@@ -5,7 +5,7 @@
 **The in-house playback core of NipaPlay.** Written in Rust, embeddable, handling everything from decode to render.
 
 > Named after the detective **Furude Erika** from *Umineko When They Cry*.
-> [NipaPlay](https://github.com/amessoft/NipaPlay-Reload) takes its name from **Furude Rika**'s catchphrase "nipah~☆" in *Higurashi When They Cry* — the community simply calls her "Rika".
+> [NipaPlay](https://github.com/AimesSoft/NipaPlay-Reload) takes its name from **Furude Rika**'s catchphrase "nipah~☆" in *Higurashi When They Cry* — the community simply calls her "Rika".
 > One is the player the audience sees; the other is the engine behind the curtain. Two sides of the same coin, from the same universe.
 
 The host application provides a rendering surface and sends playback commands — decoding, timing, video rendering, subtitles, danmaku, and audio output are handled entirely inside Erika, without passing through the host's rendering pipeline.
