@@ -8,4 +8,4 @@ version.workspace = true
 
 [dependencies]
 crossbeam-channel.workspace = true
-erika = { path = "../../crates/erika" }
+erika = { path = "../../crates/erika", default-features = false }

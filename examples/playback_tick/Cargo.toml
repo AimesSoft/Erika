@@ -7,4 +7,4 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-erika = { path = "../../crates/erika" }
+erika = { path = "../../crates/erika", default-features = false }

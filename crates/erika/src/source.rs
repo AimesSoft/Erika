@@ -1,6 +1,8 @@
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::env;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
@@ -81,14 +83,97 @@ impl MediaSource for LocalFileSource {
     }
 }
 
-#[derive(Debug)]
 pub struct HttpRangeSource {
     uri: String,
+    agent: ureq::Agent,
+    content_length: Option<u64>,
+    cache_start: u64,
+    cache_bytes: Vec<u8>,
+    read_ahead_bytes: u64,
 }
 
 impl HttpRangeSource {
+    const DEFAULT_READ_AHEAD_BYTES: u64 = 1024 * 1024;
+
     pub fn new(uri: impl Into<String>) -> Self {
-        Self { uri: uri.into() }
+        let agent = ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(10)))
+            .timeout_recv_response(Some(Duration::from_secs(15)))
+            .timeout_recv_body(Some(Duration::from_secs(60)))
+            .build()
+            .into();
+        Self {
+            uri: uri.into(),
+            agent,
+            content_length: None,
+            cache_start: 0,
+            cache_bytes: Vec::new(),
+            read_ahead_bytes: http_read_ahead_bytes(),
+        }
+    }
+
+    fn cache_end(&self) -> u64 {
+        self.cache_start
+            .saturating_add(self.cache_bytes.len() as u64)
+    }
+
+    fn cached_slice(&self, range: ByteRange) -> Option<Vec<u8>> {
+        let length = range.length?;
+        let end = range.start.checked_add(length)?;
+        if range.start < self.cache_start || end > self.cache_end() {
+            return None;
+        }
+        let start_index = usize::try_from(range.start - self.cache_start).ok()?;
+        let length = usize::try_from(length).ok()?;
+        let end_index = start_index.checked_add(length)?;
+        Some(self.cache_bytes[start_index..end_index].to_vec())
+    }
+
+    fn fetch_range(&self, range: ByteRange) -> Result<Vec<u8>> {
+        let header = match range.length {
+            Some(length) if length > 0 => {
+                let end = range.start.saturating_add(length).saturating_sub(1);
+                format!("bytes={}-{}", range.start, end)
+            }
+            _ => format!("bytes={}-", range.start),
+        };
+        let started = Instant::now();
+        let mut response = self
+            .agent
+            .get(&self.uri)
+            .header("Range", &header)
+            .call()
+            .map_err(|error| SourceError::Http(error.to_string()))?;
+        let status = response.status().as_u16();
+        let mut bytes = Vec::new();
+        response
+            .body_mut()
+            .as_reader()
+            .read_to_end(&mut bytes)
+            .map_err(|error| SourceError::Http(error.to_string()))?;
+        http_trace_log(format!(
+            "{{\"event\":\"http_range\",\"start\":{},\"length\":{},\"status\":{},\"bytes\":{},\"elapsed_ms\":{:.3}}}",
+            range.start,
+            range
+                .length
+                .map_or_else(|| "null".to_string(), |length| length.to_string()),
+            status,
+            bytes.len(),
+            started.elapsed().as_secs_f64() * 1000.0,
+        ));
+        Ok(bytes)
+    }
+}
+
+impl std::fmt::Debug for HttpRangeSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpRangeSource")
+            .field("uri", &redacted_uri(&self.uri))
+            .field("content_length", &self.content_length)
+            .field("cache_start", &self.cache_start)
+            .field("cache_bytes", &self.cache_bytes.len())
+            .field("read_ahead_bytes", &self.read_ahead_bytes)
+            .finish()
     }
 }
 
@@ -98,34 +183,68 @@ impl MediaSource for HttpRangeSource {
     }
 
     fn len(&mut self) -> Result<Option<u64>> {
-        let response = ureq::head(&self.uri)
+        if self.content_length.is_some() {
+            return Ok(self.content_length);
+        }
+        let started = Instant::now();
+        let response = self
+            .agent
+            .head(&self.uri)
             .call()
             .map_err(|error| SourceError::Http(error.to_string()))?;
-        Ok(response
+        let status = response.status().as_u16();
+        let length = response
             .headers()
             .get("content-length")
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok()))
+            .and_then(|value| value.parse::<u64>().ok());
+        self.content_length = length;
+        http_trace_log(format!(
+            "{{\"event\":\"http_head\",\"status\":{},\"length\":{},\"elapsed_ms\":{:.3}}}",
+            status,
+            length.map_or_else(|| "null".to_string(), |length| length.to_string()),
+            started.elapsed().as_secs_f64() * 1000.0,
+        ));
+        Ok(length)
     }
 
     fn read_range(&mut self, range: ByteRange) -> Result<Vec<u8>> {
-        let header = match range.length {
-            Some(length) if length > 0 => {
-                format!("bytes={}-{}", range.start, range.start + length - 1)
+        if let Some(bytes) = self.cached_slice(range) {
+            http_trace_log(format!(
+                "{{\"event\":\"http_cache_hit\",\"start\":{},\"length\":{},\"bytes\":{}}}",
+                range.start,
+                range.length.unwrap_or_default(),
+                bytes.len(),
+            ));
+            return Ok(bytes);
+        }
+
+        let requested_length = range.length.unwrap_or(0);
+        let fetch_length = match range.length {
+            Some(length) => {
+                let mut length = length.max(self.read_ahead_bytes);
+                if let Some(total) = self.content_length.or_else(|| self.len().ok().flatten()) {
+                    if range.start >= total {
+                        return Ok(Vec::new());
+                    }
+                    length = length.min(total.saturating_sub(range.start));
+                }
+                Some(length.max(requested_length))
             }
-            _ => format!("bytes={}-", range.start),
+            None => None,
         };
-        let mut response = ureq::get(&self.uri)
-            .header("Range", &header)
-            .call()
-            .map_err(|error| SourceError::Http(error.to_string()))?;
-        let mut bytes = Vec::new();
-        response
-            .body_mut()
-            .as_reader()
-            .read_to_end(&mut bytes)
-            .map_err(|error| SourceError::Http(error.to_string()))?;
-        Ok(bytes)
+        let fetched = self.fetch_range(ByteRange {
+            start: range.start,
+            length: fetch_length,
+        })?;
+        if range.length.is_none() {
+            return Ok(fetched);
+        }
+
+        self.cache_start = range.start;
+        self.cache_bytes = fetched;
+        let copy_len = requested_length.min(self.cache_bytes.len() as u64) as usize;
+        Ok(self.cache_bytes[..copy_len].to_vec())
     }
 }
 
@@ -168,6 +287,46 @@ fn source_from_auto_uri(uri: &str) -> Result<Box<dyn MediaSource>> {
 
 fn local_path_from_uri(uri: &str) -> &str {
     uri.strip_prefix("file://").unwrap_or(uri)
+}
+
+fn http_read_ahead_bytes() -> u64 {
+    env::var("ERIKA_HTTP_READAHEAD_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(HttpRangeSource::DEFAULT_READ_AHEAD_BYTES)
+}
+
+fn http_trace_log(line: impl AsRef<str>) {
+    if !crate::trace::env_flag("ERIKA_HTTP_TRACE") {
+        return;
+    }
+    let line = line.as_ref();
+    eprintln!("{line}");
+    let path = env::var_os("ERIKA_HTTP_TRACE_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp/erika_http_trace.jsonl"));
+    let _ = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut file| writeln!(file, "{line}"));
+}
+
+fn redacted_uri(uri: &str) -> String {
+    let mut value = uri.to_string();
+    for key in ["api_key=", "AccessToken="] {
+        let mut search_from = 0;
+        while let Some(relative) = value[search_from..].find(key) {
+            let start = search_from + relative + key.len();
+            let end = value[start..]
+                .find('&')
+                .map(|relative_end| start + relative_end)
+                .unwrap_or(value.len());
+            value.replace_range(start..end, "REDACTED");
+            search_from = start + "REDACTED".len();
+        }
+    }
+    value
 }
 
 #[cfg(test)]
@@ -218,5 +377,17 @@ mod tests {
             source_from_uri_with_hint("file:///tmp/video.mp4", MediaSourceHint::Http),
             Err(SourceError::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn redacted_uri_hides_access_tokens() {
+        assert_eq!(
+            redacted_uri("https://example.invalid/video.mkv?api_key=secret&x=1"),
+            "https://example.invalid/video.mkv?api_key=REDACTED&x=1"
+        );
+        assert_eq!(
+            redacted_uri("https://example.invalid/video.mkv?AccessToken=secret"),
+            "https://example.invalid/video.mkv?AccessToken=REDACTED"
+        );
     }
 }
