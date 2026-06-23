@@ -59,7 +59,10 @@ final player = ErikaPlayer();
 await player.open('/path/to/video.mp4');
 await player.play();
 
-// Widget 树中:
+// 推荐：完整播放器 UI 在 macOS/iOS 使用原生 window overlay / 挖空路径
+ErikaWindowOverlayVideoView(player: player)
+
+// 兼容/诊断：Flutter platform view 路径
 ErikaVideoView(player: player)
 ```
 

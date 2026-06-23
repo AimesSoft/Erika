@@ -2,8 +2,13 @@ import Darwin
 import AVFoundation
 import Flutter
 import Metal
+import ObjectiveC.runtime
 import QuartzCore
 import UIKit
+
+private let erikaWindowHostedVideoSurfaceId: Int64 = -1
+private let erikaDebugLabelsEnabled =
+  ProcessInfo.processInfo.environment["ERIKA_DEBUG_LABELS"] == "1"
 
 private func erikaHdrWrite(_ message: String) {
   fputs("ErikaHDR[iOS]: \(message)\n", stderr)
@@ -265,7 +270,7 @@ private enum ErikaPluginError: Error, CustomStringConvertible {
     case .viewNotFound(let viewId):
       return "Erika video view \(viewId) was not found."
     case .overlayNotAvailable:
-      return "Window overlay is not available on iOS. Use ErikaVideoView."
+      return "No window-hosted Erika overlay is available."
     case .presenterCreateFailed:
       return "erika_presenter_create returned null."
     case .erikaStatus(let operation, let status):
@@ -1030,6 +1035,148 @@ private final class ErikaMetalUIView: UIView, ErikaMetalSurfaceView {
   }
 }
 
+private final class ErikaWindowOverlayView: UIView, ErikaMetalSurfaceView {
+  let platformViewId: Int64 = erikaWindowHostedVideoSurfaceId
+  weak var plugin: ErikaFlutterPlugin?
+  var attachedPlayerId: Int64?
+
+  private var overlayFrameGeneration: Int64?
+  private var debugLabelView: UILabel?
+
+  /// Generation of the widget that currently owns this shared overlay surface.
+  /// Used to reject stale detach calls from disposed widgets.
+  var activeGeneration: Int64? { overlayFrameGeneration }
+
+  override class var layerClass: AnyClass { CAMetalLayer.self }
+
+  var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
+
+  var currentScale: Double {
+    Double(max(1.0, window?.screen.scale ?? UIScreen.main.scale))
+  }
+
+  init(plugin: ErikaFlutterPlugin?) {
+    self.plugin = plugin
+    super.init(frame: .zero)
+    isOpaque = true
+    isHidden = true
+    isUserInteractionEnabled = false
+    backgroundColor = .black
+    contentScaleFactor = CGFloat(currentScale)
+    autoresizingMask = []
+    metalLayer.pixelFormat = .bgra8Unorm
+    metalLayer.framebufferOnly = true
+    metalLayer.isOpaque = true
+    metalLayer.backgroundColor = UIColor.black.cgColor
+    layer.actions = [
+      "bounds": NSNull(),
+      "frame": NSNull(),
+      "position": NSNull(),
+    ]
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  deinit {
+    plugin?.detachOverlayView(self)
+  }
+
+  override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+    false
+  }
+
+  override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+    nil
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    updateDrawableSize()
+    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
+  }
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    updateDrawableSize()
+    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
+  }
+
+  func updateOverlayFrame(
+    _ frame: CGRect?,
+    visible: Bool,
+    debugLabel: String?,
+    generation: Int64?
+  ) {
+    if visible {
+      overlayFrameGeneration = generation
+    } else if let generation,
+              let overlayFrameGeneration,
+              generation != overlayFrameGeneration {
+      return
+    }
+
+    updateDebugLabel(debugLabel)
+    let shouldShow = visible &&
+      (frame?.width ?? 0) > 0 &&
+      (frame?.height ?? 0) > 0
+
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    defer { CATransaction.commit() }
+
+    guard shouldShow, let frame else {
+      isHidden = true
+      return
+    }
+
+    let resolvedFrame = frame.integral
+    if self.frame != resolvedFrame {
+      self.frame = resolvedFrame
+    }
+    isHidden = false
+    updateDrawableSize()
+    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
+  }
+
+  func updateDrawableSize() {
+    let scale = CGFloat(currentScale)
+    contentScaleFactor = scale
+    metalLayer.contentsScale = scale
+    metalLayer.frame = bounds
+    metalLayer.drawableSize = CGSize(
+      width: max(1.0, bounds.width * scale),
+      height: max(1.0, bounds.height * scale)
+    )
+  }
+
+  func pngSnapshotData() -> Data? {
+    snapshotPngData(of: self)
+  }
+
+  private func updateDebugLabel(_ text: String?) {
+    guard erikaDebugLabelsEnabled, let text, !text.isEmpty else {
+      debugLabelView?.removeFromSuperview()
+      debugLabelView = nil
+      return
+    }
+    let label = debugLabelView ?? UILabel()
+    if debugLabelView == nil {
+      label.textColor = UIColor(white: 1.0, alpha: 0.45)
+      label.font = UIFont.systemFont(ofSize: 12, weight: .medium)
+      label.translatesAutoresizingMaskIntoConstraints = false
+      addSubview(label)
+      NSLayoutConstraint.activate([
+        label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+        label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+      ])
+      debugLabelView = label
+    }
+    label.text = text
+  }
+}
+
 private func snapshotPngData(of view: UIView) -> Data? {
   guard view.bounds.width > 0, view.bounds.height > 0 else {
     return nil
@@ -1077,6 +1224,29 @@ private final class ErikaVideoViewFactory: NSObject, FlutterPlatformViewFactory 
     let platformView = ErikaVideoPlatformView(frame: frame, viewId: viewId, arguments: args, plugin: plugin)
     plugin?.registerView(platformView.metalView, viewId: viewId)
     return platformView
+  }
+}
+
+private enum ErikaAssociatedObjectKeys {
+  static var windowOverlayView: UInt8 = 0
+}
+
+private extension UIWindow {
+  var erikaWindowOverlayView: ErikaWindowOverlayView? {
+    get {
+      objc_getAssociatedObject(
+        self,
+        &ErikaAssociatedObjectKeys.windowOverlayView
+      ) as? ErikaWindowOverlayView
+    }
+    set {
+      objc_setAssociatedObject(
+        self,
+        &ErikaAssociatedObjectKeys.windowOverlayView,
+        newValue,
+        .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+      )
+    }
   }
 }
 
@@ -1284,8 +1454,47 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         let viewId = try requiredInt64(args["viewId"], name: "viewId")
         host.detach(viewId: viewId)
         result(nil)
-      case "attachOverlay", "detachOverlay", "setOverlayFrame":
-        throw ErikaPluginError.overlayNotAvailable
+      case "attachOverlay":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        let overlay = try ensureWindowOverlayInstalled()
+        try host.attach(view: overlay)
+        result(erikaWindowHostedVideoSurfaceId)
+      case "detachOverlay":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        let generation = int64Value(args["generation"])
+        let overlay = resolveWindowOverlay()
+        // A disposing widget can fire detachOverlay after a newer widget has
+        // already re-attached the shared overlay surface. Skip the teardown so
+        // the stale detach cannot stop the live surface's display link and
+        // leave a frozen, non-rendering overlay on screen.
+        if let generation,
+           let activeGeneration = overlay?.activeGeneration,
+           generation != activeGeneration {
+          result(nil)
+          return
+        }
+        host.detach(viewId: erikaWindowHostedVideoSurfaceId)
+        overlay?.updateOverlayFrame(
+          nil,
+          visible: false,
+          debugLabel: nil,
+          generation: generation
+        )
+        result(nil)
+      case "setOverlayFrame":
+        let args = try dictionaryArgs(call.arguments)
+        let overlay = try ensureWindowOverlayInstalled()
+        let visible = boolValue(args["visible"]) ?? true
+        let frame = convertedOverlayRect(from: args, targetView: overlay)
+        overlay.updateOverlayFrame(
+          frame,
+          visible: visible,
+          debugLabel: args["debugLabel"] as? String,
+          generation: int64Value(args["generation"])
+        )
+        result(nil)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -1325,6 +1534,158 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         host.resizeFromAttachedView()
       }
     }
+  }
+
+  fileprivate func detachOverlayView(_ view: ErikaWindowOverlayView) {
+    for host in players.values {
+      host.detach(viewId: view.platformViewId)
+    }
+    if views[view.platformViewId]?.view === view {
+      views.removeValue(forKey: view.platformViewId)
+    }
+    if view.window?.erikaWindowOverlayView === view {
+      view.window?.erikaWindowOverlayView = nil
+    }
+  }
+
+  private func ensureWindowOverlayInstalled() throws -> ErikaWindowOverlayView {
+    if let existing = resolveWindowOverlay(),
+       existing.superview != nil {
+      return existing
+    }
+
+    guard let flutterHostView = currentFlutterHostView() else {
+      throw ErikaPluginError.overlayNotAvailable
+    }
+    guard let hostWindow = flutterHostView.window else {
+      throw ErikaPluginError.overlayNotAvailable
+    }
+    let hostSuperview = flutterHostView.superview ?? hostWindow
+
+    prepareFlutterHostViewForWindowOverlay(flutterHostView)
+
+    let overlay = hostWindow.erikaWindowOverlayView ??
+      ErikaWindowOverlayView(plugin: self)
+    overlay.plugin = self
+
+    if overlay.superview !== hostSuperview {
+      overlay.removeFromSuperview()
+      overlay.frame = .zero
+    }
+    if flutterHostView.superview === hostSuperview,
+       shouldPlaceWindowOverlayAboveFlutter() {
+      hostSuperview.insertSubview(overlay, aboveSubview: flutterHostView)
+    } else if flutterHostView.superview === hostSuperview {
+      hostSuperview.insertSubview(overlay, belowSubview: flutterHostView)
+    } else if shouldPlaceWindowOverlayAboveFlutter() {
+      hostSuperview.addSubview(overlay)
+    } else {
+      hostSuperview.insertSubview(overlay, at: 0)
+    }
+
+    hostWindow.erikaWindowOverlayView = overlay
+    registerView(overlay, viewId: overlay.platformViewId)
+    return overlay
+  }
+
+  private func resolveWindowOverlay() -> ErikaWindowOverlayView? {
+    for window in activeWindows() {
+      if let overlay = window.erikaWindowOverlayView {
+        return overlay
+      }
+    }
+    return nil
+  }
+
+  private func currentFlutterHostView() -> UIView? {
+    for window in activeWindows() {
+      if let controller = findFlutterViewController(from: window.rootViewController) {
+        return controller.view
+      }
+    }
+    return activeWindows().first?.rootViewController?.view
+  }
+
+  private func activeWindows() -> [UIWindow] {
+    let scenes = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .filter {
+        $0.activationState == .foregroundActive ||
+          $0.activationState == .foregroundInactive
+      }
+    let windows = scenes.flatMap(\.windows).filter { !$0.isHidden }
+    return windows.sorted { lhs, rhs in
+      if lhs.isKeyWindow != rhs.isKeyWindow {
+        return lhs.isKeyWindow
+      }
+      return lhs.windowLevel.rawValue > rhs.windowLevel.rawValue
+    }
+  }
+
+  private func findFlutterViewController(from controller: UIViewController?) -> FlutterViewController? {
+    guard let controller else {
+      return nil
+    }
+    if let flutter = controller as? FlutterViewController {
+      return flutter
+    }
+    if let presented = findFlutterViewController(from: controller.presentedViewController) {
+      return presented
+    }
+    if let navigation = controller as? UINavigationController,
+       let visible = findFlutterViewController(from: navigation.visibleViewController) {
+      return visible
+    }
+    if let tab = controller as? UITabBarController,
+       let selected = findFlutterViewController(from: tab.selectedViewController) {
+      return selected
+    }
+    for child in controller.children {
+      if let flutter = findFlutterViewController(from: child) {
+        return flutter
+      }
+    }
+    return nil
+  }
+
+  private func prepareFlutterHostViewForWindowOverlay(_ view: UIView) {
+    if shouldPlaceWindowOverlayAboveFlutter() {
+      return
+    }
+    view.isOpaque = false
+    view.backgroundColor = .clear
+    view.layer.isOpaque = false
+    view.layer.backgroundColor = UIColor.clear.cgColor
+    view.window?.backgroundColor = .black
+  }
+
+  private func shouldPlaceWindowOverlayAboveFlutter() -> Bool {
+    let environment = ProcessInfo.processInfo.environment
+    if environment["ERIKA_WINDOW_OVERLAY_BELOW"] == "1" {
+      return false
+    }
+    return environment["ERIKA_WINDOW_OVERLAY_ABOVE"] == "1"
+  }
+
+  private func convertedOverlayRect(
+    from args: [String: Any],
+    targetView: UIView
+  ) -> CGRect? {
+    guard let x = doubleValue(args["x"]),
+          let y = doubleValue(args["y"]),
+          let width = doubleValue(args["width"]),
+          let height = doubleValue(args["height"]) else {
+      return nil
+    }
+    guard width > 0, height > 0 else {
+      return nil
+    }
+    guard let flutterHostView = currentFlutterHostView(),
+          let targetSuperview = targetView.superview else {
+      return CGRect(x: x, y: y, width: width, height: height)
+    }
+    let rect = CGRect(x: x, y: y, width: width, height: height)
+    return flutterHostView.convert(rect, to: targetSuperview)
   }
 
   private func createPlayer(arguments: Any?) throws -> Int64 {

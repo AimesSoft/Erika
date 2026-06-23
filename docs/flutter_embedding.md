@@ -16,41 +16,51 @@ There are two C ABI entrypoint families:
 
 Both families are declared in `crates/erika_capi/include/erika.h`.
 
-## macOS HDR Path
+## Apple Surface Strategies
 
-The macOS HDR path uses a native Metal-backed surface, not Flutter Texture.
-Flutter/AppKit view composition can show video but is vulnerable to black
-flicker, while a window-hosted native layer with a transparent Flutter region is
-the stable HDR direction.
-
-The plugin implements two view strategies:
+The Apple HDR path uses a native Metal-backed surface, not Flutter Texture.
+The Flutter plugin intentionally exposes two native surface strategies on both
+macOS and iOS so hosts can pick the composition model that matches their UI.
 
 ### ErikaVideoView (Platform View)
 
-Standard Flutter platform view backed by `NSView`/`CAMetalLayer`. The plugin
-creates a native video view registered as `erika_flutter/video_view`, attaches
-it to the presenter, and drives rendering from a display link.
+Standard Flutter platform view backed by `NSView`/`CAMetalLayer` on macOS and
+`UIView`/`CAMetalLayer` on iOS. The plugin creates a native video view
+registered as `erika_flutter/video_view`, attaches it to the presenter, and
+drives rendering from a display link.
+
+This path is useful for simple embedders and diagnostics. On macOS it is not the
+recommended production path because AppKit/Flutter platform view composition can
+show black flicker or other compositor artifacts.
 
 ### ErikaWindowOverlayVideoView (Window Overlay)
 
-For HDR/EDR on macOS, the plugin creates a window-hosted native overlay that
-sits outside Flutter's compositor:
+For the preferred HDR/EDR path, the plugin creates a window-hosted native
+overlay that sits outside Flutter's platform-view compositor:
 
 1. Dart `ErikaWindowOverlayVideoView` reserves a rectangle in the widget tree.
-2. The macOS plugin creates a window-level `CAMetalLayer` as a sibling/underlay.
+2. The platform plugin creates a window-level native view with a `CAMetalLayer`
+   as a sibling/underlay of the Flutter host view.
 3. Flutter paints the widget region transparent, leaving a hole for native video.
 4. The widget tracks its position and sends geometry updates with a surface
    generation number, so stale hide calls from disposed widgets cannot affect
    newly attached surfaces.
 5. Attach retry with exponential backoff handles window readiness timing.
 
-## iOS Path
+The overlay path is the recommended path for NipaPlay and other full-player
+UIs. It keeps video presentation owned by Erika/Metal while Flutter remains a
+control and layout layer. On iOS the native side uses `UIWindow` plus a sibling
+`UIView`/`CAMetalLayer`; on macOS it uses the host `NSWindow` plus a sibling
+`NSView`/`CAMetalLayer`.
 
-The iOS plugin uses `UiKitView` backed by `CAMetalLayer`. The Erika C ABI
-static library is linked into the app through a CocoaPod script phase that
-builds the Rust `erika_capi` crate for the target iOS architecture.
+Touch events pass through both native video strategies, so Flutter controls can
+remain above or around the video surface.
 
-Touch events pass through the video view (`hitTestBehavior: transparent`).
+## iOS Build Path
+
+The iOS plugin links the Erika C ABI static library into the app through a
+CocoaPod script phase that builds the Rust `erika_capi` crate for the target iOS
+architecture.
 
 ## Minimal Presenter Flow
 
@@ -106,6 +116,12 @@ final player = ErikaPlayer(
 
 await player.open('/path/to/video.mp4');
 await player.play();
+
+// Preferred for full-player UIs on macOS/iOS:
+ErikaWindowOverlayVideoView(player: player)
+
+// Compatibility/diagnostic platform-view path:
+ErikaVideoView(player: player)
 
 // Playback control
 await player.pause();

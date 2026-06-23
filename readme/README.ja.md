@@ -59,7 +59,10 @@ final player = ErikaPlayer();
 await player.open('/path/to/video.mp4');
 await player.play();
 
-// ウィジェットツリー内:
+// 推奨: フルプレイヤー UI では Erika のネイティブ Metal レイヤーを使います。
+ErikaWindowOverlayVideoView(player: player)
+
+// 互換/診断: Flutter platform view 埋め込みも引き続き利用できます。
 ErikaVideoView(player: player)
 ```
 
