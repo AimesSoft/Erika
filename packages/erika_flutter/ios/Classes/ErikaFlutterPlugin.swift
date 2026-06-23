@@ -1043,6 +1043,10 @@ private final class ErikaWindowOverlayView: UIView, ErikaMetalSurfaceView {
   private var overlayFrameGeneration: Int64?
   private var debugLabelView: UILabel?
 
+  /// Generation of the widget that currently owns this shared overlay surface.
+  /// Used to reject stale detach calls from disposed widgets.
+  var activeGeneration: Int64? { overlayFrameGeneration }
+
   override class var layerClass: AnyClass { CAMetalLayer.self }
 
   var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
@@ -1459,15 +1463,25 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       case "detachOverlay":
         let args = try dictionaryArgs(call.arguments)
         let host = try playerHost(from: args)
-        host.detach(viewId: erikaWindowHostedVideoSurfaceId)
-        if let overlay = resolveWindowOverlay() {
-          overlay.updateOverlayFrame(
-            nil,
-            visible: false,
-            debugLabel: nil,
-            generation: int64Value(args["generation"])
-          )
+        let generation = int64Value(args["generation"])
+        let overlay = resolveWindowOverlay()
+        // A disposing widget can fire detachOverlay after a newer widget has
+        // already re-attached the shared overlay surface. Skip the teardown so
+        // the stale detach cannot stop the live surface's display link and
+        // leave a frozen, non-rendering overlay on screen.
+        if let generation,
+           let activeGeneration = overlay?.activeGeneration,
+           generation != activeGeneration {
+          result(nil)
+          return
         }
+        host.detach(viewId: erikaWindowHostedVideoSurfaceId)
+        overlay?.updateOverlayFrame(
+          nil,
+          visible: false,
+          debugLabel: nil,
+          generation: generation
+        )
         result(nil)
       case "setOverlayFrame":
         let args = try dictionaryArgs(call.arguments)
