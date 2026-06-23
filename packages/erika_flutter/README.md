@@ -5,12 +5,22 @@ Flutter plugin for the Erika media playback engine.
 The plugin keeps Dart out of the hot path:
 
 - Dart exposes low-frequency player commands and event streams.
-- The macOS plugin owns `NSView`/`CAMetalLayer` lifecycle and loads the Erika
-  dynamic library.
-- The iOS plugin owns `UIView`/`CAMetalLayer` lifecycle and links the Erika
-  static library.
+- The Apple plugins expose two native Metal surface strategies:
+  `ErikaWindowOverlayVideoView` for the recommended window-hosted overlay path,
+  and `ErikaVideoView` for compatibility platform-view embedding.
+- The macOS plugin loads the Erika dynamic library.
+- The iOS plugin links the Erika static library.
 - Erika owns playback, rendering, audio, timing, and overlays through
   `ErikaPresenterHandle`.
+
+## Video Surfaces
+
+Use `ErikaWindowOverlayVideoView` for full-player macOS/iOS UIs. It reserves a
+Flutter layout rect while the plugin hosts a sibling native `CAMetalLayer`, so
+video stays outside Flutter's platform-view compositor.
+
+Use `ErikaVideoView` when a standard Flutter platform view is required for a
+small embedder, compatibility path, or diagnostics.
 
 ## macOS Setup
 

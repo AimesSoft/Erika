@@ -189,12 +189,15 @@ Header: `crates/erika_capi/include/erika.h`
 
 `packages/erika_flutter` provides macOS and iOS Flutter embedding:
 
-- **Dart**: `ErikaPlayer` (commands + events), `ErikaVideoView` (platform view),
-  `ErikaWindowOverlayVideoView` (macOS HDR native layer path).
-- **macOS Swift plugin**: Loads `liberika_capi.dylib`, creates
-  `NSView`/`CAMetalLayer`, drives `render_tick` from display link.
-- **iOS Swift plugin**: Links `liberika_capi.a` statically, creates
-  `UIView`/`CAMetalLayer`, same presenter model.
+- **Dart**: `ErikaPlayer` (commands + events), `ErikaWindowOverlayVideoView`
+  (recommended window-hosted native Metal surface), and `ErikaVideoView`
+  (compatibility platform view).
+- **macOS Swift plugin**: Loads `liberika_capi.dylib`, creates either
+  `NSWindow`-hosted overlay or `NSView`/`CAMetalLayer` platform view surfaces,
+  and drives `render_tick` from a display link.
+- **iOS Swift plugin**: Links `liberika_capi.a` statically, creates either
+  `UIWindow`-hosted overlay or `UIView`/`CAMetalLayer` platform view surfaces,
+  and uses the same presenter model.
 
 See `docs/flutter_embedding.md` for the embedding model and HDR strategy.
 

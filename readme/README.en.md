@@ -59,7 +59,10 @@ final player = ErikaPlayer();
 await player.open('/path/to/video.mp4');
 await player.play();
 
-// In your widget tree:
+// Recommended for full-player UIs: keep video in Erika's native Metal layer.
+ErikaWindowOverlayVideoView(player: player)
+
+// Compatibility/diagnostics: Flutter platform-view embedding remains available.
 ErikaVideoView(player: player)
 ```
 

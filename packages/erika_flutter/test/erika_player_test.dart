@@ -164,6 +164,60 @@ void main() {
     await player.dispose();
   });
 
+  test('window overlay methods forward surface geometry', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(playerChannel, (MethodCall call) async {
+      playerCalls.add(call);
+      return switch (call.method) {
+        'create' => 7,
+        'attachOverlay' => ErikaPlayer.windowOverlayViewId,
+        'dispose' => null,
+        _ => null,
+      };
+    });
+    final player = ErikaPlayer();
+
+    final viewId = await player.attachWindowOverlay();
+    await player.setWindowOverlayFrame(
+      frame: const Rect.fromLTWH(10, 20, 320, 180),
+      visible: true,
+      generation: 42,
+      debugLabel: 'episode.mkv',
+    );
+    await player.detachWindowOverlay(generation: 42);
+
+    expect(viewId, ErikaPlayer.windowOverlayViewId);
+    expect(
+      playerCalls
+          .singleWhere((MethodCall call) => call.method == 'attachOverlay')
+          .arguments,
+      <String, Object?>{'playerId': 7},
+    );
+    expect(
+      playerCalls
+          .singleWhere((MethodCall call) => call.method == 'setOverlayFrame')
+          .arguments,
+      <String, Object?>{
+        'viewId': ErikaPlayer.windowOverlayViewId,
+        'generation': 42,
+        'x': 10.0,
+        'y': 20.0,
+        'width': 320.0,
+        'height': 180.0,
+        'visible': true,
+        'debugLabel': 'episode.mkv',
+      },
+    );
+    expect(
+      playerCalls
+          .singleWhere((MethodCall call) => call.method == 'detachOverlay')
+          .arguments,
+      <String, Object?>{'playerId': 7, 'generation': 42},
+    );
+
+    await player.dispose();
+  });
+
   test('upscaler mode is forwarded to native presenter', () async {
     final player = ErikaPlayer();
 

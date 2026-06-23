@@ -8,6 +8,16 @@ import 'package:flutter/widgets.dart';
 
 import 'erika_player.dart';
 
+bool get _supportsWindowOverlayVideoView =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS);
+
+/// Flutter platform-view video surface backed by AppKit/UIKit.
+///
+/// This is the compatibility surface. Full-player Apple hosts should usually
+/// prefer [ErikaWindowOverlayVideoView] so Erika owns the native Metal video
+/// plane outside Flutter's platform-view compositor.
 class ErikaVideoView extends StatefulWidget {
   const ErikaVideoView({
     super.key,
@@ -94,6 +104,10 @@ class _ErikaVideoViewState extends State<ErikaVideoView> {
   }
 }
 
+/// Window-hosted native Metal video surface for macOS and iOS.
+///
+/// The widget reserves a Flutter layout rect while the platform plugin hosts a
+/// sibling native view with a CAMetalLayer and keeps its frame in sync.
 class ErikaWindowOverlayVideoView extends StatefulWidget {
   const ErikaWindowOverlayVideoView({
     super.key,
@@ -185,10 +199,7 @@ class _ErikaWindowOverlayVideoViewState
   }
 
   Future<void> _attachOverlaySurface() async {
-    if (!mounted ||
-        _isBound ||
-        kIsWeb ||
-        defaultTargetPlatform != TargetPlatform.macOS) {
+    if (!mounted || _isBound || !_supportsWindowOverlayVideoView) {
       return;
     }
 
@@ -232,7 +243,7 @@ class _ErikaWindowOverlayVideoViewState
     required bool visible,
     bool force = false,
   }) async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.macOS) {
+    if (!_supportsWindowOverlayVideoView) {
       return;
     }
 
@@ -295,7 +306,7 @@ class _ErikaWindowOverlayVideoViewState
 
   @override
   Widget build(BuildContext context) {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.macOS) {
+    if (!_supportsWindowOverlayVideoView) {
       return const SizedBox.shrink();
     }
     _scheduleFrameUpdate();
