@@ -135,7 +135,7 @@ pub mod iosaudio {
         fn default() -> Self {
             Self {
                 ring_buffer: AudioRingBufferConfig {
-                    capacity_frames: 96_000,
+                    capacity_frames: 192_000,
                     drop_oldest_on_overflow: true,
                 },
             }
@@ -503,7 +503,7 @@ pub mod coreaudio {
         fn default() -> Self {
             Self {
                 ring_buffer: AudioRingBufferConfig {
-                    capacity_frames: 96_000,
+                    capacity_frames: 192_000,
                     drop_oldest_on_overflow: true,
                 },
             }

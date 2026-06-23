@@ -35,12 +35,45 @@ pub enum PlaybackError {
 
 pub type Result<T> = std::result::Result<T, PlaybackError>;
 
-const VIDEO_FRAME_QUEUE_LIMIT: usize = 8;
-const AUDIO_FRAME_QUEUE_LIMIT: usize = 16;
+const DEFAULT_VIDEO_FRAME_QUEUE_LIMIT: usize = 8;
+const DEFAULT_AUDIO_FRAME_QUEUE_LIMIT: usize = 16;
+const STREAMING_VIDEO_FRAME_QUEUE_LIMIT: usize = 48;
+const STREAMING_AUDIO_FRAME_QUEUE_LIMIT: usize = 128;
 const SUBTITLE_FRAME_QUEUE_LIMIT: usize = 32;
 const EXTERNAL_SUBTITLE_LOOKAHEAD: Duration = Duration::from_secs(5);
 const DEFAULT_AUDIO_LEAD_TIME: Duration = Duration::from_millis(120);
 const STREAMING_AUDIO_LEAD_TIME: Duration = Duration::from_millis(1500);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PlaybackQueueLimits {
+    video_frames: usize,
+    audio_frames: usize,
+    subtitle_frames: usize,
+}
+
+impl PlaybackQueueLimits {
+    fn for_request(request: &MediaRequest) -> Self {
+        if request_uses_http_source(request) {
+            Self {
+                video_frames: STREAMING_VIDEO_FRAME_QUEUE_LIMIT,
+                audio_frames: STREAMING_AUDIO_FRAME_QUEUE_LIMIT,
+                subtitle_frames: SUBTITLE_FRAME_QUEUE_LIMIT,
+            }
+        } else {
+            Self::default()
+        }
+    }
+}
+
+impl Default for PlaybackQueueLimits {
+    fn default() -> Self {
+        Self {
+            video_frames: DEFAULT_VIDEO_FRAME_QUEUE_LIMIT,
+            audio_frames: DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+            subtitle_frames: SUBTITLE_FRAME_QUEUE_LIMIT,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoDecodePreference {
@@ -124,6 +157,7 @@ pub struct PlaybackSession {
     video_frames: VecDeque<Frame>,
     audio_frames: VecDeque<PcmAudioFrame>,
     subtitle_frames: VecDeque<DecodedSubtitleFrame>,
+    queue_limits: PlaybackQueueLimits,
     eof: bool,
 }
 
@@ -131,6 +165,7 @@ unsafe impl Send for PlaybackSession {}
 
 impl PlaybackSession {
     pub fn open(request: &MediaRequest, config: PlaybackSessionConfig) -> Result<Self> {
+        let queue_limits = PlaybackQueueLimits::for_request(request);
         let source = source_from_uri_with_hint(&request.uri, request.source_hint)?;
         let mut demuxer = Demuxer::open_source(source)?;
         let selected_video_track = demuxer
@@ -225,6 +260,7 @@ impl PlaybackSession {
             video_frames: VecDeque::new(),
             audio_frames: VecDeque::new(),
             subtitle_frames: VecDeque::new(),
+            queue_limits,
             eof: false,
         })
     }
@@ -252,9 +288,6 @@ impl PlaybackSession {
             return Ok(None);
         }
         while self.audio_frames.is_empty() && !self.eof {
-            if self.video_decoder.is_some() && self.video_frames.len() >= VIDEO_FRAME_QUEUE_LIMIT {
-                return Ok(None);
-            }
             self.pump_once()?;
         }
         Ok(self.audio_frames.pop_front())
@@ -529,7 +562,7 @@ impl PlaybackSession {
             let decoder = self.video_decoder.as_mut().expect("video decoder exists");
             decoder.send_packet(&packet)?;
             drain_video_frames(decoder, &mut self.video_frames)?;
-            trim_video_queue(&mut self.video_frames);
+            trim_video_queue(&mut self.video_frames, self.queue_limits.video_frames);
             return Ok(());
         }
 
@@ -543,7 +576,7 @@ impl PlaybackSession {
                 decoder.send_packet(&packet)?;
             }
             self.drain_audio_frames()?;
-            trim_audio_queue(&mut self.audio_frames);
+            trim_audio_queue(&mut self.audio_frames, self.queue_limits.audio_frames);
             return Ok(());
         }
 
@@ -558,7 +591,7 @@ impl PlaybackSession {
                 .expect("subtitle decoder exists");
             if let Some(frame) = decoder.decode_packet(&packet)? {
                 self.subtitle_frames.push_back(frame);
-                trim_subtitle_queue(&mut self.subtitle_frames);
+                trim_subtitle_queue(&mut self.subtitle_frames, self.queue_limits.subtitle_frames);
             }
         }
         Ok(())
@@ -571,7 +604,7 @@ impl PlaybackSession {
         if let Some(decoder) = &mut self.video_decoder {
             decoder.send_eof()?;
             drain_video_frames(decoder, &mut self.video_frames)?;
-            trim_video_queue(&mut self.video_frames);
+            trim_video_queue(&mut self.video_frames, self.queue_limits.video_frames);
         }
         if self.audio_decoder.is_some() {
             {
@@ -579,7 +612,7 @@ impl PlaybackSession {
                 decoder.send_eof()?;
             }
             self.drain_audio_frames()?;
-            trim_audio_queue(&mut self.audio_frames);
+            trim_audio_queue(&mut self.audio_frames, self.queue_limits.audio_frames);
         }
         self.eof = true;
         Ok(())
@@ -1352,6 +1385,10 @@ impl VideoPlaybackEngine {
         self.state
     }
 
+    pub(crate) fn should_prefill_audio(&self) -> bool {
+        self.state == PlaybackRunState::Playing
+    }
+
     pub fn play(&mut self) {
         if matches!(
             self.state,
@@ -1735,20 +1772,20 @@ fn drain_video_frames(decoder: &mut Decoder, frames: &mut VecDeque<Frame>) -> Re
     }
 }
 
-fn trim_video_queue(frames: &mut VecDeque<Frame>) {
-    while frames.len() > VIDEO_FRAME_QUEUE_LIMIT {
+fn trim_video_queue(frames: &mut VecDeque<Frame>, limit: usize) {
+    while frames.len() > limit {
         let _ = frames.pop_back();
     }
 }
 
-fn trim_audio_queue(frames: &mut VecDeque<PcmAudioFrame>) {
-    while frames.len() > AUDIO_FRAME_QUEUE_LIMIT {
+fn trim_audio_queue(frames: &mut VecDeque<PcmAudioFrame>, limit: usize) {
+    while frames.len() > limit {
         let _ = frames.pop_front();
     }
 }
 
-fn trim_subtitle_queue(frames: &mut VecDeque<DecodedSubtitleFrame>) {
-    while frames.len() > SUBTITLE_FRAME_QUEUE_LIMIT {
+fn trim_subtitle_queue(frames: &mut VecDeque<DecodedSubtitleFrame>, limit: usize) {
+    while frames.len() > limit {
         let _ = frames.pop_front();
     }
 }
@@ -2001,6 +2038,24 @@ mod tests {
         let timing = playback_timing_for_request(&request, PlaybackTimingConfig::default());
 
         assert_eq!(timing.audio_lead_time, DEFAULT_AUDIO_LEAD_TIME);
+    }
+
+    #[test]
+    fn http_requests_get_deeper_playback_queue_limits() {
+        let request = MediaRequest::new("https://example.invalid/video.mkv");
+        let limits = PlaybackQueueLimits::for_request(&request);
+
+        assert_eq!(limits.video_frames, STREAMING_VIDEO_FRAME_QUEUE_LIMIT);
+        assert_eq!(limits.audio_frames, STREAMING_AUDIO_FRAME_QUEUE_LIMIT);
+        assert_eq!(limits.subtitle_frames, SUBTITLE_FRAME_QUEUE_LIMIT);
+    }
+
+    #[test]
+    fn local_requests_keep_default_playback_queue_limits() {
+        let request = MediaRequest::new("/tmp/video.mkv");
+        let limits = PlaybackQueueLimits::for_request(&request);
+
+        assert_eq!(limits, PlaybackQueueLimits::default());
     }
 
     #[test]

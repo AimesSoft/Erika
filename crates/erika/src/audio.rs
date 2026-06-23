@@ -38,7 +38,7 @@ pub struct AudioRingBufferConfig {
 impl Default for AudioRingBufferConfig {
     fn default() -> Self {
         Self {
-            capacity_frames: 48_000,
+            capacity_frames: 192_000,
             drop_oldest_on_overflow: true,
         }
     }

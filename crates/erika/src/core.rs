@@ -2,7 +2,7 @@ use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError, bounded, unbounded};
 use thiserror::Error;
@@ -18,6 +18,7 @@ use crate::trace;
 static NEXT_PLAYER_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_EXTERNAL_SUBTITLE_TRACK_ID: AtomicU64 = AtomicU64::new(1);
 const EXTERNAL_SUBTITLE_TRACK_ID_BASE: i64 = 1_000_000;
+const AUDIO_PREFILL_BURST_LIMIT: usize = 64;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PlayerError {
@@ -54,7 +55,7 @@ impl Default for PlayerConfig {
             playback: PlaybackSessionConfig::default(),
             renderer: RendererBackendPreference::default(),
             video_frame_queue_capacity: 3,
-            audio_frame_queue_capacity: 64,
+            audio_frame_queue_capacity: 192,
             subtitle_frame_queue_capacity: 16,
         }
     }
@@ -903,6 +904,10 @@ fn run_playback_worker(
             }
         }
 
+        if engine.should_prefill_audio() {
+            pump_audio_from_worker(engine, &inner, playback_generation, "before_video_tick");
+        }
+
         sync_playback_clock_from_worker(
             engine,
             &inner,
@@ -945,23 +950,7 @@ fn run_playback_worker(
         );
 
         if engine.state() == PlaybackRunState::Playing {
-            match engine.tick_audio() {
-                Ok(Some(frame)) => emit_audio_frame_from_worker(
-                    &inner,
-                    PlayerAudioFrame {
-                        frame: frame.frame,
-                        generation: playback_generation,
-                    },
-                ),
-                Ok(None) => {}
-                Err(error) => {
-                    emit_from_worker(
-                        &inner,
-                        PlayerEvent::Error(PlayerError::Playback(error.to_string())),
-                    );
-                    set_state_from_worker(&inner, PlayerState::Error);
-                }
-            }
+            pump_audio_from_worker(engine, &inner, playback_generation, "after_video_tick");
 
             match engine.tick_subtitle() {
                 Ok(Some(frame)) => emit_subtitle_frame_from_worker(
@@ -1000,6 +989,51 @@ fn run_playback_worker(
         if let Some(position) = last_position_event.take() {
             emit_from_worker(&inner, PlayerEvent::PositionChanged(position));
         }
+    }
+}
+
+fn pump_audio_from_worker(
+    engine: &mut VideoPlaybackEngine,
+    inner: &Arc<Mutex<PlayerInner>>,
+    playback_generation: u64,
+    stage: &'static str,
+) {
+    let started = Instant::now();
+    let mut emitted = 0usize;
+    for _ in 0..AUDIO_PREFILL_BURST_LIMIT {
+        if audio_frame_sender_is_full(inner) {
+            break;
+        }
+        match engine.tick_audio() {
+            Ok(Some(frame)) => {
+                emitted += 1;
+                if !emit_audio_frame_from_worker(
+                    inner,
+                    PlayerAudioFrame {
+                        frame: frame.frame,
+                        generation: playback_generation,
+                    },
+                ) {
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                emit_from_worker(
+                    inner,
+                    PlayerEvent::Error(PlayerError::Playback(error.to_string())),
+                );
+                set_state_from_worker(inner, PlayerState::Error);
+                break;
+            }
+        }
+    }
+    if emitted > 0 {
+        trace::log(format!(
+            "[erika-clock-trace] stage=worker_audio_prefill:{stage} emitted={} elapsed_ms={:.3}",
+            emitted,
+            started.elapsed().as_secs_f64() * 1000.0,
+        ));
     }
 }
 
@@ -1237,19 +1271,28 @@ fn emit_video_frame_from_worker(inner: &Arc<Mutex<PlayerInner>>, frame: PlayerVi
     }
 }
 
-fn emit_audio_frame_from_worker(inner: &Arc<Mutex<PlayerInner>>, frame: PlayerAudioFrame) {
+fn audio_frame_sender_is_full(inner: &Arc<Mutex<PlayerInner>>) -> bool {
+    let inner = inner.lock().expect("player mutex poisoned");
+    inner
+        .audio_frame_sender
+        .as_ref()
+        .is_none_or(|sender| sender.is_full())
+}
+
+fn emit_audio_frame_from_worker(inner: &Arc<Mutex<PlayerInner>>, frame: PlayerAudioFrame) -> bool {
     let sender = {
         let inner = inner.lock().expect("player mutex poisoned");
         let Some(sender) = inner.audio_frame_sender.as_ref() else {
-            return;
+            return false;
         };
         sender.clone()
     };
     if sender.send(frame).is_err() {
         let mut inner = inner.lock().expect("player mutex poisoned");
         inner.audio_frame_sender = None;
-        return;
+        return false;
     }
+    true
 }
 
 fn emit_subtitle_frame_from_worker(inner: &Arc<Mutex<PlayerInner>>, frame: PlayerSubtitleFrame) {
