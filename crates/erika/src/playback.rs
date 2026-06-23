@@ -4,7 +4,9 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 use crate::audio::AudioClockSnapshot;
-use crate::core::{MediaRequest, TrackInfo, TrackKind, TrackSelection, VideoParams};
+use crate::core::{
+    MediaRequest, MediaSourceHint, TrackInfo, TrackKind, TrackSelection, VideoParams,
+};
 use crate::ffmpeg::{
     self, AudioResampler, Decoder, DecoderBackend, DecoderConfig, DecoderOutputFrame, Demuxer,
     Frame, PcmAudioFrame, PcmFormat, StreamSelection, SubtitleDecoder,
@@ -37,6 +39,8 @@ const VIDEO_FRAME_QUEUE_LIMIT: usize = 8;
 const AUDIO_FRAME_QUEUE_LIMIT: usize = 16;
 const SUBTITLE_FRAME_QUEUE_LIMIT: usize = 32;
 const EXTERNAL_SUBTITLE_LOOKAHEAD: Duration = Duration::from_secs(5);
+const DEFAULT_AUDIO_LEAD_TIME: Duration = Duration::from_millis(120);
+const STREAMING_AUDIO_LEAD_TIME: Duration = Duration::from_millis(1500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoDecodePreference {
@@ -830,7 +834,7 @@ impl Default for PlaybackTimingConfig {
         Self {
             clock_mode: PlaybackClockMode::default(),
             video_scheduler: VideoFrameScheduler::default(),
-            audio_lead_time: Duration::from_millis(120),
+            audio_lead_time: DEFAULT_AUDIO_LEAD_TIME,
             audio_sync: AudioSyncConfig::default(),
         }
     }
@@ -1235,7 +1239,7 @@ unsafe impl Send for VideoPlaybackEngine {}
 
 impl VideoPlaybackEngine {
     pub fn open(request: &MediaRequest, config: PlaybackSessionConfig) -> Result<Self> {
-        let timing = config.timing;
+        let timing = playback_timing_for_request(request, config.timing);
         Ok(Self::from_session_with_timing(
             PlaybackSession::open(request, config)?,
             timing,
@@ -1645,6 +1649,28 @@ impl VideoPlaybackEngine {
     }
 }
 
+fn playback_timing_for_request(
+    request: &MediaRequest,
+    mut timing: PlaybackTimingConfig,
+) -> PlaybackTimingConfig {
+    if request_uses_http_source(request) && timing.audio_lead_time == DEFAULT_AUDIO_LEAD_TIME {
+        timing.audio_lead_time = STREAMING_AUDIO_LEAD_TIME;
+    }
+    timing
+}
+
+fn request_uses_http_source(request: &MediaRequest) -> bool {
+    match request.source_hint {
+        MediaSourceHint::Http => true,
+        MediaSourceHint::Auto => is_http_uri(&request.uri),
+        MediaSourceHint::LocalFile => false,
+    }
+}
+
+fn is_http_uri(uri: &str) -> bool {
+    uri.starts_with("http://") || uri.starts_with("https://")
+}
+
 fn trace_clock_reset(
     stage: &'static str,
     before: Duration,
@@ -1947,6 +1973,34 @@ mod tests {
         assert_eq!(correction.drift, Duration::from_secs(1));
         assert!(correction.snapped);
         assert_eq!(clock.media_time_at(t0), Duration::from_secs(11));
+    }
+
+    #[test]
+    fn http_playback_uses_deeper_audio_lead() {
+        let request = MediaRequest::new("https://example.invalid/video.mkv");
+        let timing = playback_timing_for_request(&request, PlaybackTimingConfig::default());
+
+        assert_eq!(timing.audio_lead_time, STREAMING_AUDIO_LEAD_TIME);
+    }
+
+    #[test]
+    fn custom_audio_lead_is_preserved_for_http_playback() {
+        let request = MediaRequest::new("https://example.invalid/video.mkv");
+        let custom = PlaybackTimingConfig {
+            audio_lead_time: Duration::from_millis(750),
+            ..PlaybackTimingConfig::default()
+        };
+        let timing = playback_timing_for_request(&request, custom);
+
+        assert_eq!(timing.audio_lead_time, Duration::from_millis(750));
+    }
+
+    #[test]
+    fn local_playback_keeps_default_audio_lead() {
+        let request = MediaRequest::new("/tmp/video.mkv");
+        let timing = playback_timing_for_request(&request, PlaybackTimingConfig::default());
+
+        assert_eq!(timing.audio_lead_time, DEFAULT_AUDIO_LEAD_TIME);
     }
 
     #[test]
