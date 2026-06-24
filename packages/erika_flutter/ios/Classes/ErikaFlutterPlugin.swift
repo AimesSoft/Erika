@@ -1023,7 +1023,10 @@ private final class ErikaMetalUIView: UIView, ErikaMetalSurfaceView {
     let scale = CGFloat(currentScale)
     contentScaleFactor = scale
     metalLayer.contentsScale = scale
-    metalLayer.frame = bounds
+    // metalLayer is this view's *backing* layer (layerClass == CAMetalLayer);
+    // UIKit already syncs its frame to the view. Setting it to `bounds` would
+    // move the backing layer to the superlayer origin, rendering the video at
+    // (0,0) instead of the view's frame (visible once the view isn't full-screen).
     metalLayer.drawableSize = CGSize(
       width: max(1.0, bounds.width * scale),
       height: max(1.0, bounds.height * scale)
@@ -1144,7 +1147,10 @@ private final class ErikaWindowOverlayView: UIView, ErikaMetalSurfaceView {
     let scale = CGFloat(currentScale)
     contentScaleFactor = scale
     metalLayer.contentsScale = scale
-    metalLayer.frame = bounds
+    // metalLayer is this view's *backing* layer (layerClass == CAMetalLayer);
+    // UIKit already syncs its frame to the view. Setting it to `bounds` would
+    // move the backing layer to the superlayer origin, rendering the video at
+    // (0,0) instead of the view's frame (visible once the view isn't full-screen).
     metalLayer.drawableSize = CGSize(
       width: max(1.0, bounds.width * scale),
       height: max(1.0, bounds.height * scale)
