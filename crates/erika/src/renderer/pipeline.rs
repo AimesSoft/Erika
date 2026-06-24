@@ -18,11 +18,11 @@ impl HdrMetadata {
     }
 
     pub fn nominal_peak_nits(self) -> Option<f32> {
-        self.content_light
-            .and_then(|metadata| metadata.max_content_light_level_nits())
+        self.mastering_display
+            .and_then(|metadata| metadata.max_luminance_nits())
             .or_else(|| {
-                self.mastering_display
-                    .and_then(|metadata| metadata.max_luminance_nits())
+                self.content_light
+                    .and_then(|metadata| metadata.max_content_light_level_nits())
             })
     }
 }
@@ -762,7 +762,7 @@ mod tests {
     }
 
     #[test]
-    fn hdr_metadata_prefers_content_light_peak() {
+    fn hdr_metadata_prefers_mastering_display_peak() {
         let metadata = HdrMetadata::new(
             Some(MasteringDisplayMetadata {
                 display_primaries: None,
@@ -779,9 +779,31 @@ mod tests {
         let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq)
             .hdr_metadata(Some(metadata));
 
+        assert_eq!(metadata.nominal_peak_nits(), Some(1000.0));
+        assert_eq!(source.nominal_peak_nits, 1000.0);
+        assert_eq!(source.hdr_metadata, Some(metadata));
+    }
+
+    #[test]
+    fn hdr_metadata_falls_back_to_max_cll_when_mastering_peak_is_missing() {
+        let metadata = HdrMetadata::new(
+            Some(MasteringDisplayMetadata {
+                display_primaries: None,
+                white_point: None,
+                min_luminance_nits: Some(0.005),
+                max_luminance_nits: None,
+            }),
+            Some(ContentLightMetadata {
+                max_content_light_level_nits: 4000,
+                max_frame_average_light_level_nits: 450,
+            }),
+        );
+
+        let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq)
+            .hdr_metadata(Some(metadata));
+
         assert_eq!(metadata.nominal_peak_nits(), Some(4000.0));
         assert_eq!(source.nominal_peak_nits, 4000.0);
-        assert_eq!(source.hdr_metadata, Some(metadata));
     }
 
     #[test]

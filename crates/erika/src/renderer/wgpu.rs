@@ -1763,6 +1763,16 @@ mod tests {
         (num / den).powf(1.0 / m1)
     }
 
+    fn ref_pq_inverse_eotf(normalized_nits: f32) -> f32 {
+        let m1 = 0.1593017578125;
+        let m2 = 78.84375;
+        let c1 = 0.8359375;
+        let c2 = 18.8515625;
+        let c3 = 18.6875;
+        let p = normalized_nits.clamp(0.0, 1.0).powf(m1);
+        ((c1 + c2 * p) / (1.0 + c3 * p).max(0.000001)).powf(m2)
+    }
+
     fn ref_transfer_to_source_linear(rgb: [f32; 3], u: &VideoUniforms) -> [f32; 3] {
         let rgb = rgb.map(|c| c.max(0.0));
         match u.source_transfer {
@@ -1810,6 +1820,12 @@ mod tests {
     }
 
     fn ref_output(rgb: [f32; 3], u: &VideoUniforms) -> [f32; 3] {
+        if u.target_transfer == 3 {
+            let pq_absolute_peak_nits = 10000.0;
+            let target_white = u.nits[3].max(1.0);
+            return rgb
+                .map(|c| ref_pq_inverse_eotf(c.max(0.0) * target_white / pq_absolute_peak_nits));
+        }
         if u.edr_output != 0 {
             return rgb.map(|c| c.max(0.0));
         }
@@ -1821,6 +1837,9 @@ mod tests {
     }
 
     fn ref_final(rgb: [f32; 3], u: &VideoUniforms) -> [f32; 3] {
+        if u.target_transfer == 3 {
+            return rgb.map(|c| c.clamp(0.0, 1.0));
+        }
         if u.edr_output != 0 {
             let headroom = (u.nits[1].max(1.0) / u.nits[3].max(1.0)).max(1.0);
             rgb.map(|c| c.clamp(0.0, headroom))
@@ -1901,6 +1920,10 @@ mod tests {
             [0.0, 0.0, 1.0, 0.0],
         ];
 
+        let mut pq_target = identity;
+        pq_target.target_transfer = 3;
+        pq_target.nits = [1000.0, 10000.0, 203.0, 203.0];
+
         let samples = [
             (16u8, 128u8, 128u8),
             (128, 128, 128),
@@ -1909,7 +1932,7 @@ mod tests {
             (235, 128, 128),
         ];
 
-        for uniforms in [sdr, identity] {
+        for uniforms in [sdr, identity, pq_target] {
             for (y, cb, cr) in samples {
                 let (luma, chroma) = build_solid_nv12(4, 4, y, cb, cr);
                 let out = renderer

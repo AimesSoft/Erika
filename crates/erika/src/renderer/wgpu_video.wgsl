@@ -54,6 +54,16 @@ fn pq_eotf(encoded: f32) -> f32 {
     return pow(num / den, 1.0 / m1);
 }
 
+fn pq_inverse_eotf(normalized_nits: f32) -> f32 {
+    let m1 = 0.1593017578125;
+    let m2 = 78.84375;
+    let c1 = 0.8359375;
+    let c2 = 18.8515625;
+    let c3 = 18.6875;
+    let p = pow(clamp(normalized_nits, 0.0, 1.0), m1);
+    return pow((c1 + c2 * p) / max(1.0 + c3 * p, 0.000001), m2);
+}
+
 fn transfer_to_source_reference_linear(rgb_in: vec3<f32>) -> vec3<f32> {
     let rgb = max(rgb_in, vec3<f32>(0.0));
     if (uniforms.source_transfer == 3u) {
@@ -106,6 +116,15 @@ fn target_nits_to_reference_linear(nits: vec3<f32>) -> vec3<f32> {
 }
 
 fn target_reference_linear_to_output(rgb: vec3<f32>) -> vec3<f32> {
+    if (uniforms.target_transfer == 3u) {
+        let pq_absolute_peak_nits = 10000.0;
+        let nits = max(rgb, vec3<f32>(0.0)) * target_reference_white_nits();
+        return vec3<f32>(
+            pq_inverse_eotf(nits.r / pq_absolute_peak_nits),
+            pq_inverse_eotf(nits.g / pq_absolute_peak_nits),
+            pq_inverse_eotf(nits.b / pq_absolute_peak_nits)
+        );
+    }
     if (uniforms.edr_output != 0u) {
         return max(rgb, vec3<f32>(0.0));
     }
@@ -119,6 +138,9 @@ fn target_reference_linear_to_output(rgb: vec3<f32>) -> vec3<f32> {
 }
 
 fn final_output(rgb: vec3<f32>) -> vec4<f32> {
+    if (uniforms.target_transfer == 3u) {
+        return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    }
     if (uniforms.edr_output != 0u) {
         let headroom = max(target_peak_nits() / target_reference_white_nits(), 1.0);
         return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(headroom)), 1.0);
