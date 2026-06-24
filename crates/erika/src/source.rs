@@ -2,6 +2,7 @@ use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
@@ -90,18 +91,19 @@ pub struct HttpRangeSource {
     cache_start: u64,
     cache_bytes: Vec<u8>,
     read_ahead_bytes: u64,
+    prefetch: Option<PendingHttpFetch>,
+}
+
+struct PendingHttpFetch {
+    range: ByteRange,
+    handle: JoinHandle<Result<Vec<u8>>>,
 }
 
 impl HttpRangeSource {
-    const DEFAULT_READ_AHEAD_BYTES: u64 = 1024 * 1024;
+    const DEFAULT_READ_AHEAD_BYTES: u64 = 2 * 1024 * 1024;
 
     pub fn new(uri: impl Into<String>) -> Self {
-        let agent = ureq::Agent::config_builder()
-            .timeout_connect(Some(Duration::from_secs(10)))
-            .timeout_recv_response(Some(Duration::from_secs(15)))
-            .timeout_recv_body(Some(Duration::from_secs(60)))
-            .build()
-            .into();
+        let agent = http_agent();
         Self {
             uri: uri.into(),
             agent,
@@ -109,6 +111,7 @@ impl HttpRangeSource {
             cache_start: 0,
             cache_bytes: Vec::new(),
             read_ahead_bytes: http_read_ahead_bytes(),
+            prefetch: None,
         }
     }
 
@@ -129,40 +132,160 @@ impl HttpRangeSource {
         Some(self.cache_bytes[start_index..end_index].to_vec())
     }
 
+    fn cached_prefix(&self, range: ByteRange) -> Option<Vec<u8>> {
+        let length = range.length?;
+        let end = range.start.checked_add(length)?;
+        let cache_end = self.cache_end();
+        if range.start < self.cache_start || range.start >= cache_end || end <= cache_end {
+            return None;
+        }
+        let start_index = usize::try_from(range.start - self.cache_start).ok()?;
+        let end_index = usize::try_from(cache_end - self.cache_start).ok()?;
+        Some(self.cache_bytes[start_index..end_index].to_vec())
+    }
+
     fn fetch_range(&self, range: ByteRange) -> Result<Vec<u8>> {
-        let header = match range.length {
-            Some(length) if length > 0 => {
-                let end = range.start.saturating_add(length).saturating_sub(1);
-                format!("bytes={}-{}", range.start, end)
+        fetch_http_range(&self.agent, &self.uri, range, "http_range")
+    }
+
+    fn fetch_length(&mut self, range: ByteRange) -> Result<Option<u64>> {
+        let requested_length = range.length.unwrap_or(0);
+        Ok(match range.length {
+            Some(length) => {
+                let mut length = length.max(self.read_ahead_bytes);
+                if let Some(total) = self.content_length.or_else(|| self.len().ok().flatten()) {
+                    if range.start >= total {
+                        return Ok(Some(0));
+                    }
+                    length = length.min(total.saturating_sub(range.start));
+                }
+                Some(length.max(requested_length))
             }
-            _ => format!("bytes={}-", range.start),
-        };
-        let started = Instant::now();
-        let mut response = self
-            .agent
-            .get(&self.uri)
-            .header("Range", &header)
-            .call()
-            .map_err(|error| SourceError::Http(error.to_string()))?;
-        let status = response.status().as_u16();
-        let mut bytes = Vec::new();
-        response
-            .body_mut()
-            .as_reader()
-            .read_to_end(&mut bytes)
-            .map_err(|error| SourceError::Http(error.to_string()))?;
+            None => None,
+        })
+    }
+
+    fn take_prefetch(&mut self, range: ByteRange) -> Option<Result<(u64, Vec<u8>)>> {
+        let pending = self.prefetch.take()?;
+        if !range_contains(pending.range, range) {
+            return None;
+        }
+        let join_started = Instant::now();
+        let start = pending.range.start;
+        let result = pending
+            .handle
+            .join()
+            .map_err(|_| SourceError::Http("http prefetch thread panicked".to_string()))
+            .and_then(|bytes| bytes);
         http_trace_log(format!(
-            "{{\"event\":\"http_range\",\"start\":{},\"length\":{},\"status\":{},\"bytes\":{},\"elapsed_ms\":{:.3}}}",
+            "{{\"event\":\"http_prefetch_join\",\"start\":{},\"length\":{},\"elapsed_ms\":{:.3}}}",
+            start,
+            pending
+                .range
+                .length
+                .map_or_else(|| "null".to_string(), |length| length.to_string()),
+            join_started.elapsed().as_secs_f64() * 1000.0,
+        ));
+        Some(result.map(|bytes| (start, bytes)))
+    }
+
+    fn maybe_start_prefetch(&mut self, range: ByteRange) {
+        if self.prefetch.is_some() || self.cache_bytes.is_empty() {
+            return;
+        }
+        let Some(length) = range.length else {
+            return;
+        };
+        let Some(total) = self.content_length else {
+            return;
+        };
+        let Some(end) = range.start.checked_add(length) else {
+            return;
+        };
+        let cache_end = self.cache_end();
+        if end > cache_end || cache_end >= total {
+            return;
+        }
+        let remaining = cache_end.saturating_sub(end);
+        if remaining > self.read_ahead_bytes / 2 {
+            return;
+        }
+        let length = self.read_ahead_bytes.min(total.saturating_sub(cache_end));
+        if length == 0 {
+            return;
+        }
+        let prefetch_range = ByteRange {
+            start: cache_end,
+            length: Some(length),
+        };
+        self.prefetch = Some(PendingHttpFetch::spawn(self.uri.clone(), prefetch_range));
+    }
+}
+
+impl PendingHttpFetch {
+    fn spawn(uri: String, range: ByteRange) -> Self {
+        http_trace_log(format!(
+            "{{\"event\":\"http_prefetch_start\",\"start\":{},\"length\":{}}}",
             range.start,
             range
                 .length
                 .map_or_else(|| "null".to_string(), |length| length.to_string()),
-            status,
-            bytes.len(),
-            started.elapsed().as_secs_f64() * 1000.0,
         ));
-        Ok(bytes)
+        let handle = thread::spawn(move || {
+            let agent = http_agent();
+            fetch_http_range(&agent, &uri, range, "http_prefetch_range")
+        });
+        Self { range, handle }
     }
+}
+
+fn http_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_recv_response(Some(Duration::from_secs(15)))
+        .timeout_recv_body(Some(Duration::from_secs(60)))
+        .build()
+        .into()
+}
+
+fn fetch_http_range(
+    agent: &ureq::Agent,
+    uri: &str,
+    range: ByteRange,
+    event: &str,
+) -> Result<Vec<u8>> {
+    let header = match range.length {
+        Some(length) if length > 0 => {
+            let end = range.start.saturating_add(length).saturating_sub(1);
+            format!("bytes={}-{}", range.start, end)
+        }
+        _ => format!("bytes={}-", range.start),
+    };
+    let started = Instant::now();
+    let mut response = agent
+        .get(uri)
+        .header("Range", &header)
+        .call()
+        .map_err(|error| SourceError::Http(error.to_string()))?;
+    let status = response.status().as_u16();
+    let mut bytes = Vec::new();
+    response
+        .body_mut()
+        .as_reader()
+        .read_to_end(&mut bytes)
+        .map_err(|error| SourceError::Http(error.to_string()))?;
+    http_trace_log(format!(
+        "{{\"event\":\"{}\",\"start\":{},\"length\":{},\"status\":{},\"bytes\":{},\"elapsed_ms\":{:.3}}}",
+        event,
+        range.start,
+        range
+            .length
+            .map_or_else(|| "null".to_string(), |length| length.to_string()),
+        status,
+        bytes.len(),
+        started.elapsed().as_secs_f64() * 1000.0,
+    ));
+    Ok(bytes)
 }
 
 impl std::fmt::Debug for HttpRangeSource {
@@ -210,6 +333,7 @@ impl MediaSource for HttpRangeSource {
 
     fn read_range(&mut self, range: ByteRange) -> Result<Vec<u8>> {
         if let Some(bytes) = self.cached_slice(range) {
+            self.maybe_start_prefetch(range);
             http_trace_log(format!(
                 "{{\"event\":\"http_cache_hit\",\"start\":{},\"length\":{},\"bytes\":{}}}",
                 range.start,
@@ -220,29 +344,54 @@ impl MediaSource for HttpRangeSource {
         }
 
         let requested_length = range.length.unwrap_or(0);
-        let fetch_length = match range.length {
-            Some(length) => {
-                let mut length = length.max(self.read_ahead_bytes);
-                if let Some(total) = self.content_length.or_else(|| self.len().ok().flatten()) {
-                    if range.start >= total {
-                        return Ok(Vec::new());
-                    }
-                    length = length.min(total.saturating_sub(range.start));
+        if let Some(prefix) = self.cached_prefix(range) {
+            let prefix_length = prefix.len() as u64;
+            let suffix_range = ByteRange {
+                start: range.start.saturating_add(prefix_length),
+                length: Some(requested_length.saturating_sub(prefix_length)),
+            };
+            if let Some(prefetch) = self.take_prefetch(suffix_range) {
+                let (prefetch_start, prefetch_bytes) = prefetch?;
+                let prefetch_range = ByteRange {
+                    start: prefetch_start,
+                    length: Some(prefetch_bytes.len() as u64),
+                };
+                if range_contains(prefetch_range, suffix_range) {
+                    let mut cache_bytes = prefix;
+                    cache_bytes.extend_from_slice(&prefetch_bytes);
+                    self.cache_start = range.start;
+                    self.cache_bytes = cache_bytes;
+                    self.maybe_start_prefetch(range);
+                    let copy_len = requested_length.min(self.cache_bytes.len() as u64) as usize;
+                    return Ok(self.cache_bytes[..copy_len].to_vec());
                 }
-                Some(length.max(requested_length))
             }
-            None => None,
+        }
+        let fetch_length = self.fetch_length(range)?;
+        if fetch_length == Some(0) {
+            return Ok(Vec::new());
+        }
+        let fetched = match self.take_prefetch(range) {
+            Some(Ok((start, bytes))) => {
+                self.cache_start = start;
+                self.cache_bytes = bytes;
+                let bytes = self.cached_slice(range).unwrap_or_default();
+                self.maybe_start_prefetch(range);
+                return Ok(bytes);
+            }
+            Some(Err(error)) => return Err(error),
+            None => self.fetch_range(ByteRange {
+                start: range.start,
+                length: fetch_length,
+            })?,
         };
-        let fetched = self.fetch_range(ByteRange {
-            start: range.start,
-            length: fetch_length,
-        })?;
         if range.length.is_none() {
             return Ok(fetched);
         }
 
         self.cache_start = range.start;
         self.cache_bytes = fetched;
+        self.maybe_start_prefetch(range);
         let copy_len = requested_length.min(self.cache_bytes.len() as u64) as usize;
         Ok(self.cache_bytes[..copy_len].to_vec())
     }
@@ -287,6 +436,19 @@ fn source_from_auto_uri(uri: &str) -> Result<Box<dyn MediaSource>> {
 
 fn local_path_from_uri(uri: &str) -> &str {
     uri.strip_prefix("file://").unwrap_or(uri)
+}
+
+fn range_contains(container: ByteRange, range: ByteRange) -> bool {
+    let (Some(container_length), Some(range_length)) = (container.length, range.length) else {
+        return false;
+    };
+    let Some(container_end) = container.start.checked_add(container_length) else {
+        return false;
+    };
+    let Some(range_end) = range.start.checked_add(range_length) else {
+        return false;
+    };
+    range.start >= container.start && range_end <= container_end
 }
 
 fn http_read_ahead_bytes() -> u64 {
@@ -376,6 +538,35 @@ mod tests {
         assert!(matches!(
             source_from_uri_with_hint("file:///tmp/video.mp4", MediaSourceHint::Http),
             Err(SourceError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn http_default_read_ahead_is_streaming_sized() {
+        assert_eq!(HttpRangeSource::DEFAULT_READ_AHEAD_BYTES, 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn range_contains_accepts_inner_byte_ranges() {
+        assert!(range_contains(
+            ByteRange {
+                start: 100,
+                length: Some(200),
+            },
+            ByteRange {
+                start: 128,
+                length: Some(64),
+            },
+        ));
+        assert!(!range_contains(
+            ByteRange {
+                start: 100,
+                length: Some(200),
+            },
+            ByteRange {
+                start: 280,
+                length: Some(64),
+            },
         ));
     }
 

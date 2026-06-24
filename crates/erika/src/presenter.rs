@@ -40,7 +40,7 @@ use crate::subtitle::{
 use crate::trace;
 use crate::{PlayerError, Result};
 
-const AUDIO_START_BUFFER: Duration = Duration::from_millis(50);
+const AUDIO_START_BUFFER: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone)]
 pub struct PresenterConfig {
@@ -78,7 +78,7 @@ impl Default for PresenterAudioConfig {
         {
             Self {
                 ring_buffer: AudioRingBufferConfig {
-                    capacity_frames: 96_000,
+                    capacity_frames: 192_000,
                     drop_oldest_on_overflow: true,
                 },
             }
@@ -119,6 +119,11 @@ pub struct PresenterStats {
 pub struct PresenterRuntimeSnapshot {
     pub stats: PresenterStats,
     pub renderer: RendererRuntimeStats,
+    pub audio_output_queued_duration: Option<Duration>,
+    pub audio_output_queued_frames: usize,
+    pub audio_output_read_frames: u64,
+    pub audio_output_written_frames: u64,
+    pub audio_output_underflow_frames: u64,
     pub media_time: Duration,
     pub generation: u64,
     pub playing: bool,
@@ -640,9 +645,18 @@ impl PresenterRuntime {
             .current_danmaku
             .as_ref()
             .map_or(Default::default(), |plan| plan.frame_stats);
+        let audio_snapshot = self.audio_output.clock_snapshot();
         PresenterRuntimeSnapshot {
             stats: self.stats,
             renderer,
+            audio_output_queued_duration: audio_snapshot
+                .and_then(|snapshot| snapshot.queued_duration),
+            audio_output_queued_frames: audio_snapshot.map_or(0, |snapshot| snapshot.queued_frames),
+            audio_output_read_frames: audio_snapshot.map_or(0, |snapshot| snapshot.read_frames),
+            audio_output_written_frames: audio_snapshot
+                .map_or(0, |snapshot| snapshot.written_frames),
+            audio_output_underflow_frames: audio_snapshot
+                .map_or(0, |snapshot| snapshot.underflow_frames),
             media_time: self.current_media_time,
             generation: self.current_generation,
             playing: self.is_playing(),
