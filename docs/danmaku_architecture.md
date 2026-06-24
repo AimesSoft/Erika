@@ -1,5 +1,7 @@
 # Erika 弹幕子系统架构
 
+[中文](danmaku_architecture.md) | [English](danmaku_architecture.en.md) | [日本語](danmaku_architecture.ja.md)
+
 本文记录当前 Erika 弹幕子系统的实际架构、它和 NipaPlay DFM+ 弹幕系统的对应关系，以及后续应替换/保持的边界。核心结论是：Erika 也应该把自己视为一个 NipaPlay 弹幕系统的原生化承载者。弹幕系统的输入仍然是弹幕文件和用户配置，布局内核应尽量保持 DFM+ 的输入输出语义，最终输出随视频帧一起进入 Erika 原生 renderer。
 
 ## 当前目标

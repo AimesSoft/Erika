@@ -1,5 +1,7 @@
 # Erika Architecture
 
+[中文](architecture.zh.md) | [English](architecture.md) | [日本語](architecture.ja.md)
+
 Erika is an embeddable Rust media playback library. Host applications call into
 the engine through the Rust API, a C ABI (`erika_capi`), or Flutter bindings
 (`erika_flutter`). Video frames, subtitles, and danmaku stay inside the engine
