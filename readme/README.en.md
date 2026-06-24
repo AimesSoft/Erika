@@ -2,6 +2,9 @@
 
 # Erika
 
+> "GOOD! I'm Erika, the fifth player kernel in NipaPlay after mdk, video player, libmpv, and media kit."
+> "Even counting you, there are only four player kernels!"
+
 **The in-house playback core of NipaPlay.** Written in Rust, embeddable, handling everything from decode to render.
 
 > Named after the detective **Furude Erika** from *Umineko When They Cry*.
