@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
@@ -7,6 +8,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ERIKA_NATIVE_PROFILE");
     println!("cargo:rerun-if-env-changed=ERIKA_NATIVE_TARGET");
     println!("cargo:rerun-if-env-changed=ERIKA_FFMPEG_DIR");
+    println!("cargo:rerun-if-env-changed=ERIKA_ALLOW_LEGACY_FFMPEG");
+    println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
 
     let dist_dir = ffmpeg_dist_dir();
     let include_dir = dist_dir.join("include");
@@ -14,11 +17,14 @@ fn main() {
 
     if !include_dir.join("libavformat/avformat.h").exists() {
         panic!(
-            "FFmpeg headers were not found at {}. Run `cargo run -p xtask -- deps build --profile {}` first, or set ERIKA_FFMPEG_DIR.",
+            "FFmpeg headers were not found at {}. Run `{}` first, or set ERIKA_FFMPEG_DIR.",
             include_dir.display(),
-            native_profile()
+            xtask_build_hint()
         );
     }
+
+    let ffmpeg_version_major = emit_ffmpeg_version_cfg(&include_dir);
+    enforce_windows_ffmpeg_version(ffmpeg_version_major, &include_dir);
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=avdevice");
@@ -40,7 +46,29 @@ fn main() {
         println!("cargo:rustc-link-lib=iconv");
         println!("cargo:rustc-link-lib=bz2");
         println!("cargo:rustc-link-lib=z");
+    } else if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        for lib in [
+            "bcrypt",
+            "d3d11",
+            "dxgi",
+            "dxguid",
+            "gdi32",
+            "mf",
+            "mfplat",
+            "mfuuid",
+            "mfreadwrite",
+            "ole32",
+            "secur32",
+            "strmiids",
+            "user32",
+            "uuid",
+            "ws2_32",
+        ] {
+            println!("cargo:rustc-link-lib={lib}");
+        }
     }
+
+    ensure_libclang_path();
 
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
@@ -69,6 +97,84 @@ fn main() {
         .expect("write FFmpeg bindings");
 }
 
+fn emit_ffmpeg_version_cfg(include_dir: &Path) -> Option<u32> {
+    println!("cargo:rustc-check-cfg=cfg(erika_ffmpeg_legacy_channel_layout)");
+    let version_header = include_dir.join("libavutil/version.h");
+    println!("cargo:rerun-if-changed={}", version_header.display());
+    let Ok(contents) = fs::read_to_string(&version_header) else {
+        return None;
+    };
+    let major = contents.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some("#define"), Some("LIBAVUTIL_VERSION_MAJOR"), Some(value)) => {
+                value.parse::<u32>().ok()
+            }
+            _ => None,
+        }
+    });
+    if matches!(major, Some(value) if value < 57) {
+        println!("cargo:rustc-cfg=erika_ffmpeg_legacy_channel_layout");
+    }
+    major
+}
+
+fn enforce_windows_ffmpeg_version(version_major: Option<u32>, include_dir: &Path) {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    if env::var("ERIKA_ALLOW_LEGACY_FFMPEG").as_deref() == Ok("1") {
+        return;
+    }
+    if matches!(version_major, Some(major) if major >= 59) {
+        return;
+    }
+    panic!(
+        "Windows native core requires Erika's FFmpeg 7.x dependency bundle (libavutil >= 59), but found {:?} under {}. Run `{}` or set ERIKA_FFMPEG_DIR to that dist; set ERIKA_ALLOW_LEGACY_FFMPEG=1 only for local compatibility experiments.",
+        version_major,
+        include_dir.display(),
+        xtask_build_hint()
+    );
+}
+
+fn ensure_libclang_path() {
+    if env::var_os("LIBCLANG_PATH").is_some() {
+        return;
+    }
+    for path in [
+        Path::new("C:/msys64/mingw64/bin"),
+        Path::new("C:/Program Files/LLVM/bin"),
+    ] {
+        if path.join("libclang.dll").exists() {
+            // Build scripts are single-process setup code; set this before bindgen
+            // loads libclang so Windows source builds work without a developer shell.
+            unsafe {
+                env::set_var("LIBCLANG_PATH", path);
+            }
+            prepend_path_for_dlls(path);
+            if path.starts_with("C:/msys64") {
+                prepend_path_for_dlls(Path::new("C:/msys64/usr/bin"));
+            }
+            return;
+        }
+    }
+}
+
+fn prepend_path_for_dlls(path: &Path) {
+    if !path.exists() {
+        return;
+    }
+    let mut paths = vec![path.to_path_buf()];
+    if let Some(current) = env::var_os("PATH") {
+        paths.extend(env::split_paths(&current));
+    }
+    if let Ok(joined) = env::join_paths(paths) {
+        unsafe {
+            env::set_var("PATH", joined);
+        }
+    }
+}
+
 fn ffmpeg_dist_dir() -> PathBuf {
     if let Ok(path) = env::var("ERIKA_FFMPEG_DIR") {
         return PathBuf::from(path);
@@ -83,12 +189,27 @@ fn ffmpeg_dist_dir() -> PathBuf {
     let mut dist = workspace_root().join("third_party/dist");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("ios") {
         dist = dist.join("ios");
+    } else if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "x86_64".to_string());
+        dist = dist.join(format!("{arch}-pc-windows-msvc"));
     }
     dist.join(native_profile()).join("ffmpeg")
 }
 
 fn native_profile() -> String {
     env::var("ERIKA_NATIVE_PROFILE").unwrap_or_else(|_| "lgpl".to_string())
+}
+
+fn xtask_build_hint() -> String {
+    let profile = native_profile();
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "x86_64".to_string());
+        format!(
+            "cargo run -p xtask -- deps build --profile {profile} --target {arch}-pc-windows-msvc"
+        )
+    } else {
+        format!("cargo run -p xtask -- deps build --profile {profile}")
+    }
 }
 
 fn workspace_root() -> PathBuf {

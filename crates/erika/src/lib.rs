@@ -10,6 +10,8 @@ pub mod renderer;
 pub mod source;
 pub mod subtitle;
 pub mod text;
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 mod trace;
 

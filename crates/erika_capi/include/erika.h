@@ -195,6 +195,15 @@ typedef struct ErikaPresenterStats {
   uint64_t import_failures;
   uint64_t render_failures;
   uint64_t audio_failures;
+  uint64_t software_video_frames;
+  uint64_t hardware_video_frames;
+  uint64_t zero_copy_video_frames;
+  uint64_t cpu_video_frame_fallbacks;
+  uint64_t last_render_micros;
+  uint64_t last_render_current_micros;
+  uint64_t audio_clock_read_frames;
+  uint64_t audio_clock_queued_frames;
+  uint64_t audio_clock_underflow_frames;
 } ErikaPresenterStats;
 
 ErikaHandle *erika_create(void);
@@ -353,6 +362,23 @@ ErikaStatus erika_presenter_tracks(
 ErikaStatus erika_presenter_attach_metal_layer(
     ErikaPresenterHandle *handle,
     uint64_t raw_layer,
+    uint32_t width,
+    uint32_t height,
+    double scale);
+
+ErikaStatus erika_presenter_attach_wgpu_surface(
+    ErikaPresenterHandle *handle,
+    ErikaWgpuSurfaceKind kind,
+    uint64_t raw_window,
+    uint64_t raw_display,
+    uint32_t width,
+    uint32_t height,
+    double scale);
+
+ErikaStatus erika_presenter_attach_windows_hwnd(
+    ErikaPresenterHandle *handle,
+    uint64_t hwnd,
+    uint64_t hinstance,
     uint32_t width,
     uint32_t height,
     double scale);

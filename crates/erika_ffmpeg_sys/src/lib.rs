@@ -56,4 +56,13 @@ impl NativeDependencyProfile {
             ],
         }
     }
+
+    pub fn ffmpeg_configure_flags_for_target_os(self, target_os: &str) -> Vec<&'static str> {
+        let mut flags = self.ffmpeg_configure_flags().to_vec();
+        if target_os == "windows" {
+            flags.retain(|flag| *flag != "--enable-videotoolbox");
+            flags.extend(["--enable-d3d11va", "--enable-dxva2"]);
+        }
+        flags
+    }
 }

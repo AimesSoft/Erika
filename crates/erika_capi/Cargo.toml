@@ -10,8 +10,9 @@ version.workspace = true
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [features]
-default = ["libass"]
+default = ["libass", "wgpu"]
 libass = ["erika/libass"]
+wgpu = ["erika/wgpu"]
 
 [dependencies]
 crossbeam-channel.workspace = true

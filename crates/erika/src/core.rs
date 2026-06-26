@@ -459,6 +459,10 @@ pub struct RendererRuntimeStats {
     pub last_upscaler_encode_duration: Duration,
     pub last_gpu_duration: Duration,
     pub attached: bool,
+    pub software_video_frames: u64,
+    pub hardware_video_frames: u64,
+    pub zero_copy_video_frames: u64,
+    pub cpu_video_frame_fallbacks: u64,
 }
 
 struct PlayerInner {

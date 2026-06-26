@@ -21,6 +21,7 @@ members = [
   "examples/playback_audio_tick",
   "examples/render_pipeline_plan",
   "examples/macos_native_demo",
+  "examples/windows_native_demo",
   "examples/wgpu_video_png",
   "examples/wgpu_decode_png",
   "examples/wgpu_window_check",
@@ -61,6 +62,7 @@ objc2-metal = "0.3.2"
 objc2-quartz-core = "0.3.2"
 thiserror = "2.0.17"
 ureq = { version = "3.1.4", default-features = false, features = ["rustls"] }
+windows = "0.62.2"
 
 [profile.dev]
 debug = 2

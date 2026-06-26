@@ -79,6 +79,7 @@ impl Default for PlaybackQueueLimits {
 pub enum VideoDecodePreference {
     Software,
     VideoToolbox,
+    D3d11va,
 }
 
 impl VideoDecodePreference {
@@ -86,6 +87,7 @@ impl VideoDecodePreference {
         match self {
             Self::Software => DecoderConfig::software(),
             Self::VideoToolbox => DecoderConfig::videotoolbox(),
+            Self::D3d11va => DecoderConfig::d3d11va(),
         }
     }
 }
@@ -97,7 +99,14 @@ impl Default for VideoDecodePreference {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(target_os = "windows")]
+impl Default for VideoDecodePreference {
+    fn default() -> Self {
+        Self::D3d11va
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 impl Default for VideoDecodePreference {
     fn default() -> Self {
         Self::Software
@@ -192,10 +201,20 @@ impl PlaybackSession {
         if let Some(stream_index) = selected_video_track {
             selected_streams.push(stream_index);
             let parameters = demuxer.codec_parameters(stream_index)?;
-            video_decoder = Some(Decoder::open_with_config(
-                parameters,
-                config.video_decode.decoder_config(),
-            )?);
+            let decoder_config = config.video_decode.decoder_config();
+            video_decoder = Some(
+                match Decoder::open_with_config(parameters, decoder_config) {
+                    Ok(decoder) => decoder,
+                    Err(error) if decoder_config.backend != DecoderBackend::Software => {
+                        eprintln!(
+                            "Erika playback {:?} decoder open failed: {error}; falling back to software",
+                            decoder_config.backend
+                        );
+                        Decoder::open_with_config(parameters, DecoderConfig::software())?
+                    }
+                    Err(error) => return Err(error.into()),
+                },
+            );
         }
         let mut audio_decoder = None;
         if let Some(stream_index) = selected_audio_track {
