@@ -55,6 +55,7 @@ use crate::renderer::metal::{
 };
 use crate::renderer::pipeline::{ColorRange, LumaUpscalerMode, ToneMapOperator};
 use crate::subtitle::{AssColor, SubtitleAlphaBitmap};
+use crate::trace;
 
 const CV_PIXEL_FORMAT_420_YP_CB_CR10_BI_PLANAR_VIDEO_RANGE: u32 =
     kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange;
@@ -291,6 +292,7 @@ impl MetalRendererImpl {
                 "no CAMetalLayer attached".to_string(),
             ));
         };
+        let started = Instant::now();
 
         unsafe {
             let Some(drawable): Option<Retained<ProtocolObject<dyn CAMetalDrawable>>> =
@@ -334,6 +336,16 @@ impl MetalRendererImpl {
         }
 
         self.stats.rendered_frames += 1;
+        if trace::enabled() {
+            trace::log(format!(
+                "[erika-render-trace] stage=clear elapsed_ms={:.3} color={:.3},{:.3},{:.3},{:.3}",
+                started.elapsed().as_secs_f64() * 1000.0,
+                color.red,
+                color.green,
+                color.blue,
+                color.alpha,
+            ));
+        }
 
         Ok(())
     }
@@ -424,9 +436,12 @@ impl MetalRendererImpl {
         overlay: Option<OverlayRenderFrame<'_>>,
         danmaku: Option<DanmakuRenderFrame<'_>>,
     ) -> Result<()> {
+        let started = Instant::now();
         let danmaku_item_count = danmaku
             .as_ref()
             .map_or(0usize, |danmaku| danmaku.plan.items.len());
+        let mut upscaled_luma_used = false;
+        let has_overlay = overlay.is_some();
         self.stats.last_danmaku_atlas_duration = Duration::ZERO;
         self.stats.last_danmaku_vertex_build_duration = Duration::ZERO;
         self.stats.last_danmaku_vertex_copy_duration = Duration::ZERO;
@@ -536,6 +551,7 @@ impl MetalRendererImpl {
             if upscaled_luma.is_some() {
                 self.stats.upscaled_frames += 1;
                 frame.pipeline = frame.pipeline.with_luma_upscaler(self.upscaler.mode());
+                upscaled_luma_used = true;
             }
             let luma: &ProtocolObject<dyn MTLTexture> = upscaled_luma.as_deref().unwrap_or(luma);
 
@@ -632,6 +648,23 @@ impl MetalRendererImpl {
         if danmaku_item_count > 0 {
             self.stats.danmaku_passes += 1;
             self.stats.danmaku_items += danmaku_item_count as u64;
+        }
+        if trace::enabled() {
+            trace::log(format!(
+                "[erika-render-trace] stage=video_frame elapsed_ms={:.3} gen={} size={}x{} upscaled={} overlay={} danmaku_items={} gpu_ms={:.3} upscaler_ms={:.3}",
+                started.elapsed().as_secs_f64() * 1000.0,
+                frame
+                    .frame_token
+                    .map(|token| token.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                frame.frame.info.width,
+                frame.frame.info.height,
+                upscale_requested && upscaled_luma_used,
+                has_overlay,
+                danmaku_item_count,
+                self.stats.last_gpu_duration.as_secs_f64() * 1000.0,
+                self.stats.last_upscaler_encode_duration.as_secs_f64() * 1000.0,
+            ));
         }
 
         Ok(())

@@ -1,6 +1,6 @@
 use std::env;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 use crate::core::MediaSourceHint;
+use crate::trace;
 
 #[derive(Debug, Error)]
 pub enum SourceError {
@@ -310,6 +311,13 @@ impl MediaSource for HttpRangeSource {
             return Ok(self.content_length);
         }
         let started = Instant::now();
+        http_trace_log(format!(
+            "[erika-http-trace] stage=head_request uri={} cache_start={} cache_end={} read_ahead={}",
+            redacted_uri(&self.uri),
+            self.cache_start,
+            self.cache_end(),
+            self.read_ahead_bytes,
+        ));
         let response = self
             .agent
             .head(&self.uri)
@@ -323,7 +331,7 @@ impl MediaSource for HttpRangeSource {
             .and_then(|value| value.parse::<u64>().ok());
         self.content_length = length;
         http_trace_log(format!(
-            "{{\"event\":\"http_head\",\"status\":{},\"length\":{},\"elapsed_ms\":{:.3}}}",
+            "[erika-http-trace] stage=head_response status={} length={} elapsed_ms={:.3}",
             status,
             length.map_or_else(|| "null".to_string(), |length| length.to_string()),
             started.elapsed().as_secs_f64() * 1000.0,
@@ -459,19 +467,13 @@ fn http_read_ahead_bytes() -> u64 {
 }
 
 fn http_trace_log(line: impl AsRef<str>) {
-    if !crate::trace::env_flag("ERIKA_HTTP_TRACE") {
+    if !trace::env_flag("ERIKA_HTTP_TRACE") {
         return;
     }
-    let line = line.as_ref();
-    eprintln!("{line}");
     let path = env::var_os("ERIKA_HTTP_TRACE_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/tmp/erika_http_trace.jsonl"));
-    let _ = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .and_then(|mut file| writeln!(file, "{line}"));
+    trace::append_line(line.as_ref(), path);
 }
 
 fn redacted_uri(uri: &str) -> String {

@@ -18,7 +18,10 @@ use crate::trace;
 static NEXT_PLAYER_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_EXTERNAL_SUBTITLE_TRACK_ID: AtomicU64 = AtomicU64::new(1);
 const EXTERNAL_SUBTITLE_TRACK_ID_BASE: i64 = 1_000_000;
-const AUDIO_PREFILL_BURST_LIMIT: usize = 64;
+const AUDIO_PREFILL_AFTER_VIDEO_LIMIT: usize = 4;
+const AUDIO_PREFILL_PACKET_BUDGET: usize = 4;
+const AUDIO_PREFILL_TIME_BUDGET: Duration = Duration::from_millis(3);
+const AUDIO_PREFILL_LOW_WATER: Duration = Duration::from_millis(350);
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PlayerError {
@@ -884,12 +887,27 @@ fn run_playback_worker(
     inner: Arc<Mutex<PlayerInner>>,
     commands: Receiver<PlaybackCommand>,
 ) {
+    let worker_started = std::time::Instant::now();
     let mut last_position_event = None;
     let mut playback_generation = 1u64;
     let mut last_worker_clock = None;
+    let mut last_audio_snapshot = None;
+    let mut loop_count = 0u64;
+    trace::log(format!(
+        "[erika-playback-trace] stage=worker_start state={:?} generation={} poll_ms={} uptime_ms={:.3}",
+        engine.state(),
+        playback_generation,
+        playback_poll_interval(engine.state()).as_millis(),
+        worker_started.elapsed().as_secs_f64() * 1000.0,
+    ));
     loop {
+        loop_count = loop_count.saturating_add(1);
+        let loop_started = std::time::Instant::now();
+        let mut command_count = 0usize;
         match commands.recv_timeout(playback_poll_interval(engine.state())) {
             Ok(command) => {
+                command_count += 1;
+                observe_audio_pump_command(&mut last_audio_snapshot, &command);
                 if !handle_playback_command(engine, &inner, command, &mut playback_generation) {
                     return;
                 }
@@ -899,14 +917,13 @@ fn run_playback_worker(
         }
 
         while let Ok(command) = commands.try_recv() {
+            command_count += 1;
+            observe_audio_pump_command(&mut last_audio_snapshot, &command);
             if !handle_playback_command(engine, &inner, command, &mut playback_generation) {
                 return;
             }
         }
-
-        if engine.should_prefill_audio() {
-            pump_audio_from_worker(engine, &inner, playback_generation, "before_video_tick");
-        }
+        let after_commands = std::time::Instant::now();
 
         sync_playback_clock_from_worker(
             engine,
@@ -915,11 +932,25 @@ fn run_playback_worker(
             "before_video_tick",
             &mut last_worker_clock,
         );
+        let after_clock_sync = std::time::Instant::now();
 
         match engine.tick() {
             Ok(Some(frame)) => {
                 let position = frame.pts.unwrap_or(frame.media_time);
                 last_position_event = Some(position);
+                trace::log(format!(
+                    "[erika-playback-trace] stage=video_frame gen={} pts={} media={} late={} loop={} commands={} state={:?}",
+                    playback_generation,
+                    trace::duration_label(frame.pts),
+                    trace::duration_label(Some(frame.media_time)),
+                    frame
+                        .late_by
+                        .map(|duration| format!("{:.3}", duration.as_secs_f64()))
+                        .unwrap_or_else(|| "-".to_string()),
+                    loop_count,
+                    command_count,
+                    engine.state(),
+                ));
                 emit_video_frame_from_worker(
                     &inner,
                     PlayerVideoFrame {
@@ -933,6 +964,10 @@ fn run_playback_worker(
             }
             Ok(None) => {}
             Err(error) => {
+                trace::log(format!(
+                    "[erika-playback-trace] stage=video_tick_error gen={} loop={} commands={} error={}",
+                    playback_generation, loop_count, command_count, error,
+                ));
                 emit_from_worker(
                     &inner,
                     PlayerEvent::Error(PlayerError::Playback(error.to_string())),
@@ -948,9 +983,18 @@ fn run_playback_worker(
             "after_video_tick",
             &mut last_worker_clock,
         );
+        let after_video = std::time::Instant::now();
 
         if engine.state() == PlaybackRunState::Playing {
-            pump_audio_from_worker(engine, &inner, playback_generation, "after_video_tick");
+            if should_prefill_audio_from_worker(engine, last_audio_snapshot) {
+                pump_audio_from_worker(
+                    engine,
+                    &inner,
+                    playback_generation,
+                    "after_video_tick",
+                    AUDIO_PREFILL_AFTER_VIDEO_LIMIT,
+                );
+            }
 
             match engine.tick_subtitle() {
                 Ok(Some(frame)) => emit_subtitle_frame_from_worker(
@@ -981,6 +1025,7 @@ fn run_playback_worker(
             "after_av_tick",
             &mut last_worker_clock,
         );
+        let after_av = std::time::Instant::now();
 
         if engine.state() == PlaybackRunState::Ended {
             set_state_from_worker(&inner, PlayerState::Stopped);
@@ -988,6 +1033,25 @@ fn run_playback_worker(
 
         if let Some(position) = last_position_event.take() {
             emit_from_worker(&inner, PlayerEvent::PositionChanged(position));
+        }
+
+        let loop_duration = loop_started.elapsed();
+        if trace::enabled() && (loop_duration > Duration::from_millis(4) || command_count > 0) {
+            trace::log(format!(
+                "[erika-playback-trace] stage=worker_loop gen={} loop={} commands={} total_ms={:.3} commands_ms={:.3} clock_ms={:.3} video_ms={:.3} av_ms={:.3} state={:?}",
+                playback_generation,
+                loop_count,
+                command_count,
+                loop_duration.as_secs_f64() * 1000.0,
+                after_commands.duration_since(loop_started).as_secs_f64() * 1000.0,
+                after_clock_sync
+                    .duration_since(after_commands)
+                    .as_secs_f64()
+                    * 1000.0,
+                after_video.duration_since(after_clock_sync).as_secs_f64() * 1000.0,
+                after_av.duration_since(after_video).as_secs_f64() * 1000.0,
+                engine.state(),
+            ));
         }
     }
 }
@@ -997,14 +1061,24 @@ fn pump_audio_from_worker(
     inner: &Arc<Mutex<PlayerInner>>,
     playback_generation: u64,
     stage: &'static str,
+    burst_limit: usize,
 ) {
     let started = Instant::now();
     let mut emitted = 0usize;
-    for _ in 0..AUDIO_PREFILL_BURST_LIMIT {
+    let mut budget_exhausted = false;
+    for _ in 0..burst_limit {
+        let elapsed = started.elapsed();
+        if elapsed >= AUDIO_PREFILL_TIME_BUDGET {
+            budget_exhausted = true;
+            break;
+        }
         if audio_frame_sender_is_full(inner) {
             break;
         }
-        match engine.tick_audio() {
+        match engine.tick_audio_bounded(
+            AUDIO_PREFILL_PACKET_BUDGET,
+            AUDIO_PREFILL_TIME_BUDGET.saturating_sub(elapsed),
+        ) {
             Ok(Some(frame)) => {
                 emitted += 1;
                 if !emit_audio_frame_from_worker(
@@ -1028,12 +1102,40 @@ fn pump_audio_from_worker(
             }
         }
     }
-    if emitted > 0 {
+    if emitted > 0 || budget_exhausted {
         trace::log(format!(
-            "[erika-clock-trace] stage=worker_audio_prefill:{stage} emitted={} elapsed_ms={:.3}",
+            "[erika-clock-trace] stage=worker_audio_prefill:{stage} emitted={} frame_limit={} packet_budget={} budget_exhausted={} elapsed_ms={:.3}",
             emitted,
+            burst_limit,
+            AUDIO_PREFILL_PACKET_BUDGET,
+            budget_exhausted,
             started.elapsed().as_secs_f64() * 1000.0,
         ));
+    }
+}
+
+fn should_prefill_audio_from_worker(
+    engine: &VideoPlaybackEngine,
+    snapshot: Option<AudioClockSnapshot>,
+) -> bool {
+    if !engine.should_prefill_audio() {
+        return false;
+    }
+    snapshot
+        .and_then(|snapshot| snapshot.queued_duration)
+        .is_none_or(|queued| queued < AUDIO_PREFILL_LOW_WATER)
+}
+
+fn observe_audio_pump_command(
+    last_audio_snapshot: &mut Option<AudioClockSnapshot>,
+    command: &PlaybackCommand,
+) {
+    match command {
+        PlaybackCommand::AudioClock(snapshot) => *last_audio_snapshot = Some(*snapshot),
+        PlaybackCommand::Seek(_) | PlaybackCommand::Stop | PlaybackCommand::SelectAudioTrack(_) => {
+            *last_audio_snapshot = None;
+        }
+        _ => {}
     }
 }
 
