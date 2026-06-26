@@ -3,10 +3,12 @@ use std::{
     fs::OpenOptions,
     io::Write,
     path::PathBuf,
+    sync::{Arc, Condvar, Mutex},
+    thread,
     time::{Duration, Instant},
 };
 
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, Sender};
 
 #[cfg(target_os = "macos")]
 use crate::apple::coreaudio::{CoreAudioOutput, CoreAudioOutputConfig};
@@ -23,7 +25,7 @@ use crate::core::{
 use crate::danmaku::{
     DANMAKU_DEBUG_BUCKETS, DanmakuDebugBucket, DanmakuLayoutConfig, DanmakuPreparedStats,
     DanmakuRenderPlan, DanmakuSession, DanmakuTimeline, DanmakuTrackInfo, DanmakuTrackSource,
-    DanmakuViewport, DfmLayoutEngine,
+    DanmakuViewport, DfmLayoutEngine, DfmPreparedLayout,
 };
 use crate::overlay::{OverlayFrame, OverlayTimeline, OverlayViewport};
 use crate::renderer::metal::{MetalRenderer, MetalRendererConfig};
@@ -41,6 +43,14 @@ use crate::trace;
 use crate::{PlayerError, Result};
 
 const AUDIO_START_BUFFER: Duration = Duration::from_millis(250);
+const AUDIO_PUMP_FRAME_LIMIT: usize = 16;
+const AUDIO_PUMP_TIME_BUDGET: Duration = Duration::from_millis(4);
+const VIDEO_PUMP_FRAME_LIMIT: usize = 8;
+const VIDEO_PUMP_TIME_BUDGET: Duration = Duration::from_millis(4);
+const DANMAKU_PLAN_REQUEST_QUANTUM: Duration = Duration::from_millis(250);
+const DANMAKU_PREPARE_REFRESH_MARGIN: Duration = Duration::from_secs(4);
+const DANMAKU_PLAN_LOOKAHEAD: Duration = Duration::from_secs(8);
+const DANMAKU_PLAN_LOOKBACK_PADDING: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub struct PresenterConfig {
@@ -168,6 +178,7 @@ pub struct PresenterRuntime {
     last_audio_clock_sync: Option<AudioClockSyncState>,
     current_overlay: Option<OverlayFrame>,
     current_danmaku: Option<DanmakuRenderPlan>,
+    current_danmaku_prepared: Option<CurrentDanmakuPrepared>,
     current_media_time: Duration,
     current_generation: u64,
     current_output_viewport: Option<DanmakuViewport>,
@@ -177,6 +188,7 @@ pub struct PresenterRuntime {
     render_test_pattern_when_idle: bool,
     danmaku_session: DanmakuSession,
     danmaku: DfmLayoutEngine,
+    danmaku_planner: AsyncDanmakuPlanner,
     danmaku_generation: u64,
     danmaku_trace: DanmakuTimeTrace,
     stats: PresenterStats,
@@ -196,6 +208,146 @@ pub struct PresenterRuntime {
 struct AudioClockSyncState {
     media_time: Duration,
     read_frames: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DanmakuPlanKey {
+    media_time: Duration,
+    viewport: DanmakuViewport,
+    generation: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AsyncDanmakuPlanRequest {
+    key: DanmakuPlanKey,
+}
+
+#[derive(Debug)]
+struct AsyncDanmakuPlanResult {
+    request: AsyncDanmakuPlanRequest,
+    prepared: DfmPreparedLayout,
+    window_start: Duration,
+    window_end: Duration,
+    elapsed: Duration,
+}
+
+#[derive(Debug)]
+struct AsyncDanmakuPlannerState {
+    revision: u64,
+    config_revision: u64,
+    timeline: DanmakuTimeline,
+    config: DanmakuLayoutConfig,
+    latest_request: Option<AsyncDanmakuPlanRequest>,
+    shutdown: bool,
+}
+
+struct AsyncDanmakuPlanner {
+    shared: Arc<(Mutex<AsyncDanmakuPlannerState>, Condvar)>,
+    results: Receiver<AsyncDanmakuPlanResult>,
+    last_requested: Option<DanmakuPlanKey>,
+}
+
+#[derive(Debug, Clone)]
+struct CurrentDanmakuPrepared {
+    request: AsyncDanmakuPlanRequest,
+    prepared: DfmPreparedLayout,
+    window_start: Duration,
+    window_end: Duration,
+}
+
+impl AsyncDanmakuPlanner {
+    fn new(
+        engine: DfmLayoutEngine,
+        timeline: DanmakuTimeline,
+        config: DanmakuLayoutConfig,
+    ) -> Self {
+        let state = AsyncDanmakuPlannerState {
+            revision: 0,
+            config_revision: 1,
+            timeline,
+            config,
+            latest_request: None,
+            shutdown: false,
+        };
+        let shared = Arc::new((Mutex::new(state), Condvar::new()));
+        let (result_tx, results) = crossbeam_channel::unbounded();
+        let worker_shared = Arc::clone(&shared);
+        thread::Builder::new()
+            .name("erika-danmaku".to_string())
+            .spawn(move || run_async_danmaku_planner(worker_shared, result_tx, engine))
+            .expect("spawn erika danmaku planner");
+        Self {
+            shared,
+            results,
+            last_requested: None,
+        }
+    }
+
+    fn set_timeline(&mut self, timeline: DanmakuTimeline) {
+        self.update_configuration(Some(timeline), None);
+    }
+
+    fn clear_timeline(&mut self) {
+        self.update_configuration(Some(DanmakuTimeline::default()), None);
+    }
+
+    fn set_config(&mut self, config: DanmakuLayoutConfig) {
+        self.update_configuration(None, Some(config));
+    }
+
+    fn invalidate_requests(&mut self) {
+        self.last_requested = None;
+        let (lock, _) = &*self.shared;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.latest_request = None;
+    }
+
+    fn request_plan(&mut self, key: DanmakuPlanKey) {
+        if self.last_requested == Some(key) {
+            return;
+        }
+        self.last_requested = Some(key);
+        let request = AsyncDanmakuPlanRequest { key };
+        let (lock, cvar) = &*self.shared;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.latest_request = Some(request);
+        state.revision = state.revision.saturating_add(1);
+        cvar.notify_one();
+    }
+
+    fn try_recv(&self) -> Option<AsyncDanmakuPlanResult> {
+        self.results.try_recv().ok()
+    }
+
+    fn update_configuration(
+        &mut self,
+        timeline: Option<DanmakuTimeline>,
+        config: Option<DanmakuLayoutConfig>,
+    ) {
+        self.last_requested = None;
+        let (lock, cvar) = &*self.shared;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(timeline) = timeline {
+            state.timeline = timeline;
+        }
+        if let Some(config) = config {
+            state.config = config;
+        }
+        state.latest_request = None;
+        state.config_revision = state.config_revision.saturating_add(1);
+        state.revision = state.revision.saturating_add(1);
+        cvar.notify_one();
+    }
+}
+
+impl Drop for AsyncDanmakuPlanner {
+    fn drop(&mut self) {
+        let (lock, cvar) = &*self.shared;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.shutdown = true;
+        state.revision = state.revision.saturating_add(1);
+        cvar.notify_one();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -266,6 +418,10 @@ impl PresenterRuntime {
             .map(DanmakuSession::from_timeline)
             .unwrap_or_default();
         let danmaku_timeline = danmaku_session.active_timeline_clone();
+        let danmaku_config = config.danmaku_config;
+        let danmaku = DfmLayoutEngine::new(danmaku_timeline.clone(), danmaku_config.clone());
+        let danmaku_planner =
+            AsyncDanmakuPlanner::new(danmaku.clone(), danmaku_timeline, danmaku_config);
         Ok(Self {
             player,
             renderer,
@@ -278,6 +434,7 @@ impl PresenterRuntime {
             last_audio_clock_sync: None,
             current_overlay: None,
             current_danmaku: None,
+            current_danmaku_prepared: None,
             current_media_time: Duration::ZERO,
             current_generation: 1,
             current_output_viewport: None,
@@ -286,7 +443,8 @@ impl PresenterRuntime {
             overlay: config.overlay,
             render_test_pattern_when_idle: config.render_test_pattern_when_idle,
             danmaku_session,
-            danmaku: DfmLayoutEngine::new(danmaku_timeline, config.danmaku_config),
+            danmaku,
+            danmaku_planner,
             danmaku_generation: 1,
             danmaku_trace: DanmakuTimeTrace::from_env(),
             stats: PresenterStats::default(),
@@ -309,24 +467,21 @@ impl PresenterRuntime {
 
     pub fn attach_surface(&mut self, surface: PlatformSurface) -> Result<()> {
         self.current_output_viewport = surface_danmaku_viewport(surface);
-        self.current_danmaku = None;
-        self.current_danmaku_viewport = None;
+        self.clear_current_danmaku_state();
         self.player.attach_surface(surface)?;
         self.renderer.attach_surface(surface)
     }
 
     pub fn detach_surface(&mut self) -> Result<()> {
         self.current_output_viewport = None;
-        self.current_danmaku = None;
-        self.current_danmaku_viewport = None;
+        self.clear_current_danmaku_state();
         self.player.detach_surface()?;
         self.renderer.detach_surface()
     }
 
     pub fn resize_surface(&mut self, width: u32, height: u32, scale: f64) -> Result<()> {
         self.current_output_viewport = Some(surface_dimensions_to_viewport(width, height, scale));
-        self.current_danmaku = None;
-        self.current_danmaku_viewport = None;
+        self.clear_current_danmaku_state();
         self.last_audio_clock_sync = None;
         self.renderer.resize_surface(width, height, scale)
     }
@@ -335,8 +490,7 @@ impl PresenterRuntime {
         self.reset_audio_output();
         self.drain_pending_player_frames();
         self.current_overlay = None;
-        self.current_danmaku = None;
-        self.current_danmaku_viewport = None;
+        self.clear_current_danmaku_state();
         self.current_media_time = Duration::ZERO;
         self.current_generation = self.current_generation.saturating_add(1).max(1);
         self.last_audio_clock_sync = None;
@@ -375,8 +529,7 @@ impl PresenterRuntime {
         self.reset_audio_output();
         self.drain_pending_player_frames();
         self.current_overlay = None;
-        self.current_danmaku = None;
-        self.current_danmaku_viewport = None;
+        self.clear_current_danmaku_state();
         self.last_audio_clock_sync = None;
         self.bump_danmaku_generation();
         result
@@ -387,8 +540,7 @@ impl PresenterRuntime {
         self.reset_audio_output();
         self.drain_pending_player_frames();
         self.current_overlay = None;
-        self.current_danmaku = None;
-        self.current_danmaku_viewport = None;
+        self.clear_current_danmaku_state();
         self.last_audio_clock_sync = None;
         self.bump_danmaku_generation();
         result
@@ -399,8 +551,7 @@ impl PresenterRuntime {
         self.reset_audio_output();
         self.drain_pending_player_frames();
         self.current_overlay = None;
-        self.current_danmaku = None;
-        self.current_danmaku_viewport = None;
+        self.clear_current_danmaku_state();
         self.current_media_time = position;
         self.last_audio_clock_sync = None;
         self.bump_danmaku_generation();
@@ -486,8 +637,8 @@ impl PresenterRuntime {
     pub fn clear_danmaku(&mut self) {
         self.danmaku_session.clear();
         self.danmaku.clear_timeline();
-        self.current_danmaku = None;
-        self.current_danmaku_viewport = None;
+        self.danmaku_planner.clear_timeline();
+        self.clear_current_danmaku_state();
         self.bump_danmaku_generation();
     }
 
@@ -505,11 +656,11 @@ impl PresenterRuntime {
     }
 
     pub fn set_danmaku_config(&mut self, config: DanmakuLayoutConfig) {
-        if !self.danmaku.set_config(config) {
+        if !self.danmaku.set_config(config.clone()) {
             return;
         }
-        self.current_danmaku = None;
-        self.current_danmaku_viewport = None;
+        self.danmaku_planner.set_config(config);
+        self.clear_current_danmaku_state();
         self.bump_danmaku_generation();
     }
 
@@ -554,10 +705,6 @@ impl PresenterRuntime {
         let tick_started = Instant::now();
         let pump_started = Instant::now();
 
-        let audio_started = Instant::now();
-        self.pump_audio();
-        self.last_audio_pump_duration = audio_started.elapsed();
-
         let subtitle_started = Instant::now();
         self.pump_subtitles();
         self.last_subtitle_pump_duration = subtitle_started.elapsed();
@@ -565,6 +712,10 @@ impl PresenterRuntime {
         let video_started = Instant::now();
         self.pump_video();
         self.last_video_pump_duration = video_started.elapsed();
+
+        let audio_started = Instant::now();
+        self.pump_audio();
+        self.last_audio_pump_duration = audio_started.elapsed();
 
         let sync_started = Instant::now();
         self.sync_media_time_from_player();
@@ -623,6 +774,53 @@ impl PresenterRuntime {
         }
 
         self.last_tick_duration = tick_started.elapsed();
+        if trace::enabled() {
+            let renderer = self.renderer.runtime_stats();
+            trace::log(format!(
+                "[erika-presenter-trace] stage=render_tick media={} player={} gen={} playing={} tick_ms={:.3} pump_ms={:.3} audio_ms={:.3} subtitle_ms={:.3} video_ms={:.3} clock_ms={:.3} plan_ms={:.3} render_ms={:.3} render_current_ms={:.3} render_test_ms={:.3} stats_video={} stats_audio={} stats_subtitle={} stats_overlay={} renderer_rendered={} renderer_offscreen={} renderer_gpu_ms={:.3} audio_queued={} audio_queued_ms={} audio_underflow={} output={}x{} danmaku_items={}",
+                duration_label(Some(self.current_media_time)),
+                duration_label(Some(self.player.current_media_time())),
+                self.current_generation,
+                self.is_playing(),
+                self.last_tick_duration.as_secs_f64() * 1000.0,
+                self.last_pump_duration.as_secs_f64() * 1000.0,
+                self.last_audio_pump_duration.as_secs_f64() * 1000.0,
+                self.last_subtitle_pump_duration.as_secs_f64() * 1000.0,
+                self.last_video_pump_duration.as_secs_f64() * 1000.0,
+                self.last_clock_sync_duration.as_secs_f64() * 1000.0,
+                self.last_danmaku_plan_duration.as_secs_f64() * 1000.0,
+                self.last_render_duration.as_secs_f64() * 1000.0,
+                self.last_render_current_duration.as_secs_f64() * 1000.0,
+                self.last_render_test_duration.as_secs_f64() * 1000.0,
+                self.stats.decoded_video_frames,
+                self.stats.pushed_audio_frames,
+                self.stats.decoded_subtitle_frames,
+                self.stats.overlay_frames,
+                renderer.rendered_frames,
+                renderer.offscreen_frames,
+                renderer.last_gpu_duration.as_secs_f64() * 1000.0,
+                self.audio_output
+                    .clock_snapshot()
+                    .map(|snapshot| snapshot.queued_frames)
+                    .unwrap_or(0),
+                self.audio_output
+                    .clock_snapshot()
+                    .and_then(|snapshot| snapshot.queued_duration)
+                    .map(|duration| duration.as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0),
+                self.audio_output
+                    .clock_snapshot()
+                    .map(|snapshot| snapshot.underflow_frames)
+                    .unwrap_or(0),
+                self.current_output_viewport
+                    .map_or(0, |viewport| viewport.width),
+                self.current_output_viewport
+                    .map_or(0, |viewport| viewport.height),
+                self.current_danmaku
+                    .as_ref()
+                    .map_or(0, |plan| plan.items.len()),
+            ));
+        }
         Ok(self.stats)
     }
 
@@ -695,7 +893,12 @@ impl PresenterRuntime {
     }
 
     fn pump_video(&mut self) {
+        let started = Instant::now();
+        let mut pumped = 0usize;
         loop {
+            if pumped >= VIDEO_PUMP_FRAME_LIMIT || started.elapsed() >= VIDEO_PUMP_TIME_BUDGET {
+                break;
+            }
             match self.video_frames.try_recv() {
                 Ok(frame) => {
                     if frame.generation < self.player.playback_generation() {
@@ -732,6 +935,7 @@ impl PresenterRuntime {
                                 plan_generation,
                                 plan_items,
                             );
+                            pumped += 1;
                         }
                         Err(error) => {
                             self.stats.import_failures += 1;
@@ -761,8 +965,7 @@ impl PresenterRuntime {
         let generation = generation.max(self.danmaku_generation).max(1);
         let danmaku_viewport = self.current_output_viewport.unwrap_or(viewport);
         self.current_danmaku_viewport = Some(danmaku_viewport);
-        self.current_danmaku = Some(self.danmaku.render_plan(pts, danmaku_viewport, generation));
-        self.record_current_danmaku_stats();
+        self.request_current_danmaku_plan(pts, danmaku_viewport, generation);
     }
 
     fn record_current_danmaku_stats(&mut self) {
@@ -775,39 +978,110 @@ impl PresenterRuntime {
     }
 
     fn refresh_stale_danmaku_plan(&mut self) {
-        let stale = self.current_danmaku.as_ref().is_none_or(|plan| {
-            plan.generation != self.current_generation || plan.media_time != self.current_media_time
-        });
-        if stale {
-            self.refresh_current_danmaku_plan();
+        self.apply_ready_danmaku_plans();
+        self.refresh_current_danmaku_plan_from_prepared();
+        self.request_current_danmaku_plan_for_current_time();
+    }
+
+    fn apply_ready_danmaku_plans(&mut self) {
+        while let Some(result) = self.danmaku_planner.try_recv() {
+            let accepted = self.danmaku_plan_result_is_current(&result);
+            let prepared_items = result.prepared.items().len();
+            if accepted {
+                self.current_danmaku_prepared = Some(CurrentDanmakuPrepared {
+                    request: result.request,
+                    prepared: result.prepared,
+                    window_start: result.window_start,
+                    window_end: result.window_end,
+                });
+                self.last_danmaku_plan_duration = result.elapsed;
+            }
+            if self.danmaku_trace.enabled {
+                self.trace_danmaku_time(
+                    if accepted {
+                        "prepared_async_ready"
+                    } else {
+                        "prepared_async_stale"
+                    },
+                    self.current_media_time,
+                    self.current_generation,
+                    None,
+                    None,
+                    Some(result.request.key.media_time),
+                    Some(result.request.key.generation),
+                    prepared_items,
+                );
+            }
         }
     }
 
-    fn refresh_current_danmaku_plan(&mut self) {
-        refresh_danmaku_plan(
-            &mut self.current_danmaku,
-            self.current_danmaku_viewport,
-            &mut self.danmaku,
+    fn refresh_current_danmaku_plan_from_prepared(&mut self) {
+        let Some(prepared) = &self.current_danmaku_prepared else {
+            self.current_danmaku = None;
+            return;
+        };
+        if !self.danmaku_prepared_covers_current_time(prepared) {
+            self.current_danmaku = None;
+            return;
+        }
+        let plan = self.danmaku.render_prepared_plan(
+            &prepared.prepared,
             self.current_media_time,
             self.current_generation,
         );
+        self.current_danmaku = Some(plan);
         self.record_current_danmaku_stats();
-        let plan_time = self.current_danmaku.as_ref().map(|plan| plan.media_time);
-        let plan_generation = self.current_danmaku.as_ref().map(|plan| plan.generation);
-        let plan_items = self
-            .current_danmaku
-            .as_ref()
-            .map_or(0, |plan| plan.items.len());
-        self.trace_danmaku_time(
-            "plan_refresh",
+    }
+
+    fn request_current_danmaku_plan_for_current_time(&mut self) {
+        let Some(viewport) = self.current_danmaku_viewport else {
+            return;
+        };
+        self.request_current_danmaku_plan(
             self.current_media_time,
+            viewport,
             self.current_generation,
-            None,
-            None,
-            plan_time,
-            plan_generation,
-            plan_items,
         );
+    }
+
+    fn request_current_danmaku_plan(
+        &mut self,
+        media_time: Duration,
+        viewport: DanmakuViewport,
+        generation: u64,
+    ) {
+        if self
+            .current_danmaku_prepared
+            .as_ref()
+            .is_some_and(|prepared| {
+                self.danmaku_prepared_covers_current_time(prepared)
+                    && prepared.window_end.saturating_sub(media_time)
+                        > DANMAKU_PREPARE_REFRESH_MARGIN
+            })
+        {
+            return;
+        }
+        let key = DanmakuPlanKey {
+            media_time: quantize_duration(media_time, DANMAKU_PLAN_REQUEST_QUANTUM),
+            viewport,
+            generation: generation.max(self.danmaku_generation).max(1),
+        };
+        self.danmaku_planner.request_plan(key);
+    }
+
+    fn danmaku_plan_result_is_current(&self, result: &AsyncDanmakuPlanResult) -> bool {
+        let key = result.request.key;
+        key.generation == self.current_generation
+            && Some(key.viewport) == self.current_danmaku_viewport
+            && result.window_start <= self.current_media_time
+            && self.current_media_time <= result.window_end
+    }
+
+    fn danmaku_prepared_covers_current_time(&self, prepared: &CurrentDanmakuPrepared) -> bool {
+        prepared.request.key.generation == self.current_generation
+            && Some(prepared.request.key.viewport) == self.current_danmaku_viewport
+            && prepared.window_start <= self.current_media_time
+            && self.current_media_time <= prepared.window_end
     }
 
     fn sync_media_time_from_player(&mut self) {
@@ -941,13 +1215,21 @@ impl PresenterRuntime {
 
     fn bump_danmaku_generation(&mut self) {
         bump_generation(&mut self.current_generation, &mut self.danmaku_generation);
+        self.danmaku_planner.invalidate_requests();
+        self.clear_current_danmaku_state();
+    }
+
+    fn clear_current_danmaku_state(&mut self) {
+        self.current_danmaku = None;
+        self.current_danmaku_prepared = None;
+        self.current_danmaku_viewport = None;
     }
 
     fn sync_danmaku_engine_timeline(&mut self) {
         let timeline = self.danmaku_session.active_timeline_clone();
         self.danmaku.sync_timeline(&timeline);
-        self.current_danmaku = None;
-        self.current_danmaku_viewport = None;
+        self.danmaku_planner.set_timeline(timeline);
+        self.clear_current_danmaku_state();
     }
 
     fn pump_subtitles(&mut self) {
@@ -967,18 +1249,25 @@ impl PresenterRuntime {
     }
 
     fn pump_audio(&mut self) {
+        let started = Instant::now();
+        let mut pumped = 0usize;
         loop {
+            if pumped >= AUDIO_PUMP_FRAME_LIMIT || started.elapsed() >= AUDIO_PUMP_TIME_BUDGET {
+                break;
+            }
             match self.audio_frames.try_recv() {
                 Ok(frame) => {
                     if frame.generation < self.player.playback_generation() {
                         continue;
                     }
                     self.push_audio(frame);
+                    pumped += 1;
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => break,
                 Err(crossbeam_channel::TryRecvError::Disconnected) => break,
             }
         }
+        self.ensure_audio_started();
         if self.audio_started {
             self.sync_player_to_audio_output();
         }
@@ -1042,15 +1331,21 @@ impl PresenterRuntime {
             }
         }
 
-        if !self.audio_started && self.audio_output_ready_to_start() {
-            if let Err(error) = self.audio_output.start() {
-                self.stats.audio_failures += 1;
-                eprintln!("Erika presenter audio start failed: {error}");
-                return;
-            }
-            self.audio_started = true;
-            self.last_audio_clock_sync = None;
+        self.ensure_audio_started();
+    }
+
+    fn ensure_audio_started(&mut self) {
+        if self.audio_started || !self.audio_output_ready_to_start() || !self.audio_start_allowed()
+        {
+            return;
         }
+        if let Err(error) = self.audio_output.start() {
+            self.stats.audio_failures += 1;
+            eprintln!("Erika presenter audio start failed: {error}");
+            return;
+        }
+        self.audio_started = true;
+        self.last_audio_clock_sync = None;
     }
 
     fn audio_output_ready_to_start(&self) -> bool {
@@ -1058,6 +1353,10 @@ impl PresenterRuntime {
             .clock_snapshot()
             .and_then(|snapshot| snapshot.queued_duration)
             .is_some_and(|queued| queued >= AUDIO_START_BUFFER)
+    }
+
+    fn audio_start_allowed(&self) -> bool {
+        self.player.track_selection().video.is_none() || self.stats.rendered_video_frames > 0
     }
 
     fn reset_audio_output(&mut self) {
@@ -1077,6 +1376,7 @@ impl PresenterRuntime {
     }
 }
 
+#[cfg(test)]
 fn refresh_danmaku_plan(
     current_plan: &mut Option<DanmakuRenderPlan>,
     viewport: Option<DanmakuViewport>,
@@ -1088,6 +1388,91 @@ fn refresh_danmaku_plan(
         return;
     };
     *current_plan = Some(engine.render_plan(media_time, viewport, generation));
+}
+
+fn run_async_danmaku_planner(
+    shared: Arc<(Mutex<AsyncDanmakuPlannerState>, Condvar)>,
+    results: Sender<AsyncDanmakuPlanResult>,
+    mut engine: DfmLayoutEngine,
+) {
+    let (mut timeline, mut config, mut applied_config_revision) = {
+        let (lock, _) = &*shared;
+        let state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        (
+            state.timeline.clone(),
+            state.config.clone(),
+            state.config_revision,
+        )
+    };
+    let mut seen_revision = 0u64;
+
+    loop {
+        let (request, config_update) = {
+            let (lock, cvar) = &*shared;
+            let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            while !state.shutdown && state.revision == seen_revision {
+                state = cvar
+                    .wait(state)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
+            if state.shutdown {
+                return;
+            }
+            seen_revision = state.revision;
+            let config_update = (state.config_revision != applied_config_revision).then(|| {
+                (
+                    state.config_revision,
+                    state.timeline.clone(),
+                    state.config.clone(),
+                )
+            });
+            (state.latest_request, config_update)
+        };
+
+        if let Some((revision, next_timeline, next_config)) = config_update {
+            timeline = next_timeline;
+            config = next_config;
+            engine.set_config(config.clone());
+            applied_config_revision = revision;
+        }
+
+        if let Some(request) = request {
+            let started = Instant::now();
+            let (window, window_start, window_end) =
+                danmaku_plan_window(&timeline, request.key.media_time, &config);
+            engine.sync_timeline(&window);
+            let prepared = engine.prepare(request.key.viewport, request.key.generation);
+            let elapsed = started.elapsed();
+            if results
+                .send(AsyncDanmakuPlanResult {
+                    request,
+                    prepared,
+                    window_start,
+                    window_end,
+                    elapsed,
+                })
+                .is_err()
+            {
+                return;
+            }
+        }
+    }
+}
+
+fn danmaku_plan_window(
+    timeline: &DanmakuTimeline,
+    media_time: Duration,
+    config: &DanmakuLayoutConfig,
+) -> (DanmakuTimeline, Duration, Duration) {
+    let scroll_duration = if config.scroll_duration_seconds.is_finite() {
+        config.scroll_duration_seconds.clamp(1.0, 60.0)
+    } else {
+        10.0
+    };
+    let lookback = Duration::from_secs_f32(scroll_duration) + DANMAKU_PLAN_LOOKBACK_PADDING;
+    let start = media_time.checked_sub(lookback).unwrap_or(Duration::ZERO);
+    let end = media_time + DANMAKU_PLAN_LOOKAHEAD;
+    (timeline.window(start, end), start, end)
 }
 
 fn surface_danmaku_viewport(surface: PlatformSurface) -> Option<DanmakuViewport> {
@@ -1134,6 +1519,15 @@ fn duration_regressed(next: Duration, previous: Duration) -> bool {
     previous
         .checked_sub(next)
         .is_some_and(|delta| delta > Duration::from_millis(5))
+}
+
+fn quantize_duration(value: Duration, quantum: Duration) -> Duration {
+    if quantum.is_zero() {
+        return value;
+    }
+    let quantum_micros = quantum.as_micros();
+    let quantized = (value.as_micros() / quantum_micros) * quantum_micros;
+    Duration::from_micros(quantized.min(u128::from(u64::MAX)) as u64)
 }
 
 fn duration_label(value: Option<Duration>) -> String {

@@ -12,6 +12,7 @@ pub use crate::renderer::pipeline::LumaUpscalerMode;
 use crate::renderer::pipeline::{
     ColorRange, HdrMetadata, MatrixCoefficients, SourceColorState, VideoRenderPipeline,
 };
+use crate::trace;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod apple;
@@ -630,7 +631,18 @@ impl RendererBackend for MetalRenderer {
     fn render_test_frame(&mut self, time_seconds: f64) -> Result<()> {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
+            let started = std::time::Instant::now();
             self.inner.render_clear(ClearColor::animated(time_seconds))
+                .map(|result| {
+                    if trace::enabled() {
+                        trace::log(format!(
+                            "[erika-render-trace] stage=test_frame time_seconds={:.3} elapsed_ms={:.3}",
+                            time_seconds,
+                            started.elapsed().as_secs_f64() * 1000.0,
+                        ));
+                    }
+                    result
+                })
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {
@@ -642,21 +654,50 @@ impl RendererBackend for MetalRenderer {
     }
 
     fn upload_player_frame(&mut self, frame: &PlayerVideoFrame) -> Result<()> {
+        let started = std::time::Instant::now();
         let imported = self.import_player_frame(&frame.frame)?;
         self.current_frame = Some(imported);
         self.current_media_time = frame.pts.unwrap_or(frame.media_time);
         self.current_generation = frame.generation.max(1);
         self.upload_counter = self.upload_counter.wrapping_add(1);
+        if trace::enabled() {
+            trace::log(format!(
+                "[erika-render-trace] stage=upload_frame gen={} pts={} media={} late={} frame_token={} elapsed_ms={:.3} size={}x{}",
+                frame.generation,
+                frame
+                    .pts
+                    .map(|pts| format!("{:.3}", pts.as_secs_f64()))
+                    .unwrap_or_else(|| "-".to_string()),
+                format!("{:.3}", frame.media_time.as_secs_f64()),
+                frame
+                    .late_by
+                    .map(|duration| format!("{:.3}", duration.as_secs_f64()))
+                    .unwrap_or_else(|| "-".to_string()),
+                self.upload_counter,
+                started.elapsed().as_secs_f64() * 1000.0,
+                frame.frame.width(),
+                frame.frame.height(),
+            ));
+        }
         Ok(())
     }
 
     fn render_current_frame(&mut self, context: RenderFrameContext<'_>) -> Result<bool> {
         let Some(frame) = self.current_frame.take() else {
+            if trace::enabled() {
+                trace::log(format!(
+                    "[erika-render-trace] stage=render_current_frame empty gen={} media={} output={}x{}",
+                    context.generation,
+                    trace::duration_label(Some(context.media_time)),
+                    context.output_width,
+                    context.output_height,
+                ));
+            }
             return Ok(false);
         };
+        let started = std::time::Instant::now();
         let danmaku = context.danmaku.filter(|plan| {
             plan.generation == context.generation
-                && plan.media_time == context.media_time
                 && (context.output_width == 0 || plan.viewport.width == context.output_width)
                 && (context.output_height == 0 || plan.viewport.height == context.output_height)
         });
@@ -666,6 +707,18 @@ impl RendererBackend for MetalRenderer {
             danmaku.map(DanmakuRenderFrame::new),
         );
         self.current_frame = Some(frame);
+        if trace::enabled() {
+            trace::log(format!(
+                "[erika-render-trace] stage=render_current_frame gen={} media={} output={}x{} danmaku={} elapsed_ms={:.3} result={}",
+                context.generation,
+                trace::duration_label(Some(context.media_time)),
+                context.output_width,
+                context.output_height,
+                danmaku.as_ref().map_or(0, |plan| plan.items.len()),
+                started.elapsed().as_secs_f64() * 1000.0,
+                result.is_ok(),
+            ));
+        }
         result.map(|()| true)
     }
 
