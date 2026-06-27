@@ -824,6 +824,27 @@ impl PresenterRuntime {
         Ok(self.stats)
     }
 
+    pub fn capture_frame_rgba(&mut self, width: u32, height: u32) -> Result<Option<Vec<u8>>> {
+        if width == 0 || height == 0 {
+            return Err(PlayerError::Renderer(
+                "capture size must be non-zero".to_string(),
+            ));
+        }
+
+        self.pump_subtitles();
+        self.pump_video();
+        self.sync_media_time_from_player();
+        self.refresh_stale_danmaku_plan();
+
+        let context = RenderFrameContext::new(self.current_media_time, self.current_generation)
+            .overlay(self.current_overlay.as_ref())
+            .danmaku(self.current_danmaku.as_ref())
+            .output_size(width, height);
+        self.renderer
+            .capture_current_frame(context, width, height)
+            .map(|capture| capture.map(|capture| capture.rgba))
+    }
+
     pub fn stats(&self) -> PresenterStats {
         self.stats
     }

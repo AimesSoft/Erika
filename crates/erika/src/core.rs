@@ -266,6 +266,13 @@ pub struct RenderFrameContext<'a> {
     pub output_height: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RendererFrameCapture {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
 impl<'a> RenderFrameContext<'a> {
     pub fn new(media_time: Duration, generation: u64) -> Self {
         Self {
@@ -417,6 +424,16 @@ pub trait RendererBackend {
     /// surface. Returns `false` if there is no current frame to draw, letting the
     /// caller fall back to a test frame.
     fn render_current_frame(&mut self, context: RenderFrameContext<'_>) -> Result<bool>;
+
+    /// Render the retained current frame into an offscreen RGBA buffer.
+    fn capture_current_frame(
+        &mut self,
+        _context: RenderFrameContext<'_>,
+        _width: u32,
+        _height: u32,
+    ) -> Result<Option<RendererFrameCapture>> {
+        Ok(None)
+    }
 
     fn runtime_stats(&self) -> RendererRuntimeStats {
         RendererRuntimeStats::default()
