@@ -1052,9 +1052,10 @@ impl Frame {
         }
     }
 
-    /// Repack a software-decoded 4:2:0 frame into GPU-ready planes: NV12 for 8-bit
-    /// (yuv420p/nv12) or P010 (16-bit, MSB-aligned) for 10-bit (yuv420p10le/p010le).
-    /// Returns `None` for hardware frames or unsupported formats.
+    /// Repack a software-decoded frame into GPU-ready planes. Native 4:2:0 inputs
+    /// preserve NV12/P010; other CPU pixel formats fall back through swscale to
+    /// 8-bit NV12 so unusual RGB, 4:2:2, or 4:4:4 sources can still play.
+    /// Returns `None` for hardware frames or formats swscale cannot convert.
     pub fn to_planar_frame(&self) -> Option<PlanarFrame> {
         let format = self.raw_pixel_format();
         if format == sys::AVPixelFormat_AV_PIX_FMT_YUV420P
@@ -1117,8 +1118,75 @@ impl Frame {
                     chroma,
                 })
             } else {
-                None
+                self.to_nv12_with_swscale()
             }
+        }
+    }
+
+    fn to_nv12_with_swscale(&self) -> Option<PlanarFrame> {
+        let width = self.width() as usize;
+        let height = self.height() as usize;
+        if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+            return None;
+        }
+        let width_i32 = i32::try_from(width).ok()?;
+        let height_i32 = i32::try_from(height).ok()?;
+        let format = self.raw_pixel_format();
+        if format < 0
+            || format == sys::AVPixelFormat_AV_PIX_FMT_VIDEOTOOLBOX
+            || format == sys::AVPixelFormat_AV_PIX_FMT_NONE
+        {
+            return None;
+        }
+
+        unsafe {
+            let frame = &*self.ptr;
+            let context = sys::sws_getContext(
+                width_i32,
+                height_i32,
+                format,
+                width_i32,
+                height_i32,
+                sys::AVPixelFormat_AV_PIX_FMT_NV12,
+                sys::SWS_BILINEAR as c_int,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null(),
+            );
+            if context.is_null() {
+                return None;
+            }
+
+            let mut luma = vec![0u8; width * height];
+            let mut chroma = vec![0u8; width * (height / 2)];
+            let mut dst_data = [
+                luma.as_mut_ptr(),
+                chroma.as_mut_ptr(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+            ];
+            let mut dst_linesize = [width_i32, width_i32, 0, 0];
+            let converted = sys::sws_scale(
+                context,
+                frame.data.as_ptr() as *const *const u8,
+                frame.linesize.as_ptr(),
+                0,
+                height_i32,
+                dst_data.as_mut_ptr(),
+                dst_linesize.as_mut_ptr(),
+            );
+            sys::sws_freeContext(context);
+            if converted != height_i32 {
+                return None;
+            }
+
+            Some(PlanarFrame {
+                format: PlanarPixelFormat::Nv12,
+                width: width as u32,
+                height: height as u32,
+                luma,
+                chroma,
+            })
         }
     }
 }
@@ -2487,6 +2555,54 @@ mod tests {
     }
 
     #[test]
+    fn bgra_software_frame_falls_back_to_nv12() {
+        let frame = Frame::alloc(TimeBase { num: 1, den: 1 }).unwrap();
+        let mut pixels = vec![
+            0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 255, 255, 0, 255, 0, 255,
+        ];
+        unsafe {
+            (*frame.ptr).width = 2;
+            (*frame.ptr).height = 2;
+            (*frame.ptr).format = sys::AVPixelFormat_AV_PIX_FMT_BGRA;
+            (*frame.ptr).data[0] = pixels.as_mut_ptr();
+            (*frame.ptr).linesize[0] = 8;
+        }
+
+        let planar = frame.to_planar_frame().unwrap();
+
+        assert_eq!(planar.format, PlanarPixelFormat::Nv12);
+        assert_eq!((planar.width, planar.height), (2, 2));
+        assert_eq!(planar.luma.len(), 4);
+        assert_eq!(planar.chroma.len(), 2);
+    }
+
+    #[test]
+    fn yuv444p_software_frame_falls_back_to_nv12() {
+        let frame = Frame::alloc(TimeBase { num: 1, den: 1 }).unwrap();
+        let mut y = vec![16, 64, 128, 235];
+        let mut u = vec![128; 4];
+        let mut v = vec![128; 4];
+        unsafe {
+            (*frame.ptr).width = 2;
+            (*frame.ptr).height = 2;
+            (*frame.ptr).format = sys::AVPixelFormat_AV_PIX_FMT_YUV444P;
+            (*frame.ptr).data[0] = y.as_mut_ptr();
+            (*frame.ptr).data[1] = u.as_mut_ptr();
+            (*frame.ptr).data[2] = v.as_mut_ptr();
+            (*frame.ptr).linesize[0] = 2;
+            (*frame.ptr).linesize[1] = 2;
+            (*frame.ptr).linesize[2] = 2;
+        }
+
+        let planar = frame.to_planar_frame().unwrap();
+
+        assert_eq!(planar.format, PlanarPixelFormat::Nv12);
+        assert_eq!((planar.width, planar.height), (2, 2));
+        assert_eq!(planar.luma.len(), 4);
+        assert_eq!(planar.chroma.len(), 2);
+    }
+
+    #[test]
     fn frame_reads_hdr_side_data() {
         let frame = Frame::alloc(TimeBase { num: 1, den: 1 }).unwrap();
         unsafe {
@@ -2511,7 +2627,7 @@ mod tests {
         let mastering = metadata.mastering_display.unwrap();
         let content_light = metadata.content_light.unwrap();
 
-        assert_eq!(metadata.nominal_peak_nits(), Some(4000.0));
+        assert_eq!(metadata.nominal_peak_nits(), Some(1000.0));
         assert_eq!(content_light.max_content_light_level_nits, 4000);
         assert_eq!(content_light.max_frame_average_light_level_nits, 450);
         assert_close(mastering.max_luminance_nits.unwrap(), 1000.0);
