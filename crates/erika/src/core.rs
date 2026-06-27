@@ -462,6 +462,8 @@ pub struct RendererRuntimeStats {
     pub software_video_frames: u64,
     pub hardware_video_frames: u64,
     pub zero_copy_video_frames: u64,
+    pub direct_zero_copy_video_frames: u64,
+    pub shared_handle_video_frames: u64,
     pub cpu_video_frame_fallbacks: u64,
 }
 

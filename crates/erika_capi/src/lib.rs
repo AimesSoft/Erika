@@ -363,6 +363,8 @@ pub struct ErikaPresenterStats {
     pub audio_clock_read_frames: u64,
     pub audio_clock_queued_frames: u64,
     pub audio_clock_underflow_frames: u64,
+    pub direct_zero_copy_video_frames: u64,
+    pub shared_handle_video_frames: u64,
 }
 
 #[unsafe(no_mangle)]
@@ -2105,6 +2107,8 @@ fn presenter_stats_to_c(snapshot: PresenterRuntimeSnapshot) -> ErikaPresenterSta
         audio_clock_queued_frames: snapshot.audio_output_queued_frames.min(u64::MAX as usize)
             as u64,
         audio_clock_underflow_frames: snapshot.audio_output_underflow_frames,
+        direct_zero_copy_video_frames: renderer.direct_zero_copy_video_frames,
+        shared_handle_video_frames: renderer.shared_handle_video_frames,
     }
 }
 

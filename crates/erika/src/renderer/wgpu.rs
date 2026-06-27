@@ -1594,6 +1594,8 @@ impl RendererBackend for WgpuRenderer {
             software_video_frames: stats.software_video_frames,
             hardware_video_frames: stats.hardware_video_frames,
             zero_copy_video_frames: stats.zero_copy_video_frames,
+            direct_zero_copy_video_frames: 0,
+            shared_handle_video_frames: 0,
             cpu_video_frame_fallbacks: stats.cpu_video_frame_fallbacks,
         }
     }

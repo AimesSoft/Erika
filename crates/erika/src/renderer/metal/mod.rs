@@ -698,6 +698,8 @@ impl RendererBackend for MetalRenderer {
             software_video_frames: 0,
             hardware_video_frames: self.upload_counter,
             zero_copy_video_frames: self.upload_counter,
+            direct_zero_copy_video_frames: self.upload_counter,
+            shared_handle_video_frames: 0,
             cpu_video_frame_fallbacks: 0,
         }
     }

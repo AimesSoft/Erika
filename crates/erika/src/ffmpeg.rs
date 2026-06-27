@@ -743,6 +743,7 @@ unsafe fn ensure_d3d11va_frames_for_context(
     }
     const D3D11_BIND_SHADER_RESOURCE: u32 = 0x8;
     const D3D11_BIND_DECODER: u32 = 0x200;
+    const D3D11_RESOURCE_MISC_SHARED: u32 = 0x2;
 
     let mut frames_ref = unsafe { sys::av_hwframe_ctx_alloc((*state).device_ref) };
     if frames_ref.is_null() {
@@ -765,6 +766,7 @@ unsafe fn ensure_d3d11va_frames_for_context(
         frames_ctx.height = align_i32(unsafe { (*context).coded_height }, alignment);
         frames_ctx.initial_pool_size = d3d11va_pool_size(unsafe { (*context).codec_id });
         d3d11_frames.BindFlags = D3D11_BIND_DECODER | D3D11_BIND_SHADER_RESOURCE;
+        d3d11_frames.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
         let code = unsafe { sys::av_hwframe_ctx_init(frames_ref) };
         if code < 0 {
             trace_ffmpeg("av_hwframe_ctx_init(D3D11VA) failed");

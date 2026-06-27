@@ -2,7 +2,7 @@ use std::ffi::c_void;
 use std::mem;
 use std::ptr;
 
-use ::windows::Win32::Foundation::{HMODULE, HWND};
+use ::windows::Win32::Foundation::{HANDLE, HMODULE, HWND};
 use ::windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
 use ::windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1,
@@ -29,7 +29,7 @@ use ::windows::Win32::Graphics::Dxgi::Common::{
 use ::windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_PRESENT_PARAMETERS, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
     DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter, IDXGIDevice,
-    IDXGIFactory2, IDXGISwapChain1,
+    IDXGIFactory2, IDXGIResource, IDXGISwapChain1,
 };
 use ::windows::core::{Interface, PCSTR};
 
@@ -392,6 +392,8 @@ pub struct D3d11RendererStats {
     pub rendered_frames: u64,
     pub hardware_video_frames: u64,
     pub zero_copy_video_frames: u64,
+    pub direct_zero_copy_video_frames: u64,
+    pub shared_handle_video_frames: u64,
     pub cpu_video_frame_fallbacks: u64,
     pub import_failures: u64,
     pub prepared_overlay_frames: u64,
@@ -437,6 +439,12 @@ struct ImportedVideoFrame {
     _height: u32,
     _array_index: u32,
     constants: VideoUniforms,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum D3d11VideoImportMode {
+    DirectDecoderDevice,
+    SharedHandle,
 }
 
 #[derive(Clone)]
@@ -562,8 +570,8 @@ impl D3d11Renderer {
         let retained_frame = frame.frame.try_clone_ref().map_err(|error| {
             PlayerError::Renderer(format!("d3d11: av_frame_ref failed: {error}"))
         })?;
-        let texture = clone_d3d11_texture(texture_ref.raw_texture())?;
-        self.ensure_device_for_texture(&texture)?;
+        let source_texture = clone_d3d11_texture(texture_ref.raw_texture())?;
+        let (texture, import_mode) = self.import_texture_for_current_device(&source_texture)?;
 
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         unsafe { texture.GetDesc(&mut desc) };
@@ -588,6 +596,14 @@ impl D3d11Renderer {
             .map_err(|error| d3d11va_srv_error(error, &desc, array_index))?;
         self.stats.hardware_video_frames += 1;
         self.stats.zero_copy_video_frames += 1;
+        match import_mode {
+            D3d11VideoImportMode::DirectDecoderDevice => {
+                self.stats.direct_zero_copy_video_frames += 1;
+            }
+            D3d11VideoImportMode::SharedHandle => {
+                self.stats.shared_handle_video_frames += 1;
+            }
+        }
         self.current_video = Some(ImportedVideoFrame {
             _frame: retained_frame,
             _texture: texture,
@@ -599,6 +615,24 @@ impl D3d11Renderer {
             constants: constants_for_frame(frame, texture_format),
         });
         Ok(())
+    }
+
+    fn import_texture_for_current_device(
+        &mut self,
+        texture: &ID3D11Texture2D,
+    ) -> Result<(ID3D11Texture2D, D3d11VideoImportMode)> {
+        if let Some(state) = self.state.as_ref() {
+            let frame_device = unsafe { texture.GetDevice() }
+                .map_err(|error| d3d_error("ID3D11Texture2D::GetDevice", error))?;
+            if state.device.as_raw() == frame_device.as_raw() {
+                return Ok((texture.clone(), D3d11VideoImportMode::DirectDecoderDevice));
+            }
+            return open_shared_texture_on_device(&state.device, texture)
+                .map(|texture| (texture, D3d11VideoImportMode::SharedHandle));
+        }
+
+        self.ensure_device_for_texture(texture)?;
+        Ok((texture.clone(), D3d11VideoImportMode::DirectDecoderDevice))
     }
 
     fn prepare_overlay_draws(
@@ -1048,6 +1082,8 @@ impl RendererBackend for D3d11Renderer {
             software_video_frames: 0,
             hardware_video_frames: self.stats.hardware_video_frames,
             zero_copy_video_frames: self.stats.zero_copy_video_frames,
+            direct_zero_copy_video_frames: self.stats.direct_zero_copy_video_frames,
+            shared_handle_video_frames: self.stats.shared_handle_video_frames,
             cpu_video_frame_fallbacks: self.stats.cpu_video_frame_fallbacks,
             upscaler_mode: self.upscaler_mode,
             upscaler_backend: if self.upscaler_mode.is_enabled() {
@@ -1442,6 +1478,35 @@ fn create_plane_srv(
             })?;
     }
     view.ok_or_else(|| PlayerError::Renderer("d3d11: shader resource view was null".to_string()))
+}
+
+fn open_shared_texture_on_device(
+    device: &ID3D11Device,
+    texture: &ID3D11Texture2D,
+) -> Result<ID3D11Texture2D> {
+    let shared_handle = d3d11_shared_handle(texture)?;
+    let mut imported = None;
+    unsafe {
+        device
+            .OpenSharedResource::<ID3D11Texture2D>(shared_handle, &mut imported)
+            .map_err(|error| d3d_error("ID3D11Device::OpenSharedResource(D3D11VA)", error))?;
+    }
+    imported
+        .ok_or_else(|| PlayerError::Renderer("d3d11: shared texture import was null".to_string()))
+}
+
+fn d3d11_shared_handle(texture: &ID3D11Texture2D) -> Result<HANDLE> {
+    let resource: IDXGIResource = texture
+        .cast()
+        .map_err(|error| d3d_error("ID3D11Texture2D::cast<IDXGIResource>", error))?;
+    let handle = unsafe { resource.GetSharedHandle() }
+        .map_err(|error| d3d_error("IDXGIResource::GetSharedHandle(D3D11VA)", error))?;
+    if handle.is_invalid() {
+        return Err(PlayerError::Renderer(
+            "d3d11: D3D11VA texture did not expose a valid shared handle".to_string(),
+        ));
+    }
+    Ok(handle)
 }
 
 fn create_overlay_texture(
@@ -1850,5 +1915,20 @@ mod tests {
     fn d3d11_overlay_shader_compiles() {
         compile_shader_source(OVERLAY_SHADER_SOURCE, "overlay_vs_main", "vs_4_0").unwrap();
         compile_shader_source(OVERLAY_SHADER_SOURCE, "overlay_ps_main", "ps_4_0").unwrap();
+    }
+
+    #[test]
+    fn renderer_stats_distinguish_direct_and_shared_zero_copy() {
+        let mut renderer = D3d11Renderer::new().unwrap();
+        renderer.stats.hardware_video_frames = 3;
+        renderer.stats.zero_copy_video_frames = 3;
+        renderer.stats.direct_zero_copy_video_frames = 1;
+        renderer.stats.shared_handle_video_frames = 2;
+
+        let stats = renderer.runtime_stats();
+        assert_eq!(stats.hardware_video_frames, 3);
+        assert_eq!(stats.zero_copy_video_frames, 3);
+        assert_eq!(stats.direct_zero_copy_video_frames, 1);
+        assert_eq!(stats.shared_handle_video_frames, 2);
     }
 }

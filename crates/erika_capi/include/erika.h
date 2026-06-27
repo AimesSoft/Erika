@@ -204,6 +204,8 @@ typedef struct ErikaPresenterStats {
   uint64_t audio_clock_read_frames;
   uint64_t audio_clock_queued_frames;
   uint64_t audio_clock_underflow_frames;
+  uint64_t direct_zero_copy_video_frames;
+  uint64_t shared_handle_video_frames;
 } ErikaPresenterStats;
 
 ErikaHandle *erika_create(void);
