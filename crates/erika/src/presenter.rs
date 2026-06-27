@@ -14,7 +14,7 @@ use crossbeam_channel::{Receiver, Sender};
 use crate::apple::coreaudio::{CoreAudioOutput, CoreAudioOutputConfig};
 #[cfg(target_os = "ios")]
 use crate::apple::iosaudio::{IosAudioQueueOutput, IosAudioQueueOutputConfig};
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 use crate::audio::BufferedAudioOutput;
 use crate::audio::{AudioClockSnapshot, AudioOutputBackend, AudioRingBufferConfig};
 use crate::core::{
@@ -28,7 +28,11 @@ use crate::danmaku::{
     DanmakuViewport, DfmLayoutEngine, DfmPreparedLayout,
 };
 use crate::overlay::{OverlayFrame, OverlayTimeline, OverlayViewport};
-use crate::renderer::metal::{MetalRenderer, MetalRendererConfig};
+#[cfg(target_os = "windows")]
+use crate::playback::VideoDecodePreference;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use crate::renderer::metal::MetalRenderer;
+use crate::renderer::metal::MetalRendererConfig;
 use crate::subtitle::{
     DecodedSubtitleFrame, SubtitleAssStyle, SubtitleRendererCore, SubtitleTrackConfig,
     SubtitleViewport, decoded_subtitle_frames_to_timeline,
@@ -39,6 +43,8 @@ use crate::subtitle::{
     decoded_subtitle_frames_to_ass_script_with_style,
 };
 use crate::trace;
+#[cfg(target_os = "windows")]
+use crate::windows::wasapi::{WasapiAudioOutput, WasapiAudioOutputConfig};
 use crate::{PlayerError, Result};
 
 const AUDIO_START_BUFFER: Duration = Duration::from_millis(250);
@@ -84,7 +90,14 @@ impl Default for PresenterAudioConfig {
                 ring_buffer: config.ring_buffer,
             }
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(target_os = "windows")]
+        {
+            let config = WasapiAudioOutputConfig::default();
+            Self {
+                ring_buffer: config.ring_buffer,
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
         {
             Self {
                 ring_buffer: AudioRingBufferConfig {
@@ -408,8 +421,10 @@ impl DanmakuTimeTrace {
 }
 
 impl PresenterRuntime {
-    pub fn new(config: PresenterConfig) -> Result<Self> {
-        let renderer = build_renderer(config.player.renderer, config.renderer)?;
+    pub fn new(mut config: PresenterConfig) -> Result<Self> {
+        let renderer_preference = config.player.renderer;
+        let renderer = build_renderer(renderer_preference, config.renderer)?;
+        resolve_presenter_player_config(&mut config.player, renderer_preference);
         let player = Player::new(config.player);
         let video_frames = player.subscribe_video_frames();
         let audio_frames = player.subscribe_audio_frames();
@@ -1707,17 +1722,47 @@ impl Drop for PresenterRuntime {
 
 fn build_renderer(
     preference: RendererBackendPreference,
-    metal_config: MetalRendererConfig,
+    _metal_config: MetalRendererConfig,
 ) -> Result<Box<dyn RendererBackend>> {
     match preference {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         RendererBackendPreference::PlatformNative | RendererBackendPreference::Auto => {
-            Ok(Box::new(MetalRenderer::with_config(metal_config)?))
+            Ok(Box::new(MetalRenderer::with_config(_metal_config)?))
+        }
+        #[cfg(target_os = "windows")]
+        RendererBackendPreference::PlatformNative | RendererBackendPreference::Auto => {
+            Ok(Box::new(
+                crate::renderer::d3d11::D3d11Renderer::with_config(_metal_config)?,
+            ))
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+        RendererBackendPreference::PlatformNative | RendererBackendPreference::Auto => {
+            build_wgpu_renderer()
         }
         RendererBackendPreference::WgpuFallback => build_wgpu_renderer(),
         RendererBackendPreference::FlutterTexture => Err(PlayerError::Renderer(
             "Flutter texture backend is not supported by the presenter runtime".to_string(),
         )),
     }
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_presenter_player_config(
+    player: &mut PlayerConfig,
+    renderer_preference: RendererBackendPreference,
+) {
+    if matches!(renderer_preference, RendererBackendPreference::WgpuFallback)
+        && player.playback.video_decode == VideoDecodePreference::D3d11va
+    {
+        player.playback.video_decode = VideoDecodePreference::Software;
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn resolve_presenter_player_config(
+    _player: &mut PlayerConfig,
+    _renderer_preference: RendererBackendPreference,
+) {
 }
 
 fn build_audio_output(config: PresenterAudioConfig) -> Box<dyn AudioOutputBackend> {
@@ -1733,7 +1778,13 @@ fn build_audio_output(config: PresenterAudioConfig) -> Box<dyn AudioOutputBacken
             ring_buffer: config.ring_buffer,
         }))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    #[cfg(target_os = "windows")]
+    {
+        Box::new(WasapiAudioOutput::new(WasapiAudioOutputConfig {
+            ring_buffer: config.ring_buffer,
+        }))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
     {
         Box::new(BufferedAudioOutput::new(config.ring_buffer))
     }
@@ -2012,6 +2063,33 @@ mod tests {
     fn danmaku_engine(text: &str) -> DfmLayoutEngine {
         let timeline = DanmakuTimeline::new(vec![danmaku_item(1, 1.0, text)]).unwrap();
         DfmLayoutEngine::new(timeline, DanmakuLayoutConfig::default())
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_wgpu_presenter_uses_software_decode_until_zero_copy_interop_exists() {
+        let mut player = PlayerConfig::default();
+        player.renderer = RendererBackendPreference::WgpuFallback;
+        player.playback.video_decode = VideoDecodePreference::D3d11va;
+
+        resolve_presenter_player_config(&mut player, RendererBackendPreference::WgpuFallback);
+
+        assert_eq!(
+            player.playback.video_decode,
+            VideoDecodePreference::Software
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_native_presenter_keeps_d3d11va_for_zero_copy_interop() {
+        let mut player = PlayerConfig::default();
+        player.renderer = RendererBackendPreference::PlatformNative;
+        player.playback.video_decode = VideoDecodePreference::D3d11va;
+
+        resolve_presenter_player_config(&mut player, RendererBackendPreference::PlatformNative);
+
+        assert_eq!(player.playback.video_decode, VideoDecodePreference::D3d11va);
     }
 
     #[test]

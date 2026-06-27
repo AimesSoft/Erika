@@ -1,4 +1,9 @@
 fn main() {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os != "macos" {
+        return;
+    }
+
     println!("cargo:rerun-if-changed=native/DanmakuPerfLab.m");
 
     cc::Build::new()

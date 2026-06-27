@@ -11,7 +11,8 @@ import 'erika_player.dart';
 bool get _supportsWindowOverlayVideoView =>
     !kIsWeb &&
     (defaultTargetPlatform == TargetPlatform.iOS ||
-        defaultTargetPlatform == TargetPlatform.macOS);
+        defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.windows);
 
 /// Flutter platform-view video surface backed by AppKit/UIKit.
 ///
@@ -95,19 +96,24 @@ class _ErikaVideoViewState extends State<ErikaVideoView> {
           hitTestBehavior: PlatformViewHitTestBehavior.transparent,
           gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
         );
+      case TargetPlatform.windows:
+        return ErikaWindowOverlayVideoView(
+          player: widget.player,
+          debugLabel: widget.debugLabel,
+          onPlatformViewIdChanged: widget.onPlatformViewIdChanged,
+        );
       case TargetPlatform.android:
       case TargetPlatform.fuchsia:
       case TargetPlatform.linux:
-      case TargetPlatform.windows:
         return const SizedBox.shrink();
     }
   }
 }
 
-/// Window-hosted native Metal video surface for macOS and iOS.
+/// Window-hosted native video surface for macOS, iOS, and Windows.
 ///
 /// The widget reserves a Flutter layout rect while the platform plugin hosts a
-/// sibling native view with a CAMetalLayer and keeps its frame in sync.
+/// sibling native view and keeps its frame in sync.
 class ErikaWindowOverlayVideoView extends StatefulWidget {
   const ErikaWindowOverlayVideoView({
     super.key,
@@ -128,7 +134,8 @@ class ErikaWindowOverlayVideoView extends StatefulWidget {
 }
 
 class _ErikaWindowOverlayVideoViewState
-    extends State<ErikaWindowOverlayVideoView> with WidgetsBindingObserver {
+    extends State<ErikaWindowOverlayVideoView>
+    with WidgetsBindingObserver {
   Timer? _retryTimer;
   Timer? _frameTimer;
   int _bindAttempts = 0;
@@ -182,8 +189,11 @@ class _ErikaWindowOverlayVideoViewState
 
   void _startFrameTimer() {
     _frameTimer?.cancel();
+    final interval = defaultTargetPlatform == TargetPlatform.windows
+        ? const Duration(milliseconds: 16)
+        : const Duration(milliseconds: 250);
     _frameTimer = Timer.periodic(
-      const Duration(milliseconds: 250),
+      interval,
       (_) => _scheduleFrameUpdate(),
     );
   }

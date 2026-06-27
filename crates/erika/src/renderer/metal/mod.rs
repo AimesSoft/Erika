@@ -370,11 +370,11 @@ impl MetalRenderer {
         Self::with_config(MetalRendererConfig::default())
     }
 
-    pub fn with_config(config: MetalRendererConfig) -> Result<Self> {
+    pub fn with_config(_config: MetalRendererConfig) -> Result<Self> {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             Ok(Self {
-                inner: apple::MetalRendererImpl::new(config)?,
+                inner: apple::MetalRendererImpl::new(_config)?,
                 current_frame: None,
                 current_media_time: Duration::ZERO,
                 current_generation: 1,
@@ -833,6 +833,19 @@ impl RendererBackend for MetalRenderer {
             last_upscaler_encode_duration: stats.last_upscaler_encode_duration,
             last_gpu_duration: stats.last_gpu_duration,
             attached: stats.drawable_width > 0 && stats.drawable_height > 0,
+            software_video_frames: 0,
+            hardware_video_frames: self.upload_counter,
+            zero_copy_video_frames: self.upload_counter,
+            direct_zero_copy_video_frames: self.upload_counter,
+            shared_handle_video_frames: 0,
+            cpu_video_frame_fallbacks: 0,
+            hdr_source_frames: 0,
+            hdr10_output_frames: 0,
+            sdr_tonemap_frames: 0,
+            hdr10_metadata_updates: 0,
+            hdr10_metadata_failures: 0,
+            hdr10_output_failures: 0,
+            hdr10_output_active: false,
         }
     }
 

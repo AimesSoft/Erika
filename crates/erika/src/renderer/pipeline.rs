@@ -446,6 +446,16 @@ impl TargetColorState {
             edr_headroom: headroom,
         }
     }
+
+    pub fn hdr10(primaries: ColorPrimaries) -> Self {
+        Self {
+            primaries,
+            transfer: TransferFunction::Pq,
+            peak_nits: 10_000.0,
+            reference_white_nits: 203.0,
+            edr_headroom: 1.0,
+        }
+    }
 }
 
 impl Default for TargetColorState {
@@ -601,6 +611,70 @@ impl Default for VideoRenderPipeline {
     }
 }
 
+/// Fragment-shader uniforms shared by the video sampling shaders.
+///
+/// Backends may wrap this with presentation-only fields (for example Metal's
+/// target rect), but the color/HDR/gamut payload is generated here so platform
+/// renderers do not each invent their own color contract.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "wgpu", derive(bytemuck::Pod, bytemuck::Zeroable))]
+pub struct VideoUniforms {
+    pub is_p010: u32,
+    pub full_range: u32,
+    pub source_transfer: u32,
+    pub target_transfer: u32,
+    pub tone_map: u32,
+    pub edr_output: u32,
+    pub reserved0: u32,
+    pub reserved1: u32,
+    pub nits: [f32; 4],
+    pub luma_coefficients: [f32; 4],
+    pub gamut_matrix_rows: [[f32; 4]; 3],
+}
+
+impl VideoUniforms {
+    pub fn from_pipeline(pipeline: &VideoRenderPipeline, is_p010: bool, edr_output: bool) -> Self {
+        let luma = pipeline.luma_coefficients();
+        Self {
+            is_p010: u32::from(is_p010),
+            full_range: u32::from(matches!(pipeline.source.range, ColorRange::Full)),
+            source_transfer: transfer_code(pipeline.source.transfer),
+            target_transfer: transfer_code(pipeline.target.transfer),
+            tone_map: tone_map_code(pipeline.tone_map.operator),
+            edr_output: u32::from(edr_output),
+            reserved0: 0,
+            reserved1: 0,
+            nits: [
+                pipeline.source.nominal_peak_nits,
+                pipeline.target.peak_nits,
+                pipeline.source.reference_white_nits,
+                pipeline.target.reference_white_nits,
+            ],
+            luma_coefficients: [luma.kr, luma.kg, luma.kb, 0.0],
+            gamut_matrix_rows: pipeline.gamut_matrix().row4s(),
+        }
+    }
+}
+
+fn transfer_code(transfer: TransferFunction) -> u32 {
+    match transfer {
+        TransferFunction::Srgb => 1,
+        TransferFunction::Bt1886 => 2,
+        TransferFunction::Pq => 3,
+        TransferFunction::Hlg => 4,
+        TransferFunction::Unknown => 1,
+    }
+}
+
+fn tone_map_code(operator: ToneMapOperator) -> u32 {
+    match operator {
+        ToneMapOperator::Clip => 0,
+        ToneMapOperator::Reinhard => 1,
+        ToneMapOperator::Mobius => 2,
+    }
+}
+
 fn build_graph(
     source: SourceColorState,
     target: TargetColorState,
@@ -690,6 +764,19 @@ mod tests {
         assert!(pipeline.graph.contains(RenderPassKind::GamutMap));
         assert!(pipeline.graph.contains(RenderPassKind::ToneMap));
         assert!(pipeline.graph.contains(RenderPassKind::OutputTransform));
+    }
+
+    #[test]
+    fn hdr_pq_to_hdr10_keeps_absolute_pq_without_tone_mapping() {
+        let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq);
+        let target = TargetColorState::hdr10(ColorPrimaries::Bt2020);
+        let pipeline = VideoRenderPipeline::new(source, target);
+
+        assert_eq!(pipeline.target.transfer, TransferFunction::Pq);
+        assert_eq!(pipeline.target.reference_white_nits, 203.0);
+        assert!(!pipeline.requires_tone_mapping());
+        assert!(!pipeline.graph.contains(RenderPassKind::GamutMap));
+        assert!(!pipeline.graph.contains(RenderPassKind::ToneMap));
     }
 
     #[test]

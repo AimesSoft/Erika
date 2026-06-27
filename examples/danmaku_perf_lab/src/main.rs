@@ -19,6 +19,7 @@ use erika::presenter::{PresenterConfig, PresenterRuntime};
 use erika::renderer::metal::{LumaUpscalerMode, MetalRendererConfig};
 use erika::{MediaRequest, MetalSurfaceHandle, PlatformSurface};
 
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn erika_perf_lab_run_app();
 }
@@ -35,7 +36,7 @@ fn main() {
     let options = parse_args(&args).unwrap_or_else(|error| {
         eprintln!("{error}");
         eprintln!(
-            "usage: cargo run -p danmaku_perf_lab -- [--window] [--fullscreen] [--uncapped] [--danmaku PATH] [--video PATH] [--software] \
+            "usage: cargo run -p danmaku_perf_lab -- [--window] [--fullscreen] [--uncapped] [--danmaku PATH] [--video PATH] [--software|--videotoolbox|--d3d11va] \
              [--items N|--rate N] [--duration SECONDS] [--frames N] [--fps N] [--size WxH] \
              [--prewarm-frames N] \
              [--font-size N] [--display-area N] [--scroll-duration N] [--scroll-overwrite] \
@@ -156,12 +157,18 @@ fn run(options: PerfOptions) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn run_window(options: PerfOptions) -> Result<(), String> {
     WINDOW_OPTIONS
         .set(options)
         .map_err(|_| "window options already initialized".to_string())?;
     unsafe { erika_perf_lab_run_app() };
     Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_window(_options: PerfOptions) -> Result<(), String> {
+    Err("danmaku_perf_lab --window is macOS/Metal-only; use windows_native_demo for Windows HWND/D3D11 presenter smoke tests".to_string())
 }
 
 fn run_synthetic(
@@ -225,7 +232,7 @@ fn run_video_driven(
                     Some(VideoSample {
                         width: frame.frame.width() as usize,
                         height: frame.frame.height() as usize,
-                        is_hardware: frame.frame.is_videotoolbox(),
+                        is_hardware: frame.frame.is_videotoolbox() || frame.frame.is_d3d11va(),
                         late_by: frame.late_by,
                     }),
                 ));
@@ -1426,6 +1433,7 @@ fn parse_args(args: &[String]) -> Result<PerfOptions, String> {
                 };
             }
             "--videotoolbox" => options.decode_preference = VideoDecodePreference::VideoToolbox,
+            "--d3d11va" => options.decode_preference = VideoDecodePreference::D3d11va,
             "--items" => {
                 options.item_count = next_parse(args, &mut index, "--items")?;
                 explicit_items = true;

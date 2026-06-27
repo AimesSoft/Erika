@@ -1,18 +1,23 @@
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use std::ffi::c_void;
+#[cfg(target_os = "windows")]
+use std::num::NonZeroIsize;
 use wgpu::util::DeviceExt;
 
 use crate::core::{
     ColorPrimaries, LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame,
-    RenderFrameContext, RendererBackend, RendererRuntimeStats, Result, TransferFunction,
-    WgpuSurfaceHandle, WgpuSurfaceKind,
+    RenderFrameContext, RendererBackend, RendererRuntimeStats, Result, WgpuSurfaceHandle,
+    WgpuSurfaceKind,
 };
 use crate::danmaku::{DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan};
 use crate::ffmpeg::{PlanarFrame, PlanarPixelFormat};
 use crate::overlay::OverlayFrame;
 use crate::renderer::pipeline::{
-    ColorRange, SourceColorState, TargetColorState, ToneMapOperator, VideoRenderPipeline,
+    LumaUpscalerMode, SourceColorState, TargetColorState, VideoRenderPipeline,
 };
 use crate::subtitle::AssColor;
+
+pub use crate::renderer::pipeline::VideoUniforms;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WgpuRendererStats {
@@ -20,6 +25,10 @@ pub struct WgpuRendererStats {
     pub surface_height: u32,
     pub rendered_frames: u64,
     pub offscreen_frames: u64,
+    pub software_video_frames: u64,
+    pub hardware_video_frames: u64,
+    pub zero_copy_video_frames: u64,
+    pub cpu_video_frame_fallbacks: u64,
     pub danmaku_passes: u64,
     pub danmaku_items: u64,
     pub attached: bool,
@@ -86,71 +95,6 @@ impl WgpuOffscreenReadback {
             self.rgba[offset + 2],
             self.rgba[offset + 3],
         ]
-    }
-}
-
-/// Fragment-shader uniforms for the video pipeline. The field order and byte layout
-/// mirror the Metal `VideoUniforms` in `renderer/metal/apple.rs` exactly, so both
-/// backends consume the same data and produce the same pixels.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct VideoUniforms {
-    pub is_p010: u32,
-    pub full_range: u32,
-    pub source_transfer: u32,
-    pub target_transfer: u32,
-    pub tone_map: u32,
-    pub edr_output: u32,
-    pub reserved0: u32,
-    pub reserved1: u32,
-    pub nits: [f32; 4],
-    pub luma_coefficients: [f32; 4],
-    pub gamut_matrix_rows: [[f32; 4]; 3],
-}
-
-impl VideoUniforms {
-    /// Build the uniform block from a resolved render pipeline, matching how the
-    /// Metal renderer fills its `VideoUniforms` in `render_video_frame`.
-    pub fn from_pipeline(pipeline: &VideoRenderPipeline, is_p010: bool, edr_output: bool) -> Self {
-        let luma = pipeline.luma_coefficients();
-        Self {
-            is_p010: u32::from(is_p010),
-            full_range: u32::from(matches!(pipeline.source.range, ColorRange::Full)),
-            source_transfer: transfer_code(pipeline.source.transfer),
-            target_transfer: transfer_code(pipeline.target.transfer),
-            tone_map: tone_map_code(pipeline.tone_map.operator),
-            edr_output: u32::from(edr_output),
-            reserved0: 0,
-            reserved1: 0,
-            nits: [
-                pipeline.source.nominal_peak_nits,
-                pipeline.target.peak_nits,
-                pipeline.source.reference_white_nits,
-                pipeline.target.reference_white_nits,
-            ],
-            luma_coefficients: [luma.kr, luma.kg, luma.kb, 0.0],
-            gamut_matrix_rows: pipeline.gamut_matrix().row4s(),
-        }
-    }
-}
-
-// Mirror of the `transfer_code` / `tone_map_code` mappings in macos.rs. Kept in sync
-// with the Metal backend; the WGSL shader branches on these same integer codes.
-fn transfer_code(transfer: TransferFunction) -> u32 {
-    match transfer {
-        TransferFunction::Srgb => 1,
-        TransferFunction::Bt1886 => 2,
-        TransferFunction::Pq => 3,
-        TransferFunction::Hlg => 4,
-        TransferFunction::Unknown => 1,
-    }
-}
-
-fn tone_map_code(operator: ToneMapOperator) -> u32 {
-    match operator {
-        ToneMapOperator::Clip => 0,
-        ToneMapOperator::Reinhard => 1,
-        ToneMapOperator::Mobius => 2,
     }
 }
 
@@ -322,6 +266,7 @@ pub struct WgpuRenderer {
     current_video: Option<UploadedVideoFrame>,
     danmaku_atlas_cache: Option<WgpuDanmakuAtlasCache>,
     supports_16bit_norm: bool,
+    upscaler_mode: LumaUpscalerMode,
     stats: WgpuRendererStats,
 }
 
@@ -372,6 +317,7 @@ impl WgpuRenderer {
             current_video: None,
             danmaku_atlas_cache: None,
             supports_16bit_norm,
+            upscaler_mode: LumaUpscalerMode::Off,
             stats: WgpuRendererStats::default(),
         })
     }
@@ -1437,11 +1383,26 @@ impl RendererBackend for WgpuRenderer {
         };
 
         // SAFETY: `create_surface_unsafe` requires the raw handle to point at a live
-        // CAMetalLayer that outlives the returned surface. The embedder owns the layer
-        // for the lifetime of the attachment, mirroring the Metal renderer contract.
+        // platform surface that outlives the returned surface. The embedder owns the
+        // HWND/CAMetalLayer for the lifetime of the attachment.
         let target = match handle.kind {
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
             WgpuSurfaceKind::MacOsCaMetalLayer => {
                 wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(handle.raw_window as *mut c_void)
+            }
+            #[cfg(target_os = "windows")]
+            WgpuSurfaceKind::WindowsHwnd => {
+                let hwnd = NonZeroIsize::new(handle.raw_window as isize).ok_or_else(|| {
+                    PlayerError::Renderer("wgpu Windows HWND surface handle is null".to_string())
+                })?;
+                let mut window = wgpu::rwh::Win32WindowHandle::new(hwnd);
+                window.hinstance = NonZeroIsize::new(handle.raw_display as isize);
+                wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: Some(wgpu::rwh::RawDisplayHandle::Windows(
+                        wgpu::rwh::WindowsDisplayHandle::new(),
+                    )),
+                    raw_window_handle: wgpu::rwh::RawWindowHandle::Win32(window),
+                }
             }
             other => {
                 return Err(PlayerError::Renderer(format!(
@@ -1522,16 +1483,20 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn upload_player_frame(&mut self, frame: &PlayerVideoFrame) -> Result<()> {
-        // Software path: repack the decoded planes (8-bit NV12 or 10-bit P010) and
-        // upload. A hardware frame (e.g. VideoToolbox) has no CPU planes here; that
-        // needs the per-platform zero-copy interop bridge (a later slice).
-        let planar = frame.frame.to_planar_frame().ok_or_else(|| {
-            PlayerError::Renderer(
-                "wgpu: frame is not software 4:2:0 8-bit/10-bit (hardware frame or unsupported \
-                 format)"
-                    .to_string(),
-            )
-        })?;
+        let hardware_frame = frame.frame.has_hw_frames_context();
+        let planar = if let Some(planar) = frame.frame.to_planar_frame() {
+            self.stats.software_video_frames += 1;
+            planar
+        } else if hardware_frame {
+            self.stats.hardware_video_frames += 1;
+            return Err(PlayerError::Renderer(
+                "wgpu: hardware video frames require zero-copy native interop; use software decode or a native hardware renderer".to_string(),
+            ));
+        } else {
+            return Err(PlayerError::Renderer(
+                "wgpu: frame is not software 4:2:0 8-bit/10-bit".to_string(),
+            ));
+        };
         let is_p010 = matches!(planar.format, PlanarPixelFormat::P010);
         let source = SourceColorState::new(
             frame.frame.color_primaries(),
@@ -1616,14 +1581,35 @@ impl RendererBackend for WgpuRenderer {
             last_danmaku_encode_duration: Default::default(),
             last_danmaku_vertex_bytes: 0,
             last_danmaku_vertex_count: 0,
-            upscaler_mode: Default::default(),
-            upscaler_backend: LumaUpscalerBackendStatus::Off,
+            upscaler_mode: self.upscaler_mode,
+            upscaler_backend: if self.upscaler_mode.is_enabled() {
+                LumaUpscalerBackendStatus::Inactive
+            } else {
+                LumaUpscalerBackendStatus::Off
+            },
             upscaler_fallbacks: 0,
             upscaled_frames: 0,
             last_upscaler_encode_duration: Default::default(),
             last_gpu_duration: Default::default(),
             attached: stats.attached,
+            software_video_frames: stats.software_video_frames,
+            hardware_video_frames: stats.hardware_video_frames,
+            zero_copy_video_frames: stats.zero_copy_video_frames,
+            direct_zero_copy_video_frames: 0,
+            shared_handle_video_frames: 0,
+            cpu_video_frame_fallbacks: stats.cpu_video_frame_fallbacks,
+            hdr_source_frames: 0,
+            hdr10_output_frames: 0,
+            sdr_tonemap_frames: 0,
+            hdr10_metadata_updates: 0,
+            hdr10_metadata_failures: 0,
+            hdr10_output_failures: 0,
+            hdr10_output_active: false,
         }
+    }
+
+    fn set_luma_upscaler(&mut self, mode: LumaUpscalerMode) {
+        self.upscaler_mode = mode;
     }
 }
 

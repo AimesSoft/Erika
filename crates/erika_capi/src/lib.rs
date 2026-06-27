@@ -1,18 +1,19 @@
+use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Duration;
 
 use crossbeam_channel::Receiver;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 use erika::LumaUpscalerBackendStatus;
 use erika::danmaku::{
     DanmakuLayoutConfig, DanmakuShadowStyle, DanmakuTimeline, DanmakuTrackInfo, DanmakuTrackSource,
 };
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use erika::presenter::{PresenterConfig, PresenterRuntime, PresenterStats};
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
+use erika::presenter::{PresenterConfig, PresenterRuntime, PresenterRuntimeSnapshot};
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 use erika::renderer::metal::{MetalOutputMode, MetalRendererConfig};
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 use erika::renderer::pipeline::LumaUpscalerMode;
 use erika::{
     FlutterTextureHandle, FlutterTextureKind, MediaRequest, MetalSurfaceHandle, PlatformSurface,
@@ -29,6 +30,46 @@ pub enum ErikaStatus {
     PlayerError = 3,
     Panic = 4,
     NoEvent = 5,
+}
+
+thread_local! {
+    static LAST_ERROR: RefCell<Option<String>> = RefCell::new(None);
+}
+
+fn clear_last_error() {
+    LAST_ERROR.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+}
+
+fn set_last_error(message: impl Into<String>) {
+    let message = message.into().replace('\0', "\\0");
+    LAST_ERROR.with(|slot| {
+        *slot.borrow_mut() = Some(message);
+    });
+}
+
+fn ensure_last_error(status: ErikaStatus) {
+    LAST_ERROR.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(format!("Erika C ABI returned {status:?}"));
+        }
+    });
+}
+
+fn finalize_status(status: ErikaStatus) -> ErikaStatus {
+    match status {
+        ErikaStatus::Ok => clear_last_error(),
+        ErikaStatus::NoEvent => {}
+        _ => ensure_last_error(status),
+    }
+    status
+}
+
+fn player_error(message: impl Into<String>) -> ErikaStatus {
+    set_last_error(message);
+    ErikaStatus::PlayerError
 }
 
 #[repr(C)]
@@ -335,7 +376,7 @@ pub struct ErikaHandle {
     events: Receiver<PlayerEvent>,
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 pub struct ErikaPresenterHandle {
     presenter: PresenterRuntime,
     events: Receiver<PlayerEvent>,
@@ -354,6 +395,24 @@ pub struct ErikaPresenterStats {
     pub import_failures: u64,
     pub render_failures: u64,
     pub audio_failures: u64,
+    pub software_video_frames: u64,
+    pub hardware_video_frames: u64,
+    pub zero_copy_video_frames: u64,
+    pub cpu_video_frame_fallbacks: u64,
+    pub last_render_micros: u64,
+    pub last_render_current_micros: u64,
+    pub audio_clock_read_frames: u64,
+    pub audio_clock_queued_frames: u64,
+    pub audio_clock_underflow_frames: u64,
+    pub direct_zero_copy_video_frames: u64,
+    pub shared_handle_video_frames: u64,
+    pub hdr_source_frames: u64,
+    pub hdr10_output_frames: u64,
+    pub sdr_tonemap_frames: u64,
+    pub hdr10_metadata_updates: u64,
+    pub hdr10_metadata_failures: u64,
+    pub hdr10_output_failures: u64,
+    pub hdr10_output_active: bool,
 }
 
 #[unsafe(no_mangle)]
@@ -368,6 +427,19 @@ pub unsafe extern "C" fn erika_destroy(handle: *mut ErikaHandle) {
     if !handle.is_null() {
         drop(unsafe { Box::from_raw(handle) });
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn erika_last_error_message() -> *mut c_char {
+    LAST_ERROR.with(|slot| option_string_to_c(slot.borrow().as_deref()))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_string_free(value: *mut c_char) {
+    if value.is_null() {
+        return;
+    }
+    unsafe { drop(CString::from_raw(value)) };
 }
 
 #[unsafe(no_mangle)]
@@ -533,6 +605,7 @@ pub unsafe extern "C" fn erika_attach_metal_layer(
     scale: f64,
 ) -> ErikaStatus {
     if raw_layer == 0 {
+        set_last_error("metal layer pointer is null");
         return ErikaStatus::NullPointer;
     }
     with_handle_mut(handle, |handle| {
@@ -553,6 +626,7 @@ pub unsafe extern "C" fn erika_attach_wgpu_surface(
     scale: f64,
 ) -> ErikaStatus {
     if raw_window == 0 {
+        set_last_error("surface window pointer is null");
         return ErikaStatus::NullPointer;
     }
     with_handle_mut(handle, |handle| {
@@ -635,19 +709,19 @@ pub unsafe extern "C" fn erika_poll_event(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn erika_presenter_create() -> *mut ErikaPresenterHandle {
     create_presenter_handle(PresenterConfig::default())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn erika_presenter_create() -> *mut std::ffi::c_void {
     std::ptr::null_mut()
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn erika_presenter_create_with_config(
     config: ErikaPresenterConfig,
@@ -655,7 +729,7 @@ pub extern "C" fn erika_presenter_create_with_config(
     create_presenter_handle(presenter_config_from_c(config))
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn erika_presenter_create_with_output_mode(
     output_mode: i32,
@@ -668,7 +742,7 @@ pub extern "C" fn erika_presenter_create_with_output_mode(
     }))
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn erika_presenter_create_with_config(
     _config: ErikaPresenterConfig,
@@ -676,7 +750,7 @@ pub extern "C" fn erika_presenter_create_with_config(
     std::ptr::null_mut()
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn erika_presenter_create_with_output_mode(
     _output_mode: i32,
@@ -685,18 +759,22 @@ pub extern "C" fn erika_presenter_create_with_output_mode(
     std::ptr::null_mut()
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 fn create_presenter_handle(config: PresenterConfig) -> *mut ErikaPresenterHandle {
     match PresenterRuntime::new(config) {
         Ok(presenter) => {
+            clear_last_error();
             let events = presenter.player().subscribe();
             Box::into_raw(Box::new(ErikaPresenterHandle { presenter, events }))
         }
-        Err(_) => std::ptr::null_mut(),
+        Err(error) => {
+            set_last_error(format!("presenter create failed: {error}"));
+            std::ptr::null_mut()
+        }
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 fn presenter_config_from_c(config: ErikaPresenterConfig) -> PresenterConfig {
     let output_mode = match ErikaPresenterOutputMode::from_raw(config.output_mode) {
         ErikaPresenterOutputMode::AppleEdr => {
@@ -720,7 +798,7 @@ fn presenter_config_from_c(config: ErikaPresenterConfig) -> PresenterConfig {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 fn luma_upscaler_mode_from_c(mode: i32) -> LumaUpscalerMode {
     match ErikaLumaUpscalerMode::from_raw(mode) {
         ErikaLumaUpscalerMode::Off => LumaUpscalerMode::Off,
@@ -729,7 +807,7 @@ fn luma_upscaler_mode_from_c(mode: i32) -> LumaUpscalerMode {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 fn luma_upscaler_mode_to_c(mode: LumaUpscalerMode) -> i32 {
     match mode {
         LumaUpscalerMode::Off => ErikaLumaUpscalerMode::Off as i32,
@@ -738,7 +816,7 @@ fn luma_upscaler_mode_to_c(mode: LumaUpscalerMode) -> i32 {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 fn upscaler_backend_status_to_c(status: LumaUpscalerBackendStatus) -> i32 {
     match status {
         LumaUpscalerBackendStatus::Off => ErikaUpscalerBackendStatus::Off as i32,
@@ -751,7 +829,7 @@ fn upscaler_backend_status_to_c(status: LumaUpscalerBackendStatus) -> i32 {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 fn upscaler_status_to_c(stats: RendererRuntimeStats) -> ErikaUpscalerStatus {
     ErikaUpscalerStatus {
         requested_mode: luma_upscaler_mode_to_c(stats.upscaler_mode),
@@ -832,12 +910,15 @@ fn danmaku_block_words_from_json(json: &str) -> Result<Vec<String>, ErikaStatus>
     }
 }
 
-#[cfg(all(any(target_os = "macos", target_os = "ios"), test))]
+#[cfg(all(
+    any(target_os = "macos", target_os = "ios", target_os = "windows"),
+    test
+))]
 fn metal_output_mode_from_c(config: ErikaPresenterConfig) -> MetalOutputMode {
     presenter_config_from_c(config).renderer.output_mode
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_destroy(handle: *mut ErikaPresenterHandle) {
     if !handle.is_null() {
@@ -845,11 +926,11 @@ pub unsafe extern "C" fn erika_presenter_destroy(handle: *mut ErikaPresenterHand
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_destroy(_handle: *mut std::ffi::c_void) {}
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_open(
     handle: *mut ErikaPresenterHandle,
@@ -864,7 +945,7 @@ pub unsafe extern "C" fn erika_presenter_open(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_play(handle: *mut ErikaPresenterHandle) -> ErikaStatus {
     with_presenter_mut(handle, |handle| {
@@ -872,7 +953,7 @@ pub unsafe extern "C" fn erika_presenter_play(handle: *mut ErikaPresenterHandle)
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_pause(handle: *mut ErikaPresenterHandle) -> ErikaStatus {
     with_presenter_mut(handle, |handle| {
@@ -880,7 +961,7 @@ pub unsafe extern "C" fn erika_presenter_pause(handle: *mut ErikaPresenterHandle
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_stop(handle: *mut ErikaPresenterHandle) -> ErikaStatus {
     with_presenter_mut(handle, |handle| {
@@ -888,7 +969,7 @@ pub unsafe extern "C" fn erika_presenter_stop(handle: *mut ErikaPresenterHandle)
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_close(handle: *mut ErikaPresenterHandle) -> ErikaStatus {
     with_presenter_mut(handle, |handle| {
@@ -896,7 +977,7 @@ pub unsafe extern "C" fn erika_presenter_close(handle: *mut ErikaPresenterHandle
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_seek(
     handle: *mut ErikaPresenterHandle,
@@ -911,7 +992,7 @@ pub unsafe extern "C" fn erika_presenter_seek(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_playback_rate(
     handle: *mut ErikaPresenterHandle,
@@ -922,7 +1003,7 @@ pub unsafe extern "C" fn erika_presenter_set_playback_rate(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_volume(
     handle: *mut ErikaPresenterHandle,
@@ -934,7 +1015,7 @@ pub unsafe extern "C" fn erika_presenter_set_volume(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_upscaler(
     handle: *mut ErikaPresenterHandle,
@@ -948,7 +1029,7 @@ pub unsafe extern "C" fn erika_presenter_set_upscaler(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
     handle: *mut ErikaPresenterHandle,
@@ -960,7 +1041,7 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_upscaler_status(
     handle: *mut ErikaPresenterHandle,
@@ -976,7 +1057,7 @@ pub unsafe extern "C" fn erika_presenter_get_upscaler_status(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_add_external_subtitle(
     handle: *mut ErikaPresenterHandle,
@@ -1001,7 +1082,7 @@ pub unsafe extern "C" fn erika_presenter_add_external_subtitle(
     })
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_add_external_subtitle(
     _handle: *mut std::ffi::c_void,
@@ -1011,7 +1092,7 @@ pub unsafe extern "C" fn erika_presenter_add_external_subtitle(
     ErikaStatus::PlayerError
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_remove_subtitle_track(
     handle: *mut ErikaPresenterHandle,
@@ -1022,7 +1103,7 @@ pub unsafe extern "C" fn erika_presenter_remove_subtitle_track(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_select_audio_track(
     handle: *mut ErikaPresenterHandle,
@@ -1037,7 +1118,7 @@ pub unsafe extern "C" fn erika_presenter_select_audio_track(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_select_subtitle_track(
     handle: *mut ErikaPresenterHandle,
@@ -1052,7 +1133,7 @@ pub unsafe extern "C" fn erika_presenter_select_subtitle_track(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_load_danmaku_file(
     handle: *mut ErikaPresenterHandle,
@@ -1073,7 +1154,7 @@ pub unsafe extern "C" fn erika_presenter_load_danmaku_file(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_load_danmaku_json(
     handle: *mut ErikaPresenterHandle,
@@ -1094,7 +1175,7 @@ pub unsafe extern "C" fn erika_presenter_load_danmaku_json(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_add_danmaku_track_file(
     handle: *mut ErikaPresenterHandle,
@@ -1128,7 +1209,7 @@ pub unsafe extern "C" fn erika_presenter_add_danmaku_track_file(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_add_danmaku_track_json(
     handle: *mut ErikaPresenterHandle,
@@ -1162,7 +1243,7 @@ pub unsafe extern "C" fn erika_presenter_add_danmaku_track_json(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_remove_danmaku_track(
     handle: *mut ErikaPresenterHandle,
@@ -1177,7 +1258,7 @@ pub unsafe extern "C" fn erika_presenter_remove_danmaku_track(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_track_enabled(
     handle: *mut ErikaPresenterHandle,
@@ -1196,7 +1277,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_track_enabled(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_track_offset(
     handle: *mut ErikaPresenterHandle,
@@ -1215,7 +1296,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_track_offset(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_global_offset(
     handle: *mut ErikaPresenterHandle,
@@ -1227,7 +1308,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_global_offset(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_danmaku_tracks(
     handle: *mut ErikaPresenterHandle,
@@ -1248,7 +1329,7 @@ pub unsafe extern "C" fn erika_presenter_danmaku_tracks(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_clear_danmaku(
     handle: *mut ErikaPresenterHandle,
@@ -1259,7 +1340,7 @@ pub unsafe extern "C" fn erika_presenter_clear_danmaku(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_enabled(
     handle: *mut ErikaPresenterHandle,
@@ -1271,7 +1352,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_enabled(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_config(
     handle: *mut ErikaPresenterHandle,
@@ -1290,7 +1371,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_config(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_config_ptr(
     handle: *mut ErikaPresenterHandle,
@@ -1302,7 +1383,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_config_ptr(
     unsafe { erika_presenter_set_danmaku_config(handle, *config) }
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_danmaku_config(
     handle: *mut ErikaPresenterHandle,
@@ -1324,7 +1405,7 @@ pub unsafe extern "C" fn erika_presenter_get_danmaku_config(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_font(
     handle: *mut ErikaPresenterHandle,
@@ -1339,7 +1420,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_font(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_block_words_json(
     handle: *mut ErikaPresenterHandle,
@@ -1365,7 +1446,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_block_words_json(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_track_selection(
     handle: *mut ErikaPresenterHandle,
@@ -1380,7 +1461,7 @@ pub unsafe extern "C" fn erika_presenter_track_selection(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_tracks(
     handle: *mut ErikaPresenterHandle,
@@ -1396,7 +1477,7 @@ pub unsafe extern "C" fn erika_presenter_tracks(
     })
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_remove_subtitle_track(
     _handle: *mut std::ffi::c_void,
@@ -1405,7 +1486,7 @@ pub unsafe extern "C" fn erika_presenter_remove_subtitle_track(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_select_audio_track(
     _handle: *mut std::ffi::c_void,
@@ -1414,7 +1495,7 @@ pub unsafe extern "C" fn erika_presenter_select_audio_track(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_select_subtitle_track(
     _handle: *mut std::ffi::c_void,
@@ -1423,7 +1504,7 @@ pub unsafe extern "C" fn erika_presenter_select_subtitle_track(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_track_selection(
     _handle: *mut std::ffi::c_void,
@@ -1432,7 +1513,7 @@ pub unsafe extern "C" fn erika_presenter_track_selection(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_tracks(
     _handle: *mut std::ffi::c_void,
@@ -1443,7 +1524,7 @@ pub unsafe extern "C" fn erika_presenter_tracks(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_playback_rate(
     _handle: *mut std::ffi::c_void,
@@ -1452,7 +1533,7 @@ pub unsafe extern "C" fn erika_presenter_set_playback_rate(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_volume(
     _handle: *mut std::ffi::c_void,
@@ -1461,7 +1542,7 @@ pub unsafe extern "C" fn erika_presenter_set_volume(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_upscaler(
     _handle: *mut std::ffi::c_void,
@@ -1470,7 +1551,7 @@ pub unsafe extern "C" fn erika_presenter_set_upscaler(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
     _handle: *mut std::ffi::c_void,
@@ -1479,7 +1560,7 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_upscaler_status(
     _handle: *mut std::ffi::c_void,
@@ -1491,7 +1572,7 @@ pub unsafe extern "C" fn erika_presenter_get_upscaler_status(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_load_danmaku_file(
     _handle: *mut std::ffi::c_void,
@@ -1500,7 +1581,7 @@ pub unsafe extern "C" fn erika_presenter_load_danmaku_file(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_load_danmaku_json(
     _handle: *mut std::ffi::c_void,
@@ -1509,7 +1590,7 @@ pub unsafe extern "C" fn erika_presenter_load_danmaku_json(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_add_danmaku_track_file(
     _handle: *mut std::ffi::c_void,
@@ -1524,7 +1605,7 @@ pub unsafe extern "C" fn erika_presenter_add_danmaku_track_file(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_add_danmaku_track_json(
     _handle: *mut std::ffi::c_void,
@@ -1539,7 +1620,7 @@ pub unsafe extern "C" fn erika_presenter_add_danmaku_track_json(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_remove_danmaku_track(
     _handle: *mut std::ffi::c_void,
@@ -1548,7 +1629,7 @@ pub unsafe extern "C" fn erika_presenter_remove_danmaku_track(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_track_enabled(
     _handle: *mut std::ffi::c_void,
@@ -1558,7 +1639,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_track_enabled(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_track_offset(
     _handle: *mut std::ffi::c_void,
@@ -1568,7 +1649,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_track_offset(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_global_offset(
     _handle: *mut std::ffi::c_void,
@@ -1577,7 +1658,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_global_offset(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_danmaku_tracks(
     _handle: *mut std::ffi::c_void,
@@ -1591,7 +1672,7 @@ pub unsafe extern "C" fn erika_presenter_danmaku_tracks(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_clear_danmaku(
     _handle: *mut std::ffi::c_void,
@@ -1599,7 +1680,7 @@ pub unsafe extern "C" fn erika_presenter_clear_danmaku(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_enabled(
     _handle: *mut std::ffi::c_void,
@@ -1608,7 +1689,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_enabled(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_config(
     _handle: *mut std::ffi::c_void,
@@ -1617,7 +1698,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_config(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_config_ptr(
     _handle: *mut std::ffi::c_void,
@@ -1629,7 +1710,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_config_ptr(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_danmaku_config(
     _handle: *mut std::ffi::c_void,
@@ -1641,7 +1722,7 @@ pub unsafe extern "C" fn erika_presenter_get_danmaku_config(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_font(
     _handle: *mut std::ffi::c_void,
@@ -1651,7 +1732,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_font(
     ErikaStatus::PlayerError
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_block_words_json(
     _handle: *mut std::ffi::c_void,
@@ -1663,7 +1744,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_block_words_json(
     ErikaStatus::PlayerError
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_attach_metal_layer(
     handle: *mut ErikaPresenterHandle,
@@ -1682,7 +1763,58 @@ pub unsafe extern "C" fn erika_presenter_attach_metal_layer(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_attach_wgpu_surface(
+    handle: *mut ErikaPresenterHandle,
+    kind: ErikaWgpuSurfaceKind,
+    raw_window: u64,
+    raw_display: u64,
+    width: u32,
+    height: u32,
+    scale: f64,
+) -> ErikaStatus {
+    if raw_window == 0 {
+        return ErikaStatus::NullPointer;
+    }
+    with_presenter_mut(handle, |handle| {
+        status_from_player_result(handle.presenter.attach_surface(PlatformSurface::Wgpu(
+            WgpuSurfaceHandle::new(
+                wgpu_surface_kind_from_c(kind),
+                raw_window,
+                raw_display,
+                width,
+                height,
+                scale,
+            ),
+        )))
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_attach_windows_hwnd(
+    handle: *mut ErikaPresenterHandle,
+    hwnd: u64,
+    hinstance: u64,
+    width: u32,
+    height: u32,
+    scale: f64,
+) -> ErikaStatus {
+    unsafe {
+        erika_presenter_attach_wgpu_surface(
+            handle,
+            ErikaWgpuSurfaceKind::WindowsHwnd,
+            hwnd,
+            hinstance,
+            width,
+            height,
+            scale,
+        )
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_resize_surface(
     handle: *mut ErikaPresenterHandle,
@@ -1695,7 +1827,7 @@ pub unsafe extern "C" fn erika_presenter_resize_surface(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_detach_surface(
     handle: *mut ErikaPresenterHandle,
@@ -1705,7 +1837,7 @@ pub unsafe extern "C" fn erika_presenter_detach_surface(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_render_tick(
     handle: *mut ErikaPresenterHandle,
@@ -1714,18 +1846,20 @@ pub unsafe extern "C" fn erika_presenter_render_tick(
 ) -> ErikaStatus {
     with_presenter_mut(handle, |handle| {
         match handle.presenter.render_tick(time_seconds) {
-            Ok(stats) => {
+            Ok(_stats) => {
                 if !out_stats.is_null() {
-                    unsafe { *out_stats = presenter_stats_to_c(stats) };
+                    let snapshot = handle.presenter.runtime_snapshot();
+                    unsafe { *out_stats = presenter_stats_to_c(snapshot) };
                 }
+                clear_last_error();
                 ErikaStatus::Ok
             }
-            Err(_) => ErikaStatus::PlayerError,
+            Err(error) => player_error(format!("render_tick failed: {error}")),
         }
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_capture_frame_rgba(
     handle: *mut ErikaPresenterHandle,
@@ -1751,29 +1885,50 @@ pub unsafe extern "C" fn erika_presenter_capture_frame_rgba(
                 }
                 ErikaStatus::Ok
             }
-            Ok(_) => ErikaStatus::PlayerError,
-            Err(_) => ErikaStatus::PlayerError,
+            Ok(_) => player_error("capture_frame_rgba returned an unexpected frame size"),
+            Err(error) => player_error(format!("capture_frame_rgba failed: {error}")),
         }
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_poll_event(
     handle: *mut ErikaPresenterHandle,
     out_event: *mut ErikaEvent,
 ) -> ErikaStatus {
     if out_event.is_null() {
+        set_last_error("event output pointer is null");
         return ErikaStatus::NullPointer;
     }
-    with_presenter_mut(handle, |handle| match handle.events.try_recv() {
-        Ok(event) => {
-            unsafe { *out_event = event_to_c(event) };
-            ErikaStatus::Ok
+    if handle.is_null() {
+        set_last_error("Erika presenter handle pointer is null");
+        return ErikaStatus::NullPointer;
+    }
+    match catch_unwind(AssertUnwindSafe(|| {
+        let handle = unsafe { &mut *handle };
+        match handle.events.try_recv() {
+            Ok(event) => {
+                let event = event_to_c(event);
+                let is_error = event.kind == ErikaEventKind::Error;
+                unsafe { *out_event = event };
+                if !is_error {
+                    clear_last_error();
+                }
+                ErikaStatus::Ok
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => ErikaStatus::NoEvent,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                player_error("presenter event channel disconnected")
+            }
         }
-        Err(crossbeam_channel::TryRecvError::Empty) => ErikaStatus::NoEvent,
-        Err(crossbeam_channel::TryRecvError::Disconnected) => ErikaStatus::PlayerError,
-    })
+    })) {
+        Ok(status) => status,
+        Err(_) => {
+            set_last_error("panic while polling Erika presenter event");
+            ErikaStatus::Panic
+        }
+    }
 }
 
 fn with_handle_mut(
@@ -1781,36 +1936,48 @@ fn with_handle_mut(
     f: impl FnOnce(&mut ErikaHandle) -> ErikaStatus,
 ) -> ErikaStatus {
     if handle.is_null() {
+        set_last_error("Erika handle pointer is null");
         return ErikaStatus::NullPointer;
     }
     match catch_unwind(AssertUnwindSafe(|| f(unsafe { &mut *handle }))) {
-        Ok(status) => status,
-        Err(_) => ErikaStatus::Panic,
+        Ok(status) => finalize_status(status),
+        Err(_) => {
+            set_last_error("panic while handling Erika C ABI call");
+            ErikaStatus::Panic
+        }
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 fn with_presenter_mut(
     handle: *mut ErikaPresenterHandle,
     f: impl FnOnce(&mut ErikaPresenterHandle) -> ErikaStatus,
 ) -> ErikaStatus {
     if handle.is_null() {
+        set_last_error("Erika presenter handle pointer is null");
         return ErikaStatus::NullPointer;
     }
     match catch_unwind(AssertUnwindSafe(|| f(unsafe { &mut *handle }))) {
-        Ok(status) => status,
-        Err(_) => ErikaStatus::Panic,
+        Ok(status) => finalize_status(status),
+        Err(_) => {
+            set_last_error("panic while handling Erika presenter C ABI call");
+            ErikaStatus::Panic
+        }
     }
 }
 
 fn c_string(ptr: *const c_char) -> Result<String, ErikaStatus> {
     if ptr.is_null() {
+        set_last_error("required C string pointer is null");
         return Err(ErikaStatus::NullPointer);
     }
     unsafe { CStr::from_ptr(ptr) }
         .to_str()
         .map(str::to_string)
-        .map_err(|_| ErikaStatus::InvalidUtf8)
+        .map_err(|_| {
+            set_last_error("required C string is not valid UTF-8");
+            ErikaStatus::InvalidUtf8
+        })
 }
 
 fn optional_c_string(ptr: *const c_char) -> Option<String> {
@@ -1827,8 +1994,11 @@ fn optional_c_string(ptr: *const c_char) -> Option<String> {
 
 fn status_from_player_result(result: erika::Result<()>) -> ErikaStatus {
     match result {
-        Ok(()) => ErikaStatus::Ok,
-        Err(_) => ErikaStatus::PlayerError,
+        Ok(()) => {
+            clear_last_error();
+            ErikaStatus::Ok
+        }
+        Err(error) => player_error(error.to_string()),
     }
 }
 
@@ -2004,11 +2174,14 @@ fn event_to_c(event: PlayerEvent) -> ErikaEvent {
             kind: ErikaEventKind::SurfaceDetached,
             ..ErikaEvent::default()
         },
-        PlayerEvent::Error(_) => ErikaEvent {
-            kind: ErikaEventKind::Error,
-            status: ErikaStatus::PlayerError,
-            ..ErikaEvent::default()
-        },
+        PlayerEvent::Error(error) => {
+            set_last_error(error.to_string());
+            ErikaEvent {
+                kind: ErikaEventKind::Error,
+                status: ErikaStatus::PlayerError,
+                ..ErikaEvent::default()
+            }
+        }
     }
 }
 
@@ -2069,8 +2242,10 @@ fn duration_micros_u64(duration: Duration) -> u64 {
     duration.as_micros().min(u64::MAX as u128) as u64
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-fn presenter_stats_to_c(stats: PresenterStats) -> ErikaPresenterStats {
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
+fn presenter_stats_to_c(snapshot: PresenterRuntimeSnapshot) -> ErikaPresenterStats {
+    let stats = snapshot.stats;
+    let renderer = snapshot.renderer;
     ErikaPresenterStats {
         decoded_video_frames: stats.decoded_video_frames,
         rendered_video_frames: stats.rendered_video_frames,
@@ -2082,6 +2257,25 @@ fn presenter_stats_to_c(stats: PresenterStats) -> ErikaPresenterStats {
         import_failures: stats.import_failures,
         render_failures: stats.render_failures,
         audio_failures: stats.audio_failures,
+        software_video_frames: renderer.software_video_frames,
+        hardware_video_frames: renderer.hardware_video_frames,
+        zero_copy_video_frames: renderer.zero_copy_video_frames,
+        cpu_video_frame_fallbacks: renderer.cpu_video_frame_fallbacks,
+        last_render_micros: duration_micros_u64(snapshot.last_render_duration),
+        last_render_current_micros: duration_micros_u64(snapshot.last_render_current_duration),
+        audio_clock_read_frames: snapshot.audio_output_read_frames,
+        audio_clock_queued_frames: snapshot.audio_output_queued_frames.min(u64::MAX as usize)
+            as u64,
+        audio_clock_underflow_frames: snapshot.audio_output_underflow_frames,
+        direct_zero_copy_video_frames: renderer.direct_zero_copy_video_frames,
+        shared_handle_video_frames: renderer.shared_handle_video_frames,
+        hdr_source_frames: renderer.hdr_source_frames,
+        hdr10_output_frames: renderer.hdr10_output_frames,
+        sdr_tonemap_frames: renderer.sdr_tonemap_frames,
+        hdr10_metadata_updates: renderer.hdr10_metadata_updates,
+        hdr10_metadata_failures: renderer.hdr10_metadata_failures,
+        hdr10_output_failures: renderer.hdr10_output_failures,
+        hdr10_output_active: renderer.hdr10_output_active,
     }
 }
 
@@ -2264,7 +2458,7 @@ mod tests {
         unsafe { erika_destroy(handle) };
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
     #[test]
     fn c_presenter_lifecycle_rejects_null_and_can_be_destroyed() {
         assert_eq!(
@@ -2276,7 +2470,7 @@ mod tests {
         unsafe { erika_presenter_destroy(handle) };
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
     #[test]
     fn c_presenter_set_volume_accepts_valid_handle() {
         assert_eq!(
@@ -2297,7 +2491,7 @@ mod tests {
         unsafe { erika_presenter_destroy(handle) };
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
     #[test]
     fn c_presenter_set_upscaler_accepts_valid_handle() {
         assert_eq!(
@@ -2329,7 +2523,7 @@ mod tests {
         unsafe { erika_presenter_destroy(handle) };
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
     #[test]
     fn c_presenter_reports_upscaler_status() {
         assert_eq!(
@@ -2374,7 +2568,7 @@ mod tests {
         unsafe { erika_presenter_destroy(handle) };
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
     #[test]
     fn c_presenter_can_be_created_with_edr_config() {
         let handle = erika_presenter_create_with_config(ErikaPresenterConfig {
@@ -2386,7 +2580,7 @@ mod tests {
         unsafe { erika_presenter_destroy(handle) };
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
     #[test]
     fn c_presenter_danmaku_api_loads_configures_and_clears() {
         let handle = erika_presenter_create();
@@ -2416,7 +2610,7 @@ mod tests {
         unsafe { erika_presenter_destroy(handle) };
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
     #[test]
     fn c_presenter_config_maps_output_modes() {
         assert_eq!(
@@ -2449,7 +2643,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
     #[test]
     fn c_presenter_config_maps_upscaler_modes() {
         assert_eq!(
@@ -2484,6 +2678,20 @@ mod tests {
             .renderer
             .luma_upscaler,
             LumaUpscalerMode::Off
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn c_presenter_config_keeps_windows_native_decode_path() {
+        let config = presenter_config_from_c(ErikaPresenterConfig::default());
+        assert_eq!(
+            config.player.renderer,
+            erika::RendererBackendPreference::Auto
+        );
+        assert_eq!(
+            config.player.playback.video_decode,
+            erika::playback::VideoDecodePreference::D3d11va
         );
     }
 }

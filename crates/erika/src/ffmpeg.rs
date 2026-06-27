@@ -46,6 +46,8 @@ pub enum FfmpegError {
     ExpectedAudioFrame,
     #[error("expected subtitle stream")]
     ExpectedSubtitleStream,
+    #[error("unsupported D3D11VA software pixel format: {0}")]
+    UnsupportedD3d11vaSwFormat(i32),
     #[error(
         "invalid subtitle bitmap: width={width} height={height} stride={stride} colors={colors}"
     )]
@@ -547,7 +549,7 @@ impl SubtitleDecoder {
                 self.context,
                 &mut subtitle,
                 &mut got_subtitle,
-                packet.as_ptr(),
+                packet.as_ptr().cast_mut(),
             )
         };
         if code < 0 {
@@ -594,6 +596,7 @@ pub enum DecoderOutput {
 pub enum DecoderBackend {
     Software,
     VideoToolbox,
+    D3d11va,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -613,6 +616,12 @@ impl DecoderConfig {
             backend: DecoderBackend::VideoToolbox,
         }
     }
+
+    pub fn d3d11va() -> Self {
+        Self {
+            backend: DecoderBackend::D3d11va,
+        }
+    }
 }
 
 impl Default for DecoderConfig {
@@ -623,11 +632,13 @@ impl Default for DecoderConfig {
 
 struct HardwareDecoderState {
     device_ref: *mut sys::AVBufferRef,
+    frames_ref: *mut sys::AVBufferRef,
     pixel_format: sys::AVPixelFormat,
 }
 
 impl Drop for HardwareDecoderState {
     fn drop(&mut self) {
+        unsafe { sys::av_buffer_unref(&mut self.frames_ref) };
         unsafe { sys::av_buffer_unref(&mut self.device_ref) };
     }
 }
@@ -681,6 +692,7 @@ impl Decoder {
         time_base: TimeBase,
         config: DecoderConfig,
     ) -> Result<Self> {
+        configure_ffmpeg_debug_logging();
         let codec_id = unsafe { (*parameters_ptr).codec_id };
         let codec = unsafe { sys::avcodec_find_decoder(codec_id) };
         if codec.is_null() {
@@ -702,8 +714,10 @@ impl Decoder {
             "avcodec_parameters_to_context",
         )?;
         let mut decoder = decoder;
-        if config.backend == DecoderBackend::VideoToolbox {
-            decoder.configure_videotoolbox(codec)?;
+        match config.backend {
+            DecoderBackend::Software => {}
+            DecoderBackend::VideoToolbox => decoder.configure_videotoolbox(codec)?,
+            DecoderBackend::D3d11va => decoder.configure_d3d11va(codec)?,
         }
         check(
             unsafe { sys::avcodec_open2(decoder.context, codec, ptr::null_mut()) },
@@ -762,26 +776,48 @@ impl Decoder {
     }
 
     fn configure_videotoolbox(&mut self, codec: *const sys::AVCodec) -> Result<()> {
-        let pixel_format =
-            hardware_pixel_format(codec, sys::AVHWDeviceType_AV_HWDEVICE_TYPE_VIDEOTOOLBOX)
-                .ok_or_else(|| FfmpegError::NullPointer("avcodec_get_hw_config(VideoToolbox)"))?;
+        self.configure_hardware(
+            codec,
+            sys::AVHWDeviceType_AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+            "avcodec_get_hw_config(VideoToolbox)",
+            "av_hwdevice_ctx_create(VideoToolbox)",
+        )
+    }
+
+    fn configure_d3d11va(&mut self, codec: *const sys::AVCodec) -> Result<()> {
+        self.configure_hardware(
+            codec,
+            sys::AVHWDeviceType_AV_HWDEVICE_TYPE_D3D11VA,
+            "avcodec_get_hw_config(D3D11VA)",
+            "av_hwdevice_ctx_create(D3D11VA)",
+        )?;
+        Ok(())
+    }
+
+    fn configure_hardware(
+        &mut self,
+        codec: *const sys::AVCodec,
+        device_type: sys::AVHWDeviceType,
+        hw_config_operation: &'static str,
+        hw_device_operation: &'static str,
+    ) -> Result<()> {
+        let pixel_format = hardware_pixel_format(codec, device_type)
+            .ok_or_else(|| FfmpegError::NullPointer(hw_config_operation))?;
         let mut device_ref = ptr::null_mut();
         check(
             unsafe {
                 sys::av_hwdevice_ctx_create(
                     &mut device_ref,
-                    sys::AVHWDeviceType_AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+                    device_type,
                     ptr::null(),
                     ptr::null_mut(),
                     0,
                 )
             },
-            "av_hwdevice_ctx_create(VideoToolbox)",
+            hw_device_operation,
         )?;
         if device_ref.is_null() {
-            return Err(FfmpegError::NullPointer(
-                "av_hwdevice_ctx_create(VideoToolbox)",
-            ));
+            return Err(FfmpegError::NullPointer(hw_device_operation));
         }
 
         let context_device_ref = unsafe { sys::av_buffer_ref(device_ref) };
@@ -792,6 +828,7 @@ impl Decoder {
 
         let mut hw_state = Box::new(HardwareDecoderState {
             device_ref,
+            frames_ref: ptr::null_mut(),
             pixel_format,
         });
 
@@ -802,6 +839,114 @@ impl Decoder {
         }
         self.hw_state = Some(hw_state);
         Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn ensure_d3d11va_frames_for_context(
+    context: *mut sys::AVCodecContext,
+    state: *mut HardwareDecoderState,
+) {
+    if !unsafe { (*state).frames_ref }.is_null() {
+        return;
+    }
+    const D3D11_BIND_SHADER_RESOURCE: u32 = 0x8;
+    const D3D11_BIND_DECODER: u32 = 0x200;
+    const D3D11_RESOURCE_MISC_SHARED: u32 = 0x2;
+
+    let mut frames_ref = unsafe { sys::av_hwframe_ctx_alloc((*state).device_ref) };
+    if frames_ref.is_null() {
+        trace_ffmpeg("av_hwframe_ctx_alloc(D3D11VA) returned null");
+        return;
+    }
+
+    let init_result = (|| {
+        let frames_ctx = unsafe { (*frames_ref).data.cast::<sys::AVHWFramesContext>().as_mut() }?;
+        let d3d11_frames = unsafe {
+            frames_ctx
+                .hwctx
+                .cast::<sys::AVD3D11VAFramesContext>()
+                .as_mut()
+        }?;
+        frames_ctx.format = unsafe { (*state).pixel_format };
+        frames_ctx.sw_format = d3d11va_sw_format_for_context(context);
+        let alignment = d3d11va_surface_alignment(unsafe { (*context).codec_id });
+        frames_ctx.width = align_i32(unsafe { (*context).coded_width }, alignment);
+        frames_ctx.height = align_i32(unsafe { (*context).coded_height }, alignment);
+        frames_ctx.initial_pool_size = d3d11va_pool_size(unsafe { (*context).codec_id });
+        d3d11_frames.BindFlags = D3D11_BIND_DECODER | D3D11_BIND_SHADER_RESOURCE;
+        d3d11_frames.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+        let code = unsafe { sys::av_hwframe_ctx_init(frames_ref) };
+        if code < 0 {
+            trace_ffmpeg("av_hwframe_ctx_init(D3D11VA) failed");
+            return None;
+        }
+        Some(())
+    })();
+
+    if init_result.is_some() {
+        unsafe {
+            (*state).frames_ref = frames_ref;
+        }
+        frames_ref = ptr::null_mut();
+    }
+    if !frames_ref.is_null() {
+        unsafe { sys::av_buffer_unref(&mut frames_ref) };
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn d3d11va_sw_format_for_context(context: *const sys::AVCodecContext) -> sys::AVPixelFormat {
+    match unsafe { (*context).sw_pix_fmt } {
+        sys::AVPixelFormat_AV_PIX_FMT_YUV420P10LE
+        | sys::AVPixelFormat_AV_PIX_FMT_YUV420P10BE
+        | sys::AVPixelFormat_AV_PIX_FMT_P010LE
+        | sys::AVPixelFormat_AV_PIX_FMT_P010BE => sys::AVPixelFormat_AV_PIX_FMT_P010LE,
+        _ => sys::AVPixelFormat_AV_PIX_FMT_NV12,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn d3d11va_surface_alignment(codec_id: sys::AVCodecID) -> i32 {
+    if codec_id == sys::AVCodecID_AV_CODEC_ID_MPEG2VIDEO {
+        32
+    } else if codec_id == sys::AVCodecID_AV_CODEC_ID_HEVC
+        || codec_id == sys::AVCodecID_AV_CODEC_ID_AV1
+    {
+        128
+    } else {
+        16
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn d3d11va_pool_size(codec_id: sys::AVCodecID) -> i32 {
+    if codec_id == sys::AVCodecID_AV_CODEC_ID_H264 || codec_id == sys::AVCodecID_AV_CODEC_ID_HEVC {
+        20
+    } else if codec_id == sys::AVCodecID_AV_CODEC_ID_VP9
+        || codec_id == sys::AVCodecID_AV_CODEC_ID_AV1
+    {
+        12
+    } else {
+        5
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn align_i32(value: i32, alignment: i32) -> i32 {
+    let value = value.max(1);
+    ((value + alignment - 1) / alignment) * alignment
+}
+
+fn configure_ffmpeg_debug_logging() {
+    if std::env::var_os("ERIKA_FFMPEG_DEBUG").is_some() {
+        unsafe { sys::av_log_set_level(sys::AV_LOG_DEBUG as c_int) };
+    }
+}
+
+fn trace_ffmpeg(message: &str) {
+    if std::env::var_os("ERIKA_FFMPEG_DEBUG").is_some() {
+        eprintln!("erika ffmpeg: {message}");
     }
 }
 
@@ -853,6 +998,33 @@ impl VideoToolboxPixelBuffer<'_> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct D3d11vaTexture<'a> {
+    raw_texture: *mut c_void,
+    array_index: u32,
+    width: u32,
+    height: u32,
+    _frame: PhantomData<&'a Frame>,
+}
+
+impl D3d11vaTexture<'_> {
+    pub fn raw_texture(self) -> *mut c_void {
+        self.raw_texture
+    }
+
+    pub fn array_index(self) -> u32 {
+        self.array_index
+    }
+
+    pub fn width(self) -> u32 {
+        self.width
+    }
+
+    pub fn height(self) -> u32 {
+        self.height
+    }
+}
+
 unsafe impl Send for Frame {}
 
 impl Frame {
@@ -862,6 +1034,15 @@ impl Frame {
             return Err(FfmpegError::NullPointer("av_frame_alloc"));
         }
         Ok(Self { ptr, time_base })
+    }
+
+    pub fn try_clone_ref(&self) -> Result<Self> {
+        let frame = Frame::alloc(self.time_base)?;
+        check(
+            unsafe { sys::av_frame_ref(frame.ptr, self.ptr) },
+            "av_frame_ref",
+        )?;
+        Ok(frame)
     }
 
     pub fn as_ptr(&self) -> *const sys::AVFrame {
@@ -881,7 +1062,14 @@ impl Frame {
     }
 
     pub fn channel_count(&self) -> u32 {
-        unsafe { (*self.ptr).ch_layout.nb_channels.max(0) as u32 }
+        #[cfg(erika_ffmpeg_legacy_channel_layout)]
+        unsafe {
+            sys::av_frame_get_channels(self.ptr).max(0) as u32
+        }
+        #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
+        unsafe {
+            (*self.ptr).ch_layout.nb_channels.max(0) as u32
+        }
     }
 
     pub fn sample_count(&self) -> usize {
@@ -912,6 +1100,10 @@ impl Frame {
         self.raw_pixel_format() == sys::AVPixelFormat_AV_PIX_FMT_VIDEOTOOLBOX
     }
 
+    pub fn is_d3d11va(&self) -> bool {
+        self.raw_pixel_format() == sys::AVPixelFormat_AV_PIX_FMT_D3D11
+    }
+
     pub fn has_hw_frames_context(&self) -> bool {
         unsafe { !(*self.ptr).hw_frames_ctx.is_null() }
     }
@@ -926,6 +1118,24 @@ impl Frame {
         }
         Some(VideoToolboxPixelBuffer {
             raw,
+            width: self.width(),
+            height: self.height(),
+            _frame: PhantomData,
+        })
+    }
+
+    pub fn d3d11va_texture(&self) -> Option<D3d11vaTexture<'_>> {
+        if !self.is_d3d11va() {
+            return None;
+        }
+        let raw_texture = unsafe { (*self.ptr).data[0] }.cast::<c_void>();
+        if raw_texture.is_null() {
+            return None;
+        }
+        let array_index = unsafe { (*self.ptr).data[1] as usize }.try_into().ok()?;
+        Some(D3d11vaTexture {
+            raw_texture,
+            array_index,
             width: self.width(),
             height: self.height(),
             _frame: PhantomData,
@@ -1341,26 +1551,7 @@ impl AudioResampler {
             return Err(FfmpegError::ExpectedAudioFrame);
         }
         let output_layout = ChannelLayout::default_for_channels(output_format.channels)?;
-        let mut context = ptr::null_mut();
-        check(
-            unsafe {
-                sys::swr_alloc_set_opts2(
-                    &mut context,
-                    output_layout.as_ptr(),
-                    sys::AVSampleFormat_AV_SAMPLE_FMT_FLT,
-                    output_format.sample_rate as i32,
-                    &(*frame.ptr).ch_layout,
-                    frame.raw_sample_format(),
-                    frame.sample_rate() as i32,
-                    0,
-                    ptr::null_mut(),
-                )
-            },
-            "swr_alloc_set_opts2",
-        )?;
-        if context.is_null() {
-            return Err(FfmpegError::NullPointer("swr_alloc_set_opts2"));
-        }
+        let context = unsafe { allocate_swr_context(frame, output_format, &output_layout)? };
         check(unsafe { sys::swr_init(context) }, "swr_init")?;
         Ok(Self {
             context,
@@ -1392,7 +1583,7 @@ impl AudioResampler {
         let channels = self.output_format.channels.max(1) as usize;
         let mut samples = vec![0.0f32; output_capacity as usize * channels];
         let mut output_planes = [samples.as_mut_ptr().cast::<u8>()];
-        let input = unsafe { (*frame.ptr).extended_data as *const *const u8 };
+        let input = unsafe { (*frame.ptr).extended_data as *mut *const u8 };
         if input.is_null() {
             return Err(FfmpegError::NullPointer("AVFrame.extended_data"));
         }
@@ -1423,10 +1614,78 @@ impl Drop for AudioResampler {
     }
 }
 
+#[cfg(not(erika_ffmpeg_legacy_channel_layout))]
+unsafe fn allocate_swr_context(
+    frame: &Frame,
+    output_format: PcmFormat,
+    output_layout: &ChannelLayout,
+) -> Result<*mut sys::SwrContext> {
+    let mut context = ptr::null_mut();
+    check(
+        unsafe {
+            sys::swr_alloc_set_opts2(
+                &mut context,
+                output_layout.as_ptr(),
+                sys::AVSampleFormat_AV_SAMPLE_FMT_FLT,
+                output_format.sample_rate as i32,
+                &(*frame.ptr).ch_layout,
+                frame.raw_sample_format(),
+                frame.sample_rate() as i32,
+                0,
+                ptr::null_mut(),
+            )
+        },
+        "swr_alloc_set_opts2",
+    )?;
+    if context.is_null() {
+        return Err(FfmpegError::NullPointer("swr_alloc_set_opts2"));
+    }
+    Ok(context)
+}
+
+#[cfg(erika_ffmpeg_legacy_channel_layout)]
+unsafe fn allocate_swr_context(
+    frame: &Frame,
+    output_format: PcmFormat,
+    output_layout: &ChannelLayout,
+) -> Result<*mut sys::SwrContext> {
+    let input_layout = unsafe { legacy_frame_channel_layout(frame) };
+    let context = unsafe {
+        sys::swr_alloc_set_opts(
+            ptr::null_mut(),
+            output_layout.as_raw(),
+            sys::AVSampleFormat_AV_SAMPLE_FMT_FLT,
+            output_format.sample_rate as i32,
+            input_layout,
+            frame.raw_sample_format(),
+            frame.sample_rate() as i32,
+            0,
+            ptr::null_mut(),
+        )
+    };
+    if context.is_null() {
+        return Err(FfmpegError::NullPointer("swr_alloc_set_opts"));
+    }
+    Ok(context)
+}
+
+#[cfg(erika_ffmpeg_legacy_channel_layout)]
+unsafe fn legacy_frame_channel_layout(frame: &Frame) -> i64 {
+    let layout = unsafe { sys::av_frame_get_channel_layout(frame.ptr) };
+    if layout != 0 {
+        layout
+    } else {
+        let channels = frame.channel_count().min(i32::MAX as u32) as i32;
+        unsafe { sys::av_get_default_channel_layout(channels) }
+    }
+}
+
+#[cfg(not(erika_ffmpeg_legacy_channel_layout))]
 struct ChannelLayout {
     raw: sys::AVChannelLayout,
 }
 
+#[cfg(not(erika_ffmpeg_legacy_channel_layout))]
 impl ChannelLayout {
     fn default_for_channels(channels: u32) -> Result<Self> {
         let channels = channels.min(i32::MAX as u32) as i32;
@@ -1448,9 +1707,35 @@ impl ChannelLayout {
     }
 }
 
+#[cfg(not(erika_ffmpeg_legacy_channel_layout))]
 impl Drop for ChannelLayout {
     fn drop(&mut self) {
         unsafe { sys::av_channel_layout_uninit(&mut self.raw) };
+    }
+}
+
+#[cfg(erika_ffmpeg_legacy_channel_layout)]
+struct ChannelLayout {
+    raw: i64,
+}
+
+#[cfg(erika_ffmpeg_legacy_channel_layout)]
+impl ChannelLayout {
+    fn default_for_channels(channels: u32) -> Result<Self> {
+        let channels = channels.min(i32::MAX as u32) as i32;
+        let raw = unsafe { sys::av_get_default_channel_layout(channels) };
+        if raw == 0 {
+            return Err(FfmpegError::Api {
+                operation: "av_get_default_channel_layout",
+                code: -1,
+                message: "invalid channel layout".to_string(),
+            });
+        }
+        Ok(Self { raw })
+    }
+
+    fn as_raw(&self) -> i64 {
+        self.raw
     }
 }
 
@@ -1749,7 +2034,7 @@ fn open_format_context(uri: &str) -> Result<FormatContext> {
             sys::avformat_open_input(
                 &mut format_context,
                 input.as_ptr(),
-                ptr::null(),
+                ptr::null_mut(),
                 ptr::null_mut(),
             )
         },
@@ -1776,7 +2061,7 @@ fn open_source_format_context(source: Box<dyn MediaSource>) -> Result<FormatCont
             sys::avformat_open_input(
                 &mut opened_context,
                 uri.as_ptr(),
-                ptr::null(),
+                ptr::null_mut(),
                 ptr::null_mut(),
             )
         },
@@ -1947,6 +2232,9 @@ unsafe fn audio_probe(track: &TrackInfo, codecpar: *const sys::AVCodecParameters
         track_id: track.id,
         codec: track.codec.clone(),
         sample_rate: unsafe { (*codecpar).sample_rate.max(0) as u32 },
+        #[cfg(erika_ffmpeg_legacy_channel_layout)]
+        channels: unsafe { (*codecpar).channels.max(0) as u32 },
+        #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
         channels: unsafe { (*codecpar).ch_layout.nb_channels.max(0) as u32 },
         sample_format: unsafe { sample_format_name((*codecpar).format) },
     }
@@ -2263,6 +2551,7 @@ unsafe fn content_light_metadata(frame: *const sys::AVFrame) -> Option<ContentLi
     })
 }
 
+#[allow(irrefutable_let_patterns)]
 unsafe fn read_frame_side_data<T: Copy>(
     frame: *const sys::AVFrame,
     side_data_type: sys::AVFrameSideDataType,
@@ -2276,6 +2565,9 @@ unsafe fn read_frame_side_data<T: Copy>(
     }
     let data = unsafe { (*side_data).data };
     let size = unsafe { (*side_data).size };
+    let Ok(size) = usize::try_from(size) else {
+        return None;
+    };
     if data.is_null() || size < mem::size_of::<T>() {
         return None;
     }
@@ -2359,6 +2651,21 @@ unsafe extern "C" fn select_hw_format(
                 break;
             }
             if format == target {
+                #[cfg(target_os = "windows")]
+                if target == sys::AVPixelFormat_AV_PIX_FMT_D3D11 {
+                    unsafe { ensure_d3d11va_frames_for_context(context, state.cast_mut()) };
+                }
+                let frames_ref = unsafe { (*state).frames_ref };
+                if !frames_ref.is_null() {
+                    let context_frames = unsafe { &mut (*context).hw_frames_ctx };
+                    if !(*context_frames).is_null() {
+                        unsafe { sys::av_buffer_unref(context_frames) };
+                    }
+                    let frames_ref = unsafe { sys::av_buffer_ref(frames_ref) };
+                    if !frames_ref.is_null() {
+                        *context_frames = frames_ref;
+                    }
+                }
                 return format;
             }
             index += 1;

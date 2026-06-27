@@ -27,6 +27,23 @@ cargo run -p danmaku_perf_lab -- \
 ```
 
 Use `--software` to force software decode when isolating CPU decode load.
+On Windows, `--d3d11va` can be passed explicitly when checking hardware decode
+selection; the `video_frames` summary reports hardware frames for both
+VideoToolbox and D3D11VA.
+
+## Windows native presenter smoke
+
+The lab's `--window` mode is macOS/Metal-only. Use the Windows native demo for
+HWND/D3D11VA presenter verification and JSONL metrics:
+
+```sh
+cargo run -p windows_native_demo --target x86_64-pc-windows-msvc -- \
+  "D:\path\to\video.mp4" \
+  --platform-native \
+  --synthetic-danmaku 120 \
+  --smoke-seconds 10 \
+  --metrics-log D:\erika_windows_smoke.jsonl
+```
 
 ## Native Metal window stress
 
