@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:erika_flutter/erika_flutter.dart';
@@ -118,6 +120,34 @@ void main() {
     expect(call.arguments, <String, Object?>{
       'playerId': 7,
       'trackId': 1000001,
+    });
+
+    await player.dispose();
+  });
+
+  test('screenshot forwards optional capture size', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(playerChannel, (MethodCall call) async {
+      playerCalls.add(call);
+      return switch (call.method) {
+        'create' => 7,
+        'screenshot' => Uint8List.fromList(<int>[1, 2, 3, 4]),
+        'dispose' => null,
+        _ => null,
+      };
+    });
+    final player = ErikaPlayer();
+
+    final bytes = await player.screenshot(width: 320, height: 180);
+
+    expect(bytes, <int>[1, 2, 3, 4]);
+    final call = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'screenshot',
+    );
+    expect(call.arguments, <String, Object?>{
+      'playerId': 7,
+      'width': 320,
+      'height': 180,
     });
 
     await player.dispose();

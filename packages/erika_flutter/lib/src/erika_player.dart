@@ -449,13 +449,15 @@ class ErikaPlayer {
     return ErikaUpscalerStatus.fromMap(status);
   }
 
-  Future<Uint8List?> screenshot({int? viewId}) async {
+  Future<Uint8List?> screenshot({int? viewId, int? width, int? height}) async {
     final playerId = await ensureCreated();
     return _channel.invokeMethod<Uint8List>(
       'screenshot',
       <String, Object?>{
         'playerId': playerId,
         if (viewId != null) 'viewId': viewId,
+        if (width != null) 'width': width,
+        if (height != null) 'height': height,
       },
     );
   }

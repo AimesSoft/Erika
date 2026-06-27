@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use crate::core::{
     ColorPrimaries, LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame,
-    RenderFrameContext, RendererBackend, RendererRuntimeStats, Result, TransferFunction,
+    RenderFrameContext, RendererBackend, RendererFrameCapture, RendererRuntimeStats, Result,
+    TransferFunction,
 };
 use crate::danmaku::DanmakuRenderPlan;
 use crate::ffmpeg::Frame;
@@ -476,6 +477,28 @@ impl MetalRenderer {
         }
     }
 
+    pub fn capture_video_frame_rgba(
+        &mut self,
+        frame: VideoRenderFrame<'_>,
+        overlay: Option<OverlayRenderFrame<'_>>,
+        danmaku: Option<DanmakuRenderFrame<'_>>,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>> {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            self.inner
+                .capture_video_frame_rgba(frame, overlay, danmaku, width, height)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        {
+            let _ = (frame, overlay, danmaku, width, height);
+            Err(PlayerError::Renderer(
+                "Metal renderer is only available on Apple platforms for v0".to_string(),
+            ))
+        }
+    }
+
     pub fn render_overlay_frame(&mut self, overlay: OverlayRenderFrame<'_>) -> Result<()> {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
@@ -723,6 +746,42 @@ impl RendererBackend for MetalRenderer {
             ));
         }
         result.map(|()| true)
+    }
+
+    fn capture_current_frame(
+        &mut self,
+        context: RenderFrameContext<'_>,
+        width: u32,
+        height: u32,
+    ) -> Result<Option<RendererFrameCapture>> {
+        let Some(frame) = self.current_frame.take() else {
+            return Ok(None);
+        };
+        if width == 0 || height == 0 {
+            self.current_frame = Some(frame);
+            return Err(PlayerError::Renderer(
+                "capture size must be non-zero".to_string(),
+            ));
+        }
+        let danmaku = context.danmaku.filter(|plan| {
+            plan.generation == context.generation
+                && plan.viewport.width == width
+                && plan.viewport.height == height
+        });
+        let rgba = self.capture_video_frame_rgba(
+            VideoRenderFrame::new(&frame).frame_token(self.upload_counter),
+            context.overlay.map(OverlayRenderFrame::new),
+            danmaku.map(DanmakuRenderFrame::new),
+            width,
+            height,
+        );
+        self.current_frame = Some(frame);
+        let rgba = rgba?;
+        Ok(Some(RendererFrameCapture {
+            width,
+            height,
+            rgba,
+        }))
     }
 
     fn runtime_stats(&self) -> RendererRuntimeStats {
