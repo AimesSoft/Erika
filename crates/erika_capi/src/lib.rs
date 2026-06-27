@@ -16,9 +16,8 @@ use erika::renderer::metal::{MetalOutputMode, MetalRendererConfig};
 use erika::renderer::pipeline::LumaUpscalerMode;
 use erika::{
     FlutterTextureHandle, FlutterTextureKind, MediaRequest, MetalSurfaceHandle, PlatformSurface,
-    Player, PlayerConfig, PlayerEvent, PlayerState, RendererBackendPreference,
-    RendererRuntimeStats, TrackInfo, TrackKind, TrackSelection, TrackSource, TransferFunction,
-    WgpuSurfaceHandle, WgpuSurfaceKind,
+    Player, PlayerConfig, PlayerEvent, PlayerState, RendererRuntimeStats, TrackInfo, TrackKind,
+    TrackSelection, TrackSource, TransferFunction, WgpuSurfaceHandle, WgpuSurfaceKind,
 };
 
 #[repr(C)]
@@ -720,19 +719,14 @@ fn presenter_config_from_c(config: ErikaPresenterConfig) -> PresenterConfig {
         ErikaPresenterOutputMode::Sdr => MetalOutputMode::Sdr,
     };
 
-    let mut presenter = PresenterConfig {
+    PresenterConfig {
         renderer: MetalRendererConfig {
             output_mode,
             luma_upscaler: luma_upscaler_mode_from_c(config.luma_upscaler),
             ..MetalRendererConfig::default()
         },
         ..PresenterConfig::default()
-    };
-    #[cfg(target_os = "windows")]
-    {
-        presenter.player.renderer = RendererBackendPreference::WgpuFallback;
     }
-    presenter
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
@@ -2513,6 +2507,20 @@ mod tests {
             .renderer
             .luma_upscaler,
             LumaUpscalerMode::Off
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn c_presenter_config_keeps_windows_native_decode_path() {
+        let config = presenter_config_from_c(ErikaPresenterConfig::default());
+        assert_eq!(
+            config.player.renderer,
+            erika::RendererBackendPreference::Auto
+        );
+        assert_eq!(
+            config.player.playback.video_decode,
+            erika::playback::VideoDecodePreference::D3d11va
         );
     }
 }
