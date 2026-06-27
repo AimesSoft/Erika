@@ -113,8 +113,9 @@ class ErikaDanmakuTrackInfo {
     return ErikaDanmakuTrackInfo(
       id: (map['id'] as num?)?.toInt() ?? 0,
       enabled: map['enabled'] == true,
-      offset:
-          Duration(microseconds: (map['offsetMicros'] as num?)?.toInt() ?? 0),
+      offset: Duration(
+        microseconds: (map['offsetMicros'] as num?)?.toInt() ?? 0,
+      ),
       itemCount: (map['itemCount'] as num?)?.toInt() ?? 0,
       name: map['name'] as String?,
       source: map['source'] as String?,
@@ -224,27 +225,21 @@ class _ErikaDanmakuConfigPatch {
     );
   }
 
-  _ErikaDanmakuConfigPatch differenceFrom(
-    _ErikaDanmakuConfigPatch? previous,
-  ) {
+  _ErikaDanmakuConfigPatch differenceFrom(_ErikaDanmakuConfigPatch? previous) {
     return _ErikaDanmakuConfigPatch(
       enabled: _changed(enabled, previous?.enabled) ? enabled : null,
       fontSize: _changed(fontSize, previous?.fontSize) ? fontSize : null,
       opacity: _changed(opacity, previous?.opacity) ? opacity : null,
       displayArea:
           _changed(displayArea, previous?.displayArea) ? displayArea : null,
-      scrollDurationSeconds: _changed(
-        scrollDurationSeconds,
-        previous?.scrollDurationSeconds,
-      )
-          ? scrollDurationSeconds
-          : null,
-      scrollSpeedFactor: _changed(
-        scrollSpeedFactor,
-        previous?.scrollSpeedFactor,
-      )
-          ? scrollSpeedFactor
-          : null,
+      scrollDurationSeconds:
+          _changed(scrollDurationSeconds, previous?.scrollDurationSeconds)
+              ? scrollDurationSeconds
+              : null,
+      scrollSpeedFactor:
+          _changed(scrollSpeedFactor, previous?.scrollSpeedFactor)
+              ? scrollSpeedFactor
+              : null,
       trackGapRatio: _changed(trackGapRatio, previous?.trackGapRatio)
           ? trackGapRatio
           : null,
@@ -271,12 +266,10 @@ class _ErikaDanmakuConfigPatch {
       allowStacking: _changed(allowStacking, previous?.allowStacking)
           ? allowStacking
           : null,
-      allowScrollOverwrite: _changed(
-        allowScrollOverwrite,
-        previous?.allowScrollOverwrite,
-      )
-          ? allowScrollOverwrite
-          : null,
+      allowScrollOverwrite:
+          _changed(allowScrollOverwrite, previous?.allowScrollOverwrite)
+              ? allowScrollOverwrite
+              : null,
       maxQuantity:
           _changed(maxQuantity, previous?.maxQuantity) ? maxQuantity : null,
       maxLinesPerMode: _changed(maxLinesPerMode, previous?.maxLinesPerMode)
@@ -330,11 +323,7 @@ class _ErikaDanmakuConfigPatch {
 }
 
 class ErikaPlayer {
-  ErikaPlayer({
-    this.outputMode,
-    this.edrHeadroom,
-    this.hdrDebug = false,
-  }) {
+  ErikaPlayer({this.outputMode, this.edrHeadroom, this.hdrDebug = false}) {
     _eventSubscription ??= _events.receiveBroadcastStream().listen(
       _dispatchNativeEvent,
       onError: (Object error, StackTrace stackTrace) {
@@ -353,8 +342,9 @@ class ErikaPlayer {
   int? _id;
   Future<int>? _createFuture;
   bool _disposed = false;
-  static const Duration _danmakuConfigCoalesceDelay =
-      Duration(milliseconds: 50);
+  static const Duration _danmakuConfigCoalesceDelay = Duration(
+    milliseconds: 50,
+  );
   Timer? _danmakuConfigTimer;
   bool _danmakuConfigInFlight = false;
   _ErikaDanmakuConfigPatch? _pendingDanmakuConfig;
@@ -437,6 +427,15 @@ class ErikaPlayer {
     });
   }
 
+  Future<void> setSubtitleScale(double scale) async {
+    final playerId = await ensureCreated();
+    final clampedScale = scale.isFinite ? scale.clamp(0.25, 4.0) : 1.0;
+    await _invoke('setSubtitleScale', <String, Object?>{
+      'playerId': playerId,
+      'scale': clampedScale,
+    });
+  }
+
   Future<ErikaUpscalerStatus> getUpscalerStatus() async {
     final playerId = await ensureCreated();
     final status = await _channel.invokeMethod<Map<dynamic, dynamic>>(
@@ -451,15 +450,12 @@ class ErikaPlayer {
 
   Future<Uint8List?> screenshot({int? viewId, int? width, int? height}) async {
     final playerId = await ensureCreated();
-    return _channel.invokeMethod<Uint8List>(
-      'screenshot',
-      <String, Object?>{
-        'playerId': playerId,
-        if (viewId != null) 'viewId': viewId,
-        if (width != null) 'width': width,
-        if (height != null) 'height': height,
-      },
-    );
+    return _channel.invokeMethod<Uint8List>('screenshot', <String, Object?>{
+      'playerId': playerId,
+      if (viewId != null) 'viewId': viewId,
+      if (width != null) 'width': width,
+      if (height != null) 'height': height,
+    });
   }
 
   Future<int> addExternalSubtitle(String uri) async {
@@ -504,15 +500,13 @@ class ErikaPlayer {
     Duration offset = Duration.zero,
   }) async {
     final playerId = await ensureCreated();
-    final trackId = await _channel.invokeMethod<int>(
-      'addDanmakuTrackFile',
-      <String, Object?>{
-        'playerId': playerId,
-        'uri': uri,
-        if (name != null) 'name': name,
-        'offsetMicros': offset.inMicroseconds,
-      },
-    );
+    final trackId = await _channel
+        .invokeMethod<int>('addDanmakuTrackFile', <String, Object?>{
+      'playerId': playerId,
+      'uri': uri,
+      if (name != null) 'name': name,
+      'offsetMicros': offset.inMicroseconds,
+    });
     if (trackId == null || trackId <= 0) {
       throw StateError('Erika danmaku track add returned no track id.');
     }
@@ -525,15 +519,13 @@ class ErikaPlayer {
     Duration offset = Duration.zero,
   }) async {
     final playerId = await ensureCreated();
-    final trackId = await _channel.invokeMethod<int>(
-      'addDanmakuTrackJson',
-      <String, Object?>{
-        'playerId': playerId,
-        'json': json,
-        if (name != null) 'name': name,
-        'offsetMicros': offset.inMicroseconds,
-      },
-    );
+    final trackId = await _channel
+        .invokeMethod<int>('addDanmakuTrackJson', <String, Object?>{
+      'playerId': playerId,
+      'json': json,
+      if (name != null) 'name': name,
+      'offsetMicros': offset.inMicroseconds,
+    });
     if (trackId == null || trackId <= 0) {
       throw StateError('Erika danmaku track add returned no track id.');
     }
@@ -852,10 +844,7 @@ class ErikaPlayer {
     if (hdrDebug) {
       debugPrint('ErikaHDR[Dart]: create arguments=$arguments');
     }
-    final playerId = await _channel.invokeMethod<int>(
-      'create',
-      arguments,
-    );
+    final playerId = await _channel.invokeMethod<int>('create', arguments);
     if (playerId == null || playerId <= 0) {
       throw StateError('Erika presenter creation failed.');
     }

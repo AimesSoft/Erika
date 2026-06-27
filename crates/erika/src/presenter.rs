@@ -29,15 +29,14 @@ use crate::danmaku::{
 };
 use crate::overlay::{OverlayFrame, OverlayTimeline, OverlayViewport};
 use crate::renderer::metal::{MetalRenderer, MetalRendererConfig};
-#[cfg(feature = "libass")]
-use crate::subtitle::decoded_subtitle_frames_to_ass_script;
 use crate::subtitle::{
-    DecodedSubtitleFrame, SubtitleRendererCore, SubtitleTrackConfig, SubtitleViewport,
-    decoded_subtitle_frames_to_timeline,
+    DecodedSubtitleFrame, SubtitleAssStyle, SubtitleRendererCore, SubtitleTrackConfig,
+    SubtitleViewport, decoded_subtitle_frames_to_timeline,
 };
 #[cfg(feature = "libass")]
 use crate::subtitle::{
     LibassRenderConfig, LibassSubtitleRenderer, SubtitleRenderRequest, SubtitleRenderer,
+    decoded_subtitle_frames_to_ass_script_with_style,
 };
 use crate::trace;
 use crate::{PlayerError, Result};
@@ -51,6 +50,7 @@ const DANMAKU_PLAN_REQUEST_QUANTUM: Duration = Duration::from_millis(250);
 const DANMAKU_PREPARE_REFRESH_MARGIN: Duration = Duration::from_secs(4);
 const DANMAKU_PLAN_LOOKAHEAD: Duration = Duration::from_secs(8);
 const DANMAKU_PLAN_LOOKBACK_PADDING: Duration = Duration::from_secs(2);
+const DEFAULT_SUBTITLE_FONT_SCALE: f64 = 1.0;
 
 #[derive(Debug, Clone)]
 pub struct PresenterConfig {
@@ -183,6 +183,7 @@ pub struct PresenterRuntime {
     current_generation: u64,
     current_output_viewport: Option<DanmakuViewport>,
     current_danmaku_viewport: Option<DanmakuViewport>,
+    subtitle_font_scale: f64,
     subtitles: SubtitleFrameState,
     overlay: OverlayTimeline,
     render_test_pattern_when_idle: bool,
@@ -439,6 +440,7 @@ impl PresenterRuntime {
             current_generation: 1,
             current_output_viewport: None,
             current_danmaku_viewport: None,
+            subtitle_font_scale: DEFAULT_SUBTITLE_FONT_SCALE,
             subtitles: SubtitleFrameState::default(),
             overlay: config.overlay,
             render_test_pattern_when_idle: config.render_test_pattern_when_idle,
@@ -568,6 +570,15 @@ impl PresenterRuntime {
 
     pub fn volume(&self) -> f64 {
         self.audio_output.volume() as f64
+    }
+
+    pub fn set_subtitle_scale(&mut self, scale: f64) {
+        let scale = normalize_subtitle_font_scale(scale);
+        if (self.subtitle_font_scale - scale).abs() < 0.001 {
+            return;
+        }
+        self.subtitle_font_scale = scale;
+        self.refresh_current_overlay();
     }
 
     pub fn set_danmaku_timeline(&mut self, timeline: DanmakuTimeline) {
@@ -978,7 +989,19 @@ impl PresenterRuntime {
         let mut overlay = self
             .overlay
             .render(pts, OverlayViewport::new(viewport.width, viewport.height));
-        self.subtitles.append_to_overlay(pts, &mut overlay);
+        let subtitle_style = self.subtitle_ass_style(overlay.viewport);
+        self.subtitles
+            .append_to_overlay(pts, &mut overlay, subtitle_style);
+        if subtitle_diag_enabled() {
+            eprintln!(
+                "[erika-subtitle-diag] stage=update_overlay pts={} gen={} video={}x{} overlay={}",
+                duration_label(Some(pts)),
+                generation,
+                viewport.width,
+                viewport.height,
+                overlay_debug_summary(&overlay),
+            );
+        }
         if !overlay.is_empty() {
             self.stats.overlay_frames += 1;
         }
@@ -1115,12 +1138,28 @@ impl PresenterRuntime {
             .max(1);
         if player_time != self.current_media_time {
             self.current_media_time = player_time;
-            if let Some(viewport) = self.current_danmaku_viewport {
+            if let Some(viewport) = self
+                .current_overlay
+                .as_ref()
+                .map(|overlay| overlay.viewport)
+            {
                 let mut overlay = self.overlay.render(
                     player_time,
                     OverlayViewport::new(viewport.width, viewport.height),
                 );
-                self.subtitles.append_to_overlay(player_time, &mut overlay);
+                let subtitle_style = self.subtitle_ass_style(overlay.viewport);
+                self.subtitles
+                    .append_to_overlay(player_time, &mut overlay, subtitle_style);
+                if subtitle_diag_enabled() {
+                    eprintln!(
+                        "[erika-subtitle-diag] stage=clock_overlay player={} gen={} overlay_viewport={}x{} overlay={}",
+                        duration_label(Some(player_time)),
+                        self.current_generation,
+                        viewport.width,
+                        viewport.height,
+                        overlay_debug_summary(&overlay),
+                    );
+                }
                 self.current_overlay = Some(overlay);
             }
         }
@@ -1134,6 +1173,32 @@ impl PresenterRuntime {
             None,
             0,
         );
+    }
+
+    fn refresh_current_overlay(&mut self) {
+        let Some(viewport) = self
+            .current_overlay
+            .as_ref()
+            .map(|overlay| overlay.viewport)
+        else {
+            return;
+        };
+        let mut overlay = self.overlay.render(
+            self.current_media_time,
+            OverlayViewport::new(viewport.width, viewport.height),
+        );
+        let subtitle_style = self.subtitle_ass_style(overlay.viewport);
+        self.subtitles
+            .append_to_overlay(self.current_media_time, &mut overlay, subtitle_style);
+        self.current_overlay = Some(overlay);
+    }
+
+    fn subtitle_ass_style(&self, viewport: OverlayViewport) -> SubtitleAssStyle {
+        SubtitleAssStyle {
+            font_scale: self.subtitle_font_scale,
+            play_res_width: viewport.width,
+            play_res_height: viewport.height,
+        }
     }
 
     fn trace_danmaku_time(
@@ -1259,6 +1324,18 @@ impl PresenterRuntime {
                 Ok(frame) => {
                     if frame.generation < self.player.playback_generation() {
                         continue;
+                    }
+                    if subtitle_diag_enabled() {
+                        eprintln!(
+                            "[erika-subtitle-diag] stage=pump_subtitle gen={} track={} start={} end={} text_segments={} bitmap_planes={} empty={}",
+                            frame.generation,
+                            frame.frame.track_id,
+                            duration_label(frame.frame.start),
+                            duration_label(frame.frame.end),
+                            frame.frame.text.len(),
+                            frame.frame.bitmap.planes.len(),
+                            frame.frame.is_empty(),
+                        );
                     }
                     self.stats.decoded_subtitle_frames += 1;
                     self.subtitles.push(frame);
@@ -1529,6 +1606,14 @@ fn surface_dimensions_to_viewport(width: u32, height: u32, scale: f64) -> Danmak
     DanmakuViewport::with_scale(pixel_width, pixel_height, scale as f32)
 }
 
+fn normalize_subtitle_font_scale(scale: f64) -> f64 {
+    if scale.is_finite() {
+        scale.clamp(0.25, 4.0)
+    } else {
+        DEFAULT_SUBTITLE_FONT_SCALE
+    }
+}
+
 fn bump_generation(current_generation: &mut u64, danmaku_generation: &mut u64) {
     *danmaku_generation = danmaku_generation.saturating_add(1).max(1);
     *current_generation = current_generation
@@ -1555,6 +1640,60 @@ fn duration_label(value: Option<Duration>) -> String {
     value
         .map(|duration| format!("{:.3}", duration.as_secs_f64()))
         .unwrap_or_else(|| "-".to_string())
+}
+
+fn subtitle_diag_enabled() -> bool {
+    trace::env_flag("ERIKA_SUBTITLE_DIAG")
+}
+
+fn overlay_debug_summary(overlay: &OverlayFrame) -> String {
+    let first_plane = overlay
+        .subtitle_planes
+        .first()
+        .map(|plane| {
+            let max_alpha = plane
+                .rgba
+                .chunks_exact(4)
+                .map(|pixel| pixel[3])
+                .max()
+                .unwrap_or(0);
+            format!(
+                "first_rgba=x:{} y:{} w:{} h:{} max_a:{} bytes:{}",
+                plane.x,
+                plane.y,
+                plane.width,
+                plane.height,
+                max_alpha,
+                plane.rgba.len(),
+            )
+        })
+        .unwrap_or_else(|| "first_rgba=none".to_string());
+    let first_alpha = overlay
+        .subtitle_alpha_planes
+        .first()
+        .map(|plane| {
+            let max_alpha = plane.alpha.iter().copied().max().unwrap_or(0);
+            format!(
+                "first_alpha=x:{} y:{} w:{} h:{} max_a:{} bytes:{}",
+                plane.placement.x,
+                plane.placement.y,
+                plane.placement.width,
+                plane.placement.height,
+                max_alpha,
+                plane.alpha.len(),
+            )
+        })
+        .unwrap_or_else(|| "first_alpha=none".to_string());
+    format!(
+        "viewport={}x{} rgba_planes={} alpha_planes={} changed={} {} {}",
+        overlay.viewport.width,
+        overlay.viewport.height,
+        overlay.subtitle_planes.len(),
+        overlay.subtitle_alpha_planes.len(),
+        overlay.subtitle_changed,
+        first_plane,
+        first_alpha,
+    )
 }
 
 impl Drop for PresenterRuntime {
@@ -1656,7 +1795,12 @@ impl SubtitleFrameState {
             .retain(|frame| !frame.frame.is_empty() && frame.frame.end.is_none_or(|end| pts < end));
     }
 
-    fn append_to_overlay(&mut self, pts: Duration, overlay: &mut OverlayFrame) {
+    fn append_to_overlay(
+        &mut self,
+        pts: Duration,
+        overlay: &mut OverlayFrame,
+        style: SubtitleAssStyle,
+    ) {
         self.retain_at(pts);
         let active = self
             .frames
@@ -1683,7 +1827,7 @@ impl SubtitleFrameState {
             .map(|frame| frame.frame.clone())
             .collect::<Vec<_>>();
         if !text_frames.is_empty() {
-            self.append_text_subtitles(pts, overlay, &text_frames);
+            self.append_text_subtitles(pts, overlay, &text_frames, style);
             subtitle_changed = true;
         }
 
@@ -1696,8 +1840,12 @@ impl SubtitleFrameState {
         pts: Duration,
         overlay: &mut OverlayFrame,
         frames: &[DecodedSubtitleFrame],
+        style: SubtitleAssStyle,
     ) {
-        match self.text_renderer.render(pts, overlay.viewport, frames) {
+        match self
+            .text_renderer
+            .render(pts, overlay.viewport, frames, style)
+        {
             Ok(Some(frame)) => overlay.subtitle_planes.extend(frame.planes),
             Ok(None) => {}
             Err(error) => {
@@ -1713,6 +1861,7 @@ impl SubtitleFrameState {
         pts: Duration,
         overlay: &mut OverlayFrame,
         frames: &[DecodedSubtitleFrame],
+        _style: SubtitleAssStyle,
     ) {
         append_text_subtitles_debug(pts, overlay, frames);
     }
@@ -1732,9 +1881,11 @@ impl CachedLibassTextRenderer {
         pts: Duration,
         viewport: OverlayViewport,
         frames: &[DecodedSubtitleFrame],
+        style: SubtitleAssStyle,
     ) -> crate::subtitle::Result<Option<crate::subtitle::SubtitleFrame>> {
         let fallback_end = pts.saturating_add(Duration::from_secs(24 * 60 * 60));
-        let Some(script) = decoded_subtitle_frames_to_ass_script(frames.iter(), fallback_end)
+        let Some(script) =
+            decoded_subtitle_frames_to_ass_script_with_style(frames.iter(), fallback_end, style)
         else {
             self.script = None;
             self.renderer = None;
@@ -1886,7 +2037,11 @@ mod tests {
         ));
         let mut overlay = empty_overlay();
 
-        state.append_to_overlay(Duration::from_secs(3), &mut overlay);
+        state.append_to_overlay(
+            Duration::from_secs(3),
+            &mut overlay,
+            SubtitleAssStyle::default(),
+        );
 
         assert_eq!(overlay.subtitle_planes.len(), 2);
         assert!(overlay.subtitle_changed);
@@ -1905,7 +2060,11 @@ mod tests {
         ));
         let mut overlay = empty_overlay();
 
-        state.append_to_overlay(Duration::from_secs(4), &mut overlay);
+        state.append_to_overlay(
+            Duration::from_secs(4),
+            &mut overlay,
+            SubtitleAssStyle::default(),
+        );
 
         assert_eq!(overlay.subtitle_planes.len(), 1);
 
@@ -1917,7 +2076,11 @@ mod tests {
             generation: 1,
         });
         let mut overlay = empty_overlay();
-        state.append_to_overlay(Duration::from_millis(4500), &mut overlay);
+        state.append_to_overlay(
+            Duration::from_millis(4500),
+            &mut overlay,
+            SubtitleAssStyle::default(),
+        );
 
         assert!(overlay.subtitle_planes.is_empty());
     }
@@ -1933,7 +2096,11 @@ mod tests {
         ));
         let mut overlay = empty_overlay();
 
-        state.append_to_overlay(Duration::from_secs(2), &mut overlay);
+        state.append_to_overlay(
+            Duration::from_secs(2),
+            &mut overlay,
+            SubtitleAssStyle::default(),
+        );
 
         assert!(!overlay.subtitle_planes.is_empty());
         assert!(overlay.subtitle_changed);

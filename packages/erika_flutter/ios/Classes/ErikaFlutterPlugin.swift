@@ -294,6 +294,7 @@ private final class ErikaNativeLibrary {
   typealias SetPlaybackRateFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
   typealias SetVolumeFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
   typealias SetUpscalerFn = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Int32
+  typealias SetSubtitleScaleFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
   typealias GetUpscalerStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias SelectTrackFn = @convention(c) (UnsafeMutableRawPointer?, Int64) -> Int32
   typealias AddExternalSubtitleFn = @convention(c) (
@@ -353,6 +354,7 @@ private final class ErikaNativeLibrary {
   let setPlaybackRate: SetPlaybackRateFn?
   let setVolume: SetVolumeFn?
   let setUpscaler: SetUpscalerFn?
+  let setSubtitleScale: SetSubtitleScaleFn?
   let getUpscalerStatus: GetUpscalerStatusFn?
   let selectAudioTrack: SelectTrackFn
   let selectSubtitleTrack: SelectTrackFn
@@ -408,6 +410,7 @@ private final class ErikaNativeLibrary {
     setPlaybackRate = Self.loadOptional("erika_presenter_set_playback_rate", from: libraryHandle, as: SetPlaybackRateFn.self)
     setVolume = Self.loadOptional("erika_presenter_set_volume", from: libraryHandle, as: SetVolumeFn.self)
     setUpscaler = Self.loadOptional("erika_presenter_set_upscaler", from: libraryHandle, as: SetUpscalerFn.self)
+    setSubtitleScale = Self.loadOptional("erika_presenter_set_subtitle_scale", from: libraryHandle, as: SetSubtitleScaleFn.self)
     getUpscalerStatus = Self.loadOptional("erika_presenter_get_upscaler_status", from: libraryHandle, as: GetUpscalerStatusFn.self)
     selectAudioTrack = try Self.load("erika_presenter_select_audio_track", from: libraryHandle, as: SelectTrackFn.self)
     selectSubtitleTrack = try Self.load("erika_presenter_select_subtitle_track", from: libraryHandle, as: SelectTrackFn.self)
@@ -576,6 +579,14 @@ private final class ErikaPlayerHost {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_upscaler")
     }
     try check(setUpscaler(handle, mode), operation: "set_upscaler")
+  }
+
+  func setSubtitleScale(_ scale: Double) throws {
+    guard let setSubtitleScale = library.setSubtitleScale else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_set_subtitle_scale")
+    }
+    let clampedScale = scale.isFinite ? min(max(scale, 0.25), 4.0) : 1.0
+    try check(setSubtitleScale(handle, clampedScale), operation: "set_subtitle_scale")
   }
 
   func upscalerStatus() throws -> [String: Any] {
@@ -1359,6 +1370,13 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
           throw ErikaPluginError.invalidArguments("mode is required.")
         }
         try playerHost(from: args).setUpscaler(mode: mode)
+        result(nil)
+      case "setSubtitleScale":
+        let args = try dictionaryArgs(call.arguments)
+        guard let scale = doubleValue(args["scale"]) else {
+          throw ErikaPluginError.invalidArguments("scale is required.")
+        }
+        try playerHost(from: args).setSubtitleScale(scale)
         result(nil)
       case "getUpscalerStatus":
         let args = try dictionaryArgs(call.arguments)
