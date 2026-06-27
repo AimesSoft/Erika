@@ -202,6 +202,27 @@ private struct ErikaPresenterStatsC {
   var importFailures: UInt64 = 0
   var renderFailures: UInt64 = 0
   var audioFailures: UInt64 = 0
+  // The fields below must mirror `ErikaPresenterStats` in
+  // crates/erika_capi/include/erika.h exactly (order and types). erika_presenter_render_tick
+  // writes the full struct through this pointer, so any missing field overflows the buffer.
+  var softwareVideoFrames: UInt64 = 0
+  var hardwareVideoFrames: UInt64 = 0
+  var zeroCopyVideoFrames: UInt64 = 0
+  var cpuVideoFrameFallbacks: UInt64 = 0
+  var lastRenderMicros: UInt64 = 0
+  var lastRenderCurrentMicros: UInt64 = 0
+  var audioClockReadFrames: UInt64 = 0
+  var audioClockQueuedFrames: UInt64 = 0
+  var audioClockUnderflowFrames: UInt64 = 0
+  var directZeroCopyVideoFrames: UInt64 = 0
+  var sharedHandleVideoFrames: UInt64 = 0
+  var hdrSourceFrames: UInt64 = 0
+  var hdr10OutputFrames: UInt64 = 0
+  var sdrTonemapFrames: UInt64 = 0
+  var hdr10MetadataUpdates: UInt64 = 0
+  var hdr10MetadataFailures: UInt64 = 0
+  var hdr10OutputFailures: UInt64 = 0
+  var hdr10OutputActive: Bool = false
 }
 
 private struct ErikaUpscalerStatusC {
