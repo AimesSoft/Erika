@@ -2033,7 +2033,8 @@ fn apply_windows_target_env(command: &mut Command, target: AppleTarget) -> Resul
     }
     if let Some(existing_path) = existing_path {
         let existing_dirs = env::split_paths(&existing_path).collect::<Vec<_>>();
-        prepend_paths_to_command(command, existing_dirs.iter().map(PathBuf::as_path));
+        // Keep VSDevCmd's PATH first so MSVC link.exe wins over POSIX tools such as MSYS link.exe.
+        append_paths_to_command(command, existing_dirs.iter().map(PathBuf::as_path));
     }
     Ok(())
 }
@@ -2207,33 +2208,6 @@ fn append_paths_to_command<'a>(command: &mut Command, dirs: impl IntoIterator<It
     }
 }
 
-fn prepend_paths_to_command<'a>(command: &mut Command, dirs: impl IntoIterator<Item = &'a Path>) {
-    let mut paths = dirs
-        .into_iter()
-        .filter(|path| path.exists())
-        .map(Path::to_path_buf)
-        .collect::<Vec<_>>();
-    let base_path = command
-        .get_envs()
-        .find_map(|(key, value)| {
-            if key.to_string_lossy().eq_ignore_ascii_case("PATH") {
-                value.map(OsString::from)
-            } else {
-                None
-            }
-        })
-        .or_else(|| env::var_os("PATH"));
-    if let Some(base_path) = base_path {
-        paths.extend(env::split_paths(&base_path));
-    }
-    if !paths.is_empty() {
-        command.env(
-            "PATH",
-            env::join_paths(paths).expect("PATH entries are valid"),
-        );
-    }
-}
-
 fn command_env_path(command: &Command) -> Option<OsString> {
     command.get_envs().find_map(|(key, value)| {
         if key.to_string_lossy().eq_ignore_ascii_case("PATH") {
@@ -2348,6 +2322,35 @@ fn command_display(command: &Command) -> String {
             .map(String::from),
     );
     parts.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn appending_paths_keeps_existing_command_path_first() {
+        let temp = env::temp_dir().join("erika-xtask-path-order-test");
+        let vs_bin = temp.join("VS/VC/bin");
+        let system_bin = temp.join("Windows/System32");
+        let msys_bin = temp.join("msys64/usr/bin");
+        fs::create_dir_all(&vs_bin).unwrap();
+        fs::create_dir_all(&system_bin).unwrap();
+        fs::create_dir_all(&msys_bin).unwrap();
+
+        let mut command = Command::new("tool");
+        let vs_path = env::join_paths([&vs_bin, &system_bin]).unwrap();
+        command.env("PATH", vs_path);
+
+        append_paths_to_command(&mut command, [msys_bin.as_path()]);
+
+        let merged = command_env_path(&command).unwrap();
+        let paths = env::split_paths(&merged).collect::<Vec<_>>();
+        assert_eq!(paths[0], vs_bin);
+        assert_eq!(paths[1], system_bin);
+        assert!(paths.iter().any(|path| path == &msys_bin));
+    }
 }
 
 fn print_help() {

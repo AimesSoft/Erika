@@ -479,7 +479,9 @@ impl PlaybackSession {
             video_decoder = Some(
                 match Decoder::open_owned_with_config(parameters, decoder_config) {
                     Ok(decoder) => decoder,
-                    Err(error) if decoder_config.backend != DecoderBackend::Software => {
+                    Err(error)
+                        if should_fallback_video_decoder_open_error(decoder_config.backend) =>
+                    {
                         eprintln!(
                             "Erika playback {:?} decoder open failed: {error}; falling back to software",
                             decoder_config.backend
@@ -2250,6 +2252,10 @@ fn sanitize_playback_rate(rate: f64) -> f64 {
     }
 }
 
+fn should_fallback_video_decoder_open_error(backend: DecoderBackend) -> bool {
+    matches!(backend, DecoderBackend::D3d11va)
+}
+
 fn elapsed_since(anchor: Instant, now: Instant) -> Duration {
     now.checked_duration_since(anchor).unwrap_or(Duration::ZERO)
 }
@@ -2279,6 +2285,19 @@ fn add_signed_duration(base: Duration, delta_nanos: i128) -> Duration {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn decoder_open_fallback_is_limited_to_d3d11va() {
+        assert!(should_fallback_video_decoder_open_error(
+            DecoderBackend::D3d11va
+        ));
+        assert!(!should_fallback_video_decoder_open_error(
+            DecoderBackend::VideoToolbox
+        ));
+        assert!(!should_fallback_video_decoder_open_error(
+            DecoderBackend::Software
+        ));
+    }
 
     #[test]
     fn opened_media_info_keeps_probe_summary() {

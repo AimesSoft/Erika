@@ -1729,7 +1729,9 @@ fn build_renderer(
         }
         #[cfg(target_os = "windows")]
         RendererBackendPreference::PlatformNative | RendererBackendPreference::Auto => {
-            Ok(Box::new(crate::renderer::d3d11::D3d11Renderer::new()?))
+            Ok(Box::new(
+                crate::renderer::d3d11::D3d11Renderer::with_config(_metal_config)?,
+            ))
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
         RendererBackendPreference::PlatformNative | RendererBackendPreference::Auto => {

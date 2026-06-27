@@ -366,11 +366,12 @@ pub mod wasapi {
     }
 
     struct WasapiRenderState {
-        _com: ComApartment,
         client: IAudioClient,
         render_client: IAudioRenderClient,
         buffer_frames: u32,
         channels: usize,
+        // Drop the COM interfaces before uninitializing the apartment.
+        _com: ComApartment,
     }
 
     impl WasapiRenderState {
@@ -455,11 +456,11 @@ pub mod wasapi {
             .map_err(|error| wasapi_error("IAudioClient::GetService(IAudioRenderClient)", error))?;
 
         Ok(WasapiRenderState {
-            _com,
             client,
             render_client,
             buffer_frames,
             channels: format.channels as usize,
+            _com,
         })
     }
 

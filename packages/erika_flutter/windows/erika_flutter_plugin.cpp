@@ -830,6 +830,16 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
         std::max<int64_t>(1, LogicalToPhysical(host, logical_height)));
   }
 
+  uint32_t LogicalWidth() const {
+    return static_cast<uint32_t>(
+        std::max<int64_t>(1, static_cast<int64_t>(std::llround(logical_width))));
+  }
+
+  uint32_t LogicalHeight() const {
+    return static_cast<uint32_t>(
+        std::max<int64_t>(1, static_cast<int64_t>(std::llround(logical_height))));
+  }
+
   void RefreshScaleAndReposition() {
     SetFrame(logical_x, logical_y, logical_width, logical_height, visible,
              active_generation, std::nullopt);
@@ -1172,8 +1182,8 @@ struct ErikaFlutterPlugin::PlayerHost {
   }
 
   void AttachOverlay(ErikaOverlayWindow& overlay) {
-    const uint32_t width = overlay.PixelWidth();
-    const uint32_t height = overlay.PixelHeight();
+    const uint32_t width = overlay.LogicalWidth();
+    const uint32_t height = overlay.LogicalHeight();
     const double scale = overlay.scale;
     const uint64_t hwnd = reinterpret_cast<uint64_t>(overlay.hwnd);
     const uint64_t hinstance = reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr));
@@ -1190,8 +1200,8 @@ struct ErikaFlutterPlugin::PlayerHost {
     if (!surface_attached || attached_hwnd != overlay.hwnd) {
       return;
     }
-    Check(library->resize_surface(handle, overlay.PixelWidth(),
-                                  overlay.PixelHeight(), overlay.scale),
+    Check(library->resize_surface(handle, overlay.LogicalWidth(),
+                                  overlay.LogicalHeight(), overlay.scale),
           "resize_surface", library->TakeLastError());
   }
 

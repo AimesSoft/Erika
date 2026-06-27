@@ -45,6 +45,7 @@ use crate::core::{
 use crate::danmaku::{DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan};
 use crate::ffmpeg::Frame;
 use crate::overlay::OverlayFrame;
+use crate::renderer::metal::MetalRendererConfig;
 use crate::renderer::pipeline::{
     Chromaticity, LumaUpscalerMode, PrimariesCoordinates, SourceColorState, TargetColorState,
     VideoRenderPipeline, VideoUniforms, primaries_coordinates,
@@ -445,6 +446,12 @@ struct AttachedSurface {
     render_target: Option<ID3D11RenderTargetView>,
 }
 
+impl AttachedSurface {
+    fn physical_size(&self) -> D3d11PhysicalSize {
+        physical_size(self.width, self.height, self.scale)
+    }
+}
+
 struct ImportedVideoFrame {
     _frame: Frame,
     _texture: ID3D11Texture2D,
@@ -452,8 +459,15 @@ struct ImportedVideoFrame {
     chroma: ID3D11ShaderResourceView,
     width: u32,
     height: u32,
+    tex_rect: D3d11TexRect,
     _array_index: u32,
     constants: VideoUniforms,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct D3d11PhysicalSize {
+    width: u32,
+    height: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -472,6 +486,47 @@ impl D3d11DrawRect {
             width: width.max(1) as f32,
             height: height.max(1) as f32,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct D3d11TexRect {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+impl D3d11TexRect {
+    const FULL: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    };
+
+    fn visible_region(
+        visible_width: u32,
+        visible_height: u32,
+        texture_width: u32,
+        texture_height: u32,
+    ) -> Self {
+        let texture_width = texture_width.max(1);
+        let texture_height = texture_height.max(1);
+        Self {
+            x: 0.0,
+            y: 0.0,
+            width: visible_width.max(1).min(texture_width) as f32 / texture_width as f32,
+            height: visible_height.max(1).min(texture_height) as f32 / texture_height as f32,
+        }
+    }
+
+    fn right(self) -> f32 {
+        (self.x + self.width).min(1.0)
+    }
+
+    fn bottom(self) -> f32 {
+        (self.y + self.height).min(1.0)
     }
 }
 
@@ -553,12 +608,16 @@ pub struct D3d11Renderer {
 
 impl D3d11Renderer {
     pub fn new() -> Result<Self> {
+        Self::with_config(MetalRendererConfig::default())
+    }
+
+    pub fn with_config(config: MetalRendererConfig) -> Result<Self> {
         Ok(Self {
             state: None,
             surface: None,
             current_video: None,
             danmaku_atlas_cache: None,
-            upscaler_mode: LumaUpscalerMode::Off,
+            upscaler_mode: config.luma_upscaler,
             hdr10_output_unavailable: false,
             stats: D3d11RendererStats::default(),
         })
@@ -632,8 +691,9 @@ impl D3d11Renderer {
             &state.device,
             surface.swapchain.as_ref().expect("swapchain just created"),
         )?);
-        self.stats.surface_width = scaled(surface.width, surface.scale);
-        self.stats.surface_height = scaled(surface.height, surface.scale);
+        let physical = surface.physical_size();
+        self.stats.surface_width = physical.width;
+        self.stats.surface_height = physical.height;
         self.stats.hdr10_output_active = matches!(output_mode, D3d11OutputMode::Hdr10);
         Ok(())
     }
@@ -745,6 +805,8 @@ impl D3d11Renderer {
         let source_color = source_color_for_frame(frame);
         let output_mode = self.select_output_mode_for_source(source_color)?;
         let target_color = output_mode.target_color_for_source(source_color);
+        let visible_width = texture_ref.width().max(1).min(desc.Width.max(1));
+        let visible_height = texture_ref.height().max(1).min(desc.Height.max(1));
 
         let state = self.state.as_ref().expect("device ensured");
         let luma = create_plane_srv(state, &texture, array_index, texture_format.luma_srv())
@@ -766,8 +828,14 @@ impl D3d11Renderer {
             _texture: texture,
             luma,
             chroma,
-            width: texture_ref.width().max(1),
-            height: texture_ref.height().max(1),
+            width: visible_width,
+            height: visible_height,
+            tex_rect: D3d11TexRect::visible_region(
+                visible_width,
+                visible_height,
+                desc.Width,
+                desc.Height,
+            ),
             _array_index: array_index,
             constants: constants_for_frame(source_color, texture_format, target_color),
         });
@@ -1084,17 +1152,20 @@ impl D3d11Renderer {
             .swapchain
             .as_ref()
             .ok_or_else(|| PlayerError::Renderer("d3d11: no swapchain attached".to_string()))?;
+        let physical = surface.physical_size();
         let target_rect =
-            aspect_fit_rect(video.width, video.height, surface.width, surface.height);
+            aspect_fit_rect(video.width, video.height, physical.width, physical.height);
         unsafe {
-            state.context.ClearRenderTargetView(rtv, &[0.0, 0.0, 0.0, 1.0]);
+            state
+                .context
+                .ClearRenderTargetView(rtv, &[0.0, 0.0, 0.0, 1.0]);
         }
         state.draw_video(video, rtv, target_rect)?;
         if !overlay_draws.is_empty() {
-            state.draw_overlays(&overlay_draws, rtv, surface.width, surface.height)?;
+            state.draw_overlays(&overlay_draws, rtv, physical.width, physical.height)?;
         }
         if !danmaku_draws.is_empty() {
-            state.draw_overlays(&danmaku_draws, rtv, surface.width, surface.height)?;
+            state.draw_overlays(&danmaku_draws, rtv, physical.width, physical.height)?;
         }
         present_swapchain(swapchain, "IDXGISwapChain1::Present1")?;
         self.stats.rendered_frames += 1;
@@ -1366,7 +1437,16 @@ impl D3d11DeviceState {
         };
         let stride = mem::size_of::<VideoVertex>() as u32;
         let offset = 0u32;
+        let vertices = video_vertices(video.tex_rect);
         unsafe {
+            self.context.UpdateSubresource(
+                &self.vertex_buffer,
+                0,
+                None,
+                vertices.as_ptr() as *const c_void,
+                0,
+                0,
+            );
             self.context.UpdateSubresource(
                 &self.constants,
                 0,
@@ -1426,7 +1506,16 @@ impl D3d11DeviceState {
         let stride = mem::size_of::<VideoVertex>() as u32;
         let offset = 0u32;
         let blend_factor = [0.0f32; 4];
+        let vertices = video_vertices(D3d11TexRect::FULL);
         unsafe {
+            self.context.UpdateSubresource(
+                &self.vertex_buffer,
+                0,
+                None,
+                vertices.as_ptr() as *const c_void,
+                0,
+                0,
+            );
             self.context.RSSetViewports(Some(&[viewport]));
             self.context
                 .IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1865,32 +1954,7 @@ fn create_input_layout(device: &ID3D11Device, vertex_blob: &ID3DBlob) -> Result<
 }
 
 fn create_vertex_buffer(device: &ID3D11Device) -> Result<ID3D11Buffer> {
-    let vertices = [
-        VideoVertex {
-            position: [-1.0, -1.0],
-            texcoord: [0.0, 1.0],
-        },
-        VideoVertex {
-            position: [-1.0, 1.0],
-            texcoord: [0.0, 0.0],
-        },
-        VideoVertex {
-            position: [1.0, -1.0],
-            texcoord: [1.0, 1.0],
-        },
-        VideoVertex {
-            position: [1.0, -1.0],
-            texcoord: [1.0, 1.0],
-        },
-        VideoVertex {
-            position: [-1.0, 1.0],
-            texcoord: [0.0, 0.0],
-        },
-        VideoVertex {
-            position: [1.0, 1.0],
-            texcoord: [1.0, 0.0],
-        },
-    ];
+    let vertices = video_vertices(D3d11TexRect::FULL);
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: mem::size_of_val(&vertices) as u32,
         Usage: D3D11_USAGE_DEFAULT,
@@ -1910,6 +1974,39 @@ fn create_vertex_buffer(device: &ID3D11Device) -> Result<ID3D11Buffer> {
         Some(&data),
         "ID3D11Device::CreateBuffer(vertex)",
     )
+}
+
+fn video_vertices(tex_rect: D3d11TexRect) -> [VideoVertex; 6] {
+    let left = tex_rect.x;
+    let right = tex_rect.right();
+    let top = tex_rect.y;
+    let bottom = tex_rect.bottom();
+    [
+        VideoVertex {
+            position: [-1.0, -1.0],
+            texcoord: [left, bottom],
+        },
+        VideoVertex {
+            position: [-1.0, 1.0],
+            texcoord: [left, top],
+        },
+        VideoVertex {
+            position: [1.0, -1.0],
+            texcoord: [right, bottom],
+        },
+        VideoVertex {
+            position: [1.0, -1.0],
+            texcoord: [right, bottom],
+        },
+        VideoVertex {
+            position: [-1.0, 1.0],
+            texcoord: [left, top],
+        },
+        VideoVertex {
+            position: [1.0, 1.0],
+            texcoord: [right, top],
+        },
+    ]
 }
 
 fn create_constants_buffer(device: &ID3D11Device) -> Result<ID3D11Buffer> {
@@ -2171,6 +2268,13 @@ fn scaled(value: u32, scale: f64) -> u32 {
     ((value.max(1) as f64) * scale).round().min(u32::MAX as f64) as u32
 }
 
+fn physical_size(width: u32, height: u32, scale: f64) -> D3d11PhysicalSize {
+    D3d11PhysicalSize {
+        width: scaled(width, scale),
+        height: scaled(height, scale),
+    }
+}
+
 fn nul(value: &str) -> Vec<u8> {
     let mut bytes = value.as_bytes().to_vec();
     bytes.push(0);
@@ -2219,6 +2323,13 @@ fn d3d_error(operation: &'static str, error: ::windows::core::Error) -> PlayerEr
 mod tests {
     use super::*;
 
+    fn assert_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 0.0001,
+            "expected {actual} to be close to {expected}"
+        );
+    }
+
     #[test]
     fn video_texture_format_maps_plane_srv_formats() {
         assert_eq!(
@@ -2233,6 +2344,41 @@ mod tests {
                 .chroma_srv(),
             DXGI_FORMAT_R16G16_UNORM
         );
+    }
+
+    #[test]
+    fn d3d11_tex_rect_crops_padded_decoder_texture() {
+        let rect = D3d11TexRect::visible_region(1920, 1080, 2048, 1088);
+
+        assert_close(rect.width, 1920.0 / 2048.0);
+        assert_close(rect.height, 1080.0 / 1088.0);
+        let vertices = video_vertices(rect);
+        assert_close(vertices[0].texcoord[1], 1080.0 / 1088.0);
+        assert_close(vertices[2].texcoord[0], 1920.0 / 2048.0);
+    }
+
+    #[test]
+    fn d3d11_physical_size_applies_surface_scale() {
+        assert_eq!(
+            physical_size(640, 360, 1.5),
+            D3d11PhysicalSize {
+                width: 960,
+                height: 540,
+            }
+        );
+    }
+
+    #[test]
+    fn d3d11_renderer_config_initializes_upscaler_mode() {
+        let renderer = D3d11Renderer::with_config(MetalRendererConfig {
+            output_mode: crate::renderer::metal::MetalOutputMode::Sdr,
+            luma_upscaler: LumaUpscalerMode::ArtCnnC4F16,
+        })
+        .unwrap();
+
+        let stats = renderer.runtime_stats();
+        assert_eq!(stats.upscaler_mode, LumaUpscalerMode::ArtCnnC4F16);
+        assert_eq!(stats.upscaler_backend, LumaUpscalerBackendStatus::Inactive);
     }
 
     #[test]
