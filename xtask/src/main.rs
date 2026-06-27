@@ -1143,6 +1143,16 @@ fn pkg_config_path<'a>(prefixes: impl IntoIterator<Item = &'a PathBuf>) -> Strin
     .into_owned()
 }
 
+fn pkg_config_path_for_layout(layout: &WorkspaceLayout) -> String {
+    pkg_config_path([
+        &layout.ffmpeg_prefix,
+        &layout.freetype_prefix,
+        &layout.harfbuzz_prefix,
+        &layout.fribidi_prefix,
+        &layout.libass_prefix,
+    ])
+}
+
 fn fetch_and_extract(
     layout: &WorkspaceLayout,
     urls: &[&str],
@@ -1551,9 +1561,21 @@ fn ensure_pkg_config_shim(layout: &WorkspaceLayout) -> Result<PathBuf> {
     fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let exe = env::current_exe().context("resolve current xtask executable")?;
     let shim = dir.join("pkg-config.cmd");
+    let default_pkg_config_path = pkg_config_path_for_layout(layout);
     fs::write(
         &shim,
-        format!("@echo off\r\n\"{}\" pkg-config-shim %*\r\n", exe.display()),
+        format!(
+            "@echo off\r\n\
+             set \"ERIKA_PKG_CONFIG_PATH={}\"\r\n\
+             if defined PKG_CONFIG_PATH (\r\n\
+             \tset \"PKG_CONFIG_PATH=%ERIKA_PKG_CONFIG_PATH%;%PKG_CONFIG_PATH%\"\r\n\
+             ) else (\r\n\
+             \tset \"PKG_CONFIG_PATH=%ERIKA_PKG_CONFIG_PATH%\"\r\n\
+             )\r\n\
+             \"{}\" pkg-config-shim %*\r\n",
+            default_pkg_config_path,
+            exe.display()
+        ),
     )
     .with_context(|| format!("write {}", shim.display()))?;
     Ok(shim)
