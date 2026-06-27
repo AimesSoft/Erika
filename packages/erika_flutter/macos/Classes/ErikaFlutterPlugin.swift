@@ -740,7 +740,7 @@ private final class ErikaPlayerHost {
     if let width, let height, let data = captureFrameRgba(width: width, height: height) {
       return data
     }
-    (view ?? attachedView)?.pngSnapshotData()
+    return (view ?? attachedView)?.pngSnapshotData()
   }
 
   func attach(view: ErikaMetalSurfaceView) throws {
