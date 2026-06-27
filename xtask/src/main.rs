@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::fs;
+use std::fs::{self, File};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
@@ -551,7 +553,7 @@ fn prepare_dependency_dirs(layout: &WorkspaceLayout) -> Result<()> {
 }
 
 fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Result<()> {
-    for tool in ["curl", "tar", "xz"] {
+    for tool in ["tar"] {
         if which(tool).is_none() {
             bail!("required build tool `{tool}` was not found in PATH");
         }
@@ -1169,32 +1171,14 @@ fn fetch_and_extract(
 
 fn download_archive(urls: &[&str], partial_path: &PathBuf, archive_path: &PathBuf) -> Result<()> {
     let mut last_error = None;
+    let agent = download_agent();
     for url in urls {
         println!("download {url}");
         if partial_path.exists() {
             fs::remove_file(partial_path)
                 .with_context(|| format!("remove {}", partial_path.display()))?;
         }
-        let mut curl = Command::new("curl");
-        curl.arg("-L")
-            .arg("--fail")
-            .arg("--show-error")
-            .arg("--connect-timeout")
-            .arg("20")
-            .arg("--max-time")
-            .arg("300")
-            .arg("--speed-limit")
-            .arg("1")
-            .arg("--speed-time")
-            .arg("20")
-            .arg("--retry")
-            .arg("2")
-            .arg("--retry-delay")
-            .arg("2")
-            .arg("--output")
-            .arg(partial_path)
-            .arg(url);
-        match run(&mut curl) {
+        match download_url(&agent, url, partial_path) {
             Ok(()) => {
                 fs::rename(partial_path, archive_path).with_context(|| {
                     format!(
@@ -1219,6 +1203,30 @@ fn download_archive(urls: &[&str], partial_path: &PathBuf, archive_path: &PathBu
             archive_path.display()
         ),
     }
+}
+
+fn download_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(20)))
+        .timeout_recv_response(Some(Duration::from_secs(60)))
+        .timeout_recv_body(Some(Duration::from_secs(300)))
+        .max_redirects(10)
+        .build()
+        .into()
+}
+
+fn download_url(agent: &ureq::Agent, url: &str, partial_path: &Path) -> Result<()> {
+    let mut response = agent
+        .get(url)
+        .header("User-Agent", "erika-xtask")
+        .call()
+        .with_context(|| format!("download {url}"))?;
+    let mut reader = response.body_mut().as_reader();
+    let mut output =
+        File::create(partial_path).with_context(|| format!("create {}", partial_path.display()))?;
+    io::copy(&mut reader, &mut output)
+        .with_context(|| format!("write {}", partial_path.display()))?;
+    Ok(())
 }
 
 fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
