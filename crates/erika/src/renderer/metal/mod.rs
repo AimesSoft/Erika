@@ -32,6 +32,15 @@ pub struct ClearColor {
 }
 
 impl ClearColor {
+    pub fn black() -> Self {
+        Self {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 1.0,
+        }
+    }
+
     pub fn animated(time_seconds: f64) -> Self {
         Self {
             red: time_seconds.sin() * 0.5 + 0.5,
@@ -654,6 +663,20 @@ impl RendererBackend for MetalRenderer {
         Ok(())
     }
 
+    fn clear_current_frame(&mut self) -> Result<()> {
+        self.current_frame = None;
+        self.current_media_time = Duration::ZERO;
+        self.current_generation = 1;
+        self.upload_counter = 0;
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            if self.inner.has_surface() {
+                self.inner.render_clear(ClearColor::black())?;
+            }
+        }
+        Ok(())
+    }
+
     fn render_test_frame(&mut self, time_seconds: f64) -> Result<()> {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
@@ -862,13 +885,7 @@ mod tests {
         let frame = OverlayFrame {
             pts: Duration::from_secs(1),
             viewport: OverlayViewport::new(640, 360),
-            subtitle_planes: vec![SubtitleBitmapPlane {
-                x: 0,
-                y: 0,
-                width: 10,
-                height: 4,
-                rgba: vec![255; 10 * 4 * 4],
-            }],
+            subtitle_planes: vec![SubtitleBitmapPlane::new(0, 0, 10, 4, vec![255; 10 * 4 * 4])],
             subtitle_alpha_planes: Vec::new(),
             subtitle_changed: true,
         };
@@ -927,13 +944,7 @@ mod tests {
         let frame = OverlayFrame {
             pts: Duration::ZERO,
             viewport: OverlayViewport::new(1, 1),
-            subtitle_planes: vec![SubtitleBitmapPlane {
-                x: 0,
-                y: 0,
-                width: 2,
-                height: 2,
-                rgba: vec![0; 15],
-            }],
+            subtitle_planes: vec![SubtitleBitmapPlane::new(0, 0, 2, 2, vec![0; 15])],
             subtitle_alpha_planes: Vec::new(),
             subtitle_changed: true,
         };

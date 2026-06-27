@@ -286,6 +286,10 @@ impl MetalRendererImpl {
         self.stats.prepared_overlay_subtitle_planes += info.subtitle_planes as u64;
     }
 
+    pub fn has_surface(&self) -> bool {
+        self.layer.is_some()
+    }
+
     pub fn render_clear(&mut self, color: ClearColor) -> Result<()> {
         let Some(layer) = &self.layer else {
             return Err(PlayerError::Renderer(
@@ -897,14 +901,16 @@ impl MetalRendererImpl {
 
         let pipeline = self.overlay_pipeline_state()?;
         let sampler = self.video_sampler_state()?;
+        let viewport_width = overlay.frame.viewport.width;
+        let viewport_height = overlay.frame.viewport.height;
         for plane in &overlay.frame.subtitle_planes {
             let texture = self.create_overlay_texture(
                 plane.width as usize,
                 plane.height as usize,
                 &plane.rgba,
             )?;
-            let uniforms =
-                OverlayUniforms::from_plane(plane.x, plane.y, plane.width, plane.height, layout);
+            let (x, y, width, height) = plane.scaled_rect(viewport_width, viewport_height);
+            let uniforms = OverlayUniforms::from_plane(x, y, width, height, layout);
             unsafe {
                 encoder.setRenderPipelineState(&pipeline);
                 encoder.setFragmentTexture_atIndex(Some(&*texture), 0);

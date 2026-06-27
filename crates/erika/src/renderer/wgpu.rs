@@ -852,14 +852,8 @@ impl WgpuRenderer {
                 &plane.rgba,
                 plane.width * 4,
             );
-            let uniforms = OverlayUniforms::rgba_plane(
-                plane.x,
-                plane.y,
-                plane.width,
-                plane.height,
-                viewport_w,
-                viewport_h,
-            );
+            let (x, y, width, height) = plane.scaled_rect(viewport_w, viewport_h);
+            let uniforms = OverlayUniforms::rgba_plane(x, y, width, height, viewport_w, viewport_h);
             draws.push(self.make_overlay_draw(&texture, uniforms));
         }
 
@@ -1550,6 +1544,14 @@ impl RendererBackend for WgpuRenderer {
             VideoRenderPipeline::new(source, TargetColorState::sdr(ColorPrimaries::Bt709));
         let uniforms = VideoUniforms::from_pipeline(&pipeline, is_p010, false);
         self.upload_planar_with_context(planar, uniforms)
+    }
+
+    fn clear_current_frame(&mut self) -> Result<()> {
+        self.current_video = None;
+        if self.surface.is_some() {
+            self.render_surface_clear(WgpuClearColor::new(0.0, 0.0, 0.0, 1.0))?;
+        }
+        Ok(())
     }
 
     fn render_current_frame(&mut self, context: RenderFrameContext<'_>) -> Result<bool> {

@@ -560,7 +560,14 @@ impl SubtitleDecoder {
             return Ok(None);
         }
 
-        let frame = unsafe { import_av_subtitle(i64::from(self.stream_index), packet, &subtitle) };
+        let canvas = unsafe {
+            (
+                (*self.context).width.max(0) as u32,
+                (*self.context).height.max(0) as u32,
+            )
+        };
+        let frame =
+            unsafe { import_av_subtitle(i64::from(self.stream_index), packet, &subtitle, canvas) };
         unsafe { sys::avsubtitle_free(&mut subtitle) };
         frame.map(Some)
     }
@@ -1956,6 +1963,7 @@ unsafe fn import_av_subtitle(
     track_id: i64,
     packet: &Packet,
     subtitle: &sys::AVSubtitle,
+    canvas: (u32, u32),
 ) -> Result<DecodedSubtitleFrame> {
     let start = subtitle_start_time(packet, subtitle);
     let start_offset = Duration::from_millis(u64::from(subtitle.start_display_time));
@@ -1993,7 +2001,7 @@ unsafe fn import_av_subtitle(
             }
             sys::AVSubtitleType_SUBTITLE_BITMAP => {
                 if let Some(plane) = unsafe { subtitle_bitmap_rect_to_rgba_plane(rect) }? {
-                    frame.push_bitmap_plane(plane, forced);
+                    frame.push_bitmap_plane(plane.with_canvas(canvas.0, canvas.1), forced);
                 }
             }
             _ => {}
@@ -2076,13 +2084,13 @@ unsafe fn subtitle_bitmap_rect_to_rgba_plane(
         }
     }
 
-    Ok(Some(SubtitleBitmapPlane {
-        x: rect.x,
-        y: rect.y,
-        width: rect.w as u32,
-        height: rect.h as u32,
+    Ok(Some(SubtitleBitmapPlane::new(
+        rect.x,
+        rect.y,
+        rect.w as u32,
+        rect.h as u32,
         rgba,
-    }))
+    )))
 }
 
 fn palette_color_to_rgba(color: u32) -> [u8; 4] {
@@ -2472,7 +2480,7 @@ mod tests {
             ..sys::AVSubtitle::default()
         };
 
-        let frame = unsafe { import_av_subtitle(7, &packet, &subtitle) }.unwrap();
+        let frame = unsafe { import_av_subtitle(7, &packet, &subtitle, (0, 0)) }.unwrap();
 
         assert_eq!(frame.track_id, 7);
         assert_eq!(frame.start, Some(Duration::from_millis(1250)));
@@ -2516,7 +2524,7 @@ mod tests {
             ..sys::AVSubtitle::default()
         };
 
-        let frame = unsafe { import_av_subtitle(9, &packet, &subtitle) }.unwrap();
+        let frame = unsafe { import_av_subtitle(9, &packet, &subtitle, (1920, 1080)) }.unwrap();
 
         assert_eq!(frame.start, Some(Duration::from_secs(2)));
         assert_eq!(frame.end, Some(Duration::from_millis(2500)));
@@ -2526,6 +2534,7 @@ mod tests {
             (plane.x, plane.y, plane.width, plane.height),
             (11, 22, 2, 2)
         );
+        assert_eq!((plane.canvas_width, plane.canvas_height), (1920, 1080));
         assert_eq!(
             plane.rgba,
             vec![
