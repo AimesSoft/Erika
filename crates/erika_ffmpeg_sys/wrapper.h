@@ -8,3 +8,4 @@
 #include <libavutil/mem.h>
 #include <libavutil/pixdesc.h>
 #include <libswresample/swresample.h>
+#include <libswscale/swscale.h>
