@@ -224,7 +224,51 @@ pub struct SubtitleBitmapPlane {
     pub y: i32,
     pub width: u32,
     pub height: u32,
+    pub canvas_width: u32,
+    pub canvas_height: u32,
     pub rgba: Vec<u8>,
+}
+
+impl SubtitleBitmapPlane {
+    pub fn new(x: i32, y: i32, width: u32, height: u32, rgba: Vec<u8>) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+            canvas_width: 0,
+            canvas_height: 0,
+            rgba,
+        }
+    }
+
+    pub fn with_canvas(mut self, width: u32, height: u32) -> Self {
+        self.canvas_width = width;
+        self.canvas_height = height;
+        self
+    }
+
+    pub fn scaled_rect(&self, viewport_width: u32, viewport_height: u32) -> (i32, i32, u32, u32) {
+        if self.canvas_width == 0
+            || self.canvas_height == 0
+            || (self.canvas_width == viewport_width && self.canvas_height == viewport_height)
+        {
+            return (self.x, self.y, self.width, self.height);
+        }
+        let viewport_width = viewport_width.max(1) as f64;
+        let viewport_height = viewport_height.max(1) as f64;
+        let canvas_width = self.canvas_width.max(1) as f64;
+        let canvas_height = self.canvas_height.max(1) as f64;
+        let scale = (viewport_width / canvas_width).max(viewport_height / canvas_height);
+        let offset_x = (viewport_width - canvas_width * scale) * 0.5;
+        let offset_y = (viewport_height - canvas_height * scale) * 0.5;
+        (
+            (offset_x + self.x as f64 * scale).round() as i32,
+            (offset_y + self.y as f64 * scale).round() as i32,
+            ((self.width as f64 * scale).round() as u32).max(1),
+            ((self.height as f64 * scale).round() as u32).max(1),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,13 +376,13 @@ impl SubtitleAlphaBitmap {
             }
         }
 
-        Some(SubtitleBitmapPlane {
-            x: self.placement.x,
-            y: self.placement.y,
-            width: self.placement.width,
-            height: self.placement.height,
+        Some(SubtitleBitmapPlane::new(
+            self.placement.x,
+            self.placement.y,
+            self.placement.width,
+            self.placement.height,
             rgba,
-        })
+        ))
     }
 }
 
@@ -1030,13 +1074,13 @@ impl SubtitleTimeline {
             let y = height
                 .saturating_sub(plane_height.saturating_mul(index as u32 + 1))
                 .saturating_sub(24) as i32;
-            planes.push(SubtitleBitmapPlane {
+            planes.push(SubtitleBitmapPlane::new(
                 x,
                 y,
-                width: plane_width,
-                height: plane_height,
-                rgba: debug_rgba_plane(plane_width, plane_height),
-            });
+                plane_width,
+                plane_height,
+                debug_rgba_plane(plane_width, plane_height),
+            ));
         }
         SubtitleFrame { pts, planes }
     }
@@ -1483,6 +1527,13 @@ Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,Hello libass
             Some(SubtitleFileFormat::Ass)
         );
         assert_eq!(SubtitleFileFormat::from_path("/tmp/movie.sup"), None);
+    }
+
+    #[test]
+    fn bitmap_plane_scales_from_subtitle_canvas_to_video_viewport() {
+        let plane = SubtitleBitmapPlane::new(800, 905, 322, 60, Vec::new()).with_canvas(1920, 1080);
+
+        assert_eq!(plane.scaled_rect(3840, 1816), (1600, 1638, 644, 120));
     }
 
     #[test]
