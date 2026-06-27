@@ -791,7 +791,8 @@ fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         .arg("-Dasm=disabled")
         .arg("-Dlibunibreak=disabled")
         .env("PKG_CONFIG_PATH", &pkg_config_path)
-        .env("PKG_CONFIG", &pkg_config);
+        .env("PKG_CONFIG", &pkg_config)
+        .env("ERIKA_PKG_CONFIG_RELATIVE_BASE", &layout.libass_build_dir);
     if options.target.is_windows() {
         setup
             .arg("-Dcoretext=disabled")
@@ -811,7 +812,8 @@ fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         .arg("-C")
         .arg(&layout.libass_build_dir)
         .env("PKG_CONFIG_PATH", &pkg_config_path)
-        .env("PKG_CONFIG", &pkg_config);
+        .env("PKG_CONFIG", &pkg_config)
+        .env("ERIKA_PKG_CONFIG_RELATIVE_BASE", &layout.libass_build_dir);
     if let Some(jobs) = options.jobs {
         compile.arg(format!("-j{jobs}"));
     }
@@ -823,7 +825,8 @@ fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         .arg("-C")
         .arg(&layout.libass_build_dir)
         .env("PKG_CONFIG_PATH", &pkg_config_path)
-        .env("PKG_CONFIG", &pkg_config);
+        .env("PKG_CONFIG", &pkg_config)
+        .env("ERIKA_PKG_CONFIG_RELATIVE_BASE", &layout.libass_build_dir);
     apply_windows_target_env(&mut install, options.target)?;
     run(&mut install)?;
     ensure_windows_link_aliases(
@@ -1636,6 +1639,7 @@ fn pkg_config_shim(args: Vec<String>) -> Result<()> {
                 &pc,
                 PkgFlagKind::Cflags,
                 query.static_link,
+                query.msvc_syntax,
                 &mut visited,
                 &mut output,
             )?;
@@ -1645,20 +1649,13 @@ fn pkg_config_shim(args: Vec<String>) -> Result<()> {
                 &pc,
                 PkgFlagKind::Libs,
                 query.static_link,
+                query.msvc_syntax,
                 &mut visited,
                 &mut output,
             )?;
         }
     }
 
-    let output = if query.msvc_syntax {
-        output
-            .into_iter()
-            .map(msvc_pkg_config_token)
-            .collect::<Vec<_>>()
-    } else {
-        output
-    };
     if !output.is_empty() {
         println!("{}", output.join(" "));
     }
@@ -1726,11 +1723,24 @@ struct PcFile {
 
 impl PcFile {
     fn value(&self, key: &str) -> String {
-        self.fields.get(key).cloned().unwrap_or_default()
+        self.fields
+            .get(key)
+            .map(|value| substitute_pc_vars(value, &self.variables))
+            .unwrap_or_default()
     }
 
     fn variable(&self, key: &str) -> String {
         self.variables.get(key).cloned().unwrap_or_default()
+    }
+
+    fn flag_tokens(&self, key: &str) -> Vec<String> {
+        self.fields
+            .get(key)
+            .into_iter()
+            .flat_map(|field| split_pc_field_tokens(field))
+            .map(|token| unescape_pc_whitespace(&substitute_pc_vars(&token, &self.variables)))
+            .filter(|token| !token.is_empty())
+            .collect()
     }
 }
 
@@ -1744,6 +1754,7 @@ fn collect_pc_flags(
     pc: &PcFile,
     kind: PkgFlagKind,
     static_link: bool,
+    msvc_syntax: bool,
     visited: &mut HashSet<String>,
     output: &mut Vec<String>,
 ) -> Result<()> {
@@ -1753,19 +1764,30 @@ fn collect_pc_flags(
     }
 
     let mut fields = match kind {
-        PkgFlagKind::Cflags => vec![pc.value("Cflags")],
-        PkgFlagKind::Libs => vec![pc.value("Libs")],
+        PkgFlagKind::Cflags => vec!["Cflags"],
+        PkgFlagKind::Libs => vec!["Libs"],
     };
     if kind == PkgFlagKind::Libs && static_link {
-        fields.push(pc.value("Libs.private"));
+        fields.push("Libs.private");
     }
     for field in fields {
-        output.extend(field.split_whitespace().map(str::to_string));
+        output.extend(
+            pc.flag_tokens(field)
+                .into_iter()
+                .map(|token| format_pkg_config_token(token, msvc_syntax)),
+        );
     }
 
     for required in pc_requirements(pc, static_link) {
         let required_pc = load_pc_file(&required)?;
-        collect_pc_flags(&required_pc, kind, static_link, visited, output)?;
+        collect_pc_flags(
+            &required_pc,
+            kind,
+            static_link,
+            msvc_syntax,
+            visited,
+            output,
+        )?;
     }
     Ok(())
 }
@@ -1815,19 +1837,10 @@ fn parse_pc_file(package: &str, path: &Path) -> Result<PcFile> {
         let colon = line.find(':');
         if let Some(index) = colon.filter(|index| equals.is_none_or(|equals| *index < equals)) {
             let (key, value) = line.split_at(index);
-            fields.insert(
-                key.trim().to_string(),
-                substitute_pc_vars(value[1..].trim(), &variables),
-            );
+            fields.insert(key.trim().to_string(), value[1..].trim().to_string());
         } else if let Some((key, value)) = line.split_once('=') {
-            let value = substitute_pc_vars(value.trim(), &variables);
+            let value = unescape_pc_whitespace(&substitute_pc_vars(value.trim(), &variables));
             variables.insert(key.trim().to_string(), value);
-        }
-    }
-    let field_keys = fields.keys().cloned().collect::<Vec<_>>();
-    for key in field_keys {
-        if let Some(value) = fields.get(&key).cloned() {
-            fields.insert(key, substitute_pc_vars(&value, &variables));
         }
     }
     Ok(PcFile {
@@ -1852,6 +1865,140 @@ fn substitute_pc_vars(value: &str, variables: &HashMap<String, String>) -> Strin
         output.replace_range(start..=end, &replacement);
     }
     output
+}
+
+fn split_pc_field_tokens(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+    for ch in value.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch.is_whitespace() {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if escaped {
+        current.push('\\');
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn unescape_pc_whitespace(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut escaped = false;
+    for ch in value.chars() {
+        if escaped {
+            output.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else {
+            output.push(ch);
+        }
+    }
+    if escaped {
+        output.push('\\');
+    }
+    output
+}
+
+fn format_pkg_config_token(token: String, msvc_syntax: bool) -> String {
+    let token = if let Some(path) = token.strip_prefix("-I") {
+        let path = pkg_config_output_path(path);
+        if msvc_syntax {
+            format!("/I{path}")
+        } else {
+            format!("-I{path}")
+        }
+    } else if let Some(path) = token.strip_prefix("-L") {
+        let path = pkg_config_output_path(path);
+        if msvc_syntax {
+            format!("/libpath:{path}")
+        } else {
+            format!("-L{path}")
+        }
+    } else if msvc_syntax {
+        msvc_pkg_config_token(token)
+    } else {
+        token
+    };
+    escape_pkg_config_token(&token)
+}
+
+fn pkg_config_output_path(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    if let Some(relative) = relative_pkg_config_path(&path) {
+        return relative;
+    }
+    path
+}
+
+fn relative_pkg_config_path(path: &str) -> Option<String> {
+    let base = env::var_os("ERIKA_PKG_CONFIG_RELATIVE_BASE")?;
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        return None;
+    }
+    relative_path(Path::new(&base), &path).map(|path| path_to_forward_slashes(&path))
+}
+
+fn relative_path(base: &Path, path: &Path) -> Option<PathBuf> {
+    let base_components = base.components().collect::<Vec<_>>();
+    let path_components = path.components().collect::<Vec<_>>();
+    let mut common = 0;
+    while common < base_components.len()
+        && common < path_components.len()
+        && windows_component_eq(base_components[common], path_components[common])
+    {
+        common += 1;
+    }
+    if common == 0 {
+        return None;
+    }
+    let mut relative = PathBuf::new();
+    for component in &base_components[common..] {
+        if matches!(component, std::path::Component::Normal(_)) {
+            relative.push("..");
+        }
+    }
+    for component in &path_components[common..] {
+        relative.push(component.as_os_str());
+    }
+    Some(relative)
+}
+
+fn windows_component_eq(left: std::path::Component<'_>, right: std::path::Component<'_>) -> bool {
+    left.as_os_str()
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+}
+
+fn path_to_forward_slashes(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn escape_pkg_config_token(token: &str) -> String {
+    token
+        .chars()
+        .flat_map(|ch| {
+            if ch.is_whitespace() {
+                vec!['\\', ch]
+            } else {
+                vec![ch]
+            }
+        })
+        .collect()
 }
 
 fn msvc_pkg_config_token(token: String) -> String {
