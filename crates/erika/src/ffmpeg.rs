@@ -46,6 +46,8 @@ pub enum FfmpegError {
     ExpectedAudioFrame,
     #[error("expected subtitle stream")]
     ExpectedSubtitleStream,
+    #[error("unsupported D3D11VA software pixel format: {0}")]
+    UnsupportedD3d11vaSwFormat(i32),
     #[error(
         "invalid subtitle bitmap: width={width} height={height} stride={stride} colors={colors}"
     )]
@@ -551,11 +553,13 @@ impl Default for DecoderConfig {
 
 struct HardwareDecoderState {
     device_ref: *mut sys::AVBufferRef,
+    frames_ref: *mut sys::AVBufferRef,
     pixel_format: sys::AVPixelFormat,
 }
 
 impl Drop for HardwareDecoderState {
     fn drop(&mut self) {
+        unsafe { sys::av_buffer_unref(&mut self.frames_ref) };
         unsafe { sys::av_buffer_unref(&mut self.device_ref) };
     }
 }
@@ -579,6 +583,7 @@ impl Decoder {
         parameters: CodecParameters<'_>,
         config: DecoderConfig,
     ) -> Result<Self> {
+        configure_ffmpeg_debug_logging();
         let codec_id = unsafe { (*parameters.ptr).codec_id };
         let codec = unsafe { sys::avcodec_find_decoder(codec_id) };
         if codec.is_null() {
@@ -676,7 +681,8 @@ impl Decoder {
             sys::AVHWDeviceType_AV_HWDEVICE_TYPE_D3D11VA,
             "avcodec_get_hw_config(D3D11VA)",
             "av_hwdevice_ctx_create(D3D11VA)",
-        )
+        )?;
+        Ok(())
     }
 
     fn configure_hardware(
@@ -713,6 +719,7 @@ impl Decoder {
 
         let mut hw_state = Box::new(HardwareDecoderState {
             device_ref,
+            frames_ref: ptr::null_mut(),
             pixel_format,
         });
 
@@ -723,6 +730,112 @@ impl Decoder {
         }
         self.hw_state = Some(hw_state);
         Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn ensure_d3d11va_frames_for_context(
+    context: *mut sys::AVCodecContext,
+    state: *mut HardwareDecoderState,
+) {
+    if !unsafe { (*state).frames_ref }.is_null() {
+        return;
+    }
+    const D3D11_BIND_SHADER_RESOURCE: u32 = 0x8;
+    const D3D11_BIND_DECODER: u32 = 0x200;
+
+    let mut frames_ref = unsafe { sys::av_hwframe_ctx_alloc((*state).device_ref) };
+    if frames_ref.is_null() {
+        trace_ffmpeg("av_hwframe_ctx_alloc(D3D11VA) returned null");
+        return;
+    }
+
+    let init_result = (|| {
+        let frames_ctx = unsafe { (*frames_ref).data.cast::<sys::AVHWFramesContext>().as_mut() }?;
+        let d3d11_frames = unsafe {
+            frames_ctx
+                .hwctx
+                .cast::<sys::AVD3D11VAFramesContext>()
+                .as_mut()
+        }?;
+        frames_ctx.format = unsafe { (*state).pixel_format };
+        frames_ctx.sw_format = d3d11va_sw_format_for_context(context);
+        let alignment = d3d11va_surface_alignment(unsafe { (*context).codec_id });
+        frames_ctx.width = align_i32(unsafe { (*context).coded_width }, alignment);
+        frames_ctx.height = align_i32(unsafe { (*context).coded_height }, alignment);
+        frames_ctx.initial_pool_size = d3d11va_pool_size(unsafe { (*context).codec_id });
+        d3d11_frames.BindFlags = D3D11_BIND_DECODER | D3D11_BIND_SHADER_RESOURCE;
+        let code = unsafe { sys::av_hwframe_ctx_init(frames_ref) };
+        if code < 0 {
+            trace_ffmpeg("av_hwframe_ctx_init(D3D11VA) failed");
+            return None;
+        }
+        Some(())
+    })();
+
+    if init_result.is_some() {
+        unsafe {
+            (*state).frames_ref = frames_ref;
+        }
+        frames_ref = ptr::null_mut();
+    }
+    if !frames_ref.is_null() {
+        unsafe { sys::av_buffer_unref(&mut frames_ref) };
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn d3d11va_sw_format_for_context(context: *const sys::AVCodecContext) -> sys::AVPixelFormat {
+    match unsafe { (*context).sw_pix_fmt } {
+        sys::AVPixelFormat_AV_PIX_FMT_YUV420P10LE
+        | sys::AVPixelFormat_AV_PIX_FMT_YUV420P10BE
+        | sys::AVPixelFormat_AV_PIX_FMT_P010LE
+        | sys::AVPixelFormat_AV_PIX_FMT_P010BE => sys::AVPixelFormat_AV_PIX_FMT_P010LE,
+        _ => sys::AVPixelFormat_AV_PIX_FMT_NV12,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn d3d11va_surface_alignment(codec_id: sys::AVCodecID) -> i32 {
+    if codec_id == sys::AVCodecID_AV_CODEC_ID_MPEG2VIDEO {
+        32
+    } else if codec_id == sys::AVCodecID_AV_CODEC_ID_HEVC
+        || codec_id == sys::AVCodecID_AV_CODEC_ID_AV1
+    {
+        128
+    } else {
+        16
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn d3d11va_pool_size(codec_id: sys::AVCodecID) -> i32 {
+    if codec_id == sys::AVCodecID_AV_CODEC_ID_H264 || codec_id == sys::AVCodecID_AV_CODEC_ID_HEVC {
+        20
+    } else if codec_id == sys::AVCodecID_AV_CODEC_ID_VP9
+        || codec_id == sys::AVCodecID_AV_CODEC_ID_AV1
+    {
+        12
+    } else {
+        5
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn align_i32(value: i32, alignment: i32) -> i32 {
+    let value = value.max(1);
+    ((value + alignment - 1) / alignment) * alignment
+}
+
+fn configure_ffmpeg_debug_logging() {
+    if std::env::var_os("ERIKA_FFMPEG_DEBUG").is_some() {
+        unsafe { sys::av_log_set_level(sys::AV_LOG_DEBUG as c_int) };
+    }
+}
+
+fn trace_ffmpeg(message: &str) {
+    if std::env::var_os("ERIKA_FFMPEG_DEBUG").is_some() {
+        eprintln!("erika ffmpeg: {message}");
     }
 }
 
@@ -810,6 +923,15 @@ impl Frame {
             return Err(FfmpegError::NullPointer("av_frame_alloc"));
         }
         Ok(Self { ptr, time_base })
+    }
+
+    pub fn try_clone_ref(&self) -> Result<Self> {
+        let frame = Frame::alloc(self.time_base)?;
+        check(
+            unsafe { sys::av_frame_ref(frame.ptr, self.ptr) },
+            "av_frame_ref",
+        )?;
+        Ok(frame)
     }
 
     pub fn as_ptr(&self) -> *const sys::AVFrame {
@@ -2349,6 +2471,21 @@ unsafe extern "C" fn select_hw_format(
                 break;
             }
             if format == target {
+                #[cfg(target_os = "windows")]
+                if target == sys::AVPixelFormat_AV_PIX_FMT_D3D11 {
+                    unsafe { ensure_d3d11va_frames_for_context(context, state.cast_mut()) };
+                }
+                let frames_ref = unsafe { (*state).frames_ref };
+                if !frames_ref.is_null() {
+                    let context_frames = unsafe { &mut (*context).hw_frames_ctx };
+                    if !(*context_frames).is_null() {
+                        unsafe { sys::av_buffer_unref(context_frames) };
+                    }
+                    let frames_ref = unsafe { sys::av_buffer_ref(frames_ref) };
+                    if !frames_ref.is_null() {
+                        *context_frames = frames_ref;
+                    }
+                }
                 return format;
             }
             index += 1;

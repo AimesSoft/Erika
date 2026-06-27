@@ -1173,7 +1173,11 @@ fn build_renderer(
         RendererBackendPreference::PlatformNative | RendererBackendPreference::Auto => {
             Ok(Box::new(MetalRenderer::with_config(_metal_config)?))
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(target_os = "windows")]
+        RendererBackendPreference::PlatformNative | RendererBackendPreference::Auto => {
+            Ok(Box::new(crate::renderer::d3d11::D3d11Renderer::new()?))
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
         RendererBackendPreference::PlatformNative | RendererBackendPreference::Auto => {
             build_wgpu_renderer()
         }
@@ -1189,12 +1193,8 @@ fn resolve_presenter_player_config(
     player: &mut PlayerConfig,
     renderer_preference: RendererBackendPreference,
 ) {
-    if matches!(
-        renderer_preference,
-        RendererBackendPreference::PlatformNative
-            | RendererBackendPreference::Auto
-            | RendererBackendPreference::WgpuFallback
-    ) && player.playback.video_decode == VideoDecodePreference::D3d11va
+    if matches!(renderer_preference, RendererBackendPreference::WgpuFallback)
+        && player.playback.video_decode == VideoDecodePreference::D3d11va
     {
         player.playback.video_decode = VideoDecodePreference::Software;
     }
@@ -1501,6 +1501,18 @@ mod tests {
             player.playback.video_decode,
             VideoDecodePreference::Software
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_native_presenter_keeps_d3d11va_for_zero_copy_interop() {
+        let mut player = PlayerConfig::default();
+        player.renderer = RendererBackendPreference::PlatformNative;
+        player.playback.video_decode = VideoDecodePreference::D3d11va;
+
+        resolve_presenter_player_config(&mut player, RendererBackendPreference::PlatformNative);
+
+        assert_eq!(player.playback.video_decode, VideoDecodePreference::D3d11va);
     }
 
     #[test]
