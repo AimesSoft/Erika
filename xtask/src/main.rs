@@ -1143,16 +1143,6 @@ fn pkg_config_path<'a>(prefixes: impl IntoIterator<Item = &'a PathBuf>) -> Strin
     .into_owned()
 }
 
-fn pkg_config_path_for_layout(layout: &WorkspaceLayout) -> String {
-    pkg_config_path([
-        &layout.ffmpeg_prefix,
-        &layout.freetype_prefix,
-        &layout.harfbuzz_prefix,
-        &layout.fribidi_prefix,
-        &layout.libass_prefix,
-    ])
-}
-
 fn fetch_and_extract(
     layout: &WorkspaceLayout,
     urls: &[&str],
@@ -1561,24 +1551,61 @@ fn ensure_pkg_config_shim(layout: &WorkspaceLayout) -> Result<PathBuf> {
     fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let exe = env::current_exe().context("resolve current xtask executable")?;
     let shim = dir.join("pkg-config.cmd");
-    let default_pkg_config_path = pkg_config_path_for_layout(layout);
+    let root_from_shim = windows_cmd_parent_traversal(&layout.root, &dir)?;
+    let dist_from_root = windows_cmd_path_under_root(&layout.root, &layout.dist_dir)?;
+    let exe_command = if let Ok(exe_from_root) = exe.strip_prefix(&layout.root) {
+        format!("\"%ERIKA_ROOT%\\{}\"", windows_cmd_path(exe_from_root))
+    } else {
+        format!("\"{}\"", exe.display())
+    };
     fs::write(
         &shim,
         format!(
             "@echo off\r\n\
-             set \"ERIKA_PKG_CONFIG_PATH={}\"\r\n\
+             setlocal\r\n\
+             for %%I in (\"%~dp0{}\") do set \"ERIKA_ROOT=%%~fI\"\r\n\
+             set \"ERIKA_DIST_DIR=%ERIKA_ROOT%\\{}\"\r\n\
+             set \"ERIKA_PKG_CONFIG_PATH=%ERIKA_DIST_DIR%\\ffmpeg\\lib\\pkgconfig;%ERIKA_DIST_DIR%\\freetype\\lib\\pkgconfig;%ERIKA_DIST_DIR%\\harfbuzz\\lib\\pkgconfig;%ERIKA_DIST_DIR%\\fribidi\\lib\\pkgconfig;%ERIKA_DIST_DIR%\\libass\\lib\\pkgconfig\"\r\n\
              if defined PKG_CONFIG_PATH (\r\n\
              \tset \"PKG_CONFIG_PATH=%ERIKA_PKG_CONFIG_PATH%;%PKG_CONFIG_PATH%\"\r\n\
              ) else (\r\n\
              \tset \"PKG_CONFIG_PATH=%ERIKA_PKG_CONFIG_PATH%\"\r\n\
              )\r\n\
-             \"{}\" pkg-config-shim %*\r\n",
-            default_pkg_config_path,
-            exe.display()
+             {} pkg-config-shim %*\r\n\
+             exit /b %ERRORLEVEL%\r\n",
+            root_from_shim, dist_from_root, exe_command
         ),
     )
     .with_context(|| format!("write {}", shim.display()))?;
     Ok(shim)
+}
+
+fn windows_cmd_parent_traversal(root: &Path, dir: &Path) -> Result<String> {
+    let rel = dir
+        .strip_prefix(root)
+        .with_context(|| format!("{} is not under {}", dir.display(), root.display()))?;
+    let depth = rel.components().count();
+    if depth == 0 {
+        Ok(".".to_string())
+    } else {
+        Ok(std::iter::repeat_n("..", depth)
+            .collect::<Vec<_>>()
+            .join("\\"))
+    }
+}
+
+fn windows_cmd_path_under_root(root: &Path, path: &Path) -> Result<String> {
+    let rel = path
+        .strip_prefix(root)
+        .with_context(|| format!("{} is not under {}", path.display(), root.display()))?;
+    Ok(windows_cmd_path(rel))
+}
+
+fn windows_cmd_path(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("\\")
 }
 
 fn pkg_config_shim(args: Vec<String>) -> Result<()> {
