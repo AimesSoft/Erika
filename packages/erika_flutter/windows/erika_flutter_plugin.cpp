@@ -82,6 +82,50 @@ std::wstring Utf8ToWide(const std::string& value) {
   return result;
 }
 
+std::string WideToUtf8(const std::wstring& value) {
+  if (value.empty()) {
+    return {};
+  }
+  const int size =
+      WideCharToMultiByte(CP_UTF8, 0, value.data(),
+                          static_cast<int>(value.size()), nullptr, 0, nullptr,
+                          nullptr);
+  if (size <= 0) {
+    return {};
+  }
+  std::string result(static_cast<size_t>(size), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+                      result.data(), size, nullptr, nullptr);
+  return result;
+}
+
+std::string PathToUtf8(const std::filesystem::path& path) {
+  return WideToUtf8(path.wstring());
+}
+
+std::string SafeUtf8Message(const char* message) {
+  if (message == nullptr || *message == '\0') {
+    return "Unknown Erika plugin error.";
+  }
+  const int wide_size = MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, message, -1, nullptr, 0);
+  if (wide_size > 0) {
+    return std::string(message);
+  }
+  const int fallback_size =
+      MultiByteToWideChar(CP_ACP, 0, message, -1, nullptr, 0);
+  if (fallback_size <= 0) {
+    return "Erika plugin error contained invalid text.";
+  }
+  std::wstring wide(static_cast<size_t>(fallback_size), L'\0');
+  MultiByteToWideChar(CP_ACP, 0, message, -1, wide.data(), fallback_size);
+  if (!wide.empty() && wide.back() == L'\0') {
+    wide.pop_back();
+  }
+  auto result = WideToUtf8(wide);
+  return result.empty() ? "Erika plugin error contained invalid text." : result;
+}
+
 std::optional<std::filesystem::path> EnvironmentPath(const wchar_t* name) {
   const DWORD size = GetEnvironmentVariableW(name, nullptr, 0);
   if (size == 0) {
@@ -128,7 +172,7 @@ std::filesystem::path SourceTreeRoot() {
 }
 
 void DebugLog(const std::string& message) {
-  OutputDebugStringA(("ErikaFlutterPlugin: " + message + "\n").c_str());
+  OutputDebugStringW((L"ErikaFlutterPlugin: " + Utf8ToWide(message) + L"\n").c_str());
 }
 
 double NowSeconds() {
@@ -491,7 +535,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   ErikaNativeLibrary() {
     const auto loaded = OpenLibrary();
     module = loaded.first;
-    DebugLog("loaded Erika C API from " + loaded.second.string());
+    DebugLog("loaded Erika C API from " + PathToUtf8(loaded.second));
 
     create = LoadRequired<CreateFn>("erika_presenter_create");
     create_with_config =
@@ -591,7 +635,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
       if (HMODULE module = LoadLibraryW(candidate.c_str())) {
         return {module, candidate};
       }
-      failures << candidate.string() << " (" << LastErrorMessage() << "); ";
+      failures << PathToUtf8(candidate) << " (" << LastErrorMessage() << "); ";
     }
     throw PluginError("Unable to load erika_capi.dll. Tried: " +
                       failures.str());
@@ -1594,7 +1638,7 @@ void ErikaFlutterPlugin::HandleMethodCall(
       result->NotImplemented();
     }
   } catch (const std::exception& error) {
-    result->Error("ERIKA_ERROR", error.what());
+    result->Error("ERIKA_ERROR", SafeUtf8Message(error.what()));
   }
 }
 
