@@ -950,6 +950,18 @@ pub unsafe extern "C" fn erika_presenter_set_upscaler(
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
+    handle: *mut ErikaPresenterHandle,
+    scale: f64,
+) -> ErikaStatus {
+    with_presenter_mut(handle, |handle| {
+        handle.presenter.set_subtitle_scale(scale);
+        ErikaStatus::Ok
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_upscaler_status(
     handle: *mut ErikaPresenterHandle,
     out_status: *mut ErikaUpscalerStatus,
@@ -1454,6 +1466,15 @@ pub unsafe extern "C" fn erika_presenter_set_volume(
 pub unsafe extern "C" fn erika_presenter_set_upscaler(
     _handle: *mut std::ffi::c_void,
     _mode: i32,
+) -> ErikaStatus {
+    ErikaStatus::PlayerError
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
+    _handle: *mut std::ffi::c_void,
+    _scale: f64,
 ) -> ErikaStatus {
     ErikaStatus::PlayerError
 }

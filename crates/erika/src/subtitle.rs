@@ -548,6 +548,23 @@ impl Default for LibassRenderConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SubtitleAssStyle {
+    pub font_scale: f64,
+    pub play_res_width: u32,
+    pub play_res_height: u32,
+}
+
+impl Default for SubtitleAssStyle {
+    fn default() -> Self {
+        Self {
+            font_scale: 1.0,
+            play_res_width: 1920,
+            play_res_height: 1080,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LibassRenderOperation {
     SetFrameSize { width: u32, height: u32 },
@@ -1132,6 +1149,18 @@ pub fn decoded_subtitle_frames_to_ass_script<'a>(
     frames: impl IntoIterator<Item = &'a DecodedSubtitleFrame>,
     fallback_end: Duration,
 ) -> Option<String> {
+    decoded_subtitle_frames_to_ass_script_with_style(
+        frames,
+        fallback_end,
+        SubtitleAssStyle::default(),
+    )
+}
+
+pub fn decoded_subtitle_frames_to_ass_script_with_style<'a>(
+    frames: impl IntoIterator<Item = &'a DecodedSubtitleFrame>,
+    fallback_end: Duration,
+    style: SubtitleAssStyle,
+) -> Option<String> {
     let mut events = String::new();
     for frame in frames {
         if !frame.has_text() {
@@ -1168,7 +1197,7 @@ pub fn decoded_subtitle_frames_to_ass_script<'a>(
         return None;
     }
 
-    let mut script = String::from(DEFAULT_ASS_SCRIPT_HEADER);
+    let mut script = default_ass_script_header(style);
     script.push_str(&events);
     Some(script)
 }
@@ -1299,18 +1328,47 @@ fn escape_ass_text(value: &str) -> String {
     output
 }
 
-const DEFAULT_ASS_SCRIPT_HEADER: &str = r#"[Script Info]
+const DEFAULT_ASS_FONT_SIZE: f64 = 48.0;
+const DEFAULT_ASS_OUTLINE: f64 = 2.0;
+
+fn normalize_ass_font_scale(scale: f64) -> f64 {
+    if scale.is_finite() {
+        scale.clamp(0.25, 4.0)
+    } else {
+        1.0
+    }
+}
+
+fn ass_number(value: f64) -> String {
+    let rounded = (value * 100.0).round() / 100.0;
+    if rounded.fract().abs() < 0.001 {
+        format!("{rounded:.0}")
+    } else {
+        format!("{rounded:.2}")
+    }
+}
+
+fn default_ass_script_header(style: SubtitleAssStyle) -> String {
+    let scale = normalize_ass_font_scale(style.font_scale);
+    let font_size = ass_number(DEFAULT_ASS_FONT_SIZE * scale);
+    let outline = ass_number(DEFAULT_ASS_OUTLINE * scale);
+    let play_res_width = style.play_res_width.max(1);
+    let play_res_height = style.play_res_height.max(1);
+    format!(
+        r#"[Script Info]
 ScriptType: v4.00+
-PlayResX: 1920
-PlayResY: 1080
+PlayResX: {play_res_width}
+PlayResY: {play_res_height}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H80000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,2,48,48,54,1
+Style: Default,Arial,{font_size},&H00FFFFFF,&H000000FF,&H80000000,&H80000000,0,0,0,0,100,100,0,0,1,{outline},0,2,48,48,54,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"#;
+"#
+    )
+}
 
 fn debug_rgba_plane(width: u32, height: u32) -> Vec<u8> {
     let mut rgba = vec![0u8; width as usize * height as usize * 4];
@@ -1462,6 +1520,58 @@ Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,Hello libass
         assert!(script.contains("[Script Info]"));
         assert!(script.contains("Dialogue: 0,0:00:01.25,0:00:02.50"));
         assert!(script.contains("hello\\Nworld"));
+    }
+
+    #[test]
+    fn decoded_plain_text_subtitle_ass_script_honors_font_scale() {
+        let mut frame = DecodedSubtitleFrame::new(
+            2,
+            Some(Duration::from_millis(1250)),
+            Some(Duration::from_millis(2500)),
+        );
+        frame.push_text(SubtitleTextSegment::new(
+            SubtitleTextFormat::PlainText,
+            "scaled",
+        ));
+
+        let script = decoded_subtitle_frames_to_ass_script_with_style(
+            [&frame],
+            Duration::from_secs(5),
+            SubtitleAssStyle {
+                font_scale: 1.5,
+                ..SubtitleAssStyle::default()
+            },
+        )
+        .unwrap();
+
+        assert!(script.contains("Style: Default,Arial,72,"));
+    }
+
+    #[test]
+    fn decoded_plain_text_subtitle_ass_script_uses_render_viewport_as_play_res() {
+        let mut frame = DecodedSubtitleFrame::new(
+            2,
+            Some(Duration::from_millis(1250)),
+            Some(Duration::from_millis(2500)),
+        );
+        frame.push_text(SubtitleTextSegment::new(
+            SubtitleTextFormat::PlainText,
+            "wide",
+        ));
+
+        let script = decoded_subtitle_frames_to_ass_script_with_style(
+            [&frame],
+            Duration::from_secs(5),
+            SubtitleAssStyle {
+                play_res_width: 1920,
+                play_res_height: 816,
+                ..SubtitleAssStyle::default()
+            },
+        )
+        .unwrap();
+
+        assert!(script.contains("PlayResX: 1920"));
+        assert!(script.contains("PlayResY: 816"));
     }
 
     #[test]
