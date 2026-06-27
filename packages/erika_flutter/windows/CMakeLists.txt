@@ -76,13 +76,21 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
 
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
+set(ERIKA_NATIVE_TARGET "x86_64-pc-windows-msvc")
+set(ERIKA_NATIVE_PROFILE "lgpl")
+
 set(ERIKA_CAPI_DLL_PATH
   "${ERIKA_REPO_ROOT}/target/$<IF:$<CONFIG:Debug>,debug,release>/erika_capi.dll")
 add_custom_target(erika_capi_runtime
-  COMMAND "${CARGO_EXECUTABLE}" build -p erika_capi
-    $<$<NOT:$<CONFIG:Debug>>:--release>
+  COMMAND "${CMAKE_COMMAND}"
+    "-DERIKA_REPO_ROOT=${ERIKA_REPO_ROOT}"
+    "-DCARGO_EXECUTABLE=${CARGO_EXECUTABLE}"
+    "-DERIKA_NATIVE_TARGET=${ERIKA_NATIVE_TARGET}"
+    "-DERIKA_NATIVE_PROFILE=${ERIKA_NATIVE_PROFILE}"
+    "-DERIKA_BUILD_CONFIG=$<CONFIG>"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/build_erika_runtime.cmake"
   WORKING_DIRECTORY "${ERIKA_REPO_ROOT}"
-  COMMENT "Building Erika C API runtime for $<CONFIG>"
+  COMMENT "Building Erika native dependencies and C API runtime for $<CONFIG>"
   VERBATIM
 )
 add_dependencies(${PLUGIN_NAME} erika_capi_runtime)

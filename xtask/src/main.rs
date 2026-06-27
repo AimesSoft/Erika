@@ -1317,7 +1317,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         configure.arg("--arch=x86_64");
         configure.arg("--toolchain=msvc");
         apply_windows_target_env(&mut configure, options.target)?;
-        prepend_windows_posix_paths(&mut configure);
+        append_windows_posix_paths(&mut configure);
     } else {
         configure.arg("--cc=clang");
     }
@@ -1345,12 +1345,12 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         .current_dir(&layout.ffmpeg_build_dir)
         .arg(format!("-j{jobs}"));
     apply_windows_target_env(&mut build, options.target)?;
-    prepend_windows_posix_paths(&mut build);
+    append_windows_posix_paths(&mut build);
     run(&mut build)?;
     let mut install = Command::new(make);
     install.current_dir(&layout.ffmpeg_build_dir).arg("install");
     apply_windows_target_env(&mut install, options.target)?;
-    prepend_windows_posix_paths(&mut install);
+    append_windows_posix_paths(&mut install);
     run(&mut install)?;
     ensure_windows_link_aliases(
         options.target,
@@ -1949,7 +1949,7 @@ fn python_tool() -> Option<PathBuf> {
     which("python3").or_else(|| which("python"))
 }
 
-fn prepend_windows_posix_paths(command: &mut Command) {
+fn append_windows_posix_paths(command: &mut Command) {
     if !cfg!(windows) {
         return;
     }
@@ -1958,7 +1958,25 @@ fn prepend_windows_posix_paths(command: &mut Command) {
         Path::new("C:/Program Files/Git/usr/bin"),
         Path::new("C:/mingw64/bin"),
     ];
-    prepend_paths_to_command(command, dirs.into_iter().filter(|path| path.exists()));
+    append_paths_to_command(command, dirs.into_iter().filter(|path| path.exists()));
+}
+
+fn append_paths_to_command<'a>(command: &mut Command, dirs: impl IntoIterator<Item = &'a Path>) {
+    let mut paths = command_env_path(command)
+        .or_else(|| env::var_os("PATH"))
+        .map(|base_path| env::split_paths(&base_path).collect::<Vec<_>>())
+        .unwrap_or_default();
+    paths.extend(
+        dirs.into_iter()
+            .filter(|path| path.exists())
+            .map(Path::to_path_buf),
+    );
+    if !paths.is_empty() {
+        command.env(
+            "PATH",
+            env::join_paths(paths).expect("PATH entries are valid"),
+        );
+    }
 }
 
 fn prepend_paths_to_command<'a>(command: &mut Command, dirs: impl IntoIterator<Item = &'a Path>) {
