@@ -22,3 +22,5 @@ flutter:
         pluginClass: ErikaFlutterPlugin
       macos:
         pluginClass: ErikaFlutterPlugin
+      windows:
+        pluginClass: ErikaFlutterPlugin
