@@ -1,5 +1,7 @@
 # Flutter Embedding
 
+[中文](flutter_embedding.zh.md) | [English](flutter_embedding.md) | [日本語](flutter_embedding.ja.md)
+
 Erika is not a Flutter video renderer. Flutter is an optional host UI.
 The player owns decode, timing, native rendering, subtitles, danmaku, audio, and
 HDR presentation.

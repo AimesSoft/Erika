@@ -30,12 +30,12 @@ use objc2_core_video::{
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBlendFactor, MTLBlendOperation, MTLClearColor, MTLCreateSystemDefaultDevice, MTLLoadAction,
-    MTLPixelFormat, MTLRegion, MTLResourceOptions, MTLStoreAction, MTLTextureDescriptor,
-    MTLTextureUsage,
+    MTLOrigin, MTLPixelFormat, MTLRegion, MTLResourceOptions, MTLSize, MTLStorageMode,
+    MTLStoreAction, MTLTextureDescriptor, MTLTextureUsage,
 };
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue,
-    MTLDevice, MTLDrawable, MTLRenderPassDescriptor, MTLTexture,
+    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder,
+    MTLCommandQueue, MTLDevice, MTLDrawable, MTLRenderPassDescriptor, MTLTexture,
 };
 use objc2_metal::{
     MTLLibrary, MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPipelineDescriptor,
@@ -55,6 +55,7 @@ use crate::renderer::metal::{
 };
 use crate::renderer::pipeline::{ColorRange, LumaUpscalerMode, ToneMapOperator};
 use crate::subtitle::{AssColor, SubtitleAlphaBitmap};
+use crate::trace;
 
 const CV_PIXEL_FORMAT_420_YP_CB_CR10_BI_PLANAR_VIDEO_RANGE: u32 =
     kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange;
@@ -291,6 +292,7 @@ impl MetalRendererImpl {
                 "no CAMetalLayer attached".to_string(),
             ));
         };
+        let started = Instant::now();
 
         unsafe {
             let Some(drawable): Option<Retained<ProtocolObject<dyn CAMetalDrawable>>> =
@@ -334,6 +336,16 @@ impl MetalRendererImpl {
         }
 
         self.stats.rendered_frames += 1;
+        if trace::enabled() {
+            trace::log(format!(
+                "[erika-render-trace] stage=clear elapsed_ms={:.3} color={:.3},{:.3},{:.3},{:.3}",
+                started.elapsed().as_secs_f64() * 1000.0,
+                color.red,
+                color.green,
+                color.blue,
+                color.alpha,
+            ));
+        }
 
         Ok(())
     }
@@ -424,9 +436,12 @@ impl MetalRendererImpl {
         overlay: Option<OverlayRenderFrame<'_>>,
         danmaku: Option<DanmakuRenderFrame<'_>>,
     ) -> Result<()> {
+        let started = Instant::now();
         let danmaku_item_count = danmaku
             .as_ref()
             .map_or(0usize, |danmaku| danmaku.plan.items.len());
+        let mut upscaled_luma_used = false;
+        let has_overlay = overlay.is_some();
         self.stats.last_danmaku_atlas_duration = Duration::ZERO;
         self.stats.last_danmaku_vertex_build_duration = Duration::ZERO;
         self.stats.last_danmaku_vertex_copy_duration = Duration::ZERO;
@@ -536,6 +551,7 @@ impl MetalRendererImpl {
             if upscaled_luma.is_some() {
                 self.stats.upscaled_frames += 1;
                 frame.pipeline = frame.pipeline.with_luma_upscaler(self.upscaler.mode());
+                upscaled_luma_used = true;
             }
             let luma: &ProtocolObject<dyn MTLTexture> = upscaled_luma.as_deref().unwrap_or(luma);
 
@@ -633,8 +649,220 @@ impl MetalRendererImpl {
             self.stats.danmaku_passes += 1;
             self.stats.danmaku_items += danmaku_item_count as u64;
         }
+        if trace::enabled() {
+            trace::log(format!(
+                "[erika-render-trace] stage=video_frame elapsed_ms={:.3} gen={} size={}x{} upscaled={} overlay={} danmaku_items={} gpu_ms={:.3} upscaler_ms={:.3}",
+                started.elapsed().as_secs_f64() * 1000.0,
+                frame
+                    .frame_token
+                    .map(|token| token.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                frame.frame.info.width,
+                frame.frame.info.height,
+                upscale_requested && upscaled_luma_used,
+                has_overlay,
+                danmaku_item_count,
+                self.stats.last_gpu_duration.as_secs_f64() * 1000.0,
+                self.stats.last_upscaler_encode_duration.as_secs_f64() * 1000.0,
+            ));
+        }
 
         Ok(())
+    }
+
+    pub fn capture_video_frame_rgba(
+        &mut self,
+        mut frame: VideoRenderFrame<'_>,
+        overlay: Option<OverlayRenderFrame<'_>>,
+        danmaku: Option<DanmakuRenderFrame<'_>>,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>> {
+        if width == 0 || height == 0 {
+            return Err(PlayerError::Renderer(
+                "capture size must be non-zero".to_string(),
+            ));
+        }
+
+        let Some(textures) = frame.frame.inner.as_ref() else {
+            return Err(PlayerError::Renderer(
+                "imported video frame has no Metal textures".to_string(),
+            ));
+        };
+        let Some(luma) = textures.luma_texture() else {
+            return Err(PlayerError::Renderer(
+                "imported video frame has no luma plane".to_string(),
+            ));
+        };
+        let Some(chroma) = textures.chroma_texture() else {
+            return Err(PlayerError::Renderer(
+                "imported video frame has no chroma plane".to_string(),
+            ));
+        };
+
+        let source_color = frame.pipeline.source;
+        frame.pipeline = frame
+            .pipeline
+            .with_target(self.output_mode.target_color_for_source(source_color));
+
+        let layout = VideoPresentationLayout::aspect_fit(
+            frame.frame.info.width as u32,
+            frame.frame.info.height as u32,
+            width,
+            height,
+        );
+
+        unsafe {
+            let metal_format = metal_pixel_format(self.drawable_pixel_format);
+            let descriptor =
+                MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                    metal_format,
+                    width as usize,
+                    height as usize,
+                    false,
+                );
+            descriptor.setStorageMode(MTLStorageMode::Private);
+            descriptor.setUsage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+            let target = self
+                .device
+                .newTextureWithDescriptor(&descriptor)
+                .ok_or_else(|| {
+                    PlayerError::Renderer("capture texture allocation failed".to_string())
+                })?;
+
+            let Some(command_buffer) = self.queue.commandBuffer() else {
+                return Err(PlayerError::Renderer(
+                    "commandBuffer returned nil".to_string(),
+                ));
+            };
+
+            let pipeline = self.video_pipeline_state()?;
+            let sampler = self.video_sampler_state()?;
+            let pass_descriptor = MTLRenderPassDescriptor::new();
+            let attachments = pass_descriptor.colorAttachments();
+            let attachment = attachments.objectAtIndexedSubscript(0);
+            attachment.setTexture(Some(&*target));
+            attachment.setLoadAction(MTLLoadAction::Clear);
+            attachment.setStoreAction(MTLStoreAction::Store);
+            attachment.setClearColor(MTLClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 1.0,
+            });
+
+            let Some(encoder) = command_buffer.renderCommandEncoderWithDescriptor(&pass_descriptor)
+            else {
+                return Err(PlayerError::Renderer(
+                    "renderCommandEncoderWithDescriptor returned nil".to_string(),
+                ));
+            };
+
+            let uniforms = VideoUniforms {
+                is_p010: matches!(frame.frame.info.format, ImportedVideoFormat::P010) as u32,
+                full_range: matches!(frame.pipeline.source.range, ColorRange::Full) as u32,
+                source_transfer: transfer_code(frame.pipeline.source.transfer),
+                target_transfer: transfer_code(frame.pipeline.target.transfer),
+                tone_map: tone_map_code(frame.pipeline.tone_map.operator),
+                edr_output: self.output_mode.is_edr() as u32,
+                _reserved0: 0,
+                _reserved1: 0,
+                rect: layout.target_rect,
+                viewport: layout.video_viewport(),
+                nits: [
+                    frame.pipeline.source.nominal_peak_nits,
+                    frame.pipeline.target.peak_nits,
+                    frame.pipeline.source.reference_white_nits,
+                    frame.pipeline.target.reference_white_nits,
+                ],
+                luma_coefficients: luma_coefficients(frame.pipeline.luma_coefficients()),
+                gamut_matrix_rows: frame.pipeline.gamut_matrix().row4s(),
+            };
+            encoder.setRenderPipelineState(&pipeline);
+            encoder.setFragmentTexture_atIndex(Some(luma), 0);
+            encoder.setFragmentTexture_atIndex(Some(chroma), 1);
+            encoder.setFragmentSamplerState_atIndex(Some(&sampler), 0);
+            encoder.setVertexBytes_length_atIndex(
+                NonNull::new(
+                    (&uniforms as *const VideoUniforms)
+                        .cast::<c_void>()
+                        .cast_mut(),
+                )
+                .expect("uniform pointer is non-null"),
+                mem::size_of::<VideoUniforms>(),
+                0,
+            );
+            encoder.setFragmentBytes_length_atIndex(
+                NonNull::new(
+                    (&uniforms as *const VideoUniforms)
+                        .cast::<c_void>()
+                        .cast_mut(),
+                )
+                .expect("uniform pointer is non-null"),
+                mem::size_of::<VideoUniforms>(),
+                0,
+            );
+            encoder.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::TriangleStrip, 0, 4);
+
+            if let Some(overlay) = overlay {
+                self.draw_overlay_planes(&encoder, overlay, layout)?;
+            }
+            if let Some(danmaku) = danmaku.as_ref() {
+                self.draw_danmaku_plan(&encoder, danmaku.plan, layout)?;
+            }
+            encoder.endEncoding();
+
+            let bytes_per_pixel = match self.drawable_pixel_format {
+                MetalDrawablePixelFormat::Bgra8Unorm => 4usize,
+                MetalDrawablePixelFormat::Rgba16Float => 8usize,
+            };
+            let row_bytes = width as usize * bytes_per_pixel;
+            let buffer_len = row_bytes * height as usize;
+            let readback = self
+                .device
+                .newBufferWithLength_options(buffer_len, MTLResourceOptions::StorageModeShared)
+                .ok_or_else(|| {
+                    PlayerError::Renderer("capture readback buffer allocation failed".to_string())
+                })?;
+            let Some(blit) = command_buffer.blitCommandEncoder() else {
+                return Err(PlayerError::Renderer(
+                    "blitCommandEncoder returned nil".to_string(),
+                ));
+            };
+            blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
+                &target,
+                0,
+                0,
+                MTLOrigin { x: 0, y: 0, z: 0 },
+                MTLSize {
+                    width: width as usize,
+                    height: height as usize,
+                    depth: 1,
+                },
+                &readback,
+                0,
+                row_bytes,
+                buffer_len,
+            );
+            blit.endEncoding();
+            command_buffer.commit();
+            command_buffer.waitUntilCompleted();
+            if command_buffer.status() != MTLCommandBufferStatus::Completed {
+                return Err(PlayerError::Renderer(format!(
+                    "capture command buffer failed with status {:?}",
+                    command_buffer.status()
+                )));
+            }
+
+            let raw =
+                std::slice::from_raw_parts(readback.contents().as_ptr().cast::<u8>(), buffer_len);
+            Ok(convert_capture_to_rgba8(
+                raw,
+                width as usize,
+                height as usize,
+                self.drawable_pixel_format,
+            ))
+        }
     }
 
     pub fn set_luma_upscaler(&mut self, mode: LumaUpscalerMode) {
@@ -1413,6 +1641,62 @@ fn metal_pixel_format(format: MetalDrawablePixelFormat) -> MTLPixelFormat {
         MetalDrawablePixelFormat::Bgra8Unorm => MTLPixelFormat::BGRA8Unorm,
         MetalDrawablePixelFormat::Rgba16Float => MTLPixelFormat::RGBA16Float,
     }
+}
+
+fn convert_capture_to_rgba8(
+    raw: &[u8],
+    width: usize,
+    height: usize,
+    format: MetalDrawablePixelFormat,
+) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    match format {
+        MetalDrawablePixelFormat::Bgra8Unorm => {
+            for pixel in raw.chunks_exact(4).take(width * height) {
+                rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+            }
+        }
+        MetalDrawablePixelFormat::Rgba16Float => {
+            for pixel in raw.chunks_exact(8).take(width * height) {
+                let r = half_to_unorm8(u16::from_le_bytes([pixel[0], pixel[1]]));
+                let g = half_to_unorm8(u16::from_le_bytes([pixel[2], pixel[3]]));
+                let b = half_to_unorm8(u16::from_le_bytes([pixel[4], pixel[5]]));
+                let a = half_to_unorm8(u16::from_le_bytes([pixel[6], pixel[7]]));
+                rgba.extend_from_slice(&[r, g, b, a]);
+            }
+        }
+    }
+    rgba
+}
+
+fn half_to_unorm8(bits: u16) -> u8 {
+    let value = half_to_f32(bits).clamp(0.0, 1.0);
+    (value * 255.0).round() as u8
+}
+
+fn half_to_f32(bits: u16) -> f32 {
+    let sign = ((bits >> 15) & 0x1) as u32;
+    let exp = ((bits >> 10) & 0x1f) as i32;
+    let frac = (bits & 0x03ff) as u32;
+    let f_bits = if exp == 0 {
+        if frac == 0 {
+            sign << 31
+        } else {
+            let mut frac = frac;
+            let mut exp = -14;
+            while (frac & 0x0400) == 0 {
+                frac <<= 1;
+                exp -= 1;
+            }
+            frac &= 0x03ff;
+            (sign << 31) | (((exp + 127) as u32) << 23) | (frac << 13)
+        }
+    } else if exp == 0x1f {
+        (sign << 31) | 0x7f80_0000 | (frac << 13)
+    } else {
+        (sign << 31) | (((exp - 15 + 127) as u32) << 23) | (frac << 13)
+    };
+    f32::from_bits(f_bits)
 }
 
 fn edr_layer_color_space(

@@ -4,6 +4,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 use crate::ffmpeg::{PcmAudioFrame, PcmFormat};
+use crate::trace;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum AudioError {
@@ -238,6 +239,34 @@ impl AudioRingBuffer {
         self.stats.dropped_frames +=
             (dropped_frames + incoming_frames.saturating_sub(accepted_frames)) as u64;
 
+        if trace::enabled()
+            && (dropped_frames > 0
+                || accepted_frames < incoming_frames
+                || self.queued_frames() >= self.config.capacity_frames.saturating_sub(256))
+        {
+            trace::log(format!(
+                "[erika-audio-trace] stage=push pts={} incoming_frames={} accepted_frames={} dropped_frames={} queued_frames={} queued_duration={} written_frames={} dropped_total={} sample_rate={} channels={} capacity_frames={} drop_oldest={}",
+                frame_pts.map_or_else(
+                    || "-".to_string(),
+                    |pts| format!("{:.3}", pts.as_secs_f64())
+                ),
+                incoming_frames,
+                accepted_frames,
+                dropped_frames + incoming_frames.saturating_sub(accepted_frames),
+                self.queued_frames(),
+                self.queued_duration().map_or_else(
+                    || "-".to_string(),
+                    |duration| format!("{:.3}", duration.as_secs_f64())
+                ),
+                self.stats.written_frames,
+                self.stats.dropped_frames,
+                format!("{}", format.sample_rate),
+                channels,
+                self.config.capacity_frames,
+                self.config.drop_oldest_on_overflow,
+            ));
+        }
+
         Ok(AudioPushResult {
             accepted_frames,
             dropped_frames: dropped_frames + incoming_frames.saturating_sub(accepted_frames),
@@ -271,6 +300,24 @@ impl AudioRingBuffer {
         self.advance_timeline(read_frames, format.sample_rate);
         self.stats.read_frames += read_frames as u64;
         self.stats.underflow_frames += underflow_frames as u64;
+
+        if trace::enabled() && (underflow_frames > 0 || read_frames == 0 && requested_frames > 0) {
+            trace::log(format!(
+                "[erika-audio-trace] stage=read requested_frames={} read_frames={} underflow_frames={} queued_frames={} queued_duration={} read_total={} underflow_total={} sample_rate={} channels={} state=buffered",
+                requested_frames,
+                read_frames,
+                underflow_frames,
+                self.queued_frames(),
+                self.queued_duration().map_or_else(
+                    || "-".to_string(),
+                    |duration| format!("{:.3}", duration.as_secs_f64())
+                ),
+                self.stats.read_frames,
+                self.stats.underflow_frames,
+                format.sample_rate,
+                channels,
+            ));
+        }
 
         Ok(AudioReadResult {
             frames: read_frames,

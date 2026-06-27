@@ -286,6 +286,7 @@ ErikaStatus erika_presenter_seek(ErikaPresenterHandle *handle, uint64_t position
 ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *handle, double rate);
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *handle, double volume);
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *handle, int32_t mode);
+ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *handle, double scale);
 ErikaStatus erika_presenter_get_upscaler_status(
     ErikaPresenterHandle *handle,
     ErikaUpscalerStatus *out_status);

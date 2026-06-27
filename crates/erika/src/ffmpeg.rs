@@ -233,6 +233,8 @@ pub struct Demuxer {
     selection: StreamSelection,
 }
 
+unsafe impl Send for Demuxer {}
+
 impl Demuxer {
     pub fn open_path(path: impl AsRef<Path>) -> Result<Self> {
         Self::open_uri(&path.as_ref().to_string_lossy())
@@ -321,6 +323,11 @@ impl Demuxer {
         })
     }
 
+    pub fn owned_codec_parameters(&self, stream_index: i32) -> Result<OwnedCodecParameters> {
+        let parameters = self.codec_parameters(stream_index)?;
+        OwnedCodecParameters::copy_from(parameters)
+    }
+
     pub fn open_decoder(&self, stream_index: i32) -> Result<Decoder> {
         Decoder::open(self.codec_parameters(stream_index)?)
     }
@@ -403,6 +410,54 @@ impl CodecParameters<'_> {
     }
 }
 
+pub struct OwnedCodecParameters {
+    ptr: *mut sys::AVCodecParameters,
+    stream_index: i32,
+    time_base: TimeBase,
+}
+
+unsafe impl Send for OwnedCodecParameters {}
+
+impl OwnedCodecParameters {
+    fn copy_from(parameters: CodecParameters<'_>) -> Result<Self> {
+        let ptr = unsafe { sys::avcodec_parameters_alloc() };
+        if ptr.is_null() {
+            return Err(FfmpegError::NullPointer("avcodec_parameters_alloc"));
+        }
+        check(
+            unsafe { sys::avcodec_parameters_copy(ptr, parameters.ptr) },
+            "avcodec_parameters_copy",
+        )?;
+        Ok(Self {
+            ptr,
+            stream_index: parameters.stream_index,
+            time_base: parameters.time_base,
+        })
+    }
+
+    pub fn stream_index(&self) -> i32 {
+        self.stream_index
+    }
+
+    pub fn time_base(&self) -> TimeBase {
+        self.time_base
+    }
+
+    pub fn codec_name(&self) -> Option<String> {
+        unsafe { codec_name((*self.ptr).codec_id) }
+    }
+
+    pub fn kind(&self) -> Option<TrackKind> {
+        unsafe { track_kind((*self.ptr).codec_type) }
+    }
+}
+
+impl Drop for OwnedCodecParameters {
+    fn drop(&mut self) {
+        unsafe { sys::avcodec_parameters_free(&mut self.ptr) };
+    }
+}
+
 pub struct SubtitleDecoder {
     context: *mut sys::AVCodecContext,
     stream_index: i32,
@@ -414,11 +469,31 @@ unsafe impl Send for SubtitleDecoder {}
 
 impl SubtitleDecoder {
     pub fn open(parameters: CodecParameters<'_>) -> Result<Self> {
-        if parameters.kind() != Some(TrackKind::Subtitle) {
+        Self::open_raw(
+            parameters.ptr,
+            parameters.stream_index,
+            parameters.time_base,
+        )
+    }
+
+    pub fn open_owned(parameters: &OwnedCodecParameters) -> Result<Self> {
+        Self::open_raw(
+            parameters.ptr,
+            parameters.stream_index,
+            parameters.time_base,
+        )
+    }
+
+    fn open_raw(
+        parameters_ptr: *const sys::AVCodecParameters,
+        stream_index: i32,
+        time_base: TimeBase,
+    ) -> Result<Self> {
+        if unsafe { track_kind((*parameters_ptr).codec_type) } != Some(TrackKind::Subtitle) {
             return Err(FfmpegError::ExpectedSubtitleStream);
         }
 
-        let codec_id = unsafe { (*parameters.ptr).codec_id };
+        let codec_id = unsafe { (*parameters_ptr).codec_id };
         let codec = unsafe { sys::avcodec_find_decoder(codec_id) };
         if codec.is_null() {
             return Err(FfmpegError::NullPointer("avcodec_find_decoder(subtitle)"));
@@ -429,19 +504,16 @@ impl SubtitleDecoder {
         }
         let decoder = Self {
             context,
-            stream_index: parameters.stream_index,
-            time_base: parameters.time_base,
-            track: SubtitleTrackConfig::embedded(
-                i64::from(parameters.stream_index),
-                i64::from(parameters.stream_index),
-            ),
+            stream_index,
+            time_base,
+            track: SubtitleTrackConfig::embedded(i64::from(stream_index), i64::from(stream_index)),
         };
         check(
-            unsafe { sys::avcodec_parameters_to_context(decoder.context, parameters.ptr) },
+            unsafe { sys::avcodec_parameters_to_context(decoder.context, parameters_ptr) },
             "avcodec_parameters_to_context(subtitle)",
         )?;
         unsafe {
-            (*decoder.context).pkt_timebase = parameters.time_base.to_av_rational();
+            (*decoder.context).pkt_timebase = time_base.to_av_rational();
         }
         check(
             unsafe { sys::avcodec_open2(decoder.context, codec, ptr::null_mut()) },
@@ -579,12 +651,42 @@ impl Decoder {
         Self::open_with_config(parameters, DecoderConfig::default())
     }
 
+    pub fn open_owned(parameters: &OwnedCodecParameters) -> Result<Self> {
+        Self::open_owned_with_config(parameters, DecoderConfig::default())
+    }
+
+    pub fn open_owned_with_config(
+        parameters: &OwnedCodecParameters,
+        config: DecoderConfig,
+    ) -> Result<Self> {
+        Self::open_raw(
+            parameters.ptr,
+            parameters.stream_index,
+            parameters.time_base,
+            config,
+        )
+    }
+
     pub fn open_with_config(
         parameters: CodecParameters<'_>,
         config: DecoderConfig,
     ) -> Result<Self> {
+        Self::open_raw(
+            parameters.ptr,
+            parameters.stream_index,
+            parameters.time_base,
+            config,
+        )
+    }
+
+    fn open_raw(
+        parameters_ptr: *const sys::AVCodecParameters,
+        stream_index: i32,
+        time_base: TimeBase,
+        config: DecoderConfig,
+    ) -> Result<Self> {
         configure_ffmpeg_debug_logging();
-        let codec_id = unsafe { (*parameters.ptr).codec_id };
+        let codec_id = unsafe { (*parameters_ptr).codec_id };
         let codec = unsafe { sys::avcodec_find_decoder(codec_id) };
         if codec.is_null() {
             return Err(FfmpegError::NullPointer("avcodec_find_decoder"));
@@ -595,13 +697,13 @@ impl Decoder {
         }
         let decoder = Self {
             context,
-            stream_index: parameters.stream_index,
-            time_base: parameters.time_base,
+            stream_index,
+            time_base,
             backend: config.backend,
             hw_state: None,
         };
         check(
-            unsafe { sys::avcodec_parameters_to_context(decoder.context, parameters.ptr) },
+            unsafe { sys::avcodec_parameters_to_context(decoder.context, parameters_ptr) },
             "avcodec_parameters_to_context",
         )?;
         let mut decoder = decoder;

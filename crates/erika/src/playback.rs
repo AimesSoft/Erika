@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
+use std::thread;
 use std::time::{Duration, Instant};
 
+use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded, unbounded};
 use thiserror::Error;
 
 use crate::audio::AudioClockSnapshot;
@@ -9,7 +11,7 @@ use crate::core::{
 };
 use crate::ffmpeg::{
     self, AudioResampler, Decoder, DecoderBackend, DecoderConfig, DecoderOutputFrame, Demuxer,
-    Frame, PcmAudioFrame, PcmFormat, StreamSelection, SubtitleDecoder,
+    Frame, OwnedCodecParameters, PcmAudioFrame, PcmFormat, StreamSelection, SubtitleDecoder,
 };
 use crate::source::{self, source_from_uri_with_hint};
 use crate::subtitle::{DecodedSubtitleFrame, SubtitleTrackConfig, SubtitleTrackSource};
@@ -31,6 +33,8 @@ pub enum PlaybackError {
     TrackNotFound { kind: TrackKind, track_id: i64 },
     #[error("subtitle track is not removable: {0}")]
     SubtitleTrackNotRemovable(i64),
+    #[error("demux worker error: {0}")]
+    DemuxWorker(String),
 }
 
 pub type Result<T> = std::result::Result<T, PlaybackError>;
@@ -43,6 +47,7 @@ const SUBTITLE_FRAME_QUEUE_LIMIT: usize = 32;
 const EXTERNAL_SUBTITLE_LOOKAHEAD: Duration = Duration::from_secs(5);
 const DEFAULT_AUDIO_LEAD_TIME: Duration = Duration::from_millis(120);
 const STREAMING_AUDIO_LEAD_TIME: Duration = Duration::from_millis(1500);
+const DEMUX_PACKET_QUEUE_LIMIT: usize = 512;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PlaybackQueueLimits {
@@ -72,6 +77,266 @@ impl Default for PlaybackQueueLimits {
             audio_frames: DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
             subtitle_frames: SUBTITLE_FRAME_QUEUE_LIMIT,
         }
+    }
+}
+
+enum DemuxMessage {
+    Packet {
+        generation: u64,
+        packet: ffmpeg::Packet,
+    },
+    Eof {
+        generation: u64,
+    },
+    Error {
+        generation: u64,
+        message: String,
+    },
+}
+
+enum DemuxCommand {
+    Start {
+        generation: u64,
+    },
+    SetSelection {
+        generation: u64,
+        selection: StreamSelection,
+    },
+    Seek {
+        generation: u64,
+        position: Duration,
+    },
+    Stop,
+}
+
+enum PumpInput {
+    Packet(ffmpeg::Packet),
+    Eof,
+    Empty,
+}
+
+struct AsyncDemuxer {
+    packets: Receiver<DemuxMessage>,
+    commands: Sender<DemuxCommand>,
+    generation: u64,
+    active: bool,
+}
+
+impl AsyncDemuxer {
+    fn spawn(demuxer: Demuxer) -> Self {
+        let (packet_sender, packets) = bounded(DEMUX_PACKET_QUEUE_LIMIT);
+        let (commands, command_receiver) = unbounded();
+        thread::Builder::new()
+            .name("erika-demux".to_string())
+            .spawn(move || run_demux_worker(demuxer, packet_sender, command_receiver))
+            .expect("spawn erika demux worker");
+        Self {
+            packets,
+            commands,
+            generation: 1,
+            active: false,
+        }
+    }
+
+    fn start(&mut self) -> Result<()> {
+        if self.active {
+            return Ok(());
+        }
+        self.commands
+            .send(DemuxCommand::Start {
+                generation: self.generation,
+            })
+            .map_err(|_| PlaybackError::DemuxWorker("demux command channel closed".to_string()))?;
+        self.active = true;
+        Ok(())
+    }
+
+    fn set_stream_selection(&mut self, selection: StreamSelection) -> Result<()> {
+        self.generation = self.generation.saturating_add(1).max(1);
+        self.active = false;
+        self.drain_stale_packets();
+        self.commands
+            .send(DemuxCommand::SetSelection {
+                generation: self.generation,
+                selection,
+            })
+            .map_err(|_| PlaybackError::DemuxWorker("demux command channel closed".to_string()))
+    }
+
+    fn seek(&mut self, position: Duration) -> Result<()> {
+        self.generation = self.generation.saturating_add(1).max(1);
+        self.active = false;
+        self.drain_stale_packets();
+        self.commands
+            .send(DemuxCommand::Seek {
+                generation: self.generation,
+                position,
+            })
+            .map_err(|_| PlaybackError::DemuxWorker("demux command channel closed".to_string()))
+    }
+
+    fn poll(&mut self) -> Result<PumpInput> {
+        self.start()?;
+        loop {
+            match self.packets.try_recv() {
+                Ok(DemuxMessage::Packet { generation, packet })
+                    if generation == self.generation =>
+                {
+                    return Ok(PumpInput::Packet(packet));
+                }
+                Ok(DemuxMessage::Eof { generation }) if generation == self.generation => {
+                    return Ok(PumpInput::Eof);
+                }
+                Ok(DemuxMessage::Error {
+                    generation,
+                    message,
+                }) if generation == self.generation => {
+                    return Err(PlaybackError::DemuxWorker(message));
+                }
+                Ok(_) => continue,
+                Err(TryRecvError::Empty) => return Ok(PumpInput::Empty),
+                Err(TryRecvError::Disconnected) => {
+                    return Err(PlaybackError::DemuxWorker(
+                        "demux packet channel closed".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
+    fn drain_stale_packets(&mut self) {
+        while self.packets.try_recv().is_ok() {}
+    }
+}
+
+impl Drop for AsyncDemuxer {
+    fn drop(&mut self) {
+        let _ = self.commands.send(DemuxCommand::Stop);
+    }
+}
+
+fn run_demux_worker(
+    mut demuxer: Demuxer,
+    packets: Sender<DemuxMessage>,
+    commands: Receiver<DemuxCommand>,
+) {
+    let mut generation = 1u64;
+    let mut eof = false;
+    let mut active = false;
+    let mut pending_seek = None;
+    loop {
+        while let Ok(command) = commands.try_recv() {
+            if !handle_demux_command(
+                &mut demuxer,
+                &packets,
+                command,
+                &mut generation,
+                &mut eof,
+                &mut active,
+                &mut pending_seek,
+            ) {
+                return;
+            }
+        }
+
+        if eof || !active {
+            match commands.recv() {
+                Ok(command) => {
+                    if !handle_demux_command(
+                        &mut demuxer,
+                        &packets,
+                        command,
+                        &mut generation,
+                        &mut eof,
+                        &mut active,
+                        &mut pending_seek,
+                    ) {
+                        return;
+                    }
+                }
+                Err(_) => return,
+            }
+            continue;
+        }
+
+        let message = match demuxer.read_packet() {
+            Ok(Some(packet)) => DemuxMessage::Packet { generation, packet },
+            Ok(None) => {
+                eof = true;
+                DemuxMessage::Eof { generation }
+            }
+            Err(error) => {
+                eof = true;
+                DemuxMessage::Error {
+                    generation,
+                    message: error.to_string(),
+                }
+            }
+        };
+        if packets.send(message).is_err() {
+            return;
+        }
+    }
+}
+
+fn handle_demux_command(
+    demuxer: &mut Demuxer,
+    packets: &Sender<DemuxMessage>,
+    command: DemuxCommand,
+    generation: &mut u64,
+    eof: &mut bool,
+    active: &mut bool,
+    pending_seek: &mut Option<(u64, Duration)>,
+) -> bool {
+    match command {
+        DemuxCommand::Start {
+            generation: next_generation,
+        } => {
+            *generation = next_generation;
+            if let Some((seek_generation, position)) = pending_seek.take() {
+                *generation = seek_generation;
+                *eof = false;
+                if let Err(error) = demuxer.seek(position) {
+                    let _ = packets.send(DemuxMessage::Error {
+                        generation: *generation,
+                        message: error.to_string(),
+                    });
+                    *eof = true;
+                    *active = false;
+                    return true;
+                }
+            }
+            *active = true;
+            true
+        }
+        DemuxCommand::SetSelection {
+            generation: next_generation,
+            selection,
+        } => {
+            *generation = next_generation;
+            *eof = false;
+            *active = false;
+            *pending_seek = None;
+            if let Err(error) = demuxer.set_stream_selection(selection) {
+                let _ = packets.send(DemuxMessage::Error {
+                    generation: *generation,
+                    message: error.to_string(),
+                });
+                *eof = true;
+            }
+            true
+        }
+        DemuxCommand::Seek {
+            generation: next_generation,
+            position,
+        } => {
+            *generation = next_generation;
+            *eof = false;
+            *active = false;
+            *pending_seek = Some((*generation, position));
+            true
+        }
+        DemuxCommand::Stop => false,
     }
 }
 
@@ -155,7 +420,8 @@ impl OpenedMediaInfo {
 }
 
 pub struct PlaybackSession {
-    demuxer: Demuxer,
+    demuxer: AsyncDemuxer,
+    codec_parameters: Vec<OwnedCodecParameters>,
     video_decoder: Option<Decoder>,
     audio_decoder: Option<Decoder>,
     subtitle_decoder: Option<SubtitleDecoder>,
@@ -177,6 +443,12 @@ impl PlaybackSession {
         let queue_limits = PlaybackQueueLimits::for_request(request);
         let source = source_from_uri_with_hint(&request.uri, request.source_hint)?;
         let mut demuxer = Demuxer::open_source(source)?;
+        let mut probe = demuxer.probe().clone();
+        let codec_parameters = probe
+            .tracks
+            .iter()
+            .map(|track| demuxer.owned_codec_parameters(track.id as i32))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         let selected_video_track = demuxer
             .probe()
             .tracks
@@ -200,17 +472,17 @@ impl PlaybackSession {
         let mut selected_streams = Vec::new();
         if let Some(stream_index) = selected_video_track {
             selected_streams.push(stream_index);
-            let parameters = demuxer.codec_parameters(stream_index)?;
+            let parameters = codec_parameters_for(&codec_parameters, stream_index)?;
             let decoder_config = config.video_decode.decoder_config();
             video_decoder = Some(
-                match Decoder::open_with_config(parameters, decoder_config) {
+                match Decoder::open_owned_with_config(parameters, decoder_config) {
                     Ok(decoder) => decoder,
                     Err(error) if decoder_config.backend != DecoderBackend::Software => {
                         eprintln!(
                             "Erika playback {:?} decoder open failed: {error}; falling back to software",
                             decoder_config.backend
                         );
-                        Decoder::open_with_config(parameters, DecoderConfig::software())?
+                        Decoder::open_owned_with_config(parameters, DecoderConfig::software())?
                     }
                     Err(error) => return Err(error.into()),
                 },
@@ -219,13 +491,15 @@ impl PlaybackSession {
         let mut audio_decoder = None;
         if let Some(stream_index) = selected_audio_track {
             selected_streams.push(stream_index);
-            let parameters = demuxer.codec_parameters(stream_index)?;
-            audio_decoder = Some(Decoder::open(parameters)?);
+            let parameters = codec_parameters_for(&codec_parameters, stream_index)?;
+            audio_decoder = Some(Decoder::open_owned(parameters)?);
         }
         let mut subtitle_decoder = None;
         let mut opened_subtitle_track = None;
         if let Some(stream_index) = selected_subtitle_track {
-            match demuxer.open_subtitle_decoder(stream_index) {
+            match codec_parameters_for(&codec_parameters, stream_index)
+                .and_then(|parameters| SubtitleDecoder::open_owned(parameters).map_err(Into::into))
+            {
                 Ok(decoder) => {
                     selected_streams.push(stream_index);
                     opened_subtitle_track = Some(stream_index);
@@ -240,7 +514,6 @@ impl PlaybackSession {
             demuxer.set_stream_selection(StreamSelection::only(selected_streams))?;
         }
 
-        let mut probe = demuxer.probe().clone();
         let video_params = selected_video_track.and_then(|stream_index| {
             probe
                 .video
@@ -268,7 +541,8 @@ impl PlaybackSession {
         };
 
         Ok(Self {
-            demuxer,
+            demuxer: AsyncDemuxer::spawn(demuxer),
+            codec_parameters,
             video_decoder,
             audio_decoder,
             subtitle_decoder,
@@ -292,12 +566,18 @@ impl PlaybackSession {
         self.info.track_selection()
     }
 
+    pub fn is_eof(&self) -> bool {
+        self.eof
+    }
+
     pub fn next_video_frame(&mut self) -> Result<Option<Frame>> {
         if self.video_decoder.is_none() {
             return Ok(None);
         }
         while self.video_frames.is_empty() && !self.eof {
-            self.pump_once()?;
+            if !self.pump_once()? {
+                break;
+            }
         }
         Ok(self.video_frames.pop_front())
     }
@@ -307,9 +587,48 @@ impl PlaybackSession {
             return Ok(None);
         }
         while self.audio_frames.is_empty() && !self.eof {
-            self.pump_once()?;
+            if !self.pump_once()? {
+                break;
+            }
         }
         Ok(self.audio_frames.pop_front())
+    }
+
+    pub fn next_audio_frame_bounded(
+        &mut self,
+        max_packets: usize,
+        max_duration: Duration,
+    ) -> Result<Option<PcmAudioFrame>> {
+        if self.audio_decoder.is_none() {
+            return Ok(None);
+        }
+
+        let started = Instant::now();
+        let mut pumped_packets = 0usize;
+        while self.audio_frames.is_empty() && !self.eof && pumped_packets < max_packets {
+            if started.elapsed() >= max_duration {
+                break;
+            }
+            if self.pump_once()? {
+                pumped_packets = pumped_packets.saturating_add(1);
+            } else {
+                break;
+            }
+        }
+
+        let frame = self.audio_frames.pop_front();
+        if trace::enabled() && (pumped_packets > 0 || started.elapsed() >= max_duration) {
+            trace::log(format!(
+                "[erika-playback-trace] stage=session_audio_pump packets={} max_packets={} produced={} queued_audio={} eof={} elapsed_ms={:.3}",
+                pumped_packets,
+                max_packets,
+                frame.is_some(),
+                self.audio_frames.len(),
+                self.eof,
+                started.elapsed().as_secs_f64() * 1000.0,
+            ));
+        }
+        Ok(frame)
     }
 
     pub fn next_subtitle_frame(
@@ -393,8 +712,8 @@ impl PlaybackSession {
         match track_id {
             Some(id) => {
                 let stream_index = self.embedded_track_stream_index(id, TrackKind::Audio)?;
-                let parameters = self.demuxer.codec_parameters(stream_index)?;
-                let decoder = Decoder::open(parameters)?;
+                let parameters = self.codec_parameters(stream_index)?;
+                let decoder = Decoder::open_owned(parameters)?;
                 self.audio_decoder = Some(decoder);
                 self.info.selected_audio_track = Some(id);
                 self.info.audio_output = Some(self.audio_output);
@@ -427,7 +746,8 @@ impl PlaybackSession {
             Some(id) => match self.subtitle_track_source(id)? {
                 SubtitleTrackSource::Embedded { stream_index } => {
                     let stream_index = stream_index_i32(stream_index, TrackKind::Subtitle, id)?;
-                    let decoder = self.demuxer.open_subtitle_decoder(stream_index)?;
+                    let decoder =
+                        SubtitleDecoder::open_owned(self.codec_parameters(stream_index)?)?;
                     self.subtitle_decoder = Some(decoder);
                     self.info.selected_subtitle_track = Some(id);
                 }
@@ -516,6 +836,10 @@ impl PlaybackSession {
         stream_index_i32(track.id, kind, track_id)
     }
 
+    fn codec_parameters(&self, stream_index: i32) -> Result<&OwnedCodecParameters> {
+        codec_parameters_for(&self.codec_parameters, stream_index)
+    }
+
     fn subtitle_track_source(&self, track_id: i64) -> Result<SubtitleTrackSource> {
         self.info
             .subtitle_tracks
@@ -565,10 +889,17 @@ impl PlaybackSession {
         );
     }
 
-    fn pump_once(&mut self) -> Result<()> {
-        match self.demuxer.read_packet()? {
-            Some(packet) => self.route_packet(packet),
-            None => self.finish_decoders(),
+    fn pump_once(&mut self) -> Result<bool> {
+        match self.demuxer.poll()? {
+            PumpInput::Packet(packet) => {
+                self.route_packet(packet)?;
+                Ok(true)
+            }
+            PumpInput::Eof => {
+                self.finish_decoders()?;
+                Ok(true)
+            }
+            PumpInput::Empty => Ok(false),
         }
     }
 
@@ -806,6 +1137,19 @@ fn external_subtitle_title(uri: &str) -> Option<String> {
         .unwrap_or(uri)
         .trim();
     (!leaf.is_empty()).then_some(leaf.to_string())
+}
+
+fn codec_parameters_for(
+    parameters: &[OwnedCodecParameters],
+    stream_index: i32,
+) -> Result<&OwnedCodecParameters> {
+    parameters
+        .iter()
+        .find(|parameters| parameters.stream_index() == stream_index)
+        .ok_or(PlaybackError::TrackNotFound {
+            kind: TrackKind::Video,
+            track_id: i64::from(stream_index),
+        })
 }
 
 fn mark_selected_tracks(
@@ -1564,6 +1908,36 @@ impl VideoPlaybackEngine {
         }))
     }
 
+    pub fn tick_audio_bounded(
+        &mut self,
+        max_packets: usize,
+        max_decode_duration: Duration,
+    ) -> Result<Option<TimedAudioFrame>> {
+        if self.state != PlaybackRunState::Playing {
+            return Ok(None);
+        }
+        self.ensure_pending_audio_bounded(max_packets, max_decode_duration)?;
+        let Some(frame) = self.pending_audio.as_ref() else {
+            return Ok(None);
+        };
+
+        let pts = frame.pts;
+        let now = Instant::now();
+        let media_time = self.clock.media_time_at(now);
+        if pts.is_some_and(|pts| pts > media_time + self.timing.audio_lead_time) {
+            return Ok(None);
+        }
+
+        let frame = self.pending_audio.take().expect("pending audio exists");
+        let late_by = pts.and_then(|pts| media_time.checked_sub(pts));
+        Ok(Some(TimedAudioFrame {
+            frame,
+            pts,
+            media_time,
+            late_by,
+        }))
+    }
+
     pub fn tick_subtitle(&mut self) -> Result<Option<TimedSubtitleFrame>> {
         if self.state != PlaybackRunState::Playing {
             return Ok(None);
@@ -1676,7 +2050,7 @@ impl VideoPlaybackEngine {
             return Ok(());
         }
         self.pending_frame = self.session.next_video_frame()?;
-        if self.pending_frame.is_none() {
+        if self.pending_frame.is_none() && self.session.is_eof() {
             self.eof = true;
             self.state = PlaybackRunState::Ended;
             let now = Instant::now();
@@ -1693,6 +2067,20 @@ impl VideoPlaybackEngine {
             return Ok(());
         }
         self.pending_audio = self.session.next_audio_frame()?;
+        Ok(())
+    }
+
+    fn ensure_pending_audio_bounded(
+        &mut self,
+        max_packets: usize,
+        max_decode_duration: Duration,
+    ) -> Result<()> {
+        if self.pending_audio.is_some() || self.eof {
+            return Ok(());
+        }
+        self.pending_audio = self
+            .session
+            .next_audio_frame_bounded(max_packets, max_decode_duration)?;
         Ok(())
     }
 

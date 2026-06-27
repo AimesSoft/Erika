@@ -1529,7 +1529,6 @@ impl RendererBackend for WgpuRenderer {
         self.ensure_video_pipeline(format);
         let danmaku = context.danmaku.filter(|plan| {
             plan.generation == context.generation
-                && plan.media_time == context.media_time
                 && (context.output_width == 0 || plan.viewport.width == context.output_width)
                 && (context.output_height == 0 || plan.viewport.height == context.output_height)
         });

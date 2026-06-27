@@ -165,6 +165,7 @@ private final class ErikaNativeLibrary {
   typealias SetPlaybackRateFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
   typealias SetVolumeFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
   typealias SetUpscalerFn = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Int32
+  typealias SetSubtitleScaleFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
   typealias GetUpscalerStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias SelectTrackFn = @convention(c) (UnsafeMutableRawPointer?, Int64) -> Int32
   typealias AddExternalSubtitleFn = @convention(c) (
@@ -207,6 +208,7 @@ private final class ErikaNativeLibrary {
   typealias AttachMetalLayerFn = @convention(c) (UnsafeMutableRawPointer?, UInt64, UInt32, UInt32, Double) -> Int32
   typealias ResizeSurfaceFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, Double) -> Int32
   typealias RenderTickFn = @convention(c) (UnsafeMutableRawPointer?, Double, UnsafeMutableRawPointer?) -> Int32
+  typealias CaptureFrameRgbaFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, UnsafeMutableRawPointer?, Int) -> Int32
   typealias PollEventFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
 
   static let shared = try? ErikaNativeLibrary()
@@ -223,6 +225,7 @@ private final class ErikaNativeLibrary {
   let setPlaybackRate: SetPlaybackRateFn?
   let setVolume: SetVolumeFn?
   let setUpscaler: SetUpscalerFn?
+  let setSubtitleScale: SetSubtitleScaleFn?
   let getUpscalerStatus: GetUpscalerStatusFn?
   let selectAudioTrack: SelectTrackFn
   let selectSubtitleTrack: SelectTrackFn
@@ -251,6 +254,7 @@ private final class ErikaNativeLibrary {
   let resizeSurface: ResizeSurfaceFn
   let detachSurface: CommandFn
   let renderTick: RenderTickFn
+  let captureFrameRgba: CaptureFrameRgbaFn?
   let pollEvent: PollEventFn
 
   private let libraryHandle: UnsafeMutableRawPointer
@@ -271,6 +275,7 @@ private final class ErikaNativeLibrary {
     setPlaybackRate = Self.loadOptional("erika_presenter_set_playback_rate", from: libraryHandle, as: SetPlaybackRateFn.self)
     setVolume = Self.loadOptional("erika_presenter_set_volume", from: libraryHandle, as: SetVolumeFn.self)
     setUpscaler = Self.loadOptional("erika_presenter_set_upscaler", from: libraryHandle, as: SetUpscalerFn.self)
+    setSubtitleScale = Self.loadOptional("erika_presenter_set_subtitle_scale", from: libraryHandle, as: SetSubtitleScaleFn.self)
     getUpscalerStatus = Self.loadOptional("erika_presenter_get_upscaler_status", from: libraryHandle, as: GetUpscalerStatusFn.self)
     selectAudioTrack = try Self.load("erika_presenter_select_audio_track", from: libraryHandle, as: SelectTrackFn.self)
     selectSubtitleTrack = try Self.load("erika_presenter_select_subtitle_track", from: libraryHandle, as: SelectTrackFn.self)
@@ -299,6 +304,7 @@ private final class ErikaNativeLibrary {
     resizeSurface = try Self.load("erika_presenter_resize_surface", from: libraryHandle, as: ResizeSurfaceFn.self)
     detachSurface = try Self.load("erika_presenter_detach_surface", from: libraryHandle, as: CommandFn.self)
     renderTick = try Self.load("erika_presenter_render_tick", from: libraryHandle, as: RenderTickFn.self)
+    captureFrameRgba = Self.loadOptional("erika_presenter_capture_frame_rgba", from: libraryHandle, as: CaptureFrameRgbaFn.self)
     pollEvent = try Self.load("erika_presenter_poll_event", from: libraryHandle, as: PollEventFn.self)
   }
 
@@ -451,6 +457,14 @@ private final class ErikaPlayerHost {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_upscaler")
     }
     try check(setUpscaler(handle, mode), operation: "set_upscaler")
+  }
+
+  func setSubtitleScale(_ scale: Double) throws {
+    guard let setSubtitleScale = library.setSubtitleScale else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_set_subtitle_scale")
+    }
+    let clampedScale = scale.isFinite ? min(max(scale, 0.25), 4.0) : 1.0
+    try check(setSubtitleScale(handle, clampedScale), operation: "set_subtitle_scale")
   }
 
   func upscalerStatus() throws -> [String: Any] {
@@ -700,7 +714,32 @@ private final class ErikaPlayerHost {
     return selection.toFlutterMap()
   }
 
-  func screenshot(view: ErikaMetalSurfaceView? = nil) -> Data? {
+  func captureFrameRgba(width: Int, height: Int) -> Data? {
+    guard width > 0, height > 0, let captureFrameRgba = library.captureFrameRgba else {
+      return nil
+    }
+    let byteCount = width * height * 4
+    var data = Data(count: byteCount)
+    let status = data.withUnsafeMutableBytes { buffer in
+      captureFrameRgba(
+        handle,
+        UInt32(width),
+        UInt32(height),
+        buffer.baseAddress,
+        byteCount
+      )
+    }
+    guard status == 0 else {
+      NSLog("Erika: captureFrameRgba failed with status \(status)")
+      return nil
+    }
+    return data
+  }
+
+  func screenshot(view: ErikaMetalSurfaceView? = nil, width: Int? = nil, height: Int? = nil) -> Data? {
+    if let width, let height, let data = captureFrameRgba(width: width, height: height) {
+      return data
+    }
     (view ?? attachedView)?.pngSnapshotData()
   }
 
@@ -1292,6 +1331,14 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         }
         try host.setUpscaler(mode: mode)
         result(nil)
+      case "setSubtitleScale":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        guard let scale = doubleValue(args["scale"]) else {
+          throw ErikaPluginError.invalidArguments("scale is required.")
+        }
+        try host.setSubtitleScale(scale)
+        result(nil)
       case "getUpscalerStatus":
         let args = try dictionaryArgs(call.arguments)
         result(try playerHost(from: args).upscalerStatus())
@@ -1419,7 +1466,9 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         let args = try dictionaryArgs(call.arguments)
         let host = try playerHost(from: args)
         let view = try optionalVideoView(from: args, host: host)
-        if let data = host.screenshot(view: view) {
+        let width = int64Value(args["width"]).map(Int.init)
+        let height = int64Value(args["height"]).map(Int.init)
+        if let data = host.screenshot(view: view, width: width, height: height) {
           result(FlutterStandardTypedData(bytes: data))
         } else {
           result(nil)

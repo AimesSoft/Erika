@@ -377,6 +377,19 @@ impl DanmakuTimeline {
         &self.items
     }
 
+    pub fn window(&self, start: Duration, end: Duration) -> Self {
+        if end < start || self.items.is_empty() {
+            return Self::default();
+        }
+        let items = self
+            .items
+            .iter()
+            .filter(|item| item.pts >= start && item.pts <= end)
+            .cloned()
+            .collect();
+        Self { items }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -1796,6 +1809,16 @@ impl DfmLayoutEngine {
             .as_ref()
             .expect("prepared layout exists")
             .frame_layout(media_time, generation)
+    }
+
+    pub fn render_prepared_plan(
+        &self,
+        prepared: &DfmPreparedLayout,
+        media_time: Duration,
+        generation: u64,
+    ) -> DanmakuRenderPlan {
+        let layout = prepared.frame_layout(media_time, generation);
+        self.rasterizer.render_plan(&layout)
     }
 
     pub fn render_plan(

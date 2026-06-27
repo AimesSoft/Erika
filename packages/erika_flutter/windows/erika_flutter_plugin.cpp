@@ -368,6 +368,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   using SetPlaybackRateFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
   using SetVolumeFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
   using SetUpscalerFn = ErikaStatus (*)(ErikaPresenterHandle*, int32_t);
+  using SetSubtitleScaleFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
   using GetUpscalerStatusFn =
       ErikaStatus (*)(ErikaPresenterHandle*, ErikaUpscalerStatus*);
   using SelectTrackFn = ErikaStatus (*)(ErikaPresenterHandle*, int64_t);
@@ -455,6 +456,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   SetPlaybackRateFn set_playback_rate = nullptr;
   SetVolumeFn set_volume = nullptr;
   SetUpscalerFn set_upscaler = nullptr;
+  SetSubtitleScaleFn set_subtitle_scale = nullptr;
   GetUpscalerStatusFn get_upscaler_status = nullptr;
   SelectTrackFn select_audio_track = nullptr;
   SelectTrackFn select_subtitle_track = nullptr;
@@ -508,6 +510,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
     set_volume = LoadOptional<SetVolumeFn>("erika_presenter_set_volume");
     set_upscaler =
         LoadOptional<SetUpscalerFn>("erika_presenter_set_upscaler");
+    set_subtitle_scale = LoadOptional<SetSubtitleScaleFn>(
+        "erika_presenter_set_subtitle_scale");
     get_upscaler_status = LoadOptional<GetUpscalerStatusFn>(
         "erika_presenter_get_upscaler_status");
     select_audio_track =
@@ -788,6 +792,14 @@ struct ErikaFlutterPlugin::PlayerHost {
       throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_upscaler");
     }
     Check(library->set_upscaler(handle, mode), "set_upscaler");
+  }
+
+  void SetSubtitleScale(double scale) {
+    if (library->set_subtitle_scale == nullptr) {
+      throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_subtitle_scale");
+    }
+    const double clamped = std::isfinite(scale) ? std::clamp(scale, 0.25, 4.0) : 1.0;
+    Check(library->set_subtitle_scale(handle, clamped), "set_subtitle_scale");
   }
 
   EncodableValue GetUpscalerStatus() {
@@ -1456,6 +1468,10 @@ void ErikaFlutterPlugin::HandleMethodCall(
     } else if (method == "setUpscaler") {
       PlayerFromArgs(args).SetUpscaler(
           static_cast<int32_t>(RequiredInt64(args, "mode")));
+      result->Success();
+    } else if (method == "setSubtitleScale") {
+      PlayerFromArgs(args).SetSubtitleScale(
+          DoubleValue(FindArg(args, "scale")).value_or(1.0));
       result->Success();
     } else if (method == "getUpscalerStatus") {
       result->Success(PlayerFromArgs(args).GetUpscalerStatus());

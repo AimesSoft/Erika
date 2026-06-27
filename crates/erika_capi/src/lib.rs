@@ -971,6 +971,18 @@ pub unsafe extern "C" fn erika_presenter_set_upscaler(
 
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
+    handle: *mut ErikaPresenterHandle,
+    scale: f64,
+) -> ErikaStatus {
+    with_presenter_mut(handle, |handle| {
+        handle.presenter.set_subtitle_scale(scale);
+        ErikaStatus::Ok
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_upscaler_status(
     handle: *mut ErikaPresenterHandle,
     out_status: *mut ErikaUpscalerStatus,
@@ -1481,6 +1493,15 @@ pub unsafe extern "C" fn erika_presenter_set_upscaler(
 
 #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
+    _handle: *mut std::ffi::c_void,
+    _scale: f64,
+) -> ErikaStatus {
+    ErikaStatus::PlayerError
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_upscaler_status(
     _handle: *mut std::ffi::c_void,
     out_status: *mut ErikaUpscalerStatus,
@@ -1778,6 +1799,38 @@ pub unsafe extern "C" fn erika_presenter_render_tick(
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_capture_frame_rgba(
+    handle: *mut ErikaPresenterHandle,
+    width: u32,
+    height: u32,
+    out_rgba: *mut u8,
+    out_capacity: usize,
+) -> ErikaStatus {
+    let Some(expected_len) = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+    else {
+        return ErikaStatus::PlayerError;
+    };
+    if expected_len == 0 || out_rgba.is_null() || out_capacity < expected_len {
+        return ErikaStatus::NullPointer;
+    }
+    with_presenter_mut(handle, |handle| {
+        match handle.presenter.capture_frame_rgba(width, height) {
+            Ok(Some(rgba)) if rgba.len() == expected_len => {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(rgba.as_ptr(), out_rgba, expected_len);
+                }
+                ErikaStatus::Ok
+            }
+            Ok(_) => ErikaStatus::PlayerError,
+            Err(_) => ErikaStatus::PlayerError,
+        }
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_poll_event(
     handle: *mut ErikaPresenterHandle,
