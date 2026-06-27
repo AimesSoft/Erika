@@ -128,6 +128,9 @@ impl MetalOutputMode {
                         target.transfer = TransferFunction::Pq;
                         target.peak_nits = 10_000.0;
                         target.reference_white_nits = 203.0;
+                    } else {
+                        target.peak_nits = 100.0 * headroom.max(1.0);
+                        target.reference_white_nits = 100.0;
                     }
                     target
                 }
@@ -903,8 +906,8 @@ mod tests {
         let target = output.target_color();
         assert_eq!(target.primaries, ColorPrimaries::Bt709);
         assert_eq!(target.transfer, TransferFunction::Srgb);
-        assert_eq!(target.peak_nits, 812.0);
-        assert_eq!(target.reference_white_nits, 203.0);
+        assert_eq!(target.peak_nits, 400.0);
+        assert_eq!(target.reference_white_nits, 100.0);
         assert_eq!(target.edr_headroom, 4.0);
     }
 
@@ -927,7 +930,8 @@ mod tests {
     fn metal_output_mode_clamps_edr_headroom_to_one() {
         let target = MetalOutputMode::apple_edr(0.25).target_color();
 
-        assert_eq!(target.peak_nits, 203.0);
+        assert_eq!(target.peak_nits, 100.0);
+        assert_eq!(target.reference_white_nits, 100.0);
         assert_eq!(target.edr_headroom, 1.0);
     }
 
