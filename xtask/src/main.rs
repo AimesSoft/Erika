@@ -574,7 +574,7 @@ fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Resu
                 bail!("required CMake was not found; install the Visual Studio CMake component");
             }
             if python_tool().is_none() {
-                bail!("required Python was not found in PATH");
+                bail!("required Python with venv support was not found in PATH");
             }
             let _ = ensure_pkg_config_shim(layout)?;
         }
@@ -582,11 +582,13 @@ fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Resu
     }
 
     let compiler = "clang";
-    for tool in ["make", compiler, "cmake", "python3", "pkg-config"] {
-        let found = which(tool).is_some() || (tool == "python3" && which("python").is_some());
-        if !found {
+    for tool in ["make", compiler, "cmake", "pkg-config"] {
+        if which(tool).is_none() {
             bail!("required build tool `{tool}` was not found in PATH");
         }
+    }
+    if python_tool().is_none() {
+        bail!("required Python with venv support was not found in PATH");
     }
     Ok(())
 }
@@ -1954,7 +1956,29 @@ fn gnu_make() -> Option<PathBuf> {
 }
 
 fn python_tool() -> Option<PathBuf> {
-    which("python3").or_else(|| which("python"))
+    ["python3", "python", "py"]
+        .into_iter()
+        .filter_map(which)
+        .find(|path| python_candidate_is_usable(path))
+}
+
+fn python_candidate_is_usable(path: &Path) -> bool {
+    if cfg!(windows)
+        && path
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .contains("\\windowsapps\\")
+    {
+        return false;
+    }
+    Command::new(path)
+        .arg("-c")
+        .arg("import venv")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn append_windows_posix_paths(command: &mut Command) {
