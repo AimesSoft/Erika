@@ -9,11 +9,14 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <filesystem>
+#include <iomanip>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -171,8 +174,40 @@ std::filesystem::path SourceTreeRoot() {
 #endif
 }
 
+std::filesystem::path LogFilePath() {
+  if (auto value = EnvironmentPath(L"ERIKA_FLUTTER_LOG_FILE")) {
+    return *value;
+  }
+  if (auto value = EnvironmentPath(L"LOCALAPPDATA")) {
+    return *value / L"Erika" / L"erika_flutter_windows.log";
+  }
+  return std::filesystem::temp_directory_path() / L"erika_flutter_windows.log";
+}
+
+std::string TimestampForLog() {
+  const auto now = std::chrono::system_clock::now();
+  const auto time = std::chrono::system_clock::to_time_t(now);
+  std::tm local_time{};
+  localtime_s(&local_time, &time);
+  std::ostringstream stream;
+  stream << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S");
+  return stream.str();
+}
+
 void DebugLog(const std::string& message) {
-  OutputDebugStringW((L"ErikaFlutterPlugin: " + Utf8ToWide(message) + L"\n").c_str());
+  const std::string line = TimestampForLog() + " [tid " +
+                           std::to_string(GetCurrentThreadId()) + "] " +
+                           message;
+  OutputDebugStringW((L"ErikaFlutterPlugin: " + Utf8ToWide(line) + L"\n").c_str());
+  static std::mutex log_mutex;
+  std::lock_guard<std::mutex> lock(log_mutex);
+  try {
+    const auto path = LogFilePath();
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream file(path, std::ios::app | std::ios::binary);
+    file << line << "\n";
+  } catch (...) {
+  }
 }
 
 double NowSeconds() {
@@ -190,6 +225,18 @@ double ScaleForWindow(HWND hwnd) {
     return 1.0;
   }
   return std::max(1.0, static_cast<double>(dpi) / 96.0);
+}
+
+HWND RootHostWindow(HWND flutter_window) {
+  if (flutter_window == nullptr) {
+    return nullptr;
+  }
+  const HWND root = GetAncestor(flutter_window, GA_ROOT);
+  return root != nullptr ? root : flutter_window;
+}
+
+int LogicalToPhysical(HWND hwnd, double value) {
+  return static_cast<int>(std::llround(value * ScaleForWindow(hwnd)));
 }
 
 UINT FrameTimerIntervalMs() {
@@ -210,12 +257,38 @@ UINT FrameTimerIntervalMs() {
   }
 }
 
-void Check(ErikaStatus status, const char* operation) {
+std::string StatusName(ErikaStatus status) {
+  switch (status) {
+    case ErikaStatus_Ok:
+      return "Ok";
+    case ErikaStatus_NullPointer:
+      return "NullPointer";
+    case ErikaStatus_InvalidUtf8:
+      return "InvalidUtf8";
+    case ErikaStatus_PlayerError:
+      return "PlayerError";
+    case ErikaStatus_Panic:
+      return "Panic";
+    case ErikaStatus_NoEvent:
+      return "NoEvent";
+  }
+  return "Unknown";
+}
+
+void Check(ErikaStatus status,
+           const char* operation,
+           const std::string& native_error = {}) {
   if (status == ErikaStatus_Ok) {
     return;
   }
-  throw PluginError(std::string(operation) + " failed with ErikaStatus " +
-                    std::to_string(static_cast<int>(status)));
+  std::string message = std::string(operation) + " failed with ErikaStatus_" +
+                        StatusName(status) + " (" +
+                        std::to_string(static_cast<int>(status)) + ")";
+  if (!native_error.empty()) {
+    message += ": " + native_error;
+  }
+  DebugLog(message);
+  throw PluginError(message);
 }
 
 const EncodableMap& DictionaryArgs(const EncodableValue* arguments) {
@@ -456,6 +529,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   using RenderTickFn =
       ErikaStatus (*)(ErikaPresenterHandle*, double, ErikaPresenterStats*);
   using PollEventFn = ErikaStatus (*)(ErikaPresenterHandle*, ErikaEvent*);
+  using LastErrorMessageFn = char* (*)();
+  using StringFreeFn = void (*)(char*);
 
   static std::shared_ptr<ErikaNativeLibrary> Shared() {
     static std::mutex mutex;
@@ -484,6 +559,21 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
       return create_with_output_mode(config.output_mode, config.edr_headroom);
     }
     return create();
+  }
+
+  std::string TakeLastError() const {
+    if (last_error_message == nullptr) {
+      return {};
+    }
+    char* raw = last_error_message();
+    if (raw == nullptr) {
+      return {};
+    }
+    std::string message = SafeUtf8Message(raw);
+    if (string_free != nullptr) {
+      string_free(raw);
+    }
+    return message;
   }
 
   HMODULE module = nullptr;
@@ -530,6 +620,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   CommandFn detach_surface = nullptr;
   RenderTickFn render_tick = nullptr;
   PollEventFn poll_event = nullptr;
+  LastErrorMessageFn last_error_message = nullptr;
+  StringFreeFn string_free = nullptr;
 
  private:
   ErikaNativeLibrary() {
@@ -610,6 +702,9 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
         LoadRequired<CommandFn>("erika_presenter_detach_surface");
     render_tick = LoadRequired<RenderTickFn>("erika_presenter_render_tick");
     poll_event = LoadRequired<PollEventFn>("erika_presenter_poll_event");
+    last_error_message =
+        LoadOptional<LastErrorMessageFn>("erika_last_error_message");
+    string_free = LoadOptional<StringFreeFn>("erika_string_free");
   }
 
   static std::pair<HMODULE, std::filesystem::path> OpenLibrary() {
@@ -661,13 +756,16 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
 };
 
 struct ErikaFlutterPlugin::ErikaOverlayWindow {
-  explicit ErikaOverlayWindow(HWND parent_window)
-      : parent(parent_window), scale(ScaleForWindow(parent_window)) {
+  explicit ErikaOverlayWindow(HWND flutter_window)
+      : flutter(flutter_window),
+        host(RootHostWindow(flutter_window)),
+        scale(ScaleForWindow(host)) {
     RegisterWindowClass();
-    hwnd = CreateWindowExW(0, kOverlayWindowClassName, L"Erika Video Surface",
-                           WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, 0, 0,
-                           1, 1, parent, nullptr, GetModuleHandleW(nullptr),
-                           this);
+    hwnd = CreateWindowExW(
+        WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW,
+        kOverlayWindowClassName, L"Erika Video Surface",
+        WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, 0, 0, 1, 1,
+        nullptr, nullptr, GetModuleHandleW(nullptr), this);
     if (hwnd == nullptr) {
       throw PluginError("Unable to create Windows video overlay HWND: " +
                         LastErrorMessage());
@@ -697,7 +795,8 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
     logical_width = width;
     logical_height = height;
     visible = is_visible && width > 0.0 && height > 0.0;
-    scale = ScaleForWindow(parent);
+    host = RootHostWindow(flutter);
+    scale = ScaleForWindow(host);
 
     if (debug_label) {
       SetWindowTextW(hwnd, Utf8ToWide(*debug_label).c_str());
@@ -708,23 +807,27 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
       return;
     }
 
-    const int px = static_cast<int>(std::llround(logical_x * scale));
-    const int py = static_cast<int>(std::llround(logical_y * scale));
-    const int pw = static_cast<int>(std::llround(logical_width * scale));
-    const int ph = static_cast<int>(std::llround(logical_height * scale));
-    SetWindowPos(hwnd, HWND_TOP, px, py, std::max(1, pw), std::max(1, ph),
-                 SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    POINT client_origin{0, 0};
+    if (host != nullptr) {
+      ClientToScreen(host, &client_origin);
+    }
+    const int px = client_origin.x + LogicalToPhysical(host, logical_x);
+    const int py = client_origin.y + LogicalToPhysical(host, logical_y);
+    const int pw = std::max(1, LogicalToPhysical(host, logical_width));
+    const int ph = std::max(1, LogicalToPhysical(host, logical_height));
+    const HWND insert_after = host != nullptr ? host : HWND_BOTTOM;
+    SetWindowPos(hwnd, insert_after, px, py, pw, ph,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
   }
 
   uint32_t PixelWidth() const {
     return static_cast<uint32_t>(
-        std::max<int64_t>(1, std::llround(logical_width * scale)));
+        std::max<int64_t>(1, LogicalToPhysical(host, logical_width)));
   }
 
   uint32_t PixelHeight() const {
     return static_cast<uint32_t>(
-        std::max<int64_t>(1, std::llround(logical_height * scale)));
+        std::max<int64_t>(1, LogicalToPhysical(host, logical_height)));
   }
 
   void RefreshScaleAndReposition() {
@@ -772,7 +875,8 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
     }
   }
 
-  HWND parent = nullptr;
+  HWND flutter = nullptr;
+  HWND host = nullptr;
   HWND hwnd = nullptr;
   double scale = 1.0;
   double logical_x = 0.0;
@@ -790,7 +894,13 @@ struct ErikaFlutterPlugin::PlayerHost {
       : id(player_id), library(std::move(native_library)) {
     handle = library->CreatePresenter(config);
     if (handle == nullptr) {
-      throw PluginError("erika_presenter_create returned null.");
+      std::string message = "erika_presenter_create returned null";
+      const auto detail = library->TakeLastError();
+      if (!detail.empty()) {
+        message += ": " + detail;
+      }
+      DebugLog(message);
+      throw PluginError(message);
     }
     RefreshDanmakuConfigSnapshot();
   }
@@ -804,23 +914,25 @@ struct ErikaFlutterPlugin::PlayerHost {
   }
 
   void Open(const std::string& uri) {
-    Check(library->open(handle, uri.c_str()), "open");
+    Check(library->open(handle, uri.c_str()), "open", library->TakeLastError());
   }
 
-  void Play() { Check(library->play(handle), "play"); }
-  void Pause() { Check(library->pause(handle), "pause"); }
-  void Stop() { Check(library->stop(handle), "stop"); }
-  void Close() { Check(library->close(handle), "close"); }
+  void Play() { Check(library->play(handle), "play", library->TakeLastError()); }
+  void Pause() { Check(library->pause(handle), "pause", library->TakeLastError()); }
+  void Stop() { Check(library->stop(handle), "stop", library->TakeLastError()); }
+  void Close() { Check(library->close(handle), "close", library->TakeLastError()); }
 
   void Seek(uint64_t position_micros) {
-    Check(library->seek(handle, position_micros), "seek");
+    Check(library->seek(handle, position_micros), "seek",
+          library->TakeLastError());
   }
 
   void SetPlaybackRate(double rate) {
     if (library->set_playback_rate == nullptr) {
       throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_playback_rate");
     }
-    Check(library->set_playback_rate(handle, rate), "set_playback_rate");
+    Check(library->set_playback_rate(handle, rate), "set_playback_rate",
+          library->TakeLastError());
   }
 
   void SetVolume(double volume) {
@@ -828,14 +940,16 @@ struct ErikaFlutterPlugin::PlayerHost {
       throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_volume");
     }
     const double clamped = std::isfinite(volume) ? std::clamp(volume, 0.0, 1.0) : 1.0;
-    Check(library->set_volume(handle, clamped), "set_volume");
+    Check(library->set_volume(handle, clamped), "set_volume",
+          library->TakeLastError());
   }
 
   void SetUpscaler(int32_t mode) {
     if (library->set_upscaler == nullptr) {
       throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_upscaler");
     }
-    Check(library->set_upscaler(handle, mode), "set_upscaler");
+    Check(library->set_upscaler(handle, mode), "set_upscaler",
+          library->TakeLastError());
   }
 
   void SetSubtitleScale(double scale) {
@@ -1061,11 +1175,11 @@ struct ErikaFlutterPlugin::PlayerHost {
     const uint32_t width = overlay.PixelWidth();
     const uint32_t height = overlay.PixelHeight();
     const double scale = overlay.scale;
+    const uint64_t hwnd = reinterpret_cast<uint64_t>(overlay.hwnd);
+    const uint64_t hinstance = reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr));
     Check(library->attach_windows_hwnd(
-              handle, reinterpret_cast<uint64_t>(overlay.hwnd),
-              reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr)), width,
-              height, scale),
-          "attach_windows_hwnd");
+              handle, hwnd, hinstance, width, height, scale),
+          "attach_windows_hwnd", library->TakeLastError());
     attached_hwnd = overlay.hwnd;
     attached_view_id = kWindowOverlayViewId;
     surface_attached = true;
@@ -1078,7 +1192,7 @@ struct ErikaFlutterPlugin::PlayerHost {
     }
     Check(library->resize_surface(handle, overlay.PixelWidth(),
                                   overlay.PixelHeight(), overlay.scale),
-          "resize_surface");
+          "resize_surface", library->TakeLastError());
   }
 
   void Detach(std::optional<int64_t> view_id) {
@@ -1097,8 +1211,9 @@ struct ErikaFlutterPlugin::PlayerHost {
       const double time_seconds = NowSeconds() - start_time_seconds;
       const auto status = library->render_tick(handle, time_seconds, &stats);
       if (status != ErikaStatus_Ok) {
-        DebugLog("render_tick failed with ErikaStatus " +
-                 std::to_string(static_cast<int>(status)));
+        DebugLog("render_tick failed with ErikaStatus_" + StatusName(status) +
+                 " (" + std::to_string(static_cast<int>(status)) + "): " +
+                 library->TakeLastError());
       }
     }
     PollEvents(event_sink);
@@ -1112,12 +1227,20 @@ struct ErikaFlutterPlugin::PlayerHost {
       ErikaEvent event{};
       const auto status = library->poll_event(handle, &event);
       if (status == ErikaStatus_Ok) {
+        if (event.kind == ErikaEventKind_Error) {
+          DebugLog("player " + std::to_string(id) +
+                   " event error status=ErikaStatus_" +
+                   StatusName(event.status) + " (" +
+                   std::to_string(static_cast<int>(event.status)) + "): " +
+                   library->TakeLastError());
+        }
         event_sink->Success(EventToMap(event));
         continue;
       }
       if (status != ErikaStatus_NoEvent) {
-        DebugLog("poll_event failed with ErikaStatus " +
-                 std::to_string(static_cast<int>(status)));
+        DebugLog("poll_event failed with ErikaStatus_" + StatusName(status) +
+                 " (" + std::to_string(static_cast<int>(status)) + "): " +
+                 library->TakeLastError());
       }
       break;
     }
@@ -1323,6 +1446,8 @@ ErikaFlutterPlugin::~ErikaFlutterPlugin() {
 void ErikaFlutterPlugin::SetEventSink(
     std::unique_ptr<flutter::EventSink<EncodableValue>> sink) {
   event_sink_ = std::move(sink);
+  StartFrameTimer();
+  OnFrameTimer();
 }
 
 void ErikaFlutterPlugin::ClearEventSink() {
@@ -1350,9 +1475,11 @@ void ErikaFlutterPlugin::StartFrameTimer() {
     return;
   }
   frame_timer_id_ = reinterpret_cast<UINT_PTR>(this);
-  if (!SetTimer(hwnd, frame_timer_id_, FrameTimerIntervalMs(), nullptr)) {
+  if (!SetTimer(hwnd, frame_timer_id_, FrameTimerIntervalMs(),
+                &ErikaFlutterPlugin::FrameTimerProc)) {
     DebugLog("SetTimer failed: " + LastErrorMessage());
     frame_timer_id_ = 0;
+    return;
   }
 }
 
@@ -1367,9 +1494,28 @@ void ErikaFlutterPlugin::StopFrameTimer() {
 }
 
 void ErikaFlutterPlugin::OnFrameTimer() {
+  if (in_frame_timer_) {
+    return;
+  }
+  in_frame_timer_ = true;
   for (auto& entry : players_) {
     entry.second->RenderTick(event_sink_.get());
   }
+  in_frame_timer_ = false;
+}
+
+void CALLBACK ErikaFlutterPlugin::FrameTimerProc(HWND hwnd,
+                                                 UINT message,
+                                                 UINT_PTR timer_id,
+                                                 DWORD time) {
+  (void)hwnd;
+  (void)message;
+  (void)time;
+  auto* plugin = reinterpret_cast<ErikaFlutterPlugin*>(timer_id);
+  if (plugin == nullptr || plugin->frame_timer_id_ != timer_id) {
+    return;
+  }
+  plugin->OnFrameTimer();
 }
 
 std::optional<LRESULT> ErikaFlutterPlugin::OnTopLevelWindowProc(
@@ -1377,11 +1523,10 @@ std::optional<LRESULT> ErikaFlutterPlugin::OnTopLevelWindowProc(
     UINT message,
     WPARAM wparam,
     LPARAM lparam) {
-  if (message == WM_TIMER && wparam == frame_timer_id_) {
-    OnFrameTimer();
-    return std::nullopt;
-  }
-  if (message == WM_SIZE || message == WM_DPICHANGED) {
+  if (message == WM_MOVE || message == WM_MOVING || message == WM_SIZE ||
+      message == WM_SIZING || message == WM_EXITSIZEMOVE ||
+      message == WM_SHOWWINDOW || message == WM_DPICHANGED ||
+      message == WM_WINDOWPOSCHANGED) {
     if (overlay_window_) {
       overlay_window_->RefreshScaleAndReposition();
       ResizeAttachedOverlay();
@@ -1401,8 +1546,9 @@ ErikaFlutterPlugin::ErikaOverlayWindow& ErikaFlutterPlugin::EnsureOverlayWindow(
   if (parent == nullptr) {
     throw PluginError("No Flutter HWND is available for Erika overlay.");
   }
-  if (!overlay_window_ || overlay_window_->parent != parent) {
+  if (!overlay_window_ || overlay_window_->flutter != parent) {
     overlay_window_ = std::make_unique<ErikaOverlayWindow>(parent);
+    StartFrameTimer();
   }
   return *overlay_window_;
 }
@@ -1453,6 +1599,7 @@ int64_t ErikaFlutterPlugin::CreatePlayer(const EncodableValue* arguments) {
   players_[id] = std::make_unique<PlayerHost>(
       id, ErikaNativeLibrary::Shared(), config);
   StartFrameTimer();
+  OnFrameTimer();
   return id;
 }
 
@@ -1472,7 +1619,9 @@ void ErikaFlutterPlugin::HandleMethodCall(
   const auto& method = method_call.method_name();
   try {
     if (method == "create") {
-      result->Success(EncodableValue(CreatePlayer(method_call.arguments())));
+      const int64_t player_id = CreatePlayer(method_call.arguments());
+      OnFrameTimer();
+      result->Success(EncodableValue(player_id));
       return;
     }
 
@@ -1480,26 +1629,33 @@ void ErikaFlutterPlugin::HandleMethodCall(
 
     if (method == "dispose") {
       RemovePlayer(RequiredInt64(args, "playerId"));
+      OnFrameTimer();
       result->Success();
     } else if (method == "open") {
       PlayerFromArgs(args).Open(RequiredString(args, "uri"));
+      OnFrameTimer();
       result->Success();
     } else if (method == "play") {
       PlayerFromArgs(args).Play();
+      OnFrameTimer();
       result->Success();
     } else if (method == "pause") {
       PlayerFromArgs(args).Pause();
+      OnFrameTimer();
       result->Success();
     } else if (method == "stop") {
       PlayerFromArgs(args).Stop();
+      OnFrameTimer();
       result->Success();
     } else if (method == "close") {
       PlayerFromArgs(args).Close();
+      OnFrameTimer();
       result->Success();
     } else if (method == "seek") {
       PlayerFromArgs(args).Seek(
           static_cast<uint64_t>(std::max<int64_t>(
               0, RequiredInt64(args, "positionMicros"))));
+      OnFrameTimer();
       result->Success();
     } else if (method == "setPlaybackRate") {
       PlayerFromArgs(args).SetPlaybackRate(
@@ -1520,11 +1676,14 @@ void ErikaFlutterPlugin::HandleMethodCall(
     } else if (method == "getUpscalerStatus") {
       result->Success(PlayerFromArgs(args).GetUpscalerStatus());
     } else if (method == "addExternalSubtitle") {
-      result->Success(EncodableValue(
-          PlayerFromArgs(args).AddExternalSubtitle(RequiredString(args, "uri"))));
+      const int64_t track_id =
+          PlayerFromArgs(args).AddExternalSubtitle(RequiredString(args, "uri"));
+      OnFrameTimer();
+      result->Success(EncodableValue(track_id));
     } else if (method == "removeSubtitleTrack") {
       PlayerFromArgs(args).RemoveSubtitleTrack(
           RequiredInt64(args, "trackId"));
+      OnFrameTimer();
       result->Success();
     } else if (method == "loadDanmakuFile") {
       PlayerFromArgs(args).LoadDanmakuFile(RequiredString(args, "uri"));
@@ -1584,10 +1743,12 @@ void ErikaFlutterPlugin::HandleMethodCall(
       result->Success();
     } else if (method == "selectAudioTrack") {
       PlayerFromArgs(args).SelectAudioTrack(OptionalTrackId(FindArg(args, "trackId")));
+      OnFrameTimer();
       result->Success();
     } else if (method == "selectSubtitleTrack") {
       PlayerFromArgs(args).SelectSubtitleTrack(
           OptionalTrackId(FindArg(args, "trackId")));
+      OnFrameTimer();
       result->Success();
     } else if (method == "tracks") {
       result->Success(PlayerFromArgs(args).Tracks());
@@ -1601,13 +1762,16 @@ void ErikaFlutterPlugin::HandleMethodCall(
                           " was not found.");
       }
       host.AttachOverlay(EnsureOverlayWindow());
+      OnFrameTimer();
       result->Success();
     } else if (method == "detachView") {
       PlayerFromArgs(args).Detach(RequiredInt64(args, "viewId"));
+      OnFrameTimer();
       result->Success();
     } else if (method == "attachOverlay") {
       auto& host = PlayerFromArgs(args);
       host.AttachOverlay(EnsureOverlayWindow());
+      OnFrameTimer();
       result->Success(EncodableValue(kWindowOverlayViewId));
     } else if (method == "detachOverlay") {
       auto& host = PlayerFromArgs(args);
@@ -1618,6 +1782,7 @@ void ErikaFlutterPlugin::HandleMethodCall(
         return;
       }
       host.Detach(kWindowOverlayViewId);
+      OnFrameTimer();
       if (overlay_window_) {
         overlay_window_->SetFrame(0.0, 0.0, 0.0, 0.0, false, generation,
                                   std::nullopt);
@@ -1633,12 +1798,15 @@ void ErikaFlutterPlugin::HandleMethodCall(
                        Int64Value(FindArg(args, "generation")),
                        StringValue(FindArg(args, "debugLabel")));
       ResizeAttachedOverlay();
+      OnFrameTimer();
       result->Success();
     } else {
       result->NotImplemented();
     }
   } catch (const std::exception& error) {
-    result->Error("ERIKA_ERROR", SafeUtf8Message(error.what()));
+    const auto message = SafeUtf8Message(error.what());
+    DebugLog("method " + method + " failed: " + message);
+    result->Error("ERIKA_ERROR", message);
   }
 }
 

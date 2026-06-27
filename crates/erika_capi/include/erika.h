@@ -217,6 +217,8 @@ typedef struct ErikaPresenterStats {
 
 ErikaHandle *erika_create(void);
 void erika_destroy(ErikaHandle *handle);
+char *erika_last_error_message(void);
+void erika_string_free(char *value);
 
 ErikaStatus erika_open(ErikaHandle *handle, const char *uri);
 ErikaStatus erika_play(ErikaHandle *handle);

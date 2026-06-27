@@ -189,8 +189,11 @@ class _ErikaWindowOverlayVideoViewState
 
   void _startFrameTimer() {
     _frameTimer?.cancel();
+    final interval = defaultTargetPlatform == TargetPlatform.windows
+        ? const Duration(milliseconds: 16)
+        : const Duration(milliseconds: 250);
     _frameTimer = Timer.periodic(
-      const Duration(milliseconds: 250),
+      interval,
       (_) => _scheduleFrameUpdate(),
     );
   }

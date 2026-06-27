@@ -43,6 +43,7 @@ const DEFAULT_VIDEO_FRAME_QUEUE_LIMIT: usize = 8;
 const DEFAULT_AUDIO_FRAME_QUEUE_LIMIT: usize = 16;
 const STREAMING_VIDEO_FRAME_QUEUE_LIMIT: usize = 48;
 const STREAMING_AUDIO_FRAME_QUEUE_LIMIT: usize = 128;
+const D3D11VA_VIDEO_FRAME_QUEUE_LIMIT: usize = 8;
 const SUBTITLE_FRAME_QUEUE_LIMIT: usize = 32;
 const EXTERNAL_SUBTITLE_LOOKAHEAD: Duration = Duration::from_secs(5);
 const DEFAULT_AUDIO_LEAD_TIME: Duration = Duration::from_millis(120);
@@ -432,6 +433,7 @@ pub struct PlaybackSession {
     video_frames: VecDeque<Frame>,
     audio_frames: VecDeque<PcmAudioFrame>,
     subtitle_frames: VecDeque<DecodedSubtitleFrame>,
+    pending_video_packets: VecDeque<ffmpeg::Packet>,
     queue_limits: PlaybackQueueLimits,
     eof: bool,
 }
@@ -553,6 +555,7 @@ impl PlaybackSession {
             video_frames: VecDeque::new(),
             audio_frames: VecDeque::new(),
             subtitle_frames: VecDeque::new(),
+            pending_video_packets: VecDeque::new(),
             queue_limits,
             eof: false,
         })
@@ -782,6 +785,7 @@ impl PlaybackSession {
             external.seek(position)?;
         }
         self.audio_resampler = None;
+        self.pending_video_packets.clear();
         self.video_frames.clear();
         self.audio_frames.clear();
         self.subtitle_frames.clear();
@@ -890,6 +894,9 @@ impl PlaybackSession {
     }
 
     fn pump_once(&mut self) -> Result<bool> {
+        if self.route_pending_video_packets()? {
+            return Ok(true);
+        }
         match self.demuxer.poll()? {
             PumpInput::Packet(packet) => {
                 self.route_packet(packet)?;
@@ -909,10 +916,15 @@ impl PlaybackSession {
             .as_ref()
             .is_some_and(|decoder| packet.stream_index() == decoder.stream_index())
         {
+            if self.should_defer_video_packet() {
+                self.pending_video_packets.push_back(packet);
+                return Ok(());
+            }
+            let video_frame_limit = self.active_video_frame_queue_limit();
             let decoder = self.video_decoder.as_mut().expect("video decoder exists");
             decoder.send_packet(&packet)?;
             drain_video_frames(decoder, &mut self.video_frames)?;
-            trim_video_queue(&mut self.video_frames, self.queue_limits.video_frames);
+            trim_video_queue(&mut self.video_frames, video_frame_limit);
             return Ok(());
         }
 
@@ -947,14 +959,47 @@ impl PlaybackSession {
         Ok(())
     }
 
+    fn route_pending_video_packets(&mut self) -> Result<bool> {
+        let mut routed_any = false;
+        while !self.should_defer_video_packet() {
+            let Some(packet) = self.pending_video_packets.pop_front() else {
+                return Ok(routed_any);
+            };
+            self.route_packet(packet)?;
+            routed_any = true;
+        }
+        Ok(routed_any)
+    }
+
+    fn should_defer_video_packet(&self) -> bool {
+        self.video_decoder
+            .as_ref()
+            .is_some_and(|decoder| decoder.backend() == DecoderBackend::D3d11va)
+            && self.video_frames.len() >= D3D11VA_VIDEO_FRAME_QUEUE_LIMIT
+    }
+
+    fn active_video_frame_queue_limit(&self) -> usize {
+        if self
+            .video_decoder
+            .as_ref()
+            .is_some_and(|decoder| decoder.backend() == DecoderBackend::D3d11va)
+        {
+            D3D11VA_VIDEO_FRAME_QUEUE_LIMIT
+        } else {
+            self.queue_limits.video_frames
+        }
+    }
+
     fn finish_decoders(&mut self) -> Result<()> {
         if self.eof {
             return Ok(());
         }
+        while self.route_pending_video_packets()? {}
+        let video_frame_limit = self.active_video_frame_queue_limit();
         if let Some(decoder) = &mut self.video_decoder {
             decoder.send_eof()?;
             drain_video_frames(decoder, &mut self.video_frames)?;
-            trim_video_queue(&mut self.video_frames, self.queue_limits.video_frames);
+            trim_video_queue(&mut self.video_frames, video_frame_limit);
         }
         if self.audio_decoder.is_some() {
             {

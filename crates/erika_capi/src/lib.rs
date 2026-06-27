@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Duration;
@@ -29,6 +30,46 @@ pub enum ErikaStatus {
     PlayerError = 3,
     Panic = 4,
     NoEvent = 5,
+}
+
+thread_local! {
+    static LAST_ERROR: RefCell<Option<String>> = RefCell::new(None);
+}
+
+fn clear_last_error() {
+    LAST_ERROR.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+}
+
+fn set_last_error(message: impl Into<String>) {
+    let message = message.into().replace('\0', "\\0");
+    LAST_ERROR.with(|slot| {
+        *slot.borrow_mut() = Some(message);
+    });
+}
+
+fn ensure_last_error(status: ErikaStatus) {
+    LAST_ERROR.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(format!("Erika C ABI returned {status:?}"));
+        }
+    });
+}
+
+fn finalize_status(status: ErikaStatus) -> ErikaStatus {
+    match status {
+        ErikaStatus::Ok => clear_last_error(),
+        ErikaStatus::NoEvent => {}
+        _ => ensure_last_error(status),
+    }
+    status
+}
+
+fn player_error(message: impl Into<String>) -> ErikaStatus {
+    set_last_error(message);
+    ErikaStatus::PlayerError
 }
 
 #[repr(C)]
@@ -389,6 +430,19 @@ pub unsafe extern "C" fn erika_destroy(handle: *mut ErikaHandle) {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn erika_last_error_message() -> *mut c_char {
+    LAST_ERROR.with(|slot| option_string_to_c(slot.borrow().as_deref()))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_string_free(value: *mut c_char) {
+    if value.is_null() {
+        return;
+    }
+    unsafe { drop(CString::from_raw(value)) };
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_open(handle: *mut ErikaHandle, uri: *const c_char) -> ErikaStatus {
     with_handle_mut(handle, |handle| {
         let uri = match c_string(uri) {
@@ -551,6 +605,7 @@ pub unsafe extern "C" fn erika_attach_metal_layer(
     scale: f64,
 ) -> ErikaStatus {
     if raw_layer == 0 {
+        set_last_error("metal layer pointer is null");
         return ErikaStatus::NullPointer;
     }
     with_handle_mut(handle, |handle| {
@@ -571,6 +626,7 @@ pub unsafe extern "C" fn erika_attach_wgpu_surface(
     scale: f64,
 ) -> ErikaStatus {
     if raw_window == 0 {
+        set_last_error("surface window pointer is null");
         return ErikaStatus::NullPointer;
     }
     with_handle_mut(handle, |handle| {
@@ -707,10 +763,14 @@ pub extern "C" fn erika_presenter_create_with_output_mode(
 fn create_presenter_handle(config: PresenterConfig) -> *mut ErikaPresenterHandle {
     match PresenterRuntime::new(config) {
         Ok(presenter) => {
+            clear_last_error();
             let events = presenter.player().subscribe();
             Box::into_raw(Box::new(ErikaPresenterHandle { presenter, events }))
         }
-        Err(_) => std::ptr::null_mut(),
+        Err(error) => {
+            set_last_error(format!("presenter create failed: {error}"));
+            std::ptr::null_mut()
+        }
     }
 }
 
@@ -1791,9 +1851,10 @@ pub unsafe extern "C" fn erika_presenter_render_tick(
                     let snapshot = handle.presenter.runtime_snapshot();
                     unsafe { *out_stats = presenter_stats_to_c(snapshot) };
                 }
+                clear_last_error();
                 ErikaStatus::Ok
             }
-            Err(_) => ErikaStatus::PlayerError,
+            Err(error) => player_error(format!("render_tick failed: {error}")),
         }
     })
 }
@@ -1824,29 +1885,50 @@ pub unsafe extern "C" fn erika_presenter_capture_frame_rgba(
                 }
                 ErikaStatus::Ok
             }
-            Ok(_) => ErikaStatus::PlayerError,
-            Err(_) => ErikaStatus::PlayerError,
+            Ok(_) => player_error("capture_frame_rgba returned an unexpected frame size"),
+            Err(error) => player_error(format!("capture_frame_rgba failed: {error}")),
         }
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_poll_event(
     handle: *mut ErikaPresenterHandle,
     out_event: *mut ErikaEvent,
 ) -> ErikaStatus {
     if out_event.is_null() {
+        set_last_error("event output pointer is null");
         return ErikaStatus::NullPointer;
     }
-    with_presenter_mut(handle, |handle| match handle.events.try_recv() {
-        Ok(event) => {
-            unsafe { *out_event = event_to_c(event) };
-            ErikaStatus::Ok
+    if handle.is_null() {
+        set_last_error("Erika presenter handle pointer is null");
+        return ErikaStatus::NullPointer;
+    }
+    match catch_unwind(AssertUnwindSafe(|| {
+        let handle = unsafe { &mut *handle };
+        match handle.events.try_recv() {
+            Ok(event) => {
+                let event = event_to_c(event);
+                let is_error = event.kind == ErikaEventKind::Error;
+                unsafe { *out_event = event };
+                if !is_error {
+                    clear_last_error();
+                }
+                ErikaStatus::Ok
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => ErikaStatus::NoEvent,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                player_error("presenter event channel disconnected")
+            }
         }
-        Err(crossbeam_channel::TryRecvError::Empty) => ErikaStatus::NoEvent,
-        Err(crossbeam_channel::TryRecvError::Disconnected) => ErikaStatus::PlayerError,
-    })
+    })) {
+        Ok(status) => status,
+        Err(_) => {
+            set_last_error("panic while polling Erika presenter event");
+            ErikaStatus::Panic
+        }
+    }
 }
 
 fn with_handle_mut(
@@ -1854,11 +1936,15 @@ fn with_handle_mut(
     f: impl FnOnce(&mut ErikaHandle) -> ErikaStatus,
 ) -> ErikaStatus {
     if handle.is_null() {
+        set_last_error("Erika handle pointer is null");
         return ErikaStatus::NullPointer;
     }
     match catch_unwind(AssertUnwindSafe(|| f(unsafe { &mut *handle }))) {
-        Ok(status) => status,
-        Err(_) => ErikaStatus::Panic,
+        Ok(status) => finalize_status(status),
+        Err(_) => {
+            set_last_error("panic while handling Erika C ABI call");
+            ErikaStatus::Panic
+        }
     }
 }
 
@@ -1868,22 +1954,30 @@ fn with_presenter_mut(
     f: impl FnOnce(&mut ErikaPresenterHandle) -> ErikaStatus,
 ) -> ErikaStatus {
     if handle.is_null() {
+        set_last_error("Erika presenter handle pointer is null");
         return ErikaStatus::NullPointer;
     }
     match catch_unwind(AssertUnwindSafe(|| f(unsafe { &mut *handle }))) {
-        Ok(status) => status,
-        Err(_) => ErikaStatus::Panic,
+        Ok(status) => finalize_status(status),
+        Err(_) => {
+            set_last_error("panic while handling Erika presenter C ABI call");
+            ErikaStatus::Panic
+        }
     }
 }
 
 fn c_string(ptr: *const c_char) -> Result<String, ErikaStatus> {
     if ptr.is_null() {
+        set_last_error("required C string pointer is null");
         return Err(ErikaStatus::NullPointer);
     }
     unsafe { CStr::from_ptr(ptr) }
         .to_str()
         .map(str::to_string)
-        .map_err(|_| ErikaStatus::InvalidUtf8)
+        .map_err(|_| {
+            set_last_error("required C string is not valid UTF-8");
+            ErikaStatus::InvalidUtf8
+        })
 }
 
 fn optional_c_string(ptr: *const c_char) -> Option<String> {
@@ -1900,8 +1994,11 @@ fn optional_c_string(ptr: *const c_char) -> Option<String> {
 
 fn status_from_player_result(result: erika::Result<()>) -> ErikaStatus {
     match result {
-        Ok(()) => ErikaStatus::Ok,
-        Err(_) => ErikaStatus::PlayerError,
+        Ok(()) => {
+            clear_last_error();
+            ErikaStatus::Ok
+        }
+        Err(error) => player_error(error.to_string()),
     }
 }
 
@@ -2077,11 +2174,14 @@ fn event_to_c(event: PlayerEvent) -> ErikaEvent {
             kind: ErikaEventKind::SurfaceDetached,
             ..ErikaEvent::default()
         },
-        PlayerEvent::Error(_) => ErikaEvent {
-            kind: ErikaEventKind::Error,
-            status: ErikaStatus::PlayerError,
-            ..ErikaEvent::default()
-        },
+        PlayerEvent::Error(error) => {
+            set_last_error(error.to_string());
+            ErikaEvent {
+                kind: ErikaEventKind::Error,
+                status: ErikaStatus::PlayerError,
+                ..ErikaEvent::default()
+            }
+        }
     }
 }
 

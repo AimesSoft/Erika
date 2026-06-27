@@ -450,10 +450,29 @@ struct ImportedVideoFrame {
     _texture: ID3D11Texture2D,
     luma: ID3D11ShaderResourceView,
     chroma: ID3D11ShaderResourceView,
-    _width: u32,
-    _height: u32,
+    width: u32,
+    height: u32,
     _array_index: u32,
     constants: VideoUniforms,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct D3d11DrawRect {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+impl D3d11DrawRect {
+    fn full(width: u32, height: u32) -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            width: width.max(1) as f32,
+            height: height.max(1) as f32,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -747,8 +766,8 @@ impl D3d11Renderer {
             _texture: texture,
             luma,
             chroma,
-            _width: texture_ref.width().max(1),
-            _height: texture_ref.height().max(1),
+            width: texture_ref.width().max(1),
+            height: texture_ref.height().max(1),
             _array_index: array_index,
             constants: constants_for_frame(source_color, texture_format, target_color),
         });
@@ -1065,7 +1084,12 @@ impl D3d11Renderer {
             .swapchain
             .as_ref()
             .ok_or_else(|| PlayerError::Renderer("d3d11: no swapchain attached".to_string()))?;
-        state.draw_video(video, rtv, surface.width, surface.height)?;
+        let target_rect =
+            aspect_fit_rect(video.width, video.height, surface.width, surface.height);
+        unsafe {
+            state.context.ClearRenderTargetView(rtv, &[0.0, 0.0, 0.0, 1.0]);
+        }
+        state.draw_video(video, rtv, target_rect)?;
         if !overlay_draws.is_empty() {
             state.draw_overlays(&overlay_draws, rtv, surface.width, surface.height)?;
         }
@@ -1108,12 +1132,8 @@ impl D3d11Renderer {
             .render_target
             .as_ref()
             .ok_or_else(|| PlayerError::Renderer("d3d11: no render target attached".to_string()))?;
-        let color = [
-            (time_seconds.sin() * 0.5 + 0.5) as f32,
-            ((time_seconds * 0.73).sin() * 0.5 + 0.5) as f32,
-            ((time_seconds * 1.37).cos() * 0.5 + 0.5) as f32,
-            1.0,
-        ];
+        let _ = time_seconds;
+        let color = [0.0, 0.0, 0.0, 1.0];
         unsafe {
             trace("render_clear: clear");
             state.context.ClearRenderTargetView(rtv, &color);
@@ -1334,14 +1354,13 @@ impl D3d11DeviceState {
         &self,
         video: &ImportedVideoFrame,
         render_target: &ID3D11RenderTargetView,
-        width: u32,
-        height: u32,
+        target: D3d11DrawRect,
     ) -> Result<()> {
         let viewport = D3D11_VIEWPORT {
-            TopLeftX: 0.0,
-            TopLeftY: 0.0,
-            Width: width.max(1) as f32,
-            Height: height.max(1) as f32,
+            TopLeftX: target.x,
+            TopLeftY: target.y,
+            Width: target.width.max(1.0),
+            Height: target.height.max(1.0),
             MinDepth: 0.0,
             MaxDepth: 1.0,
         };
@@ -1479,6 +1498,38 @@ impl D3d11VideoTextureFormat {
         match self {
             Self::Nv12 => DXGI_FORMAT_R8G8_UNORM,
             Self::P010 => DXGI_FORMAT_R16G16_UNORM,
+        }
+    }
+}
+
+fn aspect_fit_rect(
+    source_width: u32,
+    source_height: u32,
+    target_width: u32,
+    target_height: u32,
+) -> D3d11DrawRect {
+    if source_width == 0 || source_height == 0 || target_width == 0 || target_height == 0 {
+        return D3d11DrawRect::full(target_width, target_height);
+    }
+    let target_w = target_width as f32;
+    let target_h = target_height as f32;
+    let source_aspect = source_width as f32 / source_height as f32;
+    let target_aspect = target_w / target_h;
+    if source_aspect > target_aspect {
+        let height = target_w / source_aspect;
+        D3d11DrawRect {
+            x: 0.0,
+            y: (target_h - height) * 0.5,
+            width: target_w,
+            height,
+        }
+    } else {
+        let width = target_h * source_aspect;
+        D3d11DrawRect {
+            x: (target_w - width) * 0.5,
+            y: 0.0,
+            width,
+            height: target_h,
         }
     }
 }

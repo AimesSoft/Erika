@@ -72,6 +72,10 @@ class ErikaFlutterPlugin : public flutter::Plugin {
   void StartFrameTimer();
   void StopFrameTimer();
   void OnFrameTimer();
+  static void CALLBACK FrameTimerProc(HWND hwnd,
+                                      UINT message,
+                                      UINT_PTR timer_id,
+                                      DWORD time);
   std::optional<LRESULT> OnTopLevelWindowProc(HWND hwnd,
                                               UINT message,
                                               WPARAM wparam,
@@ -93,6 +97,7 @@ class ErikaFlutterPlugin : public flutter::Plugin {
   int64_t next_player_id_ = 1;
   int window_proc_delegate_id_ = 0;
   UINT_PTR frame_timer_id_ = 0;
+  bool in_frame_timer_ = false;
 };
 
 }  // namespace erika_flutter
