@@ -206,6 +206,13 @@ typedef struct ErikaPresenterStats {
   uint64_t audio_clock_underflow_frames;
   uint64_t direct_zero_copy_video_frames;
   uint64_t shared_handle_video_frames;
+  uint64_t hdr_source_frames;
+  uint64_t hdr10_output_frames;
+  uint64_t sdr_tonemap_frames;
+  uint64_t hdr10_metadata_updates;
+  uint64_t hdr10_metadata_failures;
+  uint64_t hdr10_output_failures;
+  bool hdr10_output_active;
 } ErikaPresenterStats;
 
 ErikaHandle *erika_create(void);

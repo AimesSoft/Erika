@@ -446,6 +446,16 @@ impl TargetColorState {
             edr_headroom: headroom,
         }
     }
+
+    pub fn hdr10(primaries: ColorPrimaries) -> Self {
+        Self {
+            primaries,
+            transfer: TransferFunction::Pq,
+            peak_nits: 10_000.0,
+            reference_white_nits: 203.0,
+            edr_headroom: 1.0,
+        }
+    }
 }
 
 impl Default for TargetColorState {
@@ -754,6 +764,19 @@ mod tests {
         assert!(pipeline.graph.contains(RenderPassKind::GamutMap));
         assert!(pipeline.graph.contains(RenderPassKind::ToneMap));
         assert!(pipeline.graph.contains(RenderPassKind::OutputTransform));
+    }
+
+    #[test]
+    fn hdr_pq_to_hdr10_keeps_absolute_pq_without_tone_mapping() {
+        let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq);
+        let target = TargetColorState::hdr10(ColorPrimaries::Bt2020);
+        let pipeline = VideoRenderPipeline::new(source, target);
+
+        assert_eq!(pipeline.target.transfer, TransferFunction::Pq);
+        assert_eq!(pipeline.target.reference_white_nits, 203.0);
+        assert!(!pipeline.requires_tone_mapping());
+        assert!(!pipeline.graph.contains(RenderPassKind::GamutMap));
+        assert!(!pipeline.graph.contains(RenderPassKind::ToneMap));
     }
 
     #[test]

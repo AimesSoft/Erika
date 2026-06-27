@@ -365,6 +365,13 @@ pub struct ErikaPresenterStats {
     pub audio_clock_underflow_frames: u64,
     pub direct_zero_copy_video_frames: u64,
     pub shared_handle_video_frames: u64,
+    pub hdr_source_frames: u64,
+    pub hdr10_output_frames: u64,
+    pub sdr_tonemap_frames: u64,
+    pub hdr10_metadata_updates: u64,
+    pub hdr10_metadata_failures: u64,
+    pub hdr10_output_failures: u64,
+    pub hdr10_output_active: bool,
 }
 
 #[unsafe(no_mangle)]
@@ -2109,6 +2116,13 @@ fn presenter_stats_to_c(snapshot: PresenterRuntimeSnapshot) -> ErikaPresenterSta
         audio_clock_underflow_frames: snapshot.audio_output_underflow_frames,
         direct_zero_copy_video_frames: renderer.direct_zero_copy_video_frames,
         shared_handle_video_frames: renderer.shared_handle_video_frames,
+        hdr_source_frames: renderer.hdr_source_frames,
+        hdr10_output_frames: renderer.hdr10_output_frames,
+        sdr_tonemap_frames: renderer.sdr_tonemap_frames,
+        hdr10_metadata_updates: renderer.hdr10_metadata_updates,
+        hdr10_metadata_failures: renderer.hdr10_metadata_failures,
+        hdr10_output_failures: renderer.hdr10_output_failures,
+        hdr10_output_active: renderer.hdr10_output_active,
     }
 }
 

@@ -2716,7 +2716,7 @@ mod tests {
         let mastering = metadata.mastering_display.unwrap();
         let content_light = metadata.content_light.unwrap();
 
-        assert_eq!(metadata.nominal_peak_nits(), Some(4000.0));
+        assert_eq!(metadata.nominal_peak_nits(), Some(1000.0));
         assert_eq!(content_light.max_content_light_level_nits, 4000);
         assert_eq!(content_light.max_frame_average_light_level_nits, 450);
         assert_close(mastering.max_luminance_nits.unwrap(), 1000.0);

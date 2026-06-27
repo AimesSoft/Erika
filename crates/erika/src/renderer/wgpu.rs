@@ -1597,6 +1597,13 @@ impl RendererBackend for WgpuRenderer {
             direct_zero_copy_video_frames: 0,
             shared_handle_video_frames: 0,
             cpu_video_frame_fallbacks: stats.cpu_video_frame_fallbacks,
+            hdr_source_frames: 0,
+            hdr10_output_frames: 0,
+            sdr_tonemap_frames: 0,
+            hdr10_metadata_updates: 0,
+            hdr10_metadata_failures: 0,
+            hdr10_output_failures: 0,
+            hdr10_output_active: false,
         }
     }
 

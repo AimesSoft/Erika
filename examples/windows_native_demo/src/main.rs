@@ -367,13 +367,16 @@ mod windows_demo {
         let snapshot = presenter.runtime_snapshot();
         let duration = snapshot.media_time.as_secs_f64().max(0.0);
         let title = format!(
-            "Erika Windows Native Demo  t={duration:.2}s  sw={} hw={} zero={} direct={} shared={} cpu={} audio_q={} underflow={}",
+            "Erika Windows Native Demo  t={duration:.2}s  sw={} hw={} zero={} direct={} shared={} cpu={} hdr10={} hdr_src={} sdr_tm={} audio_q={} underflow={}",
             snapshot.renderer.software_video_frames,
             snapshot.renderer.hardware_video_frames,
             snapshot.renderer.zero_copy_video_frames,
             snapshot.renderer.direct_zero_copy_video_frames,
             snapshot.renderer.shared_handle_video_frames,
             snapshot.renderer.cpu_video_frame_fallbacks,
+            u8::from(snapshot.renderer.hdr10_output_active),
+            snapshot.renderer.hdr_source_frames,
+            snapshot.renderer.sdr_tonemap_frames,
             snapshot.audio_output_queued_frames,
             snapshot.audio_output_underflow_frames,
         );
@@ -443,7 +446,7 @@ mod windows_demo {
         let danmaku_plan = timing_summary(&metrics.danmaku_plan_durations);
         let gpu = timing_summary(&metrics.gpu_durations);
         println!(
-            "erika_windows_smoke elapsed={:.3}s ticks={} tick_fps={:.2} decoded={} rendered_video={} rendered_total={} hw={} zero={} direct={} shared={} cpu={} import_failures={} render_failures={} audio_underflow={} danmaku_passes={} danmaku_draw_items={} atlas_uploads={} atlas_reuses={} tick_ms_avg={:.3} tick_ms_p95={:.3} tick_ms_max={:.3} render_ms_avg={:.3} render_ms_p95={:.3} render_ms_max={:.3} pump_ms_avg={:.3} pump_ms_p95={:.3} video_pump_ms_p95={:.3} danmaku_plan_ms_p95={:.3} gpu_ms_p95={:.3}",
+            "erika_windows_smoke elapsed={:.3}s ticks={} tick_fps={:.2} decoded={} rendered_video={} rendered_total={} hw={} zero={} direct={} shared={} cpu={} hdr10_active={} hdr_source={} hdr10_output={} sdr_tonemap={} hdr_meta_updates={} hdr_meta_failures={} hdr_output_failures={} import_failures={} render_failures={} audio_underflow={} danmaku_passes={} danmaku_draw_items={} atlas_uploads={} atlas_reuses={} tick_ms_avg={:.3} tick_ms_p95={:.3} tick_ms_max={:.3} render_ms_avg={:.3} render_ms_p95={:.3} render_ms_max={:.3} pump_ms_avg={:.3} pump_ms_p95={:.3} video_pump_ms_p95={:.3} danmaku_plan_ms_p95={:.3} gpu_ms_p95={:.3}",
             elapsed_seconds,
             metrics.render_ticks,
             metrics.render_ticks as f64 / elapsed_seconds,
@@ -455,6 +458,13 @@ mod windows_demo {
             snapshot.renderer.direct_zero_copy_video_frames,
             snapshot.renderer.shared_handle_video_frames,
             snapshot.renderer.cpu_video_frame_fallbacks,
+            u8::from(snapshot.renderer.hdr10_output_active),
+            snapshot.renderer.hdr_source_frames,
+            snapshot.renderer.hdr10_output_frames,
+            snapshot.renderer.sdr_tonemap_frames,
+            snapshot.renderer.hdr10_metadata_updates,
+            snapshot.renderer.hdr10_metadata_failures,
+            snapshot.renderer.hdr10_output_failures,
             snapshot.stats.import_failures,
             snapshot.stats.render_failures,
             snapshot.audio_output_underflow_frames,
@@ -486,7 +496,7 @@ mod windows_demo {
         let render = timing_summary(&metrics.render_durations);
         let elapsed_seconds = elapsed.as_secs_f64().max(0.001);
         format!(
-            "{{\"elapsed_s\":{elapsed:.3},\"ticks\":{ticks},\"tick_fps\":{tick_fps:.3},\"decoded\":{decoded},\"rendered_video\":{rendered_video},\"rendered_total\":{rendered_total},\"hw\":{hw},\"zero\":{zero},\"direct\":{direct},\"shared\":{shared},\"cpu\":{cpu},\"import_failures\":{import_failures},\"render_failures\":{render_failures},\"audio_underflow\":{audio_underflow},\"danmaku_passes\":{danmaku_passes},\"danmaku_draw_items\":{danmaku_draw_items},\"atlas_uploads\":{atlas_uploads},\"atlas_reuses\":{atlas_reuses},\"tick_ms_avg\":{tick_avg:.3},\"tick_ms_p95\":{tick_p95:.3},\"render_ms_avg\":{render_avg:.3},\"render_ms_p95\":{render_p95:.3}}}",
+            "{{\"elapsed_s\":{elapsed:.3},\"ticks\":{ticks},\"tick_fps\":{tick_fps:.3},\"decoded\":{decoded},\"rendered_video\":{rendered_video},\"rendered_total\":{rendered_total},\"hw\":{hw},\"zero\":{zero},\"direct\":{direct},\"shared\":{shared},\"cpu\":{cpu},\"hdr10_active\":{hdr10_active},\"hdr_source\":{hdr_source},\"hdr10_output\":{hdr10_output},\"sdr_tonemap\":{sdr_tonemap},\"hdr_meta_updates\":{hdr_meta_updates},\"hdr_meta_failures\":{hdr_meta_failures},\"hdr_output_failures\":{hdr_output_failures},\"import_failures\":{import_failures},\"render_failures\":{render_failures},\"audio_underflow\":{audio_underflow},\"danmaku_passes\":{danmaku_passes},\"danmaku_draw_items\":{danmaku_draw_items},\"atlas_uploads\":{atlas_uploads},\"atlas_reuses\":{atlas_reuses},\"tick_ms_avg\":{tick_avg:.3},\"tick_ms_p95\":{tick_p95:.3},\"render_ms_avg\":{render_avg:.3},\"render_ms_p95\":{render_p95:.3}}}",
             elapsed = elapsed_seconds,
             ticks = metrics.render_ticks,
             tick_fps = metrics.render_ticks as f64 / elapsed_seconds,
@@ -498,6 +508,13 @@ mod windows_demo {
             direct = snapshot.renderer.direct_zero_copy_video_frames,
             shared = snapshot.renderer.shared_handle_video_frames,
             cpu = snapshot.renderer.cpu_video_frame_fallbacks,
+            hdr10_active = u8::from(snapshot.renderer.hdr10_output_active),
+            hdr_source = snapshot.renderer.hdr_source_frames,
+            hdr10_output = snapshot.renderer.hdr10_output_frames,
+            sdr_tonemap = snapshot.renderer.sdr_tonemap_frames,
+            hdr_meta_updates = snapshot.renderer.hdr10_metadata_updates,
+            hdr_meta_failures = snapshot.renderer.hdr10_metadata_failures,
+            hdr_output_failures = snapshot.renderer.hdr10_output_failures,
             import_failures = snapshot.stats.import_failures,
             render_failures = snapshot.stats.render_failures,
             audio_underflow = snapshot.audio_output_underflow_frames,
