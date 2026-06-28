@@ -257,6 +257,15 @@ UINT FrameTimerIntervalMs() {
   }
 }
 
+bool FrameTraceEnabled() {
+  const auto value = EnvironmentPath(L"ERIKA_FLUTTER_FRAME_TRACE");
+  if (!value) {
+    return false;
+  }
+  const auto text = value->wstring();
+  return text != L"0" && text != L"false" && text != L"FALSE";
+}
+
 std::string StatusName(ErikaStatus status) {
   switch (status) {
     case ErikaStatus_Ok:
@@ -1485,12 +1494,14 @@ void ErikaFlutterPlugin::StartFrameTimer() {
     return;
   }
   frame_timer_id_ = reinterpret_cast<UINT_PTR>(this);
-  if (!SetTimer(hwnd, frame_timer_id_, FrameTimerIntervalMs(),
+  const UINT interval_ms = FrameTimerIntervalMs();
+  if (!SetTimer(hwnd, frame_timer_id_, interval_ms,
                 &ErikaFlutterPlugin::FrameTimerProc)) {
     DebugLog("SetTimer failed: " + LastErrorMessage());
     frame_timer_id_ = 0;
     return;
   }
+  DebugLog("frame timer started interval_ms=" + std::to_string(interval_ms));
 }
 
 void ErikaFlutterPlugin::StopFrameTimer() {
@@ -1508,8 +1519,26 @@ void ErikaFlutterPlugin::OnFrameTimer() {
     return;
   }
   in_frame_timer_ = true;
+  static bool trace_enabled = FrameTraceEnabled();
+  static auto last_tick = std::chrono::steady_clock::now();
+  static uint64_t tick_count = 0;
+  const auto tick_started = std::chrono::steady_clock::now();
   for (auto& entry : players_) {
     entry.second->RenderTick(event_sink_.get());
+  }
+  if (trace_enabled) {
+    tick_count += 1;
+    const auto elapsed = std::chrono::duration<double, std::milli>(
+        tick_started - last_tick);
+    const auto work = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - tick_started);
+    if (tick_count % 60 == 0 || elapsed.count() > 24.0 || work.count() > 8.0) {
+      DebugLog("frame_tick count=" + std::to_string(tick_count) +
+               " delta_ms=" + std::to_string(elapsed.count()) +
+               " work_ms=" + std::to_string(work.count()) +
+               " players=" + std::to_string(players_.size()));
+    }
+    last_tick = tick_started;
   }
   in_frame_timer_ = false;
 }
