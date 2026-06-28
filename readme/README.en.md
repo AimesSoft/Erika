@@ -15,18 +15,19 @@ The host application provides a rendering surface and sends playback commands �
 
 ## Features
 
-- **Hardware-accelerated decoding** -- VideoToolbox (macOS/iOS), extensible to other platform backends
-- **Zero-copy rendering** -- CVPixelBuffer to MTLTexture passthrough, video frames never round-trip through CPU memory
-- **HDR/EDR output** -- native Apple EDR support, PQ (BT.2020) metadata preservation and tone mapping
-- **Native Metal renderer** -- YCbCr sampling, color space conversion, tone mapping, subtitle/danmaku compositing in a single render pass
+- **Hardware-accelerated decoding** -- VideoToolbox (macOS/iOS), D3D11VA (Windows), extensible to other platform backends
+- **Zero-copy rendering** -- CVPixelBuffer to MTLTexture (Apple) / D3D11VA texture interop (Windows), video frames never round-trip through CPU memory
+- **HDR/EDR output** -- native Apple EDR support, Windows HDR10 swapchain, PQ (BT.2020) metadata preservation and tone mapping
+- **Native Metal renderer** -- YCbCr sampling, color space conversion, tone mapping, subtitle/danmaku compositing in a single render pass (macOS/iOS)
+- **Native Direct3D 11 renderer** -- Windows: D3D11VA zero-copy texture interop, YCbCr sampling, HDR10 output, subtitle/danmaku overlay compositing
 - **Neural upscaling** -- ArtCNN anime luma 2x super-resolution, Metal compute kernels, simdgroup-matrix and scalar backends, luma-plane-only and zero-copy into the render pipeline
-- **Audio output** -- CoreAudio (macOS) / AudioQueue (iOS), f32 PCM ring buffer, audio clock synchronization
+- **Audio output** -- CoreAudio (macOS) / AudioQueue (iOS) / WASAPI (Windows), f32 PCM ring buffer, audio clock synchronization
 - **Subtitles** -- SRT / WebVTT / ASS parsing, libass rendering (statically linked), embedded and external subtitle tracks
 - **Danmaku** -- Bilibili XML / JSON parsing, DFM+ collision-aware lane layout engine, glyph atlas native GPU rendering
 - **Playback engine** -- play / pause / stop / seek / rate control, audio-master clock discipline, vsync-quantized frame scheduling
-- **C ABI** -- 63 exported functions, opaque handle design, callable from C / C++ / Swift / Dart FFI / any FFI-capable language
-- **Flutter plugin** -- macOS + iOS native view embedding, HDR native layer path support
-- **wgpu backend** -- cross-platform rendering foundation in place (Windows / Linux / Android direction)
+- **C ABI** -- 69 exported functions, opaque handle design, callable from C / C++ / Swift / Dart FFI / any FFI-capable language
+- **Flutter plugin** -- macOS + iOS + Windows native view embedding, HDR native layer path support
+- **wgpu backend** -- cross-platform rendering foundation in place (Linux / Android direction)
 
 ## Quick Start
 
@@ -86,7 +87,7 @@ Header: [`crates/erika_capi/include/erika.h`](crates/erika_capi/include/erika.h)
 |----------|--------|--------|-------|--------|
 | macOS 14+ | VideoToolbox | Metal | CoreAudio | **Available** |
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | **Available** |
-| Windows | -- | wgpu (planned) | -- | Planned |
+| Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | **Available** |
 | Linux | -- | wgpu (planned) | -- | Planned |
 | Android | -- | wgpu (planned) | -- | Planned |
 
@@ -96,11 +97,20 @@ Header: [`crates/erika_capi/include/erika.h`](crates/erika_capi/include/erika.h)
 crates/erika              Core playback library
 crates/erika_capi         C ABI export layer
 crates/erika_ffmpeg_sys   Low-level FFmpeg bindings
-packages/erika_flutter    Flutter plugin (macOS + iOS)
+packages/erika_flutter    Flutter plugin (macOS + iOS + Windows)
 examples/                 Validation and demo programs
 xtask/                    Native dependency build orchestration
 docs/                     Architecture and embedding documentation
 ```
+
+## Documentation
+
+- [Architecture](../docs/architecture.md) — engine design, render backends, platform support
+- [C ABI Reference](../docs/capi_reference.md) — every export, status codes, ownership & threading
+- [Integration Guide](../docs/integration.md) — embedding in C/C++/Win32/Swift and other non-Flutter hosts
+- [Build Guide](../docs/building.md) — xtask, native deps, cross-compilation
+- [Flutter Embedding](../docs/flutter_embedding.md) · [Danmaku Architecture](../docs/danmaku_architecture.en.md)
+- [Contributing / Developer Guide](../CONTRIBUTING.md) — repo layout, threading model, adding a platform backend
 
 ## Building
 
@@ -108,6 +118,7 @@ docs/                     Architecture and embedding documentation
 
 - Rust 1.92+
 - Xcode Command Line Tools (macOS/iOS)
+- MSVC toolchain + Windows SDK (Windows, target `x86_64-pc-windows-msvc`)
 - CMake, pkg-config
 
 ### Build Native Dependencies
@@ -133,9 +144,13 @@ cargo test --workspace
 ### Verify Playback Path
 
 ```sh
+# macOS
 export SAMPLE="/path/to/video.mp4"
 cargo run -p macos_native_demo -- "$SAMPLE"
 cargo run -p macos_native_demo -- --smoke-seconds 3 "$SAMPLE"
+
+# Windows
+cargo run -p windows_native_demo -- "%SAMPLE%"
 ```
 
 ## License

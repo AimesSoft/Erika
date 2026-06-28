@@ -79,7 +79,7 @@ HDR/EDR の推奨 path ではありません。video が Flutter compositor に�
 
 ## wgpu Fallback
 
-Apple HDR path は引き続き native Metal です。`wgpu` は Windows、Linux、Android、および非 HDR path に向けた cross-platform fallback です。wgpu renderer は video frame rendering と danmaku compositing を実装済みですが、VideoToolbox zero-copy import や HDR/EDR output はまだ未対応です。
+Apple HDR path は引き続き native Metal で、Windows は native Direct3D 11 renderer（D3D11VA zero-copy decode、HDR10 output）を使います。`wgpu` は Linux、Android、および非 HDR path に向けた cross-platform fallback です。wgpu renderer は video frame rendering と danmaku compositing を実装済みですが、ハードウェア zero-copy import や HDR/EDR output はまだ未対応です。
 
 ## Dart API
 

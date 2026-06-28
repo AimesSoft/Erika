@@ -103,10 +103,11 @@ C ABI reserves `erika_attach_flutter_texture` for this path.
 
 ## wgpu Fallback
 
-The Apple HDR path remains native Metal. `wgpu` is the cross-platform fallback
-direction for Windows, Linux, Android, and non-HDR paths. The wgpu renderer has
+The Apple HDR path remains native Metal, and Windows uses a native Direct3D 11
+renderer (D3D11VA zero-copy decode, HDR10 output). `wgpu` is the cross-platform
+fallback direction for Linux, Android, and non-HDR paths. The wgpu renderer has
 video frame rendering and danmaku compositing implemented, but does not yet
-support VideoToolbox zero-copy import or HDR/EDR output.
+support hardware zero-copy import or HDR/EDR output.
 
 ## Dart API
 

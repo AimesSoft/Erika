@@ -15,18 +15,19 @@
 
 ## 特性
 
-- **硬件加速解码** — VideoToolbox (macOS/iOS)，可扩展至其他平台后端
+- **硬件加速解码** — VideoToolbox (macOS/iOS)、D3D11VA (Windows)，可扩展至其他平台后端
 - **零拷贝渲染** — CVPixelBuffer → MTLTexture 直通，视频帧不经过 CPU 内存
 - **HDR/EDR 输出** — Apple EDR 原生支持，PQ (BT.2020) 元数据保留与 tone mapping
-- **原生 Metal 渲染器** — YCbCr 采样、色彩空间转换、tone mapping、字幕/弹幕合成，一次 render pass 完成
+- **原生 Metal 渲染器** — YCbCr 采样、色彩空间转换、tone mapping、字幕/弹幕合成，一次 render pass 完成 (macOS/iOS)
+- **原生 Direct3D 11 渲染器** — Windows: D3D11VA 零拷贝纹理互操作、YCbCr 采样、HDR10 输出、字幕/弹幕 overlay 合成
 - **AI 超分** — ArtCNN 动漫亮度 2x 神经超分，Metal compute 算子，simdgroup_matrix / 标量双后端，仅处理 Y 平面、零拷贝接入渲染管线
-- **音频输出** — CoreAudio (macOS) / AudioQueue (iOS)，f32 PCM ring buffer，音频时钟同步
+- **音频输出** — CoreAudio (macOS) / AudioQueue (iOS) / WASAPI (Windows)，f32 PCM ring buffer，音频时钟同步
 - **字幕** — SRT / WebVTT / ASS 解析，libass 渲染 (静态链接)，嵌入与外挂字幕轨
 - **弹幕** — Bilibili XML / JSON 解析，DFM+ 碰撞避让布局引擎，glyph atlas 原生 GPU 渲染
 - **播放引擎** — play / pause / stop / seek / 倍速，音频主时钟同步，vsync 量化调度
-- **C ABI** — 63 个导出函数，opaque handle 设计，可从 C / C++ / Swift / Dart FFI / 任何 FFI 语言调用
-- **Flutter 插件** — macOS + iOS 原生视图嵌入，支持 HDR native layer 路径
-- **wgpu 后端** — 跨平台渲染基础就绪 (Windows / Linux / Android 方向)
+- **C ABI** — 69 个导出函数，opaque handle 设计，可从 C / C++ / Swift / Dart FFI / 任何 FFI 语言调用
+- **Flutter 插件** — macOS + iOS + Windows 原生视图嵌入，支持 HDR native layer 路径
+- **wgpu 后端** — 跨平台渲染基础就绪 (Linux / Android 方向)
 
 ## 快速开始
 
@@ -86,7 +87,7 @@ Erika 提供两组 C ABI 入口，适配不同嵌入场景：
 |------|------|------|------|------|
 | macOS 14+ | VideoToolbox | Metal | CoreAudio | **可用** |
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | **可用** |
-| Windows | — | wgpu (planned) | — | 规划中 |
+| Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | **可用** |
 | Linux | — | wgpu (planned) | — | 规划中 |
 | Android | — | wgpu (planned) | — | 规划中 |
 
@@ -96,11 +97,20 @@ Erika 提供两组 C ABI 入口，适配不同嵌入场景：
 crates/erika              核心播放库
 crates/erika_capi         C ABI 导出层
 crates/erika_ffmpeg_sys   FFmpeg 底层 bindings
-packages/erika_flutter    Flutter 插件 (macOS + iOS)
+packages/erika_flutter    Flutter 插件 (macOS + iOS + Windows)
 examples/                 验证与演示程序
 xtask/                    原生依赖构建编排
 docs/                     架构与嵌入文档
 ```
+
+## 文档
+
+- [架构总览](docs/architecture.zh.md) — 引擎设计、渲染后端、平台支持
+- [C ABI 参考手册](docs/capi_reference.zh.md) — 全部导出函数、状态码、所有权与线程约定
+- [原生接入指南](docs/integration.zh.md) — C/C++/Win32/Swift 等非 Flutter 宿主的端到端嵌入
+- [构建与依赖指南](docs/building.zh.md) — xtask、native 依赖、交叉编译
+- [Flutter 嵌入](docs/flutter_embedding.zh.md) ・ [弹幕架构](docs/danmaku_architecture.md)
+- [贡献 / 开发者指南](CONTRIBUTING.zh.md) — 仓库布局、线程模型、新增平台后端
 
 ## 构建
 
@@ -108,6 +118,7 @@ docs/                     架构与嵌入文档
 
 - Rust 1.92+
 - Xcode Command Line Tools (macOS/iOS)
+- MSVC 工具链 + Windows SDK (Windows，target `x86_64-pc-windows-msvc`)
 - CMake, pkg-config
 
 ### 构建原生依赖
@@ -133,9 +144,13 @@ cargo test --workspace
 ### 验证播放路径
 
 ```sh
+# macOS
 export SAMPLE="/path/to/video.mp4"
 cargo run -p macos_native_demo -- "$SAMPLE"
 cargo run -p macos_native_demo -- --smoke-seconds 3 "$SAMPLE"
+
+# Windows
+cargo run -p windows_native_demo -- "%SAMPLE%"
 ```
 
 ## 许可证

@@ -15,18 +15,19 @@
 
 ## 機能
 
-- **ハードウェアアクセラレーション** -- VideoToolbox (macOS/iOS)、他プラットフォームバックエンドへ拡張可能
-- **ゼロコピーレンダリング** -- CVPixelBuffer から MTLTexture への直接パススルー、CPU メモリを経由しない
-- **HDR/EDR 出力** -- Apple EDR ネイティブサポート、PQ (BT.2020) メタデータ保持とトーンマッピング
-- **Metal ネイティブレンダラー** -- YCbCr サンプリング、色空間変換、トーンマッピング、字幕/弾幕合成を単一レンダーパスで実行
+- **ハードウェアアクセラレーション** -- VideoToolbox (macOS/iOS)、D3D11VA (Windows)、他プラットフォームバックエンドへ拡張可能
+- **ゼロコピーレンダリング** -- CVPixelBuffer から MTLTexture (Apple) / D3D11VA テクスチャ相互運用 (Windows)、CPU メモリを経由しない
+- **HDR/EDR 出力** -- Apple EDR ネイティブサポート、Windows HDR10 スワップチェーン、PQ (BT.2020) メタデータ保持とトーンマッピング
+- **Metal ネイティブレンダラー** -- YCbCr サンプリング、色空間変換、トーンマッピング、字幕/弾幕合成を単一レンダーパスで実行 (macOS/iOS)
+- **Direct3D 11 ネイティブレンダラー** -- Windows: D3D11VA ゼロコピーテクスチャ相互運用、YCbCr サンプリング、HDR10 出力、字幕/弾幕 overlay 合成
 - **ニューラル超解像** -- ArtCNN によるアニメ輝度 2x 超解像、Metal compute カーネル、simdgroup_matrix / スカラーの二重バックエンド、輝度プレーンのみゼロコピーでレンダーパイプラインに統合
-- **音声出力** -- CoreAudio (macOS) / AudioQueue (iOS)、f32 PCM リングバッファ、音声クロック同期
+- **音声出力** -- CoreAudio (macOS) / AudioQueue (iOS) / WASAPI (Windows)、f32 PCM リングバッファ、音声クロック同期
 - **字幕** -- SRT / WebVTT / ASS パーサー、libass レンダリング（静的リンク）、埋め込みおよび外部字幕トラック
 - **弾幕** -- Bilibili XML / JSON パーサー、DFM+ 衝突回避レーン配置エンジン、グリフアトラスによるネイティブ GPU レンダリング
 - **再生エンジン** -- play / pause / stop / seek / 再生速度制御、音声マスタークロック同期、vsync 量子化フレームスケジューリング
-- **C ABI** -- 63 のエクスポート関数、不透明ハンドル設計、C / C++ / Swift / Dart FFI / 任意の FFI 対応言語から呼び出し可能
-- **Flutter プラグイン** -- macOS + iOS ネイティブビュー組み込み、HDR ネイティブレイヤーパスサポート
-- **wgpu バックエンド** -- クロスプラットフォームレンダリング基盤構築済み (Windows / Linux / Android 方向)
+- **C ABI** -- 69 のエクスポート関数、不透明ハンドル設計、C / C++ / Swift / Dart FFI / 任意の FFI 対応言語から呼び出し可能
+- **Flutter プラグイン** -- macOS + iOS + Windows ネイティブビュー組み込み、HDR ネイティブレイヤーパスサポート
+- **wgpu バックエンド** -- クロスプラットフォームレンダリング基盤構築済み (Linux / Android 方向)
 
 ## クイックスタート
 
@@ -86,7 +87,7 @@ ErikaVideoView(player: player)
 |----------------|---------|-------------|------|------|
 | macOS 14+ | VideoToolbox | Metal | CoreAudio | **利用可能** |
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | **利用可能** |
-| Windows | -- | wgpu (計画中) | -- | 計画中 |
+| Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | **利用可能** |
 | Linux | -- | wgpu (計画中) | -- | 計画中 |
 | Android | -- | wgpu (計画中) | -- | 計画中 |
 
@@ -96,11 +97,20 @@ ErikaVideoView(player: player)
 crates/erika              コア再生ライブラリ
 crates/erika_capi         C ABI エクスポート層
 crates/erika_ffmpeg_sys   FFmpeg 低レベルバインディング
-packages/erika_flutter    Flutter プラグイン (macOS + iOS)
+packages/erika_flutter    Flutter プラグイン (macOS + iOS + Windows)
 examples/                 検証・デモプログラム
 xtask/                    ネイティブ依存関係ビルドオーケストレーション
 docs/                     アーキテクチャと組み込みドキュメント
 ```
+
+## ドキュメント
+
+- [アーキテクチャ](../docs/architecture.ja.md) — エンジン設計、レンダーバックエンド、プラットフォーム対応
+- [C ABI リファレンス](../docs/capi_reference.ja.md) — 全エクスポート関数、ステータスコード、所有権とスレッド規約
+- [組み込みガイド](../docs/integration.ja.md) — C/C++/Win32/Swift など非 Flutter ホストへの組み込み
+- [ビルドガイド](../docs/building.ja.md) — xtask、native 依存、クロスコンパイル
+- [Flutter 組み込み](../docs/flutter_embedding.ja.md) ・ [弾幕アーキテクチャ](../docs/danmaku_architecture.ja.md)
+- [コントリビュート / 開発者ガイド](../CONTRIBUTING.ja.md) — リポジトリ構成、スレッドモデル、プラットフォームバックエンドの追加
 
 ## ビルド
 
@@ -108,6 +118,7 @@ docs/                     アーキテクチャと組み込みドキュメント
 
 - Rust 1.92+
 - Xcode Command Line Tools (macOS/iOS)
+- MSVC ツールチェーン + Windows SDK (Windows、ターゲット `x86_64-pc-windows-msvc`)
 - CMake, pkg-config
 
 ### ネイティブ依存関係のビルド
@@ -133,9 +144,13 @@ cargo test --workspace
 ### 再生パスの検証
 
 ```sh
+# macOS
 export SAMPLE="/path/to/video.mp4"
 cargo run -p macos_native_demo -- "$SAMPLE"
 cargo run -p macos_native_demo -- --smoke-seconds 3 "$SAMPLE"
+
+# Windows
+cargo run -p windows_native_demo -- "%SAMPLE%"
 ```
 
 ## ライセンス

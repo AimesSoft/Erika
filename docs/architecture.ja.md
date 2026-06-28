@@ -11,15 +11,16 @@ Rust Player Core
   source abstraction ─── file + HTTP range
   FFmpeg wrappers ────── custom AVIO, probe, demux, decode, seek, audio resample
   playback engine ────── video/audio tick, clock, frame scheduler
-  video decode ───────── VideoToolbox (macOS/iOS), software fallback
-  audio output ───────── CoreAudio (macOS), AudioQueue (iOS), ring buffer
+  video decode ───────── VideoToolbox (macOS/iOS), D3D11VA (Windows), software fallback
+  audio output ───────── CoreAudio (macOS), AudioQueue (iOS), WASAPI (Windows), ring buffer
   overlay timeline ───── subtitle + danmaku composition
   renderer core ──────── color state, render graph, tone map, scaler policy
   Metal renderer ─────── zero-copy NV12/P010, HDR/EDR, subtitle/danmaku pass
+  D3D11 renderer ─────── zero-copy D3D11VA, HDR10, subtitle/danmaku pass (Windows)
   wgpu renderer ──────── cross-platform video + danmaku rendering
   presenter runtime ──── ties player + renderer + audio + overlays
-  C ABI ──────────────── 63 exported functions, two handle families
-  Flutter plugin ─────── macOS + iOS native view embedding
+  C ABI ──────────────── 69 exported functions, two handle families
+  Flutter plugin ─────── macOS + iOS + Windows native view embedding
 ```
 
 ## ネイティブ依存関係
@@ -98,6 +99,16 @@ Apple platform の主 renderer です。
 - Danmaku: atlas からの instanced glyph quad drawing（shadow → outline → fill）。
 - Presentation layout は source aspect ratio を保ちます。
 
+### Direct3D 11 Renderer（Windows）
+
+Windows のネイティブ renderer（`renderer/d3d11.rs`）：
+
+- ゼロコピー D3D11VA デコードテクスチャ相互運用：デコードされた `ID3D11Texture2D` surface を render device に共有し、CPU を経由しません。
+- YCbCr サンプリングと色空間変換（HLSL shader）、Metal と同じ pipeline model。
+- HDR10 出力：`R10G10B10A2_UNORM` swapchain + `DXGI_HDR_METADATA_HDR10`、SDR（`BGRA8`）fallback あり。
+- 字幕 overlay の alpha-atlas upload と blending、atlas からの instanced danmaku glyph quad 描画。
+- `render_tick` で駆動される window-hosted swapchain。
+
 ### wgpu Renderer（cross-platform）
 
 移植性向けの第二 backend です。
@@ -108,7 +119,7 @@ Apple platform の主 renderer です。
 - Danmaku glyph atlas rendering。
 - headless testing 用 offscreen render target。
 - surface handle model は macOS NSView、iOS UIView、Windows HWND、X11/Wayland、Android native window をカバーします。
-- VideoToolbox zero-copy import と HDR/EDR output は未実装です。
+- ハードウェアゼロコピー import（VideoToolbox / D3D11VA）と HDR/EDR output は未実装で、Linux と Android 向けの計画パスです。
 
 ### Render Pipeline
 
@@ -128,7 +139,7 @@ Apple platform の主 renderer です。
 
 ## C ABI
 
-`erika_capi` は 2 つの handle family で 63 関数を export します。
+`erika_capi` は 2 つの handle family で 69 関数を export します。
 
 - **`ErikaHandle`**: player control と event polling。rendering は host 管理です。
 - **`ErikaPresenterHandle`**: Erika が full stack を所有します。host は surface を渡して `render_tick` を呼びます。
@@ -139,11 +150,12 @@ Header: `crates/erika_capi/include/erika.h`
 
 ## Flutter Plugin
 
-`packages/erika_flutter` は macOS / iOS の Flutter embedding を提供します。
+`packages/erika_flutter` は macOS / iOS / Windows の Flutter embedding を提供します。
 
-- **Dart**: `ErikaPlayer`（commands + events）、`ErikaWindowOverlayVideoView`（推奨の window-hosted native Metal surface）、`ErikaVideoView`（compatibility platform view）。
+- **Dart**: `ErikaPlayer`（commands + events）、`ErikaWindowOverlayVideoView`（推奨の window-hosted native surface——Apple では Metal、Windows では D3D11 swapchain）、`ErikaVideoView`（compatibility platform view）。
 - **macOS Swift plugin**: `liberika_capi.dylib` を読み込み、`NSWindow` overlay または `NSView`/`CAMetalLayer` platform view surface を作成し、display link から `render_tick` を駆動します。
 - **iOS Swift plugin**: `liberika_capi.a` を static link し、`UIWindow` overlay または `UIView`/`CAMetalLayer` platform view surface を作成し、同じ presenter model を使います。
+- **Windows C++ plugin**（`ErikaFlutterPluginCApi`）: CMake（`build_erika_runtime.cmake`、cargo target `x86_64-pc-windows-msvc`）で `erika_capi.dll` をビルド・リンクし、window-level D3D11 swapchain を host し、frame scheduler から `render_tick` を駆動します。
 
 embedding model と HDR strategy は `docs/flutter_embedding.md` を参照してください。
 
@@ -153,7 +165,7 @@ embedding model と HDR strategy は `docs/flutter_embedding.md` を参照して
 |----------|--------|--------|-------|--------|
 | macOS 14+ | VideoToolbox | Metal | CoreAudio | Available |
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | Available |
-| Windows | — | wgpu (planned) | — | Planned |
+| Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
 | Android | — | wgpu (planned) | — | Planned |
 

@@ -1,6 +1,38 @@
 #ifndef ERIKA_H
 #define ERIKA_H
 
+/*
+ * Erika media playback engine — C ABI.
+ *
+ * Full reference: docs/capi_reference.md. Embedding walkthrough:
+ * docs/integration.md.
+ *
+ * Two independent entry points; pick one per integration:
+ *   - ErikaHandle:          pull model. The host renders and pulls state.
+ *   - ErikaPresenterHandle: push model. Erika owns decode/timing/audio/render;
+ *                           the host gives it a surface and calls render_tick.
+ *                           Compiled on macOS / iOS / Windows only; on other
+ *                           targets erika_presenter_create returns NULL.
+ *
+ * Conventions:
+ *   - Every fallible call returns ErikaStatus; Ok (0) and NoEvent are the only
+ *     non-error results. Panics are caught and surface as ErikaStatus_Panic.
+ *   - On a non-Ok/NoEvent result a human-readable message is stored in a
+ *     THREAD-LOCAL slot; read it on the same thread via
+ *     erika_last_error_message() and free with erika_string_free().
+ *   - Any char* Erika returns is caller-owned: free standalone strings with
+ *     erika_string_free(); free strings inside ErikaTrackInfo /
+ *     ErikaDanmakuTrackInfo with the matching *_info_free() function.
+ *   - const char* arguments are borrowed for the call only and must be
+ *     NUL-terminated UTF-8.
+ *   - List getters use the counted-array idiom: pass (buf, capacity, &len);
+ *     len is set to the total count, at most capacity records are written, and
+ *     capacity 0 with a NULL buffer queries the count.
+ *   - attach_*/resize take width/height in physical pixels and a DPI scale.
+ *   - A handle is not internally synchronized: do not call into one handle
+ *     concurrently from multiple threads.
+ */
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -8,6 +40,7 @@
 extern "C" {
 #endif
 
+/* Opaque handles. ErikaHandle = pull model, ErikaPresenterHandle = push model. */
 typedef struct ErikaHandle ErikaHandle;
 typedef struct ErikaPresenterHandle ErikaPresenterHandle;
 
@@ -223,17 +256,25 @@ typedef struct ErikaPresenterStats {
   bool hdr10_output_active;
 } ErikaPresenterStats;
 
+/* ===== ErikaHandle (pull model) ===== */
+
+/* Lifecycle and thread-local error retrieval. erika_create never fails. */
 ErikaHandle *erika_create(void);
 void erika_destroy(ErikaHandle *handle);
 char *erika_last_error_message(void);
 void erika_string_free(char *value);
 
+/* Playback control. uri is a local path or HTTP(S) URL; times are microseconds.
+ * open() is asynchronous — watch StateChanged/DurationChanged events. */
 ErikaStatus erika_open(ErikaHandle *handle, const char *uri);
 ErikaStatus erika_play(ErikaHandle *handle);
 ErikaStatus erika_pause(ErikaHandle *handle);
 ErikaStatus erika_stop(ErikaHandle *handle);
 ErikaStatus erika_close(ErikaHandle *handle);
 ErikaStatus erika_seek(ErikaHandle *handle, uint64_t position_micros);
+/* Tracks and subtitles. Subtitle track id -1 disables subtitles.
+ * erika_tracks uses the counted-array idiom; free each filled record with
+ * erika_track_info_free. */
 ErikaStatus erika_add_external_subtitle(
     ErikaHandle *handle,
     const char *uri,
@@ -251,9 +292,12 @@ ErikaStatus erika_tracks(
     uintptr_t *out_len);
 void erika_track_info_free(ErikaTrackInfo *track);
 void erika_danmaku_track_info_free(ErikaDanmakuTrackInfo *track);
+/* State and non-blocking event polling (returns NoEvent when the queue is empty). */
 ErikaStatus erika_state(ErikaHandle *handle, ErikaState *out_state);
 ErikaStatus erika_poll_event(ErikaHandle *handle, ErikaEvent *out_event);
 
+/* Host-managed surface attach. raw_layer is a CAMetalLayer* cast to uint64_t;
+ * for wgpu, raw_window/raw_display are platform handles for the given kind. */
 ErikaStatus erika_attach_metal_layer(
     ErikaHandle *handle,
     uint64_t raw_layer,
@@ -280,6 +324,10 @@ ErikaStatus erika_attach_flutter_texture(
 
 ErikaStatus erika_detach_surface(ErikaHandle *handle);
 
+/* ===== ErikaPresenterHandle (push model) — macOS / iOS / Windows only ===== */
+
+/* Lifecycle and configuration. A NULL return means creation failed; check
+ * erika_last_error_message. Config selects output mode, EDR headroom, upscaler. */
 ErikaPresenterHandle *erika_presenter_create(void);
 ErikaPresenterHandle *erika_presenter_create_with_config(ErikaPresenterConfig config);
 ErikaPresenterHandle *erika_presenter_create_with_output_mode(
@@ -287,6 +335,9 @@ ErikaPresenterHandle *erika_presenter_create_with_output_mode(
     float edr_headroom);
 void erika_presenter_destroy(ErikaPresenterHandle *handle);
 
+/* Playback and runtime parameters. volume is 0.0–1.0; rate 1.0 is normal speed;
+ * set_upscaler takes an ErikaLumaUpscalerMode and is a no-op fallback where the
+ * Metal compute path is unavailable. */
 ErikaStatus erika_presenter_open(ErikaPresenterHandle *handle, const char *uri);
 ErikaStatus erika_presenter_play(ErikaPresenterHandle *handle);
 ErikaStatus erika_presenter_pause(ErikaPresenterHandle *handle);
@@ -313,6 +364,10 @@ ErikaStatus erika_presenter_select_audio_track(
 ErikaStatus erika_presenter_select_subtitle_track(
     ErikaPresenterHandle *handle,
     int64_t track_id);
+/* Danmaku (bullet comments). load_* replaces danmaku with one anonymous track;
+ * add_*_track builds a named multi-track list. Input is Bilibili XML (*_file,
+ * by path/URL) or JSON (*_json, inline). offset_micros shifts one track's
+ * timeline; the global offset shifts all. See docs/danmaku_architecture.md. */
 ErikaStatus erika_presenter_load_danmaku_file(
     ErikaPresenterHandle *handle,
     const char *uri);
@@ -379,6 +434,11 @@ ErikaStatus erika_presenter_tracks(
     uintptr_t capacity,
     uintptr_t *out_len);
 
+/* Surface and presentation. attach_metal_layer for macOS/iOS (CAMetalLayer*),
+ * attach_windows_hwnd for Windows (wraps attach_wgpu_surface with WindowsHwnd:
+ * hwnd = HWND, hinstance = HINSTANCE). The renderer backend (native Metal,
+ * native D3D11, or wgpu) is chosen by presenter config, not the attach call.
+ * Call resize_surface on any drawable-size or scale change. */
 ErikaStatus erika_presenter_attach_metal_layer(
     ErikaPresenterHandle *handle,
     uint64_t raw_layer,
@@ -410,11 +470,26 @@ ErikaStatus erika_presenter_resize_surface(
     double scale);
 
 ErikaStatus erika_presenter_detach_surface(ErikaPresenterHandle *handle);
+
+/* Render loop and events. Call render_tick once per display frame from the
+ * surface's display timer; time_seconds is the host display clock (presentation
+ * timestamp) for the frame, used for vsync-quantized scheduling. out_stats may
+ * be NULL. poll_event is non-blocking (NoEvent when idle). */
 ErikaStatus erika_presenter_render_tick(
     ErikaPresenterHandle *handle,
     double time_seconds,
     ErikaPresenterStats *out_stats);
 ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *handle, ErikaEvent *out_event);
+
+/* Screenshot: render the current composited frame (video + subtitle + danmaku)
+ * off-screen into a caller-allocated RGBA8 buffer at the requested size.
+ * out_capacity must be >= width*height*4. Fails if no frame is available yet. */
+ErikaStatus erika_presenter_capture_frame_rgba(
+    ErikaPresenterHandle *handle,
+    uint32_t width,
+    uint32_t height,
+    uint8_t *out_rgba,
+    uintptr_t out_capacity);
 
 #ifdef __cplusplus
 }

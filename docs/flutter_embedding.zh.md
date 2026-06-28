@@ -79,7 +79,7 @@ Flutter Texture 是一个能力更低的兼容路径。
 
 ## wgpu Fallback
 
-Apple HDR 路径仍然坚持 native Metal。`wgpu` 是面向 Windows、Linux、Android 以及非 HDR 路径的跨平台 fallback 方向。wgpu renderer 已实现视频帧渲染和弹幕合成，但尚未支持 VideoToolbox 零拷贝导入或 HDR/EDR 输出。
+Apple HDR 路径仍然坚持 native Metal，Windows 使用 native Direct3D 11 渲染器（D3D11VA 零拷贝解码、HDR10 输出）。`wgpu` 是面向 Linux、Android 以及非 HDR 路径的跨平台 fallback 方向。wgpu renderer 已实现视频帧渲染和弹幕合成，但尚未支持硬件零拷贝导入或 HDR/EDR 输出。
 
 ## Dart API
 

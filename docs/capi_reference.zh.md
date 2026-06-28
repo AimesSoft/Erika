@@ -1,0 +1,401 @@
+# Erika C ABI 参考手册
+
+本文档描述 `erika_capi` 导出的稳定 C ABI，声明在
+[`crates/erika_capi/include/erika.h`](../crates/erika_capi/include/erika.h)。该
+ABI 是所有非 Rust 宿主（C、C++、Swift、Dart FFI、Win32……）的唯一接入面。Rust
+嵌入方应直接使用 `erika` crate；本层仅为 FFI 而存在。
+
+嵌入流程（surface attach、渲染循环、释放）见 [integration.zh.md](integration.zh.md)。
+高层引擎设计见 [architecture.zh.md](architecture.zh.md)。
+
+> 英文版：[capi_reference.md](capi_reference.md)。
+
+## 两个 handle 族
+
+Erika 暴露两个相互独立的入口，每个集成选其一。
+
+| Handle | 模型 | 谁渲染 | 适用 |
+|--------|------|--------|------|
+| `ErikaHandle` | **拉取（Pull）** | 宿主 | 你拥有渲染循环、自己拉取解码帧 / 驱动自己的合成器。 |
+| `ErikaPresenterHandle` | **推送（Push）** | Erika | 你把一个原生 surface 交给 Erika，每个显示帧调一次 `render_tick`。Erika 负责解码、时序、音频、overlay 和呈现。 |
+
+`ErikaPresenterHandle` 是推荐路径，也是 Flutter 插件和原生 demo 所用的。它只在
+**macOS、iOS、Windows** 上编译。其它平台上 `erika_presenter_create` 仍然导出但返回
+`NULL`，presenter 族的其余函数不存在——请按平台守卫 presenter 用法。
+
+两个族不共享状态；一个进程可同时使用两者，但单个媒体会话只活在一个 handle 里。
+
+## 约定
+
+### 状态码
+
+每个可失败的调用都返回 `ErikaStatus`：
+
+| 值 | 码 | 含义 |
+|----|----|------|
+| `ErikaStatus_Ok` | 0 | 成功。清空线程局部错误。 |
+| `ErikaStatus_NullPointer` | 1 | 必需的 handle 或 out 指针为 `NULL`（或 surface 指针为 0）。 |
+| `ErikaStatus_InvalidUtf8` | 2 | 某个 `const char*` 参数不是合法 UTF-8。 |
+| `ErikaStatus_PlayerError` | 3 | 引擎拒绝该调用；读取错误信息（见下）。 |
+| `ErikaStatus_Panic` | 4 | 在边界处捕获到 Rust panic。该调用除 panic 前已完成的部分外无效；handle 应视为可疑状态。 |
+| `ErikaStatus_NoEvent` | 5 | 仅 `*_poll_event`：队列为空（非错误）。 |
+
+务必检查返回值。`Ok` 和 `NoEvent` 是仅有的非错误结果。
+
+### panic 安全
+
+ABI 永不让 unwind 穿越 FFI 边界。每个入口都把函数体包在 `catch_unwind` 里；panic
+会变成 `ErikaStatus_Panic` 并设置错误信息。你可以跨边界调用，无需担心 C++
+`noexcept`/SEH。
+
+### 错误信息（线程局部）
+
+任何非 `Ok`/`NoEvent` 的结果，Erika 会把一条可读信息存进**线程局部**槽。读取：
+
+```c
+char *msg = erika_last_error_message();   // 堆分配，可能为 NULL
+if (msg) { fprintf(stderr, "erika: %s\n", msg); erika_string_free(msg); }
+```
+
+因为是线程局部的，要**在发起失败调用的同一线程**上读取，且在该线程下一次调用之前读取
+（之后一次 `Ok` 会清空它）。`erika_last_error_message` 返回的是你拥有的副本——用
+`erika_string_free` 释放。
+
+### 字符串所有权
+
+Erika 返回的任何 `char*` 都是堆分配、归调用方所有：
+
+- 独立字符串（如 `erika_last_error_message`）→ 用 `erika_string_free` 释放。
+- 内嵌在 `ErikaTrackInfo` 中的字符串 → 用 `erika_track_info_free(&track)`
+  释放整条记录（会释放每个内部字符串）。
+- 内嵌在 `ErikaDanmakuTrackInfo` 中的字符串 → 用
+  `erika_danmaku_track_info_free(&track)` 释放。
+
+切勿用 libc `free()` 释放这些；始终用配套的 Erika 释放函数，使分配在同一 allocator
+上跨越 ABI。
+
+你传入的 `const char*` 参数仅在调用期间被借用；Erika 会复制所需内容。它们必须是
+NUL 结尾的 UTF-8。
+
+### 计数数组惯用法
+
+列表 getter（`erika_tracks`、`erika_presenter_tracks`、
+`erika_presenter_danmaku_tracks`）使用调用方分配的缓冲：
+
+```c
+size_t total = 0;
+erika_presenter_tracks(p, NULL, 0, &total);          // 1) 查询数量
+ErikaTrackInfo *buf = calloc(total, sizeof *buf);
+erika_presenter_tracks(p, buf, total, &total);        // 2) 填充
+for (size_t i = 0; i < total; i++) { /* 使用 buf[i] */ }
+for (size_t i = 0; i < total; i++) erika_track_info_free(&buf[i]);
+free(buf);
+```
+
+`out_len` **始终**被设为可用记录的总数。最多写入 `capacity` 条；传
+`capacity == 0`（配 `NULL` 缓冲）是受支持的"问数量"方式。只有实际写入的记录才持有
+需要释放的字符串。
+
+### Surface 几何与 scale
+
+`attach_*` 和 `resize_surface` 的 `width`、`height` 单位是**物理像素**，`scale`
+是 backing/DPI 因子（如 Retina 的 `2.0`、Windows 的显示器缩放）。surface 指针为 `0`
+会被拒绝并返回 `NullPointer`。
+
+### 线程
+
+单个 handle **没有内部同步**。不要从多个线程并发调用同一个 handle；请自行串行化
+（或把 handle 限定在单线程内）。presenter 的 `render_tick` 应从拥有显示定时器 /
+surface 的线程驱动。不同 handle 在不同线程上互相独立。记住错误信息是线程局部的。
+
+## `ErikaHandle` —— 拉取模型
+
+宿主自己驱动渲染，并拉取状态/事件。
+
+### 生命周期
+
+```c
+ErikaHandle *erika_create(void);
+void         erika_destroy(ErikaHandle *handle);
+char        *erika_last_error_message(void);   // 线程局部，调用方释放
+void         erika_string_free(char *value);
+```
+
+`erika_create` 永不失败（返回合法 handle）。`erika_destroy(NULL)` 是 no-op。销毁
+handle 会停止播放并释放全部资源。
+
+### 播放控制
+
+```c
+ErikaStatus erika_open(ErikaHandle *handle, const char *uri);   // 文件路径或 URL
+ErikaStatus erika_play(ErikaHandle *handle);
+ErikaStatus erika_pause(ErikaHandle *handle);
+ErikaStatus erika_stop(ErikaHandle *handle);
+ErikaStatus erika_close(ErikaHandle *handle);
+ErikaStatus erika_seek(ErikaHandle *handle, uint64_t position_micros);
+```
+
+`uri` 是本地文件路径或 HTTP(S) URL。`seek` 单位为微秒。`open` 异步开始；观察
+`StateChanged`/`DurationChanged` 事件以得知媒体何时就绪。
+
+### 轨道与字幕
+
+```c
+ErikaStatus erika_add_external_subtitle(ErikaHandle *, const char *uri, int64_t *out_track_id);
+ErikaStatus erika_remove_subtitle_track(ErikaHandle *, int64_t track_id);
+ErikaStatus erika_select_audio_track(ErikaHandle *, int64_t track_id);
+ErikaStatus erika_select_subtitle_track(ErikaHandle *, int64_t track_id);
+ErikaStatus erika_track_selection(ErikaHandle *, ErikaTrackSelection *out_selection);
+ErikaStatus erika_tracks(ErikaHandle *, ErikaTrackInfo *out_tracks, uintptr_t capacity, uintptr_t *out_len);
+void        erika_track_info_free(ErikaTrackInfo *track);
+```
+
+`erika_tracks` 遵循计数数组惯用法。`erika_track_selection` 报告当前选中的
+视频/音频/字幕轨 id（`-1` 表示无）。选择字幕轨 id `-1` 即关闭字幕。
+
+### 状态与事件
+
+```c
+ErikaStatus erika_state(ErikaHandle *, ErikaState *out_state);
+ErikaStatus erika_poll_event(ErikaHandle *, ErikaEvent *out_event);
+```
+
+`erika_poll_event` 非阻塞：队列空时返回 `NoEvent`。在循环里把它抽干。见
+[事件](#事件)。
+
+### Surface attach（宿主管理）
+
+```c
+ErikaStatus erika_attach_metal_layer(ErikaHandle *, uint64_t raw_layer, uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_attach_wgpu_surface(ErikaHandle *, ErikaWgpuSurfaceKind kind,
+                                      uint64_t raw_window, uint64_t raw_display,
+                                      uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_attach_flutter_texture(ErikaHandle *, ErikaFlutterTextureKind kind,
+                                         int64_t texture_id, uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_detach_surface(ErikaHandle *);
+```
+
+`raw_layer` 是 `CAMetalLayer*` 转成的 `uint64_t`。对 `erika_attach_wgpu_surface`，
+`raw_window`/`raw_display` 是该 `kind` 对应的平台窗口/显示句柄（如 `WindowsHwnd`
+的 `HWND` + `HINSTANCE`，`XlibWindow` 的 xcb/Xlib window + display）。
+`erika_attach_flutter_texture` 把一个外部纹理 id 注册进平台 texture registrar。
+
+## `ErikaPresenterHandle` —— 推送模型
+
+Erika 拥有完整栈；宿主提供 surface 并调用 `render_tick`。**仅 macOS / iOS / Windows。**
+
+### 生命周期与配置
+
+```c
+ErikaPresenterHandle *erika_presenter_create(void);
+ErikaPresenterHandle *erika_presenter_create_with_config(ErikaPresenterConfig config);
+ErikaPresenterHandle *erika_presenter_create_with_output_mode(int32_t output_mode, float edr_headroom);
+void                  erika_presenter_destroy(ErikaPresenterHandle *handle);
+```
+
+`ErikaPresenterConfig` 选择输出模式（SDR / Apple EDR）、EDR headroom 和初始亮度超分。
+`create_with_output_mode` 是简写；`create` 用默认值（SDR、无超分）。返回 `NULL`
+表示创建失败——检查 `erika_last_error_message`。
+
+### 播放与运行时参数
+
+```c
+ErikaStatus erika_presenter_open(ErikaPresenterHandle *, const char *uri);
+ErikaStatus erika_presenter_play(ErikaPresenterHandle *);
+ErikaStatus erika_presenter_pause(ErikaPresenterHandle *);
+ErikaStatus erika_presenter_stop(ErikaPresenterHandle *);
+ErikaStatus erika_presenter_close(ErikaPresenterHandle *);
+ErikaStatus erika_presenter_seek(ErikaPresenterHandle *, uint64_t position_micros);
+ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *, double rate);
+ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *, double volume);   // 0.0–1.0
+ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *, int32_t mode);  // ErikaLumaUpscalerMode
+ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *, double scale);
+```
+
+`set_playback_rate(1.0)` 为正常速度。`set_upscaler` 在运行时切换神经亮度超分（见
+[`erika_presenter_get_upscaler_status`](#诊断与截图)）；在没有 Metal compute 路径
+的后端上它是 no-op 回退。
+
+### 轨道与字幕
+
+```c
+ErikaStatus erika_presenter_add_external_subtitle(ErikaPresenterHandle *, const char *uri, int64_t *out_track_id);
+ErikaStatus erika_presenter_remove_subtitle_track(ErikaPresenterHandle *, int64_t track_id);
+ErikaStatus erika_presenter_select_audio_track(ErikaPresenterHandle *, int64_t track_id);
+ErikaStatus erika_presenter_select_subtitle_track(ErikaPresenterHandle *, int64_t track_id);
+ErikaStatus erika_presenter_track_selection(ErikaPresenterHandle *, ErikaTrackSelection *out_selection);
+ErikaStatus erika_presenter_tracks(ErikaPresenterHandle *, ErikaTrackInfo *out_tracks, uintptr_t capacity, uintptr_t *out_len);
+```
+
+语义同 `ErikaHandle` 的轨道函数。
+
+### 弹幕
+
+```c
+ErikaStatus erika_presenter_load_danmaku_file(ErikaPresenterHandle *, const char *uri);
+ErikaStatus erika_presenter_load_danmaku_json(ErikaPresenterHandle *, const char *json);
+ErikaStatus erika_presenter_add_danmaku_track_file(ErikaPresenterHandle *, const char *uri, const char *name, int64_t offset_micros, uint64_t *out_track_id);
+ErikaStatus erika_presenter_add_danmaku_track_json(ErikaPresenterHandle *, const char *json, const char *name, int64_t offset_micros, uint64_t *out_track_id);
+ErikaStatus erika_presenter_remove_danmaku_track(ErikaPresenterHandle *, uint64_t track_id);
+ErikaStatus erika_presenter_set_danmaku_track_enabled(ErikaPresenterHandle *, uint64_t track_id, bool enabled);
+ErikaStatus erika_presenter_set_danmaku_track_offset(ErikaPresenterHandle *, uint64_t track_id, int64_t offset_micros);
+ErikaStatus erika_presenter_set_danmaku_global_offset(ErikaPresenterHandle *, int64_t offset_micros);
+ErikaStatus erika_presenter_danmaku_tracks(ErikaPresenterHandle *, ErikaDanmakuTrackInfo *out_tracks, uintptr_t capacity, uintptr_t *out_len);
+ErikaStatus erika_presenter_clear_danmaku(ErikaPresenterHandle *);
+ErikaStatus erika_presenter_set_danmaku_enabled(ErikaPresenterHandle *, bool enabled);
+ErikaStatus erika_presenter_set_danmaku_config(ErikaPresenterHandle *, ErikaDanmakuConfig config);
+ErikaStatus erika_presenter_set_danmaku_config_ptr(ErikaPresenterHandle *, const ErikaDanmakuConfig *config);
+ErikaStatus erika_presenter_get_danmaku_config(ErikaPresenterHandle *, ErikaDanmakuConfig *out_config);
+ErikaStatus erika_presenter_set_danmaku_font(ErikaPresenterHandle *, const char *family, const char *file_path);
+ErikaStatus erika_presenter_set_danmaku_block_words_json(ErikaPresenterHandle *, const char *json);
+```
+
+`load_danmaku_*` 用单条匿名轨替换当前弹幕；`add_danmaku_track_*` 构建多轨列表
+（每轨带名字和时间偏移）。输入为 Bilibili XML（`*_file`，按路径/URL）或 JSON
+（`*_json`，内联）。`offset_micros` 偏移某条轨的时间线；全局 offset 偏移所有轨。
+`set_danmaku_config` / `_ptr` 应用完整 `ErikaDanmakuConfig`（`_ptr` 变体避免按值
+传结构体）；`get_danmaku_config` 读回。布局引擎见
+[danmaku_architecture.md](danmaku_architecture.md)。`set_danmaku_block_words_json`
+接受一个字符串 JSON 数组用于过滤。
+
+### Surface 与呈现
+
+```c
+ErikaStatus erika_presenter_attach_metal_layer(ErikaPresenterHandle *, uint64_t raw_layer, uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_presenter_attach_wgpu_surface(ErikaPresenterHandle *, ErikaWgpuSurfaceKind kind, uint64_t raw_window, uint64_t raw_display, uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_presenter_attach_windows_hwnd(ErikaPresenterHandle *, uint64_t hwnd, uint64_t hinstance, uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_presenter_resize_surface(ErikaPresenterHandle *, uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_presenter_detach_surface(ErikaPresenterHandle *);
+```
+
+macOS/iOS 用 `attach_metal_layer`（`CAMetalLayer*`），Windows 用
+`attach_windows_hwnd`（它是 `attach_wgpu_surface` + kind `WindowsHwnd` 的便捷封装，
+传 `HWND` + `HINSTANCE`）。绑定到 surface 的渲染后端（原生 Metal、原生 Direct3D 11
+或 wgpu）由 presenter 配置决定，而非 attach 调用决定。drawable 尺寸或 scale 变化时
+调 `resize_surface`。
+
+### 渲染循环与事件
+
+```c
+ErikaStatus erika_presenter_render_tick(ErikaPresenterHandle *, double time_seconds, ErikaPresenterStats *out_stats);
+ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *, ErikaEvent *out_event);
+```
+
+每个显示帧调一次 `render_tick`（如来自 `CADisplayLink`、`CVDisplayLink` 或 Windows
+帧调度器）。`time_seconds` 是该帧的宿主显示时钟（秒）——Erika 用它做 vsync 量化调度，
+所以传**呈现时间戳**，不是 wall-clock 增量。若 `out_stats` 非 `NULL`，会填入流水线
+计数器快照。`poll_event` 非阻塞，空闲时返回 `NoEvent`。
+
+### 诊断与截图
+
+```c
+ErikaStatus erika_presenter_get_upscaler_status(ErikaPresenterHandle *, ErikaUpscalerStatus *out_status);
+ErikaStatus erika_presenter_capture_frame_rgba(ErikaPresenterHandle *, uint32_t width, uint32_t height,
+                                               uint8_t *out_rgba, uintptr_t out_capacity);
+```
+
+`get_upscaler_status` 报告请求的超分模式、当前后端（off / inactive / building /
+scalar / simdgroup-matrix）、fallback 次数、超分帧数，以及最近的 encode/GPU 耗时
+（微秒）。
+
+`capture_frame_rgba` 是**截图**：把当前合成帧（视频 + 字幕 + 弹幕）离屏渲染进调用方
+分配的 RGBA8 缓冲，按请求的 `width`×`height`（与显示 surface 尺寸无关）。
+`out_capacity` 至少为 `width*height*4`。尚无可用帧时返回 `PlayerError`；实现于原生
+Metal 与 Direct3D 11 后端（wgpu 后端不返回截图）。
+
+```c
+uint32_t w = 1920, h = 1080;
+uint8_t *rgba = malloc((size_t)w * h * 4);
+if (erika_presenter_capture_frame_rgba(p, w, h, rgba, (uintptr_t)w * h * 4) == ErikaStatus_Ok) {
+    /* rgba 为 w*h 紧排的 RGBA8 像素——可编码为 PNG 等 */
+}
+free(rgba);
+```
+
+## 枚举
+
+| 枚举 | 取值 |
+|------|------|
+| `ErikaState` | `Idle` `Opening` `Ready` `Playing` `Paused` `Stopped` `Closed` `Error` |
+| `ErikaEventKind` | `None` `StateChanged` `DurationChanged` `PositionChanged` `TracksChanged` `BufferingChanged` `VideoParamsChanged` `SurfaceAttached` `SurfaceDetached` `Error` `TrackSelectionChanged` |
+| `ErikaTrackKind` | `Video` `Audio` `Subtitle` |
+| `ErikaTrackSource` | `Embedded` `External` |
+| `ErikaWgpuSurfaceKind` | `Unknown` `MacOsNsView` `MacOsCaMetalLayer` `IosUiView` `WindowsHwnd` `XlibWindow` `WaylandSurface` `AndroidNativeWindow` |
+| `ErikaFlutterTextureKind` | `Unknown` `MacOsTextureRegistrar` `IosTextureRegistrar` `AndroidSurfaceTexture` `WindowsTextureRegistrar` `LinuxTextureRegistrar` |
+| `ErikaPresenterOutputMode` | `Sdr` `AppleEdr` |
+| `ErikaLumaUpscalerMode` | `Off` `ArtCnnC4F16` `ArtCnnC4F32` |
+| `ErikaUpscalerBackendStatus` | `Off` `Inactive` `Building` `Scalar` `SimdgroupMatrix` |
+
+## 结构体
+
+- **`ErikaPresenterConfig`** `{ int32 output_mode; float edr_headroom; int32 luma_upscaler; }` —
+  按值传给 `create_with_config`。
+- **`ErikaUpscalerStatus`** —— 请求模式、当前后端、fallback 次数、超分帧数、最近
+  encode/GPU 微秒。
+- **`ErikaDanmakuConfig`** —— 完整弹幕布局/外观配置（字号、不透明度、显示区域、滚动
+  时序、碰撞/堆叠开关、屏蔽模式、阴影样式）。`font_size` 是 NipaPlay/Flutter 的*逻辑*
+  字号；Erika 会乘以 surface scale 得到 glyph 像素。
+- **`ErikaDanmakuTrackInfo`** `{ id, enabled, offset_micros, item_count, char *name, char *source }` —
+  用 `erika_danmaku_track_info_free` 释放。
+- **`ErikaVideoParams`** `{ width, height, primaries, transfer }` —— 通过
+  `VideoParamsChanged` 上报的色彩元数据。
+- **`ErikaTrackCounts`** / **`ErikaTrackSelection`** —— 各类轨道计数 / 选中 id
+  （`-1` = 无）。
+- **`ErikaTrackInfo`** —— 完整的每轨元数据；六个 `char*` 字段归调用方所有（用
+  `erika_track_info_free` 释放）。
+- **`ErikaEvent`** —— 用结构体表达的 tagged union：`kind` 决定哪些字段有意义
+  （`state`、`duration_micros`、`position_micros`、`buffering`、`video`、`tracks`）；
+  `Error` 事件由 `status` 携带状态码。
+- **`ErikaPresenterStats`** —— 流水线计数器：解码/渲染帧数、推送音频帧、overlay/弹幕
+  帧、硬解 vs 软解 vs 零拷贝帧数、HDR 源/HDR10 输出/SDR tonemap 计数、音频时钟
+  read/queued/underflow 帧数，以及最近渲染耗时。
+
+## 事件
+
+每次循环迭代轮询并按 `kind` 分发：
+
+```c
+ErikaEvent ev;
+while (erika_presenter_poll_event(p, &ev) == ErikaStatus_Ok) {
+    switch (ev.kind) {
+        case ErikaEventKind_StateChanged:    /* ev.state */                 break;
+        case ErikaEventKind_DurationChanged: /* ev.duration_micros */        break;
+        case ErikaEventKind_PositionChanged: /* ev.position_micros */        break;
+        case ErikaEventKind_TracksChanged:   /* 重新查询 erika_*_tracks */    break;
+        case ErikaEventKind_BufferingChanged:/* ev.buffering */              break;
+        case ErikaEventKind_VideoParamsChanged: /* ev.video */               break;
+        case ErikaEventKind_Error:           /* ev.status + last_error */    break;
+        default: break;
+    }
+}
+```
+
+事件队列有界，靠轮询抽干；停止轮询的宿主只是停止观察状态。`position_micros` 在播放
+中周期性发出。
+
+## 最小 presenter 集成（C）
+
+```c
+#include "erika.h"
+
+ErikaPresenterHandle *p = erika_presenter_create();
+erika_presenter_attach_metal_layer(p, (uint64_t)layer, w, h, scale);  // 或 attach_windows_hwnd
+if (erika_presenter_open(p, "/path/to/video.mkv") != ErikaStatus_Ok) {
+    char *m = erika_last_error_message(); /* 记录 */ erika_string_free(m);
+}
+erika_presenter_play(p);
+
+// 每个显示帧:
+ErikaPresenterStats stats;
+erika_presenter_render_tick(p, host_time_seconds, &stats);
+ErikaEvent ev;
+while (erika_presenter_poll_event(p, &ev) == ErikaStatus_Ok) { /* 分发 */ }
+
+// 释放:
+erika_presenter_detach_surface(p);
+erika_presenter_destroy(p);
+```
+
+各平台的 surface 与显示定时器细节见 [integration.zh.md](integration.zh.md)，以及可运行的
+[`macos_native_demo`](../examples/macos_native_demo) /
+[`windows_native_demo`](../examples/windows_native_demo) 示例。

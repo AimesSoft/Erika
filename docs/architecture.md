@@ -14,15 +14,16 @@ Rust Player Core
   source abstraction ─── file + HTTP range
   FFmpeg wrappers ────── custom AVIO, probe, demux, decode, seek, audio resample
   playback engine ────── video/audio tick, clock, frame scheduler
-  video decode ───────── VideoToolbox (macOS/iOS), software fallback
-  audio output ───────── CoreAudio (macOS), AudioQueue (iOS), ring buffer
+  video decode ───────── VideoToolbox (macOS/iOS), D3D11VA (Windows), software fallback
+  audio output ───────── CoreAudio (macOS), AudioQueue (iOS), WASAPI (Windows), ring buffer
   overlay timeline ───── subtitle + danmaku composition
   renderer core ──────── color state, render graph, tone map, scaler policy
   Metal renderer ─────── zero-copy NV12/P010, HDR/EDR, subtitle/danmaku pass
+  D3D11 renderer ─────── zero-copy D3D11VA, HDR10, subtitle/danmaku pass (Windows)
   wgpu renderer ──────── cross-platform video + danmaku rendering
   presenter runtime ──── ties player + renderer + audio + overlays
-  C ABI ──────────────── 63 exported functions, two handle families
-  Flutter plugin ─────── macOS + iOS native view embedding
+  C ABI ──────────────── 69 exported functions, two handle families
+  Flutter plugin ─────── macOS + iOS + Windows native view embedding
 ```
 
 ## Native Dependencies
@@ -137,6 +138,20 @@ The primary renderer for Apple platforms:
 - Danmaku: Instanced glyph quad drawing from atlas (shadow → outline → fill passes).
 - Presentation layout preserves source aspect ratio.
 
+### Direct3D 11 Renderer (Windows)
+
+The native renderer for Windows (`renderer/d3d11.rs`):
+
+- Zero-copy D3D11VA decode-texture interop: decoded `ID3D11Texture2D` surfaces
+  are shared into the render device, no CPU round-trip.
+- YCbCr sampling and color space conversion (HLSL shaders), same pipeline model
+  as Metal.
+- HDR10 output via an `R10G10B10A2_UNORM` swapchain with `DXGI_HDR_METADATA_HDR10`,
+  with SDR (`BGRA8`) fallback.
+- Subtitle overlay alpha-atlas upload and blending; instanced danmaku glyph
+  quad drawing from the atlas.
+- Window-hosted swapchain driven by `render_tick`.
+
 ### wgpu Renderer (cross-platform)
 
 Second renderer backend for portability:
@@ -148,8 +163,8 @@ Second renderer backend for portability:
 - Offscreen render target for headless testing.
 - Surface handle model covers macOS NSView, iOS UIView, Windows HWND,
   X11/Wayland, Android native windows.
-- VideoToolbox zero-copy import and HDR/EDR output are not yet implemented in
-  this backend.
+- Hardware zero-copy import (VideoToolbox / D3D11VA) and HDR/EDR output are not
+  yet implemented in this backend; it is the planned path for Linux and Android.
 
 ### Render Pipeline
 
@@ -174,7 +189,7 @@ DanmakuEngine, and audio output. The host supplies a native surface and drives
 
 ## C ABI
 
-`erika_capi` exports 63 functions through two handle families:
+`erika_capi` exports 69 functions through two handle families:
 
 - **`ErikaHandle`** — player control and event polling. The host owns rendering.
 - **`ErikaPresenterHandle`** — Erika owns the full stack. The host provides a
@@ -189,17 +204,21 @@ Header: `crates/erika_capi/include/erika.h`
 
 ## Flutter Plugin
 
-`packages/erika_flutter` provides macOS and iOS Flutter embedding:
+`packages/erika_flutter` provides macOS, iOS, and Windows Flutter embedding:
 
 - **Dart**: `ErikaPlayer` (commands + events), `ErikaWindowOverlayVideoView`
-  (recommended window-hosted native Metal surface), and `ErikaVideoView`
-  (compatibility platform view).
+  (recommended window-hosted native surface — Metal on Apple, D3D11 swapchain on
+  Windows), and `ErikaVideoView` (compatibility platform view).
 - **macOS Swift plugin**: Loads `liberika_capi.dylib`, creates either
   `NSWindow`-hosted overlay or `NSView`/`CAMetalLayer` platform view surfaces,
   and drives `render_tick` from a display link.
 - **iOS Swift plugin**: Links `liberika_capi.a` statically, creates either
   `UIWindow`-hosted overlay or `UIView`/`CAMetalLayer` platform view surfaces,
   and uses the same presenter model.
+- **Windows C++ plugin** (`ErikaFlutterPluginCApi`): builds and links
+  `erika_capi.dll` via CMake (`build_erika_runtime.cmake`, cargo target
+  `x86_64-pc-windows-msvc`), hosts a window-level D3D11 swapchain, and drives
+  `render_tick` from a frame scheduler.
 
 See `docs/flutter_embedding.md` for the embedding model and HDR strategy.
 
@@ -209,6 +228,6 @@ See `docs/flutter_embedding.md` for the embedding model and HDR strategy.
 |----------|--------|--------|-------|--------|
 | macOS 14+ | VideoToolbox | Metal | CoreAudio | Available |
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | Available |
-| Windows | — | wgpu (planned) | — | Planned |
+| Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
 | Android | — | wgpu (planned) | — | Planned |

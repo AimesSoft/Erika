@@ -11,15 +11,16 @@ Rust Player Core
   source abstraction ─── file + HTTP range
   FFmpeg wrappers ────── custom AVIO, probe, demux, decode, seek, audio resample
   playback engine ────── video/audio tick, clock, frame scheduler
-  video decode ───────── VideoToolbox (macOS/iOS), software fallback
-  audio output ───────── CoreAudio (macOS), AudioQueue (iOS), ring buffer
+  video decode ───────── VideoToolbox (macOS/iOS), D3D11VA (Windows), software fallback
+  audio output ───────── CoreAudio (macOS), AudioQueue (iOS), WASAPI (Windows), ring buffer
   overlay timeline ───── subtitle + danmaku composition
   renderer core ──────── color state, render graph, tone map, scaler policy
   Metal renderer ─────── zero-copy NV12/P010, HDR/EDR, subtitle/danmaku pass
+  D3D11 renderer ─────── zero-copy D3D11VA, HDR10, subtitle/danmaku pass (Windows)
   wgpu renderer ──────── cross-platform video + danmaku rendering
   presenter runtime ──── ties player + renderer + audio + overlays
-  C ABI ──────────────── 63 exported functions, two handle families
-  Flutter plugin ─────── macOS + iOS native view embedding
+  C ABI ──────────────── 69 exported functions, two handle families
+  Flutter plugin ─────── macOS + iOS + Windows native view embedding
 ```
 
 ## 原生依赖
@@ -98,6 +99,16 @@ Apple 平台的主渲染器：
 - 弹幕：来自 atlas 的 instanced glyph quad 绘制（shadow → outline → fill）。
 - 呈现布局保持源宽高比。
 
+### Direct3D 11 Renderer（Windows）
+
+Windows 平台的原生渲染器（`renderer/d3d11.rs`）：
+
+- 零拷贝 D3D11VA 解码纹理互操作：解码出的 `ID3D11Texture2D` 表面共享进渲染设备，不经过 CPU。
+- YCbCr 采样与色彩空间转换（HLSL shader），与 Metal 保持同一流水线模型。
+- HDR10 输出：`R10G10B10A2_UNORM` swapchain + `DXGI_HDR_METADATA_HDR10`，并提供 SDR（`BGRA8`）回退。
+- 字幕 overlay alpha-atlas 上传与 blending；来自 atlas 的 instanced 弹幕 glyph quad 绘制。
+- window-hosted swapchain，由 `render_tick` 驱动。
+
 ### wgpu Renderer（跨平台）
 
 面向可移植性的第二渲染后端：
@@ -108,7 +119,7 @@ Apple 平台的主渲染器：
 - 弹幕 glyph atlas 渲染。
 - 可用于无头测试的离屏 render target。
 - 表面句柄模型覆盖 macOS NSView、iOS UIView、Windows HWND、X11/Wayland、Android native window。
-- 目前尚未实现 VideoToolbox 零拷贝导入和 HDR/EDR 输出。
+- 目前尚未实现硬件零拷贝导入（VideoToolbox / D3D11VA）和 HDR/EDR 输出；这是面向 Linux 和 Android 的规划路径。
 
 ### Render Pipeline
 
@@ -128,7 +139,7 @@ Apple 平台的主渲染器：
 
 ## C ABI
 
-`erika_capi` 通过两组 handle family 导出 63 个函数：
+`erika_capi` 通过两组 handle family 导出 69 个函数：
 
 - **`ErikaHandle`**：播放器控制与事件轮询，渲染由宿主管理。
 - **`ErikaPresenterHandle`**：Erika 持有完整栈，宿主只需提供 surface 并调用 `render_tick`。
@@ -139,11 +150,12 @@ Header：`crates/erika_capi/include/erika.h`
 
 ## Flutter Plugin
 
-`packages/erika_flutter` 提供 macOS 和 iOS 的 Flutter embedding：
+`packages/erika_flutter` 提供 macOS、iOS 和 Windows 的 Flutter embedding：
 
-- **Dart**：`ErikaPlayer`（命令 + 事件）、`ErikaWindowOverlayVideoView`（推荐的 window-hosted native Metal surface）、`ErikaVideoView`（兼容 platform view）。
+- **Dart**：`ErikaPlayer`（命令 + 事件）、`ErikaWindowOverlayVideoView`（推荐的 window-hosted native surface——Apple 上是 Metal，Windows 上是 D3D11 swapchain）、`ErikaVideoView`（兼容 platform view）。
 - **macOS Swift plugin**：加载 `liberika_capi.dylib`，创建 `NSWindow` overlay 或 `NSView`/`CAMetalLayer` platform view，并通过 display link 驱动 `render_tick`。
 - **iOS Swift plugin**：静态链接 `liberika_capi.a`，创建 `UIWindow` overlay 或 `UIView`/`CAMetalLayer` platform view，并沿用同一 presenter 模型。
+- **Windows C++ plugin**（`ErikaFlutterPluginCApi`）：通过 CMake（`build_erika_runtime.cmake`，cargo target `x86_64-pc-windows-msvc`）构建并链接 `erika_capi.dll`，host 一个 window-level D3D11 swapchain，并由帧调度器驱动 `render_tick`。
 
 Embedding 模型和 HDR 策略见 `docs/flutter_embedding.md`。
 
@@ -153,7 +165,7 @@ Embedding 模型和 HDR 策略见 `docs/flutter_embedding.md`。
 |----------|--------|--------|-------|--------|
 | macOS 14+ | VideoToolbox | Metal | CoreAudio | Available |
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | Available |
-| Windows | — | wgpu (planned) | — | Planned |
+| Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
 | Android | — | wgpu (planned) | — | Planned |
 
