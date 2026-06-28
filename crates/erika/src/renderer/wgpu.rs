@@ -264,6 +264,7 @@ pub struct WgpuRenderer {
     video_pipeline: Option<VideoPipeline>,
     overlay_pipeline: Option<OverlayPipeline>,
     current_video: Option<UploadedVideoFrame>,
+    current_video_visible: bool,
     danmaku_atlas_cache: Option<WgpuDanmakuAtlasCache>,
     supports_16bit_norm: bool,
     upscaler_mode: LumaUpscalerMode,
@@ -315,6 +316,7 @@ impl WgpuRenderer {
             video_pipeline: None,
             overlay_pipeline: None,
             current_video: None,
+            current_video_visible: false,
             danmaku_atlas_cache: None,
             supports_16bit_norm,
             upscaler_mode: LumaUpscalerMode::Off,
@@ -594,6 +596,7 @@ impl WgpuRenderer {
             height,
             uniforms,
         });
+        self.current_video_visible = true;
         Ok(())
     }
 
@@ -1512,7 +1515,7 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn clear_current_frame(&mut self) -> Result<()> {
-        self.current_video = None;
+        self.current_video_visible = false;
         if self.surface.is_some() {
             self.render_surface_clear(WgpuClearColor::new(0.0, 0.0, 0.0, 1.0))?;
         }
@@ -1520,7 +1523,7 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn render_current_frame(&mut self, context: RenderFrameContext<'_>) -> Result<bool> {
-        if self.current_video.is_none() {
+        if !self.current_video_visible || self.current_video.is_none() {
             return Ok(false);
         }
         let Some(format) = self.surface.as_ref().map(|attached| attached.config.format) else {
