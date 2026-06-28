@@ -1694,12 +1694,13 @@ fn smoke_ffmpeg_make(options: DepsOptions) -> Result<()> {
     fs::create_dir_all(&smoke_dir).with_context(|| format!("create {}", smoke_dir.display()))?;
     fs::write(
         smoke_dir.join("Makefile"),
-        "all:\n\t@echo cwd=$(CURDIR)\n\t@test -f Makefile\n\t@awk 'BEGIN { s = \"C:\\\\tmp\\\\file\"; gsub(/\\\\/, \"/\", s); if (s != \"C:/tmp/file\") exit 42 }'\n\t@echo erika-ffmpeg-make-smoke-ok\n",
+        "all:\n\t@echo cwd=$(CURDIR)\n\t@test -f Makefile\n\t@command -v cl.exe >/dev/null\n\t@awk 'BEGIN { s = \"C:\\\\tmp\\\\file\"; gsub(/\\\\/, \"/\", s); if (s != \"C:/tmp/file\") exit 42 }'\n\t@echo erika-ffmpeg-make-smoke-ok\n",
     )
     .with_context(|| format!("write {}", smoke_dir.join("Makefile").display()))?;
 
     let args = ["all".to_string()];
     let mut command = ffmpeg_make_command(&make, &smoke_dir, &args, options.target)?;
+    apply_windows_target_env(&mut command, options.target)?;
     apply_windows_posix_shell(&mut command, options.target);
     append_windows_posix_paths(&mut command);
     let result = run(&mut command);
@@ -2400,7 +2401,7 @@ fn ffmpeg_make_command(
         .collect::<Vec<_>>()
         .join(" && ");
         command
-            .arg("-lc")
+            .arg("-c")
             .arg(make_line)
             .env("MSYS2_ARG_CONV_EXCL", "*");
         return Ok(command);
