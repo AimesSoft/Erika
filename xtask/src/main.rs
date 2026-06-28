@@ -87,7 +87,7 @@ fn check(mut args: Vec<String>) -> Result<()> {
 
 fn deps(mut args: Vec<String>) -> Result<()> {
     if args.is_empty() {
-        bail!("missing deps subcommand: plan, fetch, status, or build");
+        bail!("missing deps subcommand: plan, fetch, status, smoke-ffmpeg-make, or build");
     }
     let subcommand = args.remove(0);
     let options = DepsOptions::parse(&args)?;
@@ -103,6 +103,7 @@ fn deps(mut args: Vec<String>) -> Result<()> {
             write_profile_metadata(&layout, options.profile, options.target)
         }
         "status" => print_dependency_status(&workspace_layout(options.profile, options.target)?),
+        "smoke-ffmpeg-make" => smoke_ffmpeg_make(options),
         "build" => {
             print_dependency_plan(options.profile, options.target);
             build_dependencies(options)
@@ -1677,6 +1678,33 @@ fn native_static_lib_exists(prefix: &Path, name: &str) -> bool {
     ]
     .into_iter()
     .any(|file| lib_dir.join(file).exists())
+}
+
+fn smoke_ffmpeg_make(options: DepsOptions) -> Result<()> {
+    if !options.target.is_windows() {
+        bail!("deps smoke-ffmpeg-make only applies to the Windows FFmpeg/MSYS make path");
+    }
+
+    let make = gnu_make().context("required GNU make was not found")?;
+    let smoke_dir = env::temp_dir().join(format!("erika-ffmpeg-make-smoke-{}", std::process::id()));
+    if smoke_dir.exists() {
+        fs::remove_dir_all(&smoke_dir)
+            .with_context(|| format!("remove {}", smoke_dir.display()))?;
+    }
+    fs::create_dir_all(&smoke_dir).with_context(|| format!("create {}", smoke_dir.display()))?;
+    fs::write(
+        smoke_dir.join("Makefile"),
+        "all:\n\t@echo cwd=$(CURDIR)\n\t@test -f Makefile\n\t@awk 'BEGIN { s = \"C:\\\\tmp\\\\file\"; gsub(/\\\\/, \"/\", s); if (s != \"C:/tmp/file\") exit 42 }'\n\t@echo erika-ffmpeg-make-smoke-ok\n",
+    )
+    .with_context(|| format!("write {}", smoke_dir.join("Makefile").display()))?;
+
+    let args = ["all".to_string()];
+    let mut command = ffmpeg_make_command(&make, &smoke_dir, &args, options.target)?;
+    apply_windows_posix_shell(&mut command, options.target);
+    append_windows_posix_paths(&mut command);
+    let result = run(&mut command);
+    let _ = fs::remove_dir_all(&smoke_dir);
+    result
 }
 
 fn ensure_windows_link_aliases(
