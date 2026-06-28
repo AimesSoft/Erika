@@ -2359,12 +2359,19 @@ fn ffmpeg_make_command(
     if target.is_windows() {
         let shell = posix_shell().context("required POSIX shell was not found for FFmpeg make")?;
         let mut command = Command::new(shell);
-        let make_line = std::iter::once(shell_quote(&path_to_forward_slashes(make)))
-            .chain(args.iter().map(|arg| shell_quote(arg)))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let make_line = std::iter::once(format!(
+            "cd {}",
+            shell_quote(&path_to_forward_slashes(build_dir))
+        ))
+        .chain(std::iter::once(
+            std::iter::once(shell_quote(&path_to_forward_slashes(make)))
+                .chain(args.iter().map(|arg| shell_quote(arg)))
+                .collect::<Vec<_>>()
+                .join(" "),
+        ))
+        .collect::<Vec<_>>()
+        .join(" && ");
         command
-            .current_dir(build_dir)
             .arg("-lc")
             .arg(make_line)
             .env("MSYS2_ARG_CONV_EXCL", "*");
