@@ -57,6 +57,7 @@ pub struct MetalRenderer {
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     _unsupported: (),
     current_frame: Option<ImportedVideoFrame>,
+    current_frame_visible: bool,
     current_media_time: Duration,
     current_generation: u64,
     upload_counter: u64,
@@ -376,6 +377,7 @@ impl MetalRenderer {
             Ok(Self {
                 inner: apple::MetalRendererImpl::new(_config)?,
                 current_frame: None,
+                current_frame_visible: false,
                 current_media_time: Duration::ZERO,
                 current_generation: 1,
                 upload_counter: 0,
@@ -664,10 +666,9 @@ impl RendererBackend for MetalRenderer {
     }
 
     fn clear_current_frame(&mut self) -> Result<()> {
-        self.current_frame = None;
+        self.current_frame_visible = false;
         self.current_media_time = Duration::ZERO;
         self.current_generation = 1;
-        self.upload_counter = 0;
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             if self.inner.has_surface() {
@@ -706,6 +707,7 @@ impl RendererBackend for MetalRenderer {
         let started = std::time::Instant::now();
         let imported = self.import_player_frame(&frame.frame)?;
         self.current_frame = Some(imported);
+        self.current_frame_visible = true;
         self.current_media_time = frame.pts.unwrap_or(frame.media_time);
         self.current_generation = frame.generation.max(1);
         self.upload_counter = self.upload_counter.wrapping_add(1);
@@ -732,6 +734,9 @@ impl RendererBackend for MetalRenderer {
     }
 
     fn render_current_frame(&mut self, context: RenderFrameContext<'_>) -> Result<bool> {
+        if !self.current_frame_visible {
+            return Ok(false);
+        }
         let Some(frame) = self.current_frame.take() else {
             if trace::enabled() {
                 trace::log(format!(
