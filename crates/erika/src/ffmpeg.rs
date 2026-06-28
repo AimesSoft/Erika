@@ -447,21 +447,6 @@ impl OwnedCodecParameters {
         unsafe { codec_name((*self.ptr).codec_id) }
     }
 
-    pub fn sample_rate(&self) -> u32 {
-        unsafe { (*self.ptr).sample_rate.max(0) as u32 }
-    }
-
-    pub fn channel_count(&self) -> u32 {
-        #[cfg(erika_ffmpeg_legacy_channel_layout)]
-        {
-            unsafe { (*self.ptr).channels.max(0) as u32 }
-        }
-        #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
-        {
-            unsafe { (*self.ptr).ch_layout.nb_channels.max(0) as u32 }
-        }
-    }
-
     pub fn kind(&self) -> Option<TrackKind> {
         unsafe { track_kind((*self.ptr).codec_type) }
     }
