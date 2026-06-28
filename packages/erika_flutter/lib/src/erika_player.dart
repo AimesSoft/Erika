@@ -92,6 +92,148 @@ class ErikaUpscalerStatus {
   }
 }
 
+class ErikaPresenterStats {
+  const ErikaPresenterStats({
+    required this.decodedVideoFrames,
+    required this.renderedVideoFrames,
+    required this.renderedTestFrames,
+    required this.pushedAudioFrames,
+    required this.overlayFrames,
+    required this.danmakuFrames,
+    required this.danmakuItems,
+    required this.importFailures,
+    required this.renderFailures,
+    required this.audioFailures,
+    required this.softwareVideoFrames,
+    required this.hardwareVideoFrames,
+    required this.zeroCopyVideoFrames,
+    required this.cpuVideoFrameFallbacks,
+    required this.lastRenderDuration,
+    required this.lastRenderCurrentDuration,
+    required this.audioClockReadFrames,
+    required this.audioClockQueuedFrames,
+    required this.audioClockUnderflowFrames,
+    required this.directZeroCopyVideoFrames,
+    required this.sharedHandleVideoFrames,
+    required this.hdrSourceFrames,
+    required this.hdr10OutputFrames,
+    required this.sdrTonemapFrames,
+    required this.hdr10MetadataUpdates,
+    required this.hdr10MetadataFailures,
+    required this.hdr10OutputFailures,
+    required this.hdr10OutputActive,
+  });
+
+  final int decodedVideoFrames;
+  final int renderedVideoFrames;
+  final int renderedTestFrames;
+  final int pushedAudioFrames;
+  final int overlayFrames;
+  final int danmakuFrames;
+  final int danmakuItems;
+  final int importFailures;
+  final int renderFailures;
+  final int audioFailures;
+  final int softwareVideoFrames;
+  final int hardwareVideoFrames;
+  final int zeroCopyVideoFrames;
+  final int cpuVideoFrameFallbacks;
+  final Duration lastRenderDuration;
+  final Duration lastRenderCurrentDuration;
+  final int audioClockReadFrames;
+  final int audioClockQueuedFrames;
+  final int audioClockUnderflowFrames;
+  final int directZeroCopyVideoFrames;
+  final int sharedHandleVideoFrames;
+  final int hdrSourceFrames;
+  final int hdr10OutputFrames;
+  final int sdrTonemapFrames;
+  final int hdr10MetadataUpdates;
+  final int hdr10MetadataFailures;
+  final int hdr10OutputFailures;
+  final bool hdr10OutputActive;
+
+  factory ErikaPresenterStats.fromMap(Map<dynamic, dynamic> map) {
+    return ErikaPresenterStats(
+      decodedVideoFrames: _intValue(map['decodedVideoFrames']),
+      renderedVideoFrames: _intValue(map['renderedVideoFrames']),
+      renderedTestFrames: _intValue(map['renderedTestFrames']),
+      pushedAudioFrames: _intValue(map['pushedAudioFrames']),
+      overlayFrames: _intValue(map['overlayFrames']),
+      danmakuFrames: _intValue(map['danmakuFrames']),
+      danmakuItems: _intValue(map['danmakuItems']),
+      importFailures: _intValue(map['importFailures']),
+      renderFailures: _intValue(map['renderFailures']),
+      audioFailures: _intValue(map['audioFailures']),
+      softwareVideoFrames: _intValue(map['softwareVideoFrames']),
+      hardwareVideoFrames: _intValue(map['hardwareVideoFrames']),
+      zeroCopyVideoFrames: _intValue(map['zeroCopyVideoFrames']),
+      cpuVideoFrameFallbacks: _intValue(map['cpuVideoFrameFallbacks']),
+      lastRenderDuration: Duration(
+        microseconds: _intValue(map['lastRenderMicros']),
+      ),
+      lastRenderCurrentDuration: Duration(
+        microseconds: _intValue(map['lastRenderCurrentMicros']),
+      ),
+      audioClockReadFrames: _intValue(map['audioClockReadFrames']),
+      audioClockQueuedFrames: _intValue(map['audioClockQueuedFrames']),
+      audioClockUnderflowFrames: _intValue(map['audioClockUnderflowFrames']),
+      directZeroCopyVideoFrames: _intValue(map['directZeroCopyVideoFrames']),
+      sharedHandleVideoFrames: _intValue(map['sharedHandleVideoFrames']),
+      hdrSourceFrames: _intValue(map['hdrSourceFrames']),
+      hdr10OutputFrames: _intValue(map['hdr10OutputFrames']),
+      sdrTonemapFrames: _intValue(map['sdrTonemapFrames']),
+      hdr10MetadataUpdates: _intValue(map['hdr10MetadataUpdates']),
+      hdr10MetadataFailures: _intValue(map['hdr10MetadataFailures']),
+      hdr10OutputFailures: _intValue(map['hdr10OutputFailures']),
+      hdr10OutputActive: map['hdr10OutputActive'] == true,
+    );
+  }
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'decodedVideoFrames': decodedVideoFrames,
+      'renderedVideoFrames': renderedVideoFrames,
+      'renderedTestFrames': renderedTestFrames,
+      'pushedAudioFrames': pushedAudioFrames,
+      'overlayFrames': overlayFrames,
+      'danmakuFrames': danmakuFrames,
+      'danmakuItems': danmakuItems,
+      'importFailures': importFailures,
+      'renderFailures': renderFailures,
+      'audioFailures': audioFailures,
+      'softwareVideoFrames': softwareVideoFrames,
+      'hardwareVideoFrames': hardwareVideoFrames,
+      'zeroCopyVideoFrames': zeroCopyVideoFrames,
+      'cpuVideoFrameFallbacks': cpuVideoFrameFallbacks,
+      'lastRenderMicros': lastRenderDuration.inMicroseconds,
+      'lastRenderCurrentMicros': lastRenderCurrentDuration.inMicroseconds,
+      'audioClockReadFrames': audioClockReadFrames,
+      'audioClockQueuedFrames': audioClockQueuedFrames,
+      'audioClockUnderflowFrames': audioClockUnderflowFrames,
+      'directZeroCopyVideoFrames': directZeroCopyVideoFrames,
+      'sharedHandleVideoFrames': sharedHandleVideoFrames,
+      'hdrSourceFrames': hdrSourceFrames,
+      'hdr10OutputFrames': hdr10OutputFrames,
+      'sdrTonemapFrames': sdrTonemapFrames,
+      'hdr10MetadataUpdates': hdr10MetadataUpdates,
+      'hdr10MetadataFailures': hdr10MetadataFailures,
+      'hdr10OutputFailures': hdr10OutputFailures,
+      'hdr10OutputActive': hdr10OutputActive,
+    };
+  }
+
+  static int _intValue(Object? value) {
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    return 0;
+  }
+}
+
 class ErikaDanmakuTrackInfo {
   const ErikaDanmakuTrackInfo({
     required this.id,
@@ -446,6 +588,18 @@ class ErikaPlayer {
       throw StateError('Erika upscaler status returned null.');
     }
     return ErikaUpscalerStatus.fromMap(status);
+  }
+
+  Future<ErikaPresenterStats> getPresenterStats() async {
+    final playerId = await ensureCreated();
+    final stats = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+      'getPresenterStats',
+      <String, Object?>{'playerId': playerId},
+    );
+    if (stats == null) {
+      throw StateError('Erika presenter stats returned null.');
+    }
+    return ErikaPresenterStats.fromMap(stats);
   }
 
   Future<Uint8List?> screenshot({int? viewId, int? width, int? height}) async {

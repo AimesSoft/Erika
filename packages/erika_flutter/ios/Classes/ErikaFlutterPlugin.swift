@@ -167,6 +167,14 @@ private struct ErikaTrackInfoC {
   var title: UnsafeMutablePointer<CChar>?
   var language: UnsafeMutablePointer<CChar>?
   var codec: UnsafeMutablePointer<CChar>?
+  var width: UInt32 = 0
+  var height: UInt32 = 0
+  var sampleRate: UInt32 = 0
+  var channels: UInt32 = 0
+  var pixelFormat: UnsafeMutablePointer<CChar>?
+  var sampleFormat: UnsafeMutablePointer<CChar>?
+  var profile: UnsafeMutablePointer<CChar>?
+  var level: Int32 = 0
 }
 
 private struct ErikaPresenterConfigC {
@@ -540,6 +548,7 @@ private final class ErikaPlayerHost {
   private let hdrDebug: Bool
   private let presenterConfig: ErikaPresenterConfigC
   private var loggedFirstRenderedVideoFrame = false
+  private var latestPresenterStats = ErikaPresenterStatsC()
 
   init(id: Int64, library: ErikaNativeLibrary, config: ErikaPresenterConfigC, hdrDebug: Bool) throws {
     self.id = id
@@ -620,6 +629,10 @@ private final class ErikaPlayerHost {
     }
     try check(result, operation: "get_upscaler_status")
     return status.toFlutterMap()
+  }
+
+  func presenterStats() -> [String: Any] {
+    latestPresenterStats.toFlutterMap()
   }
 
   func addExternalSubtitle(uri: String) throws -> Int64 {
@@ -898,6 +911,8 @@ private final class ErikaPlayerHost {
     }
     if status != 0 {
       NSLog("ErikaFlutterPlugin: render_tick failed with status \(status)")
+    } else {
+      latestPresenterStats = stats
     }
     if hdrDebug && !loggedFirstRenderedVideoFrame && stats.renderedVideoFrames > 0 {
       loggedFirstRenderedVideoFrame = true
@@ -1402,6 +1417,9 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       case "getUpscalerStatus":
         let args = try dictionaryArgs(call.arguments)
         result(try playerHost(from: args).upscalerStatus())
+      case "getPresenterStats":
+        let args = try dictionaryArgs(call.arguments)
+        result(try playerHost(from: args).presenterStats())
       case "addExternalSubtitle":
         let args = try dictionaryArgs(call.arguments)
         guard let uri = args["uri"] as? String, !uri.isEmpty else {
@@ -2052,6 +2070,41 @@ private extension ErikaUpscalerStatusC {
   }
 }
 
+private extension ErikaPresenterStatsC {
+  func toFlutterMap() -> [String: Any] {
+    [
+      "decodedVideoFrames": Int64(clamping: decodedVideoFrames),
+      "renderedVideoFrames": Int64(clamping: renderedVideoFrames),
+      "renderedTestFrames": Int64(clamping: renderedTestFrames),
+      "pushedAudioFrames": Int64(clamping: pushedAudioFrames),
+      "overlayFrames": Int64(clamping: overlayFrames),
+      "danmakuFrames": Int64(clamping: danmakuFrames),
+      "danmakuItems": Int64(clamping: danmakuItems),
+      "importFailures": Int64(clamping: importFailures),
+      "renderFailures": Int64(clamping: renderFailures),
+      "audioFailures": Int64(clamping: audioFailures),
+      "softwareVideoFrames": Int64(clamping: softwareVideoFrames),
+      "hardwareVideoFrames": Int64(clamping: hardwareVideoFrames),
+      "zeroCopyVideoFrames": Int64(clamping: zeroCopyVideoFrames),
+      "cpuVideoFrameFallbacks": Int64(clamping: cpuVideoFrameFallbacks),
+      "lastRenderMicros": Int64(clamping: lastRenderMicros),
+      "lastRenderCurrentMicros": Int64(clamping: lastRenderCurrentMicros),
+      "audioClockReadFrames": Int64(clamping: audioClockReadFrames),
+      "audioClockQueuedFrames": Int64(clamping: audioClockQueuedFrames),
+      "audioClockUnderflowFrames": Int64(clamping: audioClockUnderflowFrames),
+      "directZeroCopyVideoFrames": Int64(clamping: directZeroCopyVideoFrames),
+      "sharedHandleVideoFrames": Int64(clamping: sharedHandleVideoFrames),
+      "hdrSourceFrames": Int64(clamping: hdrSourceFrames),
+      "hdr10OutputFrames": Int64(clamping: hdr10OutputFrames),
+      "sdrTonemapFrames": Int64(clamping: sdrTonemapFrames),
+      "hdr10MetadataUpdates": Int64(clamping: hdr10MetadataUpdates),
+      "hdr10MetadataFailures": Int64(clamping: hdr10MetadataFailures),
+      "hdr10OutputFailures": Int64(clamping: hdr10OutputFailures),
+      "hdr10OutputActive": hdr10OutputActive,
+    ]
+  }
+}
+
 private extension ErikaTrackInfoC {
   func toFlutterMap() -> [String: Any] {
     [
@@ -2063,6 +2116,14 @@ private extension ErikaTrackInfoC {
       "title": title.map { String(cString: $0) } as Any,
       "language": language.map { String(cString: $0) } as Any,
       "codec": codec.map { String(cString: $0) } as Any,
+      "width": Int(width),
+      "height": Int(height),
+      "sampleRate": Int(sampleRate),
+      "channels": Int(channels),
+      "pixelFormat": pixelFormat.map { String(cString: $0) } as Any,
+      "sampleFormat": sampleFormat.map { String(cString: $0) } as Any,
+      "profile": profile.map { String(cString: $0) } as Any,
+      "level": Int(level),
     ]
   }
 }

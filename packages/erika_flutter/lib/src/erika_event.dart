@@ -142,6 +142,14 @@ class ErikaTrackInfo {
     this.title,
     this.language,
     this.codec,
+    this.width = 0,
+    this.height = 0,
+    this.sampleRate = 0,
+    this.channels = 0,
+    this.pixelFormat,
+    this.sampleFormat,
+    this.profile,
+    this.level = 0,
   });
 
   factory ErikaTrackInfo.fromMap(Map<dynamic, dynamic> map) {
@@ -154,6 +162,14 @@ class ErikaTrackInfo {
       title: map['title'] as String?,
       language: map['language'] as String?,
       codec: map['codec'] as String?,
+      width: _asInt(map['width']),
+      height: _asInt(map['height']),
+      sampleRate: _asInt(map['sampleRate']),
+      channels: _asInt(map['channels']),
+      pixelFormat: map['pixelFormat'] as String?,
+      sampleFormat: map['sampleFormat'] as String?,
+      profile: map['profile'] as String?,
+      level: _asInt(map['level']),
     );
   }
 
@@ -165,6 +181,35 @@ class ErikaTrackInfo {
   final String? title;
   final String? language;
   final String? codec;
+  final int width;
+  final int height;
+  final int sampleRate;
+  final int channels;
+  final String? pixelFormat;
+  final String? sampleFormat;
+  final String? profile;
+  final int level;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'id': id,
+      'kind': kind.name,
+      'source': source.name,
+      'selected': selected,
+      'canRemove': canRemove,
+      'title': title,
+      'language': language,
+      'codec': codec,
+      'width': width,
+      'height': height,
+      'sampleRate': sampleRate,
+      'channels': channels,
+      'pixelFormat': pixelFormat,
+      'sampleFormat': sampleFormat,
+      'profile': profile,
+      'level': level,
+    };
+  }
 
   bool get isEmbedded => source == ErikaTrackSource.embedded;
   bool get isExternal => source == ErikaTrackSource.external;

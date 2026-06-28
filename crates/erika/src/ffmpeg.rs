@@ -2121,10 +2121,20 @@ fn inspect_format_context(
         track.codec = codec.clone();
 
         if kind == TrackKind::Video {
-            video.push(unsafe { video_probe(&track, codecpar) });
+            let probe = unsafe { video_probe(&track, codecpar) };
+            track.width = probe.params.width;
+            track.height = probe.params.height;
+            track.pixel_format = probe.pixel_format.clone();
+            track.profile = probe.profile.clone();
+            track.level = probe.level;
+            video.push(probe);
         }
         if kind == TrackKind::Audio {
-            audio.push(unsafe { audio_probe(&track, codecpar) });
+            let probe = unsafe { audio_probe(&track, codecpar) };
+            track.sample_rate = probe.sample_rate;
+            track.channels = probe.channels;
+            track.sample_format = probe.sample_format.clone();
+            audio.push(probe);
         }
         if kind == TrackKind::Subtitle {
             subtitles.push(subtitle_probe(&track));

@@ -171,6 +171,14 @@ typedef struct ErikaTrackInfo {
   char *title;
   char *language;
   char *codec;
+  uint32_t width;
+  uint32_t height;
+  uint32_t sample_rate;
+  uint32_t channels;
+  char *pixel_format;
+  char *sample_format;
+  char *profile;
+  int32_t level;
 } ErikaTrackInfo;
 
 typedef struct ErikaEvent {

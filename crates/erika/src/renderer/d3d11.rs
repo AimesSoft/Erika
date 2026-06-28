@@ -908,14 +908,7 @@ impl D3d11Renderer {
             let (x, y, width, height) = plane.scaled_rect(viewport_w, viewport_h);
             draws.push(D3d11OverlayDraw {
                 texture,
-                constants: OverlayUniforms::rgba_plane(
-                    x,
-                    y,
-                    width,
-                    height,
-                    viewport_w,
-                    viewport_h,
-                ),
+                constants: OverlayUniforms::rgba_plane(x, y, width, height, viewport_w, viewport_h),
             });
         }
 

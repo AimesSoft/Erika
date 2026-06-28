@@ -481,6 +481,67 @@ EncodableValue UpscalerStatusToMap(const ErikaUpscalerStatus& status) {
   });
 }
 
+EncodableValue PresenterStatsToMap(const ErikaPresenterStats& stats) {
+  return EncodableValue(EncodableMap{
+      {EncodableValue("decodedVideoFrames"),
+       EncodableValue(static_cast<int64_t>(stats.decoded_video_frames))},
+      {EncodableValue("renderedVideoFrames"),
+       EncodableValue(static_cast<int64_t>(stats.rendered_video_frames))},
+      {EncodableValue("renderedTestFrames"),
+       EncodableValue(static_cast<int64_t>(stats.rendered_test_frames))},
+      {EncodableValue("pushedAudioFrames"),
+       EncodableValue(static_cast<int64_t>(stats.pushed_audio_frames))},
+      {EncodableValue("overlayFrames"),
+       EncodableValue(static_cast<int64_t>(stats.overlay_frames))},
+      {EncodableValue("danmakuFrames"),
+       EncodableValue(static_cast<int64_t>(stats.danmaku_frames))},
+      {EncodableValue("danmakuItems"),
+       EncodableValue(static_cast<int64_t>(stats.danmaku_items))},
+      {EncodableValue("importFailures"),
+       EncodableValue(static_cast<int64_t>(stats.import_failures))},
+      {EncodableValue("renderFailures"),
+       EncodableValue(static_cast<int64_t>(stats.render_failures))},
+      {EncodableValue("audioFailures"),
+       EncodableValue(static_cast<int64_t>(stats.audio_failures))},
+      {EncodableValue("softwareVideoFrames"),
+       EncodableValue(static_cast<int64_t>(stats.software_video_frames))},
+      {EncodableValue("hardwareVideoFrames"),
+       EncodableValue(static_cast<int64_t>(stats.hardware_video_frames))},
+      {EncodableValue("zeroCopyVideoFrames"),
+       EncodableValue(static_cast<int64_t>(stats.zero_copy_video_frames))},
+      {EncodableValue("cpuVideoFrameFallbacks"),
+       EncodableValue(static_cast<int64_t>(stats.cpu_video_frame_fallbacks))},
+      {EncodableValue("lastRenderMicros"),
+       EncodableValue(static_cast<int64_t>(stats.last_render_micros))},
+      {EncodableValue("lastRenderCurrentMicros"),
+       EncodableValue(static_cast<int64_t>(stats.last_render_current_micros))},
+      {EncodableValue("audioClockReadFrames"),
+       EncodableValue(static_cast<int64_t>(stats.audio_clock_read_frames))},
+      {EncodableValue("audioClockQueuedFrames"),
+       EncodableValue(static_cast<int64_t>(stats.audio_clock_queued_frames))},
+      {EncodableValue("audioClockUnderflowFrames"),
+       EncodableValue(static_cast<int64_t>(stats.audio_clock_underflow_frames))},
+      {EncodableValue("directZeroCopyVideoFrames"),
+       EncodableValue(static_cast<int64_t>(stats.direct_zero_copy_video_frames))},
+      {EncodableValue("sharedHandleVideoFrames"),
+       EncodableValue(static_cast<int64_t>(stats.shared_handle_video_frames))},
+      {EncodableValue("hdrSourceFrames"),
+       EncodableValue(static_cast<int64_t>(stats.hdr_source_frames))},
+      {EncodableValue("hdr10OutputFrames"),
+       EncodableValue(static_cast<int64_t>(stats.hdr10_output_frames))},
+      {EncodableValue("sdrTonemapFrames"),
+       EncodableValue(static_cast<int64_t>(stats.sdr_tonemap_frames))},
+      {EncodableValue("hdr10MetadataUpdates"),
+       EncodableValue(static_cast<int64_t>(stats.hdr10_metadata_updates))},
+      {EncodableValue("hdr10MetadataFailures"),
+       EncodableValue(static_cast<int64_t>(stats.hdr10_metadata_failures))},
+      {EncodableValue("hdr10OutputFailures"),
+       EncodableValue(static_cast<int64_t>(stats.hdr10_output_failures))},
+      {EncodableValue("hdr10OutputActive"),
+       EncodableValue(stats.hdr10_output_active)},
+  });
+}
+
 }  // namespace
 
 struct ErikaFlutterPlugin::ErikaNativeLibrary {
@@ -988,6 +1049,10 @@ struct ErikaFlutterPlugin::PlayerHost {
     return UpscalerStatusToMap(status);
   }
 
+  EncodableValue GetPresenterStats() const {
+    return PresenterStatsToMap(latest_presenter_stats);
+  }
+
   int64_t AddExternalSubtitle(const std::string& uri) {
     int64_t track_id = 0;
     Check(library->add_external_subtitle(handle, uri.c_str(), &track_id),
@@ -1178,6 +1243,19 @@ struct ErikaFlutterPlugin::PlayerHost {
           {EncodableValue("title"), NullableString(track.title)},
           {EncodableValue("language"), NullableString(track.language)},
           {EncodableValue("codec"), NullableString(track.codec)},
+          {EncodableValue("width"),
+           EncodableValue(static_cast<int32_t>(track.width))},
+          {EncodableValue("height"),
+           EncodableValue(static_cast<int32_t>(track.height))},
+          {EncodableValue("sampleRate"),
+           EncodableValue(static_cast<int32_t>(track.sample_rate))},
+          {EncodableValue("channels"),
+           EncodableValue(static_cast<int32_t>(track.channels))},
+          {EncodableValue("pixelFormat"), NullableString(track.pixel_format)},
+          {EncodableValue("sampleFormat"), NullableString(track.sample_format)},
+          {EncodableValue("profile"), NullableString(track.profile)},
+          {EncodableValue("level"),
+           EncodableValue(static_cast<int32_t>(track.level))},
       }));
       library->free_track_info(&track);
     }
@@ -1233,6 +1311,8 @@ struct ErikaFlutterPlugin::PlayerHost {
         DebugLog("render_tick failed with ErikaStatus_" + StatusName(status) +
                  " (" + std::to_string(static_cast<int>(status)) + "): " +
                  library->TakeLastError());
+      } else {
+        latest_presenter_stats = stats;
       }
     }
     PollEvents(event_sink);
@@ -1397,6 +1477,7 @@ struct ErikaFlutterPlugin::PlayerHost {
   bool surface_attached = false;
   double start_time_seconds = NowSeconds();
   ErikaDanmakuConfig current_danmaku_config = DefaultDanmakuConfig();
+  ErikaPresenterStats latest_presenter_stats{};
 };
 
 ErikaEventStreamHandler::ErikaEventStreamHandler(ErikaFlutterPlugin* plugin)
@@ -1714,6 +1795,8 @@ void ErikaFlutterPlugin::HandleMethodCall(
       result->Success();
     } else if (method == "getUpscalerStatus") {
       result->Success(PlayerFromArgs(args).GetUpscalerStatus());
+    } else if (method == "getPresenterStats") {
+      result->Success(PlayerFromArgs(args).GetPresenterStats());
     } else if (method == "addExternalSubtitle") {
       const int64_t track_id =
           PlayerFromArgs(args).AddExternalSubtitle(RequiredString(args, "uri"));

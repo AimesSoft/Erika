@@ -135,6 +135,14 @@ pub struct ErikaTrackInfo {
     pub title: *mut c_char,
     pub language: *mut c_char,
     pub codec: *mut c_char,
+    pub width: u32,
+    pub height: u32,
+    pub sample_rate: u32,
+    pub channels: u32,
+    pub pixel_format: *mut c_char,
+    pub sample_format: *mut c_char,
+    pub profile: *mut c_char,
+    pub level: i32,
 }
 
 impl Default for ErikaTrackInfo {
@@ -148,6 +156,14 @@ impl Default for ErikaTrackInfo {
             title: std::ptr::null_mut(),
             language: std::ptr::null_mut(),
             codec: std::ptr::null_mut(),
+            width: 0,
+            height: 0,
+            sample_rate: 0,
+            channels: 0,
+            pixel_format: std::ptr::null_mut(),
+            sample_format: std::ptr::null_mut(),
+            profile: std::ptr::null_mut(),
+            level: 0,
         }
     }
 }
@@ -584,6 +600,9 @@ pub unsafe extern "C" fn erika_track_info_free(track: *mut ErikaTrackInfo) {
     free_c_string(&mut track.title);
     free_c_string(&mut track.language);
     free_c_string(&mut track.codec);
+    free_c_string(&mut track.pixel_format);
+    free_c_string(&mut track.sample_format);
+    free_c_string(&mut track.profile);
 }
 
 #[unsafe(no_mangle)]
@@ -2070,6 +2089,14 @@ fn track_info_to_c(track: &TrackInfo) -> ErikaTrackInfo {
         title: option_string_to_c(track.title.as_deref()),
         language: option_string_to_c(track.language.as_deref()),
         codec: option_string_to_c(track.codec.as_deref()),
+        width: track.width,
+        height: track.height,
+        sample_rate: track.sample_rate,
+        channels: track.channels,
+        pixel_format: option_string_to_c(track.pixel_format.as_deref()),
+        sample_format: option_string_to_c(track.sample_format.as_deref()),
+        profile: option_string_to_c(track.profile.as_deref()),
+        level: track.level.unwrap_or(0),
     }
 }
 
