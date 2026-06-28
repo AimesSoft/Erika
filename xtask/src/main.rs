@@ -2401,8 +2401,9 @@ fn ffmpeg_make_command(
         .collect::<Vec<_>>()
         .join(" && ");
         command
-            .arg("-c")
+            .arg("-lc")
             .arg(make_line)
+            .env("MSYS2_PATH_TYPE", "inherit")
             .env("MSYS2_ARG_CONV_EXCL", "*");
         return Ok(command);
     }
