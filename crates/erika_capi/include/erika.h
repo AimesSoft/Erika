@@ -28,7 +28,8 @@
  *   - List getters use the counted-array idiom: pass (buf, capacity, &len);
  *     len is set to the total count, at most capacity records are written, and
  *     capacity 0 with a NULL buffer queries the count.
- *   - attach_*/resize take width/height in physical pixels and a DPI scale.
+ *   - attach and resize functions take width/height in physical pixels and a
+ *     DPI scale.
  *   - A handle is not internally synchronized: do not call into one handle
  *     concurrently from multiple threads.
  */

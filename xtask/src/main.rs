@@ -1692,9 +1692,18 @@ fn smoke_ffmpeg_make(options: DepsOptions) -> Result<()> {
             .with_context(|| format!("remove {}", smoke_dir.display()))?;
     }
     fs::create_dir_all(&smoke_dir).with_context(|| format!("create {}", smoke_dir.display()))?;
+    let root = workspace_root()?;
+    fs::write(
+        smoke_dir.join("header_smoke.cpp"),
+        "#include \"crates/erika_capi/include/erika.h\"\nint main() { return 0; }\n",
+    )
+    .with_context(|| format!("write {}", smoke_dir.join("header_smoke.cpp").display()))?;
     fs::write(
         smoke_dir.join("Makefile"),
-        "all:\n\t@echo cwd=$(CURDIR)\n\t@test -f Makefile\n\t@command -v cl.exe >/dev/null\n\t@awk 'BEGIN { s = \"C:\\\\tmp\\\\file\"; gsub(/\\\\/, \"/\", s); if (s != \"C:/tmp/file\") exit 42 }'\n\t@echo erika-ffmpeg-make-smoke-ok\n",
+        format!(
+            "all:\n\t@echo cwd=$(CURDIR)\n\t@test -f Makefile\n\t@command -v cl.exe >/dev/null\n\t@awk 'BEGIN {{ s = \"C:\\\\tmp\\\\file\"; gsub(/\\\\/, \"/\", s); if (s != \"C:/tmp/file\") exit 42 }}'\n\t@cl.exe /nologo /TP /std:c++17 /I\"{}\" /c header_smoke.cpp\n\t@echo erika-ffmpeg-make-smoke-ok\n",
+            path_to_forward_slashes(&root)
+        ),
     )
     .with_context(|| format!("write {}", smoke_dir.join("Makefile").display()))?;
 
