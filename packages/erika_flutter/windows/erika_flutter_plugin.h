@@ -13,8 +13,11 @@
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
 
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <unordered_map>
 
 #include "erika.h"
@@ -71,11 +74,19 @@ class ErikaFlutterPlugin : public flutter::Plugin {
   double BackingScale() const;
   void StartFrameTimer();
   void StopFrameTimer();
+  void PostFrameTick(HWND hwnd, uint64_t generation);
+  void FrameTimerThreadMain(HWND hwnd,
+                            HANDLE stop_event,
+                            double interval_ms,
+                            uint64_t generation);
+  HWND EnsureFrameMessageWindow();
+  void DestroyFrameMessageWindow();
+  void RefreshFrameTimerForCurrentDisplay();
+  static LRESULT CALLBACK FrameMessageWindowProc(HWND hwnd,
+                                                 UINT message,
+                                                 WPARAM wparam,
+                                                 LPARAM lparam);
   void OnFrameTimer();
-  static void CALLBACK FrameTimerProc(HWND hwnd,
-                                      UINT message,
-                                      UINT_PTR timer_id,
-                                      DWORD time);
   std::optional<LRESULT> OnTopLevelWindowProc(HWND hwnd,
                                               UINT message,
                                               WPARAM wparam,
@@ -96,7 +107,14 @@ class ErikaFlutterPlugin : public flutter::Plugin {
   std::unique_ptr<ErikaOverlayWindow> overlay_window_;
   int64_t next_player_id_ = 1;
   int window_proc_delegate_id_ = 0;
-  UINT_PTR frame_timer_id_ = 0;
+  HWND frame_message_window_ = nullptr;
+  HANDLE frame_timer_stop_event_ = nullptr;
+  std::thread frame_timer_thread_;
+  std::atomic<bool> frame_timer_running_{false};
+  std::atomic<bool> frame_tick_pending_{false};
+  std::atomic<uint64_t> frame_timer_generation_{0};
+  double frame_timer_target_fps_ = 0.0;
+  double frame_timer_interval_ms_ = 0.0;
   bool in_frame_timer_ = false;
 };
 

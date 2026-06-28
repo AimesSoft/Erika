@@ -25,8 +25,13 @@ namespace {
 
 constexpr int64_t kWindowOverlayViewId = -1;
 constexpr wchar_t kOverlayWindowClassName[] = L"ErikaFlutterVideoOverlay";
-constexpr UINT kFrameTimerMinIntervalMs = 1;
-constexpr UINT kFrameTimerDefaultIntervalMs = 16;
+constexpr wchar_t kFrameMessageWindowClassName[] = L"ErikaFlutterFrameScheduler";
+constexpr UINT kFrameTimerMessage = WM_APP + 1;
+constexpr double kFrameTimerMinFps = 1.0;
+constexpr double kFrameTimerMaxFps = 1000.0;
+constexpr double kFrameTimerDefaultFps = 60.0;
+constexpr double kFrameTimerMinIntervalMs = 1.0;
+constexpr DWORD kWaitableTimerHighResolutionFlag = 0x00000002;
 
 using flutter::EncodableList;
 using flutter::EncodableMap;
@@ -239,22 +244,66 @@ int LogicalToPhysical(HWND hwnd, double value) {
   return static_cast<int>(std::llround(value * ScaleForWindow(hwnd)));
 }
 
-UINT FrameTimerIntervalMs() {
+std::optional<double> RefreshRateForWindow(HWND hwnd) {
+  HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+  if (monitor == nullptr) {
+    return std::nullopt;
+  }
+
+  MONITORINFOEXW monitor_info{};
+  monitor_info.cbSize = sizeof(monitor_info);
+  if (!GetMonitorInfoW(monitor, &monitor_info)) {
+    return std::nullopt;
+  }
+
+  DEVMODEW mode{};
+  mode.dmSize = sizeof(mode);
+  if (!EnumDisplaySettingsW(monitor_info.szDevice, ENUM_CURRENT_SETTINGS,
+                            &mode)) {
+    return std::nullopt;
+  }
+  if ((mode.dmFields & DM_DISPLAYFREQUENCY) == 0 ||
+      mode.dmDisplayFrequency <= 1) {
+    return std::nullopt;
+  }
+  const double fps = static_cast<double>(mode.dmDisplayFrequency);
+  if (!std::isfinite(fps) || fps < kFrameTimerMinFps ||
+      fps > kFrameTimerMaxFps) {
+    return std::nullopt;
+  }
+  return fps;
+}
+
+double FrameTimerTargetFps(HWND hwnd) {
   const auto env = EnvironmentPath(L"ERIKA_FLUTTER_TARGET_FPS");
-  if (!env) {
-    return kFrameTimerDefaultIntervalMs;
-  }
-  try {
-    const double fps = std::stod(env->wstring());
-    if (!std::isfinite(fps) || fps <= 0.0) {
-      return kFrameTimerDefaultIntervalMs;
+  if (env) {
+    try {
+      const double fps = std::stod(env->wstring());
+      if (std::isfinite(fps) && fps > 0.0) {
+        return std::clamp(fps, kFrameTimerMinFps, kFrameTimerMaxFps);
+      }
+    } catch (...) {
     }
-    const double clamped = std::clamp(fps, 1.0, 1000.0);
-    return std::max(kFrameTimerMinIntervalMs,
-                    static_cast<UINT>(std::llround(1000.0 / clamped)));
-  } catch (...) {
-    return kFrameTimerDefaultIntervalMs;
   }
+  if (auto refresh_rate = RefreshRateForWindow(hwnd)) {
+    return std::clamp(*refresh_rate, kFrameTimerMinFps, kFrameTimerMaxFps);
+  }
+  return kFrameTimerDefaultFps;
+}
+
+double FrameTimerIntervalMs(double fps) {
+  if (!std::isfinite(fps) || fps <= 0.0) {
+    fps = kFrameTimerDefaultFps;
+  }
+  return std::max(kFrameTimerMinIntervalMs, 1000.0 / fps);
+}
+
+LARGE_INTEGER RelativeWaitTimeForMilliseconds(double milliseconds) {
+  LARGE_INTEGER due_time{};
+  due_time.QuadPart =
+      -std::max<LONGLONG>(1, static_cast<LONGLONG>(
+                                 std::llround(milliseconds * 10000.0)));
+  return due_time;
 }
 
 bool FrameTraceEnabled() {
@@ -1532,6 +1581,7 @@ ErikaFlutterPlugin::ErikaFlutterPlugin(
 
 ErikaFlutterPlugin::~ErikaFlutterPlugin() {
   StopFrameTimer();
+  DestroyFrameMessageWindow();
   if (window_proc_delegate_id_ != 0) {
     registrar_->UnregisterTopLevelWindowProcDelegate(window_proc_delegate_id_);
     window_proc_delegate_id_ = 0;
@@ -1567,32 +1617,257 @@ double ErikaFlutterPlugin::BackingScale() const {
 }
 
 void ErikaFlutterPlugin::StartFrameTimer() {
-  if (frame_timer_id_ != 0) {
+  if (frame_timer_running_.load(std::memory_order_acquire)) {
     return;
   }
-  HWND hwnd = FlutterWindow();
+  HWND source_hwnd = FlutterWindow();
+  const double target_fps = FrameTimerTargetFps(source_hwnd);
+  const double interval_ms = FrameTimerIntervalMs(target_fps);
+  HWND hwnd = EnsureFrameMessageWindow();
   if (hwnd == nullptr) {
     return;
   }
-  frame_timer_id_ = reinterpret_cast<UINT_PTR>(this);
-  const UINT interval_ms = FrameTimerIntervalMs();
-  if (!SetTimer(hwnd, frame_timer_id_, interval_ms,
-                &ErikaFlutterPlugin::FrameTimerProc)) {
-    DebugLog("SetTimer failed: " + LastErrorMessage());
-    frame_timer_id_ = 0;
+
+  HANDLE stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (stop_event == nullptr) {
+    DebugLog("CreateEventW for frame scheduler failed: " + LastErrorMessage());
     return;
   }
-  DebugLog("frame timer started interval_ms=" + std::to_string(interval_ms));
+
+  const uint64_t generation =
+      frame_timer_generation_.fetch_add(1, std::memory_order_acq_rel) + 1;
+  frame_tick_pending_.store(false, std::memory_order_release);
+  frame_timer_target_fps_ = target_fps;
+  frame_timer_interval_ms_ = interval_ms;
+  frame_timer_stop_event_ = stop_event;
+  frame_timer_running_.store(true, std::memory_order_release);
+  try {
+    frame_timer_thread_ = std::thread(
+        &ErikaFlutterPlugin::FrameTimerThreadMain, this, hwnd, stop_event,
+        interval_ms, generation);
+  } catch (const std::exception& error) {
+    frame_timer_running_.store(false, std::memory_order_release);
+    frame_timer_generation_.fetch_add(1, std::memory_order_acq_rel);
+    frame_timer_stop_event_ = nullptr;
+    CloseHandle(stop_event);
+    DebugLog(std::string("frame scheduler thread failed: ") + error.what());
+    return;
+  }
+
+  DebugLog("frame scheduler started interval_ms=" +
+           std::to_string(interval_ms) + " target_fps=" +
+           std::to_string(target_fps) + " generation=" +
+           std::to_string(generation));
 }
 
 void ErikaFlutterPlugin::StopFrameTimer() {
-  if (frame_timer_id_ == 0) {
+  if (!frame_timer_running_.exchange(false, std::memory_order_acq_rel)) {
     return;
   }
-  if (HWND hwnd = FlutterWindow()) {
-    KillTimer(hwnd, frame_timer_id_);
+  frame_timer_generation_.fetch_add(1, std::memory_order_acq_rel);
+  HANDLE stop_event = frame_timer_stop_event_;
+  if (stop_event != nullptr) {
+    SetEvent(stop_event);
   }
-  frame_timer_id_ = 0;
+  if (frame_timer_thread_.joinable()) {
+    frame_timer_thread_.join();
+  }
+  if (stop_event != nullptr) {
+    CloseHandle(stop_event);
+    frame_timer_stop_event_ = nullptr;
+  }
+  frame_tick_pending_.store(false, std::memory_order_release);
+  DebugLog("frame scheduler stopped");
+}
+
+void ErikaFlutterPlugin::PostFrameTick(HWND hwnd, uint64_t generation) {
+  if (!frame_timer_running_.load(std::memory_order_acquire) ||
+      generation != frame_timer_generation_.load(std::memory_order_acquire)) {
+    return;
+  }
+  bool expected = false;
+  if (!frame_tick_pending_.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel)) {
+    return;
+  }
+  if (!PostMessageW(hwnd, kFrameTimerMessage, reinterpret_cast<WPARAM>(this),
+                    static_cast<LPARAM>(generation))) {
+    frame_tick_pending_.store(false, std::memory_order_release);
+    DebugLog("PostMessage frame tick failed: " + LastErrorMessage());
+  }
+}
+
+void ErikaFlutterPlugin::FrameTimerThreadMain(HWND hwnd,
+                                              HANDLE stop_event,
+                                              double interval_ms,
+                                              uint64_t generation) {
+  SetLastError(0);
+  bool high_resolution = true;
+  HANDLE timer =
+      CreateWaitableTimerExW(nullptr, nullptr,
+                             kWaitableTimerHighResolutionFlag, TIMER_ALL_ACCESS);
+  if (timer == nullptr) {
+    const auto high_resolution_error = LastErrorMessage();
+    high_resolution = false;
+    timer = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
+    if (timer != nullptr) {
+      DebugLog("high resolution waitable timer unavailable: " +
+               high_resolution_error + "; using regular waitable timer");
+    }
+  }
+
+  auto run_timeout_loop = [&]() {
+    const DWORD wait_ms =
+        static_cast<DWORD>(std::max(1.0, std::ceil(interval_ms)));
+    while (frame_timer_running_.load(std::memory_order_acquire) &&
+           generation ==
+               frame_timer_generation_.load(std::memory_order_acquire)) {
+      const DWORD wait = WaitForSingleObject(stop_event, wait_ms);
+      if (wait != WAIT_TIMEOUT) {
+        break;
+      }
+      PostFrameTick(hwnd, generation);
+    }
+  };
+
+  if (timer == nullptr) {
+    DebugLog("CreateWaitableTimerExW failed: " + LastErrorMessage() +
+             "; using wait timeout loop");
+    run_timeout_loop();
+    return;
+  }
+
+  DebugLog(std::string("frame scheduler timer armed high_resolution=") +
+           (high_resolution ? "true" : "false"));
+  HANDLE wait_handles[] = {stop_event, timer};
+  using clock = std::chrono::steady_clock;
+  const auto period = std::chrono::duration_cast<clock::duration>(
+      std::chrono::duration<double, std::milli>(interval_ms));
+  auto next_tick = clock::now();
+  while (frame_timer_running_.load(std::memory_order_acquire) &&
+         generation == frame_timer_generation_.load(std::memory_order_acquire)) {
+    next_tick += period;
+    auto now = clock::now();
+    const double late_ms =
+        std::chrono::duration<double, std::milli>(now - next_tick).count();
+    if (late_ms > interval_ms * 4.0) {
+      next_tick = now + period;
+    }
+    const double delay_ms =
+        std::chrono::duration<double, std::milli>(next_tick - now).count();
+    if (delay_ms <= 0.05) {
+      PostFrameTick(hwnd, generation);
+      continue;
+    }
+
+    auto due_time = RelativeWaitTimeForMilliseconds(delay_ms);
+    if (!SetWaitableTimer(timer, &due_time, 0, nullptr, nullptr, FALSE)) {
+      DebugLog("SetWaitableTimer failed: " + LastErrorMessage() +
+               "; using wait timeout loop");
+      CloseHandle(timer);
+      run_timeout_loop();
+      return;
+    }
+
+    const DWORD wait = WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
+    if (wait == WAIT_OBJECT_0) {
+      break;
+    }
+    if (wait == WAIT_OBJECT_0 + 1) {
+      PostFrameTick(hwnd, generation);
+      continue;
+    }
+    DebugLog("frame scheduler wait failed: " + LastErrorMessage());
+    break;
+  }
+  CancelWaitableTimer(timer);
+  CloseHandle(timer);
+}
+
+HWND ErikaFlutterPlugin::EnsureFrameMessageWindow() {
+  if (frame_message_window_ != nullptr) {
+    return frame_message_window_;
+  }
+
+  WNDCLASSEXW window_class{};
+  window_class.cbSize = sizeof(window_class);
+  window_class.lpfnWndProc = &ErikaFlutterPlugin::FrameMessageWindowProc;
+  window_class.hInstance = GetModuleHandleW(nullptr);
+  window_class.lpszClassName = kFrameMessageWindowClassName;
+  if (!RegisterClassExW(&window_class) &&
+      GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+    DebugLog("Unable to register frame scheduler window class: " +
+             LastErrorMessage());
+    return nullptr;
+  }
+
+  frame_message_window_ = CreateWindowExW(
+      0, kFrameMessageWindowClassName, L"Erika Frame Scheduler", 0, 0, 0, 0, 0,
+      HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), this);
+  if (frame_message_window_ == nullptr) {
+    DebugLog("Unable to create frame scheduler message HWND: " +
+             LastErrorMessage());
+  }
+  return frame_message_window_;
+}
+
+void ErikaFlutterPlugin::DestroyFrameMessageWindow() {
+  if (frame_message_window_ != nullptr) {
+    DestroyWindow(frame_message_window_);
+    frame_message_window_ = nullptr;
+  }
+}
+
+void ErikaFlutterPlugin::RefreshFrameTimerForCurrentDisplay() {
+  if (!frame_timer_running_.load(std::memory_order_acquire)) {
+    return;
+  }
+  const double target_fps = FrameTimerTargetFps(FlutterWindow());
+  const double interval_ms = FrameTimerIntervalMs(target_fps);
+  if (std::abs(interval_ms - frame_timer_interval_ms_) <= 0.05) {
+    return;
+  }
+
+  DebugLog("frame scheduler display refresh changed old_fps=" +
+           std::to_string(frame_timer_target_fps_) + " new_fps=" +
+           std::to_string(target_fps) + " old_interval_ms=" +
+           std::to_string(frame_timer_interval_ms_) + " new_interval_ms=" +
+           std::to_string(interval_ms));
+  StopFrameTimer();
+  StartFrameTimer();
+}
+
+LRESULT CALLBACK ErikaFlutterPlugin::FrameMessageWindowProc(HWND hwnd,
+                                                            UINT message,
+                                                            WPARAM wparam,
+                                                            LPARAM lparam) {
+  if (message == WM_NCCREATE) {
+    auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                      reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+  }
+
+  auto* plugin = reinterpret_cast<ErikaFlutterPlugin*>(
+      GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+  if (message == kFrameTimerMessage && plugin != nullptr) {
+    const auto generation = static_cast<uint64_t>(lparam);
+    if (plugin == reinterpret_cast<ErikaFlutterPlugin*>(wparam) &&
+        plugin->frame_timer_running_.load(std::memory_order_acquire) &&
+        generation ==
+            plugin->frame_timer_generation_.load(std::memory_order_acquire)) {
+      plugin->frame_tick_pending_.store(false, std::memory_order_release);
+      plugin->OnFrameTimer();
+    }
+    return 0;
+  }
+
+  if (message == WM_NCDESTROY && plugin != nullptr) {
+    if (plugin->frame_message_window_ == hwnd) {
+      plugin->frame_message_window_ = nullptr;
+    }
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+  }
+  return DefWindowProcW(hwnd, message, wparam, lparam);
 }
 
 void ErikaFlutterPlugin::OnFrameTimer() {
@@ -1624,20 +1899,6 @@ void ErikaFlutterPlugin::OnFrameTimer() {
   in_frame_timer_ = false;
 }
 
-void CALLBACK ErikaFlutterPlugin::FrameTimerProc(HWND hwnd,
-                                                 UINT message,
-                                                 UINT_PTR timer_id,
-                                                 DWORD time) {
-  (void)hwnd;
-  (void)message;
-  (void)time;
-  auto* plugin = reinterpret_cast<ErikaFlutterPlugin*>(timer_id);
-  if (plugin == nullptr || plugin->frame_timer_id_ != timer_id) {
-    return;
-  }
-  plugin->OnFrameTimer();
-}
-
 std::optional<LRESULT> ErikaFlutterPlugin::OnTopLevelWindowProc(
     HWND hwnd,
     UINT message,
@@ -1651,8 +1912,10 @@ std::optional<LRESULT> ErikaFlutterPlugin::OnTopLevelWindowProc(
       overlay_window_->RefreshScaleAndReposition();
       ResizeAttachedOverlay();
     }
+    RefreshFrameTimerForCurrentDisplay();
   }
   if (message == WM_DESTROY) {
+    StopFrameTimer();
     for (auto& entry : players_) {
       entry.second->Detach(std::nullopt);
     }
