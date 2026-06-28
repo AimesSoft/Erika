@@ -1467,20 +1467,22 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     let jobs = options.jobs.unwrap_or_else(default_job_count);
     println!("build FFmpeg with {jobs} jobs");
     let make = gnu_make().context("required GNU make was not found")?;
-    let mut build = Command::new(&make);
-    build
-        .current_dir(&layout.ffmpeg_build_dir)
-        .arg(format!("-j{jobs}"));
+    let build_args = [format!("-j{jobs}")];
+    let mut build =
+        ffmpeg_make_command(&make, &layout.ffmpeg_build_dir, &build_args, options.target)?;
     apply_windows_target_env(&mut build, options.target)?;
     apply_windows_posix_shell(&mut build, options.target);
-    add_windows_make_shell_arg(&mut build, options.target);
     append_windows_posix_paths(&mut build);
     run(&mut build)?;
-    let mut install = Command::new(make);
-    install.current_dir(&layout.ffmpeg_build_dir).arg("install");
+    let install_args = ["install".to_string()];
+    let mut install = ffmpeg_make_command(
+        &make,
+        &layout.ffmpeg_build_dir,
+        &install_args,
+        options.target,
+    )?;
     apply_windows_target_env(&mut install, options.target)?;
     apply_windows_posix_shell(&mut install, options.target);
-    add_windows_make_shell_arg(&mut install, options.target);
     append_windows_posix_paths(&mut install);
     run(&mut install)?;
     ensure_windows_link_aliases(
@@ -2348,6 +2350,32 @@ fn gnu_make() -> Option<PathBuf> {
         .or_else(|| existing_path("C:/mingw64/bin/mingw32-make.exe"))
 }
 
+fn ffmpeg_make_command(
+    make: &Path,
+    build_dir: &Path,
+    args: &[String],
+    target: AppleTarget,
+) -> Result<Command> {
+    if target.is_windows() {
+        let shell = posix_shell().context("required POSIX shell was not found for FFmpeg make")?;
+        let mut command = Command::new(shell);
+        let make_line = std::iter::once(shell_quote(&path_to_forward_slashes(make)))
+            .chain(args.iter().map(|arg| shell_quote(arg)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        command
+            .current_dir(build_dir)
+            .arg("-lc")
+            .arg(make_line)
+            .env("MSYS2_ARG_CONV_EXCL", "*");
+        return Ok(command);
+    }
+
+    let mut command = Command::new(make);
+    command.current_dir(build_dir).args(args);
+    Ok(command)
+}
+
 fn python_tool() -> Option<PathBuf> {
     ["python3", "python", "py"]
         .into_iter()
@@ -2397,14 +2425,8 @@ fn apply_windows_posix_shell(command: &mut Command, target: AppleTarget) {
     command.env("SHELL", &shell);
 }
 
-fn add_windows_make_shell_arg(command: &mut Command, target: AppleTarget) {
-    if !target.is_windows() {
-        return;
-    }
-    let Some(shell) = posix_shell() else {
-        return;
-    };
-    command.arg(format!("SHELL={}", shell.display()));
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn append_paths_to_command<'a>(command: &mut Command, dirs: impl IntoIterator<Item = &'a Path>) {
