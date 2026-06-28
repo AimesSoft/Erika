@@ -905,13 +905,14 @@ impl D3d11Renderer {
                     plane.width * 4,
                 )?
             };
+            let (x, y, width, height) = plane.scaled_rect(viewport_w, viewport_h);
             draws.push(D3d11OverlayDraw {
                 texture,
                 constants: OverlayUniforms::rgba_plane(
-                    plane.x,
-                    plane.y,
-                    plane.width,
-                    plane.height,
+                    x,
+                    y,
+                    width,
+                    height,
                     viewport_w,
                     viewport_h,
                 ),
@@ -1249,7 +1250,8 @@ impl RendererBackend for D3d11Renderer {
         });
         self.hdr10_output_unavailable = false;
         self.stats.attached = true;
-        self.recreate_surface_targets()
+        self.recreate_surface_targets()?;
+        self.render_clear(0.0)
     }
 
     fn detach_surface(&mut self) -> Result<()> {
@@ -1293,6 +1295,15 @@ impl RendererBackend for D3d11Renderer {
         Err(PlayerError::Renderer(
             "d3d11: software frames require WgpuFallback or a CPU upload path".to_string(),
         ))
+    }
+
+    fn clear_current_frame(&mut self) -> Result<()> {
+        self.current_video = None;
+        self.danmaku_atlas_cache = None;
+        if self.surface.is_some() {
+            self.render_clear(0.0)?;
+        }
+        Ok(())
     }
 
     fn render_current_frame(&mut self, context: RenderFrameContext<'_>) -> Result<bool> {

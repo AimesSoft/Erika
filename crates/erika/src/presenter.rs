@@ -506,11 +506,8 @@ impl PresenterRuntime {
     pub fn open(&mut self, media: MediaRequest) -> Result<()> {
         self.reset_audio_output();
         self.drain_pending_player_frames();
-        self.current_overlay = None;
-        self.clear_current_danmaku_state();
-        self.current_media_time = Duration::ZERO;
+        self.clear_playback_visual_state(Duration::ZERO);
         self.current_generation = self.current_generation.saturating_add(1).max(1);
-        self.last_audio_clock_sync = None;
         self.player.open(media)
     }
 
@@ -545,10 +542,8 @@ impl PresenterRuntime {
         let result = self.player.stop();
         self.reset_audio_output();
         self.drain_pending_player_frames();
-        self.current_overlay = None;
-        self.clear_current_danmaku_state();
-        self.last_audio_clock_sync = None;
         self.bump_danmaku_generation();
+        self.clear_playback_visual_state(Duration::ZERO);
         result
     }
 
@@ -556,10 +551,8 @@ impl PresenterRuntime {
         let result = self.player.close();
         self.reset_audio_output();
         self.drain_pending_player_frames();
-        self.current_overlay = None;
-        self.clear_current_danmaku_state();
-        self.last_audio_clock_sync = None;
         self.bump_danmaku_generation();
+        self.clear_playback_visual_state(Duration::ZERO);
         result
     }
 
@@ -567,11 +560,8 @@ impl PresenterRuntime {
         let result = self.player.seek(position);
         self.reset_audio_output();
         self.drain_pending_player_frames();
-        self.current_overlay = None;
-        self.clear_current_danmaku_state();
-        self.current_media_time = position;
-        self.last_audio_clock_sync = None;
         self.bump_danmaku_generation();
+        self.clear_playback_visual_state(position);
         result
     }
 
@@ -1326,6 +1316,18 @@ impl PresenterRuntime {
         self.current_danmaku_viewport = None;
     }
 
+    fn clear_playback_visual_state(&mut self, media_time: Duration) {
+        self.current_overlay = None;
+        self.subtitles.clear();
+        self.clear_current_danmaku_state();
+        self.current_media_time = media_time;
+        self.last_audio_clock_sync = None;
+        if let Err(error) = self.renderer.clear_current_frame() {
+            self.stats.render_failures += 1;
+            eprintln!("Erika presenter renderer clear failed: {error}");
+        }
+    }
+
     fn sync_danmaku_engine_timeline(&mut self) {
         let timeline = self.danmaku_session.active_timeline_clone();
         self.danmaku.sync_timeline(&timeline);
@@ -1825,6 +1827,14 @@ struct SubtitleFrameState {
 }
 
 impl SubtitleFrameState {
+    fn clear(&mut self) {
+        self.frames.clear();
+        #[cfg(feature = "libass")]
+        {
+            self.text_renderer.clear();
+        }
+    }
+
     fn push(&mut self, frame: PlayerSubtitleFrame) {
         self.retain_at(subtitle_start(&frame).unwrap_or(frame.media_time));
         if frame.frame.is_empty() {
@@ -1927,6 +1937,11 @@ struct CachedLibassTextRenderer {
 
 #[cfg(feature = "libass")]
 impl CachedLibassTextRenderer {
+    fn clear(&mut self) {
+        self.script = None;
+        self.renderer = None;
+    }
+
     fn render(
         &mut self,
         pts: Duration,
@@ -1990,13 +2005,7 @@ mod tests {
     fn subtitle_frame(start: Duration, end: Option<Duration>) -> PlayerSubtitleFrame {
         let mut frame = DecodedSubtitleFrame::new(2, Some(start), end);
         frame.push_bitmap_plane(
-            SubtitleBitmapPlane {
-                x: 0,
-                y: 0,
-                width: 1,
-                height: 1,
-                rgba: vec![255, 255, 255, 255],
-            },
+            SubtitleBitmapPlane::new(0, 0, 1, 1, vec![255, 255, 255, 255]),
             false,
         );
         PlayerSubtitleFrame {

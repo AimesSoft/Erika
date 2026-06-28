@@ -875,13 +875,7 @@ mod tests {
         let frame = OverlayFrame {
             pts: Duration::from_secs(1),
             viewport: OverlayViewport::new(640, 360),
-            subtitle_planes: vec![SubtitleBitmapPlane {
-                x: 0,
-                y: 0,
-                width: 10,
-                height: 4,
-                rgba: vec![255; 10 * 4 * 4],
-            }],
+            subtitle_planes: vec![SubtitleBitmapPlane::new(0, 0, 10, 4, vec![255; 10 * 4 * 4])],
             subtitle_alpha_planes: Vec::new(),
             subtitle_changed: true,
         };
@@ -940,13 +934,7 @@ mod tests {
         let frame = OverlayFrame {
             pts: Duration::ZERO,
             viewport: OverlayViewport::new(1, 1),
-            subtitle_planes: vec![SubtitleBitmapPlane {
-                x: 0,
-                y: 0,
-                width: 2,
-                height: 2,
-                rgba: vec![0; 15],
-            }],
+            subtitle_planes: vec![SubtitleBitmapPlane::new(0, 0, 2, 2, vec![0; 15])],
             subtitle_alpha_planes: Vec::new(),
             subtitle_changed: true,
         };

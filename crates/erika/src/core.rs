@@ -420,6 +420,12 @@ pub trait RendererBackend {
     /// textures, wgpu textures, ...) so the presenter stays backend-agnostic.
     fn upload_player_frame(&mut self, frame: &PlayerVideoFrame) -> Result<()>;
 
+    /// Drop any retained video frame and clear the attached output surface when
+    /// the backend can do so.
+    fn clear_current_frame(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Render the current frame (optionally compositing `overlay`) to the attached
     /// surface. Returns `false` if there is no current frame to draw, letting the
     /// caller fall back to a test frame.
