@@ -15,6 +15,7 @@ const LIBASS_VERSION: &str = "0.17.3";
 const HARFBUZZ_VERSION: &str = "10.4.0";
 const FREETYPE_VERSION: &str = "2.13.3";
 const FRIBIDI_VERSION: &str = "1.0.16";
+const ZLIB_VERSION: &str = "1.3.1";
 
 const FFMPEG_ARCHIVE: &str = "ffmpeg-7.1.1.tar.xz";
 const FFMPEG_DIR: &str = "ffmpeg-7.1.1";
@@ -46,6 +47,13 @@ const FRIBIDI_DIR: &str = "fribidi-1.0.16";
 const FRIBIDI_URLS: &[&str] = &[
     "https://github.com/fribidi/fribidi/releases/download/v1.0.16/fribidi-1.0.16.tar.xz",
     "https://codeload.github.com/fribidi/fribidi/tar.gz/refs/tags/v1.0.16",
+];
+
+const ZLIB_ARCHIVE: &str = "zlib-1.3.1.tar.gz";
+const ZLIB_DIR: &str = "zlib-1.3.1";
+const ZLIB_URLS: &[&str] = &[
+    "https://zlib.net/fossils/zlib-1.3.1.tar.gz",
+    "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
 ];
 
 fn main() -> Result<()> {
@@ -345,6 +353,10 @@ struct WorkspaceLayout {
     fribidi_build_dir: PathBuf,
     fribidi_build_marker: PathBuf,
     fribidi_prefix: PathBuf,
+    zlib_source_dir: PathBuf,
+    zlib_build_dir: PathBuf,
+    zlib_build_marker: PathBuf,
+    zlib_prefix: PathBuf,
     python_tools_dir: PathBuf,
 }
 
@@ -390,6 +402,10 @@ fn workspace_layout(
     let fribidi_build_dir = build_dir.join("fribidi");
     let fribidi_build_marker = fribidi_build_dir.join("fribidi-built.txt");
     let fribidi_prefix = dist_dir.join("fribidi");
+    let zlib_source_dir = source_dir.join(ZLIB_DIR);
+    let zlib_build_dir = build_dir.join("zlib");
+    let zlib_build_marker = zlib_build_dir.join("zlib-built.txt");
+    let zlib_prefix = dist_dir.join("zlib");
     let python_tools_dir = build_dir.join("python-tools");
     Ok(WorkspaceLayout {
         root,
@@ -417,6 +433,10 @@ fn workspace_layout(
         fribidi_build_dir,
         fribidi_build_marker,
         fribidi_prefix,
+        zlib_source_dir,
+        zlib_build_dir,
+        zlib_build_marker,
+        zlib_prefix,
         python_tools_dir,
     })
 }
@@ -430,6 +450,7 @@ fn print_dependency_plan(profile: NativeDependencyProfile, target: AppleTarget) 
     println!("harfbuzz: {HARFBUZZ_VERSION} ({})", HARFBUZZ_URLS[0]);
     println!("freetype: {FREETYPE_VERSION} ({})", FREETYPE_URLS[0]);
     println!("fribidi: {FRIBIDI_VERSION} ({})", FRIBIDI_URLS[0]);
+    println!("zlib: {ZLIB_VERSION} ({})", ZLIB_URLS[0]);
     println!("ffmpeg configure flags:");
     for flag in profile.ffmpeg_configure_flags_for_target(target) {
         println!("  {flag}");
@@ -446,6 +467,7 @@ fn fetch_dependency_sources(layout: &WorkspaceLayout, all: bool) -> Result<()> {
         .with_context(|| format!("create {}", layout.source_dir.display()))?;
 
     fetch_and_extract(layout, FFMPEG_URLS, FFMPEG_ARCHIVE, FFMPEG_DIR)?;
+    fetch_and_extract(layout, ZLIB_URLS, ZLIB_ARCHIVE, ZLIB_DIR)?;
     if all {
         fetch_and_extract(layout, LIBASS_URLS, LIBASS_ARCHIVE, LIBASS_DIR)?;
         fetch_and_extract(layout, HARFBUZZ_URLS, HARFBUZZ_ARCHIVE, HARFBUZZ_DIR)?;
@@ -464,6 +486,7 @@ fn build_dependencies(options: DepsOptions) -> Result<()> {
     ensure_required_tools(options, &layout)?;
     prepare_dependency_dirs(&layout)?;
     fetch_dependency_sources(&layout, options.all)?;
+    build_zlib(&layout, options)?;
     build_ffmpeg(&layout, options)?;
     if options.all {
         build_text_dependencies(&layout, options)?;
@@ -489,6 +512,17 @@ fn print_dependency_status(layout: &WorkspaceLayout) -> Result<()> {
     println!(
         "ffmpeg dist: {}",
         status_word(native_static_lib_exists(&layout.ffmpeg_prefix, "avformat"))
+    );
+    println!(
+        "zlib source: {}",
+        status_word(layout.zlib_source_dir.exists())
+    );
+    println!(
+        "zlib dist: {}",
+        status_word(
+            native_static_lib_exists(&layout.zlib_prefix, "z")
+                || native_static_lib_exists(&layout.zlib_prefix, "zlib")
+        )
     );
     println!(
         "libass source: {}",
@@ -571,10 +605,10 @@ fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Resu
         if gnu_make().is_none() {
             bail!("required GNU make was not found; install MSYS2 make or MinGW mingw32-make");
         }
+        if cmake_tool().is_none() {
+            bail!("required CMake was not found; install the Visual Studio CMake component");
+        }
         if options.all {
-            if cmake_tool().is_none() {
-                bail!("required CMake was not found; install the Visual Studio CMake component");
-            }
             if python_tool().is_none() {
                 bail!("required Python with venv support was not found in PATH");
             }
@@ -601,6 +635,59 @@ fn build_text_dependencies(layout: &WorkspaceLayout, options: DepsOptions) -> Re
     build_fribidi(layout, options)?;
     build_libass(layout, options)?;
     Ok(())
+}
+
+fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
+    if layout.zlib_build_marker.exists() && !options.force {
+        println!(
+            "reuse zlib build marker {}",
+            layout.zlib_build_marker.display()
+        );
+        ensure_windows_link_aliases(
+            options.target,
+            &layout.zlib_prefix,
+            &[("zlibstatic.lib", "z.lib")],
+        )?;
+        ensure_windows_zlib_static_alias(options.target, &layout.zlib_prefix)?;
+        ensure_windows_zlib_header_compat(options.target, &layout.zlib_prefix)?;
+        return Ok(());
+    }
+    clean_build_and_prefix(options, &layout.zlib_build_dir, &layout.zlib_prefix)?;
+    fs::create_dir_all(&layout.zlib_build_dir)
+        .with_context(|| format!("create {}", layout.zlib_build_dir.display()))?;
+    fs::create_dir_all(&layout.zlib_prefix)
+        .with_context(|| format!("create {}", layout.zlib_prefix.display()))?;
+
+    println!("configure zlib");
+    let mut configure = cmake_command(options.target)?;
+    configure
+        .arg("-S")
+        .arg(&layout.zlib_source_dir)
+        .arg("-B")
+        .arg(&layout.zlib_build_dir)
+        .arg("-DCMAKE_BUILD_TYPE=Release")
+        .arg("-DBUILD_SHARED_LIBS=OFF")
+        .arg("-DZLIB_BUILD_EXAMPLES=OFF")
+        .arg(format!(
+            "-DCMAKE_INSTALL_PREFIX={}",
+            layout.zlib_prefix.display()
+        ));
+    apply_cmake_target(&mut configure, options.target)?;
+    run(&mut configure)?;
+    cmake_build_install(&layout.zlib_build_dir, options.jobs, options.target)?;
+    ensure_windows_link_aliases(
+        options.target,
+        &layout.zlib_prefix,
+        &[("zlibstatic.lib", "z.lib")],
+    )?;
+    ensure_windows_zlib_static_alias(options.target, &layout.zlib_prefix)?;
+    ensure_windows_zlib_header_compat(options.target, &layout.zlib_prefix)?;
+    write_marker(
+        &layout.zlib_build_marker,
+        "zlib",
+        ZLIB_VERSION,
+        &layout.zlib_prefix,
+    )
 }
 
 fn build_freetype(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
@@ -1237,7 +1324,7 @@ fn download_url(agent: &ureq::Agent, url: &str, partial_path: &Path) -> Result<(
 }
 
 fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if layout.ffmpeg_build_marker.exists() && !options.force {
+    if ffmpeg_build_marker_is_current(layout, options) && !options.force {
         println!(
             "reuse FFmpeg build marker {}",
             layout.ffmpeg_build_marker.display()
@@ -1315,6 +1402,14 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
             "{}={}",
             config.deployment_flag, config.deployment_target
         ));
+        extra_cflags.push(format!(
+            "-I{}",
+            ffmpeg_flag_path_arg(&layout.zlib_prefix.join("include"))
+        ));
+        extra_ldflags.push(format!(
+            "-L{}",
+            ffmpeg_flag_path_arg(&layout.zlib_prefix.join("lib"))
+        ));
         configure.env("SDKROOT", &config.sdk_root);
         match options.target {
             AppleTarget::Aarch64Macos | AppleTarget::X86_64Macos => {
@@ -1331,10 +1426,26 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         configure.arg("--target-os=win64");
         configure.arg("--arch=x86_64");
         configure.arg("--toolchain=msvc");
+        extra_cflags.push(format!(
+            "-I{}",
+            ffmpeg_flag_path_arg(&layout.zlib_prefix.join("include"))
+        ));
+        extra_ldflags.push(format!(
+            "-libpath:{}",
+            ffmpeg_flag_path_arg(&layout.zlib_prefix.join("lib"))
+        ));
         apply_windows_target_env(&mut configure, options.target)?;
         append_windows_posix_paths(&mut configure);
     } else {
         configure.arg("--cc=clang");
+        extra_cflags.push(format!(
+            "-I{}",
+            ffmpeg_flag_path_arg(&layout.zlib_prefix.join("include"))
+        ));
+        extra_ldflags.push(format!(
+            "-L{}",
+            ffmpeg_flag_path_arg(&layout.zlib_prefix.join("lib"))
+        ));
     }
     if !extra_cflags.is_empty() {
         configure.arg(format!("--extra-cflags={}", extra_cflags.join(" ")));
@@ -1384,10 +1495,14 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     fs::write(
         &layout.ffmpeg_build_marker,
         format!(
-            "ffmpeg={FFMPEG_VERSION}\nprofile={}\ntarget={}\nprefix={}\n",
+            "ffmpeg={FFMPEG_VERSION}\nzlib={ZLIB_VERSION}\nprofile={}\ntarget={}\nprefix={}\nflags={}\n",
             profile_name(options.profile),
             options.target.triple().unwrap_or("host"),
-            layout.ffmpeg_prefix.display()
+            layout.ffmpeg_prefix.display(),
+            options
+                .profile
+                .ffmpeg_configure_flags_for_target(options.target)
+                .join(" ")
         ),
     )
     .with_context(|| format!("write {}", layout.ffmpeg_build_marker.display()))?;
@@ -1429,6 +1544,34 @@ fn apple_toolchain(target: AppleTarget) -> Result<Option<AppleToolchain>> {
     }))
 }
 
+fn ffmpeg_flag_path_arg(path: &Path) -> String {
+    shell_escape(&path.to_string_lossy().replace('\\', "/"))
+}
+
+fn ffmpeg_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions) -> bool {
+    let Ok(marker) = fs::read_to_string(&layout.ffmpeg_build_marker) else {
+        return false;
+    };
+    marker.contains(&format!("ffmpeg={FFMPEG_VERSION}\n"))
+        && marker.contains(&format!("profile={}\n", profile_name(options.profile)))
+        && marker.contains(&format!(
+            "target={}\n",
+            options.target.triple().unwrap_or("host")
+        ))
+        && marker.contains(&format!("zlib={ZLIB_VERSION}\n"))
+        && marker.contains("--enable-zlib")
+}
+
+fn shell_escape(value: &str) -> String {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | ':' | '.' | '_' | '-'))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 fn write_profile_metadata(
     layout: &WorkspaceLayout,
     profile: NativeDependencyProfile,
@@ -1439,11 +1582,13 @@ fn write_profile_metadata(
     fs::write(
         layout.dist_dir.join("erika-native-deps.txt"),
         format!(
-            "profile={}\ntarget={}\nffmpeg={}\nffmpeg_dist={}\nlibass={}\nlibass_source={}\nharfbuzz={}\nharfbuzz_source={}\nfreetype={}\nfreetype_source={}\nfribidi={}\nfribidi_source={}\n",
+            "profile={}\ntarget={}\nffmpeg={}\nffmpeg_dist={}\nzlib={}\nzlib_dist={}\nlibass={}\nlibass_source={}\nharfbuzz={}\nharfbuzz_source={}\nfreetype={}\nfreetype_source={}\nfribidi={}\nfribidi_source={}\n",
             profile_name(profile),
             target.triple().unwrap_or("host"),
             FFMPEG_VERSION,
             layout.ffmpeg_prefix.display(),
+            ZLIB_VERSION,
+            layout.zlib_prefix.display(),
             LIBASS_VERSION,
             source_state(&layout.libass_source_dir),
             HARFBUZZ_VERSION,
@@ -1545,6 +1690,50 @@ fn ensure_windows_link_aliases(
         fs::copy(&source, &alias)
             .with_context(|| format!("copy {} to {}", source.display(), alias.display()))?;
     }
+    Ok(())
+}
+
+fn ensure_windows_zlib_static_alias(target: AppleTarget, prefix: &Path) -> Result<()> {
+    if !target.is_windows() {
+        return Ok(());
+    }
+    let lib_dir = prefix.join("lib");
+    let static_lib = lib_dir.join("zlibstatic.lib");
+    let import_lib = lib_dir.join("zlib.lib");
+    if static_lib.exists() {
+        fs::copy(&static_lib, &import_lib).with_context(|| {
+            format!("copy {} to {}", static_lib.display(), import_lib.display())
+        })?;
+    }
+    Ok(())
+}
+
+fn ensure_windows_zlib_header_compat(target: AppleTarget, prefix: &Path) -> Result<()> {
+    if !target.is_windows() {
+        return Ok(());
+    }
+    let header = prefix.join("include").join("zconf.h");
+    if !header.exists() {
+        return Ok(());
+    }
+    let content =
+        fs::read_to_string(&header).with_context(|| format!("read {}", header.display()))?;
+    if content.contains("#if defined(HAVE_UNISTD_H) && !defined(_WIN32)") {
+        return Ok(());
+    }
+
+    let updated = content.replace(
+        "#ifdef HAVE_UNISTD_H    /* may be set to #if 1 by ./configure */",
+        "#if defined(HAVE_UNISTD_H) && !defined(_WIN32)    /* may be set to #if 1 by ./configure */",
+    );
+    if updated == content {
+        println!(
+            "warning: zlib header compatibility patch not applied to {}",
+            header.display()
+        );
+        return Ok(());
+    }
+    fs::write(&header, updated).with_context(|| format!("write {}", header.display()))?;
     Ok(())
 }
 
