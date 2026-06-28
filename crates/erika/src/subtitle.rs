@@ -1654,6 +1654,13 @@ Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,Hello libass
     }
 
     #[test]
+    fn bitmap_plane_scales_to_matching_aspect_video_viewport() {
+        let plane = SubtitleBitmapPlane::new(800, 905, 322, 60, Vec::new()).with_canvas(1920, 1080);
+
+        assert_eq!(plane.scaled_rect(3840, 2160), (1600, 1810, 644, 120));
+    }
+
+    #[test]
     fn decoded_text_frames_can_become_debug_timeline() {
         let mut frame = DecodedSubtitleFrame::new(
             2,

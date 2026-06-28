@@ -8,10 +8,12 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ERIKA_NATIVE_PROFILE");
     println!("cargo:rerun-if-env-changed=ERIKA_NATIVE_TARGET");
     println!("cargo:rerun-if-env-changed=ERIKA_FFMPEG_DIR");
+    println!("cargo:rerun-if-env-changed=ERIKA_ZLIB_DIR");
     println!("cargo:rerun-if-env-changed=ERIKA_ALLOW_LEGACY_FFMPEG");
     println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
 
     let dist_dir = ffmpeg_dist_dir();
+    let zlib_dir = native_dep_dir("ERIKA_ZLIB_DIR", "zlib");
     let include_dir = dist_dir.join("include");
     let lib_dir = dist_dir.join("lib");
 
@@ -27,6 +29,10 @@ fn main() {
     enforce_windows_ffmpeg_version(ffmpeg_version_major, &include_dir);
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
+    println!(
+        "cargo:rustc-link-search=native={}",
+        zlib_dir.join("lib").display()
+    );
     println!("cargo:rustc-link-lib=static=avdevice");
     println!("cargo:rustc-link-lib=static=avfilter");
     println!("cargo:rustc-link-lib=static=avformat");
@@ -34,6 +40,11 @@ fn main() {
     println!("cargo:rustc-link-lib=static=swresample");
     println!("cargo:rustc-link-lib=static=swscale");
     println!("cargo:rustc-link-lib=static=avutil");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rustc-link-lib=static=zlib");
+    } else {
+        println!("cargo:rustc-link-lib=static=z");
+    }
 
     if matches!(
         env::var("CARGO_CFG_TARGET_OS").as_deref(),
@@ -45,7 +56,6 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=VideoToolbox");
         println!("cargo:rustc-link-lib=iconv");
         println!("cargo:rustc-link-lib=bz2");
-        println!("cargo:rustc-link-lib=z");
     } else if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         for lib in [
             "bcrypt",
@@ -197,6 +207,27 @@ fn ffmpeg_dist_dir() -> PathBuf {
         dist = dist.join(format!("{arch}-pc-windows-msvc"));
     }
     dist.join(native_profile()).join("ffmpeg")
+}
+
+fn native_dep_dir(env_name: &str, name: &str) -> PathBuf {
+    if let Ok(path) = env::var(env_name) {
+        return PathBuf::from(path);
+    }
+    if let Ok(target) = env::var("ERIKA_NATIVE_TARGET") {
+        return workspace_root()
+            .join("third_party/dist")
+            .join(target)
+            .join(native_profile())
+            .join(name);
+    }
+    let mut dist = workspace_root().join("third_party/dist");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("ios") {
+        dist = dist.join("ios");
+    } else if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "x86_64".to_string());
+        dist = dist.join(format!("{arch}-pc-windows-msvc"));
+    }
+    dist.join(native_profile()).join(name)
 }
 
 fn native_profile() -> String {
