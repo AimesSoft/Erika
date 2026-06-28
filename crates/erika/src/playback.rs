@@ -493,9 +493,11 @@ impl PlaybackSession {
             );
         }
         let mut audio_decoder = None;
+        let mut audio_output = config.audio_output;
         if let Some(stream_index) = selected_audio_track {
             selected_streams.push(stream_index);
             let parameters = codec_parameters_for(&codec_parameters, stream_index)?;
+            audio_output = audio_output_format_for_parameters(parameters, config.audio_output);
             audio_decoder = Some(Decoder::open_owned(parameters)?);
         }
         let mut subtitle_decoder = None;
@@ -541,7 +543,7 @@ impl PlaybackSession {
             selected_subtitle_track: opened_subtitle_track.map(i64::from),
             subtitle_tracks: probe.subtitles,
             video_decode_backend: video_decoder.as_ref().map(Decoder::backend),
-            audio_output: audio_decoder.as_ref().map(|_| config.audio_output),
+            audio_output: audio_decoder.as_ref().map(|_| audio_output),
         };
 
         Ok(Self {
@@ -552,7 +554,7 @@ impl PlaybackSession {
             subtitle_decoder,
             external_subtitles: Vec::new(),
             audio_resampler: None,
-            audio_output: config.audio_output,
+            audio_output,
             info,
             video_frames: VecDeque::new(),
             audio_frames: VecDeque::new(),
@@ -718,7 +720,10 @@ impl PlaybackSession {
             Some(id) => {
                 let stream_index = self.embedded_track_stream_index(id, TrackKind::Audio)?;
                 let parameters = self.codec_parameters(stream_index)?;
+                let audio_output =
+                    audio_output_format_for_parameters(parameters, self.audio_output);
                 let decoder = Decoder::open_owned(parameters)?;
+                self.audio_output = audio_output;
                 self.audio_decoder = Some(decoder);
                 self.info.selected_audio_track = Some(id);
                 self.info.audio_output = Some(self.audio_output);
@@ -1197,6 +1202,25 @@ fn codec_parameters_for(
             kind: TrackKind::Video,
             track_id: i64::from(stream_index),
         })
+}
+
+fn audio_output_format_for_parameters(
+    parameters: &OwnedCodecParameters,
+    fallback: PcmFormat,
+) -> PcmFormat {
+    let sample_rate = parameters.sample_rate().max(fallback.sample_rate).max(1);
+    let source_channels = parameters.channel_count();
+    let channels = output_channels_for_source(source_channels).unwrap_or(fallback.channels.max(1));
+    PcmFormat::f32_interleaved(sample_rate, channels)
+}
+
+fn output_channels_for_source(source_channels: u32) -> Option<u32> {
+    match source_channels {
+        0 => None,
+        1 | 2 => Some(2),
+        3..=6 => Some(6),
+        _ => Some(8),
+    }
 }
 
 fn mark_selected_tracks(
@@ -2333,6 +2357,15 @@ mod tests {
         assert_eq!(info.subtitle_tracks.len(), 1);
         assert_eq!(info.video_decode_backend, Some(DecoderBackend::Software));
         assert_eq!(info.audio_output, Some(PcmFormat::default()));
+    }
+
+    #[test]
+    fn output_channels_match_common_surround_layouts() {
+        assert_eq!(output_channels_for_source(0), None);
+        assert_eq!(output_channels_for_source(1), Some(2));
+        assert_eq!(output_channels_for_source(2), Some(2));
+        assert_eq!(output_channels_for_source(6), Some(6));
+        assert_eq!(output_channels_for_source(8), Some(8));
     }
 
     #[test]
