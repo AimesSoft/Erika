@@ -29,17 +29,21 @@ small embedder, compatibility path, or diagnostics.
 
 ## macOS Setup
 
-For local development the macOS plugin loads Erika through `dlopen`.
-Set `ERIKA_CAPI_DYLIB` to override the dynamic library path. If unset, the
-plugin searches the app bundle, the executable directory, and then
-`$WORKSPACE/target/debug/liberika_capi.dylib`.
+The macOS plugin's podspec build phase builds the universal
+`liberika_capi.dylib` from source (or downloads a prebuilt one — see below) and
+bundles it into the app's `Contents/Frameworks`, codesigned, during the macOS
+app build. At runtime the plugin loads it via `dlopen`.
 
-Build the dynamic library:
+Overrides: `ERIKA_CAPI_DYLIB` forces the runtime dylib path; `ERIKA_MACOS_CAPI_DYLIB`
+points the build phase at an explicit dylib to bundle instead of building.
 
-```sh
-cargo run -p xtask -- deps build --all --profile lgpl
-cargo build -p erika_capi
-```
+## Prebuilt binaries (opt-in)
+
+To skip building Erika (and FFmpeg) from source, set `ERIKA_PREBUILT=1` in the
+app build to download the prebuilt `erika_capi` from a GitHub Release
+(`ERIKA_PREBUILT_TAG` selects the tag, default `v0.1.0`). Supported on macOS,
+Windows, and iOS; any failure falls back to the source build. See
+[`docs/releasing.md`](../../docs/releasing.md).
 
 ## iOS Setup
 

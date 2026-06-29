@@ -82,10 +82,13 @@ Enable it by setting environment variables in the host app's build:
   must be built `--no-default-features --features libass` to match the plugin's
   link flags (the release workflow does this); verify against a release built
   that way before relying on it.
-- **macOS**: not wired yet — the macOS plugin loads the dylib via `dlopen` and
-  the dylib is provisioned by the host app, not the podspec. Point the host at a
-  downloaded `liberika_capi.dylib` via `ERIKA_CAPI_DYLIB`, or add a host-side
-  download step.
+- **macOS** (podspec `script_phase`): downloads `erika-capi-macos-universal.zip`,
+  extracts the universal `liberika_capi.dylib`, and bundles it into the app's
+  `Contents/Frameworks` (`install_name @rpath`, codesigned) — where the plugin's
+  `dlopen` search finds it. Without `ERIKA_PREBUILT`, the same phase builds the
+  universal dylib from source. `ERIKA_MACOS_CAPI_DYLIB` can point at an explicit
+  dylib instead. The macOS plugin is self-contained, so a host app no longer
+  needs its own dylib-provisioning step.
 
 Pin `ERIKA_PREBUILT_TAG` to a release whose Erika source matches the plugin
 revision you build against, so the C ABI in the header and the prebuilt library
