@@ -110,6 +110,7 @@ docs/                     架构与嵌入文档
 - [原生接入指南](docs/integration.zh.md) — C/C++/Win32/Swift 等非 Flutter 宿主的端到端嵌入
 - [构建与依赖指南](docs/building.zh.md) — xtask、native 依赖、交叉编译
 - [Flutter 嵌入](docs/flutter_embedding.zh.md) ・ [弹幕架构](docs/danmaku_architecture.md)
+- [发布与预编译产物](docs/releasing.md) — 各平台预编译 `erika_capi` 库下载与打包(英文)
 - [贡献 / 开发者指南](CONTRIBUTING.zh.md) — 仓库布局、线程模型、新增平台后端
 
 ## 构建

@@ -110,6 +110,7 @@ docs/                     アーキテクチャと組み込みドキュメント
 - [組み込みガイド](../docs/integration.ja.md) — C/C++/Win32/Swift など非 Flutter ホストへの組み込み
 - [ビルドガイド](../docs/building.ja.md) — xtask、native 依存、クロスコンパイル
 - [Flutter 組み込み](../docs/flutter_embedding.ja.md) ・ [弾幕アーキテクチャ](../docs/danmaku_architecture.ja.md)
+- [リリースとプリビルドバイナリ](../docs/releasing.md) — プラットフォーム別 `erika_capi` ライブラリの配布とパッケージング（英語）
 - [コントリビュート / 開発者ガイド](../CONTRIBUTING.ja.md) — リポジトリ構成、スレッドモデル、プラットフォームバックエンドの追加
 
 ## ビルド

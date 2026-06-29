@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+#
+# Stage and zip an Erika C ABI prebuilt bundle.
+#
+# Usage: packaging/bundle.sh <bundle-name> <out-zip> <artifact> [<artifact> ...]
+#   <bundle-name>  directory name inside the zip, e.g. erika-capi-macos-universal
+#   <out-zip>      output .zip path (created; parent dirs made)
+#   <artifact>     one or more lib files or directories (e.g. an .xcframework)
+#
+# Produces a zip containing:
+#   <bundle-name>/lib/<artifacts>
+#   <bundle-name>/include/erika.h
+#   <bundle-name>/LICENSE                 (Erika, MPL-2.0)
+#   <bundle-name>/THIRD_PARTY_NOTICES.md  (FFmpeg LGPL etc.)
+#   <bundle-name>/MANIFEST.txt           (ref/commit/profile/date)
+#
+# Requires `zip` on PATH (install via choco on Windows runners).
+set -euo pipefail
+
+if [ "$#" -lt 3 ]; then
+  echo "usage: bundle.sh <bundle-name> <out-zip> <artifact>..." >&2
+  exit 2
+fi
+
+NAME="$1"
+OUT="$2"
+shift 2
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+mkdir -p "$(dirname "$OUT")"
+OUT="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"
+
+STAGE_ROOT="$(mktemp -d)"
+STAGE="$STAGE_ROOT/$NAME"
+mkdir -p "$STAGE/lib" "$STAGE/include"
+
+for artifact in "$@"; do
+  if [ ! -e "$artifact" ]; then
+    echo "bundle.sh: artifact not found: $artifact" >&2
+    exit 1
+  fi
+  cp -R "$artifact" "$STAGE/lib/"
+done
+
+cp "$ROOT/crates/erika_capi/include/erika.h" "$STAGE/include/erika.h"
+cp "$ROOT/LICENSE" "$STAGE/LICENSE"
+cp "$ROOT/packaging/THIRD_PARTY_NOTICES.md" "$STAGE/THIRD_PARTY_NOTICES.md"
+
+commit="${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)}"
+cat > "$STAGE/MANIFEST.txt" <<EOF
+Erika C ABI prebuilt bundle
+bundle:  $NAME
+ref:     ${GITHUB_REF_NAME:-local}
+commit:  $commit
+built:   $(date -u +%Y-%m-%dT%H:%M:%SZ)
+profile: ${ERIKA_NATIVE_PROFILE:-lgpl}
+
+Erika is MPL-2.0. Bundled native libraries are statically linked; see
+THIRD_PARTY_NOTICES.md for their licenses and the LGPL relink note.
+Header: include/erika.h. Reference: docs/capi_reference.md.
+EOF
+
+( cd "$STAGE_ROOT" && zip -r "$OUT" "$NAME" >/dev/null )
+echo "bundle.sh: wrote $OUT"
+ls -l "$OUT"

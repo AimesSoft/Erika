@@ -110,6 +110,7 @@ docs/                     Architecture and embedding documentation
 - [Integration Guide](../docs/integration.md) — embedding in C/C++/Win32/Swift and other non-Flutter hosts
 - [Build Guide](../docs/building.md) — xtask, native deps, cross-compilation
 - [Flutter Embedding](../docs/flutter_embedding.md) · [Danmaku Architecture](../docs/danmaku_architecture.en.md)
+- [Releasing & Prebuilt Binaries](../docs/releasing.md) — downloadable per-platform `erika_capi` libraries and packaging
 - [Contributing / Developer Guide](../CONTRIBUTING.md) — repo layout, threading model, adding a platform backend
 
 ## Building

@@ -1,0 +1,207 @@
+name: Release
+
+# Build prebuilt erika_capi bundles and attach them to a GitHub Release.
+#
+# Trigger: push a tag like `v0.1.0` to publish. Use the manual "Run workflow"
+# button (workflow_dispatch) to dry-run the builds without publishing (the
+# publish job is gated on a tag ref).
+#
+# Bundles (per platform): liberika_capi.{dylib,a} / erika_capi.dll + libs /
+# erika_capi.xcframework, plus erika.h, LICENSE (MPL-2.0), and
+# THIRD_PARTY_NOTICES.md. Native deps (FFmpeg/libass/...) are statically linked
+# via the `lgpl` profile.
+#
+# The Windows toolchain mirrors the proven setup in NipaPlay-Reload's CI:
+# MSYS2 on the runner's C:\msys64 (xtask hard-codes that path) + LLVM/libclang
+# for bindgen + core.longpaths.
+#
+# NOTE: Linux is intentionally not built yet — xtask's native dependency build
+# only targets Apple + Windows (it forces --enable-videotoolbox on non-Windows),
+# so a Linux target needs xtask work first. Add a `linux` job once that lands.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PROFILE: lgpl
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  macos:
+    name: macOS (universal)
+    runs-on: macos-14
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Install native build tools
+        run: brew install nasm meson ninja pkg-config
+      - name: Cache native dependencies
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: deps-macos-${{ hashFiles('xtask/src/main.rs') }}
+      - name: Build native deps + erika_capi (arm64, x86_64)
+        run: |
+          for T in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo run -p xtask -- deps build --all --profile "$PROFILE" --target "$T"
+            ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
+              cargo build -p erika_capi --release --target "$T"
+          done
+      - name: Make universal binaries
+        run: |
+          mkdir -p out
+          lipo -create \
+            target/aarch64-apple-darwin/release/liberika_capi.dylib \
+            target/x86_64-apple-darwin/release/liberika_capi.dylib \
+            -output out/liberika_capi.dylib
+          lipo -create \
+            target/aarch64-apple-darwin/release/liberika_capi.a \
+            target/x86_64-apple-darwin/release/liberika_capi.a \
+            -output out/liberika_capi.a
+          install_name_tool -id @rpath/liberika_capi.dylib out/liberika_capi.dylib
+      - name: Package
+        run: |
+          bash packaging/bundle.sh erika-capi-macos-universal \
+            dist/erika-capi-macos-universal.zip \
+            out/liberika_capi.dylib out/liberika_capi.a
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erika-capi-macos-universal
+          path: dist/*.zip
+
+  ios:
+    name: iOS (XCFramework)
+    runs-on: macos-14
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - name: Install native build tools
+        run: brew install nasm meson ninja pkg-config
+      - name: Cache native dependencies
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: deps-ios-${{ hashFiles('xtask/src/main.rs') }}
+      - name: Build native deps + erika_capi (device + simulators)
+        run: |
+          for T in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
+            cargo run -p xtask -- deps build --all --profile "$PROFILE" --target "$T"
+            ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
+              cargo build -p erika_capi --release --target "$T"
+          done
+      - name: Assemble XCFramework
+        run: |
+          mkdir -p out hdr
+          cp crates/erika_capi/include/erika.h hdr/erika.h
+          # Fat static lib for the simulator slice (arm64 + x86_64).
+          lipo -create \
+            target/aarch64-apple-ios-sim/release/liberika_capi.a \
+            target/x86_64-apple-ios/release/liberika_capi.a \
+            -output out/liberika_capi-sim.a
+          xcodebuild -create-xcframework \
+            -library target/aarch64-apple-ios/release/liberika_capi.a -headers hdr \
+            -library out/liberika_capi-sim.a -headers hdr \
+            -output out/erika_capi.xcframework
+      - name: Package
+        run: |
+          bash packaging/bundle.sh erika-capi-ios \
+            dist/erika-capi-ios.zip out/erika_capi.xcframework
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erika-capi-ios
+          path: dist/*.zip
+
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Setup MSYS2 tools (Erika's xtask hard-codes C:\msys64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          release: false
+          update: false
+          path-type: inherit
+          install: >-
+            make
+            tar
+            diffutils
+            coreutils
+            pkgconf
+            perl
+            zip
+      - name: Install build tools (nasm, meson, ninja, LLVM/libclang)
+        shell: pwsh
+        run: |
+          choco install -y --no-progress nasm
+          pip install --quiet meson ninja
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path (Join-Path $llvmBin "libclang.dll"))) {
+            choco install llvm -y --no-progress
+          }
+          "LIBCLANG_PATH=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Add-Content -Path $env:GITHUB_PATH -Value $llvmBin
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\NASM"
+          git config --global core.longpaths true
+      - name: Cache native dependencies
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: deps-windows-${{ hashFiles('xtask/src/main.rs') }}
+      - name: Build native deps + erika_capi
+        shell: bash
+        run: |
+          cargo run -p xtask -- deps build --all --profile "$PROFILE" --target x86_64-pc-windows-msvc
+          ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="x86_64-pc-windows-msvc" \
+            cargo build -p erika_capi --release --target x86_64-pc-windows-msvc
+      - name: Package
+        shell: bash
+        run: |
+          R=target/x86_64-pc-windows-msvc/release
+          bash packaging/bundle.sh erika-capi-windows-x64 \
+            dist/erika-capi-windows-x64.zip \
+            "$R/erika_capi.dll" "$R/erika_capi.dll.lib" "$R/erika_capi.lib"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erika-capi-windows-x64
+          path: dist/*.zip
+
+  release:
+    name: Publish Release
+    needs: [macos, ios, windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.zip
+          generate_release_notes: true
+          body: |
+            Prebuilt `erika_capi` C ABI bundles (static `lgpl` profile).
+
+            Each archive contains the library, `include/erika.h`, `LICENSE`
+            (MPL-2.0), and `THIRD_PARTY_NOTICES.md`. See
+            [docs/capi_reference.md](https://github.com/AimesSoft/Erika/blob/${{ github.ref_name }}/docs/capi_reference.md)
+            and [docs/integration.md](https://github.com/AimesSoft/Erika/blob/${{ github.ref_name }}/docs/integration.md)
+            to integrate.
