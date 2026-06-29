@@ -95,11 +95,15 @@ jobs:
           path: third_party
           key: deps-ios-${{ hashFiles('xtask/src/main.rs') }}
       - name: Build native deps + erika_capi (device + simulators)
+        # iOS links against the static lib only (XCFramework). Build just the
+        # staticlib via `cargo rustc --crate-type staticlib` so the cdylib link
+        # (which iOS does not use and which fails to resolve here) is skipped.
         run: |
           for T in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
             cargo run -p xtask -- deps build --all --profile "$PROFILE" --target "$T"
             ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
-              cargo build -p erika_capi --release --target "$T"
+            IPHONEOS_DEPLOYMENT_TARGET=13.0 \
+              cargo rustc -p erika_capi --lib --release --target "$T" --crate-type staticlib
           done
       - name: Assemble XCFramework
         run: |
@@ -150,7 +154,7 @@ jobs:
       - name: Install build tools (nasm, meson, ninja, LLVM/libclang)
         shell: pwsh
         run: |
-          choco install -y --no-progress nasm
+          choco install -y --no-progress nasm zip
           pip install --quiet meson ninja
           $llvmBin = "C:\Program Files\LLVM\bin"
           if (-not (Test-Path (Join-Path $llvmBin "libclang.dll"))) {
