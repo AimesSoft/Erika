@@ -53,6 +53,7 @@ use crate::renderer::metal::{
     MetalRendererStats, OverlayRenderFrame, PreparedOverlayFrameInfo, VideoFrameTextureSource,
     VideoRenderFrame, fourcc_string,
 };
+use crate::renderer::pipeline::TargetColorState;
 use crate::renderer::pipeline::{ColorRange, LumaUpscalerMode, ToneMapOperator};
 use crate::subtitle::{AssColor, SubtitleAlphaBitmap};
 use crate::trace;
@@ -422,7 +423,7 @@ impl MetalRendererImpl {
                 self.stats.drawable_width,
                 self.stats.drawable_height,
             );
-            self.draw_overlay_planes(&encoder, overlay, layout)?;
+            self.draw_overlay_planes(&encoder, overlay, layout, self.output_mode.target_color())?;
             encoder.endEncoding();
             let drawable_ref: &ProtocolObject<dyn MTLDrawable> =
                 ProtocolObject::from_ref(&*drawable);
@@ -633,11 +634,12 @@ impl MetalRendererImpl {
             );
             encoder.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::TriangleStrip, 0, 4);
 
+            let target_color = frame.pipeline.target;
             if let Some(overlay) = overlay {
-                self.draw_overlay_planes(&encoder, overlay, layout)?;
+                self.draw_overlay_planes(&encoder, overlay, layout, target_color)?;
             }
             if let Some(danmaku) = danmaku.as_ref() {
-                self.draw_danmaku_plan(&encoder, danmaku.plan, layout)?;
+                self.draw_danmaku_plan(&encoder, danmaku.plan, layout, target_color)?;
             }
 
             encoder.endEncoding();
@@ -808,11 +810,12 @@ impl MetalRendererImpl {
             );
             encoder.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::TriangleStrip, 0, 4);
 
+            let target_color = frame.pipeline.target;
             if let Some(overlay) = overlay {
-                self.draw_overlay_planes(&encoder, overlay, layout)?;
+                self.draw_overlay_planes(&encoder, overlay, layout, target_color)?;
             }
             if let Some(danmaku) = danmaku.as_ref() {
-                self.draw_danmaku_plan(&encoder, danmaku.plan, layout)?;
+                self.draw_danmaku_plan(&encoder, danmaku.plan, layout, target_color)?;
             }
             encoder.endEncoding();
 
@@ -891,6 +894,7 @@ impl MetalRendererImpl {
         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
         overlay: OverlayRenderFrame<'_>,
         layout: VideoPresentationLayout,
+        target: TargetColorState,
     ) -> Result<()> {
         let _ = crate::renderer::metal::inspect_overlay_frame(overlay.frame)?;
         if overlay.frame.subtitle_planes.is_empty()
@@ -910,7 +914,7 @@ impl MetalRendererImpl {
                 &plane.rgba,
             )?;
             let (x, y, width, height) = plane.scaled_rect(viewport_width, viewport_height);
-            let uniforms = OverlayUniforms::from_plane(x, y, width, height, layout);
+            let uniforms = OverlayUniforms::from_plane(x, y, width, height, layout, target);
             unsafe {
                 encoder.setRenderPipelineState(&pipeline);
                 encoder.setFragmentTexture_atIndex(Some(&*texture), 0);
@@ -949,6 +953,7 @@ impl MetalRendererImpl {
                     atlas_width,
                     atlas_height,
                     layout,
+                    target,
                 );
                 unsafe {
                     encoder.setRenderPipelineState(&pipeline);
@@ -980,6 +985,7 @@ impl MetalRendererImpl {
         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
         plan: &DanmakuRenderPlan,
         layout: VideoPresentationLayout,
+        target: TargetColorState,
     ) -> Result<()> {
         if plan.is_empty() {
             return Ok(());
@@ -1011,6 +1017,7 @@ impl MetalRendererImpl {
             &fill_texture,
             &outline_texture,
             layout,
+            target,
         )?;
         Ok(())
     }
@@ -1059,16 +1066,29 @@ impl MetalRendererImpl {
         fill_texture: &ProtocolObject<dyn MTLTexture>,
         outline_texture: &ProtocolObject<dyn MTLTexture>,
         layout: VideoPresentationLayout,
+        target: TargetColorState,
     ) -> Result<()> {
         let build_started = Instant::now();
         let uniforms = DanmakuBatchUniforms {
             viewport: layout.overlay_viewport(),
-            _reserved0: [0.0, 0.0],
+            target_transfer: transfer_code(target.transfer),
+            _reserved0: 0,
+            ui_nits: [ui_reference_white_nits(target), 0.0, 0.0, 0.0],
         };
         unsafe {
             encoder.setRenderPipelineState(pipeline);
             encoder.setFragmentSamplerState_atIndex(Some(sampler), 0);
             encoder.setVertexBytes_length_atIndex(
+                NonNull::new(
+                    (&uniforms as *const DanmakuBatchUniforms)
+                        .cast::<c_void>()
+                        .cast_mut(),
+                )
+                .expect("danmaku batch uniforms pointer is non-null"),
+                mem::size_of::<DanmakuBatchUniforms>(),
+                1,
+            );
+            encoder.setFragmentBytes_length_atIndex(
                 NonNull::new(
                     (&uniforms as *const DanmakuBatchUniforms)
                         .cast::<c_void>()
@@ -1736,6 +1756,14 @@ fn transfer_code(transfer: crate::core::TransferFunction) -> u32 {
     }
 }
 
+fn ui_reference_white_nits(target: TargetColorState) -> f32 {
+    if matches!(target.transfer, TransferFunction::Pq) {
+        target.reference_white_nits.max(1.0)
+    } else {
+        100.0
+    }
+}
+
 fn tone_map_code(operator: ToneMapOperator) -> u32 {
     match operator {
         ToneMapOperator::Clip => 0,
@@ -1755,15 +1783,18 @@ struct OverlayUniforms {
     tex_rect: [f32; 4],
     viewport: [f32; 2],
     overlay_mode: u32,
-    _reserved0: u32,
+    target_transfer: u32,
     color: [f32; 4],
+    ui_nits: [f32; 4],
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct DanmakuBatchUniforms {
     viewport: [f32; 2],
-    _reserved0: [f32; 2],
+    target_transfer: u32,
+    _reserved0: u32,
+    ui_nits: [f32; 4],
 }
 
 #[repr(C)]
@@ -1791,14 +1822,16 @@ impl OverlayUniforms {
         width: u32,
         height: u32,
         layout: VideoPresentationLayout,
+        target: TargetColorState,
     ) -> Self {
         Self {
             rect: layout.map_source_rect(x as f32, y as f32, width as f32, height as f32),
             tex_rect: [0.0, 0.0, 1.0, 1.0],
             viewport: layout.overlay_viewport(),
             overlay_mode: 0,
-            _reserved0: 0,
+            target_transfer: transfer_code(target.transfer),
             color: [1.0, 1.0, 1.0, 1.0],
+            ui_nits: [ui_reference_white_nits(target), 0.0, 0.0, 0.0],
         }
     }
 
@@ -1808,6 +1841,7 @@ impl OverlayUniforms {
         atlas_width: usize,
         atlas_height: usize,
         layout: VideoPresentationLayout,
+        target: TargetColorState,
     ) -> Self {
         let color = AssColor::from_libass_rgba(bitmap.color_rgba);
         let atlas_width = atlas_width.max(1) as f32;
@@ -1827,13 +1861,14 @@ impl OverlayUniforms {
             ],
             viewport: layout.overlay_viewport(),
             overlay_mode: 1,
-            _reserved0: 0,
+            target_transfer: transfer_code(target.transfer),
             color: [
                 color.red as f32 / 255.0,
                 color.green as f32 / 255.0,
                 color.blue as f32 / 255.0,
                 color.alpha as f32 / 255.0,
             ],
+            ui_nits: [ui_reference_white_nits(target), 0.0, 0.0, 0.0],
         }
     }
 }
@@ -2274,6 +2309,20 @@ float4 final_output(float3 rgb, constant VideoUniforms& uniforms) {
     return float4(clamp(rgb, 0.0, 1.0), 1.0);
 }
 
+float3 sdr_ui_color_to_target_output(float3 rgb, uint target_transfer, float reference_white_nits) {
+    if (target_transfer == 3) {
+        constexpr float pq_absolute_peak_nits = 10000.0;
+        float3 linear = pow(max(rgb, float3(0.0)), float3(2.2));
+        float3 nits = linear * max(reference_white_nits, 1.0);
+        return float3(
+            pq_inverse_eotf(nits.r / pq_absolute_peak_nits),
+            pq_inverse_eotf(nits.g / pq_absolute_peak_nits),
+            pq_inverse_eotf(nits.b / pq_absolute_peak_nits)
+        );
+    }
+    return rgb;
+}
+
 struct RangeExpandedYCbCr {
     float y;
     float2 cbcr;
@@ -2354,8 +2403,9 @@ struct OverlayUniforms {
     float4 tex_rect;
     float2 viewport;
     uint overlay_mode;
-    uint reserved0;
+    uint target_transfer;
     float4 color;
+    float4 ui_nits;
 };
 
 vertex VertexOut erika_overlay_vertex(
@@ -2393,14 +2443,26 @@ fragment float4 erika_overlay_fragment(
     constant OverlayUniforms& uniforms [[buffer(0)]]) {
     float4 sampled = overlay_texture.sample(overlay_sampler, in.tex_coord);
     if (uniforms.overlay_mode == 1) {
-        return float4(uniforms.color.rgb, uniforms.color.a * sampled.r);
+        float3 rgb = sdr_ui_color_to_target_output(
+            uniforms.color.rgb,
+            uniforms.target_transfer,
+            uniforms.ui_nits.x
+        );
+        return float4(rgb, uniforms.color.a * sampled.r);
     }
+    sampled.rgb = sdr_ui_color_to_target_output(
+        sampled.rgb,
+        uniforms.target_transfer,
+        uniforms.ui_nits.x
+    );
     return sampled;
 }
 
 struct DanmakuBatchUniforms {
     float2 viewport;
-    float2 reserved0;
+    uint target_transfer;
+    uint reserved0;
+    float4 ui_nits;
 };
 
 struct DanmakuBatchInstance {
@@ -2446,9 +2508,15 @@ vertex DanmakuBatchOut erika_danmaku_batch_vertex(
 fragment float4 erika_danmaku_batch_fragment(
     DanmakuBatchOut in [[stage_in]],
     texture2d<float, access::sample> atlas_texture [[texture(0)]],
-    sampler atlas_sampler [[sampler(0)]]) {
+    sampler atlas_sampler [[sampler(0)]],
+    constant DanmakuBatchUniforms& uniforms [[buffer(1)]]) {
     float mask = atlas_texture.sample(atlas_sampler, in.tex_coord).r;
-    return float4(in.color.rgb, in.color.a * mask);
+    float3 rgb = sdr_ui_color_to_target_output(
+        in.color.rgb,
+        uniforms.target_transfer,
+        uniforms.ui_nits.x
+    );
+    return float4(rgb, in.color.a * mask);
 }
 "#;
 
@@ -2667,13 +2735,31 @@ mod tests {
 
     #[test]
     fn overlay_uniforms_keep_color_aligned() {
-        assert_eq!(std::mem::size_of::<super::OverlayUniforms>(), 64);
+        assert_eq!(std::mem::size_of::<super::OverlayUniforms>(), 80);
         assert_eq!(std::mem::offset_of!(super::OverlayUniforms, tex_rect), 16);
         assert_eq!(
             std::mem::offset_of!(super::OverlayUniforms, overlay_mode),
             40
         );
+        assert_eq!(
+            std::mem::offset_of!(super::OverlayUniforms, target_transfer),
+            44
+        );
         assert_eq!(std::mem::offset_of!(super::OverlayUniforms, color), 48);
+        assert_eq!(std::mem::offset_of!(super::OverlayUniforms, ui_nits), 64);
+    }
+
+    #[test]
+    fn danmaku_uniforms_keep_ui_output_fields_aligned() {
+        assert_eq!(std::mem::size_of::<super::DanmakuBatchUniforms>(), 32);
+        assert_eq!(
+            std::mem::offset_of!(super::DanmakuBatchUniforms, target_transfer),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(super::DanmakuBatchUniforms, ui_nits),
+            16
+        );
     }
 
     #[test]
@@ -2691,8 +2777,14 @@ mod tests {
         };
         let layout = super::VideoPresentationLayout::aspect_fit(640, 360, 640, 360);
 
-        let uniforms =
-            super::OverlayUniforms::from_alpha_atlas_bitmap(&bitmap, &placement, 200, 100, layout);
+        let uniforms = super::OverlayUniforms::from_alpha_atlas_bitmap(
+            &bitmap,
+            &placement,
+            200,
+            100,
+            layout,
+            crate::renderer::pipeline::TargetColorState::default(),
+        );
 
         assert_eq!(uniforms.rect, [12.0, 34.0, 56.0, 78.0]);
         assert_eq!(uniforms.tex_rect, [0.05, 0.05, 0.28, 0.78]);
@@ -2825,7 +2917,14 @@ mod tests {
     #[test]
     fn overlay_uniforms_map_source_rect_into_presentation_layout() {
         let layout = super::VideoPresentationLayout::aspect_fit(1920, 1080, 1000, 1000);
-        let uniforms = super::OverlayUniforms::from_plane(960, 540, 192, 108, layout);
+        let uniforms = super::OverlayUniforms::from_plane(
+            960,
+            540,
+            192,
+            108,
+            layout,
+            crate::renderer::pipeline::TargetColorState::default(),
+        );
 
         assert_eq!(uniforms.viewport, [1000.0, 1000.0]);
         for (actual, expected) in uniforms.rect.into_iter().zip([500.0, 500.0, 100.0, 56.25]) {

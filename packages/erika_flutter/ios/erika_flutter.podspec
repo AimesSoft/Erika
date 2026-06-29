@@ -132,7 +132,7 @@ ERIKA_FRIBIDI_DIR="${ERIKA_FRIBIDI_DIR:-$ERIKA_TARGET_DIST/fribidi}"
 # v0.1.0). Any failure falls through to the source build below, so enabling it
 # never breaks a build. ERIKA_IOS_CAPI_STATICLIB still takes precedence.
 PREBUILT_LIB=""
-if [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_IOS_CAPI_STATICLIB:-}" ]; then
+if [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ] && [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_IOS_CAPI_STATICLIB:-}" ]; then
   PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.0}"
   PREBUILT_WORK="$ERIKA_ROOT/target/erika-prebuilt-ios"
   PREBUILT_ZIP="$PREBUILT_WORK/erika-capi-ios.zip"
