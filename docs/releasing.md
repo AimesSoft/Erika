@@ -60,6 +60,37 @@ bash packaging/bundle.sh erika-capi-macos-universal \
   dist/erika-capi-macos-universal.zip out/liberika_capi.dylib out/liberika_capi.a
 ```
 
+## Consuming prebuilt bundles from the Flutter plugin (opt-in)
+
+The `erika_flutter` plugin can download a prebuilt bundle from a release instead
+of building Erika from source, which avoids compiling FFmpeg in the host app's
+build. It is **opt-in** and always falls back to the source build on any
+failure, so enabling it cannot break a build.
+
+Enable it by setting environment variables in the host app's build:
+
+| Variable | Effect |
+|----------|--------|
+| `ERIKA_PREBUILT=1` | Download the prebuilt `erika_capi` instead of building from source. |
+| `ERIKA_PREBUILT_TAG=v0.1.0` | Release tag to download (default `v0.1.0`). |
+
+- **Windows** (`build_erika_runtime.cmake`): downloads `erika-capi-windows-x64.zip`
+  and drops `erika_capi.dll` where the plugin bundles it. The plugin loads the
+  DLL dynamically, so this is feature-agnostic and works against `v0.1.0`.
+- **iOS** (podspec): downloads `erika-capi-ios.zip`, picks the device or
+  simulator slice from the XCFramework, and links it. The prebuilt static lib
+  must be built `--no-default-features --features libass` to match the plugin's
+  link flags (the release workflow does this); verify against a release built
+  that way before relying on it.
+- **macOS**: not wired yet — the macOS plugin loads the dylib via `dlopen` and
+  the dylib is provisioned by the host app, not the podspec. Point the host at a
+  downloaded `liberika_capi.dylib` via `ERIKA_CAPI_DYLIB`, or add a host-side
+  download step.
+
+Pin `ERIKA_PREBUILT_TAG` to a release whose Erika source matches the plugin
+revision you build against, so the C ABI in the header and the prebuilt library
+agree.
+
 ## Consuming a bundle
 
 Unzip, then point your build at `include/` for the header and `lib/` for the

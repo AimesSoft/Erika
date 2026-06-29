@@ -48,7 +48,7 @@ Pod::Spec.new do |s|
     .join(' ')
 
   s.name             = 'erika_flutter'
-  s.version          = '0.0.1'
+  s.version          = '0.1.0'
   s.summary          = 'Flutter embedder glue for the Erika Rust media engine.'
   s.description      = <<-DESC
 Flutter iOS plugin that hosts a CAMetalLayer and drives Erika through its C ABI.
@@ -127,14 +127,44 @@ ERIKA_FREETYPE_DIR="${ERIKA_FREETYPE_DIR:-$ERIKA_TARGET_DIST/freetype}"
 ERIKA_HARFBUZZ_DIR="${ERIKA_HARFBUZZ_DIR:-$ERIKA_TARGET_DIST/harfbuzz}"
 ERIKA_FRIBIDI_DIR="${ERIKA_FRIBIDI_DIR:-$ERIKA_TARGET_DIST/fribidi}"
 
-if [ ! -f "$ERIKA_FFMPEG_DIR/include/libavformat/avformat.h" ] || [ ! -f "$ERIKA_LIBASS_DIR/lib/libass.a" ]; then
-  echo "Building Erika native dependencies for $RUST_TARGET ($ERIKA_NATIVE_PROFILE, with libass)"
-  (cd "$ERIKA_ROOT" && cargo run -p xtask -- deps build --all --profile "$ERIKA_NATIVE_PROFILE" --target "$RUST_TARGET" --jobs "$HOST_JOBS")
+# Optional: use a prebuilt static lib from a GitHub Release (opt-in).
+# Enable with ERIKA_PREBUILT=1; ERIKA_PREBUILT_TAG selects the tag (default
+# v0.1.0). Any failure falls through to the source build below, so enabling it
+# never breaks a build. ERIKA_IOS_CAPI_STATICLIB still takes precedence.
+PREBUILT_LIB=""
+if [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_IOS_CAPI_STATICLIB:-}" ]; then
+  PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.0}"
+  PREBUILT_WORK="$ERIKA_ROOT/target/erika-prebuilt-ios"
+  PREBUILT_ZIP="$PREBUILT_WORK/erika-capi-ios.zip"
+  PREBUILT_URL="https://github.com/AimesSoft/Erika/releases/download/$PREBUILT_TAG/erika-capi-ios.zip"
+  rm -rf "$PREBUILT_WORK"
+  mkdir -p "$PREBUILT_WORK"
+  echo "Erika: downloading prebuilt $PREBUILT_URL"
+  if curl -fSL --retry 3 -o "$PREBUILT_ZIP" "$PREBUILT_URL" && unzip -oq "$PREBUILT_ZIP" -d "$PREBUILT_WORK"; then
+    XCF="$(find "$PREBUILT_WORK" -type d -name 'erika_capi.xcframework' | head -1)"
+    if [ -n "$XCF" ]; then
+      case "${PLATFORM_NAME:-iphoneos}" in
+        iphonesimulator) SLICE="$(find "$XCF" -maxdepth 1 -type d -name '*simulator*' | head -1)" ;;
+        *) SLICE="$(find "$XCF" -maxdepth 1 -type d -name 'ios-*' ! -name '*simulator*' | head -1)" ;;
+      esac
+      if [ -n "${SLICE:-}" ] && [ -f "$SLICE/liberika_capi.a" ]; then
+        PREBUILT_LIB="$SLICE/liberika_capi.a"
+        echo "Erika: using prebuilt $PREBUILT_TAG -> $PREBUILT_LIB"
+      fi
+    fi
+  fi
+  [ -n "$PREBUILT_LIB" ] || echo "Erika: prebuilt unavailable; building from source"
 fi
 
 if [ -n "${ERIKA_IOS_CAPI_STATICLIB:-}" ]; then
   LIB_SOURCE="$ERIKA_IOS_CAPI_STATICLIB"
+elif [ -n "$PREBUILT_LIB" ]; then
+  LIB_SOURCE="$PREBUILT_LIB"
 else
+  if [ ! -f "$ERIKA_FFMPEG_DIR/include/libavformat/avformat.h" ] || [ ! -f "$ERIKA_LIBASS_DIR/lib/libass.a" ]; then
+    echo "Building Erika native dependencies for $RUST_TARGET ($ERIKA_NATIVE_PROFILE, with libass)"
+    (cd "$ERIKA_ROOT" && cargo run -p xtask -- deps build --all --profile "$ERIKA_NATIVE_PROFILE" --target "$RUST_TARGET" --jobs "$HOST_JOBS")
+  fi
   LIB_SOURCE="$ERIKA_ROOT/target/$RUST_TARGET/$CARGO_PROFILE/liberika_capi.a"
   echo "Building Erika C ABI staticlib for $RUST_TARGET ($CARGO_PROFILE)"
   (cd "$ERIKA_ROOT" && ERIKA_NATIVE_PROFILE="$ERIKA_NATIVE_PROFILE" ERIKA_NATIVE_TARGET="$RUST_TARGET" ERIKA_FFMPEG_DIR="$ERIKA_FFMPEG_DIR" ERIKA_LIBASS_DIR="$ERIKA_LIBASS_DIR" ERIKA_FREETYPE_DIR="$ERIKA_FREETYPE_DIR" ERIKA_HARFBUZZ_DIR="$ERIKA_HARFBUZZ_DIR" ERIKA_FRIBIDI_DIR="$ERIKA_FRIBIDI_DIR" cargo rustc -p erika_capi --target "$RUST_TARGET" --no-default-features --features libass $CARGO_ARGS --lib --crate-type staticlib)

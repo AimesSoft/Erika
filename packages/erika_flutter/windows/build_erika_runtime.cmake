@@ -53,6 +53,64 @@ function(erika_native_deps_ready output)
   set(${output} "${ready}" PARENT_SCOPE)
 endfunction()
 
+# --- Optional: use a prebuilt erika_capi.dll from a GitHub Release ---
+# Opt in with ERIKA_PREBUILT=1. ERIKA_PREBUILT_TAG selects the release tag
+# (default v0.1.0). On any failure this falls through to the source build below,
+# so enabling it never breaks a build. The Windows plugin loads the DLL
+# dynamically, so only erika_capi.dll is required.
+if("$ENV{ERIKA_PREBUILT}" STREQUAL "1")
+  if(ERIKA_BUILD_CONFIG STREQUAL "Debug")
+    set(_erika_cfg_dir "debug")
+  else()
+    set(_erika_cfg_dir "release")
+  endif()
+  set(_erika_dll_out "${ERIKA_REPO_ROOT}/target/${_erika_cfg_dir}/erika_capi.dll")
+  if(EXISTS "${_erika_dll_out}")
+    message(STATUS "Erika: reusing prebuilt ${_erika_dll_out}")
+    return()
+  endif()
+  set(_erika_tag "v0.1.0")
+  if(NOT "$ENV{ERIKA_PREBUILT_TAG}" STREQUAL "")
+    set(_erika_tag "$ENV{ERIKA_PREBUILT_TAG}")
+  endif()
+  set(_erika_url
+    "https://github.com/AimesSoft/Erika/releases/download/${_erika_tag}/erika-capi-windows-x64.zip")
+  set(_erika_work "${ERIKA_REPO_ROOT}/target/erika-prebuilt-windows")
+  set(_erika_zip "${_erika_work}/bundle.zip")
+  file(REMOVE_RECURSE "${_erika_work}")
+  file(MAKE_DIRECTORY "${_erika_work}")
+  message(STATUS "Erika: downloading prebuilt ${_erika_url}")
+  file(DOWNLOAD "${_erika_url}" "${_erika_zip}" STATUS _erika_dl TIMEOUT 900)
+  list(GET _erika_dl 0 _erika_dl_code)
+  if(_erika_dl_code EQUAL 0)
+    execute_process(
+      COMMAND "${CMAKE_COMMAND}" -E tar xf "${_erika_zip}"
+      WORKING_DIRECTORY "${_erika_work}"
+      RESULT_VARIABLE _erika_unzip)
+    file(GLOB_RECURSE _erika_found_dll "${_erika_work}/*/lib/erika_capi.dll")
+    if(_erika_unzip EQUAL 0 AND _erika_found_dll)
+      list(GET _erika_found_dll 0 _erika_src_dll)
+      get_filename_component(_erika_src_lib_dir "${_erika_src_dll}" DIRECTORY)
+      file(MAKE_DIRECTORY "${ERIKA_REPO_ROOT}/target/${_erika_cfg_dir}")
+      file(COPY "${_erika_src_dll}"
+        DESTINATION "${ERIKA_REPO_ROOT}/target/${_erika_cfg_dir}")
+      foreach(_erika_extra erika_capi.dll.lib erika_capi.lib)
+        if(EXISTS "${_erika_src_lib_dir}/${_erika_extra}")
+          file(COPY "${_erika_src_lib_dir}/${_erika_extra}"
+            DESTINATION "${ERIKA_REPO_ROOT}/target/${_erika_cfg_dir}")
+        endif()
+      endforeach()
+      if(EXISTS "${_erika_dll_out}")
+        message(STATUS "Erika: installed prebuilt ${_erika_tag} -> ${_erika_dll_out}")
+        return()
+      endif()
+    endif()
+    message(WARNING "Erika: prebuilt extract failed; building from source")
+  else()
+    message(WARNING "Erika: prebuilt download failed (${_erika_dl}); building from source")
+  endif()
+endif()
+
 erika_native_deps_ready(ERIKA_NATIVE_DEPS_READY)
 if(NOT ERIKA_NATIVE_DEPS_READY)
   message(STATUS

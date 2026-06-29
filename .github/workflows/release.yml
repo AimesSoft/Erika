@@ -103,7 +103,8 @@ jobs:
             cargo run -p xtask -- deps build --all --profile "$PROFILE" --target "$T"
             ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
             IPHONEOS_DEPLOYMENT_TARGET=13.0 \
-              cargo rustc -p erika_capi --lib --release --target "$T" --crate-type staticlib
+              cargo rustc -p erika_capi --lib --release --target "$T" \
+                --no-default-features --features libass --crate-type staticlib
           done
       - name: Assemble XCFramework
         run: |
