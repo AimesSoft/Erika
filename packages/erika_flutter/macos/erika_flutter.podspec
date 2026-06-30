@@ -57,7 +57,7 @@ mkdir -p "$DEST_DIR"
 # v0.1.0). Any failure falls through to the source build. ERIKA_MACOS_CAPI_DYLIB
 # takes precedence (explicit dylib path).
 UNIVERSAL_DYLIB=""
-if [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_MACOS_CAPI_DYLIB:-}" ]; then
+if [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ] && [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_MACOS_CAPI_DYLIB:-}" ]; then
   PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.0}"
   PREBUILT_WORK="$ERIKA_ROOT/target/erika-prebuilt-macos"
   PREBUILT_ZIP="$PREBUILT_WORK/erika-capi-macos-universal.zip"

@@ -73,6 +73,7 @@ Enable it by setting environment variables in the host app's build:
 |----------|--------|
 | `ERIKA_PREBUILT=1` | Download the prebuilt `erika_capi` instead of building from source. |
 | `ERIKA_PREBUILT_TAG=v0.1.0` | Release tag to download (default `v0.1.0`). |
+| `ERIKA_FORCE_SOURCE_BUILD=1` | macOS/iOS only: bypass the prebuilt path and build the local source, useful when debugging Erika changes through the Flutter plugin. |
 
 - **Windows** (`build_erika_runtime.cmake`): downloads `erika-capi-windows-x64.zip`
   and drops `erika_capi.dll` where the plugin bundles it. The plugin loads the

@@ -45,6 +45,10 @@ app build to download the prebuilt `erika_capi` from a GitHub Release
 Windows, and iOS; any failure falls back to the source build. See
 [`docs/releasing.md`](../../docs/releasing.md).
 
+When debugging local Erika source changes on macOS or iOS, set
+`ERIKA_FORCE_SOURCE_BUILD=1` to bypass the prebuilt download path even if the
+host app enables `ERIKA_PREBUILT=1`.
+
 ## iOS Setup
 
 The iOS CocoaPod script phase builds the Erika native dependencies and C ABI
