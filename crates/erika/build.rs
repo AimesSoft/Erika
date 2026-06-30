@@ -56,12 +56,17 @@ fn main() {
     println!("cargo:rustc-link-lib=static=harfbuzz");
     println!("cargo:rustc-link-lib=static=freetype");
 
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        println!("cargo:rustc-link-lib=framework=ApplicationServices");
+    let target_os = env::var("CARGO_CFG_TARGET_OS").ok();
+    if matches!(target_os.as_deref(), Some("ios" | "macos")) {
+        if target_os.as_deref() == Some("macos") {
+            println!("cargo:rustc-link-lib=framework=ApplicationServices");
+        }
         println!("cargo:rustc-link-lib=framework=CoreText");
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
         println!("cargo:rustc-link-lib=framework=CoreGraphics");
-        println!("cargo:rustc-link-lib=iconv");
+        if target_os.as_deref() == Some("macos") {
+            println!("cargo:rustc-link-lib=iconv");
+        }
     }
 }
 
