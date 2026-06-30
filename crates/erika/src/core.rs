@@ -18,9 +18,9 @@ use crate::trace;
 static NEXT_PLAYER_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_EXTERNAL_SUBTITLE_TRACK_ID: AtomicU64 = AtomicU64::new(1);
 const EXTERNAL_SUBTITLE_TRACK_ID_BASE: i64 = 1_000_000;
-const AUDIO_PREFILL_AFTER_VIDEO_LIMIT: usize = 4;
-const AUDIO_PREFILL_PACKET_BUDGET: usize = 4;
-const AUDIO_PREFILL_TIME_BUDGET: Duration = Duration::from_millis(3);
+const AUDIO_PREFILL_AFTER_VIDEO_LIMIT: usize = 8;
+const AUDIO_PREFILL_PACKET_BUDGET: usize = 6;
+const AUDIO_PREFILL_TIME_BUDGET: Duration = Duration::from_millis(5);
 const AUDIO_PREFILL_LOW_WATER: Duration = Duration::from_millis(350);
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
