@@ -48,7 +48,7 @@ Pod::Spec.new do |s|
     .join(' ')
 
   s.name             = 'erika_flutter'
-  s.version          = '0.1.0'
+  s.version          = '0.1.1'
   s.summary          = 'Flutter embedder glue for the Erika Rust media engine.'
   s.description      = <<-DESC
 Flutter iOS plugin that hosts a CAMetalLayer and drives Erika through its C ABI.
@@ -83,13 +83,18 @@ fi
 case "${PLATFORM_NAME:-iphoneos}" in
   iphoneos)
     RUST_TARGET="aarch64-apple-ios"
+    BINDGEN_CLANG_TARGET="arm64-apple-ios"
+    BINDGEN_SDK="iphoneos"
     ;;
   iphonesimulator)
     if [ "$ARCH" = "x86_64" ]; then
       RUST_TARGET="x86_64-apple-ios"
+      BINDGEN_CLANG_TARGET="x86_64-apple-ios-simulator"
     else
       RUST_TARGET="aarch64-apple-ios-sim"
+      BINDGEN_CLANG_TARGET="arm64-apple-ios-simulator"
     fi
+    BINDGEN_SDK="iphonesimulator"
     ;;
   *)
     echo "error: unsupported Erika iOS platform: ${PLATFORM_NAME:-unknown}" >&2
@@ -118,6 +123,10 @@ if command -v rustup >/dev/null 2>&1; then
   rustup target add "$RUST_TARGET"
 fi
 
+BINDGEN_SDKROOT="$(xcrun --sdk "$BINDGEN_SDK" --show-sdk-path)"
+BINDGEN_TARGET_ENV="$(echo "$RUST_TARGET" | tr '-' '_')"
+export "BINDGEN_EXTRA_CLANG_ARGS_$BINDGEN_TARGET_ENV=--target=$BINDGEN_CLANG_TARGET -isysroot $BINDGEN_SDKROOT"
+
 if [ -z "${ERIKA_FFMPEG_DIR:-}" ]; then
   ERIKA_FFMPEG_DIR="$ERIKA_ROOT/third_party/dist/$RUST_TARGET/$ERIKA_NATIVE_PROFILE/ffmpeg"
 fi
@@ -129,11 +138,11 @@ ERIKA_FRIBIDI_DIR="${ERIKA_FRIBIDI_DIR:-$ERIKA_TARGET_DIST/fribidi}"
 
 # Optional: use a prebuilt static lib from a GitHub Release (opt-in).
 # Enable with ERIKA_PREBUILT=1; ERIKA_PREBUILT_TAG selects the tag (default
-# v0.1.0). Any failure falls through to the source build below, so enabling it
+# v0.1.1). Any failure falls through to the source build below, so enabling it
 # never breaks a build. ERIKA_IOS_CAPI_STATICLIB still takes precedence.
 PREBUILT_LIB=""
 if [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ] && [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_IOS_CAPI_STATICLIB:-}" ]; then
-  PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.0}"
+  PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.1}"
   PREBUILT_WORK="$ERIKA_ROOT/target/erika-prebuilt-ios"
   PREBUILT_ZIP="$PREBUILT_WORK/erika-capi-ios.zip"
   PREBUILT_URL="https://github.com/AimesSoft/Erika/releases/download/$PREBUILT_TAG/erika-capi-ios.zip"
@@ -186,6 +195,6 @@ fi
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386',
-    'OTHER_LDFLAGS' => "$(inherited) \"$(PODS_TARGET_SRCROOT)/native/liberika_capi.a\" #{erika_cabi_undefined_flags} -framework AVFoundation -framework AudioToolbox -framework QuartzCore -framework Metal -framework CoreVideo -framework CoreMedia -framework VideoToolbox -framework CoreFoundation -framework CoreGraphics -framework Foundation -liconv -lbz2 -lz",
+    'OTHER_LDFLAGS' => "$(inherited) \"$(PODS_TARGET_SRCROOT)/native/liberika_capi.a\" #{erika_cabi_undefined_flags} -framework AVFoundation -framework AudioToolbox -framework QuartzCore -framework Metal -framework CoreVideo -framework CoreMedia -framework VideoToolbox -framework CoreText -framework CoreFoundation -framework CoreGraphics -framework Foundation -liconv -lbz2 -lz",
   }
 end
