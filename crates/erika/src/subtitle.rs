@@ -1,6 +1,6 @@
-#[cfg(feature = "libass")]
-use std::ptr::NonNull;
 use std::time::Duration;
+#[cfg(feature = "libass")]
+use std::{ffi::CStr, ptr::NonNull};
 
 use thiserror::Error;
 
@@ -577,6 +577,11 @@ mod libass_ffi {
     }
 }
 
+#[cfg(feature = "libass")]
+const ASS_FONTPROVIDER_AUTODETECT: libc::c_int = 1;
+#[cfg(feature = "libass")]
+const ASS_FONTPROVIDER_CORETEXT: libc::c_int = 2;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LibassRenderConfig {
     pub glyph_cache_limit: i32,
@@ -685,8 +690,8 @@ impl LibassSubtitleRenderer {
             libass_ffi::ass_set_fonts(
                 renderer.as_ptr(),
                 std::ptr::null(),
-                std::ptr::null(),
-                1,
+                default_ass_font_family_cstr().as_ptr(),
+                default_ass_font_provider(),
                 std::ptr::null(),
                 1,
             );
@@ -1374,6 +1379,28 @@ fn escape_ass_text(value: &str) -> String {
 
 const DEFAULT_ASS_FONT_SIZE: f64 = 48.0;
 const DEFAULT_ASS_OUTLINE: f64 = 2.0;
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+const DEFAULT_ASS_FONT_FAMILY: &str = "PingFang SC";
+#[cfg(not(any(target_os = "ios", target_os = "macos")))]
+const DEFAULT_ASS_FONT_FAMILY: &str = "Arial";
+
+#[cfg(feature = "libass")]
+fn default_ass_font_provider() -> libc::c_int {
+    if cfg!(any(target_os = "ios", target_os = "macos")) {
+        ASS_FONTPROVIDER_CORETEXT
+    } else {
+        ASS_FONTPROVIDER_AUTODETECT
+    }
+}
+
+#[cfg(feature = "libass")]
+fn default_ass_font_family_cstr() -> &'static CStr {
+    if cfg!(any(target_os = "ios", target_os = "macos")) {
+        c"PingFang SC"
+    } else {
+        c"Arial"
+    }
+}
 
 fn normalize_ass_font_scale(scale: f64) -> f64 {
     if scale.is_finite() {
@@ -1396,6 +1423,7 @@ fn default_ass_script_header(style: SubtitleAssStyle) -> String {
     let scale = normalize_ass_font_scale(style.font_scale);
     let font_size = ass_number(DEFAULT_ASS_FONT_SIZE * scale);
     let outline = ass_number(DEFAULT_ASS_OUTLINE * scale);
+    let font_family = DEFAULT_ASS_FONT_FAMILY;
     let play_res_width = style.play_res_width.max(1);
     let play_res_height = style.play_res_height.max(1);
     format!(
@@ -1406,7 +1434,7 @@ PlayResY: {play_res_height}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,{font_size},&H00FFFFFF,&H000000FF,&H80000000,&H80000000,0,0,0,0,100,100,0,0,1,{outline},0,2,48,48,54,1
+Style: Default,{font_family},{font_size},&H00FFFFFF,&H000000FF,&H80000000,&H80000000,0,0,0,0,100,100,0,0,1,{outline},0,2,48,48,54,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -1595,7 +1623,7 @@ Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,Hello libass
         )
         .unwrap();
 
-        assert!(script.contains("Style: Default,Arial,72,"));
+        assert!(script.contains(&format!("Style: Default,{DEFAULT_ASS_FONT_FAMILY},72,")));
     }
 
     #[test]
