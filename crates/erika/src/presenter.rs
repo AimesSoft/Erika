@@ -50,6 +50,9 @@ use crate::{PlayerError, Result};
 const AUDIO_START_BUFFER: Duration = Duration::from_millis(250);
 const AUDIO_PUMP_FRAME_LIMIT: usize = 16;
 const AUDIO_PUMP_TIME_BUDGET: Duration = Duration::from_millis(4);
+const AUDIO_FAST_RATE_PUMP_FRAME_LIMIT: usize = 48;
+const AUDIO_FAST_RATE_PUMP_TIME_BUDGET: Duration = Duration::from_millis(8);
+const PLAYBACK_RATE_EPSILON: f64 = 0.001;
 const VIDEO_PUMP_FRAME_LIMIT: usize = 8;
 const VIDEO_PUMP_TIME_BUDGET: Duration = Duration::from_millis(4);
 const DANMAKU_PLAN_REQUEST_QUANTUM: Duration = Duration::from_millis(250);
@@ -188,7 +191,8 @@ pub struct PresenterRuntime {
     audio_output: Box<dyn AudioOutputBackend>,
     audio_configured: bool,
     audio_started: bool,
-    last_audio_clock_sync: Option<AudioClockSyncState>,
+    last_audio_clock_report: Option<AudioClockReportState>,
+    playback_rate: f64,
     current_overlay: Option<OverlayFrame>,
     current_danmaku: Option<DanmakuRenderPlan>,
     current_danmaku_prepared: Option<CurrentDanmakuPrepared>,
@@ -219,9 +223,11 @@ pub struct PresenterRuntime {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct AudioClockSyncState {
+struct AudioClockReportState {
     media_time: Duration,
+    queued_frames: usize,
     read_frames: u64,
+    underflow_frames: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -447,7 +453,8 @@ impl PresenterRuntime {
             audio_output: build_audio_output(config.audio),
             audio_configured: false,
             audio_started: false,
-            last_audio_clock_sync: None,
+            last_audio_clock_report: None,
+            playback_rate: 1.0,
             current_overlay: None,
             current_danmaku: None,
             current_danmaku_prepared: None,
@@ -499,7 +506,7 @@ impl PresenterRuntime {
     pub fn resize_surface(&mut self, width: u32, height: u32, scale: f64) -> Result<()> {
         self.current_output_viewport = Some(surface_dimensions_to_viewport(width, height, scale));
         self.clear_current_danmaku_state();
-        self.last_audio_clock_sync = None;
+        self.last_audio_clock_report = None;
         self.renderer.resize_surface(width, height, scale)
     }
 
@@ -522,7 +529,7 @@ impl PresenterRuntime {
             eprintln!("Erika presenter audio pause failed: {error}");
         }
         self.audio_started = false;
-        self.last_audio_clock_sync = None;
+        self.last_audio_clock_report = None;
         result
     }
 
@@ -565,8 +572,13 @@ impl PresenterRuntime {
         result
     }
 
-    pub fn set_playback_rate(&self, rate: f64) -> Result<()> {
-        self.player.set_playback_rate(rate)
+    pub fn set_playback_rate(&mut self, rate: f64) -> Result<()> {
+        let next_rate = normalize_playback_rate(rate);
+        self.player.set_playback_rate(next_rate)?;
+        self.playback_rate = next_rate;
+        self.audio_output.set_playback_rate(next_rate);
+        self.last_audio_clock_report = None;
+        Ok(())
     }
 
     pub fn set_volume(&mut self, volume: f64) {
@@ -1321,7 +1333,7 @@ impl PresenterRuntime {
         self.subtitles.clear();
         self.clear_current_danmaku_state();
         self.current_media_time = media_time;
-        self.last_audio_clock_sync = None;
+        self.last_audio_clock_report = None;
         if let Err(error) = self.renderer.clear_current_frame() {
             self.stats.render_failures += 1;
             eprintln!("Erika presenter renderer clear failed: {error}");
@@ -1366,8 +1378,9 @@ impl PresenterRuntime {
     fn pump_audio(&mut self) {
         let started = Instant::now();
         let mut pumped = 0usize;
+        let (frame_limit, time_budget) = self.audio_pump_limits();
         loop {
-            if pumped >= AUDIO_PUMP_FRAME_LIMIT || started.elapsed() >= AUDIO_PUMP_TIME_BUDGET {
+            if pumped >= frame_limit || started.elapsed() >= time_budget {
                 break;
             }
             match self.audio_frames.try_recv() {
@@ -1384,15 +1397,27 @@ impl PresenterRuntime {
         }
         self.ensure_audio_started();
         if self.audio_started {
-            self.sync_player_to_audio_output();
+            self.report_audio_clock_snapshot();
         }
     }
 
-    fn sync_player_to_audio_output(&mut self) {
+    fn audio_pump_limits(&self) -> (usize, Duration) {
+        if (self.playback_rate - 1.0).abs() > PLAYBACK_RATE_EPSILON {
+            (
+                AUDIO_FAST_RATE_PUMP_FRAME_LIMIT,
+                AUDIO_FAST_RATE_PUMP_TIME_BUDGET,
+            )
+        } else {
+            (AUDIO_PUMP_FRAME_LIMIT, AUDIO_PUMP_TIME_BUDGET)
+        }
+    }
+
+    fn report_audio_clock_snapshot(&mut self) {
         let Some(snapshot) = self.audio_output.clock_snapshot() else {
             return;
         };
-        if !self.should_sync_audio_clock(snapshot) {
+        // Report queue/underflow movement even when the engine later rejects the clock for sync.
+        if !self.should_report_audio_clock(snapshot) {
             return;
         }
         trace::log(format!(
@@ -1407,24 +1432,26 @@ impl PresenterRuntime {
         let _ = self.player.update_audio_clock(snapshot);
     }
 
-    fn should_sync_audio_clock(&mut self, snapshot: AudioClockSnapshot) -> bool {
+    fn should_report_audio_clock(&mut self, snapshot: AudioClockSnapshot) -> bool {
         let Some(media_time) = snapshot.media_time else {
             return false;
         };
-        if snapshot.read_frames == 0 {
-            return false;
-        }
-        let next = AudioClockSyncState {
+        let next = AudioClockReportState {
             media_time,
+            queued_frames: snapshot.queued_frames,
             read_frames: snapshot.read_frames,
+            underflow_frames: snapshot.underflow_frames,
         };
-        let should_sync = self.last_audio_clock_sync.is_none_or(|previous| {
-            snapshot.read_frames > previous.read_frames && media_time >= previous.media_time
+        let should_report = self.last_audio_clock_report.is_none_or(|previous| {
+            snapshot.read_frames > previous.read_frames
+                || snapshot.underflow_frames > previous.underflow_frames
+                || snapshot.queued_frames != previous.queued_frames
+                || media_time > previous.media_time
         });
-        if should_sync {
-            self.last_audio_clock_sync = Some(next);
+        if should_report {
+            self.last_audio_clock_report = Some(next);
         }
-        should_sync
+        should_report
     }
 
     fn push_audio(&mut self, frame: PlayerAudioFrame) {
@@ -1435,7 +1462,7 @@ impl PresenterRuntime {
                 return;
             }
             self.audio_configured = true;
-            self.last_audio_clock_sync = None;
+            self.last_audio_clock_report = None;
         }
         match self.audio_output.push(frame.frame) {
             Ok(_) => self.stats.pushed_audio_frames += 1,
@@ -1460,7 +1487,7 @@ impl PresenterRuntime {
             return;
         }
         self.audio_started = true;
-        self.last_audio_clock_sync = None;
+        self.last_audio_clock_report = None;
     }
 
     fn audio_output_ready_to_start(&self) -> bool {
@@ -1481,13 +1508,21 @@ impl PresenterRuntime {
         }
         self.audio_configured = false;
         self.audio_started = false;
-        self.last_audio_clock_sync = None;
+        self.last_audio_clock_report = None;
     }
 
     fn drain_pending_player_frames(&mut self) {
         while self.video_frames.try_recv().is_ok() {}
         while self.audio_frames.try_recv().is_ok() {}
         while self.subtitle_frames.try_recv().is_ok() {}
+    }
+}
+
+fn normalize_playback_rate(rate: f64) -> f64 {
+    if rate.is_finite() && rate > 0.0 {
+        rate
+    } else {
+        1.0
     }
 }
 
@@ -2267,31 +2302,43 @@ mod tests {
     }
 
     #[test]
-    fn audio_clock_sync_ignores_unread_and_regressing_snapshots() {
+    fn audio_clock_report_tracks_queue_and_underflow_changes() {
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
 
-        assert!(!presenter.should_sync_audio_clock(AudioClockSnapshot {
+        let first = AudioClockSnapshot {
             media_time: Some(Duration::from_secs(1)),
             queued_duration: Some(Duration::from_millis(500)),
             queued_frames: 24_000,
             read_frames: 0,
             written_frames: 24_000,
             underflow_frames: 0,
-        }));
-        assert!(presenter.should_sync_audio_clock(AudioClockSnapshot {
-            media_time: Some(Duration::from_millis(900)),
+        };
+        assert!(presenter.should_report_audio_clock(first));
+        assert!(!presenter.should_report_audio_clock(first));
+        assert!(presenter.should_report_audio_clock(AudioClockSnapshot {
+            media_time: Some(Duration::from_secs(1)),
             queued_duration: Some(Duration::from_millis(300)),
             queued_frames: 14_400,
-            read_frames: 4_800,
+            read_frames: 0,
             written_frames: 19_200,
             underflow_frames: 0,
         }));
-        assert!(!presenter.should_sync_audio_clock(AudioClockSnapshot {
+        assert!(presenter.should_report_audio_clock(AudioClockSnapshot {
             media_time: Some(Duration::from_millis(100)),
+            queued_duration: Some(Duration::ZERO),
+            queued_frames: 0,
+            read_frames: 0,
+            written_frames: 24_000,
+            underflow_frames: 512,
+        }));
+
+        presenter.playback_rate = 2.0;
+        assert!(presenter.should_report_audio_clock(AudioClockSnapshot {
+            media_time: Some(Duration::from_secs(1)),
             queued_duration: Some(Duration::from_millis(300)),
             queued_frames: 14_400,
-            read_frames: 9_600,
-            written_frames: 24_000,
+            read_frames: 14_400,
+            written_frames: 28_800,
             underflow_frames: 0,
         }));
     }

@@ -1,10 +1,16 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
+use soundtouch::{Setting, SoundTouch};
 use thiserror::Error;
 
 use crate::ffmpeg::{PcmAudioFrame, PcmFormat};
 use crate::trace;
+
+const RATE_CHANGE_AUDIO_BRIDGE: Duration = Duration::from_millis(80);
+const SOUNDTOUCH_SEQUENCE_MS: i32 = 25;
+const SOUNDTOUCH_SEEK_WINDOW_MS: i32 = 12;
+const SOUNDTOUCH_OVERLAP_MS: i32 = 6;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum AudioError {
@@ -78,15 +84,98 @@ pub struct AudioClockSnapshot {
     pub underflow_frames: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct AudioTimelineSegment {
     start: Option<Duration>,
     frames: usize,
+    media_frames_per_output_frame: f64,
 }
 
 impl AudioTimelineSegment {
-    fn new(start: Option<Duration>, frames: usize) -> Self {
-        Self { start, frames }
+    fn new(start: Option<Duration>, frames: usize, media_frames_per_output_frame: f64) -> Self {
+        Self {
+            start,
+            frames,
+            media_frames_per_output_frame,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AudioTempoProcessor {
+    format: PcmFormat,
+    playback_rate: f64,
+    processor: SoundTouch,
+    pending_pts: Option<Duration>,
+}
+
+impl AudioTempoProcessor {
+    fn new(format: PcmFormat, playback_rate: f64) -> Self {
+        let playback_rate = normalize_playback_rate(playback_rate);
+        let mut processor = SoundTouch::new();
+        processor
+            .set_sample_rate(format.sample_rate.max(8_000))
+            .set_channels(format.channels.max(1) as u32)
+            .set_tempo(playback_rate)
+            .set_setting(Setting::UseQuickseek, 1)
+            .set_setting(Setting::SequenceMs, SOUNDTOUCH_SEQUENCE_MS)
+            .set_setting(Setting::SeekwindowMs, SOUNDTOUCH_SEEK_WINDOW_MS)
+            .set_setting(Setting::OverlapMs, SOUNDTOUCH_OVERLAP_MS);
+        Self {
+            format,
+            playback_rate,
+            processor,
+            pending_pts: None,
+        }
+    }
+
+    fn matches(&self, format: PcmFormat, playback_rate: f64) -> bool {
+        self.format == format
+            && (self.playback_rate - normalize_playback_rate(playback_rate)).abs() < 0.001
+    }
+
+    fn process(&mut self, frame: PcmAudioFrame) -> (Vec<f32>, Option<Duration>, f64) {
+        let channels = self.format.channels.max(1) as usize;
+        let input_frames = frame.samples.len() / channels;
+        if input_frames == 0 {
+            return (Vec::new(), frame.pts, self.playback_rate);
+        }
+        if self.pending_pts.is_none() {
+            self.pending_pts = frame.pts;
+        }
+        self.processor.put_samples(&frame.samples, input_frames);
+        let output = self.receive_available();
+        let start = self.pending_pts;
+        let output_frames = output.len() / channels;
+        if output_frames > 0 {
+            if let Some(start) = self.pending_pts {
+                self.pending_pts = offset_pts_scaled(
+                    start,
+                    output_frames,
+                    self.format.sample_rate,
+                    self.playback_rate,
+                );
+            }
+        }
+        (output, start, self.playback_rate)
+    }
+
+    fn receive_available(&mut self) -> Vec<f32> {
+        const OUTPUT_FRAMES: usize = 4096;
+        let channels = self.format.channels.max(1) as usize;
+        let mut chunk = vec![0.0f32; OUTPUT_FRAMES * channels];
+        let mut output = Vec::new();
+        loop {
+            let frames = self.processor.receive_samples(&mut chunk, OUTPUT_FRAMES);
+            if frames == 0 {
+                break;
+            }
+            output.extend_from_slice(&chunk[..frames * channels]);
+            if frames < OUTPUT_FRAMES {
+                break;
+            }
+        }
+        output
     }
 }
 
@@ -97,6 +186,8 @@ pub struct AudioRingBuffer {
     samples: VecDeque<f32>,
     timeline: VecDeque<AudioTimelineSegment>,
     last_media_time: Option<Duration>,
+    playback_rate: f64,
+    tempo_processor: Option<AudioTempoProcessor>,
     stats: AudioRingBufferStats,
 }
 
@@ -108,6 +199,8 @@ impl AudioRingBuffer {
             samples: VecDeque::new(),
             timeline: VecDeque::new(),
             last_media_time: None,
+            playback_rate: 1.0,
+            tempo_processor: None,
             stats: AudioRingBufferStats::default(),
         }
     }
@@ -179,8 +272,19 @@ impl AudioRingBuffer {
         self.samples.clear();
         self.timeline.clear();
         self.last_media_time = None;
+        self.tempo_processor = None;
         self.stats.queued_frames = 0;
         self.stats.queued_samples = 0;
+    }
+
+    pub fn set_playback_rate(&mut self, rate: f64) {
+        let rate = normalize_playback_rate(rate);
+        if (self.playback_rate - rate).abs() <= 0.001 {
+            return;
+        }
+        self.playback_rate = rate;
+        self.tempo_processor = None;
+        self.trim_queued_to_front_frames(self.rate_change_bridge_frames());
     }
 
     pub fn push_frame(&mut self, frame: PcmAudioFrame) -> Result<AudioPushResult> {
@@ -197,10 +301,23 @@ impl AudioRingBuffer {
 
         let format = self.format.expect("audio format exists");
         let channels = format.channels as usize;
-        let incoming_frames = frame.samples.len() / channels;
+        let original_frames = frame.samples.len() / channels;
         let mut dropped_frames = 0usize;
         let frame_pts = frame.pts;
-        let frame_samples = frame.samples;
+        let (frame_samples, segment_start, media_frames_per_output_frame) =
+            self.prepare_frame_samples(frame, format);
+        let incoming_frames = frame_samples.len() / channels;
+        if incoming_frames == 0 {
+            return Ok(AudioPushResult {
+                accepted_frames: 0,
+                dropped_frames: 0,
+            });
+        }
+        let media_frames_per_output_frame = if media_frames_per_output_frame > 0.0 {
+            media_frames_per_output_frame
+        } else {
+            original_frames as f64 / incoming_frames.max(1) as f64
+        };
 
         if self.config.drop_oldest_on_overflow {
             while self.queued_frames() + incoming_frames > self.config.capacity_frames {
@@ -232,8 +349,16 @@ impl AudioRingBuffer {
                 .take(accepted_samples),
         );
         self.push_timeline_segment(
-            frame_pts.and_then(|pts| offset_pts(pts, skip_incoming_frames, format.sample_rate)),
+            segment_start.and_then(|pts| {
+                offset_pts_scaled(
+                    pts,
+                    skip_incoming_frames,
+                    format.sample_rate,
+                    media_frames_per_output_frame,
+                )
+            }),
             accepted_frames,
+            media_frames_per_output_frame,
         );
         self.stats.written_frames += accepted_frames as u64;
         self.stats.dropped_frames +=
@@ -326,6 +451,24 @@ impl AudioRingBuffer {
         })
     }
 
+    fn prepare_frame_samples(
+        &mut self,
+        frame: PcmAudioFrame,
+        format: PcmFormat,
+    ) -> (Vec<f32>, Option<Duration>, f64) {
+        if (self.playback_rate - 1.0).abs() <= 0.001 {
+            self.tempo_processor = None;
+            return (frame.samples, frame.pts, 1.0);
+        }
+        let processor = self
+            .tempo_processor
+            .get_or_insert_with(|| AudioTempoProcessor::new(format, self.playback_rate));
+        if !processor.matches(format, self.playback_rate) {
+            *processor = AudioTempoProcessor::new(format, self.playback_rate);
+        }
+        processor.process(frame)
+    }
+
     fn drop_oldest_frame(&mut self, channels: usize) -> bool {
         if self.samples.len() < channels {
             self.samples.clear();
@@ -338,12 +481,58 @@ impl AudioRingBuffer {
         true
     }
 
-    fn push_timeline_segment(&mut self, start: Option<Duration>, frames: usize) {
+    fn rate_change_bridge_frames(&self) -> usize {
+        self.format.map_or(0, |format| {
+            (format.sample_rate as f64 * RATE_CHANGE_AUDIO_BRIDGE.as_secs_f64()).round() as usize
+        })
+    }
+
+    fn trim_queued_to_front_frames(&mut self, frames: usize) {
+        let Some(format) = self.format else {
+            self.samples.clear();
+            self.timeline.clear();
+            return;
+        };
+        let channels = format.channels as usize;
+        let target_samples = frames.saturating_mul(channels);
+        if self.samples.len() > target_samples {
+            self.samples.truncate(target_samples);
+        }
+        self.trim_timeline_to_front_frames(self.samples.len() / channels.max(1));
+    }
+
+    fn trim_timeline_to_front_frames(&mut self, mut frames: usize) {
+        let mut trimmed = VecDeque::new();
+        while frames > 0 {
+            let Some(mut segment) = self.timeline.pop_front() else {
+                break;
+            };
+            if segment.frames <= frames {
+                frames -= segment.frames;
+                trimmed.push_back(segment);
+            } else {
+                segment.frames = frames;
+                trimmed.push_back(segment);
+                break;
+            }
+        }
+        self.timeline = trimmed;
+    }
+
+    fn push_timeline_segment(
+        &mut self,
+        start: Option<Duration>,
+        frames: usize,
+        media_frames_per_output_frame: f64,
+    ) {
         if frames == 0 {
             return;
         }
-        self.timeline
-            .push_back(AudioTimelineSegment::new(start, frames));
+        self.timeline.push_back(AudioTimelineSegment::new(
+            start,
+            frames,
+            media_frames_per_output_frame,
+        ));
     }
 
     fn advance_timeline(&mut self, mut frames: usize, sample_rate: u32) {
@@ -353,7 +542,12 @@ impl AudioRingBuffer {
             };
             let consumed = frames.min(front.frames);
             if let Some(start) = front.start {
-                self.last_media_time = offset_pts(start, consumed, sample_rate);
+                self.last_media_time = offset_pts_scaled(
+                    start,
+                    consumed,
+                    sample_rate,
+                    front.media_frames_per_output_frame,
+                );
                 front.start = self.last_media_time;
             }
             front.frames -= consumed;
@@ -372,6 +566,7 @@ pub trait AudioOutputBackend {
     fn stop(&mut self) -> Result<()>;
     fn set_volume(&mut self, volume: f32);
     fn volume(&self) -> f32;
+    fn set_playback_rate(&mut self, _rate: f64) {}
     fn push(&mut self, frame: PcmAudioFrame) -> Result<AudioPushResult>;
     fn state(&self) -> AudioOutputState;
     fn stats(&self) -> AudioRingBufferStats;
@@ -444,6 +639,10 @@ impl AudioOutputBackend for BufferedAudioOutput {
         self.volume
     }
 
+    fn set_playback_rate(&mut self, rate: f64) {
+        self.buffer.set_playback_rate(rate);
+    }
+
     fn push(&mut self, frame: PcmAudioFrame) -> Result<AudioPushResult> {
         self.buffer.push_frame(frame)
     }
@@ -479,11 +678,25 @@ pub fn apply_volume(samples: &mut [f32], volume: f32) {
     }
 }
 
-fn offset_pts(pts: Duration, frames: usize, sample_rate: u32) -> Option<Duration> {
+fn offset_pts_scaled(
+    pts: Duration,
+    frames: usize,
+    sample_rate: u32,
+    media_frames_per_output_frame: f64,
+) -> Option<Duration> {
     if sample_rate == 0 {
         return Some(pts);
     }
-    Some(pts + Duration::from_secs_f64(frames as f64 / sample_rate as f64))
+    let media_frames = frames as f64 * media_frames_per_output_frame.max(0.0);
+    Some(pts + Duration::from_secs_f64(media_frames / sample_rate as f64))
+}
+
+fn normalize_playback_rate(rate: f64) -> f64 {
+    if rate.is_finite() && rate > 0.0 {
+        rate.clamp(0.25, 4.0)
+    } else {
+        1.0
+    }
 }
 
 #[cfg(test)]
@@ -627,6 +840,64 @@ mod tests {
     }
 
     #[test]
+    fn ring_buffer_fast_rate_preserves_pitch_and_media_timeline() {
+        let mut buffer = AudioRingBuffer::with_format(
+            AudioRingBufferConfig {
+                capacity_frames: 48_000,
+                drop_oldest_on_overflow: true,
+            },
+            stereo_format(),
+        )
+        .unwrap();
+        buffer.set_playback_rate(2.0);
+        for index in 0..8 {
+            buffer
+                .push_frame(timed_frame(
+                    Duration::from_secs(10)
+                        + Duration::from_secs_f64(index as f64 * 2048.0 / 48_000.0),
+                    2048,
+                ))
+                .unwrap();
+        }
+
+        let queued_frames = buffer.clock_snapshot().queued_frames;
+        assert!(queued_frames > 0);
+        assert!(queued_frames < 16_384);
+
+        let mut output = vec![0.0; queued_frames * 2];
+        let result = buffer.read_interleaved(&mut output).unwrap();
+
+        assert_eq!(result.frames, queued_frames);
+        let media_time = buffer.clock_snapshot().media_time.unwrap();
+        let expected = Duration::from_secs(10)
+            + Duration::from_secs_f64(queued_frames as f64 * 2.0 / 48_000.0);
+        assert!(duration_abs_diff(media_time, expected) < Duration::from_millis(2));
+    }
+
+    #[test]
+    fn ring_buffer_rate_change_keeps_short_audio_bridge() {
+        let mut buffer = AudioRingBuffer::with_format(
+            AudioRingBufferConfig {
+                capacity_frames: 48_000,
+                drop_oldest_on_overflow: true,
+            },
+            stereo_format(),
+        )
+        .unwrap();
+        buffer
+            .push_frame(timed_frame(Duration::from_secs(4), 4_800))
+            .unwrap();
+
+        buffer.set_playback_rate(2.0);
+
+        assert_eq!(buffer.clock_snapshot().queued_frames, 3_840);
+        assert_eq!(
+            buffer.clock_snapshot().media_time,
+            Some(Duration::from_secs(4))
+        );
+    }
+
+    #[test]
     fn ring_buffer_clock_survives_frame_drop() {
         let mut buffer = AudioRingBuffer::with_format(
             AudioRingBufferConfig {
@@ -644,5 +915,11 @@ mod tests {
             buffer.clock_snapshot().media_time,
             Some(Duration::from_nanos(1_000_041_667))
         );
+    }
+
+    fn duration_abs_diff(a: Duration, b: Duration) -> Duration {
+        a.checked_sub(b)
+            .or_else(|| b.checked_sub(a))
+            .unwrap_or(Duration::ZERO)
     }
 }

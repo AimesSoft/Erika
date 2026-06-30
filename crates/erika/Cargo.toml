@@ -24,6 +24,7 @@ rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 smallvec.workspace = true
+soundtouch.workspace = true
 thiserror.workspace = true
 ureq.workspace = true
 wgpu = { version = "29.0.3", optional = true }
