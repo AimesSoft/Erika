@@ -346,6 +346,12 @@ pub mod iosaudio {
             IosAudioQueueOutput::volume(self)
         }
 
+        fn set_playback_rate(&mut self, rate: f64) {
+            if let Ok(mut buffer) = self.buffer.lock() {
+                buffer.set_playback_rate(rate);
+            }
+        }
+
         fn push(&mut self, frame: PcmAudioFrame) -> crate::audio::Result<AudioPushResult> {
             IosAudioQueueOutput::push(self, frame)
                 .map_err(|error| crate::audio::AudioError::Backend(error.to_string()))
@@ -650,6 +656,12 @@ pub mod coreaudio {
 
         fn volume(&self) -> f32 {
             CoreAudioOutput::volume(self)
+        }
+
+        fn set_playback_rate(&mut self, rate: f64) {
+            if let Ok(mut buffer) = self.buffer.lock() {
+                buffer.set_playback_rate(rate);
+            }
         }
 
         fn push(&mut self, frame: PcmAudioFrame) -> crate::audio::Result<AudioPushResult> {

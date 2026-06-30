@@ -48,6 +48,7 @@ const SUBTITLE_FRAME_QUEUE_LIMIT: usize = 32;
 const EXTERNAL_SUBTITLE_LOOKAHEAD: Duration = Duration::from_secs(5);
 const DEFAULT_AUDIO_LEAD_TIME: Duration = Duration::from_millis(120);
 const STREAMING_AUDIO_LEAD_TIME: Duration = Duration::from_millis(1500);
+const OUTPUT_AUDIO_CLOCK_STALE_TOLERANCE: Duration = Duration::from_millis(250);
 const DEMUX_PACKET_QUEUE_LIMIT: usize = 512;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1920,6 +1921,19 @@ impl VideoPlaybackEngine {
         let media_time = snapshot.media_time?;
         let now = Instant::now();
         let before = self.clock.media_time_at(now);
+        if media_time + OUTPUT_AUDIO_CLOCK_STALE_TOLERANCE < before {
+            trace::log(format!(
+                "[erika-clock-trace] stage=output_audio_clock_skip reason=stale before={} media={} queued={} queued_frames={} read={} written={} underflow={}",
+                trace::duration_label(Some(before)),
+                trace::duration_label(Some(media_time)),
+                trace::duration_label(snapshot.queued_duration),
+                snapshot.queued_frames,
+                snapshot.read_frames,
+                snapshot.written_frames,
+                snapshot.underflow_frames,
+            ));
+            return None;
+        }
         let correction = self.clock.discipline_to(
             media_time,
             now,
