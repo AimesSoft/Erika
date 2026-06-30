@@ -167,10 +167,28 @@ impl HttpRangeSource {
     }
 
     fn take_prefetch(&mut self, range: ByteRange) -> Option<Result<(u64, Vec<u8>)>> {
-        let pending = self.prefetch.take()?;
+        let pending = self.prefetch.as_ref()?;
         if !range_contains(pending.range, range) {
+            let _ = self.prefetch.take();
             return None;
         }
+        if !pending.is_finished() {
+            http_trace_log(format!(
+                "{{\"event\":\"http_prefetch_pending\",\"start\":{},\"length\":{},\"requested_start\":{},\"requested_length\":{}}}",
+                pending.range.start,
+                pending
+                    .range
+                    .length
+                    .map_or_else(|| "null".to_string(), |length| length.to_string()),
+                range.start,
+                range
+                    .length
+                    .map_or_else(|| "null".to_string(), |length| length.to_string()),
+            ));
+            return None;
+        }
+
+        let pending = self.prefetch.take()?;
         let join_started = Instant::now();
         let start = pending.range.start;
         let result = pending
@@ -238,6 +256,10 @@ impl PendingHttpFetch {
         });
         Self { range, handle }
     }
+
+    fn is_finished(&self) -> bool {
+        self.handle.is_finished()
+    }
 }
 
 fn http_agent() -> ureq::Agent {
@@ -263,18 +285,39 @@ fn fetch_http_range(
         _ => format!("bytes={}-", range.start),
     };
     let started = Instant::now();
-    let mut response = agent
-        .get(uri)
-        .header("Range", &header)
-        .call()
-        .map_err(|error| SourceError::Http(error.to_string()))?;
+    let mut response = match agent.get(uri).header("Range", &header).call() {
+        Ok(response) => response,
+        Err(error) => {
+            http_trace_log(format!(
+                "{{\"event\":\"{}_error\",\"phase\":\"request\",\"start\":{},\"length\":{},\"elapsed_ms\":{:.3},\"error\":\"{}\"}}",
+                event,
+                range.start,
+                range
+                    .length
+                    .map_or_else(|| "null".to_string(), |length| length.to_string()),
+                started.elapsed().as_secs_f64() * 1000.0,
+                json_escape(&error.to_string()),
+            ));
+            return Err(SourceError::Http(error.to_string()));
+        }
+    };
     let status = response.status().as_u16();
     let mut bytes = Vec::new();
-    response
-        .body_mut()
-        .as_reader()
-        .read_to_end(&mut bytes)
-        .map_err(|error| SourceError::Http(error.to_string()))?;
+    if let Err(error) = response.body_mut().as_reader().read_to_end(&mut bytes) {
+        http_trace_log(format!(
+            "{{\"event\":\"{}_error\",\"phase\":\"body\",\"start\":{},\"length\":{},\"status\":{},\"bytes\":{},\"elapsed_ms\":{:.3},\"error\":\"{}\"}}",
+            event,
+            range.start,
+            range
+                .length
+                .map_or_else(|| "null".to_string(), |length| length.to_string()),
+            status,
+            bytes.len(),
+            started.elapsed().as_secs_f64() * 1000.0,
+            json_escape(&error.to_string()),
+        ));
+        return Err(SourceError::Http(error.to_string()));
+    }
     http_trace_log(format!(
         "{{\"event\":\"{}\",\"start\":{},\"length\":{},\"status\":{},\"bytes\":{},\"elapsed_ms\":{:.3}}}",
         event,
@@ -374,6 +417,23 @@ impl MediaSource for HttpRangeSource {
                     return Ok(self.cache_bytes[..copy_len].to_vec());
                 }
             }
+
+            let _ = self.prefetch.take();
+            let fetch_length = self.fetch_length(suffix_range)?;
+            if fetch_length == Some(0) {
+                return Ok(prefix);
+            }
+            let suffix = self.fetch_range(ByteRange {
+                start: suffix_range.start,
+                length: fetch_length,
+            })?;
+            let mut cache_bytes = prefix;
+            cache_bytes.extend_from_slice(&suffix);
+            self.cache_start = range.start;
+            self.cache_bytes = cache_bytes;
+            self.maybe_start_prefetch(range);
+            let copy_len = requested_length.min(self.cache_bytes.len() as u64) as usize;
+            return Ok(self.cache_bytes[..copy_len].to_vec());
         }
         let fetch_length = self.fetch_length(range)?;
         if fetch_length == Some(0) {
@@ -491,6 +551,14 @@ fn redacted_uri(uri: &str) -> String {
         }
     }
     value
+}
+
+fn json_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[cfg(test)]

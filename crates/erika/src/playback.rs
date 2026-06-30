@@ -2,7 +2,9 @@ use std::collections::VecDeque;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded, unbounded};
+use crossbeam_channel::{
+    Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError, bounded, unbounded,
+};
 use thiserror::Error;
 
 use crate::audio::AudioClockSnapshot;
@@ -260,23 +262,142 @@ fn run_demux_worker(
             continue;
         }
 
+        let read_started = Instant::now();
         let message = match demuxer.read_packet() {
-            Ok(Some(packet)) => DemuxMessage::Packet { generation, packet },
+            Ok(Some(packet)) => {
+                let read_elapsed = read_started.elapsed();
+                if trace::enabled() && read_elapsed > Duration::from_millis(20) {
+                    trace::log(format!(
+                        "[erika-playback-trace] stage=demux_read_packet gen={} stream={} elapsed_ms={:.3} queue_len={}",
+                        generation,
+                        packet.stream_index(),
+                        read_elapsed.as_secs_f64() * 1000.0,
+                        packets.len(),
+                    ));
+                }
+                DemuxMessage::Packet { generation, packet }
+            }
             Ok(None) => {
                 eof = true;
+                trace::log(format!(
+                    "[erika-playback-trace] stage=demux_read_eof gen={} elapsed_ms={:.3} queue_len={}",
+                    generation,
+                    read_started.elapsed().as_secs_f64() * 1000.0,
+                    packets.len(),
+                ));
                 DemuxMessage::Eof { generation }
             }
             Err(error) => {
                 eof = true;
+                trace::log(format!(
+                    "[erika-playback-trace] stage=demux_read_error gen={} elapsed_ms={:.3} queue_len={} error={}",
+                    generation,
+                    read_started.elapsed().as_secs_f64() * 1000.0,
+                    packets.len(),
+                    error,
+                ));
                 DemuxMessage::Error {
                     generation,
                     message: error.to_string(),
                 }
             }
         };
-        if packets.send(message).is_err() {
+        if !send_demux_message(
+            &mut demuxer,
+            &packets,
+            &commands,
+            message,
+            &mut generation,
+            &mut eof,
+            &mut active,
+            &mut pending_seek,
+        ) {
             return;
         }
+    }
+}
+
+fn send_demux_message(
+    demuxer: &mut Demuxer,
+    packets: &Sender<DemuxMessage>,
+    commands: &Receiver<DemuxCommand>,
+    mut message: DemuxMessage,
+    generation: &mut u64,
+    eof: &mut bool,
+    active: &mut bool,
+    pending_seek: &mut Option<(u64, Duration)>,
+) -> bool {
+    let message_generation = demux_message_generation(&message);
+    let started = Instant::now();
+    loop {
+        while let Ok(command) = commands.try_recv() {
+            trace_demux_send_wait(started, packets.len(), "command");
+            if !handle_demux_command(
+                demuxer,
+                packets,
+                command,
+                generation,
+                eof,
+                active,
+                pending_seek,
+            ) {
+                return false;
+            }
+            if !*active || *generation != message_generation {
+                return true;
+            }
+        }
+
+        match packets.try_send(message) {
+            Ok(()) => {
+                trace_demux_send_wait(started, packets.len(), "sent");
+                return true;
+            }
+            Err(TrySendError::Disconnected(_)) => return false,
+            Err(TrySendError::Full(returned)) => {
+                message = returned;
+                match commands.recv_timeout(Duration::from_millis(5)) {
+                    Ok(command) => {
+                        trace_demux_send_wait(started, packets.len(), "command_after_full");
+                        if !handle_demux_command(
+                            demuxer,
+                            packets,
+                            command,
+                            generation,
+                            eof,
+                            active,
+                            pending_seek,
+                        ) {
+                            return false;
+                        }
+                        if !*active || *generation != message_generation {
+                            return true;
+                        }
+                    }
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => return false,
+                }
+            }
+        }
+    }
+}
+
+fn demux_message_generation(message: &DemuxMessage) -> u64 {
+    match message {
+        DemuxMessage::Packet { generation, .. }
+        | DemuxMessage::Eof { generation }
+        | DemuxMessage::Error { generation, .. } => *generation,
+    }
+}
+
+fn trace_demux_send_wait(started: Instant, queue_len: usize, outcome: &'static str) {
+    if trace::enabled() && started.elapsed() > Duration::from_millis(20) {
+        trace::log(format!(
+            "[erika-playback-trace] stage=demux_send_wait outcome={} elapsed_ms={:.3} queue_len={}",
+            outcome,
+            started.elapsed().as_secs_f64() * 1000.0,
+            queue_len,
+        ));
     }
 }
 
@@ -622,14 +743,17 @@ impl PlaybackSession {
         }
 
         let frame = self.audio_frames.pop_front();
-        if trace::enabled() && (pumped_packets > 0 || started.elapsed() >= max_duration) {
+        if trace::enabled()
+            && (pumped_packets > 0 || frame.is_none() || started.elapsed() >= max_duration)
+        {
             trace::log(format!(
-                "[erika-playback-trace] stage=session_audio_pump packets={} max_packets={} produced={} queued_audio={} eof={} elapsed_ms={:.3}",
+                "[erika-playback-trace] stage=session_audio_pump packets={} max_packets={} produced={} queued_audio={} eof={} pending_video={} elapsed_ms={:.3}",
                 pumped_packets,
                 max_packets,
                 frame.is_some(),
                 self.audio_frames.len(),
                 self.eof,
+                self.pending_video_packets.len(),
                 started.elapsed().as_secs_f64() * 1000.0,
             ));
         }
@@ -922,11 +1046,7 @@ impl PlaybackSession {
                 self.pending_video_packets.push_back(packet);
                 return Ok(());
             }
-            let video_frame_limit = self.active_video_frame_queue_limit();
-            let decoder = self.video_decoder.as_mut().expect("video decoder exists");
-            decoder.send_packet(&packet)?;
-            drain_video_frames(decoder, &mut self.video_frames)?;
-            trim_video_queue(&mut self.video_frames, video_frame_limit);
+            let _ = self.route_video_packet(packet)?;
             return Ok(());
         }
 
@@ -967,10 +1087,42 @@ impl PlaybackSession {
             let Some(packet) = self.pending_video_packets.pop_front() else {
                 return Ok(routed_any);
             };
-            self.route_packet(packet)?;
+            if !self.route_video_packet(packet)? {
+                return Ok(routed_any);
+            }
             routed_any = true;
         }
         Ok(routed_any)
+    }
+
+    fn route_video_packet(&mut self, packet: ffmpeg::Packet) -> Result<bool> {
+        let video_frame_limit = self.active_video_frame_queue_limit();
+        let before_frames = self.video_frames.len();
+        let decoder = self.video_decoder.as_mut().expect("video decoder exists");
+        match decoder.send_packet(&packet) {
+            Ok(()) => {
+                drain_video_frames(decoder, &mut self.video_frames)?;
+                trim_video_queue(&mut self.video_frames, video_frame_limit);
+                Ok(true)
+            }
+            Err(error) if error.is_again() => {
+                drain_video_frames(decoder, &mut self.video_frames)?;
+                trim_video_queue(&mut self.video_frames, video_frame_limit);
+                match decoder.send_packet(&packet) {
+                    Ok(()) => {
+                        drain_video_frames(decoder, &mut self.video_frames)?;
+                        trim_video_queue(&mut self.video_frames, video_frame_limit);
+                        Ok(true)
+                    }
+                    Err(error) if error.is_again() => {
+                        self.pending_video_packets.push_front(packet);
+                        Ok(self.video_frames.len() > before_frames)
+                    }
+                    Err(error) => Err(error.into()),
+                }
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     fn should_defer_video_packet(&self) -> bool {

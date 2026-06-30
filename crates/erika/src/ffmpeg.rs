@@ -61,6 +61,12 @@ pub enum FfmpegError {
     Source(String),
 }
 
+impl FfmpegError {
+    pub fn is_again(&self) -> bool {
+        matches!(self, Self::Api { code, .. } if *code == av_error(EAGAIN))
+    }
+}
+
 pub type Result<T> = std::result::Result<T, FfmpegError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
