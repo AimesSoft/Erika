@@ -50,6 +50,8 @@ use crate::{PlayerError, Result};
 const AUDIO_START_BUFFER: Duration = Duration::from_millis(250);
 const AUDIO_PUMP_FRAME_LIMIT: usize = 16;
 const AUDIO_PUMP_TIME_BUDGET: Duration = Duration::from_millis(4);
+const AUDIO_CLOCK_STALE_TOLERANCE: Duration = Duration::from_millis(250);
+const PLAYBACK_RATE_EPSILON: f64 = 0.001;
 const VIDEO_PUMP_FRAME_LIMIT: usize = 8;
 const VIDEO_PUMP_TIME_BUDGET: Duration = Duration::from_millis(4);
 const DANMAKU_PLAN_REQUEST_QUANTUM: Duration = Duration::from_millis(250);
@@ -189,6 +191,7 @@ pub struct PresenterRuntime {
     audio_configured: bool,
     audio_started: bool,
     last_audio_clock_sync: Option<AudioClockSyncState>,
+    playback_rate: f64,
     current_overlay: Option<OverlayFrame>,
     current_danmaku: Option<DanmakuRenderPlan>,
     current_danmaku_prepared: Option<CurrentDanmakuPrepared>,
@@ -448,6 +451,7 @@ impl PresenterRuntime {
             audio_configured: false,
             audio_started: false,
             last_audio_clock_sync: None,
+            playback_rate: 1.0,
             current_overlay: None,
             current_danmaku: None,
             current_danmaku_prepared: None,
@@ -565,8 +569,22 @@ impl PresenterRuntime {
         result
     }
 
-    pub fn set_playback_rate(&self, rate: f64) -> Result<()> {
-        self.player.set_playback_rate(rate)
+    pub fn set_playback_rate(&mut self, rate: f64) -> Result<()> {
+        let previous_rate = self.playback_rate;
+        let next_rate = normalize_playback_rate(rate);
+        let was_audio_enabled = playback_rate_uses_audio(previous_rate);
+        let will_audio_enable = playback_rate_uses_audio(next_rate);
+        let resume_time = self.player.current_media_time();
+        self.player.set_playback_rate(rate)?;
+        self.playback_rate = next_rate;
+        if was_audio_enabled != will_audio_enable {
+            self.reset_audio_output();
+            self.drain_pending_audio_frames();
+            if will_audio_enable {
+                self.player.seek(resume_time)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn set_volume(&mut self, volume: f64) {
@@ -1364,6 +1382,11 @@ impl PresenterRuntime {
     }
 
     fn pump_audio(&mut self) {
+        if !self.audio_playback_enabled() {
+            self.suspend_audio_output_for_playback_rate();
+            self.drain_pending_audio_frames();
+            return;
+        }
         let started = Instant::now();
         let mut pumped = 0usize;
         loop {
@@ -1389,6 +1412,9 @@ impl PresenterRuntime {
     }
 
     fn sync_player_to_audio_output(&mut self) {
+        if !self.audio_playback_enabled() {
+            return;
+        }
         let Some(snapshot) = self.audio_output.clock_snapshot() else {
             return;
         };
@@ -1408,10 +1434,17 @@ impl PresenterRuntime {
     }
 
     fn should_sync_audio_clock(&mut self, snapshot: AudioClockSnapshot) -> bool {
+        if !self.audio_playback_enabled() {
+            return false;
+        }
         let Some(media_time) = snapshot.media_time else {
             return false;
         };
         if snapshot.read_frames == 0 {
+            return false;
+        }
+        let player_time = self.player.current_media_time();
+        if media_time + AUDIO_CLOCK_STALE_TOLERANCE < player_time {
             return false;
         }
         let next = AudioClockSyncState {
@@ -1428,6 +1461,9 @@ impl PresenterRuntime {
     }
 
     fn push_audio(&mut self, frame: PlayerAudioFrame) {
+        if !self.audio_playback_enabled() {
+            return;
+        }
         if !self.audio_configured {
             if let Err(error) = self.audio_output.configure(frame.frame.format) {
                 self.stats.audio_failures += 1;
@@ -1450,7 +1486,10 @@ impl PresenterRuntime {
     }
 
     fn ensure_audio_started(&mut self) {
-        if self.audio_started || !self.audio_output_ready_to_start() || !self.audio_start_allowed()
+        if self.audio_started
+            || !self.audio_playback_enabled()
+            || !self.audio_output_ready_to_start()
+            || !self.audio_start_allowed()
         {
             return;
         }
@@ -1484,11 +1523,38 @@ impl PresenterRuntime {
         self.last_audio_clock_sync = None;
     }
 
+    fn suspend_audio_output_for_playback_rate(&mut self) {
+        if self.audio_configured || self.audio_started {
+            self.reset_audio_output();
+        }
+        self.last_audio_clock_sync = None;
+    }
+
+    fn audio_playback_enabled(&self) -> bool {
+        playback_rate_uses_audio(self.playback_rate)
+    }
+
+    fn drain_pending_audio_frames(&mut self) {
+        while self.audio_frames.try_recv().is_ok() {}
+    }
+
     fn drain_pending_player_frames(&mut self) {
         while self.video_frames.try_recv().is_ok() {}
         while self.audio_frames.try_recv().is_ok() {}
         while self.subtitle_frames.try_recv().is_ok() {}
     }
+}
+
+fn normalize_playback_rate(rate: f64) -> f64 {
+    if rate.is_finite() && rate > 0.0 {
+        rate
+    } else {
+        1.0
+    }
+}
+
+fn playback_rate_uses_audio(rate: f64) -> bool {
+    (normalize_playback_rate(rate) - 1.0).abs() <= PLAYBACK_RATE_EPSILON
 }
 
 #[cfg(test)]
@@ -2292,6 +2358,16 @@ mod tests {
             queued_frames: 14_400,
             read_frames: 9_600,
             written_frames: 24_000,
+            underflow_frames: 0,
+        }));
+
+        presenter.playback_rate = 2.0;
+        assert!(!presenter.should_sync_audio_clock(AudioClockSnapshot {
+            media_time: Some(Duration::from_secs(1)),
+            queued_duration: Some(Duration::from_millis(300)),
+            queued_frames: 14_400,
+            read_frames: 14_400,
+            written_frames: 28_800,
             underflow_frames: 0,
         }));
     }

@@ -1904,6 +1904,19 @@ impl VideoPlaybackEngine {
         if self.state != PlaybackRunState::Playing {
             return None;
         }
+        if (self.clock.rate() - 1.0).abs() > 0.001 {
+            trace::log(format!(
+                "[erika-clock-trace] stage=output_audio_clock_skip reason=playback_rate rate={:.3} media={} queued={} queued_frames={} read={} written={} underflow={}",
+                self.clock.rate(),
+                trace::duration_label(snapshot.media_time),
+                trace::duration_label(snapshot.queued_duration),
+                snapshot.queued_frames,
+                snapshot.read_frames,
+                snapshot.written_frames,
+                snapshot.underflow_frames,
+            ));
+            return None;
+        }
         let media_time = snapshot.media_time?;
         let now = Instant::now();
         let before = self.clock.media_time_at(now);
