@@ -83,13 +83,18 @@ fi
 case "${PLATFORM_NAME:-iphoneos}" in
   iphoneos)
     RUST_TARGET="aarch64-apple-ios"
+    BINDGEN_CLANG_TARGET="arm64-apple-ios"
+    BINDGEN_SDK="iphoneos"
     ;;
   iphonesimulator)
     if [ "$ARCH" = "x86_64" ]; then
       RUST_TARGET="x86_64-apple-ios"
+      BINDGEN_CLANG_TARGET="x86_64-apple-ios-simulator"
     else
       RUST_TARGET="aarch64-apple-ios-sim"
+      BINDGEN_CLANG_TARGET="arm64-apple-ios-simulator"
     fi
+    BINDGEN_SDK="iphonesimulator"
     ;;
   *)
     echo "error: unsupported Erika iOS platform: ${PLATFORM_NAME:-unknown}" >&2
@@ -117,6 +122,10 @@ fi
 if command -v rustup >/dev/null 2>&1; then
   rustup target add "$RUST_TARGET"
 fi
+
+BINDGEN_SDKROOT="$(xcrun --sdk "$BINDGEN_SDK" --show-sdk-path)"
+BINDGEN_TARGET_ENV="$(echo "$RUST_TARGET" | tr '-' '_')"
+export "BINDGEN_EXTRA_CLANG_ARGS_$BINDGEN_TARGET_ENV=--target=$BINDGEN_CLANG_TARGET -isysroot $BINDGEN_SDKROOT"
 
 if [ -z "${ERIKA_FFMPEG_DIR:-}" ]; then
   ERIKA_FFMPEG_DIR="$ERIKA_ROOT/third_party/dist/$RUST_TARGET/$ERIKA_NATIVE_PROFILE/ffmpeg"
@@ -186,6 +195,6 @@ fi
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386',
-    'OTHER_LDFLAGS' => "$(inherited) \"$(PODS_TARGET_SRCROOT)/native/liberika_capi.a\" #{erika_cabi_undefined_flags} -framework AVFoundation -framework AudioToolbox -framework QuartzCore -framework Metal -framework CoreVideo -framework CoreMedia -framework VideoToolbox -framework CoreFoundation -framework CoreGraphics -framework Foundation -liconv -lbz2 -lz",
+    'OTHER_LDFLAGS' => "$(inherited) \"$(PODS_TARGET_SRCROOT)/native/liberika_capi.a\" #{erika_cabi_undefined_flags} -framework AVFoundation -framework AudioToolbox -framework QuartzCore -framework Metal -framework CoreVideo -framework CoreMedia -framework VideoToolbox -framework CoreText -framework CoreFoundation -framework CoreGraphics -framework Foundation -liconv -lbz2 -lz",
   }
 end
