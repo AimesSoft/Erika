@@ -2,7 +2,7 @@ name: Release
 
 # Build prebuilt erika_capi bundles and attach them to a GitHub Release.
 #
-# Trigger: push a tag like `v0.1.0` to publish. Use the manual "Run workflow"
+# Trigger: push a tag like `v0.1.1` to publish. Use the manual "Run workflow"
 # button (workflow_dispatch) to dry-run the builds without publishing (the
 # publish job is gated on a tag ref).
 #
