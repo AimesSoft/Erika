@@ -15,4 +15,6 @@ pub mod windows;
 
 mod trace;
 
+pub(crate) const NIPAPLAY_FALLBACK_FONT: &[u8] = include_bytes!("../assets/subfont.ttf");
+
 pub use core::*;
