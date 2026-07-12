@@ -1571,7 +1571,57 @@ mod tests {
     }
 
     #[test]
-    fn player_seek_updates_shared_media_time_and_generation_immediately() {
+    fn player_rapid_seeks_enqueue_fifo_and_publish_latest_target() {
+        let player = Player::new(PlayerConfig::default());
+        let events = player.subscribe();
+        let receiver = {
+            let (commands, receiver) = unbounded();
+            let mut inner = player.inner.lock().expect("player mutex poisoned");
+            inner.state = PlayerState::Playing;
+            inner.playback = Some(PlaybackRuntime {
+                commands,
+                worker: None,
+            });
+            receiver
+        };
+        let before_generation = player.playback_generation();
+        let targets = [
+            Duration::from_secs(1),
+            Duration::from_secs(4),
+            Duration::from_secs(2),
+        ];
+
+        for target in targets {
+            player.seek(target).unwrap();
+        }
+
+        let queued_targets = receiver
+            .try_iter()
+            .map(|command| match command {
+                PlaybackCommand::Seek(position) => position,
+                _ => panic!("unexpected playback command"),
+            })
+            .collect::<Vec<_>>();
+        let published_targets = events
+            .try_iter()
+            .map(|event| match event {
+                PlayerEvent::PositionChanged(position) => position,
+                _ => panic!("unexpected player event"),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(queued_targets, targets);
+        assert_eq!(published_targets, targets);
+        assert_eq!(player.current_media_time(), targets[2]);
+        assert_eq!(
+            player.playback_generation(),
+            before_generation + targets.len() as u64
+        );
+        assert_eq!(player.state(), PlayerState::Playing);
+    }
+
+    #[test]
+    fn player_seek_updates_shared_media_time_and_generation_immediately_when_ready() {
         let player = Player::new(PlayerConfig::default());
         let receiver = {
             let (commands, receiver) = bounded(1);
@@ -1592,7 +1642,37 @@ mod tests {
             Ok(PlaybackCommand::Seek(position)) if position == Duration::from_secs(12)
         ));
         assert_eq!(player.current_media_time(), Duration::from_secs(12));
-        assert!(player.playback_generation() > before_generation);
+        assert_eq!(player.playback_generation(), before_generation + 1);
+        assert_eq!(player.state(), PlayerState::Ready);
+    }
+
+    #[test]
+    fn player_seek_while_paused_preserves_paused_state() {
+        let player = Player::new(PlayerConfig::default());
+        let events = player.subscribe();
+        let receiver = {
+            let (commands, receiver) = unbounded();
+            let mut inner = player.inner.lock().expect("player mutex poisoned");
+            inner.state = PlayerState::Paused;
+            inner.current_media_time = Duration::from_secs(8);
+            inner.playback = Some(PlaybackRuntime {
+                commands,
+                worker: None,
+            });
+            receiver
+        };
+        let target = Duration::from_secs(23);
+
+        player.seek(target).unwrap();
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(PlaybackCommand::Seek(position)) if position == target
+        ));
+        assert_eq!(player.current_media_time(), target);
+        assert_eq!(player.state(), PlayerState::Paused);
+        assert_eq!(events.try_recv(), Ok(PlayerEvent::PositionChanged(target)));
+        assert!(events.try_recv().is_err());
     }
 
     #[test]
