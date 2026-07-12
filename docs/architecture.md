@@ -91,7 +91,9 @@ produces video frames and PCM audio blocks.
   tracks. External tracks can be added/removed at runtime.
 - **libass renderer**: Statically linked, enabled by default. Accepts ASS
   scripts, calls `ass_render_frame`, imports alpha planes into Erika's overlay
-  system. Uses CoreText font provider on Apple platforms.
+  system. macOS uses the CoreText font provider; iOS registers Erika's bundled
+  Droid Sans Fallback as an in-memory font and avoids inaccessible system font
+  paths.
 - **SubtitleRendererCore**: Renderer-facing boundary that tracks changed/unchanged
   frames to avoid redundant GPU uploads.
 

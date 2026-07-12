@@ -17,7 +17,8 @@ license files:
 | iOS | `erika-capi-ios.zip` | `erika_capi.xcframework` (device + simulator) |
 
 Every archive also includes `include/erika.h`, `LICENSE` (Erika, MPL-2.0),
-`THIRD_PARTY_NOTICES.md`, and a `MANIFEST.txt` recording the tag/commit.
+`THIRD_PARTY_NOTICES.md`, applicable dependency and embedded asset license texts
+under `licenses/`, and a `MANIFEST.txt` recording the tag/commit.
 
 The native dependencies (FFmpeg, libass, FreeType, HarfBuzz, FriBidi, zlib) are
 **statically linked** via the `lgpl` profile, so each library is self-contained
@@ -37,8 +38,8 @@ The release is fully automated by
    `version` in the root `Cargo.toml` if appropriate.
 2. Tag and push:
    ```sh
-   git tag v0.1.1
-   git push origin v0.1.1
+   git tag v0.1.2
+   git push origin v0.1.2
    ```
 3. The workflow builds the macOS / iOS / Windows bundles (each builds the native
    deps from source, so expect a long run on a cold cache) and attaches the
@@ -72,12 +73,12 @@ Enable it by setting environment variables in the host app's build:
 | Variable | Effect |
 |----------|--------|
 | `ERIKA_PREBUILT=1` | Download the prebuilt `erika_capi` instead of building from source. |
-| `ERIKA_PREBUILT_TAG=v0.1.1` | Release tag to download (default `v0.1.1`). |
+| `ERIKA_PREBUILT_TAG=v0.1.2` | Release tag to download (default `v0.1.2`). |
 | `ERIKA_FORCE_SOURCE_BUILD=1` | macOS/iOS only: bypass the prebuilt path and build the local source, useful when debugging Erika changes through the Flutter plugin. |
 
 - **Windows** (`build_erika_runtime.cmake`): downloads `erika-capi-windows-x64.zip`
   and drops `erika_capi.dll` where the plugin bundles it. The plugin loads the
-  DLL dynamically, so this is feature-agnostic and works against `v0.1.1`.
+  DLL dynamically, so this is feature-agnostic and works against `v0.1.2`.
 - **iOS** (podspec): downloads `erika-capi-ios.zip`, picks the device or
   simulator slice from the XCFramework, and links it. The prebuilt static lib
   must be built `--no-default-features --features libass` to match the plugin's
