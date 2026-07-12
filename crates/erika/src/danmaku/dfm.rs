@@ -7,6 +7,8 @@
 
 use rustc_hash::{FxHashMap, FxHasher};
 
+use std::collections::HashMap;
+
 use super::dfm_core::{
     filters::{FilterContext, FilterSystem},
     model::{DanmakuItem, DanmakuType, Duration, GlobalFlags},
@@ -31,7 +33,7 @@ pub struct PrepareItem {
 }
 
 #[derive(Debug, Clone)]
-pub struct PrepareRequest {
+pub struct PrepareRequest<'a> {
     pub items: Vec<PrepareItem>,
     pub width: f64,
     pub height: f64,
@@ -45,6 +47,7 @@ pub struct PrepareRequest {
     pub max_lines_per_type: Option<u32>,
     pub track_gap_ratio: f64,
     pub outline_width: f64,
+    pub preferred_tracks: &'a HashMap<u64, usize>,
     pub block_words: Vec<String>,
     pub block_top: bool,
     pub block_bottom: bool,
@@ -222,7 +225,8 @@ pub fn prepare_layout(request: PrepareRequest) -> Result<PreparedLayout, String>
     for (type_idx, _) in type_order.iter().enumerate() {
         for &i in &type_indices[type_idx] {
             let is_me = items[i].1;
-            let (placed, displaced_index) = retainer.fix_with_options(
+            let preferred_track = request.preferred_tracks.get(&items[i].0).copied();
+            let (placed, displaced_index) = retainer.fix_with_options_and_preferred_track(
                 &mut items[i].4,
                 width,
                 height,
@@ -231,6 +235,7 @@ pub fn prepare_layout(request: PrepareRequest) -> Result<PreparedLayout, String>
                 is_me,
                 request.allow_stacking,
                 request.allow_scroll_overwrite,
+                preferred_track,
             );
             if !placed {
                 items[i].4.is_filtered = true;
