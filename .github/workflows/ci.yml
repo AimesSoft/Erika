@@ -1,0 +1,176 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROFILE: lgpl
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  quality:
+    name: Quality (Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Check license policy
+        run: cargo run --locked -p xtask -- check license
+      - name: Get Flutter dependencies
+        working-directory: packages/erika_flutter
+        run: flutter pub get
+      - name: Analyze Flutter package
+        working-directory: packages/erika_flutter
+        run: flutter analyze --no-pub
+      - name: Test Flutter package
+        working-directory: packages/erika_flutter
+        run: flutter test --no-pub --reporter expanded
+
+  rust-macos:
+    name: Rust (macOS)
+    runs-on: macos-14
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Select host target
+        run: |
+          case "$(uname -m)" in
+            arm64) echo "ERIKA_NATIVE_TARGET=aarch64-apple-darwin" >> "$GITHUB_ENV" ;;
+            x86_64) echo "ERIKA_NATIVE_TARGET=x86_64-apple-darwin" >> "$GITHUB_ENV" ;;
+            *) echo "unsupported macOS architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+      - name: Install native build tools
+        run: brew install nasm meson ninja pkg-config
+      - name: Cache native dependencies
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: deps-macos-${{ hashFiles('xtask/src/main.rs') }}
+      - name: Build native dependencies
+        run: >-
+          cargo run --locked -p xtask -- deps build --all
+          --profile "$PROFILE" --target "$ERIKA_NATIVE_TARGET"
+      - name: Test core library
+        # Workspace-wide tests currently compile platform demo binaries too;
+        # keep the required PR gate on the two production packages.
+        run: >-
+          ERIKA_NATIVE_PROFILE="$PROFILE"
+          cargo test --locked -p erika --lib
+      - name: Test C API library
+        run: >-
+          ERIKA_NATIVE_PROFILE="$PROFILE"
+          cargo test --locked -p erika_capi --lib
+      - name: Clippy core crate
+        # Surface existing lints without making the historical warning backlog
+        # block this first CI baseline.
+        run: >-
+          ERIKA_NATIVE_PROFILE="$PROFILE"
+          cargo clippy --locked -p erika --all-targets --all-features
+          --no-deps
+
+  ios:
+    name: iOS device staticlib
+    runs-on: macos-14
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - name: Install native build tools
+        run: brew install nasm meson ninja pkg-config
+      - name: Cache native dependencies
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: deps-ios-${{ hashFiles('xtask/src/main.rs') }}
+      - name: Build iOS native dependencies
+        run: >-
+          cargo run --locked -p xtask -- deps build --all
+          --profile "$PROFILE" --target aarch64-apple-ios
+      - name: Compile iOS static library
+        run: |
+          ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="aarch64-apple-ios" \
+          IPHONEOS_DEPLOYMENT_TARGET=13.0 \
+            cargo rustc --locked -p erika_capi --lib --release \
+              --target aarch64-apple-ios \
+              --no-default-features --features libass --crate-type staticlib
+
+  windows:
+    name: Windows x64 build
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Setup MSYS2 tools (Erika's xtask hard-codes C:\msys64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          release: false
+          update: false
+          path-type: inherit
+          install: >-
+            make
+            tar
+            diffutils
+            coreutils
+            pkgconf
+            perl
+            zip
+      - name: Install build tools (nasm, meson, ninja, LLVM/libclang)
+        shell: pwsh
+        run: |
+          choco install -y --no-progress nasm zip
+          pip install --quiet meson ninja
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path (Join-Path $llvmBin "libclang.dll"))) {
+            choco install llvm -y --no-progress
+          }
+          "LIBCLANG_PATH=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Add-Content -Path $env:GITHUB_PATH -Value $llvmBin
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\NASM"
+          git config --global core.longpaths true
+      - name: Cache native dependencies
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: deps-windows-${{ hashFiles('xtask/src/main.rs') }}
+      - name: Build native dependencies
+        shell: bash
+        run: >-
+          cargo run --locked -p xtask -- deps build --all
+          --profile "$PROFILE" --target x86_64-pc-windows-msvc
+      - name: Build C API
+        shell: bash
+        run: |
+          ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="x86_64-pc-windows-msvc" \
+            cargo build --locked -p erika_capi --release \
+              --target x86_64-pc-windows-msvc
