@@ -2811,31 +2811,118 @@ mod tests {
     }
 
     #[test]
-    fn playback_clock_tracks_pause_seek_and_rate() {
+    fn playback_clock_paused_seek_remains_frozen() {
         let t0 = Instant::now();
         let mut clock = PlaybackClock::paused_at(Duration::from_secs(10));
 
-        assert_eq!(clock.media_time_at(t0), Duration::from_secs(10));
-        clock.play(t0);
-        assert_eq!(
-            clock.media_time_at(t0 + Duration::from_millis(250)),
-            Duration::from_millis(10_250)
-        );
+        clock.seek(Duration::from_secs(2), t0);
 
-        clock.pause(t0 + Duration::from_millis(500));
+        assert!(!clock.is_running());
+        assert_eq!(clock.media_time_at(t0), Duration::from_secs(2));
         assert_eq!(
-            clock.media_time_at(t0 + Duration::from_secs(10)),
+            clock.media_time_at(t0 + Duration::from_secs(60)),
+            Duration::from_secs(2)
+        );
+    }
+
+    #[test]
+    fn playback_clock_pause_freezes_accumulated_time() {
+        let t0 = Instant::now();
+        let mut clock = PlaybackClock::paused_at(Duration::from_secs(10));
+        let pause_time = t0 + Duration::from_millis(500);
+
+        clock.play(t0);
+        clock.pause(pause_time);
+
+        assert!(!clock.is_running());
+        assert_eq!(
+            clock.media_time_at(pause_time),
             Duration::from_millis(10_500)
         );
-
-        clock.seek(Duration::from_secs(2), t0 + Duration::from_secs(10));
-        clock.play(t0 + Duration::from_secs(10));
-        clock.set_rate(2.0, t0 + Duration::from_secs(11));
-
         assert_eq!(
-            clock.media_time_at(t0 + Duration::from_secs(12)),
-            Duration::from_secs(5)
+            clock.media_time_at(pause_time + Duration::from_secs(60)),
+            Duration::from_millis(10_500)
         );
+    }
+
+    #[test]
+    fn playback_clock_paused_seek_then_resume_starts_from_new_target() {
+        let t0 = Instant::now();
+        let mut clock = PlaybackClock::running_at(Duration::from_secs(10), t0);
+        let pause_time = t0 + Duration::from_millis(500);
+        let seek_time = pause_time + Duration::from_secs(5);
+        let resume_time = seek_time + Duration::from_secs(5);
+
+        clock.pause(pause_time);
+        clock.seek(Duration::from_secs(2), seek_time);
+
+        assert!(!clock.is_running());
+        assert_eq!(clock.media_time_at(resume_time), Duration::from_secs(2));
+
+        clock.play(resume_time);
+
+        assert_eq!(clock.media_time_at(resume_time), Duration::from_secs(2));
+        assert_eq!(
+            clock.media_time_at(resume_time + Duration::from_millis(250)),
+            Duration::from_millis(2_250)
+        );
+    }
+
+    #[test]
+    fn playback_clock_running_seek_reanchors_elapsed_time() {
+        let t0 = Instant::now();
+        let mut clock = PlaybackClock::running_at(Duration::from_secs(10), t0);
+        let seek_time = t0 + Duration::from_secs(3);
+
+        clock.seek(Duration::from_secs(2), seek_time);
+
+        assert!(clock.is_running());
+        assert_eq!(clock.media_time_at(seek_time), Duration::from_secs(2));
+        assert_eq!(
+            clock.media_time_at(seek_time + Duration::from_millis(750)),
+            Duration::from_millis(2_750)
+        );
+    }
+
+    #[test]
+    fn playback_clock_rate_change_is_continuous_and_scales_elapsed_time() {
+        let t0 = Instant::now();
+        let mut clock = PlaybackClock::running_at(Duration::from_secs(10), t0);
+        let rate_change_time = t0 + Duration::from_millis(500);
+
+        clock.set_rate(2.0, rate_change_time);
+
+        assert_eq!(clock.rate(), 2.0);
+        assert_eq!(
+            clock.media_time_at(rate_change_time),
+            Duration::from_millis(10_500)
+        );
+        assert_eq!(
+            clock.media_time_at(rate_change_time + Duration::from_secs(1)),
+            Duration::from_millis(12_500)
+        );
+    }
+
+    #[test]
+    fn playback_clock_invalid_rate_falls_back_to_one() {
+        let t0 = Instant::now();
+
+        for invalid_rate in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let mut clock = PlaybackClock::running_at(Duration::from_secs(10), t0);
+            let rate_change_time = t0 + Duration::from_millis(500);
+
+            clock.set_rate(invalid_rate, rate_change_time);
+
+            assert_eq!(clock.rate(), 1.0);
+            assert_eq!(
+                clock.media_time_at(rate_change_time),
+                Duration::from_millis(10_500)
+            );
+            assert_eq!(
+                clock.media_time_at(rate_change_time + Duration::from_secs(1)),
+                Duration::from_millis(11_500)
+            );
+        }
     }
 
     #[test]
