@@ -726,32 +726,62 @@ impl PlaybackSession {
         max_packets: usize,
         max_duration: Duration,
     ) -> Result<Option<PcmAudioFrame>> {
+        self.next_audio_frame_bounded_where(max_packets, max_duration, |_| true)
+    }
+
+    fn next_audio_frame_bounded_where(
+        &mut self,
+        max_packets: usize,
+        max_duration: Duration,
+        mut keep_frame: impl FnMut(&mut PcmAudioFrame) -> bool,
+    ) -> Result<Option<PcmAudioFrame>> {
         if self.audio_decoder.is_none() {
             return Ok(None);
         }
 
         let started = Instant::now();
         let mut pumped_packets = 0usize;
-        while self.audio_frames.is_empty() && !self.eof && pumped_packets < max_packets {
+        let mut filtered_frames = 0usize;
+        let mut inspected_frames = 0usize;
+        let mut frame = pop_matching_audio_frame(
+            &mut self.audio_frames,
+            &mut keep_frame,
+            &mut filtered_frames,
+            &mut inspected_frames,
+            started,
+            max_duration,
+        );
+        while frame.is_none() && !self.eof && pumped_packets < max_packets {
             if started.elapsed() >= max_duration {
                 break;
             }
             if self.pump_once()? {
                 pumped_packets = pumped_packets.saturating_add(1);
+                frame = pop_matching_audio_frame(
+                    &mut self.audio_frames,
+                    &mut keep_frame,
+                    &mut filtered_frames,
+                    &mut inspected_frames,
+                    started,
+                    max_duration,
+                );
             } else {
                 break;
             }
         }
 
-        let frame = self.audio_frames.pop_front();
         if trace::enabled()
-            && (pumped_packets > 0 || frame.is_none() || started.elapsed() >= max_duration)
+            && (pumped_packets > 0
+                || filtered_frames > 0
+                || frame.is_none()
+                || started.elapsed() >= max_duration)
         {
             trace::log(format!(
-                "[erika-playback-trace] stage=session_audio_pump packets={} max_packets={} produced={} queued_audio={} eof={} pending_video={} elapsed_ms={:.3}",
+                "[erika-playback-trace] stage=session_audio_pump packets={} max_packets={} produced={} filtered={} queued_audio={} eof={} pending_video={} elapsed_ms={:.3}",
                 pumped_packets,
                 max_packets,
                 frame.is_some(),
+                filtered_frames,
                 self.audio_frames.len(),
                 self.eof,
                 self.pending_video_packets.len(),
@@ -1828,7 +1858,8 @@ pub struct VideoPlaybackEngine {
     last_presented_pts: Option<Duration>,
     eof: bool,
     waiting_for_first_frame: bool,
-    seek_floor: Option<Duration>,
+    video_seek_floor: Option<Duration>,
+    audio_seek_floor: Option<Duration>,
 }
 
 unsafe impl Send for VideoPlaybackEngine {}
@@ -1861,7 +1892,8 @@ impl VideoPlaybackEngine {
             last_presented_pts: None,
             eof: false,
             waiting_for_first_frame: false,
-            seek_floor: None,
+            video_seek_floor: None,
+            audio_seek_floor: None,
         }
     }
 
@@ -1940,7 +1972,8 @@ impl VideoPlaybackEngine {
         self.last_presented_pts = None;
         self.eof = false;
         self.waiting_for_first_frame = self.state == PlaybackRunState::Playing;
-        self.seek_floor = Some(media_time);
+        self.video_seek_floor = Some(media_time);
+        self.audio_seek_floor = Some(media_time);
         Ok(())
     }
 
@@ -2003,7 +2036,8 @@ impl VideoPlaybackEngine {
         self.state = PlaybackRunState::Stopped;
         self.eof = false;
         self.waiting_for_first_frame = false;
-        self.seek_floor = None;
+        self.video_seek_floor = None;
+        self.audio_seek_floor = None;
     }
 
     pub fn seek(&mut self, position: Duration) -> Result<()> {
@@ -2019,7 +2053,8 @@ impl VideoPlaybackEngine {
         self.last_presented_pts = None;
         self.eof = false;
         self.waiting_for_first_frame = self.state == PlaybackRunState::Playing;
-        self.seek_floor = Some(position);
+        self.video_seek_floor = Some(position);
+        self.audio_seek_floor = Some(position);
         Ok(())
     }
 
@@ -2071,13 +2106,19 @@ impl VideoPlaybackEngine {
             return None;
         }
         let media_time = snapshot.media_time?;
+        let audio_reference_time = media_time.saturating_add(
+            snapshot
+                .queued_duration
+                .unwrap_or_else(|| Duration::from_millis(0)),
+        );
         let now = Instant::now();
         let before = self.clock.media_time_at(now);
         if media_time + OUTPUT_AUDIO_CLOCK_STALE_TOLERANCE < before {
             trace::log(format!(
-                "[erika-clock-trace] stage=output_audio_clock_skip reason=stale before={} media={} queued={} queued_frames={} read={} written={} underflow={}",
+                "[erika-clock-trace] stage=output_audio_clock_skip reason=stale before={} media={} reference={} queued={} queued_frames={} read={} written={} underflow={}",
                 trace::duration_label(Some(before)),
                 trace::duration_label(Some(media_time)),
+                trace::duration_label(Some(audio_reference_time)),
                 trace::duration_label(snapshot.queued_duration),
                 snapshot.queued_frames,
                 snapshot.read_frames,
@@ -2204,7 +2245,7 @@ impl VideoPlaybackEngine {
             };
 
             let pts = frame.pts().and_then(|pts| pts.as_duration());
-            if self.should_drop_seek_preroll(pts) {
+            if self.should_drop_video_seek_preroll(pts) {
                 let _ = self.pending_frame.take();
                 continue;
             }
@@ -2255,18 +2296,18 @@ impl VideoPlaybackEngine {
         }
     }
 
-    fn should_drop_seek_preroll(&mut self, pts: Option<Duration>) -> bool {
-        let Some(target) = self.seek_floor else {
+    fn should_drop_video_seek_preroll(&mut self, pts: Option<Duration>) -> bool {
+        let Some(target) = self.video_seek_floor else {
             return false;
         };
         let Some(pts) = pts else {
-            self.seek_floor = None;
+            self.video_seek_floor = None;
             return false;
         };
         if pts < target {
             true
         } else {
-            self.seek_floor = None;
+            self.video_seek_floor = None;
             false
         }
     }
@@ -2292,7 +2333,12 @@ impl VideoPlaybackEngine {
         if self.pending_audio.is_some() || self.eof {
             return Ok(());
         }
-        self.pending_audio = self.session.next_audio_frame()?;
+        while let Some(mut frame) = self.session.next_audio_frame()? {
+            if keep_audio_frame_after_seek_floor(&mut self.audio_seek_floor, &mut frame) {
+                self.pending_audio = Some(frame);
+                break;
+            }
+        }
         Ok(())
     }
 
@@ -2304,9 +2350,12 @@ impl VideoPlaybackEngine {
         if self.pending_audio.is_some() || self.eof {
             return Ok(());
         }
-        self.pending_audio = self
-            .session
-            .next_audio_frame_bounded(max_packets, max_decode_duration)?;
+        let audio_seek_floor = &mut self.audio_seek_floor;
+        self.pending_audio = self.session.next_audio_frame_bounded_where(
+            max_packets,
+            max_decode_duration,
+            |frame| keep_audio_frame_after_seek_floor(audio_seek_floor, frame),
+        )?;
         Ok(())
     }
 
@@ -2403,6 +2452,103 @@ fn drain_video_frames(decoder: &mut Decoder, frames: &mut VecDeque<Frame>) -> Re
             DecoderOutputFrame::NeedMoreInput | DecoderOutputFrame::EndOfStream => return Ok(()),
         }
     }
+}
+
+fn pop_matching_audio_frame(
+    frames: &mut VecDeque<PcmAudioFrame>,
+    keep_frame: &mut impl FnMut(&mut PcmAudioFrame) -> bool,
+    filtered_frames: &mut usize,
+    inspected_frames: &mut usize,
+    started: Instant,
+    max_duration: Duration,
+) -> Option<PcmAudioFrame> {
+    while !frames.is_empty() {
+        if *inspected_frames > 0 && started.elapsed() >= max_duration {
+            return None;
+        }
+        let mut frame = frames.pop_front().expect("audio frame exists");
+        *inspected_frames = inspected_frames.saturating_add(1);
+        if keep_frame(&mut frame) {
+            return Some(frame);
+        }
+        *filtered_frames = filtered_frames.saturating_add(1);
+    }
+    None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AudioSeekFloorAction {
+    Drop,
+    Emit { trimmed_frames: usize },
+}
+
+fn keep_audio_frame_after_seek_floor(
+    seek_floor: &mut Option<Duration>,
+    frame: &mut PcmAudioFrame,
+) -> bool {
+    let Some(target) = *seek_floor else {
+        return true;
+    };
+    let original_pts = frame.pts;
+    match trim_audio_frame_to_seek_floor(frame, target) {
+        AudioSeekFloorAction::Drop => false,
+        AudioSeekFloorAction::Emit { trimmed_frames } => {
+            *seek_floor = None;
+            trace::log(format!(
+                "[erika-playback-trace] stage=audio_seek_floor_emit target={} pts_before={} pts_after={} trimmed_frames={} frames={}",
+                trace::duration_label(Some(target)),
+                trace::duration_label(original_pts),
+                trace::duration_label(frame.pts),
+                trimmed_frames,
+                frame.frames,
+            ));
+            true
+        }
+    }
+}
+
+fn trim_audio_frame_to_seek_floor(
+    frame: &mut PcmAudioFrame,
+    target: Duration,
+) -> AudioSeekFloorAction {
+    let Some(pts) = frame.pts else {
+        return AudioSeekFloorAction::Emit { trimmed_frames: 0 };
+    };
+    if pts >= target {
+        return AudioSeekFloorAction::Emit { trimmed_frames: 0 };
+    }
+
+    let channels = frame.format.channels as usize;
+    let sample_rate = frame.format.sample_rate;
+    if channels == 0 || sample_rate == 0 {
+        return AudioSeekFloorAction::Emit { trimmed_frames: 0 };
+    }
+
+    let available_frames = frame.samples.len() / channels;
+    let delta = target.saturating_sub(pts);
+    let frames_to_trim = duration_to_audio_frames_ceil(delta, sample_rate);
+    if frames_to_trim >= available_frames {
+        return AudioSeekFloorAction::Drop;
+    }
+
+    frame.samples = frame.samples.split_off(frames_to_trim * channels);
+    frame.frames = frame.samples.len() / channels;
+    frame.pts = Some(pts.saturating_add(Duration::from_secs_f64(
+        frames_to_trim as f64 / sample_rate as f64,
+    )));
+    AudioSeekFloorAction::Emit {
+        trimmed_frames: frames_to_trim,
+    }
+}
+
+fn duration_to_audio_frames_ceil(duration: Duration, sample_rate: u32) -> usize {
+    const NANOS_PER_SECOND: u128 = 1_000_000_000;
+    let numerator = duration.as_nanos().saturating_mul(sample_rate as u128);
+    let frames = numerator
+        .saturating_add(NANOS_PER_SECOND - 1)
+        .checked_div(NANOS_PER_SECOND)
+        .unwrap_or(0);
+    frames.min(usize::MAX as u128) as usize
 }
 
 fn trim_video_queue(frames: &mut VecDeque<Frame>, limit: usize) {
@@ -2584,6 +2730,84 @@ mod tests {
         assert_eq!(frame.text[0].display_text(), "External subtitle");
 
         let _ = fs::remove_file(path);
+    }
+
+    fn pcm_frame(pts: Duration, frames: usize) -> PcmAudioFrame {
+        PcmAudioFrame {
+            format: PcmFormat::f32_interleaved(10, 2),
+            pts: Some(pts),
+            frames,
+            samples: (0..frames * 2).map(|sample| sample as f32).collect(),
+        }
+    }
+
+    #[test]
+    fn audio_seek_floor_drops_pcm_ending_at_target() {
+        let mut frame = pcm_frame(Duration::from_secs(9), 5);
+
+        let action = trim_audio_frame_to_seek_floor(&mut frame, Duration::from_millis(9_500));
+
+        assert_eq!(action, AudioSeekFloorAction::Drop);
+    }
+
+    #[test]
+    fn audio_seek_floor_trims_overlapping_pcm_to_first_sample_at_or_after_target() {
+        let mut frame = pcm_frame(Duration::from_secs(9), 10);
+
+        let action = trim_audio_frame_to_seek_floor(&mut frame, Duration::from_millis(9_450));
+
+        assert_eq!(action, AudioSeekFloorAction::Emit { trimmed_frames: 5 });
+        assert_eq!(frame.pts, Some(Duration::from_millis(9_500)));
+        assert_eq!(frame.frames, 5);
+        assert_eq!(
+            frame.samples,
+            (10..20).map(|sample| sample as f32).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn audio_seek_floor_survives_dropped_frames_and_clears_on_emit() {
+        let target = Duration::from_secs(10);
+        let mut seek_floor = Some(target);
+        let mut preroll = pcm_frame(Duration::from_millis(9_500), 5);
+        let mut on_target = pcm_frame(target, 5);
+
+        assert!(!keep_audio_frame_after_seek_floor(
+            &mut seek_floor,
+            &mut preroll
+        ));
+        assert_eq!(seek_floor, Some(target));
+        assert!(keep_audio_frame_after_seek_floor(
+            &mut seek_floor,
+            &mut on_target
+        ));
+        assert_eq!(seek_floor, None);
+    }
+
+    #[test]
+    fn bounded_audio_filter_preserves_remaining_queue_after_deadline() {
+        let mut frames = VecDeque::from([
+            pcm_frame(Duration::from_secs(9), 5),
+            pcm_frame(Duration::from_millis(9_500), 5),
+            pcm_frame(Duration::from_secs(10), 5),
+        ]);
+        let mut filtered_frames = 0;
+        let mut inspected_frames = 0;
+        let mut reject_all = |_: &mut PcmAudioFrame| false;
+
+        let frame = pop_matching_audio_frame(
+            &mut frames,
+            &mut reject_all,
+            &mut filtered_frames,
+            &mut inspected_frames,
+            Instant::now(),
+            Duration::ZERO,
+        );
+
+        assert!(frame.is_none());
+        assert_eq!(filtered_frames, 1);
+        assert_eq!(inspected_frames, 1);
+        assert_eq!(frames.len(), 2);
     }
 
     #[test]

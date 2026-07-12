@@ -17,12 +17,12 @@ use ab_glyph::{Font, FontArc, FontVec, Glyph, GlyphId, PxScale, ScaleFont};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::NIPAPLAY_FALLBACK_FONT;
 use crate::text::TextShaper;
 
 const DEFAULT_SOURCE_FONT_SIZE: f32 = 25.0;
 const DEFAULT_CONFIG_FONT_SIZE: f32 = 30.0;
 const DEFAULT_NATIVE_FONT_SIZE: f32 = DEFAULT_CONFIG_FONT_SIZE;
-const NIPAPLAY_DANMAKU_FONT: &[u8] = include_bytes!("../assets/subfont.ttf");
 const DEFAULT_SCROLL_DURATION: Duration = Duration::from_millis(9000);
 const DEFAULT_STATIC_DURATION: Duration = Duration::from_millis(3800);
 const DEFAULT_GENERATION: u64 = 1;
@@ -2303,7 +2303,7 @@ fn load_font_family(family: &str) -> Option<FontArc> {
 }
 
 fn load_default_font() -> Option<FontArc> {
-    if let Ok(font) = FontArc::try_from_slice(NIPAPLAY_DANMAKU_FONT) {
+    if let Ok(font) = FontArc::try_from_slice(NIPAPLAY_FALLBACK_FONT) {
         return Some(font);
     }
 

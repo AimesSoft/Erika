@@ -1,7 +1,11 @@
 use std::cell::RefCell;
+use std::env;
 use std::ffi::{CStr, CString, c_char};
+use std::fs::{OpenOptions, create_dir_all};
+use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::time::Duration;
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel::Receiver;
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
@@ -70,6 +74,62 @@ fn finalize_status(status: ErikaStatus) -> ErikaStatus {
 fn player_error(message: impl Into<String>) -> ErikaStatus {
     set_last_error(message);
     ErikaStatus::PlayerError
+}
+
+fn capi_trace_enabled() -> bool {
+    env_flag("ERIKA_CAPI_TRACE") || env_flag("ERIKA_PLAYBACK_TRACE")
+}
+
+fn env_flag(name: &str) -> bool {
+    match env::var(name).ok().as_deref() {
+        Some("0" | "false" | "FALSE" | "off" | "OFF" | "") | None => false,
+        Some(_) => true,
+    }
+}
+
+fn capi_trace_path() -> PathBuf {
+    env::var_os("ERIKA_CAPI_TRACE_FILE")
+        .or_else(|| env::var_os("ERIKA_PLAYBACK_TRACE_FILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp/erika_capi_trace.log"))
+}
+
+fn capi_trace(line: impl AsRef<str>) {
+    if !capi_trace_enabled() {
+        return;
+    }
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_millis())
+        .unwrap_or(0);
+    let path = capi_trace_path();
+    if let Some(parent) = path.parent() {
+        let _ = create_dir_all(parent);
+    }
+    let line = format!("[erika-capi-trace] ts_ms={now_ms} {}", line.as_ref());
+    eprintln!("{line}");
+    let _ = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut file| writeln!(file, "{line}"));
+}
+
+fn redacted_uri(uri: &str) -> String {
+    let mut value = uri.to_string();
+    for key in ["token=", "api_key=", "AccessToken="] {
+        let mut search_from = 0;
+        while let Some(relative) = value[search_from..].find(key) {
+            let start = search_from + relative + key.len();
+            let end = value[start..]
+                .find('&')
+                .map(|relative_end| start + relative_end)
+                .unwrap_or(value.len());
+            value.replace_range(start..end, "REDACTED");
+            search_from = start + "REDACTED".len();
+        }
+    }
+    value
 }
 
 #[repr(C)]
@@ -433,6 +493,11 @@ pub struct ErikaPresenterStats {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn erika_create() -> *mut ErikaHandle {
+    capi_trace(format!(
+        "fn=erika_create playback_trace={} playback_trace_file={}",
+        env::var("ERIKA_PLAYBACK_TRACE").unwrap_or_else(|_| "<unset>".to_string()),
+        env::var("ERIKA_PLAYBACK_TRACE_FILE").unwrap_or_else(|_| "<unset>".to_string()),
+    ));
     let player = Player::new(PlayerConfig::default());
     let events = player.subscribe();
     Box::into_raw(Box::new(ErikaHandle { player, events }))
@@ -465,21 +530,39 @@ pub unsafe extern "C" fn erika_open(handle: *mut ErikaHandle, uri: *const c_char
             Ok(uri) => uri,
             Err(status) => return status,
         };
-        status_from_player_result(handle.player.open(MediaRequest::new(uri)))
+        capi_trace(format!(
+            "fn=erika_open handle={handle:p} uri={}",
+            redacted_uri(&uri)
+        ));
+        let status = status_from_player_result(handle.player.open(MediaRequest::new(uri)));
+        capi_trace(format!(
+            "fn=erika_open.done handle={handle:p} status={status:?}"
+        ));
+        status
     })
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_play(handle: *mut ErikaHandle) -> ErikaStatus {
     with_handle_mut(handle, |handle| {
-        status_from_player_result(handle.player.play())
+        capi_trace(format!("fn=erika_play handle={handle:p}"));
+        let status = status_from_player_result(handle.player.play());
+        capi_trace(format!(
+            "fn=erika_play.done handle={handle:p} status={status:?}"
+        ));
+        status
     })
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_pause(handle: *mut ErikaHandle) -> ErikaStatus {
     with_handle_mut(handle, |handle| {
-        status_from_player_result(handle.player.pause())
+        capi_trace(format!("fn=erika_pause handle={handle:p}"));
+        let status = status_from_player_result(handle.player.pause());
+        capi_trace(format!(
+            "fn=erika_pause.done handle={handle:p} status={status:?}"
+        ));
+        status
     })
 }
 
@@ -500,7 +583,15 @@ pub unsafe extern "C" fn erika_close(handle: *mut ErikaHandle) -> ErikaStatus {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_seek(handle: *mut ErikaHandle, position_micros: u64) -> ErikaStatus {
     with_handle_mut(handle, |handle| {
-        status_from_player_result(handle.player.seek(Duration::from_micros(position_micros)))
+        capi_trace(format!(
+            "fn=erika_seek handle={handle:p} position_micros={position_micros}"
+        ));
+        let status =
+            status_from_player_result(handle.player.seek(Duration::from_micros(position_micros)));
+        capi_trace(format!(
+            "fn=erika_seek.done handle={handle:p} status={status:?}"
+        ));
+        status
     })
 }
 
@@ -720,7 +811,12 @@ pub unsafe extern "C" fn erika_poll_event(
     }
     with_handle_mut(handle, |handle| match handle.events.try_recv() {
         Ok(event) => {
-            unsafe { *out_event = event_to_c(event) };
+            let event = event_to_c(event);
+            capi_trace(format!(
+                "fn=erika_poll_event event={:?} state={:?} position_micros={} duration_micros={}",
+                event.kind, event.state, event.position_micros, event.duration_micros
+            ));
+            unsafe { *out_event = event };
             ErikaStatus::Ok
         }
         Err(crossbeam_channel::TryRecvError::Empty) => ErikaStatus::NoEvent,
@@ -731,6 +827,11 @@ pub unsafe extern "C" fn erika_poll_event(
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn erika_presenter_create() -> *mut ErikaPresenterHandle {
+    capi_trace(format!(
+        "fn=erika_presenter_create playback_trace={} playback_trace_file={}",
+        env::var("ERIKA_PLAYBACK_TRACE").unwrap_or_else(|_| "<unset>".to_string()),
+        env::var("ERIKA_PLAYBACK_TRACE_FILE").unwrap_or_else(|_| "<unset>".to_string()),
+    ));
     create_presenter_handle(PresenterConfig::default())
 }
 
@@ -784,9 +885,12 @@ fn create_presenter_handle(config: PresenterConfig) -> *mut ErikaPresenterHandle
         Ok(presenter) => {
             clear_last_error();
             let events = presenter.player().subscribe();
-            Box::into_raw(Box::new(ErikaPresenterHandle { presenter, events }))
+            let handle = Box::into_raw(Box::new(ErikaPresenterHandle { presenter, events }));
+            capi_trace(format!("fn=create_presenter_handle.done handle={handle:p}"));
+            handle
         }
         Err(error) => {
+            capi_trace(format!("fn=create_presenter_handle.error error={error}"));
             set_last_error(format!("presenter create failed: {error}"));
             std::ptr::null_mut()
         }
@@ -960,7 +1064,15 @@ pub unsafe extern "C" fn erika_presenter_open(
             Ok(uri) => uri,
             Err(status) => return status,
         };
-        status_from_player_result(handle.presenter.open(MediaRequest::new(uri)))
+        capi_trace(format!(
+            "fn=erika_presenter_open handle={handle:p} uri={}",
+            redacted_uri(&uri)
+        ));
+        let status = status_from_player_result(handle.presenter.open(MediaRequest::new(uri)));
+        capi_trace(format!(
+            "fn=erika_presenter_open.done handle={handle:p} status={status:?}"
+        ));
+        status
     })
 }
 
@@ -968,7 +1080,12 @@ pub unsafe extern "C" fn erika_presenter_open(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_play(handle: *mut ErikaPresenterHandle) -> ErikaStatus {
     with_presenter_mut(handle, |handle| {
-        status_from_player_result(handle.presenter.play())
+        capi_trace(format!("fn=erika_presenter_play handle={handle:p}"));
+        let status = status_from_player_result(handle.presenter.play());
+        capi_trace(format!(
+            "fn=erika_presenter_play.done handle={handle:p} status={status:?}"
+        ));
+        status
     })
 }
 
@@ -976,7 +1093,12 @@ pub unsafe extern "C" fn erika_presenter_play(handle: *mut ErikaPresenterHandle)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_pause(handle: *mut ErikaPresenterHandle) -> ErikaStatus {
     with_presenter_mut(handle, |handle| {
-        status_from_player_result(handle.presenter.pause())
+        capi_trace(format!("fn=erika_presenter_pause handle={handle:p}"));
+        let status = status_from_player_result(handle.presenter.pause());
+        capi_trace(format!(
+            "fn=erika_presenter_pause.done handle={handle:p} status={status:?}"
+        ));
+        status
     })
 }
 
@@ -1003,11 +1125,18 @@ pub unsafe extern "C" fn erika_presenter_seek(
     position_micros: u64,
 ) -> ErikaStatus {
     with_presenter_mut(handle, |handle| {
-        status_from_player_result(
+        capi_trace(format!(
+            "fn=erika_presenter_seek handle={handle:p} position_micros={position_micros}"
+        ));
+        let status = status_from_player_result(
             handle
                 .presenter
                 .seek(Duration::from_micros(position_micros)),
-        )
+        );
+        capi_trace(format!(
+            "fn=erika_presenter_seek.done handle={handle:p} status={status:?}"
+        ));
+        status
     })
 }
 
@@ -1930,6 +2059,18 @@ pub unsafe extern "C" fn erika_presenter_poll_event(
             Ok(event) => {
                 let event = event_to_c(event);
                 let is_error = event.kind == ErikaEventKind::Error;
+                capi_trace(format!(
+                    "fn=erika_presenter_poll_event event={:?} state={:?} position_micros={} duration_micros={} video={}x{} tracks={}/{}/{}",
+                    event.kind,
+                    event.state,
+                    event.position_micros,
+                    event.duration_micros,
+                    event.video.width,
+                    event.video.height,
+                    event.tracks.video,
+                    event.tracks.audio,
+                    event.tracks.subtitle,
+                ));
                 unsafe { *out_event = event };
                 if !is_error {
                     clear_last_error();

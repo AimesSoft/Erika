@@ -4,6 +4,9 @@ use std::{ffi::CStr, ptr::NonNull};
 
 use thiserror::Error;
 
+#[cfg(all(feature = "libass", target_os = "ios"))]
+use crate::NIPAPLAY_FALLBACK_FONT;
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum SubtitleError {
     #[error("invalid subtitle timestamp: {0}")]
@@ -544,6 +547,13 @@ mod libass_ffi {
     unsafe extern "C" {
         pub fn ass_library_init() -> *mut AssLibrary;
         pub fn ass_library_done(library: *mut AssLibrary);
+        #[cfg(target_os = "ios")]
+        pub fn ass_add_font(
+            library: *mut AssLibrary,
+            name: *const c_char,
+            data: *const c_char,
+            data_size: c_int,
+        );
         pub fn ass_renderer_init(library: *mut AssLibrary) -> *mut AssRenderer;
         pub fn ass_renderer_done(renderer: *mut AssRenderer);
         pub fn ass_set_frame_size(renderer: *mut AssRenderer, width: c_int, height: c_int);
@@ -577,6 +587,8 @@ mod libass_ffi {
     }
 }
 
+#[cfg(feature = "libass")]
+const ASS_FONTPROVIDER_NONE: libc::c_int = 0;
 #[cfg(feature = "libass")]
 const ASS_FONTPROVIDER_AUTODETECT: libc::c_int = 1;
 #[cfg(feature = "libass")]
@@ -678,6 +690,8 @@ impl LibassSubtitleRenderer {
             let library = NonNull::new(libass_ffi::ass_library_init()).ok_or_else(|| {
                 SubtitleError::Libass("failed to initialize libass library".to_string())
             })?;
+
+            add_bundled_ass_fallback_font(library.as_ptr());
 
             let Some(renderer) = NonNull::new(libass_ffi::ass_renderer_init(library.as_ptr()))
             else {
@@ -1379,14 +1393,18 @@ fn escape_ass_text(value: &str) -> String {
 
 const DEFAULT_ASS_FONT_SIZE: f64 = 48.0;
 const DEFAULT_ASS_OUTLINE: f64 = 2.0;
-#[cfg(any(target_os = "ios", target_os = "macos"))]
+#[cfg(target_os = "ios")]
+const DEFAULT_ASS_FONT_FAMILY: &str = "Droid Sans Fallback";
+#[cfg(target_os = "macos")]
 const DEFAULT_ASS_FONT_FAMILY: &str = "PingFang SC";
 #[cfg(not(any(target_os = "ios", target_os = "macos")))]
 const DEFAULT_ASS_FONT_FAMILY: &str = "Arial";
 
 #[cfg(feature = "libass")]
 fn default_ass_font_provider() -> libc::c_int {
-    if cfg!(any(target_os = "ios", target_os = "macos")) {
+    if cfg!(target_os = "ios") {
+        ASS_FONTPROVIDER_NONE
+    } else if cfg!(target_os = "macos") {
         ASS_FONTPROVIDER_CORETEXT
     } else {
         ASS_FONTPROVIDER_AUTODETECT
@@ -1395,12 +1413,30 @@ fn default_ass_font_provider() -> libc::c_int {
 
 #[cfg(feature = "libass")]
 fn default_ass_font_family_cstr() -> &'static CStr {
-    if cfg!(any(target_os = "ios", target_os = "macos")) {
+    if cfg!(target_os = "ios") {
+        c"Droid Sans Fallback"
+    } else if cfg!(target_os = "macos") {
         c"PingFang SC"
     } else {
         c"Arial"
     }
 }
+
+#[cfg(all(feature = "libass", target_os = "ios"))]
+unsafe fn add_bundled_ass_fallback_font(library: *mut libass_ffi::AssLibrary) {
+    debug_assert!(NIPAPLAY_FALLBACK_FONT.len() <= libc::c_int::MAX as usize);
+    unsafe {
+        libass_ffi::ass_add_font(
+            library,
+            c"subfont.ttf".as_ptr(),
+            NIPAPLAY_FALLBACK_FONT.as_ptr().cast(),
+            NIPAPLAY_FALLBACK_FONT.len() as libc::c_int,
+        );
+    }
+}
+
+#[cfg(all(feature = "libass", not(target_os = "ios")))]
+unsafe fn add_bundled_ass_fallback_font(_library: *mut libass_ffi::AssLibrary) {}
 
 fn normalize_ass_font_scale(scale: f64) -> f64 {
     if scale.is_finite() {

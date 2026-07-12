@@ -1477,7 +1477,10 @@ impl PresenterRuntime {
     }
 
     fn ensure_audio_started(&mut self) {
-        if self.audio_started || !self.audio_output_ready_to_start() || !self.audio_start_allowed()
+        if !self.is_playing()
+            || self.audio_started
+            || !self.audio_output_ready_to_start()
+            || !self.audio_start_allowed()
         {
             return;
         }
@@ -2341,6 +2344,31 @@ mod tests {
             written_frames: 28_800,
             underflow_frames: 0,
         }));
+    }
+
+    #[test]
+    fn audio_start_is_blocked_while_player_is_not_playing() {
+        use crate::audio::{AudioOutputState, BufferedAudioOutput};
+        use crate::ffmpeg::{PcmAudioFrame, PcmFormat};
+
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        let format = PcmFormat::f32_interleaved(48_000, 2);
+        let mut output = BufferedAudioOutput::new(AudioRingBufferConfig::default());
+        output.configure(format).unwrap();
+        output
+            .push(PcmAudioFrame {
+                format,
+                pts: Some(Duration::ZERO),
+                frames: 12_000,
+                samples: vec![0.0; 24_000],
+            })
+            .unwrap();
+        presenter.audio_output = Box::new(output);
+
+        presenter.ensure_audio_started();
+
+        assert!(!presenter.audio_started);
+        assert_eq!(presenter.audio_output.state(), AudioOutputState::Stopped);
     }
 
     #[test]
