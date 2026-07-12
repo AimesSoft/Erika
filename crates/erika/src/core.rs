@@ -518,6 +518,7 @@ pub struct RendererRuntimeStats {
 
 struct PlayerInner {
     state: PlayerState,
+    ended: bool,
     media: Option<MediaRequest>,
     playback: Option<PlaybackRuntime>,
     duration: Option<Duration>,
@@ -549,6 +550,49 @@ enum PlaybackCommand {
 struct PlaybackRuntime {
     commands: Sender<PlaybackCommand>,
     worker: Option<JoinHandle<()>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MediaTimePublication {
+    previous_media_time: Duration,
+    previous_generation: u64,
+    previous_ended: bool,
+    published_generation: u64,
+}
+
+fn publish_media_time(inner: &mut PlayerInner, media_time: Duration) -> MediaTimePublication {
+    let publication = MediaTimePublication {
+        previous_media_time: inner.current_media_time,
+        previous_generation: inner.playback_generation,
+        previous_ended: inner.ended,
+        published_generation: inner.playback_generation.saturating_add(1).max(1),
+    };
+    inner.current_media_time = media_time;
+    inner.playback_generation = publication.published_generation;
+    inner.ended = false;
+    publication
+}
+
+fn rollback_media_time_publication(
+    inner: &Arc<Mutex<PlayerInner>>,
+    publication: MediaTimePublication,
+) {
+    let mut inner = inner.lock().expect("player mutex poisoned");
+    inner.current_media_time = publication.previous_media_time;
+    inner.playback_generation = publication.previous_generation;
+    inner.ended = publication.previous_ended;
+}
+
+fn confirm_media_time_publication(
+    inner: &Arc<Mutex<PlayerInner>>,
+    media_time: Duration,
+    publication: MediaTimePublication,
+) {
+    let mut inner = inner.lock().expect("player mutex poisoned");
+    inner.current_media_time = media_time;
+    inner.playback_generation = inner
+        .playback_generation
+        .max(publication.published_generation);
 }
 
 impl PlaybackRuntime {
@@ -596,6 +640,7 @@ impl Player {
             config,
             inner: Arc::new(Mutex::new(PlayerInner {
                 state: PlayerState::Idle,
+                ended: false,
                 media: None,
                 playback: None,
                 duration: None,
@@ -622,6 +667,16 @@ impl Player {
 
     pub fn state(&self) -> PlayerState {
         self.inner.lock().expect("player mutex poisoned").state
+    }
+
+    pub(crate) fn is_stopped_at_end(&self) -> bool {
+        let inner = self.inner.lock().expect("player mutex poisoned");
+        inner.state == PlayerState::Stopped && inner.ended
+    }
+
+    #[cfg(test)]
+    fn is_ended(&self) -> bool {
+        self.inner.lock().expect("player mutex poisoned").ended
     }
 
     pub fn current_media_time(&self) -> Duration {
@@ -709,6 +764,7 @@ impl Player {
             inner.duration = info.duration;
             inner.current_media_time = Duration::ZERO;
             inner.playback_generation = 1;
+            inner.ended = false;
             inner.tracks = info.tracks.clone();
             inner.track_selection = info.track_selection();
         }
@@ -723,16 +779,35 @@ impl Player {
 
     pub fn play(&self) -> Result<()> {
         self.ensure_not_closed()?;
-        match self.state() {
-            PlayerState::Ready | PlayerState::Paused | PlayerState::Stopped => {
-                self.send_playback_command(PlaybackCommand::Play)?;
-                self.transition(PlayerState::Playing)
-            }
-            from => Err(PlayerError::InvalidStateTransition {
+        let (from, restart_publication) = {
+            let mut inner = self.inner.lock().expect("player mutex poisoned");
+            let from = inner.state;
+            let restart_publication = (from == PlayerState::Stopped && inner.ended)
+                .then(|| publish_media_time(&mut inner, Duration::ZERO));
+            (from, restart_publication)
+        };
+        if !matches!(
+            from,
+            PlayerState::Ready | PlayerState::Paused | PlayerState::Stopped
+        ) {
+            return Err(PlayerError::InvalidStateTransition {
                 from,
                 to: PlayerState::Playing,
-            }),
+            });
         }
+
+        let result = self.send_playback_command(PlaybackCommand::Play);
+        if result.is_err()
+            && let Some(publication) = restart_publication
+        {
+            rollback_media_time_publication(&self.inner, publication);
+        }
+        result?;
+        if let Some(publication) = restart_publication {
+            confirm_media_time_publication(&self.inner, Duration::ZERO, publication);
+            self.emit(PlayerEvent::PositionChanged(Duration::ZERO));
+        }
+        self.transition(PlayerState::Playing)
     }
 
     pub fn pause(&self) -> Result<()> {
@@ -751,30 +826,16 @@ impl Player {
 
     pub fn seek(&self, position: Duration) -> Result<()> {
         self.ensure_not_closed()?;
-        let (previous_media_time, previous_generation, next_generation) = {
+        let publication = {
             let mut inner = self.inner.lock().expect("player mutex poisoned");
-            let previous_media_time = inner.current_media_time;
-            let previous_generation = inner.playback_generation;
-            inner.current_media_time = position;
-            inner.playback_generation = inner.playback_generation.saturating_add(1).max(1);
-            (
-                previous_media_time,
-                previous_generation,
-                inner.playback_generation,
-            )
+            publish_media_time(&mut inner, position)
         };
         let result = self.send_playback_command(PlaybackCommand::Seek(position));
         if result.is_err() {
-            let mut inner = self.inner.lock().expect("player mutex poisoned");
-            inner.current_media_time = previous_media_time;
-            inner.playback_generation = previous_generation;
+            rollback_media_time_publication(&self.inner, publication);
         }
         result?;
-        {
-            let mut inner = self.inner.lock().expect("player mutex poisoned");
-            inner.current_media_time = position;
-            inner.playback_generation = inner.playback_generation.max(next_generation);
-        }
+        confirm_media_time_publication(&self.inner, position, publication);
         self.emit(PlayerEvent::PositionChanged(position));
         Ok(())
     }
@@ -825,12 +886,16 @@ impl Player {
 
     pub fn stop(&self) -> Result<()> {
         self.ensure_not_closed()?;
-        self.send_playback_command(PlaybackCommand::Stop)?;
-        {
+        let publication = {
             let mut inner = self.inner.lock().expect("player mutex poisoned");
-            inner.current_media_time = Duration::ZERO;
-            inner.playback_generation = inner.playback_generation.saturating_add(1).max(1);
+            publish_media_time(&mut inner, Duration::ZERO)
+        };
+        let result = self.send_playback_command(PlaybackCommand::Stop);
+        if result.is_err() {
+            rollback_media_time_publication(&self.inner, publication);
         }
+        result?;
+        confirm_media_time_publication(&self.inner, Duration::ZERO, publication);
         self.emit(PlayerEvent::PositionChanged(Duration::ZERO));
         self.transition(PlayerState::Stopped)
     }
@@ -856,6 +921,7 @@ impl Player {
             inner.duration = None;
             inner.current_media_time = Duration::ZERO;
             inner.playback_generation = inner.playback_generation.saturating_add(1).max(1);
+            inner.ended = false;
         }
         self.transition(PlayerState::Closed)
     }
@@ -944,6 +1010,7 @@ fn run_playback_worker(
     let mut playback_generation = 1u64;
     let mut last_worker_clock = None;
     let mut last_audio_snapshot = None;
+    let mut eof_published = false;
     let mut loop_count = 0u64;
     trace::log(format!(
         "[erika-playback-trace] stage=worker_start state={:?} generation={} poll_ms={} uptime_ms={:.3}",
@@ -959,7 +1026,7 @@ fn run_playback_worker(
         match commands.recv_timeout(playback_poll_interval(engine.state())) {
             Ok(command) => {
                 command_count += 1;
-                observe_audio_pump_command(&mut last_audio_snapshot, &command);
+                observe_audio_pump_command(engine.state(), &mut last_audio_snapshot, &command);
                 if !handle_playback_command(engine, &inner, command, &mut playback_generation) {
                     return;
                 }
@@ -970,10 +1037,13 @@ fn run_playback_worker(
 
         while let Ok(command) = commands.try_recv() {
             command_count += 1;
-            observe_audio_pump_command(&mut last_audio_snapshot, &command);
+            observe_audio_pump_command(engine.state(), &mut last_audio_snapshot, &command);
             if !handle_playback_command(engine, &inner, command, &mut playback_generation) {
                 return;
             }
+        }
+        if engine.state() != PlaybackRunState::Ended {
+            eof_published = false;
         }
         let after_commands = std::time::Instant::now();
 
@@ -1079,11 +1149,9 @@ fn run_playback_worker(
         );
         let after_av = std::time::Instant::now();
 
-        if engine.state() == PlaybackRunState::Ended {
-            set_state_from_worker(&inner, PlayerState::Stopped);
-        }
-
-        if let Some(position) = last_position_event.take() {
+        if publish_natural_eof_from_worker(engine, &inner, &mut eof_published) {
+            last_position_event = None;
+        } else if let Some(position) = last_position_event.take() {
             emit_from_worker(&inner, PlayerEvent::PositionChanged(position));
         }
 
@@ -1179,11 +1247,15 @@ fn should_prefill_audio_from_worker(
 }
 
 fn observe_audio_pump_command(
+    engine_state: PlaybackRunState,
     last_audio_snapshot: &mut Option<AudioClockSnapshot>,
     command: &PlaybackCommand,
 ) {
     match command {
         PlaybackCommand::AudioClock(snapshot) => *last_audio_snapshot = Some(*snapshot),
+        PlaybackCommand::Play if engine_state == PlaybackRunState::Ended => {
+            *last_audio_snapshot = None;
+        }
         PlaybackCommand::Seek(_) | PlaybackCommand::Stop | PlaybackCommand::SelectAudioTrack(_) => {
             *last_audio_snapshot = None;
         }
@@ -1198,7 +1270,21 @@ fn handle_playback_command(
     playback_generation: &mut u64,
 ) -> bool {
     match command {
-        PlaybackCommand::Play => engine.play(),
+        PlaybackCommand::Play => match engine.play_checked() {
+            Ok(restarted) => {
+                if restarted {
+                    *playback_generation = playback_generation.saturating_add(1).max(1);
+                    set_ended_from_worker(inner, false);
+                }
+            }
+            Err(error) => {
+                emit_from_worker(
+                    inner,
+                    PlayerEvent::Error(PlayerError::Playback(error.to_string())),
+                );
+                set_state_from_worker(inner, PlayerState::Error);
+            }
+        },
         PlaybackCommand::Pause => engine.pause(),
         PlaybackCommand::Seek(position) => {
             trace::log(format!(
@@ -1214,6 +1300,7 @@ fn handle_playback_command(
                 set_state_from_worker(inner, PlayerState::Error);
             } else {
                 *playback_generation = playback_generation.saturating_add(1).max(1);
+                set_ended_from_worker(inner, false);
                 trace::log(format!(
                     "[erika-clock-trace] stage=worker_command_seek_done target={} gen_after={}",
                     trace::duration_label(Some(position)),
@@ -1224,10 +1311,19 @@ fn handle_playback_command(
         PlaybackCommand::SetPlaybackRate(rate) => {
             engine.set_playback_rate(rate);
         }
-        PlaybackCommand::Stop => {
-            engine.stop();
-            *playback_generation = playback_generation.saturating_add(1).max(1);
-        }
+        PlaybackCommand::Stop => match engine.stop_checked() {
+            Ok(()) => {
+                *playback_generation = playback_generation.saturating_add(1).max(1);
+                set_ended_from_worker(inner, false);
+            }
+            Err(error) => {
+                emit_from_worker(
+                    inner,
+                    PlayerEvent::Error(PlayerError::Playback(error.to_string())),
+                );
+                set_state_from_worker(inner, PlayerState::Error);
+            }
+        },
         PlaybackCommand::AudioClock(snapshot) => {
             trace::log(format!(
                 "[erika-clock-trace] stage=worker_command_audio_clock media={} queued={} queued_frames={} read={} written={} underflow={} gen={}",
@@ -1349,6 +1445,41 @@ fn sync_track_state_from_worker(inner: &Arc<Mutex<PlayerInner>>, engine: &VideoP
     }
 }
 
+fn publish_natural_eof_from_worker(
+    engine: &VideoPlaybackEngine,
+    inner: &Arc<Mutex<PlayerInner>>,
+    eof_published: &mut bool,
+) -> bool {
+    if engine.state() != PlaybackRunState::Ended {
+        *eof_published = false;
+        return false;
+    }
+    let final_position = engine
+        .info()
+        .duration
+        .unwrap_or_else(|| engine.media_time());
+    publish_natural_eof_events_from_worker(inner, final_position, eof_published);
+    true
+}
+
+fn publish_natural_eof_events_from_worker(
+    inner: &Arc<Mutex<PlayerInner>>,
+    final_position: Duration,
+    eof_published: &mut bool,
+) {
+    if *eof_published {
+        return;
+    }
+    {
+        let mut inner = inner.lock().expect("player mutex poisoned");
+        inner.current_media_time = final_position;
+        inner.ended = true;
+    }
+    emit_from_worker(inner, PlayerEvent::PositionChanged(final_position));
+    set_state_from_worker(inner, PlayerState::Stopped);
+    *eof_published = true;
+}
+
 fn sync_playback_clock_from_worker(
     engine: &VideoPlaybackEngine,
     inner: &Arc<Mutex<PlayerInner>>,
@@ -1360,6 +1491,17 @@ fn sync_playback_clock_from_worker(
     let mut inner = inner.lock().expect("player mutex poisoned");
     let shared_before = inner.current_media_time;
     let generation = playback_generation.max(1);
+    let shared_generation = inner.playback_generation.max(1);
+    if worker_clock_generation_is_stale(shared_generation, generation) {
+        trace::log(format!(
+            "[erika-clock-trace] stage=worker_sync:{stage} action=skip_stale_worker media={} shared_before={} worker_gen={} shared_gen={}",
+            trace::duration_label(Some(media_time)),
+            trace::duration_label(Some(shared_before)),
+            generation,
+            shared_generation,
+        ));
+        return;
+    }
     let worker_back = last_worker_clock.is_some_and(|(last_time, last_generation)| {
         last_generation == generation && trace::duration_regressed(media_time, last_time)
     });
@@ -1386,6 +1528,10 @@ fn sync_playback_clock_from_worker(
     *last_worker_clock = Some((media_time, generation));
 }
 
+fn worker_clock_generation_is_stale(shared_generation: u64, worker_generation: u64) -> bool {
+    shared_generation.max(1) > worker_generation.max(1)
+}
+
 fn playback_poll_interval(state: PlaybackRunState) -> Duration {
     match state {
         PlaybackRunState::Playing => Duration::from_millis(2),
@@ -1405,6 +1551,10 @@ fn set_state_from_worker(inner: &Arc<Mutex<PlayerInner>>, next: PlayerState) {
     if previous != next {
         emit_from_worker(inner, PlayerEvent::StateChanged(next));
     }
+}
+
+fn set_ended_from_worker(inner: &Arc<Mutex<PlayerInner>>, ended: bool) {
+    inner.lock().expect("player mutex poisoned").ended = ended;
 }
 
 fn emit_from_worker(inner: &Arc<Mutex<PlayerInner>>, event: PlayerEvent) {
@@ -1463,6 +1613,46 @@ fn emit_subtitle_frame_from_worker(inner: &Arc<Mutex<PlayerInner>>, frame: Playe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn install_fake_playback(
+        player: &Player,
+        state: PlayerState,
+        media_time: Duration,
+        generation: u64,
+        ended: bool,
+    ) -> Receiver<PlaybackCommand> {
+        let (commands, receiver) = unbounded();
+        let mut inner = player.inner.lock().expect("player mutex poisoned");
+        inner.state = state;
+        inner.current_media_time = media_time;
+        inner.playback_generation = generation;
+        inner.ended = ended;
+        inner.playback = Some(PlaybackRuntime {
+            commands,
+            worker: None,
+        });
+        receiver
+    }
+
+    fn install_disconnected_playback(
+        player: &Player,
+        state: PlayerState,
+        media_time: Duration,
+        generation: u64,
+        ended: bool,
+    ) {
+        let (commands, receiver) = unbounded();
+        drop(receiver);
+        let mut inner = player.inner.lock().expect("player mutex poisoned");
+        inner.state = state;
+        inner.current_media_time = media_time;
+        inner.playback_generation = generation;
+        inner.ended = ended;
+        inner.playback = Some(PlaybackRuntime {
+            commands,
+            worker: None,
+        });
+    }
 
     #[test]
     fn player_play_pause_emits_state_events_after_ready() {
@@ -1568,6 +1758,243 @@ mod tests {
 
         assert!(player.tracks().is_empty());
         assert_eq!(player.track_selection(), TrackSelection::default());
+    }
+
+    #[test]
+    fn stopped_play_from_eof_publishes_rewind_before_playing() {
+        let player = Player::new(PlayerConfig::default());
+        let events = player.subscribe();
+        let commands = install_fake_playback(
+            &player,
+            PlayerState::Stopped,
+            Duration::from_secs(8),
+            7,
+            true,
+        );
+
+        player.play().unwrap();
+
+        assert!(matches!(commands.try_recv(), Ok(PlaybackCommand::Play)));
+        assert_eq!(player.current_media_time(), Duration::ZERO);
+        assert_eq!(player.playback_generation(), 8);
+        assert_eq!(player.state(), PlayerState::Playing);
+        assert!(!player.is_ended());
+        assert_eq!(
+            events.try_iter().collect::<Vec<_>>(),
+            vec![
+                PlayerEvent::PositionChanged(Duration::ZERO),
+                PlayerEvent::StateChanged(PlayerState::Playing),
+            ]
+        );
+    }
+
+    #[test]
+    fn stopped_play_at_zero_does_not_publish_another_generation() {
+        let player = Player::new(PlayerConfig::default());
+        let events = player.subscribe();
+        let commands =
+            install_fake_playback(&player, PlayerState::Stopped, Duration::ZERO, 7, false);
+
+        player.play().unwrap();
+
+        assert!(matches!(commands.try_recv(), Ok(PlaybackCommand::Play)));
+        assert_eq!(player.current_media_time(), Duration::ZERO);
+        assert_eq!(player.playback_generation(), 7);
+        assert!(!player.is_ended());
+        assert_eq!(
+            events.try_iter().collect::<Vec<_>>(),
+            vec![PlayerEvent::StateChanged(PlayerState::Playing)]
+        );
+    }
+
+    #[test]
+    fn failed_eof_play_rolls_back_prepublished_clock_and_generation() {
+        let player = Player::new(PlayerConfig::default());
+        let events = player.subscribe();
+        install_disconnected_playback(
+            &player,
+            PlayerState::Stopped,
+            Duration::from_secs(8),
+            7,
+            true,
+        );
+
+        assert!(matches!(player.play(), Err(PlayerError::Playback(_))));
+
+        assert_eq!(player.current_media_time(), Duration::from_secs(8));
+        assert_eq!(player.playback_generation(), 7);
+        assert_eq!(player.state(), PlayerState::Stopped);
+        assert!(player.is_ended());
+        assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn seek_from_eof_then_play_preserves_nonzero_target_and_single_generation() {
+        let player = Player::new(PlayerConfig::default());
+        let events = player.subscribe();
+        let commands = install_fake_playback(
+            &player,
+            PlayerState::Stopped,
+            Duration::from_secs(8),
+            7,
+            true,
+        );
+        let target = Duration::from_millis(3_250);
+
+        player.seek(target).unwrap();
+        player.play().unwrap();
+
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(PlaybackCommand::Seek(position)) if position == target
+        ));
+        assert!(matches!(commands.try_recv(), Ok(PlaybackCommand::Play)));
+        assert_eq!(player.current_media_time(), target);
+        assert_eq!(player.playback_generation(), 8);
+        assert_eq!(player.state(), PlayerState::Playing);
+        assert!(!player.is_ended());
+        assert_eq!(
+            events.try_iter().collect::<Vec<_>>(),
+            vec![
+                PlayerEvent::PositionChanged(target),
+                PlayerEvent::StateChanged(PlayerState::Playing),
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_seek_from_eof_restores_ended_marker() {
+        let player = Player::new(PlayerConfig::default());
+        install_disconnected_playback(
+            &player,
+            PlayerState::Stopped,
+            Duration::from_secs(8),
+            7,
+            true,
+        );
+
+        assert!(matches!(
+            player.seek(Duration::from_millis(3_250)),
+            Err(PlayerError::Playback(_))
+        ));
+
+        assert_eq!(player.current_media_time(), Duration::from_secs(8));
+        assert_eq!(player.playback_generation(), 7);
+        assert_eq!(player.state(), PlayerState::Stopped);
+        assert!(player.is_ended());
+    }
+
+    #[test]
+    fn stop_publishes_zero_before_stopped() {
+        let player = Player::new(PlayerConfig::default());
+        let events = player.subscribe();
+        let commands = install_fake_playback(
+            &player,
+            PlayerState::Playing,
+            Duration::from_secs(3),
+            11,
+            false,
+        );
+
+        player.stop().unwrap();
+
+        assert!(matches!(commands.try_recv(), Ok(PlaybackCommand::Stop)));
+        assert_eq!(player.current_media_time(), Duration::ZERO);
+        assert_eq!(player.playback_generation(), 12);
+        assert_eq!(player.state(), PlayerState::Stopped);
+        assert!(!player.is_ended());
+        assert_eq!(
+            events.try_iter().collect::<Vec<_>>(),
+            vec![
+                PlayerEvent::PositionChanged(Duration::ZERO),
+                PlayerEvent::StateChanged(PlayerState::Stopped),
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_stop_rolls_back_prepublished_clock_and_generation() {
+        let player = Player::new(PlayerConfig::default());
+        let events = player.subscribe();
+        install_disconnected_playback(
+            &player,
+            PlayerState::Playing,
+            Duration::from_secs(3),
+            11,
+            false,
+        );
+
+        assert!(matches!(player.stop(), Err(PlayerError::Playback(_))));
+
+        assert_eq!(player.current_media_time(), Duration::from_secs(3));
+        assert_eq!(player.playback_generation(), 11);
+        assert_eq!(player.state(), PlayerState::Playing);
+        assert!(!player.is_ended());
+        assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn natural_eof_worker_events_are_ordered_once_without_generation_change() {
+        let player = Player::new(PlayerConfig::default());
+        let events = player.subscribe();
+        {
+            let mut inner = player.inner.lock().expect("player mutex poisoned");
+            inner.state = PlayerState::Playing;
+            inner.current_media_time = Duration::from_millis(7_967);
+            inner.playback_generation = 13;
+        }
+        let mut eof_published = false;
+
+        publish_natural_eof_events_from_worker(
+            &player.inner,
+            Duration::from_secs(8),
+            &mut eof_published,
+        );
+        publish_natural_eof_events_from_worker(
+            &player.inner,
+            Duration::from_secs(8),
+            &mut eof_published,
+        );
+
+        assert!(eof_published);
+        assert_eq!(player.current_media_time(), Duration::from_secs(8));
+        assert_eq!(player.playback_generation(), 13);
+        assert_eq!(player.state(), PlayerState::Stopped);
+        assert!(player.is_ended());
+        assert_eq!(
+            events.try_iter().collect::<Vec<_>>(),
+            vec![
+                PlayerEvent::PositionChanged(Duration::from_secs(8)),
+                PlayerEvent::StateChanged(PlayerState::Stopped),
+            ]
+        );
+    }
+
+    #[test]
+    fn ended_play_clears_stale_audio_snapshot_before_restart() {
+        let mut snapshot = Some(AudioClockSnapshot {
+            media_time: Some(Duration::from_secs(8)),
+            queued_duration: Some(Duration::from_millis(100)),
+            queued_frames: 4_800,
+            read_frames: 48_000,
+            written_frames: 52_800,
+            underflow_frames: 0,
+        });
+
+        observe_audio_pump_command(
+            PlaybackRunState::Ended,
+            &mut snapshot,
+            &PlaybackCommand::Play,
+        );
+
+        assert!(snapshot.is_none());
+    }
+
+    #[test]
+    fn worker_clock_waits_for_prepublished_generation() {
+        assert!(worker_clock_generation_is_stale(8, 7));
+        assert!(!worker_clock_generation_is_stale(8, 8));
+        assert!(!worker_clock_generation_is_stale(7, 8));
     }
 
     #[test]
