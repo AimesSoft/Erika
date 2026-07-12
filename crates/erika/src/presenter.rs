@@ -518,7 +518,13 @@ impl PresenterRuntime {
         self.player.open(media)
     }
 
-    pub fn play(&self) -> Result<()> {
+    pub fn play(&mut self) -> Result<()> {
+        if self.player.is_stopped_at_end() {
+            self.reset_audio_output();
+            self.drain_pending_player_frames();
+            self.bump_danmaku_generation();
+            self.clear_playback_visual_state(Duration::ZERO);
+        }
         self.player.play()
     }
 
