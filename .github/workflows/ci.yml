@@ -33,6 +33,9 @@ jobs:
         with:
           channel: stable
           cache: true
+      - name: Verify playback fixture checksums
+        working-directory: crates/erika/testdata/playback
+        run: sha256sum --check SHA256SUMS
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
       - name: Check license policy

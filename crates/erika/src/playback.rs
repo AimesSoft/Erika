@@ -1938,9 +1938,23 @@ impl VideoPlaybackEngine {
     }
 
     pub fn select_audio_track(&mut self, track_id: Option<i64>) -> Result<()> {
-        let media_time = self.media_time();
+        self.select_audio_track_with_now(track_id, Instant::now)
+    }
+
+    #[cfg(test)]
+    fn select_audio_track_at(&mut self, track_id: Option<i64>, now: Instant) -> Result<()> {
+        self.select_audio_track_with_now(track_id, || now)
+    }
+
+    fn select_audio_track_with_now(
+        &mut self,
+        track_id: Option<i64>,
+        mut now: impl FnMut() -> Instant,
+    ) -> Result<()> {
+        let media_time = self.media_time_at(now());
         self.session.select_audio_track(track_id)?;
-        self.reset_streams_at(media_time)?;
+        self.session.seek(media_time)?;
+        self.reset_streams_at(media_time, now());
         Ok(())
     }
 
@@ -1948,9 +1962,18 @@ impl VideoPlaybackEngine {
         &mut self,
         track_id: Option<i64>,
     ) -> Result<Option<TimedSubtitleFrame>> {
-        let media_time = self.media_time();
+        self.select_subtitle_track_with_now(track_id, Instant::now)
+    }
+
+    fn select_subtitle_track_with_now(
+        &mut self,
+        track_id: Option<i64>,
+        mut now: impl FnMut() -> Instant,
+    ) -> Result<Option<TimedSubtitleFrame>> {
+        let media_time = self.media_time_at(now());
         let frame = self.session.select_subtitle_track(track_id, media_time)?;
-        self.reset_streams_at(media_time)?;
+        self.session.seek(media_time)?;
+        self.reset_streams_at(media_time, now());
         Ok(frame.map(|frame| TimedSubtitleFrame {
             frame,
             pts: Some(media_time),
@@ -1959,9 +1982,7 @@ impl VideoPlaybackEngine {
         }))
     }
 
-    fn reset_streams_at(&mut self, media_time: Duration) -> Result<()> {
-        self.session.seek(media_time)?;
-        let now = Instant::now();
+    fn reset_streams_at(&mut self, media_time: Duration, now: Instant) {
         let before = self.clock.media_time_at(now);
         self.clock
             .reset(media_time, self.state == PlaybackRunState::Playing, now);
@@ -1974,7 +1995,6 @@ impl VideoPlaybackEngine {
         self.waiting_for_first_frame = self.state == PlaybackRunState::Playing;
         self.video_seek_floor = Some(media_time);
         self.audio_seek_floor = Some(media_time);
-        Ok(())
     }
 
     pub fn state(&self) -> PlaybackRunState {
@@ -1986,13 +2006,22 @@ impl VideoPlaybackEngine {
     }
 
     pub fn play(&mut self) {
+        self.play_with_now(Instant::now);
+    }
+
+    #[cfg(test)]
+    fn play_at(&mut self, now: Instant) {
+        self.play_with_now(|| now);
+    }
+
+    fn play_with_now(&mut self, now: impl FnOnce() -> Instant) {
         if matches!(
             self.state,
             PlaybackRunState::Playing | PlaybackRunState::Ended
         ) {
             return;
         }
-        let now = Instant::now();
+        let now = now();
         let before = self.clock.media_time_at(now);
         let waiting_for_first_frame = self.last_presented_pts.is_none();
         if !waiting_for_first_frame {
@@ -2010,10 +2039,19 @@ impl VideoPlaybackEngine {
     }
 
     pub fn pause(&mut self) {
+        self.pause_with_now(Instant::now);
+    }
+
+    #[cfg(test)]
+    fn pause_at(&mut self, now: Instant) {
+        self.pause_with_now(|| now);
+    }
+
+    fn pause_with_now(&mut self, now: impl FnOnce() -> Instant) {
         if self.state != PlaybackRunState::Playing {
             return;
         }
-        let now = Instant::now();
+        let now = now();
         let before = self.clock.media_time_at(now);
         self.clock.pause(now);
         trace::log(format!(
@@ -2041,8 +2079,17 @@ impl VideoPlaybackEngine {
     }
 
     pub fn seek(&mut self, position: Duration) -> Result<()> {
+        self.seek_with_now(position, Instant::now)
+    }
+
+    #[cfg(test)]
+    fn seek_at(&mut self, position: Duration, now: Instant) -> Result<()> {
+        self.seek_with_now(position, || now)
+    }
+
+    fn seek_with_now(&mut self, position: Duration, now: impl FnOnce() -> Instant) -> Result<()> {
         self.session.seek(position)?;
-        let now = Instant::now();
+        let now = now();
         let before = self.clock.media_time_at(now);
         self.clock
             .reset(position, self.state == PlaybackRunState::Playing, now);
@@ -2059,11 +2106,19 @@ impl VideoPlaybackEngine {
     }
 
     pub fn media_time(&self) -> Duration {
-        self.clock.media_time_at(Instant::now())
+        self.media_time_at(Instant::now())
+    }
+
+    fn media_time_at(&self, now: Instant) -> Duration {
+        self.clock.media_time_at(now)
     }
 
     pub fn clock_snapshot(&self) -> PlaybackClockSnapshot {
-        self.clock.snapshot_at(Instant::now())
+        self.clock_snapshot_at(Instant::now())
+    }
+
+    fn clock_snapshot_at(&self, now: Instant) -> PlaybackClockSnapshot {
+        self.clock.snapshot_at(now)
     }
 
     pub fn timing_config(&self) -> PlaybackTimingConfig {
@@ -2075,7 +2130,10 @@ impl VideoPlaybackEngine {
     }
 
     pub fn set_playback_rate(&mut self, rate: f64) {
-        let now = Instant::now();
+        self.set_playback_rate_at(rate, Instant::now());
+    }
+
+    fn set_playback_rate_at(&mut self, rate: f64, now: Instant) {
         let before = self.clock.media_time_at(now);
         let before_rate = self.clock.rate();
         self.clock.set_rate(rate, now);
@@ -2089,6 +2147,23 @@ impl VideoPlaybackEngine {
     }
 
     pub fn sync_to_audio_clock(&mut self, snapshot: AudioClockSnapshot) -> Option<ClockCorrection> {
+        self.sync_to_audio_clock_with_now(snapshot, Instant::now)
+    }
+
+    #[cfg(test)]
+    fn sync_to_audio_clock_at(
+        &mut self,
+        snapshot: AudioClockSnapshot,
+        now: Instant,
+    ) -> Option<ClockCorrection> {
+        self.sync_to_audio_clock_with_now(snapshot, || now)
+    }
+
+    fn sync_to_audio_clock_with_now(
+        &mut self,
+        snapshot: AudioClockSnapshot,
+        now: impl FnOnce() -> Instant,
+    ) -> Option<ClockCorrection> {
         if self.state != PlaybackRunState::Playing {
             return None;
         }
@@ -2111,7 +2186,7 @@ impl VideoPlaybackEngine {
                 .queued_duration
                 .unwrap_or_else(|| Duration::from_millis(0)),
         );
-        let now = Instant::now();
+        let now = now();
         let before = self.clock.media_time_at(now);
         if media_time + OUTPUT_AUDIO_CLOCK_STALE_TOLERANCE < before {
             trace::log(format!(
@@ -2150,6 +2225,18 @@ impl VideoPlaybackEngine {
     }
 
     pub fn tick_audio(&mut self) -> Result<Option<TimedAudioFrame>> {
+        self.tick_audio_with_now(Instant::now)
+    }
+
+    #[cfg(test)]
+    fn tick_audio_at(&mut self, now: Instant) -> Result<Option<TimedAudioFrame>> {
+        self.tick_audio_with_now(|| now)
+    }
+
+    fn tick_audio_with_now(
+        &mut self,
+        now: impl FnOnce() -> Instant,
+    ) -> Result<Option<TimedAudioFrame>> {
         if self.state != PlaybackRunState::Playing {
             return Ok(None);
         }
@@ -2159,7 +2246,7 @@ impl VideoPlaybackEngine {
         };
 
         let pts = frame.pts;
-        let now = Instant::now();
+        let now = now();
         let media_time = self.clock.media_time_at(now);
         if pts.is_some_and(|pts| pts > media_time + self.timing.audio_lead_time) {
             return Ok(None);
@@ -2234,12 +2321,24 @@ impl VideoPlaybackEngine {
     }
 
     pub fn tick(&mut self) -> Result<Option<TimedVideoFrame>> {
+        self.tick_with_now(Instant::now)
+    }
+
+    #[cfg(test)]
+    fn tick_at(&mut self, now: Instant) -> Result<Option<TimedVideoFrame>> {
+        self.tick_with_now(|| now)
+    }
+
+    fn tick_with_now(
+        &mut self,
+        mut now: impl FnMut() -> Instant,
+    ) -> Result<Option<TimedVideoFrame>> {
         if self.state != PlaybackRunState::Playing {
             return Ok(None);
         }
         let mut consecutive_drops = 0usize;
         loop {
-            self.ensure_pending_frame()?;
+            self.ensure_pending_frame_with_now(&mut now)?;
             let Some(frame) = self.pending_frame.as_ref() else {
                 return Ok(None);
             };
@@ -2251,7 +2350,7 @@ impl VideoPlaybackEngine {
             }
             let should_present_first = self.last_presented_pts.is_none();
             if should_present_first && self.waiting_for_first_frame {
-                let now = Instant::now();
+                let now = now();
                 let before = self.clock.media_time_at(now);
                 self.clock.sync_to(
                     pts.unwrap_or(Duration::ZERO),
@@ -2269,7 +2368,7 @@ impl VideoPlaybackEngine {
                 self.waiting_for_first_frame = false;
             }
 
-            let media_time = self.media_time();
+            let media_time = self.media_time_at(now());
             match self
                 .timing
                 .video_scheduler
@@ -2312,7 +2411,7 @@ impl VideoPlaybackEngine {
         }
     }
 
-    fn ensure_pending_frame(&mut self) -> Result<()> {
+    fn ensure_pending_frame_with_now(&mut self, now: &mut impl FnMut() -> Instant) -> Result<()> {
         if self.pending_frame.is_some() || self.eof {
             return Ok(());
         }
@@ -2320,10 +2419,13 @@ impl VideoPlaybackEngine {
         if self.pending_frame.is_none() && self.session.is_eof() {
             self.eof = true;
             self.state = PlaybackRunState::Ended;
-            let now = Instant::now();
-            let media_time = self.info().duration.unwrap_or_else(|| self.media_time());
-            let before = self.clock.media_time_at(now);
-            self.clock.reset(media_time, false, now);
+            let eof_now = now();
+            let media_time = self
+                .info()
+                .duration
+                .unwrap_or_else(|| self.media_time_at(now()));
+            let before = self.clock.media_time_at(eof_now);
+            self.clock.reset(media_time, false, eof_now);
             trace_clock_reset("eof", before, media_time, self.state);
         }
         Ok(())
@@ -2609,7 +2711,101 @@ fn add_signed_duration(base: Duration, delta_nanos: i128) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use std::{fs, path::PathBuf, thread};
+
+    const FIXTURE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+    fn playback_fixture_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/playback/playback-fixture.mkv")
+    }
+
+    fn playback_fixture_engine() -> VideoPlaybackEngine {
+        let path = playback_fixture_path();
+        assert!(path.is_file(), "fixture is missing: {}", path.display());
+        let request = MediaRequest {
+            uri: path.to_string_lossy().into_owned(),
+            source_hint: MediaSourceHint::LocalFile,
+        };
+        let config = PlaybackSessionConfig {
+            video_decode: VideoDecodePreference::Software,
+            ..PlaybackSessionConfig::default()
+        };
+        let engine = VideoPlaybackEngine::open(&request, config).unwrap();
+
+        assert_eq!(engine.info().duration, Some(Duration::from_secs(8)));
+        assert_eq!(engine.info().selected_video_track, Some(0));
+        assert_eq!(engine.info().selected_audio_track, Some(1));
+        engine
+    }
+
+    fn next_fixture_video_at(engine: &mut VideoPlaybackEngine, now: Instant) -> TimedVideoFrame {
+        let deadline = Instant::now() + FIXTURE_WAIT_TIMEOUT;
+        loop {
+            if let Some(frame) = engine.tick_at(now).unwrap() {
+                return frame;
+            }
+            assert_ne!(
+                engine.state(),
+                PlaybackRunState::Ended,
+                "fixture reached EOF before yielding a video frame"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for a fixture video frame"
+            );
+            thread::yield_now();
+        }
+    }
+
+    fn next_fixture_audio_at(engine: &mut VideoPlaybackEngine, now: Instant) -> TimedAudioFrame {
+        let deadline = Instant::now() + FIXTURE_WAIT_TIMEOUT;
+        loop {
+            if let Some(frame) = engine.tick_audio_at(now).unwrap() {
+                return frame;
+            }
+            assert_eq!(engine.state(), PlaybackRunState::Playing);
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for a fixture audio frame"
+            );
+            thread::yield_now();
+        }
+    }
+
+    fn positive_zero_crossing_indices(frame: &PcmAudioFrame) -> Vec<usize> {
+        let channels = frame.format.channels as usize;
+        assert!(channels > 0);
+        let mut samples = frame
+            .samples
+            .chunks_exact(channels)
+            .map(|samples| samples[0]);
+        let Some(mut previous) = samples.next() else {
+            return Vec::new();
+        };
+        let mut crossings = Vec::new();
+        for (index, sample) in samples.enumerate() {
+            if previous <= 0.0 && sample > 0.0 {
+                crossings.push(index + 1);
+            }
+            previous = sample;
+        }
+        crossings
+    }
+
+    fn estimated_frequency_hz(frame: &PcmAudioFrame) -> f64 {
+        let crossings = positive_zero_crossing_indices(frame);
+        assert!(crossings.len() >= 2);
+        let crossing_span = crossings.last().unwrap() - crossings.first().unwrap();
+        (crossings.len() - 1) as f64 * frame.format.sample_rate as f64 / crossing_span as f64
+    }
+
+    fn duration_difference(left: Duration, right: Duration) -> Duration {
+        if left >= right {
+            left - right
+        } else {
+            right - left
+        }
+    }
 
     #[test]
     fn decoder_open_fallback_is_limited_to_d3d11va() {
@@ -2658,6 +2854,190 @@ mod tests {
         assert_eq!(info.subtitle_tracks.len(), 1);
         assert_eq!(info.video_decode_backend, Some(DecoderBackend::Software));
         assert_eq!(info.audio_output, Some(PcmFormat::default()));
+    }
+
+    #[test]
+    fn playback_fixture_rapid_seek_emits_only_final_target_av() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+
+        engine
+            .seek_at(Duration::from_millis(1_275), t0 + Duration::from_millis(10))
+            .unwrap();
+        engine
+            .seek_at(Duration::from_millis(6_125), t0 + Duration::from_millis(20))
+            .unwrap();
+        let target = Duration::from_millis(3_250);
+        let settled_at = t0 + Duration::from_millis(30);
+        engine.seek_at(target, settled_at).unwrap();
+
+        let video = next_fixture_video_at(&mut engine, settled_at);
+        let audio = next_fixture_audio_at(&mut engine, settled_at);
+        let video_pts = video.pts.expect("fixture video PTS");
+        let audio_pts = audio.pts.expect("fixture audio PTS");
+
+        assert!(video_pts >= target, "video preroll escaped: {video_pts:?}");
+        assert!(audio_pts >= target, "audio preroll escaped: {audio_pts:?}");
+        assert!(video_pts - target <= Duration::from_millis(34));
+        assert!(audio_pts - target <= Duration::from_millis(34));
+        assert!(duration_difference(video_pts, audio_pts) <= Duration::from_millis(34));
+        assert_eq!(video.media_time, video_pts);
+    }
+
+    #[test]
+    fn playback_fixture_paused_seek_keeps_clock_frozen() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+
+        let paused_at = t0 + Duration::from_millis(500);
+        engine.pause_at(paused_at);
+        let target = Duration::from_millis(5_125);
+        engine.seek_at(target, paused_at).unwrap();
+
+        assert_eq!(engine.state(), PlaybackRunState::Paused);
+        assert_eq!(engine.media_time_at(paused_at), target);
+        assert_eq!(
+            engine.media_time_at(paused_at + Duration::from_secs(60)),
+            target
+        );
+        let resume_at = paused_at + Duration::from_secs(60);
+        assert!(engine.tick_at(resume_at).unwrap().is_none());
+        assert!(engine.tick_audio_at(resume_at).unwrap().is_none());
+
+        engine.play_at(resume_at);
+        let video = next_fixture_video_at(&mut engine, resume_at);
+        let audio = next_fixture_audio_at(&mut engine, resume_at);
+        let video_pts = video.pts.expect("resumed video PTS");
+        let audio_pts = audio.pts.expect("resumed audio PTS");
+        assert!(video_pts >= target);
+        assert!(audio_pts >= target);
+        assert!(video_pts - target <= Duration::from_millis(34));
+        assert!(audio_pts - target <= Duration::from_millis(34));
+    }
+
+    #[test]
+    fn playback_fixture_non_unit_rate_rejects_audio_master_correction() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+
+        let rate_changed_at = t0 + Duration::from_millis(100);
+        engine.set_playback_rate_at(2.0, rate_changed_at);
+        let sync_at = rate_changed_at + Duration::from_millis(100);
+        let before = engine.clock_snapshot_at(sync_at);
+        let correction = engine.sync_to_audio_clock_at(
+            AudioClockSnapshot {
+                media_time: Some(Duration::from_secs(5)),
+                queued_duration: Some(Duration::from_millis(250)),
+                queued_frames: 12_000,
+                read_frames: 24_000,
+                written_frames: 36_000,
+                underflow_frames: 0,
+            },
+            sync_at,
+        );
+
+        assert!(correction.is_none());
+        assert_eq!(engine.clock_snapshot_at(sync_at), before);
+        assert_eq!(before.media_time, Duration::from_millis(300));
+        assert_eq!(before.source, PlaybackClockSource::Wall);
+        assert_eq!(before.rate, 2.0);
+    }
+
+    #[test]
+    fn playback_fixture_audio_track_switch_restarts_at_current_media_time() {
+        let mut engine = playback_fixture_engine();
+        let audio_track_ids = engine
+            .info()
+            .tracks
+            .iter()
+            .filter(|track| track.kind == TrackKind::Audio)
+            .map(|track| track.id)
+            .collect::<Vec<_>>();
+        assert_eq!(audio_track_ids, vec![1, 2]);
+
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+        let first_track_audio = next_fixture_audio_at(&mut engine, t0);
+
+        let switch_at = t0 + Duration::from_secs(2);
+        engine
+            .select_audio_track_at(Some(audio_track_ids[1]), switch_at)
+            .unwrap();
+        assert_eq!(engine.track_selection().audio, Some(audio_track_ids[1]));
+
+        let switched_video = next_fixture_video_at(&mut engine, switch_at);
+        let switched_audio = next_fixture_audio_at(&mut engine, switch_at);
+        let switched_video_pts = switched_video.pts.expect("switched video PTS");
+        let switched_audio_pts = switched_audio.pts.expect("switched audio PTS");
+        assert!(switched_video_pts >= Duration::from_secs(2));
+        assert!(switched_audio_pts >= Duration::from_secs(2));
+        assert!(switched_video_pts - Duration::from_secs(2) <= Duration::from_millis(34));
+        assert!(switched_audio_pts - Duration::from_secs(2) <= Duration::from_millis(34));
+
+        let first_frequency = estimated_frequency_hz(&first_track_audio.frame);
+        let switched_frequency = estimated_frequency_hz(&switched_audio.frame);
+        assert!((800.0..=960.0).contains(&first_frequency));
+        assert!(
+            (1_200.0..=1_440.0).contains(&switched_frequency),
+            "expected 1320 Hz track after switch, got {switched_frequency:.1} Hz"
+        );
+    }
+
+    #[test]
+    fn playback_fixture_eof_ends_and_freezes_clock_at_duration() {
+        let mut engine = playback_fixture_engine();
+        let mut timing = engine.timing_config();
+        timing.video_scheduler.drop_tolerance = Duration::from_secs(9);
+        engine.set_timing_config(timing);
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let first = next_fixture_video_at(&mut engine, t0);
+        assert_eq!(first.pts, Some(Duration::ZERO));
+
+        let eof_at = t0 + Duration::from_secs(8);
+        let deadline = Instant::now() + FIXTURE_WAIT_TIMEOUT;
+        let mut last_video_pts = first.pts;
+        while engine.state() != PlaybackRunState::Ended {
+            if let Some(frame) = engine.tick_at(eof_at).unwrap() {
+                last_video_pts = frame.pts.or(last_video_pts);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for fixture EOF"
+            );
+            thread::yield_now();
+        }
+
+        let duration = engine.info().duration.expect("fixture duration");
+        assert_eq!(duration, Duration::from_secs(8));
+        let last_video_pts = last_video_pts.expect("last fixture video PTS");
+        assert!(last_video_pts <= duration);
+        assert!(duration - last_video_pts <= Duration::from_millis(34));
+        assert_eq!(engine.media_time_at(eof_at), duration);
+        assert_eq!(
+            engine.media_time_at(eof_at + Duration::from_secs(60)),
+            duration
+        );
+        assert_eq!(
+            engine.clock_snapshot_at(eof_at + Duration::from_secs(60)),
+            PlaybackClockSnapshot {
+                media_time: duration,
+                source: PlaybackClockSource::Wall,
+                rate: 1.0,
+            }
+        );
+        assert!(
+            engine
+                .tick_at(eof_at + Duration::from_secs(60))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
