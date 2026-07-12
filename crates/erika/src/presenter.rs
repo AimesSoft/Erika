@@ -1585,6 +1585,7 @@ fn run_async_danmaku_planner(
         if let Some((revision, next_timeline, next_config)) = config_update {
             timeline = next_timeline;
             config = next_config;
+            engine.invalidate_stable_tracks();
             engine.set_config(config.clone());
             applied_config_revision = revision;
         }

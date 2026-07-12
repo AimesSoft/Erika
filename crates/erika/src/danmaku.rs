@@ -1735,6 +1735,8 @@ pub struct DfmLayoutEngine {
     config: DanmakuLayoutConfig,
     rasterizer: DanmakuTextRasterizer,
     prepared: Option<DfmPreparedLayout>,
+    stable_tracks: HashMap<u64, usize>,
+    stable_viewport: Option<DanmakuViewport>,
 }
 
 impl DfmLayoutEngine {
@@ -1746,12 +1748,15 @@ impl DfmLayoutEngine {
             config,
             rasterizer,
             prepared: None,
+            stable_tracks: HashMap::new(),
+            stable_viewport: None,
         }
     }
 
     pub fn set_timeline(&mut self, timeline: DanmakuTimeline) {
         self.timeline = timeline;
         self.prepared = None;
+        self.invalidate_stable_tracks();
     }
 
     pub fn sync_timeline(&mut self, timeline: &DanmakuTimeline) {
@@ -1764,6 +1769,7 @@ impl DfmLayoutEngine {
     pub fn clear_timeline(&mut self) {
         self.timeline = DanmakuTimeline::default();
         self.prepared = None;
+        self.invalidate_stable_tracks();
     }
 
     pub fn set_config(&mut self, config: DanmakuLayoutConfig) -> bool {
@@ -1778,6 +1784,7 @@ impl DfmLayoutEngine {
             self.rasterizer = DanmakuTextRasterizer::for_config(&self.config);
         }
         self.prepared = None;
+        self.invalidate_stable_tracks();
         true
     }
 
@@ -1786,10 +1793,28 @@ impl DfmLayoutEngine {
     }
 
     pub fn prepare(&mut self, viewport: DanmakuViewport, _generation: u64) -> DfmPreparedLayout {
+        if self.stable_viewport != Some(viewport) {
+            self.invalidate_stable_tracks();
+            self.stable_viewport = Some(viewport);
+        }
         let config = self.config.sanitized();
-        let prepared = prepare_layout(&self.timeline, viewport, &config, &self.rasterizer);
+        let prepared = prepare_layout(
+            &self.timeline,
+            viewport,
+            &config,
+            &self.rasterizer,
+            &self.stable_tracks,
+        );
+        for item in prepared.items() {
+            self.stable_tracks.insert(item.id, item.track_index);
+        }
         self.prepared = Some(prepared.clone());
         prepared
+    }
+
+    pub fn invalidate_stable_tracks(&mut self) {
+        self.stable_tracks.clear();
+        self.stable_viewport = None;
     }
 
     pub fn frame_layout(
@@ -1837,6 +1862,7 @@ fn prepare_layout(
     viewport: DanmakuViewport,
     config: &DanmakuLayoutConfig,
     rasterizer: &DanmakuTextRasterizer,
+    stable_tracks: &HashMap<u64, usize>,
 ) -> DfmPreparedLayout {
     if timeline.is_empty() || !config.enabled {
         let dfm_layout = dfm::PreparedLayout {
@@ -1899,6 +1925,7 @@ fn prepare_layout(
         max_lines_per_type: config.max_lines_per_mode,
         track_gap_ratio: config.track_gap_ratio as f64,
         outline_width: config.outline_width as f64,
+        preferred_tracks: stable_tracks,
         block_words: config.block_words.clone(),
         block_top: config.block_top,
         block_bottom: config.block_bottom,
@@ -2619,6 +2646,62 @@ mod tests {
             &prepared.items()[0].text_layout,
             &first_text_layout
         ));
+    }
+
+    #[test]
+    fn sliding_timeline_window_preserves_tracks_for_overlapping_items() {
+        let timeline = DanmakuTimeline::new(
+            (0..80)
+                .map(|index| {
+                    let mut entry = item(
+                        index as f64 * 0.25,
+                        &format!("scroll {index}"),
+                        DanmakuMode::Scroll,
+                    );
+                    entry.id = index + 1;
+                    entry
+                })
+                .collect(),
+        )
+        .unwrap();
+        let config = DanmakuLayoutConfig {
+            allow_stacking: true,
+            merge_duplicates: false,
+            ..DanmakuLayoutConfig::default()
+        };
+        let viewport = DanmakuViewport::new(640, 360);
+        let first_window = timeline.window(Duration::ZERO, Duration::from_secs(12));
+        let second_window = timeline.window(Duration::from_secs(4), Duration::from_secs(16));
+        let mut engine = DfmLayoutEngine::new(first_window, config.clone());
+
+        let first = engine.prepare(viewport, 1);
+        let first_tracks = first
+            .items()
+            .iter()
+            .map(|item| (item.id, item.track_index))
+            .collect::<HashMap<_, _>>();
+        engine.sync_timeline(&second_window);
+        let second = engine.prepare(viewport, 1);
+
+        let overlap = second
+            .items()
+            .iter()
+            .filter_map(|item| {
+                first_tracks
+                    .get(&item.id)
+                    .map(|track| (*track, item.track_index))
+            })
+            .collect::<Vec<_>>();
+        assert!(!overlap.is_empty());
+        assert!(overlap.iter().all(|(before, after)| before == after));
+
+        let mut fresh_engine = DfmLayoutEngine::new(second_window, config);
+        let fresh = fresh_engine.prepare(viewport, 1);
+        assert!(fresh.items().iter().any(|item| {
+            first_tracks
+                .get(&item.id)
+                .is_some_and(|track| *track != item.track_index)
+        }));
     }
 
     #[test]

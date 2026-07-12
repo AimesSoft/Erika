@@ -146,6 +146,31 @@ impl DanmakuRetainer {
         allow_stacking: bool,
         allow_scroll_overwrite: bool,
     ) -> (bool, DisplacedIndices) {
+        self.fix_with_options_and_preferred_track(
+            item,
+            view_width,
+            view_height,
+            flags,
+            display_area,
+            is_me,
+            allow_stacking,
+            allow_scroll_overwrite,
+            None,
+        )
+    }
+
+    pub fn fix_with_options_and_preferred_track(
+        &mut self,
+        item: &mut DanmakuItem,
+        view_width: f32,
+        view_height: f32,
+        flags: &GlobalFlags,
+        display_area: f32,
+        is_me: bool,
+        allow_stacking: bool,
+        allow_scroll_overwrite: bool,
+        preferred_track: Option<usize>,
+    ) -> (bool, DisplacedIndices) {
         // Each type has independent track systems (r2l_tracks, top_tracks, etc.).
         // Respect display_area exactly; display_area=1.0 means full-screen danmaku.
         let effective_height = view_height * display_area;
@@ -166,6 +191,7 @@ impl DanmakuRetainer {
                     is_me,
                     allow_stacking,
                     allow_scroll_overwrite,
+                    preferred_track,
                 ) {
                     Some((row, displaced)) => {
                         item.y = self.margin + row as f32 * track_height;
@@ -186,6 +212,7 @@ impl DanmakuRetainer {
                     is_me,
                     allow_stacking,
                     allow_scroll_overwrite,
+                    preferred_track,
                 ) {
                     Some((row, displaced)) => {
                         item.y = self.margin + row as f32 * track_height;
@@ -198,7 +225,8 @@ impl DanmakuRetainer {
             }
             DanmakuType::FixTop => {
                 self.top_tracks.ensure_track_count(track_count);
-                match select_fixed_track(&entry, &mut self.top_tracks, track_count) {
+                match select_fixed_track(&entry, &mut self.top_tracks, track_count, preferred_track)
+                {
                     Some(row) => {
                         item.y = self.margin + row as f32 * track_height;
                         item.is_shown = true;
@@ -210,7 +238,12 @@ impl DanmakuRetainer {
             }
             DanmakuType::FixBottom => {
                 self.bottom_tracks.ensure_track_count(track_count);
-                match select_fixed_track(&entry, &mut self.bottom_tracks, track_count) {
+                match select_fixed_track(
+                    &entry,
+                    &mut self.bottom_tracks,
+                    track_count,
+                    preferred_track,
+                ) {
                     Some(row) => {
                         item.y = effective_height - (row as f32 + 1.0) * track_height;
                         item.is_shown = true;
@@ -248,8 +281,20 @@ fn select_scroll_track(
     is_me: bool,
     allow_stacking: bool,
     allow_scroll_overwrite: bool,
+    preferred_track: Option<usize>,
 ) -> Option<(usize, DisplacedIndices)> {
     track_data.compact(new_entry.time_ms, new_entry.duration_ms);
+
+    if let Some(row) = preferred_track.filter(|row| *row < track_count) {
+        let can_reuse = allow_stacking
+            || track_data.tracks[row]
+                .iter()
+                .all(|existing| !scroll_entries_collide(new_entry, existing, view_width));
+        if can_reuse {
+            track_data.tracks[row].push(new_entry.clone());
+            return Some((row, SmallVec::new()));
+        }
+    }
 
     if allow_stacking && track_count > 0 {
         let row = stack_track_for(new_entry, track_count);
@@ -357,6 +402,7 @@ fn select_fixed_track(
     new_entry: &TrackEntry,
     track_data: &mut TrackData,
     track_count: usize,
+    preferred_track: Option<usize>,
 ) -> Option<usize> {
     let new_start = new_entry.time_ms;
 
@@ -366,6 +412,13 @@ fn select_fixed_track(
     }
 
     let tracks = &mut track_data.tracks;
+    if let Some(row) = preferred_track.filter(|row| *row < track_count) {
+        let track = &mut tracks[row];
+        if track.is_empty() || new_start >= track.last().expect("track is not empty").end_ms() {
+            track.push(new_entry.clone());
+            return Some(row);
+        }
+    }
     for i in 0..track_count {
         if tracks[i].is_empty() {
             tracks[i].push(new_entry.clone());
