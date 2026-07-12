@@ -41,7 +41,7 @@ points the build phase at an explicit dylib to bundle instead of building.
 
 To skip building Erika (and FFmpeg) from source, set `ERIKA_PREBUILT=1` in the
 app build to download the prebuilt `erika_capi` from a GitHub Release
-(`ERIKA_PREBUILT_TAG` selects the tag, default `v0.1.1`). Supported on macOS,
+(`ERIKA_PREBUILT_TAG` selects the tag, default `v0.1.2`). Supported on macOS,
 Windows, and iOS; any failure falls back to the source build. See
 [`docs/releasing.md`](../../docs/releasing.md).
 

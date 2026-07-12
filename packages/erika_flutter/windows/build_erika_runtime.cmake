@@ -55,7 +55,7 @@ endfunction()
 
 # --- Optional: use a prebuilt erika_capi.dll from a GitHub Release ---
 # Opt in with ERIKA_PREBUILT=1. ERIKA_PREBUILT_TAG selects the release tag
-# (default v0.1.1). On any failure this falls through to the source build below,
+# (default v0.1.2). On any failure this falls through to the source build below,
 # so enabling it never breaks a build. The Windows plugin loads the DLL
 # dynamically, so only erika_capi.dll is required.
 if("$ENV{ERIKA_PREBUILT}" STREQUAL "1")
@@ -64,15 +64,25 @@ if("$ENV{ERIKA_PREBUILT}" STREQUAL "1")
   else()
     set(_erika_cfg_dir "release")
   endif()
-  set(_erika_dll_out "${ERIKA_REPO_ROOT}/target/${_erika_cfg_dir}/erika_capi.dll")
-  if(EXISTS "${_erika_dll_out}")
-    message(STATUS "Erika: reusing prebuilt ${_erika_dll_out}")
-    return()
-  endif()
-  set(_erika_tag "v0.1.1")
+  set(_erika_tag "v0.1.2")
   if(NOT "$ENV{ERIKA_PREBUILT_TAG}" STREQUAL "")
     set(_erika_tag "$ENV{ERIKA_PREBUILT_TAG}")
   endif()
+  set(_erika_dll_out "${ERIKA_REPO_ROOT}/target/${_erika_cfg_dir}/erika_capi.dll")
+  set(_erika_tag_marker "${_erika_dll_out}.prebuilt-tag")
+  if(EXISTS "${_erika_dll_out}" AND EXISTS "${_erika_tag_marker}")
+    file(READ "${_erika_tag_marker}" _erika_cached_tag)
+    string(STRIP "${_erika_cached_tag}" _erika_cached_tag)
+    if("${_erika_cached_tag}" STREQUAL "${_erika_tag}")
+      message(STATUS "Erika: reusing prebuilt ${_erika_tag} -> ${_erika_dll_out}")
+      return()
+    endif()
+  endif()
+  file(REMOVE
+    "${_erika_dll_out}"
+    "${ERIKA_REPO_ROOT}/target/${_erika_cfg_dir}/erika_capi.dll.lib"
+    "${ERIKA_REPO_ROOT}/target/${_erika_cfg_dir}/erika_capi.lib"
+    "${_erika_tag_marker}")
   set(_erika_url
     "https://github.com/AimesSoft/Erika/releases/download/${_erika_tag}/erika-capi-windows-x64.zip")
   set(_erika_work "${ERIKA_REPO_ROOT}/target/erika-prebuilt-windows")
@@ -101,6 +111,7 @@ if("$ENV{ERIKA_PREBUILT}" STREQUAL "1")
         endif()
       endforeach()
       if(EXISTS "${_erika_dll_out}")
+        file(WRITE "${_erika_tag_marker}" "${_erika_tag}\n")
         message(STATUS "Erika: installed prebuilt ${_erika_tag} -> ${_erika_dll_out}")
         return()
       endif()
@@ -109,6 +120,18 @@ if("$ENV{ERIKA_PREBUILT}" STREQUAL "1")
   else()
     message(WARNING "Erika: prebuilt download failed (${_erika_dl}); building from source")
   endif()
+  file(REMOVE "${_erika_tag_marker}")
+else()
+  # A source build replaces any DLL previously installed by the prebuilt path.
+  # Drop its tag marker so a later prebuilt build cannot mistake the source DLL
+  # for the cached release artifact.
+  if(ERIKA_BUILD_CONFIG STREQUAL "Debug")
+    set(_erika_source_cfg_dir "debug")
+  else()
+    set(_erika_source_cfg_dir "release")
+  endif()
+  file(REMOVE
+    "${ERIKA_REPO_ROOT}/target/${_erika_source_cfg_dir}/erika_capi.dll.prebuilt-tag")
 endif()
 
 erika_native_deps_ready(ERIKA_NATIVE_DEPS_READY)

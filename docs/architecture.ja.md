@@ -71,7 +71,7 @@ cargo run -p xtask -- deps status
 ## 字幕システム
 
 - **Parsing**: SRT、WebVTT、ASS timeline parsing。embedded / external subtitle track を扱い、external track は runtime で追加・削除できます。
-- **libass renderer**: static link で既定有効。ASS script を受け取り、`ass_render_frame` を呼び、alpha plane を Erika の overlay system に取り込みます。Apple platform では CoreText font provider を使います。
+- **libass renderer**: static link で既定有効。ASS script を受け取り、`ass_render_frame` を呼び、alpha plane を Erika の overlay system に取り込みます。macOS では CoreText font provider を使い、iOS では Erika に内蔵した Droid Sans Fallback を memory font として登録して、app からアクセスできない system font path を避けます。
 - **SubtitleRendererCore**: changed / unchanged frame を追跡し、不要な GPU upload を避ける renderer-facing boundary です。
 
 ## 弾幕システム

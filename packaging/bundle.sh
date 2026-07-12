@@ -12,6 +12,7 @@
 #   <bundle-name>/include/erika.h
 #   <bundle-name>/LICENSE                 (Erika, MPL-2.0)
 #   <bundle-name>/THIRD_PARTY_NOTICES.md  (FFmpeg LGPL etc.)
+#   <bundle-name>/licenses/               (dependency and asset licenses/notices)
 #   <bundle-name>/MANIFEST.txt           (ref/commit/profile/date)
 #
 # Requires `zip` on PATH (install via choco on Windows runners).
@@ -33,7 +34,7 @@ OUT="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"
 
 STAGE_ROOT="$(mktemp -d)"
 STAGE="$STAGE_ROOT/$NAME"
-mkdir -p "$STAGE/lib" "$STAGE/include"
+mkdir -p "$STAGE/lib" "$STAGE/include" "$STAGE/licenses"
 
 for artifact in "$@"; do
   if [ ! -e "$artifact" ]; then
@@ -46,6 +47,17 @@ done
 cp "$ROOT/crates/erika_capi/include/erika.h" "$STAGE/include/erika.h"
 cp "$ROOT/LICENSE" "$STAGE/LICENSE"
 cp "$ROOT/packaging/THIRD_PARTY_NOTICES.md" "$STAGE/THIRD_PARTY_NOTICES.md"
+cp "$ROOT/packaging/LICENSE.Apache-2.0" "$STAGE/licenses/LICENSE.Apache-2.0"
+cp "$ROOT/packaging/LICENSE.LGPL-2.1" "$STAGE/licenses/LICENSE.LGPL-2.1"
+cp "$ROOT/packaging/LICENSE.LGPL-3.0" "$STAGE/licenses/LICENSE.LGPL-3.0"
+cp "$ROOT/packaging/LICENSE.GPL-3.0" "$STAGE/licenses/LICENSE.GPL-3.0"
+cp "$ROOT/packaging/LICENSE.FFmpeg.md" "$STAGE/licenses/LICENSE.FFmpeg.md"
+cp "$ROOT/packaging/LICENSE.libass" "$STAGE/licenses/LICENSE.libass"
+cp "$ROOT/packaging/LICENSE.FreeType" "$STAGE/licenses/LICENSE.FreeType"
+cp "$ROOT/packaging/LICENSE.HarfBuzz" "$STAGE/licenses/LICENSE.HarfBuzz"
+cp "$ROOT/packaging/LICENSE.zlib" "$STAGE/licenses/LICENSE.zlib"
+cp "$ROOT/crates/erika/assets/NOTICE.md" "$STAGE/licenses/NOTICE.Droid-Sans-Fallback.md"
+cp "$ROOT/crates/erika/assets/artcnn/LICENSE.ArtCNN" "$STAGE/licenses/LICENSE.ArtCNN"
 
 commit="${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)}"
 cat > "$STAGE/MANIFEST.txt" <<EOF
@@ -57,7 +69,7 @@ built:   $(date -u +%Y-%m-%dT%H:%M:%SZ)
 profile: ${ERIKA_NATIVE_PROFILE:-lgpl}
 
 Erika is MPL-2.0. Bundled native libraries are statically linked; see
-THIRD_PARTY_NOTICES.md for their licenses and the LGPL relink note.
+THIRD_PARTY_NOTICES.md and licenses/ for their licenses and the LGPL relink note.
 Header: include/erika.h. Reference: docs/capi_reference.md.
 EOF
 
