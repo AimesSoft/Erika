@@ -61,6 +61,11 @@ impl PresentationLayout {
     }
 
     #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
+    pub(crate) fn is_source_upscaled(self) -> bool {
+        self.target_rect[2] > self.source_width
+    }
+
+    #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
     pub(crate) fn video_viewport(self) -> [f32; 4] {
         [self.drawable_width, self.drawable_height, 0.0, 0.0]
     }
@@ -114,6 +119,13 @@ mod tests {
         );
         assert_eq!(layout.overlay_viewport(), [1000.0, 1000.0]);
         assert_eq!(layout.video_viewport(), [1000.0, 1000.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn source_upscaling_query_tracks_presented_width() {
+        assert!(PresentationLayout::aspect_fit(1920, 1080, 3840, 2160).is_source_upscaled());
+        assert!(!PresentationLayout::aspect_fit(1920, 1080, 1920, 1080).is_source_upscaled());
+        assert!(!PresentationLayout::aspect_fit(1920, 1080, 1000, 1000).is_source_upscaled());
     }
 
     #[test]

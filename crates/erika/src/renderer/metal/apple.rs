@@ -527,7 +527,7 @@ impl MetalRendererImpl {
         // The neural doubler only pays off when the video is actually shown
         // larger than its source resolution.
         let upscale_requested = self.upscaler.mode().is_enabled()
-            && layout.target_rect[2] > layout.source_width
+            && layout.is_source_upscaled()
             && matches!(
                 luma.pixelFormat(),
                 MTLPixelFormat::R8Unorm | MTLPixelFormat::R16Unorm
