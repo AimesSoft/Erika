@@ -8,7 +8,7 @@ struct OverlayUniforms {
     tex_rect: vec4<f32>,
     viewport: vec2<f32>,
     overlay_mode: u32,
-    reserved0: u32,
+    output_encoding: u32,
     color: vec4<f32>,
 };
 
@@ -23,20 +23,15 @@ struct VertexOut {
 
 @vertex
 fn erika_overlay_vertex(@builtin(vertex_index) vertex_id: u32) -> VertexOut {
-    var unit_positions = array<vec2<f32>, 4>(
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(1.0, 0.0),
-        vec2<f32>(0.0, 1.0),
-        vec2<f32>(1.0, 1.0),
-    );
-    var tex_coords = array<vec2<f32>, 4>(
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(1.0, 0.0),
-        vec2<f32>(0.0, 1.0),
-        vec2<f32>(1.0, 1.0),
+    // Keep this array-free for SwiftShader GLES 3.0; dynamically indexing a
+    // function-local vec2 array with vertex_index can silently produce no
+    // rasterized primitives on the Android emulator.
+    let unit = vec2<f32>(
+        f32(vertex_id & 1u),
+        f32((vertex_id >> 1u) & 1u),
     );
 
-    let pixel = uniforms.rect.xy + unit_positions[vertex_id] * uniforms.rect.zw;
+    let pixel = uniforms.rect.xy + unit * uniforms.rect.zw;
     let ndc = vec2<f32>(
         pixel.x / max(uniforms.viewport.x, 1.0) * 2.0 - 1.0,
         1.0 - pixel.y / max(uniforms.viewport.y, 1.0) * 2.0,
@@ -44,15 +39,25 @@ fn erika_overlay_vertex(@builtin(vertex_index) vertex_id: u32) -> VertexOut {
 
     var out: VertexOut;
     out.position = vec4<f32>(ndc, 0.0, 1.0);
-    out.tex_coord = uniforms.tex_rect.xy + tex_coords[vertex_id] * uniforms.tex_rect.zw;
+    out.tex_coord = uniforms.tex_rect.xy + unit * uniforms.tex_rect.zw;
     return out;
 }
 
 @fragment
 fn erika_overlay_fragment(in: VertexOut) -> @location(0) vec4<f32> {
     let sampled = textureSample(overlay_texture, overlay_sampler, in.tex_coord);
+    var rgb = select(
+        sampled.rgb,
+        pow(max(sampled.rgb, vec3<f32>(0.0)), vec3<f32>(2.2)),
+        uniforms.output_encoding == 1u,
+    );
     if (uniforms.overlay_mode == 1u) {
-        return vec4<f32>(uniforms.color.rgb, uniforms.color.a * sampled.r);
+        rgb = select(
+            uniforms.color.rgb,
+            pow(max(uniforms.color.rgb, vec3<f32>(0.0)), vec3<f32>(2.2)),
+            uniforms.output_encoding == 1u,
+        );
+        return vec4<f32>(rgb, uniforms.color.a * sampled.r);
     }
-    return sampled;
+    return vec4<f32>(rgb, sampled.a);
 }

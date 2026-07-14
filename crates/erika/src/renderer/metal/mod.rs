@@ -15,6 +15,11 @@ use crate::renderer::pipeline::{
 };
 use crate::trace;
 
+pub use crate::renderer::output::OutputMode as MetalOutputMode;
+use crate::renderer::output::{
+    ActiveOutputEncoding, OutputFallbackReason, OutputRuntimeStatus, OutputSurfaceFormat,
+};
+
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod apple;
 // Public for integration tests (numeric verification against ONNX
@@ -61,6 +66,7 @@ pub struct MetalRenderer {
     current_media_time: Duration,
     current_generation: u64,
     upload_counter: u64,
+    output_mode: MetalOutputMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -78,81 +84,59 @@ impl Default for MetalRendererConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum MetalOutputMode {
-    Sdr,
-    AppleEdr { headroom: f32 },
+#[allow(dead_code)]
+pub(crate) fn metal_drawable_pixel_format(mode: MetalOutputMode) -> MetalDrawablePixelFormat {
+    match mode {
+        MetalOutputMode::Sdr => MetalDrawablePixelFormat::Bgra8Unorm,
+        MetalOutputMode::AppleEdr { .. } | MetalOutputMode::ExtendedLinear { .. } => {
+            MetalDrawablePixelFormat::Rgba16Float
+        }
+    }
 }
 
-impl MetalOutputMode {
-    pub fn apple_edr(headroom: f32) -> Self {
-        Self::AppleEdr {
-            headroom: headroom.max(1.0),
+#[allow(dead_code)]
+pub(crate) fn metal_target_color(
+    mode: MetalOutputMode,
+    source: SourceColorState,
+) -> crate::renderer::pipeline::TargetColorState {
+    match mode {
+        MetalOutputMode::Sdr => {
+            crate::renderer::pipeline::TargetColorState::sdr(ColorPrimaries::Bt709)
         }
-    }
+        MetalOutputMode::AppleEdr { headroom } | MetalOutputMode::ExtendedLinear { headroom } => {
+            #[cfg(target_os = "ios")]
+            {
+                let _ = source;
+                let headroom = headroom.max(1.0);
+                return crate::renderer::pipeline::TargetColorState {
+                    primaries: ColorPrimaries::Bt709,
+                    transfer: TransferFunction::Srgb,
+                    peak_nits: 100.0 * headroom,
+                    reference_white_nits: 100.0,
+                    edr_headroom: headroom,
+                };
+            }
 
-    pub fn pixel_format(self) -> MetalDrawablePixelFormat {
-        match self {
-            Self::Sdr => MetalDrawablePixelFormat::Bgra8Unorm,
-            Self::AppleEdr { .. } => MetalDrawablePixelFormat::Rgba16Float,
-        }
-    }
-
-    pub fn is_edr(self) -> bool {
-        matches!(self, Self::AppleEdr { .. })
-    }
-
-    pub fn target_color(self) -> crate::renderer::pipeline::TargetColorState {
-        self.target_color_for_source(SourceColorState::default())
-    }
-
-    pub fn target_color_for_source(
-        self,
-        source: SourceColorState,
-    ) -> crate::renderer::pipeline::TargetColorState {
-        match self {
-            Self::Sdr => crate::renderer::pipeline::TargetColorState::sdr(ColorPrimaries::Bt709),
-            Self::AppleEdr { headroom } => {
-                #[cfg(target_os = "ios")]
-                {
-                    let _ = source;
-                    let headroom = headroom.max(1.0);
-                    return crate::renderer::pipeline::TargetColorState {
-                        primaries: ColorPrimaries::Bt709,
-                        transfer: TransferFunction::Srgb,
-                        peak_nits: 100.0 * headroom,
-                        reference_white_nits: 100.0,
-                        edr_headroom: headroom,
-                    };
+            #[cfg(not(target_os = "ios"))]
+            {
+                let primaries = match (source.transfer, source.primaries) {
+                    (TransferFunction::Pq, ColorPrimaries::Unknown) => ColorPrimaries::Bt2020,
+                    (TransferFunction::Pq, primaries) => primaries,
+                    _ => ColorPrimaries::Bt709,
+                };
+                let mut target =
+                    crate::renderer::pipeline::TargetColorState::apple_edr(primaries, headroom);
+                if matches!(source.transfer, TransferFunction::Pq) {
+                    target.transfer = TransferFunction::Pq;
+                    target.peak_nits = 10_000.0;
+                    target.reference_white_nits = 203.0;
+                } else {
+                    target.peak_nits = 100.0 * headroom.max(1.0);
+                    target.reference_white_nits = 100.0;
                 }
-
-                #[cfg(not(target_os = "ios"))]
-                {
-                    let primaries = match (source.transfer, source.primaries) {
-                        (TransferFunction::Pq, ColorPrimaries::Unknown) => ColorPrimaries::Bt2020,
-                        (TransferFunction::Pq, primaries) => primaries,
-                        _ => ColorPrimaries::Bt709,
-                    };
-                    let mut target =
-                        crate::renderer::pipeline::TargetColorState::apple_edr(primaries, headroom);
-                    if matches!(source.transfer, TransferFunction::Pq) {
-                        target.transfer = TransferFunction::Pq;
-                        target.peak_nits = 10_000.0;
-                        target.reference_white_nits = 203.0;
-                    } else {
-                        target.peak_nits = 100.0 * headroom.max(1.0);
-                        target.reference_white_nits = 100.0;
-                    }
-                    target
-                }
+                target
             }
         }
-    }
-}
-
-impl Default for MetalOutputMode {
-    fn default() -> Self {
-        Self::Sdr
     }
 }
 
@@ -381,6 +365,7 @@ impl MetalRenderer {
                 current_media_time: Duration::ZERO,
                 current_generation: 1,
                 upload_counter: 0,
+                output_mode: _config.output_mode,
             })
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios")))]
@@ -666,6 +651,7 @@ impl RendererBackend for MetalRenderer {
     }
 
     fn clear_current_frame(&mut self) -> Result<()> {
+        self.current_frame = None;
         self.current_frame_visible = false;
         self.current_media_time = Duration::ZERO;
         self.current_generation = 1;
@@ -705,7 +691,12 @@ impl RendererBackend for MetalRenderer {
 
     fn upload_player_frame(&mut self, frame: &PlayerVideoFrame) -> Result<()> {
         let started = std::time::Instant::now();
-        let imported = self.import_player_frame(&frame.frame)?;
+        let decoded = frame.frame.decoded_frame().ok_or_else(|| {
+            PlayerError::Renderer(
+                "Metal renderer received a non-VideoToolbox hardware payload".to_string(),
+            )
+        })?;
+        let imported = self.import_player_frame(decoded)?;
         self.current_frame = Some(imported);
         self.current_frame_visible = true;
         self.current_media_time = frame.pts.unwrap_or(frame.media_time);
@@ -854,6 +845,39 @@ impl RendererBackend for MetalRenderer {
         }
     }
 
+    fn output_status(&self) -> OutputRuntimeStatus {
+        let stats = self.stats();
+        let attached = stats.drawable_width > 0 && stats.drawable_height > 0;
+        let extended = attached && self.output_mode.is_edr();
+        OutputRuntimeStatus {
+            requested_mode: self.output_mode,
+            active_encoding: if extended {
+                ActiveOutputEncoding::AppleEdr
+            } else {
+                ActiveOutputEncoding::SdrSrgb
+            },
+            surface_format: if extended {
+                OutputSurfaceFormat::SixteenBitFloat
+            } else {
+                OutputSurfaceFormat::EightBitUnorm
+            },
+            native_data_space: -1,
+            requested_headroom: self.output_mode.headroom(),
+            active_headroom: if extended {
+                self.output_mode.headroom()
+            } else {
+                1.0
+            },
+            active_headroom_known: attached,
+            extended_linear_active: extended,
+            fallback_reason: OutputFallbackReason::None,
+            fallback_count: 0,
+            data_space_failures: 0,
+            headroom_updates: 0,
+            extended_linear_frames: if extended { stats.rendered_frames } else { 0 },
+        }
+    }
+
     fn set_luma_upscaler(&mut self, mode: crate::renderer::pipeline::LumaUpscalerMode) {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
@@ -974,10 +998,13 @@ mod tests {
     fn metal_output_mode_maps_sdr_to_default_drawable_and_target() {
         let output = MetalOutputMode::default();
 
-        assert_eq!(output.pixel_format(), MetalDrawablePixelFormat::Bgra8Unorm);
+        assert_eq!(
+            metal_drawable_pixel_format(output),
+            MetalDrawablePixelFormat::Bgra8Unorm
+        );
         assert!(!output.is_edr());
 
-        let target = output.target_color();
+        let target = metal_target_color(output, SourceColorState::default());
         assert_eq!(target.primaries, ColorPrimaries::Bt709);
         assert_eq!(target.transfer, TransferFunction::Srgb);
         assert_eq!(target.peak_nits, 100.0);
@@ -988,10 +1015,13 @@ mod tests {
     fn metal_output_mode_maps_apple_edr_to_float_drawable_and_headroom_target() {
         let output = MetalOutputMode::apple_edr(4.0);
 
-        assert_eq!(output.pixel_format(), MetalDrawablePixelFormat::Rgba16Float);
+        assert_eq!(
+            metal_drawable_pixel_format(output),
+            MetalDrawablePixelFormat::Rgba16Float
+        );
         assert!(output.is_edr());
 
-        let target = output.target_color();
+        let target = metal_target_color(output, SourceColorState::default());
         assert_eq!(target.primaries, ColorPrimaries::Bt709);
         assert_eq!(target.transfer, TransferFunction::Srgb);
         assert_eq!(target.peak_nits, 400.0);
@@ -1005,7 +1035,7 @@ mod tests {
         let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq)
             .nominal_peak_nits(1200.0);
 
-        let target = output.target_color_for_source(source);
+        let target = metal_target_color(output, source);
 
         assert_eq!(target.primaries, ColorPrimaries::Bt2020);
         assert_eq!(target.transfer, TransferFunction::Pq);
@@ -1016,7 +1046,10 @@ mod tests {
 
     #[test]
     fn metal_output_mode_clamps_edr_headroom_to_one() {
-        let target = MetalOutputMode::apple_edr(0.25).target_color();
+        let target = metal_target_color(
+            MetalOutputMode::apple_edr(0.25),
+            SourceColorState::default(),
+        );
 
         assert_eq!(target.peak_nits, 100.0);
         assert_eq!(target.reference_white_nits, 100.0);

@@ -1,10 +1,15 @@
-use std::time::Duration;
 #[cfg(feature = "libass")]
-use std::{ffi::CStr, ptr::NonNull};
+use std::{
+    collections::HashSet,
+    ffi::{CStr, CString},
+    ptr::NonNull,
+    sync::Mutex,
+};
+use std::{sync::Arc, time::Duration};
 
 use thiserror::Error;
 
-#[cfg(all(feature = "libass", target_os = "ios"))]
+#[cfg(all(feature = "libass", any(target_os = "ios", target_os = "android")))]
 use crate::NIPAPLAY_FALLBACK_FONT;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -29,6 +34,62 @@ pub enum SubtitleError {
 }
 
 pub type Result<T> = std::result::Result<T, SubtitleError>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubtitleFontAttachment {
+    pub name: String,
+    pub mime_type: Option<String>,
+    pub families: Vec<String>,
+    pub data: Arc<[u8]>,
+}
+
+impl SubtitleFontAttachment {
+    pub fn new(
+        name: impl Into<String>,
+        mime_type: Option<String>,
+        families: Vec<String>,
+        data: impl Into<Arc<[u8]>>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            mime_type,
+            families,
+            data: data.into(),
+        }
+    }
+
+    pub fn byte_len(&self) -> usize {
+        self.data.len()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssTrackResources {
+    pub source_stream_index: i64,
+    pub codec_private: Arc<[u8]>,
+    pub fonts: Arc<[SubtitleFontAttachment]>,
+}
+
+impl AssTrackResources {
+    pub fn new(
+        source_stream_index: i64,
+        codec_private: impl Into<Arc<[u8]>>,
+        fonts: impl Into<Arc<[SubtitleFontAttachment]>>,
+    ) -> Self {
+        Self {
+            source_stream_index,
+            codec_private: codec_private.into(),
+            fonts: fonts.into(),
+        }
+    }
+
+    pub fn font_bytes(&self) -> usize {
+        self.fonts
+            .iter()
+            .map(SubtitleFontAttachment::byte_len)
+            .sum()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubtitleTrackSource {
@@ -153,6 +214,7 @@ pub struct DecodedSubtitleFrame {
     pub text: Vec<SubtitleTextSegment>,
     pub bitmap: SubtitleFrame,
     pub forced: bool,
+    pub ass_track: Option<Arc<AssTrackResources>>,
 }
 
 impl DecodedSubtitleFrame {
@@ -167,6 +229,7 @@ impl DecodedSubtitleFrame {
                 planes: Vec::new(),
             },
             forced: false,
+            ass_track: None,
         }
     }
 
@@ -189,6 +252,17 @@ impl DecodedSubtitleFrame {
     pub fn with_track_id(mut self, track_id: i64) -> Self {
         self.track_id = track_id;
         self
+    }
+
+    pub fn with_ass_track(mut self, resources: Option<Arc<AssTrackResources>>) -> Self {
+        self.ass_track = resources;
+        self
+    }
+
+    pub fn has_ass_chunks(&self) -> bool {
+        self.text
+            .iter()
+            .any(|segment| segment.format == SubtitleTextFormat::Ass && !segment.text.is_empty())
     }
 
     pub fn has_text(&self) -> bool {
@@ -544,10 +618,20 @@ mod libass_ffi {
         pub image_type: AssImageType,
     }
 
+    pub type ErikaAssLogSink =
+        unsafe extern "C" fn(opaque: *mut c_void, level: c_int, message: *const c_char);
+
+    #[repr(C)]
+    #[derive(Debug)]
+    pub struct ErikaAssLogBridge {
+        pub sink: Option<ErikaAssLogSink>,
+        pub opaque: *mut c_void,
+    }
+
     unsafe extern "C" {
         pub fn ass_library_init() -> *mut AssLibrary;
         pub fn ass_library_done(library: *mut AssLibrary);
-        #[cfg(target_os = "ios")]
+        pub fn ass_set_extract_fonts(library: *mut AssLibrary, extract: c_int);
         pub fn ass_add_font(
             library: *mut AssLibrary,
             name: *const c_char,
@@ -558,6 +642,7 @@ mod libass_ffi {
         pub fn ass_renderer_done(renderer: *mut AssRenderer);
         pub fn ass_set_frame_size(renderer: *mut AssRenderer, width: c_int, height: c_int);
         pub fn ass_set_storage_size(renderer: *mut AssRenderer, width: c_int, height: c_int);
+        pub fn ass_set_font_scale(renderer: *mut AssRenderer, font_scale: f64);
         pub fn ass_set_fonts(
             renderer: *mut AssRenderer,
             default_font: *const c_char,
@@ -577,6 +662,16 @@ mod libass_ffi {
             buffer_size: size_t,
             codepage: *const c_char,
         ) -> *mut AssTrack;
+        pub fn ass_new_track(library: *mut AssLibrary) -> *mut AssTrack;
+        pub fn ass_process_codec_private(track: *mut AssTrack, data: *const c_char, size: c_int);
+        pub fn ass_process_chunk(
+            track: *mut AssTrack,
+            data: *const c_char,
+            size: c_int,
+            timecode: c_longlong,
+            duration: c_longlong,
+        );
+        pub fn ass_flush_events(track: *mut AssTrack);
         pub fn ass_free_track(track: *mut AssTrack);
         pub fn ass_render_frame(
             renderer: *mut AssRenderer,
@@ -584,6 +679,10 @@ mod libass_ffi {
             now: c_longlong,
             detect_change: *mut c_int,
         ) -> *mut AssImage;
+        pub fn erika_ass_install_log_bridge(
+            library: *mut AssLibrary,
+            bridge: *mut ErikaAssLogBridge,
+        );
     }
 }
 
@@ -671,27 +770,51 @@ impl LibassRenderPlan {
 #[cfg(feature = "libass")]
 #[derive(Debug)]
 pub struct LibassSubtitleRenderer {
-    library: NonNull<libass_ffi::AssLibrary>,
-    renderer: NonNull<libass_ffi::AssRenderer>,
+    runtime: LibassRuntime,
     track: NonNull<libass_ffi::AssTrack>,
     config: LibassRenderConfig,
+    font_scale: f64,
 }
 
 #[cfg(feature = "libass")]
-impl LibassSubtitleRenderer {
-    pub fn from_ass_script(script: impl AsRef<[u8]>, config: LibassRenderConfig) -> Result<Self> {
-        let script = script.as_ref();
-        if script.is_empty() {
-            return Err(SubtitleError::Libass("ASS script is empty".to_string()));
-        }
+#[derive(Debug)]
+struct LibassRuntime {
+    library: NonNull<libass_ffi::AssLibrary>,
+    renderer: NonNull<libass_ffi::AssRenderer>,
+    _log_context: Box<LibassLogContext>,
+    _log_bridge: Box<libass_ffi::ErikaAssLogBridge>,
+}
 
-        let mut script = script.to_vec();
+#[cfg(feature = "libass")]
+#[derive(Debug)]
+struct LibassLogContext {
+    track_id: i64,
+    seen: Mutex<HashSet<String>>,
+}
+
+#[cfg(feature = "libass")]
+impl LibassRuntime {
+    fn new(
+        track_id: i64,
+        fonts: &[SubtitleFontAttachment],
+        config: LibassRenderConfig,
+    ) -> Result<Self> {
         unsafe {
             let library = NonNull::new(libass_ffi::ass_library_init()).ok_or_else(|| {
                 SubtitleError::Libass("failed to initialize libass library".to_string())
             })?;
-
+            let mut log_context = Box::new(LibassLogContext {
+                track_id,
+                seen: Mutex::new(HashSet::new()),
+            });
+            let mut log_bridge = Box::new(libass_ffi::ErikaAssLogBridge {
+                sink: Some(libass_log_sink),
+                opaque: (&mut *log_context as *mut LibassLogContext).cast(),
+            });
+            libass_ffi::erika_ass_install_log_bridge(library.as_ptr(), &mut *log_bridge);
+            libass_ffi::ass_set_extract_fonts(library.as_ptr(), 1);
             add_bundled_ass_fallback_font(library.as_ptr());
+            add_attached_ass_fonts(library.as_ptr(), track_id, fonts);
 
             let Some(renderer) = NonNull::new(libass_ffi::ass_renderer_init(library.as_ptr()))
             else {
@@ -700,7 +823,6 @@ impl LibassSubtitleRenderer {
                     "failed to initialize libass renderer".to_string(),
                 ));
             };
-
             libass_ffi::ass_set_fonts(
                 renderer.as_ptr(),
                 std::ptr::null(),
@@ -714,27 +836,142 @@ impl LibassSubtitleRenderer {
                 config.glyph_cache_limit,
                 config.bitmap_cache_limit_mb,
             );
+            Ok(Self {
+                library,
+                renderer,
+                _log_context: log_context,
+                _log_bridge: log_bridge,
+            })
+        }
+    }
+}
 
+#[cfg(feature = "libass")]
+impl Drop for LibassRuntime {
+    fn drop(&mut self) {
+        unsafe {
+            libass_ffi::ass_renderer_done(self.renderer.as_ptr());
+            libass_ffi::ass_library_done(self.library.as_ptr());
+        }
+    }
+}
+
+#[cfg(feature = "libass")]
+impl LibassSubtitleRenderer {
+    pub fn from_ass_script(script: impl AsRef<[u8]>, config: LibassRenderConfig) -> Result<Self> {
+        let script = script.as_ref();
+        if script.is_empty() {
+            return Err(SubtitleError::Libass("ASS script is empty".to_string()));
+        }
+
+        let mut script = script.to_vec();
+        let runtime = LibassRuntime::new(-1, &[], config)?;
+        unsafe {
             let Some(track) = NonNull::new(libass_ffi::ass_read_memory(
-                library.as_ptr(),
+                runtime.library.as_ptr(),
                 script.as_mut_ptr().cast(),
                 script.len(),
                 std::ptr::null(),
             )) else {
-                libass_ffi::ass_renderer_done(renderer.as_ptr());
-                libass_ffi::ass_library_done(library.as_ptr());
                 return Err(SubtitleError::Libass(
                     "failed to parse ASS script with libass".to_string(),
                 ));
             };
 
             Ok(Self {
-                library,
-                renderer,
+                runtime,
                 track,
                 config,
+                font_scale: 1.0,
             })
         }
+    }
+
+    pub fn from_ass_track(
+        track_id: i64,
+        resources: &AssTrackResources,
+        config: LibassRenderConfig,
+    ) -> Result<Self> {
+        if resources.codec_private.is_empty() {
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "subtitle_ass_track",
+                    "stage": "codec_private_missing",
+                    "trackId": track_id,
+                    "sourceStreamIndex": resources.source_stream_index,
+                })
+                .to_string(),
+            );
+            return Err(SubtitleError::Libass(
+                "ASS CodecPrivate is empty".to_string(),
+            ));
+        }
+        let private_size = i32::try_from(resources.codec_private.len()).map_err(|_| {
+            SubtitleError::Libass("ASS CodecPrivate exceeds libass integer range".to_string())
+        })?;
+        let runtime = LibassRuntime::new(track_id, &resources.fonts, config)?;
+        unsafe {
+            let track = NonNull::new(libass_ffi::ass_new_track(runtime.library.as_ptr()))
+                .ok_or_else(|| SubtitleError::Libass("failed to allocate ASS track".to_string()))?;
+            libass_ffi::ass_process_codec_private(
+                track.as_ptr(),
+                resources.codec_private.as_ptr().cast(),
+                private_size,
+            );
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "subtitle_ass_track",
+                    "stage": "loaded",
+                    "trackId": track_id,
+                    "sourceStreamIndex": resources.source_stream_index,
+                    "headerBytes": resources.codec_private.len(),
+                    "fontCount": resources.fonts.len(),
+                    "fontBytes": resources.font_bytes(),
+                })
+                .to_string(),
+            );
+            Ok(Self {
+                runtime,
+                track,
+                config,
+                font_scale: 1.0,
+            })
+        }
+    }
+
+    pub fn process_chunk(
+        &mut self,
+        chunk: &str,
+        start: Duration,
+        end: Option<Duration>,
+    ) -> Result<()> {
+        if chunk.is_empty() {
+            return Ok(());
+        }
+        let chunk_size = i32::try_from(chunk.len()).map_err(|_| {
+            SubtitleError::Libass("ASS event chunk exceeds libass integer range".to_string())
+        })?;
+        let start_ms = duration_to_millis_i64(start);
+        let end_ms = end.map(duration_to_millis_i64).unwrap_or(i64::MAX);
+        let duration_ms = end_ms.saturating_sub(start_ms).max(1);
+        unsafe {
+            libass_ffi::ass_process_chunk(
+                self.track.as_ptr(),
+                chunk.as_ptr().cast(),
+                chunk_size,
+                start_ms,
+                duration_ms,
+            );
+        }
+        Ok(())
+    }
+
+    pub fn flush_events(&mut self) {
+        unsafe { libass_ffi::ass_flush_events(self.track.as_ptr()) };
+    }
+
+    pub fn set_font_scale(&mut self, scale: f64) {
+        self.font_scale = normalize_ass_font_scale(scale);
     }
 
     pub fn config(&self) -> LibassRenderConfig {
@@ -751,8 +988,6 @@ impl Drop for LibassSubtitleRenderer {
     fn drop(&mut self) {
         unsafe {
             libass_ffi::ass_free_track(self.track.as_ptr());
-            libass_ffi::ass_renderer_done(self.renderer.as_ptr());
-            libass_ffi::ass_library_done(self.library.as_ptr());
         }
     }
 }
@@ -772,17 +1007,26 @@ impl SubtitleRenderer for LibassSubtitleRenderer {
         let timestamp_ms = duration_to_millis_i64(request.pts);
 
         unsafe {
-            libass_ffi::ass_set_frame_size(self.renderer.as_ptr(), frame_width, frame_height);
-            libass_ffi::ass_set_storage_size(self.renderer.as_ptr(), storage_width, storage_height);
+            libass_ffi::ass_set_frame_size(
+                self.runtime.renderer.as_ptr(),
+                frame_width,
+                frame_height,
+            );
+            libass_ffi::ass_set_storage_size(
+                self.runtime.renderer.as_ptr(),
+                storage_width,
+                storage_height,
+            );
+            libass_ffi::ass_set_font_scale(self.runtime.renderer.as_ptr(), self.font_scale);
             libass_ffi::ass_set_cache_limits(
-                self.renderer.as_ptr(),
+                self.runtime.renderer.as_ptr(),
                 self.config.glyph_cache_limit,
                 self.config.bitmap_cache_limit_mb,
             );
 
             let mut changed = 0;
             let images = libass_ffi::ass_render_frame(
-                self.renderer.as_ptr(),
+                self.runtime.renderer.as_ptr(),
                 self.track.as_ptr(),
                 timestamp_ms,
                 &mut changed,
@@ -1393,16 +1637,16 @@ fn escape_ass_text(value: &str) -> String {
 
 const DEFAULT_ASS_FONT_SIZE: f64 = 48.0;
 const DEFAULT_ASS_OUTLINE: f64 = 2.0;
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "android"))]
 const DEFAULT_ASS_FONT_FAMILY: &str = "Droid Sans Fallback";
 #[cfg(target_os = "macos")]
 const DEFAULT_ASS_FONT_FAMILY: &str = "PingFang SC";
-#[cfg(not(any(target_os = "ios", target_os = "macos")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_os = "macos")))]
 const DEFAULT_ASS_FONT_FAMILY: &str = "Arial";
 
 #[cfg(feature = "libass")]
 fn default_ass_font_provider() -> libc::c_int {
-    if cfg!(target_os = "ios") {
+    if cfg!(any(target_os = "ios", target_os = "android")) {
         ASS_FONTPROVIDER_NONE
     } else if cfg!(target_os = "macos") {
         ASS_FONTPROVIDER_CORETEXT
@@ -1413,7 +1657,7 @@ fn default_ass_font_provider() -> libc::c_int {
 
 #[cfg(feature = "libass")]
 fn default_ass_font_family_cstr() -> &'static CStr {
-    if cfg!(target_os = "ios") {
+    if cfg!(any(target_os = "ios", target_os = "android")) {
         c"Droid Sans Fallback"
     } else if cfg!(target_os = "macos") {
         c"PingFang SC"
@@ -1422,7 +1666,112 @@ fn default_ass_font_family_cstr() -> &'static CStr {
     }
 }
 
-#[cfg(all(feature = "libass", target_os = "ios"))]
+#[cfg(feature = "libass")]
+unsafe extern "C" fn libass_log_sink(
+    opaque: *mut libc::c_void,
+    level: libc::c_int,
+    message: *const libc::c_char,
+) {
+    if opaque.is_null() || message.is_null() || level > 5 {
+        return;
+    }
+    let context = unsafe { &*(opaque.cast::<LibassLogContext>()) };
+    let message = unsafe { CStr::from_ptr(message) }
+        .to_string_lossy()
+        .trim()
+        .to_string();
+    if message.is_empty() {
+        return;
+    }
+    let lowercase = message.to_ascii_lowercase();
+    let stage = if lowercase.contains("no style named") {
+        "missing_style"
+    } else if lowercase.contains("failed to find any fallback")
+        || lowercase.contains("glyph") && lowercase.contains("not found")
+    {
+        "missing_font"
+    } else if lowercase.contains("using default font") || lowercase.contains("using default family")
+    {
+        "font_fallback"
+    } else if level <= 2 {
+        "error"
+    } else {
+        "message"
+    };
+    let key = format!("{level}:{message}");
+    let Ok(mut seen) = context.seen.lock() else {
+        return;
+    };
+    if !seen.insert(key) {
+        return;
+    }
+    drop(seen);
+    crate::trace::diagnostic(
+        serde_json::json!({
+            "event": "subtitle_libass",
+            "stage": stage,
+            "trackId": context.track_id,
+            "level": level,
+            "message": message,
+        })
+        .to_string(),
+    );
+}
+
+#[cfg(feature = "libass")]
+unsafe fn add_attached_ass_fonts(
+    library: *mut libass_ffi::AssLibrary,
+    track_id: i64,
+    fonts: &[SubtitleFontAttachment],
+) {
+    for font in fonts {
+        let Ok(data_size) = i32::try_from(font.data.len()) else {
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "subtitle_font_attachment",
+                    "stage": "rejected",
+                    "trackId": track_id,
+                    "name": font.name,
+                    "bytes": font.data.len(),
+                    "reason": "font exceeds libass integer range",
+                })
+                .to_string(),
+            );
+            continue;
+        };
+        let Ok(name) = CString::new(font.name.as_bytes()) else {
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "subtitle_font_attachment",
+                    "stage": "rejected",
+                    "trackId": track_id,
+                    "name": font.name,
+                    "bytes": font.data.len(),
+                    "reason": "attachment name contains an interior NUL",
+                })
+                .to_string(),
+            );
+            continue;
+        };
+        unsafe {
+            libass_ffi::ass_add_font(library, name.as_ptr(), font.data.as_ptr().cast(), data_size);
+        }
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "subtitle_font_attachment",
+                "stage": "loaded",
+                "trackId": track_id,
+                "name": font.name,
+                "mimeType": font.mime_type,
+                "families": font.families,
+                "bytes": font.data.len(),
+            })
+            .to_string(),
+        );
+    }
+}
+
+#[cfg(all(feature = "libass", any(target_os = "ios", target_os = "android")))]
 unsafe fn add_bundled_ass_fallback_font(library: *mut libass_ffi::AssLibrary) {
     debug_assert!(NIPAPLAY_FALLBACK_FONT.len() <= libc::c_int::MAX as usize);
     unsafe {
@@ -1435,7 +1784,7 @@ unsafe fn add_bundled_ass_fallback_font(library: *mut libass_ffi::AssLibrary) {
     }
 }
 
-#[cfg(all(feature = "libass", not(target_os = "ios")))]
+#[cfg(all(feature = "libass", not(any(target_os = "ios", target_os = "android"))))]
 unsafe fn add_bundled_ass_fallback_font(_library: *mut libass_ffi::AssLibrary) {}
 
 fn normalize_ass_font_scale(scale: f64) -> f64 {
@@ -1560,6 +1909,20 @@ Style: Default,Arial,32,&H00FFFFFF,&H000000FF,&H80000000,&H80000000,0,0,0,0,100,
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,Hello libass
+"#;
+
+    #[cfg(feature = "libass")]
+    const STREAM_ASS_HEADER: &str = r#"[Script Info]
+ScriptType: v4.00+
+PlayResX: 640
+PlayResY: 360
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Sign,Droid Sans Fallback,40,&H00FFFFFF,&H000000FF,&H80000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,5,20,20,24,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 "#;
 
     #[test]
@@ -1992,5 +2355,94 @@ Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,Hello libass
         assert_eq!(bitmaps.color_space, SubtitleBitmapColorSpace::Video);
         assert!(!bitmaps.parts.is_empty());
         assert!(bitmaps.parts.iter().all(SubtitleAlphaBitmap::is_valid));
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_stream_track_preserves_matroska_chunk_and_flushes_on_seek() {
+        let font = SubtitleFontAttachment::new(
+            "subfont.ttf",
+            Some("font/ttf".to_string()),
+            vec!["Droid Sans Fallback".to_string()],
+            Arc::<[u8]>::from(crate::NIPAPLAY_FALLBACK_FONT),
+        );
+        let resources = AssTrackResources::new(
+            2,
+            Arc::<[u8]>::from(STREAM_ASS_HEADER.as_bytes()),
+            Arc::<[SubtitleFontAttachment]>::from(vec![font]),
+        );
+        let raw_chunk = "7,0,Sign,sign,0,0,0,,{\\pos(100,80)\\clip(0,0,300,200)\\t(0,500,\\blur3)\\fad(100,100)}Streamed";
+        let mut renderer =
+            LibassSubtitleRenderer::from_ass_track(2, &resources, LibassRenderConfig::default())
+                .unwrap();
+        renderer
+            .process_chunk(raw_chunk, Duration::ZERO, Some(Duration::from_secs(2)))
+            .unwrap();
+
+        let request = SubtitleRenderRequest::new(Duration::from_millis(500), 640, 360);
+        let SubtitleRenderOutput::Alpha(first) = renderer.render(request).unwrap() else {
+            panic!("stream renderer should produce alpha bitmaps");
+        };
+        assert!(!first.parts.is_empty());
+        assert!(first.parts.iter().all(|part| part.placement.x < 220));
+        assert!(first.parts.iter().all(|part| part.placement.y < 180));
+
+        // Matroska ReadOrder duplicate checking remains enabled, so processing
+        // the same frame twice in one generation must not create a second event.
+        renderer
+            .process_chunk(raw_chunk, Duration::ZERO, Some(Duration::from_secs(2)))
+            .unwrap();
+        let SubtitleRenderOutput::Alpha(duplicate) = renderer.render(request).unwrap() else {
+            panic!("stream renderer should produce alpha bitmaps");
+        };
+        assert_eq!(duplicate.parts, first.parts);
+
+        renderer.flush_events();
+        let SubtitleRenderOutput::Alpha(flushed) = renderer.render(request).unwrap() else {
+            panic!("stream renderer should produce alpha bitmaps");
+        };
+        assert!(flushed.parts.is_empty());
+
+        // A seek/generation reset flushes the duplicate cache as well.
+        renderer
+            .process_chunk(raw_chunk, Duration::ZERO, Some(Duration::from_secs(2)))
+            .unwrap();
+        let SubtitleRenderOutput::Alpha(after_seek) = renderer.render(request).unwrap() else {
+            panic!("stream renderer should produce alpha bitmaps");
+        };
+        assert!(!after_seek.parts.is_empty());
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_log_bridge_captures_missing_style_exactly() {
+        let resources = AssTrackResources::new(
+            2,
+            Arc::<[u8]>::from(STREAM_ASS_HEADER.as_bytes()),
+            Arc::<[SubtitleFontAttachment]>::from([]),
+        );
+        let mut renderer =
+            LibassSubtitleRenderer::from_ass_track(2, &resources, LibassRenderConfig::default())
+                .unwrap();
+        renderer
+            .process_chunk(
+                "8,0,Missing Style,,0,0,0,,text",
+                Duration::ZERO,
+                Some(Duration::from_secs(1)),
+            )
+            .unwrap();
+        let _ = renderer
+            .render(SubtitleRenderRequest::new(
+                Duration::from_millis(100),
+                640,
+                360,
+            ))
+            .unwrap();
+
+        let seen = renderer.runtime._log_context.seen.lock().unwrap();
+        assert!(
+            seen.iter()
+                .any(|message| message.contains("no style named"))
+        );
     }
 }

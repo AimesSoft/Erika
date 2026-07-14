@@ -46,10 +46,14 @@ use crate::danmaku::{DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan}
 use crate::ffmpeg::Frame;
 use crate::overlay::OverlayFrame;
 use crate::renderer::metal::MetalRendererConfig;
+use crate::renderer::output::{
+    ActiveOutputEncoding, OutputFallbackReason, OutputRuntimeStatus, OutputSurfaceFormat,
+};
 use crate::renderer::pipeline::{
     Chromaticity, LumaUpscalerMode, PrimariesCoordinates, SourceColorState, TargetColorState,
     VideoRenderPipeline, VideoUniforms, primaries_coordinates,
 };
+use crate::renderer::presentation::PresentationLayout;
 use crate::subtitle::AssColor;
 
 const SDR_SWAPCHAIN_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -478,17 +482,6 @@ struct D3d11DrawRect {
     height: f32,
 }
 
-impl D3d11DrawRect {
-    fn full(width: u32, height: u32) -> Self {
-        Self {
-            x: 0.0,
-            y: 0.0,
-            width: width.max(1) as f32,
-            height: height.max(1) as f32,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct D3d11TexRect {
     x: f32,
@@ -601,6 +594,7 @@ pub struct D3d11Renderer {
     surface: Option<AttachedSurface>,
     current_video: Option<ImportedVideoFrame>,
     danmaku_atlas_cache: Option<D3d11DanmakuAtlasCache>,
+    requested_output_mode: crate::renderer::output::OutputMode,
     upscaler_mode: LumaUpscalerMode,
     hdr10_output_unavailable: bool,
     stats: D3d11RendererStats,
@@ -617,6 +611,7 @@ impl D3d11Renderer {
             surface: None,
             current_video: None,
             danmaku_atlas_cache: None,
+            requested_output_mode: config.output_mode,
             upscaler_mode: config.luma_upscaler,
             hdr10_output_unavailable: false,
             stats: D3d11RendererStats::default(),
@@ -781,9 +776,14 @@ impl D3d11Renderer {
                 "d3d11: hardware frame is not a D3D11VA texture".to_string(),
             ));
         };
-        let retained_frame = frame.frame.try_clone_ref().map_err(|error| {
-            PlayerError::Renderer(format!("d3d11: av_frame_ref failed: {error}"))
-        })?;
+        let retained_frame = frame
+            .frame
+            .decoded_frame()
+            .expect("D3D11VA texture originates from a decoded AVFrame")
+            .try_clone_ref()
+            .map_err(|error| {
+                PlayerError::Renderer(format!("d3d11: av_frame_ref failed: {error}"))
+            })?;
         let source_texture = clone_d3d11_texture(texture_ref.raw_texture())?;
         let (texture, import_mode) = self.import_texture_for_current_device(&source_texture)?;
 
@@ -1338,6 +1338,33 @@ impl RendererBackend for D3d11Renderer {
         }
     }
 
+    fn output_status(&self) -> OutputRuntimeStatus {
+        let hdr10_active = self.stats.hdr10_output_active;
+        OutputRuntimeStatus {
+            requested_mode: self.requested_output_mode,
+            active_encoding: if hdr10_active {
+                ActiveOutputEncoding::Hdr10Pq
+            } else {
+                ActiveOutputEncoding::SdrSrgb
+            },
+            surface_format: if hdr10_active {
+                OutputSurfaceFormat::TenBitUnorm
+            } else {
+                OutputSurfaceFormat::EightBitUnorm
+            },
+            native_data_space: -1,
+            requested_headroom: self.requested_output_mode.headroom(),
+            active_headroom: if hdr10_active { 10_000.0 / 203.0 } else { 1.0 },
+            active_headroom_known: self.stats.attached,
+            extended_linear_active: false,
+            fallback_reason: OutputFallbackReason::None,
+            fallback_count: self.stats.hdr10_output_failures,
+            data_space_failures: self.stats.hdr10_output_failures,
+            headroom_updates: self.stats.hdr10_metadata_updates,
+            extended_linear_frames: 0,
+        }
+    }
+
     fn set_luma_upscaler(&mut self, mode: LumaUpscalerMode) {
         self.upscaler_mode = mode;
     }
@@ -1601,29 +1628,14 @@ fn aspect_fit_rect(
     target_width: u32,
     target_height: u32,
 ) -> D3d11DrawRect {
-    if source_width == 0 || source_height == 0 || target_width == 0 || target_height == 0 {
-        return D3d11DrawRect::full(target_width, target_height);
-    }
-    let target_w = target_width as f32;
-    let target_h = target_height as f32;
-    let source_aspect = source_width as f32 / source_height as f32;
-    let target_aspect = target_w / target_h;
-    if source_aspect > target_aspect {
-        let height = target_w / source_aspect;
-        D3d11DrawRect {
-            x: 0.0,
-            y: (target_h - height) * 0.5,
-            width: target_w,
-            height,
-        }
-    } else {
-        let width = target_h * source_aspect;
-        D3d11DrawRect {
-            x: (target_w - width) * 0.5,
-            y: 0.0,
-            width,
-            height: target_h,
-        }
+    let rect =
+        PresentationLayout::aspect_fit(source_width, source_height, target_width, target_height)
+            .presentation_rect();
+    D3d11DrawRect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
     }
 }
 

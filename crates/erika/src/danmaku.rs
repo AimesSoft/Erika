@@ -296,7 +296,9 @@ impl DanmakuTimeline {
         let trimmed = input.trim_start();
         if trimmed.starts_with('<') {
             Self::from_bilibili_xml(input)
-        } else if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        } else if trimmed.starts_with('{') {
+            Self::from_json(input).or_else(|_| Self::from_json_lines(input))
+        } else if trimmed.starts_with('[') {
             Self::from_json(input)
         } else {
             Self::from_json_lines(input)

@@ -437,12 +437,21 @@ impl TargetColorState {
     }
 
     pub fn apple_edr(primaries: ColorPrimaries, headroom: f32) -> Self {
+        Self::extended_linear(primaries, 203.0, headroom)
+    }
+
+    pub fn extended_linear(
+        primaries: ColorPrimaries,
+        reference_white_nits: f32,
+        headroom: f32,
+    ) -> Self {
+        let reference_white_nits = reference_white_nits.max(1.0);
         let headroom = headroom.max(1.0);
         Self {
             primaries,
             transfer: TransferFunction::Srgb,
-            peak_nits: 203.0 * headroom,
-            reference_white_nits: 203.0,
+            peak_nits: reference_white_nits * headroom,
+            reference_white_nits,
             edr_headroom: headroom,
         }
     }
@@ -626,7 +635,13 @@ pub struct VideoUniforms {
     pub target_transfer: u32,
     pub tone_map: u32,
     pub edr_output: u32,
-    pub reserved0: u32,
+    /// 0 samples Y + interleaved CbCr planes; 1 samples an already converted
+    /// nonlinear RGB texture; 2 samples ArtCNN's packed 2x luma output plus a
+    /// normal CbCr plane; 3 applies that packed luma as detail to an already
+    /// converted nonlinear RGB texture. Packed RGBA texels store the top-left,
+    /// top-right, bottom-left and bottom-right luma subpixels. All modes retain
+    /// the common transfer/gamut/tone-map handling.
+    pub input_mode: u32,
     pub reserved1: u32,
     pub nits: [f32; 4],
     pub luma_coefficients: [f32; 4],
@@ -643,7 +658,7 @@ impl VideoUniforms {
             target_transfer: transfer_code(pipeline.target.transfer),
             tone_map: tone_map_code(pipeline.tone_map.operator),
             edr_output: u32::from(edr_output),
-            reserved0: 0,
+            input_mode: 0,
             reserved1: 0,
             nits: [
                 pipeline.source.nominal_peak_nits,
@@ -654,6 +669,21 @@ impl VideoUniforms {
             luma_coefficients: [luma.kr, luma.kg, luma.kb, 0.0],
             gamut_matrix_rows: pipeline.gamut_matrix().row4s(),
         }
+    }
+
+    pub fn rgb_texture_input(mut self) -> Self {
+        self.input_mode = 1;
+        self
+    }
+
+    pub fn packed_d2s_luma_input(mut self) -> Self {
+        self.input_mode = 2;
+        self
+    }
+
+    pub fn packed_d2s_rgb_detail_input(mut self) -> Self {
+        self.input_mode = 3;
+        self
     }
 }
 

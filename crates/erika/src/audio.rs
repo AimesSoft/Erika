@@ -7,6 +7,8 @@ use thiserror::Error;
 use crate::ffmpeg::{PcmAudioFrame, PcmFormat};
 use crate::trace;
 
+pub(crate) mod spsc;
+
 const RATE_CHANGE_AUDIO_BRIDGE: Duration = Duration::from_millis(80);
 const SOUNDTOUCH_SEQUENCE_MS: i32 = 25;
 const SOUNDTOUCH_SEEK_WINDOW_MS: i32 = 12;
@@ -82,6 +84,36 @@ pub struct AudioClockSnapshot {
     pub read_frames: u64,
     pub written_frames: u64,
     pub underflow_frames: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AudioRecoveryState {
+    #[default]
+    Stable,
+    Disconnected,
+    Recovering,
+    Failed,
+}
+
+impl AudioRecoveryState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Disconnected => "disconnected",
+            Self::Recovering => "recovering",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AudioOutputRuntimeStats {
+    pub recovery_state: AudioRecoveryState,
+    pub last_error_code: i32,
+    pub recovery_attempts: u64,
+    pub recovery_count: u64,
+    pub recovery_failures: u64,
+    pub transition_sequence: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -572,6 +604,9 @@ pub trait AudioOutputBackend {
     fn stats(&self) -> AudioRingBufferStats;
     fn clock_snapshot(&self) -> Option<AudioClockSnapshot> {
         None
+    }
+    fn runtime_stats(&self) -> AudioOutputRuntimeStats {
+        AudioOutputRuntimeStats::default()
     }
 }
 

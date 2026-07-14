@@ -1,7 +1,13 @@
+#[cfg(target_os = "android")]
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+#[cfg(target_os = "android")]
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "android")]
+use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -18,6 +24,8 @@ pub enum SourceError {
     Http(String),
     #[error("unsupported source URI: {0}")]
     Unsupported(String),
+    #[error("invalid owned file descriptor URI: {0}")]
+    InvalidFileDescriptorUri(String),
 }
 
 pub type Result<T> = std::result::Result<T, SourceError>;
@@ -83,6 +91,248 @@ impl MediaSource for LocalFileSource {
             .map_err(|error| SourceError::Io(error.to_string()))?;
         Ok(bytes)
     }
+}
+
+/// A seekable Android content descriptor owned by the media source.
+///
+/// The descriptor is closed automatically when this value is dropped. `offset`
+/// and `length` expose an `AssetFileDescriptor` slice as a zero-based media file.
+#[cfg(target_os = "android")]
+#[derive(Debug)]
+pub struct OwnedFileDescriptorSource {
+    uri: String,
+    file: File,
+    offset: u64,
+    length: Option<u64>,
+}
+
+/// Keeps an Android-owned descriptor registered until a synchronous native
+/// source call either adopts it or returns an error.
+///
+/// Dropping the registration closes the descriptor when no `MediaSource`
+/// consumed it. This closes the ownership gap between JNI validation and the
+/// point where playback constructs `OwnedFileDescriptorSource`.
+#[cfg(target_os = "android")]
+#[derive(Debug)]
+pub struct AndroidOwnedFdRegistration {
+    fd: RawFd,
+}
+
+#[cfg(target_os = "android")]
+impl Drop for AndroidOwnedFdRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut registry) = android_owned_fd_registry().lock() {
+            let _ = registry.remove(&self.fd);
+        }
+    }
+}
+
+/// Registers a descriptor transferred by the Android host for one synchronous
+/// native invocation. `source_from_uri` consumes the registered `File`; if the
+/// invocation fails before that boundary, the returned guard closes it.
+#[cfg(target_os = "android")]
+pub fn register_android_owned_fd(file: File) -> Result<AndroidOwnedFdRegistration> {
+    let fd = file.as_raw_fd();
+    if fd < 0 {
+        return Err(SourceError::InvalidFileDescriptorUri(format!(
+            "negative descriptor {fd}"
+        )));
+    }
+    let mut registry = android_owned_fd_registry()
+        .lock()
+        .map_err(|_| SourceError::Io("Android owned-fd registry mutex poisoned".to_string()))?;
+    if registry.contains_key(&fd) {
+        // The existing entry already owns this raw descriptor. Closing a second
+        // File wrapper here would invalidate that entry, so discard only the
+        // duplicate wrapper and preserve the original ownership.
+        std::mem::forget(file);
+        return Err(SourceError::InvalidFileDescriptorUri(format!(
+            "descriptor {fd} is already awaiting source adoption"
+        )));
+    }
+    registry.insert(fd, file);
+    Ok(AndroidOwnedFdRegistration { fd })
+}
+
+#[cfg(target_os = "android")]
+fn android_owned_fd_registry() -> &'static Mutex<HashMap<RawFd, File>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<RawFd, File>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(target_os = "android")]
+fn take_registered_android_owned_fd(fd: RawFd) -> Option<File> {
+    android_owned_fd_registry().lock().ok()?.remove(&fd)
+}
+
+#[cfg(target_os = "android")]
+impl OwnedFileDescriptorSource {
+    /// Takes ownership of `fd`; callers must not close or reuse it afterwards.
+    ///
+    /// # Safety
+    ///
+    /// `fd` must be a valid, uniquely-owned, seekable descriptor.
+    pub unsafe fn from_owned_fd(
+        fd: RawFd,
+        offset: u64,
+        length: Option<u64>,
+        uri: impl Into<String>,
+    ) -> Result<Self> {
+        if fd < 0 {
+            return Err(SourceError::InvalidFileDescriptorUri(format!(
+                "negative descriptor {fd}"
+            )));
+        }
+        // SAFETY: ownership is transferred by the function contract.
+        let file = unsafe { File::from_raw_fd(fd) };
+        Self::from_owned_file(file, offset, length, uri.into())
+    }
+
+    fn from_owned_file(file: File, offset: u64, length: Option<u64>, uri: String) -> Result<Self> {
+        let metadata = file
+            .metadata()
+            .map_err(|error| SourceError::Io(error.to_string()))?;
+        let length = length.or_else(|| metadata.len().checked_sub(offset));
+        Ok(Self {
+            uri,
+            file,
+            offset,
+            length,
+        })
+    }
+
+    unsafe fn open_uri(uri: &str) -> Result<Self> {
+        let fd = parse_owned_fd(uri)?;
+        // Safe URI dispatch may only consume descriptors registered by the JNI
+        // transferred-fd contract. Never adopt a registry miss by raw number:
+        // that could seize or double-close an unrelated process descriptor.
+        // Direct native callers with unique ownership must use `from_owned_fd`.
+        let file = take_registered_android_owned_fd(fd).ok_or_else(|| {
+            SourceError::InvalidFileDescriptorUri(format!(
+                "{uri} (descriptor was not explicitly transferred)"
+            ))
+        })?;
+        let spec = parse_fd_uri(uri)?;
+        Self::from_owned_file(file, spec.offset, spec.length, uri.to_string())
+    }
+}
+
+#[cfg(target_os = "android")]
+impl MediaSource for OwnedFileDescriptorSource {
+    fn uri(&self) -> &str {
+        &self.uri
+    }
+
+    fn len(&mut self) -> Result<Option<u64>> {
+        Ok(self.length)
+    }
+
+    fn read_range(&mut self, range: ByteRange) -> Result<Vec<u8>> {
+        let length = match self.length {
+            Some(total) if range.start >= total => return Ok(Vec::new()),
+            Some(total) => Some(
+                range
+                    .length
+                    .unwrap_or_else(|| total.saturating_sub(range.start))
+                    .min(total.saturating_sub(range.start)),
+            ),
+            None => range.length,
+        };
+        let absolute_start = self.offset.checked_add(range.start).ok_or_else(|| {
+            SourceError::Io("owned descriptor seek offset overflowed u64".to_string())
+        })?;
+        self.file
+            .seek(SeekFrom::Start(absolute_start))
+            .map_err(|error| SourceError::Io(error.to_string()))?;
+        let mut bytes = Vec::new();
+        match length {
+            Some(length) => (&mut self.file)
+                .take(length)
+                .read_to_end(&mut bytes)
+                .map_err(|error| SourceError::Io(error.to_string()))?,
+            None => self
+                .file
+                .read_to_end(&mut bytes)
+                .map_err(|error| SourceError::Io(error.to_string()))?,
+        };
+        Ok(bytes)
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OwnedFdUri {
+    fd: i32,
+    offset: u64,
+    length: Option<u64>,
+}
+
+#[cfg(any(target_os = "android", test))]
+fn parse_fd_uri(uri: &str) -> Result<OwnedFdUri> {
+    let body = uri
+        .strip_prefix("fd://")
+        .ok_or_else(|| SourceError::InvalidFileDescriptorUri(uri.to_string()))?;
+    let (fd, query) = body.split_once('?').unwrap_or((body, ""));
+    let fd = parse_owned_fd_value(fd, uri)?;
+    let mut offset = None;
+    let mut length = None;
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair
+            .split_once('=')
+            .ok_or_else(|| SourceError::InvalidFileDescriptorUri(uri.to_string()))?;
+        match key {
+            "offset" => {
+                if offset.is_some() {
+                    return Err(SourceError::InvalidFileDescriptorUri(uri.to_string()));
+                }
+                offset = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| SourceError::InvalidFileDescriptorUri(uri.to_string()))?,
+                );
+            }
+            "length" => {
+                if length.is_some() {
+                    return Err(SourceError::InvalidFileDescriptorUri(uri.to_string()));
+                }
+                length = Some(if value.is_empty() || value == "-1" {
+                    None
+                } else {
+                    Some(
+                        value
+                            .parse::<u64>()
+                            .map_err(|_| SourceError::InvalidFileDescriptorUri(uri.to_string()))?,
+                    )
+                });
+            }
+            // Display names/URIs may be appended by the Android host for diagnostics.
+            "name" | "display_uri" => {}
+            _ => return Err(SourceError::InvalidFileDescriptorUri(uri.to_string())),
+        }
+    }
+    Ok(OwnedFdUri {
+        fd,
+        offset: offset.unwrap_or(0),
+        length: length.flatten(),
+    })
+}
+
+#[cfg(target_os = "android")]
+fn parse_owned_fd(uri: &str) -> Result<i32> {
+    let body = uri
+        .strip_prefix("fd://")
+        .ok_or_else(|| SourceError::InvalidFileDescriptorUri(uri.to_string()))?;
+    let fd = body.split_once(['?', '/', '#']).map_or(body, |(fd, _)| fd);
+    parse_owned_fd_value(fd, uri)
+}
+
+#[cfg(any(target_os = "android", test))]
+fn parse_owned_fd_value(value: &str, uri: &str) -> Result<i32> {
+    value
+        .parse::<i32>()
+        .ok()
+        .filter(|fd| *fd >= 0)
+        .ok_or_else(|| SourceError::InvalidFileDescriptorUri(uri.to_string()))
 }
 
 pub struct HttpRangeSource {
@@ -469,15 +719,23 @@ pub fn source_from_uri(uri: &str) -> Result<Box<dyn MediaSource>> {
     source_from_uri_with_hint(uri, MediaSourceHint::Auto)
 }
 
+/// Reads an entire URI through the same MediaSource abstraction used by FFmpeg.
+///
+/// This is intentionally synchronous for small sidecar assets such as danmaku or
+/// subtitle files. On Android it also establishes and completes the ownership
+/// transfer for `fd://` descriptors within the native call.
+pub fn read_uri_to_end(uri: &str) -> Result<Vec<u8>> {
+    let mut source = source_from_uri(uri)?;
+    source.read_range(ByteRange::suffix_from(0))
+}
+
 pub fn source_from_uri_with_hint(
     uri: &str,
     source_hint: MediaSourceHint,
 ) -> Result<Box<dyn MediaSource>> {
     match source_hint {
         MediaSourceHint::Auto => source_from_auto_uri(uri),
-        MediaSourceHint::LocalFile => {
-            Ok(Box::new(LocalFileSource::open(local_path_from_uri(uri))?))
-        }
+        MediaSourceHint::LocalFile => source_from_local_uri(uri),
         MediaSourceHint::Http => {
             if uri.starts_with("http://") || uri.starts_with("https://") {
                 Ok(Box::new(HttpRangeSource::new(uri)))
@@ -489,6 +747,9 @@ pub fn source_from_uri_with_hint(
 }
 
 fn source_from_auto_uri(uri: &str) -> Result<Box<dyn MediaSource>> {
+    if uri.starts_with("fd://") {
+        return source_from_local_uri(uri);
+    }
     if let Some(path) = uri.strip_prefix("file://") {
         return Ok(Box::new(LocalFileSource::open(path)?));
     }
@@ -500,6 +761,23 @@ fn source_from_auto_uri(uri: &str) -> Result<Box<dyn MediaSource>> {
         return Ok(Box::new(LocalFileSource::open(path)?));
     }
     Err(SourceError::Unsupported(uri.to_string()))
+}
+
+fn source_from_local_uri(uri: &str) -> Result<Box<dyn MediaSource>> {
+    if uri.starts_with("fd://") {
+        #[cfg(target_os = "android")]
+        {
+            // SAFETY: accepting this URI is the ownership-transfer boundary.
+            return Ok(Box::new(unsafe {
+                OwnedFileDescriptorSource::open_uri(uri)?
+            }));
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            return Err(SourceError::Unsupported(uri.to_string()));
+        }
+    }
+    Ok(Box::new(LocalFileSource::open(local_path_from_uri(uri))?))
 }
 
 fn local_path_from_uri(uri: &str) -> &str {
@@ -586,6 +864,10 @@ mod tests {
                 .unwrap(),
             b"cde"
         );
+        assert_eq!(
+            read_uri_to_end(&format!("file://{}", path.display())).unwrap(),
+            b"abcdef"
+        );
 
         let _ = std::fs::remove_file(path);
     }
@@ -608,6 +890,54 @@ mod tests {
         assert!(matches!(
             source_from_uri_with_hint("file:///tmp/video.mp4", MediaSourceHint::Http),
             Err(SourceError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn owned_fd_uri_parses_asset_slice() {
+        assert_eq!(
+            parse_fd_uri("fd://42?offset=4096&length=8192").unwrap(),
+            OwnedFdUri {
+                fd: 42,
+                offset: 4096,
+                length: Some(8192),
+            }
+        );
+        assert_eq!(
+            parse_fd_uri("fd://7?length=-1").unwrap(),
+            OwnedFdUri {
+                fd: 7,
+                offset: 0,
+                length: None,
+            }
+        );
+    }
+
+    #[test]
+    fn owned_fd_uri_rejects_invalid_or_ambiguous_values() {
+        for uri in [
+            "fd://-1",
+            "fd://not-a-number",
+            "fd://3?offset=x",
+            "fd://3?offset=1&offset=2",
+            "fd://3?unknown=1",
+        ] {
+            assert!(matches!(
+                parse_fd_uri(uri),
+                Err(SourceError::InvalidFileDescriptorUri(_))
+            ));
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    #[test]
+    fn unregistered_owned_fd_uri_cannot_adopt_a_numeric_descriptor() {
+        let error = unsafe { OwnedFileDescriptorSource::open_uri("fd://2147483647") }
+            .expect_err("an unregistered descriptor must be rejected");
+        assert!(matches!(
+            error,
+            SourceError::InvalidFileDescriptorUri(message)
+                if message.contains("not explicitly transferred")
         ));
     }
 

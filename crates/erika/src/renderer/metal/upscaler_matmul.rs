@@ -28,22 +28,14 @@ use objc2_metal::{
 };
 
 use crate::core::{PlayerError, Result};
+use crate::renderer::artcnn::{
+    ArtCnnExecutionPolicy, ArtCnnModel, ArtCnnModelLayout, CONVOLUTION_TAPS as TAPS,
+    FrameTokenCache, MIDDLE_LAYER_COUNT as MID_LAYERS,
+};
 use crate::renderer::pipeline::LumaUpscalerMode;
 
-const TAPS: usize = 9;
-const MID_LAYERS: usize = 5;
 /// Simdgroups per threadgroup; each handles one output row.
 const SIMDS: usize = 4;
-
-/// Pixel fragments (of 8 px) per simdgroup strip.
-/// `ERIKA_SR_PXF` overrides for tuning experiments.
-fn pxf() -> usize {
-    std::env::var("ERIKA_SR_PXF")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| (1..=8).contains(value))
-        .unwrap_or(8)
-}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -80,7 +72,7 @@ struct MatPool {
     output_format: MTLPixelFormat,
     features: [Retained<ProtocolObject<dyn MTLBuffer>>; 3],
     output: Retained<ProtocolObject<dyn MTLTexture>>,
-    cached_token: Option<u64>,
+    frame_cache: FrameTokenCache,
 }
 
 pub(super) struct Resources {
@@ -110,26 +102,24 @@ fn half(payload: &[u8], index: usize) -> u16 {
 /// `assets/artcnn/export_artcnn.py`) into the matmul layout:
 /// per-tap row-major `CH x CH` matrices, bias outer-product blocks, plus the
 /// shared ones-row and identity fragments.
-fn repack_weights(payload: &[u8], channels: usize) -> (Vec<u16>, MatOffsets) {
+fn repack_weights(payload: &[u8], layout: ArtCnnModelLayout) -> (Vec<u16>, MatOffsets) {
+    let channels = layout.feature_count;
     let slices = channels / 4;
     let one = 0x3C00u16; // 1.0 as f16
 
-    // Source offsets in halfs, mirroring LayerOffsets in the scalar backend.
-    let src_conv0_w = 0;
-    let src_conv0_b = src_conv0_w + slices * TAPS * 4;
+    // The canonical offsets use half4 units; matrix packing indexes halfs.
+    let source = layout.layer_offsets;
+    let src_conv0_w = source.conv0_w as usize * 4;
+    let src_conv0_b = source.conv0_b as usize * 4;
     // Each (out-slice, tap, in-slice) entry is a 4x4 matrix = 16 halfs.
-    let mid_size = slices * TAPS * slices * 16;
     let mut src_mid_w = [0usize; MID_LAYERS];
     let mut src_mid_b = [0usize; MID_LAYERS];
-    let mut cursor = src_conv0_b + channels;
     for layer in 0..MID_LAYERS {
-        src_mid_w[layer] = cursor;
-        cursor += mid_size;
-        src_mid_b[layer] = cursor;
-        cursor += channels;
+        src_mid_w[layer] = source.mid_w[layer] as usize * 4;
+        src_mid_b[layer] = source.mid_b[layer] as usize * 4;
     }
-    let src_conv6_w = cursor;
-    let src_conv6_b = src_conv6_w + TAPS * slices * 16;
+    let src_conv6_w = source.conv6_w as usize * 4;
+    let src_conv6_b = source.conv6_b as usize * 4;
 
     let mut out: Vec<u16> = Vec::new();
     let take = |len: usize, out: &mut Vec<u16>| {
@@ -228,11 +218,11 @@ fn repack_weights(payload: &[u8], channels: usize) -> (Vec<u16>, MatOffsets) {
 
 pub(super) fn build_resources(
     device: &ProtocolObject<dyn MTLDevice>,
-    mode: LumaUpscalerMode,
-    payload: &[u8],
-    channels: usize,
+    model: ArtCnnModel<'_>,
 ) -> Result<Resources> {
-    let (packed, offsets) = repack_weights(payload, channels);
+    let mode = model.mode;
+    let channels = model.layout.feature_count;
+    let (packed, offsets) = repack_weights(model.payload, model.layout);
     let weights = unsafe {
         device.newBufferWithBytes_length_options(
             NonNull::new(packed.as_ptr().cast::<c_void>().cast_mut())
@@ -243,7 +233,7 @@ pub(super) fn build_resources(
     }
     .ok_or_else(|| PlayerError::Renderer("newBufferWithBytes returned nil".to_string()))?;
 
-    let pxf = pxf();
+    let pxf = ArtCnnExecutionPolicy::for_mode(mode).matrix_pixel_fragments;
     let source = MATMUL_SHADER_TEMPLATE
         .replace("{CH}", &channels.to_string())
         .replace("{PXF}", &pxf.to_string())
@@ -328,7 +318,7 @@ fn ensure_pool(
         output_format,
         features: [feature_buffer()?, feature_buffer()?, feature_buffer()?],
         output,
-        cached_token: None,
+        frame_cache: FrameTokenCache::default(),
     });
     Ok(true)
 }
@@ -344,14 +334,10 @@ pub(super) fn encode(
     let width = luma.width();
     let height = luma.height();
     let fresh_pool = ensure_pool(resources, device, width, height, output_format)?;
-    let pool = resources.pool.as_mut().expect("pool built above");
-    if let (Some(token), Some(cached)) = (frame_token, pool.cached_token) {
-        if token == cached {
-            return Ok(pool.output.clone());
-        }
-    }
-    pool.cached_token = frame_token;
     let pool = resources.pool.as_ref().expect("pool built above");
+    if pool.frame_cache.matches(frame_token) {
+        return Ok(pool.output.clone());
+    }
 
     if fresh_pool {
         // The zero border around each feature plane provides the zero padding
@@ -482,8 +468,15 @@ pub(super) fn encode(
     );
     encoder.dispatchThreadgroups_threadsPerThreadgroup(pixel_grid, pixel_threadgroup);
 
+    let output = pool.output.clone();
     encoder.endEncoding();
-    Ok(pool.output.clone())
+    resources
+        .pool
+        .as_mut()
+        .expect("pool built above")
+        .frame_cache
+        .commit(frame_token);
+    Ok(output)
 }
 
 fn set_params(encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>, params: &MatParams) {
