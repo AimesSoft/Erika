@@ -184,6 +184,15 @@ def resolveNdkDirectory = {
     )
 }
 
+def resolveCargoTargetDirectory = { File repoRoot ->
+    def configured = System.getenv("CARGO_TARGET_DIR")
+    if (configured == null || configured.trim().isEmpty()) {
+        return new File(repoRoot, "target")
+    }
+    def target = new File(configured)
+    return target.isAbsolute() ? target : new File(repoRoot, configured)
+}
+
 def hostTag = {
     def os = System.getProperty("os.name").toLowerCase(Locale.ROOT)
     if (os.contains("windows")) {
@@ -212,6 +221,7 @@ tasks.register("buildErikaAndroidRuntime") {
 
     doLast {
         def repoRoot = findErikaRepoRoot()
+        def cargoTargetDirectory = resolveCargoTargetDirectory(repoRoot)
         def ndkDirectory = resolveNdkDirectory()
         def toolchainBin = new File(
             ndkDirectory,
@@ -266,6 +276,7 @@ tasks.register("buildErikaAndroidRuntime") {
                 "ANDROID_API_LEVEL": apiLevel.toString(),
                 "ERIKA_NATIVE_TARGET": rustTarget,
                 "ERIKA_NATIVE_PROFILE": nativeProfile,
+                "CARGO_TARGET_DIR": cargoTargetDirectory.absolutePath,
                 "LIBCLANG_PATH": libclangDirectory.absolutePath,
                 "PATH": toolchainBin.absolutePath + File.pathSeparator + System.getenv("PATH"),
                 (bindgenKey): System.getenv(bindgenKey)
@@ -317,7 +328,10 @@ tasks.register("buildErikaAndroidRuntime") {
                 )
             }.assertNormalExitValue()
 
-            def source = new File(repoRoot, "target/$rustTarget/release/liberika_capi.so")
+            def source = new File(
+                cargoTargetDirectory,
+                "$rustTarget/release/liberika_capi.so",
+            )
             if (!source.isFile()) {
                 throw new GradleException("Erika Android runtime was not produced: $source")
             }
