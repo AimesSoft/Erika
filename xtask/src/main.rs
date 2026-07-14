@@ -11,15 +11,27 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 const FFMPEG_VERSION: &str = "7.1.1";
+const DAV1D_VERSION: &str = "1.5.1";
 const LIBASS_VERSION: &str = "0.17.3";
 const HARFBUZZ_VERSION: &str = "10.4.0";
 const FREETYPE_VERSION: &str = "2.13.3";
 const FRIBIDI_VERSION: &str = "1.0.16";
 const ZLIB_VERSION: &str = "1.3.1";
+const DEFAULT_ANDROID_API_LEVEL: u32 = 26;
 
 const FFMPEG_ARCHIVE: &str = "ffmpeg-7.1.1.tar.xz";
 const FFMPEG_DIR: &str = "ffmpeg-7.1.1";
 const FFMPEG_URLS: &[&str] = &["https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz"];
+const FFMPEG_PATCHSET_VERSION: &str = "erika-android-mediacodec-v2";
+const FFMPEG_PATCHES: &[&str] =
+    &["third_party/patches/ffmpeg-7.1.1/0001-erika-mediacodec-bounded-receive.patch"];
+
+const DAV1D_ARCHIVE: &str = "dav1d-1.5.1.tar.gz";
+const DAV1D_DIR: &str = "dav1d-1.5.1";
+const DAV1D_URLS: &[&str] = &[
+    "https://code.videolan.org/videolan/dav1d/-/archive/1.5.1/dav1d-1.5.1.tar.gz",
+    "https://codeload.github.com/videolan/dav1d/tar.gz/refs/tags/1.5.1",
+];
 
 const LIBASS_ARCHIVE: &str = "libass-0.17.3.tar.xz";
 const LIBASS_DIR: &str = "libass-0.17.3";
@@ -134,8 +146,7 @@ impl NativeDependencyProfile {
                 "--enable-protocol=file",
                 "--enable-demuxer=mov,matroska,mpegts,mpegps,mpegvideo,avi,flv,h264,hevc,av1,ivf,mp3,aac,flac,wav,ogg,ac3,eac3,dts,truehd,mlp,mjpeg,vc1,ass,srt,webvtt",
                 "--enable-parser=hevc,h264,av1,vp9,aac,ac3,dca,mlp,opus,vorbis,flac,mpegaudio,mpegvideo,mpeg4video,mjpeg,vc1,dvdsub,dvbsub",
-                "--enable-decoder=hevc,h264,av1,vp9,mpeg1video,mpeg2video,mpeg4,vc1,mjpeg,flv,theora,aac,ac3,eac3,dca,truehd,mlp,opus,vorbis,flac,mp3,pcm_s16le,pcm_s24le,pcm_s32le,ass,srt,webvtt,pgssub,dvdsub,dvbsub",
-                "--enable-videotoolbox",
+                "--enable-decoder=hevc,h264,av1,vp8,vp9,mpeg1video,mpeg2video,mpeg4,vc1,mjpeg,flv,theora,aac,ac3,eac3,dca,truehd,mlp,opus,vorbis,flac,mp3,pcm_s16le,pcm_s24le,pcm_s32le,ass,srt,webvtt,pgssub,dvdsub,dvbsub",
             ],
             Self::GplFull => &[
                 "--enable-gpl",
@@ -150,24 +161,64 @@ impl NativeDependencyProfile {
                 "--enable-protocol=file",
                 "--enable-demuxer=mov,matroska,mpegts,mpegps,mpegvideo,avi,flv,h264,hevc,av1,ivf,mp3,aac,flac,wav,ogg,ac3,eac3,dts,truehd,mlp,mjpeg,vc1,ass,srt,webvtt",
                 "--enable-parser=hevc,h264,av1,vp9,aac,ac3,dca,mlp,opus,vorbis,flac,mpegaudio,mpegvideo,mpeg4video,mjpeg,vc1,dvdsub,dvbsub",
-                "--enable-decoder=hevc,h264,av1,vp9,mpeg1video,mpeg2video,mpeg4,vc1,mjpeg,flv,theora,aac,ac3,eac3,dca,truehd,mlp,opus,vorbis,flac,mp3,pcm_s16le,pcm_s24le,pcm_s32le,ass,srt,webvtt,pgssub,dvdsub,dvbsub",
-                "--enable-videotoolbox",
+                "--enable-decoder=hevc,h264,av1,vp8,vp9,mpeg1video,mpeg2video,mpeg4,vc1,mjpeg,flv,theora,aac,ac3,eac3,dca,truehd,mlp,opus,vorbis,flac,mp3,pcm_s16le,pcm_s24le,pcm_s32le,ass,srt,webvtt,pgssub,dvdsub,dvbsub",
             ],
         }
     }
 
-    fn ffmpeg_configure_flags_for_target(self, target: AppleTarget) -> Vec<&'static str> {
+    fn ffmpeg_configure_flags_for_target(self, target: NativeTarget) -> Vec<&'static str> {
         let mut flags = self.ffmpeg_configure_flags().to_vec();
         if target.is_windows() {
-            flags.retain(|flag| *flag != "--enable-videotoolbox");
             flags.extend(["--enable-d3d11va", "--enable-dxva2"]);
+        } else if target.is_android() {
+            flags.extend([
+                "--enable-jni",
+                "--enable-mediacodec",
+                "--enable-libdav1d",
+                "--enable-decoder=h264_mediacodec,hevc_mediacodec,mpeg2_mediacodec,mpeg4_mediacodec,vp8_mediacodec,vp9_mediacodec,av1_mediacodec,libdav1d",
+            ]);
+            // FFmpeg's 32-bit external and inline x86 assembly still emits
+            // absolute R_386_32 relocations even with CONFIG_PIC enabled.
+            // Android has rejected text relocations since API 23, so keep the
+            // complete C decoder set while disabling the incompatible asm
+            // acceleration paths for this legacy ABI.
+            if matches!(target, NativeTarget::I686Android) {
+                flags.push("--disable-asm");
+            }
+        } else if target.is_apple() {
+            flags.push("--enable-videotoolbox");
+        }
+        if target.is_android() {
+            assert_android_software_decoder_fallbacks(&flags);
         }
         flags
     }
 }
 
+fn assert_android_software_decoder_fallbacks(flags: &[&str]) {
+    let enabled = flags
+        .iter()
+        .filter_map(|flag| flag.strip_prefix("--enable-decoder="))
+        .flat_map(|decoders| decoders.split(','))
+        .collect::<std::collections::HashSet<_>>();
+    for (hardware, software) in [
+        ("h264_mediacodec", "h264"),
+        ("hevc_mediacodec", "hevc"),
+        ("mpeg2_mediacodec", "mpeg2video"),
+        ("mpeg4_mediacodec", "mpeg4"),
+        ("vp8_mediacodec", "vp8"),
+        ("vp9_mediacodec", "vp9"),
+        ("av1_mediacodec", "libdav1d"),
+    ] {
+        assert!(
+            !enabled.contains(hardware) || enabled.contains(software),
+            "Android FFmpeg enables {hardware} without required software fallback {software}"
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AppleTarget {
+enum NativeTarget {
     Host,
     Aarch64Macos,
     X86_64Macos,
@@ -175,9 +226,13 @@ enum AppleTarget {
     Aarch64IosSimulator,
     X86_64IosSimulator,
     X86_64WindowsMsvc,
+    Aarch64Android,
+    Armv7Android,
+    X86_64Android,
+    I686Android,
 }
 
-impl AppleTarget {
+impl NativeTarget {
     fn parse(value: &str) -> Result<Self> {
         match value {
             "host" => Ok(Self::Host),
@@ -187,6 +242,10 @@ impl AppleTarget {
             "aarch64-apple-ios-sim" => Ok(Self::Aarch64IosSimulator),
             "x86_64-apple-ios" => Ok(Self::X86_64IosSimulator),
             "x86_64-pc-windows-msvc" | "windows-x64" => Ok(Self::X86_64WindowsMsvc),
+            "aarch64-linux-android" | "arm64-v8a" => Ok(Self::Aarch64Android),
+            "armv7-linux-androideabi" | "armeabi-v7a" => Ok(Self::Armv7Android),
+            "x86_64-linux-android" | "android-x64" => Ok(Self::X86_64Android),
+            "i686-linux-android" | "x86" => Ok(Self::I686Android),
             other => bail!("unknown native target: {other}"),
         }
     }
@@ -200,6 +259,10 @@ impl AppleTarget {
             Self::Aarch64IosSimulator => Some("aarch64-apple-ios-sim"),
             Self::X86_64IosSimulator => Some("x86_64-apple-ios"),
             Self::X86_64WindowsMsvc => Some("x86_64-pc-windows-msvc"),
+            Self::Aarch64Android => Some("aarch64-linux-android"),
+            Self::Armv7Android => Some("armv7-linux-androideabi"),
+            Self::X86_64Android => Some("x86_64-linux-android"),
+            Self::I686Android => Some("i686-linux-android"),
         }
     }
 
@@ -209,7 +272,11 @@ impl AppleTarget {
             Self::Aarch64Macos | Self::X86_64Macos => Some("macosx"),
             Self::Aarch64Ios => Some("iphoneos"),
             Self::Aarch64IosSimulator | Self::X86_64IosSimulator => Some("iphonesimulator"),
-            Self::X86_64WindowsMsvc => None,
+            Self::X86_64WindowsMsvc
+            | Self::Aarch64Android
+            | Self::Armv7Android
+            | Self::X86_64Android
+            | Self::I686Android => None,
         }
     }
 
@@ -219,6 +286,10 @@ impl AppleTarget {
             Self::Aarch64Macos | Self::Aarch64Ios | Self::Aarch64IosSimulator => Some("arm64"),
             Self::X86_64Macos | Self::X86_64IosSimulator => Some("x86_64"),
             Self::X86_64WindowsMsvc => Some("x86_64"),
+            Self::Aarch64Android => Some("aarch64"),
+            Self::Armv7Android => Some("arm"),
+            Self::X86_64Android => Some("x86_64"),
+            Self::I686Android => Some("x86"),
         }
     }
 
@@ -228,6 +299,10 @@ impl AppleTarget {
             Self::Aarch64Macos | Self::Aarch64Ios | Self::Aarch64IosSimulator => Some("aarch64"),
             Self::X86_64Macos | Self::X86_64IosSimulator => Some("x86_64"),
             Self::X86_64WindowsMsvc => Some("x86_64"),
+            Self::Aarch64Android => Some("aarch64"),
+            Self::Armv7Android => Some("arm"),
+            Self::X86_64Android => Some("x86_64"),
+            Self::I686Android => Some("x86"),
         }
     }
 
@@ -237,6 +312,30 @@ impl AppleTarget {
             Self::Aarch64Macos | Self::Aarch64Ios | Self::Aarch64IosSimulator => Some("arm64"),
             Self::X86_64Macos | Self::X86_64IosSimulator => Some("x86_64"),
             Self::X86_64WindowsMsvc => Some("x86_64"),
+            Self::Aarch64Android => Some("aarch64"),
+            Self::Armv7Android => Some("armv7"),
+            Self::X86_64Android => Some("x86_64"),
+            Self::I686Android => Some("i686"),
+        }
+    }
+
+    fn android_abi(self) -> Option<&'static str> {
+        match self {
+            Self::Aarch64Android => Some("arm64-v8a"),
+            Self::Armv7Android => Some("armeabi-v7a"),
+            Self::X86_64Android => Some("x86_64"),
+            Self::I686Android => Some("x86"),
+            _ => None,
+        }
+    }
+
+    fn android_clang_triple(self) -> Option<&'static str> {
+        match self {
+            Self::Aarch64Android => Some("aarch64-linux-android"),
+            Self::Armv7Android => Some("armv7a-linux-androideabi"),
+            Self::X86_64Android => Some("x86_64-linux-android"),
+            Self::I686Android => Some("i686-linux-android"),
+            _ => None,
         }
     }
 
@@ -249,6 +348,24 @@ impl AppleTarget {
 
     fn is_windows(self) -> bool {
         matches!(self, Self::X86_64WindowsMsvc) || (matches!(self, Self::Host) && cfg!(windows))
+    }
+
+    fn is_apple(self) -> bool {
+        matches!(
+            self,
+            Self::Aarch64Macos
+                | Self::X86_64Macos
+                | Self::Aarch64Ios
+                | Self::Aarch64IosSimulator
+                | Self::X86_64IosSimulator
+        ) || (matches!(self, Self::Host) && cfg!(target_vendor = "apple"))
+    }
+
+    fn is_android(self) -> bool {
+        matches!(
+            self,
+            Self::Aarch64Android | Self::Armv7Android | Self::X86_64Android | Self::I686Android
+        ) || (matches!(self, Self::Host) && cfg!(target_os = "android"))
     }
 
     fn deployment_target(self) -> Option<(String, &'static str)> {
@@ -266,7 +383,11 @@ impl AppleTarget {
                 env::var("IPHONEOS_DEPLOYMENT_TARGET").unwrap_or_else(|_| "13.0".to_string()),
                 "-mios-simulator-version-min",
             )),
-            Self::X86_64WindowsMsvc => None,
+            Self::X86_64WindowsMsvc
+            | Self::Aarch64Android
+            | Self::Armv7Android
+            | Self::X86_64Android
+            | Self::I686Android => None,
         }
     }
 }
@@ -274,7 +395,7 @@ impl AppleTarget {
 #[derive(Debug, Clone, Copy)]
 struct DepsOptions {
     profile: NativeDependencyProfile,
-    target: AppleTarget,
+    target: NativeTarget,
     force: bool,
     all: bool,
     jobs: Option<usize>,
@@ -284,7 +405,7 @@ impl DepsOptions {
     fn parse(args: &[String]) -> Result<Self> {
         let mut options = Self {
             profile: NativeDependencyProfile::Lgpl,
-            target: AppleTarget::Host,
+            target: NativeTarget::Host,
             force: false,
             all: false,
             jobs: None,
@@ -303,7 +424,7 @@ impl DepsOptions {
                 }
                 "--target" => {
                     let value = args.get(index + 1).context("--target requires a value")?;
-                    options.target = AppleTarget::parse(value)?;
+                    options.target = NativeTarget::parse(value)?;
                     index += 2;
                 }
                 "--force" => {
@@ -330,6 +451,7 @@ impl DepsOptions {
 #[derive(Debug)]
 struct WorkspaceLayout {
     root: PathBuf,
+    target: NativeTarget,
     cache_dir: PathBuf,
     source_dir: PathBuf,
     build_dir: PathBuf,
@@ -338,6 +460,10 @@ struct WorkspaceLayout {
     ffmpeg_build_dir: PathBuf,
     ffmpeg_build_marker: PathBuf,
     ffmpeg_prefix: PathBuf,
+    dav1d_source_dir: PathBuf,
+    dav1d_build_dir: PathBuf,
+    dav1d_build_marker: PathBuf,
+    dav1d_prefix: PathBuf,
     libass_source_dir: PathBuf,
     libass_build_dir: PathBuf,
     libass_build_marker: PathBuf,
@@ -363,7 +489,7 @@ struct WorkspaceLayout {
 
 fn workspace_layout(
     profile: NativeDependencyProfile,
-    target: AppleTarget,
+    target: NativeTarget,
 ) -> Result<WorkspaceLayout> {
     let root = workspace_root()?;
     let cache_dir = root.join("third_party/cache");
@@ -387,6 +513,10 @@ fn workspace_layout(
     let ffmpeg_build_dir = build_dir.join("ffmpeg");
     let ffmpeg_build_marker = ffmpeg_build_dir.join("ffmpeg-built.txt");
     let ffmpeg_prefix = dist_dir.join("ffmpeg");
+    let dav1d_source_dir = source_dir.join(DAV1D_DIR);
+    let dav1d_build_dir = build_dir.join("dav1d");
+    let dav1d_build_marker = dav1d_build_dir.join("dav1d-built.txt");
+    let dav1d_prefix = dist_dir.join("dav1d");
     let libass_source_dir = source_dir.join(LIBASS_DIR);
     let libass_build_dir = build_dir.join("libass");
     let libass_build_marker = libass_build_dir.join("libass-built.txt");
@@ -410,6 +540,7 @@ fn workspace_layout(
     let python_tools_dir = build_dir.join("python-tools");
     Ok(WorkspaceLayout {
         root,
+        target,
         cache_dir,
         source_dir,
         build_dir,
@@ -418,6 +549,10 @@ fn workspace_layout(
         ffmpeg_build_dir,
         ffmpeg_build_marker,
         ffmpeg_prefix,
+        dav1d_source_dir,
+        dav1d_build_dir,
+        dav1d_build_marker,
+        dav1d_prefix,
         libass_source_dir,
         libass_build_dir,
         libass_build_marker,
@@ -442,11 +577,22 @@ fn workspace_layout(
     })
 }
 
-fn print_dependency_plan(profile: NativeDependencyProfile, target: AppleTarget) {
+fn print_dependency_plan(profile: NativeDependencyProfile, target: NativeTarget) {
     println!("Erika native dependency plan");
     println!("profile: {}", profile_name(profile));
     println!("target: {}", target.triple().unwrap_or("host"));
+    if let Some(abi) = target.android_abi() {
+        println!("android ABI: {abi}");
+        match android_api_level() {
+            Ok(api_level) => println!("android API level: {api_level}"),
+            Err(error) => println!("android API level: invalid ({error})"),
+        }
+    }
     println!("ffmpeg: {FFMPEG_VERSION} ({})", FFMPEG_URLS[0]);
+    if target.is_android() {
+        println!("ffmpeg patch set: {FFMPEG_PATCHSET_VERSION}");
+        println!("dav1d: {DAV1D_VERSION} ({})", DAV1D_URLS[0]);
+    }
     println!("libass: {LIBASS_VERSION} ({})", LIBASS_URLS[0]);
     println!("harfbuzz: {HARFBUZZ_VERSION} ({})", HARFBUZZ_URLS[0]);
     println!("freetype: {FREETYPE_VERSION} ({})", FREETYPE_URLS[0]);
@@ -468,7 +614,11 @@ fn fetch_dependency_sources(layout: &WorkspaceLayout, all: bool) -> Result<()> {
         .with_context(|| format!("create {}", layout.source_dir.display()))?;
 
     fetch_and_extract(layout, FFMPEG_URLS, FFMPEG_ARCHIVE, FFMPEG_DIR)?;
+    apply_ffmpeg_patches(layout)?;
     fetch_and_extract(layout, ZLIB_URLS, ZLIB_ARCHIVE, ZLIB_DIR)?;
+    if layout.target.is_android() {
+        fetch_and_extract(layout, DAV1D_URLS, DAV1D_ARCHIVE, DAV1D_DIR)?;
+    }
     if all {
         fetch_and_extract(layout, LIBASS_URLS, LIBASS_ARCHIVE, LIBASS_DIR)?;
         fetch_and_extract(layout, HARFBUZZ_URLS, HARFBUZZ_ARCHIVE, HARFBUZZ_DIR)?;
@@ -488,6 +638,9 @@ fn build_dependencies(options: DepsOptions) -> Result<()> {
     prepare_dependency_dirs(&layout)?;
     fetch_dependency_sources(&layout, options.all)?;
     build_zlib(&layout, options)?;
+    if options.target.is_android() {
+        build_dav1d(&layout, options)?;
+    }
     build_ffmpeg(&layout, options)?;
     if options.all {
         build_text_dependencies(&layout, options)?;
@@ -514,6 +667,16 @@ fn print_dependency_status(layout: &WorkspaceLayout) -> Result<()> {
         "ffmpeg dist: {}",
         status_word(native_static_lib_exists(&layout.ffmpeg_prefix, "avformat"))
     );
+    if layout.target.is_android() {
+        println!(
+            "dav1d source: {}",
+            status_word(layout.dav1d_source_dir.exists())
+        );
+        println!(
+            "dav1d dist: {}",
+            status_word(native_static_lib_exists(&layout.dav1d_prefix, "dav1d"))
+        );
+    }
     println!(
         "zlib source: {}",
         status_word(layout.zlib_source_dir.exists())
@@ -618,6 +781,46 @@ fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Resu
         return Ok(());
     }
 
+    if options.target.is_android() {
+        let toolchain = android_toolchain(options.target)?
+            .context("an explicit Android target requires an Android NDK toolchain")?;
+        println!("Android NDK: {}", toolchain.ndk_root.display());
+        println!("Android toolchain: {}", toolchain.bin_dir.display());
+        if cfg!(windows) && posix_shell().is_none() {
+            bail!(
+                "required POSIX shell was not found; install Git for Windows so FFmpeg configure can run"
+            );
+        }
+        if cfg!(windows) {
+            let _ = windows_msvc_environment()?;
+        }
+        if gnu_make().is_none() {
+            bail!(
+                "required GNU make was not found; install make or use an NDK distribution that includes prebuilt make"
+            );
+        }
+        if matches!(options.target, NativeTarget::X86_64Android)
+            && (!ffmpeg_build_marker_is_current(layout, options)
+                || !dav1d_build_marker_is_current(layout, options))
+            && which("nasm").is_none()
+        {
+            bail!("required build tool `nasm` was not found for Android x86_64 FFmpeg/dav1d");
+        }
+        if cmake_tool().is_none() {
+            bail!("required CMake was not found; install CMake or Android SDK CMake");
+        }
+        if python_tool().is_none() && (which("meson").is_none() || which("ninja").is_none()) {
+            bail!(
+                "required Python with venv support was not found; Android dav1d needs Meson/Ninja and xtask cannot provision them"
+            );
+        }
+        let _ = ensure_meson_tools(layout)?;
+        let _ = ensure_pkg_config_shim(layout)?;
+        let _ = host_c_compiler()?;
+        let _ = host_cxx_compiler()?;
+        return Ok(());
+    }
+
     let compiler = "clang";
     for tool in ["make", compiler, "cmake", "pkg-config"] {
         if which(tool).is_none() {
@@ -689,6 +892,85 @@ fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         ZLIB_VERSION,
         &layout.zlib_prefix,
     )
+}
+
+fn build_dav1d(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
+    if !options.target.is_android() {
+        return Ok(());
+    }
+    if dav1d_build_marker_is_current(layout, options) && !options.force {
+        println!(
+            "reuse dav1d build marker {}",
+            layout.dav1d_build_marker.display()
+        );
+        return Ok(());
+    }
+
+    // The marker includes the Android API and assembly policy. Never mix an
+    // older cross configuration with the current ABI build.
+    for path in [&layout.dav1d_build_dir, &layout.dav1d_prefix] {
+        if path.exists() {
+            fs::remove_dir_all(path).with_context(|| format!("remove {}", path.display()))?;
+        }
+    }
+    fs::create_dir_all(&layout.dav1d_prefix)
+        .with_context(|| format!("create {}", layout.dav1d_prefix.display()))?;
+
+    let meson = ensure_meson_tools(layout)?;
+    let asm_enabled = dav1d_asm_enabled(options.target);
+    println!(
+        "configure dav1d for {} (asm={asm_enabled})",
+        options.target.triple().unwrap_or("host")
+    );
+    let mut setup = meson_command(&meson);
+    setup
+        .arg("setup")
+        .arg(&layout.dav1d_build_dir)
+        .arg(&layout.dav1d_source_dir)
+        .arg(format!("--prefix={}", layout.dav1d_prefix.display()))
+        .arg("--libdir=lib")
+        .arg("--default-library=static")
+        .arg("--buildtype=release")
+        .arg("-Dbitdepths=8,16")
+        .arg(format!("-Denable_asm={asm_enabled}"))
+        .arg("-Denable_tools=false")
+        .arg("-Denable_examples=false")
+        .arg("-Denable_tests=false")
+        .arg("-Denable_docs=false")
+        .arg("-Dlogging=true");
+    apply_meson_target(&mut setup, layout, options.target, "dav1d")?;
+    apply_windows_target_env(&mut setup, options.target)?;
+    run(&mut setup)?;
+    meson_compile_install(
+        &meson,
+        &layout.dav1d_build_dir,
+        options.jobs,
+        options.target,
+    )?;
+
+    let archive = layout.dav1d_prefix.join("lib/libdav1d.a");
+    let pkg_config = layout.dav1d_prefix.join("lib/pkgconfig/dav1d.pc");
+    for path in [&archive, &pkg_config] {
+        if !path.is_file() {
+            bail!("dav1d install did not produce {}", path.display());
+        }
+    }
+    fs::write(
+        &layout.dav1d_build_marker,
+        format!(
+            "dav1d={DAV1D_VERSION}\ntarget={}\nandroid_api={}\nasm={asm_enabled}\nprefix={}\n",
+            options.target.triple().unwrap_or("host"),
+            android_api_level()?,
+            layout.dav1d_prefix.display(),
+        ),
+    )
+    .with_context(|| format!("write {}", layout.dav1d_build_marker.display()))
+}
+
+fn dav1d_asm_enabled(target: NativeTarget) -> bool {
+    // Match the FFmpeg policy for 32-bit Android x86: omit assembly that can
+    // introduce text relocations into the final shared library.
+    !matches!(target, NativeTarget::I686Android)
 }
 
 fn build_freetype(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
@@ -772,9 +1054,13 @@ fn build_harfbuzz(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> 
         configure
             .arg("-DHB_HAVE_CORETEXT=OFF")
             .arg("-DHB_HAVE_DIRECTWRITE=ON");
-    } else {
+    } else if options.target.is_apple() {
         configure
             .arg("-DHB_HAVE_CORETEXT=ON")
+            .arg("-DHB_HAVE_DIRECTWRITE=OFF");
+    } else {
+        configure
+            .arg("-DHB_HAVE_CORETEXT=OFF")
             .arg("-DHB_HAVE_DIRECTWRITE=OFF");
     }
     apply_cmake_target(&mut configure, options.target)?;
@@ -801,6 +1087,11 @@ fn build_fribidi(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         )?;
         return Ok(());
     }
+    patch_fribidi_meson_native_compiler(layout)?;
+    if layout.fribidi_build_dir.exists() && !layout.fribidi_build_marker.exists() {
+        fs::remove_dir_all(&layout.fribidi_build_dir)
+            .with_context(|| format!("remove stale {}", layout.fribidi_build_dir.display()))?;
+    }
     let meson = ensure_meson_tools(layout)?;
     clean_build_and_prefix(options, &layout.fribidi_build_dir, &layout.fribidi_prefix)?;
     fs::create_dir_all(&layout.fribidi_prefix)
@@ -816,7 +1107,7 @@ fn build_fribidi(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         .arg("--buildtype=release")
         .arg("-Ddocs=false")
         .arg("-Dtests=false");
-    apply_meson_apple_target(&mut setup, layout, options.target, "fribidi")?;
+    apply_meson_target(&mut setup, layout, options.target, "fribidi")?;
     apply_windows_target_env(&mut setup, options.target)?;
     run(&mut setup)?;
     meson_compile_install(
@@ -836,6 +1127,26 @@ fn build_fribidi(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         FRIBIDI_VERSION,
         &layout.fribidi_prefix,
     )
+}
+
+fn patch_fribidi_meson_native_compiler(layout: &WorkspaceLayout) -> Result<()> {
+    let path = layout.fribidi_source_dir.join("gen.tab/meson.build");
+    let contents = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let original = "native_cc = meson.get_compiler('c')";
+    let replacement = "native_cc = meson.get_compiler('c', native: true)";
+    if contents.contains(replacement) {
+        return Ok(());
+    }
+    if !contents.contains(original) {
+        bail!(
+            "FriBidi native compiler declaration was not found in {}; update the Erika patch for this FriBidi version",
+            path.display()
+        );
+    }
+    fs::write(&path, contents.replacen(original, replacement, 1))
+        .with_context(|| format!("patch {}", path.display()))?;
+    println!("patched FriBidi Meson generators to probe headers with the build-machine compiler");
+    Ok(())
 }
 
 fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
@@ -887,12 +1198,17 @@ fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         setup
             .arg("-Dcoretext=disabled")
             .arg("-Ddirectwrite=enabled");
-    } else {
+    } else if options.target.is_apple() {
         setup
             .arg("-Dcoretext=enabled")
             .arg("-Ddirectwrite=disabled");
+    } else {
+        setup
+            .arg("-Dcoretext=disabled")
+            .arg("-Ddirectwrite=disabled")
+            .arg("-Drequire-system-font-provider=false");
     }
-    apply_meson_apple_target(&mut setup, layout, options.target, "libass")?;
+    apply_meson_target(&mut setup, layout, options.target, "libass")?;
     apply_windows_target_env(&mut setup, options.target)?;
     run(&mut setup)?;
 
@@ -908,6 +1224,7 @@ fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         compile.arg(format!("-j{jobs}"));
     }
     apply_windows_target_env(&mut compile, options.target)?;
+    apply_android_host_env(&mut compile, options.target)?;
     run(&mut compile)?;
     let mut install = meson_command(&meson);
     install
@@ -918,6 +1235,7 @@ fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         .env("PKG_CONFIG", &pkg_config)
         .env("ERIKA_PKG_CONFIG_RELATIVE_BASE", &layout.libass_build_dir);
     apply_windows_target_env(&mut install, options.target)?;
+    apply_android_host_env(&mut install, options.target)?;
     run(&mut install)?;
     ensure_windows_link_aliases(
         options.target,
@@ -936,7 +1254,7 @@ fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
 fn cmake_build_install(
     build_dir: &std::path::Path,
     jobs: Option<usize>,
-    target: AppleTarget,
+    target: NativeTarget,
 ) -> Result<()> {
     let mut build = cmake_command(target)?;
     build
@@ -1003,17 +1321,31 @@ fn meson_command(meson: &MesonTools) -> Command {
     command
 }
 
-fn cmake_command(target: AppleTarget) -> Result<Command> {
-    if target.is_windows() {
-        let cmake = cmake_tool().context("required CMake was not found")?;
-        Ok(Command::new(cmake))
-    } else {
-        Ok(Command::new("cmake"))
-    }
+fn cmake_command(target: NativeTarget) -> Result<Command> {
+    let _ = target;
+    let cmake = cmake_tool().context("required CMake was not found")?;
+    Ok(Command::new(cmake))
 }
 
-fn apply_cmake_target(command: &mut Command, target: AppleTarget) -> Result<()> {
+fn apply_cmake_target(command: &mut Command, target: NativeTarget) -> Result<()> {
     apply_cmake_apple_target(command, target)?;
+    if let Some(config) = android_toolchain(target)? {
+        command
+            .arg(format!(
+                "-DCMAKE_TOOLCHAIN_FILE={}",
+                config.cmake_toolchain_file.display()
+            ))
+            .arg(format!("-DANDROID_ABI={}", config.abi))
+            .arg(format!("-DANDROID_PLATFORM=android-{}", config.api_level))
+            .arg("-DANDROID_STL=c++_shared")
+            .arg("-DCMAKE_POSITION_INDEPENDENT_CODE=ON");
+        if let Some(ninja) = ninja_tool() {
+            command
+                .arg("-G")
+                .arg("Ninja")
+                .arg(format!("-DCMAKE_MAKE_PROGRAM={}", ninja.display()));
+        }
+    }
     if target.is_windows() {
         if let Some(ninja) = ninja_tool() {
             command
@@ -1026,7 +1358,7 @@ fn apply_cmake_target(command: &mut Command, target: AppleTarget) -> Result<()> 
     Ok(())
 }
 
-fn apply_cmake_apple_target(command: &mut Command, target: AppleTarget) -> Result<()> {
+fn apply_cmake_apple_target(command: &mut Command, target: NativeTarget) -> Result<()> {
     let Some(config) = apple_toolchain(target)? else {
         return Ok(());
     };
@@ -1048,10 +1380,10 @@ fn apply_cmake_apple_target(command: &mut Command, target: AppleTarget) -> Resul
     apply_apple_target_env(command, target)
 }
 
-fn apply_meson_apple_target(
+fn apply_meson_target(
     command: &mut Command,
     layout: &WorkspaceLayout,
-    target: AppleTarget,
+    target: NativeTarget,
     name: &str,
 ) -> Result<()> {
     let Some(cross_file) = meson_cross_file(layout, target, name)? else {
@@ -1062,75 +1394,112 @@ fn apply_meson_apple_target(
     // gen.tab on the build machine. Provide an explicit build-machine compiler
     // pinned to the macOS SDK so the iOS SDKROOT we export below does not make
     // those native tools target iOS and fail to run.
-    let native_file = meson_native_file(layout, name)?;
+    let native_file = meson_native_file(layout, target, name)?;
     command.arg("--native-file").arg(native_file);
-    apply_apple_target_env(command, target)
+    apply_apple_target_env(command, target)?;
+    apply_android_host_env(command, target)
 }
 
-fn meson_native_file(layout: &WorkspaceLayout, name: &str) -> Result<PathBuf> {
-    let sdk_root = xcrun("macosx", &["--show-sdk-path"])?;
-    let clang = xcrun("macosx", &["-f", "clang"])?;
-    let clangxx = xcrun("macosx", &["-f", "clang++"])?;
-    // The iOS SDKROOT we export for the cross build otherwise makes clang target
-    // iOS even with a macOS -isysroot, producing native tools that cannot run on
-    // the build machine. Pin the target triple to macOS to override it.
-    let arch = match env::consts::ARCH {
-        "aarch64" => "arm64",
-        other => other,
-    };
-    let target = format!("{arch}-apple-macos");
+fn meson_native_file(
+    layout: &WorkspaceLayout,
+    target: NativeTarget,
+    name: &str,
+) -> Result<PathBuf> {
     let path = layout.build_dir.join(format!("{name}-meson-native.ini"));
-    let content = format!(
-        "[binaries]\nc = [{}, '-target', {}, '-isysroot', {}]\ncpp = [{}, '-target', {}, '-isysroot', {}]\n",
-        meson_string(&clang),
-        meson_string(&target),
-        meson_string(&sdk_root),
-        meson_string(&clangxx),
-        meson_string(&target),
-        meson_string(&sdk_root),
-    );
+    let content = if target.is_apple() {
+        let sdk_root = xcrun("macosx", &["--show-sdk-path"])?;
+        let clang = xcrun("macosx", &["-f", "clang"])?;
+        let clangxx = xcrun("macosx", &["-f", "clang++"])?;
+        // SDKROOT belongs to the target build. Pin native generators back to macOS.
+        let arch = match env::consts::ARCH {
+            "aarch64" => "arm64",
+            other => other,
+        };
+        let host_target = format!("{arch}-apple-macos");
+        format!(
+            "[binaries]\nc = [{}, '-target', {}, '-isysroot', {}]\ncpp = [{}, '-target', {}, '-isysroot', {}]\n",
+            meson_string(&clang),
+            meson_string(&host_target),
+            meson_string(&sdk_root),
+            meson_string(&clangxx),
+            meson_string(&host_target),
+            meson_string(&sdk_root),
+        )
+    } else {
+        format!(
+            "[binaries]\nc = {}\ncpp = {}\n",
+            meson_string(&host_c_compiler()?.display().to_string()),
+            meson_string(&host_cxx_compiler()?.display().to_string()),
+        )
+    };
     fs::write(&path, content).with_context(|| format!("write {}", path.display()))?;
     Ok(path)
 }
 
 fn meson_cross_file(
     layout: &WorkspaceLayout,
-    target: AppleTarget,
+    target: NativeTarget,
     name: &str,
 ) -> Result<Option<PathBuf>> {
-    let Some(config) = apple_toolchain(target)? else {
+    let path = layout.build_dir.join(format!("{name}-meson-cross.ini"));
+    let content = if let Some(config) = apple_toolchain(target)? {
+        let pkg_config = which("pkg-config").unwrap_or_else(|| PathBuf::from("pkg-config"));
+        let arch_flags = apple_arch_flags(&config);
+        format!(
+            "[binaries]\nc = {}\ncpp = {}\nar = {}\nstrip = {}\npkg-config = {}\n\n[built-in options]\nc_args = {}\ncpp_args = {}\nc_link_args = {}\ncpp_link_args = {}\n\n[host_machine]\nsystem = 'darwin'\ncpu_family = {}\ncpu = {}\nendian = 'little'\n",
+            meson_string(&config.clang.display().to_string()),
+            meson_string(&config.clangxx.display().to_string()),
+            meson_string(&config.ar.display().to_string()),
+            meson_string(&config.strip.display().to_string()),
+            meson_string(&pkg_config.display().to_string()),
+            meson_array(&arch_flags),
+            meson_array(&arch_flags),
+            meson_array(&arch_flags),
+            meson_array(&arch_flags),
+            meson_string(
+                target
+                    .meson_cpu_family()
+                    .context("explicit Apple target must have a Meson CPU family")?,
+            ),
+            meson_string(
+                target
+                    .meson_cpu()
+                    .context("explicit Apple target must have a Meson CPU")?,
+            ),
+        )
+    } else if let Some(config) = android_toolchain(target)? {
+        let pkg_config = ensure_pkg_config_shim(layout)?;
+        let pic_flags = vec!["-fPIC".to_string()];
+        format!(
+            "[binaries]\nc = {}\ncpp = {}\nar = {}\nstrip = {}\npkg-config = {}\n\n[built-in options]\nc_args = {}\ncpp_args = {}\nc_link_args = {}\ncpp_link_args = {}\n\n[properties]\nneeds_exe_wrapper = true\n\n[host_machine]\nsystem = 'android'\ncpu_family = {}\ncpu = {}\nendian = 'little'\n",
+            meson_string(&config.clang.display().to_string()),
+            meson_string(&config.clangxx.display().to_string()),
+            meson_string(&config.ar.display().to_string()),
+            meson_string(&config.strip.display().to_string()),
+            meson_string(&pkg_config.display().to_string()),
+            meson_array(&pic_flags),
+            meson_array(&pic_flags),
+            meson_array(&pic_flags),
+            meson_array(&pic_flags),
+            meson_string(
+                target
+                    .meson_cpu_family()
+                    .context("explicit Android target must have a Meson CPU family")?,
+            ),
+            meson_string(
+                target
+                    .meson_cpu()
+                    .context("explicit Android target must have a Meson CPU")?,
+            ),
+        )
+    } else {
         return Ok(None);
     };
-    let pkg_config = which("pkg-config").unwrap_or_else(|| PathBuf::from("pkg-config"));
-    let arch_flags = apple_arch_flags(&config);
-    let path = layout.build_dir.join(format!("{name}-meson-cross.ini"));
-    let content = format!(
-        "[binaries]\nc = {}\ncpp = {}\nar = {}\nstrip = {}\npkg-config = {}\n\n[built-in options]\nc_args = {}\ncpp_args = {}\nc_link_args = {}\ncpp_link_args = {}\n\n[host_machine]\nsystem = 'darwin'\ncpu_family = {}\ncpu = {}\nendian = 'little'\n",
-        meson_string(&config.clang.display().to_string()),
-        meson_string(&config.clangxx.display().to_string()),
-        meson_string(&config.ar.display().to_string()),
-        meson_string(&config.strip.display().to_string()),
-        meson_string(&pkg_config.display().to_string()),
-        meson_array(&arch_flags),
-        meson_array(&arch_flags),
-        meson_array(&arch_flags),
-        meson_array(&arch_flags),
-        meson_string(
-            target
-                .meson_cpu_family()
-                .context("explicit Apple target must have a Meson CPU family")?,
-        ),
-        meson_string(
-            target
-                .meson_cpu()
-                .context("explicit Apple target must have a Meson CPU")?,
-        ),
-    );
     fs::write(&path, content).with_context(|| format!("write {}", path.display()))?;
     Ok(Some(path))
 }
 
-fn apply_apple_target_env(command: &mut Command, target: AppleTarget) -> Result<()> {
+fn apply_apple_target_env(command: &mut Command, target: NativeTarget) -> Result<()> {
     let Some(config) = apple_toolchain(target)? else {
         return Ok(());
     };
@@ -1183,7 +1552,7 @@ fn meson_compile_install(
     meson: &MesonTools,
     build_dir: &std::path::Path,
     jobs: Option<usize>,
-    target: AppleTarget,
+    target: NativeTarget,
 ) -> Result<()> {
     let mut compile = meson_command(meson);
     compile.arg("compile").arg("-C").arg(build_dir);
@@ -1191,10 +1560,12 @@ fn meson_compile_install(
         compile.arg(format!("-j{jobs}"));
     }
     apply_windows_target_env(&mut compile, target)?;
+    apply_android_host_env(&mut compile, target)?;
     run(&mut compile)?;
     let mut install = meson_command(meson);
     install.arg("install").arg("-C").arg(build_dir);
     apply_windows_target_env(&mut install, target)?;
+    apply_android_host_env(&mut install, target)?;
     run(&mut install)
 }
 
@@ -1236,6 +1607,332 @@ fn pkg_config_path<'a>(prefixes: impl IntoIterator<Item = &'a PathBuf>) -> Strin
     .into_owned()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UnifiedPatchHunk {
+    old_start: usize,
+    old_lines: Vec<String>,
+    new_lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UnifiedPatchFile {
+    path: PathBuf,
+    hunks: Vec<UnifiedPatchHunk>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PatchApplication {
+    Applied,
+    AlreadyApplied,
+}
+
+fn apply_ffmpeg_patches(layout: &WorkspaceLayout) -> Result<()> {
+    validate_generated_ffmpeg_source_path(layout)?;
+    let patchset = ffmpeg_patchset_id(&layout.root)?;
+    let application = match apply_ffmpeg_patch_files(layout) {
+        Ok(application) => application,
+        Err(first_error) => {
+            // third_party/src is generated from the pinned archive. If an older
+            // Erika patch set or an interrupted partial application left it in
+            // an unknown state, refresh it automatically instead of requiring
+            // users to repair the vendored source tree by hand.
+            println!(
+                "FFmpeg source does not match patch set {patchset}; refresh the pinned source ({first_error:#})"
+            );
+            refresh_ffmpeg_source(layout)?;
+            apply_ffmpeg_patch_files(layout).with_context(|| {
+                format!(
+                    "apply FFmpeg patch set {patchset} after refreshing {}",
+                    layout.ffmpeg_source_dir.display()
+                )
+            })?
+        }
+    };
+    fs::write(
+        layout.ffmpeg_source_dir.join(".erika-patchset"),
+        format!("{patchset}\n"),
+    )
+    .with_context(|| {
+        format!(
+            "write FFmpeg patch stamp in {}",
+            layout.ffmpeg_source_dir.display()
+        )
+    })?;
+    match application {
+        PatchApplication::Applied => println!("applied FFmpeg patch set {patchset}"),
+        PatchApplication::AlreadyApplied => println!("reuse FFmpeg patch set {patchset}"),
+    }
+    Ok(())
+}
+
+fn apply_ffmpeg_patch_files(layout: &WorkspaceLayout) -> Result<PatchApplication> {
+    let mut application = PatchApplication::AlreadyApplied;
+    for relative_path in FFMPEG_PATCHES {
+        let patch_path = layout.root.join(relative_path);
+        let patch = fs::read_to_string(&patch_path)
+            .with_context(|| format!("read FFmpeg patch {}", patch_path.display()))?;
+        if apply_unified_patch(&layout.ffmpeg_source_dir, &patch)
+            .with_context(|| format!("apply FFmpeg patch {}", patch_path.display()))?
+            == PatchApplication::Applied
+        {
+            application = PatchApplication::Applied;
+        }
+    }
+    Ok(application)
+}
+
+fn refresh_ffmpeg_source(layout: &WorkspaceLayout) -> Result<()> {
+    validate_generated_ffmpeg_source_path(layout)?;
+    if layout.ffmpeg_source_dir.exists() {
+        fs::remove_dir_all(&layout.ffmpeg_source_dir)
+            .with_context(|| format!("remove {}", layout.ffmpeg_source_dir.display()))?;
+    }
+    extract_archive(&layout.cache_dir.join(FFMPEG_ARCHIVE), &layout.source_dir)
+}
+
+fn validate_generated_ffmpeg_source_path(layout: &WorkspaceLayout) -> Result<()> {
+    let expected_source = layout.source_dir.join(FFMPEG_DIR);
+    if layout.ffmpeg_source_dir != expected_source {
+        bail!(
+            "refuse to modify unexpected FFmpeg source path {}",
+            layout.ffmpeg_source_dir.display()
+        );
+    }
+    let canonical_root = fs::canonicalize(&layout.root)
+        .with_context(|| format!("resolve workspace root {}", layout.root.display()))?;
+    let canonical_source_dir = fs::canonicalize(&layout.source_dir)
+        .with_context(|| format!("resolve source root {}", layout.source_dir.display()))?;
+    if !canonical_source_dir.starts_with(&canonical_root) {
+        bail!(
+            "refuse to modify FFmpeg source root outside the workspace: {}",
+            canonical_source_dir.display()
+        );
+    }
+    if layout.ffmpeg_source_dir.exists() {
+        let canonical_ffmpeg = fs::canonicalize(&layout.ffmpeg_source_dir).with_context(|| {
+            format!(
+                "resolve FFmpeg source path {}",
+                layout.ffmpeg_source_dir.display()
+            )
+        })?;
+        let canonical_expected = canonical_source_dir.join(FFMPEG_DIR);
+        if canonical_ffmpeg != canonical_expected {
+            bail!(
+                "refuse to modify redirected FFmpeg source path: {}",
+                canonical_ffmpeg.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn ffmpeg_patchset_id(root: &Path) -> Result<String> {
+    let mut hash = 0xcbf29ce484222325_u64;
+    fn update(hash: &mut u64, bytes: &[u8]) {
+        for byte in bytes {
+            *hash ^= u64::from(*byte);
+            *hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+
+    update(&mut hash, FFMPEG_PATCHSET_VERSION.as_bytes());
+    for relative_path in FFMPEG_PATCHES {
+        update(&mut hash, &[0]);
+        update(&mut hash, relative_path.as_bytes());
+        update(&mut hash, &[0]);
+        let patch_path = root.join(relative_path);
+        let patch = fs::read(&patch_path)
+            .with_context(|| format!("read FFmpeg patch {}", patch_path.display()))?;
+        update(&mut hash, &patch);
+    }
+    Ok(format!("{FFMPEG_PATCHSET_VERSION}-{hash:016x}"))
+}
+
+fn apply_unified_patch(source_root: &Path, patch: &str) -> Result<PatchApplication> {
+    let files = parse_unified_patch(patch)?;
+    let mut pending_writes = Vec::new();
+    for file in files {
+        if file.path.is_absolute()
+            || file
+                .path
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            bail!("unsafe path in unified patch: {}", file.path.display());
+        }
+        let path = source_root.join(&file.path);
+        let contents = fs::read_to_string(&path)
+            .with_context(|| format!("read patch target {}", path.display()))?;
+        let (updated, changed) = apply_patch_hunks(&contents, &file.hunks)
+            .with_context(|| format!("patch {}", path.display()))?;
+        if changed {
+            pending_writes.push((path, updated));
+        }
+    }
+
+    for (path, contents) in pending_writes.iter() {
+        fs::write(path, contents).with_context(|| format!("write {}", path.display()))?;
+    }
+    Ok(if pending_writes.is_empty() {
+        PatchApplication::AlreadyApplied
+    } else {
+        PatchApplication::Applied
+    })
+}
+
+fn parse_unified_patch(patch: &str) -> Result<Vec<UnifiedPatchFile>> {
+    let lines = patch.lines().collect::<Vec<_>>();
+    let mut files = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        let Some(path) = lines[index].strip_prefix("+++ ") else {
+            index += 1;
+            continue;
+        };
+        let path = path
+            .split_whitespace()
+            .next()
+            .context("unified patch +++ line has no path")?;
+        let path = path
+            .strip_prefix("b/")
+            .context("unified patch target must use a b/ path")?;
+        let mut file = UnifiedPatchFile {
+            path: PathBuf::from(path),
+            hunks: Vec::new(),
+        };
+        index += 1;
+
+        while index < lines.len() && !lines[index].starts_with("diff --git ") {
+            if !lines[index].starts_with("@@ ") {
+                index += 1;
+                continue;
+            }
+            let (old_start, old_count, new_count) = parse_unified_hunk_header(lines[index])?;
+            index += 1;
+            let mut old_lines = Vec::with_capacity(old_count);
+            let mut new_lines = Vec::with_capacity(new_count);
+            while old_lines.len() < old_count || new_lines.len() < new_count {
+                let line = lines.get(index).with_context(|| {
+                    format!("truncated unified patch hunk at old line {old_start}")
+                })?;
+                index += 1;
+                if line.starts_with('\\') {
+                    continue;
+                }
+                let (prefix, text) = line.split_at(1);
+                match prefix {
+                    " " => {
+                        old_lines.push(text.to_string());
+                        new_lines.push(text.to_string());
+                    }
+                    "-" => old_lines.push(text.to_string()),
+                    "+" => new_lines.push(text.to_string()),
+                    _ => bail!("invalid unified patch hunk line: {line}"),
+                }
+                if old_lines.len() > old_count || new_lines.len() > new_count {
+                    bail!("unified patch hunk contains more lines than its header declares");
+                }
+            }
+            file.hunks.push(UnifiedPatchHunk {
+                old_start,
+                old_lines,
+                new_lines,
+            });
+        }
+        if file.hunks.is_empty() {
+            bail!(
+                "unified patch contains no hunks for {}",
+                file.path.display()
+            );
+        }
+        files.push(file);
+    }
+    if files.is_empty() {
+        bail!("unified patch contains no target files");
+    }
+    Ok(files)
+}
+
+fn parse_unified_hunk_header(header: &str) -> Result<(usize, usize, usize)> {
+    let ranges = header
+        .strip_prefix("@@")
+        .and_then(|rest| rest.split_once("@@").map(|(ranges, _)| ranges.trim()))
+        .with_context(|| format!("invalid unified patch hunk header: {header}"))?;
+    let mut ranges = ranges.split_whitespace();
+    let (old_start, old_count) = parse_unified_range(
+        ranges
+            .next()
+            .context("unified patch hunk has no old range")?,
+        '-',
+    )?;
+    let (_, new_count) = parse_unified_range(
+        ranges
+            .next()
+            .context("unified patch hunk has no new range")?,
+        '+',
+    )?;
+    Ok((old_start, old_count, new_count))
+}
+
+fn parse_unified_range(range: &str, prefix: char) -> Result<(usize, usize)> {
+    let range = range
+        .strip_prefix(prefix)
+        .with_context(|| format!("unified patch range must start with {prefix}: {range}"))?;
+    let (start, count) = range.split_once(',').unwrap_or((range, "1"));
+    let start = start
+        .parse::<usize>()
+        .with_context(|| format!("invalid unified patch range start: {range}"))?;
+    let count = count
+        .parse::<usize>()
+        .with_context(|| format!("invalid unified patch range count: {range}"))?;
+    if start == 0 || count == 0 {
+        bail!("zero-length unified patch ranges are not supported: {range}");
+    }
+    Ok((start, count))
+}
+
+fn apply_patch_hunks(contents: &str, hunks: &[UnifiedPatchHunk]) -> Result<(String, bool)> {
+    let trailing_newline = contents.ends_with('\n');
+    let mut lines = contents.lines().map(str::to_string).collect::<Vec<_>>();
+    let mut line_shift = 0_isize;
+    let mut changed = false;
+    for hunk in hunks {
+        let expected = isize::try_from(hunk.old_start - 1)
+            .context("unified patch line number does not fit isize")?
+            + line_shift;
+        if expected < 0 {
+            bail!("unified patch hunk resolves before the start of the file");
+        }
+        let expected = usize::try_from(expected).expect("non-negative patch line index");
+        if patch_lines_match(&lines, expected, &hunk.old_lines) {
+            lines.splice(
+                expected..expected + hunk.old_lines.len(),
+                hunk.new_lines.iter().cloned(),
+            );
+            changed = true;
+        } else if !patch_lines_match(&lines, expected, &hunk.new_lines) {
+            bail!(
+                "hunk at source line {} matches neither the pinned FFmpeg source nor the already-patched source",
+                hunk.old_start
+            );
+        }
+        line_shift += hunk.new_lines.len() as isize - hunk.old_lines.len() as isize;
+    }
+
+    let mut updated = lines.join("\n");
+    if trailing_newline {
+        updated.push('\n');
+    }
+    Ok((updated, changed))
+}
+
+fn patch_lines_match(lines: &[String], start: usize, expected: &[String]) -> bool {
+    start
+        .checked_add(expected.len())
+        .filter(|end| *end <= lines.len())
+        .is_some_and(|end| lines[start..end] == *expected)
+}
+
 fn fetch_and_extract(
     layout: &WorkspaceLayout,
     urls: &[&str],
@@ -1253,15 +1950,19 @@ fn fetch_and_extract(
     let source_path = layout.source_dir.join(source_dir_name);
     if !source_path.exists() {
         println!("extract {}", archive_path.display());
-        run(Command::new("tar")
-            .arg("-xf")
-            .arg(&archive_path)
-            .arg("-C")
-            .arg(&layout.source_dir))?;
+        extract_archive(&archive_path, &layout.source_dir)?;
     } else {
         println!("reuse {}", source_path.display());
     }
     Ok(())
+}
+
+fn extract_archive(archive_path: &Path, destination: &Path) -> Result<()> {
+    run(Command::new("tar")
+        .arg("-xf")
+        .arg(archive_path)
+        .arg("-C")
+        .arg(destination))
 }
 
 fn download_archive(urls: &[&str], partial_path: &PathBuf, archive_path: &PathBuf) -> Result<()> {
@@ -1325,7 +2026,8 @@ fn download_url(agent: &ureq::Agent, url: &str, partial_path: &Path) -> Result<(
 }
 
 fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if ffmpeg_build_marker_is_current(layout, options) && !options.force {
+    let marker_is_current = ffmpeg_build_marker_is_current(layout, options);
+    if marker_is_current && !options.force {
         println!(
             "reuse FFmpeg build marker {}",
             layout.ffmpeg_build_marker.display()
@@ -1346,11 +2048,13 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         return Ok(());
     }
 
-    if options.force && layout.ffmpeg_prefix.exists() {
+    // A changed target/configuration marker must never reuse objects or static
+    // archive members produced by the previous FFmpeg configuration.
+    if layout.ffmpeg_prefix.exists() {
         fs::remove_dir_all(&layout.ffmpeg_prefix)
             .with_context(|| format!("remove {}", layout.ffmpeg_prefix.display()))?;
     }
-    if options.force && layout.ffmpeg_build_dir.exists() {
+    if layout.ffmpeg_build_dir.exists() {
         fs::remove_dir_all(&layout.ffmpeg_build_dir)
             .with_context(|| format!("remove {}", layout.ffmpeg_build_dir.display()))?;
     }
@@ -1358,12 +2062,14 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         .with_context(|| format!("create {}", layout.ffmpeg_build_dir.display()))?;
     fs::create_dir_all(&layout.ffmpeg_prefix)
         .with_context(|| format!("create {}", layout.ffmpeg_prefix.display()))?;
-    if options.target.is_windows() && !layout.ffmpeg_build_dir.join("configure").exists() {
-        println!("copy FFmpeg source for Windows in-tree build");
+    if uses_windows_posix_ffmpeg(options.target)
+        && !layout.ffmpeg_build_dir.join("configure").exists()
+    {
+        println!("copy FFmpeg source for Windows-hosted in-tree build");
         copy_dir_all(&layout.ffmpeg_source_dir, &layout.ffmpeg_build_dir)?;
     }
 
-    let mut configure = if options.target.is_windows() {
+    let mut configure = if uses_windows_posix_ffmpeg(options.target) {
         let mut command = Command::new(
             posix_shell().context("required POSIX shell was not found for FFmpeg configure")?,
         );
@@ -1373,9 +2079,28 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         Command::new(layout.ffmpeg_source_dir.join("configure"))
     };
     configure.current_dir(&layout.ffmpeg_build_dir);
-    configure.arg(format!("--prefix={}", layout.ffmpeg_prefix.display()));
-    configure.arg("--pkg-config=false");
-    configure.arg("--disable-x86asm");
+    configure.arg(format!(
+        "--prefix={}",
+        path_to_forward_slashes(&layout.ffmpeg_prefix)
+    ));
+    if options.target.is_android() {
+        let pkg_config = ensure_pkg_config_shim(layout)?;
+        let dav1d_pkg_config_dir = layout.dav1d_prefix.join("lib/pkgconfig");
+        configure
+            .arg(format!(
+                "--pkg-config={}",
+                ffmpeg_flag_path_arg(&pkg_config)
+            ))
+            .arg("--pkg-config-flags=--static")
+            .env("PKG_CONFIG_PATH", &dav1d_pkg_config_dir)
+            .env("PKG_CONFIG_LIBDIR", &dav1d_pkg_config_dir)
+            .env("ERIKA_PKG_CONFIG_RELATIVE_BASE", &layout.ffmpeg_build_dir);
+    } else {
+        configure.arg("--pkg-config=false");
+    }
+    if !options.target.is_android() {
+        configure.arg("--disable-x86asm");
+    }
     let mut extra_cflags = if options.target.is_windows() {
         Vec::new()
     } else {
@@ -1413,16 +2138,55 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         ));
         configure.env("SDKROOT", &config.sdk_root);
         match options.target {
-            AppleTarget::Aarch64Macos | AppleTarget::X86_64Macos => {
+            NativeTarget::Aarch64Macos | NativeTarget::X86_64Macos => {
                 configure.env("MACOSX_DEPLOYMENT_TARGET", &config.deployment_target);
             }
-            AppleTarget::Aarch64Ios
-            | AppleTarget::Aarch64IosSimulator
-            | AppleTarget::X86_64IosSimulator => {
+            NativeTarget::Aarch64Ios
+            | NativeTarget::Aarch64IosSimulator
+            | NativeTarget::X86_64IosSimulator => {
                 configure.env("IPHONEOS_DEPLOYMENT_TARGET", &config.deployment_target);
             }
-            AppleTarget::Host | AppleTarget::X86_64WindowsMsvc => {}
+            NativeTarget::Host
+            | NativeTarget::X86_64WindowsMsvc
+            | NativeTarget::Aarch64Android
+            | NativeTarget::Armv7Android
+            | NativeTarget::X86_64Android
+            | NativeTarget::I686Android => {}
         }
+    } else if let Some(config) = android_toolchain(options.target)? {
+        configure.arg(format!("--cc={}", ffmpeg_flag_path_arg(&config.clang)));
+        configure.arg(format!("--cxx={}", ffmpeg_flag_path_arg(&config.clangxx)));
+        configure.arg(format!("--ar={}", ffmpeg_flag_path_arg(&config.ar)));
+        configure.arg(format!("--ranlib={}", ffmpeg_flag_path_arg(&config.ranlib)));
+        configure.arg(format!("--strip={}", ffmpeg_flag_path_arg(&config.strip)));
+        configure.arg(format!("--nm={}", ffmpeg_flag_path_arg(&config.nm)));
+        configure.arg("--target-os=android");
+        configure.arg("--enable-cross-compile");
+        configure.arg(format!("--arch={}", config.arch));
+        configure.arg(format!(
+            "--sysroot={}",
+            path_to_forward_slashes(&config.sysroot)
+        ));
+        if let Some(host_cc) = ffmpeg_android_host_cc(&config)? {
+            configure.arg(format!("--host-cc={host_cc}"));
+        }
+        extra_cflags.push(format!(
+            "-I{}",
+            ffmpeg_flag_path_arg(&layout.zlib_prefix.join("include"))
+        ));
+        extra_cflags.push(format!(
+            "-I{}",
+            ffmpeg_flag_path_arg(&layout.dav1d_prefix.join("include"))
+        ));
+        extra_ldflags.push(format!(
+            "-L{}",
+            ffmpeg_flag_path_arg(&layout.zlib_prefix.join("lib"))
+        ));
+        extra_ldflags.push(format!(
+            "-L{}",
+            ffmpeg_flag_path_arg(&layout.dav1d_prefix.join("lib"))
+        ));
+        configure.env("ANDROID_NDK_HOME", &config.ndk_root);
     } else if options.target.is_windows() {
         configure.arg("--target-os=win64");
         configure.arg("--arch=x86_64");
@@ -1436,8 +2200,6 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
             ffmpeg_flag_path_arg(&layout.zlib_prefix.join("lib"))
         ));
         apply_windows_target_env(&mut configure, options.target)?;
-        apply_windows_posix_shell(&mut configure, options.target);
-        append_windows_posix_paths(&mut configure);
     } else {
         configure.arg("--cc=clang");
         extra_cflags.push(format!(
@@ -1449,6 +2211,9 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
             ffmpeg_flag_path_arg(&layout.zlib_prefix.join("lib"))
         ));
     }
+    apply_windows_posix_shell(&mut configure, options.target);
+    append_windows_posix_paths(&mut configure);
+    apply_android_host_env(&mut configure, options.target)?;
     if !extra_cflags.is_empty() {
         configure.arg(format!("--extra-cflags={}", extra_cflags.join(" ")));
     }
@@ -1464,6 +2229,9 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
 
     println!("configure FFmpeg");
     run(&mut configure)?;
+    if cfg!(windows) && options.target.is_android() {
+        enable_ffmpeg_archive_response_files(&layout.ffmpeg_build_dir)?;
+    }
 
     let jobs = options.jobs.unwrap_or_else(default_job_count);
     println!("build FFmpeg with {jobs} jobs");
@@ -1472,6 +2240,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     let mut build =
         ffmpeg_make_command(&make, &layout.ffmpeg_build_dir, &build_args, options.target)?;
     apply_windows_target_env(&mut build, options.target)?;
+    apply_android_host_env(&mut build, options.target)?;
     apply_windows_posix_shell(&mut build, options.target);
     append_windows_posix_paths(&mut build);
     run(&mut build)?;
@@ -1483,6 +2252,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         options.target,
     )?;
     apply_windows_target_env(&mut install, options.target)?;
+    apply_android_host_env(&mut install, options.target)?;
     apply_windows_posix_shell(&mut install, options.target);
     append_windows_posix_paths(&mut install);
     run(&mut install)?;
@@ -1500,12 +2270,24 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         ],
     )?;
 
+    let ffmpeg_patchset = ffmpeg_patchset_id(&layout.root)?;
     fs::write(
         &layout.ffmpeg_build_marker,
         format!(
-            "ffmpeg={FFMPEG_VERSION}\nzlib={ZLIB_VERSION}\nprofile={}\ntarget={}\nprefix={}\nflags={}\n",
+            "ffmpeg={FFMPEG_VERSION}\npatchset={}\nzlib={ZLIB_VERSION}\ndav1d={}\nprofile={}\ntarget={}\nandroid_api={}\nprefix={}\nflags={}\n",
+            ffmpeg_patchset,
+            if options.target.is_android() {
+                DAV1D_VERSION
+            } else {
+                "n/a"
+            },
             profile_name(options.profile),
             options.target.triple().unwrap_or("host"),
+            if options.target.is_android() {
+                android_api_level()?.to_string()
+            } else {
+                "n/a".to_string()
+            },
             layout.ffmpeg_prefix.display(),
             options
                 .profile
@@ -1514,6 +2296,36 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         ),
     )
     .with_context(|| format!("write {}", layout.ffmpeg_build_marker.display()))?;
+    Ok(())
+}
+
+fn enable_ffmpeg_archive_response_files(build_dir: &Path) -> Result<()> {
+    let makefile = build_dir.join("ffbuild/library.mak");
+    let contents =
+        fs::read_to_string(&makefile).with_context(|| format!("read {}", makefile.display()))?;
+    let original = "\t$(AR) $(ARFLAGS) $(AR_O) $^";
+    let replacement = concat!(
+        "\t$(file >$@.rsp,$(ARFLAGS) $(AR_O) $^)\n",
+        "\t$(AR) @$@.rsp\n",
+        "\t$(RM) $@.rsp"
+    );
+    if contents.contains(replacement) {
+        return Ok(());
+    }
+    if !contents.contains(original) {
+        bail!(
+            "FFmpeg archive recipe was not found in {}; cannot enable Windows response files",
+            makefile.display()
+        );
+    }
+    let patched = contents.replacen(original, replacement, 1);
+    fs::write(&makefile, patched).with_context(|| {
+        format!(
+            "write response-file archive recipe to {}",
+            makefile.display()
+        )
+    })?;
+    println!("patched FFmpeg static archive recipe to use llvm-ar response files on Windows");
     Ok(())
 }
 
@@ -1529,7 +2341,24 @@ struct AppleToolchain {
     deployment_target: String,
 }
 
-fn apple_toolchain(target: AppleTarget) -> Result<Option<AppleToolchain>> {
+#[derive(Debug, Clone)]
+struct AndroidToolchain {
+    ndk_root: PathBuf,
+    bin_dir: PathBuf,
+    sysroot: PathBuf,
+    cmake_toolchain_file: PathBuf,
+    clang: PathBuf,
+    clangxx: PathBuf,
+    ar: PathBuf,
+    ranlib: PathBuf,
+    strip: PathBuf,
+    nm: PathBuf,
+    arch: &'static str,
+    abi: &'static str,
+    api_level: u32,
+}
+
+fn apple_toolchain(target: NativeTarget) -> Result<Option<AppleToolchain>> {
     let Some(sdk) = target.sdk() else {
         return Ok(None);
     };
@@ -1552,6 +2381,192 @@ fn apple_toolchain(target: AppleTarget) -> Result<Option<AppleToolchain>> {
     }))
 }
 
+fn android_toolchain(target: NativeTarget) -> Result<Option<AndroidToolchain>> {
+    if !target.is_android() || matches!(target, NativeTarget::Host) {
+        return Ok(None);
+    }
+    let ndk_root = android_ndk_root()?;
+    let host_tag = android_ndk_host_tag(&ndk_root)?;
+    let bin_dir = ndk_root
+        .join("toolchains/llvm/prebuilt")
+        .join(&host_tag)
+        .join("bin");
+    let sysroot = ndk_root
+        .join("toolchains/llvm/prebuilt")
+        .join(&host_tag)
+        .join("sysroot");
+    let cmake_toolchain_file = ndk_root.join("build/cmake/android.toolchain.cmake");
+    let api_level = android_api_level()?;
+    let clang_triple = target
+        .android_clang_triple()
+        .context("explicit Android target must have a Clang triple")?;
+    let clang = required_executable_in_dir(
+        &bin_dir,
+        &format!("{clang_triple}{api_level}-clang"),
+        "Android NDK C compiler",
+    )?;
+    let clangxx = required_executable_in_dir(
+        &bin_dir,
+        &format!("{clang_triple}{api_level}-clang++"),
+        "Android NDK C++ compiler",
+    )?;
+    let ar = required_executable_in_dir(&bin_dir, "llvm-ar", "Android NDK archiver")?;
+    let ranlib = required_executable_in_dir(&bin_dir, "llvm-ranlib", "Android NDK ranlib")?;
+    let strip = required_executable_in_dir(&bin_dir, "llvm-strip", "Android NDK strip")?;
+    let nm = required_executable_in_dir(&bin_dir, "llvm-nm", "Android NDK nm")?;
+    if !sysroot.is_dir() || !cmake_toolchain_file.is_file() {
+        bail!(
+            "Android NDK at {} is incomplete (missing sysroot or android.toolchain.cmake)",
+            ndk_root.display()
+        );
+    }
+    Ok(Some(AndroidToolchain {
+        ndk_root,
+        bin_dir,
+        sysroot,
+        cmake_toolchain_file,
+        clang,
+        clangxx,
+        ar,
+        ranlib,
+        strip,
+        nm,
+        arch: target
+            .ffmpeg_arch()
+            .context("explicit Android target must have an FFmpeg arch")?,
+        abi: target
+            .android_abi()
+            .context("explicit Android target must have an ABI")?,
+        api_level,
+    }))
+}
+
+fn ffmpeg_android_host_cc(config: &AndroidToolchain) -> Result<Option<String>> {
+    if !cfg!(windows) {
+        return Ok(None);
+    }
+    let clang =
+        required_executable_in_dir(&config.bin_dir, "clang", "Android NDK host Clang compiler")?;
+    Ok(Some(format!(
+        "{} --target=x86_64-pc-windows-msvc -fuse-ld=link",
+        ffmpeg_flag_path_arg(&clang)
+    )))
+}
+
+fn android_api_level() -> Result<u32> {
+    let value = env::var("ANDROID_API_LEVEL")
+        .ok()
+        .map(|value| {
+            value
+                .trim_start_matches("android-")
+                .parse::<u32>()
+                .with_context(|| format!("ANDROID_API_LEVEL must be an integer, got `{value}`"))
+        })
+        .transpose()?
+        .unwrap_or(DEFAULT_ANDROID_API_LEVEL);
+    if value < DEFAULT_ANDROID_API_LEVEL {
+        bail!(
+            "Android API level {value} is unsupported; Erika requires API {} or newer",
+            DEFAULT_ANDROID_API_LEVEL
+        );
+    }
+    Ok(value)
+}
+
+fn android_ndk_root() -> Result<PathBuf> {
+    let mut candidates = Vec::new();
+    for variable in ["ANDROID_NDK_HOME", "ANDROID_NDK_ROOT"] {
+        if let Some(path) = env::var_os(variable) {
+            candidates.push(PathBuf::from(path));
+        }
+    }
+    for variable in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
+        if let Some(path) = env::var_os(variable) {
+            add_android_sdk_ndk_candidates(&mut candidates, &PathBuf::from(path));
+        }
+    }
+    if cfg!(windows) {
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            add_android_sdk_ndk_candidates(
+                &mut candidates,
+                &PathBuf::from(local_app_data).join("Android/Sdk"),
+            );
+        }
+    }
+    if let Some(path) = candidates.into_iter().find(|path| {
+        path.join("build/cmake/android.toolchain.cmake").is_file()
+            && path.join("toolchains/llvm/prebuilt").is_dir()
+    }) {
+        return Ok(path);
+    }
+    bail!(
+        "Android NDK was not found. Set ANDROID_NDK_HOME/ANDROID_NDK_ROOT, or install a side-by-side NDK under ANDROID_HOME/ndk"
+    )
+}
+
+fn add_android_sdk_ndk_candidates(candidates: &mut Vec<PathBuf>, sdk_root: &Path) {
+    let ndk_dir = sdk_root.join("ndk");
+    if let Ok(entries) = fs::read_dir(&ndk_dir) {
+        let mut versions = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect::<Vec<_>>();
+        versions.sort_by_key(|path| {
+            path.file_name()
+                .map(|name| android_ndk_version_key(&name.to_string_lossy()))
+                .unwrap_or_default()
+        });
+        versions.reverse();
+        candidates.extend(versions);
+    }
+    candidates.push(sdk_root.join("ndk-bundle"));
+}
+
+fn android_ndk_version_key(value: &str) -> Vec<u32> {
+    value
+        .split(|ch: char| !ch.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse().ok())
+        .collect()
+}
+
+fn android_ndk_host_tag(ndk_root: &Path) -> Result<String> {
+    let prebuilt = ndk_root.join("toolchains/llvm/prebuilt");
+    let preferred: &[&str] = if cfg!(windows) {
+        &["windows-x86_64"]
+    } else if cfg!(target_os = "macos") {
+        &["darwin-aarch64", "darwin-x86_64"]
+    } else {
+        &["linux-x86_64"]
+    };
+    for tag in preferred {
+        if prebuilt.join(tag).is_dir() {
+            return Ok((*tag).to_string());
+        }
+    }
+    let available = fs::read_dir(&prebuilt)
+        .with_context(|| format!("read Android NDK prebuilt directory {}", prebuilt.display()))?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect::<Vec<_>>();
+    bail!(
+        "Android NDK at {} has no toolchain for this host (available: {})",
+        ndk_root.display(),
+        available.join(", ")
+    )
+}
+
+fn required_executable_in_dir(dir: &Path, name: &str, description: &str) -> Result<PathBuf> {
+    let executable = executable_in_dir(dir, name);
+    if executable.is_file() {
+        Ok(executable)
+    } else {
+        bail!("{description} was not found under {}", dir.display())
+    }
+}
+
 fn ffmpeg_flag_path_arg(path: &Path) -> String {
     shell_escape(&path.to_string_lossy().replace('\\', "/"))
 }
@@ -1560,6 +2575,11 @@ fn ffmpeg_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions
     let Ok(marker) = fs::read_to_string(&layout.ffmpeg_build_marker) else {
         return false;
     };
+    let android_api_is_current = !options.target.is_android()
+        || android_api_level().is_ok_and(|api| marker.contains(&format!("android_api={api}\n")));
+    let patchset_is_current = ffmpeg_patchset_id(&layout.root).is_ok_and(|patchset| {
+        ffmpeg_build_marker_has_current_patchset(&marker, options.target, &patchset)
+    });
     marker.contains(&format!("ffmpeg={FFMPEG_VERSION}\n"))
         && marker.contains(&format!("profile={}\n", profile_name(options.profile)))
         && marker.contains(&format!(
@@ -1567,7 +2587,59 @@ fn ffmpeg_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions
             options.target.triple().unwrap_or("host")
         ))
         && marker.contains(&format!("zlib={ZLIB_VERSION}\n"))
-        && marker.contains("--enable-zlib")
+        && marker.contains(&format!(
+            "dav1d={}\n",
+            if options.target.is_android() {
+                DAV1D_VERSION
+            } else {
+                "n/a"
+            }
+        ))
+        && ffmpeg_build_marker_has_current_flags(&marker, options.profile, options.target)
+        && patchset_is_current
+        && android_api_is_current
+}
+
+fn dav1d_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions) -> bool {
+    if !options.target.is_android() {
+        return true;
+    }
+    let Ok(marker) = fs::read_to_string(&layout.dav1d_build_marker) else {
+        return false;
+    };
+    android_api_level().is_ok_and(|api| {
+        marker.contains(&format!("dav1d={DAV1D_VERSION}\n"))
+            && marker.contains(&format!(
+                "target={}\n",
+                options.target.triple().unwrap_or("host")
+            ))
+            && marker.contains(&format!("android_api={api}\n"))
+            && marker.contains(&format!("asm={}\n", dav1d_asm_enabled(options.target)))
+    })
+}
+
+fn ffmpeg_build_marker_has_current_flags(
+    marker: &str,
+    profile: NativeDependencyProfile,
+    target: NativeTarget,
+) -> bool {
+    let expected = profile.ffmpeg_configure_flags_for_target(target).join(" ");
+    marker
+        .lines()
+        .find_map(|line| line.strip_prefix("flags="))
+        .is_some_and(|flags| flags == expected)
+}
+
+fn ffmpeg_build_marker_has_current_patchset(
+    marker: &str,
+    target: NativeTarget,
+    expected: &str,
+) -> bool {
+    !target.is_android()
+        || marker
+            .lines()
+            .find_map(|line| line.strip_prefix("patchset="))
+            .is_some_and(|patchset| patchset == expected)
 }
 
 fn shell_escape(value: &str) -> String {
@@ -1583,18 +2655,35 @@ fn shell_escape(value: &str) -> String {
 fn write_profile_metadata(
     layout: &WorkspaceLayout,
     profile: NativeDependencyProfile,
-    target: AppleTarget,
+    target: NativeTarget,
 ) -> Result<()> {
     fs::create_dir_all(&layout.dist_dir)
         .with_context(|| format!("create {}", layout.dist_dir.display()))?;
+    let ffmpeg_patchset = ffmpeg_patchset_id(&layout.root)?;
     fs::write(
         layout.dist_dir.join("erika-native-deps.txt"),
         format!(
-            "profile={}\ntarget={}\nffmpeg={}\nffmpeg_dist={}\nzlib={}\nzlib_dist={}\nlibass={}\nlibass_source={}\nharfbuzz={}\nharfbuzz_source={}\nfreetype={}\nfreetype_source={}\nfribidi={}\nfribidi_source={}\n",
+            "profile={}\ntarget={}\nandroid_api={}\nffmpeg={}\nffmpeg_patchset={}\nffmpeg_dist={}\ndav1d={}\ndav1d_dist={}\nzlib={}\nzlib_dist={}\nlibass={}\nlibass_source={}\nharfbuzz={}\nharfbuzz_source={}\nfreetype={}\nfreetype_source={}\nfribidi={}\nfribidi_source={}\n",
             profile_name(profile),
             target.triple().unwrap_or("host"),
+            if target.is_android() {
+                android_api_level()?.to_string()
+            } else {
+                "n/a".to_string()
+            },
             FFMPEG_VERSION,
+            ffmpeg_patchset,
             layout.ffmpeg_prefix.display(),
+            if target.is_android() {
+                DAV1D_VERSION
+            } else {
+                "n/a"
+            },
+            if target.is_android() {
+                layout.dav1d_prefix.display().to_string()
+            } else {
+                "n/a".to_string()
+            },
             ZLIB_VERSION,
             layout.zlib_prefix.display(),
             LIBASS_VERSION,
@@ -1636,7 +2725,14 @@ fn check_license_policy() -> Result<()> {
     {
         bail!("gpl-full profile must explicitly pass --enable-gpl");
     }
-    println!("license policy ok: default=lgpl, gpl-full is opt-in");
+    let notices = fs::read_to_string(root.join("packaging/THIRD_PARTY_NOTICES.md"))
+        .context("read third-party notices")?;
+    if !notices.contains("| dav1d | 1.5.x | BSD 2-Clause |")
+        || !root.join("packaging/LICENSE.dav1d").is_file()
+    {
+        bail!("dav1d BSD 2-Clause attribution must ship with release bundles");
+    }
+    println!("license policy ok: default=lgpl, gpl-full is opt-in, dav1d BSD notice present");
     Ok(())
 }
 
@@ -1718,7 +2814,7 @@ fn smoke_ffmpeg_make(options: DepsOptions) -> Result<()> {
 }
 
 fn ensure_windows_link_aliases(
-    target: AppleTarget,
+    target: NativeTarget,
     prefix: &Path,
     aliases: &[(&str, &str)],
 ) -> Result<()> {
@@ -1738,7 +2834,7 @@ fn ensure_windows_link_aliases(
     Ok(())
 }
 
-fn ensure_windows_zlib_static_alias(target: AppleTarget, prefix: &Path) -> Result<()> {
+fn ensure_windows_zlib_static_alias(target: NativeTarget, prefix: &Path) -> Result<()> {
     if !target.is_windows() {
         return Ok(());
     }
@@ -1753,7 +2849,7 @@ fn ensure_windows_zlib_static_alias(target: AppleTarget, prefix: &Path) -> Resul
     Ok(())
 }
 
-fn ensure_windows_zlib_header_compat(target: AppleTarget, prefix: &Path) -> Result<()> {
+fn ensure_windows_zlib_header_compat(target: NativeTarget, prefix: &Path) -> Result<()> {
     if !target.is_windows() {
         return Ok(());
     }
@@ -1804,7 +2900,7 @@ fn ensure_pkg_config_shim(layout: &WorkspaceLayout) -> Result<PathBuf> {
              setlocal\r\n\
              for %%I in (\"%~dp0{}\") do set \"ERIKA_ROOT=%%~fI\"\r\n\
              set \"ERIKA_DIST_DIR=%ERIKA_ROOT%\\{}\"\r\n\
-             set \"ERIKA_PKG_CONFIG_PATH=%ERIKA_DIST_DIR%\\ffmpeg\\lib\\pkgconfig;%ERIKA_DIST_DIR%\\freetype\\lib\\pkgconfig;%ERIKA_DIST_DIR%\\harfbuzz\\lib\\pkgconfig;%ERIKA_DIST_DIR%\\fribidi\\lib\\pkgconfig;%ERIKA_DIST_DIR%\\libass\\lib\\pkgconfig\"\r\n\
+             set \"ERIKA_PKG_CONFIG_PATH=%ERIKA_DIST_DIR%\\dav1d\\lib\\pkgconfig;%ERIKA_DIST_DIR%\\ffmpeg\\lib\\pkgconfig;%ERIKA_DIST_DIR%\\freetype\\lib\\pkgconfig;%ERIKA_DIST_DIR%\\harfbuzz\\lib\\pkgconfig;%ERIKA_DIST_DIR%\\fribidi\\lib\\pkgconfig;%ERIKA_DIST_DIR%\\libass\\lib\\pkgconfig\"\r\n\
              if defined PKG_CONFIG_PATH (\r\n\
              \tset \"PKG_CONFIG_PATH=%ERIKA_PKG_CONFIG_PATH%;%PKG_CONFIG_PATH%\"\r\n\
              ) else (\r\n\
@@ -2259,10 +3355,21 @@ fn looks_like_version(value: &str) -> bool {
 static WINDOWS_MSVC_ENV: OnceLock<std::result::Result<Vec<(OsString, OsString)>, String>> =
     OnceLock::new();
 
-fn apply_windows_target_env(command: &mut Command, target: AppleTarget) -> Result<()> {
+fn apply_windows_target_env(command: &mut Command, target: NativeTarget) -> Result<()> {
     if !target.is_windows() {
         return Ok(());
     }
+    apply_msvc_environment(command)
+}
+
+fn apply_android_host_env(command: &mut Command, target: NativeTarget) -> Result<()> {
+    if !cfg!(windows) || !target.is_android() {
+        return Ok(());
+    }
+    apply_msvc_environment(command)
+}
+
+fn apply_msvc_environment(command: &mut Command) -> Result<()> {
     let existing_path = command_env_path(command);
     for (key, value) in windows_msvc_environment()? {
         command.env(key, value);
@@ -2357,27 +3464,74 @@ fn vs_dev_cmd() -> Option<PathBuf> {
 }
 
 fn cmake_tool() -> Option<PathBuf> {
-    which("cmake").or_else(|| {
-        existing_path(
+    which("cmake")
+        .or_else(|| android_sdk_cmake_tool("cmake"))
+        .or_else(|| {
+            existing_path(
             "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe",
         )
-    })
+        })
 }
 
 fn ninja_tool() -> Option<PathBuf> {
-    which("ninja").or_else(|| {
-        existing_path(
+    which("ninja")
+        .or_else(|| android_sdk_cmake_tool("ninja"))
+        .or_else(|| {
+            existing_path(
             "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
         )
-    })
+        })
+}
+
+fn android_sdk_cmake_tool(tool: &str) -> Option<PathBuf> {
+    let mut sdk_roots = ["ANDROID_HOME", "ANDROID_SDK_ROOT"]
+        .into_iter()
+        .filter_map(env::var_os)
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if cfg!(windows) {
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            sdk_roots.push(PathBuf::from(local_app_data).join("Android/Sdk"));
+        }
+    }
+    for sdk_root in sdk_roots {
+        let Ok(entries) = fs::read_dir(sdk_root.join("cmake")) else {
+            continue;
+        };
+        let mut versions = entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect::<Vec<_>>();
+        versions.sort_by_key(|path| {
+            path.file_name()
+                .map(|name| android_ndk_version_key(&name.to_string_lossy()))
+                .unwrap_or_default()
+        });
+        versions.reverse();
+        for version in versions {
+            let candidate = executable_in_dir(&version.join("bin"), tool);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 fn posix_shell() -> Option<PathBuf> {
     existing_path("C:/msys64/usr/bin/sh.exe")
-        .or_else(|| which("sh"))
-        .or_else(|| which("bash"))
         .or_else(|| existing_path("C:/Program Files/Git/usr/bin/sh.exe"))
         .or_else(|| existing_path("C:/Program Files/Git/bin/bash.exe"))
+        .or_else(|| which("sh"))
+        .or_else(|| {
+            which("bash").filter(|path| {
+                !cfg!(windows)
+                    || !path
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case("C:\\Windows\\System32\\bash.exe")
+            })
+        })
 }
 
 fn gnu_make() -> Option<PathBuf> {
@@ -2386,15 +3540,34 @@ fn gnu_make() -> Option<PathBuf> {
         .or_else(|| which("gmake"))
         .or_else(|| which("mingw32-make"))
         .or_else(|| existing_path("C:/mingw64/bin/mingw32-make.exe"))
+        .or_else(android_ndk_make)
+}
+
+fn android_ndk_make() -> Option<PathBuf> {
+    let ndk_root = android_ndk_root().ok()?;
+    let host_tag = android_ndk_host_tag(&ndk_root).ok()?;
+    for bin_dir in [
+        ndk_root.join("prebuilt").join(&host_tag).join("bin"),
+        ndk_root
+            .join("toolchains/llvm/prebuilt")
+            .join(&host_tag)
+            .join("bin"),
+    ] {
+        let candidate = executable_in_dir(&bin_dir, "make");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn ffmpeg_make_command(
     make: &Path,
     build_dir: &Path,
     args: &[String],
-    target: AppleTarget,
+    target: NativeTarget,
 ) -> Result<Command> {
-    if target.is_windows() {
+    if uses_windows_posix_ffmpeg(target) {
         let shell = posix_shell().context("required POSIX shell was not found for FFmpeg make")?;
         let mut command = Command::new(shell);
         let make_line = std::iter::once(format!(
@@ -2460,8 +3633,8 @@ fn append_windows_posix_paths(command: &mut Command) {
     append_paths_to_command(command, dirs.into_iter().filter(|path| path.exists()));
 }
 
-fn apply_windows_posix_shell(command: &mut Command, target: AppleTarget) {
-    if !target.is_windows() {
+fn apply_windows_posix_shell(command: &mut Command, target: NativeTarget) {
+    if !uses_windows_posix_ffmpeg(target) {
         return;
     }
     let Some(shell) = posix_shell() else {
@@ -2469,6 +3642,49 @@ fn apply_windows_posix_shell(command: &mut Command, target: AppleTarget) {
     };
     command.env("CONFIG_SHELL", &shell);
     command.env("SHELL", &shell);
+}
+
+fn uses_windows_posix_ffmpeg(target: NativeTarget) -> bool {
+    cfg!(windows) && (target.is_windows() || target.is_android())
+}
+
+fn host_c_compiler() -> Result<PathBuf> {
+    host_compiler("CC_FOR_BUILD", &["cc", "clang", "gcc", "cl"])
+        .context("a host C compiler is required for Meson build-machine generators")
+}
+
+fn host_cxx_compiler() -> Result<PathBuf> {
+    host_compiler("CXX_FOR_BUILD", &["c++", "clang++", "g++", "cl"])
+        .context("a host C++ compiler is required for Meson build-machine generators")
+}
+
+fn host_compiler(variable: &str, candidates: &[&str]) -> Option<PathBuf> {
+    env::var_os(variable)
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            if cfg!(windows) && candidates.contains(&"cl") {
+                windows_host_cl_compiler()
+            } else {
+                None
+            }
+        })
+        .or_else(|| candidates.iter().find_map(|candidate| which(candidate)))
+}
+
+fn windows_host_cl_compiler() -> Option<PathBuf> {
+    let tools = windows_msvc_environment().ok()?;
+    let root = tools.iter().find_map(|(key, value)| {
+        key.to_string_lossy()
+            .eq_ignore_ascii_case("VCToolsInstallDir")
+            .then(|| PathBuf::from(value))
+    })?;
+    [
+        root.join("bin/Hostx64/x64/cl.exe"),
+        root.join("bin/Hostx86/x86/cl.exe"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
 }
 
 fn shell_quote(value: &str) -> String {
@@ -2613,6 +3829,179 @@ fn command_display(command: &Command) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn android_targets_map_to_rust_abi_and_clang() {
+        let cases = [
+            (
+                "aarch64-linux-android",
+                "arm64-v8a",
+                "aarch64-linux-android",
+            ),
+            (
+                "armv7-linux-androideabi",
+                "armeabi-v7a",
+                "armv7a-linux-androideabi",
+            ),
+            ("x86_64-linux-android", "x86_64", "x86_64-linux-android"),
+            ("i686-linux-android", "x86", "i686-linux-android"),
+        ];
+        for (triple, abi, clang) in cases {
+            let target = NativeTarget::parse(triple).unwrap();
+            assert!(target.is_android());
+            assert_eq!(target.triple(), Some(triple));
+            assert_eq!(target.android_abi(), Some(abi));
+            assert_eq!(target.android_clang_triple(), Some(clang));
+        }
+    }
+
+    #[test]
+    fn android_ffmpeg_plan_enables_mediacodec_without_videotoolbox() {
+        for profile in [
+            NativeDependencyProfile::Lgpl,
+            NativeDependencyProfile::GplFull,
+        ] {
+            let flags = profile.ffmpeg_configure_flags_for_target(NativeTarget::X86_64Android);
+            assert!(flags.contains(&"--enable-jni"));
+            assert!(flags.contains(&"--enable-mediacodec"));
+            assert!(flags.contains(&"--enable-libdav1d"));
+            assert!(flags.iter().any(|flag| {
+                flag.contains("h264_mediacodec")
+                    && flag.contains("vp8_mediacodec")
+                    && flag.contains("av1_mediacodec")
+                    && flag.contains("libdav1d")
+            }));
+            assert!(flags.iter().any(|flag| {
+                flag.strip_prefix("--enable-decoder=")
+                    .is_some_and(|decoders| decoders.split(',').any(|decoder| decoder == "vp8"))
+            }));
+            assert!(!flags.contains(&"--enable-videotoolbox"));
+        }
+    }
+
+    #[test]
+    fn android_i686_ffmpeg_disables_non_pic_x86_assembly() {
+        for profile in [
+            NativeDependencyProfile::Lgpl,
+            NativeDependencyProfile::GplFull,
+        ] {
+            let i686 = profile.ffmpeg_configure_flags_for_target(NativeTarget::I686Android);
+            assert!(i686.contains(&"--disable-asm"));
+            assert!(!dav1d_asm_enabled(NativeTarget::I686Android));
+
+            let x86_64 = profile.ffmpeg_configure_flags_for_target(NativeTarget::X86_64Android);
+            assert!(!x86_64.contains(&"--disable-asm"));
+            assert!(dav1d_asm_enabled(NativeTarget::X86_64Android));
+        }
+    }
+
+    #[test]
+    fn ffmpeg_marker_invalidates_when_android_decoder_flags_change() {
+        let profile = NativeDependencyProfile::Lgpl;
+        let target = NativeTarget::X86_64Android;
+        let current = format!(
+            "flags={}\n",
+            profile.ffmpeg_configure_flags_for_target(target).join(" ")
+        );
+        assert!(ffmpeg_build_marker_has_current_flags(
+            &current, profile, target
+        ));
+
+        let stale = current.replace(",vp8,vp9", ",vp9");
+        assert!(!ffmpeg_build_marker_has_current_flags(
+            &stale, profile, target
+        ));
+    }
+
+    #[test]
+    fn android_ffmpeg_marker_requires_current_patchset_revision() {
+        let target = NativeTarget::X86_64Android;
+        let patchset = "erika-android-mediacodec-v1-deadbeef";
+        assert!(!ffmpeg_build_marker_has_current_patchset(
+            "ffmpeg=7.1.1\n",
+            target,
+            patchset
+        ));
+        assert!(ffmpeg_build_marker_has_current_patchset(
+            &format!("ffmpeg=7.1.1\npatchset={patchset}\n"),
+            target,
+            patchset
+        ));
+        assert!(ffmpeg_build_marker_has_current_patchset(
+            "ffmpeg=7.1.1\n",
+            NativeTarget::Host,
+            patchset
+        ));
+    }
+
+    #[test]
+    fn unified_patch_application_is_idempotent() {
+        let patch = concat!(
+            "--- a/example.c\n",
+            "+++ b/example.c\n",
+            "@@ -2,2 +2,3 @@\n",
+            " beta\n",
+            "+bounded\n",
+            " gamma\n",
+        );
+        let parsed = parse_unified_patch(patch).unwrap();
+        assert_eq!(parsed.len(), 1);
+
+        let original = "alpha\nbeta\ngamma\n";
+        let (patched, changed) = apply_patch_hunks(original, &parsed[0].hunks).unwrap();
+        assert!(changed);
+        assert_eq!(patched, "alpha\nbeta\nbounded\ngamma\n");
+
+        let (reapplied, changed) = apply_patch_hunks(&patched, &parsed[0].hunks).unwrap();
+        assert!(!changed);
+        assert_eq!(reapplied, patched);
+    }
+
+    #[test]
+    fn ffmpeg_patch_is_opt_in_and_uses_zero_timeout_dequeues() {
+        let root = workspace_root().unwrap();
+        let patch = fs::read_to_string(root.join(FFMPEG_PATCHES[0])).unwrap();
+        assert!(patch.contains("\"erika_nonblocking\""));
+        assert!(patch.contains("OFFSET(erika_nonblocking), AV_OPT_TYPE_BOOL, {.i64 = 0}"));
+        assert!(patch.contains("s->ctx->erika_nonblocking = s->erika_nonblocking"));
+        assert!(patch.contains("wait && !s->erika_nonblocking"));
+        assert!(patch.contains("&null_pkt, !s->erika_nonblocking"));
+        assert_eq!(patch.matches("frame, !s->erika_nonblocking").count(), 3);
+        assert!(patch.contains("if (s->erika_nonblocking)"));
+        assert!(patch.contains("output_dequeue_timeout_us = 0"));
+        assert!(patch.contains("s->draining && !s->erika_nonblocking"));
+        assert!(patch.contains("return AVERROR(EAGAIN);"));
+        assert!(patch.contains("Erika nonblocking MediaCodec receive: yielding"));
+        assert!(patch.contains("EAGAIN after zero-timeout input/output starvation"));
+        assert!(patch.contains("Erika nonblocking MediaCodec drain: yielding EAGAIN"));
+    }
+
+    #[test]
+    fn android_ffmpeg_flags_require_dav1d_for_av1_fallback() {
+        for target in [
+            NativeTarget::Aarch64Android,
+            NativeTarget::Armv7Android,
+            NativeTarget::X86_64Android,
+            NativeTarget::I686Android,
+        ] {
+            let flags = NativeDependencyProfile::Lgpl.ffmpeg_configure_flags_for_target(target);
+            let decoders = flags
+                .iter()
+                .filter_map(|flag| flag.strip_prefix("--enable-decoder="))
+                .flat_map(|value| value.split(','))
+                .collect::<HashSet<_>>();
+            assert!(decoders.contains("av1_mediacodec"));
+            assert!(decoders.contains("libdav1d"));
+            assert!(flags.contains(&"--enable-libdav1d"));
+        }
+    }
+
+    #[test]
+    fn android_ndk_versions_sort_numerically() {
+        let mut versions = ["9.0.0", "29.0.14206865", "27.2.12479018"];
+        versions.sort_by_key(|value| android_ndk_version_key(value));
+        assert_eq!(versions, ["9.0.0", "27.2.12479018", "29.0.14206865"]);
+    }
+
     #[cfg(windows)]
     #[test]
     fn appending_paths_keeps_existing_command_path_first() {
@@ -2644,7 +4033,7 @@ fn print_help() {
     println!("  cargo run -p xtask -- deps fetch --profile lgpl [--all]");
     println!("  cargo run -p xtask -- deps status --profile lgpl");
     println!(
-        "  cargo run -p xtask -- deps build --profile lgpl [--target host|aarch64-apple-darwin|x86_64-apple-darwin|aarch64-apple-ios|aarch64-apple-ios-sim|x86_64-apple-ios|x86_64-pc-windows-msvc|windows-x64] [--force] [--jobs N]"
+        "  cargo run -p xtask -- deps build --profile lgpl [--target host|aarch64-apple-darwin|x86_64-apple-darwin|aarch64-apple-ios|aarch64-apple-ios-sim|x86_64-apple-ios|x86_64-pc-windows-msvc|aarch64-linux-android|armv7-linux-androideabi|x86_64-linux-android|i686-linux-android] [--force] [--jobs N]"
     );
     println!("  cargo run -p xtask -- check license");
 }

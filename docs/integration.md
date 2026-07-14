@@ -24,7 +24,7 @@ Use `ErikaPresenterHandle` unless you have a reason to render yourself. The
 pull-model `ErikaHandle` is for hosts that own their compositor and only want
 Erika's decode/timing/state. The rest of this guide is presenter-based.
 
-The presenter family is compiled on **macOS, iOS, and Windows** only.
+The presenter family is compiled on **macOS, iOS, Windows, and Android**.
 
 ## 2. The lifecycle
 
@@ -45,8 +45,8 @@ frame appear immediately.
 
 ```c
 ErikaPresenterConfig cfg = {
-    .output_mode  = ErikaPresenterOutputMode_Sdr,   // or _AppleEdr on macOS/iOS
-    .edr_headroom = 1.0f,                            // used only for Apple EDR
+    .output_mode  = ErikaPresenterOutputMode_Sdr,   // AppleEdr or Android ExtendedLinear
+    .edr_headroom = 1.0f,                            // requested content-headroom ceiling
     .luma_upscaler = ErikaLumaUpscalerMode_Off,      // or ArtCnnC4F16 / C4F32
 };
 ErikaPresenterHandle *p = erika_presenter_create_with_config(cfg);
@@ -54,8 +54,10 @@ if (!p) { /* read erika_last_error_message() */ }
 ```
 
 `erika_presenter_create()` uses defaults (SDR, no upscaler). The neural luma
-upscaler is a Metal-compute feature; on the D3D11/wgpu backends `set_upscaler`
-is an accepted no-op fallback.
+upscaler is implemented by Metal on Apple platforms and by wgpu compute on
+capable Vulkan-class adapters, including Android. Backends without compute
+(notably GLES 3.0 and D3D11) retain native luma sampling and report an explicit
+`Inactive` status and fallback reason.
 
 ## 4. Attach a surface
 
@@ -102,6 +104,54 @@ For X11/Wayland/Android or to be explicit about the surface kind, use
 `erika_presenter_attach_wgpu_surface(p, kind, raw_window, raw_display, w, h, scale)`
 with the matching `ErikaWgpuSurfaceKind` and platform handles.
 
+### Android extended-linear scRGB
+
+Android `ExtendedLinear` is FP16 extended-linear scRGB, not HDR10/PQ. A native
+host must provide an `ANativeWindow` from a `SurfaceView` that is directly
+composited (the Flutter plugin uses Hybrid Composition) and attach it with the
+probed output capabilities:
+
+```c
+ErikaSurfaceOutputCapabilities caps = {
+    .extended_linear = display_and_surface_are_hdr_capable,
+    .direct_composition = true,       // SurfaceView, not TextureView
+    .desired_headroom = requested_headroom, // 0 = system auto
+    .fallback_reason = host_probe_reason, // 0 when eligible
+};
+erika_presenter_attach_wgpu_surface_with_output_capabilities(
+    p, ErikaWgpuSurfaceKind_AndroidNativeWindow,
+    (uint64_t)(uintptr_t)native_window, 0, w, h, scale, caps);
+```
+
+The renderer activates extended-linear only when the request, display/surface
+eligibility, direct composition, Vulkan backend, `Rgba16Float` support, and
+post-configure `ADATASPACE_SCRGB_LINEAR` readback all succeed. Any failed
+condition keeps playback on SDR and records a stable `fallback_reason` code
+`0..8`; GLES and `TextureView` are always SDR paths.
+
+`ErikaPresenterConfig.edr_headroom` is the content ceiling. A positive
+`desired_headroom` is an optional surface ceiling; `0` leaves the surface in
+system-auto mode. The effective wgpu target follows those ceilings and the
+current display HDR/SDR ratio when that ratio is known. On API 34+, a native
+host should observe `Display.registerHdrSdrRatioChangedListener` and publish
+each real state change with
+`erika_presenter_set_output_headroom(p, ratio, true)`. Publish
+`(1.0f, false)` when the ratio becomes unavailable or the view detaches. The
+Flutter plugin performs this wiring automatically. On API 35 it also calls
+`SurfaceView.setDesiredHdrHeadroom` per view; it never changes the global
+window.
+
+After attach and after every resize/recovery, query
+`erika_presenter_get_output_status`. Active Android scRGB reports
+`AndroidExtendedLinearScRgb`, `SixteenBitFloat`, native dataspace `406913024`,
+and `extended_linear_active = true`. When Android supplies a display ratio,
+`active_headroom` contains that ratio and `active_headroom_known` is true;
+otherwise the field is only a fallback value and `active_headroom_known` is
+false. `headroom_updates` increments only for a real known-state or ratio
+change. A requested mode is not evidence that the mode is active. Current
+non-HDR/emulator testing covers the SDR fallback path; API 35 HDR-device
+acceptance remains required for the active path.
+
 ## 5. Open and play
 
 ```c
@@ -115,9 +165,9 @@ erika_presenter_play(p);
 
 Drive `render_tick` from the surface's display timer — `CADisplayLink`
 (iOS) / `CVDisplayLink` or `CADisplayLink` (macOS) / a frame scheduler on
-Windows. Pass the frame's **presentation time in seconds** from a monotonic
-host clock; Erika uses it for vsync-quantized scheduling, so pass an absolute
-timestamp, not a delta.
+Windows / `Choreographer` on Android. Pass the frame's **presentation time in
+seconds** from a monotonic host clock; Erika uses it for vsync-quantized
+scheduling, so pass an absolute timestamp, not a delta.
 
 ```c
 // Once per display frame:
@@ -171,6 +221,11 @@ All of these are safe to call live, between ticks:
   `set_danmaku_config`, offset tracks, set the font, set blocked words. See
   [danmaku_architecture.md](danmaku_architecture.md).
 - **Upscaler:** `set_upscaler(mode)`; inspect with `get_upscaler_status`.
+- **Output:** inspect the actual mode and fallback counters with
+  `erika_presenter_get_output_status`; Android native hosts publish dynamic
+  display ratios with `erika_presenter_set_output_headroom`. `capture_frame_rgba`
+  always produces an SDR RGBA8 screenshot of video + subtitle + danmaku, even
+  when the display output is extended-linear.
 
 ## 9. Teardown
 
@@ -220,8 +275,16 @@ already does this — prefer it unless you are building a custom embedder.
 
 - [ ] Create the presenter (with the right output mode for your display).
 - [ ] Attach the surface with **physical-pixel** size and the correct scale.
+- [ ] For Android extended-linear, use a Hybrid-Composition `SurfaceView`, pass
+  probed output capabilities, and verify `Rgba16Float + SCRGB_LINEAR` through
+  `erika_presenter_get_output_status`; otherwise accept and log the SDR reason.
+- [ ] On API 34+, publish display HDR/SDR ratio changes through
+  `erika_presenter_set_output_headroom`; on API 35 keep desired headroom scoped
+  to the individual `SurfaceView`.
 - [ ] Open, then play; don't block — watch events for readiness.
 - [ ] `render_tick(absolute_time_seconds)` every display frame; drain events.
 - [ ] `resize_surface` on every size/scale change.
 - [ ] One thread per handle, or serialize calls.
 - [ ] Free every returned string / `ErikaTrackInfo`; `detach` then `destroy`.
+- [ ] Do not claim Android extended-linear device validation until the API 35
+  HDR-device rotation/recovery, multi-player, and SDR-screenshot checks pass.

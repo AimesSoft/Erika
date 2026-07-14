@@ -1,12 +1,12 @@
 # Erika のビルド
 
-Erika は一連の**静的ビルドされたネイティブ依存**（FFmpeg と、オプションで libass 字幕
-スタック）をリンクする Rust workspace です。これらのネイティブライブラリは vendoring
+Erika は一連の**静的ビルドされたネイティブ依存**（FFmpeg、Android の dav1d AV1
+ソフトウェアフォールバック、オプションの libass 字幕スタック）をリンクする Rust workspace です。これらのネイティブライブラリは vendoring
 されていません——`xtask` オーケストレータで一度ビルドすると `third_party/dist/` 配下に
 配置され、Rust crate がそのステージングディレクトリをリンクします。
 
 ```
-xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,zlib,libass,…}
+xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,zlib,libass,…}
                                         │
                           erika_ffmpeg_sys/build.rs（dist を自動発見、bindgen 実行）
                                         │
@@ -45,6 +45,14 @@ FFmpeg の x86 アセンブリに `nasm`）が必要です。macOS では Xcode 
 MSVC 環境が有効なシェル（*"x64 Native Tools Command Prompt"* など）からコマンドを実行し、
 `xtask` がツールチェーンを見つけられるようにします。
 
+### ビルドツール —— Android
+
+Android SDK + NDK r29、CMake、Ninja、GNU make、Python (`venv`)、Meson、
+`pkg-config` が必要です。x86_64 では `nasm` も必要です。Windows ホストでは
+Git Bash と Visual Studio Build Tools を使用します。NDK は `ANDROID_NDK_HOME`、
+`ANDROID_NDK_ROOT`、SDK 環境変数、または Android Studio の既定 SDK から自動検出されます。
+Android の最小 API は 26 です。
+
 ## `xtask` でネイティブ依存をビルド
 
 `xtask` は workspace メンバーで、`cargo run -p xtask -- …` で呼びます。
@@ -54,7 +62,7 @@ MSVC 環境が有効なシェル（*"x64 Native Tools Command Prompt"* など）
 cargo run -p xtask -- deps plan
 cargo run -p xtask -- deps status
 
-# 最小セット（zlib + FFmpeg）—— LGPL profile
+# 基本セット（zlib + FFmpeg、Android は dav1d も）—— LGPL profile
 cargo run -p xtask -- deps build --profile lgpl
 
 # libass 字幕スタックを含めすべて
@@ -70,7 +78,7 @@ cargo run -p xtask -- deps build --all --profile lgpl
 |--------|----|------|------|
 | `--profile` | `lgpl`、`gpl-full` | `lgpl` | FFmpeg ライセンス profile（下記）。 |
 | `--target` | ターゲット表参照 | `host` | クロスコンパイル先。 |
-| `--all` | — | off | libass + FreeType + HarfBuzz + FriBidi（字幕描画）も。なしなら zlib + FFmpeg のみ。 |
+| `--all` | — | off | libass + FreeType + HarfBuzz + FriBidi（字幕描画）も。基本セットは zlib + FFmpeg、Android ターゲットでは dav1d も含む。 |
 | `--force` | — | off | 最新マーカーがあっても再ビルド。 |
 | `--jobs N` | 整数 | 自動 | ネイティブビルドの並列度。 |
 
@@ -85,6 +93,10 @@ cargo run -p xtask -- deps build --all --profile lgpl
 | `aarch64-apple-ios-sim` | iOS sim（Apple Silicon） | |
 | `x86_64-apple-ios` | iOS sim（Intel） | |
 | `x86_64-pc-windows-msvc`（または `windows-x64`） | Windows | FFmpeg で VideoToolbox を D3D11VA/DXVA2 に置換。 |
+| `aarch64-linux-android`（`arm64-v8a`） | Android arm64 | |
+| `armv7-linux-androideabi`（`armeabi-v7a`） | Android ARMv7 | |
+| `x86_64-linux-android`（`android-x64`） | Android x86_64 | |
+| `i686-linux-android`（`x86`） | Android x86 | Android 共有ライブラリで非 PIC 再配置を避けるため、x86 アセンブリ高速化を無効化。 |
 
 デプロイ最小バージョンは既定で macOS `11.0` / iOS `13.0`。
 `MACOSX_DEPLOYMENT_TARGET` / `IPHONEOS_DEPLOYMENT_TARGET` で上書き可能。
@@ -95,7 +107,7 @@ cargo run -p xtask -- deps build --all --profile lgpl
 
 - **`lgpl`**（既定）—— FFmpeg を `--disable-gpl --enable-version3`、静的、ネットワーク
   なし、file プロトコルのみ、厳選した demuxer/decoder/parser セット、zlib 有効、加えて
-  VideoToolbox（Apple）または D3D11VA/DXVA2（Windows）で構成。
+  VideoToolbox（Apple）、D3D11VA/DXVA2（Windows）、または JNI/MediaCodec + ソースビルドの dav1d AV1 フォールバック（Android）で構成。
 - **`gpl-full`** —— 同じセットに `--enable-gpl`。成果物の GPL 条項を受け入れる場合のみ。
 
 Rust workspace 自体は MPL-2.0（[`LICENSE`](../LICENSE)）。`xtask` と `cargo build` で
@@ -112,7 +124,7 @@ third_party/
   build/<target>/<profile>/    out-of-tree ビルドツリー
   dist/<target>/<profile>/     crate がリンクする install prefix:
     ffmpeg/{include,lib}
-    zlib/    libass/    freetype/    harfbuzz/    fribidi/
+    dav1d/   zlib/    libass/    freetype/    harfbuzz/    fribidi/
 ```
 
 `host` ターゲットでは `<target>` のパスセグメントは省略されます
@@ -129,7 +141,7 @@ third_party/
    では `ios/` セグメント付き）。
 
 関連する環境変数：`ERIKA_NATIVE_PROFILE`、`ERIKA_NATIVE_TARGET`、`ERIKA_FFMPEG_DIR`、
-`ERIKA_ZLIB_DIR`、`LIBCLANG_PATH`、`ERIKA_ALLOW_LEGACY_FFMPEG`（脱出ハッチ）。Erika は
+`ERIKA_DAV1D_DIR`、`ERIKA_ZLIB_DIR`、`LIBCLANG_PATH`、`ERIKA_ALLOW_LEGACY_FFMPEG`（脱出ハッチ）。Erika は
 FFmpeg **7.x**（`libavutil >= 59`）を要求し、Windows ネイティブコアはこれを強制します。
 `ERIKA_ALLOW_LEGACY_FFMPEG=1` はローカルの互換性実験のときだけ設定してください。
 
@@ -148,6 +160,44 @@ cargo test --workspace               # ユニット + 統合テスト
 - iOS：`liberika_capi.a`（静的）。
 - Windows：`erika_capi.dll`（Flutter Windows プラグインが `build_erika_runtime.cmake`
   でビルド）。
+- Android：ABI ごとの `liberika_capi.so` と対応する NDK
+  `libc++_shared.so`。ネイティブ埋め込み向けの `liberika_capi.a` も生成されます。
+
+Android の MediaCodec パスは H.264、HEVC、MPEG-2、MPEG-4、VP8、VP9、AV1 を有効にし、
+読み取り可能な YUV を共有 wgpu 合成パイプラインへ渡します。ハードウェアデコードですが
+CPU upload を伴い、Surface ゼロコピーではありません。AV1 MediaCodec が開けない、または
+デコードに失敗した場合、ソフトウェアパスは FFmpeg の `libdav1d` decoder を明示的に選択します。
+`xtask` は全 4 Android ABI 向けに dav1d 1.5.1 をソースからビルドし、8-bit と高ビット深度を
+有効にします。32-bit x86 では PIC 安全性のためアセンブリを無効にします。
+
+### Android output negotiation の検証
+
+Android の optional high-headroom mode は `ExtendedLinear` で、FP16
+extended-linear scRGB として実装されています。HDR10/PQ ではなく、HDR10 metadata も
+出力しません。SDR は通常の `TextureView`、extended-linear の要求時は Flutter Hybrid
+Composition の `SurfaceView` を使います。active になるには HDR 対応 display、Vulkan、
+wgpu surface capabilities の `Rgba16Float`、configure 後の
+`ADATASPACE_SCRGB_LINEAR`（`406913024`、`0x18410000`）readback 成功も必要です。
+minimum API は 26 のままですが、API 26/27 は native-window dataspace API が無いため
+reason `5` で SDR に明示 fallback します。
+
+Flutter harness は `getOutputStatus()`、native harness は
+`erika_presenter_get_output_status()` を使い、requested mode だけで active output を
+推測しないでください。non-HDR emulator/device では extended-linear を要求しても再生を
+継続し、SDR、非ゼロの `fallbackCount`、安定した `fallbackReason` `0..8`（通常は `1`、
+`display_hdr_unsupported`）を報告する必要があります。最終の API 35 HDR 実機 acceptance
+では以下をすべて要求します。
+
+- `activeEncoding == AndroidExtendedLinearScRgb`、
+  `surfaceFormat == SixteenBitFloat`、`nativeDataSpace == 406913024`、
+  `extendedLinearActive == true`、`fallbackReason == None`、かつ
+  `extendedLinearFrames` が増加すること。
+- resize/rotation と background/foreground recovery 後も同じ状態を維持すること。
+- multiple player が独立した surface で動作すること。
+- screenshot が常に current composited frame を tone-map した SDR RGBA8 であること。
+
+現在の emulator/non-HDR coverage が検証するのは fallback branch です。上記 API 35 HDR
+実機テストが通るまで Android active extended-linear path を実機検証済みとしません。
 
 ## 再生パスの検証
 
@@ -174,6 +224,13 @@ demo はフレームごとのパイプライン統計（デコード/描画フ�
 - **bindgen / libclang エラー** —— `LIBCLANG_PATH` を LLVM の `lib` ディレクトリに設定。
 - **Windows：configure 失敗** —— POSIX シェル（Git Bash/MSYS2）と GNU make が `PATH` 上に
   あり、MSVC 環境から起動していることを確認。
+- **Android NDK が見つからない** —— `ANDROID_NDK_HOME` を設定し、
+  `build/cmake/android.toolchain.cmake` の存在を確認。
+- **Android で extended-linear を要求しても SDR のまま** —— `getOutputStatus()` の
+  `fallbackReason` を読み、numeric code をログに残します。主な原因は HDR 非対応 display
+  （`1`）、Hybrid Composition ではない（`2`）、GLES（`3`）、`Rgba16Float` 不在（`4`）、
+  dataspace API 不在（`5`）、`SCRGB_LINEAR` verification failure（`6`）です。`7` と `8` は
+  surface configure failure と unsupported backend での Apple EDR request を表します。
 - **旧 FFmpeg が拒否される** —— 7.x バンドルを導入/ビルド。システム FFmpeg に依存しない。
 - **license チェック失敗** —— profile に GPL と LGPL の成果物が混在。単一 `--profile` で
   deps を再ビルド。

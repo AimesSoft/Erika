@@ -20,8 +20,8 @@ Erika 暴露两个相互独立的入口，每个集成选其一。
 | `ErikaPresenterHandle` | **推送（Push）** | Erika | 你把一个原生 surface 交给 Erika，每个显示帧调一次 `render_tick`。Erika 负责解码、时序、音频、overlay 和呈现。 |
 
 `ErikaPresenterHandle` 是推荐路径，也是 Flutter 插件和原生 demo 所用的。它只在
-**macOS、iOS、Windows** 上编译。其它平台上 `erika_presenter_create` 仍然导出但返回
-`NULL`，presenter 族的其余函数不存在——请按平台守卫 presenter 用法。
+**macOS、iOS、Windows、Android** 上编译。其它平台上 `erika_presenter_create` 仍然
+导出但返回 `NULL`，presenter 族的其余函数不存在——请按平台守卫 presenter 用法。
 
 两个族不共享状态；一个进程可同时使用两者，但单个媒体会话只活在一个 handle 里。
 
@@ -170,6 +170,11 @@ ErikaStatus erika_attach_metal_layer(ErikaHandle *, uint64_t raw_layer, uint32_t
 ErikaStatus erika_attach_wgpu_surface(ErikaHandle *, ErikaWgpuSurfaceKind kind,
                                       uint64_t raw_window, uint64_t raw_display,
                                       uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_attach_wgpu_surface_with_output_capabilities(
+                                      ErikaHandle *, ErikaWgpuSurfaceKind kind,
+                                      uint64_t raw_window, uint64_t raw_display,
+                                      uint32_t w, uint32_t h, double scale,
+                                      ErikaSurfaceOutputCapabilities capabilities);
 ErikaStatus erika_attach_flutter_texture(ErikaHandle *, ErikaFlutterTextureKind kind,
                                          int64_t texture_id, uint32_t w, uint32_t h, double scale);
 ErikaStatus erika_detach_surface(ErikaHandle *);
@@ -179,10 +184,14 @@ ErikaStatus erika_detach_surface(ErikaHandle *);
 `raw_window`/`raw_display` 是该 `kind` 对应的平台窗口/显示句柄（如 `WindowsHwnd`
 的 `HWND` + `HINSTANCE`，`XlibWindow` 的 xcb/Xlib window + display）。
 `erika_attach_flutter_texture` 把一个外部纹理 id 注册进平台 texture registrar。
+Android 原生宿主若要声明直接合成、具备 HDR eligibility 的 `SurfaceView`，必须使用
+`_with_output_capabilities` 变体；短函数传入全 false/default capabilities，因此不能激活
+Android extended-linear 输出。
 
 ## `ErikaPresenterHandle` —— 推送模型
 
-Erika 拥有完整栈；宿主提供 surface 并调用 `render_tick`。**仅 macOS / iOS / Windows。**
+Erika 拥有完整栈；宿主提供 surface 并调用 `render_tick`。
+**macOS / iOS / Windows / Android。**
 
 ### 生命周期与配置
 
@@ -193,9 +202,11 @@ ErikaPresenterHandle *erika_presenter_create_with_output_mode(int32_t output_mod
 void                  erika_presenter_destroy(ErikaPresenterHandle *handle);
 ```
 
-`ErikaPresenterConfig` 选择输出模式（SDR / Apple EDR）、EDR headroom 和初始亮度超分。
-`create_with_output_mode` 是简写；`create` 用默认值（SDR、无超分）。返回 `NULL`
-表示创建失败——检查 `erika_last_error_message`。
+`ErikaPresenterConfig` 选择输出模式（`Sdr`、Apple `AppleEdr`、Android
+`ExtendedLinear`）、请求的 EDR/scRGB 内容 headroom 上限和初始亮度超分。Android
+`ExtendedLinear` 是 FP16 extended-linear scRGB，不是 HDR10/PQ。
+`create_with_output_mode` 是简写；`create` 用默认值（SDR、无超分）。返回 `NULL` 表示
+创建失败——检查 `erika_last_error_message`。
 
 ### 播放与运行时参数
 
@@ -210,11 +221,20 @@ ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *, double rat
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *, double volume);   // 0.0–1.0
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *, int32_t mode);  // ErikaLumaUpscalerMode
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *, double scale);
+ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float headroom, bool known);
 ```
 
 `set_playback_rate(1.0)` 为正常速度。`set_upscaler` 在运行时切换神经亮度超分（见
-[`erika_presenter_get_upscaler_status`](#诊断与截图)）；在没有 Metal compute 路径
-的后端上它是 no-op 回退。
+[`erika_presenter_get_upscaler_status`](#诊断与截图)）。Metal 与具备 compute 能力的
+wgpu/Vulkan renderer 会执行 ArtCNN；其他后端保留原生 luma sampling，并明确报告
+`Inactive` 回退。
+
+`set_output_headroom` 用于发布显示器当前 HDR/SDR ratio。Android API 34+ 宿主应从
+`Display.registerHdrSdrRatioChangedListener` 调用它：有效 ratio 传 `known = true`，测量
+不可用时传 `(1.0f, false)`。数值会清洗到 `1.0..10000.0`。wgpu 会忽略重复状态、无需
+重新 attach surface 即更新后续帧 target，并且只有 known 状态或 ratio 真实变化时才增加
+`headroom_updates`。有效内容 target 受配置的内容上限、正数 surface
+`desired_headroom` 和已知显示 ratio 共同约束。其他 renderer 可以忽略这个 advisory 更新。
 
 ### 轨道与字幕
 
@@ -263,6 +283,7 @@ ErikaStatus erika_presenter_set_danmaku_block_words_json(ErikaPresenterHandle *,
 ```c
 ErikaStatus erika_presenter_attach_metal_layer(ErikaPresenterHandle *, uint64_t raw_layer, uint32_t w, uint32_t h, double scale);
 ErikaStatus erika_presenter_attach_wgpu_surface(ErikaPresenterHandle *, ErikaWgpuSurfaceKind kind, uint64_t raw_window, uint64_t raw_display, uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_presenter_attach_wgpu_surface_with_output_capabilities(ErikaPresenterHandle *, ErikaWgpuSurfaceKind kind, uint64_t raw_window, uint64_t raw_display, uint32_t w, uint32_t h, double scale, ErikaSurfaceOutputCapabilities capabilities);
 ErikaStatus erika_presenter_attach_windows_hwnd(ErikaPresenterHandle *, uint64_t hwnd, uint64_t hinstance, uint32_t w, uint32_t h, double scale);
 ErikaStatus erika_presenter_resize_surface(ErikaPresenterHandle *, uint32_t w, uint32_t h, double scale);
 ErikaStatus erika_presenter_detach_surface(ErikaPresenterHandle *);
@@ -273,6 +294,15 @@ macOS/iOS 用 `attach_metal_layer`（`CAMetalLayer*`），Windows 用
 传 `HWND` + `HINSTANCE`）。绑定到 surface 的渲染后端（原生 Metal、原生 Direct3D 11
 或 wgpu）由 presenter 配置决定，而非 attach 调用决定。drawable 尺寸或 scale 变化时
 调 `resize_surface`。
+
+Android extended-linear 应把 Flutter Hybrid Composition `SurfaceView` 对应的
+`AndroidNativeWindow` 传给 `_with_output_capabilities`。只有在显示器/surface HDR 探测成功
+后才设置 `extended_linear`，只有直接 `SurfaceView` 才设置
+`direct_composition = true`，并把宿主探测失败保留在 `fallback_reason`。
+`desired_headroom = 0` 表示系统 auto；正数是 surface 上限，可用于 API 35 per-`SurfaceView`
+`setDesiredHdrHeadroom`。Erika 仍会自行
+验证 Vulkan、`Rgba16Float` 和 `ADATASPACE_SCRGB_LINEAR`；任何一项失败都会回退 SDR，
+且原因可查询。
 
 ### 渲染循环与事件
 
@@ -290,6 +320,7 @@ ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *, ErikaEvent *out_e
 
 ```c
 ErikaStatus erika_presenter_get_upscaler_status(ErikaPresenterHandle *, ErikaUpscalerStatus *out_status);
+ErikaStatus erika_presenter_get_output_status(ErikaPresenterHandle *, ErikaOutputStatus *out_status);
 ErikaStatus erika_presenter_capture_frame_rgba(ErikaPresenterHandle *, uint32_t width, uint32_t height,
                                                uint8_t *out_rgba, uintptr_t out_capacity);
 ```
@@ -298,10 +329,44 @@ ErikaStatus erika_presenter_capture_frame_rgba(ErikaPresenterHandle *, uint32_t 
 scalar / simdgroup-matrix）、fallback 次数、超分帧数，以及最近的 encode/GPU 耗时
 （微秒）。
 
+`get_output_status` 返回实际协商到的输出，而不只是请求值。13 个字段如下：
+
+| 字段 | 含义 |
+|------|------|
+| `requested_mode` | 创建时请求的 `ErikaPresenterOutputMode`。 |
+| `active_encoding` | 实际的 `SdrSrgb`、`AppleEdr`、`AndroidExtendedLinearScRgb` 或 `Hdr10Pq` encoding。 |
+| `surface_format` | 实际 8-bit UNORM、10-bit UNORM 或 16-bit float surface class。 |
+| `native_data_space` | Android `ANativeWindow` dataspace；`406913024` 为 `SCRGB_LINEAR`，`-1` 表示不可用/不适用。 |
+| `requested_headroom` | 清洗后的请求内容 headroom 上限，最小 `1.0`。 |
+| `active_headroom` | 已知时为当前显示器 HDR/SDR ratio；未知时为有效内容 fallback 值。 |
+| `active_headroom_known` | `active_headroom` 是否来自权威平台 ratio；API 34+ ratio 可用时 Android 设为 true。 |
+| `extended_linear_active` | FP extended-linear 呈现路径是否激活；用 `active_encoding` 区分 Apple EDR 与 Android scRGB。 |
+| `fallback_reason` | 解释请求模式为何未激活的稳定 `ErikaOutputFallbackReason`。 |
+| `fallback_count` | 已记录的输出回退 transition/failure 次数。 |
+| `data_space_failures` | dataspace/输出色彩空间验证失败次数。 |
+| `headroom_updates` | 运行时 headroom 状态真实变化次数；重复发布相同 ratio/known 不增长。 |
+| `extended_linear_frames` | 通过 active extended-linear 路径呈现的帧数。 |
+
+Fallback 数值是稳定 ABI；新增原因只能追加，不能重排 `0..8`：
+
+| 码 | 枚举 | 稳定 label | 含义 |
+|----|------|------------|------|
+| 0 | `None` | `none` | 无回退。 |
+| 1 | `DisplayHdrUnsupported` | `display_hdr_unsupported` | 显示器/surface HDR 能力探测失败。 |
+| 2 | `HybridCompositionRequired` | `hybrid_composition_required` | Android surface 不是直接合成的 `SurfaceView`。 |
+| 3 | `WgpuBackendNotVulkan` | `wgpu_backend_not_vulkan` | 当前 wgpu backend 不是 Vulkan（如 GLES）。 |
+| 4 | `Rgba16FloatSurfaceFormatUnavailable` | `rgba16float_surface_format_unavailable` | Surface capabilities 没有 `Rgba16Float`。 |
+| 5 | `NativeWindowDataSpaceApiUnavailable` | `native_window_dataspace_api_unavailable` | `ANativeWindow_*DataSpace` API 不可用（含 API 26/27）。 |
+| 6 | `ScrgbDataSpaceVerificationFailed` | `scrgb_dataspace_verification_failed` | `SCRGB_LINEAR` set/readback 未通过验证。 |
+| 7 | `SurfaceConfigureFailed` | `surface_configure_failed` | 请求的输出 surface configure 失败。 |
+| 8 | `LegacyAppleEdrUnsupported` | `legacy_apple_edr_unsupported` | 在未实现 Apple EDR 的 backend 上请求了该模式。 |
+
 `capture_frame_rgba` 是**截图**：把当前合成帧（视频 + 字幕 + 弹幕）离屏渲染进调用方
 分配的 RGBA8 缓冲，按请求的 `width`×`height`（与显示 surface 尺寸无关）。
-`out_capacity` 至少为 `width*height*4`。尚无可用帧时返回 `PlayerError`；实现于原生
-Metal 与 Direct3D 11 后端（wgpu 后端不返回截图）。
+`out_capacity` 至少为 `width*height*4`。尚无可用帧时返回 `PlayerError`。Metal 与
+wgpu（包括 Android）已实现截图；当前 D3D11 backend 尚未实现。截图始终使用 SDR RGBA8
+离屏 target，并对 HDR/extended-linear 内容 tone-map，因此即使显示输出是 Apple EDR、
+HDR10 或 Android extended-linear scRGB，返回字节仍是 SDR。
 
 ```c
 uint32_t w = 1920, h = 1080;
@@ -322,7 +387,10 @@ free(rgba);
 | `ErikaTrackSource` | `Embedded` `External` |
 | `ErikaWgpuSurfaceKind` | `Unknown` `MacOsNsView` `MacOsCaMetalLayer` `IosUiView` `WindowsHwnd` `XlibWindow` `WaylandSurface` `AndroidNativeWindow` |
 | `ErikaFlutterTextureKind` | `Unknown` `MacOsTextureRegistrar` `IosTextureRegistrar` `AndroidSurfaceTexture` `WindowsTextureRegistrar` `LinuxTextureRegistrar` |
-| `ErikaPresenterOutputMode` | `Sdr` `AppleEdr` |
+| `ErikaPresenterOutputMode` | `Sdr` `AppleEdr` `ExtendedLinear` |
+| `ErikaActiveOutputEncoding` | `SdrSrgb` `AppleEdr` `AndroidExtendedLinearScRgb` `Hdr10Pq` |
+| `ErikaOutputSurfaceFormat` | `EightBitUnorm` `TenBitUnorm` `SixteenBitFloat` |
+| `ErikaOutputFallbackReason` | `None` `DisplayHdrUnsupported` `HybridCompositionRequired` `WgpuBackendNotVulkan` `Rgba16FloatSurfaceFormatUnavailable` `NativeWindowDataSpaceApiUnavailable` `ScrgbDataSpaceVerificationFailed` `SurfaceConfigureFailed` `LegacyAppleEdrUnsupported` |
 | `ErikaLumaUpscalerMode` | `Off` `ArtCnnC4F16` `ArtCnnC4F32` |
 | `ErikaUpscalerBackendStatus` | `Off` `Inactive` `Building` `Scalar` `SimdgroupMatrix` |
 
@@ -330,8 +398,10 @@ free(rgba);
 
 - **`ErikaPresenterConfig`** `{ int32 output_mode; float edr_headroom; int32 luma_upscaler; }` —
   按值传给 `create_with_config`。
+- **`ErikaSurfaceOutputCapabilities`** `{ bool extended_linear; bool direct_composition; float desired_headroom; int32 fallback_reason; }` —— attach 时传入的 Android 宿主显示器/surface 探测结果；`desired_headroom == 0` 表示系统 auto。
 - **`ErikaUpscalerStatus`** —— 请求模式、当前后端、fallback 次数、超分帧数、最近
   encode/GPU 微秒。
+- **`ErikaOutputStatus`** —— 上文“诊断与截图”说明的 13 字段协商输出快照。
 - **`ErikaDanmakuConfig`** —— 完整弹幕布局/外观配置（字号、不透明度、显示区域、滚动
   时序、碰撞/堆叠开关、屏蔽模式、阴影样式）。`font_size` 是 NipaPlay/Flutter 的*逻辑*
   字号；Erika 会乘以 surface scale 得到 glyph 像素。

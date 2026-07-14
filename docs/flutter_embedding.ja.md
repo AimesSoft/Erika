@@ -9,7 +9,7 @@ Erika は Flutter の動画レンダラーではありません。Flutter はあ
 C ABI の entrypoint family は 2 つあります。
 
 - `ErikaHandle`: control と event API。host が自前の presenter loop を持つ場合や、再生の probe / control だけを行いたい場合に使います。
-- `ErikaPresenterHandle`: presenter-owned API。Erika が `Player + MetalRenderer + audio output` を所有し、host は native surface と display tick callback だけを提供する場合に使います。
+- `ErikaPresenterHandle`: presenter-owned API。Erika が `Player + renderer + audio output` を所有し、host は native surface と display tick callback だけを提供する場合に使います。
 
 どちらも `crates/erika_capi/include/erika.h` に定義されています。
 
@@ -36,6 +36,22 @@ HDR/EDR の推奨 path は、Flutter の platform-view compositor の外側に�
 この overlay path は NipaPlay や他の full-player UI に推奨です。video presentation は Erika/Metal が持ち、Flutter は control / layout layer に専念できます。iOS では `UIWindow` + sibling `UIView`/`CAMetalLayer`、macOS では host `NSWindow` + sibling `NSView`/`CAMetalLayer` を使います。
 
 touch events は両方の native video strategy を通過するので、Flutter controls を video surface の上や周囲に置けます。
+
+## Android Surface Strategies
+
+Android では 2 つの video widget が同じ native-view selector を使います。SDR は実体のある
+`TextureView` を使い、検証済みです。wgpu は Vulkan を優先し、bounded GLES fallback も
+備えます。
+`ErikaOutputMode.extendedLinear` を要求すると、FP16 scRGB を Flutter の texture-layer
+compositor に通さないよう、`PlatformViewLink` と Hybrid Composition で `SurfaceView` を
+作ります。surface は `Choreographer` で駆動し、lifecycle、resize、audio focus、output
+fallback は plugin が管理します。
+
+FP16 extended-linear scRGB は `Rgba16Float` negotiation と
+`ADATASPACE_SCRGB_LINEAR` verification まで実装済みですが、active path はまだ実機検証済み
+とは claim しません。最終 acceptance には API 35 HDR device が必要です。HDR 非対応 display、
+GLES、`TextureView`、FP16 不在、dataspace verification failure では SDR playback を継続し、
+query 可能な fallback reason と明示的な log を提供します。
 
 ## iOS Build Path
 
@@ -77,9 +93,15 @@ Flutter Texture は機能が限定された compatibility path です。
 
 HDR/EDR の推奨 path ではありません。video が Flutter compositor に入ってしまうためです。C ABI はこの path のために `erika_attach_flutter_texture` を確保しています。
 
-## wgpu Fallback
+## wgpu と Android
 
-Apple HDR path は引き続き native Metal で、Windows は native Direct3D 11 renderer（D3D11VA zero-copy decode、HDR10 output）を使います。`wgpu` は Linux、Android、および非 HDR path に向けた cross-platform fallback です。wgpu renderer は video frame rendering と danmaku compositing を実装済みですが、ハードウェア zero-copy import や HDR/EDR output はまだ未対応です。
+Apple HDR path は native Metal、Windows は native Direct3D 11 renderer（D3D11VA
+zero-copy decode、HDR10 output）を使います。Android では wgpu が実 renderer です。Vulkan は
+MediaCodec Surface frame を AHardwareBuffer 経由で import し、software frame には明示的な
+CPU upload fallback があります。video、subtitle、danmaku、capture、ArtCNN compute はこの
+path を共有します。Vulkan は FP16 extended-linear scRGB を negotiate でき、GLES または
+capability negotiation failure は明示的に SDR へ fallback します。Android SDR は検証済み、
+API 35 HDR device の active-path acceptance は未完了です。Linux support は引き続き計画中です。
 
 ## Dart API
 
@@ -104,7 +126,7 @@ await player.seek(Duration(seconds: 30));
 await player.setVolume(0.8);
 await player.setPlaybackRate(1.5);
 
-// Neural upscaler (anime luma 2x; macOS/iOS only)
+// Neural upscaler (anime luma 2x; Apple Metal / Android Vulkan)
 await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16); // off / artCnnC4F16 / artCnnC4F32
 final status = await player.getUpscalerStatus();
 
@@ -136,10 +158,15 @@ await player.dispose();
 | `off` | どの mode も要求されていない。 |
 | `building` | kernel を compile 中（その mode の初回使用）。準備完了まで frame は未拡大で描画される。 |
 | `inactive` | mode は要求されたが、この frame では適用されていない。たとえば video の表示サイズが source resolution を超えていない、または source が HDR（upscaler は SDR luma のみ処理）など。 |
-| `scalar` | portable scalar backend で動作中（非 Apple Silicon GPU）。 |
+| `scalar` | Metal scalar または wgpu compute backend で動作中。 |
 | `simdgroupMatrix` | `simdgroup_matrix` backend で動作中（Apple Silicon の既定）。 |
 
-upscaler は drawable が source resolution より大きく video を表示している場合にのみ有効になります。そのため、1080p source を 1080p（またはそれ以下）の view に出している間は `inactive` のままです。C4F16 は realtime の推奨で、C4F32 はより高画質ですが、1080p input では M-Pro/Max クラスの GPU が必要です。renderer 側の設計は `docs/architecture.md` を参照してください。
+upscaler は drawable が source resolution より大きく video を表示している場合にのみ有効に
+なります。そのため、1080p source を 1080p（またはそれ以下）の view に出している間は
+`inactive` のままです。C4F16 は realtime の推奨です。Apple の C4F32 は 1080p input で通常
+M-Pro/Max クラスの GPU を必要とします。Android では両 model が Vulkan compute を使い、
+GLES は明示的な `inactive` fallback を報告します。renderer 側の設計は
+`docs/architecture.md` を参照してください。
 
 ## Ownership Rule
 

@@ -18,7 +18,7 @@ See also: [architecture.md](docs/architecture.md) (engine design),
 crates/erika              Core engine (library)
 crates/erika_capi         C ABI export layer  →  erika.h
 crates/erika_ffmpeg_sys   FFmpeg bindgen bindings
-packages/erika_flutter    Flutter plugin (macOS + iOS + Windows)
+packages/erika_flutter    Flutter plugin (macOS + iOS + Windows + Android)
 examples/                 Validation / smoke / demo binaries
 xtask/                    Native dependency build orchestration
 docs/                     Architecture and integration docs
@@ -31,14 +31,14 @@ third_party/              Built native deps (gitignored output)
 |--------|----------------|
 | `core` | Public config + the `RendererBackend` trait, `PlatformSurface`, `RendererBackendPreference`. |
 | `playback` | Playback engine: video/audio tick, master clock, frame scheduler, `VideoDecodePreference`. |
-| `ffmpeg` | Demux, decode, resample, seek; `DecoderBackend` (software / VideoToolbox / D3D11VA). |
+| `ffmpeg` | Demux, decode, resample, seek; `DecoderBackend` (software / VideoToolbox / D3D11VA / MediaCodec). |
 | `audio` | `AudioOutputBackend` trait, ring buffer, audio clock. |
-| `renderer` | `metal` (Apple), `d3d11` (Windows), `wgpu` (cross-platform), `pipeline` (backend-agnostic color/tone-map/scaler decisions). |
+| `renderer` | `metal` (Apple), `d3d11` (Windows), `wgpu` (cross-platform and Android), `pipeline` (backend-agnostic color/tone-map/scaler decisions). |
 | `overlay` / `subtitle` / `text` | Overlay timeline; SRT/WebVTT/ASS + libass; font providers. |
 | `danmaku` | Bilibili XML/JSON parsing, collision-avoidance layout, glyph atlas. |
 | `presenter` | `PresenterRuntime` — ties player + renderer + audio + overlays; what `render_tick` drives. |
 | `source` | `MediaSource` trait — file + HTTP range. |
-| `apple` / `windows` | Platform glue: CoreAudio/AudioQueue/VideoToolbox/Metal interop; WASAPI. |
+| `apple` / `windows` / `android` | Platform glue: CoreAudio/AudioQueue/VideoToolbox/Metal interop; WASAPI; AAudio/MediaCodec/native-window interop. |
 
 ## Runtime model
 
@@ -107,10 +107,14 @@ cargo fmt --all
 ```
 
 - Platform-specific code is `#[cfg]`-gated; when you touch a `cfg` branch, keep
-  the `macos` / `ios` / `windows` / fallback arms all compiling. CI builds the
+  the `macos` / `ios` / `windows` / `android` / fallback arms all compiling. CI builds the
   targets you can't test locally.
-- The neural upscaler weights are verified against onnxruntime references
-  (`tests/artcnn_upscaler.rs`); don't change kernels without re-checking.
+- The neural upscaler weights are verified against onnxruntime references in
+  `tests/artcnn_upscaler.rs` (Metal) and `tests/wgpu_artcnn.rs` (tiled wgpu);
+  don't change kernels without re-checking both applicable paths.
+- Android SDR playback and explicit output fallback are verified. Do not label
+  extended-linear scRGB device-validated until the API 35 HDR-device active path
+  passes `Rgba16Float + SCRGB_LINEAR` acceptance and recovery checks.
 - The native demos double as smoke tests:
   `cargo run -p macos_native_demo -- --smoke-seconds 3 "$SAMPLE"` (and the
   Windows equivalent) print pipeline counters — use them to confirm hardware
@@ -122,8 +126,8 @@ cargo fmt --all
 - **No `unwrap`/`panic` on the hot path or across FFI.** Return `Result` and map
   to `ErikaStatus` at the boundary.
 - **Match the surrounding code** — naming, comment density, and the existing
-  `cfg` structure. Platform glue stays in `apple.rs` / `windows.rs`, not spread
-  through the engine.
+  `cfg` structure. Platform glue stays in `apple.rs` / `windows.rs` /
+  `android.rs`, not spread through the engine.
 - **Keep docs in sync.** Architecture/integration docs and the trilingual
   READMEs (`README.md` + `readme/*.md`, `docs/*.{md,zh.md,ja.md}`) should reflect
   user-visible changes. The base doc is English; translations follow.

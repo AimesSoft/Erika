@@ -15,19 +15,19 @@ The host application provides a rendering surface and sends playback commands â€
 
 ## Features
 
-- **Hardware-accelerated decoding** -- VideoToolbox (macOS/iOS), D3D11VA (Windows), extensible to other platform backends
-- **Zero-copy rendering** -- CVPixelBuffer to MTLTexture (Apple) / D3D11VA texture interop (Windows), video frames never round-trip through CPU memory
-- **HDR/EDR output** -- native Apple EDR support, Windows HDR10 swapchain, PQ (BT.2020) metadata preservation and tone mapping
+- **Hardware-accelerated decoding** -- VideoToolbox (macOS/iOS), D3D11VA (Windows), and MediaCodec (Android), with explicit software-decode fallback when interop is unavailable
+- **Zero-copy rendering** -- CVPixelBuffer to MTLTexture (Apple), D3D11VA texture interop (Windows), and MediaCodec Surface to AHardwareBuffer/Vulkan (Android), with explicit CPU-upload fallback when import fails
+- **HDR/EDR output** -- Apple EDR, Windows HDR10, and Android FP16 extended-linear scRGB negotiation with explicit SDR fallback
 - **Native Metal renderer** -- YCbCr sampling, color space conversion, tone mapping, subtitle/danmaku compositing in a single render pass (macOS/iOS)
 - **Native Direct3D 11 renderer** -- Windows: D3D11VA zero-copy texture interop, YCbCr sampling, HDR10 output, subtitle/danmaku overlay compositing
-- **Neural upscaling** -- ArtCNN anime luma 2x super-resolution, Metal compute kernels, simdgroup-matrix and scalar backends, luma-plane-only and zero-copy into the render pipeline
-- **Audio output** -- CoreAudio (macOS) / AudioQueue (iOS) / WASAPI (Windows), f32 PCM ring buffer, audio clock synchronization
+- **Neural upscaling** -- ArtCNN anime luma 2x super-resolution using Metal and wgpu/Vulkan compute, integrated into the rendering pipeline
+- **Audio output** -- CoreAudio (macOS) / AudioQueue (iOS) / WASAPI (Windows) / AAudio (Android), f32 PCM ring buffer, audio clock synchronization
 - **Subtitles** -- SRT / WebVTT / ASS parsing, libass rendering (statically linked), embedded and external subtitle tracks
 - **Danmaku** -- Bilibili XML / JSON parsing, DFM+ collision-aware lane layout engine, glyph atlas native GPU rendering
 - **Playback engine** -- play / pause / stop / seek / rate control, audio-master clock discipline, vsync-quantized frame scheduling
-- **C ABI** -- 69 exported functions, opaque handle design, callable from C / C++ / Swift / Dart FFI / any FFI-capable language
-- **Flutter plugin** -- macOS + iOS + Windows native view embedding, HDR native layer path support
-- **wgpu backend** -- cross-platform rendering foundation in place (Linux / Android direction)
+- **C ABI** -- 73 exported functions, opaque handle design, callable from C / C++ / Swift / Dart FFI / any FFI-capable language
+- **Flutter plugin** -- macOS + iOS + Windows + Android native view embedding with platform-native high-dynamic-range surface paths
+- **wgpu backend** -- Android playback, overlays, capture, and bounded Vulkan/GLES recovery are available; Linux remains planned
 
 ## Quick Start
 
@@ -89,7 +89,7 @@ Header: [`crates/erika_capi/include/erika.h`](crates/erika_capi/include/erika.h)
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | **Available** |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | **Available** |
 | Linux | -- | wgpu (planned) | -- | Planned |
-| Android | -- | wgpu (planned) | -- | Planned |
+| Android 8+ | MediaCodec / software | wgpu (Vulkan + GLES fallback) | AAudio | **Available**; SDR verified, extended-linear scRGB implemented, API 35 HDR-device active-path acceptance pending |
 
 ## Repository Structure
 
@@ -97,7 +97,7 @@ Header: [`crates/erika_capi/include/erika.h`](crates/erika_capi/include/erika.h)
 crates/erika              Core playback library
 crates/erika_capi         C ABI export layer
 crates/erika_ffmpeg_sys   Low-level FFmpeg bindings
-packages/erika_flutter    Flutter plugin (macOS + iOS + Windows)
+packages/erika_flutter    Flutter plugin (macOS + iOS + Windows + Android)
 examples/                 Validation and demo programs
 xtask/                    Native dependency build orchestration
 docs/                     Architecture and embedding documentation
@@ -120,6 +120,7 @@ docs/                     Architecture and embedding documentation
 - Rust 1.92+
 - Xcode Command Line Tools (macOS/iOS)
 - MSVC toolchain + Windows SDK (Windows, target `x86_64-pc-windows-msvc`)
+- Android SDK + NDK r29 and the corresponding Android Rust targets
 - CMake, pkg-config
 
 ### Build Native Dependencies

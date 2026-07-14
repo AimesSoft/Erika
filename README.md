@@ -15,19 +15,19 @@
 
 ## 特性
 
-- **硬件加速解码** — VideoToolbox (macOS/iOS)、D3D11VA (Windows)，可扩展至其他平台后端
-- **零拷贝渲染** — CVPixelBuffer → MTLTexture 直通，视频帧不经过 CPU 内存
-- **HDR/EDR 输出** — Apple EDR 原生支持，PQ (BT.2020) 元数据保留与 tone mapping
+- **硬件加速解码** — VideoToolbox (macOS/iOS)、D3D11VA (Windows)、MediaCodec (Android)，互操作不可用时明确回退软解
+- **零拷贝渲染** — Apple CVPixelBuffer → MTLTexture、Windows D3D11VA 纹理互操作、Android MediaCodec Surface → AHardwareBuffer/Vulkan；无法导入时明确回退 CPU upload
+- **HDR/EDR 输出** — Apple EDR、Windows HDR10，以及 Android FP16 extended-linear scRGB 协商与明确 SDR 回退
 - **原生 Metal 渲染器** — YCbCr 采样、色彩空间转换、tone mapping、字幕/弹幕合成，一次 render pass 完成 (macOS/iOS)
 - **原生 Direct3D 11 渲染器** — Windows: D3D11VA 零拷贝纹理互操作、YCbCr 采样、HDR10 输出、字幕/弹幕 overlay 合成
-- **AI 超分** — ArtCNN 动漫亮度 2x 神经超分，Metal compute 算子，simdgroup_matrix / 标量双后端，仅处理 Y 平面、零拷贝接入渲染管线
-- **音频输出** — CoreAudio (macOS) / AudioQueue (iOS) / WASAPI (Windows)，f32 PCM ring buffer，音频时钟同步
+- **AI 超分** — ArtCNN 动漫亮度 2x 神经超分，Metal 与 wgpu/Vulkan compute 算子，仅处理亮度并接入渲染管线
+- **音频输出** — CoreAudio (macOS) / AudioQueue (iOS) / WASAPI (Windows) / AAudio (Android)，f32 PCM ring buffer，音频时钟同步
 - **字幕** — SRT / WebVTT / ASS 解析，libass 渲染 (静态链接)，嵌入与外挂字幕轨
 - **弹幕** — Bilibili XML / JSON 解析，DFM+ 碰撞避让布局引擎，glyph atlas 原生 GPU 渲染
 - **播放引擎** — play / pause / stop / seek / 倍速，音频主时钟同步，vsync 量化调度
-- **C ABI** — 69 个导出函数，opaque handle 设计，可从 C / C++ / Swift / Dart FFI / 任何 FFI 语言调用
-- **Flutter 插件** — macOS + iOS + Windows 原生视图嵌入，支持 HDR native layer 路径
-- **wgpu 后端** — 跨平台渲染基础就绪 (Linux / Android 方向)
+- **C ABI** — 73 个导出函数，opaque handle 设计，可从 C / C++ / Swift / Dart FFI / 任何 FFI 语言调用
+- **Flutter 插件** — macOS + iOS + Windows + Android 原生视图嵌入，支持平台原生高动态范围 surface 路径
+- **wgpu 后端** — Android 播放、overlay、截图与 Vulkan/GLES 恢复路径可用；Linux 仍在规划中
 
 ## 快速开始
 
@@ -89,7 +89,7 @@ Erika 提供两组 C ABI 入口，适配不同嵌入场景：
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | **可用** |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | **可用** |
 | Linux | — | wgpu (planned) | — | 规划中 |
-| Android | — | wgpu (planned) | — | 规划中 |
+| Android 8+ | MediaCodec / software | wgpu (Vulkan + GLES fallback) | AAudio | **可用**；SDR 已验证，extended-linear scRGB 已实现，API 35 HDR 真机 active path 待验收 |
 
 ## 仓库结构
 
@@ -97,7 +97,7 @@ Erika 提供两组 C ABI 入口，适配不同嵌入场景：
 crates/erika              核心播放库
 crates/erika_capi         C ABI 导出层
 crates/erika_ffmpeg_sys   FFmpeg 底层 bindings
-packages/erika_flutter    Flutter 插件 (macOS + iOS + Windows)
+packages/erika_flutter    Flutter 插件 (macOS + iOS + Windows + Android)
 examples/                 验证与演示程序
 xtask/                    原生依赖构建编排
 docs/                     架构与嵌入文档
@@ -120,6 +120,7 @@ docs/                     架构与嵌入文档
 - Rust 1.92+
 - Xcode Command Line Tools (macOS/iOS)
 - MSVC 工具链 + Windows SDK (Windows，target `x86_64-pc-windows-msvc`)
+- Android SDK + NDK r29，以及对应 Android Rust target
 - CMake, pkg-config
 
 ### 构建原生依赖

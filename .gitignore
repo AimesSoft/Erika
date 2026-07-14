@@ -1,8 +1,13 @@
 /target/
+/out/
 /.cargo/config.local.toml
 /third_party/cache/
 /third_party/src/
 /third_party/build/
 /third_party/dist/
+/packages/erika_flutter/android/.gradle/
+/packages/erika_flutter/android/.cxx/
+/packages/erika_flutter/android/build/
+/packages/erika_flutter/android/local.properties
 /packages/erika_flutter/ios/native/
 .DS_Store

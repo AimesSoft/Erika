@@ -20,10 +20,10 @@ Rust Player Core
   renderer core ──────── color state, render graph, tone map, scaler policy
   Metal renderer ─────── zero-copy NV12/P010, HDR/EDR, subtitle/danmaku pass
   D3D11 renderer ─────── zero-copy D3D11VA, HDR10, subtitle/danmaku pass (Windows)
-  wgpu renderer ──────── cross-platform video + danmaku rendering
+  wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB
   presenter runtime ──── ties player + renderer + audio + overlays
-  C ABI ──────────────── 69 exported functions, two handle families
-  Flutter plugin ─────── macOS + iOS + Windows native view embedding
+  C ABI ──────────────── 73 exported functions, two handle families
+  Flutter plugin ─────── macOS + iOS + Windows + Android native view embedding
 ```
 
 ## Native Dependencies
@@ -33,7 +33,8 @@ sources into `third_party/`. The default profile is `lgpl`.
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| FFmpeg | 7.1.1 | Demux, decode, audio resample, VideoToolbox |
+| FFmpeg | 7.1.1 | Demux, decode, audio resample, platform hardware decode |
+| dav1d | 1.5.1 | Android AV1 software fallback (8-bit and high bit depth) |
 | libass | 0.17.3 | ASS subtitle rendering |
 | FreeType | 2.13.3 | Font rasterization (libass dependency) |
 | HarfBuzz | 10.4.0 | Text shaping (libass dependency) |
@@ -55,9 +56,10 @@ cargo run -p xtask -- deps status
 - **Demuxer** — owns `AVFormatContext`, optionally with a Rust-backed custom
   `AVIOContext` from `MediaSource`. Supports stream selection, reference-counted
   packets, and timestamp-based seek.
-- **Decoder** — software and VideoToolbox hardware backends. Hardware frames
-  preserve BT.2020/PQ metadata and carry `CVPixelBufferRef` for zero-copy Metal
-  import.
+- **Decoder** — software plus VideoToolbox, D3D11VA, and MediaCodec hardware
+  backends. Android software AV1 explicitly selects the source-built
+  `libdav1d` decoder. Hardware frames preserve color metadata for the renderer's
+  platform-specific import or upload path.
 - **AudioResampler** — wraps `libswresample`, converts to interleaved f32 PCM
   (default 48 kHz stereo).
 - **SubtitleDecoder** — decodes embedded text and bitmap subtitle streams.
@@ -66,6 +68,14 @@ cargo run -p xtask -- deps status
 
 `PlaybackSession` opens media, selects tracks, configures decode backend, and
 produces video frames and PCM audio blocks.
+
+Decoder availability is a session invariant: when a video track is selected,
+the play, seek, and video-frame-pump entry points require an active video
+decoder. Destructive MediaCodec transitions, including seek reopen and
+Surface-to-ByteBuffer/software fallback, first record a decoder-unavailable
+reason. If the final software decoder open also fails, those entry points
+return that explicit error and require the media to be reopened; they never
+enter an audio-only false `Playing` state.
 
 `VideoPlaybackEngine` adds clocked playback:
 
@@ -136,6 +146,9 @@ The primary renderer for Apple platforms:
   `simdgroup_matrix` matmul implementation (default on Apple Silicon) and a
   scalar texture fallback; both are compiled on a background thread, so
   playback continues unscaled until the pipelines are ready.
+  Blob validation, model layout, execution policy, and frame-token caching live
+  in the backend-neutral `renderer/artcnn.rs` module and are also consumed by
+  the wgpu implementation.
 - Subtitle overlay: RGBA plane upload and alpha blending.
 - Danmaku: Instanced glyph quad drawing from atlas (shadow → outline → fill passes).
 - Presentation layout preserves source aspect ratio.
@@ -160,13 +173,52 @@ Second renderer backend for portability:
 
 - Real `wgpu` dependency with device/surface/pipeline creation.
 - NV12/P010 video frame upload and WGSL YCbCr conversion shader.
+- Android MediaCodec Surface import through AHardwareBuffer/Vulkan, with an
+  explicit ByteBuffer/CPU-upload path when native interop is unavailable.
+- The shared `renderer/frame.rs` boundary carries geometry/color metadata plus
+  either a decoded FFmpeg frame or an independent prepared AHardwareBuffer.
+  MediaCodec Surface AVFrames are released on the playback worker while their
+  decoder callback context is still alive; presenter and GPU recovery never
+  retain the decoder-owned AVFrame.
 - Color space conversion, tone mapping (same pipeline model as Metal).
-- Danmaku glyph atlas rendering.
-- Offscreen render target for headless testing.
+- Tiled ArtCNN C4F16/C4F32 compute (`renderer/wgpu_artcnn.rs`) with bounded
+  feature textures and a source-sized packed DepthToSpace output. It accepts
+  both native luma planes and Android's converted nonlinear RGB texture while
+  preserving chroma as `rgb + (Y_sr - Y)`. GLES 3.0 reports `Inactive` with a
+  structured `native_luma_sampling` fallback instead of attempting compute.
+- Subtitle/danmaku compositing, frame capture, and offscreen headless tests.
+  Capture always renders to an SDR RGBA8 target, including when the display
+  surface is extended-linear, so screenshots never expose unclamped scRGB
+  values as if they were SDR pixels.
 - Surface handle model covers macOS NSView, iOS UIView, Windows HWND,
   X11/Wayland, Android native windows.
-- Hardware zero-copy import (VideoToolbox / D3D11VA) and HDR/EDR output are not
-  yet implemented in this backend; it is the planned path for Linux and Android.
+- Android has bounded Vulkan/GLES backend recovery and explicit import,
+  capability, quality-reduction, and device-failure diagnostics. Its
+  high-headroom output is FP16 **extended-linear scRGB**, not HDR10/PQ: the
+  renderer uses `Rgba16Float`, Vulkan's extended-sRGB-linear color space, and
+  verifies `ADATASPACE_SCRGB_LINEAR` (`0x18410000`) on the `ANativeWindow` after
+  every configure/reconfigure. Android scRGB uses BT.709 primaries with
+  `1.0 = 80 nit`; it does not emit PQ or HDR10 static metadata.
+- Extended-linear activation requires an explicit `ExtendedLinear` request, an
+  HDR-capable display/surface, a `SurfaceView` hosted with Flutter Hybrid
+  Composition, the Vulkan wgpu backend, `Rgba16Float` surface support, and a
+  successful `SCRGB_LINEAR` dataspace readback. A missing condition selects the
+  normal SDR surface immediately and records one of the stable fallback reason
+  codes `0..8`; GLES and `TextureView` are therefore SDR paths.
+- On API 34+, the Android host observes the display with
+  `Display.registerHdrSdrRatioChangedListener` and publishes real changes
+  through `erika_presenter_set_output_headroom`. wgpu updates the effective
+  content headroom used by subsequent frames and the queryable output status
+  without reattaching the surface. When the ratio is available,
+  `activeHeadroomKnown` is true; `headroomUpdates` grows only when the known
+  flag or ratio actually changes.
+- A Flutter extended-linear player with no explicit `edrHeadroom` uses a 4x
+  content ceiling while passing `0` to the `SurfaceView` as system-auto desired
+  headroom. An explicit value becomes the content ceiling and, on API 35, the
+  per-`SurfaceView` desired headroom; Erika never changes the global window.
+- Emulator/non-HDR coverage verifies the explicit SDR fallback path. Active
+  `Rgba16Float + SCRGB_LINEAR` presentation still requires acceptance on an
+  API 35 HDR device before it is described as device-validated.
 
 ### Render Pipeline
 
@@ -175,6 +227,9 @@ consumes them:
 
 - `SourceColorState` / `TargetColorState` — primaries, transfer, range.
 - `VideoRenderPipeline` — gamut matrix, tone map operator, transfer functions.
+- `renderer::output` — requested mode, active encoding, surface format,
+  dataspace/headroom state, and stable fallback diagnostics shared by the
+  native renderers and wgpu.
 - HDR metadata: mastering display, content light level, nominal peak nits.
 
 ## Presenter Runtime
@@ -184,6 +239,10 @@ DanmakuEngine, and audio output. The host supplies a native surface and drives
 `render_tick` from a display timer.
 
 - Pumps video frames, updates overlay (subtitle + danmaku), renders, presents.
+- Decoder-changing operations use a quiesce/ACK barrier, discard renderer and
+  receiver state, perform the transition, then resume. Playback generations
+  remain monotonic across reopen and stale import feedback is gated by both
+  generation and the exact MediaCodec route.
 - Danmaku plan generation is time-synchronized with video frames using
   generation + media_time gating.
 - Supports playback rate, volume, track selection, subtitle/danmaku
@@ -191,7 +250,7 @@ DanmakuEngine, and audio output. The host supplies a native surface and drives
 
 ## C ABI
 
-`erika_capi` exports 69 functions through two handle families:
+`erika_capi` exports 73 functions through two handle families:
 
 - **`ErikaHandle`** — player control and event polling. The host owns rendering.
 - **`ErikaPresenterHandle`** — Erika owns the full stack. The host provides a
@@ -200,13 +259,14 @@ DanmakuEngine, and audio output. The host supplies a native surface and drives
 Covers: create/destroy, open/play/pause/stop/seek, track selection, subtitle
 track add/remove, danmaku track management (add/remove/enable/offset/config),
 surface attach/detach/resize, event polling, volume, playback rate, neural
-luma upscaler switching, and upscaler backend status diagnostics.
+luma upscaler switching, upscaler diagnostics, and the 13-field output status
+snapshot returned by `erika_presenter_get_output_status`.
 
 Header: `crates/erika_capi/include/erika.h`
 
 ## Flutter Plugin
 
-`packages/erika_flutter` provides macOS, iOS, and Windows Flutter embedding:
+`packages/erika_flutter` provides macOS, iOS, Windows, and Android Flutter embedding:
 
 - **Dart**: `ErikaPlayer` (commands + events), `ErikaWindowOverlayVideoView`
   (recommended window-hosted native surface — Metal on Apple, D3D11 swapchain on
@@ -221,6 +281,12 @@ Header: `crates/erika_capi/include/erika.h`
   `erika_capi.dll` via CMake (`build_erika_runtime.cmake`, cargo target
   `x86_64-pc-windows-msvc`), hosts a window-level D3D11 swapchain, and drives
   `render_tick` from a frame scheduler.
+- **Android Kotlin/JNI plugin**: builds the Rust runtime for Android ABIs and
+  gives each player an independent native surface. SDR uses `TextureView`;
+  requested extended-linear output uses `SurfaceView` through Flutter Hybrid
+  Composition. The plugin coordinates Activity surface lifecycle, audio focus,
+  noisy-route policy, HDR eligibility/headroom, and drives presentation from a
+  shared frame scheduler only while players are active.
 
 See `docs/flutter_embedding.md` for the embedding model and HDR strategy.
 
@@ -232,4 +298,4 @@ See `docs/flutter_embedding.md` for the embedding model and HDR strategy.
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | Available |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
-| Android | — | wgpu (planned) | — | Planned |
+| Android 8+ | MediaCodec / software | wgpu Vulkan with GLES fallback | AAudio | Available; SDR validated, extended-linear scRGB implementation awaits API 35 HDR-device acceptance |

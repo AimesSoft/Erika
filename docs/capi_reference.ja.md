@@ -22,7 +22,7 @@ Erika は独立した 2 つのエントリーポイントを公開します。�
 | `ErikaPresenterHandle` | **プッシュ** | Erika | native surface を Erika に渡し、表示フレームごとに `render_tick` を 1 回呼ぶ。Erika が decode・timing・audio・overlay・presentation を所有する。 |
 
 `ErikaPresenterHandle` が推奨パスで、Flutter plugin と native demo もこれを使います。
-コンパイルされるのは **macOS / iOS / Windows のみ**。他のターゲットでは
+コンパイルされるのは **macOS / iOS / Windows / Android**。他のターゲットでは
 `erika_presenter_create` は export されますが `NULL` を返し、presenter ファミリーの
 残りは存在しません——presenter の利用はプラットフォームでガードしてください。
 
@@ -176,6 +176,11 @@ ErikaStatus erika_attach_metal_layer(ErikaHandle *, uint64_t raw_layer, uint32_t
 ErikaStatus erika_attach_wgpu_surface(ErikaHandle *, ErikaWgpuSurfaceKind kind,
                                       uint64_t raw_window, uint64_t raw_display,
                                       uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_attach_wgpu_surface_with_output_capabilities(
+                                      ErikaHandle *, ErikaWgpuSurfaceKind kind,
+                                      uint64_t raw_window, uint64_t raw_display,
+                                      uint32_t w, uint32_t h, double scale,
+                                      ErikaSurfaceOutputCapabilities capabilities);
 ErikaStatus erika_attach_flutter_texture(ErikaHandle *, ErikaFlutterTextureKind kind,
                                          int64_t texture_id, uint32_t w, uint32_t h, double scale);
 ErikaStatus erika_detach_surface(ErikaHandle *);
@@ -185,12 +190,15 @@ ErikaStatus erika_detach_surface(ErikaHandle *);
 `erika_attach_wgpu_surface` では `raw_window`/`raw_display` がその `kind` のプラット
 フォームの window/display ハンドル（例：`WindowsHwnd` なら `HWND` + `HINSTANCE`、
 `XlibWindow` なら xcb/Xlib window + display）。`erika_attach_flutter_texture` は外部
-テクスチャ id をプラットフォーム texture registrar に登録します。
+テクスチャ id をプラットフォーム texture registrar に登録します。Android native host
+が direct-composited かつ HDR-eligible な `SurfaceView` を宣言する場合は
+`_with_output_capabilities` variant が必要です。短い関数は all-false/default
+capabilities を渡すため Android extended-linear output は active になりません。
 
 ## `ErikaPresenterHandle` —— プッシュモデル
 
 Erika がフルスタックを所有し、ホストは surface を提供して `render_tick` を呼びます。
-**macOS / iOS / Windows のみ。**
+**macOS / iOS / Windows / Android。**
 
 ### ライフサイクルと設定
 
@@ -201,9 +209,11 @@ ErikaPresenterHandle *erika_presenter_create_with_output_mode(int32_t output_mod
 void                  erika_presenter_destroy(ErikaPresenterHandle *handle);
 ```
 
-`ErikaPresenterConfig` は出力モード（SDR / Apple EDR）、EDR headroom、初期輝度
-アップスケーラを選びます。`create_with_output_mode` は短縮形、`create` は既定値
-（SDR、アップスケーラ無し）。`NULL` が返れば作成失敗——`erika_last_error_message` を確認。
+`ErikaPresenterConfig` は出力モード（`Sdr`、Apple `AppleEdr`、Android
+`ExtendedLinear`）、requested EDR/scRGB content-headroom ceiling、初期輝度アップスケーラを選びます。
+Android `ExtendedLinear` は FP16 extended-linear scRGB で HDR10/PQ ではありません。
+`create_with_output_mode` は短縮形、`create` は既定値（SDR、アップスケーラ無し）。
+`NULL` が返れば作成失敗——`erika_last_error_message` を確認。
 
 ### 再生とランタイムパラメータ
 
@@ -218,11 +228,21 @@ ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *, double rat
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *, double volume);   // 0.0–1.0
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *, int32_t mode);  // ErikaLumaUpscalerMode
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *, double scale);
+ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float headroom, bool known);
 ```
 
 `set_playback_rate(1.0)` が通常速度。`set_upscaler` はランタイムで神経輝度アップ
 スケーラを切り替えます（[`erika_presenter_get_upscaler_status`](#診断とスクリーンショット)
-参照）。Metal compute パスのない backend では no-op フォールバックです。
+参照）。Metal と compute-capable な wgpu/Vulkan renderer は ArtCNN を実行し、
+それ以外の backend は native luma sampling を維持して `Inactive` fallback を明示します。
+
+`set_output_headroom` は display の current HDR/SDR ratio を publish します。Android API 34+
+host は `Display.registerHdrSdrRatioChangedListener` から呼び、valid ratio は `known = true`、
+measurement unavailable は `(1.0f, false)` を渡します。値は `1.0..10000.0` に sanitize
+されます。wgpu は duplicate state を無視し、surface reattach 無しで後続 frame target を
+更新し、known state または ratio が実際に変わった場合だけ `headroom_updates` を増やします。
+effective content target は configured content ceiling、正の surface `desired_headroom`、known
+display ratio で制限されます。他 renderer はこの advisory update を無視できます。
 
 ### トラックと字幕
 
@@ -272,6 +292,7 @@ XML（`*_file`、パス/URL）または JSON（`*_json`、インライン）。`
 ```c
 ErikaStatus erika_presenter_attach_metal_layer(ErikaPresenterHandle *, uint64_t raw_layer, uint32_t w, uint32_t h, double scale);
 ErikaStatus erika_presenter_attach_wgpu_surface(ErikaPresenterHandle *, ErikaWgpuSurfaceKind kind, uint64_t raw_window, uint64_t raw_display, uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_presenter_attach_wgpu_surface_with_output_capabilities(ErikaPresenterHandle *, ErikaWgpuSurfaceKind kind, uint64_t raw_window, uint64_t raw_display, uint32_t w, uint32_t h, double scale, ErikaSurfaceOutputCapabilities capabilities);
 ErikaStatus erika_presenter_attach_windows_hwnd(ErikaPresenterHandle *, uint64_t hwnd, uint64_t hinstance, uint32_t w, uint32_t h, double scale);
 ErikaStatus erika_presenter_resize_surface(ErikaPresenterHandle *, uint32_t w, uint32_t h, double scale);
 ErikaStatus erika_presenter_detach_surface(ErikaPresenterHandle *);
@@ -282,6 +303,15 @@ macOS/iOS は `attach_metal_layer`（`CAMetalLayer*`）、Windows は `attach_wi
 surface に紐づくレンダラ backend（native Metal、native Direct3D 11、wgpu）は attach 呼び
 出しではなく presenter 設定で決まります。drawable サイズや scale が変わったら
 `resize_surface` を呼びます。
+
+Android extended-linear では Flutter Hybrid Composition `SurfaceView` の
+`AndroidNativeWindow` を `_with_output_capabilities` に渡します。display/surface HDR probe
+成功時だけ `extended_linear` を、direct `SurfaceView` の場合だけ
+`direct_composition = true` を設定し、host probe failure は `fallback_reason` に保持します。
+`desired_headroom = 0` は system auto、正の値は surface ceiling で、API 35 per-`SurfaceView`
+`setDesiredHdrHeadroom` に使用できます。
+Erika は Vulkan、`Rgba16Float`、`ADATASPACE_SCRGB_LINEAR` も検証します。どれかが失敗
+すると SDR に fallback し、その理由を取得できます。
 
 ### レンダーループとイベント
 
@@ -301,6 +331,7 @@ Windows のフレームスケジューラなど）。`time_seconds` はそのフ
 
 ```c
 ErikaStatus erika_presenter_get_upscaler_status(ErikaPresenterHandle *, ErikaUpscalerStatus *out_status);
+ErikaStatus erika_presenter_get_output_status(ErikaPresenterHandle *, ErikaOutputStatus *out_status);
 ErikaStatus erika_presenter_capture_frame_rgba(ErikaPresenterHandle *, uint32_t width, uint32_t height,
                                                uint8_t *out_rgba, uintptr_t out_capacity);
 ```
@@ -309,11 +340,46 @@ ErikaStatus erika_presenter_capture_frame_rgba(ErikaPresenterHandle *, uint32_t 
 building / scalar / simdgroup-matrix）、フォールバック回数、アップスケール済みフレーム数、
 直近の encode/GPU 時間（マイクロ秒）を報告します。
 
+`get_output_status` は request だけでなく実際に negotiated された output を返します。
+13 field は次のとおりです。
+
+| Field | 意味 |
+|-------|------|
+| `requested_mode` | 作成時に要求した `ErikaPresenterOutputMode`。 |
+| `active_encoding` | 実際の `SdrSrgb`、`AppleEdr`、`AndroidExtendedLinearScRgb`、`Hdr10Pq` encoding。 |
+| `surface_format` | 実際の 8-bit UNORM、10-bit UNORM、16-bit float surface class。 |
+| `native_data_space` | Android `ANativeWindow` dataspace。`406913024` は `SCRGB_LINEAR`、`-1` は unavailable/not applicable。 |
+| `requested_headroom` | sanitize 済み requested content-headroom ceiling。最小 `1.0`。 |
+| `active_headroom` | known なら current display HDR/SDR ratio、unknown なら effective-content fallback value。 |
+| `active_headroom_known` | `active_headroom` が authoritative platform ratio 由来か。API 34+ ratio available なら Android は true。 |
+| `extended_linear_active` | FP extended-linear presentation path が active か。Apple EDR と Android scRGB は `active_encoding` で区別。 |
+| `fallback_reason` | requested mode が active でない理由を示す stable `ErikaOutputFallbackReason`。 |
+| `fallback_count` | 記録された output fallback transition/failure の回数。 |
+| `data_space_failures` | dataspace/output color-space validation failure 回数。 |
+| `headroom_updates` | runtime headroom state の実変化回数。duplicate ratio/known publish では増えない。 |
+| `extended_linear_frames` | active extended-linear path で present した frame 数。 |
+
+Fallback value は ABI-stable です。新しい reason は末尾へ追加し、`0..8` を renumber しません。
+
+| Code | Enum | Stable label | 意味 |
+|------|------|--------------|------|
+| 0 | `None` | `none` | fallback なし。 |
+| 1 | `DisplayHdrUnsupported` | `display_hdr_unsupported` | display/surface HDR capability probe failure。 |
+| 2 | `HybridCompositionRequired` | `hybrid_composition_required` | Android surface が direct `SurfaceView` composition ではない。 |
+| 3 | `WgpuBackendNotVulkan` | `wgpu_backend_not_vulkan` | active wgpu backend が Vulkan ではない（例：GLES）。 |
+| 4 | `Rgba16FloatSurfaceFormatUnavailable` | `rgba16float_surface_format_unavailable` | surface capabilities に `Rgba16Float` がない。 |
+| 5 | `NativeWindowDataSpaceApiUnavailable` | `native_window_dataspace_api_unavailable` | `ANativeWindow_*DataSpace` API がない（API 26/27 を含む）。 |
+| 6 | `ScrgbDataSpaceVerificationFailed` | `scrgb_dataspace_verification_failed` | `SCRGB_LINEAR` set/readback verification failure。 |
+| 7 | `SurfaceConfigureFailed` | `surface_configure_failed` | requested output surface configure failure。 |
+| 8 | `LegacyAppleEdrUnsupported` | `legacy_apple_edr_unsupported` | Apple EDR 未実装 backend でこの mode を要求。 |
+
 `capture_frame_rgba` は**スクリーンショット**です。現在の合成フレーム（映像 + 字幕 +
 弾幕）を、要求した `width`×`height`（表示 surface サイズとは独立）で呼び出し側確保の
 RGBA8 バッファにオフスクリーン描画します。`out_capacity` は少なくとも `width*height*4`。
-フレームがまだ無いときは `PlayerError` を返します。native Metal と Direct3D 11 backend で
-実装されています（wgpu backend はキャプチャを返しません）。
+フレームがまだ無いときは `PlayerError` を返します。Metal と wgpu（Android を含む）は
+capture を実装済みで、現在の D3D11 backend は未実装です。capture は常に SDR RGBA8
+offscreen target を使い、HDR/extended-linear content を tone-map します。したがって display
+output が Apple EDR、HDR10、Android extended-linear scRGB の場合も返す byte は SDR です。
 
 ```c
 uint32_t w = 1920, h = 1080;
@@ -334,7 +400,10 @@ free(rgba);
 | `ErikaTrackSource` | `Embedded` `External` |
 | `ErikaWgpuSurfaceKind` | `Unknown` `MacOsNsView` `MacOsCaMetalLayer` `IosUiView` `WindowsHwnd` `XlibWindow` `WaylandSurface` `AndroidNativeWindow` |
 | `ErikaFlutterTextureKind` | `Unknown` `MacOsTextureRegistrar` `IosTextureRegistrar` `AndroidSurfaceTexture` `WindowsTextureRegistrar` `LinuxTextureRegistrar` |
-| `ErikaPresenterOutputMode` | `Sdr` `AppleEdr` |
+| `ErikaPresenterOutputMode` | `Sdr` `AppleEdr` `ExtendedLinear` |
+| `ErikaActiveOutputEncoding` | `SdrSrgb` `AppleEdr` `AndroidExtendedLinearScRgb` `Hdr10Pq` |
+| `ErikaOutputSurfaceFormat` | `EightBitUnorm` `TenBitUnorm` `SixteenBitFloat` |
+| `ErikaOutputFallbackReason` | `None` `DisplayHdrUnsupported` `HybridCompositionRequired` `WgpuBackendNotVulkan` `Rgba16FloatSurfaceFormatUnavailable` `NativeWindowDataSpaceApiUnavailable` `ScrgbDataSpaceVerificationFailed` `SurfaceConfigureFailed` `LegacyAppleEdrUnsupported` |
 | `ErikaLumaUpscalerMode` | `Off` `ArtCnnC4F16` `ArtCnnC4F32` |
 | `ErikaUpscalerBackendStatus` | `Off` `Inactive` `Building` `Scalar` `SimdgroupMatrix` |
 
@@ -342,8 +411,11 @@ free(rgba);
 
 - **`ErikaPresenterConfig`** `{ int32 output_mode; float edr_headroom; int32 luma_upscaler; }` —
   `create_with_config` に値で渡す。
+- **`ErikaSurfaceOutputCapabilities`** `{ bool extended_linear; bool direct_composition; float desired_headroom; int32 fallback_reason; }` —— attach 時に渡す Android host の display/surface probe result。`desired_headroom == 0` は system auto。
 - **`ErikaUpscalerStatus`** —— 要求モード、現在の backend、フォールバック回数、
   アップスケール済みフレーム数、直近の encode/GPU マイクロ秒。
+- **`ErikaOutputStatus`** —— 上記「診断とスクリーンショット」の 13-field negotiated
+  output snapshot。
 - **`ErikaDanmakuConfig`** —— 弾幕レイアウト/外観の全設定（フォントサイズ、不透明度、
   表示領域、スクロールタイミング、衝突/スタックフラグ、ブロックモード、影スタイル）。
   `font_size` は NipaPlay/Flutter の*論理*サイズで、Erika が surface scale を掛けて

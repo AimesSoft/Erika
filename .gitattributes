@@ -1,0 +1,4 @@
+# Unified diff fixtures require a prefix space on blank context lines and the
+# conventional `-- ` mail signature. Do not report those structural bytes as
+# trailing-whitespace errors when patch files are committed as test inputs.
+*.patch -whitespace
