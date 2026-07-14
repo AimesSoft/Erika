@@ -21,6 +21,8 @@ enum ErikaEventKind {
   surfaceDetached,
   error,
   trackSelectionChanged,
+  videoDecoderChanged,
+  audioOutputChanged,
 }
 
 enum ErikaTrackKind {
@@ -60,6 +62,98 @@ class ErikaVideoParams {
     if (value is int) {
       return value;
     }
+    if (value is num) {
+      return value.toInt();
+    }
+    return 0;
+  }
+}
+
+class ErikaVideoDecoderInfo {
+  const ErikaVideoDecoderInfo({
+    required this.stage,
+    required this.requestedBackend,
+    required this.activeBackend,
+    required this.fallbackCount,
+    this.previousBackend,
+    this.codec,
+    this.pixelFormat,
+    this.lineSizes = const <int>[],
+    this.reason,
+  });
+
+  factory ErikaVideoDecoderInfo.fromMap(Map<dynamic, dynamic> map) {
+    return ErikaVideoDecoderInfo(
+      stage: map['stage'] as String? ?? '',
+      requestedBackend: map['requestedBackend'] as String? ?? '',
+      previousBackend: map['previousBackend'] as String?,
+      activeBackend: map['activeBackend'] as String? ?? '',
+      fallbackCount: _asInt(map['fallbackCount']),
+      codec: map['codec'] as String?,
+      pixelFormat: map['pixelFormat'] as String?,
+      lineSizes: switch (map['lineSizes']) {
+        final List<dynamic> values => values
+            .whereType<num>()
+            .map((value) => value.toInt())
+            .toList(growable: false),
+        _ => const <int>[],
+      },
+      reason: map['reason'] as String?,
+    );
+  }
+
+  final String stage;
+  final String requestedBackend;
+  final String? previousBackend;
+  final String activeBackend;
+  final int fallbackCount;
+  final String? codec;
+  final String? pixelFormat;
+  final List<int> lineSizes;
+  final String? reason;
+
+  static int _asInt(Object? value) {
+    if (value is num) {
+      return value.toInt();
+    }
+    return 0;
+  }
+}
+
+class ErikaAudioOutputInfo {
+  const ErikaAudioOutputInfo({
+    required this.recoveryState,
+    required this.lastErrorCode,
+    required this.recoveryAttempts,
+    required this.recoveryCount,
+    required this.recoveryFailures,
+    required this.transitionSequence,
+  });
+
+  factory ErikaAudioOutputInfo.fromMap(Map<dynamic, dynamic> map) {
+    return ErikaAudioOutputInfo(
+      recoveryState: map['recoveryState'] as String? ?? 'unknown',
+      lastErrorCode: _asInt(map['lastErrorCode']),
+      recoveryAttempts: _asInt(map['recoveryAttempts']),
+      recoveryCount: _asInt(map['recoveryCount']),
+      recoveryFailures: _asInt(map['recoveryFailures']),
+      transitionSequence: _asInt(map['transitionSequence']),
+    );
+  }
+
+  final String recoveryState;
+  final int lastErrorCode;
+  final int recoveryAttempts;
+  final int recoveryCount;
+  final int recoveryFailures;
+  final int transitionSequence;
+
+  bool get isStable => recoveryState == 'stable';
+  bool get isDisconnected => recoveryState == 'disconnected';
+  bool get isRecovering => recoveryState == 'recovering';
+  bool get isFailed => recoveryState == 'failed';
+
+  static int _asInt(Object? value) {
     if (value is num) {
       return value.toInt();
     }
@@ -252,6 +346,10 @@ class ErikaPlayerEvent {
     required this.trackList,
     required this.trackSelection,
     this.status = 0,
+    this.error,
+    this.message,
+    this.decoder,
+    this.audio,
   });
 
   factory ErikaPlayerEvent.fromMap(Map<dynamic, dynamic> map) {
@@ -271,6 +369,18 @@ class ErikaPlayerEvent {
         map['trackSelection'] as Map<dynamic, dynamic>?,
       ),
       status: _asInt(map['status']),
+      error: map['error'] as String?,
+      message: map['message'] as String?,
+      decoder: switch (map['decoder']) {
+        final Map<dynamic, dynamic> value =>
+          ErikaVideoDecoderInfo.fromMap(value),
+        _ => null,
+      },
+      audio: switch (map['audio']) {
+        final Map<dynamic, dynamic> value =>
+          ErikaAudioOutputInfo.fromMap(value),
+        _ => null,
+      },
     );
   }
 
@@ -285,6 +395,10 @@ class ErikaPlayerEvent {
   final List<ErikaTrackInfo> trackList;
   final ErikaTrackSelection trackSelection;
   final int status;
+  final String? error;
+  final String? message;
+  final ErikaVideoDecoderInfo? decoder;
+  final ErikaAudioOutputInfo? audio;
 
   static int _asInt(Object? value) {
     if (value is int) {

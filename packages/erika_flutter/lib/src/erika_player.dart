@@ -8,11 +8,158 @@ import 'erika_event.dart';
 
 enum ErikaOutputMode {
   sdr(0),
-  appleEdr(1);
+  appleEdr(1),
+  extendedLinear(2);
 
   const ErikaOutputMode(this.nativeValue);
 
   final int nativeValue;
+
+  static ErikaOutputMode fromNativeValue(int value) {
+    return switch (value) {
+      1 => ErikaOutputMode.appleEdr,
+      2 => ErikaOutputMode.extendedLinear,
+      _ => ErikaOutputMode.sdr,
+    };
+  }
+}
+
+enum ErikaActiveOutputEncoding {
+  sdrSrgb(0),
+  appleEdr(1),
+  androidExtendedLinearScRgb(2),
+  hdr10Pq(3);
+
+  const ErikaActiveOutputEncoding(this.nativeValue);
+
+  final int nativeValue;
+
+  static ErikaActiveOutputEncoding fromNativeValue(int value) {
+    return switch (value) {
+      1 => ErikaActiveOutputEncoding.appleEdr,
+      2 => ErikaActiveOutputEncoding.androidExtendedLinearScRgb,
+      3 => ErikaActiveOutputEncoding.hdr10Pq,
+      _ => ErikaActiveOutputEncoding.sdrSrgb,
+    };
+  }
+}
+
+enum ErikaOutputSurfaceFormat {
+  eightBitUnorm(0),
+  tenBitUnorm(1),
+  sixteenBitFloat(2);
+
+  const ErikaOutputSurfaceFormat(this.nativeValue);
+
+  final int nativeValue;
+
+  static ErikaOutputSurfaceFormat fromNativeValue(int value) {
+    return switch (value) {
+      1 => ErikaOutputSurfaceFormat.tenBitUnorm,
+      2 => ErikaOutputSurfaceFormat.sixteenBitFloat,
+      _ => ErikaOutputSurfaceFormat.eightBitUnorm,
+    };
+  }
+}
+
+enum ErikaOutputFallbackReason {
+  none(0, 'none'),
+  displayHdrUnsupported(1, 'display_hdr_unsupported'),
+  hybridCompositionRequired(2, 'hybrid_composition_required'),
+  wgpuBackendNotVulkan(3, 'wgpu_backend_not_vulkan'),
+  rgba16FloatSurfaceFormatUnavailable(
+    4,
+    'rgba16float_surface_format_unavailable',
+  ),
+  nativeWindowDataSpaceApiUnavailable(
+    5,
+    'native_window_dataspace_api_unavailable',
+  ),
+  scrgbDataSpaceVerificationFailed(
+    6,
+    'scrgb_dataspace_verification_failed',
+  ),
+  surfaceConfigureFailed(7, 'surface_configure_failed'),
+  legacyAppleEdrUnsupported(8, 'legacy_apple_edr_unsupported'),
+  unknown(-1, 'unknown');
+
+  const ErikaOutputFallbackReason(this.nativeValue, this.label);
+
+  final int nativeValue;
+  final String label;
+
+  static ErikaOutputFallbackReason fromNativeValue(int value) {
+    return switch (value) {
+      0 => ErikaOutputFallbackReason.none,
+      1 => ErikaOutputFallbackReason.displayHdrUnsupported,
+      2 => ErikaOutputFallbackReason.hybridCompositionRequired,
+      3 => ErikaOutputFallbackReason.wgpuBackendNotVulkan,
+      4 => ErikaOutputFallbackReason.rgba16FloatSurfaceFormatUnavailable,
+      5 => ErikaOutputFallbackReason.nativeWindowDataSpaceApiUnavailable,
+      6 => ErikaOutputFallbackReason.scrgbDataSpaceVerificationFailed,
+      7 => ErikaOutputFallbackReason.surfaceConfigureFailed,
+      8 => ErikaOutputFallbackReason.legacyAppleEdrUnsupported,
+      _ => ErikaOutputFallbackReason.unknown,
+    };
+  }
+}
+
+class ErikaOutputStatus {
+  const ErikaOutputStatus({
+    required this.requestedMode,
+    required this.activeEncoding,
+    required this.surfaceFormat,
+    required this.nativeDataSpace,
+    required this.requestedHeadroom,
+    required this.activeHeadroom,
+    required this.activeHeadroomKnown,
+    required this.extendedLinearActive,
+    required this.fallbackReason,
+    required this.fallbackCount,
+    required this.dataSpaceFailures,
+    required this.headroomUpdates,
+    required this.extendedLinearFrames,
+  });
+
+  final ErikaOutputMode requestedMode;
+  final ErikaActiveOutputEncoding activeEncoding;
+  final ErikaOutputSurfaceFormat surfaceFormat;
+  final int nativeDataSpace;
+  final double requestedHeadroom;
+  final double activeHeadroom;
+  final bool activeHeadroomKnown;
+  final bool extendedLinearActive;
+  final ErikaOutputFallbackReason fallbackReason;
+  final int fallbackCount;
+  final int dataSpaceFailures;
+  final int headroomUpdates;
+  final int extendedLinearFrames;
+
+  factory ErikaOutputStatus.fromMap(Map<dynamic, dynamic> map) {
+    return ErikaOutputStatus(
+      requestedMode: ErikaOutputMode.fromNativeValue(
+        (map['requestedMode'] as num?)?.toInt() ?? 0,
+      ),
+      activeEncoding: ErikaActiveOutputEncoding.fromNativeValue(
+        (map['activeEncoding'] as num?)?.toInt() ?? 0,
+      ),
+      surfaceFormat: ErikaOutputSurfaceFormat.fromNativeValue(
+        (map['surfaceFormat'] as num?)?.toInt() ?? 0,
+      ),
+      nativeDataSpace: (map['nativeDataSpace'] as num?)?.toInt() ?? -1,
+      requestedHeadroom: (map['requestedHeadroom'] as num?)?.toDouble() ?? 1.0,
+      activeHeadroom: (map['activeHeadroom'] as num?)?.toDouble() ?? 1.0,
+      activeHeadroomKnown: map['activeHeadroomKnown'] == true,
+      extendedLinearActive: map['extendedLinearActive'] == true,
+      fallbackReason: ErikaOutputFallbackReason.fromNativeValue(
+        (map['fallbackReason'] as num?)?.toInt() ?? 0,
+      ),
+      fallbackCount: (map['fallbackCount'] as num?)?.toInt() ?? 0,
+      dataSpaceFailures: (map['dataSpaceFailures'] as num?)?.toInt() ?? 0,
+      headroomUpdates: (map['headroomUpdates'] as num?)?.toInt() ?? 0,
+      extendedLinearFrames: (map['extendedLinearFrames'] as num?)?.toInt() ?? 0,
+    );
+  }
 }
 
 enum ErikaUpscalerMode {
@@ -113,6 +260,11 @@ class ErikaPresenterStats {
     required this.audioClockReadFrames,
     required this.audioClockQueuedFrames,
     required this.audioClockUnderflowFrames,
+    required this.audioRecoveryState,
+    required this.audioLastErrorCode,
+    required this.audioRecoveryAttempts,
+    required this.audioRecoveryCount,
+    required this.audioRecoveryFailures,
     required this.directZeroCopyVideoFrames,
     required this.sharedHandleVideoFrames,
     required this.hdrSourceFrames,
@@ -122,6 +274,7 @@ class ErikaPresenterStats {
     required this.hdr10MetadataFailures,
     required this.hdr10OutputFailures,
     required this.hdr10OutputActive,
+    required this.videoFrameBackpressureDrops,
   });
 
   final int decodedVideoFrames;
@@ -143,6 +296,11 @@ class ErikaPresenterStats {
   final int audioClockReadFrames;
   final int audioClockQueuedFrames;
   final int audioClockUnderflowFrames;
+  final int audioRecoveryState;
+  final int audioLastErrorCode;
+  final int audioRecoveryAttempts;
+  final int audioRecoveryCount;
+  final int audioRecoveryFailures;
   final int directZeroCopyVideoFrames;
   final int sharedHandleVideoFrames;
   final int hdrSourceFrames;
@@ -152,6 +310,7 @@ class ErikaPresenterStats {
   final int hdr10MetadataFailures;
   final int hdr10OutputFailures;
   final bool hdr10OutputActive;
+  final int videoFrameBackpressureDrops;
 
   factory ErikaPresenterStats.fromMap(Map<dynamic, dynamic> map) {
     return ErikaPresenterStats(
@@ -178,6 +337,11 @@ class ErikaPresenterStats {
       audioClockReadFrames: _intValue(map['audioClockReadFrames']),
       audioClockQueuedFrames: _intValue(map['audioClockQueuedFrames']),
       audioClockUnderflowFrames: _intValue(map['audioClockUnderflowFrames']),
+      audioRecoveryState: _intValue(map['audioRecoveryState']),
+      audioLastErrorCode: _intValue(map['audioLastErrorCode']),
+      audioRecoveryAttempts: _intValue(map['audioRecoveryAttempts']),
+      audioRecoveryCount: _intValue(map['audioRecoveryCount']),
+      audioRecoveryFailures: _intValue(map['audioRecoveryFailures']),
       directZeroCopyVideoFrames: _intValue(map['directZeroCopyVideoFrames']),
       sharedHandleVideoFrames: _intValue(map['sharedHandleVideoFrames']),
       hdrSourceFrames: _intValue(map['hdrSourceFrames']),
@@ -187,6 +351,9 @@ class ErikaPresenterStats {
       hdr10MetadataFailures: _intValue(map['hdr10MetadataFailures']),
       hdr10OutputFailures: _intValue(map['hdr10OutputFailures']),
       hdr10OutputActive: map['hdr10OutputActive'] == true,
+      videoFrameBackpressureDrops: _intValue(
+        map['videoFrameBackpressureDrops'],
+      ),
     );
   }
 
@@ -211,6 +378,11 @@ class ErikaPresenterStats {
       'audioClockReadFrames': audioClockReadFrames,
       'audioClockQueuedFrames': audioClockQueuedFrames,
       'audioClockUnderflowFrames': audioClockUnderflowFrames,
+      'audioRecoveryState': audioRecoveryState,
+      'audioLastErrorCode': audioLastErrorCode,
+      'audioRecoveryAttempts': audioRecoveryAttempts,
+      'audioRecoveryCount': audioRecoveryCount,
+      'audioRecoveryFailures': audioRecoveryFailures,
       'directZeroCopyVideoFrames': directZeroCopyVideoFrames,
       'sharedHandleVideoFrames': sharedHandleVideoFrames,
       'hdrSourceFrames': hdrSourceFrames,
@@ -220,6 +392,7 @@ class ErikaPresenterStats {
       'hdr10MetadataFailures': hdr10MetadataFailures,
       'hdr10OutputFailures': hdr10OutputFailures,
       'hdr10OutputActive': hdr10OutputActive,
+      'videoFrameBackpressureDrops': videoFrameBackpressureDrops,
     };
   }
 
@@ -465,7 +638,21 @@ class _ErikaDanmakuConfigPatch {
 }
 
 class ErikaPlayer {
-  ErikaPlayer({this.outputMode, this.edrHeadroom, this.hdrDebug = false}) {
+  ErikaPlayer({
+    this.outputMode,
+    this.edrHeadroom,
+    this.upscaler,
+    this.hdrDebug = false,
+  }) {
+    final headroom = edrHeadroom;
+    if (headroom != null &&
+        (!headroom.isFinite || headroom < 1.0 || headroom > 10000.0)) {
+      throw ArgumentError.value(
+        headroom,
+        'edrHeadroom',
+        'must be finite and in [1, 10000]; omit it for system-auto headroom',
+      );
+    }
     _eventSubscription ??= _events.receiveBroadcastStream().listen(
       _dispatchNativeEvent,
       onError: (Object error, StackTrace stackTrace) {
@@ -483,6 +670,7 @@ class ErikaPlayer {
 
   int? _id;
   Future<int>? _createFuture;
+  Future<void>? _disposeFuture;
   bool _disposed = false;
   static const Duration _danmakuConfigCoalesceDelay = Duration(
     milliseconds: 50,
@@ -496,6 +684,7 @@ class ErikaPlayer {
 
   final ErikaOutputMode? outputMode;
   final double? edrHeadroom;
+  final ErikaUpscalerMode? upscaler;
   final bool hdrDebug;
 
   int? get id => _id;
@@ -510,10 +699,10 @@ class ErikaPlayer {
       throw StateError('ErikaPlayer has been disposed.');
     }
     final existing = _id;
-    if (existing != null) {
-      return Future<int>.value(existing);
-    }
-    return _createFuture ??= _create();
+    final player = existing != null
+        ? Future<int>.value(existing)
+        : (_createFuture ??= _create());
+    return _requireActiveAfter(player);
   }
 
   Future<void> open(String uri) async {
@@ -588,6 +777,18 @@ class ErikaPlayer {
       throw StateError('Erika upscaler status returned null.');
     }
     return ErikaUpscalerStatus.fromMap(status);
+  }
+
+  Future<ErikaOutputStatus> getOutputStatus() async {
+    final playerId = await ensureCreated();
+    final status = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+      'getOutputStatus',
+      <String, Object?>{'playerId': playerId},
+    );
+    if (status == null) {
+      throw StateError('Erika output status returned null.');
+    }
+    return ErikaOutputStatus.fromMap(status);
   }
 
   Future<ErikaPresenterStats> getPresenterStats() async {
@@ -952,7 +1153,9 @@ class ErikaPlayer {
     required int generation,
     String? debugLabel,
   }) async {
+    final playerId = await ensureCreated();
     await _invoke('setOverlayFrame', <String, Object?>{
+      'playerId': playerId,
       'viewId': windowOverlayViewId,
       'generation': generation,
       'x': frame.left,
@@ -964,11 +1167,16 @@ class ErikaPlayer {
     });
   }
 
-  Future<void> dispose() async {
-    if (_disposed) {
-      return;
+  Future<void> dispose() {
+    final existing = _disposeFuture;
+    if (existing != null) {
+      return existing;
     }
     _disposed = true;
+    return _disposeFuture = _dispose();
+  }
+
+  Future<void> _dispose() async {
     _danmakuConfigTimer?.cancel();
     _danmakuConfigTimer = null;
     for (final completer in _pendingDanmakuConfigCompleters) {
@@ -978,21 +1186,38 @@ class ErikaPlayer {
     }
     _pendingDanmakuConfigCompleters.clear();
     _pendingDanmakuConfig = null;
+
+    final createFuture = _createFuture;
+    if (createFuture != null) {
+      try {
+        await createFuture;
+      } catch (_) {
+        // Creation callers retain the original error. Disposal only needs to
+        // clean up a native player if creation produced one.
+      }
+    }
+
     final playerId = _id;
     _id = null;
     _createFuture = null;
     if (playerId == null) {
       return;
     }
-    await _invoke('dispose', <String, Object?>{'playerId': playerId});
-    final controller = _controllers.remove(playerId);
-    await controller?.close();
+    try {
+      await _invoke('dispose', <String, Object?>{'playerId': playerId});
+    } finally {
+      final controller = _controllers.remove(playerId);
+      await controller?.close();
+    }
   }
 
   Future<int> _create() async {
+    final requestedHeadroom = edrHeadroom ??
+        (outputMode == ErikaOutputMode.extendedLinear ? 4.0 : null);
     final arguments = <String, Object?>{
       if (outputMode case final mode?) 'outputMode': mode.nativeValue,
-      if (edrHeadroom case final headroom?) 'edrHeadroom': headroom,
+      if (requestedHeadroom case final headroom?) 'edrHeadroom': headroom,
+      if (upscaler case final mode?) 'upscaler': mode.nativeValue,
       if (hdrDebug) 'hdrDebug': true,
     };
     if (hdrDebug) {
@@ -1004,6 +1229,14 @@ class ErikaPlayer {
     }
     _id = playerId;
     _controllerFor(playerId);
+    return playerId;
+  }
+
+  Future<int> _requireActiveAfter(Future<int> player) async {
+    final playerId = await player;
+    if (_disposed) {
+      throw StateError('ErikaPlayer has been disposed.');
+    }
     return playerId;
   }
 

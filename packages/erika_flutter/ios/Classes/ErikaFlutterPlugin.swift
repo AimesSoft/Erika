@@ -222,6 +222,11 @@ private struct ErikaPresenterStatsC {
   var audioClockReadFrames: UInt64 = 0
   var audioClockQueuedFrames: UInt64 = 0
   var audioClockUnderflowFrames: UInt64 = 0
+  var audioRecoveryState: Int32 = 0
+  var audioLastErrorCode: Int32 = 0
+  var audioRecoveryAttempts: UInt64 = 0
+  var audioRecoveryCount: UInt64 = 0
+  var audioRecoveryFailures: UInt64 = 0
   var directZeroCopyVideoFrames: UInt64 = 0
   var sharedHandleVideoFrames: UInt64 = 0
   var hdrSourceFrames: UInt64 = 0
@@ -231,6 +236,7 @@ private struct ErikaPresenterStatsC {
   var hdr10MetadataFailures: UInt64 = 0
   var hdr10OutputFailures: UInt64 = 0
   var hdr10OutputActive: Bool = false
+  var videoFrameBackpressureDrops: UInt64 = 0
 }
 
 private struct ErikaUpscalerStatusC {
@@ -240,6 +246,23 @@ private struct ErikaUpscalerStatusC {
   var upscaledFrames: UInt64 = 0
   var lastEncodeMicros: UInt64 = 0
   var lastGpuMicros: UInt64 = 0
+}
+
+// Keep field order and types aligned with `ErikaOutputStatus` in erika.h.
+private struct ErikaOutputStatusC {
+  var requestedMode: Int32 = 0
+  var activeEncoding: Int32 = 0
+  var surfaceFormat: Int32 = 0
+  var nativeDataSpace: Int32 = 0
+  var requestedHeadroom: Float = 1.0
+  var activeHeadroom: Float = 1.0
+  var activeHeadroomKnown: Bool = false
+  var extendedLinearActive: Bool = false
+  var fallbackReason: Int32 = 0
+  var fallbackCount: UInt64 = 0
+  var dataSpaceFailures: UInt64 = 0
+  var headroomUpdates: UInt64 = 0
+  var extendedLinearFrames: UInt64 = 0
 }
 
 private let erikaDefaultDisplayFps = 60
@@ -325,6 +348,7 @@ private final class ErikaNativeLibrary {
   typealias SetUpscalerFn = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Int32
   typealias SetSubtitleScaleFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
   typealias GetUpscalerStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
+  typealias GetOutputStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias SelectTrackFn = @convention(c) (UnsafeMutableRawPointer?, Int64) -> Int32
   typealias AddExternalSubtitleFn = @convention(c) (
     UnsafeMutableRawPointer?,
@@ -385,6 +409,7 @@ private final class ErikaNativeLibrary {
   let setUpscaler: SetUpscalerFn?
   let setSubtitleScale: SetSubtitleScaleFn?
   let getUpscalerStatus: GetUpscalerStatusFn?
+  let getOutputStatus: GetOutputStatusFn?
   let selectAudioTrack: SelectTrackFn
   let selectSubtitleTrack: SelectTrackFn
   let addExternalSubtitle: AddExternalSubtitleFn
@@ -441,6 +466,7 @@ private final class ErikaNativeLibrary {
     setUpscaler = Self.loadOptional("erika_presenter_set_upscaler", from: libraryHandle, as: SetUpscalerFn.self)
     setSubtitleScale = Self.loadOptional("erika_presenter_set_subtitle_scale", from: libraryHandle, as: SetSubtitleScaleFn.self)
     getUpscalerStatus = Self.loadOptional("erika_presenter_get_upscaler_status", from: libraryHandle, as: GetUpscalerStatusFn.self)
+    getOutputStatus = Self.loadOptional("erika_presenter_get_output_status", from: libraryHandle, as: GetOutputStatusFn.self)
     selectAudioTrack = try Self.load("erika_presenter_select_audio_track", from: libraryHandle, as: SelectTrackFn.self)
     selectSubtitleTrack = try Self.load("erika_presenter_select_subtitle_track", from: libraryHandle, as: SelectTrackFn.self)
     addExternalSubtitle = try Self.load("erika_presenter_add_external_subtitle", from: libraryHandle, as: AddExternalSubtitleFn.self)
@@ -628,6 +654,18 @@ private final class ErikaPlayerHost {
       getStatus(handle, UnsafeMutableRawPointer(pointer))
     }
     try check(result, operation: "get_upscaler_status")
+    return status.toFlutterMap()
+  }
+
+  func outputStatus() throws -> [String: Any] {
+    guard let getStatus = library.getOutputStatus else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_get_output_status")
+    }
+    var status = ErikaOutputStatusC()
+    let result = withUnsafeMutablePointer(to: &status) { pointer in
+      getStatus(handle, UnsafeMutableRawPointer(pointer))
+    }
+    try check(result, operation: "get_output_status")
     return status.toFlutterMap()
   }
 
@@ -1417,6 +1455,9 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       case "getUpscalerStatus":
         let args = try dictionaryArgs(call.arguments)
         result(try playerHost(from: args).upscalerStatus())
+      case "getOutputStatus":
+        let args = try dictionaryArgs(call.arguments)
+        result(try playerHost(from: args).outputStatus())
       case "getPresenterStats":
         let args = try dictionaryArgs(call.arguments)
         result(try playerHost(from: args).presenterStats())
@@ -2070,6 +2111,26 @@ private extension ErikaUpscalerStatusC {
   }
 }
 
+private extension ErikaOutputStatusC {
+  func toFlutterMap() -> [String: Any] {
+    [
+      "requestedMode": Int(requestedMode),
+      "activeEncoding": Int(activeEncoding),
+      "surfaceFormat": Int(surfaceFormat),
+      "nativeDataSpace": Int(nativeDataSpace),
+      "requestedHeadroom": Double(requestedHeadroom),
+      "activeHeadroom": Double(activeHeadroom),
+      "activeHeadroomKnown": activeHeadroomKnown,
+      "extendedLinearActive": extendedLinearActive,
+      "fallbackReason": Int(fallbackReason),
+      "fallbackCount": Int64(clamping: fallbackCount),
+      "dataSpaceFailures": Int64(clamping: dataSpaceFailures),
+      "headroomUpdates": Int64(clamping: headroomUpdates),
+      "extendedLinearFrames": Int64(clamping: extendedLinearFrames),
+    ]
+  }
+}
+
 private extension ErikaPresenterStatsC {
   func toFlutterMap() -> [String: Any] {
     [
@@ -2092,6 +2153,11 @@ private extension ErikaPresenterStatsC {
       "audioClockReadFrames": Int64(clamping: audioClockReadFrames),
       "audioClockQueuedFrames": Int64(clamping: audioClockQueuedFrames),
       "audioClockUnderflowFrames": Int64(clamping: audioClockUnderflowFrames),
+      "audioRecoveryState": Int(audioRecoveryState),
+      "audioLastErrorCode": Int(audioLastErrorCode),
+      "audioRecoveryAttempts": Int64(clamping: audioRecoveryAttempts),
+      "audioRecoveryCount": Int64(clamping: audioRecoveryCount),
+      "audioRecoveryFailures": Int64(clamping: audioRecoveryFailures),
       "directZeroCopyVideoFrames": Int64(clamping: directZeroCopyVideoFrames),
       "sharedHandleVideoFrames": Int64(clamping: sharedHandleVideoFrames),
       "hdrSourceFrames": Int64(clamping: hdrSourceFrames),
@@ -2101,6 +2167,7 @@ private extension ErikaPresenterStatsC {
       "hdr10MetadataFailures": Int64(clamping: hdr10MetadataFailures),
       "hdr10OutputFailures": Int64(clamping: hdr10OutputFailures),
       "hdr10OutputActive": hdr10OutputActive,
+      "videoFrameBackpressureDrops": Int64(clamping: videoFrameBackpressureDrops),
     ]
   }
 }

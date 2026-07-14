@@ -588,7 +588,41 @@ EncodableValue PresenterStatsToMap(const ErikaPresenterStats& stats) {
        EncodableValue(static_cast<int64_t>(stats.hdr10_output_failures))},
       {EncodableValue("hdr10OutputActive"),
        EncodableValue(stats.hdr10_output_active)},
+      {EncodableValue("videoFrameBackpressureDrops"),
+       EncodableValue(
+           static_cast<int64_t>(stats.video_frame_backpressure_drops))},
   });
+}
+
+EncodableValue OutputStatusToMap(const ErikaOutputStatus& status) {
+  EncodableMap map;
+  map[EncodableValue("requestedMode")] =
+      EncodableValue(status.requested_mode);
+  map[EncodableValue("activeEncoding")] =
+      EncodableValue(status.active_encoding);
+  map[EncodableValue("surfaceFormat")] =
+      EncodableValue(status.surface_format);
+  map[EncodableValue("nativeDataSpace")] =
+      EncodableValue(status.native_data_space);
+  map[EncodableValue("requestedHeadroom")] =
+      EncodableValue(static_cast<double>(status.requested_headroom));
+  map[EncodableValue("activeHeadroom")] =
+      EncodableValue(static_cast<double>(status.active_headroom));
+  map[EncodableValue("activeHeadroomKnown")] =
+      EncodableValue(status.active_headroom_known);
+  map[EncodableValue("extendedLinearActive")] =
+      EncodableValue(status.extended_linear_active);
+  map[EncodableValue("fallbackReason")] =
+      EncodableValue(status.fallback_reason);
+  map[EncodableValue("fallbackCount")] =
+      EncodableValue(static_cast<int64_t>(status.fallback_count));
+  map[EncodableValue("dataSpaceFailures")] =
+      EncodableValue(static_cast<int64_t>(status.data_space_failures));
+  map[EncodableValue("headroomUpdates")] =
+      EncodableValue(static_cast<int64_t>(status.headroom_updates));
+  map[EncodableValue("extendedLinearFrames")] =
+      EncodableValue(static_cast<int64_t>(status.extended_linear_frames));
+  return EncodableValue(std::move(map));
 }
 
 }  // namespace
@@ -607,6 +641,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   using SetSubtitleScaleFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
   using GetUpscalerStatusFn =
       ErikaStatus (*)(ErikaPresenterHandle*, ErikaUpscalerStatus*);
+  using GetOutputStatusFn =
+      ErikaStatus (*)(ErikaPresenterHandle*, ErikaOutputStatus*);
   using SelectTrackFn = ErikaStatus (*)(ErikaPresenterHandle*, int64_t);
   using AddExternalSubtitleFn =
       ErikaStatus (*)(ErikaPresenterHandle*, const char*, int64_t*);
@@ -711,6 +747,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   SetUpscalerFn set_upscaler = nullptr;
   SetSubtitleScaleFn set_subtitle_scale = nullptr;
   GetUpscalerStatusFn get_upscaler_status = nullptr;
+  GetOutputStatusFn get_output_status = nullptr;
   SelectTrackFn select_audio_track = nullptr;
   SelectTrackFn select_subtitle_track = nullptr;
   AddExternalSubtitleFn add_external_subtitle = nullptr;
@@ -769,6 +806,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
         "erika_presenter_set_subtitle_scale");
     get_upscaler_status = LoadOptional<GetUpscalerStatusFn>(
         "erika_presenter_get_upscaler_status");
+    get_output_status = LoadOptional<GetOutputStatusFn>(
+        "erika_presenter_get_output_status");
     select_audio_track =
         LoadRequired<SelectTrackFn>("erika_presenter_select_audio_track");
     select_subtitle_track =
@@ -1096,6 +1135,19 @@ struct ErikaFlutterPlugin::PlayerHost {
     ErikaUpscalerStatus status{};
     Check(library->get_upscaler_status(handle, &status), "get_upscaler_status");
     return UpscalerStatusToMap(status);
+  }
+
+  EncodableValue GetOutputStatus() {
+    if (library->get_output_status == nullptr) {
+      throw PluginError(
+          "Missing Erika C ABI symbol: erika_presenter_get_output_status");
+    }
+    ErikaOutputStatus status{};
+    const ErikaStatus result = library->get_output_status(handle, &status);
+    if (result != ErikaStatus_Ok) {
+      Check(result, "get_output_status", library->TakeLastError());
+    }
+    return OutputStatusToMap(status);
   }
 
   EncodableValue GetPresenterStats() const {
@@ -2058,6 +2110,8 @@ void ErikaFlutterPlugin::HandleMethodCall(
       result->Success();
     } else if (method == "getUpscalerStatus") {
       result->Success(PlayerFromArgs(args).GetUpscalerStatus());
+    } else if (method == "getOutputStatus") {
+      result->Success(PlayerFromArgs(args).GetOutputStatus());
     } else if (method == "getPresenterStats") {
       result->Success(PlayerFromArgs(args).GetPresenterStats());
     } else if (method == "addExternalSubtitle") {
