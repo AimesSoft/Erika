@@ -3305,6 +3305,12 @@ impl RendererBackend for WgpuRenderer {
         Ok(())
     }
 
+    fn preserve_current_frame_for_track_transition(&mut self) -> Result<()> {
+        // Track switches use the same renderer-owned snapshot, without making
+        // native Metal/D3D backends clear their historical current frame.
+        Ok(())
+    }
+
     fn render_current_frame(&mut self, context: RenderFrameContext<'_>) -> Result<bool> {
         if !self.current_video_visible || self.current_video.is_none() {
             return Ok(false);
@@ -4043,6 +4049,14 @@ impl RendererBackend for AndroidRecoveringWgpuRenderer {
         self.active.preserve_current_frame_for_transition()
     }
 
+    fn preserve_current_frame_for_track_transition(&mut self) -> Result<()> {
+        // Track selection also seeks/reopens MediaCodec on Android. Retire the
+        // decoder-owned recovery payload while preserving the active wgpu
+        // renderer's detached GPU snapshot.
+        self.current_frame = None;
+        self.active.preserve_current_frame_for_track_transition()
+    }
+
     fn render_current_frame(&mut self, context: RenderFrameContext<'_>) -> Result<bool> {
         self.execute_with_recovery(
             "render_current_frame",
@@ -4693,6 +4707,7 @@ mod tests {
             .upload_nv12(4, 2, &[235; 8], &[128; 4], uniforms)
             .unwrap();
 
+        RendererBackend::preserve_current_frame_for_track_transition(&mut renderer).unwrap();
         RendererBackend::preserve_current_frame_for_transition(&mut renderer).unwrap();
 
         let capture = RendererBackend::capture_current_frame(

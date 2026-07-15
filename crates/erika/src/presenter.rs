@@ -77,6 +77,7 @@ const DEFAULT_SUBTITLE_FONT_SCALE: f64 = 1.0;
 enum TransitionFramePolicy {
     Clear,
     PreserveRendererSnapshot,
+    PreserveTrackSwitchFrame,
 }
 
 #[derive(Debug, Clone)]
@@ -813,7 +814,7 @@ impl PresenterRuntime {
         self.bump_danmaku_generation();
         self.clear_playback_visual_state(
             self.current_media_time,
-            TransitionFramePolicy::PreserveRendererSnapshot,
+            TransitionFramePolicy::PreserveTrackSwitchFrame,
         );
         let transition = self.finish_frame_output_transition("select_audio_track", quiesced, true);
         result.and(transition)
@@ -826,7 +827,7 @@ impl PresenterRuntime {
         self.bump_danmaku_generation();
         self.clear_playback_visual_state(
             self.current_media_time,
-            TransitionFramePolicy::PreserveRendererSnapshot,
+            TransitionFramePolicy::PreserveTrackSwitchFrame,
         );
         let transition =
             self.finish_frame_output_transition("select_subtitle_track", quiesced, true);
@@ -1617,6 +1618,9 @@ impl PresenterRuntime {
             TransitionFramePolicy::PreserveRendererSnapshot => {
                 self.preserve_current_video_frame_for_transition()
             }
+            TransitionFramePolicy::PreserveTrackSwitchFrame => {
+                self.preserve_current_video_frame_for_track_transition()
+            }
         }
     }
 
@@ -1634,6 +1638,22 @@ impl PresenterRuntime {
                 serde_json::json!({
                     "event": "frame_transition_snapshot",
                     "stage": "preserve_failed",
+                    "reason": error.to_string(),
+                    "action": "clear_current_frame",
+                })
+                .to_string(),
+            );
+            self.release_current_video_frame();
+        }
+    }
+
+    fn preserve_current_video_frame_for_track_transition(&mut self) {
+        if let Err(error) = self.renderer.preserve_current_frame_for_track_transition() {
+            self.stats.render_failures += 1;
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "frame_transition_snapshot",
+                    "stage": "track_transition_preserve_failed",
                     "reason": error.to_string(),
                     "action": "clear_current_frame",
                 })

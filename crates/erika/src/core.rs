@@ -597,6 +597,15 @@ pub trait RendererBackend {
         self.clear_current_frame()
     }
 
+    /// Prepare the retained video frame for an audio/subtitle track switch.
+    /// Native renderers keep their existing imported frame, matching the
+    /// historical track-switch behavior. Recovery renderers may override this
+    /// to release decoder-owned recovery payloads while retaining a detached
+    /// renderer-owned snapshot.
+    fn preserve_current_frame_for_track_transition(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Render the current frame (optionally compositing `overlay`) to the attached
     /// surface. Returns `false` if there is no current frame to draw, letting the
     /// caller fall back to a test frame.
@@ -2658,6 +2667,53 @@ fn emit_subtitle_frame_from_worker(inner: &Arc<Mutex<PlayerInner>>, frame: Playe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct TransitionFrameProbe {
+        clears: u32,
+    }
+
+    impl RendererBackend for TransitionFrameProbe {
+        fn attach_surface(&mut self, _surface: PlatformSurface) -> Result<()> {
+            Ok(())
+        }
+
+        fn detach_surface(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn resize_surface(&mut self, _width: u32, _height: u32, _scale: f64) -> Result<()> {
+            Ok(())
+        }
+
+        fn render_test_frame(&mut self, _time_seconds: f64) -> Result<()> {
+            Ok(())
+        }
+
+        fn upload_player_frame(&mut self, _frame: &PlayerVideoFrame) -> Result<()> {
+            Ok(())
+        }
+
+        fn clear_current_frame(&mut self) -> Result<()> {
+            self.clears += 1;
+            Ok(())
+        }
+
+        fn render_current_frame(&mut self, _context: RenderFrameContext<'_>) -> Result<bool> {
+            Ok(false)
+        }
+    }
+
+    #[test]
+    fn native_track_transition_keeps_frame_while_decoder_transition_clears() {
+        let mut renderer = TransitionFrameProbe::default();
+
+        RendererBackend::preserve_current_frame_for_track_transition(&mut renderer).unwrap();
+        assert_eq!(renderer.clears, 0);
+
+        RendererBackend::preserve_current_frame_for_transition(&mut renderer).unwrap();
+        assert_eq!(renderer.clears, 1);
+    }
 
     fn install_test_runtime(player: &Player, capacity: usize) -> Receiver<PlaybackCommand> {
         let (commands, receiver) = bounded(capacity.max(1));
