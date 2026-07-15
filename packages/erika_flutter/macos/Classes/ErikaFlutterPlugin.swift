@@ -880,8 +880,8 @@ private final class ErikaPlayerHost {
 
   private func attachOrResize(view: ErikaMetalSurfaceView, attach: Bool) throws {
     view.updateDrawableSize()
-    let width = UInt32(max(1.0, view.bounds.width).rounded())
-    let height = UInt32(max(1.0, view.bounds.height).rounded())
+    let width = UInt32(max(1.0, view.metalLayer.drawableSize.width).rounded())
+    let height = UInt32(max(1.0, view.metalLayer.drawableSize.height).rounded())
     let scale = view.currentBackingScale
     if attach {
       let rawLayer = UInt64(UInt(bitPattern: Unmanaged.passUnretained(view.metalLayer).toOpaque()))

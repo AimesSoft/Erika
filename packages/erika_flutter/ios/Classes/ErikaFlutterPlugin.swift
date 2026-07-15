@@ -991,21 +991,21 @@ private final class ErikaPlayerHost {
   private func attachOrResize(view: ErikaMetalSurfaceView, attach: Bool) throws {
     erikaConfigureLayerDynamicRange(view.metalLayer, config: presenterConfig)
     view.updateDrawableSize()
-    let width = UInt32(max(1.0, view.bounds.width).rounded())
-    let height = UInt32(max(1.0, view.bounds.height).rounded())
+    let width = UInt32(max(1.0, view.metalLayer.drawableSize.width).rounded())
+    let height = UInt32(max(1.0, view.metalLayer.drawableSize.height).rounded())
     let scale = view.currentScale
     if attach {
       let rawLayer = UInt64(UInt(bitPattern: Unmanaged.passUnretained(view.metalLayer).toOpaque()))
       try check(library.attachMetalLayer(handle, rawLayer, width, height, scale), operation: "attach_metal_layer")
       erikaHdrLog(
         hdrDebug,
-        "attached layer player=\(id) view=\(view.platformViewId) logical=\(width)x\(height) scale=\(String(format: "%.3f", scale)) \(erikaScreenSummary(view.window?.screen ?? UIScreen.main)) \(erikaLayerSummary(view.metalLayer))"
+        "attached layer player=\(id) view=\(view.platformViewId) physical=\(width)x\(height) scale=\(String(format: "%.3f", scale)) \(erikaScreenSummary(view.window?.screen ?? UIScreen.main)) \(erikaLayerSummary(view.metalLayer))"
       )
     } else {
       try check(library.resizeSurface(handle, width, height, scale), operation: "resize_surface")
       erikaHdrLog(
         hdrDebug,
-        "resized layer player=\(id) view=\(view.platformViewId) logical=\(width)x\(height) scale=\(String(format: "%.3f", scale)) \(erikaLayerSummary(view.metalLayer))"
+        "resized layer player=\(id) view=\(view.platformViewId) physical=\(width)x\(height) scale=\(String(format: "%.3f", scale)) \(erikaLayerSummary(view.metalLayer))"
       )
     }
   }

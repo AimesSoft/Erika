@@ -44,7 +44,7 @@ use objc2_metal::{
 use objc2_metal::{MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerState};
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 
-use crate::core::{ColorPrimaries, TransferFunction};
+use crate::core::{ColorPrimaries, SurfaceMetrics, TransferFunction};
 use crate::danmaku::{DanmakuGlyphAtlas, DanmakuRenderPlan};
 use crate::renderer::metal::upscaler::LumaUpscaler;
 use crate::renderer::metal::{
@@ -176,9 +176,7 @@ impl MetalRendererImpl {
     pub unsafe fn attach_raw_layer(
         &mut self,
         layer: *mut c_void,
-        width: u32,
-        height: u32,
-        scale: f64,
+        metrics: SurfaceMetrics,
     ) -> Result<()> {
         if layer.is_null() {
             return Err(PlayerError::Renderer(
@@ -190,7 +188,7 @@ impl MetalRendererImpl {
         layer.setDevice(Some(&*self.device));
         self.configure_layer_output(&layer);
         self.layer = Some(layer);
-        self.resize_surface(width, height, scale);
+        self.resize_surface(metrics);
         Ok(())
     }
 
@@ -198,12 +196,13 @@ impl MetalRendererImpl {
         self.layer = None;
     }
 
-    pub fn resize_surface(&mut self, width: u32, height: u32, scale: f64) {
+    pub fn resize_surface(&mut self, metrics: SurfaceMetrics) {
         let Some(layer) = &self.layer else {
             return;
         };
-        let drawable_width = (width as f64 * scale).max(1.0);
-        let drawable_height = (height as f64 * scale).max(1.0);
+        let (width, height) = metrics.physical_size();
+        let drawable_width = width as f64;
+        let drawable_height = height as f64;
         let size = CGSize::new(drawable_width, drawable_height);
         layer.setDrawableSize(size);
         self.stats.drawable_width = drawable_width.round() as u32;

@@ -892,15 +892,8 @@ pub unsafe extern "C" fn erika_attach_wgpu_surface_with_output_capabilities(
     with_handle_mut(handle, |handle| {
         status_from_player_result(
             handle.player.attach_surface(PlatformSurface::Wgpu(
-                WgpuSurfaceHandle::new(
-                    wgpu_surface_kind_from_c(kind),
-                    raw_window,
-                    raw_display,
-                    width,
-                    height,
-                    scale,
-                )
-                .with_output_capabilities(output_capabilities.into()),
+                wgpu_surface_handle_from_c(kind, raw_window, raw_display, width, height, scale)
+                    .with_output_capabilities(output_capabilities.into()),
             )),
         )
     })
@@ -2683,15 +2676,8 @@ pub unsafe extern "C" fn erika_presenter_attach_wgpu_surface_with_output_capabil
     with_presenter_mut(handle, |handle| {
         status_from_player_result(
             handle.presenter.attach_surface(PlatformSurface::Wgpu(
-                WgpuSurfaceHandle::new(
-                    wgpu_surface_kind_from_c(kind),
-                    raw_window,
-                    raw_display,
-                    width,
-                    height,
-                    scale,
-                )
-                .with_output_capabilities(output_capabilities.into()),
+                wgpu_surface_handle_from_c(kind, raw_window, raw_display, width, height, scale)
+                    .with_output_capabilities(output_capabilities.into()),
             )),
         )
     })
@@ -3250,6 +3236,20 @@ fn wgpu_surface_kind_from_c(kind: ErikaWgpuSurfaceKind) -> WgpuSurfaceKind {
     }
 }
 
+fn wgpu_surface_handle_from_c(
+    kind: ErikaWgpuSurfaceKind,
+    raw_window: u64,
+    raw_display: u64,
+    width: u32,
+    height: u32,
+    scale: f64,
+) -> WgpuSurfaceHandle {
+    let kind = wgpu_surface_kind_from_c(kind);
+    // The public C ABI defines width/height as exact physical pixels. `scale`
+    // is retained independently for logical UI content such as danmaku.
+    WgpuSurfaceHandle::new(kind, raw_window, raw_display, width, height, scale)
+}
+
 fn flutter_texture_kind_from_c(kind: ErikaFlutterTextureKind) -> FlutterTextureKind {
     match kind {
         ErikaFlutterTextureKind::Unknown => FlutterTextureKind::Unknown,
@@ -3539,6 +3539,21 @@ mod tests {
         assert_eq!(event.kind, ErikaEventKind::SurfaceAttached);
 
         unsafe { erika_destroy(handle) };
+    }
+
+    #[test]
+    fn c_wgpu_surface_keeps_physical_extent_separate_from_scale() {
+        let handle = wgpu_surface_handle_from_c(
+            ErikaWgpuSurfaceKind::AndroidNativeWindow,
+            42,
+            0,
+            1081,
+            607,
+            2.625,
+        );
+
+        assert_eq!(handle.metrics().physical_size(), (1081, 607));
+        assert_eq!(handle.metrics().content_scale, 2.625);
     }
 
     #[test]

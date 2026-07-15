@@ -1,5 +1,6 @@
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import <math.h>
 
 extern void erika_perf_lab_attach_layer(void *layer, unsigned int width, unsigned int height, double scale);
 extern void erika_perf_lab_resize_layer(unsigned int width, unsigned int height, double scale);
@@ -122,10 +123,12 @@ static NSString *ErikaLabFormatTime(double seconds) {
   CGSize drawableSize = CGSizeMake(MAX(1.0, self.bounds.size.width * scale), MAX(1.0, self.bounds.size.height * scale));
   self.metalLayer.drawableSize = drawableSize;
   self.metalLayer.frame = self.bounds;
+  unsigned int pixelWidth = (unsigned int)MAX(1.0, round(drawableSize.width));
+  unsigned int pixelHeight = (unsigned int)MAX(1.0, round(drawableSize.height));
   if (attach) {
-    erika_perf_lab_attach_layer((__bridge void *)self.metalLayer, (unsigned int)self.bounds.size.width, (unsigned int)self.bounds.size.height, scale);
+    erika_perf_lab_attach_layer((__bridge void *)self.metalLayer, pixelWidth, pixelHeight, scale);
   } else {
-    erika_perf_lab_resize_layer((unsigned int)self.bounds.size.width, (unsigned int)self.bounds.size.height, scale);
+    erika_perf_lab_resize_layer(pixelWidth, pixelHeight, scale);
   }
 }
 

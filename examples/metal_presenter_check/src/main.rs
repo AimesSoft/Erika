@@ -2,7 +2,7 @@ use std::ffi::c_void;
 use std::process;
 
 use erika::renderer::metal::MetalRenderer;
-use erika::{MetalSurfaceHandle, PlatformSurface, RendererBackend};
+use erika::{MetalSurfaceHandle, PlatformSurface, RendererBackend, SurfaceMetrics};
 
 unsafe extern "C" {
     fn erika_presenter_check_create_layer(width: f64, height: f64, scale: f64) -> *mut c_void;
@@ -29,8 +29,8 @@ fn run_check(layer: *mut c_void) -> Result<(), String> {
     renderer
         .attach_surface(PlatformSurface::Metal(MetalSurfaceHandle::new(
             layer as u64,
-            640,
-            360,
+            1280,
+            720,
             2.0,
         )))
         .map_err(|error| error.to_string())?;
@@ -38,7 +38,7 @@ fn run_check(layer: *mut c_void) -> Result<(), String> {
         .render_test_frame(0.25)
         .map_err(|error| error.to_string())?;
     renderer
-        .resize_surface(320, 180, 2.0)
+        .resize_surface(SurfaceMetrics::new(640, 360, 2.0))
         .map_err(|error| error.to_string())?;
     renderer
         .render_test_frame(0.5)

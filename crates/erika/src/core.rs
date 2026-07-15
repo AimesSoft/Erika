@@ -437,21 +437,78 @@ pub enum PlatformSurface {
     FlutterTexture(FlutterTextureHandle),
 }
 
+impl PlatformSurface {
+    pub fn metrics(self) -> SurfaceMetrics {
+        match self {
+            Self::Metal(handle) => handle.metrics,
+            Self::Wgpu(handle) => handle.metrics(),
+            Self::FlutterTexture(handle) => handle.metrics,
+        }
+    }
+}
+
+/// Exact native drawable/swapchain extent. Surface width and height in Erika's
+/// public API are physical pixels and are never derived from the content scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SurfacePhysicalExtent {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl SurfacePhysicalExtent {
+    pub fn new(width: u32, height: u32) -> Self {
+        Self {
+            width: width.max(1),
+            height: height.max(1),
+        }
+    }
+}
+
+/// Shared surface sizing contract. `physical_extent` configures the GPU
+/// target; `content_scale` converts Flutter/NipaPlay logical UI units to
+/// physical pixels without changing that target extent.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfaceMetrics {
+    pub physical_extent: SurfacePhysicalExtent,
+    pub content_scale: f64,
+}
+
+impl SurfaceMetrics {
+    pub fn new(width: u32, height: u32, content_scale: f64) -> Self {
+        Self {
+            physical_extent: SurfacePhysicalExtent::new(width, height),
+            content_scale: normalize_surface_scale(content_scale),
+        }
+    }
+
+    pub fn resized(self, width: u32, height: u32, content_scale: f64) -> Self {
+        Self::new(width, height, content_scale)
+    }
+
+    pub fn physical_size(self) -> (u32, u32) {
+        (self.physical_extent.width, self.physical_extent.height)
+    }
+}
+
+fn normalize_surface_scale(scale: f64) -> f64 {
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetalSurfaceHandle {
     pub raw_layer: u64,
-    pub width: u32,
-    pub height: u32,
-    pub scale: f64,
+    pub metrics: SurfaceMetrics,
 }
 
 impl MetalSurfaceHandle {
     pub fn new(raw_layer: u64, width: u32, height: u32, scale: f64) -> Self {
         Self {
             raw_layer,
-            width,
-            height,
-            scale,
+            metrics: SurfaceMetrics::new(width, height, scale),
         }
     }
 }
@@ -473,9 +530,7 @@ pub struct WgpuSurfaceHandle {
     pub kind: WgpuSurfaceKind,
     pub raw_window: u64,
     pub raw_display: u64,
-    pub width: u32,
-    pub height: u32,
-    pub scale: f64,
+    pub metrics: SurfaceMetrics,
     pub output_capabilities: SurfaceOutputCapabilities,
 }
 
@@ -492,11 +547,17 @@ impl WgpuSurfaceHandle {
             kind,
             raw_window,
             raw_display,
-            width,
-            height,
-            scale,
+            metrics: SurfaceMetrics::new(width, height, scale),
             output_capabilities: SurfaceOutputCapabilities::default(),
         }
+    }
+
+    pub fn metrics(self) -> SurfaceMetrics {
+        self.metrics
+    }
+
+    pub fn resize(&mut self, metrics: SurfaceMetrics) {
+        self.metrics = metrics;
     }
 
     pub fn with_output_capabilities(
@@ -547,9 +608,7 @@ pub enum FlutterTextureKind {
 pub struct FlutterTextureHandle {
     pub kind: FlutterTextureKind,
     pub texture_id: i64,
-    pub width: u32,
-    pub height: u32,
-    pub scale: f64,
+    pub metrics: SurfaceMetrics,
     pub hdr_capable: bool,
 }
 
@@ -564,9 +623,7 @@ impl FlutterTextureHandle {
         Self {
             kind,
             texture_id,
-            width,
-            height,
-            scale,
+            metrics: SurfaceMetrics::new(width, height, scale),
             hdr_capable: false,
         }
     }
@@ -575,7 +632,7 @@ impl FlutterTextureHandle {
 pub trait RendererBackend {
     fn attach_surface(&mut self, surface: PlatformSurface) -> Result<()>;
     fn detach_surface(&mut self) -> Result<()>;
-    fn resize_surface(&mut self, width: u32, height: u32, scale: f64) -> Result<()>;
+    fn resize_surface(&mut self, metrics: SurfaceMetrics) -> Result<()>;
     fn render_test_frame(&mut self, time_seconds: f64) -> Result<()>;
 
     /// Import/upload a freshly decoded video frame and retain it as the current
@@ -2668,6 +2725,33 @@ fn emit_subtitle_frame_from_worker(inner: &Arc<Mutex<PlayerInner>>, frame: Playe
 mod tests {
     use super::*;
 
+    #[test]
+    fn surface_metrics_keep_exact_physical_extent() {
+        let metrics = SurfaceMetrics::new(1081, 607, 2.625);
+
+        assert_eq!(metrics.physical_size(), (1081, 607));
+        assert_eq!(metrics.content_scale, 2.625);
+    }
+
+    #[test]
+    fn surface_metrics_preserve_low_density_and_sanitize_invalid_scale() {
+        assert_eq!(SurfaceMetrics::new(320, 240, 0.75).content_scale, 0.75);
+        assert_eq!(SurfaceMetrics::new(320, 240, f64::NAN).content_scale, 1.0);
+        assert_eq!(SurfaceMetrics::new(320, 240, 0.0).content_scale, 1.0);
+        assert_eq!(SurfaceMetrics::new(320, 240, -2.0).content_scale, 1.0);
+    }
+
+    #[test]
+    fn surface_metrics_resize_never_derives_extent_from_scale() {
+        let metrics = SurfaceMetrics::new(1080, 2400, 2.625);
+
+        assert_eq!(metrics.physical_size(), (1080, 2400));
+        assert_eq!(
+            metrics.resized(1440, 3120, 3.5).physical_size(),
+            (1440, 3120)
+        );
+    }
+
     #[derive(Default)]
     struct TransitionFrameProbe {
         clears: u32,
@@ -2682,7 +2766,7 @@ mod tests {
             Ok(())
         }
 
-        fn resize_surface(&mut self, _width: u32, _height: u32, _scale: f64) -> Result<()> {
+        fn resize_surface(&mut self, _metrics: SurfaceMetrics) -> Result<()> {
             Ok(())
         }
 

@@ -29,7 +29,7 @@ use crate::audio::{
 use crate::core::{
     AudioOutputEvent, MediaRequest, PlatformSurface, Player, PlayerAudioFrame, PlayerConfig,
     PlayerSubtitleFrame, PlayerVideoFrame, RenderFrameContext, RendererBackend,
-    RendererBackendPreference, RendererRuntimeStats, TrackInfo, TrackSelection,
+    RendererBackendPreference, RendererRuntimeStats, SurfaceMetrics, TrackInfo, TrackSelection,
     VideoFrameImportFailure,
 };
 use crate::danmaku::{
@@ -234,7 +234,7 @@ pub struct PresenterRuntime {
     rejected_video_import_route: Option<RejectedVideoImportRoute>,
     current_media_time: Duration,
     current_generation: u64,
-    current_output_viewport: Option<DanmakuViewport>,
+    current_surface_metrics: Option<SurfaceMetrics>,
     current_danmaku_viewport: Option<DanmakuViewport>,
     subtitle_font_scale: f64,
     subtitles: SubtitleFrameState,
@@ -531,7 +531,7 @@ impl PresenterRuntime {
             rejected_video_import_route: None,
             current_media_time: Duration::ZERO,
             current_generation: 1,
-            current_output_viewport: None,
+            current_surface_metrics: None,
             current_danmaku_viewport: None,
             subtitle_font_scale: DEFAULT_SUBTITLE_FONT_SCALE,
             subtitles: SubtitleFrameState::default(),
@@ -561,26 +561,28 @@ impl PresenterRuntime {
     }
 
     pub fn attach_surface(&mut self, surface: PlatformSurface) -> Result<()> {
+        let metrics = surface.metrics();
         self.renderer.attach_surface(surface)?;
         if let Err(error) = self.player.attach_surface(surface) {
             let _ = self.renderer.detach_surface();
             return Err(error);
         }
-        self.current_output_viewport = surface_danmaku_viewport(surface);
+        self.current_surface_metrics = Some(metrics);
         self.clear_current_danmaku_state();
         Ok(())
     }
 
     pub fn detach_surface(&mut self) -> Result<()> {
-        self.current_output_viewport = None;
+        self.current_surface_metrics = None;
         self.clear_current_danmaku_state();
         self.player.detach_surface()?;
         self.renderer.detach_surface()
     }
 
     pub fn resize_surface(&mut self, width: u32, height: u32, scale: f64) -> Result<()> {
-        self.renderer.resize_surface(width, height, scale)?;
-        self.current_output_viewport = Some(surface_dimensions_to_viewport(width, height, scale));
+        let metrics = SurfaceMetrics::new(width, height, scale);
+        self.renderer.resize_surface(metrics)?;
+        self.current_surface_metrics = Some(metrics);
         self.clear_current_danmaku_state();
         self.last_audio_clock_report = None;
         Ok(())
@@ -891,10 +893,10 @@ impl PresenterRuntime {
             .overlay(self.current_overlay.as_ref())
             .danmaku(self.current_danmaku.as_ref())
             .output_size(
-                self.current_output_viewport
-                    .map_or(0, |viewport| viewport.width),
-                self.current_output_viewport
-                    .map_or(0, |viewport| viewport.height),
+                self.current_surface_metrics
+                    .map_or(0, |metrics| metrics.physical_extent.width),
+                self.current_surface_metrics
+                    .map_or(0, |metrics| metrics.physical_extent.height),
             );
         let render_started = Instant::now();
         let render_result = self.renderer.render_current_frame(context);
@@ -957,10 +959,10 @@ impl PresenterRuntime {
                     .clock_snapshot()
                     .map(|snapshot| snapshot.underflow_frames)
                     .unwrap_or(0),
-                self.current_output_viewport
-                    .map_or(0, |viewport| viewport.width),
-                self.current_output_viewport
-                    .map_or(0, |viewport| viewport.height),
+                self.current_surface_metrics
+                    .map_or(0, |metrics| metrics.physical_extent.width),
+                self.current_surface_metrics
+                    .map_or(0, |metrics| metrics.physical_extent.height),
                 self.current_danmaku
                     .as_ref()
                     .map_or(0, |plan| plan.items.len()),
@@ -1298,7 +1300,10 @@ impl PresenterRuntime {
         }
         self.current_overlay = Some(overlay);
         let generation = generation.max(self.danmaku_generation).max(1);
-        let danmaku_viewport = self.current_output_viewport.unwrap_or(viewport);
+        let danmaku_viewport = self
+            .current_surface_metrics
+            .map(surface_metrics_to_viewport)
+            .unwrap_or(viewport);
         self.current_danmaku_viewport = Some(danmaku_viewport);
         self.request_current_danmaku_plan(pts, danmaku_viewport, generation);
     }
@@ -2121,37 +2126,9 @@ fn danmaku_plan_window(
     (timeline.window(start, end), start, end)
 }
 
-fn surface_danmaku_viewport(surface: PlatformSurface) -> Option<DanmakuViewport> {
-    match surface {
-        PlatformSurface::Metal(handle) => Some(surface_dimensions_to_viewport(
-            handle.width,
-            handle.height,
-            handle.scale,
-        )),
-        PlatformSurface::Wgpu(handle) => Some(surface_dimensions_to_viewport(
-            handle.width,
-            handle.height,
-            handle.scale,
-        )),
-        PlatformSurface::FlutterTexture(handle) => Some(surface_dimensions_to_viewport(
-            handle.width,
-            handle.height,
-            handle.scale,
-        )),
-    }
-}
-
-fn surface_dimensions_to_viewport(width: u32, height: u32, scale: f64) -> DanmakuViewport {
-    let scale = if scale.is_finite() {
-        scale.max(1.0)
-    } else {
-        1.0
-    };
-    let pixel_width = ((width.max(1) as f64) * scale).round().min(u32::MAX as f64) as u32;
-    let pixel_height = ((height.max(1) as f64) * scale)
-        .round()
-        .min(u32::MAX as f64) as u32;
-    DanmakuViewport::with_scale(pixel_width, pixel_height, scale as f32)
+fn surface_metrics_to_viewport(metrics: SurfaceMetrics) -> DanmakuViewport {
+    let (pixel_width, pixel_height) = metrics.physical_size();
+    DanmakuViewport::with_scale(pixel_width, pixel_height, metrics.content_scale as f32)
 }
 
 fn normalize_subtitle_font_scale(scale: f64) -> f64 {
@@ -3322,9 +3299,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     #[test]
     fn surface_dimensions_are_converted_to_full_output_danmaku_viewport() {
-        let viewport = surface_dimensions_to_viewport(800, 450, 2.0);
+        let viewport = surface_metrics_to_viewport(SurfaceMetrics::new(1600, 900, 2.0));
 
         assert_eq!(viewport, DanmakuViewport::with_scale(1600, 900, 2.0));
+    }
+
+    #[test]
+    fn physical_surface_extent_keeps_pixels_and_applies_content_scale() {
+        let viewport = surface_metrics_to_viewport(SurfaceMetrics::new(1081, 607, 2.625));
+
+        assert_eq!(viewport, DanmakuViewport::with_scale(1081, 607, 2.625));
     }
 
     #[test]

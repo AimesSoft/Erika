@@ -59,13 +59,15 @@ fn main() {
 fn run(layer: *mut c_void, scale: f64, seconds: f64) -> Result<(), String> {
     let mut renderer = WgpuRenderer::new().map_err(|e| e.to_string())?;
     println!("wgpu backend: {:?}", renderer.adapter_info().backend);
+    let pixel_width = (f64::from(WIDTH) * scale).round().max(1.0) as u32;
+    let pixel_height = (f64::from(HEIGHT) * scale).round().max(1.0) as u32;
 
     let surface = PlatformSurface::Wgpu(WgpuSurfaceHandle::new(
         WgpuSurfaceKind::MacOsCaMetalLayer,
         layer as u64,
         0,
-        WIDTH,
-        HEIGHT,
+        pixel_width,
+        pixel_height,
         scale,
     ));
     renderer

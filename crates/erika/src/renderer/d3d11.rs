@@ -39,8 +39,8 @@ use ::windows::core::{Interface, PCSTR};
 
 use crate::core::{
     ColorPrimaries, LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame,
-    RenderFrameContext, RendererBackend, RendererRuntimeStats, Result, TransferFunction,
-    WgpuSurfaceKind,
+    RenderFrameContext, RendererBackend, RendererRuntimeStats, Result, SurfaceMetrics,
+    TransferFunction, WgpuSurfaceKind,
 };
 use crate::danmaku::{DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan};
 use crate::ffmpeg::Frame;
@@ -442,18 +442,10 @@ struct D3d11DeviceState {
 
 struct AttachedSurface {
     hwnd: HWND,
-    width: u32,
-    height: u32,
-    scale: f64,
+    metrics: SurfaceMetrics,
     output_mode: D3d11OutputMode,
     swapchain: Option<IDXGISwapChain1>,
     render_target: Option<ID3D11RenderTargetView>,
-}
-
-impl AttachedSurface {
-    fn physical_size(&self) -> D3d11PhysicalSize {
-        physical_size(self.width, self.height, self.scale)
-    }
 }
 
 struct ImportedVideoFrame {
@@ -466,12 +458,6 @@ struct ImportedVideoFrame {
     tex_rect: D3d11TexRect,
     _array_index: u32,
     constants: VideoUniforms,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct D3d11PhysicalSize {
-    width: u32,
-    height: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -669,9 +655,8 @@ impl D3d11Renderer {
         surface.swapchain = Some(create_swapchain(
             &state.device,
             surface.hwnd,
-            surface.width,
-            surface.height,
-            surface.scale,
+            surface.metrics.physical_extent.width,
+            surface.metrics.physical_extent.height,
             output_mode.swapchain_format(),
         )?);
         configure_swapchain_color_space(
@@ -686,9 +671,8 @@ impl D3d11Renderer {
             &state.device,
             surface.swapchain.as_ref().expect("swapchain just created"),
         )?);
-        let physical = surface.physical_size();
-        self.stats.surface_width = physical.width;
-        self.stats.surface_height = physical.height;
+        self.stats.surface_width = surface.metrics.physical_extent.width;
+        self.stats.surface_height = surface.metrics.physical_extent.height;
         self.stats.hdr10_output_active = matches!(output_mode, D3d11OutputMode::Hdr10);
         Ok(())
     }
@@ -1146,7 +1130,7 @@ impl D3d11Renderer {
             .swapchain
             .as_ref()
             .ok_or_else(|| PlayerError::Renderer("d3d11: no swapchain attached".to_string()))?;
-        let physical = surface.physical_size();
+        let physical = surface.metrics.physical_extent;
         let target_rect =
             aspect_fit_rect(video.width, video.height, physical.width, physical.height);
         unsafe {
@@ -1234,9 +1218,7 @@ impl RendererBackend for D3d11Renderer {
         }
         self.surface = Some(AttachedSurface {
             hwnd: HWND(handle.raw_window as *mut c_void),
-            width: handle.width.max(1),
-            height: handle.height.max(1),
-            scale: handle.scale,
+            metrics: handle.metrics,
             output_mode: D3d11OutputMode::Sdr,
             swapchain: None,
             render_target: None,
@@ -1257,15 +1239,17 @@ impl RendererBackend for D3d11Renderer {
         Ok(())
     }
 
-    fn resize_surface(&mut self, width: u32, height: u32, scale: f64) -> Result<()> {
+    fn resize_surface(&mut self, metrics: SurfaceMetrics) -> Result<()> {
         let Some(surface) = self.surface.as_mut() else {
             return Err(PlayerError::Renderer(
                 "d3d11: no HWND surface attached".to_string(),
             ));
         };
-        surface.width = width.max(1);
-        surface.height = height.max(1);
-        surface.scale = scale;
+        if surface.metrics.physical_extent == metrics.physical_extent {
+            surface.metrics = metrics;
+            return Ok(());
+        }
+        surface.metrics = metrics;
         self.hdr10_output_unavailable = false;
         self.recreate_surface_targets()
     }
@@ -1677,7 +1661,6 @@ fn create_swapchain(
     hwnd: HWND,
     width: u32,
     height: u32,
-    scale: f64,
     format: DXGI_FORMAT,
 ) -> Result<IDXGISwapChain1> {
     trace("create_swapchain: cast IDXGIDevice");
@@ -1691,8 +1674,8 @@ fn create_swapchain(
     let factory: IDXGIFactory2 = unsafe { adapter.GetParent() }
         .map_err(|error| d3d_error("IDXGIAdapter::GetParent<IDXGIFactory2>", error))?;
     let desc = DXGI_SWAP_CHAIN_DESC1 {
-        Width: scaled(width, scale),
-        Height: scaled(height, scale),
+        Width: width.max(1),
+        Height: height.max(1),
         Format: format,
         Stereo: false.into(),
         SampleDesc: DXGI_SAMPLE_DESC {
@@ -2275,22 +2258,6 @@ fn clamp_u16(value: u32) -> u16 {
     value.min(u16::MAX as u32) as u16
 }
 
-fn scaled(value: u32, scale: f64) -> u32 {
-    let scale = if scale.is_finite() {
-        scale.max(1.0)
-    } else {
-        1.0
-    };
-    ((value.max(1) as f64) * scale).round().min(u32::MAX as f64) as u32
-}
-
-fn physical_size(width: u32, height: u32, scale: f64) -> D3d11PhysicalSize {
-    D3d11PhysicalSize {
-        width: scaled(width, scale),
-        height: scaled(height, scale),
-    }
-}
-
 fn nul(value: &str) -> Vec<u8> {
     let mut bytes = value.as_bytes().to_vec();
     bytes.push(0);
@@ -2374,14 +2341,11 @@ mod tests {
     }
 
     #[test]
-    fn d3d11_physical_size_applies_surface_scale() {
-        assert_eq!(
-            physical_size(640, 360, 1.5),
-            D3d11PhysicalSize {
-                width: 960,
-                height: 540,
-            }
-        );
+    fn d3d11_surface_extent_is_already_physical() {
+        let metrics = SurfaceMetrics::new(960, 540, 1.5);
+
+        assert_eq!(metrics.physical_size(), (960, 540));
+        assert_eq!(metrics.content_scale, 1.5);
     }
 
     #[test]

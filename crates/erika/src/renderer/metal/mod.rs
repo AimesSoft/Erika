@@ -4,7 +4,7 @@ use std::time::Duration;
 use crate::core::{
     ColorPrimaries, LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame,
     RenderFrameContext, RendererBackend, RendererFrameCapture, RendererRuntimeStats, Result,
-    TransferFunction,
+    SurfaceMetrics, TransferFunction,
 };
 use crate::danmaku::DanmakuRenderPlan;
 use crate::ffmpeg::Frame;
@@ -379,17 +379,15 @@ impl MetalRenderer {
     pub unsafe fn attach_raw_layer(
         &mut self,
         layer: *mut c_void,
-        width: u32,
-        height: u32,
-        scale: f64,
+        metrics: SurfaceMetrics,
     ) -> Result<()> {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
-            unsafe { self.inner.attach_raw_layer(layer, width, height, scale) }
+            unsafe { self.inner.attach_raw_layer(layer, metrics) }
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {
-            let _ = (layer, width, height, scale);
+            let _ = (layer, metrics);
             Err(PlayerError::Renderer(
                 "Metal renderer is only available on Apple platforms for v0".to_string(),
             ))
@@ -614,12 +612,7 @@ impl RendererBackend for MetalRenderer {
     fn attach_surface(&mut self, surface: PlatformSurface) -> Result<()> {
         match surface {
             PlatformSurface::Metal(handle) => unsafe {
-                self.attach_raw_layer(
-                    handle.raw_layer as *mut c_void,
-                    handle.width,
-                    handle.height,
-                    handle.scale,
-                )
+                self.attach_raw_layer(handle.raw_layer as *mut c_void, handle.metrics)
             },
             PlatformSurface::Wgpu(_) => Err(crate::core::PlayerError::Renderer(
                 "wgpu surface cannot be attached to MetalRenderer".to_string(),
@@ -638,14 +631,14 @@ impl RendererBackend for MetalRenderer {
         Ok(())
     }
 
-    fn resize_surface(&mut self, width: u32, height: u32, scale: f64) -> Result<()> {
+    fn resize_surface(&mut self, metrics: SurfaceMetrics) -> Result<()> {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
-            self.inner.resize_surface(width, height, scale);
+            self.inner.resize_surface(metrics);
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {
-            let _ = (width, height, scale);
+            let _ = metrics;
         }
         Ok(())
     }

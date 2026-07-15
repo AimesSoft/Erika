@@ -2835,7 +2835,7 @@ impl WgpuRenderer {
                 .ok_or_else(|| {
                     PlayerError::Renderer("wgpu surface exposes no alpha modes".to_string())
                 })?;
-            let (width, height) = scaled_surface_size(handle.width, handle.height, handle.scale);
+            let (width, height) = handle.metrics().physical_size();
             let mut config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format: selection.format,
@@ -3138,16 +3138,6 @@ fn configure_attached_surface(
     false
 }
 
-fn scaled_surface_size(width: u32, height: u32, scale: f64) -> (u32, u32) {
-    let scale = if scale.is_finite() {
-        scale.max(1.0)
-    } else {
-        1.0
-    };
-    let scaled = |value: u32| ((value.max(1) as f64) * scale).round().min(u32::MAX as f64) as u32;
-    (scaled(width), scaled(height))
-}
-
 type PresentationViewport = PresentationRect;
 
 fn aspect_fit_viewport(
@@ -3212,18 +3202,20 @@ impl RendererBackend for WgpuRenderer {
         Ok(())
     }
 
-    fn resize_surface(&mut self, width: u32, height: u32, scale: f64) -> Result<()> {
-        if self.surface.is_none() {
-            return Err(PlayerError::Renderer(
-                "no wgpu surface attached".to_string(),
-            ));
+    fn resize_surface(&mut self, metrics: crate::core::SurfaceMetrics) -> Result<()> {
+        let current_size = self
+            .surface
+            .as_ref()
+            .ok_or_else(|| PlayerError::Renderer("no wgpu surface attached".to_string()))?
+            .handle
+            .metrics()
+            .physical_size();
+        let (surface_width, surface_height) = metrics.physical_size();
+        if current_size != (surface_width, surface_height) {
+            self.configure_surface(surface_width, surface_height);
         }
-        let (surface_width, surface_height) = scaled_surface_size(width, height, scale);
-        self.configure_surface(surface_width, surface_height);
         if let Some(attached) = self.surface.as_mut() {
-            attached.handle.width = width;
-            attached.handle.height = height;
-            attached.handle.scale = scale;
+            attached.handle.resize(metrics);
         }
         Ok(())
     }
@@ -3978,16 +3970,14 @@ impl RendererBackend for AndroidRecoveringWgpuRenderer {
         Ok(())
     }
 
-    fn resize_surface(&mut self, width: u32, height: u32, scale: f64) -> Result<()> {
+    fn resize_surface(&mut self, metrics: crate::core::SurfaceMetrics) -> Result<()> {
         self.execute_with_recovery(
             "resize_surface",
             AndroidWgpuRecoveryPolicy::AnyRendererFailure,
-            |renderer| renderer.resize_surface(width, height, scale),
+            |renderer| renderer.resize_surface(metrics),
         )?;
         if let Some(surface) = self.surface.as_mut() {
-            surface.width = width;
-            surface.height = height;
-            surface.scale = scale;
+            surface.resize(metrics);
         }
         Ok(())
     }
@@ -4355,6 +4345,15 @@ mod tests {
 
     fn to_u8(component: f64) -> u8 {
         (component * 255.0).round() as u8
+    }
+
+    #[test]
+    fn wgpu_surface_extent_is_not_multiplied_by_content_scale() {
+        let handle =
+            WgpuSurfaceHandle::new(WgpuSurfaceKind::AndroidNativeWindow, 1, 0, 1081, 607, 2.625);
+
+        assert_eq!(handle.metrics().physical_size(), (1081, 607));
+        assert_eq!(handle.metrics().content_scale, 2.625);
     }
 
     #[test]

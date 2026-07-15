@@ -2785,6 +2785,24 @@ mod tests {
     }
 
     #[test]
+    fn nipaplay_phone_font_size_uses_fractional_android_density() {
+        let timeline = DanmakuTimeline::new(vec![DanmakuItem {
+            font_size: DEFAULT_SOURCE_FONT_SIZE,
+            ..item(0.0, "android density", DanmakuMode::Top)
+        }])
+        .unwrap();
+        let config = DanmakuLayoutConfig {
+            font_size: 20.0,
+            ..DanmakuLayoutConfig::default()
+        };
+        let mut engine = DfmLayoutEngine::new(timeline, config);
+
+        let prepared = engine.prepare(DanmakuViewport::with_scale(1080, 2400, 2.625), 1);
+
+        assert_close(prepared.items()[0].font_size, 52.5);
+    }
+
+    #[test]
     fn source_font_size_is_relative_to_configured_reference_size() {
         let timeline = DanmakuTimeline::new(vec![DanmakuItem {
             font_size: 50.0,
