@@ -921,16 +921,14 @@ internal class ErikaAndroidVideoView(
         surfaceRecoveryRunnable = null
     }
 
-    private fun surfaceMetrics(pixelWidth: Int, pixelHeight: Int): SurfaceMetrics {
-        // SurfaceTexture dimensions are already physical pixels. Passing an
-        // artificial logical size and density through JNI caused a lossy
-        // divide/round/multiply cycle on non-integral Android densities, so the
-        // wgpu swapchain could differ from the actual buffer by one or more
-        // pixels. Keep Android's surface contract pixel-exact.
-        return SurfaceMetrics(
-            width = max(1, pixelWidth),
-            height = max(1, pixelHeight),
-            scale = 1.0,
+    private fun surfaceMetrics(pixelWidth: Int, pixelHeight: Int): AndroidSurfaceMetrics {
+        // Surface callbacks already report exact physical pixels. Density is
+        // carried separately so native logical UI content (danmaku/subtitles)
+        // scales like Flutter without resizing the wgpu swapchain.
+        return resolveAndroidSurfaceMetrics(
+            pixelWidth = pixelWidth,
+            pixelHeight = pixelHeight,
+            density = nativeView.resources.displayMetrics.density.toDouble(),
         )
     }
 
@@ -941,12 +939,6 @@ internal class ErikaAndroidVideoView(
         outputSurface = null
         ownsOutputSurface = false
     }
-
-    private data class SurfaceMetrics(
-        val width: Int,
-        val height: Int,
-        val scale: Double,
-    )
 
     private data class SurfaceAttempt(
         val operation: String,
