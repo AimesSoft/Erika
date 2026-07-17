@@ -55,7 +55,7 @@ endfunction()
 
 # --- Optional: use a prebuilt erika_capi.dll from a GitHub Release ---
 # Opt in with ERIKA_PREBUILT=1. ERIKA_PREBUILT_TAG selects the release tag
-# (default v0.1.2). On any failure this falls through to the source build below,
+# (default v0.1.3). On any failure this falls through to the source build below,
 # so enabling it never breaks a build. The Windows plugin loads the DLL
 # dynamically, so only erika_capi.dll is required.
 if("$ENV{ERIKA_PREBUILT}" STREQUAL "1")
@@ -64,7 +64,7 @@ if("$ENV{ERIKA_PREBUILT}" STREQUAL "1")
   else()
     set(_erika_cfg_dir "release")
   endif()
-  set(_erika_tag "v0.1.2")
+  set(_erika_tag "v0.1.3")
   if(NOT "$ENV{ERIKA_PREBUILT_TAG}" STREQUAL "")
     set(_erika_tag "$ENV{ERIKA_PREBUILT_TAG}")
   endif()

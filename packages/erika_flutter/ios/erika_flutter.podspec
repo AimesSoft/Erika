@@ -48,7 +48,7 @@ Pod::Spec.new do |s|
     .join(' ')
 
   s.name             = 'erika_flutter'
-  s.version          = '0.1.2'
+  s.version          = '0.1.3'
   s.summary          = 'Flutter embedder glue for the Erika Rust media engine.'
   s.description      = <<-DESC
 Flutter iOS plugin that hosts a CAMetalLayer and drives Erika through its C ABI.
@@ -138,11 +138,11 @@ ERIKA_FRIBIDI_DIR="${ERIKA_FRIBIDI_DIR:-$ERIKA_TARGET_DIST/fribidi}"
 
 # Optional: use a prebuilt static lib from a GitHub Release (opt-in).
 # Enable with ERIKA_PREBUILT=1; ERIKA_PREBUILT_TAG selects the tag (default
-# v0.1.2). Any failure falls through to the source build below, so enabling it
+# v0.1.3). Any failure falls through to the source build below, so enabling it
 # never breaks a build. ERIKA_IOS_CAPI_STATICLIB still takes precedence.
 PREBUILT_LIB=""
 if [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ] && [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_IOS_CAPI_STATICLIB:-}" ]; then
-  PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.2}"
+  PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.3}"
   PREBUILT_WORK="$ERIKA_ROOT/target/erika-prebuilt-ios"
   PREBUILT_ZIP="$PREBUILT_WORK/erika-capi-ios.zip"
   PREBUILT_URL="https://github.com/AimesSoft/Erika/releases/download/$PREBUILT_TAG/erika-capi-ios.zip"

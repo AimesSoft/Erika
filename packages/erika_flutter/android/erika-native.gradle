@@ -1,4 +1,6 @@
 import java.util.Locale
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import org.gradle.process.ExecOperations
 
 def execOperations = project.services.get(ExecOperations)
@@ -85,6 +87,17 @@ def selectedAbis = requestedAbis()
 def skipNativeBuild = (project.findProperty("erikaSkipNativeBuild")
     ?: System.getenv("ERIKA_ANDROID_SKIP_NATIVE_BUILD")
     ?: "false").toString().toBoolean()
+def forceSourceBuild = (System.getenv("ERIKA_FORCE_SOURCE_BUILD") ?: "0") == "1"
+def usePrebuilt = (System.getenv("ERIKA_PREBUILT") ?: "0") == "1" && !forceSourceBuild
+def prebuiltTag = System.getenv("ERIKA_PREBUILT_TAG") ?: "v0.1.3"
+def prebuiltCacheKey = prebuiltTag.replaceAll(/[^A-Za-z0-9._-]/, "_")
+def prebuiltCacheDirectory = new File(
+    gradle.gradleUserHomeDir,
+    "caches/erika/$prebuiltCacheKey",
+)
+def prebuiltArchive = new File(prebuiltCacheDirectory, "erika-capi-android.zip")
+def prebuiltUrl =
+    "https://github.com/AimesSoft/Erika/releases/download/$prebuiltTag/erika-capi-android.zip"
 selectedAbis.each { abi ->
     if (!abiDefinitions.containsKey(abi)) {
         throw new GradleException(
@@ -206,7 +219,7 @@ def hostTag = {
 
 tasks.register("buildErikaAndroidRuntime") {
     group = "build"
-    description = "Build Erika native dependencies and erika_capi.so for the selected Android ABIs"
+    description = "Stage a prebuilt or source-built Erika runtime for the selected Android ABIs"
     outputs.dir(generatedJniLibs)
     // Cargo and xtask own their incremental caches. Always enter the native
     // build so Rust/source or ABI changes cannot leave stale packaged .so files.
@@ -220,6 +233,80 @@ tasks.register("buildErikaAndroidRuntime") {
     }
 
     doLast {
+        project.delete(generatedJniLibs.get().asFile)
+
+        if (usePrebuilt) {
+            try {
+                prebuiltCacheDirectory.mkdirs()
+                if (!prebuiltArchive.isFile()) {
+                    def temporaryArchive = new File(
+                        prebuiltCacheDirectory,
+                        "${prebuiltArchive.name}.part",
+                    )
+                    project.delete(temporaryArchive)
+                    logger.lifecycle("Downloading Erika Android prebuilt $prebuiltTag from $prebuiltUrl")
+                    ant.get(src: prebuiltUrl, dest: temporaryArchive, verbose: true)
+                    try {
+                        Files.move(
+                            temporaryArchive.toPath(),
+                            prebuiltArchive.toPath(),
+                            StandardCopyOption.REPLACE_EXISTING,
+                            StandardCopyOption.ATOMIC_MOVE,
+                        )
+                    } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
+                        Files.move(
+                            temporaryArchive.toPath(),
+                            prebuiltArchive.toPath(),
+                            StandardCopyOption.REPLACE_EXISTING,
+                        )
+                    }
+                } else {
+                    logger.lifecycle(
+                        "Using cached Erika Android prebuilt $prebuiltTag from $prebuiltArchive",
+                    )
+                }
+
+                selectedAbis.each { abi ->
+                    def destination = generatedJniLibs.get().dir(abi).asFile
+                    project.copy {
+                        from(project.zipTree(prebuiltArchive)) {
+                            // Official release bundles have an
+                            // erika-capi-android/ top-level directory. Keep
+                            // accepting a flat lib/ layout as well for mirrors
+                            // and locally produced archives.
+                            include "lib/android/$abi/liberika_capi.so"
+                            include "lib/android/$abi/libc++_shared.so"
+                            include "erika-capi-android/lib/android/$abi/liberika_capi.so"
+                            include "erika-capi-android/lib/android/$abi/libc++_shared.so"
+                            eachFile { details -> details.path = details.name }
+                            includeEmptyDirs = false
+                        }
+                        into destination
+                    }
+                    ["liberika_capi.so", "libc++_shared.so"].each { library ->
+                        def staged = new File(destination, library)
+                        if (!staged.isFile() || staged.length() == 0L) {
+                            throw new GradleException(
+                                "Erika Android prebuilt $prebuiltTag is missing $abi/$library",
+                            )
+                        }
+                    }
+                }
+
+                logger.lifecycle(
+                    "Staged Erika Android prebuilt $prebuiltTag for ${selectedAbis.join(', ')}",
+                )
+                return
+            } catch (Exception error) {
+                logger.warn(
+                    "Unable to use Erika Android prebuilt $prebuiltTag; " +
+                        "falling back to a source build: ${error.message}",
+                )
+                project.delete(generatedJniLibs.get().asFile)
+                project.delete(prebuiltArchive)
+            }
+        }
+
         def repoRoot = findErikaRepoRoot()
         def cargoTargetDirectory = resolveCargoTargetDirectory(repoRoot)
         def ndkDirectory = resolveNdkDirectory()
@@ -246,8 +333,6 @@ tasks.register("buildErikaAndroidRuntime") {
         def apiLevel = Math.max(26, minSdkLevel)
         def nativeProfile = System.getenv("ERIKA_NATIVE_PROFILE") ?: "lgpl"
         def cargo = System.getenv("CARGO") ?: (hostIsWindows ? "cargo.exe" : "cargo")
-
-        project.delete(generatedJniLibs.get().asFile)
 
         selectedAbis.each { abi ->
             def definition = abiDefinitions[abi]
