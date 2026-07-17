@@ -763,7 +763,11 @@ impl D3d11Renderer {
         let retained_frame = frame
             .frame
             .decoded_frame()
-            .expect("D3D11VA texture originates from a decoded AVFrame")
+            .ok_or_else(|| {
+                PlayerError::Renderer(
+                    "d3d11: D3D11VA texture is missing its decoded AVFrame backing".to_string(),
+                )
+            })?
             .try_clone_ref()
             .map_err(|error| {
                 PlayerError::Renderer(format!("d3d11: av_frame_ref failed: {error}"))
