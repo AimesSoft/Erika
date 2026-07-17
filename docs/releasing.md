@@ -48,8 +48,8 @@ The release is fully automated by
    section, and bump `version` in the root `Cargo.toml` if appropriate.
 2. Tag and push:
    ```sh
-   git tag v0.1.2
-   git push origin v0.1.2
+   git tag v0.1.3
+   git push origin v0.1.3
    ```
 3. The workflow builds the macOS / iOS / Windows / Android bundles (each builds the native
    deps from source, so expect a long run on a cold cache) and attaches the
@@ -83,12 +83,12 @@ Enable it by setting environment variables in the host app's build:
 | Variable | Effect |
 |----------|--------|
 | `ERIKA_PREBUILT=1` | Download the prebuilt `erika_capi` instead of building from source. |
-| `ERIKA_PREBUILT_TAG=v0.1.2` | Release tag to download (default `v0.1.2`). |
-| `ERIKA_FORCE_SOURCE_BUILD=1` | macOS/iOS only: bypass the prebuilt path and build the local source, useful when debugging Erika changes through the Flutter plugin. |
+| `ERIKA_PREBUILT_TAG=v0.1.3` | Release tag to download (default `v0.1.3`). |
+| `ERIKA_FORCE_SOURCE_BUILD=1` | Bypass the prebuilt path and build the local source, useful when debugging Erika changes through the Flutter plugin. |
 
 - **Windows** (`build_erika_runtime.cmake`): downloads `erika-capi-windows-x64.zip`
   and drops `erika_capi.dll` where the plugin bundles it. The plugin loads the
-  DLL dynamically, so this is feature-agnostic and works against `v0.1.2`.
+  DLL dynamically, so this is feature-agnostic and works against `v0.1.3`.
 - **iOS** (podspec): downloads `erika-capi-ios.zip`, picks the device or
   simulator slice from the XCFramework, and links it. The prebuilt static lib
   must be built `--no-default-features --features libass` to match the plugin's
@@ -101,10 +101,10 @@ Enable it by setting environment variables in the host app's build:
   universal dylib from source. `ERIKA_MACOS_CAPI_DYLIB` can point at an explicit
   dylib instead. The macOS plugin is self-contained, so a host app no longer
   needs its own dylib-provisioning step.
-- **Android**: `erika-capi-android.zip` provides `liberika_capi.so`,
-  `liberika_capi.a`, and `libc++_shared.so` per Android ABI. Flutter integration
-  packages the shared pair directly; native C/C++ embedders may instead link
-  the static archive and provide the matching C++ runtime themselves.
+- **Android** (`erika-native.gradle`): downloads `erika-capi-android.zip` and
+  stages `liberika_capi.so` plus `libc++_shared.so` for the requested Flutter
+  ABIs. Native C/C++ embedders may instead link the bundled static archive and
+  provide the matching C++ runtime themselves.
 
 Pin `ERIKA_PREBUILT_TAG` to a release whose Erika source matches the plugin
 revision you build against, so the C ABI in the header and the prebuilt library

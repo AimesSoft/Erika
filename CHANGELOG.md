@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.3 - 2026-07-17
+
+### Android playback and packaging
+
+- Added the complete MediaCodec, AHardwareBuffer/wgpu, AAudio, Flutter
+  PlatformView, SAF/content-source, subtitle, danmaku, screenshot, SDR/HDR,
+  diagnostics, and recovery paths.
+- `ERIKA_PREBUILT=1` now stages `liberika_capi.so` and `libc++_shared.so` from
+  the tagged Android release archive for the requested Flutter ABIs, with an
+  explicit source-build fallback.
+
 ### Breaking C API surface-size semantics
 
 The `width` and `height` arguments passed to
