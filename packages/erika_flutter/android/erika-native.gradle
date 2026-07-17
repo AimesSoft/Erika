@@ -270,8 +270,14 @@ tasks.register("buildErikaAndroidRuntime") {
                     def destination = generatedJniLibs.get().dir(abi).asFile
                     project.copy {
                         from(project.zipTree(prebuiltArchive)) {
+                            // Official release bundles have an
+                            // erika-capi-android/ top-level directory. Keep
+                            // accepting a flat lib/ layout as well for mirrors
+                            // and locally produced archives.
                             include "lib/android/$abi/liberika_capi.so"
                             include "lib/android/$abi/libc++_shared.so"
+                            include "erika-capi-android/lib/android/$abi/liberika_capi.so"
+                            include "erika-capi-android/lib/android/$abi/libc++_shared.so"
                             eachFile { details -> details.path = details.name }
                             includeEmptyDirs = false
                         }
