@@ -9,6 +9,7 @@ profile. Their licenses apply to the corresponding portions of the binary.
 | Component | Version | License |
 |-----------|---------|---------|
 | FFmpeg (libav*) | 7.x | LGPL v3 (configured `--disable-gpl --enable-version3`) |
+| dav1d | 1.5.x | BSD 2-Clause |
 | libass | 0.17.x | ISC |
 | FreeType | 2.13.x | FTL / GPLv2 (FTL used here) |
 | HarfBuzz | bundled | MIT (Old) |
@@ -55,7 +56,7 @@ modified SoundTouch. The LGPL v2.1 text is included at
 `licenses/LICENSE.LGPL-2.1`.
 
 The archive's `licenses/` directory contains the applicable FFmpeg LGPLv3/GPLv3
-terms, the FreeType License, and the libass, HarfBuzz, and zlib notices in
-addition to the asset and LGPLv2.1 texts. The same upstream license files are
-also distributed with each library's source archive (retrievable via
-`xtask deps fetch`).
+terms, the dav1d BSD 2-Clause license, the FreeType License, and the libass,
+HarfBuzz, and zlib notices in addition to the asset and LGPLv2.1 texts. The same
+upstream license files are also distributed with each library's source archive
+(retrievable via `xtask deps fetch`).

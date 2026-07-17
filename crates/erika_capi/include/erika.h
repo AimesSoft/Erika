@@ -11,7 +11,7 @@
  *   - ErikaHandle:          pull model. The host renders and pulls state.
  *   - ErikaPresenterHandle: push model. Erika owns decode/timing/audio/render;
  *                           the host gives it a surface and calls render_tick.
- *                           Compiled on macOS / iOS / Windows only; on other
+ *                           Compiled on macOS / iOS / Windows / Android; on other
  *                           targets erika_presenter_create returns NULL.
  *
  * Conventions:
@@ -28,8 +28,9 @@
  *   - List getters use the counted-array idiom: pass (buf, capacity, &len);
  *     len is set to the total count, at most capacity records are written, and
  *     capacity 0 with a NULL buffer queries the count.
- *   - attach and resize functions take width/height in physical pixels and a
- *     DPI scale.
+ *   - attach and resize functions take exact width/height in physical pixels.
+ *     The scale is the independent logical-content/DPI scale used for UI such
+ *     as danmaku; it never multiplies the surface extent.
  *   - A handle is not internally synchronized: do not call into one handle
  *     concurrently from multiple threads.
  */
@@ -77,6 +78,8 @@ typedef enum ErikaEventKind {
   ErikaEventKind_SurfaceDetached = 8,
   ErikaEventKind_Error = 9,
   ErikaEventKind_TrackSelectionChanged = 10,
+  ErikaEventKind_VideoDecoderChanged = 11,
+  ErikaEventKind_AudioOutputChanged = 12,
 } ErikaEventKind;
 
 typedef enum ErikaTrackKind {
@@ -113,7 +116,33 @@ typedef enum ErikaFlutterTextureKind {
 typedef enum ErikaPresenterOutputMode {
   ErikaPresenterOutputMode_Sdr = 0,
   ErikaPresenterOutputMode_AppleEdr = 1,
+  ErikaPresenterOutputMode_ExtendedLinear = 2,
 } ErikaPresenterOutputMode;
+
+typedef enum ErikaActiveOutputEncoding {
+  ErikaActiveOutputEncoding_SdrSrgb = 0,
+  ErikaActiveOutputEncoding_AppleEdr = 1,
+  ErikaActiveOutputEncoding_AndroidExtendedLinearScRgb = 2,
+  ErikaActiveOutputEncoding_Hdr10Pq = 3,
+} ErikaActiveOutputEncoding;
+
+typedef enum ErikaOutputFallbackReason {
+  ErikaOutputFallbackReason_None = 0,
+  ErikaOutputFallbackReason_DisplayHdrUnsupported = 1,
+  ErikaOutputFallbackReason_HybridCompositionRequired = 2,
+  ErikaOutputFallbackReason_WgpuBackendNotVulkan = 3,
+  ErikaOutputFallbackReason_Rgba16FloatSurfaceFormatUnavailable = 4,
+  ErikaOutputFallbackReason_NativeWindowDataSpaceApiUnavailable = 5,
+  ErikaOutputFallbackReason_ScrgbDataSpaceVerificationFailed = 6,
+  ErikaOutputFallbackReason_SurfaceConfigureFailed = 7,
+  ErikaOutputFallbackReason_LegacyAppleEdrUnsupported = 8,
+} ErikaOutputFallbackReason;
+
+typedef enum ErikaOutputSurfaceFormat {
+  ErikaOutputSurfaceFormat_EightBitUnorm = 0,
+  ErikaOutputSurfaceFormat_TenBitUnorm = 1,
+  ErikaOutputSurfaceFormat_SixteenBitFloat = 2,
+} ErikaOutputSurfaceFormat;
 
 typedef enum ErikaLumaUpscalerMode {
   ErikaLumaUpscalerMode_Off = 0,
@@ -135,6 +164,13 @@ typedef struct ErikaPresenterConfig {
   int32_t luma_upscaler;
 } ErikaPresenterConfig;
 
+typedef struct ErikaSurfaceOutputCapabilities {
+  bool extended_linear;
+  bool direct_composition;
+  float desired_headroom;
+  int32_t fallback_reason;
+} ErikaSurfaceOutputCapabilities;
+
 typedef struct ErikaUpscalerStatus {
   int32_t requested_mode;
   int32_t active_backend;
@@ -143,6 +179,22 @@ typedef struct ErikaUpscalerStatus {
   uint64_t last_encode_micros;
   uint64_t last_gpu_micros;
 } ErikaUpscalerStatus;
+
+typedef struct ErikaOutputStatus {
+  int32_t requested_mode;
+  int32_t active_encoding;
+  int32_t surface_format;
+  int32_t native_data_space;
+  float requested_headroom;
+  float active_headroom;
+  bool active_headroom_known;
+  bool extended_linear_active;
+  int32_t fallback_reason;
+  uint64_t fallback_count;
+  uint64_t data_space_failures;
+  uint64_t headroom_updates;
+  uint64_t extended_linear_frames;
+} ErikaOutputStatus;
 
 typedef struct ErikaDanmakuConfig {
   bool enabled;
@@ -246,6 +298,12 @@ typedef struct ErikaPresenterStats {
   uint64_t audio_clock_read_frames;
   uint64_t audio_clock_queued_frames;
   uint64_t audio_clock_underflow_frames;
+  /* 0 stable, 1 disconnected, 2 recovering, 3 failed. */
+  int32_t audio_recovery_state;
+  int32_t audio_last_error_code;
+  uint64_t audio_recovery_attempts;
+  uint64_t audio_recovery_count;
+  uint64_t audio_recovery_failures;
   uint64_t direct_zero_copy_video_frames;
   uint64_t shared_handle_video_frames;
   uint64_t hdr_source_frames;
@@ -255,6 +313,7 @@ typedef struct ErikaPresenterStats {
   uint64_t hdr10_metadata_failures;
   uint64_t hdr10_output_failures;
   bool hdr10_output_active;
+  uint64_t video_frame_backpressure_drops;
 } ErikaPresenterStats;
 
 /* ===== ErikaHandle (pull model) ===== */
@@ -268,6 +327,7 @@ void erika_string_free(char *value);
 /* Playback control. uri is a local path or HTTP(S) URL; times are microseconds.
  * open() is asynchronous — watch StateChanged/DurationChanged events. */
 ErikaStatus erika_open(ErikaHandle *handle, const char *uri);
+/* play enqueues work; observe StateChanged/Error for the authoritative result. */
 ErikaStatus erika_play(ErikaHandle *handle);
 ErikaStatus erika_pause(ErikaHandle *handle);
 ErikaStatus erika_stop(ErikaHandle *handle);
@@ -315,6 +375,16 @@ ErikaStatus erika_attach_wgpu_surface(
     uint32_t height,
     double scale);
 
+ErikaStatus erika_attach_wgpu_surface_with_output_capabilities(
+    ErikaHandle *handle,
+    ErikaWgpuSurfaceKind kind,
+    uint64_t raw_window,
+    uint64_t raw_display,
+    uint32_t width,
+    uint32_t height,
+    double scale,
+    ErikaSurfaceOutputCapabilities output_capabilities);
+
 ErikaStatus erika_attach_flutter_texture(
     ErikaHandle *handle,
     ErikaFlutterTextureKind kind,
@@ -325,7 +395,7 @@ ErikaStatus erika_attach_flutter_texture(
 
 ErikaStatus erika_detach_surface(ErikaHandle *handle);
 
-/* ===== ErikaPresenterHandle (push model) — macOS / iOS / Windows only ===== */
+/* ===== ErikaPresenterHandle (push model) — macOS / iOS / Windows / Android ===== */
 
 /* Lifecycle and configuration. A NULL return means creation failed; check
  * erika_last_error_message. Config selects output mode, EDR headroom, upscaler. */
@@ -337,9 +407,11 @@ ErikaPresenterHandle *erika_presenter_create_with_output_mode(
 void erika_presenter_destroy(ErikaPresenterHandle *handle);
 
 /* Playback and runtime parameters. volume is 0.0–1.0; rate 1.0 is normal speed;
- * set_upscaler takes an ErikaLumaUpscalerMode and is a no-op fallback where the
- * Metal compute path is unavailable. */
+ * set_upscaler takes an ErikaLumaUpscalerMode. Metal and capable wgpu/Vulkan
+ * renderers execute ArtCNN; other backends retain native luma sampling and
+ * report an explicit Inactive fallback. */
 ErikaStatus erika_presenter_open(ErikaPresenterHandle *handle, const char *uri);
+/* play enqueues work; observe StateChanged/Error for the authoritative result. */
 ErikaStatus erika_presenter_play(ErikaPresenterHandle *handle);
 ErikaStatus erika_presenter_pause(ErikaPresenterHandle *handle);
 ErikaStatus erika_presenter_stop(ErikaPresenterHandle *handle);
@@ -349,9 +421,16 @@ ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *handle, doub
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *handle, double volume);
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *handle, int32_t mode);
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *handle, double scale);
+ErikaStatus erika_presenter_set_output_headroom(
+    ErikaPresenterHandle *handle,
+    float headroom,
+    bool known);
 ErikaStatus erika_presenter_get_upscaler_status(
     ErikaPresenterHandle *handle,
     ErikaUpscalerStatus *out_status);
+ErikaStatus erika_presenter_get_output_status(
+    ErikaPresenterHandle *handle,
+    ErikaOutputStatus *out_status);
 ErikaStatus erika_presenter_add_external_subtitle(
     ErikaPresenterHandle *handle,
     const char *uri,
@@ -455,6 +534,16 @@ ErikaStatus erika_presenter_attach_wgpu_surface(
     uint32_t width,
     uint32_t height,
     double scale);
+
+ErikaStatus erika_presenter_attach_wgpu_surface_with_output_capabilities(
+    ErikaPresenterHandle *handle,
+    ErikaWgpuSurfaceKind kind,
+    uint64_t raw_window,
+    uint64_t raw_display,
+    uint32_t width,
+    uint32_t height,
+    double scale,
+    ErikaSurfaceOutputCapabilities output_capabilities);
 
 ErikaStatus erika_presenter_attach_windows_hwnd(
     ErikaPresenterHandle *handle,

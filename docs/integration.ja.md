@@ -23,7 +23,7 @@ Rust の `PresenterRuntime` を直接駆動します。以下の C ABI 呼び出
 `ErikaHandle` は、独自コンポジタを持ち Erika の decode/timing/state だけが欲しいホスト
 向けです。本ガイドの残りは presenter ベースです。
 
-presenter ファミリーは **macOS / iOS / Windows のみ**でコンパイルされます。
+presenter ファミリーは **macOS / iOS / Windows / Android** でコンパイルされます。
 
 ## 2. ライフサイクル
 
@@ -43,8 +43,8 @@ create ──▶ attach surface ──▶ open ──▶ play ──▶ (render_
 
 ```c
 ErikaPresenterConfig cfg = {
-    .output_mode  = ErikaPresenterOutputMode_Sdr,   // macOS/iOS では _AppleEdr も
-    .edr_headroom = 1.0f,                            // Apple EDR のみ使用
+    .output_mode  = ErikaPresenterOutputMode_Sdr,   // AppleEdr / Android ExtendedLinear
+    .edr_headroom = 1.0f,                            // requested content-headroom ceiling
     .luma_upscaler = ErikaLumaUpscalerMode_Off,      // または ArtCnnC4F16 / C4F32
 };
 ErikaPresenterHandle *p = erika_presenter_create_with_config(cfg);
@@ -52,8 +52,9 @@ if (!p) { /* erika_last_error_message() を読む */ }
 ```
 
 `erika_presenter_create()` は既定値（SDR、アップスケーラ無し）。神経輝度アップスケーラは
-Metal compute 機能で、D3D11/wgpu backend では `set_upscaler` は受理される no-op
-フォールバックです。
+Apple platform では Metal、Android を含む compute-capable Vulkan/wgpu adapter では
+wgpu が実行します。GLES 3.0 や D3D11 のような compute 非対応 backend は native luma
+sampling を維持し、`Inactive` status と fallback reason を明示します。
 
 ## 4. surface を attach する
 
@@ -99,6 +100,47 @@ X11/Wayland/Android、または surface 種別を明示したい場合は、対�
 `erika_presenter_attach_wgpu_surface(p, kind, raw_window, raw_display, w, h, scale)`
 を使います。
 
+### Android extended-linear scRGB
+
+Android `ExtendedLinear` は FP16 extended-linear scRGB で、HDR10/PQ ではありません。
+native host は direct-composited `SurfaceView` から `ANativeWindow` を取得し（Flutter
+plugin は Hybrid Composition を使用）、probe した output capabilities を attach に渡します。
+
+```c
+ErikaSurfaceOutputCapabilities caps = {
+    .extended_linear = display_and_surface_are_hdr_capable,
+    .direct_composition = true,       // SurfaceView。TextureView ではない
+    .desired_headroom = requested_headroom, // 0 = system auto
+    .fallback_reason = host_probe_reason, // eligible なら 0
+};
+erika_presenter_attach_wgpu_surface_with_output_capabilities(
+    p, ErikaWgpuSurfaceKind_AndroidNativeWindow,
+    (uint64_t)(uintptr_t)native_window, 0, w, h, scale, caps);
+```
+
+requested mode、display/surface eligibility、direct composition、Vulkan backend、
+`Rgba16Float` support、configure 後の `ADATASPACE_SCRGB_LINEAR` readback がすべて
+成功した場合だけ extended-linear が active になります。どれかが失敗すると SDR playback
+を維持し、安定した `fallback_reason` code `0..8` を記録します。GLES と `TextureView` は
+常に SDR path です。
+
+`ErikaPresenterConfig.edr_headroom` は content ceiling です。正の `desired_headroom` は
+optional surface ceiling、`0` は system auto を表します。wgpu の effective target はこれらの
+ceiling と、known な場合の current display HDR/SDR ratio に従います。API 34+ の native host
+は `Display.registerHdrSdrRatioChangedListener` を監視し、実際の state change ごとに
+`erika_presenter_set_output_headroom(p, ratio, true)` を呼びます。ratio unavailable / view
+detach では `(1.0f, false)` を publish します。Flutter plugin はこの wiring を自動で行います。
+API 35 では `SurfaceView.setDesiredHdrHeadroom` も view ごとに呼び、global Window は変更しません。
+
+attach 後と resize/recovery ごとに `erika_presenter_get_output_status` を取得します。
+Android scRGB の active state は `AndroidExtendedLinearScRgb`、`SixteenBitFloat`、native
+dataspace `406913024`、`extended_linear_active = true` です。Android が display ratio を
+提供した場合は `active_headroom` がその ratio、`active_headroom_known = true` です。
+提供されない場合は fallback value で `active_headroom_known = false` です。known state または
+ratio が実際に変わった場合だけ `headroom_updates` が増えます。requested mode だけでは active
+state の証明になりません。現在の non-HDR/emulator test は SDR fallback を対象とし、active
+path は API 35 HDR 実機 acceptance が必要です。
+
 ## 5. open して play
 
 ```c
@@ -111,7 +153,7 @@ erika_presenter_play(p);
 ## 6. レンダーループ
 
 surface の表示タイマー——`CADisplayLink`（iOS）/ `CVDisplayLink` または `CADisplayLink`
-（macOS）/ Windows のフレームスケジューラ——から `render_tick` を駆動します。そのフレームの
+（macOS）/ Windows のフレームスケジューラ / Android `Choreographer`——から `render_tick` を駆動します。そのフレームの
 **プレゼンテーション時刻（秒）**を単調なホストクロックから渡します。Erika は vsync 量子化
 スケジューリングに使うので、差分ではなく絶対タイムスタンプを渡します。
 
@@ -165,6 +207,10 @@ sleep で 60 Hz を近似できます。
   トラックのオフセット、フォント設定、ブロックワード設定。
   [danmaku_architecture.md](danmaku_architecture.md) 参照。
 - **アップスケーラ:** `set_upscaler(mode)`。`get_upscaler_status` で確認。
+- **出力:** `erika_presenter_get_output_status` で active mode と fallback counter を確認。
+  Android native host は `erika_presenter_set_output_headroom` で dynamic display ratio を
+  publish します。`capture_frame_rgba` は display output が extended-linear の場合も、映像 +
+  字幕 + 弾幕を SDR RGBA8 screenshot として返します。
 
 ## 9. 解放
 
@@ -212,8 +258,15 @@ macOS/iOS の Flutter Swift プラグインも同じ C ABI 上でこれを行っ
 
 - [ ] presenter を作成（ディスプレイに合った出力モードで）。
 - [ ] **物理ピクセル**サイズと正しい scale で surface を attach。
+- [ ] Android extended-linear は Hybrid Composition の `SurfaceView` を使い、probe した
+  output capabilities を渡し、`erika_presenter_get_output_status` で
+  `Rgba16Float + SCRGB_LINEAR` を検証。失敗時は SDR reason を記録。
+- [ ] API 34+ は `erika_presenter_set_output_headroom` で display HDR/SDR ratio change を
+  publish。API 35 desired headroom は個別 `SurfaceView` に限定。
 - [ ] open してから play。ブロックせずイベントで準備完了を観測。
 - [ ] 表示フレームごとに `render_tick(absolute_time_seconds)`。イベントをドレイン。
 - [ ] サイズ/scale 変化のたびに `resize_surface`。
 - [ ] handle ごとに 1 スレッド、または呼び出しを直列化。
 - [ ] 返された文字列 / `ErikaTrackInfo` をすべて解放。`detach` してから `destroy`。
+- [ ] API 35 HDR 実機の rotation/recovery、multi-player、SDR screenshot check が通るまで
+  Android extended-linear を実機検証済みとしない。

@@ -16,7 +16,7 @@ Erika 是 NipaPlay 的自研播放内核:一个 Rust 引擎,从 demux/decode 一
 crates/erika              核心引擎(库)
 crates/erika_capi         C ABI 导出层  →  erika.h
 crates/erika_ffmpeg_sys   FFmpeg bindgen 绑定
-packages/erika_flutter    Flutter 插件(macOS + iOS + Windows)
+packages/erika_flutter    Flutter 插件(macOS + iOS + Windows + Android)
 examples/                 验证 / 冒烟 / demo 程序
 xtask/                    原生依赖构建编排
 docs/                     架构与接入文档
@@ -29,14 +29,14 @@ third_party/              构建出的原生依赖(gitignore 输出)
 |------|------|
 | `core` | 公共配置 + `RendererBackend` trait、`PlatformSurface`、`RendererBackendPreference`。 |
 | `playback` | 播放引擎:视频/音频 tick、主时钟、帧调度器、`VideoDecodePreference`。 |
-| `ffmpeg` | demux、decode、resample、seek;`DecoderBackend`(software / VideoToolbox / D3D11VA)。 |
+| `ffmpeg` | demux、decode、resample、seek;`DecoderBackend`(software / VideoToolbox / D3D11VA / MediaCodec)。 |
 | `audio` | `AudioOutputBackend` trait、ring buffer、音频时钟。 |
-| `renderer` | `metal`(Apple)、`d3d11`(Windows)、`wgpu`(跨平台)、`pipeline`(后端无关的色彩/tone-map/scaler 决策)。 |
+| `renderer` | `metal`(Apple)、`d3d11`(Windows)、`wgpu`(跨平台及 Android)、`pipeline`(后端无关的色彩/tone-map/scaler 决策)。 |
 | `overlay` / `subtitle` / `text` | overlay 时间线;SRT/WebVTT/ASS + libass;字体提供者。 |
 | `danmaku` | Bilibili XML/JSON 解析、碰撞避让布局、glyph atlas。 |
 | `presenter` | `PresenterRuntime`——串起 player + renderer + audio + overlay;`render_tick` 所驱动的对象。 |
 | `source` | `MediaSource` trait——file + HTTP range。 |
-| `apple` / `windows` | 平台胶水:CoreAudio/AudioQueue/VideoToolbox/Metal 互操作;WASAPI。 |
+| `apple` / `windows` / `android` | 平台胶水:CoreAudio/AudioQueue/VideoToolbox/Metal 互操作;WASAPI;AAudio/MediaCodec/native-window 互操作。 |
 
 ## 运行时模型
 
@@ -95,9 +95,12 @@ cargo fmt --all
 ```
 
 - 平台相关代码以 `#[cfg]` 门控;改某个 `cfg` 分支时,保持 `macos` / `ios` / `windows` /
-  fallback 各分支都能编译。本地测不了的目标交给 CI。
-- 神经超分权重对照 onnxruntime 参考验证(`tests/artcnn_upscaler.rs`);不重新核对就别改
-  kernel。
+  `android` / fallback 各分支都能编译。本地测不了的目标交给 CI。
+- 神经超分权重会在 `tests/artcnn_upscaler.rs`（Metal）和
+  `tests/wgpu_artcnn.rs`（分块 wgpu）中对照 onnxruntime 参考验证；修改 kernel 前必须
+  重新核对对应路径。
+- Android SDR 播放和明确的 output fallback 已验证。在 API 35 HDR 真机 active path 通过
+  `Rgba16Float + SCRGB_LINEAR` 及恢复检查前，不得将 extended-linear scRGB 标记为真机已验证。
 - 原生 demo 兼作冒烟测试:
   `cargo run -p macos_native_demo -- --smoke-seconds 3 "$SAMPLE"`(及 Windows 等价命令)
   打印流水线计数器——用它确认改动后硬解和零拷贝互操作仍然生效。
@@ -108,7 +111,7 @@ cargo fmt --all
 - **热路径或跨 FFI 上不 `unwrap`/`panic`。** 返回 `Result`,在边界处映射为
   `ErikaStatus`。
 - **与周围代码一致**——命名、注释密度、既有的 `cfg` 结构。平台胶水留在 `apple.rs` /
-  `windows.rs`,别散进引擎。
+  `windows.rs` / `android.rs`,别散进引擎。
 - **保持文档同步。** 架构/接入文档和三语 README(`README.md` + `readme/*.md`、
   `docs/*.{md,zh.md,ja.md}`)应反映用户可见的改动。基准文档为英文,翻译随后。
 

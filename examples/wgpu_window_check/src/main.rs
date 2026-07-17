@@ -59,13 +59,15 @@ fn main() {
 fn run(layer: *mut c_void, scale: f64, seconds: f64) -> Result<(), String> {
     let mut renderer = WgpuRenderer::new().map_err(|e| e.to_string())?;
     println!("wgpu backend: {:?}", renderer.adapter_info().backend);
+    let pixel_width = (f64::from(WIDTH) * scale).round().max(1.0) as u32;
+    let pixel_height = (f64::from(HEIGHT) * scale).round().max(1.0) as u32;
 
     let surface = PlatformSurface::Wgpu(WgpuSurfaceHandle::new(
         WgpuSurfaceKind::MacOsCaMetalLayer,
         layer as u64,
         0,
-        WIDTH,
-        HEIGHT,
+        pixel_width,
+        pixel_height,
         scale,
     ));
     renderer
@@ -144,7 +146,7 @@ fn bars_uniforms() -> VideoUniforms {
         target_transfer: 0,
         tone_map: 0,
         edr_output: 0,
-        reserved0: 0,
+        input_mode: 0,
         reserved1: 0,
         nits: [100.0, 100.0, 100.0, 100.0],
         luma_coefficients: [0.2126, 0.7152, 0.0722, 0.0],

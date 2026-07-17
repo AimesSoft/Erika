@@ -1,3 +1,5 @@
+#[cfg(target_os = "android")]
+pub mod android;
 pub mod apple;
 pub mod audio;
 pub mod core;

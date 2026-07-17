@@ -14,6 +14,9 @@ bool get _supportsWindowOverlayVideoView =>
         defaultTargetPlatform == TargetPlatform.macOS ||
         defaultTargetPlatform == TargetPlatform.windows);
 
+bool get _usesAndroidTextureView =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
 /// Flutter platform-view video surface backed by AppKit/UIKit.
 ///
 /// This is the compatibility surface. Full-player Apple hosts should usually
@@ -103,10 +106,242 @@ class _ErikaVideoViewState extends State<ErikaVideoView> {
           onPlatformViewIdChanged: widget.onPlatformViewIdChanged,
         );
       case TargetPlatform.android:
+        return _ErikaAndroidVideoView(
+          player: widget.player,
+          debugLabel: widget.debugLabel,
+          onPlatformViewIdChanged: widget.onPlatformViewIdChanged,
+        );
       case TargetPlatform.fuchsia:
       case TargetPlatform.linux:
         return const SizedBox.shrink();
     }
+  }
+}
+
+class _ErikaAndroidVideoView extends StatefulWidget {
+  const _ErikaAndroidVideoView({
+    required this.player,
+    this.debugLabel,
+    this.onPlatformViewIdChanged,
+  });
+
+  final ErikaPlayer player;
+  final String? debugLabel;
+  final ValueChanged<int?>? onPlatformViewIdChanged;
+
+  @override
+  State<_ErikaAndroidVideoView> createState() => _ErikaAndroidVideoViewState();
+}
+
+class _ErikaAndroidVideoViewState extends State<_ErikaAndroidVideoView> {
+  static const _attachRetryDelays = <Duration>[
+    Duration(milliseconds: 16),
+    Duration(milliseconds: 32),
+    Duration(milliseconds: 64),
+    Duration(milliseconds: 128),
+    Duration(milliseconds: 256),
+    Duration(milliseconds: 512),
+    Duration(seconds: 1),
+  ];
+
+  int? _viewId;
+  int _attachmentGeneration = 0;
+  int _surfaceGeneration = 0;
+
+  bool _usesExtendedLinearSurface(ErikaPlayer player) =>
+      player.outputMode == ErikaOutputMode.extendedLinear;
+
+  Object _surfaceConfigurationKey(ErikaPlayer player) {
+    if (!_usesExtendedLinearSurface(player)) {
+      return 'sdr';
+    }
+    final headroom = player.edrHeadroom;
+    return headroom == null
+        ? 'extended-linear:auto'
+        : 'extended-linear:$headroom';
+  }
+
+  @override
+  void didUpdateWidget(covariant _ErikaAndroidVideoView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.player == widget.player) {
+      return;
+    }
+    final surfaceConfigurationChanged =
+        _surfaceConfigurationKey(oldWidget.player) !=
+            _surfaceConfigurationKey(widget.player);
+    if (surfaceConfigurationChanged) {
+      // Invalidate callbacks from a PlatformView whose asynchronous create
+      // has not completed yet; in that state _viewId is still null.
+      _surfaceGeneration += 1;
+    }
+    final viewId = _viewId;
+    if (viewId != null) {
+      final generation = ++_attachmentGeneration;
+      if (!surfaceConfigurationChanged) {
+        unawaited(
+          _switchPlayer(
+            oldPlayer: oldWidget.player,
+            newPlayer: widget.player,
+            viewId: viewId,
+            generation: generation,
+          ),
+        );
+      } else {
+        unawaited(
+          _detachIgnoringFailure(oldWidget.player, viewId, 'view rebuild'),
+        );
+        _viewId = null;
+        widget.onPlatformViewIdChanged?.call(null);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _attachmentGeneration += 1;
+    _surfaceGeneration += 1;
+    final viewId = _viewId;
+    widget.onPlatformViewIdChanged?.call(null);
+    if (viewId != null) {
+      unawaited(_detachIgnoringFailure(widget.player, viewId, 'dispose'));
+    }
+    super.dispose();
+  }
+
+  void _handlePlatformViewCreated(int viewId, int surfaceGeneration) {
+    if (!mounted || surfaceGeneration != _surfaceGeneration) {
+      return;
+    }
+    final generation = ++_attachmentGeneration;
+    _viewId = viewId;
+    widget.onPlatformViewIdChanged?.call(viewId);
+    unawaited(_attachWithRetry(widget.player, viewId, generation));
+  }
+
+  bool _attachmentIsCurrent(
+    ErikaPlayer player,
+    int viewId,
+    int generation,
+  ) =>
+      mounted &&
+      generation == _attachmentGeneration &&
+      identical(widget.player, player) &&
+      _viewId == viewId;
+
+  Future<void> _switchPlayer({
+    required ErikaPlayer oldPlayer,
+    required ErikaPlayer newPlayer,
+    required int viewId,
+    required int generation,
+  }) async {
+    await _detachIgnoringFailure(oldPlayer, viewId, 'player switch');
+    if (!_attachmentIsCurrent(newPlayer, viewId, generation)) {
+      return;
+    }
+    await _attachWithRetry(newPlayer, viewId, generation);
+  }
+
+  Future<void> _attachWithRetry(
+    ErikaPlayer player,
+    int viewId,
+    int generation,
+  ) async {
+    Object? lastError;
+    for (var attempt = 0;; attempt += 1) {
+      if (!_attachmentIsCurrent(player, viewId, generation)) {
+        return;
+      }
+      try {
+        await player.attachView(viewId);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+      if (attempt >= _attachRetryDelays.length) {
+        debugPrint(
+          'ErikaAndroidVideoView: attach failed after '
+          '${attempt + 1} attempts for view $viewId: $lastError',
+        );
+        return;
+      }
+      await Future<void>.delayed(_attachRetryDelays[attempt]);
+    }
+  }
+
+  Future<void> _detachIgnoringFailure(
+    ErikaPlayer player,
+    int viewId,
+    String reason,
+  ) async {
+    try {
+      await player.detachView(viewId);
+    } catch (error) {
+      debugPrint(
+        'ErikaAndroidVideoView: detach failed during $reason for '
+        'view $viewId; native recovery remains active: $error',
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final extendedLinear = _usesExtendedLinearSurface(widget.player);
+    final surfaceGeneration = _surfaceGeneration;
+    final creationParams = <String, Object?>{
+      if (widget.debugLabel case final label?) 'debugLabel': label,
+      'outputMode': extendedLinear
+          ? ErikaOutputMode.extendedLinear.nativeValue
+          : ErikaOutputMode.sdr.nativeValue,
+      if (extendedLinear)
+        'requestedHdrHeadroom': widget.player.edrHeadroom ?? 0.0,
+      if (extendedLinear) 'composition': 'hybrid',
+    };
+    if (!extendedLinear) {
+      return AndroidView(
+        key: const ValueKey<String>('erika-android-sdr-texture-view'),
+        viewType: 'erika_flutter/video_view',
+        layoutDirection: TextDirection.ltr,
+        creationParamsCodec: const StandardMessageCodec(),
+        creationParams: creationParams,
+        onPlatformViewCreated: (int viewId) =>
+            _handlePlatformViewCreated(viewId, surfaceGeneration),
+        hitTestBehavior: PlatformViewHitTestBehavior.transparent,
+        gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
+      );
+    }
+
+    return PlatformViewLink(
+      key: ValueKey<Object>(_surfaceConfigurationKey(widget.player)),
+      viewType: 'erika_flutter/hdr_video_view',
+      surfaceFactory: (
+        BuildContext context,
+        PlatformViewController controller,
+      ) =>
+          AndroidViewSurface(
+        controller: controller as AndroidViewController,
+        hitTestBehavior: PlatformViewHitTestBehavior.transparent,
+        gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
+      ),
+      onCreatePlatformView: (PlatformViewCreationParams params) {
+        final controller = PlatformViewsService.initExpensiveAndroidView(
+          id: params.id,
+          viewType: 'erika_flutter/hdr_video_view',
+          layoutDirection: TextDirection.ltr,
+          creationParamsCodec: const StandardMessageCodec(),
+          creationParams: creationParams,
+          onFocus: () => params.onFocusChanged(true),
+        );
+        controller
+          ..addOnPlatformViewCreatedListener(params.onPlatformViewCreated)
+          ..addOnPlatformViewCreatedListener(
+            (int viewId) =>
+                _handlePlatformViewCreated(viewId, surfaceGeneration),
+          )
+          ..create();
+        return controller;
+      },
+    );
   }
 }
 
@@ -134,8 +369,7 @@ class ErikaWindowOverlayVideoView extends StatefulWidget {
 }
 
 class _ErikaWindowOverlayVideoViewState
-    extends State<ErikaWindowOverlayVideoView>
-    with WidgetsBindingObserver {
+    extends State<ErikaWindowOverlayVideoView> with WidgetsBindingObserver {
   Timer? _retryTimer;
   Timer? _frameTimer;
   int _bindAttempts = 0;
@@ -146,6 +380,9 @@ class _ErikaWindowOverlayVideoViewState
   @override
   void initState() {
     super.initState();
+    if (_usesAndroidTextureView) {
+      return;
+    }
     WidgetsBinding.instance.addObserver(this);
     _surfaceGeneration = identityHashCode(this);
     widget.onPlatformViewIdChanged?.call(ErikaPlayer.windowOverlayViewId);
@@ -156,6 +393,9 @@ class _ErikaWindowOverlayVideoViewState
   @override
   void didUpdateWidget(covariant ErikaWindowOverlayVideoView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (_usesAndroidTextureView) {
+      return;
+    }
     if (oldWidget.player != widget.player) {
       _retryTimer?.cancel();
       _bindAttempts = 0;
@@ -171,11 +411,19 @@ class _ErikaWindowOverlayVideoViewState
 
   @override
   void didChangeMetrics() {
+    if (_usesAndroidTextureView) {
+      return;
+    }
     _scheduleFrameUpdate(force: true);
   }
 
   @override
   void dispose() {
+    if (_usesAndroidTextureView) {
+      widget.onFrameRectChanged?.call(null);
+      super.dispose();
+      return;
+    }
     WidgetsBinding.instance.removeObserver(this);
     _retryTimer?.cancel();
     _frameTimer?.cancel();
@@ -192,10 +440,7 @@ class _ErikaWindowOverlayVideoViewState
     final interval = defaultTargetPlatform == TargetPlatform.windows
         ? const Duration(milliseconds: 16)
         : const Duration(milliseconds: 250);
-    _frameTimer = Timer.periodic(
-      interval,
-      (_) => _scheduleFrameUpdate(),
-    );
+    _frameTimer = Timer.periodic(interval, (_) => _scheduleFrameUpdate());
   }
 
   void _scheduleAttach() {
@@ -316,6 +561,23 @@ class _ErikaWindowOverlayVideoViewState
 
   @override
   Widget build(BuildContext context) {
+    if (_usesAndroidTextureView) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          return;
+        }
+        final renderObject = context.findRenderObject();
+        if (renderObject is RenderBox && renderObject.hasSize) {
+          final origin = renderObject.localToGlobal(Offset.zero);
+          widget.onFrameRectChanged?.call(origin & renderObject.size);
+        }
+      });
+      return _ErikaAndroidVideoView(
+        player: widget.player,
+        debugLabel: widget.debugLabel,
+        onPlatformViewIdChanged: widget.onPlatformViewIdChanged,
+      );
+    }
     if (!_supportsWindowOverlayVideoView) {
       return const SizedBox.shrink();
     }

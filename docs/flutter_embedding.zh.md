@@ -9,7 +9,7 @@ Erika 不是 Flutter 视频渲染器。Flutter 只是可选宿主 UI。播放器
 有两组 C ABI 入口：
 
 - `ErikaHandle`：控制与事件 API。适合宿主管理自己的 presenter loop，或只想探测/控制播放的场景。
-- `ErikaPresenterHandle`：presenter-owned API。适合 Erika 自己持有 `Player + MetalRenderer + audio output`，宿主只提供 native surface 和 display tick callback 的场景。
+- `ErikaPresenterHandle`：presenter-owned API。适合 Erika 自己持有 `Player + renderer + audio output`，宿主只提供 native surface 和 display tick callback 的场景。
 
 两组入口都声明在 `crates/erika_capi/include/erika.h`。
 
@@ -36,6 +36,19 @@ Apple HDR 路径使用 native Metal-backed surface，而不是 Flutter Texture�
 这个 overlay 路径是 NipaPlay 和其他 full-player UI 的推荐方案。它让视频呈现由 Erika/Metal 持有，而 Flutter 继续承担控制层和布局层。iOS 上 native side 使用 `UIWindow` 加 sibling `UIView`/`CAMetalLayer`；macOS 上使用 host `NSWindow` 加 sibling `NSView`/`CAMetalLayer`。
 
 触摸事件会穿透两种 native video strategy，因此 Flutter controls 可以保持在视频 surface 上方或周围。
+
+## Android Surface Strategies
+
+Android 上两个视频 widget 都使用同一套 native-view selector。SDR 使用真实的
+`TextureView`，且已完成验证；wgpu 优先选择 Vulkan，并提供有界 GLES fallback。请求
+`ErikaOutputMode.extendedLinear` 时则通过 `PlatformViewLink` 和 Hybrid Composition
+创建 `SurfaceView`，避免 FP16 scRGB 经过 Flutter texture-layer compositor。surface 由
+`Choreographer` 驱动，lifecycle、resize、audio focus 和 output fallback 仍由 plugin 管理。
+
+FP16 extended-linear scRGB 已实现完整的 `Rgba16Float` 协商和
+`ADATASPACE_SCRGB_LINEAR` 验证，但 active path 尚不宣称通过真机验收；最终仍需 API 35
+HDR 真机。显示器不支持 HDR、GLES、`TextureView`、缺少 FP16 或 dataspace 验证失败时都会
+继续 SDR 播放，并提供可查询的 fallback reason 和明确日志。
 
 ## iOS Build Path
 
@@ -77,9 +90,14 @@ Flutter Texture 是一个能力更低的兼容路径。
 
 它不是首选 HDR/EDR 路径，因为视频会进入 Flutter compositor。C ABI 为此路径保留了 `erika_attach_flutter_texture`。
 
-## wgpu Fallback
+## wgpu 与 Android
 
-Apple HDR 路径仍然坚持 native Metal，Windows 使用 native Direct3D 11 渲染器（D3D11VA 零拷贝解码、HDR10 输出）。`wgpu` 是面向 Linux、Android 以及非 HDR 路径的跨平台 fallback 方向。wgpu renderer 已实现视频帧渲染和弹幕合成，但尚未支持硬件零拷贝导入或 HDR/EDR 输出。
+Apple HDR 路径仍使用 native Metal，Windows 使用 native Direct3D 11 渲染器（D3D11VA
+零拷贝解码、HDR10 输出）。Android 上 wgpu 是实际渲染器：Vulkan 通过 AHardwareBuffer
+导入 MediaCodec Surface 帧，software frame 则有明确的 CPU upload fallback；视频、字幕、
+弹幕、截图和 ArtCNN compute 共用这条路径。Vulkan 可协商 FP16 extended-linear scRGB，
+GLES 或能力协商失败会明确回退 SDR。Android SDR 已验证，API 35 HDR 真机 active path
+仍待验收；Linux 支持仍在规划中。
 
 ## Dart API
 
@@ -104,7 +122,7 @@ await player.seek(Duration(seconds: 30));
 await player.setVolume(0.8);
 await player.setPlaybackRate(1.5);
 
-// Neural upscaler (anime luma 2x; macOS/iOS only)
+// Neural upscaler (anime luma 2x; Apple Metal / Android Vulkan)
 await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16); // off / artCnnC4F16 / artCnnC4F32
 final status = await player.getUpscalerStatus();
 
@@ -136,10 +154,13 @@ await player.dispose();
 | `off` | 没有请求任何模式。 |
 | `building` | kernel 正在编译（首次使用该模式）；在准备好之前视频会保持未放大。 |
 | `inactive` | 请求了模式，但这一帧没有生效，例如视频显示尺寸没有超过源分辨率，或源视频是 HDR（upscaler 只处理 SDR luma）。 |
-| `scalar` | 运行在可移植 scalar backend 上（非 Apple Silicon GPU）。 |
+| `scalar` | 运行在 Metal scalar 或 wgpu compute backend 上。 |
 | `simdgroupMatrix` | 运行在 `simdgroup_matrix` backend 上（Apple Silicon 默认）。 |
 
-只有当 drawable 显示的视频尺寸大于源分辨率时，upscaler 才会生效，所以 1080p 源在 1080p（或更小）视图里会保持 `inactive`。C4F16 是实时推荐；C4F32 质量更高，但在 1080p 输入下需要 M-Pro/Max 级别 GPU。渲染器侧设计见 `docs/architecture.md`。
+只有当 drawable 显示的视频尺寸大于源分辨率时，upscaler 才会生效，所以 1080p 源在
+1080p（或更小）视图里会保持 `inactive`。C4F16 是实时推荐；Apple 上的 C4F32 在 1080p
+输入下通常需要 M-Pro/Max 级别 GPU。Android 上两个模型都使用 Vulkan compute，GLES 会
+明确报告 `inactive` fallback。渲染器侧设计见 `docs/architecture.md`。
 
 ## Ownership Rule
 

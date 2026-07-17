@@ -10,37 +10,49 @@ use std::{
 
 use crossbeam_channel::{Receiver, Sender};
 
+#[cfg(target_os = "android")]
+use crate::android::aaudio::{AAudioOutput, AAudioOutputConfig};
 #[cfg(target_os = "macos")]
 use crate::apple::coreaudio::{CoreAudioOutput, CoreAudioOutputConfig};
 #[cfg(target_os = "ios")]
 use crate::apple::iosaudio::{IosAudioQueueOutput, IosAudioQueueOutputConfig};
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+)))]
 use crate::audio::BufferedAudioOutput;
-use crate::audio::{AudioClockSnapshot, AudioOutputBackend, AudioRingBufferConfig};
+use crate::audio::{
+    AudioClockSnapshot, AudioOutputBackend, AudioOutputRuntimeStats, AudioRingBufferConfig,
+};
 use crate::core::{
-    MediaRequest, PlatformSurface, Player, PlayerAudioFrame, PlayerConfig, PlayerSubtitleFrame,
-    PlayerVideoFrame, RenderFrameContext, RendererBackend, RendererBackendPreference,
-    RendererRuntimeStats, TrackInfo, TrackSelection,
+    AudioOutputEvent, MediaRequest, PlatformSurface, Player, PlayerAudioFrame, PlayerConfig,
+    PlayerSubtitleFrame, PlayerVideoFrame, RenderFrameContext, RendererBackend,
+    RendererBackendPreference, RendererRuntimeStats, SurfaceMetrics, TrackInfo, TrackSelection,
+    VideoFrameImportFailure,
 };
 use crate::danmaku::{
     DANMAKU_DEBUG_BUCKETS, DanmakuDebugBucket, DanmakuLayoutConfig, DanmakuPreparedStats,
     DanmakuRenderPlan, DanmakuSession, DanmakuTimeline, DanmakuTrackInfo, DanmakuTrackSource,
     DanmakuViewport, DfmLayoutEngine, DfmPreparedLayout,
 };
+use crate::ffmpeg::DecoderBackend;
 use crate::overlay::{OverlayFrame, OverlayTimeline, OverlayViewport};
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "android"))]
 use crate::playback::VideoDecodePreference;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::renderer::metal::MetalRenderer;
 use crate::renderer::metal::MetalRendererConfig;
+#[cfg(feature = "libass")]
+use crate::subtitle::{
+    AssTrackResources, LibassRenderConfig, LibassSubtitleRenderer, SubtitleBitmapSet,
+    SubtitleError, SubtitleRenderOutput, SubtitleRenderRequest, SubtitleRenderer,
+    decoded_subtitle_frames_to_ass_script_with_style,
+};
 use crate::subtitle::{
     DecodedSubtitleFrame, SubtitleAssStyle, SubtitleRendererCore, SubtitleTrackConfig,
     SubtitleViewport, decoded_subtitle_frames_to_timeline,
-};
-#[cfg(feature = "libass")]
-use crate::subtitle::{
-    LibassRenderConfig, LibassSubtitleRenderer, SubtitleRenderRequest, SubtitleRenderer,
-    decoded_subtitle_frames_to_ass_script_with_style,
 };
 use crate::trace;
 #[cfg(target_os = "windows")]
@@ -60,6 +72,13 @@ const DANMAKU_PREPARE_REFRESH_MARGIN: Duration = Duration::from_secs(4);
 const DANMAKU_PLAN_LOOKAHEAD: Duration = Duration::from_secs(8);
 const DANMAKU_PLAN_LOOKBACK_PADDING: Duration = Duration::from_secs(2);
 const DEFAULT_SUBTITLE_FONT_SCALE: f64 = 1.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransitionFramePolicy {
+    Clear,
+    PreserveRendererSnapshot,
+    PreserveTrackSwitchFrame,
+}
 
 #[derive(Debug, Clone)]
 pub struct PresenterConfig {
@@ -100,7 +119,19 @@ impl Default for PresenterAudioConfig {
                 ring_buffer: config.ring_buffer,
             }
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+        #[cfg(target_os = "android")]
+        {
+            let config = AAudioOutputConfig::default();
+            Self {
+                ring_buffer: config.ring_buffer,
+            }
+        }
+        #[cfg(not(any(
+            target_os = "android",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "windows"
+        )))]
         {
             Self {
                 ring_buffer: AudioRingBufferConfig {
@@ -137,6 +168,7 @@ pub struct PresenterStats {
     pub danmaku_frames: u64,
     pub danmaku_items: u64,
     pub import_failures: u64,
+    pub video_frame_backpressure_drops: u64,
     pub render_failures: u64,
     pub audio_failures: u64,
 }
@@ -145,11 +177,13 @@ pub struct PresenterStats {
 pub struct PresenterRuntimeSnapshot {
     pub stats: PresenterStats,
     pub renderer: RendererRuntimeStats,
+    pub output: crate::renderer::output::OutputRuntimeStatus,
     pub audio_output_queued_duration: Option<Duration>,
     pub audio_output_queued_frames: usize,
     pub audio_output_read_frames: u64,
     pub audio_output_written_frames: u64,
     pub audio_output_underflow_frames: u64,
+    pub audio_output_runtime_stats: AudioOutputRuntimeStats,
     pub media_time: Duration,
     pub generation: u64,
     pub playing: bool,
@@ -192,13 +226,15 @@ pub struct PresenterRuntime {
     audio_configured: bool,
     audio_started: bool,
     last_audio_clock_report: Option<AudioClockReportState>,
+    last_audio_runtime_stats: AudioOutputRuntimeStats,
     playback_rate: f64,
     current_overlay: Option<OverlayFrame>,
     current_danmaku: Option<DanmakuRenderPlan>,
     current_danmaku_prepared: Option<CurrentDanmakuPrepared>,
+    rejected_video_import_route: Option<RejectedVideoImportRoute>,
     current_media_time: Duration,
     current_generation: u64,
-    current_output_viewport: Option<DanmakuViewport>,
+    current_surface_metrics: Option<SurfaceMetrics>,
     current_danmaku_viewport: Option<DanmakuViewport>,
     subtitle_font_scale: f64,
     subtitles: SubtitleFrameState,
@@ -220,6 +256,34 @@ pub struct PresenterRuntime {
     last_render_duration: Duration,
     last_render_current_duration: Duration,
     last_render_test_duration: Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RejectedVideoImportRoute {
+    backend: DecoderBackend,
+    mediacodec_surface: bool,
+    generation: u64,
+}
+
+impl RejectedVideoImportRoute {
+    fn new(backend: DecoderBackend, mediacodec_surface: bool, generation: u64) -> Self {
+        Self {
+            backend,
+            mediacodec_surface: backend == DecoderBackend::MediaCodec && mediacodec_surface,
+            generation,
+        }
+    }
+}
+
+fn should_reject_video_import(
+    rejected: Option<RejectedVideoImportRoute>,
+    candidate: RejectedVideoImportRoute,
+) -> bool {
+    rejected == Some(candidate)
+}
+
+fn should_report_video_frame_backpressure(drop_count: u64) -> bool {
+    drop_count == 1 || drop_count.is_power_of_two()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -430,7 +494,12 @@ impl PresenterRuntime {
     pub fn new(mut config: PresenterConfig) -> Result<Self> {
         let renderer_preference = config.player.renderer;
         let renderer = build_renderer(renderer_preference, config.renderer)?;
-        resolve_presenter_player_config(&mut config.player, renderer_preference);
+        let supports_mediacodec_surface = renderer.supports_mediacodec_surface_frames();
+        resolve_presenter_player_config(
+            &mut config.player,
+            renderer_preference,
+            supports_mediacodec_surface,
+        );
         let player = Player::new(config.player);
         let video_frames = player.subscribe_video_frames();
         let audio_frames = player.subscribe_audio_frames();
@@ -454,13 +523,15 @@ impl PresenterRuntime {
             audio_configured: false,
             audio_started: false,
             last_audio_clock_report: None,
+            last_audio_runtime_stats: AudioOutputRuntimeStats::default(),
             playback_rate: 1.0,
             current_overlay: None,
             current_danmaku: None,
             current_danmaku_prepared: None,
+            rejected_video_import_route: None,
             current_media_time: Duration::ZERO,
             current_generation: 1,
-            current_output_viewport: None,
+            current_surface_metrics: None,
             current_danmaku_viewport: None,
             subtitle_font_scale: DEFAULT_SUBTITLE_FONT_SCALE,
             subtitles: SubtitleFrameState::default(),
@@ -490,32 +561,45 @@ impl PresenterRuntime {
     }
 
     pub fn attach_surface(&mut self, surface: PlatformSurface) -> Result<()> {
-        self.current_output_viewport = surface_danmaku_viewport(surface);
+        let metrics = surface.metrics();
+        self.renderer.attach_surface(surface)?;
+        if let Err(error) = self.player.attach_surface(surface) {
+            let _ = self.renderer.detach_surface();
+            return Err(error);
+        }
+        self.current_surface_metrics = Some(metrics);
         self.clear_current_danmaku_state();
-        self.player.attach_surface(surface)?;
-        self.renderer.attach_surface(surface)
+        Ok(())
     }
 
     pub fn detach_surface(&mut self) -> Result<()> {
-        self.current_output_viewport = None;
+        self.current_surface_metrics = None;
         self.clear_current_danmaku_state();
         self.player.detach_surface()?;
         self.renderer.detach_surface()
     }
 
     pub fn resize_surface(&mut self, width: u32, height: u32, scale: f64) -> Result<()> {
-        self.current_output_viewport = Some(surface_dimensions_to_viewport(width, height, scale));
+        let metrics = SurfaceMetrics::new(width, height, scale);
+        self.renderer.resize_surface(metrics)?;
+        self.current_surface_metrics = Some(metrics);
         self.clear_current_danmaku_state();
         self.last_audio_clock_report = None;
-        self.renderer.resize_surface(width, height, scale)
+        Ok(())
     }
 
     pub fn open(&mut self, media: MediaRequest) -> Result<()> {
+        self.quiesce_frame_output("open")?;
         self.reset_audio_output();
+        self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
         self.drain_pending_player_frames();
-        self.clear_playback_visual_state(Duration::ZERO);
         self.current_generation = self.current_generation.saturating_add(1).max(1);
-        self.player.open(media)
+        let result = self.player.open(media);
+        // Player::open joins the previous producer before returning, so this
+        // second drain deterministically removes anything it emitted between
+        // the first drain and shutdown. The new engine is still paused.
+        self.drain_pending_player_frames();
+        result
     }
 
     pub fn play(&mut self) -> Result<()> {
@@ -523,7 +607,7 @@ impl PresenterRuntime {
             self.reset_audio_output();
             self.drain_pending_player_frames();
             self.bump_danmaku_generation();
-            self.clear_playback_visual_state(Duration::ZERO);
+            self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
         }
         self.player.play()
     }
@@ -552,30 +636,35 @@ impl PresenterRuntime {
     }
 
     pub fn stop(&mut self) -> Result<()> {
+        let quiesced = self.quiesce_frame_output("stop")?;
         let result = self.player.stop();
         self.reset_audio_output();
-        self.drain_pending_player_frames();
         self.bump_danmaku_generation();
-        self.clear_playback_visual_state(Duration::ZERO);
-        result
+        self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
+        let transition = self.finish_frame_output_transition("stop", quiesced, true);
+        result.and(transition)
     }
 
     pub fn close(&mut self) -> Result<()> {
-        let result = self.player.close();
+        self.quiesce_frame_output("close")?;
         self.reset_audio_output();
-        self.drain_pending_player_frames();
         self.bump_danmaku_generation();
-        self.clear_playback_visual_state(Duration::ZERO);
+        self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
+        self.drain_pending_player_frames();
+        let result = self.player.close();
+        // Shutdown is joined at this point; no producer can refill a receiver.
+        self.drain_pending_player_frames();
         result
     }
 
     pub fn seek(&mut self, position: Duration) -> Result<()> {
+        let quiesced = self.quiesce_frame_output("seek")?;
         let result = self.player.seek(position);
         self.reset_audio_output();
-        self.drain_pending_player_frames();
         self.bump_danmaku_generation();
-        self.clear_playback_visual_state(position);
-        result
+        self.clear_playback_visual_state(position, TransitionFramePolicy::PreserveRendererSnapshot);
+        let transition = self.finish_frame_output_transition("seek", quiesced, true);
+        result.and(transition)
     }
 
     pub fn set_playback_rate(&mut self, rate: f64) -> Result<()> {
@@ -708,6 +797,10 @@ impl PresenterRuntime {
         self.renderer.set_luma_upscaler(mode);
     }
 
+    pub fn set_output_headroom(&mut self, headroom: f32, known: bool) {
+        self.renderer.set_output_headroom(headroom, known);
+    }
+
     pub fn add_external_subtitle(&self, uri: impl Into<String>) -> Result<SubtitleTrackConfig> {
         self.player.add_external_subtitle(uri)
     }
@@ -717,14 +810,30 @@ impl PresenterRuntime {
     }
 
     pub fn select_audio_track(&mut self, track_id: Option<i64>) -> Result<()> {
+        let quiesced = self.quiesce_frame_output("select_audio_track")?;
         let result = self.player.select_audio_track(track_id);
         self.reset_audio_output();
-        self.drain_pending_player_frames();
-        result
+        self.bump_danmaku_generation();
+        self.clear_playback_visual_state(
+            self.current_media_time,
+            TransitionFramePolicy::PreserveTrackSwitchFrame,
+        );
+        let transition = self.finish_frame_output_transition("select_audio_track", quiesced, true);
+        result.and(transition)
     }
 
-    pub fn select_subtitle_track(&self, track_id: Option<i64>) -> Result<()> {
-        self.player.select_subtitle_track(track_id)
+    pub fn select_subtitle_track(&mut self, track_id: Option<i64>) -> Result<()> {
+        let quiesced = self.quiesce_frame_output("select_subtitle_track")?;
+        let result = self.player.select_subtitle_track(track_id);
+        self.reset_audio_output();
+        self.bump_danmaku_generation();
+        self.clear_playback_visual_state(
+            self.current_media_time,
+            TransitionFramePolicy::PreserveTrackSwitchFrame,
+        );
+        let transition =
+            self.finish_frame_output_transition("select_subtitle_track", quiesced, true);
+        result.and(transition)
     }
 
     pub fn tracks(&self) -> Vec<TrackInfo> {
@@ -748,7 +857,11 @@ impl PresenterRuntime {
         self.last_video_pump_duration = video_started.elapsed();
 
         let audio_started = Instant::now();
+        // Publish a callback-observed disconnection before clock/push recovery
+        // advances the backend to recovering or stable during this tick.
+        self.report_audio_output_runtime_stats();
         self.pump_audio();
+        self.report_audio_output_runtime_stats();
         self.last_audio_pump_duration = audio_started.elapsed();
 
         let sync_started = Instant::now();
@@ -780,10 +893,10 @@ impl PresenterRuntime {
             .overlay(self.current_overlay.as_ref())
             .danmaku(self.current_danmaku.as_ref())
             .output_size(
-                self.current_output_viewport
-                    .map_or(0, |viewport| viewport.width),
-                self.current_output_viewport
-                    .map_or(0, |viewport| viewport.height),
+                self.current_surface_metrics
+                    .map_or(0, |metrics| metrics.physical_extent.width),
+                self.current_surface_metrics
+                    .map_or(0, |metrics| metrics.physical_extent.height),
             );
         let render_started = Instant::now();
         let render_result = self.renderer.render_current_frame(context);
@@ -846,10 +959,10 @@ impl PresenterRuntime {
                     .clock_snapshot()
                     .map(|snapshot| snapshot.underflow_frames)
                     .unwrap_or(0),
-                self.current_output_viewport
-                    .map_or(0, |viewport| viewport.width),
-                self.current_output_viewport
-                    .map_or(0, |viewport| viewport.height),
+                self.current_surface_metrics
+                    .map_or(0, |metrics| metrics.physical_extent.width),
+                self.current_surface_metrics
+                    .map_or(0, |metrics| metrics.physical_extent.height),
                 self.current_danmaku
                     .as_ref()
                     .map_or(0, |plan| plan.items.len()),
@@ -870,13 +983,44 @@ impl PresenterRuntime {
         self.sync_media_time_from_player();
         self.refresh_stale_danmaku_plan();
 
+        // Capture is a real render target with its own pixel viewport. Reusing
+        // the surface-sized composition here makes resized screenshots either
+        // drop danmaku (the renderer rejects mismatched plans) or scale a stale
+        // subtitle atlas. Build both overlays for the requested target so the
+        // public width/height API has the same composition semantics as an
+        // equivalently sized presentation surface.
+        let (capture_overlay, capture_danmaku) = self.capture_composition(width, height);
+
         let context = RenderFrameContext::new(self.current_media_time, self.current_generation)
-            .overlay(self.current_overlay.as_ref())
-            .danmaku(self.current_danmaku.as_ref())
+            .overlay(Some(&capture_overlay))
+            .danmaku(Some(&capture_danmaku))
             .output_size(width, height);
         self.renderer
             .capture_current_frame(context, width, height)
             .map(|capture| capture.map(|capture| capture.rgba))
+    }
+
+    fn capture_composition(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> (OverlayFrame, DanmakuRenderPlan) {
+        let capture_overlay_viewport = OverlayViewport::new(width, height);
+        let mut capture_overlay = self
+            .overlay
+            .render(self.current_media_time, capture_overlay_viewport);
+        let subtitle_style = self.subtitle_ass_style(capture_overlay.viewport);
+        self.subtitles.append_to_overlay(
+            self.current_media_time,
+            &mut capture_overlay,
+            subtitle_style,
+        );
+        let capture_danmaku = self.danmaku.render_plan(
+            self.current_media_time,
+            DanmakuViewport::new(width, height),
+            self.current_generation,
+        );
+        (capture_overlay, capture_danmaku)
     }
 
     pub fn stats(&self) -> PresenterStats {
@@ -885,6 +1029,7 @@ impl PresenterRuntime {
 
     pub fn runtime_snapshot(&self) -> PresenterRuntimeSnapshot {
         let renderer = self.renderer.runtime_stats();
+        let output = self.renderer.output_status();
         let (current_danmaku_items, current_danmaku_atlas_version, current_danmaku_atlas_bytes) =
             self.current_danmaku.as_ref().map_or((0, 0, 0), |plan| {
                 let atlas = plan.atlas.as_ref();
@@ -902,6 +1047,7 @@ impl PresenterRuntime {
         PresenterRuntimeSnapshot {
             stats: self.stats,
             renderer,
+            output,
             audio_output_queued_duration: audio_snapshot
                 .and_then(|snapshot| snapshot.queued_duration),
             audio_output_queued_frames: audio_snapshot.map_or(0, |snapshot| snapshot.queued_frames),
@@ -910,6 +1056,7 @@ impl PresenterRuntime {
                 .map_or(0, |snapshot| snapshot.written_frames),
             audio_output_underflow_frames: audio_snapshot
                 .map_or(0, |snapshot| snapshot.underflow_frames),
+            audio_output_runtime_stats: self.audio_output.runtime_stats(),
             media_time: self.current_media_time,
             generation: self.current_generation,
             playing: self.is_playing(),
@@ -956,12 +1103,27 @@ impl PresenterRuntime {
             }
             match self.video_frames.try_recv() {
                 Ok(frame) => {
-                    if frame.generation < self.player.playback_generation() {
+                    if frame.generation != self.player.playback_generation() {
+                        continue;
+                    }
+                    #[cfg(target_os = "android")]
+                    let mediacodec_surface = frame.frame.is_mediacodec();
+                    #[cfg(not(target_os = "android"))]
+                    let mediacodec_surface = false;
+                    let import_route = RejectedVideoImportRoute::new(
+                        frame.decode_backend,
+                        mediacodec_surface,
+                        frame.generation,
+                    );
+                    if should_reject_video_import(self.rejected_video_import_route, import_route) {
                         continue;
                     }
                     self.stats.decoded_video_frames += 1;
                     match self.renderer.upload_player_frame(&frame) {
                         Ok(()) => {
+                            if self.rejected_video_import_route.is_some() {
+                                self.rejected_video_import_route = None;
+                            }
                             let pts = frame.pts.unwrap_or(frame.media_time);
                             self.current_media_time = pts;
                             self.current_generation =
@@ -992,8 +1154,107 @@ impl PresenterRuntime {
                             );
                             pumped += 1;
                         }
+                        Err(PlayerError::RendererBackpressure(reason)) => {
+                            self.stats.video_frame_backpressure_drops =
+                                self.stats.video_frame_backpressure_drops.saturating_add(1);
+                            let drop_count = self.stats.video_frame_backpressure_drops;
+                            if should_report_video_frame_backpressure(drop_count) {
+                                trace::diagnostic(
+                                    serde_json::json!({
+                                        "event": "video_frame_backpressure",
+                                        "stage": "renderer_upload_drop",
+                                        "backend": frame.decode_backend.as_str(),
+                                        "mediaCodecMode": if import_route.mediacodec_surface {
+                                            Some("surface_ahardwarebuffer")
+                                        } else if frame.decode_backend == DecoderBackend::MediaCodec {
+                                            Some("bytebuffer_cpu_upload")
+                                        } else {
+                                            None
+                                        },
+                                        "generation": frame.generation,
+                                        "dropCount": drop_count,
+                                        "action": "drop_current_frame_keep_decoder_and_render_previous",
+                                        "reason": reason.as_str(),
+                                    })
+                                    .to_string(),
+                                );
+                            }
+                            // Capacity pressure is expected under a temporarily
+                            // saturated GPU. Keep the decoder route active, do not
+                            // advance media time to a frame that was not uploaded,
+                            // and leave queued frames for the next tick.
+                            break;
+                        }
                         Err(error) => {
                             self.stats.import_failures += 1;
+                            let failure = VideoFrameImportFailure {
+                                decode_backend: frame.decode_backend,
+                                mediacodec_surface: import_route.mediacodec_surface,
+                                codec: self.selected_video_codec(),
+                                pixel_format: frame.frame.pixel_format(),
+                                line_sizes: frame.frame.line_sizes(),
+                                width: frame.frame.width(),
+                                height: frame.frame.height(),
+                                generation: frame.generation,
+                                reason: error.to_string(),
+                            };
+                            trace::diagnostic(failure.structured_message());
+                            if matches!(
+                                frame.decode_backend,
+                                DecoderBackend::MediaCodec | DecoderBackend::Software
+                            ) {
+                                self.rejected_video_import_route = Some(import_route);
+                                // The decoder transition must not race a local
+                                // frame, queued frames, or the Android recovery
+                                // renderer's retained current payload.
+                                drop(frame);
+                                let quiesced =
+                                    match self.quiesce_frame_output("video_import_failure") {
+                                        Ok(quiesced) => quiesced,
+                                        Err(error) => {
+                                            trace::diagnostic(
+                                                serde_json::json!({
+                                                    "event": "video_frame_import_feedback_failed",
+                                                    "backend": import_route.backend.as_str(),
+                                                    "stage": "quiesce",
+                                                    "reason": error.to_string(),
+                                                })
+                                                .to_string(),
+                                            );
+                                            break;
+                                        }
+                                    };
+                                self.release_current_video_frame();
+                                self.drain_pending_video_frames();
+                                if let Err(report_error) =
+                                    self.player.report_video_frame_import_failure(failure)
+                                {
+                                    trace::diagnostic(
+                                        serde_json::json!({
+                                            "event": "video_frame_import_feedback_failed",
+                                            "backend": import_route.backend.as_str(),
+                                            "reason": report_error.to_string(),
+                                        })
+                                        .to_string(),
+                                    );
+                                }
+                                if let Err(error) = self.finish_frame_output_transition(
+                                    "video_import_failure",
+                                    quiesced,
+                                    false,
+                                ) {
+                                    trace::diagnostic(
+                                        serde_json::json!({
+                                            "event": "video_frame_import_feedback_failed",
+                                            "backend": import_route.backend.as_str(),
+                                            "stage": "transition_finish",
+                                            "reason": error.to_string(),
+                                        })
+                                        .to_string(),
+                                    );
+                                }
+                                break;
+                            }
                             eprintln!("Erika presenter video import failed: {error}");
                         }
                     }
@@ -1002,6 +1263,15 @@ impl PresenterRuntime {
                 Err(crossbeam_channel::TryRecvError::Disconnected) => break,
             }
         }
+    }
+
+    fn selected_video_codec(&self) -> Option<String> {
+        let selected = self.player.track_selection().video?;
+        self.player
+            .tracks()
+            .into_iter()
+            .find(|track| track.id == selected)
+            .and_then(|track| track.codec)
     }
 
     fn update_overlay(&mut self, pts: Duration, generation: u64, width: usize, height: usize) {
@@ -1030,7 +1300,10 @@ impl PresenterRuntime {
         }
         self.current_overlay = Some(overlay);
         let generation = generation.max(self.danmaku_generation).max(1);
-        let danmaku_viewport = self.current_output_viewport.unwrap_or(viewport);
+        let danmaku_viewport = self
+            .current_surface_metrics
+            .map(surface_metrics_to_viewport)
+            .unwrap_or(viewport);
         self.current_danmaku_viewport = Some(danmaku_viewport);
         self.request_current_danmaku_plan(pts, danmaku_viewport, generation);
     }
@@ -1334,15 +1607,218 @@ impl PresenterRuntime {
         self.current_danmaku_viewport = None;
     }
 
-    fn clear_playback_visual_state(&mut self, media_time: Duration) {
+    fn clear_playback_visual_state(
+        &mut self,
+        media_time: Duration,
+        frame_policy: TransitionFramePolicy,
+    ) {
+        self.rejected_video_import_route = None;
         self.current_overlay = None;
         self.subtitles.clear();
         self.clear_current_danmaku_state();
         self.current_media_time = media_time;
         self.last_audio_clock_report = None;
+        match frame_policy {
+            TransitionFramePolicy::Clear => self.release_current_video_frame(),
+            TransitionFramePolicy::PreserveRendererSnapshot => {
+                self.preserve_current_video_frame_for_transition()
+            }
+            TransitionFramePolicy::PreserveTrackSwitchFrame => {
+                self.preserve_current_video_frame_for_track_transition()
+            }
+        }
+    }
+
+    fn release_current_video_frame(&mut self) {
         if let Err(error) = self.renderer.clear_current_frame() {
             self.stats.render_failures += 1;
             eprintln!("Erika presenter renderer clear failed: {error}");
+        }
+    }
+
+    fn preserve_current_video_frame_for_transition(&mut self) {
+        if let Err(error) = self.renderer.preserve_current_frame_for_transition() {
+            self.stats.render_failures += 1;
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "frame_transition_snapshot",
+                    "stage": "preserve_failed",
+                    "reason": error.to_string(),
+                    "action": "clear_current_frame",
+                })
+                .to_string(),
+            );
+            self.release_current_video_frame();
+        }
+    }
+
+    fn preserve_current_video_frame_for_track_transition(&mut self) {
+        if let Err(error) = self.renderer.preserve_current_frame_for_track_transition() {
+            self.stats.render_failures += 1;
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "frame_transition_snapshot",
+                    "stage": "track_transition_preserve_failed",
+                    "reason": error.to_string(),
+                    "action": "clear_current_frame",
+                })
+                .to_string(),
+            );
+            self.release_current_video_frame();
+        }
+    }
+
+    fn quiesce_frame_output(&mut self, operation: &'static str) -> Result<bool> {
+        let started = Instant::now();
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "player_frame_output_transition",
+                "stage": "quiesce_request",
+                "operation": operation,
+            })
+            .to_string(),
+        );
+        match self.player.set_frame_output_quiesced(true) {
+            Ok(active) => {
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "player_frame_output_transition",
+                        "stage": "quiesce_acknowledged",
+                        "operation": operation,
+                        "active": active,
+                        "elapsedMs": started.elapsed().as_millis(),
+                    })
+                    .to_string(),
+                );
+                Ok(active)
+            }
+            Err(error) => {
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "player_frame_output_transition",
+                        "stage": "quiesce_failed",
+                        "operation": operation,
+                        "elapsedMs": started.elapsed().as_millis(),
+                        "reason": error.to_string(),
+                    })
+                    .to_string(),
+                );
+                Err(error)
+            }
+        }
+    }
+
+    fn finish_frame_output_transition(
+        &mut self,
+        operation: &'static str,
+        active: bool,
+        drain_all_streams: bool,
+    ) -> Result<()> {
+        if !active {
+            if drain_all_streams {
+                self.drain_pending_player_frames();
+            } else {
+                self.drain_pending_video_frames();
+            }
+            return Ok(());
+        }
+        // A second quiesce command is a FIFO barrier behind the transition
+        // command. Its ACK proves decoder replacement finished while output
+        // remained disabled, so both drains are race-free.
+        let barrier_started = Instant::now();
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "player_frame_output_transition",
+                "stage": "transition_barrier_request",
+                "operation": operation,
+            })
+            .to_string(),
+        );
+        let barrier_error = match self.player.set_frame_output_quiesced(true) {
+            Ok(_) => {
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "player_frame_output_transition",
+                        "stage": "transition_barrier_acknowledged",
+                        "operation": operation,
+                        "elapsedMs": barrier_started.elapsed().as_millis(),
+                    })
+                    .to_string(),
+                );
+                if drain_all_streams {
+                    self.drain_pending_player_frames();
+                } else {
+                    self.drain_pending_video_frames();
+                }
+                None
+            }
+            Err(error) => {
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "player_frame_output_transition",
+                        "stage": "transition_barrier_failed",
+                        "operation": operation,
+                        "elapsedMs": barrier_started.elapsed().as_millis(),
+                        "reason": error.to_string(),
+                    })
+                    .to_string(),
+                );
+                Some(error)
+            }
+        };
+
+        let resume_started = Instant::now();
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "player_frame_output_transition",
+                "stage": "resume_request",
+                "operation": operation,
+            })
+            .to_string(),
+        );
+        let resume_result = self.player.set_frame_output_quiesced(false);
+        match &resume_result {
+            Ok(_) => {
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "player_frame_output_transition",
+                        "stage": "resume_acknowledged",
+                        "operation": operation,
+                        "elapsedMs": resume_started.elapsed().as_millis(),
+                    })
+                    .to_string(),
+                );
+                // If the first barrier timed out but resume was acknowledged,
+                // FIFO ordering still proves the transition completed before
+                // output resumed, so the pending receivers are now safe to drain.
+                if barrier_error.is_some() {
+                    if drain_all_streams {
+                        self.drain_pending_player_frames();
+                    } else {
+                        self.drain_pending_video_frames();
+                    }
+                }
+            }
+            Err(error) => {
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "player_frame_output_transition",
+                        "stage": "resume_failed",
+                        "operation": operation,
+                        "elapsedMs": resume_started.elapsed().as_millis(),
+                        "reason": error.to_string(),
+                    })
+                    .to_string(),
+                );
+            }
+        }
+
+        match (barrier_error, resume_result) {
+            (None, result) => result.map(|_| ()),
+            (Some(barrier_error), Ok(_)) => Err(barrier_error),
+            (Some(barrier_error), Err(resume_error)) => Err(PlayerError::Playback(format!(
+                "frame output transition barrier failed: {barrier_error}; resume failed: {resume_error}",
+            ))),
         }
     }
 
@@ -1357,7 +1833,7 @@ impl PresenterRuntime {
         loop {
             match self.subtitle_frames.try_recv() {
                 Ok(frame) => {
-                    if frame.generation < self.player.playback_generation() {
+                    if frame.generation != self.player.playback_generation() {
                         continue;
                     }
                     if subtitle_diag_enabled() {
@@ -1391,7 +1867,7 @@ impl PresenterRuntime {
             }
             match self.audio_frames.try_recv() {
                 Ok(frame) => {
-                    if frame.generation < self.player.playback_generation() {
+                    if frame.generation != self.player.playback_generation() {
                         continue;
                     }
                     self.push_audio(frame);
@@ -1520,10 +1996,25 @@ impl PresenterRuntime {
         self.last_audio_clock_report = None;
     }
 
+    fn report_audio_output_runtime_stats(&mut self) {
+        let stats = self.audio_output.runtime_stats();
+        if stats.transition_sequence == self.last_audio_runtime_stats.transition_sequence {
+            return;
+        }
+        self.last_audio_runtime_stats = stats;
+        let event = AudioOutputEvent { stats };
+        trace::diagnostic(event.structured_message());
+        self.player.report_audio_output_event(event);
+    }
+
     fn drain_pending_player_frames(&mut self) {
-        while self.video_frames.try_recv().is_ok() {}
+        self.drain_pending_video_frames();
         while self.audio_frames.try_recv().is_ok() {}
         while self.subtitle_frames.try_recv().is_ok() {}
+    }
+
+    fn drain_pending_video_frames(&mut self) {
+        while self.video_frames.try_recv().is_ok() {}
     }
 }
 
@@ -1635,37 +2126,9 @@ fn danmaku_plan_window(
     (timeline.window(start, end), start, end)
 }
 
-fn surface_danmaku_viewport(surface: PlatformSurface) -> Option<DanmakuViewport> {
-    match surface {
-        PlatformSurface::Metal(handle) => Some(surface_dimensions_to_viewport(
-            handle.width,
-            handle.height,
-            handle.scale,
-        )),
-        PlatformSurface::Wgpu(handle) => Some(surface_dimensions_to_viewport(
-            handle.width,
-            handle.height,
-            handle.scale,
-        )),
-        PlatformSurface::FlutterTexture(handle) => Some(surface_dimensions_to_viewport(
-            handle.width,
-            handle.height,
-            handle.scale,
-        )),
-    }
-}
-
-fn surface_dimensions_to_viewport(width: u32, height: u32, scale: f64) -> DanmakuViewport {
-    let scale = if scale.is_finite() {
-        scale.max(1.0)
-    } else {
-        1.0
-    };
-    let pixel_width = ((width.max(1) as f64) * scale).round().min(u32::MAX as f64) as u32;
-    let pixel_height = ((height.max(1) as f64) * scale)
-        .round()
-        .min(u32::MAX as f64) as u32;
-    DanmakuViewport::with_scale(pixel_width, pixel_height, scale as f32)
+fn surface_metrics_to_viewport(metrics: SurfaceMetrics) -> DanmakuViewport {
+    let (pixel_width, pixel_height) = metrics.physical_size();
+    DanmakuViewport::with_scale(pixel_width, pixel_height, metrics.content_scale as f32)
 }
 
 fn normalize_subtitle_font_scale(scale: f64) -> f64 {
@@ -1760,8 +2223,7 @@ fn overlay_debug_summary(overlay: &OverlayFrame) -> String {
 
 impl Drop for PresenterRuntime {
     fn drop(&mut self) {
-        let _ = self.audio_output.stop();
-        let _ = self.player.close();
+        let _ = self.close();
     }
 }
 
@@ -1782,9 +2244,9 @@ fn build_renderer(
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
         RendererBackendPreference::PlatformNative | RendererBackendPreference::Auto => {
-            build_wgpu_renderer()
+            build_wgpu_renderer(_metal_config)
         }
-        RendererBackendPreference::WgpuFallback => build_wgpu_renderer(),
+        RendererBackendPreference::WgpuFallback => build_wgpu_renderer(_metal_config),
         RendererBackendPreference::FlutterTexture => Err(PlayerError::Renderer(
             "Flutter texture backend is not supported by the presenter runtime".to_string(),
         )),
@@ -1795,6 +2257,7 @@ fn build_renderer(
 fn resolve_presenter_player_config(
     player: &mut PlayerConfig,
     renderer_preference: RendererBackendPreference,
+    _supports_mediacodec_surface: bool,
 ) {
     if matches!(renderer_preference, RendererBackendPreference::WgpuFallback)
         && player.playback.video_decode == VideoDecodePreference::D3d11va
@@ -1803,10 +2266,37 @@ fn resolve_presenter_player_config(
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "android")]
+fn resolve_presenter_player_config(
+    player: &mut PlayerConfig,
+    _renderer_preference: RendererBackendPreference,
+    supports_mediacodec_surface: bool,
+) {
+    if player.playback.video_decode == VideoDecodePreference::MediaCodec
+        && !supports_mediacodec_surface
+    {
+        player.playback.video_decode = VideoDecodePreference::MediaCodecByteBuffer;
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "android_mediacodec_fallback",
+                "stage": "renderer_capability_to_bytebuffer",
+                "fromMode": "surface_ahardwarebuffer",
+                "toMode": "bytebuffer_cpu_upload",
+                "surfaceZeroCopyDisabled": true,
+                "configurationFallback": true,
+                "fallbackCount": 1,
+                "reason": "active renderer does not expose Vulkan AHardwareBuffer import capability",
+            })
+            .to_string(),
+        );
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
 fn resolve_presenter_player_config(
     _player: &mut PlayerConfig,
     _renderer_preference: RendererBackendPreference,
+    _supports_mediacodec_surface: bool,
 ) {
 }
 
@@ -1829,19 +2319,52 @@ fn build_audio_output(config: PresenterAudioConfig) -> Box<dyn AudioOutputBacken
             ring_buffer: config.ring_buffer,
         }))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+
+    #[cfg(target_os = "android")]
+    {
+        Box::new(AAudioOutput::new(AAudioOutputConfig {
+            ring_buffer: config.ring_buffer,
+        }))
+    }
+    #[cfg(not(any(
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows"
+    )))]
     {
         Box::new(BufferedAudioOutput::new(config.ring_buffer))
     }
 }
 
 #[cfg(feature = "wgpu")]
-fn build_wgpu_renderer() -> Result<Box<dyn RendererBackend>> {
-    Ok(Box::new(crate::renderer::wgpu::WgpuRenderer::new()?))
+fn build_wgpu_renderer(config: MetalRendererConfig) -> Result<Box<dyn RendererBackend>> {
+    #[cfg(target_os = "android")]
+    let mut renderer = crate::renderer::wgpu::AndroidRecoveringWgpuRenderer::new_with_output_mode(
+        config.output_mode,
+    )?;
+    #[cfg(not(target_os = "android"))]
+    let mut renderer = crate::renderer::wgpu::WgpuRenderer::new()?;
+    renderer.set_luma_upscaler(config.luma_upscaler);
+    #[cfg(not(target_os = "android"))]
+    if config.output_mode.is_edr() {
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "video_output_mode",
+                "stage": "configuration_fallback",
+                "renderer": "wgpu",
+                "requested": "apple_edr",
+                "active": "sdr",
+                "reason": "Apple EDR is unavailable on the active wgpu platform surface",
+            })
+            .to_string(),
+        );
+    }
+    Ok(Box::new(renderer))
 }
 
 #[cfg(not(feature = "wgpu"))]
-fn build_wgpu_renderer() -> Result<Box<dyn RendererBackend>> {
+fn build_wgpu_renderer(_config: MetalRendererConfig) -> Result<Box<dyn RendererBackend>> {
     Err(PlayerError::Renderer(
         "wgpu renderer backend requires the `wgpu` cargo feature".to_string(),
     ))
@@ -1868,6 +2391,8 @@ fn subtitle_start(frame: &PlayerSubtitleFrame) -> Option<Duration> {
 struct SubtitleFrameState {
     frames: Vec<PlayerSubtitleFrame>,
     #[cfg(feature = "libass")]
+    ass_renderer: CachedAssTrackRenderer,
+    #[cfg(feature = "libass")]
     text_renderer: CachedLibassTextRenderer,
 }
 
@@ -1876,15 +2401,47 @@ impl SubtitleFrameState {
         self.frames.clear();
         #[cfg(feature = "libass")]
         {
+            self.ass_renderer.clear();
             self.text_renderer.clear();
         }
     }
 
-    fn push(&mut self, frame: PlayerSubtitleFrame) {
+    fn push(&mut self, mut frame: PlayerSubtitleFrame) {
         self.retain_at(subtitle_start(&frame).unwrap_or(frame.media_time));
         if frame.frame.is_empty() {
+            #[cfg(feature = "libass")]
+            {
+                self.ass_renderer.clear_track(frame.frame.track_id);
+                self.text_renderer.clear();
+            }
             self.frames
                 .retain(|current| current.frame.track_id != frame.frame.track_id);
+            return;
+        }
+
+        #[cfg(feature = "libass")]
+        match self
+            .ass_renderer
+            .process_frame(&frame.frame, frame.generation)
+        {
+            Ok(true) => frame
+                .frame
+                .text
+                .retain(|segment| segment.format != crate::subtitle::SubtitleTextFormat::Ass),
+            Ok(false) => {}
+            Err(error) => crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "subtitle_ass_track",
+                    "stage": "chunk_rejected",
+                    "trackId": frame.frame.track_id,
+                    "generation": frame.generation,
+                    "reason": error.to_string(),
+                })
+                .to_string(),
+            ),
+        }
+
+        if frame.frame.is_empty() {
             return;
         }
         if frame.frame.end.is_none() {
@@ -1908,16 +2465,33 @@ impl SubtitleFrameState {
         style: SubtitleAssStyle,
     ) {
         self.retain_at(pts);
+        let mut subtitle_changed = false;
+
+        #[cfg(feature = "libass")]
+        match self
+            .ass_renderer
+            .render(pts, overlay.viewport, style.font_scale)
+        {
+            Ok(Some(bitmaps)) => {
+                subtitle_changed |= bitmaps.changed;
+                overlay.subtitle_alpha_planes.extend(bitmaps.parts);
+            }
+            Ok(None) => {}
+            Err(error) => crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "subtitle_ass_track",
+                    "stage": "render_failed",
+                    "reason": error.to_string(),
+                })
+                .to_string(),
+            ),
+        }
+
         let active = self
             .frames
             .iter()
             .filter(|frame| subtitle_is_active(frame, pts))
             .collect::<Vec<_>>();
-        if active.is_empty() {
-            return;
-        }
-
-        let mut subtitle_changed = false;
         for frame in &active {
             if !frame.frame.bitmap.planes.is_empty() {
                 overlay
@@ -1933,8 +2507,7 @@ impl SubtitleFrameState {
             .map(|frame| frame.frame.clone())
             .collect::<Vec<_>>();
         if !text_frames.is_empty() {
-            self.append_text_subtitles(pts, overlay, &text_frames, style);
-            subtitle_changed = true;
+            subtitle_changed |= self.append_text_subtitles(pts, overlay, &text_frames, style);
         }
 
         overlay.subtitle_changed |= subtitle_changed;
@@ -1947,16 +2520,28 @@ impl SubtitleFrameState {
         overlay: &mut OverlayFrame,
         frames: &[DecodedSubtitleFrame],
         style: SubtitleAssStyle,
-    ) {
+    ) -> bool {
         match self
             .text_renderer
             .render(pts, overlay.viewport, frames, style)
         {
-            Ok(Some(frame)) => overlay.subtitle_planes.extend(frame.planes),
-            Ok(None) => {}
+            Ok(Some(bitmaps)) => {
+                let changed = bitmaps.changed;
+                overlay.subtitle_alpha_planes.extend(bitmaps.parts);
+                changed
+            }
+            Ok(None) => false,
             Err(error) => {
-                eprintln!("Erika presenter text subtitle render failed: {error}");
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "subtitle_text",
+                        "stage": "render_failed",
+                        "reason": error.to_string(),
+                    })
+                    .to_string(),
+                );
                 append_text_subtitles_debug(pts, overlay, frames);
+                true
             }
         }
     }
@@ -1968,8 +2553,103 @@ impl SubtitleFrameState {
         overlay: &mut OverlayFrame,
         frames: &[DecodedSubtitleFrame],
         _style: SubtitleAssStyle,
-    ) {
+    ) -> bool {
         append_text_subtitles_debug(pts, overlay, frames);
+        true
+    }
+}
+
+#[cfg(feature = "libass")]
+#[derive(Debug, Default)]
+struct CachedAssTrackRenderer {
+    generation: u64,
+    track_id: Option<i64>,
+    resources: Option<Arc<AssTrackResources>>,
+    renderer: Option<LibassSubtitleRenderer>,
+}
+
+#[cfg(feature = "libass")]
+impl CachedAssTrackRenderer {
+    fn clear(&mut self) {
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.flush_events();
+        }
+        self.generation = 0;
+        self.track_id = None;
+        self.resources = None;
+        self.renderer = None;
+    }
+
+    fn clear_track(&mut self, track_id: i64) {
+        if self.track_id == Some(track_id) {
+            self.clear();
+        }
+    }
+
+    fn process_frame(
+        &mut self,
+        frame: &DecodedSubtitleFrame,
+        generation: u64,
+    ) -> crate::subtitle::Result<bool> {
+        if !frame.has_ass_chunks() {
+            return Ok(false);
+        }
+        let resources = frame.ass_track.as_ref().ok_or_else(|| {
+            SubtitleError::Libass("decoded ASS event has no track resources".to_string())
+        })?;
+        let resources_changed = self
+            .resources
+            .as_ref()
+            .is_none_or(|current| !Arc::ptr_eq(current, resources));
+        if self.generation != generation
+            || self.track_id != Some(frame.track_id)
+            || resources_changed
+        {
+            self.clear();
+            self.renderer = Some(LibassSubtitleRenderer::from_ass_track(
+                frame.track_id,
+                resources,
+                LibassRenderConfig::default(),
+            )?);
+            self.generation = generation;
+            self.track_id = Some(frame.track_id);
+            self.resources = Some(resources.clone());
+        }
+
+        let renderer = self.renderer.as_mut().ok_or_else(|| {
+            SubtitleError::Libass("ASS track renderer is unavailable".to_string())
+        })?;
+        let start = frame.start.unwrap_or(Duration::ZERO);
+        for segment in frame
+            .text
+            .iter()
+            .filter(|segment| segment.format == crate::subtitle::SubtitleTextFormat::Ass)
+        {
+            renderer.process_chunk(&segment.text, start, frame.end)?;
+        }
+        Ok(true)
+    }
+
+    fn render(
+        &mut self,
+        pts: Duration,
+        viewport: OverlayViewport,
+        font_scale: f64,
+    ) -> crate::subtitle::Result<Option<SubtitleBitmapSet>> {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return Ok(None);
+        };
+        renderer.set_font_scale(font_scale);
+        match renderer.render(SubtitleRenderRequest::new(
+            pts,
+            viewport.width,
+            viewport.height,
+        ))? {
+            SubtitleRenderOutput::Alpha(bitmaps) => Ok(Some(bitmaps)),
+            SubtitleRenderOutput::Rgba(_) => Err(SubtitleError::Libass(
+                "libass renderer returned RGBA output".to_string(),
+            )),
+        }
     }
 }
 
@@ -1993,7 +2673,7 @@ impl CachedLibassTextRenderer {
         viewport: OverlayViewport,
         frames: &[DecodedSubtitleFrame],
         style: SubtitleAssStyle,
-    ) -> crate::subtitle::Result<Option<crate::subtitle::SubtitleFrame>> {
+    ) -> crate::subtitle::Result<Option<SubtitleBitmapSet>> {
         let fallback_end = pts.saturating_add(Duration::from_secs(24 * 60 * 60));
         let Some(script) =
             decoded_subtitle_frames_to_ass_script_with_style(frames.iter(), fallback_end, style)
@@ -2013,13 +2693,16 @@ impl CachedLibassTextRenderer {
         let Some(renderer) = self.renderer.as_mut() else {
             return Ok(None);
         };
-        renderer
-            .render(SubtitleRenderRequest::new(
-                pts,
-                viewport.width,
-                viewport.height,
-            ))
-            .map(|output| Some(output.into_rgba_frame()))
+        match renderer.render(SubtitleRenderRequest::new(
+            pts,
+            viewport.width,
+            viewport.height,
+        ))? {
+            SubtitleRenderOutput::Alpha(bitmaps) => Ok(Some(bitmaps)),
+            SubtitleRenderOutput::Rgba(_) => Err(SubtitleError::Libass(
+                "libass renderer returned RGBA output".to_string(),
+            )),
+        }
     }
 }
 
@@ -2042,6 +2725,44 @@ fn append_text_subtitles_debug(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejected_mediacodec_surface_route_allows_bytebuffer_recovery() {
+        let rejected = RejectedVideoImportRoute::new(DecoderBackend::MediaCodec, true, 7);
+        let byte_buffer = RejectedVideoImportRoute::new(DecoderBackend::MediaCodec, false, 7);
+
+        assert!(!should_reject_video_import(Some(rejected), byte_buffer));
+    }
+
+    #[test]
+    fn rejected_mediacodec_bytebuffer_route_suppresses_repeat_failures() {
+        let rejected = RejectedVideoImportRoute::new(DecoderBackend::MediaCodec, false, 7);
+        let next_byte_buffer = RejectedVideoImportRoute::new(DecoderBackend::MediaCodec, false, 7);
+        let software = RejectedVideoImportRoute::new(DecoderBackend::Software, false, 7);
+
+        assert!(should_reject_video_import(Some(rejected), next_byte_buffer));
+        assert!(!should_reject_video_import(Some(rejected), software));
+    }
+
+    #[test]
+    fn rejected_route_does_not_suppress_the_same_route_in_a_new_generation() {
+        let rejected = RejectedVideoImportRoute::new(DecoderBackend::MediaCodec, true, 7);
+        let reopened_surface = RejectedVideoImportRoute::new(DecoderBackend::MediaCodec, true, 8);
+
+        assert!(!should_reject_video_import(
+            Some(rejected),
+            reopened_surface
+        ));
+    }
+
+    #[test]
+    fn video_frame_backpressure_logging_is_exponentially_throttled() {
+        let reported = (1..=10)
+            .filter(|count| should_report_video_frame_backpressure(*count))
+            .collect::<Vec<_>>();
+
+        assert_eq!(reported, vec![1, 2, 4, 8]);
+    }
     use crate::danmaku::{DanmakuColor, DanmakuItem, DanmakuMode};
     use crate::subtitle::{
         DecodedSubtitleFrame, SubtitleBitmapPlane, SubtitleTextFormat, SubtitleTextSegment,
@@ -2082,6 +2803,47 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "libass")]
+    fn ass_subtitle_frame(
+        track_id: i64,
+        generation: u64,
+        start: Duration,
+        end: Duration,
+        read_order: u64,
+        resources: Arc<AssTrackResources>,
+    ) -> PlayerSubtitleFrame {
+        let mut frame = DecodedSubtitleFrame::new(track_id, Some(start), Some(end));
+        frame.push_text(SubtitleTextSegment::new(
+            SubtitleTextFormat::Ass,
+            format!("{read_order},0,Default,,0,0,0,,{{\\pos(100,80)\\fad(50,50)}}streamed"),
+        ));
+        frame.ass_track = Some(resources);
+        PlayerSubtitleFrame {
+            frame,
+            pts: Some(start),
+            media_time: start,
+            late_by: None,
+            generation,
+        }
+    }
+
+    #[cfg(feature = "libass")]
+    fn ass_test_header() -> String {
+        r#"[Script Info]
+ScriptType: v4.00+
+PlayResX: 640
+PlayResY: 360
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,32,&H00FFFFFF,&H000000FF,&H80000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,2,20,20,24,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"#
+        .to_string()
+    }
+
     fn empty_overlay() -> OverlayFrame {
         OverlayFrame {
             pts: Duration::ZERO,
@@ -2117,7 +2879,11 @@ mod tests {
         player.renderer = RendererBackendPreference::WgpuFallback;
         player.playback.video_decode = VideoDecodePreference::D3d11va;
 
-        resolve_presenter_player_config(&mut player, RendererBackendPreference::WgpuFallback);
+        resolve_presenter_player_config(
+            &mut player,
+            RendererBackendPreference::WgpuFallback,
+            false,
+        );
 
         assert_eq!(
             player.playback.video_decode,
@@ -2132,9 +2898,57 @@ mod tests {
         player.renderer = RendererBackendPreference::PlatformNative;
         player.playback.video_decode = VideoDecodePreference::D3d11va;
 
-        resolve_presenter_player_config(&mut player, RendererBackendPreference::PlatformNative);
+        resolve_presenter_player_config(
+            &mut player,
+            RendererBackendPreference::PlatformNative,
+            false,
+        );
 
         assert_eq!(player.playback.video_decode, VideoDecodePreference::D3d11va);
+    }
+
+    #[cfg(target_os = "android")]
+    #[test]
+    fn android_presenter_uses_bytebuffer_when_ahb_interop_is_unavailable() {
+        let mut player = PlayerConfig::default();
+        player.playback.video_decode = VideoDecodePreference::MediaCodec;
+
+        resolve_presenter_player_config(&mut player, RendererBackendPreference::Auto, false);
+
+        assert_eq!(
+            player.playback.video_decode,
+            VideoDecodePreference::MediaCodecByteBuffer
+        );
+    }
+
+    #[cfg(target_os = "android")]
+    #[test]
+    fn android_presenter_keeps_surface_mediacodec_when_ahb_interop_is_available() {
+        let mut player = PlayerConfig::default();
+        player.playback.video_decode = VideoDecodePreference::MediaCodec;
+
+        resolve_presenter_player_config(&mut player, RendererBackendPreference::Auto, true);
+
+        assert_eq!(
+            player.playback.video_decode,
+            VideoDecodePreference::MediaCodec
+        );
+    }
+
+    #[cfg(target_os = "android")]
+    #[test]
+    fn android_presenter_preserves_explicit_non_surface_decode_modes() {
+        for mode in [
+            VideoDecodePreference::Software,
+            VideoDecodePreference::MediaCodecByteBuffer,
+        ] {
+            let mut player = PlayerConfig::default();
+            player.playback.video_decode = mode;
+
+            resolve_presenter_player_config(&mut player, RendererBackendPreference::Auto, false);
+
+            assert_eq!(player.playback.video_decode, mode);
+        }
     }
 
     #[test]
@@ -2258,8 +3072,95 @@ mod tests {
             SubtitleAssStyle::default(),
         );
 
+        #[cfg(feature = "libass")]
+        assert!(!overlay.subtitle_alpha_planes.is_empty());
+        #[cfg(not(feature = "libass"))]
         assert!(!overlay.subtitle_planes.is_empty());
         assert!(overlay.subtitle_changed);
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn subtitle_state_streams_ass_into_alpha_planes_and_clears_track() {
+        let header = ass_test_header();
+        let resources = Arc::new(AssTrackResources::new(
+            2,
+            Arc::<[u8]>::from(header.as_bytes()),
+            Arc::<[crate::subtitle::SubtitleFontAttachment]>::from([]),
+        ));
+        let mut state = SubtitleFrameState::default();
+        state.push(ass_subtitle_frame(
+            2,
+            3,
+            Duration::ZERO,
+            Duration::from_secs(2),
+            7,
+            resources,
+        ));
+        assert!(state.frames.is_empty());
+
+        let mut overlay = empty_overlay();
+        state.append_to_overlay(
+            Duration::from_millis(500),
+            &mut overlay,
+            SubtitleAssStyle::default(),
+        );
+        assert!(overlay.subtitle_planes.is_empty());
+        assert!(!overlay.subtitle_alpha_planes.is_empty());
+        assert!(overlay.subtitle_changed);
+
+        state.push(PlayerSubtitleFrame {
+            frame: DecodedSubtitleFrame::new(2, Some(Duration::from_secs(1)), None),
+            pts: Some(Duration::from_secs(1)),
+            media_time: Duration::from_secs(1),
+            late_by: None,
+            generation: 4,
+        });
+        let mut cleared = empty_overlay();
+        state.append_to_overlay(
+            Duration::from_millis(750),
+            &mut cleared,
+            SubtitleAssStyle::default(),
+        );
+        assert!(cleared.subtitle_alpha_planes.is_empty());
+        assert!(state.ass_renderer.renderer.is_none());
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn subtitle_state_rebuilds_ass_track_on_generation_change() {
+        let header = ass_test_header();
+        let resources = Arc::new(AssTrackResources::new(
+            2,
+            Arc::<[u8]>::from(header.as_bytes()),
+            Arc::<[crate::subtitle::SubtitleFontAttachment]>::from([]),
+        ));
+        let mut state = SubtitleFrameState::default();
+        state.push(ass_subtitle_frame(
+            2,
+            1,
+            Duration::ZERO,
+            Duration::from_secs(2),
+            1,
+            resources.clone(),
+        ));
+        state.push(ass_subtitle_frame(
+            2,
+            2,
+            Duration::from_secs(10),
+            Duration::from_secs(12),
+            1,
+            resources,
+        ));
+
+        assert_eq!(state.ass_renderer.generation, 2);
+        let mut overlay = empty_overlay();
+        state.append_to_overlay(
+            Duration::from_millis(500),
+            &mut overlay,
+            SubtitleAssStyle::default(),
+        );
+        assert!(overlay.subtitle_alpha_planes.is_empty());
     }
 
     #[test]
@@ -2279,6 +3180,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "wgpu")]
     fn idle_tick_does_not_render_test_pattern_by_default() {
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
 
@@ -2292,6 +3194,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "wgpu")]
     fn repeated_danmaku_config_does_not_bump_generation() {
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
         let original_generation = presenter.current_generation;
@@ -2312,6 +3215,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "wgpu")]
     fn audio_clock_report_tracks_queue_and_underflow_changes() {
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
 
@@ -2354,6 +3258,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "wgpu")]
     fn audio_start_is_blocked_while_player_is_not_playing() {
         use crate::audio::{AudioOutputState, BufferedAudioOutput};
         use crate::ffmpeg::{PcmAudioFrame, PcmFormat};
@@ -2379,6 +3284,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "wgpu")]
     fn presenter_volume_is_clamped() {
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
 
@@ -2393,9 +3299,37 @@ mod tests {
 
     #[test]
     fn surface_dimensions_are_converted_to_full_output_danmaku_viewport() {
-        let viewport = surface_dimensions_to_viewport(800, 450, 2.0);
+        let viewport = surface_metrics_to_viewport(SurfaceMetrics::new(1600, 900, 2.0));
 
         assert_eq!(viewport, DanmakuViewport::with_scale(1600, 900, 2.0));
+    }
+
+    #[test]
+    fn physical_surface_extent_keeps_pixels_and_applies_content_scale() {
+        let viewport = surface_metrics_to_viewport(SurfaceMetrics::new(1081, 607, 2.625));
+
+        assert_eq!(viewport, DanmakuViewport::with_scale(1081, 607, 2.625));
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu")]
+    fn resized_capture_rebuilds_subtitle_and_danmaku_for_capture_viewport() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        presenter.subtitles.push(subtitle_frame(
+            Duration::from_secs(1),
+            Some(Duration::from_secs(3)),
+        ));
+        presenter.danmaku = danmaku_engine("capture viewport");
+        presenter.current_media_time = Duration::from_millis(1500);
+        presenter.current_generation = 9;
+
+        let (overlay, danmaku) = presenter.capture_composition(320, 180);
+
+        assert_eq!(overlay.viewport, OverlayViewport::new(320, 180));
+        assert_eq!(overlay.subtitle_planes.len(), 1);
+        assert_eq!(danmaku.viewport, DanmakuViewport::new(320, 180));
+        assert_eq!(danmaku.generation, 9);
+        assert!(!danmaku.items.is_empty());
     }
 
     #[test]
@@ -2427,6 +3361,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "wgpu")]
     fn presenter_danmaku_session_merges_tracks_and_applies_track_controls() {
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
         let first = DanmakuTimeline::new(vec![danmaku_item(1, 1.0, "first")]).unwrap();

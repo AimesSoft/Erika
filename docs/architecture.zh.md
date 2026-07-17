@@ -17,10 +17,10 @@ Rust Player Core
   renderer core ──────── color state, render graph, tone map, scaler policy
   Metal renderer ─────── zero-copy NV12/P010, HDR/EDR, subtitle/danmaku pass
   D3D11 renderer ─────── zero-copy D3D11VA, HDR10, subtitle/danmaku pass (Windows)
-  wgpu renderer ──────── cross-platform video + danmaku rendering
+  wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB
   presenter runtime ──── ties player + renderer + audio + overlays
-  C ABI ──────────────── 69 exported functions, two handle families
-  Flutter plugin ─────── macOS + iOS + Windows native view embedding
+  C ABI ──────────────── 73 exported functions, two handle families
+  Flutter plugin ─────── macOS + iOS + Windows + Android native view embedding
 ```
 
 ## 原生依赖
@@ -29,7 +29,8 @@ Rust Player Core
 
 | 依赖 | 版本 | 作用 |
 |------|------|------|
-| FFmpeg | 7.1.1 | Demux、decode、audio resample、VideoToolbox |
+| FFmpeg | 7.1.1 | Demux、decode、audio resample、平台硬解 |
+| dav1d | 1.5.1 | Android AV1 软解回退（8-bit 与高位深） |
 | libass | 0.17.3 | ASS 字幕渲染 |
 | FreeType | 2.13.3 | 字体栅格化（libass 依赖） |
 | HarfBuzz | 10.4.0 | 文本 shaping（libass 依赖） |
@@ -54,6 +55,8 @@ cargo run -p xtask -- deps status
 ## 播放引擎
 
 `PlaybackSession` 负责打开媒体、选择轨道、配置解码后端，并产出视频帧和 PCM 音频块。
+
+解码器可用性是 session invariant：只要选中了视频轨，play、seek 和 video-frame pump 入口就必须有活动的视频 decoder。MediaCodec seek reopen 以及 Surface→ByteBuffer/software fallback 等破坏性切换会先记录 decoder unavailable reason；若最终 software decoder 也打开失败，这些入口会返回该明确错误并要求重新 open 媒体，绝不会进入只播音频的假 `Playing` 状态。
 
 `VideoPlaybackEngine` 增加时钟驱动播放：
 
@@ -94,7 +97,7 @@ Apple 平台的主渲染器：
 - YCbCr 采样、transfer decode、gamut mapping（BT.2020→BT.709、Display P3→BT.709）。
 - Tone mapping：Mobius、Reinhard、clip，支持绝对 nits。
 - SDR 输出（`BGRA8Unorm`）与 Apple EDR 输出（`RGBA16Float` + EDR headroom）。
-- 神经亮度超分（`LumaUpscalerMode`）：ArtCNN C4F16/C4F32 2x doubler，以 Metal compute pass 跑在解码后的 Y plane 上，并与 render pass 使用同一 command buffer（`renderer/metal/upscaler.rs`）。色度保持原分辨率。仅在视频显示尺寸大于源分辨率时启用；网络输出会按解码帧缓存，重复 vsync tick 直接复用结果。权重来自上游 ONNX 发布（`assets/artcnn/`），并用 `tests/artcnn_upscaler.rs` 中的 onnxruntime 参考验证。提供 `simdgroup_matrix` matmul 后端（Apple Silicon 默认）和 scalar texture fallback；两者都在后台线程编译，编译完成前播放会先以未放大状态继续。
+- 神经亮度超分（`LumaUpscalerMode`）：ArtCNN C4F16/C4F32 2x doubler，以 Metal compute pass 跑在解码后的 Y plane 上，并与 render pass 使用同一 command buffer（`renderer/metal/upscaler.rs`）。色度保持原分辨率。仅在视频显示尺寸大于源分辨率时启用；网络输出会按解码帧缓存，重复 vsync tick 直接复用结果。权重来自上游 ONNX 发布（`assets/artcnn/`），并用 `tests/artcnn_upscaler.rs` 中的 onnxruntime 参考验证。提供 `simdgroup_matrix` matmul 后端（Apple Silicon 默认）和 scalar texture fallback；两者都在后台线程编译，编译完成前播放会先以未放大状态继续。blob 校验、模型布局、执行策略和 frame-token cache 已抽到平台中立的 `renderer/artcnn.rs`，并由 wgpu 后端共同使用。
 - 字幕 overlay：RGBA plane 上传与 alpha blending。
 - 弹幕：来自 atlas 的 instanced glyph quad 绘制（shadow → outline → fill）。
 - 呈现布局保持源宽高比。
@@ -115,11 +118,17 @@ Windows 平台的原生渲染器（`renderer/d3d11.rs`）：
 
 - 真正的 `wgpu` 依赖与设备/表面/pipeline 创建。
 - NV12/P010 视频帧上传和 WGSL YCbCr 转换 shader。
+- Android 通过 AHardwareBuffer/Vulkan 导入 MediaCodec Surface；原生互操作不可用时明确切到 ByteBuffer/CPU upload。
+- 公共 `renderer/frame.rs` 边界统一携带尺寸/色彩元数据，以及 FFmpeg 解码帧或独立的 prepared AHardwareBuffer。MediaCodec Surface 的 AVFrame 会在 playback worker 上、decoder callback context 仍存活时释放；presenter 与 GPU recovery 不再持有 decoder-owned AVFrame。
 - 色彩空间转换、tone mapping（与 Metal 保持同一流水线模型）。
-- 弹幕 glyph atlas 渲染。
-- 可用于无头测试的离屏 render target。
+- 分块执行 ArtCNN C4F16/C4F32（`renderer/wgpu_artcnn.rs`），用有界 feature texture 和源分辨率 packed DepthToSpace 输出控制显存。既支持原生 luma plane，也支持 Android 已转换的 nonlinear RGB texture，并通过 `rgb + (Y_sr - Y)` 保持色度。GLES 3.0 不尝试 compute，而是明确报告 `Inactive` 和 `native_luma_sampling` 回退。
+- 字幕/弹幕合成、截图，以及可用于无头验证的离屏 render target。即使显示 surface 是 extended-linear，截图也始终离屏渲染到 SDR RGBA8 target，避免把未映射的 scRGB 值当成 SDR 像素输出。
 - 表面句柄模型覆盖 macOS NSView、iOS UIView、Windows HWND、X11/Wayland、Android native window。
-- 目前尚未实现硬件零拷贝导入（VideoToolbox / D3D11VA）和 HDR/EDR 输出；这是面向 Linux 和 Android 的规划路径。
+- Android 提供有界 Vulkan/GLES backend recovery，以及 import、能力、质量降级和 device failure 的结构化日志。其高 headroom 输出是 FP16 **extended-linear scRGB**，不是 HDR10/PQ：renderer 使用 `Rgba16Float`、Vulkan extended-sRGB-linear color space，并在每次 configure/reconfigure 后验证 `ANativeWindow` 的 `ADATASPACE_SCRGB_LINEAR`（`0x18410000`）。Android scRGB 使用 BT.709 primaries，`1.0 = 80 nit`，不会输出 PQ 或 HDR10 static metadata。
+- Extended-linear 只有在显式请求 `ExtendedLinear`、显示器/surface 支持 HDR、使用 Flutter Hybrid Composition 承载 `SurfaceView`、wgpu 后端为 Vulkan、surface 支持 `Rgba16Float`，且 `SCRGB_LINEAR` dataspace 回读成功时才会激活。任一条件缺失都会立即选择正常 SDR surface，并记录稳定的 `0..8` fallback reason；因此 GLES 与 `TextureView` 都是 SDR 路径。
+- API 34+ 上，Android 宿主通过 `Display.registerHdrSdrRatioChangedListener` 观察显示器，并把真实变化经 `erika_presenter_set_output_headroom` 发布给 Erika。wgpu 无需重新 attach surface，就会让后续帧使用更新后的有效内容 headroom，并同步可查询状态。ratio 可用时 `activeHeadroomKnown` 为 true；只有 known 标志或 ratio 确实变化时，`headroomUpdates` 才增长。
+- Flutter extended-linear player 未显式传 `edrHeadroom` 时，内容上限默认为 4x，同时给 `SurfaceView` 传 `0` 表示系统 auto desired headroom。显式数值会成为内容上限，并在 API 35 上作为 per-`SurfaceView` desired headroom；Erika 不修改全局 Window。
+- 模拟器/非 HDR 设备覆盖已经验证明确的 SDR 回退分支；在完成 API 35 HDR 真机上的 `Rgba16Float + SCRGB_LINEAR` 验收前，不把 active extended-linear 路径描述为“已通过真机验证”。
 
 ### Render Pipeline
 
@@ -127,6 +136,7 @@ Windows 平台的原生渲染器（`renderer/d3d11.rs`）：
 
 - `SourceColorState` / `TargetColorState`：primaries、transfer、range。
 - `VideoRenderPipeline`：gamut matrix、tone map operator、transfer functions。
+- `renderer::output`：由原生 renderer 与 wgpu 共用的请求模式、实际 encoding、surface format、dataspace/headroom 状态和稳定 fallback 诊断。
 - HDR metadata：mastering display、content light level、nominal peak nits。
 
 ## Presenter Runtime
@@ -135,27 +145,29 @@ Windows 平台的原生渲染器（`renderer/d3d11.rs`）：
 
 - 推送视频帧，更新 overlay（字幕 + 弹幕），渲染并 present。
 - 弹幕 plan 生成与视频帧通过 generation + media_time gate 保持同步。
+- seek、选轨、fallback、open/close 等 decoder transition 使用 quiesce/ACK 屏障：停发帧、释放 renderer cache、清 receiver、完成切换后再恢复。playback generation 跨 reopen 单调递增，旧 generation 或旧 MediaCodec route 的 import feedback 会被明确丢弃。
 - 运行时支持倍速、音量、轨道选择、字幕/弹幕配置。
 
 ## C ABI
 
-`erika_capi` 通过两组 handle family 导出 69 个函数：
+`erika_capi` 通过两组 handle family 导出 73 个函数：
 
 - **`ErikaHandle`**：播放器控制与事件轮询，渲染由宿主管理。
 - **`ErikaPresenterHandle`**：Erika 持有完整栈，宿主只需提供 surface 并调用 `render_tick`。
 
-覆盖范围包括：create/destroy、open/play/pause/stop/seek、轨道选择、字幕轨增删、弹幕轨管理（add/remove/enable/offset/config）、surface attach/detach/resize、事件轮询、音量、播放速率、神经亮度超分切换、超分后端状态诊断。
+覆盖范围包括：create/destroy、open/play/pause/stop/seek、轨道选择、字幕轨增删、弹幕轨管理（add/remove/enable/offset/config）、surface attach/detach/resize、事件轮询、音量、播放速率、神经亮度超分切换、超分诊断，以及 `erika_presenter_get_output_status` 返回的 13 字段输出状态快照。
 
 Header：`crates/erika_capi/include/erika.h`
 
 ## Flutter Plugin
 
-`packages/erika_flutter` 提供 macOS、iOS 和 Windows 的 Flutter embedding：
+`packages/erika_flutter` 提供 macOS、iOS、Windows 和 Android 的 Flutter embedding：
 
 - **Dart**：`ErikaPlayer`（命令 + 事件）、`ErikaWindowOverlayVideoView`（推荐的 window-hosted native surface——Apple 上是 Metal，Windows 上是 D3D11 swapchain）、`ErikaVideoView`（兼容 platform view）。
 - **macOS Swift plugin**：加载 `liberika_capi.dylib`，创建 `NSWindow` overlay 或 `NSView`/`CAMetalLayer` platform view，并通过 display link 驱动 `render_tick`。
 - **iOS Swift plugin**：静态链接 `liberika_capi.a`，创建 `UIWindow` overlay 或 `UIView`/`CAMetalLayer` platform view，并沿用同一 presenter 模型。
 - **Windows C++ plugin**（`ErikaFlutterPluginCApi`）：通过 CMake（`build_erika_runtime.cmake`，cargo target `x86_64-pc-windows-msvc`）构建并链接 `erika_capi.dll`，host 一个 window-level D3D11 swapchain，并由帧调度器驱动 `render_tick`。
+- **Android Kotlin/JNI plugin**：为 Android ABI 构建 Rust runtime，每个 player 持有独立原生 surface。SDR 使用 `TextureView`；请求 extended-linear 时，通过 Flutter Hybrid Composition 使用 `SurfaceView`。插件协调 Activity surface lifecycle、音频焦点、noisy-route、HDR eligibility/headroom，并只在存在活跃 player 时驱动共享帧调度器。
 
 Embedding 模型和 HDR 策略见 `docs/flutter_embedding.md`。
 
@@ -167,5 +179,5 @@ Embedding 模型和 HDR 策略见 `docs/flutter_embedding.md`。
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | Available |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
-| Android | — | wgpu (planned) | — | Planned |
+| Android 8+ | MediaCodec / software | wgpu Vulkan + GLES fallback | AAudio | Available；SDR 已验证，extended-linear scRGB 等待 API 35 HDR 真机验收 |
 

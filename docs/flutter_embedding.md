@@ -13,7 +13,7 @@ There are two C ABI entrypoint families:
 - `ErikaHandle`: control and event API. Use this when the host owns its own
   presenter loop or only wants to probe/control playback.
 - `ErikaPresenterHandle`: presenter-owned API. Use this when Erika should
-  own `Player + MetalRenderer + audio output` and the host only supplies a
+  own `Player + renderer + audio output` and the host only supplies a
   native surface plus a display-tick callback.
 
 Both families are declared in `crates/erika_capi/include/erika.h`.
@@ -58,6 +58,23 @@ control and layout layer. On iOS the native side uses `UIWindow` plus a sibling
 Touch events pass through both native video strategies, so Flutter controls can
 remain above or around the video surface.
 
+## Android Surface Strategies
+
+On Android, both video widgets use the same native-view selector. SDR uses a
+real `TextureView` and has been verified. wgpu selects Vulkan with a bounded
+GLES fallback. Requesting `ErikaOutputMode.extendedLinear` instead creates a
+`SurfaceView` through `PlatformViewLink` and Hybrid Composition so FP16 scRGB
+does not pass through Flutter's texture-layer compositor. `Choreographer`
+drives the surface, while lifecycle, resize, audio focus, and output fallback
+remain owned by the plugin.
+
+The FP16 extended-linear scRGB implementation is complete, including
+`Rgba16Float` negotiation and `ADATASPACE_SCRGB_LINEAR` verification. Its active
+path is not yet claimed as device-validated: final acceptance still requires an
+API 35 HDR device. Unsupported displays, GLES, `TextureView`, missing FP16, or
+dataspace verification failures continue in SDR with a queryable fallback
+reason and explicit logs.
+
 ## iOS Build Path
 
 The iOS plugin links the Erika C ABI static library into the app through a
@@ -101,13 +118,16 @@ Useful for:
 Not the preferred HDR/EDR route because video enters Flutter's compositor. The
 C ABI reserves `erika_attach_flutter_texture` for this path.
 
-## wgpu Fallback
+## wgpu and Android
 
 The Apple HDR path remains native Metal, and Windows uses a native Direct3D 11
-renderer (D3D11VA zero-copy decode, HDR10 output). `wgpu` is the cross-platform
-fallback direction for Linux, Android, and non-HDR paths. The wgpu renderer has
-video frame rendering and danmaku compositing implemented, but does not yet
-support hardware zero-copy import or HDR/EDR output.
+renderer (D3D11VA zero-copy decode, HDR10 output). On Android, wgpu is the active
+renderer: Vulkan imports MediaCodec Surface frames through AHardwareBuffer, and
+software frames have an explicit CPU-upload fallback. Video, subtitles,
+danmaku, capture, and ArtCNN compute share this path. Vulkan can negotiate FP16
+extended-linear scRGB; GLES and failed capability negotiation explicitly fall
+back to SDR. Android SDR is verified, while the API 35 HDR-device active-path
+acceptance remains pending. Linux support remains planned.
 
 ## Dart API
 
@@ -132,7 +152,7 @@ await player.seek(Duration(seconds: 30));
 await player.setVolume(0.8);
 await player.setPlaybackRate(1.5);
 
-// Neural upscaler (anime luma 2x; macOS/iOS only)
+// Neural upscaler (anime luma 2x; Apple Metal / Android Vulkan)
 await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16); // off / artCnnC4F16 / artCnnC4F32
 final status = await player.getUpscalerStatus();
 // status.requestedMode  -- what was requested
@@ -168,14 +188,15 @@ so the host should poll `getUpscalerStatus` to drive its UI:
 | `off` | No mode requested. |
 | `building` | Kernels compiling (first use of a mode); frames render unscaled until ready. |
 | `inactive` | Mode requested but not applied this frame — e.g. the video is not displayed above its source resolution, or the source is HDR (upscaler runs on SDR luma only). |
-| `scalar` | Running on the portable scalar backend (non-Apple-Silicon GPUs). |
+| `scalar` | Running on the Metal scalar or wgpu compute backend. |
 | `simdgroupMatrix` | Running on the `simdgroup_matrix` backend (Apple Silicon default). |
 
 The upscaler only engages when the drawable shows the video larger than its
 source resolution, so a 1080p source in a 1080p (or smaller) view stays
-`inactive`. C4F16 is the real-time recommendation; C4F32 is higher quality but
-needs an M-Pro/Max-class GPU at 1080p input. See `docs/architecture.md` for the
-renderer-side design.
+`inactive`. C4F16 is the real-time recommendation. On Apple, C4F32 generally
+needs an M-Pro/Max-class GPU at 1080p input; on Android, both models use Vulkan
+compute and GLES reports an explicit `inactive` fallback. See
+`docs/architecture.md` for the renderer-side design.
 
 ## Ownership Rule
 

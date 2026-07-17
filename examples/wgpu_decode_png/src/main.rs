@@ -9,7 +9,7 @@ use std::process;
 use std::time::Duration;
 
 use erika::ffmpeg::{DecoderOutputFrame, Demuxer, Frame, StreamSelection};
-use erika::renderer::wgpu::WgpuRenderer;
+use erika::renderer::{VideoFramePayload, wgpu::WgpuRenderer};
 use erika::{PlayerVideoFrame, RendererBackend, TrackKind};
 
 fn main() {
@@ -96,7 +96,8 @@ fn render_frame(renderer: &mut WgpuRenderer, frame: Frame, out: &str) {
         frame.transfer_function(),
     );
     let player_frame = PlayerVideoFrame {
-        frame,
+        frame: VideoFramePayload::from_decoded(frame).expect("prepare renderer payload"),
+        decode_backend: erika::ffmpeg::DecoderBackend::Software,
         pts,
         media_time: pts.unwrap_or_default(),
         late_by: None,

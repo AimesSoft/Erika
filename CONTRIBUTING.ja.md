@@ -17,7 +17,7 @@ Erika は NipaPlay の自社開発再生コアです：demux/decode から GPU �
 crates/erika              コアエンジン（ライブラリ）
 crates/erika_capi         C ABI エクスポート層  →  erika.h
 crates/erika_ffmpeg_sys   FFmpeg bindgen バインディング
-packages/erika_flutter    Flutter プラグイン（macOS + iOS + Windows）
+packages/erika_flutter    Flutter プラグイン（macOS + iOS + Windows + Android）
 examples/                 検証 / スモーク / demo バイナリ
 xtask/                    ネイティブ依存ビルドのオーケストレーション
 docs/                     アーキテクチャと組み込みドキュメント
@@ -30,14 +30,14 @@ third_party/              ビルドされたネイティブ依存（gitignore �
 |-----------|------|
 | `core` | 公開設定 + `RendererBackend` trait、`PlatformSurface`、`RendererBackendPreference`。 |
 | `playback` | 再生エンジン：映像/音声 tick、マスタークロック、フレームスケジューラ、`VideoDecodePreference`。 |
-| `ffmpeg` | demux、decode、resample、seek；`DecoderBackend`（software / VideoToolbox / D3D11VA）。 |
+| `ffmpeg` | demux、decode、resample、seek；`DecoderBackend`（software / VideoToolbox / D3D11VA / MediaCodec）。 |
 | `audio` | `AudioOutputBackend` trait、リングバッファ、オーディオクロック。 |
-| `renderer` | `metal`（Apple）、`d3d11`（Windows）、`wgpu`（クロスプラットフォーム）、`pipeline`（backend 非依存の色/トーンマップ/scaler 判断）。 |
+| `renderer` | `metal`（Apple）、`d3d11`（Windows）、`wgpu`（クロスプラットフォームと Android）、`pipeline`（backend 非依存の色/トーンマップ/scaler 判断）。 |
 | `overlay` / `subtitle` / `text` | overlay タイムライン；SRT/WebVTT/ASS + libass；フォントプロバイダ。 |
 | `danmaku` | Bilibili XML/JSON 解析、衝突回避レイアウト、グリフアトラス。 |
 | `presenter` | `PresenterRuntime`——player + renderer + audio + overlay をつなぐ。`render_tick` が駆動する対象。 |
 | `source` | `MediaSource` trait——file + HTTP range。 |
-| `apple` / `windows` | プラットフォームグルー：CoreAudio/AudioQueue/VideoToolbox/Metal 相互運用；WASAPI。 |
+| `apple` / `windows` / `android` | プラットフォームグルー：CoreAudio/AudioQueue/VideoToolbox/Metal 相互運用；WASAPI；AAudio/MediaCodec/native-window 相互運用。 |
 
 ## ランタイムモデル
 
@@ -102,10 +102,14 @@ cargo fmt --all
 ```
 
 - プラットフォーム固有コードは `#[cfg]` でゲートされます。ある `cfg` ブランチを触ったら、
-  `macos` / `ios` / `windows` / フォールバックのすべてがコンパイルできる状態を保ちます。
+  `macos` / `ios` / `windows` / `android` / フォールバックのすべてがコンパイルできる状態を保ちます。
   ローカルでテストできないターゲットは CI に任せます。
-- 神経アップスケーラの重みは onnxruntime リファレンスと照合検証されます
-  （`tests/artcnn_upscaler.rs`）。再確認せずにカーネルを変更しないこと。
+- 神経アップスケーラの重みは `tests/artcnn_upscaler.rs`（Metal）と
+  `tests/wgpu_artcnn.rs`（tiled wgpu）で onnxruntime リファレンスと照合されます。
+  対応する path を再確認せずに kernel を変更しないこと。
+- Android SDR playback と明示的な output fallback は検証済みです。API 35 HDR device の
+  active path が `Rgba16Float + SCRGB_LINEAR` acceptance と recovery check を通るまで、
+  extended-linear scRGB を実機検証済みと表記しないこと。
 - native demo はスモークテストも兼ねます：
   `cargo run -p macos_native_demo -- --smoke-seconds 3 "$SAMPLE"`（および Windows 版）が
   パイプラインカウンタを出力します——変更後もハードデコードとゼロコピー相互運用が効くか
@@ -117,7 +121,7 @@ cargo fmt --all
 - **ホットパスや FFI 越しで `unwrap`/`panic` しない。** `Result` を返し、境界で
   `ErikaStatus` にマップする。
 - **周囲のコードに合わせる**——命名、コメント密度、既存の `cfg` 構造。プラットフォーム
-  グルーは `apple.rs` / `windows.rs` に置き、エンジン全体に散らさない。
+  グルーは `apple.rs` / `windows.rs` / `android.rs` に置き、エンジン全体に散らさない。
 - **ドキュメントを同期。** アーキテクチャ/組み込みドキュメントと三言語 README
   （`README.md` + `readme/*.md`、`docs/*.{md,zh.md,ja.md}`）はユーザに見える変更を反映する
   こと。基準ドキュメントは英語で、翻訳は後続。

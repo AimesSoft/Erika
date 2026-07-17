@@ -34,18 +34,14 @@ use objc2_metal::{
 };
 
 use crate::core::{LumaUpscalerBackendStatus, PlayerError, Result};
+use crate::renderer::artcnn::{
+    self, ArtCnnBackendOverride, ArtCnnExecutionPolicy, ArtCnnModel, FrameTokenCache, LayerOffsets,
+    MIDDLE_LAYER_COUNT as MID_LAYERS,
+};
 use crate::renderer::pipeline::LumaUpscalerMode;
 
 #[path = "upscaler_matmul.rs"]
 mod matmul;
-
-const BLOB_C4F16: &[u8] = include_bytes!("../../../assets/artcnn/artcnn_c4f16.bin");
-const BLOB_C4F32: &[u8] = include_bytes!("../../../assets/artcnn/artcnn_c4f32.bin");
-const BLOB_MAGIC: u32 = 0x4E4E_4341; // "ACNN"
-const BLOB_VERSION: u32 = 1;
-const BLOB_HEADER_BYTES: usize = 16;
-const TAPS: usize = 9;
-const MID_LAYERS: usize = 5;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -54,54 +50,6 @@ struct ConvParams {
     bias_offset: u32,
     relu: u32,
     add_residual: u32,
-}
-
-/// Per-layer offsets into the weights buffer, in `half4` units.
-struct LayerOffsets {
-    conv0_w: u32,
-    conv0_b: u32,
-    mid_w: [u32; MID_LAYERS],
-    mid_b: [u32; MID_LAYERS],
-    conv6_w: u32,
-    conv6_b: u32,
-}
-
-impl LayerOffsets {
-    fn for_slices(slices: u32) -> Self {
-        let mut cursor = 0u32;
-        let mut take = |len: u32| {
-            let offset = cursor;
-            cursor += len;
-            offset
-        };
-        let conv0_w = take(slices * TAPS as u32);
-        let conv0_b = take(slices);
-        let mut mid_w = [0u32; MID_LAYERS];
-        let mut mid_b = [0u32; MID_LAYERS];
-        for layer in 0..MID_LAYERS {
-            mid_w[layer] = take(slices * TAPS as u32 * slices * 4);
-            mid_b[layer] = take(slices);
-        }
-        let conv6_w = take(TAPS as u32 * slices * 4);
-        let conv6_b = take(1);
-        Self {
-            conv0_w,
-            conv0_b,
-            mid_w,
-            mid_b,
-            conv6_w,
-            conv6_b,
-        }
-    }
-
-    fn total_half4(slices: u32) -> usize {
-        let slices = slices as usize;
-        slices * TAPS
-            + slices
-            + MID_LAYERS * (slices * TAPS * slices * 4 + slices)
-            + TAPS * slices * 4
-            + 1
-    }
 }
 
 struct TexturePool {
@@ -113,7 +61,7 @@ struct TexturePool {
     /// Frame token of the upscale currently held in `output`. When a frame is
     /// presented for several vsync ticks, the cached output is reused instead
     /// of re-running the network.
-    cached_token: Option<u64>,
+    frame_cache: FrameTokenCache,
 }
 
 struct UpscalerResources {
@@ -180,80 +128,19 @@ pub struct LumaUpscaler {
     auto_matmul_fallbacks: u64,
 }
 
-fn blob_for_mode(mode: LumaUpscalerMode) -> Option<(&'static [u8], u32)> {
-    match mode {
-        LumaUpscalerMode::Off => None,
-        LumaUpscalerMode::ArtCnnC4F16 => Some((BLOB_C4F16, 4)),
-        LumaUpscalerMode::ArtCnnC4F32 => Some((BLOB_C4F32, 8)),
-    }
-}
-
-/// Per-thread output block size, tuned per variant: wider networks need more
-/// accumulator registers, so they use smaller blocks to avoid spilling.
-/// `ERIKA_SR_BLOCK=WxH` overrides both variants for tuning experiments.
-fn block_for_mode(mode: LumaUpscalerMode) -> (usize, usize) {
-    if let Ok(value) = std::env::var("ERIKA_SR_BLOCK") {
-        if let Some((x, y)) = value.split_once('x') {
-            if let (Ok(x), Ok(y)) = (x.parse::<usize>(), y.parse::<usize>()) {
-                if (1..=4).contains(&x) && (1..=4).contains(&y) {
-                    return (x, y);
-                }
-            }
-        }
-    }
-    match mode {
-        LumaUpscalerMode::Off => (1, 1),
-        LumaUpscalerMode::ArtCnnC4F16 => (2, 2),
-        LumaUpscalerMode::ArtCnnC4F32 => (2, 1),
-    }
-}
-
-fn read_u32(blob: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(blob[offset..offset + 4].try_into().expect("4 bytes"))
-}
-
 fn build_backend(
     device: &ProtocolObject<dyn MTLDevice>,
     mode: LumaUpscalerMode,
     matmul: bool,
 ) -> Result<BackendResources> {
+    let model = artcnn::model_for_mode(mode)?;
     if matmul {
-        let (payload, channels) = blob_payload(mode)?;
         Ok(BackendResources::Matmul(matmul::build_resources(
-            device, mode, payload, channels,
+            device, model,
         )?))
     } else {
-        Ok(BackendResources::Scalar(build_resources(device, mode)?))
+        Ok(BackendResources::Scalar(build_resources(device, model)?))
     }
-}
-
-/// Validates the blob header and returns (payload, channel count).
-fn blob_payload(mode: LumaUpscalerMode) -> Result<(&'static [u8], usize)> {
-    let (blob, slices) = blob_for_mode(mode)
-        .ok_or_else(|| PlayerError::Renderer("upscaler mode has no weights".to_string()))?;
-    if blob.len() < BLOB_HEADER_BYTES
-        || read_u32(blob, 0) != BLOB_MAGIC
-        || read_u32(blob, 4) != BLOB_VERSION
-    {
-        return Err(PlayerError::Renderer(
-            "ArtCNN weights blob has an unexpected header".to_string(),
-        ));
-    }
-    let feats = read_u32(blob, 8);
-    if feats != slices * 4 {
-        return Err(PlayerError::Renderer(format!(
-            "ArtCNN weights blob feature count {feats} does not match mode {mode:?}"
-        )));
-    }
-    let payload = &blob[BLOB_HEADER_BYTES..];
-    let expected_bytes = LayerOffsets::total_half4(slices) * 8;
-    if payload.len() != expected_bytes {
-        return Err(PlayerError::Renderer(format!(
-            "ArtCNN weights blob payload is {} bytes, expected {expected_bytes}",
-            payload.len()
-        )));
-    }
-    Ok((payload, feats as usize))
 }
 
 impl LumaUpscaler {
@@ -319,12 +206,12 @@ impl LumaUpscaler {
                 matmul: true,
                 fallback_to_scalar: false,
             },
-            UpscalerBackend::Auto => match std::env::var("ERIKA_SR_BACKEND").as_deref() {
-                Ok("scalar") => BackendChoice {
+            UpscalerBackend::Auto => match ArtCnnBackendOverride::from_environment() {
+                Some(ArtCnnBackendOverride::Scalar) => BackendChoice {
                     matmul: false,
                     fallback_to_scalar: false,
                 },
-                Ok("matmul") => BackendChoice {
+                Some(ArtCnnBackendOverride::Matrix) => BackendChoice {
                     matmul: true,
                     fallback_to_scalar: false,
                 },
@@ -485,14 +372,10 @@ impl LumaUpscaler {
         let width = luma.width();
         let height = luma.height();
         ensure_pool(resources, device, width, height, output_format)?;
-        let pool = resources.pool.as_mut().expect("pool built above");
-        if let (Some(token), Some(cached)) = (frame_token, pool.cached_token) {
-            if token == cached {
-                return Ok(Some(pool.output.clone()));
-            }
-        }
-        pool.cached_token = frame_token;
         let pool = resources.pool.as_ref().expect("pool built above");
+        if pool.frame_cache.matches(frame_token) {
+            return Ok(Some(pool.output.clone()));
+        }
 
         let Some(encoder) = command_buffer.computeCommandEncoder() else {
             return Err(PlayerError::Renderer(
@@ -566,8 +449,15 @@ impl LumaUpscaler {
         set_params(&encoder, &params);
         encoder.dispatchThreadgroups_threadsPerThreadgroup(grid, threadgroup);
 
+        let output = pool.output.clone();
         encoder.endEncoding();
-        Ok(Some(pool.output.clone()))
+        resources
+            .pool
+            .as_mut()
+            .expect("pool built above")
+            .frame_cache
+            .commit(frame_token);
+        Ok(Some(output))
     }
 }
 
@@ -584,32 +474,11 @@ fn set_params(encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>, params: &C
 
 fn build_resources(
     device: &ProtocolObject<dyn MTLDevice>,
-    mode: LumaUpscalerMode,
+    model: ArtCnnModel<'_>,
 ) -> Result<UpscalerResources> {
-    let (blob, slices) = blob_for_mode(mode)
-        .ok_or_else(|| PlayerError::Renderer("upscaler mode has no weights".to_string()))?;
-    if blob.len() < BLOB_HEADER_BYTES
-        || read_u32(blob, 0) != BLOB_MAGIC
-        || read_u32(blob, 4) != BLOB_VERSION
-    {
-        return Err(PlayerError::Renderer(
-            "ArtCNN weights blob has an unexpected header".to_string(),
-        ));
-    }
-    let feats = read_u32(blob, 8);
-    if feats != slices * 4 {
-        return Err(PlayerError::Renderer(format!(
-            "ArtCNN weights blob feature count {feats} does not match mode {mode:?}"
-        )));
-    }
-    let payload = &blob[BLOB_HEADER_BYTES..];
-    let expected_bytes = LayerOffsets::total_half4(slices) * 8;
-    if payload.len() != expected_bytes {
-        return Err(PlayerError::Renderer(format!(
-            "ArtCNN weights blob payload is {} bytes, expected {expected_bytes}",
-            payload.len()
-        )));
-    }
+    let mode = model.mode;
+    let slices = model.layout.feature_slices;
+    let payload = model.payload;
 
     let weights = unsafe {
         device.newBufferWithBytes_length_options(
@@ -621,7 +490,8 @@ fn build_resources(
     }
     .ok_or_else(|| PlayerError::Renderer("newBufferWithBytes returned nil".to_string()))?;
 
-    let (block_x, block_y) = block_for_mode(mode);
+    let policy = ArtCnnExecutionPolicy::for_mode(mode);
+    let (block_x, block_y) = policy.scalar_block;
     let source = UPSCALER_SHADER_TEMPLATE
         .replace("{SLICES}", &slices.to_string())
         .replace("{BX}", &block_x.to_string())
@@ -645,8 +515,8 @@ fn build_resources(
     Ok(UpscalerResources {
         mode,
         slices,
-        block: block_for_mode(mode),
-        offsets: LayerOffsets::for_slices(slices),
+        block: policy.scalar_block,
+        offsets: model.layout.layer_offsets,
         weights,
         conv0_pipeline: pipeline("artcnn_conv0")?,
         conv_pipeline: pipeline("artcnn_conv")?,
@@ -707,7 +577,7 @@ fn ensure_pool(
         output_format,
         features: [feature_texture()?, feature_texture()?, feature_texture()?],
         output,
-        cached_token: None,
+        frame_cache: FrameTokenCache::default(),
     });
     Ok(())
 }

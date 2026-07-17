@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -9,14 +10,17 @@ use thiserror::Error;
 
 use crate::audio::AudioClockSnapshot;
 use crate::core::{
-    MediaRequest, MediaSourceHint, TrackInfo, TrackKind, TrackSelection, VideoParams,
+    MediaRequest, MediaSourceHint, TrackInfo, TrackKind, TrackSelection, VideoDecoderEvent,
+    VideoFrameImportFailure, VideoParams,
 };
 use crate::ffmpeg::{
     self, AudioResampler, Decoder, DecoderBackend, DecoderConfig, DecoderOutputFrame, Demuxer,
     Frame, OwnedCodecParameters, PcmAudioFrame, PcmFormat, StreamSelection, SubtitleDecoder,
 };
 use crate::source::{self, source_from_uri_with_hint};
-use crate::subtitle::{DecodedSubtitleFrame, SubtitleTrackConfig, SubtitleTrackSource};
+use crate::subtitle::{
+    DecodedSubtitleFrame, SubtitleFontAttachment, SubtitleTrackConfig, SubtitleTrackSource,
+};
 use crate::trace;
 
 #[derive(Debug, Error)]
@@ -27,6 +31,8 @@ pub enum PlaybackError {
     Source(#[from] source::SourceError),
     #[error("no video track found")]
     NoVideoTrack,
+    #[error("video decoder unavailable: {reason}")]
+    VideoDecoderUnavailable { reason: String },
     #[error("selected decoder output is not a video frame")]
     UnexpectedDecoderOutput,
     #[error("no subtitle track found")]
@@ -37,6 +43,12 @@ pub enum PlaybackError {
     SubtitleTrackNotRemovable(i64),
     #[error("demux worker error: {0}")]
     DemuxWorker(String),
+    #[error("decoder EOF drain timed out: {reason}")]
+    DecoderDrainTimeout { reason: String },
+    #[error("decoder input stalled: {reason}")]
+    DecoderInputStall { reason: String },
+    #[error("audio output stalled at EOF: {reason}")]
+    AudioOutputStall { reason: String },
 }
 
 pub type Result<T> = std::result::Result<T, PlaybackError>;
@@ -52,6 +64,14 @@ const DEFAULT_AUDIO_LEAD_TIME: Duration = Duration::from_millis(120);
 const STREAMING_AUDIO_LEAD_TIME: Duration = Duration::from_millis(1500);
 const OUTPUT_AUDIO_CLOCK_STALE_TOLERANCE: Duration = Duration::from_millis(250);
 const DEMUX_PACKET_QUEUE_LIMIT: usize = 512;
+const SEEK_PREROLL_DECODE_TIME_BUDGET: Duration = Duration::from_millis(5);
+const SEEK_PREROLL_LOG_INTERVAL: Duration = Duration::from_millis(500);
+const VIDEO_PUMP_PACKET_BUDGET: usize = 64;
+const VIDEO_PUMP_TIME_BUDGET: Duration = Duration::from_millis(5);
+const AUDIO_SEEK_INVALID_PACKET_LIMIT: usize = 64;
+const DECODER_EOF_DRAIN_STALL_TIMEOUT: Duration = Duration::from_secs(2);
+const DECODER_INPUT_STALL_TIMEOUT: Duration = Duration::from_secs(2);
+const AUDIO_EOF_OUTPUT_STALL_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PlaybackQueueLimits {
@@ -468,6 +488,8 @@ pub enum VideoDecodePreference {
     Software,
     VideoToolbox,
     D3d11va,
+    MediaCodec,
+    MediaCodecByteBuffer,
 }
 
 impl VideoDecodePreference {
@@ -476,6 +498,8 @@ impl VideoDecodePreference {
             Self::Software => DecoderConfig::software(),
             Self::VideoToolbox => DecoderConfig::videotoolbox(),
             Self::D3d11va => DecoderConfig::d3d11va(),
+            Self::MediaCodec => DecoderConfig::mediacodec(),
+            Self::MediaCodecByteBuffer => DecoderConfig::mediacodec_byte_buffer(),
         }
     }
 }
@@ -494,7 +518,19 @@ impl Default for VideoDecodePreference {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+#[cfg(target_os = "android")]
+impl Default for VideoDecodePreference {
+    fn default() -> Self {
+        Self::MediaCodec
+    }
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+)))]
 impl Default for VideoDecodePreference {
     fn default() -> Self {
         Self::Software
@@ -542,25 +578,135 @@ impl OpenedMediaInfo {
     }
 }
 
+struct DecodedVideoFrame {
+    frame: Frame,
+    decode_backend: DecoderBackend,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MediaCodecFallbackTarget {
+    ByteBuffer,
+    Software,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MediaCodecSeekRoute {
+    Surface,
+    ByteBuffer,
+}
+
+impl MediaCodecSeekRoute {
+    fn decoder_config(self) -> DecoderConfig {
+        match self {
+            Self::Surface => DecoderConfig::mediacodec(),
+            Self::ByteBuffer => DecoderConfig::mediacodec_byte_buffer(),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Surface => "surface_ahardwarebuffer",
+            Self::ByteBuffer => "bytebuffer_cpu_upload",
+        }
+    }
+}
+
+impl DecodedVideoFrame {
+    fn pts(&self) -> Option<ffmpeg::PacketTimestamp> {
+        self.frame.pts()
+    }
+}
+
 pub struct PlaybackSession {
     demuxer: AsyncDemuxer,
     codec_parameters: Vec<OwnedCodecParameters>,
     video_decoder: Option<Decoder>,
+    video_decoder_unavailable_reason: Option<String>,
     audio_decoder: Option<Decoder>,
     subtitle_decoder: Option<SubtitleDecoder>,
+    subtitle_fonts: Arc<[SubtitleFontAttachment]>,
     external_subtitles: Vec<ExternalSubtitleSession>,
     audio_resampler: Option<AudioResampler>,
     audio_output: PcmFormat,
+    audio_output_active: bool,
     info: OpenedMediaInfo,
-    video_frames: VecDeque<Frame>,
+    video_frames: VecDeque<DecodedVideoFrame>,
     audio_frames: VecDeque<PcmAudioFrame>,
     subtitle_frames: VecDeque<DecodedSubtitleFrame>,
     pending_video_packets: VecDeque<ffmpeg::Packet>,
+    video_fallback_waiting_for_keyframe: bool,
+    audio_seek_waiting_for_valid_packet: bool,
+    audio_seek_dropped_packets: usize,
+    mediacodec_surface_disabled: bool,
+    video_decoder_fallbacks: u64,
+    video_decoder_events: VecDeque<VideoDecoderEvent>,
     queue_limits: PlaybackQueueLimits,
+    demux_eof: bool,
+    video_packet_stall_polls: u64,
+    video_packet_stall_logged: bool,
+    video_packet_stall_started_at: Option<Instant>,
+    eof_drain_polls: u64,
+    eof_drain_pending_logged: bool,
+    eof_drain_last_progress_at: Option<Instant>,
     eof: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DecoderDrainStatus {
+    frames: usize,
+    end_of_stream: bool,
+}
+
+impl DecoderDrainStatus {
+    fn made_progress(self) -> bool {
+        self.frames > 0 || self.end_of_stream
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DiscardedPlaybackQueues {
+    video_frames: usize,
+    audio_frames: usize,
+    subtitle_frames: usize,
+    video_packets: usize,
+}
+
+fn trace_discarded_playback_queues(
+    stage: &'static str,
+    discarded: DiscardedPlaybackQueues,
+    decoder_alive: bool,
+) {
+    if discarded == DiscardedPlaybackQueues::default() {
+        return;
+    }
+    trace::diagnostic(
+        serde_json::json!({
+            "event": "playback_queue_cleanup",
+            "stage": stage,
+            "discardedVideoFrames": discarded.video_frames,
+            "discardedAudioFrames": discarded.audio_frames,
+            "discardedSubtitleFrames": discarded.subtitle_frames,
+            "discardedVideoPackets": discarded.video_packets,
+            "decoderAliveDuringCleanup": decoder_alive,
+        })
+        .to_string(),
+    );
+}
+
 unsafe impl Send for PlaybackSession {}
+
+impl Drop for PlaybackSession {
+    fn drop(&mut self) {
+        // MediaCodec Surface frames keep an AVBuffer release callback that
+        // calls back into the decoder's MediaCodec context. Release every
+        // queued frame while video_decoder is still alive; Rust otherwise
+        // drops fields in declaration order and would destroy the decoder
+        // before video_frames.
+        let decoder_alive = self.video_decoder.is_some();
+        let discarded = self.discard_queued_frames_and_packets();
+        trace_discarded_playback_queues("session_drop", discarded, decoder_alive);
+    }
+}
 
 impl PlaybackSession {
     pub fn open(request: &MediaRequest, config: PlaybackSessionConfig) -> Result<Self> {
@@ -568,6 +714,7 @@ impl PlaybackSession {
         let source = source_from_uri_with_hint(&request.uri, request.source_hint)?;
         let mut demuxer = Demuxer::open_source(source)?;
         let mut probe = demuxer.probe().clone();
+        let subtitle_fonts = probe.subtitle_fonts.clone();
         let codec_parameters = probe
             .tracks
             .iter()
@@ -593,24 +740,196 @@ impl PlaybackSession {
             .map(|track| track.id as i32);
 
         let mut video_decoder = None;
+        let mut video_decoder_fallbacks = 0u64;
+        let mut video_decoder_events = VecDeque::new();
         let mut selected_streams = Vec::new();
         if let Some(stream_index) = selected_video_track {
             selected_streams.push(stream_index);
             let parameters = codec_parameters_for(&codec_parameters, stream_index)?;
+            let codec = parameters.codec_name();
             let decoder_config = config.video_decode.decoder_config();
             video_decoder = Some(
                 match Decoder::open_owned_with_config(parameters, decoder_config) {
-                    Ok(decoder) => decoder,
+                    Ok(decoder) => {
+                        let event = VideoDecoderEvent {
+                            stage: video_decoder_open_stage(decoder_config).to_string(),
+                            requested_backend: decoder_config.backend,
+                            previous_backend: None,
+                            active_backend: decoder.backend(),
+                            fallback_count: 0,
+                            codec: codec.clone(),
+                            pixel_format: None,
+                            line_sizes: None,
+                            reason: None,
+                        };
+                        trace::diagnostic(event.structured_message());
+                        video_decoder_events.push_back(event);
+                        decoder
+                    }
                     Err(error)
                         if should_fallback_video_decoder_open_error(decoder_config.backend) =>
                     {
-                        eprintln!(
-                            "Erika playback {:?} decoder open failed: {error}; falling back to software",
-                            decoder_config.backend
-                        );
-                        Decoder::open_owned_with_config(parameters, DecoderConfig::software())?
+                        let surface_error = error.to_string();
+                        if decoder_config.backend == DecoderBackend::MediaCodec
+                            && decoder_config.mediacodec_surface
+                        {
+                            match Decoder::open_owned_with_config(
+                                parameters,
+                                DecoderConfig::mediacodec_byte_buffer(),
+                            ) {
+                                Ok(decoder) => {
+                                    video_decoder_fallbacks = 1;
+                                    trace::diagnostic(
+                                        serde_json::json!({
+                                            "event": "android_mediacodec_fallback",
+                                            "stage": "open_surface_to_bytebuffer",
+                                            "fromMode": "surface_ahardwarebuffer",
+                                            "toMode": "bytebuffer_cpu_upload",
+                                            "fallbackCount": video_decoder_fallbacks,
+                                            "reason": surface_error.as_str(),
+                                        })
+                                        .to_string(),
+                                    );
+                                    let event = VideoDecoderEvent {
+                                        stage: "open_surface_to_bytebuffer".to_string(),
+                                        requested_backend: decoder_config.backend,
+                                        previous_backend: Some(decoder_config.backend),
+                                        active_backend: decoder.backend(),
+                                        fallback_count: video_decoder_fallbacks,
+                                        codec: codec.clone(),
+                                        pixel_format: None,
+                                        line_sizes: None,
+                                        reason: Some(surface_error),
+                                    };
+                                    trace::diagnostic(event.structured_message());
+                                    video_decoder_events.push_back(event);
+                                    decoder
+                                }
+                                Err(byte_buffer_error) => {
+                                    let byte_buffer_error = byte_buffer_error.to_string();
+                                    video_decoder_fallbacks = 2;
+                                    let decoder = match Decoder::open_owned_with_config(
+                                        parameters,
+                                        DecoderConfig::software(),
+                                    ) {
+                                        Ok(decoder) => decoder,
+                                        Err(software_error) => {
+                                            return Err(video_decoder_open_unavailable_error(
+                                                "open_software_failed",
+                                                decoder_config.backend,
+                                                stream_index,
+                                                codec.as_deref(),
+                                                video_decoder_fallbacks,
+                                                format!(
+                                                    "MediaCodec Surface open failed: {surface_error}; MediaCodec byte-buffer open failed: {byte_buffer_error}; software decoder open failed: {software_error}"
+                                                ),
+                                            ));
+                                        }
+                                    };
+                                    trace::diagnostic(
+                                        serde_json::json!({
+                                            "event": "android_mediacodec_fallback",
+                                            "stage": "open_bytebuffer_to_software",
+                                            "fromMode": "bytebuffer_cpu_upload",
+                                            "toMode": "software_decode",
+                                            "fallbackCount": video_decoder_fallbacks,
+                                            "surfaceReason": surface_error.as_str(),
+                                            "reason": byte_buffer_error.as_str(),
+                                        })
+                                        .to_string(),
+                                    );
+                                    let event = VideoDecoderEvent {
+                                        stage: "open_bytebuffer_to_software".to_string(),
+                                        requested_backend: decoder_config.backend,
+                                        previous_backend: Some(decoder_config.backend),
+                                        active_backend: decoder.backend(),
+                                        fallback_count: video_decoder_fallbacks,
+                                        codec: codec.clone(),
+                                        pixel_format: None,
+                                        line_sizes: None,
+                                        reason: Some(format!(
+                                            "surface mode failed: {surface_error}; MediaCodec byte-buffer mode failed: {byte_buffer_error}"
+                                        )),
+                                    };
+                                    trace::diagnostic(event.structured_message());
+                                    video_decoder_events.push_back(event);
+                                    decoder
+                                }
+                            }
+                        } else {
+                            video_decoder_fallbacks = 1;
+                            let decoder = match Decoder::open_owned_with_config(
+                                parameters,
+                                DecoderConfig::software(),
+                            ) {
+                                Ok(decoder) => decoder,
+                                Err(software_error) => {
+                                    let stage =
+                                        if decoder_config.backend == DecoderBackend::MediaCodec {
+                                            "open_bytebuffer_to_software_failed"
+                                        } else {
+                                            "open_software_fallback_failed"
+                                        };
+                                    return Err(video_decoder_open_unavailable_error(
+                                        stage,
+                                        decoder_config.backend,
+                                        stream_index,
+                                        codec.as_deref(),
+                                        video_decoder_fallbacks,
+                                        format!(
+                                            "{} decoder open failed: {surface_error}; software decoder open failed: {software_error}",
+                                            decoder_config.backend.as_str(),
+                                        ),
+                                    ));
+                                }
+                            };
+                            let stage = if decoder_config.backend == DecoderBackend::MediaCodec {
+                                #[cfg(target_os = "android")]
+                                trace::diagnostic(
+                                    serde_json::json!({
+                                        "event": "android_mediacodec_fallback",
+                                        "stage": "open_bytebuffer_to_software",
+                                        "fromMode": "bytebuffer_cpu_upload",
+                                        "toMode": "software_decode",
+                                        "surfaceZeroCopyDisabled": true,
+                                        "fallbackCount": video_decoder_fallbacks,
+                                        "reason": surface_error.as_str(),
+                                    })
+                                    .to_string(),
+                                );
+                                "open_bytebuffer_to_software"
+                            } else {
+                                "open"
+                            };
+                            let event = VideoDecoderEvent {
+                                stage: stage.to_string(),
+                                requested_backend: decoder_config.backend,
+                                previous_backend: Some(decoder_config.backend),
+                                active_backend: decoder.backend(),
+                                fallback_count: video_decoder_fallbacks,
+                                codec: codec.clone(),
+                                pixel_format: None,
+                                line_sizes: None,
+                                reason: Some(surface_error),
+                            };
+                            trace::diagnostic(event.structured_message());
+                            video_decoder_events.push_back(event);
+                            decoder
+                        }
                     }
-                    Err(error) => return Err(error.into()),
+                    Err(error) => {
+                        return Err(video_decoder_open_unavailable_error(
+                            video_decoder_open_stage(decoder_config),
+                            decoder_config.backend,
+                            stream_index,
+                            codec.as_deref(),
+                            video_decoder_fallbacks,
+                            format!(
+                                "{} decoder open failed: {error}",
+                                decoder_config.backend.as_str(),
+                            ),
+                        ));
+                    }
                 },
             );
         }
@@ -623,9 +942,10 @@ impl PlaybackSession {
         let mut subtitle_decoder = None;
         let mut opened_subtitle_track = None;
         if let Some(stream_index) = selected_subtitle_track {
-            match codec_parameters_for(&codec_parameters, stream_index)
-                .and_then(|parameters| SubtitleDecoder::open_owned(parameters).map_err(Into::into))
-            {
+            match codec_parameters_for(&codec_parameters, stream_index).and_then(|parameters| {
+                SubtitleDecoder::open_owned_with_fonts(parameters, subtitle_fonts.clone())
+                    .map_err(Into::into)
+            }) {
                 Ok(decoder) => {
                     selected_streams.push(stream_index);
                     opened_subtitle_track = Some(stream_index);
@@ -666,27 +986,114 @@ impl PlaybackSession {
             audio_output: audio_decoder.as_ref().map(|_| config.audio_output),
         };
 
+        let mediacodec_surface_disabled = video_decoder.as_ref().is_some_and(|decoder| {
+            decoder.backend() == DecoderBackend::MediaCodec && !decoder.uses_mediacodec_surface()
+        });
         Ok(Self {
             demuxer: AsyncDemuxer::spawn(demuxer),
             codec_parameters,
             video_decoder,
+            video_decoder_unavailable_reason: None,
             audio_decoder,
             subtitle_decoder,
+            subtitle_fonts,
             external_subtitles: Vec::new(),
             audio_resampler: None,
             audio_output: config.audio_output,
+            audio_output_active: true,
             info,
             video_frames: VecDeque::new(),
             audio_frames: VecDeque::new(),
             subtitle_frames: VecDeque::new(),
             pending_video_packets: VecDeque::new(),
+            video_fallback_waiting_for_keyframe: false,
+            audio_seek_waiting_for_valid_packet: false,
+            audio_seek_dropped_packets: 0,
+            mediacodec_surface_disabled,
+            video_decoder_fallbacks,
+            video_decoder_events,
             queue_limits,
+            demux_eof: false,
+            video_packet_stall_polls: 0,
+            video_packet_stall_logged: false,
+            video_packet_stall_started_at: None,
+            eof_drain_polls: 0,
+            eof_drain_pending_logged: false,
+            eof_drain_last_progress_at: None,
             eof: false,
         })
     }
 
     pub fn info(&self) -> &OpenedMediaInfo {
         &self.info
+    }
+
+    fn ensure_video_decoder_available(&self, stage: &str) -> Result<()> {
+        let Some(reason) = video_decoder_unavailability_reason(
+            self.info.selected_video_track,
+            self.video_decoder.is_some(),
+            self.video_decoder_unavailable_reason.as_deref(),
+        ) else {
+            return Ok(());
+        };
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "video_decoder_unavailable",
+                "stage": stage,
+                "selectedVideoTrack": self.info.selected_video_track,
+                "fallbackCount": self.video_decoder_fallbacks,
+                "reason": reason.as_str(),
+            })
+            .to_string(),
+        );
+        Err(PlaybackError::VideoDecoderUnavailable { reason })
+    }
+
+    fn mark_video_decoder_unavailable(&mut self, reason: String) {
+        self.video_decoder_unavailable_reason = Some(reason);
+        self.info.video_decode_backend = None;
+    }
+
+    fn clear_video_decoder_unavailable(&mut self) {
+        self.video_decoder_unavailable_reason = None;
+    }
+
+    fn discard_queued_frames_and_packets(&mut self) -> DiscardedPlaybackQueues {
+        let discarded = DiscardedPlaybackQueues {
+            video_frames: self.video_frames.len(),
+            audio_frames: self.audio_frames.len(),
+            subtitle_frames: self.subtitle_frames.len(),
+            video_packets: self.pending_video_packets.len(),
+        };
+        self.video_frames.clear();
+        self.audio_frames.clear();
+        self.subtitle_frames.clear();
+        self.pending_video_packets.clear();
+        discarded
+    }
+
+    fn discard_video_frames_and_packets(&mut self) -> DiscardedPlaybackQueues {
+        let discarded = DiscardedPlaybackQueues {
+            video_frames: self.video_frames.len(),
+            video_packets: self.pending_video_packets.len(),
+            ..DiscardedPlaybackQueues::default()
+        };
+        self.video_frames.clear();
+        self.pending_video_packets.clear();
+        discarded
+    }
+
+    fn selected_video_codec(&self) -> Option<String> {
+        let selected = self.info.selected_video_track?;
+        self.info
+            .tracks
+            .iter()
+            .find(|track| track.id == selected)
+            .and_then(|track| track.codec.clone())
+    }
+
+    fn take_video_decoder_events(&mut self) -> Vec<VideoDecoderEvent> {
+        self.video_decoder_events.drain(..).collect()
     }
 
     pub fn track_selection(&self) -> TrackSelection {
@@ -697,14 +1104,101 @@ impl PlaybackSession {
         self.eof
     }
 
-    pub fn next_video_frame(&mut self) -> Result<Option<Frame>> {
+    fn has_queued_video_frames(&self) -> bool {
+        !self.video_frames.is_empty()
+    }
+
+    fn has_queued_audio_frames(&self) -> bool {
+        !self.audio_frames.is_empty()
+    }
+
+    fn queued_audio_frame_count(&self) -> usize {
+        self.audio_frames.len()
+    }
+
+    fn discard_queued_audio_frames(&mut self) -> usize {
+        let discarded = self.audio_frames.len();
+        self.audio_frames.clear();
+        discarded
+    }
+
+    fn decoder_fallback_requires_replay(&self) -> bool {
+        self.demux_eof || self.eof
+    }
+
+    fn recover_from_video_input_stall(&mut self, reason: &str) -> Result<bool> {
+        let Some(target) = self.mediacodec_fallback_target() else {
+            return Ok(false);
+        };
+        match target {
+            MediaCodecFallbackTarget::ByteBuffer => self
+                .fallback_mediacodec_surface_to_byte_buffer(
+                    "decoder_input_stall",
+                    reason.to_string(),
+                    None,
+                )?,
+            MediaCodecFallbackTarget::Software => self.fallback_video_decoder_to_software(
+                "decoder_input_stall_bytebuffer_to_software",
+                reason.to_string(),
+                None,
+            )?,
+        }
+        Ok(true)
+    }
+
+    fn set_audio_output_active(&mut self, active: bool) -> usize {
+        if self.audio_output_active == active {
+            return 0;
+        }
+        self.audio_output_active = active;
+        if active {
+            0
+        } else {
+            self.discard_queued_audio_frames()
+        }
+    }
+
+    fn rebase_decoder_progress_watchdogs(&mut self) {
+        let now = Instant::now();
+        if self.video_packet_stall_started_at.is_some() {
+            self.video_packet_stall_started_at = Some(now);
+        }
+        if self.eof_drain_last_progress_at.is_some() {
+            self.eof_drain_last_progress_at = Some(now);
+        }
+    }
+
+    fn next_video_frame(&mut self) -> Result<Option<DecodedVideoFrame>> {
+        self.ensure_video_decoder_available("next_video_frame")?;
         if self.video_decoder.is_none() {
             return Ok(None);
         }
-        while self.video_frames.is_empty() && !self.eof {
+        let started = Instant::now();
+        let mut pumped_packets = 0usize;
+        while self.video_frames.is_empty()
+            && !self.eof
+            && pumped_packets < VIDEO_PUMP_PACKET_BUDGET
+            && started.elapsed() < VIDEO_PUMP_TIME_BUDGET
+        {
             if !self.pump_once()? {
                 break;
             }
+            pumped_packets = pumped_packets.saturating_add(1);
+        }
+        if trace::enabled()
+            && self.video_frames.is_empty()
+            && !self.eof
+            && (pumped_packets >= VIDEO_PUMP_PACKET_BUDGET
+                || started.elapsed() >= VIDEO_PUMP_TIME_BUDGET)
+        {
+            trace::log(format!(
+                "[erika-playback-trace] stage=session_video_pump_budget packets={} packet_budget={} queued_audio={} pending_video={} elapsed_ms={:.3}",
+                pumped_packets,
+                VIDEO_PUMP_PACKET_BUDGET,
+                self.audio_frames.len(),
+                self.pending_video_packets.len(),
+                started.elapsed().as_secs_f64() * 1000.0,
+            ));
         }
         Ok(self.video_frames.pop_front())
     }
@@ -906,8 +1400,10 @@ impl PlaybackSession {
             Some(id) => match self.subtitle_track_source(id)? {
                 SubtitleTrackSource::Embedded { stream_index } => {
                     let stream_index = stream_index_i32(stream_index, TrackKind::Subtitle, id)?;
-                    let decoder =
-                        SubtitleDecoder::open_owned(self.codec_parameters(stream_index)?)?;
+                    let decoder = SubtitleDecoder::open_owned_with_fonts(
+                        self.codec_parameters(stream_index)?,
+                        self.subtitle_fonts.clone(),
+                    )?;
                     self.subtitle_decoder = Some(decoder);
                     self.info.selected_subtitle_track = Some(id);
                 }
@@ -928,26 +1424,231 @@ impl PlaybackSession {
     }
 
     pub fn seek(&mut self, position: Duration) -> Result<()> {
+        self.seek_with_decoder_flush(position, true, true)
+    }
+
+    fn seek_for_stop(&mut self, position: Duration) -> Result<()> {
+        self.seek_with_decoder_flush_inner(position, true, true, false)
+    }
+
+    fn seek_with_decoder_flush(
+        &mut self,
+        position: Duration,
+        flush_audio_decoder: bool,
+        flush_subtitle_decoder: bool,
+    ) -> Result<()> {
+        self.seek_with_decoder_flush_inner(
+            position,
+            flush_audio_decoder,
+            flush_subtitle_decoder,
+            true,
+        )
+    }
+
+    fn seek_with_decoder_flush_inner(
+        &mut self,
+        position: Duration,
+        flush_audio_decoder: bool,
+        flush_subtitle_decoder: bool,
+        require_video_decoder: bool,
+    ) -> Result<()> {
+        if require_video_decoder {
+            self.ensure_video_decoder_available("seek")?;
+        }
         self.demuxer.seek(position)?;
-        if let Some(decoder) = &mut self.video_decoder {
-            decoder.flush();
+        // Release every queued frame before replacing a MediaCodec decoder.
+        // Surface frames retain AImage/AHardwareBuffer state tied to the old
+        // codec and `delay_flush=1`; keeping one alive across the replacement
+        // can stall the new route or exhaust its ImageReader immediately.
+        let decoder_alive = self.video_decoder.is_some();
+        let discarded = self.discard_queued_frames_and_packets();
+        trace_discarded_playback_queues("seek_before_decoder_transition", discarded, decoder_alive);
+        self.video_fallback_waiting_for_keyframe = self.video_decoder.is_some();
+        if self.video_fallback_waiting_for_keyframe {
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "video_seek_preroll",
+                    "stage": "waiting_for_keyframe",
+                    "targetSeconds": position.as_secs_f64(),
+                    "videoBackend": self.active_video_decoder_backend().map(DecoderBackend::as_str),
+                })
+                .to_string(),
+            );
         }
-        if let Some(decoder) = &mut self.audio_decoder {
-            decoder.flush();
+        self.audio_seek_waiting_for_valid_packet = self.audio_decoder.is_some();
+        self.audio_seek_dropped_packets = 0;
+
+        #[cfg(target_os = "android")]
+        let video_decoder_reopened = self.reopen_mediacodec_video_decoder_for_seek(position)?;
+        #[cfg(not(target_os = "android"))]
+        let video_decoder_reopened = false;
+
+        if !video_decoder_reopened {
+            // Non-MediaCodec backends retain their active route across seeks.
+            // Android MediaCodec is reopened above because CCodec flush is not
+            // reliable for Surface output (notably AV1 with delay_flush=1).
+            if let Some(decoder) = &mut self.video_decoder {
+                decoder.flush();
+            }
         }
-        if let Some(decoder) = &mut self.subtitle_decoder {
-            decoder.flush();
+        if flush_audio_decoder {
+            if let Some(decoder) = &mut self.audio_decoder {
+                decoder.flush();
+            }
+        }
+        if flush_subtitle_decoder {
+            if let Some(decoder) = &mut self.subtitle_decoder {
+                decoder.flush();
+            }
         }
         for external in &mut self.external_subtitles {
             external.seek(position)?;
         }
         self.audio_resampler = None;
-        self.pending_video_packets.clear();
-        self.video_frames.clear();
-        self.audio_frames.clear();
-        self.subtitle_frames.clear();
-        self.eof = false;
+        self.reset_eof_drain_state();
         Ok(())
+    }
+
+    #[cfg(target_os = "android")]
+    fn reopen_mediacodec_video_decoder_for_seek(&mut self, position: Duration) -> Result<bool> {
+        let Some(route) = mediacodec_seek_route(
+            self.active_video_decoder_backend(),
+            self.video_decoder
+                .as_ref()
+                .is_some_and(Decoder::uses_mediacodec_surface),
+        ) else {
+            return Ok(false);
+        };
+        let stream_index = self
+            .video_decoder
+            .as_ref()
+            .expect("MediaCodec decoder exists")
+            .stream_index();
+        let codec = codec_parameters_for(&self.codec_parameters, stream_index)?.codec_name();
+        self.mark_video_decoder_unavailable(format!(
+            "MediaCodec {} decoder is being reopened for seek to {:.3}s",
+            route.as_str(),
+            position.as_secs_f64(),
+        ));
+        let previous_decoder = self
+            .video_decoder
+            .take()
+            .expect("MediaCodec decoder exists");
+        // Destroy CCodec, its Surface, and the old AImageReader before opening
+        // the replacement. Keeping the previous decoder alive during open can
+        // itself exhaust scarce hardware codec instances and force a false
+        // fallback.
+        drop(previous_decoder);
+        let parameters = codec_parameters_for(&self.codec_parameters, stream_index)?;
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "android_mediacodec_seek_reopen",
+                "stage": "begin",
+                "mode": route.as_str(),
+                "codec": codec.as_deref(),
+                "targetSeconds": position.as_secs_f64(),
+            })
+            .to_string(),
+        );
+
+        match Decoder::open_owned_with_config(parameters, route.decoder_config()) {
+            Ok(decoder) => {
+                self.video_decoder = Some(decoder);
+                self.info.video_decode_backend = Some(DecoderBackend::MediaCodec);
+                self.clear_video_decoder_unavailable();
+                self.mediacodec_surface_disabled = route == MediaCodecSeekRoute::ByteBuffer;
+                let event = VideoDecoderEvent {
+                    stage: match route {
+                        MediaCodecSeekRoute::Surface => "seek_reopen_surface",
+                        MediaCodecSeekRoute::ByteBuffer => "seek_reopen_bytebuffer",
+                    }
+                    .to_string(),
+                    requested_backend: DecoderBackend::MediaCodec,
+                    previous_backend: Some(DecoderBackend::MediaCodec),
+                    active_backend: DecoderBackend::MediaCodec,
+                    fallback_count: self.video_decoder_fallbacks,
+                    codec: codec.clone(),
+                    pixel_format: None,
+                    line_sizes: None,
+                    reason: None,
+                };
+                trace::diagnostic(event.structured_message());
+                self.video_decoder_events.push_back(event);
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "android_mediacodec_seek_reopen",
+                        "stage": "ready",
+                        "mode": route.as_str(),
+                        "codec": codec.as_deref(),
+                        "targetSeconds": position.as_secs_f64(),
+                    })
+                    .to_string(),
+                );
+            }
+            Err(reopen_error) => {
+                let reopen_reason = reopen_error.to_string();
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "android_mediacodec_seek_reopen",
+                        "stage": "route_open_failed",
+                        "mode": route.as_str(),
+                        "codec": codec.as_deref(),
+                        "targetSeconds": position.as_secs_f64(),
+                        "reason": reopen_reason.as_str(),
+                    })
+                    .to_string(),
+                );
+                let recovery = match route {
+                    MediaCodecSeekRoute::Surface => self
+                        .fallback_mediacodec_surface_to_byte_buffer(
+                            "seek_reopen",
+                            reopen_reason.clone(),
+                            None,
+                        ),
+                    MediaCodecSeekRoute::ByteBuffer => self.fallback_video_decoder_to_software(
+                        "seek_reopen_bytebuffer_to_software",
+                        reopen_reason.clone(),
+                        None,
+                    ),
+                };
+                if let Err(recovery_error) = recovery {
+                    trace::diagnostic(
+                        serde_json::json!({
+                            "event": "android_mediacodec_seek_reopen",
+                            "stage": "fallback_failed",
+                            "mode": route.as_str(),
+                            "codec": codec.as_deref(),
+                            "targetSeconds": position.as_secs_f64(),
+                            "routeReason": reopen_reason.as_str(),
+                            "reason": recovery_error.to_string(),
+                        })
+                        .to_string(),
+                    );
+                    return Err(recovery_error);
+                }
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "android_mediacodec_seek_reopen",
+                        "stage": "fallback_ready",
+                        "requestedMode": route.as_str(),
+                        "activeBackend": self.active_video_decoder_backend().map(DecoderBackend::as_str),
+                        "activeMode": self.video_decoder.as_ref().and_then(|decoder| {
+                            (decoder.backend() == DecoderBackend::MediaCodec).then_some(
+                                if decoder.uses_mediacodec_surface() {
+                                    "surface_ahardwarebuffer"
+                                } else {
+                                    "bytebuffer_cpu_upload"
+                                },
+                            )
+                        }),
+                        "codec": codec.as_deref(),
+                        "targetSeconds": position.as_secs_f64(),
+                    })
+                    .to_string(),
+                );
+            }
+        }
+        Ok(true)
     }
 
     fn pump_external_subtitles(&mut self, track_id: i64, media_time: Duration) -> Result<()> {
@@ -1038,6 +1739,7 @@ impl PlaybackSession {
             self.demuxer
                 .set_stream_selection(StreamSelection::only(streams))?;
         }
+        self.reset_eof_drain_state();
         Ok(())
     }
 
@@ -1054,13 +1756,23 @@ impl PlaybackSession {
         if self.route_pending_video_packets()? {
             return Ok(true);
         }
+        if !self.pending_video_packets.is_empty() {
+            return Ok(false);
+        }
+        if self.audio_output_active && self.audio_frames.len() >= self.queue_limits.audio_frames {
+            return Ok(false);
+        }
+        if self.demux_eof {
+            return self.finish_decoders();
+        }
         match self.demuxer.poll()? {
             PumpInput::Packet(packet) => {
                 self.route_packet(packet)?;
                 Ok(true)
             }
             PumpInput::Eof => {
-                self.finish_decoders()?;
+                self.demux_eof = true;
+                let _ = self.finish_decoders()?;
                 Ok(true)
             }
             PumpInput::Empty => Ok(false),
@@ -1086,12 +1798,7 @@ impl PlaybackSession {
             .as_ref()
             .is_some_and(|decoder| packet.stream_index() == decoder.stream_index())
         {
-            {
-                let decoder = self.audio_decoder.as_mut().expect("audio decoder exists");
-                decoder.send_packet(&packet)?;
-            }
-            self.drain_audio_frames()?;
-            trim_audio_queue(&mut self.audio_frames, self.queue_limits.audio_frames);
+            self.route_audio_packet(packet)?;
             return Ok(());
         }
 
@@ -1112,48 +1819,592 @@ impl PlaybackSession {
         Ok(())
     }
 
+    fn route_audio_packet(&mut self, packet: ffmpeg::Packet) -> Result<()> {
+        let mut send_result = self
+            .audio_decoder
+            .as_mut()
+            .expect("audio decoder exists")
+            .send_packet(&packet);
+        if matches!(&send_result, Err(error) if error.is_again()) {
+            self.drain_audio_frames()?;
+            send_result = self
+                .audio_decoder
+                .as_mut()
+                .expect("audio decoder exists")
+                .send_packet(&packet);
+        }
+
+        match send_result {
+            Ok(()) => {
+                if self.audio_seek_dropped_packets > 0 {
+                    trace::diagnostic(
+                        serde_json::json!({
+                            "event": "audio_decoder_recovery",
+                            "stage": "seek_preroll_ready",
+                            "stream": packet.stream_index(),
+                            "droppedPackets": self.audio_seek_dropped_packets,
+                            "packetPtsSeconds": packet
+                                .pts()
+                                .map(ffmpeg::PacketTimestamp::seconds),
+                        })
+                        .to_string(),
+                    );
+                }
+                self.audio_seek_waiting_for_valid_packet = false;
+                self.audio_seek_dropped_packets = 0;
+                self.drain_audio_frames()?;
+                Ok(())
+            }
+            Err(error)
+                if self.audio_seek_waiting_for_valid_packet
+                    && self.audio_seek_dropped_packets < AUDIO_SEEK_INVALID_PACKET_LIMIT
+                    && error.is_invalid_argument() =>
+            {
+                self.audio_seek_dropped_packets = self.audio_seek_dropped_packets.saturating_add(1);
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "audio_decoder_recovery",
+                        "stage": "seek_preroll_packet_dropped",
+                        "stream": packet.stream_index(),
+                        "droppedPackets": self.audio_seek_dropped_packets,
+                        "dropLimit": AUDIO_SEEK_INVALID_PACKET_LIMIT,
+                        "packetPtsSeconds": packet.pts().map(ffmpeg::PacketTimestamp::seconds),
+                        "packetDtsSeconds": packet.dts().map(ffmpeg::PacketTimestamp::seconds),
+                        "packetDurationSeconds": packet.duration_seconds(),
+                        "packetBytes": packet.size(),
+                        "reason": error.to_string(),
+                    })
+                    .to_string(),
+                );
+                Ok(())
+            }
+            Err(error) => {
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "decoder_packet_failure",
+                        "kind": "audio",
+                        "stream": packet.stream_index(),
+                        "seekPreroll": self.audio_seek_waiting_for_valid_packet,
+                        "seekPrerollDroppedPackets": self.audio_seek_dropped_packets,
+                        "packetPtsSeconds": packet.pts().map(ffmpeg::PacketTimestamp::seconds),
+                        "packetDtsSeconds": packet.dts().map(ffmpeg::PacketTimestamp::seconds),
+                        "packetDurationSeconds": packet.duration_seconds(),
+                        "packetBytes": packet.size(),
+                        "reason": error.to_string(),
+                    })
+                    .to_string(),
+                );
+                Err(error.into())
+            }
+        }
+    }
+
     fn route_pending_video_packets(&mut self) -> Result<bool> {
         let mut routed_any = false;
         while !self.should_defer_video_packet() {
             let Some(packet) = self.pending_video_packets.pop_front() else {
+                self.reset_video_packet_stall_state();
                 return Ok(routed_any);
             };
             if !self.route_video_packet(packet)? {
+                self.observe_video_packet_stall()?;
                 return Ok(routed_any);
             }
+            self.reset_video_packet_stall_state();
             routed_any = true;
         }
+        // D3D11VA deliberately holds packets while its bounded frame queue is
+        // full. That is consumer backpressure, not a decoder send/receive
+        // deadlock, so a previous codec-stall deadline must not leak into it.
+        self.reset_video_packet_stall_state();
         Ok(routed_any)
     }
 
+    fn observe_video_packet_stall(&mut self) -> Result<()> {
+        self.video_packet_stall_polls = self.video_packet_stall_polls.saturating_add(1);
+        let now = Instant::now();
+        let started_at = *self.video_packet_stall_started_at.get_or_insert(now);
+        let stalled_for = now.saturating_duration_since(started_at);
+        if !self.video_packet_stall_logged {
+            self.video_packet_stall_logged = true;
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "decoder_input_stall",
+                    "stage": "pending",
+                    "polls": self.video_packet_stall_polls,
+                    "pendingVideoPackets": self.pending_video_packets.len(),
+                    "demuxEof": self.demux_eof,
+                    "videoBackend": self.active_video_decoder_backend().map(DecoderBackend::as_str),
+                    "retryOwner": "playback_pump",
+                })
+                .to_string(),
+            );
+        }
+        if stalled_for < DECODER_INPUT_STALL_TIMEOUT {
+            return Ok(());
+        }
+
+        let packet = self.pending_video_packets.front();
+        let packet_pts = packet.and_then(ffmpeg::Packet::pts);
+        let packet_dts = packet.and_then(ffmpeg::Packet::dts);
+        let reason = format!(
+            "video packet remained rejected for {:.3}s after {} polls (pending_packets={}, demux_eof={}, video_backend={}, packet_pts={:?}, packet_dts={:?}, packet_key={}, packet_bytes={})",
+            stalled_for.as_secs_f64(),
+            self.video_packet_stall_polls,
+            self.pending_video_packets.len(),
+            self.demux_eof,
+            self.active_video_decoder_backend()
+                .map(DecoderBackend::as_str)
+                .unwrap_or("none"),
+            packet_pts.map(ffmpeg::PacketTimestamp::seconds),
+            packet_dts.map(ffmpeg::PacketTimestamp::seconds),
+            packet.is_some_and(ffmpeg::Packet::is_key),
+            packet.map_or(0, ffmpeg::Packet::size),
+        );
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "decoder_input_stall",
+                "stage": "timeout",
+                "polls": self.video_packet_stall_polls,
+                "stalledSeconds": stalled_for.as_secs_f64(),
+                "pendingVideoPackets": self.pending_video_packets.len(),
+                "demuxEof": self.demux_eof,
+                "videoBackend": self.active_video_decoder_backend().map(DecoderBackend::as_str),
+                "packetPtsSeconds": packet_pts.map(ffmpeg::PacketTimestamp::seconds),
+                "packetDtsSeconds": packet_dts.map(ffmpeg::PacketTimestamp::seconds),
+                "packetKey": packet.is_some_and(ffmpeg::Packet::is_key),
+                "packetBytes": packet.map_or(0, ffmpeg::Packet::size),
+                "reason": reason.as_str(),
+            })
+            .to_string(),
+        );
+        Err(PlaybackError::DecoderInputStall { reason })
+    }
+
+    fn reset_video_packet_stall_state(&mut self) {
+        self.video_packet_stall_polls = 0;
+        self.video_packet_stall_logged = false;
+        self.video_packet_stall_started_at = None;
+    }
+
     fn route_video_packet(&mut self, packet: ffmpeg::Packet) -> Result<bool> {
+        if self.video_fallback_waiting_for_keyframe {
+            if !packet.is_key() {
+                return Ok(true);
+            }
+            self.video_fallback_waiting_for_keyframe = false;
+            let active_backend = self
+                .active_video_decoder_backend()
+                .unwrap_or(DecoderBackend::Software);
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "video_decoder_recovery_keyframe",
+                    "backend": active_backend.as_str(),
+                    "mediaCodecMode": self.video_decoder.as_ref().and_then(|decoder| {
+                        (decoder.backend() == DecoderBackend::MediaCodec).then_some(
+                            if decoder.uses_mediacodec_surface() {
+                                "surface_ahardwarebuffer"
+                            } else {
+                                "bytebuffer_cpu_upload"
+                            },
+                        )
+                    }),
+                    "stream": packet.stream_index(),
+                })
+                .to_string(),
+            );
+        }
+
         let video_frame_limit = self.active_video_frame_queue_limit();
         let before_frames = self.video_frames.len();
+        match self.route_video_packet_with_active_decoder(&packet, video_frame_limit) {
+            Ok(Some(progress)) => Ok(progress),
+            Ok(None) => {
+                self.pending_video_packets.push_front(packet);
+                Ok(self.video_frames.len() > before_frames)
+            }
+            Err(error)
+                if self.active_video_decoder_backend() == Some(DecoderBackend::MediaCodec) =>
+            {
+                let reason = error.to_string();
+                match self.mediacodec_fallback_target() {
+                    Some(MediaCodecFallbackTarget::ByteBuffer) => self
+                        .fallback_mediacodec_surface_to_byte_buffer(
+                            "decode",
+                            reason.clone(),
+                            None,
+                        )?,
+                    Some(MediaCodecFallbackTarget::Software) => self
+                        .fallback_video_decoder_to_software(
+                            "decode_bytebuffer_to_software",
+                            reason.clone(),
+                            None,
+                        )?,
+                    None => return Err(error),
+                }
+                if !packet.is_key() {
+                    self.video_fallback_waiting_for_keyframe = true;
+                    let active_backend = self
+                        .active_video_decoder_backend()
+                        .unwrap_or(DecoderBackend::Software);
+                    trace::diagnostic(
+                        serde_json::json!({
+                            "event": "video_decoder_recovery_waiting_for_keyframe",
+                            "backend": active_backend.as_str(),
+                            "stream": packet.stream_index(),
+                            "reason": reason,
+                        })
+                        .to_string(),
+                    );
+                    return Ok(true);
+                }
+                match self.route_video_packet_with_active_decoder(&packet, video_frame_limit)? {
+                    Some(progress) => Ok(progress),
+                    None => {
+                        self.pending_video_packets.push_front(packet);
+                        Ok(self.video_frames.len() > before_frames)
+                    }
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn route_video_packet_with_active_decoder(
+        &mut self,
+        packet: &ffmpeg::Packet,
+        video_frame_limit: usize,
+    ) -> Result<Option<bool>> {
         let decoder = self.video_decoder.as_mut().expect("video decoder exists");
-        match decoder.send_packet(&packet) {
+        match decoder.send_packet(packet) {
             Ok(()) => {
                 drain_video_frames(decoder, &mut self.video_frames)?;
                 trim_video_queue(&mut self.video_frames, video_frame_limit);
-                Ok(true)
+                Ok(Some(true))
             }
             Err(error) if error.is_again() => {
                 drain_video_frames(decoder, &mut self.video_frames)?;
                 trim_video_queue(&mut self.video_frames, video_frame_limit);
-                match decoder.send_packet(&packet) {
+                match decoder.send_packet(packet) {
                     Ok(()) => {
                         drain_video_frames(decoder, &mut self.video_frames)?;
                         trim_video_queue(&mut self.video_frames, video_frame_limit);
-                        Ok(true)
+                        Ok(Some(true))
                     }
-                    Err(error) if error.is_again() => {
-                        self.pending_video_packets.push_front(packet);
-                        Ok(self.video_frames.len() > before_frames)
-                    }
+                    Err(error) if error.is_again() => Ok(None),
                     Err(error) => Err(error.into()),
                 }
             }
             Err(error) => Err(error.into()),
         }
+    }
+
+    fn active_video_decoder_backend(&self) -> Option<DecoderBackend> {
+        self.video_decoder.as_ref().map(Decoder::backend)
+    }
+
+    fn active_or_selected_video_stream_index(&self) -> Result<i32> {
+        if let Some(decoder) = &self.video_decoder {
+            return Ok(decoder.stream_index());
+        }
+        let track_id = self
+            .info
+            .selected_video_track
+            .ok_or(PlaybackError::NoVideoTrack)?;
+        stream_index_i32(track_id, TrackKind::Video, track_id)
+    }
+
+    fn mediacodec_fallback_target(&self) -> Option<MediaCodecFallbackTarget> {
+        mediacodec_fallback_target(
+            self.active_video_decoder_backend(),
+            self.video_decoder
+                .as_ref()
+                .is_some_and(Decoder::uses_mediacodec_surface),
+            self.mediacodec_surface_disabled,
+        )
+    }
+
+    fn fallback_mediacodec_surface_to_byte_buffer(
+        &mut self,
+        stage: &str,
+        reason: String,
+        import_failure: Option<&VideoFrameImportFailure>,
+    ) -> Result<()> {
+        let stream_index = self.active_or_selected_video_stream_index()?;
+        let codec = codec_parameters_for(&self.codec_parameters, stream_index)?.codec_name();
+        self.mark_video_decoder_unavailable(format!(
+            "{stage}: MediaCodec Surface decoder retired before byte-buffer fallback: {reason}"
+        ));
+        self.mediacodec_surface_disabled = true;
+        let discarded = self.discard_video_frames_and_packets();
+        let previous_decoder = self.video_decoder.take();
+        let previous_backend = previous_decoder.as_ref().map(Decoder::backend);
+        let previous_surface = previous_decoder
+            .as_ref()
+            .is_some_and(Decoder::uses_mediacodec_surface);
+        drop(previous_decoder);
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "video_decoder_retired",
+                "stage": format!("{stage}_surface_to_bytebuffer"),
+                "previousBackend": previous_backend.map(DecoderBackend::as_str),
+                "previousMediaCodecSurface": previous_surface,
+                "discardedVideoFrames": discarded.video_frames,
+                "discardedAudioFrames": discarded.audio_frames,
+                "discardedSubtitleFrames": discarded.subtitle_frames,
+                "discardedVideoPackets": discarded.video_packets,
+                "fallbackGeneration": import_failure.map(|failure| failure.generation),
+                "reason": reason.as_str(),
+            })
+            .to_string(),
+        );
+        let parameters = codec_parameters_for(&self.codec_parameters, stream_index)?;
+        match Decoder::open_owned_with_config(parameters, DecoderConfig::mediacodec_byte_buffer()) {
+            Ok(decoder) => {
+                self.video_decoder = Some(decoder);
+                self.info.video_decode_backend = Some(DecoderBackend::MediaCodec);
+                self.clear_video_decoder_unavailable();
+                self.video_decoder_fallbacks = self.video_decoder_fallbacks.saturating_add(1);
+                let transition_stage = format!("{stage}_surface_to_bytebuffer");
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "android_mediacodec_fallback",
+                        "stage": transition_stage.as_str(),
+                        "fromMode": "surface_ahardwarebuffer",
+                        "toMode": "bytebuffer_cpu_upload",
+                        "surfaceZeroCopyDisabled": true,
+                        "fallbackCount": self.video_decoder_fallbacks,
+                        "reason": reason.as_str(),
+                    })
+                    .to_string(),
+                );
+                let event = VideoDecoderEvent {
+                    stage: transition_stage,
+                    requested_backend: DecoderBackend::MediaCodec,
+                    previous_backend: Some(DecoderBackend::MediaCodec),
+                    active_backend: DecoderBackend::MediaCodec,
+                    fallback_count: self.video_decoder_fallbacks,
+                    codec: import_failure
+                        .and_then(|failure| failure.codec.clone())
+                        .or(codec.clone()),
+                    pixel_format: import_failure.and_then(|failure| failure.pixel_format.clone()),
+                    line_sizes: import_failure.map(|failure| failure.line_sizes),
+                    reason: Some(reason),
+                };
+                trace::diagnostic(event.structured_message());
+                self.video_decoder_events.push_back(event);
+                Ok(())
+            }
+            Err(byte_buffer_error) => {
+                self.video_decoder_fallbacks = self.video_decoder_fallbacks.saturating_add(1);
+                let byte_buffer_error = byte_buffer_error.to_string();
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "android_mediacodec_fallback",
+                        "stage": format!("{stage}_bytebuffer_open_failed"),
+                        "fromMode": "surface_ahardwarebuffer",
+                        "attemptedMode": "bytebuffer_cpu_upload",
+                        "toMode": "software_decode",
+                        "surfaceZeroCopyDisabled": true,
+                        "fallbackCount": self.video_decoder_fallbacks,
+                        "surfaceReason": reason.as_str(),
+                        "reason": byte_buffer_error.as_str(),
+                    })
+                    .to_string(),
+                );
+                self.fallback_video_decoder_to_software(
+                    &format!("{stage}_bytebuffer_to_software"),
+                    format!(
+                        "MediaCodec surface mode failed: {reason}; MediaCodec byte-buffer mode failed: {byte_buffer_error}"
+                    ),
+                    import_failure,
+                )
+            }
+        }
+    }
+
+    fn fallback_video_decoder_to_software(
+        &mut self,
+        stage: &str,
+        reason: String,
+        import_failure: Option<&VideoFrameImportFailure>,
+    ) -> Result<()> {
+        let stream_index = self.active_or_selected_video_stream_index()?;
+        let codec = codec_parameters_for(&self.codec_parameters, stream_index)?.codec_name();
+        let previous_backend = self
+            .video_decoder
+            .as_ref()
+            .map(Decoder::backend)
+            .unwrap_or(DecoderBackend::MediaCodec);
+        let previous_surface = self
+            .video_decoder
+            .as_ref()
+            .is_some_and(Decoder::uses_mediacodec_surface);
+        self.mark_video_decoder_unavailable(format!(
+            "{stage}: {} decoder retired before software fallback: {reason}",
+            previous_backend.as_str(),
+        ));
+        let discarded = self.discard_video_frames_and_packets();
+        let previous_decoder = self.video_decoder.take();
+        drop(previous_decoder);
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "video_decoder_retired",
+                "stage": stage,
+                "previousBackend": previous_backend.as_str(),
+                "previousMediaCodecSurface": previous_surface,
+                "discardedVideoFrames": discarded.video_frames,
+                "discardedAudioFrames": discarded.audio_frames,
+                "discardedSubtitleFrames": discarded.subtitle_frames,
+                "discardedVideoPackets": discarded.video_packets,
+                "fallbackGeneration": import_failure.map(|failure| failure.generation),
+                "reason": reason.as_str(),
+            })
+            .to_string(),
+        );
+        let parameters = codec_parameters_for(&self.codec_parameters, stream_index)?;
+        self.video_decoder_fallbacks = self.video_decoder_fallbacks.saturating_add(1);
+        let decoder = match Decoder::open_owned_with_config(parameters, DecoderConfig::software()) {
+            Ok(decoder) => decoder,
+            Err(error) => {
+                let decoder_error = error.to_string();
+                let unavailable_reason =
+                    format!("{stage}: {reason}; software decoder open failed: {decoder_error}");
+                self.mark_video_decoder_unavailable(unavailable_reason.clone());
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "video_decoder_unavailable",
+                        "stage": stage,
+                        "requestedBackend": DecoderBackend::MediaCodec.as_str(),
+                        "previousBackend": previous_backend.as_str(),
+                        "previousMediaCodecSurface": previous_surface,
+                        "selectedVideoTrack": self.info.selected_video_track,
+                        "codec": codec.as_deref(),
+                        "fallbackGeneration": import_failure.map(|failure| failure.generation),
+                        "fallbackCount": self.video_decoder_fallbacks,
+                        "reason": unavailable_reason.as_str(),
+                    })
+                    .to_string(),
+                );
+                return Err(PlaybackError::VideoDecoderUnavailable {
+                    reason: unavailable_reason,
+                });
+            }
+        };
+        self.video_decoder = Some(decoder);
+        self.info.video_decode_backend = Some(DecoderBackend::Software);
+        self.clear_video_decoder_unavailable();
+        let event = VideoDecoderEvent {
+            stage: stage.to_string(),
+            requested_backend: DecoderBackend::MediaCodec,
+            previous_backend: Some(previous_backend),
+            active_backend: DecoderBackend::Software,
+            fallback_count: self.video_decoder_fallbacks,
+            codec: import_failure
+                .and_then(|failure| failure.codec.clone())
+                .or(codec),
+            pixel_format: import_failure.and_then(|failure| failure.pixel_format.clone()),
+            line_sizes: import_failure.map(|failure| failure.line_sizes),
+            reason: Some(reason),
+        };
+        trace::diagnostic(event.structured_message());
+        self.video_decoder_events.push_back(event);
+        Ok(())
+    }
+
+    fn fallback_after_video_import_failure(
+        &mut self,
+        stage: &str,
+        failure: &VideoFrameImportFailure,
+    ) -> Result<bool> {
+        if failure.decode_backend != DecoderBackend::MediaCodec {
+            return Ok(false);
+        }
+        let active_backend = self.active_video_decoder_backend();
+        if active_backend != Some(DecoderBackend::MediaCodec) {
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "video_frame_import_failure",
+                    "stage": "stale_backend_feedback_ignored",
+                    "failedBackend": failure.decode_backend.as_str(),
+                    "activeBackend": active_backend.map(DecoderBackend::as_str),
+                    "generation": failure.generation,
+                    "reason": failure.reason.as_str(),
+                })
+                .to_string(),
+            );
+            return Ok(false);
+        }
+        let active_surface = self
+            .video_decoder
+            .as_ref()
+            .is_some_and(Decoder::uses_mediacodec_surface);
+        if failure.mediacodec_surface != active_surface {
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "video_frame_import_failure",
+                    "stage": "stale_route_feedback_ignored",
+                    "failedMediaCodecSurface": failure.mediacodec_surface,
+                    "activeMediaCodecSurface": active_surface,
+                    "generation": failure.generation,
+                    "reason": failure.reason.as_str(),
+                })
+                .to_string(),
+            );
+            return Ok(false);
+        }
+        match self.mediacodec_fallback_target() {
+            Some(MediaCodecFallbackTarget::ByteBuffer) => self
+                .fallback_mediacodec_surface_to_byte_buffer(
+                    stage,
+                    failure.reason.clone(),
+                    Some(failure),
+                )?,
+            Some(MediaCodecFallbackTarget::Software) => self.fallback_video_decoder_to_software(
+                &format!("{stage}_bytebuffer_to_software"),
+                failure.reason.clone(),
+                Some(failure),
+            )?,
+            None => return Ok(false),
+        }
+        self.video_fallback_waiting_for_keyframe = true;
+        let active_backend = self
+            .active_video_decoder_backend()
+            .unwrap_or(DecoderBackend::Software);
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "video_decoder_recovery_waiting_for_keyframe",
+                "backend": active_backend.as_str(),
+                "mediaCodecMode": self.video_decoder.as_ref().and_then(|decoder| {
+                    (decoder.backend() == DecoderBackend::MediaCodec).then_some(
+                        if decoder.uses_mediacodec_surface() {
+                            "surface_ahardwarebuffer"
+                        } else {
+                            "bytebuffer_cpu_upload"
+                        },
+                    )
+                }),
+                "codec": failure.codec.as_deref(),
+                "pixelFormat": failure.pixel_format.as_deref(),
+                "lineSizes": failure.line_sizes,
+                "reason": failure.reason.as_str(),
+            })
+            .to_string(),
+        );
+        Ok(true)
+    }
+
+    fn video_import_failure_matches_active_decoder(
+        &self,
+        failure: &VideoFrameImportFailure,
+    ) -> bool {
+        failure.decode_backend == DecoderBackend::MediaCodec
+            && self.active_video_decoder_backend() == Some(DecoderBackend::MediaCodec)
+            && failure.mediacodec_surface
+                == self
+                    .video_decoder
+                    .as_ref()
+                    .is_some_and(Decoder::uses_mediacodec_surface)
     }
 
     fn should_defer_video_packet(&self) -> bool {
@@ -1175,30 +2426,135 @@ impl PlaybackSession {
         }
     }
 
-    fn finish_decoders(&mut self) -> Result<()> {
+    fn finish_decoders(&mut self) -> Result<bool> {
         if self.eof {
-            return Ok(());
+            return Ok(false);
         }
-        while self.route_pending_video_packets()? {}
-        let video_frame_limit = self.active_video_frame_queue_limit();
-        if let Some(decoder) = &mut self.video_decoder {
-            decoder.send_eof()?;
-            drain_video_frames(decoder, &mut self.video_frames)?;
-            trim_video_queue(&mut self.video_frames, video_frame_limit);
+
+        let mut made_progress = false;
+        while self.route_pending_video_packets()? {
+            made_progress = true;
         }
-        if self.audio_decoder.is_some() {
-            {
-                let decoder = self.audio_decoder.as_mut().expect("audio decoder exists");
-                decoder.send_eof()?;
+        if !self.pending_video_packets.is_empty() {
+            return Ok(made_progress);
+        }
+
+        self.eof_drain_polls = self.eof_drain_polls.saturating_add(1);
+        let now = Instant::now();
+        self.eof_drain_last_progress_at.get_or_insert(now);
+
+        if let Some(decoder) = self
+            .video_decoder
+            .as_mut()
+            .filter(|decoder| !decoder.is_end_of_stream())
+        {
+            if !decoder.eof_sent() {
+                match decoder.send_eof() {
+                    Ok(()) => made_progress = true,
+                    Err(error) if error.is_again() => {}
+                    Err(error) => return Err(error.into()),
+                }
             }
-            self.drain_audio_frames()?;
-            trim_audio_queue(&mut self.audio_frames, self.queue_limits.audio_frames);
+            let status = drain_video_frames(decoder, &mut self.video_frames)?;
+            made_progress |= status.made_progress();
         }
-        self.eof = true;
-        Ok(())
+        if self
+            .audio_decoder
+            .as_ref()
+            .is_some_and(|decoder| !decoder.is_end_of_stream())
+        {
+            let eof_sent = self.audio_decoder.as_ref().is_some_and(Decoder::eof_sent);
+            if !eof_sent {
+                let decoder = self.audio_decoder.as_mut().expect("audio decoder exists");
+                match decoder.send_eof() {
+                    Ok(()) => made_progress = true,
+                    Err(error) if error.is_again() => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            let status = self.drain_audio_frames()?;
+            made_progress |= status.made_progress();
+        }
+        if made_progress {
+            self.eof_drain_last_progress_at = Some(now);
+        }
+
+        let video_complete = self
+            .video_decoder
+            .as_ref()
+            .is_none_or(Decoder::is_end_of_stream);
+        let audio_complete = self
+            .audio_decoder
+            .as_ref()
+            .is_none_or(Decoder::is_end_of_stream);
+        let complete = video_complete && audio_complete;
+        if complete {
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "decoder_eof_drain",
+                    "stage": "complete",
+                    "polls": self.eof_drain_polls,
+                    "videoComplete": video_complete,
+                    "audioComplete": audio_complete,
+                    "videoBackend": self.active_video_decoder_backend().map(DecoderBackend::as_str),
+                })
+                .to_string(),
+            );
+            self.eof = true;
+            return Ok(true);
+        }
+
+        if !self.eof_drain_pending_logged {
+            self.eof_drain_pending_logged = true;
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "decoder_eof_drain",
+                    "stage": "pending",
+                    "polls": self.eof_drain_polls,
+                    "videoEofSubmitted": self.video_decoder.as_ref().is_none_or(Decoder::eof_sent),
+                    "videoComplete": video_complete,
+                    "audioEofSubmitted": self.audio_decoder.as_ref().is_none_or(Decoder::eof_sent),
+                    "audioComplete": audio_complete,
+                    "videoBackend": self.active_video_decoder_backend().map(DecoderBackend::as_str),
+                    "retryOwner": "playback_pump",
+                })
+                .to_string(),
+            );
+        }
+
+        let stalled_for = now.saturating_duration_since(
+            self.eof_drain_last_progress_at
+                .expect("EOF drain progress timestamp initialized"),
+        );
+        if stalled_for >= DECODER_EOF_DRAIN_STALL_TIMEOUT {
+            let reason = format!(
+                "no decoder drain progress for {:.3}s after {} polls (video_complete={video_complete}, audio_complete={audio_complete}, video_backend={})",
+                stalled_for.as_secs_f64(),
+                self.eof_drain_polls,
+                self.active_video_decoder_backend()
+                    .map(DecoderBackend::as_str)
+                    .unwrap_or("none"),
+            );
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "decoder_eof_drain",
+                    "stage": "timeout",
+                    "polls": self.eof_drain_polls,
+                    "stalledSeconds": stalled_for.as_secs_f64(),
+                    "videoComplete": video_complete,
+                    "audioComplete": audio_complete,
+                    "videoBackend": self.active_video_decoder_backend().map(DecoderBackend::as_str),
+                    "reason": reason.as_str(),
+                })
+                .to_string(),
+            );
+            return Err(PlaybackError::DecoderDrainTimeout { reason });
+        }
+        Ok(made_progress)
     }
 
-    fn drain_audio_frames(&mut self) -> Result<()> {
+    fn drain_audio_frames(&mut self) -> Result<DecoderDrainStatus> {
+        let mut status = DecoderDrainStatus::default();
         loop {
             let output = {
                 let decoder = self.audio_decoder.as_mut().expect("audio decoder exists");
@@ -1207,13 +2563,28 @@ impl PlaybackSession {
             match output {
                 DecoderOutputFrame::Frame(frame) => {
                     let pcm = self.convert_audio_frame(frame)?;
-                    self.audio_frames.push_back(pcm);
+                    if self.audio_output_active {
+                        self.audio_frames.push_back(pcm);
+                    }
+                    status.frames = status.frames.saturating_add(1);
                 }
-                DecoderOutputFrame::NeedMoreInput | DecoderOutputFrame::EndOfStream => {
-                    return Ok(());
+                DecoderOutputFrame::NeedMoreInput => return Ok(status),
+                DecoderOutputFrame::EndOfStream => {
+                    status.frames = status.frames.saturating_add(self.drain_audio_resampler()?);
+                    status.end_of_stream = true;
+                    return Ok(status);
                 }
             }
         }
+    }
+
+    fn reset_eof_drain_state(&mut self) {
+        self.demux_eof = false;
+        self.reset_video_packet_stall_state();
+        self.eof_drain_polls = 0;
+        self.eof_drain_pending_logged = false;
+        self.eof_drain_last_progress_at = None;
+        self.eof = false;
     }
 
     fn convert_audio_frame(&mut self, frame: Frame) -> Result<PcmAudioFrame> {
@@ -1225,6 +2596,32 @@ impl PlaybackSession {
             .expect("audio resampler exists")
             .convert(&frame)
             .map_err(PlaybackError::from)
+    }
+
+    fn drain_audio_resampler(&mut self) -> Result<usize> {
+        let Some(resampler) = self.audio_resampler.as_mut() else {
+            return Ok(0);
+        };
+        let mut output_frames = 0usize;
+        while let Some(frame) = resampler.drain()? {
+            if self.audio_output_active {
+                self.audio_frames.push_back(frame);
+            }
+            output_frames = output_frames.saturating_add(1);
+        }
+        if output_frames > 0 {
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "audio_resampler_drain",
+                    "stage": "complete",
+                    "outputFrames": output_frames,
+                    "audioOutputActive": self.audio_output_active,
+                    "queuedAudioFrames": self.audio_frames.len(),
+                })
+                .to_string(),
+            );
+        }
+        Ok(output_frames)
     }
 }
 
@@ -1828,6 +3225,7 @@ pub struct DisplayFrameSchedule {
 
 pub struct TimedVideoFrame {
     pub frame: Frame,
+    pub decode_backend: DecoderBackend,
     pub pts: Option<Duration>,
     pub media_time: Duration,
     pub late_by: Option<Duration>,
@@ -1852,17 +3250,53 @@ pub struct VideoPlaybackEngine {
     state: PlaybackRunState,
     clock: PlaybackClock,
     timing: PlaybackTimingConfig,
-    pending_frame: Option<Frame>,
+    pending_frame: Option<DecodedVideoFrame>,
     pending_audio: Option<PcmAudioFrame>,
     pending_subtitle: Option<DecodedSubtitleFrame>,
+    audio_output_active: bool,
+    audio_eof_stall_started_at: Option<Instant>,
+    audio_eof_stall_pending_frames: usize,
+    audio_eof_stall_logged: bool,
     last_presented_pts: Option<Duration>,
     eof: bool,
     waiting_for_first_frame: bool,
     video_seek_floor: Option<Duration>,
     audio_seek_floor: Option<Duration>,
+    video_seek_preroll_started_at: Option<Instant>,
+    video_seek_preroll_dropped_frames: u64,
+    last_video_seek_preroll_log: Option<Instant>,
 }
 
 unsafe impl Send for VideoPlaybackEngine {}
+
+impl Drop for VideoPlaybackEngine {
+    fn drop(&mut self) {
+        // pending_frame is declared after session, so without an explicit
+        // teardown it would outlive the MediaCodec decoder owned by session.
+        // Drop engine- and session-owned frames first while that decoder and
+        // its release callback context are both valid.
+        let decoder_alive = self.session.video_decoder.is_some();
+        let pending_video = self.pending_frame.take().is_some();
+        let pending_audio = self.pending_audio.take().is_some();
+        let pending_subtitle = self.pending_subtitle.take().is_some();
+        let discarded = self.session.discard_queued_frames_and_packets();
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "playback_engine_teardown",
+                "stage": "drop_before_decoder",
+                "pendingVideoFrame": pending_video,
+                "pendingAudioFrame": pending_audio,
+                "pendingSubtitleFrame": pending_subtitle,
+                "discardedVideoFrames": discarded.video_frames,
+                "discardedAudioFrames": discarded.audio_frames,
+                "discardedSubtitleFrames": discarded.subtitle_frames,
+                "discardedVideoPackets": discarded.video_packets,
+                "decoderAliveDuringCleanup": decoder_alive,
+            })
+            .to_string(),
+        );
+    }
+}
 
 impl VideoPlaybackEngine {
     pub fn open(request: &MediaRequest, config: PlaybackSessionConfig) -> Result<Self> {
@@ -1889,16 +3323,110 @@ impl VideoPlaybackEngine {
             pending_frame: None,
             pending_audio: None,
             pending_subtitle: None,
+            audio_output_active: true,
+            audio_eof_stall_started_at: None,
+            audio_eof_stall_pending_frames: 0,
+            audio_eof_stall_logged: false,
             last_presented_pts: None,
             eof: false,
             waiting_for_first_frame: false,
             video_seek_floor: None,
             audio_seek_floor: None,
+            video_seek_preroll_started_at: None,
+            video_seek_preroll_dropped_frames: 0,
+            last_video_seek_preroll_log: None,
         }
     }
 
     pub fn info(&self) -> &OpenedMediaInfo {
         self.session.info()
+    }
+
+    pub fn take_video_decoder_events(&mut self) -> Vec<VideoDecoderEvent> {
+        self.session.take_video_decoder_events()
+    }
+
+    pub fn handle_video_frame_import_failure(
+        &mut self,
+        failure: &VideoFrameImportFailure,
+    ) -> Result<bool> {
+        self.handle_video_frame_failure("renderer_import", failure)
+    }
+
+    fn handle_video_frame_failure(
+        &mut self,
+        stage: &str,
+        failure: &VideoFrameImportFailure,
+    ) -> Result<bool> {
+        let fallback_requires_replay = self.session.decoder_fallback_requires_replay();
+        let replay_position = self.last_presented_pts.unwrap_or_else(|| self.media_time());
+        let resume_after_replay = self.state == PlaybackRunState::Playing;
+        if !self
+            .session
+            .video_import_failure_matches_active_decoder(failure)
+        {
+            let changed = self
+                .session
+                .fallback_after_video_import_failure(stage, failure)?;
+            if changed {
+                self.finish_video_decoder_fallback(
+                    stage,
+                    fallback_requires_replay,
+                    replay_position,
+                    resume_after_replay,
+                )?;
+            }
+            return Ok(changed);
+        }
+        let pending_frame_discarded = self.pending_frame.take().is_some();
+        if pending_frame_discarded {
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "video_decoder_retired",
+                    "stage": format!("{stage}_engine_pending_frame"),
+                    "discardedEnginePendingFrame": true,
+                    "fallbackGeneration": failure.generation,
+                    "reason": failure.reason.as_str(),
+                })
+                .to_string(),
+            );
+        }
+        let changed = self
+            .session
+            .fallback_after_video_import_failure(stage, failure)?;
+        if changed {
+            self.finish_video_decoder_fallback(
+                stage,
+                fallback_requires_replay,
+                replay_position,
+                resume_after_replay,
+            )?;
+        }
+        Ok(changed)
+    }
+
+    fn finish_video_decoder_fallback(
+        &mut self,
+        stage: &str,
+        requires_replay: bool,
+        replay_position: Duration,
+        resume_after_replay: bool,
+    ) -> Result<()> {
+        self.eof = false;
+        if !requires_replay {
+            return Ok(());
+        }
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "video_decoder_recovery_replay",
+                "stage": stage,
+                "targetSeconds": replay_position.as_secs_f64(),
+                "resumeAfterReplay": resume_after_replay,
+                "reason": "decoder route changed after demux or decoder EOF",
+            })
+            .to_string(),
+        );
+        self.seek_with_playback_intent(replay_position, resume_after_replay)
     }
 
     pub fn track_selection(&self) -> TrackSelection {
@@ -1951,10 +3479,12 @@ impl VideoPlaybackEngine {
         track_id: Option<i64>,
         mut now: impl FnMut() -> Instant,
     ) -> Result<()> {
+        if self.session.info.selected_audio_track == track_id {
+            return Ok(());
+        }
         let media_time = self.media_time_at(now());
         self.session.select_audio_track(track_id)?;
-        self.session.seek(media_time)?;
-        self.reset_streams_at(media_time, now());
+        self.reset_streams_at_with_decoder_flush(media_time, false, true, now)?;
         Ok(())
     }
 
@@ -1970,10 +3500,12 @@ impl VideoPlaybackEngine {
         track_id: Option<i64>,
         mut now: impl FnMut() -> Instant,
     ) -> Result<Option<TimedSubtitleFrame>> {
+        if self.session.info.selected_subtitle_track == track_id {
+            return Ok(None);
+        }
         let media_time = self.media_time_at(now());
         let frame = self.session.select_subtitle_track(track_id, media_time)?;
-        self.session.seek(media_time)?;
-        self.reset_streams_at(media_time, now());
+        self.reset_streams_at_with_decoder_flush(media_time, true, false, now)?;
         Ok(frame.map(|frame| TimedSubtitleFrame {
             frame,
             pts: Some(media_time),
@@ -1982,19 +3514,31 @@ impl VideoPlaybackEngine {
         }))
     }
 
-    fn reset_streams_at(&mut self, media_time: Duration, now: Instant) {
+    fn reset_streams_at_with_decoder_flush(
+        &mut self,
+        media_time: Duration,
+        flush_audio_decoder: bool,
+        flush_subtitle_decoder: bool,
+        now: impl FnOnce() -> Instant,
+    ) -> Result<()> {
+        self.discard_pending_frames_for_seek();
+        self.session.seek_with_decoder_flush(
+            media_time,
+            flush_audio_decoder,
+            flush_subtitle_decoder,
+        )?;
+        let now = now();
         let before = self.clock.media_time_at(now);
         self.clock
             .reset(media_time, self.state == PlaybackRunState::Playing, now);
         trace_clock_reset("reset_streams_at", before, media_time, self.state);
-        self.pending_frame = None;
-        self.pending_audio = None;
-        self.pending_subtitle = None;
         self.last_presented_pts = None;
         self.eof = false;
         self.waiting_for_first_frame = self.state == PlaybackRunState::Playing;
         self.video_seek_floor = Some(media_time);
         self.audio_seek_floor = Some(media_time);
+        self.reset_video_seek_preroll_budget(now);
+        Ok(())
     }
 
     pub fn state(&self) -> PlaybackRunState {
@@ -2005,8 +3549,38 @@ impl VideoPlaybackEngine {
         self.state == PlaybackRunState::Playing
     }
 
-    pub fn play(&mut self) {
-        let _ = self.play_checked();
+    pub(crate) fn set_audio_output_active(&mut self, active: bool) {
+        if self.audio_output_active == active {
+            return;
+        }
+        let pending_audio = if active {
+            0
+        } else {
+            usize::from(self.pending_audio.take().is_some())
+        };
+        let queued_audio = self.session.set_audio_output_active(active);
+        self.audio_output_active = active;
+        self.reset_audio_eof_stall_state();
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "playback_audio_output",
+                "stage": if active { "attached" } else { "detached" },
+                "discardedPendingAudioFrames": pending_audio,
+                "discardedQueuedAudioFrames": queued_audio,
+            })
+            .to_string(),
+        );
+    }
+
+    pub(crate) fn rebase_progress_watchdogs(&mut self) {
+        self.session.rebase_decoder_progress_watchdogs();
+        if self.audio_eof_stall_started_at.is_some() {
+            self.audio_eof_stall_started_at = Some(Instant::now());
+        }
+    }
+
+    pub fn play(&mut self) -> Result<()> {
+        self.play_checked().map(|_| ())
     }
 
     pub(crate) fn play_checked(&mut self) -> Result<bool> {
@@ -2024,18 +3598,43 @@ impl VideoPlaybackEngine {
     }
 
     fn play_checked_with_now(&mut self, now: impl FnOnce() -> Instant) -> Result<bool> {
+        self.session.ensure_video_decoder_available("play")?;
         if self.state == PlaybackRunState::Playing {
             return Ok(false);
         }
-        let rewound_from_ended = self.state == PlaybackRunState::Ended;
+        let state_before = self.state;
+        let rewound_from_ended = playback_state_requires_rewind(state_before);
         if rewound_from_ended {
-            self.session.seek(Duration::ZERO)?;
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "playback_restart",
+                    "stage": "begin",
+                    "fromState": format!("{state_before:?}"),
+                    "targetSeconds": 0.0,
+                })
+                .to_string(),
+            );
         }
-        let now = now();
-        if rewound_from_ended {
-            self.commit_stopped_at(now, "replay");
-        }
+        let now = if rewound_from_ended {
+            // Drop engine-owned MediaCodec/AImage state before the session
+            // reopens its decoder route for replay.
+            self.seek_with_playback_intent_with_now(Duration::ZERO, false, now)?
+        } else {
+            now()
+        };
         self.start_playback_at(now);
+        if rewound_from_ended {
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "playback_restart",
+                    "stage": "ready",
+                    "fromState": format!("{state_before:?}"),
+                    "targetSeconds": 0.0,
+                    "state": "Playing",
+                })
+                .to_string(),
+            );
+        }
         Ok(rewound_from_ended)
     }
 
@@ -2054,6 +3653,7 @@ impl VideoPlaybackEngine {
         ));
         self.state = PlaybackRunState::Playing;
         self.waiting_for_first_frame = waiting_for_first_frame;
+        self.rebase_progress_watchdogs();
     }
 
     pub fn pause(&mut self) {
@@ -2094,7 +3694,12 @@ impl VideoPlaybackEngine {
     }
 
     fn stop_checked_with_now(&mut self, now: impl FnOnce() -> Instant) -> Result<()> {
-        self.session.seek(Duration::ZERO)?;
+        self.discard_pending_frames_for_seek();
+        // Stop must remain available after a final decoder failure so callers
+        // can quiesce playback and release audio even though replay is blocked.
+        // The stop-specific session seek resets demux/audio/subtitle state but
+        // deliberately preserves the recorded video-decoder failure.
+        self.session.seek_for_stop(Duration::ZERO)?;
         self.commit_stopped_at(now(), "stop");
         Ok(())
     }
@@ -2112,37 +3717,83 @@ impl VideoPlaybackEngine {
         self.waiting_for_first_frame = false;
         self.video_seek_floor = Some(Duration::ZERO);
         self.audio_seek_floor = Some(Duration::ZERO);
+        self.reset_audio_eof_stall_state();
+        self.reset_video_seek_preroll_budget(now);
     }
 
     pub fn seek(&mut self, position: Duration) -> Result<()> {
-        self.seek_with_now(position, Instant::now)
+        self.seek_with_playback_intent_with_now(
+            position,
+            self.state == PlaybackRunState::Playing,
+            Instant::now,
+        )
+        .map(|_| ())
     }
 
     #[cfg(test)]
     fn seek_at(&mut self, position: Duration, now: Instant) -> Result<()> {
-        self.seek_with_now(position, || now)
+        self.seek_with_playback_intent_with_now(
+            position,
+            self.state == PlaybackRunState::Playing,
+            || now,
+        )
+        .map(|_| ())
     }
 
-    fn seek_with_now(&mut self, position: Duration, now: impl FnOnce() -> Instant) -> Result<()> {
-        let state_before = self.state;
+    pub fn seek_with_playback_intent(
+        &mut self,
+        position: Duration,
+        resume_after_seek: bool,
+    ) -> Result<()> {
+        self.seek_with_playback_intent_with_now(position, resume_after_seek, Instant::now)
+            .map(|_| ())
+    }
+
+    fn seek_with_playback_intent_with_now(
+        &mut self,
+        position: Duration,
+        resume_after_seek: bool,
+        now: impl FnOnce() -> Instant,
+    ) -> Result<Instant> {
+        self.discard_pending_frames_for_seek();
         self.session.seek(position)?;
         let now = now();
+        let state_before = self.state;
+        let state_after = playback_state_after_seek_intent(state_before, resume_after_seek);
         let before = self.clock.media_time_at(now);
         self.clock
-            .reset(position, state_before == PlaybackRunState::Playing, now);
-        trace_clock_reset("seek", before, position, state_before);
+            .reset(position, state_after == PlaybackRunState::Playing, now);
+        trace_clock_reset("seek", before, position, state_after);
+        self.last_presented_pts = None;
+        self.eof = false;
+        self.state = state_after;
+        self.waiting_for_first_frame = state_after == PlaybackRunState::Playing;
+        self.video_seek_floor = Some(position);
+        self.audio_seek_floor = Some(position);
+        self.reset_video_seek_preroll_budget(now);
+        if state_before != state_after {
+            trace::log(format!(
+                "[erika-playback-trace] stage=seek_rearm from={state_before:?} to={state_after:?} target={}",
+                trace::duration_label(Some(position)),
+            ));
+        }
+        Ok(now)
+    }
+
+    fn discard_pending_frames_for_seek(&mut self) {
+        // Drop the engine-owned frames before PlaybackSession touches a
+        // decoder. In particular, a MediaCodec Surface frame retains the old
+        // AImageReader/codec route and must not survive decoder replacement.
         self.pending_frame = None;
         self.pending_audio = None;
         self.pending_subtitle = None;
-        self.last_presented_pts = None;
-        self.eof = false;
-        if state_before == PlaybackRunState::Ended {
-            self.state = PlaybackRunState::Stopped;
-        }
-        self.waiting_for_first_frame = state_before == PlaybackRunState::Playing;
-        self.video_seek_floor = Some(position);
-        self.audio_seek_floor = Some(position);
-        Ok(())
+        self.reset_audio_eof_stall_state();
+    }
+
+    fn reset_video_seek_preroll_budget(&mut self, now: Instant) {
+        self.video_seek_preroll_started_at = Some(now);
+        self.video_seek_preroll_dropped_frames = 0;
+        self.last_video_seek_preroll_log = None;
     }
 
     pub fn media_time(&self) -> Duration {
@@ -2332,6 +3983,11 @@ impl VideoPlaybackEngine {
         }))
     }
 
+    pub(crate) fn restore_pending_audio_frame(&mut self, frame: PcmAudioFrame) {
+        debug_assert!(self.pending_audio.is_none());
+        self.pending_audio = Some(frame);
+    }
+
     pub fn tick_subtitle(&mut self) -> Result<Option<TimedSubtitleFrame>> {
         if self.state != PlaybackRunState::Playing {
             return Ok(None);
@@ -2376,7 +4032,9 @@ impl VideoPlaybackEngine {
         if self.state != PlaybackRunState::Playing {
             return Ok(None);
         }
+        let tick_started = Instant::now();
         let mut consecutive_drops = 0usize;
+        let mut seek_preroll_drops = 0usize;
         loop {
             self.ensure_pending_frame_with_now(&mut now)?;
             let Some(frame) = self.pending_frame.as_ref() else {
@@ -2386,6 +4044,18 @@ impl VideoPlaybackEngine {
             let pts = frame.pts().and_then(|pts| pts.as_duration());
             if self.should_drop_video_seek_preroll(pts) {
                 let _ = self.pending_frame.take();
+                seek_preroll_drops = seek_preroll_drops.saturating_add(1);
+                self.video_seek_preroll_dropped_frames =
+                    self.video_seek_preroll_dropped_frames.saturating_add(1);
+                let elapsed = tick_started.elapsed();
+                if seek_preroll_budget_exhausted(
+                    seek_preroll_drops,
+                    self.timing.video_scheduler.max_consecutive_drops,
+                    elapsed,
+                ) {
+                    self.trace_video_seek_preroll_yield(pts, seek_preroll_drops, elapsed);
+                    return Ok(None);
+                }
                 continue;
             }
             let should_present_first = self.last_presented_pts.is_none();
@@ -2422,10 +4092,50 @@ impl VideoPlaybackEngine {
                     consecutive_drops += 1;
                 }
                 decision => {
+                    #[cfg(target_os = "android")]
+                    if let Err(error) = self
+                        .pending_frame
+                        .as_ref()
+                        .expect("pending frame exists")
+                        .frame
+                        .prepare_mediacodec_image()
+                    {
+                        if error.is_android_mediacodec_backpressure() {
+                            // Keep the already-released frame pending. A later
+                            // worker tick retries only ImageReader acquisition;
+                            // it must never release the codec token twice or
+                            // turn transient AImage capacity into decoder fallback.
+                            return Ok(None);
+                        }
+                        // Delivery failed before the renderer ever received the
+                        // frame, so recover on this playback worker immediately.
+                        // This also freezes the old Surface route before another
+                        // codec buffer can be released into a broken ImageReader.
+                        let pending = self.pending_frame.as_ref().expect("pending frame exists");
+                        let failure = VideoFrameImportFailure {
+                            decode_backend: pending.decode_backend,
+                            mediacodec_surface: pending.frame.is_mediacodec(),
+                            codec: self.session.selected_video_codec(),
+                            pixel_format: pending.frame.pixel_format(),
+                            line_sizes: pending.frame.line_sizes(),
+                            width: pending.frame.width(),
+                            height: pending.frame.height(),
+                            generation: 0,
+                            reason: format!(
+                                "stage=android_mediacodec_worker_prepare reason={error}"
+                            ),
+                        };
+                        trace::diagnostic(failure.structured_message());
+                        if self.handle_video_frame_failure("surface_delivery", &failure)? {
+                            return Ok(None);
+                        }
+                        return Err(error.into());
+                    }
                     let frame = self.pending_frame.take().expect("pending frame exists");
                     self.last_presented_pts = pts;
                     return Ok(Some(TimedVideoFrame {
-                        frame,
+                        frame: frame.frame,
+                        decode_backend: frame.decode_backend,
                         pts,
                         media_time,
                         late_by: decision.late_by(),
@@ -2441,22 +4151,145 @@ impl VideoPlaybackEngine {
         };
         let Some(pts) = pts else {
             self.video_seek_floor = None;
+            self.finish_video_seek_preroll(target, None, "missing_pts");
             return false;
         };
         if pts < target {
             true
         } else {
             self.video_seek_floor = None;
+            self.finish_video_seek_preroll(target, Some(pts), "target_reached");
             false
         }
+    }
+
+    fn trace_video_seek_preroll_yield(
+        &mut self,
+        pts: Option<Duration>,
+        burst_drops: usize,
+        elapsed: Duration,
+    ) {
+        let now = Instant::now();
+        if self
+            .last_video_seek_preroll_log
+            .is_some_and(|last| now.duration_since(last) < SEEK_PREROLL_LOG_INTERVAL)
+        {
+            return;
+        }
+        self.last_video_seek_preroll_log = Some(now);
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "video_seek_preroll",
+                "stage": "budget_yield",
+                "targetSeconds": self.video_seek_floor.map(|target| target.as_secs_f64()),
+                "lastPtsSeconds": pts.map(|pts| pts.as_secs_f64()),
+                "burstDroppedFrames": burst_drops,
+                "totalDroppedFrames": self.video_seek_preroll_dropped_frames,
+                "frameBudget": self.timing.video_scheduler.max_consecutive_drops.max(1),
+                "timeBudgetMs": SEEK_PREROLL_DECODE_TIME_BUDGET.as_secs_f64() * 1000.0,
+                "burstElapsedMs": elapsed.as_secs_f64() * 1000.0,
+            })
+            .to_string(),
+        );
+    }
+
+    fn finish_video_seek_preroll(
+        &mut self,
+        target: Duration,
+        pts: Option<Duration>,
+        reason: &'static str,
+    ) {
+        let dropped_frames = self.video_seek_preroll_dropped_frames;
+        let elapsed = self
+            .video_seek_preroll_started_at
+            .map(|started| started.elapsed())
+            .unwrap_or_default();
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "video_seek_preroll",
+                "stage": "complete",
+                "reason": reason,
+                "targetSeconds": target.as_secs_f64(),
+                "firstOutputPtsSeconds": pts.map(|pts| pts.as_secs_f64()),
+                "totalDroppedFrames": dropped_frames,
+                "elapsedMs": elapsed.as_secs_f64() * 1000.0,
+            })
+            .to_string(),
+        );
+        self.video_seek_preroll_started_at = None;
+        self.video_seek_preroll_dropped_frames = 0;
+        self.last_video_seek_preroll_log = None;
     }
 
     fn ensure_pending_frame_with_now(&mut self, now: &mut impl FnMut() -> Instant) -> Result<()> {
         if self.pending_frame.is_some() || self.eof {
             return Ok(());
         }
-        self.pending_frame = self.session.next_video_frame()?;
+        self.pending_frame = match self.session.next_video_frame() {
+            Ok(frame) => frame,
+            Err(PlaybackError::DecoderInputStall { reason }) => {
+                let replay_position = self
+                    .video_seek_floor
+                    .unwrap_or_else(|| self.media_time_at(now()));
+                let resume_after_replay = self.state == PlaybackRunState::Playing;
+                if !self.session.recover_from_video_input_stall(&reason)? {
+                    return Err(PlaybackError::DecoderInputStall { reason });
+                }
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "video_decoder_recovery_replay",
+                        "stage": "decoder_input_stall",
+                        "targetSeconds": replay_position.as_secs_f64(),
+                        "resumeAfterReplay": resume_after_replay,
+                        "reason": reason.as_str(),
+                    })
+                    .to_string(),
+                );
+                self.seek_with_playback_intent_with_now(
+                    replay_position,
+                    resume_after_replay,
+                    || now(),
+                )?;
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
         if self.pending_frame.is_none() && self.session.is_eof() {
+            if !self.audio_output_active {
+                let pending_audio = usize::from(self.pending_audio.take().is_some());
+                let queued_audio = self.session.discard_queued_audio_frames();
+                if pending_audio > 0 || queued_audio > 0 {
+                    trace::diagnostic(
+                        serde_json::json!({
+                            "event": "playback_audio_eof",
+                            "stage": "discard_without_output",
+                            "pendingEngineAudioFrames": pending_audio,
+                            "queuedSessionAudioFrames": queued_audio,
+                            "reason": "no active audio frame consumer",
+                        })
+                        .to_string(),
+                    );
+                }
+            }
+
+            let queued_audio = self.session.queued_audio_frame_count();
+            let pending_audio = self.pending_audio.is_some();
+            if self.audio_output_active && (pending_audio || queued_audio > 0) {
+                self.observe_audio_eof_stall(usize::from(pending_audio) + queued_audio)?;
+                return Ok(());
+            }
+            self.reset_audio_eof_stall_state();
+
+            if !playback_eof_ready(
+                self.session.is_eof(),
+                self.pending_frame.is_some(),
+                self.session.has_queued_video_frames(),
+                self.audio_output_active,
+                self.pending_audio.is_some(),
+                self.session.has_queued_audio_frames(),
+            ) {
+                return Ok(());
+            }
             self.eof = true;
             self.state = PlaybackRunState::Ended;
             let eof_now = now();
@@ -2469,6 +4302,59 @@ impl VideoPlaybackEngine {
             trace_clock_reset("eof", before, media_time, self.state);
         }
         Ok(())
+    }
+
+    fn observe_audio_eof_stall(&mut self, pending_frames: usize) -> Result<()> {
+        let now = Instant::now();
+        if self.audio_eof_stall_started_at.is_none()
+            || pending_frames < self.audio_eof_stall_pending_frames
+        {
+            self.audio_eof_stall_started_at = Some(now);
+        }
+        self.audio_eof_stall_pending_frames = pending_frames;
+        if !self.audio_eof_stall_logged {
+            self.audio_eof_stall_logged = true;
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "playback_audio_eof",
+                    "stage": "pending_output",
+                    "pendingAudioFrames": pending_frames,
+                    "timeoutSeconds": AUDIO_EOF_OUTPUT_STALL_TIMEOUT.as_secs_f64(),
+                    "retryOwner": "playback_audio_pump",
+                })
+                .to_string(),
+            );
+        }
+        let stalled_for = now.saturating_duration_since(
+            self.audio_eof_stall_started_at
+                .expect("audio EOF stall timestamp initialized"),
+        );
+        if stalled_for < AUDIO_EOF_OUTPUT_STALL_TIMEOUT {
+            return Ok(());
+        }
+
+        let reason = format!(
+            "{} decoded audio frame(s) remained blocked for {:.3}s after video and decoder EOF",
+            pending_frames,
+            stalled_for.as_secs_f64(),
+        );
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "playback_audio_eof",
+                "stage": "output_timeout",
+                "pendingAudioFrames": pending_frames,
+                "stalledSeconds": stalled_for.as_secs_f64(),
+                "reason": reason.as_str(),
+            })
+            .to_string(),
+        );
+        Err(PlaybackError::AudioOutputStall { reason })
+    }
+
+    fn reset_audio_eof_stall_state(&mut self) {
+        self.audio_eof_stall_started_at = None;
+        self.audio_eof_stall_pending_frames = 0;
+        self.audio_eof_stall_logged = false;
     }
 
     fn ensure_pending_audio(&mut self) -> Result<()> {
@@ -2508,6 +4394,66 @@ impl VideoPlaybackEngine {
         self.pending_subtitle = self.session.next_subtitle_frame(media_time)?;
         Ok(())
     }
+}
+
+fn playback_eof_ready(
+    session_eof: bool,
+    pending_video: bool,
+    queued_video: bool,
+    audio_output_active: bool,
+    pending_audio: bool,
+    queued_audio: bool,
+) -> bool {
+    session_eof
+        && !pending_video
+        && !queued_video
+        && (!audio_output_active || (!pending_audio && !queued_audio))
+}
+
+fn playback_state_requires_rewind(state: PlaybackRunState) -> bool {
+    state == PlaybackRunState::Ended
+}
+
+fn video_decoder_unavailability_reason(
+    selected_video_track: Option<i64>,
+    decoder_available: bool,
+    recorded_reason: Option<&str>,
+) -> Option<String> {
+    let track_id = selected_video_track.filter(|_| !decoder_available)?;
+    Some(recorded_reason.map(str::to_owned).unwrap_or_else(|| {
+        format!(
+            "selected video track {track_id} has no active decoder; reopen the media before playback"
+        )
+    }))
+}
+
+#[cfg(test)]
+fn playback_state_after_seek(state: PlaybackRunState) -> PlaybackRunState {
+    playback_state_after_seek_intent(state, state == PlaybackRunState::Playing)
+}
+
+fn playback_state_after_seek_intent(
+    state_before: PlaybackRunState,
+    resume_after_seek: bool,
+) -> PlaybackRunState {
+    if resume_after_seek {
+        PlaybackRunState::Playing
+    } else if matches!(
+        state_before,
+        PlaybackRunState::Stopped | PlaybackRunState::Ended
+    ) {
+        PlaybackRunState::Stopped
+    } else {
+        PlaybackRunState::Paused
+    }
+}
+
+fn seek_preroll_budget_exhausted(
+    dropped_frames: usize,
+    configured_frame_budget: usize,
+    elapsed: Duration,
+) -> bool {
+    dropped_frames >= configured_frame_budget.max(1) || elapsed >= SEEK_PREROLL_DECODE_TIME_BUDGET
 }
 
 fn playback_timing_for_request(
@@ -2587,11 +4533,26 @@ fn trace_clock_correction(
     ));
 }
 
-fn drain_video_frames(decoder: &mut Decoder, frames: &mut VecDeque<Frame>) -> Result<()> {
+fn drain_video_frames(
+    decoder: &mut Decoder,
+    frames: &mut VecDeque<DecodedVideoFrame>,
+) -> Result<DecoderDrainStatus> {
+    let decode_backend = decoder.backend();
+    let mut status = DecoderDrainStatus::default();
     loop {
         match decoder.receive_frame()? {
-            DecoderOutputFrame::Frame(frame) => frames.push_back(frame),
-            DecoderOutputFrame::NeedMoreInput | DecoderOutputFrame::EndOfStream => return Ok(()),
+            DecoderOutputFrame::Frame(frame) => {
+                frames.push_back(DecodedVideoFrame {
+                    frame,
+                    decode_backend,
+                });
+                status.frames = status.frames.saturating_add(1);
+            }
+            DecoderOutputFrame::NeedMoreInput => return Ok(status),
+            DecoderOutputFrame::EndOfStream => {
+                status.end_of_stream = true;
+                return Ok(status);
+            }
         }
     }
 }
@@ -2693,14 +4654,12 @@ fn duration_to_audio_frames_ceil(duration: Duration, sample_rate: u32) -> usize 
     frames.min(usize::MAX as u128) as usize
 }
 
-fn trim_video_queue(frames: &mut VecDeque<Frame>, limit: usize) {
+fn trim_video_queue<T>(frames: &mut VecDeque<T>, limit: usize) {
     while frames.len() > limit {
-        let _ = frames.pop_back();
-    }
-}
-
-fn trim_audio_queue(frames: &mut VecDeque<PcmAudioFrame>, limit: usize) {
-    while frames.len() > limit {
+        // Playback is real-time: when audio-driven demux temporarily outruns
+        // presentation, retain the newest decoded frames and discard the
+        // stalest one. Dropping the newest tail can otherwise make EOF freeze
+        // on an older frame even though the decoder produced the final frame.
         let _ = frames.pop_front();
     }
 }
@@ -2720,7 +4679,67 @@ fn sanitize_playback_rate(rate: f64) -> f64 {
 }
 
 fn should_fallback_video_decoder_open_error(backend: DecoderBackend) -> bool {
-    matches!(backend, DecoderBackend::D3d11va)
+    matches!(
+        backend,
+        DecoderBackend::D3d11va | DecoderBackend::MediaCodec
+    )
+}
+
+fn video_decoder_open_stage(config: DecoderConfig) -> &'static str {
+    match (config.backend, config.mediacodec_surface) {
+        (DecoderBackend::MediaCodec, true) => "open_surface",
+        (DecoderBackend::MediaCodec, false) => "open_bytebuffer",
+        _ => "open",
+    }
+}
+
+fn video_decoder_open_unavailable_error(
+    stage: &str,
+    requested_backend: DecoderBackend,
+    selected_video_track: i32,
+    codec: Option<&str>,
+    fallback_count: u64,
+    reason: String,
+) -> PlaybackError {
+    let reason = format!("{stage}: {reason}");
+    trace::diagnostic(
+        serde_json::json!({
+            "event": "video_decoder_unavailable",
+            "stage": stage,
+            "requestedBackend": requested_backend.as_str(),
+            "selectedVideoTrack": selected_video_track,
+            "codec": codec,
+            "fallbackCount": fallback_count,
+            "reason": reason.as_str(),
+        })
+        .to_string(),
+    );
+    PlaybackError::VideoDecoderUnavailable { reason }
+}
+
+fn mediacodec_fallback_target(
+    active_backend: Option<DecoderBackend>,
+    uses_surface: bool,
+    surface_disabled: bool,
+) -> Option<MediaCodecFallbackTarget> {
+    match active_backend {
+        Some(DecoderBackend::MediaCodec) if uses_surface && !surface_disabled => {
+            Some(MediaCodecFallbackTarget::ByteBuffer)
+        }
+        Some(DecoderBackend::MediaCodec) => Some(MediaCodecFallbackTarget::Software),
+        _ => None,
+    }
+}
+
+fn mediacodec_seek_route(
+    active_backend: Option<DecoderBackend>,
+    uses_surface: bool,
+) -> Option<MediaCodecSeekRoute> {
+    match active_backend {
+        Some(DecoderBackend::MediaCodec) if uses_surface => Some(MediaCodecSeekRoute::Surface),
+        Some(DecoderBackend::MediaCodec) => Some(MediaCodecSeekRoute::ByteBuffer),
+        _ => None,
+    }
 }
 
 fn elapsed_since(anchor: Instant, now: Instant) -> Duration {
@@ -2884,6 +4903,7 @@ mod tests {
             if let Some(frame) = engine.tick_at(eof_at).unwrap() {
                 last_video_pts = frame.pts.or(last_video_pts);
             }
+            let _ = engine.tick_audio_at(eof_at).unwrap();
             assert!(
                 Instant::now() < deadline,
                 "timed out waiting for fixture EOF"
@@ -2893,10 +4913,195 @@ mod tests {
         (eof_at, last_video_pts.expect("last fixture video PTS"))
     }
 
+    fn assert_decoder_unavailable<T>(result: Result<T>, expected: &str) {
+        match result {
+            Err(PlaybackError::VideoDecoderUnavailable { reason }) => {
+                assert_eq!(reason, expected)
+            }
+            Err(error) => panic!("expected VideoDecoderUnavailable, got {error}"),
+            Ok(_) => panic!("expected VideoDecoderUnavailable"),
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    fn wait_for_android_video_frame(
+        engine: &mut VideoPlaybackEngine,
+        stage: &str,
+    ) -> TimedVideoFrame {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(frame) = engine.tick().unwrap() {
+                return frame;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for {stage}");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     #[test]
-    fn decoder_open_fallback_is_limited_to_d3d11va() {
+    fn decoder_drain_status_reports_only_frames_or_end_of_stream_as_progress() {
+        assert!(!DecoderDrainStatus::default().made_progress());
+        assert!(
+            DecoderDrainStatus {
+                frames: 1,
+                end_of_stream: false,
+            }
+            .made_progress()
+        );
+        assert!(
+            DecoderDrainStatus {
+                frames: 0,
+                end_of_stream: true,
+            }
+            .made_progress()
+        );
+        assert!(
+            DecoderDrainStatus {
+                frames: 1,
+                end_of_stream: true,
+            }
+            .made_progress()
+        );
+    }
+
+    #[test]
+    fn playback_eof_ready_covers_every_pending_output_combination() {
+        for session_eof in [false, true] {
+            for pending_video in [false, true] {
+                for queued_video in [false, true] {
+                    for audio_output_active in [false, true] {
+                        for pending_audio in [false, true] {
+                            for queued_audio in [false, true] {
+                                let expected = session_eof
+                                    && !pending_video
+                                    && !queued_video
+                                    && (!audio_output_active || (!pending_audio && !queued_audio));
+                                assert_eq!(
+                                    playback_eof_ready(
+                                        session_eof,
+                                        pending_video,
+                                        queued_video,
+                                        audio_output_active,
+                                        pending_audio,
+                                        queued_audio,
+                                    ),
+                                    expected,
+                                    "session_eof={session_eof} pending_video={pending_video} queued_video={queued_video} audio_output_active={audio_output_active} pending_audio={pending_audio} queued_audio={queued_audio}",
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn only_natural_eof_requires_a_zero_rewind_before_play() {
+        assert!(!playback_state_requires_rewind(PlaybackRunState::Stopped));
+        assert!(playback_state_requires_rewind(PlaybackRunState::Ended));
+        assert!(!playback_state_requires_rewind(PlaybackRunState::Paused));
+        assert!(!playback_state_requires_rewind(PlaybackRunState::Playing));
+    }
+
+    #[test]
+    fn selected_video_track_without_decoder_reports_the_recorded_reason() {
+        assert_eq!(video_decoder_unavailability_reason(None, false, None), None);
+        assert_eq!(
+            video_decoder_unavailability_reason(Some(7), true, Some("ignored")),
+            None
+        );
+        assert_eq!(
+            video_decoder_unavailability_reason(Some(7), false, Some("software fallback failed")),
+            Some("software fallback failed".to_string())
+        );
+        assert_eq!(
+            video_decoder_unavailability_reason(Some(7), false, None),
+            Some(
+                "selected video track 7 has no active decoder; reopen the media before playback"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn successful_seek_preserves_terminal_and_paused_states() {
+        assert_eq!(
+            playback_state_after_seek(PlaybackRunState::Stopped),
+            PlaybackRunState::Stopped
+        );
+        assert_eq!(
+            playback_state_after_seek(PlaybackRunState::Ended),
+            PlaybackRunState::Stopped
+        );
+        assert_eq!(
+            playback_state_after_seek(PlaybackRunState::Paused),
+            PlaybackRunState::Paused
+        );
+        assert_eq!(
+            playback_state_after_seek(PlaybackRunState::Playing),
+            PlaybackRunState::Playing
+        );
+        assert_eq!(
+            playback_state_after_seek_intent(PlaybackRunState::Paused, true),
+            PlaybackRunState::Playing
+        );
+        assert_eq!(
+            playback_state_after_seek_intent(PlaybackRunState::Paused, false),
+            PlaybackRunState::Paused
+        );
+    }
+
+    #[test]
+    fn mediacodec_seek_reopens_the_active_surface_or_bytebuffer_route() {
+        assert_eq!(
+            mediacodec_seek_route(Some(DecoderBackend::MediaCodec), true),
+            Some(MediaCodecSeekRoute::Surface)
+        );
+        assert_eq!(
+            mediacodec_seek_route(Some(DecoderBackend::MediaCodec), false),
+            Some(MediaCodecSeekRoute::ByteBuffer)
+        );
+        assert_eq!(
+            mediacodec_seek_route(Some(DecoderBackend::Software), false),
+            None
+        );
+        assert_eq!(
+            MediaCodecSeekRoute::Surface.decoder_config(),
+            DecoderConfig::mediacodec()
+        );
+        assert_eq!(
+            MediaCodecSeekRoute::ByteBuffer.decoder_config(),
+            DecoderConfig::mediacodec_byte_buffer()
+        );
+    }
+
+    #[test]
+    fn seek_preroll_budget_yields_by_frame_count_or_elapsed_time() {
+        assert!(!seek_preroll_budget_exhausted(
+            2,
+            3,
+            SEEK_PREROLL_DECODE_TIME_BUDGET.saturating_sub(Duration::from_nanos(1))
+        ));
+        assert!(seek_preroll_budget_exhausted(3, 3, Duration::ZERO));
+        assert!(seek_preroll_budget_exhausted(
+            1,
+            100,
+            SEEK_PREROLL_DECODE_TIME_BUDGET
+        ));
+        assert!(
+            seek_preroll_budget_exhausted(1, 0, Duration::ZERO),
+            "a zero scheduler budget must still allow one frame before yielding"
+        );
+    }
+
+    #[test]
+    fn decoder_open_fallback_is_enabled_for_platform_hardware_backends() {
         assert!(should_fallback_video_decoder_open_error(
             DecoderBackend::D3d11va
+        ));
+        assert!(should_fallback_video_decoder_open_error(
+            DecoderBackend::MediaCodec
         ));
         assert!(!should_fallback_video_decoder_open_error(
             DecoderBackend::VideoToolbox
@@ -2904,6 +5109,138 @@ mod tests {
         assert!(!should_fallback_video_decoder_open_error(
             DecoderBackend::Software
         ));
+    }
+
+    #[test]
+    fn mediacodec_open_events_identify_surface_and_bytebuffer_modes() {
+        assert_eq!(
+            video_decoder_open_stage(DecoderConfig::mediacodec()),
+            "open_surface"
+        );
+        assert_eq!(
+            video_decoder_open_stage(DecoderConfig::mediacodec_byte_buffer()),
+            "open_bytebuffer"
+        );
+        assert_eq!(video_decoder_open_stage(DecoderConfig::software()), "open");
+    }
+
+    #[test]
+    fn mediacodec_surface_failure_steps_down_to_bytebuffer() {
+        assert_eq!(
+            mediacodec_fallback_target(Some(DecoderBackend::MediaCodec), true, false),
+            Some(MediaCodecFallbackTarget::ByteBuffer)
+        );
+    }
+
+    #[test]
+    fn mediacodec_bytebuffer_failure_steps_down_to_software() {
+        assert_eq!(
+            mediacodec_fallback_target(Some(DecoderBackend::MediaCodec), false, true),
+            Some(MediaCodecFallbackTarget::Software)
+        );
+        assert_eq!(
+            mediacodec_fallback_target(Some(DecoderBackend::MediaCodec), true, true),
+            Some(MediaCodecFallbackTarget::Software),
+            "a disabled Surface path must not be re-enabled by a stale decoder"
+        );
+    }
+
+    #[test]
+    fn mediacodec_fallback_ignores_non_mediacodec_decoders() {
+        assert_eq!(
+            mediacodec_fallback_target(Some(DecoderBackend::Software), false, true),
+            None
+        );
+    }
+
+    #[test]
+    fn decoder_unavailability_survives_stop_and_blocks_replay_when_env_is_set() {
+        let Ok(sample) = std::env::var("ERIKA_TEST_SAMPLE") else {
+            return;
+        };
+        let config = PlaybackSessionConfig {
+            video_decode: VideoDecodePreference::Software,
+            ..PlaybackSessionConfig::default()
+        };
+        let mut engine = VideoPlaybackEngine::open(&MediaRequest::new(sample), config).unwrap();
+        assert!(engine.session.info.selected_video_track.is_some());
+        engine.play().unwrap();
+
+        let reason = "forced final software decoder fallback failure".to_string();
+        drop(engine.session.video_decoder.take());
+        engine
+            .session
+            .mark_video_decoder_unavailable(reason.clone());
+        assert_eq!(engine.info().video_decode_backend, None);
+        engine.stop();
+
+        assert_decoder_unavailable(engine.session.next_video_frame(), &reason);
+        assert_decoder_unavailable(engine.seek(Duration::from_secs(1)), &reason);
+        assert_decoder_unavailable(engine.play(), &reason);
+        assert_eq!(engine.state(), PlaybackRunState::Stopped);
+        assert_eq!(engine.media_time(), Duration::ZERO);
+        assert!(!engine.clock.is_running());
+        assert!(!engine.should_prefill_audio());
+    }
+
+    #[cfg(target_os = "android")]
+    #[test]
+    fn repeated_android_seek_and_track_transitions_release_old_mediacodec_routes_when_env_is_set() {
+        let Ok(sample) = std::env::var("ERIKA_TEST_SAMPLE") else {
+            return;
+        };
+        let subtitle_path = std::env::temp_dir().join(format!(
+            "erika-android-transition-stress-{}.srt",
+            std::process::id()
+        ));
+        fs::write(
+            &subtitle_path,
+            "1\n00:00:00,000 --> 00:00:10,000\nAndroid transition stress\n",
+        )
+        .unwrap();
+
+        let config = PlaybackSessionConfig {
+            video_decode: VideoDecodePreference::MediaCodec,
+            ..PlaybackSessionConfig::default()
+        };
+        let mut engine = VideoPlaybackEngine::open(&MediaRequest::new(sample), config).unwrap();
+        let audio_track = engine
+            .info()
+            .selected_audio_track
+            .expect("ERIKA_TEST_SAMPLE must contain audio");
+        let (subtitle_track, _) = engine
+            .add_external_subtitle(SubtitleTrackConfig::external(
+                1_900_001,
+                subtitle_path.to_string_lossy(),
+            ))
+            .unwrap();
+        engine.play().unwrap();
+
+        for round in 0..6u64 {
+            let target = Duration::from_millis((round * 733) % 4_500);
+            engine.seek(target).unwrap();
+            drop(wait_for_android_video_frame(&mut engine, "seek frame"));
+
+            engine.select_audio_track(None).unwrap();
+            engine.select_audio_track(Some(audio_track)).unwrap();
+            engine.select_subtitle_track(None).unwrap();
+            engine
+                .select_subtitle_track(Some(subtitle_track.id))
+                .unwrap();
+            drop(wait_for_android_video_frame(
+                &mut engine,
+                "post-track-transition frame",
+            ));
+        }
+
+        assert_eq!(
+            engine.session.active_video_decoder_backend(),
+            Some(DecoderBackend::MediaCodec)
+        );
+        assert!(engine.session.video_decoder_unavailable_reason.is_none());
+        engine.remove_subtitle_track(subtitle_track.id).unwrap();
+        drop(engine);
+        let _ = fs::remove_file(subtitle_path);
     }
 
     #[test]
@@ -3168,7 +5505,10 @@ mod tests {
         let duration = engine.info().duration.expect("fixture duration");
         assert_eq!(duration, Duration::from_secs(8));
         assert!(last_video_pts <= duration);
-        assert!(duration - last_video_pts <= Duration::from_millis(34));
+        assert!(
+            duration - last_video_pts <= Duration::from_millis(34),
+            "fixture ended before the final video frame: last={last_video_pts:?} duration={duration:?}",
+        );
         assert_eq!(engine.media_time_at(eof_at), duration);
         assert_eq!(
             engine.media_time_at(eof_at + Duration::from_secs(60)),

@@ -9,7 +9,7 @@ struct VideoUniforms {
     target_transfer: u32,
     tone_map: u32,
     edr_output: u32,
-    reserved0: u32,
+    input_mode: u32,
     reserved1: u32,
     nits: vec4<f32>,
     luma_coefficients: vec4<f32>,
@@ -170,39 +170,91 @@ fn expand_ycbcr_range(y_in: f32, cbcr_in: vec2<f32>) -> RangeExpandedYCbCr {
     return out;
 }
 
+fn packed_luma_texel(virtual_coord_in: vec2<i32>, virtual_size: vec2<i32>) -> f32 {
+    let virtual_coord = clamp(virtual_coord_in, vec2<i32>(0), virtual_size - vec2<i32>(1));
+    let packed_coord = virtual_coord / vec2<i32>(2);
+    let packed = textureLoad(luma_texture, packed_coord, 0);
+    let component = u32((virtual_coord.y & 1) * 2 + (virtual_coord.x & 1));
+    if (component == 0u) {
+        return packed.r;
+    }
+    if (component == 1u) {
+        return packed.g;
+    }
+    if (component == 2u) {
+        return packed.b;
+    }
+    return packed.a;
+}
+
+// ArtCNN stores the four DCR subpixels of a virtual 2W x 2H luma image in one
+// RGBA texel. Reconstruct the same normalized-coordinate bilinear sample that
+// a native 2W x 2H texture would provide, without allocating that large image.
+fn sample_packed_luma(tex_coord: vec2<f32>) -> f32 {
+    let packed_size = vec2<i32>(textureDimensions(luma_texture, 0));
+    let virtual_size = packed_size * vec2<i32>(2);
+    let sample_position = clamp(tex_coord, vec2<f32>(0.0), vec2<f32>(1.0))
+        * vec2<f32>(virtual_size) - vec2<f32>(0.5);
+    let lo = vec2<i32>(floor(sample_position));
+    let fraction = fract(sample_position);
+    let y0 = mix(
+        packed_luma_texel(lo, virtual_size),
+        packed_luma_texel(lo + vec2<i32>(1, 0), virtual_size),
+        fraction.x,
+    );
+    let y1 = mix(
+        packed_luma_texel(lo + vec2<i32>(0, 1), virtual_size),
+        packed_luma_texel(lo + vec2<i32>(1, 1), virtual_size),
+        fraction.x,
+    );
+    return mix(y0, y1, fraction.y);
+}
+
 @vertex
 fn erika_video_vertex(@builtin(vertex_index) vertex_id: u32) -> VertexOut {
-    var positions = array<vec2<f32>, 3>(
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>( 3.0, -1.0),
-        vec2<f32>(-1.0,  3.0),
-    );
-    var tex_coords = array<vec2<f32>, 3>(
-        vec2<f32>(0.0, 1.0),
-        vec2<f32>(2.0, 1.0),
-        vec2<f32>(0.0, -1.0),
+    // Avoid dynamically indexing a function-local position array here. The
+    // Android emulator's SwiftShader GLES 3.0 compiler accepts Naga's generated
+    // GLSL for that pattern but rasterizes no vertices. These bits produce the
+    // same three full-screen-triangle coordinates without an array lookup.
+    let unit = vec2<f32>(
+        f32(vertex_id & 1u),
+        f32((vertex_id >> 1u) & 1u),
     );
     var out: VertexOut;
-    out.position = vec4<f32>(positions[vertex_id], 0.0, 1.0);
-    out.tex_coord = tex_coords[vertex_id];
+    out.position = vec4<f32>(unit * 4.0 - vec2<f32>(1.0), 0.0, 1.0);
+    out.tex_coord = vec2<f32>(unit.x * 2.0, 1.0 - unit.y * 2.0);
     return out;
 }
 
 @fragment
 fn erika_video_fragment(in: VertexOut) -> @location(0) vec4<f32> {
-    let y_sample = textureSample(luma_texture, video_sampler, in.tex_coord).r;
-    let cbcr_sample = textureSample(chroma_texture, video_sampler, in.tex_coord).rg;
-    let expanded = expand_ycbcr_range(y_sample, cbcr_sample);
-    let y = expanded.y;
-    let cbcr = expanded.cbcr;
-
-    let kr = uniforms.luma_coefficients.x;
-    let kg = max(uniforms.luma_coefficients.y, 0.000001);
-    let kb = uniforms.luma_coefficients.z;
     var rgb: vec3<f32>;
-    rgb.r = y + 2.0 * (1.0 - kr) * cbcr.y;
-    rgb.b = y + 2.0 * (1.0 - kb) * cbcr.x;
-    rgb.g = (y - kr * rgb.r - kb * rgb.b) / kg;
+    if (uniforms.input_mode == 1u) {
+        rgb = textureSample(luma_texture, video_sampler, in.tex_coord).rgb;
+    } else if (uniforms.input_mode == 3u) {
+        let original_rgb = textureSample(chroma_texture, video_sampler, in.tex_coord).rgb;
+        let original_luma = dot(uniforms.luma_coefficients.xyz, original_rgb);
+        let enhanced_luma = sample_packed_luma(in.tex_coord);
+        rgb = original_rgb + vec3<f32>(enhanced_luma - original_luma);
+    } else {
+        var y_sample: f32;
+        if (uniforms.input_mode == 2u) {
+            y_sample = sample_packed_luma(in.tex_coord);
+        } else {
+            y_sample = textureSample(luma_texture, video_sampler, in.tex_coord).r;
+        }
+        let cbcr_sample = textureSample(chroma_texture, video_sampler, in.tex_coord).rg;
+        let expanded = expand_ycbcr_range(y_sample, cbcr_sample);
+        let y = expanded.y;
+        let cbcr = expanded.cbcr;
+
+        let kr = uniforms.luma_coefficients.x;
+        let kg = max(uniforms.luma_coefficients.y, 0.000001);
+        let kb = uniforms.luma_coefficients.z;
+        rgb.r = y + 2.0 * (1.0 - kr) * cbcr.y;
+        rgb.b = y + 2.0 * (1.0 - kb) * cbcr.x;
+        rgb.g = (y - kr * rgb.r - kb * rgb.b) / kg;
+    }
     rgb = transfer_to_source_reference_linear(rgb);
     rgb = apply_gamut_map(rgb);
     rgb = source_reference_to_nits(rgb);

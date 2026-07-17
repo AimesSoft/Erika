@@ -3,13 +3,13 @@
 > Translations: [中文](building.zh.md) · [日本語](building.ja.md)
 
 Erika is a Rust workspace that links a set of **statically built native
-dependencies** (FFmpeg and, optionally, the libass subtitle stack). Those native
-libraries are not vendored — you build them once with the `xtask` orchestrator,
+dependencies** (FFmpeg, Android's dav1d AV1 fallback, and optionally the libass
+subtitle stack). Those native libraries are not vendored — you build them once with the `xtask` orchestrator,
 which stages them under `third_party/dist/`, and the Rust crates link against
 that staging directory.
 
 ```
-xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,zlib,libass,…}
+xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,zlib,libass,…}
                                         │
                           erika_ffmpeg_sys/build.rs  (auto-discovers dist, runs bindgen)
                                         │
@@ -48,6 +48,25 @@ automatically, set `LIBCLANG_PATH`.
 Run the commands from a shell where the MSVC environment is active (e.g. a
 *"x64 Native Tools Command Prompt"*), so `xtask` can locate the toolchain.
 
+### Build tools — Android
+
+- Android SDK plus NDK **r29** (the build also accepts another modern
+  side-by-side NDK). `xtask` discovers it from `ANDROID_NDK_HOME`,
+  `ANDROID_NDK_ROOT`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or the standard
+  Android Studio SDK directory.
+- CMake, Ninja, GNU make, `nasm` (for x86_64), Python with `venv`, Meson,
+  and `pkg-config`. On Windows, Git Bash supplies the POSIX shell required by
+  FFmpeg, Visual Studio Build Tools supplies the host linker, and NDK r29's
+  bundled `make.exe` is discovered automatically.
+- A host C/C++ compiler for Meson-generated build tools. Set `CC_FOR_BUILD` and
+  `CXX_FOR_BUILD` when `cc` / `c++` are not on `PATH`.
+- Rust standard-library targets for the ABIs you build:
+  `aarch64-linux-android`, `armv7-linux-androideabi`,
+  `x86_64-linux-android`, and `i686-linux-android`.
+
+Erika's Android minimum is API **26**. Override it with
+`ANDROID_API_LEVEL` only when targeting a newer API.
+
 ## Native dependencies via `xtask`
 
 `xtask` is a workspace member; invoke it with `cargo run -p xtask -- …`.
@@ -57,7 +76,7 @@ Run the commands from a shell where the MSVC environment is active (e.g. a
 cargo run -p xtask -- deps plan
 cargo run -p xtask -- deps status
 
-# Build the minimal set (zlib + FFmpeg) — LGPL profile
+# Build the baseline set (zlib + FFmpeg; Android also builds dav1d) — LGPL profile
 cargo run -p xtask -- deps build --profile lgpl
 
 # Build everything, including the libass subtitle stack
@@ -73,7 +92,7 @@ Subcommands: `plan` (print the plan), `fetch` (download sources only),
 |------|--------|---------|---------|
 | `--profile` | `lgpl`, `gpl-full` | `lgpl` | FFmpeg license profile (see below). |
 | `--target` | see targets table | `host` | Cross-compile target. |
-| `--all` | — | off | Also build libass + FreeType + HarfBuzz + FriBidi (subtitle rendering). Without it, only zlib + FFmpeg are built. |
+| `--all` | — | off | Also build libass + FreeType + HarfBuzz + FriBidi (subtitle rendering). The baseline is zlib + FFmpeg, plus dav1d for Android targets. |
 | `--force` | — | off | Rebuild even if up-to-date markers exist. |
 | `--jobs N` | integer | auto | Parallelism for the native builds. |
 
@@ -88,9 +107,48 @@ Subcommands: `plan` (print the plan), `fetch` (download sources only),
 | `aarch64-apple-ios-sim` | iOS sim (Apple Silicon) | |
 | `x86_64-apple-ios` | iOS sim (Intel) | |
 | `x86_64-pc-windows-msvc` (or `windows-x64`) | Windows | Swaps VideoToolbox for D3D11VA/DXVA2 in FFmpeg. |
+| `aarch64-linux-android` (or `arm64-v8a`) | Android arm64 | Flutter/Play primary device ABI. |
+| `armv7-linux-androideabi` (or `armeabi-v7a`) | Android ARMv7 | 32-bit ARM compatibility ABI. |
+| `x86_64-linux-android` (or `android-x64`) | Android x86_64 | Emulator and x86_64 device ABI. |
+| `i686-linux-android` (or `x86`) | Android x86 | 32-bit emulator compatibility ABI; x86 assembly acceleration is disabled because Android shared libraries cannot contain its non-PIC relocations. |
 
 Deployment minimums default to macOS `11.0` / iOS `13.0` and can be overridden
 with `MACOSX_DEPLOYMENT_TARGET` / `IPHONEOS_DEPLOYMENT_TARGET`.
+
+Android builds use `android-26`, `c++_shared`, PIC static dependencies, and the
+NDK LLVM toolchain selected for the requested ABI.
+
+### Android x86_64 build (Windows PowerShell)
+
+```powershell
+$env:ANDROID_NDK_HOME = "$env:LOCALAPPDATA\Android\Sdk\ndk\29.0.14206865"
+$env:ANDROID_NDK_ROOT = $env:ANDROID_NDK_HOME
+$env:ANDROID_API_LEVEL = "26"
+
+rustup target add x86_64-linux-android
+cargo run -p xtask -- deps build --all --profile lgpl --target x86_64-linux-android
+
+$bin = "$env:ANDROID_NDK_HOME\toolchains\llvm\prebuilt\windows-x86_64\bin"
+$prebuilt = Split-Path $bin -Parent
+$env:CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER = "$bin\x86_64-linux-android26-clang.cmd"
+$env:CC_X86_64_LINUX_ANDROID = $env:CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER
+$env:CXX_X86_64_LINUX_ANDROID = "$bin\x86_64-linux-android26-clang++.cmd"
+$env:AR_X86_64_LINUX_ANDROID = "$bin\llvm-ar.exe"
+$env:LIBCLANG_PATH = $bin
+$env:Path = "$bin;$env:Path"
+$env:BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android = "--target=x86_64-linux-android26 --sysroot=`"$prebuilt\sysroot`""
+$env:CFLAGS_x86_64_linux_android = "-fPIC"
+$env:CXXFLAGS_x86_64_linux_android = "-fPIC"
+$env:ERIKA_NATIVE_PROFILE = "lgpl"
+$env:ERIKA_NATIVE_TARGET = "x86_64-linux-android"
+
+cargo build -p erika_capi --release --target x86_64-linux-android `
+  --no-default-features --features libass,wgpu
+```
+
+Cargo produces both `liberika_capi.so` and `liberika_capi.a` under
+`target/x86_64-linux-android/release`. The Flutter Android Gradle task packages
+the cdylib directly together with the matching NDK `libc++_shared.so`.
 
 ## License profiles
 
@@ -98,7 +156,8 @@ The native build is split into profiles so the license boundary is explicit:
 
 - **`lgpl`** (default) — FFmpeg configured `--disable-gpl --enable-version3`,
   static, no network, file protocol only, a curated demuxer/decoder/parser set,
-  zlib enabled, plus VideoToolbox (Apple) or D3D11VA/DXVA2 (Windows).
+  zlib enabled, plus VideoToolbox (Apple), D3D11VA/DXVA2 (Windows), or
+  JNI/MediaCodec plus source-built dav1d AV1 software fallback (Android).
 - **`gpl-full`** — the same set with `--enable-gpl`. Use only if you accept GPL
   terms for the resulting binary.
 
@@ -117,7 +176,7 @@ third_party/
   build/<target>/<profile>/    out-of-tree build trees
   dist/<target>/<profile>/     install prefixes the crates link:
     ffmpeg/{include,lib}
-    zlib/    libass/    freetype/    harfbuzz/    fribidi/
+    dav1d/   zlib/    libass/    freetype/    harfbuzz/    fribidi/
 ```
 
 For the `host` target the `<target>` path segment is omitted
@@ -134,7 +193,7 @@ For the `host` target the `<target>` path segment is omitted
    `ios/` segment when building for iOS).
 
 Relevant environment variables: `ERIKA_NATIVE_PROFILE`, `ERIKA_NATIVE_TARGET`,
-`ERIKA_FFMPEG_DIR`, `ERIKA_ZLIB_DIR`, `LIBCLANG_PATH`, and
+`ERIKA_FFMPEG_DIR`, `ERIKA_DAV1D_DIR`, `ERIKA_ZLIB_DIR`, `LIBCLANG_PATH`, and
 `ERIKA_ALLOW_LEGACY_FFMPEG` (escape hatch). Erika requires FFmpeg **7.x**
 (`libavutil >= 59`); the Windows native core enforces this. Set
 `ERIKA_ALLOW_LEGACY_FFMPEG=1` only for local compatibility experiments.
@@ -154,6 +213,49 @@ cargo test --workspace               # unit + integration tests
 - iOS: `liberika_capi.a` (static).
 - Windows: `erika_capi.dll` (the Flutter Windows plugin builds it through
   `build_erika_runtime.cmake`).
+- Android: per-ABI `liberika_capi.so` plus the matching NDK
+  `libc++_shared.so`; `liberika_capi.a` is also available for native embedders.
+
+Android FFmpeg keeps the H.264, HEVC, MPEG-2, MPEG-4, VP8, VP9, and AV1
+MediaCodec decoders enabled. The intended hardware path asks MediaCodec for
+software-readable YUV frames and reuses the shared wgpu upload/composition
+pipeline, preserving subtitles, danmaku, and screenshots. This is hardware
+decode with a CPU upload, not a zero-copy Surface path; metrics must report it
+accordingly. If AV1 MediaCodec cannot open or fails while decoding, the software
+path explicitly selects FFmpeg's `libdav1d` decoder. `xtask` builds dav1d 1.5.1
+from source for every Android ABI with both 8-bit and high-bit-depth support;
+the 32-bit x86 slice disables assembly to preserve PIC safety.
+
+### Verify Android output negotiation
+
+Android's optional high-headroom mode is `ExtendedLinear`, implemented as FP16
+extended-linear scRGB. It is not HDR10/PQ and does not emit HDR10 metadata. SDR
+uses the normal `TextureView`; an extended-linear request uses a `SurfaceView`
+hosted with Flutter Hybrid Composition. Activation additionally requires an
+HDR-capable display, Vulkan, `Rgba16Float` in the wgpu surface capabilities,
+and successful post-configure readback of `ADATASPACE_SCRGB_LINEAR`
+(`406913024`, `0x18410000`). API 26 remains supported, but API 26/27 cannot use
+the native-window dataspace API and therefore fall back to SDR with reason `5`.
+
+Use `getOutputStatus()` in Flutter or
+`erika_presenter_get_output_status()` in a native harness; never infer active
+output from the requested mode alone. On a non-HDR emulator/device, an
+extended-linear request should remain playable and report SDR, a nonzero
+`fallbackCount`, and a stable `fallbackReason` in `0..8` (normally `1`,
+`display_hdr_unsupported`). On the final API 35 HDR-device acceptance run,
+require all of the following:
+
+- `activeEncoding == AndroidExtendedLinearScRgb`,
+  `surfaceFormat == SixteenBitFloat`, `nativeDataSpace == 406913024`,
+  `extendedLinearActive == true`, `fallbackReason == None`, and increasing
+  `extendedLinearFrames`;
+- the same state survives resize/rotation and background/foreground recovery;
+- independent surfaces work with multiple players; and
+- screenshots remain SDR RGBA8, tone-mapped from the current composited frame.
+
+Current emulator/non-HDR coverage validates the fallback branch. Do not mark
+the active Android extended-linear path as device-validated until the API 35
+HDR-device run above passes.
 
 ## Verify the playback path
 
@@ -181,6 +283,17 @@ decode and zero-copy interop are engaged.
   directory.
 - **Windows: configure fails** — ensure a POSIX shell (Git Bash/MSYS2) and GNU
   make are on `PATH`, and that you launched from an MSVC environment.
+- **Android NDK not found** — set `ANDROID_NDK_HOME` explicitly and verify
+  `build/cmake/android.toolchain.cmake` exists beneath it.
+- **Android Meson native-tool failure** — install a host compiler or set
+  `CC_FOR_BUILD` / `CXX_FOR_BUILD`; these compile generators that run on the
+  build machine, not Android code.
+- **Android extended-linear request remains SDR** — read `fallbackReason` from
+  `getOutputStatus()` and keep the numeric code in logs. Common causes are a
+  non-HDR display (`1`), non-Hybrid composition (`2`), GLES (`3`), missing
+  `Rgba16Float` (`4`), unavailable dataspace API (`5`), or failed
+  `SCRGB_LINEAR` verification (`6`). Codes `7` and `8` identify surface
+  configuration failure and an Apple-EDR request on an unsupported backend.
 - **Legacy FFmpeg rejected** — install/build the 7.x bundle; don't rely on a
   system FFmpeg.
 - **License check fails** — your profile mixes GPL and LGPL artifacts; rebuild

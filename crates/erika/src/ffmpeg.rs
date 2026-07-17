@@ -1,10 +1,13 @@
 use std::collections::BTreeSet;
-use std::ffi::{CStr, CString, c_int, c_void};
+use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::marker::PhantomData;
 use std::mem;
 use std::path::Path;
 use std::ptr;
 use std::slice;
+use std::sync::Arc;
+#[cfg(target_os = "android")]
+use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::core::{ColorPrimaries, TrackInfo, TrackKind, TransferFunction, VideoParams};
@@ -14,14 +17,23 @@ use crate::renderer::pipeline::{
 };
 use crate::source::{ByteRange, MediaSource};
 use crate::subtitle::{
-    DecodedSubtitleFrame, SubtitleBitmapPlane, SubtitleTextFormat, SubtitleTextSegment,
-    SubtitleTrackConfig,
+    AssTrackResources, DecodedSubtitleFrame, SubtitleBitmapPlane, SubtitleFontAttachment,
+    SubtitleTextFormat, SubtitleTextSegment, SubtitleTrackConfig,
 };
 use erika_ffmpeg_sys as sys;
 use libc::{EAGAIN, EINVAL, EIO, ESPIPE, SEEK_CUR, SEEK_END, SEEK_SET};
 use thiserror::Error;
 
+#[cfg(target_os = "android")]
+use crate::android::mediacodec::{
+    AndroidHardwareBufferImage, AndroidMediaCodecError, AndroidMediaCodecFrameSource,
+};
+
 const AVERROR_EOF: i32 = -541_478_725;
+const MAX_SUBTITLE_FONT_ATTACHMENTS: usize = 256;
+const MAX_SUBTITLE_FONT_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_SUBTITLE_FONT_TOTAL_BYTES: usize = 256 * 1024 * 1024;
+const MAX_ASS_CODEC_PRIVATE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum FfmpegError {
@@ -48,6 +60,12 @@ pub enum FfmpegError {
     ExpectedSubtitleStream,
     #[error("unsupported D3D11VA software pixel format: {0}")]
     UnsupportedD3d11vaSwFormat(i32),
+    #[cfg(target_os = "android")]
+    #[error("Android MediaCodec surface error: {0}")]
+    AndroidMediaCodec(String),
+    #[cfg(target_os = "android")]
+    #[error("Android MediaCodec surface backpressure: {0}")]
+    AndroidMediaCodecBackpressure(String),
     #[error(
         "invalid subtitle bitmap: width={width} height={height} stride={stride} colors={colors}"
     )]
@@ -64,6 +82,15 @@ pub enum FfmpegError {
 impl FfmpegError {
     pub fn is_again(&self) -> bool {
         matches!(self, Self::Api { code, .. } if *code == av_error(EAGAIN))
+    }
+
+    pub fn is_invalid_argument(&self) -> bool {
+        matches!(self, Self::Api { code, .. } if *code == av_error(EINVAL))
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn is_android_mediacodec_backpressure(&self) -> bool {
+        matches!(self, Self::AndroidMediaCodecBackpressure(_))
     }
 }
 
@@ -149,6 +176,7 @@ pub struct MediaProbe {
     pub video: Vec<VideoProbe>,
     pub audio: Vec<AudioProbe>,
     pub subtitles: Vec<SubtitleTrackConfig>,
+    pub subtitle_fonts: Arc<[SubtitleFontAttachment]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,6 +264,7 @@ pub struct Demuxer {
     context: FormatContext,
     probe: MediaProbe,
     stream_time_bases: Vec<Option<TimeBase>>,
+    timeline_origin_micros: i64,
     selection: StreamSelection,
 }
 
@@ -249,11 +278,14 @@ impl Demuxer {
     pub fn open_uri(uri: &str) -> Result<Self> {
         let mut context = open_format_context(uri)?;
         find_stream_info(&mut context)?;
+        let timeline_origin_micros = format_timeline_origin_micros(context.as_ptr());
+        trace_timeline_origin(timeline_origin_micros);
         let (probe, stream_time_bases) = inspect_format_context(uri, context.as_ptr());
         Ok(Self {
             context,
             probe,
             stream_time_bases,
+            timeline_origin_micros,
             selection: StreamSelection::all(),
         })
     }
@@ -262,11 +294,14 @@ impl Demuxer {
         let uri = source.uri().to_string();
         let mut context = open_source_format_context(source)?;
         find_stream_info(&mut context)?;
+        let timeline_origin_micros = format_timeline_origin_micros(context.as_ptr());
+        trace_timeline_origin(timeline_origin_micros);
         let (probe, stream_time_bases) = inspect_format_context(&uri, context.as_ptr());
         Ok(Self {
             context,
             probe,
             stream_time_bases,
+            timeline_origin_micros,
             selection: StreamSelection::all(),
         })
     }
@@ -339,7 +374,13 @@ impl Demuxer {
     }
 
     pub fn open_subtitle_decoder(&self, stream_index: i32) -> Result<SubtitleDecoder> {
-        SubtitleDecoder::open(self.codec_parameters(stream_index)?)
+        let parameters = self.codec_parameters(stream_index)?;
+        SubtitleDecoder::open_raw_with_fonts(
+            parameters.ptr,
+            parameters.stream_index,
+            parameters.time_base,
+            self.probe.subtitle_fonts.clone(),
+        )
     }
 
     pub fn read_packet(&mut self) -> Result<Option<Packet>> {
@@ -354,6 +395,7 @@ impl Demuxer {
 
             let stream_index = packet.stream_index();
             packet.time_base = self.stream_time_base(stream_index);
+            packet.normalize_timeline(self.timeline_origin_micros);
             if self.selection.accepts(stream_index) {
                 return Ok(Some(packet));
             }
@@ -361,23 +403,90 @@ impl Demuxer {
     }
 
     pub fn seek(&mut self, position: Duration) -> Result<()> {
-        let target = position.as_micros().min(i64::MAX as u128) as i64;
-        check(
-            unsafe {
-                sys::av_seek_frame(
+        let relative_target = position.as_micros().min(i64::MAX as u128) as i64;
+        let absolute_target =
+            absolute_seek_target_micros(relative_target, self.timeline_origin_micros);
+        let seek_stream = self.selected_video_seek_stream();
+        let (stream_index, target) = seek_stream.map_or((-1, absolute_target), |stream_index| {
+            let time_base = self
+                .stream_time_base(stream_index)
+                .expect("selected video stream has a time base");
+            (
+                stream_index,
+                rescale_microseconds_to_time_base(absolute_target, time_base),
+            )
+        });
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "ffmpeg_seek",
+                "stage": "backward_keyframe_request",
+                "streamIndex": stream_index,
+                "relativeTargetMicros": relative_target,
+                "timelineOriginMicros": self.timeline_origin_micros,
+                "absoluteTargetMicros": absolute_target,
+                "targetInSeekTimeBase": target,
+            })
+            .to_string(),
+        );
+        let backward = unsafe {
+            sys::av_seek_frame(
+                self.context.as_mut_ptr(),
+                stream_index,
+                target,
+                sys::AVSEEK_FLAG_BACKWARD as i32,
+            )
+        };
+        if backward < 0 {
+            // Queue-backed subtitle demuxers reject a backward seek before the
+            // first cue (for example target 0 with the first SRT cue at 500 ms).
+            // A full-range seek can select that first future cue while retaining
+            // the normal backward/keyframe behavior for media demuxers that
+            // accepted the primary request.
+            let fallback = unsafe {
+                sys::avformat_seek_file(
                     self.context.as_mut_ptr(),
-                    -1,
+                    stream_index,
+                    i64::MIN,
                     target,
-                    sys::AVSEEK_FLAG_BACKWARD as i32,
+                    i64::MAX,
+                    0,
                 )
-            },
-            "av_seek_frame",
-        )?;
+            };
+            if fallback < 0 {
+                check(backward, "av_seek_frame")?;
+            }
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "ffmpeg_seek",
+                    "stage": "full_range_fallback",
+                    "streamIndex": stream_index,
+                    "relativeTargetMicros": relative_target,
+                    "timelineOriginMicros": self.timeline_origin_micros,
+                    "absoluteTargetMicros": absolute_target,
+                    "targetInSeekTimeBase": target,
+                    "backwardError": error_string(backward),
+                })
+                .to_string(),
+            );
+        }
         check(
             unsafe { sys::avformat_flush(self.context.as_mut_ptr()) },
             "avformat_flush",
         )?;
         Ok(())
+    }
+
+    fn selected_video_seek_stream(&self) -> Option<i32> {
+        self.probe
+            .tracks
+            .iter()
+            .find(|track| {
+                track.kind == TrackKind::Video
+                    && i32::try_from(track.id)
+                        .ok()
+                        .is_some_and(|stream| self.selection.accepts(stream))
+            })
+            .and_then(|track| i32::try_from(track.id).ok())
     }
 
     fn has_stream(&self, stream_index: i32) -> bool {
@@ -469,31 +578,43 @@ pub struct SubtitleDecoder {
     stream_index: i32,
     time_base: TimeBase,
     track: SubtitleTrackConfig,
+    ass_track: Option<Arc<AssTrackResources>>,
+    missing_ass_header_reported: bool,
 }
 
 unsafe impl Send for SubtitleDecoder {}
 
 impl SubtitleDecoder {
     pub fn open(parameters: CodecParameters<'_>) -> Result<Self> {
-        Self::open_raw(
+        Self::open_raw_with_fonts(
             parameters.ptr,
             parameters.stream_index,
             parameters.time_base,
+            Arc::from([]),
         )
     }
 
     pub fn open_owned(parameters: &OwnedCodecParameters) -> Result<Self> {
-        Self::open_raw(
+        Self::open_owned_with_fonts(parameters, Arc::from([]))
+    }
+
+    pub fn open_owned_with_fonts(
+        parameters: &OwnedCodecParameters,
+        fonts: Arc<[SubtitleFontAttachment]>,
+    ) -> Result<Self> {
+        Self::open_raw_with_fonts(
             parameters.ptr,
             parameters.stream_index,
             parameters.time_base,
+            fonts,
         )
     }
 
-    fn open_raw(
+    fn open_raw_with_fonts(
         parameters_ptr: *const sys::AVCodecParameters,
         stream_index: i32,
         time_base: TimeBase,
+        fonts: Arc<[SubtitleFontAttachment]>,
     ) -> Result<Self> {
         if unsafe { track_kind((*parameters_ptr).codec_type) } != Some(TrackKind::Subtitle) {
             return Err(FfmpegError::ExpectedSubtitleStream);
@@ -508,11 +629,13 @@ impl SubtitleDecoder {
         if context.is_null() {
             return Err(FfmpegError::NullPointer("avcodec_alloc_context3(subtitle)"));
         }
-        let decoder = Self {
+        let mut decoder = Self {
             context,
             stream_index,
             time_base,
             track: SubtitleTrackConfig::embedded(i64::from(stream_index), i64::from(stream_index)),
+            ass_track: None,
+            missing_ass_header_reported: false,
         };
         check(
             unsafe { sys::avcodec_parameters_to_context(decoder.context, parameters_ptr) },
@@ -525,6 +648,30 @@ impl SubtitleDecoder {
             unsafe { sys::avcodec_open2(decoder.context, codec, ptr::null_mut()) },
             "avcodec_open2(subtitle)",
         )?;
+        let subtitle_header_size = unsafe { (*decoder.context).subtitle_header_size };
+        let codec_private = if subtitle_header_size > 0 {
+            unsafe { subtitle_header_bytes(decoder.context, stream_index) }
+        } else {
+            unsafe { codec_parameter_extradata(parameters_ptr, stream_index) }
+        };
+        if let Some(codec_private) = codec_private {
+            decoder.ass_track = Some(Arc::new(AssTrackResources::new(
+                i64::from(stream_index),
+                codec_private,
+                fonts,
+            )));
+        } else if unsafe { subtitle_codec_is_text(codec_id) } {
+            decoder.missing_ass_header_reported = true;
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "subtitle_ass_track",
+                    "stage": "codec_private_missing",
+                    "trackId": stream_index,
+                    "sourceStreamIndex": stream_index,
+                })
+                .to_string(),
+            );
+        }
         Ok(decoder)
     }
 
@@ -574,10 +721,31 @@ impl SubtitleDecoder {
                 (*self.context).height.max(0) as u32,
             )
         };
-        let frame =
-            unsafe { import_av_subtitle(i64::from(self.stream_index), packet, &subtitle, canvas) };
+        let frame = unsafe {
+            import_av_subtitle(
+                i64::from(self.stream_index),
+                packet,
+                &subtitle,
+                canvas,
+                self.ass_track.clone(),
+            )
+        };
         unsafe { sys::avsubtitle_free(&mut subtitle) };
-        frame.map(Some)
+        let frame = frame?;
+        if frame.has_ass_chunks() && frame.ass_track.is_none() && !self.missing_ass_header_reported
+        {
+            self.missing_ass_header_reported = true;
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "subtitle_ass_track",
+                    "stage": "codec_private_missing",
+                    "trackId": frame.track_id,
+                    "sourceStreamIndex": self.stream_index,
+                })
+                .to_string(),
+            );
+        }
+        Ok(Some(frame))
     }
 
     pub fn flush(&mut self) {
@@ -603,29 +771,59 @@ pub enum DecoderBackend {
     Software,
     VideoToolbox,
     D3d11va,
+    MediaCodec,
+}
+
+impl DecoderBackend {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Software => "software",
+            Self::VideoToolbox => "videotoolbox",
+            Self::D3d11va => "d3d11va",
+            Self::MediaCodec => "mediacodec",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DecoderConfig {
     pub backend: DecoderBackend,
+    pub mediacodec_surface: bool,
 }
 
 impl DecoderConfig {
     pub fn software() -> Self {
         Self {
             backend: DecoderBackend::Software,
+            mediacodec_surface: false,
         }
     }
 
     pub fn videotoolbox() -> Self {
         Self {
             backend: DecoderBackend::VideoToolbox,
+            mediacodec_surface: false,
         }
     }
 
     pub fn d3d11va() -> Self {
         Self {
             backend: DecoderBackend::D3d11va,
+            mediacodec_surface: false,
+        }
+    }
+
+    pub fn mediacodec() -> Self {
+        Self {
+            backend: DecoderBackend::MediaCodec,
+            mediacodec_surface: true,
+        }
+    }
+
+    pub fn mediacodec_byte_buffer() -> Self {
+        Self {
+            backend: DecoderBackend::MediaCodec,
+            mediacodec_surface: false,
         }
     }
 }
@@ -642,6 +840,20 @@ struct HardwareDecoderState {
     pixel_format: sys::AVPixelFormat,
 }
 
+#[cfg(target_os = "android")]
+#[derive(Clone)]
+struct AndroidMediaCodecFrameState {
+    source: Arc<AndroidMediaCodecFrameSource>,
+    delivery: Arc<Mutex<AndroidMediaCodecFrameDelivery>>,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Default)]
+struct AndroidMediaCodecFrameDelivery {
+    released: bool,
+    result: Option<std::result::Result<Arc<AndroidHardwareBufferImage>, String>>,
+}
+
 impl Drop for HardwareDecoderState {
     fn drop(&mut self) {
         unsafe { sys::av_buffer_unref(&mut self.frames_ref) };
@@ -654,7 +866,12 @@ pub struct Decoder {
     stream_index: i32,
     time_base: TimeBase,
     backend: DecoderBackend,
+    mediacodec_surface: bool,
+    eof_sent: bool,
+    end_of_stream: bool,
     hw_state: Option<Box<HardwareDecoderState>>,
+    #[cfg(target_os = "android")]
+    mediacodec_source: Option<Arc<AndroidMediaCodecFrameSource>>,
 }
 
 unsafe impl Send for Decoder {}
@@ -700,9 +917,19 @@ impl Decoder {
     ) -> Result<Self> {
         configure_ffmpeg_debug_logging();
         let codec_id = unsafe { (*parameters_ptr).codec_id };
-        let codec = unsafe { sys::avcodec_find_decoder(codec_id) };
+        let (codec, find_operation) = match config.backend {
+            DecoderBackend::Software => software_decoder(codec_id),
+            DecoderBackend::MediaCodec => (
+                mediacodec_decoder(codec_id),
+                "avcodec_find_decoder_by_name(MediaCodec)",
+            ),
+            DecoderBackend::VideoToolbox | DecoderBackend::D3d11va => (
+                unsafe { sys::avcodec_find_decoder(codec_id) },
+                "avcodec_find_decoder",
+            ),
+        };
         if codec.is_null() {
-            return Err(FfmpegError::NullPointer("avcodec_find_decoder"));
+            return Err(FfmpegError::NullPointer(find_operation));
         }
         let context = unsafe { sys::avcodec_alloc_context3(codec) };
         if context.is_null() {
@@ -713,7 +940,12 @@ impl Decoder {
             stream_index,
             time_base,
             backend: config.backend,
+            mediacodec_surface: config.mediacodec_surface,
+            eof_sent: false,
+            end_of_stream: false,
             hw_state: None,
+            #[cfg(target_os = "android")]
+            mediacodec_source: None,
         };
         check(
             unsafe { sys::avcodec_parameters_to_context(decoder.context, parameters_ptr) },
@@ -722,13 +954,172 @@ impl Decoder {
         let mut decoder = decoder;
         match config.backend {
             DecoderBackend::Software => {}
+            DecoderBackend::MediaCodec =>
+            {
+                #[cfg(target_os = "android")]
+                if config.mediacodec_surface {
+                    decoder.configure_mediacodec(codec)?;
+                }
+            }
             DecoderBackend::VideoToolbox => decoder.configure_videotoolbox(codec)?,
             DecoderBackend::D3d11va => decoder.configure_d3d11va(codec)?,
         }
-        check(
-            unsafe { sys::avcodec_open2(decoder.context, codec, ptr::null_mut()) },
-            "avcodec_open2",
-        )?;
+        let mut codec_options = ptr::null_mut();
+        #[cfg(target_os = "android")]
+        if config.backend == DecoderBackend::MediaCodec {
+            let option_result = check(
+                unsafe {
+                    sys::av_dict_set(
+                        &mut codec_options,
+                        c"erika_nonblocking".as_ptr(),
+                        c"1".as_ptr(),
+                        0,
+                    )
+                },
+                "av_dict_set(erika_nonblocking=1)",
+            );
+            if let Err(error) = option_result {
+                unsafe { sys::av_dict_free(&mut codec_options) };
+                return Err(error);
+            }
+        }
+        #[cfg(target_os = "android")]
+        if config.backend == DecoderBackend::MediaCodec && config.mediacodec_surface {
+            // FFmpeg's JNI MediaCodec wrapper can only configure a jobject
+            // Surface. The AImageReader route supplies an ANativeWindow, which
+            // is consumed correctly only by the NDK wrapper. FFmpeg otherwise
+            // auto-selects JNI whenever a JavaVM is registered and silently
+            // configures a byte-buffer decoder with no output Surface.
+            let option_result = check(
+                unsafe {
+                    sys::av_dict_set(&mut codec_options, c"ndk_codec".as_ptr(), c"1".as_ptr(), 0)
+                },
+                "av_dict_set(ndk_codec=1)",
+            );
+            if let Err(error) = option_result {
+                unsafe { sys::av_dict_free(&mut codec_options) };
+                return Err(error);
+            }
+            let delay_flush_result = check(
+                unsafe {
+                    sys::av_dict_set(
+                        &mut codec_options,
+                        c"delay_flush".as_ptr(),
+                        c"1".as_ptr(),
+                        0,
+                    )
+                },
+                "av_dict_set(delay_flush=1)",
+            );
+            if let Err(error) = delay_flush_result {
+                unsafe { sys::av_dict_free(&mut codec_options) };
+                return Err(error);
+            }
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "android_mediacodec_surface",
+                    "stage": "decoder_api_selected",
+                    "codecApi": "ndk",
+                    "options": ["ndk_codec=1", "delay_flush=1", "erika_nonblocking=1"],
+                    "reason": "AImageReader output is supplied as ANativeWindow",
+                })
+                .to_string(),
+            );
+        }
+        let open_code = unsafe { sys::avcodec_open2(decoder.context, codec, &mut codec_options) };
+        #[cfg(target_os = "android")]
+        let erika_nonblocking_unconsumed = config.backend == DecoderBackend::MediaCodec
+            && !unsafe {
+                sys::av_dict_get(codec_options, c"erika_nonblocking".as_ptr(), ptr::null(), 0)
+            }
+            .is_null();
+        #[cfg(target_os = "android")]
+        let surface_option_unconsumed = config.backend == DecoderBackend::MediaCodec
+            && config.mediacodec_surface
+            && (!unsafe { sys::av_dict_get(codec_options, c"ndk_codec".as_ptr(), ptr::null(), 0) }
+                .is_null()
+                || !unsafe {
+                    sys::av_dict_get(codec_options, c"delay_flush".as_ptr(), ptr::null(), 0)
+                }
+                .is_null());
+        unsafe { sys::av_dict_free(&mut codec_options) };
+        let mut open_result = check(open_code, "avcodec_open2");
+        #[cfg(target_os = "android")]
+        if open_result.is_ok()
+            && config.backend == DecoderBackend::MediaCodec
+            && erika_nonblocking_unconsumed
+        {
+            open_result = Err(FfmpegError::AndroidMediaCodec(
+                "FFmpeg did not consume required decoder option erika_nonblocking=1; rebuild Android native dependencies with the Erika FFmpeg 7.1.1 patch set"
+                    .to_string(),
+            ));
+        }
+        #[cfg(target_os = "android")]
+        if open_result.is_ok()
+            && config.backend == DecoderBackend::MediaCodec
+            && config.mediacodec_surface
+            && surface_option_unconsumed
+        {
+            open_result = Err(FfmpegError::AndroidMediaCodec(
+                "FFmpeg did not consume required Surface decoder options ndk_codec=1 and delay_flush=1"
+                    .to_string(),
+            ));
+        }
+        #[cfg(target_os = "android")]
+        if config.backend == DecoderBackend::MediaCodec {
+            if open_result.is_ok() {
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "android_mediacodec_decoder",
+                        "stage": "nonblocking_dequeue_enabled",
+                        "mode": if config.mediacodec_surface {
+                            "surface_ahardwarebuffer"
+                        } else {
+                            "bytebuffer_cpu_upload"
+                        },
+                        "option": "erika_nonblocking",
+                        "value": true,
+                        "verification": "avcodec_open2_consumed",
+                        "patchVersion": "v2",
+                        "inputDequeueTimeoutMicros": 0,
+                        "outputDequeueTimeoutMicros": 0,
+                        "drainOutputDequeueTimeoutMicros": 0,
+                        "reason": "positive NDK dequeue timeouts can remain blocked inside the synchronous MediaCodec framework request after a codec transition",
+                        "retryOwner": "rust_playback_worker",
+                    })
+                    .to_string(),
+                );
+            }
+            if let Err(error) = &open_result {
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "android_mediacodec_decoder",
+                        "stage": "decoder_open_failed",
+                        "mode": if config.mediacodec_surface {
+                            "surface_ahardwarebuffer"
+                        } else {
+                            "bytebuffer_cpu_upload"
+                        },
+                        "reason": error.to_string(),
+                    })
+                    .to_string(),
+                );
+            }
+        }
+        open_result?;
+        #[cfg(target_os = "android")]
+        if config.backend == DecoderBackend::Software && codec_id == sys::AVCodecID_AV_CODEC_ID_AV1
+        {
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "video_decoder",
+                    "stage": "software_decoder_selected",
+                    "codec": "av1",
+                    "decoder": "libdav1d",
+                })
+                .to_string(),
+            );
+        }
         Ok(decoder)
     }
 
@@ -742,6 +1133,18 @@ impl Decoder {
 
     pub fn backend(&self) -> DecoderBackend {
         self.backend
+    }
+
+    pub fn uses_mediacodec_surface(&self) -> bool {
+        self.backend == DecoderBackend::MediaCodec && self.mediacodec_surface
+    }
+
+    pub fn eof_sent(&self) -> bool {
+        self.eof_sent
+    }
+
+    pub fn is_end_of_stream(&self) -> bool {
+        self.end_of_stream
     }
 
     pub fn send_packet(&mut self, packet: &Packet) -> Result<()> {
@@ -758,27 +1161,51 @@ impl Decoder {
     }
 
     pub fn send_eof(&mut self) -> Result<()> {
-        check(
-            unsafe { sys::avcodec_send_packet(self.context, ptr::null()) },
-            "avcodec_send_packet_eof",
-        )
+        if self.eof_sent {
+            return Ok(());
+        }
+        let code = unsafe { sys::avcodec_send_packet(self.context, ptr::null()) };
+        if code == AVERROR_EOF {
+            self.eof_sent = true;
+            self.end_of_stream = true;
+            return Ok(());
+        }
+        check(code, "avcodec_send_packet_eof")?;
+        self.eof_sent = true;
+        Ok(())
     }
 
     pub fn receive_frame(&mut self) -> Result<DecoderOutputFrame> {
-        let frame = Frame::alloc(self.time_base)?;
+        let mut frame = Frame::alloc(self.time_base)?;
         let code = unsafe { sys::avcodec_receive_frame(self.context, frame.ptr) };
         if code == av_error(EAGAIN) {
             return Ok(DecoderOutputFrame::NeedMoreInput);
         }
         if code == AVERROR_EOF {
+            self.end_of_stream = true;
             return Ok(DecoderOutputFrame::EndOfStream);
         }
         check(code, "avcodec_receive_frame")?;
+        #[cfg(target_os = "android")]
+        if self.backend == DecoderBackend::MediaCodec && frame.is_mediacodec() {
+            let source = self.mediacodec_source.clone().ok_or_else(|| {
+                FfmpegError::AndroidMediaCodec(
+                    "decoder returned AV_PIX_FMT_MEDIACODEC without an AImageReader source"
+                        .to_string(),
+                )
+            })?;
+            frame.mediacodec = Some(AndroidMediaCodecFrameState {
+                source,
+                delivery: Arc::new(Mutex::new(AndroidMediaCodecFrameDelivery::default())),
+            });
+        }
         Ok(DecoderOutputFrame::Frame(frame))
     }
 
     pub fn flush(&mut self) {
         unsafe { sys::avcodec_flush_buffers(self.context) };
+        self.eof_sent = false;
+        self.end_of_stream = false;
     }
 
     fn configure_videotoolbox(&mut self, codec: *const sys::AVCodec) -> Result<()> {
@@ -797,6 +1224,117 @@ impl Decoder {
             "avcodec_get_hw_config(D3D11VA)",
             "av_hwdevice_ctx_create(D3D11VA)",
         )?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "android")]
+    fn configure_mediacodec(&mut self, codec: *const sys::AVCodec) -> Result<()> {
+        let result = self.configure_mediacodec_inner(codec);
+        if let Err(error) = &result {
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "android_mediacodec_surface",
+                    "stage": "decoder_surface_configuration_failed",
+                    "reason": error.to_string(),
+                })
+                .to_string(),
+            );
+        }
+        result
+    }
+
+    #[cfg(target_os = "android")]
+    fn configure_mediacodec_inner(&mut self, codec: *const sys::AVCodec) -> Result<()> {
+        let pixel_format =
+            hardware_pixel_format(codec, sys::AVHWDeviceType_AV_HWDEVICE_TYPE_MEDIACODEC)
+                .ok_or_else(|| {
+                    FfmpegError::AndroidMediaCodec(
+                        "avcodec_get_hw_config did not expose a MediaCodec HW device format"
+                            .to_string(),
+                    )
+                })?;
+        if pixel_format != sys::AVPixelFormat_AV_PIX_FMT_MEDIACODEC {
+            return Err(FfmpegError::AndroidMediaCodec(format!(
+                "unexpected MediaCodec hardware pixel format {pixel_format}"
+            )));
+        }
+        let width = unsafe {
+            (*self.context)
+                .width
+                .max((*self.context).coded_width)
+                .max(0) as u32
+        };
+        let height = unsafe {
+            (*self.context)
+                .height
+                .max((*self.context).coded_height)
+                .max(0) as u32
+        };
+        let source = Arc::new(
+            AndroidMediaCodecFrameSource::new(width, height)
+                .map_err(|error| FfmpegError::AndroidMediaCodec(error.to_string()))?,
+        );
+
+        let mut device_ref =
+            unsafe { sys::av_hwdevice_ctx_alloc(sys::AVHWDeviceType_AV_HWDEVICE_TYPE_MEDIACODEC) };
+        if device_ref.is_null() {
+            return Err(FfmpegError::NullPointer(
+                "av_hwdevice_ctx_alloc(MediaCodec)",
+            ));
+        }
+        let setup = (|| {
+            let device_context =
+                unsafe { (*device_ref).data.cast::<sys::AVHWDeviceContext>().as_mut() }
+                    .ok_or(FfmpegError::NullPointer("AVHWDeviceContext(MediaCodec)"))?;
+            let mediacodec_context = unsafe {
+                device_context
+                    .hwctx
+                    .cast::<sys::AVMediaCodecDeviceContext>()
+                    .as_mut()
+            }
+            .ok_or(FfmpegError::NullPointer("AVMediaCodecDeviceContext"))?;
+            mediacodec_context.surface = ptr::null_mut();
+            mediacodec_context.native_window = source.native_window().as_ptr();
+            mediacodec_context.create_window = 0;
+            check(
+                unsafe { sys::av_hwdevice_ctx_init(device_ref) },
+                "av_hwdevice_ctx_init(MediaCodec)",
+            )?;
+            let context_device_ref = unsafe { sys::av_buffer_ref(device_ref) };
+            if context_device_ref.is_null() {
+                return Err(FfmpegError::NullPointer(
+                    "av_buffer_ref(MediaCodec hw_device_ctx)",
+                ));
+            }
+            let mut hw_state = Box::new(HardwareDecoderState {
+                device_ref,
+                frames_ref: ptr::null_mut(),
+                pixel_format,
+            });
+            unsafe {
+                (*self.context).hw_device_ctx = context_device_ref;
+                (*self.context).opaque = (&mut *hw_state) as *mut HardwareDecoderState as *mut _;
+                (*self.context).get_format = Some(select_hw_format);
+            }
+            self.hw_state = Some(hw_state);
+            self.mediacodec_source = Some(source.clone());
+            device_ref = ptr::null_mut();
+            Ok(())
+        })();
+        if !device_ref.is_null() {
+            unsafe { sys::av_buffer_unref(&mut device_ref) };
+        }
+        setup?;
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "android_mediacodec_surface",
+                "stage": "decoder_surface_configured",
+                "width": source.width(),
+                "height": source.height(),
+                "pixelFormat": "mediacodec",
+            })
+            .to_string(),
+        );
         Ok(())
     }
 
@@ -846,6 +1384,41 @@ impl Decoder {
         self.hw_state = Some(hw_state);
         Ok(())
     }
+}
+
+fn software_decoder(codec_id: sys::AVCodecID) -> (*const sys::AVCodec, &'static str) {
+    #[cfg(target_os = "android")]
+    if codec_id == sys::AVCodecID_AV_CODEC_ID_AV1 {
+        return (
+            unsafe { sys::avcodec_find_decoder_by_name(c"libdav1d".as_ptr()) },
+            "avcodec_find_decoder_by_name(libdav1d)",
+        );
+    }
+    (
+        unsafe { sys::avcodec_find_decoder(codec_id) },
+        "avcodec_find_decoder",
+    )
+}
+
+fn mediacodec_decoder(codec_id: sys::AVCodecID) -> *const sys::AVCodec {
+    let name = if codec_id == sys::AVCodecID_AV_CODEC_ID_H264 {
+        b"h264_mediacodec\0".as_slice()
+    } else if codec_id == sys::AVCodecID_AV_CODEC_ID_HEVC {
+        b"hevc_mediacodec\0".as_slice()
+    } else if codec_id == sys::AVCodecID_AV_CODEC_ID_MPEG2VIDEO {
+        b"mpeg2_mediacodec\0".as_slice()
+    } else if codec_id == sys::AVCodecID_AV_CODEC_ID_MPEG4 {
+        b"mpeg4_mediacodec\0".as_slice()
+    } else if codec_id == sys::AVCodecID_AV_CODEC_ID_VP8 {
+        b"vp8_mediacodec\0".as_slice()
+    } else if codec_id == sys::AVCodecID_AV_CODEC_ID_VP9 {
+        b"vp9_mediacodec\0".as_slice()
+    } else if codec_id == sys::AVCodecID_AV_CODEC_ID_AV1 {
+        b"av1_mediacodec\0".as_slice()
+    } else {
+        return ptr::null();
+    };
+    unsafe { sys::avcodec_find_decoder_by_name(name.as_ptr().cast()) }
 }
 
 #[cfg(target_os = "windows")]
@@ -950,6 +1523,56 @@ fn configure_ffmpeg_debug_logging() {
     }
 }
 
+/// Registers the process Java VM used by FFmpeg's MediaCodec bridge.
+///
+/// FFmpeg cannot attach decoder worker threads to JNI until this has run. A
+/// missing registration makes every MediaCodec decoder fail with "No Java
+/// virtual machine has been registered", which would otherwise look like a
+/// normal hardware-to-software fallback.
+///
+/// # Safety
+///
+/// `java_vm` must be the live `JavaVM*` supplied by Android to `JNI_OnLoad`.
+#[cfg(target_os = "android")]
+pub unsafe fn register_android_java_vm(java_vm: *mut c_void) -> Result<()> {
+    if java_vm.is_null() {
+        let error = FfmpegError::NullPointer("JNI_OnLoad(JavaVM)");
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "ffmpeg_jni",
+                "stage": "java_vm_registration_failed",
+                "reason": error.to_string(),
+            })
+            .to_string(),
+        );
+        return Err(error);
+    }
+
+    let result = check(
+        unsafe { sys::av_jni_set_java_vm(java_vm, ptr::null_mut()) },
+        "av_jni_set_java_vm",
+    );
+    match &result {
+        Ok(()) => crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "ffmpeg_jni",
+                "stage": "java_vm_registered",
+            })
+            .to_string(),
+        ),
+        Err(error) => crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "ffmpeg_jni",
+                "stage": "java_vm_registration_failed",
+                "reason": error.to_string(),
+            })
+            .to_string(),
+        ),
+    }
+    result
+}
+
+#[cfg(target_os = "windows")]
 fn trace_ffmpeg(message: &str) {
     if std::env::var_os("ERIKA_FFMPEG_DEBUG").is_some() {
         eprintln!("erika ffmpeg: {message}");
@@ -971,14 +1594,19 @@ pub enum DecoderOutputFrame {
 pub struct Frame {
     ptr: *mut sys::AVFrame,
     time_base: TimeBase,
+    #[cfg(target_os = "android")]
+    mediacodec: Option<AndroidMediaCodecFrameState>,
 }
 
 pub struct AudioResampler {
     context: *mut sys::SwrContext,
     output_format: PcmFormat,
+    next_output_pts: Option<Duration>,
     #[allow(dead_code)]
     output_layout: ChannelLayout,
 }
+
+const AUDIO_RESAMPLER_PTS_DISCONTINUITY_TOLERANCE: Duration = Duration::from_millis(250);
 
 unsafe impl Send for AudioResampler {}
 
@@ -1039,15 +1667,24 @@ impl Frame {
         if ptr.is_null() {
             return Err(FfmpegError::NullPointer("av_frame_alloc"));
         }
-        Ok(Self { ptr, time_base })
+        Ok(Self {
+            ptr,
+            time_base,
+            #[cfg(target_os = "android")]
+            mediacodec: None,
+        })
     }
 
     pub fn try_clone_ref(&self) -> Result<Self> {
-        let frame = Frame::alloc(self.time_base)?;
+        let mut frame = Frame::alloc(self.time_base)?;
         check(
             unsafe { sys::av_frame_ref(frame.ptr, self.ptr) },
             "av_frame_ref",
         )?;
+        #[cfg(target_os = "android")]
+        {
+            frame.mediacodec = self.mediacodec.clone();
+        }
         Ok(frame)
     }
 
@@ -1102,12 +1739,164 @@ impl Frame {
         unsafe { (*self.ptr).format }
     }
 
+    pub fn line_sizes(&self) -> [i32; 4] {
+        unsafe {
+            let linesize = (*self.ptr).linesize;
+            [linesize[0], linesize[1], linesize[2], linesize[3]]
+        }
+    }
+
     pub fn is_videotoolbox(&self) -> bool {
         self.raw_pixel_format() == sys::AVPixelFormat_AV_PIX_FMT_VIDEOTOOLBOX
     }
 
     pub fn is_d3d11va(&self) -> bool {
         self.raw_pixel_format() == sys::AVPixelFormat_AV_PIX_FMT_D3D11
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn is_mediacodec(&self) -> bool {
+        self.raw_pixel_format() == sys::AVPixelFormat_AV_PIX_FMT_MEDIACODEC
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn render_mediacodec_image(&self) -> Result<Arc<AndroidHardwareBufferImage>> {
+        if !self.is_mediacodec() {
+            return Err(FfmpegError::AndroidMediaCodec(format!(
+                "expected AV_PIX_FMT_MEDIACODEC, received {:?}",
+                self.pixel_format()
+            )));
+        }
+        let state = self.mediacodec.as_ref().ok_or_else(|| {
+            FfmpegError::AndroidMediaCodec(
+                "MediaCodec frame is not associated with its AImageReader source".to_string(),
+            )
+        })?;
+        let expected_media_timestamp_ns = self.raw_pts().and_then(|pts| {
+            let denominator = i128::from(self.time_base.den);
+            if denominator == 0 {
+                return None;
+            }
+            let timestamp_ns = i128::from(pts)
+                .checked_mul(i128::from(self.time_base.num))?
+                .checked_mul(1_000_000_000)?
+                / denominator;
+            i64::try_from(timestamp_ns).ok()
+        });
+        let mut delivery = state.delivery.lock().map_err(|_| {
+            FfmpegError::AndroidMediaCodec(
+                "MediaCodec frame delivery state lock was poisoned".to_string(),
+            )
+        })?;
+        if let Some(result) = delivery.result.as_ref() {
+            return result
+                .as_ref()
+                .map(Arc::clone)
+                .map_err(|error| FfmpegError::AndroidMediaCodec(error.clone()));
+        }
+        let _delivery_guard = state
+            .source
+            .lock_delivery()
+            .map_err(|error| FfmpegError::AndroidMediaCodec(error.to_string()))?;
+        if !delivery.released {
+            if let Err(error @ AndroidMediaCodecError::ImageBackpressure { .. }) = state
+                .source
+                .ensure_image_capacity(expected_media_timestamp_ns)
+            {
+                return Err(FfmpegError::AndroidMediaCodecBackpressure(
+                    error.to_string(),
+                ));
+            }
+            let buffer = unsafe { (*self.ptr).data[3] }.cast::<sys::AVMediaCodecBuffer>();
+            if buffer.is_null() {
+                let error = FfmpegError::NullPointer("AVMediaCodecBuffer");
+                delivery.result = Some(Err(error.to_string()));
+                return Err(error);
+            }
+            // ImageReader is an off-screen consumer, not a display surface. Release
+            // exactly one codec buffer for immediate rendering and then acquire the
+            // next queued image. Display-time scheduling is unnecessary here; the
+            // per-source delivery lock keeps release/acquire pairs in queue order.
+            let render_result = unsafe { sys::av_mediacodec_release_buffer(buffer, 1) };
+            if render_result < 0 {
+                let error = api_error("av_mediacodec_release_buffer(render=1)", render_result);
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "android_mediacodec_surface",
+                        "stage": "render_buffer_failed",
+                        "renderMode": "immediate",
+                        "expectedMediaTimestampNs": expected_media_timestamp_ns,
+                        "reason": error.to_string(),
+                    })
+                    .to_string(),
+                );
+                delivery.result = Some(Err(error.to_string()));
+                return Err(error);
+            }
+            delivery.released = true;
+        }
+        match state
+            .source
+            .acquire_next_rendered_image(expected_media_timestamp_ns)
+        {
+            Ok(image) => {
+                delivery.result = Some(Ok(Arc::clone(&image)));
+                Ok(image)
+            }
+            Err(error @ AndroidMediaCodecError::ImageBackpressure { .. }) => Err(
+                FfmpegError::AndroidMediaCodecBackpressure(error.to_string()),
+            ),
+            Err(error) => {
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "android_mediacodec_surface",
+                        "stage": "image_acquire_failed",
+                        "renderMode": "immediate",
+                        "expectedMediaTimestampNs": expected_media_timestamp_ns,
+                        "reason": error.to_string(),
+                    })
+                    .to_string(),
+                );
+                let error = error.to_string();
+                delivery.result = Some(Err(error.clone()));
+                Err(FfmpegError::AndroidMediaCodec(error))
+            }
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn prepare_mediacodec_image(&self) -> Result<()> {
+        if !self.is_mediacodec() {
+            return Ok(());
+        }
+        self.render_mediacodec_image().map(|_| ())
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn prepared_mediacodec_image(&self) -> Result<Arc<AndroidHardwareBufferImage>> {
+        if !self.is_mediacodec() {
+            return Err(FfmpegError::AndroidMediaCodec(format!(
+                "expected AV_PIX_FMT_MEDIACODEC, received {:?}",
+                self.pixel_format()
+            )));
+        }
+        let state = self.mediacodec.as_ref().ok_or_else(|| {
+            FfmpegError::AndroidMediaCodec(
+                "MediaCodec frame is not associated with its AImageReader source".to_string(),
+            )
+        })?;
+        let delivery = state.delivery.lock().map_err(|_| {
+            FfmpegError::AndroidMediaCodec(
+                "MediaCodec frame delivery state lock was poisoned".to_string(),
+            )
+        })?;
+        match delivery.result.as_ref() {
+            Some(Ok(image)) => Ok(Arc::clone(image)),
+            Some(Err(error)) => Err(FfmpegError::AndroidMediaCodec(error.clone())),
+            None => Err(FfmpegError::AndroidMediaCodec(
+                "MediaCodec image was not prepared on the playback worker".to_string(),
+            )),
+        }
     }
 
     pub fn has_hw_frames_context(&self) -> bool {
@@ -1198,12 +1987,12 @@ impl Frame {
     pub fn to_nv12(&self) -> Option<Nv12Frame> {
         let width = self.width() as usize;
         let height = self.height() as usize;
-        if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+        if width == 0 || height == 0 {
             return None;
         }
         let format = self.raw_pixel_format();
-        let chroma_width = width / 2;
-        let chroma_height = height / 2;
+        let chroma_width = width.div_ceil(2);
+        let chroma_height = height.div_ceil(2);
 
         // SAFETY: `self.ptr` is a valid AVFrame for this Frame's lifetime. For a
         // software 4:2:0 frame `data[0]` is the luma plane and `data[1..]` the
@@ -1296,11 +2085,11 @@ impl Frame {
 
         let width = self.width() as usize;
         let height = self.height() as usize;
-        if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+        if width == 0 || height == 0 {
             return None;
         }
-        let chroma_width = width / 2;
-        let chroma_height = height / 2;
+        let chroma_width = width.div_ceil(2);
+        let chroma_height = height.div_ceil(2);
 
         // SAFETY: `self.ptr` is a valid AVFrame. For 10-bit planar 4:2:0 the planes
         // hold 16-bit little-endian samples spanning `linesize[i]` bytes per row; the
@@ -1349,11 +2138,15 @@ impl Frame {
     fn to_nv12_with_swscale(&self) -> Option<PlanarFrame> {
         let width = self.width() as usize;
         let height = self.height() as usize;
-        if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+        if width == 0 || height == 0 {
             return None;
         }
         let width_i32 = i32::try_from(width).ok()?;
         let height_i32 = i32::try_from(height).ok()?;
+        let chroma_width = width.div_ceil(2);
+        let chroma_height = height.div_ceil(2);
+        let chroma_row_bytes = chroma_width.checked_mul(2)?;
+        let chroma_linesize = i32::try_from(chroma_row_bytes).ok()?;
         let format = self.raw_pixel_format();
         if format < 0
             || format == sys::AVPixelFormat_AV_PIX_FMT_VIDEOTOOLBOX
@@ -1381,14 +2174,14 @@ impl Frame {
             }
 
             let mut luma = vec![0u8; width * height];
-            let mut chroma = vec![0u8; width * (height / 2)];
+            let mut chroma = vec![0u8; chroma_row_bytes * chroma_height];
             let mut dst_data = [
                 luma.as_mut_ptr(),
                 chroma.as_mut_ptr(),
                 ptr::null_mut(),
                 ptr::null_mut(),
             ];
-            let mut dst_linesize = [width_i32, width_i32, 0, 0];
+            let mut dst_linesize = [width_i32, chroma_linesize, 0, 0];
             let converted = sys::sws_scale(
                 context,
                 frame.data.as_ptr() as *const *const u8,
@@ -1416,7 +2209,7 @@ impl Frame {
 
 /// Tightly packed NV12 planes produced by [`Frame::to_nv12`]: an 8-bit luma plane
 /// (`width * height`) and an interleaved Cb/Cr plane at half resolution
-/// (`(width / 2) * (height / 2) * 2`).
+/// (`ceil(width / 2) * ceil(height / 2) * 2`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Nv12Frame {
     pub width: u32,
@@ -1445,6 +2238,101 @@ pub struct PlanarFrame {
     pub height: u32,
     pub luma: Vec<u8>,
     pub chroma: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PlanarFrameConversionError {
+    #[error("P010 to NV12 conversion requires P010 input, got {format:?}")]
+    ExpectedP010 { format: PlanarPixelFormat },
+    #[error("P010 {plane} plane is {actual} bytes, expected {expected} for {width}x{height}")]
+    InvalidP010PlaneSize {
+        plane: &'static str,
+        actual: usize,
+        expected: usize,
+        width: u32,
+        height: u32,
+    },
+    #[error("P010 plane dimensions overflow host address space for {width}x{height}")]
+    DimensionsOverflow { width: u32, height: u32 },
+}
+
+impl PlanarFrame {
+    /// Down-converts tightly packed P010 into tightly packed NV12 on the CPU.
+    ///
+    /// P010 stores each 10-bit code in the high bits of a little-endian 16-bit
+    /// word. Rounding the 10-bit code by two bits preserves the conventional
+    /// limited-range anchors exactly (`64 -> 16`, `940 -> 235`, `960 -> 240`)
+    /// while also mapping full-range `1023` to `255`.
+    pub fn downconvert_p010_to_nv12(self) -> std::result::Result<Self, PlanarFrameConversionError> {
+        if self.format != PlanarPixelFormat::P010 {
+            return Err(PlanarFrameConversionError::ExpectedP010 {
+                format: self.format,
+            });
+        }
+
+        let luma_samples = (self.width as usize)
+            .checked_mul(self.height as usize)
+            .ok_or(PlanarFrameConversionError::DimensionsOverflow {
+                width: self.width,
+                height: self.height,
+            })?;
+        let chroma_samples = (self.width.div_ceil(2) as usize)
+            .checked_mul(self.height.div_ceil(2) as usize)
+            .and_then(|samples| samples.checked_mul(2))
+            .ok_or(PlanarFrameConversionError::DimensionsOverflow {
+                width: self.width,
+                height: self.height,
+            })?;
+        let expected_luma =
+            luma_samples
+                .checked_mul(2)
+                .ok_or(PlanarFrameConversionError::DimensionsOverflow {
+                    width: self.width,
+                    height: self.height,
+                })?;
+        let expected_chroma = chroma_samples.checked_mul(2).ok_or(
+            PlanarFrameConversionError::DimensionsOverflow {
+                width: self.width,
+                height: self.height,
+            },
+        )?;
+        if self.luma.len() != expected_luma {
+            return Err(PlanarFrameConversionError::InvalidP010PlaneSize {
+                plane: "luma",
+                actual: self.luma.len(),
+                expected: expected_luma,
+                width: self.width,
+                height: self.height,
+            });
+        }
+        if self.chroma.len() != expected_chroma {
+            return Err(PlanarFrameConversionError::InvalidP010PlaneSize {
+                plane: "chroma",
+                actual: self.chroma.len(),
+                expected: expected_chroma,
+                width: self.width,
+                height: self.height,
+            });
+        }
+
+        Ok(Self {
+            format: PlanarPixelFormat::Nv12,
+            width: self.width,
+            height: self.height,
+            luma: downconvert_p010_samples_to_u8(&self.luma),
+            chroma: downconvert_p010_samples_to_u8(&self.chroma),
+        })
+    }
+}
+
+fn downconvert_p010_samples_to_u8(source: &[u8]) -> Vec<u8> {
+    source
+        .chunks_exact(2)
+        .map(|bytes| {
+            let code = u16::from_le_bytes([bytes[0], bytes[1]]) >> 6;
+            (((u32::from(code) + 2) >> 2).min(u32::from(u8::MAX))) as u8
+        })
+        .collect()
 }
 
 /// Reads a 10-bit little-endian plane and rewrites it as P010 (value `<< 6`, so the
@@ -1562,6 +2450,7 @@ impl AudioResampler {
         Ok(Self {
             context,
             output_format,
+            next_output_pts: None,
             output_layout,
         })
     }
@@ -1573,6 +2462,29 @@ impl AudioResampler {
     pub fn convert(&mut self, frame: &Frame) -> Result<PcmAudioFrame> {
         if !frame.is_audio() {
             return Err(FfmpegError::ExpectedAudioFrame);
+        }
+        let input_pts = frame.pts().and_then(|pts| pts.as_duration());
+        let (pts, reanchored) = select_resampler_output_pts(self.next_output_pts, input_pts);
+        if reanchored {
+            let discarded_delay_frames =
+                unsafe { sys::swr_get_delay(self.context, self.output_format.sample_rate as i64) }
+                    .max(0);
+            unsafe { sys::swr_close(self.context) };
+            check(
+                unsafe { sys::swr_init(self.context) },
+                "swr_init(discontinuity)",
+            )?;
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "audio_resampler_timeline",
+                    "stage": "discontinuity_reanchor",
+                    "expectedSeconds": self.next_output_pts.map(|pts| pts.as_secs_f64()),
+                    "inputSeconds": input_pts.map(|pts| pts.as_secs_f64()),
+                    "discardedDelayFrames": discarded_delay_frames,
+                    "toleranceSeconds": AUDIO_RESAMPLER_PTS_DISCONTINUITY_TOLERANCE.as_secs_f64(),
+                })
+                .to_string(),
+            );
         }
         let input_samples = frame.sample_count().min(i32::MAX as usize) as i32;
         let delay = unsafe { sys::swr_get_delay(self.context, frame.sample_rate() as i64) }.max(0);
@@ -1605,12 +2517,80 @@ impl AudioResampler {
         check(converted, "swr_convert")?;
         let frames = converted.max(0) as usize;
         samples.truncate(frames * channels);
+        self.next_output_pts = pcm_end_pts(pts, frames, self.output_format.sample_rate);
         Ok(PcmAudioFrame {
             format: self.output_format,
-            pts: frame.pts().and_then(|pts| pts.as_duration()),
+            pts,
             frames,
             samples,
         })
+    }
+
+    pub fn drain(&mut self) -> Result<Option<PcmAudioFrame>> {
+        let output_capacity =
+            unsafe { sys::swr_get_delay(self.context, self.output_format.sample_rate as i64) }
+                .max(0)
+                .min(i32::MAX as i64) as i32;
+        if output_capacity == 0 {
+            return Ok(None);
+        }
+
+        let channels = self.output_format.channels.max(1) as usize;
+        let mut samples = vec![0.0f32; output_capacity as usize * channels];
+        let mut output_planes = [samples.as_mut_ptr().cast::<u8>()];
+        let converted = unsafe {
+            sys::swr_convert(
+                self.context,
+                output_planes.as_mut_ptr(),
+                output_capacity,
+                ptr::null_mut(),
+                0,
+            )
+        };
+        check(converted, "swr_convert(drain)")?;
+        let frames = converted.max(0) as usize;
+        if frames == 0 {
+            return Ok(None);
+        }
+        samples.truncate(frames * channels);
+        let pts = self.next_output_pts;
+        self.next_output_pts = pcm_end_pts(pts, frames, self.output_format.sample_rate);
+        Ok(Some(PcmAudioFrame {
+            format: self.output_format,
+            pts,
+            frames,
+            samples,
+        }))
+    }
+}
+
+fn pcm_end_pts(pts: Option<Duration>, frames: usize, sample_rate: u32) -> Option<Duration> {
+    let pts = pts?;
+    if frames == 0 || sample_rate == 0 {
+        return Some(pts);
+    }
+    Some(pts.saturating_add(Duration::from_secs_f64(frames as f64 / sample_rate as f64)))
+}
+
+fn select_resampler_output_pts(
+    expected: Option<Duration>,
+    input: Option<Duration>,
+) -> (Option<Duration>, bool) {
+    let Some(expected) = expected else {
+        return (input, false);
+    };
+    let Some(input) = input else {
+        return (Some(expected), false);
+    };
+    let drift = if expected >= input {
+        expected - input
+    } else {
+        input - expected
+    };
+    if drift > AUDIO_RESAMPLER_PTS_DISCONTINUITY_TOLERANCE {
+        (Some(input), true)
+    } else {
+        (Some(expected), false)
     }
 }
 
@@ -1768,6 +2748,21 @@ impl Packet {
             ptr,
             time_base: None,
         })
+    }
+
+    fn normalize_timeline(&mut self, timeline_origin_micros: i64) {
+        let Some(time_base) = self.time_base.filter(|_| timeline_origin_micros != 0) else {
+            return;
+        };
+        let origin = rescale_microseconds_to_time_base(timeline_origin_micros, time_base);
+        unsafe {
+            if timestamp_value((*self.ptr).pts).is_some() {
+                (*self.ptr).pts = (*self.ptr).pts.saturating_sub(origin);
+            }
+            if timestamp_value((*self.ptr).dts).is_some() {
+                (*self.ptr).dts = (*self.ptr).dts.saturating_sub(origin);
+            }
+        }
     }
 
     pub fn as_ptr(&self) -> *const sys::AVPacket {
@@ -2100,6 +3095,7 @@ fn inspect_format_context(
     let mut video = Vec::new();
     let mut audio = Vec::new();
     let mut subtitles = Vec::new();
+    let mut subtitle_fonts = Vec::new();
     let mut stream_time_bases = Vec::with_capacity(stream_count);
 
     for index in 0..stream_count {
@@ -2113,6 +3109,19 @@ fn inspect_format_context(
 
         let codecpar = unsafe { (*stream).codecpar };
         if codecpar.is_null() {
+            continue;
+        }
+
+        if unsafe { (*codecpar).codec_type } == sys::AVMediaType_AVMEDIA_TYPE_ATTACHMENT {
+            let accepted_bytes = subtitle_fonts
+                .iter()
+                .map(SubtitleFontAttachment::byte_len)
+                .sum();
+            if let Some(font) = unsafe {
+                subtitle_font_attachment(stream, codecpar, subtitle_fonts.len(), accepted_bytes)
+            } {
+                subtitle_fonts.push(font);
+            }
             continue;
         }
 
@@ -2157,6 +3166,7 @@ fn inspect_format_context(
             video,
             audio,
             subtitles,
+            subtitle_fonts: Arc::from(subtitle_fonts),
         },
         stream_time_bases,
     )
@@ -2166,16 +3176,20 @@ fn check(code: i32, operation: &'static str) -> Result<()> {
     if code >= 0 {
         Ok(())
     } else {
-        Err(FfmpegError::Api {
-            operation,
-            code,
-            message: error_string(code),
-        })
+        Err(api_error(operation, code))
+    }
+}
+
+fn api_error(operation: &'static str, code: i32) -> FfmpegError {
+    FfmpegError::Api {
+        operation,
+        code,
+        message: error_string(code),
     }
 }
 
 fn error_string(code: i32) -> String {
-    let mut buffer = [0i8; 256];
+    let mut buffer = [0 as c_char; 256];
     unsafe {
         if sys::av_strerror(code, buffer.as_mut_ptr(), buffer.len()) == 0 {
             CStr::from_ptr(buffer.as_ptr())
@@ -2263,17 +3277,208 @@ fn subtitle_probe(track: &TrackInfo) -> SubtitleTrackConfig {
     config
 }
 
+unsafe fn subtitle_font_attachment(
+    stream: *const sys::AVStream,
+    codecpar: *const sys::AVCodecParameters,
+    accepted_count: usize,
+    accepted_bytes: usize,
+) -> Option<SubtitleFontAttachment> {
+    let stream_index = unsafe { (*stream).index };
+    let name = metadata_value(unsafe { (*stream).metadata }, "filename")
+        .unwrap_or_else(|| format!("attachment-{stream_index}"));
+    let mime_type = metadata_value(unsafe { (*stream).metadata }, "mimetype");
+    let codec = unsafe { codec_name((*codecpar).codec_id) };
+    if !is_font_attachment_candidate(&name, mime_type.as_deref(), codec.as_deref()) {
+        return None;
+    }
+
+    let size = unsafe { (*codecpar).extradata_size };
+    let data = unsafe { (*codecpar).extradata };
+    if size <= 0 || data.is_null() {
+        log_subtitle_font_rejected(
+            stream_index,
+            &name,
+            mime_type.as_deref(),
+            0,
+            "attachment has no font data",
+        );
+        return None;
+    }
+    let size = size as usize;
+    if accepted_count >= MAX_SUBTITLE_FONT_ATTACHMENTS {
+        log_subtitle_font_rejected(
+            stream_index,
+            &name,
+            mime_type.as_deref(),
+            size,
+            "container font attachment count limit exceeded",
+        );
+        return None;
+    }
+    if size > MAX_SUBTITLE_FONT_ATTACHMENT_BYTES {
+        log_subtitle_font_rejected(
+            stream_index,
+            &name,
+            mime_type.as_deref(),
+            size,
+            "font attachment byte limit exceeded",
+        );
+        return None;
+    }
+    if accepted_bytes
+        .checked_add(size)
+        .is_none_or(|total| total > MAX_SUBTITLE_FONT_TOTAL_BYTES)
+    {
+        log_subtitle_font_rejected(
+            stream_index,
+            &name,
+            mime_type.as_deref(),
+            size,
+            "container font attachment total byte limit exceeded",
+        );
+        return None;
+    }
+    let bytes = unsafe { slice::from_raw_parts(data, size) }.to_vec();
+    let mut database = fontdb::Database::new();
+    database.load_font_data(bytes.clone());
+    let faces = database.faces().collect::<Vec<_>>();
+    if faces.is_empty() {
+        log_subtitle_font_rejected(
+            stream_index,
+            &name,
+            mime_type.as_deref(),
+            bytes.len(),
+            "font parser found no faces",
+        );
+        return None;
+    }
+
+    let mut families = BTreeSet::new();
+    for face in faces {
+        families.extend(face.families.iter().map(|(family, _)| family.clone()));
+        if !face.post_script_name.is_empty() {
+            families.insert(face.post_script_name.clone());
+        }
+    }
+    let families = families.into_iter().collect::<Vec<_>>();
+    crate::trace::diagnostic(
+        serde_json::json!({
+            "event": "subtitle_font_attachment",
+            "stage": "validated",
+            "sourceStreamIndex": stream_index,
+            "name": name,
+            "mimeType": mime_type,
+            "families": families,
+            "bytes": bytes.len(),
+        })
+        .to_string(),
+    );
+    Some(SubtitleFontAttachment::new(
+        name,
+        mime_type,
+        families,
+        Arc::<[u8]>::from(bytes),
+    ))
+}
+
+fn is_font_attachment_candidate(name: &str, mime_type: Option<&str>, codec: Option<&str>) -> bool {
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase());
+    let mime_type = mime_type.map(str::to_ascii_lowercase);
+    matches!(extension.as_deref(), Some("ttf" | "otf" | "ttc" | "otc"))
+        || mime_type.as_deref().is_some_and(|mime| {
+            mime.starts_with("font/") || mime.contains("truetype") || mime.contains("opentype")
+        })
+        || matches!(codec, Some("ttf" | "otf"))
+}
+
+fn log_subtitle_font_rejected(
+    stream_index: i32,
+    name: &str,
+    mime_type: Option<&str>,
+    bytes: usize,
+    reason: &str,
+) {
+    crate::trace::diagnostic(
+        serde_json::json!({
+            "event": "subtitle_font_attachment",
+            "stage": "rejected",
+            "sourceStreamIndex": stream_index,
+            "name": name,
+            "mimeType": mime_type,
+            "bytes": bytes,
+            "reason": reason,
+        })
+        .to_string(),
+    );
+}
+
+unsafe fn subtitle_header_bytes(
+    context: *const sys::AVCodecContext,
+    stream_index: i32,
+) -> Option<Arc<[u8]>> {
+    let size = unsafe { (*context).subtitle_header_size };
+    let data = unsafe { (*context).subtitle_header };
+    copy_ass_codec_private(data, size, stream_index, "subtitle_header")
+}
+
+unsafe fn codec_parameter_extradata(
+    parameters: *const sys::AVCodecParameters,
+    stream_index: i32,
+) -> Option<Arc<[u8]>> {
+    let size = unsafe { (*parameters).extradata_size };
+    let data = unsafe { (*parameters).extradata };
+    copy_ass_codec_private(data, size, stream_index, "codec_extradata")
+}
+
+fn copy_ass_codec_private(
+    data: *const u8,
+    size: i32,
+    stream_index: i32,
+    source: &str,
+) -> Option<Arc<[u8]>> {
+    if size <= 0 || data.is_null() {
+        return None;
+    }
+    let size = size as usize;
+    if size > MAX_ASS_CODEC_PRIVATE_BYTES {
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "subtitle_ass_track",
+                "stage": "codec_private_rejected",
+                "sourceStreamIndex": stream_index,
+                "source": source,
+                "bytes": size,
+                "limitBytes": MAX_ASS_CODEC_PRIVATE_BYTES,
+                "reason": "ASS CodecPrivate byte limit exceeded",
+            })
+            .to_string(),
+        );
+        return None;
+    }
+    Some(Arc::from(unsafe { slice::from_raw_parts(data, size) }))
+}
+
+unsafe fn subtitle_codec_is_text(codec_id: sys::AVCodecID) -> bool {
+    let descriptor = unsafe { sys::avcodec_descriptor_get(codec_id) };
+    !descriptor.is_null()
+        && unsafe { (*descriptor).props } & sys::AV_CODEC_PROP_TEXT_SUB as i32 != 0
+}
+
 unsafe fn import_av_subtitle(
     track_id: i64,
     packet: &Packet,
     subtitle: &sys::AVSubtitle,
     canvas: (u32, u32),
+    ass_track: Option<Arc<AssTrackResources>>,
 ) -> Result<DecodedSubtitleFrame> {
     let start = subtitle_start_time(packet, subtitle);
     let start_offset = Duration::from_millis(u64::from(subtitle.start_display_time));
     let start = start.map(|pts| pts.saturating_add(start_offset));
     let end = subtitle_end_time(start, subtitle);
     let mut frame = DecodedSubtitleFrame::new(track_id, start, end);
+    let mut has_ass = false;
 
     let rect_count = subtitle.num_rects as usize;
     if rect_count == 0 || subtitle.rects.is_null() {
@@ -2298,6 +3503,7 @@ unsafe fn import_av_subtitle(
             }
             sys::AVSubtitleType_SUBTITLE_ASS => {
                 if let Some(text) = unsafe { subtitle_c_string(rect.ass) } {
+                    has_ass = true;
                     frame.push_text(
                         SubtitleTextSegment::new(SubtitleTextFormat::Ass, text).with_forced(forced),
                     );
@@ -2310,6 +3516,10 @@ unsafe fn import_av_subtitle(
             }
             _ => {}
         }
+    }
+
+    if has_ass {
+        frame.ass_track = ass_track;
     }
 
     Ok(frame)
@@ -2628,6 +3838,44 @@ fn timestamp_value(value: i64) -> Option<i64> {
     if value == i64::MIN { None } else { Some(value) }
 }
 
+fn format_timeline_origin_micros(raw: *const sys::AVFormatContext) -> i64 {
+    if raw.is_null() {
+        return 0;
+    }
+    timestamp_value(unsafe { (*raw).start_time }).unwrap_or(0)
+}
+
+fn trace_timeline_origin(timeline_origin_micros: i64) {
+    if timeline_origin_micros == 0 {
+        return;
+    }
+    crate::trace::diagnostic(
+        serde_json::json!({
+            "event": "ffmpeg_timeline",
+            "stage": "normalize_origin",
+            "timelineOriginMicros": timeline_origin_micros,
+        })
+        .to_string(),
+    );
+}
+
+fn absolute_seek_target_micros(relative_target: i64, timeline_origin_micros: i64) -> i64 {
+    timeline_origin_micros.saturating_add(relative_target)
+}
+
+fn rescale_microseconds_to_time_base(microseconds: i64, time_base: TimeBase) -> i64 {
+    unsafe {
+        sys::av_rescale_q(
+            microseconds,
+            sys::AVRational {
+                num: 1,
+                den: sys::AV_TIME_BASE as i32,
+            },
+            time_base.to_av_rational(),
+        )
+    }
+}
+
 fn av_error(errno: i32) -> i32 {
     -errno
 }
@@ -2710,6 +3958,50 @@ mod tests {
     }
 
     #[test]
+    fn resampler_pts_keeps_continuous_output_and_reanchors_real_discontinuities() {
+        let expected = Duration::from_secs(1);
+        assert_eq!(
+            select_resampler_output_pts(None, Some(expected)),
+            (Some(expected), false)
+        );
+        assert_eq!(
+            select_resampler_output_pts(Some(expected), Some(expected + Duration::from_millis(8)),),
+            (Some(expected), false)
+        );
+        assert_eq!(
+            select_resampler_output_pts(Some(expected), Some(expected + Duration::from_secs(2)),),
+            (Some(expected + Duration::from_secs(2)), true)
+        );
+        assert_eq!(
+            select_resampler_output_pts(Some(expected), None),
+            (Some(expected), false)
+        );
+    }
+
+    #[test]
+    fn mpeg_ts_timeline_origin_is_rescaled_into_stream_ticks() {
+        assert_eq!(
+            rescale_microseconds_to_time_base(
+                600_000_000,
+                TimeBase {
+                    num: 1,
+                    den: 90_000,
+                },
+            ),
+            54_000_000
+        );
+    }
+
+    #[test]
+    fn relative_seek_targets_include_the_container_timeline_origin() {
+        assert_eq!(
+            absolute_seek_target_micros(15_000_000, 600_000_000),
+            615_000_000
+        );
+        assert_eq!(absolute_seek_target_micros(15_000_000, 0), 15_000_000);
+    }
+
+    #[test]
     fn stream_selection_accepts_expected_streams() {
         let selection = StreamSelection::only([0, 2]);
         assert!(selection.accepts(0));
@@ -2778,10 +4070,18 @@ mod tests {
     }
 
     #[test]
-    fn imports_av_subtitle_text_and_ass_rects() {
+    fn imports_real_matroska_ass_chunk_without_rewriting() {
         let packet = Packet::alloc().unwrap();
         let plain = CString::new("hello").unwrap();
-        let ass = CString::new("Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,hi").unwrap();
+        let raw_ass = "1,0,Song - CN,sign,12,34,56,banner,{\\pos(100,200)\\clip(0,0,300,200)\\t(0,500,\\blur6)\\fad(100,200)}hi";
+        let ass = CString::new(raw_ass).unwrap();
+        let resources = Arc::new(AssTrackResources::new(
+            7,
+            Arc::<[u8]>::from(
+                b"[Script Info]\n[V4+ Styles]\nStyle: Song - CN,Arial,32\n[Events]\n".as_slice(),
+            ),
+            Arc::<[SubtitleFontAttachment]>::from([]),
+        ));
         let mut text_rect = sys::AVSubtitleRect {
             type_: sys::AVSubtitleType_SUBTITLE_TEXT,
             text: plain.as_ptr().cast_mut(),
@@ -2803,7 +4103,9 @@ mod tests {
             ..sys::AVSubtitle::default()
         };
 
-        let frame = unsafe { import_av_subtitle(7, &packet, &subtitle, (0, 0)) }.unwrap();
+        let frame =
+            unsafe { import_av_subtitle(7, &packet, &subtitle, (0, 0), Some(resources.clone())) }
+                .unwrap();
 
         assert_eq!(frame.track_id, 7);
         assert_eq!(frame.start, Some(Duration::from_millis(1250)));
@@ -2813,6 +4115,8 @@ mod tests {
         assert_eq!(frame.text[0].text, "hello");
         assert!(frame.text[0].forced);
         assert_eq!(frame.text[1].format, SubtitleTextFormat::Ass);
+        assert_eq!(frame.text[1].text, raw_ass);
+        assert!(Arc::ptr_eq(frame.ass_track.as_ref().unwrap(), &resources));
         assert!(frame.forced);
     }
 
@@ -2847,7 +4151,8 @@ mod tests {
             ..sys::AVSubtitle::default()
         };
 
-        let frame = unsafe { import_av_subtitle(9, &packet, &subtitle, (1920, 1080)) }.unwrap();
+        let frame =
+            unsafe { import_av_subtitle(9, &packet, &subtitle, (1920, 1080), None) }.unwrap();
 
         assert_eq!(frame.start, Some(Duration::from_secs(2)));
         assert_eq!(frame.end, Some(Duration::from_millis(2500)));
@@ -2864,6 +4169,152 @@ mod tests {
                 0, 0, 0, 0, 0x40, 0x20, 0xff, 0x80, 0x00, 0xff, 0x80, 0xff, 0x40, 0x20, 0xff, 0x80,
             ]
         );
+    }
+
+    #[test]
+    fn ass_codec_private_copy_enforces_byte_limit() {
+        let header = b"[Script Info]\n";
+        let copied = copy_ass_codec_private(header.as_ptr(), header.len() as i32, 2, "test")
+            .expect("small header should be copied");
+        assert_eq!(&*copied, header);
+
+        assert!(
+            copy_ass_codec_private(
+                header.as_ptr(),
+                (MAX_ASS_CODEC_PRIVATE_BYTES + 1) as i32,
+                2,
+                "test",
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn validates_true_type_attachment_and_extracts_family_names() {
+        let mut stream = sys::AVStream {
+            index: 4,
+            ..sys::AVStream::default()
+        };
+        let mut parameters = sys::AVCodecParameters {
+            codec_type: sys::AVMediaType_AVMEDIA_TYPE_ATTACHMENT,
+            codec_id: sys::AVCodecID_AV_CODEC_ID_TTF,
+            extradata: crate::NIPAPLAY_FALLBACK_FONT.as_ptr().cast_mut(),
+            extradata_size: crate::NIPAPLAY_FALLBACK_FONT.len() as i32,
+            ..sys::AVCodecParameters::default()
+        };
+
+        let font = unsafe { subtitle_font_attachment(&mut stream, &mut parameters, 0, 0) }
+            .expect("bundled TTF should validate");
+
+        assert_eq!(font.byte_len(), crate::NIPAPLAY_FALLBACK_FONT.len());
+        assert!(
+            font.families
+                .iter()
+                .any(|family| family == "Droid Sans Fallback")
+        );
+    }
+
+    #[test]
+    fn rejects_font_before_copy_when_attachment_limits_are_exceeded() {
+        let mut stream = sys::AVStream {
+            index: 9,
+            ..sys::AVStream::default()
+        };
+        let byte = 0u8;
+        let mut parameters = sys::AVCodecParameters {
+            codec_type: sys::AVMediaType_AVMEDIA_TYPE_ATTACHMENT,
+            codec_id: sys::AVCodecID_AV_CODEC_ID_TTF,
+            extradata: (&byte as *const u8).cast_mut(),
+            extradata_size: 1,
+            ..sys::AVCodecParameters::default()
+        };
+
+        assert!(
+            unsafe {
+                subtitle_font_attachment(
+                    &mut stream,
+                    &mut parameters,
+                    MAX_SUBTITLE_FONT_ATTACHMENTS,
+                    0,
+                )
+            }
+            .is_none()
+        );
+
+        parameters.extradata_size = (MAX_SUBTITLE_FONT_ATTACHMENT_BYTES + 1) as i32;
+        assert!(unsafe { subtitle_font_attachment(&mut stream, &mut parameters, 0, 0) }.is_none());
+
+        parameters.extradata_size = 1;
+        assert!(
+            unsafe {
+                subtitle_font_attachment(
+                    &mut stream,
+                    &mut parameters,
+                    0,
+                    MAX_SUBTITLE_FONT_TOTAL_BYTES,
+                )
+            }
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn real_ass_container_preserves_header_fonts_and_matroska_chunk_when_env_is_set() {
+        let Ok(path) = std::env::var("ERIKA_ASS_SAMPLE") else {
+            return;
+        };
+        let mut demuxer = Demuxer::open_path(&path).unwrap();
+        let subtitle_stream = demuxer
+            .probe()
+            .tracks
+            .iter()
+            .find(|track| {
+                track.kind == TrackKind::Subtitle && track.codec.as_deref() == Some("ass")
+            })
+            .map(|track| track.id as i32)
+            .expect("sample should contain an ASS subtitle stream");
+        assert!(!demuxer.probe().subtitle_fonts.is_empty());
+        assert!(
+            demuxer
+                .probe()
+                .subtitle_fonts
+                .iter()
+                .all(|font| !font.families.is_empty() && !font.data.is_empty())
+        );
+
+        let mut decoder = demuxer.open_subtitle_decoder(subtitle_stream).unwrap();
+        demuxer
+            .set_stream_selection(StreamSelection::only([subtitle_stream]))
+            .unwrap();
+        let frame = loop {
+            let packet = demuxer
+                .read_packet()
+                .unwrap()
+                .expect("sample should contain an ASS packet");
+            if let Some(frame) = decoder.decode_packet(&packet).unwrap() {
+                if frame.has_ass_chunks() {
+                    break frame;
+                }
+            }
+        };
+
+        let resources = frame
+            .ass_track
+            .as_ref()
+            .expect("decoded ASS frame should retain track resources");
+        let header = std::str::from_utf8(&resources.codec_private).unwrap();
+        assert!(header.contains("[Script Info]"));
+        assert!(header.contains("[V4+ Styles]"));
+        assert!(header.contains("[Events]"));
+        assert_eq!(resources.fonts.len(), demuxer.probe().subtitle_fonts.len());
+        let chunk = frame
+            .text
+            .iter()
+            .find(|segment| segment.format == SubtitleTextFormat::Ass)
+            .expect("decoded frame should contain an ASS chunk");
+        assert_eq!(chunk.text.splitn(9, ',').count(), 9);
+        assert!(!chunk.text.starts_with("Dialogue:"));
+        assert!(chunk.text.contains("{\\"));
     }
 
     #[test]
@@ -2884,6 +4335,53 @@ mod tests {
         let error = unsafe { subtitle_bitmap_rect_to_rgba_plane(&rect) }.unwrap_err();
 
         assert!(matches!(error, FfmpegError::InvalidSubtitleBitmap { .. }));
+    }
+
+    #[test]
+    fn p010_downconversion_rounds_to_nv12_and_preserves_video_range_anchors() {
+        let pack = |codes: &[u16]| {
+            codes
+                .iter()
+                .flat_map(|code| (*code << 6).to_le_bytes())
+                .collect::<Vec<_>>()
+        };
+        let frame = PlanarFrame {
+            format: PlanarPixelFormat::P010,
+            width: 4,
+            height: 2,
+            luma: pack(&[0, 1, 2, 3, 64, 512, 940, 1023]),
+            chroma: pack(&[64, 960, 512, 1023]),
+        };
+
+        let converted = frame.downconvert_p010_to_nv12().unwrap();
+
+        assert_eq!(converted.format, PlanarPixelFormat::Nv12);
+        assert_eq!((converted.width, converted.height), (4, 2));
+        assert_eq!(converted.luma, vec![0, 0, 1, 1, 16, 128, 235, 255]);
+        assert_eq!(converted.chroma, vec![16, 240, 128, 255]);
+    }
+
+    #[test]
+    fn p010_downconversion_rejects_malformed_planes() {
+        let error = PlanarFrame {
+            format: PlanarPixelFormat::P010,
+            width: 2,
+            height: 2,
+            luma: vec![0; 6],
+            chroma: vec![0; 4],
+        }
+        .downconvert_p010_to_nv12()
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            PlanarFrameConversionError::InvalidP010PlaneSize {
+                plane: "luma",
+                actual: 6,
+                expected: 8,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -2932,6 +4430,31 @@ mod tests {
         assert_eq!((planar.width, planar.height), (2, 2));
         assert_eq!(planar.luma.len(), 4);
         assert_eq!(planar.chroma.len(), 2);
+    }
+
+    #[test]
+    fn odd_sized_yuv420p_frame_preserves_ceil_chroma_extent() {
+        let frame = Frame::alloc(TimeBase { num: 1, den: 1 }).unwrap();
+        let mut y = vec![16, 32, 48, 64, 80, 96, 112, 128, 144];
+        let mut u = vec![100, 110, 120, 130];
+        let mut v = vec![140, 150, 160, 170];
+        unsafe {
+            (*frame.ptr).width = 3;
+            (*frame.ptr).height = 3;
+            (*frame.ptr).format = sys::AVPixelFormat_AV_PIX_FMT_YUV420P;
+            (*frame.ptr).data[0] = y.as_mut_ptr();
+            (*frame.ptr).data[1] = u.as_mut_ptr();
+            (*frame.ptr).data[2] = v.as_mut_ptr();
+            (*frame.ptr).linesize[0] = 3;
+            (*frame.ptr).linesize[1] = 2;
+            (*frame.ptr).linesize[2] = 2;
+        }
+
+        let planar = frame.to_planar_frame().unwrap();
+
+        assert_eq!((planar.width, planar.height), (3, 3));
+        assert_eq!(planar.luma, y);
+        assert_eq!(planar.chroma, vec![100, 140, 110, 150, 120, 160, 130, 170]);
     }
 
     #[test]

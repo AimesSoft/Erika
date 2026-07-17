@@ -44,17 +44,18 @@ use objc2_metal::{
 use objc2_metal::{MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerState};
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 
-use crate::core::{ColorPrimaries, TransferFunction};
+use crate::core::{ColorPrimaries, SurfaceMetrics, TransferFunction};
 use crate::danmaku::{DanmakuGlyphAtlas, DanmakuRenderPlan};
 use crate::renderer::metal::upscaler::LumaUpscaler;
 use crate::renderer::metal::{
     ClearColor, DanmakuRenderFrame, ImportedVideoFormat, ImportedVideoFrameInfo,
     ImportedVideoPlaneInfo, MetalDrawablePixelFormat, MetalOutputMode, MetalRendererConfig,
     MetalRendererStats, OverlayRenderFrame, PreparedOverlayFrameInfo, VideoFrameTextureSource,
-    VideoRenderFrame, fourcc_string,
+    VideoRenderFrame, fourcc_string, metal_drawable_pixel_format, metal_target_color,
 };
 use crate::renderer::pipeline::TargetColorState;
 use crate::renderer::pipeline::{ColorRange, LumaUpscalerMode, ToneMapOperator};
+use crate::renderer::presentation::PresentationLayout as VideoPresentationLayout;
 use crate::subtitle::{AssColor, SubtitleAlphaBitmap};
 use crate::trace;
 
@@ -149,7 +150,7 @@ impl MetalRendererImpl {
             device,
             queue,
             output_mode: config.output_mode,
-            drawable_pixel_format: config.output_mode.pixel_format(),
+            drawable_pixel_format: metal_drawable_pixel_format(config.output_mode),
             layer: None,
             texture_cache: None,
             video_pipeline: None,
@@ -175,9 +176,7 @@ impl MetalRendererImpl {
     pub unsafe fn attach_raw_layer(
         &mut self,
         layer: *mut c_void,
-        width: u32,
-        height: u32,
-        scale: f64,
+        metrics: SurfaceMetrics,
     ) -> Result<()> {
         if layer.is_null() {
             return Err(PlayerError::Renderer(
@@ -189,7 +188,7 @@ impl MetalRendererImpl {
         layer.setDevice(Some(&*self.device));
         self.configure_layer_output(&layer);
         self.layer = Some(layer);
-        self.resize_surface(width, height, scale);
+        self.resize_surface(metrics);
         Ok(())
     }
 
@@ -197,12 +196,13 @@ impl MetalRendererImpl {
         self.layer = None;
     }
 
-    pub fn resize_surface(&mut self, width: u32, height: u32, scale: f64) {
+    pub fn resize_surface(&mut self, metrics: SurfaceMetrics) {
         let Some(layer) = &self.layer else {
             return;
         };
-        let drawable_width = (width as f64 * scale).max(1.0);
-        let drawable_height = (height as f64 * scale).max(1.0);
+        let (width, height) = metrics.physical_size();
+        let drawable_width = width as f64;
+        let drawable_height = height as f64;
         let size = CGSize::new(drawable_width, drawable_height);
         layer.setDrawableSize(size);
         self.stats.drawable_width = drawable_width.round() as u32;
@@ -218,7 +218,7 @@ impl MetalRendererImpl {
     }
 
     fn configure_layer_output(&mut self, layer: &CAMetalLayer) {
-        self.drawable_pixel_format = self.output_mode.pixel_format();
+        self.drawable_pixel_format = metal_drawable_pixel_format(self.output_mode);
         layer.setPixelFormat(metal_pixel_format(self.drawable_pixel_format));
         set_layer_edr_enabled(layer, self.output_mode.is_edr());
         let (color_space_name, color_space_label) = if self.output_mode.is_edr() {
@@ -423,7 +423,15 @@ impl MetalRendererImpl {
                 self.stats.drawable_width,
                 self.stats.drawable_height,
             );
-            self.draw_overlay_planes(&encoder, overlay, layout, self.output_mode.target_color())?;
+            self.draw_overlay_planes(
+                &encoder,
+                overlay,
+                layout,
+                metal_target_color(
+                    self.output_mode,
+                    crate::renderer::pipeline::SourceColorState::default(),
+                ),
+            )?;
             encoder.endEncoding();
             let drawable_ref: &ProtocolObject<dyn MTLDrawable> =
                 ProtocolObject::from_ref(&*drawable);
@@ -479,7 +487,7 @@ impl MetalRendererImpl {
         self.configure_layer_source_color(&layer, source_color);
         frame.pipeline = frame
             .pipeline
-            .with_target(self.output_mode.target_color_for_source(source_color));
+            .with_target(metal_target_color(self.output_mode, source_color));
         if !self.logged_first_video_frame {
             self.logged_first_video_frame = true;
             if hdr_debug_enabled() {
@@ -518,7 +526,7 @@ impl MetalRendererImpl {
         // The neural doubler only pays off when the video is actually shown
         // larger than its source resolution.
         let upscale_requested = self.upscaler.mode().is_enabled()
-            && layout.target_rect[2] > layout.source_width
+            && layout.is_source_upscaled()
             && matches!(
                 luma.pixelFormat(),
                 MTLPixelFormat::R8Unorm | MTLPixelFormat::R16Unorm
@@ -709,7 +717,7 @@ impl MetalRendererImpl {
         let source_color = frame.pipeline.source;
         frame.pipeline = frame
             .pipeline
-            .with_target(self.output_mode.target_color_for_source(source_color));
+            .with_target(metal_target_color(self.output_mode, source_color));
 
         let layout = VideoPresentationLayout::aspect_fit(
             frame.frame.info.width as u32,
@@ -1606,60 +1614,6 @@ struct VideoUniforms {
     nits: [f32; 4],
     luma_coefficients: [f32; 4],
     gamut_matrix_rows: [[f32; 4]; 3],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct VideoPresentationLayout {
-    source_width: f32,
-    source_height: f32,
-    drawable_width: f32,
-    drawable_height: f32,
-    target_rect: [f32; 4],
-}
-
-impl VideoPresentationLayout {
-    fn aspect_fit(
-        source_width: u32,
-        source_height: u32,
-        drawable_width: u32,
-        drawable_height: u32,
-    ) -> Self {
-        let source_width = source_width.max(1) as f32;
-        let source_height = source_height.max(1) as f32;
-        let drawable_width = drawable_width.max(1) as f32;
-        let drawable_height = drawable_height.max(1) as f32;
-        let scale = (drawable_width / source_width).min(drawable_height / source_height);
-        let width = source_width * scale;
-        let height = source_height * scale;
-        let x = (drawable_width - width) * 0.5;
-        let y = (drawable_height - height) * 0.5;
-        Self {
-            source_width,
-            source_height,
-            drawable_width,
-            drawable_height,
-            target_rect: [x, y, width, height],
-        }
-    }
-
-    fn video_viewport(self) -> [f32; 4] {
-        [self.drawable_width, self.drawable_height, 0.0, 0.0]
-    }
-
-    fn overlay_viewport(self) -> [f32; 2] {
-        [self.drawable_width, self.drawable_height]
-    }
-
-    fn map_source_rect(self, x: f32, y: f32, width: f32, height: f32) -> [f32; 4] {
-        let scale_x = self.target_rect[2] / self.source_width;
-        let scale_y = self.target_rect[3] / self.source_height;
-        [
-            self.target_rect[0] + x * scale_x,
-            self.target_rect[1] + y * scale_y,
-            width * scale_x,
-            height * scale_y,
-        ]
-    }
 }
 
 fn metal_pixel_format(format: MetalDrawablePixelFormat) -> MTLPixelFormat {

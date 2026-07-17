@@ -22,7 +22,7 @@ overlay 和呈现,宿主提供一个 surface 并每帧调一次 `render_tick`。
 除非你有理由自己渲染,否则用 `ErikaPresenterHandle`。拉取模型的 `ErikaHandle` 适合
 拥有自己合成器、只想要 Erika 解码/时序/状态的宿主。本指南其余部分都基于 presenter。
 
-presenter 族仅在 **macOS、iOS、Windows** 上编译。
+presenter 族在 **macOS、iOS、Windows 和 Android** 上编译。
 
 ## 2. 生命周期
 
@@ -42,16 +42,18 @@ create ──▶ attach surface ──▶ open ──▶ play ──▶ (render_
 
 ```c
 ErikaPresenterConfig cfg = {
-    .output_mode  = ErikaPresenterOutputMode_Sdr,   // macOS/iOS 上可用 _AppleEdr
-    .edr_headroom = 1.0f,                            // 仅 Apple EDR 用到
+    .output_mode  = ErikaPresenterOutputMode_Sdr,   // AppleEdr 或 Android ExtendedLinear
+    .edr_headroom = 1.0f,                            // 请求的内容 headroom 上限
     .luma_upscaler = ErikaLumaUpscalerMode_Off,      // 或 ArtCnnC4F16 / C4F32
 };
 ErikaPresenterHandle *p = erika_presenter_create_with_config(cfg);
 if (!p) { /* 读取 erika_last_error_message() */ }
 ```
 
-`erika_presenter_create()` 用默认值（SDR、无超分）。神经亮度超分是 Metal compute
-特性;在 D3D11/wgpu 后端上 `set_upscaler` 是被接受的 no-op 回退。
+`erika_presenter_create()` 用默认值（SDR、无超分）。神经亮度超分在 Apple 平台由
+Metal 实现，在包括 Android 在内、具备 compute 能力的 Vulkan/wgpu adapter 上由
+wgpu 实现。GLES 3.0 和 D3D11 等无 compute 后端会保留原生 luma sampling，并明确
+报告 `Inactive` 状态和回退原因。
 
 ## 4. Attach 一个 surface
 
@@ -96,6 +98,45 @@ presenter 配置下,该 surface 驱动**原生 Direct3D 11** 渲染器（D3D11VA
 `erika_presenter_attach_wgpu_surface(p, kind, raw_window, raw_display, w, h, scale)`,
 配对应的 `ErikaWgpuSurfaceKind` 和平台句柄。
 
+### Android extended-linear scRGB
+
+Android `ExtendedLinear` 是 FP16 extended-linear scRGB，不是 HDR10/PQ。原生宿主必须从
+直接合成的 `SurfaceView` 取得 `ANativeWindow`（Flutter 插件使用 Hybrid Composition），
+并把探测到的输出能力传入 attach：
+
+```c
+ErikaSurfaceOutputCapabilities caps = {
+    .extended_linear = display_and_surface_are_hdr_capable,
+    .direct_composition = true,       // SurfaceView，而非 TextureView
+    .desired_headroom = requested_headroom, // 0 = 系统 auto
+    .fallback_reason = host_probe_reason, // eligible 时为 0
+};
+erika_presenter_attach_wgpu_surface_with_output_capabilities(
+    p, ErikaWgpuSurfaceKind_AndroidNativeWindow,
+    (uint64_t)(uintptr_t)native_window, 0, w, h, scale, caps);
+```
+
+只有请求模式、显示器/surface eligibility、direct composition、Vulkan backend、
+`Rgba16Float` 支持和 configure 后的 `ADATASPACE_SCRGB_LINEAR` 回读全部成功时，renderer
+才会激活 extended-linear。任一条件失败都会保持 SDR 播放，并记录稳定的 `0..8`
+`fallback_reason`；GLES 与 `TextureView` 始终是 SDR 路径。
+
+`ErikaPresenterConfig.edr_headroom` 是内容上限。正数 `desired_headroom` 是可选的 surface
+上限；`0` 表示由系统自动决定。wgpu 的有效 target 会受这些上限和当前显示器 HDR/SDR
+ratio 共同约束。API 34+ 的原生宿主应监听
+`Display.registerHdrSdrRatioChangedListener`，并在状态真实变化时调用
+`erika_presenter_set_output_headroom(p, ratio, true)`；ratio 不可用或 view detach 时发布
+`(1.0f, false)`。Flutter 插件会自动完成这条链路。API 35 上它还会按 view 调用
+`SurfaceView.setDesiredHdrHeadroom`，不会修改全局 Window。
+
+attach 后以及每次 resize/recovery 后都应查询 `erika_presenter_get_output_status`。Android
+scRGB 真正激活时会报告 `AndroidExtendedLinearScRgb`、`SixteenBitFloat`、native dataspace
+`406913024` 和 `extended_linear_active = true`。Android 提供显示器 ratio 时，
+`active_headroom` 为该 ratio，且 `active_headroom_known = true`；否则该字段只是 fallback
+值，`active_headroom_known = false`。只有 known 状态或 ratio 真实变化时，
+`headroom_updates` 才增长。请求模式本身不能证明实际模式已激活。当前非 HDR/模拟器测试
+覆盖 SDR 回退；active 路径仍需 API 35 HDR 真机验收。
+
 ## 5. 打开并播放
 
 ```c
@@ -108,8 +149,9 @@ erika_presenter_play(p);
 ## 6. 渲染循环
 
 从 surface 的显示定时器驱动 `render_tick`——`CADisplayLink`（iOS）/ `CVDisplayLink`
-或 `CADisplayLink`（macOS）/ Windows 的帧调度器。传该帧的**呈现时间(秒)**,取自单调
-宿主时钟;Erika 用它做 vsync 量化调度,所以传绝对时间戳,不是增量。
+或 `CADisplayLink`（macOS）/ Windows 的帧调度器 / Android `Choreographer`。传该帧的
+**呈现时间(秒)**,取自单调宿主时钟;Erika 用它做 vsync 量化调度,所以传绝对时间戳,
+不是增量。
 
 ```c
 // 每个显示帧:
@@ -159,6 +201,10 @@ while (erika_presenter_poll_event(p, &ev) == ErikaStatus_Ok) {
   开关(`set_danmaku_enabled`)、用 `set_danmaku_config` 调参、偏移轨、设字体、设屏蔽词。
   见 [danmaku_architecture.md](danmaku_architecture.md)。
 - **超分:** `set_upscaler(mode)`;用 `get_upscaler_status` 检视。
+- **输出:** 用 `erika_presenter_get_output_status` 检视实际模式和 fallback counters。
+  Android 原生宿主用 `erika_presenter_set_output_headroom` 发布动态显示 ratio。
+  `capture_frame_rgba` 始终输出视频 + 字幕 + 弹幕的 SDR RGBA8 截图，即使显示输出是
+  extended-linear。
 
 ## 9. 释放
 
@@ -202,8 +248,15 @@ include `erika.h`,链接库(见 [building.zh.md](building.zh.md)),就这么简�
 
 - [ ] 创建 presenter(用与你显示器匹配的输出模式)。
 - [ ] 用**物理像素**尺寸和正确的 scale attach surface。
+- [ ] Android extended-linear 必须使用 Hybrid Composition 的 `SurfaceView`，传入探测后的
+  output capabilities，并用 `erika_presenter_get_output_status` 验证
+  `Rgba16Float + SCRGB_LINEAR`；否则接受并记录 SDR reason。
+- [ ] API 34+ 通过 `erika_presenter_set_output_headroom` 发布显示器 HDR/SDR ratio 变化；
+  API 35 的 desired headroom 只作用于单个 `SurfaceView`。
 - [ ] 先 open 再 play;别阻塞——通过事件观察就绪。
 - [ ] 每个显示帧 `render_tick(absolute_time_seconds)`;抽干事件。
 - [ ] 每次尺寸/scale 变化都 `resize_surface`。
 - [ ] 每个 handle 一个线程,或串行化调用。
 - [ ] 释放每个返回的字符串 / `ErikaTrackInfo`;先 `detach` 再 `destroy`。
+- [ ] API 35 HDR 真机的旋转/恢复、多 player 和 SDR 截图检查通过前，不宣称 Android
+  extended-linear 已完成真机验证。

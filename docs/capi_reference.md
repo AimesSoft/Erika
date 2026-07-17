@@ -22,9 +22,10 @@ Erika exposes two independent entry points. Pick one per integration.
 | `ErikaPresenterHandle` | **Push** | Erika | You give Erika a native surface and call `render_tick` once per display frame. Erika owns decode, timing, audio, overlays, and presentation. |
 
 `ErikaPresenterHandle` is the recommended path and what the Flutter plugin and
-the native demos use. It is compiled only on **macOS, iOS, and Windows**. On
-other targets `erika_presenter_create` is still exported but returns `NULL`, and
-the rest of the presenter family is absent — guard presenter usage by platform.
+the native demos use. It is compiled on **macOS, iOS, Windows, and Android**.
+On other targets `erika_presenter_create` is still exported but returns `NULL`,
+and the rest of the presenter family is absent — guard presenter usage by
+platform.
 
 The two families do not share state; a process may use both, but a given media
 session lives in exactly one handle.
@@ -147,8 +148,9 @@ ErikaStatus erika_seek(ErikaHandle *handle, uint64_t position_micros);
 ```
 
 `uri` is a local filesystem path or an HTTP(S) URL. `seek` takes microseconds.
-`open` begins asynchronously; watch for `StateChanged` /`DurationChanged` events
-to learn when the media is ready.
+`open` and `play` enqueue work asynchronously. Watch for `StateChanged`,
+`DurationChanged`, and `Error` events for the authoritative result instead of
+blocking the host UI thread.
 
 ### Tracks and subtitles
 
@@ -183,6 +185,11 @@ ErikaStatus erika_attach_metal_layer(ErikaHandle *, uint64_t raw_layer, uint32_t
 ErikaStatus erika_attach_wgpu_surface(ErikaHandle *, ErikaWgpuSurfaceKind kind,
                                       uint64_t raw_window, uint64_t raw_display,
                                       uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_attach_wgpu_surface_with_output_capabilities(
+                                      ErikaHandle *, ErikaWgpuSurfaceKind kind,
+                                      uint64_t raw_window, uint64_t raw_display,
+                                      uint32_t w, uint32_t h, double scale,
+                                      ErikaSurfaceOutputCapabilities capabilities);
 ErikaStatus erika_attach_flutter_texture(ErikaHandle *, ErikaFlutterTextureKind kind,
                                          int64_t texture_id, uint32_t w, uint32_t h, double scale);
 ErikaStatus erika_detach_surface(ErikaHandle *);
@@ -192,12 +199,15 @@ ErikaStatus erika_detach_surface(ErikaHandle *);
 `raw_window`/`raw_display` are the platform window/display handles for the given
 `kind` (e.g. `HWND` + `HINSTANCE` for `WindowsHwnd`, `xcb`/Xlib window + display
 for `XlibWindow`). `erika_attach_flutter_texture` registers an external texture
-id with a platform texture registrar.
+id with a platform texture registrar. The `_with_output_capabilities` variant
+is required when an Android native host wants to declare a directly composited,
+HDR-eligible `SurfaceView`; the shorter function supplies all-false/default
+capabilities and therefore cannot activate Android extended-linear output.
 
 ## `ErikaPresenterHandle` — push model
 
 Erika owns the full stack; the host supplies a surface and calls `render_tick`.
-**macOS / iOS / Windows only.**
+**macOS / iOS / Windows / Android.**
 
 ### Lifecycle and configuration
 
@@ -208,10 +218,13 @@ ErikaPresenterHandle *erika_presenter_create_with_output_mode(int32_t output_mod
 void                  erika_presenter_destroy(ErikaPresenterHandle *handle);
 ```
 
-`ErikaPresenterConfig` selects the output mode (SDR / Apple EDR), the EDR
-headroom, and the initial luma upscaler. `create_with_output_mode` is a
-shorthand; `create` uses defaults (SDR, no upscaler). A `NULL` return means
-creation failed — check `erika_last_error_message`.
+`ErikaPresenterConfig` selects the output mode (`Sdr`, Apple `AppleEdr`, or
+Android `ExtendedLinear`), the requested EDR/scRGB content-headroom ceiling,
+and the initial
+luma upscaler. Android `ExtendedLinear` means FP16 extended-linear scRGB, not
+HDR10/PQ. `create_with_output_mode` is a shorthand; `create` uses defaults
+(SDR, no upscaler). A `NULL` return means creation failed — check
+`erika_last_error_message`.
 
 ### Playback and runtime parameters
 
@@ -226,11 +239,24 @@ ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *, double rat
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *, double volume);   // 0.0–1.0
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *, int32_t mode);  // ErikaLumaUpscalerMode
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *, double scale);
+ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float headroom, bool known);
 ```
 
 `set_playback_rate(1.0)` is normal speed. `set_upscaler` switches the neural
 luma upscaler at runtime (see [`erika_presenter_get_upscaler_status`](#diagnostics-and-capture));
-it is a no-op fallback on backends without a Metal compute path.
+Metal and capable wgpu/Vulkan renderers execute ArtCNN, while backends without
+compute retain native luma sampling and report an explicit `Inactive` fallback.
+
+`set_output_headroom` publishes the display's current HDR/SDR ratio. Android
+API 34+ hosts should call it from
+`Display.registerHdrSdrRatioChangedListener`, passing `known = true` for a valid
+ratio and `(1.0f, false)` when the measurement becomes unavailable. Values are
+sanitized to `1.0..10000.0`. wgpu ignores duplicate state, updates subsequent
+frame targets without reattaching the surface, and increments
+`headroom_updates` only for a real known-state or ratio change. The effective
+content target is bounded by the configured content ceiling, any positive
+surface `desired_headroom`, and the known display ratio. Other renderers may
+ignore this advisory update.
 
 ### Tracks and subtitles
 
@@ -280,6 +306,7 @@ engine. `set_danmaku_block_words_json` takes a JSON array of strings to filter.
 ```c
 ErikaStatus erika_presenter_attach_metal_layer(ErikaPresenterHandle *, uint64_t raw_layer, uint32_t w, uint32_t h, double scale);
 ErikaStatus erika_presenter_attach_wgpu_surface(ErikaPresenterHandle *, ErikaWgpuSurfaceKind kind, uint64_t raw_window, uint64_t raw_display, uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_presenter_attach_wgpu_surface_with_output_capabilities(ErikaPresenterHandle *, ErikaWgpuSurfaceKind kind, uint64_t raw_window, uint64_t raw_display, uint32_t w, uint32_t h, double scale, ErikaSurfaceOutputCapabilities capabilities);
 ErikaStatus erika_presenter_attach_windows_hwnd(ErikaPresenterHandle *, uint64_t hwnd, uint64_t hinstance, uint32_t w, uint32_t h, double scale);
 ErikaStatus erika_presenter_resize_surface(ErikaPresenterHandle *, uint32_t w, uint32_t h, double scale);
 ErikaStatus erika_presenter_detach_surface(ErikaPresenterHandle *);
@@ -291,6 +318,16 @@ Use `attach_metal_layer` on macOS/iOS (a `CAMetalLayer*`), and
 The renderer backend bound to the surface (native Metal, native Direct3D 11, or
 wgpu) is decided by the presenter configuration, not by the attach call. Call
 `resize_surface` whenever the drawable size or scale changes.
+
+For Android extended-linear, pass an `AndroidNativeWindow` from a
+Hybrid-Composition `SurfaceView` through the `_with_output_capabilities`
+function. Set `extended_linear` only after the display/surface HDR probe, set
+`direct_composition = true` only for the direct `SurfaceView`, and preserve any
+host probe failure in `fallback_reason`. `desired_headroom = 0` means system
+auto; a positive value is a surface ceiling and is suitable for API 35
+per-`SurfaceView` `setDesiredHdrHeadroom`. Erika still verifies Vulkan,
+`Rgba16Float`, and `ADATASPACE_SCRGB_LINEAR` itself; failure of any condition
+falls back to SDR and remains queryable.
 
 ### Render loop and events
 
@@ -310,6 +347,7 @@ scheduling, so pass the presentation timestamp, not wall-clock deltas. If
 
 ```c
 ErikaStatus erika_presenter_get_upscaler_status(ErikaPresenterHandle *, ErikaUpscalerStatus *out_status);
+ErikaStatus erika_presenter_get_output_status(ErikaPresenterHandle *, ErikaOutputStatus *out_status);
 ErikaStatus erika_presenter_capture_frame_rgba(ErikaPresenterHandle *, uint32_t width, uint32_t height,
                                                uint8_t *out_rgba, uintptr_t out_capacity);
 ```
@@ -318,12 +356,48 @@ ErikaStatus erika_presenter_capture_frame_rgba(ErikaPresenterHandle *, uint32_t 
 (off / inactive / building / scalar / simdgroup-matrix), the fallback count,
 upscaled frame count, and recent encode/GPU timings in microseconds.
 
+`get_output_status` returns the actual negotiated output, not merely the
+request. The 13 fields are:
+
+| Field | Meaning |
+|-------|---------|
+| `requested_mode` | `ErikaPresenterOutputMode` requested at creation. |
+| `active_encoding` | Actual `SdrSrgb`, `AppleEdr`, `AndroidExtendedLinearScRgb`, or `Hdr10Pq` encoding. |
+| `surface_format` | Actual 8-bit UNORM, 10-bit UNORM, or 16-bit float surface class. |
+| `native_data_space` | Android `ANativeWindow` dataspace; `406913024` is `SCRGB_LINEAR`, `-1` means unavailable/not applicable. |
+| `requested_headroom` | Sanitized requested content-headroom ceiling, at least `1.0`. |
+| `active_headroom` | Current display HDR/SDR ratio when known; otherwise an effective-content fallback value. |
+| `active_headroom_known` | Whether `active_headroom` came from an authoritative platform ratio. Android sets this true when the API 34+ ratio is available. |
+| `extended_linear_active` | A floating-point extended-linear presentation path is active; use `active_encoding` to distinguish Apple EDR from Android scRGB. |
+| `fallback_reason` | Stable `ErikaOutputFallbackReason` code explaining why the requested mode is not active. |
+| `fallback_count` | Number of recorded output fallback transitions/failures. |
+| `data_space_failures` | Dataspace/output-color-space validation failure count. |
+| `headroom_updates` | Real runtime headroom state changes; duplicate ratio/known publications do not increment it. |
+| `extended_linear_frames` | Frames presented through an active extended-linear path. |
+
+The fallback values are ABI-stable; append new reasons, never renumber `0..8`:
+
+| Code | Enum | Stable label | Meaning |
+|------|------|--------------|---------|
+| 0 | `None` | `none` | No fallback. |
+| 1 | `DisplayHdrUnsupported` | `display_hdr_unsupported` | Display/surface HDR capability probe failed. |
+| 2 | `HybridCompositionRequired` | `hybrid_composition_required` | Android surface is not direct `SurfaceView` composition. |
+| 3 | `WgpuBackendNotVulkan` | `wgpu_backend_not_vulkan` | Active wgpu backend is not Vulkan (for example GLES). |
+| 4 | `Rgba16FloatSurfaceFormatUnavailable` | `rgba16float_surface_format_unavailable` | Surface capabilities do not expose `Rgba16Float`. |
+| 5 | `NativeWindowDataSpaceApiUnavailable` | `native_window_dataspace_api_unavailable` | `ANativeWindow_*DataSpace` API is unavailable (including API 26/27). |
+| 6 | `ScrgbDataSpaceVerificationFailed` | `scrgb_dataspace_verification_failed` | `SCRGB_LINEAR` set/readback did not verify. |
+| 7 | `SurfaceConfigureFailed` | `surface_configure_failed` | Requested output surface configuration failed. |
+| 8 | `LegacyAppleEdrUnsupported` | `legacy_apple_edr_unsupported` | Apple EDR was requested on a backend that does not implement it. |
+
 `capture_frame_rgba` is a **screenshot**: it renders the current composited
 frame (video + subtitle + danmaku) off-screen into a caller-allocated RGBA8
 buffer at the requested `width`×`height` (independent of the display surface
 size). `out_capacity` must be at least `width*height*4`. It returns `PlayerError`
-when no frame is available yet, and is implemented on the native Metal and
-Direct3D 11 backends (the wgpu backend returns no capture).
+when no frame is available yet. Metal and wgpu (including Android) implement
+capture; the current D3D11 backend does not. Capture always uses an SDR RGBA8
+offscreen target and tone-maps HDR/extended-linear content, so the returned
+bytes are SDR even when the display output is Apple EDR, HDR10, or Android
+extended-linear scRGB.
 
 ```c
 uint32_t w = 1920, h = 1080;
@@ -344,7 +418,10 @@ free(rgba);
 | `ErikaTrackSource` | `Embedded` `External` |
 | `ErikaWgpuSurfaceKind` | `Unknown` `MacOsNsView` `MacOsCaMetalLayer` `IosUiView` `WindowsHwnd` `XlibWindow` `WaylandSurface` `AndroidNativeWindow` |
 | `ErikaFlutterTextureKind` | `Unknown` `MacOsTextureRegistrar` `IosTextureRegistrar` `AndroidSurfaceTexture` `WindowsTextureRegistrar` `LinuxTextureRegistrar` |
-| `ErikaPresenterOutputMode` | `Sdr` `AppleEdr` |
+| `ErikaPresenterOutputMode` | `Sdr` `AppleEdr` `ExtendedLinear` |
+| `ErikaActiveOutputEncoding` | `SdrSrgb` `AppleEdr` `AndroidExtendedLinearScRgb` `Hdr10Pq` |
+| `ErikaOutputSurfaceFormat` | `EightBitUnorm` `TenBitUnorm` `SixteenBitFloat` |
+| `ErikaOutputFallbackReason` | `None` `DisplayHdrUnsupported` `HybridCompositionRequired` `WgpuBackendNotVulkan` `Rgba16FloatSurfaceFormatUnavailable` `NativeWindowDataSpaceApiUnavailable` `ScrgbDataSpaceVerificationFailed` `SurfaceConfigureFailed` `LegacyAppleEdrUnsupported` |
 | `ErikaLumaUpscalerMode` | `Off` `ArtCnnC4F16` `ArtCnnC4F32` |
 | `ErikaUpscalerBackendStatus` | `Off` `Inactive` `Building` `Scalar` `SimdgroupMatrix` |
 
@@ -352,8 +429,11 @@ free(rgba);
 
 - **`ErikaPresenterConfig`** `{ int32 output_mode; float edr_headroom; int32 luma_upscaler; }` —
   passed by value to `create_with_config`.
+- **`ErikaSurfaceOutputCapabilities`** `{ bool extended_linear; bool direct_composition; float desired_headroom; int32 fallback_reason; }` — host-side Android display/surface probe supplied at attach time; `desired_headroom == 0` selects system auto.
 - **`ErikaUpscalerStatus`** — requested mode, active backend, fallback count,
   upscaled frames, last encode/GPU micros.
+- **`ErikaOutputStatus`** — the 13-field negotiated output snapshot documented
+  under [Diagnostics and capture](#diagnostics-and-capture).
 - **`ErikaDanmakuConfig`** — full danmaku layout/appearance config (font size,
   opacity, display area, scroll timing, collision/stacking flags, blocked modes,
   shadow style). `font_size` is a NipaPlay/Flutter *logical* size; Erika

@@ -1,0 +1,105 @@
+name: Android
+
+on:
+  pull_request:
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/android.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
+      - "packaging/**"
+      - "packages/erika_flutter/**"
+      - "third_party/patches/**"
+      - "xtask/**"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_API_LEVEL: "26"
+  ANDROID_NDK_VERSION: "29.0.14206865"
+  ERIKA_NATIVE_PROFILE: lgpl
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native:
+    name: ${{ matrix.abi }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rust_target: aarch64-linux-android
+            abi: arm64-v8a
+            clang_target: aarch64-linux-android
+            cxx_runtime_target: aarch64-linux-android
+          - rust_target: armv7-linux-androideabi
+            abi: armeabi-v7a
+            clang_target: armv7a-linux-androideabi
+            cxx_runtime_target: arm-linux-androideabi
+          - rust_target: x86_64-linux-android
+            abi: x86_64
+            clang_target: x86_64-linux-android
+            cxx_runtime_target: x86_64-linux-android
+          - rust_target: i686-linux-android
+            abi: x86
+            clang_target: i686-linux-android
+            cxx_runtime_target: i686-linux-android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - uses: android-actions/setup-android@v3
+      - name: Install Android NDK and native build tools
+        run: |
+          sdkmanager "ndk;$ANDROID_NDK_VERSION"
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake make meson nasm ninja-build pkg-config libclang-dev python3-venv
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+      - name: Cache native dependencies
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: deps-android-${{ matrix.rust_target }}-ndk${{ env.ANDROID_NDK_VERSION }}-api${{ env.ANDROID_API_LEVEL }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
+      - name: Build native dependencies and static C API
+        shell: bash
+        run: |
+          set -euo pipefail
+          T="${{ matrix.rust_target }}"
+          PREBUILT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          TOOLCHAIN="$PREBUILT/bin"
+          CC="$TOOLCHAIN/${{ matrix.clang_target }}${ANDROID_API_LEVEL}-clang"
+          CXX="$TOOLCHAIN/${{ matrix.clang_target }}${ANDROID_API_LEVEL}-clang++"
+          AR="$TOOLCHAIN/llvm-ar"
+          CARGO_KEY="$(echo "$T" | tr '[:lower:]-' '[:upper:]_')"
+          CC_KEY="${T//-/_}"
+          LIBCLANG_FILE="$(find "$PREBUILT" -type f -name 'libclang.so*' -print -quit)"
+          test -n "$LIBCLANG_FILE"
+          LIBCLANG_PATH="$(dirname "$LIBCLANG_FILE")"
+          test -d "$LIBCLANG_PATH"
+          export LIBCLANG_PATH
+          export "CARGO_TARGET_${CARGO_KEY}_LINKER=$CC"
+          export "CC_${CC_KEY}=$CC" "CXX_${CC_KEY}=$CXX" "AR_${CC_KEY}=$AR"
+          export "BINDGEN_EXTRA_CLANG_ARGS_${CC_KEY}=--target=${{ matrix.clang_target }}${ANDROID_API_LEVEL} --sysroot=$PREBUILT/sysroot"
+          export "CFLAGS_${CC_KEY}=-fPIC" "CXXFLAGS_${CC_KEY}=-fPIC"
+          cargo run -p xtask -- deps plan --profile "$ERIKA_NATIVE_PROFILE" --target "$T"
+          cargo run -p xtask -- deps build --all --profile "$ERIKA_NATIVE_PROFILE" --target "$T"
+          ERIKA_NATIVE_TARGET="$T" \
+            cargo build -p erika_capi --release --target "$T" \
+              --no-default-features --features libass,wgpu
+          mkdir -p "out/android/${{ matrix.abi }}"
+          cp "target/$T/release/liberika_capi.a" "out/android/${{ matrix.abi }}/liberika_capi.a"
+          cp "target/$T/release/liberika_capi.so" "out/android/${{ matrix.abi }}/liberika_capi.so"
+          cp "$PREBUILT/sysroot/usr/lib/${{ matrix.cxx_runtime_target }}/libc++_shared.so" \
+            "out/android/${{ matrix.abi }}/libc++_shared.so"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erika-capi-android-${{ matrix.abi }}
+          path: out/android/${{ matrix.abi }}

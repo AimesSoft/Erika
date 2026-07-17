@@ -1,19 +1,46 @@
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
 use std::ffi::c_void;
 #[cfg(target_os = "windows")]
 use std::num::NonZeroIsize;
+#[cfg(target_os = "android")]
+use std::ptr::NonNull;
+#[cfg(target_os = "android")]
+use std::{
+    any::Any,
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::{Arc, Mutex},
+};
 use wgpu::util::DeviceExt;
 
+#[cfg(target_os = "android")]
+use crate::android::{AndroidDataSpaceErrorKind, AndroidNativeWindow};
+#[cfg(any(
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows"
+))]
+use crate::core::WgpuSurfaceKind;
 use crate::core::{
-    ColorPrimaries, LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame,
-    RenderFrameContext, RendererBackend, RendererRuntimeStats, Result, WgpuSurfaceHandle,
-    WgpuSurfaceKind,
+    LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame, RenderFrameContext,
+    RendererBackend, RendererRuntimeStats, Result, SurfaceOutputCapabilities, WgpuSurfaceHandle,
 };
 use crate::danmaku::{DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan};
-use crate::ffmpeg::{PlanarFrame, PlanarPixelFormat};
+use crate::ffmpeg::{DecoderBackend, PlanarFrame, PlanarFrameConversionError, PlanarPixelFormat};
 use crate::overlay::OverlayFrame;
-use crate::renderer::pipeline::{
-    LumaUpscalerMode, SourceColorState, TargetColorState, VideoRenderPipeline,
+#[cfg(target_os = "android")]
+use crate::renderer::android_vulkan::{
+    AndroidAhbConversionError, AndroidAhbCrop, AndroidAhbFrameDescription, AndroidVulkanInterop,
+    retire_ahb_conversion_after_submission,
+};
+use crate::renderer::output::{
+    ActiveOutputEncoding, OutputDescription, OutputFallbackReason, OutputMode, OutputRuntimeStatus,
+    OutputSurfaceFormat,
+};
+use crate::renderer::pipeline::{LumaUpscalerMode, SourceColorState, VideoRenderPipeline};
+use crate::renderer::presentation::{PresentationLayout, PresentationRect};
+use crate::renderer::wgpu_artcnn::{
+    WgpuArtCnn, WgpuArtCnnInput, WgpuArtCnnInputKind, WgpuArtCnnStatus,
 };
 use crate::subtitle::AssColor;
 
@@ -28,10 +55,46 @@ pub struct WgpuRendererStats {
     pub software_video_frames: u64,
     pub hardware_video_frames: u64,
     pub zero_copy_video_frames: u64,
+    pub shared_handle_video_frames: u64,
     pub cpu_video_frame_fallbacks: u64,
+    pub hdr_source_frames: u64,
+    pub sdr_tonemap_frames: u64,
     pub danmaku_passes: u64,
     pub danmaku_items: u64,
     pub attached: bool,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Debug, Clone)]
+struct AndroidWgpuDeviceFailure {
+    kind: &'static str,
+    reason: String,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Default)]
+struct AndroidWgpuDeviceHealth {
+    failure: Mutex<Option<AndroidWgpuDeviceFailure>>,
+}
+
+#[cfg(target_os = "android")]
+impl AndroidWgpuDeviceHealth {
+    fn record(&self, kind: &'static str, reason: String, replace_existing: bool) {
+        let mut failure = self
+            .failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if replace_existing || failure.is_none() {
+            *failure = Some(AndroidWgpuDeviceFailure { kind, reason });
+        }
+    }
+
+    fn failure(&self) -> Option<AndroidWgpuDeviceFailure> {
+        self.failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
 }
 
 /// A clear color in the renderer's working space, components in `[0, 1]`.
@@ -110,7 +173,7 @@ pub struct OverlayUniforms {
     pub tex_rect: [f32; 4],
     pub viewport: [f32; 2],
     pub overlay_mode: u32,
-    pub reserved0: u32,
+    pub output_encoding: u32,
     pub color: [f32; 4],
 }
 
@@ -129,7 +192,7 @@ impl OverlayUniforms {
             tex_rect: [0.0, 0.0, 1.0, 1.0],
             viewport: [viewport_w.max(1) as f32, viewport_h.max(1) as f32],
             overlay_mode: 0,
-            reserved0: 0,
+            output_encoding: 0,
             color: [1.0, 1.0, 1.0, 1.0],
         }
     }
@@ -167,7 +230,7 @@ impl OverlayUniforms {
             ],
             viewport: [viewport_w.max(1) as f32, viewport_h.max(1) as f32],
             overlay_mode: 1,
-            reserved0: 0,
+            output_encoding: 0,
             color: [
                 f32::from(color.red) / 255.0,
                 f32::from(color.green) / 255.0,
@@ -189,9 +252,14 @@ impl OverlayUniforms {
             tex_rect,
             viewport: [viewport_w.max(1) as f32, viewport_h.max(1) as f32],
             overlay_mode: 1,
-            reserved0: 0,
+            output_encoding: 0,
             color,
         }
+    }
+
+    fn for_output(mut self, output: OutputDescription) -> Self {
+        self.output_encoding = u32::from(output.extended_linear);
+        self
     }
 }
 
@@ -239,25 +307,142 @@ impl WgpuDanmakuAtlasCache {
     }
 }
 
-/// The currently uploaded video frame: GPU plane textures plus the color uniforms
-/// to render it. Retained so the presenter can re-present it across vsync ticks.
+enum UploadedVideoTextures {
+    Planar {
+        luma: wgpu::Texture,
+        chroma: wgpu::Texture,
+    },
+    Rgb {
+        texture: wgpu::Texture,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlanarUploadPath {
+    Native,
+    CpuP010ToNv12,
+}
+
+struct PreparedPlanarUpload {
+    frame: PlanarFrame,
+    uniforms: VideoUniforms,
+    path: PlanarUploadPath,
+}
+
+fn prepare_planar_upload(
+    frame: PlanarFrame,
+    mut uniforms: VideoUniforms,
+    supports_16bit_norm: bool,
+) -> std::result::Result<PreparedPlanarUpload, PlanarFrameConversionError> {
+    let (frame, path) = if frame.format == PlanarPixelFormat::P010 && !supports_16bit_norm {
+        (
+            frame.downconvert_p010_to_nv12()?,
+            PlanarUploadPath::CpuP010ToNv12,
+        )
+    } else {
+        (frame, PlanarUploadPath::Native)
+    };
+    uniforms.is_p010 = u32::from(frame.format == PlanarPixelFormat::P010);
+    Ok(PreparedPlanarUpload {
+        frame,
+        uniforms,
+        path,
+    })
+}
+
+fn source_color_for_player_frame(frame: &PlayerVideoFrame) -> SourceColorState {
+    SourceColorState::new(
+        frame.frame.color_primaries(),
+        frame.frame.transfer_function(),
+    )
+    .range(frame.frame.color_range())
+    .matrix(frame.frame.matrix_coefficients())
+    .hdr_metadata(frame.frame.hdr_metadata())
+}
+
+/// The currently uploaded video frame: source textures plus the common color
+/// uniforms. Retained so the presenter can re-present it across vsync ticks.
 struct UploadedVideoFrame {
-    luma: wgpu::Texture,
-    chroma: wgpu::Texture,
+    textures: UploadedVideoTextures,
     width: u32,
     height: u32,
     uniforms: VideoUniforms,
+    source_color: Option<SourceColorState>,
+    /// Monotonic renderer-local identity for the uploaded decoded frame.
+    /// Presentation ticks reuse this token so an expensive GPU preprocessing
+    /// pass is only encoded once per upload, independent of repeated PTS values.
+    frame_token: u64,
+}
+
+impl UploadedVideoFrame {
+    fn uniforms_for_output(&self, output: OutputDescription) -> VideoUniforms {
+        let Some(source) = self.source_color else {
+            return self.uniforms;
+        };
+        let pipeline = VideoRenderPipeline::new(source, output.target);
+        let uniforms = VideoUniforms::from_pipeline(
+            &pipeline,
+            self.uniforms.is_p010 != 0,
+            output.extended_linear,
+        );
+        match &self.textures {
+            UploadedVideoTextures::Planar { .. } => uniforms,
+            UploadedVideoTextures::Rgb { .. } => uniforms.rgb_texture_input(),
+        }
+    }
 }
 
 struct AttachedSurface {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
+    sdr_format: wgpu::TextureFormat,
+    output: OutputDescription,
+    fallback_reason: OutputFallbackReason,
+    data_space_failure: bool,
+    native_data_space: i32,
     handle: WgpuSurfaceHandle,
+    // Declared after `surface` so the wgpu surface is dropped before its native
+    // window reference during normal field destruction.
+    #[cfg(target_os = "android")]
+    _android_window: Option<AndroidNativeWindow>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AttachedOutputState {
+    output: OutputDescription,
+    fallback_reason: OutputFallbackReason,
+    data_space_failure: bool,
+    native_data_space: i32,
+}
+
+impl AttachedSurface {
+    fn output_state(&self) -> AttachedOutputState {
+        AttachedOutputState {
+            output: self.output,
+            fallback_reason: self.fallback_reason,
+            data_space_failure: self.data_space_failure,
+            native_data_space: self.native_data_space,
+        }
+    }
+}
+
+enum SurfaceFrame {
+    Texture {
+        texture: wgpu::SurfaceTexture,
+        reconfigure_after_present: bool,
+    },
+    Skipped,
 }
 
 pub struct WgpuRenderer {
-    instance: wgpu::Instance,
+    _instance: wgpu::Instance,
     adapter: wgpu::Adapter,
+    #[cfg(target_os = "android")]
+    android_vulkan: Option<AndroidVulkanInterop>,
+    #[cfg(target_os = "android")]
+    android_device_health: Arc<AndroidWgpuDeviceHealth>,
+    #[cfg(target_os = "android")]
+    android_backend_candidate_index: usize,
     device: wgpu::Device,
     queue: wgpu::Queue,
     surface: Option<AttachedSurface>,
@@ -265,61 +450,711 @@ pub struct WgpuRenderer {
     overlay_pipeline: Option<OverlayPipeline>,
     current_video: Option<UploadedVideoFrame>,
     current_video_visible: bool,
+    upload_serial: u64,
     danmaku_atlas_cache: Option<WgpuDanmakuAtlasCache>,
     supports_16bit_norm: bool,
+    output_mode: OutputMode,
+    output_status: OutputRuntimeStatus,
+    output_headroom: OutputHeadroomState,
     upscaler_mode: LumaUpscalerMode,
+    upscaler: WgpuArtCnn,
+    upscaler_failed_frame_token: Option<u64>,
+    upscaler_active_frame_reported: bool,
+    cpu_video_frame_fallback_reported: bool,
+    p010_quality_fallback_reported: bool,
+    sdr_hdr_output_reported: bool,
+    #[cfg(target_os = "android")]
+    android_shared_frame_reported: bool,
     stats: WgpuRendererStats,
 }
 
 /// Offscreen readback targets use a linear `Rgba8Unorm` format so a clear value of
 /// `c` reads back as `round(c * 255)` with no transfer-function surprises.
 const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+#[cfg(target_os = "android")]
+const ANDROID_WGPU_DROP_POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+
+#[derive(Debug, Clone)]
+struct WgpuSurfaceOutputSelection {
+    format: wgpu::TextureFormat,
+    sdr_format: wgpu::TextureFormat,
+    output: OutputDescription,
+    fallback_reason: OutputFallbackReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct OutputHeadroomState {
+    headroom: f32,
+    known: bool,
+}
+
+impl OutputHeadroomState {
+    fn reported(headroom: f32, known: bool) -> Self {
+        if known && headroom.is_finite() && headroom >= 1.0 {
+            Self {
+                headroom: headroom.min(10_000.0),
+                known,
+            }
+        } else {
+            Self::default()
+        }
+    }
+}
+
+impl Default for OutputHeadroomState {
+    fn default() -> Self {
+        Self {
+            headroom: 1.0,
+            known: false,
+        }
+    }
+}
+
+fn effective_extended_linear_headroom(
+    requested: OutputMode,
+    capabilities: SurfaceOutputCapabilities,
+    display: OutputHeadroomState,
+) -> f32 {
+    let mut headroom = requested.headroom().max(1.0);
+    if capabilities.desired_headroom.is_finite() && capabilities.desired_headroom >= 1.0 {
+        headroom = headroom.min(capabilities.desired_headroom);
+    }
+    // A ratio of exactly 1 is common before the first HDR layer is visible.
+    // Do not clamp the content to SDR at that point or the display may never
+    // observe values above reference white and grant additional headroom.
+    if display.known && display.headroom > 1.0 {
+        headroom = headroom.min(display.headroom);
+    }
+    headroom.max(1.0)
+}
+
+fn preferred_sdr_surface_format(formats: &[wgpu::TextureFormat]) -> Option<wgpu::TextureFormat> {
+    [
+        wgpu::TextureFormat::Bgra8Unorm,
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    ]
+    .into_iter()
+    .find(|candidate| formats.contains(candidate))
+    .or_else(|| {
+        formats
+            .iter()
+            .copied()
+            .find(|format| *format != wgpu::TextureFormat::Rgba16Float)
+    })
+}
+
+fn select_wgpu_surface_output(
+    requested: OutputMode,
+    capabilities: SurfaceOutputCapabilities,
+    backend: wgpu::Backend,
+    formats: &[wgpu::TextureFormat],
+) -> Option<WgpuSurfaceOutputSelection> {
+    let sdr_format = preferred_sdr_surface_format(formats)?;
+    let fallback_reason = match requested {
+        OutputMode::Sdr => OutputFallbackReason::None,
+        OutputMode::AppleEdr { .. } => OutputFallbackReason::LegacyAppleEdrUnsupported,
+        OutputMode::ExtendedLinear { .. } if !capabilities.extended_linear => {
+            if capabilities.fallback_reason == OutputFallbackReason::None {
+                OutputFallbackReason::DisplayHdrUnsupported
+            } else {
+                capabilities.fallback_reason
+            }
+        }
+        OutputMode::ExtendedLinear { .. } if !capabilities.direct_composition => {
+            OutputFallbackReason::HybridCompositionRequired
+        }
+        OutputMode::ExtendedLinear { .. } if backend != wgpu::Backend::Vulkan => {
+            OutputFallbackReason::WgpuBackendNotVulkan
+        }
+        OutputMode::ExtendedLinear { .. }
+            if !formats.contains(&wgpu::TextureFormat::Rgba16Float) =>
+        {
+            OutputFallbackReason::Rgba16FloatSurfaceFormatUnavailable
+        }
+        OutputMode::ExtendedLinear { headroom } => {
+            return Some(WgpuSurfaceOutputSelection {
+                format: wgpu::TextureFormat::Rgba16Float,
+                sdr_format,
+                output: OutputDescription::extended_linear(headroom),
+                fallback_reason: OutputFallbackReason::None,
+            });
+        }
+    };
+
+    Some(WgpuSurfaceOutputSelection {
+        format: sdr_format,
+        sdr_format,
+        output: OutputDescription::sdr(),
+        fallback_reason,
+    })
+}
+
+fn requested_device_limits(adapter_limits: wgpu::Limits, backend: wgpu::Backend) -> wgpu::Limits {
+    // Erika only needs the portable binding-count and buffer-size baseline, but
+    // video and swapchain textures must retain the adapter's real resolution.
+    // This also keeps Android software Vulkan implementations usable: SwiftShader
+    // exposes the Vulkan minimum 16 KiB uniform-buffer binding limit, while
+    // `Limits::default()` asks for 64 KiB and makes `request_device` fail.
+    // GLES 3.0 adapters legitimately expose no compute workgroups. Request the
+    // WebGL2/GLES baseline there instead of accidentally asking for the GLES 3.1
+    // compute minima and rejecting an otherwise valid presentation backend.
+    let baseline = if backend == wgpu::Backend::Gl {
+        wgpu::Limits::downlevel_webgl2_defaults()
+    } else {
+        wgpu::Limits::downlevel_defaults()
+    };
+    baseline
+        .using_resolution(adapter_limits.clone())
+        .using_alignment(adapter_limits)
+}
+
+fn wgpu_instance_flags() -> wgpu::InstanceFlags {
+    let flags = wgpu::InstanceFlags::from_build_config().with_env();
+    #[cfg(target_os = "android")]
+    {
+        // Android Emulator's ranchu Vulkan driver can dereference a null
+        // debug-utils object while assigning HAL labels. Keep wgpu validation
+        // enabled, but do not forward object labels into that vendor path.
+        return flags | wgpu::InstanceFlags::DISCARD_HAL_LABELS;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        flags
+    }
+}
+
+#[derive(Clone, Copy)]
+struct WgpuBackendCandidate {
+    label: &'static str,
+    backends: wgpu::Backends,
+    force_fallback_adapter: bool,
+    #[cfg(target_os = "android")]
+    android_ahb_interop: bool,
+    #[cfg(target_os = "android")]
+    allow_cpu_adapter: bool,
+}
+
+struct WgpuDeviceContext {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    supports_16bit_norm: bool,
+    #[cfg(target_os = "android")]
+    android_vulkan: Option<AndroidVulkanInterop>,
+    #[cfg(target_os = "android")]
+    android_device_health: Arc<AndroidWgpuDeviceHealth>,
+    #[cfg(target_os = "android")]
+    android_backend_candidate_index: usize,
+}
+
+fn wgpu_backend_candidates() -> Vec<WgpuBackendCandidate> {
+    #[cfg(target_os = "android")]
+    {
+        // Keep the instances separate. A driver may support ordinary Vulkan
+        // rendering while lacking one of the AHardwareBuffer interop extensions;
+        // retain that Vulkan CPU-upload route before falling back to EGL/GLES.
+        vec![
+            WgpuBackendCandidate {
+                label: "vulkan-ahb",
+                backends: wgpu::Backends::VULKAN,
+                force_fallback_adapter: false,
+                android_ahb_interop: true,
+                allow_cpu_adapter: false,
+            },
+            WgpuBackendCandidate {
+                label: "vulkan",
+                backends: wgpu::Backends::VULKAN,
+                force_fallback_adapter: false,
+                android_ahb_interop: false,
+                allow_cpu_adapter: false,
+            },
+            WgpuBackendCandidate {
+                label: "gles",
+                backends: wgpu::Backends::GL,
+                force_fallback_adapter: false,
+                android_ahb_interop: false,
+                allow_cpu_adapter: false,
+            },
+            WgpuBackendCandidate {
+                label: "vulkan-software",
+                backends: wgpu::Backends::VULKAN,
+                force_fallback_adapter: true,
+                android_ahb_interop: false,
+                allow_cpu_adapter: true,
+            },
+        ]
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        vec![WgpuBackendCandidate {
+            label: "platform-default",
+            backends: wgpu::Backends::all(),
+            force_fallback_adapter: false,
+        }]
+    }
+}
+
+fn backend_candidate_order(
+    candidate_count: usize,
+    start_index: usize,
+    excluded: &[usize],
+) -> Vec<usize> {
+    if candidate_count == 0 {
+        return Vec::new();
+    }
+    let start_index = start_index % candidate_count;
+    (0..candidate_count)
+        .map(|offset| (start_index + offset) % candidate_count)
+        .filter(|candidate_index| !excluded.contains(candidate_index))
+        .collect()
+}
+
+fn attempted_candidate_prefix(
+    candidate_order: &[usize],
+    selected_candidate: Option<usize>,
+) -> Vec<usize> {
+    let attempted_count = selected_candidate
+        .and_then(|selected_candidate| {
+            candidate_order
+                .iter()
+                .position(|candidate_index| *candidate_index == selected_candidate)
+        })
+        .map_or(candidate_order.len(), |position| position + 1);
+    candidate_order
+        .iter()
+        .copied()
+        .take(attempted_count)
+        .collect()
+}
+
+#[cfg(target_os = "android")]
+fn install_device_diagnostics(
+    device: &wgpu::Device,
+    candidate: &'static str,
+    adapter_info: &wgpu::AdapterInfo,
+) -> Arc<AndroidWgpuDeviceHealth> {
+    let health = Arc::new(AndroidWgpuDeviceHealth::default());
+    let backend = format!("{:?}", adapter_info.backend);
+    let name = adapter_info.name.clone();
+    let uncaptured_backend = backend.clone();
+    let uncaptured_name = name.clone();
+    let uncaptured_health = Arc::clone(&health);
+    device.on_uncaptured_error(Arc::new(move |error| {
+        let error_kind = match &error {
+            wgpu::Error::OutOfMemory { .. } => "out_of_memory",
+            wgpu::Error::Validation { .. } => "validation",
+            wgpu::Error::Internal { .. } => "internal",
+        };
+        uncaptured_health.record(error_kind, error.to_string(), false);
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "wgpu_renderer",
+                "stage": "uncaptured_error",
+                "backendCandidate": candidate,
+                "backend": uncaptured_backend.as_str(),
+                "name": uncaptured_name.as_str(),
+                "errorKind": error_kind,
+                "message": error.to_string(),
+            })
+            .to_string(),
+        );
+    }));
+
+    let lost_health = Arc::clone(&health);
+    device.set_device_lost_callback(move |reason, message| {
+        let failure_reason = if message.is_empty() {
+            format!("{reason:?}")
+        } else {
+            format!("{reason:?}: {message}")
+        };
+        lost_health.record("device_lost", failure_reason, true);
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "wgpu_renderer",
+                "stage": "device_lost",
+                "backendCandidate": candidate,
+                "backend": backend.as_str(),
+                "name": name.as_str(),
+                "reason": format!("{reason:?}"),
+                "message": message,
+            })
+            .to_string(),
+        );
+    });
+    health
+}
+
+fn request_wgpu_device(
+    candidate: WgpuBackendCandidate,
+    backend_candidate_index: usize,
+    attempt_index: usize,
+    attempt_count: usize,
+) -> std::result::Result<WgpuDeviceContext, String> {
+    #[cfg(not(target_os = "android"))]
+    let _ = (backend_candidate_index, attempt_index, attempt_count);
+
+    #[cfg(target_os = "android")]
+    crate::trace::diagnostic(
+        serde_json::json!({
+            "event": "wgpu_renderer",
+            "stage": "backend_attempt_started",
+            "backendCandidate": candidate.label,
+            "backendCandidateIndex": backend_candidate_index,
+            "attempt": attempt_index + 1,
+            "attemptCount": attempt_count,
+            "fallback": attempt_index > 0,
+            "forceFallbackAdapter": candidate.force_fallback_adapter,
+            "adapterSelectionPolicy": if candidate.force_fallback_adapter {
+                "forced_fallback_only"
+            } else {
+                "default"
+            },
+        })
+        .to_string(),
+    );
+
+    #[cfg(target_os = "android")]
+    if candidate.android_ahb_interop {
+        let context = crate::renderer::android_vulkan::create_device().map_err(|message| {
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "wgpu_renderer",
+                    "stage": "android_vulkan_interop_unavailable",
+                    "backendCandidate": candidate.label,
+                    "attempt": attempt_index + 1,
+                    "attemptCount": attempt_count,
+                    "reason": message.as_str(),
+                    "fallback": "vulkan_cpu_upload",
+                })
+                .to_string(),
+            );
+            message
+        })?;
+        let adapter_info = context.adapter.get_info();
+        let adapter_limits = context.adapter.limits();
+        let android_device_health =
+            install_device_diagnostics(&context.device, candidate.label, &adapter_info);
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "wgpu_renderer",
+                "stage": "device_created",
+                "backendCandidate": candidate.label,
+                "backendCandidateIndex": backend_candidate_index,
+                "attempt": attempt_index + 1,
+                "attemptCount": attempt_count,
+                "fallback": false,
+                "forceFallbackAdapter": candidate.force_fallback_adapter,
+                "backend": format!("{:?}", adapter_info.backend),
+                "deviceType": format!("{:?}", adapter_info.device_type),
+                "name": adapter_info.name.as_str(),
+                "driver": adapter_info.driver.as_str(),
+                "driverInfo": adapter_info.driver_info.as_str(),
+                "supports16BitNorm": context.supports_16bit_norm,
+                "adapterMaxTextureDimension2D": adapter_limits.max_texture_dimension_2d,
+                "adapterMaxUniformBufferBindingSize": adapter_limits.max_uniform_buffer_binding_size,
+                "androidHardwareBufferInteropCapable": true,
+            })
+            .to_string(),
+        );
+        return Ok(WgpuDeviceContext {
+            instance: context.instance,
+            adapter: context.adapter,
+            device: context.device,
+            queue: context.queue,
+            supports_16bit_norm: context.supports_16bit_norm,
+            android_vulkan: Some(context.interop),
+            android_device_health,
+            android_backend_candidate_index: backend_candidate_index,
+        });
+    }
+
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: candidate.backends,
+        flags: wgpu_instance_flags(),
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: candidate.force_fallback_adapter,
+        compatible_surface: None,
+    }))
+    .map_err(|error| {
+        let message = format!("adapter request failed: {error}");
+        #[cfg(target_os = "android")]
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "wgpu_renderer",
+                "stage": "adapter_request_failed",
+                "backendCandidate": candidate.label,
+                "attempt": attempt_index + 1,
+                "attemptCount": attempt_count,
+                "forceFallbackAdapter": candidate.force_fallback_adapter,
+                "reason": message.as_str(),
+            })
+            .to_string(),
+        );
+        message
+    })?;
+    let adapter_info = adapter.get_info();
+    #[cfg(target_os = "android")]
+    if candidate.backends == wgpu::Backends::VULKAN
+        && adapter_info.device_type == wgpu::DeviceType::Cpu
+        && !candidate.allow_cpu_adapter
+    {
+        let message = format!(
+            "software Vulkan adapter {} is deferred until after GLES",
+            adapter_info.name
+        );
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "wgpu_renderer",
+                "stage": "software_vulkan_deferred",
+                "backendCandidate": candidate.label,
+                "attempt": attempt_index + 1,
+                "attemptCount": attempt_count,
+                "backend": format!("{:?}", adapter_info.backend),
+                "deviceType": format!("{:?}", adapter_info.device_type),
+                "name": adapter_info.name.as_str(),
+                "fallback": "gles_cpu_upload",
+                "reason": message.as_str(),
+            })
+            .to_string(),
+        );
+        return Err(message);
+    }
+    let adapter_limits = adapter.limits();
+
+    // 16-bit normalized textures (R16Unorm/Rg16Unorm) are needed for P010/10-bit
+    // upload. They are not in the WebGPU baseline, so request the feature only when
+    // the adapter advertises it (true on Metal/Vulkan/DX12 native backends).
+    let supports_16bit_norm = adapter
+        .features()
+        .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
+    let required_features = if supports_16bit_norm {
+        wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+    } else {
+        wgpu::Features::empty()
+    };
+    let required_limits = requested_device_limits(adapter_limits.clone(), adapter_info.backend);
+
+    #[cfg(target_os = "android")]
+    crate::trace::diagnostic(
+        serde_json::json!({
+            "event": "wgpu_renderer",
+            "stage": "adapter_selected",
+            "backendCandidate": candidate.label,
+            "attempt": attempt_index + 1,
+            "attemptCount": attempt_count,
+            "fallback": attempt_index > 0,
+            "forceFallbackAdapter": candidate.force_fallback_adapter,
+            "adapterSelectionPolicy": if candidate.force_fallback_adapter {
+                "forced_fallback_only"
+            } else {
+                "default"
+            },
+            "backend": format!("{:?}", adapter_info.backend),
+            "deviceType": format!("{:?}", adapter_info.device_type),
+            "name": adapter_info.name.as_str(),
+            "driver": adapter_info.driver.as_str(),
+            "driverInfo": adapter_info.driver_info.as_str(),
+            "androidHardwareBufferInteropCapable": false,
+            "supports16BitNorm": supports_16bit_norm,
+            "adapterMaxTextureDimension2D": adapter_limits.max_texture_dimension_2d,
+            "adapterMaxUniformBufferBindingSize": adapter_limits.max_uniform_buffer_binding_size,
+            "requestedMaxTextureDimension2D": required_limits.max_texture_dimension_2d,
+            "requestedMaxUniformBufferBindingSize": required_limits.max_uniform_buffer_binding_size,
+        })
+        .to_string(),
+    );
+
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("erika-wgpu-device"),
+        required_features,
+        required_limits,
+        memory_hints: wgpu::MemoryHints::default(),
+        experimental_features: wgpu::ExperimentalFeatures::default(),
+        trace: wgpu::Trace::Off,
+    }))
+    .map_err(|error| {
+        let message = format!("device request failed: {error}");
+        #[cfg(target_os = "android")]
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "wgpu_renderer",
+                "stage": "device_request_failed",
+                "backendCandidate": candidate.label,
+                "attempt": attempt_index + 1,
+                "attemptCount": attempt_count,
+                "backend": format!("{:?}", adapter_info.backend),
+                "name": adapter_info.name.as_str(),
+                "reason": message.as_str(),
+            })
+            .to_string(),
+        );
+        message
+    })?;
+
+    #[cfg(target_os = "android")]
+    let android_device_health = install_device_diagnostics(&device, candidate.label, &adapter_info);
+
+    #[cfg(target_os = "android")]
+    crate::trace::diagnostic(
+        serde_json::json!({
+            "event": "wgpu_renderer",
+            "stage": "device_created",
+            "backendCandidate": candidate.label,
+            "backendCandidateIndex": backend_candidate_index,
+            "attempt": attempt_index + 1,
+            "attemptCount": attempt_count,
+            "fallback": attempt_index > 0,
+            "forceFallbackAdapter": candidate.force_fallback_adapter,
+            "adapterSelectionPolicy": if candidate.force_fallback_adapter {
+                "forced_fallback_only"
+            } else {
+                "default"
+            },
+            "backend": format!("{:?}", adapter_info.backend),
+            "name": adapter_info.name.as_str(),
+            "androidHardwareBufferInteropCapable": false,
+        })
+        .to_string(),
+    );
+
+    Ok(WgpuDeviceContext {
+        instance,
+        adapter,
+        device,
+        queue,
+        supports_16bit_norm,
+        #[cfg(target_os = "android")]
+        android_vulkan: None,
+        #[cfg(target_os = "android")]
+        android_device_health,
+        #[cfg(target_os = "android")]
+        android_backend_candidate_index: backend_candidate_index,
+    })
+}
 
 impl WgpuRenderer {
     pub fn new() -> Result<Self> {
-        let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-        }))
-        .map_err(|error| PlayerError::Renderer(format!("wgpu adapter request failed: {error}")))?;
+        Self::new_with_output_mode(OutputMode::Sdr)
+    }
 
-        // 16-bit normalized textures (R16Unorm/Rg16Unorm) are needed for P010/10-bit
-        // upload. They are not in the WebGPU baseline, so request the feature only when
-        // the adapter advertises it (true on Metal/Vulkan/DX12 native backends).
-        let supports_16bit_norm = adapter
-            .features()
-            .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
-        let required_features = if supports_16bit_norm {
-            wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
-        } else {
-            wgpu::Features::empty()
+    pub fn new_with_output_mode(output_mode: OutputMode) -> Result<Self> {
+        let candidate_count = wgpu_backend_candidates().len();
+        Self::new_with_candidate_order(
+            backend_candidate_order(candidate_count, 0, &[]),
+            output_mode,
+        )
+    }
+
+    #[cfg(target_os = "android")]
+    fn new_after_runtime_failure(
+        current_candidate: usize,
+        excluded: &[usize],
+        output_mode: OutputMode,
+    ) -> (Result<Self>, Vec<usize>) {
+        let candidate_count = wgpu_backend_candidates().len();
+        let candidate_order = backend_candidate_order(
+            candidate_count,
+            current_candidate.saturating_add(1),
+            excluded,
+        );
+        let result = Self::new_with_candidate_order(candidate_order.clone(), output_mode);
+        let selected_candidate = result
+            .as_ref()
+            .ok()
+            .map(|renderer| renderer.android_backend_candidate_index);
+        (
+            result,
+            attempted_candidate_prefix(&candidate_order, selected_candidate),
+        )
+    }
+
+    fn new_with_candidate_order(
+        candidate_order: Vec<usize>,
+        output_mode: OutputMode,
+    ) -> Result<Self> {
+        let candidates = wgpu_backend_candidates();
+        if candidate_order.is_empty() {
+            return Err(PlayerError::Renderer(
+                "wgpu initialization has no untried backend candidates".to_string(),
+            ));
+        }
+        let mut failures = Vec::with_capacity(candidate_order.len());
+        let mut selected = None;
+        for (attempt_index, candidate_index) in candidate_order.iter().copied().enumerate() {
+            let candidate = candidates[candidate_index];
+            match request_wgpu_device(
+                candidate,
+                candidate_index,
+                attempt_index,
+                candidate_order.len(),
+            ) {
+                Ok(context) => {
+                    selected = Some(context);
+                    break;
+                }
+                Err(error) => failures.push(format!("{}: {error}", candidate.label)),
+            }
+        }
+        let Some(context) = selected else {
+            let message = format!(
+                "wgpu initialization failed after all backend candidates: {}",
+                failures.join("; ")
+            );
+            #[cfg(target_os = "android")]
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "wgpu_renderer",
+                    "stage": "initialization_failed",
+                    "backendCandidates": candidate_order
+                        .iter()
+                        .map(|candidate_index| candidates[*candidate_index].label)
+                        .collect::<Vec<_>>(),
+                    "failures": failures,
+                    "reason": message.as_str(),
+                })
+                .to_string(),
+            );
+            return Err(PlayerError::Renderer(message));
         };
 
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("erika-wgpu-device"),
-            required_features,
-            required_limits: wgpu::Limits::default(),
-            memory_hints: wgpu::MemoryHints::default(),
-            experimental_features: wgpu::ExperimentalFeatures::default(),
-            trace: wgpu::Trace::Off,
-        }))
-        .map_err(|error| PlayerError::Renderer(format!("wgpu device request failed: {error}")))?;
-
+        let upscaler = WgpuArtCnn::new(&context.adapter, &context.device);
         Ok(Self {
-            instance,
-            adapter,
-            device,
-            queue,
+            _instance: context.instance,
+            adapter: context.adapter,
+            device: context.device,
+            queue: context.queue,
+            #[cfg(target_os = "android")]
+            android_vulkan: context.android_vulkan,
+            #[cfg(target_os = "android")]
+            android_device_health: context.android_device_health,
+            #[cfg(target_os = "android")]
+            android_backend_candidate_index: context.android_backend_candidate_index,
             surface: None,
             video_pipeline: None,
             overlay_pipeline: None,
             current_video: None,
             current_video_visible: false,
+            upload_serial: 0,
             danmaku_atlas_cache: None,
-            supports_16bit_norm,
+            supports_16bit_norm: context.supports_16bit_norm,
+            output_mode,
+            output_status: OutputRuntimeStatus::requested(output_mode),
+            output_headroom: OutputHeadroomState::default(),
             upscaler_mode: LumaUpscalerMode::Off,
+            upscaler,
+            upscaler_failed_frame_token: None,
+            upscaler_active_frame_reported: false,
+            cpu_video_frame_fallback_reported: false,
+            p010_quality_fallback_reported: false,
+            sdr_hdr_output_reported: false,
+            #[cfg(target_os = "android")]
+            android_shared_frame_reported: false,
             stats: WgpuRendererStats::default(),
         })
     }
@@ -337,8 +1172,139 @@ impl WgpuRenderer {
         self.stats
     }
 
+    fn observe_attached_output(&mut self, attached: AttachedOutputState, count_fallback: bool) {
+        self.output_status.active_encoding = if attached.output.extended_linear {
+            ActiveOutputEncoding::AndroidExtendedLinearScRgb
+        } else {
+            ActiveOutputEncoding::SdrSrgb
+        };
+        self.output_status.surface_format = attached.output.surface_format;
+        self.output_status.native_data_space = attached.native_data_space;
+        self.output_status.active_headroom = if attached.output.extended_linear {
+            if self.output_headroom.known {
+                self.output_headroom.headroom
+            } else {
+                attached.output.target.edr_headroom.max(1.0)
+            }
+        } else {
+            1.0
+        };
+        self.output_status.active_headroom_known = if attached.output.extended_linear {
+            self.output_headroom.known
+        } else {
+            true
+        };
+        self.output_status.extended_linear_active = attached.output.extended_linear;
+        self.output_status.fallback_reason = attached.fallback_reason;
+        if count_fallback && attached.fallback_reason != OutputFallbackReason::None {
+            self.output_status.fallback_count = self.output_status.fallback_count.saturating_add(1);
+        }
+        if count_fallback && attached.data_space_failure {
+            self.output_status.data_space_failures =
+                self.output_status.data_space_failures.saturating_add(1);
+        }
+    }
+
+    fn update_output_headroom_state(&mut self, state: OutputHeadroomState, count_update: bool) {
+        let unchanged = self.output_headroom.known == state.known
+            && (self.output_headroom.headroom - state.headroom).abs() < 0.001;
+        if unchanged {
+            return;
+        }
+        self.output_headroom = state;
+
+        let mut effective_content_headroom = None;
+        let mut extended_linear_active = false;
+        if let Some(attached) = self.surface.as_mut()
+            && attached.output.extended_linear
+        {
+            let effective = effective_extended_linear_headroom(
+                self.output_mode,
+                attached.handle.output_capabilities,
+                state,
+            );
+            attached.output = OutputDescription::extended_linear(effective);
+            effective_content_headroom = Some(effective);
+            extended_linear_active = true;
+        }
+
+        if extended_linear_active {
+            self.output_status.active_headroom = if state.known {
+                state.headroom
+            } else {
+                effective_content_headroom.unwrap_or_else(|| self.output_mode.headroom())
+            };
+            self.output_status.active_headroom_known = state.known;
+        }
+        if count_update && self.output_mode.is_android_extended_linear() {
+            self.output_status.headroom_updates =
+                self.output_status.headroom_updates.saturating_add(1);
+        }
+
+        #[cfg(target_os = "android")]
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "video_output_mode",
+                "stage": "headroom_updated",
+                "requested": "extended_linear",
+                "reportedHeadroom": state.headroom,
+                "reportedHeadroomKnown": state.known,
+                "effectiveContentHeadroom": effective_content_headroom,
+                "extendedLinearActive": extended_linear_active,
+                "headroomUpdates": self.output_status.headroom_updates,
+            })
+            .to_string(),
+        );
+    }
+
+    fn observe_detached_output(&mut self) {
+        self.output_status.active_encoding = ActiveOutputEncoding::SdrSrgb;
+        self.output_status.surface_format = OutputSurfaceFormat::EightBitUnorm;
+        self.output_status.native_data_space = -1;
+        self.output_status.active_headroom = 1.0;
+        self.output_status.active_headroom_known = false;
+        self.output_status.extended_linear_active = false;
+    }
+
     pub fn adapter_info(&self) -> wgpu::AdapterInfo {
         self.adapter.get_info()
+    }
+
+    fn next_upload_serial(&mut self) -> u64 {
+        self.upload_serial = self.upload_serial.saturating_add(1).max(1);
+        self.upload_serial
+    }
+
+    #[cfg(target_os = "android")]
+    fn android_backend_candidate_label(&self) -> &'static str {
+        wgpu_backend_candidates()
+            .get(self.android_backend_candidate_index)
+            .map_or("unknown", |candidate| candidate.label)
+    }
+
+    #[cfg(target_os = "android")]
+    fn android_poll_device_health(&self, operation: &'static str) -> Result<()> {
+        if let Some(failure) = self.android_device_health.failure() {
+            return Err(PlayerError::Renderer(format!(
+                "Android wgpu device is unhealthy before {operation}: kind={} backend={} reason={}",
+                failure.kind,
+                self.android_backend_candidate_label(),
+                failure.reason
+            )));
+        }
+        if let Err(error) = self.device.poll(wgpu::PollType::Poll) {
+            self.android_device_health
+                .record("poll_error", error.to_string(), true);
+        }
+        if let Some(failure) = self.android_device_health.failure() {
+            return Err(PlayerError::Renderer(format!(
+                "Android wgpu device became unhealthy during {operation}: kind={} backend={} reason={}",
+                failure.kind,
+                self.android_backend_candidate_label(),
+                failure.reason
+            )));
+        }
+        Ok(())
     }
 
     /// Render a single clear pass into an offscreen `width`x`height` target and read
@@ -479,7 +1445,8 @@ impl WgpuRenderer {
     /// path so results can be compared against the native backend.
     ///
     /// `luma` is `width * height` bytes (Y plane). `chroma` is the interleaved
-    /// Cb/Cr plane at half resolution: `(width / 2) * (height / 2) * 2` bytes.
+    /// Cb/Cr plane at half resolution:
+    /// `ceil(width / 2) * ceil(height / 2) * 2` bytes.
     pub fn render_nv12_offscreen(
         &mut self,
         width: u32,
@@ -495,7 +1462,7 @@ impl WgpuRenderer {
 
     /// Upload tightly packed NV12 planes as the current video frame. `luma` is
     /// `width * height` bytes; `chroma` is the interleaved Cb/Cr plane at half
-    /// resolution (`(width / 2) * (height / 2) * 2` bytes).
+    /// resolution (`ceil(width / 2) * ceil(height / 2) * 2` bytes).
     pub fn upload_nv12(
         &mut self,
         width: u32,
@@ -517,21 +1484,56 @@ impl WgpuRenderer {
     }
 
     /// Upload a repacked planar frame (8-bit NV12 or 10-bit P010) as the current
-    /// video frame. P010 requires the `TEXTURE_FORMAT_16BIT_NORM` adapter feature.
+    /// video frame. When the adapter lacks `TEXTURE_FORMAT_16BIT_NORM`, P010 is
+    /// explicitly down-converted to NV12 on the CPU while retaining the color/HDR
+    /// pipeline carried by `uniforms`.
     pub fn upload_planar(&mut self, frame: PlanarFrame, uniforms: VideoUniforms) -> Result<()> {
-        self.upload_planar_with_context(frame, uniforms)
+        self.upload_planar_with_context(frame, uniforms, None)
     }
 
     fn upload_planar_with_context(
         &mut self,
         frame: PlanarFrame,
         uniforms: VideoUniforms,
+        source_color: Option<SourceColorState>,
     ) -> Result<()> {
+        let prepared =
+            prepare_planar_upload(frame, uniforms, self.supports_16bit_norm).map_err(|error| {
+                PlayerError::Renderer(format!("stage=cpu_p010_to_nv12_fallback reason={error}"))
+            })?;
+        if prepared.path == PlanarUploadPath::CpuP010ToNv12 && !self.p010_quality_fallback_reported
+        {
+            self.p010_quality_fallback_reported = true;
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "video_frame_import",
+                    "stage": "cpu_p010_to_nv12_quality_fallback",
+                    "renderer": "wgpu",
+                    "width": prepared.frame.width,
+                    "height": prepared.frame.height,
+                    "sourcePixelFormat": "P010",
+                    "uploadPixelFormat": "NV12",
+                    "sourceBitDepth": 10,
+                    "uploadBitDepth": 8,
+                    "adapterSupports16BitNorm": self.supports_16bit_norm,
+                    "colorPipelinePreserved": true,
+                    "hdrDescriptionPreserved": true,
+                    "fullRange": prepared.uniforms.full_range != 0,
+                    "sourceTransferCode": prepared.uniforms.source_transfer,
+                    "sourcePeakNits": prepared.uniforms.nits[0],
+                    "toneMapCode": prepared.uniforms.tone_map,
+                    "reason": "adapter lacks TEXTURE_FORMAT_16BIT_NORM; CPU P010-to-NV12 down-conversion keeps playback available with an explicit 10-bit-to-8-bit quality reduction",
+                })
+                .to_string(),
+            );
+        }
+        let frame = prepared.frame;
+        let uniforms = prepared.uniforms;
         let width = frame.width;
         let height = frame.height;
-        if width == 0 || height == 0 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+        if width == 0 || height == 0 {
             return Err(PlayerError::Renderer(
-                "planar frame dimensions must be non-zero and even".to_string(),
+                "planar frame dimensions must be non-zero".to_string(),
             ));
         }
         let (luma_format, chroma_format, bytes_per_sample) = match frame.format {
@@ -540,22 +1542,14 @@ impl WgpuRenderer {
                 wgpu::TextureFormat::Rg8Unorm,
                 1u32,
             ),
-            PlanarPixelFormat::P010 => {
-                if !self.supports_16bit_norm {
-                    return Err(PlayerError::Renderer(
-                        "wgpu adapter lacks TEXTURE_FORMAT_16BIT_NORM required for P010/10-bit"
-                            .to_string(),
-                    ));
-                }
-                (
-                    wgpu::TextureFormat::R16Unorm,
-                    wgpu::TextureFormat::Rg16Unorm,
-                    2u32,
-                )
-            }
+            PlanarPixelFormat::P010 => (
+                wgpu::TextureFormat::R16Unorm,
+                wgpu::TextureFormat::Rg16Unorm,
+                2u32,
+            ),
         };
-        let chroma_width = width / 2;
-        let chroma_height = height / 2;
+        let chroma_width = width.div_ceil(2);
+        let chroma_height = height.div_ceil(2);
         let expected_luma = (width * height * bytes_per_sample) as usize;
         let expected_chroma = (chroma_width * chroma_height * 2 * bytes_per_sample) as usize;
         if frame.luma.len() != expected_luma {
@@ -589,12 +1583,189 @@ impl WgpuRenderer {
             &frame.chroma,
             chroma_width * 2 * bytes_per_sample,
         );
+        let frame_token = self.next_upload_serial();
         self.current_video = Some(UploadedVideoFrame {
-            luma: luma_texture,
-            chroma: chroma_texture,
+            textures: UploadedVideoTextures::Planar {
+                luma: luma_texture,
+                chroma: chroma_texture,
+            },
             width,
             height,
             uniforms,
+            source_color,
+            frame_token,
+        });
+        self.current_video_visible = true;
+        Ok(())
+    }
+
+    fn video_uniforms_for_frame(
+        &mut self,
+        frame: &PlayerVideoFrame,
+        is_p010: bool,
+    ) -> VideoUniforms {
+        let source = source_color_for_player_frame(frame);
+        let output = self
+            .surface
+            .as_ref()
+            .map_or_else(OutputDescription::sdr, |surface| surface.output);
+        let pipeline = VideoRenderPipeline::new(source, output.target);
+        if source.is_hdr() {
+            self.stats.hdr_source_frames += 1;
+            if !output.extended_linear && pipeline.requires_tone_mapping() {
+                self.stats.sdr_tonemap_frames += 1;
+            }
+            if !output.extended_linear && !self.sdr_hdr_output_reported {
+                self.sdr_hdr_output_reported = true;
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "video_output_mode",
+                        "stage": "sdr_tonemap",
+                        "renderer": "wgpu",
+                        "sourcePrimaries": format!("{:?}", source.primaries),
+                        "sourceTransfer": format!("{:?}", source.transfer),
+                        "sourcePeakNits": source.nominal_peak_nits,
+                        "targetPrimaries": "Bt709",
+                        "targetTransfer": "Srgb",
+                        "reason": "the active wgpu surface is SDR; HDR source is tone-mapped instead of being silently clipped",
+                    })
+                    .to_string(),
+                );
+            }
+        }
+        VideoUniforms::from_pipeline(&pipeline, is_p010, output.extended_linear)
+    }
+
+    #[cfg(target_os = "android")]
+    fn upload_android_mediacodec_frame(&mut self, frame: &PlayerVideoFrame) -> Result<()> {
+        if self.android_vulkan.is_none() {
+            return Err(PlayerError::Renderer(
+                "stage=android_mediacodec_import reason=vulkan_ahardwarebuffer_interop_unavailable"
+                    .to_string(),
+            ));
+        }
+        let image = frame.frame.prepared_mediacodec_image().map_err(|error| {
+            PlayerError::Renderer(format!(
+                "stage=android_mediacodec_prepared_image reason={error}"
+            ))
+        })?;
+        let description = image.description();
+        let crop = image.crop();
+        let timestamp_ns = image.timestamp_ns();
+        let owner: std::sync::Arc<dyn std::any::Any + Send + Sync> = image.clone();
+        let hardware_buffer = image.hardware_buffer().cast::<ash::vk::AHardwareBuffer>();
+        let frame_description = AndroidAhbFrameDescription {
+            hardware_buffer,
+            buffer_width: description.width,
+            buffer_height: description.height,
+            crop: AndroidAhbCrop {
+                left: crop.left as u32,
+                top: crop.top as u32,
+                right: crop.right as u32,
+                bottom: crop.bottom as u32,
+            },
+            color_range: frame.frame.color_range(),
+            matrix_coefficients: frame.frame.matrix_coefficients(),
+            owner,
+        };
+        let mut state_encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("erika-android-ahb-state-encoder"),
+                });
+        let mut conversion_encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("erika-android-ahb-conversion-encoder"),
+                });
+        let conversion = unsafe {
+            self.android_vulkan
+                .as_ref()
+                .expect("Android Vulkan interop checked")
+                .convert_ahardware_buffer(
+                    &self.device,
+                    &mut state_encoder,
+                    &mut conversion_encoder,
+                    frame_description,
+                )
+        }
+        .map_err(|error| match error {
+            AndroidAhbConversionError::Backpressure { .. } => PlayerError::RendererBackpressure(
+                format!("stage=android_ahardwarebuffer_conversion reason={error}"),
+            ),
+            AndroidAhbConversionError::Interop(_) => PlayerError::Renderer(format!(
+                "stage=android_ahardwarebuffer_conversion reason={error}"
+            )),
+        })?;
+        let source_color = source_color_for_player_frame(frame);
+        let uniforms = self.video_uniforms_for_frame(frame, false);
+        // Preserve this order: the wgpu command buffer establishes the tracked
+        // COLOR_ATTACHMENT state, then the raw Vulkan command buffer overwrites
+        // the texture while leaving the real image in that same state.
+        let submission = self
+            .queue
+            .submit([state_encoder.finish(), conversion_encoder.finish()]);
+        let _ = submission;
+        retire_ahb_conversion_after_submission(&self.queue, conversion.pending);
+        self.upload_converted_rgb_texture(
+            conversion.texture,
+            conversion.width,
+            conversion.height,
+            uniforms,
+            Some(source_color),
+        )?;
+        self.stats.hardware_video_frames += 1;
+        self.stats.zero_copy_video_frames += 1;
+        self.stats.shared_handle_video_frames += 1;
+        if !self.android_shared_frame_reported {
+            self.android_shared_frame_reported = true;
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "video_frame_import",
+                    "stage": "android_ahardwarebuffer_shared_handle_active",
+                    "decodeBackend": frame.decode_backend.as_str(),
+                    "timestampNs": timestamp_ns,
+                    "bufferWidth": description.width,
+                    "bufferHeight": description.height,
+                    "visibleWidth": conversion.width,
+                    "visibleHeight": conversion.height,
+                    "crop": {
+                        "left": crop.left,
+                        "top": crop.top,
+                        "right": crop.right,
+                        "bottom": crop.bottom,
+                    },
+                    "directPlaneSampling": false,
+                    "conversionTarget": "rgba16float",
+                })
+                .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "android")]
+    fn upload_converted_rgb_texture(
+        &mut self,
+        texture: wgpu::Texture,
+        width: u32,
+        height: u32,
+        uniforms: VideoUniforms,
+        source_color: Option<SourceColorState>,
+    ) -> Result<()> {
+        if width == 0 || height == 0 {
+            return Err(PlayerError::Renderer(
+                "converted Android frame dimensions must be non-zero".to_string(),
+            ));
+        }
+        let frame_token = self.next_upload_serial();
+        self.current_video = Some(UploadedVideoFrame {
+            textures: UploadedVideoTextures::Rgb { texture },
+            width,
+            height,
+            uniforms: uniforms.rgb_texture_input(),
+            source_color,
+            frame_token,
         });
         self.current_video_visible = true;
         Ok(())
@@ -607,17 +1778,35 @@ impl WgpuRenderer {
         &mut self,
         overlay: Option<&OverlayFrame>,
     ) -> Result<Option<WgpuOffscreenReadback>> {
+        let Some((width, height)) = self
+            .current_video
+            .as_ref()
+            .map(|video| (video.width, video.height))
+        else {
+            return Ok(None);
+        };
+        self.render_current_offscreen_sized(width, height, overlay, None)
+    }
+
+    fn render_current_offscreen_sized(
+        &mut self,
+        width: u32,
+        height: u32,
+        overlay: Option<&OverlayFrame>,
+        danmaku: Option<&DanmakuRenderPlan>,
+    ) -> Result<Option<WgpuOffscreenReadback>> {
         if self.current_video.is_none() {
             return Ok(None);
         }
+        if width == 0 || height == 0 {
+            return Err(PlayerError::Renderer(
+                "offscreen target must have non-zero dimensions".to_string(),
+            ));
+        }
         self.ensure_video_pipeline(OFFSCREEN_FORMAT);
-        if overlay.is_some_and(overlay_has_planes) {
+        if overlay.is_some_and(overlay_has_planes) || danmaku.is_some_and(|plan| !plan.is_empty()) {
             self.ensure_overlay_pipeline(OFFSCREEN_FORMAT);
         }
-        let (width, height) = {
-            let video = self.current_video.as_ref().expect("current video frame");
-            (video.width, video.height)
-        };
         let target = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("erika-wgpu-video-target"),
             size: wgpu::Extent3d {
@@ -633,9 +1822,21 @@ impl WgpuRenderer {
             view_formats: &[],
         });
         let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
-        let _ = self.draw_current_video(&target_view, overlay, None)?;
+        let danmaku_draws = self.draw_current_video(
+            &target_view,
+            width,
+            height,
+            overlay,
+            danmaku,
+            OutputDescription::sdr(),
+        )?;
         let rgba = self.read_back_rgba8(&target, width, height)?;
         self.stats.rendered_frames += 1;
+        self.stats.offscreen_frames += 1;
+        if danmaku_draws > 0 {
+            self.stats.danmaku_passes += 1;
+            self.stats.danmaku_items += danmaku_draws as u64;
+        }
         Ok(Some(WgpuOffscreenReadback {
             width,
             height,
@@ -649,37 +1850,182 @@ impl WgpuRenderer {
     fn draw_current_video(
         &mut self,
         target_view: &wgpu::TextureView,
+        target_width: u32,
+        target_height: u32,
         overlay: Option<&OverlayFrame>,
         danmaku: Option<&DanmakuRenderPlan>,
+        output: OutputDescription,
     ) -> Result<usize> {
         let overlay_draws = match overlay {
-            Some(frame) if overlay_has_planes(frame) => self.prepare_overlay_draws(frame)?,
+            Some(frame) if overlay_has_planes(frame) => {
+                self.prepare_overlay_draws(frame, output)?
+            }
             _ => Vec::new(),
         };
         let danmaku_draws = match danmaku {
-            Some(plan) if !plan.is_empty() => self.prepare_danmaku_draws(plan)?,
+            Some(plan) if !plan.is_empty() => self.prepare_danmaku_draws(plan, output)?,
             _ => Vec::new(),
         };
-        let video = self
-            .current_video
+        let (
+            native_luma_view,
+            native_chroma_view,
+            source_is_rgb,
+            video_width,
+            video_height,
+            frame_token,
+            mut video_uniforms,
+        ) = {
+            let video = self
+                .current_video
+                .as_ref()
+                .ok_or_else(|| PlayerError::Renderer("no current video frame".to_string()))?;
+            let (luma_view, chroma_view, source_is_rgb) = match &video.textures {
+                UploadedVideoTextures::Planar { luma, chroma } => (
+                    luma.create_view(&wgpu::TextureViewDescriptor::default()),
+                    chroma.create_view(&wgpu::TextureViewDescriptor::default()),
+                    false,
+                ),
+                UploadedVideoTextures::Rgb { texture } => (
+                    texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                    texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                    true,
+                ),
+            };
+            (
+                luma_view,
+                chroma_view,
+                source_is_rgb,
+                video.width,
+                video.height,
+                video.frame_token,
+                video.uniforms_for_output(output),
+            )
+        };
+        let viewport = aspect_fit_viewport(video_width, video_height, target_width, target_height);
+        let upscale_requested = self.upscaler_mode.is_enabled()
+            && self.upscaler.status() == WgpuArtCnnStatus::Scalar
+            && viewport.width > video_width as f32
+            && self.upscaler_failed_frame_token != Some(frame_token);
+        let mut upscaled_output = None;
+        if upscale_requested {
+            let input = if source_is_rgb {
+                WgpuArtCnnInput::NonlinearRgb {
+                    view: &native_luma_view,
+                    luma_coefficients: [
+                        video_uniforms.luma_coefficients[0],
+                        video_uniforms.luma_coefficients[1],
+                        video_uniforms.luma_coefficients[2],
+                    ],
+                }
+            } else {
+                WgpuArtCnnInput::PlanarLuma {
+                    view: &native_luma_view,
+                }
+            };
+            let input_kind = input.kind();
+            let out_of_memory_scope = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+            let internal_scope = self.device.push_error_scope(wgpu::ErrorFilter::Internal);
+            let validation_scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let mut compute_encoder =
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("erika-wgpu-artcnn-encoder"),
+                    });
+            let encode_result = self.upscaler.encode(
+                &self.device,
+                &self.queue,
+                &mut compute_encoder,
+                input,
+                video_width,
+                video_height,
+                Some(frame_token),
+            );
+            let compute_commands = compute_encoder.finish();
+            let submit_compute = matches!(&encode_result, Ok(Some(output)) if !output.cache_hit);
+            if submit_compute {
+                // Keep all scopes active through queue submission. Some backends
+                // defer resource-usage validation until this point, and an ArtCNN
+                // failure must remain local to the optional upscaler rather than
+                // becoming an uncaptured renderer/device failure.
+                self.queue.submit(Some(compute_commands));
+            } else {
+                drop(compute_commands);
+            }
+            let validation = pollster::block_on(validation_scope.pop());
+            let internal = pollster::block_on(internal_scope.pop());
+            let out_of_memory = pollster::block_on(out_of_memory_scope.pop());
+            if let Some(error) = validation.or(internal).or(out_of_memory) {
+                let failure = self
+                    .upscaler
+                    .handle_deferred_encode_failure(input_kind, error.to_string());
+                self.upscaler_failed_frame_token = Some(frame_token);
+                crate::trace::diagnostic(failure.diagnostic_json().to_string());
+            } else {
+                match encode_result {
+                    Ok(Some(output)) => {
+                        if let Err(commit_failure) = self.upscaler.commit_encoded_output(&output) {
+                            let failure = self.upscaler.handle_deferred_encode_failure(
+                                input_kind,
+                                commit_failure.to_string(),
+                            );
+                            self.upscaler_failed_frame_token = Some(frame_token);
+                            crate::trace::diagnostic(failure.diagnostic_json().to_string());
+                        } else {
+                            video_uniforms = match output.input_kind {
+                                WgpuArtCnnInputKind::PlanarLuma => {
+                                    video_uniforms.packed_d2s_luma_input()
+                                }
+                                WgpuArtCnnInputKind::NonlinearRgb => {
+                                    video_uniforms.packed_d2s_rgb_detail_input()
+                                }
+                            };
+                            self.upscaler_failed_frame_token = None;
+                            if !self.upscaler_active_frame_reported {
+                                self.upscaler_active_frame_reported = true;
+                                let stats = self.upscaler.stats();
+                                crate::trace::diagnostic(
+                                    serde_json::json!({
+                                        "event": "luma_upscaler",
+                                        "stage": "frame_encoded",
+                                        "renderer": "wgpu",
+                                        "requestedMode": format!("{:?}", self.upscaler_mode),
+                                        "activeBackend": "scalar_compute",
+                                        "inputKind": format!("{:?}", output.input_kind),
+                                        "width": video_width,
+                                        "height": video_height,
+                                        "frameToken": frame_token,
+                                        "cacheHit": output.cache_hit,
+                                        "encodedTiles": stats.encoded_tiles,
+                                        "computeDispatches": stats.compute_dispatches,
+                                        "fallbackCount": stats.fallback_count,
+                                    })
+                                    .to_string(),
+                                );
+                            }
+                            upscaled_output = Some(output);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(failure) => {
+                        self.upscaler_failed_frame_token = Some(frame_token);
+                        crate::trace::diagnostic(failure.diagnostic_json().to_string());
+                    }
+                }
+            }
+        }
+        let luma_view = upscaled_output
             .as_ref()
-            .ok_or_else(|| PlayerError::Renderer("no current video frame".to_string()))?;
+            .map_or(&native_luma_view, |output| &output.view);
+        let chroma_view = &native_chroma_view;
         let pipeline = self
             .video_pipeline
             .as_ref()
             .ok_or_else(|| PlayerError::Renderer("video pipeline not initialized".to_string()))?;
-
-        let luma_view = video
-            .luma
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let chroma_view = video
-            .chroma
-            .create_view(&wgpu::TextureViewDescriptor::default());
         let uniform_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("erika-wgpu-video-uniforms"),
-                contents: bytemuck::bytes_of(&video.uniforms),
+                contents: bytemuck::bytes_of(&video_uniforms),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -692,11 +2038,11 @@ impl WgpuRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&luma_view),
+                    resource: wgpu::BindingResource::TextureView(luma_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&chroma_view),
+                    resource: wgpu::BindingResource::TextureView(chroma_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -729,6 +2075,14 @@ impl WgpuRenderer {
             });
             pass.set_pipeline(&pipeline.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_viewport(
+                viewport.x,
+                viewport.y,
+                viewport.width,
+                viewport.height,
+                0.0,
+                1.0,
+            );
             pass.draw(0..3, 0..1);
         }
 
@@ -770,7 +2124,11 @@ impl WgpuRenderer {
 
     /// Build per-quad GPU resources for the overlay: straight-RGBA subtitle planes
     /// (mode 0) plus libass alpha coverage bitmaps packed into one R8 atlas (mode 1).
-    fn prepare_overlay_draws(&self, frame: &OverlayFrame) -> Result<Vec<OverlayDraw>> {
+    fn prepare_overlay_draws(
+        &self,
+        frame: &OverlayFrame,
+        output: OutputDescription,
+    ) -> Result<Vec<OverlayDraw>> {
         if self.overlay_pipeline.is_none() {
             return Err(PlayerError::Renderer(
                 "overlay pipeline not initialized".to_string(),
@@ -802,15 +2160,20 @@ impl WgpuRenderer {
                 plane.width * 4,
             );
             let (x, y, width, height) = plane.scaled_rect(viewport_w, viewport_h);
-            let uniforms = OverlayUniforms::rgba_plane(x, y, width, height, viewport_w, viewport_h);
+            let uniforms = OverlayUniforms::rgba_plane(x, y, width, height, viewport_w, viewport_h)
+                .for_output(output);
             draws.push(self.make_overlay_draw(&texture, uniforms));
         }
 
-        self.append_alpha_atlas_draws(frame, viewport_w, viewport_h, &mut draws)?;
+        self.append_alpha_atlas_draws(frame, viewport_w, viewport_h, output, &mut draws)?;
         Ok(draws)
     }
 
-    fn prepare_danmaku_draws(&mut self, plan: &DanmakuRenderPlan) -> Result<Vec<OverlayDraw>> {
+    fn prepare_danmaku_draws(
+        &mut self,
+        plan: &DanmakuRenderPlan,
+        output: OutputDescription,
+    ) -> Result<Vec<OverlayDraw>> {
         if self.overlay_pipeline.is_none() {
             return Err(PlayerError::Renderer(
                 "overlay pipeline not initialized".to_string(),
@@ -841,6 +2204,7 @@ impl WgpuRenderer {
                 &outline_texture,
                 viewport_w,
                 viewport_h,
+                output,
                 &mut draws,
             );
         }
@@ -890,6 +2254,7 @@ impl WgpuRenderer {
         outline_texture: &wgpu::Texture,
         viewport_w: u32,
         viewport_h: u32,
+        output: OutputDescription,
         draws: &mut Vec<OverlayDraw>,
     ) {
         if item.shadow_rgba[3] > 0.0 {
@@ -902,7 +2267,8 @@ impl WgpuRenderer {
                 item.tex_rect,
                 viewport_w,
                 viewport_h,
-            );
+            )
+            .for_output(output);
             draws.push(self.make_overlay_draw(outline_texture, uniforms));
         }
         if item.outline_rgba[3] > 0.0 {
@@ -912,7 +2278,8 @@ impl WgpuRenderer {
                 item.tex_rect,
                 viewport_w,
                 viewport_h,
-            );
+            )
+            .for_output(output);
             draws.push(self.make_overlay_draw(outline_texture, uniforms));
         }
         let uniforms = OverlayUniforms::alpha_atlas_rect(
@@ -921,7 +2288,8 @@ impl WgpuRenderer {
             item.tex_rect,
             viewport_w,
             viewport_h,
-        );
+        )
+        .for_output(output);
         draws.push(self.make_overlay_draw(fill_texture, uniforms));
     }
 
@@ -933,6 +2301,7 @@ impl WgpuRenderer {
         frame: &OverlayFrame,
         viewport_w: u32,
         viewport_h: u32,
+        output: OutputDescription,
         draws: &mut Vec<OverlayDraw>,
     ) -> Result<()> {
         let bitmaps = &frame.subtitle_alpha_planes;
@@ -998,7 +2367,8 @@ impl WgpuRenderer {
                 atlas_height as u32,
                 viewport_w,
                 viewport_h,
-            );
+            )
+            .for_output(output);
             draws.push(self.make_overlay_draw(&atlas, uniforms));
         }
         Ok(())
@@ -1309,19 +2679,17 @@ impl WgpuRenderer {
     }
 
     fn render_surface_clear(&mut self, color: WgpuClearColor) -> Result<()> {
-        let Some(attached) = self.surface.as_ref() else {
+        if self.surface.is_none() {
             return Err(PlayerError::Renderer(
                 "no wgpu surface attached".to_string(),
             ));
-        };
-        let frame = match attached.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
-            other => {
-                return Err(PlayerError::Renderer(format!(
-                    "wgpu surface acquire failed: {other:?}"
-                )));
-            }
+        }
+        let SurfaceFrame::Texture {
+            texture: frame,
+            reconfigure_after_present,
+        } = self.acquire_surface_frame()?
+        else {
+            return Ok(());
         };
         let view = frame
             .texture
@@ -1351,30 +2719,463 @@ impl WgpuRenderer {
         }
         self.queue.submit(Some(encoder.finish()));
         frame.present();
+        if reconfigure_after_present {
+            self.reconfigure_surface();
+        }
         self.stats.rendered_frames += 1;
         Ok(())
     }
 
-    fn configure_surface(&mut self, width: u32, height: u32) {
-        let Some(attached) = self.surface.as_mut() else {
-            return;
+    fn create_attached_surface(&self, handle: WgpuSurfaceHandle) -> Result<AttachedSurface> {
+        #[cfg(not(any(
+            target_os = "android",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "windows"
+        )))]
+        {
+            return Err(PlayerError::Renderer(format!(
+                "wgpu surface kind {:?} is not wired on this platform",
+                handle.kind
+            )));
+        }
+
+        #[cfg(any(
+            target_os = "android",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "windows"
+        ))]
+        {
+            #[cfg(target_os = "android")]
+            let android_window;
+
+            // SAFETY: the embedder owns the platform handle for the attachment. On
+            // Android we additionally acquire an ANativeWindow reference retained by
+            // `AttachedSurface`, so the raw handle outlives the wgpu surface.
+            let target = match handle.kind {
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
+                WgpuSurfaceKind::MacOsCaMetalLayer => {
+                    wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(handle.raw_window as *mut c_void)
+                }
+                #[cfg(target_os = "windows")]
+                WgpuSurfaceKind::WindowsHwnd => {
+                    let hwnd = NonZeroIsize::new(handle.raw_window as isize).ok_or_else(|| {
+                        PlayerError::Renderer(
+                            "wgpu Windows HWND surface handle is null".to_string(),
+                        )
+                    })?;
+                    let mut window = wgpu::rwh::Win32WindowHandle::new(hwnd);
+                    window.hinstance = NonZeroIsize::new(handle.raw_display as isize);
+                    wgpu::SurfaceTargetUnsafe::RawHandle {
+                        raw_display_handle: Some(wgpu::rwh::RawDisplayHandle::Windows(
+                            wgpu::rwh::WindowsDisplayHandle::new(),
+                        )),
+                        raw_window_handle: wgpu::rwh::RawWindowHandle::Win32(window),
+                    }
+                }
+                #[cfg(target_os = "android")]
+                WgpuSurfaceKind::AndroidNativeWindow => {
+                    let raw_window =
+                        NonNull::new(handle.raw_window as *mut c_void).ok_or_else(|| {
+                            PlayerError::Renderer(
+                                "wgpu Android ANativeWindow surface handle is null".to_string(),
+                            )
+                        })?;
+                    // SAFETY: attach_surface's contract requires a live ANativeWindow.
+                    let owned_window = unsafe { AndroidNativeWindow::acquire(raw_window) };
+                    let window_handle =
+                        wgpu::rwh::AndroidNdkWindowHandle::new(owned_window.as_non_null());
+                    android_window = Some(owned_window);
+                    wgpu::SurfaceTargetUnsafe::RawHandle {
+                        raw_display_handle: Some(wgpu::rwh::RawDisplayHandle::Android(
+                            wgpu::rwh::AndroidDisplayHandle::new(),
+                        )),
+                        raw_window_handle: wgpu::rwh::RawWindowHandle::AndroidNdk(window_handle),
+                    }
+                }
+                other => {
+                    return Err(PlayerError::Renderer(format!(
+                        "wgpu surface kind {other:?} is not wired yet"
+                    )));
+                }
+            };
+            let surface =
+                unsafe { self._instance.create_surface_unsafe(target) }.map_err(|error| {
+                    PlayerError::Renderer(format!("wgpu surface creation failed: {error}"))
+                })?;
+            let caps = surface.get_capabilities(&self.adapter);
+            let adapter_backend = self.adapter.get_info().backend;
+            let selection = select_wgpu_surface_output(
+                self.output_mode,
+                handle.output_capabilities,
+                adapter_backend,
+                &caps.formats,
+            )
+            .ok_or_else(|| {
+                PlayerError::Renderer(
+                    "wgpu surface exposes no usable SDR presentation format".to_string(),
+                )
+            })?;
+            let present_mode = caps
+                .present_modes
+                .iter()
+                .copied()
+                .find(|mode| *mode == wgpu::PresentMode::Fifo)
+                .or_else(|| caps.present_modes.first().copied())
+                .ok_or_else(|| {
+                    PlayerError::Renderer("wgpu surface exposes no present modes".to_string())
+                })?;
+            let alpha_mode = caps
+                .alpha_modes
+                .iter()
+                .copied()
+                .find(|mode| *mode == wgpu::CompositeAlphaMode::Opaque)
+                .or_else(|| caps.alpha_modes.first().copied())
+                .ok_or_else(|| {
+                    PlayerError::Renderer("wgpu surface exposes no alpha modes".to_string())
+                })?;
+            let (width, height) = handle.metrics().physical_size();
+            let mut config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: selection.format,
+                width,
+                height,
+                present_mode,
+                desired_maximum_frame_latency: 2,
+                alpha_mode,
+                view_formats: vec![],
+            };
+            surface.configure(&self.device, &config);
+            let mut output = selection.output;
+            if output.extended_linear {
+                output = OutputDescription::extended_linear(effective_extended_linear_headroom(
+                    self.output_mode,
+                    handle.output_capabilities,
+                    self.output_headroom,
+                ));
+            }
+            let mut fallback_reason = selection.fallback_reason;
+            #[cfg(target_os = "android")]
+            let mut data_space_verification = None;
+            #[cfg(target_os = "android")]
+            let mut data_space_failure = false;
+            #[cfg(target_os = "android")]
+            if output.extended_linear {
+                let verification = android_window
+                    .as_ref()
+                    .expect("Android surface retains an ANativeWindow")
+                    .ensure_scrgb_linear_data_space();
+                match verification {
+                    Ok(verification) => data_space_verification = Some(verification),
+                    Err(error) => {
+                        data_space_failure = true;
+                        fallback_reason = match error.kind {
+                            AndroidDataSpaceErrorKind::ApiUnavailable => {
+                                OutputFallbackReason::NativeWindowDataSpaceApiUnavailable
+                            }
+                            AndroidDataSpaceErrorKind::VerificationFailed => {
+                                OutputFallbackReason::ScrgbDataSpaceVerificationFailed
+                            }
+                        };
+                        crate::trace::diagnostic(
+                            serde_json::json!({
+                                "event": "video_output_mode",
+                                "stage": "native_dataspace_verification_failed",
+                                "renderer": "wgpu",
+                                "requested": "extended_linear",
+                                "backend": format!("{adapter_backend:?}"),
+                                "surfaceFormat": format!("{:?}", config.format),
+                                "expectedDataSpace": "SCRGB_LINEAR",
+                                "reason": error.to_string(),
+                                "fallback": "sdr",
+                            })
+                            .to_string(),
+                        );
+                        config.format = selection.sdr_format;
+                        surface.configure(&self.device, &config);
+                        output = OutputDescription::sdr();
+                    }
+                }
+            }
+            #[cfg(target_os = "android")]
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "video_output_mode",
+                    "stage": if output.extended_linear { "surface_active" } else { "surface_fallback" },
+                    "renderer": "wgpu",
+                    "requestedMode": format!("{:?}", self.output_mode),
+                    "activeEncoding": if output.extended_linear { "android_extended_linear_scrgb" } else { "sdr_srgb" },
+                    "backend": format!("{adapter_backend:?}"),
+                    "surfaceFormat": format!("{:?}", config.format),
+                    "colorSpace": output.color_space.label(),
+                    "surfaceFormatClass": output.surface_format.label(),
+                    "requestedHeadroom": self.output_mode.headroom(),
+                    "surfaceDesiredHeadroom": handle.output_capabilities.desired_headroom,
+                    "reportedHeadroom": self.output_headroom.headroom,
+                    "reportedHeadroomKnown": self.output_headroom.known,
+                    "effectiveContentHeadroom": output.target.edr_headroom,
+                    "surfaceExtendedLinearCapable": handle.output_capabilities.extended_linear,
+                    "surfaceDirectComposition": handle.output_capabilities.direct_composition,
+                    "availableFormats": caps.formats.iter().map(|format| format!("{format:?}")).collect::<Vec<_>>(),
+                    "dataSpaceBefore": data_space_verification.map(|value| value.before),
+                    "dataSpaceAfter": data_space_verification.map(|value| value.after),
+                    "dataSpaceCorrected": data_space_verification.is_some_and(|value| value.corrected),
+                    "fallback": fallback_reason != OutputFallbackReason::None,
+                    "reasonCode": fallback_reason as i32,
+                    "reason": fallback_reason.label(),
+                })
+                .to_string(),
+            );
+            Ok(AttachedSurface {
+                surface,
+                config,
+                sdr_format: selection.sdr_format,
+                output,
+                fallback_reason,
+                #[cfg(target_os = "android")]
+                data_space_failure,
+                #[cfg(not(target_os = "android"))]
+                data_space_failure: false,
+                #[cfg(target_os = "android")]
+                native_data_space: data_space_verification.map_or(-1, |value| value.after),
+                #[cfg(not(target_os = "android"))]
+                native_data_space: -1,
+                handle,
+                #[cfg(target_os = "android")]
+                _android_window: android_window,
+            })
+        }
+    }
+
+    fn acquire_surface_frame(&mut self) -> Result<SurfaceFrame> {
+        for recovery_attempt in 0..2 {
+            let status = self
+                .surface
+                .as_ref()
+                .ok_or_else(|| PlayerError::Renderer("no wgpu surface attached".to_string()))?
+                .surface
+                .get_current_texture();
+            match status {
+                wgpu::CurrentSurfaceTexture::Success(texture) => {
+                    return Ok(SurfaceFrame::Texture {
+                        texture,
+                        reconfigure_after_present: false,
+                    });
+                }
+                wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+                    return Ok(SurfaceFrame::Texture {
+                        texture,
+                        reconfigure_after_present: true,
+                    });
+                }
+                wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                    return Ok(SurfaceFrame::Skipped);
+                }
+                wgpu::CurrentSurfaceTexture::Outdated => {
+                    #[cfg(target_os = "android")]
+                    crate::trace::diagnostic(
+                        serde_json::json!({
+                            "event": "android_gpu_recovery",
+                            "stage": "surface_outdated",
+                            "backendCandidate": self.android_backend_candidate_label(),
+                            "surfaceRecoveryAttempt": recovery_attempt + 1,
+                            "surfaceRecoveryAttemptLimit": 2,
+                            "action": "reconfigure_surface_on_current_device",
+                        })
+                        .to_string(),
+                    );
+                    self.reconfigure_surface();
+                }
+                wgpu::CurrentSurfaceTexture::Lost => {
+                    #[cfg(target_os = "android")]
+                    crate::trace::diagnostic(
+                        serde_json::json!({
+                            "event": "android_gpu_recovery",
+                            "stage": "surface_lost",
+                            "backendCandidate": self.android_backend_candidate_label(),
+                            "surfaceRecoveryAttempt": recovery_attempt + 1,
+                            "surfaceRecoveryAttemptLimit": 2,
+                            "action": "recreate_surface_on_current_device",
+                        })
+                        .to_string(),
+                    );
+                    self.recreate_surface()?;
+                }
+                wgpu::CurrentSurfaceTexture::Validation => {
+                    #[cfg(target_os = "android")]
+                    crate::trace::diagnostic(
+                        serde_json::json!({
+                            "event": "android_gpu_recovery",
+                            "stage": "surface_validation_failed",
+                            "backendCandidate": self.android_backend_candidate_label(),
+                            "surfaceRecoveryAttempt": recovery_attempt + 1,
+                            "surfaceRecoveryAttemptLimit": 2,
+                            "action": "escalate_to_renderer_rebuild",
+                        })
+                        .to_string(),
+                    );
+                    return Err(PlayerError::Renderer(
+                        "wgpu surface acquisition failed validation".to_string(),
+                    ));
+                }
+            }
+        }
+        #[cfg(target_os = "android")]
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "android_gpu_recovery",
+                "stage": "surface_recovery_exhausted_on_current_device",
+                "backendCandidate": self.android_backend_candidate_label(),
+                "surfaceRecoveryAttemptLimit": 2,
+                "action": "escalate_to_renderer_rebuild",
+            })
+            .to_string(),
+        );
+        Err(PlayerError::Renderer(
+            "wgpu surface remained outdated or lost after recovery".to_string(),
+        ))
+    }
+
+    fn recreate_surface(&mut self) -> Result<()> {
+        let handle = self
+            .surface
+            .as_ref()
+            .ok_or_else(|| PlayerError::Renderer("no wgpu surface attached".to_string()))?
+            .handle;
+        let replacement = self.create_attached_surface(handle)?;
+        self.stats.surface_width = replacement.config.width;
+        self.stats.surface_height = replacement.config.height;
+        self.observe_attached_output(replacement.output_state(), true);
+        self.surface = Some(replacement);
+        Ok(())
+    }
+
+    fn reconfigure_surface(&mut self) {
+        let output_state = {
+            let Some(attached) = self.surface.as_mut() else {
+                return;
+            };
+            let new_fallback =
+                configure_attached_surface(&self.device, attached, "reconfigure_surface");
+            (attached.output_state(), new_fallback)
         };
-        attached.config.width = width.max(1);
-        attached.config.height = height.max(1);
-        attached.surface.configure(&self.device, &attached.config);
-        self.stats.surface_width = attached.config.width;
-        self.stats.surface_height = attached.config.height;
+        self.observe_attached_output(output_state.0, output_state.1);
+    }
+
+    fn configure_surface(&mut self, width: u32, height: u32) {
+        let (surface_width, surface_height, output_state, new_fallback) = {
+            let Some(attached) = self.surface.as_mut() else {
+                return;
+            };
+            attached.config.width = width.max(1);
+            attached.config.height = height.max(1);
+            let new_fallback = configure_attached_surface(&self.device, attached, "resize_surface");
+            (
+                attached.config.width,
+                attached.config.height,
+                attached.output_state(),
+                new_fallback,
+            )
+        };
+        self.stats.surface_width = surface_width;
+        self.stats.surface_height = surface_height;
+        self.observe_attached_output(output_state, new_fallback);
     }
 }
 
-fn scaled_surface_size(width: u32, height: u32, scale: f64) -> (u32, u32) {
-    let scale = if scale.is_finite() {
-        scale.max(1.0)
-    } else {
-        1.0
-    };
-    let scaled = |value: u32| ((value.max(1) as f64) * scale).round().min(u32::MAX as f64) as u32;
-    (scaled(width), scaled(height))
+fn configure_attached_surface(
+    device: &wgpu::Device,
+    attached: &mut AttachedSurface,
+    operation: &'static str,
+) -> bool {
+    attached.surface.configure(device, &attached.config);
+    #[cfg(target_os = "android")]
+    if attached.output.extended_linear {
+        match attached
+            ._android_window
+            .as_ref()
+            .expect("Android surface retains an ANativeWindow")
+            .ensure_scrgb_linear_data_space()
+        {
+            Ok(verification) => attached.native_data_space = verification.after,
+            Err(error) => {
+                let fallback_reason = match error.kind {
+                    AndroidDataSpaceErrorKind::ApiUnavailable => {
+                        OutputFallbackReason::NativeWindowDataSpaceApiUnavailable
+                    }
+                    AndroidDataSpaceErrorKind::VerificationFailed => {
+                        OutputFallbackReason::ScrgbDataSpaceVerificationFailed
+                    }
+                };
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "video_output_mode",
+                        "stage": "native_dataspace_revalidation_failed",
+                        "renderer": "wgpu",
+                        "operation": operation,
+                        "surfaceFormat": format!("{:?}", attached.config.format),
+                        "expectedDataSpace": "SCRGB_LINEAR",
+                        "reason": error.to_string(),
+                        "reasonCode": fallback_reason as i32,
+                        "reasonLabel": fallback_reason.label(),
+                        "fallback": "sdr",
+                    })
+                    .to_string(),
+                );
+                attached.config.format = attached.sdr_format;
+                attached.output = OutputDescription::sdr();
+                attached.fallback_reason = fallback_reason;
+                attached.data_space_failure = true;
+                attached.native_data_space = -1;
+                attached.surface.configure(device, &attached.config);
+                return true;
+            }
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = operation;
+    false
+}
+
+type PresentationViewport = PresentationRect;
+
+fn aspect_fit_viewport(
+    source_width: u32,
+    source_height: u32,
+    target_width: u32,
+    target_height: u32,
+) -> PresentationViewport {
+    PresentationLayout::aspect_fit(source_width, source_height, target_width, target_height)
+        .presentation_rect()
+}
+
+#[cfg(target_os = "android")]
+fn android_wgpu_drop_poll_type() -> wgpu::PollType {
+    wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: Some(ANDROID_WGPU_DROP_POLL_TIMEOUT),
+    }
+}
+
+#[cfg(target_os = "android")]
+impl Drop for WgpuRenderer {
+    fn drop(&mut self) {
+        if let Err(error) = self.device.poll(android_wgpu_drop_poll_type()) {
+            let timeout = matches!(&error, wgpu::PollError::Timeout);
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "wgpu_renderer",
+                    "stage": if timeout { "drop_poll_timeout" } else { "drop_poll_error" },
+                    "errorKind": if timeout { "timeout" } else { "poll_error" },
+                    "timeoutMs": ANDROID_WGPU_DROP_POLL_TIMEOUT.as_millis() as u64,
+                    "message": error.to_string(),
+                    "reason": "Android renderer teardown uses a bounded GPU wait so lifecycle destruction cannot block indefinitely",
+                })
+                .to_string(),
+            );
+        }
+    }
 }
 
 impl RendererBackend for WgpuRenderer {
@@ -1385,90 +3186,36 @@ impl RendererBackend for WgpuRenderer {
             ));
         };
 
-        // SAFETY: `create_surface_unsafe` requires the raw handle to point at a live
-        // platform surface that outlives the returned surface. The embedder owns the
-        // HWND/CAMetalLayer for the lifetime of the attachment.
-        let target = match handle.kind {
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            WgpuSurfaceKind::MacOsCaMetalLayer => {
-                wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(handle.raw_window as *mut c_void)
-            }
-            #[cfg(target_os = "windows")]
-            WgpuSurfaceKind::WindowsHwnd => {
-                let hwnd = NonZeroIsize::new(handle.raw_window as isize).ok_or_else(|| {
-                    PlayerError::Renderer("wgpu Windows HWND surface handle is null".to_string())
-                })?;
-                let mut window = wgpu::rwh::Win32WindowHandle::new(hwnd);
-                window.hinstance = NonZeroIsize::new(handle.raw_display as isize);
-                wgpu::SurfaceTargetUnsafe::RawHandle {
-                    raw_display_handle: Some(wgpu::rwh::RawDisplayHandle::Windows(
-                        wgpu::rwh::WindowsDisplayHandle::new(),
-                    )),
-                    raw_window_handle: wgpu::rwh::RawWindowHandle::Win32(window),
-                }
-            }
-            other => {
-                return Err(PlayerError::Renderer(format!(
-                    "wgpu surface kind {other:?} is not wired yet"
-                )));
-            }
-        };
-        let surface = unsafe { self.instance.create_surface_unsafe(target) }.map_err(|error| {
-            PlayerError::Renderer(format!("wgpu surface creation failed: {error}"))
-        })?;
-
-        let caps = surface.get_capabilities(&self.adapter);
-        // Prefer a non-sRGB format: the video shader already emits display-encoded
-        // values for the SDR target, so an sRGB surface would double-encode gamma.
-        let format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|format| !format.is_srgb())
-            .unwrap_or_else(|| caps.formats[0]);
-        let (surface_width, surface_height) =
-            scaled_surface_size(handle.width, handle.height, handle.scale);
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: surface_width,
-            height: surface_height,
-            present_mode: caps.present_modes[0],
-            desired_maximum_frame_latency: 2,
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-        };
-        surface.configure(&self.device, &config);
-
-        self.stats.surface_width = config.width;
-        self.stats.surface_height = config.height;
+        let attached = self.create_attached_surface(handle)?;
+        self.stats.surface_width = attached.config.width;
+        self.stats.surface_height = attached.config.height;
         self.stats.attached = true;
-        self.surface = Some(AttachedSurface {
-            surface,
-            config,
-            handle,
-        });
+        self.observe_attached_output(attached.output_state(), true);
+        self.surface = Some(attached);
         Ok(())
     }
 
     fn detach_surface(&mut self) -> Result<()> {
         self.surface = None;
         self.stats.attached = false;
+        self.observe_detached_output();
         Ok(())
     }
 
-    fn resize_surface(&mut self, width: u32, height: u32, scale: f64) -> Result<()> {
-        if self.surface.is_none() {
-            return Err(PlayerError::Renderer(
-                "no wgpu surface attached".to_string(),
-            ));
+    fn resize_surface(&mut self, metrics: crate::core::SurfaceMetrics) -> Result<()> {
+        let current_size = self
+            .surface
+            .as_ref()
+            .ok_or_else(|| PlayerError::Renderer("no wgpu surface attached".to_string()))?
+            .handle
+            .metrics()
+            .physical_size();
+        let (surface_width, surface_height) = metrics.physical_size();
+        if current_size != (surface_width, surface_height) {
+            self.configure_surface(surface_width, surface_height);
         }
-        let (surface_width, surface_height) = scaled_surface_size(width, height, scale);
-        self.configure_surface(surface_width, surface_height);
         if let Some(attached) = self.surface.as_mut() {
-            attached.handle.width = width;
-            attached.handle.height = height;
-            attached.handle.scale = scale;
+            attached.handle.resize(metrics);
         }
         Ok(())
     }
@@ -1486,9 +3233,36 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn upload_player_frame(&mut self, frame: &PlayerVideoFrame) -> Result<()> {
+        #[cfg(target_os = "android")]
+        if frame.decode_backend == DecoderBackend::MediaCodec && frame.frame.is_mediacodec() {
+            return self.upload_android_mediacodec_frame(frame);
+        }
         let hardware_frame = frame.frame.has_hw_frames_context();
         let planar = if let Some(planar) = frame.frame.to_planar_frame() {
-            self.stats.software_video_frames += 1;
+            match frame.decode_backend {
+                DecoderBackend::Software => self.stats.software_video_frames += 1,
+                DecoderBackend::VideoToolbox
+                | DecoderBackend::D3d11va
+                | DecoderBackend::MediaCodec => {
+                    self.stats.hardware_video_frames += 1;
+                    self.stats.cpu_video_frame_fallbacks += 1;
+                    if !self.cpu_video_frame_fallback_reported {
+                        self.cpu_video_frame_fallback_reported = true;
+                        crate::trace::diagnostic(
+                            serde_json::json!({
+                                "event": "video_frame_import",
+                                "stage": "cpu_upload_fallback",
+                                "decodeBackend": frame.decode_backend.as_str(),
+                                "pixelFormat": frame.frame.pixel_format(),
+                                "lineSizes": frame.frame.line_sizes(),
+                                "fallbackCount": self.stats.cpu_video_frame_fallbacks,
+                                "reason": "hardware decoder produced CPU-readable planes; wgpu uploaded those planes because native zero-copy interop was unavailable",
+                            })
+                            .to_string(),
+                        );
+                    }
+                }
+            }
             planar
         } else if hardware_frame {
             self.stats.hardware_video_frames += 1;
@@ -1501,24 +3275,31 @@ impl RendererBackend for WgpuRenderer {
             ));
         };
         let is_p010 = matches!(planar.format, PlanarPixelFormat::P010);
-        let source = SourceColorState::new(
-            frame.frame.color_primaries(),
-            frame.frame.transfer_function(),
-        )
-        .range(frame.frame.color_range())
-        .matrix(frame.frame.matrix_coefficients())
-        .hdr_metadata(frame.frame.hdr_metadata());
-        let pipeline =
-            VideoRenderPipeline::new(source, TargetColorState::sdr(ColorPrimaries::Bt709));
-        let uniforms = VideoUniforms::from_pipeline(&pipeline, is_p010, false);
-        self.upload_planar_with_context(planar, uniforms)
+        let source_color = source_color_for_player_frame(frame);
+        let uniforms = self.video_uniforms_for_frame(frame, is_p010);
+        self.upload_planar_with_context(planar, uniforms, Some(source_color))
     }
 
     fn clear_current_frame(&mut self) -> Result<()> {
         self.current_video_visible = false;
+        self.current_video = None;
         if self.surface.is_some() {
             self.render_surface_clear(WgpuClearColor::new(0.0, 0.0, 0.0, 1.0))?;
         }
+        Ok(())
+    }
+
+    fn preserve_current_frame_for_transition(&mut self) -> Result<()> {
+        // Every wgpu upload lives in renderer-owned textures. Android
+        // MediaCodec/AHardwareBuffer ownership has already been retired after
+        // the conversion submission, so this detached snapshot can remain
+        // visible and capturable while the decoder is reopened.
+        Ok(())
+    }
+
+    fn preserve_current_frame_for_track_transition(&mut self) -> Result<()> {
+        // Track switches use the same renderer-owned snapshot, without making
+        // native Metal/D3D backends clear their historical current frame.
         Ok(())
     }
 
@@ -1526,38 +3307,60 @@ impl RendererBackend for WgpuRenderer {
         if !self.current_video_visible || self.current_video.is_none() {
             return Ok(false);
         }
-        let Some(format) = self.surface.as_ref().map(|attached| attached.config.format) else {
+        if self.surface.is_none() {
             // No surface to present to (e.g. ticked before attach); the presenter
             // falls back to a test frame.
             return Ok(false);
-        };
-        self.ensure_video_pipeline(format);
+        }
         let danmaku = context.danmaku.filter(|plan| {
             plan.generation == context.generation
                 && (context.output_width == 0 || plan.viewport.width == context.output_width)
                 && (context.output_height == 0 || plan.viewport.height == context.output_height)
         });
+        let SurfaceFrame::Texture {
+            texture: frame,
+            reconfigure_after_present,
+        } = self.acquire_surface_frame()?
+        else {
+            // A timeout or occlusion skips this tick but the current video frame
+            // remains valid; report it handled so the presenter does not clear it.
+            return Ok(true);
+        };
+        let (format, target_width, target_height, output) = {
+            let attached = self.surface.as_ref().expect("surface present");
+            (
+                attached.config.format,
+                attached.config.width,
+                attached.config.height,
+                attached.output,
+            )
+        };
+        self.ensure_video_pipeline(format);
         if context.overlay.is_some_and(overlay_has_planes)
             || danmaku.is_some_and(|plan| !plan.is_empty())
         {
             self.ensure_overlay_pipeline(format);
         }
-        let attached = self.surface.as_ref().expect("surface present");
-        let frame = match attached.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
-            other => {
-                return Err(PlayerError::Renderer(format!(
-                    "wgpu surface acquire failed: {other:?}"
-                )));
-            }
-        };
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let danmaku_draws = self.draw_current_video(&view, context.overlay, danmaku)?;
+        let danmaku_draws = self.draw_current_video(
+            &view,
+            target_width,
+            target_height,
+            context.overlay,
+            danmaku,
+            output,
+        )?;
         frame.present();
+        if reconfigure_after_present {
+            self.reconfigure_surface();
+        }
         self.stats.rendered_frames += 1;
+        if output.extended_linear {
+            self.output_status.extended_linear_frames =
+                self.output_status.extended_linear_frames.saturating_add(1);
+        }
         if danmaku_draws > 0 {
             self.stats.danmaku_passes += 1;
             self.stats.danmaku_items += danmaku_draws as u64;
@@ -1565,8 +3368,65 @@ impl RendererBackend for WgpuRenderer {
         Ok(true)
     }
 
+    fn capture_current_frame(
+        &mut self,
+        context: RenderFrameContext<'_>,
+        width: u32,
+        height: u32,
+    ) -> Result<Option<crate::core::RendererFrameCapture>> {
+        if !self.current_video_visible || self.current_video.is_none() {
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "frame_capture",
+                    "stage": "no_current_frame",
+                    "renderer": "wgpu",
+                    "requestedWidth": width,
+                    "requestedHeight": height,
+                    "currentVideoVisible": self.current_video_visible,
+                    "hasCurrentVideo": self.current_video.is_some(),
+                })
+                .to_string(),
+            );
+            return Ok(None);
+        }
+        if width == 0 || height == 0 {
+            return Err(PlayerError::Renderer(
+                "capture size must be non-zero".to_string(),
+            ));
+        }
+        let danmaku = context.danmaku.filter(|plan| {
+            plan.generation == context.generation
+                && plan.viewport.width == width
+                && plan.viewport.height == height
+        });
+        let Some(readback) =
+            self.render_current_offscreen_sized(width, height, context.overlay, danmaku)?
+        else {
+            return Ok(None);
+        };
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "frame_capture",
+                "stage": "completed",
+                "renderer": "wgpu",
+                "requestedWidth": width,
+                "requestedHeight": height,
+                "actualWidth": readback.width,
+                "actualHeight": readback.height,
+                "rgbaBytes": readback.rgba.len(),
+            })
+            .to_string(),
+        );
+        Ok(Some(crate::core::RendererFrameCapture {
+            width: readback.width,
+            height: readback.height,
+            rgba: readback.rgba,
+        }))
+    }
+
     fn runtime_stats(&self) -> RendererRuntimeStats {
         let stats = self.stats();
+        let upscaler = self.upscaler.stats();
         RendererRuntimeStats {
             surface_width: stats.surface_width,
             surface_height: stats.surface_height,
@@ -1585,25 +3445,26 @@ impl RendererBackend for WgpuRenderer {
             last_danmaku_vertex_bytes: 0,
             last_danmaku_vertex_count: 0,
             upscaler_mode: self.upscaler_mode,
-            upscaler_backend: if self.upscaler_mode.is_enabled() {
-                LumaUpscalerBackendStatus::Inactive
-            } else {
-                LumaUpscalerBackendStatus::Off
+            upscaler_backend: match self.upscaler.status() {
+                WgpuArtCnnStatus::Off => LumaUpscalerBackendStatus::Off,
+                WgpuArtCnnStatus::Building => LumaUpscalerBackendStatus::Building,
+                WgpuArtCnnStatus::Inactive => LumaUpscalerBackendStatus::Inactive,
+                WgpuArtCnnStatus::Scalar => LumaUpscalerBackendStatus::Scalar,
             },
-            upscaler_fallbacks: 0,
-            upscaled_frames: 0,
-            last_upscaler_encode_duration: Default::default(),
+            upscaler_fallbacks: upscaler.fallback_count,
+            upscaled_frames: upscaler.upscaled_frames,
+            last_upscaler_encode_duration: upscaler.last_encode_duration,
             last_gpu_duration: Default::default(),
             attached: stats.attached,
             software_video_frames: stats.software_video_frames,
             hardware_video_frames: stats.hardware_video_frames,
             zero_copy_video_frames: stats.zero_copy_video_frames,
             direct_zero_copy_video_frames: 0,
-            shared_handle_video_frames: 0,
+            shared_handle_video_frames: stats.shared_handle_video_frames,
             cpu_video_frame_fallbacks: stats.cpu_video_frame_fallbacks,
-            hdr_source_frames: 0,
+            hdr_source_frames: stats.hdr_source_frames,
             hdr10_output_frames: 0,
-            sdr_tonemap_frames: 0,
+            sdr_tonemap_frames: stats.sdr_tonemap_frames,
             hdr10_metadata_updates: 0,
             hdr10_metadata_failures: 0,
             hdr10_output_failures: 0,
@@ -1611,14 +3472,870 @@ impl RendererBackend for WgpuRenderer {
         }
     }
 
+    fn output_status(&self) -> OutputRuntimeStatus {
+        self.output_status
+    }
+
+    fn set_luma_upscaler(&mut self, mode: LumaUpscalerMode) {
+        if mode == self.upscaler_mode
+            && self.upscaler.mode() == mode
+            && ((mode == LumaUpscalerMode::Off && self.upscaler.status() == WgpuArtCnnStatus::Off)
+                || (mode.is_enabled() && self.upscaler.status() == WgpuArtCnnStatus::Scalar))
+        {
+            return;
+        }
+        self.upscaler_mode = mode;
+        self.upscaler_failed_frame_token = None;
+        self.upscaler_active_frame_reported = false;
+        if mode.is_enabled() {
+            crate::trace::diagnostic(self.upscaler.capability().diagnostic_json(mode).to_string());
+        }
+        match self.upscaler.set_mode(&self.device, mode) {
+            Ok(()) => {
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "luma_upscaler",
+                        "stage": if mode.is_enabled() { "active" } else { "disabled" },
+                        "renderer": "wgpu",
+                        "requestedMode": format!("{mode:?}"),
+                        "activeBackend": format!("{:?}", self.upscaler.status()),
+                        "fallback": serde_json::Value::Null,
+                    })
+                    .to_string(),
+                );
+            }
+            Err(failure) => {
+                crate::trace::diagnostic(failure.diagnostic_json().to_string());
+            }
+        }
+    }
+
+    fn set_output_headroom(&mut self, headroom: f32, known: bool) {
+        self.update_output_headroom_state(OutputHeadroomState::reported(headroom, known), true);
+    }
+
+    fn supports_mediacodec_surface_frames(&self) -> bool {
+        #[cfg(target_os = "android")]
+        {
+            return self.android_vulkan.is_some();
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            false
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AndroidWgpuRecoveryPolicy {
+    AnyRendererFailure,
+    DeviceFailureOnly,
+}
+
+#[cfg(target_os = "android")]
+struct AndroidWgpuOperationFailure {
+    error: PlayerError,
+    recoverable: bool,
+}
+
+#[cfg(target_os = "android")]
+struct AndroidWgpuRebuildFailure {
+    error: PlayerError,
+    can_try_another_backend: bool,
+}
+
+/// Android wgpu presentation with bounded runtime backend recovery.
+///
+/// `WgpuRenderer` already repairs an outdated/lost swapchain on the active
+/// device. This layer handles the next failure boundary: configure/present
+/// validation, an unhealthy/lost device, or a surface that remains unusable.
+/// Each backend candidate is selected at most once per recovery sequence. A
+/// replacement renderer reattaches the retained `ANativeWindow` and reimports
+/// the last decoded frame when that frame remains importable.
+#[cfg(target_os = "android")]
+pub struct AndroidRecoveringWgpuRenderer {
+    active: WgpuRenderer,
+    // Bridges the short interval between dropping a failed renderer's
+    // `AttachedSurface` and acquiring the same raw window in its replacement.
+    // The JNI bridge also owns the window, but the renderer recovery layer must
+    // be correct for direct C ABI embedders that satisfy only the attach call's
+    // lifetime contract.
+    recovery_window: Option<AndroidNativeWindow>,
+    surface: Option<WgpuSurfaceHandle>,
+    current_frame: Option<PlayerVideoFrame>,
+    output_mode: OutputMode,
+    output_headroom: OutputHeadroomState,
+    upscaler_mode: LumaUpscalerMode,
+    retired_stats: RendererRuntimeStats,
+    retired_output_status: OutputRuntimeStatus,
+    terminal_failure: Option<String>,
+    recovery_sequence: u64,
+}
+
+#[cfg(target_os = "android")]
+impl AndroidRecoveringWgpuRenderer {
+    pub fn new() -> Result<Self> {
+        Self::new_with_output_mode(OutputMode::Sdr)
+    }
+
+    pub fn new_with_output_mode(output_mode: OutputMode) -> Result<Self> {
+        Ok(Self {
+            active: WgpuRenderer::new_with_output_mode(output_mode)?,
+            recovery_window: None,
+            surface: None,
+            current_frame: None,
+            output_mode,
+            output_headroom: OutputHeadroomState::default(),
+            upscaler_mode: LumaUpscalerMode::Off,
+            retired_stats: RendererRuntimeStats::default(),
+            retired_output_status: OutputRuntimeStatus::requested(output_mode),
+            terminal_failure: None,
+            recovery_sequence: 0,
+        })
+    }
+
+    fn reset_terminal_failure(&mut self, operation: &'static str) {
+        if let Some(previous) = self.terminal_failure.take() {
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "android_gpu_recovery",
+                    "stage": "terminal_failure_reset",
+                    "operation": operation,
+                    "previousFailure": previous,
+                    "reason": "a new Android surface attachment starts a fresh bounded GPU recovery sequence",
+                })
+                .to_string(),
+            );
+        }
+    }
+
+    fn invoke_active<T>(
+        &mut self,
+        operation: &'static str,
+        policy: AndroidWgpuRecoveryPolicy,
+        call: &mut impl FnMut(&mut WgpuRenderer) -> Result<T>,
+    ) -> std::result::Result<T, AndroidWgpuOperationFailure> {
+        if let Err(error) = self.active.android_poll_device_health(operation) {
+            return Err(AndroidWgpuOperationFailure {
+                error,
+                recoverable: true,
+            });
+        }
+
+        let call_result = catch_unwind(AssertUnwindSafe(|| call(&mut self.active)));
+        let result = match call_result {
+            Ok(result) => result,
+            Err(payload) => {
+                return Err(AndroidWgpuOperationFailure {
+                    error: PlayerError::Renderer(format!(
+                        "panic during Android wgpu {operation}: {}",
+                        panic_payload_message(payload.as_ref())
+                    )),
+                    recoverable: true,
+                });
+            }
+        };
+
+        if let Err(health_error) = self.active.android_poll_device_health(operation) {
+            let reason = match result {
+                Ok(_) => health_error.to_string(),
+                Err(operation_error) => format!(
+                    "{}; operation also returned: {}",
+                    health_error, operation_error
+                ),
+            };
+            return Err(AndroidWgpuOperationFailure {
+                error: PlayerError::Renderer(reason),
+                recoverable: true,
+            });
+        }
+
+        result.map_err(|error| {
+            let recoverable = matches!(error, PlayerError::Renderer(_))
+                && policy == AndroidWgpuRecoveryPolicy::AnyRendererFailure;
+            AndroidWgpuOperationFailure { error, recoverable }
+        })
+    }
+
+    fn execute_with_recovery<T>(
+        &mut self,
+        operation: &'static str,
+        policy: AndroidWgpuRecoveryPolicy,
+        mut call: impl FnMut(&mut WgpuRenderer) -> Result<T>,
+    ) -> Result<T> {
+        if let Some(reason) = self.terminal_failure.as_ref() {
+            return Err(PlayerError::Renderer(format!(
+                "Android wgpu recovery is exhausted; {operation} requires a new surface attachment: {reason}"
+            )));
+        }
+
+        let candidate_count = wgpu_backend_candidates().len();
+        let mut attempted_candidates = vec![self.active.android_backend_candidate_index];
+        let mut failures = Vec::new();
+
+        loop {
+            match self.invoke_active(operation, policy, &mut call) {
+                Ok(value) => {
+                    if !failures.is_empty() {
+                        crate::trace::diagnostic(
+                            serde_json::json!({
+                                "event": "android_gpu_recovery",
+                                "stage": "operation_recovered",
+                                "sequence": self.recovery_sequence,
+                                "operation": operation,
+                                "activeBackendCandidate": self.active.android_backend_candidate_label(),
+                                "attemptedBackendCandidates": candidate_labels(&attempted_candidates),
+                                "failureCount": failures.len(),
+                                "failures": failures,
+                                "surfaceRestored": self.surface.is_some(),
+                                "currentFrameCached": self.current_frame.is_some(),
+                            })
+                            .to_string(),
+                        );
+                    }
+                    return Ok(value);
+                }
+                Err(failure) if !failure.recoverable => return Err(failure.error),
+                Err(failure) => {
+                    failures.push(format!(
+                        "{}: {}",
+                        self.active.android_backend_candidate_label(),
+                        failure.error
+                    ));
+                    self.recovery_sequence = self.recovery_sequence.saturating_add(1).max(1);
+                    crate::trace::diagnostic(
+                        serde_json::json!({
+                            "event": "android_gpu_recovery",
+                            "stage": "operation_failed",
+                            "sequence": self.recovery_sequence,
+                            "operation": operation,
+                            "activeBackendCandidate": self.active.android_backend_candidate_label(),
+                            "attemptedBackendCandidates": candidate_labels(&attempted_candidates),
+                            "failureCount": failures.len(),
+                            "reason": failure.error.to_string(),
+                            "action": "rebuild_renderer_rotate_backend_restore_surface_and_frame",
+                        })
+                        .to_string(),
+                    );
+                }
+            }
+
+            loop {
+                if attempted_candidates.len() >= candidate_count {
+                    return self.exhaust_recovery(operation, attempted_candidates, failures);
+                }
+                match self.rebuild_active_renderer(operation, &mut attempted_candidates) {
+                    Ok(()) => break,
+                    Err(failure) => {
+                        failures.push(format!(
+                            "{}: {}",
+                            self.active.android_backend_candidate_label(),
+                            failure.error
+                        ));
+                        if !failure.can_try_another_backend {
+                            return self.exhaust_recovery(
+                                operation,
+                                attempted_candidates,
+                                failures,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn rebuild_active_renderer(
+        &mut self,
+        operation: &'static str,
+        attempted_candidates: &mut Vec<usize>,
+    ) -> std::result::Result<(), AndroidWgpuRebuildFailure> {
+        let previous_candidate = self.active.android_backend_candidate_index;
+        let previous_label = self.active.android_backend_candidate_label();
+        let (replacement, construction_attempts) = catch_unwind(AssertUnwindSafe(|| {
+            WgpuRenderer::new_after_runtime_failure(
+                previous_candidate,
+                attempted_candidates,
+                self.output_mode,
+            )
+        }))
+        .map_err(|payload| AndroidWgpuRebuildFailure {
+            error: PlayerError::Renderer(format!(
+                "panic while rebuilding Android wgpu renderer after {operation}: {}",
+                panic_payload_message(payload.as_ref())
+            )),
+            can_try_another_backend: false,
+        })?;
+        for candidate_index in construction_attempts {
+            if !attempted_candidates.contains(&candidate_index) {
+                attempted_candidates.push(candidate_index);
+            }
+        }
+        let replacement = replacement.map_err(|error| AndroidWgpuRebuildFailure {
+            error,
+            can_try_another_backend: false,
+        })?;
+
+        let replacement_candidate = replacement.android_backend_candidate_index;
+        let replacement_label = replacement.android_backend_candidate_label();
+        accumulate_retired_renderer_stats(&mut self.retired_stats, self.active.runtime_stats());
+        accumulate_retired_output_status(
+            &mut self.retired_output_status,
+            self.active.output_status(),
+        );
+        self.active = replacement;
+        self.active.set_luma_upscaler(self.upscaler_mode);
+        self.active
+            .update_output_headroom_state(self.output_headroom, false);
+
+        let surface_restored = if let Some(surface) = self.surface {
+            match catch_unwind(AssertUnwindSafe(|| {
+                self.active.attach_surface(PlatformSurface::Wgpu(surface))
+            })) {
+                Ok(Ok(())) => {
+                    if let Err(error) = self.active.android_poll_device_health("restore_surface") {
+                        return Err(AndroidWgpuRebuildFailure {
+                            error,
+                            can_try_another_backend: attempted_candidates.len()
+                                < wgpu_backend_candidates().len(),
+                        });
+                    }
+                    true
+                }
+                Ok(Err(error)) => {
+                    return Err(AndroidWgpuRebuildFailure {
+                        error,
+                        can_try_another_backend: attempted_candidates.len()
+                            < wgpu_backend_candidates().len(),
+                    });
+                }
+                Err(payload) => {
+                    return Err(AndroidWgpuRebuildFailure {
+                        error: PlayerError::Renderer(format!(
+                            "panic while restoring Android wgpu surface: {}",
+                            panic_payload_message(payload.as_ref())
+                        )),
+                        can_try_another_backend: attempted_candidates.len()
+                            < wgpu_backend_candidates().len(),
+                    });
+                }
+            }
+        } else {
+            false
+        };
+
+        let mut frame_restored = false;
+        if let Some(frame) = self.current_frame.as_ref() {
+            let restore_result =
+                catch_unwind(AssertUnwindSafe(|| self.active.upload_player_frame(frame)));
+            match restore_result {
+                Ok(Ok(())) => match self.active.android_poll_device_health("restore_frame") {
+                    Ok(()) => frame_restored = true,
+                    Err(error) => {
+                        return Err(AndroidWgpuRebuildFailure {
+                            error,
+                            can_try_another_backend: attempted_candidates.len()
+                                < wgpu_backend_candidates().len(),
+                        });
+                    }
+                },
+                Ok(Err(error)) => {
+                    if let Err(health_error) =
+                        self.active.android_poll_device_health("restore_frame")
+                    {
+                        return Err(AndroidWgpuRebuildFailure {
+                            error: PlayerError::Renderer(format!(
+                                "{health_error}; cached frame restore also returned: {error}"
+                            )),
+                            can_try_another_backend: attempted_candidates.len()
+                                < wgpu_backend_candidates().len(),
+                        });
+                    }
+                    crate::trace::diagnostic(
+                        serde_json::json!({
+                            "event": "android_gpu_recovery",
+                            "stage": "current_frame_restore_failed",
+                            "sequence": self.recovery_sequence,
+                            "operation": operation,
+                            "backendCandidate": replacement_label,
+                            "decodeBackend": frame.decode_backend.as_str(),
+                            "generation": frame.generation,
+                            "reason": error.to_string(),
+                            "action": "keep_renderer_and_surface_wait_for_next_decoded_frame",
+                        })
+                        .to_string(),
+                    );
+                }
+                Err(payload) => {
+                    return Err(AndroidWgpuRebuildFailure {
+                        error: PlayerError::Renderer(format!(
+                            "panic while restoring cached Android video frame: {}",
+                            panic_payload_message(payload.as_ref())
+                        )),
+                        can_try_another_backend: attempted_candidates.len()
+                            < wgpu_backend_candidates().len(),
+                    });
+                }
+            }
+        }
+
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "android_gpu_recovery",
+                "stage": "renderer_rebuilt",
+                "sequence": self.recovery_sequence,
+                "operation": operation,
+                "previousBackendCandidate": previous_label,
+                "activeBackendCandidate": replacement_label,
+                "backendChanged": previous_candidate != replacement_candidate,
+                "attemptedBackendCandidates": candidate_labels(attempted_candidates),
+                "surfaceRestored": surface_restored,
+                "currentFrameCached": self.current_frame.is_some(),
+                "currentFrameRestored": frame_restored,
+                "mediaCodecSurfaceFramesSupported": self.active.supports_mediacodec_surface_frames(),
+            })
+            .to_string(),
+        );
+        Ok(())
+    }
+
+    fn exhaust_recovery<T>(
+        &mut self,
+        operation: &'static str,
+        attempted_candidates: Vec<usize>,
+        failures: Vec<String>,
+    ) -> Result<T> {
+        let message = format!(
+            "Android wgpu runtime recovery exhausted during {operation} after {} backend candidate(s): {}",
+            attempted_candidates.len(),
+            failures.join("; ")
+        );
+        self.terminal_failure = Some(message.clone());
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "android_gpu_recovery",
+                "stage": "recovery_exhausted",
+                "sequence": self.recovery_sequence,
+                "operation": operation,
+                "attemptedBackendCandidates": candidate_labels(&attempted_candidates),
+                "attemptedBackendCount": attempted_candidates.len(),
+                "candidateCount": wgpu_backend_candidates().len(),
+                "failures": failures,
+                "reason": message.as_str(),
+                "requiredAction": "detach_and_attach_a_live_android_surface_to_start_a_new_bounded_recovery_sequence",
+            })
+            .to_string(),
+        );
+        Err(PlayerError::Renderer(message))
+    }
+}
+
+#[cfg(target_os = "android")]
+impl RendererBackend for AndroidRecoveringWgpuRenderer {
+    fn attach_surface(&mut self, surface: PlatformSurface) -> Result<()> {
+        let PlatformSurface::Wgpu(handle) = surface else {
+            return Err(PlayerError::Renderer(
+                "non-wgpu surface cannot be attached to AndroidRecoveringWgpuRenderer".to_string(),
+            ));
+        };
+        if handle.kind != WgpuSurfaceKind::AndroidNativeWindow {
+            return Err(PlayerError::Renderer(format!(
+                "wgpu surface kind {:?} cannot be attached to AndroidRecoveringWgpuRenderer",
+                handle.kind
+            )));
+        }
+        let raw_window = NonNull::new(handle.raw_window as *mut c_void).ok_or_else(|| {
+            PlayerError::Renderer("wgpu Android ANativeWindow surface handle is null".to_string())
+        })?;
+        // SAFETY: RendererBackend::attach_surface requires a live native handle.
+        // This extra owned reference remains across every active renderer swap.
+        let recovery_window = unsafe { AndroidNativeWindow::acquire(raw_window) };
+        self.reset_terminal_failure("attach_surface");
+        self.execute_with_recovery(
+            "attach_surface",
+            AndroidWgpuRecoveryPolicy::AnyRendererFailure,
+            |renderer| renderer.attach_surface(surface),
+        )?;
+        self.recovery_window = Some(recovery_window);
+        self.surface = Some(handle);
+        Ok(())
+    }
+
+    fn detach_surface(&mut self) -> Result<()> {
+        self.active.detach_surface()?;
+        self.surface = None;
+        self.recovery_window = None;
+        self.terminal_failure = None;
+        Ok(())
+    }
+
+    fn resize_surface(&mut self, metrics: crate::core::SurfaceMetrics) -> Result<()> {
+        self.execute_with_recovery(
+            "resize_surface",
+            AndroidWgpuRecoveryPolicy::AnyRendererFailure,
+            |renderer| renderer.resize_surface(metrics),
+        )?;
+        if let Some(surface) = self.surface.as_mut() {
+            surface.resize(metrics);
+        }
+        Ok(())
+    }
+
+    fn render_test_frame(&mut self, time_seconds: f64) -> Result<()> {
+        self.execute_with_recovery(
+            "render_test_frame",
+            AndroidWgpuRecoveryPolicy::AnyRendererFailure,
+            |renderer| renderer.render_test_frame(time_seconds),
+        )
+    }
+
+    fn upload_player_frame(&mut self, frame: &PlayerVideoFrame) -> Result<()> {
+        self.execute_with_recovery(
+            "upload_player_frame",
+            AndroidWgpuRecoveryPolicy::DeviceFailureOnly,
+            |renderer| renderer.upload_player_frame(frame),
+        )?;
+        self.current_frame = match retain_player_video_frame(frame) {
+            Ok(frame) => Some(frame),
+            Err(error) => {
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "android_gpu_recovery",
+                        "stage": "current_frame_cache_failed",
+                        "decodeBackend": frame.decode_backend.as_str(),
+                        "generation": frame.generation,
+                        "pixelFormat": frame.frame.pixel_format(),
+                        "reason": error.to_string(),
+                        "action": "continue_rendering_without_cross_device_frame_restore",
+                    })
+                    .to_string(),
+                );
+                None
+            }
+        };
+        Ok(())
+    }
+
+    fn clear_current_frame(&mut self) -> Result<()> {
+        // Retained cross-device recovery data must be released even when the
+        // active GPU is already lost and clearing the surface fails. Taking it
+        // first also prevents recovery from restoring a frame that the
+        // presenter is explicitly retiring before a decoder transition.
+        self.current_frame = None;
+        self.execute_with_recovery(
+            "clear_current_frame",
+            AndroidWgpuRecoveryPolicy::AnyRendererFailure,
+            WgpuRenderer::clear_current_frame,
+        )
+    }
+
+    fn preserve_current_frame_for_transition(&mut self) -> Result<()> {
+        // The recovery cache may retain the original PlayerVideoFrame and its
+        // MediaCodec release callback. Drop that decoder-owned payload, but
+        // keep the active renderer's detached GPU texture as a transition
+        // snapshot.
+        self.current_frame = None;
+        self.active.preserve_current_frame_for_transition()
+    }
+
+    fn preserve_current_frame_for_track_transition(&mut self) -> Result<()> {
+        // Track selection also seeks/reopens MediaCodec on Android. Retire the
+        // decoder-owned recovery payload while preserving the active wgpu
+        // renderer's detached GPU snapshot.
+        self.current_frame = None;
+        self.active.preserve_current_frame_for_track_transition()
+    }
+
+    fn render_current_frame(&mut self, context: RenderFrameContext<'_>) -> Result<bool> {
+        self.execute_with_recovery(
+            "render_current_frame",
+            AndroidWgpuRecoveryPolicy::AnyRendererFailure,
+            |renderer| renderer.render_current_frame(context),
+        )
+    }
+
+    fn capture_current_frame(
+        &mut self,
+        context: RenderFrameContext<'_>,
+        width: u32,
+        height: u32,
+    ) -> Result<Option<crate::core::RendererFrameCapture>> {
+        self.execute_with_recovery(
+            "capture_current_frame",
+            AndroidWgpuRecoveryPolicy::AnyRendererFailure,
+            |renderer| renderer.capture_current_frame(context, width, height),
+        )
+    }
+
+    fn runtime_stats(&self) -> RendererRuntimeStats {
+        let mut stats = self.active.runtime_stats();
+        add_retired_renderer_stats(&mut stats, self.retired_stats);
+        stats
+    }
+
+    fn output_status(&self) -> OutputRuntimeStatus {
+        let mut status = self.active.output_status();
+        add_retired_output_counters(&mut status, self.retired_output_status);
+        status
+    }
+
+    fn supports_mediacodec_surface_frames(&self) -> bool {
+        self.active.supports_mediacodec_surface_frames()
+    }
+
     fn set_luma_upscaler(&mut self, mode: LumaUpscalerMode) {
         self.upscaler_mode = mode;
+        self.active.set_luma_upscaler(mode);
     }
+
+    fn set_output_headroom(&mut self, headroom: f32, known: bool) {
+        self.output_headroom = OutputHeadroomState::reported(headroom, known);
+        self.active
+            .update_output_headroom_state(self.output_headroom, true);
+    }
+}
+
+#[cfg(target_os = "android")]
+fn retain_player_video_frame(frame: &PlayerVideoFrame) -> Result<PlayerVideoFrame> {
+    Ok(PlayerVideoFrame {
+        frame: frame.frame.try_clone_ref().map_err(|error| {
+            PlayerError::Renderer(format!(
+                "failed to retain current frame for Android GPU recovery: {error}"
+            ))
+        })?,
+        decode_backend: frame.decode_backend,
+        pts: frame.pts,
+        media_time: frame.media_time,
+        late_by: frame.late_by,
+        generation: frame.generation,
+    })
+}
+
+#[cfg(target_os = "android")]
+fn candidate_labels(candidate_indices: &[usize]) -> Vec<&'static str> {
+    let candidates = wgpu_backend_candidates();
+    candidate_indices
+        .iter()
+        .map(|candidate_index| {
+            candidates
+                .get(*candidate_index)
+                .map_or("unknown", |candidate| candidate.label)
+        })
+        .collect()
+}
+
+#[cfg(target_os = "android")]
+fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".to_string())
+}
+
+#[cfg(target_os = "android")]
+fn accumulate_retired_renderer_stats(
+    retired: &mut RendererRuntimeStats,
+    current: RendererRuntimeStats,
+) {
+    add_retired_renderer_stats(retired, current);
+}
+
+#[cfg(target_os = "android")]
+fn accumulate_retired_output_status(
+    retired: &mut OutputRuntimeStatus,
+    current: OutputRuntimeStatus,
+) {
+    add_retired_output_counters(retired, current);
+}
+
+#[cfg(target_os = "android")]
+fn add_retired_output_counters(target: &mut OutputRuntimeStatus, retired: OutputRuntimeStatus) {
+    target.fallback_count = target.fallback_count.saturating_add(retired.fallback_count);
+    target.data_space_failures = target
+        .data_space_failures
+        .saturating_add(retired.data_space_failures);
+    target.headroom_updates = target
+        .headroom_updates
+        .saturating_add(retired.headroom_updates);
+    target.extended_linear_frames = target
+        .extended_linear_frames
+        .saturating_add(retired.extended_linear_frames);
+}
+
+#[cfg(target_os = "android")]
+fn add_retired_renderer_stats(target: &mut RendererRuntimeStats, retired: RendererRuntimeStats) {
+    target.rendered_frames = target
+        .rendered_frames
+        .saturating_add(retired.rendered_frames);
+    target.offscreen_frames = target
+        .offscreen_frames
+        .saturating_add(retired.offscreen_frames);
+    target.prepared_overlay_frames = target
+        .prepared_overlay_frames
+        .saturating_add(retired.prepared_overlay_frames);
+    target.prepared_overlay_subtitle_planes = target
+        .prepared_overlay_subtitle_planes
+        .saturating_add(retired.prepared_overlay_subtitle_planes);
+    target.danmaku_passes = target.danmaku_passes.saturating_add(retired.danmaku_passes);
+    target.danmaku_draw_items = target
+        .danmaku_draw_items
+        .saturating_add(retired.danmaku_draw_items);
+    target.overlay_alpha_atlas_uploads = target
+        .overlay_alpha_atlas_uploads
+        .saturating_add(retired.overlay_alpha_atlas_uploads);
+    target.overlay_alpha_atlas_reuses = target
+        .overlay_alpha_atlas_reuses
+        .saturating_add(retired.overlay_alpha_atlas_reuses);
+    target.upscaler_fallbacks = target
+        .upscaler_fallbacks
+        .saturating_add(retired.upscaler_fallbacks);
+    target.upscaled_frames = target
+        .upscaled_frames
+        .saturating_add(retired.upscaled_frames);
+    target.software_video_frames = target
+        .software_video_frames
+        .saturating_add(retired.software_video_frames);
+    target.hardware_video_frames = target
+        .hardware_video_frames
+        .saturating_add(retired.hardware_video_frames);
+    target.zero_copy_video_frames = target
+        .zero_copy_video_frames
+        .saturating_add(retired.zero_copy_video_frames);
+    target.direct_zero_copy_video_frames = target
+        .direct_zero_copy_video_frames
+        .saturating_add(retired.direct_zero_copy_video_frames);
+    target.shared_handle_video_frames = target
+        .shared_handle_video_frames
+        .saturating_add(retired.shared_handle_video_frames);
+    target.cpu_video_frame_fallbacks = target
+        .cpu_video_frame_fallbacks
+        .saturating_add(retired.cpu_video_frame_fallbacks);
+    target.hdr_source_frames = target
+        .hdr_source_frames
+        .saturating_add(retired.hdr_source_frames);
+    target.hdr10_output_frames = target
+        .hdr10_output_frames
+        .saturating_add(retired.hdr10_output_frames);
+    target.sdr_tonemap_frames = target
+        .sdr_tonemap_frames
+        .saturating_add(retired.sdr_tonemap_frames);
+    target.hdr10_metadata_updates = target
+        .hdr10_metadata_updates
+        .saturating_add(retired.hdr10_metadata_updates);
+    target.hdr10_metadata_failures = target
+        .hdr10_metadata_failures
+        .saturating_add(retired.hdr10_metadata_failures);
+    target.hdr10_output_failures = target
+        .hdr10_output_failures
+        .saturating_add(retired.hdr10_output_failures);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_candidate_recovery_order_rotates_and_excludes_attempted_backends() {
+        assert_eq!(backend_candidate_order(4, 2, &[]), vec![2, 3, 0, 1]);
+        assert_eq!(backend_candidate_order(4, 2, &[2, 0]), vec![3, 1]);
+        assert_eq!(backend_candidate_order(4, 7, &[3]), vec![0, 1, 2]);
+        assert!(backend_candidate_order(0, 0, &[]).is_empty());
+    }
+
+    #[test]
+    fn runtime_recovery_records_initialization_failures_before_selected_candidate() {
+        let order = vec![1, 2, 3, 0];
+        assert_eq!(attempted_candidate_prefix(&order, Some(3)), vec![1, 2, 3]);
+        assert_eq!(attempted_candidate_prefix(&order, Some(1)), vec![1]);
+        assert_eq!(attempted_candidate_prefix(&order, None), order);
+    }
+
+    #[cfg(target_os = "android")]
+    #[test]
+    fn android_backend_candidates_keep_plain_vulkan_before_gles() {
+        let candidates = wgpu_backend_candidates();
+        let labels = candidates
+            .iter()
+            .map(|candidate| candidate.label)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            labels,
+            vec!["vulkan-ahb", "vulkan", "gles", "vulkan-software"]
+        );
+        assert!(candidates[0].android_ahb_interop);
+        assert!(!candidates[1].android_ahb_interop);
+        assert!(!candidates[2].android_ahb_interop);
+        assert!(!candidates[1].allow_cpu_adapter);
+        assert!(!candidates[2].allow_cpu_adapter);
+        assert!(candidates[3].allow_cpu_adapter);
+        assert!(
+            candidates[..3]
+                .iter()
+                .all(|candidate| !candidate.force_fallback_adapter)
+        );
+        assert!(candidates[3].force_fallback_adapter);
+    }
+
+    #[cfg(target_os = "android")]
+    #[test]
+    fn android_device_health_promotes_device_lost_over_prior_validation() {
+        let health = AndroidWgpuDeviceHealth::default();
+        health.record("validation", "bad surface configuration".to_string(), false);
+        health.record("internal", "later internal error".to_string(), false);
+        assert_eq!(health.failure().unwrap().kind, "validation");
+
+        health.record("device_lost", "unknown: reset".to_string(), true);
+        let failure = health.failure().unwrap();
+        assert_eq!(failure.kind, "device_lost");
+        assert_eq!(failure.reason, "unknown: reset");
+    }
+
+    #[cfg(target_os = "android")]
+    #[test]
+    fn retired_renderer_stats_preserve_current_surface_and_accumulate_counters() {
+        let mut current = RendererRuntimeStats {
+            surface_width: 1920,
+            surface_height: 1080,
+            rendered_frames: 4,
+            hardware_video_frames: 5,
+            attached: true,
+            ..RendererRuntimeStats::default()
+        };
+        let retired = RendererRuntimeStats {
+            surface_width: 1280,
+            surface_height: 720,
+            rendered_frames: 7,
+            hardware_video_frames: 9,
+            attached: false,
+            ..RendererRuntimeStats::default()
+        };
+
+        add_retired_renderer_stats(&mut current, retired);
+
+        assert_eq!(current.surface_width, 1920);
+        assert_eq!(current.surface_height, 1080);
+        assert!(current.attached);
+        assert_eq!(current.rendered_frames, 11);
+        assert_eq!(current.hardware_video_frames, 14);
+    }
+
+    #[cfg(target_os = "android")]
+    #[test]
+    fn android_renderer_drop_poll_is_bounded() {
+        match android_wgpu_drop_poll_type() {
+            wgpu::PollType::Wait {
+                submission_index,
+                timeout,
+            } => {
+                assert!(submission_index.is_none());
+                assert_eq!(timeout, Some(ANDROID_WGPU_DROP_POLL_TIMEOUT));
+            }
+            wgpu::PollType::Poll => panic!("renderer drop must perform one bounded wait"),
+        }
+    }
     use crate::core::MetalSurfaceHandle;
     use crate::danmaku::{
         DanmakuFrameStats, DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan,
@@ -1628,6 +4345,285 @@ mod tests {
 
     fn to_u8(component: f64) -> u8 {
         (component * 255.0).round() as u8
+    }
+
+    #[test]
+    fn wgpu_surface_extent_is_not_multiplied_by_content_scale() {
+        let handle =
+            WgpuSurfaceHandle::new(WgpuSurfaceKind::AndroidNativeWindow, 1, 0, 1081, 607, 2.625);
+
+        assert_eq!(handle.metrics().physical_size(), (1081, 607));
+        assert_eq!(handle.metrics().content_scale, 2.625);
+    }
+
+    #[test]
+    fn requested_limits_accept_minimum_uniform_binding_without_losing_resolution() {
+        let adapter_limits = wgpu::Limits {
+            max_texture_dimension_2d: 16_384,
+            max_uniform_buffer_binding_size: 16 * 1024,
+            ..wgpu::Limits::downlevel_defaults()
+        };
+
+        let requested = requested_device_limits(adapter_limits, wgpu::Backend::Vulkan);
+
+        assert_eq!(requested.max_texture_dimension_2d, 16_384);
+        assert_eq!(requested.max_uniform_buffer_binding_size, 16 * 1024);
+        assert!(std::mem::size_of::<VideoUniforms>() <= 16 * 1024);
+    }
+
+    #[test]
+    fn requested_limits_accept_gles_without_compute_support() {
+        let adapter_limits = wgpu::Limits {
+            max_texture_dimension_2d: 8192,
+            max_uniform_buffer_binding_size: 16 * 1024,
+            max_compute_workgroup_storage_size: 0,
+            max_compute_invocations_per_workgroup: 0,
+            max_compute_workgroup_size_x: 0,
+            max_compute_workgroup_size_y: 0,
+            max_compute_workgroup_size_z: 0,
+            max_compute_workgroups_per_dimension: 0,
+            ..wgpu::Limits::downlevel_webgl2_defaults()
+        };
+
+        let requested = requested_device_limits(adapter_limits, wgpu::Backend::Gl);
+
+        assert_eq!(requested.max_texture_dimension_2d, 8192);
+        assert_eq!(requested.max_uniform_buffer_binding_size, 16 * 1024);
+        assert_eq!(requested.max_compute_workgroups_per_dimension, 0);
+    }
+
+    #[test]
+    fn android_extended_linear_surface_requires_vulkan_fp16_and_direct_composition() {
+        let capabilities = SurfaceOutputCapabilities {
+            extended_linear: true,
+            direct_composition: true,
+            desired_headroom: 4.0,
+            fallback_reason: OutputFallbackReason::None,
+        };
+        let formats = [
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
+        ];
+
+        let active = select_wgpu_surface_output(
+            OutputMode::extended_linear(4.0),
+            capabilities,
+            wgpu::Backend::Vulkan,
+            &formats,
+        )
+        .unwrap();
+        assert_eq!(active.format, wgpu::TextureFormat::Rgba16Float);
+        assert!(active.output.extended_linear);
+        assert_eq!(active.fallback_reason, OutputFallbackReason::None);
+        assert_eq!(active.output.target.reference_white_nits, 80.0);
+
+        let gles = select_wgpu_surface_output(
+            OutputMode::extended_linear(4.0),
+            capabilities,
+            wgpu::Backend::Gl,
+            &formats,
+        )
+        .unwrap();
+        assert_eq!(gles.format, wgpu::TextureFormat::Rgba8Unorm);
+        assert!(!gles.output.extended_linear);
+        assert_eq!(
+            gles.fallback_reason,
+            OutputFallbackReason::WgpuBackendNotVulkan
+        );
+
+        let texture_composited = select_wgpu_surface_output(
+            OutputMode::extended_linear(4.0),
+            SurfaceOutputCapabilities {
+                direct_composition: false,
+                ..capabilities
+            },
+            wgpu::Backend::Vulkan,
+            &formats,
+        )
+        .unwrap();
+        assert!(!texture_composited.output.extended_linear);
+        assert_eq!(
+            texture_composited.fallback_reason,
+            OutputFallbackReason::HybridCompositionRequired
+        );
+
+        let display_unsupported = select_wgpu_surface_output(
+            OutputMode::extended_linear(4.0),
+            SurfaceOutputCapabilities {
+                extended_linear: false,
+                direct_composition: true,
+                desired_headroom: 0.0,
+                fallback_reason: OutputFallbackReason::DisplayHdrUnsupported,
+            },
+            wgpu::Backend::Vulkan,
+            &formats,
+        )
+        .unwrap();
+        assert_eq!(
+            display_unsupported.fallback_reason,
+            OutputFallbackReason::DisplayHdrUnsupported
+        );
+
+        let api_unavailable = select_wgpu_surface_output(
+            OutputMode::extended_linear(4.0),
+            SurfaceOutputCapabilities {
+                extended_linear: false,
+                direct_composition: true,
+                desired_headroom: 0.0,
+                fallback_reason: OutputFallbackReason::NativeWindowDataSpaceApiUnavailable,
+            },
+            wgpu::Backend::Vulkan,
+            &formats,
+        )
+        .unwrap();
+        assert_eq!(
+            api_unavailable.fallback_reason,
+            OutputFallbackReason::NativeWindowDataSpaceApiUnavailable
+        );
+    }
+
+    #[test]
+    fn extended_linear_headroom_respects_explicit_and_reported_limits() {
+        let requested = OutputMode::extended_linear(4.0);
+        let auto = SurfaceOutputCapabilities {
+            extended_linear: true,
+            direct_composition: true,
+            desired_headroom: 0.0,
+            fallback_reason: OutputFallbackReason::None,
+        };
+        assert_eq!(
+            effective_extended_linear_headroom(requested, auto, OutputHeadroomState::default(),),
+            4.0
+        );
+        // A pre-content ratio of 1 must not suppress the first HDR signal.
+        assert_eq!(
+            effective_extended_linear_headroom(
+                requested,
+                auto,
+                OutputHeadroomState::reported(1.0, true),
+            ),
+            4.0
+        );
+        assert_eq!(
+            effective_extended_linear_headroom(
+                requested,
+                auto,
+                OutputHeadroomState::reported(2.5, true),
+            ),
+            2.5
+        );
+
+        let explicit = SurfaceOutputCapabilities {
+            desired_headroom: 3.0,
+            ..auto
+        };
+        assert_eq!(
+            effective_extended_linear_headroom(
+                requested,
+                explicit,
+                OutputHeadroomState::reported(3.5, true),
+            ),
+            3.0
+        );
+        assert_eq!(
+            effective_extended_linear_headroom(
+                requested,
+                explicit,
+                OutputHeadroomState::reported(2.0, true),
+            ),
+            2.0
+        );
+    }
+
+    #[test]
+    fn legacy_apple_edr_request_does_not_activate_android_scrgb() {
+        let selection = select_wgpu_surface_output(
+            OutputMode::apple_edr(4.0),
+            SurfaceOutputCapabilities {
+                extended_linear: true,
+                direct_composition: true,
+                desired_headroom: 4.0,
+                fallback_reason: OutputFallbackReason::None,
+            },
+            wgpu::Backend::Vulkan,
+            &[
+                wgpu::TextureFormat::Rgba8Unorm,
+                wgpu::TextureFormat::Rgba16Float,
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(selection.format, wgpu::TextureFormat::Rgba8Unorm);
+        assert!(!selection.output.extended_linear);
+        assert_eq!(
+            selection.fallback_reason,
+            OutputFallbackReason::LegacyAppleEdrUnsupported
+        );
+    }
+
+    #[test]
+    fn planar_upload_downconverts_p010_only_when_16bit_norm_is_missing() {
+        let pack = |codes: &[u16]| {
+            codes
+                .iter()
+                .flat_map(|code| (*code << 6).to_le_bytes())
+                .collect::<Vec<_>>()
+        };
+        let p010 = PlanarFrame {
+            format: PlanarPixelFormat::P010,
+            width: 2,
+            height: 2,
+            luma: pack(&[64, 940, 512, 1023]),
+            chroma: pack(&[512, 960]),
+        };
+        let mut uniforms =
+            VideoUniforms::from_pipeline(&VideoRenderPipeline::sdr_default(), false, false);
+        uniforms.source_transfer = 77;
+        uniforms.nits = [1_000.0, 100.0, 203.0, 100.0];
+
+        let native = prepare_planar_upload(p010.clone(), uniforms, true).unwrap();
+        let mut expected_native_uniforms = uniforms;
+        expected_native_uniforms.is_p010 = 1;
+        assert_eq!(native.path, PlanarUploadPath::Native);
+        assert_eq!(native.frame, p010);
+        assert_eq!(native.uniforms, expected_native_uniforms);
+
+        let fallback = prepare_planar_upload(p010, uniforms, false).unwrap();
+        let mut expected_fallback_uniforms = uniforms;
+        expected_fallback_uniforms.is_p010 = 0;
+        assert_eq!(fallback.path, PlanarUploadPath::CpuP010ToNv12);
+        assert_eq!(fallback.frame.format, PlanarPixelFormat::Nv12);
+        assert_eq!(fallback.frame.luma, vec![16, 235, 128, 255]);
+        assert_eq!(fallback.frame.chroma, vec![128, 240]);
+        assert_eq!(fallback.uniforms, expected_fallback_uniforms);
+
+        let nv12 = fallback.frame;
+        let native_nv12 = prepare_planar_upload(nv12.clone(), uniforms, false).unwrap();
+        assert_eq!(native_nv12.path, PlanarUploadPath::Native);
+        assert_eq!(native_nv12.frame, nv12);
+        assert_eq!(native_nv12.uniforms.is_p010, 0);
+    }
+
+    #[test]
+    fn aspect_fit_viewport_letterboxes_and_pillarboxes() {
+        assert_eq!(
+            aspect_fit_viewport(1920, 1080, 1000, 1000),
+            PresentationViewport {
+                x: 0.0,
+                y: 218.75,
+                width: 1000.0,
+                height: 562.5,
+            }
+        );
+        assert_eq!(
+            aspect_fit_viewport(1080, 1920, 1000, 1000),
+            PresentationViewport {
+                x: 218.75,
+                y: 0.0,
+                width: 562.5,
+                height: 1000.0,
+            }
+        );
     }
 
     #[test]
@@ -1677,6 +4673,112 @@ mod tests {
     }
 
     #[test]
+    fn renderer_backend_capture_uses_requested_size_and_aspect_fit() {
+        let mut renderer = WgpuRenderer::new().unwrap();
+        let uniforms =
+            VideoUniforms::from_pipeline(&VideoRenderPipeline::sdr_default(), false, false);
+        renderer
+            .upload_nv12(4, 2, &[235; 8], &[128; 4], uniforms)
+            .unwrap();
+
+        let capture = RendererBackend::capture_current_frame(
+            &mut renderer,
+            RenderFrameContext::new(Duration::ZERO, 1).output_size(4, 4),
+            4,
+            4,
+        )
+        .unwrap()
+        .expect("current wgpu frame captured");
+
+        assert_eq!((capture.width, capture.height), (4, 4));
+        assert_eq!(capture.rgba.len(), 4 * 4 * 4);
+        assert_eq!(&capture.rgba[0..4], &[0, 0, 0, 255]);
+        assert!(capture.rgba[4 * 4 + 0] > 200);
+        assert_eq!(renderer.stats().offscreen_frames, 1);
+    }
+
+    #[test]
+    fn transition_snapshot_remains_available_for_capture() {
+        let mut renderer = WgpuRenderer::new().unwrap();
+        let uniforms =
+            VideoUniforms::from_pipeline(&VideoRenderPipeline::sdr_default(), false, false);
+        renderer
+            .upload_nv12(4, 2, &[235; 8], &[128; 4], uniforms)
+            .unwrap();
+
+        RendererBackend::preserve_current_frame_for_track_transition(&mut renderer).unwrap();
+        RendererBackend::preserve_current_frame_for_transition(&mut renderer).unwrap();
+
+        let capture = RendererBackend::capture_current_frame(
+            &mut renderer,
+            RenderFrameContext::new(Duration::from_secs(15), 2).output_size(4, 4),
+            4,
+            4,
+        )
+        .unwrap()
+        .expect("transition snapshot remains capturable");
+
+        assert_eq!((capture.width, capture.height), (4, 4));
+        assert_eq!(capture.rgba.len(), 4 * 4 * 4);
+        assert_eq!(&capture.rgba[0..4], &[0, 0, 0, 255]);
+        assert!(capture.rgba[4 * 4 + 0] > 200);
+    }
+
+    #[test]
+    fn full_clear_removes_current_frame_from_capture() {
+        let mut renderer = WgpuRenderer::new().unwrap();
+        let uniforms =
+            VideoUniforms::from_pipeline(&VideoRenderPipeline::sdr_default(), false, false);
+        renderer
+            .upload_nv12(4, 2, &[235; 8], &[128; 4], uniforms)
+            .unwrap();
+
+        RendererBackend::clear_current_frame(&mut renderer).unwrap();
+
+        let capture = RendererBackend::capture_current_frame(
+            &mut renderer,
+            RenderFrameContext::new(Duration::ZERO, 1).output_size(4, 4),
+            4,
+            4,
+        )
+        .unwrap();
+        assert!(capture.is_none());
+    }
+
+    #[test]
+    fn wgpu_renderer_composites_rgba_overlay_pixels() {
+        let mut renderer = WgpuRenderer::new().unwrap();
+        let uniforms =
+            VideoUniforms::from_pipeline(&VideoRenderPipeline::sdr_default(), false, false);
+        renderer
+            .upload_nv12(4, 4, &[16; 16], &[128; 8], uniforms)
+            .unwrap();
+
+        let overlay = OverlayFrame {
+            pts: Duration::ZERO,
+            viewport: crate::overlay::OverlayViewport::new(4, 4),
+            subtitle_planes: vec![crate::subtitle::SubtitleBitmapPlane::new(
+                1,
+                1,
+                2,
+                2,
+                vec![255, 0, 0, 255].repeat(4),
+            )],
+            subtitle_alpha_planes: Vec::new(),
+            subtitle_changed: true,
+        };
+        let capture = renderer
+            .render_current_offscreen(Some(&overlay))
+            .unwrap()
+            .expect("current wgpu frame captured with overlay");
+
+        assert_eq!(capture.pixel(0, 0), [0, 0, 0, 255]);
+        assert_eq!(capture.pixel(1, 1), [255, 0, 0, 255]);
+        assert_eq!(capture.pixel(2, 2), [255, 0, 0, 255]);
+        assert_eq!(capture.pixel(3, 3), [0, 0, 0, 255]);
+    }
+
+    #[test]
     fn wgpu_renderer_prepares_danmaku_glyph_atlas_draws_and_reuses_cache() {
         let mut renderer = WgpuRenderer::new().unwrap();
         renderer.ensure_overlay_pipeline(OFFSCREEN_FORMAT);
@@ -1705,7 +4807,9 @@ mod tests {
             frame_stats: DanmakuFrameStats::default(),
         };
 
-        let draws = renderer.prepare_danmaku_draws(&plan).unwrap();
+        let draws = renderer
+            .prepare_danmaku_draws(&plan, OutputDescription::sdr())
+            .unwrap();
         assert_eq!(draws.len(), 2);
         assert!(
             renderer
@@ -1714,7 +4818,9 @@ mod tests {
                 .is_some_and(|cache| cache.can_reuse_for(&atlas))
         );
 
-        let cached_draws = renderer.prepare_danmaku_draws(&plan).unwrap();
+        let cached_draws = renderer
+            .prepare_danmaku_draws(&plan, OutputDescription::sdr())
+            .unwrap();
         assert_eq!(cached_draws.len(), 2);
         assert!(
             renderer
@@ -1878,7 +4984,7 @@ mod tests {
 
     fn build_solid_nv12(width: u32, height: u32, y: u8, cb: u8, cr: u8) -> (Vec<u8>, Vec<u8>) {
         let luma = vec![y; (width * height) as usize];
-        let chroma_pixels = (width / 2) as usize * (height / 2) as usize;
+        let chroma_pixels = width.div_ceil(2) as usize * height.div_ceil(2) as usize;
         let mut chroma = Vec::with_capacity(chroma_pixels * 2);
         for _ in 0..chroma_pixels {
             chroma.push(cb);
@@ -1977,12 +5083,8 @@ mod tests {
     }
 
     #[test]
-    fn wgpu_uploads_and_renders_p010_frame() {
+    fn wgpu_uploads_and_renders_p010_frame_or_8bit_capability_fallback() {
         let mut renderer = WgpuRenderer::new().unwrap();
-        if !renderer.supports_16bit_norm() {
-            // Backend without TEXTURE_FORMAT_16BIT_NORM cannot do P010; skip.
-            return;
-        }
 
         // 4x4 P010 frame: bright luma, neutral chroma. Samples are 10-bit values
         // MSB-aligned in 16-bit LE (code << 6), matching `Frame::to_planar_frame`.

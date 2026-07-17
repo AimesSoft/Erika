@@ -32,8 +32,8 @@ fn run_check(layer: *mut c_void) -> Result<(), String> {
     renderer
         .attach_surface(PlatformSurface::Metal(MetalSurfaceHandle::new(
             layer as u64,
-            640,
-            360,
+            1280,
+            720,
             2.0,
         )))
         .map_err(|error| error.to_string())?;

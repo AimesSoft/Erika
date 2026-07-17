@@ -19,6 +19,41 @@ pub(crate) fn log(line: impl AsRef<str>) {
     append_line(line.as_ref(), default_trace_path());
 }
 
+/// Emits an unconditional operational diagnostic. Decoder/backend transitions
+/// use this path because a hardware fallback must remain visible even when the
+/// optional playback trace is disabled.
+pub(crate) fn diagnostic(line: impl AsRef<str>) {
+    let line = line.as_ref();
+    #[cfg(target_os = "android")]
+    android_log(line);
+    #[cfg(not(target_os = "android"))]
+    eprintln!("{line}");
+}
+
+#[cfg(target_os = "android")]
+fn android_log(line: &str) {
+    use std::ffi::{CString, c_char, c_int};
+
+    const ANDROID_LOG_WARN: c_int = 5;
+    const TAG: &[u8] = b"Erika\0";
+
+    #[link(name = "log")]
+    unsafe extern "C" {
+        fn __android_log_write(priority: c_int, tag: *const c_char, text: *const c_char) -> c_int;
+    }
+
+    let Ok(message) = CString::new(line.replace('\0', "\\0")) else {
+        return;
+    };
+    unsafe {
+        let _ = __android_log_write(
+            ANDROID_LOG_WARN,
+            TAG.as_ptr().cast::<c_char>(),
+            message.as_ptr(),
+        );
+    }
+}
+
 pub(crate) fn append_line(line: impl AsRef<str>, path: impl AsRef<Path>) {
     let line = line.as_ref();
     let path = path.as_ref();

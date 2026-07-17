@@ -10,6 +10,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_plugin_android_lifecycle: ^2.0.26
 
 dev_dependencies:
   flutter_test:
@@ -18,6 +19,9 @@ dev_dependencies:
 flutter:
   plugin:
     platforms:
+      android:
+        package: dev.aimesoft.erika_flutter
+        pluginClass: ErikaFlutterPlugin
       ios:
         pluginClass: ErikaFlutterPlugin
       macos:

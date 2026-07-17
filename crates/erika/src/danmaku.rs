@@ -296,7 +296,9 @@ impl DanmakuTimeline {
         let trimmed = input.trim_start();
         if trimmed.starts_with('<') {
             Self::from_bilibili_xml(input)
-        } else if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        } else if trimmed.starts_with('{') {
+            Self::from_json(input).or_else(|_| Self::from_json_lines(input))
+        } else if trimmed.starts_with('[') {
             Self::from_json(input)
         } else {
             Self::from_json_lines(input)
@@ -2135,11 +2137,11 @@ fn item_from_json_value(value: &Value, fallback_id: u64) -> Result<DanmakuItem> 
         ),
         text,
         mode,
-        font_size: numeric_field(object, &["font_size", "size", "s"])
+        font_size: numeric_field(object, &["font_size", "fontSize", "size", "s"])
             .unwrap_or(DEFAULT_SOURCE_FONT_SIZE as f64) as f32,
         color,
         opacity: numeric_field(object, &["opacity", "alpha", "a"]).unwrap_or(1.0) as f32,
-        is_self: bool_field(object, &["is_me", "self", "mine"]).unwrap_or(false),
+        is_self: bool_field(object, &["is_me", "isMe", "self", "mine"]).unwrap_or(false),
     })
 }
 
@@ -2556,6 +2558,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_nipaplay_camel_case_item_fields() {
+        let input = r#"[{"t":1,"c":"phone","y":"scroll","r":16777215,"fontSize":30,"isMe":true}]"#;
+        let timeline = DanmakuTimeline::from_json(input).unwrap();
+
+        assert_eq!(timeline.items()[0].font_size, 30.0);
+        assert!(timeline.items()[0].is_self);
+    }
+
+    #[test]
     fn parses_json_lines_and_xml() {
         let jsonl = r#"{"t":1,"c":"a","y":"bottom","r":16777215}
 {"t":2,"c":"b","y":"scroll"}"#;
@@ -2780,6 +2791,24 @@ mod tests {
 
         assert_close(one_x.items()[0].font_size, expected);
         assert_close(two_x.items()[0].font_size, expected * 2.0);
+    }
+
+    #[test]
+    fn nipaplay_phone_font_size_uses_fractional_android_density() {
+        let timeline = DanmakuTimeline::new(vec![DanmakuItem {
+            font_size: DEFAULT_SOURCE_FONT_SIZE,
+            ..item(0.0, "android density", DanmakuMode::Top)
+        }])
+        .unwrap();
+        let config = DanmakuLayoutConfig {
+            font_size: 20.0,
+            ..DanmakuLayoutConfig::default()
+        };
+        let mut engine = DfmLayoutEngine::new(timeline, config);
+
+        let prepared = engine.prepare(DanmakuViewport::with_scale(1080, 2400, 2.625), 1);
+
+        assert_close(prepared.items()[0].font_size, 52.5);
     }
 
     #[test]

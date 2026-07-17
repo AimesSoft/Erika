@@ -9,11 +9,18 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ERIKA_NATIVE_TARGET");
     println!("cargo:rerun-if-env-changed=ERIKA_FFMPEG_DIR");
     println!("cargo:rerun-if-env-changed=ERIKA_ZLIB_DIR");
+    println!("cargo:rerun-if-env-changed=ERIKA_DAV1D_DIR");
     println!("cargo:rerun-if-env-changed=ERIKA_ALLOW_LEGACY_FFMPEG");
     println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
+    println!("cargo:rerun-if-env-changed=ANDROID_API_LEVEL");
+    println!("cargo:rerun-if-env-changed=ANDROID_NDK_HOME");
+    println!("cargo:rerun-if-env-changed=ANDROID_NDK_ROOT");
+    println!("cargo:rerun-if-env-changed=ANDROID_HOME");
+    println!("cargo:rerun-if-env-changed=ANDROID_SDK_ROOT");
 
     let dist_dir = ffmpeg_dist_dir();
     let zlib_dir = native_dep_dir("ERIKA_ZLIB_DIR", "zlib");
+    let dav1d_dir = native_dep_dir("ERIKA_DAV1D_DIR", "dav1d");
     let include_dir = dist_dir.join("include");
     let lib_dir = dist_dir.join("lib");
 
@@ -25,14 +32,66 @@ fn main() {
         );
     }
 
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        for archive in [
+            "libavdevice.a",
+            "libavfilter.a",
+            "libavformat.a",
+            "libavcodec.a",
+            "libswresample.a",
+            "libswscale.a",
+            "libavutil.a",
+        ] {
+            let archive = lib_dir.join(archive);
+            println!("cargo:rerun-if-changed={}", archive.display());
+            if !archive.is_file() {
+                panic!(
+                    "Android FFmpeg archive was not found at {}. Run `{}` first.",
+                    archive.display(),
+                    xtask_build_hint()
+                );
+            }
+        }
+        let zlib_header = zlib_dir.join("include/zlib.h");
+        let zlib_archive = zlib_dir.join("lib/libz.a");
+        for path in [&zlib_header, &zlib_archive] {
+            println!("cargo:rerun-if-changed={}", path.display());
+            if !path.is_file() {
+                panic!(
+                    "Android zlib dependency was not found at {}. Run `{}` first.",
+                    path.display(),
+                    xtask_build_hint()
+                );
+            }
+        }
+        let dav1d_header = dav1d_dir.join("include/dav1d/dav1d.h");
+        let dav1d_archive = dav1d_dir.join("lib/libdav1d.a");
+        for path in [&dav1d_header, &dav1d_archive] {
+            println!("cargo:rerun-if-changed={}", path.display());
+            if !path.is_file() {
+                panic!(
+                    "Android dav1d dependency was not found at {}. Run `{}` first, or set ERIKA_DAV1D_DIR.",
+                    path.display(),
+                    xtask_build_hint()
+                );
+            }
+        }
+    }
+
     let ffmpeg_version_major = emit_ffmpeg_version_cfg(&include_dir);
-    enforce_windows_ffmpeg_version(ffmpeg_version_major, &include_dir);
+    enforce_bundled_ffmpeg_version(ffmpeg_version_major, &include_dir);
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!(
         "cargo:rustc-link-search=native={}",
         zlib_dir.join("lib").display()
     );
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        println!(
+            "cargo:rustc-link-search=native={}",
+            dav1d_dir.join("lib").display()
+        );
+    }
     println!("cargo:rustc-link-lib=static=avdevice");
     println!("cargo:rustc-link-lib=static=avfilter");
     println!("cargo:rustc-link-lib=static=avformat");
@@ -40,6 +99,9 @@ fn main() {
     println!("cargo:rustc-link-lib=static=swresample");
     println!("cargo:rustc-link-lib=static=swscale");
     println!("cargo:rustc-link-lib=static=avutil");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        println!("cargo:rustc-link-lib=static=dav1d");
+    }
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         println!("cargo:rustc-link-lib=static=zlib");
     } else {
@@ -76,11 +138,23 @@ fn main() {
         ] {
             println!("cargo:rustc-link-lib={lib}");
         }
+    } else if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        for lib in [
+            "android",
+            "log",
+            "camera2ndk",
+            "mediandk",
+            "atomic",
+            "dl",
+            "m",
+        ] {
+            println!("cargo:rustc-link-lib={lib}");
+        }
     }
 
     ensure_libclang_path();
 
-    let bindings = bindgen::Builder::default()
+    let mut builder = bindgen::Builder::default()
         .header("wrapper.h")
         .clang_arg(format!("-I{}", include_dir.display()))
         .allowlist_function("av_.*")
@@ -100,9 +174,11 @@ fn main() {
         .blocklist_item("FP_.*")
         .generate_comments(false)
         .derive_debug(true)
-        .derive_default(true)
-        .generate()
-        .expect("generate FFmpeg bindings");
+        .derive_default(true);
+    for argument in android_bindgen_clang_args() {
+        builder = builder.clang_arg(argument);
+    }
+    let bindings = builder.generate().expect("generate FFmpeg bindings");
 
     let out_path = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set"));
     bindings
@@ -132,8 +208,9 @@ fn emit_ffmpeg_version_cfg(include_dir: &Path) -> Option<u32> {
     major
 }
 
-fn enforce_windows_ffmpeg_version(version_major: Option<u32>, include_dir: &Path) {
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+fn enforce_bundled_ffmpeg_version(version_major: Option<u32>, include_dir: &Path) {
+    let target_os = env::var("CARGO_CFG_TARGET_OS").ok();
+    if !matches!(target_os.as_deref(), Some("windows" | "android")) {
         return;
     }
     if env::var("ERIKA_ALLOW_LEGACY_FFMPEG").as_deref() == Ok("1") {
@@ -143,7 +220,8 @@ fn enforce_windows_ffmpeg_version(version_major: Option<u32>, include_dir: &Path
         return;
     }
     panic!(
-        "Windows native core requires Erika's FFmpeg 7.x dependency bundle (libavutil >= 59), but found {:?} under {}. Run `{}` or set ERIKA_FFMPEG_DIR to that dist; set ERIKA_ALLOW_LEGACY_FFMPEG=1 only for local compatibility experiments.",
+        "{} native core requires Erika's FFmpeg 7.x dependency bundle (libavutil >= 59), but found {:?} under {}. Run `{}` or set ERIKA_FFMPEG_DIR to that dist; set ERIKA_ALLOW_LEGACY_FFMPEG=1 only for local compatibility experiments.",
+        target_os.as_deref().unwrap_or("target"),
         version_major,
         include_dir.display(),
         xtask_build_hint()
@@ -154,23 +232,155 @@ fn ensure_libclang_path() {
     if env::var_os("LIBCLANG_PATH").is_some() {
         return;
     }
-    for path in [
-        Path::new("C:/msys64/mingw64/bin"),
-        Path::new("C:/Program Files/LLVM/bin"),
-    ] {
-        if path.join("libclang.dll").exists() {
+    let mut candidates = vec![
+        PathBuf::from("C:/msys64/mingw64/bin"),
+        PathBuf::from("C:/Program Files/LLVM/bin"),
+    ];
+    if let Some(prebuilt) = android_ndk_prebuilt_dir() {
+        candidates.push(prebuilt.join("bin"));
+        candidates.push(prebuilt.join("lib64"));
+        candidates.push(prebuilt.join("lib"));
+    }
+    for path in candidates {
+        if contains_libclang(&path) {
             // Build scripts are single-process setup code; set this before bindgen
             // loads libclang so Windows source builds work without a developer shell.
             unsafe {
-                env::set_var("LIBCLANG_PATH", path);
+                env::set_var("LIBCLANG_PATH", &path);
             }
-            prepend_path_for_dlls(path);
+            prepend_path_for_dlls(&path);
             if path.starts_with("C:/msys64") {
                 prepend_path_for_dlls(Path::new("C:/msys64/usr/bin"));
             }
             return;
         }
     }
+}
+
+fn contains_libclang(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    if ["libclang.dll", "libclang.so", "libclang.dylib"]
+        .into_iter()
+        .any(|name| path.join(name).is_file())
+    {
+        return true;
+    }
+    fs::read_dir(path).is_ok_and(|entries| {
+        entries.filter_map(|entry| entry.ok()).any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("libclang.so.")
+        })
+    })
+}
+
+fn android_bindgen_clang_args() -> Vec<String> {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
+        return Vec::new();
+    }
+    let target = env::var("TARGET").expect("Cargo TARGET is set for Android bindgen");
+    let clang_triple = match target.as_str() {
+        "aarch64-linux-android" => "aarch64-linux-android",
+        "armv7-linux-androideabi" => "armv7a-linux-androideabi",
+        "x86_64-linux-android" => "x86_64-linux-android",
+        "i686-linux-android" => "i686-linux-android",
+        other => panic!("unsupported Android Rust target for bindgen: {other}"),
+    };
+    let api_level = android_api_level();
+    let prebuilt = android_ndk_prebuilt_dir()
+        .expect("Android NDK was not found for bindgen; set ANDROID_NDK_HOME or ANDROID_NDK_ROOT");
+    let sysroot = prebuilt.join("sysroot");
+    if !sysroot.is_dir() {
+        panic!("Android NDK sysroot was not found at {}", sysroot.display());
+    }
+    vec![
+        format!("--target={clang_triple}{api_level}"),
+        format!("--sysroot={}", sysroot.to_string_lossy().replace('\\', "/")),
+    ]
+}
+
+fn android_api_level() -> u32 {
+    let api = env::var("ANDROID_API_LEVEL")
+        .ok()
+        .map(|value| {
+            value
+                .trim_start_matches("android-")
+                .parse::<u32>()
+                .unwrap_or_else(|_| panic!("ANDROID_API_LEVEL must be an integer, got `{value}`"))
+        })
+        .unwrap_or(26);
+    assert!(api >= 26, "Erika Android builds require API 26 or newer");
+    api
+}
+
+fn android_ndk_prebuilt_dir() -> Option<PathBuf> {
+    let ndk_root = android_ndk_root()?;
+    let prebuilt = ndk_root.join("toolchains/llvm/prebuilt");
+    let preferred: &[&str] = if cfg!(windows) {
+        &["windows-x86_64"]
+    } else if cfg!(target_os = "macos") {
+        &["darwin-aarch64", "darwin-x86_64"]
+    } else {
+        &["linux-x86_64"]
+    };
+    preferred
+        .iter()
+        .map(|tag| prebuilt.join(tag))
+        .find(|path| path.is_dir())
+}
+
+fn android_ndk_root() -> Option<PathBuf> {
+    let mut candidates = ["ANDROID_NDK_HOME", "ANDROID_NDK_ROOT"]
+        .into_iter()
+        .filter_map(env::var_os)
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    for variable in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
+        if let Some(root) = env::var_os(variable) {
+            add_sdk_ndk_candidates(&mut candidates, &PathBuf::from(root));
+        }
+    }
+    if cfg!(windows) {
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            add_sdk_ndk_candidates(
+                &mut candidates,
+                &PathBuf::from(local_app_data).join("Android/Sdk"),
+            );
+        }
+    }
+    candidates.into_iter().find(|path| {
+        path.join("build/cmake/android.toolchain.cmake").is_file()
+            && path.join("toolchains/llvm/prebuilt").is_dir()
+    })
+}
+
+fn add_sdk_ndk_candidates(candidates: &mut Vec<PathBuf>, sdk_root: &Path) {
+    if let Ok(entries) = fs::read_dir(sdk_root.join("ndk")) {
+        let mut versions = entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect::<Vec<_>>();
+        versions.sort_by_key(|path| {
+            path.file_name()
+                .map(|name| version_key(&name.to_string_lossy()))
+                .unwrap_or_default()
+        });
+        versions.reverse();
+        candidates.extend(versions);
+    }
+    candidates.push(sdk_root.join("ndk-bundle"));
+}
+
+fn version_key(value: &str) -> Vec<u32> {
+    value
+        .split(|ch: char| !ch.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse().ok())
+        .collect()
 }
 
 fn prepend_path_for_dlls(path: &Path) {
@@ -200,11 +410,8 @@ fn ffmpeg_dist_dir() -> PathBuf {
             .join("ffmpeg");
     }
     let mut dist = workspace_root().join("third_party/dist");
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("ios") {
-        dist = dist.join("ios");
-    } else if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "x86_64".to_string());
-        dist = dist.join(format!("{arch}-pc-windows-msvc"));
+    if let Some(target) = inferred_native_target() {
+        dist = dist.join(target);
     }
     dist.join(native_profile()).join("ffmpeg")
 }
@@ -221,11 +428,8 @@ fn native_dep_dir(env_name: &str, name: &str) -> PathBuf {
             .join(name);
     }
     let mut dist = workspace_root().join("third_party/dist");
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("ios") {
-        dist = dist.join("ios");
-    } else if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "x86_64".to_string());
-        dist = dist.join(format!("{arch}-pc-windows-msvc"));
+    if let Some(target) = inferred_native_target() {
+        dist = dist.join(target);
     }
     dist.join(native_profile()).join(name)
 }
@@ -236,13 +440,24 @@ fn native_profile() -> String {
 
 fn xtask_build_hint() -> String {
     let profile = native_profile();
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "x86_64".to_string());
-        format!(
-            "cargo run -p xtask -- deps build --profile {profile} --target {arch}-pc-windows-msvc"
-        )
+    if let Some(target) = inferred_native_target() {
+        format!("cargo run -p xtask -- deps build --profile {profile} --target {target}")
     } else {
         format!("cargo run -p xtask -- deps build --profile {profile}")
+    }
+}
+
+fn inferred_native_target() -> Option<String> {
+    let os = env::var("CARGO_CFG_TARGET_OS").ok()?;
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").ok()?;
+    match (os.as_str(), arch.as_str()) {
+        ("windows", "x86_64") => Some("x86_64-pc-windows-msvc".to_string()),
+        ("android", "aarch64") => Some("aarch64-linux-android".to_string()),
+        ("android", "arm") => Some("armv7-linux-androideabi".to_string()),
+        ("android", "x86_64") => Some("x86_64-linux-android".to_string()),
+        ("android", "x86") => Some("i686-linux-android".to_string()),
+        ("ios", _) => Some("ios".to_string()),
+        _ => None,
     }
 }
 
