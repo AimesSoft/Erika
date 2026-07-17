@@ -36,8 +36,9 @@ create ──▶ attach surface ──▶ open ──▶ play ──▶ (render_
                         detach surface ──▶ destroy
 ```
 
-`open` is asynchronous. The handle moves through `Opening → Ready → Playing`;
-observe transitions via events rather than blocking. You can attach the surface
+`open` and `play` are asynchronous. The handle moves through
+`Opening → Ready → Playing`; observe transitions and failures via events rather
+than blocking. You can attach the surface
 before or after `open`, but attaching first lets the idle test pattern / first
 frame appear immediately.
 

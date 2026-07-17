@@ -135,8 +135,9 @@ ErikaStatus erika_close(ErikaHandle *handle);
 ErikaStatus erika_seek(ErikaHandle *handle, uint64_t position_micros);
 ```
 
-`uri` 是本地文件路径或 HTTP(S) URL。`seek` 单位为微秒。`open` 异步开始；观察
-`StateChanged`/`DurationChanged` 事件以得知媒体何时就绪。
+`uri` 是本地文件路径或 HTTP(S) URL。`seek` 单位为微秒。`open` 和 `play` 都会
+异步入队；应观察 `StateChanged`、`DurationChanged` 和 `Error` 事件获取最终结果，
+不要阻塞宿主 UI 线程。
 
 ### 轨道与字幕
 

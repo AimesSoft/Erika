@@ -140,8 +140,9 @@ ErikaStatus erika_close(ErikaHandle *handle);
 ErikaStatus erika_seek(ErikaHandle *handle, uint64_t position_micros);
 ```
 
-`uri` はローカルパスまたは HTTP(S) URL。`seek` はマイクロ秒。`open` は非同期に開始し、
-`StateChanged`/`DurationChanged` イベントでメディアの準備完了を知ります。
+`uri` はローカルパスまたは HTTP(S) URL。`seek` はマイクロ秒。`open` と `play` は
+非同期にキューへ投入されます。ホスト UI スレッドをブロックせず、`StateChanged`、
+`DurationChanged`、`Error` イベントで最終結果を確認してください。
 
 ### トラックと字幕
 

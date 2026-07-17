@@ -43,8 +43,9 @@ pipeline as Apple and Windows.
 The release is fully automated by
 [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
-1. Make sure `main` is green and the docs/version are up to date. Bump
-   `version` in the root `Cargo.toml` if appropriate.
+1. Make sure `main` is green and the docs/version are up to date. Review the
+   root [`CHANGELOG.md`](../CHANGELOG.md), especially its breaking-change
+   section, and bump `version` in the root `Cargo.toml` if appropriate.
 2. Tag and push:
    ```sh
    git tag v0.1.2

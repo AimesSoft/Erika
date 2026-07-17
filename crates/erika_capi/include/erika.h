@@ -327,6 +327,7 @@ void erika_string_free(char *value);
 /* Playback control. uri is a local path or HTTP(S) URL; times are microseconds.
  * open() is asynchronous — watch StateChanged/DurationChanged events. */
 ErikaStatus erika_open(ErikaHandle *handle, const char *uri);
+/* play enqueues work; observe StateChanged/Error for the authoritative result. */
 ErikaStatus erika_play(ErikaHandle *handle);
 ErikaStatus erika_pause(ErikaHandle *handle);
 ErikaStatus erika_stop(ErikaHandle *handle);
@@ -410,6 +411,7 @@ void erika_presenter_destroy(ErikaPresenterHandle *handle);
  * renderers execute ArtCNN; other backends retain native luma sampling and
  * report an explicit Inactive fallback. */
 ErikaStatus erika_presenter_open(ErikaPresenterHandle *handle, const char *uri);
+/* play enqueues work; observe StateChanged/Error for the authoritative result. */
 ErikaStatus erika_presenter_play(ErikaPresenterHandle *handle);
 ErikaStatus erika_presenter_pause(ErikaPresenterHandle *handle);
 ErikaStatus erika_presenter_stop(ErikaPresenterHandle *handle);

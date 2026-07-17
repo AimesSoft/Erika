@@ -148,8 +148,9 @@ ErikaStatus erika_seek(ErikaHandle *handle, uint64_t position_micros);
 ```
 
 `uri` is a local filesystem path or an HTTP(S) URL. `seek` takes microseconds.
-`open` begins asynchronously; watch for `StateChanged` /`DurationChanged` events
-to learn when the media is ready.
+`open` and `play` enqueue work asynchronously. Watch for `StateChanged`,
+`DurationChanged`, and `Error` events for the authoritative result instead of
+blocking the host UI thread.
 
 ### Tracks and subtitles
 
