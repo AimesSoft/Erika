@@ -27,6 +27,7 @@ const AUDIO_CLOCK_SNAPSHOT_STALE_AFTER: Duration = Duration::from_millis(500);
 const AUDIO_OUTPUT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(10);
 const POSITION_EVENT_INTERVAL: Duration = Duration::from_millis(100);
 const FRAME_OUTPUT_BARRIER_TIMEOUT: Duration = Duration::from_secs(2);
+const SUBTITLE_FRAME_HANDOFF_MIN_CAPACITY: usize = 1024;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PlayerError {
@@ -768,6 +769,7 @@ struct PlayerInner {
     video_frame_sender: Option<Sender<PlayerVideoFrame>>,
     audio_frame_sender: Option<Sender<PlayerAudioFrame>>,
     subtitle_frame_sender: Option<Sender<PlayerSubtitleFrame>>,
+    subtitle_frame_backpressure_drops: u64,
 }
 
 struct PlayerLifecycle {
@@ -779,7 +781,6 @@ enum PlaybackCommand {
     Play {
         sequence: u64,
         generation: u64,
-        reply: Sender<std::result::Result<(), String>>,
     },
     Pause {
         sequence: u64,
@@ -899,6 +900,7 @@ impl Player {
                 video_frame_sender: None,
                 audio_frame_sender: None,
                 subtitle_frame_sender: None,
+                subtitle_frame_backpressure_drops: 0,
             })),
             lifecycle: Arc::new(Mutex::new(PlayerLifecycle {
                 epoch: 1,
@@ -980,13 +982,17 @@ impl Player {
 
     pub fn subscribe_subtitle_frames(&self) -> Receiver<PlayerSubtitleFrame> {
         // Subtitle frames are event data: dropping one can permanently remove an
-        // ASS chunk (style animation, sign, or overlapping line). Playback itself
-        // is paced and bounded upstream, so keep this handoff lossless.
-        let (sender, receiver) = unbounded();
-        self.inner
-            .lock()
-            .expect("player mutex poisoned")
-            .subtitle_frame_sender = Some(sender);
+        // ASS chunk (style animation, sign, or overlapping line). Keep a large
+        // handoff for temporary host stalls, but cap it so a subscriber that stops
+        // draining cannot grow memory without bound.
+        let capacity = self
+            .config
+            .subtitle_frame_queue_capacity
+            .max(SUBTITLE_FRAME_HANDOFF_MIN_CAPACITY);
+        let (sender, receiver) = bounded(capacity);
+        let mut inner = self.inner.lock().expect("player mutex poisoned");
+        inner.subtitle_frame_sender = Some(sender);
+        inner.subtitle_frame_backpressure_drops = 0;
         receiver
     }
 
@@ -1088,27 +1094,12 @@ impl Player {
                 inner.playback_generation.max(1),
             )
         };
-        let (reply, response) = bounded(1);
-        if commands
+        commands
             .send(PlaybackCommand::Play {
                 sequence,
                 generation,
-                reply,
             })
-            .is_err()
-        {
-            return Err(PlayerError::Playback(
-                "playback worker is not running".to_string(),
-            ));
-        }
-        response
-            .recv()
-            .map_err(|_| {
-                PlayerError::Playback(
-                    "playback worker stopped before acknowledging play".to_string(),
-                )
-            })?
-            .map_err(PlayerError::Playback)
+            .map_err(|_| PlayerError::Playback("playback worker is not running".to_string()))
     }
 
     pub fn pause(&self) -> Result<()> {
@@ -1959,14 +1950,9 @@ fn handle_playback_command(
         PlaybackCommand::Play {
             sequence,
             generation,
-            reply,
         } => {
             if !begin_playback_command_execution(sequence, last_executed_playback_command_sequence)
             {
-                let _ = reply.send(Err(format!(
-                    "play command sequence {sequence} arrived after sequence {} was already executed",
-                    *last_executed_playback_command_sequence,
-                )));
                 return true;
             }
             let state_before = engine.state();
@@ -1981,31 +1967,18 @@ fn handle_playback_command(
                         *playback_generation = playback_generation.saturating_add(1).max(1);
                     }
                     if !playback_command_sequence_is_current(inner, sequence) {
-                        let _ = reply.send(Err(format!(
-                            "play command sequence {sequence} was superseded during execution"
-                        )));
                         return true;
                     }
-                    let committed = commit_playback_command_intent(
+                    let _ = commit_playback_command_intent(
                         inner,
                         sequence,
                         Some(*playback_generation),
                         restarted.then_some(Duration::ZERO),
                         Some(PlayerState::Playing),
                     );
-                    let _ = reply.send(if committed {
-                        Ok(())
-                    } else {
-                        Err(format!(
-                            "play command sequence {sequence} was superseded before commit"
-                        ))
-                    });
                 }
                 Err(error) => {
                     if !playback_command_sequence_is_current(inner, sequence) {
-                        let _ = reply.send(Err(format!(
-                            "play command sequence {sequence} was superseded while failing: {error}"
-                        )));
                         return true;
                     }
                     let message = if restarting {
@@ -2017,9 +1990,8 @@ fn handle_playback_command(
                         engine,
                         inner,
                         if restarting { "play_restart" } else { "play" },
-                        message.clone(),
+                        message,
                     );
-                    let _ = reply.send(Err(message));
                 }
             }
         }
@@ -2709,14 +2681,38 @@ fn emit_audio_frame_from_worker(inner: &Arc<Mutex<PlayerInner>>, frame: PlayerAu
 
 fn emit_subtitle_frame_from_worker(inner: &Arc<Mutex<PlayerInner>>, frame: PlayerSubtitleFrame) {
     let mut inner = inner.lock().expect("player mutex poisoned");
-    let result = {
+    let (result, capacity) = {
         let Some(sender) = inner.subtitle_frame_sender.as_ref() else {
             return;
         };
-        sender.try_send(frame)
+        (
+            sender.try_send(frame),
+            sender
+                .capacity()
+                .unwrap_or(SUBTITLE_FRAME_HANDOFF_MIN_CAPACITY),
+        )
     };
     match result {
-        Ok(()) | Err(TrySendError::Full(_)) => {}
+        Ok(()) => {}
+        Err(TrySendError::Full(frame)) => {
+            inner.subtitle_frame_backpressure_drops =
+                inner.subtitle_frame_backpressure_drops.saturating_add(1);
+            let dropped = inner.subtitle_frame_backpressure_drops;
+            if dropped == 1 || dropped.is_power_of_two() {
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "subtitle_frame_handoff",
+                        "stage": "backlog_limit",
+                        "capacity": capacity,
+                        "droppedFrames": dropped,
+                        "trackId": frame.frame.track_id,
+                        "generation": frame.generation,
+                        "reason": "subtitle subscriber is not draining; dropping newest frame to bound memory",
+                    })
+                    .to_string(),
+                );
+            }
+        }
         Err(TrySendError::Disconnected(_)) => inner.subtitle_frame_sender = None,
     }
 }
@@ -2812,22 +2808,20 @@ mod tests {
         receiver
     }
 
-    fn play_with_test_ack(
+    fn play_with_test_commit(
         player: &Player,
         commands: &Receiver<PlaybackCommand>,
         restarted_from_eof: bool,
     ) -> (u64, u64) {
-        let caller = player.clone();
-        let pending_play = std::thread::spawn(move || caller.play());
-        let (sequence, generation, reply) = match commands
+        player.play().expect("queue play command");
+        let (sequence, generation) = match commands
             .recv_timeout(Duration::from_secs(1))
             .expect("play command")
         {
             PlaybackCommand::Play {
                 sequence,
                 generation,
-                reply,
-            } => (sequence, generation, reply),
+            } => (sequence, generation),
             _ => panic!("expected play command"),
         };
         let worker_generation = if restarted_from_eof {
@@ -2842,11 +2836,6 @@ mod tests {
             restarted_from_eof.then_some(Duration::ZERO),
             Some(PlayerState::Playing),
         ));
-        reply.send(Ok(())).expect("acknowledge play command");
-        pending_play
-            .join()
-            .expect("play caller thread")
-            .expect("play acknowledgement");
         (sequence, generation)
     }
 
@@ -3109,15 +3098,12 @@ mod tests {
             inner.state = PlayerState::Stopped;
             inner.current_media_time = Duration::from_secs(11);
         }
-        let caller = player.clone();
-        let pending_play = std::thread::spawn(move || caller.play());
-        let (play_sequence, reply) = match receiver
+        player.play().unwrap();
+        let play_sequence = match receiver
             .recv_timeout(Duration::from_secs(1))
             .expect("play command")
         {
-            PlaybackCommand::Play {
-                sequence, reply, ..
-            } => (sequence, reply),
+            PlaybackCommand::Play { sequence, .. } => sequence,
             _ => panic!("expected play command"),
         };
 
@@ -3137,36 +3123,33 @@ mod tests {
             Some(Duration::ZERO),
             Some(PlayerState::Playing),
         ));
-        reply
-            .send(Err("play command superseded by stop".to_string()))
-            .unwrap();
-
-        assert!(pending_play.join().unwrap().is_err());
         assert_eq!(player.state(), PlayerState::Stopped);
         assert_eq!(player.current_media_time(), Duration::ZERO);
     }
 
     #[test]
-    fn player_play_waits_for_worker_ack_before_committing_playing() {
+    fn player_play_returns_after_queueing_without_false_playing_state() {
         let player = Player::new(PlayerConfig::default());
         let receiver = install_test_runtime(&player, 2);
         {
             let mut inner = player.inner.lock().expect("player mutex poisoned");
             inner.state = PlayerState::Stopped;
         }
-        let caller = player.clone();
-        let play = std::thread::spawn(move || caller.play());
+        player.play().unwrap();
 
-        let reply = match receiver.recv_timeout(Duration::from_secs(1)).unwrap() {
-            PlaybackCommand::Play { reply, .. } => reply,
+        let sequence = match receiver.recv_timeout(Duration::from_secs(1)).unwrap() {
+            PlaybackCommand::Play { sequence, .. } => sequence,
             _ => panic!("expected play command"),
         };
         assert_eq!(player.state(), PlayerState::Stopped);
 
-        set_state_from_worker(&player.inner, PlayerState::Playing);
-        reply.send(Ok(())).unwrap();
-
-        play.join().unwrap().unwrap();
+        assert!(commit_playback_command_intent(
+            &player.inner,
+            sequence,
+            Some(1),
+            None,
+            Some(PlayerState::Playing),
+        ));
         assert_eq!(player.state(), PlayerState::Playing);
     }
 
@@ -3188,21 +3171,16 @@ mod tests {
         assert_eq!(player.state(), PlayerState::Stopped);
         assert_eq!(player.current_media_time(), Duration::ZERO);
 
-        let caller = player.clone();
-        let play = std::thread::spawn(move || caller.play());
+        player.play().unwrap();
 
-        let reply = match receiver.recv_timeout(Duration::from_secs(1)).unwrap() {
-            PlaybackCommand::Play { reply, .. } => reply,
+        match receiver.recv_timeout(Duration::from_secs(1)).unwrap() {
+            PlaybackCommand::Play { .. } => {}
             _ => panic!("expected play command"),
-        };
+        }
         let message = "video decoder unavailable: all fallback routes failed".to_string();
         set_state_from_worker(&player.inner, PlayerState::Error);
-        reply.send(Err(message.clone())).unwrap();
+        player.emit(PlayerEvent::Error(PlayerError::Playback(message)));
 
-        assert_eq!(
-            play.join().unwrap().unwrap_err(),
-            PlayerError::Playback(message)
-        );
         assert_eq!(player.state(), PlayerState::Error);
         assert_ne!(player.state(), PlayerState::Playing);
         assert_eq!(player.current_media_time(), Duration::ZERO);
@@ -3429,6 +3407,45 @@ mod tests {
     }
 
     #[test]
+    fn subtitle_event_handoff_bounds_a_stalled_subscriber() {
+        let player = Player::new(PlayerConfig {
+            subtitle_frame_queue_capacity: 1,
+            ..PlayerConfig::default()
+        });
+        let frames = player.subscribe_subtitle_frames();
+
+        for index in 0..=SUBTITLE_FRAME_HANDOFF_MIN_CAPACITY {
+            emit_subtitle_frame_from_worker(
+                &player.inner,
+                PlayerSubtitleFrame {
+                    frame: crate::subtitle::DecodedSubtitleFrame::new(
+                        2,
+                        Some(Duration::from_millis(index as u64)),
+                        Some(Duration::from_millis(index as u64 + 1)),
+                    ),
+                    pts: Some(Duration::from_millis(index as u64)),
+                    media_time: Duration::from_millis(index as u64),
+                    late_by: None,
+                    generation: 1,
+                },
+            );
+        }
+
+        assert_eq!(
+            frames.try_iter().count(),
+            SUBTITLE_FRAME_HANDOFF_MIN_CAPACITY
+        );
+        assert_eq!(
+            player
+                .inner
+                .lock()
+                .expect("player mutex poisoned")
+                .subtitle_frame_backpressure_drops,
+            1,
+        );
+    }
+
+    #[test]
     fn player_track_cache_defaults_to_empty_selection() {
         let player = Player::new(PlayerConfig::default());
 
@@ -3448,7 +3465,7 @@ mod tests {
             true,
         );
 
-        let (_, command_generation) = play_with_test_ack(&player, &commands, true);
+        let (_, command_generation) = play_with_test_commit(&player, &commands, true);
 
         assert_eq!(command_generation, 7);
         assert_eq!(player.current_media_time(), Duration::ZERO);
@@ -3471,7 +3488,7 @@ mod tests {
         let commands =
             install_fake_playback(&player, PlayerState::Stopped, Duration::ZERO, 7, false);
 
-        let (_, command_generation) = play_with_test_ack(&player, &commands, false);
+        let (_, command_generation) = play_with_test_commit(&player, &commands, false);
 
         assert_eq!(command_generation, 7);
         assert_eq!(player.current_media_time(), Duration::ZERO);
@@ -3523,7 +3540,7 @@ mod tests {
             commands.try_recv(),
             Ok(PlaybackCommand::Seek { position, .. }) if position == target
         ));
-        let (_, command_generation) = play_with_test_ack(&player, &commands, false);
+        let (_, command_generation) = play_with_test_commit(&player, &commands, false);
         assert_eq!(command_generation, 8);
         assert_eq!(player.current_media_time(), target);
         assert_eq!(player.playback_generation(), 8);
@@ -3662,11 +3679,9 @@ mod tests {
             underflow_frames: 0,
         });
         let mut snapshot_at = Some(Instant::now());
-        let (reply, _response) = bounded(1);
         let command = PlaybackCommand::Play {
             sequence: 1,
             generation: 1,
-            reply,
         };
 
         observe_audio_pump_command(
