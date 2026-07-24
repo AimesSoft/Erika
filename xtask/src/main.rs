@@ -186,7 +186,11 @@ impl NativeDependencyProfile {
                 flags.push("--disable-asm");
             }
         } else if target.is_apple() {
-            flags.push("--enable-videotoolbox");
+            flags.extend([
+                "--enable-videotoolbox",
+                "--enable-libdav1d",
+                "--enable-decoder=libdav1d",
+            ]);
         }
         if target.is_android() {
             assert_android_software_decoder_fallbacks(&flags);
@@ -616,7 +620,7 @@ fn fetch_dependency_sources(layout: &WorkspaceLayout, all: bool) -> Result<()> {
     fetch_and_extract(layout, FFMPEG_URLS, FFMPEG_ARCHIVE, FFMPEG_DIR)?;
     apply_ffmpeg_patches(layout)?;
     fetch_and_extract(layout, ZLIB_URLS, ZLIB_ARCHIVE, ZLIB_DIR)?;
-    if layout.target.is_android() {
+    if layout.target.is_android() || layout.target.is_apple() {
         fetch_and_extract(layout, DAV1D_URLS, DAV1D_ARCHIVE, DAV1D_DIR)?;
     }
     if all {
@@ -638,7 +642,7 @@ fn build_dependencies(options: DepsOptions) -> Result<()> {
     prepare_dependency_dirs(&layout)?;
     fetch_dependency_sources(&layout, options.all)?;
     build_zlib(&layout, options)?;
-    if options.target.is_android() {
+    if options.target.is_android() || options.target.is_apple() {
         build_dav1d(&layout, options)?;
     }
     build_ffmpeg(&layout, options)?;
@@ -895,7 +899,7 @@ fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
 }
 
 fn build_dav1d(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if !options.target.is_android() {
+    if !options.target.is_android() && !options.target.is_apple() {
         return Ok(());
     }
     if dav1d_build_marker_is_current(layout, options) && !options.force {
@@ -906,8 +910,8 @@ fn build_dav1d(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         return Ok(());
     }
 
-    // The marker includes the Android API and assembly policy. Never mix an
-    // older cross configuration with the current ABI build.
+    // The marker includes the target API and assembly policy. Never mix an
+    // older cross configuration with the current build.
     for path in [&layout.dav1d_build_dir, &layout.dav1d_prefix] {
         if path.exists() {
             fs::remove_dir_all(path).with_context(|| format!("remove {}", path.display()))?;
@@ -960,7 +964,11 @@ fn build_dav1d(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         format!(
             "dav1d={DAV1D_VERSION}\ntarget={}\nandroid_api={}\nasm={asm_enabled}\nprefix={}\n",
             options.target.triple().unwrap_or("host"),
-            android_api_level()?,
+            if options.target.is_android() {
+                android_api_level()?.to_string()
+            } else {
+                "n/a".to_string()
+            },
             layout.dav1d_prefix.display(),
         ),
     )
@@ -2083,7 +2091,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         "--prefix={}",
         path_to_forward_slashes(&layout.ffmpeg_prefix)
     ));
-    if options.target.is_android() {
+    if options.target.is_android() || options.target.is_apple() {
         let pkg_config = ensure_pkg_config_shim(layout)?;
         let dav1d_pkg_config_dir = layout.dav1d_prefix.join("lib/pkgconfig");
         configure
@@ -2136,6 +2144,16 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
             "-L{}",
             ffmpeg_flag_path_arg(&layout.zlib_prefix.join("lib"))
         ));
+        if options.target.is_apple() {
+            extra_cflags.push(format!(
+                "-I{}",
+                ffmpeg_flag_path_arg(&layout.dav1d_prefix.join("include"))
+            ));
+            extra_ldflags.push(format!(
+                "-L{}",
+                ffmpeg_flag_path_arg(&layout.dav1d_prefix.join("lib"))
+            ));
+        }
         configure.env("SDKROOT", &config.sdk_root);
         match options.target {
             NativeTarget::Aarch64Macos | NativeTarget::X86_64Macos => {
@@ -2276,7 +2294,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         format!(
             "ffmpeg={FFMPEG_VERSION}\npatchset={}\nzlib={ZLIB_VERSION}\ndav1d={}\nprofile={}\ntarget={}\nandroid_api={}\nprefix={}\nflags={}\n",
             ffmpeg_patchset,
-            if options.target.is_android() {
+            if options.target.is_android() || options.target.is_apple() {
                 DAV1D_VERSION
             } else {
                 "n/a"
@@ -2575,8 +2593,11 @@ fn ffmpeg_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions
     let Ok(marker) = fs::read_to_string(&layout.ffmpeg_build_marker) else {
         return false;
     };
-    let android_api_is_current = !options.target.is_android()
-        || android_api_level().is_ok_and(|api| marker.contains(&format!("android_api={api}\n")));
+    let android_api_is_current = if options.target.is_android() {
+        android_api_level().is_ok_and(|api| marker.contains(&format!("android_api={api}\n")))
+    } else {
+        marker.contains("android_api=n/a\n")
+    };
     let patchset_is_current = ffmpeg_patchset_id(&layout.root).is_ok_and(|patchset| {
         ffmpeg_build_marker_has_current_patchset(&marker, options.target, &patchset)
     });
@@ -2589,7 +2610,7 @@ fn ffmpeg_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions
         && marker.contains(&format!("zlib={ZLIB_VERSION}\n"))
         && marker.contains(&format!(
             "dav1d={}\n",
-            if options.target.is_android() {
+            if options.target.is_android() || options.target.is_apple() {
                 DAV1D_VERSION
             } else {
                 "n/a"
@@ -2601,21 +2622,25 @@ fn ffmpeg_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions
 }
 
 fn dav1d_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions) -> bool {
-    if !options.target.is_android() {
+    if !options.target.is_android() && !options.target.is_apple() {
         return true;
     }
     let Ok(marker) = fs::read_to_string(&layout.dav1d_build_marker) else {
         return false;
     };
-    android_api_level().is_ok_and(|api| {
+    let api_is_current = if options.target.is_android() {
+        android_api_level().is_ok_and(|api| marker.contains(&format!("android_api={api}\n")))
+    } else {
+        marker.contains("android_api=n/a\n")
+    };
+    api_is_current && {
         marker.contains(&format!("dav1d={DAV1D_VERSION}\n"))
             && marker.contains(&format!(
                 "target={}\n",
                 options.target.triple().unwrap_or("host")
             ))
-            && marker.contains(&format!("android_api={api}\n"))
             && marker.contains(&format!("asm={}\n", dav1d_asm_enabled(options.target)))
-    })
+    }
 }
 
 fn ffmpeg_build_marker_has_current_flags(
@@ -2674,12 +2699,12 @@ fn write_profile_metadata(
             FFMPEG_VERSION,
             ffmpeg_patchset,
             layout.ffmpeg_prefix.display(),
-            if target.is_android() {
+            if target.is_android() || target.is_apple() {
                 DAV1D_VERSION
             } else {
                 "n/a"
             },
-            if target.is_android() {
+            if target.is_android() || target.is_apple() {
                 layout.dav1d_prefix.display().to_string()
             } else {
                 "n/a".to_string()
@@ -3875,6 +3900,16 @@ mod tests {
                     .is_some_and(|decoders| decoders.split(',').any(|decoder| decoder == "vp8"))
             }));
             assert!(!flags.contains(&"--enable-videotoolbox"));
+        }
+    }
+
+    #[test]
+    fn apple_ffmpeg_plan_enables_videotoolbox_with_dav1d_fallback() {
+        for target in [NativeTarget::Aarch64Macos, NativeTarget::Aarch64Ios] {
+            let flags = NativeDependencyProfile::Lgpl.ffmpeg_configure_flags_for_target(target);
+            assert!(flags.contains(&"--enable-videotoolbox"));
+            assert!(flags.contains(&"--enable-libdav1d"));
+            assert!(flags.contains(&"--enable-decoder=libdav1d"));
         }
     }
 

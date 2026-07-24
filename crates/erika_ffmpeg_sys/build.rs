@@ -32,7 +32,10 @@ fn main() {
         );
     }
 
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+    if matches!(
+        env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("android" | "macos" | "ios")
+    ) {
         for archive in [
             "libavdevice.a",
             "libavfilter.a",
@@ -64,13 +67,18 @@ fn main() {
                 );
             }
         }
+    }
+    if matches!(
+        env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("android" | "macos" | "ios")
+    ) {
         let dav1d_header = dav1d_dir.join("include/dav1d/dav1d.h");
         let dav1d_archive = dav1d_dir.join("lib/libdav1d.a");
         for path in [&dav1d_header, &dav1d_archive] {
             println!("cargo:rerun-if-changed={}", path.display());
             if !path.is_file() {
                 panic!(
-                    "Android dav1d dependency was not found at {}. Run `{}` first, or set ERIKA_DAV1D_DIR.",
+                    "dav1d dependency was not found at {}. Run `{}` first, or set ERIKA_DAV1D_DIR.",
                     path.display(),
                     xtask_build_hint()
                 );
@@ -86,7 +94,10 @@ fn main() {
         "cargo:rustc-link-search=native={}",
         zlib_dir.join("lib").display()
     );
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+    if matches!(
+        env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("android" | "macos" | "ios")
+    ) {
         println!(
             "cargo:rustc-link-search=native={}",
             dav1d_dir.join("lib").display()
@@ -99,7 +110,10 @@ fn main() {
     println!("cargo:rustc-link-lib=static=swresample");
     println!("cargo:rustc-link-lib=static=swscale");
     println!("cargo:rustc-link-lib=static=avutil");
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+    if matches!(
+        env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("android" | "macos" | "ios")
+    ) {
         println!("cargo:rustc-link-lib=static=dav1d");
     }
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {

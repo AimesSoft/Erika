@@ -1107,7 +1107,6 @@ impl Decoder {
             }
         }
         open_result?;
-        #[cfg(target_os = "android")]
         if config.backend == DecoderBackend::Software && codec_id == sys::AVCodecID_AV_CODEC_ID_AV1
         {
             crate::trace::diagnostic(
@@ -1387,7 +1386,6 @@ impl Decoder {
 }
 
 fn software_decoder(codec_id: sys::AVCodecID) -> (*const sys::AVCodec, &'static str) {
-    #[cfg(target_os = "android")]
     if codec_id == sys::AVCodecID_AV_CODEC_ID_AV1 {
         return (
             unsafe { sys::avcodec_find_decoder_by_name(c"libdav1d".as_ptr()) },

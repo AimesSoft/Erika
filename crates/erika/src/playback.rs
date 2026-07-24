@@ -771,7 +771,10 @@ impl PlaybackSession {
                         decoder
                     }
                     Err(error)
-                        if should_fallback_video_decoder_open_error(decoder_config.backend) =>
+                        if should_fallback_video_decoder_open_error(
+                            decoder_config.backend,
+                            codec.as_deref(),
+                        ) =>
                     {
                         let surface_error = error.to_string();
                         if decoder_config.backend == DecoderBackend::MediaCodec
@@ -4682,11 +4685,11 @@ fn sanitize_playback_rate(rate: f64) -> f64 {
     }
 }
 
-fn should_fallback_video_decoder_open_error(backend: DecoderBackend) -> bool {
+fn should_fallback_video_decoder_open_error(backend: DecoderBackend, codec: Option<&str>) -> bool {
     matches!(
         backend,
         DecoderBackend::D3d11va | DecoderBackend::MediaCodec
-    )
+    ) || (backend == DecoderBackend::VideoToolbox && codec == Some("av1"))
 }
 
 fn video_decoder_open_stage(config: DecoderConfig) -> &'static str {
@@ -5103,16 +5106,24 @@ mod tests {
     #[test]
     fn decoder_open_fallback_is_enabled_for_platform_hardware_backends() {
         assert!(should_fallback_video_decoder_open_error(
-            DecoderBackend::D3d11va
+            DecoderBackend::D3d11va,
+            None
         ));
         assert!(should_fallback_video_decoder_open_error(
-            DecoderBackend::MediaCodec
+            DecoderBackend::MediaCodec,
+            None
         ));
         assert!(!should_fallback_video_decoder_open_error(
-            DecoderBackend::VideoToolbox
+            DecoderBackend::VideoToolbox,
+            Some("h264")
+        ));
+        assert!(should_fallback_video_decoder_open_error(
+            DecoderBackend::VideoToolbox,
+            Some("av1")
         ));
         assert!(!should_fallback_video_decoder_open_error(
-            DecoderBackend::Software
+            DecoderBackend::Software,
+            Some("av1")
         ));
     }
 
