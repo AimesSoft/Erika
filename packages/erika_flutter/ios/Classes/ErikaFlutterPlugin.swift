@@ -188,6 +188,11 @@ private struct ErikaPresenterConfigC {
   }
 }
 
+private struct ErikaHttpHeader {
+  var name: UnsafeMutablePointer<CChar>?
+  var value: UnsafeMutablePointer<CChar>?
+}
+
 private struct ErikaEventC {
   var kind: Int32 = 0
   var status: Int32 = 0
