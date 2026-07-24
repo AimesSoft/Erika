@@ -46,6 +46,8 @@ fn run_check(layer: *mut c_void) -> Result<(), String> {
             y: 260,
             width: 240,
             height: 32,
+            canvas_width: 640,
+            canvas_height: 360,
             rgba: solid_rgba(240, 32, [255, 255, 255, 220]),
         }],
         subtitle_alpha_planes: Vec::new(),

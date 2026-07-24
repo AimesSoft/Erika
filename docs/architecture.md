@@ -33,11 +33,11 @@ sources into `third_party/`. The default profile is `lgpl`.
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| FFmpeg | 7.1.1 | Demux, decode, audio resample, platform hardware decode |
+| FFmpeg | 8.1.2 | Demux, decode, audio resample, platform hardware decode |
 | dav1d | 1.5.1 | Android AV1 software fallback (8-bit and high bit depth) |
-| libass | 0.17.3 | ASS subtitle rendering |
-| FreeType | 2.13.3 | Font rasterization (libass dependency) |
-| HarfBuzz | 10.4.0 | Text shaping (libass dependency) |
+| libass | 0.17.5 | ASS subtitle rendering |
+| FreeType | 2.14.3 | Font rasterization (libass dependency) |
+| HarfBuzz | 14.2.1 | Text shaping (libass dependency) |
 | FriBidi | 1.0.16 | Bidirectional text (libass dependency) |
 
 All dependencies are statically linked. libass and its dependencies are enabled

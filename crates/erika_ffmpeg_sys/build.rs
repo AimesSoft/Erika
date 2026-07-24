@@ -220,7 +220,7 @@ fn enforce_bundled_ffmpeg_version(version_major: Option<u32>, include_dir: &Path
         return;
     }
     panic!(
-        "{} native core requires Erika's FFmpeg 7.x dependency bundle (libavutil >= 59), but found {:?} under {}. Run `{}` or set ERIKA_FFMPEG_DIR to that dist; set ERIKA_ALLOW_LEGACY_FFMPEG=1 only for local compatibility experiments.",
+        "{} native core requires Erika's FFmpeg 8.x dependency bundle (libavutil >= 59), but found {:?} under {}. Run `{}` or set ERIKA_FFMPEG_DIR to that dist; set ERIKA_ALLOW_LEGACY_FFMPEG=1 only for local compatibility experiments.",
         target_os.as_deref().unwrap_or("target"),
         version_major,
         include_dir.display(),

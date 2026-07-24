@@ -220,7 +220,7 @@ fn enforce_bundled_ffmpeg_version(version_major: Option<u32>) {
         return;
     }
     panic!(
-        "{} native core requires Erika's FFmpeg 7.x dependency bundle (libavutil >= 59), but found {:?}. Run `cargo run -p xtask -- deps build --profile {} --target {}` or set ERIKA_FFMPEG_DIR to that dist.",
+        "{} native core requires Erika's FFmpeg 8.x dependency bundle (libavutil >= 59), but found {:?}. Run `cargo run -p xtask -- deps build --profile {} --target {}` or set ERIKA_FFMPEG_DIR to that dist.",
         target_os.as_deref().unwrap_or("target"),
         version_major,
         native_profile(),

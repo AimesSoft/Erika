@@ -29,11 +29,11 @@ Rust Player Core
 
 | 依存関係 | バージョン | 目的 |
 |----------|-----------|------|
-| FFmpeg | 7.1.1 | Demux、decode、audio resample、プラットフォーム HW decode |
+| FFmpeg | 8.1.2 | Demux、decode、audio resample、プラットフォーム HW decode |
 | dav1d | 1.5.1 | Android AV1 software fallback（8-bit / high bit depth） |
-| libass | 0.17.3 | ASS 字幕描画 |
-| FreeType | 2.13.3 | フォントラスタライズ（libass 依存） |
-| HarfBuzz | 10.4.0 | テキストシェーピング（libass 依存） |
+| libass | 0.17.5 | ASS subtitle 描画 |
+| FreeType | 2.14.3 | フォントラスタライズ（libass 依存） |
+| HarfBuzz | 14.2.1 | テキストシェーピング（libass 依存） |
 | FriBidi | 1.0.16 | 双方向テキスト処理（libass 依存） |
 
 すべて静的リンクです。libass とその依存関係は既定で有効です（`features = ["libass"]`）。
@@ -180,4 +180,3 @@ embedding model と HDR strategy は `docs/flutter_embedding.md` を参照して
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
 | Android 8+ | MediaCodec / software | wgpu Vulkan + GLES fallback | AAudio | Available。SDR は検証済み、extended-linear scRGB は API 35 HDR 実機 acceptance 待ち |
-

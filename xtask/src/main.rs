@@ -10,21 +10,21 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
-const FFMPEG_VERSION: &str = "7.1.1";
+const FFMPEG_VERSION: &str = "8.1.2";
 const DAV1D_VERSION: &str = "1.5.1";
-const LIBASS_VERSION: &str = "0.17.3";
-const HARFBUZZ_VERSION: &str = "10.4.0";
-const FREETYPE_VERSION: &str = "2.13.3";
+const LIBASS_VERSION: &str = "0.17.5";
+const HARFBUZZ_VERSION: &str = "14.2.1";
+const FREETYPE_VERSION: &str = "2.14.3";
 const FRIBIDI_VERSION: &str = "1.0.16";
-const ZLIB_VERSION: &str = "1.3.1";
+const ZLIB_VERSION: &str = "1.3.2";
 const DEFAULT_ANDROID_API_LEVEL: u32 = 26;
 
-const FFMPEG_ARCHIVE: &str = "ffmpeg-7.1.1.tar.xz";
-const FFMPEG_DIR: &str = "ffmpeg-7.1.1";
-const FFMPEG_URLS: &[&str] = &["https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz"];
-const FFMPEG_PATCHSET_VERSION: &str = "erika-android-mediacodec-v2";
+const FFMPEG_ARCHIVE: &str = "ffmpeg-8.1.2.tar.xz";
+const FFMPEG_DIR: &str = "ffmpeg-8.1.2";
+const FFMPEG_URLS: &[&str] = &["https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz"];
+const FFMPEG_PATCHSET_VERSION: &str = "erika-android-mediacodec-v3";
 const FFMPEG_PATCHES: &[&str] =
-    &["third_party/patches/ffmpeg-7.1.1/0001-erika-mediacodec-bounded-receive.patch"];
+    &["third_party/patches/ffmpeg-8.1.2/0001-erika-mediacodec-bounded-receive.patch"];
 
 const DAV1D_ARCHIVE: &str = "dav1d-1.5.1.tar.gz";
 const DAV1D_DIR: &str = "dav1d-1.5.1";
@@ -33,25 +33,25 @@ const DAV1D_URLS: &[&str] = &[
     "https://codeload.github.com/videolan/dav1d/tar.gz/refs/tags/1.5.1",
 ];
 
-const LIBASS_ARCHIVE: &str = "libass-0.17.3.tar.xz";
-const LIBASS_DIR: &str = "libass-0.17.3";
+const LIBASS_ARCHIVE: &str = "libass-0.17.5.tar.xz";
+const LIBASS_DIR: &str = "libass-0.17.5";
 const LIBASS_URLS: &[&str] = &[
-    "https://github.com/libass/libass/releases/download/0.17.3/libass-0.17.3.tar.xz",
-    "https://codeload.github.com/libass/libass/tar.gz/refs/tags/0.17.3",
+    "https://github.com/libass/libass/releases/download/0.17.5/libass-0.17.5.tar.xz",
+    "https://codeload.github.com/libass/libass/tar.gz/refs/tags/0.17.5",
 ];
 
-const HARFBUZZ_ARCHIVE: &str = "harfbuzz-10.4.0.tar.xz";
-const HARFBUZZ_DIR: &str = "harfbuzz-10.4.0";
+const HARFBUZZ_ARCHIVE: &str = "harfbuzz-14.2.1.tar.xz";
+const HARFBUZZ_DIR: &str = "harfbuzz-14.2.1";
 const HARFBUZZ_URLS: &[&str] = &[
-    "https://github.com/harfbuzz/harfbuzz/releases/download/10.4.0/harfbuzz-10.4.0.tar.xz",
-    "https://codeload.github.com/harfbuzz/harfbuzz/tar.gz/refs/tags/10.4.0",
+    "https://github.com/harfbuzz/harfbuzz/releases/download/14.2.1/harfbuzz-14.2.1.tar.xz",
+    "https://codeload.github.com/harfbuzz/harfbuzz/tar.gz/refs/tags/14.2.1",
 ];
 
-const FREETYPE_ARCHIVE: &str = "freetype-2.13.3.tar.xz";
-const FREETYPE_DIR: &str = "freetype-2.13.3";
+const FREETYPE_ARCHIVE: &str = "freetype-2.14.3.tar.xz";
+const FREETYPE_DIR: &str = "freetype-2.14.3";
 const FREETYPE_URLS: &[&str] = &[
-    "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz",
-    "https://sourceforge.net/projects/freetype/files/freetype2/2.13.3/freetype-2.13.3.tar.xz/download",
+    "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz",
+    "https://sourceforge.net/projects/freetype/files/freetype2/2.14.3/freetype-2.14.3.tar.xz/download",
 ];
 
 const FRIBIDI_ARCHIVE: &str = "fribidi-1.0.16.tar.xz";
@@ -61,11 +61,11 @@ const FRIBIDI_URLS: &[&str] = &[
     "https://codeload.github.com/fribidi/fribidi/tar.gz/refs/tags/v1.0.16",
 ];
 
-const ZLIB_ARCHIVE: &str = "zlib-1.3.1.tar.gz";
-const ZLIB_DIR: &str = "zlib-1.3.1";
+const ZLIB_ARCHIVE: &str = "zlib-1.3.2.tar.gz";
+const ZLIB_DIR: &str = "zlib-1.3.2";
 const ZLIB_URLS: &[&str] = &[
-    "https://zlib.net/fossils/zlib-1.3.1.tar.gz",
-    "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
+    "https://zlib.net/zlib-1.3.2.tar.gz",
+    "https://github.com/madler/zlib/archive/refs/tags/v1.3.2.tar.gz",
 ];
 
 fn main() -> Result<()> {
@@ -3917,17 +3917,17 @@ mod tests {
         let target = NativeTarget::X86_64Android;
         let patchset = "erika-android-mediacodec-v1-deadbeef";
         assert!(!ffmpeg_build_marker_has_current_patchset(
-            "ffmpeg=7.1.1\n",
+            &format!("ffmpeg={FFMPEG_VERSION}\n"),
             target,
             patchset
         ));
         assert!(ffmpeg_build_marker_has_current_patchset(
-            &format!("ffmpeg=7.1.1\npatchset={patchset}\n"),
+            &format!("ffmpeg={FFMPEG_VERSION}\npatchset={patchset}\n"),
             target,
             patchset
         ));
         assert!(ffmpeg_build_marker_has_current_patchset(
-            "ffmpeg=7.1.1\n",
+            &format!("ffmpeg={FFMPEG_VERSION}\n"),
             NativeTarget::Host,
             patchset
         ));
@@ -3960,6 +3960,7 @@ mod tests {
     fn ffmpeg_patch_is_opt_in_and_uses_zero_timeout_dequeues() {
         let root = workspace_root().unwrap();
         let patch = fs::read_to_string(root.join(FFMPEG_PATCHES[0])).unwrap();
+        assert_eq!(parse_unified_patch(&patch).unwrap().len(), 3);
         assert!(patch.contains("\"erika_nonblocking\""));
         assert!(patch.contains("OFFSET(erika_nonblocking), AV_OPT_TYPE_BOOL, {.i64 = 0}"));
         assert!(patch.contains("s->ctx->erika_nonblocking = s->erika_nonblocking"));
