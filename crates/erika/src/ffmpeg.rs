@@ -1043,7 +1043,7 @@ impl Decoder {
                 }
                 .is_null());
         unsafe { sys::av_dict_free(&mut codec_options) };
-        let open_result = check(open_code, "avcodec_open2");
+        let mut open_result = check(open_code, "avcodec_open2");
         #[cfg(target_os = "android")]
         if open_result.is_ok()
             && config.backend == DecoderBackend::MediaCodec
@@ -1175,7 +1175,7 @@ impl Decoder {
     }
 
     pub fn receive_frame(&mut self) -> Result<DecoderOutputFrame> {
-        let frame = Frame::alloc(self.time_base)?;
+        let mut frame = Frame::alloc(self.time_base)?;
         let code = unsafe { sys::avcodec_receive_frame(self.context, frame.ptr) };
         if code == av_error(EAGAIN) {
             return Ok(DecoderOutputFrame::NeedMoreInput);
@@ -1674,7 +1674,7 @@ impl Frame {
     }
 
     pub fn try_clone_ref(&self) -> Result<Self> {
-        let frame = Frame::alloc(self.time_base)?;
+        let mut frame = Frame::alloc(self.time_base)?;
         check(
             unsafe { sys::av_frame_ref(frame.ptr, self.ptr) },
             "av_frame_ref",
