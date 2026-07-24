@@ -923,7 +923,8 @@ impl Decoder {
                 mediacodec_decoder(codec_id),
                 "avcodec_find_decoder_by_name(MediaCodec)",
             ),
-            DecoderBackend::VideoToolbox | DecoderBackend::D3d11va => (
+            DecoderBackend::VideoToolbox => videotoolbox_decoder(codec_id),
+            DecoderBackend::D3d11va => (
                 unsafe { sys::avcodec_find_decoder(codec_id) },
                 "avcodec_find_decoder",
             ),
@@ -1390,6 +1391,19 @@ fn software_decoder(codec_id: sys::AVCodecID) -> (*const sys::AVCodec, &'static 
         return (
             unsafe { sys::avcodec_find_decoder_by_name(c"libdav1d".as_ptr()) },
             "avcodec_find_decoder_by_name(libdav1d)",
+        );
+    }
+    (
+        unsafe { sys::avcodec_find_decoder(codec_id) },
+        "avcodec_find_decoder",
+    )
+}
+
+fn videotoolbox_decoder(codec_id: sys::AVCodecID) -> (*const sys::AVCodec, &'static str) {
+    if codec_id == sys::AVCodecID_AV_CODEC_ID_AV1 {
+        return (
+            unsafe { sys::avcodec_find_decoder_by_name(c"av1".as_ptr()) },
+            "avcodec_find_decoder_by_name(av1)",
         );
     }
     (
@@ -3943,6 +3957,13 @@ mod tests {
     #[test]
     fn linked_ffmpeg_reports_version() {
         assert!(!version().is_empty());
+    }
+
+    #[test]
+    fn videotoolbox_uses_ffmpeg_av1_decoder() {
+        let (codec, operation) = videotoolbox_decoder(sys::AVCodecID_AV_CODEC_ID_AV1);
+        assert_eq!(operation, "avcodec_find_decoder_by_name(av1)");
+        assert!(!codec.is_null());
     }
 
     #[test]
