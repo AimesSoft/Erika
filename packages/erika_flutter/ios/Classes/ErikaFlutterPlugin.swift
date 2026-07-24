@@ -346,7 +346,7 @@ private final class ErikaNativeLibrary {
   typealias CreateWithOutputModeFn = @convention(c) (Int32, Float) -> UnsafeMutableRawPointer?
   typealias DestroyFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
   typealias OpenFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Int32
-  typealias OpenWithHeadersFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafePointer<ErikaHttpHeader>?, UInt) -> Int32
+  typealias OpenWithHeadersFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, UInt) -> Int32
   typealias CommandFn = @convention(c) (UnsafeMutableRawPointer?) -> Int32
   typealias SeekFn = @convention(c) (UnsafeMutableRawPointer?, UInt64) -> Int32
   typealias SetPlaybackRateFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
@@ -616,7 +616,7 @@ private final class ErikaPlayerHost {
         }
         var headers = zip(names, values).map { ErikaHttpHeader(name: $0.0, value: $0.1) }
         try headers.withUnsafeBufferPointer { buffer in
-          try check(openWithHeaders(handle, cString, buffer.baseAddress, UInt(headers.count)), operation: "open")
+          try check(openWithHeaders(handle, cString, buffer.baseAddress.map(UnsafeRawPointer.init), UInt(headers.count)), operation: "open")
         }
       } else {
         try check(library.open(handle, cString), operation: "open")
