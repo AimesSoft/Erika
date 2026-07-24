@@ -1472,7 +1472,11 @@ impl PlaybackSession {
         let decoder_alive = self.video_decoder.is_some();
         let discarded = self.discard_queued_frames_and_packets();
         trace_discarded_playback_queues("seek_before_decoder_transition", discarded, decoder_alive);
-        self.video_fallback_waiting_for_keyframe = self.video_decoder.is_some();
+        let bypass_seek_keyframe_gate = cfg!(any(target_os = "macos", target_os = "ios"))
+            && self.active_video_decoder_backend() == Some(DecoderBackend::VideoToolbox)
+            && self.active_video_codec_is_av1();
+        self.video_fallback_waiting_for_keyframe =
+            self.video_decoder.is_some() && !bypass_seek_keyframe_gate;
         if self.video_fallback_waiting_for_keyframe {
             trace::diagnostic(
                 serde_json::json!({
