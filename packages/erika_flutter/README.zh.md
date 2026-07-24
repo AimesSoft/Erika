@@ -33,6 +33,16 @@ cargo run -p xtask -- deps build --all --profile lgpl
 cargo build -p erika_capi
 ```
 
+macOS CocoaPod 默认构建 universal 动态库（arm64 + x86_64），并使用 `lipo` 合并两个 Rust target。可通过 `ERIKA_MACOS_ARCH` 选择构建架构：
+
+```sh
+ERIKA_MACOS_ARCH=arm64 flutter build macos
+ERIKA_MACOS_ARCH=x86_64 flutter build macos
+ERIKA_MACOS_ARCH=universal flutter build macos
+```
+
+可选值为 `arm64`、`x86_64` 和 `universal`，默认值是 `universal`。选择单一架构时只构建对应的 Rust target，不执行 `lipo`；其他值会使 CocoaPod 构建明确失败。
+
 ## iOS Setup
 
 iOS CocoaPod script phase 会在 Xcode 构建期间自动构建 Erika 原生依赖和 C ABI static library。需要安装对应 iOS target 的 Rust toolchain：

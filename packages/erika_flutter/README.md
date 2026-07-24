@@ -48,6 +48,19 @@ app build. At runtime the plugin loads it via `dlopen`.
 Overrides: `ERIKA_CAPI_DYLIB` forces the runtime dylib path; `ERIKA_MACOS_CAPI_DYLIB`
 points the build phase at an explicit dylib to bundle instead of building.
 
+Set `ERIKA_MACOS_ARCH` to choose the macOS architecture built by the CocoaPod
+script phase. It defaults to `universal`:
+
+```sh
+ERIKA_MACOS_ARCH=arm64 flutter build macos
+ERIKA_MACOS_ARCH=x86_64 flutter build macos
+ERIKA_MACOS_ARCH=universal flutter build macos
+```
+
+`arm64` builds only `aarch64-apple-darwin`, `x86_64` builds only
+`x86_64-apple-darwin`, and `universal` builds both targets and combines them
+with `lipo`.
+
 ## Prebuilt binaries (opt-in)
 
 To skip building Erika (and FFmpeg) from source, set `ERIKA_PREBUILT=1` in the

@@ -34,6 +34,16 @@ fi
 
 ERIKA_NATIVE_PROFILE="${ERIKA_NATIVE_PROFILE:-lgpl}"
 HOST_JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+ERIKA_MACOS_ARCH="${ERIKA_MACOS_ARCH:-universal}"
+case "$ERIKA_MACOS_ARCH" in
+  arm64) RUST_TARGETS="aarch64-apple-darwin" ;;
+  x86_64) RUST_TARGETS="x86_64-apple-darwin" ;;
+  universal) RUST_TARGETS="aarch64-apple-darwin x86_64-apple-darwin" ;;
+  *)
+    echo "error: ERIKA_MACOS_ARCH must be arm64, x86_64, or universal; got '$ERIKA_MACOS_ARCH'" >&2
+    exit 1
+    ;;
+esac
 
 if [ -n "${ERIKA_MACOS_CAPI_PROFILE:-}" ]; then
   CARGO_PROFILE="$ERIKA_MACOS_CAPI_PROFILE"
@@ -57,7 +67,7 @@ mkdir -p "$DEST_DIR"
 # v0.1.3). Any failure falls through to the source build. ERIKA_MACOS_CAPI_DYLIB
 # takes precedence (explicit dylib path).
 UNIVERSAL_DYLIB=""
-if [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ] && [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_MACOS_CAPI_DYLIB:-}" ]; then
+if [ "$ERIKA_MACOS_ARCH" = "universal" ] && [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ] && [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_MACOS_CAPI_DYLIB:-}" ]; then
   PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.3}"
   PREBUILT_WORK="$ERIKA_ROOT/target/erika-prebuilt-macos"
   PREBUILT_ZIP="$PREBUILT_WORK/erika-capi-macos-universal.zip"
@@ -78,7 +88,6 @@ fi
 if [ -n "${ERIKA_MACOS_CAPI_DYLIB:-}" ]; then
   UNIVERSAL_DYLIB="$ERIKA_MACOS_CAPI_DYLIB"
 elif [ -z "$UNIVERSAL_DYLIB" ]; then
-  RUST_TARGETS="aarch64-apple-darwin x86_64-apple-darwin"
   if command -v rustup >/dev/null 2>&1; then
     rustup target add $RUST_TARGETS
   fi
@@ -98,9 +107,13 @@ elif [ -z "$UNIVERSAL_DYLIB" ]; then
     fi
     LIPO_INPUTS="$LIPO_INPUTS $ARCH_DYLIB"
   done
-  UNIVERSAL_DYLIB="$ERIKA_ROOT/target/erika-macos-universal/liberika_capi.dylib"
-  mkdir -p "$(dirname "$UNIVERSAL_DYLIB")"
-  lipo -create $LIPO_INPUTS -output "$UNIVERSAL_DYLIB"
+  if [ "$ERIKA_MACOS_ARCH" = "universal" ]; then
+    UNIVERSAL_DYLIB="$ERIKA_ROOT/target/erika-macos-universal/liberika_capi.dylib"
+    mkdir -p "$(dirname "$UNIVERSAL_DYLIB")"
+    lipo -create $LIPO_INPUTS -output "$UNIVERSAL_DYLIB"
+  else
+    UNIVERSAL_DYLIB="$ARCH_DYLIB"
+  fi
 fi
 
 if [ ! -f "$UNIVERSAL_DYLIB" ]; then

@@ -33,6 +33,19 @@ cargo run -p xtask -- deps build --all --profile lgpl
 cargo build -p erika_capi
 ```
 
+CocoaPod の script phase で build する macOS architecture は
+`ERIKA_MACOS_ARCH` で選択できます。既定値は `universal` です。
+
+```sh
+ERIKA_MACOS_ARCH=arm64 flutter build macos
+ERIKA_MACOS_ARCH=x86_64 flutter build macos
+ERIKA_MACOS_ARCH=universal flutter build macos
+```
+
+`arm64` は `aarch64-apple-darwin` のみ、`x86_64` は
+`x86_64-apple-darwin` のみを build します。`universal` は両方の target を
+build して `lipo` で結合します。
+
 ## iOS Setup
 
 iOS の CocoaPod script phase が、Xcode build 中に Erika の native dependency と C ABI static library を自動 build します。対応する iOS target の Rust toolchain が必要です。
@@ -153,4 +166,3 @@ await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16);
 ```
 
 `ErikaUpscalerMode.off` で無効化します。`player.getUpscalerStatus()` では要求モード、実行 backend、fallback 回数、upscaled frame 数、最近の GPU timing を確認できます。Apple は Metal、Android は planar と MediaCodec Surface frame の両方で wgpu/Vulkan compute を使います。GLES 3.0 は通常再生を維持し、明示的な `inactive` fallback を報告します。
-
