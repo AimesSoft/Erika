@@ -72,6 +72,13 @@ pub enum ErikaStatus {
     NoEvent = 5,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ErikaHttpHeader {
+    pub name: *const c_char,
+    pub value: *const c_char,
+}
+
 thread_local! {
     static LAST_ERROR: RefCell<Option<String>> = RefCell::new(None);
 }
@@ -650,6 +657,16 @@ pub unsafe extern "C" fn erika_string_free(value: *mut c_char) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_open(handle: *mut ErikaHandle, uri: *const c_char) -> ErikaStatus {
+    unsafe { erika_open_with_headers(handle, uri, std::ptr::null(), 0) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_open_with_headers(
+    handle: *mut ErikaHandle,
+    uri: *const c_char,
+    headers: *const ErikaHttpHeader,
+    header_count: usize,
+) -> ErikaStatus {
     with_handle_mut(handle, |handle| {
         let uri = match c_string(uri) {
             Ok(uri) => uri,
@@ -659,7 +676,15 @@ pub unsafe extern "C" fn erika_open(handle: *mut ErikaHandle, uri: *const c_char
             "fn=erika_open handle={handle:p} uri={}",
             redacted_uri(&uri)
         ));
-        let status = status_from_player_result(handle.player.open(MediaRequest::new(uri)));
+        let headers = match c_http_headers(headers, header_count) {
+            Ok(headers) => headers,
+            Err(status) => return status,
+        };
+        let status = status_from_player_result(
+            handle
+                .player
+                .open(MediaRequest::new(uri).with_http_headers(headers)),
+        );
         capi_trace(format!(
             "fn=erika_open.done handle={handle:p} status={status:?}"
         ));
@@ -1055,6 +1080,22 @@ pub extern "C" fn erika_presenter_create_with_output_mode(
     std::ptr::null_mut()
 }
 
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+)))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_open_with_headers(
+    _handle: *mut std::ffi::c_void,
+    _uri: *const c_char,
+    _headers: *const ErikaHttpHeader,
+    _header_count: usize,
+) -> ErikaStatus {
+    ErikaStatus::PlayerError
+}
+
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
@@ -1386,6 +1427,22 @@ pub unsafe extern "C" fn erika_presenter_open(
     handle: *mut ErikaPresenterHandle,
     uri: *const c_char,
 ) -> ErikaStatus {
+    unsafe { erika_presenter_open_with_headers(handle, uri, std::ptr::null(), 0) }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_open_with_headers(
+    handle: *mut ErikaPresenterHandle,
+    uri: *const c_char,
+    headers: *const ErikaHttpHeader,
+    header_count: usize,
+) -> ErikaStatus {
     with_presenter_mut(handle, |handle| {
         let uri = match c_string(uri) {
             Ok(uri) => uri,
@@ -1395,7 +1452,15 @@ pub unsafe extern "C" fn erika_presenter_open(
             "fn=erika_presenter_open handle={handle:p} uri={}",
             redacted_uri(&uri)
         ));
-        let status = status_from_player_result(handle.presenter.open(MediaRequest::new(uri)));
+        let headers = match c_http_headers(headers, header_count) {
+            Ok(headers) => headers,
+            Err(status) => return status,
+        };
+        let status = status_from_player_result(
+            handle
+                .presenter
+                .open(MediaRequest::new(uri).with_http_headers(headers)),
+        );
         capi_trace(format!(
             "fn=erika_presenter_open.done handle={handle:p} status={status:?}"
         ));
@@ -2964,6 +3029,32 @@ fn c_string(ptr: *const c_char) -> Result<String, ErikaStatus> {
         })
 }
 
+fn c_http_headers(
+    headers: *const ErikaHttpHeader,
+    header_count: usize,
+) -> Result<Vec<(String, String)>, ErikaStatus> {
+    if header_count == 0 {
+        return Ok(Vec::new());
+    }
+    if headers.is_null() {
+        set_last_error("HTTP headers pointer is null while header count is non-zero");
+        return Err(ErikaStatus::NullPointer);
+    }
+    let headers = unsafe { std::slice::from_raw_parts(headers, header_count) };
+    headers
+        .iter()
+        .map(|header| {
+            let name = c_string(header.name)?;
+            let value = c_string(header.value)?;
+            if name.trim().is_empty() {
+                set_last_error("HTTP header name is empty");
+                return Err(ErikaStatus::PlayerError);
+            }
+            Ok((name, value))
+        })
+        .collect()
+}
+
 fn optional_c_string(ptr: *const c_char) -> Option<String> {
     if ptr.is_null() {
         return None;
@@ -3491,6 +3582,85 @@ mod tests {
         assert_eq!(status, ErikaStatus::NullPointer);
 
         unsafe { erika_destroy(handle) };
+    }
+
+    #[test]
+    fn c_http_headers_validate_parameters_and_preserve_order() {
+        assert_eq!(c_http_headers(std::ptr::null(), 0), Ok(Vec::new()));
+        assert_eq!(
+            c_http_headers(std::ptr::null(), 1),
+            Err(ErikaStatus::NullPointer)
+        );
+
+        let first_name = CString::new("Accept").unwrap();
+        let first_value = CString::new("video/mp4").unwrap();
+        let second_name = CString::new("X-Test").unwrap();
+        let second_value = CString::new("two").unwrap();
+        let headers = [
+            ErikaHttpHeader {
+                name: first_name.as_ptr(),
+                value: first_value.as_ptr(),
+            },
+            ErikaHttpHeader {
+                name: second_name.as_ptr(),
+                value: second_value.as_ptr(),
+            },
+        ];
+        assert_eq!(
+            c_http_headers(headers.as_ptr(), headers.len()).unwrap(),
+            vec![
+                ("Accept".to_string(), "video/mp4".to_string()),
+                ("X-Test".to_string(), "two".to_string()),
+            ]
+        );
+
+        let null_name = [ErikaHttpHeader {
+            name: std::ptr::null(),
+            value: first_value.as_ptr(),
+        }];
+        assert_eq!(
+            c_http_headers(null_name.as_ptr(), 1),
+            Err(ErikaStatus::NullPointer)
+        );
+
+        let null_value = [ErikaHttpHeader {
+            name: first_name.as_ptr(),
+            value: std::ptr::null(),
+        }];
+        assert_eq!(
+            c_http_headers(null_value.as_ptr(), 1),
+            Err(ErikaStatus::NullPointer)
+        );
+
+        let invalid_utf8 = [0xff_u8, 0];
+        let invalid_name = [ErikaHttpHeader {
+            name: invalid_utf8.as_ptr().cast(),
+            value: first_value.as_ptr(),
+        }];
+        assert_eq!(
+            c_http_headers(invalid_name.as_ptr(), 1),
+            Err(ErikaStatus::InvalidUtf8)
+        );
+
+        let empty_name = CString::new("").unwrap();
+        let empty_header = [ErikaHttpHeader {
+            name: empty_name.as_ptr(),
+            value: first_value.as_ptr(),
+        }];
+        assert_eq!(
+            c_http_headers(empty_header.as_ptr(), 1),
+            Err(ErikaStatus::PlayerError)
+        );
+
+        let empty_value = CString::new("").unwrap();
+        let empty_value_header = [ErikaHttpHeader {
+            name: first_name.as_ptr(),
+            value: empty_value.as_ptr(),
+        }];
+        assert_eq!(
+            c_http_headers(empty_value_header.as_ptr(), 1),
+            Ok(vec![("Accept".to_string(), String::new())])
+        );
     }
 
     #[test]

@@ -75,10 +75,7 @@ enum ErikaOutputFallbackReason {
     5,
     'native_window_dataspace_api_unavailable',
   ),
-  scrgbDataSpaceVerificationFailed(
-    6,
-    'scrgb_dataspace_verification_failed',
-  ),
+  scrgbDataSpaceVerificationFailed(6, 'scrgb_dataspace_verification_failed'),
   surfaceConfigureFailed(7, 'surface_configure_failed'),
   legacyAppleEdrUnsupported(8, 'legacy_apple_edr_unsupported'),
   unknown(-1, 'unknown');
@@ -462,8 +459,9 @@ class _ErikaDanmakuConfigPatch {
     this.blockBottom,
     this.blockScroll,
     List<String>? blockWords,
-  }) : blockWords =
-            blockWords == null ? null : List<String>.unmodifiable(blockWords);
+  }) : blockWords = blockWords == null
+           ? null
+           : List<String>.unmodifiable(blockWords);
 
   final bool? enabled;
   final double? fontSize;
@@ -545,36 +543,39 @@ class _ErikaDanmakuConfigPatch {
       enabled: _changed(enabled, previous?.enabled) ? enabled : null,
       fontSize: _changed(fontSize, previous?.fontSize) ? fontSize : null,
       opacity: _changed(opacity, previous?.opacity) ? opacity : null,
-      displayArea:
-          _changed(displayArea, previous?.displayArea) ? displayArea : null,
+      displayArea: _changed(displayArea, previous?.displayArea)
+          ? displayArea
+          : null,
       scrollDurationSeconds:
           _changed(scrollDurationSeconds, previous?.scrollDurationSeconds)
-              ? scrollDurationSeconds
-              : null,
+          ? scrollDurationSeconds
+          : null,
       scrollSpeedFactor:
           _changed(scrollSpeedFactor, previous?.scrollSpeedFactor)
-              ? scrollSpeedFactor
-              : null,
+          ? scrollSpeedFactor
+          : null,
       trackGapRatio: _changed(trackGapRatio, previous?.trackGapRatio)
           ? trackGapRatio
           : null,
-      outlineWidth:
-          _changed(outlineWidth, previous?.outlineWidth) ? outlineWidth : null,
+      outlineWidth: _changed(outlineWidth, previous?.outlineWidth)
+          ? outlineWidth
+          : null,
       shadowOffsetX: _changed(shadowOffsetX, previous?.shadowOffsetX)
           ? shadowOffsetX
           : null,
       shadowOffsetY: _changed(shadowOffsetY, previous?.shadowOffsetY)
           ? shadowOffsetY
           : null,
-      shadowStyle:
-          _changed(shadowStyle, previous?.shadowStyle) ? shadowStyle : null,
+      shadowStyle: _changed(shadowStyle, previous?.shadowStyle)
+          ? shadowStyle
+          : null,
       customFontFamily: _changed(customFontFamily, previous?.customFontFamily)
           ? customFontFamily
           : null,
       customFontFilePath:
           _changed(customFontFilePath, previous?.customFontFilePath)
-              ? customFontFilePath
-              : null,
+          ? customFontFilePath
+          : null,
       mergeDuplicates: _changed(mergeDuplicates, previous?.mergeDuplicates)
           ? mergeDuplicates
           : null,
@@ -583,20 +584,24 @@ class _ErikaDanmakuConfigPatch {
           : null,
       allowScrollOverwrite:
           _changed(allowScrollOverwrite, previous?.allowScrollOverwrite)
-              ? allowScrollOverwrite
-              : null,
-      maxQuantity:
-          _changed(maxQuantity, previous?.maxQuantity) ? maxQuantity : null,
+          ? allowScrollOverwrite
+          : null,
+      maxQuantity: _changed(maxQuantity, previous?.maxQuantity)
+          ? maxQuantity
+          : null,
       maxLinesPerMode: _changed(maxLinesPerMode, previous?.maxLinesPerMode)
           ? maxLinesPerMode
           : null,
       blockTop: _changed(blockTop, previous?.blockTop) ? blockTop : null,
-      blockBottom:
-          _changed(blockBottom, previous?.blockBottom) ? blockBottom : null,
-      blockScroll:
-          _changed(blockScroll, previous?.blockScroll) ? blockScroll : null,
-      blockWords:
-          _changedList(blockWords, previous?.blockWords) ? blockWords : null,
+      blockBottom: _changed(blockBottom, previous?.blockBottom)
+          ? blockBottom
+          : null,
+      blockScroll: _changed(blockScroll, previous?.blockScroll)
+          ? blockScroll
+          : null,
+      blockWords: _changedList(blockWords, previous?.blockWords)
+          ? blockWords
+          : null,
     );
   }
 
@@ -705,9 +710,14 @@ class ErikaPlayer {
     return _requireActiveAfter(player);
   }
 
-  Future<void> open(String uri) async {
+  Future<void> open(String uri, {Map<String, String>? httpHeaders}) async {
     final playerId = await ensureCreated();
-    await _invoke('open', <String, Object?>{'playerId': playerId, 'uri': uri});
+    await _invoke('open', <String, Object?>{
+      'playerId': playerId,
+      'uri': uri,
+      if (httpHeaders != null && httpHeaders.isNotEmpty)
+        'httpHeaders': httpHeaders,
+    });
   }
 
   Future<void> play() async {
@@ -857,11 +867,11 @@ class ErikaPlayer {
     final playerId = await ensureCreated();
     final trackId = await _channel
         .invokeMethod<int>('addDanmakuTrackFile', <String, Object?>{
-      'playerId': playerId,
-      'uri': uri,
-      if (name != null) 'name': name,
-      'offsetMicros': offset.inMicroseconds,
-    });
+          'playerId': playerId,
+          'uri': uri,
+          if (name != null) 'name': name,
+          'offsetMicros': offset.inMicroseconds,
+        });
     if (trackId == null || trackId <= 0) {
       throw StateError('Erika danmaku track add returned no track id.');
     }
@@ -876,11 +886,11 @@ class ErikaPlayer {
     final playerId = await ensureCreated();
     final trackId = await _channel
         .invokeMethod<int>('addDanmakuTrackJson', <String, Object?>{
-      'playerId': playerId,
-      'json': json,
-      if (name != null) 'name': name,
-      'offsetMicros': offset.inMicroseconds,
-    });
+          'playerId': playerId,
+          'json': json,
+          if (name != null) 'name': name,
+          'offsetMicros': offset.inMicroseconds,
+        });
     if (trackId == null || trackId <= 0) {
       throw StateError('Erika danmaku track add returned no track id.');
     }
@@ -1212,7 +1222,8 @@ class ErikaPlayer {
   }
 
   Future<int> _create() async {
-    final requestedHeadroom = edrHeadroom ??
+    final requestedHeadroom =
+        edrHeadroom ??
         (outputMode == ErikaOutputMode.extendedLinear ? 4.0 : null);
     final arguments = <String, Object?>{
       if (outputMode case final mode?) 'outputMode': mode.nativeValue,

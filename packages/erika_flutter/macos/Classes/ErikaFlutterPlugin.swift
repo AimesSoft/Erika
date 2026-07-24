@@ -212,6 +212,7 @@ private final class ErikaNativeLibrary {
   typealias CreateWithOutputModeFn = @convention(c) (Int32, Float) -> UnsafeMutableRawPointer?
   typealias DestroyFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
   typealias OpenFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Int32
+  typealias OpenWithHeadersFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafePointer<ErikaHttpHeader>?, UInt) -> Int32
   typealias CommandFn = @convention(c) (UnsafeMutableRawPointer?) -> Int32
   typealias SeekFn = @convention(c) (UnsafeMutableRawPointer?, UInt64) -> Int32
   typealias SetPlaybackRateFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
@@ -270,6 +271,7 @@ private final class ErikaNativeLibrary {
   let createWithOutputMode: CreateWithOutputModeFn?
   let destroy: DestroyFn
   let open: OpenFn
+  let openWithHeaders: OpenWithHeadersFn?
   let play: CommandFn
   let pause: CommandFn
   let stop: CommandFn
@@ -321,6 +323,7 @@ private final class ErikaNativeLibrary {
     createWithOutputMode = Self.loadOptional("erika_presenter_create_with_output_mode", from: libraryHandle, as: CreateWithOutputModeFn.self)
     destroy = try Self.load("erika_presenter_destroy", from: libraryHandle, as: DestroyFn.self)
     open = try Self.load("erika_presenter_open", from: libraryHandle, as: OpenFn.self)
+    openWithHeaders = Self.loadOptional("erika_presenter_open_with_headers", from: libraryHandle, as: OpenWithHeadersFn.self)
     play = try Self.load("erika_presenter_play", from: libraryHandle, as: CommandFn.self)
     pause = try Self.load("erika_presenter_pause", from: libraryHandle, as: CommandFn.self)
     stop = try Self.load("erika_presenter_stop", from: libraryHandle, as: CommandFn.self)
@@ -467,9 +470,22 @@ private final class ErikaPlayerHost {
     library.destroy(handle)
   }
 
-  func open(uri: String) throws {
+  func open(uri: String, httpHeaders: [String: String]) throws {
     try uri.withCString { cString in
-      try check(library.open(handle, cString), operation: "open")
+      if let openWithHeaders = library.openWithHeaders, !httpHeaders.isEmpty {
+        let names = httpHeaders.keys.map { strdup($0) }
+        let values = httpHeaders.values.map { strdup($0) }
+        defer {
+          names.forEach { free($0) }
+          values.forEach { free($0) }
+        }
+        var headers = zip(names, values).map { ErikaHttpHeader(name: $0.0, value: $0.1) }
+        try headers.withUnsafeBufferPointer { buffer in
+          try check(openWithHeaders(handle, cString, buffer.baseAddress, UInt(headers.count)), operation: "open")
+        }
+      } else {
+        try check(library.open(handle, cString), operation: "open")
+      }
     }
   }
 
@@ -1430,7 +1446,8 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         guard let uri = args["uri"] as? String, !uri.isEmpty else {
           throw ErikaPluginError.invalidArguments("uri is required.")
         }
-        try host.open(uri: uri)
+        let headers = (args["httpHeaders"] as? [String: String]) ?? [:]
+        try host.open(uri: uri, httpHeaders: headers)
         result(nil)
       case "play":
         try playerHost(from: try dictionaryArgs(call.arguments)).play()

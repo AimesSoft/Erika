@@ -63,6 +63,24 @@ Android 最低版本仍为 API 26。Extended-linear 还要求 native-window data
 
 ## Output Mode
 
+## HTTP 请求头
+
+播放 HTTP(S) 视频时，可以通过 `httpHeaders` 传递请求头：
+
+```dart
+await player.open(
+  'https://example.com/video.mp4',
+  httpHeaders: <String, String>{
+    'Authorization': 'Bearer token',
+    'Referer': 'https://example.com/',
+  },
+);
+```
+
+请求头会随 HEAD、Range GET 和预取请求发送，仅对 HTTP(S) URL 生效。`Range` 由播放引擎
+管理，不应在 `httpHeaders` 中覆盖；`content://` 和本地文件播放不使用这些请求头。请避免
+在应用日志中输出 Authorization、Cookie 等敏感值。
+
 `ErikaPlayer()` 会让 Apple 插件根据当前屏幕和环境选择 SDR 或 Apple EDR；Android 默认
 为 SDR。若要从 Dart 强制 Apple EDR：
 
@@ -150,4 +168,3 @@ await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16);
 ```
 
 使用 `ErikaUpscalerMode.off` 关闭。`player.getUpscalerStatus()` 会返回请求模式、当前后端、fallback 次数、超分帧数和最近 GPU timing。Apple 使用 Metal；Android 对 planar 与 MediaCodec Surface 帧都使用 wgpu/Vulkan compute。GLES 3.0 会保持普通播放，并明确报告 `inactive` 回退。
-

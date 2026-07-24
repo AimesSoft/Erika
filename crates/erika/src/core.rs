@@ -130,6 +130,7 @@ pub enum MediaSourceHint {
 pub struct MediaRequest {
     pub uri: String,
     pub source_hint: MediaSourceHint,
+    pub http_headers: Vec<(String, String)>,
 }
 
 impl MediaRequest {
@@ -137,7 +138,13 @@ impl MediaRequest {
         Self {
             uri: uri.into(),
             source_hint: MediaSourceHint::Auto,
+            http_headers: Vec::new(),
         }
+    }
+
+    pub fn with_http_headers(mut self, http_headers: Vec<(String, String)>) -> Self {
+        self.http_headers = http_headers;
+        self
     }
 }
 

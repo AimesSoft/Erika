@@ -17,7 +17,7 @@ use crate::ffmpeg::{
     self, AudioResampler, Decoder, DecoderBackend, DecoderConfig, DecoderOutputFrame, Demuxer,
     Frame, OwnedCodecParameters, PcmAudioFrame, PcmFormat, StreamSelection, SubtitleDecoder,
 };
-use crate::source::{self, source_from_uri_with_hint};
+use crate::source::{self, source_from_uri_with_hint, source_from_uri_with_hint_and_headers};
 use crate::subtitle::{
     DecodedSubtitleFrame, SubtitleFontAttachment, SubtitleTrackConfig, SubtitleTrackSource,
 };
@@ -711,7 +711,11 @@ impl Drop for PlaybackSession {
 impl PlaybackSession {
     pub fn open(request: &MediaRequest, config: PlaybackSessionConfig) -> Result<Self> {
         let queue_limits = PlaybackQueueLimits::for_request(request);
-        let source = source_from_uri_with_hint(&request.uri, request.source_hint)?;
+        let source = source_from_uri_with_hint_and_headers(
+            &request.uri,
+            request.source_hint,
+            request.http_headers.clone(),
+        )?;
         let mut demuxer = Demuxer::open_source(source)?;
         let mut probe = demuxer.probe().clone();
         let subtitle_fonts = probe.subtitle_fonts.clone();
@@ -4784,6 +4788,7 @@ mod tests {
         let request = MediaRequest {
             uri: path.to_string_lossy().into_owned(),
             source_hint: MediaSourceHint::LocalFile,
+            http_headers: Vec::new(),
         };
         let config = PlaybackSessionConfig {
             video_decode: VideoDecodePreference::Software,
