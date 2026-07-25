@@ -137,7 +137,13 @@ final player = ErikaPlayer(
   edrHeadroom: 4.0,                      // optional: EDR headroom
 );
 
-await player.open('/path/to/video.mp4');
+await player.open(
+  'https://example.com/video.mp4',
+  httpHeaders: <String, String>{
+    'Authorization': 'Bearer token',
+    'Referer': 'https://example.com/',
+  },
+);
 await player.play();
 
 // Preferred for full-player UIs on macOS/iOS:
