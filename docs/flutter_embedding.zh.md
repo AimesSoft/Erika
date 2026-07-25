@@ -107,7 +107,13 @@ final player = ErikaPlayer(
   edrHeadroom: 4.0,                      // optional: EDR headroom
 );
 
-await player.open('/path/to/video.mp4');
+await player.open(
+  'https://example.com/video.mp4',
+  httpHeaders: <String, String>{
+    'Authorization': 'Bearer token',
+    'Referer': 'https://example.com/',
+  },
+);
 await player.play();
 
 // Preferred for full-player UIs on macOS/iOS:
@@ -165,4 +171,3 @@ await player.dispose();
 ## Ownership Rule
 
 Flutter 负责布局和 controls。Erika 负责 video plane、subtitle plane、danmaku plane、audio 和 timing。plugin 通过 `MethodChannel` 传递命令和事件；渲染不会经过 Dart。
-

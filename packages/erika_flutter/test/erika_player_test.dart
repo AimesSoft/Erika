@@ -52,6 +52,76 @@ void main() {
     await player.dispose();
   });
 
+  test('open forwards HTTP headers without exposing them elsewhere', () async {
+    final player = ErikaPlayer();
+
+    await player.open(
+      'https://example.test/video.mkv',
+      httpHeaders: <String, String>{'Authorization': 'Bearer secret'},
+    );
+
+    final call = playerCalls.singleWhere((call) => call.method == 'open');
+    expect(call.arguments, <String, Object?>{
+      'playerId': 7,
+      'uri': 'https://example.test/video.mkv',
+      'httpHeaders': <String, String>{'Authorization': 'Bearer secret'},
+    });
+    await player.dispose();
+  });
+
+  test('open omits null and empty HTTP headers', () async {
+    final player = ErikaPlayer();
+
+    await player.open('https://example.test/null.mkv');
+    await player.open(
+      'https://example.test/empty.mkv',
+      httpHeaders: <String, String>{},
+    );
+
+    final openCalls = playerCalls
+        .where((MethodCall call) => call.method == 'open')
+        .toList(growable: false);
+    expect(openCalls, hasLength(2));
+    expect(openCalls[0].arguments, <String, Object?>{
+      'playerId': 7,
+      'uri': 'https://example.test/null.mkv',
+    });
+    expect(openCalls[1].arguments, <String, Object?>{
+      'playerId': 7,
+      'uri': 'https://example.test/empty.mkv',
+    });
+
+    await player.dispose();
+  });
+
+  test('open preserves multiple HTTP headers and empty values', () async {
+    final player = ErikaPlayer();
+
+    await player.open(
+      'https://example.test/multiple.mkv',
+      httpHeaders: <String, String>{
+        'Authorization': 'Bearer token',
+        'X-Empty': '',
+        'X-Request-ID': 'request-123',
+      },
+    );
+
+    final call = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'open',
+    );
+    expect(call.arguments, <String, Object?>{
+      'playerId': 7,
+      'uri': 'https://example.test/multiple.mkv',
+      'httpHeaders': <String, String>{
+        'Authorization': 'Bearer token',
+        'X-Empty': '',
+        'X-Request-ID': 'request-123',
+      },
+    });
+
+    await player.dispose();
+  });
+
   test('apple EDR output mode is passed to native create', () async {
     final player = ErikaPlayer(
       outputMode: ErikaOutputMode.appleEdr,
@@ -82,10 +152,7 @@ void main() {
       (MethodCall call) => call.method == 'create',
     );
     final arguments = createCall.arguments as Map<Object?, Object?>;
-    expect(
-      arguments['outputMode'],
-      ErikaOutputMode.extendedLinear.nativeValue,
-    );
+    expect(arguments['outputMode'], ErikaOutputMode.extendedLinear.nativeValue);
     expect(arguments['edrHeadroom'], 3.0);
 
     await player.dispose();
@@ -132,10 +199,7 @@ void main() {
       (MethodCall call) => call.method == 'create',
     );
     final arguments = createCall.arguments as Map<Object?, Object?>;
-    expect(
-      arguments['upscaler'],
-      ErikaUpscalerMode.artCnnC4F32.nativeValue,
-    );
+    expect(arguments['upscaler'], ErikaUpscalerMode.artCnnC4F32.nativeValue);
 
     await player.dispose();
   });
@@ -154,64 +218,66 @@ void main() {
     await player.dispose();
   });
 
-  test('dispose waits for delayed create and blocks pending player calls',
-      () async {
-    final createCompleter = Completer<int>();
-    final disposeCompleter = Completer<void>();
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(playerChannel, (MethodCall call) async {
-      playerCalls.add(call);
-      return switch (call.method) {
-        'create' => createCompleter.future,
-        'dispose' => disposeCompleter.future,
-        _ => null,
-      };
-    });
-    final player = ErikaPlayer();
+  test(
+    'dispose waits for delayed create and blocks pending player calls',
+    () async {
+      final createCompleter = Completer<int>();
+      final disposeCompleter = Completer<void>();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(playerChannel, (MethodCall call) async {
+        playerCalls.add(call);
+        return switch (call.method) {
+          'create' => createCompleter.future,
+          'dispose' => disposeCompleter.future,
+          _ => null,
+        };
+      });
+      final player = ErikaPlayer();
 
-    final openFuture = player.open('/tmp/delayed.mkv');
-    final openExpectation = expectLater(
-      openFuture,
-      throwsA(isA<StateError>()),
-    );
-    await Future<void>.delayed(Duration.zero);
-    expect(
-      playerCalls.where((MethodCall call) => call.method == 'create'),
-      hasLength(1),
-    );
+      final openFuture = player.open('/tmp/delayed.mkv');
+      final openExpectation = expectLater(
+        openFuture,
+        throwsA(isA<StateError>()),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        playerCalls.where((MethodCall call) => call.method == 'create'),
+        hasLength(1),
+      );
 
-    final firstDispose = player.dispose();
-    final secondDispose = player.dispose();
-    expect(identical(firstDispose, secondDispose), isTrue);
-    expect(() => player.ensureCreated(), throwsA(isA<StateError>()));
+      final firstDispose = player.dispose();
+      final secondDispose = player.dispose();
+      expect(identical(firstDispose, secondDispose), isTrue);
+      expect(() => player.ensureCreated(), throwsA(isA<StateError>()));
 
-    createCompleter.complete(41);
-    await openExpectation;
-    await Future<void>.delayed(Duration.zero);
+      createCompleter.complete(41);
+      await openExpectation;
+      await Future<void>.delayed(Duration.zero);
 
-    expect(
-      playerCalls.where((MethodCall call) => call.method == 'open'),
-      isEmpty,
-    );
-    final disposeCalls = playerCalls
-        .where((MethodCall call) => call.method == 'dispose')
-        .toList(growable: false);
-    expect(disposeCalls, hasLength(1));
-    expect(disposeCalls.single.arguments, <String, Object?>{'playerId': 41});
+      expect(
+        playerCalls.where((MethodCall call) => call.method == 'open'),
+        isEmpty,
+      );
+      final disposeCalls = playerCalls
+          .where((MethodCall call) => call.method == 'dispose')
+          .toList(growable: false);
+      expect(disposeCalls, hasLength(1));
+      expect(disposeCalls.single.arguments, <String, Object?>{'playerId': 41});
 
-    var cleanupCompleted = false;
-    final observedDispose = firstDispose.whenComplete(
-      () => cleanupCompleted = true,
-    );
-    await Future<void>.delayed(Duration.zero);
-    expect(cleanupCompleted, isFalse);
+      var cleanupCompleted = false;
+      final observedDispose = firstDispose.whenComplete(
+        () => cleanupCompleted = true,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(cleanupCompleted, isFalse);
 
-    disposeCompleter.complete();
-    await Future.wait(<Future<void>>[observedDispose, secondDispose]);
-    expect(cleanupCompleted, isTrue);
-    expect(player.id, isNull);
-    await expectLater(player.play(), throwsA(isA<StateError>()));
-  });
+      disposeCompleter.complete();
+      await Future.wait(<Future<void>>[observedDispose, secondDispose]);
+      expect(cleanupCompleted, isTrue);
+      expect(player.id, isNull);
+      await expectLater(player.play(), throwsA(isA<StateError>()));
+    },
+  );
 
   test('external subtitle add returns native track id', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -310,10 +376,7 @@ void main() {
     final audioCall = playerCalls.singleWhere(
       (MethodCall call) => call.method == 'selectAudioTrack',
     );
-    expect(audioCall.arguments, <String, Object?>{
-      'playerId': 7,
-      'trackId': 2,
-    });
+    expect(audioCall.arguments, <String, Object?>{'playerId': 7, 'trackId': 2});
 
     final subtitleCall = playerCalls.singleWhere(
       (MethodCall call) => call.method == 'selectSubtitleTrack',
@@ -334,10 +397,7 @@ void main() {
     final call = playerCalls.singleWhere(
       (MethodCall call) => call.method == 'setPlaybackRate',
     );
-    expect(call.arguments, <String, Object?>{
-      'playerId': 7,
-      'rate': 1.5,
-    });
+    expect(call.arguments, <String, Object?>{'playerId': 7, 'rate': 1.5});
 
     await player.dispose();
   });
@@ -397,12 +457,14 @@ void main() {
     await player.dispose();
   });
 
-  testWidgets('window overlay uses the Android TextureView platform view',
-      (WidgetTester tester) async {
+  testWidgets('window overlay uses the Android TextureView platform view', (
+    WidgetTester tester,
+  ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(SystemChannels.platform_views,
-            (MethodCall call) async {
+        .setMockMethodCallHandler(SystemChannels.platform_views, (
+      MethodCall call,
+    ) async {
       final arguments = call.arguments as Map<Object?, Object?>?;
       return switch (call.method) {
         'create' => 1,
@@ -448,73 +510,76 @@ void main() {
   });
 
   testWidgets(
-      'extended-linear Android view forces Hybrid Composition SurfaceView',
-      (WidgetTester tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.android;
-    final platformViewCalls = <MethodCall>[];
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(SystemChannels.platform_views,
-            (MethodCall call) async {
-      platformViewCalls.add(call);
-      return null;
-    });
-    final player = ErikaPlayer(
-      outputMode: ErikaOutputMode.extendedLinear,
-      edrHeadroom: 4.0,
-    );
-    try {
-      await tester.pumpWidget(
-        Directionality(
-          textDirection: TextDirection.ltr,
-          child: SizedBox(
-            width: 320,
-            height: 180,
-            child: ErikaVideoView(
-              player: player,
-              debugLabel: 'android-hdr-video',
+    'extended-linear Android view forces Hybrid Composition SurfaceView',
+    (WidgetTester tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final platformViewCalls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform_views, (
+        MethodCall call,
+      ) async {
+        platformViewCalls.add(call);
+        return null;
+      });
+      final player = ErikaPlayer(
+        outputMode: ErikaOutputMode.extendedLinear,
+        edrHeadroom: 4.0,
+      );
+      try {
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: SizedBox(
+              width: 320,
+              height: 180,
+              child: ErikaVideoView(
+                player: player,
+                debugLabel: 'android-hdr-video',
+              ),
             ),
           ),
-        ),
-      );
-      await tester.pumpAndSettle();
+        );
+        await tester.pumpAndSettle();
 
-      expect(find.byType(PlatformViewLink), findsOneWidget);
-      expect(find.byType(AndroidView), findsNothing);
-      final createCall = platformViewCalls.singleWhere(
-        (MethodCall call) => call.method == 'create',
-      );
-      final createArguments = createCall.arguments as Map<Object?, Object?>;
-      expect(createArguments['viewType'], 'erika_flutter/hdr_video_view');
-      expect(createArguments['hybrid'], isTrue);
-      final encodedParams = createArguments['params'] as Uint8List;
-      final creationParams = const StandardMessageCodec().decodeMessage(
-        ByteData.sublistView(encodedParams),
-      ) as Map<Object?, Object?>;
-      expect(
-        creationParams['outputMode'],
-        ErikaOutputMode.extendedLinear.nativeValue,
-      );
-      expect(creationParams['requestedHdrHeadroom'], 4.0);
-      expect(creationParams['composition'], 'hybrid');
+        expect(find.byType(PlatformViewLink), findsOneWidget);
+        expect(find.byType(AndroidView), findsNothing);
+        final createCall = platformViewCalls.singleWhere(
+          (MethodCall call) => call.method == 'create',
+        );
+        final createArguments = createCall.arguments as Map<Object?, Object?>;
+        expect(createArguments['viewType'], 'erika_flutter/hdr_video_view');
+        expect(createArguments['hybrid'], isTrue);
+        final encodedParams = createArguments['params'] as Uint8List;
+        final creationParams = const StandardMessageCodec().decodeMessage(
+          ByteData.sublistView(encodedParams),
+        ) as Map<Object?, Object?>;
+        expect(
+          creationParams['outputMode'],
+          ErikaOutputMode.extendedLinear.nativeValue,
+        );
+        expect(creationParams['requestedHdrHeadroom'], 4.0);
+        expect(creationParams['composition'], 'hybrid');
 
-      final attachCall = playerCalls.singleWhere(
-        (MethodCall call) => call.method == 'attachView',
-      );
-      final attachArguments = attachCall.arguments as Map<Object?, Object?>;
-      expect(attachArguments['playerId'], 7);
-      expect(attachArguments['viewId'], createArguments['id']);
-    } finally {
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pumpAndSettle();
-      await player.dispose();
-      debugDefaultTargetPlatformOverride = null;
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform_views, null);
-    }
-  });
+        final attachCall = playerCalls.singleWhere(
+          (MethodCall call) => call.method == 'attachView',
+        );
+        final attachArguments = attachCall.arguments as Map<Object?, Object?>;
+        expect(attachArguments['playerId'], 7);
+        expect(attachArguments['viewId'], createArguments['id']);
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+        await player.dispose();
+        debugDefaultTargetPlatformOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform_views, null);
+      }
+    },
+  );
 
-  testWidgets('changing extended-linear headroom recreates the Android view',
-      (WidgetTester tester) async {
+  testWidgets('changing extended-linear headroom recreates the Android view', (
+    WidgetTester tester,
+  ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     var nextPlayerId = 7;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -528,8 +593,9 @@ void main() {
     });
     final platformViewCalls = <MethodCall>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(SystemChannels.platform_views,
-            (MethodCall call) async {
+        .setMockMethodCallHandler(SystemChannels.platform_views, (
+      MethodCall call,
+    ) async {
       platformViewCalls.add(call);
       return null;
     });
@@ -584,8 +650,9 @@ void main() {
     }
   });
 
-  testWidgets('Android player switch retries a transient attach failure',
-      (WidgetTester tester) async {
+  testWidgets('Android player switch retries a transient attach failure', (
+    WidgetTester tester,
+  ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     var nextPlayerId = 7;
     var replacementAttachAttempts = 0;
@@ -607,8 +674,9 @@ void main() {
       };
     });
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(SystemChannels.platform_views,
-            (MethodCall call) async {
+        .setMockMethodCallHandler(SystemChannels.platform_views, (
+      MethodCall call,
+    ) async {
       final arguments = call.arguments as Map<Object?, Object?>?;
       return switch (call.method) {
         'create' => 1,
@@ -659,86 +727,88 @@ void main() {
   });
 
   testWidgets(
-      'stale Android platform view creation cannot replace new output config',
-      (WidgetTester tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.android;
-    var nextPlayerId = 7;
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(playerChannel, (MethodCall call) async {
-      playerCalls.add(call);
-      return switch (call.method) {
-        'create' => nextPlayerId++,
-        'dispose' => null,
-        _ => null,
-      };
-    });
-    final createCompleters = <Completer<void>>[];
-    final createViewIds = <int>[];
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(SystemChannels.platform_views,
-            (MethodCall call) {
-      if (call.method != 'create') {
-        return Future<Object?>.value(null);
-      }
-      final arguments = call.arguments as Map<Object?, Object?>;
-      final completer = Completer<void>();
-      createViewIds.add(arguments['id']! as int);
-      createCompleters.add(completer);
-      return completer.future.then<Object?>((_) => null);
-    });
-    final automatic = ErikaPlayer(outputMode: ErikaOutputMode.extendedLinear);
-    final explicit = ErikaPlayer(
-      outputMode: ErikaOutputMode.extendedLinear,
-      edrHeadroom: 2.5,
-    );
-    try {
-      expect(await automatic.ensureCreated(), 7);
-      expect(await explicit.ensureCreated(), 8);
-      Widget view(ErikaPlayer player) => Directionality(
-            textDirection: TextDirection.ltr,
-            child: SizedBox(
-              width: 320,
-              height: 180,
-              child: ErikaVideoView(player: player),
-            ),
-          );
-
-      await tester.pumpWidget(view(automatic));
-      await tester.pump();
-      expect(createCompleters, hasLength(1));
-
-      await tester.pumpWidget(view(explicit));
-      await tester.pump();
-      expect(createCompleters, hasLength(2));
-
-      createCompleters[1].complete();
-      await tester.pump();
-      createCompleters[0].complete();
-      await tester.pump();
-
-      final attachCalls = playerCalls
-          .where((MethodCall call) => call.method == 'attachView')
-          .toList(growable: false);
-      expect(attachCalls, hasLength(1));
-      expect(attachCalls.single.arguments, <String, Object?>{
-        'playerId': 8,
-        'viewId': createViewIds[1],
-      });
-    } finally {
-      for (final completer in createCompleters) {
-        if (!completer.isCompleted) {
-          completer.complete();
-        }
-      }
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pumpAndSettle();
-      await automatic.dispose();
-      await explicit.dispose();
-      debugDefaultTargetPlatformOverride = null;
+    'stale Android platform view creation cannot replace new output config',
+    (WidgetTester tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      var nextPlayerId = 7;
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(SystemChannels.platform_views, null);
-    }
-  });
+          .setMockMethodCallHandler(playerChannel, (MethodCall call) async {
+        playerCalls.add(call);
+        return switch (call.method) {
+          'create' => nextPlayerId++,
+          'dispose' => null,
+          _ => null,
+        };
+      });
+      final createCompleters = <Completer<void>>[];
+      final createViewIds = <int>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform_views, (
+        MethodCall call,
+      ) {
+        if (call.method != 'create') {
+          return Future<Object?>.value(null);
+        }
+        final arguments = call.arguments as Map<Object?, Object?>;
+        final completer = Completer<void>();
+        createViewIds.add(arguments['id']! as int);
+        createCompleters.add(completer);
+        return completer.future.then<Object?>((_) => null);
+      });
+      final automatic = ErikaPlayer(outputMode: ErikaOutputMode.extendedLinear);
+      final explicit = ErikaPlayer(
+        outputMode: ErikaOutputMode.extendedLinear,
+        edrHeadroom: 2.5,
+      );
+      try {
+        expect(await automatic.ensureCreated(), 7);
+        expect(await explicit.ensureCreated(), 8);
+        Widget view(ErikaPlayer player) => Directionality(
+              textDirection: TextDirection.ltr,
+              child: SizedBox(
+                width: 320,
+                height: 180,
+                child: ErikaVideoView(player: player),
+              ),
+            );
+
+        await tester.pumpWidget(view(automatic));
+        await tester.pump();
+        expect(createCompleters, hasLength(1));
+
+        await tester.pumpWidget(view(explicit));
+        await tester.pump();
+        expect(createCompleters, hasLength(2));
+
+        createCompleters[1].complete();
+        await tester.pump();
+        createCompleters[0].complete();
+        await tester.pump();
+
+        final attachCalls = playerCalls
+            .where((MethodCall call) => call.method == 'attachView')
+            .toList(growable: false);
+        expect(attachCalls, hasLength(1));
+        expect(attachCalls.single.arguments, <String, Object?>{
+          'playerId': 8,
+          'viewId': createViewIds[1],
+        });
+      } finally {
+        for (final completer in createCompleters) {
+          if (!completer.isCompleted) {
+            completer.complete();
+          }
+        }
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+        await automatic.dispose();
+        await explicit.dispose();
+        debugDefaultTargetPlatformOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform_views, null);
+      }
+    },
+  );
 
   test('upscaler mode is forwarded to native presenter', () async {
     final player = ErikaPlayer();
@@ -795,57 +865,59 @@ void main() {
     await player.dispose();
   });
 
-  test('extended-linear output status is decoded from native presenter',
-      () async {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(playerChannel, (MethodCall call) async {
-      playerCalls.add(call);
-      return switch (call.method) {
-        'create' => 7,
-        'getOutputStatus' => <String, Object?>{
-            'requestedMode': ErikaOutputMode.extendedLinear.nativeValue,
-            'activeEncoding': ErikaActiveOutputEncoding
-                .androidExtendedLinearScRgb.nativeValue,
-            'surfaceFormat':
-                ErikaOutputSurfaceFormat.sixteenBitFloat.nativeValue,
-            'nativeDataSpace': 0x18410000,
-            'requestedHeadroom': 4.0,
-            'activeHeadroom': 3.5,
-            'activeHeadroomKnown': true,
-            'extendedLinearActive': true,
-            'fallbackReason': ErikaOutputFallbackReason.none.nativeValue,
-            'fallbackCount': 0,
-            'dataSpaceFailures': 0,
-            'headroomUpdates': 2,
-            'extendedLinearFrames': 42,
-          },
-        'dispose' => null,
-        _ => null,
-      };
-    });
+  test(
+    'extended-linear output status is decoded from native presenter',
+    () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(playerChannel, (MethodCall call) async {
+        playerCalls.add(call);
+        return switch (call.method) {
+          'create' => 7,
+          'getOutputStatus' => <String, Object?>{
+              'requestedMode': ErikaOutputMode.extendedLinear.nativeValue,
+              'activeEncoding': ErikaActiveOutputEncoding
+                  .androidExtendedLinearScRgb.nativeValue,
+              'surfaceFormat':
+                  ErikaOutputSurfaceFormat.sixteenBitFloat.nativeValue,
+              'nativeDataSpace': 0x18410000,
+              'requestedHeadroom': 4.0,
+              'activeHeadroom': 3.5,
+              'activeHeadroomKnown': true,
+              'extendedLinearActive': true,
+              'fallbackReason': ErikaOutputFallbackReason.none.nativeValue,
+              'fallbackCount': 0,
+              'dataSpaceFailures': 0,
+              'headroomUpdates': 2,
+              'extendedLinearFrames': 42,
+            },
+          'dispose' => null,
+          _ => null,
+        };
+      });
 
-    final player = ErikaPlayer(outputMode: ErikaOutputMode.extendedLinear);
-    final status = await player.getOutputStatus();
+      final player = ErikaPlayer(outputMode: ErikaOutputMode.extendedLinear);
+      final status = await player.getOutputStatus();
 
-    expect(status.requestedMode, ErikaOutputMode.extendedLinear);
-    expect(
-      status.activeEncoding,
-      ErikaActiveOutputEncoding.androidExtendedLinearScRgb,
-    );
-    expect(status.surfaceFormat, ErikaOutputSurfaceFormat.sixteenBitFloat);
-    expect(status.nativeDataSpace, 0x18410000);
-    expect(status.activeHeadroom, 3.5);
-    expect(status.extendedLinearActive, isTrue);
-    expect(status.fallbackReason, ErikaOutputFallbackReason.none);
-    expect(status.extendedLinearFrames, 42);
+      expect(status.requestedMode, ErikaOutputMode.extendedLinear);
+      expect(
+        status.activeEncoding,
+        ErikaActiveOutputEncoding.androidExtendedLinearScRgb,
+      );
+      expect(status.surfaceFormat, ErikaOutputSurfaceFormat.sixteenBitFloat);
+      expect(status.nativeDataSpace, 0x18410000);
+      expect(status.activeHeadroom, 3.5);
+      expect(status.extendedLinearActive, isTrue);
+      expect(status.fallbackReason, ErikaOutputFallbackReason.none);
+      expect(status.extendedLinearFrames, 42);
 
-    final call = playerCalls.singleWhere(
-      (MethodCall call) => call.method == 'getOutputStatus',
-    );
-    expect(call.arguments, <String, Object?>{'playerId': 7});
+      final call = playerCalls.singleWhere(
+        (MethodCall call) => call.method == 'getOutputStatus',
+      );
+      expect(call.arguments, <String, Object?>{'playerId': 7});
 
-    await player.dispose();
-  });
+      await player.dispose();
+    },
+  );
 
   test('danmaku config forwards block words as json', () async {
     final player = ErikaPlayer();
@@ -934,7 +1006,8 @@ void main() {
     expect(
       playerCalls
           .singleWhere(
-              (MethodCall call) => call.method == 'addDanmakuTrackFile')
+            (MethodCall call) => call.method == 'addDanmakuTrackFile',
+          )
           .arguments,
       <String, Object?>{
         'playerId': 7,
@@ -946,7 +1019,8 @@ void main() {
     expect(
       playerCalls
           .singleWhere(
-              (MethodCall call) => call.method == 'addDanmakuTrackJson')
+            (MethodCall call) => call.method == 'addDanmakuTrackJson',
+          )
           .arguments,
       <String, Object?>{
         'playerId': 7,
@@ -958,21 +1032,24 @@ void main() {
     expect(
       playerCalls
           .singleWhere(
-              (MethodCall call) => call.method == 'setDanmakuTrackEnabled')
+            (MethodCall call) => call.method == 'setDanmakuTrackEnabled',
+          )
           .arguments,
       <String, Object?>{'playerId': 7, 'trackId': 11, 'enabled': false},
     );
     expect(
       playerCalls
           .singleWhere(
-              (MethodCall call) => call.method == 'setDanmakuTrackOffset')
+            (MethodCall call) => call.method == 'setDanmakuTrackOffset',
+          )
           .arguments,
       <String, Object?>{'playerId': 7, 'trackId': 12, 'offsetMicros': 1000000},
     );
     expect(
       playerCalls
           .singleWhere(
-              (MethodCall call) => call.method == 'setDanmakuGlobalOffset')
+            (MethodCall call) => call.method == 'setDanmakuGlobalOffset',
+          )
           .arguments,
       <String, Object?>{'playerId': 7, 'offsetMicros': -100000},
     );
@@ -1162,32 +1239,34 @@ void main() {
     expect(event.decoder?.reason, contains('buffer layout'));
   });
 
-  test('player event parses AAudio recovery details without kind downgrade',
-      () {
-    expect(ErikaEventKind.audioOutputChanged.index, 12);
-    final event = ErikaPlayerEvent.fromMap(<String, Object?>{
-      'playerId': 7,
-      'kind': ErikaEventKind.audioOutputChanged.index,
-      'state': ErikaPlaybackState.playing.index,
-      'audio': <String, Object?>{
-        'event': 'audio_output_changed',
-        'recoveryState': 'stable',
-        'lastErrorCode': -899,
-        'recoveryAttempts': 2,
-        'recoveryCount': 1,
-        'recoveryFailures': 1,
-        'transitionSequence': 5,
-      },
-      'message': '{"event":"audio_output_changed"}',
-    });
+  test(
+    'player event parses AAudio recovery details without kind downgrade',
+    () {
+      expect(ErikaEventKind.audioOutputChanged.index, 12);
+      final event = ErikaPlayerEvent.fromMap(<String, Object?>{
+        'playerId': 7,
+        'kind': ErikaEventKind.audioOutputChanged.index,
+        'state': ErikaPlaybackState.playing.index,
+        'audio': <String, Object?>{
+          'event': 'audio_output_changed',
+          'recoveryState': 'stable',
+          'lastErrorCode': -899,
+          'recoveryAttempts': 2,
+          'recoveryCount': 1,
+          'recoveryFailures': 1,
+          'transitionSequence': 5,
+        },
+        'message': '{"event":"audio_output_changed"}',
+      });
 
-    expect(event.kind, ErikaEventKind.audioOutputChanged);
-    expect(event.audio?.recoveryState, 'stable');
-    expect(event.audio?.lastErrorCode, -899);
-    expect(event.audio?.recoveryAttempts, 2);
-    expect(event.audio?.recoveryCount, 1);
-    expect(event.audio?.recoveryFailures, 1);
-    expect(event.audio?.transitionSequence, 5);
-    expect(event.message, contains('audio_output_changed'));
-  });
+      expect(event.kind, ErikaEventKind.audioOutputChanged);
+      expect(event.audio?.recoveryState, 'stable');
+      expect(event.audio?.lastErrorCode, -899);
+      expect(event.audio?.recoveryAttempts, 2);
+      expect(event.audio?.recoveryCount, 1);
+      expect(event.audio?.recoveryFailures, 1);
+      expect(event.audio?.transitionSequence, 5);
+      expect(event.message, contains('audio_output_changed'));
+    },
+  );
 }
