@@ -1742,6 +1742,8 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       throw ErikaPluginError.overlayNotAvailable
     }
 
+    prepareFlutterHostViewForWindowOverlay(flutterHostView)
+
     let overlay = hostWindow.erikaWindowOverlayView ??
       ErikaWindowOverlayView(plugin: self)
     overlay.plugin = self
@@ -1792,6 +1794,16 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       return false
     }
     return environment["ERIKA_WINDOW_OVERLAY_ABOVE"] == "1"
+  }
+
+  private func prepareFlutterHostViewForWindowOverlay(_ view: NSView) {
+    if shouldPlaceWindowOverlayAboveFlutter() {
+      return
+    }
+    view.wantsLayer = true
+    view.layer?.isOpaque = false
+    view.layer?.backgroundColor = NSColor.clear.cgColor
+    view.window?.backgroundColor = .black
   }
 
   private func convertedOverlayRect(
