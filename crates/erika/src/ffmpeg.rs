@@ -1050,7 +1050,7 @@ impl Decoder {
             && erika_nonblocking_unconsumed
         {
             open_result = Err(FfmpegError::AndroidMediaCodec(
-                "FFmpeg did not consume required decoder option erika_nonblocking=1; rebuild Android native dependencies with the Erika FFmpeg 7.1.1 patch set"
+                "FFmpeg did not consume required decoder option erika_nonblocking=1; rebuild Android native dependencies with the Erika FFmpeg 8.1.2 patch set"
                     .to_string(),
             ));
         }
@@ -2164,7 +2164,7 @@ impl Frame {
                 width_i32,
                 height_i32,
                 sys::AVPixelFormat_AV_PIX_FMT_NV12,
-                sys::SWS_BILINEAR as c_int,
+                sys::ERIKA_SWS_BILINEAR,
                 ptr::null_mut(),
                 ptr::null_mut(),
                 ptr::null(),
@@ -3652,7 +3652,7 @@ unsafe fn profile_name(
 ) -> Option<String> {
     let codec_id = unsafe { (*codecpar).codec_id };
     let profile = unsafe { (*codecpar).profile };
-    if profile == sys::FF_PROFILE_UNKNOWN {
+    if profile == sys::ERIKA_PROFILE_UNKNOWN {
         return None;
     }
     let name = unsafe { sys::av_get_profile_name(sys::avcodec_find_decoder(codec_id), profile) };

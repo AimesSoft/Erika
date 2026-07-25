@@ -1,7 +1,7 @@
-pub const FFMPEG_VERSION: &str = "7.1.1";
-pub const LIBASS_VERSION: &str = "0.17.3";
-pub const HARFBUZZ_VERSION: &str = "10.4.0";
-pub const FREETYPE_VERSION: &str = "2.13.3";
+pub const FFMPEG_VERSION: &str = "8.1.2";
+pub const LIBASS_VERSION: &str = "0.17.5";
+pub const HARFBUZZ_VERSION: &str = "14.2.1";
+pub const FREETYPE_VERSION: &str = "2.14.3";
 
 #[allow(
     non_camel_case_types,
@@ -14,6 +14,20 @@ mod bindings {
 }
 
 pub use bindings::*;
+
+pub const ERIKA_SWS_BILINEAR: std::os::raw::c_int = SwsFlags_SWS_BILINEAR as std::os::raw::c_int;
+pub const ERIKA_PROFILE_UNKNOWN: i32 = AV_PROFILE_UNKNOWN;
+
+#[cfg(test)]
+mod tests {
+    use super::{ERIKA_PROFILE_UNKNOWN, ERIKA_SWS_BILINEAR};
+
+    #[test]
+    fn ffmpeg_812_compatibility_constants() {
+        assert_eq!(ERIKA_SWS_BILINEAR, 2);
+        assert_eq!(ERIKA_PROFILE_UNKNOWN, -99);
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeDependencyProfile {
