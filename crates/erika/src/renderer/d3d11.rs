@@ -1287,6 +1287,10 @@ impl RendererBackend for D3d11Renderer {
         Ok(())
     }
 
+    fn preserve_current_frame_for_transition(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     fn render_current_frame(&mut self, context: RenderFrameContext<'_>) -> Result<bool> {
         self.render_video(context)
     }

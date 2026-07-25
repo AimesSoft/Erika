@@ -691,6 +691,10 @@ impl RendererBackend for MetalRenderer {
         Ok(())
     }
 
+    fn preserve_current_frame_for_transition(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     fn render_test_frame(&mut self, time_seconds: f64) -> Result<()> {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
