@@ -7,7 +7,7 @@ use crate::core::{
     SurfaceMetrics, TransferFunction,
 };
 use crate::danmaku::DanmakuRenderPlan;
-use crate::ffmpeg::Frame;
+use crate::ffmpeg::{Frame, PlanarFrame};
 use crate::overlay::OverlayFrame;
 pub use crate::renderer::pipeline::LumaUpscalerMode;
 use crate::renderer::pipeline::{
@@ -66,6 +66,7 @@ pub struct MetalRenderer {
     current_media_time: Duration,
     current_generation: u64,
     upload_counter: u64,
+    software_upload_counter: u64,
     output_mode: MetalOutputMode,
 }
 
@@ -365,6 +366,7 @@ impl MetalRenderer {
                 current_media_time: Duration::ZERO,
                 current_generation: 1,
                 upload_counter: 0,
+                software_upload_counter: 0,
                 output_mode: _config.output_mode,
             })
         }
@@ -520,18 +522,25 @@ impl MetalRenderer {
     }
 
     fn import_player_frame(&mut self, frame: &Frame) -> Result<ImportedVideoFrame> {
-        let pixel_buffer = frame.videotoolbox_pixel_buffer().ok_or_else(|| {
-            PlayerError::Renderer(
-                "decoded frame is not backed by VideoToolbox CVPixelBuffer".to_string(),
-            )
-        })?;
-        let mut imported = unsafe {
-            self.import_video_frame_textures(VideoFrameTextureSource::new(
-                pixel_buffer.raw(),
-                pixel_buffer.width(),
-                pixel_buffer.height(),
-            ))
-        }?;
+        let mut imported = if let Some(pixel_buffer) = frame.videotoolbox_pixel_buffer() {
+            unsafe {
+                self.import_video_frame_textures(VideoFrameTextureSource::new(
+                    pixel_buffer.raw(),
+                    pixel_buffer.width(),
+                    pixel_buffer.height(),
+                ))
+            }?
+        } else {
+            let planar = frame.to_planar_frame().ok_or_else(|| {
+                PlayerError::Renderer(format!(
+                    "unsupported software video frame format {}",
+                    frame
+                        .pixel_format()
+                        .unwrap_or_else(|| "unknown".to_string())
+                ))
+            })?;
+            self.import_planar_frame(&planar, frame.color_range())?
+        };
         imported.set_source_color_metadata(
             frame.color_primaries(),
             frame.transfer_function(),
@@ -540,6 +549,31 @@ impl MetalRenderer {
             frame.hdr_metadata(),
         );
         Ok(imported)
+    }
+
+    fn import_planar_frame(
+        &mut self,
+        frame: &PlanarFrame,
+        color_range: ColorRange,
+    ) -> Result<ImportedVideoFrame> {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            let result = self
+                .inner
+                .upload_planar_video_frame(frame, color_range == ColorRange::Full)?;
+            Ok(ImportedVideoFrame {
+                info: result.info,
+                source_color: SourceColorState::default(),
+                inner: Some(result.textures),
+            })
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        {
+            let _ = (frame, color_range);
+            Err(PlayerError::Renderer(
+                "Metal renderer is only available on Apple platforms for v0".to_string(),
+            ))
+        }
     }
 
     pub fn stats(&self) -> MetalRendererStats {
@@ -690,6 +724,9 @@ impl RendererBackend for MetalRenderer {
             )
         })?;
         let imported = self.import_player_frame(decoded)?;
+        if !decoded.is_videotoolbox() {
+            self.software_upload_counter = self.software_upload_counter.wrapping_add(1);
+        }
         self.current_frame = Some(imported);
         self.current_frame_visible = true;
         self.current_media_time = frame.pts.unwrap_or(frame.media_time);
@@ -822,12 +859,18 @@ impl RendererBackend for MetalRenderer {
             last_upscaler_encode_duration: stats.last_upscaler_encode_duration,
             last_gpu_duration: stats.last_gpu_duration,
             attached: stats.drawable_width > 0 && stats.drawable_height > 0,
-            software_video_frames: 0,
-            hardware_video_frames: self.upload_counter,
-            zero_copy_video_frames: self.upload_counter,
-            direct_zero_copy_video_frames: self.upload_counter,
+            software_video_frames: self.software_upload_counter,
+            hardware_video_frames: self
+                .upload_counter
+                .saturating_sub(self.software_upload_counter),
+            zero_copy_video_frames: self
+                .upload_counter
+                .saturating_sub(self.software_upload_counter),
+            direct_zero_copy_video_frames: self
+                .upload_counter
+                .saturating_sub(self.software_upload_counter),
             shared_handle_video_frames: 0,
-            cpu_video_frame_fallbacks: 0,
+            cpu_video_frame_fallbacks: self.software_upload_counter,
             hdr_source_frames: 0,
             hdr10_output_frames: 0,
             sdr_tonemap_frames: 0,

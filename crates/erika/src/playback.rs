@@ -767,7 +767,10 @@ impl PlaybackSession {
                         decoder
                     }
                     Err(error)
-                        if should_fallback_video_decoder_open_error(decoder_config.backend) =>
+                        if should_fallback_video_decoder_open_error(
+                            decoder_config.backend,
+                            codec.as_deref(),
+                        ) =>
                     {
                         let surface_error = error.to_string();
                         if decoder_config.backend == DecoderBackend::MediaCodec
@@ -1123,7 +1126,9 @@ impl PlaybackSession {
     }
 
     fn decoder_fallback_requires_replay(&self) -> bool {
-        self.demux_eof || self.eof
+        self.demux_eof
+            || self.eof
+            || self.active_video_decoder_backend() == Some(DecoderBackend::VideoToolbox)
     }
 
     fn recover_from_video_input_stall(&mut self, reason: &str) -> Result<bool> {
@@ -1463,7 +1468,11 @@ impl PlaybackSession {
         let decoder_alive = self.video_decoder.is_some();
         let discarded = self.discard_queued_frames_and_packets();
         trace_discarded_playback_queues("seek_before_decoder_transition", discarded, decoder_alive);
-        self.video_fallback_waiting_for_keyframe = self.video_decoder.is_some();
+        let bypass_seek_keyframe_gate = cfg!(any(target_os = "macos", target_os = "ios"))
+            && self.active_video_decoder_backend() == Some(DecoderBackend::VideoToolbox)
+            && self.active_video_codec_is_av1();
+        self.video_fallback_waiting_for_keyframe =
+            self.video_decoder.is_some() && !bypass_seek_keyframe_gate;
         if self.video_fallback_waiting_for_keyframe {
             trace::diagnostic(
                 serde_json::json!({
@@ -2066,6 +2075,37 @@ impl PlaybackSession {
                     }
                 }
             }
+            Err(error)
+                if self.active_video_decoder_backend() == Some(DecoderBackend::VideoToolbox)
+                    && self.active_video_codec_is_av1() =>
+            {
+                let reason = error.to_string();
+                self.fallback_video_decoder_to_software(
+                    "decode_videotoolbox_to_software",
+                    reason.clone(),
+                    None,
+                )?;
+                if !packet.is_key() {
+                    self.video_fallback_waiting_for_keyframe = true;
+                    trace::diagnostic(
+                        serde_json::json!({
+                            "event": "video_decoder_recovery_waiting_for_keyframe",
+                            "backend": DecoderBackend::Software.as_str(),
+                            "stream": packet.stream_index(),
+                            "reason": reason,
+                        })
+                        .to_string(),
+                    );
+                    return Ok(true);
+                }
+                match self.route_video_packet_with_active_decoder(&packet, video_frame_limit)? {
+                    Some(progress) => Ok(progress),
+                    None => {
+                        self.pending_video_packets.push_front(packet);
+                        Ok(self.video_frames.len() > before_frames)
+                    }
+                }
+            }
             Err(error) => Err(error),
         }
     }
@@ -2101,6 +2141,15 @@ impl PlaybackSession {
 
     fn active_video_decoder_backend(&self) -> Option<DecoderBackend> {
         self.video_decoder.as_ref().map(Decoder::backend)
+    }
+
+    fn active_video_codec_is_av1(&self) -> bool {
+        self.video_decoder.as_ref().is_some_and(|decoder| {
+            codec_parameters_for(&self.codec_parameters, decoder.stream_index())
+                .ok()
+                .and_then(|parameters| parameters.codec_name())
+                .is_some_and(|codec| codec.eq_ignore_ascii_case("av1"))
+        })
     }
 
     fn active_or_selected_video_stream_index(&self) -> Result<i32> {
@@ -2296,7 +2345,7 @@ impl PlaybackSession {
         self.clear_video_decoder_unavailable();
         let event = VideoDecoderEvent {
             stage: stage.to_string(),
-            requested_backend: DecoderBackend::MediaCodec,
+            requested_backend: previous_backend,
             previous_backend: Some(previous_backend),
             active_backend: DecoderBackend::Software,
             fallback_count: self.video_decoder_fallbacks,
@@ -2317,11 +2366,22 @@ impl PlaybackSession {
         stage: &str,
         failure: &VideoFrameImportFailure,
     ) -> Result<bool> {
-        if failure.decode_backend != DecoderBackend::MediaCodec {
+        let is_mediacodec = failure.decode_backend == DecoderBackend::MediaCodec;
+        let is_videotoolbox_av1 = failure.decode_backend == DecoderBackend::VideoToolbox
+            && failure
+                .codec
+                .as_deref()
+                .is_some_and(|codec| codec.eq_ignore_ascii_case("av1"));
+        if !is_mediacodec && !is_videotoolbox_av1 {
             return Ok(false);
         }
         let active_backend = self.active_video_decoder_backend();
-        if active_backend != Some(DecoderBackend::MediaCodec) {
+        let expected_backend = if is_videotoolbox_av1 {
+            DecoderBackend::VideoToolbox
+        } else {
+            DecoderBackend::MediaCodec
+        };
+        if active_backend != Some(expected_backend) {
             trace::diagnostic(
                 serde_json::json!({
                     "event": "video_frame_import_failure",
@@ -2334,6 +2394,14 @@ impl PlaybackSession {
                 .to_string(),
             );
             return Ok(false);
+        }
+        if is_videotoolbox_av1 {
+            self.fallback_video_decoder_to_software(
+                &format!("{stage}_videotoolbox_to_software"),
+                failure.reason.clone(),
+                Some(failure),
+            )?;
+            return Ok(true);
         }
         let active_surface = self
             .video_decoder
@@ -2398,13 +2466,16 @@ impl PlaybackSession {
         &self,
         failure: &VideoFrameImportFailure,
     ) -> bool {
-        failure.decode_backend == DecoderBackend::MediaCodec
-            && self.active_video_decoder_backend() == Some(DecoderBackend::MediaCodec)
-            && failure.mediacodec_surface
-                == self
-                    .video_decoder
-                    .as_ref()
-                    .is_some_and(Decoder::uses_mediacodec_surface)
+        failure.decode_backend
+            == self
+                .active_video_decoder_backend()
+                .unwrap_or(DecoderBackend::Software)
+            && (failure.decode_backend != DecoderBackend::MediaCodec
+                || failure.mediacodec_surface
+                    == self
+                        .video_decoder
+                        .as_ref()
+                        .is_some_and(Decoder::uses_mediacodec_surface))
     }
 
     fn should_defer_video_packet(&self) -> bool {
@@ -4678,11 +4749,12 @@ fn sanitize_playback_rate(rate: f64) -> f64 {
     }
 }
 
-fn should_fallback_video_decoder_open_error(backend: DecoderBackend) -> bool {
+fn should_fallback_video_decoder_open_error(backend: DecoderBackend, codec: Option<&str>) -> bool {
     matches!(
         backend,
         DecoderBackend::D3d11va | DecoderBackend::MediaCodec
-    )
+    ) || (backend == DecoderBackend::VideoToolbox
+        && codec.is_some_and(|codec| codec.eq_ignore_ascii_case("av1")))
 }
 
 fn video_decoder_open_stage(config: DecoderConfig) -> &'static str {
@@ -5098,16 +5170,28 @@ mod tests {
     #[test]
     fn decoder_open_fallback_is_enabled_for_platform_hardware_backends() {
         assert!(should_fallback_video_decoder_open_error(
-            DecoderBackend::D3d11va
+            DecoderBackend::D3d11va,
+            None
         ));
         assert!(should_fallback_video_decoder_open_error(
-            DecoderBackend::MediaCodec
+            DecoderBackend::MediaCodec,
+            None
         ));
         assert!(!should_fallback_video_decoder_open_error(
-            DecoderBackend::VideoToolbox
+            DecoderBackend::VideoToolbox,
+            Some("h264")
+        ));
+        assert!(should_fallback_video_decoder_open_error(
+            DecoderBackend::VideoToolbox,
+            Some("av1")
+        ));
+        assert!(should_fallback_video_decoder_open_error(
+            DecoderBackend::VideoToolbox,
+            Some("AV1")
         ));
         assert!(!should_fallback_video_decoder_open_error(
-            DecoderBackend::Software
+            DecoderBackend::Software,
+            Some("av1")
         ));
     }
 
