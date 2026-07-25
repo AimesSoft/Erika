@@ -854,7 +854,7 @@ fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         ensure_windows_link_aliases(
             options.target,
             &layout.zlib_prefix,
-            &[("zlibstatic.lib", "z.lib")],
+            &[("zlibs.lib", "z.lib")],
         )?;
         ensure_windows_zlib_static_alias(options.target, &layout.zlib_prefix)?;
         ensure_windows_zlib_header_compat(options.target, &layout.zlib_prefix)?;
@@ -886,7 +886,7 @@ fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     ensure_windows_link_aliases(
         options.target,
         &layout.zlib_prefix,
-        &[("zlibstatic.lib", "z.lib")],
+        &[("zlibs.lib", "z.lib")],
     )?;
     ensure_windows_zlib_static_alias(options.target, &layout.zlib_prefix)?;
     ensure_windows_zlib_header_compat(options.target, &layout.zlib_prefix)?;
@@ -2864,12 +2864,18 @@ fn ensure_windows_zlib_static_alias(target: NativeTarget, prefix: &Path) -> Resu
         return Ok(());
     }
     let lib_dir = prefix.join("lib");
-    let static_lib = lib_dir.join("zlibstatic.lib");
     let import_lib = lib_dir.join("zlib.lib");
-    if static_lib.exists() {
-        fs::copy(&static_lib, &import_lib).with_context(|| {
-            format!("copy {} to {}", static_lib.display(), import_lib.display())
-        })?;
+    if import_lib.exists() {
+        return Ok(());
+    }
+    for source in ["zlibs.lib", "zlibstatic.lib", "z.lib"] {
+        let static_lib = lib_dir.join(source);
+        if static_lib.exists() {
+            fs::copy(&static_lib, &import_lib).with_context(|| {
+                format!("copy {} to {}", static_lib.display(), import_lib.display())
+            })?;
+            break;
+        }
     }
     Ok(())
 }

@@ -107,7 +107,9 @@ fn main() {
     println!("cargo:rustc-link-lib=static=harfbuzz");
     println!("cargo:rustc-link-lib=static=freetype");
 
-    if matches!(target_os.as_deref(), Some("ios" | "macos")) {
+    if target_os.as_deref() == Some("windows") {
+        println!("cargo:rustc-link-lib=dwrite");
+    } else if matches!(target_os.as_deref(), Some("ios" | "macos")) {
         if target_os.as_deref() == Some("macos") {
             println!("cargo:rustc-link-lib=framework=ApplicationServices");
         }
