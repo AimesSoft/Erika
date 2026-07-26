@@ -142,7 +142,7 @@ third_party/
 
 関連する環境変数：`ERIKA_NATIVE_PROFILE`、`ERIKA_NATIVE_TARGET`、`ERIKA_FFMPEG_DIR`、
 `ERIKA_DAV1D_DIR`、`ERIKA_ZLIB_DIR`、`LIBCLANG_PATH`、`ERIKA_ALLOW_LEGACY_FFMPEG`（脱出ハッチ）。Erika は
-FFmpeg **7.x**（`libavutil >= 59`）を要求し、Windows ネイティブコアはこれを強制します。
+FFmpeg **8.x**（`libavutil >= 60`）を要求し、Windows と Android のネイティブコアはこれを強制します。
 `ERIKA_ALLOW_LEGACY_FFMPEG=1` はローカルの互換性実験のときだけ設定してください。
 
 ## コンパイルとテスト

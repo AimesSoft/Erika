@@ -194,8 +194,8 @@ For the `host` target the `<target>` path segment is omitted
 
 Relevant environment variables: `ERIKA_NATIVE_PROFILE`, `ERIKA_NATIVE_TARGET`,
 `ERIKA_FFMPEG_DIR`, `ERIKA_DAV1D_DIR`, `ERIKA_ZLIB_DIR`, `LIBCLANG_PATH`, and
-`ERIKA_ALLOW_LEGACY_FFMPEG` (escape hatch). Erika requires FFmpeg **7.x**
-(`libavutil >= 59`); the Windows native core enforces this. Set
+`ERIKA_ALLOW_LEGACY_FFMPEG` (escape hatch). Erika requires FFmpeg **8.x**
+(`libavutil >= 60`); the Windows and Android native core enforces this. Set
 `ERIKA_ALLOW_LEGACY_FFMPEG=1` only for local compatibility experiments.
 
 ## Compile and test
