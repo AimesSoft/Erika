@@ -25,7 +25,7 @@
 - **字幕** -- SRT / WebVTT / ASS パーサー、libass レンダリング（静的リンク）、埋め込みおよび外部字幕トラック
 - **弾幕** -- Bilibili XML / JSON パーサー、DFM+ 衝突回避レーン配置エンジン、グリフアトラスによるネイティブ GPU レンダリング
 - **再生エンジン** -- play / pause / stop / seek / 再生速度制御、音声マスタークロック同期、vsync 量子化フレームスケジューリング
-- **C ABI** -- 73 のエクスポート関数、不透明ハンドル設計、C / C++ / Swift / Dart FFI / 任意の FFI 対応言語から呼び出し可能
+- **C ABI** -- 75 のエクスポート関数、不透明ハンドル設計、C / C++ / Swift / Dart FFI / 任意の FFI 対応言語から呼び出し可能
 - **Flutter プラグイン** -- macOS + iOS + Windows + Android の native view embedding と platform-native high-dynamic-range surface path
 - **wgpu バックエンド** -- Android の playback、overlay、capture、bounded Vulkan/GLES recovery は利用可能。Linux は引き続き計画中
 

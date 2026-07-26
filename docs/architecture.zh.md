@@ -19,7 +19,7 @@ Rust Player Core
   D3D11 renderer ─────── zero-copy D3D11VA, HDR10, subtitle/danmaku pass (Windows)
   wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB
   presenter runtime ──── ties player + renderer + audio + overlays
-  C ABI ──────────────── 73 exported functions, two handle families
+  C ABI ──────────────── 75 exported functions, two handle families
   Flutter plugin ─────── macOS + iOS + Windows + Android native view embedding
 ```
 
@@ -150,7 +150,7 @@ Windows 平台的原生渲染器（`renderer/d3d11.rs`）：
 
 ## C ABI
 
-`erika_capi` 通过两组 handle family 导出 73 个函数：
+`erika_capi` 通过两组 handle family 导出 75 个函数：
 
 - **`ErikaHandle`**：播放器控制与事件轮询，渲染由宿主管理。
 - **`ErikaPresenterHandle`**：Erika 持有完整栈，宿主只需提供 surface 并调用 `render_tick`。

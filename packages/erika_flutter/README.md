@@ -103,6 +103,35 @@ to Erika, allowing wgpu to update subsequent frame targets and output status
 without reattaching the surface. On API 35 it also applies per-`SurfaceView`
 desired HDR headroom without changing the host window globally.
 
+## HTTP Headers
+
+For HTTP(S) video playback, pass request headers through `httpHeaders`:
+
+```dart
+await player.open(
+  'https://example.com/video.mp4',
+  httpHeaders: <String, String>{
+    'Authorization': 'Bearer token',
+    'Referer': 'https://example.com/',
+  },
+);
+```
+
+Headers are sent with HEAD, Range GET, and prefetch requests, and only apply to
+HTTP(S) URLs. Headers are ignored for `content://` and local-file playback.
+Avoid writing sensitive values such as Authorization and Cookie to application
+logs.
+
+Headers the playback engine derives itself are rejected instead of merged:
+`Range`, `Host`, `Content-Length`, `Transfer-Encoding`, and `Connection`
+(case-insensitive) make `open` throw, as do names and values that are not valid
+HTTP field tokens. If the bundled native library is a 0.1.3-or-earlier prebuilt
+that predates HTTP header support, an `open` that carries headers throws rather
+than silently dropping them.
+
+Headers apply to the media source only — external subtitle tracks and danmaku
+sidecar files are still fetched without them.
+
 ## Output Mode
 
 `ErikaPlayer()` lets the Apple plugins choose SDR or Apple EDR from the current

@@ -17,6 +17,7 @@ Pod::Spec.new do |s|
     erika_presenter_load_danmaku_file
     erika_presenter_load_danmaku_json
     erika_presenter_open
+    erika_presenter_open_with_headers
     erika_presenter_pause
     erika_presenter_play
     erika_presenter_poll_event
