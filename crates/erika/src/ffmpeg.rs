@@ -1115,7 +1115,11 @@ impl Decoder {
                     "event": "video_decoder",
                     "stage": "software_decoder_selected",
                     "codec": "av1",
-                    "decoder": "libdav1d",
+                    "decoder": if cfg!(target_os = "windows") {
+                        "avcodec_find_decoder"
+                    } else {
+                        "libdav1d"
+                    },
                 })
                 .to_string(),
             );
@@ -1387,6 +1391,7 @@ impl Decoder {
 }
 
 fn software_decoder(codec_id: sys::AVCodecID) -> (*const sys::AVCodec, &'static str) {
+    #[cfg(not(target_os = "windows"))]
     if codec_id == sys::AVCodecID_AV_CODEC_ID_AV1 {
         return (
             unsafe { sys::avcodec_find_decoder_by_name(c"libdav1d".as_ptr()) },
@@ -3963,6 +3968,16 @@ mod tests {
     fn videotoolbox_uses_ffmpeg_av1_decoder() {
         let (codec, operation) = videotoolbox_decoder(sys::AVCodecID_AV_CODEC_ID_AV1);
         assert_eq!(operation, "avcodec_find_decoder_by_name(av1)");
+        assert!(!codec.is_null());
+    }
+
+    #[test]
+    fn software_uses_available_ffmpeg_av1_decoder() {
+        let (codec, operation) = software_decoder(sys::AVCodecID_AV_CODEC_ID_AV1);
+        #[cfg(target_os = "windows")]
+        assert_eq!(operation, "avcodec_find_decoder");
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(operation, "avcodec_find_decoder_by_name(libdav1d)");
         assert!(!codec.is_null());
     }
 
