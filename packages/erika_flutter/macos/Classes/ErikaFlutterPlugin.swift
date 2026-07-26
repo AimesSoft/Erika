@@ -1803,7 +1803,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
     view.wantsLayer = true
     view.layer?.isOpaque = false
     view.layer?.backgroundColor = NSColor.clear.cgColor
-    view.window?.backgroundColor = .black
+    (flutterHostViewController as? FlutterViewController)?.backgroundColor = .clear
   }
 
   private func convertedOverlayRect(
