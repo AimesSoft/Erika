@@ -637,8 +637,12 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   using SeekFn = ErikaStatus (*)(ErikaPresenterHandle*, uint64_t);
   using SetPlaybackRateFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
   using SetVolumeFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
+  using GetVolumeFn = ErikaStatus (*)(ErikaPresenterHandle*, double*);
+  using SetMutedFn = ErikaStatus (*)(ErikaPresenterHandle*, bool);
   using SetUpscalerFn = ErikaStatus (*)(ErikaPresenterHandle*, int32_t);
   using SetSubtitleScaleFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
+  using SetSubtitleDelayFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
+  using SetAudioDelayFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
   using GetUpscalerStatusFn =
       ErikaStatus (*)(ErikaPresenterHandle*, ErikaUpscalerStatus*);
   using GetOutputStatusFn =
@@ -744,8 +748,12 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   SeekFn seek = nullptr;
   SetPlaybackRateFn set_playback_rate = nullptr;
   SetVolumeFn set_volume = nullptr;
+  GetVolumeFn get_volume = nullptr;
+  SetMutedFn set_muted = nullptr;
   SetUpscalerFn set_upscaler = nullptr;
   SetSubtitleScaleFn set_subtitle_scale = nullptr;
+  SetSubtitleDelayFn set_subtitle_delay = nullptr;
+  SetAudioDelayFn set_audio_delay = nullptr;
   GetUpscalerStatusFn get_upscaler_status = nullptr;
   GetOutputStatusFn get_output_status = nullptr;
   SelectTrackFn select_audio_track = nullptr;
@@ -800,10 +808,16 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
     set_playback_rate =
         LoadOptional<SetPlaybackRateFn>("erika_presenter_set_playback_rate");
     set_volume = LoadOptional<SetVolumeFn>("erika_presenter_set_volume");
+    get_volume = LoadOptional<GetVolumeFn>("erika_presenter_get_volume");
+    set_muted = LoadOptional<SetMutedFn>("erika_presenter_set_muted");
     set_upscaler =
         LoadOptional<SetUpscalerFn>("erika_presenter_set_upscaler");
     set_subtitle_scale = LoadOptional<SetSubtitleScaleFn>(
         "erika_presenter_set_subtitle_scale");
+    set_subtitle_delay = LoadOptional<SetSubtitleDelayFn>(
+        "erika_presenter_set_subtitle_delay");
+    set_audio_delay = LoadOptional<SetAudioDelayFn>(
+        "erika_presenter_set_audio_delay");
     get_upscaler_status = LoadOptional<GetUpscalerStatusFn>(
         "erika_presenter_get_upscaler_status");
     get_output_status = LoadOptional<GetOutputStatusFn>(
@@ -1102,6 +1116,24 @@ struct ErikaFlutterPlugin::PlayerHost {
           library->TakeLastError());
   }
 
+  double GetVolume() {
+    if (library->get_volume == nullptr) {
+      throw PluginError("Missing Erika C ABI symbol: erika_presenter_get_volume");
+    }
+    double volume = 1.0;
+    Check(library->get_volume(handle, &volume), "get_volume",
+          library->TakeLastError());
+    return volume;
+  }
+
+  void SetMuted(bool muted) {
+    if (library->set_muted == nullptr) {
+      throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_muted");
+    }
+    Check(library->set_muted(handle, muted), "set_muted",
+          library->TakeLastError());
+  }
+
   void SetUpscaler(int32_t mode) {
     if (library->set_upscaler == nullptr) {
       throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_upscaler");
@@ -1116,6 +1148,26 @@ struct ErikaFlutterPlugin::PlayerHost {
     }
     const double clamped = std::isfinite(scale) ? std::clamp(scale, 0.25, 4.0) : 1.0;
     Check(library->set_subtitle_scale(handle, clamped), "set_subtitle_scale");
+  }
+
+  void SetSubtitleDelay(double seconds) {
+    if (library->set_subtitle_delay == nullptr) {
+      throw PluginError(
+          "Missing Erika C ABI symbol: erika_presenter_set_subtitle_delay");
+    }
+    const double clamped =
+        std::isfinite(seconds) ? std::clamp(seconds, -60.0, 60.0) : 0.0;
+    Check(library->set_subtitle_delay(handle, clamped), "set_subtitle_delay");
+  }
+
+  void SetAudioDelay(double seconds) {
+    if (library->set_audio_delay == nullptr) {
+      throw PluginError(
+          "Missing Erika C ABI symbol: erika_presenter_set_audio_delay");
+    }
+    const double clamped =
+        std::isfinite(seconds) ? std::clamp(seconds, -10.0, 10.0) : 0.0;
+    Check(library->set_audio_delay(handle, clamped), "set_audio_delay");
   }
 
   EncodableValue GetUpscalerStatus() {
@@ -2090,6 +2142,12 @@ void ErikaFlutterPlugin::HandleMethodCall(
       PlayerFromArgs(args).SetVolume(
           DoubleValue(FindArg(args, "volume")).value_or(1.0));
       result->Success();
+    } else if (method == "getVolume") {
+      result->Success(EncodableValue(PlayerFromArgs(args).GetVolume()));
+    } else if (method == "setMuted") {
+      PlayerFromArgs(args).SetMuted(
+          BoolValue(FindArg(args, "muted")).value_or(false));
+      result->Success();
     } else if (method == "setUpscaler") {
       PlayerFromArgs(args).SetUpscaler(
           static_cast<int32_t>(RequiredInt64(args, "mode")));
@@ -2097,6 +2155,14 @@ void ErikaFlutterPlugin::HandleMethodCall(
     } else if (method == "setSubtitleScale") {
       PlayerFromArgs(args).SetSubtitleScale(
           DoubleValue(FindArg(args, "scale")).value_or(1.0));
+      result->Success();
+    } else if (method == "setSubtitleDelay") {
+      PlayerFromArgs(args).SetSubtitleDelay(
+          DoubleValue(FindArg(args, "seconds")).value_or(0.0));
+      result->Success();
+    } else if (method == "setAudioDelay") {
+      PlayerFromArgs(args).SetAudioDelay(
+          DoubleValue(FindArg(args, "seconds")).value_or(0.0));
       result->Success();
     } else if (method == "getUpscalerStatus") {
       result->Success(PlayerFromArgs(args).GetUpscalerStatus());

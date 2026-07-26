@@ -342,6 +342,94 @@ void main() {
     await player.dispose();
   });
 
+  test('subtitle delay is forwarded in clamped seconds', () async {
+    final player = ErikaPlayer();
+
+    await player.setSubtitleDelay(const Duration(milliseconds: 2500));
+    await player.setSubtitleDelay(const Duration(seconds: -90));
+
+    final calls = playerCalls
+        .where((MethodCall call) => call.method == 'setSubtitleDelay')
+        .toList();
+    expect(calls, hasLength(2));
+    expect(calls[0].arguments, <String, Object?>{
+      'playerId': 7,
+      'seconds': 2.5,
+    });
+    expect(calls[1].arguments, <String, Object?>{
+      'playerId': 7,
+      'seconds': -60.0,
+    });
+
+    await player.dispose();
+  });
+
+  test('audio delay is forwarded in clamped seconds', () async {
+    final player = ErikaPlayer();
+
+    await player.setAudioDelay(const Duration(milliseconds: -250));
+    await player.setAudioDelay(const Duration(seconds: 25));
+
+    final calls = playerCalls
+        .where((MethodCall call) => call.method == 'setAudioDelay')
+        .toList();
+    expect(calls, hasLength(2));
+    expect(calls[0].arguments, <String, Object?>{
+      'playerId': 7,
+      'seconds': -0.25,
+    });
+    expect(calls[1].arguments, <String, Object?>{
+      'playerId': 7,
+      'seconds': 10.0,
+    });
+
+    await player.dispose();
+  });
+
+  test('mute flag is forwarded to native player', () async {
+    final player = ErikaPlayer();
+
+    await player.setMuted(true);
+    await player.setMuted(false);
+
+    final calls = playerCalls
+        .where((MethodCall call) => call.method == 'setMuted')
+        .toList();
+    expect(calls, hasLength(2));
+    expect(calls[0].arguments, <String, Object?>{
+      'playerId': 7,
+      'muted': true,
+    });
+    expect(calls[1].arguments, <String, Object?>{
+      'playerId': 7,
+      'muted': false,
+    });
+
+    await player.dispose();
+  });
+
+  test('volume getter reads the saved native volume', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(playerChannel, (MethodCall call) async {
+      playerCalls.add(call);
+      return switch (call.method) {
+        'create' => 7,
+        'getVolume' => 0.35,
+        _ => null,
+      };
+    });
+    final player = ErikaPlayer();
+
+    expect(await player.getVolume(), closeTo(0.35, 0.000001));
+
+    final call = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'getVolume',
+    );
+    expect(call.arguments, <String, Object?>{'playerId': 7});
+
+    await player.dispose();
+  });
+
   test('window overlay methods forward surface geometry', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(playerChannel, (MethodCall call) async {

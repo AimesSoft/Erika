@@ -750,6 +750,31 @@ class ErikaPlayer {
     });
   }
 
+  /// Returns the saved user volume in `[0.0, 1.0]`. While muted this still
+  /// reports the volume set via [setVolume] so UIs can keep their slider
+  /// position; the audio output itself runs at zero gain.
+  Future<double> getVolume() async {
+    final playerId = await ensureCreated();
+    final volume = await _channel.invokeMethod<num>(
+      'getVolume',
+      <String, Object?>{'playerId': playerId},
+    );
+    if (volume == null) {
+      throw StateError('Erika volume returned null.');
+    }
+    return volume.toDouble();
+  }
+
+  /// Mutes or unmutes audio output without discarding the saved volume.
+  /// Volume changes made while muted are remembered and applied on unmute.
+  Future<void> setMuted(bool muted) async {
+    final playerId = await ensureCreated();
+    await _invoke('setMuted', <String, Object?>{
+      'playerId': playerId,
+      'muted': muted,
+    });
+  }
+
   Future<void> setUpscaler(ErikaUpscalerMode mode) async {
     final playerId = await ensureCreated();
     await _invoke('setUpscaler', <String, Object?>{
@@ -764,6 +789,38 @@ class ErikaPlayer {
     await _invoke('setSubtitleScale', <String, Object?>{
       'playerId': playerId,
       'scale': clampedScale,
+    });
+  }
+
+  /// Sets the subtitle delay with mpv `sub-delay` semantics: a positive
+  /// [delay] displays subtitles later relative to the video, a negative one
+  /// earlier. Clamped to plus or minus 60 seconds.
+  Future<void> setSubtitleDelay(Duration delay) async {
+    final playerId = await ensureCreated();
+    final seconds =
+        (delay.inMicroseconds / Duration.microsecondsPerSecond).clamp(
+      -60.0,
+      60.0,
+    );
+    await _invoke('setSubtitleDelay', <String, Object?>{
+      'playerId': playerId,
+      'seconds': seconds,
+    });
+  }
+
+  /// Sets the audio delay with mpv `audio-delay` semantics: a positive
+  /// [delay] plays audio later than the video. Clamped to plus or minus
+  /// 10 seconds.
+  Future<void> setAudioDelay(Duration delay) async {
+    final playerId = await ensureCreated();
+    final seconds =
+        (delay.inMicroseconds / Duration.microsecondsPerSecond).clamp(
+      -10.0,
+      10.0,
+    );
+    await _invoke('setAudioDelay', <String, Object?>{
+      'playerId': playerId,
+      'seconds': seconds,
     });
   }
 

@@ -755,6 +755,23 @@ unsafe fn invoke_presenter(
             let scale = required_f64(args, "scale")?;
             status_value(unsafe { erika_presenter_set_subtitle_scale(handle, scale) })
         }
+        "setSubtitleDelay" => {
+            let seconds = required_f64(args, "seconds")?;
+            status_value(unsafe { erika_presenter_set_subtitle_delay(handle, seconds) })
+        }
+        "setAudioDelay" => {
+            let seconds = required_f64(args, "seconds")?;
+            status_value(unsafe { erika_presenter_set_audio_delay(handle, seconds) })
+        }
+        "setMuted" => {
+            let muted = required_bool(args, "muted")?;
+            status_value(unsafe { erika_presenter_set_muted(handle, muted) })
+        }
+        "getVolume" => {
+            let mut volume = 1.0f64;
+            call_status(unsafe { erika_presenter_get_volume(handle, &mut volume) })?;
+            Ok(json!(volume))
+        }
         "setOutputHeadroom" => {
             let headroom = required_f64(args, "headroom")? as f32;
             let known =
@@ -1372,6 +1389,10 @@ fn optional_i64(args: &Map<String, Value>, name: &str) -> Option<i64> {
 
 fn optional_bool(args: &Map<String, Value>, name: &str) -> Option<bool> {
     args.get(name).and_then(Value::as_bool)
+}
+
+fn required_bool(args: &Map<String, Value>, name: &str) -> Result<bool, String> {
+    optional_bool(args, name).ok_or_else(|| format!("{name} is required"))
 }
 
 fn c_string(value: &str, name: &str) -> Result<CString, String> {
