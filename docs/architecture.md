@@ -22,7 +22,7 @@ Rust Player Core
   D3D11 renderer ─────── zero-copy D3D11VA, HDR10, subtitle/danmaku pass (Windows)
   wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB
   presenter runtime ──── ties player + renderer + audio + overlays
-  C ABI ──────────────── 73 exported functions, two handle families
+  C ABI ──────────────── 75 exported functions, two handle families
   Flutter plugin ─────── macOS + iOS + Windows + Android native view embedding
 ```
 
@@ -250,7 +250,7 @@ DanmakuEngine, and audio output. The host supplies a native surface and drives
 
 ## C ABI
 
-`erika_capi` exports 73 functions through two handle families:
+`erika_capi` exports 75 functions through two handle families:
 
 - **`ErikaHandle`** — player control and event polling. The host owns rendering.
 - **`ErikaPresenterHandle`** — Erika owns the full stack. The host provides a

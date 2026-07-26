@@ -306,6 +306,7 @@ private struct ErikaDanmakuTrackInfoC {
 private enum ErikaPluginError: Error, CustomStringConvertible {
   case libraryNotFound([String])
   case symbolMissing(String)
+  case httpHeadersUnsupported
   case invalidArguments(String)
   case playerNotFound(Int64)
   case viewNotFound(Int64)
@@ -320,6 +321,8 @@ private enum ErikaPluginError: Error, CustomStringConvertible {
       return "Unable to load Erika C ABI. Tried: \(paths.joined(separator: ", "))"
     case .symbolMissing(let symbol):
       return "Missing Erika C ABI symbol: \(symbol)"
+    case .httpHeadersUnsupported:
+      return "The loaded Erika native library does not export erika_presenter_open_with_headers, so httpHeaders cannot be applied. Update the bundled native library (a prebuilt from 0.1.3 or earlier predates HTTP header support)."
     case .invalidArguments(let message):
       return message
     case .playerNotFound(let playerId):
@@ -607,19 +610,24 @@ private final class ErikaPlayerHost {
 
   func open(uri: String, httpHeaders: [String: String]) throws {
     try uri.withCString { cString in
-      if let openWithHeaders = library.openWithHeaders, !httpHeaders.isEmpty {
-        let names = httpHeaders.keys.map { strdup($0) }
-        let values = httpHeaders.values.map { strdup($0) }
-        defer {
-          names.forEach { free($0) }
-          values.forEach { free($0) }
-        }
-        var headers = zip(names, values).map { ErikaHttpHeader(name: $0.0, value: $0.1) }
-        try headers.withUnsafeBufferPointer { buffer in
-          try check(openWithHeaders(handle, cString, buffer.baseAddress.map(UnsafeRawPointer.init), UInt(headers.count)), operation: "open")
-        }
-      } else {
+      guard !httpHeaders.isEmpty else {
         try check(library.open(handle, cString), operation: "open")
+        return
+      }
+      // Never fall back to the headerless entry point here: silently dropping
+      // the headers turns an authenticated stream into an opaque 403.
+      guard let openWithHeaders = library.openWithHeaders else {
+        throw ErikaPluginError.httpHeadersUnsupported
+      }
+      let names = httpHeaders.keys.map { strdup($0) }
+      let values = httpHeaders.values.map { strdup($0) }
+      defer {
+        names.forEach { free($0) }
+        values.forEach { free($0) }
+      }
+      let headers = zip(names, values).map { ErikaHttpHeader(name: $0.0, value: $0.1) }
+      try headers.withUnsafeBufferPointer { buffer in
+        try check(openWithHeaders(handle, cString, buffer.baseAddress.map(UnsafeRawPointer.init), UInt(headers.count)), operation: "open")
       }
     }
   }

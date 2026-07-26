@@ -732,11 +732,7 @@ unsafe fn invoke_presenter(
                 erika_presenter_open_with_headers(
                     handle,
                     uri_c.as_ptr(),
-                    if headers.is_empty() {
-                        ptr::null()
-                    } else {
-                        headers.as_ptr()
-                    },
+                    headers.as_ptr(),
                     headers.len(),
                 )
             };
@@ -1390,9 +1386,34 @@ fn c_string(value: &str, name: &str) -> Result<CString, String> {
     CString::new(value).map_err(|_| format!("{name} contains an embedded NUL byte"))
 }
 
-fn c_http_headers(args: &Map<String, Value>) -> Result<Vec<ErikaHttpHeader>, String> {
+/// Owns the `CString` storage the `ErikaHttpHeader` pointers refer to. Keeping
+/// the strings and the header array in one value means the pointers stay valid
+/// for exactly as long as the caller holds the storage, instead of dangling the
+/// moment the builder returns.
+#[derive(Default)]
+struct HttpHeaderStorage {
+    _names: Vec<CString>,
+    _values: Vec<CString>,
+    headers: Vec<ErikaHttpHeader>,
+}
+
+impl HttpHeaderStorage {
+    fn as_ptr(&self) -> *const ErikaHttpHeader {
+        if self.headers.is_empty() {
+            ptr::null()
+        } else {
+            self.headers.as_ptr()
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.headers.len()
+    }
+}
+
+fn c_http_headers(args: &Map<String, Value>) -> Result<HttpHeaderStorage, String> {
     let Some(value) = args.get("httpHeaders") else {
-        return Ok(Vec::new());
+        return Ok(HttpHeaderStorage::default());
     };
     let object = value
         .as_object()
@@ -1403,17 +1424,25 @@ fn c_http_headers(args: &Map<String, Value>) -> Result<Vec<ErikaHttpHeader>, Str
         let value = value
             .as_str()
             .ok_or_else(|| format!("httpHeaders value for {name} must be a string"))?;
+        if let Some(error) = http_header_error(name, value) {
+            return Err(error);
+        }
         names.push(c_string(name, "httpHeaders name")?);
         values.push(c_string(value, "httpHeaders value")?);
     }
-    Ok(names
+    let headers = names
         .iter()
         .zip(values.iter())
         .map(|(name, value)| ErikaHttpHeader {
             name: name.as_ptr(),
             value: value.as_ptr(),
         })
-        .collect())
+        .collect();
+    Ok(HttpHeaderStorage {
+        _names: names,
+        _values: values,
+        headers,
+    })
 }
 
 fn optional_c_string(args: &Map<String, Value>, name: &str) -> Result<Option<CString>, String> {
@@ -1578,6 +1607,7 @@ mod tests {
         });
         let headers = c_http_headers(args.as_object().unwrap()).unwrap();
         let values = headers
+            .headers
             .iter()
             .map(|header| unsafe {
                 (
@@ -1587,6 +1617,36 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(values, vec![("Accept", "video/mp4"), ("X-Test", "two")]);
+        assert_eq!(headers.len(), 2);
+        assert!(!headers.as_ptr().is_null());
+    }
+
+    #[test]
+    fn empty_json_http_headers_produce_a_null_header_pointer() {
+        let args = json!({});
+        let headers = c_http_headers(args.as_object().unwrap()).unwrap();
+
+        assert_eq!(headers.len(), 0);
+        assert!(headers.as_ptr().is_null());
+    }
+
+    #[test]
+    fn rejects_reserved_and_malformed_json_http_headers() {
+        for value in [
+            json!({"Range": "bytes=0-10"}),
+            json!({"host": "example.invalid"}),
+            json!({"Content-Length": "10"}),
+            json!({"Transfer-Encoding": "chunked"}),
+            json!({"Connection": "close"}),
+            json!({"X Test": "value"}),
+            json!({"X-Test": "line\nbreak"}),
+        ] {
+            let args = json!({"httpHeaders": value});
+            assert!(
+                c_http_headers(args.as_object().unwrap()).is_err(),
+                "{value} must be rejected"
+            );
+        }
     }
 
     #[test]
@@ -1602,11 +1662,7 @@ mod tests {
         }
 
         let args = json!({});
-        assert!(
-            c_http_headers(args.as_object().unwrap())
-                .unwrap()
-                .is_empty()
-        );
+        assert_eq!(c_http_headers(args.as_object().unwrap()).unwrap().len(), 0);
     }
 
     #[test]

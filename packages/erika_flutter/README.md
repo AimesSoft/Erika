@@ -118,10 +118,19 @@ await player.open(
 ```
 
 Headers are sent with HEAD, Range GET, and prefetch requests, and only apply to
-HTTP(S) URLs. The playback engine manages `Range`; do not override it in
-`httpHeaders`. Headers are ignored for `content://` and local-file playback.
+HTTP(S) URLs. Headers are ignored for `content://` and local-file playback.
 Avoid writing sensitive values such as Authorization and Cookie to application
 logs.
+
+Headers the playback engine derives itself are rejected instead of merged:
+`Range`, `Host`, `Content-Length`, `Transfer-Encoding`, and `Connection`
+(case-insensitive) make `open` throw, as do names and values that are not valid
+HTTP field tokens. If the bundled native library is a 0.1.3-or-earlier prebuilt
+that predates HTTP header support, an `open` that carries headers throws rather
+than silently dropping them.
+
+Headers apply to the media source only — external subtitle tracks and danmaku
+sidecar files are still fetched without them.
 
 ## Output Mode
 

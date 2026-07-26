@@ -139,8 +139,8 @@ ErikaStatus erika_seek(ErikaHandle *handle, uint64_t position_micros);
 
 `uri` 是本地文件路径或 HTTP(S) URL。`erika_open_with_headers` 用于为 HTTP(S) 播放
 设置请求头；`headers` 只在调用期间读取，调用返回后即可释放。`header_count` 大于零时
-`headers` 不能为 NULL。请求头会用于 HEAD、Range GET 和预取请求；`Range` 由播放器管理，
-不要通过自定义请求头覆盖它。认证信息和 Cookie 不会写入 Erika 日志。`seek` 单位为微秒。`open` 和 `play` 都会
+`headers` 不能为 NULL。请求头会用于 HEAD、Range GET 和预取请求。
+认证信息和 Cookie 不会写入 Erika 日志。`seek` 单位为微秒。`open` 和 `play` 都会
 异步入队；应观察 `StateChanged`、`DurationChanged` 和 `Error` 事件获取最终结果，
 不要阻塞宿主 UI 线程。
 
@@ -260,6 +260,15 @@ erika_presenter_open_with_headers(presenter, "https://example.com/video.mp4",
 
 请求头仅对 HTTP(S) source 生效；本地文件和 Android `content://` source 会忽略它们。
 调用方负责保证 URI、header 名称和值在调用期间保持有效，接口不会接管这些字符串的所有权。
+
+播放器自己生成的请求头会被拒绝而不是合并——底层 HTTP client 是追加而非替换重复的
+header：`Range`、`Host`、`Content-Length`、`Transfer-Encoding`、`Connection`
+（大小写不敏感匹配）都会让调用返回 `ERIKA_STATUS_PLAYER_ERROR`。不符合 HTTP token
+规则的 header 名，或包含非法字符的 header 值，同样会失败——校验发生在 `open`，
+而不是第一次 range 请求时。
+
+请求头只作用于媒体 source。外挂字幕轨道和弹幕 sidecar 文件仍然不带这些请求头拉取，
+因此能通过视频认证的 token 目前无法用于这些 URL。
 
 `set_output_headroom` 用于发布显示器当前 HDR/SDR ratio。Android API 34+ 宿主应从
 `Display.registerHdrSdrRatioChangedListener` 调用它：有效 ratio 传 `known = true`，测量

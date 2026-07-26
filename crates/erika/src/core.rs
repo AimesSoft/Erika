@@ -126,11 +126,31 @@ pub enum MediaSourceHint {
     Http,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct MediaRequest {
     pub uri: String,
     pub source_hint: MediaSourceHint,
     pub http_headers: Vec<(String, String)>,
+}
+
+/// Hand-written so that credentials carried by custom headers (`Authorization`,
+/// session cookies, …) never reach a log line through a derived `Debug`.
+impl std::fmt::Debug for MediaRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MediaRequest")
+            .field("uri", &self.uri)
+            .field("source_hint", &self.source_hint)
+            .field(
+                "http_headers",
+                &self
+                    .http_headers
+                    .iter()
+                    .map(|(name, _)| (name.as_str(), "REDACTED"))
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 impl MediaRequest {

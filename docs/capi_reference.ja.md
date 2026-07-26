@@ -145,8 +145,8 @@ ErikaStatus erika_seek(ErikaHandle *handle, uint64_t position_micros);
 `uri` はローカルパスまたは HTTP(S) URL。`erika_open_with_headers` は HTTP(S) 再生用の
 header を設定します。`headers` は呼び出し中だけ読み取られ、戻り値の後に解放できます。
 `header_count` が 0 より大きい場合、`headers` は NULL にできません。header は HEAD、Range
-GET、prefetch request に使用され、`Range` は player が管理するため custom header で上書き
-しないでください。認証情報と Cookie は Erika の log に書き込まれません。`seek` は
+GET、prefetch request に使用されます。
+認証情報と Cookie は Erika の log に書き込まれません。`seek` は
 マイクロ秒。`open` と `play` は
 非同期にキューへ投入されます。ホスト UI スレッドをブロックせず、`StateChanged`、
 `DurationChanged`、`Error` イベントで最終結果を確認してください。
@@ -270,6 +270,17 @@ erika_presenter_open_with_headers(presenter, "https://example.com/video.mp4",
 header は HTTP(S) source にだけ適用され、local file と Android の `content://` source では
 無視されます。呼び出し側は URI、header 名、値を呼び出し中有効なまま保持してください。
 この API はこれらの文字列の所有権を取得しません。
+
+player 自身が生成する header は merge されず reject されます。下層の HTTP client は重複を
+置き換えず追加するためです：`Range`、`Host`、`Content-Length`、`Transfer-Encoding`、
+`Connection`（大文字小文字を区別せず一致）はいずれも呼び出しを
+`ERIKA_STATUS_PLAYER_ERROR` で失敗させます。HTTP token として不正な header 名や、field
+value に使えない文字を含む値も同様です。検証は最初の range request ではなく `open` の
+時点で行われます。
+
+header が適用されるのは media source だけです。外部 subtitle track と danmaku sidecar は
+まだ header なしで取得されるため、video を認証する token はこれらの URL にはまだ適用
+されません。
 
 `set_output_headroom` は display の current HDR/SDR ratio を publish します。Android API 34+
 host は `Display.registerHdrSdrRatioChangedListener` から呼び、valid ratio は `known = true`、

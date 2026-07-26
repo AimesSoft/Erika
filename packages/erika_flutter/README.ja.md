@@ -77,9 +77,17 @@ await player.open(
 ```
 
 header は HEAD、Range GET、prefetch request とともに送信され、HTTP(S) URL にだけ適用されます。
-`Range` は playback engine が管理するため、`httpHeaders` で上書きしないでください。
 `content://` と local file の再生では header は無視されます。Authorization や Cookie などの
 機密値を application log に出力しないでください。
+
+playback engine 自身が生成する header は merge されず reject されます：`Range`、`Host`、
+`Content-Length`、`Transfer-Encoding`、`Connection`（大文字小文字を区別しない）は `open` を
+throw させます。HTTP field として不正な名前や値も同様です。同梱の native library が
+0.1.3 以前の prebuilt（HTTP header 対応より前）の場合、header 付きの `open` は黙って
+header を捨てずに throw します。
+
+header が適用されるのは media source だけです。外部 subtitle track と danmaku sidecar は
+まだ header なしで取得されます。
 
 ## Output Mode
 

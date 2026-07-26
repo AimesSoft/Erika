@@ -19,7 +19,7 @@ Rust Player Core
   D3D11 renderer ─────── zero-copy D3D11VA, HDR10, subtitle/danmaku pass (Windows)
   wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB
   presenter runtime ──── ties player + renderer + audio + overlays
-  C ABI ──────────────── 73 exported functions, two handle families
+  C ABI ──────────────── 75 exported functions, two handle families
   Flutter plugin ─────── macOS + iOS + Windows + Android native view embedding
 ```
 
@@ -150,7 +150,7 @@ Windows のネイティブ renderer（`renderer/d3d11.rs`）：
 
 ## C ABI
 
-`erika_capi` は 2 つの handle family で 73 関数を export します。
+`erika_capi` は 2 つの handle family で 75 関数を export します。
 
 - **`ErikaHandle`**: player control と event polling。rendering は host 管理です。
 - **`ErikaPresenterHandle`**: Erika が full stack を所有します。host は surface を渡して `render_tick` を呼びます。

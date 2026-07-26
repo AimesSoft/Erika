@@ -765,16 +765,7 @@ pub fn source_from_uri_with_hint_and_headers(
     http_headers: Vec<(String, String)>,
 ) -> Result<Box<dyn MediaSource>> {
     match source_hint {
-        MediaSourceHint::Auto => {
-            if uri.starts_with("http://") || uri.starts_with("https://") {
-                Ok(Box::new(HttpRangeSource::with_http_headers(
-                    uri,
-                    http_headers,
-                )))
-            } else {
-                source_from_auto_uri(uri)
-            }
-        }
+        MediaSourceHint::Auto => source_from_auto_uri(uri, http_headers),
         MediaSourceHint::LocalFile => source_from_local_uri(uri),
         MediaSourceHint::Http => {
             if uri.starts_with("http://") || uri.starts_with("https://") {
@@ -789,7 +780,10 @@ pub fn source_from_uri_with_hint_and_headers(
     }
 }
 
-fn source_from_auto_uri(uri: &str) -> Result<Box<dyn MediaSource>> {
+fn source_from_auto_uri(
+    uri: &str,
+    http_headers: Vec<(String, String)>,
+) -> Result<Box<dyn MediaSource>> {
     if uri.starts_with("fd://") {
         return source_from_local_uri(uri);
     }
@@ -797,7 +791,10 @@ fn source_from_auto_uri(uri: &str) -> Result<Box<dyn MediaSource>> {
         return Ok(Box::new(LocalFileSource::open(path)?));
     }
     if uri.starts_with("http://") || uri.starts_with("https://") {
-        return Ok(Box::new(HttpRangeSource::new(uri)));
+        return Ok(Box::new(HttpRangeSource::with_http_headers(
+            uri,
+            http_headers,
+        )));
     }
     let path = Path::new(uri);
     if path.exists() {

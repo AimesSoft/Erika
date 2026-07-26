@@ -61,8 +61,6 @@ Android 最低版本仍为 API 26。Extended-linear 还要求 native-window data
 重新 attach surface 就能更新后续帧 target 和输出状态。API 35 上插件还会按
 `SurfaceView` 设置 desired HDR headroom，不修改宿主的全局 Window。
 
-## Output Mode
-
 ## HTTP 请求头
 
 播放 HTTP(S) 视频时，可以通过 `httpHeaders` 传递请求头：
@@ -77,9 +75,17 @@ await player.open(
 );
 ```
 
-请求头会随 HEAD、Range GET 和预取请求发送，仅对 HTTP(S) URL 生效。`Range` 由播放引擎
-管理，不应在 `httpHeaders` 中覆盖；`content://` 和本地文件播放不使用这些请求头。请避免
-在应用日志中输出 Authorization、Cookie 等敏感值。
+请求头会随 HEAD、Range GET 和预取请求发送，仅对 HTTP(S) URL 生效；`content://` 和本地
+文件播放不使用这些请求头。请避免在应用日志中输出 Authorization、Cookie 等敏感值。
+
+播放引擎自己生成的请求头会被拒绝而不是合并：`Range`、`Host`、`Content-Length`、
+`Transfer-Encoding`、`Connection`（大小写不敏感）会让 `open` 抛出异常，不符合 HTTP
+字段规则的名称和值同样如此。若打包的 native library 是 0.1.3 或更早的预编译产物（早于
+HTTP 请求头支持），带请求头的 `open` 会抛出异常，而不是静默丢弃它们。
+
+请求头只作用于媒体 source——外挂字幕轨道和弹幕 sidecar 文件仍然不带这些请求头拉取。
+
+## Output Mode
 
 `ErikaPlayer()` 会让 Apple 插件根据当前屏幕和环境选择 SDR 或 Apple EDR；Android 默认
 为 SDR。若要从 Dart 强制 Apple EDR：

@@ -1076,10 +1076,24 @@ struct ErikaFlutterPlugin::PlayerHost {
 
   void Open(const std::string& uri, const EncodableMap& args) {
     const auto* raw_headers = FindArg(args, "httpHeaders");
-    const auto* headers = raw_headers == nullptr
-        ? nullptr
-        : std::get_if<EncodableMap>(raw_headers);
-    if (library->open_with_headers != nullptr && headers != nullptr && !headers->empty()) {
+    const EncodableMap* headers = nullptr;
+    if (raw_headers != nullptr &&
+        !std::holds_alternative<std::monostate>(*raw_headers)) {
+      headers = std::get_if<EncodableMap>(raw_headers);
+      if (headers == nullptr) {
+        throw PluginError("httpHeaders must be a map of string names to string values.");
+      }
+    }
+    if (headers != nullptr && !headers->empty()) {
+      // Never fall back to the headerless entry point here: silently dropping
+      // the headers turns an authenticated stream into an opaque 403.
+      if (library->open_with_headers == nullptr) {
+        throw PluginError(
+            "The loaded Erika native library does not export "
+            "erika_presenter_open_with_headers, so httpHeaders cannot be applied. "
+            "Update the bundled erika_capi.dll (a prebuilt from 0.1.3 or earlier "
+            "predates HTTP header support).");
+      }
       std::vector<std::string> names;
       std::vector<std::string> values;
       std::vector<ErikaHttpHeader> native_headers;
