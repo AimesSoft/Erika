@@ -846,7 +846,12 @@ fn build_text_dependencies(layout: &WorkspaceLayout, options: DepsOptions) -> Re
 }
 
 fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if layout.zlib_build_marker.exists() && !options.force {
+    if layout.zlib_build_marker.exists()
+        && !options.force
+        && (native_static_lib_exists(&layout.zlib_prefix, "z")
+            || native_static_lib_exists(&layout.zlib_prefix, "zlib")
+            || native_static_lib_exists(&layout.zlib_prefix, "zs"))
+    {
         println!(
             "reuse zlib build marker {}",
             layout.zlib_build_marker.display()
@@ -854,7 +859,7 @@ fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         ensure_windows_link_aliases(
             options.target,
             &layout.zlib_prefix,
-            &[("zlibs.lib", "z.lib")],
+            &[("zs.lib", "z.lib"), ("z.lib", "zlib.lib")],
         )?;
         ensure_windows_zlib_static_alias(options.target, &layout.zlib_prefix)?;
         ensure_windows_zlib_header_compat(options.target, &layout.zlib_prefix)?;
@@ -875,7 +880,10 @@ fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         .arg(&layout.zlib_build_dir)
         .arg("-DCMAKE_BUILD_TYPE=Release")
         .arg("-DBUILD_SHARED_LIBS=OFF")
-        .arg("-DZLIB_BUILD_EXAMPLES=OFF")
+        .arg("-DZLIB_BUILD_SHARED=OFF")
+        .arg("-DZLIB_BUILD_STATIC=ON")
+        .arg("-DZLIB_INSTALL=ON")
+        .arg("-DZLIB_BUILD_TESTING=OFF")
         .arg(format!(
             "-DCMAKE_INSTALL_PREFIX={}",
             layout.zlib_prefix.display()
@@ -886,7 +894,7 @@ fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     ensure_windows_link_aliases(
         options.target,
         &layout.zlib_prefix,
-        &[("zlibs.lib", "z.lib")],
+        &[("zs.lib", "z.lib"), ("z.lib", "zlib.lib")],
     )?;
     ensure_windows_zlib_static_alias(options.target, &layout.zlib_prefix)?;
     ensure_windows_zlib_header_compat(options.target, &layout.zlib_prefix)?;
@@ -2868,7 +2876,7 @@ fn ensure_windows_zlib_static_alias(target: NativeTarget, prefix: &Path) -> Resu
     if import_lib.exists() {
         return Ok(());
     }
-    for source in ["zlibs.lib", "zlibstatic.lib", "z.lib"] {
+    for source in ["zs.lib", "zlibs.lib", "zlibstatic.lib", "z.lib"] {
         let static_lib = lib_dir.join(source);
         if static_lib.exists() {
             fs::copy(&static_lib, &import_lib).with_context(|| {
