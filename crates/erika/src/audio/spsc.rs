@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use super::{AudioPushResult, AudioRingBufferStats};
+use super::{AudioPushResult, AudioRingBufferStats, apply_volume_ramp, normalize_volume};
 
 const EMPTY_POSITION: u64 = u64::MAX;
 
@@ -32,18 +32,25 @@ impl PcmSpscSlot {
 /// sample copies, zero filling, and atomic counter updates. Slot
 /// versions prevent a producer-side drop-oldest overwrite from exposing a torn
 /// multi-channel frame to the realtime consumer.
+///
+/// Samples are stored at source gain. Volume is applied on the consumer side
+/// as a per-callback linear ramp from the last applied gain to the current
+/// target, so a control-thread volume step neither rewrites queued slots nor
+/// produces an audible discontinuity (zipper noise).
 pub(crate) struct PcmSpscRing {
     capacity_frames: usize,
     channels: usize,
     slots: Box<[PcmSpscSlot]>,
-    source_samples: Box<[AtomicU32]>,
-    output_samples: Box<[AtomicU32]>,
+    samples: Box<[AtomicU32]>,
     read_position: AtomicU64,
     write_position: AtomicU64,
     written_frames: AtomicU64,
     read_frames: AtomicU64,
     dropped_frames: AtomicU64,
     underflow_frames: AtomicU64,
+    target_volume: AtomicU32,
+    // Only the single consumer reads and writes this between its callbacks.
+    last_applied_volume: AtomicU32,
 }
 
 impl PcmSpscRing {
@@ -56,11 +63,7 @@ impl PcmSpscRing {
             .map(|_| PcmSpscSlot::empty())
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let source_samples = (0..sample_capacity)
-            .map(|_| AtomicU32::new(0.0f32.to_bits()))
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        let output_samples = (0..sample_capacity)
+        let samples = (0..sample_capacity)
             .map(|_| AtomicU32::new(0.0f32.to_bits()))
             .collect::<Vec<_>>()
             .into_boxed_slice();
@@ -68,14 +71,15 @@ impl PcmSpscRing {
             capacity_frames,
             channels,
             slots,
-            source_samples,
-            output_samples,
+            samples,
             read_position: AtomicU64::new(0),
             write_position: AtomicU64::new(0),
             written_frames: AtomicU64::new(0),
             read_frames: AtomicU64::new(0),
             dropped_frames: AtomicU64::new(0),
             underflow_frames: AtomicU64::new(0),
+            target_volume: AtomicU32::new(1.0f32.to_bits()),
+            last_applied_volume: AtomicU32::new(1.0f32.to_bits()),
         })
     }
 
@@ -91,7 +95,6 @@ impl PcmSpscRing {
         &self,
         input: &[f32],
         drop_oldest_on_overflow: bool,
-        volume: f32,
     ) -> PcmSpscPushResult {
         let original_frames = input.len() / self.channels;
         let mut input_offset_frames = 0usize;
@@ -127,11 +130,8 @@ impl PcmSpscRing {
             let input_base = input_frame * self.channels;
             let output_base = slot_index * self.channels;
             for channel in 0..self.channels {
-                let sample = input[input_base + channel];
-                self.source_samples[output_base + channel]
-                    .store(sample.to_bits(), Ordering::Relaxed);
-                self.output_samples[output_base + channel]
-                    .store((sample * volume).to_bits(), Ordering::Relaxed);
+                self.samples[output_base + channel]
+                    .store(input[input_base + channel].to_bits(), Ordering::Relaxed);
             }
             slot.position.store(position, Ordering::Relaxed);
             slot.version.fetch_add(1, Ordering::Release);
@@ -181,9 +181,8 @@ impl PcmSpscRing {
             }
             let sample_base = slot_index * self.channels;
             for channel in 0..self.channels {
-                output[output_base + channel] = f32::from_bits(
-                    self.output_samples[sample_base + channel].load(Ordering::Relaxed),
-                );
+                output[output_base + channel] =
+                    f32::from_bits(self.samples[sample_base + channel].load(Ordering::Relaxed));
             }
             let version_after = slot.version.load(Ordering::Acquire);
             let read_floor = self.read_position.load(Ordering::Acquire);
@@ -199,6 +198,14 @@ impl PcmSpscRing {
             Ordering::AcqRel,
         );
 
+        // Ramp from the previous callback's gain to the current target so a
+        // control-thread volume step never lands as an audible discontinuity.
+        let from = f32::from_bits(self.last_applied_volume.load(Ordering::Relaxed));
+        let to = f32::from_bits(self.target_volume.load(Ordering::Relaxed));
+        apply_volume_ramp(output, self.channels, from, to);
+        self.last_applied_volume
+            .store(normalize_volume(to).to_bits(), Ordering::Relaxed);
+
         let underflow_frames = requested_frames.saturating_sub(valid_frames);
         self.read_frames
             .fetch_add(valid_frames as u64, Ordering::Relaxed);
@@ -212,28 +219,22 @@ impl PcmSpscRing {
         self.read_position.store(write, Ordering::Release);
     }
 
+    /// Publishes a new gain target for the consumer-side ramp. Queued samples
+    /// are left untouched; the next `read_interleaved` ramps toward the target
+    /// without disturbing slots the realtime reader may be copying.
     pub(crate) fn set_volume(&self, volume: f32) {
-        let read = self.read_position.load(Ordering::Acquire);
-        let write = self.write_position.load(Ordering::Acquire);
-        let frames = write.saturating_sub(read).min(self.capacity_frames as u64) as usize;
-        for frame_index in 0..frames {
-            let position = read.saturating_add(frame_index as u64);
-            let slot_index = position as usize % self.capacity_frames;
-            let slot = &self.slots[slot_index];
-            if slot.position.load(Ordering::Acquire) != position {
-                continue;
-            }
-            slot.version.fetch_add(1, Ordering::AcqRel);
-            let sample_base = slot_index * self.channels;
-            for channel in 0..self.channels {
-                let sample = f32::from_bits(
-                    self.source_samples[sample_base + channel].load(Ordering::Relaxed),
-                );
-                self.output_samples[sample_base + channel]
-                    .store((sample * volume).to_bits(), Ordering::Relaxed);
-            }
-            slot.version.fetch_add(1, Ordering::Release);
-        }
+        self.target_volume
+            .store(normalize_volume(volume).to_bits(), Ordering::Relaxed);
+    }
+
+    /// Sets the gain target and the ramp origin together, so the next read
+    /// applies `volume` as a constant instead of ramping toward it from the
+    /// previous gain. Only call while the consumer is not running (for example
+    /// when seeding a freshly created ring before the stream starts).
+    pub(crate) fn snap_volume(&self, volume: f32) {
+        let bits = normalize_volume(volume).to_bits();
+        self.target_volume.store(bits, Ordering::Relaxed);
+        self.last_applied_volume.store(bits, Ordering::Relaxed);
     }
 
     pub(crate) fn stats(&self) -> AudioRingBufferStats {
@@ -270,7 +271,10 @@ mod tests {
     #[test]
     fn ring_reads_interleaved_frames_and_zero_fills_underflow() {
         let ring = PcmSpscRing::new(4, 2).unwrap();
-        let pushed = ring.push_interleaved(&[0.1, 0.2, 0.3, 0.4], true, 0.5);
+        // Seed both ramp endpoints so this test asserts steady-state
+        // amplitudes rather than the transition slope.
+        ring.snap_volume(0.5);
+        let pushed = ring.push_interleaved(&[0.1, 0.2, 0.3, 0.4], true);
         let mut output = [1.0; 6];
 
         let read = ring.read_interleaved(&mut output);
@@ -284,8 +288,8 @@ mod tests {
     #[test]
     fn ring_drops_oldest_complete_frames_on_overflow() {
         let ring = PcmSpscRing::new(2, 2).unwrap();
-        ring.push_interleaved(&[1.0, 10.0, 2.0, 20.0], true, 1.0);
-        let pushed = ring.push_interleaved(&[3.0, 30.0], true, 1.0);
+        ring.push_interleaved(&[1.0, 10.0, 2.0, 20.0], true);
+        let pushed = ring.push_interleaved(&[3.0, 30.0], true);
         let mut output = [0.0; 4];
 
         ring.read_interleaved(&mut output);
@@ -303,7 +307,7 @@ mod tests {
         let producer = thread::spawn(move || {
             for value in 1..=FRAMES {
                 let sample = value as f32;
-                producer_ring.push_interleaved(&[sample, -sample], true, 1.0);
+                producer_ring.push_interleaved(&[sample, -sample], true);
             }
         });
 
@@ -322,14 +326,55 @@ mod tests {
     }
 
     #[test]
-    fn volume_changes_rescale_already_queued_frames_off_callback() {
+    fn set_volume_leaves_queued_samples_untouched() {
         let ring = PcmSpscRing::new(2, 2).unwrap();
-        ring.push_interleaved(&[1.0, -1.0, 0.5, -0.5], true, 1.0);
+        ring.push_interleaved(&[1.0, -1.0, 0.5, -0.5], true);
+        let versions_before: Vec<u64> = ring
+            .slots
+            .iter()
+            .map(|slot| slot.version.load(Ordering::Acquire))
+            .collect();
+        let samples_before: Vec<u32> = ring
+            .samples
+            .iter()
+            .map(|sample| sample.load(Ordering::Relaxed))
+            .collect();
 
         ring.set_volume(0.25);
+
+        let versions_after: Vec<u64> = ring
+            .slots
+            .iter()
+            .map(|slot| slot.version.load(Ordering::Acquire))
+            .collect();
+        let samples_after: Vec<u32> = ring
+            .samples
+            .iter()
+            .map(|sample| sample.load(Ordering::Relaxed))
+            .collect();
+        assert_eq!(versions_before, versions_after);
+        assert_eq!(samples_before, samples_after);
+        assert_eq!(
+            f32::from_bits(ring.target_volume.load(Ordering::Relaxed)),
+            0.25
+        );
+    }
+
+    #[test]
+    fn volume_step_ramps_across_the_next_read_and_then_holds() {
+        let ring = PcmSpscRing::new(8, 1).unwrap();
+        ring.push_interleaved(&[1.0; 8], true);
+
+        ring.set_volume(0.5);
         let mut output = [0.0; 4];
         ring.read_interleaved(&mut output);
 
-        assert_eq!(output, [0.25, -0.25, 0.125, -0.125]);
+        // The first callback after the step ramps monotonically down to the
+        // target instead of applying it as a discontinuity.
+        assert_eq!(output, [0.875, 0.75, 0.625, 0.5]);
+
+        // Subsequent callbacks apply the settled gain as a constant.
+        ring.read_interleaved(&mut output);
+        assert_eq!(output, [0.5, 0.5, 0.5, 0.5]);
     }
 }

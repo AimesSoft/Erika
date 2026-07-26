@@ -32,7 +32,7 @@ pub mod iosaudio {
 
     use crate::audio::{
         AudioClockSnapshot, AudioOutputBackend, AudioOutputState, AudioPushResult, AudioRingBuffer,
-        AudioRingBufferConfig, AudioRingBufferStats, apply_volume, normalize_volume,
+        AudioRingBufferConfig, AudioRingBufferStats, apply_volume_ramp, normalize_volume,
     };
     use crate::ffmpeg::{PcmAudioFrame, PcmFormat, PcmSampleFormat};
 
@@ -145,6 +145,10 @@ pub mod iosaudio {
     struct CallbackState {
         buffer: Arc<Mutex<AudioRingBuffer>>,
         volume: Arc<AtomicU32>,
+        // Gain the previous callback ended on; only the serialized AudioQueue
+        // callback reads and writes it, so Relaxed ordering suffices.
+        last_applied_volume: AtomicU32,
+        channels: usize,
     }
 
     pub struct IosAudioQueueOutput {
@@ -177,6 +181,8 @@ pub mod iosaudio {
             let state = Box::new(CallbackState {
                 buffer: Arc::clone(&self.buffer),
                 volume: Arc::clone(&self.volume),
+                last_applied_volume: AtomicU32::new(self.volume.load(Ordering::Relaxed)),
+                channels: format.channels.max(1) as usize,
             });
             let state = NonNull::new(Box::into_raw(state)).expect("Box::into_raw is non-null");
             let mut queue: AudioQueueRef = ptr::null_mut();
@@ -236,8 +242,12 @@ pub mod iosaudio {
         pub fn start(&mut self) -> Result<()> {
             let queue = self.queue.ok_or(IosAudioQueueOutputError::NotConfigured)?;
             if self.state != AudioOutputState::Paused {
+                let state = self
+                    .callback_state
+                    .ok_or(IosAudioQueueOutputError::NotConfigured)?;
                 for &buffer in &self.buffers {
-                    fill_audio_queue_buffer(queue, buffer, &self.buffer, &self.volume)?;
+                    // SAFETY: the callback state stays alive until dispose_queue.
+                    fill_audio_queue_buffer(queue, buffer, unsafe { state.as_ref() })?;
                 }
             }
             check_status(
@@ -379,14 +389,13 @@ pub mod iosaudio {
             return;
         }
         let state = unsafe { &*(user_data as *const CallbackState) };
-        let _ = fill_audio_queue_buffer(queue, audio_buffer, &state.buffer, &state.volume);
+        let _ = fill_audio_queue_buffer(queue, audio_buffer, state);
     }
 
     fn fill_audio_queue_buffer(
         queue: AudioQueueRef,
         audio_buffer: AudioQueueBufferRef,
-        ring_buffer: &Arc<Mutex<AudioRingBuffer>>,
-        volume: &Arc<AtomicU32>,
+        state: &CallbackState,
     ) -> Result<()> {
         if queue.is_null() || audio_buffer.is_null() {
             return Err(IosAudioQueueOutputError::NotConfigured);
@@ -400,7 +409,7 @@ pub mod iosaudio {
         let samples = unsafe {
             std::slice::from_raw_parts_mut(buffer.audio_data.cast::<f32>(), sample_count)
         };
-        match ring_buffer.lock() {
+        match state.buffer.lock() {
             Ok(mut ring) => {
                 if ring.read_interleaved(samples).is_err() {
                     samples.fill(0.0);
@@ -408,7 +417,14 @@ pub mod iosaudio {
             }
             Err(_) => samples.fill(0.0),
         }
-        apply_volume(samples, f32::from_bits(volume.load(Ordering::Relaxed)));
+        // Ramp from the gain the previous buffer ended on so an atomic volume
+        // step never lands as an audible discontinuity (zipper noise).
+        let from = f32::from_bits(state.last_applied_volume.load(Ordering::Relaxed));
+        let to = f32::from_bits(state.volume.load(Ordering::Relaxed));
+        apply_volume_ramp(samples, state.channels, from, to);
+        state
+            .last_applied_volume
+            .store(normalize_volume(to).to_bits(), Ordering::Relaxed);
         buffer.audio_data_byte_size = buffer.audio_data_bytes_capacity;
         check_status(
             unsafe { AudioQueueEnqueueBuffer(queue, audio_buffer, 0, ptr::null()) },
@@ -481,7 +497,7 @@ pub mod coreaudio {
 
     use crate::audio::{
         AudioClockSnapshot, AudioOutputBackend, AudioOutputState, AudioPushResult, AudioReadResult,
-        AudioRingBuffer, AudioRingBufferConfig, AudioRingBufferStats, apply_volume,
+        AudioRingBuffer, AudioRingBufferConfig, AudioRingBufferStats, apply_volume_ramp,
         normalize_volume,
     };
     use crate::ffmpeg::{PcmAudioFrame, PcmFormat, PcmSampleFormat};
@@ -545,6 +561,7 @@ pub mod coreaudio {
                 &mut audio_unit,
                 Arc::clone(&self.buffer),
                 Arc::clone(&self.volume),
+                format.channels.max(1) as usize,
             )?;
             audio_unit.initialize()?;
             self.audio_unit = Some(audio_unit);
@@ -697,17 +714,22 @@ pub mod coreaudio {
         audio_unit: &mut AudioUnit,
         buffer: Arc<Mutex<AudioRingBuffer>>,
         volume: Arc<AtomicU32>,
+        channels: usize,
     ) -> Result<()> {
         type Args = render_callback::Args<data::Interleaved<f32>>;
+        // Owned by the render callback closure; CoreAudio serializes calls, so
+        // the gain the previous callback ended on needs no synchronization.
+        let mut last_applied_volume = f32::from_bits(volume.load(Ordering::Relaxed));
         audio_unit.set_render_callback(move |mut args: Args| {
             let read_result = buffer
                 .lock()
                 .map_err(|_| ())
                 .and_then(|mut buffer| buffer.read_interleaved(args.data.buffer).map_err(|_| ()))?;
-            apply_volume(
-                args.data.buffer,
-                f32::from_bits(volume.load(Ordering::Relaxed)),
-            );
+            // Ramp from the previous callback's gain so an atomic volume step
+            // never lands as an audible discontinuity (zipper noise).
+            let target = f32::from_bits(volume.load(Ordering::Relaxed));
+            apply_volume_ramp(args.data.buffer, channels, last_applied_volume, target);
+            last_applied_volume = normalize_volume(target);
             if read_result.underflow_frames > 0 {
                 args.flags
                     .insert(render_callback::ActionFlags::OUTPUT_IS_SILENCE);
@@ -735,6 +757,7 @@ pub mod coreaudio {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::audio::apply_volume;
 
         #[test]
         fn volume_is_clamped_and_applied_to_pcm_samples() {
