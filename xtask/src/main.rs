@@ -854,7 +854,7 @@ fn build_text_dependencies(layout: &WorkspaceLayout, options: DepsOptions) -> Re
 }
 
 fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if layout.zlib_build_marker.exists()
+    if marker_has_version(&layout.zlib_build_marker, "zlib", ZLIB_VERSION)
         && !options.force
         && (native_static_lib_exists(&layout.zlib_prefix, "z")
             || native_static_lib_exists(&layout.zlib_prefix, "zlib")
@@ -873,7 +873,7 @@ fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         ensure_windows_zlib_header_compat(options.target, &layout.zlib_prefix)?;
         return Ok(());
     }
-    clean_build_and_prefix(options, &layout.zlib_build_dir, &layout.zlib_prefix)?;
+    reset_build_and_prefix(&layout.zlib_build_dir, &layout.zlib_prefix)?;
     fs::create_dir_all(&layout.zlib_build_dir)
         .with_context(|| format!("create {}", layout.zlib_build_dir.display()))?;
     fs::create_dir_all(&layout.zlib_prefix)
@@ -1005,14 +1005,16 @@ fn dav1d_requires_nasm(target: NativeTarget) -> bool {
 }
 
 fn build_freetype(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if layout.freetype_build_marker.exists() && !options.force {
+    if marker_has_version(&layout.freetype_build_marker, "freetype", FREETYPE_VERSION)
+        && !options.force
+    {
         println!(
             "reuse FreeType build marker {}",
             layout.freetype_build_marker.display()
         );
         return Ok(());
     }
-    clean_build_and_prefix(options, &layout.freetype_build_dir, &layout.freetype_prefix)?;
+    reset_build_and_prefix(&layout.freetype_build_dir, &layout.freetype_prefix)?;
     fs::create_dir_all(&layout.freetype_build_dir)
         .with_context(|| format!("create {}", layout.freetype_build_dir.display()))?;
     fs::create_dir_all(&layout.freetype_prefix)
@@ -1048,14 +1050,16 @@ fn build_freetype(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> 
 }
 
 fn build_harfbuzz(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if layout.harfbuzz_build_marker.exists() && !options.force {
+    if marker_has_version(&layout.harfbuzz_build_marker, "harfbuzz", HARFBUZZ_VERSION)
+        && !options.force
+    {
         println!(
             "reuse HarfBuzz build marker {}",
             layout.harfbuzz_build_marker.display()
         );
         return Ok(());
     }
-    clean_build_and_prefix(options, &layout.harfbuzz_build_dir, &layout.harfbuzz_prefix)?;
+    reset_build_and_prefix(&layout.harfbuzz_build_dir, &layout.harfbuzz_prefix)?;
     fs::create_dir_all(&layout.harfbuzz_build_dir)
         .with_context(|| format!("create {}", layout.harfbuzz_build_dir.display()))?;
     fs::create_dir_all(&layout.harfbuzz_prefix)
@@ -1106,7 +1110,9 @@ fn build_harfbuzz(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> 
 }
 
 fn build_fribidi(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if layout.fribidi_build_marker.exists() && !options.force {
+    if marker_has_version(&layout.fribidi_build_marker, "fribidi", FRIBIDI_VERSION)
+        && !options.force
+    {
         println!(
             "reuse FriBidi build marker {}",
             layout.fribidi_build_marker.display()
@@ -1119,12 +1125,8 @@ fn build_fribidi(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         return Ok(());
     }
     patch_fribidi_meson_native_compiler(layout)?;
-    if layout.fribidi_build_dir.exists() && !layout.fribidi_build_marker.exists() {
-        fs::remove_dir_all(&layout.fribidi_build_dir)
-            .with_context(|| format!("remove stale {}", layout.fribidi_build_dir.display()))?;
-    }
     let meson = ensure_meson_tools(layout)?;
-    clean_build_and_prefix(options, &layout.fribidi_build_dir, &layout.fribidi_prefix)?;
+    reset_build_and_prefix(&layout.fribidi_build_dir, &layout.fribidi_prefix)?;
     fs::create_dir_all(&layout.fribidi_prefix)
         .with_context(|| format!("create {}", layout.fribidi_prefix.display()))?;
     println!("configure FriBidi");
@@ -1181,7 +1183,7 @@ fn patch_fribidi_meson_native_compiler(layout: &WorkspaceLayout) -> Result<()> {
 }
 
 fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if layout.libass_build_marker.exists() && !options.force {
+    if marker_has_version(&layout.libass_build_marker, "libass", LIBASS_VERSION) && !options.force {
         println!(
             "reuse libass build marker {}",
             layout.libass_build_marker.display()
@@ -1193,12 +1195,8 @@ fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         )?;
         return Ok(());
     }
-    if layout.libass_build_dir.exists() && !layout.libass_build_marker.exists() {
-        fs::remove_dir_all(&layout.libass_build_dir)
-            .with_context(|| format!("remove stale {}", layout.libass_build_dir.display()))?;
-    }
     let meson = ensure_meson_tools(layout)?;
-    clean_build_and_prefix(options, &layout.libass_build_dir, &layout.libass_prefix)?;
+    reset_build_and_prefix(&layout.libass_build_dir, &layout.libass_prefix)?;
     fs::create_dir_all(&layout.libass_prefix)
         .with_context(|| format!("create {}", layout.libass_prefix.display()))?;
 
@@ -1600,16 +1598,15 @@ fn meson_compile_install(
     run(&mut install)
 }
 
-fn clean_build_and_prefix(
-    options: DepsOptions,
-    build_dir: &std::path::Path,
-    prefix: &std::path::Path,
-) -> Result<()> {
-    if options.force && prefix.exists() {
-        fs::remove_dir_all(prefix).with_context(|| format!("remove {}", prefix.display()))?;
-    }
-    if options.force && build_dir.exists() {
-        fs::remove_dir_all(build_dir).with_context(|| format!("remove {}", build_dir.display()))?;
+// Only reached once the build marker was rejected, so the build directory holds
+// a CMake or Meson configuration for a version we no longer pin. Never reuse it:
+// both generators refuse to reconfigure against a different source directory,
+// and the prefix would keep headers and archives from the old version.
+fn reset_build_and_prefix(build_dir: &std::path::Path, prefix: &std::path::Path) -> Result<()> {
+    for path in [prefix, build_dir] {
+        if path.exists() {
+            fs::remove_dir_all(path).with_context(|| format!("remove {}", path.display()))?;
+        }
     }
     Ok(())
 }
@@ -1625,6 +1622,16 @@ fn write_marker(
         format!("{name}={version}\nprefix={}\n", prefix.display()),
     )
     .with_context(|| format!("write {}", path.display()))
+}
+
+fn marker_has_version(path: &std::path::Path, name: &str, version: &str) -> bool {
+    fs::read_to_string(path)
+        .map(|marker| {
+            marker
+                .lines()
+                .any(|line| line == format!("{name}={version}"))
+        })
+        .unwrap_or(false)
 }
 
 fn pkg_config_path<'a>(prefixes: impl IntoIterator<Item = &'a PathBuf>) -> String {
@@ -3965,6 +3972,17 @@ mod tests {
         assert!(dav1d_requires_nasm(NativeTarget::X86_64Android));
         assert!(!dav1d_requires_nasm(NativeTarget::Aarch64Macos));
         assert!(!dav1d_requires_nasm(NativeTarget::Aarch64Ios));
+    }
+
+    #[test]
+    fn dependency_markers_require_current_versions() {
+        let path = std::env::temp_dir().join(format!("erika-xtask-marker-{}", std::process::id()));
+        fs::write(&path, "zlib=1.3.1\nprefix=/tmp\n").unwrap();
+
+        assert!(!marker_has_version(&path, "zlib", "1.3.2"));
+        assert!(marker_has_version(&path, "zlib", "1.3.1"));
+
+        fs::remove_file(path).unwrap();
     }
 
     #[test]
