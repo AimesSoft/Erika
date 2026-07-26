@@ -1561,6 +1561,60 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
     })
 }
 
+/// Sets the fallback subtitle font. A null or empty `family`/`file_path`
+/// clears that half of the selection and restores the platform default.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_set_subtitle_font(
+    handle: *mut ErikaPresenterHandle,
+    family: *const c_char,
+    file_path: *const c_char,
+) -> ErikaStatus {
+    with_presenter_mut(handle, |handle| {
+        let family = optional_c_string(family).unwrap_or_default();
+        let file_path = optional_c_string(file_path).unwrap_or_default();
+        handle.presenter.set_subtitle_font(family, file_path);
+        ErikaStatus::Ok
+    })
+}
+
+/// Sets the fallback subtitle look: colours as `0xRRGGBBAA`, plus the base font
+/// size and outline width in ASS script units (the subtitle scale still
+/// multiplies both). With `force_override` set, all of it and the custom font
+/// replace what ASS dialogue styles ask for instead of only filling in what
+/// they leave unspecified.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_set_subtitle_style(
+    handle: *mut ErikaPresenterHandle,
+    primary_rgba: u32,
+    outline_rgba: u32,
+    font_size: f64,
+    outline_width: f64,
+    force_override: bool,
+) -> ErikaStatus {
+    with_presenter_mut(handle, |handle| {
+        handle.presenter.set_subtitle_style(
+            primary_rgba,
+            outline_rgba,
+            font_size,
+            outline_width,
+            force_override,
+        );
+        ErikaStatus::Ok
+    })
+}
+
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
@@ -2309,6 +2363,39 @@ pub unsafe extern "C" fn erika_presenter_set_upscaler(
 pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
     _handle: *mut std::ffi::c_void,
     _scale: f64,
+) -> ErikaStatus {
+    ErikaStatus::PlayerError
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+)))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_set_subtitle_font(
+    _handle: *mut std::ffi::c_void,
+    _family: *const c_char,
+    _file_path: *const c_char,
+) -> ErikaStatus {
+    ErikaStatus::PlayerError
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+)))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_set_subtitle_style(
+    _handle: *mut std::ffi::c_void,
+    _primary_rgba: u32,
+    _outline_rgba: u32,
+    _font_size: f64,
+    _outline_width: f64,
+    _force_override: bool,
 ) -> ErikaStatus {
     ErikaStatus::PlayerError
 }

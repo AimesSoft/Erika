@@ -164,6 +164,16 @@ final tracks = await player.tracks();
 await player.selectAudioTrack(trackId);
 await player.selectSubtitleTrack(trackId);
 await player.addExternalSubtitle('/path/to/subtitle.srt');
+await player.setSubtitleScale(1.2);
+// Fallback subtitle font and colors (0xRRGGBBAA); forceOverride also
+// replaces the styling an ASS script carries.
+await player.setSubtitleStyle(
+  fontFamily: 'Source Han Sans SC',
+  primaryColorRgba: 0xFFFFFFFF,
+  outlineColorRgba: 0x0000007F,
+  fontSize: 48,
+  outlineWidth: 2,
+);
 
 // Danmaku
 await player.loadDanmakuFile('/path/to/danmaku.xml');

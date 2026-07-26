@@ -74,7 +74,8 @@ cargo run -p xtask -- deps status
 ## 字幕系统
 
 - **Parsing**：SRT、WebVTT、ASS 时间线解析。支持内嵌和外部字幕轨，外部轨可在运行时增删。
-- **libass renderer**：静态链接且默认启用。接收 ASS 脚本，调用 `ass_render_frame`，把 alpha plane 导入 Erika 的 overlay 系统。macOS 使用 CoreText 字体提供者；iOS 把 Erika 内嵌的 Droid Sans Fallback 注册为内存字体，避开应用不可访问的系统字体路径。
+- **libass renderer**：静态链接且默认启用。接收 ASS 脚本，调用 `ass_render_frame`，把 alpha plane 导入 Erika 的 overlay 系统。macOS 使用 CoreText 字体提供者，Windows 用 DirectWrite；其余目标运行时没有任何系统字体提供者（vendored libass 关闭了 fontconfig），因此 Erika 内嵌并在所有平台注册为内存字体的 Droid Sans Fallback 就是 libass 默认解析到的字体族。
+- **字幕样式**：自定义字体族、字体文件、字号、描边宽度与文字/描边颜色作为回退值，补足脚本未指定的部分以及纯文本字幕的样式；字号与描边还会再乘上字幕缩放。`force_override` 会把它们提升为 libass 的 selective style override，从而覆盖 ASS 对白自带的样式。
 - **SubtitleRendererCore**：面向 renderer 的边界层，用 changed/unchanged frame 跟踪避免重复 GPU 上传。
 
 ## 弹幕系统

@@ -755,6 +755,50 @@ unsafe fn invoke_presenter(
             let scale = required_f64(args, "scale")?;
             status_value(unsafe { erika_presenter_set_subtitle_scale(handle, scale) })
         }
+        "setSubtitleStyle" => {
+            if args.contains_key("fontFamily") || args.contains_key("fontFilePath") {
+                let family = optional_c_string(args, "fontFamily")?;
+                let file_path = optional_c_string(args, "fontFilePath")?;
+                call_status(unsafe {
+                    erika_presenter_set_subtitle_font(
+                        handle,
+                        optional_c_string_ptr(&family),
+                        optional_c_string_ptr(&file_path),
+                    )
+                })?;
+            }
+            if args.contains_key("primaryColorRgba")
+                || args.contains_key("outlineColorRgba")
+                || args.contains_key("fontSize")
+                || args.contains_key("outlineWidth")
+                || args.contains_key("forceOverride")
+            {
+                let mut primary = erika::subtitle::DEFAULT_SUBTITLE_PRIMARY_COLOR_RGBA;
+                let mut outline = erika::subtitle::DEFAULT_SUBTITLE_OUTLINE_COLOR_RGBA;
+                update_u32(args, "primaryColorRgba", &mut primary);
+                update_u32(args, "outlineColorRgba", &mut outline);
+                let font_size = args
+                    .get("fontSize")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(erika::subtitle::DEFAULT_SUBTITLE_FONT_SIZE);
+                let outline_width = args
+                    .get("outlineWidth")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(erika::subtitle::DEFAULT_SUBTITLE_OUTLINE_WIDTH);
+                let force_override = optional_bool(args, "forceOverride").unwrap_or(false);
+                call_status(unsafe {
+                    erika_presenter_set_subtitle_style(
+                        handle,
+                        primary,
+                        outline,
+                        font_size,
+                        outline_width,
+                        force_override,
+                    )
+                })?;
+            }
+            Ok(Value::Null)
+        }
         "setOutputHeadroom" => {
             let headroom = required_f64(args, "headroom")? as f32;
             let known =

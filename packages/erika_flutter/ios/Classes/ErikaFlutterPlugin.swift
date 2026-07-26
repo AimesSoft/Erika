@@ -347,6 +347,19 @@ private final class ErikaNativeLibrary {
   typealias SetVolumeFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
   typealias SetUpscalerFn = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Int32
   typealias SetSubtitleScaleFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
+  typealias SetSubtitleFontFn = @convention(c) (
+    UnsafeMutableRawPointer?,
+    UnsafePointer<CChar>?,
+    UnsafePointer<CChar>?
+  ) -> Int32
+  typealias SetSubtitleStyleFn = @convention(c) (
+    UnsafeMutableRawPointer?,
+    UInt32,
+    UInt32,
+    Double,
+    Double,
+    Bool
+  ) -> Int32
   typealias GetUpscalerStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias GetOutputStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias SelectTrackFn = @convention(c) (UnsafeMutableRawPointer?, Int64) -> Int32
@@ -408,6 +421,8 @@ private final class ErikaNativeLibrary {
   let setVolume: SetVolumeFn?
   let setUpscaler: SetUpscalerFn?
   let setSubtitleScale: SetSubtitleScaleFn?
+  let setSubtitleFont: SetSubtitleFontFn?
+  let setSubtitleStyle: SetSubtitleStyleFn?
   let getUpscalerStatus: GetUpscalerStatusFn?
   let getOutputStatus: GetOutputStatusFn?
   let selectAudioTrack: SelectTrackFn
@@ -465,6 +480,8 @@ private final class ErikaNativeLibrary {
     setVolume = Self.loadOptional("erika_presenter_set_volume", from: libraryHandle, as: SetVolumeFn.self)
     setUpscaler = Self.loadOptional("erika_presenter_set_upscaler", from: libraryHandle, as: SetUpscalerFn.self)
     setSubtitleScale = Self.loadOptional("erika_presenter_set_subtitle_scale", from: libraryHandle, as: SetSubtitleScaleFn.self)
+    setSubtitleFont = Self.loadOptional("erika_presenter_set_subtitle_font", from: libraryHandle, as: SetSubtitleFontFn.self)
+    setSubtitleStyle = Self.loadOptional("erika_presenter_set_subtitle_style", from: libraryHandle, as: SetSubtitleStyleFn.self)
     getUpscalerStatus = Self.loadOptional("erika_presenter_get_upscaler_status", from: libraryHandle, as: GetUpscalerStatusFn.self)
     getOutputStatus = Self.loadOptional("erika_presenter_get_output_status", from: libraryHandle, as: GetOutputStatusFn.self)
     selectAudioTrack = try Self.load("erika_presenter_select_audio_track", from: libraryHandle, as: SelectTrackFn.self)
@@ -643,6 +660,34 @@ private final class ErikaPlayerHost {
     }
     let clampedScale = scale.isFinite ? min(max(scale, 0.25), 4.0) : 1.0
     try check(setSubtitleScale(handle, clampedScale), operation: "set_subtitle_scale")
+  }
+
+  func setSubtitleFont(family: String?, filePath: String?) throws {
+    guard let setSubtitleFont = library.setSubtitleFont else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_set_subtitle_font")
+    }
+    let status = withOptionalCString(family ?? "") { familyCString in
+      withOptionalCString(filePath ?? "") { filePathCString in
+        setSubtitleFont(handle, familyCString, filePathCString)
+      }
+    }
+    try check(status, operation: "set_subtitle_font")
+  }
+
+  func setSubtitleStyle(
+    primaryRgba: UInt32,
+    outlineRgba: UInt32,
+    fontSize: Double,
+    outlineWidth: Double,
+    forceOverride: Bool
+  ) throws {
+    guard let setSubtitleStyle = library.setSubtitleStyle else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_set_subtitle_style")
+    }
+    try check(
+      setSubtitleStyle(handle, primaryRgba, outlineRgba, fontSize, outlineWidth, forceOverride),
+      operation: "set_subtitle_style"
+    )
   }
 
   func upscalerStatus() throws -> [String: Any] {
@@ -1451,6 +1496,30 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
           throw ErikaPluginError.invalidArguments("scale is required.")
         }
         try playerHost(from: args).setSubtitleScale(scale)
+        result(nil)
+      case "setSubtitleStyle":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        if args.keys.contains("fontFamily") || args.keys.contains("fontFilePath") {
+          try host.setSubtitleFont(
+            family: args["fontFamily"] as? String,
+            filePath: args["fontFilePath"] as? String
+          )
+        }
+        if args.keys.contains("primaryColorRgba") || args.keys.contains("outlineColorRgba")
+          || args.keys.contains("fontSize") || args.keys.contains("outlineWidth")
+          || args.keys.contains("forceOverride")
+        {
+          let primary = int64Value(args["primaryColorRgba"]) ?? 0xFFFF_FFFF
+          let outline = int64Value(args["outlineColorRgba"]) ?? 0x0000_007F
+          try host.setSubtitleStyle(
+            primaryRgba: UInt32(truncatingIfNeeded: primary),
+            outlineRgba: UInt32(truncatingIfNeeded: outline),
+            fontSize: doubleValue(args["fontSize"]) ?? 48.0,
+            outlineWidth: doubleValue(args["outlineWidth"]) ?? 2.0,
+            forceOverride: boolValue(args["forceOverride"]) ?? false
+          )
+        }
         result(nil)
       case "getUpscalerStatus":
         let args = try dictionaryArgs(call.arguments)

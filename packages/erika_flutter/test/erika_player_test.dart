@@ -847,6 +847,60 @@ void main() {
     await player.dispose();
   });
 
+  test('subtitle style forwards font and colors with defaults', () async {
+    final player = ErikaPlayer();
+
+    await player.setSubtitleStyle(
+      fontFamily: 'Erika Sans',
+      fontFilePath: '/tmp/subtitle.otf',
+    );
+
+    final call = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'setSubtitleStyle',
+    );
+    expect(call.arguments, <String, Object?>{
+      'playerId': 7,
+      'fontFamily': 'Erika Sans',
+      'fontFilePath': '/tmp/subtitle.otf',
+      'primaryColorRgba': kErikaDefaultSubtitlePrimaryColorRgba,
+      'outlineColorRgba': kErikaDefaultSubtitleOutlineColorRgba,
+      'fontSize': kErikaDefaultSubtitleFontSize,
+      'outlineWidth': kErikaDefaultSubtitleOutlineWidth,
+      'forceOverride': false,
+    });
+
+    await player.dispose();
+  });
+
+  test('subtitle style keeps previously applied fields', () async {
+    final player = ErikaPlayer();
+
+    await player.setSubtitleStyle(fontFamily: 'Erika Sans');
+    await player.setSubtitleStyle(
+      primaryColorRgba: 0xFF0000FF,
+      fontSize: 64.0,
+      outlineWidth: 4.0,
+      forceOverride: true,
+    );
+
+    final calls = playerCalls
+        .where((MethodCall call) => call.method == 'setSubtitleStyle')
+        .toList();
+    expect(calls, hasLength(2));
+    expect(calls.last.arguments, <String, Object?>{
+      'playerId': 7,
+      'fontFamily': 'Erika Sans',
+      'fontFilePath': '',
+      'primaryColorRgba': 0xFF0000FF,
+      'outlineColorRgba': kErikaDefaultSubtitleOutlineColorRgba,
+      'fontSize': 64.0,
+      'outlineWidth': 4.0,
+      'forceOverride': true,
+    });
+
+    await player.dispose();
+  });
+
   test('danmaku config forwards block words as json', () async {
     final player = ErikaPlayer();
 

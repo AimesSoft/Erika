@@ -239,6 +239,8 @@ ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *, double rat
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *, double volume);   // 0.0–1.0
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *, int32_t mode);  // ErikaLumaUpscalerMode
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *, double scale);
+ErikaStatus erika_presenter_set_subtitle_font(ErikaPresenterHandle *, const char *family, const char *file_path);
+ErikaStatus erika_presenter_set_subtitle_style(ErikaPresenterHandle *, uint32_t primary_rgba, uint32_t outline_rgba, double font_size, double outline_width, bool force_override);
 ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float headroom, bool known);
 ```
 
@@ -246,6 +248,17 @@ ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float he
 luma upscaler at runtime (see [`erika_presenter_get_upscaler_status`](#diagnostics-and-capture));
 Metal and capable wgpu/Vulkan renderers execute ArtCNN, while backends without
 compute retain native luma sampling and report an explicit `Inactive` fallback.
+
+`set_subtitle_font` and `set_subtitle_style` set the subtitle *fallback* look.
+An empty family or path clears that half of the selection. Colours are
+`0xRRGGBBAA`, defaulting to opaque white text (`0xFFFFFFFF`) and
+half-transparent black outline (`0x0000007F`). `font_size` (default `48`,
+clamped to `8..400`) and `outline_width` (default `2`, clamped to `0..32`) are in
+ASS script units and are still multiplied by `set_subtitle_scale`. A container
+ASS script keeps its own styling; these only fill in what the script leaves
+open, what the system cannot resolve, and the look of plain-text (SRT/WebVTT)
+subtitles. Pass `force_override = true` to push the font, size, border and
+colours onto ASS dialogue events that carry their own styling.
 
 `set_output_headroom` publishes the display's current HDR/SDR ratio. Android
 API 34+ hosts should call it from

@@ -197,6 +197,11 @@ while (erika_presenter_poll_event(p, &ev) == ErikaStatus_Ok) {
 - **轨道:** `erika_presenter_tracks`(计数数组惯用法)、`select_audio_track` /
   `select_subtitle_track`(id `-1` 关闭字幕)、`add_external_subtitle`、
   `remove_subtitle_track`、`set_subtitle_scale`。
+- **字幕样式:** `set_subtitle_font(family, file_path)` 与
+  `set_subtitle_style(primary_rgba, outline_rgba, font_size, outline_width,
+  force_override)`。两者都是回退值——未开 `force_override` 时 ASS 脚本保留自带样式；
+  字号与描边仍会再乘 `set_subtitle_scale`。见
+  [capi_reference.zh.md](capi_reference.zh.md#播放与运行时参数)。
 - **弹幕:** 加载一条轨(`load_danmaku_file` / `_json` 或多轨 `add_danmaku_track_*`)、
   开关(`set_danmaku_enabled`)、用 `set_danmaku_config` 调参、偏移轨、设字体、设屏蔽词。
   见 [danmaku_architecture.md](danmaku_architecture.md)。

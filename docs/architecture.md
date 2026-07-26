@@ -101,9 +101,15 @@ enter an audio-only false `Playing` state.
   tracks. External tracks can be added/removed at runtime.
 - **libass renderer**: Statically linked, enabled by default. Accepts ASS
   scripts, calls `ass_render_frame`, imports alpha planes into Erika's overlay
-  system. macOS uses the CoreText font provider; iOS registers Erika's bundled
-  Droid Sans Fallback as an in-memory font and avoids inaccessible system font
-  paths.
+  system. macOS uses the CoreText font provider and Windows DirectWrite; every
+  other target runs without a system font provider (the vendored libass build
+  disables fontconfig), so Erika's bundled Droid Sans Fallback — registered as
+  an in-memory font on all platforms — is the family libass resolves by default.
+- **Subtitle style**: A custom font family, font file, font size, outline width
+  and text/outline colours act as fallbacks that fill in what a script leaves
+  open, plus the styling of plain-text subtitles; the subtitle scale multiplies
+  the metrics. `force_override` promotes them to libass' selective style
+  override so they also replace what ASS dialogue events request.
 - **SubtitleRendererCore**: Renderer-facing boundary that tracks changed/unchanged
   frames to avoid redundant GPU uploads.
 

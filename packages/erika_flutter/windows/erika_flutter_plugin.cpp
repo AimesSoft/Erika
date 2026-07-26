@@ -639,6 +639,10 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   using SetVolumeFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
   using SetUpscalerFn = ErikaStatus (*)(ErikaPresenterHandle*, int32_t);
   using SetSubtitleScaleFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
+  using SetSubtitleFontFn =
+      ErikaStatus (*)(ErikaPresenterHandle*, const char*, const char*);
+  using SetSubtitleStyleFn = ErikaStatus (*)(ErikaPresenterHandle*, uint32_t,
+                                             uint32_t, double, double, bool);
   using GetUpscalerStatusFn =
       ErikaStatus (*)(ErikaPresenterHandle*, ErikaUpscalerStatus*);
   using GetOutputStatusFn =
@@ -746,6 +750,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   SetVolumeFn set_volume = nullptr;
   SetUpscalerFn set_upscaler = nullptr;
   SetSubtitleScaleFn set_subtitle_scale = nullptr;
+  SetSubtitleFontFn set_subtitle_font = nullptr;
+  SetSubtitleStyleFn set_subtitle_style = nullptr;
   GetUpscalerStatusFn get_upscaler_status = nullptr;
   GetOutputStatusFn get_output_status = nullptr;
   SelectTrackFn select_audio_track = nullptr;
@@ -804,6 +810,10 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
         LoadOptional<SetUpscalerFn>("erika_presenter_set_upscaler");
     set_subtitle_scale = LoadOptional<SetSubtitleScaleFn>(
         "erika_presenter_set_subtitle_scale");
+    set_subtitle_font =
+        LoadOptional<SetSubtitleFontFn>("erika_presenter_set_subtitle_font");
+    set_subtitle_style = LoadOptional<SetSubtitleStyleFn>(
+        "erika_presenter_set_subtitle_style");
     get_upscaler_status = LoadOptional<GetUpscalerStatusFn>(
         "erika_presenter_get_upscaler_status");
     get_output_status = LoadOptional<GetOutputStatusFn>(
@@ -1116,6 +1126,27 @@ struct ErikaFlutterPlugin::PlayerHost {
     }
     const double clamped = std::isfinite(scale) ? std::clamp(scale, 0.25, 4.0) : 1.0;
     Check(library->set_subtitle_scale(handle, clamped), "set_subtitle_scale");
+  }
+
+  void SetSubtitleFont(const std::optional<std::string>& family,
+                       const std::optional<std::string>& file_path) {
+    if (library->set_subtitle_font == nullptr) {
+      throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_subtitle_font");
+    }
+    Check(library->set_subtitle_font(handle, family ? family->c_str() : nullptr,
+                                     file_path ? file_path->c_str() : nullptr),
+          "set_subtitle_font");
+  }
+
+  void SetSubtitleStyle(uint32_t primary_rgba, uint32_t outline_rgba,
+                        double font_size, double outline_width,
+                        bool force_override) {
+    if (library->set_subtitle_style == nullptr) {
+      throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_subtitle_style");
+    }
+    Check(library->set_subtitle_style(handle, primary_rgba, outline_rgba,
+                                      font_size, outline_width, force_override),
+          "set_subtitle_style");
   }
 
   EncodableValue GetUpscalerStatus() {
@@ -2097,6 +2128,31 @@ void ErikaFlutterPlugin::HandleMethodCall(
     } else if (method == "setSubtitleScale") {
       PlayerFromArgs(args).SetSubtitleScale(
           DoubleValue(FindArg(args, "scale")).value_or(1.0));
+      result->Success();
+    } else if (method == "setSubtitleStyle") {
+      auto& host = PlayerFromArgs(args);
+      const bool has_font = FindArg(args, "fontFamily") != nullptr ||
+                            FindArg(args, "fontFilePath") != nullptr;
+      if (has_font) {
+        host.SetSubtitleFont(StringValue(FindArg(args, "fontFamily")),
+                             StringValue(FindArg(args, "fontFilePath")));
+      }
+      const bool has_style = FindArg(args, "primaryColorRgba") != nullptr ||
+                             FindArg(args, "outlineColorRgba") != nullptr ||
+                             FindArg(args, "fontSize") != nullptr ||
+                             FindArg(args, "outlineWidth") != nullptr ||
+                             FindArg(args, "forceOverride") != nullptr;
+      if (has_style) {
+        const int64_t primary =
+            Int64Value(FindArg(args, "primaryColorRgba")).value_or(0xFFFFFFFF);
+        const int64_t outline =
+            Int64Value(FindArg(args, "outlineColorRgba")).value_or(0x0000007F);
+        host.SetSubtitleStyle(
+            static_cast<uint32_t>(primary), static_cast<uint32_t>(outline),
+            DoubleValue(FindArg(args, "fontSize")).value_or(48.0),
+            DoubleValue(FindArg(args, "outlineWidth")).value_or(2.0),
+            BoolValue(FindArg(args, "forceOverride")).value_or(false));
+      }
       result->Success();
     } else if (method == "getUpscalerStatus") {
       result->Success(PlayerFromArgs(args).GetUpscalerStatus());

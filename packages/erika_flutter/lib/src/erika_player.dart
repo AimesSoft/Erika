@@ -6,6 +6,18 @@ import 'package:flutter/services.dart';
 
 import 'erika_event.dart';
 
+/// Subtitle text colour Erika falls back to, as `0xRRGGBBAA`: opaque white.
+const int kErikaDefaultSubtitlePrimaryColorRgba = 0xFFFFFFFF;
+
+/// Subtitle outline colour Erika falls back to: half-transparent black.
+const int kErikaDefaultSubtitleOutlineColorRgba = 0x0000007F;
+
+/// Base subtitle font size in ASS script units, before [ErikaPlayer.setSubtitleScale].
+const double kErikaDefaultSubtitleFontSize = 48.0;
+
+/// Base subtitle outline width in ASS script units, before the subtitle scale.
+const double kErikaDefaultSubtitleOutlineWidth = 2.0;
+
 enum ErikaOutputMode {
   sdr(0),
   appleEdr(1),
@@ -679,6 +691,13 @@ class ErikaPlayer {
   bool _danmakuConfigInFlight = false;
   _ErikaDanmakuConfigPatch? _pendingDanmakuConfig;
   _ErikaDanmakuConfigPatch? _lastAppliedDanmakuConfig;
+  String? _subtitleFontFamily;
+  String? _subtitleFontFilePath;
+  int _subtitlePrimaryColorRgba = kErikaDefaultSubtitlePrimaryColorRgba;
+  int _subtitleOutlineColorRgba = kErikaDefaultSubtitleOutlineColorRgba;
+  double _subtitleFontSize = kErikaDefaultSubtitleFontSize;
+  double _subtitleOutlineWidth = kErikaDefaultSubtitleOutlineWidth;
+  bool _subtitleForceOverride = false;
   final List<Completer<void>> _pendingDanmakuConfigCompleters =
       <Completer<void>>[];
 
@@ -765,6 +784,67 @@ class ErikaPlayer {
       'playerId': playerId,
       'scale': clampedScale,
     });
+  }
+
+  /// Sets the subtitle font, size, outline width and colours.
+  ///
+  /// Values act as fallbacks: an ASS script keeps its own styling, and these
+  /// only fill in what it leaves open, what the system cannot resolve, and the
+  /// look of plain-text (SRT/WebVTT) subtitles. Pass [forceOverride] to push
+  /// them onto dialogue that does carry its own styling.
+  ///
+  /// Colours are `0xRRGGBBAA`. [fontSize] and [outlineWidth] are in ASS script
+  /// units (clamped to `8..400` and `0..32`), and [setSubtitleScale] still
+  /// multiplies both.
+  ///
+  /// Omitted arguments keep whatever this player last applied, so a single
+  /// field can be changed on its own. Pass an empty string to clear the font
+  /// family or file and return to the platform default.
+  Future<void> setSubtitleStyle({
+    String? fontFamily,
+    String? fontFilePath,
+    int? primaryColorRgba,
+    int? outlineColorRgba,
+    double? fontSize,
+    double? outlineWidth,
+    bool? forceOverride,
+  }) async {
+    final playerId = await ensureCreated();
+    _subtitleFontFamily = fontFamily ?? _subtitleFontFamily;
+    _subtitleFontFilePath = fontFilePath ?? _subtitleFontFilePath;
+    _subtitlePrimaryColorRgba =
+        _clampColorRgba(primaryColorRgba) ?? _subtitlePrimaryColorRgba;
+    _subtitleOutlineColorRgba =
+        _clampColorRgba(outlineColorRgba) ?? _subtitleOutlineColorRgba;
+    _subtitleFontSize =
+        _clampMetric(fontSize, 8.0, 400.0) ?? _subtitleFontSize;
+    _subtitleOutlineWidth =
+        _clampMetric(outlineWidth, 0.0, 32.0) ?? _subtitleOutlineWidth;
+    _subtitleForceOverride = forceOverride ?? _subtitleForceOverride;
+    await _invoke('setSubtitleStyle', <String, Object?>{
+      'playerId': playerId,
+      'fontFamily': _subtitleFontFamily ?? '',
+      'fontFilePath': _subtitleFontFilePath ?? '',
+      'primaryColorRgba': _subtitlePrimaryColorRgba,
+      'outlineColorRgba': _subtitleOutlineColorRgba,
+      'fontSize': _subtitleFontSize,
+      'outlineWidth': _subtitleOutlineWidth,
+      'forceOverride': _subtitleForceOverride,
+    });
+  }
+
+  static int? _clampColorRgba(int? value) {
+    if (value == null) {
+      return null;
+    }
+    return value & 0xFFFFFFFF;
+  }
+
+  static double? _clampMetric(double? value, double min, double max) {
+    if (value == null || !value.isFinite) {
+      return null;
+    }
+    return value.clamp(min, max);
   }
 
   Future<ErikaUpscalerStatus> getUpscalerStatus() async {

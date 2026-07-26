@@ -222,6 +222,8 @@ ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *, double rat
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *, double volume);   // 0.0–1.0
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *, int32_t mode);  // ErikaLumaUpscalerMode
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *, double scale);
+ErikaStatus erika_presenter_set_subtitle_font(ErikaPresenterHandle *, const char *family, const char *file_path);
+ErikaStatus erika_presenter_set_subtitle_style(ErikaPresenterHandle *, uint32_t primary_rgba, uint32_t outline_rgba, double font_size, double outline_width, bool force_override);
 ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float headroom, bool known);
 ```
 
@@ -229,6 +231,14 @@ ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float he
 [`erika_presenter_get_upscaler_status`](#诊断与截图)）。Metal 与具备 compute 能力的
 wgpu/Vulkan renderer 会执行 ArtCNN；其他后端保留原生 luma sampling，并明确报告
 `Inactive` 回退。
+
+`set_subtitle_font` 与 `set_subtitle_style` 设置字幕的**回退**外观。family 或
+path 传空即清除该项。颜色为 `0xRRGGBBAA`，默认不透明白色文字（`0xFFFFFFFF`）与
+半透明黑色描边（`0x0000007F`）。`font_size`（默认 `48`，钳位 `8..400`）与
+`outline_width`（默认 `2`，钳位 `0..32`）以 ASS 脚本单位计，且仍会再乘上
+`set_subtitle_scale`。容器内的 ASS 脚本保留自带样式，这些值只用于补足脚本未指定的
+部分、系统解析不到的字体，以及纯文本（SRT/WebVTT）字幕的外观。传
+`force_override = true` 可让字体、字号、描边与颜色覆盖 ASS 对白自带的样式。
 
 `set_output_headroom` 用于发布显示器当前 HDR/SDR ratio。Android API 34+ 宿主应从
 `Display.registerHdrSdrRatioChangedListener` 调用它：有效 ratio 传 `known = true`，测量
