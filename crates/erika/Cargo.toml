@@ -15,7 +15,9 @@ wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 [dependencies]
 ab_glyph.workspace = true
 aho-corasick.workspace = true
+chardetng.workspace = true
 crossbeam-channel.workspace = true
+encoding_rs.workspace = true
 fontdb.workspace = true
 libc.workspace = true
 erika_ffmpeg_sys = { path = "../erika_ffmpeg_sys" }

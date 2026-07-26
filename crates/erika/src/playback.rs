@@ -2675,7 +2675,10 @@ impl ExternalSubtitleSession {
                 return Err(PlaybackError::SubtitleTrackNotRemovable(*stream_index));
             }
         };
-        let source = source_from_uri_with_hint(&uri, crate::core::MediaSourceHint::Auto)?;
+        let source = match external_subtitle_transcoded_source(&uri) {
+            Some(source) => source,
+            None => source_from_uri_with_hint(&uri, crate::core::MediaSourceHint::Auto)?,
+        };
         let mut demuxer = Demuxer::open_source(source)?;
         let stream_index = demuxer
             .probe()
@@ -2755,6 +2758,48 @@ impl ExternalSubtitleSession {
         self.eof = false;
         Ok(())
     }
+}
+
+/// Returns an in-memory UTF-8 source when `uri` points at a text subtitle
+/// (SRT/VTT/ASS) whose bytes need charset transcoding for FFmpeg.
+///
+/// `None` means the caller should open the URI through the regular source
+/// path: the extension is not a known text subtitle format (e.g. PGS `.sup`),
+/// the bytes are already UTF-8, the charset detector was not confident, or the
+/// sidecar read failed (the demuxer will surface that error itself).
+fn external_subtitle_transcoded_source(uri: &str) -> Option<Box<dyn source::MediaSource>> {
+    crate::subtitle::SubtitleFileFormat::from_path(uri)?;
+    let bytes = match source::read_uri_to_end(uri) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "subtitle_charset",
+                    "uri": uri,
+                    "detected": "unread",
+                    "transcoded": false,
+                    "error": error.to_string(),
+                })
+                .to_string(),
+            );
+            return None;
+        }
+    };
+    let inspection = crate::subtitle_charset::inspect(&bytes);
+    let transcoded = inspection.utf8.is_some();
+    trace::diagnostic(
+        serde_json::json!({
+            "event": "subtitle_charset",
+            "uri": uri,
+            "detected": inspection.detected,
+            "transcoded": transcoded,
+        })
+        .to_string(),
+    );
+    let utf8 = inspection.utf8?;
+    Some(Box::new(
+        crate::subtitle_charset::TranscodedMemorySource::new(uri.to_string(), utf8),
+    ))
 }
 
 fn external_subtitle_title(uri: &str) -> Option<String> {
@@ -5598,6 +5643,32 @@ mod tests {
         assert_eq!(frame.end, Some(Duration::from_secs(3)));
         assert_eq!(frame.text.len(), 1);
         assert_eq!(frame.text[0].display_text(), "External subtitle");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn external_subtitle_session_transcodes_gbk_encoded_file() {
+        let path = std::env::temp_dir().join(format!(
+            "erika-external-subtitle-gbk-{}.srt",
+            std::process::id()
+        ));
+        let dialogue = "简体中文外挂字幕";
+        let srt = format!("1\n00:00:01,000 --> 00:00:03,000\n{dialogue}\n");
+        let (encoded, _, had_errors) = encoding_rs::GBK.encode(&srt);
+        assert!(!had_errors);
+        assert!(std::str::from_utf8(&encoded).is_err());
+        fs::write(&path, &encoded).unwrap();
+        let config = SubtitleTrackConfig::external(1_000_008, path.to_string_lossy());
+
+        let mut external = ExternalSubtitleSession::open(config).unwrap();
+        external.pump_until(Duration::from_secs(2)).unwrap();
+        let frame = external.pop_front().unwrap();
+
+        assert_eq!(frame.track_id, 1_000_008);
+        assert_eq!(frame.start, Some(Duration::from_secs(1)));
+        assert_eq!(frame.text.len(), 1);
+        assert_eq!(frame.text[0].display_text(), dialogue);
 
         let _ = fs::remove_file(path);
     }

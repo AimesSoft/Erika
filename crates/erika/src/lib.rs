@@ -11,6 +11,7 @@ pub mod presenter;
 pub mod renderer;
 pub mod source;
 pub mod subtitle;
+pub mod subtitle_charset;
 pub mod text;
 #[cfg(target_os = "windows")]
 pub mod windows;
