@@ -347,7 +347,16 @@ pub struct HttpRangeSource {
 
 struct PendingHttpFetch {
     range: ByteRange,
-    handle: JoinHandle<Result<Vec<u8>>>,
+    handle: JoinHandle<Result<HttpRangeResponse>>,
+}
+
+/// Bytes fetched for one HTTP range request plus the resource total reported
+/// by the server (`Content-Range` on 206, `Content-Length` on a whole-file
+/// 200). The total lets callers backfill `content_length` when HEAD is
+/// unavailable (e.g. servers answering HEAD with 405).
+struct HttpRangeResponse {
+    bytes: Vec<u8>,
+    total_length: Option<u64>,
 }
 
 impl HttpRangeSource {
@@ -395,8 +404,12 @@ impl HttpRangeSource {
         Some(self.cache_bytes[start_index..end_index].to_vec())
     }
 
-    fn fetch_range(&self, range: ByteRange) -> Result<Vec<u8>> {
-        fetch_http_range(&self.agent, &self.uri, range, "http_range")
+    fn fetch_range(&mut self, range: ByteRange) -> Result<Vec<u8>> {
+        let response = fetch_http_range(&self.agent, &self.uri, range, "http_range")?;
+        if self.content_length.is_none() {
+            self.content_length = response.total_length;
+        }
+        Ok(response.bytes)
     }
 
     fn fetch_length(&mut self, range: ByteRange) -> Result<Option<u64>> {
@@ -423,8 +436,11 @@ impl HttpRangeSource {
             return None;
         }
         if !pending.is_finished() {
+            // The pending fetch covers the requested bytes and they are needed
+            // now: joining the in-flight thread is expected to be much cheaper
+            // than issuing a duplicate synchronous download of the same range.
             http_trace_log(format!(
-                "{{\"event\":\"http_prefetch_pending\",\"start\":{},\"length\":{},\"requested_start\":{},\"requested_length\":{}}}",
+                "{{\"event\":\"http_prefetch_pending\",\"decision\":\"join\",\"start\":{},\"length\":{},\"requested_start\":{},\"requested_length\":{}}}",
                 pending.range.start,
                 pending
                     .range
@@ -435,7 +451,6 @@ impl HttpRangeSource {
                     .length
                     .map_or_else(|| "null".to_string(), |length| length.to_string()),
             ));
-            return None;
         }
 
         let pending = self.prefetch.take()?;
@@ -445,7 +460,7 @@ impl HttpRangeSource {
             .handle
             .join()
             .map_err(|_| SourceError::Http("http prefetch thread panicked".to_string()))
-            .and_then(|bytes| bytes);
+            .and_then(|response| response);
         http_trace_log(format!(
             "{{\"event\":\"http_prefetch_join\",\"start\":{},\"length\":{},\"elapsed_ms\":{:.3}}}",
             start,
@@ -455,7 +470,12 @@ impl HttpRangeSource {
                 .map_or_else(|| "null".to_string(), |length| length.to_string()),
             join_started.elapsed().as_secs_f64() * 1000.0,
         ));
-        Some(result.map(|bytes| (start, bytes)))
+        Some(result.map(|response| {
+            if self.content_length.is_none() {
+                self.content_length = response.total_length;
+            }
+            (start, response.bytes)
+        }))
     }
 
     fn maybe_start_prefetch(&mut self, range: ByteRange) {
@@ -521,42 +541,182 @@ fn http_agent() -> ureq::Agent {
         .into()
 }
 
-fn fetch_http_range(
-    agent: &ureq::Agent,
-    uri: &str,
-    range: ByteRange,
-    event: &str,
-) -> Result<Vec<u8>> {
-    let header = match range.length {
+const HTTP_FETCH_MAX_ATTEMPTS: u32 = 3;
+const HTTP_FETCH_RETRY_BACKOFF: [Duration; 2] =
+    [Duration::from_millis(200), Duration::from_secs(1)];
+
+fn http_retry_backoff(attempt: u32) -> Duration {
+    let index = usize::try_from(attempt.saturating_sub(1)).unwrap_or(0);
+    HTTP_FETCH_RETRY_BACKOFF
+        .get(index)
+        .copied()
+        .unwrap_or(Duration::from_secs(1))
+}
+
+/// Whether a failed HTTP exchange is worth retrying: transport errors and 5xx
+/// responses are transient; 4xx responses are deterministic client errors.
+fn http_error_is_retryable(error: &ureq::Error) -> bool {
+    match error {
+        ureq::Error::StatusCode(status) => *status >= 500,
+        _ => true,
+    }
+}
+
+/// Parses the `total` out of a `Content-Range: bytes start-end/total` header.
+/// Returns `None` for missing headers, unsatisfied-range (`*/total` still
+/// yields the total), and unknown totals (`bytes 0-1/*`).
+fn parse_content_range_total(value: &str) -> Option<u64> {
+    let rest = value.trim().strip_prefix("bytes")?.trim_start();
+    let (_, total) = rest.rsplit_once('/')?;
+    total.trim().parse::<u64>().ok()
+}
+
+fn http_range_header(range: ByteRange) -> String {
+    match range.length {
         Some(length) if length > 0 => {
             let end = range.start.saturating_add(length).saturating_sub(1);
             format!("bytes={}-{}", range.start, end)
         }
         _ => format!("bytes={}-", range.start),
-    };
-    let started = Instant::now();
-    let mut response = match agent.get(uri).header("Range", &header).call() {
-        Ok(response) => response,
-        Err(error) => {
+    }
+}
+
+fn fetch_http_range(
+    agent: &ureq::Agent,
+    uri: &str,
+    range: ByteRange,
+    event: &str,
+) -> Result<HttpRangeResponse> {
+    let mut bytes = Vec::new();
+    let mut total_length = None;
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        // Resume from what already arrived: earlier attempts keep their bytes
+        // and the Range start advances past them.
+        let received = bytes.len() as u64;
+        if range.length.is_some_and(|length| received >= length) {
+            // A body error surfaced after every requested byte arrived; the
+            // payload is complete, so do not re-request an open-ended tail.
+            return Ok(HttpRangeResponse {
+                bytes,
+                total_length,
+            });
+        }
+        let resume_range = ByteRange {
+            start: range.start.saturating_add(received),
+            length: range.length.map(|length| length.saturating_sub(received)),
+        };
+        let header = http_range_header(resume_range);
+        let started = Instant::now();
+        let mut response = match agent.get(uri).header("Range", &header).call() {
+            Ok(response) => response,
+            Err(error) => {
+                http_trace_log(format!(
+                    "{{\"event\":\"{}_error\",\"phase\":\"request\",\"attempt\":{},\"start\":{},\"length\":{},\"elapsed_ms\":{:.3},\"error\":\"{}\"}}",
+                    event,
+                    attempt,
+                    resume_range.start,
+                    resume_range
+                        .length
+                        .map_or_else(|| "null".to_string(), |length| length.to_string()),
+                    started.elapsed().as_secs_f64() * 1000.0,
+                    json_escape(&error.to_string()),
+                ));
+                if attempt < HTTP_FETCH_MAX_ATTEMPTS && http_error_is_retryable(&error) {
+                    let backoff = http_retry_backoff(attempt);
+                    http_trace_log(format!(
+                        "{{\"event\":\"{}_retry\",\"phase\":\"request\",\"attempt\":{},\"start\":{},\"received\":{},\"backoff_ms\":{}}}",
+                        event,
+                        attempt,
+                        resume_range.start,
+                        received,
+                        backoff.as_millis(),
+                    ));
+                    thread::sleep(backoff);
+                    continue;
+                }
+                return Err(SourceError::Http(error.to_string()));
+            }
+        };
+        let status = response.status().as_u16();
+        match status {
+            206 => {
+                let content_range_total = response
+                    .headers()
+                    .get("content-range")
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(parse_content_range_total);
+                if total_length.is_none() {
+                    total_length = content_range_total;
+                }
+            }
+            200 => {
+                if resume_range.start > 0 {
+                    // The server sent the file from byte zero: treating that
+                    // payload as `resume_range.start` data would silently
+                    // corrupt the cache, so fail instead of retrying.
+                    http_trace_log(format!(
+                        "{{\"event\":\"{}_error\",\"phase\":\"status\",\"attempt\":{},\"start\":{},\"status\":200}}",
+                        event, attempt, resume_range.start,
+                    ));
+                    return Err(SourceError::Http(
+                        "server ignored Range request (status 200)".to_string(),
+                    ));
+                }
+                if total_length.is_none() {
+                    total_length = response
+                        .headers()
+                        .get("content-length")
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|value| value.parse::<u64>().ok());
+                }
+            }
+            // ureq maps 4xx/5xx to Error::StatusCode before this point; any
+            // other status (204, 304, ...) carries no usable range payload.
+            _ => {
+                http_trace_log(format!(
+                    "{{\"event\":\"{}_error\",\"phase\":\"status\",\"attempt\":{},\"start\":{},\"status\":{}}}",
+                    event, attempt, resume_range.start, status,
+                ));
+                return Err(SourceError::Http(format!(
+                    "unexpected HTTP status {status} for Range request"
+                )));
+            }
+        }
+        if let Err(error) = response.body_mut().as_reader().read_to_end(&mut bytes) {
             http_trace_log(format!(
-                "{{\"event\":\"{}_error\",\"phase\":\"request\",\"start\":{},\"length\":{},\"elapsed_ms\":{:.3},\"error\":\"{}\"}}",
+                "{{\"event\":\"{}_error\",\"phase\":\"body\",\"attempt\":{},\"start\":{},\"length\":{},\"status\":{},\"bytes\":{},\"elapsed_ms\":{:.3},\"error\":\"{}\"}}",
                 event,
-                range.start,
-                range
+                attempt,
+                resume_range.start,
+                resume_range
                     .length
                     .map_or_else(|| "null".to_string(), |length| length.to_string()),
+                status,
+                bytes.len(),
                 started.elapsed().as_secs_f64() * 1000.0,
                 json_escape(&error.to_string()),
             ));
+            if attempt < HTTP_FETCH_MAX_ATTEMPTS {
+                let backoff = http_retry_backoff(attempt);
+                http_trace_log(format!(
+                    "{{\"event\":\"{}_retry\",\"phase\":\"body\",\"attempt\":{},\"start\":{},\"received\":{},\"backoff_ms\":{}}}",
+                    event,
+                    attempt,
+                    range.start.saturating_add(bytes.len() as u64),
+                    bytes.len(),
+                    backoff.as_millis(),
+                ));
+                thread::sleep(backoff);
+                continue;
+            }
             return Err(SourceError::Http(error.to_string()));
         }
-    };
-    let status = response.status().as_u16();
-    let mut bytes = Vec::new();
-    if let Err(error) = response.body_mut().as_reader().read_to_end(&mut bytes) {
         http_trace_log(format!(
-            "{{\"event\":\"{}_error\",\"phase\":\"body\",\"start\":{},\"length\":{},\"status\":{},\"bytes\":{},\"elapsed_ms\":{:.3},\"error\":\"{}\"}}",
+            "{{\"event\":\"{}\",\"attempt\":{},\"start\":{},\"length\":{},\"status\":{},\"bytes\":{},\"elapsed_ms\":{:.3}}}",
             event,
+            attempt,
             range.start,
             range
                 .length
@@ -564,22 +724,12 @@ fn fetch_http_range(
             status,
             bytes.len(),
             started.elapsed().as_secs_f64() * 1000.0,
-            json_escape(&error.to_string()),
         ));
-        return Err(SourceError::Http(error.to_string()));
+        return Ok(HttpRangeResponse {
+            bytes,
+            total_length,
+        });
     }
-    http_trace_log(format!(
-        "{{\"event\":\"{}\",\"start\":{},\"length\":{},\"status\":{},\"bytes\":{},\"elapsed_ms\":{:.3}}}",
-        event,
-        range.start,
-        range
-            .length
-            .map_or_else(|| "null".to_string(), |length| length.to_string()),
-        status,
-        bytes.len(),
-        started.elapsed().as_secs_f64() * 1000.0,
-    ));
-    Ok(bytes)
 }
 
 impl std::fmt::Debug for HttpRangeSource {
@@ -611,25 +761,64 @@ impl MediaSource for HttpRangeSource {
             self.cache_end(),
             self.read_ahead_bytes,
         ));
-        let response = self
-            .agent
-            .head(&self.uri)
-            .call()
-            .map_err(|error| SourceError::Http(error.to_string()))?;
-        let status = response.status().as_u16();
-        let length = response
-            .headers()
-            .get("content-length")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok());
-        self.content_length = length;
+        let mut attempt = 0u32;
+        let head_error = loop {
+            attempt += 1;
+            match self.agent.head(&self.uri).call() {
+                Ok(response) => {
+                    let status = response.status().as_u16();
+                    let length = response
+                        .headers()
+                        .get("content-length")
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|value| value.parse::<u64>().ok());
+                    self.content_length = length;
+                    http_trace_log(format!(
+                        "[erika-http-trace] stage=head_response status={} length={} elapsed_ms={:.3}",
+                        status,
+                        length.map_or_else(|| "null".to_string(), |length| length.to_string()),
+                        started.elapsed().as_secs_f64() * 1000.0,
+                    ));
+                    return Ok(length);
+                }
+                Err(error) => {
+                    http_trace_log(format!(
+                        "[erika-http-trace] stage=head_error attempt={} elapsed_ms={:.3} error={}",
+                        attempt,
+                        started.elapsed().as_secs_f64() * 1000.0,
+                        json_escape(&error.to_string()),
+                    ));
+                    if attempt < HTTP_FETCH_MAX_ATTEMPTS && http_error_is_retryable(&error) {
+                        let backoff = http_retry_backoff(attempt);
+                        http_trace_log(format!(
+                            "[erika-http-trace] stage=head_retry attempt={} backoff_ms={}",
+                            attempt,
+                            backoff.as_millis(),
+                        ));
+                        thread::sleep(backoff);
+                        continue;
+                    }
+                    break error;
+                }
+            }
+        };
+        // Some servers reject HEAD (e.g. 405) yet still serve ranges. Probe
+        // with a one-byte GET and take the total from Content-Range.
         http_trace_log(format!(
-            "[erika-http-trace] stage=head_response status={} length={} elapsed_ms={:.3}",
-            status,
-            length.map_or_else(|| "null".to_string(), |length| length.to_string()),
-            started.elapsed().as_secs_f64() * 1000.0,
+            "[erika-http-trace] stage=head_fallback_range error={}",
+            json_escape(&head_error.to_string()),
         ));
-        Ok(length)
+        let probe = ByteRange {
+            start: 0,
+            length: Some(1),
+        };
+        match fetch_http_range(&self.agent, &self.uri, probe, "http_length_probe") {
+            Ok(response) => {
+                self.content_length = response.total_length;
+                Ok(self.content_length)
+            }
+            Err(_) => Err(SourceError::Http(head_error.to_string())),
+        }
     }
 
     fn read_range(&mut self, range: ByteRange) -> Result<Vec<u8>> {
@@ -693,9 +882,26 @@ impl MediaSource for HttpRangeSource {
             Some(Ok((start, bytes))) => {
                 self.cache_start = start;
                 self.cache_bytes = bytes;
-                let bytes = self.cached_slice(range).unwrap_or_default();
-                self.maybe_start_prefetch(range);
-                return Ok(bytes);
+                if let Some(bytes) = self.cached_slice(range) {
+                    self.maybe_start_prefetch(range);
+                    return Ok(bytes);
+                }
+                // The prefetch returned fewer bytes than requested (short
+                // read). An empty result here would be mistaken for EOF by
+                // the AVIO layer, so fall back to a synchronous fetch.
+                http_trace_log(format!(
+                    "{{\"event\":\"http_prefetch_short_read\",\"start\":{},\"length\":{},\"cache_start\":{},\"cache_bytes\":{}}}",
+                    range.start,
+                    range
+                        .length
+                        .map_or_else(|| "null".to_string(), |length| length.to_string()),
+                    self.cache_start,
+                    self.cache_bytes.len(),
+                ));
+                self.fetch_range(ByteRange {
+                    start: range.start,
+                    length: fetch_length,
+                })?
             }
             Some(Err(error)) => return Err(error),
             None => self.fetch_range(ByteRange {
@@ -841,9 +1047,105 @@ fn json_escape(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
 
     use super::*;
+
+    struct MockResponse {
+        delay: Duration,
+        raw: Vec<u8>,
+    }
+
+    impl MockResponse {
+        fn immediate(raw: Vec<u8>) -> Self {
+            Self {
+                delay: Duration::ZERO,
+                raw,
+            }
+        }
+
+        fn delayed(delay: Duration, raw: Vec<u8>) -> Self {
+            Self { delay, raw }
+        }
+    }
+
+    /// Serves each response over one connection (in order) and reports every
+    /// received request head through the returned channel.
+    fn spawn_mock_http_server(responses: Vec<MockResponse>) -> (String, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let uri = format!("http://{}/video.mkv", listener.local_addr().unwrap());
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            for response in responses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut head = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    head.push_str(&line);
+                }
+                let _ = sender.send(head);
+                if !response.delay.is_zero() {
+                    thread::sleep(response.delay);
+                }
+                let _ = stream.write_all(&response.raw);
+                let _ = stream.flush();
+            }
+        });
+        (uri, receiver)
+    }
+
+    fn http_206_response(start: u64, total: u64, body: &[u8]) -> Vec<u8> {
+        let end = start + body.len() as u64 - 1;
+        let mut raw = format!(
+            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{total}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len(),
+        )
+        .into_bytes();
+        raw.extend_from_slice(body);
+        raw
+    }
+
+    /// A 206 head that promises `declared_length` bytes but sends fewer before
+    /// the connection closes, producing a body-phase transport error.
+    fn http_206_truncated_response(
+        start: u64,
+        total: u64,
+        declared_length: usize,
+        body: &[u8],
+    ) -> Vec<u8> {
+        let end = start + declared_length as u64 - 1;
+        let mut raw = format!(
+            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{total}\r\nContent-Length: {declared_length}\r\nConnection: close\r\n\r\n",
+        )
+        .into_bytes();
+        raw.extend_from_slice(body);
+        raw
+    }
+
+    fn http_simple_response(status_line: &str, body: &[u8]) -> Vec<u8> {
+        let mut raw = format!(
+            "HTTP/1.1 {status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len(),
+        )
+        .into_bytes();
+        raw.extend_from_slice(body);
+        raw
+    }
+
+    fn recv_request_head(requests: &mpsc::Receiver<String>) -> String {
+        requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("mock server should have received a request")
+            .to_lowercase()
+    }
 
     #[test]
     fn local_file_source_reads_ranges() {
@@ -968,6 +1270,182 @@ mod tests {
                 length: Some(64),
             },
         ));
+    }
+
+    #[test]
+    fn content_range_total_parses_totals_and_rejects_unknown() {
+        assert_eq!(parse_content_range_total("bytes 0-99/1234"), Some(1234));
+        assert_eq!(parse_content_range_total("bytes 100-199/200"), Some(200));
+        assert_eq!(parse_content_range_total("bytes */555"), Some(555));
+        assert_eq!(parse_content_range_total("bytes 0-99/*"), None);
+        assert_eq!(parse_content_range_total("items 0-99/1234"), None);
+        assert_eq!(parse_content_range_total(""), None);
+    }
+
+    #[test]
+    fn http_range_rejects_status_200_for_nonzero_offset() {
+        let body = vec![b'a'; 100];
+        let (uri, requests) = spawn_mock_http_server(vec![MockResponse::immediate(
+            http_simple_response("200 OK", &body),
+        )]);
+        let mut source = HttpRangeSource::new(uri);
+        source.content_length = Some(100);
+        let error = source
+            .read_range(ByteRange {
+                start: 10,
+                length: Some(10),
+            })
+            .expect_err("a 200 answer to a mid-file Range request must fail");
+        assert!(matches!(
+            error,
+            SourceError::Http(message) if message.contains("ignored Range")
+        ));
+        assert!(recv_request_head(&requests).contains("range: bytes=10-99"));
+    }
+
+    #[test]
+    fn http_range_accepts_status_200_for_whole_file_and_backfills_total() {
+        let body = b"whole-file-payload".to_vec();
+        let (uri, _requests) = spawn_mock_http_server(vec![MockResponse::immediate(
+            http_simple_response("200 OK", &body),
+        )]);
+        let mut source = HttpRangeSource::new(uri);
+        assert_eq!(
+            source.read_range(ByteRange::suffix_from(0)).unwrap(),
+            body.clone()
+        );
+        // Content-Length of the 200 response backfills the total without HEAD.
+        assert_eq!(source.len().unwrap(), Some(body.len() as u64));
+    }
+
+    #[test]
+    fn http_range_backfills_total_from_206_content_range() {
+        let body = vec![b'x'; 16];
+        let (uri, _requests) = spawn_mock_http_server(vec![MockResponse::immediate(
+            http_206_response(0, 4096, &body),
+        )]);
+        let mut source = HttpRangeSource::new(uri);
+        assert_eq!(source.read_range(ByteRange::suffix_from(0)).unwrap(), body);
+        // The 206 Content-Range total satisfies len() without a HEAD request.
+        assert_eq!(source.len().unwrap(), Some(4096));
+    }
+
+    #[test]
+    fn http_range_retries_after_server_error() {
+        let body: Vec<u8> = (0..64u8).collect();
+        let (uri, requests) = spawn_mock_http_server(vec![
+            MockResponse::immediate(http_simple_response("500 Internal Server Error", b"boom")),
+            MockResponse::immediate(http_206_response(0, 64, &body)),
+        ]);
+        let mut source = HttpRangeSource::new(uri);
+        source.content_length = Some(64);
+        assert_eq!(
+            source
+                .read_range(ByteRange {
+                    start: 0,
+                    length: Some(64),
+                })
+                .unwrap(),
+            body
+        );
+        assert!(recv_request_head(&requests).contains("range: bytes=0-63"));
+        assert!(recv_request_head(&requests).contains("range: bytes=0-63"));
+    }
+
+    #[test]
+    fn http_range_resumes_truncated_body_from_received_offset() {
+        let body: Vec<u8> = (0..64u8).collect();
+        let (uri, requests) = spawn_mock_http_server(vec![
+            // Promises 64 bytes but closes after 32: a body-phase error.
+            MockResponse::immediate(http_206_truncated_response(0, 64, 64, &body[..32])),
+            MockResponse::immediate(http_206_response(32, 64, &body[32..])),
+        ]);
+        let mut source = HttpRangeSource::new(uri);
+        source.content_length = Some(64);
+        assert_eq!(
+            source
+                .read_range(ByteRange {
+                    start: 0,
+                    length: Some(64),
+                })
+                .unwrap(),
+            body
+        );
+        assert!(recv_request_head(&requests).contains("range: bytes=0-63"));
+        // The resumed request must start where the truncated body stopped.
+        assert!(recv_request_head(&requests).contains("range: bytes=32-63"));
+    }
+
+    #[test]
+    fn take_prefetch_joins_inflight_thread_instead_of_refetching() {
+        let body: Vec<u8> = (0..100u8).collect();
+        let (uri, requests) = spawn_mock_http_server(vec![MockResponse::delayed(
+            Duration::from_millis(250),
+            http_206_response(0, 100, &body),
+        )]);
+        let mut source = HttpRangeSource::new(uri.clone());
+        source.content_length = Some(100);
+        let range = ByteRange {
+            start: 0,
+            length: Some(100),
+        };
+        source.prefetch = Some(PendingHttpFetch::spawn(uri, range));
+        assert_eq!(source.read_range(range).unwrap(), body);
+        let _ = recv_request_head(&requests);
+        // Joining the pending prefetch must not issue a duplicate download.
+        assert!(requests.recv_timeout(Duration::from_millis(100)).is_err());
+    }
+
+    #[test]
+    fn short_prefetch_read_falls_back_to_synchronous_fetch() {
+        let body: Vec<u8> = (0..100u8).collect();
+        let (uri, requests) = spawn_mock_http_server(vec![
+            // Prefetch answer is complete HTTP but shorter than the request.
+            MockResponse::immediate(http_206_response(0, 100, &body[..50])),
+            MockResponse::immediate(http_206_response(0, 100, &body)),
+        ]);
+        let mut source = HttpRangeSource::new(uri.clone());
+        source.content_length = Some(100);
+        let range = ByteRange {
+            start: 0,
+            length: Some(100),
+        };
+        source.prefetch = Some(PendingHttpFetch::spawn(uri, range));
+        // A short prefetch must trigger the synchronous fallback, not an
+        // empty (fake-EOF) read.
+        assert_eq!(source.read_range(range).unwrap(), body);
+        let _ = recv_request_head(&requests);
+        assert!(recv_request_head(&requests).contains("range: bytes=0-99"));
+    }
+
+    #[test]
+    fn len_retries_head_before_succeeding() {
+        let head_response = b"HTTP/1.1 200 OK\r\nContent-Length: 4321\r\nConnection: close\r\n\r\n";
+        let (uri, requests) = spawn_mock_http_server(vec![
+            MockResponse::immediate(http_simple_response("500 Internal Server Error", b"")),
+            MockResponse::immediate(head_response.to_vec()),
+        ]);
+        let mut source = HttpRangeSource::new(uri);
+        assert_eq!(source.len().unwrap(), Some(4321));
+        assert!(recv_request_head(&requests).starts_with("head"));
+        assert!(recv_request_head(&requests).starts_with("head"));
+    }
+
+    #[test]
+    fn len_falls_back_to_range_probe_when_head_is_rejected() {
+        let (uri, requests) = spawn_mock_http_server(vec![
+            MockResponse::immediate(
+                b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_vec(),
+            ),
+            MockResponse::immediate(http_206_response(0, 1234, b"z")),
+        ]);
+        let mut source = HttpRangeSource::new(uri);
+        assert_eq!(source.len().unwrap(), Some(1234));
+        assert!(recv_request_head(&requests).starts_with("head"));
+        let probe = recv_request_head(&requests);
+        assert!(probe.starts_with("get"));
+        assert!(probe.contains("range: bytes=0-0"));
     }
 
     #[test]
