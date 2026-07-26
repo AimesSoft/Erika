@@ -2135,7 +2135,7 @@ fn handle_playback_command(
                 return true;
             }
             match failure.decode_backend {
-                DecoderBackend::MediaCodec => {
+                DecoderBackend::MediaCodec | DecoderBackend::VideoToolbox => {
                     if let Err(error) = engine.handle_video_frame_import_failure(&failure) {
                         fail_video_import_from_worker(
                             engine,
@@ -2150,7 +2150,7 @@ fn handle_playback_command(
                 DecoderBackend::Software => {
                     fail_video_import_from_worker(engine, inner, failure.structured_message());
                 }
-                DecoderBackend::VideoToolbox | DecoderBackend::D3d11va => {}
+                DecoderBackend::D3d11va => {}
             }
         }
         PlaybackCommand::AddExternalSubtitle { config, reply } => {
