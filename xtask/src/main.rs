@@ -803,7 +803,7 @@ fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Resu
                 "required GNU make was not found; install make or use an NDK distribution that includes prebuilt make"
             );
         }
-        if matches!(options.target, NativeTarget::X86_64Android)
+        if dav1d_requires_nasm(options.target)
             && (!ffmpeg_build_marker_is_current(layout, options)
                 || !dav1d_build_marker_is_current(layout, options))
             && which("nasm").is_none()
@@ -823,6 +823,14 @@ fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Resu
         let _ = host_c_compiler()?;
         let _ = host_cxx_compiler()?;
         return Ok(());
+    }
+
+    if dav1d_requires_nasm(options.target)
+        && (!ffmpeg_build_marker_is_current(layout, options)
+            || !dav1d_build_marker_is_current(layout, options))
+        && which("nasm").is_none()
+    {
+        bail!("required build tool `nasm` was not found for x86_64 Apple dav1d assembly");
     }
 
     let compiler = "clang";
@@ -987,6 +995,13 @@ fn dav1d_asm_enabled(target: NativeTarget) -> bool {
     // Match the FFmpeg policy for 32-bit Android x86: omit assembly that can
     // introduce text relocations into the final shared library.
     !matches!(target, NativeTarget::I686Android)
+}
+
+fn dav1d_requires_nasm(target: NativeTarget) -> bool {
+    matches!(
+        target,
+        NativeTarget::X86_64Macos | NativeTarget::X86_64IosSimulator | NativeTarget::X86_64Android
+    )
 }
 
 fn build_freetype(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
@@ -3941,6 +3956,15 @@ mod tests {
             assert!(!x86_64.contains(&"--disable-asm"));
             assert!(dav1d_asm_enabled(NativeTarget::X86_64Android));
         }
+    }
+
+    #[test]
+    fn x86_64_dav1d_targets_require_nasm() {
+        assert!(dav1d_requires_nasm(NativeTarget::X86_64Macos));
+        assert!(dav1d_requires_nasm(NativeTarget::X86_64IosSimulator));
+        assert!(dav1d_requires_nasm(NativeTarget::X86_64Android));
+        assert!(!dav1d_requires_nasm(NativeTarget::Aarch64Macos));
+        assert!(!dav1d_requires_nasm(NativeTarget::Aarch64Ios));
     }
 
     #[test]
