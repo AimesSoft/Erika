@@ -125,12 +125,41 @@ float pq_inverse_eotf(float normalized_nits) {
     return pow((c1 + c2 * p) / max(1.0 + c3 * p, 0.000001), m2);
 }
 
+// BT.2100 HLG inverse OETF: nonlinear signal E' to scene linear light in
+// [0, 1]. Mirrors the Rust reference implementation in
+// `renderer/pipeline.rs` tests (`hlg_inverse_oetf`).
+float hlg_inverse_oetf(float encoded) {
+    const float a = 0.17883277;
+    const float b = 0.28466892;
+    const float c = 0.55991073;
+    float e = max(encoded, 0.0);
+    if (e <= 0.5) {
+        return e * e / 3.0;
+    }
+    return (exp((e - c) / a) + b) / 12.0;
+}
+
 float3 transfer_to_source_reference_linear(float3 rgb_in) {
     float3 rgb = max(rgb_in, float3(0.0, 0.0, 0.0));
     if (source_transfer == 3u) {
         const float pq_absolute_peak_nits = 10000.0;
         return float3(pq_eotf(rgb.r), pq_eotf(rgb.g), pq_eotf(rgb.b))
             * (pq_absolute_peak_nits / source_reference_white_nits());
+    }
+    if (source_transfer == 4u) {
+        // HLG: inverse OETF to scene linear, then the BT.2100 OOTF (system
+        // gamma 1.2 at the 1000 nit nominal peak) to display linear,
+        // normalized to source reference white like the PQ branch above.
+        const float hlg_nominal_peak_nits = 1000.0;
+        const float hlg_system_gamma = 1.2;
+        float3 scene = float3(
+            hlg_inverse_oetf(rgb.r),
+            hlg_inverse_oetf(rgb.g),
+            hlg_inverse_oetf(rgb.b)
+        );
+        float scene_luma = max(dot(luma_coefficients.xyz, scene), 0.000001);
+        return scene * (hlg_nominal_peak_nits * pow(scene_luma, hlg_system_gamma - 1.0)
+            / source_reference_white_nits());
     }
     if (source_transfer == 1u) {
         return pow(rgb, float3(2.2, 2.2, 2.2));
@@ -272,12 +301,41 @@ cbuffer OverlayConstants : register(b0) {
     float4 tex_rect;
     float2 viewport;
     uint overlay_mode;
-    uint reserved0;
+    uint target_transfer;
     float4 color;
+    float4 ui_nits;
 };
 
 Texture2D overlayTex : register(t0);
 SamplerState overlaySampler : register(s0);
+
+float pq_inverse_eotf(float normalized_nits) {
+    const float m1 = 0.1593017578125;
+    const float m2 = 78.84375;
+    const float c1 = 0.8359375;
+    const float c2 = 18.8515625;
+    const float c3 = 18.6875;
+    float p = pow(clamp(normalized_nits, 0.0, 1.0), m1);
+    return pow((c1 + c2 * p) / max(1.0 + c3 * p, 0.000001), m2);
+}
+
+// Re-encode SDR UI colors (subtitles, danmaku) for a PQ swapchain: sRGB to
+// linear, scale to the UI reference white, then PQ inverse EOTF. Mirrors
+// `sdr_ui_color_to_target_output` in the Metal shader in `metal/apple.rs`
+// (`linear` is an HLSL interpolation keyword, hence `linear_rgb`).
+float3 sdr_ui_color_to_target_output(float3 rgb, uint transfer, float reference_white_nits) {
+    if (transfer == 3u) {
+        const float pq_absolute_peak_nits = 10000.0;
+        float3 linear_rgb = pow(max(rgb, float3(0.0, 0.0, 0.0)), float3(2.2, 2.2, 2.2));
+        float3 nits = linear_rgb * max(reference_white_nits, 1.0);
+        return float3(
+            pq_inverse_eotf(nits.r / pq_absolute_peak_nits),
+            pq_inverse_eotf(nits.g / pq_absolute_peak_nits),
+            pq_inverse_eotf(nits.b / pq_absolute_peak_nits)
+        );
+    }
+    return rgb;
+}
 
 VsOut overlay_vs_main(VsIn input) {
     float2 pixel = rect.xy + input.texcoord * rect.zw;
@@ -295,8 +353,10 @@ VsOut overlay_vs_main(VsIn input) {
 float4 overlay_ps_main(VsOut input) : SV_Target {
     float4 sampled = overlayTex.Sample(overlaySampler, input.texcoord);
     if (overlay_mode == 1u) {
-        return float4(color.rgb, color.a * sampled.r);
+        float3 rgb = sdr_ui_color_to_target_output(color.rgb, target_transfer, ui_nits.x);
+        return float4(rgb, color.a * sampled.r);
     }
+    sampled.rgb = sdr_ui_color_to_target_output(sampled.rgb, target_transfer, ui_nits.x);
     return sampled;
 }
 "#;
@@ -308,6 +368,10 @@ struct VideoVertex {
     texcoord: [f32; 2],
 }
 
+/// Overlay quad uniforms, byte-compatible with the HLSL `OverlayConstants`
+/// cbuffer (80 bytes, 16-byte aligned). `target_transfer` and `ui_nits.x`
+/// drive the SDR-UI-to-PQ re-encode when presenting on an HDR10 swapchain,
+/// mirroring the Metal `OverlayUniforms` in `metal/apple.rs`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct OverlayUniforms {
@@ -315,11 +379,13 @@ struct OverlayUniforms {
     tex_rect: [f32; 4],
     viewport: [f32; 2],
     overlay_mode: u32,
-    reserved0: u32,
+    target_transfer: u32,
     color: [f32; 4],
+    ui_nits: [f32; 4],
 }
 
 impl OverlayUniforms {
+    #[allow(clippy::too_many_arguments)]
     fn rgba_plane(
         x: i32,
         y: i32,
@@ -327,14 +393,16 @@ impl OverlayUniforms {
         height: u32,
         viewport_w: u32,
         viewport_h: u32,
+        target: TargetColorState,
     ) -> Self {
         Self {
             rect: [x as f32, y as f32, width as f32, height as f32],
             tex_rect: [0.0, 0.0, 1.0, 1.0],
             viewport: [viewport_w.max(1) as f32, viewport_h.max(1) as f32],
             overlay_mode: 0,
-            reserved0: 0,
+            target_transfer: transfer_code(target.transfer),
             color: [1.0, 1.0, 1.0, 1.0],
+            ui_nits: [ui_reference_white_nits(target), 0.0, 0.0, 0.0],
         }
     }
 
@@ -350,6 +418,7 @@ impl OverlayUniforms {
         atlas_h: u32,
         viewport_w: u32,
         viewport_h: u32,
+        target: TargetColorState,
     ) -> Self {
         let color = AssColor::from_libass_rgba(color_rgba);
         let aw = atlas_w.max(1) as f32;
@@ -369,13 +438,14 @@ impl OverlayUniforms {
             ],
             viewport: [viewport_w.max(1) as f32, viewport_h.max(1) as f32],
             overlay_mode: 1,
-            reserved0: 0,
+            target_transfer: transfer_code(target.transfer),
             color: [
                 f32::from(color.red) / 255.0,
                 f32::from(color.green) / 255.0,
                 f32::from(color.blue) / 255.0,
                 f32::from(color.alpha) / 255.0,
             ],
+            ui_nits: [ui_reference_white_nits(target), 0.0, 0.0, 0.0],
         }
     }
 
@@ -385,15 +455,38 @@ impl OverlayUniforms {
         tex_rect: [f32; 4],
         viewport_w: u32,
         viewport_h: u32,
+        target: TargetColorState,
     ) -> Self {
         Self {
             rect,
             tex_rect,
             viewport: [viewport_w.max(1) as f32, viewport_h.max(1) as f32],
             overlay_mode: 1,
-            reserved0: 0,
+            target_transfer: transfer_code(target.transfer),
             color,
+            ui_nits: [ui_reference_white_nits(target), 0.0, 0.0, 0.0],
         }
+    }
+}
+
+fn transfer_code(transfer: TransferFunction) -> u32 {
+    match transfer {
+        TransferFunction::Srgb => 1,
+        TransferFunction::Bt1886 => 2,
+        TransferFunction::Pq => 3,
+        TransferFunction::Hlg => 4,
+        TransferFunction::Unknown => 1,
+    }
+}
+
+/// Nits at which full-scale SDR UI white is placed on a PQ output; SDR targets
+/// keep the shader pass-through. Mirrors `ui_reference_white_nits` in
+/// `metal/apple.rs`.
+fn ui_reference_white_nits(target: TargetColorState) -> f32 {
+    if matches!(target.transfer, TransferFunction::Pq) {
+        target.reference_white_nits.max(1.0)
+    } else {
+        100.0
     }
 }
 
@@ -537,12 +630,16 @@ impl D3d11OutputMode {
         }
     }
 
-    fn target_color_for_source(self, source: SourceColorState) -> TargetColorState {
-        let _ = source;
+    fn target_color(self) -> TargetColorState {
         match self {
             Self::Sdr => TargetColorState::sdr(ColorPrimaries::Bt709),
             Self::Hdr10 => TargetColorState::hdr10(ColorPrimaries::Bt2020),
         }
+    }
+
+    fn target_color_for_source(self, source: SourceColorState) -> TargetColorState {
+        let _ = source;
+        self.target_color()
     }
 }
 
@@ -848,6 +945,16 @@ impl D3d11Renderer {
         Ok((texture.clone(), D3d11VideoImportMode::DirectDecoderDevice))
     }
 
+    /// Target color state overlays are composited into: the attached surface's
+    /// swapchain encoding (PQ for HDR10, sRGB otherwise).
+    fn overlay_target_color(&self) -> TargetColorState {
+        self.surface
+            .as_ref()
+            .map(|surface| surface.output_mode)
+            .unwrap_or_default()
+            .target_color()
+    }
+
     fn prepare_overlay_draws(
         &mut self,
         frame: Option<&OverlayFrame>,
@@ -867,6 +974,7 @@ impl D3d11Renderer {
             as u64;
         let viewport_w = frame.viewport.width;
         let viewport_h = frame.viewport.height;
+        let target = self.overlay_target_color();
         let mut draws = Vec::new();
 
         for plane in &frame.subtitle_planes {
@@ -896,11 +1004,13 @@ impl D3d11Renderer {
             let (x, y, width, height) = plane.scaled_rect(viewport_w, viewport_h);
             draws.push(D3d11OverlayDraw {
                 texture,
-                constants: OverlayUniforms::rgba_plane(x, y, width, height, viewport_w, viewport_h),
+                constants: OverlayUniforms::rgba_plane(
+                    x, y, width, height, viewport_w, viewport_h, target,
+                ),
             });
         }
 
-        self.append_alpha_atlas_draws(frame, viewport_w, viewport_h, &mut draws)?;
+        self.append_alpha_atlas_draws(frame, viewport_w, viewport_h, target, &mut draws)?;
         Ok(draws)
     }
 
@@ -931,11 +1041,12 @@ impl D3d11Renderer {
         }
         let viewport_w = plan.viewport.width;
         let viewport_h = plan.viewport.height;
+        let target = self.overlay_target_color();
         let mut draws = Vec::with_capacity(plan.items.len() * 3);
         let (fill, outline) = self.prepare_danmaku_atlas_textures(atlas)?;
         for item in &plan.items {
             self.append_danmaku_glyph_draws(
-                item, &fill, &outline, viewport_w, viewport_h, &mut draws,
+                item, &fill, &outline, viewport_w, viewport_h, target, &mut draws,
             );
         }
         Ok(draws)
@@ -985,6 +1096,7 @@ impl D3d11Renderer {
         Ok((fill, outline))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn append_danmaku_glyph_draws(
         &self,
         item: &DanmakuGlyphInstance,
@@ -992,6 +1104,7 @@ impl D3d11Renderer {
         outline_texture: &D3d11OverlayTexture,
         viewport_w: u32,
         viewport_h: u32,
+        target: TargetColorState,
         draws: &mut Vec<D3d11OverlayDraw>,
     ) {
         if item.shadow_rgba[3] > 0.0 {
@@ -1006,6 +1119,7 @@ impl D3d11Renderer {
                     item.tex_rect,
                     viewport_w,
                     viewport_h,
+                    target,
                 ),
             });
         }
@@ -1018,6 +1132,7 @@ impl D3d11Renderer {
                     item.tex_rect,
                     viewport_w,
                     viewport_h,
+                    target,
                 ),
             });
         }
@@ -1029,6 +1144,7 @@ impl D3d11Renderer {
                 item.tex_rect,
                 viewport_w,
                 viewport_h,
+                target,
             ),
         });
     }
@@ -1038,6 +1154,7 @@ impl D3d11Renderer {
         frame: &OverlayFrame,
         viewport_w: u32,
         viewport_h: u32,
+        target: TargetColorState,
         draws: &mut Vec<D3d11OverlayDraw>,
     ) -> Result<()> {
         let bitmaps = &frame.subtitle_alpha_planes;
@@ -1109,6 +1226,7 @@ impl D3d11Renderer {
                     atlas_height as u32,
                     viewport_w,
                     viewport_h,
+                    target,
                 ),
             });
         }
