@@ -2626,6 +2626,9 @@ unsafe fn allocate_swr_context(
     if context.is_null() {
         return Err(FfmpegError::NullPointer("swr_alloc_set_opts2"));
     }
+    unsafe {
+        configure_downmix_normalization(context, frame.channel_count(), output_format.channels)
+    };
     Ok(context)
 }
 
@@ -2652,7 +2655,73 @@ unsafe fn allocate_swr_context(
     if context.is_null() {
         return Err(FfmpegError::NullPointer("swr_alloc_set_opts"));
     }
+    unsafe {
+        configure_downmix_normalization(context, frame.channel_count(), output_format.channels)
+    };
     Ok(context)
+}
+
+// `libavutil/opt.h` is not pulled in by the erika_ffmpeg_sys wrapper header, so
+// bindgen does not emit this binding even though `av_.*` is allowlisted. The
+// symbol is exported by the bundled static libavutil, so declare it directly.
+unsafe extern "C" {
+    fn av_opt_set_double(
+        obj: *mut c_void,
+        name: *const c_char,
+        val: f64,
+        search_flags: c_int,
+    ) -> c_int;
+}
+
+/// Returns whether a swr context that maps `input_channels` down to
+/// `output_channels` needs its rematrix normalized to avoid clipping.
+///
+/// FFmpeg's default downmix matrices sum to more than unity per output channel
+/// (e.g. 5.1 -> stereo: FL_out = FL + 0.707*FC + 0.707*BL, coefficient sum
+/// ~2.41), so full-scale f32 input exceeds +/-1.0 and hard-clips downstream.
+/// Upmix and equal-channel conversions keep the default behavior so stereo
+/// pass-through loudness is unaffected.
+fn downmix_requires_normalization(input_channels: u32, output_channels: u32) -> bool {
+    output_channels < input_channels
+}
+
+/// Sets `rematrix_maxval` to 1.0 on `context` so swresample normalizes the
+/// downmix matrix, preventing clipped output. Only applies when channels are
+/// reduced; failures are traced but non-fatal (the context falls back to the
+/// default un-normalized matrix).
+///
+/// # Safety
+/// `context` must point to a valid, allocated `SwrContext` that has not been
+/// initialized with `swr_init` yet.
+unsafe fn configure_downmix_normalization(
+    context: *mut sys::SwrContext,
+    input_channels: u32,
+    output_channels: u32,
+) {
+    if !downmix_requires_normalization(input_channels, output_channels) {
+        return;
+    }
+    let code = unsafe {
+        av_opt_set_double(
+            context.cast::<c_void>(),
+            c"rematrix_maxval".as_ptr(),
+            1.0,
+            0,
+        )
+    };
+    if code < 0 {
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "audio_resampler_downmix",
+                "stage": "rematrix_maxval_failed",
+                "inputChannels": input_channels,
+                "outputChannels": output_channels,
+                "code": code,
+                "message": error_string(code),
+            })
+            .to_string(),
+        );
+    }
 }
 
 #[cfg(erika_ffmpeg_legacy_channel_layout)]
@@ -3955,6 +4024,80 @@ mod tests {
         };
         assert_eq!(timestamp.seconds(), 1.0);
         assert_eq!(timestamp.as_duration(), Some(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn downmix_normalization_only_applies_when_channels_are_reduced() {
+        assert!(downmix_requires_normalization(6, 2));
+        assert!(downmix_requires_normalization(8, 2));
+        assert!(downmix_requires_normalization(6, 5));
+        assert!(!downmix_requires_normalization(2, 2));
+        assert!(!downmix_requires_normalization(1, 2));
+        assert!(!downmix_requires_normalization(2, 6));
+    }
+
+    #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
+    fn full_scale_audio_frame(channels: i32, sample_rate: i32, samples: i32) -> Frame {
+        let frame = Frame::alloc(TimeBase {
+            num: 1,
+            den: sample_rate,
+        })
+        .unwrap();
+        unsafe {
+            (*frame.ptr).format = sys::AVSampleFormat_AV_SAMPLE_FMT_FLT;
+            (*frame.ptr).sample_rate = sample_rate;
+            (*frame.ptr).nb_samples = samples;
+            sys::av_channel_layout_default(&mut (*frame.ptr).ch_layout, channels);
+            check(
+                sys::av_frame_get_buffer(frame.ptr, 0),
+                "av_frame_get_buffer",
+            )
+            .unwrap();
+            let data = (*frame.ptr).extended_data.read().cast::<f32>();
+            for index in 0..(samples as usize * channels as usize) {
+                data.add(index).write(1.0);
+            }
+        }
+        frame
+    }
+
+    #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
+    #[test]
+    fn surround_downmix_to_stereo_does_not_clip_full_scale_input() {
+        let frame = full_scale_audio_frame(6, 48_000, 1024);
+        let mut resampler =
+            AudioResampler::new_from_frame(&frame, PcmFormat::f32_interleaved(48_000, 2)).unwrap();
+        let pcm = resampler.convert(&frame).unwrap();
+        assert!(pcm.frames > 0);
+        let peak = pcm
+            .samples
+            .iter()
+            .fold(0.0f32, |peak, sample| peak.max(sample.abs()));
+        // Without rematrix normalization the default 5.1 -> stereo matrix sums
+        // to ~2.41 per output channel, so full-scale input would peak well
+        // above 1.0 here.
+        assert!(
+            peak <= 1.0 + 1e-4,
+            "downmixed peak {peak} exceeds full scale"
+        );
+        // The signal must still be audible, not silenced by the normalization.
+        assert!(peak > 0.5, "downmixed peak {peak} unexpectedly quiet");
+    }
+
+    #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
+    #[test]
+    fn stereo_passthrough_keeps_unity_gain() {
+        let frame = full_scale_audio_frame(2, 48_000, 512);
+        let mut resampler =
+            AudioResampler::new_from_frame(&frame, PcmFormat::f32_interleaved(48_000, 2)).unwrap();
+        let pcm = resampler.convert(&frame).unwrap();
+        assert!(pcm.frames > 0);
+        for sample in &pcm.samples {
+            assert!(
+                (sample - 1.0).abs() < 1e-4,
+                "stereo pass-through altered sample: {sample}"
+            );
+        }
     }
 
     #[test]
