@@ -210,6 +210,11 @@ jobs:
             pkgconf
             perl
             zip
+      - name: Select MSYS2 tool root
+        if: matrix.msys2
+        shell: pwsh
+        run: |
+          "MSYS2_ROOT=C:\msys64" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Install build tools (nasm, meson, ninja, LLVM/libclang)
         shell: pwsh
         run: |
@@ -232,6 +237,12 @@ jobs:
         with:
           path: third_party
           key: deps-windows-${{ matrix.arch }}-${{ hashFiles('xtask/src/main.rs') }}
+      - name: Verify FFmpeg make shell
+        shell: pwsh
+        run: |
+          cargo run --locked -p xtask -- deps smoke-ffmpeg-make `
+            --profile "$env:PROFILE" `
+            --target "${{ matrix.target }}"
       - name: Build native deps + erika_capi
         shell: bash
         run: |
