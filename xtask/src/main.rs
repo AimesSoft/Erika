@@ -1823,18 +1823,18 @@ fn apply_ffmpeg_patch_files(layout: &WorkspaceLayout) -> Result<PatchApplication
 
 fn refresh_ffmpeg_source(layout: &WorkspaceLayout) -> Result<()> {
     validate_generated_ffmpeg_source_path(layout)?;
+    let archive_path = layout.cache_dir.join(FFMPEG_ARCHIVE);
     if layout.ffmpeg_source_dir.exists() {
         fs::remove_dir_all(&layout.ffmpeg_source_dir)
             .with_context(|| format!("remove {}", layout.ffmpeg_source_dir.display()))?;
     }
-    extract_archive(
-        &layout.cache_dir.join(FFMPEG_ARCHIVE),
-        &layout.source_dir,
-        FFMPEG_DIR,
-    )?;
+    extract_archive(&archive_path, &layout.source_dir, FFMPEG_DIR)?;
     fs::write(
         layout.ffmpeg_source_dir.join(".erika-extracted"),
-        format!("archive={FFMPEG_ARCHIVE}\n"),
+        format!(
+            "archive={FFMPEG_ARCHIVE}\nsha256={}\n",
+            archive_sha256(&archive_path)?
+        ),
     )
     .with_context(|| format!("mark {} extracted", layout.ffmpeg_source_dir.display()))
 }
@@ -2107,7 +2107,8 @@ fn fetch_and_extract(
 
     let source_path = layout.source_dir.join(source_dir_name);
     let extraction_marker = source_path.join(".erika-extracted");
-    let expected_marker = format!("archive={archive_name}\n");
+    let mut archive_digest = archive_sha256(&archive_path)?;
+    let mut expected_marker = format!("archive={archive_name}\nsha256={archive_digest}\n");
     if source_path.exists()
         && fs::read_to_string(&extraction_marker).is_ok_and(|marker| marker == expected_marker)
     {
@@ -2119,7 +2120,19 @@ fn fetch_and_extract(
             .with_context(|| format!("remove incomplete source {}", source_path.display()))?;
     }
     println!("extract {}", archive_path.display());
-    extract_archive(&archive_path, &layout.source_dir, source_dir_name)?;
+    if let Err(error) = extract_archive(&archive_path, &layout.source_dir, source_dir_name) {
+        println!(
+            "extract failed for {}, downloading a fresh archive",
+            archive_path.display()
+        );
+        fs::remove_file(&archive_path)
+            .with_context(|| format!("remove {}", archive_path.display()))?;
+        download_archive(urls, &partial_path, &archive_path, expected_sha256)
+            .with_context(|| format!("recover after extraction failure: {error:#}"))?;
+        archive_digest = archive_sha256(&archive_path)?;
+        expected_marker = format!("archive={archive_name}\nsha256={archive_digest}\n");
+        extract_archive(&archive_path, &layout.source_dir, source_dir_name)?;
+    }
     fs::write(&extraction_marker, expected_marker)
         .with_context(|| format!("write {}", extraction_marker.display()))?;
     Ok(())
@@ -2222,14 +2235,16 @@ fn download_archive(
 }
 
 fn archive_checksum_matches(path: &Path, expected: &str) -> bool {
+    archive_sha256(path).is_ok_and(|actual| actual.eq_ignore_ascii_case(expected))
+}
+
+fn archive_sha256(path: &Path) -> Result<String> {
     let Ok(mut file) = File::open(path) else {
-        return false;
+        bail!("open {}", path.display());
     };
     let mut hasher = Sha256::new();
-    if io::copy(&mut file, &mut hasher).is_err() {
-        return false;
-    }
-    format!("{:x}", hasher.finalize()).eq_ignore_ascii_case(expected)
+    io::copy(&mut file, &mut hasher).with_context(|| format!("read {}", path.display()))?;
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn download_agent() -> ureq::Agent {
