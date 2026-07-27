@@ -140,6 +140,8 @@ no-op. Destroying a handle stops playback and releases all resources.
 
 ```c
 ErikaStatus erika_open(ErikaHandle *handle, const char *uri);   // file path or URL
+ErikaStatus erika_open_with_headers(ErikaHandle *handle, const char *uri,
+                                    const ErikaHttpHeader *headers, uintptr_t header_count);
 ErikaStatus erika_play(ErikaHandle *handle);
 ErikaStatus erika_pause(ErikaHandle *handle);
 ErikaStatus erika_stop(ErikaHandle *handle);
@@ -147,7 +149,12 @@ ErikaStatus erika_close(ErikaHandle *handle);
 ErikaStatus erika_seek(ErikaHandle *handle, uint64_t position_micros);
 ```
 
-`uri` is a local filesystem path or an HTTP(S) URL. `seek` takes microseconds.
+`uri` is a local filesystem path or an HTTP(S) URL. `erika_open_with_headers`
+sets headers for HTTP(S) playback; `headers` is read only during the call and
+may be released after it returns. When `header_count` is nonzero, `headers`
+must not be `NULL`. Headers are used for HEAD, Range GET, and prefetch requests.
+Authentication information and cookies are not written to Erika logs. `seek`
+takes microseconds.
 `open` and `play` enqueue work asynchronously. Watch for `StateChanged`,
 `DurationChanged`, and `Error` events for the authoritative result instead of
 blocking the host UI thread.
@@ -230,6 +237,9 @@ HDR10/PQ. `create_with_output_mode` is a shorthand; `create` uses defaults
 
 ```c
 ErikaStatus erika_presenter_open(ErikaPresenterHandle *, const char *uri);
+ErikaStatus erika_presenter_open_with_headers(ErikaPresenterHandle *, const char *uri,
+                                              const ErikaHttpHeader *headers,
+                                              uintptr_t header_count);
 ErikaStatus erika_presenter_play(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_pause(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_stop(ErikaPresenterHandle *);
@@ -259,6 +269,43 @@ ASS script keeps its own styling; these only fill in what the script leaves
 open, what the system cannot resolve, and the look of plain-text (SRT/WebVTT)
 subtitles. Pass `force_override = true` to push the font, size, border and
 colours onto ASS dialogue events that carry their own styling.
+
+`ErikaHttpHeader` is defined as:
+
+```c
+typedef struct ErikaHttpHeader {
+  const char *name;
+  const char *value;
+} ErikaHttpHeader;
+```
+
+For example:
+
+```c
+ErikaHttpHeader headers[] = {
+    {"Authorization", "Bearer token"},
+    {"Referer", "https://example.com/"},
+};
+erika_presenter_open_with_headers(presenter, "https://example.com/video.mp4",
+                                  headers, 2);
+```
+
+Headers apply only to HTTP(S) sources; local files and Android `content://`
+sources ignore them. The caller must keep the URI, header names, and values
+valid for the duration of the call; the API does not take ownership of these
+strings.
+
+Headers the player derives itself are rejected rather than merged, because the
+underlying HTTP client appends duplicates instead of replacing them: `Range`,
+`Host`, `Content-Length`, `Transfer-Encoding`, and `Connection` (matched
+case-insensitively) all fail the call with `ERIKA_STATUS_PLAYER_ERROR`. A header
+name that is not a valid HTTP token, or a value containing characters that are
+not allowed in a field value, fails the same way — validation happens during
+`open`, not on the first range request.
+
+Headers are attached to the media source only. External subtitle tracks and
+danmaku sidecar files are still fetched without them, so a token that
+authenticates the video does not yet authenticate those URLs.
 
 `set_output_headroom` publishes the display's current HDR/SDR ratio. Android
 API 34+ hosts should call it from

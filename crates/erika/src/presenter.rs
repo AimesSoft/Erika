@@ -1251,7 +1251,9 @@ impl PresenterRuntime {
                             trace::diagnostic(failure.structured_message());
                             if matches!(
                                 frame.decode_backend,
-                                DecoderBackend::MediaCodec | DecoderBackend::Software
+                                DecoderBackend::MediaCodec
+                                    | DecoderBackend::Software
+                                    | DecoderBackend::VideoToolbox
                             ) {
                                 self.rejected_video_import_route = Some(import_route);
                                 // The decoder transition must not race a local

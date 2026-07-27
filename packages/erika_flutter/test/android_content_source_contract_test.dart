@@ -3,7 +3,9 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('Android content pipes spool off the platform thread with bounded cleanup', () {
+  test(
+      'Android content pipes spool off the platform thread with bounded cleanup',
+      () {
     final plugin = File(
       'android/src/main/kotlin/dev/aimesoft/erika_flutter/'
       'ErikaFlutterPlugin.kt',

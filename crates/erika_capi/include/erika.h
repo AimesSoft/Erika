@@ -46,6 +46,11 @@ extern "C" {
 typedef struct ErikaHandle ErikaHandle;
 typedef struct ErikaPresenterHandle ErikaPresenterHandle;
 
+typedef struct ErikaHttpHeader {
+  const char *name;
+  const char *value;
+} ErikaHttpHeader;
+
 typedef enum ErikaStatus {
   ErikaStatus_Ok = 0,
   ErikaStatus_NullPointer = 1,
@@ -327,6 +332,11 @@ void erika_string_free(char *value);
 /* Playback control. uri is a local path or HTTP(S) URL; times are microseconds.
  * open() is asynchronous — watch StateChanged/DurationChanged events. */
 ErikaStatus erika_open(ErikaHandle *handle, const char *uri);
+ErikaStatus erika_open_with_headers(
+    ErikaHandle *handle,
+    const char *uri,
+    const ErikaHttpHeader *headers,
+    uintptr_t header_count);
 /* play enqueues work; observe StateChanged/Error for the authoritative result. */
 ErikaStatus erika_play(ErikaHandle *handle);
 ErikaStatus erika_pause(ErikaHandle *handle);
@@ -411,6 +421,11 @@ void erika_presenter_destroy(ErikaPresenterHandle *handle);
  * renderers execute ArtCNN; other backends retain native luma sampling and
  * report an explicit Inactive fallback. */
 ErikaStatus erika_presenter_open(ErikaPresenterHandle *handle, const char *uri);
+ErikaStatus erika_presenter_open_with_headers(
+    ErikaPresenterHandle *handle,
+    const char *uri,
+    const ErikaHttpHeader *headers,
+    uintptr_t header_count);
 /* play enqueues work; observe StateChanged/Error for the authoritative result. */
 ErikaStatus erika_presenter_play(ErikaPresenterHandle *handle);
 ErikaStatus erika_presenter_pause(ErikaPresenterHandle *handle);

@@ -633,6 +633,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   using CreateWithOutputModeFn = ErikaPresenterHandle* (*)(int32_t, float);
   using DestroyFn = void (*)(ErikaPresenterHandle*);
   using OpenFn = ErikaStatus (*)(ErikaPresenterHandle*, const char*);
+  using OpenWithHeadersFn = ErikaStatus (*)(ErikaPresenterHandle*, const char*, const ErikaHttpHeader*, uintptr_t);
   using CommandFn = ErikaStatus (*)(ErikaPresenterHandle*);
   using SeekFn = ErikaStatus (*)(ErikaPresenterHandle*, uint64_t);
   using SetPlaybackRateFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
@@ -741,6 +742,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   CreateWithOutputModeFn create_with_output_mode = nullptr;
   DestroyFn destroy = nullptr;
   OpenFn open = nullptr;
+  OpenWithHeadersFn open_with_headers = nullptr;
   CommandFn play = nullptr;
   CommandFn pause = nullptr;
   CommandFn stop = nullptr;
@@ -798,6 +800,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
         "erika_presenter_create_with_output_mode");
     destroy = LoadRequired<DestroyFn>("erika_presenter_destroy");
     open = LoadRequired<OpenFn>("erika_presenter_open");
+    open_with_headers = LoadOptional<OpenWithHeadersFn>("erika_presenter_open_with_headers");
     play = LoadRequired<CommandFn>("erika_presenter_play");
     pause = LoadRequired<CommandFn>("erika_presenter_pause");
     stop = LoadRequired<CommandFn>("erika_presenter_stop");
@@ -1081,7 +1084,49 @@ struct ErikaFlutterPlugin::PlayerHost {
     }
   }
 
-  void Open(const std::string& uri) {
+  void Open(const std::string& uri, const EncodableMap& args) {
+    const auto* raw_headers = FindArg(args, "httpHeaders");
+    const EncodableMap* headers = nullptr;
+    if (raw_headers != nullptr &&
+        !std::holds_alternative<std::monostate>(*raw_headers)) {
+      headers = std::get_if<EncodableMap>(raw_headers);
+      if (headers == nullptr) {
+        throw PluginError("httpHeaders must be a map of string names to string values.");
+      }
+    }
+    if (headers != nullptr && !headers->empty()) {
+      // Never fall back to the headerless entry point here: silently dropping
+      // the headers turns an authenticated stream into an opaque 403.
+      if (library->open_with_headers == nullptr) {
+        throw PluginError(
+            "The loaded Erika native library does not export "
+            "erika_presenter_open_with_headers, so httpHeaders cannot be applied. "
+            "Update the bundled erika_capi.dll (a prebuilt from 0.1.3 or earlier "
+            "predates HTTP header support).");
+      }
+      std::vector<std::string> names;
+      std::vector<std::string> values;
+      std::vector<ErikaHttpHeader> native_headers;
+      names.reserve(headers->size());
+      values.reserve(headers->size());
+      native_headers.reserve(headers->size());
+      for (const auto& entry : *headers) {
+        const auto name = StringValue(&entry.first);
+        const auto value = StringValue(&entry.second);
+        if (!name || !value) {
+          throw PluginError("httpHeaders must contain string names and values.");
+        }
+        names.push_back(*name);
+        values.push_back(*value);
+      }
+      for (size_t index = 0; index < names.size(); ++index) {
+        native_headers.push_back({names[index].c_str(), values[index].c_str()});
+      }
+      Check(library->open_with_headers(handle, uri.c_str(), native_headers.data(),
+                                       native_headers.size()), "open",
+            library->TakeLastError());
+      return;
+    }
     Check(library->open(handle, uri.c_str()), "open", library->TakeLastError());
   }
 
@@ -2088,7 +2133,7 @@ void ErikaFlutterPlugin::HandleMethodCall(
       OnFrameTimer();
       result->Success();
     } else if (method == "open") {
-      PlayerFromArgs(args).Open(RequiredString(args, "uri"));
+      PlayerFromArgs(args).Open(RequiredString(args, "uri"), args);
       OnFrameTimer();
       result->Success();
     } else if (method == "play") {

@@ -5,7 +5,7 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly FIXTURE_NAME="playback-fixture.mkv"
 readonly FIXTURE_PATH="${SCRIPT_DIR}/${FIXTURE_NAME}"
 readonly CHECKSUM_PATH="${SCRIPT_DIR}/SHA256SUMS"
-readonly REQUIRED_VERSION="7.1.1"
+readonly REQUIRED_VERSION="8.1.2"
 
 usage() {
   cat <<'EOF'

@@ -727,7 +727,15 @@ unsafe fn invoke_presenter(
             let uri = required_string(args, "uri")?;
             let uri_c = c_string(uri, "uri")?;
             arm_owned_fd_for_source(owned_fd, uri)?;
-            let status = unsafe { erika_presenter_open(handle, uri_c.as_ptr()) };
+            let headers = c_http_headers(args)?;
+            let status = unsafe {
+                erika_presenter_open_with_headers(
+                    handle,
+                    uri_c.as_ptr(),
+                    headers.as_ptr(),
+                    headers.len(),
+                )
+            };
             call_status(status)?;
             Ok(Value::Null)
         }
@@ -1422,6 +1430,65 @@ fn c_string(value: &str, name: &str) -> Result<CString, String> {
     CString::new(value).map_err(|_| format!("{name} contains an embedded NUL byte"))
 }
 
+/// Owns the `CString` storage the `ErikaHttpHeader` pointers refer to. Keeping
+/// the strings and the header array in one value means the pointers stay valid
+/// for exactly as long as the caller holds the storage, instead of dangling the
+/// moment the builder returns.
+#[derive(Default)]
+struct HttpHeaderStorage {
+    _names: Vec<CString>,
+    _values: Vec<CString>,
+    headers: Vec<ErikaHttpHeader>,
+}
+
+impl HttpHeaderStorage {
+    fn as_ptr(&self) -> *const ErikaHttpHeader {
+        if self.headers.is_empty() {
+            ptr::null()
+        } else {
+            self.headers.as_ptr()
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.headers.len()
+    }
+}
+
+fn c_http_headers(args: &Map<String, Value>) -> Result<HttpHeaderStorage, String> {
+    let Some(value) = args.get("httpHeaders") else {
+        return Ok(HttpHeaderStorage::default());
+    };
+    let object = value
+        .as_object()
+        .ok_or_else(|| "httpHeaders must be a dictionary".to_string())?;
+    let mut names = Vec::with_capacity(object.len());
+    let mut values = Vec::with_capacity(object.len());
+    for (name, value) in object {
+        let value = value
+            .as_str()
+            .ok_or_else(|| format!("httpHeaders value for {name} must be a string"))?;
+        if let Some(error) = http_header_error(name, value) {
+            return Err(error);
+        }
+        names.push(c_string(name, "httpHeaders name")?);
+        values.push(c_string(value, "httpHeaders value")?);
+    }
+    let headers = names
+        .iter()
+        .zip(values.iter())
+        .map(|(name, value)| ErikaHttpHeader {
+            name: name.as_ptr(),
+            value: value.as_ptr(),
+        })
+        .collect();
+    Ok(HttpHeaderStorage {
+        _names: names,
+        _values: values,
+        headers,
+    })
+}
+
 fn optional_c_string(args: &Map<String, Value>, name: &str) -> Result<Option<CString>, String> {
     match args.get(name) {
         None | Some(Value::Null) => Ok(None),
@@ -1572,6 +1639,74 @@ mod tests {
         assert_eq!(owned_fd_from_uri("fd://42?offset=5&length=9"), Some(42));
         assert_eq!(owned_fd_from_uri("fd://bad?offset=0"), None);
         assert_eq!(owned_fd_from_uri("file:///tmp/video.mkv"), None);
+    }
+
+    #[test]
+    fn parses_json_http_headers_into_c_headers() {
+        let args = json!({
+            "httpHeaders": {
+                "Accept": "video/mp4",
+                "X-Test": "two"
+            }
+        });
+        let headers = c_http_headers(args.as_object().unwrap()).unwrap();
+        let values = headers
+            .headers
+            .iter()
+            .map(|header| unsafe {
+                (
+                    CStr::from_ptr(header.name).to_str().unwrap(),
+                    CStr::from_ptr(header.value).to_str().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![("Accept", "video/mp4"), ("X-Test", "two")]);
+        assert_eq!(headers.len(), 2);
+        assert!(!headers.as_ptr().is_null());
+    }
+
+    #[test]
+    fn empty_json_http_headers_produce_a_null_header_pointer() {
+        let args = json!({});
+        let headers = c_http_headers(args.as_object().unwrap()).unwrap();
+
+        assert_eq!(headers.len(), 0);
+        assert!(headers.as_ptr().is_null());
+    }
+
+    #[test]
+    fn rejects_reserved_and_malformed_json_http_headers() {
+        for value in [
+            json!({"Range": "bytes=0-10"}),
+            json!({"host": "example.invalid"}),
+            json!({"Content-Length": "10"}),
+            json!({"Transfer-Encoding": "chunked"}),
+            json!({"Connection": "close"}),
+            json!({"X Test": "value"}),
+            json!({"X-Test": "line\nbreak"}),
+        ] {
+            let args = json!({"httpHeaders": value});
+            assert!(
+                c_http_headers(args.as_object().unwrap()).is_err(),
+                "{value} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_json_http_headers() {
+        for value in [
+            json!("not a dictionary"),
+            json!({"X-Test": 1}),
+            json!({"X\u{0000}-Test": "value"}),
+            json!({"X-Test": "value\u{0000}"}),
+        ] {
+            let args = json!({"httpHeaders": value});
+            assert!(c_http_headers(args.as_object().unwrap()).is_err());
+        }
+
+        let args = json!({});
+        assert_eq!(c_http_headers(args.as_object().unwrap()).unwrap().len(), 0);
     }
 
     #[test]

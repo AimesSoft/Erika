@@ -338,6 +338,7 @@ fn parse_owned_fd_value(value: &str, uri: &str) -> Result<i32> {
 pub struct HttpRangeSource {
     uri: String,
     agent: ureq::Agent,
+    http_headers: Vec<(String, String)>,
     content_length: Option<u64>,
     cache_start: u64,
     cache_bytes: Vec<u8>,
@@ -354,10 +355,15 @@ impl HttpRangeSource {
     const DEFAULT_READ_AHEAD_BYTES: u64 = 2 * 1024 * 1024;
 
     pub fn new(uri: impl Into<String>) -> Self {
+        Self::with_http_headers(uri, Vec::new())
+    }
+
+    pub fn with_http_headers(uri: impl Into<String>, http_headers: Vec<(String, String)>) -> Self {
         let agent = http_agent();
         Self {
             uri: uri.into(),
             agent,
+            http_headers,
             content_length: None,
             cache_start: 0,
             cache_bytes: Vec::new(),
@@ -396,7 +402,13 @@ impl HttpRangeSource {
     }
 
     fn fetch_range(&self, range: ByteRange) -> Result<Vec<u8>> {
-        fetch_http_range(&self.agent, &self.uri, range, "http_range")
+        fetch_http_range(
+            &self.agent,
+            &self.uri,
+            &self.http_headers,
+            range,
+            "http_range",
+        )
     }
 
     fn fetch_length(&mut self, range: ByteRange) -> Result<Option<u64>> {
@@ -487,12 +499,16 @@ impl HttpRangeSource {
             start: cache_end,
             length: Some(length),
         };
-        self.prefetch = Some(PendingHttpFetch::spawn(self.uri.clone(), prefetch_range));
+        self.prefetch = Some(PendingHttpFetch::spawn(
+            self.uri.clone(),
+            self.http_headers.clone(),
+            prefetch_range,
+        ));
     }
 }
 
 impl PendingHttpFetch {
-    fn spawn(uri: String, range: ByteRange) -> Self {
+    fn spawn(uri: String, http_headers: Vec<(String, String)>, range: ByteRange) -> Self {
         http_trace_log(format!(
             "{{\"event\":\"http_prefetch_start\",\"start\":{},\"length\":{}}}",
             range.start,
@@ -502,7 +518,7 @@ impl PendingHttpFetch {
         ));
         let handle = thread::spawn(move || {
             let agent = http_agent();
-            fetch_http_range(&agent, &uri, range, "http_prefetch_range")
+            fetch_http_range(&agent, &uri, &http_headers, range, "http_prefetch_range")
         });
         Self { range, handle }
     }
@@ -524,6 +540,7 @@ fn http_agent() -> ureq::Agent {
 fn fetch_http_range(
     agent: &ureq::Agent,
     uri: &str,
+    http_headers: &[(String, String)],
     range: ByteRange,
     event: &str,
 ) -> Result<Vec<u8>> {
@@ -535,7 +552,11 @@ fn fetch_http_range(
         _ => format!("bytes={}-", range.start),
     };
     let started = Instant::now();
-    let mut response = match agent.get(uri).header("Range", &header).call() {
+    let mut request = agent.get(uri).header("Range", &header);
+    for (name, value) in http_headers {
+        request = request.header(name, value);
+    }
+    let mut response = match request.call() {
         Ok(response) => response,
         Err(error) => {
             http_trace_log(format!(
@@ -611,9 +632,11 @@ impl MediaSource for HttpRangeSource {
             self.cache_end(),
             self.read_ahead_bytes,
         ));
-        let response = self
-            .agent
-            .head(&self.uri)
+        let mut request = self.agent.head(&self.uri);
+        for (name, value) in &self.http_headers {
+            request = request.header(name, value);
+        }
+        let response = request
             .call()
             .map_err(|error| SourceError::Http(error.to_string()))?;
         let status = response.status().as_u16();
@@ -733,12 +756,23 @@ pub fn source_from_uri_with_hint(
     uri: &str,
     source_hint: MediaSourceHint,
 ) -> Result<Box<dyn MediaSource>> {
+    source_from_uri_with_hint_and_headers(uri, source_hint, Vec::new())
+}
+
+pub fn source_from_uri_with_hint_and_headers(
+    uri: &str,
+    source_hint: MediaSourceHint,
+    http_headers: Vec<(String, String)>,
+) -> Result<Box<dyn MediaSource>> {
     match source_hint {
-        MediaSourceHint::Auto => source_from_auto_uri(uri),
+        MediaSourceHint::Auto => source_from_auto_uri(uri, http_headers),
         MediaSourceHint::LocalFile => source_from_local_uri(uri),
         MediaSourceHint::Http => {
             if uri.starts_with("http://") || uri.starts_with("https://") {
-                Ok(Box::new(HttpRangeSource::new(uri)))
+                Ok(Box::new(HttpRangeSource::with_http_headers(
+                    uri,
+                    http_headers,
+                )))
             } else {
                 Err(SourceError::Unsupported(uri.to_string()))
             }
@@ -746,7 +780,10 @@ pub fn source_from_uri_with_hint(
     }
 }
 
-fn source_from_auto_uri(uri: &str) -> Result<Box<dyn MediaSource>> {
+fn source_from_auto_uri(
+    uri: &str,
+    http_headers: Vec<(String, String)>,
+) -> Result<Box<dyn MediaSource>> {
     if uri.starts_with("fd://") {
         return source_from_local_uri(uri);
     }
@@ -754,7 +791,10 @@ fn source_from_auto_uri(uri: &str) -> Result<Box<dyn MediaSource>> {
         return Ok(Box::new(LocalFileSource::open(path)?));
     }
     if uri.starts_with("http://") || uri.starts_with("https://") {
-        return Ok(Box::new(HttpRangeSource::new(uri)));
+        return Ok(Box::new(HttpRangeSource::with_http_headers(
+            uri,
+            http_headers,
+        )));
     }
     let path = Path::new(uri);
     if path.exists() {
@@ -944,6 +984,48 @@ mod tests {
     #[test]
     fn http_default_read_ahead_is_streaming_sized() {
         assert_eq!(HttpRangeSource::DEFAULT_READ_AHEAD_BYTES, 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn http_source_constructor_preserves_custom_headers() {
+        let source = HttpRangeSource::with_http_headers(
+            "https://example.invalid/video.mp4",
+            vec![
+                ("Authorization".to_string(), "Bearer test".to_string()),
+                ("X-Playback-Session".to_string(), "session-123".to_string()),
+            ],
+        );
+        assert_eq!(
+            source.http_headers,
+            vec![
+                ("Authorization".to_string(), "Bearer test".to_string()),
+                ("X-Playback-Session".to_string(), "session-123".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn http_source_new_starts_without_custom_headers() {
+        let source = HttpRangeSource::new("https://example.invalid/video.mp4");
+
+        assert!(source.http_headers.is_empty());
+    }
+
+    #[test]
+    fn http_source_preserves_headers_without_normalizing_values() {
+        let headers = vec![
+            ("Authorization".to_string(), "Bearer a+b/c==".to_string()),
+            (
+                "X-Client-Tag".to_string(),
+                "  preserve whitespace  ".to_string(),
+            ),
+        ];
+        let source = HttpRangeSource::with_http_headers(
+            "https://example.invalid/video.mp4",
+            headers.clone(),
+        );
+
+        assert_eq!(source.http_headers, headers);
     }
 
     #[test]

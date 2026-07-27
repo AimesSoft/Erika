@@ -111,7 +111,13 @@ final player = ErikaPlayer(
   edrHeadroom: 4.0,                      // optional: EDR headroom
 );
 
-await player.open('/path/to/video.mp4');
+await player.open(
+  'https://example.com/video.mp4',
+  httpHeaders: <String, String>{
+    'Authorization': 'Bearer token',
+    'Referer': 'https://example.com/',
+  },
+);
 await player.play();
 
 // Preferred for full-player UIs on macOS/iOS:
@@ -181,4 +187,3 @@ GLES は明示的な `inactive` fallback を報告します。renderer 側の設
 ## Ownership Rule
 
 Flutter は layout と controls を担当し、Erika は video plane、subtitle plane、danmaku plane、audio、timing を担当します。plugin は `MethodChannel` を通じて command と event を橋渡しし、rendering は Dart を経由しません。
-
