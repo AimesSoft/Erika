@@ -1,47 +1,17 @@
-From 7f3f4f9d9c1a96a4e257d6a57ceee223a1a1c001 Mon Sep 17 00:00:00 2001
-From: Erika Project <erika@example.invalid>
-Date: Tue, 14 Jul 2026 00:00:00 +0800
-Subject: [PATCH] avcodec/mediacodec: add command-aware nonblocking dequeue
-
-Android's synchronous MediaCodec wrapper can remain parked in a dequeue
-framework request after a codec transition even when the caller supplies a
-positive timeout. That can keep an embedding playback worker inside
-avcodec_receive_frame() indefinitely and prevent it from servicing seek,
-track-switch, or shutdown commands.
-
-Add an Erika-private decoder option that makes every MediaCodec input and
-output dequeue use a zero timeout, including EOS submission and draining.
-Yield EAGAIN to the embedding decode pump when no progress is possible, and
-rate-limit the corresponding informational diagnostics. The option defaults
-to disabled, preserving upstream behavior for every caller that does not
-explicitly opt in.
----
- libavcodec/mediacodecdec.c        | 42 ++++++++++++++++++++++++++++++++-----
- libavcodec/mediacodecdec_common.c | 11 ++++++----
- libavcodec/mediacodecdec_common.h |  1 +
- 3 files changed, 45 insertions(+), 9 deletions(-)
-
 diff --git a/libavcodec/mediacodecdec.c b/libavcodec/mediacodecdec.c
-index cc55b30..31aece3 100644
 --- a/libavcodec/mediacodecdec.c
 +++ b/libavcodec/mediacodecdec.c
-@@ -55,10 +55,13 @@ typedef struct MediaCodecH264DecContext {
- 
-     int delay_flush;
+@@ -57,6 +57,9 @@
      int amlogic_mpeg2_api23_workaround;
  
      int use_ndk_codec;
 +    int erika_nonblocking;
 +    int erika_nonblocking_yield_logged;
 +    int erika_nonblocking_drain_yield_logged;
+     // Ref. MediaFormat KEY_OPERATING_RATE
+     int operating_rate;
  } MediaCodecH264DecContext;
- 
- static av_cold int mediacodec_decode_close(AVCodecContext *avctx)
- {
-     MediaCodecH264DecContext *s = avctx->priv_data;
-@@ -449,10 +452,11 @@ static av_cold int mediacodec_decode_init(AVCodecContext *avctx)
-         goto done;
-     }
+@@ -450,6 +453,7 @@
  
      s->ctx->delay_flush = s->delay_flush;
      s->ctx->use_ndk_codec = s->use_ndk_codec;
@@ -49,11 +19,7 @@ index cc55b30..31aece3 100644
  
      if ((ret = ff_mediacodec_dec_init(avctx, s->ctx, codec_mime, format)) < 0) {
          s->ctx = NULL;
-         goto done;
-     }
-@@ -503,27 +507,51 @@ static int mediacodec_receive_frame(AVCodecContext *avctx, AVFrame *frame)
- 
-     /* poll for new frame */
+@@ -504,6 +508,15 @@
      ret = ff_mediacodec_dec_receive(avctx, s->ctx, frame, false);
      if (ret != AVERROR(EAGAIN))
          return ret;
@@ -69,8 +35,7 @@ index cc55b30..31aece3 100644
  
      /* feed decoder */
      while (1) {
-         if (s->ctx->current_input_buffer < 0 && !s->ctx->draining) {
-             /* poll for input space */
+@@ -512,15 +525,30 @@
              index = ff_AMediaCodec_dequeueInputBuffer(s->ctx->codec, 0);
              if (index < 0) {
                  /* no space, block for an output frame to appear */
@@ -103,11 +68,7 @@ index cc55b30..31aece3 100644
                  return ret;
              }
              s->ctx->current_input_buffer = index;
-         }
- 
-@@ -554,16 +582,16 @@ static int mediacodec_receive_frame(AVCodecContext *avctx, AVFrame *frame)
- 
-         /* fetch new packet or eof */
+@@ -555,12 +583,12 @@
          ret = ff_decode_get_packet(avctx, &s->buffered_pkt);
          if (ret == AVERROR_EOF) {
              AVPacket null_pkt = { 0 };
@@ -123,11 +84,7 @@ index cc55b30..31aece3 100644
          } else if (ret < 0) {
              return ret;
          }
-     }
- 
-@@ -573,10 +601,12 @@ static int mediacodec_receive_frame(AVCodecContext *avctx, AVFrame *frame)
- static void mediacodec_decode_flush(AVCodecContext *avctx)
- {
+@@ -574,6 +602,8 @@
      MediaCodecH264DecContext *s = avctx->priv_data;
  
      av_packet_unref(&s->buffered_pkt);
@@ -136,28 +93,20 @@ index cc55b30..31aece3 100644
  
      ff_mediacodec_dec_flush(avctx, s->ctx);
  }
- 
- static const AVCodecHWConfigInternal *const mediacodec_hw_configs[] = {
-@@ -597,10 +627,12 @@ static const AVCodecHWConfigInternal *const mediacodec_hw_configs[] = {
- static const AVOption ff_mediacodec_vdec_options[] = {
+@@ -597,7 +627,9 @@ static const AVOption ff_mediacodec_vdec_options[] = {
      { "delay_flush", "Delay flush until hw output buffers are returned to the decoder",
                       OFFSET(delay_flush), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, VD },
      { "ndk_codec", "Use MediaCodec from NDK",
                     OFFSET(use_ndk_codec), AV_OPT_TYPE_BOOL, {.i64 = -1}, -1, 1, VD },
 +    { "erika_nonblocking", "Use zero-timeout MediaCodec dequeues and yield EAGAIN on starvation",
 +                           OFFSET(erika_nonblocking), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, VD },
+     { "operating_rate", "The desired operating rate that the codec will need to operate at, zero for unspecified",
+             OFFSET(operating_rate), AV_OPT_TYPE_INT, {.i64 = 0}, 0, INT_MAX, VD },
      { NULL }
- };
- 
- #define DECLARE_MEDIACODEC_VCLASS(short_name)                   \
- static const AVClass ff_##short_name##_mediacodec_dec_class = { \
 diff --git a/libavcodec/mediacodecdec_common.c b/libavcodec/mediacodecdec_common.c
-index 3770b4f..234a4fe 100644
 --- a/libavcodec/mediacodecdec_common.c
 +++ b/libavcodec/mediacodecdec_common.c
-@@ -887,11 +887,12 @@ int ff_mediacodec_dec_send(AVCodecContext *avctx, MediaCodecDecContext *s,
-     int need_draining = 0;
-     uint8_t *data;
+@@ -898,7 +898,8 @@
      size_t size;
      FFAMediaCodec *codec = s->codec;
      int status;
@@ -167,11 +116,7 @@ index 3770b4f..234a4fe 100644
      int64_t pts;
  
      if (s->flushing) {
-         av_log(avctx, AV_LOG_ERROR, "Decoder is flushing and cannot accept new buffer "
-                                     "until all output buffers have been released\n");
-@@ -988,11 +989,13 @@ int ff_mediacodec_dec_receive(AVCodecContext *avctx, MediaCodecDecContext *s,
- 
-     if (s->draining && s->eos) {
+@@ -999,7 +1000,9 @@
          return AVERROR_EOF;
      }
  
@@ -182,11 +127,7 @@ index 3770b4f..234a4fe 100644
          /* If the codec is flushing or need to be flushed, block for a fair
           * amount of time to ensure we got a frame */
          output_dequeue_timeout_us = OUTPUT_DEQUEUE_BLOCK_TIMEOUT_US;
-     } else if (s->output_buffer_count == 0 || !wait) {
-         /* If the codec hasn't produced any frames, do not block so we
-@@ -1068,15 +1071,15 @@ int ff_mediacodec_dec_receive(AVCodecContext *avctx, MediaCodecDecContext *s,
-         }
- 
+@@ -1079,11 +1082,11 @@
      } else if (ff_AMediaCodec_infoOutputBuffersChanged(codec, index)) {
          ff_AMediaCodec_cleanOutputBuffers(codec);
      } else if (ff_AMediaCodec_infoTryAgainLater(codec, index)) {
@@ -200,15 +141,10 @@ index 3770b4f..234a4fe 100644
              av_log(avctx, AV_LOG_TRACE, "No output buffer available, try again later\n");
          }
      } else {
-         av_log(avctx, AV_LOG_ERROR, "Failed to dequeue output buffer (status=%zd)\n", index);
-         return AVERROR_EXTERNAL;
 diff --git a/libavcodec/mediacodecdec_common.h b/libavcodec/mediacodecdec_common.h
-index 0ab2903..c307271 100644
 --- a/libavcodec/mediacodecdec_common.h
 +++ b/libavcodec/mediacodecdec_common.h
-@@ -69,10 +69,11 @@ typedef struct MediaCodecDecContext {
- 
-     bool delay_flush;
+@@ -71,6 +71,7 @@
      atomic_int serial;
  
      bool use_ndk_codec;
@@ -216,8 +152,3 @@ index 0ab2903..c307271 100644
  } MediaCodecDecContext;
  
  int ff_mediacodec_dec_init(AVCodecContext *avctx,
-                            MediaCodecDecContext *s,
-                            const char *mime,
--- 
-2.50.1
-

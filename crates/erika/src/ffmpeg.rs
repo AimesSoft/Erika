@@ -923,7 +923,8 @@ impl Decoder {
                 mediacodec_decoder(codec_id),
                 "avcodec_find_decoder_by_name(MediaCodec)",
             ),
-            DecoderBackend::VideoToolbox | DecoderBackend::D3d11va => (
+            DecoderBackend::VideoToolbox => videotoolbox_decoder(codec_id),
+            DecoderBackend::D3d11va => (
                 unsafe { sys::avcodec_find_decoder(codec_id) },
                 "avcodec_find_decoder",
             ),
@@ -1050,7 +1051,7 @@ impl Decoder {
             && erika_nonblocking_unconsumed
         {
             open_result = Err(FfmpegError::AndroidMediaCodec(
-                "FFmpeg did not consume required decoder option erika_nonblocking=1; rebuild Android native dependencies with the Erika FFmpeg 7.1.1 patch set"
+                "FFmpeg did not consume required decoder option erika_nonblocking=1; rebuild Android native dependencies with the Erika FFmpeg 8.1.2 patch set"
                     .to_string(),
             ));
         }
@@ -1107,7 +1108,6 @@ impl Decoder {
             }
         }
         open_result?;
-        #[cfg(target_os = "android")]
         if config.backend == DecoderBackend::Software && codec_id == sys::AVCodecID_AV_CODEC_ID_AV1
         {
             crate::trace::diagnostic(
@@ -1115,7 +1115,11 @@ impl Decoder {
                     "event": "video_decoder",
                     "stage": "software_decoder_selected",
                     "codec": "av1",
-                    "decoder": "libdav1d",
+                    "decoder": if cfg!(target_os = "windows") {
+                        "avcodec_find_decoder"
+                    } else {
+                        "libdav1d"
+                    },
                 })
                 .to_string(),
             );
@@ -1387,11 +1391,24 @@ impl Decoder {
 }
 
 fn software_decoder(codec_id: sys::AVCodecID) -> (*const sys::AVCodec, &'static str) {
-    #[cfg(target_os = "android")]
+    #[cfg(not(target_os = "windows"))]
     if codec_id == sys::AVCodecID_AV_CODEC_ID_AV1 {
         return (
             unsafe { sys::avcodec_find_decoder_by_name(c"libdav1d".as_ptr()) },
             "avcodec_find_decoder_by_name(libdav1d)",
+        );
+    }
+    (
+        unsafe { sys::avcodec_find_decoder(codec_id) },
+        "avcodec_find_decoder",
+    )
+}
+
+fn videotoolbox_decoder(codec_id: sys::AVCodecID) -> (*const sys::AVCodec, &'static str) {
+    if codec_id == sys::AVCodecID_AV_CODEC_ID_AV1 {
+        return (
+            unsafe { sys::avcodec_find_decoder_by_name(c"av1".as_ptr()) },
+            "avcodec_find_decoder_by_name(av1)",
         );
     }
     (
@@ -2164,7 +2181,7 @@ impl Frame {
                 width_i32,
                 height_i32,
                 sys::AVPixelFormat_AV_PIX_FMT_NV12,
-                sys::SWS_BILINEAR as c_int,
+                sys::ERIKA_SWS_BILINEAR,
                 ptr::null_mut(),
                 ptr::null_mut(),
                 ptr::null(),
@@ -3652,7 +3669,7 @@ unsafe fn profile_name(
 ) -> Option<String> {
     let codec_id = unsafe { (*codecpar).codec_id };
     let profile = unsafe { (*codecpar).profile };
-    if profile == sys::FF_PROFILE_UNKNOWN {
+    if profile == sys::ERIKA_PROFILE_UNKNOWN {
         return None;
     }
     let name = unsafe { sys::av_get_profile_name(sys::avcodec_find_decoder(codec_id), profile) };
@@ -3945,6 +3962,23 @@ mod tests {
     #[test]
     fn linked_ffmpeg_reports_version() {
         assert!(!version().is_empty());
+    }
+
+    #[test]
+    fn videotoolbox_uses_ffmpeg_av1_decoder() {
+        let (codec, operation) = videotoolbox_decoder(sys::AVCodecID_AV_CODEC_ID_AV1);
+        assert_eq!(operation, "avcodec_find_decoder_by_name(av1)");
+        assert!(!codec.is_null());
+    }
+
+    #[test]
+    fn software_uses_available_ffmpeg_av1_decoder() {
+        let (codec, operation) = software_decoder(sys::AVCodecID_AV_CODEC_ID_AV1);
+        #[cfg(target_os = "windows")]
+        assert_eq!(operation, "avcodec_find_decoder");
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(operation, "avcodec_find_decoder_by_name(libdav1d)");
+        assert!(!codec.is_null());
     }
 
     #[test]

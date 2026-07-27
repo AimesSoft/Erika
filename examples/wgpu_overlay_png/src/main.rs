@@ -42,6 +42,8 @@ fn main() {
                 y: 132,
                 width: 240,
                 height: 28,
+                canvas_width: WIDTH,
+                canvas_height: HEIGHT,
                 rgba: solid_rgba(240, 28, [255, 255, 255, 200]),
             },
             // A small opaque magenta box top-left to show exact placement.
@@ -50,6 +52,8 @@ fn main() {
                 y: 12,
                 width: 40,
                 height: 24,
+                canvas_width: WIDTH,
+                canvas_height: HEIGHT,
                 rgba: solid_rgba(40, 24, [255, 0, 255, 255]),
             },
         ],

@@ -10,21 +10,21 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
-const FFMPEG_VERSION: &str = "7.1.1";
+const FFMPEG_VERSION: &str = "8.1.2";
 const DAV1D_VERSION: &str = "1.5.1";
-const LIBASS_VERSION: &str = "0.17.3";
-const HARFBUZZ_VERSION: &str = "10.4.0";
-const FREETYPE_VERSION: &str = "2.13.3";
+const LIBASS_VERSION: &str = "0.17.5";
+const HARFBUZZ_VERSION: &str = "14.2.1";
+const FREETYPE_VERSION: &str = "2.14.3";
 const FRIBIDI_VERSION: &str = "1.0.16";
-const ZLIB_VERSION: &str = "1.3.1";
+const ZLIB_VERSION: &str = "1.3.2";
 const DEFAULT_ANDROID_API_LEVEL: u32 = 26;
 
-const FFMPEG_ARCHIVE: &str = "ffmpeg-7.1.1.tar.xz";
-const FFMPEG_DIR: &str = "ffmpeg-7.1.1";
-const FFMPEG_URLS: &[&str] = &["https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz"];
-const FFMPEG_PATCHSET_VERSION: &str = "erika-android-mediacodec-v2";
+const FFMPEG_ARCHIVE: &str = "ffmpeg-8.1.2.tar.xz";
+const FFMPEG_DIR: &str = "ffmpeg-8.1.2";
+const FFMPEG_URLS: &[&str] = &["https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz"];
+const FFMPEG_PATCHSET_VERSION: &str = "erika-android-mediacodec-v3";
 const FFMPEG_PATCHES: &[&str] =
-    &["third_party/patches/ffmpeg-7.1.1/0001-erika-mediacodec-bounded-receive.patch"];
+    &["third_party/patches/ffmpeg-8.1.2/0001-erika-mediacodec-bounded-receive.patch"];
 
 const DAV1D_ARCHIVE: &str = "dav1d-1.5.1.tar.gz";
 const DAV1D_DIR: &str = "dav1d-1.5.1";
@@ -33,25 +33,25 @@ const DAV1D_URLS: &[&str] = &[
     "https://codeload.github.com/videolan/dav1d/tar.gz/refs/tags/1.5.1",
 ];
 
-const LIBASS_ARCHIVE: &str = "libass-0.17.3.tar.xz";
-const LIBASS_DIR: &str = "libass-0.17.3";
+const LIBASS_ARCHIVE: &str = "libass-0.17.5.tar.xz";
+const LIBASS_DIR: &str = "libass-0.17.5";
 const LIBASS_URLS: &[&str] = &[
-    "https://github.com/libass/libass/releases/download/0.17.3/libass-0.17.3.tar.xz",
-    "https://codeload.github.com/libass/libass/tar.gz/refs/tags/0.17.3",
+    "https://github.com/libass/libass/releases/download/0.17.5/libass-0.17.5.tar.xz",
+    "https://codeload.github.com/libass/libass/tar.gz/refs/tags/0.17.5",
 ];
 
-const HARFBUZZ_ARCHIVE: &str = "harfbuzz-10.4.0.tar.xz";
-const HARFBUZZ_DIR: &str = "harfbuzz-10.4.0";
+const HARFBUZZ_ARCHIVE: &str = "harfbuzz-14.2.1.tar.xz";
+const HARFBUZZ_DIR: &str = "harfbuzz-14.2.1";
 const HARFBUZZ_URLS: &[&str] = &[
-    "https://github.com/harfbuzz/harfbuzz/releases/download/10.4.0/harfbuzz-10.4.0.tar.xz",
-    "https://codeload.github.com/harfbuzz/harfbuzz/tar.gz/refs/tags/10.4.0",
+    "https://github.com/harfbuzz/harfbuzz/releases/download/14.2.1/harfbuzz-14.2.1.tar.xz",
+    "https://codeload.github.com/harfbuzz/harfbuzz/tar.gz/refs/tags/14.2.1",
 ];
 
-const FREETYPE_ARCHIVE: &str = "freetype-2.13.3.tar.xz";
-const FREETYPE_DIR: &str = "freetype-2.13.3";
+const FREETYPE_ARCHIVE: &str = "freetype-2.14.3.tar.xz";
+const FREETYPE_DIR: &str = "freetype-2.14.3";
 const FREETYPE_URLS: &[&str] = &[
-    "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz",
-    "https://sourceforge.net/projects/freetype/files/freetype2/2.13.3/freetype-2.13.3.tar.xz/download",
+    "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz",
+    "https://sourceforge.net/projects/freetype/files/freetype2/2.14.3/freetype-2.14.3.tar.xz/download",
 ];
 
 const FRIBIDI_ARCHIVE: &str = "fribidi-1.0.16.tar.xz";
@@ -61,11 +61,11 @@ const FRIBIDI_URLS: &[&str] = &[
     "https://codeload.github.com/fribidi/fribidi/tar.gz/refs/tags/v1.0.16",
 ];
 
-const ZLIB_ARCHIVE: &str = "zlib-1.3.1.tar.gz";
-const ZLIB_DIR: &str = "zlib-1.3.1";
+const ZLIB_ARCHIVE: &str = "zlib-1.3.2.tar.gz";
+const ZLIB_DIR: &str = "zlib-1.3.2";
 const ZLIB_URLS: &[&str] = &[
-    "https://zlib.net/fossils/zlib-1.3.1.tar.gz",
-    "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
+    "https://zlib.net/zlib-1.3.2.tar.gz",
+    "https://github.com/madler/zlib/archive/refs/tags/v1.3.2.tar.gz",
 ];
 
 fn main() -> Result<()> {
@@ -186,7 +186,11 @@ impl NativeDependencyProfile {
                 flags.push("--disable-asm");
             }
         } else if target.is_apple() {
-            flags.push("--enable-videotoolbox");
+            flags.extend([
+                "--enable-videotoolbox",
+                "--enable-libdav1d",
+                "--enable-decoder=libdav1d",
+            ]);
         }
         if target.is_android() {
             assert_android_software_decoder_fallbacks(&flags);
@@ -616,7 +620,7 @@ fn fetch_dependency_sources(layout: &WorkspaceLayout, all: bool) -> Result<()> {
     fetch_and_extract(layout, FFMPEG_URLS, FFMPEG_ARCHIVE, FFMPEG_DIR)?;
     apply_ffmpeg_patches(layout)?;
     fetch_and_extract(layout, ZLIB_URLS, ZLIB_ARCHIVE, ZLIB_DIR)?;
-    if layout.target.is_android() {
+    if layout.target.is_android() || layout.target.is_apple() {
         fetch_and_extract(layout, DAV1D_URLS, DAV1D_ARCHIVE, DAV1D_DIR)?;
     }
     if all {
@@ -638,7 +642,7 @@ fn build_dependencies(options: DepsOptions) -> Result<()> {
     prepare_dependency_dirs(&layout)?;
     fetch_dependency_sources(&layout, options.all)?;
     build_zlib(&layout, options)?;
-    if options.target.is_android() {
+    if options.target.is_android() || options.target.is_apple() {
         build_dav1d(&layout, options)?;
     }
     build_ffmpeg(&layout, options)?;
@@ -799,7 +803,7 @@ fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Resu
                 "required GNU make was not found; install make or use an NDK distribution that includes prebuilt make"
             );
         }
-        if matches!(options.target, NativeTarget::X86_64Android)
+        if dav1d_requires_nasm(options.target)
             && (!ffmpeg_build_marker_is_current(layout, options)
                 || !dav1d_build_marker_is_current(layout, options))
             && which("nasm").is_none()
@@ -819,6 +823,14 @@ fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Resu
         let _ = host_c_compiler()?;
         let _ = host_cxx_compiler()?;
         return Ok(());
+    }
+
+    if dav1d_requires_nasm(options.target)
+        && (!ffmpeg_build_marker_is_current(layout, options)
+            || !dav1d_build_marker_is_current(layout, options))
+        && which("nasm").is_none()
+    {
+        bail!("required build tool `nasm` was not found for x86_64 Apple dav1d assembly");
     }
 
     let compiler = "clang";
@@ -842,7 +854,12 @@ fn build_text_dependencies(layout: &WorkspaceLayout, options: DepsOptions) -> Re
 }
 
 fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if layout.zlib_build_marker.exists() && !options.force {
+    if marker_has_version(&layout.zlib_build_marker, "zlib", ZLIB_VERSION)
+        && !options.force
+        && (native_static_lib_exists(&layout.zlib_prefix, "z")
+            || native_static_lib_exists(&layout.zlib_prefix, "zlib")
+            || native_static_lib_exists(&layout.zlib_prefix, "zs"))
+    {
         println!(
             "reuse zlib build marker {}",
             layout.zlib_build_marker.display()
@@ -850,13 +867,13 @@ fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         ensure_windows_link_aliases(
             options.target,
             &layout.zlib_prefix,
-            &[("zlibstatic.lib", "z.lib")],
+            &[("zs.lib", "z.lib"), ("z.lib", "zlib.lib")],
         )?;
         ensure_windows_zlib_static_alias(options.target, &layout.zlib_prefix)?;
         ensure_windows_zlib_header_compat(options.target, &layout.zlib_prefix)?;
         return Ok(());
     }
-    clean_build_and_prefix(options, &layout.zlib_build_dir, &layout.zlib_prefix)?;
+    reset_build_and_prefix(&layout.zlib_build_dir, &layout.zlib_prefix)?;
     fs::create_dir_all(&layout.zlib_build_dir)
         .with_context(|| format!("create {}", layout.zlib_build_dir.display()))?;
     fs::create_dir_all(&layout.zlib_prefix)
@@ -871,7 +888,10 @@ fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         .arg(&layout.zlib_build_dir)
         .arg("-DCMAKE_BUILD_TYPE=Release")
         .arg("-DBUILD_SHARED_LIBS=OFF")
-        .arg("-DZLIB_BUILD_EXAMPLES=OFF")
+        .arg("-DZLIB_BUILD_SHARED=OFF")
+        .arg("-DZLIB_BUILD_STATIC=ON")
+        .arg("-DZLIB_INSTALL=ON")
+        .arg("-DZLIB_BUILD_TESTING=OFF")
         .arg(format!(
             "-DCMAKE_INSTALL_PREFIX={}",
             layout.zlib_prefix.display()
@@ -882,7 +902,7 @@ fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     ensure_windows_link_aliases(
         options.target,
         &layout.zlib_prefix,
-        &[("zlibstatic.lib", "z.lib")],
+        &[("zs.lib", "z.lib"), ("z.lib", "zlib.lib")],
     )?;
     ensure_windows_zlib_static_alias(options.target, &layout.zlib_prefix)?;
     ensure_windows_zlib_header_compat(options.target, &layout.zlib_prefix)?;
@@ -895,7 +915,7 @@ fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
 }
 
 fn build_dav1d(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if !options.target.is_android() {
+    if !options.target.is_android() && !options.target.is_apple() {
         return Ok(());
     }
     if dav1d_build_marker_is_current(layout, options) && !options.force {
@@ -906,8 +926,8 @@ fn build_dav1d(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         return Ok(());
     }
 
-    // The marker includes the Android API and assembly policy. Never mix an
-    // older cross configuration with the current ABI build.
+    // The marker includes the target API and assembly policy. Never mix an
+    // older cross configuration with the current build.
     for path in [&layout.dav1d_build_dir, &layout.dav1d_prefix] {
         if path.exists() {
             fs::remove_dir_all(path).with_context(|| format!("remove {}", path.display()))?;
@@ -960,7 +980,11 @@ fn build_dav1d(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         format!(
             "dav1d={DAV1D_VERSION}\ntarget={}\nandroid_api={}\nasm={asm_enabled}\nprefix={}\n",
             options.target.triple().unwrap_or("host"),
-            android_api_level()?,
+            if options.target.is_android() {
+                android_api_level()?.to_string()
+            } else {
+                "n/a".to_string()
+            },
             layout.dav1d_prefix.display(),
         ),
     )
@@ -973,15 +997,24 @@ fn dav1d_asm_enabled(target: NativeTarget) -> bool {
     !matches!(target, NativeTarget::I686Android)
 }
 
+fn dav1d_requires_nasm(target: NativeTarget) -> bool {
+    matches!(
+        target,
+        NativeTarget::X86_64Macos | NativeTarget::X86_64IosSimulator | NativeTarget::X86_64Android
+    )
+}
+
 fn build_freetype(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if layout.freetype_build_marker.exists() && !options.force {
+    if marker_has_version(&layout.freetype_build_marker, "freetype", FREETYPE_VERSION)
+        && !options.force
+    {
         println!(
             "reuse FreeType build marker {}",
             layout.freetype_build_marker.display()
         );
         return Ok(());
     }
-    clean_build_and_prefix(options, &layout.freetype_build_dir, &layout.freetype_prefix)?;
+    reset_build_and_prefix(&layout.freetype_build_dir, &layout.freetype_prefix)?;
     fs::create_dir_all(&layout.freetype_build_dir)
         .with_context(|| format!("create {}", layout.freetype_build_dir.display()))?;
     fs::create_dir_all(&layout.freetype_prefix)
@@ -1017,14 +1050,16 @@ fn build_freetype(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> 
 }
 
 fn build_harfbuzz(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if layout.harfbuzz_build_marker.exists() && !options.force {
+    if marker_has_version(&layout.harfbuzz_build_marker, "harfbuzz", HARFBUZZ_VERSION)
+        && !options.force
+    {
         println!(
             "reuse HarfBuzz build marker {}",
             layout.harfbuzz_build_marker.display()
         );
         return Ok(());
     }
-    clean_build_and_prefix(options, &layout.harfbuzz_build_dir, &layout.harfbuzz_prefix)?;
+    reset_build_and_prefix(&layout.harfbuzz_build_dir, &layout.harfbuzz_prefix)?;
     fs::create_dir_all(&layout.harfbuzz_build_dir)
         .with_context(|| format!("create {}", layout.harfbuzz_build_dir.display()))?;
     fs::create_dir_all(&layout.harfbuzz_prefix)
@@ -1075,7 +1110,9 @@ fn build_harfbuzz(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> 
 }
 
 fn build_fribidi(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if layout.fribidi_build_marker.exists() && !options.force {
+    if marker_has_version(&layout.fribidi_build_marker, "fribidi", FRIBIDI_VERSION)
+        && !options.force
+    {
         println!(
             "reuse FriBidi build marker {}",
             layout.fribidi_build_marker.display()
@@ -1088,12 +1125,8 @@ fn build_fribidi(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         return Ok(());
     }
     patch_fribidi_meson_native_compiler(layout)?;
-    if layout.fribidi_build_dir.exists() && !layout.fribidi_build_marker.exists() {
-        fs::remove_dir_all(&layout.fribidi_build_dir)
-            .with_context(|| format!("remove stale {}", layout.fribidi_build_dir.display()))?;
-    }
     let meson = ensure_meson_tools(layout)?;
-    clean_build_and_prefix(options, &layout.fribidi_build_dir, &layout.fribidi_prefix)?;
+    reset_build_and_prefix(&layout.fribidi_build_dir, &layout.fribidi_prefix)?;
     fs::create_dir_all(&layout.fribidi_prefix)
         .with_context(|| format!("create {}", layout.fribidi_prefix.display()))?;
     println!("configure FriBidi");
@@ -1150,7 +1183,7 @@ fn patch_fribidi_meson_native_compiler(layout: &WorkspaceLayout) -> Result<()> {
 }
 
 fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if layout.libass_build_marker.exists() && !options.force {
+    if marker_has_version(&layout.libass_build_marker, "libass", LIBASS_VERSION) && !options.force {
         println!(
             "reuse libass build marker {}",
             layout.libass_build_marker.display()
@@ -1162,12 +1195,8 @@ fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         )?;
         return Ok(());
     }
-    if layout.libass_build_dir.exists() && !layout.libass_build_marker.exists() {
-        fs::remove_dir_all(&layout.libass_build_dir)
-            .with_context(|| format!("remove stale {}", layout.libass_build_dir.display()))?;
-    }
     let meson = ensure_meson_tools(layout)?;
-    clean_build_and_prefix(options, &layout.libass_build_dir, &layout.libass_prefix)?;
+    reset_build_and_prefix(&layout.libass_build_dir, &layout.libass_prefix)?;
     fs::create_dir_all(&layout.libass_prefix)
         .with_context(|| format!("create {}", layout.libass_prefix.display()))?;
 
@@ -1186,8 +1215,8 @@ fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         .arg(format!("--prefix={}", layout.libass_prefix.display()))
         .arg("--default-library=static")
         .arg("--buildtype=release")
-        .arg("-Dtest=false")
-        .arg("-Dprofile=false")
+        .arg("-Dtest=disabled")
+        .arg("-Dprofile=disabled")
         .arg("-Dfontconfig=disabled")
         .arg("-Dasm=disabled")
         .arg("-Dlibunibreak=disabled")
@@ -1569,16 +1598,15 @@ fn meson_compile_install(
     run(&mut install)
 }
 
-fn clean_build_and_prefix(
-    options: DepsOptions,
-    build_dir: &std::path::Path,
-    prefix: &std::path::Path,
-) -> Result<()> {
-    if options.force && prefix.exists() {
-        fs::remove_dir_all(prefix).with_context(|| format!("remove {}", prefix.display()))?;
-    }
-    if options.force && build_dir.exists() {
-        fs::remove_dir_all(build_dir).with_context(|| format!("remove {}", build_dir.display()))?;
+// Only reached once the build marker was rejected, so the build directory holds
+// a CMake or Meson configuration for a version we no longer pin. Never reuse it:
+// both generators refuse to reconfigure against a different source directory,
+// and the prefix would keep headers and archives from the old version.
+fn reset_build_and_prefix(build_dir: &std::path::Path, prefix: &std::path::Path) -> Result<()> {
+    for path in [prefix, build_dir] {
+        if path.exists() {
+            fs::remove_dir_all(path).with_context(|| format!("remove {}", path.display()))?;
+        }
     }
     Ok(())
 }
@@ -1594,6 +1622,16 @@ fn write_marker(
         format!("{name}={version}\nprefix={}\n", prefix.display()),
     )
     .with_context(|| format!("write {}", path.display()))
+}
+
+fn marker_has_version(path: &std::path::Path, name: &str, version: &str) -> bool {
+    fs::read_to_string(path)
+        .map(|marker| {
+            marker
+                .lines()
+                .any(|line| line == format!("{name}={version}"))
+        })
+        .unwrap_or(false)
 }
 
 fn pkg_config_path<'a>(prefixes: impl IntoIterator<Item = &'a PathBuf>) -> String {
@@ -2083,7 +2121,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         "--prefix={}",
         path_to_forward_slashes(&layout.ffmpeg_prefix)
     ));
-    if options.target.is_android() {
+    if options.target.is_android() || options.target.is_apple() {
         let pkg_config = ensure_pkg_config_shim(layout)?;
         let dav1d_pkg_config_dir = layout.dav1d_prefix.join("lib/pkgconfig");
         configure
@@ -2136,6 +2174,16 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
             "-L{}",
             ffmpeg_flag_path_arg(&layout.zlib_prefix.join("lib"))
         ));
+        if options.target.is_apple() {
+            extra_cflags.push(format!(
+                "-I{}",
+                ffmpeg_flag_path_arg(&layout.dav1d_prefix.join("include"))
+            ));
+            extra_ldflags.push(format!(
+                "-L{}",
+                ffmpeg_flag_path_arg(&layout.dav1d_prefix.join("lib"))
+            ));
+        }
         configure.env("SDKROOT", &config.sdk_root);
         match options.target {
             NativeTarget::Aarch64Macos | NativeTarget::X86_64Macos => {
@@ -2276,7 +2324,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         format!(
             "ffmpeg={FFMPEG_VERSION}\npatchset={}\nzlib={ZLIB_VERSION}\ndav1d={}\nprofile={}\ntarget={}\nandroid_api={}\nprefix={}\nflags={}\n",
             ffmpeg_patchset,
-            if options.target.is_android() {
+            if options.target.is_android() || options.target.is_apple() {
                 DAV1D_VERSION
             } else {
                 "n/a"
@@ -2575,8 +2623,11 @@ fn ffmpeg_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions
     let Ok(marker) = fs::read_to_string(&layout.ffmpeg_build_marker) else {
         return false;
     };
-    let android_api_is_current = !options.target.is_android()
-        || android_api_level().is_ok_and(|api| marker.contains(&format!("android_api={api}\n")));
+    let android_api_is_current = if options.target.is_android() {
+        android_api_level().is_ok_and(|api| marker.contains(&format!("android_api={api}\n")))
+    } else {
+        marker.contains("android_api=n/a\n")
+    };
     let patchset_is_current = ffmpeg_patchset_id(&layout.root).is_ok_and(|patchset| {
         ffmpeg_build_marker_has_current_patchset(&marker, options.target, &patchset)
     });
@@ -2589,7 +2640,7 @@ fn ffmpeg_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions
         && marker.contains(&format!("zlib={ZLIB_VERSION}\n"))
         && marker.contains(&format!(
             "dav1d={}\n",
-            if options.target.is_android() {
+            if options.target.is_android() || options.target.is_apple() {
                 DAV1D_VERSION
             } else {
                 "n/a"
@@ -2601,21 +2652,25 @@ fn ffmpeg_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions
 }
 
 fn dav1d_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions) -> bool {
-    if !options.target.is_android() {
+    if !options.target.is_android() && !options.target.is_apple() {
         return true;
     }
     let Ok(marker) = fs::read_to_string(&layout.dav1d_build_marker) else {
         return false;
     };
-    android_api_level().is_ok_and(|api| {
+    let api_is_current = if options.target.is_android() {
+        android_api_level().is_ok_and(|api| marker.contains(&format!("android_api={api}\n")))
+    } else {
+        marker.contains("android_api=n/a\n")
+    };
+    api_is_current && {
         marker.contains(&format!("dav1d={DAV1D_VERSION}\n"))
             && marker.contains(&format!(
                 "target={}\n",
                 options.target.triple().unwrap_or("host")
             ))
-            && marker.contains(&format!("android_api={api}\n"))
             && marker.contains(&format!("asm={}\n", dav1d_asm_enabled(options.target)))
-    })
+    }
 }
 
 fn ffmpeg_build_marker_has_current_flags(
@@ -2674,12 +2729,12 @@ fn write_profile_metadata(
             FFMPEG_VERSION,
             ffmpeg_patchset,
             layout.ffmpeg_prefix.display(),
-            if target.is_android() {
+            if target.is_android() || target.is_apple() {
                 DAV1D_VERSION
             } else {
                 "n/a"
             },
-            if target.is_android() {
+            if target.is_android() || target.is_apple() {
                 layout.dav1d_prefix.display().to_string()
             } else {
                 "n/a".to_string()
@@ -2839,12 +2894,18 @@ fn ensure_windows_zlib_static_alias(target: NativeTarget, prefix: &Path) -> Resu
         return Ok(());
     }
     let lib_dir = prefix.join("lib");
-    let static_lib = lib_dir.join("zlibstatic.lib");
     let import_lib = lib_dir.join("zlib.lib");
-    if static_lib.exists() {
-        fs::copy(&static_lib, &import_lib).with_context(|| {
-            format!("copy {} to {}", static_lib.display(), import_lib.display())
-        })?;
+    if import_lib.exists() {
+        return Ok(());
+    }
+    for source in ["zs.lib", "zlibs.lib", "zlibstatic.lib", "z.lib"] {
+        let static_lib = lib_dir.join(source);
+        if static_lib.exists() {
+            fs::copy(&static_lib, &import_lib).with_context(|| {
+                format!("copy {} to {}", static_lib.display(), import_lib.display())
+            })?;
+            break;
+        }
     }
     Ok(())
 }
@@ -3879,6 +3940,16 @@ mod tests {
     }
 
     #[test]
+    fn apple_ffmpeg_plan_enables_videotoolbox_with_dav1d_fallback() {
+        for target in [NativeTarget::Aarch64Macos, NativeTarget::Aarch64Ios] {
+            let flags = NativeDependencyProfile::Lgpl.ffmpeg_configure_flags_for_target(target);
+            assert!(flags.contains(&"--enable-videotoolbox"));
+            assert!(flags.contains(&"--enable-libdav1d"));
+            assert!(flags.contains(&"--enable-decoder=libdav1d"));
+        }
+    }
+
+    #[test]
     fn android_i686_ffmpeg_disables_non_pic_x86_assembly() {
         for profile in [
             NativeDependencyProfile::Lgpl,
@@ -3892,6 +3963,26 @@ mod tests {
             assert!(!x86_64.contains(&"--disable-asm"));
             assert!(dav1d_asm_enabled(NativeTarget::X86_64Android));
         }
+    }
+
+    #[test]
+    fn x86_64_dav1d_targets_require_nasm() {
+        assert!(dav1d_requires_nasm(NativeTarget::X86_64Macos));
+        assert!(dav1d_requires_nasm(NativeTarget::X86_64IosSimulator));
+        assert!(dav1d_requires_nasm(NativeTarget::X86_64Android));
+        assert!(!dav1d_requires_nasm(NativeTarget::Aarch64Macos));
+        assert!(!dav1d_requires_nasm(NativeTarget::Aarch64Ios));
+    }
+
+    #[test]
+    fn dependency_markers_require_current_versions() {
+        let path = std::env::temp_dir().join(format!("erika-xtask-marker-{}", std::process::id()));
+        fs::write(&path, "zlib=1.3.1\nprefix=/tmp\n").unwrap();
+
+        assert!(!marker_has_version(&path, "zlib", "1.3.2"));
+        assert!(marker_has_version(&path, "zlib", "1.3.1"));
+
+        fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -3917,17 +4008,17 @@ mod tests {
         let target = NativeTarget::X86_64Android;
         let patchset = "erika-android-mediacodec-v1-deadbeef";
         assert!(!ffmpeg_build_marker_has_current_patchset(
-            "ffmpeg=7.1.1\n",
+            &format!("ffmpeg={FFMPEG_VERSION}\n"),
             target,
             patchset
         ));
         assert!(ffmpeg_build_marker_has_current_patchset(
-            &format!("ffmpeg=7.1.1\npatchset={patchset}\n"),
+            &format!("ffmpeg={FFMPEG_VERSION}\npatchset={patchset}\n"),
             target,
             patchset
         ));
         assert!(ffmpeg_build_marker_has_current_patchset(
-            "ffmpeg=7.1.1\n",
+            &format!("ffmpeg={FFMPEG_VERSION}\n"),
             NativeTarget::Host,
             patchset
         ));
@@ -3960,6 +4051,7 @@ mod tests {
     fn ffmpeg_patch_is_opt_in_and_uses_zero_timeout_dequeues() {
         let root = workspace_root().unwrap();
         let patch = fs::read_to_string(root.join(FFMPEG_PATCHES[0])).unwrap();
+        assert_eq!(parse_unified_patch(&patch).unwrap().len(), 3);
         assert!(patch.contains("\"erika_nonblocking\""));
         assert!(patch.contains("OFFSET(erika_nonblocking), AV_OPT_TYPE_BOOL, {.i64 = 0}"));
         assert!(patch.contains("s->ctx->erika_nonblocking = s->erika_nonblocking"));

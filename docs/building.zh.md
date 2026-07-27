@@ -180,7 +180,7 @@ third_party/
 
 相关环境变量:`ERIKA_NATIVE_PROFILE`、`ERIKA_NATIVE_TARGET`、`ERIKA_FFMPEG_DIR`、
 `ERIKA_DAV1D_DIR`、`ERIKA_ZLIB_DIR`、`LIBCLANG_PATH`,以及 `ERIKA_ALLOW_LEGACY_FFMPEG`(应急开关)。Erika
-需要 FFmpeg **7.x**(`libavutil >= 59`);Windows 原生核心强制此点。仅在本地兼容性实验时
+需要 FFmpeg **8.x**(`libavutil >= 60`);Windows 和 Android 原生核心强制此点。仅在本地兼容性实验时
 才设 `ERIKA_ALLOW_LEGACY_FFMPEG=1`。
 
 ## 编译与测试

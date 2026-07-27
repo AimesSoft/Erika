@@ -107,7 +107,9 @@ fn main() {
     println!("cargo:rustc-link-lib=static=harfbuzz");
     println!("cargo:rustc-link-lib=static=freetype");
 
-    if matches!(target_os.as_deref(), Some("ios" | "macos")) {
+    if target_os.as_deref() == Some("windows") {
+        println!("cargo:rustc-link-lib=dwrite");
+    } else if matches!(target_os.as_deref(), Some("ios" | "macos")) {
         if target_os.as_deref() == Some("macos") {
             println!("cargo:rustc-link-lib=framework=ApplicationServices");
         }
@@ -216,11 +218,11 @@ fn enforce_bundled_ffmpeg_version(version_major: Option<u32>) {
     if env::var("ERIKA_ALLOW_LEGACY_FFMPEG").as_deref() == Ok("1") {
         return;
     }
-    if matches!(version_major, Some(major) if major >= 59) {
+    if matches!(version_major, Some(major) if major >= 60) {
         return;
     }
     panic!(
-        "{} native core requires Erika's FFmpeg 7.x dependency bundle (libavutil >= 59), but found {:?}. Run `cargo run -p xtask -- deps build --profile {} --target {}` or set ERIKA_FFMPEG_DIR to that dist.",
+        "{} native core requires Erika's FFmpeg 8.x dependency bundle (libavutil >= 60), but found {:?}. Run `cargo run -p xtask -- deps build --profile {} --target {}` or set ERIKA_FFMPEG_DIR to that dist.",
         target_os.as_deref().unwrap_or("target"),
         version_major,
         native_profile(),

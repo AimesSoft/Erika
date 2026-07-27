@@ -85,12 +85,14 @@ elif [ -z "$UNIVERSAL_DYLIB" ]; then
   LIPO_INPUTS=""
   for RUST_TARGET in $RUST_TARGETS; do
     DIST="$ERIKA_ROOT/third_party/dist/$RUST_TARGET/$ERIKA_NATIVE_PROFILE"
-    if [ ! -f "$DIST/ffmpeg/include/libavformat/avformat.h" ] || [ ! -f "$DIST/libass/lib/libass.a" ]; then
+    DAV1D_DIR="$DIST/dav1d"
+    DAV1D_MARKER="$ERIKA_ROOT/third_party/build/$RUST_TARGET/$ERIKA_NATIVE_PROFILE/dav1d/dav1d-built.txt"
+    if [ ! -f "$DIST/ffmpeg/include/libavformat/avformat.h" ] || [ ! -f "$DAV1D_DIR/include/dav1d/dav1d.h" ] || [ ! -f "$DAV1D_DIR/lib/libdav1d.a" ] || [ ! -f "$DAV1D_MARKER" ] || ! grep -qx 'dav1d=1.5.1' "$DAV1D_MARKER" || [ ! -f "$DIST/libass/lib/libass.a" ]; then
       echo "Building Erika native dependencies for $RUST_TARGET ($ERIKA_NATIVE_PROFILE, with libass)"
       (cd "$ERIKA_ROOT" && cargo run -p xtask -- deps build --all --profile "$ERIKA_NATIVE_PROFILE" --target "$RUST_TARGET" --jobs "$HOST_JOBS")
     fi
     echo "Building Erika C ABI dylib for $RUST_TARGET ($CARGO_PROFILE)"
-    (cd "$ERIKA_ROOT" && ERIKA_NATIVE_PROFILE="$ERIKA_NATIVE_PROFILE" ERIKA_NATIVE_TARGET="$RUST_TARGET" ERIKA_FFMPEG_DIR="$DIST/ffmpeg" ERIKA_LIBASS_DIR="$DIST/libass" ERIKA_FREETYPE_DIR="$DIST/freetype" ERIKA_HARFBUZZ_DIR="$DIST/harfbuzz" ERIKA_FRIBIDI_DIR="$DIST/fribidi" cargo build -p erika_capi --target "$RUST_TARGET" --no-default-features --features libass $CARGO_ARGS)
+    (cd "$ERIKA_ROOT" && ERIKA_NATIVE_PROFILE="$ERIKA_NATIVE_PROFILE" ERIKA_NATIVE_TARGET="$RUST_TARGET" ERIKA_FFMPEG_DIR="$DIST/ffmpeg" ERIKA_DAV1D_DIR="$DAV1D_DIR" ERIKA_LIBASS_DIR="$DIST/libass" ERIKA_FREETYPE_DIR="$DIST/freetype" ERIKA_HARFBUZZ_DIR="$DIST/harfbuzz" ERIKA_FRIBIDI_DIR="$DIST/fribidi" cargo build -p erika_capi --target "$RUST_TARGET" --no-default-features --features libass $CARGO_ARGS)
     ARCH_DYLIB="$ERIKA_ROOT/target/$RUST_TARGET/$CARGO_PROFILE/liberika_capi.dylib"
     if [ ! -f "$ARCH_DYLIB" ]; then
       echo "error: $ARCH_DYLIB was not produced by the Erika build" >&2
