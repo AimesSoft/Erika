@@ -230,6 +230,7 @@ enum NativeTarget {
     Aarch64IosSimulator,
     X86_64IosSimulator,
     X86_64WindowsMsvc,
+    Aarch64WindowsMsvc,
     Aarch64Android,
     Armv7Android,
     X86_64Android,
@@ -246,6 +247,7 @@ impl NativeTarget {
             "aarch64-apple-ios-sim" => Ok(Self::Aarch64IosSimulator),
             "x86_64-apple-ios" => Ok(Self::X86_64IosSimulator),
             "x86_64-pc-windows-msvc" | "windows-x64" => Ok(Self::X86_64WindowsMsvc),
+            "aarch64-pc-windows-msvc" | "windows-arm64" => Ok(Self::Aarch64WindowsMsvc),
             "aarch64-linux-android" | "arm64-v8a" => Ok(Self::Aarch64Android),
             "armv7-linux-androideabi" | "armeabi-v7a" => Ok(Self::Armv7Android),
             "x86_64-linux-android" | "android-x64" => Ok(Self::X86_64Android),
@@ -263,6 +265,7 @@ impl NativeTarget {
             Self::Aarch64IosSimulator => Some("aarch64-apple-ios-sim"),
             Self::X86_64IosSimulator => Some("x86_64-apple-ios"),
             Self::X86_64WindowsMsvc => Some("x86_64-pc-windows-msvc"),
+            Self::Aarch64WindowsMsvc => Some("aarch64-pc-windows-msvc"),
             Self::Aarch64Android => Some("aarch64-linux-android"),
             Self::Armv7Android => Some("armv7-linux-androideabi"),
             Self::X86_64Android => Some("x86_64-linux-android"),
@@ -277,6 +280,7 @@ impl NativeTarget {
             Self::Aarch64Ios => Some("iphoneos"),
             Self::Aarch64IosSimulator | Self::X86_64IosSimulator => Some("iphonesimulator"),
             Self::X86_64WindowsMsvc
+            | Self::Aarch64WindowsMsvc
             | Self::Aarch64Android
             | Self::Armv7Android
             | Self::X86_64Android
@@ -290,6 +294,7 @@ impl NativeTarget {
             Self::Aarch64Macos | Self::Aarch64Ios | Self::Aarch64IosSimulator => Some("arm64"),
             Self::X86_64Macos | Self::X86_64IosSimulator => Some("x86_64"),
             Self::X86_64WindowsMsvc => Some("x86_64"),
+            Self::Aarch64WindowsMsvc => Some("aarch64"),
             Self::Aarch64Android => Some("aarch64"),
             Self::Armv7Android => Some("arm"),
             Self::X86_64Android => Some("x86_64"),
@@ -303,6 +308,7 @@ impl NativeTarget {
             Self::Aarch64Macos | Self::Aarch64Ios | Self::Aarch64IosSimulator => Some("aarch64"),
             Self::X86_64Macos | Self::X86_64IosSimulator => Some("x86_64"),
             Self::X86_64WindowsMsvc => Some("x86_64"),
+            Self::Aarch64WindowsMsvc => Some("aarch64"),
             Self::Aarch64Android => Some("aarch64"),
             Self::Armv7Android => Some("arm"),
             Self::X86_64Android => Some("x86_64"),
@@ -316,6 +322,7 @@ impl NativeTarget {
             Self::Aarch64Macos | Self::Aarch64Ios | Self::Aarch64IosSimulator => Some("arm64"),
             Self::X86_64Macos | Self::X86_64IosSimulator => Some("x86_64"),
             Self::X86_64WindowsMsvc => Some("x86_64"),
+            Self::Aarch64WindowsMsvc => Some("arm64"),
             Self::Aarch64Android => Some("aarch64"),
             Self::Armv7Android => Some("armv7"),
             Self::X86_64Android => Some("x86_64"),
@@ -351,7 +358,8 @@ impl NativeTarget {
     }
 
     fn is_windows(self) -> bool {
-        matches!(self, Self::X86_64WindowsMsvc) || (matches!(self, Self::Host) && cfg!(windows))
+        matches!(self, Self::X86_64WindowsMsvc | Self::Aarch64WindowsMsvc)
+            || (matches!(self, Self::Host) && cfg!(windows))
     }
 
     fn is_apple(self) -> bool {
@@ -388,6 +396,7 @@ impl NativeTarget {
                 "-mios-simulator-version-min",
             )),
             Self::X86_64WindowsMsvc
+            | Self::Aarch64WindowsMsvc
             | Self::Aarch64Android
             | Self::Armv7Android
             | Self::X86_64Android
@@ -764,7 +773,7 @@ fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Resu
     }
 
     if options.target.is_windows() {
-        let _ = windows_msvc_environment()?;
+        let _ = windows_msvc_environment(options.target)?;
         if posix_shell().is_none() {
             bail!(
                 "required POSIX shell was not found; install Git for Windows or MSYS2 so FFmpeg configure can run"
@@ -796,7 +805,7 @@ fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Resu
             );
         }
         if cfg!(windows) {
-            let _ = windows_msvc_environment()?;
+            let _ = windows_msvc_environment(windows_host_target())?;
         }
         if gnu_make().is_none() {
             bail!(
@@ -1426,7 +1435,8 @@ fn apply_meson_target(
     let native_file = meson_native_file(layout, target, name)?;
     command.arg("--native-file").arg(native_file);
     apply_apple_target_env(command, target)?;
-    apply_android_host_env(command, target)
+    apply_android_host_env(command, target)?;
+    apply_windows_target_env(command, target)
 }
 
 fn meson_native_file(
@@ -1519,6 +1529,28 @@ fn meson_cross_file(
                 target
                     .meson_cpu()
                     .context("explicit Android target must have a Meson CPU")?,
+            ),
+        )
+    } else if matches!(target, NativeTarget::Aarch64WindowsMsvc) {
+        let tools = windows_msvc_environment(target)?;
+        let compiler = msvc_tool_path(tools, "cl.exe")?;
+        let archiver = msvc_tool_path(tools, "lib.exe")?;
+        let linker = msvc_tool_path(tools, "link.exe")?;
+        format!(
+            "[binaries]\nc = {}\ncpp = {}\nar = {}\nstrip = {}\n\n[properties]\nneeds_exe_wrapper = true\n\n[host_machine]\nsystem = 'windows'\ncpu_family = {}\ncpu = {}\nendian = 'little'\n",
+            meson_string(&compiler.display().to_string()),
+            meson_string(&compiler.display().to_string()),
+            meson_string(&archiver.display().to_string()),
+            meson_string(&linker.display().to_string()),
+            meson_string(
+                target
+                    .meson_cpu_family()
+                    .context("Windows ARM64 target must have a Meson CPU family")?,
+            ),
+            meson_string(
+                target
+                    .meson_cpu()
+                    .context("Windows ARM64 target must have a Meson CPU")?,
             ),
         )
     } else {
@@ -2196,6 +2228,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
             }
             NativeTarget::Host
             | NativeTarget::X86_64WindowsMsvc
+            | NativeTarget::Aarch64WindowsMsvc
             | NativeTarget::Aarch64Android
             | NativeTarget::Armv7Android
             | NativeTarget::X86_64Android
@@ -2237,7 +2270,16 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         configure.env("ANDROID_NDK_HOME", &config.ndk_root);
     } else if options.target.is_windows() {
         configure.arg("--target-os=win64");
-        configure.arg("--arch=x86_64");
+        configure.arg(format!(
+            "--arch={}",
+            options
+                .target
+                .ffmpeg_arch()
+                .context("Windows target must have an FFmpeg architecture")?
+        ));
+        if matches!(options.target, NativeTarget::Aarch64WindowsMsvc) {
+            configure.arg("--enable-cross-compile");
+        }
         configure.arg("--toolchain=msvc");
         extra_cflags.push(format!(
             "-I{}",
@@ -2496,8 +2538,11 @@ fn ffmpeg_android_host_cc(config: &AndroidToolchain) -> Result<Option<String>> {
     let clang =
         required_executable_in_dir(&config.bin_dir, "clang", "Android NDK host Clang compiler")?;
     Ok(Some(format!(
-        "{} --target=x86_64-pc-windows-msvc -fuse-ld=link",
-        ffmpeg_flag_path_arg(&clang)
+        "{} --target={} -fuse-ld=link",
+        ffmpeg_flag_path_arg(&clang),
+        windows_host_target()
+            .triple()
+            .context("Windows host target must have a Rust triple")?
     )))
 }
 
@@ -3413,26 +3458,44 @@ fn looks_like_version(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
 }
 
-static WINDOWS_MSVC_ENV: OnceLock<std::result::Result<Vec<(OsString, OsString)>, String>> =
+static WINDOWS_X64_MSVC_ENV: OnceLock<std::result::Result<Vec<(OsString, OsString)>, String>> =
+    OnceLock::new();
+static WINDOWS_ARM64_MSVC_ENV: OnceLock<std::result::Result<Vec<(OsString, OsString)>, String>> =
     OnceLock::new();
 
 fn apply_windows_target_env(command: &mut Command, target: NativeTarget) -> Result<()> {
     if !target.is_windows() {
         return Ok(());
     }
-    apply_msvc_environment(command)
+    apply_msvc_environment(command, target)
 }
 
 fn apply_android_host_env(command: &mut Command, target: NativeTarget) -> Result<()> {
     if !cfg!(windows) || !target.is_android() {
         return Ok(());
     }
-    apply_msvc_environment(command)
+    apply_msvc_environment(command, windows_host_target())
 }
 
-fn apply_msvc_environment(command: &mut Command) -> Result<()> {
+fn windows_host_target() -> NativeTarget {
+    if cfg!(all(windows, target_arch = "aarch64")) {
+        NativeTarget::Aarch64WindowsMsvc
+    } else {
+        NativeTarget::X86_64WindowsMsvc
+    }
+}
+
+fn windows_host_arch() -> &'static str {
+    if matches!(windows_host_target(), NativeTarget::Aarch64WindowsMsvc) {
+        "arm64"
+    } else {
+        "x64"
+    }
+}
+
+fn apply_msvc_environment(command: &mut Command, target: NativeTarget) -> Result<()> {
     let existing_path = command_env_path(command);
-    for (key, value) in windows_msvc_environment()? {
+    for (key, value) in windows_msvc_environment(target)? {
         command.env(key, value);
     }
     if let Some(existing_path) = existing_path {
@@ -3443,23 +3506,32 @@ fn apply_msvc_environment(command: &mut Command) -> Result<()> {
     Ok(())
 }
 
-fn windows_msvc_environment() -> Result<&'static [(OsString, OsString)]> {
-    match WINDOWS_MSVC_ENV
-        .get_or_init(|| load_windows_msvc_environment().map_err(|e| e.to_string()))
-    {
+fn windows_msvc_environment(target: NativeTarget) -> Result<&'static [(OsString, OsString)]> {
+    let cache = match target {
+        NativeTarget::Aarch64WindowsMsvc => &WINDOWS_ARM64_MSVC_ENV,
+        _ => &WINDOWS_X64_MSVC_ENV,
+    };
+    match cache.get_or_init(|| load_windows_msvc_environment(target).map_err(|e| e.to_string())) {
         Ok(values) => Ok(values.as_slice()),
         Err(message) => bail!("{message}"),
     }
 }
 
-fn load_windows_msvc_environment() -> Result<Vec<(OsString, OsString)>> {
+fn load_windows_msvc_environment(target: NativeTarget) -> Result<Vec<(OsString, OsString)>> {
     let devcmd = vs_dev_cmd().context("Visual Studio Developer Command Prompt was not found")?;
-    let script_path = env::temp_dir().join("erika-vsdevcmd-env.cmd");
+    let arch = match target {
+        NativeTarget::Aarch64WindowsMsvc => "arm64",
+        _ => "x64",
+    };
+    let host_arch = windows_host_arch();
+    let script_path = env::temp_dir().join(format!("erika-vsdevcmd-{arch}-env.cmd"));
     fs::write(
         &script_path,
         format!(
-            "@echo off\r\ncall \"{}\" -arch=x64 -host_arch=x64 >nul\r\nset\r\n",
-            devcmd.display()
+            "@echo off\r\ncall \"{}\" -arch={} -host_arch={} >nul\r\nset\r\n",
+            devcmd.display(),
+            arch,
+            host_arch
         ),
     )
     .with_context(|| format!("write {}", script_path.display()))?;
@@ -3494,20 +3566,37 @@ fn load_windows_msvc_environment() -> Result<Vec<(OsString, OsString)>> {
     Ok(values)
 }
 
+fn msvc_tool_path(tools: &[(OsString, OsString)], executable: &str) -> Result<PathBuf> {
+    let path = tools
+        .iter()
+        .find_map(|(key, value)| {
+            key.to_string_lossy()
+                .eq_ignore_ascii_case("PATH")
+                .then_some(value)
+        })
+        .context("Visual Studio environment did not provide PATH")?;
+    env::split_paths(path)
+        .map(|dir| dir.join(executable))
+        .find(|candidate| candidate.is_file())
+        .with_context(|| format!("Visual Studio environment did not provide {executable}"))
+}
+
 fn vs_dev_cmd() -> Option<PathBuf> {
-    let vswhere = which("vswhere").or_else(|| {
-        existing_path("C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe")
-    })?;
+    let vswhere = which("vswhere")
+        .or_else(|| {
+            program_files_path(
+                "ProgramFiles(x86)",
+                "Microsoft Visual Studio/Installer/vswhere.exe",
+            )
+        })
+        .or_else(|| {
+            program_files_path(
+                "ProgramFiles",
+                "Microsoft Visual Studio/Installer/vswhere.exe",
+            )
+        })?;
     let output = Command::new(vswhere)
-        .args([
-            "-latest",
-            "-products",
-            "*",
-            "-requires",
-            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-            "-property",
-            "installationPath",
-        ])
+        .args(["-latest", "-products", "*", "-property", "installationPath"])
         .output()
         .ok()?;
     if output.status.success() {
@@ -3519,9 +3608,28 @@ fn vs_dev_cmd() -> Option<PathBuf> {
             }
         }
     }
-    existing_path(
-        "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/Common7/Tools/VsDevCmd.bat",
-    )
+    ["Enterprise", "BuildTools", "Community", "Professional"]
+        .into_iter()
+        .flat_map(|edition| {
+            ["ProgramFiles", "ProgramFiles(x86)"]
+                .into_iter()
+                .filter_map(move |variable| {
+                    program_files_path(
+                        variable,
+                        &format!(
+                            "Microsoft Visual Studio/2022/{edition}/Common7/Tools/VsDevCmd.bat"
+                        ),
+                    )
+                })
+        })
+        .next()
+}
+
+fn program_files_path(variable: &str, relative: &str) -> Option<PathBuf> {
+    env::var_os(variable)
+        .map(PathBuf::from)
+        .map(|root| root.join(relative))
+        .filter(|path| path.is_file())
 }
 
 fn cmake_tool() -> Option<PathBuf> {
@@ -3581,10 +3689,7 @@ fn android_sdk_cmake_tool(tool: &str) -> Option<PathBuf> {
 }
 
 fn posix_shell() -> Option<PathBuf> {
-    existing_path("C:/msys64/usr/bin/sh.exe")
-        .or_else(|| existing_path("C:/Program Files/Git/usr/bin/sh.exe"))
-        .or_else(|| existing_path("C:/Program Files/Git/bin/bash.exe"))
-        .or_else(|| which("sh"))
+    which("sh")
         .or_else(|| {
             which("bash").filter(|path| {
                 !cfg!(windows)
@@ -3593,15 +3698,48 @@ fn posix_shell() -> Option<PathBuf> {
                         .eq_ignore_ascii_case("C:\\Windows\\System32\\bash.exe")
             })
         })
+        .or_else(|| {
+            windows_posix_bin_dirs()
+                .into_iter()
+                .flat_map(|dir| [dir.join("sh.exe"), dir.join("bash.exe")])
+                .find(|path| path.is_file())
+        })
 }
 
 fn gnu_make() -> Option<PathBuf> {
-    existing_path("C:/msys64/usr/bin/make.exe")
-        .or_else(|| which("make"))
+    which("make")
         .or_else(|| which("gmake"))
         .or_else(|| which("mingw32-make"))
-        .or_else(|| existing_path("C:/mingw64/bin/mingw32-make.exe"))
+        .or_else(|| {
+            windows_posix_bin_dirs()
+                .into_iter()
+                .flat_map(|dir| [dir.join("make.exe"), dir.join("mingw32-make.exe")])
+                .find(|path| path.is_file())
+        })
         .or_else(android_ndk_make)
+}
+
+fn windows_posix_bin_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(root) = env::var_os("MSYS2_ROOT") {
+        let root = PathBuf::from(root);
+        dirs.push(root.join("usr/bin"));
+        dirs.push(root.join("ucrt64/bin"));
+        dirs.push(root.join("mingw64/bin"));
+    }
+    for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(root) = env::var_os(variable) {
+            let root = PathBuf::from(root);
+            dirs.push(root.join("Git/usr/bin"));
+            dirs.push(root.join("Git/bin"));
+        }
+    }
+    dirs.extend([
+        PathBuf::from("C:/msys64/usr/bin"),
+        PathBuf::from("C:/msys64/ucrt64/bin"),
+        PathBuf::from("C:/mingw64/bin"),
+    ]);
+    dirs
 }
 
 fn android_ndk_make() -> Option<PathBuf> {
@@ -3686,12 +3824,8 @@ fn append_windows_posix_paths(command: &mut Command) {
     if !cfg!(windows) {
         return;
     }
-    let dirs = [
-        Path::new("C:/msys64/usr/bin"),
-        Path::new("C:/Program Files/Git/usr/bin"),
-        Path::new("C:/mingw64/bin"),
-    ];
-    append_paths_to_command(command, dirs.into_iter().filter(|path| path.exists()));
+    let dirs = windows_posix_bin_dirs();
+    append_paths_to_command(command, dirs.iter().map(PathBuf::as_path));
 }
 
 fn apply_windows_posix_shell(command: &mut Command, target: NativeTarget) {
@@ -3734,18 +3868,8 @@ fn host_compiler(variable: &str, candidates: &[&str]) -> Option<PathBuf> {
 }
 
 fn windows_host_cl_compiler() -> Option<PathBuf> {
-    let tools = windows_msvc_environment().ok()?;
-    let root = tools.iter().find_map(|(key, value)| {
-        key.to_string_lossy()
-            .eq_ignore_ascii_case("VCToolsInstallDir")
-            .then(|| PathBuf::from(value))
-    })?;
-    [
-        root.join("bin/Hostx64/x64/cl.exe"),
-        root.join("bin/Hostx86/x86/cl.exe"),
-    ]
-    .into_iter()
-    .find(|path| path.is_file())
+    let tools = windows_msvc_environment(windows_host_target()).ok()?;
+    msvc_tool_path(tools, "cl.exe").ok()
 }
 
 fn shell_quote(value: &str) -> String {
@@ -3889,6 +4013,36 @@ fn command_display(command: &Command) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_targets_map_to_rust_and_native_architectures() {
+        let cases = [
+            (
+                "x86_64-pc-windows-msvc",
+                NativeTarget::X86_64WindowsMsvc,
+                "x86_64",
+                "x86_64",
+            ),
+            (
+                "aarch64-pc-windows-msvc",
+                NativeTarget::Aarch64WindowsMsvc,
+                "aarch64",
+                "arm64",
+            ),
+        ];
+        for (triple, expected, ffmpeg_arch, meson_cpu) in cases {
+            let target = NativeTarget::parse(triple).unwrap();
+            assert_eq!(target, expected);
+            assert!(target.is_windows());
+            assert_eq!(target.triple(), Some(triple));
+            assert_eq!(target.ffmpeg_arch(), Some(ffmpeg_arch));
+            assert_eq!(target.meson_cpu(), Some(meson_cpu));
+        }
+        assert_eq!(
+            NativeTarget::parse("windows-arm64").unwrap(),
+            NativeTarget::Aarch64WindowsMsvc
+        );
+    }
 
     #[test]
     fn android_targets_map_to_rust_abi_and_clang() {
@@ -4125,7 +4279,7 @@ fn print_help() {
     println!("  cargo run -p xtask -- deps fetch --profile lgpl [--all]");
     println!("  cargo run -p xtask -- deps status --profile lgpl");
     println!(
-        "  cargo run -p xtask -- deps build --profile lgpl [--target host|aarch64-apple-darwin|x86_64-apple-darwin|aarch64-apple-ios|aarch64-apple-ios-sim|x86_64-apple-ios|x86_64-pc-windows-msvc|aarch64-linux-android|armv7-linux-androideabi|x86_64-linux-android|i686-linux-android] [--force] [--jobs N]"
+        "  cargo run -p xtask -- deps build --profile lgpl [--target host|aarch64-apple-darwin|x86_64-apple-darwin|aarch64-apple-ios|aarch64-apple-ios-sim|x86_64-apple-ios|x86_64-pc-windows-msvc|aarch64-pc-windows-msvc|aarch64-linux-android|armv7-linux-androideabi|x86_64-linux-android|i686-linux-android] [--force] [--jobs N]"
     );
     println!("  cargo run -p xtask -- check license");
 }

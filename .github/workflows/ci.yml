@@ -51,48 +51,60 @@ jobs:
         run: flutter test --no-pub --reporter expanded
 
   rust-macos:
-    name: Rust (macOS)
-    runs-on: macos-14
+    name: Rust (macOS ${{ matrix.arch }})
     timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            runner: macos-15
+          - arch: x64
+            target: x86_64-apple-darwin
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
           targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - name: Select host target
-        run: |
-          case "$(uname -m)" in
-            arm64) echo "ERIKA_NATIVE_TARGET=aarch64-apple-darwin" >> "$GITHUB_ENV" ;;
-            x86_64) echo "ERIKA_NATIVE_TARGET=x86_64-apple-darwin" >> "$GITHUB_ENV" ;;
-            *) echo "unsupported macOS architecture: $(uname -m)" >&2; exit 1 ;;
-          esac
       - name: Install native build tools
         run: brew install nasm meson ninja pkg-config
       - name: Cache native dependencies
         uses: actions/cache@v4
         with:
           path: third_party
-          key: deps-macos-${{ hashFiles('xtask/src/main.rs') }}
+          key: deps-macos-${{ matrix.arch }}-${{ hashFiles('xtask/src/main.rs') }}
       - name: Build native dependencies
-        run: >-
-          cargo run --locked -p xtask -- deps build --all
-          --profile "$PROFILE" --target "$ERIKA_NATIVE_TARGET"
-      - name: Test core library
-        # Workspace-wide tests currently compile platform demo binaries too;
-        # keep the required PR gate on the two production packages.
+        run: |
+          test "$(uname -m)" = "${{ matrix.arch == 'arm64' && 'arm64' || 'x86_64' }}"
+          cargo run --locked -p xtask -- deps build --all \
+            --profile "$PROFILE" --target "${{ matrix.target }}"
+      - name: Build C API library
         run: >-
           ERIKA_NATIVE_PROFILE="$PROFILE"
+          ERIKA_NATIVE_TARGET="${{ matrix.target }}"
+          cargo build --locked -p erika_capi --release
+          --target "${{ matrix.target }}"
+      - name: Test core library
+        if: matrix.arch == 'arm64'
+        run: >-
+          ERIKA_NATIVE_PROFILE="$PROFILE"
+          ERIKA_NATIVE_TARGET="${{ matrix.target }}"
           cargo test --locked -p erika --lib
       - name: Test C API library
+        if: matrix.arch == 'arm64'
         run: >-
           ERIKA_NATIVE_PROFILE="$PROFILE"
+          ERIKA_NATIVE_TARGET="${{ matrix.target }}"
           cargo test --locked -p erika_capi --lib
       - name: Clippy core crate
-        # Surface existing lints without making the historical warning backlog
-        # block this first CI baseline.
+        if: matrix.arch == 'arm64'
         run: >-
           ERIKA_NATIVE_PROFILE="$PROFILE"
+          ERIKA_NATIVE_TARGET="${{ matrix.target }}"
           cargo clippy --locked -p erika --all-targets --all-features
           --no-deps
 
@@ -125,15 +137,36 @@ jobs:
               --no-default-features --features libass --crate-type staticlib
 
   windows:
-    name: Windows x64 build
-    runs-on: windows-latest
+    name: Windows ${{ matrix.arch }} build
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            host_arch: AMD64
+            target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            msys2: true
+          - arch: arm64
+            host_arch: ARM64
+            target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            msys2: false
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
-      - name: Setup MSYS2 tools (Erika's xtask hard-codes C:\msys64)
+          targets: ${{ matrix.target }}
+      - name: Verify native host architecture
+        shell: pwsh
+        run: |
+          if ($env:PROCESSOR_ARCHITECTURE -ne "${{ matrix.host_arch }}") {
+            throw "Expected ${{ matrix.host_arch }} host, got $env:PROCESSOR_ARCHITECTURE"
+          }
+      - name: Setup MSYS2 tools
+        if: matrix.msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -151,7 +184,11 @@ jobs:
       - name: Install build tools (nasm, meson, ninja, LLVM/libclang)
         shell: pwsh
         run: |
-          choco install -y --no-progress nasm zip
+          if ("${{ matrix.arch }}" -eq "x64") {
+            choco install -y --no-progress nasm zip
+          } elseif (-not (Get-Command make -ErrorAction SilentlyContinue)) {
+            choco install -y --no-progress make
+          }
           pip install --quiet meson ninja
           $llvmBin = "C:\Program Files\LLVM\bin"
           if (-not (Test-Path (Join-Path $llvmBin "libclang.dll"))) {
@@ -165,15 +202,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: deps-windows-${{ hashFiles('xtask/src/main.rs') }}
+          key: deps-windows-${{ matrix.arch }}-${{ hashFiles('xtask/src/main.rs') }}
       - name: Build native dependencies
         shell: bash
         run: >-
           cargo run --locked -p xtask -- deps build --all
-          --profile "$PROFILE" --target x86_64-pc-windows-msvc
+          --profile "$PROFILE" --target "${{ matrix.target }}"
       - name: Build C API
         shell: bash
         run: |
-          ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="x86_64-pc-windows-msvc" \
+          ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="${{ matrix.target }}" \
             cargo build --locked -p erika_capi --release \
-              --target x86_64-pc-windows-msvc
+              --target "${{ matrix.target }}"

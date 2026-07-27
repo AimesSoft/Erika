@@ -33,45 +33,83 @@ env:
 
 jobs:
   macos:
-    name: macOS (universal)
-    runs-on: macos-14
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            host_arch: arm64
+            target: aarch64-apple-darwin
+            runner: macos-15
+          - arch: x64
+            host_arch: x86_64
+            target: x86_64-apple-darwin
+            runner: macos-15-intel
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.target }}
       - name: Install native build tools
         run: brew install nasm meson ninja pkg-config
       - name: Cache native dependencies
         uses: actions/cache@v4
         with:
           path: third_party
-          key: deps-macos-${{ hashFiles('xtask/src/main.rs') }}
-      - name: Build native deps + erika_capi (arm64, x86_64)
+          key: deps-macos-${{ matrix.arch }}-${{ hashFiles('xtask/src/main.rs') }}
+      - name: Build native deps + erika_capi
         run: |
-          for T in aarch64-apple-darwin x86_64-apple-darwin; do
-            cargo run -p xtask -- deps build --all --profile "$PROFILE" --target "$T"
-            ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
-              cargo build -p erika_capi --release --target "$T"
-          done
-      - name: Make universal binaries
+          test "$(uname -m)" = "${{ matrix.host_arch }}"
+          cargo run -p xtask -- deps build --all --profile "$PROFILE" --target "${{ matrix.target }}"
+          ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="${{ matrix.target }}" \
+            cargo build -p erika_capi --release --target "${{ matrix.target }}"
+      - name: Stage architecture libraries
         run: |
-          mkdir -p out
-          lipo -create \
-            target/aarch64-apple-darwin/release/liberika_capi.dylib \
-            target/x86_64-apple-darwin/release/liberika_capi.dylib \
-            -output out/liberika_capi.dylib
-          lipo -create \
-            target/aarch64-apple-darwin/release/liberika_capi.a \
-            target/x86_64-apple-darwin/release/liberika_capi.a \
-            -output out/liberika_capi.a
-          install_name_tool -id @rpath/liberika_capi.dylib out/liberika_capi.dylib
+          mkdir -p "out/${{ matrix.arch }}"
+          cp "target/${{ matrix.target }}/release/liberika_capi.dylib" "out/${{ matrix.arch }}/"
+          cp "target/${{ matrix.target }}/release/liberika_capi.a" "out/${{ matrix.arch }}/"
+          install_name_tool -id @rpath/liberika_capi.dylib "out/${{ matrix.arch }}/liberika_capi.dylib"
+      - name: Package
+        run: |
+          bash packaging/bundle.sh "erika-capi-macos-${{ matrix.arch }}" \
+            "dist/erika-capi-macos-${{ matrix.arch }}.zip" \
+            "out/${{ matrix.arch }}/liberika_capi.dylib" \
+            "out/${{ matrix.arch }}/liberika_capi.a"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erika-capi-macos-${{ matrix.arch }}
+          path: |
+            dist/*.zip
+            out/${{ matrix.arch }}/*
+
+  macos-universal:
+    name: macOS universal
+    needs: macos
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: erika-capi-macos-*
+          path: artifacts
+      - name: Make universal libraries
+        run: |
+          ARM64=artifacts/erika-capi-macos-arm64/out/arm64
+          X64=artifacts/erika-capi-macos-x64/out/x64
+          mkdir -p out/universal
+          lipo -create "$ARM64/liberika_capi.dylib" "$X64/liberika_capi.dylib" \
+            -output out/universal/liberika_capi.dylib
+          lipo -create "$ARM64/liberika_capi.a" "$X64/liberika_capi.a" \
+            -output out/universal/liberika_capi.a
+          install_name_tool -id @rpath/liberika_capi.dylib out/universal/liberika_capi.dylib
       - name: Package
         run: |
           bash packaging/bundle.sh erika-capi-macos-universal \
             dist/erika-capi-macos-universal.zip \
-            out/liberika_capi.dylib out/liberika_capi.a
+            out/universal/liberika_capi.dylib out/universal/liberika_capi.a
       - uses: actions/upload-artifact@v4
         with:
           name: erika-capi-macos-universal
@@ -128,15 +166,36 @@ jobs:
           path: dist/*.zip
 
   windows:
-    name: Windows x64
-    runs-on: windows-latest
+    name: Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            host_arch: AMD64
+            target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            msys2: true
+          - arch: arm64
+            host_arch: ARM64
+            target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            msys2: false
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
-      - name: Setup MSYS2 tools (Erika's xtask hard-codes C:\msys64)
+          targets: ${{ matrix.target }}
+      - name: Verify native host architecture
+        shell: pwsh
+        run: |
+          if ($env:PROCESSOR_ARCHITECTURE -ne "${{ matrix.host_arch }}") {
+            throw "Expected ${{ matrix.host_arch }} host, got $env:PROCESSOR_ARCHITECTURE"
+          }
+      - name: Setup MSYS2 tools
+        if: matrix.msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -154,7 +213,11 @@ jobs:
       - name: Install build tools (nasm, meson, ninja, LLVM/libclang)
         shell: pwsh
         run: |
-          choco install -y --no-progress nasm zip
+          if ("${{ matrix.arch }}" -eq "x64") {
+            choco install -y --no-progress nasm zip
+          } elseif (-not (Get-Command make -ErrorAction SilentlyContinue)) {
+            choco install -y --no-progress make
+          }
           pip install --quiet meson ninja
           $llvmBin = "C:\Program Files\LLVM\bin"
           if (-not (Test-Path (Join-Path $llvmBin "libclang.dll"))) {
@@ -168,23 +231,23 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: deps-windows-${{ hashFiles('xtask/src/main.rs') }}
+          key: deps-windows-${{ matrix.arch }}-${{ hashFiles('xtask/src/main.rs') }}
       - name: Build native deps + erika_capi
         shell: bash
         run: |
-          cargo run -p xtask -- deps build --all --profile "$PROFILE" --target x86_64-pc-windows-msvc
-          ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="x86_64-pc-windows-msvc" \
-            cargo build -p erika_capi --release --target x86_64-pc-windows-msvc
+          cargo run -p xtask -- deps build --all --profile "$PROFILE" --target "${{ matrix.target }}"
+          ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="${{ matrix.target }}" \
+            cargo build -p erika_capi --release --target "${{ matrix.target }}"
       - name: Package
         shell: bash
         run: |
-          R=target/x86_64-pc-windows-msvc/release
-          bash packaging/bundle.sh erika-capi-windows-x64 \
-            dist/erika-capi-windows-x64.zip \
+          R=target/${{ matrix.target }}/release
+          bash packaging/bundle.sh erika-capi-windows-${{ matrix.arch }} \
+            dist/erika-capi-windows-${{ matrix.arch }}.zip \
             "$R/erika_capi.dll" "$R/erika_capi.dll.lib" "$R/erika_capi.lib"
       - uses: actions/upload-artifact@v4
         with:
-          name: erika-capi-windows-x64
+          name: erika-capi-windows-${{ matrix.arch }}
           path: dist/*.zip
 
   android:
@@ -258,7 +321,7 @@ jobs:
 
   release:
     name: Publish Release
-    needs: [macos, ios, windows, android]
+    needs: [macos, macos-universal, ios, windows, android]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:

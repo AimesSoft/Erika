@@ -1,9 +1,9 @@
 # Releasing Erika
 
+> Translations: [中文](releasing.zh.md) · [日本語](releasing.ja.md)
+
 This describes how prebuilt `erika_capi` binaries are published so that other
 projects can link Erika without building it from source.
-
-> Translations: pending. Base language: English.
 
 ## What ships
 
@@ -12,8 +12,11 @@ license files:
 
 | Platform | Archive | Library artifacts |
 |----------|---------|-------------------|
-| macOS (universal) | `erika-capi-macos-universal.zip` | `liberika_capi.dylib`, `liberika_capi.a` (arm64 + x86_64) |
+| macOS arm64 | `erika-capi-macos-arm64.zip` | `liberika_capi.dylib`, `liberika_capi.a` |
+| macOS x64 | `erika-capi-macos-x64.zip` | `liberika_capi.dylib`, `liberika_capi.a` |
+| macOS universal | `erika-capi-macos-universal.zip` | `liberika_capi.dylib`, `liberika_capi.a` (arm64 + x86_64) |
 | Windows x64 | `erika-capi-windows-x64.zip` | `erika_capi.dll`, `erika_capi.dll.lib` (import), `erika_capi.lib` (static) |
+| Windows ARM64 | `erika-capi-windows-arm64.zip` | `erika_capi.dll`, `erika_capi.dll.lib` (import), `erika_capi.lib` (static) |
 | iOS | `erika-capi-ios.zip` | `erika_capi.xcframework` (device + simulator) |
 | Android | `erika-capi-android.zip` | `liberika_capi.so`, `liberika_capi.a`, and `libc++_shared.so` for `arm64-v8a`, `armeabi-v7a`, `x86_64`, and `x86` |
 
@@ -51,9 +54,11 @@ The release is fully automated by
    git tag v0.1.3
    git push origin v0.1.3
    ```
-3. The workflow builds the macOS / iOS / Windows / Android bundles (each builds the native
-   deps from source, so expect a long run on a cold cache) and attaches the
-   archives to a new GitHub Release for that tag.
+3. The workflow builds macOS arm64 on `macos-15` and macOS x64 on
+   `macos-15-intel`, then combines those native-host outputs into the universal
+   bundle. Windows x64 runs on `windows-latest` and Windows ARM64 runs natively
+   on `windows-11-arm`. It also builds the iOS / Android bundles and attaches
+   all archives to a new GitHub Release for that tag.
 
 To dry-run the builds without publishing, trigger the workflow manually
 ("Run workflow" / `workflow_dispatch`) — the build jobs run, but the publish job
@@ -85,22 +90,21 @@ Enable it by setting environment variables in the host app's build:
 | `ERIKA_PREBUILT=1` | Download the prebuilt `erika_capi` instead of building from source. |
 | `ERIKA_PREBUILT_TAG=v0.1.3` | Release tag to download (default `v0.1.3`). |
 | `ERIKA_FORCE_SOURCE_BUILD=1` | Bypass the prebuilt path and build the local source, useful when debugging Erika changes through the Flutter plugin. |
+| `ERIKA_MACOS_ARCHS=universal|arm64|x86_64|arm64,x86_64` | Select the macOS source and prebuilt artifact architecture. |
 
-- **Windows** (`build_erika_runtime.cmake`): downloads `erika-capi-windows-x64.zip`
-  and drops `erika_capi.dll` where the plugin bundles it. The plugin loads the
-  DLL dynamically, so this is feature-agnostic and works against `v0.1.3`.
+- **Windows** (`build_erika_runtime.cmake`): downloads the x64 or ARM64 archive
+  selected by the CMake target and drops `erika_capi.dll` where the plugin
+  bundles it.
 - **iOS** (podspec): downloads `erika-capi-ios.zip`, picks the device or
   simulator slice from the XCFramework, and links it. The prebuilt static lib
   must be built `--no-default-features --features libass` to match the plugin's
   link flags (the release workflow does this); verify against a release built
   that way before relying on it.
-- **macOS** (podspec `script_phase`): downloads `erika-capi-macos-universal.zip`,
-  extracts the universal `liberika_capi.dylib`, and bundles it into the app's
-  `Contents/Frameworks` (`install_name @rpath`, codesigned) — where the plugin's
-  `dlopen` search finds it. Without `ERIKA_PREBUILT`, the same phase builds the
-  universal dylib from source. `ERIKA_MACOS_CAPI_DYLIB` can point at an explicit
-  dylib instead. The macOS plugin is self-contained, so a host app no longer
-  needs its own dylib-provisioning step.
+- **macOS** (podspec `script_phase`): downloads the arm64, x64, or universal
+  archive selected by `ERIKA_MACOS_ARCHS` and bundles its dylib into the app's
+  `Contents/Frameworks` (`install_name @rpath`, codesigned). Without
+  `ERIKA_PREBUILT`, the same phase builds the selected architecture from source.
+  `ERIKA_MACOS_CAPI_DYLIB` can point at an explicit dylib instead.
 - **Android** (`erika-native.gradle`): downloads `erika-capi-android.zip` and
   stages `liberika_capi.so` plus `libc++_shared.so` for the requested Flutter
   ABIs. Native C/C++ embedders may instead link the bundled static archive and
