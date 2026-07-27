@@ -26,6 +26,7 @@ permissions:
 
 env:
   PROFILE: lgpl
+  IPHONEOS_DEPLOYMENT_TARGET: "13.0"
   ANDROID_API_LEVEL: "26"
   ANDROID_NDK_VERSION: "29.0.14206865"
   CARGO_TERM_COLOR: always
@@ -59,7 +60,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: deps-macos-${{ matrix.arch }}-${{ hashFiles('xtask/src/main.rs') }}
+          key: native-v2-macos-${{ matrix.target }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
       - name: Build native deps + erika_capi
         run: |
           test "$(uname -m)" = "${{ matrix.host_arch }}"
@@ -130,7 +131,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: deps-ios-${{ hashFiles('xtask/src/main.rs') }}
+          key: native-v2-ios-release-all-min${{ env.IPHONEOS_DEPLOYMENT_TARGET }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
       - name: Build native deps + erika_capi (device + simulators)
         # iOS links against the static lib only (XCFramework). Build just the
         # staticlib via `cargo rustc --crate-type staticlib` so the cdylib link
@@ -139,8 +140,7 @@ jobs:
           for T in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
             cargo run -p xtask -- deps build --all --profile "$PROFILE" --target "$T"
             ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
-            IPHONEOS_DEPLOYMENT_TARGET=13.0 \
-              cargo rustc -p erika_capi --lib --release --target "$T" \
+            cargo rustc -p erika_capi --lib --release --target "$T" \
                 --no-default-features --features libass --crate-type staticlib
           done
       - name: Assemble XCFramework
@@ -236,7 +236,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: deps-windows-${{ matrix.arch }}-${{ hashFiles('xtask/src/main.rs') }}
+          key: native-v2-windows-${{ matrix.target }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
       - name: Verify FFmpeg make shell
         shell: pwsh
         run: |
@@ -282,7 +282,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: deps-android-ndk${{ env.ANDROID_NDK_VERSION }}-api${{ env.ANDROID_API_LEVEL }}-${{ hashFiles('xtask/src/main.rs') }}
+          key: native-v2-android-release-all-ndk${{ env.ANDROID_NDK_VERSION }}-api${{ env.ANDROID_API_LEVEL }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
       - name: Build native deps + erika_capi (all ABIs)
         shell: bash
         run: |

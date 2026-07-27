@@ -16,6 +16,7 @@ concurrency:
 
 env:
   PROFILE: lgpl
+  IPHONEOS_DEPLOYMENT_TARGET: "13.0"
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
@@ -76,7 +77,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: deps-macos-${{ matrix.arch }}-${{ hashFiles('xtask/src/main.rs') }}
+          key: native-v2-macos-${{ matrix.target }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
       - name: Build native dependencies
         run: |
           test "$(uname -m)" = "${{ matrix.arch == 'arm64' && 'arm64' || 'x86_64' }}"
@@ -123,7 +124,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: deps-ios-${{ hashFiles('xtask/src/main.rs') }}
+          key: native-v2-ios-device-aarch64-min${{ env.IPHONEOS_DEPLOYMENT_TARGET }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
       - name: Build iOS native dependencies
         run: >-
           cargo run --locked -p xtask -- deps build --all
@@ -131,8 +132,7 @@ jobs:
       - name: Compile iOS static library
         run: |
           ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="aarch64-apple-ios" \
-          IPHONEOS_DEPLOYMENT_TARGET=13.0 \
-            cargo rustc --locked -p erika_capi --lib --release \
+          cargo rustc --locked -p erika_capi --lib --release \
               --target aarch64-apple-ios \
               --no-default-features --features libass --crate-type staticlib
 
@@ -207,7 +207,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: deps-windows-${{ matrix.arch }}-${{ hashFiles('xtask/src/main.rs') }}
+          key: native-v2-windows-${{ matrix.target }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
       - name: Verify FFmpeg make shell
         shell: pwsh
         run: |

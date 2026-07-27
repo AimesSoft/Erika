@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 
 const FFMPEG_VERSION: &str = "8.1.2";
 const GAS_PREPROCESSOR_REVISION: &str = "d09971fad329d32df19f5bbafe88cf2f0ed04ed7";
@@ -22,9 +23,10 @@ const FRIBIDI_VERSION: &str = "1.0.16";
 const ZLIB_VERSION: &str = "1.3.2";
 const DEFAULT_ANDROID_API_LEVEL: u32 = 26;
 
-const FFMPEG_ARCHIVE: &str = "ffmpeg-8.1.2.tar.xz";
-const FFMPEG_DIR: &str = "ffmpeg-8.1.2";
-const FFMPEG_URLS: &[&str] = &["https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz"];
+const FFMPEG_ARCHIVE: &str = "ffmpeg-n8.1.2.tar.gz";
+const FFMPEG_DIR: &str = "FFmpeg-n8.1.2";
+const FFMPEG_URLS: &[&str] = &["https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/refs/tags/n8.1.2"];
+const FFMPEG_SHA256: &str = "9fd092511605bbebafe095ea6d38d9e40f34d12f7386e1258372df8be0576eb7";
 const FFMPEG_PATCHSET_VERSION: &str = "erika-android-mediacodec-v4";
 const FFMPEG_PATCHES: &[&str] = &[
     "third_party/patches/ffmpeg-8.1.2/0001-erika-mediacodec-bounded-receive.patch",
@@ -33,10 +35,7 @@ const FFMPEG_PATCHES: &[&str] = &[
 
 const DAV1D_ARCHIVE: &str = "dav1d-1.5.1.tar.gz";
 const DAV1D_DIR: &str = "dav1d-1.5.1";
-const DAV1D_URLS: &[&str] = &[
-    "https://code.videolan.org/videolan/dav1d/-/archive/1.5.1/dav1d-1.5.1.tar.gz",
-    "https://codeload.github.com/videolan/dav1d/tar.gz/refs/tags/1.5.1",
-];
+const DAV1D_URLS: &[&str] = &["https://codeload.github.com/videolan/dav1d/tar.gz/refs/tags/1.5.1"];
 
 const LIBASS_ARCHIVE: &str = "libass-0.17.5.tar.xz";
 const LIBASS_DIR: &str = "libass-0.17.5";
@@ -52,12 +51,10 @@ const HARFBUZZ_URLS: &[&str] = &[
     "https://codeload.github.com/harfbuzz/harfbuzz/tar.gz/refs/tags/14.2.1",
 ];
 
-const FREETYPE_ARCHIVE: &str = "freetype-2.14.3.tar.xz";
-const FREETYPE_DIR: &str = "freetype-2.14.3";
-const FREETYPE_URLS: &[&str] = &[
-    "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz",
-    "https://sourceforge.net/projects/freetype/files/freetype2/2.14.3/freetype-2.14.3.tar.xz/download",
-];
+const FREETYPE_ARCHIVE: &str = "freetype-VER-2-14-3.tar.gz";
+const FREETYPE_DIR: &str = "freetype-VER-2-14-3";
+const FREETYPE_URLS: &[&str] =
+    &["https://codeload.github.com/freetype/freetype/tar.gz/refs/tags/VER-2-14-3"];
 
 const FRIBIDI_ARCHIVE: &str = "fribidi-1.0.16.tar.xz";
 const FRIBIDI_DIR: &str = "fribidi-1.0.16";
@@ -68,10 +65,7 @@ const FRIBIDI_URLS: &[&str] = &[
 
 const ZLIB_ARCHIVE: &str = "zlib-1.3.2.tar.gz";
 const ZLIB_DIR: &str = "zlib-1.3.2";
-const ZLIB_URLS: &[&str] = &[
-    "https://zlib.net/zlib-1.3.2.tar.gz",
-    "https://github.com/madler/zlib/archive/refs/tags/v1.3.2.tar.gz",
-];
+const ZLIB_URLS: &[&str] = &["https://codeload.github.com/madler/zlib/tar.gz/refs/tags/v1.3.2"];
 
 fn main() -> Result<()> {
     let mut args = env::args().skip(1).collect::<Vec<_>>();
@@ -631,17 +625,23 @@ fn fetch_dependency_sources(layout: &WorkspaceLayout, all: bool) -> Result<()> {
     fs::create_dir_all(&layout.source_dir)
         .with_context(|| format!("create {}", layout.source_dir.display()))?;
 
-    fetch_and_extract(layout, FFMPEG_URLS, FFMPEG_ARCHIVE, FFMPEG_DIR)?;
+    fetch_and_extract(
+        layout,
+        FFMPEG_URLS,
+        FFMPEG_ARCHIVE,
+        FFMPEG_DIR,
+        Some(FFMPEG_SHA256),
+    )?;
     apply_ffmpeg_patches(layout)?;
-    fetch_and_extract(layout, ZLIB_URLS, ZLIB_ARCHIVE, ZLIB_DIR)?;
+    fetch_and_extract(layout, ZLIB_URLS, ZLIB_ARCHIVE, ZLIB_DIR, None)?;
     if layout.target.is_android() || layout.target.is_apple() {
-        fetch_and_extract(layout, DAV1D_URLS, DAV1D_ARCHIVE, DAV1D_DIR)?;
+        fetch_and_extract(layout, DAV1D_URLS, DAV1D_ARCHIVE, DAV1D_DIR, None)?;
     }
     if all {
-        fetch_and_extract(layout, LIBASS_URLS, LIBASS_ARCHIVE, LIBASS_DIR)?;
-        fetch_and_extract(layout, HARFBUZZ_URLS, HARFBUZZ_ARCHIVE, HARFBUZZ_DIR)?;
-        fetch_and_extract(layout, FREETYPE_URLS, FREETYPE_ARCHIVE, FREETYPE_DIR)?;
-        fetch_and_extract(layout, FRIBIDI_URLS, FRIBIDI_ARCHIVE, FRIBIDI_DIR)?;
+        fetch_and_extract(layout, LIBASS_URLS, LIBASS_ARCHIVE, LIBASS_DIR, None)?;
+        fetch_and_extract(layout, HARFBUZZ_URLS, HARFBUZZ_ARCHIVE, HARFBUZZ_DIR, None)?;
+        fetch_and_extract(layout, FREETYPE_URLS, FREETYPE_ARCHIVE, FREETYPE_DIR, None)?;
+        fetch_and_extract(layout, FRIBIDI_URLS, FRIBIDI_ARCHIVE, FRIBIDI_DIR, None)?;
     } else {
         println!(
             "skip text/subtitle source fetch; pass --all when preparing libass/HarfBuzz/FreeType work"
@@ -874,8 +874,12 @@ fn build_text_dependencies(layout: &WorkspaceLayout, options: DepsOptions) -> Re
 }
 
 fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if marker_has_version(&layout.zlib_build_marker, "zlib", ZLIB_VERSION)
-        && !options.force
+    if marker_has_version(
+        &layout.zlib_build_marker,
+        "zlib",
+        ZLIB_VERSION,
+        options.target,
+    ) && !options.force
         && (native_static_lib_exists(&layout.zlib_prefix, "z")
             || native_static_lib_exists(&layout.zlib_prefix, "zlib")
             || native_static_lib_exists(&layout.zlib_prefix, "zs"))
@@ -931,6 +935,7 @@ fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         "zlib",
         ZLIB_VERSION,
         &layout.zlib_prefix,
+        options.target,
     )
 }
 
@@ -998,13 +1003,14 @@ fn build_dav1d(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     fs::write(
         &layout.dav1d_build_marker,
         format!(
-            "dav1d={DAV1D_VERSION}\ntarget={}\nandroid_api={}\nasm={asm_enabled}\nprefix={}\n",
+            "dav1d={DAV1D_VERSION}\ntarget={}\nandroid_api={}\ndeployment_target={}\nasm={asm_enabled}\nprefix={}\n",
             options.target.triple().unwrap_or("host"),
             if options.target.is_android() {
                 android_api_level()?.to_string()
             } else {
                 "n/a".to_string()
             },
+            native_deployment_target(options.target),
             layout.dav1d_prefix.display(),
         ),
     )
@@ -1035,8 +1041,12 @@ fn ffmpeg_requires_nasm(target: NativeTarget) -> bool {
 }
 
 fn build_freetype(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if marker_has_version(&layout.freetype_build_marker, "freetype", FREETYPE_VERSION)
-        && !options.force
+    if marker_has_version(
+        &layout.freetype_build_marker,
+        "freetype",
+        FREETYPE_VERSION,
+        options.target,
+    ) && !options.force
     {
         println!(
             "reuse FreeType build marker {}",
@@ -1076,12 +1086,17 @@ fn build_freetype(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> 
         "freetype",
         FREETYPE_VERSION,
         &layout.freetype_prefix,
+        options.target,
     )
 }
 
 fn build_harfbuzz(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if marker_has_version(&layout.harfbuzz_build_marker, "harfbuzz", HARFBUZZ_VERSION)
-        && !options.force
+    if marker_has_version(
+        &layout.harfbuzz_build_marker,
+        "harfbuzz",
+        HARFBUZZ_VERSION,
+        options.target,
+    ) && !options.force
     {
         println!(
             "reuse HarfBuzz build marker {}",
@@ -1136,12 +1151,17 @@ fn build_harfbuzz(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> 
         "harfbuzz",
         HARFBUZZ_VERSION,
         &layout.harfbuzz_prefix,
+        options.target,
     )
 }
 
 fn build_fribidi(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if marker_has_version(&layout.fribidi_build_marker, "fribidi", FRIBIDI_VERSION)
-        && !options.force
+    if marker_has_version(
+        &layout.fribidi_build_marker,
+        "fribidi",
+        FRIBIDI_VERSION,
+        options.target,
+    ) && !options.force
     {
         println!(
             "reuse FriBidi build marker {}",
@@ -1189,6 +1209,7 @@ fn build_fribidi(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         "fribidi",
         FRIBIDI_VERSION,
         &layout.fribidi_prefix,
+        options.target,
     )
 }
 
@@ -1213,7 +1234,13 @@ fn patch_fribidi_meson_native_compiler(layout: &WorkspaceLayout) -> Result<()> {
 }
 
 fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if marker_has_version(&layout.libass_build_marker, "libass", LIBASS_VERSION) && !options.force {
+    if marker_has_version(
+        &layout.libass_build_marker,
+        "libass",
+        LIBASS_VERSION,
+        options.target,
+    ) && !options.force
+    {
         println!(
             "reuse libass build marker {}",
             layout.libass_build_marker.display()
@@ -1307,6 +1334,7 @@ fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         "libass",
         LIBASS_VERSION,
         &layout.libass_prefix,
+        options.target,
     )
 }
 
@@ -1669,22 +1697,43 @@ fn write_marker(
     name: &str,
     version: &str,
     prefix: &std::path::Path,
+    target: NativeTarget,
 ) -> Result<()> {
     fs::write(
         path,
-        format!("{name}={version}\nprefix={}\n", prefix.display()),
+        format!(
+            "{name}={version}\ndeployment_target={}\nprefix={}\n",
+            native_deployment_target(target),
+            prefix.display()
+        ),
     )
     .with_context(|| format!("write {}", path.display()))
 }
 
-fn marker_has_version(path: &std::path::Path, name: &str, version: &str) -> bool {
+fn marker_has_version(
+    path: &std::path::Path,
+    name: &str,
+    version: &str,
+    target: NativeTarget,
+) -> bool {
     fs::read_to_string(path)
         .map(|marker| {
             marker
                 .lines()
                 .any(|line| line == format!("{name}={version}"))
+                && marker.contains(&format!(
+                    "deployment_target={}\n",
+                    native_deployment_target(target)
+                ))
         })
         .unwrap_or(false)
+}
+
+fn native_deployment_target(target: NativeTarget) -> String {
+    target
+        .deployment_target()
+        .map(|(deployment_target, _)| deployment_target)
+        .unwrap_or_else(|| "n/a".to_string())
 }
 
 fn pkg_config_path<'a>(prefixes: impl IntoIterator<Item = &'a PathBuf>) -> String {
@@ -1778,7 +1827,16 @@ fn refresh_ffmpeg_source(layout: &WorkspaceLayout) -> Result<()> {
         fs::remove_dir_all(&layout.ffmpeg_source_dir)
             .with_context(|| format!("remove {}", layout.ffmpeg_source_dir.display()))?;
     }
-    extract_archive(&layout.cache_dir.join(FFMPEG_ARCHIVE), &layout.source_dir)
+    extract_archive(
+        &layout.cache_dir.join(FFMPEG_ARCHIVE),
+        &layout.source_dir,
+        FFMPEG_DIR,
+    )?;
+    fs::write(
+        layout.ffmpeg_source_dir.join(".erika-extracted"),
+        format!("archive={FFMPEG_ARCHIVE}\n"),
+    )
+    .with_context(|| format!("mark {} extracted", layout.ffmpeg_source_dir.display()))
 }
 
 fn validate_generated_ffmpeg_source_path(layout: &WorkspaceLayout) -> Result<()> {
@@ -2029,59 +2087,130 @@ fn fetch_and_extract(
     urls: &[&str],
     archive_name: &str,
     source_dir_name: &str,
+    expected_sha256: Option<&str>,
 ) -> Result<()> {
     let archive_path = layout.cache_dir.join(archive_name);
     let partial_path = layout.cache_dir.join(format!("{archive_name}.part"));
+    if archive_path.exists()
+        && expected_sha256
+            .is_some_and(|expected| !archive_checksum_matches(&archive_path, expected))
+    {
+        println!("discard invalid archive {}", archive_path.display());
+        fs::remove_file(&archive_path)
+            .with_context(|| format!("remove {}", archive_path.display()))?;
+    }
     if !archive_path.exists() {
-        download_archive(urls, &partial_path, &archive_path)?;
+        download_archive(urls, &partial_path, &archive_path, expected_sha256)?;
     } else {
         println!("reuse {}", archive_path.display());
     }
 
     let source_path = layout.source_dir.join(source_dir_name);
-    if !source_path.exists() {
-        println!("extract {}", archive_path.display());
-        extract_archive(&archive_path, &layout.source_dir)?;
-    } else {
+    let extraction_marker = source_path.join(".erika-extracted");
+    let expected_marker = format!("archive={archive_name}\n");
+    if source_path.exists()
+        && fs::read_to_string(&extraction_marker).is_ok_and(|marker| marker == expected_marker)
+    {
         println!("reuse {}", source_path.display());
+        return Ok(());
     }
+    if source_path.exists() {
+        fs::remove_dir_all(&source_path)
+            .with_context(|| format!("remove incomplete source {}", source_path.display()))?;
+    }
+    println!("extract {}", archive_path.display());
+    extract_archive(&archive_path, &layout.source_dir, source_dir_name)?;
+    fs::write(&extraction_marker, expected_marker)
+        .with_context(|| format!("write {}", extraction_marker.display()))?;
     Ok(())
 }
 
-fn extract_archive(archive_path: &Path, destination: &Path) -> Result<()> {
-    run(Command::new("tar")
+fn extract_archive(archive_path: &Path, destination: &Path, source_dir_name: &str) -> Result<()> {
+    let temporary_dir = destination.join(format!(
+        ".erika-extract-{source_dir_name}-{}",
+        std::process::id()
+    ));
+    if temporary_dir.exists() {
+        fs::remove_dir_all(&temporary_dir)
+            .with_context(|| format!("remove {}", temporary_dir.display()))?;
+    }
+    fs::create_dir_all(&temporary_dir)
+        .with_context(|| format!("create {}", temporary_dir.display()))?;
+    let result = run(Command::new("tar")
         .arg("-xf")
         .arg(archive_path)
         .arg("-C")
-        .arg(destination))
+        .arg(&temporary_dir));
+    if let Err(error) = result {
+        let _ = fs::remove_dir_all(&temporary_dir);
+        return Err(error);
+    }
+    let extracted_source = temporary_dir.join(source_dir_name);
+    if !extracted_source.is_dir() {
+        let _ = fs::remove_dir_all(&temporary_dir);
+        bail!(
+            "archive {} did not contain expected directory {source_dir_name}",
+            archive_path.display()
+        );
+    }
+    let source_path = destination.join(source_dir_name);
+    fs::rename(&extracted_source, &source_path).with_context(|| {
+        format!(
+            "rename {} to {}",
+            extracted_source.display(),
+            source_path.display()
+        )
+    })?;
+    fs::remove_dir_all(&temporary_dir)
+        .with_context(|| format!("remove {}", temporary_dir.display()))
 }
 
-fn download_archive(urls: &[&str], partial_path: &PathBuf, archive_path: &PathBuf) -> Result<()> {
+fn download_archive(
+    urls: &[&str],
+    partial_path: &PathBuf,
+    archive_path: &PathBuf,
+    expected_sha256: Option<&str>,
+) -> Result<()> {
     let mut last_error = None;
     let agent = download_agent();
     for url in urls {
-        println!("download {url}");
-        if partial_path.exists() {
-            fs::remove_file(partial_path)
-                .with_context(|| format!("remove {}", partial_path.display()))?;
-        }
-        match download_url(&agent, url, partial_path) {
-            Ok(()) => {
-                fs::rename(partial_path, archive_path).with_context(|| {
-                    format!(
-                        "rename {} to {}",
-                        partial_path.display(),
-                        archive_path.display()
-                    )
-                })?;
-                return Ok(());
+        for attempt in 1..=4 {
+            println!("download {url} (attempt {attempt}/4)");
+            if partial_path.exists() {
+                fs::remove_file(partial_path)
+                    .with_context(|| format!("remove {}", partial_path.display()))?;
             }
-            Err(error) => {
-                last_error = Some(error);
-                let _ = fs::remove_file(partial_path);
-                println!("download failed, trying next source if available");
+            match download_url(&agent, url, partial_path).and_then(|()| {
+                if expected_sha256
+                    .is_none_or(|expected| archive_checksum_matches(partial_path, expected))
+                {
+                    Ok(())
+                } else {
+                    bail!("checksum mismatch for {}", partial_path.display())
+                }
+            }) {
+                Ok(()) => {
+                    fs::rename(partial_path, archive_path).with_context(|| {
+                        format!(
+                            "rename {} to {}",
+                            partial_path.display(),
+                            archive_path.display()
+                        )
+                    })?;
+                    return Ok(());
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    let _ = fs::remove_file(partial_path);
+                    if attempt < 4 {
+                        let delay = Duration::from_secs(2_u64.pow(attempt));
+                        println!("download failed, retrying in {} seconds", delay.as_secs());
+                        std::thread::sleep(delay);
+                    }
+                }
             }
         }
+        println!("download failed, trying next source if available");
     }
     match last_error {
         Some(error) => Err(error).context("all download sources failed"),
@@ -2090,6 +2219,17 @@ fn download_archive(urls: &[&str], partial_path: &PathBuf, archive_path: &PathBu
             archive_path.display()
         ),
     }
+}
+
+fn archive_checksum_matches(path: &Path, expected: &str) -> bool {
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    let mut hasher = Sha256::new();
+    if io::copy(&mut file, &mut hasher).is_err() {
+        return false;
+    }
+    format!("{:x}", hasher.finalize()).eq_ignore_ascii_case(expected)
 }
 
 fn download_agent() -> ureq::Agent {
@@ -2403,7 +2543,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     fs::write(
         &layout.ffmpeg_build_marker,
         format!(
-            "ffmpeg={FFMPEG_VERSION}\npatchset={}\nzlib={ZLIB_VERSION}\ndav1d={}\nprofile={}\ntarget={}\nandroid_api={}\nprefix={}\nflags={}\n",
+            "ffmpeg={FFMPEG_VERSION}\npatchset={}\nzlib={ZLIB_VERSION}\ndav1d={}\nprofile={}\ntarget={}\nandroid_api={}\ndeployment_target={}\nprefix={}\nflags={}\n",
             ffmpeg_patchset,
             if options.target.is_android() || options.target.is_apple() {
                 DAV1D_VERSION
@@ -2417,6 +2557,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
             } else {
                 "n/a".to_string()
             },
+            native_deployment_target(options.target),
             layout.ffmpeg_prefix.display(),
             options
                 .profile
@@ -2820,6 +2961,41 @@ fn ffmpeg_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions
         && ffmpeg_build_marker_has_current_flags(&marker, options.profile, options.target)
         && patchset_is_current
         && android_api_is_current
+        && marker.contains(&format!(
+            "deployment_target={}\n",
+            native_deployment_target(options.target)
+        ))
+        && ffmpeg_install_is_complete(layout, options.target)
+}
+
+fn ffmpeg_install_is_complete(layout: &WorkspaceLayout, target: NativeTarget) -> bool {
+    let library_extension = if target.is_windows() { "lib" } else { "a" };
+    layout
+        .ffmpeg_prefix
+        .join("include/libavformat/avformat.h")
+        .is_file()
+        && [
+            "avdevice",
+            "avfilter",
+            "avformat",
+            "avcodec",
+            "swresample",
+            "swscale",
+            "avutil",
+        ]
+        .iter()
+        .all(|library| {
+            layout
+                .ffmpeg_prefix
+                .join("lib")
+                .join(format!("{library}.{library_extension}"))
+                .is_file()
+                || layout
+                    .ffmpeg_prefix
+                    .join("lib")
+                    .join(format!("lib{library}.a"))
+                    .is_file()
+        })
 }
 
 fn dav1d_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions) -> bool {
@@ -2839,6 +3015,10 @@ fn dav1d_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions)
             && marker.contains(&format!(
                 "target={}\n",
                 options.target.triple().unwrap_or("host")
+            ))
+            && marker.contains(&format!(
+                "deployment_target={}\n",
+                native_deployment_target(options.target)
             ))
             && marker.contains(&format!("asm={}\n", dav1d_asm_enabled(options.target)))
     }
@@ -4362,10 +4542,20 @@ mod tests {
     #[test]
     fn dependency_markers_require_current_versions() {
         let path = std::env::temp_dir().join(format!("erika-xtask-marker-{}", std::process::id()));
-        fs::write(&path, "zlib=1.3.1\nprefix=/tmp\n").unwrap();
+        fs::write(&path, "zlib=1.3.1\ndeployment_target=n/a\nprefix=/tmp\n").unwrap();
 
-        assert!(!marker_has_version(&path, "zlib", "1.3.2"));
-        assert!(marker_has_version(&path, "zlib", "1.3.1"));
+        assert!(!marker_has_version(
+            &path,
+            "zlib",
+            "1.3.2",
+            NativeTarget::Host
+        ));
+        assert!(marker_has_version(
+            &path,
+            "zlib",
+            "1.3.1",
+            NativeTarget::Host
+        ));
 
         fs::remove_file(path).unwrap();
     }
