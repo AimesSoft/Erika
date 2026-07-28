@@ -724,7 +724,11 @@ impl PresenterRuntime {
             outline_color_rgba: outline_rgba,
             font_size,
             outline_width,
-            force_override,
+            override_mask: if force_override {
+                crate::subtitle::SUBTITLE_OVERRIDE_LEGACY_FORCE
+            } else {
+                0
+            },
             ..self.subtitle_style.clone()
         };
         self.apply_subtitle_style(style);

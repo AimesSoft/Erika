@@ -724,18 +724,6 @@ mod libass_ffi {
 
 /// `ASS_OVERRIDE_BIT_FONT_SIZE_FIELDS`: override `FontSize`, `Spacing`,
 /// `ScaleX` and `ScaleY` on dialogue events.
-#[cfg(feature = "libass")]
-const ASS_OVERRIDE_BIT_FONT_SIZE_FIELDS: libc::c_int = 1 << 2;
-/// `ASS_OVERRIDE_BIT_FONT_NAME`: override `FontName` on dialogue events.
-#[cfg(feature = "libass")]
-const ASS_OVERRIDE_BIT_FONT_NAME: libc::c_int = 1 << 3;
-/// `ASS_OVERRIDE_BIT_BORDER`: override `BorderStyle`, `Outline` and `Shadow`
-/// on dialogue events.
-#[cfg(feature = "libass")]
-const ASS_OVERRIDE_BIT_BORDER: libc::c_int = 1 << 6;
-/// `ASS_OVERRIDE_BIT_COLORS`: override the four colour fields on dialogue events.
-#[cfg(feature = "libass")]
-const ASS_OVERRIDE_BIT_COLORS: libc::c_int = 1 << 4;
 /// Style name handed to libass for the override style. libass stores this
 /// pointer without copying it, so it has to be `'static`.
 #[cfg(feature = "libass")]
@@ -772,14 +760,31 @@ pub const DEFAULT_SUBTITLE_OUTLINE_COLOR_RGBA: u32 = 0x0000_007f;
 pub const DEFAULT_SUBTITLE_FONT_SIZE: f64 = DEFAULT_ASS_FONT_SIZE;
 /// Base subtitle outline width in ASS script units, before the viewer's scale.
 pub const DEFAULT_SUBTITLE_OUTLINE_WIDTH: f64 = DEFAULT_ASS_OUTLINE;
+pub const SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS: u32 = 1 << 2;
+pub const SUBTITLE_OVERRIDE_FONT_NAME: u32 = 1 << 3;
+pub const SUBTITLE_OVERRIDE_COLORS: u32 = 1 << 4;
+pub const SUBTITLE_OVERRIDE_ATTRIBUTES: u32 = 1 << 5;
+pub const SUBTITLE_OVERRIDE_BORDER: u32 = 1 << 6;
+pub const SUBTITLE_OVERRIDE_ALIGNMENT: u32 = 1 << 7;
+pub const SUBTITLE_OVERRIDE_MARGINS: u32 = 1 << 8;
+pub const SUBTITLE_OVERRIDE_BLUR: u32 = 1 << 11;
+pub const SUBTITLE_OVERRIDE_LEGACY_FORCE: u32 = SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS
+    | SUBTITLE_OVERRIDE_FONT_NAME
+    | SUBTITLE_OVERRIDE_COLORS
+    | SUBTITLE_OVERRIDE_BORDER;
+pub const SUBTITLE_OVERRIDE_ALL: u32 = SUBTITLE_OVERRIDE_LEGACY_FORCE
+    | SUBTITLE_OVERRIDE_ATTRIBUTES
+    | SUBTITLE_OVERRIDE_ALIGNMENT
+    | SUBTITLE_OVERRIDE_MARGINS
+    | SUBTITLE_OVERRIDE_BLUR;
 
 /// User-chosen subtitle look. Empty strings mean "keep Erika's default", so
 /// [`SubtitleStyleConfig::default`] reproduces the built-in style exactly.
 ///
 /// The font and colours act as *fallbacks*: a container ASS script keeps its
 /// own styling, and these only fill in what the script leaves open (or what the
-/// system cannot resolve). Set `force_override` to push them onto dialogue
-/// events that do specify their own font and colours.
+/// system cannot resolve). Set the corresponding `override_mask` bits to push
+/// configured fields onto dialogue events that specify their own style.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubtitleStyleConfig {
     /// Family libass resolves when a script names no font, or names one that is
@@ -795,9 +800,21 @@ pub struct SubtitleStyleConfig {
     pub font_size: f64,
     /// Base outline (border) width in ASS script units, before the scale.
     pub outline_width: f64,
-    /// Replace the font, size, border and colours of ASS dialogue events
-    /// instead of only filling in what they leave unspecified.
-    pub force_override: bool,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strike_out: bool,
+    pub spacing: f64,
+    pub scale_x_percent: f64,
+    pub scale_y_percent: f64,
+    pub border_style: i32,
+    pub shadow_depth: f64,
+    pub blur: f64,
+    pub alignment: i32,
+    pub margin_left: i32,
+    pub margin_right: i32,
+    pub margin_vertical: i32,
+    pub override_mask: u32,
 }
 
 impl Default for SubtitleStyleConfig {
@@ -809,7 +826,21 @@ impl Default for SubtitleStyleConfig {
             outline_color_rgba: DEFAULT_SUBTITLE_OUTLINE_COLOR_RGBA,
             font_size: DEFAULT_ASS_FONT_SIZE,
             outline_width: DEFAULT_ASS_OUTLINE,
-            force_override: false,
+            bold: false,
+            italic: false,
+            underline: false,
+            strike_out: false,
+            spacing: 0.0,
+            scale_x_percent: 100.0,
+            scale_y_percent: 100.0,
+            border_style: 1,
+            shadow_depth: 0.0,
+            blur: 0.0,
+            alignment: 2,
+            margin_left: 48,
+            margin_right: 48,
+            margin_vertical: 54,
+            override_mask: 0,
         }
     }
 }
@@ -831,6 +862,25 @@ impl SubtitleStyleConfig {
         } else {
             DEFAULT_ASS_OUTLINE
         };
+        self.spacing = normalize_ass_metric(self.spacing, 0.0, -100.0, 100.0);
+        self.scale_x_percent = normalize_ass_metric(self.scale_x_percent, 100.0, 1.0, 1000.0);
+        self.scale_y_percent = normalize_ass_metric(self.scale_y_percent, 100.0, 1.0, 1000.0);
+        self.shadow_depth = normalize_ass_metric(self.shadow_depth, 0.0, 0.0, MAX_ASS_OUTLINE);
+        self.blur = normalize_ass_metric(self.blur, 0.0, 0.0, 100.0);
+        self.border_style = if matches!(self.border_style, 1 | 3) {
+            self.border_style
+        } else {
+            1
+        };
+        self.alignment = if (1..=9).contains(&self.alignment) {
+            self.alignment
+        } else {
+            2
+        };
+        self.margin_left = self.margin_left.clamp(0, 10_000);
+        self.margin_right = self.margin_right.clamp(0, 10_000);
+        self.margin_vertical = self.margin_vertical.clamp(0, 10_000);
+        self.override_mask &= SUBTITLE_OVERRIDE_ALL;
         self
     }
 
@@ -988,8 +1038,8 @@ impl LibassRuntime {
 
     /// Pushes the user style into libass: the custom face (if any) becomes a
     /// known font and the last-resort font path, the custom family becomes the
-    /// default family, and `force_override` decides whether dialogue styling is
-    /// replaced or merely backfilled.
+    /// default family, and `override_mask` decides which dialogue styling is
+    /// replaced instead of merely backfilled.
     fn configure_style(
         &mut self,
         style: &SubtitleStyleConfig,
@@ -1046,14 +1096,7 @@ impl LibassRuntime {
         font_scale: f64,
         play_res_height: u32,
     ) -> libc::c_int {
-        let bits = if style.force_override {
-            ASS_OVERRIDE_BIT_COLORS
-                | ASS_OVERRIDE_BIT_FONT_NAME
-                | ASS_OVERRIDE_BIT_FONT_SIZE_FIELDS
-                | ASS_OVERRIDE_BIT_BORDER
-        } else {
-            0
-        };
+        let bits = (style.override_mask & SUBTITLE_OVERRIDE_ALL) as libc::c_int;
         if bits != 0 {
             unsafe {
                 libass_ffi::ass_set_selective_style_override_enabled(self.renderer.as_ptr(), 0);
@@ -1066,28 +1109,28 @@ impl LibassRuntime {
                 secondary_colour: libass_style_color(style.primary_color_rgba),
                 outline_colour: libass_style_color(style.outline_color_rgba),
                 back_colour: libass_style_color(style.outline_color_rgba),
-                bold: 0,
-                italic: 0,
-                underline: 0,
-                strike_out: 0,
-                scale_x: 1.0,
-                scale_y: 1.0,
-                spacing: 0.0,
+                bold: i32::from(style.bold),
+                italic: i32::from(style.italic),
+                underline: i32::from(style.underline),
+                strike_out: i32::from(style.strike_out),
+                scale_x: style.scale_x_percent / 100.0,
+                scale_y: style.scale_y_percent / 100.0,
+                spacing: selective_override_metric(style.spacing, font_scale, play_res_height),
                 angle: 0.0,
-                border_style: 1,
+                border_style: style.border_style,
                 outline: selective_override_metric(
                     style.outline_width,
                     font_scale,
                     play_res_height,
                 ),
-                shadow: 0.0,
-                alignment: 2,
-                margin_l: 0,
-                margin_r: 0,
-                margin_v: 0,
+                shadow: selective_override_metric(style.shadow_depth, font_scale, play_res_height),
+                alignment: style.alignment,
+                margin_l: style.margin_left,
+                margin_r: style.margin_right,
+                margin_v: style.margin_vertical,
                 encoding: 1,
                 treat_fontname_as_pattern: 0,
-                blur: 0.0,
+                blur: selective_override_metric(style.blur, font_scale, play_res_height),
                 justify: 0,
             };
             unsafe {
@@ -2223,6 +2266,14 @@ fn normalize_ass_font_scale(scale: f64) -> f64 {
     }
 }
 
+fn normalize_ass_metric(value: f64, default: f64, min: f64, max: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(min, max)
+    } else {
+        default
+    }
+}
+
 #[cfg(feature = "libass")]
 fn selective_override_metric(value: f64, font_scale: f64, play_res_height: u32) -> f64 {
     value * normalize_ass_font_scale(font_scale) * 288.0 / f64::from(play_res_height.max(1))
@@ -2258,6 +2309,14 @@ fn default_ass_script_header(style: &SubtitleAssStyle) -> String {
     let metrics = style.style.clone().normalized();
     let font_size = ass_number(metrics.font_size * scale);
     let outline = ass_number(metrics.outline_width * scale);
+    let shadow = ass_number(metrics.shadow_depth * scale);
+    let spacing = ass_number(metrics.spacing * scale);
+    let scale_x = ass_number(metrics.scale_x_percent);
+    let scale_y = ass_number(metrics.scale_y_percent);
+    let bold = i32::from(metrics.bold) * -1;
+    let italic = i32::from(metrics.italic) * -1;
+    let underline = i32::from(metrics.underline) * -1;
+    let strike_out = i32::from(metrics.strike_out) * -1;
     let font_family = style
         .style
         .font_family()
@@ -2275,11 +2334,16 @@ PlayResY: {play_res_height}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_family},{font_size},{primary_color},&H000000FF,{outline_color},{outline_color},0,0,0,0,100,100,0,0,1,{outline},0,2,48,48,54,1
+Style: Default,{font_family},{font_size},{primary_color},&H000000FF,{outline_color},{outline_color},{bold},{italic},{underline},{strike_out},{scale_x},{scale_y},{spacing},0,{border_style},{outline},{shadow},{alignment},{margin_left},{margin_right},{margin_vertical},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"#
+"#,
+        border_style = metrics.border_style,
+        alignment = metrics.alignment,
+        margin_left = metrics.margin_left,
+        margin_right = metrics.margin_right,
+        margin_vertical = metrics.margin_vertical,
     )
 }
 
@@ -2950,6 +3014,34 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     }
 
     #[test]
+    fn subtitle_style_config_drives_extended_ass_style_fields() {
+        let style = SubtitleAssStyle {
+            font_scale: 1.5,
+            style: SubtitleStyleConfig {
+                bold: true,
+                italic: true,
+                underline: true,
+                strike_out: true,
+                spacing: 2.0,
+                scale_x_percent: 90.0,
+                scale_y_percent: 110.0,
+                border_style: 3,
+                shadow_depth: 4.0,
+                alignment: 8,
+                margin_left: 12,
+                margin_right: 34,
+                margin_vertical: 56,
+                ..SubtitleStyleConfig::default()
+            },
+            ..SubtitleAssStyle::default()
+        };
+
+        let header = default_ass_script_header(&style);
+
+        assert!(header.contains(",-1,-1,-1,-1,90,110,3,0,3,3,6,8,12,34,56,1"));
+    }
+
+    #[test]
     fn subtitle_style_config_clamps_metrics_and_rejects_non_finite() {
         let clamped = SubtitleStyleConfig {
             font_size: 10_000.0,
@@ -2968,6 +3060,39 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         .normalized();
         assert_eq!(restored.font_size, DEFAULT_SUBTITLE_FONT_SIZE);
         assert_eq!(restored.outline_width, DEFAULT_SUBTITLE_OUTLINE_WIDTH);
+
+        let extended = SubtitleStyleConfig {
+            spacing: f64::NAN,
+            scale_x_percent: 0.0,
+            scale_y_percent: 10_000.0,
+            border_style: 2,
+            shadow_depth: f64::INFINITY,
+            blur: -1.0,
+            alignment: 10,
+            margin_left: -1,
+            margin_right: 20_000,
+            margin_vertical: -5,
+            override_mask: u32::MAX,
+            ..SubtitleStyleConfig::default()
+        }
+        .normalized();
+        assert_eq!(extended.spacing, 0.0);
+        assert_eq!(extended.scale_x_percent, 1.0);
+        assert_eq!(extended.scale_y_percent, 1000.0);
+        assert_eq!(extended.border_style, 1);
+        assert_eq!(extended.shadow_depth, 0.0);
+        assert_eq!(extended.blur, 0.0);
+        assert_eq!(extended.alignment, 2);
+        assert_eq!(extended.margin_left, 0);
+        assert_eq!(extended.margin_right, 10_000);
+        assert_eq!(extended.margin_vertical, 0);
+        assert_eq!(extended.override_mask, SUBTITLE_OVERRIDE_ALL);
+    }
+
+    #[test]
+    fn subtitle_override_masks_match_libass_selective_bits() {
+        assert_eq!(SUBTITLE_OVERRIDE_LEGACY_FORCE, 0x005c);
+        assert_eq!(SUBTITLE_OVERRIDE_ALL, 0x09fc);
     }
 
     #[test]
@@ -3049,11 +3174,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert!(!fallback.parts.is_empty());
         assert!(
             !red(&fallback),
-            "colors must stay a fallback until force_override is set"
+            "colors must stay a fallback until the color override bit is set"
         );
 
         renderer.set_style(&SubtitleStyleConfig {
-            force_override: true,
+            override_mask: SUBTITLE_OVERRIDE_COLORS,
             ..style
         });
         let SubtitleRenderOutput::Alpha(overridden) = renderer.render(request).unwrap() else {
@@ -3078,7 +3203,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         let style = SubtitleStyleConfig {
             font_size: 48.0,
             outline_width: 2.0,
-            force_override: true,
+            override_mask: SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS | SUBTITLE_OVERRIDE_BORDER,
             ..SubtitleStyleConfig::default()
         };
         let mut heights = Vec::new();
