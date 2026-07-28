@@ -30,7 +30,8 @@ use crate::android::mediacodec::{
 };
 #[cfg(target_env = "ohos")]
 use crate::ohos::avcodec::{
-    DecodedNv12FrameView, OhosDecoderOutput, OhosVideoCodec, OhosVideoDecoder,
+    DecodedNv12FrameView, DecodedSurfaceFrame, OhosDecoderOutput, OhosNativeBufferImage,
+    OhosVideoCodec, OhosVideoDecoder,
 };
 
 const AVERROR_EOF: i32 = -541_478_725;
@@ -1192,6 +1193,21 @@ impl Decoder {
         self.backend == DecoderBackend::MediaCodec && self.mediacodec_surface
     }
 
+    pub fn uses_avcodec_surface(&self) -> bool {
+        #[cfg(target_env = "ohos")]
+        {
+            self.backend == DecoderBackend::AvCodec
+                && self
+                    .ohos_decoder
+                    .as_ref()
+                    .is_some_and(OhosVideoDecoder::uses_surface)
+        }
+        #[cfg(not(target_env = "ohos"))]
+        {
+            false
+        }
+    }
+
     pub fn eof_sent(&self) -> bool {
         self.eof_sent
     }
@@ -1259,6 +1275,21 @@ impl Decoder {
         if let Some(decoder) = self.ohos_decoder.as_mut() {
             let time_base = self.time_base;
             let color = self.ohos_color_properties;
+            if decoder.uses_surface() {
+                return match decoder
+                    .receive_surface_frame()
+                    .map_err(FfmpegError::OhosAvCodec)?
+                {
+                    OhosDecoderOutput::NeedMoreInput => Ok(DecoderOutputFrame::NeedMoreInput),
+                    OhosDecoderOutput::Frame(decoded) => Ok(DecoderOutputFrame::Frame(
+                        Frame::from_ohos_surface(decoded, time_base, color)?,
+                    )),
+                    OhosDecoderOutput::EndOfStream => {
+                        self.end_of_stream = true;
+                        Ok(DecoderOutputFrame::EndOfStream)
+                    }
+                };
+            }
             return match decoder
                 .receive_frame(|decoded| {
                     Frame::from_ohos_nv12(decoded, time_base, color)
@@ -1350,12 +1381,17 @@ impl Decoder {
         };
         let ohos_decoder = OhosVideoDecoder::new(codec_kind, width, height, codec_config)
             .map_err(FfmpegError::OhosAvCodec)?;
+        let output_mode = if ohos_decoder.uses_surface() {
+            "surface_native_buffer"
+        } else {
+            "buffer_nv12_direct_frame_copy"
+        };
         crate::trace::diagnostic(
             serde_json::json!({
                 "event": "ohos_avcodec_decoder",
                 "stage": "decoder_opened",
                 "codec": codec_kind.as_str(),
-                "mode": "buffer_nv12_direct_frame_copy",
+                "mode": output_mode,
                 "width": width,
                 "height": height,
                 "codecConfigBytes": codec_config.len(),
@@ -1785,6 +1821,14 @@ pub struct Frame {
     time_base: TimeBase,
     #[cfg(target_os = "android")]
     mediacodec: Option<AndroidMediaCodecFrameState>,
+    #[cfg(target_env = "ohos")]
+    ohos_surface: Option<OhosAvCodecSurfaceFrameState>,
+}
+
+#[cfg(target_env = "ohos")]
+#[derive(Clone)]
+struct OhosAvCodecSurfaceFrameState {
+    image: Arc<OhosNativeBufferImage>,
 }
 
 pub struct AudioResampler {
@@ -1861,7 +1905,43 @@ impl Frame {
             time_base,
             #[cfg(target_os = "android")]
             mediacodec: None,
+            #[cfg(target_env = "ohos")]
+            ohos_surface: None,
         })
+    }
+
+    #[cfg(target_env = "ohos")]
+    fn from_ohos_surface(
+        decoded: DecodedSurfaceFrame,
+        time_base: TimeBase,
+        color: OhosFrameColorProperties,
+    ) -> Result<Self> {
+        if decoded.width == 0
+            || decoded.height == 0
+            || decoded.width > i32::MAX as u32
+            || decoded.height > i32::MAX as u32
+        {
+            return Err(FfmpegError::OhosAvCodec(format!(
+                "invalid decoded Surface dimensions {}x{}",
+                decoded.width, decoded.height
+            )));
+        }
+        let mut frame = Self::alloc(time_base)?;
+        unsafe {
+            (*frame.ptr).format = sys::AVPixelFormat_AV_PIX_FMT_NONE;
+            (*frame.ptr).width = decoded.width as i32;
+            (*frame.ptr).height = decoded.height as i32;
+            (*frame.ptr).pts = rescale_microseconds_to_time_base(decoded.pts_micros, time_base);
+            (*frame.ptr).color_range = color.range;
+            (*frame.ptr).color_primaries = color.primaries;
+            (*frame.ptr).color_trc = color.transfer;
+            (*frame.ptr).colorspace = color.space;
+            (*frame.ptr).chroma_location = color.chroma_location;
+        }
+        frame.ohos_surface = Some(OhosAvCodecSurfaceFrameState {
+            image: decoded.image,
+        });
+        Ok(frame)
     }
 
     #[cfg(target_env = "ohos")]
@@ -1968,6 +2048,10 @@ impl Frame {
         #[cfg(target_os = "android")]
         {
             frame.mediacodec = self.mediacodec.clone();
+        }
+        #[cfg(target_env = "ohos")]
+        {
+            frame.ohos_surface = self.ohos_surface.clone();
         }
         Ok(frame)
     }
@@ -2146,6 +2230,21 @@ impl Frame {
                 Err(FfmpegError::AndroidMediaCodec(error))
             }
         }
+    }
+
+    #[cfg(target_env = "ohos")]
+    pub fn is_ohos_avcodec_surface(&self) -> bool {
+        self.ohos_surface.is_some()
+    }
+
+    #[cfg(target_env = "ohos")]
+    pub(crate) fn prepared_ohos_native_buffer(&self) -> Result<Arc<OhosNativeBufferImage>> {
+        let state = self.ohos_surface.as_ref().ok_or_else(|| {
+            FfmpegError::OhosAvCodec(
+                "decoded frame is not associated with an AVCodec Surface".to_string(),
+            )
+        })?;
+        Ok(Arc::clone(&state.image))
     }
 
     #[cfg(target_os = "android")]

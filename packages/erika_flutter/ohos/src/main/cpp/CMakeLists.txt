@@ -32,6 +32,7 @@ set(OHOS_BINDGEN_ARGS
 )
 file(GLOB_RECURSE ERIKA_RUST_SOURCES CONFIGURE_DEPENDS
   "${ERIKA_ROOT}/crates/*.rs"
+  "${ERIKA_ROOT}/third_party/wgpu-hal/*.rs"
   "${ERIKA_ROOT}/xtask/*.rs"
 )
 list(APPEND ERIKA_RUST_SOURCES

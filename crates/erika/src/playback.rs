@@ -58,6 +58,10 @@ const DEFAULT_AUDIO_FRAME_QUEUE_LIMIT: usize = 16;
 const STREAMING_VIDEO_FRAME_QUEUE_LIMIT: usize = 48;
 const STREAMING_AUDIO_FRAME_QUEUE_LIMIT: usize = 128;
 const D3D11VA_VIDEO_FRAME_QUEUE_LIMIT: usize = 8;
+// NativeImage typically exposes a triple-buffered producer queue. Keep one
+// slot free so decoder prebuffering cannot deadlock before the presenter calls
+// OH_NativeImage_UpdateSurfaceImage for the first frame.
+const AVCODEC_SURFACE_VIDEO_FRAME_QUEUE_LIMIT: usize = 2;
 const SUBTITLE_FRAME_QUEUE_LIMIT: usize = 32;
 const EXTERNAL_SUBTITLE_LOOKAHEAD: Duration = Duration::from_secs(5);
 const DEFAULT_AUDIO_LEAD_TIME: Duration = Duration::from_millis(120);
@@ -1526,7 +1530,9 @@ impl PlaybackSession {
 
         #[cfg(target_os = "android")]
         let video_decoder_reopened = self.reopen_mediacodec_video_decoder_for_seek(position)?;
-        #[cfg(not(target_os = "android"))]
+        #[cfg(target_env = "ohos")]
+        let video_decoder_reopened = self.reopen_avcodec_video_decoder_for_seek(position)?;
+        #[cfg(not(any(target_os = "android", target_env = "ohos")))]
         let video_decoder_reopened = false;
 
         if !video_decoder_reopened {
@@ -1692,6 +1698,79 @@ impl PlaybackSession {
                     })
                     .to_string(),
                 );
+            }
+        }
+        Ok(true)
+    }
+
+    #[cfg(target_env = "ohos")]
+    fn reopen_avcodec_video_decoder_for_seek(&mut self, position: Duration) -> Result<bool> {
+        let Some(previous_decoder) = self.video_decoder.as_ref() else {
+            return Ok(false);
+        };
+        if previous_decoder.backend() != DecoderBackend::AvCodec
+            || !previous_decoder.uses_avcodec_surface()
+        {
+            return Ok(false);
+        }
+        let stream_index = previous_decoder.stream_index();
+        let codec = codec_parameters_for(&self.codec_parameters, stream_index)?.codec_name();
+        self.mark_video_decoder_unavailable(format!(
+            "AVCodec Surface decoder is being reopened for seek to {:.3}s",
+            position.as_secs_f64(),
+        ));
+        let previous_decoder = self
+            .video_decoder
+            .take()
+            .expect("AVCodec Surface decoder exists");
+        drop(previous_decoder);
+        let parameters = codec_parameters_for(&self.codec_parameters, stream_index)?;
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "ohos_avcodec_seek_reopen",
+                "stage": "begin",
+                "mode": "surface_native_buffer",
+                "codec": codec.as_deref(),
+                "targetSeconds": position.as_secs_f64(),
+            })
+            .to_string(),
+        );
+        match Decoder::open_owned_with_config(parameters, DecoderConfig::avcodec()) {
+            Ok(decoder) => {
+                self.video_decoder = Some(decoder);
+                self.info.video_decode_backend = Some(DecoderBackend::AvCodec);
+                self.clear_video_decoder_unavailable();
+                let event = VideoDecoderEvent {
+                    stage: "seek_reopen_avcodec_surface".to_string(),
+                    requested_backend: DecoderBackend::AvCodec,
+                    previous_backend: Some(DecoderBackend::AvCodec),
+                    active_backend: DecoderBackend::AvCodec,
+                    fallback_count: self.video_decoder_fallbacks,
+                    codec: codec.clone(),
+                    pixel_format: None,
+                    line_sizes: None,
+                    reason: None,
+                };
+                trace::diagnostic(event.structured_message());
+                self.video_decoder_events.push_back(event);
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "ohos_avcodec_seek_reopen",
+                        "stage": "ready",
+                        "mode": "surface_native_buffer",
+                        "codec": codec.as_deref(),
+                        "targetSeconds": position.as_secs_f64(),
+                    })
+                    .to_string(),
+                );
+            }
+            Err(error) => {
+                let reason = error.to_string();
+                self.fallback_video_decoder_to_software(
+                    "seek_reopen_avcodec_to_software",
+                    reason,
+                    None,
+                )?;
             }
         }
         Ok(true)
@@ -1959,9 +2038,10 @@ impl PlaybackSession {
             self.reset_video_packet_stall_state();
             routed_any = true;
         }
-        // D3D11VA deliberately holds packets while its bounded frame queue is
-        // full. That is consumer backpressure, not a decoder send/receive
-        // deadlock, so a previous codec-stall deadline must not leak into it.
+        // Hardware surface decoders deliberately hold packets while their
+        // bounded frame queue is full. That is consumer backpressure, not a
+        // decoder send/receive deadlock, so a previous codec-stall deadline
+        // must not leak into it.
         self.reset_video_packet_stall_state();
         Ok(routed_any)
     }
@@ -2552,21 +2632,23 @@ impl PlaybackSession {
     }
 
     fn should_defer_video_packet(&self) -> bool {
-        self.video_decoder
-            .as_ref()
-            .is_some_and(|decoder| decoder.backend() == DecoderBackend::D3d11va)
-            && self.video_frames.len() >= D3D11VA_VIDEO_FRAME_QUEUE_LIMIT
+        self.video_decoder.as_ref().is_some_and(|decoder| {
+            (decoder.backend() == DecoderBackend::D3d11va
+                && self.video_frames.len() >= D3D11VA_VIDEO_FRAME_QUEUE_LIMIT)
+                || (decoder.uses_avcodec_surface()
+                    && self.video_frames.len() >= AVCODEC_SURFACE_VIDEO_FRAME_QUEUE_LIMIT)
+        })
     }
 
     fn active_video_frame_queue_limit(&self) -> usize {
-        if self
-            .video_decoder
-            .as_ref()
-            .is_some_and(|decoder| decoder.backend() == DecoderBackend::D3d11va)
-        {
-            D3D11VA_VIDEO_FRAME_QUEUE_LIMIT
-        } else {
-            self.queue_limits.video_frames
+        match self.video_decoder.as_ref() {
+            Some(decoder) if decoder.backend() == DecoderBackend::D3d11va => {
+                D3D11VA_VIDEO_FRAME_QUEUE_LIMIT
+            }
+            Some(decoder) if decoder.uses_avcodec_surface() => {
+                AVCODEC_SURFACE_VIDEO_FRAME_QUEUE_LIMIT
+            }
+            _ => self.queue_limits.video_frames,
         }
     }
 

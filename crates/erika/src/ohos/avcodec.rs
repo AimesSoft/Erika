@@ -1,14 +1,19 @@
 use std::collections::VecDeque;
 use std::ffi::{c_char, c_void};
-use std::ptr;
+use std::ptr::{self, NonNull};
 use std::slice;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
+use std::time::{Duration, Instant};
 
 const AV_ERR_OK: i32 = 0;
 const AV_PIXEL_FORMAT_NV12: i32 = 2;
+const AV_PIXEL_FORMAT_SURFACE_FORMAT: i32 = 4;
 const AVCODEC_BUFFER_FLAGS_EOS: u32 = 1 << 0;
 const AVCODEC_BUFFER_FLAGS_SYNC_FRAME: u32 = 1 << 1;
 const DEFAULT_MAX_INPUT_SIZE: usize = 4 * 1024 * 1024;
+const NATIVE_ERROR_NO_BUFFER: i32 = 40_601_000;
+const NATIVEBUFFER_USAGE_HW_TEXTURE: u64 = 1 << 9;
 
 #[repr(C)]
 struct OH_AVCodec {
@@ -23,6 +28,45 @@ struct OH_AVFormat {
 #[repr(C)]
 struct OH_AVBuffer {
     _private: [u8; 0],
+}
+
+#[repr(C)]
+struct OH_NativeImage {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+struct OHNativeWindow {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+struct OHNativeWindowBuffer {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+struct OH_NativeBuffer {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OhosNativeBufferConfig {
+    pub width: i32,
+    pub height: i32,
+    pub format: i32,
+    pub usage: i32,
+    pub stride: i32,
+}
+
+type OhOnFrameAvailable = unsafe extern "C" fn(*mut c_void);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct OH_OnFrameAvailableListener {
+    context: *mut c_void,
+    on_frame_available: Option<OhOnFrameAvailable>,
 }
 
 #[repr(C)]
@@ -67,6 +111,8 @@ unsafe extern "C" {
     fn OH_VideoDecoder_Flush(codec: *mut OH_AVCodec) -> i32;
     fn OH_VideoDecoder_PushInputBuffer(codec: *mut OH_AVCodec, index: u32) -> i32;
     fn OH_VideoDecoder_FreeOutputBuffer(codec: *mut OH_AVCodec, index: u32) -> i32;
+    fn OH_VideoDecoder_SetSurface(codec: *mut OH_AVCodec, window: *mut OHNativeWindow) -> i32;
+    fn OH_VideoDecoder_RenderOutputBuffer(codec: *mut OH_AVCodec, index: u32) -> i32;
 }
 
 #[link(name = "native_media_core")]
@@ -96,6 +142,47 @@ unsafe extern "C" {
     ) -> i32;
     fn OH_AVBuffer_GetAddr(buffer: *mut OH_AVBuffer) -> *mut u8;
     fn OH_AVBuffer_GetCapacity(buffer: *mut OH_AVBuffer) -> i32;
+}
+
+#[link(name = "native_image")]
+unsafe extern "C" {
+    fn OH_NativeImage_Create(texture_id: u32, texture_target: u32) -> *mut OH_NativeImage;
+    fn OH_ConsumerSurface_Create() -> *mut OH_NativeImage;
+    fn OH_NativeImage_AttachContext(image: *mut OH_NativeImage, texture_id: u32) -> i32;
+    fn OH_ConsumerSurface_SetDefaultUsage(image: *mut OH_NativeImage, usage: u64) -> i32;
+    fn OH_NativeImage_AcquireNativeWindow(image: *mut OH_NativeImage) -> *mut OHNativeWindow;
+    fn OH_NativeImage_SetOnFrameAvailableListener(
+        image: *mut OH_NativeImage,
+        listener: OH_OnFrameAvailableListener,
+    ) -> i32;
+    fn OH_NativeImage_UnsetOnFrameAvailableListener(image: *mut OH_NativeImage) -> i32;
+    fn OH_NativeImage_UpdateSurfaceImage(image: *mut OH_NativeImage) -> i32;
+    fn OH_NativeImage_GetTransformMatrixV2(image: *mut OH_NativeImage, matrix: *mut f32) -> i32;
+    fn OH_NativeImage_AcquireNativeWindowBuffer(
+        image: *mut OH_NativeImage,
+        native_window_buffer: *mut *mut OHNativeWindowBuffer,
+        fence_fd: *mut i32,
+    ) -> i32;
+    fn OH_NativeImage_ReleaseNativeWindowBuffer(
+        image: *mut OH_NativeImage,
+        native_window_buffer: *mut OHNativeWindowBuffer,
+        fence_fd: i32,
+    ) -> i32;
+    fn OH_NativeImage_Destroy(image: *mut *mut OH_NativeImage);
+}
+
+#[link(name = "native_buffer")]
+unsafe extern "C" {
+    fn OH_NativeBuffer_FromNativeWindowBuffer(
+        native_window_buffer: *mut OHNativeWindowBuffer,
+        buffer: *mut *mut OH_NativeBuffer,
+    ) -> i32;
+    fn OH_NativeBuffer_GetConfig(buffer: *mut OH_NativeBuffer, config: *mut OhosNativeBufferConfig);
+}
+
+#[link(name = "native_window")]
+unsafe extern "C" {
+    fn OH_NativeWindow_DestroyNativeWindowBuffer(buffer: *mut OHNativeWindowBuffer);
 }
 
 #[link(name = "native_media_codecbase")]
@@ -148,6 +235,470 @@ pub enum OhosDecoderOutput<T> {
     NeedMoreInput,
     Frame(T),
     EndOfStream,
+}
+
+#[derive(Clone)]
+pub struct DecodedSurfaceFrame {
+    pub image: Arc<OhosNativeBufferImage>,
+    pub width: u32,
+    pub height: u32,
+    pub pts_micros: i64,
+}
+
+struct SurfaceAvailability {
+    pending: usize,
+    shutting_down: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OhosAvCodecSurfaceMode {
+    ExternalTexture,
+    NativeBuffer,
+}
+
+pub struct OhosAvCodecSurface {
+    image: *mut OH_NativeImage,
+    window: *mut OHNativeWindow,
+    mode: OhosAvCodecSurfaceMode,
+    availability: Mutex<SurfaceAvailability>,
+    available: Condvar,
+    consumer: Mutex<()>,
+    discarded_external_frames: AtomicUsize,
+}
+
+unsafe impl Send for OhosAvCodecSurface {}
+unsafe impl Sync for OhosAvCodecSurface {}
+
+static REGISTERED_EXTERNAL_SURFACE: Mutex<Option<Weak<OhosAvCodecSurface>>> = Mutex::new(None);
+
+fn wait_acquire_fence(fence_fd: i32, timeout: Duration) -> Result<(), String> {
+    if fence_fd < 0 {
+        return Ok(());
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("timed out waiting for OHOS NativeBuffer acquire fence".to_string());
+        }
+        let timeout_ms = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+        let mut descriptor = libc::pollfd {
+            fd: fence_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+        if result > 0 {
+            unsafe { libc::close(fence_fd) };
+            return Ok(());
+        }
+        if result == 0 {
+            return Err("timed out waiting for OHOS NativeBuffer acquire fence".to_string());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(format!(
+                "failed waiting for OHOS NativeBuffer acquire fence: {error}"
+            ));
+        }
+    }
+}
+
+impl OhosAvCodecSurface {
+    pub fn new_external_texture(texture_id: u32, texture_target: u32) -> Result<Arc<Self>, String> {
+        let image = unsafe { OH_NativeImage_Create(texture_id, texture_target) };
+        if image.is_null() {
+            return Err(format!(
+                "OH_NativeImage_Create returned null for texture {texture_id} target 0x{texture_target:x}"
+            ));
+        }
+        let attach_code = unsafe { OH_NativeImage_AttachContext(image, texture_id) };
+        if attach_code != AV_ERR_OK {
+            let mut image = image;
+            unsafe { OH_NativeImage_Destroy(&mut image) };
+            return Err(format!(
+                "OH_NativeImage_AttachContext failed with {attach_code}"
+            ));
+        }
+        let usage_code =
+            unsafe { OH_ConsumerSurface_SetDefaultUsage(image, NATIVEBUFFER_USAGE_HW_TEXTURE) };
+        if usage_code != AV_ERR_OK {
+            let mut image = image;
+            unsafe { OH_NativeImage_Destroy(&mut image) };
+            return Err(format!(
+                "OH_ConsumerSurface_SetDefaultUsage(HW_TEXTURE) failed with {usage_code}"
+            ));
+        }
+        Self::from_image(image, OhosAvCodecSurfaceMode::ExternalTexture)
+    }
+
+    pub fn new_native_buffer() -> Result<Arc<Self>, String> {
+        let image = unsafe { OH_ConsumerSurface_Create() };
+        if image.is_null() {
+            return Err("OH_ConsumerSurface_Create returned null".to_string());
+        }
+        let usage_code =
+            unsafe { OH_ConsumerSurface_SetDefaultUsage(image, NATIVEBUFFER_USAGE_HW_TEXTURE) };
+        if usage_code != AV_ERR_OK {
+            let mut image = image;
+            unsafe { OH_NativeImage_Destroy(&mut image) };
+            return Err(format!(
+                "OH_ConsumerSurface_SetDefaultUsage(HW_TEXTURE) failed with {usage_code}"
+            ));
+        }
+        Self::from_image(image, OhosAvCodecSurfaceMode::NativeBuffer)
+    }
+
+    fn from_image(
+        image: *mut OH_NativeImage,
+        mode: OhosAvCodecSurfaceMode,
+    ) -> Result<Arc<Self>, String> {
+        let window = unsafe { OH_NativeImage_AcquireNativeWindow(image) };
+        if window.is_null() {
+            let mut image = image;
+            unsafe { OH_NativeImage_Destroy(&mut image) };
+            return Err("OH_NativeImage_AcquireNativeWindow returned null".to_string());
+        }
+        let surface = Arc::new(Self {
+            image,
+            window,
+            mode,
+            availability: Mutex::new(SurfaceAvailability {
+                pending: 0,
+                shutting_down: false,
+            }),
+            available: Condvar::new(),
+            consumer: Mutex::new(()),
+            discarded_external_frames: AtomicUsize::new(0),
+        });
+        let listener = OH_OnFrameAvailableListener {
+            context: Arc::as_ptr(&surface).cast_mut().cast(),
+            on_frame_available: Some(on_surface_frame_available),
+        };
+        let code = unsafe { OH_NativeImage_SetOnFrameAvailableListener(image, listener) };
+        if code != AV_ERR_OK {
+            return Err(format!(
+                "OH_NativeImage_SetOnFrameAvailableListener failed with {code}"
+            ));
+        }
+        Ok(surface)
+    }
+
+    fn window(&self) -> *mut OHNativeWindow {
+        self.window
+    }
+
+    pub fn acquire_frame(
+        self: &Arc<Self>,
+        timeout: Duration,
+    ) -> Result<Arc<OhosNativeBufferImage>, String> {
+        let deadline = Instant::now() + timeout;
+        let mut availability = self
+            .availability
+            .lock()
+            .map_err(|_| "OHOS surface availability lock was poisoned".to_string())?;
+        while availability.pending == 0 && !availability.shutting_down {
+            let now = Instant::now();
+            if now >= deadline {
+                return Err("timed out waiting for decoded Surface buffer".to_string());
+            }
+            let wait = deadline.saturating_duration_since(now);
+            let (next, result) = self
+                .available
+                .wait_timeout(availability, wait)
+                .map_err(|_| "OHOS surface availability wait was poisoned".to_string())?;
+            availability = next;
+            if result.timed_out() && availability.pending == 0 {
+                return Err("timed out waiting for decoded Surface buffer".to_string());
+            }
+        }
+        if availability.shutting_down {
+            return Err("decoded Surface is shutting down".to_string());
+        }
+        availability.pending = availability.pending.saturating_sub(1);
+        drop(availability);
+        let payload = match self.mode {
+            OhosAvCodecSurfaceMode::ExternalTexture => {
+                NativeBufferImagePayload::ExternalTexture { pending: true }
+            }
+            OhosAvCodecSurfaceMode::NativeBuffer => {
+                let _consumer = self
+                    .consumer
+                    .lock()
+                    .map_err(|_| "OHOS NativeImage acquire lock was poisoned".to_string())?;
+                let mut native_window_buffer = ptr::null_mut();
+                let mut fence_fd = -1;
+                let acquire_code = unsafe {
+                    OH_NativeImage_AcquireNativeWindowBuffer(
+                        self.image,
+                        &mut native_window_buffer,
+                        &mut fence_fd,
+                    )
+                };
+                if acquire_code != AV_ERR_OK || native_window_buffer.is_null() {
+                    if fence_fd >= 0 {
+                        unsafe { libc::close(fence_fd) };
+                    }
+                    return Err(format!(
+                        "OH_NativeImage_AcquireNativeWindowBuffer failed with {acquire_code}"
+                    ));
+                }
+                if let Err(error) = wait_acquire_fence(fence_fd, timeout) {
+                    let _ = unsafe {
+                        OH_NativeImage_ReleaseNativeWindowBuffer(
+                            self.image,
+                            native_window_buffer,
+                            fence_fd,
+                        )
+                    };
+                    return Err(error);
+                }
+                let mut native_buffer = ptr::null_mut();
+                let convert_code = unsafe {
+                    OH_NativeBuffer_FromNativeWindowBuffer(native_window_buffer, &mut native_buffer)
+                };
+                if convert_code != AV_ERR_OK || native_buffer.is_null() {
+                    let _ = unsafe {
+                        OH_NativeImage_ReleaseNativeWindowBuffer(
+                            self.image,
+                            native_window_buffer,
+                            -1,
+                        )
+                    };
+                    return Err(format!(
+                        "OH_NativeBuffer_FromNativeWindowBuffer failed with {convert_code}"
+                    ));
+                }
+                let mut config = OhosNativeBufferConfig::default();
+                unsafe { OH_NativeBuffer_GetConfig(native_buffer, &mut config) };
+                if config.width <= 0 || config.height <= 0 {
+                    let _ = unsafe {
+                        OH_NativeImage_ReleaseNativeWindowBuffer(
+                            self.image,
+                            native_window_buffer,
+                            -1,
+                        )
+                    };
+                    return Err(format!("invalid OH_NativeBuffer config {config:?}"));
+                }
+                NativeBufferImagePayload::NativeBuffer {
+                    native_window_buffer,
+                    native_buffer,
+                    config,
+                }
+            }
+        };
+        Ok(Arc::new(OhosNativeBufferImage {
+            source: Arc::clone(self),
+            state: Mutex::new(NativeBufferImageState {
+                payload: Some(payload),
+            }),
+        }))
+    }
+
+    fn update_external_texture(&self) -> Result<Option<[f32; 16]>, String> {
+        self.drain_discarded_external_frames()?;
+        let _consumer = self
+            .consumer
+            .lock()
+            .map_err(|_| "OHOS NativeImage update lock was poisoned".to_string())?;
+        let update_code = unsafe { OH_NativeImage_UpdateSurfaceImage(self.image) };
+        if update_code == NATIVE_ERROR_NO_BUFFER {
+            return Ok(None);
+        }
+        check_avcodec(update_code, "OH_NativeImage_UpdateSurfaceImage")?;
+        let mut transform = [0.0; 16];
+        check_avcodec(
+            unsafe { OH_NativeImage_GetTransformMatrixV2(self.image, transform.as_mut_ptr()) },
+            "OH_NativeImage_GetTransformMatrixV2",
+        )?;
+        Ok(Some(transform))
+    }
+
+    pub(crate) fn drain_discarded_external_frames(&self) -> Result<usize, String> {
+        let discarded = self.discarded_external_frames.swap(0, Ordering::AcqRel);
+        if discarded == 0 {
+            return Ok(0);
+        }
+        let _consumer = self
+            .consumer
+            .lock()
+            .map_err(|_| "OHOS NativeImage update lock was poisoned".to_string())?;
+        let mut drained = 0;
+        for index in 0..discarded {
+            let update_code = unsafe { OH_NativeImage_UpdateSurfaceImage(self.image) };
+            if update_code == NATIVE_ERROR_NO_BUFFER {
+                self.discarded_external_frames
+                    .fetch_add(discarded - index, Ordering::AcqRel);
+                break;
+            }
+            check_avcodec(update_code, "OH_NativeImage_UpdateSurfaceImage(discarded)")?;
+            drained += 1;
+        }
+        Ok(drained)
+    }
+
+    fn mark_external_frame_discarded(&self) {
+        self.discarded_external_frames
+            .fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn reset_pending_callbacks_after_flush(&self) -> Result<(), String> {
+        let mut availability = self
+            .availability
+            .lock()
+            .map_err(|_| "OHOS surface availability lock was poisoned".to_string())?;
+        availability.pending = 0;
+        Ok(())
+    }
+
+    fn prepare_for_decoder_attachment(&self) -> Result<(), String> {
+        self.reset_pending_callbacks_after_flush()?;
+        self.discarded_external_frames.store(0, Ordering::Release);
+        Ok(())
+    }
+
+    fn release_native_buffer(
+        &self,
+        native_window_buffer: *mut OHNativeWindowBuffer,
+    ) -> Result<(), String> {
+        let _consumer = self
+            .consumer
+            .lock()
+            .map_err(|_| "OHOS NativeImage release lock was poisoned".to_string())?;
+        let code = unsafe {
+            OH_NativeImage_ReleaseNativeWindowBuffer(self.image, native_window_buffer, -1)
+        };
+        if code == AV_ERR_OK {
+            Ok(())
+        } else {
+            unsafe { OH_NativeWindow_DestroyNativeWindowBuffer(native_window_buffer) };
+            Err(format!(
+                "OH_NativeImage_ReleaseNativeWindowBuffer failed with {code}"
+            ))
+        }
+    }
+}
+
+pub fn register_external_avcodec_surface(surface: &Arc<OhosAvCodecSurface>) -> Result<(), String> {
+    let mut registered = REGISTERED_EXTERNAL_SURFACE
+        .lock()
+        .map_err(|_| "OHOS external AVCodec surface registry lock was poisoned".to_string())?;
+    *registered = Some(Arc::downgrade(surface));
+    Ok(())
+}
+
+fn registered_external_avcodec_surface() -> Option<Arc<OhosAvCodecSurface>> {
+    let surface = REGISTERED_EXTERNAL_SURFACE
+        .lock()
+        .ok()
+        .and_then(|registered| registered.as_ref().and_then(Weak::upgrade))?;
+    surface.prepare_for_decoder_attachment().ok()?;
+    Some(surface)
+}
+
+impl Drop for OhosAvCodecSurface {
+    fn drop(&mut self) {
+        if let Ok(mut availability) = self.availability.lock() {
+            availability.shutting_down = true;
+            self.available.notify_all();
+        }
+        if !self.image.is_null() {
+            let _ = unsafe { OH_NativeImage_UnsetOnFrameAvailableListener(self.image) };
+            unsafe { OH_NativeImage_Destroy(&mut self.image) };
+        }
+        self.window = ptr::null_mut();
+    }
+}
+
+enum NativeBufferImagePayload {
+    ExternalTexture {
+        pending: bool,
+    },
+    NativeBuffer {
+        native_window_buffer: *mut OHNativeWindowBuffer,
+        native_buffer: *mut OH_NativeBuffer,
+        config: OhosNativeBufferConfig,
+    },
+}
+
+struct NativeBufferImageState {
+    payload: Option<NativeBufferImagePayload>,
+}
+
+pub struct OhosNativeBufferImage {
+    source: Arc<OhosAvCodecSurface>,
+    state: Mutex<NativeBufferImageState>,
+}
+
+unsafe impl Send for OhosNativeBufferImage {}
+unsafe impl Sync for OhosNativeBufferImage {}
+
+impl OhosNativeBufferImage {
+    pub fn update_external_texture(&self) -> Result<Option<[f32; 16]>, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "OHOS native image frame lock was poisoned".to_string())?;
+        match state.payload.as_mut() {
+            Some(NativeBufferImagePayload::ExternalTexture { pending }) if *pending => {
+                let transform = self.source.update_external_texture()?;
+                *pending = false;
+                Ok(transform)
+            }
+            Some(NativeBufferImagePayload::ExternalTexture { .. }) => {
+                Err("OHOS external texture frame was already updated".to_string())
+            }
+            Some(NativeBufferImagePayload::NativeBuffer { .. }) => {
+                Err("OHOS NativeBuffer frame cannot update an external OES texture".to_string())
+            }
+            None => Err("OHOS native image frame was already released".to_string()),
+        }
+    }
+
+    pub fn native_buffer(&self) -> Result<(NonNull<c_void>, OhosNativeBufferConfig), String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "OHOS native buffer image lock was poisoned".to_string())?;
+        match state.payload.as_ref() {
+            Some(NativeBufferImagePayload::NativeBuffer {
+                native_buffer,
+                config,
+                ..
+            }) => NonNull::new((*native_buffer).cast())
+                .map(|buffer| (buffer, *config))
+                .ok_or_else(|| "OHOS NativeBuffer pointer is null".to_string()),
+            Some(NativeBufferImagePayload::ExternalTexture { .. }) => {
+                Err("OHOS external OES frame has no acquired NativeBuffer".to_string())
+            }
+            None => Err("OHOS NativeBuffer frame was already released".to_string()),
+        }
+    }
+
+    pub fn release_to_surface(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "OHOS native buffer image lock was poisoned".to_string())?;
+        match state.payload.take() {
+            Some(NativeBufferImagePayload::ExternalTexture { pending: true }) => {
+                self.source.mark_external_frame_discarded();
+                Ok(())
+            }
+            Some(NativeBufferImagePayload::ExternalTexture { pending: false }) | None => Ok(()),
+            Some(NativeBufferImagePayload::NativeBuffer {
+                native_window_buffer,
+                ..
+            }) => self.source.release_native_buffer(native_window_buffer),
+        }
+    }
+}
+
+impl Drop for OhosNativeBufferImage {
+    fn drop(&mut self) {
+        let _ = self.release_to_surface();
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -203,6 +754,7 @@ pub struct OhosVideoDecoder {
     nal_length_size: Option<usize>,
     parameter_sets: Vec<u8>,
     parameter_sets_sent: bool,
+    surface: Option<Arc<OhosAvCodecSurface>>,
     started: bool,
 }
 
@@ -245,6 +797,7 @@ impl OhosVideoDecoder {
             nal_length_size,
             parameter_sets,
             parameter_sets_sent: false,
+            surface: registered_external_avcodec_surface(),
             started: false,
         };
         decoder.initialize(width, height, &codec_config)?;
@@ -286,7 +839,11 @@ impl OhosVideoDecoder {
             set_format_int(
                 format,
                 unsafe { OH_MD_KEY_PIXEL_FORMAT },
-                AV_PIXEL_FORMAT_NV12,
+                if self.surface.is_some() {
+                    AV_PIXEL_FORMAT_SURFACE_FORMAT
+                } else {
+                    AV_PIXEL_FORMAT_NV12
+                },
                 "OH_MD_KEY_PIXEL_FORMAT",
             )?;
             if !codec_config.is_empty()
@@ -309,6 +866,12 @@ impl OhosVideoDecoder {
         unsafe { OH_AVFormat_Destroy(format) };
         format_result?;
 
+        if let Some(surface) = self.surface.as_ref() {
+            check_avcodec(
+                unsafe { OH_VideoDecoder_SetSurface(self.codec, surface.window()) },
+                "OH_VideoDecoder_SetSurface",
+            )?;
+        }
         check_avcodec(
             unsafe { OH_VideoDecoder_Prepare(self.codec) },
             "OH_VideoDecoder_Prepare",
@@ -462,12 +1025,53 @@ impl OhosVideoDecoder {
         }
     }
 
+    pub fn receive_surface_frame(
+        &mut self,
+    ) -> Result<OhosDecoderOutput<DecodedSurfaceFrame>, String> {
+        self.check_callback_error()?;
+        let Some(surface) = self.surface.as_ref().cloned() else {
+            return Err("AVCodec decoder is not configured for Surface output".to_string());
+        };
+        let (output, layout) = {
+            let mut state = self.state()?;
+            let Some(output) = state.outputs.pop_front() else {
+                return Ok(OhosDecoderOutput::NeedMoreInput);
+            };
+            (output, state.layout)
+        };
+        if output.attr.flags & AVCODEC_BUFFER_FLAGS_EOS != 0 && output.attr.size <= 0 {
+            check_avcodec(
+                unsafe { OH_VideoDecoder_FreeOutputBuffer(self.codec, output.index) },
+                "OH_VideoDecoder_FreeOutputBuffer(surface eof)",
+            )?;
+            return Ok(OhosDecoderOutput::EndOfStream);
+        }
+        check_avcodec(
+            unsafe { OH_VideoDecoder_RenderOutputBuffer(self.codec, output.index) },
+            "OH_VideoDecoder_RenderOutputBuffer",
+        )?;
+        let image = surface.acquire_frame(Duration::from_millis(100))?;
+        Ok(OhosDecoderOutput::Frame(DecodedSurfaceFrame {
+            image,
+            width: layout.width,
+            height: layout.height,
+            pts_micros: output.attr.pts,
+        }))
+    }
+
+    pub fn uses_surface(&self) -> bool {
+        self.surface.is_some()
+    }
+
     pub fn flush(&mut self) -> Result<(), String> {
         self.check_callback_error()?;
         check_avcodec(
             unsafe { OH_VideoDecoder_Flush(self.codec) },
             "OH_VideoDecoder_Flush",
         )?;
+        if let Some(surface) = &self.surface {
+            surface.reset_pending_callbacks_after_flush()?;
+        }
         {
             let mut state = self.state()?;
             state.inputs.clear();
@@ -495,6 +1099,17 @@ impl OhosVideoDecoder {
             .state
             .lock()
             .map_err(|_| "HarmonyOS AVCodec callback state lock was poisoned".to_string())
+    }
+}
+
+unsafe extern "C" fn on_surface_frame_available(context: *mut c_void) {
+    if context.is_null() {
+        return;
+    }
+    let surface = unsafe { &*context.cast::<OhosAvCodecSurface>() };
+    if let Ok(mut availability) = surface.availability.lock() {
+        availability.pending = availability.pending.saturating_add(1);
+        surface.available.notify_one();
     }
 }
 

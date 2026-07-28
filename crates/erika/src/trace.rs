@@ -26,7 +26,9 @@ pub(crate) fn diagnostic(line: impl AsRef<str>) {
     let line = line.as_ref();
     #[cfg(target_os = "android")]
     android_log(line);
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_env = "ohos")]
+    ohos_log(line);
+    #[cfg(not(any(target_os = "android", target_env = "ohos")))]
     eprintln!("{line}");
 }
 
@@ -49,6 +51,43 @@ fn android_log(line: &str) {
         let _ = __android_log_write(
             ANDROID_LOG_WARN,
             TAG.as_ptr().cast::<c_char>(),
+            message.as_ptr(),
+        );
+    }
+}
+
+#[cfg(target_env = "ohos")]
+fn ohos_log(line: &str) {
+    use std::ffi::{CString, c_char, c_int, c_uint};
+
+    const LOG_APP: c_int = 0;
+    const LOG_WARN: c_int = 5;
+    const ERIKA_LOG_DOMAIN: c_uint = 0xE901;
+    const TAG: &[u8] = b"Erika\0";
+    const PUBLIC_STRING_FORMAT: &[u8] = b"%{public}s\0";
+
+    #[link(name = "hilog_ndk.z")]
+    unsafe extern "C" {
+        fn OH_LOG_Print(
+            log_type: c_int,
+            level: c_int,
+            domain: c_uint,
+            tag: *const c_char,
+            format: *const c_char,
+            ...
+        ) -> c_int;
+    }
+
+    let Ok(message) = CString::new(line.replace('\0', "\\0")) else {
+        return;
+    };
+    unsafe {
+        let _ = OH_LOG_Print(
+            LOG_APP,
+            LOG_WARN,
+            ERIKA_LOG_DOMAIN,
+            TAG.as_ptr().cast::<c_char>(),
+            PUBLIC_STRING_FORMAT.as_ptr().cast::<c_char>(),
             message.as_ptr(),
         );
     }
