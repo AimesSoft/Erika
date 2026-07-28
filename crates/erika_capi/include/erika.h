@@ -169,6 +169,45 @@ typedef struct ErikaPresenterConfig {
   int32_t luma_upscaler;
 } ErikaPresenterConfig;
 
+#define ERIKA_SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS (1u << 2)
+#define ERIKA_SUBTITLE_OVERRIDE_FONT_NAME (1u << 3)
+#define ERIKA_SUBTITLE_OVERRIDE_COLORS (1u << 4)
+#define ERIKA_SUBTITLE_OVERRIDE_ATTRIBUTES (1u << 5)
+#define ERIKA_SUBTITLE_OVERRIDE_BORDER (1u << 6)
+#define ERIKA_SUBTITLE_OVERRIDE_ALIGNMENT (1u << 7)
+#define ERIKA_SUBTITLE_OVERRIDE_MARGINS (1u << 8)
+#define ERIKA_SUBTITLE_OVERRIDE_BLUR (1u << 11)
+#define ERIKA_SUBTITLE_OVERRIDE_ALL                                              \
+  (ERIKA_SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS |                                   \
+   ERIKA_SUBTITLE_OVERRIDE_FONT_NAME | ERIKA_SUBTITLE_OVERRIDE_COLORS |         \
+   ERIKA_SUBTITLE_OVERRIDE_ATTRIBUTES | ERIKA_SUBTITLE_OVERRIDE_BORDER |        \
+   ERIKA_SUBTITLE_OVERRIDE_ALIGNMENT | ERIKA_SUBTITLE_OVERRIDE_MARGINS |        \
+   ERIKA_SUBTITLE_OVERRIDE_BLUR)
+
+typedef struct ErikaSubtitleStyle {
+  const char *font_family;
+  const char *font_file_path;
+  uint32_t primary_color_rgba;
+  uint32_t outline_color_rgba;
+  double font_size;
+  double outline_width;
+  bool bold;
+  bool italic;
+  bool underline;
+  bool strike_out;
+  double spacing;
+  double scale_x_percent;
+  double scale_y_percent;
+  int32_t border_style;
+  double shadow_depth;
+  double blur;
+  int32_t alignment;
+  int32_t margin_left;
+  int32_t margin_right;
+  int32_t margin_vertical;
+  uint32_t override_mask;
+} ErikaSubtitleStyle;
+
 typedef struct ErikaSurfaceOutputCapabilities {
   bool extended_linear;
   bool direct_composition;
@@ -437,24 +476,15 @@ ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *handle, double volu
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *handle, int32_t mode);
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *handle, double scale);
 /* Fallback subtitle font. NULL or empty clears that half of the selection.
- * A container ASS script keeps its own fonts unless force_override is set
- * through erika_presenter_set_subtitle_style. */
+ * A container ASS script keeps its own font unless the font-name override bit
+ * is passed through erika_presenter_set_subtitle_style. */
 ErikaStatus erika_presenter_set_subtitle_font(
     ErikaPresenterHandle *handle,
     const char *family,
     const char *file_path);
-/* Fallback subtitle look: colours as 0xRRGGBBAA, plus the base font size and
- * outline width in ASS script units, both still multiplied by the subtitle
- * scale. With force_override set, these and the custom font replace the styling
- * ASS dialogue events request instead of only filling in what they leave
- * unspecified. */
 ErikaStatus erika_presenter_set_subtitle_style(
     ErikaPresenterHandle *handle,
-    uint32_t primary_rgba,
-    uint32_t outline_rgba,
-    double font_size,
-    double outline_width,
-    bool force_override);
+    ErikaSubtitleStyle style);
 ErikaStatus erika_presenter_set_output_headroom(
     ErikaPresenterHandle *handle,
     float headroom,

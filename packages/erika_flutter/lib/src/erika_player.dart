@@ -18,6 +18,23 @@ const double kErikaDefaultSubtitleFontSize = 48.0;
 /// Base subtitle outline width in ASS script units, before the subtitle scale.
 const double kErikaDefaultSubtitleOutlineWidth = 2.0;
 
+const int kErikaSubtitleOverrideFontSizeFields = 1 << 2;
+const int kErikaSubtitleOverrideFontName = 1 << 3;
+const int kErikaSubtitleOverrideColors = 1 << 4;
+const int kErikaSubtitleOverrideAttributes = 1 << 5;
+const int kErikaSubtitleOverrideBorder = 1 << 6;
+const int kErikaSubtitleOverrideAlignment = 1 << 7;
+const int kErikaSubtitleOverrideMargins = 1 << 8;
+const int kErikaSubtitleOverrideBlur = 1 << 11;
+const int kErikaSubtitleOverrideAll = kErikaSubtitleOverrideFontSizeFields |
+    kErikaSubtitleOverrideFontName |
+    kErikaSubtitleOverrideColors |
+    kErikaSubtitleOverrideAttributes |
+    kErikaSubtitleOverrideBorder |
+    kErikaSubtitleOverrideAlignment |
+    kErikaSubtitleOverrideMargins |
+    kErikaSubtitleOverrideBlur;
+
 enum ErikaOutputMode {
   sdr(0),
   appleEdr(1),
@@ -471,9 +488,8 @@ class _ErikaDanmakuConfigPatch {
     this.blockBottom,
     this.blockScroll,
     List<String>? blockWords,
-  }) : blockWords = blockWords == null
-           ? null
-           : List<String>.unmodifiable(blockWords);
+  }) : blockWords =
+            blockWords == null ? null : List<String>.unmodifiable(blockWords);
 
   final bool? enabled;
   final double? fontSize;
@@ -555,39 +571,36 @@ class _ErikaDanmakuConfigPatch {
       enabled: _changed(enabled, previous?.enabled) ? enabled : null,
       fontSize: _changed(fontSize, previous?.fontSize) ? fontSize : null,
       opacity: _changed(opacity, previous?.opacity) ? opacity : null,
-      displayArea: _changed(displayArea, previous?.displayArea)
-          ? displayArea
-          : null,
+      displayArea:
+          _changed(displayArea, previous?.displayArea) ? displayArea : null,
       scrollDurationSeconds:
           _changed(scrollDurationSeconds, previous?.scrollDurationSeconds)
-          ? scrollDurationSeconds
-          : null,
+              ? scrollDurationSeconds
+              : null,
       scrollSpeedFactor:
           _changed(scrollSpeedFactor, previous?.scrollSpeedFactor)
-          ? scrollSpeedFactor
-          : null,
+              ? scrollSpeedFactor
+              : null,
       trackGapRatio: _changed(trackGapRatio, previous?.trackGapRatio)
           ? trackGapRatio
           : null,
-      outlineWidth: _changed(outlineWidth, previous?.outlineWidth)
-          ? outlineWidth
-          : null,
+      outlineWidth:
+          _changed(outlineWidth, previous?.outlineWidth) ? outlineWidth : null,
       shadowOffsetX: _changed(shadowOffsetX, previous?.shadowOffsetX)
           ? shadowOffsetX
           : null,
       shadowOffsetY: _changed(shadowOffsetY, previous?.shadowOffsetY)
           ? shadowOffsetY
           : null,
-      shadowStyle: _changed(shadowStyle, previous?.shadowStyle)
-          ? shadowStyle
-          : null,
+      shadowStyle:
+          _changed(shadowStyle, previous?.shadowStyle) ? shadowStyle : null,
       customFontFamily: _changed(customFontFamily, previous?.customFontFamily)
           ? customFontFamily
           : null,
       customFontFilePath:
           _changed(customFontFilePath, previous?.customFontFilePath)
-          ? customFontFilePath
-          : null,
+              ? customFontFilePath
+              : null,
       mergeDuplicates: _changed(mergeDuplicates, previous?.mergeDuplicates)
           ? mergeDuplicates
           : null,
@@ -596,24 +609,20 @@ class _ErikaDanmakuConfigPatch {
           : null,
       allowScrollOverwrite:
           _changed(allowScrollOverwrite, previous?.allowScrollOverwrite)
-          ? allowScrollOverwrite
-          : null,
-      maxQuantity: _changed(maxQuantity, previous?.maxQuantity)
-          ? maxQuantity
-          : null,
+              ? allowScrollOverwrite
+              : null,
+      maxQuantity:
+          _changed(maxQuantity, previous?.maxQuantity) ? maxQuantity : null,
       maxLinesPerMode: _changed(maxLinesPerMode, previous?.maxLinesPerMode)
           ? maxLinesPerMode
           : null,
       blockTop: _changed(blockTop, previous?.blockTop) ? blockTop : null,
-      blockBottom: _changed(blockBottom, previous?.blockBottom)
-          ? blockBottom
-          : null,
-      blockScroll: _changed(blockScroll, previous?.blockScroll)
-          ? blockScroll
-          : null,
-      blockWords: _changedList(blockWords, previous?.blockWords)
-          ? blockWords
-          : null,
+      blockBottom:
+          _changed(blockBottom, previous?.blockBottom) ? blockBottom : null,
+      blockScroll:
+          _changed(blockScroll, previous?.blockScroll) ? blockScroll : null,
+      blockWords:
+          _changedList(blockWords, previous?.blockWords) ? blockWords : null,
     );
   }
 
@@ -702,7 +711,21 @@ class ErikaPlayer {
   int _subtitleOutlineColorRgba = kErikaDefaultSubtitleOutlineColorRgba;
   double _subtitleFontSize = kErikaDefaultSubtitleFontSize;
   double _subtitleOutlineWidth = kErikaDefaultSubtitleOutlineWidth;
-  bool _subtitleForceOverride = false;
+  bool _subtitleBold = false;
+  bool _subtitleItalic = false;
+  bool _subtitleUnderline = false;
+  bool _subtitleStrikeOut = false;
+  double _subtitleSpacing = 0.0;
+  double _subtitleScaleXPercent = 100.0;
+  double _subtitleScaleYPercent = 100.0;
+  int _subtitleBorderStyle = 1;
+  double _subtitleShadowDepth = 0.0;
+  double _subtitleBlur = 0.0;
+  int _subtitleAlignment = 2;
+  int _subtitleMarginLeft = 48;
+  int _subtitleMarginRight = 48;
+  int _subtitleMarginVertical = 54;
+  int _subtitleOverrideMask = 0;
   final List<Completer<void>> _pendingDanmakuConfigCompleters =
       <Completer<void>>[];
 
@@ -796,12 +819,12 @@ class ErikaPlayer {
     });
   }
 
-  /// Sets the subtitle font, size, outline width and colours.
+  /// Sets the subtitle style.
   ///
   /// Values act as fallbacks: an ASS script keeps its own styling, and these
   /// only fill in what it leaves open, what the system cannot resolve, and the
-  /// look of plain-text (SRT/WebVTT) subtitles. Pass [forceOverride] to push
-  /// them onto dialogue that does carry its own styling.
+  /// look of plain-text (SRT/WebVTT) subtitles. Set bits in [overrideMask] to
+  /// push selected fields onto dialogue that carries its own styling.
   ///
   /// Colours are `0xRRGGBBAA`. [fontSize] and [outlineWidth] are in ASS script
   /// units (clamped to `8..400` and `0..32`), and [setSubtitleScale] still
@@ -817,7 +840,21 @@ class ErikaPlayer {
     int? outlineColorRgba,
     double? fontSize,
     double? outlineWidth,
-    bool? forceOverride,
+    bool? bold,
+    bool? italic,
+    bool? underline,
+    bool? strikeOut,
+    double? spacing,
+    double? scaleXPercent,
+    double? scaleYPercent,
+    int? borderStyle,
+    double? shadowDepth,
+    double? blur,
+    int? alignment,
+    int? marginLeft,
+    int? marginRight,
+    int? marginVertical,
+    int? overrideMask,
   }) async {
     final playerId = await ensureCreated();
     _subtitleFontFamily = fontFamily ?? _subtitleFontFamily;
@@ -826,11 +863,33 @@ class ErikaPlayer {
         _clampColorRgba(primaryColorRgba) ?? _subtitlePrimaryColorRgba;
     _subtitleOutlineColorRgba =
         _clampColorRgba(outlineColorRgba) ?? _subtitleOutlineColorRgba;
-    _subtitleFontSize =
-        _clampMetric(fontSize, 8.0, 400.0) ?? _subtitleFontSize;
+    _subtitleFontSize = _clampMetric(fontSize, 8.0, 400.0) ?? _subtitleFontSize;
     _subtitleOutlineWidth =
         _clampMetric(outlineWidth, 0.0, 32.0) ?? _subtitleOutlineWidth;
-    _subtitleForceOverride = forceOverride ?? _subtitleForceOverride;
+    _subtitleBold = bold ?? _subtitleBold;
+    _subtitleItalic = italic ?? _subtitleItalic;
+    _subtitleUnderline = underline ?? _subtitleUnderline;
+    _subtitleStrikeOut = strikeOut ?? _subtitleStrikeOut;
+    _subtitleSpacing = _clampMetric(spacing, -100.0, 100.0) ?? _subtitleSpacing;
+    _subtitleScaleXPercent =
+        _clampMetric(scaleXPercent, 1.0, 1000.0) ?? _subtitleScaleXPercent;
+    _subtitleScaleYPercent =
+        _clampMetric(scaleYPercent, 1.0, 1000.0) ?? _subtitleScaleYPercent;
+    _subtitleBorderStyle =
+        _validValue(borderStyle, const <int>{1, 3}) ?? _subtitleBorderStyle;
+    _subtitleShadowDepth =
+        _clampMetric(shadowDepth, 0.0, 32.0) ?? _subtitleShadowDepth;
+    _subtitleBlur = _clampMetric(blur, 0.0, 100.0) ?? _subtitleBlur;
+    _subtitleAlignment = _clampInt(alignment, 1, 9) ?? _subtitleAlignment;
+    _subtitleMarginLeft =
+        _clampInt(marginLeft, 0, 10000) ?? _subtitleMarginLeft;
+    _subtitleMarginRight =
+        _clampInt(marginRight, 0, 10000) ?? _subtitleMarginRight;
+    _subtitleMarginVertical =
+        _clampInt(marginVertical, 0, 10000) ?? _subtitleMarginVertical;
+    _subtitleOverrideMask = overrideMask == null
+        ? _subtitleOverrideMask
+        : overrideMask & kErikaSubtitleOverrideAll;
     await _invoke('setSubtitleStyle', <String, Object?>{
       'playerId': playerId,
       'fontFamily': _subtitleFontFamily ?? '',
@@ -839,8 +898,30 @@ class ErikaPlayer {
       'outlineColorRgba': _subtitleOutlineColorRgba,
       'fontSize': _subtitleFontSize,
       'outlineWidth': _subtitleOutlineWidth,
-      'forceOverride': _subtitleForceOverride,
+      'bold': _subtitleBold,
+      'italic': _subtitleItalic,
+      'underline': _subtitleUnderline,
+      'strikeOut': _subtitleStrikeOut,
+      'spacing': _subtitleSpacing,
+      'scaleXPercent': _subtitleScaleXPercent,
+      'scaleYPercent': _subtitleScaleYPercent,
+      'borderStyle': _subtitleBorderStyle,
+      'shadowDepth': _subtitleShadowDepth,
+      'blur': _subtitleBlur,
+      'alignment': _subtitleAlignment,
+      'marginLeft': _subtitleMarginLeft,
+      'marginRight': _subtitleMarginRight,
+      'marginVertical': _subtitleMarginVertical,
+      'overrideMask': _subtitleOverrideMask,
     });
+  }
+
+  static int? _validValue(int? value, Set<int> validValues) {
+    return value != null && validValues.contains(value) ? value : null;
+  }
+
+  static int? _clampInt(int? value, int min, int max) {
+    return value?.clamp(min, max);
   }
 
   static int? _clampColorRgba(int? value) {
@@ -947,11 +1028,11 @@ class ErikaPlayer {
     final playerId = await ensureCreated();
     final trackId = await _channel
         .invokeMethod<int>('addDanmakuTrackFile', <String, Object?>{
-          'playerId': playerId,
-          'uri': uri,
-          if (name != null) 'name': name,
-          'offsetMicros': offset.inMicroseconds,
-        });
+      'playerId': playerId,
+      'uri': uri,
+      if (name != null) 'name': name,
+      'offsetMicros': offset.inMicroseconds,
+    });
     if (trackId == null || trackId <= 0) {
       throw StateError('Erika danmaku track add returned no track id.');
     }
@@ -966,11 +1047,11 @@ class ErikaPlayer {
     final playerId = await ensureCreated();
     final trackId = await _channel
         .invokeMethod<int>('addDanmakuTrackJson', <String, Object?>{
-          'playerId': playerId,
-          'json': json,
-          if (name != null) 'name': name,
-          'offsetMicros': offset.inMicroseconds,
-        });
+      'playerId': playerId,
+      'json': json,
+      if (name != null) 'name': name,
+      'offsetMicros': offset.inMicroseconds,
+    });
     if (trackId == null || trackId <= 0) {
       throw StateError('Erika danmaku track add returned no track id.');
     }
@@ -1302,8 +1383,7 @@ class ErikaPlayer {
   }
 
   Future<int> _create() async {
-    final requestedHeadroom =
-        edrHeadroom ??
+    final requestedHeadroom = edrHeadroom ??
         (outputMode == ErikaOutputMode.extendedLinear ? 4.0 : null);
     final arguments = <String, Object?>{
       if (outputMode case final mode?) 'outputMode': mode.nativeValue,

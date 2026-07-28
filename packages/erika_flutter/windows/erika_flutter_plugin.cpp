@@ -642,8 +642,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   using SetSubtitleScaleFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
   using SetSubtitleFontFn =
       ErikaStatus (*)(ErikaPresenterHandle*, const char*, const char*);
-  using SetSubtitleStyleFn = ErikaStatus (*)(ErikaPresenterHandle*, uint32_t,
-                                             uint32_t, double, double, bool);
+  using SetSubtitleStyleFn =
+      ErikaStatus (*)(ErikaPresenterHandle*, ErikaSubtitleStyle);
   using GetUpscalerStatusFn =
       ErikaStatus (*)(ErikaPresenterHandle*, ErikaUpscalerStatus*);
   using GetOutputStatusFn =
@@ -1183,14 +1183,42 @@ struct ErikaFlutterPlugin::PlayerHost {
           "set_subtitle_font");
   }
 
-  void SetSubtitleStyle(uint32_t primary_rgba, uint32_t outline_rgba,
-                        double font_size, double outline_width,
-                        bool force_override) {
+  void SetSubtitleStyle(const std::optional<std::string>& font_family,
+                        const std::optional<std::string>& font_file_path,
+                        uint32_t primary_rgba, uint32_t outline_rgba,
+                        double font_size, double outline_width, bool bold,
+                        bool italic, bool underline, bool strike_out,
+                        double spacing, double scale_x_percent,
+                        double scale_y_percent, int32_t border_style,
+                        double shadow_depth, double blur, int32_t alignment,
+                        int32_t margin_left, int32_t margin_right,
+                        int32_t margin_vertical, uint32_t override_mask) {
     if (library->set_subtitle_style == nullptr) {
       throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_subtitle_style");
     }
-    Check(library->set_subtitle_style(handle, primary_rgba, outline_rgba,
-                                      font_size, outline_width, force_override),
+    ErikaSubtitleStyle style{};
+    style.font_family = font_family ? font_family->c_str() : nullptr;
+    style.font_file_path = font_file_path ? font_file_path->c_str() : nullptr;
+    style.primary_color_rgba = primary_rgba;
+    style.outline_color_rgba = outline_rgba;
+    style.font_size = font_size;
+    style.outline_width = outline_width;
+    style.bold = bold;
+    style.italic = italic;
+    style.underline = underline;
+    style.strike_out = strike_out;
+    style.spacing = spacing;
+    style.scale_x_percent = scale_x_percent;
+    style.scale_y_percent = scale_y_percent;
+    style.border_style = border_style;
+    style.shadow_depth = shadow_depth;
+    style.blur = blur;
+    style.alignment = alignment;
+    style.margin_left = margin_left;
+    style.margin_right = margin_right;
+    style.margin_vertical = margin_vertical;
+    style.override_mask = override_mask;
+    Check(library->set_subtitle_style(handle, style),
           "set_subtitle_style");
   }
 
@@ -2176,27 +2204,59 @@ void ErikaFlutterPlugin::HandleMethodCall(
       result->Success();
     } else if (method == "setSubtitleStyle") {
       auto& host = PlayerFromArgs(args);
-      const bool has_font = FindArg(args, "fontFamily") != nullptr ||
-                            FindArg(args, "fontFilePath") != nullptr;
-      if (has_font) {
-        host.SetSubtitleFont(StringValue(FindArg(args, "fontFamily")),
-                             StringValue(FindArg(args, "fontFilePath")));
-      }
-      const bool has_style = FindArg(args, "primaryColorRgba") != nullptr ||
+      const bool has_style = FindArg(args, "fontFamily") != nullptr ||
+                             FindArg(args, "fontFilePath") != nullptr ||
+                             FindArg(args, "primaryColorRgba") != nullptr ||
                              FindArg(args, "outlineColorRgba") != nullptr ||
                              FindArg(args, "fontSize") != nullptr ||
                              FindArg(args, "outlineWidth") != nullptr ||
-                             FindArg(args, "forceOverride") != nullptr;
+                             FindArg(args, "bold") != nullptr ||
+                             FindArg(args, "italic") != nullptr ||
+                             FindArg(args, "underline") != nullptr ||
+                             FindArg(args, "strikeOut") != nullptr ||
+                             FindArg(args, "spacing") != nullptr ||
+                             FindArg(args, "scaleXPercent") != nullptr ||
+                             FindArg(args, "scaleYPercent") != nullptr ||
+                             FindArg(args, "borderStyle") != nullptr ||
+                             FindArg(args, "shadowDepth") != nullptr ||
+                             FindArg(args, "blur") != nullptr ||
+                             FindArg(args, "alignment") != nullptr ||
+                             FindArg(args, "marginLeft") != nullptr ||
+                             FindArg(args, "marginRight") != nullptr ||
+                             FindArg(args, "marginVertical") != nullptr ||
+                             FindArg(args, "overrideMask") != nullptr;
       if (has_style) {
         const int64_t primary =
             Int64Value(FindArg(args, "primaryColorRgba")).value_or(0xFFFFFFFF);
         const int64_t outline =
             Int64Value(FindArg(args, "outlineColorRgba")).value_or(0x0000007F);
         host.SetSubtitleStyle(
+            StringValue(FindArg(args, "fontFamily")),
+            StringValue(FindArg(args, "fontFilePath")),
             static_cast<uint32_t>(primary), static_cast<uint32_t>(outline),
             DoubleValue(FindArg(args, "fontSize")).value_or(48.0),
             DoubleValue(FindArg(args, "outlineWidth")).value_or(2.0),
-            BoolValue(FindArg(args, "forceOverride")).value_or(false));
+            BoolValue(FindArg(args, "bold")).value_or(false),
+            BoolValue(FindArg(args, "italic")).value_or(false),
+            BoolValue(FindArg(args, "underline")).value_or(false),
+            BoolValue(FindArg(args, "strikeOut")).value_or(false),
+            DoubleValue(FindArg(args, "spacing")).value_or(0.0),
+            DoubleValue(FindArg(args, "scaleXPercent")).value_or(100.0),
+            DoubleValue(FindArg(args, "scaleYPercent")).value_or(100.0),
+            static_cast<int32_t>(
+                Int64Value(FindArg(args, "borderStyle")).value_or(1)),
+            DoubleValue(FindArg(args, "shadowDepth")).value_or(0.0),
+            DoubleValue(FindArg(args, "blur")).value_or(0.0),
+            static_cast<int32_t>(
+                Int64Value(FindArg(args, "alignment")).value_or(2)),
+            static_cast<int32_t>(
+                Int64Value(FindArg(args, "marginLeft")).value_or(48)),
+            static_cast<int32_t>(
+                Int64Value(FindArg(args, "marginRight")).value_or(48)),
+            static_cast<int32_t>(
+                Int64Value(FindArg(args, "marginVertical")).value_or(54)),
+            static_cast<uint32_t>(
+                Int64Value(FindArg(args, "overrideMask")).value_or(0)));
       }
       result->Success();
     } else if (method == "getUpscalerStatus") {

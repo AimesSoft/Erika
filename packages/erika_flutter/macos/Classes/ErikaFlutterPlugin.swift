@@ -60,6 +60,30 @@ private struct ErikaPresenterConfigC {
   }
 }
 
+private struct ErikaSubtitleStyleC {
+  var fontFamily: UnsafePointer<CChar>?
+  var fontFilePath: UnsafePointer<CChar>?
+  var primaryColorRgba: UInt32
+  var outlineColorRgba: UInt32
+  var fontSize: Double
+  var outlineWidth: Double
+  var bold: Bool
+  var italic: Bool
+  var underline: Bool
+  var strikeOut: Bool
+  var spacing: Double
+  var scaleXPercent: Double
+  var scaleYPercent: Double
+  var borderStyle: Int32
+  var shadowDepth: Double
+  var blur: Double
+  var alignment: Int32
+  var marginLeft: Int32
+  var marginRight: Int32
+  var marginVertical: Int32
+  var overrideMask: UInt32
+}
+
 private struct ErikaHttpHeader {
   var name: UnsafeMutablePointer<CChar>?
   var value: UnsafeMutablePointer<CChar>?
@@ -234,11 +258,7 @@ private final class ErikaNativeLibrary {
   ) -> Int32
   typealias SetSubtitleStyleFn = @convention(c) (
     UnsafeMutableRawPointer?,
-    UInt32,
-    UInt32,
-    Double,
-    Double,
-    Bool
+    UnsafeRawPointer?
   ) -> Int32
   typealias GetUpscalerStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias GetOutputStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
@@ -582,19 +602,62 @@ private final class ErikaPlayerHost {
   }
 
   func setSubtitleStyle(
+    fontFamily: String?,
+    fontFilePath: String?,
     primaryRgba: UInt32,
     outlineRgba: UInt32,
     fontSize: Double,
     outlineWidth: Double,
-    forceOverride: Bool
+    bold: Bool,
+    italic: Bool,
+    underline: Bool,
+    strikeOut: Bool,
+    spacing: Double,
+    scaleXPercent: Double,
+    scaleYPercent: Double,
+    borderStyle: Int32,
+    shadowDepth: Double,
+    blur: Double,
+    alignment: Int32,
+    marginLeft: Int32,
+    marginRight: Int32,
+    marginVertical: Int32,
+    overrideMask: UInt32
   ) throws {
     guard let setSubtitleStyle = library.setSubtitleStyle else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_subtitle_style")
     }
-    try check(
-      setSubtitleStyle(handle, primaryRgba, outlineRgba, fontSize, outlineWidth, forceOverride),
-      operation: "set_subtitle_style"
-    )
+    let status = withOptionalCString(fontFamily ?? "") { fontFamilyCString in
+      withOptionalCString(fontFilePath ?? "") { fontFilePathCString in
+        var style = ErikaSubtitleStyleC(
+          fontFamily: fontFamilyCString,
+          fontFilePath: fontFilePathCString,
+          primaryColorRgba: primaryRgba,
+          outlineColorRgba: outlineRgba,
+          fontSize: fontSize,
+          outlineWidth: outlineWidth,
+          bold: bold,
+          italic: italic,
+          underline: underline,
+          strikeOut: strikeOut,
+          spacing: spacing,
+          scaleXPercent: scaleXPercent,
+          scaleYPercent: scaleYPercent,
+          borderStyle: borderStyle,
+          shadowDepth: shadowDepth,
+          blur: blur,
+          alignment: alignment,
+          marginLeft: marginLeft,
+          marginRight: marginRight,
+          marginVertical: marginVertical,
+          overrideMask: overrideMask
+        )
+        return withUnsafePointer(to: &style) { pointer in
+          setSubtitleStyle(handle, UnsafeRawPointer(pointer))
+        }
+      }
+    }
+    try check(status, operation: "set_subtitle_style")
   }
 
   func upscalerStatus() throws -> [String: Any] {
@@ -1568,16 +1631,39 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         }
         if args.keys.contains("primaryColorRgba") || args.keys.contains("outlineColorRgba")
           || args.keys.contains("fontSize") || args.keys.contains("outlineWidth")
-          || args.keys.contains("forceOverride")
+          || args.keys.contains("bold") || args.keys.contains("italic")
+          || args.keys.contains("underline") || args.keys.contains("strikeOut")
+          || args.keys.contains("spacing") || args.keys.contains("scaleXPercent")
+          || args.keys.contains("scaleYPercent") || args.keys.contains("borderStyle")
+          || args.keys.contains("shadowDepth") || args.keys.contains("blur")
+          || args.keys.contains("alignment") || args.keys.contains("marginLeft")
+          || args.keys.contains("marginRight") || args.keys.contains("marginVertical")
+          || args.keys.contains("overrideMask")
         {
           let primary = int64Value(args["primaryColorRgba"]) ?? 0xFFFF_FFFF
           let outline = int64Value(args["outlineColorRgba"]) ?? 0x0000_007F
           try host.setSubtitleStyle(
+            fontFamily: args["fontFamily"] as? String,
+            fontFilePath: args["fontFilePath"] as? String,
             primaryRgba: UInt32(truncatingIfNeeded: primary),
             outlineRgba: UInt32(truncatingIfNeeded: outline),
             fontSize: doubleValue(args["fontSize"]) ?? 48.0,
             outlineWidth: doubleValue(args["outlineWidth"]) ?? 2.0,
-            forceOverride: boolValue(args["forceOverride"]) ?? false
+            bold: boolValue(args["bold"]) ?? false,
+            italic: boolValue(args["italic"]) ?? false,
+            underline: boolValue(args["underline"]) ?? false,
+            strikeOut: boolValue(args["strikeOut"]) ?? false,
+            spacing: doubleValue(args["spacing"]) ?? 0.0,
+            scaleXPercent: doubleValue(args["scaleXPercent"]) ?? 100.0,
+            scaleYPercent: doubleValue(args["scaleYPercent"]) ?? 100.0,
+            borderStyle: int32Value(args["borderStyle"]) ?? 1,
+            shadowDepth: doubleValue(args["shadowDepth"]) ?? 0.0,
+            blur: doubleValue(args["blur"]) ?? 0.0,
+            alignment: int32Value(args["alignment"]) ?? 2,
+            marginLeft: int32Value(args["marginLeft"]) ?? 48,
+            marginRight: int32Value(args["marginRight"]) ?? 48,
+            marginVertical: int32Value(args["marginVertical"]) ?? 54,
+            overrideMask: UInt32(truncatingIfNeeded: int64Value(args["overrideMask"]) ?? 0)
           )
         }
         result(nil)

@@ -54,6 +54,13 @@ use erika::renderer::output::{
     target_os = "android"
 ))]
 use erika::renderer::pipeline::LumaUpscalerMode;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+))]
+use erika::subtitle::SubtitleStyleConfig;
 use erika::{
     FlutterTextureHandle, FlutterTextureKind, MediaRequest, MetalSurfaceHandle, PlatformSurface,
     Player, PlayerConfig, PlayerEvent, PlayerState, RendererRuntimeStats,
@@ -363,6 +370,61 @@ pub struct ErikaPresenterConfig {
     pub output_mode: i32,
     pub edr_headroom: f32,
     pub luma_upscaler: i32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ErikaSubtitleStyle {
+    pub font_family: *const c_char,
+    pub font_file_path: *const c_char,
+    pub primary_color_rgba: u32,
+    pub outline_color_rgba: u32,
+    pub font_size: f64,
+    pub outline_width: f64,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strike_out: bool,
+    pub spacing: f64,
+    pub scale_x_percent: f64,
+    pub scale_y_percent: f64,
+    pub border_style: i32,
+    pub shadow_depth: f64,
+    pub blur: f64,
+    pub alignment: i32,
+    pub margin_left: i32,
+    pub margin_right: i32,
+    pub margin_vertical: i32,
+    pub override_mask: u32,
+}
+
+impl Default for ErikaSubtitleStyle {
+    fn default() -> Self {
+        let style = erika::subtitle::SubtitleStyleConfig::default();
+        Self {
+            font_family: std::ptr::null(),
+            font_file_path: std::ptr::null(),
+            primary_color_rgba: style.primary_color_rgba,
+            outline_color_rgba: style.outline_color_rgba,
+            font_size: style.font_size,
+            outline_width: style.outline_width,
+            bold: style.bold,
+            italic: style.italic,
+            underline: style.underline,
+            strike_out: style.strike_out,
+            spacing: style.spacing,
+            scale_x_percent: style.scale_x_percent,
+            scale_y_percent: style.scale_y_percent,
+            border_style: style.border_style,
+            shadow_depth: style.shadow_depth,
+            blur: style.blur,
+            alignment: style.alignment,
+            margin_left: style.margin_left,
+            margin_right: style.margin_right,
+            margin_vertical: style.margin_vertical,
+            override_mask: style.override_mask,
+        }
+    }
 }
 
 #[repr(C)]
@@ -1221,6 +1283,39 @@ fn presenter_config_from_c(config: ErikaPresenterConfig) -> PresenterConfig {
     target_os = "windows",
     target_os = "android"
 ))]
+fn subtitle_style_from_c(style: ErikaSubtitleStyle) -> Result<SubtitleStyleConfig, ErikaStatus> {
+    Ok(SubtitleStyleConfig {
+        font_family: optional_c_string_result(style.font_family)?,
+        font_file_path: optional_c_string_result(style.font_file_path)?,
+        primary_color_rgba: style.primary_color_rgba,
+        outline_color_rgba: style.outline_color_rgba,
+        font_size: style.font_size,
+        outline_width: style.outline_width,
+        bold: style.bold,
+        italic: style.italic,
+        underline: style.underline,
+        strike_out: style.strike_out,
+        spacing: style.spacing,
+        scale_x_percent: style.scale_x_percent,
+        scale_y_percent: style.scale_y_percent,
+        border_style: style.border_style,
+        shadow_depth: style.shadow_depth,
+        blur: style.blur,
+        alignment: style.alignment,
+        margin_left: style.margin_left,
+        margin_right: style.margin_right,
+        margin_vertical: style.margin_vertical,
+        override_mask: style.override_mask,
+    }
+    .normalized())
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+))]
 fn luma_upscaler_mode_from_c(mode: i32) -> LumaUpscalerMode {
     match ErikaLumaUpscalerMode::from_raw(mode) {
         ErikaLumaUpscalerMode::Off => LumaUpscalerMode::Off,
@@ -1648,11 +1743,6 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_font(
     })
 }
 
-/// Sets the fallback subtitle look: colours as `0xRRGGBBAA`, plus the base font
-/// size and outline width in ASS script units (the subtitle scale still
-/// multiplies both). With `force_override` set, all of it and the custom font
-/// replace what ASS dialogue styles ask for instead of only filling in what
-/// they leave unspecified.
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
@@ -1662,20 +1752,14 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_font(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_subtitle_style(
     handle: *mut ErikaPresenterHandle,
-    primary_rgba: u32,
-    outline_rgba: u32,
-    font_size: f64,
-    outline_width: f64,
-    force_override: bool,
+    style: ErikaSubtitleStyle,
 ) -> ErikaStatus {
     with_presenter_mut(handle, |handle| {
-        handle.presenter.set_subtitle_style(
-            primary_rgba,
-            outline_rgba,
-            font_size,
-            outline_width,
-            force_override,
-        );
+        let style = match subtitle_style_from_c(style) {
+            Ok(style) => style,
+            Err(status) => return status,
+        };
+        handle.presenter.set_subtitle_style(style);
         ErikaStatus::Ok
     })
 }
@@ -2456,11 +2540,7 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_font(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_subtitle_style(
     _handle: *mut std::ffi::c_void,
-    _primary_rgba: u32,
-    _outline_rgba: u32,
-    _font_size: f64,
-    _outline_width: f64,
-    _force_override: bool,
+    _style: ErikaSubtitleStyle,
 ) -> ErikaStatus {
     ErikaStatus::PlayerError
 }
@@ -3112,6 +3192,19 @@ fn c_string(ptr: *const c_char) -> Result<String, ErikaStatus> {
         .map(str::to_string)
         .map_err(|_| {
             set_last_error("required C string is not valid UTF-8");
+            ErikaStatus::InvalidUtf8
+        })
+}
+
+fn optional_c_string_result(ptr: *const c_char) -> Result<String, ErikaStatus> {
+    if ptr.is_null() {
+        return Ok(String::new());
+    }
+    unsafe { CStr::from_ptr(ptr) }
+        .to_str()
+        .map(|value| value.trim().to_string())
+        .map_err(|_| {
+            set_last_error("optional C string is not valid UTF-8");
             ErikaStatus::InvalidUtf8
         })
 }
@@ -4221,6 +4314,61 @@ mod tests {
             }),
             MetalOutputMode::apple_edr(1.0)
         );
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "android"
+    ))]
+    #[test]
+    fn c_subtitle_style_maps_all_fields_and_normalizes_override_mask() {
+        let family = CString::new(" Test Family ").unwrap();
+        let file_path = CString::new(" /tmp/subtitle.ttf ").unwrap();
+        let style = subtitle_style_from_c(ErikaSubtitleStyle {
+            font_family: family.as_ptr(),
+            font_file_path: file_path.as_ptr(),
+            primary_color_rgba: 0x1122_33ff,
+            outline_color_rgba: 0x4455_667f,
+            font_size: 52.0,
+            outline_width: 4.0,
+            bold: true,
+            italic: true,
+            underline: true,
+            strike_out: true,
+            spacing: 3.5,
+            scale_x_percent: 125.0,
+            scale_y_percent: 90.0,
+            border_style: 3,
+            shadow_depth: 2.0,
+            blur: 1.5,
+            alignment: 8,
+            margin_left: 12,
+            margin_right: 13,
+            margin_vertical: 14,
+            override_mask: u32::MAX,
+        })
+        .unwrap();
+
+        assert_eq!(style.font_family, "Test Family");
+        assert_eq!(style.font_file_path, "/tmp/subtitle.ttf");
+        assert_eq!(style.primary_color_rgba, 0x1122_33ff);
+        assert_eq!(style.outline_color_rgba, 0x4455_667f);
+        assert_eq!(style.font_size, 52.0);
+        assert_eq!(style.outline_width, 4.0);
+        assert!(style.bold && style.italic && style.underline && style.strike_out);
+        assert_eq!(style.spacing, 3.5);
+        assert_eq!(style.scale_x_percent, 125.0);
+        assert_eq!(style.scale_y_percent, 90.0);
+        assert_eq!(style.border_style, 3);
+        assert_eq!(style.shadow_depth, 2.0);
+        assert_eq!(style.blur, 1.5);
+        assert_eq!(style.alignment, 8);
+        assert_eq!(style.margin_left, 12);
+        assert_eq!(style.margin_right, 13);
+        assert_eq!(style.margin_vertical, 14);
+        assert_eq!(style.override_mask, erika::subtitle::SUBTITLE_OVERRIDE_ALL);
     }
 
     #[test]

@@ -707,30 +707,7 @@ impl PresenterRuntime {
         self.apply_subtitle_style(style);
     }
 
-    /// Sets the fallback subtitle colours (`0xRRGGBBAA`), the base font size and
-    /// outline width in ASS script units, and whether all of it, plus the custom
-    /// font, replaces the styling ASS dialogue events ask for. The viewer's
-    /// subtitle scale still multiplies the metrics.
-    pub fn set_subtitle_style(
-        &mut self,
-        primary_rgba: u32,
-        outline_rgba: u32,
-        font_size: f64,
-        outline_width: f64,
-        force_override: bool,
-    ) {
-        let style = SubtitleStyleConfig {
-            primary_color_rgba: primary_rgba,
-            outline_color_rgba: outline_rgba,
-            font_size,
-            outline_width,
-            override_mask: if force_override {
-                crate::subtitle::SUBTITLE_OVERRIDE_LEGACY_FORCE
-            } else {
-                0
-            },
-            ..self.subtitle_style.clone()
-        };
+    pub fn set_subtitle_style(&mut self, style: SubtitleStyleConfig) {
         self.apply_subtitle_style(style);
     }
 
