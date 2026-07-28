@@ -734,6 +734,7 @@ impl PresenterRuntime {
             return;
         }
         self.subtitle_delay = delay;
+        self.subtitles.subtitle_delay = delay;
         self.refresh_current_overlay();
     }
 
@@ -2529,6 +2530,12 @@ fn subtitle_start(frame: &PlayerSubtitleFrame) -> Option<Duration> {
 #[derive(Debug, Default)]
 struct SubtitleFrameState {
     frames: Vec<PlayerSubtitleFrame>,
+    /// Mirrors [`PresenterRuntime::subtitle_delay`] so retention runs in the
+    /// same shifted domain the overlay renders in. Cues arrive on the unshifted
+    /// timeline, so retiring them against an incoming cue's raw start time
+    /// would drop the cue before it while a positive delay still owes that cue
+    /// `delay` seconds of screen time.
+    subtitle_delay: f64,
     #[cfg(feature = "libass")]
     ass_renderer: CachedAssTrackRenderer,
     #[cfg(feature = "libass")]
@@ -2546,7 +2553,10 @@ impl SubtitleFrameState {
     }
 
     fn push(&mut self, mut frame: PlayerSubtitleFrame) {
-        self.retain_at(subtitle_start(&frame).unwrap_or(frame.media_time));
+        self.retain_at(shifted_subtitle_pts(
+            subtitle_start(&frame).unwrap_or(frame.media_time),
+            self.subtitle_delay,
+        ));
         if frame.frame.is_empty() {
             #[cfg(feature = "libass")]
             {
@@ -3107,6 +3117,38 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             generation: 1,
         };
         assert!(!subtitle_is_active(&empty, Duration::ZERO));
+    }
+
+    #[test]
+    fn positive_subtitle_delay_keeps_a_cue_through_its_delayed_window() {
+        // Two adjacent cues: 1..3 then 3..5. With a 2 s delay the first is
+        // still on screen until the clock reaches 5, but it is the arrival of
+        // the second cue at its unshifted start (3) that used to retire it.
+        let mut state = SubtitleFrameState {
+            subtitle_delay: 2.0,
+            ..SubtitleFrameState::default()
+        };
+        state.push(subtitle_frame(
+            Duration::from_secs(1),
+            Some(Duration::from_secs(3)),
+        ));
+        state.push(subtitle_frame(
+            Duration::from_secs(3),
+            Some(Duration::from_secs(5)),
+        ));
+
+        let mut overlay = empty_overlay();
+        state.append_to_overlay(
+            shifted_subtitle_pts(Duration::from_secs(4), 2.0),
+            &mut overlay,
+            SubtitleAssStyle::default(),
+        );
+
+        assert_eq!(
+            overlay.subtitle_planes.len(),
+            1,
+            "the first cue must survive until its delayed window closes"
+        );
     }
 
     #[test]
