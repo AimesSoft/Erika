@@ -1,8 +1,13 @@
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    target_env = "ohos"
+))]
 use std::ffi::c_void;
 #[cfg(target_os = "windows")]
 use std::num::NonZeroIsize;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_env = "ohos"))]
 use std::ptr::NonNull;
 #[cfg(target_os = "android")]
 use std::{
@@ -18,7 +23,8 @@ use crate::android::{AndroidDataSpaceErrorKind, AndroidNativeWindow};
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_env = "ohos"
 ))]
 use crate::core::WgpuSurfaceKind;
 use crate::core::{
@@ -687,7 +693,18 @@ fn wgpu_backend_candidates() -> Vec<WgpuBackendCandidate> {
             },
         ]
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_env = "ohos")]
+    {
+        // wgpu's OpenHarmony window-handle implementation is backed by EGL.
+        // Keep Vulkan out of this candidate because Vulkan WSI does not accept
+        // raw-window-handle's `OhosNdk` variant.
+        vec![WgpuBackendCandidate {
+            label: "ohos-gles",
+            backends: wgpu::Backends::GL,
+            force_fallback_adapter: false,
+        }]
+    }
+    #[cfg(not(any(target_os = "android", target_env = "ohos")))]
     {
         vec![WgpuBackendCandidate {
             label: "platform-default",
@@ -2731,7 +2748,8 @@ impl WgpuRenderer {
             target_os = "android",
             target_os = "macos",
             target_os = "ios",
-            target_os = "windows"
+            target_os = "windows",
+            target_env = "ohos"
         )))]
         {
             return Err(PlayerError::Renderer(format!(
@@ -2744,7 +2762,8 @@ impl WgpuRenderer {
             target_os = "android",
             target_os = "macos",
             target_os = "ios",
-            target_os = "windows"
+            target_os = "windows",
+            target_env = "ohos"
         ))]
         {
             #[cfg(target_os = "android")]
@@ -2792,6 +2811,23 @@ impl WgpuRenderer {
                             wgpu::rwh::AndroidDisplayHandle::new(),
                         )),
                         raw_window_handle: wgpu::rwh::RawWindowHandle::AndroidNdk(window_handle),
+                    }
+                }
+                #[cfg(target_env = "ohos")]
+                WgpuSurfaceKind::OhosNativeWindow => {
+                    let raw_window =
+                        NonNull::new(handle.raw_window as *mut c_void).ok_or_else(|| {
+                            PlayerError::Renderer(
+                                "wgpu OpenHarmony OHNativeWindow surface handle is null"
+                                    .to_string(),
+                            )
+                        })?;
+                    let window_handle = wgpu::rwh::OhosNdkWindowHandle::new(raw_window);
+                    wgpu::SurfaceTargetUnsafe::RawHandle {
+                        raw_display_handle: Some(wgpu::rwh::RawDisplayHandle::Ohos(
+                            wgpu::rwh::OhosDisplayHandle::new(),
+                        )),
+                        raw_window_handle: wgpu::rwh::RawWindowHandle::OhosNdk(window_handle),
                     }
                 }
                 other => {

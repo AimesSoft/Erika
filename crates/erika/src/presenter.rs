@@ -20,7 +20,8 @@ use crate::apple::iosaudio::{IosAudioQueueOutput, IosAudioQueueOutputConfig};
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_env = "ohos"
 )))]
 use crate::audio::BufferedAudioOutput;
 use crate::audio::{
@@ -38,6 +39,8 @@ use crate::danmaku::{
     DanmakuViewport, DfmLayoutEngine, DfmPreparedLayout,
 };
 use crate::ffmpeg::DecoderBackend;
+#[cfg(target_env = "ohos")]
+use crate::ohos::ohaudio::{OHAudioOutput, OHAudioOutputConfig};
 use crate::overlay::{OverlayFrame, OverlayTimeline, OverlayViewport};
 #[cfg(any(target_os = "windows", target_os = "android"))]
 use crate::playback::VideoDecodePreference;
@@ -126,11 +129,19 @@ impl Default for PresenterAudioConfig {
                 ring_buffer: config.ring_buffer,
             }
         }
+        #[cfg(target_env = "ohos")]
+        {
+            let config = OHAudioOutputConfig::default();
+            Self {
+                ring_buffer: config.ring_buffer,
+            }
+        }
         #[cfg(not(any(
             target_os = "android",
             target_os = "macos",
             target_os = "ios",
-            target_os = "windows"
+            target_os = "windows",
+            target_env = "ohos"
         )))]
         {
             Self {
@@ -2328,11 +2339,18 @@ fn build_audio_output(config: PresenterAudioConfig) -> Box<dyn AudioOutputBacken
             ring_buffer: config.ring_buffer,
         }))
     }
+    #[cfg(target_env = "ohos")]
+    {
+        Box::new(OHAudioOutput::new(OHAudioOutputConfig {
+            ring_buffer: config.ring_buffer,
+        }))
+    }
     #[cfg(not(any(
         target_os = "android",
         target_os = "macos",
         target_os = "ios",
-        target_os = "windows"
+        target_os = "windows",
+        target_env = "ohos"
     )))]
     {
         Box::new(BufferedAudioOutput::new(config.ring_buffer))

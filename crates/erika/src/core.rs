@@ -551,6 +551,7 @@ pub enum WgpuSurfaceKind {
     XlibWindow,
     WaylandSurface,
     AndroidNativeWindow,
+    OhosNativeWindow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

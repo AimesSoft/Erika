@@ -234,6 +234,7 @@ enum NativeTarget {
     Armv7Android,
     X86_64Android,
     I686Android,
+    Aarch64Ohos,
 }
 
 impl NativeTarget {
@@ -250,6 +251,7 @@ impl NativeTarget {
             "armv7-linux-androideabi" | "armeabi-v7a" => Ok(Self::Armv7Android),
             "x86_64-linux-android" | "android-x64" => Ok(Self::X86_64Android),
             "i686-linux-android" | "x86" => Ok(Self::I686Android),
+            "aarch64-unknown-linux-ohos" | "ohos-arm64" => Ok(Self::Aarch64Ohos),
             other => bail!("unknown native target: {other}"),
         }
     }
@@ -267,6 +269,7 @@ impl NativeTarget {
             Self::Armv7Android => Some("armv7-linux-androideabi"),
             Self::X86_64Android => Some("x86_64-linux-android"),
             Self::I686Android => Some("i686-linux-android"),
+            Self::Aarch64Ohos => Some("aarch64-unknown-linux-ohos"),
         }
     }
 
@@ -280,7 +283,8 @@ impl NativeTarget {
             | Self::Aarch64Android
             | Self::Armv7Android
             | Self::X86_64Android
-            | Self::I686Android => None,
+            | Self::I686Android
+            | Self::Aarch64Ohos => None,
         }
     }
 
@@ -294,6 +298,7 @@ impl NativeTarget {
             Self::Armv7Android => Some("arm"),
             Self::X86_64Android => Some("x86_64"),
             Self::I686Android => Some("x86"),
+            Self::Aarch64Ohos => Some("aarch64"),
         }
     }
 
@@ -307,6 +312,7 @@ impl NativeTarget {
             Self::Armv7Android => Some("arm"),
             Self::X86_64Android => Some("x86_64"),
             Self::I686Android => Some("x86"),
+            Self::Aarch64Ohos => Some("aarch64"),
         }
     }
 
@@ -320,6 +326,7 @@ impl NativeTarget {
             Self::Armv7Android => Some("armv7"),
             Self::X86_64Android => Some("x86_64"),
             Self::I686Android => Some("i686"),
+            Self::Aarch64Ohos => Some("aarch64"),
         }
     }
 
@@ -372,6 +379,11 @@ impl NativeTarget {
         ) || (matches!(self, Self::Host) && cfg!(target_os = "android"))
     }
 
+    fn is_ohos(self) -> bool {
+        matches!(self, Self::Aarch64Ohos)
+            || (matches!(self, Self::Host) && cfg!(target_env = "ohos"))
+    }
+
     fn deployment_target(self) -> Option<(String, &'static str)> {
         match self {
             Self::Host => None,
@@ -391,7 +403,8 @@ impl NativeTarget {
             | Self::Aarch64Android
             | Self::Armv7Android
             | Self::X86_64Android
-            | Self::I686Android => None,
+            | Self::I686Android
+            | Self::Aarch64Ohos => None,
         }
     }
 }
@@ -822,6 +835,23 @@ fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Resu
         let _ = ensure_pkg_config_shim(layout)?;
         let _ = host_c_compiler()?;
         let _ = host_cxx_compiler()?;
+        return Ok(());
+    }
+
+    if options.target.is_ohos() {
+        let toolchain = ohos_toolchain(options.target)?
+            .context("an explicit OpenHarmony target requires the native SDK toolchain")?;
+        println!(
+            "OpenHarmony native SDK: {}",
+            toolchain.native_root.display()
+        );
+        println!("OpenHarmony toolchain: {}", toolchain.bin_dir.display());
+        if gnu_make().is_none() {
+            bail!("required GNU make was not found for the OpenHarmony FFmpeg build");
+        }
+        if cmake_tool().is_none() {
+            bail!("required CMake was not found for the OpenHarmony dependency build");
+        }
         return Ok(());
     }
 
@@ -1367,6 +1397,26 @@ fn apply_cmake_target(command: &mut Command, target: NativeTarget) -> Result<()>
             .arg(format!("-DANDROID_ABI={}", config.abi))
             .arg(format!("-DANDROID_PLATFORM=android-{}", config.api_level))
             .arg("-DANDROID_STL=c++_shared")
+            .arg("-DCMAKE_POSITION_INDEPENDENT_CODE=ON");
+        if let Some(ninja) = ninja_tool() {
+            command
+                .arg("-G")
+                .arg("Ninja")
+                .arg(format!("-DCMAKE_MAKE_PROGRAM={}", ninja.display()));
+        }
+    }
+    if let Some(config) = ohos_toolchain(target)? {
+        command
+            .arg(format!(
+                "-DCMAKE_TOOLCHAIN_FILE={}",
+                config.cmake_toolchain_file.display()
+            ))
+            .arg("-DOHOS_ARCH=arm64-v8a")
+            .arg("-DOHOS_STL=c++_shared")
+            .arg(format!(
+                "-DOHOS_COMPATIBLE_SDK_VERSION={}",
+                config.compatible_sdk_version
+            ))
             .arg("-DCMAKE_POSITION_INDEPENDENT_CODE=ON");
         if let Some(ninja) = ninja_tool() {
             command
@@ -2199,7 +2249,8 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
             | NativeTarget::Aarch64Android
             | NativeTarget::Armv7Android
             | NativeTarget::X86_64Android
-            | NativeTarget::I686Android => {}
+            | NativeTarget::I686Android
+            | NativeTarget::Aarch64Ohos => {}
         }
     } else if let Some(config) = android_toolchain(options.target)? {
         configure.arg(format!("--cc={}", ffmpeg_flag_path_arg(&config.clang)));
@@ -2235,6 +2286,28 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
             ffmpeg_flag_path_arg(&layout.dav1d_prefix.join("lib"))
         ));
         configure.env("ANDROID_NDK_HOME", &config.ndk_root);
+    } else if let Some(config) = ohos_toolchain(options.target)? {
+        configure.arg(format!("--cc={}", ffmpeg_flag_path_arg(&config.clang)));
+        configure.arg(format!("--cxx={}", ffmpeg_flag_path_arg(&config.clangxx)));
+        configure.arg(format!("--ar={}", ffmpeg_flag_path_arg(&config.ar)));
+        configure.arg(format!("--ranlib={}", ffmpeg_flag_path_arg(&config.ranlib)));
+        configure.arg(format!("--strip={}", ffmpeg_flag_path_arg(&config.strip)));
+        configure.arg(format!("--nm={}", ffmpeg_flag_path_arg(&config.nm)));
+        configure.arg("--target-os=linux");
+        configure.arg("--enable-cross-compile");
+        configure.arg("--arch=aarch64");
+        configure.arg(format!(
+            "--sysroot={}",
+            path_to_forward_slashes(&config.sysroot)
+        ));
+        extra_cflags.push(format!(
+            "-I{}",
+            ffmpeg_flag_path_arg(&layout.zlib_prefix.join("include"))
+        ));
+        extra_ldflags.push(format!(
+            "-L{}",
+            ffmpeg_flag_path_arg(&layout.zlib_prefix.join("lib"))
+        ));
     } else if options.target.is_windows() {
         configure.arg("--target-os=win64");
         configure.arg("--arch=x86_64");
@@ -2406,6 +2479,21 @@ struct AndroidToolchain {
     api_level: u32,
 }
 
+#[derive(Debug, Clone)]
+struct OhosToolchain {
+    native_root: PathBuf,
+    bin_dir: PathBuf,
+    sysroot: PathBuf,
+    cmake_toolchain_file: PathBuf,
+    clang: PathBuf,
+    clangxx: PathBuf,
+    ar: PathBuf,
+    ranlib: PathBuf,
+    strip: PathBuf,
+    nm: PathBuf,
+    compatible_sdk_version: String,
+}
+
 fn apple_toolchain(target: NativeTarget) -> Result<Option<AppleToolchain>> {
     let Some(sdk) = target.sdk() else {
         return Ok(None);
@@ -2487,6 +2575,76 @@ fn android_toolchain(target: NativeTarget) -> Result<Option<AndroidToolchain>> {
             .context("explicit Android target must have an ABI")?,
         api_level,
     }))
+}
+
+fn ohos_toolchain(target: NativeTarget) -> Result<Option<OhosToolchain>> {
+    if !target.is_ohos() || matches!(target, NativeTarget::Host) {
+        return Ok(None);
+    }
+    let native_root = ohos_native_root()?;
+    let bin_dir = native_root.join("llvm/bin");
+    let sysroot = native_root.join("sysroot");
+    let cmake_toolchain_file = native_root.join("build/cmake/ohos.toolchain.cmake");
+    let clang = required_executable_in_dir(
+        &bin_dir,
+        "aarch64-unknown-linux-ohos-clang",
+        "OpenHarmony C compiler",
+    )?;
+    let clangxx = required_executable_in_dir(
+        &bin_dir,
+        "aarch64-unknown-linux-ohos-clang++",
+        "OpenHarmony C++ compiler",
+    )?;
+    let ar = required_executable_in_dir(&bin_dir, "llvm-ar", "OpenHarmony archiver")?;
+    let ranlib = required_executable_in_dir(&bin_dir, "llvm-ranlib", "OpenHarmony ranlib")?;
+    let strip = required_executable_in_dir(&bin_dir, "llvm-strip", "OpenHarmony strip")?;
+    let nm = required_executable_in_dir(&bin_dir, "llvm-nm", "OpenHarmony nm")?;
+    if !sysroot.is_dir() || !cmake_toolchain_file.is_file() {
+        bail!(
+            "OpenHarmony native SDK at {} is incomplete (missing sysroot or ohos.toolchain.cmake)",
+            native_root.display()
+        );
+    }
+    let compatible_sdk_version =
+        env::var("OHOS_COMPATIBLE_SDK_VERSION").unwrap_or_else(|_| "18".to_string());
+    Ok(Some(OhosToolchain {
+        native_root,
+        bin_dir,
+        sysroot,
+        cmake_toolchain_file,
+        clang,
+        clangxx,
+        ar,
+        ranlib,
+        strip,
+        nm,
+        compatible_sdk_version,
+    }))
+}
+
+fn ohos_native_root() -> Result<PathBuf> {
+    for variable in ["OHOS_NDK_HOME", "OHOS_SDK_NATIVE"] {
+        if let Some(value) = env::var_os(variable) {
+            let path = PathBuf::from(value);
+            if path.is_dir() {
+                return Ok(path);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let deveco = PathBuf::from(
+            "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/native",
+        );
+        if deveco.is_dir() {
+            return Ok(deveco);
+        }
+    }
+
+    bail!(
+        "OpenHarmony native SDK was not found; set OHOS_NDK_HOME or OHOS_SDK_NATIVE to the SDK native directory"
+    )
 }
 
 fn ffmpeg_android_host_cc(config: &AndroidToolchain) -> Result<Option<String>> {

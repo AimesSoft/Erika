@@ -16,6 +16,8 @@ The plugin keeps Dart out of the hot path:
 - The Windows plugin builds and links the Erika C ABI DLL.
 - The Android plugin builds `liberika_capi.so` per ABI and drives its native
   surface from `Choreographer`.
+- The HarmonyOS plugin registers a Flutter external texture, attaches its
+  `OHNativeWindow` to Erika, and uses OHAudio for low-latency PCM output.
 - Erika owns playback, rendering, audio, timing, and overlays through
   `ErikaPresenterHandle`.
 
@@ -102,6 +104,19 @@ specific fallback. On API 34+, the plugin observes
 to Erika, allowing wgpu to update subsequent frame targets and output status
 without reattaching the surface. On API 35 it also applies per-`SurfaceView`
 desired HDR headroom without changing the host window globally.
+
+## HarmonyOS Setup
+
+The HarmonyOS module requires DevEco Studio's OpenHarmony Native SDK and the
+Rust `aarch64-unknown-linux-ohos` target. Its Hvigor/CMake build compiles the
+LGPL FFmpeg/zlib dependencies and `liberika_capi.so`, then packages that runtime
+alongside `liberika_flutter.so`.
+
+Use `ErikaVideoView` on HarmonyOS. It registers a Flutter external texture,
+obtains the texture surface as an `OHNativeWindow`, and renders through
+wgpu/OpenGL ES. Audio uses OHAudio with interleaved f32 PCM. The current
+HarmonyOS path uses FFmpeg software decoding; AVCodec hardware decoding is not
+yet enabled.
 
 ## HTTP Headers
 

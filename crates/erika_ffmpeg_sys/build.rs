@@ -17,6 +17,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ANDROID_NDK_ROOT");
     println!("cargo:rerun-if-env-changed=ANDROID_HOME");
     println!("cargo:rerun-if-env-changed=ANDROID_SDK_ROOT");
+    println!("cargo:rerun-if-env-changed=OHOS_NDK_HOME");
+    println!("cargo:rerun-if-env-changed=OHOS_SDK_NATIVE");
 
     let dist_dir = ffmpeg_dist_dir();
     let zlib_dir = native_dep_dir("ERIKA_ZLIB_DIR", "zlib");
@@ -189,7 +191,7 @@ fn main() {
         .generate_comments(false)
         .derive_debug(true)
         .derive_default(true);
-    for argument in android_bindgen_clang_args() {
+    for argument in target_bindgen_clang_args() {
         builder = builder.clang_arg(argument);
     }
     let bindings = builder.generate().expect("generate FFmpeg bindings");
@@ -252,6 +254,10 @@ fn ensure_libclang_path() {
         candidates.push(prebuilt.join("lib64"));
         candidates.push(prebuilt.join("lib"));
     }
+    if let Some(native_root) = ohos_native_root() {
+        candidates.push(native_root.join("llvm/lib"));
+        candidates.push(native_root.join("llvm/bin"));
+    }
     for path in candidates {
         if contains_libclang(&path) {
             // Build scripts are single-process setup code; set this before bindgen
@@ -288,7 +294,16 @@ fn contains_libclang(path: &Path) -> bool {
     })
 }
 
-fn android_bindgen_clang_args() -> Vec<String> {
+fn target_bindgen_clang_args() -> Vec<String> {
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("ohos") {
+        let native_root = ohos_native_root().expect(
+            "OpenHarmony native SDK was not found for bindgen; set OHOS_NDK_HOME or OHOS_SDK_NATIVE",
+        );
+        return vec![
+            "--target=aarch64-unknown-linux-ohos".to_string(),
+            format!("--sysroot={}", native_root.join("sysroot").display()),
+        ];
+    }
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
         return Vec::new();
     }
@@ -311,6 +326,27 @@ fn android_bindgen_clang_args() -> Vec<String> {
         format!("--target={clang_triple}{api_level}"),
         format!("--sysroot={}", sysroot.to_string_lossy().replace('\\', "/")),
     ]
+}
+
+fn ohos_native_root() -> Option<PathBuf> {
+    for variable in ["OHOS_NDK_HOME", "OHOS_SDK_NATIVE"] {
+        if let Some(value) = env::var_os(variable) {
+            let path = PathBuf::from(value);
+            if path.is_dir() {
+                return Some(path);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let deveco = PathBuf::from(
+            "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/native",
+        );
+        if deveco.is_dir() {
+            return Some(deveco);
+        }
+    }
+    None
 }
 
 fn android_api_level() -> u32 {

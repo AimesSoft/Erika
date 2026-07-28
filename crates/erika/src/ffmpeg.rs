@@ -3016,6 +3016,11 @@ struct CustomAvio {
     context: *mut sys::AVIOContext,
     source: Box<dyn MediaSource>,
     offset: u64,
+    last_error: Option<String>,
+}
+
+fn normalize_avio_seek_whence(whence: c_int) -> c_int {
+    whence & !(sys::AVSEEK_FORCE as c_int)
 }
 
 impl CustomAvio {
@@ -3031,6 +3036,7 @@ impl CustomAvio {
             context: ptr::null_mut(),
             source,
             offset: 0,
+            last_error: None,
         });
         let context = unsafe {
             sys::avio_alloc_context(
@@ -3071,16 +3077,30 @@ impl CustomAvio {
                 self.offset = self.offset.saturating_add(copy_len as u64);
                 copy_len as c_int
             }
-            Err(_) => av_error(EIO),
+            Err(error) => {
+                self.last_error = Some(error.to_string());
+                eprintln!(
+                    "Erika custom AVIO read failed at offset {} for {} bytes: {error}",
+                    self.offset, length
+                );
+                av_error(EIO)
+            }
         }
     }
 
     fn seek(&mut self, offset: i64, whence: c_int) -> i64 {
+        // FFmpeg may OR AVSEEK_FORCE into ordinary SEEK_SET/SEEK_CUR/SEEK_END
+        // requests. It is a hint to the protocol layer rather than a distinct
+        // seek origin, so custom AVIO implementations must ignore it.
+        let whence = normalize_avio_seek_whence(whence);
         if whence == sys::AVSEEK_SIZE as c_int {
             return match self.source.len() {
                 Ok(Some(length)) => length.min(i64::MAX as u64) as i64,
                 Ok(None) => av_error(ESPIPE) as i64,
-                Err(_) => av_error(EIO) as i64,
+                Err(error) => {
+                    self.last_error = Some(error.to_string());
+                    av_error(EIO) as i64
+                }
             };
         }
 
@@ -3090,9 +3110,17 @@ impl CustomAvio {
             SEEK_END => match self.source.len() {
                 Ok(Some(length)) => length.min(i64::MAX as u64) as i64 + offset,
                 Ok(None) => return av_error(ESPIPE) as i64,
-                Err(_) => return av_error(EIO) as i64,
+                Err(error) => {
+                    self.last_error = Some(error.to_string());
+                    return av_error(EIO) as i64;
+                }
             },
-            _ => return av_error(EINVAL) as i64,
+            _ => {
+                let error = format!("unsupported seek origin {whence:#x} at offset {offset}");
+                self.last_error = Some(error.clone());
+                eprintln!("Erika custom AVIO rejected {error}");
+                return av_error(EINVAL) as i64;
+            }
         };
         if target < 0 {
             return av_error(EINVAL) as i64;
@@ -3180,7 +3208,12 @@ fn open_source_format_context(source: Box<dyn MediaSource>) -> Result<FormatCont
             if !opened_context.is_null() {
                 unsafe { sys::avformat_close_input(&mut opened_context) };
             }
-            Err(error)
+            match avio.last_error.as_deref() {
+                Some(source_error) => Err(FfmpegError::Source(format!(
+                    "{error}; custom AVIO: {source_error}"
+                ))),
+                None => Err(error),
+            }
         }
     }
 }
@@ -4052,6 +4085,18 @@ mod tests {
     #[test]
     fn linked_ffmpeg_reports_version() {
         assert!(!version().is_empty());
+    }
+
+    #[test]
+    fn avseek_force_does_not_change_seek_origin() {
+        let forced_set = SEEK_SET | sys::AVSEEK_FORCE as c_int;
+        let forced_size = sys::AVSEEK_SIZE as c_int | sys::AVSEEK_FORCE as c_int;
+
+        assert_eq!(normalize_avio_seek_whence(forced_set), SEEK_SET);
+        assert_eq!(
+            normalize_avio_seek_whence(forced_size),
+            sys::AVSEEK_SIZE as c_int
+        );
     }
 
     #[test]
