@@ -2750,7 +2750,10 @@ impl ExternalSubtitleSession {
                 return Err(PlaybackError::SubtitleTrackNotRemovable(*stream_index));
             }
         };
-        let source = source_from_uri_with_hint(&uri, crate::core::MediaSourceHint::Auto)?;
+        let source = match external_subtitle_source(&uri) {
+            Some(source) => source,
+            None => source_from_uri_with_hint(&uri, crate::core::MediaSourceHint::Auto)?,
+        };
         let mut demuxer = Demuxer::open_source(source)?;
         let stream_index = demuxer
             .probe()
@@ -2830,6 +2833,71 @@ impl ExternalSubtitleSession {
         self.eof = false;
         Ok(())
     }
+}
+
+/// Whether charset inspection should take over opening `uri`.
+///
+/// True for the text subtitle formats FFmpeg parses as UTF-8, and also for a
+/// URI whose last path segment carries no extension at all -- Android hands us
+/// `fd://<n>?offset=...&length=...` for a content:// pick, which names no file
+/// yet is exactly where GBK/Big5/Shift-JIS sidecars turn up. A known extension
+/// that is not a text format (PGS `.sup`, VobSub `.idx`/`.sub`) is left to the
+/// regular source path so its bytes are never buffered.
+fn external_subtitle_needs_charset_inspection(uri: &str) -> bool {
+    let path = crate::subtitle::uri_path_component(uri);
+    match crate::subtitle::subtitle_path_extension(path) {
+        Some(_) => crate::subtitle::SubtitleFileFormat::from_path(path).is_some(),
+        None => true,
+    }
+}
+
+/// Opens an external text subtitle, transcoding it to UTF-8 when its bytes are
+/// not already valid UTF-8.
+///
+/// Returns `None` only when the URI was never taken over (see
+/// [`external_subtitle_needs_charset_inspection`]) or could not be read, in
+/// which case the caller opens it through the regular source path. Once the
+/// bytes have been read this **always** yields a source holding them, even for
+/// passthrough: the URI must not be opened a second time. Android content
+/// descriptors are one-shot and a reopen fails outright, and an HTTP sidecar
+/// would otherwise be downloaded twice for the common already-UTF-8 case.
+fn external_subtitle_source(uri: &str) -> Option<Box<dyn source::MediaSource>> {
+    if !external_subtitle_needs_charset_inspection(uri) {
+        return None;
+    }
+    let bytes = match source::read_uri_to_end(uri) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "subtitle_charset",
+                    "uri": uri,
+                    "detected": "unread",
+                    "transcoded": false,
+                    "error": error.to_string(),
+                })
+                .to_string(),
+            );
+            return None;
+        }
+    };
+    let inspection = crate::subtitle_charset::inspect(&bytes);
+    let transcoded = inspection.utf8.is_some();
+    trace::diagnostic(
+        serde_json::json!({
+            "event": "subtitle_charset",
+            "uri": uri,
+            "detected": inspection.detected,
+            "transcoded": transcoded,
+        })
+        .to_string(),
+    );
+    Some(Box::new(
+        crate::subtitle_charset::TranscodedMemorySource::new(
+            uri.to_string(),
+            inspection.utf8.unwrap_or(bytes),
+        ),
+    ))
 }
 
 fn external_subtitle_title(uri: &str) -> Option<String> {
@@ -5687,6 +5755,75 @@ mod tests {
         assert_eq!(frame.end, Some(Duration::from_secs(3)));
         assert_eq!(frame.text.len(), 1);
         assert_eq!(frame.text[0].display_text(), "External subtitle");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn external_subtitle_inspection_covers_query_uris_and_extensionless_uris() {
+        assert!(external_subtitle_needs_charset_inspection("/tmp/movie.srt"));
+        // Signed sidecar URLs keep their extension behind a query string.
+        assert!(external_subtitle_needs_charset_inspection(
+            "https://host/sub.srt?token=abc"
+        ));
+        // Android content picks arrive as a bare descriptor with no file name.
+        assert!(external_subtitle_needs_charset_inspection(
+            "fd://42?offset=0&length=4096"
+        ));
+        // Bitmap subtitle formats stay on the regular source path so their
+        // bytes are never buffered for a charset guess.
+        assert!(!external_subtitle_needs_charset_inspection(
+            "/tmp/movie.sup"
+        ));
+        assert!(!external_subtitle_needs_charset_inspection(
+            "https://host/movie.idx?token=abc"
+        ));
+    }
+
+    #[test]
+    fn external_subtitle_source_serves_utf8_bytes_without_reopening() {
+        let path = std::env::temp_dir().join(format!(
+            "erika-external-subtitle-utf8-{}.srt",
+            std::process::id()
+        ));
+        let srt = "1\n00:00:01,000 --> 00:00:03,000\nalready utf-8\n";
+        fs::write(&path, srt).unwrap();
+
+        // Passthrough must still hand back a source: the bytes were already
+        // consumed, and a one-shot descriptor could not be opened again.
+        let source = external_subtitle_source(&path.to_string_lossy())
+            .expect("passthrough must still yield a source");
+        let mut source = source;
+        let bytes = source
+            .read_range(crate::source::ByteRange::suffix_from(0))
+            .unwrap();
+        assert_eq!(bytes, srt.as_bytes());
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn external_subtitle_session_transcodes_gbk_encoded_file() {
+        let path = std::env::temp_dir().join(format!(
+            "erika-external-subtitle-gbk-{}.srt",
+            std::process::id()
+        ));
+        let dialogue = "简体中文外挂字幕";
+        let srt = format!("1\n00:00:01,000 --> 00:00:03,000\n{dialogue}\n");
+        let (encoded, _, had_errors) = encoding_rs::GBK.encode(&srt);
+        assert!(!had_errors);
+        assert!(std::str::from_utf8(&encoded).is_err());
+        fs::write(&path, &encoded).unwrap();
+        let config = SubtitleTrackConfig::external(1_000_008, path.to_string_lossy());
+
+        let mut external = ExternalSubtitleSession::open(config).unwrap();
+        external.pump_until(Duration::from_secs(2)).unwrap();
+        let frame = external.pop_front().unwrap();
+
+        assert_eq!(frame.track_id, 1_000_008);
+        assert_eq!(frame.start, Some(Duration::from_secs(1)));
+        assert_eq!(frame.text.len(), 1);
+        assert_eq!(frame.text[0].display_text(), dialogue);
 
         let _ = fs::remove_file(path);
     }
