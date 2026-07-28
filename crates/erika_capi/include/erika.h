@@ -270,6 +270,9 @@ typedef struct ErikaTrackInfo {
   char *sample_format;
   char *profile;
   int32_t level;
+  uint64_t bit_rate;
+  uint32_t frame_rate_numerator;
+  uint32_t frame_rate_denominator;
 } ErikaTrackInfo;
 
 typedef struct ErikaEvent {
@@ -502,6 +505,9 @@ ErikaStatus erika_presenter_danmaku_tracks(
     uintptr_t *out_len);
 ErikaStatus erika_presenter_clear_danmaku(ErikaPresenterHandle *handle);
 ErikaStatus erika_presenter_set_danmaku_enabled(
+    ErikaPresenterHandle *handle,
+    bool enabled);
+ErikaStatus erika_presenter_set_debug_hud_enabled(
     ErikaPresenterHandle *handle,
     bool enabled);
 ErikaStatus erika_presenter_set_danmaku_config(

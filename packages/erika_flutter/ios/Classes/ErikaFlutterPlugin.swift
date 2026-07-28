@@ -175,6 +175,9 @@ private struct ErikaTrackInfoC {
   var sampleFormat: UnsafeMutablePointer<CChar>?
   var profile: UnsafeMutablePointer<CChar>?
   var level: Int32 = 0
+  var bitRate: UInt64 = 0
+  var frameRateNumerator: UInt32 = 0
+  var frameRateDenominator: UInt32 = 0
 }
 
 private struct ErikaPresenterConfigC {
@@ -375,6 +378,7 @@ private final class ErikaNativeLibrary {
   ) -> Int32
   typealias ClearDanmakuFn = @convention(c) (UnsafeMutableRawPointer?) -> Int32
   typealias SetDanmakuEnabledFn = @convention(c) (UnsafeMutableRawPointer?, Bool) -> Int32
+  typealias SetDebugHudEnabledFn = @convention(c) (UnsafeMutableRawPointer?, Bool) -> Int32
   typealias SetDanmakuConfigFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeRawPointer?) -> Int32
   typealias GetDanmakuConfigFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias SetDanmakuFontFn = @convention(c) (
@@ -435,6 +439,7 @@ private final class ErikaNativeLibrary {
   let danmakuTracks: TracksFn?
   let clearDanmaku: ClearDanmakuFn?
   let setDanmakuEnabled: SetDanmakuEnabledFn?
+  let setDebugHudEnabled: SetDebugHudEnabledFn?
   let setDanmakuConfig: SetDanmakuConfigFn?
   let getDanmakuConfig: GetDanmakuConfigFn?
   let setDanmakuFont: SetDanmakuFontFn?
@@ -493,6 +498,7 @@ private final class ErikaNativeLibrary {
     danmakuTracks = Self.loadOptional("erika_presenter_danmaku_tracks", from: libraryHandle, as: TracksFn.self)
     clearDanmaku = Self.loadOptional("erika_presenter_clear_danmaku", from: libraryHandle, as: ClearDanmakuFn.self)
     setDanmakuEnabled = Self.loadOptional("erika_presenter_set_danmaku_enabled", from: libraryHandle, as: SetDanmakuEnabledFn.self)
+    setDebugHudEnabled = Self.loadOptional("erika_presenter_set_debug_hud_enabled", from: libraryHandle, as: SetDebugHudEnabledFn.self)
     setDanmakuConfig = Self.loadOptional("erika_presenter_set_danmaku_config_ptr", from: libraryHandle, as: SetDanmakuConfigFn.self)
     getDanmakuConfig = Self.loadOptional("erika_presenter_get_danmaku_config", from: libraryHandle, as: GetDanmakuConfigFn.self)
     setDanmakuFont = Self.loadOptional("erika_presenter_set_danmaku_font", from: libraryHandle, as: SetDanmakuFontFn.self)
@@ -825,6 +831,13 @@ private final class ErikaPlayerHost {
     }
     try check(setEnabled(handle, enabled), operation: "set_danmaku_enabled")
     currentDanmakuConfig.enabled = enabled ? 1 : 0
+  }
+
+  func setDebugHudEnabled(_ enabled: Bool) throws {
+    guard let setEnabled = library.setDebugHudEnabled else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_set_debug_hud_enabled")
+    }
+    try check(setEnabled(handle, enabled), operation: "set_debug_hud_enabled")
   }
 
   func danmakuConfigSnapshot() -> ErikaDanmakuConfigC {
@@ -1491,6 +1504,10 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       case "getPresenterStats":
         let args = try dictionaryArgs(call.arguments)
         result(try playerHost(from: args).presenterStats())
+      case "setDebugHudEnabled":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).setDebugHudEnabled(boolValue(args["enabled"]) ?? false)
+        result(nil)
       case "addExternalSubtitle":
         let args = try dictionaryArgs(call.arguments)
         guard let uri = args["uri"] as? String, !uri.isEmpty else {
@@ -2221,6 +2238,9 @@ private extension ErikaTrackInfoC {
       "sampleFormat": sampleFormat.map { String(cString: $0) } as Any,
       "profile": profile.map { String(cString: $0) } as Any,
       "level": Int(level),
+      "bitRate": Int64(clamping: bitRate),
+      "frameRateNumerator": Int(frameRateNumerator),
+      "frameRateDenominator": Int(frameRateDenominator),
     ]
   }
 }

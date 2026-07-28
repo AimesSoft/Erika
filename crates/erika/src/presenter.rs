@@ -37,6 +37,7 @@ use crate::danmaku::{
     DanmakuRenderPlan, DanmakuSession, DanmakuTimeline, DanmakuTrackInfo, DanmakuTrackSource,
     DanmakuViewport, DfmLayoutEngine, DfmPreparedLayout,
 };
+use crate::debug_hud::{DebugHud, DebugHudSnapshot};
 use crate::ffmpeg::DecoderBackend;
 use crate::overlay::{OverlayFrame, OverlayTimeline, OverlayViewport};
 #[cfg(any(target_os = "windows", target_os = "android"))]
@@ -229,6 +230,7 @@ pub struct PresenterRuntime {
     last_audio_runtime_stats: AudioOutputRuntimeStats,
     playback_rate: f64,
     current_overlay: Option<OverlayFrame>,
+    debug_hud: DebugHud,
     current_danmaku: Option<DanmakuRenderPlan>,
     current_danmaku_prepared: Option<CurrentDanmakuPrepared>,
     rejected_video_import_route: Option<RejectedVideoImportRoute>,
@@ -526,6 +528,7 @@ impl PresenterRuntime {
             last_audio_runtime_stats: AudioOutputRuntimeStats::default(),
             playback_rate: 1.0,
             current_overlay: None,
+            debug_hud: DebugHud::new(),
             current_danmaku: None,
             current_danmaku_prepared: None,
             rejected_video_import_route: None,
@@ -682,6 +685,14 @@ impl PresenterRuntime {
 
     pub fn volume(&self) -> f64 {
         self.audio_output.volume() as f64
+    }
+
+    pub fn set_debug_hud_enabled(&mut self, enabled: bool) {
+        self.debug_hud.set_enabled(enabled);
+    }
+
+    pub fn debug_hud_enabled(&self) -> bool {
+        self.debug_hud.enabled()
     }
 
     pub fn set_subtitle_scale(&mut self, scale: f64) {
@@ -889,8 +900,43 @@ impl PresenterRuntime {
             plan_items,
         );
 
+        let hud_snapshot = self.debug_hud_snapshot();
+        let hud_viewport = self
+            .current_overlay
+            .as_ref()
+            .map(|overlay| overlay.viewport)
+            .or_else(|| {
+                self.current_surface_metrics.map(|metrics| {
+                    OverlayViewport::new(
+                        metrics.physical_extent.width,
+                        metrics.physical_extent.height,
+                    )
+                })
+            });
+        let hud_plane = hud_viewport.and_then(|viewport| {
+            self.debug_hud
+                .update(
+                    Instant::now(),
+                    viewport.width,
+                    viewport.height,
+                    hud_snapshot,
+                )
+                .cloned()
+        });
+        let mut render_overlay = self.current_overlay.clone();
+        if let Some(plane) = hud_plane {
+            let viewport = hud_viewport.expect("HUD requires a viewport");
+            let overlay = render_overlay.get_or_insert_with(|| OverlayFrame {
+                pts: self.current_media_time,
+                viewport,
+                subtitle_planes: Vec::new(),
+                subtitle_alpha_planes: Vec::new(),
+                subtitle_changed: false,
+            });
+            overlay.subtitle_planes.push(plane);
+        }
         let context = RenderFrameContext::new(self.current_media_time, self.current_generation)
-            .overlay(self.current_overlay.as_ref())
+            .overlay(render_overlay.as_ref())
             .danmaku(self.current_danmaku.as_ref())
             .output_size(
                 self.current_surface_metrics
@@ -969,6 +1015,77 @@ impl PresenterRuntime {
             ));
         }
         Ok(self.stats)
+    }
+
+    fn debug_hud_snapshot(&self) -> DebugHudSnapshot {
+        let selected = self.player.track_selection().video.and_then(|selected| {
+            self.player
+                .tracks()
+                .into_iter()
+                .find(|track| track.id == selected)
+        });
+        let selected_audio = self.player.track_selection().audio.and_then(|selected| {
+            self.player
+                .tracks()
+                .into_iter()
+                .find(|track| track.id == selected)
+        });
+        let renderer = self.renderer.runtime_stats();
+        let clock = self.audio_output.clock_snapshot();
+        let output = self.renderer.output_status();
+        let audio_runtime = self.audio_output.runtime_stats();
+        let surface = self.current_surface_metrics;
+        DebugHudSnapshot {
+            codec: selected.as_ref().and_then(|track| track.codec.clone()),
+            width: selected.as_ref().map_or(0, |track| track.width),
+            height: selected.as_ref().map_or(0, |track| track.height),
+            bit_rate: selected.as_ref().and_then(|track| track.bit_rate),
+            nominal_fps: selected
+                .as_ref()
+                .and_then(|track| track.frame_rate.as_ref())
+                .map(|rate| rate.frames_per_second()),
+            pixel_format: selected
+                .as_ref()
+                .and_then(|track| track.pixel_format.clone()),
+            profile: selected.as_ref().and_then(|track| track.profile.clone()),
+            player_state: format!("{:?}", self.player.state()).to_lowercase(),
+            media_time: self.current_media_time,
+            duration: self.player.duration(),
+            playback_rate: self.playback_rate,
+            surface_width: surface.map_or(0, |metrics| metrics.physical_extent.width),
+            surface_height: surface.map_or(0, |metrics| metrics.physical_extent.height),
+            decoded_video_frames: self.stats.decoded_video_frames,
+            rendered_video_frames: self.stats.rendered_video_frames,
+            dropped_video_frames: self.stats.video_frame_backpressure_drops,
+            hardware_video_frames: renderer.hardware_video_frames,
+            software_video_frames: renderer.software_video_frames,
+            zero_copy_video_frames: renderer.zero_copy_video_frames,
+            direct_zero_copy_video_frames: renderer.direct_zero_copy_video_frames,
+            shared_handle_video_frames: renderer.shared_handle_video_frames,
+            cpu_video_frame_fallbacks: renderer.cpu_video_frame_fallbacks,
+            import_failures: self.stats.import_failures,
+            render_failures: self.stats.render_failures,
+            render_duration: self.last_render_duration,
+            gpu_duration: renderer.last_gpu_duration,
+            audio_queued_frames: clock.map_or(0, |snapshot| snapshot.queued_frames),
+            audio_queued_duration: clock.and_then(|snapshot| snapshot.queued_duration),
+            audio_underflow_frames: clock.map_or(0, |snapshot| snapshot.underflow_frames),
+            audio_codec: selected_audio
+                .as_ref()
+                .and_then(|track| track.codec.clone()),
+            audio_sample_rate: selected_audio.as_ref().map_or(0, |track| track.sample_rate),
+            audio_channels: selected_audio.as_ref().map_or(0, |track| track.channels),
+            audio_recovery_state: audio_runtime.recovery_state.as_str().to_string(),
+            hdr_output_active: renderer.hdr10_output_active,
+            output_encoding: output.active_encoding.label().to_string(),
+            output_format: output.surface_format.label().to_string(),
+            output_headroom: output.active_headroom,
+            output_fallback: output.fallback_reason.label().to_string(),
+            danmaku_items: self
+                .current_danmaku
+                .as_ref()
+                .map_or(0, |plan| plan.items.len()),
+        }
     }
 
     pub fn capture_frame_rgba(&mut self, width: u32, height: u32) -> Result<Option<Vec<u8>>> {

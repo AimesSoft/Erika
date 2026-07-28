@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::core::{ColorPrimaries, TrackInfo, TrackKind, TransferFunction, VideoParams};
+use crate::core::{ColorPrimaries, FrameRate, TrackInfo, TrackKind, TransferFunction, VideoParams};
 use crate::renderer::pipeline::{
     Chromaticity, ColorRange, ContentLightMetadata, HdrMetadata, MasteringDisplayMetadata,
     MatrixCoefficients,
@@ -3241,8 +3241,12 @@ fn inspect_format_context(
         track.title = metadata_value(unsafe { (*stream).metadata }, "title");
         track.language = metadata_value(unsafe { (*stream).metadata }, "language");
         track.codec = codec.clone();
+        track.bit_rate = u64::try_from(unsafe { (*codecpar).bit_rate })
+            .ok()
+            .filter(|bit_rate| *bit_rate > 0);
 
         if kind == TrackKind::Video {
+            track.frame_rate = unsafe { stream_frame_rate(stream) };
             let probe = unsafe { video_probe(&track, codecpar) };
             track.width = probe.params.width;
             track.height = probe.params.height;
@@ -3339,6 +3343,17 @@ unsafe fn codec_name(codec_id: sys::AVCodecID) -> Option<String> {
             .to_string_lossy()
             .into_owned(),
     )
+}
+
+unsafe fn stream_frame_rate(stream: *const sys::AVStream) -> Option<FrameRate> {
+    let average = unsafe { (*stream).avg_frame_rate };
+    frame_rate_from_av(average).or_else(|| frame_rate_from_av(unsafe { (*stream).r_frame_rate }))
+}
+
+fn frame_rate_from_av(value: sys::AVRational) -> Option<FrameRate> {
+    let numerator = u32::try_from(value.num).ok()?;
+    let denominator = u32::try_from(value.den).ok()?;
+    FrameRate::new(numerator, denominator)
 }
 
 unsafe fn video_probe(track: &TrackInfo, codecpar: *const sys::AVCodecParameters) -> VideoProbe {
@@ -4072,6 +4087,23 @@ mod tests {
     }
 
     #[test]
+    fn playback_fixture_exposes_video_technical_metadata() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/playback/playback-fixture.mkv");
+        let probe = probe_path(path).unwrap();
+        let video = probe
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Video)
+            .unwrap();
+
+        assert_eq!(video.codec.as_deref(), Some("mpeg4"));
+        assert_eq!((video.width, video.height), (160, 90));
+        assert_eq!(video.bit_rate, None);
+        assert_eq!(video.frame_rate, FrameRate::new(30, 1));
+    }
+
+    #[test]
     fn time_base_converts_packet_timestamps() {
         let timestamp = PacketTimestamp {
             raw: 24,
@@ -4732,6 +4764,17 @@ mod tests {
 
     fn rational(num: i32, den: i32) -> sys::AVRational {
         sys::AVRational { num, den }
+    }
+
+    #[test]
+    fn frame_rate_normalizes_positive_rationals() {
+        assert_eq!(
+            frame_rate_from_av(rational(60_000, 2_002)),
+            FrameRate::new(30_000, 1_001)
+        );
+        assert_eq!(frame_rate_from_av(rational(0, 1)), None);
+        assert_eq!(frame_rate_from_av(rational(30, 0)), None);
+        assert_eq!(frame_rate_from_av(rational(-30, 1)), None);
     }
 
     fn assert_close(actual: f32, expected: f32) {

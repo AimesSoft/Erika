@@ -813,6 +813,14 @@ class ErikaPlayer {
     return ErikaPresenterStats.fromMap(stats);
   }
 
+  Future<void> setDebugHudEnabled(bool enabled) async {
+    final playerId = await ensureCreated();
+    await _channel.invokeMethod<void>('setDebugHudEnabled', <String, Object?>{
+      'playerId': playerId,
+      'enabled': enabled,
+    });
+  }
+
   Future<Uint8List?> screenshot({int? viewId, int? width, int? height}) async {
     final playerId = await ensureCreated();
     return _channel.invokeMethod<Uint8List>('screenshot', <String, Object?>{

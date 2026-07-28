@@ -4,6 +4,7 @@ pub mod apple;
 pub mod audio;
 pub mod core;
 pub mod danmaku;
+pub mod debug_hud;
 pub mod ffmpeg;
 pub mod overlay;
 pub mod playback;

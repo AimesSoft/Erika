@@ -1723,6 +1723,7 @@ class ErikaFlutterPlugin :
             "getUpscalerStatus",
             "getOutputStatus",
             "getPresenterStats",
+            "setDebugHudEnabled",
             "addExternalSubtitle",
             "removeSubtitleTrack",
             "loadDanmakuFile",
