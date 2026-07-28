@@ -167,6 +167,13 @@ final status = await player.getUpscalerStatus();
 
 // Track management
 final tracks = await player.tracks();
+for (final track in tracks) {
+  if (track.kind == ErikaTrackKind.video && track.selected) {
+    print('${track.codec} ${track.width}x${track.height}');
+    print('${track.bitRate} bps / ${track.framesPerSecond} fps');
+    break;
+  }
+}
 await player.selectAudioTrack(trackId);
 await player.selectSubtitleTrack(trackId);
 await player.addExternalSubtitle('/path/to/subtitle.srt');
@@ -176,6 +183,10 @@ await player.loadDanmakuFile('/path/to/danmaku.xml');
 await player.addDanmakuTrackJson(jsonString, name: 'source', offset: Duration.zero);
 await player.setDanmakuConfig(fontSize: 30, displayArea: 0.5);
 
+// Native diagnostics HUD (disabled by default)
+await player.setDebugHudEnabled(true);
+final presenterStats = await player.getPresenterStats();
+
 // Events
 player.events.listen((event) {
   // event.kind, event.state, event.position, event.duration, ...
@@ -183,6 +194,49 @@ player.events.listen((event) {
 
 await player.dispose();
 ```
+
+## Media Track Information
+
+`tracks()` returns an `ErikaTrackInfo` for every embedded or external track. A video track
+provides `codec`, `width`, `height`, `pixelFormat`, `profile`, `level`, `bitRate`,
+`frameRateNumerator`, and `frameRateDenominator`; audio tracks additionally provide
+`sampleRate`, `channels`, and `sampleFormat`.
+
+- `bitRate` is in bit/s and comes from the container/codec's average or nominal track metadata.
+  It is `null` when unavailable and is not an instantaneous runtime bitrate.
+- `frameRateNumerator` / `frameRateDenominator` retain the rational value, preventing values
+  such as `30000/1001` from being truncated. `framesPerSecond` is a Dart convenience getter;
+  for variable-frame-rate media it remains an average or declared value.
+- `TracksChanged` and `TrackSelectionChanged` events include the complete `trackList`. Hosts may
+  also call `tracks()` again after either event to obtain a current snapshot.
+
+```dart
+player.events.listen((event) {
+  if (event.kind == ErikaEventKind.tracksChanged) {
+    for (final track in event.trackList) {
+      if (track.kind == ErikaTrackKind.video && track.selected) {
+        print(track.toMap());
+        break;
+      }
+    }
+  }
+});
+```
+
+## Native Debug HUD
+
+`setDebugHudEnabled(true)` makes Erika draw a diagnostic HUD in the native video composition. It
+does not render through Dart or alter the Flutter widget hierarchy. It is off by
+default and intended for development, performance analysis, and on-device diagnosis.
+
+The low-frequency HUD snapshot includes track codec/resolution/bitrate/frame rate, playback
+position and rate, decoded and rendered FPS, hardware/software decode route, zero-copy/fallback
+counters, CPU/GPU render times, audio queue and underflow, HDR output negotiation, and danmaku
+item count. FPS is derived from adjacent sampling windows; frame and failure counters are
+cumulative for the presenter lifetime. The HUD is excluded from `screenshot()` off-screen captures.
+
+For a custom UI, use `getPresenterStats()` to retrieve the latest native display-tick snapshot. It
+does not drive the HUD, and its freshness depends on an attached surface and active display loop.
 
 ## Neural Upscaler Status
 

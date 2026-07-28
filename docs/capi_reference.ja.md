@@ -303,6 +303,12 @@ ErikaStatus erika_presenter_tracks(ErikaPresenterHandle *, ErikaTrackInfo *out_t
 
 `ErikaHandle` のトラック関数と同じ意味論です。
 
+`ErikaTrackInfo` の `codec`、`width`、`height`、`pixel_format`、`profile`、`level` は
+track metadata です。`bit_rate` の単位は bit/s、`frame_rate_numerator` /
+`frame_rate_denominator` は video track の有理 frame rate です。`0` は unknown を表します。
+これらは open または track change 時に probe される平均/nominal 値であり、瞬間 bitrate や
+real-time render FPS ではありません。
+
 ### 弾幕（ダンマク）
 
 ```c
@@ -317,6 +323,7 @@ ErikaStatus erika_presenter_set_danmaku_global_offset(ErikaPresenterHandle *, in
 ErikaStatus erika_presenter_danmaku_tracks(ErikaPresenterHandle *, ErikaDanmakuTrackInfo *out_tracks, uintptr_t capacity, uintptr_t *out_len);
 ErikaStatus erika_presenter_clear_danmaku(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_set_danmaku_enabled(ErikaPresenterHandle *, bool enabled);
+ErikaStatus erika_presenter_set_debug_hud_enabled(ErikaPresenterHandle *, bool enabled);
 ErikaStatus erika_presenter_set_danmaku_config(ErikaPresenterHandle *, ErikaDanmakuConfig config);
 ErikaStatus erika_presenter_set_danmaku_config_ptr(ErikaPresenterHandle *, const ErikaDanmakuConfig *config);
 ErikaStatus erika_presenter_get_danmaku_config(ErikaPresenterHandle *, ErikaDanmakuConfig *out_config);
@@ -332,6 +339,13 @@ XML（`*_file`、パス/URL）または JSON（`*_json`、インライン）。`
 値渡しを避ける）、`get_danmaku_config` で読み戻します。レイアウトエンジンは
 [danmaku_architecture.md](danmaku_architecture.md) を参照。
 `set_danmaku_block_words_json` はフィルタ用の文字列 JSON 配列を取ります。
+
+`set_debug_hud_enabled` は default で off です。on にすると Presenter は native video
+composition に diagnostic HUD を描画します。HUD は track technical metadata、
+playback state、decoded/rendered FPS、decode/zero-copy counters、render/audio state、HDR
+output、danmaku item count を表示します。video frame がある時だけ表示され、host による
+stats polling は不要で、`ErikaPresenterStats` にも書き込みません。off-screen
+`capture_frame_rgba` は HUD を含みません。
 
 ### Surface とプレゼンテーション
 
@@ -473,7 +487,8 @@ free(rgba);
 - **`ErikaTrackCounts`** / **`ErikaTrackSelection`** —— 種別ごとの件数 / 選択 id
   （`-1` = 無し）。
 - **`ErikaTrackInfo`** —— トラックごとの全メタデータ。6 つの `char*` フィールドは
-  呼び出し側の所有（`erika_track_info_free` で解放）。
+  caller が所有（`erika_track_info_free` で解放）。video track はさらに `bit_rate`
+  （bit/s）と `frame_rate_numerator` / `frame_rate_denominator`（`0` = unknown）を持ちます。
 - **`ErikaEvent`** —— 構造体による tagged union：`kind` がどのフィールドが有効かを選ぶ
   （`state`、`duration_micros`、`position_micros`、`buffering`、`video`、`tracks`）。
   `Error` イベントは `status` がコードを運ぶ。

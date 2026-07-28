@@ -159,6 +159,11 @@ void        erika_track_info_free(ErikaTrackInfo *track);
 `erika_tracks` 遵循计数数组惯用法。`erika_track_selection` 报告当前选中的
 视频/音频/字幕轨 id（`-1` 表示无）。选择字幕轨 id `-1` 即关闭字幕。
 
+`ErikaTrackInfo` 的 `codec`、`width`、`height`、`pixel_format`、`profile`、`level` 是轨道
+元数据。`bit_rate` 的单位为 bit/s，`frame_rate_numerator` / `frame_rate_denominator` 是视频
+轨的有理帧率；`0` 表示对应值未知。它们在 open 或轨道变化时探测，属于平均或标称值，
+不是播放中的瞬时码率或实时渲染 FPS。
+
 ### 状态与事件
 
 ```c
@@ -304,6 +309,7 @@ ErikaStatus erika_presenter_set_danmaku_global_offset(ErikaPresenterHandle *, in
 ErikaStatus erika_presenter_danmaku_tracks(ErikaPresenterHandle *, ErikaDanmakuTrackInfo *out_tracks, uintptr_t capacity, uintptr_t *out_len);
 ErikaStatus erika_presenter_clear_danmaku(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_set_danmaku_enabled(ErikaPresenterHandle *, bool enabled);
+ErikaStatus erika_presenter_set_debug_hud_enabled(ErikaPresenterHandle *, bool enabled);
 ErikaStatus erika_presenter_set_danmaku_config(ErikaPresenterHandle *, ErikaDanmakuConfig config);
 ErikaStatus erika_presenter_set_danmaku_config_ptr(ErikaPresenterHandle *, const ErikaDanmakuConfig *config);
 ErikaStatus erika_presenter_get_danmaku_config(ErikaPresenterHandle *, ErikaDanmakuConfig *out_config);
@@ -318,6 +324,11 @@ ErikaStatus erika_presenter_set_danmaku_block_words_json(ErikaPresenterHandle *,
 传结构体）；`get_danmaku_config` 读回。布局引擎见
 [danmaku_architecture.md](danmaku_architecture.md)。`set_danmaku_block_words_json`
 接受一个字符串 JSON 数组用于过滤。
+
+`set_debug_hud_enabled` 默认关闭。开启后 Presenter 在原生视频合成中绘制诊断 HUD，显示轨道
+技术信息、播放状态、实时解码/渲染 FPS、解码/零拷贝路径、渲染和音频状态、
+HDR 输出以及弹幕数量。HUD 只在已有视频帧时显示；其统计不要求调用方轮询，也不会写入
+`ErikaPresenterStats`。`capture_frame_rgba` 的离屏截图不包含 HUD。
 
 ### Surface 与呈现
 
@@ -453,7 +464,8 @@ free(rgba);
 - **`ErikaTrackCounts`** / **`ErikaTrackSelection`** —— 各类轨道计数 / 选中 id
   （`-1` = 无）。
 - **`ErikaTrackInfo`** —— 完整的每轨元数据；六个 `char*` 字段归调用方所有（用
-  `erika_track_info_free` 释放）。
+  `erika_track_info_free` 释放）。视频轨还包含 `bit_rate`（bit/s）和
+  `frame_rate_numerator` / `frame_rate_denominator`（`0` = unknown）。
 - **`ErikaEvent`** —— 用结构体表达的 tagged union：`kind` 决定哪些字段有意义
   （`state`、`duration_micros`、`position_micros`、`buffering`、`video`、`tracks`）；
   `Error` 事件由 `status` 携带状态码。
