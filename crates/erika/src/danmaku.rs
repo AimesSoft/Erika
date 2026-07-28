@@ -21,6 +21,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::NIPAPLAY_FALLBACK_FONT;
+use crate::subtitle::SubtitleFontAttachment;
 use crate::text::TextShaper;
 use outline::{raster_radius, resolve_width_px};
 use typography::{
@@ -1139,6 +1140,21 @@ struct DanmakuFontFace {
     font: Arc<FontArc>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DanmakuFontSelection {
+    pub generation: u64,
+    pub fonts: Arc<[SubtitleFontAttachment]>,
+}
+
+impl DanmakuFontSelection {
+    pub fn new(generation: u64, fonts: impl Into<Arc<[SubtitleFontAttachment]>>) -> Self {
+        Self {
+            generation,
+            fonts: fonts.into(),
+        }
+    }
+}
+
 impl DanmakuFontFace {
     fn new(id: u32, font: FontArc) -> Self {
         Self {
@@ -1307,6 +1323,8 @@ impl TextLayoutCacheKey {
 pub struct DanmakuTextRasterizer {
     shaper: TextShaper,
     primary_font: Option<DanmakuFontFace>,
+    selected_fonts: Arc<[DanmakuFontFace]>,
+    selected_before_primary: bool,
     fallback_fonts: Arc<Mutex<SystemFontFallback>>,
     glyph_cache: Arc<Mutex<HashMap<GlyphCacheKey, Arc<RasterizedGlyph>>>>,
     text_layout_cache: Arc<Mutex<HashMap<TextLayoutCacheKey, Arc<PreparedTextLayout>>>>,
@@ -1324,6 +1342,8 @@ impl DanmakuTextRasterizer {
         Self {
             shaper,
             primary_font: load_default_font().map(|font| DanmakuFontFace::new(0, font)),
+            selected_fonts: Arc::from([]),
+            selected_before_primary: false,
             fallback_fonts: Arc::new(Mutex::new(SystemFontFallback::new(1))),
             glyph_cache: Arc::new(Mutex::new(HashMap::new())),
             text_layout_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -1332,16 +1352,30 @@ impl DanmakuTextRasterizer {
     }
 
     pub fn for_config(config: &DanmakuLayoutConfig) -> Self {
+        Self::for_config_and_selection(config, &DanmakuFontSelection::default())
+    }
+
+    pub fn for_config_and_selection(
+        config: &DanmakuLayoutConfig,
+        selection: &DanmakuFontSelection,
+    ) -> Self {
         let shaper = TextShaper::default();
+        let primary_font = load_configured_font(
+            &config.custom_font_family,
+            &config.custom_font_file_path,
+            config.custom_font_face_index,
+        )
+        .map(|font| DanmakuFontFace::new(0, font));
+        let first_selected_id = u32::from(primary_font.is_some());
+        let selected_fonts = load_selected_fonts(&selection.fonts, first_selected_id);
+        let next_font_id = first_selected_id.saturating_add(selected_fonts.len() as u32);
         Self {
             shaper,
-            primary_font: load_configured_font(
-                &config.custom_font_family,
-                &config.custom_font_file_path,
-                config.custom_font_face_index,
-            )
-            .map(|font| DanmakuFontFace::new(0, font)),
-            fallback_fonts: Arc::new(Mutex::new(SystemFontFallback::new(1))),
+            primary_font,
+            selected_fonts: Arc::from(selected_fonts),
+            selected_before_primary: config.custom_font_family.is_empty()
+                && config.custom_font_file_path.is_empty(),
+            fallback_fonts: Arc::new(Mutex::new(SystemFontFallback::new(next_font_id))),
             glyph_cache: Arc::new(Mutex::new(HashMap::new())),
             text_layout_cache: Arc::new(Mutex::new(HashMap::new())),
             glyph_atlas: Arc::new(Mutex::new(PersistentGlyphAtlas::new())),
@@ -1483,8 +1517,18 @@ impl DanmakuTextRasterizer {
     }
 
     fn resolve_font(&self, ch: char) -> Option<DanmakuFontFace> {
+        if self.selected_before_primary {
+            if let Some(font) = self.selected_fonts.iter().find(|font| font.has_glyph(ch)) {
+                return Some(font.clone());
+            }
+        }
         if let Some(font) = &self.primary_font {
             if font.has_glyph(ch) {
+                return Some(font.clone());
+            }
+        }
+        if !self.selected_before_primary {
+            if let Some(font) = self.selected_fonts.iter().find(|font| font.has_glyph(ch)) {
                 return Some(font.clone());
             }
         }
@@ -1845,6 +1889,7 @@ pub struct DfmLayoutEngine {
     timeline: DanmakuTimeline,
     config: DanmakuLayoutConfig,
     rasterizer: DanmakuTextRasterizer,
+    font_selection: DanmakuFontSelection,
     prepared: Option<DfmPreparedLayout>,
     stable_tracks: HashMap<u64, usize>,
     stable_viewport: Option<DanmakuViewport>,
@@ -1858,6 +1903,7 @@ impl DfmLayoutEngine {
             timeline,
             config,
             rasterizer,
+            font_selection: DanmakuFontSelection::default(),
             prepared: None,
             stable_tracks: HashMap::new(),
             stable_viewport: None,
@@ -1902,7 +1948,8 @@ impl DfmLayoutEngine {
             || self.config.custom_font_face_index != config.custom_font_face_index;
         self.config = config;
         if font_changed {
-            self.rasterizer = DanmakuTextRasterizer::for_config(&self.config);
+            self.rasterizer =
+                DanmakuTextRasterizer::for_config_and_selection(&self.config, &self.font_selection);
         }
         if layout_changed {
             self.prepared = None;
@@ -1917,6 +1964,17 @@ impl DfmLayoutEngine {
             }
             DanmakuConfigChange::PaintOnly
         }
+    }
+
+    pub fn set_font_selection(&mut self, selection: DanmakuFontSelection) -> bool {
+        if self.font_selection.generation == selection.generation {
+            return false;
+        }
+        self.rasterizer = DanmakuTextRasterizer::for_config_and_selection(&self.config, &selection);
+        self.font_selection = selection;
+        self.prepared = None;
+        self.invalidate_stable_tracks();
+        true
     }
 
     pub fn config(&self) -> &DanmakuLayoutConfig {
@@ -2452,6 +2510,25 @@ fn load_configured_font(family: &str, file_path: &str, face_index: u32) -> Optio
     load_default_font()
 }
 
+fn load_selected_fonts(
+    attachments: &[SubtitleFontAttachment],
+    first_font_id: u32,
+) -> Vec<DanmakuFontFace> {
+    let mut fonts = Vec::new();
+    for attachment in attachments {
+        let mut database = fontdb::Database::new();
+        database.load_font_data(attachment.data.to_vec());
+        let face_ids = database.faces().map(|face| face.id).collect::<Vec<_>>();
+        for face_id in face_ids {
+            if let Some(font) = load_fontdb_face(&database, face_id) {
+                let id = first_font_id.saturating_add(fonts.len() as u32);
+                fonts.push(DanmakuFontFace::new(id, font));
+            }
+        }
+    }
+    fonts
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct CustomDanmakuFontError {
     reason: &'static str,
@@ -2782,6 +2859,10 @@ mod tests {
             (actual - expected).abs() < 0.001,
             "expected {actual} to be close to {expected}"
         );
+    }
+
+    fn selected_font(data: Vec<u8>) -> SubtitleFontAttachment {
+        SubtitleFontAttachment::new("selected", None, Vec::new(), Arc::<[u8]>::from(data))
     }
 
     #[test]
@@ -3151,6 +3232,44 @@ mod tests {
         assert_eq!(reference, Duration::from_secs(10));
         assert_eq!(wide, Duration::from_secs(13));
         assert_eq!(retina_reference, reference);
+    }
+
+    #[test]
+    fn selected_memory_fonts_fallback_in_selection_order() {
+        let first = selected_font(NIPAPLAY_FALLBACK_FONT.to_vec());
+        let second = selected_font(test_ttc());
+        let selection = DanmakuFontSelection::new(1, Arc::from(vec![first, second]));
+        let rasterizer = DanmakuTextRasterizer::for_config_and_selection(
+            &DanmakuLayoutConfig::default(),
+            &selection,
+        );
+
+        let resolved = rasterizer
+            .resolve_font('A')
+            .expect("selected font resolves");
+
+        assert_eq!(resolved.id, 1);
+    }
+
+    #[test]
+    fn font_selection_generation_atomically_invalidates_rasterizer_caches() {
+        let timeline = DanmakuTimeline::new(vec![item(0.0, "cache", DanmakuMode::Top)]).unwrap();
+        let mut engine = DfmLayoutEngine::new(timeline, DanmakuLayoutConfig::default());
+        let viewport = DanmakuViewport::new(640, 360);
+        let first = engine.render_plan(Duration::from_millis(500), viewport, 1);
+        let first_atlas = first.atlas.expect("first atlas exists");
+        let selection = DanmakuFontSelection::new(
+            2,
+            Arc::from(vec![selected_font(NIPAPLAY_FALLBACK_FONT.to_vec())]),
+        );
+
+        assert!(engine.set_font_selection(selection.clone()));
+        assert!(!engine.set_font_selection(selection));
+        assert!(engine.prepared.is_none());
+        let second = engine.render_plan(Duration::from_millis(500), viewport, 2);
+        let second_atlas = second.atlas.expect("second atlas exists");
+
+        assert!(!Arc::ptr_eq(&first_atlas, &second_atlas));
     }
 
     #[test]

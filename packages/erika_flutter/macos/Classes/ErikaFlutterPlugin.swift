@@ -256,6 +256,14 @@ private struct ErikaUpscalerStatusC {
   var lastGpuMicros: UInt64 = 0
 }
 
+private struct ErikaSubtitleMemoryFontStatusC {
+  var registeredCount: UInt = 0
+  var registeredBytes: UInt = 0
+  var selectedCount: UInt = 0
+  var generation: UInt64 = 0
+  var selectedIds: UnsafeMutablePointer<UInt64>?
+}
+
 // Keep field order and types aligned with `ErikaOutputStatus` in erika.h.
 private struct ErikaOutputStatusC {
   var requestedMode: Int32 = 0
@@ -372,6 +380,10 @@ private final class ErikaNativeLibrary {
     UnsafeMutableRawPointer?,
     UnsafeRawPointer?
   ) -> Int32
+  typealias RegisterSubtitleMemoryFontFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt, UnsafeMutablePointer<UInt64>?) -> Int32
+  typealias SelectSubtitleMemoryFontsFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt64>?, UInt) -> Int32
+  typealias GetSubtitleMemoryFontStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
+  typealias FreeSubtitleMemoryFontStatusFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
   typealias GetUpscalerStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias GetOutputStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias SelectTrackFn = @convention(c) (UnsafeMutableRawPointer?, Int64) -> Int32
@@ -439,6 +451,11 @@ private final class ErikaNativeLibrary {
   let setSubtitleScale: SetSubtitleScaleFn?
   let setSubtitleFont: SetSubtitleFontFn?
   let setSubtitleStyle: SetSubtitleStyleFn?
+  let registerSubtitleMemoryFont: RegisterSubtitleMemoryFontFn?
+  let selectSubtitleMemoryFonts: SelectSubtitleMemoryFontsFn?
+  let clearSubtitleMemoryFonts: CommandFn?
+  let getSubtitleMemoryFontStatus: GetSubtitleMemoryFontStatusFn?
+  let freeSubtitleMemoryFontStatus: FreeSubtitleMemoryFontStatusFn?
   let getUpscalerStatus: GetUpscalerStatusFn?
   let getOutputStatus: GetOutputStatusFn?
   let selectAudioTrack: SelectTrackFn
@@ -496,6 +513,11 @@ private final class ErikaNativeLibrary {
     setSubtitleScale = Self.loadOptional("erika_presenter_set_subtitle_scale", from: libraryHandle, as: SetSubtitleScaleFn.self)
     setSubtitleFont = Self.loadOptional("erika_presenter_set_subtitle_font", from: libraryHandle, as: SetSubtitleFontFn.self)
     setSubtitleStyle = Self.loadOptional("erika_presenter_set_subtitle_style", from: libraryHandle, as: SetSubtitleStyleFn.self)
+    registerSubtitleMemoryFont = Self.loadOptional("erika_presenter_register_subtitle_memory_font", from: libraryHandle, as: RegisterSubtitleMemoryFontFn.self)
+    selectSubtitleMemoryFonts = Self.loadOptional("erika_presenter_select_subtitle_memory_fonts", from: libraryHandle, as: SelectSubtitleMemoryFontsFn.self)
+    clearSubtitleMemoryFonts = Self.loadOptional("erika_presenter_clear_subtitle_memory_fonts", from: libraryHandle, as: CommandFn.self)
+    getSubtitleMemoryFontStatus = Self.loadOptional("erika_presenter_get_subtitle_memory_font_status", from: libraryHandle, as: GetSubtitleMemoryFontStatusFn.self)
+    freeSubtitleMemoryFontStatus = Self.loadOptional("erika_subtitle_memory_font_status_free", from: libraryHandle, as: FreeSubtitleMemoryFontStatusFn.self)
     getUpscalerStatus = Self.loadOptional("erika_presenter_get_upscaler_status", from: libraryHandle, as: GetUpscalerStatusFn.self)
     getOutputStatus = Self.loadOptional("erika_presenter_get_output_status", from: libraryHandle, as: GetOutputStatusFn.self)
     selectAudioTrack = try Self.load("erika_presenter_select_audio_track", from: libraryHandle, as: SelectTrackFn.self)
@@ -840,6 +862,34 @@ private final class ErikaPlayerHost {
     }
     try check(result, operation: "get_upscaler_status")
     return status.toFlutterMap()
+  }
+
+  func registerSubtitleMemoryFont(_ data: Data) throws -> UInt64 {
+    guard let register = library.registerSubtitleMemoryFont else { throw ErikaPluginError.symbolMissing("erika_presenter_register_subtitle_memory_font") }
+    var fontId: UInt64 = 0
+    let status = data.withUnsafeBytes { register(handle, $0.bindMemory(to: UInt8.self).baseAddress, UInt(data.count), &fontId) }
+    try check(status, operation: "register_subtitle_memory_font")
+    return fontId
+  }
+
+  func selectSubtitleMemoryFonts(_ fontIds: [UInt64]) throws {
+    guard let select = library.selectSubtitleMemoryFonts else { throw ErikaPluginError.symbolMissing("erika_presenter_select_subtitle_memory_fonts") }
+    try fontIds.withUnsafeBufferPointer { try check(select(handle, $0.baseAddress, UInt($0.count)), operation: "select_subtitle_memory_fonts") }
+  }
+
+  func clearSubtitleMemoryFonts() throws {
+    guard let clear = library.clearSubtitleMemoryFonts else { throw ErikaPluginError.symbolMissing("erika_presenter_clear_subtitle_memory_fonts") }
+    try check(clear(handle), operation: "clear_subtitle_memory_fonts")
+  }
+
+  func subtitleMemoryFontStatus() throws -> [String: Any] {
+    guard let getStatus = library.getSubtitleMemoryFontStatus else { throw ErikaPluginError.symbolMissing("erika_presenter_get_subtitle_memory_font_status") }
+    var status = ErikaSubtitleMemoryFontStatusC()
+    defer {
+      if let freeStatus = library.freeSubtitleMemoryFontStatus { withUnsafeMutablePointer(to: &status) { freeStatus(UnsafeMutableRawPointer($0)) } }
+    }
+    try withUnsafeMutablePointer(to: &status) { try check(getStatus(handle, UnsafeMutableRawPointer($0)), operation: "get_subtitle_memory_font_status") }
+    return ["registeredCount": Int(status.registeredCount), "registeredBytes": Int(status.registeredBytes), "selectedCount": Int(status.selectedCount), "generation": Int64(clamping: status.generation), "selectedIds": status.selectedIds.map { pointer in (0..<Int(status.selectedCount)).map { Int64(clamping: pointer[$0]) } } ?? []]
   }
 
   func outputStatus() throws -> [String: Any] {
@@ -1936,6 +1986,21 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         }
         try host.setSubtitleScale(scale)
         result(nil)
+      case "registerSubtitleMemoryFont":
+        let args = try dictionaryArgs(call.arguments)
+        guard let data = args["data"] as? FlutterStandardTypedData else { throw ErikaPluginError.invalidArguments("data is required.") }
+        result(Int64(clamping: try playerHost(from: args).registerSubtitleMemoryFont(data.data)))
+      case "selectSubtitleMemoryFonts":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).selectSubtitleMemoryFonts((args["fontIds"] as? [NSNumber] ?? []).map { $0.uint64Value })
+        result(nil)
+      case "clearSubtitleMemoryFonts":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).clearSubtitleMemoryFonts()
+        result(nil)
+      case "getSubtitleMemoryFontStatus":
+        let args = try dictionaryArgs(call.arguments)
+        result(try playerHost(from: args).subtitleMemoryFontStatus())
       case "setSubtitleStyle":
         let args = try dictionaryArgs(call.arguments)
         let host = try playerHost(from: args)

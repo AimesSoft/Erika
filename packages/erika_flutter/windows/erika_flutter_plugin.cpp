@@ -657,6 +657,26 @@ EncodableValue OutputStatusToMap(const ErikaOutputStatus& status) {
   return EncodableValue(std::move(map));
 }
 
+EncodableValue SubtitleMemoryFontStatusToMap(
+    const ErikaSubtitleMemoryFontStatus& status) {
+  EncodableList selected_ids;
+  selected_ids.reserve(status.selected_count);
+  for (uintptr_t index = 0; index < status.selected_count; ++index) {
+    selected_ids.emplace_back(static_cast<int64_t>(status.selected_ids[index]));
+  }
+  return EncodableValue(EncodableMap{
+      {EncodableValue("registeredCount"),
+       EncodableValue(static_cast<int64_t>(status.registered_count))},
+      {EncodableValue("registeredBytes"),
+       EncodableValue(static_cast<int64_t>(status.registered_bytes))},
+      {EncodableValue("selectedCount"),
+       EncodableValue(static_cast<int64_t>(status.selected_count))},
+      {EncodableValue("generation"),
+       EncodableValue(static_cast<int64_t>(status.generation))},
+      {EncodableValue("selectedIds"), EncodableValue(std::move(selected_ids))},
+  });
+}
+
 }  // namespace
 
 struct ErikaFlutterPlugin::ErikaNativeLibrary {
@@ -676,6 +696,12 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
       ErikaStatus (*)(ErikaPresenterHandle*, const char*, const char*);
   using SetSubtitleStyleFn =
       ErikaStatus (*)(ErikaPresenterHandle*, ErikaSubtitleStyle);
+  using RegisterSubtitleMemoryFontFn = ErikaStatus (*)(
+      ErikaPresenterHandle*, const uint8_t*, uintptr_t, uint64_t*);
+  using SelectSubtitleMemoryFontsFn = ErikaStatus (*)(
+      ErikaPresenterHandle*, const uint64_t*, uintptr_t);
+  using GetSubtitleMemoryFontStatusFn = ErikaStatus (*)(
+      ErikaPresenterHandle*, ErikaSubtitleMemoryFontStatus*);
   using GetUpscalerStatusFn =
       ErikaStatus (*)(ErikaPresenterHandle*, ErikaUpscalerStatus*);
   using GetOutputStatusFn =
@@ -787,6 +813,11 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   SetSubtitleScaleFn set_subtitle_scale = nullptr;
   SetSubtitleFontFn set_subtitle_font = nullptr;
   SetSubtitleStyleFn set_subtitle_style = nullptr;
+  RegisterSubtitleMemoryFontFn register_subtitle_memory_font = nullptr;
+  SelectSubtitleMemoryFontsFn select_subtitle_memory_fonts = nullptr;
+  CommandFn clear_subtitle_memory_fonts = nullptr;
+  GetSubtitleMemoryFontStatusFn get_subtitle_memory_font_status = nullptr;
+  void (*free_subtitle_memory_font_status)(ErikaSubtitleMemoryFontStatus*) = nullptr;
   GetUpscalerStatusFn get_upscaler_status = nullptr;
   GetOutputStatusFn get_output_status = nullptr;
   SelectTrackFn select_audio_track = nullptr;
@@ -851,6 +882,16 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
         LoadOptional<SetSubtitleFontFn>("erika_presenter_set_subtitle_font");
     set_subtitle_style = LoadOptional<SetSubtitleStyleFn>(
         "erika_presenter_set_subtitle_style");
+    register_subtitle_memory_font = LoadOptional<RegisterSubtitleMemoryFontFn>(
+        "erika_presenter_register_subtitle_memory_font");
+    select_subtitle_memory_fonts = LoadOptional<SelectSubtitleMemoryFontsFn>(
+        "erika_presenter_select_subtitle_memory_fonts");
+    clear_subtitle_memory_fonts = LoadOptional<CommandFn>(
+        "erika_presenter_clear_subtitle_memory_fonts");
+    get_subtitle_memory_font_status = LoadOptional<GetSubtitleMemoryFontStatusFn>(
+        "erika_presenter_get_subtitle_memory_font_status");
+    free_subtitle_memory_font_status = LoadOptional<void (*)(ErikaSubtitleMemoryFontStatus*)>(
+        "erika_subtitle_memory_font_status_free");
     get_upscaler_status = LoadOptional<GetUpscalerStatusFn>(
         "erika_presenter_get_upscaler_status");
     get_output_status = LoadOptional<GetOutputStatusFn>(
@@ -1261,6 +1302,56 @@ struct ErikaFlutterPlugin::PlayerHost {
     style.override_mask = override_mask;
     Check(library->set_subtitle_style(handle, style),
           "set_subtitle_style");
+  }
+
+  uint64_t RegisterSubtitleMemoryFont(const std::vector<uint8_t>& data) {
+    if (library->register_subtitle_memory_font == nullptr) {
+      throw PluginError("Missing Erika C ABI symbol: erika_presenter_register_subtitle_memory_font");
+    }
+    uint64_t font_id = 0;
+    Check(library->register_subtitle_memory_font(handle, data.data(), data.size(),
+                                                  &font_id),
+          "register_subtitle_memory_font");
+    return font_id;
+  }
+
+  void SelectSubtitleMemoryFonts(const EncodableList& values) {
+    if (library->select_subtitle_memory_fonts == nullptr) {
+      throw PluginError("Missing Erika C ABI symbol: erika_presenter_select_subtitle_memory_fonts");
+    }
+    std::vector<uint64_t> ids;
+    ids.reserve(values.size());
+    for (const auto& value : values) {
+      const auto id = Int64Value(&value);
+      if (!id || *id <= 0) {
+        throw PluginError("fontIds must contain positive integers.");
+      }
+      ids.push_back(static_cast<uint64_t>(*id));
+    }
+    Check(library->select_subtitle_memory_fonts(handle, ids.data(), ids.size()),
+          "select_subtitle_memory_fonts");
+  }
+
+  void ClearSubtitleMemoryFonts() {
+    if (library->clear_subtitle_memory_fonts == nullptr) {
+      throw PluginError("Missing Erika C ABI symbol: erika_presenter_clear_subtitle_memory_fonts");
+    }
+    Check(library->clear_subtitle_memory_fonts(handle),
+          "clear_subtitle_memory_fonts");
+  }
+
+  EncodableValue GetSubtitleMemoryFontStatus() {
+    if (library->get_subtitle_memory_font_status == nullptr) {
+      throw PluginError("Missing Erika C ABI symbol: erika_presenter_get_subtitle_memory_font_status");
+    }
+    ErikaSubtitleMemoryFontStatus status{};
+    Check(library->get_subtitle_memory_font_status(handle, &status),
+          "get_subtitle_memory_font_status");
+    auto result = SubtitleMemoryFontStatusToMap(status);
+    if (library->free_subtitle_memory_font_status != nullptr) {
+      library->free_subtitle_memory_font_status(&status);
+    }
+    return result;
   }
 
   EncodableValue GetUpscalerStatus() {
@@ -2320,6 +2411,25 @@ void ErikaFlutterPlugin::HandleMethodCall(
       PlayerFromArgs(args).SetSubtitleScale(
           DoubleValue(FindArg(args, "scale")).value_or(1.0));
       result->Success();
+    } else if (method == "registerSubtitleMemoryFont") {
+      const auto* data = std::get_if<std::vector<uint8_t>>(FindArg(args, "data"));
+      if (data == nullptr || data->empty()) {
+        throw PluginError("data is required.");
+      }
+      result->Success(EncodableValue(static_cast<int64_t>(
+          PlayerFromArgs(args).RegisterSubtitleMemoryFont(*data))));
+    } else if (method == "selectSubtitleMemoryFonts") {
+      const auto* ids = std::get_if<EncodableList>(FindArg(args, "fontIds"));
+      if (ids == nullptr) {
+        throw PluginError("fontIds is required.");
+      }
+      PlayerFromArgs(args).SelectSubtitleMemoryFonts(*ids);
+      result->Success();
+    } else if (method == "clearSubtitleMemoryFonts") {
+      PlayerFromArgs(args).ClearSubtitleMemoryFonts();
+      result->Success();
+    } else if (method == "getSubtitleMemoryFontStatus") {
+      result->Success(PlayerFromArgs(args).GetSubtitleMemoryFontStatus());
     } else if (method == "setSubtitleStyle") {
       auto& host = PlayerFromArgs(args);
       const bool has_style = FindArg(args, "fontFamily") != nullptr ||

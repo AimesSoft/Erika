@@ -46,6 +46,9 @@ pub struct SubtitleFontAttachment {
     pub data: Arc<[u8]>,
 }
 
+pub const MAX_MEMORY_SUBTITLE_FONT_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_MEMORY_SUBTITLE_FONT_TOTAL_BYTES: usize = 128 * 1024 * 1024;
+
 impl SubtitleFontAttachment {
     pub fn new(
         name: impl Into<String>,
@@ -938,6 +941,8 @@ pub struct SubtitleAssStyle {
     pub play_res_width: u32,
     pub play_res_height: u32,
     pub style: SubtitleStyleConfig,
+    pub memory_fonts: Arc<[SubtitleFontAttachment]>,
+    pub memory_font_revision: u64,
 }
 
 impl Default for SubtitleAssStyle {
@@ -947,6 +952,8 @@ impl Default for SubtitleAssStyle {
             play_res_width: 1920,
             play_res_height: 1080,
             style: SubtitleStyleConfig::default(),
+            memory_fonts: Arc::from([]),
+            memory_font_revision: 0,
         }
     }
 }
@@ -1003,6 +1010,7 @@ pub struct LibassSubtitleRenderer {
     override_font_scale: f64,
     play_res_height: u32,
     style: SubtitleStyleConfig,
+    memory_fonts: Arc<[SubtitleFontAttachment]>,
 }
 
 /// Font selection currently installed in libass. `ass_set_fonts` rebuilds the
@@ -1049,6 +1057,7 @@ impl LibassRuntime {
     fn new(
         track_id: i64,
         fonts: &[SubtitleFontAttachment],
+        memory_fonts: &[SubtitleFontAttachment],
         config: LibassRenderConfig,
         style: &SubtitleStyleConfig,
     ) -> Result<Self> {
@@ -1067,6 +1076,7 @@ impl LibassRuntime {
             libass_ffi::erika_ass_install_log_bridge(library.as_ptr(), &mut *log_bridge);
             libass_ffi::ass_set_extract_fonts(library.as_ptr(), 1);
             add_bundled_ass_fallback_font(library.as_ptr(), track_id);
+            add_attached_ass_fonts(library.as_ptr(), track_id, memory_fonts);
             add_attached_ass_fonts(library.as_ptr(), track_id, fonts);
 
             let Some(renderer) = NonNull::new(libass_ffi::ass_renderer_init(library.as_ptr()))
@@ -1092,7 +1102,7 @@ impl LibassRuntime {
                 _log_bridge: log_bridge,
             }
         };
-        runtime.configure_style(style, 1.0, 288);
+        runtime.configure_style(style, memory_fonts, 1.0, 288);
         Ok(runtime)
     }
 
@@ -1107,10 +1117,11 @@ impl LibassRuntime {
     fn configure_style(
         &mut self,
         style: &SubtitleStyleConfig,
+        memory_fonts: &[SubtitleFontAttachment],
         font_scale: f64,
         play_res_height: u32,
     ) {
-        let fonts_changed = self.configure_fonts(style);
+        let fonts_changed = self.configure_fonts(style, memory_fonts);
         let override_bits = self.configure_style_override(style, font_scale, play_res_height);
         crate::trace::diagnostic(
             serde_json::json!({
@@ -1134,14 +1145,23 @@ impl LibassRuntime {
     /// bundled fallback, every container attachment, every custom face) and
     /// empties the font, metrics and bitmap caches — far too much work to repeat
     /// on a viewport resize. Returns whether libass was reconfigured.
-    fn configure_fonts(&mut self, style: &SubtitleStyleConfig) -> bool {
+    fn configure_fonts(
+        &mut self,
+        style: &SubtitleStyleConfig,
+        memory_fonts: &[SubtitleFontAttachment],
+    ) -> bool {
         if let Some(path) = style.font_file_path() {
             self.load_custom_font_file(path);
         }
+        let memory_family = memory_fonts
+            .first()
+            .and_then(|font| font.families.first())
+            .and_then(|family| CString::new(family.as_str()).ok());
         let selection = LibassFontSelection {
             family: style
                 .font_family()
                 .and_then(|family| CString::new(family).ok())
+                .or(memory_family)
                 .unwrap_or_else(|| default_ass_font_family_cstr().to_owned()),
             default_font: style
                 .font_file_path()
@@ -1398,6 +1418,15 @@ impl LibassSubtitleRenderer {
         config: LibassRenderConfig,
         style: &SubtitleStyleConfig,
     ) -> Result<Self> {
+        Self::from_ass_script_with_style_and_fonts(script, config, style, Arc::from([]))
+    }
+
+    pub fn from_ass_script_with_style_and_fonts(
+        script: impl AsRef<[u8]>,
+        config: LibassRenderConfig,
+        style: &SubtitleStyleConfig,
+        memory_fonts: Arc<[SubtitleFontAttachment]>,
+    ) -> Result<Self> {
         let script = script.as_ref();
         if script.is_empty() {
             return Err(SubtitleError::Libass("ASS script is empty".to_string()));
@@ -1405,7 +1434,7 @@ impl LibassSubtitleRenderer {
 
         let style = style.clone().normalized();
         let mut script = script.to_vec();
-        let runtime = LibassRuntime::new(-1, &[], config, &style)?;
+        let runtime = LibassRuntime::new(-1, &[], &memory_fonts, config, &style)?;
         unsafe {
             let Some(track) = NonNull::new(libass_ffi::ass_read_memory(
                 runtime.library.as_ptr(),
@@ -1425,6 +1454,7 @@ impl LibassSubtitleRenderer {
                 override_font_scale: 1.0,
                 play_res_height: 288,
                 style,
+                memory_fonts,
             })
         }
     }
@@ -1448,6 +1478,16 @@ impl LibassSubtitleRenderer {
         config: LibassRenderConfig,
         style: &SubtitleStyleConfig,
     ) -> Result<Self> {
+        Self::from_ass_track_with_style_and_fonts(track_id, resources, config, style, Arc::from([]))
+    }
+
+    pub fn from_ass_track_with_style_and_fonts(
+        track_id: i64,
+        resources: &AssTrackResources,
+        config: LibassRenderConfig,
+        style: &SubtitleStyleConfig,
+        memory_fonts: Arc<[SubtitleFontAttachment]>,
+    ) -> Result<Self> {
         if resources.codec_private.is_empty() {
             crate::trace::diagnostic(
                 serde_json::json!({
@@ -1466,7 +1506,8 @@ impl LibassSubtitleRenderer {
             SubtitleError::Libass("ASS CodecPrivate exceeds libass integer range".to_string())
         })?;
         let style = style.clone().normalized();
-        let runtime = LibassRuntime::new(track_id, &resources.fonts, config, &style)?;
+        let runtime =
+            LibassRuntime::new(track_id, &resources.fonts, &memory_fonts, config, &style)?;
         unsafe {
             let track = NonNull::new(libass_ffi::ass_new_track(runtime.library.as_ptr()))
                 .ok_or_else(|| SubtitleError::Libass("failed to allocate ASS track".to_string()))?;
@@ -1495,6 +1536,7 @@ impl LibassSubtitleRenderer {
                 override_font_scale: 1.0,
                 play_res_height: 288,
                 style,
+                memory_fonts,
             })
         }
     }
@@ -1547,8 +1589,12 @@ impl LibassSubtitleRenderer {
             return;
         }
         self.override_font_scale = scale;
-        self.runtime
-            .configure_style(&self.style, self.override_font_scale, self.play_res_height);
+        self.runtime.configure_style(
+            &self.style,
+            &self.memory_fonts,
+            self.override_font_scale,
+            self.play_res_height,
+        );
     }
 
     /// Height the override metrics are normalized against, which must be the
@@ -1562,8 +1608,12 @@ impl LibassSubtitleRenderer {
             return;
         }
         self.play_res_height = play_res_height;
-        self.runtime
-            .configure_style(&self.style, self.override_font_scale, self.play_res_height);
+        self.runtime.configure_style(
+            &self.style,
+            &self.memory_fonts,
+            self.override_font_scale,
+            self.play_res_height,
+        );
     }
 
     /// Re-applies the user font and colours. Cheap and idempotent: an unchanged
@@ -1578,14 +1628,19 @@ impl LibassSubtitleRenderer {
             {
                 self.runtime.configure_style(
                     &style,
+                    &self.memory_fonts,
                     self.override_font_scale,
                     self.play_res_height,
                 );
             }
             return;
         }
-        self.runtime
-            .configure_style(&style, self.override_font_scale, self.play_res_height);
+        self.runtime.configure_style(
+            &style,
+            &self.memory_fonts,
+            self.override_font_scale,
+            self.play_res_height,
+        );
         self.style = style;
     }
 
