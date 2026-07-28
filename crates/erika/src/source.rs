@@ -571,6 +571,78 @@ fn parse_content_range_total(value: &str) -> Option<u64> {
     total.trim().parse::<u64>().ok()
 }
 
+/// Parses the first byte offset out of a `Content-Range: bytes start-end/total`
+/// header. `None` for an unsatisfied-range form (`bytes */total`), which names
+/// no offset.
+fn parse_content_range_start(value: &str) -> Option<u64> {
+    let rest = value.trim().strip_prefix("bytes")?.trim_start();
+    let (range, _) = rest.rsplit_once('/')?;
+    let (start, _) = range.trim().split_once('-')?;
+    start.trim().parse::<u64>().ok()
+}
+
+/// The strongest entity validator the response offers, preferred in the order
+/// RFC 9110 recommends for `If-Range`.
+fn response_entity_validator<T>(response: &ureq::http::Response<T>) -> Option<String> {
+    ["etag", "last-modified"].into_iter().find_map(|name| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+/// Learns the total length from a one-byte GET, for origins that reject HEAD.
+///
+/// The body is deliberately never read. An origin that rejects HEAD *and*
+/// ignores Range answers 200 with the whole object, so buffering the response
+/// would turn a `len()` call into a full download of the media -- gigabytes
+/// into memory before playback, just to learn a number the headers already
+/// carry.
+fn probe_http_total_length(agent: &ureq::Agent, uri: &str) -> Result<Option<u64>> {
+    let probe = ByteRange {
+        start: 0,
+        length: Some(1),
+    };
+    let response = agent
+        .get(uri)
+        .header("Range", &http_range_header(probe))
+        .call()
+        .map_err(|error| {
+            http_trace_log(format!(
+                "{{\"event\":\"http_length_probe_error\",\"phase\":\"request\",\"error\":\"{}\"}}",
+                json_escape(&error.to_string()),
+            ));
+            SourceError::Http(error.to_string())
+        })?;
+    let status = response.status().as_u16();
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+    };
+    let total_length = match status {
+        206 => header("content-range")
+            .as_deref()
+            .and_then(parse_content_range_total),
+        // Range was ignored; Content-Length is the whole object, which is
+        // exactly the total being probed for.
+        200 => header("content-length").and_then(|value| value.trim().parse::<u64>().ok()),
+        _ => None,
+    };
+    http_trace_log(format!(
+        "{{\"event\":\"http_length_probe\",\"status\":{},\"total\":{}}}",
+        status,
+        total_length.map_or_else(|| "null".to_string(), |total| total.to_string()),
+    ));
+    Ok(total_length)
+}
+
 fn http_range_header(range: ByteRange) -> String {
     match range.length {
         Some(length) if length > 0 => {
@@ -589,6 +661,12 @@ fn fetch_http_range(
 ) -> Result<HttpRangeResponse> {
     let mut bytes = Vec::new();
     let mut total_length = None;
+    // Entity validator from the first response. A resumed request replays it as
+    // `If-Range` so an origin that re-encoded or load-balanced to a different
+    // variant answers 200 (which the status check below rejects for a non-zero
+    // start) instead of handing back bytes from a different object to be spliced
+    // onto the prefix we already hold.
+    let mut validator: Option<String> = None;
     let mut attempt = 0u32;
     loop {
         attempt += 1;
@@ -609,7 +687,13 @@ fn fetch_http_range(
         };
         let header = http_range_header(resume_range);
         let started = Instant::now();
-        let mut response = match agent.get(uri).header("Range", &header).call() {
+        let mut request = agent.get(uri).header("Range", &header);
+        if received > 0
+            && let Some(validator) = validator.as_deref()
+        {
+            request = request.header("If-Range", validator);
+        }
+        let mut response = match request.call() {
             Ok(response) => response,
             Err(error) => {
                 http_trace_log(format!(
@@ -642,13 +726,33 @@ fn fetch_http_range(
         let status = response.status().as_u16();
         match status {
             206 => {
-                let content_range_total = response
+                let content_range = response
                     .headers()
                     .get("content-range")
                     .and_then(|value| value.to_str().ok())
-                    .and_then(parse_content_range_total);
+                    .map(str::to_string);
+                // A resumed request must continue exactly where the prefix
+                // ends. A server that answers 206 from a different offset --
+                // or a changed entity that ignored If-Range -- would otherwise
+                // be spliced onto the bytes already held and returned as
+                // silently corrupt media.
+                if let Some(start) = content_range.as_deref().and_then(parse_content_range_start)
+                    && start != resume_range.start
+                {
+                    http_trace_log(format!(
+                        "{{\"event\":\"{}_error\",\"phase\":\"content_range\",\"attempt\":{},\"start\":{},\"served_start\":{}}}",
+                        event, attempt, resume_range.start, start,
+                    ));
+                    return Err(SourceError::Http(format!(
+                        "server served range from {start}, expected {}",
+                        resume_range.start
+                    )));
+                }
                 if total_length.is_none() {
-                    total_length = content_range_total;
+                    total_length = content_range.as_deref().and_then(parse_content_range_total);
+                }
+                if validator.is_none() {
+                    validator = response_entity_validator(&response);
                 }
             }
             200 => {
@@ -670,6 +774,9 @@ fn fetch_http_range(
                         .get("content-length")
                         .and_then(|value| value.to_str().ok())
                         .and_then(|value| value.parse::<u64>().ok());
+                }
+                if validator.is_none() {
+                    validator = response_entity_validator(&response);
                 }
             }
             // ureq maps 4xx/5xx to Error::StatusCode before this point; any
@@ -808,13 +915,9 @@ impl MediaSource for HttpRangeSource {
             "[erika-http-trace] stage=head_fallback_range error={}",
             json_escape(&head_error.to_string()),
         ));
-        let probe = ByteRange {
-            start: 0,
-            length: Some(1),
-        };
-        match fetch_http_range(&self.agent, &self.uri, probe, "http_length_probe") {
-            Ok(response) => {
-                self.content_length = response.total_length;
+        match probe_http_total_length(&self.agent, &self.uri) {
+            Ok(total_length) => {
+                self.content_length = total_length;
                 Ok(self.content_length)
             }
             Err(_) => Err(SourceError::Http(head_error.to_string())),
@@ -1429,6 +1532,94 @@ mod tests {
         assert_eq!(source.len().unwrap(), Some(4321));
         assert!(recv_request_head(&requests).starts_with("head"));
         assert!(recv_request_head(&requests).starts_with("head"));
+    }
+
+    #[test]
+    fn len_probe_does_not_download_a_body_that_ignores_range() {
+        // HEAD is rejected and the origin ignores Range, answering 200 with the
+        // whole object. The probe must take the total from Content-Length and
+        // leave the payload on the wire instead of buffering the media.
+        let payload = vec![b'x'; 512 * 1024];
+        let mut raw = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            payload.len()
+        )
+        .into_bytes();
+        raw.extend_from_slice(&payload);
+        let (uri, requests) = spawn_mock_http_server(vec![
+            MockResponse::immediate(
+                b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_vec(),
+            ),
+            MockResponse::immediate(raw),
+        ]);
+
+        let mut source = HttpRangeSource::new(uri);
+        assert_eq!(source.len().unwrap(), Some(payload.len() as u64));
+        assert!(recv_request_head(&requests).starts_with("head"));
+        let probe = recv_request_head(&requests);
+        assert!(probe.starts_with("get"));
+        assert!(probe.contains("range: bytes=0-0"), "probe head: {probe}");
+    }
+
+    #[test]
+    fn resumed_range_is_bound_to_the_first_response_entity() {
+        let body: Vec<u8> = (0..64u8).collect();
+        // Same truncated-then-resume shape as the resume test above, but the
+        // first response carries a validator the retry has to replay.
+        let mut truncated = format!(
+            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-63/64\r\nContent-Length: 64\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n"
+        )
+        .into_bytes();
+        truncated.extend_from_slice(&body[..32]);
+        let (uri, requests) = spawn_mock_http_server(vec![
+            MockResponse::immediate(truncated),
+            MockResponse::immediate(http_206_response(32, 64, &body[32..])),
+        ]);
+
+        let mut source = HttpRangeSource::new(uri);
+        source.content_length = Some(64);
+        assert_eq!(
+            source
+                .read_range(ByteRange {
+                    start: 0,
+                    length: Some(64),
+                })
+                .unwrap(),
+            body
+        );
+
+        let first = recv_request_head(&requests);
+        assert!(!first.contains("if-range"), "first request: {first}");
+        let resumed = recv_request_head(&requests);
+        assert!(
+            resumed.contains("if-range: \"v1\""),
+            "resumed request must replay the validator: {resumed}"
+        );
+    }
+
+    #[test]
+    fn resumed_range_rejects_a_response_served_from_a_different_offset() {
+        let body: Vec<u8> = (0..64u8).collect();
+        let (uri, _requests) = spawn_mock_http_server(vec![
+            MockResponse::immediate(http_206_truncated_response(0, 64, 64, &body[..32])),
+            // The resume asked for byte 32; this answers from 0 instead, which
+            // would splice mismatched bytes onto the prefix already held.
+            MockResponse::immediate(http_206_response(0, 64, &body[..32])),
+        ]);
+
+        let mut source = HttpRangeSource::new(uri);
+        source.content_length = Some(64);
+        let error = source
+            .read_range(ByteRange {
+                start: 0,
+                length: Some(64),
+            })
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("served range from 0"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
