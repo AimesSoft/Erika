@@ -3279,7 +3279,8 @@ impl RendererBackend for WgpuRenderer {
                 DecoderBackend::Software => self.stats.software_video_frames += 1,
                 DecoderBackend::VideoToolbox
                 | DecoderBackend::D3d11va
-                | DecoderBackend::MediaCodec => {
+                | DecoderBackend::MediaCodec
+                | DecoderBackend::AvCodec => {
                     self.stats.hardware_video_frames += 1;
                     self.stats.cpu_video_frame_fallbacks += 1;
                     if !self.cpu_video_frame_fallback_reported {

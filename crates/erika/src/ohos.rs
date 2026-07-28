@@ -1,3 +1,5 @@
+pub mod avcodec;
+
 pub mod ohaudio {
     use std::collections::VecDeque;
     use std::ffi::c_void;

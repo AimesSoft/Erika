@@ -1215,6 +1215,7 @@ impl PresenterRuntime {
                                 DecoderBackend::MediaCodec
                                     | DecoderBackend::Software
                                     | DecoderBackend::VideoToolbox
+                                    | DecoderBackend::AvCodec
                             ) {
                                 self.rejected_video_import_route = Some(import_route);
                                 // The decoder transition must not race a local

@@ -2163,7 +2163,9 @@ fn handle_playback_command(
                 return true;
             }
             match failure.decode_backend {
-                DecoderBackend::MediaCodec | DecoderBackend::VideoToolbox => {
+                DecoderBackend::MediaCodec
+                | DecoderBackend::VideoToolbox
+                | DecoderBackend::AvCodec => {
                     if let Err(error) = engine.handle_video_frame_import_failure(&failure) {
                         fail_video_import_from_worker(
                             engine,

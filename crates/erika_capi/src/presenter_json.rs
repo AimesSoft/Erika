@@ -44,7 +44,30 @@ pub unsafe extern "C" fn erika_presenter_poll_event_json(
             ErikaStatus::NoEvent => return Ok(None),
             status => call_status(status)?,
         }
-        Ok(Some(event_json(event)))
+        let mut value = event_json(event);
+        if let Value::Object(map) = &mut value {
+            match event.kind {
+                ErikaEventKind::Error => {
+                    map.insert("error".to_string(), Value::String(last_error(event.status)));
+                }
+                ErikaEventKind::VideoDecoderChanged => {
+                    let message = last_error(event.status);
+                    if let Ok(decoder) = serde_json::from_str::<Value>(&message) {
+                        map.insert("decoder".to_string(), decoder);
+                    }
+                    map.insert("message".to_string(), Value::String(message));
+                }
+                ErikaEventKind::AudioOutputChanged => {
+                    let message = last_error(event.status);
+                    if let Ok(audio) = serde_json::from_str::<Value>(&message) {
+                        map.insert("audio".to_string(), audio);
+                    }
+                    map.insert("message".to_string(), Value::String(message));
+                }
+                _ => {}
+            }
+        }
+        Ok(Some(value))
     }));
     match result {
         Ok(Ok(None)) => ptr::null_mut(),
