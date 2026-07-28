@@ -7,6 +7,7 @@
 mod dfm;
 pub mod dfm_core;
 mod outline;
+mod typography;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -14,17 +15,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ab_glyph::{Font, FontArc, FontVec, Glyph, GlyphId, PxScale, ScaleFont};
+use ab_glyph::{Font, FontArc, FontVec, Glyph, GlyphId, ScaleFont};
 use serde_json::Value;
 use thiserror::Error;
 
 use crate::NIPAPLAY_FALLBACK_FONT;
 use crate::text::TextShaper;
 use outline::{raster_radius, resolve_width_px};
+use typography::{
+    DEFAULT_CONFIG_FONT_SIZE, DEFAULT_NATIVE_FONT_SIZE, DEFAULT_SOURCE_FONT_SIZE,
+    effective_config_font_size, effective_font_size, px_scale_for_em,
+};
 
-const DEFAULT_SOURCE_FONT_SIZE: f32 = 25.0;
-const DEFAULT_CONFIG_FONT_SIZE: f32 = 30.0;
-const DEFAULT_NATIVE_FONT_SIZE: f32 = DEFAULT_CONFIG_FONT_SIZE;
 const DEFAULT_SCROLL_DURATION: Duration = Duration::from_millis(9000);
 const DEFAULT_STATIC_DURATION: Duration = Duration::from_millis(3800);
 const DEFAULT_GENERATION: u64 = 1;
@@ -1284,7 +1286,6 @@ impl DanmakuTextRasterizer {
     }
 
     fn measure_with_fallback(&self, text: &str, font_size: f32) -> TextMeasure {
-        let scale = PxScale::from(font_size);
         let mut width = 0.0f32;
         let mut max_ascent = 0.0f32;
         let mut max_descent = 0.0f32;
@@ -1299,6 +1300,7 @@ impl DanmakuTextRasterizer {
                 previous = None;
                 continue;
             };
+            let scale = px_scale_for_em(face.font.as_ref(), font_size);
             let scaled = face.font.as_scaled(scale);
             let glyph_id = scaled.glyph_id(ch);
             if let Some((previous_font_id, previous_glyph_id)) = previous {
@@ -1367,7 +1369,7 @@ impl DanmakuTextRasterizer {
                 if previous_font_id == face.id {
                     pen_x += face
                         .font
-                        .as_scaled(PxScale::from(font_size))
+                        .as_scaled(px_scale_for_em(face.font.as_ref(), font_size))
                         .kern(previous_glyph_id, current);
                 }
             }
@@ -2231,23 +2233,6 @@ fn compute_scroll_duration(config: &DanmakuLayoutConfig) -> Duration {
     Duration::from_millis(millis.max(1.0).round() as u64)
 }
 
-fn effective_config_font_size(config_font_size: f32, scale_factor: f32) -> f32 {
-    let logical = sanitize_f32(config_font_size, DEFAULT_CONFIG_FONT_SIZE).max(1.0);
-    let scale_factor = sanitize_f32(scale_factor, 1.0).max(0.001);
-    (logical * scale_factor).max(1.0)
-}
-
-fn effective_font_size(source_font_size: f32, config_font_size: f32, scale_factor: f32) -> f32 {
-    let base = effective_config_font_size(config_font_size, scale_factor);
-    let source = sanitize_f32(source_font_size, DEFAULT_SOURCE_FONT_SIZE);
-    let reference_size = if source > 0.0 {
-        base * (source / DEFAULT_SOURCE_FONT_SIZE)
-    } else {
-        base
-    };
-    reference_size.max(1.0)
-}
-
 fn scale_offset(offset: [f32; 2], scale_factor: f32) -> [f32; 2] {
     let scale_factor = sanitize_f32(scale_factor, 1.0).max(0.001);
     [offset[0] * scale_factor, offset[1] * scale_factor]
@@ -2388,7 +2373,7 @@ fn load_default_font() -> Option<FontArc> {
 
 fn rasterize_font_glyph(font: &FontArc, key: GlyphCacheKey) -> RasterizedGlyph {
     let font_size = key.font_size();
-    let scale = PxScale::from(font_size);
+    let scale = px_scale_for_em(font, font_size);
     let scaled = font.as_scaled(scale);
     let glyph_id = scaled.glyph_id(key.ch);
     let advance = scaled.h_advance(glyph_id).max(0.0);
