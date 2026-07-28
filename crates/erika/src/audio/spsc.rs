@@ -202,9 +202,11 @@ impl PcmSpscRing {
         // control-thread volume step never lands as an audible discontinuity.
         let from = f32::from_bits(self.last_applied_volume.load(Ordering::Relaxed));
         let to = f32::from_bits(self.target_volume.load(Ordering::Relaxed));
-        apply_volume_ramp(output, self.channels, from, to);
+        // Only the leading `candidate_frames` carry ring data; the rest of the
+        // buffer was zero-filled above and must not consume ramp progress.
+        let reached = apply_volume_ramp(output, self.channels, from, to, candidate_frames);
         self.last_applied_volume
-            .store(normalize_volume(to).to_bits(), Ordering::Relaxed);
+            .store(reached.to_bits(), Ordering::Relaxed);
 
         let underflow_frames = requested_frames.saturating_sub(valid_frames);
         self.read_frames

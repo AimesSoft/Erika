@@ -449,30 +449,33 @@ pub mod wasapi {
             for command in commands.try_iter() {
                 match command {
                     WasapiRenderCommand::Start => {
-                        if !playing {
-                            match &render_state {
-                                Some(state) => {
-                                    if let Err(error) = state.client_start() {
-                                        on_device_error(
-                                            error,
-                                            &mut render_state,
-                                            &mut recovery_plan,
-                                            &mut next_recovery_at,
-                                        )?;
-                                    }
-                                }
-                                None => {
-                                    // A fresh Start re-arms an exhausted
-                                    // recovery schedule and retries at once.
-                                    if next_recovery_at.is_none() {
-                                        recovery_plan.reset();
-                                        let _ = recovery_plan.next_step();
-                                        next_recovery_at = Some(Instant::now());
-                                    }
+                        match &render_state {
+                            Some(state) => {
+                                if !playing && let Err(error) = state.client_start() {
+                                    on_device_error(
+                                        error,
+                                        &mut render_state,
+                                        &mut recovery_plan,
+                                        &mut next_recovery_at,
+                                    )?;
                                 }
                             }
-                            playing = true;
+                            None => {
+                                // A fresh Start re-arms an exhausted recovery
+                                // schedule and retries at once. This must not
+                                // be gated on `!playing`: a device loss leaves
+                                // the logical state playing, so an exhausted
+                                // schedule would otherwise stay disarmed and
+                                // strand playback silent until the caller
+                                // paused first.
+                                if next_recovery_at.is_none() {
+                                    recovery_plan.reset();
+                                    let _ = recovery_plan.next_step();
+                                    next_recovery_at = Some(Instant::now());
+                                }
+                            }
                         }
+                        playing = true;
                     }
                     WasapiRenderCommand::Pause => {
                         if playing {
@@ -551,17 +554,14 @@ pub mod wasapi {
 
             if playing && let Some(state) = &mut render_state {
                 let target_volume = f32::from_bits(volume.load(Ordering::Relaxed));
-                if let Err(error) =
-                    state.render_available_frames(&buffer, last_applied_volume, target_volume)
-                {
-                    on_device_error(
+                match state.render_available_frames(&buffer, last_applied_volume, target_volume) {
+                    Ok(reached) => last_applied_volume = reached,
+                    Err(error) => on_device_error(
                         error,
                         &mut render_state,
                         &mut recovery_plan,
                         &mut next_recovery_at,
-                    )?;
-                } else {
-                    last_applied_volume = normalize_volume(target_volume);
+                    )?,
                 }
             }
             thread::sleep(RENDER_POLL_INTERVAL);
@@ -615,23 +615,27 @@ pub mod wasapi {
                 .map_err(|error| wasapi_error("IAudioClient::Reset", error))
         }
 
+        /// Renders whatever the endpoint has room for, returning the gain the
+        /// volume ramp actually reached so the next pass resumes from there.
         fn render_available_frames(
             &mut self,
             buffer: &Arc<Mutex<AudioRingBuffer>>,
             from_volume: f32,
             to_volume: f32,
-        ) -> Result<()> {
+        ) -> Result<f32> {
             let padding = unsafe { self.client.GetCurrentPadding() }
                 .map_err(|error| wasapi_error("IAudioClient::GetCurrentPadding", error))?;
             let frames = self.buffer_frames.saturating_sub(padding);
             if frames == 0 {
-                return Ok(());
+                // Nothing was written, so the ramp made no progress.
+                return Ok(normalize_volume(from_volume));
             }
 
             let data = unsafe { self.render_client.GetBuffer(frames) }
                 .map_err(|error| wasapi_error("IAudioRenderClient::GetBuffer", error))?;
             let sample_count = frames as usize * self.channels;
             let mut silent = false;
+            let mut reached_volume = normalize_volume(from_volume);
             let result = (|| {
                 let output = unsafe { slice::from_raw_parts_mut(data.cast::<f32>(), sample_count) };
                 let read_result = {
@@ -642,7 +646,14 @@ pub mod wasapi {
                 };
                 // Ramp from the gain the previous pass ended on so an atomic
                 // volume step never lands as a discontinuity (zipper noise).
-                apply_volume_ramp(output, self.channels, from_volume, to_volume);
+                // Only the frames the ring supplied advance the ramp.
+                reached_volume = apply_volume_ramp(
+                    output,
+                    self.channels,
+                    from_volume,
+                    to_volume,
+                    read_result.frames,
+                );
                 silent = read_result.frames == 0;
                 Ok(())
             })();
@@ -654,7 +665,7 @@ pub mod wasapi {
             };
             let release_result = unsafe { self.render_client.ReleaseBuffer(frames, release_flags) }
                 .map_err(|error| wasapi_error("IAudioRenderClient::ReleaseBuffer", error));
-            result.and(release_result)
+            result.and(release_result).map(|()| reached_volume)
         }
     }
 

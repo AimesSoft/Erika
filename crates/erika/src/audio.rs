@@ -861,33 +861,58 @@ pub fn apply_volume(samples: &mut [f32], volume: f32) {
     }
 }
 
-/// Applies a linear per-frame gain ramp from `from` to `to` across `samples`.
+/// Applies a linear per-frame gain ramp from `from` to `to` across `samples`,
+/// returning the gain the ramp actually reached.
 ///
 /// Volume changes are atomic steps on the control side; multiplying a whole
 /// buffer by the new value produces an audible discontinuity (zipper noise).
-/// Realtime read callbacks instead ramp from the gain they last applied to the
-/// current target, then remember the target for the next callback. All
-/// channels of a frame share one gain step, the last frame lands on `to`, and
-/// `from == to` degrades to a constant [`apply_volume`].
-pub fn apply_volume_ramp(samples: &mut [f32], channels: usize, from: f32, to: f32) {
+/// Realtime read callbacks instead ramp from the gain they last applied toward
+/// the current target, then carry the returned gain into the next callback.
+/// All channels of a frame share one gain step and `from == to` degrades to a
+/// constant [`apply_volume`].
+///
+/// `audible_frames` is how many leading frames actually carry audio. The ramp
+/// is always *planned* across the full buffer so its slope does not depend on
+/// how much the ring could supply, but a short read only advances part of that
+/// plan and only that part is reported back. Ramping across a zero-filled
+/// underflow tail and then recording `to` as applied would put the next
+/// callback at a gain the audible samples never reached, recreating the very
+/// discontinuity this exists to avoid.
+pub fn apply_volume_ramp(
+    samples: &mut [f32],
+    channels: usize,
+    from: f32,
+    to: f32,
+    audible_frames: usize,
+) -> f32 {
     let from = normalize_volume(from);
     let to = normalize_volume(to);
     let channels = channels.max(1);
     let frames = samples.len() / channels;
     if frames == 0 || from == to {
         apply_volume(samples, to);
-        return;
+        return to;
+    }
+    let audible_frames = audible_frames.min(frames);
+    if audible_frames == 0 {
+        return from;
     }
     let span = to - from;
     let frame_count = frames as f32;
-    for (index, frame) in samples.chunks_exact_mut(channels).enumerate() {
+    for (index, frame) in samples
+        .chunks_exact_mut(channels)
+        .take(audible_frames)
+        .enumerate()
+    {
         let gain = from + span * ((index + 1) as f32 / frame_count);
         for sample in frame {
             *sample *= gain;
         }
     }
-    // A trailing partial frame cannot ramp; give it the final gain.
-    apply_volume(&mut samples[frames * channels..], to);
+    let reached = from + span * (audible_frames as f32 / frame_count);
+    // A trailing partial frame cannot ramp; give it the gain we reached.
+    apply_volume(&mut samples[frames * channels..], reached);
+    reached
 }
 
 fn offset_pts_scaled(
@@ -1025,39 +1050,68 @@ mod tests {
     #[test]
     fn volume_ramp_interpolates_per_frame_and_lands_on_target() {
         let mut samples = [1.0f32; 8];
-        apply_volume_ramp(&mut samples, 2, 0.0, 1.0);
+        let reached = apply_volume_ramp(&mut samples, 2, 0.0, 1.0, 4);
         assert_eq!(samples, [0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0]);
+        assert_eq!(reached, 1.0);
     }
 
     #[test]
     fn volume_ramp_with_equal_endpoints_is_constant_gain() {
         let mut samples = [1.0f32, -0.5, 0.25, 0.0];
-        apply_volume_ramp(&mut samples, 2, 0.5, 0.5);
+        let reached = apply_volume_ramp(&mut samples, 2, 0.5, 0.5, 2);
         assert_eq!(samples, [0.5, -0.25, 0.125, 0.0]);
+        assert_eq!(reached, 0.5);
     }
 
     #[test]
     fn volume_ramp_is_monotonic_and_clamps_invalid_endpoints() {
         let mut samples = [1.0f32; 32];
-        apply_volume_ramp(&mut samples, 1, 2.0, -1.0);
+        let reached = apply_volume_ramp(&mut samples, 1, 2.0, -1.0, 32);
 
         for pair in samples.windows(2) {
             assert!(pair[1] <= pair[0], "ramp regressed: {pair:?}");
         }
         assert_eq!(samples[0], 1.0 - 1.0 / 32.0);
         assert_eq!(samples[31], 0.0);
+        assert_eq!(reached, 0.0);
+    }
+
+    #[test]
+    fn volume_ramp_stops_at_the_underflow_boundary() {
+        // Four frames requested, one supplied: the audible frame takes the
+        // first ramp step and the zero-filled tail is left alone, so the next
+        // callback resumes from 0.875 rather than jumping straight to 0.5.
+        let mut samples = [1.0f32, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let reached = apply_volume_ramp(&mut samples, 2, 1.0, 0.5, 1);
+
+        assert_eq!(samples[0], 0.875);
+        assert_eq!(samples[1], 0.875);
+        assert_eq!(reached, 0.875);
+        assert!(
+            samples[2..].iter().all(|sample| *sample == 0.0),
+            "underflow tail must stay silent: {samples:?}"
+        );
+    }
+
+    #[test]
+    fn volume_ramp_makes_no_progress_without_audible_frames() {
+        let mut samples = [0.0f32; 8];
+        let reached = apply_volume_ramp(&mut samples, 2, 1.0, 0.5, 0);
+        assert_eq!(reached, 1.0);
+        assert!(samples.iter().all(|sample| *sample == 0.0));
     }
 
     #[test]
     fn volume_ramp_handles_empty_buffers_and_partial_frames() {
         let mut empty: [f32; 0] = [];
-        apply_volume_ramp(&mut empty, 2, 0.0, 1.0);
+        assert_eq!(apply_volume_ramp(&mut empty, 2, 0.0, 1.0, 0), 1.0);
 
         // One full stereo frame plus a trailing partial frame: a single frame
         // lands directly on the target and the tail takes the same gain.
         let mut samples = [1.0f32, 1.0, 1.0];
-        apply_volume_ramp(&mut samples, 2, 0.0, 0.5);
+        let reached = apply_volume_ramp(&mut samples, 2, 0.0, 0.5, 1);
         assert_eq!(samples, [0.5, 0.5, 0.5]);
+        assert_eq!(reached, 0.5);
     }
 
     #[test]

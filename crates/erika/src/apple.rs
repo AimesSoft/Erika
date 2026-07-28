@@ -409,22 +409,28 @@ pub mod iosaudio {
         let samples = unsafe {
             std::slice::from_raw_parts_mut(buffer.audio_data.cast::<f32>(), sample_count)
         };
-        match state.buffer.lock() {
-            Ok(mut ring) => {
-                if ring.read_interleaved(samples).is_err() {
+        let audible_frames = match state.buffer.lock() {
+            Ok(mut ring) => match ring.read_interleaved(samples) {
+                Ok(read) => read.frames,
+                Err(_) => {
                     samples.fill(0.0);
+                    0
                 }
+            },
+            Err(_) => {
+                samples.fill(0.0);
+                0
             }
-            Err(_) => samples.fill(0.0),
-        }
+        };
         // Ramp from the gain the previous buffer ended on so an atomic volume
-        // step never lands as an audible discontinuity (zipper noise).
+        // step never lands as an audible discontinuity (zipper noise). Only the
+        // frames the ring actually supplied advance the ramp.
         let from = f32::from_bits(state.last_applied_volume.load(Ordering::Relaxed));
         let to = f32::from_bits(state.volume.load(Ordering::Relaxed));
-        apply_volume_ramp(samples, state.channels, from, to);
+        let reached = apply_volume_ramp(samples, state.channels, from, to, audible_frames);
         state
             .last_applied_volume
-            .store(normalize_volume(to).to_bits(), Ordering::Relaxed);
+            .store(reached.to_bits(), Ordering::Relaxed);
         buffer.audio_data_byte_size = buffer.audio_data_bytes_capacity;
         check_status(
             unsafe { AudioQueueEnqueueBuffer(queue, audio_buffer, 0, ptr::null()) },
@@ -726,10 +732,16 @@ pub mod coreaudio {
                 .map_err(|_| ())
                 .and_then(|mut buffer| buffer.read_interleaved(args.data.buffer).map_err(|_| ()))?;
             // Ramp from the previous callback's gain so an atomic volume step
-            // never lands as an audible discontinuity (zipper noise).
+            // never lands as an audible discontinuity (zipper noise). Only the
+            // frames the ring actually supplied advance the ramp.
             let target = f32::from_bits(volume.load(Ordering::Relaxed));
-            apply_volume_ramp(args.data.buffer, channels, last_applied_volume, target);
-            last_applied_volume = normalize_volume(target);
+            last_applied_volume = apply_volume_ramp(
+                args.data.buffer,
+                channels,
+                last_applied_volume,
+                target,
+                read_result.frames,
+            );
             if read_result.underflow_frames > 0 {
                 args.flags
                     .insert(render_callback::ActionFlags::OUTPUT_IS_SILENCE);
