@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicI32, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use soundtouch::{Setting, SoundTouch};
@@ -114,6 +115,153 @@ pub struct AudioOutputRuntimeStats {
     pub recovery_count: u64,
     pub recovery_failures: u64,
     pub transition_sequence: u64,
+}
+
+/// Exponential backoff schedule for audio device-loss recovery attempts.
+///
+/// Platform backends drive the schedule from their render/callback threads;
+/// the schedule itself is platform independent so it stays unit testable on
+/// any host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecoveryBackoff {
+    initial_delay: Duration,
+    max_attempts: u32,
+    attempts: u32,
+}
+
+impl RecoveryBackoff {
+    pub fn new(initial_delay: Duration, max_attempts: u32) -> Self {
+        Self {
+            initial_delay,
+            max_attempts,
+            attempts: 0,
+        }
+    }
+
+    /// Returns the delay to wait before the next recovery attempt, doubling
+    /// on every call, or `None` once the attempt budget is exhausted.
+    pub fn next_delay(&mut self) -> Option<Duration> {
+        if self.attempts >= self.max_attempts {
+            return None;
+        }
+        let exponent = self.attempts.min(31);
+        self.attempts += 1;
+        Some(self.initial_delay.saturating_mul(1u32 << exponent))
+    }
+
+    pub fn attempts(&self) -> u32 {
+        self.attempts
+    }
+
+    pub fn is_exhausted(&self) -> bool {
+        self.attempts >= self.max_attempts
+    }
+
+    pub fn reset(&mut self) {
+        self.attempts = 0;
+    }
+}
+
+const RECOVERY_STATE_STABLE: u8 = 0;
+const RECOVERY_STATE_DISCONNECTED: u8 = 1;
+const RECOVERY_STATE_RECOVERING: u8 = 2;
+const RECOVERY_STATE_FAILED: u8 = 3;
+
+fn decode_recovery_state(state: u8) -> AudioRecoveryState {
+    match state {
+        RECOVERY_STATE_DISCONNECTED => AudioRecoveryState::Disconnected,
+        RECOVERY_STATE_RECOVERING => AudioRecoveryState::Recovering,
+        RECOVERY_STATE_FAILED => AudioRecoveryState::Failed,
+        _ => AudioRecoveryState::Stable,
+    }
+}
+
+/// Lock-free publication of audio device-loss recovery progress.
+///
+/// A backend's render thread records state transitions while control threads
+/// read [`RecoverySignals::snapshot`] for
+/// [`AudioOutputBackend::runtime_stats`]. The transitions mirror the AAudio
+/// recovery state machine in `android.rs`.
+#[derive(Debug, Default)]
+pub struct RecoverySignals {
+    recovery_state: AtomicU8,
+    last_error_code: AtomicI32,
+    recovery_attempts: AtomicU64,
+    recovery_count: AtomicU64,
+    recovery_failures: AtomicU64,
+    transition_sequence: AtomicU64,
+}
+
+impl RecoverySignals {
+    pub fn mark_disconnected(&self, error_code: i32) -> AudioOutputRuntimeStats {
+        self.last_error_code.store(error_code, Ordering::Relaxed);
+        self.recovery_state
+            .store(RECOVERY_STATE_DISCONNECTED, Ordering::Release);
+        self.transition_sequence.fetch_add(1, Ordering::Release);
+        self.snapshot()
+    }
+
+    pub fn begin_recovery(&self) -> AudioOutputRuntimeStats {
+        self.recovery_attempts.fetch_add(1, Ordering::Relaxed);
+        self.recovery_state
+            .store(RECOVERY_STATE_RECOVERING, Ordering::Release);
+        self.transition_sequence.fetch_add(1, Ordering::Release);
+        self.snapshot()
+    }
+
+    /// Commits a successful recovery. Returns `None` when the state moved on
+    /// concurrently (for example a fresh disconnect landed before the commit),
+    /// in which case the caller must keep the newer state visible.
+    pub fn recovery_succeeded(&self) -> Option<AudioOutputRuntimeStats> {
+        if self
+            .recovery_state
+            .compare_exchange(
+                RECOVERY_STATE_RECOVERING,
+                RECOVERY_STATE_STABLE,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return None;
+        }
+        self.recovery_count.fetch_add(1, Ordering::Relaxed);
+        self.transition_sequence.fetch_add(1, Ordering::Release);
+        Some(self.snapshot())
+    }
+
+    pub fn recovery_failed(&self, error_code: i32) -> AudioOutputRuntimeStats {
+        self.last_error_code.store(error_code, Ordering::Relaxed);
+        self.recovery_failures.fetch_add(1, Ordering::Relaxed);
+        self.recovery_state
+            .store(RECOVERY_STATE_FAILED, Ordering::Release);
+        self.transition_sequence.fetch_add(1, Ordering::Release);
+        self.snapshot()
+    }
+
+    pub fn reset(&self) {
+        self.last_error_code.store(0, Ordering::Relaxed);
+        self.recovery_state
+            .store(RECOVERY_STATE_STABLE, Ordering::Release);
+        self.transition_sequence.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn snapshot(&self) -> AudioOutputRuntimeStats {
+        loop {
+            let sequence_before = self.transition_sequence.load(Ordering::Acquire);
+            let snapshot = AudioOutputRuntimeStats {
+                recovery_state: decode_recovery_state(self.recovery_state.load(Ordering::Acquire)),
+                last_error_code: self.last_error_code.load(Ordering::Relaxed),
+                recovery_attempts: self.recovery_attempts.load(Ordering::Relaxed),
+                recovery_count: self.recovery_count.load(Ordering::Relaxed),
+                recovery_failures: self.recovery_failures.load(Ordering::Relaxed),
+                transition_sequence: sequence_before,
+            };
+            if sequence_before == self.transition_sequence.load(Ordering::Acquire) {
+                return snapshot;
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -713,6 +861,60 @@ pub fn apply_volume(samples: &mut [f32], volume: f32) {
     }
 }
 
+/// Applies a linear per-frame gain ramp from `from` to `to` across `samples`,
+/// returning the gain the ramp actually reached.
+///
+/// Volume changes are atomic steps on the control side; multiplying a whole
+/// buffer by the new value produces an audible discontinuity (zipper noise).
+/// Realtime read callbacks instead ramp from the gain they last applied toward
+/// the current target, then carry the returned gain into the next callback.
+/// All channels of a frame share one gain step and `from == to` degrades to a
+/// constant [`apply_volume`].
+///
+/// `audible_frames` is how many leading frames actually carry audio. The ramp
+/// is always *planned* across the full buffer so its slope does not depend on
+/// how much the ring could supply, but a short read only advances part of that
+/// plan and only that part is reported back. Ramping across a zero-filled
+/// underflow tail and then recording `to` as applied would put the next
+/// callback at a gain the audible samples never reached, recreating the very
+/// discontinuity this exists to avoid.
+pub fn apply_volume_ramp(
+    samples: &mut [f32],
+    channels: usize,
+    from: f32,
+    to: f32,
+    audible_frames: usize,
+) -> f32 {
+    let from = normalize_volume(from);
+    let to = normalize_volume(to);
+    let channels = channels.max(1);
+    let frames = samples.len() / channels;
+    if frames == 0 || from == to {
+        apply_volume(samples, to);
+        return to;
+    }
+    let audible_frames = audible_frames.min(frames);
+    if audible_frames == 0 {
+        return from;
+    }
+    let span = to - from;
+    let frame_count = frames as f32;
+    for (index, frame) in samples
+        .chunks_exact_mut(channels)
+        .take(audible_frames)
+        .enumerate()
+    {
+        let gain = from + span * ((index + 1) as f32 / frame_count);
+        for sample in frame {
+            *sample *= gain;
+        }
+    }
+    let reached = from + span * (audible_frames as f32 / frame_count);
+    // A trailing partial frame cannot ramp; give it the gain we reached.
+    apply_volume(&mut samples[frames * channels..], reached);
+    reached
+}
+
 fn offset_pts_scaled(
     pts: Duration,
     frames: usize,
@@ -843,6 +1045,145 @@ mod tests {
         assert_eq!(output.volume(), 0.0);
         output.set_volume(f32::NAN);
         assert_eq!(output.volume(), 1.0);
+    }
+
+    #[test]
+    fn volume_ramp_interpolates_per_frame_and_lands_on_target() {
+        let mut samples = [1.0f32; 8];
+        let reached = apply_volume_ramp(&mut samples, 2, 0.0, 1.0, 4);
+        assert_eq!(samples, [0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0]);
+        assert_eq!(reached, 1.0);
+    }
+
+    #[test]
+    fn volume_ramp_with_equal_endpoints_is_constant_gain() {
+        let mut samples = [1.0f32, -0.5, 0.25, 0.0];
+        let reached = apply_volume_ramp(&mut samples, 2, 0.5, 0.5, 2);
+        assert_eq!(samples, [0.5, -0.25, 0.125, 0.0]);
+        assert_eq!(reached, 0.5);
+    }
+
+    #[test]
+    fn volume_ramp_is_monotonic_and_clamps_invalid_endpoints() {
+        let mut samples = [1.0f32; 32];
+        let reached = apply_volume_ramp(&mut samples, 1, 2.0, -1.0, 32);
+
+        for pair in samples.windows(2) {
+            assert!(pair[1] <= pair[0], "ramp regressed: {pair:?}");
+        }
+        assert_eq!(samples[0], 1.0 - 1.0 / 32.0);
+        assert_eq!(samples[31], 0.0);
+        assert_eq!(reached, 0.0);
+    }
+
+    #[test]
+    fn volume_ramp_stops_at_the_underflow_boundary() {
+        // Four frames requested, one supplied: the audible frame takes the
+        // first ramp step and the zero-filled tail is left alone, so the next
+        // callback resumes from 0.875 rather than jumping straight to 0.5.
+        let mut samples = [1.0f32, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let reached = apply_volume_ramp(&mut samples, 2, 1.0, 0.5, 1);
+
+        assert_eq!(samples[0], 0.875);
+        assert_eq!(samples[1], 0.875);
+        assert_eq!(reached, 0.875);
+        assert!(
+            samples[2..].iter().all(|sample| *sample == 0.0),
+            "underflow tail must stay silent: {samples:?}"
+        );
+    }
+
+    #[test]
+    fn volume_ramp_makes_no_progress_without_audible_frames() {
+        let mut samples = [0.0f32; 8];
+        let reached = apply_volume_ramp(&mut samples, 2, 1.0, 0.5, 0);
+        assert_eq!(reached, 1.0);
+        assert!(samples.iter().all(|sample| *sample == 0.0));
+    }
+
+    #[test]
+    fn volume_ramp_handles_empty_buffers_and_partial_frames() {
+        let mut empty: [f32; 0] = [];
+        assert_eq!(apply_volume_ramp(&mut empty, 2, 0.0, 1.0, 0), 1.0);
+
+        // One full stereo frame plus a trailing partial frame: a single frame
+        // lands directly on the target and the tail takes the same gain.
+        let mut samples = [1.0f32, 1.0, 1.0];
+        let reached = apply_volume_ramp(&mut samples, 2, 0.0, 0.5, 1);
+        assert_eq!(samples, [0.5, 0.5, 0.5]);
+        assert_eq!(reached, 0.5);
+    }
+
+    #[test]
+    fn recovery_backoff_doubles_until_attempts_are_exhausted() {
+        let mut backoff = RecoveryBackoff::new(Duration::from_millis(200), 5);
+
+        let delays: Vec<_> = std::iter::from_fn(|| backoff.next_delay()).collect();
+
+        assert_eq!(
+            delays,
+            [200, 400, 800, 1600, 3200].map(Duration::from_millis)
+        );
+        assert!(backoff.is_exhausted());
+        assert_eq!(backoff.attempts(), 5);
+
+        backoff.reset();
+        assert!(!backoff.is_exhausted());
+        assert_eq!(backoff.next_delay(), Some(Duration::from_millis(200)));
+    }
+
+    #[test]
+    fn recovery_signals_track_disconnect_recover_cycle() {
+        let signals = RecoverySignals::default();
+        assert_eq!(
+            signals.snapshot().recovery_state,
+            AudioRecoveryState::Stable
+        );
+
+        let stats = signals.mark_disconnected(-77);
+        assert_eq!(stats.recovery_state, AudioRecoveryState::Disconnected);
+        assert_eq!(stats.last_error_code, -77);
+
+        let stats = signals.begin_recovery();
+        assert_eq!(stats.recovery_state, AudioRecoveryState::Recovering);
+        assert_eq!(stats.recovery_attempts, 1);
+
+        let stats = signals
+            .recovery_succeeded()
+            .expect("recovering commits to stable");
+        assert_eq!(stats.recovery_state, AudioRecoveryState::Stable);
+        assert_eq!(stats.recovery_count, 1);
+
+        // A success must not commit when a fresh disconnect superseded it.
+        signals.mark_disconnected(-78);
+        assert!(signals.recovery_succeeded().is_none());
+        assert_eq!(
+            signals.snapshot().recovery_state,
+            AudioRecoveryState::Disconnected
+        );
+
+        signals.begin_recovery();
+        let stats = signals.recovery_failed(-79);
+        assert_eq!(stats.recovery_state, AudioRecoveryState::Failed);
+        assert_eq!(stats.recovery_failures, 1);
+        assert_eq!(stats.last_error_code, -79);
+
+        signals.reset();
+        let stats = signals.snapshot();
+        assert_eq!(stats.recovery_state, AudioRecoveryState::Stable);
+        assert_eq!(stats.last_error_code, 0);
+    }
+
+    #[test]
+    fn recovery_signals_snapshot_sequence_advances_per_transition() {
+        let signals = RecoverySignals::default();
+        let initial = signals.snapshot().transition_sequence;
+
+        signals.mark_disconnected(-1);
+        signals.begin_recovery();
+        signals.recovery_succeeded();
+
+        assert_eq!(signals.snapshot().transition_sequence, initial + 3);
     }
 
     #[test]
