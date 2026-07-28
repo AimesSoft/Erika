@@ -913,6 +913,8 @@ pub struct LibassSubtitleRenderer {
     track: NonNull<libass_ffi::AssTrack>,
     config: LibassRenderConfig,
     font_scale: f64,
+    override_font_scale: f64,
+    play_res_height: u32,
     style: SubtitleStyleConfig,
 }
 
@@ -980,7 +982,7 @@ impl LibassRuntime {
                 _log_bridge: log_bridge,
             }
         };
-        runtime.configure_style(style);
+        runtime.configure_style(style, 1.0, 288);
         Ok(runtime)
     }
 
@@ -988,7 +990,12 @@ impl LibassRuntime {
     /// known font and the last-resort font path, the custom family becomes the
     /// default family, and `force_override` decides whether dialogue styling is
     /// replaced or merely backfilled.
-    fn configure_style(&mut self, style: &SubtitleStyleConfig) {
+    fn configure_style(
+        &mut self,
+        style: &SubtitleStyleConfig,
+        font_scale: f64,
+        play_res_height: u32,
+    ) {
         if let Some(path) = style.font_file_path() {
             self.load_custom_font_file(path);
         }
@@ -1013,7 +1020,8 @@ impl LibassRuntime {
                 1,
             );
         }
-        let override_bits = self.configure_style_override(style, family);
+        let override_bits =
+            self.configure_style_override(style, family, font_scale, play_res_height);
         crate::trace::diagnostic(
             serde_json::json!({
                 "event": "subtitle_font_fallback",
@@ -1035,6 +1043,8 @@ impl LibassRuntime {
         &mut self,
         style: &SubtitleStyleConfig,
         family: &CStr,
+        font_scale: f64,
+        play_res_height: u32,
     ) -> libc::c_int {
         let bits = if style.force_override {
             ASS_OVERRIDE_BIT_COLORS
@@ -1045,10 +1055,13 @@ impl LibassRuntime {
             0
         };
         if bits != 0 {
+            unsafe {
+                libass_ffi::ass_set_selective_style_override_enabled(self.renderer.as_ptr(), 0);
+            }
             let mut override_style = libass_ffi::AssStyle {
                 name: ASS_OVERRIDE_STYLE_NAME.as_ptr().cast_mut(),
                 font_name: family.as_ptr().cast_mut(),
-                font_size: style.font_size,
+                font_size: selective_override_metric(style.font_size, font_scale, play_res_height),
                 primary_colour: libass_style_color(style.primary_color_rgba),
                 secondary_colour: libass_style_color(style.primary_color_rgba),
                 outline_colour: libass_style_color(style.outline_color_rgba),
@@ -1062,7 +1075,11 @@ impl LibassRuntime {
                 spacing: 0.0,
                 angle: 0.0,
                 border_style: 1,
-                outline: style.outline_width,
+                outline: selective_override_metric(
+                    style.outline_width,
+                    font_scale,
+                    play_res_height,
+                ),
                 shadow: 0.0,
                 alignment: 2,
                 margin_l: 0,
@@ -1186,12 +1203,13 @@ impl LibassSubtitleRenderer {
                     "failed to parse ASS script with libass".to_string(),
                 ));
             };
-
             Ok(Self {
                 runtime,
                 track,
                 config,
                 font_scale: 1.0,
+                override_font_scale: 1.0,
+                play_res_height: 288,
                 style,
             })
         }
@@ -1260,6 +1278,8 @@ impl LibassSubtitleRenderer {
                 track,
                 config,
                 font_scale: 1.0,
+                override_font_scale: 1.0,
+                play_res_height: 288,
                 style,
             })
         }
@@ -1297,7 +1317,33 @@ impl LibassSubtitleRenderer {
     }
 
     pub fn set_font_scale(&mut self, scale: f64) {
-        self.font_scale = normalize_ass_font_scale(scale);
+        let scale = normalize_ass_font_scale(scale);
+        if self.font_scale == scale {
+            return;
+        }
+        self.font_scale = scale;
+        self.runtime
+            .configure_style(&self.style, self.override_font_scale, self.play_res_height);
+    }
+
+    pub fn set_override_font_scale(&mut self, scale: f64) {
+        let scale = normalize_ass_font_scale(scale);
+        if self.override_font_scale == scale {
+            return;
+        }
+        self.override_font_scale = scale;
+        self.runtime
+            .configure_style(&self.style, self.override_font_scale, self.play_res_height);
+    }
+
+    pub fn set_play_res_height(&mut self, play_res_height: u32) {
+        let play_res_height = play_res_height.max(1);
+        if self.play_res_height == play_res_height {
+            return;
+        }
+        self.play_res_height = play_res_height;
+        self.runtime
+            .configure_style(&self.style, self.override_font_scale, self.play_res_height);
     }
 
     /// Re-applies the user font and colours. Cheap and idempotent: an unchanged
@@ -1308,7 +1354,8 @@ impl LibassSubtitleRenderer {
         if self.style == style {
             return;
         }
-        self.runtime.configure_style(&style);
+        self.runtime
+            .configure_style(&style, self.override_font_scale, self.play_res_height);
         self.style = style;
     }
 
@@ -2176,6 +2223,11 @@ fn normalize_ass_font_scale(scale: f64) -> f64 {
     }
 }
 
+#[cfg(feature = "libass")]
+fn selective_override_metric(value: f64, font_scale: f64, play_res_height: u32) -> f64 {
+    value * normalize_ass_font_scale(font_scale) * 288.0 / f64::from(play_res_height.max(1))
+}
+
 /// Formats `0xRRGGBBAA` as an ASS `&HAABBGGRR` literal, where ASS' leading byte
 /// is transparency rather than alpha.
 fn ass_color_tag(rgba: u32) -> String {
@@ -2932,6 +2984,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert_eq!(libass_style_color(0xff00_0000), 0xff00_00ff);
     }
 
+    #[cfg(feature = "libass")]
+    #[test]
+    fn selective_override_metrics_cancel_libass_play_res_normalization() {
+        assert_eq!(selective_override_metric(48.0, 1.0, 288), 48.0);
+        assert_eq!(selective_override_metric(48.0, 1.0, 720), 19.2);
+        assert_eq!(selective_override_metric(48.0, 1.0, 1080), 12.8);
+        assert_eq!(selective_override_metric(48.0, 1.5, 1080), 19.2);
+        assert_eq!(selective_override_metric(2.0, 1.5, 1080), 0.8);
+    }
+
     #[test]
     fn bundled_ass_fallback_family_matches_asset() {
         let mut database = fontdb::Database::new();
@@ -3002,8 +3064,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     #[cfg(feature = "libass")]
     #[test]
-    fn libass_forced_override_resizes_dialogue_glyphs() {
-        let request = SubtitleRenderRequest::new(Duration::from_millis(500), 640, 360);
+    fn libass_forced_override_uses_viewport_sized_metrics() {
+        let request = SubtitleRenderRequest::new(Duration::from_millis(500), 1920, 1080);
         let tallest = |bitmaps: &SubtitleBitmapSet| {
             bitmaps
                 .parts
@@ -3013,27 +3075,31 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 .unwrap_or(0)
         };
 
-        // The script asks for 32; a fallback-only style leaves that alone.
-        let mut renderer = LibassSubtitleRenderer::from_ass_script(
-            SIMPLE_ASS_SCRIPT,
-            LibassRenderConfig::default(),
-        )
-        .unwrap();
-        let SubtitleRenderOutput::Alpha(script_sized) = renderer.render(request).unwrap() else {
-            panic!("libass renderer should produce alpha bitmap output");
-        };
-
-        renderer.set_style(&SubtitleStyleConfig {
-            font_size: 96.0,
-            outline_width: 4.0,
+        let style = SubtitleStyleConfig {
+            font_size: 48.0,
+            outline_width: 2.0,
             force_override: true,
             ..SubtitleStyleConfig::default()
-        });
-        let SubtitleRenderOutput::Alpha(overridden) = renderer.render(request).unwrap() else {
-            panic!("libass renderer should produce alpha bitmap output");
         };
+        let mut heights = Vec::new();
+        for font_scale in [1.0, 1.5, 2.0] {
+            let mut renderer = LibassSubtitleRenderer::from_ass_script_with_style(
+                SIMPLE_ASS_SCRIPT,
+                LibassRenderConfig::default(),
+                &style,
+            )
+            .unwrap();
+            renderer.set_override_font_scale(font_scale);
+            renderer.set_play_res_height(1080);
+            let SubtitleRenderOutput::Alpha(overridden) = renderer.render(request).unwrap() else {
+                panic!("libass renderer should produce alpha bitmap output");
+            };
 
-        assert!(tallest(&overridden) > tallest(&script_sized));
+            heights.push(tallest(&overridden));
+        }
+        assert!(heights[0] < heights[1]);
+        assert!(heights[1] < heights[2]);
+        assert!(heights[0] < 80);
     }
 
     #[cfg(feature = "libass")]

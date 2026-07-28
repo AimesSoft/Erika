@@ -2698,6 +2698,7 @@ impl CachedAssTrackRenderer {
         let Some(renderer) = self.renderer.as_mut() else {
             return Ok(None);
         };
+        renderer.set_play_res_height(viewport.height);
         renderer.set_style(style);
         renderer.set_font_scale(font_scale);
         match renderer.render(SubtitleRenderRequest::new(
@@ -2754,6 +2755,8 @@ impl CachedLibassTextRenderer {
         let Some(renderer) = self.renderer.as_mut() else {
             return Ok(None);
         };
+        renderer.set_override_font_scale(style.font_scale);
+        renderer.set_play_res_height(style.play_res_height);
         renderer.set_style(&style.style);
         match renderer.render(SubtitleRenderRequest::new(
             pts,
