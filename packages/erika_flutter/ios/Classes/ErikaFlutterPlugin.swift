@@ -405,6 +405,8 @@ private final class ErikaNativeLibrary {
   typealias RenderTickFn = @convention(c) (UnsafeMutableRawPointer?, Double, UnsafeMutableRawPointer?) -> Int32
   typealias CaptureFrameRgbaFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, UnsafeMutableRawPointer?, Int) -> Int32
   typealias PollEventFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
+  typealias LastErrorMessageFn = @convention(c) () -> UnsafeMutablePointer<CChar>?
+  typealias StringFreeFn = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
 
   static let shared = try? ErikaNativeLibrary()
 
@@ -454,6 +456,8 @@ private final class ErikaNativeLibrary {
   let renderTick: RenderTickFn
   let captureFrameRgba: CaptureFrameRgbaFn?
   let pollEvent: PollEventFn
+  let lastErrorMessage: LastErrorMessageFn
+  let stringFree: StringFreeFn
 
   private let libraryHandle: UnsafeMutableRawPointer
   let path: String
@@ -513,6 +517,8 @@ private final class ErikaNativeLibrary {
     renderTick = try Self.load("erika_presenter_render_tick", from: libraryHandle, as: RenderTickFn.self)
     captureFrameRgba = Self.loadOptional("erika_presenter_capture_frame_rgba", from: libraryHandle, as: CaptureFrameRgbaFn.self)
     pollEvent = try Self.load("erika_presenter_poll_event", from: libraryHandle, as: PollEventFn.self)
+    lastErrorMessage = try Self.load("erika_last_error_message", from: libraryHandle, as: LastErrorMessageFn.self)
+    stringFree = try Self.load("erika_string_free", from: libraryHandle, as: StringFreeFn.self)
   }
 
   private static func openLibrary() throws -> (handle: UnsafeMutableRawPointer, path: String) {
@@ -575,6 +581,14 @@ private final class ErikaNativeLibrary {
       return createWithOutputMode(config.outputMode, config.edrHeadroom)
     }
     return create()
+  }
+
+  func currentEventMessage() -> String? {
+    guard let pointer = lastErrorMessage() else {
+      return nil
+    }
+    defer { stringFree(pointer) }
+    return String(validatingUTF8: pointer)
   }
 }
 
@@ -1020,7 +1034,10 @@ private final class ErikaPlayerHost {
             "video params player=\(id) width=\(event.video.width) height=\(event.video.height) primaries=\(event.video.primaries) transfer=\(event.video.transfer)"
           )
         }
-        sendEvent(event.toFlutterMap(playerId: id, host: self))
+        let message = event.kind == 9 || event.kind == 11 || event.kind == 12
+          ? library.currentEventMessage()
+          : nil
+        sendEvent(event.toFlutterMap(playerId: id, host: self, structuredMessage: message))
         continue
       }
       if status != 5 {
@@ -2106,7 +2123,11 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
 }
 
 private extension ErikaEventC {
-  func toFlutterMap(playerId: Int64, host: ErikaPlayerHost? = nil) -> [String: Any] {
+  func toFlutterMap(
+    playerId: Int64,
+    host: ErikaPlayerHost? = nil,
+    structuredMessage: String? = nil
+  ) -> [String: Any] {
     var map: [String: Any] = [
       "playerId": playerId,
       "kind": Int(kind),
@@ -2134,6 +2155,17 @@ private extension ErikaEventC {
         "audio": -1,
         "subtitle": -1,
       ]
+    }
+    if let structuredMessage,
+       let data = structuredMessage.data(using: .utf8),
+       let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+      if kind == 11 {
+        map["decoder"] = payload
+      } else if kind == 12 {
+        map["audio"] = payload
+      } else if kind == 9 {
+        map["error"] = structuredMessage
+      }
     }
     return map
   }

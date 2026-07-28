@@ -3246,7 +3246,7 @@ fn inspect_format_context(
             .filter(|bit_rate| *bit_rate > 0);
 
         if kind == TrackKind::Video {
-            track.frame_rate = unsafe { stream_frame_rate(stream) };
+            track.frame_rate = unsafe { stream_frame_rate(raw, stream) };
             let probe = unsafe { video_probe(&track, codecpar) };
             track.width = probe.params.width;
             track.height = probe.params.height;
@@ -3269,6 +3269,11 @@ fn inspect_format_context(
         tracks.push(track);
     }
 
+    let container_bit_rate = u64::try_from(unsafe { (*raw).bit_rate })
+        .ok()
+        .filter(|bit_rate| *bit_rate > 0);
+    infer_single_video_bit_rate(&mut tracks, container_bit_rate);
+
     (
         MediaProbe {
             uri: uri.to_string(),
@@ -3281,6 +3286,34 @@ fn inspect_format_context(
         },
         stream_time_bases,
     )
+}
+
+fn infer_single_video_bit_rate(tracks: &mut [TrackInfo], container_bit_rate: Option<u64>) {
+    let Some(container_bit_rate) = container_bit_rate else {
+        return;
+    };
+    let mut video_indexes = tracks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, track)| (track.kind == TrackKind::Video).then_some(index));
+    let Some(video_index) = video_indexes.next() else {
+        return;
+    };
+    if video_indexes.next().is_some() || tracks[video_index].bit_rate.is_some() {
+        return;
+    }
+    let other_media_bit_rates = tracks
+        .iter()
+        .enumerate()
+        .filter(|(index, track)| {
+            *index != video_index && matches!(track.kind, TrackKind::Video | TrackKind::Audio)
+        })
+        .map(|(_, track)| track.bit_rate)
+        .collect::<Option<Vec<_>>>();
+    tracks[video_index].bit_rate = other_media_bit_rates
+        .and_then(|values| values.into_iter().try_fold(0_u64, u64::checked_add))
+        .and_then(|other_bit_rate| container_bit_rate.checked_sub(other_bit_rate))
+        .filter(|value| *value > 0);
 }
 
 fn check(code: i32, operation: &'static str) -> Result<()> {
@@ -3345,9 +3378,18 @@ unsafe fn codec_name(codec_id: sys::AVCodecID) -> Option<String> {
     )
 }
 
-unsafe fn stream_frame_rate(stream: *const sys::AVStream) -> Option<FrameRate> {
+unsafe fn stream_frame_rate(
+    format: *const sys::AVFormatContext,
+    stream: *const sys::AVStream,
+) -> Option<FrameRate> {
     let average = unsafe { (*stream).avg_frame_rate };
-    frame_rate_from_av(average).or_else(|| frame_rate_from_av(unsafe { (*stream).r_frame_rate }))
+    frame_rate_from_av(average)
+        .or_else(|| frame_rate_from_av(unsafe { (*stream).r_frame_rate }))
+        .or_else(|| {
+            frame_rate_from_av(unsafe {
+                sys::av_guess_frame_rate(format.cast_mut(), stream.cast_mut(), ptr::null_mut())
+            })
+        })
 }
 
 fn frame_rate_from_av(value: sys::AVRational) -> Option<FrameRate> {
@@ -4101,6 +4143,28 @@ mod tests {
         assert_eq!((video.width, video.height), (160, 90));
         assert_eq!(video.bit_rate, None);
         assert_eq!(video.frame_rate, FrameRate::new(30, 1));
+    }
+
+    #[test]
+    fn video_bit_rate_inference_requires_unambiguous_track_metadata() {
+        let mut video = TrackInfo::embedded(0, TrackKind::Video);
+        let mut audio = TrackInfo::embedded(1, TrackKind::Audio);
+        audio.bit_rate = Some(128_000);
+        let mut tracks = vec![video.clone(), audio.clone()];
+
+        infer_single_video_bit_rate(&mut tracks, Some(1_128_000));
+
+        assert_eq!(tracks[0].bit_rate, Some(1_000_000));
+
+        audio.bit_rate = None;
+        let mut tracks = vec![video.clone(), audio];
+        infer_single_video_bit_rate(&mut tracks, Some(1_128_000));
+        assert_eq!(tracks[0].bit_rate, None);
+
+        video.bit_rate = Some(900_000);
+        let mut tracks = vec![video, TrackInfo::embedded(2, TrackKind::Video)];
+        infer_single_video_bit_rate(&mut tracks, Some(1_128_000));
+        assert_eq!(tracks[1].bit_rate, None);
     }
 
     #[test]
