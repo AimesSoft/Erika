@@ -1584,13 +1584,11 @@ fn meson_cross_file(
         let tools = windows_msvc_environment(target)?;
         let compiler = msvc_tool_path(tools, "cl.exe")?;
         let archiver = msvc_tool_path(tools, "lib.exe")?;
-        let linker = msvc_tool_path(tools, "link.exe")?;
         format!(
-            "[binaries]\nc = {}\ncpp = {}\nar = {}\nstrip = {}\n\n[properties]\nneeds_exe_wrapper = true\n\n[host_machine]\nsystem = 'windows'\ncpu_family = {}\ncpu = {}\nendian = 'little'\n",
+            "[binaries]\nc = {}\ncpp = {}\nar = {}\n\n[properties]\nneeds_exe_wrapper = true\n\n[host_machine]\nsystem = 'windows'\ncpu_family = {}\ncpu = {}\nendian = 'little'\n",
             meson_string(&compiler.display().to_string()),
             meson_string(&compiler.display().to_string()),
             meson_string(&archiver.display().to_string()),
-            meson_string(&linker.display().to_string()),
             meson_string(
                 target
                     .meson_cpu_family()
