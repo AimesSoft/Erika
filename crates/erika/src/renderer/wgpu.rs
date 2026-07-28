@@ -25,7 +25,9 @@ use crate::core::{
     LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame, RenderFrameContext,
     RendererBackend, RendererRuntimeStats, Result, SurfaceOutputCapabilities, WgpuSurfaceHandle,
 };
-use crate::danmaku::{DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan};
+use crate::danmaku::{
+    DanmakuAtlasUpdate, DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan,
+};
 use crate::ffmpeg::{DecoderBackend, PlanarFrame, PlanarFrameConversionError, PlanarPixelFormat};
 use crate::overlay::OverlayFrame;
 #[cfg(target_os = "android")]
@@ -2220,6 +2222,30 @@ impl WgpuRenderer {
                 return (cache.fill_texture.clone(), cache.outline_texture.clone());
             }
         }
+        let incremental = self.danmaku_atlas_cache.as_ref().and_then(|cache| {
+            atlas
+                .incremental_update_from(cache.version, cache.width, cache.height, cache.stride)
+                .map(|update| {
+                    (
+                        cache.fill_texture.clone(),
+                        cache.outline_texture.clone(),
+                        update.clone(),
+                    )
+                })
+        });
+        if let Some((fill_texture, outline_texture, update)) = incremental {
+            self.update_danmaku_atlas_texture(&fill_texture, atlas, &atlas.fill_alpha, &update);
+            self.update_danmaku_atlas_texture(
+                &outline_texture,
+                atlas,
+                &atlas.outline_alpha,
+                &update,
+            );
+            if let Some(cache) = &mut self.danmaku_atlas_cache {
+                cache.version = atlas.version;
+            }
+            return (fill_texture, outline_texture);
+        }
         let fill_texture = self.create_plane_texture(
             "erika-wgpu-danmaku-fill-atlas",
             atlas.width,
@@ -2245,6 +2271,39 @@ impl WgpuRenderer {
             outline_texture: outline_texture.clone(),
         });
         (fill_texture, outline_texture)
+    }
+
+    fn update_danmaku_atlas_texture(
+        &self,
+        texture: &wgpu::Texture,
+        atlas: &DanmakuGlyphAtlas,
+        pixels: &[u8],
+        update: &DanmakuAtlasUpdate,
+    ) {
+        let offset = update.y as usize * atlas.stride + update.x as usize;
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: update.x,
+                    y: update.y,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pixels[offset..],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(atlas.stride as u32),
+                rows_per_image: Some(update.height),
+            },
+            wgpu::Extent3d {
+                width: update.width,
+                height: update.height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     fn append_danmaku_glyph_draws(
@@ -4789,6 +4848,7 @@ mod tests {
             fill_alpha: vec![255; 16],
             outline_alpha: vec![64; 16],
             version: 42,
+            update: None,
         };
         let plan = DanmakuRenderPlan {
             media_time: Duration::from_millis(10),
@@ -4828,6 +4888,38 @@ mod tests {
                 .as_ref()
                 .is_some_and(|cache| cache.can_reuse_for(&atlas))
         );
+        let cached_fill_texture = renderer
+            .danmaku_atlas_cache
+            .as_ref()
+            .expect("danmaku atlas cache")
+            .fill_texture
+            .clone();
+
+        let mut updated_atlas = atlas.clone();
+        updated_atlas.version = 43;
+        updated_atlas.fill_alpha[5] = 128;
+        updated_atlas.outline_alpha[5] = 192;
+        updated_atlas.update = Some(DanmakuAtlasUpdate {
+            from_version: 42,
+            x: 1,
+            y: 1,
+            width: 1,
+            height: 1,
+        });
+        let updated_plan = DanmakuRenderPlan {
+            atlas: Some(std::sync::Arc::new(updated_atlas.clone())),
+            ..plan.clone()
+        };
+        let updated_draws = renderer
+            .prepare_danmaku_draws(&updated_plan, OutputDescription::sdr())
+            .unwrap();
+        assert_eq!(updated_draws.len(), 2);
+        let updated_cache = renderer
+            .danmaku_atlas_cache
+            .as_ref()
+            .expect("updated danmaku atlas cache");
+        assert!(updated_cache.can_reuse_for(&updated_atlas));
+        assert_eq!(updated_cache.fill_texture, cached_fill_texture);
     }
 
     #[test]

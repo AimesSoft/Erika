@@ -32,6 +32,9 @@ const DEFAULT_STATIC_DURATION: Duration = Duration::from_millis(3800);
 const DEFAULT_GENERATION: u64 = 1;
 const GLYPH_ATLAS_WIDTH: u32 = 2048;
 const GLYPH_ATLAS_INITIAL_HEIGHT: u32 = 256;
+const SCROLL_DURATION_REFERENCE_LOGICAL_WIDTH: f32 = 1280.0;
+const SCROLL_DURATION_MIN_WIDTH_SCALE: f32 = 0.9;
+const SCROLL_DURATION_MAX_WIDTH_SCALE: f32 = 1.3;
 const DEFAULT_DANMAKU_TRACK_ID: u64 = 1;
 const TRACK_ID_SHIFT: u64 = 48;
 const ITEM_ID_MASK: u64 = (1u64 << TRACK_ID_SHIFT) - 1;
@@ -266,6 +269,33 @@ impl DanmakuLayoutConfig {
         config.custom_font_file_path = config.custom_font_file_path.trim().to_string();
         config
     }
+
+    fn layout_equivalent(&self, other: &Self) -> bool {
+        self.font_size == other.font_size
+            && self.display_area == other.display_area
+            && self.scroll_duration_seconds == other.scroll_duration_seconds
+            && self.scroll_speed_factor == other.scroll_speed_factor
+            && self.track_gap_ratio == other.track_gap_ratio
+            && self.outline_width == other.outline_width
+            && self.custom_font_family == other.custom_font_family
+            && self.custom_font_file_path == other.custom_font_file_path
+            && self.merge_duplicates == other.merge_duplicates
+            && self.allow_stacking == other.allow_stacking
+            && self.allow_scroll_overwrite == other.allow_scroll_overwrite
+            && self.max_quantity == other.max_quantity
+            && self.max_lines_per_mode == other.max_lines_per_mode
+            && self.block_top == other.block_top
+            && self.block_bottom == other.block_bottom
+            && self.block_scroll == other.block_scroll
+            && self.block_words == other.block_words
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DanmakuConfigChange {
+    Unchanged,
+    PaintOnly,
+    Layout,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -746,19 +776,27 @@ impl DfmPreparedLayout {
         self.stats
     }
 
+    pub(crate) fn apply_paint_config(&mut self, config: &DanmakuLayoutConfig) {
+        let config = config.sanitized();
+        debug_assert!(self.config.layout_equivalent(&config));
+        self.config.opacity = config.opacity;
+        self.config.shadow_offset = config.shadow_offset;
+        self.config.shadow_style = config.shadow_style;
+        self.config.enabled = config.enabled;
+    }
+
     pub fn frame_layout(&self, media_time: Duration, generation: u64) -> DanmakuFrameLayout {
         if !self.config.enabled {
             return DanmakuFrameLayout::empty(media_time, generation, self.viewport);
         }
         let current = media_time.as_secs_f64();
-        let dfm_frame = dfm::layout_frame(&self.dfm_layout, current);
-        let mut items = Vec::with_capacity(dfm_frame.items.len());
-        for frame_item in dfm_frame.items {
+        let mut items = Vec::with_capacity(dfm::frame_candidate_count(&self.dfm_layout, current));
+        dfm::for_each_frame_item(&self.dfm_layout, current, |frame_item| {
             let Some(item) = self.items.get(frame_item.item_index) else {
-                continue;
+                return;
             };
             if item.mode == DanmakuMode::Special {
-                continue;
+                return;
             }
             items.push(DanmakuPlacedItem {
                 item_id: item.id,
@@ -778,7 +816,7 @@ impl DfmPreparedLayout {
                 duplicate_count: item.duplicate_count,
                 text_layout: Arc::clone(&item.text_layout),
             });
-        }
+        });
         DanmakuFrameLayout {
             media_time,
             generation,
@@ -1022,6 +1060,15 @@ pub struct DanmakuGlyphInstance {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DanmakuAtlasUpdate {
+    pub from_version: u64,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DanmakuGlyphAtlas {
     pub width: u32,
     pub height: u32,
@@ -1029,6 +1076,7 @@ pub struct DanmakuGlyphAtlas {
     pub fill_alpha: Vec<u8>,
     pub outline_alpha: Vec<u8>,
     pub version: u64,
+    pub update: Option<DanmakuAtlasUpdate>,
 }
 
 impl DanmakuGlyphAtlas {
@@ -1042,6 +1090,25 @@ impl DanmakuGlyphAtlas {
 
     pub fn required_len(&self) -> usize {
         self.stride.saturating_mul(self.height as usize)
+    }
+
+    pub fn incremental_update_from(
+        &self,
+        version: u64,
+        width: u32,
+        height: u32,
+        stride: usize,
+    ) -> Option<&DanmakuAtlasUpdate> {
+        let update = self.update.as_ref()?;
+        (update.from_version == version
+            && self.width == width
+            && self.height == height
+            && self.stride == stride
+            && update.width > 0
+            && update.height > 0
+            && update.x.saturating_add(update.width) <= self.width
+            && update.y.saturating_add(update.height) <= self.height)
+            .then_some(update)
     }
 }
 
@@ -1639,6 +1706,7 @@ struct PersistentGlyphAtlas {
     packed: HashMap<GlyphCacheKey, PackedGlyph>,
     version: u64,
     dirty: bool,
+    dirty_bounds: Option<[u32; 4]>,
     snapshot: Option<Arc<DanmakuGlyphAtlas>>,
 }
 
@@ -1659,6 +1727,7 @@ impl PersistentGlyphAtlas {
             packed: HashMap::new(),
             version: 1,
             dirty: true,
+            dirty_bounds: None,
             snapshot: None,
         }
     }
@@ -1694,6 +1763,19 @@ impl PersistentGlyphAtlas {
         self.packed.insert(glyph.key, packed);
         self.version = self.version.saturating_add(1).max(1);
         self.dirty = true;
+        if packed.width > 0 && packed.height > 0 {
+            let right = packed.x.saturating_add(packed.width);
+            let bottom = packed.y.saturating_add(packed.height);
+            self.dirty_bounds = Some(match self.dirty_bounds {
+                Some([left, top, old_right, old_bottom]) => [
+                    left.min(packed.x),
+                    top.min(packed.y),
+                    old_right.max(right),
+                    old_bottom.max(bottom),
+                ],
+                None => [packed.x, packed.y, right, bottom],
+            });
+        }
         packed
     }
 
@@ -1715,6 +1797,16 @@ impl PersistentGlyphAtlas {
             return None;
         }
         if self.dirty || self.snapshot.is_none() {
+            let update = self.snapshot.as_ref().and_then(|snapshot| {
+                self.dirty_bounds
+                    .map(|[left, top, right, bottom]| DanmakuAtlasUpdate {
+                        from_version: snapshot.version,
+                        x: left,
+                        y: top,
+                        width: right.saturating_sub(left),
+                        height: bottom.saturating_sub(top),
+                    })
+            });
             self.snapshot = Some(Arc::new(DanmakuGlyphAtlas {
                 width: self.width,
                 height: self.height,
@@ -1722,8 +1814,10 @@ impl PersistentGlyphAtlas {
                 fill_alpha: self.fill_alpha.clone(),
                 outline_alpha: self.outline_alpha.clone(),
                 version: self.version,
+                update,
             }));
             self.dirty = false;
+            self.dirty_bounds = None;
         }
         self.snapshot.clone()
     }
@@ -1781,23 +1875,52 @@ impl DfmLayoutEngine {
     }
 
     pub fn set_config(&mut self, config: DanmakuLayoutConfig) -> bool {
+        self.apply_config(config) != DanmakuConfigChange::Unchanged
+    }
+
+    pub(crate) fn apply_config(&mut self, config: DanmakuLayoutConfig) -> DanmakuConfigChange {
         let config = config.sanitized();
         if self.config == config {
-            return false;
+            return DanmakuConfigChange::Unchanged;
         }
+        let layout_changed = !self.config.layout_equivalent(&config);
         let font_changed = self.config.custom_font_family != config.custom_font_family
             || self.config.custom_font_file_path != config.custom_font_file_path;
         self.config = config;
         if font_changed {
             self.rasterizer = DanmakuTextRasterizer::for_config(&self.config);
         }
-        self.prepared = None;
-        self.invalidate_stable_tracks();
-        true
+        if layout_changed {
+            self.prepared = None;
+            self.invalidate_stable_tracks();
+            DanmakuConfigChange::Layout
+        } else {
+            if let Some(prepared) = &mut self.prepared {
+                prepared.apply_paint_config(&self.config);
+            }
+            DanmakuConfigChange::PaintOnly
+        }
     }
 
     pub fn config(&self) -> &DanmakuLayoutConfig {
         &self.config
+    }
+
+    pub(crate) fn rasterizer_clone(&self) -> DanmakuTextRasterizer {
+        self.rasterizer.clone()
+    }
+
+    pub(crate) fn set_config_with_rasterizer(
+        &mut self,
+        config: DanmakuLayoutConfig,
+        rasterizer: DanmakuTextRasterizer,
+    ) {
+        if self.apply_config(config) == DanmakuConfigChange::Layout {
+            // The async planner must pack glyphs into the same atlas that the
+            // presenter later snapshots. This is especially important after a
+            // custom-font change creates a fresh rasterizer generation.
+            self.rasterizer = rasterizer;
+        }
     }
 
     pub fn prepare(&mut self, viewport: DanmakuViewport, _generation: u64) -> DfmPreparedLayout {
@@ -1813,6 +1936,13 @@ impl DfmLayoutEngine {
             &self.rasterizer,
             &self.stable_tracks,
         );
+        let active_ids = prepared
+            .items()
+            .iter()
+            .map(|item| item.id)
+            .collect::<BTreeSet<_>>();
+        self.stable_tracks
+            .retain(|item_id, _| active_ids.contains(item_id));
         for item in prepared.items() {
             self.stable_tracks.insert(item.id, item.track_index);
         }
@@ -1893,7 +2023,7 @@ fn prepare_layout(
             items: Vec::new(),
         };
     }
-    let scroll_duration = compute_scroll_duration(config);
+    let scroll_duration = scroll_duration_for_viewport(config, viewport);
     let base_font_size = effective_config_font_size(config.font_size, viewport.scale_factor);
     let source_count = timeline.items().len();
     let mut source_items = Vec::new();
@@ -2226,10 +2356,18 @@ fn decode_xml_entities(text: &str) -> String {
         .replace("&apos;", "'")
 }
 
-fn compute_scroll_duration(config: &DanmakuLayoutConfig) -> Duration {
+pub(crate) fn scroll_duration_for_viewport(
+    config: &DanmakuLayoutConfig,
+    viewport: DanmakuViewport,
+) -> Duration {
     let duration_seconds = sanitize_f32(config.scroll_duration_seconds, 10.0).max(1.0);
     let speed_factor = sanitize_f32(config.scroll_speed_factor, 1.0).max(0.001);
-    let millis = duration_seconds * 1000.0 / speed_factor;
+    let logical_width = viewport.width as f32 / viewport.scale_factor.max(0.001);
+    let width_scale = (logical_width / SCROLL_DURATION_REFERENCE_LOGICAL_WIDTH).clamp(
+        SCROLL_DURATION_MIN_WIDTH_SCALE,
+        SCROLL_DURATION_MAX_WIDTH_SCALE,
+    );
+    let millis = duration_seconds * width_scale * 1000.0 / speed_factor;
     Duration::from_millis(millis.max(1.0).round() as u64)
 }
 
@@ -2664,7 +2802,7 @@ mod tests {
         let viewport = DanmakuViewport::new(640, 360);
         let first_window = timeline.window(Duration::ZERO, Duration::from_secs(12));
         let second_window = timeline.window(Duration::from_secs(4), Duration::from_secs(16));
-        let mut engine = DfmLayoutEngine::new(first_window, config.clone());
+        let mut engine = DfmLayoutEngine::new(first_window, config);
 
         let first = engine.prepare(viewport, 1);
         let first_tracks = first
@@ -2686,14 +2824,13 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(!overlap.is_empty());
         assert!(overlap.iter().all(|(before, after)| before == after));
-
-        let mut fresh_engine = DfmLayoutEngine::new(second_window, config);
-        let fresh = fresh_engine.prepare(viewport, 1);
-        assert!(fresh.items().iter().any(|item| {
-            first_tracks
-                .get(&item.id)
-                .is_some_and(|track| *track != item.track_index)
-        }));
+        assert_eq!(engine.stable_tracks.len(), second.items().len());
+        assert!(
+            engine
+                .stable_tracks
+                .keys()
+                .all(|item_id| second.items().iter().any(|item| item.id == *item_id))
+        );
     }
 
     #[test]
@@ -2729,6 +2866,76 @@ mod tests {
         assert_ne!(first_x, second.items[0].rect[0]);
         assert_eq!(first_atlas.version, second_atlas.version);
         assert!(Arc::ptr_eq(&first_atlas, second_atlas));
+    }
+
+    #[test]
+    fn glyph_atlas_snapshot_describes_only_the_new_dirty_region() {
+        let first_timeline = DanmakuTimeline::new(vec![item(0.0, "A", DanmakuMode::Top)]).unwrap();
+        let mut engine = DfmLayoutEngine::new(first_timeline, DanmakuLayoutConfig::default());
+        let viewport = DanmakuViewport::new(640, 360);
+        let first = engine.render_plan(Duration::from_millis(500), viewport, 1);
+        let first_atlas = first.atlas.as_ref().expect("first glyph atlas exists");
+        assert!(first_atlas.update.is_none());
+
+        engine.set_timeline(DanmakuTimeline::new(vec![item(0.0, "AB", DanmakuMode::Top)]).unwrap());
+        let second = engine.render_plan(Duration::from_millis(500), viewport, 2);
+        let second_atlas = second.atlas.as_ref().expect("second glyph atlas exists");
+        let update = second_atlas
+            .update
+            .as_ref()
+            .expect("new glyph produces an incremental update");
+
+        assert_eq!(update.from_version, first_atlas.version);
+        assert!(update.width > 0 && update.height > 0);
+        assert!(update.width < second_atlas.width);
+        assert!(
+            second_atlas
+                .incremental_update_from(
+                    first_atlas.version,
+                    first_atlas.width,
+                    first_atlas.height,
+                    first_atlas.stride,
+                )
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn paint_only_config_change_reuses_prepared_layout() {
+        let timeline = DanmakuTimeline::new(vec![item(0.0, "paint", DanmakuMode::Top)]).unwrap();
+        let mut engine = DfmLayoutEngine::new(timeline, DanmakuLayoutConfig::default());
+        let viewport = DanmakuViewport::new(640, 360);
+        let first = engine.prepare(viewport, 1);
+        let first_text_layout = Arc::clone(&first.items()[0].text_layout);
+
+        let mut config = engine.config().clone();
+        config.opacity = 0.4;
+        config.shadow_style = DanmakuShadowStyle::None;
+        assert_eq!(engine.apply_config(config), DanmakuConfigChange::PaintOnly);
+
+        let prepared = engine.prepared.as_ref().expect("prepared layout retained");
+        assert!(Arc::ptr_eq(
+            &prepared.items()[0].text_layout,
+            &first_text_layout
+        ));
+        let frame = prepared.frame_layout(Duration::from_millis(500), 2);
+        assert_close(frame.items[0].opacity, 0.4);
+        assert_close(frame.items[0].shadow_alpha, 0.0);
+    }
+
+    #[test]
+    fn scroll_duration_uses_logical_width_and_retina_scale() {
+        let config = DanmakuLayoutConfig::default();
+        let narrow = scroll_duration_for_viewport(&config, DanmakuViewport::new(640, 360));
+        let reference = scroll_duration_for_viewport(&config, DanmakuViewport::new(1280, 720));
+        let wide = scroll_duration_for_viewport(&config, DanmakuViewport::new(1920, 1080));
+        let retina_reference =
+            scroll_duration_for_viewport(&config, DanmakuViewport::with_scale(2560, 1440, 2.0));
+
+        assert_eq!(narrow, Duration::from_secs(9));
+        assert_eq!(reference, Duration::from_secs(10));
+        assert_eq!(wide, Duration::from_secs(13));
+        assert_eq!(retina_reference, reference);
     }
 
     #[test]

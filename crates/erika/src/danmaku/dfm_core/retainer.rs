@@ -269,10 +269,10 @@ impl DanmakuRetainer {
 
 /// Select a track for a scroll danmaku.
 /// Returns (track_index, displaced_indices) or None if the item should be dropped.
-/// When all tracks collide, uses DFM's overwriteInsert strategy: pick the track
-/// whose items have the smallest right edge (furthest left), clear it, and place
-/// the new danmaku there. Returns indices of all cleared entries so the caller
-/// can mark them as filtered.
+/// The upper 40% of tracks form a stable zone that is never overwritten. The
+/// lower 60% form an overflow zone where DFM's overwriteInsert strategy may
+/// replace the track whose items have progressed furthest left. This keeps the
+/// top of the screen stable under extreme density while preserving throughput.
 fn select_scroll_track(
     new_entry: &TrackEntry,
     track_data: &mut TrackData,
@@ -310,7 +310,25 @@ fn select_scroll_track(
     let mut best_track = overwrite_start;
     let mut min_right_edge = f32::MAX;
 
-    for i in 0..track_count {
+    // Phase 1: fill/reuse the stable zone without ever selecting it as an
+    // overwrite candidate.
+    for i in 0..overwrite_start {
+        if track_data.tracks[i].is_empty() {
+            track_data.tracks[i].push(new_entry.clone());
+            return Some((i, SmallVec::new()));
+        }
+        let collides = track_data.tracks[i]
+            .iter()
+            .any(|existing| scroll_entries_collide(new_entry, existing, view_width));
+        if !collides {
+            track_data.tracks[i].push(new_entry.clone());
+            return Some((i, SmallVec::new()));
+        }
+    }
+
+    // Phase 2: fill/reuse the overflow zone and remember the safest sacrifice
+    // candidate in that zone only.
+    for i in overwrite_start..track_count {
         if track_data.tracks[i].is_empty() {
             track_data.tracks[i].push(new_entry.clone());
             return Some((i, SmallVec::new()));
@@ -330,7 +348,7 @@ fn select_scroll_track(
             track_data.tracks[i].push(new_entry.clone());
             return Some((i, SmallVec::new()));
         }
-        if i >= overwrite_start && track_min_right < min_right_edge {
+        if track_min_right < min_right_edge {
             min_right_edge = track_min_right;
             best_track = i;
         }
@@ -836,6 +854,53 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_scroll_overwrite_never_displaces_stable_zone() {
+        let flags = GlobalFlags::default();
+        let mut retainer = DanmakuRetainer::new(0.0, 0.0);
+        let view_width = 640.0;
+        let view_height = 150.0; // Five 30px tracks: two stable, three overflow.
+        let mut displaced = SmallVec::<[usize; 4]>::new();
+        let mut replacement_y = 0.0;
+
+        for index in 0..6 {
+            let mut item = make_scroll_item(
+                0,
+                &format!("dense-{index}"),
+                160.0,
+                DanmakuType::ScrollRL,
+                5000,
+                view_width,
+            );
+            item.index = index;
+            let (placed, next_displaced) = retainer.fix_with_options(
+                &mut item,
+                view_width,
+                view_height,
+                &flags,
+                1.0,
+                false,
+                false,
+                true,
+            );
+            assert!(placed);
+            if index == 5 {
+                displaced = next_displaced;
+                replacement_y = item.y;
+            }
+        }
+
+        assert!(!displaced.is_empty());
+        assert!(
+            displaced.iter().all(|index| *index >= 2),
+            "stable-zone entries must never be overwrite victims: {displaced:?}"
+        );
+        assert!(
+            replacement_y >= 60.0,
+            "replacement must stay in the lower overflow zone, got y={replacement_y}"
+        );
     }
 
     #[test]

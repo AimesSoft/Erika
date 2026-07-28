@@ -46,7 +46,7 @@ use objc2_metal::{MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerState}
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 
 use crate::core::{ColorPrimaries, SurfaceMetrics, TransferFunction};
-use crate::danmaku::{DanmakuGlyphAtlas, DanmakuRenderPlan};
+use crate::danmaku::{DanmakuAtlasUpdate, DanmakuGlyphAtlas, DanmakuRenderPlan};
 use crate::renderer::metal::upscaler::LumaUpscaler;
 use crate::renderer::metal::{
     ClearColor, DanmakuRenderFrame, ImportedVideoFormat, ImportedVideoFrameInfo,
@@ -1040,6 +1040,24 @@ impl MetalRendererImpl {
     )> {
         if let Some(cache) = &self.danmaku_alpha_atlas_cache {
             if cache.can_reuse_for(atlas) {
+                return Ok((cache.fill_texture.clone(), cache.outline_texture.clone()));
+            }
+        }
+        if let Some(cache) = &mut self.danmaku_alpha_atlas_cache {
+            if let Some(update) = atlas.incremental_update_from(
+                cache.version,
+                cache.width,
+                cache.height,
+                cache.stride,
+            ) {
+                update_danmaku_alpha_texture(&cache.fill_texture, atlas, &atlas.fill_alpha, update);
+                update_danmaku_alpha_texture(
+                    &cache.outline_texture,
+                    atlas,
+                    &atlas.outline_alpha,
+                    update,
+                );
+                cache.version = atlas.version;
                 return Ok((cache.fill_texture.clone(), cache.outline_texture.clone()));
             }
         }
@@ -2105,6 +2123,36 @@ impl DanmakuAlphaAtlasCache {
             && self.width == atlas.width
             && self.height == atlas.height
             && self.stride == atlas.stride
+    }
+}
+
+fn update_danmaku_alpha_texture(
+    texture: &ProtocolObject<dyn MTLTexture>,
+    atlas: &DanmakuGlyphAtlas,
+    pixels: &[u8],
+    update: &DanmakuAtlasUpdate,
+) {
+    let offset = update.y as usize * atlas.stride + update.x as usize;
+    let region = MTLRegion {
+        origin: MTLOrigin {
+            x: update.x as usize,
+            y: update.y as usize,
+            z: 0,
+        },
+        size: MTLSize {
+            width: update.width as usize,
+            height: update.height as usize,
+            depth: 1,
+        },
+    };
+    unsafe {
+        texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
+            region,
+            0,
+            NonNull::new(pixels[offset..].as_ptr().cast::<c_void>().cast_mut())
+                .expect("danmaku atlas update pointer is non-null"),
+            atlas.stride,
+        );
     }
 }
 

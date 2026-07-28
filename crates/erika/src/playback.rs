@@ -139,6 +139,12 @@ enum PumpInput {
     Empty,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaybackPumpDemand {
+    Video,
+    Audio,
+}
+
 struct AsyncDemuxer {
     packets: Receiver<DemuxMessage>,
     commands: Sender<DemuxCommand>,
@@ -1189,7 +1195,7 @@ impl PlaybackSession {
             && pumped_packets < VIDEO_PUMP_PACKET_BUDGET
             && started.elapsed() < VIDEO_PUMP_TIME_BUDGET
         {
-            if !self.pump_once()? {
+            if !self.pump_once(PlaybackPumpDemand::Video)? {
                 break;
             }
             pumped_packets = pumped_packets.saturating_add(1);
@@ -1217,7 +1223,7 @@ impl PlaybackSession {
             return Ok(None);
         }
         while self.audio_frames.is_empty() && !self.eof {
-            if !self.pump_once()? {
+            if !self.pump_once(PlaybackPumpDemand::Audio)? {
                 break;
             }
         }
@@ -1258,7 +1264,7 @@ impl PlaybackSession {
             if started.elapsed() >= max_duration {
                 break;
             }
-            if self.pump_once()? {
+            if self.pump_once(PlaybackPumpDemand::Audio)? {
                 pumped_packets = pumped_packets.saturating_add(1);
                 frame = pop_matching_audio_frame(
                     &mut self.audio_frames,
@@ -1765,14 +1771,19 @@ impl PlaybackSession {
         );
     }
 
-    fn pump_once(&mut self) -> Result<bool> {
+    fn pump_once(&mut self, demand: PlaybackPumpDemand) -> Result<bool> {
         if self.route_pending_video_packets()? {
             return Ok(true);
         }
         if !self.pending_video_packets.is_empty() {
             return Ok(false);
         }
-        if self.audio_output_active && self.audio_frames.len() >= self.queue_limits.audio_frames {
+        if audio_queue_blocks_demux(
+            demand,
+            self.audio_output_active,
+            self.audio_frames.len(),
+            self.queue_limits.audio_frames,
+        ) {
             return Ok(false);
         }
         if self.demux_eof {
@@ -2698,6 +2709,22 @@ impl PlaybackSession {
         }
         Ok(output_frames)
     }
+}
+
+fn audio_queue_blocks_demux(
+    demand: PlaybackPumpDemand,
+    audio_output_active: bool,
+    queued_audio_frames: usize,
+    audio_frame_limit: usize,
+) -> bool {
+    // Audio and video packets share the same demux stream. A full decoded
+    // audio queue may stop audio prefetch, but it must not prevent a video
+    // request from scanning past interleaved audio packets to reach the next
+    // video packet. Otherwise the 8-frame local video queue drains, then
+    // stalls behind the 16-frame audio limit in a visible ~300 ms cycle.
+    demand == PlaybackPumpDemand::Audio
+        && audio_output_active
+        && queued_audio_frames >= audio_frame_limit
 }
 
 enum SubtitleQueueCandidate {
@@ -5976,6 +6003,22 @@ mod tests {
         let limits = PlaybackQueueLimits::for_request(&request);
 
         assert_eq!(limits, PlaybackQueueLimits::default());
+    }
+
+    #[test]
+    fn full_audio_queue_only_blocks_audio_driven_demux() {
+        assert!(audio_queue_blocks_demux(
+            PlaybackPumpDemand::Audio,
+            true,
+            DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+            DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+        ));
+        assert!(!audio_queue_blocks_demux(
+            PlaybackPumpDemand::Video,
+            true,
+            DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+            DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+        ));
     }
 
     #[test]
