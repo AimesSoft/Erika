@@ -231,6 +231,7 @@ pub struct PresenterRuntime {
     current_overlay: Option<OverlayFrame>,
     current_danmaku: Option<DanmakuRenderPlan>,
     current_danmaku_prepared: Option<CurrentDanmakuPrepared>,
+    danmaku_plan_replacement_pending: bool,
     rejected_video_import_route: Option<RejectedVideoImportRoute>,
     current_media_time: Duration,
     current_generation: u64,
@@ -528,6 +529,7 @@ impl PresenterRuntime {
             current_overlay: None,
             current_danmaku: None,
             current_danmaku_prepared: None,
+            danmaku_plan_replacement_pending: false,
             rejected_video_import_route: None,
             current_media_time: Duration::ZERO,
             current_generation: 1,
@@ -783,7 +785,7 @@ impl PresenterRuntime {
             return;
         }
         self.danmaku_planner.set_config(config);
-        self.bump_danmaku_generation();
+        self.bump_danmaku_generation_for_config_change();
         // A paused player may not produce another video frame. Keep the
         // existing surface viewport and enqueue the replacement plan now so
         // display ticks can redraw the retained frame with the new settings.
@@ -984,30 +986,26 @@ impl PresenterRuntime {
         self.pump_subtitles();
         self.pump_video();
         self.sync_media_time_from_player();
-        self.refresh_stale_danmaku_plan();
 
         // Capture is a real render target with its own pixel viewport. Reusing
-        // the surface-sized composition here makes resized screenshots either
-        // drop danmaku (the renderer rejects mismatched plans) or scale a stale
-        // subtitle atlas. Build both overlays for the requested target so the
-        // public width/height API has the same composition semantics as an
-        // equivalently sized presentation surface.
-        let (capture_overlay, capture_danmaku) = self.capture_composition(width, height);
+        // the surface-sized overlay here would scale a stale subtitle atlas, so
+        // rebuild the regular subtitle overlay for the requested target.
+        //
+        // Danmaku is deliberately not attached to this offscreen context:
+        // screenshots are used as watch-history thumbnails and must represent
+        // the video rather than transient on-screen comments. The presentation
+        // context in `render_current` still attaches `current_danmaku`.
+        let capture_overlay = self.capture_overlay(width, height);
 
         let context = RenderFrameContext::new(self.current_media_time, self.current_generation)
             .overlay(Some(&capture_overlay))
-            .danmaku(Some(&capture_danmaku))
             .output_size(width, height);
         self.renderer
             .capture_current_frame(context, width, height)
             .map(|capture| capture.map(|capture| capture.rgba))
     }
 
-    fn capture_composition(
-        &mut self,
-        width: u32,
-        height: u32,
-    ) -> (OverlayFrame, DanmakuRenderPlan) {
+    fn capture_overlay(&mut self, width: u32, height: u32) -> OverlayFrame {
         let capture_overlay_viewport = OverlayViewport::new(width, height);
         let mut capture_overlay = self
             .overlay
@@ -1018,12 +1016,7 @@ impl PresenterRuntime {
             &mut capture_overlay,
             subtitle_style,
         );
-        let capture_danmaku = self.danmaku.render_plan(
-            self.current_media_time,
-            DanmakuViewport::new(width, height),
-            self.current_generation,
-        );
-        (capture_overlay, capture_danmaku)
+        capture_overlay
     }
 
     pub fn stats(&self) -> PresenterStats {
@@ -1333,6 +1326,7 @@ impl PresenterRuntime {
             let accepted = self.danmaku_plan_result_is_current(&result);
             let prepared_items = result.prepared.items().len();
             if accepted {
+                self.danmaku_plan_replacement_pending = false;
                 self.current_danmaku_prepared = Some(CurrentDanmakuPrepared {
                     request: result.request,
                     prepared: result.prepared,
@@ -1362,11 +1356,15 @@ impl PresenterRuntime {
 
     fn refresh_current_danmaku_plan_from_prepared(&mut self) {
         let Some(prepared) = &self.current_danmaku_prepared else {
-            self.current_danmaku = None;
+            if !self.danmaku_plan_replacement_pending {
+                self.current_danmaku = None;
+            }
             return;
         };
         if !self.danmaku_prepared_covers_current_time(prepared) {
-            self.current_danmaku = None;
+            if !self.danmaku_plan_replacement_pending {
+                self.current_danmaku = None;
+            }
             return;
         }
         let plan = self.danmaku.render_prepared_plan(
@@ -1606,9 +1604,27 @@ impl PresenterRuntime {
         self.invalidate_current_danmaku_plan();
     }
 
+    fn bump_danmaku_generation_for_config_change(&mut self) {
+        bump_generation(&mut self.current_generation, &mut self.danmaku_generation);
+        self.danmaku_planner.invalidate_requests();
+        self.current_danmaku_prepared = None;
+
+        // Style/layout preparation runs on the async planner. Keep the last
+        // complete plan visible until its replacement is ready so a stream of
+        // slider updates cannot alternate between danmaku and an empty frame.
+        // The old plan is only a short-lived presentation fallback; retagging
+        // it lets renderers accept it for the new danmaku generation.
+        self.danmaku_plan_replacement_pending = retain_danmaku_plan_for_config_change(
+            &mut self.current_danmaku,
+            self.danmaku.config().enabled,
+            self.current_generation,
+        );
+    }
+
     fn invalidate_current_danmaku_plan(&mut self) {
         self.current_danmaku = None;
         self.current_danmaku_prepared = None;
+        self.danmaku_plan_replacement_pending = false;
     }
 
     fn clear_current_danmaku_state(&mut self) {
@@ -2153,6 +2169,22 @@ fn bump_generation(current_generation: &mut u64, danmaku_generation: &mut u64) {
     *current_generation = current_generation
         .saturating_add(1)
         .max(*danmaku_generation);
+}
+
+fn retain_danmaku_plan_for_config_change(
+    current: &mut Option<DanmakuRenderPlan>,
+    enabled: bool,
+    generation: u64,
+) -> bool {
+    if !enabled {
+        *current = None;
+        return false;
+    }
+    let Some(plan) = current.as_mut() else {
+        return false;
+    };
+    plan.generation = generation;
+    true
 }
 
 fn duration_regressed(next: Duration, previous: Duration) -> bool {
@@ -2735,6 +2767,64 @@ fn append_text_subtitles_debug(
 mod tests {
     use super::*;
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct CapturedComposition {
+        has_overlay: bool,
+        has_danmaku: bool,
+        width: u32,
+        height: u32,
+    }
+
+    struct CaptureCompositionProbe {
+        captured: Arc<Mutex<Option<CapturedComposition>>>,
+    }
+
+    impl RendererBackend for CaptureCompositionProbe {
+        fn attach_surface(&mut self, _surface: PlatformSurface) -> Result<()> {
+            Ok(())
+        }
+
+        fn detach_surface(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn resize_surface(&mut self, _metrics: SurfaceMetrics) -> Result<()> {
+            Ok(())
+        }
+
+        fn render_test_frame(&mut self, _time_seconds: f64) -> Result<()> {
+            Ok(())
+        }
+
+        fn upload_player_frame(&mut self, _frame: &PlayerVideoFrame) -> Result<()> {
+            Ok(())
+        }
+
+        fn render_current_frame(&mut self, _context: RenderFrameContext<'_>) -> Result<bool> {
+            Ok(false)
+        }
+
+        fn capture_current_frame(
+            &mut self,
+            context: RenderFrameContext<'_>,
+            width: u32,
+            height: u32,
+        ) -> Result<Option<crate::core::RendererFrameCapture>> {
+            *self.captured.lock().expect("capture probe mutex poisoned") =
+                Some(CapturedComposition {
+                    has_overlay: context.overlay.is_some(),
+                    has_danmaku: context.danmaku.is_some(),
+                    width,
+                    height,
+                });
+            Ok(Some(crate::core::RendererFrameCapture {
+                width,
+                height,
+                rgba: vec![0; width as usize * height as usize * 4],
+            }))
+        }
+    }
+
     #[test]
     fn rejected_mediacodec_surface_route_allows_bytebuffer_recovery() {
         let rejected = RejectedVideoImportRoute::new(DecoderBackend::MediaCodec, true, 7);
@@ -3225,6 +3315,60 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     #[test]
     #[cfg(feature = "wgpu")]
+    fn danmaku_config_change_retains_current_plan_until_replacement_is_ready() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        let viewport = DanmakuViewport::new(1920, 1080);
+        presenter.current_danmaku_viewport = Some(viewport);
+        presenter.current_danmaku = Some(DanmakuRenderPlan::empty(
+            Duration::from_secs(5),
+            presenter.current_generation,
+            viewport,
+        ));
+
+        let mut config = DanmakuLayoutConfig::default();
+        config.font_size += 1.0;
+        presenter.set_danmaku_config(config);
+
+        assert!(presenter.danmaku_plan_replacement_pending);
+        assert!(presenter.current_danmaku_prepared.is_none());
+        assert_eq!(
+            presenter
+                .current_danmaku
+                .as_ref()
+                .map(|plan| plan.generation),
+            Some(presenter.current_generation)
+        );
+
+        presenter.refresh_current_danmaku_plan_from_prepared();
+
+        assert!(
+            presenter.current_danmaku.is_some(),
+            "the last complete plan must stay visible while async layout is pending"
+        );
+    }
+
+    #[test]
+    fn config_plan_retention_retags_enabled_plan_and_clears_disabled_plan() {
+        let viewport = DanmakuViewport::new(1920, 1080);
+        let mut current = Some(DanmakuRenderPlan::empty(
+            Duration::from_secs(5),
+            7,
+            viewport,
+        ));
+
+        assert!(retain_danmaku_plan_for_config_change(&mut current, true, 8));
+        assert_eq!(current.as_ref().map(|plan| plan.generation), Some(8));
+
+        assert!(!retain_danmaku_plan_for_config_change(
+            &mut current,
+            false,
+            9
+        ));
+        assert!(current.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu")]
     fn audio_clock_report_tracks_queue_and_underflow_changes() {
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
 
@@ -3322,7 +3466,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     #[test]
     #[cfg(feature = "wgpu")]
-    fn resized_capture_rebuilds_subtitle_and_danmaku_for_capture_viewport() {
+    fn resized_capture_rebuilds_subtitle_overlay_for_capture_viewport() {
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
         presenter.subtitles.push(subtitle_frame(
             Duration::from_secs(1),
@@ -3332,13 +3476,36 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         presenter.current_media_time = Duration::from_millis(1500);
         presenter.current_generation = 9;
 
-        let (overlay, danmaku) = presenter.capture_composition(320, 180);
+        let overlay = presenter.capture_overlay(320, 180);
 
         assert_eq!(overlay.viewport, OverlayViewport::new(320, 180));
         assert_eq!(overlay.subtitle_planes.len(), 1);
-        assert_eq!(danmaku.viewport, DanmakuViewport::new(320, 180));
-        assert_eq!(danmaku.generation, 9);
-        assert!(!danmaku.items.is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu")]
+    fn screenshot_capture_context_omits_danmaku() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        let captured = Arc::new(Mutex::new(None));
+        presenter.renderer = Box::new(CaptureCompositionProbe {
+            captured: Arc::clone(&captured),
+        });
+        presenter.danmaku = danmaku_engine("screen-only danmaku");
+        presenter.current_media_time = Duration::from_millis(1500);
+        presenter.current_generation = 9;
+
+        let screenshot = presenter.capture_frame_rgba(320, 180).unwrap();
+
+        assert_eq!(screenshot.as_ref().map(Vec::len), Some(320 * 180 * 4));
+        assert_eq!(
+            *captured.lock().expect("capture probe mutex poisoned"),
+            Some(CapturedComposition {
+                has_overlay: true,
+                has_danmaku: false,
+                width: 320,
+                height: 180,
+            })
+        );
     }
 
     #[test]
