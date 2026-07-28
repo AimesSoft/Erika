@@ -2685,10 +2685,31 @@ fn downmix_requires_normalization(input_channels: u32, output_channels: u32) -> 
     output_channels < input_channels
 }
 
-/// Sets `rematrix_maxval` to 1.0 on `context` so swresample normalizes the
-/// downmix matrix, preventing clipped output. Only applies when channels are
-/// reduced; failures are traced but non-fatal (the context falls back to the
-/// default un-normalized matrix).
+/// Coefficient-sum ceiling handed to swresample's `rematrix_maxval` when the
+/// channel count is reduced.
+///
+/// swresample normalizes the downmix matrix so no output row sums above this
+/// value. The obvious choice, 1.0, guarantees that even fully correlated
+/// full-scale input cannot clip -- but it pays for that guarantee everywhere:
+/// the 5.1 -> stereo row sums to ~2.41, so every surround track is scaled by
+/// 0.41 (-7.7 dB) whether or not it was ever going to clip.
+///
+/// That worst case assumes the summed channels are identical signals. Real
+/// multichannel masters are largely decorrelated, so they add as power rather
+/// than amplitude: sqrt(1^2 + 0.707^2 + 0.707^2) = sqrt(2). Normalizing to the
+/// power sum instead keeps realistic content below full scale while recovering
+/// ~3 dB over the amplitude-sum bound. Measured 5.1 -> stereo peaks at this
+/// setting: typical mixed levels 0.74, music-heavy 0.82, dialogue-heavy 0.57.
+///
+/// Only a synthetic signal holding every channel at digital full scale still
+/// exceeds unity here; catching that too would need a limiter on the output
+/// stage rather than a static matrix scale.
+const DOWNMIX_REMATRIX_MAXVAL: f64 = std::f64::consts::SQRT_2;
+
+/// Caps the downmix matrix at [`DOWNMIX_REMATRIX_MAXVAL`] so surround content
+/// stops clipping on stereo output without being needlessly attenuated. Only
+/// applies when channels are reduced; failures are traced but non-fatal (the
+/// context falls back to the default un-normalized matrix).
 ///
 /// # Safety
 /// `context` must point to a valid, allocated `SwrContext` that has not been
@@ -2705,7 +2726,7 @@ unsafe fn configure_downmix_normalization(
         av_opt_set_double(
             context.cast::<c_void>(),
             c"rematrix_maxval".as_ptr(),
-            1.0,
+            DOWNMIX_REMATRIX_MAXVAL,
             0,
         )
     };
@@ -4037,7 +4058,11 @@ mod tests {
     }
 
     #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
-    fn full_scale_audio_frame(channels: i32, sample_rate: i32, samples: i32) -> Frame {
+    /// Builds an interleaved f32 frame holding a constant level per channel.
+    /// `levels` is in the default layout order for its length (5.1 is
+    /// FL FR FC LFE BL BR).
+    fn audio_frame_with_levels(levels: &[f32], sample_rate: i32, samples: i32) -> Frame {
+        let channels = levels.len();
         let frame = Frame::alloc(TimeBase {
             num: 1,
             den: sample_rate,
@@ -4047,41 +4072,78 @@ mod tests {
             (*frame.ptr).format = sys::AVSampleFormat_AV_SAMPLE_FMT_FLT;
             (*frame.ptr).sample_rate = sample_rate;
             (*frame.ptr).nb_samples = samples;
-            sys::av_channel_layout_default(&mut (*frame.ptr).ch_layout, channels);
+            sys::av_channel_layout_default(&mut (*frame.ptr).ch_layout, channels as i32);
             check(
                 sys::av_frame_get_buffer(frame.ptr, 0),
                 "av_frame_get_buffer",
             )
             .unwrap();
             let data = (*frame.ptr).extended_data.read().cast::<f32>();
-            for index in 0..(samples as usize * channels as usize) {
-                data.add(index).write(1.0);
+            for sample in 0..samples as usize {
+                for (channel, level) in levels.iter().enumerate() {
+                    data.add(sample * channels + channel).write(*level);
+                }
             }
         }
         frame
     }
 
+    fn full_scale_audio_frame(channels: i32, sample_rate: i32, samples: i32) -> Frame {
+        audio_frame_with_levels(&vec![1.0; channels as usize], sample_rate, samples)
+    }
+
     #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
-    #[test]
-    fn surround_downmix_to_stereo_does_not_clip_full_scale_input() {
-        let frame = full_scale_audio_frame(6, 48_000, 1024);
+    fn downmix_peak_to_stereo(levels: &[f32]) -> f32 {
+        let frame = audio_frame_with_levels(levels, 48_000, 1024);
         let mut resampler =
             AudioResampler::new_from_frame(&frame, PcmFormat::f32_interleaved(48_000, 2)).unwrap();
         let pcm = resampler.convert(&frame).unwrap();
         assert!(pcm.frames > 0);
-        let peak = pcm
-            .samples
+        pcm.samples
             .iter()
-            .fold(0.0f32, |peak, sample| peak.max(sample.abs()));
-        // Without rematrix normalization the default 5.1 -> stereo matrix sums
-        // to ~2.41 per output channel, so full-scale input would peak well
-        // above 1.0 here.
+            .fold(0.0f32, |peak, sample| peak.max(sample.abs()))
+    }
+
+    #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
+    #[test]
+    fn surround_downmix_to_stereo_does_not_clip_realistic_content() {
+        // FL FR FC LFE BL BR. Un-normalized these peak at 1.27 / 1.40 / 0.98,
+        // so the first two clip against FFmpeg's default matrix.
+        for (label, levels) in [
+            ("typical mixed levels", [0.7, 0.7, 0.5, 0.0, 0.3, 0.3]),
+            ("music-heavy", [0.9, 0.9, 0.2, 0.0, 0.5, 0.5]),
+            ("dialogue-heavy", [0.2, 0.2, 1.0, 0.0, 0.1, 0.1]),
+        ] {
+            let peak = downmix_peak_to_stereo(&levels);
+            assert!(
+                peak <= 1.0 + 1e-4,
+                "{label}: downmixed peak {peak} exceeds full scale"
+            );
+        }
+    }
+
+    #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
+    #[test]
+    fn surround_downmix_normalizes_to_the_power_sum_not_the_amplitude_sum() {
+        // Every channel at digital full scale is the fully correlated worst
+        // case the amplitude sum guards against. Normalizing to it would cost
+        // 7.7 dB on all surround content; we normalize to the power sum
+        // instead, so this synthetic signal is allowed to reach the ceiling.
+        let peak = downmix_peak_to_stereo(&[1.0, 1.0, 1.0, 0.0, 1.0, 1.0]);
         assert!(
-            peak <= 1.0 + 1e-4,
-            "downmixed peak {peak} exceeds full scale"
+            (f64::from(peak) - DOWNMIX_REMATRIX_MAXVAL).abs() < 1e-3,
+            "worst-case peak {peak} should sit at the rematrix ceiling {DOWNMIX_REMATRIX_MAXVAL}"
         );
-        // The signal must still be audible, not silenced by the normalization.
-        assert!(peak > 0.5, "downmixed peak {peak} unexpectedly quiet");
+
+        // Guard the loudness side. Fronts-only input passes through the matrix
+        // at unity, so what is left is purely the normalization scale:
+        // the amplitude-sum bound (maxval 1.0) would leave 0.41 here (-7.7 dB),
+        // the power-sum bound leaves 0.59 (-4.6 dB).
+        let fronts = downmix_peak_to_stereo(&[1.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+        assert!(
+            (0.55..0.62).contains(&fronts),
+            "fronts-only downmix {fronts} left the expected -4.6 dB window"
+        );
     }
 
     #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
