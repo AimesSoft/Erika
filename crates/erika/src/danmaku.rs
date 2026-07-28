@@ -6,6 +6,7 @@
 
 mod dfm;
 pub mod dfm_core;
+mod outline;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -19,6 +20,7 @@ use thiserror::Error;
 
 use crate::NIPAPLAY_FALLBACK_FONT;
 use crate::text::TextShaper;
+use outline::{raster_radius, resolve_width_px};
 
 const DEFAULT_SOURCE_FONT_SIZE: f32 = 25.0;
 const DEFAULT_CONFIG_FONT_SIZE: f32 = 30.0;
@@ -768,7 +770,7 @@ impl DfmPreparedLayout {
                 font_size: item.font_size,
                 color: item.color,
                 opacity: item.opacity * self.config.opacity,
-                outline_width: resolve_outline_px(item.font_size, self.config.outline_width),
+                outline_width: resolve_width_px(item.font_size, self.config.outline_width),
                 shadow_offset: scale_offset(self.config.shadow_offset, self.viewport.scale_factor),
                 shadow_alpha: shadow_style_alpha(self.config.shadow_style),
                 duplicate_count: item.duplicate_count,
@@ -1211,7 +1213,7 @@ impl TextLayoutCacheKey {
             text,
             font_size_milli: (sanitize_f32(font_size, DEFAULT_NATIVE_FONT_SIZE).max(1.0) * 1000.0)
                 .round() as u32,
-            outline_radius: sanitize_f32(outline_width, 0.0).ceil().clamp(0.0, 16.0) as u16,
+            outline_radius: raster_radius(outline_width),
         }
     }
 
@@ -1480,7 +1482,9 @@ impl DanmakuTextRasterizer {
                         packed.height as f32 / atlas_h,
                     ],
                     color_rgba: color,
-                    outline_rgba: [0.0, 0.0, 0.0, color[3].min(0.75)],
+                    // Keep the outline as opaque as the fill. Capping it at
+                    // 0.75 made an otherwise opaque danmaku look washed out.
+                    outline_rgba: [0.0, 0.0, 0.0, color[3]],
                     shadow_rgba: [0.0, 0.0, 0.0, (color[3] * item.shadow_alpha).min(1.0)],
                     shadow_offset: item.shadow_offset,
                 });
@@ -1558,7 +1562,7 @@ impl GlyphCacheKey {
             ch,
             font_size_milli: (sanitize_f32(font_size, DEFAULT_NATIVE_FONT_SIZE).max(1.0) * 1000.0)
                 .round() as u32,
-            outline_radius: sanitize_f32(outline_width, 0.0).ceil().clamp(0.0, 16.0) as u16,
+            outline_radius: raster_radius(outline_width),
         }
     }
 
@@ -1950,7 +1954,7 @@ fn prepare_layout(
             let text: Arc<str> = Arc::from(item.text.as_str());
             let font_size = item.font_size as f32;
             let metrics = rasterizer.measure(&item.text, font_size);
-            let outline_width = resolve_outline_px(font_size, config.outline_width);
+            let outline_width = resolve_width_px(font_size, config.outline_width);
             let text_layout = rasterizer.prepare_text_layout_with_metrics(
                 Arc::clone(&text),
                 font_size,
@@ -2268,14 +2272,6 @@ fn apply_track_offset(pts: Duration, offset_micros: i64) -> Option<Duration> {
 fn compose_track_item_id(track_id: u64, item_id: u64) -> u64 {
     let track_part = track_id.min((1u64 << (64 - TRACK_ID_SHIFT)) - 1) << TRACK_ID_SHIFT;
     track_part | (item_id & ITEM_ID_MASK)
-}
-
-fn resolve_outline_px(font_size: f32, outline_width: f32) -> f32 {
-    let multiplier = outline_width.clamp(0.0, 4.0);
-    if multiplier <= 0.0 || !multiplier.is_finite() {
-        return 0.0;
-    }
-    (font_size * 0.06).clamp(1.0, 2.6) * multiplier
 }
 
 fn sanitize_f32(value: f32, fallback: f32) -> f32 {

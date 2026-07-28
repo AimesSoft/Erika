@@ -783,8 +783,11 @@ impl PresenterRuntime {
             return;
         }
         self.danmaku_planner.set_config(config);
-        self.clear_current_danmaku_state();
         self.bump_danmaku_generation();
+        // A paused player may not produce another video frame. Keep the
+        // existing surface viewport and enqueue the replacement plan now so
+        // display ticks can redraw the retained frame with the new settings.
+        self.request_current_danmaku_plan_for_current_time();
     }
 
     pub fn danmaku_config(&self) -> Option<&DanmakuLayoutConfig> {
@@ -1600,12 +1603,16 @@ impl PresenterRuntime {
     fn bump_danmaku_generation(&mut self) {
         bump_generation(&mut self.current_generation, &mut self.danmaku_generation);
         self.danmaku_planner.invalidate_requests();
-        self.clear_current_danmaku_state();
+        self.invalidate_current_danmaku_plan();
+    }
+
+    fn invalidate_current_danmaku_plan(&mut self) {
+        self.current_danmaku = None;
+        self.current_danmaku_prepared = None;
     }
 
     fn clear_current_danmaku_state(&mut self) {
-        self.current_danmaku = None;
-        self.current_danmaku_prepared = None;
+        self.invalidate_current_danmaku_plan();
         self.current_danmaku_viewport = None;
     }
 
@@ -1828,7 +1835,7 @@ impl PresenterRuntime {
         let timeline = self.danmaku_session.active_timeline_clone();
         self.danmaku.sync_timeline(&timeline);
         self.danmaku_planner.set_timeline(timeline);
-        self.clear_current_danmaku_state();
+        self.invalidate_current_danmaku_plan();
     }
 
     fn pump_subtitles(&mut self) {

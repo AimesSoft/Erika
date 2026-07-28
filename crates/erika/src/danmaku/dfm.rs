@@ -14,6 +14,7 @@ use super::dfm_core::{
     model::{DanmakuItem, DanmakuType, Duration, GlobalFlags},
     retainer::DanmakuRetainer,
 };
+use super::outline::resolve_width_px;
 use std::hash::{Hash, Hasher};
 
 const STATIC_DURATION_MS: i64 = 3800;
@@ -112,7 +113,7 @@ pub fn prepare_layout(request: PrepareRequest) -> Result<PreparedLayout, String>
     let scroll_dur_ms = (scroll_dur_secs * 1000.0) as i64;
     let global_flags = GlobalFlags::default();
     let outline_width = request.outline_width.max(0.0) as f32;
-    let outline_px = resolve_outline_px(font_size, outline_width);
+    let outline_px = resolve_width_px(font_size, outline_width);
 
     let mut items = request
         .items
@@ -403,14 +404,6 @@ fn fxhash_str(s: &str) -> u64 {
     let mut hasher = FxHasher::default();
     s.hash(&mut hasher);
     hasher.finish()
-}
-
-fn resolve_outline_px(font_size: f32, outline_width: f32) -> f32 {
-    let multiplier = outline_width.clamp(0.0, 4.0);
-    if multiplier <= 0.0 || !multiplier.is_finite() {
-        return 0.0;
-    }
-    (font_size * 0.06).clamp(1.0, 2.6) * multiplier
 }
 
 fn exceeds_max_line(

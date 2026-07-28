@@ -216,6 +216,11 @@ private enum ErikaPluginError: Error, CustomStringConvertible {
 }
 
 private final class ErikaNativeLibrary {
+  // This symbol was added after ErikaTrackInfo gained its extended media
+  // metadata fields. Loading an older dylib with the current Swift struct
+  // would use a different record stride and corrupt the following pointers.
+  private static let currentTrackInfoAbiSymbol = "erika_presenter_get_output_status"
+
   typealias CreateFn = @convention(c) () -> UnsafeMutableRawPointer?
   typealias CreateWithOutputModeFn = @convention(c) (Int32, Float) -> UnsafeMutableRawPointer?
   typealias DestroyFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
@@ -386,6 +391,33 @@ private final class ErikaNativeLibrary {
     if let explicitPath = environment["ERIKA_CAPI_DYLIB"], !explicitPath.isEmpty {
       candidates.append(explicitPath)
     }
+    // CocoaPods builds the dylib inside the plugin framework. Prefer that
+    // freshly built copy over an app-level dylib that may be left behind by an
+    // older build.
+    if let appFrameworksPath = Bundle.main.privateFrameworksPath {
+      candidates.append(
+        URL(fileURLWithPath: appFrameworksPath)
+          .appendingPathComponent(
+            "erika_flutter.framework/Versions/A/Frameworks/liberika_capi.dylib"
+          )
+          .path
+      )
+    }
+    if let pluginExecutablePath = bundle.executablePath {
+      candidates.append(
+        URL(fileURLWithPath: pluginExecutablePath)
+          .deletingLastPathComponent()
+          .appendingPathComponent("Frameworks/liberika_capi.dylib")
+          .path
+      )
+    }
+    if let pluginFrameworksPath = bundle.privateFrameworksPath {
+      candidates.append(
+        URL(fileURLWithPath: pluginFrameworksPath)
+          .appendingPathComponent("liberika_capi.dylib")
+          .path
+      )
+    }
     if let resourcePath = bundle.path(forResource: "liberika_capi", ofType: "dylib") {
       candidates.append(resourcePath)
     }
@@ -404,6 +436,16 @@ private final class ErikaNativeLibrary {
     var failures: [ErikaPluginError] = []
     for path in candidates {
       if let handle = dlopen(path, RTLD_NOW | RTLD_LOCAL) {
+        guard dlsym(handle, currentTrackInfoAbiSymbol) != nil else {
+          dlclose(handle)
+          failures.append(
+            .libraryLoadFailed(
+              path,
+              "incompatible Erika C ABI: missing \(currentTrackInfoAbiSymbol)"
+            )
+          )
+          continue
+        }
         NSLog("ErikaFlutterPlugin: loaded Erika C API from \(path)")
         return (handle, path)
       }
