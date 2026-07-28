@@ -2675,7 +2675,7 @@ impl ExternalSubtitleSession {
                 return Err(PlaybackError::SubtitleTrackNotRemovable(*stream_index));
             }
         };
-        let source = match external_subtitle_transcoded_source(&uri) {
+        let source = match external_subtitle_source(&uri) {
             Some(source) => source,
             None => source_from_uri_with_hint(&uri, crate::core::MediaSourceHint::Auto)?,
         };
@@ -2760,15 +2760,36 @@ impl ExternalSubtitleSession {
     }
 }
 
-/// Returns an in-memory UTF-8 source when `uri` points at a text subtitle
-/// (SRT/VTT/ASS) whose bytes need charset transcoding for FFmpeg.
+/// Whether charset inspection should take over opening `uri`.
 ///
-/// `None` means the caller should open the URI through the regular source
-/// path: the extension is not a known text subtitle format (e.g. PGS `.sup`),
-/// the bytes are already UTF-8, the charset detector was not confident, or the
-/// sidecar read failed (the demuxer will surface that error itself).
-fn external_subtitle_transcoded_source(uri: &str) -> Option<Box<dyn source::MediaSource>> {
-    crate::subtitle::SubtitleFileFormat::from_path(uri)?;
+/// True for the text subtitle formats FFmpeg parses as UTF-8, and also for a
+/// URI whose last path segment carries no extension at all -- Android hands us
+/// `fd://<n>?offset=...&length=...` for a content:// pick, which names no file
+/// yet is exactly where GBK/Big5/Shift-JIS sidecars turn up. A known extension
+/// that is not a text format (PGS `.sup`, VobSub `.idx`/`.sub`) is left to the
+/// regular source path so its bytes are never buffered.
+fn external_subtitle_needs_charset_inspection(uri: &str) -> bool {
+    let path = crate::subtitle::uri_path_component(uri);
+    match crate::subtitle::subtitle_path_extension(path) {
+        Some(_) => crate::subtitle::SubtitleFileFormat::from_path(path).is_some(),
+        None => true,
+    }
+}
+
+/// Opens an external text subtitle, transcoding it to UTF-8 when its bytes are
+/// not already valid UTF-8.
+///
+/// Returns `None` only when the URI was never taken over (see
+/// [`external_subtitle_needs_charset_inspection`]) or could not be read, in
+/// which case the caller opens it through the regular source path. Once the
+/// bytes have been read this **always** yields a source holding them, even for
+/// passthrough: the URI must not be opened a second time. Android content
+/// descriptors are one-shot and a reopen fails outright, and an HTTP sidecar
+/// would otherwise be downloaded twice for the common already-UTF-8 case.
+fn external_subtitle_source(uri: &str) -> Option<Box<dyn source::MediaSource>> {
+    if !external_subtitle_needs_charset_inspection(uri) {
+        return None;
+    }
     let bytes = match source::read_uri_to_end(uri) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -2796,9 +2817,11 @@ fn external_subtitle_transcoded_source(uri: &str) -> Option<Box<dyn source::Medi
         })
         .to_string(),
     );
-    let utf8 = inspection.utf8?;
     Some(Box::new(
-        crate::subtitle_charset::TranscodedMemorySource::new(uri.to_string(), utf8),
+        crate::subtitle_charset::TranscodedMemorySource::new(
+            uri.to_string(),
+            inspection.utf8.unwrap_or(bytes),
+        ),
     ))
 }
 
@@ -5643,6 +5666,49 @@ mod tests {
         assert_eq!(frame.end, Some(Duration::from_secs(3)));
         assert_eq!(frame.text.len(), 1);
         assert_eq!(frame.text[0].display_text(), "External subtitle");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn external_subtitle_inspection_covers_query_uris_and_extensionless_uris() {
+        assert!(external_subtitle_needs_charset_inspection("/tmp/movie.srt"));
+        // Signed sidecar URLs keep their extension behind a query string.
+        assert!(external_subtitle_needs_charset_inspection(
+            "https://host/sub.srt?token=abc"
+        ));
+        // Android content picks arrive as a bare descriptor with no file name.
+        assert!(external_subtitle_needs_charset_inspection(
+            "fd://42?offset=0&length=4096"
+        ));
+        // Bitmap subtitle formats stay on the regular source path so their
+        // bytes are never buffered for a charset guess.
+        assert!(!external_subtitle_needs_charset_inspection(
+            "/tmp/movie.sup"
+        ));
+        assert!(!external_subtitle_needs_charset_inspection(
+            "https://host/movie.idx?token=abc"
+        ));
+    }
+
+    #[test]
+    fn external_subtitle_source_serves_utf8_bytes_without_reopening() {
+        let path = std::env::temp_dir().join(format!(
+            "erika-external-subtitle-utf8-{}.srt",
+            std::process::id()
+        ));
+        let srt = "1\n00:00:01,000 --> 00:00:03,000\nalready utf-8\n";
+        fs::write(&path, srt).unwrap();
+
+        // Passthrough must still hand back a source: the bytes were already
+        // consumed, and a one-shot descriptor could not be opened again.
+        let source = external_subtitle_source(&path.to_string_lossy())
+            .expect("passthrough must still yield a source");
+        let mut source = source;
+        let bytes = source
+            .read_range(crate::source::ByteRange::suffix_from(0))
+            .unwrap();
+        assert_eq!(bytes, srt.as_bytes());
 
         let _ = fs::remove_file(path);
     }

@@ -166,15 +166,40 @@ pub enum SubtitleFileFormat {
 
 impl SubtitleFileFormat {
     pub fn from_path(path: impl AsRef<str>) -> Option<Self> {
-        let path = path.as_ref();
-        let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
-        match extension.as_str() {
+        Self::from_extension(subtitle_path_extension(path.as_ref())?)
+    }
+
+    /// Like [`Self::from_path`] but for a full URI: any query string or
+    /// fragment is dropped first, so a signed sidecar URL such as
+    /// `https://host/sub.srt?token=...` is still recognised as SRT.
+    pub fn from_uri(uri: impl AsRef<str>) -> Option<Self> {
+        Self::from_path(uri_path_component(uri.as_ref()))
+    }
+
+    fn from_extension(extension: &str) -> Option<Self> {
+        match extension.to_ascii_lowercase().as_str() {
             "srt" => Some(Self::Srt),
             "vtt" | "webvtt" => Some(Self::WebVtt),
             "ass" | "ssa" => Some(Self::Ass),
             _ => None,
         }
     }
+}
+
+/// Strips a `?query` and `#fragment` so only the path is left. Applied before
+/// extension matching because subtitle URIs are not always bare paths.
+pub(crate) fn uri_path_component(uri: &str) -> &str {
+    let path = uri.split_once('#').map_or(uri, |(path, _)| path);
+    path.split_once('?').map_or(path, |(path, _)| path)
+}
+
+/// Returns the extension of the last path segment, or `None` when that segment
+/// carries no extension at all. Splitting on the segment rather than the whole
+/// string keeps a dot earlier in the path (`/a.b/subs`) from being mistaken for
+/// one.
+pub(crate) fn subtitle_path_extension(path: &str) -> Option<&str> {
+    let leaf = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    leaf.rsplit_once('.').map(|(_, extension)| extension)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1954,6 +1979,40 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             Some(SubtitleFileFormat::Ass)
         );
         assert_eq!(SubtitleFileFormat::from_path("/tmp/movie.sup"), None);
+    }
+
+    #[test]
+    fn subtitle_file_format_ignores_query_strings_and_fragments() {
+        assert_eq!(
+            SubtitleFileFormat::from_uri("https://host/sub.srt?token=abc&x=1"),
+            Some(SubtitleFileFormat::Srt)
+        );
+        assert_eq!(
+            SubtitleFileFormat::from_uri("https://host/sub.ass#cue3"),
+            Some(SubtitleFileFormat::Ass)
+        );
+        // A dot inside the query must not be mistaken for the extension.
+        assert_eq!(
+            SubtitleFileFormat::from_uri("https://host/sub.vtt?sig=a.b.c"),
+            Some(SubtitleFileFormat::WebVtt)
+        );
+        assert_eq!(
+            SubtitleFileFormat::from_uri("https://host/sub.sup?t=1"),
+            None
+        );
+    }
+
+    #[test]
+    fn subtitle_path_extension_reads_the_last_segment_only() {
+        assert_eq!(subtitle_path_extension("/tmp/movie.en.srt"), Some("srt"));
+        assert_eq!(subtitle_path_extension("C:\\media\\movie.ass"), Some("ass"));
+        // A dot in a parent directory is not an extension.
+        assert_eq!(subtitle_path_extension("/media/season.1/subs"), None);
+        // Android hands us an fd URI that names no file at all.
+        assert_eq!(
+            subtitle_path_extension(uri_path_component("fd://42?offset=0&length=99")),
+            None
+        );
     }
 
     #[test]
