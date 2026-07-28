@@ -1469,6 +1469,7 @@ fn danmaku_config_from_c(
         shadow_style: DanmakuShadowStyle::from_code(config.shadow_style),
         custom_font_family: base.custom_font_family.clone(),
         custom_font_file_path: base.custom_font_file_path.clone(),
+        custom_font_face_index: base.custom_font_face_index,
     }
 }
 
