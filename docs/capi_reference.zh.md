@@ -161,8 +161,10 @@ void        erika_track_info_free(ErikaTrackInfo *track);
 
 `ErikaTrackInfo` 的 `codec`、`width`、`height`、`pixel_format`、`profile`、`level` 是轨道
 元数据。`bit_rate` 的单位为 bit/s，`frame_rate_numerator` / `frame_rate_denominator` 是视频
-轨的有理帧率；`0` 表示对应值未知。它们在 open 或轨道变化时探测，属于平均或标称值，
-不是播放中的瞬时码率或实时渲染 FPS。
+轨的有理帧率；`0` 表示对应值未知。帧率按平均帧率、`r_frame_rate`、FFmpeg 估算帧率的顺序
+探测。码率优先用轨自身参数；只在单视频轨缺少码率、容器总码率与所有其它音频轨码率均已知时，
+才以“容器总码率减去音频轨码率”估算。两者都不是播放中的瞬时码率或实时渲染 FPS，码率估算值
+还可能包含封装开销或其它非音频流。
 
 ### 状态与事件
 

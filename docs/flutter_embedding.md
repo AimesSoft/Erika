@@ -202,11 +202,15 @@ provides `codec`, `width`, `height`, `pixelFormat`, `profile`, `level`, `bitRate
 `frameRateNumerator`, and `frameRateDenominator`; audio tracks additionally provide
 `sampleRate`, `channels`, and `sampleFormat`.
 
-- `bitRate` is in bit/s and comes from the container/codec's average or nominal track metadata.
-  It is `null` when unavailable and is not an instantaneous runtime bitrate.
+- `bitRate` is in bit/s. Erika prefers the video track's own codec parameters; only when there is
+  one video track with no bitrate and the container total plus every other audio-track bitrate are
+  known does it estimate video bitrate as container bitrate minus audio bitrates. It is `null` when
+  unavailable, is not an instantaneous runtime bitrate, and an estimate can include container
+  overhead or non-audio streams.
 - `frameRateNumerator` / `frameRateDenominator` retain the rational value, preventing values
-  such as `30000/1001` from being truncated. `framesPerSecond` is a Dart convenience getter;
-  for variable-frame-rate media it remains an average or declared value.
+  such as `30000/1001` from being truncated. The probe order is average frame rate,
+  `r_frame_rate`, then FFmpeg's guessed frame rate. `framesPerSecond` is a Dart convenience
+  getter; for variable-frame-rate media it remains an average, declared, or guessed value.
 - `TracksChanged` and `TrackSelectionChanged` events include the complete `trackList`. Hosts may
   also call `tracks()` again after either event to obtain a current snapshot.
 

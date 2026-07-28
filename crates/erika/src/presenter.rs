@@ -30,7 +30,7 @@ use crate::core::{
     AudioOutputEvent, MediaRequest, PlatformSurface, Player, PlayerAudioFrame, PlayerConfig,
     PlayerSubtitleFrame, PlayerVideoFrame, RenderFrameContext, RendererBackend,
     RendererBackendPreference, RendererRuntimeStats, SurfaceMetrics, TrackInfo, TrackSelection,
-    VideoFrameImportFailure,
+    VideoDecoderEvent, VideoFrameImportFailure,
 };
 use crate::danmaku::{
     DANMAKU_DEBUG_BUCKETS, DanmakuDebugBucket, DanmakuLayoutConfig, DanmakuPreparedStats,
@@ -223,12 +223,14 @@ pub struct PresenterRuntime {
     video_frames: Receiver<PlayerVideoFrame>,
     audio_frames: Receiver<PlayerAudioFrame>,
     subtitle_frames: Receiver<PlayerSubtitleFrame>,
+    player_events: Receiver<crate::core::PlayerEvent>,
     audio_output: Box<dyn AudioOutputBackend>,
     audio_configured: bool,
     audio_started: bool,
     last_audio_clock_report: Option<AudioClockReportState>,
     last_audio_runtime_stats: AudioOutputRuntimeStats,
     playback_rate: f64,
+    latest_video_decoder: Option<VideoDecoderEvent>,
     current_overlay: Option<OverlayFrame>,
     debug_hud: DebugHud,
     current_danmaku: Option<DanmakuRenderPlan>,
@@ -506,6 +508,7 @@ impl PresenterRuntime {
         let video_frames = player.subscribe_video_frames();
         let audio_frames = player.subscribe_audio_frames();
         let subtitle_frames = player.subscribe_subtitle_frames();
+        let player_events = player.subscribe();
         let mut danmaku_session = config
             .danmaku
             .map(DanmakuSession::from_timeline)
@@ -521,12 +524,14 @@ impl PresenterRuntime {
             video_frames,
             audio_frames,
             subtitle_frames,
+            player_events,
             audio_output: build_audio_output(config.audio),
             audio_configured: false,
             audio_started: false,
             last_audio_clock_report: None,
             last_audio_runtime_stats: AudioOutputRuntimeStats::default(),
             playback_rate: 1.0,
+            latest_video_decoder: None,
             current_overlay: None,
             debug_hud: DebugHud::new(),
             current_danmaku: None,
@@ -597,6 +602,7 @@ impl PresenterRuntime {
         self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
         self.drain_pending_player_frames();
         self.current_generation = self.current_generation.saturating_add(1).max(1);
+        self.latest_video_decoder = None;
         let result = self.player.open(media);
         // Player::open joins the previous producer before returning, so this
         // second drain deterministically removes anything it emitted between
@@ -654,6 +660,7 @@ impl PresenterRuntime {
         self.bump_danmaku_generation();
         self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
         self.drain_pending_player_frames();
+        self.latest_video_decoder = None;
         let result = self.player.close();
         // Shutdown is joined at this point; no producer can refill a receiver.
         self.drain_pending_player_frames();
@@ -858,6 +865,7 @@ impl PresenterRuntime {
     pub fn render_tick(&mut self, time_seconds: f64) -> Result<PresenterStats> {
         let tick_started = Instant::now();
         let pump_started = Instant::now();
+        self.refresh_video_decoder_status();
 
         let subtitle_started = Instant::now();
         self.pump_subtitles();
@@ -1035,6 +1043,7 @@ impl PresenterRuntime {
         let output = self.renderer.output_status();
         let audio_runtime = self.audio_output.runtime_stats();
         let surface = self.current_surface_metrics;
+        let decoder = self.latest_video_decoder.as_ref();
         DebugHudSnapshot {
             codec: selected.as_ref().and_then(|track| track.codec.clone()),
             width: selected.as_ref().map_or(0, |track| track.width),
@@ -1048,6 +1057,18 @@ impl PresenterRuntime {
                 .as_ref()
                 .and_then(|track| track.pixel_format.clone()),
             profile: selected.as_ref().and_then(|track| track.profile.clone()),
+            decoder_requested_backend: decoder
+                .map(|event| event.requested_backend.as_str().to_string()),
+            decoder_previous_backend: decoder
+                .and_then(|event| event.previous_backend)
+                .map(|backend| backend.as_str().to_string()),
+            decoder_active_backend: decoder.map(|event| event.active_backend.as_str().to_string()),
+            decoder_codec: decoder.and_then(|event| event.codec.clone()),
+            decoder_pixel_format: decoder.and_then(|event| event.pixel_format.clone()),
+            decoder_line_sizes: decoder.and_then(|event| event.line_sizes),
+            decoder_fallback_count: decoder.map_or(0, |event| event.fallback_count),
+            decoder_stage: decoder.map(|event| event.stage.clone()),
+            decoder_reason: decoder.and_then(|event| event.reason.clone()),
             player_state: format!("{:?}", self.player.state()).to_lowercase(),
             media_time: self.current_media_time,
             duration: self.player.duration(),
@@ -1085,6 +1106,14 @@ impl PresenterRuntime {
                 .current_danmaku
                 .as_ref()
                 .map_or(0, |plan| plan.items.len()),
+        }
+    }
+
+    fn refresh_video_decoder_status(&mut self) {
+        while let Ok(event) = self.player_events.try_recv() {
+            if let crate::core::PlayerEvent::VideoDecoderChanged(event) = event {
+                self.latest_video_decoder = Some(event);
+            }
         }
     }
 

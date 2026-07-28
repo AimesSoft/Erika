@@ -173,10 +173,14 @@ track には `codec`、`width`、`height`、`pixelFormat`、`profile`、`level`�
 `frameRateNumerator`、`frameRateDenominator` が含まれ、audio track にはさらに
 `sampleRate`、`channels`、`sampleFormat` が含まれます。
 
-- `bitRate` の単位は bit/s で、container/codec が提供する平均または nominal な track
-  metadata です。取得できない場合は `null` であり、瞬間 bitrate ではありません。
+- `bitRate` の単位は bit/s です。video track 自身の codec parameter を優先し、単一の
+  video track に bitrate がなく、container total と他の全 audio track bitrate が既知の場合のみ、
+  container bitrate から audio bitrate を引いて推定します。取得できない場合は `null` です。
+  瞬間 bitrate ではなく、推定値には container overhead や非 audio stream が含まれる場合があります。
 - `frameRateNumerator` / `frameRateDenominator` は `30000/1001` などの有理数を保持します。
-  `framesPerSecond` は Dart の convenience getter です。VFR media でも平均または宣言値です。
+  probe 順序は average frame rate、`r_frame_rate`、FFmpeg guessed frame rate です。
+  `framesPerSecond` は Dart の convenience getter であり、VFR media では平均、宣言、または
+  推定値です。
 - `TracksChanged` と `TrackSelectionChanged` event には完全な `trackList` が含まれます。
   event 後に `tracks()` を再度呼んで current snapshot を取得することもできます。
 

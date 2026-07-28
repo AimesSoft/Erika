@@ -306,8 +306,11 @@ ErikaStatus erika_presenter_tracks(ErikaPresenterHandle *, ErikaTrackInfo *out_t
 `ErikaTrackInfo` の `codec`、`width`、`height`、`pixel_format`、`profile`、`level` は
 track metadata です。`bit_rate` の単位は bit/s、`frame_rate_numerator` /
 `frame_rate_denominator` は video track の有理 frame rate です。`0` は unknown を表します。
-これらは open または track change 時に probe される平均/nominal 値であり、瞬間 bitrate や
-real-time render FPS ではありません。
+frame rate は average frame rate、`r_frame_rate`、FFmpeg guessed frame rate の順に probe されます。
+bitrate は track 自身の parameter を優先し、単一 video track の bitrate がなく、container total と
+他の全 audio track bitrate が既知の場合のみ、container bitrate から audio bitrate を引いて推定します。
+どちらも瞬間 bitrate や real-time render FPS ではなく、推定 bitrate には container overhead や
+non-audio stream が含まれる場合があります。
 
 ### 弾幕（ダンマク）
 

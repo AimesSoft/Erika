@@ -20,6 +20,15 @@ pub struct DebugHudSnapshot {
     pub nominal_fps: Option<f64>,
     pub pixel_format: Option<String>,
     pub profile: Option<String>,
+    pub decoder_requested_backend: Option<String>,
+    pub decoder_previous_backend: Option<String>,
+    pub decoder_active_backend: Option<String>,
+    pub decoder_codec: Option<String>,
+    pub decoder_pixel_format: Option<String>,
+    pub decoder_line_sizes: Option<[i32; 4]>,
+    pub decoder_fallback_count: u64,
+    pub decoder_stage: Option<String>,
+    pub decoder_reason: Option<String>,
     pub player_state: String,
     pub media_time: Duration,
     pub duration: Option<Duration>,
@@ -163,6 +172,29 @@ fn hud_lines(snapshot: &DebugHudSnapshot, decoded_fps: f64, rendered_fps: f64) -
     };
     let pixel_format = snapshot.pixel_format.as_deref().unwrap_or("unknown");
     let profile = snapshot.profile.as_deref().unwrap_or("unknown");
+    let decoder_requested = snapshot
+        .decoder_requested_backend
+        .as_deref()
+        .unwrap_or("pending");
+    let decoder_previous = snapshot
+        .decoder_previous_backend
+        .as_deref()
+        .unwrap_or("none");
+    let decoder_active = snapshot
+        .decoder_active_backend
+        .as_deref()
+        .unwrap_or("pending");
+    let decoder_codec = snapshot.decoder_codec.as_deref().unwrap_or("unknown");
+    let decoder_pixel_format = snapshot
+        .decoder_pixel_format
+        .as_deref()
+        .unwrap_or("unknown");
+    let decoder_line_sizes = snapshot
+        .decoder_line_sizes
+        .map(|sizes| format!("{}/{}/{}/{}", sizes[0], sizes[1], sizes[2], sizes[3]))
+        .unwrap_or_else(|| "n/a".to_string());
+    let decoder_stage = snapshot.decoder_stage.as_deref().unwrap_or("pending");
+    let decoder_reason = snapshot.decoder_reason.as_deref().unwrap_or("none");
     let audio_codec = snapshot.audio_codec.as_deref().unwrap_or("unknown");
     let audio_queue_ms = snapshot
         .audio_queued_duration
@@ -186,6 +218,17 @@ fn hud_lines(snapshot: &DebugHudSnapshot, decoded_fps: f64, rendered_fps: f64) -
             snapshot.surface_height
         ),
         format!("Video profile {profile}  Format {pixel_format}  Path {decode_path}"),
+        format!(
+            "Decoder requested {decoder_requested}  Previous {decoder_previous}  Active {decoder_active}",
+        ),
+        format!(
+            "Decoder codec {decoder_codec}  Format {decoder_pixel_format}  Lines {decoder_line_sizes}",
+        ),
+        format!(
+            "Decoder fallback {}  Stage {}",
+            snapshot.decoder_fallback_count, decoder_stage,
+        ),
+        format!("Decoder reason {}", truncate_decoder_reason(decoder_reason)),
         format!(
             "Decode {decoded_fps:5.1} fps ({})  Render {rendered_fps:5.1} fps ({})  Drop {}",
             snapshot.decoded_video_frames,
@@ -229,6 +272,17 @@ fn hud_lines(snapshot: &DebugHudSnapshot, decoded_fps: f64, rendered_fps: f64) -
             snapshot.danmaku_items,
         ),
     ]
+}
+
+fn truncate_decoder_reason(reason: &str) -> String {
+    const MAX_CHARS: usize = 72;
+    let mut chars = reason.chars();
+    let prefix = chars.by_ref().take(MAX_CHARS).collect::<String>();
+    if chars.next().is_some() {
+        format!("{prefix}...")
+    } else {
+        prefix
+    }
 }
 
 fn format_duration(duration: Duration) -> String {
@@ -348,6 +402,15 @@ mod tests {
             nominal_fps: Some(30_000.0 / 1_001.0),
             pixel_format: Some("yuv420p10le".to_string()),
             profile: Some("Main 10".to_string()),
+            decoder_requested_backend: Some("videotoolbox".to_string()),
+            decoder_previous_backend: Some("videotoolbox".to_string()),
+            decoder_active_backend: Some("software".to_string()),
+            decoder_codec: Some("hevc".to_string()),
+            decoder_pixel_format: Some("yuv420p10le".to_string()),
+            decoder_line_sizes: Some([7680, 3840, 3840, 0]),
+            decoder_fallback_count: 1,
+            decoder_stage: Some("runtime_to_software".to_string()),
+            decoder_reason: Some("hardware import failed".to_string()),
             player_state: "playing".to_string(),
             media_time: Duration::from_secs(62),
             duration: Some(Duration::from_secs(3_725)),
@@ -405,13 +468,17 @@ mod tests {
         assert!(lines[0].contains("18.00 Mbps"));
         assert!(lines[1].contains("01:02 / 1:02:05"));
         assert!(lines[2].contains("yuv420p10le"));
-        assert!(lines[3].contains("Decode  30.0 fps"));
-        assert!(lines[4].contains("Direct 8"));
-        assert!(lines[5].contains("Import fail 3"));
-        assert!(lines[6].contains("AAC".to_lowercase().as_str()));
-        assert!(lines[6].contains("Underflow 1"));
-        assert!(lines[7].contains("hdr10-pq"));
-        assert!(lines[7].contains("Danmaku 16"));
+        assert!(lines[3].contains("requested videotoolbox"));
+        assert!(lines[3].contains("Active software"));
+        assert!(lines[4].contains("Lines 7680/3840/3840/0"));
+        assert!(lines[5].contains("runtime_to_software"));
+        assert!(lines[7].contains("Decode  30.0 fps"));
+        assert!(lines[8].contains("Direct 8"));
+        assert!(lines[9].contains("Import fail 3"));
+        assert!(lines[10].contains("aac"));
+        assert!(lines[10].contains("Underflow 1"));
+        assert!(lines[11].contains("hdr10-pq"));
+        assert!(lines[11].contains("Danmaku 16"));
     }
 
     #[test]
@@ -420,7 +487,7 @@ mod tests {
         let lines = hud_lines(&snapshot(30, 29), 30.0, 29.0);
         let plane = render_lines(&font, &lines, 1920, 1080).unwrap();
         assert_eq!(plane.width, MAX_WIDTH);
-        assert_eq!(plane.height, PADDING * 2 + LINE_HEIGHT * 8);
+        assert_eq!(plane.height, PADDING * 2 + LINE_HEIGHT * lines.len() as u32);
         assert_eq!(FONT_SIZE, 22.0);
     }
 

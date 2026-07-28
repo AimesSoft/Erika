@@ -178,9 +178,13 @@ the subtitle track id `-1` disables subtitles.
 `ErikaTrackInfo` exposes track metadata through `codec`, `width`, `height`,
 `pixel_format`, `profile`, and `level`. `bit_rate` is in bit/s, while
 `frame_rate_numerator` / `frame_rate_denominator` retain a video track's rational
-frame rate; `0` means the corresponding value is unknown. These values are
-probed when media opens or tracks change and represent average or nominal
-metadata, not instantaneous bitrate or rendered FPS.
+frame rate; `0` means the corresponding value is unknown. Frame rate is probed
+in average-frame-rate, `r_frame_rate`, then FFmpeg-guessed-frame-rate order.
+Bitrate prefers the track's own parameters; only a single video track with no
+bitrate and known container total plus every other audio-track bitrate is
+estimated as container bitrate minus audio bitrates. Neither value is an
+instantaneous bitrate or rendered FPS; an estimated bitrate can include
+container overhead or non-audio streams.
 
 ### State and events
 

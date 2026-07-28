@@ -169,10 +169,12 @@ await player.dispose();
 `frameRateDenominator` 可用于媒体详情页；音频轨道还包含 `sampleRate`、`channels` 和
 `sampleFormat`。
 
-- `bitRate` 单位为 bit/s；它来自容器/编码参数的平均或标称轨道码率。未知时为 `null`，不是
-  实时瞬时码率。
+- `bitRate` 单位为 bit/s。优先使用视频轨自身的编码参数；仅在单视频轨缺少该值、容器总码率
+  和所有其它音频轨码率均已知时，才以“容器总码率减去音频轨码率”估算。未知时为 `null`；它不是
+  实时瞬时码率，估算值也可能包含封装开销或其它非音频流的影响。
 - `frameRateNumerator` / `frameRateDenominator` 保留原始有理数，避免把 `30000/1001` 截断。
-  `framesPerSecond` 是 Dart 的便利 getter；对可变帧率内容它仍是平均或声明值，而非每帧更新值。
+  探测顺序为平均帧率、`r_frame_rate` 和 FFmpeg 的估算帧率；`framesPerSecond` 是 Dart 的便利
+  getter。对可变帧率内容它仍是平均、声明或估算值，而非每帧更新值。
 - `TracksChanged` 和 `TrackSelectionChanged` 事件的 `trackList` 会附带完整轨道列表。也可以在
   收到事件后再次调用 `tracks()` 获取当前快照。
 
