@@ -12,6 +12,7 @@ Erika 媒体播放引擎的 Flutter plugin。
 - iOS 插件链接 Erika 静态库。
 - Windows 插件构建并链接 Erika C ABI DLL。
 - Android 插件按 ABI 构建 `liberika_capi.so`，并由 `Choreographer` 驱动原生 surface。
+- HarmonyOS 插件注册 Flutter 外部纹理，把它的 `OHNativeWindow` attach 给 Erika，并用 OHAudio 做低延迟 PCM 输出。
 - Erika 通过 `ErikaPresenterHandle` 负责播放、渲染、音频、时序和 overlay。
 
 ## Video Surfaces
@@ -66,6 +67,22 @@ Android 最低版本仍为 API 26。Extended-linear 还要求 native-window data
 `Display.registerHdrSdrRatioChangedListener`，把真实 ratio 变化发布给 Erika，让 wgpu 无需
 重新 attach surface 就能更新后续帧 target 和输出状态。API 35 上插件还会按
 `SurfaceView` 设置 desired HDR headroom，不修改宿主的全局 Window。
+
+## HarmonyOS Setup
+
+HarmonyOS 模块需要 DevEco Studio 的 OpenHarmony Native SDK 和 Rust 的
+`aarch64-unknown-linux-ohos` target。它的 Hvigor/CMake 构建会编译 LGPL 的
+FFmpeg/zlib 依赖和 `liberika_capi.so`，然后把这套运行时和 `liberika_flutter.so`
+一起打包。
+
+HarmonyOS 上请使用 `ErikaVideoView`。它注册 Flutter 外部纹理，把纹理 surface 取为
+`OHNativeWindow`，并通过 wgpu Vulkan 渲染。音频走 OHAudio，交错 f32 PCM。
+
+视频解码默认使用 HarmonyOS AVCodec 硬解，支持 H.264 和 HEVC。AVCodec 渲染到
+Surface，其 `OHNativeBuffer` 作为 Vulkan 外部图像导入，再由 Vulkan YCbCr sampler
+解析，因此帧无需 CPU 拷贝即可到达合成器。不具备所需 Vulkan 扩展的设备回退到
+FFmpeg 软解 + CPU 上传；回退会通过 `VideoDecoderChanged` 事件和 presenter 诊断
+上报，而不是让播放失败。
 
 ## HTTP 请求头
 

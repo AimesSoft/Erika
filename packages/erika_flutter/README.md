@@ -125,10 +125,16 @@ LGPL FFmpeg/zlib dependencies and `liberika_capi.so`, then packages that runtime
 alongside `liberika_flutter.so`.
 
 Use `ErikaVideoView` on HarmonyOS. It registers a Flutter external texture,
-obtains the texture surface as an `OHNativeWindow`, and renders through
-wgpu/OpenGL ES. Audio uses OHAudio with interleaved f32 PCM. The current
-HarmonyOS path uses FFmpeg software decoding; AVCodec hardware decoding is not
-yet enabled.
+obtains the texture surface as an `OHNativeWindow`, and renders through wgpu
+Vulkan. Audio uses OHAudio with interleaved f32 PCM.
+
+Video decoding defaults to HarmonyOS AVCodec hardware decoding for H.264 and
+HEVC. AVCodec renders into a Surface whose `OHNativeBuffer` is imported as a
+Vulkan external image and resolved with a Vulkan YCbCr sampler, so frames reach
+the compositor without a CPU copy. Devices that do not expose the required
+Vulkan extensions fall back to FFmpeg software decoding and CPU upload; the
+fallback is reported through `VideoDecoderChanged` events and the presenter
+diagnostics rather than failing playback.
 
 ## HTTP Headers
 

@@ -15,19 +15,19 @@ The host application provides a rendering surface and sends playback commands â€
 
 ## Features
 
-- **Hardware-accelerated decoding** -- VideoToolbox (macOS/iOS), D3D11VA (Windows), and MediaCodec (Android), with explicit software-decode fallback when interop is unavailable
-- **Zero-copy rendering** -- CVPixelBuffer to MTLTexture (Apple), D3D11VA texture interop (Windows), and MediaCodec Surface to AHardwareBuffer/Vulkan (Android), with explicit CPU-upload fallback when import fails
+- **Hardware-accelerated decoding** -- VideoToolbox (macOS/iOS), D3D11VA (Windows), MediaCodec (Android), and AVCodec (HarmonyOS), with explicit software-decode fallback when interop is unavailable
+- **Zero-copy rendering** -- CVPixelBuffer to MTLTexture (Apple), D3D11VA texture interop (Windows), MediaCodec Surface to AHardwareBuffer/Vulkan (Android), and AVCodec Surface to OHNativeBuffer/Vulkan (HarmonyOS), with explicit CPU-upload fallback when import fails
 - **HDR/EDR output** -- Apple EDR, Windows HDR10, and Android FP16 extended-linear scRGB negotiation with explicit SDR fallback
 - **Native Metal renderer** -- YCbCr sampling, color space conversion, tone mapping, subtitle/danmaku compositing in a single render pass (macOS/iOS)
 - **Native Direct3D 11 renderer** -- Windows: D3D11VA zero-copy texture interop, YCbCr sampling, HDR10 output, subtitle/danmaku overlay compositing
 - **Neural upscaling** -- ArtCNN anime luma 2x super-resolution using Metal and wgpu/Vulkan compute, integrated into the rendering pipeline
-- **Audio output** -- CoreAudio (macOS) / AudioQueue (iOS) / WASAPI (Windows) / AAudio (Android), f32 PCM ring buffer, audio clock synchronization
+- **Audio output** -- CoreAudio (macOS) / AudioQueue (iOS) / WASAPI (Windows) / AAudio (Android) / OHAudio (HarmonyOS), f32 PCM ring buffer, audio clock synchronization
 - **Subtitles** -- SRT / WebVTT / ASS parsing, libass rendering (statically linked), embedded and external subtitle tracks
 - **Danmaku** -- Bilibili XML / JSON parsing, DFM+ collision-aware lane layout engine, glyph atlas native GPU rendering
 - **Playback engine** -- play / pause / stop / seek / rate control, audio-master clock discipline, vsync-quantized frame scheduling
-- **C ABI** -- 75 exported functions, opaque handle design, callable from C / C++ / Swift / Dart FFI / any FFI-capable language
-- **Flutter plugin** -- macOS + iOS + Windows + Android native view embedding with platform-native high-dynamic-range surface paths
-- **wgpu backend** -- Android playback, overlays, capture, and bounded Vulkan/GLES recovery are available; Linux remains planned
+- **C ABI** -- 79 exported functions, opaque handle design, callable from C / C++ / Swift / Dart FFI / any FFI-capable language
+- **Flutter plugin** -- macOS + iOS + Windows + Android + HarmonyOS native view/Texture embedding with platform-native high-dynamic-range surface paths
+- **wgpu backend** -- Android playback, overlays, capture, and bounded Vulkan/GLES recovery are available; HarmonyOS runs on Vulkan, presenting through OHNativeWindow with OHNativeBuffer zero-copy import; Linux remains planned
 
 ## Quick Start
 
@@ -90,6 +90,7 @@ Header: [`crates/erika_capi/include/erika.h`](crates/erika_capi/include/erika.h)
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | **Available** |
 | Linux | -- | wgpu (planned) | -- | Planned |
 | Android 8+ | MediaCodec / software | wgpu (Vulkan + GLES fallback) | AAudio | **Available**; SDR verified, extended-linear scRGB implemented, API 35 HDR-device active-path acceptance pending |
+| HarmonyOS API 18+ | AVCodec (H.264/HEVC) / software | wgpu (Vulkan) + `OHNativeBuffer` zero-copy import | OHAudio | **Available**; validated on device, not yet covered by CI |
 
 ## Repository Structure
 
@@ -97,7 +98,7 @@ Header: [`crates/erika_capi/include/erika.h`](crates/erika_capi/include/erika.h)
 crates/erika              Core playback library
 crates/erika_capi         C ABI export layer
 crates/erika_ffmpeg_sys   Low-level FFmpeg bindings
-packages/erika_flutter    Flutter plugin (macOS + iOS + Windows + Android)
+packages/erika_flutter    Flutter plugin (macOS + iOS + Windows + Android + HarmonyOS)
 examples/                 Validation and demo programs
 xtask/                    Native dependency build orchestration
 docs/                     Architecture and embedding documentation
@@ -121,6 +122,7 @@ docs/                     Architecture and embedding documentation
 - Xcode Command Line Tools (macOS/iOS)
 - MSVC toolchain + Windows SDK (Windows, target `x86_64-pc-windows-msvc`)
 - Android SDK + NDK r29 and the corresponding Android Rust targets
+- DevEco Studio OpenHarmony Native SDK and the Rust `aarch64-unknown-linux-ohos` target
 - CMake, pkg-config
 
 ### Build Native Dependencies

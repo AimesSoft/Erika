@@ -100,9 +100,16 @@ cargo run -p xtask -- deps build --all --profile lgpl
 | `armv7-linux-androideabi`（`armeabi-v7a`） | Android ARMv7 | |
 | `x86_64-linux-android`（`android-x64`） | Android x86_64 | |
 | `i686-linux-android`（`x86`） | Android x86 | Android 共有ライブラリで非 PIC 再配置を避けるため、x86 アセンブリ高速化を無効化。 |
+| `aarch64-unknown-linux-ohos`（`ohos-arm64`） | HarmonyOS arm64 | DevEco Studio の OpenHarmony Native SDK を使用。`OHOS_NDK_HOME` または `OHOS_SDK_NATIVE` と `aarch64-unknown-linux-ohos` Rust target が必要。 |
 
 デプロイ最小バージョンは既定で macOS `11.0` / iOS `13.0`。
 `MACOSX_DEPLOYMENT_TARGET` / `IPHONEOS_DEPLOYMENT_TARGET` で上書き可能。
+
+HarmonyOS build は `OHOS_NDK_HOME` または `OHOS_SDK_NATIVE` が指す DevEco Studio の
+`openharmony/native` ディレクトリを使い、その中の `aarch64-unknown-linux-ohos-clang`
+で FFmpeg、zlib、Erika を build します。Flutter plugin の Hvigor/CMake build が
+この chain を自動実行し、`liberika_capi.so` と `liberika_flutter.so` を HAP に
+package します。
 
 ### Source build architecture の選択
 

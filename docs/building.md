@@ -63,6 +63,9 @@ Run the commands from a shell where the MSVC environment is active (e.g. a
 - Rust standard-library targets for the ABIs you build:
   `aarch64-linux-android`, `armv7-linux-androideabi`,
   `x86_64-linux-android`, and `i686-linux-android`.
+- For HarmonyOS: the DevEco Studio OpenHarmony Native SDK, pointed at by
+  `OHOS_NDK_HOME` or `OHOS_SDK_NATIVE`, plus the
+  `aarch64-unknown-linux-ohos` Rust standard-library target.
 
 Erika's Android minimum is API **26**. Override it with
 `ANDROID_API_LEVEL` only when targeting a newer API.
@@ -112,12 +115,19 @@ Subcommands: `plan` (print the plan), `fetch` (download sources only),
 | `armv7-linux-androideabi` (or `armeabi-v7a`) | Android ARMv7 | 32-bit ARM compatibility ABI. |
 | `x86_64-linux-android` (or `android-x64`) | Android x86_64 | Emulator and x86_64 device ABI. |
 | `i686-linux-android` (or `x86`) | Android x86 | 32-bit emulator compatibility ABI; x86 assembly acceleration is disabled because Android shared libraries cannot contain its non-PIC relocations. |
+| `aarch64-unknown-linux-ohos` (or `ohos-arm64`) | HarmonyOS arm64 | Uses the DevEco Studio OpenHarmony Native SDK. |
 
 Deployment minimums default to macOS `11.0` / iOS `13.0` and can be overridden
 with `MACOSX_DEPLOYMENT_TARGET` / `IPHONEOS_DEPLOYMENT_TARGET`.
 
 Android builds use `android-26`, `c++_shared`, PIC static dependencies, and the
 NDK LLVM toolchain selected for the requested ABI.
+
+HarmonyOS builds take the DevEco Studio `openharmony/native` directory from
+`OHOS_NDK_HOME` or `OHOS_SDK_NATIVE` and build FFmpeg, zlib, and Erika with the
+`aarch64-unknown-linux-ohos-clang` toolchain inside it. The Flutter plugin's
+Hvigor/CMake build runs this chain automatically and packages `liberika_capi.so`
+and `liberika_flutter.so` into the HAP.
 
 ### Selecting source-build architectures
 

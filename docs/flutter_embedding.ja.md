@@ -53,6 +53,24 @@ FP16 extended-linear scRGB は `Rgba16Float` negotiation と
 GLES、`TextureView`、FP16 不在、dataspace verification failure では SDR playback を継続し、
 query 可能な fallback reason と明示的な log を提供します。
 
+## HarmonyOS Surface Strategies
+
+HarmonyOS では `ErikaVideoView` を使います。ArkTS plugin が Flutter external
+texture を登録し、その texture の surface を `OHNativeWindow` として取得して
+presenter に attach します。wgpu はその上で Vulkan 描画を行い、window system
+integration には `VK_OHOS_surface` を使います。
+
+video decode の既定は HarmonyOS AVCodec（H.264 / HEVC）です。AVCodec は Surface に
+直接 decode し、その `OHNativeBuffer` を Vulkan external image として import して
+Vulkan YCbCr sampler で解決するため、decode したフレームは CPU コピーなしで
+compositor に届きます。字幕・danmaku・overlay は他 platform と同じ wgpu pass で
+合成されます。
+
+必要な Vulkan extension が無い端末は FFmpeg software decode と CPU upload に
+fallback します。fallback は再生を失敗させず、`VideoDecoderChanged` event と
+presenter diagnostics から報告されます。HarmonyOS path は実機で検証済みですが、
+CI では未カバーです。
+
 ## iOS Build Path
 
 iOS plugin は CocoaPod script phase 経由で Erika C ABI static library を app にリンクし、対象 iOS architecture 向けに Rust の `erika_capi` crate をビルドします。
