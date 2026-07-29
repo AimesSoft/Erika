@@ -1,0 +1,136 @@
+name: OpenHarmony
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/ohos.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
+      - "packages/erika_flutter/ohos/**"
+      - "third_party/patches/**"
+      - "third_party/wgpu-hal/**"
+      - "xtask/**"
+  push:
+    branches: [main]
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/ohos.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
+      - "packages/erika_flutter/ohos/**"
+      - "third_party/patches/**"
+      - "third_party/wgpu-hal/**"
+      - "xtask/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ohos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  ERIKA_NATIVE_PROFILE: lgpl
+  ERIKA_NATIVE_TARGET: aarch64-unknown-linux-ohos
+  OHOS_COMPATIBLE_SDK_VERSION: "18"
+
+jobs:
+  native:
+    name: OpenHarmony native (arm64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-ohos
+      - name: Setup OpenHarmony SDK
+        id: ohos_sdk
+        uses: openharmony-rs/setup-ohos-sdk@b312caf8a43bb836aa24c08f65f97e1f09a89cad # v1.0.1
+        with:
+          version: "5.1.0"
+          components: native
+          cache: true
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake make ninja-build pkg-config
+      - name: Configure OpenHarmony toolchain
+        env:
+          NATIVE_ROOT: ${{ steps.ohos_sdk.outputs.ohos_sdk_native }}
+        run: |
+          set -euo pipefail
+          test -x "$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang"
+          test -x "$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang++"
+          test -f "$NATIVE_ROOT/build/cmake/ohos.toolchain.cmake"
+          {
+            echo "OHOS_NDK_HOME=$NATIVE_ROOT"
+            echo "OHOS_SDK_NATIVE=$NATIVE_ROOT"
+            echo "LIBCLANG_PATH=$NATIVE_ROOT/llvm/lib"
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER=$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang"
+            echo "CC_aarch64_unknown_linux_ohos=$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang"
+            echo "CXX_aarch64_unknown_linux_ohos=$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang++"
+            echo "AR_aarch64_unknown_linux_ohos=$NATIVE_ROOT/llvm/bin/llvm-ar"
+          } >> "$GITHUB_ENV"
+      - name: Cache native dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party/cache
+            third_party/src
+            third_party/build/${{ env.ERIKA_NATIVE_TARGET }}/${{ env.ERIKA_NATIVE_PROFILE }}
+            third_party/dist/${{ env.ERIKA_NATIVE_TARGET }}/${{ env.ERIKA_NATIVE_PROFILE }}
+          key: native-v1-ohos-${{ env.ERIKA_NATIVE_TARGET }}-api${{ env.OHOS_COMPATIBLE_SDK_VERSION }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
+      - name: Build OpenHarmony native dependencies
+        run: >-
+          cargo run --locked -p xtask -- deps build
+          --profile "$ERIKA_NATIVE_PROFILE"
+          --target "$ERIKA_NATIVE_TARGET"
+      - name: Build OpenHarmony C API
+        run: >-
+          cargo build --locked -p erika_capi --release
+          --target "$ERIKA_NATIVE_TARGET"
+          --no-default-features --features wgpu
+      - name: Build OpenHarmony Flutter native bridge
+        run: |
+          set -euo pipefail
+          cmake -S packages/erika_flutter/ohos/src/main/cpp \
+            -B target/ohos-plugin-ci \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$OHOS_SDK_NATIVE/build/cmake/ohos.toolchain.cmake" \
+            -DOHOS_ARCH=arm64-v8a \
+            -DOHOS_SDK_NATIVE="$OHOS_SDK_NATIVE"
+          cmake --build target/ohos-plugin-ci --target erika_flutter_plugin
+      - name: Verify OpenHarmony ELF and ABI
+        run: |
+          set -euo pipefail
+          library="target/$ERIKA_NATIVE_TARGET/release/liberika_capi.so"
+          readelf="$OHOS_SDK_NATIVE/llvm/bin/llvm-readelf"
+          nm="$OHOS_SDK_NATIVE/llvm/bin/llvm-nm"
+          test -f "$library"
+          "$readelf" -h "$library" | grep -Eq 'Machine:.*AArch64'
+          "$readelf" -d "$library" | grep -Eq '\(SONAME\).*liberika_capi\.so'
+          symbols="$($nm --dynamic --defined-only "$library" | awk '{print $NF}')"
+          for symbol in \
+            erika_presenter_invoke_json \
+            erika_presenter_render_tick_json \
+            erika_presenter_poll_event_json
+          do
+            grep -Fxq "$symbol" <<< "$symbols"
+          done
+          find target/ohos-plugin-ci -type f -name 'liberika_flutter.so' -print -quit | grep -q .
+      - name: Upload OpenHarmony native libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: erika-capi-openharmony-arm64
+          path: |
+            target/aarch64-unknown-linux-ohos/release/liberika_capi.so
+            target/ohos-plugin-ci/**/liberika_flutter.so
+          if-no-files-found: error

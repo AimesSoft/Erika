@@ -41,6 +41,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check license policy
         run: cargo run --locked -p xtask -- check license
+      - name: Verify vendored Cargo patches
+        run: cargo run --locked -p xtask -- check cargo-patches
       - name: Get Flutter dependencies
         working-directory: packages/erika_flutter
         run: flutter pub get
