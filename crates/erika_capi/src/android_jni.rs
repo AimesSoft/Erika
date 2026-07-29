@@ -763,6 +763,10 @@ unsafe fn invoke_presenter(
             let scale = required_f64(args, "scale")?;
             status_value(unsafe { erika_presenter_set_subtitle_scale(handle, scale) })
         }
+        "setAudioDelay" => {
+            let seconds = required_f64(args, "seconds")?;
+            status_value(unsafe { erika_presenter_set_audio_delay(handle, seconds) })
+        }
         "setOutputHeadroom" => {
             let headroom = required_f64(args, "headroom")? as f32;
             let known =

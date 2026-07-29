@@ -1720,6 +1720,7 @@ class ErikaFlutterPlugin :
             "setVolume",
             "setUpscaler",
             "setSubtitleScale",
+            "setAudioDelay",
             "getUpscalerStatus",
             "getOutputStatus",
             "getPresenterStats",

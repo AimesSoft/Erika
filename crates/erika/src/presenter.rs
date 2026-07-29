@@ -75,6 +75,7 @@ const DANMAKU_PREPARE_REFRESH_MARGIN: Duration = Duration::from_secs(4);
 const DANMAKU_PLAN_LOOKAHEAD: Duration = Duration::from_secs(8);
 const DANMAKU_PLAN_LOOKBACK_PADDING: Duration = Duration::from_secs(2);
 const DEFAULT_SUBTITLE_FONT_SCALE: f64 = 1.0;
+const AUDIO_DELAY_LIMIT_SECONDS: f64 = 10.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TransitionFramePolicy {
@@ -248,6 +249,7 @@ pub struct PresenterRuntime {
     current_surface_metrics: Option<SurfaceMetrics>,
     current_danmaku_viewport: Option<DanmakuViewport>,
     subtitle_font_scale: f64,
+    audio_delay: f64,
     subtitles: SubtitleFrameState,
     overlay: OverlayTimeline,
     render_test_pattern_when_idle: bool,
@@ -550,6 +552,7 @@ impl PresenterRuntime {
             current_surface_metrics: None,
             current_danmaku_viewport: None,
             subtitle_font_scale: DEFAULT_SUBTITLE_FONT_SCALE,
+            audio_delay: 0.0,
             subtitles: SubtitleFrameState::default(),
             overlay: config.overlay,
             render_test_pattern_when_idle: config.render_test_pattern_when_idle,
@@ -707,6 +710,18 @@ impl PresenterRuntime {
         }
         self.subtitle_font_scale = scale;
         self.refresh_current_overlay();
+    }
+
+    /// Sets the audio delay in seconds with mpv `audio-delay` semantics: a
+    /// positive value delays audio relative to the video. The value is
+    /// clamped to ±10 s and takes effect from the next decoded audio frame;
+    /// already-queued output is not rewritten.
+    pub fn set_audio_delay(&mut self, delay_seconds: f64) {
+        self.audio_delay = normalize_audio_delay(delay_seconds);
+    }
+
+    pub fn audio_delay(&self) -> f64 {
+        self.audio_delay
     }
 
     pub fn set_danmaku_timeline(&mut self, timeline: DanmakuTimeline) {
@@ -1965,6 +1980,14 @@ impl PresenterRuntime {
             self.audio_configured = true;
             self.last_audio_clock_report = None;
         }
+        let mut frame = frame;
+        // The audio clock is anchored on frame pts, so shifting the pts here
+        // delays (or advances) audio relative to the video while clock sync,
+        // subtitles, and danmaku follow automatically.
+        frame.frame.pts = frame
+            .frame
+            .pts
+            .map(|pts| shifted_audio_pts(pts, self.audio_delay));
         match self.audio_output.push(frame.frame) {
             Ok(_) => self.stats.pushed_audio_frames += 1,
             Err(error) => {
@@ -2155,6 +2178,31 @@ fn normalize_subtitle_font_scale(scale: f64) -> f64 {
         scale.clamp(0.25, 4.0)
     } else {
         DEFAULT_SUBTITLE_FONT_SCALE
+    }
+}
+
+fn normalize_audio_delay(delay_seconds: f64) -> f64 {
+    if delay_seconds.is_finite() {
+        delay_seconds.clamp(-AUDIO_DELAY_LIMIT_SECONDS, AUDIO_DELAY_LIMIT_SECONDS)
+    } else {
+        0.0
+    }
+}
+
+/// Maps a decoded audio frame's pts to its output pts for a given
+/// `audio-delay`. A positive delay pushes the audio clock forwards (`pts +
+/// delay`), which delays audio content relative to the video the clock
+/// drives; a negative delay pulls it backwards, clamping at zero.
+fn shifted_audio_pts(pts: Duration, delay_seconds: f64) -> Duration {
+    let delay = normalize_audio_delay(delay_seconds);
+    if delay == 0.0 {
+        return pts;
+    }
+    let magnitude = Duration::from_secs_f64(delay.abs());
+    if delay > 0.0 {
+        pts.saturating_add(magnitude)
+    } else {
+        pts.saturating_sub(magnitude)
     }
 }
 
@@ -3321,6 +3369,37 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert_eq!(presenter.volume(), 0.0);
         presenter.set_volume(f64::NAN);
         assert_eq!(presenter.volume(), 1.0);
+    }
+
+    #[test]
+    fn audio_pts_shift_follows_mpv_audio_delay_semantics() {
+        let pts = Duration::from_secs(10);
+
+        // Positive delay pushes audio content later than the video.
+        assert_eq!(shifted_audio_pts(pts, 2.0), Duration::from_secs(12));
+        assert_eq!(shifted_audio_pts(pts, -2.0), Duration::from_secs(8));
+        assert_eq!(shifted_audio_pts(pts, 0.0), pts);
+        // Underflow clamps at zero; delay magnitude clamps to ±10 s.
+        assert_eq!(
+            shifted_audio_pts(Duration::from_secs(1), -5.0),
+            Duration::ZERO
+        );
+        assert_eq!(shifted_audio_pts(pts, 1_000.0), Duration::from_secs(20));
+        assert_eq!(shifted_audio_pts(pts, f64::NAN), pts);
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu")]
+    fn presenter_audio_delay_setter_clamps_range() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+
+        assert_eq!(presenter.audio_delay(), 0.0);
+        presenter.set_audio_delay(25.0);
+        assert_eq!(presenter.audio_delay(), 10.0);
+        presenter.set_audio_delay(-25.0);
+        assert_eq!(presenter.audio_delay(), -10.0);
+        presenter.set_audio_delay(f64::NAN);
+        assert_eq!(presenter.audio_delay(), 0.0);
     }
 
     #[test]
