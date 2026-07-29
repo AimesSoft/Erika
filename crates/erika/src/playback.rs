@@ -3383,6 +3383,7 @@ pub struct VideoPlaybackEngine {
     last_presented_pts: Option<Duration>,
     eof: bool,
     waiting_for_first_frame: bool,
+    paused_seek_frame_pending: bool,
     video_seek_floor: Option<Duration>,
     audio_seek_floor: Option<Duration>,
     video_seek_preroll_started_at: Option<Instant>,
@@ -3453,6 +3454,7 @@ impl VideoPlaybackEngine {
             last_presented_pts: None,
             eof: false,
             waiting_for_first_frame: false,
+            paused_seek_frame_pending: false,
             video_seek_floor: None,
             audio_seek_floor: None,
             video_seek_preroll_started_at: None,
@@ -3658,6 +3660,7 @@ impl VideoPlaybackEngine {
         self.last_presented_pts = None;
         self.eof = false;
         self.waiting_for_first_frame = self.state == PlaybackRunState::Playing;
+        self.paused_seek_frame_pending = self.state == PlaybackRunState::Paused;
         self.video_seek_floor = Some(media_time);
         self.audio_seek_floor = Some(media_time);
         self.reset_video_seek_preroll_budget(now);
@@ -3670,6 +3673,10 @@ impl VideoPlaybackEngine {
 
     pub(crate) fn should_prefill_audio(&self) -> bool {
         self.state == PlaybackRunState::Playing
+    }
+
+    pub(crate) fn has_pending_paused_seek_frame(&self) -> bool {
+        self.state == PlaybackRunState::Paused && self.paused_seek_frame_pending
     }
 
     pub(crate) fn set_audio_output_active(&mut self, active: bool) {
@@ -3776,6 +3783,7 @@ impl VideoPlaybackEngine {
         ));
         self.state = PlaybackRunState::Playing;
         self.waiting_for_first_frame = waiting_for_first_frame;
+        self.paused_seek_frame_pending = false;
         self.rebase_progress_watchdogs();
     }
 
@@ -3792,15 +3800,26 @@ impl VideoPlaybackEngine {
         if self.state != PlaybackRunState::Playing {
             return;
         }
+        // Some hosts implement paused seeking by briefly resuming, issuing the
+        // seek, and pausing again before the target frame is decoded. Preserve
+        // that in-flight seek as a one-frame paused preview instead of letting
+        // the pause gate stop video pumping with no updated frame.
+        let seek_frame_pending = self.waiting_for_first_frame && self.video_seek_floor.is_some();
         let now = now();
         let before = self.clock.media_time_at(now);
-        self.clock.pause(now);
+        if let Some(target) = self.video_seek_floor.filter(|_| seek_frame_pending) {
+            self.clock.reset(target, false, now);
+        } else {
+            self.clock.pause(now);
+        }
         trace::log(format!(
             "[erika-clock-trace] stage=engine_pause before={} after={}",
             trace::duration_label(Some(before)),
             trace::duration_label(Some(self.clock.media_time_at(now))),
         ));
         self.state = PlaybackRunState::Paused;
+        self.waiting_for_first_frame = false;
+        self.paused_seek_frame_pending = seek_frame_pending;
     }
 
     pub fn stop(&mut self) {
@@ -3838,6 +3857,7 @@ impl VideoPlaybackEngine {
         self.state = PlaybackRunState::Stopped;
         self.eof = false;
         self.waiting_for_first_frame = false;
+        self.paused_seek_frame_pending = false;
         self.video_seek_floor = Some(Duration::ZERO);
         self.audio_seek_floor = Some(Duration::ZERO);
         self.reset_audio_eof_stall_state();
@@ -3891,6 +3911,7 @@ impl VideoPlaybackEngine {
         self.eof = false;
         self.state = state_after;
         self.waiting_for_first_frame = state_after == PlaybackRunState::Playing;
+        self.paused_seek_frame_pending = state_after == PlaybackRunState::Paused;
         self.video_seek_floor = Some(position);
         self.audio_seek_floor = Some(position);
         self.reset_video_seek_preroll_budget(now);
@@ -4152,7 +4173,9 @@ impl VideoPlaybackEngine {
         &mut self,
         mut now: impl FnMut() -> Instant,
     ) -> Result<Option<TimedVideoFrame>> {
-        if self.state != PlaybackRunState::Playing {
+        let paused_seek_preview =
+            self.state == PlaybackRunState::Paused && self.paused_seek_frame_pending;
+        if self.state != PlaybackRunState::Playing && !paused_seek_preview {
             return Ok(None);
         }
         let tick_started = Instant::now();
@@ -4256,6 +4279,14 @@ impl VideoPlaybackEngine {
                     }
                     let frame = self.pending_frame.take().expect("pending frame exists");
                     self.last_presented_pts = pts;
+                    if paused_seek_preview {
+                        self.paused_seek_frame_pending = false;
+                        trace::log(format!(
+                            "[erika-playback-trace] stage=paused_seek_frame pts={} target={}",
+                            trace::duration_label(pts),
+                            trace::duration_label(Some(media_time)),
+                        ));
+                    }
                     return Ok(Some(TimedVideoFrame {
                         frame: frame.frame,
                         decode_backend: frame.decode_backend,
@@ -5446,7 +5477,7 @@ mod tests {
     }
 
     #[test]
-    fn playback_fixture_paused_seek_keeps_clock_frozen() {
+    fn playback_fixture_paused_seek_previews_target_and_keeps_clock_frozen() {
         let mut engine = playback_fixture_engine();
         let t0 = Instant::now();
         engine.play_at(t0);
@@ -5464,18 +5495,56 @@ mod tests {
             target
         );
         let resume_at = paused_at + Duration::from_secs(60);
-        assert!(engine.tick_at(resume_at).unwrap().is_none());
+        let preview = next_fixture_video_at(&mut engine, resume_at);
+        let preview_pts = preview.pts.expect("paused seek preview PTS");
+        assert!(preview_pts >= target);
+        assert!(preview_pts - target <= Duration::from_millis(34));
+        assert_eq!(preview.media_time, target);
+        assert_eq!(engine.state(), PlaybackRunState::Paused);
+        assert_eq!(engine.media_time_at(resume_at), target);
+        assert!(
+            engine.tick_at(resume_at).unwrap().is_none(),
+            "a paused seek must present exactly one target frame"
+        );
         assert!(engine.tick_audio_at(resume_at).unwrap().is_none());
 
         engine.play_at(resume_at);
-        let video = next_fixture_video_at(&mut engine, resume_at);
-        let audio = next_fixture_audio_at(&mut engine, resume_at);
+        let playing_at = resume_at + Duration::from_millis(50);
+        let video = next_fixture_video_at(&mut engine, playing_at);
+        let audio = next_fixture_audio_at(&mut engine, playing_at);
         let video_pts = video.pts.expect("resumed video PTS");
         let audio_pts = audio.pts.expect("resumed audio PTS");
         assert!(video_pts >= target);
         assert!(audio_pts >= target);
-        assert!(video_pts - target <= Duration::from_millis(34));
         assert!(audio_pts - target <= Duration::from_millis(34));
+    }
+
+    #[test]
+    fn playback_fixture_pause_during_playing_seek_finishes_target_preview() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+
+        let seek_at = t0 + Duration::from_millis(500);
+        let target = Duration::from_millis(5_125);
+        engine.seek_at(target, seek_at).unwrap();
+        assert_eq!(engine.state(), PlaybackRunState::Playing);
+
+        let paused_at = seek_at + Duration::from_millis(100);
+        engine.pause_at(paused_at);
+        assert_eq!(engine.state(), PlaybackRunState::Paused);
+        assert!(engine.has_pending_paused_seek_frame());
+        assert_eq!(engine.media_time_at(paused_at), target);
+
+        let preview = next_fixture_video_at(&mut engine, paused_at);
+        let preview_pts = preview.pts.expect("interrupted seek preview PTS");
+        assert!(preview_pts >= target);
+        assert!(preview_pts - target <= Duration::from_millis(34));
+        assert_eq!(preview.media_time, target);
+        assert_eq!(engine.state(), PlaybackRunState::Paused);
+        assert!(!engine.has_pending_paused_seek_frame());
+        assert!(engine.tick_at(paused_at).unwrap().is_none());
     }
 
     #[test]

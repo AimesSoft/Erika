@@ -1564,14 +1564,17 @@ fn run_playback_worker(
         "[erika-playback-trace] stage=worker_start state={:?} generation={} poll_ms={} uptime_ms={:.3}",
         engine.state(),
         playback_generation,
-        playback_poll_interval(engine.state()).as_millis(),
+        playback_poll_interval(engine.state(), engine.has_pending_paused_seek_frame()).as_millis(),
         worker_started.elapsed().as_secs_f64() * 1000.0,
     ));
     loop {
         loop_count = loop_count.saturating_add(1);
         let loop_started = std::time::Instant::now();
         let mut command_count = 0usize;
-        match commands.recv_timeout(playback_poll_interval(engine.state())) {
+        match commands.recv_timeout(playback_poll_interval(
+            engine.state(),
+            engine.has_pending_paused_seek_frame(),
+        )) {
             Ok(command) => {
                 command_count += 1;
                 observe_audio_pump_command(
@@ -2467,12 +2470,13 @@ fn worker_clock_generation_is_stale(shared_generation: u64, worker_generation: u
     shared_generation.max(1) > worker_generation.max(1)
 }
 
-fn playback_poll_interval(state: PlaybackRunState) -> Duration {
-    match state {
-        PlaybackRunState::Playing => Duration::from_millis(2),
-        PlaybackRunState::Paused | PlaybackRunState::Stopped | PlaybackRunState::Ended => {
-            Duration::from_millis(50)
-        }
+fn playback_poll_interval(state: PlaybackRunState, paused_seek_frame_pending: bool) -> Duration {
+    if state == PlaybackRunState::Playing
+        || (state == PlaybackRunState::Paused && paused_seek_frame_pending)
+    {
+        Duration::from_millis(2)
+    } else {
+        Duration::from_millis(50)
     }
 }
 
