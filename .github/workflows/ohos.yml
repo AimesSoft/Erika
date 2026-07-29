@@ -47,7 +47,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.93.0
         with:
           targets: aarch64-unknown-linux-ohos
       - name: Setup OpenHarmony SDK
@@ -84,8 +84,9 @@ jobs:
             echo "CXX_aarch64_unknown_linux_ohos=$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang++"
             echo "AR_aarch64_unknown_linux_ohos=$NATIVE_ROOT/llvm/bin/llvm-ar"
           } >> "$GITHUB_ENV"
-      - name: Cache native dependencies
-        uses: actions/cache@v4
+      - name: Restore native dependencies
+        id: native-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             third_party/cache
@@ -98,6 +99,16 @@ jobs:
           cargo run --locked -p xtask -- deps build
           --profile "$ERIKA_NATIVE_PROFILE"
           --target "$ERIKA_NATIVE_TARGET"
+      - name: Save native dependencies
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            third_party/cache
+            third_party/src
+            third_party/build/${{ env.ERIKA_NATIVE_TARGET }}/${{ env.ERIKA_NATIVE_PROFILE }}
+            third_party/dist/${{ env.ERIKA_NATIVE_TARGET }}/${{ env.ERIKA_NATIVE_PROFILE }}
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Build OpenHarmony C API
         run: >-
           cargo build --locked -p erika_capi --release
