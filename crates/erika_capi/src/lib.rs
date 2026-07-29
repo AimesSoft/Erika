@@ -71,7 +71,8 @@ use erika::renderer::pipeline::LumaUpscalerMode;
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 use erika::subtitle::SubtitleStyleConfig;
 use erika::{
@@ -1339,7 +1340,8 @@ fn subtitle_style_from_c(style: ErikaSubtitleStyle) -> Result<SubtitleStyleConfi
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 fn luma_upscaler_mode_from_c(mode: i32) -> LumaUpscalerMode {
     match ErikaLumaUpscalerMode::from_raw(mode) {
@@ -1769,7 +1771,8 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_subtitle_font(
@@ -1789,7 +1792,8 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_font(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_subtitle_style(
@@ -2614,7 +2618,8 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_font(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_subtitle_style(
@@ -2628,7 +2633,8 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_style(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_upscaler_status(
@@ -4461,7 +4467,8 @@ mod tests {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_env = "ohos"
     ))]
     #[test]
     fn c_subtitle_style_maps_all_fields_and_normalizes_override_mask() {
