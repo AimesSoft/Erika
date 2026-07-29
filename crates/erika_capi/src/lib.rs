@@ -2180,7 +2180,8 @@ pub unsafe extern "C" fn erika_presenter_set_debug_hud_enabled(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_config(
@@ -4156,7 +4157,8 @@ mod tests {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_env = "ohos"
     ))]
     #[test]
     fn c_presenter_set_upscaler_accepts_valid_handle() {
