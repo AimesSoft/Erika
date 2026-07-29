@@ -415,6 +415,17 @@ impl Demuxer {
         let absolute_target =
             absolute_seek_target_micros(relative_target, self.timeline_origin_micros);
         let seek_stream = self.selected_video_seek_stream();
+        let selected_streams = match &self.selection {
+            StreamSelection::All => None,
+            StreamSelection::Only(streams) => Some(streams.iter().copied().collect::<Vec<_>>()),
+        };
+        let available_video_streams = self
+            .probe
+            .tracks
+            .iter()
+            .filter(|track| track.kind == TrackKind::Video)
+            .map(|track| track.id)
+            .collect::<Vec<_>>();
         let (stream_index, target) = seek_stream.map_or((-1, absolute_target), |stream_index| {
             let time_base = self
                 .stream_time_base(stream_index)
@@ -433,6 +444,8 @@ impl Demuxer {
                 "timelineOriginMicros": self.timeline_origin_micros,
                 "absoluteTargetMicros": absolute_target,
                 "targetInSeekTimeBase": target,
+                "selectedStreams": selected_streams,
+                "availableVideoStreams": available_video_streams,
             })
             .to_string(),
         );

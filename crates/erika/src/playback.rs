@@ -463,7 +463,23 @@ fn handle_demux_command(
             *generation = next_generation;
             *eof = false;
             *active = false;
-            *pending_seek = None;
+            if let Some((seek_generation, position)) = pending_seek.as_mut() {
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "demux_pending_seek",
+                        "stage": "preserved_across_stream_selection",
+                        "seekGeneration": *seek_generation,
+                        "selectionGeneration": next_generation,
+                        "targetSeconds": position.as_secs_f64(),
+                    })
+                    .to_string(),
+                );
+                // A track selection can race with the first resume seek before
+                // the demux worker receives Start. Keep that seek, but retarget
+                // its packet generation to the new selection so the caller does
+                // not discard every packet as stale.
+                *seek_generation = next_generation;
+            }
             if let Err(error) = demuxer.set_stream_selection(selection) {
                 let _ = packets.send(DemuxMessage::Error {
                     generation: *generation,
