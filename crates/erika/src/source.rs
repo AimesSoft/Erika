@@ -560,6 +560,13 @@ fn http_agent() -> ureq::Agent {
 const HTTP_FETCH_MAX_ATTEMPTS: u32 = 3;
 const HTTP_FETCH_RETRY_BACKOFF: [Duration; 2] =
     [Duration::from_millis(200), Duration::from_secs(1)];
+/// Wall-clock ceiling on one logical fetch, retries and backoff included.
+///
+/// `read_range` runs on the demuxer thread, so every retry freezes playback.
+/// The per-request timeouts already allow 10 s to connect and 15 s for response
+/// headers, which three attempts would stretch past a minute; this bounds the
+/// stall instead, at the cost of giving up on origins that are merely very slow.
+const HTTP_FETCH_TOTAL_BUDGET: Duration = Duration::from_secs(20);
 
 fn http_retry_backoff(attempt: u32) -> Duration {
     let index = usize::try_from(attempt.saturating_sub(1)).unwrap_or(0);
@@ -567,6 +574,15 @@ fn http_retry_backoff(attempt: u32) -> Duration {
         .get(index)
         .copied()
         .unwrap_or(Duration::from_secs(1))
+}
+
+/// Whether another attempt (plus its backoff) still fits inside the budget.
+/// Checked before sleeping so a retry is never armed only to blow the deadline.
+fn http_retry_fits_budget(deadline_started: Instant, backoff: Duration) -> bool {
+    deadline_started
+        .elapsed()
+        .saturating_add(backoff)
+        .lt(&HTTP_FETCH_TOTAL_BUDGET)
 }
 
 /// Whether a failed HTTP exchange is worth retrying: transport errors and 5xx
@@ -689,6 +705,7 @@ fn fetch_http_range(
     // onto the prefix we already hold.
     let mut validator: Option<String> = None;
     let mut attempt = 0u32;
+    let deadline_started = Instant::now();
     loop {
         attempt += 1;
         // Resume from what already arrived: earlier attempts keep their bytes
@@ -731,8 +748,11 @@ fn fetch_http_range(
                     started.elapsed().as_secs_f64() * 1000.0,
                     json_escape(&error.to_string()),
                 ));
-                if attempt < HTTP_FETCH_MAX_ATTEMPTS && http_error_is_retryable(&error) {
-                    let backoff = http_retry_backoff(attempt);
+                let backoff = http_retry_backoff(attempt);
+                if attempt < HTTP_FETCH_MAX_ATTEMPTS
+                    && http_error_is_retryable(&error)
+                    && http_retry_fits_budget(deadline_started, backoff)
+                {
                     http_trace_log(format!(
                         "{{\"event\":\"{}_retry\",\"phase\":\"request\",\"attempt\":{},\"start\":{},\"received\":{},\"backoff_ms\":{}}}",
                         event,
@@ -829,8 +849,10 @@ fn fetch_http_range(
                 started.elapsed().as_secs_f64() * 1000.0,
                 json_escape(&error.to_string()),
             ));
-            if attempt < HTTP_FETCH_MAX_ATTEMPTS {
-                let backoff = http_retry_backoff(attempt);
+            let backoff = http_retry_backoff(attempt);
+            if attempt < HTTP_FETCH_MAX_ATTEMPTS
+                && http_retry_fits_budget(deadline_started, backoff)
+            {
                 http_trace_log(format!(
                     "{{\"event\":\"{}_retry\",\"phase\":\"body\",\"attempt\":{},\"start\":{},\"received\":{},\"backoff_ms\":{}}}",
                     event,
@@ -923,8 +945,11 @@ impl MediaSource for HttpRangeSource {
                         started.elapsed().as_secs_f64() * 1000.0,
                         json_escape(&error.to_string()),
                     ));
-                    if attempt < HTTP_FETCH_MAX_ATTEMPTS && http_error_is_retryable(&error) {
-                        let backoff = http_retry_backoff(attempt);
+                    let backoff = http_retry_backoff(attempt);
+                    if attempt < HTTP_FETCH_MAX_ATTEMPTS
+                        && http_error_is_retryable(&error)
+                        && http_retry_fits_budget(started, backoff)
+                    {
                         http_trace_log(format!(
                             "[erika-http-trace] stage=head_retry attempt={} backoff_ms={}",
                             attempt,
@@ -1200,6 +1225,27 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
+
+    #[test]
+    fn http_retry_budget_stops_retrying_once_the_stall_ceiling_is_reached() {
+        let fresh = Instant::now();
+        assert!(http_retry_fits_budget(fresh, Duration::from_millis(200)));
+        assert!(http_retry_fits_budget(fresh, Duration::from_secs(1)));
+
+        // A fetch that already burned the budget must fail fast rather than
+        // arm another attempt: read_range blocks the demuxer thread.
+        let exhausted = Instant::now() - HTTP_FETCH_TOTAL_BUDGET;
+        assert!(!http_retry_fits_budget(exhausted, Duration::ZERO));
+
+        // The backoff counts against the budget, so a retry is refused when
+        // only the sleep would still fit.
+        let nearly_done = Instant::now() - (HTTP_FETCH_TOTAL_BUDGET - Duration::from_millis(500));
+        assert!(http_retry_fits_budget(
+            nearly_done,
+            Duration::from_millis(200)
+        ));
+        assert!(!http_retry_fits_budget(nearly_done, Duration::from_secs(1)));
+    }
 
     struct MockResponse {
         delay: Duration,
