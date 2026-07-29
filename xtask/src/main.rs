@@ -88,12 +88,95 @@ fn main() -> Result<()> {
 
 fn check(mut args: Vec<String>) -> Result<()> {
     if args.is_empty() {
-        bail!("missing check subcommand: license");
+        bail!("missing check subcommand: cargo-patches or license");
     }
     match args.remove(0).as_str() {
+        "cargo-patches" => check_cargo_patches(),
         "license" => check_license_policy(),
         other => bail!("unknown check subcommand: {other}"),
     }
+}
+
+fn check_cargo_patches() -> Result<()> {
+    let root = workspace_root()?;
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let output = Command::new(cargo)
+        .args([
+            "metadata",
+            "--locked",
+            "--format-version",
+            "1",
+            "--all-features",
+        ])
+        .arg("--manifest-path")
+        .arg(root.join("Cargo.toml"))
+        .output()
+        .context("run cargo metadata for patch verification")?;
+    if !output.status.success() {
+        bail!(
+            "cargo metadata failed while verifying patches ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parse cargo metadata")?;
+    let packages = metadata["packages"]
+        .as_array()
+        .context("cargo metadata did not contain a packages array")?;
+    let resolved = packages
+        .iter()
+        .filter(|package| package["name"].as_str() == Some("wgpu-hal"))
+        .collect::<Vec<_>>();
+    if resolved.len() != 1 {
+        let versions = resolved
+            .iter()
+            .map(|package| {
+                format!(
+                    "{} ({})",
+                    package["version"].as_str().unwrap_or("unknown version"),
+                    package["source"].as_str().unwrap_or("path")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!(
+            "expected exactly one resolved wgpu-hal package from the vendored patch, found {}: [{}]",
+            resolved.len(),
+            versions
+        );
+    }
+
+    let package = resolved[0];
+    if !package["source"].is_null() {
+        bail!(
+            "vendored wgpu-hal patch is inactive; Cargo resolved {} from {}",
+            package["version"].as_str().unwrap_or("unknown version"),
+            package["source"].as_str().unwrap_or("an unknown source")
+        );
+    }
+    let actual_manifest = package["manifest_path"]
+        .as_str()
+        .context("resolved wgpu-hal package has no manifest_path")?;
+    let actual_manifest = fs::canonicalize(actual_manifest)
+        .with_context(|| format!("canonicalize resolved wgpu-hal manifest {actual_manifest}"))?;
+    let expected_manifest = fs::canonicalize(root.join("third_party/wgpu-hal/Cargo.toml"))
+        .context("canonicalize vendored wgpu-hal manifest")?;
+    if actual_manifest != expected_manifest {
+        bail!(
+            "vendored wgpu-hal patch is inactive; expected {}, resolved {}",
+            expected_manifest.display(),
+            actual_manifest.display()
+        );
+    }
+
+    println!(
+        "cargo patch ok: wgpu-hal {} resolves from {}",
+        package["version"].as_str().unwrap_or("unknown version"),
+        expected_manifest.display()
+    );
+    Ok(())
 }
 
 fn deps(mut args: Vec<String>) -> Result<()> {
@@ -4888,5 +4971,6 @@ fn print_help() {
     println!(
         "  cargo run -p xtask -- deps build --profile lgpl [--target host|aarch64-apple-darwin|x86_64-apple-darwin|aarch64-apple-ios|aarch64-apple-ios-sim|x86_64-apple-ios|x86_64-pc-windows-msvc|aarch64-pc-windows-msvc|aarch64-linux-android|armv7-linux-androideabi|x86_64-linux-android|i686-linux-android] [--force] [--jobs N]"
     );
+    println!("  cargo run -p xtask -- check cargo-patches");
     println!("  cargo run -p xtask -- check license");
 }

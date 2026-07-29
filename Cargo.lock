@@ -2504,6 +2504,7 @@ name = "xtask"
 version = "0.1.3"
 dependencies = [
  "anyhow",
+ "serde_json",
  "sha2",
  "ureq",
 ]
