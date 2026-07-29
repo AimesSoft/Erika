@@ -2205,7 +2205,8 @@ void ErikaFlutterPlugin::HandleMethodCall(
     } else if (method == "getPresenterStats") {
       result->Success(PlayerFromArgs(args).GetPresenterStats());
     } else if (method == "setDebugHudEnabled") {
-      PlayerFromArgs(args).SetDebugHudEnabled(BoolArg(args, "enabled", false));
+      PlayerFromArgs(args).SetDebugHudEnabled(
+          BoolValue(FindArg(args, "enabled")).value_or(false));
       result->Success();
     } else if (method == "addExternalSubtitle") {
       const int64_t track_id =
