@@ -349,6 +349,7 @@ Android extended-linear 应把 Flutter Hybrid Composition `SurfaceView` 对应�
 
 ```c
 ErikaStatus erika_presenter_render_tick(ErikaPresenterHandle *, double time_seconds, ErikaPresenterStats *out_stats);
+ErikaStatus erika_presenter_get_stats(ErikaPresenterHandle *, ErikaPresenterStats *out_stats);
 ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *, ErikaEvent *out_event);
 ```
 
@@ -356,6 +357,45 @@ ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *, ErikaEvent *out_e
 帧调度器）。`time_seconds` 是该帧的宿主显示时钟（秒）——Erika 用它做 vsync 量化调度，
 所以传**呈现时间戳**，不是 wall-clock 增量。若 `out_stats` 非 `NULL`，会填入流水线
 计数器快照。`poll_event` 非阻塞，空闲时返回 `NoEvent`。
+
+`get_stats` 填入同样的 `ErikaPresenterStats` 快照，但不渲染帧。当宿主采样计数器的
+节奏与显示循环不同时用它；它不推进呈现。
+
+### JSON 桥
+
+对于平台通道本身就在序列化结构化参数的嵌入方（例如 HarmonyOS ArkTS 插件），
+同一套 presenter 接口也以 JSON 形式提供：
+
+```c
+char *erika_presenter_invoke_json(ErikaPresenterHandle *, const char *method,
+                                  const char *arguments_json);
+char *erika_presenter_render_tick_json(ErikaPresenterHandle *, double time_seconds);
+char *erika_presenter_poll_event_json(ErikaPresenterHandle *);
+```
+
+返回的字符串归 Erika 所有，必须用 `erika_string_free` 释放。`poll_event_json`
+在无事件时返回 `NULL`——不是信封——所以 `NULL` 表示空闲而非错误。
+
+三者的返回值都包在同一层信封里：
+
+```json
+{ "ok": true,  "status": 0, "value": <result> }
+{ "ok": false, "status": 1, "error": "<message>" }
+```
+
+`arguments_json` 必须是 JSON 对象。`method` 选择操作，与 C 入口一一对应：
+`open`、`play`、`pause`、`stop`、`close`、`seek`、`setPlaybackRate`、`setVolume`、
+`setUpscaler`、`setSubtitleScale`、`getUpscalerStatus`、`getOutputStatus`、
+`getPresenterStats`、`tracks`、`addExternalSubtitle`、`removeSubtitleTrack`、
+`selectAudioTrack`、`selectSubtitleTrack`，以及弹幕系列（`loadDanmakuFile`、
+`loadDanmakuJson`、`addDanmakuTrackFile`、`addDanmakuTrackJson`、
+`removeDanmakuTrack`、`setDanmakuTrackEnabled`、`setDanmakuTrackOffset`、
+`setDanmakuGlobalOffset`、`danmakuTracks`、`clearDanmaku`、`setDanmakuEnabled`、
+`setDanmakuConfig`）。未知 method 返回 `ok: false`，不会中止。权威分发表见
+`crates/erika_capi/src/presenter_json.rs`。
+
+这层桥只是便利封装，不是第二套 API：它调用的就是上面这些函数，没有额外能力。
+能在平台通道上传结构体的宿主应优先用类型化入口。
 
 ### 诊断与截图
 

@@ -54,6 +54,8 @@ xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,z
   `CC_FOR_BUILD` / `CXX_FOR_BUILD`。
 - 按需安装四个 Rust target:`aarch64-linux-android`、
   `armv7-linux-androideabi`、`x86_64-linux-android`、`i686-linux-android`。
+- HarmonyOS:DevEco Studio 的 OpenHarmony Native SDK(由 `OHOS_NDK_HOME` 或
+  `OHOS_SDK_NATIVE` 指向),以及 `aarch64-unknown-linux-ohos` Rust target。
 
 Android 最低 API 为 **26**;只在需要更高版本时用 `ANDROID_API_LEVEL` 覆盖。
 

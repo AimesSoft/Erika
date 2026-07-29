@@ -363,6 +363,7 @@ Erika は Vulkan、`Rgba16Float`、`ADATASPACE_SCRGB_LINEAR` も検証します�
 
 ```c
 ErikaStatus erika_presenter_render_tick(ErikaPresenterHandle *, double time_seconds, ErikaPresenterStats *out_stats);
+ErikaStatus erika_presenter_get_stats(ErikaPresenterHandle *, ErikaPresenterStats *out_stats);
 ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *, ErikaEvent *out_event);
 ```
 
@@ -372,6 +373,50 @@ Windows のフレームスケジューラなど）。`time_seconds` はそのフ
 **プレゼンテーションタイムスタンプ**を渡します。`out_stats` が非 `NULL` なら、パイプ
 ラインカウンタのスナップショットが書き込まれます。`poll_event` は非ブロッキングで、
 アイドル時は `NoEvent` を返します。
+
+`get_stats` は同じ `ErikaPresenterStats` スナップショットを、フレームを描画せずに
+書き込みます。ホストが表示ループとは別の周期でカウンタをサンプリングする場合に
+使ってください。プレゼンテーションは進みません。
+
+### JSON ブリッジ
+
+プラットフォームチャネルが既に構造化引数をシリアライズしている埋め込み側
+（例えば HarmonyOS ArkTS プラグイン）向けに、同じ presenter 面が JSON でも
+利用できます。
+
+```c
+char *erika_presenter_invoke_json(ErikaPresenterHandle *, const char *method,
+                                  const char *arguments_json);
+char *erika_presenter_render_tick_json(ErikaPresenterHandle *, double time_seconds);
+char *erika_presenter_poll_event_json(ErikaPresenterHandle *);
+```
+
+返される文字列は Erika が所有するため、`erika_string_free` で解放してください。
+`poll_event_json` はイベントが無いとき envelope ではなく `NULL` を返すので、
+`NULL` はエラーではなくアイドルを意味します。
+
+3 つとも結果を同じ envelope に包みます。
+
+```json
+{ "ok": true,  "status": 0, "value": <result> }
+{ "ok": false, "status": 1, "error": "<message>" }
+```
+
+`arguments_json` は JSON オブジェクトである必要があります。`method` は操作を選び、
+C エントリポイントに対応します: `open`、`play`、`pause`、`stop`、`close`、`seek`、
+`setPlaybackRate`、`setVolume`、`setUpscaler`、`setSubtitleScale`、
+`getUpscalerStatus`、`getOutputStatus`、`getPresenterStats`、`tracks`、
+`addExternalSubtitle`、`removeSubtitleTrack`、`selectAudioTrack`、
+`selectSubtitleTrack`、および danmaku 系（`loadDanmakuFile`、`loadDanmakuJson`、
+`addDanmakuTrackFile`、`addDanmakuTrackJson`、`removeDanmakuTrack`、
+`setDanmakuTrackEnabled`、`setDanmakuTrackOffset`、`setDanmakuGlobalOffset`、
+`danmakuTracks`、`clearDanmaku`、`setDanmakuEnabled`、`setDanmakuConfig`）。
+未知の method は abort せず `ok: false` を返します。正となる dispatch table は
+`crates/erika_capi/src/presenter_json.rs` です。
+
+このブリッジは利便性のためのレイヤーであり、2 つ目の API ではありません。上で
+説明した関数をそのまま呼ぶだけで、追加の機能はありません。プラットフォーム
+チャネルで構造体を渡せるホストは型付きエントリポイントを優先してください。
 
 ### 診断とスクリーンショット
 

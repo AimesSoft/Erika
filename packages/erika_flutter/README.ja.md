@@ -12,6 +12,7 @@ Erika メディア再生エンジン向けの Flutter plugin です。
 - iOS plugin は Erika の static library を link します。
 - Windows plugin は Erika C ABI DLL を build して link します。
 - Android plugin は ABI ごとに `liberika_capi.so` を build し、`Choreographer` から native surface を駆動します。
+- HarmonyOS plugin は Flutter external texture を登録し、その `OHNativeWindow` を Erika に attach して、OHAudio で低レイテンシの PCM 出力を行います。
 - Erika は `ErikaPresenterHandle` を通じて playback、rendering、audio、timing、overlay を担当します。
 
 ## Video Surfaces
@@ -67,6 +68,24 @@ API 34+ では plugin が `Display.registerHdrSdrRatioChangedListener` を監視
 change を Erika に publish します。wgpu は surface を reattach せず後続 frame target と
 output status を更新します。API 35 では host の global Window を変更せず、`SurfaceView`
 ごとに desired HDR headroom も設定します。
+
+## HarmonyOS Setup
+
+HarmonyOS module には DevEco Studio の OpenHarmony Native SDK と Rust の
+`aarch64-unknown-linux-ohos` target が必要です。Hvigor/CMake build が LGPL の
+FFmpeg/zlib 依存と `liberika_capi.so` を compile し、その runtime を
+`liberika_flutter.so` と一緒に package します。
+
+HarmonyOS では `ErikaVideoView` を使ってください。Flutter external texture を登録し、
+その texture surface を `OHNativeWindow` として取得して、wgpu Vulkan で描画します。
+音声は OHAudio の interleaved f32 PCM です。
+
+video decode は既定で HarmonyOS AVCodec の hardware decode（H.264 / HEVC）です。
+AVCodec は Surface に描画し、その `OHNativeBuffer` を Vulkan external image として
+import して Vulkan YCbCr sampler で解決するため、フレームは CPU コピーなしで
+compositor に届きます。必要な Vulkan extension を持たない端末は FFmpeg software
+decode と CPU upload に fallback します。fallback は再生を失敗させず、
+`VideoDecoderChanged` event と presenter diagnostics から報告されます。
 
 ## HTTP ヘッダー
 
