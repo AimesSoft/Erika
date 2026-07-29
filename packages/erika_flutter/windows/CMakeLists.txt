@@ -62,6 +62,9 @@ add_library(${PLUGIN_NAME} SHARED
 )
 
 apply_standard_settings(${PLUGIN_NAME})
+if(MSVC)
+  target_compile_options(${PLUGIN_NAME} PRIVATE /utf-8)
+endif()
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   CXX_VISIBILITY_PRESET hidden)

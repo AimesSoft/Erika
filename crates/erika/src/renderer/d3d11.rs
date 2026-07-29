@@ -31,9 +31,9 @@ use ::windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R32G32_FLOAT, DXGI_SAMPLE_DESC,
 };
 use ::windows::Win32::Graphics::Dxgi::{
-    DXGI_HDR_METADATA_HDR10, DXGI_HDR_METADATA_TYPE_HDR10, DXGI_HDR_METADATA_TYPE_NONE,
-    DXGI_PRESENT, DXGI_PRESENT_PARAMETERS, DXGI_SCALING_STRETCH,
-    DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT, DXGI_SWAP_CHAIN_DESC1,
+    DXGI_ERROR_WAS_STILL_DRAWING, DXGI_HDR_METADATA_HDR10, DXGI_HDR_METADATA_TYPE_HDR10,
+    DXGI_HDR_METADATA_TYPE_NONE, DXGI_PRESENT_DO_NOT_WAIT, DXGI_PRESENT_PARAMETERS,
+    DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT, DXGI_SWAP_CHAIN_DESC1,
     DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter, IDXGIDevice,
     IDXGIFactory2, IDXGIResource, IDXGISwapChain1, IDXGISwapChain3, IDXGISwapChain4,
 };
@@ -1280,10 +1280,22 @@ impl D3d11Renderer {
         }
         state.draw_video(video, scene_rtv, target_rect)?;
         if !overlay_draws.is_empty() {
-            state.draw_overlays(&overlay_draws, scene_rtv, physical.width, physical.height)?;
+            // Subtitle coordinates are produced in the video-frame viewport.
+            // Composite them through the same aspect-fit viewport as the video
+            // so resizing the window cannot stretch the subtitle independently.
+            state.draw_overlays(&overlay_draws, scene_rtv, target_rect)?;
         }
         if !danmaku_draws.is_empty() {
-            state.draw_overlays(&danmaku_draws, scene_rtv, physical.width, physical.height)?;
+            state.draw_overlays(
+                &danmaku_draws,
+                scene_rtv,
+                D3d11DrawRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: physical.width.max(1) as f32,
+                    height: physical.height.max(1) as f32,
+                },
+            )?;
         }
         if let Some((_, linear_srv)) = linear_target {
             state.draw_encode(
@@ -1674,17 +1686,16 @@ impl D3d11DeviceState {
         &self,
         draws: &[D3d11OverlayDraw],
         render_target: &ID3D11RenderTargetView,
-        width: u32,
-        height: u32,
+        target: D3d11DrawRect,
     ) -> Result<()> {
         if draws.is_empty() {
             return Ok(());
         }
         let viewport = D3D11_VIEWPORT {
-            TopLeftX: 0.0,
-            TopLeftY: 0.0,
-            Width: width.max(1) as f32,
-            Height: height.max(1) as f32,
+            TopLeftX: target.x,
+            TopLeftY: target.y,
+            Width: target.width.max(1.0),
+            Height: target.height.max(1.0),
             MinDepth: 0.0,
             MaxDepth: 1.0,
         };
@@ -2072,9 +2083,14 @@ fn present_swapchain(swapchain: &IDXGISwapChain1, operation: &'static str) -> Re
         pScrollRect: ptr::null_mut(),
         pScrollOffset: ptr::null_mut(),
     };
-    unsafe { swapchain.Present1(1, DXGI_PRESENT(0), &params) }
-        .ok()
-        .map_err(|error| d3d_error(operation, error))
+    let status = unsafe { swapchain.Present1(0, DXGI_PRESENT_DO_NOT_WAIT, &params) };
+    // Rendering shares the Windows platform thread with WM_MOVING. Never wait
+    // for a full DXGI queue here: dropping one presentation keeps window
+    // interaction responsive while decode/audio continue normally.
+    if status == DXGI_ERROR_WAS_STILL_DRAWING {
+        return Ok(());
+    }
+    status.ok().map_err(|error| d3d_error(operation, error))
 }
 
 fn create_plane_srv(

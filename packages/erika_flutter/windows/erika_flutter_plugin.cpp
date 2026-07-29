@@ -948,6 +948,10 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
                 bool is_visible,
                 std::optional<int64_t> generation,
                 const std::optional<std::string>& debug_label) {
+    if (!is_visible && generation && active_generation != 0 &&
+        *generation != active_generation) {
+      return;
+    }
     if (generation) {
       active_generation = *generation;
     }
@@ -1046,6 +1050,7 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
   double logical_height = 1.0;
   bool visible = false;
   int64_t active_generation = 0;
+  int64_t owner_player_id = 0;
 };
 
 struct ErikaFlutterPlugin::PlayerHost {
@@ -1416,6 +1421,9 @@ struct ErikaFlutterPlugin::PlayerHost {
     attached_hwnd = overlay.hwnd;
     attached_view_id = kWindowOverlayViewId;
     surface_attached = true;
+    attached_surface_width = width;
+    attached_surface_height = height;
+    attached_surface_scale = scale;
     start_time_seconds = NowSeconds();
   }
 
@@ -1423,9 +1431,19 @@ struct ErikaFlutterPlugin::PlayerHost {
     if (!surface_attached || attached_hwnd != overlay.hwnd) {
       return;
     }
-    Check(library->resize_surface(handle, overlay.PixelWidth(),
-                                  overlay.PixelHeight(), overlay.scale),
+    const uint32_t width = overlay.PixelWidth();
+    const uint32_t height = overlay.PixelHeight();
+    const double scale = overlay.scale;
+    if (width == attached_surface_width &&
+        height == attached_surface_height &&
+        std::abs(scale - attached_surface_scale) < 0.0001) {
+      return;
+    }
+    Check(library->resize_surface(handle, width, height, scale),
           "resize_surface", library->TakeLastError());
+    attached_surface_width = width;
+    attached_surface_height = height;
+    attached_surface_scale = scale;
   }
 
   void Detach(std::optional<int64_t> view_id) {
@@ -1435,6 +1453,9 @@ struct ErikaFlutterPlugin::PlayerHost {
     attached_hwnd = nullptr;
     attached_view_id = 0;
     surface_attached = false;
+    attached_surface_width = 0;
+    attached_surface_height = 0;
+    attached_surface_scale = 0.0;
     library->detach_surface(handle);
   }
 
@@ -1611,6 +1632,9 @@ struct ErikaFlutterPlugin::PlayerHost {
   HWND attached_hwnd = nullptr;
   int64_t attached_view_id = 0;
   bool surface_attached = false;
+  uint32_t attached_surface_width = 0;
+  uint32_t attached_surface_height = 0;
+  double attached_surface_scale = 0.0;
   double start_time_seconds = NowSeconds();
   ErikaDanmakuConfig current_danmaku_config = DefaultDanmakuConfig();
   ErikaPresenterStats latest_presenter_stats{};
@@ -2074,7 +2098,19 @@ int64_t ErikaFlutterPlugin::CreatePlayer(const EncodableValue* arguments) {
 }
 
 void ErikaFlutterPlugin::RemovePlayer(int64_t player_id) {
-  players_.erase(player_id);
+  const auto it = players_.find(player_id);
+  if (it == players_.end()) {
+    return;
+  }
+  // Hide the shared HWND before destroying the presenter. Presenter teardown
+  // may wait for decoder threads, and leaving the overlay visible during that
+  // wait exposes the transparent Flutter cutout as an apparently frozen app.
+  if (overlay_window_ && overlay_window_->owner_player_id == player_id) {
+    overlay_window_->SetFrame(0.0, 0.0, 0.0, 0.0, false, std::nullopt,
+                              std::nullopt);
+    overlay_window_->owner_player_id = 0;
+  }
+  players_.erase(it);
 }
 
 void ErikaFlutterPlugin::SendEvent(EncodableValue event) {
@@ -2235,7 +2271,9 @@ void ErikaFlutterPlugin::HandleMethodCall(
         throw PluginError("Erika video view " + std::to_string(view_id) +
                           " was not found.");
       }
-      host.AttachOverlay(EnsureOverlayWindow());
+      auto& overlay = EnsureOverlayWindow();
+      host.AttachOverlay(overlay);
+      overlay.owner_player_id = host.id;
       OnFrameTimer();
       result->Success();
     } else if (method == "detachView") {
@@ -2244,7 +2282,9 @@ void ErikaFlutterPlugin::HandleMethodCall(
       result->Success();
     } else if (method == "attachOverlay") {
       auto& host = PlayerFromArgs(args);
-      host.AttachOverlay(EnsureOverlayWindow());
+      auto& overlay = EnsureOverlayWindow();
+      host.AttachOverlay(overlay);
+      overlay.owner_player_id = host.id;
       OnFrameTimer();
       result->Success(EncodableValue(kWindowOverlayViewId));
     } else if (method == "detachOverlay") {
@@ -2260,17 +2300,34 @@ void ErikaFlutterPlugin::HandleMethodCall(
       if (overlay_window_) {
         overlay_window_->SetFrame(0.0, 0.0, 0.0, 0.0, false, generation,
                                   std::nullopt);
+        if (overlay_window_->owner_player_id == host.id) {
+          overlay_window_->owner_player_id = 0;
+        }
       }
       result->Success();
     } else if (method == "setOverlayFrame") {
       auto& overlay = EnsureOverlayWindow();
+      const int64_t player_id = RequiredInt64(args, "playerId");
+      PlayerFromArgs(args);
+      const bool visible = BoolValue(FindArg(args, "visible")).value_or(true);
+      if (!visible && overlay.owner_player_id != 0 &&
+          overlay.owner_player_id != player_id) {
+        result->Success();
+        return;
+      }
+      if (visible) {
+        overlay.owner_player_id = player_id;
+      }
       overlay.SetFrame(DoubleValue(FindArg(args, "x")).value_or(0.0),
                        DoubleValue(FindArg(args, "y")).value_or(0.0),
                        DoubleValue(FindArg(args, "width")).value_or(0.0),
                        DoubleValue(FindArg(args, "height")).value_or(0.0),
-                       BoolValue(FindArg(args, "visible")).value_or(true),
+                       visible,
                        Int64Value(FindArg(args, "generation")),
                        StringValue(FindArg(args, "debugLabel")));
+      if (!visible && overlay.owner_player_id == player_id) {
+        overlay.owner_player_id = 0;
+      }
       ResizeAttachedOverlay();
       OnFrameTimer();
       result->Success();

@@ -1,5 +1,16 @@
 --- a/configure
 +++ b/configure
+@@ -5364,8 +5364,9 @@
+         _ld_o='-out:$@'
+         _flags_filter=msvc_flags_link
+         _ld_lib='%.lib'
+         _ld_path='-libpath:'
+-    elif VSLANG=1033 $_cc -nologo- 2>&1 | grep -q ^Microsoft || { $_cc -v 2>&1 | grep -q clang && $_cc -? > /dev/null 2>&1; }; then
++    elif test "$toolchain" = "msvc" || \
++         VSLANG=1033 $_cc -nologo- 2>&1 | grep -q ^Microsoft || { $_cc -v 2>&1 | grep -q clang && $_cc -? > /dev/null 2>&1; }; then
+         _type=msvc
+         if VSLANG=1033 $_cc -nologo- 2>&1 | grep -q ^Microsoft; then
+             # Depending on the tool (cl.exe or link.exe), the version number
 @@ -5378,7 +5378,7 @@
              _DEPCMD='$(DEP$(1)) $(DEP$(1)FLAGS) $($(1)DEP_FLAGS) $< 2>&1 | awk '\''/including/ { sub(/^.*file: */, ""); if (!match($$0, / /)) { print $$0 } }'\'' | xargs -r -d\\n -n1 wslpath -u | awk '\''BEGIN { printf "%s:", "$@" }; { sub(/\r/,""); printf " %s", $$0 }; END { print "" }'\'' > $(@:.o=.d)'
  
