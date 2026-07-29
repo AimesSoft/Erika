@@ -642,7 +642,9 @@ pub struct VideoUniforms {
     /// top-right, bottom-left and bottom-right luma subpixels. All modes retain
     /// the common transfer/gamut/tone-map handling.
     pub input_mode: u32,
-    pub reserved1: u32,
+    /// Leaves the shader output in target-reference-linear space so a backend
+    /// can composite overlays before applying the output transfer function.
+    pub scene_linear: u32,
     pub nits: [f32; 4],
     pub luma_coefficients: [f32; 4],
     pub gamut_matrix_rows: [[f32; 4]; 3],
@@ -659,7 +661,7 @@ impl VideoUniforms {
             tone_map: tone_map_code(pipeline.tone_map.operator),
             edr_output: u32::from(edr_output),
             input_mode: 0,
-            reserved1: 0,
+            scene_linear: 0,
             nits: [
                 pipeline.source.nominal_peak_nits,
                 pipeline.target.peak_nits,
@@ -683,6 +685,11 @@ impl VideoUniforms {
 
     pub fn packed_d2s_rgb_detail_input(mut self) -> Self {
         self.input_mode = 3;
+        self
+    }
+
+    pub fn scene_linear_output(mut self) -> Self {
+        self.scene_linear = 1;
         self
     }
 }
@@ -904,22 +911,19 @@ mod tests {
     }
 
     #[test]
-    fn overlay_shaders_reencode_sdr_ui_for_pq_targets() {
+    fn overlay_shaders_handle_sdr_ui_for_hdr_targets() {
         let metal = include_str!("metal/apple.rs");
         let d3d11 = include_str!("d3d11.rs");
-        for shader in [metal, d3d11] {
-            assert!(shader.contains("float3 sdr_ui_color_to_target_output"));
-            assert!(shader.contains("pq_inverse_eotf(nits.r / pq_absolute_peak_nits)"));
-        }
-        // The D3D11 overlay pixel shader routes both tinted alpha masks and
-        // straight RGBA planes through the PQ re-encode like Metal does.
-        assert!(
-            d3d11.contains("sdr_ui_color_to_target_output(color.rgb, target_transfer, ui_nits.x)")
-        );
-        assert!(
-            d3d11
-                .contains("sdr_ui_color_to_target_output(sampled.rgb, target_transfer, ui_nits.x)")
-        );
+        assert!(metal.contains("float3 sdr_ui_color_to_target_output"));
+        assert!(metal.contains("pq_inverse_eotf(nits.r / pq_absolute_peak_nits)"));
+
+        // D3D11 composites into an FP16 reference-linear target, then applies
+        // PQ once in a full-screen encode pass after alpha blending.
+        assert!(d3d11.contains("if (ui_nits.y > 0.0)"));
+        assert!(d3d11.contains("max(ui_nits.x, 1.0) / max(ui_nits.y, 1.0)"));
+        assert!(d3d11.contains("float4 encode_ps_main"));
+        assert!(d3d11.contains("if (scene_linear != 0u)"));
+        assert!(d3d11.contains("PSSetShaderResources(0, Some(&[None]))"));
     }
 
     #[test]

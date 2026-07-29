@@ -10,7 +10,7 @@ struct VideoUniforms {
     tone_map: u32,
     edr_output: u32,
     input_mode: u32,
-    reserved1: u32,
+    scene_linear: u32,
     nits: vec4<f32>,
     luma_coefficients: vec4<f32>,
     gamut_matrix_rows: array<vec4<f32>, 3>,
@@ -145,6 +145,9 @@ fn target_nits_to_reference_linear(nits: vec3<f32>) -> vec3<f32> {
 }
 
 fn target_reference_linear_to_output(rgb: vec3<f32>) -> vec3<f32> {
+    if (uniforms.scene_linear != 0u) {
+        return max(rgb, vec3<f32>(0.0));
+    }
     if (uniforms.target_transfer == 3u) {
         let pq_absolute_peak_nits = 10000.0;
         let nits = max(rgb, vec3<f32>(0.0)) * target_reference_white_nits();
@@ -167,6 +170,9 @@ fn target_reference_linear_to_output(rgb: vec3<f32>) -> vec3<f32> {
 }
 
 fn final_output(rgb: vec3<f32>) -> vec4<f32> {
+    if (uniforms.scene_linear != 0u) {
+        return vec4<f32>(max(rgb, vec3<f32>(0.0)), 1.0);
+    }
     if (uniforms.target_transfer == 3u) {
         return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
     }
