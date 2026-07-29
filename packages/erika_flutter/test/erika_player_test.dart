@@ -402,6 +402,28 @@ void main() {
     await player.dispose();
   });
 
+  test('subtitle delay is forwarded in clamped seconds', () async {
+    final player = ErikaPlayer();
+
+    await player.setSubtitleDelay(const Duration(milliseconds: 2500));
+    await player.setSubtitleDelay(const Duration(seconds: -90));
+
+    final calls = playerCalls
+        .where((MethodCall call) => call.method == 'setSubtitleDelay')
+        .toList();
+    expect(calls, hasLength(2));
+    expect(calls[0].arguments, <String, Object?>{
+      'playerId': 7,
+      'seconds': 2.5,
+    });
+    expect(calls[1].arguments, <String, Object?>{
+      'playerId': 7,
+      'seconds': -60.0,
+    });
+
+    await player.dispose();
+  });
+
   test('window overlay methods forward surface geometry', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(playerChannel, (MethodCall call) async {

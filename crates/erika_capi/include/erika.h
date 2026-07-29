@@ -438,6 +438,9 @@ ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *handle, doub
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *handle, double volume);
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *handle, int32_t mode);
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *handle, double scale);
+/* Positive sub-delay shows subtitles later. seconds is clamped to ±60.
+ * Negative subtitle delay is limited by decode lookahead. */
+ErikaStatus erika_presenter_set_subtitle_delay(ErikaPresenterHandle *handle, double seconds);
 ErikaStatus erika_presenter_set_output_headroom(
     ErikaPresenterHandle *handle,
     float headroom,
