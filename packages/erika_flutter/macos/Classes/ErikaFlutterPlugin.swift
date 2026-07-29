@@ -1,4 +1,5 @@
 import AppKit
+import CoreVideo
 import Darwin
 import FlutterMacOS
 import Metal
@@ -10,6 +11,100 @@ private let erikaDebugLabelsEnabled =
   ProcessInfo.processInfo.environment["ERIKA_DEBUG_LABELS"] == "1"
 private let erikaDefaultDisplayFps = 60.0
 private let erikaDisplayFpsEpsilon = 0.5
+
+/// Drives rendering from the display's vertical refresh instead of a main-run-loop
+/// `Timer`. The callback stays coalesced while a render is in progress so a slow
+/// `CAMetalLayer.nextDrawable()` cannot build up timer callbacks and then replay
+/// them in a burst.
+private final class ErikaDisplayLinkDriver {
+  private let onTick: () -> Void
+  private let stateLock = NSLock()
+  private var displayLink: CVDisplayLink?
+  private var tickQueued = false
+  private var invalidated = false
+
+  init?(displayID: CGDirectDisplayID, onTick: @escaping () -> Void) {
+    self.onTick = onTick
+
+    var link: CVDisplayLink?
+    guard CVDisplayLinkCreateWithCGDisplay(displayID, &link) == kCVReturnSuccess,
+          let link else {
+      return nil
+    }
+    displayLink = link
+
+    let status = CVDisplayLinkSetOutputCallback(
+      link,
+      { _, _, _, _, _, context in
+        guard let context else {
+          return kCVReturnError
+        }
+        let driver = Unmanaged<ErikaDisplayLinkDriver>
+          .fromOpaque(context)
+          .takeUnretainedValue()
+        driver.displayDidRefresh()
+        return kCVReturnSuccess
+      },
+      Unmanaged.passUnretained(self).toOpaque()
+    )
+    guard status == kCVReturnSuccess else {
+      displayLink = nil
+      return nil
+    }
+  }
+
+  deinit {
+    invalidate()
+  }
+
+  func start() -> Bool {
+    guard let displayLink else {
+      return false
+    }
+    return CVDisplayLinkStart(displayLink) == kCVReturnSuccess
+  }
+
+  func invalidate() {
+    stateLock.lock()
+    invalidated = true
+    stateLock.unlock()
+
+    if let displayLink, CVDisplayLinkIsRunning(displayLink) {
+      CVDisplayLinkStop(displayLink)
+    }
+    displayLink = nil
+  }
+
+  private func displayDidRefresh() {
+    stateLock.lock()
+    guard !invalidated, !tickQueued else {
+      stateLock.unlock()
+      return
+    }
+    tickQueued = true
+    stateLock.unlock()
+
+    DispatchQueue.main.async { [weak self] in
+      guard let self else {
+        return
+      }
+
+      self.stateLock.lock()
+      let shouldRender = !self.invalidated
+      self.stateLock.unlock()
+
+      if shouldRender {
+        self.onTick()
+      }
+
+      // Keep tickQueued set throughout onTick(). Any display refresh received
+      // while Metal is blocked is deliberately dropped rather than replayed.
+      self.stateLock.lock()
+      self.tickQueued = false
+      self.stateLock.unlock()
+    }
+  }
+}
 
 private struct ErikaVideoParamsC {
   var width: UInt32 = 0
@@ -498,6 +593,8 @@ private final class ErikaPlayerHost {
   private let library: ErikaNativeLibrary
   private let handle: UnsafeMutableRawPointer
   private weak var attachedView: ErikaMetalSurfaceView?
+  private var displayLinkDriver: ErikaDisplayLinkDriver?
+  private var displayLinkDisplayID: CGDirectDisplayID?
   private var displayTimer: Timer?
   private var displayTimerFps: Double = 0.0
   private var startTimeSeconds: CFTimeInterval = CACurrentMediaTime()
@@ -515,7 +612,7 @@ private final class ErikaPlayerHost {
   }
 
   deinit {
-    stopDisplayTimer()
+    stopDisplayDriver()
     _ = library.detachSurface(handle)
     library.destroy(handle)
   }
@@ -890,7 +987,7 @@ private final class ErikaPlayerHost {
     attachedView = view
     view.attachedPlayerId = id
     try attachOrResize(view: view, attach: true)
-    startDisplayTimerIfNeeded(resetClock: true)
+    startDisplayDriverIfNeeded(resetClock: true)
   }
 
   func detach(viewId: Int64?) {
@@ -899,7 +996,7 @@ private final class ErikaPlayerHost {
     }
     attachedView?.attachedPlayerId = nil
     attachedView = nil
-    stopDisplayTimer()
+    stopDisplayDriver()
     _ = library.detachSurface(handle)
   }
 
@@ -909,7 +1006,7 @@ private final class ErikaPlayerHost {
     }
     do {
       try attachOrResize(view: view, attach: false)
-      startDisplayTimerIfNeeded(resetClock: false)
+      startDisplayDriverIfNeeded(resetClock: false)
     } catch {
       NSLog("ErikaFlutterPlugin: resize failed: \(error)")
     }
@@ -968,15 +1065,41 @@ private final class ErikaPlayerHost {
     }
   }
 
-  private func startDisplayTimerIfNeeded(resetClock: Bool) {
+  private func startDisplayDriverIfNeeded(resetClock: Bool) {
+    if resetClock {
+      startTimeSeconds = CACurrentMediaTime()
+    }
+
+    // Keep the explicit FPS override as a diagnostic escape hatch. Normal
+    // playback follows the actual display refresh through CVDisplayLink.
+    if ProcessInfo.processInfo.environment["ERIKA_FLUTTER_TARGET_FPS"] == nil {
+      let displayID = resolvedDisplayID()
+      if displayLinkDriver != nil && displayLinkDisplayID == displayID {
+        return
+      }
+
+      stopDisplayDriver()
+      if let driver = ErikaDisplayLinkDriver(displayID: displayID) { [weak self] in
+        guard let self else {
+          return
+        }
+        self.renderTick(sendEvent: ErikaFlutterPlugin.sharedEventSink)
+      }, driver.start() {
+        displayLinkDriver = driver
+        displayLinkDisplayID = displayID
+        return
+      }
+    }
+
+    startFallbackDisplayTimerIfNeeded()
+  }
+
+  private func startFallbackDisplayTimerIfNeeded() {
     let targetFps = resolvedDisplayTimerFps()
     if displayTimer != nil && abs(displayTimerFps - targetFps) <= erikaDisplayFpsEpsilon {
       return
     }
-    stopDisplayTimer()
-    if resetClock {
-      startTimeSeconds = CACurrentMediaTime()
-    }
+    stopDisplayDriver()
     let timer = Timer(timeInterval: 1.0 / targetFps, repeats: true) { [weak self] _ in
       guard let self else {
         return
@@ -988,10 +1111,22 @@ private final class ErikaPlayerHost {
     RunLoop.main.add(timer, forMode: .common)
   }
 
-  private func stopDisplayTimer() {
+  private func stopDisplayDriver() {
+    displayLinkDriver?.invalidate()
+    displayLinkDriver = nil
+    displayLinkDisplayID = nil
     displayTimer?.invalidate()
     displayTimer = nil
     displayTimerFps = 0.0
+  }
+
+  private func resolvedDisplayID() -> CGDirectDisplayID {
+    let screen = (attachedView as? NSView)?.window?.screen ?? NSScreen.main
+    let screenNumberKey = NSDeviceDescriptionKey("NSScreenNumber")
+    if let number = screen?.deviceDescription[screenNumberKey] as? NSNumber {
+      return CGDirectDisplayID(number.uint32Value)
+    }
+    return CGMainDisplayID()
   }
 
   private func resolvedDisplayTimerFps() -> Double {
