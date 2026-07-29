@@ -375,10 +375,28 @@ impl DanmakuDisplayClock {
         };
 
         if !playing {
-            self.media_time = authoritative_time;
+            // Player::pause publishes the paused state before the playback
+            // worker has necessarily published its final clock sample. During
+            // that edge, authoritative_time can therefore be a few
+            // milliseconds older than the already displayed danmaku time.
+            // Seeks advance the generation, so only allow a paused sample to
+            // move backward when it belongs to a new timeline generation.
+            self.media_time =
+                if self.last_host_time_seconds.is_some() && self.generation == generation {
+                    self.media_time.max(authoritative_time)
+                } else {
+                    authoritative_time
+                };
             self.last_step = DanmakuClockStep::Paused;
         } else if let Some(reset_step) = reset_step {
-            self.media_time = authoritative_time;
+            // Resuming the same generation must keep the position frozen at
+            // the pause edge even if the shared player clock is still
+            // catching up to the worker's final paused sample.
+            self.media_time = if reset_step == DanmakuClockStep::PlayStateReset {
+                self.media_time.max(authoritative_time)
+            } else {
+                authoritative_time
+            };
             self.last_step = reset_step;
         } else if let Some(last_host_time) = self.last_host_time_seconds {
             let elapsed_seconds = (host_time_seconds - last_host_time).max(0.0);
@@ -3825,6 +3843,29 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             );
             previous = sampled;
         }
+    }
+
+    #[test]
+    fn danmaku_display_clock_does_not_step_back_at_pause_edge() {
+        let mut clock = DanmakuDisplayClock::default();
+        clock.sample(1.0, Duration::from_secs(2), 7, true, 1.0);
+        let before_pause = clock.sample(1.1, Duration::from_millis(2050), 7, true, 1.0);
+        assert_eq!(before_pause, Duration::from_millis(2100));
+
+        let paused = clock.sample(1.11, Duration::from_millis(2055), 7, false, 1.0);
+        assert_eq!(paused, before_pause);
+        assert_eq!(clock.last_step, DanmakuClockStep::Paused);
+
+        let still_paused = clock.sample(1.2, Duration::from_millis(2060), 7, false, 1.0);
+        assert_eq!(still_paused, before_pause);
+
+        let resumed = clock.sample(2.0, Duration::from_millis(2070), 7, true, 1.0);
+        assert_eq!(resumed, before_pause);
+        assert_eq!(clock.last_step, DanmakuClockStep::PlayStateReset);
+
+        let seeked = clock.sample(2.1, Duration::from_secs(1), 8, false, 1.0);
+        assert_eq!(seeked, Duration::from_secs(1));
+        assert_eq!(clock.last_step, DanmakuClockStep::Paused);
     }
 
     #[test]
