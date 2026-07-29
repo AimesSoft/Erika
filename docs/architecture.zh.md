@@ -11,16 +11,16 @@ Rust Player Core
   source abstraction ─── file + HTTP range
   FFmpeg wrappers ────── custom AVIO, probe, demux, decode, seek, audio resample
   playback engine ────── video/audio tick, clock, frame scheduler
-  video decode ───────── VideoToolbox (macOS/iOS), D3D11VA (Windows), software fallback
-  audio output ───────── CoreAudio (macOS), AudioQueue (iOS), WASAPI (Windows), ring buffer
+  video decode ───────── VideoToolbox, D3D11VA, MediaCodec, AVCodec, software fallback
+  audio output ───────── CoreAudio, AudioQueue, WASAPI, AAudio, OHAudio, ring buffer
   overlay timeline ───── subtitle + danmaku composition
   renderer core ──────── color state, render graph, tone map, scaler policy
   Metal renderer ─────── zero-copy NV12/P010, HDR/EDR, subtitle/danmaku pass
   D3D11 renderer ─────── zero-copy D3D11VA, HDR10, subtitle/danmaku pass (Windows)
-  wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB
+  wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB, OHOS Vulkan
   presenter runtime ──── ties player + renderer + audio + overlays
-  C ABI ──────────────── 75 exported functions, two handle families
-  Flutter plugin ─────── macOS + iOS + Windows + Android native view embedding
+  C ABI ──────────────── 79 exported functions, two handle families
+  Flutter plugin ─────── macOS + iOS + Windows + Android + OpenHarmony embedding
 ```
 
 ## 原生依赖
@@ -48,7 +48,7 @@ cargo run -p xtask -- deps status
 `erika_ffmpeg_sys` 在构建时通过 bindgen 生成底层绑定。`erika::ffmpeg` 提供安全的 Rust 封装：
 
 - **Demuxer**：持有 `AVFormatContext`，可选使用来自 `MediaSource` 的 Rust 后端自定义 `AVIOContext`。支持流选择、引用计数 packet 和基于时间戳的 seek。
-- **Decoder**：软件和 VideoToolbox 硬件后端。硬件帧保留 BT.2020/PQ 元数据，并携带 `CVPixelBufferRef` 供 Metal 零拷贝导入。
+- **Decoder**：软件，以及 VideoToolbox、D3D11VA、MediaCodec、OpenHarmony AVCodec 硬件后端。硬件帧保留 BT.2020/PQ 元数据，并携带平台原生句柄（Apple 上是 `CVPixelBufferRef`）供渲染器零拷贝导入。
 - **AudioResampler**：封装 `libswresample`，输出 interleaved f32 PCM（默认 48 kHz stereo）。
 - **SubtitleDecoder**：解码内嵌文本和位图字幕流。
 
@@ -124,7 +124,8 @@ Windows 平台的原生渲染器（`renderer/d3d11.rs`）：
 - 色彩空间转换、tone mapping（与 Metal 保持同一流水线模型）。
 - 分块执行 ArtCNN C4F16/C4F32（`renderer/wgpu_artcnn.rs`），用有界 feature texture 和源分辨率 packed DepthToSpace 输出控制显存。既支持原生 luma plane，也支持 Android 已转换的 nonlinear RGB texture，并通过 `rgb + (Y_sr - Y)` 保持色度。GLES 3.0 不尝试 compute，而是明确报告 `Inactive` 和 `native_luma_sampling` 回退。
 - 字幕/弹幕合成、截图，以及可用于无头验证的离屏 render target。即使显示 surface 是 extended-linear，截图也始终离屏渲染到 SDR RGBA8 target，避免把未映射的 scRGB 值当成 SDR 像素输出。
-- 表面句柄模型覆盖 macOS NSView、iOS UIView、Windows HWND、X11/Wayland、Android native window。
+- 表面句柄模型覆盖 macOS NSView、iOS UIView、Windows HWND、X11/Wayland、Android native window、OpenHarmony `OHNativeWindow`。
+- OpenHarmony 把 AVCodec 的 Surface 输出作为 `OHNativeBuffer` 支撑的 Vulkan 外部图像导入，并用 Vulkan YCbCr sampler 在 GPU 上完成 YUV 转换，解码帧无需 CPU 拷贝即可进入 wgpu 合成器。缺少所需 Vulkan 扩展的设备回退到软解 + CPU 上传，回退过程通过诊断事件上报。
 - Android 提供有界 Vulkan/GLES backend recovery，以及 import、能力、质量降级和 device failure 的结构化日志。其高 headroom 输出是 FP16 **extended-linear scRGB**，不是 HDR10/PQ：renderer 使用 `Rgba16Float`、Vulkan extended-sRGB-linear color space，并在每次 configure/reconfigure 后验证 `ANativeWindow` 的 `ADATASPACE_SCRGB_LINEAR`（`0x18410000`）。Android scRGB 使用 BT.709 primaries，`1.0 = 80 nit`，不会输出 PQ 或 HDR10 static metadata。
 - Extended-linear 只有在显式请求 `ExtendedLinear`、显示器/surface 支持 HDR、使用 Flutter Hybrid Composition 承载 `SurfaceView`、wgpu 后端为 Vulkan、surface 支持 `Rgba16Float`，且 `SCRGB_LINEAR` dataspace 回读成功时才会激活。任一条件缺失都会立即选择正常 SDR surface，并记录稳定的 `0..8` fallback reason；因此 GLES 与 `TextureView` 都是 SDR 路径。
 - API 34+ 上，Android 宿主通过 `Display.registerHdrSdrRatioChangedListener` 观察显示器，并把真实变化经 `erika_presenter_set_output_headroom` 发布给 Erika。wgpu 无需重新 attach surface，就会让后续帧使用更新后的有效内容 headroom，并同步可查询状态。ratio 可用时 `activeHeadroomKnown` 为 true；只有 known 标志或 ratio 确实变化时，`headroomUpdates` 才增长。
@@ -151,7 +152,7 @@ Windows 平台的原生渲染器（`renderer/d3d11.rs`）：
 
 ## C ABI
 
-`erika_capi` 通过两组 handle family 导出 75 个函数：
+`erika_capi` 通过两组 handle family 导出 79 个函数：
 
 - **`ErikaHandle`**：播放器控制与事件轮询，渲染由宿主管理。
 - **`ErikaPresenterHandle`**：Erika 持有完整栈，宿主只需提供 surface 并调用 `render_tick`。
@@ -162,13 +163,14 @@ Header：`crates/erika_capi/include/erika.h`
 
 ## Flutter Plugin
 
-`packages/erika_flutter` 提供 macOS、iOS、Windows 和 Android 的 Flutter embedding：
+`packages/erika_flutter` 提供 macOS、iOS、Windows、Android 和 HarmonyOS 的 Flutter embedding：
 
 - **Dart**：`ErikaPlayer`（命令 + 事件）、`ErikaWindowOverlayVideoView`（推荐的 window-hosted native surface——Apple 上是 Metal，Windows 上是 D3D11 swapchain）、`ErikaVideoView`（兼容 platform view）。
 - **macOS Swift plugin**：加载 `liberika_capi.dylib`，创建 `NSWindow` overlay 或 `NSView`/`CAMetalLayer` platform view，并通过 display link 驱动 `render_tick`。
 - **iOS Swift plugin**：静态链接 `liberika_capi.a`，创建 `UIWindow` overlay 或 `UIView`/`CAMetalLayer` platform view，并沿用同一 presenter 模型。
 - **Windows C++ plugin**（`ErikaFlutterPluginCApi`）：通过 CMake（`build_erika_runtime.cmake`，cargo target `x86_64-pc-windows-msvc`）构建并链接 `erika_capi.dll`，host 一个 window-level D3D11 swapchain，并由帧调度器驱动 `render_tick`。
 - **Android Kotlin/JNI plugin**：为 Android ABI 构建 Rust runtime，每个 player 持有独立原生 surface。SDR 使用 `TextureView`；请求 extended-linear 时，通过 Flutter Hybrid Composition 使用 `SurfaceView`。插件协调 Activity surface lifecycle、音频焦点、noisy-route、HDR eligibility/headroom，并只在存在活跃 player 时驱动共享帧调度器。
+- **HarmonyOS ArkTS/N-API plugin**：通过 Hvigor/CMake 为 `aarch64-unknown-linux-ohos` 构建 `liberika_capi.so`，注册 Flutter 外部纹理，并把该纹理的 `OHNativeWindow` attach 给 presenter。音频经 OHAudio 以交错 f32 PCM 输出。
 
 Embedding 模型和 HDR 策略见 `docs/flutter_embedding.md`。
 
@@ -181,3 +183,4 @@ Embedding 模型和 HDR 策略见 `docs/flutter_embedding.md`。
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
 | Android 8+ | MediaCodec / software | wgpu Vulkan + GLES fallback | AAudio | Available；SDR 已验证，extended-linear scRGB 等待 API 35 HDR 真机验收 |
+| HarmonyOS API 18+ | AVCodec（H.264/HEVC）/ software | wgpu Vulkan，`OHNativeBuffer` 零拷贝导入 | OHAudio | Available；已在真机验证，尚未纳入 CI |

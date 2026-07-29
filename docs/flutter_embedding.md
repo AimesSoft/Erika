@@ -75,6 +75,24 @@ API 35 HDR device. Unsupported displays, GLES, `TextureView`, missing FP16, or
 dataspace verification failures continue in SDR with a queryable fallback
 reason and explicit logs.
 
+## HarmonyOS Surface Strategies
+
+On HarmonyOS, use `ErikaVideoView`. The ArkTS plugin registers a Flutter
+external texture, takes that texture's surface as an `OHNativeWindow`, and
+attaches it to the presenter; wgpu then renders through Vulkan, using
+`VK_OHOS_surface` for window-system integration.
+
+Video decoding defaults to HarmonyOS AVCodec (H.264 and HEVC). AVCodec decodes
+straight into a Surface, whose `OHNativeBuffer` is imported as a Vulkan
+external image and resolved by a Vulkan YCbCr sampler, so decoded frames reach
+the compositor with no CPU copy. Subtitles, danmaku, and overlays composite in
+the same wgpu pass as every other platform.
+
+Devices missing the required Vulkan extensions fall back to FFmpeg software
+decode with CPU upload. The fallback is reported through `VideoDecoderChanged`
+events and presenter diagnostics instead of failing playback. The HarmonyOS
+path is validated on device but is not yet covered by CI.
+
 ## iOS Build Path
 
 The iOS plugin links the Erika C ABI static library into the app through a

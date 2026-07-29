@@ -10,20 +10,30 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "android")]
 mod android_jni;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+mod presenter_json;
 
 use crossbeam_channel::Receiver;
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 use erika::LumaUpscalerBackendStatus;
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 use erika::audio::AudioRecoveryState;
 use erika::danmaku::{
@@ -33,14 +43,16 @@ use erika::danmaku::{
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 use erika::presenter::{PresenterConfig, PresenterRuntime, PresenterRuntimeSnapshot};
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 use erika::renderer::metal::{MetalOutputMode, MetalRendererConfig};
 use erika::renderer::output::{
@@ -51,7 +63,8 @@ use erika::renderer::output::{
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 use erika::renderer::pipeline::LumaUpscalerMode;
 #[cfg(any(
@@ -291,6 +304,7 @@ pub enum ErikaWgpuSurfaceKind {
     XlibWindow = 5,
     WaylandSurface = 6,
     AndroidNativeWindow = 7,
+    OhosNativeWindow = 8,
 }
 
 #[repr(C)]
@@ -639,7 +653,8 @@ pub struct ErikaHandle {
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 pub struct ErikaPresenterHandle {
     presenter: PresenterRuntime,
@@ -1061,7 +1076,8 @@ pub unsafe extern "C" fn erika_poll_event(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub extern "C" fn erika_presenter_create() -> *mut ErikaPresenterHandle {
@@ -1077,7 +1093,8 @@ pub extern "C" fn erika_presenter_create() -> *mut ErikaPresenterHandle {
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub extern "C" fn erika_presenter_create() -> *mut std::ffi::c_void {
@@ -1088,7 +1105,8 @@ pub extern "C" fn erika_presenter_create() -> *mut std::ffi::c_void {
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub extern "C" fn erika_presenter_create_with_config(
@@ -1101,7 +1119,8 @@ pub extern "C" fn erika_presenter_create_with_config(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub extern "C" fn erika_presenter_create_with_output_mode(
@@ -1119,7 +1138,8 @@ pub extern "C" fn erika_presenter_create_with_output_mode(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub extern "C" fn erika_presenter_create_with_config(
@@ -1132,7 +1152,8 @@ pub extern "C" fn erika_presenter_create_with_config(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub extern "C" fn erika_presenter_create_with_output_mode(
@@ -1146,7 +1167,8 @@ pub extern "C" fn erika_presenter_create_with_output_mode(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_open_with_headers(
@@ -1162,7 +1184,8 @@ pub unsafe extern "C" fn erika_presenter_open_with_headers(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 fn create_presenter_handle(config: PresenterConfig) -> *mut ErikaPresenterHandle {
     let created = catch_unwind(AssertUnwindSafe(|| {
@@ -1244,7 +1267,8 @@ fn report_capi_panic(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 fn presenter_config_from_c(config: ErikaPresenterConfig) -> PresenterConfig {
     let output_mode = match ErikaPresenterOutputMode::from_raw(config.output_mode) {
@@ -1281,7 +1305,8 @@ fn presenter_config_from_c(config: ErikaPresenterConfig) -> PresenterConfig {
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 fn subtitle_style_from_c(style: ErikaSubtitleStyle) -> Result<SubtitleStyleConfig, ErikaStatus> {
     Ok(SubtitleStyleConfig {
@@ -1328,7 +1353,8 @@ fn luma_upscaler_mode_from_c(mode: i32) -> LumaUpscalerMode {
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 fn luma_upscaler_mode_to_c(mode: LumaUpscalerMode) -> i32 {
     match mode {
@@ -1342,7 +1368,8 @@ fn luma_upscaler_mode_to_c(mode: LumaUpscalerMode) -> i32 {
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 fn upscaler_backend_status_to_c(status: LumaUpscalerBackendStatus) -> i32 {
     match status {
@@ -1360,7 +1387,8 @@ fn upscaler_backend_status_to_c(status: LumaUpscalerBackendStatus) -> i32 {
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 fn upscaler_status_to_c(stats: RendererRuntimeStats) -> ErikaUpscalerStatus {
     ErikaUpscalerStatus {
@@ -1481,7 +1509,8 @@ fn danmaku_block_words_from_json(json: &str) -> Result<Vec<String>, ErikaStatus>
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_env = "ohos"
     ),
     test
 ))]
@@ -1493,7 +1522,8 @@ fn metal_output_mode_from_c(config: ErikaPresenterConfig) -> MetalOutputMode {
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_destroy(handle: *mut ErikaPresenterHandle) {
@@ -1506,7 +1536,8 @@ pub unsafe extern "C" fn erika_presenter_destroy(handle: *mut ErikaPresenterHand
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_destroy(_handle: *mut std::ffi::c_void) {}
@@ -1515,7 +1546,8 @@ pub unsafe extern "C" fn erika_presenter_destroy(_handle: *mut std::ffi::c_void)
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_open(
@@ -1529,7 +1561,8 @@ pub unsafe extern "C" fn erika_presenter_open(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_open_with_headers(
@@ -1567,7 +1600,8 @@ pub unsafe extern "C" fn erika_presenter_open_with_headers(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_play(handle: *mut ErikaPresenterHandle) -> ErikaStatus {
@@ -1585,7 +1619,8 @@ pub unsafe extern "C" fn erika_presenter_play(handle: *mut ErikaPresenterHandle)
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_pause(handle: *mut ErikaPresenterHandle) -> ErikaStatus {
@@ -1603,7 +1638,8 @@ pub unsafe extern "C" fn erika_presenter_pause(handle: *mut ErikaPresenterHandle
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_stop(handle: *mut ErikaPresenterHandle) -> ErikaStatus {
@@ -1616,7 +1652,8 @@ pub unsafe extern "C" fn erika_presenter_stop(handle: *mut ErikaPresenterHandle)
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_close(handle: *mut ErikaPresenterHandle) -> ErikaStatus {
@@ -1629,7 +1666,8 @@ pub unsafe extern "C" fn erika_presenter_close(handle: *mut ErikaPresenterHandle
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_seek(
@@ -1656,7 +1694,8 @@ pub unsafe extern "C" fn erika_presenter_seek(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_playback_rate(
@@ -1672,7 +1711,8 @@ pub unsafe extern "C" fn erika_presenter_set_playback_rate(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_volume(
@@ -1689,7 +1729,8 @@ pub unsafe extern "C" fn erika_presenter_set_volume(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_upscaler(
@@ -1708,7 +1749,8 @@ pub unsafe extern "C" fn erika_presenter_set_upscaler(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
@@ -1768,7 +1810,8 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_style(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_output_headroom(
@@ -1791,7 +1834,8 @@ pub unsafe extern "C" fn erika_presenter_set_output_headroom(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_upscaler_status(
@@ -1812,7 +1856,8 @@ pub unsafe extern "C" fn erika_presenter_get_upscaler_status(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_output_status(
@@ -1833,7 +1878,8 @@ pub unsafe extern "C" fn erika_presenter_get_output_status(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_add_external_subtitle(
@@ -1863,7 +1909,8 @@ pub unsafe extern "C" fn erika_presenter_add_external_subtitle(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_add_external_subtitle(
@@ -1878,7 +1925,8 @@ pub unsafe extern "C" fn erika_presenter_add_external_subtitle(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_output_headroom(
@@ -1893,7 +1941,8 @@ pub unsafe extern "C" fn erika_presenter_set_output_headroom(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_remove_subtitle_track(
@@ -1909,7 +1958,8 @@ pub unsafe extern "C" fn erika_presenter_remove_subtitle_track(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_select_audio_track(
@@ -1929,7 +1979,8 @@ pub unsafe extern "C" fn erika_presenter_select_audio_track(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_select_subtitle_track(
@@ -1949,7 +2000,8 @@ pub unsafe extern "C" fn erika_presenter_select_subtitle_track(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_load_danmaku_file(
@@ -1978,7 +2030,8 @@ pub unsafe extern "C" fn erika_presenter_load_danmaku_file(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_load_danmaku_json(
@@ -2007,7 +2060,8 @@ pub unsafe extern "C" fn erika_presenter_load_danmaku_json(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_add_danmaku_track_file(
@@ -2049,7 +2103,8 @@ pub unsafe extern "C" fn erika_presenter_add_danmaku_track_file(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_add_danmaku_track_json(
@@ -2088,7 +2143,8 @@ pub unsafe extern "C" fn erika_presenter_add_danmaku_track_json(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_remove_danmaku_track(
@@ -2108,7 +2164,8 @@ pub unsafe extern "C" fn erika_presenter_remove_danmaku_track(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_track_enabled(
@@ -2132,7 +2189,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_track_enabled(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_track_offset(
@@ -2156,7 +2214,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_track_offset(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_global_offset(
@@ -2173,7 +2232,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_global_offset(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_danmaku_tracks(
@@ -2199,7 +2259,8 @@ pub unsafe extern "C" fn erika_presenter_danmaku_tracks(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_clear_danmaku(
@@ -2215,7 +2276,8 @@ pub unsafe extern "C" fn erika_presenter_clear_danmaku(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_enabled(
@@ -2232,7 +2294,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_enabled(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_config(
@@ -2256,7 +2319,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_config(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_config_ptr(
@@ -2273,7 +2337,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_config_ptr(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_danmaku_config(
@@ -2300,7 +2365,8 @@ pub unsafe extern "C" fn erika_presenter_get_danmaku_config(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_font(
@@ -2320,7 +2386,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_font(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_block_words_json(
@@ -2351,7 +2418,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_block_words_json(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_track_selection(
@@ -2371,7 +2439,8 @@ pub unsafe extern "C" fn erika_presenter_track_selection(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_tracks(
@@ -2392,7 +2461,8 @@ pub unsafe extern "C" fn erika_presenter_tracks(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_remove_subtitle_track(
@@ -2406,7 +2476,8 @@ pub unsafe extern "C" fn erika_presenter_remove_subtitle_track(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_select_audio_track(
@@ -2420,7 +2491,8 @@ pub unsafe extern "C" fn erika_presenter_select_audio_track(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_select_subtitle_track(
@@ -2434,7 +2506,8 @@ pub unsafe extern "C" fn erika_presenter_select_subtitle_track(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_track_selection(
@@ -2448,7 +2521,8 @@ pub unsafe extern "C" fn erika_presenter_track_selection(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_tracks(
@@ -2464,7 +2538,8 @@ pub unsafe extern "C" fn erika_presenter_tracks(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_playback_rate(
@@ -2478,7 +2553,8 @@ pub unsafe extern "C" fn erika_presenter_set_playback_rate(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_volume(
@@ -2492,7 +2568,8 @@ pub unsafe extern "C" fn erika_presenter_set_volume(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_upscaler(
@@ -2506,7 +2583,8 @@ pub unsafe extern "C" fn erika_presenter_set_upscaler(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
@@ -2520,7 +2598,8 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_subtitle_font(
@@ -2566,7 +2645,8 @@ pub unsafe extern "C" fn erika_presenter_get_upscaler_status(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_output_status(
@@ -2583,7 +2663,8 @@ pub unsafe extern "C" fn erika_presenter_get_output_status(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_load_danmaku_file(
@@ -2597,7 +2678,8 @@ pub unsafe extern "C" fn erika_presenter_load_danmaku_file(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_load_danmaku_json(
@@ -2611,7 +2693,8 @@ pub unsafe extern "C" fn erika_presenter_load_danmaku_json(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_add_danmaku_track_file(
@@ -2631,7 +2714,8 @@ pub unsafe extern "C" fn erika_presenter_add_danmaku_track_file(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_add_danmaku_track_json(
@@ -2651,7 +2735,8 @@ pub unsafe extern "C" fn erika_presenter_add_danmaku_track_json(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_remove_danmaku_track(
@@ -2665,7 +2750,8 @@ pub unsafe extern "C" fn erika_presenter_remove_danmaku_track(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_track_enabled(
@@ -2680,7 +2766,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_track_enabled(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_track_offset(
@@ -2695,7 +2782,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_track_offset(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_global_offset(
@@ -2709,7 +2797,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_global_offset(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_danmaku_tracks(
@@ -2728,7 +2817,8 @@ pub unsafe extern "C" fn erika_presenter_danmaku_tracks(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_clear_danmaku(
@@ -2741,7 +2831,8 @@ pub unsafe extern "C" fn erika_presenter_clear_danmaku(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_enabled(
@@ -2755,7 +2846,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_enabled(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_config(
@@ -2769,7 +2861,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_config(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_config_ptr(
@@ -2786,7 +2879,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_config_ptr(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_danmaku_config(
@@ -2803,7 +2897,8 @@ pub unsafe extern "C" fn erika_presenter_get_danmaku_config(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_font(
@@ -2818,7 +2913,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_font(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_block_words_json(
@@ -2835,7 +2931,8 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_block_words_json(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_attach_metal_layer(
@@ -2859,7 +2956,8 @@ pub unsafe extern "C" fn erika_presenter_attach_metal_layer(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_attach_wgpu_surface(
@@ -2889,7 +2987,8 @@ pub unsafe extern "C" fn erika_presenter_attach_wgpu_surface(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_attach_wgpu_surface_with_output_capabilities(
@@ -2919,7 +3018,8 @@ pub unsafe extern "C" fn erika_presenter_attach_wgpu_surface_with_output_capabil
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_attach_windows_hwnd(
@@ -2947,7 +3047,8 @@ pub unsafe extern "C" fn erika_presenter_attach_windows_hwnd(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_resize_surface(
@@ -2965,7 +3066,8 @@ pub unsafe extern "C" fn erika_presenter_resize_surface(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_detach_surface(
@@ -2980,7 +3082,8 @@ pub unsafe extern "C" fn erika_presenter_detach_surface(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_render_tick(
@@ -3007,7 +3110,31 @@ pub unsafe extern "C" fn erika_presenter_render_tick(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
+))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_get_stats(
+    handle: *mut ErikaPresenterHandle,
+    out_stats: *mut ErikaPresenterStats,
+) -> ErikaStatus {
+    if out_stats.is_null() {
+        set_last_error("presenter stats output pointer is null");
+        return ErikaStatus::NullPointer;
+    }
+    with_presenter_mut(handle, |handle| {
+        let snapshot = handle.presenter.runtime_snapshot();
+        unsafe { *out_stats = presenter_stats_to_c(snapshot) };
+        ErikaStatus::Ok
+    })
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_capture_frame_rgba(
@@ -3046,7 +3173,8 @@ pub unsafe extern "C" fn erika_presenter_capture_frame_rgba(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 fn capture_presenter_frame_rgba(
     handle: &mut ErikaPresenterHandle,
@@ -3074,7 +3202,8 @@ fn capture_presenter_frame_rgba(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_poll_event(
@@ -3158,7 +3287,8 @@ fn with_handle_mut(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[track_caller]
 fn with_presenter_mut(
@@ -3568,6 +3698,7 @@ fn wgpu_surface_kind_from_c(kind: ErikaWgpuSurfaceKind) -> WgpuSurfaceKind {
         ErikaWgpuSurfaceKind::XlibWindow => WgpuSurfaceKind::XlibWindow,
         ErikaWgpuSurfaceKind::WaylandSurface => WgpuSurfaceKind::WaylandSurface,
         ErikaWgpuSurfaceKind::AndroidNativeWindow => WgpuSurfaceKind::AndroidNativeWindow,
+        ErikaWgpuSurfaceKind::OhosNativeWindow => WgpuSurfaceKind::OhosNativeWindow,
     }
 }
 
@@ -3610,7 +3741,8 @@ fn duration_micros_u64(duration: Duration) -> u64 {
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 fn presenter_stats_to_c(snapshot: PresenterRuntimeSnapshot) -> ErikaPresenterStats {
     let stats = snapshot.stats;
@@ -3660,7 +3792,8 @@ fn presenter_stats_to_c(snapshot: PresenterRuntimeSnapshot) -> ErikaPresenterSta
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 fn audio_recovery_state_to_c(state: AudioRecoveryState) -> i32 {
     match state {
@@ -4069,7 +4202,8 @@ mod tests {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_env = "ohos"
     ))]
     #[test]
     fn c_presenter_lifecycle_rejects_null_and_can_be_destroyed() {
@@ -4086,7 +4220,8 @@ mod tests {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_env = "ohos"
     ))]
     #[test]
     fn presenter_capture_distinguishes_absent_frame_from_capture_failure() {
@@ -4106,7 +4241,8 @@ mod tests {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_env = "ohos"
     ))]
     #[test]
     fn c_presenter_set_volume_accepts_valid_handle() {
@@ -4132,7 +4268,8 @@ mod tests {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_env = "ohos"
     ))]
     #[test]
     fn c_presenter_set_upscaler_accepts_valid_handle() {
@@ -4169,7 +4306,8 @@ mod tests {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_env = "ohos"
     ))]
     #[test]
     fn c_presenter_reports_upscaler_status() {
@@ -4222,7 +4360,8 @@ mod tests {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_env = "ohos"
     ))]
     #[test]
     fn c_presenter_can_be_created_with_edr_config() {
@@ -4239,7 +4378,8 @@ mod tests {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_env = "ohos"
     ))]
     #[test]
     fn c_presenter_danmaku_api_loads_configures_and_clears() {
@@ -4274,7 +4414,8 @@ mod tests {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_env = "ohos"
     ))]
     #[test]
     fn c_presenter_config_maps_output_modes() {
@@ -4394,7 +4535,8 @@ mod tests {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_env = "ohos"
     ))]
     #[test]
     fn c_presenter_config_maps_upscaler_modes() {

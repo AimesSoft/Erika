@@ -11,8 +11,9 @@
  *   - ErikaHandle:          pull model. The host renders and pulls state.
  *   - ErikaPresenterHandle: push model. Erika owns decode/timing/audio/render;
  *                           the host gives it a surface and calls render_tick.
- *                           Compiled on macOS / iOS / Windows / Android; on other
- *                           targets erika_presenter_create returns NULL.
+ *                           Compiled on macOS / iOS / Windows / Android /
+ *                           OpenHarmony; on other targets
+ *                           erika_presenter_create returns NULL.
  *
  * Conventions:
  *   - Every fallible call returns ErikaStatus; Ok (0) and NoEvent are the only
@@ -107,6 +108,7 @@ typedef enum ErikaWgpuSurfaceKind {
   ErikaWgpuSurfaceKind_XlibWindow = 5,
   ErikaWgpuSurfaceKind_WaylandSurface = 6,
   ErikaWgpuSurfaceKind_AndroidNativeWindow = 7,
+  ErikaWgpuSurfaceKind_OhosNativeWindow = 8,
 } ErikaWgpuSurfaceKind;
 
 typedef enum ErikaFlutterTextureKind {
@@ -444,7 +446,7 @@ ErikaStatus erika_attach_flutter_texture(
 
 ErikaStatus erika_detach_surface(ErikaHandle *handle);
 
-/* ===== ErikaPresenterHandle (push model) — macOS / iOS / Windows / Android ===== */
+/* ===== ErikaPresenterHandle (push model) — macOS / iOS / Windows / Android / OpenHarmony ===== */
 
 /* Lifecycle and configuration. A NULL return means creation failed; check
  * erika_last_error_message. Config selects output mode, EDR headroom, upscaler. */
@@ -633,7 +635,22 @@ ErikaStatus erika_presenter_render_tick(
     ErikaPresenterHandle *handle,
     double time_seconds,
     ErikaPresenterStats *out_stats);
+ErikaStatus erika_presenter_get_stats(
+    ErikaPresenterHandle *handle,
+    ErikaPresenterStats *out_stats);
 ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *handle, ErikaEvent *out_event);
+
+/* JSON bridge used by embedders whose platform channel already serializes
+ * structured arguments. Returned strings are owned by Erika and must be
+ * released with erika_string_free. poll_event_json returns NULL when idle. */
+char *erika_presenter_invoke_json(
+    ErikaPresenterHandle *handle,
+    const char *method,
+    const char *arguments_json);
+char *erika_presenter_render_tick_json(
+    ErikaPresenterHandle *handle,
+    double time_seconds);
+char *erika_presenter_poll_event_json(ErikaPresenterHandle *handle);
 
 /* Screenshot: render the current composited frame (video + subtitle + danmaku)
  * off-screen into a caller-allocated RGBA8 buffer at the requested size.

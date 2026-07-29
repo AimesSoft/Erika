@@ -17,6 +17,9 @@ bool get _supportsWindowOverlayVideoView =>
 bool get _usesAndroidTextureView =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
+bool get _usesOhosTextureView =>
+    !kIsWeb && defaultTargetPlatform.name == 'ohos';
+
 /// Flutter platform-view video surface backed by AppKit/UIKit.
 ///
 /// This is the compatibility surface. Full-player Apple hosts should usually
@@ -80,6 +83,12 @@ class _ErikaVideoViewState extends State<ErikaVideoView> {
     final creationParams = <String, Object?>{
       if (widget.debugLabel case final label?) 'debugLabel': label,
     };
+    if (_usesOhosTextureView) {
+      return _ErikaOhosVideoView(
+        player: widget.player,
+        onPlatformViewIdChanged: widget.onPlatformViewIdChanged,
+      );
+    }
     switch (defaultTargetPlatform) {
       case TargetPlatform.macOS:
         return AppKitView(
@@ -114,7 +123,212 @@ class _ErikaVideoViewState extends State<ErikaVideoView> {
       case TargetPlatform.fuchsia:
       case TargetPlatform.linux:
         return const SizedBox.shrink();
+      // The HarmonyOS Flutter fork adds TargetPlatform.ohos. Stock Flutter
+      // considers the cases above exhaustive, while the fork needs this
+      // fallback after the name-based OHOS branch at the top of this method.
+      // ignore: unreachable_switch_default
+      default:
+        return const SizedBox.shrink();
     }
+  }
+}
+
+class _OhosSurfaceMetrics {
+  const _OhosSurfaceMetrics(this.width, this.height, this.scale);
+
+  final int width;
+  final int height;
+  final double scale;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _OhosSurfaceMetrics &&
+      width == other.width &&
+      height == other.height &&
+      scale == other.scale;
+
+  @override
+  int get hashCode => Object.hash(width, height, scale);
+}
+
+class _ErikaOhosVideoView extends StatefulWidget {
+  const _ErikaOhosVideoView({
+    required this.player,
+    this.onPlatformViewIdChanged,
+  });
+
+  final ErikaPlayer player;
+  final ValueChanged<int?>? onPlatformViewIdChanged;
+
+  @override
+  State<_ErikaOhosVideoView> createState() => _ErikaOhosVideoViewState();
+}
+
+class _ErikaOhosVideoViewState extends State<_ErikaOhosVideoView> {
+  int? _textureId;
+  int _generation = 0;
+  bool _updateInFlight = false;
+  _OhosSurfaceMetrics? _activeMetrics;
+  _OhosSurfaceMetrics? _pendingMetrics;
+
+  @override
+  void didUpdateWidget(covariant _ErikaOhosVideoView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.player == widget.player) {
+      return;
+    }
+    final textureId = _textureId;
+    if (textureId != null) {
+      final generation = ++_generation;
+      unawaited(
+        _switchPlayer(oldWidget.player, widget.player, textureId, generation),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    final generation = ++_generation;
+    final textureId = _textureId;
+    _textureId = null;
+    widget.onPlatformViewIdChanged?.call(null);
+    if (textureId != null) {
+      unawaited(_disposeTexture(widget.player, textureId, generation));
+    }
+    super.dispose();
+  }
+
+  Future<void> _switchPlayer(
+    ErikaPlayer oldPlayer,
+    ErikaPlayer newPlayer,
+    int textureId,
+    int generation,
+  ) async {
+    try {
+      await oldPlayer.detachView(textureId);
+      if (!mounted ||
+          generation != _generation ||
+          !identical(widget.player, newPlayer) ||
+          _textureId != textureId) {
+        return;
+      }
+      await newPlayer.attachView(textureId);
+    } catch (error) {
+      debugPrint('ErikaOhosVideoView: player switch failed: $error');
+    }
+  }
+
+  Future<void> _disposeTexture(
+    ErikaPlayer player,
+    int textureId,
+    int generation,
+  ) async {
+    try {
+      await player.detachView(textureId);
+    } catch (_) {
+      // releaseTexture is authoritative and detaches any remaining binding.
+    }
+    try {
+      await player.releaseTextureSurface(textureId);
+    } catch (error) {
+      debugPrint(
+        'ErikaOhosVideoView: texture release failed '
+        '(generation $generation): $error',
+      );
+    }
+  }
+
+  void _queueMetrics(_OhosSurfaceMetrics metrics) {
+    if (metrics == _activeMetrics && _pendingMetrics == null) {
+      return;
+    }
+    _pendingMetrics = metrics;
+    if (_updateInFlight) {
+      return;
+    }
+    _updateInFlight = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_flushMetrics());
+    });
+  }
+
+  Future<void> _flushMetrics() async {
+    try {
+      while (mounted) {
+        final metrics = _pendingMetrics;
+        _pendingMetrics = null;
+        if (metrics == null) {
+          return;
+        }
+        final textureId = _textureId;
+        if (textureId == null) {
+          final generation = _generation;
+          try {
+            final created = await widget.player.createTextureSurface(
+              width: metrics.width,
+              height: metrics.height,
+              scale: metrics.scale,
+            );
+            if (!mounted || generation != _generation) {
+              await widget.player.releaseTextureSurface(created);
+              return;
+            }
+            _textureId = created;
+            _activeMetrics = metrics;
+            widget.onPlatformViewIdChanged?.call(created);
+            await widget.player.attachView(created);
+            if (mounted) {
+              setState(() {});
+            }
+          } catch (error) {
+            debugPrint('ErikaOhosVideoView: texture creation failed: $error');
+          }
+        } else if (metrics != _activeMetrics) {
+          try {
+            await widget.player.resizeTextureSurface(
+              textureId,
+              width: metrics.width,
+              height: metrics.height,
+              scale: metrics.scale,
+            );
+            _activeMetrics = metrics;
+          } catch (error) {
+            debugPrint('ErikaOhosVideoView: texture resize failed: $error');
+          }
+        }
+      }
+    } finally {
+      _updateInFlight = false;
+      if (mounted && _pendingMetrics != null) {
+        _queueMetrics(_pendingMetrics!);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final scale = MediaQuery.devicePixelRatioOf(context);
+        final logicalWidth = constraints.hasBoundedWidth
+            ? constraints.maxWidth
+            : constraints.minWidth;
+        final logicalHeight = constraints.hasBoundedHeight
+            ? constraints.maxHeight
+            : constraints.minHeight;
+        final metrics = _OhosSurfaceMetrics(
+          (logicalWidth * scale).round().clamp(1, 16384),
+          (logicalHeight * scale).round().clamp(1, 16384),
+          scale,
+        );
+        _queueMetrics(metrics);
+        final textureId = _textureId;
+        if (textureId == null) {
+          return const SizedBox.expand();
+        }
+        return Texture(textureId: textureId);
+      },
+    );
   }
 }
 

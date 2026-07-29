@@ -17,6 +17,17 @@
   `erika_presenter_set_subtitle_style`. New Dart API:
   `ErikaPlayer.setSubtitleStyle`.
 
+### Native architectures and release artifacts
+
+- Added native Windows ARM64 dependency and `erika_capi` builds, plus the new
+  `erika-capi-windows-arm64.zip` release archive. Windows x64 and ARM64 CI run
+  on matching GitHub-hosted architectures.
+- Added selectable macOS arm64, x86_64, and universal builds and corresponding
+  architecture-specific release archives.
+- Re-enabled FFmpeg's optimized x86 assembly for shipped x86_64 builds. These
+  builds now require NASM and replace the previous C/compiler-vectorized FFmpeg
+  paths used while `--disable-x86asm` was enabled.
+
 ### Custom HTTP headers
 
 - Added `erika_open_with_headers` and `erika_presenter_open_with_headers`,

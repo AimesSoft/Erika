@@ -12,6 +12,7 @@ Erika 媒体播放引擎的 Flutter plugin。
 - iOS 插件链接 Erika 静态库。
 - Windows 插件构建并链接 Erika C ABI DLL。
 - Android 插件按 ABI 构建 `liberika_capi.so`，并由 `Choreographer` 驱动原生 surface。
+- HarmonyOS 插件注册 Flutter 外部纹理，把它的 `OHNativeWindow` attach 给 Erika，并用 OHAudio 做低延迟 PCM 输出。
 - Erika 通过 `ErikaPresenterHandle` 负责播放、渲染、音频、时序和 overlay。
 
 ## Video Surfaces
@@ -24,7 +25,7 @@ Windows 上 `ErikaWindowOverlayVideoView` 以 sibling surface 的形式托管一
 
 ## macOS Setup
 
-本地开发时，macOS 插件通过 `dlopen` 加载 Erika。可设置 `ERIKA_CAPI_DYLIB` 覆盖动态库路径；若未设置，插件会按 app bundle、可执行文件目录、再到 `$WORKSPACE/target/debug/liberika_capi.dylib` 依次查找。
+macOS CocoaPods 构建默认生成 arm64+x86_64 universal 动态库。依赖项目可设置 `ERIKA_MACOS_ARCHS=arm64`、`ERIKA_MACOS_ARCHS=x86_64` 或 `ERIKA_MACOS_ARCHS=arm64,x86_64` 控制产物架构；`universal` 是默认值。预构建模式会对应下载 `macos-arm64`、`macos-x64` 或 `macos-universal` 包。本地开发时插件通过 `dlopen` 加载 Erika，也可设置 `ERIKA_CAPI_DYLIB` 覆盖运行时动态库路径。
 
 构建动态库：
 
@@ -32,6 +33,12 @@ Windows 上 `ErikaWindowOverlayVideoView` 以 sibling surface 的形式托管一
 cargo run -p xtask -- deps build --all --profile lgpl
 cargo build -p erika_capi
 ```
+
+## 预构建包与源码构建
+
+设置 `ERIKA_PREBUILT=1` 可从 GitHub Release 下载预构建原生库，`ERIKA_PREBUILT_TAG=v0.1.3` 用于固定与当前插件源码匹配的 Release tag。下载或解压失败时会回退源码构建。调试本地源码时设置 `ERIKA_FORCE_SOURCE_BUILD=1` 强制绕过预构建包。完整包名和发布方式见 [releasing.zh.md](../../docs/releasing.zh.md)。
+
+源码构建时，macOS 使用 `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`，Windows 使用 `ERIKA_WINDOWS_ARCH=x64|arm64`，Android 使用 `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86`。直接构建原生库时，`xtask --target`、`ERIKA_NATIVE_TARGET` 和 `cargo build --target` 必须使用同一个 target。详细示例见 [building.zh.md](../../docs/building.zh.md)。
 
 ## iOS Setup
 
@@ -41,11 +48,11 @@ iOS CocoaPod script phase 会在 Xcode 构建期间自动构建 Erika 原生依�
 
 ## Windows Setup
 
-Windows 插件（`ErikaFlutterPluginCApi`）在 CMake 构建期间通过 `build_erika_runtime.cmake` 构建 Erika C ABI runtime（`erika_capi.dll`），对 `x86_64-pc-windows-msvc` target 调用 cargo，并把 DLL 部署到 app 旁边。需要：
+Windows 插件（`ErikaFlutterPluginCApi`）在 CMake 构建期间通过 `build_erika_runtime.cmake` 构建 Erika C ABI runtime（`erika_capi.dll`），自动跟随 CMake 的 x64 或 ARM64 生成器架构，并把 DLL 部署到 app 旁边。依赖项目也可通过 CMake cache `ERIKA_WINDOWS_ARCH=x64|arm64` 或环境变量 `ERIKA_WINDOWS_ARCH` 显式选择；高级场景可直接设置 `ERIKA_NATIVE_TARGET=x86_64-pc-windows-msvc|aarch64-pc-windows-msvc`。需要：
 
-- 安装 MSVC target 的 Rust toolchain（`rustup target add x86_64-pc-windows-msvc`）
-- Visual Studio Build Tools (MSVC) + Windows SDK
-- 原生依赖已构建到 `third_party/dist/x86_64-pc-windows-msvc/`（见仓库的 `xtask deps build` 流程）
+- 安装对应 MSVC target 的 Rust toolchain（`rustup target add x86_64-pc-windows-msvc` 或 `rustup target add aarch64-pc-windows-msvc`）
+- Visual Studio Build Tools 的 x64/ARM64 C++ 工具 + Windows SDK
+- 原生依赖已构建到 `third_party/dist/<target>/`（见仓库的 `xtask deps build` 流程）
 
 若插件无法自动定位 Erika checkout，可设置 `ERIKA_REPO_ROOT`。
 
@@ -60,6 +67,22 @@ Android 最低版本仍为 API 26。Extended-linear 还要求 native-window data
 `Display.registerHdrSdrRatioChangedListener`，把真实 ratio 变化发布给 Erika，让 wgpu 无需
 重新 attach surface 就能更新后续帧 target 和输出状态。API 35 上插件还会按
 `SurfaceView` 设置 desired HDR headroom，不修改宿主的全局 Window。
+
+## HarmonyOS Setup
+
+HarmonyOS 模块需要 DevEco Studio 的 OpenHarmony Native SDK 和 Rust 的
+`aarch64-unknown-linux-ohos` target。它的 Hvigor/CMake 构建会编译 LGPL 的
+FFmpeg/zlib 依赖和 `liberika_capi.so`，然后把这套运行时和 `liberika_flutter.so`
+一起打包。
+
+HarmonyOS 上请使用 `ErikaVideoView`。它注册 Flutter 外部纹理，把纹理 surface 取为
+`OHNativeWindow`，并通过 wgpu Vulkan 渲染。音频走 OHAudio，交错 f32 PCM。
+
+视频解码默认使用 HarmonyOS AVCodec 硬解，支持 H.264 和 HEVC。AVCodec 渲染到
+Surface，其 `OHNativeBuffer` 作为 Vulkan 外部图像导入，再由 Vulkan YCbCr sampler
+解析，因此帧无需 CPU 拷贝即可到达合成器。不具备所需 Vulkan 扩展的设备回退到
+FFmpeg 软解 + CPU 上传；回退会通过 `VideoDecoderChanged` 事件和 presenter 诊断
+上报，而不是让播放失败。
 
 ## HTTP 请求头
 

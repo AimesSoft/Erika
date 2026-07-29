@@ -50,6 +50,21 @@ FP16 extended-linear scRGB 已实现完整的 `Rgba16Float` 协商和
 HDR 真机。显示器不支持 HDR、GLES、`TextureView`、缺少 FP16 或 dataspace 验证失败时都会
 继续 SDR 播放，并提供可查询的 fallback reason 和明确日志。
 
+## HarmonyOS Surface Strategies
+
+HarmonyOS 上请使用 `ErikaVideoView`。ArkTS 插件注册 Flutter 外部纹理，把该纹理的
+surface 取为 `OHNativeWindow` 并 attach 给 presenter；wgpu 随后通过 Vulkan 渲染，
+窗口系统集成走 `VK_OHOS_surface`。
+
+视频解码默认使用 HarmonyOS AVCodec（H.264 与 HEVC）。AVCodec 直接解码到 Surface，
+其 `OHNativeBuffer` 作为 Vulkan 外部图像导入，并由 Vulkan YCbCr sampler 解析，
+因此解码帧无需 CPU 拷贝即可到达合成器。字幕、弹幕和 overlay 与其他平台一样，
+在同一个 wgpu pass 里合成。
+
+缺少所需 Vulkan 扩展的设备回退到 FFmpeg 软解 + CPU 上传。回退通过
+`VideoDecoderChanged` 事件和 presenter 诊断上报，而不是让播放失败。HarmonyOS
+路径已在真机验证，但尚未纳入 CI。
+
 ## iOS Build Path
 
 iOS plugin 通过 CocoaPod script phase 把 Erika C ABI static library 链接进 app，并为目标 iOS architecture 构建 Rust `erika_capi` crate。

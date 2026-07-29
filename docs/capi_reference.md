@@ -393,6 +393,7 @@ falls back to SDR and remains queryable.
 
 ```c
 ErikaStatus erika_presenter_render_tick(ErikaPresenterHandle *, double time_seconds, ErikaPresenterStats *out_stats);
+ErikaStatus erika_presenter_get_stats(ErikaPresenterHandle *, ErikaPresenterStats *out_stats);
 ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *, ErikaEvent *out_event);
 ```
 
@@ -402,6 +403,51 @@ display clock for the frame in seconds — Erika uses it for vsync-quantized
 scheduling, so pass the presentation timestamp, not wall-clock deltas. If
 `out_stats` is non-`NULL` it is filled with a snapshot of pipeline counters.
 `poll_event` is non-blocking and returns `NoEvent` when idle.
+
+`get_stats` fills the same `ErikaPresenterStats` snapshot without rendering a
+frame. Use it when the host samples counters on a different cadence from the
+display loop; it does not advance presentation.
+
+### JSON bridge
+
+For embedders whose platform channel already serializes structured arguments
+(the HarmonyOS ArkTS plugin, for example), the same presenter surface is
+available as JSON:
+
+```c
+char *erika_presenter_invoke_json(ErikaPresenterHandle *, const char *method,
+                                  const char *arguments_json);
+char *erika_presenter_render_tick_json(ErikaPresenterHandle *, double time_seconds);
+char *erika_presenter_poll_event_json(ErikaPresenterHandle *);
+```
+
+Every returned string is owned by Erika and must be released with
+`erika_string_free`. `poll_event_json` returns `NULL` — not an envelope — when
+no event is pending, so a `NULL` return is the idle case, not an error.
+
+All three wrap their result in an envelope:
+
+```json
+{ "ok": true,  "status": 0, "value": <result> }
+{ "ok": false, "status": 1, "error": "<message>" }
+```
+
+`arguments_json` must be a JSON object. `method` selects the operation and
+mirrors the C entry points: `open`, `play`, `pause`, `stop`, `close`, `seek`,
+`setPlaybackRate`, `setVolume`, `setUpscaler`, `setSubtitleScale`,
+`getUpscalerStatus`, `getOutputStatus`, `getPresenterStats`, `tracks`,
+`addExternalSubtitle`, `removeSubtitleTrack`, `selectAudioTrack`,
+`selectSubtitleTrack`, and the danmaku family (`loadDanmakuFile`,
+`loadDanmakuJson`, `addDanmakuTrackFile`, `addDanmakuTrackJson`,
+`removeDanmakuTrack`, `setDanmakuTrackEnabled`, `setDanmakuTrackOffset`,
+`setDanmakuGlobalOffset`, `danmakuTracks`, `clearDanmaku`, `setDanmakuEnabled`,
+`setDanmakuConfig`). An unknown method fails with `ok: false` rather than
+aborting. The authoritative dispatch table is
+`crates/erika_capi/src/presenter_json.rs`.
+
+The bridge is a convenience layer, not a second API: it calls the same
+functions documented above and carries no extra capability. Hosts that can pass
+structs across their platform channel should prefer the typed entry points.
 
 ### Diagnostics and capture
 

@@ -1298,6 +1298,49 @@ class ErikaPlayer {
     });
   }
 
+  /// Allocates a Flutter texture backed by an OpenHarmony SurfaceProducer.
+  ///
+  /// This is used by [ErikaVideoView] on HarmonyOS; other embedders normally
+  /// attach their platform view directly.
+  Future<int> createTextureSurface({
+    required int width,
+    required int height,
+    required double scale,
+  }) async {
+    final textureId = await _channel.invokeMethod<int>(
+      'createTexture',
+      <String, Object?>{
+        'width': width,
+        'height': height,
+        'scale': scale,
+      },
+    );
+    if (textureId == null || textureId < 0) {
+      throw StateError('Erika texture allocation failed.');
+    }
+    return textureId;
+  }
+
+  Future<void> resizeTextureSurface(
+    int textureId, {
+    required int width,
+    required int height,
+    required double scale,
+  }) {
+    return _invoke('resizeTexture', <String, Object?>{
+      'textureId': textureId,
+      'width': width,
+      'height': height,
+      'scale': scale,
+    });
+  }
+
+  Future<void> releaseTextureSurface(int textureId) {
+    return _invoke('releaseTexture', <String, Object?>{
+      'textureId': textureId,
+    });
+  }
+
   Future<int> attachWindowOverlay() async {
     final playerId = await ensureCreated();
     final viewId = await _channel.invokeMethod<int>(

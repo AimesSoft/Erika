@@ -1,8 +1,13 @@
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    target_env = "ohos"
+))]
 use std::ffi::c_void;
 #[cfg(target_os = "windows")]
 use std::num::NonZeroIsize;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_env = "ohos"))]
 use std::ptr::NonNull;
 #[cfg(target_os = "android")]
 use std::{
@@ -18,7 +23,8 @@ use crate::android::{AndroidDataSpaceErrorKind, AndroidNativeWindow};
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_env = "ohos"
 ))]
 use crate::core::WgpuSurfaceKind;
 use crate::core::{
@@ -32,6 +38,11 @@ use crate::overlay::OverlayFrame;
 use crate::renderer::android_vulkan::{
     AndroidAhbConversionError, AndroidAhbCrop, AndroidAhbFrameDescription, AndroidVulkanInterop,
     retire_ahb_conversion_after_submission,
+};
+#[cfg(target_env = "ohos")]
+use crate::renderer::ohos_vulkan::{
+    OhosNativeBufferConversionError, OhosNativeBufferCrop, OhosNativeBufferFrameDescription,
+    OhosVulkanInterop, retire_ohb_conversion_after_submission,
 };
 use crate::renderer::output::{
     ActiveOutputEncoding, OutputDescription, OutputFallbackReason, OutputMode, OutputRuntimeStatus,
@@ -285,8 +296,15 @@ struct OverlayPipeline {
 /// retained so the bind group stays valid for the duration of the render pass.
 struct OverlayDraw {
     bind_group: wgpu::BindGroup,
+    dynamic_offset: u32,
     _texture: wgpu::Texture,
     _uniform: wgpu::Buffer,
+}
+
+#[derive(Clone, Copy)]
+enum DanmakuAtlasTexture {
+    Fill,
+    Outline,
 }
 
 struct WgpuDanmakuAtlasCache {
@@ -443,6 +461,12 @@ pub struct WgpuRenderer {
     android_device_health: Arc<AndroidWgpuDeviceHealth>,
     #[cfg(target_os = "android")]
     android_backend_candidate_index: usize,
+    #[cfg(target_env = "ohos")]
+    ohos_vulkan: Option<OhosVulkanInterop>,
+    #[cfg(target_env = "ohos")]
+    ohos_native_buffer_surface: Option<std::sync::Arc<crate::ohos::avcodec::OhosAvCodecSurface>>,
+    #[cfg(target_env = "ohos")]
+    ohos_gles: Option<crate::ohos::gles::OhosGlesInterop>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     surface: Option<AttachedSurface>,
@@ -465,6 +489,8 @@ pub struct WgpuRenderer {
     sdr_hdr_output_reported: bool,
     #[cfg(target_os = "android")]
     android_shared_frame_reported: bool,
+    #[cfg(target_env = "ohos")]
+    ohos_shared_frame_reported: bool,
     stats: WgpuRendererStats,
 }
 
@@ -634,6 +660,8 @@ struct WgpuBackendCandidate {
     android_ahb_interop: bool,
     #[cfg(target_os = "android")]
     allow_cpu_adapter: bool,
+    #[cfg(target_env = "ohos")]
+    ohos_native_buffer_interop: bool,
 }
 
 struct WgpuDeviceContext {
@@ -648,6 +676,45 @@ struct WgpuDeviceContext {
     android_device_health: Arc<AndroidWgpuDeviceHealth>,
     #[cfg(target_os = "android")]
     android_backend_candidate_index: usize,
+    #[cfg(target_env = "ohos")]
+    ohos_vulkan: Option<OhosVulkanInterop>,
+}
+
+#[cfg(target_env = "ohos")]
+fn ohos_vulkan_video_enabled() -> bool {
+    !option_env!("ERIKA_OHOS_VULKAN_VIDEO").is_some_and(|value| {
+        value == "0" || value.eq_ignore_ascii_case("false") || value.eq_ignore_ascii_case("off")
+    })
+}
+
+#[cfg(target_env = "ohos")]
+fn fit_extent_without_upscale(
+    source_width: u32,
+    source_height: u32,
+    max_width: u32,
+    max_height: u32,
+) -> (u32, u32) {
+    if source_width == 0 || source_height == 0 {
+        return (source_width, source_height);
+    }
+    let max_width = max_width.max(1);
+    let max_height = max_height.max(1);
+    if source_width <= max_width && source_height <= max_height {
+        return (source_width, source_height);
+    }
+    if u64::from(source_width) * u64::from(max_height)
+        > u64::from(source_height) * u64::from(max_width)
+    {
+        let height = (u64::from(source_height) * u64::from(max_width)
+            + u64::from(source_width) / 2)
+            / u64::from(source_width);
+        (max_width, u32::try_from(height).unwrap_or(1).max(1))
+    } else {
+        let width = (u64::from(source_width) * u64::from(max_height)
+            + u64::from(source_height) / 2)
+            / u64::from(source_height);
+        (u32::try_from(width).unwrap_or(1).max(1), max_height)
+    }
 }
 
 fn wgpu_backend_candidates() -> Vec<WgpuBackendCandidate> {
@@ -687,7 +754,34 @@ fn wgpu_backend_candidates() -> Vec<WgpuBackendCandidate> {
             },
         ]
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_env = "ohos")]
+    {
+        let mut candidates = Vec::new();
+        if ohos_vulkan_video_enabled() {
+            candidates.push(WgpuBackendCandidate {
+                label: "ohos-vulkan-native-buffer",
+                backends: wgpu::Backends::VULKAN,
+                force_fallback_adapter: false,
+                ohos_native_buffer_interop: true,
+            });
+        }
+        candidates.extend([
+            WgpuBackendCandidate {
+                label: "ohos-vulkan",
+                backends: wgpu::Backends::VULKAN,
+                force_fallback_adapter: false,
+                ohos_native_buffer_interop: false,
+            },
+            WgpuBackendCandidate {
+                label: "ohos-gles",
+                backends: wgpu::Backends::GL,
+                force_fallback_adapter: false,
+                ohos_native_buffer_interop: false,
+            },
+        ]);
+        candidates
+    }
+    #[cfg(not(any(target_os = "android", target_env = "ohos")))]
     {
         vec![WgpuBackendCandidate {
             label: "platform-default",
@@ -871,6 +965,52 @@ fn request_wgpu_device(
         });
     }
 
+    #[cfg(target_env = "ohos")]
+    if candidate.ohos_native_buffer_interop {
+        let context = crate::renderer::ohos_vulkan::create_device().map_err(|message| {
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "wgpu_renderer",
+                    "stage": "ohos_vulkan_native_buffer_interop_unavailable",
+                    "backendCandidate": candidate.label,
+                    "attempt": attempt_index + 1,
+                    "attemptCount": attempt_count,
+                    "reason": message.as_str(),
+                    "fallback": "ohos-vulkan",
+                })
+                .to_string(),
+            );
+            message
+        })?;
+        let adapter_info = context.adapter.get_info();
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "wgpu_renderer",
+                "stage": "device_created",
+                "backendCandidate": candidate.label,
+                "backendCandidateIndex": backend_candidate_index,
+                "attempt": attempt_index + 1,
+                "attemptCount": attempt_count,
+                "backend": format!("{:?}", adapter_info.backend),
+                "deviceType": format!("{:?}", adapter_info.device_type),
+                "name": adapter_info.name.as_str(),
+                "driver": adapter_info.driver.as_str(),
+                "driverInfo": adapter_info.driver_info.as_str(),
+                "supports16BitNorm": context.supports_16bit_norm,
+                "ohosNativeBufferInteropCapable": true,
+            })
+            .to_string(),
+        );
+        return Ok(WgpuDeviceContext {
+            instance: context.instance,
+            adapter: context.adapter,
+            device: context.device,
+            queue: context.queue,
+            supports_16bit_norm: context.supports_16bit_norm,
+            ohos_vulkan: Some(context.interop),
+        });
+    }
+
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: candidate.backends,
         flags: wgpu_instance_flags(),
@@ -1035,6 +1175,8 @@ fn request_wgpu_device(
         android_device_health,
         #[cfg(target_os = "android")]
         android_backend_candidate_index: backend_candidate_index,
+        #[cfg(target_env = "ohos")]
+        ohos_vulkan: None,
     })
 }
 
@@ -1124,6 +1266,84 @@ impl WgpuRenderer {
         };
 
         let upscaler = WgpuArtCnn::new(&context.adapter, &context.device);
+        #[cfg(target_env = "ohos")]
+        let ohos_native_buffer_surface = {
+            let enabled = ohos_vulkan_video_enabled();
+            if enabled && context.ohos_vulkan.is_some() {
+                match crate::ohos::avcodec::OhosAvCodecSurface::new_native_buffer() {
+                    Ok(surface) => {
+                        crate::trace::diagnostic(
+                            serde_json::json!({
+                                "event": "ohos_avcodec_surface",
+                                "stage": "vulkan_native_buffer_ready",
+                                "zeroCopySource": true,
+                                "experimental": true,
+                            })
+                            .to_string(),
+                        );
+                        Some(surface)
+                    }
+                    Err(error) => {
+                        crate::trace::diagnostic(
+                            serde_json::json!({
+                                "event": "ohos_avcodec_surface",
+                                "stage": "vulkan_native_buffer_unavailable",
+                                "zeroCopySource": false,
+                                "reason": error,
+                            })
+                            .to_string(),
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        };
+        #[cfg(target_env = "ohos")]
+        let ohos_gles = {
+            let enabled = option_env!("ERIKA_OHOS_SURFACE_VIDEO")
+                .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+            if enabled {
+                match crate::ohos::gles::OhosGlesInterop::new(&context.device) {
+                    Ok(interop) => {
+                        crate::trace::diagnostic(
+                            serde_json::json!({
+                                "event": "ohos_avcodec_surface",
+                                "stage": "native_image_external_texture_ready",
+                                "zeroCopySource": true,
+                                "experimental": true,
+                            })
+                            .to_string(),
+                        );
+                        Some(interop)
+                    }
+                    Err(error) => {
+                        crate::trace::diagnostic(
+                            serde_json::json!({
+                                "event": "ohos_avcodec_surface",
+                                "stage": "native_image_external_texture_unavailable",
+                                "zeroCopySource": false,
+                                "reason": error,
+                            })
+                            .to_string(),
+                        );
+                        None
+                    }
+                }
+            } else {
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "ohos_avcodec_surface",
+                        "stage": "experimental_surface_video_disabled",
+                        "zeroCopySource": false,
+                        "reason": "set ERIKA_OHOS_SURFACE_VIDEO=1 at compile time to test NativeImage import",
+                    })
+                    .to_string(),
+                );
+                None
+            }
+        };
         Ok(Self {
             _instance: context.instance,
             adapter: context.adapter,
@@ -1135,6 +1355,12 @@ impl WgpuRenderer {
             android_device_health: context.android_device_health,
             #[cfg(target_os = "android")]
             android_backend_candidate_index: context.android_backend_candidate_index,
+            #[cfg(target_env = "ohos")]
+            ohos_vulkan: context.ohos_vulkan,
+            #[cfg(target_env = "ohos")]
+            ohos_native_buffer_surface,
+            #[cfg(target_env = "ohos")]
+            ohos_gles,
             surface: None,
             video_pipeline: None,
             overlay_pipeline: None,
@@ -1155,6 +1381,8 @@ impl WgpuRenderer {
             sdr_hdr_output_reported: false,
             #[cfg(target_os = "android")]
             android_shared_frame_reported: false,
+            #[cfg(target_env = "ohos")]
+            ohos_shared_frame_reported: false,
             stats: WgpuRendererStats::default(),
         })
     }
@@ -1744,7 +1972,7 @@ impl WgpuRenderer {
         Ok(())
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_env = "ohos"))]
     fn upload_converted_rgb_texture(
         &mut self,
         texture: wgpu::Texture,
@@ -1755,7 +1983,7 @@ impl WgpuRenderer {
     ) -> Result<()> {
         if width == 0 || height == 0 {
             return Err(PlayerError::Renderer(
-                "converted Android frame dimensions must be non-zero".to_string(),
+                "converted native frame dimensions must be non-zero".to_string(),
             ));
         }
         let frame_token = self.next_upload_serial();
@@ -1769,6 +1997,187 @@ impl WgpuRenderer {
         });
         self.current_video_visible = true;
         Ok(())
+    }
+
+    #[cfg(target_env = "ohos")]
+    fn upload_ohos_avcodec_frame(&mut self, frame: &PlayerVideoFrame) -> Result<()> {
+        let image = frame.frame.prepared_ohos_native_buffer().map_err(|error| {
+            PlayerError::Renderer(format!("stage=ohos_native_buffer_prepare reason={error}"))
+        })?;
+        if let Some(interop) = self.ohos_vulkan.as_ref() {
+            let (native_buffer, config) = image.native_buffer().map_err(|error| {
+                PlayerError::Renderer(format!("stage=ohos_native_buffer_acquire reason={error}"))
+            })?;
+            let buffer_width = u32::try_from(config.width).map_err(|_| {
+                PlayerError::Renderer(format!(
+                    "stage=ohos_native_buffer_config reason=invalid_width width={}",
+                    config.width
+                ))
+            })?;
+            let buffer_height = u32::try_from(config.height).map_err(|_| {
+                PlayerError::Renderer(format!(
+                    "stage=ohos_native_buffer_config reason=invalid_height height={}",
+                    config.height
+                ))
+            })?;
+            let visible_width = frame.frame.width().min(buffer_width);
+            let visible_height = frame.frame.height().min(buffer_height);
+            let (output_width, output_height) =
+                self.ohos_native_buffer_conversion_extent(visible_width, visible_height);
+            let owner: std::sync::Arc<dyn std::any::Any + Send + Sync> = image.clone();
+            let description = OhosNativeBufferFrameDescription {
+                native_buffer,
+                buffer_width,
+                buffer_height,
+                usage: config.usage as u32 as u64,
+                crop: OhosNativeBufferCrop {
+                    left: 0,
+                    top: 0,
+                    right: visible_width,
+                    bottom: visible_height,
+                },
+                output_width,
+                output_height,
+                color_range: frame.frame.color_range(),
+                matrix_coefficients: frame.frame.matrix_coefficients(),
+                owner,
+            };
+            let mut state_encoder =
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("erika-ohos-native-buffer-state-encoder"),
+                    });
+            let mut conversion_encoder =
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("erika-ohos-native-buffer-conversion-encoder"),
+                    });
+            let conversion = unsafe {
+                interop.convert_native_buffer(
+                    &self.device,
+                    &mut state_encoder,
+                    &mut conversion_encoder,
+                    description,
+                )
+            }
+            .map_err(|error| match error {
+                OhosNativeBufferConversionError::Backpressure { .. } => {
+                    PlayerError::RendererBackpressure(format!(
+                        "stage=ohos_native_buffer_conversion reason={error}"
+                    ))
+                }
+                OhosNativeBufferConversionError::Interop(_) => PlayerError::Renderer(format!(
+                    "stage=ohos_native_buffer_conversion reason={error}"
+                )),
+            })?;
+            let source_color = source_color_for_player_frame(frame);
+            let uniforms = self.video_uniforms_for_frame(frame, false);
+            self.queue
+                .submit([state_encoder.finish(), conversion_encoder.finish()]);
+            retire_ohb_conversion_after_submission(&self.queue, conversion.pending);
+            self.upload_converted_rgb_texture(
+                conversion.texture,
+                conversion.width,
+                conversion.height,
+                uniforms,
+                Some(source_color),
+            )?;
+            self.stats.hardware_video_frames += 1;
+            self.stats.zero_copy_video_frames += 1;
+            self.stats.shared_handle_video_frames += 1;
+            if !self.ohos_shared_frame_reported {
+                self.ohos_shared_frame_reported = true;
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "video_frame_import",
+                        "stage": "ohos_vulkan_native_buffer_active",
+                        "decodeBackend": frame.decode_backend.as_str(),
+                        "bufferWidth": buffer_width,
+                        "bufferHeight": buffer_height,
+                        "visibleWidth": conversion.width,
+                        "visibleHeight": conversion.height,
+                        "decodedWidth": visible_width,
+                        "decodedHeight": visible_height,
+                        "nativeFormat": config.format,
+                        "nativeStride": config.stride,
+                        "nativeUsage": config.usage,
+                        "conversionTarget": "rgba16float",
+                        "cpuReadback": false,
+                        "synchronization": "acquire_fence_then_wgpu_submission_retirement",
+                    })
+                    .to_string(),
+                );
+            }
+            return Ok(());
+        }
+        let width = frame.frame.width();
+        let height = frame.frame.height();
+        let source_color = source_color_for_player_frame(frame);
+        let texture = self
+            .ohos_gles
+            .as_ref()
+            .ok_or_else(|| {
+                PlayerError::Renderer(
+                    "stage=ohos_native_image_interop reason=not_initialized".to_string(),
+                )
+            })?
+            .convert(&self.queue, &image, width, height)
+            .map_err(|error| {
+                PlayerError::Renderer(format!("stage=ohos_native_image_conversion reason={error}"))
+            })?;
+        let Some(texture) = texture else {
+            return Ok(());
+        };
+        let uniforms = self
+            .video_uniforms_for_frame(frame, false)
+            .rgb_texture_input();
+        let frame_token = self.next_upload_serial();
+        self.current_video = Some(UploadedVideoFrame {
+            textures: UploadedVideoTextures::Rgb { texture },
+            width,
+            height,
+            uniforms,
+            source_color: Some(source_color),
+            frame_token,
+        });
+        self.current_video_visible = true;
+        self.stats.hardware_video_frames += 1;
+        self.stats.zero_copy_video_frames += 1;
+        self.stats.shared_handle_video_frames += 1;
+        if !self.ohos_shared_frame_reported {
+            self.ohos_shared_frame_reported = true;
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "video_frame_import",
+                    "stage": "ohos_native_buffer_external_oes_active",
+                    "decodeBackend": frame.decode_backend.as_str(),
+                    "width": width,
+                    "height": height,
+                    "conversionTarget": "rgba8",
+                    "cpuReadback": false,
+                    "synchronization": "gl_finish",
+                })
+                .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(target_env = "ohos")]
+    fn ohos_native_buffer_conversion_extent(
+        &self,
+        source_width: u32,
+        source_height: u32,
+    ) -> (u32, u32) {
+        let Some(surface) = self.surface.as_ref() else {
+            return (source_width, source_height);
+        };
+        fit_extent_without_upscale(
+            source_width,
+            source_height,
+            surface.config.width,
+            surface.config.height,
+        )
     }
 
     /// Render the current video frame (optionally compositing `overlay`) into an
@@ -2109,11 +2518,11 @@ impl WgpuRenderer {
             });
             pass.set_pipeline(&overlay_pipeline.pipeline);
             for draw in &overlay_draws {
-                pass.set_bind_group(0, &draw.bind_group, &[]);
+                pass.set_bind_group(0, &draw.bind_group, &[draw.dynamic_offset]);
                 pass.draw(0..4, 0..1);
             }
             for draw in &danmaku_draws {
-                pass.set_bind_group(0, &draw.bind_group, &[]);
+                pass.set_bind_group(0, &draw.bind_group, &[draw.dynamic_offset]);
                 pass.draw(0..4, 0..1);
             }
         }
@@ -2195,20 +2604,12 @@ impl WgpuRenderer {
         }
         let viewport_w = plan.viewport.width;
         let viewport_h = plan.viewport.height;
-        let mut draws = Vec::with_capacity(plan.items.len() * 3);
+        let mut uniforms = Vec::with_capacity(plan.items.len() * 3);
         let (fill_texture, outline_texture) = self.prepare_danmaku_atlas_textures(atlas);
         for item in &plan.items {
-            self.append_danmaku_glyph_draws(
-                item,
-                &fill_texture,
-                &outline_texture,
-                viewport_w,
-                viewport_h,
-                output,
-                &mut draws,
-            );
+            self.append_danmaku_glyph_uniforms(item, viewport_w, viewport_h, output, &mut uniforms);
         }
-        Ok(draws)
+        self.make_batched_danmaku_draws(&fill_texture, &outline_texture, &uniforms)
     }
 
     fn prepare_danmaku_atlas_textures(
@@ -2247,21 +2648,19 @@ impl WgpuRenderer {
         (fill_texture, outline_texture)
     }
 
-    fn append_danmaku_glyph_draws(
+    fn append_danmaku_glyph_uniforms(
         &self,
         item: &DanmakuGlyphInstance,
-        fill_texture: &wgpu::Texture,
-        outline_texture: &wgpu::Texture,
         viewport_w: u32,
         viewport_h: u32,
         output: OutputDescription,
-        draws: &mut Vec<OverlayDraw>,
+        draws: &mut Vec<(DanmakuAtlasTexture, OverlayUniforms)>,
     ) {
         if item.shadow_rgba[3] > 0.0 {
             let mut rect = item.rect;
             rect[0] += item.shadow_offset[0];
             rect[1] += item.shadow_offset[1];
-            let uniforms = OverlayUniforms::alpha_atlas_rect(
+            let uniform = OverlayUniforms::alpha_atlas_rect(
                 item.shadow_rgba,
                 rect,
                 item.tex_rect,
@@ -2269,10 +2668,10 @@ impl WgpuRenderer {
                 viewport_h,
             )
             .for_output(output);
-            draws.push(self.make_overlay_draw(outline_texture, uniforms));
+            draws.push((DanmakuAtlasTexture::Outline, uniform));
         }
         if item.outline_rgba[3] > 0.0 {
-            let uniforms = OverlayUniforms::alpha_atlas_rect(
+            let uniform = OverlayUniforms::alpha_atlas_rect(
                 item.outline_rgba,
                 item.rect,
                 item.tex_rect,
@@ -2280,9 +2679,9 @@ impl WgpuRenderer {
                 viewport_h,
             )
             .for_output(output);
-            draws.push(self.make_overlay_draw(outline_texture, uniforms));
+            draws.push((DanmakuAtlasTexture::Outline, uniform));
         }
-        let uniforms = OverlayUniforms::alpha_atlas_rect(
+        let uniform = OverlayUniforms::alpha_atlas_rect(
             item.color_rgba,
             item.rect,
             item.tex_rect,
@@ -2290,7 +2689,101 @@ impl WgpuRenderer {
             viewport_h,
         )
         .for_output(output);
-        draws.push(self.make_overlay_draw(fill_texture, uniforms));
+        draws.push((DanmakuAtlasTexture::Fill, uniform));
+    }
+
+    fn make_batched_danmaku_draws(
+        &self,
+        fill_texture: &wgpu::Texture,
+        outline_texture: &wgpu::Texture,
+        uniforms: &[(DanmakuAtlasTexture, OverlayUniforms)],
+    ) -> Result<Vec<OverlayDraw>> {
+        if uniforms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let uniform_size = std::mem::size_of::<OverlayUniforms>();
+        let alignment = self
+            .device
+            .limits()
+            .min_uniform_buffer_offset_alignment
+            .max(1) as usize;
+        let stride = uniform_size.div_ceil(alignment) * alignment;
+        let buffer_size = stride.checked_mul(uniforms.len()).ok_or_else(|| {
+            PlayerError::Renderer("danmaku dynamic uniform buffer size overflow".to_string())
+        })?;
+        let mut bytes = vec![0u8; buffer_size];
+        for (index, (_, uniform)) in uniforms.iter().enumerate() {
+            let start = index * stride;
+            bytes[start..start + uniform_size].copy_from_slice(bytemuck::bytes_of(uniform));
+        }
+        // TODO(perf): retain a growable per-frame uniform buffer and update it via
+        // `Queue::write_buffer` (or a small ring) instead of allocating a new GPU
+        // buffer for every danmaku frame. Keep `stride` device-aligned when reusing it.
+        let uniform_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("erika-wgpu-danmaku-dynamic-uniforms"),
+                contents: &bytes,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let make_bind_group = |label: &'static str, texture: &wgpu::Texture| {
+            let pipeline = self
+                .overlay_pipeline
+                .as_ref()
+                .expect("overlay pipeline initialized");
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &pipeline.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &uniform_buffer,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(uniform_size as u64),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&pipeline.sampler),
+                    },
+                ],
+            })
+        };
+        let fill_bind_group = make_bind_group("erika-wgpu-danmaku-fill-bind-group", fill_texture);
+        let outline_bind_group =
+            make_bind_group("erika-wgpu-danmaku-outline-bind-group", outline_texture);
+        uniforms
+            .iter()
+            .enumerate()
+            .map(|(index, (texture, _))| {
+                let offset = index.checked_mul(stride).ok_or_else(|| {
+                    PlayerError::Renderer("danmaku dynamic uniform offset overflow".to_string())
+                })?;
+                let dynamic_offset = u32::try_from(offset).map_err(|_| {
+                    PlayerError::Renderer(format!(
+                        "danmaku dynamic uniform offset exceeds u32: {offset}"
+                    ))
+                })?;
+                let (bind_group, texture) = match texture {
+                    DanmakuAtlasTexture::Fill => (fill_bind_group.clone(), fill_texture.clone()),
+                    DanmakuAtlasTexture::Outline => {
+                        (outline_bind_group.clone(), outline_texture.clone())
+                    }
+                };
+                Ok(OverlayDraw {
+                    bind_group,
+                    dynamic_offset,
+                    _texture: texture,
+                    _uniform: uniform_buffer.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Pack libass alpha coverage bitmaps horizontally into one R8 atlas and add a
@@ -2396,7 +2889,13 @@ impl WgpuRenderer {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: uniform.as_entire_binding(),
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &uniform,
+                        offset: 0,
+                        size: std::num::NonZeroU64::new(
+                            std::mem::size_of::<OverlayUniforms>() as u64
+                        ),
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -2410,6 +2909,7 @@ impl WgpuRenderer {
         });
         OverlayDraw {
             bind_group,
+            dynamic_offset: 0,
             _texture: texture.clone(),
             _uniform: uniform,
         }
@@ -2588,8 +3088,12 @@ impl WgpuRenderer {
                             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                             ty: wgpu::BindingType::Buffer {
                                 ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
+                                has_dynamic_offset: true,
+                                min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<
+                                    OverlayUniforms,
+                                >(
+                                )
+                                    as u64),
                             },
                             count: None,
                         },
@@ -2731,7 +3235,8 @@ impl WgpuRenderer {
             target_os = "android",
             target_os = "macos",
             target_os = "ios",
-            target_os = "windows"
+            target_os = "windows",
+            target_env = "ohos"
         )))]
         {
             return Err(PlayerError::Renderer(format!(
@@ -2744,7 +3249,8 @@ impl WgpuRenderer {
             target_os = "android",
             target_os = "macos",
             target_os = "ios",
-            target_os = "windows"
+            target_os = "windows",
+            target_env = "ohos"
         ))]
         {
             #[cfg(target_os = "android")]
@@ -2792,6 +3298,23 @@ impl WgpuRenderer {
                             wgpu::rwh::AndroidDisplayHandle::new(),
                         )),
                         raw_window_handle: wgpu::rwh::RawWindowHandle::AndroidNdk(window_handle),
+                    }
+                }
+                #[cfg(target_env = "ohos")]
+                WgpuSurfaceKind::OhosNativeWindow => {
+                    let raw_window =
+                        NonNull::new(handle.raw_window as *mut c_void).ok_or_else(|| {
+                            PlayerError::Renderer(
+                                "wgpu OpenHarmony OHNativeWindow surface handle is null"
+                                    .to_string(),
+                            )
+                        })?;
+                    let window_handle = wgpu::rwh::OhosNdkWindowHandle::new(raw_window);
+                    wgpu::SurfaceTargetUnsafe::RawHandle {
+                        raw_display_handle: Some(wgpu::rwh::RawDisplayHandle::Ohos(
+                            wgpu::rwh::OhosDisplayHandle::new(),
+                        )),
+                        raw_window_handle: wgpu::rwh::RawWindowHandle::OhosNdk(window_handle),
                     }
                 }
                 other => {
@@ -3237,13 +3760,19 @@ impl RendererBackend for WgpuRenderer {
         if frame.decode_backend == DecoderBackend::MediaCodec && frame.frame.is_mediacodec() {
             return self.upload_android_mediacodec_frame(frame);
         }
+        #[cfg(target_env = "ohos")]
+        if frame.decode_backend == DecoderBackend::AvCodec && frame.frame.is_ohos_avcodec_surface()
+        {
+            return self.upload_ohos_avcodec_frame(frame);
+        }
         let hardware_frame = frame.frame.has_hw_frames_context();
         let planar = if let Some(planar) = frame.frame.to_planar_frame() {
             match frame.decode_backend {
                 DecoderBackend::Software => self.stats.software_video_frames += 1,
                 DecoderBackend::VideoToolbox
                 | DecoderBackend::D3d11va
-                | DecoderBackend::MediaCodec => {
+                | DecoderBackend::MediaCodec
+                | DecoderBackend::AvCodec => {
                     self.stats.hardware_video_frames += 1;
                     self.stats.cpu_video_frame_fallbacks += 1;
                     if !self.cpu_video_frame_fallback_reported {
@@ -3304,6 +3833,14 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn render_current_frame(&mut self, context: RenderFrameContext<'_>) -> Result<bool> {
+        #[cfg(target_env = "ohos")]
+        if let Some(interop) = &self.ohos_gles {
+            interop.drain_discarded_frames().map_err(|error| {
+                PlayerError::Renderer(format!(
+                    "stage=ohos_native_image_drain_discarded reason={error}"
+                ))
+            })?;
+        }
         if !self.current_video_visible || self.current_video.is_none() {
             return Ok(false);
         }
@@ -3519,10 +4056,26 @@ impl RendererBackend for WgpuRenderer {
         {
             return self.android_vulkan.is_some();
         }
-        #[cfg(not(target_os = "android"))]
+        #[cfg(target_env = "ohos")]
+        {
+            return (self.ohos_vulkan.is_some() && self.ohos_native_buffer_surface.is_some())
+                || self.ohos_gles.is_some();
+        }
+        #[cfg(not(any(target_os = "android", target_env = "ohos")))]
         {
             false
         }
+    }
+
+    #[cfg(target_env = "ohos")]
+    fn ohos_avcodec_surface(
+        &self,
+    ) -> Option<std::sync::Arc<crate::ohos::avcodec::OhosAvCodecSurface>> {
+        self.ohos_native_buffer_surface.clone().or_else(|| {
+            self.ohos_gles
+                .as_ref()
+                .map(crate::ohos::gles::OhosGlesInterop::avcodec_surface)
+        })
     }
 }
 

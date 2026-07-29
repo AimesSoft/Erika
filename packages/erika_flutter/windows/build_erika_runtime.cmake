@@ -15,6 +15,10 @@ endif()
 if(NOT DEFINED ERIKA_BUILD_CONFIG OR ERIKA_BUILD_CONFIG STREQUAL "")
   set(ERIKA_BUILD_CONFIG "Release")
 endif()
+if(NOT ERIKA_NATIVE_TARGET STREQUAL "x86_64-pc-windows-msvc" AND
+    NOT ERIKA_NATIVE_TARGET STREQUAL "aarch64-pc-windows-msvc")
+  message(FATAL_ERROR "Unsupported Erika Windows target: ${ERIKA_NATIVE_TARGET}")
+endif()
 
 set(ERIKA_NATIVE_DIST_DIR
   "${ERIKA_REPO_ROOT}/third_party/dist/${ERIKA_NATIVE_TARGET}/${ERIKA_NATIVE_PROFILE}")
@@ -53,11 +57,6 @@ function(erika_native_deps_ready output)
   set(${output} "${ready}" PARENT_SCOPE)
 endfunction()
 
-# --- Optional: use a prebuilt erika_capi.dll from a GitHub Release ---
-# Opt in with ERIKA_PREBUILT=1. ERIKA_PREBUILT_TAG selects the release tag
-# (default v0.1.3). On any failure this falls through to the source build below,
-# so enabling it never breaks a build. The Windows plugin loads the DLL
-# dynamically, so only erika_capi.dll is required.
 if("$ENV{ERIKA_PREBUILT}" STREQUAL "1")
   if(ERIKA_BUILD_CONFIG STREQUAL "Debug")
     set(_erika_cfg_dir "debug")
@@ -68,7 +67,14 @@ if("$ENV{ERIKA_PREBUILT}" STREQUAL "1")
   if(NOT "$ENV{ERIKA_PREBUILT_TAG}" STREQUAL "")
     set(_erika_tag "$ENV{ERIKA_PREBUILT_TAG}")
   endif()
-  set(_erika_dll_out "${ERIKA_REPO_ROOT}/target/${_erika_cfg_dir}/erika_capi.dll")
+  if(ERIKA_NATIVE_TARGET STREQUAL "aarch64-pc-windows-msvc")
+    set(_erika_asset_arch "arm64")
+  else()
+    set(_erika_asset_arch "x64")
+  endif()
+  set(_erika_target_dir
+    "${ERIKA_REPO_ROOT}/target/${ERIKA_NATIVE_TARGET}/${_erika_cfg_dir}")
+  set(_erika_dll_out "${_erika_target_dir}/erika_capi.dll")
   set(_erika_tag_marker "${_erika_dll_out}.prebuilt-tag")
   if(EXISTS "${_erika_dll_out}" AND EXISTS "${_erika_tag_marker}")
     file(READ "${_erika_tag_marker}" _erika_cached_tag)
@@ -80,12 +86,13 @@ if("$ENV{ERIKA_PREBUILT}" STREQUAL "1")
   endif()
   file(REMOVE
     "${_erika_dll_out}"
-    "${ERIKA_REPO_ROOT}/target/${_erika_cfg_dir}/erika_capi.dll.lib"
-    "${ERIKA_REPO_ROOT}/target/${_erika_cfg_dir}/erika_capi.lib"
+    "${_erika_target_dir}/erika_capi.dll.lib"
+    "${_erika_target_dir}/erika_capi.lib"
     "${_erika_tag_marker}")
   set(_erika_url
-    "https://github.com/AimesSoft/Erika/releases/download/${_erika_tag}/erika-capi-windows-x64.zip")
-  set(_erika_work "${ERIKA_REPO_ROOT}/target/erika-prebuilt-windows")
+    "https://github.com/AimesSoft/Erika/releases/download/${_erika_tag}/erika-capi-windows-${_erika_asset_arch}.zip")
+  set(_erika_work
+    "${ERIKA_REPO_ROOT}/target/erika-prebuilt-windows-${_erika_asset_arch}")
   set(_erika_zip "${_erika_work}/bundle.zip")
   file(REMOVE_RECURSE "${_erika_work}")
   file(MAKE_DIRECTORY "${_erika_work}")
@@ -101,13 +108,13 @@ if("$ENV{ERIKA_PREBUILT}" STREQUAL "1")
     if(_erika_unzip EQUAL 0 AND _erika_found_dll)
       list(GET _erika_found_dll 0 _erika_src_dll)
       get_filename_component(_erika_src_lib_dir "${_erika_src_dll}" DIRECTORY)
-      file(MAKE_DIRECTORY "${ERIKA_REPO_ROOT}/target/${_erika_cfg_dir}")
+      file(MAKE_DIRECTORY "${_erika_target_dir}")
       file(COPY "${_erika_src_dll}"
-        DESTINATION "${ERIKA_REPO_ROOT}/target/${_erika_cfg_dir}")
+        DESTINATION "${_erika_target_dir}")
       foreach(_erika_extra erika_capi.dll.lib erika_capi.lib)
         if(EXISTS "${_erika_src_lib_dir}/${_erika_extra}")
           file(COPY "${_erika_src_lib_dir}/${_erika_extra}"
-            DESTINATION "${ERIKA_REPO_ROOT}/target/${_erika_cfg_dir}")
+            DESTINATION "${_erika_target_dir}")
         endif()
       endforeach()
       if(EXISTS "${_erika_dll_out}")
@@ -131,7 +138,7 @@ else()
     set(_erika_source_cfg_dir "release")
   endif()
   file(REMOVE
-    "${ERIKA_REPO_ROOT}/target/${_erika_source_cfg_dir}/erika_capi.dll.prebuilt-tag")
+    "${ERIKA_REPO_ROOT}/target/${ERIKA_NATIVE_TARGET}/${_erika_source_cfg_dir}/erika_capi.dll.prebuilt-tag")
 endif()
 
 erika_native_deps_ready(ERIKA_NATIVE_DEPS_READY)
@@ -160,7 +167,7 @@ else()
   message(STATUS "Using Erika native dependencies from ${ERIKA_NATIVE_DIST_DIR}")
 endif()
 
-set(ERIKA_CARGO_ARGS build -p erika_capi)
+set(ERIKA_CARGO_ARGS build -p erika_capi --target "${ERIKA_NATIVE_TARGET}")
 if(NOT ERIKA_BUILD_CONFIG STREQUAL "Debug")
   list(APPEND ERIKA_CARGO_ARGS --release)
 endif()

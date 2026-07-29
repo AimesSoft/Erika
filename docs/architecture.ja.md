@@ -11,16 +11,16 @@ Rust Player Core
   source abstraction ─── file + HTTP range
   FFmpeg wrappers ────── custom AVIO, probe, demux, decode, seek, audio resample
   playback engine ────── video/audio tick, clock, frame scheduler
-  video decode ───────── VideoToolbox (macOS/iOS), D3D11VA (Windows), software fallback
-  audio output ───────── CoreAudio (macOS), AudioQueue (iOS), WASAPI (Windows), ring buffer
+  video decode ───────── VideoToolbox, D3D11VA, MediaCodec, AVCodec, software fallback
+  audio output ───────── CoreAudio, AudioQueue, WASAPI, AAudio, OHAudio, ring buffer
   overlay timeline ───── subtitle + danmaku composition
   renderer core ──────── color state, render graph, tone map, scaler policy
   Metal renderer ─────── zero-copy NV12/P010, HDR/EDR, subtitle/danmaku pass
   D3D11 renderer ─────── zero-copy D3D11VA, HDR10, subtitle/danmaku pass (Windows)
-  wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB
+  wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB, OHOS Vulkan
   presenter runtime ──── ties player + renderer + audio + overlays
-  C ABI ──────────────── 75 exported functions, two handle families
-  Flutter plugin ─────── macOS + iOS + Windows + Android native view embedding
+  C ABI ──────────────── 79 exported functions, two handle families
+  Flutter plugin ─────── macOS + iOS + Windows + Android + OpenHarmony embedding
 ```
 
 ## ネイティブ依存関係
@@ -48,7 +48,7 @@ cargo run -p xtask -- deps status
 `erika_ffmpeg_sys` は build 時に bindgen で低レベルバインディングを生成します。`erika::ffmpeg` は安全な Rust ラッパーを提供します。
 
 - **Demuxer**: `AVFormatContext` を保持し、`MediaSource` 由来の Rust-backed custom `AVIOContext` を使うこともできます。stream selection、reference-counted packets、timestamp-based seek をサポートします。
-- **Decoder**: software と VideoToolbox hardware backend を持ちます。hardware frames は BT.2020/PQ metadata を保持し、`CVPixelBufferRef` を通じて Metal に zero-copy で渡せます。
+- **Decoder**: software に加えて VideoToolbox、D3D11VA、MediaCodec、OpenHarmony AVCodec の hardware backend を持ちます。hardware frames は BT.2020/PQ metadata を保持し、platform native handle（Apple では `CVPixelBufferRef`）を通じて renderer に zero-copy で渡せます。
 - **AudioResampler**: `libswresample` を包み、interleaved f32 PCM（既定 48 kHz stereo）へ変換します。
 - **SubtitleDecoder**: 埋め込みテキスト字幕と bitmap 字幕ストリームをデコードします。
 
@@ -124,7 +124,8 @@ Windows のネイティブ renderer（`renderer/d3d11.rs`）：
 - 色空間変換と tone mapping（Metal と同じ pipeline model）。
 - bounded feature texture と source-sized packed DepthToSpace output を使う tiled ArtCNN C4F16/C4F32 compute（`renderer/wgpu_artcnn.rs`）。native luma と Android の converted nonlinear RGB の両方を扱い、`rgb + (Y_sr - Y)` で chroma を保持します。GLES 3.0 は compute を試さず、`Inactive` と `native_luma_sampling` fallback を明示します。
 - subtitle/danmaku composite、frame capture、headless testing 用 offscreen target。display surface が extended-linear の場合も screenshot は常に SDR RGBA8 target へ offscreen render し、未マップの scRGB 値を SDR pixel として返しません。
-- surface handle model は macOS NSView、iOS UIView、Windows HWND、X11/Wayland、Android native window をカバーします。
+- surface handle model は macOS NSView、iOS UIView、Windows HWND、X11/Wayland、Android native window、OpenHarmony `OHNativeWindow` をカバーします。
+- OpenHarmony では AVCodec の Surface 出力を `OHNativeBuffer` 由来の Vulkan external image として import し、Vulkan YCbCr sampler で YUV 変換を GPU 上で行うため、decode したフレームは CPU コピーなしで wgpu compositor に到達します。必要な Vulkan extension がない端末では software decode と CPU upload に fallback し、その経緯は diagnostics event から確認できます。
 - Android は bounded Vulkan/GLES backend recovery と import/capability/quality/device-failure diagnostics を備えます。high-headroom output は FP16 **extended-linear scRGB** であり HDR10/PQ ではありません。renderer は `Rgba16Float`、Vulkan extended-sRGB-linear color space を使い、configure/reconfigure ごとに `ANativeWindow` の `ADATASPACE_SCRGB_LINEAR`（`0x18410000`）を検証します。Android scRGB は BT.709 primaries、`1.0 = 80 nit` で、PQ や HDR10 static metadata は出力しません。
 - Extended-linear が active になる条件は、`ExtendedLinear` の明示要求、HDR 対応 display/surface、Flutter Hybrid Composition の `SurfaceView`、Vulkan wgpu backend、surface の `Rgba16Float` 対応、`SCRGB_LINEAR` dataspace readback 成功です。どれかが欠けると通常の SDR surface を直ちに選び、安定 ABI の fallback reason `0..8` を記録します。そのため GLES と `TextureView` は SDR path です。
 - API 34+ では Android host が `Display.registerHdrSdrRatioChangedListener` で display を監視し、実際の変化を `erika_presenter_set_output_headroom` で Erika に publish します。wgpu は surface を reattach せず、後続 frame の effective content headroom と queryable output status を更新します。ratio が available なら `activeHeadroomKnown` は true で、known flag または ratio が実際に変わった場合だけ `headroomUpdates` が増えます。
@@ -151,7 +152,7 @@ Windows のネイティブ renderer（`renderer/d3d11.rs`）：
 
 ## C ABI
 
-`erika_capi` は 2 つの handle family で 75 関数を export します。
+`erika_capi` は 2 つの handle family で 79 関数を export します。
 
 - **`ErikaHandle`**: player control と event polling。rendering は host 管理です。
 - **`ErikaPresenterHandle`**: Erika が full stack を所有します。host は surface を渡して `render_tick` を呼びます。
@@ -162,13 +163,14 @@ Header: `crates/erika_capi/include/erika.h`
 
 ## Flutter Plugin
 
-`packages/erika_flutter` は macOS / iOS / Windows / Android の Flutter embedding を提供します。
+`packages/erika_flutter` は macOS / iOS / Windows / Android / HarmonyOS の Flutter embedding を提供します。
 
 - **Dart**: `ErikaPlayer`（commands + events）、`ErikaWindowOverlayVideoView`（推奨の window-hosted native surface——Apple では Metal、Windows では D3D11 swapchain）、`ErikaVideoView`（compatibility platform view）。
 - **macOS Swift plugin**: `liberika_capi.dylib` を読み込み、`NSWindow` overlay または `NSView`/`CAMetalLayer` platform view surface を作成し、display link から `render_tick` を駆動します。
 - **iOS Swift plugin**: `liberika_capi.a` を static link し、`UIWindow` overlay または `UIView`/`CAMetalLayer` platform view surface を作成し、同じ presenter model を使います。
 - **Windows C++ plugin**（`ErikaFlutterPluginCApi`）: CMake（`build_erika_runtime.cmake`、cargo target `x86_64-pc-windows-msvc`）で `erika_capi.dll` をビルド・リンクし、window-level D3D11 swapchain を host し、frame scheduler から `render_tick` を駆動します。
 - **Android Kotlin/JNI plugin**: Android ABI 向け Rust runtime をビルドし、player ごとに独立した native surface を持ちます。SDR は `TextureView`、extended-linear の要求時は Flutter Hybrid Composition の `SurfaceView` を使います。Activity surface lifecycle、audio focus、noisy-route policy、HDR eligibility/headroom を調整し、active player がある間だけ shared frame scheduler を駆動します。
+- **HarmonyOS ArkTS/N-API plugin**: Hvigor/CMake で `aarch64-unknown-linux-ohos` 向けに `liberika_capi.so` をビルドし、Flutter external texture を登録して、その texture の `OHNativeWindow` を presenter に attach します。音声は OHAudio を通じて interleaved f32 PCM で出力します。
 
 embedding model と HDR strategy は `docs/flutter_embedding.md` を参照してください。
 
@@ -181,3 +183,4 @@ embedding model と HDR strategy は `docs/flutter_embedding.md` を参照して
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
 | Android 8+ | MediaCodec / software | wgpu Vulkan + GLES fallback | AAudio | Available。SDR は検証済み、extended-linear scRGB は API 35 HDR 実機 acceptance 待ち |
+| HarmonyOS API 18+ | AVCodec（H.264/HEVC）/ software | wgpu Vulkan、`OHNativeBuffer` zero-copy import | OHAudio | Available。実機で検証済み、CI は未カバー |
