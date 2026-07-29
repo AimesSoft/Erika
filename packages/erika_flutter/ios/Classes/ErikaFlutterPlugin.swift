@@ -1,6 +1,7 @@
 import Darwin
 import AVFoundation
 import Flutter
+import MediaPlayer
 import Metal
 import ObjectiveC.runtime
 import QuartzCore
@@ -606,6 +607,16 @@ private final class ErikaPlayerHost {
   private let presenterConfig: ErikaPresenterConfigC
   private var loggedFirstRenderedVideoFrame = false
   private var latestPresenterStats = ErikaPresenterStatsC()
+  private var fallbackTimer: DispatchSourceTimer?
+  private var isAppInBackground = false
+  private(set) var nowPlayingTitle = ""
+  private(set) var nowPlayingArtist: String?
+  private(set) var nowPlayingAlbum: String?
+  private(set) var durationSeconds: Double?
+  private(set) var positionSeconds = 0.0
+  private(set) var playbackRate = 1.0
+  private(set) var isPlaying = false
+  var onNowPlayingChanged: ((ErikaPlayerHost) -> Void)?
 
   init(id: Int64, library: ErikaNativeLibrary, config: ErikaPresenterConfigC, hdrDebug: Bool) throws {
     self.id = id
@@ -624,11 +635,17 @@ private final class ErikaPlayerHost {
 
   deinit {
     displayLink?.invalidate()
+    fallbackTimer?.cancel()
     _ = library.detachSurface(handle)
     library.destroy(handle)
   }
 
   func open(uri: String, httpHeaders: [String: String]) throws {
+    if nowPlayingTitle.isEmpty {
+      let fallbackTitle = URL(string: uri)?.lastPathComponent.removingPercentEncoding
+        ?? URL(fileURLWithPath: uri).lastPathComponent
+      nowPlayingTitle = fallbackTitle.isEmpty ? "Erika" : fallbackTitle
+    }
     try uri.withCString { cString in
       guard !httpHeaders.isEmpty else {
         try check(library.open(handle, cString), operation: "open")
@@ -650,18 +667,42 @@ private final class ErikaPlayerHost {
         try check(openWithHeaders(handle, cString, buffer.baseAddress.map(UnsafeRawPointer.init), UInt(headers.count)), operation: "open")
       }
     }
+    notifyNowPlayingChanged()
   }
 
   func play() throws {
     try configureAudioSessionForPlayback()
     try check(library.play(handle), operation: "play")
+    isPlaying = true
+    updateTickDriver()
+    notifyNowPlayingChanged()
   }
-  func pause() throws { try check(library.pause(handle), operation: "pause") }
-  func stop() throws { try check(library.stop(handle), operation: "stop") }
-  func close() throws { try check(library.close(handle), operation: "close") }
+  func pause() throws {
+    try check(library.pause(handle), operation: "pause")
+    isPlaying = false
+    updateTickDriver()
+    notifyNowPlayingChanged()
+  }
+  func stop() throws {
+    try check(library.stop(handle), operation: "stop")
+    isPlaying = false
+    positionSeconds = 0
+    updateTickDriver()
+    notifyNowPlayingChanged()
+  }
+  func close() throws {
+    try check(library.close(handle), operation: "close")
+    isPlaying = false
+    positionSeconds = 0
+    durationSeconds = nil
+    updateTickDriver()
+    notifyNowPlayingChanged()
+  }
 
   func seek(positionMicros: UInt64) throws {
     try check(library.seek(handle, positionMicros), operation: "seek")
+    positionSeconds = Double(positionMicros) / 1_000_000
+    notifyNowPlayingChanged()
   }
 
   func setPlaybackRate(_ rate: Double) throws {
@@ -669,6 +710,20 @@ private final class ErikaPlayerHost {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_playback_rate")
     }
     try check(setRate(handle, rate), operation: "set_playback_rate")
+    playbackRate = rate
+    notifyNowPlayingChanged()
+  }
+
+  func setMediaMetadata(title: String, artist: String?, album: String?) {
+    nowPlayingTitle = title
+    nowPlayingArtist = artist
+    nowPlayingAlbum = album
+    notifyNowPlayingChanged()
+  }
+
+  func setAppInBackground(_ value: Bool) {
+    isAppInBackground = value
+    updateTickDriver()
   }
 
   func setVolume(_ volume: Double) throws {
@@ -976,6 +1031,7 @@ private final class ErikaPlayerHost {
     view.attachedPlayerId = id
     try attachOrResize(view: view, attach: true)
     startDisplayLinkIfNeeded()
+    updateTickDriver()
   }
 
   func detach(viewId: Int64?) {
@@ -986,6 +1042,7 @@ private final class ErikaPlayerHost {
     displayLink = nil
     displayLinkProxy = nil
     _ = library.detachSurface(handle)
+    updateTickDriver()
   }
 
   func resizeFromAttachedView() {
@@ -1021,13 +1078,23 @@ private final class ErikaPlayerHost {
   }
 
   func pollEvents(sendEvent: (([String: Any]) -> Void)?) {
-    guard let sendEvent else { return }
     while true {
       var event = ErikaEventC()
       let status = withUnsafeMutablePointer(to: &event) { pointer in
         library.pollEvent(handle, UnsafeMutableRawPointer(pointer))
       }
       if status == 0 {
+        if event.durationMicros >= 0 {
+          durationSeconds = Double(event.durationMicros) / 1_000_000
+        }
+        positionSeconds = Double(event.positionMicros) / 1_000_000
+        if event.kind == 1 {
+          isPlaying = event.state == 3
+          updateTickDriver()
+        }
+        if event.kind == 1 || event.kind == 2 || event.kind == 3 {
+          notifyNowPlayingChanged()
+        }
         if event.kind == 6 {
           erikaHdrLog(
             hdrDebug,
@@ -1037,7 +1104,7 @@ private final class ErikaPlayerHost {
         let message = event.kind == 9 || event.kind == 11 || event.kind == 12
           ? library.currentEventMessage()
           : nil
-        sendEvent(event.toFlutterMap(playerId: id, host: self, structuredMessage: message))
+        sendEvent?(event.toFlutterMap(playerId: id, host: self, structuredMessage: message))
         continue
       }
       if status != 5 {
@@ -1070,7 +1137,7 @@ private final class ErikaPlayerHost {
   }
 
   private func startDisplayLinkIfNeeded() {
-    guard displayLink == nil else { return }
+    guard displayLink == nil, attachedView != nil, !isAppInBackground else { return }
     startTimeSeconds = CACurrentMediaTime()
     let proxy = DisplayLinkProxy { [weak self] in
       self?.renderTick(sendEvent: ErikaFlutterPlugin.sharedEventSink)
@@ -1080,6 +1147,34 @@ private final class ErikaPlayerHost {
     link.add(to: .main, forMode: .common)
     displayLinkProxy = proxy
     displayLink = link
+  }
+
+  private func updateTickDriver() {
+    if isAppInBackground || (attachedView == nil && isPlaying) {
+      displayLink?.invalidate()
+      displayLink = nil
+      displayLinkProxy = nil
+      startFallbackTimerIfNeeded()
+    } else {
+      fallbackTimer?.cancel()
+      fallbackTimer = nil
+      startDisplayLinkIfNeeded()
+    }
+  }
+
+  private func startFallbackTimerIfNeeded() {
+    guard fallbackTimer == nil, isPlaying else { return }
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
+    timer.setEventHandler { [weak self] in
+      self?.renderTick(sendEvent: ErikaFlutterPlugin.sharedEventSink)
+    }
+    fallbackTimer = timer
+    timer.resume()
+  }
+
+  private func notifyNowPlayingChanged() {
+    onNowPlayingChanged?(self)
   }
 
   private func resolvedDisplayLinkFps() -> Int {
@@ -1439,9 +1534,21 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
   private var views: [Int64: WeakErikaVideoPlatformViewBox] = [:]
   private var nextPlayerId: Int64 = 1
   private var pollTimer: Timer?
+  private var activePlayerId: Int64?
+  private var interruptedPlayerId: Int64?
+  private var notificationObservers: [NSObjectProtocol] = []
+  private var remoteCommandTargets: [(MPRemoteCommand, Any)] = []
+
+  deinit {
+    notificationObservers.forEach(NotificationCenter.default.removeObserver)
+    remoteCommandTargets.forEach { command, target in
+      command.removeTarget(target)
+    }
+  }
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let instance = ErikaFlutterPlugin()
+    instance.configureSystemPlayback()
     let playerChannel = FlutterMethodChannel(name: playerChannelName, binaryMessenger: registrar.messenger())
     let eventsChannel = FlutterEventChannel(name: eventsChannelName, binaryMessenger: registrar.messenger())
     registrar.addMethodCallDelegate(instance, channel: playerChannel)
@@ -1458,6 +1565,10 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         let args = try dictionaryArgs(call.arguments)
         let playerId = try requiredInt64(args["playerId"], name: "playerId")
         players.removeValue(forKey: playerId)
+        if activePlayerId == playerId {
+          activePlayerId = nil
+          clearNowPlayingInfo()
+        }
         result(nil)
       case "open":
         let args = try dictionaryArgs(call.arguments)
@@ -1466,10 +1577,16 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
           throw ErikaPluginError.invalidArguments("uri is required.")
         }
         let headers = (args["httpHeaders"] as? [String: String]) ?? [:]
+        if let metadata = args["metadata"] as? [String: Any] {
+          try applyMediaMetadata(metadata, to: host)
+        }
         try host.open(uri: uri, httpHeaders: headers)
         result(nil)
       case "play":
-        try playerHost(from: try dictionaryArgs(call.arguments)).play()
+        let host = try playerHost(from: try dictionaryArgs(call.arguments))
+        try host.play()
+        activePlayerId = host.id
+        updateNowPlayingInfo(for: host)
         result(nil)
       case "pause":
         try playerHost(from: try dictionaryArgs(call.arguments)).pause()
@@ -1490,6 +1607,14 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
           throw ErikaPluginError.invalidArguments("rate is required.")
         }
         try playerHost(from: args).setPlaybackRate(rate)
+        result(nil)
+      case "setMediaMetadata":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        guard let metadata = args["metadata"] as? [String: Any] else {
+          throw ErikaPluginError.invalidArguments("metadata is required.")
+        }
+        try applyMediaMetadata(metadata, to: host)
         result(nil)
       case "setVolume":
         let args = try dictionaryArgs(call.arguments)
@@ -1896,9 +2021,147 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
     let config = presenterConfigForNewPlayer(arguments: arguments, hdrDebug: hdrDebug)
     let id = nextPlayerId
     nextPlayerId += 1
-    players[id] = try ErikaPlayerHost(id: id, library: library, config: config, hdrDebug: hdrDebug)
+    let host = try ErikaPlayerHost(id: id, library: library, config: config, hdrDebug: hdrDebug)
+    host.onNowPlayingChanged = { [weak self] changedHost in
+      guard self?.activePlayerId == changedHost.id else { return }
+      self?.updateNowPlayingInfo(for: changedHost)
+    }
+    players[id] = host
     startPollTimerIfNeeded()
     return id
+  }
+
+  private func configureSystemPlayback() {
+    let center = NotificationCenter.default
+    notificationObservers.append(center.addObserver(
+      forName: UIApplication.didEnterBackgroundNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.players.values.forEach { $0.setAppInBackground(true) }
+    })
+    notificationObservers.append(center.addObserver(
+      forName: UIApplication.willEnterForegroundNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.players.values.forEach { $0.setAppInBackground(false) }
+    })
+    notificationObservers.append(center.addObserver(
+      forName: AVAudioSession.interruptionNotification,
+      object: AVAudioSession.sharedInstance(),
+      queue: .main
+    ) { [weak self] notification in
+      self?.handleAudioInterruption(notification)
+    })
+
+    let commands = MPRemoteCommandCenter.shared()
+    addRemoteTarget(commands.playCommand) { [weak self] _ in self?.performRemotePlay() ?? .commandFailed }
+    addRemoteTarget(commands.pauseCommand) { [weak self] _ in self?.performRemotePause() ?? .commandFailed }
+    addRemoteTarget(commands.togglePlayPauseCommand) { [weak self] _ in self?.performRemoteToggle() ?? .commandFailed }
+    addRemoteTarget(commands.changePlaybackPositionCommand) { [weak self] event in
+      guard let positionEvent = event as? MPChangePlaybackPositionCommandEvent else {
+        return .commandFailed
+      }
+      return self?.performRemoteSeek(positionEvent.positionTime) ?? .commandFailed
+    }
+  }
+
+  private func addRemoteTarget(
+    _ command: MPRemoteCommand,
+    handler: @escaping (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus
+  ) {
+    let target = command.addTarget(handler: handler)
+    remoteCommandTargets.append((command, target))
+  }
+
+  private func applyMediaMetadata(_ metadata: [String: Any], to host: ErikaPlayerHost) throws {
+    guard let title = metadata["title"] as? String, !title.isEmpty else {
+      throw ErikaPluginError.invalidArguments("metadata.title is required.")
+    }
+    host.setMediaMetadata(
+      title: title,
+      artist: metadata["artist"] as? String,
+      album: metadata["album"] as? String
+    )
+  }
+
+  private func updateNowPlayingInfo(for host: ErikaPlayerHost) {
+    var info: [String: Any] = [
+      MPMediaItemPropertyTitle: host.nowPlayingTitle,
+      MPNowPlayingInfoPropertyElapsedPlaybackTime: host.positionSeconds,
+      MPNowPlayingInfoPropertyPlaybackRate: host.isPlaying ? host.playbackRate : 0,
+      MPNowPlayingInfoPropertyDefaultPlaybackRate: host.playbackRate,
+      MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.video.rawValue,
+    ]
+    if let artist = host.nowPlayingArtist { info[MPMediaItemPropertyArtist] = artist }
+    if let album = host.nowPlayingAlbum { info[MPMediaItemPropertyAlbumTitle] = album }
+    if let duration = host.durationSeconds { info[MPMediaItemPropertyPlaybackDuration] = duration }
+    let center = MPNowPlayingInfoCenter.default()
+    center.nowPlayingInfo = info
+    center.playbackState = host.isPlaying ? .playing : .paused
+  }
+
+  private func clearNowPlayingInfo() {
+    let center = MPNowPlayingInfoCenter.default()
+    center.nowPlayingInfo = nil
+    center.playbackState = .stopped
+  }
+
+  private func performRemotePlay() -> MPRemoteCommandHandlerStatus {
+    guard let host = activePlayerId.flatMap({ players[$0] }) else { return .noSuchContent }
+    do {
+      try host.play()
+      return .success
+    } catch {
+      return .commandFailed
+    }
+  }
+
+  private func performRemotePause() -> MPRemoteCommandHandlerStatus {
+    guard let host = activePlayerId.flatMap({ players[$0] }) else { return .noSuchContent }
+    do {
+      try host.pause()
+      return .success
+    } catch {
+      return .commandFailed
+    }
+  }
+
+  private func performRemoteToggle() -> MPRemoteCommandHandlerStatus {
+    guard let host = activePlayerId.flatMap({ players[$0] }) else { return .noSuchContent }
+    return host.isPlaying ? performRemotePause() : performRemotePlay()
+  }
+
+  private func performRemoteSeek(_ position: TimeInterval) -> MPRemoteCommandHandlerStatus {
+    guard let host = activePlayerId.flatMap({ players[$0] }) else { return .noSuchContent }
+    do {
+      try host.seek(positionMicros: UInt64(max(0, position) * 1_000_000))
+      return .success
+    } catch {
+      return .commandFailed
+    }
+  }
+
+  private func handleAudioInterruption(_ notification: Notification) {
+    guard let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+          let type = AVAudioSession.InterruptionType(rawValue: rawType),
+          let host = activePlayerId.flatMap({ players[$0] }) else { return }
+    if type == .began {
+      interruptedPlayerId = host.isPlaying ? host.id : nil
+      if host.isPlaying {
+        try? host.pause()
+      }
+      return
+    }
+    guard let rawOptions = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt,
+          AVAudioSession.InterruptionOptions(rawValue: rawOptions).contains(.shouldResume),
+          interruptedPlayerId == host.id else {
+      interruptedPlayerId = nil
+      return
+    }
+    interruptedPlayerId = nil
+    try? host.play()
   }
 
   private func presenterConfigForNewPlayer(arguments: Any?, hdrDebug: Bool) -> ErikaPresenterConfigC {

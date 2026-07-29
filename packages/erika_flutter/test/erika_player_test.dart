@@ -122,6 +122,44 @@ void main() {
     await player.dispose();
   });
 
+  test('media metadata is forwarded for system now playing info', () async {
+    final player = ErikaPlayer();
+    const metadata = ErikaMediaMetadata(
+      title: 'Episode 1',
+      artist: 'Erika',
+      album: 'Season 1',
+    );
+
+    await player.open('https://example.test/video.mkv', metadata: metadata);
+    await player.setMediaMetadata(metadata);
+
+    final openCall = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'open',
+    );
+    expect(openCall.arguments, <String, Object?>{
+      'playerId': 7,
+      'uri': 'https://example.test/video.mkv',
+      'metadata': <String, Object>{
+        'title': 'Episode 1',
+        'artist': 'Erika',
+        'album': 'Season 1',
+      },
+    });
+    final metadataCall = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'setMediaMetadata',
+    );
+    expect(metadataCall.arguments, <String, Object?>{
+      'playerId': 7,
+      'metadata': <String, Object>{
+        'title': 'Episode 1',
+        'artist': 'Erika',
+        'album': 'Season 1',
+      },
+    });
+
+    await player.dispose();
+  });
+
   test('apple EDR output mode is passed to native create', () async {
     final player = ErikaPlayer(
       outputMode: ErikaOutputMode.appleEdr,
