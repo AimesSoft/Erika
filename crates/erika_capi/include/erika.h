@@ -438,6 +438,9 @@ ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *handle, doub
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *handle, double volume);
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *handle, int32_t mode);
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *handle, double scale);
+/* Positive audio-delay plays audio later than video. seconds is clamped to
+ * ±10 and applies from the next decoded frame. */
+ErikaStatus erika_presenter_set_audio_delay(ErikaPresenterHandle *handle, double seconds);
 ErikaStatus erika_presenter_set_output_headroom(
     ErikaPresenterHandle *handle,
     float headroom,

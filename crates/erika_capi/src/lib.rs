@@ -1637,6 +1637,25 @@ pub unsafe extern "C" fn erika_presenter_set_volume(
     target_os = "android",
     target_env = "ohos"
 ))]
+/// # Safety
+/// `handle` must be a live pointer returned by `erika_presenter_create*`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_set_audio_delay(
+    handle: *mut ErikaPresenterHandle,
+    seconds: f64,
+) -> ErikaStatus {
+    with_presenter_mut(handle, |handle| {
+        handle.presenter.set_audio_delay(seconds);
+        ErikaStatus::Ok
+    })
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_upscaler(
     handle: *mut ErikaPresenterHandle,
@@ -2432,6 +2451,20 @@ pub unsafe extern "C" fn erika_presenter_set_volume(
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
+)))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_set_audio_delay(
+    _handle: *mut std::ffi::c_void,
+    _seconds: f64,
+) -> ErikaStatus {
+    ErikaStatus::PlayerError
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_upscaler(
@@ -4090,6 +4123,32 @@ mod tests {
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
+    ))]
+    #[test]
+    fn c_presenter_audio_delay_setter_accepts_valid_handle() {
+        assert_eq!(
+            unsafe { erika_presenter_set_audio_delay(std::ptr::null_mut(), 1.0) },
+            ErikaStatus::NullPointer
+        );
+
+        let handle = erika_presenter_create();
+        assert!(!handle.is_null());
+        assert_eq!(
+            unsafe { erika_presenter_set_audio_delay(handle, -0.5) },
+            ErikaStatus::Ok
+        );
+        assert_eq!(
+            unsafe { erika_presenter_set_audio_delay(handle, 1_000.0) },
+            ErikaStatus::Ok
+        );
+        unsafe { erika_presenter_destroy(handle) };
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "android"
     ))]
     #[test]
     fn c_presenter_set_upscaler_accepts_valid_handle() {

@@ -777,6 +777,22 @@ class ErikaPlayer {
     });
   }
 
+  /// Sets the audio delay with mpv `audio-delay` semantics: a positive
+  /// [delay] plays audio later than the video. Clamped to plus or minus
+  /// 10 seconds.
+  Future<void> setAudioDelay(Duration delay) async {
+    final playerId = await ensureCreated();
+    final seconds =
+        (delay.inMicroseconds / Duration.microsecondsPerSecond).clamp(
+      -10.0,
+      10.0,
+    );
+    await _invoke('setAudioDelay', <String, Object?>{
+      'playerId': playerId,
+      'seconds': seconds,
+    });
+  }
+
   Future<ErikaUpscalerStatus> getUpscalerStatus() async {
     final playerId = await ensureCreated();
     final status = await _channel.invokeMethod<Map<dynamic, dynamic>>(
