@@ -69,10 +69,16 @@ jobs:
           test -x "$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang"
           test -x "$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang++"
           test -f "$NATIVE_ROOT/build/cmake/ohos.toolchain.cmake"
+          cxx_include="$NATIVE_ROOT/llvm/include/libcxx-ohos/include/c++/v1"
+          if [[ ! -f "$cxx_include/vector" ]]; then
+            cxx_include="$NATIVE_ROOT/llvm/include/c++/v1"
+          fi
+          test -f "$cxx_include/vector"
           {
             echo "OHOS_NDK_HOME=$NATIVE_ROOT"
             echo "OHOS_SDK_NATIVE=$NATIVE_ROOT"
             echo "LIBCLANG_PATH=$NATIVE_ROOT/llvm/lib"
+            echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_ohos=--target=aarch64-unknown-linux-ohos --sysroot=$NATIVE_ROOT/sysroot -isystem $cxx_include"
             echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER=$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang"
             echo "CC_aarch64_unknown_linux_ohos=$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang"
             echo "CXX_aarch64_unknown_linux_ohos=$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang++"
