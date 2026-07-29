@@ -2128,7 +2128,7 @@ fn default_ass_font_provider() -> libc::c_int {
 #[cfg(feature = "libass")]
 fn default_ass_font_family_cstr() -> &'static CStr {
     if cfg!(target_os = "macos") {
-        c"PingFang SC"
+        c"Droid Sans Fallback"
     } else if cfg!(target_os = "windows") {
         c"Arial"
     } else {
@@ -3198,7 +3198,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     #[cfg(feature = "libass")]
     #[test]
-    fn default_ass_font_family_matches_generated_script_family() {
+    fn default_ass_font_family_matches_platform_fallback_policy() {
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            default_ass_font_family_cstr().to_str().unwrap(),
+            BUNDLED_ASS_FALLBACK_FONT_FAMILY
+        );
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(
             default_ass_font_family_cstr().to_str().unwrap(),
             DEFAULT_ASS_FONT_FAMILY
