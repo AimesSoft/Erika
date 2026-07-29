@@ -2716,6 +2716,9 @@ impl WgpuRenderer {
             let start = index * stride;
             bytes[start..start + uniform_size].copy_from_slice(bytemuck::bytes_of(uniform));
         }
+        // TODO(perf): retain a growable per-frame uniform buffer and update it via
+        // `Queue::write_buffer` (or a small ring) instead of allocating a new GPU
+        // buffer for every danmaku frame. Keep `stride` device-aligned when reusing it.
         let uniform_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {

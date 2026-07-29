@@ -918,6 +918,9 @@ impl MediaSource for HttpRangeSource {
         // servers close a HEAD connection without an explicit Connection
         // header; reusing that stale socket for the first GET otherwise
         // surfaces as `Peer disconnected`.
+        // TODO(perf): cache a dedicated metadata agent on `HttpRangeSource` so
+        // repeated `len()` probes without Content-Length do not rebuild the TLS
+        // client, while still keeping HEAD sockets out of the range-request pool.
         let head_agent = http_agent();
         let mut attempt = 0u32;
         let head_error = loop {
