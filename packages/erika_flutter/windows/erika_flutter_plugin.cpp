@@ -1322,11 +1322,11 @@ struct ErikaFlutterPlugin::PlayerHost {
     std::vector<uint64_t> ids;
     ids.reserve(values.size());
     for (const auto& value : values) {
-      const auto id = Int64Value(&value);
-      if (!id || *id <= 0) {
+      const auto font_id = Int64Value(&value);
+      if (!font_id || *font_id <= 0) {
         throw PluginError("fontIds must contain positive integers.");
       }
-      ids.push_back(static_cast<uint64_t>(*id));
+      ids.push_back(static_cast<uint64_t>(*font_id));
     }
     Check(library->select_subtitle_memory_fonts(handle, ids.data(), ids.size()),
           "select_subtitle_memory_fonts");
