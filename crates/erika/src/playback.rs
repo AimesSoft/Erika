@@ -969,6 +969,23 @@ impl PlaybackSession {
                 }
             }
         }
+        // Keep every embedded subtitle stream in the asynchronous demux
+        // selection. Subtitle track changes can then swap only the subtitle
+        // decoder without resetting the demux worker. Resetting its selection
+        // drains the bounded read-ahead queue while the underlying demux cursor
+        // stays ahead; that creates an A/V packet discontinuity and breaks the
+        // HEVC reference-picture chain until the next random-access frame.
+        for track in &probe.subtitles {
+            if let SubtitleTrackSource::Embedded { stream_index } = &track.source {
+                selected_streams.push(stream_index_i32(
+                    *stream_index,
+                    TrackKind::Subtitle,
+                    track.id,
+                )?);
+            }
+        }
+        selected_streams.sort_unstable();
+        selected_streams.dedup();
         if !selected_streams.is_empty() {
             demuxer.set_stream_selection(StreamSelection::only(selected_streams))?;
         }
@@ -1433,7 +1450,11 @@ impl PlaybackSession {
             }
         }
         self.subtitle_frames.clear();
-        self.update_demux_selection()?;
+        // All embedded subtitle streams are selected when the main demuxer is
+        // opened (and whenever an audio selection rebuilds its selection).
+        // Do not touch the asynchronous demux selection for a subtitle-only
+        // change: doing so would discard queued A/V packets without rewinding
+        // the demux cursor.
         self.mark_selected_tracks();
         Ok(())
     }
@@ -1741,17 +1762,17 @@ impl PlaybackSession {
         if let Some(track_id) = self.info.selected_audio_track {
             streams.push(self.embedded_track_stream_index(track_id, TrackKind::Audio)?);
         }
-        if let Some(track_id) = self.info.selected_subtitle_track {
-            if let SubtitleTrackSource::Embedded { stream_index } =
-                self.subtitle_track_source(track_id)?
-            {
+        for track in &self.info.subtitle_tracks {
+            if let SubtitleTrackSource::Embedded { stream_index } = &track.source {
                 streams.push(stream_index_i32(
-                    stream_index,
+                    *stream_index,
                     TrackKind::Subtitle,
-                    track_id,
+                    track.id,
                 )?);
             }
         }
+        streams.sort_unstable();
+        streams.dedup();
         if streams.is_empty() {
             self.demuxer.set_stream_selection(StreamSelection::all())?;
         } else {
@@ -5714,6 +5735,36 @@ mod tests {
         assert_eq!(frame.end, Some(Duration::from_secs(3)));
         assert_eq!(frame.text.len(), 1);
         assert_eq!(frame.text[0].display_text(), "External subtitle");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn adding_external_subtitle_keeps_main_demux_generation() {
+        let path = std::env::temp_dir().join(format!(
+            "erika-external-subtitle-demux-continuity-{}.srt",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            "1\n00:00:00,000 --> 00:00:08,000\nExternal subtitle\n",
+        )
+        .unwrap();
+        let mut engine = playback_fixture_engine();
+        let demux_generation = engine.session.demuxer.generation;
+
+        let (track, _) = engine
+            .add_external_subtitle(SubtitleTrackConfig::external(
+                1_000_008,
+                path.to_string_lossy(),
+            ))
+            .unwrap();
+
+        assert_eq!(track.id, 1_000_008);
+        assert_eq!(
+            engine.session.demuxer.generation, demux_generation,
+            "a subtitle-only change must not discard queued A/V packets"
+        );
 
         let _ = fs::remove_file(path);
     }
