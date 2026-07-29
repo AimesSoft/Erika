@@ -175,6 +175,9 @@ private struct ErikaTrackInfoC {
   var sampleFormat: UnsafeMutablePointer<CChar>?
   var profile: UnsafeMutablePointer<CChar>?
   var level: Int32 = 0
+  var bitRate: UInt64 = 0
+  var frameRateNumerator: UInt32 = 0
+  var frameRateDenominator: UInt32 = 0
 }
 
 private struct ErikaPresenterConfigC {
@@ -375,6 +378,7 @@ private final class ErikaNativeLibrary {
   ) -> Int32
   typealias ClearDanmakuFn = @convention(c) (UnsafeMutableRawPointer?) -> Int32
   typealias SetDanmakuEnabledFn = @convention(c) (UnsafeMutableRawPointer?, Bool) -> Int32
+  typealias SetDebugHudEnabledFn = @convention(c) (UnsafeMutableRawPointer?, Bool) -> Int32
   typealias SetDanmakuConfigFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeRawPointer?) -> Int32
   typealias GetDanmakuConfigFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias SetDanmakuFontFn = @convention(c) (
@@ -401,6 +405,8 @@ private final class ErikaNativeLibrary {
   typealias RenderTickFn = @convention(c) (UnsafeMutableRawPointer?, Double, UnsafeMutableRawPointer?) -> Int32
   typealias CaptureFrameRgbaFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, UnsafeMutableRawPointer?, Int) -> Int32
   typealias PollEventFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
+  typealias LastErrorMessageFn = @convention(c) () -> UnsafeMutablePointer<CChar>?
+  typealias StringFreeFn = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
 
   static let shared = try? ErikaNativeLibrary()
 
@@ -435,6 +441,7 @@ private final class ErikaNativeLibrary {
   let danmakuTracks: TracksFn?
   let clearDanmaku: ClearDanmakuFn?
   let setDanmakuEnabled: SetDanmakuEnabledFn?
+  let setDebugHudEnabled: SetDebugHudEnabledFn?
   let setDanmakuConfig: SetDanmakuConfigFn?
   let getDanmakuConfig: GetDanmakuConfigFn?
   let setDanmakuFont: SetDanmakuFontFn?
@@ -449,6 +456,8 @@ private final class ErikaNativeLibrary {
   let renderTick: RenderTickFn
   let captureFrameRgba: CaptureFrameRgbaFn?
   let pollEvent: PollEventFn
+  let lastErrorMessage: LastErrorMessageFn
+  let stringFree: StringFreeFn
 
   private let libraryHandle: UnsafeMutableRawPointer
   let path: String
@@ -493,6 +502,7 @@ private final class ErikaNativeLibrary {
     danmakuTracks = Self.loadOptional("erika_presenter_danmaku_tracks", from: libraryHandle, as: TracksFn.self)
     clearDanmaku = Self.loadOptional("erika_presenter_clear_danmaku", from: libraryHandle, as: ClearDanmakuFn.self)
     setDanmakuEnabled = Self.loadOptional("erika_presenter_set_danmaku_enabled", from: libraryHandle, as: SetDanmakuEnabledFn.self)
+    setDebugHudEnabled = Self.loadOptional("erika_presenter_set_debug_hud_enabled", from: libraryHandle, as: SetDebugHudEnabledFn.self)
     setDanmakuConfig = Self.loadOptional("erika_presenter_set_danmaku_config_ptr", from: libraryHandle, as: SetDanmakuConfigFn.self)
     getDanmakuConfig = Self.loadOptional("erika_presenter_get_danmaku_config", from: libraryHandle, as: GetDanmakuConfigFn.self)
     setDanmakuFont = Self.loadOptional("erika_presenter_set_danmaku_font", from: libraryHandle, as: SetDanmakuFontFn.self)
@@ -507,6 +517,8 @@ private final class ErikaNativeLibrary {
     renderTick = try Self.load("erika_presenter_render_tick", from: libraryHandle, as: RenderTickFn.self)
     captureFrameRgba = Self.loadOptional("erika_presenter_capture_frame_rgba", from: libraryHandle, as: CaptureFrameRgbaFn.self)
     pollEvent = try Self.load("erika_presenter_poll_event", from: libraryHandle, as: PollEventFn.self)
+    lastErrorMessage = try Self.load("erika_last_error_message", from: libraryHandle, as: LastErrorMessageFn.self)
+    stringFree = try Self.load("erika_string_free", from: libraryHandle, as: StringFreeFn.self)
   }
 
   private static func openLibrary() throws -> (handle: UnsafeMutableRawPointer, path: String) {
@@ -569,6 +581,14 @@ private final class ErikaNativeLibrary {
       return createWithOutputMode(config.outputMode, config.edrHeadroom)
     }
     return create()
+  }
+
+  func currentEventMessage() -> String? {
+    guard let pointer = lastErrorMessage() else {
+      return nil
+    }
+    defer { stringFree(pointer) }
+    return String(validatingUTF8: pointer)
   }
 }
 
@@ -827,6 +847,13 @@ private final class ErikaPlayerHost {
     currentDanmakuConfig.enabled = enabled ? 1 : 0
   }
 
+  func setDebugHudEnabled(_ enabled: Bool) throws {
+    guard let setEnabled = library.setDebugHudEnabled else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_set_debug_hud_enabled")
+    }
+    try check(setEnabled(handle, enabled), operation: "set_debug_hud_enabled")
+  }
+
   func danmakuConfigSnapshot() -> ErikaDanmakuConfigC {
     currentDanmakuConfig
   }
@@ -1007,7 +1034,10 @@ private final class ErikaPlayerHost {
             "video params player=\(id) width=\(event.video.width) height=\(event.video.height) primaries=\(event.video.primaries) transfer=\(event.video.transfer)"
           )
         }
-        sendEvent(event.toFlutterMap(playerId: id, host: self))
+        let message = event.kind == 9 || event.kind == 11 || event.kind == 12
+          ? library.currentEventMessage()
+          : nil
+        sendEvent(event.toFlutterMap(playerId: id, host: self, structuredMessage: message))
         continue
       }
       if status != 5 {
@@ -1491,6 +1521,10 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       case "getPresenterStats":
         let args = try dictionaryArgs(call.arguments)
         result(try playerHost(from: args).presenterStats())
+      case "setDebugHudEnabled":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).setDebugHudEnabled(boolValue(args["enabled"]) ?? false)
+        result(nil)
       case "addExternalSubtitle":
         let args = try dictionaryArgs(call.arguments)
         guard let uri = args["uri"] as? String, !uri.isEmpty else {
@@ -2089,7 +2123,11 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
 }
 
 private extension ErikaEventC {
-  func toFlutterMap(playerId: Int64, host: ErikaPlayerHost? = nil) -> [String: Any] {
+  func toFlutterMap(
+    playerId: Int64,
+    host: ErikaPlayerHost? = nil,
+    structuredMessage: String? = nil
+  ) -> [String: Any] {
     var map: [String: Any] = [
       "playerId": playerId,
       "kind": Int(kind),
@@ -2117,6 +2155,17 @@ private extension ErikaEventC {
         "audio": -1,
         "subtitle": -1,
       ]
+    }
+    if let structuredMessage,
+       let data = structuredMessage.data(using: .utf8),
+       let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+      if kind == 11 {
+        map["decoder"] = payload
+      } else if kind == 12 {
+        map["audio"] = payload
+      } else if kind == 9 {
+        map["error"] = structuredMessage
+      }
     }
     return map
   }
@@ -2221,6 +2270,9 @@ private extension ErikaTrackInfoC {
       "sampleFormat": sampleFormat.map { String(cString: $0) } as Any,
       "profile": profile.map { String(cString: $0) } as Any,
       "level": Int(level),
+      "bitRate": Int64(clamping: bitRate),
+      "frameRateNumerator": Int(frameRateNumerator),
+      "frameRateDenominator": Int(frameRateDenominator),
     ]
   }
 }

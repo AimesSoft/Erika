@@ -156,6 +156,13 @@ final status = await player.getUpscalerStatus();
 
 // Track management
 final tracks = await player.tracks();
+for (final track in tracks) {
+  if (track.kind == ErikaTrackKind.video && track.selected) {
+    print('${track.codec} ${track.width}x${track.height}');
+    print('${track.bitRate} bps / ${track.framesPerSecond} fps');
+    break;
+  }
+}
 await player.selectAudioTrack(trackId);
 await player.selectSubtitleTrack(trackId);
 await player.addExternalSubtitle('/path/to/subtitle.srt');
@@ -165,6 +172,10 @@ await player.loadDanmakuFile('/path/to/danmaku.xml');
 await player.addDanmakuTrackJson(jsonString, name: 'source', offset: Duration.zero);
 await player.setDanmakuConfig(fontSize: 30, displayArea: 0.5);
 
+// Native diagnostics HUD (disabled by default)
+await player.setDebugHudEnabled(true);
+final presenterStats = await player.getPresenterStats();
+
 // Events
 player.events.listen((event) {
   // event.kind, event.state, event.position, event.duration, ...
@@ -172,6 +183,36 @@ player.events.listen((event) {
 
 await player.dispose();
 ```
+
+## メディアトラック情報
+
+`tracks()` は embedded/external の各トラックについて `ErikaTrackInfo` を返します。video
+track には `codec`、`width`、`height`、`pixelFormat`、`profile`、`level`、`bitRate`、
+`frameRateNumerator`、`frameRateDenominator` が含まれ、audio track にはさらに
+`sampleRate`、`channels`、`sampleFormat` が含まれます。
+
+- `bitRate` の単位は bit/s です。video track 自身の codec parameter を優先し、単一の
+  video track に bitrate がなく、container total と他の全 audio track bitrate が既知の場合のみ、
+  container bitrate から audio bitrate を引いて推定します。取得できない場合は `null` です。
+  瞬間 bitrate ではなく、推定値には container overhead や非 audio stream が含まれる場合があります。
+- `frameRateNumerator` / `frameRateDenominator` は `30000/1001` などの有理数を保持します。
+  probe 順序は average frame rate、`r_frame_rate`、FFmpeg guessed frame rate です。
+  `framesPerSecond` は Dart の convenience getter であり、VFR media では平均、宣言、または
+  推定値です。
+- `TracksChanged` と `TrackSelectionChanged` event には完全な `trackList` が含まれます。
+  event 後に `tracks()` を再度呼んで current snapshot を取得することもできます。
+
+## ネイティブ Debug HUD
+
+`setDebugHudEnabled(true)` は native video composition に診断 HUD を描画します。Dart
+を通じて render せず、Flutter widget tree も変更しません。既定では off で、development、
+performance analysis、device 上の diagnosis 用です。
+
+HUD は codec/resolution/bitrate/frame rate、playback position/rate、decoded/rendered FPS、
+decode route、zero-copy/fallback counters、CPU/GPU render time、audio queue/underflow、HDR
+output negotiation、danmaku item count を表示します。FPS は隣接 sample window の差分であり、
+その他の frame/failure counter は presenter lifetime 中の累積値です。HUD は
+`screenshot()` の off-screen capture には含まれません。
 
 ## Neural Upscaler Status
 

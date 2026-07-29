@@ -1705,6 +1705,7 @@ class ErikaFlutterPlugin :
             "clearDanmaku",
             "setDanmakuEnabled",
             "setDanmakuConfig",
+            "setDebugHudEnabled",
             "selectAudioTrack",
             "selectSubtitleTrack",
         )
@@ -1723,6 +1724,7 @@ class ErikaFlutterPlugin :
             "getUpscalerStatus",
             "getOutputStatus",
             "getPresenterStats",
+            "setDebugHudEnabled",
             "addExternalSubtitle",
             "removeSubtitleTrack",
             "loadDanmakuFile",

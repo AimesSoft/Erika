@@ -149,6 +149,13 @@ final status = await player.getUpscalerStatus();
 
 // Track management
 final tracks = await player.tracks();
+for (final track in tracks) {
+  if (track.kind == ErikaTrackKind.video && track.selected) {
+    print('${track.codec} ${track.width}x${track.height}');
+    print('${track.bitRate} bps / ${track.framesPerSecond} fps');
+    break;
+  }
+}
 await player.selectAudioTrack(trackId);
 await player.selectSubtitleTrack(trackId);
 await player.addExternalSubtitle('/path/to/subtitle.srt');
@@ -158,6 +165,10 @@ await player.loadDanmakuFile('/path/to/danmaku.xml');
 await player.addDanmakuTrackJson(jsonString, name: 'source', offset: Duration.zero);
 await player.setDanmakuConfig(fontSize: 30, displayArea: 0.5);
 
+// Native diagnostics HUD (disabled by default)
+await player.setDebugHudEnabled(true);
+final presenterStats = await player.getPresenterStats();
+
 // Events
 player.events.listen((event) {
   // event.kind, event.state, event.position, event.duration, ...
@@ -165,6 +176,48 @@ player.events.listen((event) {
 
 await player.dispose();
 ```
+
+## 媒体轨道信息
+
+`tracks()` 返回每条嵌入或外挂轨道的 `ErikaTrackInfo`。视频轨道的 `codec`、`width`、
+`height`、`pixelFormat`、`profile`、`level`、`bitRate`、`frameRateNumerator` 和
+`frameRateDenominator` 可用于媒体详情页；音频轨道还包含 `sampleRate`、`channels` 和
+`sampleFormat`。
+
+- `bitRate` 单位为 bit/s。优先使用视频轨自身的编码参数；仅在单视频轨缺少该值、容器总码率
+  和所有其它音频轨码率均已知时，才以“容器总码率减去音频轨码率”估算。未知时为 `null`；它不是
+  实时瞬时码率，估算值也可能包含封装开销或其它非音频流的影响。
+- `frameRateNumerator` / `frameRateDenominator` 保留原始有理数，避免把 `30000/1001` 截断。
+  探测顺序为平均帧率、`r_frame_rate` 和 FFmpeg 的估算帧率；`framesPerSecond` 是 Dart 的便利
+  getter。对可变帧率内容它仍是平均、声明或估算值，而非每帧更新值。
+- `TracksChanged` 和 `TrackSelectionChanged` 事件的 `trackList` 会附带完整轨道列表。也可以在
+  收到事件后再次调用 `tracks()` 获取当前快照。
+
+```dart
+player.events.listen((event) {
+  if (event.kind == ErikaEventKind.tracksChanged) {
+    for (final track in event.trackList) {
+      if (track.kind == ErikaTrackKind.video && track.selected) {
+        print(track.toMap());
+        break;
+      }
+    }
+  }
+});
+```
+
+## 原生调试 HUD
+
+`setDebugHudEnabled(true)` 让 Erika 在原生视频合成中绘制诊断 HUD；它不经过 Dart 渲染，
+也不会改变 Flutter widget 层级。默认关闭，适合开发、性能分析和问题截图前的现场观察。
+
+HUD 以低频快照显示轨道编码/分辨率/码率/帧率、播放位置与倍速、实时解码与渲染 FPS、硬件或
+软件解码路径、零拷贝/回退计数、CPU/GPU 渲染耗时、音频队列与 underflow、HDR 输出协商和
+弹幕数量。实时 FPS 是相邻统计采样窗口的增量；其它帧数和失败数为 presenter 生命周期内的
+累计计数。HUD 不包含在 `screenshot()` 返回的离屏截图中。
+
+如需自行设计 UI，使用 `getPresenterStats()` 获取最近一次原生显示 tick 的统计快照；它不是
+HUD 的驱动机制，数据新鲜度取决于已挂载 surface 的显示循环。
 
 ## Neural Upscaler Status
 

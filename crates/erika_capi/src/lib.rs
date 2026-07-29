@@ -261,6 +261,9 @@ pub struct ErikaTrackInfo {
     pub sample_format: *mut c_char,
     pub profile: *mut c_char,
     pub level: i32,
+    pub bit_rate: u64,
+    pub frame_rate_numerator: u32,
+    pub frame_rate_denominator: u32,
 }
 
 impl Default for ErikaTrackInfo {
@@ -282,6 +285,9 @@ impl Default for ErikaTrackInfo {
             sample_format: std::ptr::null_mut(),
             profile: std::ptr::null_mut(),
             level: 0,
+            bit_rate: 0,
+            frame_rate_numerator: 0,
+            frame_rate_denominator: 0,
         }
     }
 }
@@ -2160,6 +2166,23 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_enabled(
     target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_set_debug_hud_enabled(
+    handle: *mut ErikaPresenterHandle,
+    enabled: bool,
+) -> ErikaStatus {
+    with_presenter_mut(handle, |handle| {
+        handle.presenter.set_debug_hud_enabled(enabled);
+        ErikaStatus::Ok
+    })
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+))]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_danmaku_config(
     handle: *mut ErikaPresenterHandle,
     config: ErikaDanmakuConfig,
@@ -3356,6 +3379,17 @@ fn track_info_to_c(track: &TrackInfo) -> ErikaTrackInfo {
         sample_format: option_string_to_c(track.sample_format.as_deref()),
         profile: option_string_to_c(track.profile.as_deref()),
         level: track.level.unwrap_or(0),
+        bit_rate: track.bit_rate.unwrap_or(0),
+        frame_rate_numerator: track
+            .frame_rate
+            .as_ref()
+            .map(|rate| rate.numerator)
+            .unwrap_or(0),
+        frame_rate_denominator: track
+            .frame_rate
+            .as_ref()
+            .map(|rate| rate.denominator)
+            .unwrap_or(0),
     }
 }
 
@@ -3710,6 +3744,8 @@ mod tests {
         track.title = Some("Signs".to_string());
         track.language = Some("jpn".to_string());
         track.codec = Some("ass".to_string());
+        track.bit_rate = Some(8_000_000);
+        track.frame_rate = erika::FrameRate::new(30_000, 1_001);
 
         let mut c_track = track_info_to_c(&track);
 
@@ -3730,6 +3766,9 @@ mod tests {
             unsafe { CStr::from_ptr(c_track.codec).to_str().unwrap() },
             "ass"
         );
+        assert_eq!(c_track.bit_rate, 8_000_000);
+        assert_eq!(c_track.frame_rate_numerator, 30_000);
+        assert_eq!(c_track.frame_rate_denominator, 1_001);
 
         unsafe { erika_track_info_free(&mut c_track) };
         assert!(c_track.title.is_null());
@@ -4090,6 +4129,34 @@ mod tests {
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
+    ))]
+    #[test]
+    fn c_presenter_toggles_debug_hud() {
+        assert_eq!(
+            unsafe { erika_presenter_set_debug_hud_enabled(std::ptr::null_mut(), true) },
+            ErikaStatus::NullPointer
+        );
+
+        let handle = erika_presenter_create();
+        assert!(!handle.is_null());
+        assert_eq!(
+            unsafe { erika_presenter_set_debug_hud_enabled(handle, true) },
+            ErikaStatus::Ok
+        );
+        assert!(unsafe { &*handle }.presenter.debug_hud_enabled());
+        assert_eq!(
+            unsafe { erika_presenter_set_debug_hud_enabled(handle, false) },
+            ErikaStatus::Ok
+        );
+        assert!(!unsafe { &*handle }.presenter.debug_hud_enabled());
+        unsafe { erika_presenter_destroy(handle) };
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "android"
     ))]
     #[test]
     fn c_presenter_set_upscaler_accepts_valid_handle() {

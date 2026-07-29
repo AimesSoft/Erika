@@ -190,6 +190,38 @@ impl Default for TrackSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameRate {
+    pub numerator: u32,
+    pub denominator: u32,
+}
+
+impl FrameRate {
+    pub fn new(numerator: u32, denominator: u32) -> Option<Self> {
+        if numerator == 0 || denominator == 0 {
+            return None;
+        }
+        let divisor = greatest_common_divisor(numerator, denominator);
+        Some(Self {
+            numerator: numerator / divisor,
+            denominator: denominator / divisor,
+        })
+    }
+
+    pub fn frames_per_second(&self) -> f64 {
+        f64::from(self.numerator) / f64::from(self.denominator)
+    }
+}
+
+fn greatest_common_divisor(mut left: u32, mut right: u32) -> u32 {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackInfo {
     pub id: i64,
     pub kind: TrackKind,
@@ -204,6 +236,8 @@ pub struct TrackInfo {
     pub sample_format: Option<String>,
     pub profile: Option<String>,
     pub level: Option<i32>,
+    pub bit_rate: Option<u64>,
+    pub frame_rate: Option<FrameRate>,
     pub selected: bool,
     pub source: TrackSource,
     pub can_remove: bool,
@@ -225,6 +259,8 @@ impl TrackInfo {
             sample_format: None,
             profile: None,
             level: None,
+            bit_rate: None,
+            frame_rate: None,
             selected: false,
             source: TrackSource::Embedded,
             can_remove: false,

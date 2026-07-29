@@ -780,6 +780,11 @@ unsafe fn invoke_presenter(
             Ok(output_status_to_json(status_value))
         }
         "getPresenterStats" => Ok(stats_to_json(presenter.latest_stats)),
+        "setDebugHudEnabled" => {
+            let enabled =
+                optional_bool(args, "enabled").ok_or_else(|| "enabled is required".to_string())?;
+            status_value(unsafe { erika_presenter_set_debug_hud_enabled(handle, enabled) })
+        }
         "addExternalSubtitle" => {
             let uri = required_string(args, "uri")?;
             let uri_c = c_string(uri, "uri")?;
@@ -975,6 +980,9 @@ unsafe fn presenter_tracks_json(handle: *mut ErikaPresenterHandle) -> Result<Val
                 "sampleFormat": unsafe { borrowed_c_string(track.sample_format) },
                 "profile": unsafe { borrowed_c_string(track.profile) },
                 "level": track.level,
+                "bitRate": track.bit_rate,
+                "frameRateNumerator": track.frame_rate_numerator,
+                "frameRateDenominator": track.frame_rate_denominator,
             });
             unsafe { erika_track_info_free(track) };
             value

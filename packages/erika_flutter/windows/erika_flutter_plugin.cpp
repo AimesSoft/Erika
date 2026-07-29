@@ -664,6 +664,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
                       uintptr_t*);
   using ClearDanmakuFn = ErikaStatus (*)(ErikaPresenterHandle*);
   using SetDanmakuEnabledFn = ErikaStatus (*)(ErikaPresenterHandle*, bool);
+  using SetDebugHudEnabledFn = ErikaStatus (*)(ErikaPresenterHandle*, bool);
   using SetDanmakuConfigFn =
       ErikaStatus (*)(ErikaPresenterHandle*, const ErikaDanmakuConfig*);
   using GetDanmakuConfigFn =
@@ -765,6 +766,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   DanmakuTracksFn danmaku_tracks = nullptr;
   ClearDanmakuFn clear_danmaku = nullptr;
   SetDanmakuEnabledFn set_danmaku_enabled = nullptr;
+  SetDebugHudEnabledFn set_debug_hud_enabled = nullptr;
   SetDanmakuConfigFn set_danmaku_config = nullptr;
   GetDanmakuConfigFn get_danmaku_config = nullptr;
   SetDanmakuFontFn set_danmaku_font = nullptr;
@@ -841,6 +843,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
         LoadOptional<ClearDanmakuFn>("erika_presenter_clear_danmaku");
     set_danmaku_enabled = LoadOptional<SetDanmakuEnabledFn>(
         "erika_presenter_set_danmaku_enabled");
+    set_debug_hud_enabled = LoadOptional<SetDebugHudEnabledFn>(
+        "erika_presenter_set_debug_hud_enabled");
     set_danmaku_config = LoadOptional<SetDanmakuConfigFn>(
         "erika_presenter_set_danmaku_config_ptr");
     get_danmaku_config = LoadOptional<GetDanmakuConfigFn>(
@@ -1336,6 +1340,15 @@ struct ErikaFlutterPlugin::PlayerHost {
     current_danmaku_config.enabled = enabled;
   }
 
+  void SetDebugHudEnabled(bool enabled) {
+    if (library->set_debug_hud_enabled == nullptr) {
+      throw PluginError(
+          "Missing Erika C ABI symbol: erika_presenter_set_debug_hud_enabled");
+    }
+    Check(library->set_debug_hud_enabled(handle, enabled),
+          "set_debug_hud_enabled");
+  }
+
   void SetDanmakuConfig(const ErikaDanmakuConfig& config) {
     if (library->set_danmaku_config == nullptr) {
       throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_danmaku_config_ptr");
@@ -1397,6 +1410,12 @@ struct ErikaFlutterPlugin::PlayerHost {
           {EncodableValue("profile"), NullableString(track.profile)},
           {EncodableValue("level"),
            EncodableValue(static_cast<int32_t>(track.level))},
+          {EncodableValue("bitRate"),
+           EncodableValue(static_cast<int64_t>(track.bit_rate))},
+          {EncodableValue("frameRateNumerator"),
+           EncodableValue(static_cast<int32_t>(track.frame_rate_numerator))},
+          {EncodableValue("frameRateDenominator"),
+           EncodableValue(static_cast<int32_t>(track.frame_rate_denominator))},
       }));
       library->free_track_info(&track);
     }
@@ -2185,6 +2204,9 @@ void ErikaFlutterPlugin::HandleMethodCall(
       result->Success(PlayerFromArgs(args).GetOutputStatus());
     } else if (method == "getPresenterStats") {
       result->Success(PlayerFromArgs(args).GetPresenterStats());
+    } else if (method == "setDebugHudEnabled") {
+      PlayerFromArgs(args).SetDebugHudEnabled(BoolArg(args, "enabled", false));
+      result->Success();
     } else if (method == "addExternalSubtitle") {
       const int64_t track_id =
           PlayerFromArgs(args).AddExternalSubtitle(RequiredString(args, "uri"));

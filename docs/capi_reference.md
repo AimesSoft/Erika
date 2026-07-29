@@ -175,6 +175,17 @@ void        erika_track_info_free(ErikaTrackInfo *track);
 the currently selected video/audio/subtitle track ids (`-1` for none). Selecting
 the subtitle track id `-1` disables subtitles.
 
+`ErikaTrackInfo` exposes track metadata through `codec`, `width`, `height`,
+`pixel_format`, `profile`, and `level`. `bit_rate` is in bit/s, while
+`frame_rate_numerator` / `frame_rate_denominator` retain a video track's rational
+frame rate; `0` means the corresponding value is unknown. Frame rate is probed
+in average-frame-rate, `r_frame_rate`, then FFmpeg-guessed-frame-rate order.
+Bitrate prefers the track's own parameters; only a single video track with no
+bitrate and known container total plus every other audio-track bitrate is
+estimated as container bitrate minus audio bitrates. Neither value is an
+instantaneous bitrate or rendered FPS; an estimated bitrate can include
+container overhead or non-audio streams.
+
 ### State and events
 
 ```c
@@ -332,6 +343,7 @@ ErikaStatus erika_presenter_set_danmaku_global_offset(ErikaPresenterHandle *, in
 ErikaStatus erika_presenter_danmaku_tracks(ErikaPresenterHandle *, ErikaDanmakuTrackInfo *out_tracks, uintptr_t capacity, uintptr_t *out_len);
 ErikaStatus erika_presenter_clear_danmaku(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_set_danmaku_enabled(ErikaPresenterHandle *, bool enabled);
+ErikaStatus erika_presenter_set_debug_hud_enabled(ErikaPresenterHandle *, bool enabled);
 ErikaStatus erika_presenter_set_danmaku_config(ErikaPresenterHandle *, ErikaDanmakuConfig config);
 ErikaStatus erika_presenter_set_danmaku_config_ptr(ErikaPresenterHandle *, const ErikaDanmakuConfig *config);
 ErikaStatus erika_presenter_get_danmaku_config(ErikaPresenterHandle *, ErikaDanmakuConfig *out_config);
@@ -347,6 +359,14 @@ tracks. `set_danmaku_config` / `_ptr` apply the full `ErikaDanmakuConfig` (the
 `_ptr` variant avoids passing the struct by value); `get_danmaku_config` reads
 it back. See [danmaku_architecture.md](danmaku_architecture.md) for the layout
 engine. `set_danmaku_block_words_json` takes a JSON array of strings to filter.
+
+`set_debug_hud_enabled` is off by default. When enabled, the Presenter draws a
+native diagnostic HUD in the video composition. It shows track
+technical metadata, playback state, decoded/rendered FPS, decode and zero-copy
+route counters, render/audio state, HDR output, and danmaku item count. The HUD
+only appears when a video frame exists, does not require host-side stats polling,
+and does not populate `ErikaPresenterStats`. Off-screen `capture_frame_rgba`
+captures exclude the HUD.
 
 ### Surface and presentation
 
@@ -538,7 +558,9 @@ free(rgba);
 - **`ErikaTrackCounts`** / **`ErikaTrackSelection`** — per-kind counts / selected
   ids (`-1` = none).
 - **`ErikaTrackInfo`** — full per-track metadata; the six `char*` fields are
-  owned by the caller (free via `erika_track_info_free`).
+  owned by the caller (free via `erika_track_info_free`). Video tracks additionally
+  expose `bit_rate` (bit/s) and `frame_rate_numerator` /
+  `frame_rate_denominator` (`0` = unknown).
 - **`ErikaEvent`** — a tagged union-by-struct: `kind` selects which fields are
   meaningful (`state`, `duration_micros`, `position_micros`, `buffering`,
   `video`, `tracks`); `status` carries the code for `Error` events.
