@@ -638,6 +638,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   using SeekFn = ErikaStatus (*)(ErikaPresenterHandle*, uint64_t);
   using SetPlaybackRateFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
   using SetVolumeFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
+  using GetVolumeFn = ErikaStatus (*)(ErikaPresenterHandle*, double*);
+  using SetMutedFn = ErikaStatus (*)(ErikaPresenterHandle*, bool);
   using SetUpscalerFn = ErikaStatus (*)(ErikaPresenterHandle*, int32_t);
   using SetSubtitleScaleFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
   using GetUpscalerStatusFn =
@@ -746,6 +748,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   SeekFn seek = nullptr;
   SetPlaybackRateFn set_playback_rate = nullptr;
   SetVolumeFn set_volume = nullptr;
+  GetVolumeFn get_volume = nullptr;
+  SetMutedFn set_muted = nullptr;
   SetUpscalerFn set_upscaler = nullptr;
   SetSubtitleScaleFn set_subtitle_scale = nullptr;
   GetUpscalerStatusFn get_upscaler_status = nullptr;
@@ -803,6 +807,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
     set_playback_rate =
         LoadOptional<SetPlaybackRateFn>("erika_presenter_set_playback_rate");
     set_volume = LoadOptional<SetVolumeFn>("erika_presenter_set_volume");
+    get_volume = LoadOptional<GetVolumeFn>("erika_presenter_get_volume");
+    set_muted = LoadOptional<SetMutedFn>("erika_presenter_set_muted");
     set_upscaler =
         LoadOptional<SetUpscalerFn>("erika_presenter_set_upscaler");
     set_subtitle_scale = LoadOptional<SetSubtitleScaleFn>(
@@ -1144,6 +1150,24 @@ struct ErikaFlutterPlugin::PlayerHost {
     }
     const double clamped = std::isfinite(volume) ? std::clamp(volume, 0.0, 1.0) : 1.0;
     Check(library->set_volume(handle, clamped), "set_volume",
+          library->TakeLastError());
+  }
+
+  double GetVolume() {
+    if (library->get_volume == nullptr) {
+      throw PluginError("Missing Erika C ABI symbol: erika_presenter_get_volume");
+    }
+    double volume = 1.0;
+    Check(library->get_volume(handle, &volume), "get_volume",
+          library->TakeLastError());
+    return volume;
+  }
+
+  void SetMuted(bool muted) {
+    if (library->set_muted == nullptr) {
+      throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_muted");
+    }
+    Check(library->set_muted(handle, muted), "set_muted",
           library->TakeLastError());
   }
 
@@ -2134,6 +2158,12 @@ void ErikaFlutterPlugin::HandleMethodCall(
     } else if (method == "setVolume") {
       PlayerFromArgs(args).SetVolume(
           DoubleValue(FindArg(args, "volume")).value_or(1.0));
+      result->Success();
+    } else if (method == "getVolume") {
+      result->Success(EncodableValue(PlayerFromArgs(args).GetVolume()));
+    } else if (method == "setMuted") {
+      PlayerFromArgs(args).SetMuted(
+          BoolValue(FindArg(args, "muted")).value_or(false));
       result->Success();
     } else if (method == "setUpscaler") {
       PlayerFromArgs(args).SetUpscaler(

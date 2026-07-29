@@ -1637,6 +1637,73 @@ pub unsafe extern "C" fn erika_presenter_set_volume(
     target_os = "android",
     target_env = "ohos"
 ))]
+/// # Safety
+/// `handle` must be a live pointer returned by `erika_presenter_create*` and
+/// `out_volume` must point to writable memory for one `f64`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_get_volume(
+    handle: *mut ErikaPresenterHandle,
+    out_volume: *mut f64,
+) -> ErikaStatus {
+    if out_volume.is_null() {
+        return ErikaStatus::NullPointer;
+    }
+    with_presenter_mut(handle, |handle| {
+        let volume = handle.presenter.volume();
+        unsafe { *out_volume = volume };
+        ErikaStatus::Ok
+    })
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+))]
+/// # Safety
+/// `handle` must be a live pointer returned by `erika_presenter_create*`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_set_muted(
+    handle: *mut ErikaPresenterHandle,
+    muted: bool,
+) -> ErikaStatus {
+    with_presenter_mut(handle, |handle| {
+        handle.presenter.set_muted(muted);
+        ErikaStatus::Ok
+    })
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+))]
+/// # Safety
+/// `handle` must be a live pointer returned by `erika_presenter_create*` and
+/// `out_muted` must point to writable memory for one `bool`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_muted(
+    handle: *mut ErikaPresenterHandle,
+    out_muted: *mut bool,
+) -> ErikaStatus {
+    if out_muted.is_null() {
+        return ErikaStatus::NullPointer;
+    }
+    with_presenter_mut(handle, |handle| {
+        let muted = handle.presenter.muted();
+        unsafe { *out_muted = muted };
+        ErikaStatus::Ok
+    })
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_upscaler(
     handle: *mut ErikaPresenterHandle,
@@ -2432,6 +2499,54 @@ pub unsafe extern "C" fn erika_presenter_set_volume(
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
+)))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_get_volume(
+    _handle: *mut std::ffi::c_void,
+    out_volume: *mut f64,
+) -> ErikaStatus {
+    if out_volume.is_null() {
+        return ErikaStatus::NullPointer;
+    }
+    ErikaStatus::PlayerError
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+)))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_set_muted(
+    _handle: *mut std::ffi::c_void,
+    _muted: bool,
+) -> ErikaStatus {
+    ErikaStatus::PlayerError
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
+)))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_muted(
+    _handle: *mut std::ffi::c_void,
+    out_muted: *mut bool,
+) -> ErikaStatus {
+    if out_muted.is_null() {
+        return ErikaStatus::NullPointer;
+    }
+    ErikaStatus::PlayerError
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android"
 )))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_upscaler(
@@ -4090,6 +4205,72 @@ mod tests {
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
+    ))]
+    #[test]
+    fn c_presenter_volume_and_mute_round_trip() {
+        let mut volume = f64::NAN;
+        assert_eq!(
+            unsafe { erika_presenter_get_volume(std::ptr::null_mut(), &mut volume) },
+            ErikaStatus::NullPointer
+        );
+        let mut muted = false;
+        assert_eq!(
+            unsafe { erika_presenter_set_muted(std::ptr::null_mut(), true) },
+            ErikaStatus::NullPointer
+        );
+        assert_eq!(
+            unsafe { erika_presenter_muted(std::ptr::null_mut(), &mut muted) },
+            ErikaStatus::NullPointer
+        );
+
+        let handle = erika_presenter_create();
+        assert!(!handle.is_null());
+        assert_eq!(
+            unsafe { erika_presenter_get_volume(handle, std::ptr::null_mut()) },
+            ErikaStatus::NullPointer
+        );
+        assert_eq!(
+            unsafe { erika_presenter_muted(handle, std::ptr::null_mut()) },
+            ErikaStatus::NullPointer
+        );
+
+        assert_eq!(
+            unsafe { erika_presenter_set_volume(handle, 0.4) },
+            ErikaStatus::Ok
+        );
+        assert_eq!(
+            unsafe { erika_presenter_set_muted(handle, true) },
+            ErikaStatus::Ok
+        );
+        assert_eq!(
+            unsafe { erika_presenter_muted(handle, &mut muted) },
+            ErikaStatus::Ok
+        );
+        assert!(muted);
+        // Muting must not clobber the saved volume the getter reports.
+        assert_eq!(
+            unsafe { erika_presenter_get_volume(handle, &mut volume) },
+            ErikaStatus::Ok
+        );
+        assert!((volume - 0.4).abs() < 0.000_001);
+
+        assert_eq!(
+            unsafe { erika_presenter_set_muted(handle, false) },
+            ErikaStatus::Ok
+        );
+        assert_eq!(
+            unsafe { erika_presenter_muted(handle, &mut muted) },
+            ErikaStatus::Ok
+        );
+        assert!(!muted);
+        unsafe { erika_presenter_destroy(handle) };
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "android"
     ))]
     #[test]
     fn c_presenter_set_upscaler_accepts_valid_handle() {

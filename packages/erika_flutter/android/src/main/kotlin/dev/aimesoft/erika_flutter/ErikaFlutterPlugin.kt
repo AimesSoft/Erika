@@ -1718,6 +1718,8 @@ class ErikaFlutterPlugin :
             "seek",
             "setPlaybackRate",
             "setVolume",
+            "getVolume",
+            "setMuted",
             "setUpscaler",
             "setSubtitleScale",
             "getUpscalerStatus",

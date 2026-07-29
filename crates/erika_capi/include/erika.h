@@ -436,6 +436,13 @@ ErikaStatus erika_presenter_close(ErikaPresenterHandle *handle);
 ErikaStatus erika_presenter_seek(ErikaPresenterHandle *handle, uint64_t position_micros);
 ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *handle, double rate);
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *handle, double volume);
+/* get_volume reports the saved user volume even while muted so hosts can
+ * restore their slider position on unmute. */
+ErikaStatus erika_presenter_get_volume(ErikaPresenterHandle *handle, double *out_volume);
+/* Mute silences output without discarding the saved volume; set_volume while
+ * muted updates the saved value and is applied on unmute. */
+ErikaStatus erika_presenter_set_muted(ErikaPresenterHandle *handle, bool muted);
+ErikaStatus erika_presenter_muted(ErikaPresenterHandle *handle, bool *out_muted);
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *handle, int32_t mode);
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *handle, double scale);
 ErikaStatus erika_presenter_set_output_headroom(

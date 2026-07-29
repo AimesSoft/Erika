@@ -248,6 +248,8 @@ pub struct PresenterRuntime {
     current_surface_metrics: Option<SurfaceMetrics>,
     current_danmaku_viewport: Option<DanmakuViewport>,
     subtitle_font_scale: f64,
+    muted: bool,
+    saved_volume: f64,
     subtitles: SubtitleFrameState,
     overlay: OverlayTimeline,
     render_test_pattern_when_idle: bool,
@@ -550,6 +552,8 @@ impl PresenterRuntime {
             current_surface_metrics: None,
             current_danmaku_viewport: None,
             subtitle_font_scale: DEFAULT_SUBTITLE_FONT_SCALE,
+            muted: false,
+            saved_volume: 1.0,
             subtitles: SubtitleFrameState::default(),
             overlay: config.overlay,
             render_test_pattern_when_idle: config.render_test_pattern_when_idle,
@@ -693,11 +697,28 @@ impl PresenterRuntime {
     }
 
     pub fn set_volume(&mut self, volume: f64) {
-        self.audio_output.set_volume(volume as f32);
+        self.saved_volume = normalize_presenter_volume(volume);
+        let output = effective_output_volume(self.muted, self.saved_volume);
+        self.audio_output.set_volume(output as f32);
     }
 
+    /// Returns the user-selected volume. While muted the audio output runs at
+    /// zero gain, but this still reports the saved volume so UIs can restore
+    /// the slider position on unmute.
     pub fn volume(&self) -> f64 {
-        self.audio_output.volume() as f64
+        self.saved_volume
+    }
+
+    /// Mutes or unmutes audio without discarding the saved volume. Volume
+    /// changes made while muted are remembered and applied on unmute.
+    pub fn set_muted(&mut self, muted: bool) {
+        self.muted = muted;
+        let output = effective_output_volume(self.muted, self.saved_volume);
+        self.audio_output.set_volume(output as f32);
+    }
+
+    pub fn muted(&self) -> bool {
+        self.muted
     }
 
     pub fn set_subtitle_scale(&mut self, scale: f64) {
@@ -2158,6 +2179,18 @@ fn normalize_subtitle_font_scale(scale: f64) -> f64 {
     }
 }
 
+fn normalize_presenter_volume(volume: f64) -> f64 {
+    if volume.is_finite() {
+        volume.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
+fn effective_output_volume(muted: bool, saved_volume: f64) -> f64 {
+    if muted { 0.0 } else { saved_volume }
+}
+
 fn bump_generation(current_generation: &mut u64, danmaku_generation: &mut u64) {
     *danmaku_generation = danmaku_generation.saturating_add(1).max(1);
     *current_generation = current_generation
@@ -3321,6 +3354,36 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert_eq!(presenter.volume(), 0.0);
         presenter.set_volume(f64::NAN);
         assert_eq!(presenter.volume(), 1.0);
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu")]
+    fn presenter_mute_preserves_saved_volume() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+
+        presenter.set_volume(0.6);
+        presenter.set_muted(true);
+        assert!(presenter.muted());
+        // Output gain is silenced while the reported volume stays at the
+        // user's saved value.
+        assert_eq!(presenter.audio_output.volume(), 0.0);
+        assert!((presenter.volume() - 0.6).abs() < 0.000_001);
+
+        // Volume changes while muted are remembered but not applied yet.
+        presenter.set_volume(0.3);
+        assert_eq!(presenter.audio_output.volume(), 0.0);
+        assert!((presenter.volume() - 0.3).abs() < 0.000_001);
+
+        presenter.set_muted(false);
+        assert!(!presenter.muted());
+        assert!((f64::from(presenter.audio_output.volume()) - 0.3).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn effective_output_volume_silences_only_while_muted() {
+        assert_eq!(effective_output_volume(true, 0.7), 0.0);
+        assert_eq!(effective_output_volume(false, 0.7), 0.7);
+        assert_eq!(effective_output_volume(false, 0.0), 0.0);
     }
 
     #[test]

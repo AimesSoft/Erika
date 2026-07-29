@@ -354,6 +354,8 @@ private final class ErikaNativeLibrary {
   typealias SeekFn = @convention(c) (UnsafeMutableRawPointer?, UInt64) -> Int32
   typealias SetPlaybackRateFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
   typealias SetVolumeFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
+  typealias GetVolumeFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutablePointer<Double>?) -> Int32
+  typealias SetMutedFn = @convention(c) (UnsafeMutableRawPointer?, Bool) -> Int32
   typealias SetUpscalerFn = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Int32
   typealias SetSubtitleScaleFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
   typealias GetUpscalerStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
@@ -416,6 +418,8 @@ private final class ErikaNativeLibrary {
   let seek: SeekFn
   let setPlaybackRate: SetPlaybackRateFn?
   let setVolume: SetVolumeFn?
+  let getVolume: GetVolumeFn?
+  let setMuted: SetMutedFn?
   let setUpscaler: SetUpscalerFn?
   let setSubtitleScale: SetSubtitleScaleFn?
   let getUpscalerStatus: GetUpscalerStatusFn?
@@ -474,6 +478,8 @@ private final class ErikaNativeLibrary {
     seek = try Self.load("erika_presenter_seek", from: libraryHandle, as: SeekFn.self)
     setPlaybackRate = Self.loadOptional("erika_presenter_set_playback_rate", from: libraryHandle, as: SetPlaybackRateFn.self)
     setVolume = Self.loadOptional("erika_presenter_set_volume", from: libraryHandle, as: SetVolumeFn.self)
+    getVolume = Self.loadOptional("erika_presenter_get_volume", from: libraryHandle, as: GetVolumeFn.self)
+    setMuted = Self.loadOptional("erika_presenter_set_muted", from: libraryHandle, as: SetMutedFn.self)
     setUpscaler = Self.loadOptional("erika_presenter_set_upscaler", from: libraryHandle, as: SetUpscalerFn.self)
     setSubtitleScale = Self.loadOptional("erika_presenter_set_subtitle_scale", from: libraryHandle, as: SetSubtitleScaleFn.self)
     getUpscalerStatus = Self.loadOptional("erika_presenter_get_upscaler_status", from: libraryHandle, as: GetUpscalerStatusFn.self)
@@ -657,6 +663,22 @@ private final class ErikaPlayerHost {
     }
     let clampedVolume = volume.isFinite ? min(max(volume, 0.0), 1.0) : 1.0
     try check(setVolume(handle, clampedVolume), operation: "set_volume")
+  }
+
+  func volume() throws -> Double {
+    guard let getVolume = library.getVolume else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_get_volume")
+    }
+    var value: Double = 1.0
+    try check(getVolume(handle, &value), operation: "get_volume")
+    return value
+  }
+
+  func setMuted(_ muted: Bool) throws {
+    guard let setMuted = library.setMuted else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_set_muted")
+    }
+    try check(setMuted(handle, muted), operation: "set_muted")
   }
 
   func setUpscaler(mode: Int32) throws {
@@ -1467,6 +1489,16 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
           throw ErikaPluginError.invalidArguments("volume is required.")
         }
         try playerHost(from: args).setVolume(volume)
+        result(nil)
+      case "getVolume":
+        let args = try dictionaryArgs(call.arguments)
+        result(try playerHost(from: args).volume())
+      case "setMuted":
+        let args = try dictionaryArgs(call.arguments)
+        guard let muted = boolValue(args["muted"]) else {
+          throw ErikaPluginError.invalidArguments("muted is required.")
+        }
+        try playerHost(from: args).setMuted(muted)
         result(nil)
       case "setUpscaler":
         let args = try dictionaryArgs(call.arguments)
