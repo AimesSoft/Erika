@@ -118,8 +118,9 @@ pub struct MetalRendererImpl {
     video_sampler: Option<Retained<ProtocolObject<dyn MTLSamplerState>>>,
     overlay_alpha_atlas_cache: Option<OverlayAlphaAtlasCache>,
     danmaku_alpha_atlas_cache: Option<DanmakuAlphaAtlasCache>,
-    danmaku_vertex_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    danmaku_vertex_buffer_len: usize,
+    danmaku_vertex_buffers: Vec<DanmakuVertexBufferSlot>,
+    danmaku_vertex_buffer_cursor: usize,
+    danmaku_vertex_buffer_acquisitions: u64,
     upscaler: LumaUpscaler,
     pending_gpu_timing: Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>>,
     stats: MetalRendererStats,
@@ -160,8 +161,9 @@ impl MetalRendererImpl {
             video_sampler: None,
             overlay_alpha_atlas_cache: None,
             danmaku_alpha_atlas_cache: None,
-            danmaku_vertex_buffer: None,
-            danmaku_vertex_buffer_len: 0,
+            danmaku_vertex_buffers: Vec::new(),
+            danmaku_vertex_buffer_cursor: 0,
+            danmaku_vertex_buffer_acquisitions: 0,
             upscaler: {
                 let mut upscaler = LumaUpscaler::default();
                 upscaler.set_mode(config.luma_upscaler);
@@ -234,8 +236,9 @@ impl MetalRendererImpl {
         self.overlay_pipeline = None;
         self.danmaku_batch_pipeline = None;
         self.overlay_alpha_atlas_cache = None;
-        self.danmaku_vertex_buffer = None;
-        self.danmaku_vertex_buffer_len = 0;
+        self.danmaku_vertex_buffers.clear();
+        self.danmaku_vertex_buffer_cursor = 0;
+        self.danmaku_vertex_buffer_acquisitions = 0;
         self.layer_color_space_label = color_space_label;
         if hdr_debug_enabled() {
             eprintln!(
@@ -648,7 +651,13 @@ impl MetalRendererImpl {
                 self.draw_overlay_planes(&encoder, overlay, layout, target_color)?;
             }
             if let Some(danmaku) = danmaku.as_ref() {
-                self.draw_danmaku_plan(&encoder, danmaku.plan, layout, target_color)?;
+                self.draw_danmaku_plan(
+                    &encoder,
+                    &command_buffer,
+                    danmaku.plan,
+                    layout,
+                    target_color,
+                )?;
             }
 
             encoder.endEncoding();
@@ -824,7 +833,13 @@ impl MetalRendererImpl {
                 self.draw_overlay_planes(&encoder, overlay, layout, target_color)?;
             }
             if let Some(danmaku) = danmaku.as_ref() {
-                self.draw_danmaku_plan(&encoder, danmaku.plan, layout, target_color)?;
+                self.draw_danmaku_plan(
+                    &encoder,
+                    &command_buffer,
+                    danmaku.plan,
+                    layout,
+                    target_color,
+                )?;
             }
             encoder.endEncoding();
 
@@ -992,6 +1007,7 @@ impl MetalRendererImpl {
     fn draw_danmaku_plan(
         &mut self,
         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+        command_buffer: &Retained<ProtocolObject<dyn MTLCommandBuffer>>,
         plan: &DanmakuRenderPlan,
         layout: VideoPresentationLayout,
         target: TargetColorState,
@@ -1020,6 +1036,7 @@ impl MetalRendererImpl {
         self.stats.last_danmaku_atlas_duration = atlas_started.elapsed();
         self.draw_danmaku_batch(
             encoder,
+            command_buffer,
             &pipeline,
             &sampler,
             plan,
@@ -1058,9 +1075,26 @@ impl MetalRendererImpl {
                     update,
                 );
                 cache.version = atlas.version;
+                if trace::enabled() {
+                    trace::log(format!(
+                        "[erika-danmaku-gpu] event=atlas_incremental version={}->{} size={}x{} region={},{}+{}x{}",
+                        update.from_version,
+                        atlas.version,
+                        atlas.width,
+                        atlas.height,
+                        update.x,
+                        update.y,
+                        update.width,
+                        update.height,
+                    ));
+                }
                 return Ok((cache.fill_texture.clone(), cache.outline_texture.clone()));
             }
         }
+        let previous_atlas = self
+            .danmaku_alpha_atlas_cache
+            .as_ref()
+            .map(|cache| (cache.version, cache.width, cache.height));
         let fill_texture = self.create_overlay_alpha_texture(
             atlas.width as usize,
             atlas.height as usize,
@@ -1081,12 +1115,25 @@ impl MetalRendererImpl {
             fill_texture: fill_texture.clone(),
             outline_texture: outline_texture.clone(),
         });
+        if trace::enabled() {
+            trace::log(format!(
+                "[erika-danmaku-gpu] event=atlas_recreate previous={} version={} size={}x{} stride={}",
+                previous_atlas
+                    .map(|(version, width, height)| format!("{version}/{width}x{height}"))
+                    .unwrap_or_else(|| "-".to_string()),
+                atlas.version,
+                atlas.width,
+                atlas.height,
+                atlas.stride,
+            ));
+        }
         Ok((fill_texture, outline_texture))
     }
 
     fn draw_danmaku_batch(
         &mut self,
         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+        command_buffer: &Retained<ProtocolObject<dyn MTLCommandBuffer>>,
         pipeline: &ProtocolObject<dyn MTLRenderPipelineState>,
         sampler: &ProtocolObject<dyn MTLSamplerState>,
         plan: &DanmakuRenderPlan,
@@ -1146,12 +1193,7 @@ impl MetalRendererImpl {
         let total_bytes = instance_bytes_len(total_instances)?;
         self.stats.last_danmaku_vertex_bytes = total_bytes;
         self.stats.last_danmaku_vertex_count = total_instances;
-        self.ensure_danmaku_vertex_buffer(total_bytes)?;
-        let buffer = self
-            .danmaku_vertex_buffer
-            .as_ref()
-            .expect("danmaku vertex buffer exists")
-            .clone();
+        let buffer = self.acquire_danmaku_vertex_buffer(total_bytes, command_buffer)?;
         write_danmaku_instances_direct(
             &buffer,
             plan,
@@ -1170,21 +1212,76 @@ impl MetalRendererImpl {
         Ok(())
     }
 
-    fn ensure_danmaku_vertex_buffer(&mut self, required_len: usize) -> Result<()> {
-        if required_len == 0 {
-            return Ok(());
+    fn acquire_danmaku_vertex_buffer(
+        &mut self,
+        required_len: usize,
+        command_buffer: &Retained<ProtocolObject<dyn MTLCommandBuffer>>,
+    ) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>> {
+        debug_assert!(required_len > 0);
+
+        let slot_count = self.danmaku_vertex_buffers.len();
+        let busy_slots = self
+            .danmaku_vertex_buffers
+            .iter()
+            .filter(|slot| !slot.is_reusable())
+            .count();
+        let reusable_index = (0..slot_count)
+            .map(|offset| (self.danmaku_vertex_buffer_cursor + offset) % slot_count)
+            .find(|&index| self.danmaku_vertex_buffers[index].is_reusable());
+        let grew_pool = reusable_index.is_none();
+        let index = reusable_index.unwrap_or_else(|| {
+            self.danmaku_vertex_buffers
+                .push(DanmakuVertexBufferSlot::default());
+            self.danmaku_vertex_buffers.len() - 1
+        });
+        let required_capacity = required_len.next_power_of_two().max(4096);
+        let slot = &mut self.danmaku_vertex_buffers[index];
+        let previous_status = slot
+            .in_flight
+            .as_ref()
+            .map(|buffer| format!("{:?}", buffer.status()))
+            .unwrap_or_else(|| "-".to_string());
+        let resized_buffer = slot.capacity < required_len || slot.buffer.is_none();
+        if slot.capacity < required_len || slot.buffer.is_none() {
+            slot.buffer = Some(
+                self.device
+                    .newBufferWithLength_options(
+                        required_capacity,
+                        MTLResourceOptions::StorageModeShared,
+                    )
+                    .ok_or_else(|| {
+                        PlayerError::Renderer("newBufferWithLength returned nil".to_string())
+                    })?,
+            );
+            slot.capacity = required_capacity;
         }
-        if self.danmaku_vertex_buffer_len >= required_len && self.danmaku_vertex_buffer.is_some() {
-            return Ok(());
+        slot.in_flight = Some(command_buffer.clone());
+        let buffer = slot
+            .buffer
+            .as_ref()
+            .expect("danmaku vertex buffer slot is initialized")
+            .clone();
+        let selected_capacity = slot.capacity;
+        self.danmaku_vertex_buffer_cursor = (index + 1) % self.danmaku_vertex_buffers.len();
+        self.danmaku_vertex_buffer_acquisitions =
+            self.danmaku_vertex_buffer_acquisitions.saturating_add(1);
+        if trace::enabled()
+            && (grew_pool || resized_buffer || self.danmaku_vertex_buffer_acquisitions % 60 == 0)
+        {
+            trace::log(format!(
+                "[erika-danmaku-gpu] event=vertex_buffer_acquire sequence={} slot={} slots={} busy_before={} previous_status={} required={} capacity={} flags=pool_grew:{} buffer_resized:{}",
+                self.danmaku_vertex_buffer_acquisitions,
+                index,
+                self.danmaku_vertex_buffers.len(),
+                busy_slots,
+                previous_status,
+                required_len,
+                selected_capacity,
+                grew_pool,
+                resized_buffer,
+            ));
         }
-        let len = required_len.next_power_of_two().max(4096);
-        let buffer = self
-            .device
-            .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-            .ok_or_else(|| PlayerError::Renderer("newBufferWithLength returned nil".to_string()))?;
-        self.danmaku_vertex_buffer = Some(buffer);
-        self.danmaku_vertex_buffer_len = len;
-        Ok(())
+        Ok(buffer)
     }
 
     fn prepare_overlay_alpha_atlas(
@@ -2115,6 +2212,26 @@ struct DanmakuAlphaAtlasCache {
     stride: usize,
     fill_texture: Retained<ProtocolObject<dyn MTLTexture>>,
     outline_texture: Retained<ProtocolObject<dyn MTLTexture>>,
+}
+
+#[derive(Default)]
+struct DanmakuVertexBufferSlot {
+    buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    capacity: usize,
+    in_flight: Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>>,
+}
+
+impl DanmakuVertexBufferSlot {
+    fn is_reusable(&self) -> bool {
+        self.in_flight.as_ref().is_none_or(|command_buffer| {
+            matches!(
+                command_buffer.status(),
+                MTLCommandBufferStatus::NotEnqueued
+                    | MTLCommandBufferStatus::Completed
+                    | MTLCommandBufferStatus::Error
+            )
+        })
+    }
 }
 
 impl DanmakuAlphaAtlasCache {

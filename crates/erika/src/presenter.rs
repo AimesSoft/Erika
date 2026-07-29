@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     env,
     fs::OpenOptions,
     io::Write,
@@ -34,7 +35,7 @@ use crate::core::{
 };
 use crate::danmaku::{
     DANMAKU_DEBUG_BUCKETS, DanmakuConfigChange, DanmakuDebugBucket, DanmakuLayoutConfig,
-    DanmakuPreparedStats, DanmakuRenderPlan, DanmakuSession, DanmakuTextRasterizer,
+    DanmakuMode, DanmakuPreparedStats, DanmakuRenderPlan, DanmakuSession, DanmakuTextRasterizer,
     DanmakuTimeline, DanmakuTrackInfo, DanmakuTrackSource, DanmakuViewport, DfmLayoutEngine,
     DfmPreparedLayout, scroll_duration_for_viewport,
 };
@@ -73,6 +74,8 @@ const DANMAKU_PREPARE_REFRESH_MARGIN: Duration = Duration::from_secs(4);
 const DANMAKU_PLAN_LOOKAHEAD: Duration = Duration::from_secs(8);
 const DANMAKU_PLAN_LOOKBACK_PADDING: Duration = Duration::from_secs(2);
 const DANMAKU_DISPLAY_CLOCK_SNAP_THRESHOLD: Duration = Duration::from_millis(150);
+const DANMAKU_MOTION_TRACE_INTERVAL: Duration = Duration::from_millis(500);
+const DANMAKU_MOTION_BACKSTEP_EPSILON: f32 = 0.5;
 const DEFAULT_SUBTITLE_FONT_SCALE: f64 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -308,22 +311,35 @@ struct DanmakuPlanKey {
 #[derive(Debug, Clone)]
 struct DanmakuDisplayClock {
     media_time: Duration,
-    last_authoritative_time: Duration,
     last_host_time_seconds: Option<f64>,
     generation: u64,
     playing: bool,
     playback_rate: f64,
+    last_step: DanmakuClockStep,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DanmakuClockStep {
+    FirstSample,
+    GenerationReset,
+    PlayStateReset,
+    PlaybackRateReset,
+    InvalidHostReset,
+    HostRollbackReset,
+    Paused,
+    Advanced,
+    ForwardSnap,
 }
 
 impl Default for DanmakuDisplayClock {
     fn default() -> Self {
         Self {
             media_time: Duration::ZERO,
-            last_authoritative_time: Duration::ZERO,
             last_host_time_seconds: None,
             generation: 0,
             playing: false,
             playback_rate: 1.0,
+            last_step: DanmakuClockStep::FirstSample,
         }
     }
 }
@@ -342,33 +358,47 @@ impl DanmakuDisplayClock {
         let host_time_went_back = self
             .last_host_time_seconds
             .is_some_and(|last| host_time_seconds < last);
-        let must_reset = self.generation != generation
-            || self.playing != playing
-            || (self.playback_rate - playback_rate).abs() > PLAYBACK_RATE_EPSILON
-            || !host_time_is_valid
-            || host_time_went_back
-            || self.last_host_time_seconds.is_none();
+        let reset_step = if self.last_host_time_seconds.is_none() {
+            Some(DanmakuClockStep::FirstSample)
+        } else if self.generation != generation {
+            Some(DanmakuClockStep::GenerationReset)
+        } else if self.playing != playing {
+            Some(DanmakuClockStep::PlayStateReset)
+        } else if (self.playback_rate - playback_rate).abs() > PLAYBACK_RATE_EPSILON {
+            Some(DanmakuClockStep::PlaybackRateReset)
+        } else if !host_time_is_valid {
+            Some(DanmakuClockStep::InvalidHostReset)
+        } else if host_time_went_back {
+            Some(DanmakuClockStep::HostRollbackReset)
+        } else {
+            None
+        };
 
-        if must_reset || !playing {
+        if !playing {
             self.media_time = authoritative_time;
+            self.last_step = DanmakuClockStep::Paused;
+        } else if let Some(reset_step) = reset_step {
+            self.media_time = authoritative_time;
+            self.last_step = reset_step;
         } else if let Some(last_host_time) = self.last_host_time_seconds {
             let elapsed_seconds = (host_time_seconds - last_host_time).max(0.0);
             self.media_time = self
                 .media_time
                 .saturating_add(Duration::from_secs_f64(elapsed_seconds * playback_rate));
 
+            // While a generation is playing, the player clock can briefly
+            // report an older sample during audio-clock discipline. A real
+            // seek changes the playback generation, so never move the visual
+            // clock backward merely to follow same-generation clock jitter.
             let forward_drift = authoritative_time.saturating_sub(self.media_time);
-            let authoritative_back_jump = self
-                .last_authoritative_time
-                .saturating_sub(authoritative_time);
-            if forward_drift > DANMAKU_DISPLAY_CLOCK_SNAP_THRESHOLD
-                || authoritative_back_jump > DANMAKU_DISPLAY_CLOCK_SNAP_THRESHOLD
-            {
+            if forward_drift > DANMAKU_DISPLAY_CLOCK_SNAP_THRESHOLD {
                 self.media_time = authoritative_time;
+                self.last_step = DanmakuClockStep::ForwardSnap;
+            } else {
+                self.last_step = DanmakuClockStep::Advanced;
             }
         }
 
-        self.last_authoritative_time = authoritative_time;
         self.last_host_time_seconds = host_time_is_valid.then_some(host_time_seconds);
         self.generation = generation;
         self.playing = playing;
@@ -378,10 +408,10 @@ impl DanmakuDisplayClock {
 
     fn reset(&mut self, media_time: Duration) {
         self.media_time = media_time;
-        self.last_authoritative_time = media_time;
         self.last_host_time_seconds = None;
         self.generation = 0;
         self.playing = false;
+        self.last_step = DanmakuClockStep::FirstSample;
     }
 }
 
@@ -551,6 +581,25 @@ struct DanmakuTimeTrace {
     last_video_generation: u64,
     last_plan_time: Option<Duration>,
     last_plan_generation: u64,
+    last_motion_log_at: Option<Instant>,
+    motion_samples: HashMap<u64, DanmakuMotionSample>,
+    motion_backsteps: u64,
+    last_motion_atlas_version: u64,
+    last_motion_prepared_key: Option<DanmakuPlanKey>,
+    last_motion_viewport: Option<DanmakuViewport>,
+    last_motion_had_plan: bool,
+    surface_resize_calls: u64,
+    surface_resize_redundant: u64,
+    last_surface_resize_log_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DanmakuMotionSample {
+    x: f32,
+    plan_time: Duration,
+    generation: u64,
+    mode: DanmakuMode,
+    viewport: DanmakuViewport,
 }
 
 impl DanmakuTimeTrace {
@@ -590,6 +639,27 @@ impl DanmakuTimeTrace {
             last_video_generation: 0,
             last_plan_time: None,
             last_plan_generation: 0,
+            last_motion_log_at: None,
+            motion_samples: HashMap::new(),
+            motion_backsteps: 0,
+            last_motion_atlas_version: 0,
+            last_motion_prepared_key: None,
+            last_motion_viewport: None,
+            last_motion_had_plan: false,
+            surface_resize_calls: 0,
+            surface_resize_redundant: 0,
+            last_surface_resize_log_at: None,
+        }
+    }
+
+    fn write_line(&self, line: &str) {
+        eprintln!("{line}");
+        if let Some(path) = &self.log_path {
+            let _ = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .and_then(|mut file| writeln!(file, "{line}"));
         }
     }
 }
@@ -687,14 +757,47 @@ impl PresenterRuntime {
 
     pub fn resize_surface(&mut self, width: u32, height: u32, scale: f64) -> Result<()> {
         let metrics = SurfaceMetrics::new(width, height, scale);
+        let previous_metrics = self.current_surface_metrics;
+        let redundant = previous_metrics == Some(metrics);
+        self.danmaku_trace.surface_resize_calls =
+            self.danmaku_trace.surface_resize_calls.saturating_add(1);
+        if redundant {
+            self.danmaku_trace.surface_resize_redundant = self
+                .danmaku_trace
+                .surface_resize_redundant
+                .saturating_add(1);
+        }
         self.renderer.resize_surface(metrics)?;
         self.current_surface_metrics = Some(metrics);
         let next_viewport = surface_metrics_to_viewport(metrics);
-        if self
+        let requires_relayout = self
             .current_danmaku_viewport
-            .is_none_or(|current| danmaku_viewport_requires_relayout(current, next_viewport))
-        {
+            .is_none_or(|current| danmaku_viewport_requires_relayout(current, next_viewport));
+        if requires_relayout {
             self.clear_current_danmaku_state();
+        }
+        if self.danmaku_trace.enabled {
+            let now = Instant::now();
+            let periodic_sample_due = self
+                .danmaku_trace
+                .last_surface_resize_log_at
+                .is_none_or(|last| last.elapsed() >= DANMAKU_MOTION_TRACE_INTERVAL);
+            if !redundant || requires_relayout || periodic_sample_due {
+                let line = format!(
+                    "[erika-danmaku-surface] previous={} next={} viewport={} calls={} redundant={} flags=same:{} relayout:{}",
+                    previous_metrics
+                        .map(surface_metrics_label)
+                        .unwrap_or_else(|| "-".to_string()),
+                    surface_metrics_label(metrics),
+                    viewport_label(next_viewport),
+                    self.danmaku_trace.surface_resize_calls,
+                    self.danmaku_trace.surface_resize_redundant,
+                    redundant,
+                    requires_relayout,
+                );
+                self.danmaku_trace.write_line(&line);
+                self.danmaku_trace.last_surface_resize_log_at = Some(now);
+            }
         }
         self.last_audio_clock_report = None;
         Ok(())
@@ -1007,6 +1110,7 @@ impl PresenterRuntime {
 
         let plan_started = Instant::now();
         self.refresh_stale_danmaku_plan();
+        self.trace_current_danmaku_motion(time_seconds);
         self.last_danmaku_plan_duration = plan_started.elapsed();
         self.last_pump_duration = pump_started.elapsed();
         let plan_time = self.current_danmaku.as_ref().map(|plan| plan.media_time);
@@ -1735,6 +1839,226 @@ impl PresenterRuntime {
         }
     }
 
+    fn trace_current_danmaku_motion(&mut self, host_time_seconds: f64) {
+        if !self.danmaku_trace.enabled {
+            return;
+        }
+
+        let now = Instant::now();
+        let periodic_sample_due = self
+            .danmaku_trace
+            .last_motion_log_at
+            .is_none_or(|last| last.elapsed() >= DANMAKU_MOTION_TRACE_INTERVAL);
+        let display_time = self.danmaku_display_clock.media_time;
+        let authoritative_time = self.current_media_time;
+        let player_time = self.player.current_media_time();
+        let clock_step = self.danmaku_display_clock.last_step;
+        let prepared_key = self
+            .current_danmaku_prepared
+            .as_ref()
+            .map(|prepared| prepared.request.key);
+        let prepared_window = self
+            .current_danmaku_prepared
+            .as_ref()
+            .map(|prepared| (prepared.window_start, prepared.window_end));
+
+        let Some(plan) = self.current_danmaku.as_ref() else {
+            let plan_disappeared = self.danmaku_trace.last_motion_had_plan;
+            if periodic_sample_due || plan_disappeared {
+                let line = format!(
+                    "[erika-danmaku-motion] event={} host={host_time_seconds:.6} display={} authoritative={} player={} clock_step={clock_step:?} gen={} playing={} plan=- pending={} prepared_key={} prepared_window={} viewport={} flags=plan_disappeared:{}",
+                    if plan_disappeared {
+                        "plan_missing"
+                    } else {
+                        "sample"
+                    },
+                    duration_label(Some(display_time)),
+                    duration_label(Some(authoritative_time)),
+                    duration_label(Some(player_time)),
+                    self.current_generation,
+                    self.is_playing(),
+                    self.danmaku_plan_replacement_pending,
+                    prepared_key
+                        .map(|key| format!(
+                            "{:.3}/{}",
+                            key.media_time.as_secs_f64(),
+                            key.generation
+                        ))
+                        .unwrap_or_else(|| "-".to_string()),
+                    prepared_window
+                        .map(|(start, end)| {
+                            format!("{:.3}..{:.3}", start.as_secs_f64(), end.as_secs_f64())
+                        })
+                        .unwrap_or_else(|| "-".to_string()),
+                    self.current_danmaku_viewport
+                        .map(viewport_label)
+                        .unwrap_or_else(|| "-".to_string()),
+                    plan_disappeared,
+                );
+                self.danmaku_trace.write_line(&line);
+                self.danmaku_trace.last_motion_log_at = Some(now);
+            }
+            self.danmaku_trace.last_motion_had_plan = false;
+            return;
+        };
+
+        let plan_time = plan.media_time;
+        let plan_generation = plan.generation;
+        let viewport = plan.viewport;
+        let atlas_version = plan.atlas.as_ref().map_or(0, |atlas| atlas.version);
+        let glyph_count = plan.items.len();
+        let mode_by_id = self
+            .current_danmaku_prepared
+            .as_ref()
+            .map(|prepared| {
+                prepared
+                    .prepared
+                    .items()
+                    .iter()
+                    .map(|item| (item.id, item.mode))
+                    .collect::<HashMap<_, _>>()
+            })
+            .unwrap_or_default();
+        let mut positions = HashMap::new();
+        for glyph in &plan.items {
+            positions.entry(glyph.item_id).or_insert(glyph.rect[0]);
+        }
+
+        let mut backstep_count = 0usize;
+        let mut worst_backstep: Option<(u64, DanmakuMode, f32, f32, f32)> = None;
+        let mut selected: Option<(u64, DanmakuMode, f32, Option<f32>)> = None;
+        for (&item_id, &x) in &positions {
+            let Some(&mode) = mode_by_id.get(&item_id) else {
+                continue;
+            };
+            let previous = self.danmaku_trace.motion_samples.get(&item_id);
+            if selected.is_none() || previous.is_some() {
+                selected = Some((item_id, mode, x, previous.map(|sample| sample.x)));
+            }
+            let Some(previous) = previous else {
+                continue;
+            };
+            if previous.generation != plan_generation
+                || previous.viewport != viewport
+                || previous.mode != mode
+                || plan_time < previous.plan_time
+            {
+                continue;
+            }
+            let opposite_delta = danmaku_motion_backstep(mode, previous.x, x);
+            if opposite_delta > DANMAKU_MOTION_BACKSTEP_EPSILON {
+                backstep_count += 1;
+                if worst_backstep
+                    .as_ref()
+                    .is_none_or(|(_, _, _, _, worst)| opposite_delta > *worst)
+                {
+                    worst_backstep = Some((item_id, mode, previous.x, x, opposite_delta));
+                }
+            }
+        }
+
+        let plan_appeared = !self.danmaku_trace.last_motion_had_plan;
+        let viewport_changed = self.danmaku_trace.last_motion_viewport != Some(viewport);
+        let prepared_changed = self.danmaku_trace.last_motion_prepared_key != prepared_key;
+        let atlas_changed = self.danmaku_trace.last_motion_atlas_version != atlas_version;
+        if backstep_count > 0 {
+            self.danmaku_trace.motion_backsteps = self
+                .danmaku_trace
+                .motion_backsteps
+                .saturating_add(backstep_count as u64);
+        }
+
+        if periodic_sample_due
+            || plan_appeared
+            || viewport_changed
+            || prepared_changed
+            || atlas_changed
+            || backstep_count > 0
+        {
+            let display_drift_ms =
+                (display_time.as_secs_f64() - authoritative_time.as_secs_f64()) * 1000.0;
+            let plan_drift_ms = (plan_time.as_secs_f64() - display_time.as_secs_f64()) * 1000.0;
+            let selected_label = selected
+                .map(|(item_id, mode, x, previous_x)| {
+                    format!(
+                        "{item_id}/{mode:?}/x:{x:.3}/prev:{}/dx:{}",
+                        previous_x
+                            .map(|value| format!("{value:.3}"))
+                            .unwrap_or_else(|| "-".to_string()),
+                        previous_x
+                            .map(|value| format!("{:.3}", x - value))
+                            .unwrap_or_else(|| "-".to_string()),
+                    )
+                })
+                .unwrap_or_else(|| "-".to_string());
+            let worst_label = worst_backstep
+                .map(|(item_id, mode, previous_x, x, delta)| {
+                    format!("{item_id}/{mode:?}/prev:{previous_x:.3}/x:{x:.3}/back:{delta:.3}")
+                })
+                .unwrap_or_else(|| "-".to_string());
+            let line = format!(
+                "[erika-danmaku-motion] event={} host={host_time_seconds:.6} display={} authoritative={} player={} clock_step={clock_step:?} display_auth_drift_ms={display_drift_ms:.3} plan={} plan_display_drift_ms={plan_drift_ms:.3} gen={}/{} playing={} viewport={} prepared_key={} prepared_window={} atlas={} glyphs={} unique_items={} selected={} cpu_backsteps={} cpu_backsteps_total={} worst={} flags=plan_appeared:{} viewport_changed:{} prepared_changed:{} atlas_changed:{} pending:{}",
+                if backstep_count > 0 {
+                    "cpu_backstep"
+                } else {
+                    "sample"
+                },
+                duration_label(Some(display_time)),
+                duration_label(Some(authoritative_time)),
+                duration_label(Some(player_time)),
+                duration_label(Some(plan_time)),
+                self.current_generation,
+                plan_generation,
+                self.is_playing(),
+                viewport_label(viewport),
+                prepared_key
+                    .map(|key| format!("{:.3}/{}", key.media_time.as_secs_f64(), key.generation))
+                    .unwrap_or_else(|| "-".to_string()),
+                prepared_window
+                    .map(|(start, end)| {
+                        format!("{:.3}..{:.3}", start.as_secs_f64(), end.as_secs_f64())
+                    })
+                    .unwrap_or_else(|| "-".to_string()),
+                atlas_version,
+                glyph_count,
+                positions.len(),
+                selected_label,
+                backstep_count,
+                self.danmaku_trace.motion_backsteps,
+                worst_label,
+                plan_appeared,
+                viewport_changed,
+                prepared_changed,
+                atlas_changed,
+                self.danmaku_plan_replacement_pending,
+            );
+            self.danmaku_trace.write_line(&line);
+            self.danmaku_trace.last_motion_log_at = Some(now);
+        }
+
+        self.danmaku_trace.motion_samples = positions
+            .into_iter()
+            .filter_map(|(item_id, x)| {
+                mode_by_id.get(&item_id).copied().map(|mode| {
+                    (
+                        item_id,
+                        DanmakuMotionSample {
+                            x,
+                            plan_time,
+                            generation: plan_generation,
+                            mode,
+                            viewport,
+                        },
+                    )
+                })
+            })
+            .collect();
+        self.danmaku_trace.last_motion_atlas_version = atlas_version;
+        self.danmaku_trace.last_motion_prepared_key = prepared_key;
+        self.danmaku_trace.last_motion_viewport = Some(viewport);
+        self.danmaku_trace.last_motion_had_plan = true;
+    }
+
     fn bump_danmaku_generation(&mut self) {
         bump_generation(&mut self.current_generation, &mut self.danmaku_generation);
         self.danmaku_planner.invalidate_requests();
@@ -2293,6 +2617,28 @@ fn danmaku_plan_window(
 fn surface_metrics_to_viewport(metrics: SurfaceMetrics) -> DanmakuViewport {
     let (pixel_width, pixel_height) = metrics.physical_size();
     DanmakuViewport::with_scale(pixel_width, pixel_height, metrics.content_scale as f32)
+}
+
+fn surface_metrics_label(metrics: SurfaceMetrics) -> String {
+    format!(
+        "{}x{}@{:.4}",
+        metrics.physical_extent.width, metrics.physical_extent.height, metrics.content_scale
+    )
+}
+
+fn viewport_label(viewport: DanmakuViewport) -> String {
+    format!(
+        "{}x{}@{:.4}",
+        viewport.width, viewport.height, viewport.scale_factor
+    )
+}
+
+fn danmaku_motion_backstep(mode: DanmakuMode, previous_x: f32, next_x: f32) -> f32 {
+    match mode {
+        DanmakuMode::Scroll => next_x - previous_x,
+        DanmakuMode::ScrollReverse => previous_x - next_x,
+        DanmakuMode::Top | DanmakuMode::Bottom | DanmakuMode::Special => 0.0,
+    }
 }
 
 fn danmaku_viewport_requires_relayout(current: DanmakuViewport, next: DanmakuViewport) -> bool {
@@ -3443,16 +3789,57 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     }
 
     #[test]
-    fn danmaku_display_clock_filters_small_backsteps_and_snaps_large_jumps() {
+    fn danmaku_display_clock_filters_backsteps_and_snaps_large_forward_jumps() {
         let mut clock = DanmakuDisplayClock::default();
         clock.sample(1.0, Duration::from_secs(2), 7, true, 1.0);
         let before_correction = clock.sample(1.010, Duration::from_millis(2010), 7, true, 1.0);
         let after_small_backstep = clock.sample(1.020, Duration::from_millis(2005), 7, true, 1.0);
         assert!(after_small_backstep > before_correction);
 
+        let after_large_backstep = clock.sample(1.030, Duration::from_millis(1500), 7, true, 1.0);
+        assert!(after_large_backstep > after_small_backstep);
+
         let after_large_forward_jump =
-            clock.sample(1.030, Duration::from_millis(2300), 7, true, 1.0);
+            clock.sample(1.040, Duration::from_millis(2300), 7, true, 1.0);
         assert_eq!(after_large_forward_jump, Duration::from_millis(2300));
+    }
+
+    #[test]
+    fn danmaku_display_clock_stays_monotonic_across_periodic_clock_rollbacks() {
+        let mut clock = DanmakuDisplayClock::default();
+        let base = Duration::from_secs(10);
+        let mut previous = clock.sample(0.0, base, 3, true, 1.0);
+
+        for tick in 1..=180u64 {
+            let elapsed = Duration::from_secs_f64(tick as f64 / 60.0);
+            let expected = base.saturating_add(elapsed);
+            let authoritative = if tick % 60 == 0 {
+                expected.saturating_sub(Duration::from_millis(200))
+            } else {
+                expected
+            };
+            let sampled = clock.sample(tick as f64 / 60.0, authoritative, 3, true, 1.0);
+            assert!(
+                sampled >= previous,
+                "danmaku clock regressed at tick {tick}: {sampled:?} < {previous:?}",
+            );
+            previous = sampled;
+        }
+    }
+
+    #[test]
+    fn danmaku_motion_trace_detects_only_opposite_scroll_direction() {
+        assert!(danmaku_motion_backstep(DanmakuMode::Scroll, 500.0, 490.0) <= 0.0);
+        assert_eq!(
+            danmaku_motion_backstep(DanmakuMode::Scroll, 490.0, 495.0),
+            5.0
+        );
+        assert!(danmaku_motion_backstep(DanmakuMode::ScrollReverse, 100.0, 110.0) <= 0.0);
+        assert_eq!(
+            danmaku_motion_backstep(DanmakuMode::ScrollReverse, 110.0, 104.0),
+            6.0
+        );
+        assert_eq!(danmaku_motion_backstep(DanmakuMode::Top, 100.0, 140.0), 0.0);
     }
 
     #[test]
