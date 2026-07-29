@@ -777,6 +777,22 @@ class ErikaPlayer {
     });
   }
 
+  /// Sets the subtitle delay with mpv `sub-delay` semantics: a positive
+  /// [delay] displays subtitles later relative to the video, a negative one
+  /// earlier. Clamped to plus or minus 60 seconds.
+  Future<void> setSubtitleDelay(Duration delay) async {
+    final playerId = await ensureCreated();
+    final seconds =
+        (delay.inMicroseconds / Duration.microsecondsPerSecond).clamp(
+      -60.0,
+      60.0,
+    );
+    await _invoke('setSubtitleDelay', <String, Object?>{
+      'playerId': playerId,
+      'seconds': seconds,
+    });
+  }
+
   Future<ErikaUpscalerStatus> getUpscalerStatus() async {
     final playerId = await ensureCreated();
     final status = await _channel.invokeMethod<Map<dynamic, dynamic>>(

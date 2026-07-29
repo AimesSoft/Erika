@@ -75,6 +75,7 @@ const DANMAKU_PREPARE_REFRESH_MARGIN: Duration = Duration::from_secs(4);
 const DANMAKU_PLAN_LOOKAHEAD: Duration = Duration::from_secs(8);
 const DANMAKU_PLAN_LOOKBACK_PADDING: Duration = Duration::from_secs(2);
 const DEFAULT_SUBTITLE_FONT_SCALE: f64 = 1.0;
+const SUBTITLE_DELAY_LIMIT_SECONDS: f64 = 60.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TransitionFramePolicy {
@@ -248,6 +249,7 @@ pub struct PresenterRuntime {
     current_surface_metrics: Option<SurfaceMetrics>,
     current_danmaku_viewport: Option<DanmakuViewport>,
     subtitle_font_scale: f64,
+    subtitle_delay: f64,
     subtitles: SubtitleFrameState,
     overlay: OverlayTimeline,
     render_test_pattern_when_idle: bool,
@@ -550,6 +552,7 @@ impl PresenterRuntime {
             current_surface_metrics: None,
             current_danmaku_viewport: None,
             subtitle_font_scale: DEFAULT_SUBTITLE_FONT_SCALE,
+            subtitle_delay: 0.0,
             subtitles: SubtitleFrameState::default(),
             overlay: config.overlay,
             render_test_pattern_when_idle: config.render_test_pattern_when_idle,
@@ -707,6 +710,28 @@ impl PresenterRuntime {
         }
         self.subtitle_font_scale = scale;
         self.refresh_current_overlay();
+    }
+
+    /// Sets the subtitle delay in seconds with mpv `sub-delay` semantics: a
+    /// positive value displays subtitles later relative to the video clock, a
+    /// negative value displays them earlier. The value is clamped to ±60 s.
+    ///
+    /// Negative delays are bounded by decode lookahead: subtitle cues are
+    /// decoded only slightly ahead of the playback clock, so cues shifted
+    /// earlier than the buffered window appear once decode catches up (or
+    /// after a seek).
+    pub fn set_subtitle_delay(&mut self, delay_seconds: f64) {
+        let delay = normalize_subtitle_delay(delay_seconds);
+        if (self.subtitle_delay - delay).abs() < 0.001 {
+            return;
+        }
+        self.subtitle_delay = delay;
+        self.subtitles.subtitle_delay = delay;
+        self.refresh_current_overlay();
+    }
+
+    pub fn subtitle_delay(&self) -> f64 {
+        self.subtitle_delay
     }
 
     pub fn set_danmaku_timeline(&mut self, timeline: DanmakuTimeline) {
@@ -1027,7 +1052,7 @@ impl PresenterRuntime {
             .render(self.current_media_time, capture_overlay_viewport);
         let subtitle_style = self.subtitle_ass_style(capture_overlay.viewport);
         self.subtitles.append_to_overlay(
-            self.current_media_time,
+            shifted_subtitle_pts(self.current_media_time, self.subtitle_delay),
             &mut capture_overlay,
             subtitle_style,
         );
@@ -1302,8 +1327,11 @@ impl PresenterRuntime {
             .overlay
             .render(pts, OverlayViewport::new(viewport.width, viewport.height));
         let subtitle_style = self.subtitle_ass_style(overlay.viewport);
-        self.subtitles
-            .append_to_overlay(pts, &mut overlay, subtitle_style);
+        self.subtitles.append_to_overlay(
+            shifted_subtitle_pts(pts, self.subtitle_delay),
+            &mut overlay,
+            subtitle_style,
+        );
         if subtitle_diag_enabled() {
             eprintln!(
                 "[erika-subtitle-diag] stage=update_overlay pts={} gen={} video={}x{} overlay={}",
@@ -1463,8 +1491,11 @@ impl PresenterRuntime {
                     OverlayViewport::new(viewport.width, viewport.height),
                 );
                 let subtitle_style = self.subtitle_ass_style(overlay.viewport);
-                self.subtitles
-                    .append_to_overlay(player_time, &mut overlay, subtitle_style);
+                self.subtitles.append_to_overlay(
+                    shifted_subtitle_pts(player_time, self.subtitle_delay),
+                    &mut overlay,
+                    subtitle_style,
+                );
                 if subtitle_diag_enabled() {
                     eprintln!(
                         "[erika-subtitle-diag] stage=clock_overlay player={} gen={} overlay_viewport={}x{} overlay={}",
@@ -1503,8 +1534,11 @@ impl PresenterRuntime {
             OverlayViewport::new(viewport.width, viewport.height),
         );
         let subtitle_style = self.subtitle_ass_style(overlay.viewport);
-        self.subtitles
-            .append_to_overlay(self.current_media_time, &mut overlay, subtitle_style);
+        self.subtitles.append_to_overlay(
+            shifted_subtitle_pts(self.current_media_time, self.subtitle_delay),
+            &mut overlay,
+            subtitle_style,
+        );
         self.current_overlay = Some(overlay);
     }
 
@@ -2158,6 +2192,31 @@ fn normalize_subtitle_font_scale(scale: f64) -> f64 {
     }
 }
 
+fn normalize_subtitle_delay(delay_seconds: f64) -> f64 {
+    if delay_seconds.is_finite() {
+        delay_seconds.clamp(-SUBTITLE_DELAY_LIMIT_SECONDS, SUBTITLE_DELAY_LIMIT_SECONDS)
+    } else {
+        0.0
+    }
+}
+
+/// Maps a playback clock time to the subtitle lookup time for a given
+/// `sub-delay`. A positive delay displays subtitles later, so the lookup time
+/// moves backwards (`pts - delay`); a negative delay moves it forwards.
+/// `Duration` cannot go negative, so lookups clamp at zero.
+fn shifted_subtitle_pts(pts: Duration, delay_seconds: f64) -> Duration {
+    let delay = normalize_subtitle_delay(delay_seconds);
+    if delay == 0.0 {
+        return pts;
+    }
+    let magnitude = Duration::from_secs_f64(delay.abs());
+    if delay > 0.0 {
+        pts.saturating_sub(magnitude)
+    } else {
+        pts.saturating_add(magnitude)
+    }
+}
+
 fn bump_generation(current_generation: &mut u64, danmaku_generation: &mut u64) {
     *danmaku_generation = danmaku_generation.saturating_add(1).max(1);
     *current_generation = current_generation
@@ -2416,6 +2475,12 @@ fn subtitle_start(frame: &PlayerSubtitleFrame) -> Option<Duration> {
 #[derive(Debug, Default)]
 struct SubtitleFrameState {
     frames: Vec<PlayerSubtitleFrame>,
+    /// Mirrors [`PresenterRuntime::subtitle_delay`] so retention runs in the
+    /// same shifted domain the overlay renders in. Cues arrive on the unshifted
+    /// timeline, so retiring them against an incoming cue's raw start time
+    /// would drop the cue before it while a positive delay still owes that cue
+    /// `delay` seconds of screen time.
+    subtitle_delay: f64,
     #[cfg(feature = "libass")]
     ass_renderer: CachedAssTrackRenderer,
     #[cfg(feature = "libass")]
@@ -2433,7 +2498,10 @@ impl SubtitleFrameState {
     }
 
     fn push(&mut self, mut frame: PlayerSubtitleFrame) {
-        self.retain_at(subtitle_start(&frame).unwrap_or(frame.media_time));
+        self.retain_at(shifted_subtitle_pts(
+            subtitle_start(&frame).unwrap_or(frame.media_time),
+            self.subtitle_delay,
+        ));
         if frame.frame.is_empty() {
             #[cfg(feature = "libass")]
             {
@@ -2997,6 +3065,38 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     }
 
     #[test]
+    fn positive_subtitle_delay_keeps_a_cue_through_its_delayed_window() {
+        // Two adjacent cues: 1..3 then 3..5. With a 2 s delay the first is
+        // still on screen until the clock reaches 5, but it is the arrival of
+        // the second cue at its unshifted start (3) that used to retire it.
+        let mut state = SubtitleFrameState {
+            subtitle_delay: 2.0,
+            ..SubtitleFrameState::default()
+        };
+        state.push(subtitle_frame(
+            Duration::from_secs(1),
+            Some(Duration::from_secs(3)),
+        ));
+        state.push(subtitle_frame(
+            Duration::from_secs(3),
+            Some(Duration::from_secs(5)),
+        ));
+
+        let mut overlay = empty_overlay();
+        state.append_to_overlay(
+            shifted_subtitle_pts(Duration::from_secs(4), 2.0),
+            &mut overlay,
+            SubtitleAssStyle::default(),
+        );
+
+        assert_eq!(
+            overlay.subtitle_planes.len(),
+            1,
+            "the first cue must survive until its delayed window closes"
+        );
+    }
+
+    #[test]
     fn subtitle_state_keeps_overlapping_bitmap_frames() {
         let mut state = SubtitleFrameState::default();
         state.push(subtitle_frame(
@@ -3321,6 +3421,53 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert_eq!(presenter.volume(), 0.0);
         presenter.set_volume(f64::NAN);
         assert_eq!(presenter.volume(), 1.0);
+    }
+
+    #[test]
+    fn subtitle_pts_shift_follows_mpv_sub_delay_semantics() {
+        let pts = Duration::from_secs(10);
+
+        // Positive delay shows subtitles later: the lookup time lags the clock.
+        assert_eq!(
+            shifted_subtitle_pts(pts, 2.0),
+            Duration::from_secs(8),
+            "positive delay must move the lookup time backwards"
+        );
+        // Negative delay shows subtitles earlier: the lookup time leads.
+        assert_eq!(shifted_subtitle_pts(pts, -2.0), Duration::from_secs(12));
+        assert_eq!(shifted_subtitle_pts(pts, 0.0), pts);
+    }
+
+    #[test]
+    fn subtitle_pts_shift_saturates_and_clamps() {
+        let pts = Duration::from_secs(1);
+
+        // Underflow clamps at zero instead of panicking.
+        assert_eq!(shifted_subtitle_pts(pts, 5.0), Duration::ZERO);
+        // Delay magnitude clamps to ±60 s.
+        assert_eq!(
+            shifted_subtitle_pts(pts, 1_000.0),
+            Duration::ZERO,
+            "positive overflow clamps to the 60 s limit before shifting"
+        );
+        assert_eq!(shifted_subtitle_pts(pts, -1_000.0), Duration::from_secs(61));
+        // Non-finite delays are ignored.
+        assert_eq!(shifted_subtitle_pts(pts, f64::NAN), pts);
+        assert_eq!(shifted_subtitle_pts(pts, f64::INFINITY), pts);
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu")]
+    fn presenter_subtitle_delay_setter_clamps_range() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+
+        assert_eq!(presenter.subtitle_delay(), 0.0);
+        presenter.set_subtitle_delay(1.5);
+        assert!((presenter.subtitle_delay() - 1.5).abs() < 0.000_001);
+        presenter.set_subtitle_delay(-90.0);
+        assert_eq!(presenter.subtitle_delay(), -60.0);
+        presenter.set_subtitle_delay(f64::NAN);
+        assert_eq!(presenter.subtitle_delay(), 0.0);
     }
 
     #[test]
