@@ -1,8 +1,6 @@
 use glow::HasContext;
 
-use crate::ohos::avcodec::{
-    OhosAvCodecSurface, OhosNativeBufferImage, register_external_avcodec_surface,
-};
+use crate::ohos::avcodec::{OhosAvCodecSurface, OhosNativeBufferImage};
 
 const GL_TEXTURE_EXTERNAL_OES: u32 = 0x8D65;
 
@@ -80,7 +78,6 @@ impl OhosGlesInterop {
             external_texture.0.get(),
             GL_TEXTURE_EXTERNAL_OES,
         )?;
-        register_external_avcodec_surface(&surface)?;
         let error = unsafe { gl.get_error() };
         if error != glow::NO_ERROR {
             return Err(format!(
@@ -97,6 +94,10 @@ impl OhosGlesInterop {
             external_texture,
             _surface: surface,
         })
+    }
+
+    pub(crate) fn avcodec_surface(&self) -> std::sync::Arc<OhosAvCodecSurface> {
+        std::sync::Arc::clone(&self._surface)
     }
 
     pub fn convert(

@@ -558,6 +558,23 @@ pub struct PlaybackSessionConfig {
     pub timing: PlaybackTimingConfig,
 }
 
+#[derive(Clone, Default)]
+pub(crate) struct PlaybackDecoderResources {
+    #[cfg(target_env = "ohos")]
+    ohos_avcodec_surface: Option<Arc<crate::ohos::avcodec::OhosAvCodecSurface>>,
+}
+
+impl PlaybackDecoderResources {
+    #[cfg(target_env = "ohos")]
+    pub(crate) fn with_ohos_avcodec_surface(
+        surface: Option<Arc<crate::ohos::avcodec::OhosAvCodecSurface>>,
+    ) -> Self {
+        Self {
+            ohos_avcodec_surface: surface,
+        }
+    }
+}
+
 impl Default for PlaybackSessionConfig {
     fn default() -> Self {
         Self {
@@ -635,6 +652,8 @@ pub struct PlaybackSession {
     demuxer: AsyncDemuxer,
     codec_parameters: Vec<OwnedCodecParameters>,
     video_decoder: Option<Decoder>,
+    #[cfg(target_env = "ohos")]
+    decoder_resources: PlaybackDecoderResources,
     video_decoder_unavailable_reason: Option<String>,
     audio_decoder: Option<Decoder>,
     subtitle_decoder: Option<SubtitleDecoder>,
@@ -663,6 +682,23 @@ pub struct PlaybackSession {
     eof_drain_pending_logged: bool,
     eof_drain_last_progress_at: Option<Instant>,
     eof: bool,
+}
+
+fn open_video_decoder(
+    parameters: &OwnedCodecParameters,
+    config: DecoderConfig,
+    resources: &PlaybackDecoderResources,
+) -> ffmpeg::Result<Decoder> {
+    #[cfg(target_env = "ohos")]
+    if config.backend == DecoderBackend::AvCodec {
+        return Decoder::open_owned_with_ohos_avcodec_surface(
+            parameters,
+            resources.ohos_avcodec_surface.clone(),
+        );
+    }
+    #[cfg(not(target_env = "ohos"))]
+    let _ = resources;
+    Decoder::open_owned_with_config(parameters, config)
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -724,6 +760,14 @@ impl Drop for PlaybackSession {
 
 impl PlaybackSession {
     pub fn open(request: &MediaRequest, config: PlaybackSessionConfig) -> Result<Self> {
+        Self::open_with_decoder_resources(request, config, PlaybackDecoderResources::default())
+    }
+
+    pub(crate) fn open_with_decoder_resources(
+        request: &MediaRequest,
+        config: PlaybackSessionConfig,
+        decoder_resources: PlaybackDecoderResources,
+    ) -> Result<Self> {
         let queue_limits = PlaybackQueueLimits::for_request(request);
         let source = source_from_uri_with_hint_and_headers(
             &request.uri,
@@ -767,7 +811,7 @@ impl PlaybackSession {
             let codec = parameters.codec_name();
             let decoder_config = config.video_decode.decoder_config();
             video_decoder = Some(
-                match Decoder::open_owned_with_config(parameters, decoder_config) {
+                match open_video_decoder(parameters, decoder_config, &decoder_resources) {
                     Ok(decoder) => {
                         let event = VideoDecoderEvent {
                             stage: video_decoder_open_stage(decoder_config).to_string(),
@@ -1028,6 +1072,8 @@ impl PlaybackSession {
             demuxer: AsyncDemuxer::spawn(demuxer),
             codec_parameters,
             video_decoder,
+            #[cfg(target_env = "ohos")]
+            decoder_resources,
             video_decoder_unavailable_reason: None,
             audio_decoder,
             subtitle_decoder,
@@ -1735,7 +1781,11 @@ impl PlaybackSession {
             })
             .to_string(),
         );
-        match Decoder::open_owned_with_config(parameters, DecoderConfig::avcodec()) {
+        match open_video_decoder(
+            parameters,
+            DecoderConfig::avcodec(),
+            &self.decoder_resources,
+        ) {
             Ok(decoder) => {
                 self.video_decoder = Some(decoder);
                 self.info.video_decode_backend = Some(DecoderBackend::AvCodec);
@@ -3594,9 +3644,17 @@ impl Drop for VideoPlaybackEngine {
 
 impl VideoPlaybackEngine {
     pub fn open(request: &MediaRequest, config: PlaybackSessionConfig) -> Result<Self> {
+        Self::open_with_decoder_resources(request, config, PlaybackDecoderResources::default())
+    }
+
+    pub(crate) fn open_with_decoder_resources(
+        request: &MediaRequest,
+        config: PlaybackSessionConfig,
+        decoder_resources: PlaybackDecoderResources,
+    ) -> Result<Self> {
         let timing = playback_timing_for_request(request, config.timing);
         Ok(Self::from_session_with_timing(
-            PlaybackSession::open(request, config)?,
+            PlaybackSession::open_with_decoder_resources(request, config, decoder_resources)?,
             timing,
         ))
     }

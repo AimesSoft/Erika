@@ -3,7 +3,7 @@ use std::ffi::{c_char, c_void};
 use std::ptr::{self, NonNull};
 use std::slice;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const AV_ERR_OK: i32 = 0;
@@ -268,8 +268,6 @@ pub struct OhosAvCodecSurface {
 
 unsafe impl Send for OhosAvCodecSurface {}
 unsafe impl Sync for OhosAvCodecSurface {}
-
-static REGISTERED_EXTERNAL_SURFACE: Mutex<Option<Weak<OhosAvCodecSurface>>> = Mutex::new(None);
 
 fn wait_acquire_fence(fence_fd: i32, timeout: Duration) -> Result<(), String> {
     if fence_fd < 0 {
@@ -580,23 +578,6 @@ impl OhosAvCodecSurface {
     }
 }
 
-pub fn register_external_avcodec_surface(surface: &Arc<OhosAvCodecSurface>) -> Result<(), String> {
-    let mut registered = REGISTERED_EXTERNAL_SURFACE
-        .lock()
-        .map_err(|_| "OHOS external AVCodec surface registry lock was poisoned".to_string())?;
-    *registered = Some(Arc::downgrade(surface));
-    Ok(())
-}
-
-fn registered_external_avcodec_surface() -> Option<Arc<OhosAvCodecSurface>> {
-    let surface = REGISTERED_EXTERNAL_SURFACE
-        .lock()
-        .ok()
-        .and_then(|registered| registered.as_ref().and_then(Weak::upgrade))?;
-    surface.prepare_for_decoder_attachment().ok()?;
-    Some(surface)
-}
-
 impl Drop for OhosAvCodecSurface {
     fn drop(&mut self) {
         if let Ok(mut availability) = self.availability.lock() {
@@ -766,11 +747,20 @@ impl OhosVideoDecoder {
         width: u32,
         height: u32,
         codec_config: &[u8],
+        surface: Option<Arc<OhosAvCodecSurface>>,
     ) -> Result<Self, String> {
         if width == 0 || height == 0 || width > i32::MAX as u32 || height > i32::MAX as u32 {
             return Err(format!("invalid video dimensions {width}x{height}"));
         }
 
+        let (codec_config, nal_length_size, parameter_sets) =
+            normalize_codec_config(codec_kind, codec_config)?;
+        let surface = surface.and_then(|surface| {
+            surface
+                .prepare_for_decoder_attachment()
+                .ok()
+                .map(|()| surface)
+        });
         let mime = codec_kind.mime();
         let codec = unsafe { OH_VideoDecoder_CreateByMime(mime.as_ptr().cast()) };
         if codec.is_null() {
@@ -779,9 +769,6 @@ impl OhosVideoDecoder {
                 codec_kind.as_str()
             ));
         }
-
-        let (codec_config, nal_length_size, parameter_sets) =
-            normalize_codec_config(codec_kind, codec_config)?;
         let callback_context = Box::new(CallbackContext {
             state: Mutex::new(CallbackState {
                 inputs: VecDeque::new(),
@@ -797,7 +784,7 @@ impl OhosVideoDecoder {
             nal_length_size,
             parameter_sets,
             parameter_sets_sent: false,
-            surface: registered_external_avcodec_surface(),
+            surface,
             started: false,
         };
         decoder.initialize(width, height, &codec_config)?;

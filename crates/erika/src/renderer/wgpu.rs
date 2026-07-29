@@ -1270,12 +1270,7 @@ impl WgpuRenderer {
         let ohos_native_buffer_surface = {
             let enabled = ohos_vulkan_video_enabled();
             if enabled && context.ohos_vulkan.is_some() {
-                match crate::ohos::avcodec::OhosAvCodecSurface::new_native_buffer().and_then(
-                    |surface| {
-                        crate::ohos::avcodec::register_external_avcodec_surface(&surface)?;
-                        Ok(surface)
-                    },
-                ) {
+                match crate::ohos::avcodec::OhosAvCodecSurface::new_native_buffer() {
                     Ok(surface) => {
                         crate::trace::diagnostic(
                             serde_json::json!({
@@ -4067,6 +4062,17 @@ impl RendererBackend for WgpuRenderer {
         {
             false
         }
+    }
+
+    #[cfg(target_env = "ohos")]
+    fn ohos_avcodec_surface(
+        &self,
+    ) -> Option<std::sync::Arc<crate::ohos::avcodec::OhosAvCodecSurface>> {
+        self.ohos_native_buffer_surface.clone().or_else(|| {
+            self.ohos_gles
+                .as_ref()
+                .map(crate::ohos::gles::OhosGlesInterop::avcodec_surface)
+        })
     }
 }
 

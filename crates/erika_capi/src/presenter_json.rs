@@ -588,3 +588,29 @@ fn update_u32(args: &Map<String, Value>, name: &str, target: &mut u32) {
         *target = value.min(u32::MAX as u64) as u32;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_bridge_is_exported_on_supported_hosts() {
+        let handle = erika_presenter_create();
+        assert!(!handle.is_null());
+
+        let response = unsafe {
+            erika_presenter_invoke_json(handle, c"getPresenterStats".as_ptr(), c"{}".as_ptr())
+        };
+        assert!(!response.is_null());
+        let value: Value = unsafe { CStr::from_ptr(response) }
+            .to_str()
+            .ok()
+            .and_then(|response| serde_json::from_str(response).ok())
+            .expect("JSON bridge returns valid UTF-8 JSON");
+        unsafe { erika_string_free(response) };
+        assert_eq!(value.get("ok"), Some(&Value::Bool(true)));
+        assert!(value.get("value").is_some_and(Value::is_object));
+
+        unsafe { erika_presenter_destroy(handle) };
+    }
+}

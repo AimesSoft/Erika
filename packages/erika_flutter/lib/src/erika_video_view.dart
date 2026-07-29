@@ -123,6 +123,10 @@ class _ErikaVideoViewState extends State<ErikaVideoView> {
       case TargetPlatform.fuchsia:
       case TargetPlatform.linux:
         return const SizedBox.shrink();
+      // The HarmonyOS Flutter fork adds TargetPlatform.ohos. Stock Flutter
+      // considers the cases above exhaustive, while the fork needs this
+      // fallback after the name-based OHOS branch at the top of this method.
+      // ignore: unreachable_switch_default
       default:
         return const SizedBox.shrink();
     }

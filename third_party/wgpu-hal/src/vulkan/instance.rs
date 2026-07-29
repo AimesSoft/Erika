@@ -12,6 +12,8 @@ use arrayvec::ArrayVec;
 use ash::{ext, khr, vk};
 use parking_lot::RwLock;
 
+// Modified by AimesSoft to support OpenHarmony's Vulkan loader and
+// VK_OHOS_surface window-system integration. All changes are OHOS-gated.
 #[cfg(target_env = "ohos")]
 const OHOS_SURFACE_EXTENSION_NAME: &CStr = c"VK_OHOS_surface";
 

@@ -928,6 +928,21 @@ impl Decoder {
         )
     }
 
+    #[cfg(target_env = "ohos")]
+    pub(crate) fn open_owned_with_ohos_avcodec_surface(
+        parameters: &OwnedCodecParameters,
+        surface: Option<Arc<crate::ohos::avcodec::OhosAvCodecSurface>>,
+    ) -> Result<Self> {
+        let codec_id = unsafe { (*parameters.ptr).codec_id };
+        Self::open_ohos_avcodec(
+            parameters.ptr,
+            parameters.stream_index,
+            parameters.time_base,
+            codec_id,
+            surface,
+        )
+    }
+
     pub fn open_with_config(
         parameters: CodecParameters<'_>,
         config: DecoderConfig,
@@ -950,7 +965,13 @@ impl Decoder {
         let codec_id = unsafe { (*parameters_ptr).codec_id };
         #[cfg(target_env = "ohos")]
         if config.backend == DecoderBackend::AvCodec {
-            return Self::open_ohos_avcodec(parameters_ptr, stream_index, time_base, codec_id);
+            return Self::open_ohos_avcodec(
+                parameters_ptr,
+                stream_index,
+                time_base,
+                codec_id,
+                None,
+            );
         }
         let (codec, find_operation) = match config.backend {
             DecoderBackend::Software => software_decoder(codec_id),
@@ -1359,6 +1380,7 @@ impl Decoder {
         stream_index: i32,
         time_base: TimeBase,
         codec_id: sys::AVCodecID,
+        surface: Option<Arc<crate::ohos::avcodec::OhosAvCodecSurface>>,
     ) -> Result<Self> {
         let codec_kind = match codec_id {
             sys::AVCodecID_AV_CODEC_ID_H264 => OhosVideoCodec::Avc,
@@ -1379,7 +1401,7 @@ impl Decoder {
                 slice::from_raw_parts(parameters.extradata, parameters.extradata_size as usize)
             }
         };
-        let ohos_decoder = OhosVideoDecoder::new(codec_kind, width, height, codec_config)
+        let ohos_decoder = OhosVideoDecoder::new(codec_kind, width, height, codec_config, surface)
             .map_err(FfmpegError::OhosAvCodec)?;
         let output_mode = if ohos_decoder.uses_surface() {
             "surface_native_buffer"
@@ -3445,10 +3467,10 @@ impl CustomAvio {
             }
             Err(error) => {
                 self.last_error = Some(error.to_string());
-                eprintln!(
+                crate::trace::log(format!(
                     "Erika custom AVIO read failed at offset {} for {} bytes: {error}",
                     self.offset, length
-                );
+                ));
                 av_error(EIO)
             }
         }
@@ -3484,7 +3506,7 @@ impl CustomAvio {
             _ => {
                 let error = format!("unsupported seek origin {whence:#x} at offset {offset}");
                 self.last_error = Some(error.clone());
-                eprintln!("Erika custom AVIO rejected {error}");
+                crate::trace::log(format!("Erika custom AVIO rejected {error}"));
                 return av_error(EINVAL) as i64;
             }
         };

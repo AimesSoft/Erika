@@ -506,11 +506,16 @@ impl PresenterRuntime {
         let renderer_preference = config.player.renderer;
         let renderer = build_renderer(renderer_preference, config.renderer)?;
         let supports_mediacodec_surface = renderer.supports_mediacodec_surface_frames();
+        #[cfg(target_env = "ohos")]
+        let ohos_avcodec_surface = renderer.ohos_avcodec_surface();
         resolve_presenter_player_config(
             &mut config.player,
             renderer_preference,
             supports_mediacodec_surface,
         );
+        #[cfg(target_env = "ohos")]
+        let player = Player::new_with_ohos_avcodec_surface(config.player, ohos_avcodec_surface);
+        #[cfg(not(target_env = "ohos"))]
         let player = Player::new(config.player);
         let video_frames = player.subscribe_video_frames();
         let audio_frames = player.subscribe_audio_frames();

@@ -254,7 +254,9 @@ fn ensure_libclang_path() {
         candidates.push(prebuilt.join("lib64"));
         candidates.push(prebuilt.join("lib"));
     }
-    if let Some(native_root) = ohos_native_root() {
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("ohos")
+        && let Some(native_root) = ohos_native_root()
+    {
         candidates.push(native_root.join("llvm/lib"));
         candidates.push(native_root.join("llvm/bin"));
     }
@@ -299,8 +301,13 @@ fn target_bindgen_clang_args() -> Vec<String> {
         let native_root = ohos_native_root().expect(
             "OpenHarmony native SDK was not found for bindgen; set OHOS_NDK_HOME or OHOS_SDK_NATIVE",
         );
+        let target = env::var("TARGET").expect("Cargo TARGET is set for OpenHarmony bindgen");
+        assert!(
+            target.ends_with("-ohos"),
+            "unsupported OpenHarmony Rust target for bindgen: {target}"
+        );
         return vec![
-            "--target=aarch64-unknown-linux-ohos".to_string(),
+            format!("--target={target}"),
             format!("--sysroot={}", native_root.join("sysroot").display()),
         ];
     }

@@ -10,7 +10,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "android")]
 mod android_jni;
-#[cfg(target_env = "ohos")]
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
 mod presenter_json;
 
 use crossbeam_channel::Receiver;

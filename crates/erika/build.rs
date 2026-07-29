@@ -16,6 +16,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ANDROID_API_LEVEL");
     println!("cargo:rerun-if-env-changed=ANDROID_NDK_HOME");
     println!("cargo:rerun-if-env-changed=ANDROID_NDK_ROOT");
+    println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.vert");
+    println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.frag");
+    println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.vert.spv");
+    println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.frag.spv");
 
     let ffmpeg_version_major = emit_ffmpeg_version_cfg();
     enforce_bundled_ffmpeg_version(ffmpeg_version_major);
