@@ -1022,7 +1022,12 @@ impl PresenterRuntime {
                 if self.danmaku.config().enabled {
                     self.refresh_current_danmaku_plan_from_prepared();
                 } else {
+                    // A layout that was already being prepared may still
+                    // complete after this call. Stop requesting more work and
+                    // make every subsequent refresh keep the surface empty.
+                    self.danmaku_planner.invalidate_requests();
                     self.current_danmaku = None;
+                    self.danmaku_plan_replacement_pending = false;
                 }
             }
             DanmakuConfigChange::Layout => {
@@ -1614,6 +1619,11 @@ impl PresenterRuntime {
     }
 
     fn refresh_current_danmaku_plan_from_prepared(&mut self) {
+        if !self.danmaku.config().enabled {
+            self.current_danmaku = None;
+            self.danmaku_plan_replacement_pending = false;
+            return;
+        }
         let Some(prepared) = &self.current_danmaku_prepared else {
             if !self.danmaku_plan_replacement_pending {
                 self.current_danmaku = None;
@@ -1652,6 +1662,9 @@ impl PresenterRuntime {
         viewport: DanmakuViewport,
         generation: u64,
     ) {
+        if !self.danmaku.config().enabled {
+            return;
+        }
         if self
             .current_danmaku_prepared
             .as_ref()
@@ -1673,7 +1686,8 @@ impl PresenterRuntime {
 
     fn danmaku_plan_result_is_current(&self, result: &AsyncDanmakuPlanResult) -> bool {
         let key = result.request.key;
-        key.generation == self.current_generation
+        self.danmaku.config().enabled
+            && key.generation == self.current_generation
             && Some(key.viewport) == self.current_danmaku_viewport
             && result.window_start <= self.current_media_time
             && self.current_media_time <= result.window_end
@@ -3961,6 +3975,105 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert_eq!(
             presenter.danmaku.config().shadow_style,
             crate::danmaku::DanmakuShadowStyle::None
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu")]
+    fn re_enabling_danmaku_requests_the_current_window_immediately() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        let viewport = DanmakuViewport::new(1920, 1080);
+        presenter.current_danmaku_viewport = Some(viewport);
+        presenter.current_media_time = Duration::from_secs(5);
+        let original_generation = presenter.current_generation;
+        presenter.current_danmaku = Some(DanmakuRenderPlan::empty(
+            presenter.current_media_time,
+            original_generation,
+            viewport,
+        ));
+
+        presenter.set_danmaku_enabled(false);
+        assert_eq!(
+            presenter.current_generation, original_generation,
+            "hiding danmaku must not start an asynchronous layout transition"
+        );
+        assert!(
+            presenter.current_danmaku.is_none(),
+            "hiding danmaku must clear the visible plan synchronously"
+        );
+
+        presenter.set_danmaku_enabled(true);
+
+        assert!(presenter.current_generation > original_generation);
+        assert!(presenter.current_danmaku_prepared.is_none());
+        let request = presenter
+            .danmaku_planner
+            .last_requested
+            .expect("re-enabling danmaku must enqueue a replacement layout");
+        assert_eq!(request.generation, presenter.current_generation);
+        assert_eq!(request.viewport, viewport);
+        assert_eq!(
+            request.media_time,
+            quantize_duration(presenter.current_media_time, DANMAKU_PLAN_REQUEST_QUANTUM)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu")]
+    fn disabling_danmaku_rejects_an_in_flight_enabled_plan() {
+        let viewport = DanmakuViewport::new(640, 360);
+        let timeline = DanmakuTimeline::new(vec![crate::danmaku::DanmakuItem {
+            id: 1,
+            pts: Duration::from_secs(5),
+            text: "stale".to_string(),
+            mode: DanmakuMode::Top,
+            font_size: 24.0,
+            color: crate::danmaku::DanmakuColor::WHITE,
+            opacity: 1.0,
+            is_self: false,
+        }])
+        .unwrap();
+        let mut stale_engine = DfmLayoutEngine::new(timeline, DanmakuLayoutConfig::default());
+        let stale_prepared = stale_engine.prepare(viewport, 1);
+
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        presenter.current_danmaku_viewport = Some(viewport);
+        presenter.current_media_time = Duration::from_secs(5);
+        presenter.danmaku_display_clock.media_time = presenter.current_media_time;
+        let generation = presenter.current_generation;
+        presenter.set_danmaku_enabled(false);
+
+        // Simulate a planner result that began before the visibility toggle
+        // and reaches the presenter immediately after it.
+        presenter.current_danmaku_prepared = Some(CurrentDanmakuPrepared {
+            request: AsyncDanmakuPlanRequest {
+                key: DanmakuPlanKey {
+                    media_time: presenter.current_media_time,
+                    viewport,
+                    generation,
+                },
+            },
+            prepared: stale_prepared,
+            window_start: Duration::ZERO,
+            window_end: Duration::from_secs(10),
+        });
+        presenter.current_danmaku = Some(DanmakuRenderPlan::empty(
+            presenter.current_media_time,
+            generation,
+            viewport,
+        ));
+
+        presenter.refresh_current_danmaku_plan_from_prepared();
+        assert!(
+            presenter.current_danmaku.is_none(),
+            "an enabled plan completed before hiding must not become visible again"
+        );
+
+        presenter.current_danmaku_prepared = None;
+        presenter.request_current_danmaku_plan_for_current_time();
+        assert!(
+            presenter.danmaku_planner.last_requested.is_none(),
+            "the hidden state must not enqueue empty replacement layouts"
         );
     }
 

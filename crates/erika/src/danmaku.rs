@@ -1883,7 +1883,11 @@ impl DfmLayoutEngine {
         if self.config == config {
             return DanmakuConfigChange::Unchanged;
         }
-        let layout_changed = !self.config.layout_equivalent(&config);
+        // Hiding can reuse the prepared geometry and suppress it immediately.
+        // Showing cannot assume that geometry still exists because planner
+        // windows prepared while disabled intentionally contain no items.
+        let re_enabling = !self.config.enabled && config.enabled;
+        let layout_changed = re_enabling || !self.config.layout_equivalent(&config);
         let font_changed = self.config.custom_font_family != config.custom_font_family
             || self.config.custom_font_file_path != config.custom_font_file_path;
         self.config = config;
@@ -2921,6 +2925,41 @@ mod tests {
         let frame = prepared.frame_layout(Duration::from_millis(500), 2);
         assert_close(frame.items[0].opacity, 0.4);
         assert_close(frame.items[0].shadow_alpha, 0.0);
+    }
+
+    #[test]
+    fn disabling_is_immediate_but_re_enabling_invalidates_empty_layouts() {
+        let timeline = DanmakuTimeline::new(vec![item(0.0, "toggle", DanmakuMode::Top)]).unwrap();
+        let mut engine = DfmLayoutEngine::new(timeline, DanmakuLayoutConfig::default());
+        let viewport = DanmakuViewport::new(640, 360);
+
+        let enabled = engine.prepare(viewport, 1);
+        assert!(!enabled.items().is_empty());
+
+        let mut config = engine.config().clone();
+        config.enabled = false;
+        assert_eq!(
+            engine.apply_config(config.clone()),
+            DanmakuConfigChange::PaintOnly
+        );
+        let hidden_frame = engine
+            .prepared
+            .as_ref()
+            .expect("disabling retains the prepared geometry")
+            .frame_layout(Duration::from_millis(500), 2);
+        assert!(hidden_frame.items.is_empty());
+
+        // A later planner window prepared while disabled is intentionally
+        // empty, which is the state that must not survive re-enabling.
+        assert!(engine.prepare(viewport, 2).items().is_empty());
+
+        config.enabled = true;
+        assert_eq!(engine.apply_config(config), DanmakuConfigChange::Layout);
+        assert!(
+            engine.prepared.is_none(),
+            "the disabled empty layout must not be reused after enabling danmaku"
+        );
+        assert!(!engine.prepare(viewport, 3).items().is_empty());
     }
 
     #[test]
