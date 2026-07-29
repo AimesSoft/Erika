@@ -3306,7 +3306,11 @@ fn infer_single_video_bit_rate(tracks: &mut [TrackInfo], container_bit_rate: Opt
         .iter()
         .enumerate()
         .filter(|(index, track)| {
-            *index != video_index && matches!(track.kind, TrackKind::Video | TrackKind::Audio)
+            *index != video_index
+                && matches!(
+                    track.kind,
+                    TrackKind::Video | TrackKind::Audio | TrackKind::Subtitle
+                )
         })
         .map(|(_, track)| track.bit_rate)
         .collect::<Option<Vec<_>>>();
@@ -4155,6 +4159,17 @@ mod tests {
         infer_single_video_bit_rate(&mut tracks, Some(1_128_000));
 
         assert_eq!(tracks[0].bit_rate, Some(1_000_000));
+
+        let mut subtitle = TrackInfo::embedded(2, TrackKind::Subtitle);
+        subtitle.bit_rate = Some(128_000);
+        let mut tracks = vec![video.clone(), audio.clone(), subtitle.clone()];
+        infer_single_video_bit_rate(&mut tracks, Some(1_256_000));
+        assert_eq!(tracks[0].bit_rate, Some(1_000_000));
+
+        subtitle.bit_rate = None;
+        let mut tracks = vec![video.clone(), audio.clone(), subtitle];
+        infer_single_video_bit_rate(&mut tracks, Some(1_256_000));
+        assert_eq!(tracks[0].bit_rate, None);
 
         audio.bit_rate = None;
         let mut tracks = vec![video.clone(), audio];

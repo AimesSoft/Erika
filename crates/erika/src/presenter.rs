@@ -908,43 +908,51 @@ impl PresenterRuntime {
             plan_items,
         );
 
-        let hud_snapshot = self.debug_hud_snapshot();
-        let hud_viewport = self
-            .current_overlay
-            .as_ref()
-            .map(|overlay| overlay.viewport)
-            .or_else(|| {
-                self.current_surface_metrics.map(|metrics| {
-                    OverlayViewport::new(
-                        metrics.physical_extent.width,
-                        metrics.physical_extent.height,
+        let hud_overlay = if self.debug_hud.enabled() {
+            let hud_snapshot = self.debug_hud_snapshot();
+            let hud_viewport = self
+                .current_overlay
+                .as_ref()
+                .map(|overlay| overlay.viewport)
+                .or_else(|| {
+                    self.current_surface_metrics.map(|metrics| {
+                        OverlayViewport::new(
+                            metrics.physical_extent.width,
+                            metrics.physical_extent.height,
+                        )
+                    })
+                });
+            let hud_plane = hud_viewport.and_then(|viewport| {
+                self.debug_hud
+                    .update(
+                        Instant::now(),
+                        viewport.width,
+                        viewport.height,
+                        hud_snapshot,
                     )
-                })
+                    .cloned()
             });
-        let hud_plane = hud_viewport.and_then(|viewport| {
-            self.debug_hud
-                .update(
-                    Instant::now(),
-                    viewport.width,
-                    viewport.height,
-                    hud_snapshot,
-                )
-                .cloned()
-        });
-        let mut render_overlay = self.current_overlay.clone();
-        if let Some(plane) = hud_plane {
-            let viewport = hud_viewport.expect("HUD requires a viewport");
-            let overlay = render_overlay.get_or_insert_with(|| OverlayFrame {
-                pts: self.current_media_time,
-                viewport,
-                subtitle_planes: Vec::new(),
-                subtitle_alpha_planes: Vec::new(),
-                subtitle_changed: false,
-            });
-            overlay.subtitle_planes.push(plane);
-        }
+            hud_plane.map(|plane| {
+                let viewport = hud_viewport.expect("HUD requires a viewport");
+                let mut overlay = self
+                    .current_overlay
+                    .clone()
+                    .unwrap_or_else(|| OverlayFrame {
+                        pts: self.current_media_time,
+                        viewport,
+                        subtitle_planes: Vec::new(),
+                        subtitle_alpha_planes: Vec::new(),
+                        subtitle_changed: false,
+                    });
+                overlay.subtitle_planes.push(plane);
+                overlay
+            })
+        } else {
+            None
+        };
+        let render_overlay = hud_overlay.as_ref().or(self.current_overlay.as_ref());
         let context = RenderFrameContext::new(self.current_media_time, self.current_generation)
-            .overlay(render_overlay.as_ref())
+            .overlay(render_overlay)
             .danmaku(self.current_danmaku.as_ref())
             .output_size(
                 self.current_surface_metrics
@@ -1026,18 +1034,14 @@ impl PresenterRuntime {
     }
 
     fn debug_hud_snapshot(&self) -> DebugHudSnapshot {
-        let selected = self.player.track_selection().video.and_then(|selected| {
-            self.player
-                .tracks()
-                .into_iter()
-                .find(|track| track.id == selected)
-        });
-        let selected_audio = self.player.track_selection().audio.and_then(|selected| {
-            self.player
-                .tracks()
-                .into_iter()
-                .find(|track| track.id == selected)
-        });
+        let selection = self.player.track_selection();
+        let tracks = self.player.tracks();
+        let selected = selection
+            .video
+            .and_then(|selected| tracks.iter().find(|track| track.id == selected));
+        let selected_audio = selection
+            .audio
+            .and_then(|selected| tracks.iter().find(|track| track.id == selected));
         let renderer = self.renderer.runtime_stats();
         let clock = self.audio_output.clock_snapshot();
         let output = self.renderer.output_status();
