@@ -89,8 +89,8 @@ Erika 提供两组 C ABI 入口，适配不同嵌入场景：
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | **可用** |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | **可用** |
 | Linux | — | wgpu (planned) | — | 规划中 |
-| Android 8+ | MediaCodec / software | wgpu (Vulkan + GLES fallback) | AAudio | **可用**；SDR 已验证，extended-linear scRGB 已实现，API 35 HDR 真机 active path 待验收 |
-| HarmonyOS API 18+ | AVCodec（H.264/HEVC）/ 软解 | wgpu (Vulkan) + `OHNativeBuffer` 零拷贝导入 | OHAudio | **可用**；已在真机验证，尚未纳入 CI |
+| Android 8+ | MediaCodec / software | wgpu (Vulkan + GLES fallback) | AAudio | **可用** |
+| HarmonyOS API 18+ | AVCodec（H.264/HEVC）/ 软解 | wgpu (Vulkan) + `OHNativeBuffer` 零拷贝导入 | OHAudio | **可用** |
 
 ## 仓库结构
 
