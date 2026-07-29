@@ -76,11 +76,45 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
 
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
-set(ERIKA_NATIVE_TARGET "x86_64-pc-windows-msvc")
-set(ERIKA_NATIVE_PROFILE "lgpl")
+set(ERIKA_WINDOWS_ARCH "" CACHE STRING
+  "Erika Windows architecture: x64, x86_64, arm64, or aarch64")
+set(ERIKA_NATIVE_TARGET "" CACHE STRING
+  "Erika Rust target override for the native runtime")
+set(ERIKA_NATIVE_PROFILE "lgpl" CACHE STRING
+  "Erika native dependency profile")
+
+if(ERIKA_NATIVE_TARGET STREQUAL "")
+  if(NOT ERIKA_WINDOWS_ARCH STREQUAL "")
+    set(_ERIKA_WINDOWS_ARCH "${ERIKA_WINDOWS_ARCH}")
+  elseif(DEFINED ENV{ERIKA_WINDOWS_ARCH} AND NOT "$ENV{ERIKA_WINDOWS_ARCH}" STREQUAL "")
+    set(_ERIKA_WINDOWS_ARCH "$ENV{ERIKA_WINDOWS_ARCH}")
+  elseif(NOT CMAKE_GENERATOR_PLATFORM STREQUAL "")
+    set(_ERIKA_WINDOWS_ARCH "${CMAKE_GENERATOR_PLATFORM}")
+  elseif(DEFINED CMAKE_VS_PLATFORM_NAME AND NOT CMAKE_VS_PLATFORM_NAME STREQUAL "")
+    set(_ERIKA_WINDOWS_ARCH "${CMAKE_VS_PLATFORM_NAME}")
+  else()
+    set(_ERIKA_WINDOWS_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+  endif()
+  string(TOLOWER "${_ERIKA_WINDOWS_ARCH}" _ERIKA_WINDOWS_ARCH)
+  if(_ERIKA_WINDOWS_ARCH MATCHES "^(x64|amd64|x86_64)$")
+    set(ERIKA_NATIVE_TARGET "x86_64-pc-windows-msvc")
+  elseif(_ERIKA_WINDOWS_ARCH MATCHES "^(arm64|aarch64)$")
+    set(ERIKA_NATIVE_TARGET "aarch64-pc-windows-msvc")
+  else()
+    message(FATAL_ERROR
+      "Unsupported Erika Windows architecture: ${_ERIKA_WINDOWS_ARCH}. "
+      "Set ERIKA_WINDOWS_ARCH to x64 or arm64.")
+  endif()
+endif()
+
+if(NOT ERIKA_NATIVE_TARGET STREQUAL "x86_64-pc-windows-msvc" AND
+    NOT ERIKA_NATIVE_TARGET STREQUAL "aarch64-pc-windows-msvc")
+  message(FATAL_ERROR
+    "Unsupported Erika Windows Rust target: ${ERIKA_NATIVE_TARGET}")
+endif()
 
 set(ERIKA_CAPI_DLL_PATH
-  "${ERIKA_REPO_ROOT}/target/$<IF:$<CONFIG:Debug>,debug,release>/erika_capi.dll")
+  "${ERIKA_REPO_ROOT}/target/${ERIKA_NATIVE_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>/erika_capi.dll")
 add_custom_target(erika_capi_runtime
   COMMAND "${CMAKE_COMMAND}"
     "-DERIKA_REPO_ROOT=${ERIKA_REPO_ROOT}"

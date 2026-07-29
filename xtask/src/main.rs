@@ -9,8 +9,12 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 
 const FFMPEG_VERSION: &str = "8.1.2";
+const GAS_PREPROCESSOR_REVISION: &str = "d09971fad329d32df19f5bbafe88cf2f0ed04ed7";
+const GAS_PREPROCESSOR_PATCH_VERSION: &str = "erika-tbnz-v1";
+const GAS_PREPROCESSOR_URL: &str = "https://raw.githubusercontent.com/libav/gas-preprocessor/d09971fad329d32df19f5bbafe88cf2f0ed04ed7/gas-preprocessor.pl";
 const DAV1D_VERSION: &str = "1.5.1";
 const LIBASS_VERSION: &str = "0.17.5";
 const HARFBUZZ_VERSION: &str = "14.2.1";
@@ -19,19 +23,19 @@ const FRIBIDI_VERSION: &str = "1.0.16";
 const ZLIB_VERSION: &str = "1.3.2";
 const DEFAULT_ANDROID_API_LEVEL: u32 = 26;
 
-const FFMPEG_ARCHIVE: &str = "ffmpeg-8.1.2.tar.xz";
-const FFMPEG_DIR: &str = "ffmpeg-8.1.2";
-const FFMPEG_URLS: &[&str] = &["https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz"];
-const FFMPEG_PATCHSET_VERSION: &str = "erika-android-mediacodec-v3";
-const FFMPEG_PATCHES: &[&str] =
-    &["third_party/patches/ffmpeg-8.1.2/0001-erika-mediacodec-bounded-receive.patch"];
+const FFMPEG_ARCHIVE: &str = "ffmpeg-n8.1.2.tar.gz";
+const FFMPEG_DIR: &str = "FFmpeg-n8.1.2";
+const FFMPEG_URLS: &[&str] = &["https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/refs/tags/n8.1.2"];
+const FFMPEG_SHA256: &str = "9fd092511605bbebafe095ea6d38d9e40f34d12f7386e1258372df8be0576eb7";
+const FFMPEG_PATCHSET_VERSION: &str = "erika-android-mediacodec-v4";
+const FFMPEG_PATCHES: &[&str] = &[
+    "third_party/patches/ffmpeg-8.1.2/0001-erika-mediacodec-bounded-receive.patch",
+    "third_party/patches/ffmpeg-8.1.2/0002-windows-msvc-awk-backslash.patch",
+];
 
 const DAV1D_ARCHIVE: &str = "dav1d-1.5.1.tar.gz";
 const DAV1D_DIR: &str = "dav1d-1.5.1";
-const DAV1D_URLS: &[&str] = &[
-    "https://code.videolan.org/videolan/dav1d/-/archive/1.5.1/dav1d-1.5.1.tar.gz",
-    "https://codeload.github.com/videolan/dav1d/tar.gz/refs/tags/1.5.1",
-];
+const DAV1D_URLS: &[&str] = &["https://codeload.github.com/videolan/dav1d/tar.gz/refs/tags/1.5.1"];
 
 const LIBASS_ARCHIVE: &str = "libass-0.17.5.tar.xz";
 const LIBASS_DIR: &str = "libass-0.17.5";
@@ -47,12 +51,10 @@ const HARFBUZZ_URLS: &[&str] = &[
     "https://codeload.github.com/harfbuzz/harfbuzz/tar.gz/refs/tags/14.2.1",
 ];
 
-const FREETYPE_ARCHIVE: &str = "freetype-2.14.3.tar.xz";
-const FREETYPE_DIR: &str = "freetype-2.14.3";
-const FREETYPE_URLS: &[&str] = &[
-    "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.xz",
-    "https://sourceforge.net/projects/freetype/files/freetype2/2.14.3/freetype-2.14.3.tar.xz/download",
-];
+const FREETYPE_ARCHIVE: &str = "freetype-VER-2-14-3.tar.gz";
+const FREETYPE_DIR: &str = "freetype-VER-2-14-3";
+const FREETYPE_URLS: &[&str] =
+    &["https://codeload.github.com/freetype/freetype/tar.gz/refs/tags/VER-2-14-3"];
 
 const FRIBIDI_ARCHIVE: &str = "fribidi-1.0.16.tar.xz";
 const FRIBIDI_DIR: &str = "fribidi-1.0.16";
@@ -63,10 +65,7 @@ const FRIBIDI_URLS: &[&str] = &[
 
 const ZLIB_ARCHIVE: &str = "zlib-1.3.2.tar.gz";
 const ZLIB_DIR: &str = "zlib-1.3.2";
-const ZLIB_URLS: &[&str] = &[
-    "https://zlib.net/zlib-1.3.2.tar.gz",
-    "https://github.com/madler/zlib/archive/refs/tags/v1.3.2.tar.gz",
-];
+const ZLIB_URLS: &[&str] = &["https://codeload.github.com/madler/zlib/tar.gz/refs/tags/v1.3.2"];
 
 fn main() -> Result<()> {
     let mut args = env::args().skip(1).collect::<Vec<_>>();
@@ -230,6 +229,7 @@ enum NativeTarget {
     Aarch64IosSimulator,
     X86_64IosSimulator,
     X86_64WindowsMsvc,
+    Aarch64WindowsMsvc,
     Aarch64Android,
     Armv7Android,
     X86_64Android,
@@ -246,6 +246,7 @@ impl NativeTarget {
             "aarch64-apple-ios-sim" => Ok(Self::Aarch64IosSimulator),
             "x86_64-apple-ios" => Ok(Self::X86_64IosSimulator),
             "x86_64-pc-windows-msvc" | "windows-x64" => Ok(Self::X86_64WindowsMsvc),
+            "aarch64-pc-windows-msvc" | "windows-arm64" => Ok(Self::Aarch64WindowsMsvc),
             "aarch64-linux-android" | "arm64-v8a" => Ok(Self::Aarch64Android),
             "armv7-linux-androideabi" | "armeabi-v7a" => Ok(Self::Armv7Android),
             "x86_64-linux-android" | "android-x64" => Ok(Self::X86_64Android),
@@ -263,6 +264,7 @@ impl NativeTarget {
             Self::Aarch64IosSimulator => Some("aarch64-apple-ios-sim"),
             Self::X86_64IosSimulator => Some("x86_64-apple-ios"),
             Self::X86_64WindowsMsvc => Some("x86_64-pc-windows-msvc"),
+            Self::Aarch64WindowsMsvc => Some("aarch64-pc-windows-msvc"),
             Self::Aarch64Android => Some("aarch64-linux-android"),
             Self::Armv7Android => Some("armv7-linux-androideabi"),
             Self::X86_64Android => Some("x86_64-linux-android"),
@@ -277,6 +279,7 @@ impl NativeTarget {
             Self::Aarch64Ios => Some("iphoneos"),
             Self::Aarch64IosSimulator | Self::X86_64IosSimulator => Some("iphonesimulator"),
             Self::X86_64WindowsMsvc
+            | Self::Aarch64WindowsMsvc
             | Self::Aarch64Android
             | Self::Armv7Android
             | Self::X86_64Android
@@ -290,6 +293,7 @@ impl NativeTarget {
             Self::Aarch64Macos | Self::Aarch64Ios | Self::Aarch64IosSimulator => Some("arm64"),
             Self::X86_64Macos | Self::X86_64IosSimulator => Some("x86_64"),
             Self::X86_64WindowsMsvc => Some("x86_64"),
+            Self::Aarch64WindowsMsvc => Some("aarch64"),
             Self::Aarch64Android => Some("aarch64"),
             Self::Armv7Android => Some("arm"),
             Self::X86_64Android => Some("x86_64"),
@@ -303,6 +307,7 @@ impl NativeTarget {
             Self::Aarch64Macos | Self::Aarch64Ios | Self::Aarch64IosSimulator => Some("aarch64"),
             Self::X86_64Macos | Self::X86_64IosSimulator => Some("x86_64"),
             Self::X86_64WindowsMsvc => Some("x86_64"),
+            Self::Aarch64WindowsMsvc => Some("aarch64"),
             Self::Aarch64Android => Some("aarch64"),
             Self::Armv7Android => Some("arm"),
             Self::X86_64Android => Some("x86_64"),
@@ -316,6 +321,7 @@ impl NativeTarget {
             Self::Aarch64Macos | Self::Aarch64Ios | Self::Aarch64IosSimulator => Some("arm64"),
             Self::X86_64Macos | Self::X86_64IosSimulator => Some("x86_64"),
             Self::X86_64WindowsMsvc => Some("x86_64"),
+            Self::Aarch64WindowsMsvc => Some("arm64"),
             Self::Aarch64Android => Some("aarch64"),
             Self::Armv7Android => Some("armv7"),
             Self::X86_64Android => Some("x86_64"),
@@ -351,7 +357,8 @@ impl NativeTarget {
     }
 
     fn is_windows(self) -> bool {
-        matches!(self, Self::X86_64WindowsMsvc) || (matches!(self, Self::Host) && cfg!(windows))
+        matches!(self, Self::X86_64WindowsMsvc | Self::Aarch64WindowsMsvc)
+            || (matches!(self, Self::Host) && cfg!(windows))
     }
 
     fn is_apple(self) -> bool {
@@ -388,6 +395,7 @@ impl NativeTarget {
                 "-mios-simulator-version-min",
             )),
             Self::X86_64WindowsMsvc
+            | Self::Aarch64WindowsMsvc
             | Self::Aarch64Android
             | Self::Armv7Android
             | Self::X86_64Android
@@ -617,17 +625,23 @@ fn fetch_dependency_sources(layout: &WorkspaceLayout, all: bool) -> Result<()> {
     fs::create_dir_all(&layout.source_dir)
         .with_context(|| format!("create {}", layout.source_dir.display()))?;
 
-    fetch_and_extract(layout, FFMPEG_URLS, FFMPEG_ARCHIVE, FFMPEG_DIR)?;
+    fetch_and_extract(
+        layout,
+        FFMPEG_URLS,
+        FFMPEG_ARCHIVE,
+        FFMPEG_DIR,
+        Some(FFMPEG_SHA256),
+    )?;
     apply_ffmpeg_patches(layout)?;
-    fetch_and_extract(layout, ZLIB_URLS, ZLIB_ARCHIVE, ZLIB_DIR)?;
+    fetch_and_extract(layout, ZLIB_URLS, ZLIB_ARCHIVE, ZLIB_DIR, None)?;
     if layout.target.is_android() || layout.target.is_apple() {
-        fetch_and_extract(layout, DAV1D_URLS, DAV1D_ARCHIVE, DAV1D_DIR)?;
+        fetch_and_extract(layout, DAV1D_URLS, DAV1D_ARCHIVE, DAV1D_DIR, None)?;
     }
     if all {
-        fetch_and_extract(layout, LIBASS_URLS, LIBASS_ARCHIVE, LIBASS_DIR)?;
-        fetch_and_extract(layout, HARFBUZZ_URLS, HARFBUZZ_ARCHIVE, HARFBUZZ_DIR)?;
-        fetch_and_extract(layout, FREETYPE_URLS, FREETYPE_ARCHIVE, FREETYPE_DIR)?;
-        fetch_and_extract(layout, FRIBIDI_URLS, FRIBIDI_ARCHIVE, FRIBIDI_DIR)?;
+        fetch_and_extract(layout, LIBASS_URLS, LIBASS_ARCHIVE, LIBASS_DIR, None)?;
+        fetch_and_extract(layout, HARFBUZZ_URLS, HARFBUZZ_ARCHIVE, HARFBUZZ_DIR, None)?;
+        fetch_and_extract(layout, FREETYPE_URLS, FREETYPE_ARCHIVE, FREETYPE_DIR, None)?;
+        fetch_and_extract(layout, FRIBIDI_URLS, FRIBIDI_ARCHIVE, FRIBIDI_DIR, None)?;
     } else {
         println!(
             "skip text/subtitle source fetch; pass --all when preparing libass/HarfBuzz/FreeType work"
@@ -764,7 +778,7 @@ fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Resu
     }
 
     if options.target.is_windows() {
-        let _ = windows_msvc_environment()?;
+        let _ = windows_msvc_environment(options.target)?;
         if posix_shell().is_none() {
             bail!(
                 "required POSIX shell was not found; install Git for Windows or MSYS2 so FFmpeg configure can run"
@@ -772,6 +786,12 @@ fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Resu
         }
         if gnu_make().is_none() {
             bail!("required GNU make was not found; install MSYS2 make or MinGW mingw32-make");
+        }
+        if ffmpeg_requires_nasm(options.target)
+            && !ffmpeg_build_marker_is_current(layout, options)
+            && which("nasm").is_none()
+        {
+            bail!("required build tool `nasm` was not found for Windows x86_64 FFmpeg assembly");
         }
         if cmake_tool().is_none() {
             bail!("required CMake was not found; install the Visual Studio CMake component");
@@ -796,7 +816,7 @@ fn ensure_required_tools(options: DepsOptions, layout: &WorkspaceLayout) -> Resu
             );
         }
         if cfg!(windows) {
-            let _ = windows_msvc_environment()?;
+            let _ = windows_msvc_environment(windows_host_target())?;
         }
         if gnu_make().is_none() {
             bail!(
@@ -854,8 +874,12 @@ fn build_text_dependencies(layout: &WorkspaceLayout, options: DepsOptions) -> Re
 }
 
 fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if marker_has_version(&layout.zlib_build_marker, "zlib", ZLIB_VERSION)
-        && !options.force
+    if marker_has_version(
+        &layout.zlib_build_marker,
+        "zlib",
+        ZLIB_VERSION,
+        options.target,
+    ) && !options.force
         && (native_static_lib_exists(&layout.zlib_prefix, "z")
             || native_static_lib_exists(&layout.zlib_prefix, "zlib")
             || native_static_lib_exists(&layout.zlib_prefix, "zs"))
@@ -911,6 +935,7 @@ fn build_zlib(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         "zlib",
         ZLIB_VERSION,
         &layout.zlib_prefix,
+        options.target,
     )
 }
 
@@ -978,13 +1003,14 @@ fn build_dav1d(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     fs::write(
         &layout.dav1d_build_marker,
         format!(
-            "dav1d={DAV1D_VERSION}\ntarget={}\nandroid_api={}\nasm={asm_enabled}\nprefix={}\n",
+            "dav1d={DAV1D_VERSION}\ntarget={}\nandroid_api={}\ndeployment_target={}\nasm={asm_enabled}\nprefix={}\n",
             options.target.triple().unwrap_or("host"),
             if options.target.is_android() {
                 android_api_level()?.to_string()
             } else {
                 "n/a".to_string()
             },
+            native_deployment_target(options.target),
             layout.dav1d_prefix.display(),
         ),
     )
@@ -1004,9 +1030,23 @@ fn dav1d_requires_nasm(target: NativeTarget) -> bool {
     )
 }
 
+fn ffmpeg_requires_nasm(target: NativeTarget) -> bool {
+    matches!(
+        target,
+        NativeTarget::X86_64Macos
+            | NativeTarget::X86_64IosSimulator
+            | NativeTarget::X86_64WindowsMsvc
+            | NativeTarget::X86_64Android
+    ) || (matches!(target, NativeTarget::Host) && cfg!(target_arch = "x86_64"))
+}
+
 fn build_freetype(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if marker_has_version(&layout.freetype_build_marker, "freetype", FREETYPE_VERSION)
-        && !options.force
+    if marker_has_version(
+        &layout.freetype_build_marker,
+        "freetype",
+        FREETYPE_VERSION,
+        options.target,
+    ) && !options.force
     {
         println!(
             "reuse FreeType build marker {}",
@@ -1046,12 +1086,17 @@ fn build_freetype(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> 
         "freetype",
         FREETYPE_VERSION,
         &layout.freetype_prefix,
+        options.target,
     )
 }
 
 fn build_harfbuzz(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if marker_has_version(&layout.harfbuzz_build_marker, "harfbuzz", HARFBUZZ_VERSION)
-        && !options.force
+    if marker_has_version(
+        &layout.harfbuzz_build_marker,
+        "harfbuzz",
+        HARFBUZZ_VERSION,
+        options.target,
+    ) && !options.force
     {
         println!(
             "reuse HarfBuzz build marker {}",
@@ -1106,12 +1151,17 @@ fn build_harfbuzz(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> 
         "harfbuzz",
         HARFBUZZ_VERSION,
         &layout.harfbuzz_prefix,
+        options.target,
     )
 }
 
 fn build_fribidi(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if marker_has_version(&layout.fribidi_build_marker, "fribidi", FRIBIDI_VERSION)
-        && !options.force
+    if marker_has_version(
+        &layout.fribidi_build_marker,
+        "fribidi",
+        FRIBIDI_VERSION,
+        options.target,
+    ) && !options.force
     {
         println!(
             "reuse FriBidi build marker {}",
@@ -1159,6 +1209,7 @@ fn build_fribidi(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         "fribidi",
         FRIBIDI_VERSION,
         &layout.fribidi_prefix,
+        options.target,
     )
 }
 
@@ -1183,7 +1234,13 @@ fn patch_fribidi_meson_native_compiler(layout: &WorkspaceLayout) -> Result<()> {
 }
 
 fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
-    if marker_has_version(&layout.libass_build_marker, "libass", LIBASS_VERSION) && !options.force {
+    if marker_has_version(
+        &layout.libass_build_marker,
+        "libass",
+        LIBASS_VERSION,
+        options.target,
+    ) && !options.force
+    {
         println!(
             "reuse libass build marker {}",
             layout.libass_build_marker.display()
@@ -1277,6 +1334,7 @@ fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         "libass",
         LIBASS_VERSION,
         &layout.libass_prefix,
+        options.target,
     )
 }
 
@@ -1426,7 +1484,8 @@ fn apply_meson_target(
     let native_file = meson_native_file(layout, target, name)?;
     command.arg("--native-file").arg(native_file);
     apply_apple_target_env(command, target)?;
-    apply_android_host_env(command, target)
+    apply_android_host_env(command, target)?;
+    apply_windows_target_env(command, target)
 }
 
 fn meson_native_file(
@@ -1519,6 +1578,26 @@ fn meson_cross_file(
                 target
                     .meson_cpu()
                     .context("explicit Android target must have a Meson CPU")?,
+            ),
+        )
+    } else if matches!(target, NativeTarget::Aarch64WindowsMsvc) {
+        let tools = windows_msvc_environment(target)?;
+        let compiler = msvc_tool_path(tools, "cl.exe")?;
+        let archiver = msvc_tool_path(tools, "lib.exe")?;
+        format!(
+            "[binaries]\nc = {}\ncpp = {}\nar = {}\n\n[properties]\nneeds_exe_wrapper = true\n\n[host_machine]\nsystem = 'windows'\ncpu_family = {}\ncpu = {}\nendian = 'little'\n",
+            meson_string(&compiler.display().to_string()),
+            meson_string(&compiler.display().to_string()),
+            meson_string(&archiver.display().to_string()),
+            meson_string(
+                target
+                    .meson_cpu_family()
+                    .context("Windows ARM64 target must have a Meson CPU family")?,
+            ),
+            meson_string(
+                target
+                    .meson_cpu()
+                    .context("Windows ARM64 target must have a Meson CPU")?,
             ),
         )
     } else {
@@ -1616,22 +1695,43 @@ fn write_marker(
     name: &str,
     version: &str,
     prefix: &std::path::Path,
+    target: NativeTarget,
 ) -> Result<()> {
     fs::write(
         path,
-        format!("{name}={version}\nprefix={}\n", prefix.display()),
+        format!(
+            "{name}={version}\ndeployment_target={}\nprefix={}\n",
+            native_deployment_target(target),
+            prefix.display()
+        ),
     )
     .with_context(|| format!("write {}", path.display()))
 }
 
-fn marker_has_version(path: &std::path::Path, name: &str, version: &str) -> bool {
+fn marker_has_version(
+    path: &std::path::Path,
+    name: &str,
+    version: &str,
+    target: NativeTarget,
+) -> bool {
     fs::read_to_string(path)
         .map(|marker| {
             marker
                 .lines()
                 .any(|line| line == format!("{name}={version}"))
+                && marker.contains(&format!(
+                    "deployment_target={}\n",
+                    native_deployment_target(target)
+                ))
         })
         .unwrap_or(false)
+}
+
+fn native_deployment_target(target: NativeTarget) -> String {
+    target
+        .deployment_target()
+        .map(|(deployment_target, _)| deployment_target)
+        .unwrap_or_else(|| "n/a".to_string())
 }
 
 fn pkg_config_path<'a>(prefixes: impl IntoIterator<Item = &'a PathBuf>) -> String {
@@ -1721,11 +1821,20 @@ fn apply_ffmpeg_patch_files(layout: &WorkspaceLayout) -> Result<PatchApplication
 
 fn refresh_ffmpeg_source(layout: &WorkspaceLayout) -> Result<()> {
     validate_generated_ffmpeg_source_path(layout)?;
+    let archive_path = layout.cache_dir.join(FFMPEG_ARCHIVE);
     if layout.ffmpeg_source_dir.exists() {
         fs::remove_dir_all(&layout.ffmpeg_source_dir)
             .with_context(|| format!("remove {}", layout.ffmpeg_source_dir.display()))?;
     }
-    extract_archive(&layout.cache_dir.join(FFMPEG_ARCHIVE), &layout.source_dir)
+    extract_archive(&archive_path, &layout.source_dir, FFMPEG_DIR)?;
+    fs::write(
+        layout.ffmpeg_source_dir.join(".erika-extracted"),
+        format!(
+            "archive={FFMPEG_ARCHIVE}\nsha256={}\n",
+            archive_sha256(&archive_path)?
+        ),
+    )
+    .with_context(|| format!("mark {} extracted", layout.ffmpeg_source_dir.display()))
 }
 
 fn validate_generated_ffmpeg_source_path(layout: &WorkspaceLayout) -> Result<()> {
@@ -1976,59 +2085,143 @@ fn fetch_and_extract(
     urls: &[&str],
     archive_name: &str,
     source_dir_name: &str,
+    expected_sha256: Option<&str>,
 ) -> Result<()> {
     let archive_path = layout.cache_dir.join(archive_name);
     let partial_path = layout.cache_dir.join(format!("{archive_name}.part"));
+    if archive_path.exists()
+        && expected_sha256
+            .is_some_and(|expected| !archive_checksum_matches(&archive_path, expected))
+    {
+        println!("discard invalid archive {}", archive_path.display());
+        fs::remove_file(&archive_path)
+            .with_context(|| format!("remove {}", archive_path.display()))?;
+    }
     if !archive_path.exists() {
-        download_archive(urls, &partial_path, &archive_path)?;
+        download_archive(urls, &partial_path, &archive_path, expected_sha256)?;
     } else {
         println!("reuse {}", archive_path.display());
     }
 
     let source_path = layout.source_dir.join(source_dir_name);
-    if !source_path.exists() {
-        println!("extract {}", archive_path.display());
-        extract_archive(&archive_path, &layout.source_dir)?;
-    } else {
+    let extraction_marker = source_path.join(".erika-extracted");
+    let mut archive_digest = archive_sha256(&archive_path)?;
+    let mut expected_marker = format!("archive={archive_name}\nsha256={archive_digest}\n");
+    if source_path.exists()
+        && fs::read_to_string(&extraction_marker).is_ok_and(|marker| marker == expected_marker)
+    {
         println!("reuse {}", source_path.display());
+        return Ok(());
     }
+    if source_path.exists() {
+        fs::remove_dir_all(&source_path)
+            .with_context(|| format!("remove incomplete source {}", source_path.display()))?;
+    }
+    println!("extract {}", archive_path.display());
+    if let Err(error) = extract_archive(&archive_path, &layout.source_dir, source_dir_name) {
+        println!(
+            "extract failed for {}, downloading a fresh archive",
+            archive_path.display()
+        );
+        fs::remove_file(&archive_path)
+            .with_context(|| format!("remove {}", archive_path.display()))?;
+        download_archive(urls, &partial_path, &archive_path, expected_sha256)
+            .with_context(|| format!("recover after extraction failure: {error:#}"))?;
+        archive_digest = archive_sha256(&archive_path)?;
+        expected_marker = format!("archive={archive_name}\nsha256={archive_digest}\n");
+        extract_archive(&archive_path, &layout.source_dir, source_dir_name)?;
+    }
+    fs::write(&extraction_marker, expected_marker)
+        .with_context(|| format!("write {}", extraction_marker.display()))?;
     Ok(())
 }
 
-fn extract_archive(archive_path: &Path, destination: &Path) -> Result<()> {
-    run(Command::new("tar")
+fn extract_archive(archive_path: &Path, destination: &Path, source_dir_name: &str) -> Result<()> {
+    let temporary_dir = destination.join(format!(
+        ".erika-extract-{source_dir_name}-{}",
+        std::process::id()
+    ));
+    if temporary_dir.exists() {
+        fs::remove_dir_all(&temporary_dir)
+            .with_context(|| format!("remove {}", temporary_dir.display()))?;
+    }
+    fs::create_dir_all(&temporary_dir)
+        .with_context(|| format!("create {}", temporary_dir.display()))?;
+    let result = run(Command::new("tar")
         .arg("-xf")
         .arg(archive_path)
         .arg("-C")
-        .arg(destination))
+        .arg(&temporary_dir));
+    if let Err(error) = result {
+        let _ = fs::remove_dir_all(&temporary_dir);
+        return Err(error);
+    }
+    let extracted_source = temporary_dir.join(source_dir_name);
+    if !extracted_source.is_dir() {
+        let _ = fs::remove_dir_all(&temporary_dir);
+        bail!(
+            "archive {} did not contain expected directory {source_dir_name}",
+            archive_path.display()
+        );
+    }
+    let source_path = destination.join(source_dir_name);
+    fs::rename(&extracted_source, &source_path).with_context(|| {
+        format!(
+            "rename {} to {}",
+            extracted_source.display(),
+            source_path.display()
+        )
+    })?;
+    fs::remove_dir_all(&temporary_dir)
+        .with_context(|| format!("remove {}", temporary_dir.display()))
 }
 
-fn download_archive(urls: &[&str], partial_path: &PathBuf, archive_path: &PathBuf) -> Result<()> {
+fn download_archive(
+    urls: &[&str],
+    partial_path: &PathBuf,
+    archive_path: &PathBuf,
+    expected_sha256: Option<&str>,
+) -> Result<()> {
     let mut last_error = None;
     let agent = download_agent();
     for url in urls {
-        println!("download {url}");
-        if partial_path.exists() {
-            fs::remove_file(partial_path)
-                .with_context(|| format!("remove {}", partial_path.display()))?;
-        }
-        match download_url(&agent, url, partial_path) {
-            Ok(()) => {
-                fs::rename(partial_path, archive_path).with_context(|| {
-                    format!(
-                        "rename {} to {}",
-                        partial_path.display(),
-                        archive_path.display()
-                    )
-                })?;
-                return Ok(());
+        for attempt in 1..=4 {
+            println!("download {url} (attempt {attempt}/4)");
+            if partial_path.exists() {
+                fs::remove_file(partial_path)
+                    .with_context(|| format!("remove {}", partial_path.display()))?;
             }
-            Err(error) => {
-                last_error = Some(error);
-                let _ = fs::remove_file(partial_path);
-                println!("download failed, trying next source if available");
+            match download_url(&agent, url, partial_path).and_then(|()| {
+                if expected_sha256
+                    .is_none_or(|expected| archive_checksum_matches(partial_path, expected))
+                {
+                    Ok(())
+                } else {
+                    bail!("checksum mismatch for {}", partial_path.display())
+                }
+            }) {
+                Ok(()) => {
+                    fs::rename(partial_path, archive_path).with_context(|| {
+                        format!(
+                            "rename {} to {}",
+                            partial_path.display(),
+                            archive_path.display()
+                        )
+                    })?;
+                    return Ok(());
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    let _ = fs::remove_file(partial_path);
+                    if attempt < 4 {
+                        let delay = Duration::from_secs(2_u64.pow(attempt));
+                        println!("download failed, retrying in {} seconds", delay.as_secs());
+                        std::thread::sleep(delay);
+                    }
+                }
             }
         }
+        println!("download failed, trying next source if available");
     }
     match last_error {
         Some(error) => Err(error).context("all download sources failed"),
@@ -2037,6 +2230,19 @@ fn download_archive(urls: &[&str], partial_path: &PathBuf, archive_path: &PathBu
             archive_path.display()
         ),
     }
+}
+
+fn archive_checksum_matches(path: &Path, expected: &str) -> bool {
+    archive_sha256(path).is_ok_and(|actual| actual.eq_ignore_ascii_case(expected))
+}
+
+fn archive_sha256(path: &Path) -> Result<String> {
+    let Ok(mut file) = File::open(path) else {
+        bail!("open {}", path.display());
+    };
+    let mut hasher = Sha256::new();
+    io::copy(&mut file, &mut hasher).with_context(|| format!("read {}", path.display()))?;
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn download_agent() -> ureq::Agent {
@@ -2136,15 +2342,19 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     } else {
         configure.arg("--pkg-config=false");
     }
-    if !options.target.is_android() {
-        configure.arg("--disable-x86asm");
-    }
     let mut extra_cflags = if options.target.is_windows() {
         Vec::new()
     } else {
         vec!["-fPIC".to_string()]
     };
     let mut extra_ldflags = Vec::new();
+    let gas_preprocessor_dir = if matches!(options.target, NativeTarget::Aarch64WindowsMsvc) {
+        ensure_gas_preprocessor(layout)?
+            .parent()
+            .map(Path::to_path_buf)
+    } else {
+        None
+    };
     if let Some(config) = apple_toolchain(options.target)? {
         configure.arg(format!("--cc={}", config.clang.display()));
         configure.arg(format!("--ar={}", config.ar.display()));
@@ -2196,6 +2406,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
             }
             NativeTarget::Host
             | NativeTarget::X86_64WindowsMsvc
+            | NativeTarget::Aarch64WindowsMsvc
             | NativeTarget::Aarch64Android
             | NativeTarget::Armv7Android
             | NativeTarget::X86_64Android
@@ -2237,7 +2448,21 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         configure.env("ANDROID_NDK_HOME", &config.ndk_root);
     } else if options.target.is_windows() {
         configure.arg("--target-os=win64");
-        configure.arg("--arch=x86_64");
+        configure.arg(format!(
+            "--arch={}",
+            options
+                .target
+                .ffmpeg_arch()
+                .context("Windows target must have an FFmpeg architecture")?
+        ));
+        if matches!(options.target, NativeTarget::Aarch64WindowsMsvc) {
+            configure.arg("--enable-cross-compile");
+            apply_ffmpeg_assembler_path(
+                &mut configure,
+                options.target,
+                gas_preprocessor_dir.as_deref(),
+            );
+        }
         configure.arg("--toolchain=msvc");
         extra_cflags.push(format!(
             "-I{}",
@@ -2277,6 +2502,9 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
 
     println!("configure FFmpeg");
     run(&mut configure)?;
+    if cfg!(windows) && options.target.is_windows() {
+        fix_ffmpeg_msvc_archive_response_file_creation(&layout.ffmpeg_build_dir)?;
+    }
     if cfg!(windows) && options.target.is_android() {
         enable_ffmpeg_archive_response_files(&layout.ffmpeg_build_dir)?;
     }
@@ -2288,6 +2516,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     let mut build =
         ffmpeg_make_command(&make, &layout.ffmpeg_build_dir, &build_args, options.target)?;
     apply_windows_target_env(&mut build, options.target)?;
+    apply_ffmpeg_assembler_path(&mut build, options.target, gas_preprocessor_dir.as_deref());
     apply_android_host_env(&mut build, options.target)?;
     apply_windows_posix_shell(&mut build, options.target);
     append_windows_posix_paths(&mut build);
@@ -2300,6 +2529,11 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         options.target,
     )?;
     apply_windows_target_env(&mut install, options.target)?;
+    apply_ffmpeg_assembler_path(
+        &mut install,
+        options.target,
+        gas_preprocessor_dir.as_deref(),
+    );
     apply_android_host_env(&mut install, options.target)?;
     apply_windows_posix_shell(&mut install, options.target);
     append_windows_posix_paths(&mut install);
@@ -2322,7 +2556,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     fs::write(
         &layout.ffmpeg_build_marker,
         format!(
-            "ffmpeg={FFMPEG_VERSION}\npatchset={}\nzlib={ZLIB_VERSION}\ndav1d={}\nprofile={}\ntarget={}\nandroid_api={}\nprefix={}\nflags={}\n",
+            "ffmpeg={FFMPEG_VERSION}\npatchset={}\nzlib={ZLIB_VERSION}\ndav1d={}\nprofile={}\ntarget={}\nandroid_api={}\ndeployment_target={}\nprefix={}\nflags={}\n",
             ffmpeg_patchset,
             if options.target.is_android() || options.target.is_apple() {
                 DAV1D_VERSION
@@ -2336,6 +2570,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
             } else {
                 "n/a".to_string()
             },
+            native_deployment_target(options.target),
             layout.ffmpeg_prefix.display(),
             options
                 .profile
@@ -2344,6 +2579,94 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         ),
     )
     .with_context(|| format!("write {}", layout.ffmpeg_build_marker.display()))?;
+    Ok(())
+}
+
+fn ensure_gas_preprocessor(layout: &WorkspaceLayout) -> Result<PathBuf> {
+    let tools_dir = layout.cache_dir.join("tools");
+    let destination = tools_dir.join("gas-preprocessor.pl");
+    let marker = tools_dir.join("gas-preprocessor.revision");
+    let current = fs::read_to_string(&marker).ok().is_some_and(|value| {
+        value.trim() == format!("{GAS_PREPROCESSOR_REVISION}-{GAS_PREPROCESSOR_PATCH_VERSION}")
+    });
+    if destination.is_file() && current {
+        ensure_gas_preprocessor_executable(&destination)?;
+        return Ok(destination);
+    }
+    fs::create_dir_all(&tools_dir).with_context(|| format!("create {}", tools_dir.display()))?;
+    let partial = tools_dir.join("gas-preprocessor.pl.part");
+    if partial.exists() {
+        fs::remove_file(&partial).with_context(|| format!("remove {}", partial.display()))?;
+    }
+    println!("download {GAS_PREPROCESSOR_URL}");
+    download_url(&download_agent(), GAS_PREPROCESSOR_URL, &partial)?;
+    patch_gas_preprocessor_for_armasm64(&partial)?;
+    fs::rename(&partial, &destination)
+        .with_context(|| format!("rename {} to {}", partial.display(), destination.display()))?;
+    fs::write(
+        &marker,
+        format!("{GAS_PREPROCESSOR_REVISION}-{GAS_PREPROCESSOR_PATCH_VERSION}\n"),
+    )
+    .with_context(|| format!("write {}", marker.display()))?;
+    ensure_gas_preprocessor_executable(&destination)?;
+    Ok(destination)
+}
+
+fn patch_gas_preprocessor_for_armasm64(path: &Path) -> Result<()> {
+    let contents = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let branch_pattern = "(cbn?z|adr|tbz)";
+    let patched_branch_pattern = "(cbn?z|adr|tbn?z)";
+    let register_workaround = "if ($instr eq \"tbz\" and";
+    let patched_register_workaround = "if ($instr =~ /^tbn?z$/ and";
+    if !contents.contains(branch_pattern) || !contents.contains(register_workaround) {
+        bail!(
+            "gas-preprocessor ARMASM branch pattern was not found in {}",
+            path.display()
+        );
+    }
+    let patched = contents
+        .replacen(branch_pattern, patched_branch_pattern, 1)
+        .replacen(register_workaround, patched_register_workaround, 1);
+    fs::write(path, patched).with_context(|| format!("write patched {}", path.display()))
+}
+
+fn ensure_gas_preprocessor_executable(path: &Path) -> Result<()> {
+    if !cfg!(windows) {
+        return Ok(());
+    }
+    let shell = posix_shell().context("required POSIX shell was not found")?;
+    run(Command::new(shell).arg("-lc").arg(format!(
+        "chmod +x {}",
+        shell_quote(&path_to_forward_slashes(path))
+    )))
+}
+
+fn apply_ffmpeg_assembler_path(command: &mut Command, target: NativeTarget, dir: Option<&Path>) {
+    if matches!(target, NativeTarget::Aarch64WindowsMsvc) {
+        if let Some(dir) = dir {
+            prepend_path_to_command(command, dir);
+        }
+    }
+}
+
+fn fix_ffmpeg_msvc_archive_response_file_creation(build_dir: &Path) -> Result<()> {
+    let makefile = build_dir.join("ffbuild/library.mak");
+    let contents =
+        fs::read_to_string(&makefile).with_context(|| format!("read {}", makefile.display()))?;
+    let original = "\t$(Q)echo $^ > $@.objs";
+    let replacement = "\t$(file >$@.objs,$^)";
+    if contents.contains(replacement) {
+        return Ok(());
+    }
+    if !contents.contains(original) {
+        bail!(
+            "FFmpeg MSVC response-file recipe was not found in {}",
+            makefile.display()
+        );
+    }
+    fs::write(&makefile, contents.replacen(original, replacement, 1))
+        .with_context(|| format!("write {}", makefile.display()))?;
+    println!("patched FFmpeg MSVC archive response-file creation");
     Ok(())
 }
 
@@ -2496,8 +2819,11 @@ fn ffmpeg_android_host_cc(config: &AndroidToolchain) -> Result<Option<String>> {
     let clang =
         required_executable_in_dir(&config.bin_dir, "clang", "Android NDK host Clang compiler")?;
     Ok(Some(format!(
-        "{} --target=x86_64-pc-windows-msvc -fuse-ld=link",
-        ffmpeg_flag_path_arg(&clang)
+        "{} --target={} -fuse-ld=link",
+        ffmpeg_flag_path_arg(&clang),
+        windows_host_target()
+            .triple()
+            .context("Windows host target must have a Rust triple")?
     )))
 }
 
@@ -2628,9 +2954,8 @@ fn ffmpeg_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions
     } else {
         marker.contains("android_api=n/a\n")
     };
-    let patchset_is_current = ffmpeg_patchset_id(&layout.root).is_ok_and(|patchset| {
-        ffmpeg_build_marker_has_current_patchset(&marker, options.target, &patchset)
-    });
+    let patchset_is_current = ffmpeg_patchset_id(&layout.root)
+        .is_ok_and(|patchset| ffmpeg_build_marker_has_current_patchset(&marker, &patchset));
     marker.contains(&format!("ffmpeg={FFMPEG_VERSION}\n"))
         && marker.contains(&format!("profile={}\n", profile_name(options.profile)))
         && marker.contains(&format!(
@@ -2649,6 +2974,41 @@ fn ffmpeg_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions
         && ffmpeg_build_marker_has_current_flags(&marker, options.profile, options.target)
         && patchset_is_current
         && android_api_is_current
+        && marker.contains(&format!(
+            "deployment_target={}\n",
+            native_deployment_target(options.target)
+        ))
+        && ffmpeg_install_is_complete(layout, options.target)
+}
+
+fn ffmpeg_install_is_complete(layout: &WorkspaceLayout, target: NativeTarget) -> bool {
+    let library_extension = if target.is_windows() { "lib" } else { "a" };
+    layout
+        .ffmpeg_prefix
+        .join("include/libavformat/avformat.h")
+        .is_file()
+        && [
+            "avdevice",
+            "avfilter",
+            "avformat",
+            "avcodec",
+            "swresample",
+            "swscale",
+            "avutil",
+        ]
+        .iter()
+        .all(|library| {
+            layout
+                .ffmpeg_prefix
+                .join("lib")
+                .join(format!("{library}.{library_extension}"))
+                .is_file()
+                || layout
+                    .ffmpeg_prefix
+                    .join("lib")
+                    .join(format!("lib{library}.a"))
+                    .is_file()
+        })
 }
 
 fn dav1d_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions) -> bool {
@@ -2669,6 +3029,10 @@ fn dav1d_build_marker_is_current(layout: &WorkspaceLayout, options: DepsOptions)
                 "target={}\n",
                 options.target.triple().unwrap_or("host")
             ))
+            && marker.contains(&format!(
+                "deployment_target={}\n",
+                native_deployment_target(options.target)
+            ))
             && marker.contains(&format!("asm={}\n", dav1d_asm_enabled(options.target)))
     }
 }
@@ -2685,16 +3049,11 @@ fn ffmpeg_build_marker_has_current_flags(
         .is_some_and(|flags| flags == expected)
 }
 
-fn ffmpeg_build_marker_has_current_patchset(
-    marker: &str,
-    target: NativeTarget,
-    expected: &str,
-) -> bool {
-    !target.is_android()
-        || marker
-            .lines()
-            .find_map(|line| line.strip_prefix("patchset="))
-            .is_some_and(|patchset| patchset == expected)
+fn ffmpeg_build_marker_has_current_patchset(marker: &str, expected: &str) -> bool {
+    marker
+        .lines()
+        .find_map(|line| line.strip_prefix("patchset="))
+        .is_some_and(|patchset| patchset == expected)
 }
 
 fn shell_escape(value: &str) -> String {
@@ -2852,7 +3211,7 @@ fn smoke_ffmpeg_make(options: DepsOptions) -> Result<()> {
     fs::write(
         smoke_dir.join("Makefile"),
         format!(
-            "all:\n\t@echo cwd=$(CURDIR)\n\t@test -f Makefile\n\t@command -v cl.exe >/dev/null\n\t@awk 'BEGIN {{ s = \"C:\\\\tmp\\\\file\"; gsub(/\\\\/, \"/\", s); if (s != \"C:/tmp/file\") exit 42 }}'\n\t@cl.exe /nologo /TP /std:c++17 /I\"{}\" /c header_smoke.cpp\n\t@echo erika-ffmpeg-make-smoke-ok\n",
+            "all:\n\t@echo cwd=$(CURDIR)\n\t@test -f Makefile\n\t@command -v cl.exe >/dev/null\n\t@awk 'BEGIN {{ bs = sprintf(\"%c\", 92); s = \"C:\" bs \"tmp\" bs \"file\"; gsub(bs bs, \"/\", s); if (s != \"C:/tmp/file\") exit 42 }}'\n\t@cl.exe /nologo /TP /std:c++17 /I\"{}\" /c header_smoke.cpp\n\t@echo erika-ffmpeg-make-smoke-ok\n",
             path_to_forward_slashes(&root)
         ),
     )
@@ -3413,26 +3772,44 @@ fn looks_like_version(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
 }
 
-static WINDOWS_MSVC_ENV: OnceLock<std::result::Result<Vec<(OsString, OsString)>, String>> =
+static WINDOWS_X64_MSVC_ENV: OnceLock<std::result::Result<Vec<(OsString, OsString)>, String>> =
+    OnceLock::new();
+static WINDOWS_ARM64_MSVC_ENV: OnceLock<std::result::Result<Vec<(OsString, OsString)>, String>> =
     OnceLock::new();
 
 fn apply_windows_target_env(command: &mut Command, target: NativeTarget) -> Result<()> {
     if !target.is_windows() {
         return Ok(());
     }
-    apply_msvc_environment(command)
+    apply_msvc_environment(command, target)
 }
 
 fn apply_android_host_env(command: &mut Command, target: NativeTarget) -> Result<()> {
     if !cfg!(windows) || !target.is_android() {
         return Ok(());
     }
-    apply_msvc_environment(command)
+    apply_msvc_environment(command, windows_host_target())
 }
 
-fn apply_msvc_environment(command: &mut Command) -> Result<()> {
+fn windows_host_target() -> NativeTarget {
+    if cfg!(all(windows, target_arch = "aarch64")) {
+        NativeTarget::Aarch64WindowsMsvc
+    } else {
+        NativeTarget::X86_64WindowsMsvc
+    }
+}
+
+fn windows_host_arch() -> &'static str {
+    if matches!(windows_host_target(), NativeTarget::Aarch64WindowsMsvc) {
+        "arm64"
+    } else {
+        "x64"
+    }
+}
+
+fn apply_msvc_environment(command: &mut Command, target: NativeTarget) -> Result<()> {
     let existing_path = command_env_path(command);
-    for (key, value) in windows_msvc_environment()? {
+    for (key, value) in windows_msvc_environment(target)? {
         command.env(key, value);
     }
     if let Some(existing_path) = existing_path {
@@ -3443,23 +3820,32 @@ fn apply_msvc_environment(command: &mut Command) -> Result<()> {
     Ok(())
 }
 
-fn windows_msvc_environment() -> Result<&'static [(OsString, OsString)]> {
-    match WINDOWS_MSVC_ENV
-        .get_or_init(|| load_windows_msvc_environment().map_err(|e| e.to_string()))
-    {
+fn windows_msvc_environment(target: NativeTarget) -> Result<&'static [(OsString, OsString)]> {
+    let cache = match target {
+        NativeTarget::Aarch64WindowsMsvc => &WINDOWS_ARM64_MSVC_ENV,
+        _ => &WINDOWS_X64_MSVC_ENV,
+    };
+    match cache.get_or_init(|| load_windows_msvc_environment(target).map_err(|e| e.to_string())) {
         Ok(values) => Ok(values.as_slice()),
         Err(message) => bail!("{message}"),
     }
 }
 
-fn load_windows_msvc_environment() -> Result<Vec<(OsString, OsString)>> {
+fn load_windows_msvc_environment(target: NativeTarget) -> Result<Vec<(OsString, OsString)>> {
     let devcmd = vs_dev_cmd().context("Visual Studio Developer Command Prompt was not found")?;
-    let script_path = env::temp_dir().join("erika-vsdevcmd-env.cmd");
+    let arch = match target {
+        NativeTarget::Aarch64WindowsMsvc => "arm64",
+        _ => "x64",
+    };
+    let host_arch = windows_host_arch();
+    let script_path = env::temp_dir().join(format!("erika-vsdevcmd-{arch}-env.cmd"));
     fs::write(
         &script_path,
         format!(
-            "@echo off\r\ncall \"{}\" -arch=x64 -host_arch=x64 >nul\r\nset\r\n",
-            devcmd.display()
+            "@echo off\r\ncall \"{}\" -arch={} -host_arch={} >nul\r\nset\r\n",
+            devcmd.display(),
+            arch,
+            host_arch
         ),
     )
     .with_context(|| format!("write {}", script_path.display()))?;
@@ -3494,20 +3880,37 @@ fn load_windows_msvc_environment() -> Result<Vec<(OsString, OsString)>> {
     Ok(values)
 }
 
+fn msvc_tool_path(tools: &[(OsString, OsString)], executable: &str) -> Result<PathBuf> {
+    let path = tools
+        .iter()
+        .find_map(|(key, value)| {
+            key.to_string_lossy()
+                .eq_ignore_ascii_case("PATH")
+                .then_some(value)
+        })
+        .context("Visual Studio environment did not provide PATH")?;
+    env::split_paths(path)
+        .map(|dir| dir.join(executable))
+        .find(|candidate| candidate.is_file())
+        .with_context(|| format!("Visual Studio environment did not provide {executable}"))
+}
+
 fn vs_dev_cmd() -> Option<PathBuf> {
-    let vswhere = which("vswhere").or_else(|| {
-        existing_path("C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe")
-    })?;
+    let vswhere = which("vswhere")
+        .or_else(|| {
+            program_files_path(
+                "ProgramFiles(x86)",
+                "Microsoft Visual Studio/Installer/vswhere.exe",
+            )
+        })
+        .or_else(|| {
+            program_files_path(
+                "ProgramFiles",
+                "Microsoft Visual Studio/Installer/vswhere.exe",
+            )
+        })?;
     let output = Command::new(vswhere)
-        .args([
-            "-latest",
-            "-products",
-            "*",
-            "-requires",
-            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-            "-property",
-            "installationPath",
-        ])
+        .args(["-latest", "-products", "*", "-property", "installationPath"])
         .output()
         .ok()?;
     if output.status.success() {
@@ -3519,9 +3922,28 @@ fn vs_dev_cmd() -> Option<PathBuf> {
             }
         }
     }
-    existing_path(
-        "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/Common7/Tools/VsDevCmd.bat",
-    )
+    ["Enterprise", "BuildTools", "Community", "Professional"]
+        .into_iter()
+        .flat_map(|edition| {
+            ["ProgramFiles", "ProgramFiles(x86)"]
+                .into_iter()
+                .filter_map(move |variable| {
+                    program_files_path(
+                        variable,
+                        &format!(
+                            "Microsoft Visual Studio/2022/{edition}/Common7/Tools/VsDevCmd.bat"
+                        ),
+                    )
+                })
+        })
+        .next()
+}
+
+fn program_files_path(variable: &str, relative: &str) -> Option<PathBuf> {
+    env::var_os(variable)
+        .map(PathBuf::from)
+        .map(|root| root.join(relative))
+        .filter(|path| path.is_file())
 }
 
 fn cmake_tool() -> Option<PathBuf> {
@@ -3581,9 +4003,9 @@ fn android_sdk_cmake_tool(tool: &str) -> Option<PathBuf> {
 }
 
 fn posix_shell() -> Option<PathBuf> {
-    existing_path("C:/msys64/usr/bin/sh.exe")
-        .or_else(|| existing_path("C:/Program Files/Git/usr/bin/sh.exe"))
-        .or_else(|| existing_path("C:/Program Files/Git/bin/bash.exe"))
+    msys2_usr_bin()
+        .map(|dir| dir.join("sh.exe"))
+        .filter(|path| path.is_file())
         .or_else(|| which("sh"))
         .or_else(|| {
             which("bash").filter(|path| {
@@ -3593,15 +4015,59 @@ fn posix_shell() -> Option<PathBuf> {
                         .eq_ignore_ascii_case("C:\\Windows\\System32\\bash.exe")
             })
         })
+        .or_else(|| {
+            windows_posix_bin_dirs()
+                .into_iter()
+                .flat_map(|dir| [dir.join("sh.exe"), dir.join("bash.exe")])
+                .find(|path| path.is_file())
+        })
 }
 
 fn gnu_make() -> Option<PathBuf> {
-    existing_path("C:/msys64/usr/bin/make.exe")
+    msys2_usr_bin()
+        .map(|dir| dir.join("make.exe"))
+        .filter(|path| path.is_file())
         .or_else(|| which("make"))
         .or_else(|| which("gmake"))
         .or_else(|| which("mingw32-make"))
-        .or_else(|| existing_path("C:/mingw64/bin/mingw32-make.exe"))
+        .or_else(|| {
+            windows_posix_bin_dirs()
+                .into_iter()
+                .flat_map(|dir| [dir.join("make.exe"), dir.join("mingw32-make.exe")])
+                .find(|path| path.is_file())
+        })
         .or_else(android_ndk_make)
+}
+
+fn msys2_usr_bin() -> Option<PathBuf> {
+    env::var_os("MSYS2_ROOT")
+        .map(PathBuf::from)
+        .map(|root| root.join("usr/bin"))
+        .filter(|path| path.is_dir())
+        .or_else(|| existing_path("C:/msys64/usr/bin"))
+}
+
+fn windows_posix_bin_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(root) = env::var_os("MSYS2_ROOT") {
+        let root = PathBuf::from(root);
+        dirs.push(root.join("usr/bin"));
+        dirs.push(root.join("ucrt64/bin"));
+        dirs.push(root.join("mingw64/bin"));
+    }
+    for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(root) = env::var_os(variable) {
+            let root = PathBuf::from(root);
+            dirs.push(root.join("Git/usr/bin"));
+            dirs.push(root.join("Git/bin"));
+        }
+    }
+    dirs.extend([
+        PathBuf::from("C:/msys64/usr/bin"),
+        PathBuf::from("C:/msys64/ucrt64/bin"),
+        PathBuf::from("C:/mingw64/bin"),
+    ]);
+    dirs
 }
 
 fn android_ndk_make() -> Option<PathBuf> {
@@ -3686,12 +4152,26 @@ fn append_windows_posix_paths(command: &mut Command) {
     if !cfg!(windows) {
         return;
     }
-    let dirs = [
-        Path::new("C:/msys64/usr/bin"),
-        Path::new("C:/Program Files/Git/usr/bin"),
-        Path::new("C:/mingw64/bin"),
-    ];
-    append_paths_to_command(command, dirs.into_iter().filter(|path| path.exists()));
+    if let Some(msys2_bin) = msys2_usr_bin() {
+        prepend_path_to_command(command, &msys2_bin);
+        return;
+    }
+    let dirs = windows_posix_bin_dirs();
+    append_paths_to_command(command, dirs.iter().map(PathBuf::as_path));
+}
+
+fn prepend_path_to_command(command: &mut Command, dir: &Path) {
+    let mut paths = vec![dir.to_path_buf()];
+    paths.extend(
+        command_env_path(command)
+            .or_else(|| env::var_os("PATH"))
+            .map(|path| env::split_paths(&path).collect::<Vec<_>>())
+            .unwrap_or_default(),
+    );
+    command.env(
+        "PATH",
+        env::join_paths(paths).expect("PATH entries are valid"),
+    );
 }
 
 fn apply_windows_posix_shell(command: &mut Command, target: NativeTarget) {
@@ -3703,6 +4183,7 @@ fn apply_windows_posix_shell(command: &mut Command, target: NativeTarget) {
     };
     command.env("CONFIG_SHELL", &shell);
     command.env("SHELL", &shell);
+    command.env("MAKESHELL", &shell);
 }
 
 fn uses_windows_posix_ffmpeg(target: NativeTarget) -> bool {
@@ -3734,18 +4215,8 @@ fn host_compiler(variable: &str, candidates: &[&str]) -> Option<PathBuf> {
 }
 
 fn windows_host_cl_compiler() -> Option<PathBuf> {
-    let tools = windows_msvc_environment().ok()?;
-    let root = tools.iter().find_map(|(key, value)| {
-        key.to_string_lossy()
-            .eq_ignore_ascii_case("VCToolsInstallDir")
-            .then(|| PathBuf::from(value))
-    })?;
-    [
-        root.join("bin/Hostx64/x64/cl.exe"),
-        root.join("bin/Hostx86/x86/cl.exe"),
-    ]
-    .into_iter()
-    .find(|path| path.is_file())
+    let tools = windows_msvc_environment(windows_host_target()).ok()?;
+    msvc_tool_path(tools, "cl.exe").ok()
 }
 
 fn shell_quote(value: &str) -> String {
@@ -3891,6 +4362,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn windows_targets_map_to_rust_and_native_architectures() {
+        let cases = [
+            (
+                "x86_64-pc-windows-msvc",
+                NativeTarget::X86_64WindowsMsvc,
+                "x86_64",
+                "x86_64",
+            ),
+            (
+                "aarch64-pc-windows-msvc",
+                NativeTarget::Aarch64WindowsMsvc,
+                "aarch64",
+                "arm64",
+            ),
+        ];
+        for (triple, expected, ffmpeg_arch, meson_cpu) in cases {
+            let target = NativeTarget::parse(triple).unwrap();
+            assert_eq!(target, expected);
+            assert!(target.is_windows());
+            assert_eq!(target.triple(), Some(triple));
+            assert_eq!(target.ffmpeg_arch(), Some(ffmpeg_arch));
+            assert_eq!(target.meson_cpu(), Some(meson_cpu));
+        }
+        assert_eq!(
+            NativeTarget::parse("windows-arm64").unwrap(),
+            NativeTarget::Aarch64WindowsMsvc
+        );
+    }
+
+    #[test]
+    fn x86_64_targets_keep_ffmpeg_assembly_enabled() {
+        for target in [
+            NativeTarget::X86_64Macos,
+            NativeTarget::X86_64IosSimulator,
+            NativeTarget::X86_64WindowsMsvc,
+            NativeTarget::X86_64Android,
+        ] {
+            let flags = NativeDependencyProfile::Lgpl.ffmpeg_configure_flags_for_target(target);
+            assert!(!flags.contains(&"--disable-x86asm"));
+            assert!(!flags.contains(&"--disable-asm"));
+            assert!(ffmpeg_requires_nasm(target));
+        }
+        assert!(!ffmpeg_requires_nasm(NativeTarget::Aarch64WindowsMsvc));
+    }
+
+    #[test]
     fn android_targets_map_to_rust_abi_and_clang() {
         let cases = [
             (
@@ -3975,12 +4492,83 @@ mod tests {
     }
 
     #[test]
+    fn windows_arm64_ffmpeg_commands_include_gas_preprocessor_path() {
+        let tools_dir = env::temp_dir().join("erika-xtask-gas-preprocessor-path-test");
+        let existing_dir = env::temp_dir().join("erika-xtask-existing-path-test");
+        let mut command = Command::new("tool");
+        command.env("PATH", env::join_paths([&existing_dir]).unwrap());
+
+        apply_ffmpeg_assembler_path(
+            &mut command,
+            NativeTarget::Aarch64WindowsMsvc,
+            Some(&tools_dir),
+        );
+
+        let merged = command_env_path(&command).unwrap();
+        let paths = env::split_paths(&merged).collect::<Vec<_>>();
+        assert_eq!(paths, [tools_dir, existing_dir]);
+    }
+
+    #[test]
+    fn gas_preprocessor_patch_adds_armasm64_tbnz_support() {
+        let path = env::temp_dir().join(format!(
+            "erika-gas-preprocessor-patch-{}.pl",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            "elsif ($line =~ /(cbn?z|adr|tbz)/) {}\nif ($instr eq \"tbz\" and $reg =~ /w\\d+/) {}\n",
+        )
+        .unwrap();
+
+        patch_gas_preprocessor_for_armasm64(&path).unwrap();
+
+        let patched = fs::read_to_string(&path).unwrap();
+        assert!(patched.contains("(cbn?z|adr|tbn?z)"));
+        assert!(patched.contains("if ($instr =~ /^tbn?z$/ and"));
+        assert!(!patched.contains("(cbn?z|adr|tbz)"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn msvc_archive_response_file_is_written_by_make() {
+        let build_dir = env::temp_dir().join(format!(
+            "erika-ffmpeg-msvc-response-file-{}",
+            std::process::id()
+        ));
+        let makefile = build_dir.join("ffbuild/library.mak");
+        fs::create_dir_all(makefile.parent().unwrap()).unwrap();
+        fs::write(
+            &makefile,
+            "ifeq ($(RESPONSE_FILES),yes)\n\t$(Q)echo $^ > $@.objs\n\t$(AR) $(ARFLAGS) $(AR_O) @$@.objs\nendif\n",
+        )
+        .unwrap();
+
+        fix_ffmpeg_msvc_archive_response_file_creation(&build_dir).unwrap();
+
+        let patched = fs::read_to_string(&makefile).unwrap();
+        assert!(patched.contains("\t$(file >$@.objs,$^)"));
+        assert!(!patched.contains("\t$(Q)echo $^ > $@.objs"));
+        fs::remove_dir_all(build_dir).unwrap();
+    }
+
+    #[test]
     fn dependency_markers_require_current_versions() {
         let path = std::env::temp_dir().join(format!("erika-xtask-marker-{}", std::process::id()));
-        fs::write(&path, "zlib=1.3.1\nprefix=/tmp\n").unwrap();
+        fs::write(&path, "zlib=1.3.1\ndeployment_target=n/a\nprefix=/tmp\n").unwrap();
 
-        assert!(!marker_has_version(&path, "zlib", "1.3.2"));
-        assert!(marker_has_version(&path, "zlib", "1.3.1"));
+        assert!(!marker_has_version(
+            &path,
+            "zlib",
+            "1.3.2",
+            NativeTarget::Host
+        ));
+        assert!(marker_has_version(
+            &path,
+            "zlib",
+            "1.3.1",
+            NativeTarget::Host
+        ));
 
         fs::remove_file(path).unwrap();
     }
@@ -4004,22 +4592,18 @@ mod tests {
     }
 
     #[test]
-    fn android_ffmpeg_marker_requires_current_patchset_revision() {
-        let target = NativeTarget::X86_64Android;
+    fn ffmpeg_markers_require_current_patchset_revision() {
         let patchset = "erika-android-mediacodec-v1-deadbeef";
         assert!(!ffmpeg_build_marker_has_current_patchset(
             &format!("ffmpeg={FFMPEG_VERSION}\n"),
-            target,
+            patchset
+        ));
+        assert!(!ffmpeg_build_marker_has_current_patchset(
+            &format!("ffmpeg={FFMPEG_VERSION}\npatchset=stale\n"),
             patchset
         ));
         assert!(ffmpeg_build_marker_has_current_patchset(
             &format!("ffmpeg={FFMPEG_VERSION}\npatchset={patchset}\n"),
-            target,
-            patchset
-        ));
-        assert!(ffmpeg_build_marker_has_current_patchset(
-            &format!("ffmpeg={FFMPEG_VERSION}\n"),
-            NativeTarget::Host,
             patchset
         ));
     }
@@ -4117,6 +4701,25 @@ mod tests {
         assert_eq!(paths[1], system_bin);
         assert!(paths.iter().any(|path| path == &msys_bin));
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepending_path_places_posix_tools_before_existing_entries() {
+        let temp = env::temp_dir().join("erika-xtask-posix-path-order-test");
+        let msys_bin = temp.join("msys64/usr/bin");
+        let mingw_bin = temp.join("mingw64/bin");
+        fs::create_dir_all(&msys_bin).unwrap();
+        fs::create_dir_all(&mingw_bin).unwrap();
+
+        let mut command = Command::new("tool");
+        command.env("PATH", env::join_paths([&mingw_bin]).unwrap());
+        prepend_path_to_command(&mut command, &msys_bin);
+
+        let merged = command_env_path(&command).unwrap();
+        let paths = env::split_paths(&merged).collect::<Vec<_>>();
+        assert_eq!(paths[0], msys_bin);
+        assert_eq!(paths[1], mingw_bin);
+    }
 }
 
 fn print_help() {
@@ -4125,7 +4728,7 @@ fn print_help() {
     println!("  cargo run -p xtask -- deps fetch --profile lgpl [--all]");
     println!("  cargo run -p xtask -- deps status --profile lgpl");
     println!(
-        "  cargo run -p xtask -- deps build --profile lgpl [--target host|aarch64-apple-darwin|x86_64-apple-darwin|aarch64-apple-ios|aarch64-apple-ios-sim|x86_64-apple-ios|x86_64-pc-windows-msvc|aarch64-linux-android|armv7-linux-androideabi|x86_64-linux-android|i686-linux-android] [--force] [--jobs N]"
+        "  cargo run -p xtask -- deps build --profile lgpl [--target host|aarch64-apple-darwin|x86_64-apple-darwin|aarch64-apple-ios|aarch64-apple-ios-sim|x86_64-apple-ios|x86_64-pc-windows-msvc|aarch64-pc-windows-msvc|aarch64-linux-android|armv7-linux-androideabi|x86_64-linux-android|i686-linux-android] [--force] [--jobs N]"
     );
     println!("  cargo run -p xtask -- check license");
 }

@@ -24,7 +24,7 @@ Windows 上 `ErikaWindowOverlayVideoView` 以 sibling surface 的形式托管一
 
 ## macOS Setup
 
-本地开发时，macOS 插件通过 `dlopen` 加载 Erika。可设置 `ERIKA_CAPI_DYLIB` 覆盖动态库路径；若未设置，插件会按 app bundle、可执行文件目录、再到 `$WORKSPACE/target/debug/liberika_capi.dylib` 依次查找。
+macOS CocoaPods 构建默认生成 arm64+x86_64 universal 动态库。依赖项目可设置 `ERIKA_MACOS_ARCHS=arm64`、`ERIKA_MACOS_ARCHS=x86_64` 或 `ERIKA_MACOS_ARCHS=arm64,x86_64` 控制产物架构；`universal` 是默认值。预构建模式会对应下载 `macos-arm64`、`macos-x64` 或 `macos-universal` 包。本地开发时插件通过 `dlopen` 加载 Erika，也可设置 `ERIKA_CAPI_DYLIB` 覆盖运行时动态库路径。
 
 构建动态库：
 
@@ -32,6 +32,12 @@ Windows 上 `ErikaWindowOverlayVideoView` 以 sibling surface 的形式托管一
 cargo run -p xtask -- deps build --all --profile lgpl
 cargo build -p erika_capi
 ```
+
+## 预构建包与源码构建
+
+设置 `ERIKA_PREBUILT=1` 可从 GitHub Release 下载预构建原生库，`ERIKA_PREBUILT_TAG=v0.1.3` 用于固定与当前插件源码匹配的 Release tag。下载或解压失败时会回退源码构建。调试本地源码时设置 `ERIKA_FORCE_SOURCE_BUILD=1` 强制绕过预构建包。完整包名和发布方式见 [releasing.zh.md](../../docs/releasing.zh.md)。
+
+源码构建时，macOS 使用 `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`，Windows 使用 `ERIKA_WINDOWS_ARCH=x64|arm64`，Android 使用 `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86`。直接构建原生库时，`xtask --target`、`ERIKA_NATIVE_TARGET` 和 `cargo build --target` 必须使用同一个 target。详细示例见 [building.zh.md](../../docs/building.zh.md)。
 
 ## iOS Setup
 
@@ -41,11 +47,11 @@ iOS CocoaPod script phase 会在 Xcode 构建期间自动构建 Erika 原生依�
 
 ## Windows Setup
 
-Windows 插件（`ErikaFlutterPluginCApi`）在 CMake 构建期间通过 `build_erika_runtime.cmake` 构建 Erika C ABI runtime（`erika_capi.dll`），对 `x86_64-pc-windows-msvc` target 调用 cargo，并把 DLL 部署到 app 旁边。需要：
+Windows 插件（`ErikaFlutterPluginCApi`）在 CMake 构建期间通过 `build_erika_runtime.cmake` 构建 Erika C ABI runtime（`erika_capi.dll`），自动跟随 CMake 的 x64 或 ARM64 生成器架构，并把 DLL 部署到 app 旁边。依赖项目也可通过 CMake cache `ERIKA_WINDOWS_ARCH=x64|arm64` 或环境变量 `ERIKA_WINDOWS_ARCH` 显式选择；高级场景可直接设置 `ERIKA_NATIVE_TARGET=x86_64-pc-windows-msvc|aarch64-pc-windows-msvc`。需要：
 
-- 安装 MSVC target 的 Rust toolchain（`rustup target add x86_64-pc-windows-msvc`）
-- Visual Studio Build Tools (MSVC) + Windows SDK
-- 原生依赖已构建到 `third_party/dist/x86_64-pc-windows-msvc/`（见仓库的 `xtask deps build` 流程）
+- 安装对应 MSVC target 的 Rust toolchain（`rustup target add x86_64-pc-windows-msvc` 或 `rustup target add aarch64-pc-windows-msvc`）
+- Visual Studio Build Tools 的 x64/ARM64 C++ 工具 + Windows SDK
+- 原生依赖已构建到 `third_party/dist/<target>/`（见仓库的 `xtask deps build` 流程）
 
 若插件无法自动定位 Erika checkout，可设置 `ERIKA_REPO_ROOT`。
 
