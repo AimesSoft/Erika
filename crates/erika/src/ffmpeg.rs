@@ -923,7 +923,8 @@ impl Decoder {
                 mediacodec_decoder(codec_id),
                 "avcodec_find_decoder_by_name(MediaCodec)",
             ),
-            DecoderBackend::VideoToolbox | DecoderBackend::D3d11va => (
+            DecoderBackend::VideoToolbox => videotoolbox_decoder(codec_id),
+            DecoderBackend::D3d11va => (
                 unsafe { sys::avcodec_find_decoder(codec_id) },
                 "avcodec_find_decoder",
             ),
@@ -1050,7 +1051,7 @@ impl Decoder {
             && erika_nonblocking_unconsumed
         {
             open_result = Err(FfmpegError::AndroidMediaCodec(
-                "FFmpeg did not consume required decoder option erika_nonblocking=1; rebuild Android native dependencies with the Erika FFmpeg 7.1.1 patch set"
+                "FFmpeg did not consume required decoder option erika_nonblocking=1; rebuild Android native dependencies with the Erika FFmpeg 8.1.2 patch set"
                     .to_string(),
             ));
         }
@@ -1107,7 +1108,6 @@ impl Decoder {
             }
         }
         open_result?;
-        #[cfg(target_os = "android")]
         if config.backend == DecoderBackend::Software && codec_id == sys::AVCodecID_AV_CODEC_ID_AV1
         {
             crate::trace::diagnostic(
@@ -1115,7 +1115,11 @@ impl Decoder {
                     "event": "video_decoder",
                     "stage": "software_decoder_selected",
                     "codec": "av1",
-                    "decoder": "libdav1d",
+                    "decoder": if cfg!(target_os = "windows") {
+                        "avcodec_find_decoder"
+                    } else {
+                        "libdav1d"
+                    },
                 })
                 .to_string(),
             );
@@ -1387,11 +1391,24 @@ impl Decoder {
 }
 
 fn software_decoder(codec_id: sys::AVCodecID) -> (*const sys::AVCodec, &'static str) {
-    #[cfg(target_os = "android")]
+    #[cfg(not(target_os = "windows"))]
     if codec_id == sys::AVCodecID_AV_CODEC_ID_AV1 {
         return (
             unsafe { sys::avcodec_find_decoder_by_name(c"libdav1d".as_ptr()) },
             "avcodec_find_decoder_by_name(libdav1d)",
+        );
+    }
+    (
+        unsafe { sys::avcodec_find_decoder(codec_id) },
+        "avcodec_find_decoder",
+    )
+}
+
+fn videotoolbox_decoder(codec_id: sys::AVCodecID) -> (*const sys::AVCodec, &'static str) {
+    if codec_id == sys::AVCodecID_AV_CODEC_ID_AV1 {
+        return (
+            unsafe { sys::avcodec_find_decoder_by_name(c"av1".as_ptr()) },
+            "avcodec_find_decoder_by_name(av1)",
         );
     }
     (
@@ -2164,7 +2181,7 @@ impl Frame {
                 width_i32,
                 height_i32,
                 sys::AVPixelFormat_AV_PIX_FMT_NV12,
-                sys::SWS_BILINEAR as c_int,
+                sys::ERIKA_SWS_BILINEAR,
                 ptr::null_mut(),
                 ptr::null_mut(),
                 ptr::null(),
@@ -2626,6 +2643,9 @@ unsafe fn allocate_swr_context(
     if context.is_null() {
         return Err(FfmpegError::NullPointer("swr_alloc_set_opts2"));
     }
+    unsafe {
+        configure_downmix_normalization(context, frame.channel_count(), output_format.channels)
+    };
     Ok(context)
 }
 
@@ -2652,7 +2672,94 @@ unsafe fn allocate_swr_context(
     if context.is_null() {
         return Err(FfmpegError::NullPointer("swr_alloc_set_opts"));
     }
+    unsafe {
+        configure_downmix_normalization(context, frame.channel_count(), output_format.channels)
+    };
     Ok(context)
+}
+
+// `libavutil/opt.h` is not pulled in by the erika_ffmpeg_sys wrapper header, so
+// bindgen does not emit this binding even though `av_.*` is allowlisted. The
+// symbol is exported by the bundled static libavutil, so declare it directly.
+unsafe extern "C" {
+    fn av_opt_set_double(
+        obj: *mut c_void,
+        name: *const c_char,
+        val: f64,
+        search_flags: c_int,
+    ) -> c_int;
+}
+
+/// Returns whether a swr context that maps `input_channels` down to
+/// `output_channels` needs its rematrix normalized to avoid clipping.
+///
+/// FFmpeg's default downmix matrices sum to more than unity per output channel
+/// (e.g. 5.1 -> stereo: FL_out = FL + 0.707*FC + 0.707*BL, coefficient sum
+/// ~2.41), so full-scale f32 input exceeds +/-1.0 and hard-clips downstream.
+/// Upmix and equal-channel conversions keep the default behavior so stereo
+/// pass-through loudness is unaffected.
+fn downmix_requires_normalization(input_channels: u32, output_channels: u32) -> bool {
+    output_channels < input_channels
+}
+
+/// Coefficient-sum ceiling handed to swresample's `rematrix_maxval` when the
+/// channel count is reduced.
+///
+/// swresample normalizes the downmix matrix so no output row sums above this
+/// value. The obvious choice, 1.0, guarantees that even fully correlated
+/// full-scale input cannot clip -- but it pays for that guarantee everywhere:
+/// the 5.1 -> stereo row sums to ~2.41, so every surround track is scaled by
+/// 0.41 (-7.7 dB) whether or not it was ever going to clip.
+///
+/// That worst case assumes the summed channels are identical signals. Real
+/// multichannel masters are largely decorrelated, so they add as power rather
+/// than amplitude: sqrt(1^2 + 0.707^2 + 0.707^2) = sqrt(2). Normalizing to the
+/// power sum instead keeps realistic content below full scale while recovering
+/// ~3 dB over the amplitude-sum bound. Measured 5.1 -> stereo peaks at this
+/// setting: typical mixed levels 0.74, music-heavy 0.82, dialogue-heavy 0.57.
+///
+/// Only a synthetic signal holding every channel at digital full scale still
+/// exceeds unity here; catching that too would need a limiter on the output
+/// stage rather than a static matrix scale.
+const DOWNMIX_REMATRIX_MAXVAL: f64 = std::f64::consts::SQRT_2;
+
+/// Caps the downmix matrix at [`DOWNMIX_REMATRIX_MAXVAL`] so surround content
+/// stops clipping on stereo output without being needlessly attenuated. Only
+/// applies when channels are reduced; failures are traced but non-fatal (the
+/// context falls back to the default un-normalized matrix).
+///
+/// # Safety
+/// `context` must point to a valid, allocated `SwrContext` that has not been
+/// initialized with `swr_init` yet.
+unsafe fn configure_downmix_normalization(
+    context: *mut sys::SwrContext,
+    input_channels: u32,
+    output_channels: u32,
+) {
+    if !downmix_requires_normalization(input_channels, output_channels) {
+        return;
+    }
+    let code = unsafe {
+        av_opt_set_double(
+            context.cast::<c_void>(),
+            c"rematrix_maxval".as_ptr(),
+            DOWNMIX_REMATRIX_MAXVAL,
+            0,
+        )
+    };
+    if code < 0 {
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "audio_resampler_downmix",
+                "stage": "rematrix_maxval_failed",
+                "inputChannels": input_channels,
+                "outputChannels": output_channels,
+                "code": code,
+                "message": error_string(code),
+            })
+            .to_string(),
+        );
+    }
 }
 
 #[cfg(erika_ffmpeg_legacy_channel_layout)]
@@ -3652,7 +3759,7 @@ unsafe fn profile_name(
 ) -> Option<String> {
     let codec_id = unsafe { (*codecpar).codec_id };
     let profile = unsafe { (*codecpar).profile };
-    if profile == sys::FF_PROFILE_UNKNOWN {
+    if profile == sys::ERIKA_PROFILE_UNKNOWN {
         return None;
     }
     let name = unsafe { sys::av_get_profile_name(sys::avcodec_find_decoder(codec_id), profile) };
@@ -3948,6 +4055,23 @@ mod tests {
     }
 
     #[test]
+    fn videotoolbox_uses_ffmpeg_av1_decoder() {
+        let (codec, operation) = videotoolbox_decoder(sys::AVCodecID_AV_CODEC_ID_AV1);
+        assert_eq!(operation, "avcodec_find_decoder_by_name(av1)");
+        assert!(!codec.is_null());
+    }
+
+    #[test]
+    fn software_uses_available_ffmpeg_av1_decoder() {
+        let (codec, operation) = software_decoder(sys::AVCodecID_AV_CODEC_ID_AV1);
+        #[cfg(target_os = "windows")]
+        assert_eq!(operation, "avcodec_find_decoder");
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(operation, "avcodec_find_decoder_by_name(libdav1d)");
+        assert!(!codec.is_null());
+    }
+
+    #[test]
     fn time_base_converts_packet_timestamps() {
         let timestamp = PacketTimestamp {
             raw: 24,
@@ -3955,6 +4079,121 @@ mod tests {
         };
         assert_eq!(timestamp.seconds(), 1.0);
         assert_eq!(timestamp.as_duration(), Some(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn downmix_normalization_only_applies_when_channels_are_reduced() {
+        assert!(downmix_requires_normalization(6, 2));
+        assert!(downmix_requires_normalization(8, 2));
+        assert!(downmix_requires_normalization(6, 5));
+        assert!(!downmix_requires_normalization(2, 2));
+        assert!(!downmix_requires_normalization(1, 2));
+        assert!(!downmix_requires_normalization(2, 6));
+    }
+
+    #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
+    /// Builds an interleaved f32 frame holding a constant level per channel.
+    /// `levels` is in the default layout order for its length (5.1 is
+    /// FL FR FC LFE BL BR).
+    fn audio_frame_with_levels(levels: &[f32], sample_rate: i32, samples: i32) -> Frame {
+        let channels = levels.len();
+        let frame = Frame::alloc(TimeBase {
+            num: 1,
+            den: sample_rate,
+        })
+        .unwrap();
+        unsafe {
+            (*frame.ptr).format = sys::AVSampleFormat_AV_SAMPLE_FMT_FLT;
+            (*frame.ptr).sample_rate = sample_rate;
+            (*frame.ptr).nb_samples = samples;
+            sys::av_channel_layout_default(&mut (*frame.ptr).ch_layout, channels as i32);
+            check(
+                sys::av_frame_get_buffer(frame.ptr, 0),
+                "av_frame_get_buffer",
+            )
+            .unwrap();
+            let data = (*frame.ptr).extended_data.read().cast::<f32>();
+            for sample in 0..samples as usize {
+                for (channel, level) in levels.iter().enumerate() {
+                    data.add(sample * channels + channel).write(*level);
+                }
+            }
+        }
+        frame
+    }
+
+    fn full_scale_audio_frame(channels: i32, sample_rate: i32, samples: i32) -> Frame {
+        audio_frame_with_levels(&vec![1.0; channels as usize], sample_rate, samples)
+    }
+
+    #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
+    fn downmix_peak_to_stereo(levels: &[f32]) -> f32 {
+        let frame = audio_frame_with_levels(levels, 48_000, 1024);
+        let mut resampler =
+            AudioResampler::new_from_frame(&frame, PcmFormat::f32_interleaved(48_000, 2)).unwrap();
+        let pcm = resampler.convert(&frame).unwrap();
+        assert!(pcm.frames > 0);
+        pcm.samples
+            .iter()
+            .fold(0.0f32, |peak, sample| peak.max(sample.abs()))
+    }
+
+    #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
+    #[test]
+    fn surround_downmix_to_stereo_does_not_clip_realistic_content() {
+        // FL FR FC LFE BL BR. Un-normalized these peak at 1.27 / 1.40 / 0.98,
+        // so the first two clip against FFmpeg's default matrix.
+        for (label, levels) in [
+            ("typical mixed levels", [0.7, 0.7, 0.5, 0.0, 0.3, 0.3]),
+            ("music-heavy", [0.9, 0.9, 0.2, 0.0, 0.5, 0.5]),
+            ("dialogue-heavy", [0.2, 0.2, 1.0, 0.0, 0.1, 0.1]),
+        ] {
+            let peak = downmix_peak_to_stereo(&levels);
+            assert!(
+                peak <= 1.0 + 1e-4,
+                "{label}: downmixed peak {peak} exceeds full scale"
+            );
+        }
+    }
+
+    #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
+    #[test]
+    fn surround_downmix_normalizes_to_the_power_sum_not_the_amplitude_sum() {
+        // Every channel at digital full scale is the fully correlated worst
+        // case the amplitude sum guards against. Normalizing to it would cost
+        // 7.7 dB on all surround content; we normalize to the power sum
+        // instead, so this synthetic signal is allowed to reach the ceiling.
+        let peak = downmix_peak_to_stereo(&[1.0, 1.0, 1.0, 0.0, 1.0, 1.0]);
+        assert!(
+            (f64::from(peak) - DOWNMIX_REMATRIX_MAXVAL).abs() < 1e-3,
+            "worst-case peak {peak} should sit at the rematrix ceiling {DOWNMIX_REMATRIX_MAXVAL}"
+        );
+
+        // Guard the loudness side. Fronts-only input passes through the matrix
+        // at unity, so what is left is purely the normalization scale:
+        // the amplitude-sum bound (maxval 1.0) would leave 0.41 here (-7.7 dB),
+        // the power-sum bound leaves 0.59 (-4.6 dB).
+        let fronts = downmix_peak_to_stereo(&[1.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+        assert!(
+            (0.55..0.62).contains(&fronts),
+            "fronts-only downmix {fronts} left the expected -4.6 dB window"
+        );
+    }
+
+    #[cfg(not(erika_ffmpeg_legacy_channel_layout))]
+    #[test]
+    fn stereo_passthrough_keeps_unity_gain() {
+        let frame = full_scale_audio_frame(2, 48_000, 512);
+        let mut resampler =
+            AudioResampler::new_from_frame(&frame, PcmFormat::f32_interleaved(48_000, 2)).unwrap();
+        let pcm = resampler.convert(&frame).unwrap();
+        assert!(pcm.frames > 0);
+        for sample in &pcm.samples {
+            assert!(
+                (sample - 1.0).abs() < 1e-4,
+                "stereo pass-through altered sample: {sample}"
+            );
+        }
     }
 
     #[test]

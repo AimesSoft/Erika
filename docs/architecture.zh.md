@@ -19,7 +19,7 @@ Rust Player Core
   D3D11 renderer ─────── zero-copy D3D11VA, HDR10, subtitle/danmaku pass (Windows)
   wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB
   presenter runtime ──── ties player + renderer + audio + overlays
-  C ABI ──────────────── 73 exported functions, two handle families
+  C ABI ──────────────── 75 exported functions, two handle families
   Flutter plugin ─────── macOS + iOS + Windows + Android native view embedding
 ```
 
@@ -29,11 +29,11 @@ Rust Player Core
 
 | 依赖 | 版本 | 作用 |
 |------|------|------|
-| FFmpeg | 7.1.1 | Demux、decode、audio resample、平台硬解 |
+| FFmpeg | 8.1.2 | Demux、decode、audio resample、平台硬解 |
 | dav1d | 1.5.1 | Android AV1 软解回退（8-bit 与高位深） |
-| libass | 0.17.3 | ASS 字幕渲染 |
-| FreeType | 2.13.3 | 字体栅格化（libass 依赖） |
-| HarfBuzz | 10.4.0 | 文本 shaping（libass 依赖） |
+| libass | 0.17.5 | ASS 字幕渲染 |
+| FreeType | 2.14.3 | 字体栅格化（libass 依赖） |
+| HarfBuzz | 14.2.1 | 文本 shaping（libass 依赖） |
 | FriBidi | 1.0.16 | 双向文本处理（libass 依赖） |
 
 所有依赖都静态链接。libass 及其依赖默认启用（`features = ["libass"]`）。
@@ -150,7 +150,7 @@ Windows 平台的原生渲染器（`renderer/d3d11.rs`）：
 
 ## C ABI
 
-`erika_capi` 通过两组 handle family 导出 73 个函数：
+`erika_capi` 通过两组 handle family 导出 75 个函数：
 
 - **`ErikaHandle`**：播放器控制与事件轮询，渲染由宿主管理。
 - **`ErikaPresenterHandle`**：Erika 持有完整栈，宿主只需提供 surface 并调用 `render_tick`。
@@ -180,4 +180,3 @@ Embedding 模型和 HDR 策略见 `docs/flutter_embedding.md`。
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
 | Android 8+ | MediaCodec / software | wgpu Vulkan + GLES fallback | AAudio | Available；SDR 已验证，extended-linear scRGB 等待 API 35 HDR 真机验收 |
-

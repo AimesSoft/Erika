@@ -25,7 +25,7 @@ selection assertions independent of network or decoder timing.
 
 ## Verify
 
-Generation is deliberately pinned to FFmpeg and FFprobe 7.1.1. The script
+Generation is deliberately pinned to FFmpeg and FFprobe 8.1.2. The script
 uses bitexact flags and single-threaded native MPEG-4/FLAC encoders. It builds
 the file twice, compares the results byte-for-byte, checks the stream layout,
 duration, frame count, B-frame count, and keyframe timestamps, then compares

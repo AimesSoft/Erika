@@ -4,6 +4,7 @@ use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
 use crate::core::{PlayerError, Result};
+use crate::ffmpeg::{PlanarFrame, PlanarPixelFormat};
 use objc2::rc::Retained;
 use objc2::runtime::{NSObjectProtocol, ProtocolObject};
 use objc2_core_foundation::CFRetained;
@@ -70,7 +71,7 @@ const CV_PIXEL_FORMAT_420_YP_CB_CR8_BI_PLANAR_FULL_RANGE: u32 =
 
 pub struct ImportedVideoFrameTextures {
     #[allow(dead_code)]
-    source_pixel_buffer: CFRetained<CVPixelBuffer>,
+    source_pixel_buffer: Option<CFRetained<CVPixelBuffer>>,
     planes: Vec<ImportedVideoPlaneTexture>,
 }
 
@@ -82,7 +83,7 @@ impl ImportedVideoFrameTextures {
 
 struct ImportedVideoPlaneTexture {
     #[allow(dead_code)]
-    cv_texture: CFRetained<CVMetalTexture>,
+    cv_texture: Option<CFRetained<CVMetalTexture>>,
     #[allow(dead_code)]
     metal_texture: Retained<ProtocolObject<dyn MTLTexture>>,
 }
@@ -1354,7 +1355,7 @@ impl MetalRendererImpl {
                 metal_pixel_format: plane.name,
             });
             imported_textures.push(ImportedVideoPlaneTexture {
-                cv_texture: texture,
+                cv_texture: Some(texture),
                 metal_texture,
             });
         }
@@ -1377,10 +1378,154 @@ impl MetalRendererImpl {
         Ok(ImportedVideoFrameResult {
             info,
             textures: ImportedVideoFrameTextures {
-                source_pixel_buffer: retained_pixel_buffer,
+                source_pixel_buffer: Some(retained_pixel_buffer),
                 planes: imported_textures,
             },
         })
+    }
+
+    pub fn upload_planar_video_frame(
+        &self,
+        frame: &PlanarFrame,
+        full_range: bool,
+    ) -> Result<ImportedVideoFrameResult> {
+        let width = frame.width as usize;
+        let height = frame.height as usize;
+        let chroma_width = width.div_ceil(2);
+        let chroma_height = height.div_ceil(2);
+        let (
+            format,
+            luma_format,
+            chroma_format,
+            luma_stride,
+            chroma_stride,
+            luma_name,
+            chroma_name,
+        ) = match frame.format {
+            PlanarPixelFormat::Nv12 => (
+                ImportedVideoFormat::Nv12,
+                MTLPixelFormat::R8Unorm,
+                MTLPixelFormat::RG8Unorm,
+                width,
+                chroma_width * 2,
+                "R8Unorm",
+                "RG8Unorm",
+            ),
+            PlanarPixelFormat::P010 => (
+                ImportedVideoFormat::P010,
+                MTLPixelFormat::R16Unorm,
+                MTLPixelFormat::RG16Unorm,
+                width * 2,
+                chroma_width * 4,
+                "R16Unorm",
+                "RG16Unorm",
+            ),
+        };
+        let luma =
+            self.create_video_plane_texture(width, height, luma_format, luma_stride, &frame.luma)?;
+        let chroma = self.create_video_plane_texture(
+            chroma_width,
+            chroma_height,
+            chroma_format,
+            chroma_stride,
+            &frame.chroma,
+        )?;
+        Ok(ImportedVideoFrameResult {
+            info: ImportedVideoFrameInfo {
+                width,
+                height,
+                pixel_format: 0,
+                pixel_format_fourcc: match format {
+                    ImportedVideoFormat::Nv12 => "NV12",
+                    ImportedVideoFormat::P010 => "P010",
+                }
+                .to_string(),
+                format,
+                full_range,
+                color_range: if full_range {
+                    ColorRange::Full
+                } else {
+                    ColorRange::Limited
+                },
+                planes: vec![
+                    ImportedVideoPlaneInfo {
+                        index: 0,
+                        width,
+                        height,
+                        metal_pixel_format: luma_name,
+                    },
+                    ImportedVideoPlaneInfo {
+                        index: 1,
+                        width: chroma_width,
+                        height: chroma_height,
+                        metal_pixel_format: chroma_name,
+                    },
+                ],
+            },
+            textures: ImportedVideoFrameTextures {
+                source_pixel_buffer: None,
+                planes: vec![
+                    ImportedVideoPlaneTexture {
+                        cv_texture: None,
+                        metal_texture: luma,
+                    },
+                    ImportedVideoPlaneTexture {
+                        cv_texture: None,
+                        metal_texture: chroma,
+                    },
+                ],
+            },
+        })
+    }
+
+    fn create_video_plane_texture(
+        &self,
+        width: usize,
+        height: usize,
+        format: MTLPixelFormat,
+        stride: usize,
+        pixels: &[u8],
+    ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>> {
+        let expected = stride.checked_mul(height).ok_or_else(|| {
+            PlayerError::Renderer("software video plane dimensions overflow".to_string())
+        })?;
+        if pixels.len() != expected {
+            return Err(PlayerError::Renderer(format!(
+                "software video plane has {} bytes, expected {expected}",
+                pixels.len()
+            )));
+        }
+        let descriptor = unsafe {
+            MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                format, width, height, false,
+            )
+        };
+        descriptor.setUsage(MTLTextureUsage::ShaderRead);
+        descriptor.setResourceOptions(MTLResourceOptions::StorageModeShared);
+        let texture = self
+            .device
+            .newTextureWithDescriptor(&descriptor)
+            .ok_or_else(|| {
+                PlayerError::Renderer("newTextureWithDescriptor returned nil".to_string())
+            })?;
+        let region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize {
+                width,
+                height,
+                depth: 1,
+            },
+        };
+        unsafe {
+            texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
+                region,
+                0,
+                NonNull::new(pixels.as_ptr().cast::<c_void>().cast_mut())
+                    .expect("software video plane pointer is non-null"),
+                stride,
+            );
+        }
+        Ok(texture)
     }
 
     fn texture_cache(&mut self) -> Result<&CVMetalTextureCache> {

@@ -25,7 +25,7 @@ The host application provides a rendering surface and sends playback commands â€
 - **Subtitles** -- SRT / WebVTT / ASS parsing, libass rendering (statically linked), embedded and external subtitle tracks
 - **Danmaku** -- Bilibili XML / JSON parsing, DFM+ collision-aware lane layout engine, glyph atlas native GPU rendering
 - **Playback engine** -- play / pause / stop / seek / rate control, audio-master clock discipline, vsync-quantized frame scheduling
-- **C ABI** -- 73 exported functions, opaque handle design, callable from C / C++ / Swift / Dart FFI / any FFI-capable language
+- **C ABI** -- 75 exported functions, opaque handle design, callable from C / C++ / Swift / Dart FFI / any FFI-capable language
 - **Flutter plugin** -- macOS + iOS + Windows + Android native view embedding with platform-native high-dynamic-range surface paths
 - **wgpu backend** -- Android playback, overlays, capture, and bounded Vulkan/GLES recovery are available; Linux remains planned
 

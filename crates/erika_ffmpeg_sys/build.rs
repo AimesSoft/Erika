@@ -32,7 +32,10 @@ fn main() {
         );
     }
 
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+    if matches!(
+        env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("android" | "macos" | "ios")
+    ) {
         for archive in [
             "libavdevice.a",
             "libavfilter.a",
@@ -64,13 +67,18 @@ fn main() {
                 );
             }
         }
+    }
+    if matches!(
+        env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("android" | "macos" | "ios")
+    ) {
         let dav1d_header = dav1d_dir.join("include/dav1d/dav1d.h");
         let dav1d_archive = dav1d_dir.join("lib/libdav1d.a");
         for path in [&dav1d_header, &dav1d_archive] {
             println!("cargo:rerun-if-changed={}", path.display());
             if !path.is_file() {
                 panic!(
-                    "Android dav1d dependency was not found at {}. Run `{}` first, or set ERIKA_DAV1D_DIR.",
+                    "dav1d dependency was not found at {}. Run `{}` first, or set ERIKA_DAV1D_DIR.",
                     path.display(),
                     xtask_build_hint()
                 );
@@ -86,7 +94,10 @@ fn main() {
         "cargo:rustc-link-search=native={}",
         zlib_dir.join("lib").display()
     );
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+    if matches!(
+        env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("android" | "macos" | "ios")
+    ) {
         println!(
             "cargo:rustc-link-search=native={}",
             dav1d_dir.join("lib").display()
@@ -99,7 +110,10 @@ fn main() {
     println!("cargo:rustc-link-lib=static=swresample");
     println!("cargo:rustc-link-lib=static=swscale");
     println!("cargo:rustc-link-lib=static=avutil");
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+    if matches!(
+        env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("android" | "macos" | "ios")
+    ) {
         println!("cargo:rustc-link-lib=static=dav1d");
     }
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
@@ -210,17 +224,14 @@ fn emit_ffmpeg_version_cfg(include_dir: &Path) -> Option<u32> {
 
 fn enforce_bundled_ffmpeg_version(version_major: Option<u32>, include_dir: &Path) {
     let target_os = env::var("CARGO_CFG_TARGET_OS").ok();
-    if !matches!(target_os.as_deref(), Some("windows" | "android")) {
-        return;
-    }
     if env::var("ERIKA_ALLOW_LEGACY_FFMPEG").as_deref() == Ok("1") {
         return;
     }
-    if matches!(version_major, Some(major) if major >= 59) {
+    if matches!(version_major, Some(major) if major >= 60) {
         return;
     }
     panic!(
-        "{} native core requires Erika's FFmpeg 7.x dependency bundle (libavutil >= 59), but found {:?} under {}. Run `{}` or set ERIKA_FFMPEG_DIR to that dist; set ERIKA_ALLOW_LEGACY_FFMPEG=1 only for local compatibility experiments.",
+        "{} native core requires Erika's FFmpeg 8.x dependency bundle (libavutil >= 60), but found {:?} under {}. Run `{}` or set ERIKA_FFMPEG_DIR to that dist; set ERIKA_ALLOW_LEGACY_FFMPEG=1 only for local compatibility experiments.",
         target_os.as_deref().unwrap_or("target"),
         version_major,
         include_dir.display(),
@@ -452,6 +463,7 @@ fn inferred_native_target() -> Option<String> {
     let arch = env::var("CARGO_CFG_TARGET_ARCH").ok()?;
     match (os.as_str(), arch.as_str()) {
         ("windows", "x86_64") => Some("x86_64-pc-windows-msvc".to_string()),
+        ("windows", "aarch64") => Some("aarch64-pc-windows-msvc".to_string()),
         ("android", "aarch64") => Some("aarch64-linux-android".to_string()),
         ("android", "arm") => Some("armv7-linux-androideabi".to_string()),
         ("android", "x86_64") => Some("x86_64-linux-android".to_string()),

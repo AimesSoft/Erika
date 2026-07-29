@@ -133,6 +133,8 @@ handle の破棄は再生を止め全リソースを解放します。
 
 ```c
 ErikaStatus erika_open(ErikaHandle *handle, const char *uri);   // ファイルパスまたは URL
+ErikaStatus erika_open_with_headers(ErikaHandle *handle, const char *uri,
+                                    const ErikaHttpHeader *headers, uintptr_t header_count);
 ErikaStatus erika_play(ErikaHandle *handle);
 ErikaStatus erika_pause(ErikaHandle *handle);
 ErikaStatus erika_stop(ErikaHandle *handle);
@@ -140,7 +142,12 @@ ErikaStatus erika_close(ErikaHandle *handle);
 ErikaStatus erika_seek(ErikaHandle *handle, uint64_t position_micros);
 ```
 
-`uri` はローカルパスまたは HTTP(S) URL。`seek` はマイクロ秒。`open` と `play` は
+`uri` はローカルパスまたは HTTP(S) URL。`erika_open_with_headers` は HTTP(S) 再生用の
+header を設定します。`headers` は呼び出し中だけ読み取られ、戻り値の後に解放できます。
+`header_count` が 0 より大きい場合、`headers` は NULL にできません。header は HEAD、Range
+GET、prefetch request に使用されます。
+認証情報と Cookie は Erika の log に書き込まれません。`seek` は
+マイクロ秒。`open` と `play` は
 非同期にキューへ投入されます。ホスト UI スレッドをブロックせず、`StateChanged`、
 `DurationChanged`、`Error` イベントで最終結果を確認してください。
 
@@ -220,6 +227,9 @@ Android `ExtendedLinear` は FP16 extended-linear scRGB で HDR10/PQ ではあ�
 
 ```c
 ErikaStatus erika_presenter_open(ErikaPresenterHandle *, const char *uri);
+ErikaStatus erika_presenter_open_with_headers(ErikaPresenterHandle *, const char *uri,
+                                              const ErikaHttpHeader *headers,
+                                              uintptr_t header_count);
 ErikaStatus erika_presenter_play(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_pause(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_stop(ErikaPresenterHandle *);
@@ -236,6 +246,41 @@ ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float he
 スケーラを切り替えます（[`erika_presenter_get_upscaler_status`](#診断とスクリーンショット)
 参照）。Metal と compute-capable な wgpu/Vulkan renderer は ArtCNN を実行し、
 それ以外の backend は native luma sampling を維持して `Inactive` fallback を明示します。
+
+`ErikaHttpHeader` は次のように定義されます：
+
+```c
+typedef struct ErikaHttpHeader {
+  const char *name;
+  const char *value;
+} ErikaHttpHeader;
+```
+
+例：
+
+```c
+ErikaHttpHeader headers[] = {
+    {"Authorization", "Bearer token"},
+    {"Referer", "https://example.com/"},
+};
+erika_presenter_open_with_headers(presenter, "https://example.com/video.mp4",
+                                  headers, 2);
+```
+
+header は HTTP(S) source にだけ適用され、local file と Android の `content://` source では
+無視されます。呼び出し側は URI、header 名、値を呼び出し中有効なまま保持してください。
+この API はこれらの文字列の所有権を取得しません。
+
+player 自身が生成する header は merge されず reject されます。下層の HTTP client は重複を
+置き換えず追加するためです：`Range`、`Host`、`Content-Length`、`Transfer-Encoding`、
+`Connection`（大文字小文字を区別せず一致）はいずれも呼び出しを
+`ERIKA_STATUS_PLAYER_ERROR` で失敗させます。HTTP token として不正な header 名や、field
+value に使えない文字を含む値も同様です。検証は最初の range request ではなく `open` の
+時点で行われます。
+
+header が適用されるのは media source だけです。外部 subtitle track と danmaku sidecar は
+まだ header なしで取得されるため、video を認証する token はこれらの URL にはまだ適用
+されません。
 
 `set_output_headroom` は display の current HDR/SDR ratio を publish します。Android API 34+
 host は `Display.registerHdrSdrRatioChangedListener` から呼び、valid ratio は `known = true`、

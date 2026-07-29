@@ -24,7 +24,7 @@ Windows では `ErikaWindowOverlayVideoView` が window-level の Direct3D 11 sw
 
 ## macOS Setup
 
-ローカル開発では macOS plugin が `dlopen` で Erika を読み込みます。`ERIKA_CAPI_DYLIB` で dynamic library path を上書きできます。未設定時は app bundle、実行ファイルディレクトリ、`$WORKSPACE/target/debug/liberika_capi.dylib` の順で探します。
+macOS CocoaPods build は既定で arm64+x86_64 universal dynamic library を生成します。依存 project は `ERIKA_MACOS_ARCHS=arm64`、`ERIKA_MACOS_ARCHS=x86_64`、または `ERIKA_MACOS_ARCHS=arm64,x86_64` で artifact architecture を選択できます。既定値は `universal` です。prebuilt mode は対応する `macos-arm64`、`macos-x64`、`macos-universal` archive を取得します。ローカル開発では plugin が `dlopen` で Erika を読み込み、`ERIKA_CAPI_DYLIB` で path を上書きできます。
 
 dynamic library を build するには：
 
@@ -32,6 +32,12 @@ dynamic library を build するには：
 cargo run -p xtask -- deps build --all --profile lgpl
 cargo build -p erika_capi
 ```
+
+## Prebuilt package と source build
+
+`ERIKA_PREBUILT=1` を設定すると GitHub Release から prebuilt native library を取得します。`ERIKA_PREBUILT_TAG=v0.1.3` で plugin source と一致する Release tag を固定してください。download または展開に失敗した場合は source build に fallback します。local source を debug するときは `ERIKA_FORCE_SOURCE_BUILD=1` で prebuilt を無効化します。package 名と release 手順は [releasing.ja.md](../../docs/releasing.ja.md) を参照してください。
+
+source build の architecture は macOS では `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`、Windows では `ERIKA_WINDOWS_ARCH=x64|arm64`、Android では `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86` で選択します。native library を直接 build する場合、`xtask --target`、`ERIKA_NATIVE_TARGET`、`cargo build --target` は同じ target にしてください。詳細は [building.ja.md](../../docs/building.ja.md) を参照してください。
 
 ## iOS Setup
 
@@ -41,11 +47,11 @@ iOS の CocoaPod script phase が、Xcode build 中に Erika の native dependen
 
 ## Windows Setup
 
-Windows plugin（`ErikaFlutterPluginCApi`）は CMake build 中に `build_erika_runtime.cmake` で Erika C ABI runtime（`erika_capi.dll`）を build し、`x86_64-pc-windows-msvc` target に対して cargo を呼び出し、DLL を app の隣に配置します。必要なもの：
+Windows plugin（`ErikaFlutterPluginCApi`）は CMake build 中に `build_erika_runtime.cmake` で Erika C ABI runtime（`erika_capi.dll`）を build し、CMake generator の x64 または ARM64 architecture に自動追従して DLL を app の隣に配置します。依存 project は CMake cache の `ERIKA_WINDOWS_ARCH=x64|arm64` または環境変数 `ERIKA_WINDOWS_ARCH` で明示的に選択できます。高度な用途では `ERIKA_NATIVE_TARGET=x86_64-pc-windows-msvc|aarch64-pc-windows-msvc` も指定できます。必要なもの：
 
-- MSVC target の Rust toolchain（`rustup target add x86_64-pc-windows-msvc`）
-- Visual Studio Build Tools (MSVC) + Windows SDK
-- `third_party/dist/x86_64-pc-windows-msvc/` に build 済みの native dependency（リポジトリの `xtask deps build` フロー）
+- 対応する MSVC target の Rust toolchain（`rustup target add x86_64-pc-windows-msvc` または `rustup target add aarch64-pc-windows-msvc`）
+- Visual Studio Build Tools の x64/ARM64 C++ tools + Windows SDK
+- `third_party/dist/<target>/` に build 済みの native dependency（リポジトリの `xtask deps build` フロー）
 
 plugin が Erika checkout を自動検出できない場合は `ERIKA_REPO_ROOT` を設定してください。
 
@@ -61,6 +67,33 @@ API 34+ では plugin が `Display.registerHdrSdrRatioChangedListener` を監視
 change を Erika に publish します。wgpu は surface を reattach せず後続 frame target と
 output status を更新します。API 35 では host の global Window を変更せず、`SurfaceView`
 ごとに desired HDR headroom も設定します。
+
+## HTTP ヘッダー
+
+HTTP(S) video を再生する場合は、`httpHeaders` で request header を渡せます：
+
+```dart
+await player.open(
+  'https://example.com/video.mp4',
+  httpHeaders: <String, String>{
+    'Authorization': 'Bearer token',
+    'Referer': 'https://example.com/',
+  },
+);
+```
+
+header は HEAD、Range GET、prefetch request とともに送信され、HTTP(S) URL にだけ適用されます。
+`content://` と local file の再生では header は無視されます。Authorization や Cookie などの
+機密値を application log に出力しないでください。
+
+playback engine 自身が生成する header は merge されず reject されます：`Range`、`Host`、
+`Content-Length`、`Transfer-Encoding`、`Connection`（大文字小文字を区別しない）は `open` を
+throw させます。HTTP field として不正な名前や値も同様です。同梱の native library が
+0.1.3 以前の prebuilt（HTTP header 対応より前）の場合、header 付きの `open` は黙って
+header を捨てずに throw します。
+
+header が適用されるのは media source だけです。外部 subtitle track と danmaku sidecar は
+まだ header なしで取得されます。
 
 ## Output Mode
 
@@ -153,4 +186,3 @@ await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16);
 ```
 
 `ErikaUpscalerMode.off` で無効化します。`player.getUpscalerStatus()` では要求モード、実行 backend、fallback 回数、upscaled frame 数、最近の GPU timing を確認できます。Apple は Metal、Android は planar と MediaCodec Surface frame の両方で wgpu/Vulkan compute を使います。GLES 3.0 は通常再生を維持し、明示的な `inactive` fallback を報告します。
-

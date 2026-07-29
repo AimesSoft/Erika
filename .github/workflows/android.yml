@@ -67,7 +67,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: deps-android-${{ matrix.rust_target }}-ndk${{ env.ANDROID_NDK_VERSION }}-api${{ env.ANDROID_API_LEVEL }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
+          key: native-v2-android-${{ matrix.rust_target }}-ndk${{ env.ANDROID_NDK_VERSION }}-api${{ env.ANDROID_API_LEVEL }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
       - name: Build native dependencies and static C API
         shell: bash
         run: |

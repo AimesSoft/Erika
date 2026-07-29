@@ -97,6 +97,7 @@ cargo run -p xtask -- deps build --all --profile lgpl
 | `aarch64-apple-ios-sim` | iOS 模拟器(Apple Silicon) | |
 | `x86_64-apple-ios` | iOS 模拟器(Intel) | |
 | `x86_64-pc-windows-msvc`(或 `windows-x64`) | Windows | FFmpeg 里把 VideoToolbox 换成 D3D11VA/DXVA2。 |
+| `aarch64-pc-windows-msvc`(或 `windows-arm64`) | Windows ARM64 | 支持 ARM64 原生宿主和 x64 到 ARM64 交叉构建。 |
 | `aarch64-linux-android`(或 `arm64-v8a`) | Android arm64 | 主流真机 ABI。 |
 | `armv7-linux-androideabi`(或 `armeabi-v7a`) | Android ARMv7 | 32 位 ARM 兼容。 |
 | `x86_64-linux-android`(或 `android-x64`) | Android x86_64 | 模拟器与 x86_64 设备。 |
@@ -107,6 +108,29 @@ cargo run -p xtask -- deps build --all --profile lgpl
 
 Android 使用 `android-26`、`c++_shared`、PIC 静态依赖和所选 ABI 对应的 NDK LLVM
 工具链。
+
+### 选择源码构建架构
+
+Flutter 依赖项目通过 `ERIKA_MACOS_ARCHS=arm64|x86_64|universal` 选择 macOS 架构，通过 `ERIKA_WINDOWS_ARCH=x64|arm64` 选择 Windows 架构，通过 `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86` 选择 Android ABI。设置 `ERIKA_FORCE_SOURCE_BUILD=1` 可强制跳过预构建包。
+
+直接构建原生库时，三个目标参数必须一致：
+
+```sh
+cargo run -p xtask -- deps build --all --profile lgpl --target aarch64-apple-darwin
+ERIKA_NATIVE_PROFILE=lgpl ERIKA_NATIVE_TARGET=aarch64-apple-darwin \
+  cargo build -p erika_capi --release --target aarch64-apple-darwin
+```
+
+Windows ARM64 使用对应的 PowerShell 命令：
+
+```powershell
+cargo run -p xtask -- deps build --all --profile lgpl --target aarch64-pc-windows-msvc
+$env:ERIKA_NATIVE_PROFILE = "lgpl"
+$env:ERIKA_NATIVE_TARGET = "aarch64-pc-windows-msvc"
+cargo build -p erika_capi --release --target aarch64-pc-windows-msvc
+```
+
+`xtask --target`、`ERIKA_NATIVE_TARGET` 和 Cargo `--target` 必须相同，否则 Cargo 可能链接到其他架构的原生依赖。
 
 ### Windows PowerShell 构建 Android x86_64
 
@@ -180,7 +204,7 @@ third_party/
 
 相关环境变量:`ERIKA_NATIVE_PROFILE`、`ERIKA_NATIVE_TARGET`、`ERIKA_FFMPEG_DIR`、
 `ERIKA_DAV1D_DIR`、`ERIKA_ZLIB_DIR`、`LIBCLANG_PATH`,以及 `ERIKA_ALLOW_LEGACY_FFMPEG`(应急开关)。Erika
-需要 FFmpeg **7.x**(`libavutil >= 59`);Windows 原生核心强制此点。仅在本地兼容性实验时
+需要 FFmpeg **8.x**(`libavutil >= 60`);Windows 和 Android 原生核心强制此点。仅在本地兼容性实验时
 才设 `ERIKA_ALLOW_LEGACY_FFMPEG=1`。
 
 ## 编译与测试

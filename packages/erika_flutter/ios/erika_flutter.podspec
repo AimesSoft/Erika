@@ -17,6 +17,7 @@ Pod::Spec.new do |s|
     erika_presenter_load_danmaku_file
     erika_presenter_load_danmaku_json
     erika_presenter_open
+    erika_presenter_open_with_headers
     erika_presenter_pause
     erika_presenter_play
     erika_presenter_poll_event
@@ -131,10 +132,12 @@ if [ -z "${ERIKA_FFMPEG_DIR:-}" ]; then
   ERIKA_FFMPEG_DIR="$ERIKA_ROOT/third_party/dist/$RUST_TARGET/$ERIKA_NATIVE_PROFILE/ffmpeg"
 fi
 ERIKA_TARGET_DIST="$ERIKA_ROOT/third_party/dist/$RUST_TARGET/$ERIKA_NATIVE_PROFILE"
+ERIKA_DAV1D_DIR="${ERIKA_DAV1D_DIR:-$ERIKA_TARGET_DIST/dav1d}"
 ERIKA_LIBASS_DIR="${ERIKA_LIBASS_DIR:-$ERIKA_TARGET_DIST/libass}"
 ERIKA_FREETYPE_DIR="${ERIKA_FREETYPE_DIR:-$ERIKA_TARGET_DIST/freetype}"
 ERIKA_HARFBUZZ_DIR="${ERIKA_HARFBUZZ_DIR:-$ERIKA_TARGET_DIST/harfbuzz}"
 ERIKA_FRIBIDI_DIR="${ERIKA_FRIBIDI_DIR:-$ERIKA_TARGET_DIST/fribidi}"
+ERIKA_DAV1D_MARKER="$ERIKA_ROOT/third_party/build/$RUST_TARGET/$ERIKA_NATIVE_PROFILE/dav1d/dav1d-built.txt"
 
 # Optional: use a prebuilt static lib from a GitHub Release (opt-in).
 # Enable with ERIKA_PREBUILT=1; ERIKA_PREBUILT_TAG selects the tag (default
@@ -170,13 +173,13 @@ if [ -n "${ERIKA_IOS_CAPI_STATICLIB:-}" ]; then
 elif [ -n "$PREBUILT_LIB" ]; then
   LIB_SOURCE="$PREBUILT_LIB"
 else
-  if [ ! -f "$ERIKA_FFMPEG_DIR/include/libavformat/avformat.h" ] || [ ! -f "$ERIKA_LIBASS_DIR/lib/libass.a" ]; then
+  if [ ! -f "$ERIKA_FFMPEG_DIR/include/libavformat/avformat.h" ] || [ ! -f "$ERIKA_DAV1D_DIR/include/dav1d/dav1d.h" ] || [ ! -f "$ERIKA_DAV1D_DIR/lib/libdav1d.a" ] || [ ! -f "$ERIKA_DAV1D_MARKER" ] || ! grep -qx 'dav1d=1.5.1' "$ERIKA_DAV1D_MARKER" || [ ! -f "$ERIKA_LIBASS_DIR/lib/libass.a" ]; then
     echo "Building Erika native dependencies for $RUST_TARGET ($ERIKA_NATIVE_PROFILE, with libass)"
     (cd "$ERIKA_ROOT" && cargo run -p xtask -- deps build --all --profile "$ERIKA_NATIVE_PROFILE" --target "$RUST_TARGET" --jobs "$HOST_JOBS")
   fi
   LIB_SOURCE="$ERIKA_ROOT/target/$RUST_TARGET/$CARGO_PROFILE/liberika_capi.a"
   echo "Building Erika C ABI staticlib for $RUST_TARGET ($CARGO_PROFILE)"
-  (cd "$ERIKA_ROOT" && ERIKA_NATIVE_PROFILE="$ERIKA_NATIVE_PROFILE" ERIKA_NATIVE_TARGET="$RUST_TARGET" ERIKA_FFMPEG_DIR="$ERIKA_FFMPEG_DIR" ERIKA_LIBASS_DIR="$ERIKA_LIBASS_DIR" ERIKA_FREETYPE_DIR="$ERIKA_FREETYPE_DIR" ERIKA_HARFBUZZ_DIR="$ERIKA_HARFBUZZ_DIR" ERIKA_FRIBIDI_DIR="$ERIKA_FRIBIDI_DIR" cargo rustc -p erika_capi --target "$RUST_TARGET" --no-default-features --features libass $CARGO_ARGS --lib --crate-type staticlib)
+  (cd "$ERIKA_ROOT" && ERIKA_NATIVE_PROFILE="$ERIKA_NATIVE_PROFILE" ERIKA_NATIVE_TARGET="$RUST_TARGET" ERIKA_FFMPEG_DIR="$ERIKA_FFMPEG_DIR" ERIKA_DAV1D_DIR="$ERIKA_DAV1D_DIR" ERIKA_LIBASS_DIR="$ERIKA_LIBASS_DIR" ERIKA_FREETYPE_DIR="$ERIKA_FREETYPE_DIR" ERIKA_HARFBUZZ_DIR="$ERIKA_HARFBUZZ_DIR" ERIKA_FRIBIDI_DIR="$ERIKA_FRIBIDI_DIR" cargo rustc -p erika_capi --target "$RUST_TARGET" --no-default-features --features libass $CARGO_ARGS --lib --crate-type staticlib)
 fi
 
 if [ ! -f "$LIB_SOURCE" ]; then

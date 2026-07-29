@@ -22,7 +22,7 @@ Rust Player Core
   D3D11 renderer ─────── zero-copy D3D11VA, HDR10, subtitle/danmaku pass (Windows)
   wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB
   presenter runtime ──── ties player + renderer + audio + overlays
-  C ABI ──────────────── 73 exported functions, two handle families
+  C ABI ──────────────── 75 exported functions, two handle families
   Flutter plugin ─────── macOS + iOS + Windows + Android native view embedding
 ```
 
@@ -33,11 +33,11 @@ sources into `third_party/`. The default profile is `lgpl`.
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| FFmpeg | 7.1.1 | Demux, decode, audio resample, platform hardware decode |
+| FFmpeg | 8.1.2 | Demux, decode, audio resample, platform hardware decode |
 | dav1d | 1.5.1 | Android AV1 software fallback (8-bit and high bit depth) |
-| libass | 0.17.3 | ASS subtitle rendering |
-| FreeType | 2.13.3 | Font rasterization (libass dependency) |
-| HarfBuzz | 10.4.0 | Text shaping (libass dependency) |
+| libass | 0.17.5 | ASS subtitle rendering |
+| FreeType | 2.14.3 | Font rasterization (libass dependency) |
+| HarfBuzz | 14.2.1 | Text shaping (libass dependency) |
 | FriBidi | 1.0.16 | Bidirectional text (libass dependency) |
 
 All dependencies are statically linked. libass and its dependencies are enabled
@@ -250,7 +250,7 @@ DanmakuEngine, and audio output. The host supplies a native surface and drives
 
 ## C ABI
 
-`erika_capi` exports 73 functions through two handle families:
+`erika_capi` exports 75 functions through two handle families:
 
 - **`ErikaHandle`** — player control and event polling. The host owns rendering.
 - **`ErikaPresenterHandle`** — Erika owns the full stack. The host provides a

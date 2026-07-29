@@ -8,11 +8,11 @@ profile. Their licenses apply to the corresponding portions of the binary.
 
 | Component | Version | License |
 |-----------|---------|---------|
-| FFmpeg (libav*) | 7.x | LGPL v3 (configured `--disable-gpl --enable-version3`) |
+| FFmpeg (libav*) | 8.1.2 | LGPL v3 (configured `--disable-gpl --enable-version3`) |
 | dav1d | 1.5.x | BSD 2-Clause |
-| libass | 0.17.x | ISC |
-| FreeType | 2.13.x | FTL / GPLv2 (FTL used here) |
-| HarfBuzz | bundled | MIT (Old) |
+| libass | 0.17.5 | ISC |
+| FreeType | 2.14.3 | FTL / GPLv2 (FTL used here) |
+| HarfBuzz | 14.2.1 | MIT (Old) |
 | FriBidi | 1.0.x | LGPL v2.1+ |
 | zlib | 1.3.x | zlib |
 | SoundTouch | 2.3.2 | LGPL v2.1 |

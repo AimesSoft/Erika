@@ -126,10 +126,31 @@ pub enum MediaSourceHint {
     Http,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct MediaRequest {
     pub uri: String,
     pub source_hint: MediaSourceHint,
+    pub http_headers: Vec<(String, String)>,
+}
+
+/// Hand-written so that credentials carried by custom headers (`Authorization`,
+/// session cookies, …) never reach a log line through a derived `Debug`.
+impl std::fmt::Debug for MediaRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MediaRequest")
+            .field("uri", &self.uri)
+            .field("source_hint", &self.source_hint)
+            .field(
+                "http_headers",
+                &self
+                    .http_headers
+                    .iter()
+                    .map(|(name, _)| (name.as_str(), "REDACTED"))
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 impl MediaRequest {
@@ -137,7 +158,13 @@ impl MediaRequest {
         Self {
             uri: uri.into(),
             source_hint: MediaSourceHint::Auto,
+            http_headers: Vec::new(),
         }
+    }
+
+    pub fn with_http_headers(mut self, http_headers: Vec<(String, String)>) -> Self {
+        self.http_headers = http_headers;
+        self
     }
 }
 
@@ -2135,7 +2162,7 @@ fn handle_playback_command(
                 return true;
             }
             match failure.decode_backend {
-                DecoderBackend::MediaCodec => {
+                DecoderBackend::MediaCodec | DecoderBackend::VideoToolbox => {
                     if let Err(error) = engine.handle_video_frame_import_failure(&failure) {
                         fail_video_import_from_worker(
                             engine,
@@ -2150,7 +2177,7 @@ fn handle_playback_command(
                 DecoderBackend::Software => {
                     fail_video_import_from_worker(engine, inner, failure.structured_message());
                 }
-                DecoderBackend::VideoToolbox | DecoderBackend::D3d11va => {}
+                DecoderBackend::D3d11va => {}
             }
         }
         PlaybackCommand::AddExternalSubtitle { config, reply } => {

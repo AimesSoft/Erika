@@ -654,6 +654,9 @@ pub mod aaudio {
                     channels: format.channels as usize,
                 })?,
             );
+            // Seed both ramp endpoints: the stream has not started, so there
+            // is no previous gain to ramp from.
+            ring.snap_volume(self.signals.volume());
             let callback = Arc::new(CallbackState {
                 ring,
                 signals: Arc::clone(&self.signals),
@@ -735,6 +738,8 @@ pub mod aaudio {
             self.signals
                 .volume
                 .store(volume.to_bits(), Ordering::Relaxed);
+            // The ring only records the new target; the realtime callback ramps
+            // toward it so queued samples are never rewritten under the reader.
             if let Ok(control) = self.control.lock()
                 && let Some(callback) = &control.callback
             {
@@ -774,11 +779,9 @@ pub mod aaudio {
             )?;
             let mut samples = vec![0.0f32; sample_count];
             control.processor.read_interleaved(&mut samples)?;
-            let pushed = callback.ring.push_interleaved(
-                &samples,
-                self.config.ring_buffer.drop_oldest_on_overflow,
-                self.signals.volume(),
-            );
+            let pushed = callback
+                .ring
+                .push_interleaved(&samples, self.config.ring_buffer.drop_oldest_on_overflow);
             control.append_timeline(pushed, prepared.media_time);
             Ok(pushed.into())
         }
