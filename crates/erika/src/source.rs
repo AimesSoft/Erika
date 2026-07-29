@@ -914,10 +914,15 @@ impl MediaSource for HttpRangeSource {
             self.cache_end(),
             self.read_ahead_bytes,
         ));
+        // Keep metadata probing off the range-request pool. Some HTTP/1.0
+        // servers close a HEAD connection without an explicit Connection
+        // header; reusing that stale socket for the first GET otherwise
+        // surfaces as `Peer disconnected`.
+        let head_agent = http_agent();
         let mut attempt = 0u32;
         let head_error = loop {
             attempt += 1;
-            let mut request = self.agent.head(&self.uri);
+            let mut request = head_agent.head(&self.uri);
             for (name, value) in &self.http_headers {
                 request = request.header(name, value);
             }

@@ -456,6 +456,7 @@ dependencies = [
  "encoding_rs",
  "erika_ffmpeg_sys",
  "fontdb",
+ "glow",
  "libc",
  "objc2",
  "objc2-core-foundation",
@@ -2097,8 +2098,6 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "29.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31f8e1a9e7a8512f276f7c62e018c7fa8d60954303fed2e5750114332049193f"
 dependencies = [
  "android_system_properties",
  "arrayvec",

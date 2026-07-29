@@ -56,6 +56,10 @@ windows = { workspace = true, features = [
 [target.'cfg(target_os = "android")'.dependencies]
 ash = "0.38.0"
 
+[target.'cfg(target_env = "ohos")'.dependencies]
+ash = "0.38.0"
+glow = "0.17.0"
+
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2.workspace = true
 objc2-core-foundation.workspace = true

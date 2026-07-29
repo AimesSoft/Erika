@@ -5,6 +5,8 @@ pub mod audio;
 pub mod core;
 pub mod danmaku;
 pub mod ffmpeg;
+#[cfg(target_env = "ohos")]
+pub mod ohos;
 pub mod overlay;
 pub mod playback;
 pub mod presenter;

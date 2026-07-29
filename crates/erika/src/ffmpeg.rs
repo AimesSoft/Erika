@@ -28,6 +28,11 @@ use thiserror::Error;
 use crate::android::mediacodec::{
     AndroidHardwareBufferImage, AndroidMediaCodecError, AndroidMediaCodecFrameSource,
 };
+#[cfg(target_env = "ohos")]
+use crate::ohos::avcodec::{
+    DecodedNv12FrameView, DecodedSurfaceFrame, OhosDecoderOutput, OhosNativeBufferImage,
+    OhosVideoCodec, OhosVideoDecoder,
+};
 
 const AVERROR_EOF: i32 = -541_478_725;
 const MAX_SUBTITLE_FONT_ATTACHMENTS: usize = 256;
@@ -66,6 +71,9 @@ pub enum FfmpegError {
     #[cfg(target_os = "android")]
     #[error("Android MediaCodec surface backpressure: {0}")]
     AndroidMediaCodecBackpressure(String),
+    #[cfg(target_env = "ohos")]
+    #[error("HarmonyOS AVCodec error: {0}")]
+    OhosAvCodec(String),
     #[error(
         "invalid subtitle bitmap: width={width} height={height} stride={stride} colors={colors}"
     )]
@@ -772,6 +780,7 @@ pub enum DecoderBackend {
     VideoToolbox,
     D3d11va,
     MediaCodec,
+    AvCodec,
 }
 
 impl DecoderBackend {
@@ -781,6 +790,7 @@ impl DecoderBackend {
             Self::VideoToolbox => "videotoolbox",
             Self::D3d11va => "d3d11va",
             Self::MediaCodec => "mediacodec",
+            Self::AvCodec => "avcodec",
         }
     }
 }
@@ -823,6 +833,13 @@ impl DecoderConfig {
     pub fn mediacodec_byte_buffer() -> Self {
         Self {
             backend: DecoderBackend::MediaCodec,
+            mediacodec_surface: false,
+        }
+    }
+
+    pub fn avcodec() -> Self {
+        Self {
+            backend: DecoderBackend::AvCodec,
             mediacodec_surface: false,
         }
     }
@@ -872,6 +889,20 @@ pub struct Decoder {
     hw_state: Option<Box<HardwareDecoderState>>,
     #[cfg(target_os = "android")]
     mediacodec_source: Option<Arc<AndroidMediaCodecFrameSource>>,
+    #[cfg(target_env = "ohos")]
+    ohos_decoder: Option<OhosVideoDecoder>,
+    #[cfg(target_env = "ohos")]
+    ohos_color_properties: OhosFrameColorProperties,
+}
+
+#[cfg(target_env = "ohos")]
+#[derive(Debug, Clone, Copy)]
+struct OhosFrameColorProperties {
+    range: sys::AVColorRange,
+    primaries: sys::AVColorPrimaries,
+    transfer: sys::AVColorTransferCharacteristic,
+    space: sys::AVColorSpace,
+    chroma_location: sys::AVChromaLocation,
 }
 
 unsafe impl Send for Decoder {}
@@ -897,6 +928,21 @@ impl Decoder {
         )
     }
 
+    #[cfg(target_env = "ohos")]
+    pub(crate) fn open_owned_with_ohos_avcodec_surface(
+        parameters: &OwnedCodecParameters,
+        surface: Option<Arc<crate::ohos::avcodec::OhosAvCodecSurface>>,
+    ) -> Result<Self> {
+        let codec_id = unsafe { (*parameters.ptr).codec_id };
+        Self::open_ohos_avcodec(
+            parameters.ptr,
+            parameters.stream_index,
+            parameters.time_base,
+            codec_id,
+            surface,
+        )
+    }
+
     pub fn open_with_config(
         parameters: CodecParameters<'_>,
         config: DecoderConfig,
@@ -917,6 +963,16 @@ impl Decoder {
     ) -> Result<Self> {
         configure_ffmpeg_debug_logging();
         let codec_id = unsafe { (*parameters_ptr).codec_id };
+        #[cfg(target_env = "ohos")]
+        if config.backend == DecoderBackend::AvCodec {
+            return Self::open_ohos_avcodec(
+                parameters_ptr,
+                stream_index,
+                time_base,
+                codec_id,
+                None,
+            );
+        }
         let (codec, find_operation) = match config.backend {
             DecoderBackend::Software => software_decoder(codec_id),
             DecoderBackend::MediaCodec => (
@@ -927,6 +983,10 @@ impl Decoder {
             DecoderBackend::D3d11va => (
                 unsafe { sys::avcodec_find_decoder(codec_id) },
                 "avcodec_find_decoder",
+            ),
+            DecoderBackend::AvCodec => (
+                ptr::null(),
+                "HarmonyOS AVCodec is unavailable on this target",
             ),
         };
         if codec.is_null() {
@@ -947,6 +1007,16 @@ impl Decoder {
             hw_state: None,
             #[cfg(target_os = "android")]
             mediacodec_source: None,
+            #[cfg(target_env = "ohos")]
+            ohos_decoder: None,
+            #[cfg(target_env = "ohos")]
+            ohos_color_properties: OhosFrameColorProperties {
+                range: unsafe { (*parameters_ptr).color_range },
+                primaries: unsafe { (*parameters_ptr).color_primaries },
+                transfer: unsafe { (*parameters_ptr).color_trc },
+                space: unsafe { (*parameters_ptr).color_space },
+                chroma_location: unsafe { (*parameters_ptr).chroma_location },
+            },
         };
         check(
             unsafe { sys::avcodec_parameters_to_context(decoder.context, parameters_ptr) },
@@ -964,6 +1034,7 @@ impl Decoder {
             }
             DecoderBackend::VideoToolbox => decoder.configure_videotoolbox(codec)?,
             DecoderBackend::D3d11va => decoder.configure_d3d11va(codec)?,
+            DecoderBackend::AvCodec => {}
         }
         let mut codec_options = ptr::null_mut();
         #[cfg(target_os = "android")]
@@ -1143,6 +1214,21 @@ impl Decoder {
         self.backend == DecoderBackend::MediaCodec && self.mediacodec_surface
     }
 
+    pub fn uses_avcodec_surface(&self) -> bool {
+        #[cfg(target_env = "ohos")]
+        {
+            self.backend == DecoderBackend::AvCodec
+                && self
+                    .ohos_decoder
+                    .as_ref()
+                    .is_some_and(OhosVideoDecoder::uses_surface)
+        }
+        #[cfg(not(target_env = "ohos"))]
+        {
+            false
+        }
+    }
+
     pub fn eof_sent(&self) -> bool {
         self.eof_sent
     }
@@ -1158,6 +1244,21 @@ impl Decoder {
                 packet_stream: packet.stream_index(),
             });
         }
+        #[cfg(target_env = "ohos")]
+        if let Some(decoder) = self.ohos_decoder.as_mut() {
+            let pts_micros = packet
+                .pts()
+                .or_else(|| packet.dts())
+                .map(timestamp_to_microseconds)
+                .unwrap_or(0);
+            return match decoder
+                .send_packet(packet.data(), pts_micros, packet.is_key())
+                .map_err(FfmpegError::OhosAvCodec)?
+            {
+                true => Ok(()),
+                false => check(av_error(EAGAIN), "OH_VideoDecoder_PushInputBuffer(wait)"),
+            };
+        }
         check(
             unsafe { sys::avcodec_send_packet(self.context, packet.as_ptr()) },
             "avcodec_send_packet",
@@ -1167,6 +1268,17 @@ impl Decoder {
     pub fn send_eof(&mut self) -> Result<()> {
         if self.eof_sent {
             return Ok(());
+        }
+        #[cfg(target_env = "ohos")]
+        if let Some(decoder) = self.ohos_decoder.as_mut() {
+            if decoder.send_eof().map_err(FfmpegError::OhosAvCodec)? {
+                self.eof_sent = true;
+                return Ok(());
+            }
+            return check(
+                av_error(EAGAIN),
+                "OH_VideoDecoder_PushInputBuffer(eof wait)",
+            );
         }
         let code = unsafe { sys::avcodec_send_packet(self.context, ptr::null()) };
         if code == AVERROR_EOF {
@@ -1180,6 +1292,40 @@ impl Decoder {
     }
 
     pub fn receive_frame(&mut self) -> Result<DecoderOutputFrame> {
+        #[cfg(target_env = "ohos")]
+        if let Some(decoder) = self.ohos_decoder.as_mut() {
+            let time_base = self.time_base;
+            let color = self.ohos_color_properties;
+            if decoder.uses_surface() {
+                return match decoder
+                    .receive_surface_frame()
+                    .map_err(FfmpegError::OhosAvCodec)?
+                {
+                    OhosDecoderOutput::NeedMoreInput => Ok(DecoderOutputFrame::NeedMoreInput),
+                    OhosDecoderOutput::Frame(decoded) => Ok(DecoderOutputFrame::Frame(
+                        Frame::from_ohos_surface(decoded, time_base, color)?,
+                    )),
+                    OhosDecoderOutput::EndOfStream => {
+                        self.end_of_stream = true;
+                        Ok(DecoderOutputFrame::EndOfStream)
+                    }
+                };
+            }
+            return match decoder
+                .receive_frame(|decoded| {
+                    Frame::from_ohos_nv12(decoded, time_base, color)
+                        .map_err(|error| error.to_string())
+                })
+                .map_err(FfmpegError::OhosAvCodec)?
+            {
+                OhosDecoderOutput::NeedMoreInput => Ok(DecoderOutputFrame::NeedMoreInput),
+                OhosDecoderOutput::Frame(frame) => Ok(DecoderOutputFrame::Frame(frame)),
+                OhosDecoderOutput::EndOfStream => {
+                    self.end_of_stream = true;
+                    Ok(DecoderOutputFrame::EndOfStream)
+                }
+            };
+        }
         let mut frame = Frame::alloc(self.time_base)?;
         let code = unsafe { sys::avcodec_receive_frame(self.context, frame.ptr) };
         if code == av_error(EAGAIN) {
@@ -1207,9 +1353,93 @@ impl Decoder {
     }
 
     pub fn flush(&mut self) {
+        #[cfg(target_env = "ohos")]
+        if let Some(decoder) = self.ohos_decoder.as_mut() {
+            if let Err(error) = decoder.flush() {
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "ohos_avcodec_decoder",
+                        "stage": "flush_failed",
+                        "reason": error,
+                    })
+                    .to_string(),
+                );
+            }
+            self.eof_sent = false;
+            self.end_of_stream = false;
+            return;
+        }
         unsafe { sys::avcodec_flush_buffers(self.context) };
         self.eof_sent = false;
         self.end_of_stream = false;
+    }
+
+    #[cfg(target_env = "ohos")]
+    fn open_ohos_avcodec(
+        parameters_ptr: *const sys::AVCodecParameters,
+        stream_index: i32,
+        time_base: TimeBase,
+        codec_id: sys::AVCodecID,
+        surface: Option<Arc<crate::ohos::avcodec::OhosAvCodecSurface>>,
+    ) -> Result<Self> {
+        let codec_kind = match codec_id {
+            sys::AVCodecID_AV_CODEC_ID_H264 => OhosVideoCodec::Avc,
+            sys::AVCodecID_AV_CODEC_ID_HEVC => OhosVideoCodec::Hevc,
+            _ => {
+                return Err(FfmpegError::OhosAvCodec(format!(
+                    "unsupported codec id {codec_id}; AVCodec hardware decoding currently supports H.264 and HEVC"
+                )));
+            }
+        };
+        let parameters = unsafe { &*parameters_ptr };
+        let width = parameters.width.max(0) as u32;
+        let height = parameters.height.max(0) as u32;
+        let codec_config = if parameters.extradata.is_null() || parameters.extradata_size <= 0 {
+            &[]
+        } else {
+            unsafe {
+                slice::from_raw_parts(parameters.extradata, parameters.extradata_size as usize)
+            }
+        };
+        let ohos_decoder = OhosVideoDecoder::new(codec_kind, width, height, codec_config, surface)
+            .map_err(FfmpegError::OhosAvCodec)?;
+        let output_mode = if ohos_decoder.uses_surface() {
+            "surface_native_buffer"
+        } else {
+            "buffer_nv12_direct_frame_copy"
+        };
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "ohos_avcodec_decoder",
+                "stage": "decoder_opened",
+                "codec": codec_kind.as_str(),
+                "mode": output_mode,
+                "width": width,
+                "height": height,
+                "codecConfigBytes": codec_config.len(),
+            })
+            .to_string(),
+        );
+        Ok(Self {
+            context: ptr::null_mut(),
+            stream_index,
+            time_base,
+            backend: DecoderBackend::AvCodec,
+            mediacodec_surface: false,
+            eof_sent: false,
+            end_of_stream: false,
+            hw_state: None,
+            #[cfg(target_os = "android")]
+            mediacodec_source: None,
+            ohos_decoder: Some(ohos_decoder),
+            ohos_color_properties: OhosFrameColorProperties {
+                range: parameters.color_range,
+                primaries: parameters.color_primaries,
+                transfer: parameters.color_trc,
+                space: parameters.color_space,
+                chroma_location: parameters.chroma_location,
+            },
+        })
     }
 
     fn configure_videotoolbox(&mut self, codec: *const sys::AVCodec) -> Result<()> {
@@ -1613,6 +1843,14 @@ pub struct Frame {
     time_base: TimeBase,
     #[cfg(target_os = "android")]
     mediacodec: Option<AndroidMediaCodecFrameState>,
+    #[cfg(target_env = "ohos")]
+    ohos_surface: Option<OhosAvCodecSurfaceFrameState>,
+}
+
+#[cfg(target_env = "ohos")]
+#[derive(Clone)]
+struct OhosAvCodecSurfaceFrameState {
+    image: Arc<OhosNativeBufferImage>,
 }
 
 pub struct AudioResampler {
@@ -1689,7 +1927,138 @@ impl Frame {
             time_base,
             #[cfg(target_os = "android")]
             mediacodec: None,
+            #[cfg(target_env = "ohos")]
+            ohos_surface: None,
         })
+    }
+
+    #[cfg(target_env = "ohos")]
+    fn from_ohos_surface(
+        decoded: DecodedSurfaceFrame,
+        time_base: TimeBase,
+        color: OhosFrameColorProperties,
+    ) -> Result<Self> {
+        if decoded.width == 0
+            || decoded.height == 0
+            || decoded.width > i32::MAX as u32
+            || decoded.height > i32::MAX as u32
+        {
+            return Err(FfmpegError::OhosAvCodec(format!(
+                "invalid decoded Surface dimensions {}x{}",
+                decoded.width, decoded.height
+            )));
+        }
+        let mut frame = Self::alloc(time_base)?;
+        unsafe {
+            (*frame.ptr).format = sys::AVPixelFormat_AV_PIX_FMT_NONE;
+            (*frame.ptr).width = decoded.width as i32;
+            (*frame.ptr).height = decoded.height as i32;
+            (*frame.ptr).pts = rescale_microseconds_to_time_base(decoded.pts_micros, time_base);
+            (*frame.ptr).color_range = color.range;
+            (*frame.ptr).color_primaries = color.primaries;
+            (*frame.ptr).color_trc = color.transfer;
+            (*frame.ptr).colorspace = color.space;
+            (*frame.ptr).chroma_location = color.chroma_location;
+        }
+        frame.ohos_surface = Some(OhosAvCodecSurfaceFrameState {
+            image: decoded.image,
+        });
+        Ok(frame)
+    }
+
+    #[cfg(target_env = "ohos")]
+    fn from_ohos_nv12(
+        decoded: DecodedNv12FrameView<'_>,
+        time_base: TimeBase,
+        color: OhosFrameColorProperties,
+    ) -> Result<Self> {
+        let frame = Self::alloc(time_base)?;
+        if decoded.width == 0
+            || decoded.height == 0
+            || decoded.width > i32::MAX as u32
+            || decoded.height > i32::MAX as u32
+        {
+            return Err(FfmpegError::OhosAvCodec(format!(
+                "invalid decoded NV12 dimensions {}x{}",
+                decoded.width, decoded.height
+            )));
+        }
+        let width = decoded.width as usize;
+        let height = decoded.height as usize;
+        let chroma_width = width.div_ceil(2) * 2;
+        let chroma_rows = height.div_ceil(2);
+        let expected_luma_size = decoded.luma_stride.checked_mul(height).ok_or_else(|| {
+            FfmpegError::OhosAvCodec("decoded NV12 luma size overflowed".to_string())
+        })?;
+        let expected_chroma_size =
+            decoded
+                .chroma_stride
+                .checked_mul(chroma_rows)
+                .ok_or_else(|| {
+                    FfmpegError::OhosAvCodec("decoded NV12 chroma size overflowed".to_string())
+                })?;
+        if decoded.luma_stride < width
+            || decoded.chroma_stride < chroma_width
+            || decoded.luma.len() < expected_luma_size
+            || decoded.chroma.len() < expected_chroma_size
+        {
+            return Err(FfmpegError::OhosAvCodec(format!(
+                "decoded NV12 frame has invalid source layout: luma {}/{expected_luma_size} bytes (stride {}), chroma {}/{expected_chroma_size} bytes (stride {})",
+                decoded.luma.len(),
+                decoded.luma_stride,
+                decoded.chroma.len(),
+                decoded.chroma_stride,
+            )));
+        }
+
+        unsafe {
+            (*frame.ptr).format = sys::AVPixelFormat_AV_PIX_FMT_NV12 as i32;
+            (*frame.ptr).width = decoded.width as i32;
+            (*frame.ptr).height = decoded.height as i32;
+            (*frame.ptr).pts = rescale_microseconds_to_time_base(decoded.pts_micros, time_base);
+            (*frame.ptr).color_range = color.range;
+            (*frame.ptr).color_primaries = color.primaries;
+            (*frame.ptr).color_trc = color.transfer;
+            (*frame.ptr).colorspace = color.space;
+            (*frame.ptr).chroma_location = color.chroma_location;
+        }
+        check(
+            unsafe { sys::av_frame_get_buffer(frame.ptr, 32) },
+            "av_frame_get_buffer(OHOS NV12)",
+        )?;
+
+        let source_luma = decoded.luma.as_ptr();
+        let source_chroma = decoded.chroma.as_ptr();
+        unsafe {
+            let destination_luma = (*frame.ptr).data[0];
+            let destination_chroma = (*frame.ptr).data[1];
+            let destination_luma_stride = (*frame.ptr).linesize[0].max(0) as usize;
+            let destination_chroma_stride = (*frame.ptr).linesize[1].max(0) as usize;
+            if destination_luma.is_null()
+                || destination_chroma.is_null()
+                || destination_luma_stride < width
+                || destination_chroma_stride < chroma_width
+            {
+                return Err(FfmpegError::OhosAvCodec(
+                    "FFmpeg allocated an invalid NV12 frame layout".to_string(),
+                ));
+            }
+            for row in 0..height {
+                ptr::copy_nonoverlapping(
+                    source_luma.add(row * decoded.luma_stride),
+                    destination_luma.add(row * destination_luma_stride),
+                    width,
+                );
+            }
+            for row in 0..chroma_rows {
+                ptr::copy_nonoverlapping(
+                    source_chroma.add(row * decoded.chroma_stride),
+                    destination_chroma.add(row * destination_chroma_stride),
+                    chroma_width,
+                );
+            }
+        }
+        Ok(frame)
     }
 
     pub fn try_clone_ref(&self) -> Result<Self> {
@@ -1701,6 +2070,10 @@ impl Frame {
         #[cfg(target_os = "android")]
         {
             frame.mediacodec = self.mediacodec.clone();
+        }
+        #[cfg(target_env = "ohos")]
+        {
+            frame.ohos_surface = self.ohos_surface.clone();
         }
         Ok(frame)
     }
@@ -1879,6 +2252,21 @@ impl Frame {
                 Err(FfmpegError::AndroidMediaCodec(error))
             }
         }
+    }
+
+    #[cfg(target_env = "ohos")]
+    pub fn is_ohos_avcodec_surface(&self) -> bool {
+        self.ohos_surface.is_some()
+    }
+
+    #[cfg(target_env = "ohos")]
+    pub(crate) fn prepared_ohos_native_buffer(&self) -> Result<Arc<OhosNativeBufferImage>> {
+        let state = self.ohos_surface.as_ref().ok_or_else(|| {
+            FfmpegError::OhosAvCodec(
+                "decoded frame is not associated with an AVCodec Surface".to_string(),
+            )
+        })?;
+        Ok(Arc::clone(&state.image))
     }
 
     #[cfg(target_os = "android")]
@@ -3016,6 +3404,11 @@ struct CustomAvio {
     context: *mut sys::AVIOContext,
     source: Box<dyn MediaSource>,
     offset: u64,
+    last_error: Option<String>,
+}
+
+fn normalize_avio_seek_whence(whence: c_int) -> c_int {
+    whence & !(sys::AVSEEK_FORCE as c_int)
 }
 
 impl CustomAvio {
@@ -3031,6 +3424,7 @@ impl CustomAvio {
             context: ptr::null_mut(),
             source,
             offset: 0,
+            last_error: None,
         });
         let context = unsafe {
             sys::avio_alloc_context(
@@ -3071,16 +3465,30 @@ impl CustomAvio {
                 self.offset = self.offset.saturating_add(copy_len as u64);
                 copy_len as c_int
             }
-            Err(_) => av_error(EIO),
+            Err(error) => {
+                self.last_error = Some(error.to_string());
+                crate::trace::log(format!(
+                    "Erika custom AVIO read failed at offset {} for {} bytes: {error}",
+                    self.offset, length
+                ));
+                av_error(EIO)
+            }
         }
     }
 
     fn seek(&mut self, offset: i64, whence: c_int) -> i64 {
+        // FFmpeg may OR AVSEEK_FORCE into ordinary SEEK_SET/SEEK_CUR/SEEK_END
+        // requests. It is a hint to the protocol layer rather than a distinct
+        // seek origin, so custom AVIO implementations must ignore it.
+        let whence = normalize_avio_seek_whence(whence);
         if whence == sys::AVSEEK_SIZE as c_int {
             return match self.source.len() {
                 Ok(Some(length)) => length.min(i64::MAX as u64) as i64,
                 Ok(None) => av_error(ESPIPE) as i64,
-                Err(_) => av_error(EIO) as i64,
+                Err(error) => {
+                    self.last_error = Some(error.to_string());
+                    av_error(EIO) as i64
+                }
             };
         }
 
@@ -3090,9 +3498,17 @@ impl CustomAvio {
             SEEK_END => match self.source.len() {
                 Ok(Some(length)) => length.min(i64::MAX as u64) as i64 + offset,
                 Ok(None) => return av_error(ESPIPE) as i64,
-                Err(_) => return av_error(EIO) as i64,
+                Err(error) => {
+                    self.last_error = Some(error.to_string());
+                    return av_error(EIO) as i64;
+                }
             },
-            _ => return av_error(EINVAL) as i64,
+            _ => {
+                let error = format!("unsupported seek origin {whence:#x} at offset {offset}");
+                self.last_error = Some(error.clone());
+                crate::trace::log(format!("Erika custom AVIO rejected {error}"));
+                return av_error(EINVAL) as i64;
+            }
         };
         if target < 0 {
             return av_error(EINVAL) as i64;
@@ -3180,7 +3596,12 @@ fn open_source_format_context(source: Box<dyn MediaSource>) -> Result<FormatCont
             if !opened_context.is_null() {
                 unsafe { sys::avformat_close_input(&mut opened_context) };
             }
-            Err(error)
+            match avio.last_error.as_deref() {
+                Some(source_error) => Err(FfmpegError::Source(format!(
+                    "{error}; custom AVIO: {source_error}"
+                ))),
+                None => Err(error),
+            }
         }
     }
 }
@@ -3983,6 +4404,19 @@ fn rescale_microseconds_to_time_base(microseconds: i64, time_base: TimeBase) -> 
     }
 }
 
+fn timestamp_to_microseconds(timestamp: PacketTimestamp) -> i64 {
+    unsafe {
+        sys::av_rescale_q(
+            timestamp.raw,
+            timestamp.time_base.to_av_rational(),
+            sys::AVRational {
+                num: 1,
+                den: sys::AV_TIME_BASE as i32,
+            },
+        )
+    }
+}
+
 fn av_error(errno: i32) -> i32 {
     -errno
 }
@@ -4052,6 +4486,18 @@ mod tests {
     #[test]
     fn linked_ffmpeg_reports_version() {
         assert!(!version().is_empty());
+    }
+
+    #[test]
+    fn avseek_force_does_not_change_seek_origin() {
+        let forced_set = SEEK_SET | sys::AVSEEK_FORCE as c_int;
+        let forced_size = sys::AVSEEK_SIZE as c_int | sys::AVSEEK_FORCE as c_int;
+
+        assert_eq!(normalize_avio_seek_whence(forced_set), SEEK_SET);
+        assert_eq!(
+            normalize_avio_seek_whence(forced_size),
+            sys::AVSEEK_SIZE as c_int
+        );
     }
 
     #[test]

@@ -20,7 +20,8 @@ use crate::apple::iosaudio::{IosAudioQueueOutput, IosAudioQueueOutputConfig};
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_env = "ohos"
 )))]
 use crate::audio::BufferedAudioOutput;
 use crate::audio::{
@@ -38,6 +39,8 @@ use crate::danmaku::{
     DanmakuViewport, DfmLayoutEngine, DfmPreparedLayout,
 };
 use crate::ffmpeg::DecoderBackend;
+#[cfg(target_env = "ohos")]
+use crate::ohos::ohaudio::{OHAudioOutput, OHAudioOutputConfig};
 use crate::overlay::{OverlayFrame, OverlayTimeline, OverlayViewport};
 #[cfg(any(target_os = "windows", target_os = "android"))]
 use crate::playback::VideoDecodePreference;
@@ -126,11 +129,19 @@ impl Default for PresenterAudioConfig {
                 ring_buffer: config.ring_buffer,
             }
         }
+        #[cfg(target_env = "ohos")]
+        {
+            let config = OHAudioOutputConfig::default();
+            Self {
+                ring_buffer: config.ring_buffer,
+            }
+        }
         #[cfg(not(any(
             target_os = "android",
             target_os = "macos",
             target_os = "ios",
-            target_os = "windows"
+            target_os = "windows",
+            target_env = "ohos"
         )))]
         {
             Self {
@@ -495,11 +506,16 @@ impl PresenterRuntime {
         let renderer_preference = config.player.renderer;
         let renderer = build_renderer(renderer_preference, config.renderer)?;
         let supports_mediacodec_surface = renderer.supports_mediacodec_surface_frames();
+        #[cfg(target_env = "ohos")]
+        let ohos_avcodec_surface = renderer.ohos_avcodec_surface();
         resolve_presenter_player_config(
             &mut config.player,
             renderer_preference,
             supports_mediacodec_surface,
         );
+        #[cfg(target_env = "ohos")]
+        let player = Player::new_with_ohos_avcodec_surface(config.player, ohos_avcodec_surface);
+        #[cfg(not(target_env = "ohos"))]
         let player = Player::new(config.player);
         let video_frames = player.subscribe_video_frames();
         let audio_frames = player.subscribe_audio_frames();
@@ -1204,6 +1220,7 @@ impl PresenterRuntime {
                                 DecoderBackend::MediaCodec
                                     | DecoderBackend::Software
                                     | DecoderBackend::VideoToolbox
+                                    | DecoderBackend::AvCodec
                             ) {
                                 self.rejected_video_import_route = Some(import_route);
                                 // The decoder transition must not race a local
@@ -2328,11 +2345,18 @@ fn build_audio_output(config: PresenterAudioConfig) -> Box<dyn AudioOutputBacken
             ring_buffer: config.ring_buffer,
         }))
     }
+    #[cfg(target_env = "ohos")]
+    {
+        Box::new(OHAudioOutput::new(OHAudioOutputConfig {
+            ring_buffer: config.ring_buffer,
+        }))
+    }
     #[cfg(not(any(
         target_os = "android",
         target_os = "macos",
         target_os = "ios",
-        target_os = "windows"
+        target_os = "windows",
+        target_env = "ohos"
     )))]
     {
         Box::new(BufferedAudioOutput::new(config.ring_buffer))

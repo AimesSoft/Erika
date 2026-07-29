@@ -102,12 +102,19 @@ cargo run -p xtask -- deps build --all --profile lgpl
 | `armv7-linux-androideabi`(或 `armeabi-v7a`) | Android ARMv7 | 32 位 ARM 兼容。 |
 | `x86_64-linux-android`(或 `android-x64`) | Android x86_64 | 模拟器与 x86_64 设备。 |
 | `i686-linux-android`(或 `x86`) | Android x86 | 32 位模拟器兼容;Android 共享库不允许对应的非 PIC 重定位,因此禁用 x86 汇编加速。 |
+| `aarch64-unknown-linux-ohos`(或 `ohos-arm64`) | HarmonyOS arm64 | 使用 DevEco Studio OpenHarmony Native SDK。 |
 
 部署最低版本默认 macOS `11.0` / iOS `13.0`,可用
 `MACOSX_DEPLOYMENT_TARGET` / `IPHONEOS_DEPLOYMENT_TARGET` 覆盖。
 
 Android 使用 `android-26`、`c++_shared`、PIC 静态依赖和所选 ABI 对应的 NDK LLVM
 工具链。
+
+HarmonyOS 使用 `OHOS_NDK_HOME` 或 `OHOS_SDK_NATIVE` 指向 DevEco Studio 的
+`openharmony/native` 目录，并通过其中的
+`aarch64-unknown-linux-ohos-clang` 构建 FFmpeg、zlib 和 Erika。Flutter 插件的
+Hvigor/CMake 构建会自动执行这条链路，并把 `liberika_capi.so` 与
+`liberika_flutter.so` 打入 HAP。
 
 ### 选择源码构建架构
 

@@ -6,6 +6,8 @@ pub mod artcnn;
 pub mod d3d11;
 mod frame;
 pub mod metal;
+#[cfg(all(feature = "wgpu", target_env = "ohos"))]
+pub(crate) mod ohos_vulkan;
 pub mod output;
 pub mod pipeline;
 pub(crate) mod presentation;

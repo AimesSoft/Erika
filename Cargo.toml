@@ -75,3 +75,9 @@ debug = 2
 [profile.release]
 codegen-units = 1
 lto = "thin"
+
+[patch.crates-io]
+# wgpu-hal 29 does not yet route raw-window-handle's OhosNdk variant through
+# VK_OHOS_surface. Keep the small OpenHarmony WSI adaptation in-tree so Vulkan
+# presentation is reproducible for downstream HarmonyOS builds.
+wgpu-hal = { path = "third_party/wgpu-hal" }

@@ -28,3 +28,5 @@ flutter:
         pluginClass: ErikaFlutterPlugin
       windows:
         pluginClass: ErikaFlutterPluginCApi
+      ohos:
+        pluginClass: ErikaFlutterPlugin
