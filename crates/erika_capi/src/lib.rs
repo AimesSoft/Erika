@@ -1887,7 +1887,8 @@ pub unsafe extern "C" fn erika_presenter_register_subtitle_memory_font(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_select_subtitle_memory_fonts(
@@ -1912,7 +1913,8 @@ pub unsafe extern "C" fn erika_presenter_select_subtitle_memory_fonts(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_clear_subtitle_memory_fonts(
@@ -1928,7 +1930,8 @@ pub unsafe extern "C" fn erika_presenter_clear_subtitle_memory_fonts(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_subtitle_memory_font_status(
@@ -1966,7 +1969,8 @@ pub unsafe extern "C" fn erika_subtitle_memory_font_status_free(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_subtitle_memory_font_info(
@@ -2011,7 +2015,8 @@ pub unsafe extern "C" fn erika_subtitle_memory_font_info_free(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_set_output_headroom(
@@ -3724,7 +3729,8 @@ fn danmaku_track_info_to_c(track: &DanmakuTrackInfo) -> ErikaDanmakuTrackInfo {
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 fn subtitle_memory_font_status_to_c(
     status: SubtitleMemoryFontStatus,
@@ -3745,7 +3751,8 @@ fn subtitle_memory_font_status_to_c(
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 fn subtitle_memory_font_info_to_c(info: SubtitleMemoryFontInfo) -> ErikaSubtitleMemoryFontInfo {
     let mut faces = info
@@ -3769,7 +3776,8 @@ fn subtitle_memory_font_info_to_c(info: SubtitleMemoryFontInfo) -> ErikaSubtitle
     target_os = "macos",
     target_os = "ios",
     target_os = "windows",
-    target_os = "android"
+    target_os = "android",
+    target_env = "ohos"
 ))]
 fn subtitle_memory_font_face_to_c(face: SubtitleMemoryFontFace) -> ErikaSubtitleMemoryFontFace {
     ErikaSubtitleMemoryFontFace {
@@ -4846,7 +4854,8 @@ mod tests {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_env = "ohos"
     ))]
     #[test]
     fn c_presenter_memory_font_round_trip_exposes_status_and_info() {
@@ -4908,7 +4917,8 @@ mod tests {
         target_os = "macos",
         target_os = "ios",
         target_os = "windows",
-        target_os = "android"
+        target_os = "android",
+        target_env = "ohos"
     ))]
     #[test]
     fn c_presenter_memory_font_rejects_invalid_pointers_and_ids() {
