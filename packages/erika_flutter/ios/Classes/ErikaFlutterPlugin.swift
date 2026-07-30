@@ -608,6 +608,7 @@ private final class ErikaPlayerHost {
   private var currentDanmakuConfig = ErikaDanmakuConfigC()
   private let hdrDebug: Bool
   private let presenterConfig: ErikaPresenterConfigC
+  private let allowBackgroundPlayback: Bool
   private var loggedFirstRenderedVideoFrame = false
   private var latestPresenterStats = ErikaPresenterStatsC()
   private var fallbackTimer: DispatchSourceTimer?
@@ -622,10 +623,17 @@ private final class ErikaPlayerHost {
   private(set) var isPlaying = false
   var onNowPlayingChanged: ((ErikaPlayerHost) -> Void)?
 
-  init(id: Int64, library: ErikaNativeLibrary, config: ErikaPresenterConfigC, hdrDebug: Bool) throws {
+  init(
+    id: Int64,
+    library: ErikaNativeLibrary,
+    config: ErikaPresenterConfigC,
+    hdrDebug: Bool,
+    allowBackgroundPlayback: Bool
+  ) throws {
     self.id = id
     self.library = library
     self.hdrDebug = hdrDebug
+    self.allowBackgroundPlayback = allowBackgroundPlayback
     presenterConfig = config
     guard let handle = library.createPresenter(config: config) else {
       throw ErikaPluginError.presenterCreateFailed
@@ -743,6 +751,13 @@ private final class ErikaPlayerHost {
   func prepareForInactiveApp() {
     setAppInBackground(true)
     audioOnlyTick(sendEvent: ErikaFlutterPlugin.sharedEventSink)
+  }
+
+  func didEnterBackground() {
+    setAppInBackground(true)
+    if !allowBackgroundPlayback && isPlaying {
+      try? pause()
+    }
   }
 
   func setVolume(_ volume: Double) throws {
@@ -1119,7 +1134,9 @@ private final class ErikaPlayerHost {
         if event.durationMicros >= 0 {
           durationSeconds = Double(event.durationMicros) / 1_000_000
         }
-        positionSeconds = Double(event.positionMicros) / 1_000_000
+        if event.kind == 3 {
+          positionSeconds = Double(event.positionMicros) / 1_000_000
+        }
         if event.kind == 1 {
           isPlaying = event.state == 3
           updateTickDriver()
@@ -2058,7 +2075,13 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
     let config = presenterConfigForNewPlayer(arguments: arguments, hdrDebug: hdrDebug)
     let id = nextPlayerId
     nextPlayerId += 1
-    let host = try ErikaPlayerHost(id: id, library: library, config: config, hdrDebug: hdrDebug)
+    let host = try ErikaPlayerHost(
+      id: id,
+      library: library,
+      config: config,
+      hdrDebug: hdrDebug,
+      allowBackgroundPlayback: boolValue(args?["allowBackgroundPlayback"]) ?? false
+    )
     host.onNowPlayingChanged = { [weak self] changedHost in
       guard self?.activePlayerId == changedHost.id else { return }
       self?.updateNowPlayingInfo(for: changedHost)
@@ -2082,7 +2105,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       object: nil,
       queue: .main
     ) { [weak self] _ in
-      self?.players.values.forEach { $0.setAppInBackground(true) }
+      self?.players.values.forEach { $0.didEnterBackground() }
     })
     notificationObservers.append(center.addObserver(
       forName: UIApplication.didBecomeActiveNotification,

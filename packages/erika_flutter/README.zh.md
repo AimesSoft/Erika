@@ -48,6 +48,8 @@ iOS CocoaPod script phase 会在 Xcode 构建期间自动构建 Erika 原生依�
 
 宿主应用必须在 Xcode 的 Signing & Capabilities 中启用 Background Modes > Audio, AirPlay, and Picture in Picture，或在 `Info.plist` 的 `UIBackgroundModes` 中加入 `audio`。播放器会注册控制中心的 Now Playing 信息和播放控制；建议通过 `ErikaMediaMetadata` 提供标题、作者、专辑和封面图片字节。
 
+后台播放默认关闭。需要后台继续播放音频时，创建播放器时设置 `ErikaPlayer(allowBackgroundPlayback: true)`。宿主未启用上述 Background Mode 时，即使设置该选项，iOS 也不会保证后台持续播放。
+
 ## Windows Setup
 
 Windows 插件（`ErikaFlutterPluginCApi`）在 CMake 构建期间通过 `build_erika_runtime.cmake` 构建 Erika C ABI runtime（`erika_capi.dll`），自动跟随 CMake 的 x64 或 ARM64 生成器架构，并把 DLL 部署到 app 旁边。依赖项目也可通过 CMake cache `ERIKA_WINDOWS_ARCH=x64|arm64` 或环境变量 `ERIKA_WINDOWS_ARCH` 显式选择；高级场景可直接设置 `ERIKA_NATIVE_TARGET=x86_64-pc-windows-msvc|aarch64-pc-windows-msvc`。需要：

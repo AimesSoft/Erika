@@ -79,6 +79,8 @@ static library automatically during Xcode builds. Requirements:
 
 The host app must enable **Background Modes > Audio, AirPlay, and Picture in Picture** under Xcode's Signing & Capabilities, or add `audio` to `UIBackgroundModes` in `Info.plist`. The player registers Now Playing metadata and playback controls with Control Center. Pass an `ErikaMediaMetadata` value to provide the title, artist, album, and encoded artwork bytes.
 
+Background playback is disabled by default. Create the player with `ErikaPlayer(allowBackgroundPlayback: true)` to keep audio playing in the background. iOS does not guarantee continued background playback unless the host app also enables the Background Mode described above.
+
 ## Windows Setup
 
 The Windows plugin (`ErikaFlutterPluginCApi`) builds the Erika C ABI runtime

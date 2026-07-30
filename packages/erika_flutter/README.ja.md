@@ -48,6 +48,8 @@ iOS の CocoaPod script phase が、Xcode build 中に Erika の native dependen
 
 host app では、Xcode の Signing & Capabilities で **Background Modes > Audio, AirPlay, and Picture in Picture** を有効にするか、`Info.plist` の `UIBackgroundModes` に `audio` を追加してください。player は Now Playing 情報と再生 control を Control Center に登録します。タイトル、アーティスト、アルバム、エンコード済み artwork bytes を表示するには `ErikaMediaMetadata` を指定してください。
 
+バックグラウンド再生はデフォルトで無効です。バックグラウンドで音声を継続する場合は、`ErikaPlayer(allowBackgroundPlayback: true)` を指定してください。host app で上記の Background Mode が有効でない場合、この option を指定しても iOS はバックグラウンド再生の継続を保証しません。
+
 ## Windows Setup
 
 Windows plugin（`ErikaFlutterPluginCApi`）は CMake build 中に `build_erika_runtime.cmake` で Erika C ABI runtime（`erika_capi.dll`）を build し、CMake generator の x64 または ARM64 architecture に自動追従して DLL を app の隣に配置します。依存 project は CMake cache の `ERIKA_WINDOWS_ARCH=x64|arm64` または環境変数 `ERIKA_WINDOWS_ARCH` で明示的に選択できます。高度な用途では `ERIKA_NATIVE_TARGET=x86_64-pc-windows-msvc|aarch64-pc-windows-msvc` も指定できます。必要なもの：

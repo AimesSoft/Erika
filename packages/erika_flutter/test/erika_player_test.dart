@@ -52,6 +52,21 @@ void main() {
     await player.dispose();
   });
 
+  test('background playback is opt-in at player creation', () async {
+    final player = ErikaPlayer(allowBackgroundPlayback: true);
+
+    expect(await player.ensureCreated(), 7);
+
+    final createCall = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'create',
+    );
+    expect(createCall.arguments, <String, Object?>{
+      'allowBackgroundPlayback': true,
+    });
+
+    await player.dispose();
+  });
+
   test('open forwards HTTP headers without exposing them elsewhere', () async {
     final player = ErikaPlayer();
 

@@ -1210,15 +1210,7 @@ impl Player {
         };
         commands
             .send(PlaybackCommand::Pause { sequence })
-            .map_err(|_| PlayerError::Playback("playback worker is not running".to_string()))?;
-        let _ = commit_playback_command_intent(
-            &self.inner,
-            sequence,
-            None,
-            None,
-            Some(PlayerState::Paused),
-        );
-        Ok(())
+            .map_err(|_| PlayerError::Playback("playback worker is not running".to_string()))
     }
 
     pub fn seek(&self, position: Duration) -> Result<()> {
@@ -2111,11 +2103,12 @@ fn handle_playback_command(
                 return true;
             }
             engine.pause();
+            let position = engine.media_time();
             let _ = commit_playback_command_intent(
                 inner,
                 sequence,
                 None,
-                None,
+                Some(position),
                 Some(PlayerState::Paused),
             );
         }
@@ -3349,6 +3342,46 @@ mod tests {
             events.recv().unwrap(),
             PlayerEvent::StateChanged(PlayerState::Ready)
         );
+    }
+
+    #[test]
+    fn pause_waits_for_worker_position_before_paused_state() {
+        let player = Player::new(PlayerConfig::default());
+        let events = player.subscribe();
+        let commands = install_test_runtime(&player, 1);
+        {
+            let mut inner = player.inner.lock().expect("player mutex poisoned");
+            inner.state = PlayerState::Playing;
+            inner.current_media_time = Duration::from_secs(8);
+        }
+
+        player.pause().unwrap();
+
+        let sequence = match commands.recv_timeout(Duration::from_secs(1)).unwrap() {
+            PlaybackCommand::Pause { sequence } => sequence,
+            _ => panic!("expected pause command"),
+        };
+        assert_eq!(player.state(), PlayerState::Playing);
+        assert!(events.try_recv().is_err());
+
+        let position = Duration::from_millis(9_250);
+        assert!(commit_playback_command_intent(
+            &player.inner,
+            sequence,
+            None,
+            Some(position),
+            Some(PlayerState::Paused),
+        ));
+        assert_eq!(
+            events.recv().unwrap(),
+            PlayerEvent::PositionChanged(position)
+        );
+        assert_eq!(
+            events.recv().unwrap(),
+            PlayerEvent::StateChanged(PlayerState::Paused)
+        );
+        assert_eq!(player.current_media_time(), position);
+        assert_eq!(player.state(), PlayerState::Paused);
     }
 
     #[test]

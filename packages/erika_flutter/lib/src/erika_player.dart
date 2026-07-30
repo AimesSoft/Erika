@@ -662,6 +662,7 @@ class ErikaPlayer {
     this.edrHeadroom,
     this.upscaler,
     this.hdrDebug = false,
+    this.allowBackgroundPlayback = false,
   }) {
     final headroom = edrHeadroom;
     if (headroom != null &&
@@ -705,6 +706,7 @@ class ErikaPlayer {
   final double? edrHeadroom;
   final ErikaUpscalerMode? upscaler;
   final bool hdrDebug;
+  final bool allowBackgroundPlayback;
 
   int? get id => _id;
 
@@ -1307,6 +1309,7 @@ class ErikaPlayer {
       if (requestedHeadroom case final headroom?) 'edrHeadroom': headroom,
       if (upscaler case final mode?) 'upscaler': mode.nativeValue,
       if (hdrDebug) 'hdrDebug': true,
+      if (allowBackgroundPlayback) 'allowBackgroundPlayback': true,
     };
     if (hdrDebug) {
       debugPrint('ErikaHDR[Dart]: create arguments=$arguments');
