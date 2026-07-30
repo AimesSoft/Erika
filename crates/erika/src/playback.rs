@@ -55,6 +55,11 @@ pub type Result<T> = std::result::Result<T, PlaybackError>;
 
 const DEFAULT_VIDEO_FRAME_QUEUE_LIMIT: usize = 8;
 const DEFAULT_AUDIO_FRAME_QUEUE_LIMIT: usize = 16;
+/// Ceiling on decoded audio frames a *video* demux request may accumulate
+/// while scanning past interleaved audio packets. At ~1024 samples per frame
+/// and 48 kHz one frame is roughly 21 ms, so this is about 11 s of audio:
+/// wider than any sane interleave distance, yet still a bound (~4 MB).
+const VIDEO_DEMAND_AUDIO_FRAME_CEILING: usize = 512;
 const STREAMING_VIDEO_FRAME_QUEUE_LIMIT: usize = 48;
 const STREAMING_AUDIO_FRAME_QUEUE_LIMIT: usize = 128;
 const D3D11VA_VIDEO_FRAME_QUEUE_LIMIT: usize = 8;
@@ -141,6 +146,12 @@ enum PumpInput {
     Packet(ffmpeg::Packet),
     Eof,
     Empty,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaybackPumpDemand {
+    Video,
+    Audio,
 }
 
 struct AsyncDemuxer {
@@ -1051,6 +1062,23 @@ impl PlaybackSession {
                 }
             }
         }
+        // Keep every embedded subtitle stream in the asynchronous demux
+        // selection. Subtitle track changes can then swap only the subtitle
+        // decoder without resetting the demux worker. Resetting its selection
+        // drains the bounded read-ahead queue while the underlying demux cursor
+        // stays ahead; that creates an A/V packet discontinuity and breaks the
+        // HEVC reference-picture chain until the next random-access frame.
+        for track in &probe.subtitles {
+            if let SubtitleTrackSource::Embedded { stream_index } = &track.source {
+                selected_streams.push(stream_index_i32(
+                    *stream_index,
+                    TrackKind::Subtitle,
+                    track.id,
+                )?);
+            }
+        }
+        selected_streams.sort_unstable();
+        selected_streams.dedup();
         if !selected_streams.is_empty() {
             demuxer.set_stream_selection(StreamSelection::only(selected_streams))?;
         }
@@ -1288,7 +1316,7 @@ impl PlaybackSession {
             && pumped_packets < VIDEO_PUMP_PACKET_BUDGET
             && started.elapsed() < VIDEO_PUMP_TIME_BUDGET
         {
-            if !self.pump_once()? {
+            if !self.pump_once(PlaybackPumpDemand::Video)? {
                 break;
             }
             pumped_packets = pumped_packets.saturating_add(1);
@@ -1316,7 +1344,7 @@ impl PlaybackSession {
             return Ok(None);
         }
         while self.audio_frames.is_empty() && !self.eof {
-            if !self.pump_once()? {
+            if !self.pump_once(PlaybackPumpDemand::Audio)? {
                 break;
             }
         }
@@ -1357,7 +1385,7 @@ impl PlaybackSession {
             if started.elapsed() >= max_duration {
                 break;
             }
-            if self.pump_once()? {
+            if self.pump_once(PlaybackPumpDemand::Audio)? {
                 pumped_packets = pumped_packets.saturating_add(1);
                 frame = pop_matching_audio_frame(
                     &mut self.audio_frames,
@@ -1379,7 +1407,7 @@ impl PlaybackSession {
                 || started.elapsed() >= max_duration)
         {
             trace::log(format!(
-                "[erika-playback-trace] stage=session_audio_pump packets={} max_packets={} produced={} filtered={} queued_audio={} eof={} pending_video={} elapsed_ms={:.3}",
+                "[erika-playback-trace] stage=session_audio_pump packets={} max_packets={} produced={} filtered={} queued_audio={} ended={} pending_video={} elapsed_ms={:.3}",
                 pumped_packets,
                 max_packets,
                 frame.is_some(),
@@ -1526,7 +1554,11 @@ impl PlaybackSession {
             }
         }
         self.subtitle_frames.clear();
-        self.update_demux_selection()?;
+        // All embedded subtitle streams are selected when the main demuxer is
+        // opened (and whenever an audio selection rebuilds its selection).
+        // Do not touch the asynchronous demux selection for a subtitle-only
+        // change: doing so would discard queued A/V packets without rewinding
+        // the demux cursor.
         self.mark_selected_tracks();
         Ok(())
     }
@@ -1913,17 +1945,17 @@ impl PlaybackSession {
         if let Some(track_id) = self.info.selected_audio_track {
             streams.push(self.embedded_track_stream_index(track_id, TrackKind::Audio)?);
         }
-        if let Some(track_id) = self.info.selected_subtitle_track {
-            if let SubtitleTrackSource::Embedded { stream_index } =
-                self.subtitle_track_source(track_id)?
-            {
+        for track in &self.info.subtitle_tracks {
+            if let SubtitleTrackSource::Embedded { stream_index } = &track.source {
                 streams.push(stream_index_i32(
-                    stream_index,
+                    *stream_index,
                     TrackKind::Subtitle,
-                    track_id,
+                    track.id,
                 )?);
             }
         }
+        streams.sort_unstable();
+        streams.dedup();
         if streams.is_empty() {
             self.demuxer.set_stream_selection(StreamSelection::all())?;
         } else {
@@ -1943,14 +1975,19 @@ impl PlaybackSession {
         );
     }
 
-    fn pump_once(&mut self) -> Result<bool> {
+    fn pump_once(&mut self, demand: PlaybackPumpDemand) -> Result<bool> {
         if self.route_pending_video_packets()? {
             return Ok(true);
         }
         if !self.pending_video_packets.is_empty() {
             return Ok(false);
         }
-        if self.audio_output_active && self.audio_frames.len() >= self.queue_limits.audio_frames {
+        if audio_queue_blocks_demux(
+            demand,
+            self.audio_output_active,
+            self.audio_frames.len(),
+            self.queue_limits.audio_frames,
+        ) {
             return Ok(false);
         }
         if self.demux_eof {
@@ -2140,7 +2177,7 @@ impl PlaybackSession {
         let packet_pts = packet.and_then(ffmpeg::Packet::pts);
         let packet_dts = packet.and_then(ffmpeg::Packet::dts);
         let reason = format!(
-            "video packet remained rejected for {:.3}s after {} polls (pending_packets={}, demux_eof={}, video_backend={}, packet_pts={:?}, packet_dts={:?}, packet_key={}, packet_bytes={})",
+            "video packet remained rejected for {:.3}s after {} polls (pending_packets={}, demux_ended={}, video_backend={}, packet_pts={:?}, packet_dts={:?}, packet_key={}, packet_bytes={})",
             stalled_for.as_secs_f64(),
             self.video_packet_stall_polls,
             self.pending_video_packets.len(),
@@ -2917,6 +2954,33 @@ impl PlaybackSession {
     }
 }
 
+fn audio_queue_blocks_demux(
+    demand: PlaybackPumpDemand,
+    audio_output_active: bool,
+    queued_audio_frames: usize,
+    audio_frame_limit: usize,
+) -> bool {
+    // Audio and video packets share the same demux stream. A full decoded
+    // audio queue may stop audio prefetch, but it must not prevent a video
+    // request from scanning past interleaved audio packets to reach the next
+    // video packet. Otherwise the 8-frame local video queue drains, then
+    // stalls behind the 16-frame audio limit in a visible ~300 ms cycle.
+    //
+    // Video demand still needs a ceiling: a container whose audio is
+    // interleaved far ahead of video, or a video stream that stops yielding
+    // packets, would otherwise grow the decoded audio queue without bound. The
+    // slack is wide enough to cross any sane interleave distance and only
+    // stops pathological streams.
+    if !audio_output_active {
+        return false;
+    }
+    let limit = match demand {
+        PlaybackPumpDemand::Audio => audio_frame_limit,
+        PlaybackPumpDemand::Video => audio_frame_limit.max(VIDEO_DEMAND_AUDIO_FRAME_CEILING),
+    };
+    queued_audio_frames >= limit
+}
+
 enum SubtitleQueueCandidate {
     Embedded { start: Duration },
     External { index: usize, start: Duration },
@@ -3620,6 +3684,7 @@ pub struct VideoPlaybackEngine {
     last_presented_pts: Option<Duration>,
     eof: bool,
     waiting_for_first_frame: bool,
+    paused_seek_frame_pending: bool,
     video_seek_floor: Option<Duration>,
     audio_seek_floor: Option<Duration>,
     video_seek_preroll_started_at: Option<Instant>,
@@ -3698,6 +3763,7 @@ impl VideoPlaybackEngine {
             last_presented_pts: None,
             eof: false,
             waiting_for_first_frame: false,
+            paused_seek_frame_pending: false,
             video_seek_floor: None,
             audio_seek_floor: None,
             video_seek_preroll_started_at: None,
@@ -3897,12 +3963,17 @@ impl VideoPlaybackEngine {
         )?;
         let now = now();
         let before = self.clock.media_time_at(now);
-        self.clock
-            .reset(media_time, self.state == PlaybackRunState::Playing, now);
+        // Park the clock on the seek target until the first post-seek frame is
+        // actually presented. Letting it run through preroll makes the reported
+        // position drift forward over frames nobody has seen yet, which the
+        // first-frame `sync_to` then has to pull back — a visible backward step
+        // for every clock consumer. `tick_with_now` starts it on that frame.
+        self.clock.reset(media_time, false, now);
         trace_clock_reset("reset_streams_at", before, media_time, self.state);
         self.last_presented_pts = None;
         self.eof = false;
         self.waiting_for_first_frame = self.state == PlaybackRunState::Playing;
+        self.paused_seek_frame_pending = self.state == PlaybackRunState::Paused;
         self.video_seek_floor = Some(media_time);
         self.audio_seek_floor = Some(media_time);
         self.reset_video_seek_preroll_budget(now);
@@ -3915,6 +3986,10 @@ impl VideoPlaybackEngine {
 
     pub(crate) fn should_prefill_audio(&self) -> bool {
         self.state == PlaybackRunState::Playing
+    }
+
+    pub(crate) fn has_pending_paused_seek_frame(&self) -> bool {
+        self.state == PlaybackRunState::Paused && self.paused_seek_frame_pending
     }
 
     pub(crate) fn set_audio_output_active(&mut self, active: bool) {
@@ -4021,6 +4096,7 @@ impl VideoPlaybackEngine {
         ));
         self.state = PlaybackRunState::Playing;
         self.waiting_for_first_frame = waiting_for_first_frame;
+        self.paused_seek_frame_pending = false;
         self.rebase_progress_watchdogs();
     }
 
@@ -4037,8 +4113,16 @@ impl VideoPlaybackEngine {
         if self.state != PlaybackRunState::Playing {
             return;
         }
+        // Some hosts implement paused seeking by briefly resuming, issuing the
+        // seek, and pausing again before the target frame is decoded. Preserve
+        // that in-flight seek as a one-frame paused preview instead of letting
+        // the pause gate stop video pumping with no updated frame.
+        let seek_frame_pending = self.waiting_for_first_frame && self.video_seek_floor.is_some();
         let now = now();
         let before = self.clock.media_time_at(now);
+        // The clock is already parked on the seek target while a post-seek
+        // frame is pending (see `reset_streams_at`), so pausing never has to
+        // rewind it back to the floor here.
         self.clock.pause(now);
         trace::log(format!(
             "[erika-clock-trace] stage=engine_pause before={} after={}",
@@ -4046,6 +4130,8 @@ impl VideoPlaybackEngine {
             trace::duration_label(Some(self.clock.media_time_at(now))),
         ));
         self.state = PlaybackRunState::Paused;
+        self.waiting_for_first_frame = false;
+        self.paused_seek_frame_pending = seek_frame_pending;
     }
 
     pub fn stop(&mut self) {
@@ -4083,6 +4169,7 @@ impl VideoPlaybackEngine {
         self.state = PlaybackRunState::Stopped;
         self.eof = false;
         self.waiting_for_first_frame = false;
+        self.paused_seek_frame_pending = false;
         self.video_seek_floor = Some(Duration::ZERO);
         self.audio_seek_floor = Some(Duration::ZERO);
         self.reset_audio_eof_stall_state();
@@ -4129,13 +4216,16 @@ impl VideoPlaybackEngine {
         let state_before = self.state;
         let state_after = playback_state_after_seek_intent(state_before, resume_after_seek);
         let before = self.clock.media_time_at(now);
-        self.clock
-            .reset(position, state_after == PlaybackRunState::Playing, now);
+        // Park on the seek target; the first presented frame starts the clock
+        // (see `reset_streams_at`). Running it through preroll would report a
+        // position no frame has reached yet and then step backward.
+        self.clock.reset(position, false, now);
         trace_clock_reset("seek", before, position, state_after);
         self.last_presented_pts = None;
         self.eof = false;
         self.state = state_after;
         self.waiting_for_first_frame = state_after == PlaybackRunState::Playing;
+        self.paused_seek_frame_pending = state_after == PlaybackRunState::Paused;
         self.video_seek_floor = Some(position);
         self.audio_seek_floor = Some(position);
         self.reset_video_seek_preroll_budget(now);
@@ -4166,6 +4256,12 @@ impl VideoPlaybackEngine {
 
     pub fn media_time(&self) -> Duration {
         self.media_time_at(Instant::now())
+    }
+
+    /// The engine's clock itself, for publishing to readers that evaluate it
+    /// on their own schedule rather than at the worker's polling rate.
+    pub fn clock(&self) -> PlaybackClock {
+        self.clock.clone()
     }
 
     fn media_time_at(&self, now: Instant) -> Duration {
@@ -4397,7 +4493,9 @@ impl VideoPlaybackEngine {
         &mut self,
         mut now: impl FnMut() -> Instant,
     ) -> Result<Option<TimedVideoFrame>> {
-        if self.state != PlaybackRunState::Playing {
+        let paused_seek_preview =
+            self.state == PlaybackRunState::Paused && self.paused_seek_frame_pending;
+        if self.state != PlaybackRunState::Playing && !paused_seek_preview {
             return Ok(None);
         }
         let tick_started = Instant::now();
@@ -4406,6 +4504,18 @@ impl VideoPlaybackEngine {
         loop {
             self.ensure_pending_frame_with_now(&mut now)?;
             let Some(frame) = self.pending_frame.as_ref() else {
+                // A paused seek past the last frame never produces the preview
+                // frame that would clear the flag. Give it up at EOF so the
+                // worker can fall back to its idle poll interval instead of
+                // spinning at the 2 ms paused-preview rate until playback
+                // resumes.
+                if paused_seek_preview && self.eof {
+                    self.paused_seek_frame_pending = false;
+                    trace::log(format!(
+                        "[erika-playback-trace] stage=paused_seek_frame_abandoned reason=eof target={}",
+                        trace::duration_label(self.video_seek_floor),
+                    ));
+                }
                 return Ok(None);
             };
 
@@ -4501,6 +4611,14 @@ impl VideoPlaybackEngine {
                     }
                     let frame = self.pending_frame.take().expect("pending frame exists");
                     self.last_presented_pts = pts;
+                    if paused_seek_preview {
+                        self.paused_seek_frame_pending = false;
+                        trace::log(format!(
+                            "[erika-playback-trace] stage=paused_seek_frame pts={} target={}",
+                            trace::duration_label(pts),
+                            trace::duration_label(Some(media_time)),
+                        ));
+                    }
                     return Ok(Some(TimedVideoFrame {
                         frame: frame.frame,
                         decode_backend: frame.decode_backend,
@@ -5692,7 +5810,7 @@ mod tests {
     }
 
     #[test]
-    fn playback_fixture_paused_seek_keeps_clock_frozen() {
+    fn playback_fixture_paused_seek_previews_target_and_keeps_clock_frozen() {
         let mut engine = playback_fixture_engine();
         let t0 = Instant::now();
         engine.play_at(t0);
@@ -5710,18 +5828,97 @@ mod tests {
             target
         );
         let resume_at = paused_at + Duration::from_secs(60);
-        assert!(engine.tick_at(resume_at).unwrap().is_none());
+        let preview = next_fixture_video_at(&mut engine, resume_at);
+        let preview_pts = preview.pts.expect("paused seek preview PTS");
+        assert!(preview_pts >= target);
+        assert!(preview_pts - target <= Duration::from_millis(34));
+        assert_eq!(preview.media_time, target);
+        assert_eq!(engine.state(), PlaybackRunState::Paused);
+        assert_eq!(engine.media_time_at(resume_at), target);
+        assert!(
+            engine.tick_at(resume_at).unwrap().is_none(),
+            "a paused seek must present exactly one target frame"
+        );
         assert!(engine.tick_audio_at(resume_at).unwrap().is_none());
 
         engine.play_at(resume_at);
-        let video = next_fixture_video_at(&mut engine, resume_at);
-        let audio = next_fixture_audio_at(&mut engine, resume_at);
+        let playing_at = resume_at + Duration::from_millis(50);
+        let video = next_fixture_video_at(&mut engine, playing_at);
+        let audio = next_fixture_audio_at(&mut engine, playing_at);
         let video_pts = video.pts.expect("resumed video PTS");
         let audio_pts = audio.pts.expect("resumed audio PTS");
         assert!(video_pts >= target);
         assert!(audio_pts >= target);
-        assert!(video_pts - target <= Duration::from_millis(34));
         assert!(audio_pts - target <= Duration::from_millis(34));
+    }
+
+    #[test]
+    fn playback_fixture_seek_parks_the_clock_until_the_first_frame_is_presented() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+
+        let seek_at = t0 + Duration::from_millis(500);
+        let target = Duration::from_millis(5_125);
+        engine.seek_at(target, seek_at).unwrap();
+
+        // Preroll: no post-seek frame has been presented yet. The clock must
+        // stay parked on the target however long decoding takes, so the
+        // reported position never runs past frames nobody has seen...
+        for elapsed in [0u64, 20, 100, 400, 800] {
+            assert_eq!(
+                engine.media_time_at(seek_at + Duration::from_millis(elapsed)),
+                target,
+                "clock advanced during seek preroll after {elapsed} ms"
+            );
+        }
+
+        // ...and audio pulled during that window is likewise gated on the
+        // target rather than an already-advancing clock.
+        let audio = next_fixture_audio_at(&mut engine, seek_at + Duration::from_millis(20));
+        let audio_pts = audio.pts.expect("post-seek audio PTS");
+        assert!(audio_pts >= target);
+
+        // The first presented frame starts the clock; from there it runs.
+        let resumed_at = seek_at + Duration::from_millis(900);
+        let video = next_fixture_video_at(&mut engine, resumed_at);
+        let video_pts = video.pts.expect("post-seek video PTS");
+        assert!(video_pts >= target);
+        assert!(engine.media_time_at(resumed_at) >= target);
+        assert!(
+            engine.media_time_at(resumed_at + Duration::from_millis(50))
+                > engine.media_time_at(resumed_at),
+            "clock must run once the first post-seek frame is presented"
+        );
+    }
+
+    #[test]
+    fn playback_fixture_pause_during_playing_seek_finishes_target_preview() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+
+        let seek_at = t0 + Duration::from_millis(500);
+        let target = Duration::from_millis(5_125);
+        engine.seek_at(target, seek_at).unwrap();
+        assert_eq!(engine.state(), PlaybackRunState::Playing);
+
+        let paused_at = seek_at + Duration::from_millis(100);
+        engine.pause_at(paused_at);
+        assert_eq!(engine.state(), PlaybackRunState::Paused);
+        assert!(engine.has_pending_paused_seek_frame());
+        assert_eq!(engine.media_time_at(paused_at), target);
+
+        let preview = next_fixture_video_at(&mut engine, paused_at);
+        let preview_pts = preview.pts.expect("interrupted seek preview PTS");
+        assert!(preview_pts >= target);
+        assert!(preview_pts - target <= Duration::from_millis(34));
+        assert_eq!(preview.media_time, target);
+        assert_eq!(engine.state(), PlaybackRunState::Paused);
+        assert!(!engine.has_pending_paused_seek_frame());
+        assert!(engine.tick_at(paused_at).unwrap().is_none());
     }
 
     #[test]
@@ -5982,6 +6179,35 @@ mod tests {
         assert_eq!(frame.text.len(), 1);
         assert_eq!(frame.text[0].display_text(), "External subtitle");
 
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn adding_external_subtitle_keeps_main_demux_generation() {
+        let path = std::env::temp_dir().join(format!(
+            "erika-external-subtitle-demux-continuity-{}.srt",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            "1\n00:00:00,000 --> 00:00:08,000\nExternal subtitle\n",
+        )
+        .unwrap();
+        let mut engine = playback_fixture_engine();
+        let demux_generation = engine.session.demuxer.generation;
+
+        let (track, _) = engine
+            .add_external_subtitle(SubtitleTrackConfig::external(
+                1_000_008,
+                path.to_string_lossy(),
+            ))
+            .unwrap();
+
+        assert_eq!(track.id, 1_000_008);
+        assert_eq!(
+            engine.session.demuxer.generation, demux_generation,
+            "a subtitle-only change must not discard queued A/V packets"
+        );
         let _ = fs::remove_file(path);
     }
 
@@ -6339,6 +6565,57 @@ mod tests {
         let limits = PlaybackQueueLimits::for_request(&request);
 
         assert_eq!(limits, PlaybackQueueLimits::default());
+    }
+
+    #[test]
+    fn full_audio_queue_only_blocks_audio_driven_demux() {
+        assert!(audio_queue_blocks_demux(
+            PlaybackPumpDemand::Audio,
+            true,
+            DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+            DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+        ));
+        assert!(!audio_queue_blocks_demux(
+            PlaybackPumpDemand::Video,
+            true,
+            DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+            DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+        ));
+    }
+
+    #[test]
+    fn video_demand_audio_backpressure_is_relaxed_but_bounded() {
+        // Wide enough to cross a container whose audio is interleaved several
+        // seconds ahead of the next video packet...
+        assert!(!audio_queue_blocks_demux(
+            PlaybackPumpDemand::Video,
+            true,
+            VIDEO_DEMAND_AUDIO_FRAME_CEILING - 1,
+            DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+        ));
+        // ...but still a ceiling, so a stream that never yields another video
+        // packet cannot grow the decoded audio queue without bound.
+        assert!(audio_queue_blocks_demux(
+            PlaybackPumpDemand::Video,
+            true,
+            VIDEO_DEMAND_AUDIO_FRAME_CEILING,
+            DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+        ));
+        // A streaming profile already allows more than the ceiling; keep its
+        // own limit rather than tightening it.
+        assert!(!audio_queue_blocks_demux(
+            PlaybackPumpDemand::Video,
+            true,
+            VIDEO_DEMAND_AUDIO_FRAME_CEILING,
+            VIDEO_DEMAND_AUDIO_FRAME_CEILING * 2,
+        ));
+        // Inactive audio output never blocks either demand.
+        assert!(!audio_queue_blocks_demux(
+            PlaybackPumpDemand::Audio,
+            false,
+            VIDEO_DEMAND_AUDIO_FRAME_CEILING * 4,
+            DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+        ));
     }
 
     #[test]

@@ -1134,6 +1134,37 @@ void main() {
     await player.dispose();
   });
 
+  test('danmaku visibility bypasses config coalescing', () async {
+    final player = ErikaPlayer();
+
+    final update = player.setDanmakuConfig(enabled: false, opacity: 0.75);
+    await Future<void>.delayed(Duration.zero);
+
+    final visibilityCalls = playerCalls
+        .where((MethodCall call) => call.method == 'setDanmakuEnabled')
+        .toList(growable: false);
+    expect(visibilityCalls, hasLength(1));
+    expect(visibilityCalls.single.arguments, <String, Object?>{
+      'playerId': 7,
+      'enabled': false,
+    });
+    expect(
+      playerCalls.where((MethodCall call) => call.method == 'setDanmakuConfig'),
+      isEmpty,
+    );
+
+    await update;
+    final configCall = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'setDanmakuConfig',
+    );
+    expect(configCall.arguments, <String, Object?>{
+      'playerId': 7,
+      'opacity': 0.75,
+    });
+
+    await player.dispose();
+  });
+
   test('danmaku track controls forward multi-track input', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(playerChannel, (MethodCall call) async {

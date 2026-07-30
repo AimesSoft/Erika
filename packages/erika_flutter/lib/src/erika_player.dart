@@ -1166,8 +1166,16 @@ class ErikaPlayer {
       return;
     }
     final playerId = await ensureCreated();
+    if (enabled != null) {
+      // Visibility changes are presentation-critical. Do not hold them behind
+      // the style coalescing timer; the native presenter can hide immediately.
+      await _invoke('setDanmakuEnabled', <String, Object?>{
+        'playerId': playerId,
+        'enabled': enabled,
+      });
+    }
     final patch = _ErikaDanmakuConfigPatch(
-      enabled: enabled,
+      enabled: null,
       fontSize: fontSize,
       opacity: opacity,
       displayArea: displayArea,

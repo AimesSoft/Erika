@@ -1,4 +1,5 @@
 import AppKit
+import CoreVideo
 import Darwin
 import FlutterMacOS
 import Metal
@@ -8,8 +9,111 @@ import QuartzCore
 private let erikaWindowHostedVideoSurfaceId: Int64 = -1
 private let erikaDebugLabelsEnabled =
   ProcessInfo.processInfo.environment["ERIKA_DEBUG_LABELS"] == "1"
+private let erikaWindowOverlayTraceEnabled =
+  ProcessInfo.processInfo.environment["ERIKA_WINDOW_OVERLAY_TRACE"] == "1"
 private let erikaDefaultDisplayFps = 60.0
 private let erikaDisplayFpsEpsilon = 0.5
+
+private func erikaWindowOverlayTrace(_ message: @autoclosure () -> String) {
+  guard erikaWindowOverlayTraceEnabled else {
+    return
+  }
+  NSLog("[ErikaWindowOverlay] %@", message())
+}
+
+/// Drives rendering from the display's vertical refresh instead of a main-run-loop
+/// `Timer`. The callback stays coalesced while a render is in progress so a slow
+/// `CAMetalLayer.nextDrawable()` cannot build up timer callbacks and then replay
+/// them in a burst.
+private final class ErikaDisplayLinkDriver {
+  private let onTick: () -> Void
+  private let stateLock = NSLock()
+  private var displayLink: CVDisplayLink?
+  private var tickQueued = false
+  private var invalidated = false
+
+  init?(displayID: CGDirectDisplayID, onTick: @escaping () -> Void) {
+    self.onTick = onTick
+
+    var link: CVDisplayLink?
+    guard CVDisplayLinkCreateWithCGDisplay(displayID, &link) == kCVReturnSuccess,
+          let link else {
+      return nil
+    }
+    displayLink = link
+
+    let status = CVDisplayLinkSetOutputCallback(
+      link,
+      { _, _, _, _, _, context in
+        guard let context else {
+          return kCVReturnError
+        }
+        let driver = Unmanaged<ErikaDisplayLinkDriver>
+          .fromOpaque(context)
+          .takeUnretainedValue()
+        driver.displayDidRefresh()
+        return kCVReturnSuccess
+      },
+      Unmanaged.passUnretained(self).toOpaque()
+    )
+    guard status == kCVReturnSuccess else {
+      displayLink = nil
+      return nil
+    }
+  }
+
+  deinit {
+    invalidate()
+  }
+
+  func start() -> Bool {
+    guard let displayLink else {
+      return false
+    }
+    return CVDisplayLinkStart(displayLink) == kCVReturnSuccess
+  }
+
+  func invalidate() {
+    stateLock.lock()
+    invalidated = true
+    stateLock.unlock()
+
+    if let displayLink, CVDisplayLinkIsRunning(displayLink) {
+      CVDisplayLinkStop(displayLink)
+    }
+    displayLink = nil
+  }
+
+  private func displayDidRefresh() {
+    stateLock.lock()
+    guard !invalidated, !tickQueued else {
+      stateLock.unlock()
+      return
+    }
+    tickQueued = true
+    stateLock.unlock()
+
+    DispatchQueue.main.async { [weak self] in
+      guard let self else {
+        return
+      }
+
+      self.stateLock.lock()
+      let shouldRender = !self.invalidated
+      self.stateLock.unlock()
+
+      if shouldRender {
+        self.onTick()
+      }
+
+      // Keep tickQueued set throughout onTick(). Any display refresh received
+      // while Metal is blocked is deliberately dropped rather than replayed.
+      self.stateLock.lock()
+      self.tickQueued = false
+      self.stateLock.unlock()
+    }
+  }
+}
 
 private struct ErikaVideoParamsC {
   var width: UInt32 = 0
@@ -243,6 +347,11 @@ private enum ErikaPluginError: Error, CustomStringConvertible {
 }
 
 private final class ErikaNativeLibrary {
+  // This symbol was added after ErikaTrackInfo gained its extended media
+  // metadata fields. Loading an older dylib with the current Swift struct
+  // would use a different record stride and corrupt the following pointers.
+  private static let currentTrackInfoAbiSymbol = "erika_presenter_get_output_status"
+
   typealias CreateFn = @convention(c) () -> UnsafeMutableRawPointer?
   typealias CreateWithOutputModeFn = @convention(c) (Int32, Float) -> UnsafeMutableRawPointer?
   typealias DestroyFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
@@ -435,6 +544,33 @@ private final class ErikaNativeLibrary {
     if let explicitPath = environment["ERIKA_CAPI_DYLIB"], !explicitPath.isEmpty {
       candidates.append(explicitPath)
     }
+    // CocoaPods builds the dylib inside the plugin framework. Prefer that
+    // freshly built copy over an app-level dylib that may be left behind by an
+    // older build.
+    if let appFrameworksPath = Bundle.main.privateFrameworksPath {
+      candidates.append(
+        URL(fileURLWithPath: appFrameworksPath)
+          .appendingPathComponent(
+            "erika_flutter.framework/Versions/A/Frameworks/liberika_capi.dylib"
+          )
+          .path
+      )
+    }
+    if let pluginExecutablePath = bundle.executablePath {
+      candidates.append(
+        URL(fileURLWithPath: pluginExecutablePath)
+          .deletingLastPathComponent()
+          .appendingPathComponent("Frameworks/liberika_capi.dylib")
+          .path
+      )
+    }
+    if let pluginFrameworksPath = bundle.privateFrameworksPath {
+      candidates.append(
+        URL(fileURLWithPath: pluginFrameworksPath)
+          .appendingPathComponent("liberika_capi.dylib")
+          .path
+      )
+    }
     if let resourcePath = bundle.path(forResource: "liberika_capi", ofType: "dylib") {
       candidates.append(resourcePath)
     }
@@ -453,6 +589,16 @@ private final class ErikaNativeLibrary {
     var failures: [ErikaPluginError] = []
     for path in candidates {
       if let handle = dlopen(path, RTLD_NOW | RTLD_LOCAL) {
+        guard dlsym(handle, currentTrackInfoAbiSymbol) != nil else {
+          dlclose(handle)
+          failures.append(
+            .libraryLoadFailed(
+              path,
+              "incompatible Erika C ABI: missing \(currentTrackInfoAbiSymbol)"
+            )
+          )
+          continue
+        }
         NSLog("ErikaFlutterPlugin: loaded Erika C API from \(path)")
         return (handle, path)
       }
@@ -513,6 +659,10 @@ private final class ErikaPlayerHost {
   private let library: ErikaNativeLibrary
   private let handle: UnsafeMutableRawPointer
   private weak var attachedView: ErikaMetalSurfaceView?
+  private var attachedViewId: Int64?
+  private var displayLinkDriver: ErikaDisplayLinkDriver?
+  private var displayLinkDisplayID: CGDirectDisplayID?
+  private var displayConfigurationObservers: [NSObjectProtocol] = []
   private var displayTimer: Timer?
   private var displayTimerFps: Double = 0.0
   private var startTimeSeconds: CFTimeInterval = CACurrentMediaTime()
@@ -530,7 +680,7 @@ private final class ErikaPlayerHost {
   }
 
   deinit {
-    stopDisplayTimer()
+    stopDisplayDriver()
     _ = library.detachSurface(handle)
     library.destroy(handle)
   }
@@ -980,19 +1130,30 @@ private final class ErikaPlayerHost {
   }
 
   func attach(view: ErikaMetalSurfaceView) throws {
+    // Moving the surface between windows re-attaches an already running
+    // player. Only a genuinely new attachment restarts the host clock; a
+    // migration must not rewind the timeline the engine is already on.
+    let isReattach = attachedView != nil
     attachedView = view
+    attachedViewId = view.platformViewId
     view.attachedPlayerId = id
+    erikaWindowOverlayTrace(
+      "attach player=\(id) surface=\(view.platformViewId) " +
+      "window=\((view as? NSView)?.window?.windowNumber ?? -1) " +
+      "drawable=\(view.metalLayer.drawableSize) reattach=\(isReattach)"
+    )
     try attachOrResize(view: view, attach: true)
-    startDisplayTimerIfNeeded(resetClock: true)
+    startDisplayDriverIfNeeded(resetClock: !isReattach)
   }
 
   func detach(viewId: Int64?) {
-    guard viewId == nil || attachedView?.platformViewId == viewId else {
+    guard viewId == nil || attachedViewId == viewId else {
       return
     }
     attachedView?.attachedPlayerId = nil
     attachedView = nil
-    stopDisplayTimer()
+    attachedViewId = nil
+    stopDisplayDriver()
     _ = library.detachSurface(handle)
   }
 
@@ -1002,7 +1163,7 @@ private final class ErikaPlayerHost {
     }
     do {
       try attachOrResize(view: view, attach: false)
-      startDisplayTimerIfNeeded(resetClock: false)
+      startDisplayDriverIfNeeded(resetClock: false)
     } catch {
       NSLog("ErikaFlutterPlugin: resize failed: \(error)")
     }
@@ -1064,15 +1225,90 @@ private final class ErikaPlayerHost {
     }
   }
 
-  private func startDisplayTimerIfNeeded(resetClock: Bool) {
+  private func startDisplayDriverIfNeeded(resetClock: Bool) {
+    if resetClock {
+      startTimeSeconds = CACurrentMediaTime()
+    }
+
+    // Keep the explicit FPS override as a diagnostic escape hatch. Normal
+    // playback follows the actual display refresh through CVDisplayLink.
+    if ProcessInfo.processInfo.environment["ERIKA_FLUTTER_TARGET_FPS"] == nil {
+      let displayID = resolvedDisplayID()
+      if displayLinkDriver != nil && displayLinkDisplayID == displayID {
+        return
+      }
+
+      stopDisplayDriver()
+      let driver = ErikaDisplayLinkDriver(displayID: displayID) { [weak self] in
+        guard let self else {
+          return
+        }
+        self.renderTick(sendEvent: ErikaFlutterPlugin.sharedEventSink)
+      }
+      if let driver, driver.start() {
+        displayLinkDriver = driver
+        displayLinkDisplayID = displayID
+        observeDisplayConfigurationChanges()
+        return
+      }
+    }
+
+    startFallbackDisplayTimerIfNeeded()
+  }
+
+  /// Re-targets the display link when the window changes screen, or when the
+  /// screen layout itself changes.
+  ///
+  /// A `CVDisplayLink` is bound to the display it was created for. Without
+  /// this, dragging the window to a second screen keeps it ticking at the old
+  /// refresh rate, and unplugging that screen stops the callbacks entirely —
+  /// with the fallback timer already torn down, rendering would simply stop.
+  private func observeDisplayConfigurationChanges() {
+    guard displayConfigurationObservers.isEmpty else {
+      return
+    }
+    let center = NotificationCenter.default
+    for name in [
+      NSWindow.didChangeScreenNotification,
+      NSApplication.didChangeScreenParametersNotification,
+    ] {
+      let observer = center.addObserver(
+        forName: name,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        self?.retargetDisplayDriverIfScreenChanged()
+      }
+      displayConfigurationObservers.append(observer)
+    }
+  }
+
+  private func retargetDisplayDriverIfScreenChanged() {
+    guard displayLinkDriver != nil else {
+      return
+    }
+    let displayID = resolvedDisplayID()
+    guard displayID != displayLinkDisplayID else {
+      return
+    }
+    // Rebuild on the new display; never reset the host clock, this is not a
+    // new playback session.
+    startDisplayDriverIfNeeded(resetClock: false)
+  }
+
+  private func stopObservingDisplayConfigurationChanges() {
+    for observer in displayConfigurationObservers {
+      NotificationCenter.default.removeObserver(observer)
+    }
+    displayConfigurationObservers.removeAll()
+  }
+
+  private func startFallbackDisplayTimerIfNeeded() {
     let targetFps = resolvedDisplayTimerFps()
     if displayTimer != nil && abs(displayTimerFps - targetFps) <= erikaDisplayFpsEpsilon {
       return
     }
-    stopDisplayTimer()
-    if resetClock {
-      startTimeSeconds = CACurrentMediaTime()
-    }
+    stopDisplayDriver()
     let timer = Timer(timeInterval: 1.0 / targetFps, repeats: true) { [weak self] _ in
       guard let self else {
         return
@@ -1084,10 +1320,23 @@ private final class ErikaPlayerHost {
     RunLoop.main.add(timer, forMode: .common)
   }
 
-  private func stopDisplayTimer() {
+  private func stopDisplayDriver() {
+    stopObservingDisplayConfigurationChanges()
+    displayLinkDriver?.invalidate()
+    displayLinkDriver = nil
+    displayLinkDisplayID = nil
     displayTimer?.invalidate()
     displayTimer = nil
     displayTimerFps = 0.0
+  }
+
+  private func resolvedDisplayID() -> CGDirectDisplayID {
+    let screen = (attachedView as? NSView)?.window?.screen ?? NSScreen.main
+    let screenNumberKey = NSDeviceDescriptionKey("NSScreenNumber")
+    if let number = screen?.deviceDescription[screenNumberKey] as? NSNumber {
+      return CGDirectDisplayID(number.uint32Value)
+    }
+    return CGMainDisplayID()
   }
 
   private func resolvedDisplayTimerFps() -> Double {
@@ -1402,6 +1651,7 @@ final class ErikaWindowOverlayView: NSView, ErikaMetalSurfaceView {
   var attachedPlayerId: Int64?
 
   private var overlayFrameGeneration: Int64?
+  private var lastTraceSignature: String?
 
   /// Generation of the widget that currently owns this shared overlay surface.
   /// Used to reject stale detach calls from disposed widgets.
@@ -1453,6 +1703,9 @@ final class ErikaWindowOverlayView: NSView, ErikaMetalSurfaceView {
 
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
+    erikaWindowOverlayTrace(
+      "surface moved window=\(window?.windowNumber ?? -1) frame=\(frame)"
+    )
     updateDrawableSize()
     plugin?.resizePlayerAttachedToView(viewId: platformViewId)
   }
@@ -1476,6 +1729,17 @@ final class ErikaWindowOverlayView: NSView, ErikaMetalSurfaceView {
     let shouldShow = visible &&
       (frame?.width ?? 0) > 0 &&
       (frame?.height ?? 0) > 0
+    if erikaWindowOverlayTraceEnabled {
+      let signature =
+        "\(window?.windowNumber ?? -1)|\(visible)|\(generation ?? -1)|\(String(describing: frame))"
+      if signature != lastTraceSignature {
+        lastTraceSignature = signature
+        erikaWindowOverlayTrace(
+          "frame window=\(window?.windowNumber ?? -1) visible=\(visible) " +
+          "generation=\(generation ?? -1) requested=\(String(describing: frame))"
+        )
+      }
+    }
 
     CATransaction.begin()
     CATransaction.setDisableActions(true)
@@ -1572,6 +1836,9 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
   private var views: [Int64: WeakErikaVideoPlatformViewBox] = [:]
   private weak var flutterHostView: NSView?
   private weak var flutterHostViewController: NSViewController?
+  private var requestedFlutterViewIdentifier: Int64?
+  private var requestedSecondaryWindow = false
+  private var windowOverlayPlayerIds: Set<Int64> = []
   private var nextPlayerId: Int64 = 1
   private var pollTimer: Timer?
 
@@ -1607,6 +1874,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       case "dispose":
         let args = try dictionaryArgs(call.arguments)
         let playerId = try requiredInt64(args["playerId"], name: "playerId")
+        windowOverlayPlayerIds.remove(playerId)
         players.removeValue(forKey: playerId)
         result(nil)
       case "open":
@@ -1873,12 +2141,22 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         let host = try playerHost(from: args)
         let viewId = try requiredInt64(args["viewId"], name: "viewId")
         host.detach(viewId: viewId)
+        if viewId == erikaWindowHostedVideoSurfaceId {
+          windowOverlayPlayerIds.remove(host.id)
+        }
         result(nil)
       case "attachOverlay":
         let args = try dictionaryArgs(call.arguments)
         let host = try playerHost(from: args)
-        let overlay = try ensureWindowOverlayInstalled()
+        updateRequestedFlutterView(from: args)
+        let installation = try ensureWindowOverlayInstalled()
+        erikaWindowOverlayTrace(
+          "attach request player=\(host.id) flutterView=\(requestedFlutterViewIdentifier ?? -1) " +
+          "secondary=\(requestedSecondaryWindow) targetWindow=\(installation.hostWindow.windowNumber)"
+        )
+        let overlay = installation.overlay
         try host.attach(view: overlay)
+        windowOverlayPlayerIds.insert(host.id)
         result(erikaWindowHostedVideoSurfaceId)
       case "detachOverlay":
         let args = try dictionaryArgs(call.arguments)
@@ -1896,19 +2174,45 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
           return
         }
         host.detach(viewId: erikaWindowHostedVideoSurfaceId)
+        windowOverlayPlayerIds.remove(host.id)
         overlay?.updateOverlayFrame(nil, visible: false, debugLabel: nil, generation: generation)
         result(nil)
       case "setOverlayFrame":
         let args = try dictionaryArgs(call.arguments)
-        let overlay = try ensureWindowOverlayInstalled()
         let visible = boolValue(args["visible"]) ?? true
-        let frame = convertedOverlayRect(from: args, targetView: overlay)
+        let generation = int64Value(args["generation"])
+        if !visible,
+           let generation,
+           let activeGeneration = resolveWindowOverlay()?.activeGeneration,
+           generation != activeGeneration {
+          result(nil)
+          return
+        }
+        updateRequestedFlutterView(from: args)
+        let installation = try ensureWindowOverlayInstalled()
+        let overlay = installation.overlay
+        let frame = convertedOverlayRect(
+          from: args,
+          sourceView: installation.flutterHostView,
+          targetView: overlay
+        )
         overlay.updateOverlayFrame(
           frame,
           visible: visible,
           debugLabel: args["debugLabel"] as? String,
-          generation: int64Value(args["generation"])
+          generation: generation
         )
+        if installation.movedBetweenWindows {
+          // A wgpu/Metal surface retains the CAMetalLayer pointer, but moving
+          // that layer into another NSWindow invalidates its drawable chain on
+          // some macOS/Flutter combinations. Re-attach after the new frame and
+          // backing scale are known so rendering resumes in the destination.
+          for playerId in windowOverlayPlayerIds {
+            if let attachedHost = players[playerId] {
+              try attachedHost.attach(view: overlay)
+            }
+          }
+        }
         result(nil)
       default:
         result(FlutterMethodNotImplemented)
@@ -1963,51 +2267,126 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
     }
   }
 
-  private func ensureWindowOverlayInstalled() throws -> ErikaWindowOverlayView {
-    if let existing = resolveWindowOverlay(),
-       existing.superview != nil {
-      return existing
-    }
+  private struct WindowOverlayInstallation {
+    let overlay: ErikaWindowOverlayView
+    let flutterHostView: NSView
+    let hostWindow: NSWindow
+    let movedBetweenWindows: Bool
+  }
 
-    guard let flutterHostView else {
+  private func ensureWindowOverlayInstalled() throws -> WindowOverlayInstallation {
+    guard let activeFlutterHostView else {
+      erikaWindowOverlayTrace(
+        "target unavailable flutterView=\(requestedFlutterViewIdentifier ?? -1) " +
+        "secondary=\(requestedSecondaryWindow); refusing main-window fallback"
+      )
       throw ErikaPluginError.overlayNotAvailable
     }
-    guard let hostWindow = flutterHostView.window else {
+    guard let hostWindow = activeFlutterHostView.window else {
       throw ErikaPluginError.overlayNotAvailable
     }
-    guard let hostSuperview = flutterHostView.superview else {
+    guard let hostSuperview = activeFlutterHostView.superview else {
       throw ErikaPluginError.overlayNotAvailable
     }
 
-    prepareFlutterHostViewForWindowOverlay(flutterHostView)
+    let existingOverlay = resolveWindowOverlay()
+    // `setOverlayFrame` runs on every geometry update. Once the overlay is
+    // already mounted in the right place there is nothing to install, and
+    // re-adding it would restart the whole attach path (viewDidMoveToWindow →
+    // updateDrawableSize → resize → display driver) on every resize frame.
+    if let existingOverlay,
+       existingOverlay.superview === hostSuperview,
+       existingOverlay.window === hostWindow {
+      existingOverlay.plugin = self
+      return WindowOverlayInstallation(
+        overlay: existingOverlay,
+        flutterHostView: activeFlutterHostView,
+        hostWindow: hostWindow,
+        movedBetweenWindows: false
+      )
+    }
 
-    let overlay = hostWindow.erikaWindowOverlayView ??
+    prepareFlutterHostViewForWindowOverlay(activeFlutterHostView)
+
+    let overlay = existingOverlay ??
+      hostWindow.erikaWindowOverlayView ??
       ErikaWindowOverlayView(plugin: self)
+    let previousWindow = overlay.window
     overlay.plugin = self
 
     if overlay.superview !== hostSuperview {
       overlay.removeFromSuperview()
       overlay.frame = .zero
       overlay.translatesAutoresizingMaskIntoConstraints = true
-      hostSuperview.addSubview(
-        overlay,
-        positioned: shouldPlaceWindowOverlayAboveFlutter() ? .above : .below,
-        relativeTo: flutterHostView
-      )
-    } else {
-      hostSuperview.addSubview(
-        overlay,
-        positioned: shouldPlaceWindowOverlayAboveFlutter() ? .above : .below,
-        relativeTo: flutterHostView
+    }
+    hostSuperview.addSubview(
+      overlay,
+      positioned: shouldPlaceWindowOverlayAboveFlutter() ? .above : .below,
+      relativeTo: activeFlutterHostView
+    )
+
+    if previousWindow !== hostWindow {
+      previousWindow?.erikaWindowOverlayView = nil
+      erikaWindowOverlayTrace(
+        "move surface flutterView=\(requestedFlutterViewIdentifier ?? -1) " +
+        "secondary=\(requestedSecondaryWindow) " +
+        "window=\(previousWindow?.windowNumber ?? -1)->\(hostWindow.windowNumber)"
       )
     }
-
     hostWindow.erikaWindowOverlayView = overlay
     registerView(overlay, viewId: overlay.platformViewId)
-    return overlay
+    if existingOverlay == nil {
+      for playerId in windowOverlayPlayerIds {
+        if let host = players[playerId] {
+          try host.attach(view: overlay)
+        }
+      }
+    }
+    return WindowOverlayInstallation(
+      overlay: overlay,
+      flutterHostView: activeFlutterHostView,
+      hostWindow: hostWindow,
+      movedBetweenWindows: existingOverlay != nil && previousWindow !== hostWindow
+    )
+  }
+
+  private func updateRequestedFlutterView(from args: [String: Any]) {
+    if let flutterViewIdentifier = int64Value(args["flutterViewId"]) {
+      requestedFlutterViewIdentifier = flutterViewIdentifier
+    }
+    if let secondaryWindow = boolValue(args["secondaryWindow"]) {
+      requestedSecondaryWindow = secondaryWindow
+    }
+  }
+
+  /// The player widget can move between FlutterViews without rebuilding its
+  /// State. Resolve the native host from the view id sent by Dart so the same
+  /// Metal overlay follows the widget into (and back out of) a detached window.
+  private var activeFlutterHostView: NSView? {
+    if let requestedFlutterViewIdentifier {
+      return NSApp.windows
+        .compactMap({ $0.contentViewController as? FlutterViewController })
+        .first(where: {
+          Int64($0.viewIdentifier) == requestedFlutterViewIdentifier
+        })?
+        .view
+    }
+    if let keyController = NSApp.keyWindow?.contentViewController
+        as? FlutterViewController {
+      return keyController.view
+    }
+    if let mainController = NSApp.mainWindow?.contentViewController
+        as? FlutterViewController {
+      return mainController.view
+    }
+    return flutterHostView ?? flutterHostViewController?.view
   }
 
   private func resolveWindowOverlay() -> ErikaWindowOverlayView? {
+    if let hostWindow = activeFlutterHostView?.window,
+       let overlay = hostWindow.erikaWindowOverlayView {
+      return overlay
+    }
     if let hostWindow = flutterHostView?.window,
        let overlay = hostWindow.erikaWindowOverlayView {
       return overlay
@@ -2040,11 +2419,17 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
     view.wantsLayer = true
     view.layer?.isOpaque = false
     view.layer?.backgroundColor = NSColor.clear.cgColor
-    (flutterHostViewController as? FlutterViewController)?.backgroundColor = .clear
+    if let targetController = view.window?.contentViewController
+        as? FlutterViewController {
+      targetController.backgroundColor = .clear
+    }
+    view.window?.isOpaque = false
+    view.window?.backgroundColor = .clear
   }
 
   private func convertedOverlayRect(
     from args: [String: Any],
+    sourceView: NSView,
     targetView: NSView
   ) -> CGRect? {
     guard let x = doubleValue(args["x"]),
@@ -2056,15 +2441,14 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
     guard width > 0, height > 0 else {
       return nil
     }
-    guard let flutterHostView,
-          let targetSuperview = targetView.superview else {
+    guard let targetSuperview = targetView.superview else {
       return CGRect(x: x, y: y, width: width, height: height)
     }
-    let sourceY = flutterHostView.isFlipped
+    let sourceY = sourceView.isFlipped
       ? y
-      : flutterHostView.bounds.height - y - height
+      : sourceView.bounds.height - y - height
     let rect = CGRect(x: x, y: sourceY, width: width, height: height)
-    return flutterHostView.convert(rect, to: targetSuperview)
+    return sourceView.convert(rect, to: targetSuperview)
   }
 
   private func createPlayer(arguments: Any?) throws -> Int64 {
