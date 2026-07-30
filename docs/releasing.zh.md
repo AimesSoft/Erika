@@ -15,9 +15,11 @@
 | Windows ARM64 | `erika-capi-windows-arm64.zip` |
 | iOS | `erika-capi-ios.zip`，包含 device 和 simulator XCFramework slice |
 | Android | `erika-capi-android.zip`，包含 `arm64-v8a`、`armeabi-v7a`、`x86_64`、`x86` |
+| OpenHarmony arm64 | `erika-capi-openharmony-arm64.zip`，包含 `liberika_capi.so` 和 `liberika_flutter.so` |
 
-OpenHarmony 已支持源码构建和 Flutter 插件接入，但当前 Release workflow
-尚不发布 OpenHarmony 预构建归档。
+OpenHarmony 归档使用 OpenHarmony 5.1.0 Native SDK、compatible SDK 18 构建，
+包含 C API runtime 和 Flutter N-API bridge；Hvigor 暂未接入自动
+`ERIKA_PREBUILT` 下载。
 
 每个归档还包含 `include/erika.h`、`LICENSE`、`THIRD_PARTY_NOTICES.md`、依赖许可证和记录 tag/commit 的 `MANIFEST.txt`。原生依赖使用 `lgpl` profile 静态链接；Android 同时携带匹配 ABI 的 `libc++_shared.so`。
 

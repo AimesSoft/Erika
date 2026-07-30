@@ -32,8 +32,8 @@
 - Added an OpenHarmony player backend and Flutter plugin with AVCodec H.264/HEVC
   hardware decoding, OHNativeBuffer/Vulkan zero-copy presentation, WGPU
   composition, subtitles, danmaku, audio, diagnostics, and RGBA screenshots.
-  OpenHarmony is built from source; the release workflow does not yet publish an
-  OpenHarmony prebuilt archive.
+  The release includes `erika-capi-openharmony-arm64.zip` with the C API runtime
+  and Flutter native bridge.
 - Added native Windows ARM64 dependency and `erika_capi` builds, plus the new
   `erika-capi-windows-arm64.zip` release archive. Windows x64 and ARM64 CI run
   on matching GitHub-hosted architectures.

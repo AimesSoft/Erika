@@ -19,9 +19,11 @@ license files:
 | Windows ARM64 | `erika-capi-windows-arm64.zip` | `erika_capi.dll`, `erika_capi.dll.lib` (import), `erika_capi.lib` (static) |
 | iOS | `erika-capi-ios.zip` | `erika_capi.xcframework` (device + simulator) |
 | Android | `erika-capi-android.zip` | `liberika_capi.so`, `liberika_capi.a`, and `libc++_shared.so` for `arm64-v8a`, `armeabi-v7a`, `x86_64`, and `x86` |
+| OpenHarmony arm64 | `erika-capi-openharmony-arm64.zip` | `liberika_capi.so`, `liberika_flutter.so` |
 
-OpenHarmony is supported through source builds and the Flutter plugin, but the
-release workflow does not currently publish an OpenHarmony prebuilt archive.
+The OpenHarmony archive is built against the OpenHarmony 5.1.0 native SDK with
+compatible SDK version 18. It contains the C API runtime and Flutter N-API
+bridge; automatic `ERIKA_PREBUILT` consumption is not yet wired into Hvigor.
 
 The Android archive stores each ABI at `lib/android/<abi>/`. Flutter/Gradle
 consumers package `liberika_capi.so` together with the matching NDK

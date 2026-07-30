@@ -7,9 +7,9 @@ name: Release
 # publish job is gated on a tag ref).
 #
 # Bundles (per platform): liberika_capi.{dylib,a} / erika_capi.dll + libs /
-# erika_capi.xcframework / Android ABI archives, plus erika.h, LICENSE (MPL-2.0), and
-# THIRD_PARTY_NOTICES.md. Native deps (FFmpeg/libass/...) are statically linked
-# via the `lgpl` profile.
+# erika_capi.xcframework / Android ABI archives / OpenHarmony shared libraries,
+# plus erika.h, LICENSE (MPL-2.0), and THIRD_PARTY_NOTICES.md. Native deps
+# (FFmpeg/libass/...) are statically linked via the `lgpl` profile.
 #
 # Windows uses MSYS2 + MSVC + LLVM/libclang. Android uses NDK LLVM at API 26;
 # xtask supports both Linux-hosted CI and Windows-hosted Git Bash builds.
@@ -330,9 +330,125 @@ jobs:
           name: erika-capi-android
           path: dist/*.zip
 
+  openharmony:
+    name: OpenHarmony arm64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      ERIKA_NATIVE_PROFILE: lgpl
+      ERIKA_NATIVE_TARGET: aarch64-unknown-linux-ohos
+      OHOS_COMPATIBLE_SDK_VERSION: "18"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          targets: aarch64-unknown-linux-ohos
+      - name: Setup OpenHarmony SDK
+        id: ohos_sdk
+        uses: openharmony-rs/setup-ohos-sdk@b312caf8a43bb836aa24c08f65f97e1f09a89cad # v1.0.1
+        with:
+          version: "5.1.0"
+          components: native
+          cache: true
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake make ninja-build pkg-config zip
+      - name: Configure OpenHarmony toolchain
+        env:
+          NATIVE_ROOT: ${{ steps.ohos_sdk.outputs.ohos_sdk_native }}
+        run: |
+          set -euo pipefail
+          test -x "$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang"
+          test -x "$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang++"
+          test -f "$NATIVE_ROOT/build/cmake/ohos.toolchain.cmake"
+          cxx_include="$NATIVE_ROOT/llvm/include/libcxx-ohos/include/c++/v1"
+          if [[ ! -f "$cxx_include/vector" ]]; then
+            cxx_include="$NATIVE_ROOT/llvm/include/c++/v1"
+          fi
+          test -f "$cxx_include/vector"
+          {
+            echo "OHOS_NDK_HOME=$NATIVE_ROOT"
+            echo "OHOS_SDK_NATIVE=$NATIVE_ROOT"
+            echo "LIBCLANG_PATH=$NATIVE_ROOT/llvm/lib"
+            echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_ohos=--target=aarch64-unknown-linux-ohos --sysroot=$NATIVE_ROOT/sysroot -isystem $cxx_include"
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER=$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang"
+            echo "CC_aarch64_unknown_linux_ohos=$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang"
+            echo "CXX_aarch64_unknown_linux_ohos=$NATIVE_ROOT/llvm/bin/aarch64-unknown-linux-ohos-clang++"
+            echo "AR_aarch64_unknown_linux_ohos=$NATIVE_ROOT/llvm/bin/llvm-ar"
+          } >> "$GITHUB_ENV"
+      - name: Restore native dependencies
+        id: native-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            third_party/cache
+            third_party/src
+            third_party/build/${{ env.ERIKA_NATIVE_TARGET }}/${{ env.ERIKA_NATIVE_PROFILE }}
+            third_party/dist/${{ env.ERIKA_NATIVE_TARGET }}/${{ env.ERIKA_NATIVE_PROFILE }}
+          key: native-v1-ohos-${{ env.ERIKA_NATIVE_TARGET }}-api${{ env.OHOS_COMPATIBLE_SDK_VERSION }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
+      - name: Build OpenHarmony native dependencies
+        run: >-
+          cargo run --locked -p xtask -- deps build
+          --profile "$ERIKA_NATIVE_PROFILE"
+          --target "$ERIKA_NATIVE_TARGET"
+      - name: Save native dependencies
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            third_party/cache
+            third_party/src
+            third_party/build/${{ env.ERIKA_NATIVE_TARGET }}/${{ env.ERIKA_NATIVE_PROFILE }}
+            third_party/dist/${{ env.ERIKA_NATIVE_TARGET }}/${{ env.ERIKA_NATIVE_PROFILE }}
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
+      - name: Build OpenHarmony C API
+        run: >-
+          cargo build --locked -p erika_capi --release
+          --target "$ERIKA_NATIVE_TARGET"
+          --no-default-features --features wgpu
+      - name: Build OpenHarmony Flutter native bridge
+        run: |
+          set -euo pipefail
+          cmake -S packages/erika_flutter/ohos/src/main/cpp \
+            -B target/ohos-plugin-release \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$OHOS_SDK_NATIVE/build/cmake/ohos.toolchain.cmake" \
+            -DOHOS_ARCH=arm64-v8a \
+            -DOHOS_SDK_NATIVE="$OHOS_SDK_NATIVE"
+          cmake --build target/ohos-plugin-release --target erika_flutter_plugin
+      - name: Verify and package OpenHarmony libraries
+        run: |
+          set -euo pipefail
+          runtime="target/$ERIKA_NATIVE_TARGET/release/liberika_capi.so"
+          plugin="$(find target/ohos-plugin-release -type f -name 'liberika_flutter.so' -print -quit)"
+          readelf="$OHOS_SDK_NATIVE/llvm/bin/llvm-readelf"
+          nm="$OHOS_SDK_NATIVE/llvm/bin/llvm-nm"
+          test -f "$runtime"
+          test -n "$plugin"
+          test -f "$plugin"
+          "$readelf" -h "$runtime" | grep -Eq 'Machine:.*AArch64'
+          "$readelf" -d "$runtime" | grep -Eq '\(SONAME\).*liberika_capi\.so'
+          symbols="$("$nm" --dynamic --defined-only "$runtime" | awk '{print $NF}')"
+          for symbol in \
+            erika_presenter_invoke_json \
+            erika_presenter_render_tick_json \
+            erika_presenter_poll_event_json
+          do
+            grep -Fxq "$symbol" <<< "$symbols"
+          done
+          bash packaging/bundle.sh erika-capi-openharmony-arm64 \
+            dist/erika-capi-openharmony-arm64.zip "$runtime" "$plugin"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erika-capi-openharmony-arm64
+          path: dist/*.zip
+          if-no-files-found: error
+
   release:
     name: Publish Release
-    needs: [macos, macos-universal, ios, windows, android]
+    needs: [macos, macos-universal, ios, windows, android, openharmony]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -350,7 +466,7 @@ jobs:
             Prebuilt `erika_capi` C ABI bundles (static `lgpl` profile),
             for macOS arm64, macOS x64, macOS universal, Windows x64,
             Windows ARM64, iOS, and Android arm64-v8a, armeabi-v7a, x86_64,
-            and x86. OpenHarmony support is source-build only in this release.
+            and x86, plus OpenHarmony arm64.
 
             Each archive contains the library, `include/erika.h`, `LICENSE`
             (MPL-2.0), and `THIRD_PARTY_NOTICES.md`. See

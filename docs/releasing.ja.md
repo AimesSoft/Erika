@@ -15,9 +15,11 @@
 | Windows ARM64 | `erika-capi-windows-arm64.zip` |
 | iOS | `erika-capi-ios.zip`、device と simulator の XCFramework slice |
 | Android | `erika-capi-android.zip`、`arm64-v8a`、`armeabi-v7a`、`x86_64`、`x86` |
+| OpenHarmony arm64 | `erika-capi-openharmony-arm64.zip`、`liberika_capi.so` と `liberika_flutter.so` |
 
-OpenHarmony は source build と Flutter plugin でサポートされますが、現在の
-Release workflow は OpenHarmony の prebuilt archive を公開しません。
+OpenHarmony archive は OpenHarmony 5.1.0 Native SDK、compatible SDK 18 で
+build され、C API runtime と Flutter N-API bridge を含みます。Hvigor の
+`ERIKA_PREBUILT` 自動 download はまだ実装されていません。
 
 各 archive には `include/erika.h`、`LICENSE`、`THIRD_PARTY_NOTICES.md`、dependency license、tag/commit を記録する `MANIFEST.txt` も含まれます。native dependency は `lgpl` profile で static link され、Android は ABI に対応する `libc++_shared.so` も含みます。
 
