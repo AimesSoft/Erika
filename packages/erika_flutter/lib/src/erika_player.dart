@@ -1358,11 +1358,22 @@ class ErikaPlayer {
     });
   }
 
-  Future<int> attachWindowOverlay() async {
+  /// Attaches the shared native overlay to this player.
+  ///
+  /// Multi-view embedders can use [flutterViewId] and [secondaryWindow] to
+  /// identify the Flutter view that currently hosts the player widget.
+  Future<int> attachWindowOverlay({
+    int? flutterViewId,
+    bool secondaryWindow = false,
+  }) async {
     final playerId = await ensureCreated();
     final viewId = await _channel.invokeMethod<int>(
       'attachOverlay',
-      <String, Object?>{'playerId': playerId},
+      <String, Object?>{
+        'playerId': playerId,
+        if (flutterViewId != null) 'flutterViewId': flutterViewId,
+        'secondaryWindow': secondaryWindow,
+      },
     );
     return viewId ?? windowOverlayViewId;
   }
@@ -1382,6 +1393,8 @@ class ErikaPlayer {
     required Rect frame,
     required bool visible,
     required int generation,
+    int? flutterViewId,
+    bool secondaryWindow = false,
     String? debugLabel,
   }) async {
     final playerId = await ensureCreated();
@@ -1394,6 +1407,8 @@ class ErikaPlayer {
       'width': frame.width,
       'height': frame.height,
       'visible': visible,
+      if (flutterViewId != null) 'flutterViewId': flutterViewId,
+      'secondaryWindow': secondaryWindow,
       if (debugLabel != null) 'debugLabel': debugLabel,
     });
   }
