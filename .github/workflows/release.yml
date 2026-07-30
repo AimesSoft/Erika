@@ -218,8 +218,9 @@ jobs:
       - name: Install build tools (nasm, meson, ninja, LLVM/libclang)
         shell: pwsh
         run: |
+          choco install -y --no-progress zip
           if ("${{ matrix.arch }}" -eq "x64") {
-            choco install -y --no-progress nasm zip
+            choco install -y --no-progress nasm
           } elseif (-not (Get-Command make -ErrorAction SilentlyContinue)) {
             choco install -y --no-progress make
           }
