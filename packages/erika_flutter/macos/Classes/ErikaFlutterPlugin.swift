@@ -1714,7 +1714,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         try host.play()
         activePlayerId = host.id
         refreshRemoteCommands()
-        publishNowPlayingInfo(for: host, playbackState: .playing)
+        publishNowPlayingInfo(for: host)
         result(nil)
       case "pause":
         try playerHost(from: try dictionaryArgs(call.arguments)).pause()
@@ -1756,6 +1756,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         )
         if activePlayerId == host.id {
           refreshRemoteCommands()
+          publishNowPlayingInfo(for: host)
         }
         result(nil)
       case "setVolume":
