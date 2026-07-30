@@ -3965,6 +3965,12 @@ impl VideoPlaybackEngine {
         self.media_time_at(Instant::now())
     }
 
+    /// The engine's clock itself, for publishing to readers that evaluate it
+    /// on their own schedule rather than at the worker's polling rate.
+    pub fn clock(&self) -> PlaybackClock {
+        self.clock.clone()
+    }
+
     fn media_time_at(&self, now: Instant) -> Duration {
         self.clock.media_time_at(now)
     }
@@ -5550,6 +5556,47 @@ mod tests {
         assert!(video_pts >= target);
         assert!(audio_pts >= target);
         assert!(audio_pts - target <= Duration::from_millis(34));
+    }
+
+    #[test]
+    fn playback_fixture_seek_parks_the_clock_until_the_first_frame_is_presented() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+
+        let seek_at = t0 + Duration::from_millis(500);
+        let target = Duration::from_millis(5_125);
+        engine.seek_at(target, seek_at).unwrap();
+
+        // Preroll: no post-seek frame has been presented yet. The clock must
+        // stay parked on the target however long decoding takes, so the
+        // reported position never runs past frames nobody has seen...
+        for elapsed in [0u64, 20, 100, 400, 800] {
+            assert_eq!(
+                engine.media_time_at(seek_at + Duration::from_millis(elapsed)),
+                target,
+                "clock advanced during seek preroll after {elapsed} ms"
+            );
+        }
+
+        // ...and audio pulled during that window is likewise gated on the
+        // target rather than an already-advancing clock.
+        let audio = next_fixture_audio_at(&mut engine, seek_at + Duration::from_millis(20));
+        let audio_pts = audio.pts.expect("post-seek audio PTS");
+        assert!(audio_pts >= target);
+
+        // The first presented frame starts the clock; from there it runs.
+        let resumed_at = seek_at + Duration::from_millis(900);
+        let video = next_fixture_video_at(&mut engine, resumed_at);
+        let video_pts = video.pts.expect("post-seek video PTS");
+        assert!(video_pts >= target);
+        assert!(engine.media_time_at(resumed_at) >= target);
+        assert!(
+            engine.media_time_at(resumed_at + Duration::from_millis(50))
+                > engine.media_time_at(resumed_at),
+            "clock must run once the first post-seek frame is presented"
+        );
     }
 
     #[test]

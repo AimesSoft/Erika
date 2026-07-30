@@ -269,10 +269,17 @@ impl DanmakuRetainer {
 
 /// Select a track for a scroll danmaku.
 /// Returns (track_index, displaced_indices) or None if the item should be dropped.
-/// The upper 40% of tracks form a stable zone that is never overwritten. The
-/// lower 60% form an overflow zone where DFM's overwriteInsert strategy may
-/// replace the track whose items have progressed furthest left. This keeps the
-/// top of the screen stable under extreme density while preserving throughput.
+/// The upper 40% of tracks form a stable zone that overwriteInsert never
+/// selects as a victim. The lower 60% form an overflow zone where DFM's
+/// strategy may replace the track whose items have progressed furthest left.
+///
+/// This mirrors the previous implementation's behaviour exactly — the old
+/// single loop already restricted victims with `i >= overwrite_start` — and
+/// only makes the two zones explicit.
+///
+/// One documented exception: a self-sent danmaku (`is_me`) still claims track
+/// 0 unconditionally, clearing whatever occupies it. That is a deliberate
+/// product rule and the only way a stable-zone track loses its contents.
 fn select_scroll_track(
     new_entry: &TrackEntry,
     track_data: &mut TrackData,

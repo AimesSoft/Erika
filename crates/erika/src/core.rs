@@ -11,7 +11,7 @@ use crate::audio::{AudioClockSnapshot, AudioOutputRuntimeStats};
 use crate::danmaku::DanmakuRenderPlan;
 use crate::ffmpeg::{DecoderBackend, Frame, PcmAudioFrame};
 use crate::overlay::OverlayFrame;
-use crate::playback::{PlaybackRunState, PlaybackSessionConfig, VideoPlaybackEngine};
+use crate::playback::{PlaybackClock, PlaybackRunState, PlaybackSessionConfig, VideoPlaybackEngine};
 use crate::renderer::VideoFramePayload;
 use crate::subtitle::{DecodedSubtitleFrame, SubtitleTrackConfig};
 use crate::trace;
@@ -121,15 +121,25 @@ pub enum PlayerState {
 
 /// A single-lock view of the shared playback clock.
 ///
-/// See [`Player::playback_snapshot`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Carries the clock rather than a reading of it, so a consumer evaluates it
+/// once at its own tick instead of inheriting the playback worker's polling
+/// granularity. See [`Player::playback_snapshot`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct PlaybackSnapshot {
-    pub media_time: Duration,
+    pub clock: PlaybackClock,
     pub generation: u64,
     pub state: PlayerState,
 }
 
 impl PlaybackSnapshot {
+    pub fn media_time(&self) -> Duration {
+        self.clock.media_time_at(Instant::now())
+    }
+
+    pub fn media_time_at(&self, now: Instant) -> Duration {
+        self.clock.media_time_at(now)
+    }
+
     pub fn is_playing(&self) -> bool {
         self.state == PlayerState::Playing
     }
@@ -802,7 +812,7 @@ struct PlayerInner {
     ended: bool,
     media: Option<MediaRequest>,
     duration: Option<Duration>,
-    current_media_time: Duration,
+    playback_clock: PlaybackClock,
     playback_generation: u64,
     playback_command_sequence: u64,
     surface: Option<PlatformSurface>,
@@ -933,7 +943,7 @@ impl Player {
                 ended: false,
                 media: None,
                 duration: None,
-                current_media_time: Duration::ZERO,
+                playback_clock: PlaybackClock::paused_at(Duration::ZERO),
                 playback_generation: 1,
                 playback_command_sequence: 0,
                 surface: None,
@@ -978,7 +988,8 @@ impl Player {
         self.inner
             .lock()
             .expect("player mutex poisoned")
-            .current_media_time
+            .playback_clock
+            .media_time_at(Instant::now())
     }
 
     /// Reads media time, timeline generation and play state under one lock.
@@ -991,7 +1002,7 @@ impl Player {
     pub fn playback_snapshot(&self) -> PlaybackSnapshot {
         let inner = self.inner.lock().expect("player mutex poisoned");
         PlaybackSnapshot {
-            media_time: inner.current_media_time,
+            clock: inner.playback_clock.clone(),
             generation: inner.playback_generation.max(1),
             state: inner.state,
         }
@@ -1105,7 +1116,7 @@ impl Player {
             let generation = inner.playback_generation.saturating_add(1).max(1);
             inner.media = Some(media);
             inner.duration = info.duration;
-            inner.current_media_time = Duration::ZERO;
+            inner.playback_clock = PlaybackClock::paused_at(Duration::ZERO);
             inner.playback_generation = generation;
             inner.playback_command_sequence = 0;
             inner.ended = false;
@@ -1193,7 +1204,7 @@ impl Player {
         self.ensure_not_closed()?;
         let commands = self.playback_commands()?;
         let (
-            previous_media_time,
+            previous_clock,
             previous_generation,
             previous_ended,
             sequence,
@@ -1201,17 +1212,17 @@ impl Player {
             resume_after_seek,
         ) = {
             let mut inner = self.inner.lock().expect("player mutex poisoned");
-            let previous_media_time = inner.current_media_time;
+            let previous_clock = inner.playback_clock.clone();
             let previous_generation = inner.playback_generation;
             let previous_ended = inner.ended;
             let resume_after_seek = inner.state == PlayerState::Playing;
             inner.playback_command_sequence =
                 inner.playback_command_sequence.saturating_add(1).max(1);
-            inner.current_media_time = position;
+            inner.playback_clock = PlaybackClock::paused_at(position);
             inner.playback_generation = inner.playback_generation.saturating_add(1).max(1);
             inner.ended = false;
             (
-                previous_media_time,
+                previous_clock,
                 previous_generation,
                 previous_ended,
                 inner.playback_command_sequence,
@@ -1230,7 +1241,7 @@ impl Player {
         {
             let mut inner = self.inner.lock().expect("player mutex poisoned");
             if inner.playback_command_sequence == sequence {
-                inner.current_media_time = previous_media_time;
+                inner.playback_clock = previous_clock;
                 inner.playback_generation = previous_generation;
                 inner.ended = previous_ended;
             }
@@ -1297,18 +1308,18 @@ impl Player {
     pub fn stop(&self) -> Result<()> {
         self.ensure_not_closed()?;
         let commands = self.playback_commands()?;
-        let (previous_media_time, previous_generation, previous_ended, sequence, generation) = {
+        let (previous_clock, previous_generation, previous_ended, sequence, generation) = {
             let mut inner = self.inner.lock().expect("player mutex poisoned");
-            let previous_media_time = inner.current_media_time;
+            let previous_clock = inner.playback_clock.clone();
             let previous_generation = inner.playback_generation;
             let previous_ended = inner.ended;
             inner.playback_command_sequence =
                 inner.playback_command_sequence.saturating_add(1).max(1);
-            inner.current_media_time = Duration::ZERO;
+            inner.playback_clock = PlaybackClock::paused_at(Duration::ZERO);
             inner.playback_generation = inner.playback_generation.saturating_add(1).max(1);
             inner.ended = false;
             (
-                previous_media_time,
+                previous_clock,
                 previous_generation,
                 previous_ended,
                 inner.playback_command_sequence,
@@ -1324,7 +1335,7 @@ impl Player {
         {
             let mut inner = self.inner.lock().expect("player mutex poisoned");
             if inner.playback_command_sequence == sequence {
-                inner.current_media_time = previous_media_time;
+                inner.playback_clock = previous_clock;
                 inner.playback_generation = previous_generation;
                 inner.ended = previous_ended;
             }
@@ -1479,7 +1490,7 @@ impl Player {
             inner.tracks.clear();
             inner.track_selection = TrackSelection::default();
             inner.duration = None;
-            inner.current_media_time = Duration::ZERO;
+            inner.playback_clock = PlaybackClock::paused_at(Duration::ZERO);
             inner.playback_generation = inner.playback_generation.saturating_add(1).max(1);
             inner.ended = false;
         }
@@ -2433,7 +2444,7 @@ fn publish_natural_eof_events_from_worker(
         ));
         return;
     }
-    inner.current_media_time = final_position;
+    inner.playback_clock = PlaybackClock::paused_at(final_position);
     inner.ended = true;
     inner.subscribers.retain(|sender| {
         sender
@@ -2459,9 +2470,11 @@ fn sync_playback_clock_from_worker(
     stage: &'static str,
     last_worker_clock: &mut Option<(Duration, u64)>,
 ) {
-    let media_time = engine.media_time();
+    let clock = engine.clock();
+    let now = Instant::now();
+    let media_time = clock.media_time_at(now);
     let mut inner = inner.lock().expect("player mutex poisoned");
-    let shared_before = inner.current_media_time;
+    let shared_before = inner.playback_clock.media_time_at(now);
     let generation = playback_generation.max(1);
     let shared_generation = inner.playback_generation.max(1);
     if worker_clock_generation_is_stale(shared_generation, generation) {
@@ -2495,7 +2508,9 @@ fn sync_playback_clock_from_worker(
             generation_changed,
         ));
     }
-    inner.current_media_time = media_time;
+    // Publish the clock, not a reading of it: consumers evaluate it at their
+    // own tick so a slow worker loop cannot quantize playback position.
+    inner.playback_clock = clock;
     inner.playback_generation = generation;
     *last_worker_clock = Some((media_time, generation));
 }
@@ -2546,7 +2561,7 @@ fn commit_playback_command_intent(
     }
     inner.ended = false;
     if let Some(position) = position {
-        inner.current_media_time = position;
+        inner.playback_clock = PlaybackClock::paused_at(position);
         inner
             .subscribers
             .retain(|sender| sender.send(PlayerEvent::PositionChanged(position)).is_ok());
@@ -2915,7 +2930,7 @@ mod tests {
         {
             let mut inner = player.inner.lock().expect("player mutex poisoned");
             inner.state = state;
-            inner.current_media_time = media_time;
+            inner.playback_clock = PlaybackClock::paused_at(media_time);
             inner.playback_generation = generation;
             inner.ended = ended;
         }
@@ -2933,7 +2948,7 @@ mod tests {
         drop(receiver);
         let mut inner = player.inner.lock().expect("player mutex poisoned");
         inner.state = state;
-        inner.current_media_time = media_time;
+        inner.playback_clock = PlaybackClock::paused_at(media_time);
         inner.playback_generation = generation;
         inner.ended = ended;
     }
@@ -3029,7 +3044,7 @@ mod tests {
         {
             let mut inner = player.inner.lock().expect("player mutex poisoned");
             inner.state = PlayerState::Playing;
-            inner.current_media_time = Duration::from_secs(5);
+            inner.playback_clock = PlaybackClock::paused_at(Duration::from_secs(5));
             inner.playback_generation = 4;
         }
 
@@ -3066,7 +3081,7 @@ mod tests {
         {
             let mut inner = player.inner.lock().expect("player mutex poisoned");
             inner.state = PlayerState::Stopped;
-            inner.current_media_time = Duration::from_secs(9);
+            inner.playback_clock = PlaybackClock::paused_at(Duration::from_secs(9));
             inner.playback_command_sequence = 7;
         }
 
@@ -3161,7 +3176,7 @@ mod tests {
         {
             let mut inner = player.inner.lock().expect("player mutex poisoned");
             inner.state = PlayerState::Stopped;
-            inner.current_media_time = Duration::from_secs(11);
+            inner.playback_clock = PlaybackClock::paused_at(Duration::from_secs(11));
         }
         player.play().unwrap();
         let play_sequence = match receiver
@@ -3225,7 +3240,7 @@ mod tests {
         {
             let mut inner = player.inner.lock().expect("player mutex poisoned");
             inner.state = PlayerState::Error;
-            inner.current_media_time = Duration::from_secs(7);
+            inner.playback_clock = PlaybackClock::paused_at(Duration::from_secs(7));
         }
 
         player.stop().unwrap();
@@ -3701,7 +3716,7 @@ mod tests {
         {
             let mut inner = player.inner.lock().expect("player mutex poisoned");
             inner.state = PlayerState::Playing;
-            inner.current_media_time = Duration::from_millis(7_967);
+            inner.playback_clock = PlaybackClock::paused_at(Duration::from_millis(7_967));
             inner.playback_generation = 13;
         }
         let mut eof_published = false;
@@ -3845,7 +3860,7 @@ mod tests {
         {
             let mut inner = player.inner.lock().expect("player mutex poisoned");
             inner.state = PlayerState::Paused;
-            inner.current_media_time = Duration::from_secs(8);
+            inner.playback_clock = PlaybackClock::paused_at(Duration::from_secs(8));
         }
         let target = Duration::from_secs(23);
 

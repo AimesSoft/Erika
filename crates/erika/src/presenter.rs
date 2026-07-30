@@ -1580,7 +1580,7 @@ impl PresenterRuntime {
         // render context all derive from this single sample, so a frame can
         // never mix a stale media time with a newer play state.
         let snapshot = self.player.playback_snapshot();
-        let player_time = snapshot.media_time;
+        let player_time = snapshot.media_time();
         self.current_generation = self
             .current_generation
             .max(snapshot.generation)
