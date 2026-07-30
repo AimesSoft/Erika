@@ -12,8 +12,8 @@ use crate::danmaku::DanmakuRenderPlan;
 use crate::ffmpeg::{DecoderBackend, Frame, PcmAudioFrame};
 use crate::overlay::OverlayFrame;
 use crate::playback::{
-    PlaybackClock, PlaybackDecoderResources, PlaybackRunState, PlaybackSessionConfig,
-    VideoPlaybackEngine,
+    PlaybackClock, PlaybackClockSource, PlaybackDecoderResources, PlaybackRunState,
+    PlaybackSessionConfig, VideoPlaybackEngine,
 };
 use crate::renderer::VideoFramePayload;
 use crate::subtitle::{DecodedSubtitleFrame, SubtitleTrackConfig};
@@ -27,6 +27,8 @@ const AUDIO_PREFILL_PACKET_BUDGET: usize = 6;
 const AUDIO_PREFILL_TIME_BUDGET: Duration = Duration::from_millis(5);
 const AUDIO_PREFILL_LOW_WATER: Duration = Duration::from_millis(350);
 const AUDIO_CLOCK_SNAPSHOT_STALE_AFTER: Duration = Duration::from_millis(500);
+const PLAYBACK_STARVATION_GRACE: Duration = Duration::from_millis(500);
+const PLAYBACK_BUFFER_RECOVERY_AUDIO: Duration = Duration::from_millis(250);
 const AUDIO_OUTPUT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(10);
 const POSITION_EVENT_INTERVAL: Duration = Duration::from_millis(100);
 const FRAME_OUTPUT_BARRIER_TIMEOUT: Duration = Duration::from_secs(2);
@@ -1662,6 +1664,7 @@ fn run_playback_worker(
     let mut last_audio_snapshot = None;
     let mut last_audio_snapshot_at = None;
     let mut audio_output_backpressure = AudioOutputBackpressureState::default();
+    let mut buffering = PlaybackBufferingTracker::default();
     let mut eof_published = false;
     let mut loop_count = 0u64;
     trace::log(format!(
@@ -1742,9 +1745,11 @@ fn run_playback_worker(
         );
         let after_clock_sync = std::time::Instant::now();
 
+        let mut produced_video_frame = false;
         if !frame_output_quiesced {
             match engine.tick() {
                 Ok(Some(frame)) => {
+                    produced_video_frame = true;
                     let position = frame.pts.unwrap_or(frame.media_time);
                     last_position_event = Some((playback_generation, position));
                     trace::log(format!(
@@ -1828,6 +1833,14 @@ fn run_playback_worker(
             }
         }
 
+        let buffering_event = update_buffering_from_worker(
+            engine,
+            &mut buffering,
+            last_audio_snapshot,
+            last_audio_snapshot_at,
+            produced_video_frame,
+        );
+
         sync_playback_clock_from_worker(
             engine,
             &inner,
@@ -1836,6 +1849,10 @@ fn run_playback_worker(
             &mut last_worker_clock,
         );
         let after_av = std::time::Instant::now();
+
+        if let Some(buffering) = buffering_event {
+            emit_from_worker(&inner, PlayerEvent::BufferingChanged(buffering));
+        }
 
         emit_video_decoder_events_from_worker(engine, &inner);
 
@@ -1885,6 +1902,130 @@ fn run_playback_worker(
             ));
         }
     }
+}
+
+#[derive(Default)]
+struct PlaybackBufferingTracker {
+    active: bool,
+    starvation_started_at: Option<Instant>,
+    last_video_frame_at: Option<Instant>,
+    last_audio_underflow_frames: Option<u64>,
+}
+
+fn audio_snapshot_is_starved(
+    snapshot: AudioClockSnapshot,
+    previous_underflow_frames: Option<u64>,
+    starvation_pending: bool,
+) -> bool {
+    let underflow_advanced =
+        previous_underflow_frames.is_some_and(|previous| snapshot.underflow_frames > previous);
+    snapshot.queued_frames == 0 && (underflow_advanced || starvation_pending)
+}
+
+fn audio_snapshot_recovery_reference(snapshot: AudioClockSnapshot) -> Option<Duration> {
+    let queued = snapshot.queued_duration?;
+    (queued >= PLAYBACK_BUFFER_RECOVERY_AUDIO)
+        .then_some(snapshot.media_time)
+        .flatten()
+}
+
+fn update_buffering_from_worker(
+    engine: &mut VideoPlaybackEngine,
+    tracker: &mut PlaybackBufferingTracker,
+    audio_snapshot: Option<AudioClockSnapshot>,
+    audio_snapshot_at: Option<Instant>,
+    produced_video_frame: bool,
+) -> Option<bool> {
+    let now = Instant::now();
+    if produced_video_frame {
+        tracker.last_video_frame_at = Some(now);
+    }
+
+    if engine.state() != PlaybackRunState::Playing {
+        let ended_buffering = tracker.active;
+        *tracker = PlaybackBufferingTracker::default();
+        return ended_buffering.then_some(false);
+    }
+
+    if tracker.active && !engine.is_buffering() {
+        tracker.active = false;
+        tracker.starvation_started_at = None;
+        tracker.last_video_frame_at = produced_video_frame.then_some(now);
+        tracker.last_audio_underflow_frames =
+            audio_snapshot.map(|snapshot| snapshot.underflow_frames);
+        return Some(false);
+    }
+
+    let fresh_audio = audio_snapshot.filter(|_| {
+        audio_snapshot_at.is_some_and(|observed| {
+            now.saturating_duration_since(observed) < AUDIO_CLOCK_SNAPSHOT_STALE_AFTER
+        })
+    });
+
+    if engine.is_buffering() {
+        let video_ready = !engine.has_video_output() || engine.buffering_video_pts().is_some();
+        let audio_reference = fresh_audio.and_then(audio_snapshot_recovery_reference);
+        let audio_ready = !engine.has_audio_output() || audio_reference.is_some();
+        if video_ready && audio_ready {
+            let reference = audio_reference
+                .or_else(|| engine.buffering_video_pts())
+                .unwrap_or_else(|| engine.media_time());
+            let source = if audio_reference.is_some() {
+                PlaybackClockSource::Audio
+            } else {
+                PlaybackClockSource::Wall
+            };
+            if engine.resume_buffering_at(reference, source, now) {
+                tracker.active = false;
+                tracker.starvation_started_at = None;
+                tracker.last_video_frame_at = Some(now);
+                tracker.last_audio_underflow_frames =
+                    audio_snapshot.map(|snapshot| snapshot.underflow_frames);
+                return Some(false);
+            }
+        }
+        tracker.last_audio_underflow_frames =
+            audio_snapshot.map(|snapshot| snapshot.underflow_frames);
+        return None;
+    }
+
+    let audio_starved = if engine.has_audio_output() {
+        fresh_audio.is_some_and(|snapshot| {
+            audio_snapshot_is_starved(
+                snapshot,
+                tracker.last_audio_underflow_frames,
+                tracker.starvation_started_at.is_some(),
+            )
+        })
+    } else {
+        false
+    };
+    let video_starved = engine.has_video_output()
+        && !engine.has_audio_output()
+        && tracker
+            .last_video_frame_at
+            .is_some_and(|last| now.saturating_duration_since(last) >= PLAYBACK_STARVATION_GRACE);
+    let waiting_for_first_frame = engine.is_waiting_for_first_frame();
+    let starved = audio_starved || video_starved || waiting_for_first_frame;
+
+    if starved {
+        let started = *tracker.starvation_started_at.get_or_insert(now);
+        if now.saturating_duration_since(started) >= PLAYBACK_STARVATION_GRACE
+            && engine.begin_buffering_at(now)
+        {
+            tracker.active = true;
+            tracker.last_audio_underflow_frames =
+                audio_snapshot.map(|snapshot| snapshot.underflow_frames);
+            return Some(true);
+        }
+    } else {
+        tracker.starvation_started_at = None;
+        if tracker.last_video_frame_at.is_none() {
+            tracker.last_video_frame_at = Some(now);
+        }
+    }
+    tracker.last_audio_underflow_frames = audio_snapshot.map(|snapshot| snapshot.underflow_frames);
+    None
 }
 
 fn emit_video_decoder_events_from_worker(
@@ -3887,6 +4028,50 @@ mod tests {
 
         assert!(snapshot.is_none());
         assert!(snapshot_at.is_none());
+    }
+
+    #[test]
+    fn buffering_audio_starvation_requires_empty_queue_and_underflow_progress() {
+        let healthy = AudioClockSnapshot {
+            media_time: Some(Duration::from_secs(5)),
+            queued_duration: Some(Duration::from_millis(100)),
+            queued_frames: 4_800,
+            read_frames: 48_000,
+            written_frames: 52_800,
+            underflow_frames: 10,
+        };
+        assert!(!audio_snapshot_is_starved(healthy, Some(9), false));
+
+        let empty = AudioClockSnapshot {
+            queued_duration: Some(Duration::ZERO),
+            queued_frames: 0,
+            underflow_frames: 11,
+            ..healthy
+        };
+        assert!(audio_snapshot_is_starved(empty, Some(10), false));
+        assert!(!audio_snapshot_is_starved(empty, Some(11), false));
+        assert!(audio_snapshot_is_starved(empty, Some(11), true));
+    }
+
+    #[test]
+    fn buffering_audio_recovery_requires_low_water_mark() {
+        let snapshot = |queued_duration, queued_frames| AudioClockSnapshot {
+            media_time: Some(Duration::from_secs(7)),
+            queued_duration: Some(queued_duration),
+            queued_frames,
+            read_frames: 48_000,
+            written_frames: 60_000,
+            underflow_frames: 0,
+        };
+
+        assert_eq!(
+            audio_snapshot_recovery_reference(snapshot(Duration::from_millis(249), 11_952)),
+            None
+        );
+        assert_eq!(
+            audio_snapshot_recovery_reference(snapshot(Duration::from_millis(250), 12_000)),
+            Some(Duration::from_secs(7))
+        );
     }
 
     #[test]

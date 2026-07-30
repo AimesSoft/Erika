@@ -3684,6 +3684,8 @@ pub struct VideoPlaybackEngine {
     last_presented_pts: Option<Duration>,
     eof: bool,
     waiting_for_first_frame: bool,
+    buffering: bool,
+    buffering_video_pts: Option<Duration>,
     paused_seek_frame_pending: bool,
     video_seek_floor: Option<Duration>,
     audio_seek_floor: Option<Duration>,
@@ -3763,6 +3765,8 @@ impl VideoPlaybackEngine {
             last_presented_pts: None,
             eof: false,
             waiting_for_first_frame: false,
+            buffering: false,
+            buffering_video_pts: None,
             paused_seek_frame_pending: false,
             video_seek_floor: None,
             audio_seek_floor: None,
@@ -3972,6 +3976,8 @@ impl VideoPlaybackEngine {
         trace_clock_reset("reset_streams_at", before, media_time, self.state);
         self.last_presented_pts = None;
         self.eof = false;
+        self.buffering = false;
+        self.buffering_video_pts = None;
         self.waiting_for_first_frame = self.state == PlaybackRunState::Playing;
         self.paused_seek_frame_pending = self.state == PlaybackRunState::Paused;
         self.video_seek_floor = Some(media_time);
@@ -3982,6 +3988,65 @@ impl VideoPlaybackEngine {
 
     pub fn state(&self) -> PlaybackRunState {
         self.state
+    }
+
+    pub(crate) fn is_buffering(&self) -> bool {
+        self.buffering
+    }
+
+    pub(crate) fn is_waiting_for_first_frame(&self) -> bool {
+        self.waiting_for_first_frame
+    }
+
+    pub(crate) fn buffering_video_pts(&self) -> Option<Duration> {
+        self.buffering_video_pts
+    }
+
+    pub(crate) fn has_audio_output(&self) -> bool {
+        self.audio_output_active && self.info().selected_audio_track.is_some()
+    }
+
+    pub(crate) fn has_video_output(&self) -> bool {
+        self.info().selected_video_track.is_some()
+    }
+
+    pub(crate) fn begin_buffering_at(&mut self, now: Instant) -> bool {
+        if self.state != PlaybackRunState::Playing || self.buffering {
+            return false;
+        }
+        let media_time = self.clock.media_time_at(now);
+        self.clock.pause(now);
+        self.buffering = true;
+        self.buffering_video_pts = None;
+        trace::log(format!(
+            "[erika-clock-trace] stage=buffering_begin media={}",
+            trace::duration_label(Some(media_time)),
+        ));
+        true
+    }
+
+    pub(crate) fn resume_buffering_at(
+        &mut self,
+        reference_time: Duration,
+        source: PlaybackClockSource,
+        now: Instant,
+    ) -> bool {
+        if self.state != PlaybackRunState::Playing || !self.buffering {
+            return false;
+        }
+        let before = self.clock.media_time_at(now);
+        self.clock.sync_to(reference_time, now, source);
+        self.clock.play(now);
+        self.buffering = false;
+        self.buffering_video_pts = None;
+        trace::log(format!(
+            "[erika-clock-trace] stage=buffering_resume before={} reference={} after={} source={:?}",
+            trace::duration_label(Some(before)),
+            trace::duration_label(Some(reference_time)),
+            trace::duration_label(Some(self.clock.media_time_at(now))),
+            source,
+        ));
+        true
     }
 
     pub(crate) fn should_prefill_audio(&self) -> bool {
@@ -4095,6 +4160,8 @@ impl VideoPlaybackEngine {
             waiting_for_first_frame,
         ));
         self.state = PlaybackRunState::Playing;
+        self.buffering = false;
+        self.buffering_video_pts = None;
         self.waiting_for_first_frame = waiting_for_first_frame;
         self.paused_seek_frame_pending = false;
         self.rebase_progress_watchdogs();
@@ -4130,6 +4197,8 @@ impl VideoPlaybackEngine {
             trace::duration_label(Some(self.clock.media_time_at(now))),
         ));
         self.state = PlaybackRunState::Paused;
+        self.buffering = false;
+        self.buffering_video_pts = None;
         self.waiting_for_first_frame = false;
         self.paused_seek_frame_pending = seek_frame_pending;
     }
@@ -4169,6 +4238,8 @@ impl VideoPlaybackEngine {
         self.state = PlaybackRunState::Stopped;
         self.eof = false;
         self.waiting_for_first_frame = false;
+        self.buffering = false;
+        self.buffering_video_pts = None;
         self.paused_seek_frame_pending = false;
         self.video_seek_floor = Some(Duration::ZERO);
         self.audio_seek_floor = Some(Duration::ZERO);
@@ -4224,6 +4295,8 @@ impl VideoPlaybackEngine {
         self.last_presented_pts = None;
         self.eof = false;
         self.state = state_after;
+        self.buffering = false;
+        self.buffering_video_pts = None;
         self.waiting_for_first_frame = state_after == PlaybackRunState::Playing;
         self.paused_seek_frame_pending = state_after == PlaybackRunState::Paused;
         self.video_seek_floor = Some(position);
@@ -4319,7 +4392,7 @@ impl VideoPlaybackEngine {
         snapshot: AudioClockSnapshot,
         now: impl FnOnce() -> Instant,
     ) -> Option<ClockCorrection> {
-        if self.state != PlaybackRunState::Playing {
+        if self.state != PlaybackRunState::Playing || self.buffering {
             return None;
         }
         if (self.clock.rate() - 1.0).abs() > 0.001 {
@@ -4498,6 +4571,9 @@ impl VideoPlaybackEngine {
         if self.state != PlaybackRunState::Playing && !paused_seek_preview {
             return Ok(None);
         }
+        if self.buffering && self.buffering_video_pts.is_some() {
+            return Ok(None);
+        }
         let tick_started = Instant::now();
         let mut consecutive_drops = 0usize;
         let mut seek_preroll_drops = 0usize;
@@ -4545,7 +4621,9 @@ impl VideoPlaybackEngine {
                     now,
                     PlaybackClockSource::Wall,
                 );
-                self.clock.play(now);
+                if !self.buffering {
+                    self.clock.play(now);
+                }
                 trace::log(format!(
                     "[erika-clock-trace] stage=first_video_sync pts={} before={} after={} state={:?}",
                     trace::duration_label(pts),
@@ -4554,6 +4632,19 @@ impl VideoPlaybackEngine {
                     self.state,
                 ));
                 self.waiting_for_first_frame = false;
+            }
+
+            if self.buffering {
+                let frame = self.pending_frame.take().expect("pending frame exists");
+                self.last_presented_pts = pts;
+                self.buffering_video_pts = pts.or(Some(self.media_time_at(now())));
+                return Ok(Some(TimedVideoFrame {
+                    frame: frame.frame,
+                    decode_backend: frame.decode_backend,
+                    pts,
+                    media_time: self.media_time_at(now()),
+                    late_by: None,
+                }));
             }
 
             let media_time = self.media_time_at(now());
@@ -4778,6 +4869,8 @@ impl VideoPlaybackEngine {
             }
             self.eof = true;
             self.state = PlaybackRunState::Ended;
+            self.buffering = false;
+            self.buffering_video_pts = None;
             let eof_now = now();
             let media_time = self
                 .info()
@@ -6390,6 +6483,59 @@ mod tests {
         assert_eq!(
             clock.media_time_at(pause_time + Duration::from_secs(60)),
             Duration::from_millis(10_500)
+        );
+    }
+
+    #[test]
+    fn buffering_freezes_clock_and_resumes_from_recovered_media_time() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+        let stalled_at = t0 + Duration::from_secs(2);
+
+        assert!(engine.begin_buffering_at(stalled_at));
+        assert!(engine.is_buffering());
+        assert_eq!(engine.media_time_at(stalled_at), Duration::from_secs(2));
+        assert_eq!(
+            engine.media_time_at(stalled_at + Duration::from_secs(15)),
+            Duration::from_secs(2)
+        );
+
+        let recovered_at = stalled_at + Duration::from_secs(15);
+        assert!(engine.resume_buffering_at(
+            Duration::from_millis(2_250),
+            PlaybackClockSource::Audio,
+            recovered_at,
+        ));
+        assert!(!engine.is_buffering());
+        assert_eq!(
+            engine.media_time_at(recovered_at),
+            Duration::from_millis(2_250)
+        );
+        assert_eq!(
+            engine.media_time_at(recovered_at + Duration::from_millis(50)),
+            Duration::from_millis(2_300)
+        );
+    }
+
+    #[test]
+    fn buffering_resume_allows_controlled_backward_reanchor() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+        let stalled_at = t0 + Duration::from_secs(10);
+
+        assert!(engine.begin_buffering_at(stalled_at));
+        assert!(engine.resume_buffering_at(
+            Duration::from_secs(4),
+            PlaybackClockSource::Audio,
+            stalled_at + Duration::from_secs(1),
+        ));
+        assert_eq!(
+            engine.media_time_at(stalled_at + Duration::from_secs(1)),
+            Duration::from_secs(4)
         );
     }
 
