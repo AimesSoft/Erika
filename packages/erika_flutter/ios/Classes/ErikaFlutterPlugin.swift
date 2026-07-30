@@ -615,6 +615,7 @@ private final class ErikaPlayerHost {
   private(set) var nowPlayingTitle = ""
   private(set) var nowPlayingArtist: String?
   private(set) var nowPlayingAlbum: String?
+  private(set) var nowPlayingArtwork: MPMediaItemArtwork?
   private(set) var durationSeconds: Double?
   private(set) var positionSeconds = 0.0
   private(set) var playbackRate = 1.0
@@ -717,10 +718,20 @@ private final class ErikaPlayerHost {
     notifyNowPlayingChanged()
   }
 
-  func setMediaMetadata(title: String, artist: String?, album: String?) {
+  func setMediaMetadata(title: String, artist: String?, album: String?, artworkData: Data?) throws {
+    let artwork: MPMediaItemArtwork?
+    if let artworkData {
+      guard let image = UIImage(data: artworkData) else {
+        throw ErikaPluginError.invalidArguments("metadata.artwork must contain a supported image.")
+      }
+      artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+    } else {
+      artwork = nil
+    }
     nowPlayingTitle = title
     nowPlayingArtist = artist
     nowPlayingAlbum = album
+    nowPlayingArtwork = artwork
     notifyNowPlayingChanged()
   }
 
@@ -2112,10 +2123,11 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
     guard let title = metadata["title"] as? String, !title.isEmpty else {
       throw ErikaPluginError.invalidArguments("metadata.title is required.")
     }
-    host.setMediaMetadata(
+    try host.setMediaMetadata(
       title: title,
       artist: metadata["artist"] as? String,
-      album: metadata["album"] as? String
+      album: metadata["album"] as? String,
+      artworkData: (metadata["artwork"] as? FlutterStandardTypedData)?.data
     )
   }
 
@@ -2129,6 +2141,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
     ]
     if let artist = host.nowPlayingArtist { info[MPMediaItemPropertyArtist] = artist }
     if let album = host.nowPlayingAlbum { info[MPMediaItemPropertyAlbumTitle] = album }
+    if let artwork = host.nowPlayingArtwork { info[MPMediaItemPropertyArtwork] = artwork }
     if let duration = host.durationSeconds { info[MPMediaItemPropertyPlaybackDuration] = duration }
     let center = MPNowPlayingInfoCenter.default()
     center.nowPlayingInfo = info

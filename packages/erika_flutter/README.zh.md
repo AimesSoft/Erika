@@ -46,7 +46,7 @@ iOS CocoaPod script phase 会在 Xcode 构建期间自动构建 Erika 原生依�
 
 - `rustup target add aarch64-apple-ios`
 
-宿主应用必须在 Xcode 的 Signing & Capabilities 中启用 Background Modes > Audio, AirPlay, and Picture in Picture，或在 `Info.plist` 的 `UIBackgroundModes` 中加入 `audio`。播放器会注册控制中心的 Now Playing 信息和播放控制；建议通过 `ErikaMediaMetadata` 提供标题、作者和专辑。
+宿主应用必须在 Xcode 的 Signing & Capabilities 中启用 Background Modes > Audio, AirPlay, and Picture in Picture，或在 `Info.plist` 的 `UIBackgroundModes` 中加入 `audio`。播放器会注册控制中心的 Now Playing 信息和播放控制；建议通过 `ErikaMediaMetadata` 提供标题、作者、专辑和封面图片字节。
 
 ## Windows Setup
 

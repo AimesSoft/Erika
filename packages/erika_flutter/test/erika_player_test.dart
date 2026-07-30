@@ -124,10 +124,12 @@ void main() {
 
   test('media metadata is forwarded for system now playing info', () async {
     final player = ErikaPlayer();
-    const metadata = ErikaMediaMetadata(
+    final artwork = Uint8List.fromList(<int>[1, 2, 3, 4]);
+    final metadata = ErikaMediaMetadata(
       title: 'Episode 1',
       artist: 'Erika',
       album: 'Season 1',
+      artwork: artwork,
     );
 
     await player.open('https://example.test/video.mkv', metadata: metadata);
@@ -143,6 +145,7 @@ void main() {
         'title': 'Episode 1',
         'artist': 'Erika',
         'album': 'Season 1',
+        'artwork': artwork,
       },
     });
     final metadataCall = playerCalls.singleWhere(
@@ -154,6 +157,7 @@ void main() {
         'title': 'Episode 1',
         'artist': 'Erika',
         'album': 'Season 1',
+        'artwork': artwork,
       },
     });
 

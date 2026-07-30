@@ -12,16 +12,19 @@ class ErikaMediaMetadata {
     required this.title,
     this.artist,
     this.album,
+    this.artwork,
   });
 
   final String title;
   final String? artist;
   final String? album;
+  final Uint8List? artwork;
 
   Map<String, Object> toMap() => <String, Object>{
         'title': title,
         if (artist != null) 'artist': artist!,
         if (album != null) 'album': album!,
+        if (artwork != null) 'artwork': artwork!,
       };
 }
 
