@@ -123,7 +123,7 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
       return;
     }
     if (call.method === 'screenshot') {
-      result.success(null);
+      this.captureFrame(args, result);
       return;
     }
     if (this.isNativePlayerMethod(call.method)) {
@@ -275,6 +275,40 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
     }
     result.success(null);
     this.drainEvents(playerId);
+  }
+
+  private captureFrame(args: Map<string, ESObject>, result: MethodResult): void {
+    const playerId = this.numberArg(args, 'playerId', 0);
+    if (!this.players.has(playerId)) {
+      result.error('ERIKA_ERROR', 'Unknown Erika player ' + playerId, null);
+      return;
+    }
+
+    let fallbackWidth = 0;
+    let fallbackHeight = 0;
+    this.textures.forEach((texture: ErikaTexture): void => {
+      if (texture.playerId === playerId) {
+        fallbackWidth = texture.width;
+        fallbackHeight = texture.height;
+      }
+    });
+    const width = Math.trunc(this.numberArg(args, 'width', fallbackWidth));
+    const height = Math.trunc(this.numberArg(args, 'height', fallbackHeight));
+    if (width <= 0 || height <= 0) {
+      result.error(
+        'ERIKA_ERROR',
+        'Screenshot width and height are required before an OpenHarmony surface is attached',
+        null,
+      );
+      return;
+    }
+
+    const bytes = erikaNative.nativeCaptureFrame(
+      playerId,
+      width,
+      height,
+    ) as Uint8Array | null;
+    result.success(bytes);
   }
 
   private invokePlayer(
