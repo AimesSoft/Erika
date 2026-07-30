@@ -260,6 +260,8 @@ ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *, double rat
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *, double volume);   // 0.0–1.0
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *, int32_t mode);  // ErikaLumaUpscalerMode
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *, double scale);
+ErikaStatus erika_presenter_set_subtitle_font(ErikaPresenterHandle *, const char *family, const char *file_path);
+ErikaStatus erika_presenter_set_subtitle_style(ErikaPresenterHandle *, ErikaSubtitleStyle style);
 ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float headroom, bool known);
 ```
 
@@ -267,6 +269,64 @@ ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float he
 luma upscaler at runtime (see [`erika_presenter_get_upscaler_status`](#diagnostics-and-capture));
 Metal and capable wgpu/Vulkan renderers execute ArtCNN, while backends without
 compute retain native luma sampling and report an explicit `Inactive` fallback.
+
+`set_subtitle_font` and `set_subtitle_style` set the subtitle *fallback* look.
+An empty family or path clears that half of the selection. Colours are
+`0xRRGGBBAA`, defaulting to opaque white text (`0xFFFFFFFF`) and
+half-transparent black outline (`0x0000007F`). `font_size` (default `48`,
+clamped to `8..400`) and `outline_width` (default `2`, clamped to `0..32`) are in
+ASS script units and are still multiplied by `set_subtitle_scale`. A container
+ASS script keeps its own styling; these only fill in what the script leaves
+open, what the system cannot resolve, and the look of plain-text (SRT/WebVTT)
+subtitles.
+
+`ErikaSubtitleStyle` carries the full look, and out-of-range metrics are clamped
+rather than rejected:
+
+```c
+typedef struct ErikaSubtitleStyle {
+  const char *font_family;      /* NULL or empty keeps the platform default */
+  const char *font_file_path;
+  uint32_t primary_color_rgba;  /* 0xRRGGBBAA */
+  uint32_t outline_color_rgba;
+  double font_size;             /* 8..400   */
+  double outline_width;         /* 0..32    */
+  bool bold, italic, underline, strike_out;
+  double spacing;               /* -100..100 */
+  double scale_x_percent;       /* 1..1000, 100 = unscaled */
+  double scale_y_percent;
+  int32_t border_style;         /* 1 outline+shadow, 3 opaque box */
+  double shadow_depth;          /* 0..32 */
+  double blur;                  /* 0..100 */
+  int32_t alignment;            /* 1..9, numpad layout, 2 = bottom centre */
+  int32_t margin_left, margin_right, margin_vertical;
+  uint32_t override_mask;
+} ErikaSubtitleStyle;
+```
+
+`override_mask` decides which of those fields stop being fallbacks and instead
+replace what ASS dialogue events request, through libass' selective style
+override. It is a bitmask of the `ERIKA_SUBTITLE_OVERRIDE_*` macros in
+`erika.h`, which mirror libass' `ASS_OVERRIDE_BIT_*` values:
+
+| Macro | Replaces |
+| --- | --- |
+| `ERIKA_SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS` | `font_size`, `spacing`, `scale_x_percent`, `scale_y_percent` |
+| `ERIKA_SUBTITLE_OVERRIDE_FONT_NAME` | `font_family` |
+| `ERIKA_SUBTITLE_OVERRIDE_COLORS` | `primary_color_rgba`, `outline_color_rgba` |
+| `ERIKA_SUBTITLE_OVERRIDE_ATTRIBUTES` | `bold`, `italic`, `underline`, `strike_out` |
+| `ERIKA_SUBTITLE_OVERRIDE_BORDER` | `border_style`, `outline_width`, `shadow_depth` |
+| `ERIKA_SUBTITLE_OVERRIDE_ALIGNMENT` | `alignment` |
+| `ERIKA_SUBTITLE_OVERRIDE_MARGINS` | `margin_left`, `margin_right`, `margin_vertical` |
+| `ERIKA_SUBTITLE_OVERRIDE_BLUR` | `blur` |
+| `ERIKA_SUBTITLE_OVERRIDE_ALL` | every field above |
+
+`0` leaves every field a fallback, and unknown bits are dropped. Sizes stay
+resolution-independent when overridden — a `font_size` of `48` lands on the same
+pixels whatever `PlayResY` a script declares. Margins do not: libass leaves
+override margins in the script's own units, so on a container ASS track they
+scale with that script's `PlayResY`, while on plain-text subtitles (whose script
+Erika generates at the frame size) they are pixels.
 
 `ErikaHttpHeader` is defined as:
 

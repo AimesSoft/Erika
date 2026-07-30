@@ -74,7 +74,8 @@ Decoder availability は session invariant です。video track が選択され�
 ## 字幕システム
 
 - **Parsing**: SRT、WebVTT、ASS timeline parsing。embedded / external subtitle track を扱い、external track は runtime で追加・削除できます。
-- **libass renderer**: static link で既定有効。ASS script を受け取り、`ass_render_frame` を呼び、alpha plane を Erika の overlay system に取り込みます。macOS では CoreText font provider を使い、iOS では Erika に内蔵した Droid Sans Fallback を memory font として登録して、app からアクセスできない system font path を避けます。
+- **libass renderer**: static link で既定有効。ASS script を受け取り、`ass_render_frame` を呼び、alpha plane を Erika の overlay system に取り込みます。macOS では CoreText font provider、Windows では DirectWrite を使います。それ以外の target は system font provider 無しで動作するため（vendored libass は fontconfig を無効化）、全 platform で memory font として登録される内蔵の Droid Sans Fallback が libass の既定 family になります。
+- **字幕スタイル**: custom な font family と font file、色、metrics（サイズ・縁取り・影・blur・字間・拡大率）、attribute、border style、alignment、margin は fallback として働き、script が指定していない部分と plain-text 字幕の styling を埋めます（metrics には字幕 scale がさらに掛かります）。`override_mask` は選んだ field を libass の selective style override に昇格させ、ASS dialogue が要求する styling も置き換えます。override 時の metrics は再正規化され、script の `PlayResY` に関係なく同じ pixel になります。
 - **SubtitleRendererCore**: changed / unchanged frame を追跡し、不要な GPU upload を避ける renderer-facing boundary です。
 
 ## 弾幕システム

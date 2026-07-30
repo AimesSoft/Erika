@@ -998,6 +998,103 @@ void main() {
     },
   );
 
+  test('subtitle style forwards font and colors with defaults', () async {
+    final player = ErikaPlayer();
+
+    await player.setSubtitleStyle(
+      fontFamily: 'Erika Sans',
+      fontFilePath: '/tmp/subtitle.otf',
+    );
+
+    final call = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'setSubtitleStyle',
+    );
+    expect(call.arguments, <String, Object?>{
+      'playerId': 7,
+      'fontFamily': 'Erika Sans',
+      'fontFilePath': '/tmp/subtitle.otf',
+      'primaryColorRgba': kErikaDefaultSubtitlePrimaryColorRgba,
+      'outlineColorRgba': kErikaDefaultSubtitleOutlineColorRgba,
+      'fontSize': kErikaDefaultSubtitleFontSize,
+      'outlineWidth': kErikaDefaultSubtitleOutlineWidth,
+      'bold': false,
+      'italic': false,
+      'underline': false,
+      'strikeOut': false,
+      'spacing': 0.0,
+      'scaleXPercent': 100.0,
+      'scaleYPercent': 100.0,
+      'borderStyle': 1,
+      'shadowDepth': 0.0,
+      'blur': 0.0,
+      'alignment': 2,
+      'marginLeft': 48,
+      'marginRight': 48,
+      'marginVertical': 54,
+      'overrideMask': 0,
+    });
+
+    await player.dispose();
+  });
+
+  test('subtitle style keeps previously applied fields', () async {
+    final player = ErikaPlayer();
+
+    await player.setSubtitleStyle(fontFamily: 'Erika Sans');
+    await player.setSubtitleStyle(
+      primaryColorRgba: 0xFF0000FF,
+      fontSize: 64.0,
+      outlineWidth: 4.0,
+      bold: true,
+      italic: true,
+      underline: true,
+      strikeOut: true,
+      spacing: 2.5,
+      scaleXPercent: 110.0,
+      scaleYPercent: 90.0,
+      borderStyle: 3,
+      shadowDepth: 5.0,
+      blur: 1.5,
+      alignment: 8,
+      marginLeft: 24,
+      marginRight: 36,
+      marginVertical: 42,
+      overrideMask: kErikaSubtitleOverrideAll,
+    );
+    await player.setSubtitleStyle(marginVertical: 84);
+
+    final calls = playerCalls
+        .where((MethodCall call) => call.method == 'setSubtitleStyle')
+        .toList();
+    expect(calls, hasLength(3));
+    expect(calls.last.arguments, <String, Object?>{
+      'playerId': 7,
+      'fontFamily': 'Erika Sans',
+      'fontFilePath': '',
+      'primaryColorRgba': 0xFF0000FF,
+      'outlineColorRgba': kErikaDefaultSubtitleOutlineColorRgba,
+      'fontSize': 64.0,
+      'outlineWidth': 4.0,
+      'bold': true,
+      'italic': true,
+      'underline': true,
+      'strikeOut': true,
+      'spacing': 2.5,
+      'scaleXPercent': 110.0,
+      'scaleYPercent': 90.0,
+      'borderStyle': 3,
+      'shadowDepth': 5.0,
+      'blur': 1.5,
+      'alignment': 8,
+      'marginLeft': 24,
+      'marginRight': 36,
+      'marginVertical': 84,
+      'overrideMask': kErikaSubtitleOverrideAll,
+    });
+
+    await player.dispose();
+  });
+
   test('danmaku config forwards block words as json', () async {
     final player = ErikaPlayer();
 

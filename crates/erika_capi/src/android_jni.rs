@@ -780,6 +780,34 @@ unsafe fn invoke_presenter(
             let scale = required_f64(args, "scale")?;
             status_value(unsafe { erika_presenter_set_subtitle_scale(handle, scale) })
         }
+        "setSubtitleStyle" => {
+            let family = optional_c_string(args, "fontFamily")?;
+            let file_path = optional_c_string(args, "fontFilePath")?;
+            let mut style = ErikaSubtitleStyle::default();
+            style.font_family = optional_c_string_ptr(&family);
+            style.font_file_path = optional_c_string_ptr(&file_path);
+            update_u32(args, "primaryColorRgba", &mut style.primary_color_rgba);
+            update_u32(args, "outlineColorRgba", &mut style.outline_color_rgba);
+            update_f64(args, "fontSize", &mut style.font_size);
+            update_f64(args, "outlineWidth", &mut style.outline_width);
+            update_bool(args, "bold", &mut style.bold);
+            update_bool(args, "italic", &mut style.italic);
+            update_bool(args, "underline", &mut style.underline);
+            update_bool(args, "strikeOut", &mut style.strike_out);
+            update_f64(args, "spacing", &mut style.spacing);
+            update_f64(args, "scaleXPercent", &mut style.scale_x_percent);
+            update_f64(args, "scaleYPercent", &mut style.scale_y_percent);
+            update_i32(args, "borderStyle", &mut style.border_style);
+            update_f64(args, "shadowDepth", &mut style.shadow_depth);
+            update_f64(args, "blur", &mut style.blur);
+            update_i32(args, "alignment", &mut style.alignment);
+            update_i32(args, "marginLeft", &mut style.margin_left);
+            update_i32(args, "marginRight", &mut style.margin_right);
+            update_i32(args, "marginVertical", &mut style.margin_vertical);
+            update_u32(args, "overrideMask", &mut style.override_mask);
+            call_status(unsafe { erika_presenter_set_subtitle_style(handle, style) })?;
+            Ok(Value::Null)
+        }
         "setOutputHeadroom" => {
             let headroom = required_f64(args, "headroom")? as f32;
             let known =
@@ -1555,6 +1583,24 @@ fn update_f32(args: &Map<String, Value>, name: &str, target: &mut f32) {
         if value.is_finite() {
             *target = value as f32;
         }
+    }
+}
+
+fn update_f64(args: &Map<String, Value>, name: &str, target: &mut f64) {
+    if let Some(value) = args.get(name).and_then(Value::as_f64) {
+        if value.is_finite() {
+            *target = value;
+        }
+    }
+}
+
+fn update_i32(args: &Map<String, Value>, name: &str, target: &mut i32) {
+    if let Some(value) = args
+        .get(name)
+        .and_then(Value::as_i64)
+        .and_then(|value| value.try_into().ok())
+    {
+        *target = value;
     }
 }
 

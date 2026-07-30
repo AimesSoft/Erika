@@ -55,8 +55,8 @@ use crate::subtitle::{
     decoded_subtitle_frames_to_ass_script_with_style,
 };
 use crate::subtitle::{
-    DecodedSubtitleFrame, SubtitleAssStyle, SubtitleRendererCore, SubtitleTrackConfig,
-    SubtitleViewport, decoded_subtitle_frames_to_timeline,
+    DecodedSubtitleFrame, SubtitleAssStyle, SubtitleRendererCore, SubtitleStyleConfig,
+    SubtitleTrackConfig, SubtitleViewport, decoded_subtitle_frames_to_timeline,
 };
 use crate::trace;
 #[cfg(target_os = "windows")]
@@ -253,6 +253,7 @@ pub struct PresenterRuntime {
     current_surface_metrics: Option<SurfaceMetrics>,
     current_danmaku_viewport: Option<DanmakuViewport>,
     subtitle_font_scale: f64,
+    subtitle_style: SubtitleStyleConfig,
     subtitles: SubtitleFrameState,
     overlay: OverlayTimeline,
     render_test_pattern_when_idle: bool,
@@ -560,6 +561,7 @@ impl PresenterRuntime {
             current_surface_metrics: None,
             current_danmaku_viewport: None,
             subtitle_font_scale: DEFAULT_SUBTITLE_FONT_SCALE,
+            subtitle_style: SubtitleStyleConfig::default(),
             subtitles: SubtitleFrameState::default(),
             overlay: config.overlay,
             render_test_pattern_when_idle: config.render_test_pattern_when_idle,
@@ -726,6 +728,35 @@ impl PresenterRuntime {
             return;
         }
         self.subtitle_font_scale = scale;
+        self.refresh_current_overlay();
+    }
+
+    /// Sets the fallback subtitle font. An empty family or path clears that
+    /// half of the selection and restores the platform default.
+    pub fn set_subtitle_font(&mut self, family: String, file_path: String) {
+        let style = SubtitleStyleConfig {
+            font_family: family,
+            font_file_path: file_path,
+            ..self.subtitle_style.clone()
+        }
+        .normalized();
+        self.apply_subtitle_style(style);
+    }
+
+    pub fn set_subtitle_style(&mut self, style: SubtitleStyleConfig) {
+        self.apply_subtitle_style(style);
+    }
+
+    pub fn subtitle_style(&self) -> &SubtitleStyleConfig {
+        &self.subtitle_style
+    }
+
+    fn apply_subtitle_style(&mut self, style: SubtitleStyleConfig) {
+        let style = style.normalized();
+        if self.subtitle_style == style {
+            return;
+        }
+        self.subtitle_style = style;
         self.refresh_current_overlay();
     }
 
@@ -1217,7 +1248,7 @@ impl PresenterRuntime {
         self.subtitles.append_to_overlay(
             self.current_media_time,
             &mut capture_overlay,
-            subtitle_style,
+            &subtitle_style,
         );
         let capture_danmaku = self.danmaku.render_plan(
             self.current_media_time,
@@ -1491,7 +1522,7 @@ impl PresenterRuntime {
             .render(pts, OverlayViewport::new(viewport.width, viewport.height));
         let subtitle_style = self.subtitle_ass_style(overlay.viewport);
         self.subtitles
-            .append_to_overlay(pts, &mut overlay, subtitle_style);
+            .append_to_overlay(pts, &mut overlay, &subtitle_style);
         if subtitle_diag_enabled() {
             eprintln!(
                 "[erika-subtitle-diag] stage=update_overlay pts={} gen={} video={}x{} overlay={}",
@@ -1652,7 +1683,7 @@ impl PresenterRuntime {
                 );
                 let subtitle_style = self.subtitle_ass_style(overlay.viewport);
                 self.subtitles
-                    .append_to_overlay(player_time, &mut overlay, subtitle_style);
+                    .append_to_overlay(player_time, &mut overlay, &subtitle_style);
                 if subtitle_diag_enabled() {
                     eprintln!(
                         "[erika-subtitle-diag] stage=clock_overlay player={} gen={} overlay_viewport={}x{} overlay={}",
@@ -1692,7 +1723,7 @@ impl PresenterRuntime {
         );
         let subtitle_style = self.subtitle_ass_style(overlay.viewport);
         self.subtitles
-            .append_to_overlay(self.current_media_time, &mut overlay, subtitle_style);
+            .append_to_overlay(self.current_media_time, &mut overlay, &subtitle_style);
         self.current_overlay = Some(overlay);
     }
 
@@ -1701,6 +1732,7 @@ impl PresenterRuntime {
             font_scale: self.subtitle_font_scale,
             play_res_width: viewport.width,
             play_res_height: viewport.height,
+            style: self.subtitle_style.clone(),
         }
     }
 
@@ -2676,7 +2708,7 @@ impl SubtitleFrameState {
         &mut self,
         pts: Duration,
         overlay: &mut OverlayFrame,
-        style: SubtitleAssStyle,
+        style: &SubtitleAssStyle,
     ) {
         self.retain_at(pts);
         let mut subtitle_changed = false;
@@ -2684,7 +2716,7 @@ impl SubtitleFrameState {
         #[cfg(feature = "libass")]
         match self
             .ass_renderer
-            .render(pts, overlay.viewport, style.font_scale)
+            .render(pts, overlay.viewport, style.font_scale, &style.style)
         {
             Ok(Some(bitmaps)) => {
                 subtitle_changed |= bitmaps.changed;
@@ -2733,7 +2765,7 @@ impl SubtitleFrameState {
         pts: Duration,
         overlay: &mut OverlayFrame,
         frames: &[DecodedSubtitleFrame],
-        style: SubtitleAssStyle,
+        style: &SubtitleAssStyle,
     ) -> bool {
         match self
             .text_renderer
@@ -2766,7 +2798,7 @@ impl SubtitleFrameState {
         pts: Duration,
         overlay: &mut OverlayFrame,
         frames: &[DecodedSubtitleFrame],
-        _style: SubtitleAssStyle,
+        _style: &SubtitleAssStyle,
     ) -> bool {
         append_text_subtitles_debug(pts, overlay, frames);
         true
@@ -2780,6 +2812,7 @@ struct CachedAssTrackRenderer {
     track_id: Option<i64>,
     resources: Option<Arc<AssTrackResources>>,
     renderer: Option<LibassSubtitleRenderer>,
+    style: SubtitleStyleConfig,
 }
 
 #[cfg(feature = "libass")]
@@ -2820,10 +2853,11 @@ impl CachedAssTrackRenderer {
             || resources_changed
         {
             self.clear();
-            self.renderer = Some(LibassSubtitleRenderer::from_ass_track(
+            self.renderer = Some(LibassSubtitleRenderer::from_ass_track_with_style(
                 frame.track_id,
                 resources,
                 LibassRenderConfig::default(),
+                &self.style,
             )?);
             self.generation = generation;
             self.track_id = Some(frame.track_id);
@@ -2849,10 +2883,16 @@ impl CachedAssTrackRenderer {
         pts: Duration,
         viewport: OverlayViewport,
         font_scale: f64,
+        style: &SubtitleStyleConfig,
     ) -> crate::subtitle::Result<Option<SubtitleBitmapSet>> {
+        if &self.style != style {
+            self.style = style.clone();
+        }
         let Some(renderer) = self.renderer.as_mut() else {
             return Ok(None);
         };
+        renderer.set_play_res_height(viewport.height);
+        renderer.set_style(style);
         renderer.set_font_scale(font_scale);
         match renderer.render(SubtitleRenderRequest::new(
             pts,
@@ -2886,7 +2926,7 @@ impl CachedLibassTextRenderer {
         pts: Duration,
         viewport: OverlayViewport,
         frames: &[DecodedSubtitleFrame],
-        style: SubtitleAssStyle,
+        style: &SubtitleAssStyle,
     ) -> crate::subtitle::Result<Option<SubtitleBitmapSet>> {
         let fallback_end = pts.saturating_add(Duration::from_secs(24 * 60 * 60));
         let Some(script) =
@@ -2897,9 +2937,10 @@ impl CachedLibassTextRenderer {
             return Ok(None);
         };
         if self.script.as_ref() != Some(&script) {
-            self.renderer = Some(LibassSubtitleRenderer::from_ass_script(
+            self.renderer = Some(LibassSubtitleRenderer::from_ass_script_with_style(
                 script.as_bytes(),
                 LibassRenderConfig::default(),
+                &style.style,
             )?);
             self.script = Some(script);
         }
@@ -2907,6 +2948,9 @@ impl CachedLibassTextRenderer {
         let Some(renderer) = self.renderer.as_mut() else {
             return Ok(None);
         };
+        renderer.set_override_font_scale(style.font_scale);
+        renderer.set_play_res_height(style.play_res_height);
+        renderer.set_style(&style.style);
         match renderer.render(SubtitleRenderRequest::new(
             pts,
             viewport.width,
@@ -3200,7 +3244,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_secs(3),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
 
         assert_eq!(overlay.subtitle_planes.len(), 2);
@@ -3223,7 +3267,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_secs(4),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
 
         assert_eq!(overlay.subtitle_planes.len(), 1);
@@ -3239,7 +3283,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_millis(4500),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
 
         assert!(overlay.subtitle_planes.is_empty());
@@ -3254,7 +3298,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_secs(2),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
         assert_eq!(overlay.subtitle_planes.len(), 1);
 
@@ -3263,7 +3307,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_secs(3),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
 
         assert!(overlay.subtitle_planes.is_empty());
@@ -3283,7 +3327,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_secs(2),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
 
         #[cfg(feature = "libass")]
@@ -3317,7 +3361,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_millis(500),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
         assert!(overlay.subtitle_planes.is_empty());
         assert!(!overlay.subtitle_alpha_planes.is_empty());
@@ -3334,7 +3378,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_millis(750),
             &mut cleared,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
         assert!(cleared.subtitle_alpha_planes.is_empty());
         assert!(state.ass_renderer.renderer.is_none());
@@ -3372,7 +3416,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_millis(500),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
         assert!(overlay.subtitle_alpha_planes.is_empty());
     }

@@ -159,6 +159,21 @@ for (final track in tracks) {
 await player.selectAudioTrack(trackId);
 await player.selectSubtitleTrack(trackId);
 await player.addExternalSubtitle('/path/to/subtitle.srt');
+await player.setSubtitleScale(1.2);
+// 字幕的回退外观（颜色为 0xRRGGBBAA）。省略的参数沿用该 player 上次应用的值；
+// 置起 overrideMask 的对应位还会覆盖 ASS 脚本自带的样式。
+await player.setSubtitleStyle(
+  fontFamily: 'Source Han Sans SC',
+  primaryColorRgba: 0xFFFFFFFF,
+  outlineColorRgba: 0x0000007F,
+  fontSize: 48,
+  outlineWidth: 2,
+  overrideMask:
+      kErikaSubtitleOverrideFontName |
+      kErikaSubtitleOverrideColors |
+      kErikaSubtitleOverrideFontSizeFields |
+      kErikaSubtitleOverrideBorder,
+);
 
 // Danmaku
 await player.loadDanmakuFile('/path/to/danmaku.xml');
