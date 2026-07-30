@@ -747,8 +747,6 @@ mod libass_ffi {
     }
 }
 
-/// `ASS_OVERRIDE_BIT_FONT_SIZE_FIELDS`: override `FontSize`, `Spacing`,
-/// `ScaleX` and `ScaleY` on dialogue events.
 /// Style name handed to libass for the override style. libass stores this
 /// pointer without copying it, so it has to be `'static`.
 #[cfg(feature = "libass")]
@@ -836,8 +834,16 @@ pub struct SubtitleStyleConfig {
     pub shadow_depth: f64,
     pub blur: f64,
     pub alignment: i32,
+    /// Left margin. Unlike the sizes above, libass does not normalize override
+    /// margins against the script resolution, so these are script units rather
+    /// than pixels: on plain-text subtitles, whose generated script is authored
+    /// at the frame size, they are pixels, but on a container ASS track they are
+    /// relative to whatever `PlayResY` the script declares.
     pub margin_left: i32,
+    /// Right margin, in the same units as [`Self::margin_left`].
     pub margin_right: i32,
+    /// Bottom (or top, per `alignment`) margin, in the same units as
+    /// [`Self::margin_left`].
     pub margin_vertical: i32,
     pub override_mask: u32,
 }
@@ -993,6 +999,16 @@ pub struct LibassSubtitleRenderer {
     style: SubtitleStyleConfig,
 }
 
+/// Font selection currently installed in libass. `ass_set_fonts` rebuilds the
+/// font selector, which re-parses every attachment the library holds, so it may
+/// only run when this selection actually changes.
+#[cfg(feature = "libass")]
+#[derive(Debug, PartialEq)]
+struct LibassFontSelection {
+    family: CString,
+    default_font: Option<CString>,
+}
+
 #[cfg(feature = "libass")]
 #[derive(Debug)]
 struct LibassRuntime {
@@ -1000,6 +1016,10 @@ struct LibassRuntime {
     renderer: NonNull<libass_ffi::AssRenderer>,
     track_id: i64,
     loaded_font_files: HashSet<String>,
+    fonts: Option<LibassFontSelection>,
+    /// Counts `ass_set_fonts` calls. Only meaningful to the tests that pin how
+    /// rarely the font selector is rebuilt.
+    fonts_generation: u64,
     _log_context: Box<LibassLogContext>,
     _log_bridge: Box<libass_ffi::ErikaAssLogBridge>,
 }
@@ -1053,6 +1073,8 @@ impl LibassRuntime {
                 renderer,
                 track_id,
                 loaded_font_files: HashSet::new(),
+                fonts: None,
+                fonts_generation: 0,
                 _log_context: log_context,
                 _log_bridge: log_bridge,
             }
@@ -1065,62 +1087,93 @@ impl LibassRuntime {
     /// known font and the last-resort font path, the custom family becomes the
     /// default family, and `override_mask` decides which dialogue styling is
     /// replaced instead of merely backfilled.
+    ///
+    /// Only the override metrics depend on `font_scale` and `play_res_height`,
+    /// and those are cheap to re-push; the font selection is left alone unless
+    /// the family or the font file changed.
     fn configure_style(
         &mut self,
         style: &SubtitleStyleConfig,
         font_scale: f64,
         play_res_height: u32,
     ) {
-        if let Some(path) = style.font_file_path() {
-            self.load_custom_font_file(path);
-        }
-        let custom_family = style
-            .font_family()
-            .and_then(|family| CString::new(family).ok());
-        let default_font = style
-            .font_file_path()
-            .and_then(|path| CString::new(path).ok());
-        let family = custom_family
-            .as_deref()
-            .unwrap_or_else(|| default_ass_font_family_cstr());
-        unsafe {
-            libass_ffi::ass_set_fonts(
-                self.renderer.as_ptr(),
-                default_font
-                    .as_ref()
-                    .map_or(std::ptr::null(), |path| path.as_ptr()),
-                family.as_ptr(),
-                default_ass_font_provider(),
-                std::ptr::null(),
-                1,
-            );
-        }
-        let override_bits =
-            self.configure_style_override(style, family, font_scale, play_res_height);
+        let fonts_changed = self.configure_fonts(style);
+        let override_bits = self.configure_style_override(style, font_scale, play_res_height);
         crate::trace::diagnostic(
             serde_json::json!({
                 "event": "subtitle_font_fallback",
                 "stage": "configured",
                 "trackId": self.track_id,
-                "defaultFamily": family.to_string_lossy(),
+                "defaultFamily": self.default_family().to_string_lossy(),
                 "fontProvider": default_ass_font_provider(),
                 "customFontFile": style.font_file_path(),
+                "fontsChanged": fonts_changed,
+                "fontsGeneration": self.fonts_generation,
                 "overrideBits": override_bits,
             })
             .to_string(),
         );
     }
 
+    /// Installs the style's font selection, skipping libass entirely when it is
+    /// already the one in effect. `ass_set_fonts` frees the font selector and
+    /// builds a new one, which re-parses every font the library holds (the
+    /// bundled fallback, every container attachment, every custom face) and
+    /// empties the font, metrics and bitmap caches — far too much work to repeat
+    /// on a viewport resize. Returns whether libass was reconfigured.
+    fn configure_fonts(&mut self, style: &SubtitleStyleConfig) -> bool {
+        if let Some(path) = style.font_file_path() {
+            self.load_custom_font_file(path);
+        }
+        let selection = LibassFontSelection {
+            family: style
+                .font_family()
+                .and_then(|family| CString::new(family).ok())
+                .unwrap_or_else(|| default_ass_font_family_cstr().to_owned()),
+            default_font: style
+                .font_file_path()
+                .and_then(|path| CString::new(path).ok()),
+        };
+        if self.fonts.as_ref() == Some(&selection) {
+            return false;
+        }
+        unsafe {
+            libass_ffi::ass_set_fonts(
+                self.renderer.as_ptr(),
+                selection
+                    .default_font
+                    .as_ref()
+                    .map_or(std::ptr::null(), |path| path.as_ptr()),
+                selection.family.as_ptr(),
+                default_ass_font_provider(),
+                std::ptr::null(),
+                1,
+            );
+        }
+        self.fonts = Some(selection);
+        self.fonts_generation += 1;
+        true
+    }
+
+    /// Family libass falls back to, which is also the family the override style
+    /// requests. Valid once [`Self::configure_fonts`] has run.
+    fn default_family(&self) -> &CStr {
+        match self.fonts.as_ref() {
+            Some(fonts) => &fonts.family,
+            None => default_ass_font_family_cstr(),
+        }
+    }
+
     /// Enables libass' selective style override when the user asked for their
     /// font and colours to win over the script's own dialogue styles. Returns
     /// the enabled bits so callers can report them.
     fn configure_style_override(
-        &mut self,
+        &self,
         style: &SubtitleStyleConfig,
-        family: &CStr,
         font_scale: f64,
         play_res_height: u32,
     ) -> libc::c_int {
+        let family = self.default_family();
         let bits = (style.override_mask & SUBTITLE_OVERRIDE_ALL) as libc::c_int;
         if bits != 0 {
             unsafe {
@@ -1384,16 +1437,17 @@ impl LibassSubtitleRenderer {
         unsafe { libass_ffi::ass_flush_events(self.track.as_ptr()) };
     }
 
+    /// Sets the scale libass applies to the whole script, including whatever the
+    /// selective style override replaced. Applied straight from
+    /// [`SubtitleRenderer::render`], so it needs no reconfiguration here.
     pub fn set_font_scale(&mut self, scale: f64) {
-        let scale = normalize_ass_font_scale(scale);
-        if self.font_scale == scale {
-            return;
-        }
-        self.font_scale = scale;
-        self.runtime
-            .configure_style(&self.style, self.override_font_scale, self.play_res_height);
+        self.font_scale = normalize_ass_font_scale(scale);
     }
 
+    /// Sets the scale folded into the override metrics, for the plain-text path
+    /// where the generated header bakes the scale into a style the override then
+    /// replaces outright. Leave it at `1.0` on tracks that carry their own
+    /// script, where [`Self::set_font_scale`] already covers the override.
     pub fn set_override_font_scale(&mut self, scale: f64) {
         let scale = normalize_ass_font_scale(scale);
         if self.override_font_scale == scale {
@@ -1404,6 +1458,11 @@ impl LibassSubtitleRenderer {
             .configure_style(&self.style, self.override_font_scale, self.play_res_height);
     }
 
+    /// Height the override metrics are normalized against, which must be the
+    /// height the frame is rendered at — not the script's own `PlayResY`. libass
+    /// scales the override style by `PlayResY / 288`, and cancelling that against
+    /// the frame height is what makes the metrics land on the same pixels as the
+    /// non-override baseline whatever `PlayResY` a script declares.
     pub fn set_play_res_height(&mut self, play_res_height: u32) {
         let play_res_height = play_res_height.max(1);
         if self.play_res_height == play_res_height {
@@ -3292,10 +3351,63 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert!(heights[0] < 80);
     }
 
+    /// `ass_set_fonts` rebuilds libass' font selector, re-parsing every font the
+    /// library holds. Metric-only changes arrive from the render path on every
+    /// resize and every scale tweak, so they must not reach it.
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_rebuilds_the_font_selector_only_when_the_font_selection_changes() {
+        let style = SubtitleStyleConfig {
+            override_mask: SUBTITLE_OVERRIDE_ALL,
+            ..SubtitleStyleConfig::default()
+        };
+        let mut renderer = LibassSubtitleRenderer::from_ass_script_with_style(
+            SIMPLE_ASS_SCRIPT,
+            LibassRenderConfig::default(),
+            &style,
+        )
+        .unwrap();
+        let installed = renderer.runtime.fonts_generation;
+        assert_eq!(
+            installed, 1,
+            "construction installs the font selection once"
+        );
+
+        renderer.set_play_res_height(1080);
+        renderer.set_play_res_height(720);
+        renderer.set_override_font_scale(1.5);
+        renderer.set_font_scale(2.0);
+        renderer.set_style(&SubtitleStyleConfig {
+            font_size: 64.0,
+            primary_color_rgba: 0xff00_00ff,
+            margin_vertical: 96,
+            ..style.clone()
+        });
+        assert_eq!(
+            renderer.runtime.fonts_generation, installed,
+            "metric and colour changes must not rebuild the font selector"
+        );
+
+        // A family that differs from every platform's default fallback.
+        renderer.set_style(&SubtitleStyleConfig {
+            font_family: "Erika Override Family".to_string(),
+            ..style
+        });
+        assert_eq!(
+            renderer.runtime.fonts_generation,
+            installed + 1,
+            "a new family must reach libass"
+        );
+    }
+
     #[cfg(feature = "libass")]
     #[test]
     fn libass_loads_a_custom_font_file_for_the_configured_family() {
-        let path = std::env::temp_dir().join("erika_subtitle_custom_font.ttf");
+        // Keep the name unique so concurrent test runs cannot clobber each other.
+        let path = std::env::temp_dir().join(format!(
+            "erika_subtitle_custom_font_{}.ttf",
+            std::process::id()
+        ));
         std::fs::write(&path, crate::NIPAPLAY_FALLBACK_FONT).unwrap();
 
         let style = SubtitleStyleConfig {
