@@ -202,6 +202,12 @@ sleep で 60 Hz を近似できます。
 - **トラック:** `erika_presenter_tracks`（カウント配列イディオム）、`select_audio_track` /
   `select_subtitle_track`（id `-1` で字幕無効）、`add_external_subtitle`、
   `remove_subtitle_track`、`set_subtitle_scale`。
+- **字幕スタイル:** `set_subtitle_font(family, file_path)` と
+  `set_subtitle_style(ErikaSubtitleStyle)`（font・色・metrics・attribute・縁取り・
+  alignment・margin）。どちらも fallback で、対応する `override_mask` の bit を
+  立てない限り ASS script は自身の styling を保ちます。サイズと縁取りには
+  `set_subtitle_scale` がさらに掛かります。
+  [capi_reference.ja.md](capi_reference.ja.md#再生とランタイムパラメータ) 参照。
 - **弾幕:** トラックの読み込み（`load_danmaku_file` / `_json` またはマルチトラック
   `add_danmaku_track_*`）、トグル（`set_danmaku_enabled`）、`set_danmaku_config` で調整、
   トラックのオフセット、フォント設定、ブロックワード設定。
