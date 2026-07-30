@@ -40,6 +40,8 @@ cargo build -p erika_capi
 
 source build の architecture は macOS では `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`、Windows では `ERIKA_WINDOWS_ARCH=x64|arm64`、Android では `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86` で選択します。native library を直接 build する場合、`xtask --target`、`ERIKA_NATIVE_TARGET`、`cargo build --target` は同じ target にしてください。詳細は [building.ja.md](../../docs/building.ja.md) を参照してください。
 
+macOS plugin は Now Playing を通じてタイトル、アーティスト、アルバム、artwork、再生状態、timeline を公開し、Remote Command Center からの再生、一時停止、停止、seek を処理します。
+
 ## iOS Setup
 
 iOS の CocoaPod script phase が、Xcode build 中に Erika の native dependency と C ABI static library を自動 build します。対応する iOS target の Rust toolchain が必要です。
@@ -49,6 +51,26 @@ iOS の CocoaPod script phase が、Xcode build 中に Erika の native dependen
 host app では、Xcode の Signing & Capabilities で **Background Modes > Audio, AirPlay, and Picture in Picture** を有効にするか、`Info.plist` の `UIBackgroundModes` に `audio` を追加してください。player は Now Playing 情報と再生 control を Control Center に登録します。タイトル、アーティスト、アルバム、エンコード済み artwork bytes を表示するには `ErikaMediaMetadata` を指定してください。
 
 バックグラウンド再生はデフォルトで無効です。バックグラウンドで音声を継続する場合は、`ErikaPlayer(allowBackgroundPlayback: true)` を指定してください。host app で上記の Background Mode が有効でない場合、この option を指定しても iOS はバックグラウンド再生の継続を保証しません。
+
+```dart
+final player = ErikaPlayer(
+  allowBackgroundPlayback: true,
+);
+
+final artwork = await rootBundle.load('assets/cover.jpg');
+await player.open(
+  mediaUrl,
+  metadata: ErikaMediaMetadata(
+    title: 'タイトル',
+    artist: 'アーティスト',
+    album: 'アルバム',
+    artwork: artwork.buffer.asUint8List(),
+  ),
+);
+await player.play();
+```
+
+`allowBackgroundPlayback` は player 作成時の option であり、native player の作成後には変更できません。`false` の場合、App がバックグラウンドに入ると再生を一時停止し、foreground に戻っても一時停止状態を維持します。`true` の場合、バックグラウンドでは動画 decode を停止して音声のみを継続し、App が active になると動画を再開します。Control Center から再生、一時停止、再生位置の変更ができます。artwork には raw pixel ではなく、JPEG や PNG など `UIImage` が対応する形式の完全な encoded image bytes を指定してください。
 
 ## Windows Setup
 
@@ -60,11 +82,15 @@ Windows plugin（`ErikaFlutterPluginCApi`）は CMake build 中に `build_erika_
 
 plugin が Erika checkout を自動検出できない場合は `ERIKA_REPO_ROOT` を設定してください。
 
+Windows plugin は System Media Transport Controls（SMTC）を通じてタイトル、アーティスト、アルバム、artwork、再生状態、timeline を公開し、system の再生、一時停止、seek を処理します。C++/WinRT を含む Windows SDK が必要で、必要な WinRT system library は plugin が自動的に link します。
+
 ## Android Setup
 
 Android Gradle build は Erika の `xtask` で native dependency を構築し、選択した ABI 向けに Cargo で `erika_capi` を build します。Android API 26 以降、Android NDK、対応する Rust target が必要です。生成される `jniLibs` には `liberika_capi.so` と ABI に対応する NDK の `libc++_shared.so` が含まれます。既定は arm64 と x86_64 で、`-PerikaAndroidAbis=arm64-v8a,x86_64` または `ERIKA_ANDROID_ABIS` で変更できます。
 
 Android の `content://` media/subtitle URI は `ContentResolver` で開いて detach し、provider の offset/length を含む所有権付き `fd://` source として Erika に渡します。
+
+Android は MediaSession と media notification を使って lock screen、Bluetooth、system media control に接続します。`allowBackgroundPlayback: true` の場合は `mediaPlayback` foreground Service を起動し、video decode を停止したままバックグラウンドで音声を継続します。plugin Manifest には foreground service と Android 13+ の notification permission が宣言されていますが、host app は product flow に応じて `POST_NOTIFICATIONS` runtime permission を要求する必要があります。permission が拒否された場合も media session は動作しますが、notification の表示は Android version と system policy に依存します。
 
 Android minimum は API 26 のままです。Extended-linear は native-window dataspace API
 （API 28+）も必要で、API 26/27 は SDR playback を継続して該当 fallback を報告します。
@@ -79,6 +105,8 @@ HarmonyOS module には DevEco Studio の OpenHarmony Native SDK と Rust の
 `aarch64-unknown-linux-ohos` target が必要です。Hvigor/CMake build が LGPL の
 FFmpeg/zlib 依存と `liberika_capi.so` を compile し、その runtime を
 `liberika_flutter.so` と一緒に package します。
+
+HarmonyOS は AVSession を通じて metadata、artwork、再生状態、位置、再生速度を公開し、system の再生、一時停止、停止、seek command を処理します。
 
 HarmonyOS では `ErikaVideoView` を使ってください。Flutter external texture を登録し、
 その texture surface を `OHNativeWindow` として取得して、wgpu Vulkan で描画します。

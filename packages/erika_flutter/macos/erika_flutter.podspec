@@ -12,7 +12,7 @@ Flutter macOS plugin that hosts a CAMetalLayer and drives Erika through its C AB
   s.source_files     = 'Classes/**/*'
   s.dependency 'FlutterMacOS'
   s.platform = :osx, '10.14'
-  s.swift_version = '5.0'
+  s.swift_version = '5.7'
   s.script_phase = {
     :name => 'Build Erika C ABI',
     :execution_position => :before_compile,
@@ -157,6 +157,6 @@ codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" "$DEST_DYLIB"
     SCRIPT
   }
   s.pod_target_xcconfig = {
-    'OTHER_LDFLAGS' => '$(inherited) -framework QuartzCore -framework Metal'
+    'OTHER_LDFLAGS' => '$(inherited) -framework QuartzCore -framework Metal -framework MediaPlayer'
   }
 end

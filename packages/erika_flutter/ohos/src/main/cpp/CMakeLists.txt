@@ -45,7 +45,7 @@ add_custom_command(
   COMMAND
     "${CMAKE_COMMAND}" -E env
       "OHOS_NDK_HOME=${OHOS_SDK_NATIVE}"
-      "${CARGO_EXECUTABLE}" +1.93.0 run -q -p xtask --
+      "${CARGO_EXECUTABLE}" run -q -p xtask --
       deps build --profile lgpl --target "${ERIKA_TARGET}"
   COMMAND
     "${CMAKE_COMMAND}" -E env
@@ -58,7 +58,7 @@ add_custom_command(
       "CC_aarch64_unknown_linux_ohos=${OHOS_LLVM_BIN}/aarch64-unknown-linux-ohos-clang"
       "CXX_aarch64_unknown_linux_ohos=${OHOS_LLVM_BIN}/aarch64-unknown-linux-ohos-clang++"
       "AR_aarch64_unknown_linux_ohos=${OHOS_LLVM_BIN}/llvm-ar"
-      "${CARGO_EXECUTABLE}" +1.93.0 build -p erika_capi
+      "${CARGO_EXECUTABLE}" build -p erika_capi
       --target "${ERIKA_TARGET}" --release
       --no-default-features --features wgpu
   WORKING_DIRECTORY "${ERIKA_ROOT}"

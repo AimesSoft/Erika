@@ -21,6 +21,7 @@
 #include <unordered_map>
 
 #include "erika.h"
+#include "erika_windows_smtc.h"
 
 namespace erika_flutter {
 
@@ -98,6 +99,10 @@ class ErikaFlutterPlugin : public flutter::Plugin {
   int64_t CreatePlayer(const flutter::EncodableValue* arguments);
   void RemovePlayer(int64_t player_id);
   void SendEvent(flutter::EncodableValue event);
+  void EnsureSmtc();
+  void SetActivePlayer(int64_t player_id);
+  void RefreshSmtc();
+  void HandleSmtcCommand(ErikaSmtcCommand command, uint64_t position_micros);
 
   flutter::PluginRegistrarWindows* registrar_ = nullptr;
   std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>>
@@ -105,6 +110,8 @@ class ErikaFlutterPlugin : public flutter::Plugin {
   std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> event_sink_;
   std::unordered_map<int64_t, std::unique_ptr<PlayerHost>> players_;
   std::unique_ptr<ErikaOverlayWindow> overlay_window_;
+  std::unique_ptr<ErikaWindowsSmtc> smtc_;
+  int64_t active_player_id_ = 0;
   int64_t next_player_id_ = 1;
   int window_proc_delegate_id_ = 0;
   HWND frame_message_window_ = nullptr;

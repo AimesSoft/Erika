@@ -52,6 +52,9 @@ internal object ErikaNative {
     external fun nativeRenderTick(handle: Long, timeSeconds: Double): String
 
     @JvmStatic
+    external fun nativeAudioOnlyTick(handle: Long): String
+
+    @JvmStatic
     external fun nativePollEvent(handle: Long): String?
 
     @JvmStatic

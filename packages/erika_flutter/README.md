@@ -49,6 +49,10 @@ consuming project can set `ERIKA_MACOS_ARCHS=arm64`, `x86_64`, or
 matching `macos-arm64`, `macos-x64`, or `macos-universal` archive. At runtime
 the plugin loads the library via `dlopen`.
 
+The macOS plugin publishes title, artist, album, artwork, playback state, and
+timeline through Now Playing, and handles system play, pause, stop, and seek
+commands through Remote Command Center.
+
 Overrides: `ERIKA_CAPI_DYLIB` forces the runtime dylib path; `ERIKA_MACOS_CAPI_DYLIB`
 points the build phase at an explicit dylib to bundle instead of building.
 
@@ -81,6 +85,26 @@ The host app must enable **Background Modes > Audio, AirPlay, and Picture in Pic
 
 Background playback is disabled by default. Create the player with `ErikaPlayer(allowBackgroundPlayback: true)` to keep audio playing in the background. iOS does not guarantee continued background playback unless the host app also enables the Background Mode described above.
 
+```dart
+final player = ErikaPlayer(
+  allowBackgroundPlayback: true,
+);
+
+final artwork = await rootBundle.load('assets/cover.jpg');
+await player.open(
+  mediaUrl,
+  metadata: ErikaMediaMetadata(
+    title: 'Title',
+    artist: 'Artist',
+    album: 'Album',
+    artwork: artwork.buffer.asUint8List(),
+  ),
+);
+await player.play();
+```
+
+`allowBackgroundPlayback` is a player creation option and cannot be changed after the native player has been created. When it is `false`, playback pauses as the app enters the background and remains paused on return. When it is `true`, video decoding is suspended while audio continues in the background, and video resumes when the app becomes active. Control Center supports play, pause, and position changes. Artwork must contain complete encoded image bytes in a format supported by `UIImage`, such as JPEG or PNG, rather than raw pixels.
+
 ## Windows Setup
 
 The Windows plugin (`ErikaFlutterPluginCApi`) builds the Erika C ABI runtime
@@ -100,6 +124,11 @@ Requirements:
 Set `ERIKA_REPO_ROOT` if the plugin cannot locate the Erika checkout
 automatically.
 
+The Windows plugin publishes title, artist, album, artwork, playback state, and
+timeline through System Media Transport Controls (SMTC), and handles system
+play, pause, and seek commands. A Windows SDK with C++/WinRT is required; the
+plugin links the required WinRT system libraries automatically.
+
 ## Android Setup
 
 The Android Gradle plugin invokes Erika's `xtask` dependency build and then
@@ -112,6 +141,15 @@ this with `-PerikaAndroidAbis=arm64-v8a,x86_64` or `ERIKA_ANDROID_ABIS`.
 Android `content://` media and subtitle URIs are opened through
 `ContentResolver`, detached, and passed to Erika as owned `fd://` sources with
 their provider offset and length.
+
+Android uses MediaSession and a media notification for lock-screen, Bluetooth,
+and system media controls. With `allowBackgroundPlayback: true`, a
+`mediaPlayback` foreground service keeps audio running while video decoding is
+suspended. The plugin manifest declares the foreground-service and Android 13+
+notification permissions, but the host app must request `POST_NOTIFICATIONS`
+at runtime as appropriate for its product flow. If permission is denied, the
+media session remains available while notification visibility depends on the
+Android version and system policy.
 
 Android's minimum remains API 26. Extended-linear output additionally needs the
 native-window dataspace API (API 28+); API 26/27 continue in SDR and report the
@@ -127,6 +165,9 @@ The HarmonyOS module requires DevEco Studio's OpenHarmony Native SDK and the
 Rust `aarch64-unknown-linux-ohos` target. Its Hvigor/CMake build compiles the
 LGPL FFmpeg/zlib dependencies and `liberika_capi.so`, then packages that runtime
 alongside `liberika_flutter.so`.
+
+HarmonyOS uses AVSession to publish metadata, artwork, playback state, position,
+and playback rate, and handles system play, pause, stop, and seek commands.
 
 Use `ErikaVideoView` on HarmonyOS. It registers a Flutter external texture,
 obtains the texture surface as an `OHNativeWindow`, and renders through wgpu

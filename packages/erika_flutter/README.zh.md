@@ -46,9 +46,29 @@ iOS CocoaPod script phase 会在 Xcode 构建期间自动构建 Erika 原生依�
 
 - `rustup target add aarch64-apple-ios`
 
-宿主应用必须在 Xcode 的 Signing & Capabilities 中启用 Background Modes > Audio, AirPlay, and Picture in Picture，或在 `Info.plist` 的 `UIBackgroundModes` 中加入 `audio`。播放器会注册控制中心的 Now Playing 信息和播放控制；建议通过 `ErikaMediaMetadata` 提供标题、作者、专辑和封面图片字节。
+宿主应用必须在 Xcode 的 Signing & Capabilities 中启用 Background Modes > Audio, AirPlay, and Picture in Picture，或在 `Info.plist` 的 `UIBackgroundModes` 中加入 `audio`。iOS 和 macOS 会注册 Now Playing 信息及系统播放控制；建议通过 `ErikaMediaMetadata` 提供标题、作者、专辑和封面图片字节。
 
 后台播放默认关闭。需要后台继续播放音频时，创建播放器时设置 `ErikaPlayer(allowBackgroundPlayback: true)`。宿主未启用上述 Background Mode 时，即使设置该选项，iOS 也不会保证后台持续播放。
+
+```dart
+final player = ErikaPlayer(
+  allowBackgroundPlayback: true,
+);
+
+final artwork = await rootBundle.load('assets/cover.jpg');
+await player.open(
+  mediaUrl,
+  metadata: ErikaMediaMetadata(
+    title: '标题',
+    artist: '作者',
+    album: '专辑',
+    artwork: artwork.buffer.asUint8List(),
+  ),
+);
+await player.play();
+```
+
+`allowBackgroundPlayback` 是播放器创建选项，播放器创建后不能动态修改。设为 `false` 时，App 进入后台会暂停播放，返回前台后保持暂停；设为 `true` 时，后台暂停视频解码但继续播放音频，返回前台后恢复视频。系统媒体面板支持播放、暂停和进度调整。封面应传入 JPEG、PNG 等完整编码图片字节，而不是原始像素数据。
 
 ## Windows Setup
 
@@ -60,11 +80,15 @@ Windows 插件（`ErikaFlutterPluginCApi`）在 CMake 构建期间通过 `build_
 
 若插件无法自动定位 Erika checkout，可设置 `ERIKA_REPO_ROOT`。
 
+Windows 通过 System Media Transport Controls 发布标题、作者、专辑、封面、播放状态和时间线，并支持系统播放、暂停和进度调整。需要包含 C++/WinRT 的 Windows SDK；插件会自动链接所需的 WinRT 系统库。
+
 ## Android Setup
 
 Android Gradle 构建会先调用 Erika 的 `xtask` 构建原生依赖，再用 Cargo 为选定 ABI 构建 `erika_capi`。需要 Android API 26 或更高版本，并安装 Android NDK 和对应 Rust target。生成的 `jniLibs` 会同时包含 `liberika_capi.so` 与匹配 ABI 的 NDK `libc++_shared.so`。默认构建 arm64 与 x86_64；可通过 `-PerikaAndroidAbis=arm64-v8a,x86_64` 或 `ERIKA_ANDROID_ABIS` 指定。
 
 Android `content://` 媒体和字幕 URI 会通过 `ContentResolver` 打开并 detach，连同 provider 的 offset/length 作为由 Rust 接管所有权的 `fd://` source 传入 Erika。
+
+Android 使用 MediaSession 和媒体通知接入锁屏、蓝牙耳机及系统媒体面板。`allowBackgroundPlayback: true` 时会启动 `mediaPlayback` 前台 Service，并在后台仅驱动音频；插件 Manifest 已声明前台服务和 Android 13+ 通知权限，但宿主应用仍需按产品流程向用户请求 `POST_NOTIFICATIONS` 运行时权限。该权限被拒绝时，系统媒体会话仍可工作，但通知展示取决于 Android 版本和系统策略。
 
 Android 最低版本仍为 API 26。Extended-linear 还要求 native-window dataspace API（API
 28+）；API 26/27 会继续 SDR 播放并报告对应 fallback。API 34+ 上，插件会监听
@@ -78,6 +102,8 @@ HarmonyOS 模块需要 DevEco Studio 的 OpenHarmony Native SDK 和 Rust 的
 `aarch64-unknown-linux-ohos` target。它的 Hvigor/CMake 构建会编译 LGPL 的
 FFmpeg/zlib 依赖和 `liberika_capi.so`，然后把这套运行时和 `liberika_flutter.so`
 一起打包。
+
+HarmonyOS 使用 AVSession 发布媒体元数据、封面、播放状态、进度和倍速，并接收系统播放、暂停、停止及进度调整命令。
 
 HarmonyOS 上请使用 `ErikaVideoView`。它注册 Flutter 外部纹理，把纹理 surface 取为
 `OHNativeWindow`，并通过 wgpu Vulkan 渲染。音频走 OHAudio，交错 f32 PCM。

@@ -5,6 +5,7 @@ import android.view.Surface
 internal class AndroidPlayerHost(
     val handle: Long,
     val requestedOutputMode: Int,
+    allowBackgroundPlayback: Boolean,
 ) {
     val requiresExtendedLinearSurface: Boolean
         get() = requestedOutputMode == 2
@@ -12,6 +13,11 @@ internal class AndroidPlayerHost(
     private val playbackTracker = AndroidPlaybackTracker()
     private val contentPreparations = AndroidContentPreparationRegistry()
     private val pendingEvents = AndroidPendingEventQueue(MAX_PENDING_EVENTS)
+    var mediaState = AndroidMediaState(
+        playerId = handle,
+        allowBackgroundPlayback = allowBackgroundPlayback,
+    )
+        private set
     val playbackPhase: AndroidPlaybackPhase
         get() = playbackTracker.phase
     val surfaceAttached: Boolean
@@ -42,6 +48,18 @@ internal class AndroidPlayerHost(
         playbackTracker.handleFocusLoss(mayResume)
 
     fun cancelPlaybackIntent(): Boolean = playbackTracker.cancelPlaybackIntent()
+
+    fun setMediaMetadata(metadata: AndroidMediaMetadata) {
+        mediaState = mediaState.copy(metadata = metadata)
+    }
+
+    fun setPlaybackRate(rate: Float) {
+        mediaState = mediaState.copy(playbackRate = rate)
+    }
+
+    fun updateMediaState(event: Map<*, *>) {
+        mediaState = updatedAndroidMediaState(mediaState, event)
+    }
 
     fun requestRender() = playbackTracker.requestRender()
 
@@ -137,6 +155,11 @@ internal class AndroidPlayerHost(
     fun renderTick(timeSeconds: Double): NativeResponse {
         check(!destroyed) { "Erika player $handle has been destroyed" }
         return NativeJson.decodeResponse(ErikaNative.nativeRenderTick(handle, timeSeconds))
+    }
+
+    fun audioOnlyTick(): NativeResponse {
+        check(!destroyed) { "Erika player $handle has been destroyed" }
+        return NativeJson.decodeResponse(ErikaNative.nativeAudioOnlyTick(handle))
     }
 
     fun pollEvent(): NativeResponse? {
