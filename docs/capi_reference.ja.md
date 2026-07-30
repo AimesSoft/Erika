@@ -240,7 +240,7 @@ ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *, double volume);  
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *, int32_t mode);  // ErikaLumaUpscalerMode
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *, double scale);
 ErikaStatus erika_presenter_set_subtitle_font(ErikaPresenterHandle *, const char *family, const char *file_path);
-ErikaStatus erika_presenter_set_subtitle_style(ErikaPresenterHandle *, uint32_t primary_rgba, uint32_t outline_rgba, double font_size, double outline_width, bool force_override);
+ErikaStatus erika_presenter_set_subtitle_style(ErikaPresenterHandle *, ErikaSubtitleStyle style);
 ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float headroom, bool known);
 ```
 
@@ -255,8 +255,54 @@ family や path が空ならその指定を解除します。色は `0xRRGGBBAA`
 `8..400` にクランプ）と `outline_width`（既定 `2`、`0..32` にクランプ）は ASS script 単位で、
 `set_subtitle_scale` がさらに掛かります。container の ASS script は自身の styling を保ち、
 これらは script が指定していない部分、system が解決できない font、そして plain-text
-（SRT/WebVTT）字幕の見た目を埋めるだけです。`force_override = true` を渡すと、自前の
-styling を持つ ASS dialogue にも font・サイズ・縁取り・色を適用します。
+（SRT/WebVTT）字幕の見た目を埋めるだけです。
+
+`ErikaSubtitleStyle` が見た目の全体を運びます。範囲外の値は拒否せずクランプされます：
+
+```c
+typedef struct ErikaSubtitleStyle {
+  const char *font_family;      /* NULL または空で platform 既定に戻す */
+  const char *font_file_path;
+  uint32_t primary_color_rgba;  /* 0xRRGGBBAA */
+  uint32_t outline_color_rgba;
+  double font_size;             /* 8..400   */
+  double outline_width;         /* 0..32    */
+  bool bold, italic, underline, strike_out;
+  double spacing;               /* -100..100 */
+  double scale_x_percent;       /* 1..1000、100 が等倍 */
+  double scale_y_percent;
+  int32_t border_style;         /* 1 = 縁取り+影、3 = 不透明ボックス */
+  double shadow_depth;          /* 0..32 */
+  double blur;                  /* 0..100 */
+  int32_t alignment;            /* 1..9、テンキー配置、2 = 下中央 */
+  int32_t margin_left, margin_right, margin_vertical;
+  uint32_t override_mask;
+} ErikaSubtitleStyle;
+```
+
+`override_mask` は、どの field を fallback から libass の selective style override
+に昇格させ、ASS dialogue が要求する styling を置き換えるかを決めます。`erika.h` の
+`ERIKA_SUBTITLE_OVERRIDE_*` マクロの bitmask で、libass の `ASS_OVERRIDE_BIT_*` に
+対応します：
+
+| マクロ | 置き換える field |
+| --- | --- |
+| `ERIKA_SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS` | `font_size`、`spacing`、`scale_x_percent`、`scale_y_percent` |
+| `ERIKA_SUBTITLE_OVERRIDE_FONT_NAME` | `font_family` |
+| `ERIKA_SUBTITLE_OVERRIDE_COLORS` | `primary_color_rgba`、`outline_color_rgba` |
+| `ERIKA_SUBTITLE_OVERRIDE_ATTRIBUTES` | `bold`、`italic`、`underline`、`strike_out` |
+| `ERIKA_SUBTITLE_OVERRIDE_BORDER` | `border_style`、`outline_width`、`shadow_depth` |
+| `ERIKA_SUBTITLE_OVERRIDE_ALIGNMENT` | `alignment` |
+| `ERIKA_SUBTITLE_OVERRIDE_MARGINS` | `margin_left`、`margin_right`、`margin_vertical` |
+| `ERIKA_SUBTITLE_OVERRIDE_BLUR` | `blur` |
+| `ERIKA_SUBTITLE_OVERRIDE_ALL` | 上記すべて |
+
+`0` ならすべて fallback のままで、未知の bit は捨てられます。override 時もサイズは
+解像度に依存せず、`font_size` が `48` なら script の `PlayResY` に関係なく同じ
+pixel になります。ただし margin は違います：libass は override の margin を script
+自身の単位のまま扱うため、container の ASS track ではその script の `PlayResY` に
+比例し、plain-text 字幕（Erika が frame サイズで script を生成する）では pixel に
+なります。
 
 `ErikaHttpHeader` は次のように定義されます：
 

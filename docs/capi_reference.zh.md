@@ -231,7 +231,7 @@ ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *, double volume);  
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *, int32_t mode);  // ErikaLumaUpscalerMode
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *, double scale);
 ErikaStatus erika_presenter_set_subtitle_font(ErikaPresenterHandle *, const char *family, const char *file_path);
-ErikaStatus erika_presenter_set_subtitle_style(ErikaPresenterHandle *, uint32_t primary_rgba, uint32_t outline_rgba, double font_size, double outline_width, bool force_override);
+ErikaStatus erika_presenter_set_subtitle_style(ErikaPresenterHandle *, ErikaSubtitleStyle style);
 ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float headroom, bool known);
 ```
 
@@ -245,8 +245,51 @@ path 传空即清除该项。颜色为 `0xRRGGBBAA`，默认不透明白色文�
 半透明黑色描边（`0x0000007F`）。`font_size`（默认 `48`，钳位 `8..400`）与
 `outline_width`（默认 `2`，钳位 `0..32`）以 ASS 脚本单位计，且仍会再乘上
 `set_subtitle_scale`。容器内的 ASS 脚本保留自带样式，这些值只用于补足脚本未指定的
-部分、系统解析不到的字体，以及纯文本（SRT/WebVTT）字幕的外观。传
-`force_override = true` 可让字体、字号、描边与颜色覆盖 ASS 对白自带的样式。
+部分、系统解析不到的字体，以及纯文本（SRT/WebVTT）字幕的外观。
+
+`ErikaSubtitleStyle` 承载完整外观，越界的度量会被钳位而不是拒绝：
+
+```c
+typedef struct ErikaSubtitleStyle {
+  const char *font_family;      /* NULL 或空则回到平台默认 */
+  const char *font_file_path;
+  uint32_t primary_color_rgba;  /* 0xRRGGBBAA */
+  uint32_t outline_color_rgba;
+  double font_size;             /* 8..400   */
+  double outline_width;         /* 0..32    */
+  bool bold, italic, underline, strike_out;
+  double spacing;               /* -100..100 */
+  double scale_x_percent;       /* 1..1000，100 为原始比例 */
+  double scale_y_percent;
+  int32_t border_style;         /* 1 描边+阴影，3 不透明底框 */
+  double shadow_depth;          /* 0..32 */
+  double blur;                  /* 0..100 */
+  int32_t alignment;            /* 1..9，小键盘布局，2 为底部居中 */
+  int32_t margin_left, margin_right, margin_vertical;
+  uint32_t override_mask;
+} ErikaSubtitleStyle;
+```
+
+`override_mask` 决定哪些字段不再只是回退值，而是通过 libass 的 selective style
+override 覆盖 ASS 对白自带的样式。它是 `erika.h` 中 `ERIKA_SUBTITLE_OVERRIDE_*`
+宏的位掩码，与 libass 的 `ASS_OVERRIDE_BIT_*` 一一对应：
+
+| 宏 | 覆盖的字段 |
+| --- | --- |
+| `ERIKA_SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS` | `font_size`、`spacing`、`scale_x_percent`、`scale_y_percent` |
+| `ERIKA_SUBTITLE_OVERRIDE_FONT_NAME` | `font_family` |
+| `ERIKA_SUBTITLE_OVERRIDE_COLORS` | `primary_color_rgba`、`outline_color_rgba` |
+| `ERIKA_SUBTITLE_OVERRIDE_ATTRIBUTES` | `bold`、`italic`、`underline`、`strike_out` |
+| `ERIKA_SUBTITLE_OVERRIDE_BORDER` | `border_style`、`outline_width`、`shadow_depth` |
+| `ERIKA_SUBTITLE_OVERRIDE_ALIGNMENT` | `alignment` |
+| `ERIKA_SUBTITLE_OVERRIDE_MARGINS` | `margin_left`、`margin_right`、`margin_vertical` |
+| `ERIKA_SUBTITLE_OVERRIDE_BLUR` | `blur` |
+| `ERIKA_SUBTITLE_OVERRIDE_ALL` | 以上全部 |
+
+传 `0` 则全部保持回退语义，未知位会被丢弃。覆盖时字号仍与分辨率无关——`font_size`
+为 `48` 时，无论脚本声明何种 `PlayResY` 都落在同样的像素上。边距则不然：libass 让
+覆盖用的 margin 保持脚本自身的单位，因此在容器内的 ASS 轨上它随该脚本的 `PlayResY`
+缩放，而在纯文本字幕（Erika 按画面尺寸生成脚本）上就是像素。
 
 `ErikaHttpHeader` 定义如下：
 

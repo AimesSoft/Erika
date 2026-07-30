@@ -218,10 +218,10 @@ All of these are safe to call live, between ticks:
   `select_audio_track` / `select_subtitle_track` (id `-1` disables subtitles),
   `add_external_subtitle`, `remove_subtitle_track`, `set_subtitle_scale`.
 - **Subtitle style:** `set_subtitle_font(family, file_path)` and
-  `set_subtitle_style(primary_rgba, outline_rgba, font_size, outline_width,
-  force_override)`. Both are fallbacks — an ASS script keeps its own styling
-  unless `force_override` is set — and `set_subtitle_scale` still multiplies the
-  metrics. See
+  `set_subtitle_style(ErikaSubtitleStyle)` (font, colours, metrics, attributes,
+  border, alignment and margins). Both are fallbacks — an ASS script keeps its
+  own styling unless the matching `override_mask` bit is set — and
+  `set_subtitle_scale` still multiplies the metrics. See
   [capi_reference.md](capi_reference.md#playback-and-runtime-parameters).
 - **Danmaku:** load a track (`load_danmaku_file` / `_json` or the multi-track
   `add_danmaku_track_*`), toggle (`set_danmaku_enabled`), tune via

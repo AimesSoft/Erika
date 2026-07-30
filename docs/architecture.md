@@ -105,11 +105,14 @@ enter an audio-only false `Playing` state.
   other target runs without a system font provider (the vendored libass build
   disables fontconfig), so Erika's bundled Droid Sans Fallback — registered as
   an in-memory font on all platforms — is the family libass resolves by default.
-- **Subtitle style**: A custom font family, font file, font size, outline width
-  and text/outline colours act as fallbacks that fill in what a script leaves
+- **Subtitle style**: A custom font family and font file, colours, metrics
+  (size, outline, shadow, blur, spacing, scale), attributes, border style,
+  alignment and margins act as fallbacks that fill in what a script leaves
   open, plus the styling of plain-text subtitles; the subtitle scale multiplies
-  the metrics. `force_override` promotes them to libass' selective style
-  override so they also replace what ASS dialogue events request.
+  the metrics. An `override_mask` promotes chosen fields to libass' selective
+  style override so they also replace what ASS dialogue events request, with the
+  override metrics renormalized so they land on the same pixels whatever
+  `PlayResY` a script declares.
 - **SubtitleRendererCore**: Renderer-facing boundary that tracks changed/unchanged
   frames to avoid redundant GPU uploads.
 
