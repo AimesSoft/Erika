@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Danmaku appearance (breaking for existing hosts)
+
+- **`outline_width` is now a profile, not a multiplier.** `0` is off, `1` fine,
+  `2` normal, `3` thick; values above `3` clamp to thick. Normal and thick
+  reproduce exactly the widths the old continuous multiplier produced at `1.0`
+  and `2.0`, so a host that used to send `outline_width: 1.0` must now send
+  `2.0` to keep the same stroke. Left unmigrated, outlines render thinner —
+  at the default font size the rasterized radius halves from 2 px to 1 px.
+- **Danmaku font size is now interpreted as pixels per em.** `ab_glyph`'s
+  `PxScale` is an ascent-to-descent height, and the previous code passed the
+  em size straight into it, so text rendered smaller than requested by the
+  font's own height/em ratio. Text now matches the requested size, which means
+  existing users see larger danmaku on upgrade: the ratio is 1.0 for STHeiti
+  and Hiragino Sans GB, but 1.4 for PingFang SC (the default macOS face), so
+  the same configuration can render up to 40% larger and fit fewer tracks.
+  Hosts that want the previous look should lower their configured font size.
+- Scroll duration now scales with the viewport's logical width (×0.9 at 640 pt
+  up to ×1.3 at 1920 pt and wider) so a danmaku crosses wide windows in a
+  comparable amount of visual time. The same configuration therefore scrolls
+  more slowly on a large window than it did before.
+- Danmaku screenshots no longer include danmaku; `capture_*` composites video
+  and subtitles only.
+
 ### Custom HTTP headers
 
 - Added `erika_open_with_headers` and `erika_presenter_open_with_headers`,

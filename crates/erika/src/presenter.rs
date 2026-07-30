@@ -28,8 +28,8 @@ use crate::audio::{
     AudioClockSnapshot, AudioOutputBackend, AudioOutputRuntimeStats, AudioRingBufferConfig,
 };
 use crate::core::{
-    AudioOutputEvent, MediaRequest, PlatformSurface, Player, PlayerAudioFrame, PlayerConfig,
-    PlayerSubtitleFrame, PlayerVideoFrame, RenderFrameContext, RendererBackend,
+    AudioOutputEvent, MediaRequest, PlatformSurface, PlaybackSnapshot, Player, PlayerAudioFrame,
+    PlayerConfig, PlayerSubtitleFrame, PlayerVideoFrame, RenderFrameContext, RendererBackend,
     RendererBackendPreference, RendererRuntimeStats, SurfaceMetrics, TrackInfo, TrackSelection,
     VideoFrameImportFailure,
 };
@@ -73,7 +73,6 @@ const DANMAKU_PLAN_REQUEST_QUANTUM: Duration = Duration::from_millis(250);
 const DANMAKU_PREPARE_REFRESH_MARGIN: Duration = Duration::from_secs(4);
 const DANMAKU_PLAN_LOOKAHEAD: Duration = Duration::from_secs(8);
 const DANMAKU_PLAN_LOOKBACK_PADDING: Duration = Duration::from_secs(2);
-const DANMAKU_DISPLAY_CLOCK_SNAP_THRESHOLD: Duration = Duration::from_millis(150);
 const DANMAKU_MOTION_TRACE_INTERVAL: Duration = Duration::from_millis(500);
 const DANMAKU_MOTION_BACKSTEP_EPSILON: f32 = 0.5;
 const DEFAULT_SUBTITLE_FONT_SCALE: f64 = 1.0;
@@ -237,7 +236,6 @@ pub struct PresenterRuntime {
     current_danmaku: Option<DanmakuRenderPlan>,
     current_danmaku_prepared: Option<CurrentDanmakuPrepared>,
     danmaku_plan_replacement_pending: bool,
-    danmaku_display_clock: DanmakuDisplayClock,
     rejected_video_import_route: Option<RejectedVideoImportRoute>,
     current_media_time: Duration,
     current_generation: u64,
@@ -306,131 +304,6 @@ struct DanmakuPlanKey {
     media_time: Duration,
     viewport: DanmakuViewport,
     generation: u64,
-}
-
-#[derive(Debug, Clone)]
-struct DanmakuDisplayClock {
-    media_time: Duration,
-    last_host_time_seconds: Option<f64>,
-    generation: u64,
-    playing: bool,
-    playback_rate: f64,
-    last_step: DanmakuClockStep,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DanmakuClockStep {
-    FirstSample,
-    GenerationReset,
-    PlayStateReset,
-    PlaybackRateReset,
-    InvalidHostReset,
-    HostRollbackReset,
-    Paused,
-    Advanced,
-    ForwardSnap,
-}
-
-impl Default for DanmakuDisplayClock {
-    fn default() -> Self {
-        Self {
-            media_time: Duration::ZERO,
-            last_host_time_seconds: None,
-            generation: 0,
-            playing: false,
-            playback_rate: 1.0,
-            last_step: DanmakuClockStep::FirstSample,
-        }
-    }
-}
-
-impl DanmakuDisplayClock {
-    fn sample(
-        &mut self,
-        host_time_seconds: f64,
-        authoritative_time: Duration,
-        generation: u64,
-        playing: bool,
-        playback_rate: f64,
-    ) -> Duration {
-        let playback_rate = normalize_playback_rate(playback_rate);
-        let host_time_is_valid = host_time_seconds.is_finite();
-        let host_time_went_back = self
-            .last_host_time_seconds
-            .is_some_and(|last| host_time_seconds < last);
-        let reset_step = if self.last_host_time_seconds.is_none() {
-            Some(DanmakuClockStep::FirstSample)
-        } else if self.generation != generation {
-            Some(DanmakuClockStep::GenerationReset)
-        } else if self.playing != playing {
-            Some(DanmakuClockStep::PlayStateReset)
-        } else if (self.playback_rate - playback_rate).abs() > PLAYBACK_RATE_EPSILON {
-            Some(DanmakuClockStep::PlaybackRateReset)
-        } else if !host_time_is_valid {
-            Some(DanmakuClockStep::InvalidHostReset)
-        } else if host_time_went_back {
-            Some(DanmakuClockStep::HostRollbackReset)
-        } else {
-            None
-        };
-
-        if !playing {
-            // Player::pause publishes the paused state before the playback
-            // worker has necessarily published its final clock sample. During
-            // that edge, authoritative_time can therefore be a few
-            // milliseconds older than the already displayed danmaku time.
-            // Seeks advance the generation, so only allow a paused sample to
-            // move backward when it belongs to a new timeline generation.
-            self.media_time =
-                if self.last_host_time_seconds.is_some() && self.generation == generation {
-                    self.media_time.max(authoritative_time)
-                } else {
-                    authoritative_time
-                };
-            self.last_step = DanmakuClockStep::Paused;
-        } else if let Some(reset_step) = reset_step {
-            // Resuming the same generation must keep the position frozen at
-            // the pause edge even if the shared player clock is still
-            // catching up to the worker's final paused sample.
-            self.media_time = if reset_step == DanmakuClockStep::PlayStateReset {
-                self.media_time.max(authoritative_time)
-            } else {
-                authoritative_time
-            };
-            self.last_step = reset_step;
-        } else if let Some(last_host_time) = self.last_host_time_seconds {
-            let elapsed_seconds = (host_time_seconds - last_host_time).max(0.0);
-            self.media_time = self
-                .media_time
-                .saturating_add(Duration::from_secs_f64(elapsed_seconds * playback_rate));
-
-            // While a generation is playing, the player clock can briefly
-            // report an older sample during audio-clock discipline. A real
-            // seek changes the playback generation, so never move the visual
-            // clock backward merely to follow same-generation clock jitter.
-            let forward_drift = authoritative_time.saturating_sub(self.media_time);
-            if forward_drift > DANMAKU_DISPLAY_CLOCK_SNAP_THRESHOLD {
-                self.media_time = authoritative_time;
-                self.last_step = DanmakuClockStep::ForwardSnap;
-            } else {
-                self.last_step = DanmakuClockStep::Advanced;
-            }
-        }
-
-        self.last_host_time_seconds = host_time_is_valid.then_some(host_time_seconds);
-        self.generation = generation;
-        self.playing = playing;
-        self.playback_rate = playback_rate;
-        self.media_time
-    }
-
-    fn reset(&mut self, media_time: Duration) {
-        self.media_time = media_time;
-        self.last_host_time_seconds = None;
-        self.generation = 0;
-        self.playing = false;
-        self.last_step = DanmakuClockStep::FirstSample;
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -728,7 +601,6 @@ impl PresenterRuntime {
             current_danmaku: None,
             current_danmaku_prepared: None,
             danmaku_plan_replacement_pending: false,
-            danmaku_display_clock: DanmakuDisplayClock::default(),
             rejected_video_import_route: None,
             current_media_time: Duration::ZERO,
             current_generation: 1,
@@ -1130,9 +1002,7 @@ impl PresenterRuntime {
         self.last_audio_pump_duration = audio_started.elapsed();
 
         let sync_started = Instant::now();
-        self.sync_media_time_from_player();
-        let is_playing = self.is_playing();
-        self.sample_danmaku_display_clock(time_seconds, is_playing);
+        let _snapshot = self.sync_media_time_from_player();
         self.last_clock_sync_duration = sync_started.elapsed();
 
         let plan_started = Instant::now();
@@ -1641,10 +1511,9 @@ impl PresenterRuntime {
             }
             return;
         }
-        let layout = prepared.prepared.frame_layout(
-            self.danmaku_display_clock.media_time,
-            self.current_generation,
-        );
+        let layout = prepared
+            .prepared
+            .frame_layout(self.current_media_time, self.current_generation);
         let plan = prepared.rasterizer.render_plan(&layout);
         self.current_danmaku = Some(plan);
         self.record_current_danmaku_stats();
@@ -1706,29 +1575,15 @@ impl PresenterRuntime {
             && self.current_media_time <= prepared.window_end
     }
 
-    fn sample_danmaku_display_clock(
-        &mut self,
-        host_time_seconds: f64,
-        is_playing: bool,
-    ) -> Duration {
-        // Danmaku layout generations reject stale async plans, but they are
-        // not seeks. Only the player's playback generation may reset the
-        // monotonic display clock.
-        self.danmaku_display_clock.sample(
-            host_time_seconds,
-            self.current_media_time,
-            self.player.playback_generation(),
-            is_playing,
-            self.playback_rate,
-        )
-    }
-
-    fn sync_media_time_from_player(&mut self) {
-        let player_time = self.player.current_media_time();
-        let player_generation = self.player.playback_generation();
+    fn sync_media_time_from_player(&mut self) -> PlaybackSnapshot {
+        // One lock for time + generation + state. Danmaku, subtitles and the
+        // render context all derive from this single sample, so a frame can
+        // never mix a stale media time with a newer play state.
+        let snapshot = self.player.playback_snapshot();
+        let player_time = snapshot.media_time;
         self.current_generation = self
             .current_generation
-            .max(player_generation)
+            .max(snapshot.generation)
             .max(self.danmaku_generation)
             .max(1);
         if player_time != self.current_media_time {
@@ -1768,6 +1623,7 @@ impl PresenterRuntime {
             None,
             0,
         );
+        snapshot
     }
 
     fn refresh_current_overlay(&mut self) {
@@ -1904,10 +1760,8 @@ impl PresenterRuntime {
             .danmaku_trace
             .last_motion_log_at
             .is_none_or(|last| last.elapsed() >= DANMAKU_MOTION_TRACE_INTERVAL);
-        let display_time = self.danmaku_display_clock.media_time;
         let authoritative_time = self.current_media_time;
         let player_time = self.player.current_media_time();
-        let clock_step = self.danmaku_display_clock.last_step;
         let prepared_key = self
             .current_danmaku_prepared
             .as_ref()
@@ -1921,13 +1775,12 @@ impl PresenterRuntime {
             let plan_disappeared = self.danmaku_trace.last_motion_had_plan;
             if periodic_sample_due || plan_disappeared {
                 let line = format!(
-                    "[erika-danmaku-motion] event={} host={host_time_seconds:.6} display={} authoritative={} player={} clock_step={clock_step:?} gen={} playing={} plan=- pending={} prepared_key={} prepared_window={} viewport={} flags=plan_disappeared:{}",
+                    "[erika-danmaku-motion] event={} host={host_time_seconds:.6} authoritative={} player={} gen={} playing={} plan=- pending={} prepared_key={} prepared_window={} viewport={} flags=plan_disappeared:{}",
                     if plan_disappeared {
                         "plan_missing"
                     } else {
                         "sample"
                     },
-                    duration_label(Some(display_time)),
                     duration_label(Some(authoritative_time)),
                     duration_label(Some(player_time)),
                     self.current_generation,
@@ -2030,9 +1883,8 @@ impl PresenterRuntime {
             || atlas_changed
             || backstep_count > 0
         {
-            let display_drift_ms =
-                (display_time.as_secs_f64() - authoritative_time.as_secs_f64()) * 1000.0;
-            let plan_drift_ms = (plan_time.as_secs_f64() - display_time.as_secs_f64()) * 1000.0;
+            let plan_drift_ms =
+                (plan_time.as_secs_f64() - authoritative_time.as_secs_f64()) * 1000.0;
             let selected_label = selected
                 .map(|(item_id, mode, x, previous_x)| {
                     format!(
@@ -2052,13 +1904,12 @@ impl PresenterRuntime {
                 })
                 .unwrap_or_else(|| "-".to_string());
             let line = format!(
-                "[erika-danmaku-motion] event={} host={host_time_seconds:.6} display={} authoritative={} player={} clock_step={clock_step:?} display_auth_drift_ms={display_drift_ms:.3} plan={} plan_display_drift_ms={plan_drift_ms:.3} gen={}/{} playing={} viewport={} prepared_key={} prepared_window={} atlas={} glyphs={} unique_items={} selected={} cpu_backsteps={} cpu_backsteps_total={} worst={} flags=plan_appeared:{} viewport_changed:{} prepared_changed:{} atlas_changed:{} pending:{}",
+                "[erika-danmaku-motion] event={} host={host_time_seconds:.6} authoritative={} player={} plan={} plan_drift_ms={plan_drift_ms:.3} gen={}/{} playing={} viewport={} prepared_key={} prepared_window={} atlas={} glyphs={} unique_items={} selected={} cpu_backsteps={} cpu_backsteps_total={} worst={} flags=plan_appeared:{} viewport_changed:{} prepared_changed:{} atlas_changed:{} pending:{}",
                 if backstep_count > 0 {
                     "cpu_backstep"
                 } else {
                     "sample"
                 },
-                duration_label(Some(display_time)),
                 duration_label(Some(authoritative_time)),
                 duration_label(Some(player_time)),
                 duration_label(Some(plan_time)),
@@ -2158,7 +2009,6 @@ impl PresenterRuntime {
         self.subtitles.clear();
         self.clear_current_danmaku_state();
         self.current_media_time = media_time;
-        self.danmaku_display_clock.reset(media_time);
         self.last_audio_clock_report = None;
         match frame_policy {
             TransitionFramePolicy::Clear => self.release_current_video_frame(),
@@ -3844,84 +3694,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert_eq!(generation, 8);
     }
 
-    #[test]
-    fn danmaku_display_clock_advances_smoothly_between_authoritative_updates() {
-        let mut clock = DanmakuDisplayClock::default();
-        assert_eq!(
-            clock.sample(10.0, Duration::from_secs(5), 1, true, 1.0),
-            Duration::from_secs(5)
-        );
-        assert_eq!(
-            clock.sample(10.008, Duration::from_secs(5), 1, true, 1.0),
-            Duration::from_millis(5008)
-        );
-        assert_eq!(
-            clock.sample(10.016, Duration::from_millis(5010), 1, true, 1.0),
-            Duration::from_millis(5016)
-        );
-    }
 
-    #[test]
-    fn danmaku_display_clock_filters_backsteps_and_snaps_large_forward_jumps() {
-        let mut clock = DanmakuDisplayClock::default();
-        clock.sample(1.0, Duration::from_secs(2), 7, true, 1.0);
-        let before_correction = clock.sample(1.010, Duration::from_millis(2010), 7, true, 1.0);
-        let after_small_backstep = clock.sample(1.020, Duration::from_millis(2005), 7, true, 1.0);
-        assert!(after_small_backstep > before_correction);
 
-        let after_large_backstep = clock.sample(1.030, Duration::from_millis(1500), 7, true, 1.0);
-        assert!(after_large_backstep > after_small_backstep);
 
-        let after_large_forward_jump =
-            clock.sample(1.040, Duration::from_millis(2300), 7, true, 1.0);
-        assert_eq!(after_large_forward_jump, Duration::from_millis(2300));
-    }
 
-    #[test]
-    fn danmaku_display_clock_stays_monotonic_across_periodic_clock_rollbacks() {
-        let mut clock = DanmakuDisplayClock::default();
-        let base = Duration::from_secs(10);
-        let mut previous = clock.sample(0.0, base, 3, true, 1.0);
 
-        for tick in 1..=180u64 {
-            let elapsed = Duration::from_secs_f64(tick as f64 / 60.0);
-            let expected = base.saturating_add(elapsed);
-            let authoritative = if tick % 60 == 0 {
-                expected.saturating_sub(Duration::from_millis(200))
-            } else {
-                expected
-            };
-            let sampled = clock.sample(tick as f64 / 60.0, authoritative, 3, true, 1.0);
-            assert!(
-                sampled >= previous,
-                "danmaku clock regressed at tick {tick}: {sampled:?} < {previous:?}",
-            );
-            previous = sampled;
-        }
-    }
-
-    #[test]
-    fn danmaku_display_clock_does_not_step_back_at_pause_edge() {
-        let mut clock = DanmakuDisplayClock::default();
-        clock.sample(1.0, Duration::from_secs(2), 7, true, 1.0);
-        let before_pause = clock.sample(1.1, Duration::from_millis(2050), 7, true, 1.0);
-        assert_eq!(before_pause, Duration::from_millis(2100));
-
-        let paused = clock.sample(1.11, Duration::from_millis(2055), 7, false, 1.0);
-        assert_eq!(paused, before_pause);
-        assert_eq!(clock.last_step, DanmakuClockStep::Paused);
-
-        let still_paused = clock.sample(1.2, Duration::from_millis(2060), 7, false, 1.0);
-        assert_eq!(still_paused, before_pause);
-
-        let resumed = clock.sample(2.0, Duration::from_millis(2070), 7, true, 1.0);
-        assert_eq!(resumed, before_pause);
-        assert_eq!(clock.last_step, DanmakuClockStep::PlayStateReset);
-
-        let seeked = clock.sample(2.1, Duration::from_secs(1), 8, false, 1.0);
-        assert_eq!(seeked, Duration::from_secs(1));
-        assert_eq!(clock.last_step, DanmakuClockStep::Paused);
-    }
 
     #[test]
     fn danmaku_motion_trace_detects_only_opposite_scroll_direction() {
@@ -3938,27 +3715,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert_eq!(danmaku_motion_backstep(DanmakuMode::Top, 100.0, 140.0), 0.0);
     }
 
-    #[test]
-    fn danmaku_display_clock_resets_for_pause_generation_and_rate_changes() {
-        let mut clock = DanmakuDisplayClock::default();
-        clock.sample(1.0, Duration::from_secs(2), 7, true, 1.0);
-        assert_eq!(
-            clock.sample(1.1, Duration::from_millis(2050), 7, false, 1.0),
-            Duration::from_millis(2050)
-        );
-        assert_eq!(
-            clock.sample(2.0, Duration::from_secs(3), 8, true, 1.0),
-            Duration::from_secs(3)
-        );
-        assert_eq!(
-            clock.sample(2.1, Duration::from_millis(3100), 8, true, 2.0),
-            Duration::from_millis(3100)
-        );
-        assert_eq!(
-            clock.sample(2.2, Duration::from_millis(3150), 8, true, 2.0),
-            Duration::from_millis(3300)
-        );
-    }
 
     #[test]
     fn presenter_config_disables_idle_test_pattern_by_default() {
@@ -3967,29 +3723,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     #[test]
     #[cfg(feature = "wgpu")]
-    fn layout_config_generation_does_not_reset_the_display_clock() {
+    fn layout_config_generation_does_not_disturb_the_playback_clock() {
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
         let playback_generation = presenter.player.playback_generation();
-        presenter.current_media_time = Duration::from_secs(2);
-        presenter.sample_danmaku_display_clock(1.0, true);
         presenter.current_media_time = Duration::from_millis(2050);
-        let before = presenter.sample_danmaku_display_clock(1.1, true);
 
         let original_layout_generation = presenter.current_generation;
         let mut config = DanmakuLayoutConfig::default();
         config.font_size += 1.0;
         presenter.set_danmaku_config(config);
+
+        // A danmaku layout generation invalidates prepared plans; it is not a
+        // seek, so it must leave the shared playback clock untouched.
         assert!(presenter.current_generation > original_layout_generation);
         assert_eq!(presenter.player.playback_generation(), playback_generation);
-
-        presenter.current_media_time = Duration::from_millis(2100);
-        let after = presenter.sample_danmaku_display_clock(1.2, true);
-        assert_eq!(after, Duration::from_millis(2200));
-        assert!(after > before);
-        assert_eq!(
-            presenter.danmaku_display_clock.last_step,
-            DanmakuClockStep::Advanced
-        );
+        assert_eq!(presenter.current_media_time, Duration::from_millis(2050));
     }
 
     #[test]
@@ -4108,7 +3856,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
         presenter.current_danmaku_viewport = Some(viewport);
         presenter.current_media_time = Duration::from_secs(5);
-        presenter.danmaku_display_clock.media_time = presenter.current_media_time;
         let generation = presenter.current_generation;
         presenter.set_danmaku_enabled(false);
 
@@ -4242,7 +3989,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
         presenter.current_danmaku_viewport = Some(viewport);
         presenter.current_media_time = Duration::from_secs(1);
-        presenter.danmaku_display_clock.media_time = presenter.current_media_time;
         presenter.current_danmaku_prepared = Some(CurrentDanmakuPrepared {
             request: AsyncDanmakuPlanRequest {
                 key: DanmakuPlanKey {
@@ -4265,7 +4011,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert!(presenter.danmaku_plan_replacement_pending);
         assert!(presenter.current_danmaku_prepared.is_some());
 
-        presenter.danmaku_display_clock.media_time = Duration::from_millis(1200);
+        presenter.current_media_time = Duration::from_millis(1200);
         presenter.refresh_current_danmaku_plan_from_prepared();
         let next = presenter.current_danmaku.as_ref().unwrap();
 

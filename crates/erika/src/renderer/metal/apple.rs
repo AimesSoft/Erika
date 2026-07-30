@@ -1227,11 +1227,22 @@ impl MetalRendererImpl {
             .map(|offset| (self.danmaku_vertex_buffer_cursor + offset) % slot_count)
             .find(|&index| self.danmaku_vertex_buffers[index].is_reusable());
         let grew_pool = reusable_index.is_none();
-        let index = reusable_index.unwrap_or_else(|| {
-            self.danmaku_vertex_buffers
-                .push(DanmakuVertexBufferSlot::default());
-            self.danmaku_vertex_buffers.len() - 1
-        });
+        let index = match reusable_index {
+            Some(index) => index,
+            // The pool is sized by how many frames Metal keeps in flight, which
+            // the drawable count bounds in practice. Cap it anyway so an
+            // offscreen path with no drawable backpressure cannot grow it
+            // without limit; past the cap the oldest slot is reused, which
+            // blocks until that command buffer retires.
+            None if slot_count >= DANMAKU_VERTEX_BUFFER_POOL_LIMIT => {
+                self.danmaku_vertex_buffer_cursor % slot_count
+            }
+            None => {
+                self.danmaku_vertex_buffers
+                    .push(DanmakuVertexBufferSlot::default());
+                self.danmaku_vertex_buffers.len() - 1
+            }
+        };
         let required_capacity = required_len.next_power_of_two().max(4096);
         let slot = &mut self.danmaku_vertex_buffers[index];
         let previous_status = slot
@@ -2011,6 +2022,9 @@ struct DanmakuBatchUniforms {
 
 const DANMAKU_FILL_ATLAS_TEXTURE: u32 = 0;
 const DANMAKU_OUTLINE_ATLAS_TEXTURE: u32 = 1;
+/// Upper bound on pooled danmaku vertex buffers. Triple buffering plus slack
+/// covers every in-flight frame a Metal drawable chain allows.
+const DANMAKU_VERTEX_BUFFER_POOL_LIMIT: usize = 8;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -2139,6 +2153,24 @@ fn for_each_ordered_danmaku_instance(
     items: &[crate::danmaku::DanmakuGlyphInstance],
     mut emit: impl FnMut(DanmakuBatchInstance),
 ) -> usize {
+    // Scanning for the next different `item_id` only yields whole danmaku
+    // while each item's glyphs stay contiguous: one run per distinct item. If
+    // that ever stops holding, items silently split into several groups and
+    // the shadow/outline/fill layering breaks again with no other symptom.
+    debug_assert_eq!(
+        items
+            .windows(2)
+            .filter(|pair| pair[0].item_id != pair[1].item_id)
+            .count()
+            + usize::from(!items.is_empty()),
+        items
+            .iter()
+            .map(|item| item.item_id)
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        "danmaku glyph instances must stay grouped by item_id"
+    );
+
     let mut emitted = 0usize;
     let mut group_start = 0usize;
     while group_start < items.len() {
@@ -2260,9 +2292,12 @@ impl DanmakuVertexBufferSlot {
         self.in_flight.as_ref().is_none_or(|command_buffer| {
             matches!(
                 command_buffer.status(),
-                MTLCommandBufferStatus::NotEnqueued
-                    | MTLCommandBufferStatus::Completed
-                    | MTLCommandBufferStatus::Error
+                // `NotEnqueued` is deliberately absent: that buffer is still
+                // being encoded, and handing its vertex storage to a second
+                // draw in the same command buffer would overwrite geometry the
+                // first draw already referenced. Metal executes lazily, so the
+                // corruption would only appear on the GPU.
+                MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error
             )
         })
     }

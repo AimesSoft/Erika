@@ -270,24 +270,25 @@ impl DanmakuLayoutConfig {
         config
     }
 
+    /// Clears the fields that only affect painting, so two configs that differ
+    /// solely in those fields compare equal.
+    ///
+    /// Written as a subtractive normalization rather than a list of
+    /// layout-affecting fields on purpose: a field added later is treated as
+    /// layout-affecting until it is explicitly listed here. That costs a
+    /// needless relayout at worst, whereas forgetting to extend an additive
+    /// list would silently drop the setting ("changing it does nothing").
+    fn without_paint_only_fields(&self) -> Self {
+        let mut config = self.clone();
+        config.opacity = 0.0;
+        config.shadow_offset = [0.0, 0.0];
+        config.shadow_style = DanmakuShadowStyle::default();
+        config.enabled = false;
+        config
+    }
+
     fn layout_equivalent(&self, other: &Self) -> bool {
-        self.font_size == other.font_size
-            && self.display_area == other.display_area
-            && self.scroll_duration_seconds == other.scroll_duration_seconds
-            && self.scroll_speed_factor == other.scroll_speed_factor
-            && self.track_gap_ratio == other.track_gap_ratio
-            && self.outline_width == other.outline_width
-            && self.custom_font_family == other.custom_font_family
-            && self.custom_font_file_path == other.custom_font_file_path
-            && self.merge_duplicates == other.merge_duplicates
-            && self.allow_stacking == other.allow_stacking
-            && self.allow_scroll_overwrite == other.allow_scroll_overwrite
-            && self.max_quantity == other.max_quantity
-            && self.max_lines_per_mode == other.max_lines_per_mode
-            && self.block_top == other.block_top
-            && self.block_bottom == other.block_bottom
-            && self.block_scroll == other.block_scroll
-            && self.block_words == other.block_words
+        self.without_paint_only_fields() == other.without_paint_only_fields()
     }
 }
 
@@ -2907,6 +2908,28 @@ mod tests {
                 )
                 .is_some()
         );
+    }
+
+    #[test]
+    fn layout_equivalence_only_ignores_the_declared_paint_only_fields() {
+        let base = DanmakuLayoutConfig::default();
+
+        let mut paint_only = base.clone();
+        paint_only.opacity = 0.25;
+        paint_only.shadow_offset = [4.0, 4.0];
+        paint_only.shadow_style = DanmakuShadowStyle::None;
+        paint_only.enabled = !base.enabled;
+        assert!(base.layout_equivalent(&paint_only));
+
+        // Anything outside that set must force a relayout; the normalization
+        // is subtractive so a field added later is layout-affecting by default.
+        let mut layout = base.clone();
+        layout.font_size += 1.0;
+        assert!(!base.layout_equivalent(&layout));
+
+        let mut blocked = base.clone();
+        blocked.block_words = vec!["blocked".to_string()];
+        assert!(!base.layout_equivalent(&blocked));
     }
 
     #[test]

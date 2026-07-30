@@ -605,6 +605,7 @@ private final class ErikaPlayerHost {
   private var attachedViewId: Int64?
   private var displayLinkDriver: ErikaDisplayLinkDriver?
   private var displayLinkDisplayID: CGDirectDisplayID?
+  private var displayConfigurationObservers: [NSObjectProtocol] = []
   private var displayTimer: Timer?
   private var displayTimerFps: Double = 0.0
   private var startTimeSeconds: CFTimeInterval = CACurrentMediaTime()
@@ -994,16 +995,20 @@ private final class ErikaPlayerHost {
   }
 
   func attach(view: ErikaMetalSurfaceView) throws {
+    // Moving the surface between windows re-attaches an already running
+    // player. Only a genuinely new attachment restarts the host clock; a
+    // migration must not rewind the timeline the engine is already on.
+    let isReattach = attachedView != nil
     attachedView = view
     attachedViewId = view.platformViewId
     view.attachedPlayerId = id
     erikaWindowOverlayTrace(
       "attach player=\(id) surface=\(view.platformViewId) " +
       "window=\((view as? NSView)?.window?.windowNumber ?? -1) " +
-      "drawable=\(view.metalLayer.drawableSize)"
+      "drawable=\(view.metalLayer.drawableSize) reattach=\(isReattach)"
     )
     try attachOrResize(view: view, attach: true)
-    startDisplayDriverIfNeeded(resetClock: true)
+    startDisplayDriverIfNeeded(resetClock: !isReattach)
   }
 
   func detach(viewId: Int64?) {
@@ -1096,19 +1101,68 @@ private final class ErikaPlayerHost {
       }
 
       stopDisplayDriver()
-      if let driver = ErikaDisplayLinkDriver(displayID: displayID) { [weak self] in
+      let driver = ErikaDisplayLinkDriver(displayID: displayID) { [weak self] in
         guard let self else {
           return
         }
         self.renderTick(sendEvent: ErikaFlutterPlugin.sharedEventSink)
-      }, driver.start() {
+      }
+      if let driver, driver.start() {
         displayLinkDriver = driver
         displayLinkDisplayID = displayID
+        observeDisplayConfigurationChanges()
         return
       }
     }
 
     startFallbackDisplayTimerIfNeeded()
+  }
+
+  /// Re-targets the display link when the window changes screen, or when the
+  /// screen layout itself changes.
+  ///
+  /// A `CVDisplayLink` is bound to the display it was created for. Without
+  /// this, dragging the window to a second screen keeps it ticking at the old
+  /// refresh rate, and unplugging that screen stops the callbacks entirely —
+  /// with the fallback timer already torn down, rendering would simply stop.
+  private func observeDisplayConfigurationChanges() {
+    guard displayConfigurationObservers.isEmpty else {
+      return
+    }
+    let center = NotificationCenter.default
+    for name in [
+      NSWindow.didChangeScreenNotification,
+      NSApplication.didChangeScreenParametersNotification,
+    ] {
+      let observer = center.addObserver(
+        forName: name,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        self?.retargetDisplayDriverIfScreenChanged()
+      }
+      displayConfigurationObservers.append(observer)
+    }
+  }
+
+  private func retargetDisplayDriverIfScreenChanged() {
+    guard displayLinkDriver != nil else {
+      return
+    }
+    let displayID = resolvedDisplayID()
+    guard displayID != displayLinkDisplayID else {
+      return
+    }
+    // Rebuild on the new display; never reset the host clock, this is not a
+    // new playback session.
+    startDisplayDriverIfNeeded(resetClock: false)
+  }
+
+  private func stopObservingDisplayConfigurationChanges() {
+    for observer in displayConfigurationObservers {
+      NotificationCenter.default.removeObserver(observer)
+    }
+    displayConfigurationObservers.removeAll()
   }
 
   private func startFallbackDisplayTimerIfNeeded() {
@@ -1129,6 +1183,7 @@ private final class ErikaPlayerHost {
   }
 
   private func stopDisplayDriver() {
+    stopObservingDisplayConfigurationChanges()
     displayLinkDriver?.invalidate()
     displayLinkDriver = nil
     displayLinkDisplayID = nil
@@ -2027,9 +2082,25 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       throw ErikaPluginError.overlayNotAvailable
     }
 
+    let existingOverlay = resolveWindowOverlay()
+    // `setOverlayFrame` runs on every geometry update. Once the overlay is
+    // already mounted in the right place there is nothing to install, and
+    // re-adding it would restart the whole attach path (viewDidMoveToWindow →
+    // updateDrawableSize → resize → display driver) on every resize frame.
+    if let existingOverlay,
+       existingOverlay.superview === hostSuperview,
+       existingOverlay.window === hostWindow {
+      existingOverlay.plugin = self
+      return WindowOverlayInstallation(
+        overlay: existingOverlay,
+        flutterHostView: activeFlutterHostView,
+        hostWindow: hostWindow,
+        movedBetweenWindows: false
+      )
+    }
+
     prepareFlutterHostViewForWindowOverlay(activeFlutterHostView)
 
-    let existingOverlay = resolveWindowOverlay()
     let overlay = existingOverlay ??
       hostWindow.erikaWindowOverlayView ??
       ErikaWindowOverlayView(plugin: self)
@@ -2040,18 +2111,12 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       overlay.removeFromSuperview()
       overlay.frame = .zero
       overlay.translatesAutoresizingMaskIntoConstraints = true
-      hostSuperview.addSubview(
-        overlay,
-        positioned: shouldPlaceWindowOverlayAboveFlutter() ? .above : .below,
-        relativeTo: activeFlutterHostView
-      )
-    } else {
-      hostSuperview.addSubview(
-        overlay,
-        positioned: shouldPlaceWindowOverlayAboveFlutter() ? .above : .below,
-        relativeTo: activeFlutterHostView
-      )
     }
+    hostSuperview.addSubview(
+      overlay,
+      positioned: shouldPlaceWindowOverlayAboveFlutter() ? .above : .below,
+      relativeTo: activeFlutterHostView
+    )
 
     if previousWindow !== hostWindow {
       previousWindow?.erikaWindowOverlayView = nil

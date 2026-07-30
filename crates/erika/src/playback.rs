@@ -55,6 +55,11 @@ pub type Result<T> = std::result::Result<T, PlaybackError>;
 
 const DEFAULT_VIDEO_FRAME_QUEUE_LIMIT: usize = 8;
 const DEFAULT_AUDIO_FRAME_QUEUE_LIMIT: usize = 16;
+/// Ceiling on decoded audio frames a *video* demux request may accumulate
+/// while scanning past interleaved audio packets. At ~1024 samples per frame
+/// and 48 kHz one frame is roughly 21 ms, so this is about 11 s of audio:
+/// wider than any sane interleave distance, yet still a bound (~4 MB).
+const VIDEO_DEMAND_AUDIO_FRAME_CEILING: usize = 512;
 const STREAMING_VIDEO_FRAME_QUEUE_LIMIT: usize = 48;
 const STREAMING_AUDIO_FRAME_QUEUE_LIMIT: usize = 128;
 const D3D11VA_VIDEO_FRAME_QUEUE_LIMIT: usize = 8;
@@ -1303,7 +1308,7 @@ impl PlaybackSession {
                 || started.elapsed() >= max_duration)
         {
             trace::log(format!(
-                "[erika-playback-trace] stage=session_audio_pump packets={} max_packets={} produced={} filtered={} queued_audio={} eof={} pending_video={} elapsed_ms={:.3}",
+                "[erika-playback-trace] stage=session_audio_pump packets={} max_packets={} produced={} filtered={} queued_audio={} ended={} pending_video={} elapsed_ms={:.3}",
                 pumped_packets,
                 max_packets,
                 frame.is_some(),
@@ -1993,7 +1998,7 @@ impl PlaybackSession {
         let packet_pts = packet.and_then(ffmpeg::Packet::pts);
         let packet_dts = packet.and_then(ffmpeg::Packet::dts);
         let reason = format!(
-            "video packet remained rejected for {:.3}s after {} polls (pending_packets={}, demux_eof={}, video_backend={}, packet_pts={:?}, packet_dts={:?}, packet_key={}, packet_bytes={})",
+            "video packet remained rejected for {:.3}s after {} polls (pending_packets={}, demux_ended={}, video_backend={}, packet_pts={:?}, packet_dts={:?}, packet_key={}, packet_bytes={})",
             stalled_for.as_secs_f64(),
             self.video_packet_stall_polls,
             self.pending_video_packets.len(),
@@ -2743,9 +2748,20 @@ fn audio_queue_blocks_demux(
     // request from scanning past interleaved audio packets to reach the next
     // video packet. Otherwise the 8-frame local video queue drains, then
     // stalls behind the 16-frame audio limit in a visible ~300 ms cycle.
-    demand == PlaybackPumpDemand::Audio
-        && audio_output_active
-        && queued_audio_frames >= audio_frame_limit
+    //
+    // Video demand still needs a ceiling: a container whose audio is
+    // interleaved far ahead of video, or a video stream that stops yielding
+    // packets, would otherwise grow the decoded audio queue without bound. The
+    // slack is wide enough to cross any sane interleave distance and only
+    // stops pathological streams.
+    if !audio_output_active {
+        return false;
+    }
+    let limit = match demand {
+        PlaybackPumpDemand::Audio => audio_frame_limit,
+        PlaybackPumpDemand::Video => audio_frame_limit.max(VIDEO_DEMAND_AUDIO_FRAME_CEILING),
+    };
+    queued_audio_frames >= limit
 }
 
 enum SubtitleQueueCandidate {
@@ -3654,8 +3670,12 @@ impl VideoPlaybackEngine {
         )?;
         let now = now();
         let before = self.clock.media_time_at(now);
-        self.clock
-            .reset(media_time, self.state == PlaybackRunState::Playing, now);
+        // Park the clock on the seek target until the first post-seek frame is
+        // actually presented. Letting it run through preroll makes the reported
+        // position drift forward over frames nobody has seen yet, which the
+        // first-frame `sync_to` then has to pull back — a visible backward step
+        // for every clock consumer. `tick_with_now` starts it on that frame.
+        self.clock.reset(media_time, false, now);
         trace_clock_reset("reset_streams_at", before, media_time, self.state);
         self.last_presented_pts = None;
         self.eof = false;
@@ -3807,11 +3827,10 @@ impl VideoPlaybackEngine {
         let seek_frame_pending = self.waiting_for_first_frame && self.video_seek_floor.is_some();
         let now = now();
         let before = self.clock.media_time_at(now);
-        if let Some(target) = self.video_seek_floor.filter(|_| seek_frame_pending) {
-            self.clock.reset(target, false, now);
-        } else {
-            self.clock.pause(now);
-        }
+        // The clock is already parked on the seek target while a post-seek
+        // frame is pending (see `reset_streams_at`), so pausing never has to
+        // rewind it back to the floor here.
+        self.clock.pause(now);
         trace::log(format!(
             "[erika-clock-trace] stage=engine_pause before={} after={}",
             trace::duration_label(Some(before)),
@@ -3904,8 +3923,10 @@ impl VideoPlaybackEngine {
         let state_before = self.state;
         let state_after = playback_state_after_seek_intent(state_before, resume_after_seek);
         let before = self.clock.media_time_at(now);
-        self.clock
-            .reset(position, state_after == PlaybackRunState::Playing, now);
+        // Park on the seek target; the first presented frame starts the clock
+        // (see `reset_streams_at`). Running it through preroll would report a
+        // position no frame has reached yet and then step backward.
+        self.clock.reset(position, false, now);
         trace_clock_reset("seek", before, position, state_after);
         self.last_presented_pts = None;
         self.eof = false;
@@ -4184,6 +4205,18 @@ impl VideoPlaybackEngine {
         loop {
             self.ensure_pending_frame_with_now(&mut now)?;
             let Some(frame) = self.pending_frame.as_ref() else {
+                // A paused seek past the last frame never produces the preview
+                // frame that would clear the flag. Give it up at EOF so the
+                // worker can fall back to its idle poll interval instead of
+                // spinning at the 2 ms paused-preview rate until playback
+                // resumes.
+                if paused_seek_preview && self.eof {
+                    self.paused_seek_frame_pending = false;
+                    trace::log(format!(
+                        "[erika-playback-trace] stage=paused_seek_frame_abandoned reason=eof target={}",
+                        trace::duration_label(self.video_seek_floor),
+                    ));
+                }
                 return Ok(None);
             };
 
@@ -6137,6 +6170,41 @@ mod tests {
             PlaybackPumpDemand::Video,
             true,
             DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+            DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+        ));
+    }
+
+    #[test]
+    fn video_demand_audio_backpressure_is_relaxed_but_bounded() {
+        // Wide enough to cross a container whose audio is interleaved several
+        // seconds ahead of the next video packet...
+        assert!(!audio_queue_blocks_demux(
+            PlaybackPumpDemand::Video,
+            true,
+            VIDEO_DEMAND_AUDIO_FRAME_CEILING - 1,
+            DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+        ));
+        // ...but still a ceiling, so a stream that never yields another video
+        // packet cannot grow the decoded audio queue without bound.
+        assert!(audio_queue_blocks_demux(
+            PlaybackPumpDemand::Video,
+            true,
+            VIDEO_DEMAND_AUDIO_FRAME_CEILING,
+            DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
+        ));
+        // A streaming profile already allows more than the ceiling; keep its
+        // own limit rather than tightening it.
+        assert!(!audio_queue_blocks_demux(
+            PlaybackPumpDemand::Video,
+            true,
+            VIDEO_DEMAND_AUDIO_FRAME_CEILING,
+            VIDEO_DEMAND_AUDIO_FRAME_CEILING * 2,
+        ));
+        // Inactive audio output never blocks either demand.
+        assert!(!audio_queue_blocks_demux(
+            PlaybackPumpDemand::Audio,
+            false,
+            VIDEO_DEMAND_AUDIO_FRAME_CEILING * 4,
             DEFAULT_AUDIO_FRAME_QUEUE_LIMIT,
         ));
     }

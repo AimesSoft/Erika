@@ -119,6 +119,22 @@ pub enum PlayerState {
     Error,
 }
 
+/// A single-lock view of the shared playback clock.
+///
+/// See [`Player::playback_snapshot`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaybackSnapshot {
+    pub media_time: Duration,
+    pub generation: u64,
+    pub state: PlayerState,
+}
+
+impl PlaybackSnapshot {
+    pub fn is_playing(&self) -> bool {
+        self.state == PlayerState::Playing
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaSourceHint {
     Auto,
@@ -965,6 +981,22 @@ impl Player {
             .current_media_time
     }
 
+    /// Reads media time, timeline generation and play state under one lock.
+    ///
+    /// Consumers that mix these three values must not sample them separately:
+    /// the playback worker publishes a new clock sample and `Player::pause`
+    /// publishes the paused state from different critical sections, so
+    /// independent reads can observe a torn triple (for example a paused state
+    /// carrying the still-advancing media time of the previous frame).
+    pub fn playback_snapshot(&self) -> PlaybackSnapshot {
+        let inner = self.inner.lock().expect("player mutex poisoned");
+        PlaybackSnapshot {
+            media_time: inner.current_media_time,
+            generation: inner.playback_generation.max(1),
+            state: inner.state,
+        }
+    }
+
     pub fn duration(&self) -> Option<Duration> {
         self.inner.lock().expect("player mutex poisoned").duration
     }
@@ -1573,7 +1605,9 @@ fn run_playback_worker(
         let mut command_count = 0usize;
         match commands.recv_timeout(playback_poll_interval(
             engine.state(),
-            engine.has_pending_paused_seek_frame(),
+            // A quiesced output cannot present the pending preview frame, so
+            // fast polling for it would never terminate.
+            engine.has_pending_paused_seek_frame() && !frame_output_quiesced,
         )) {
             Ok(command) => {
                 command_count += 1;
