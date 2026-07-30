@@ -18,6 +18,8 @@ internal interface ErikaMediaCommandHandler {
     fun pause(playerId: Long)
     fun stop(playerId: Long)
     fun seek(playerId: Long, positionMicros: Long)
+    fun previous(playerId: Long)
+    fun next(playerId: Long)
 }
 
 internal class ErikaMediaSession(
@@ -45,6 +47,12 @@ internal class ErikaMediaSession(
             override fun onStop() = activeState?.let { commands.stop(it.playerId) } ?: Unit
             override fun onSeekTo(pos: Long) =
                 activeState?.let { commands.seek(it.playerId, pos.coerceAtLeast(0L) * 1_000L) } ?: Unit
+            override fun onSkipToPrevious() =
+                activeState?.takeIf(AndroidMediaState::previousEnabled)
+                    ?.let { commands.previous(it.playerId) } ?: Unit
+            override fun onSkipToNext() =
+                activeState?.takeIf(AndroidMediaState::nextEnabled)
+                    ?.let { commands.next(it.playerId) } ?: Unit
         }, Handler(Looper.getMainLooper()))
     }
 
@@ -64,11 +72,7 @@ internal class ErikaMediaSession(
         session.setMetadata(metadataBuilder.build())
         session.setPlaybackState(
             PlaybackState.Builder()
-                .setActions(
-                    PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
-                        PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_STOP or
-                        PlaybackState.ACTION_SEEK_TO,
-                )
+                .setActions(state.androidPlaybackActions())
                 .setState(
                     state.playbackState.toAndroidPlaybackState(),
                     state.positionMicros / 1_000L,
@@ -202,6 +206,19 @@ internal class ErikaMediaSession(
 
 internal fun AndroidMediaState.shouldUsePlaybackService(): Boolean =
     allowBackgroundPlayback && playbackState == ErikaMediaSession.PLAYING_STATE
+
+internal fun AndroidMediaState.androidPlaybackActions(): Long {
+    var actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
+        PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_STOP or
+        PlaybackState.ACTION_SEEK_TO
+    if (previousEnabled) {
+        actions = actions or PlaybackState.ACTION_SKIP_TO_PREVIOUS
+    }
+    if (nextEnabled) {
+        actions = actions or PlaybackState.ACTION_SKIP_TO_NEXT
+    }
+    return actions
+}
 
 internal fun Int.toAndroidPlaybackState(): Int = when (this) {
     1 -> PlaybackState.STATE_CONNECTING

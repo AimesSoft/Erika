@@ -72,6 +72,85 @@ await player.play();
 
 `allowBackgroundPlayback` は player 作成時の option であり、native player の作成後には変更できません。`false` の場合、App がバックグラウンドに入ると再生を一時停止し、foreground に戻っても一時停止状態を維持します。`true` の場合、バックグラウンドでは動画 decode を停止して音声のみを継続し、App が active になると動画を再開します。Control Center から再生、一時停止、再生位置の変更ができます。artwork には raw pixel ではなく、JPEG や PNG など `UIImage` が対応する形式の完全な encoded image bytes を指定してください。
 
+## System Media の前後移動
+
+playlist app は active item に応じて system media panel の前へ・次へ button を有効に
+できます。Erika 自身は次の media item を選択せず、
+`systemMediaNavigationRequested` event を発行するため、Dart を playlist の唯一の
+source of truth にできます。active item が変わるたびに capability を更新してください。
+
+```dart
+import 'dart:async';
+
+import 'package:erika_flutter/erika_flutter.dart';
+
+class PlaylistController {
+  final ErikaPlayer player = ErikaPlayer(allowBackgroundPlayback: true);
+  final List<({String title, String url})> items = <({String title, String url})>[
+    (title: 'エピソード 1', url: 'https://example.com/episode-1.mp4'),
+    (title: 'エピソード 2', url: 'https://example.com/episode-2.mp4'),
+  ];
+
+  StreamSubscription<ErikaPlayerEvent>? subscription;
+  int index = 0;
+  bool switching = false;
+
+  Future<void> initialize() async {
+    subscription = player.events.listen((ErikaPlayerEvent event) async {
+      if (event.kind != ErikaEventKind.systemMediaNavigationRequested) {
+        return;
+      }
+      switch (event.systemMediaCommand) {
+        case ErikaSystemMediaCommand.previous:
+          await openAt(index - 1);
+        case ErikaSystemMediaCommand.next:
+          await openAt(index + 1);
+        case null:
+          break;
+      }
+    });
+    await openAt(0);
+  }
+
+  Future<void> openAt(int newIndex) async {
+    if (switching || newIndex < 0 || newIndex >= items.length) {
+      return;
+    }
+    switching = true;
+    await player.setSystemMediaNavigation(
+      previousEnabled: false,
+      nextEnabled: false,
+    );
+    try {
+      final item = items[newIndex];
+      await player.open(
+        item.url,
+        metadata: ErikaMediaMetadata(title: item.title),
+      );
+      await player.play();
+      index = newIndex;
+    } finally {
+      switching = false;
+      await player.setSystemMediaNavigation(
+        previousEnabled: index > 0,
+        nextEnabled: index + 1 < items.length,
+      );
+    }
+  }
+
+  Future<void> dispose() async {
+    await subscription?.cancel();
+    await player.dispose();
+  }
+}
+```
+
+capability は既定で無効で、iOS、macOS、Android、Windows、HarmonyOS に対応します。
+item の切り替え中は両方の button を一時的に無効化して重複 request を拒否し、切り替え
+成功後に index、metadata、capability を更新してください。この API が通知するのは
+`previous` と `next` のみです。再生、一時停止、停止、seek は引き続き各 platform の
+native system-media integration が直接処理します。
+
 ## Windows Setup
 
 Windows plugin（`ErikaFlutterPluginCApi`）は CMake build 中に `build_erika_runtime.cmake` で Erika C ABI runtime（`erika_capi.dll`）を build し、CMake generator の x64 または ARM64 architecture に自動追従して DLL を app の隣に配置します。依存 project は CMake cache の `ERIKA_WINDOWS_ARCH=x64|arm64` または環境変数 `ERIKA_WINDOWS_ARCH` で明示的に選択できます。高度な用途では `ERIKA_NATIVE_TARGET=x86_64-pc-windows-msvc|aarch64-pc-windows-msvc` も指定できます。必要なもの：

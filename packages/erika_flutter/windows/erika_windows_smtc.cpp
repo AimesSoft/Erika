@@ -75,6 +75,10 @@ struct ErikaWindowsSmtc::Impl {
               state->handler(ErikaSmtcCommand::play, 0);
             } else if (args.Button() == Button::Pause) {
               state->handler(ErikaSmtcCommand::pause, 0);
+            } else if (args.Button() == Button::Previous) {
+              state->handler(ErikaSmtcCommand::previous, 0);
+            } else if (args.Button() == Button::Next) {
+              state->handler(ErikaSmtcCommand::next, 0);
             }
           });
       seek_token = controls.PlaybackPositionChangeRequested(
@@ -137,6 +141,13 @@ struct ErikaWindowsSmtc::Impl {
       }
       if (!has_state || state.playback_rate != last_state.playback_rate) {
         controls.PlaybackRate(state.playback_rate);
+      }
+      if (!has_state ||
+          state.previous_enabled != last_state.previous_enabled) {
+        controls.IsPreviousEnabled(state.previous_enabled);
+      }
+      if (!has_state || state.next_enabled != last_state.next_enabled) {
+        controls.IsNextEnabled(state.next_enabled);
       }
       if (!has_state || state.playing != last_state.playing ||
           state.stopped != last_state.stopped) {

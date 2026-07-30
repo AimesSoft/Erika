@@ -47,12 +47,18 @@ interface ErikaMediaState {
   playbackRate: number;
 }
 
+interface ErikaMediaNavigation {
+  previousEnabled: boolean;
+  nextEnabled: boolean;
+}
+
 const PLAYER_CHANNEL: string = 'erika_flutter/player';
 const EVENT_CHANNEL: string = 'erika_flutter/events';
 const FRAME_INTERVAL_MS: number = 16;
 const STATE_CHANGED_EVENT_KIND: number = 1;
 const DURATION_CHANGED_EVENT_KIND: number = 2;
 const POSITION_CHANGED_EVENT_KIND: number = 3;
+const SYSTEM_MEDIA_NAVIGATION_EVENT_KIND: number = 13;
 const PLAYING_STATE: number = 3;
 const PAUSED_STATE: number = 4;
 const STOPPED_STATE: number = 5;
@@ -69,6 +75,7 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
   private textures: Map<number, ErikaTexture> = new Map();
   private mediaMetadata: Map<number, ErikaMediaMetadata> = new Map();
   private mediaStates: Map<number, ErikaMediaState> = new Map();
+  private mediaNavigation: Map<number, ErikaMediaNavigation> = new Map();
   private currentPlayerId: number = 0;
   private currentSession: avSession.AVSession | null = null;
   private sessionPromise: Promise<avSession.AVSession | null> | null = null;
@@ -120,6 +127,7 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
     this.players.clear();
     this.mediaMetadata.clear();
     this.mediaStates.clear();
+    this.mediaNavigation.clear();
     this.currentPlayerId = 0;
     this.destroyAVSession();
     this.methodChannel?.setMethodCallHandler(null);
@@ -177,6 +185,10 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
       this.setMediaMetadata(args, result);
       return;
     }
+    if (call.method === 'setSystemMediaNavigation') {
+      this.setSystemMediaNavigation(args, result);
+      return;
+    }
     if (call.method === 'open') {
       this.openPlayer(args, result);
       return;
@@ -213,6 +225,10 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
       durationMicros: 0,
       playbackRate: 1.0,
     });
+    this.mediaNavigation.set(playerId, {
+      previousEnabled: false,
+      nextEnabled: false,
+    });
     result.success(playerId);
   }
 
@@ -229,6 +245,7 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
     }
     this.mediaMetadata.delete(playerId);
     this.mediaStates.delete(playerId);
+    this.mediaNavigation.delete(playerId);
     if (this.currentPlayerId === playerId) {
       this.currentPlayerId = 0;
       this.deactivateAVSession();
@@ -277,6 +294,26 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
     }
     result.success(null);
     this.publishMediaMetadata(playerId, metadata);
+  }
+
+  private setSystemMediaNavigation(
+    args: Map<string, ESObject>,
+    result: MethodResult,
+  ): void {
+    const playerId = this.numberArg(args, 'playerId', 0);
+    if (!this.players.has(playerId)) {
+      result.error('ERIKA_ERROR', 'Unknown Erika player ' + playerId, null);
+      return;
+    }
+    this.mediaNavigation.set(playerId, {
+      previousEnabled: args.get('previousEnabled') === true,
+      nextEnabled: args.get('nextEnabled') === true,
+    });
+    result.success(null);
+    const metadata = this.mediaMetadata.get(playerId);
+    if (metadata !== undefined && this.currentPlayerId === playerId) {
+      this.publishMediaMetadata(playerId, metadata);
+    }
   }
 
   private createTexture(args: Map<string, ESObject>, result: MethodResult): void {
@@ -518,6 +555,24 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
         ['positionMicros', time * 1000],
       ]));
     });
+    session.on('playPrevious', (): void => this.emitSystemMediaNavigation('previous'));
+    session.on('playNext', (): void => this.emitSystemMediaNavigation('next'));
+  }
+
+  private emitSystemMediaNavigation(navigation: string): void {
+    const playerId = this.currentPlayerId;
+    const capabilities = this.mediaNavigation.get(playerId);
+    const enabled = navigation === 'previous'
+      ? capabilities?.previousEnabled === true
+      : capabilities?.nextEnabled === true;
+    if (!this.players.has(playerId) || !enabled) {
+      return;
+    }
+    this.eventSink?.success({
+      playerId: playerId,
+      kind: SYSTEM_MEDIA_NAVIGATION_EVENT_KIND,
+      navigation: navigation,
+    });
   }
 
   private invokeFromAVSession(method: string, extra?: Map<string, ESObject>): void {
@@ -551,6 +606,13 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
       assetId: 'erika-' + playerId,
       title: metadata.title,
     };
+    const capabilities = this.mediaNavigation.get(playerId);
+    if (capabilities?.previousEnabled === true) {
+      avMetadata.previousAssetId = 'erika-previous-' + playerId;
+    }
+    if (capabilities?.nextEnabled === true) {
+      avMetadata.nextAssetId = 'erika-next-' + playerId;
+    }
     if (metadata.artist !== undefined) {
       avMetadata.artist = metadata.artist;
     }

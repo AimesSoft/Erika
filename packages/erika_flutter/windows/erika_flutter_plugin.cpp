@@ -1160,6 +1160,11 @@ struct ErikaFlutterPlugin::PlayerHost {
     ++smtc_state.metadata_revision;
   }
 
+  void SetSystemMediaNavigation(bool previous_enabled, bool next_enabled) {
+    smtc_state.previous_enabled = previous_enabled;
+    smtc_state.next_enabled = next_enabled;
+  }
+
   void Play() {
     Check(library->play(handle), "play", library->TakeLastError());
     smtc_state.playing = true;
@@ -2297,6 +2302,20 @@ void ErikaFlutterPlugin::HandleSmtcCommand(ErikaSmtcCommand command,
       }
     } else if (command == ErikaSmtcCommand::seek) {
       it->second->Seek(position_micros);
+    } else if (command == ErikaSmtcCommand::previous ||
+               command == ErikaSmtcCommand::next) {
+      const bool enabled = command == ErikaSmtcCommand::previous
+                               ? it->second->smtc_state.previous_enabled
+                               : it->second->smtc_state.next_enabled;
+      if (enabled) {
+        SendEvent(EncodableValue(EncodableMap{
+            {EncodableValue("playerId"), EncodableValue(active_player_id_)},
+            {EncodableValue("kind"), EncodableValue(13)},
+            {EncodableValue("navigation"),
+             EncodableValue(command == ErikaSmtcCommand::previous ? "previous"
+                                                                   : "next")},
+        }));
+      }
     }
     OnFrameTimer();
   } catch (const std::exception& error) {
@@ -2397,6 +2416,12 @@ void ErikaFlutterPlugin::HandleMethodCall(
         throw PluginError("metadata is required.");
       }
       PlayerFromArgs(args).SetMediaMetadata(*metadata);
+      RefreshSmtc();
+      result->Success();
+    } else if (method == "setSystemMediaNavigation") {
+      PlayerFromArgs(args).SetSystemMediaNavigation(
+          BoolValue(FindArg(args, "previousEnabled")).value_or(false),
+          BoolValue(FindArg(args, "nextEnabled")).value_or(false));
       RefreshSmtc();
       result->Success();
     } else if (method == "setVolume") {

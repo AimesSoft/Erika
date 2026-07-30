@@ -1645,6 +1645,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
   private var pollTimer: Timer?
   private var activePlayerId: Int64?
   private var remoteCommandTargets: [(MPRemoteCommand, Any)] = []
+  private var systemMediaNavigation: [Int64: (previousEnabled: Bool, nextEnabled: Bool)] = [:]
 
   init(flutterHostView: NSView?, flutterHostViewController: NSViewController?) {
     self.flutterHostView = flutterHostView
@@ -1689,6 +1690,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         let args = try dictionaryArgs(call.arguments)
         let playerId = try requiredInt64(args["playerId"], name: "playerId")
         players.removeValue(forKey: playerId)
+        systemMediaNavigation.removeValue(forKey: playerId)
         if activePlayerId == playerId {
           activePlayerId = nil
           clearNowPlayingInfo()
@@ -1744,6 +1746,17 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
           throw ErikaPluginError.invalidArguments("metadata is required.")
         }
         try applyMediaMetadata(metadata, to: host)
+        result(nil)
+      case "setSystemMediaNavigation":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        systemMediaNavigation[host.id] = (
+          previousEnabled: boolValue(args["previousEnabled"]) ?? false,
+          nextEnabled: boolValue(args["nextEnabled"]) ?? false
+        )
+        if activePlayerId == host.id {
+          refreshRemoteCommands()
+        }
         result(nil)
       case "setVolume":
         let args = try dictionaryArgs(call.arguments)
@@ -2186,6 +2199,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       self?.handleNowPlayingChanged(for: changedHost)
     }
     players[id] = host
+    systemMediaNavigation[id] = (previousEnabled: false, nextEnabled: false)
     startPollTimerIfNeeded()
     return id
   }
@@ -2215,6 +2229,12 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         return .commandFailed
       }
       return self?.performRemoteSeek(positionEvent.positionTime) ?? .commandFailed
+    }
+    addRemoteTarget(commands.previousTrackCommand) { [weak self] _ in
+      self?.emitSystemMediaNavigation("previous") ?? .commandFailed
+    }
+    addRemoteTarget(commands.nextTrackCommand) { [weak self] _ in
+      self?.emitSystemMediaNavigation("next") ?? .commandFailed
     }
     refreshRemoteCommands()
   }
@@ -2305,6 +2325,24 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
     }
   }
 
+  private func emitSystemMediaNavigation(_ navigation: String) -> MPRemoteCommandHandlerStatus {
+    performOnMain {
+      guard let playerId = self.activePlayerId,
+            self.players[playerId] != nil,
+            let capabilities = self.systemMediaNavigation[playerId] else { return .noSuchContent }
+      let enabled = navigation == "previous"
+        ? capabilities.previousEnabled
+        : capabilities.nextEnabled
+      guard enabled else { return .noSuchContent }
+      Self.sharedEventSink?([
+        "playerId": playerId,
+        "kind": 13,
+        "navigation": navigation,
+      ])
+      return .success
+    }
+  }
+
   private func performOnMain(
     _ work: @escaping () -> MPRemoteCommandHandlerStatus
   ) -> MPRemoteCommandHandlerStatus {
@@ -2315,10 +2353,14 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
   }
 
   private func refreshRemoteCommands() {
+    let commands = MPRemoteCommandCenter.shared()
     let enabled = activePlayer() != nil
     remoteCommandTargets.forEach { command, _ in
       command.isEnabled = enabled
     }
+    let capabilities = activePlayerId.flatMap { systemMediaNavigation[$0] }
+    commands.previousTrackCommand.isEnabled = enabled && capabilities?.previousEnabled == true
+    commands.nextTrackCommand.isEnabled = enabled && capabilities?.nextEnabled == true
   }
 
   private func presenterConfigForNewPlayer(arguments: Any?) throws -> ErikaPresenterConfigC {

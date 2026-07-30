@@ -179,6 +179,26 @@ void main() {
     await player.dispose();
   });
 
+  test('system media navigation capabilities are forwarded', () async {
+    final player = ErikaPlayer();
+
+    await player.setSystemMediaNavigation(
+      previousEnabled: true,
+      nextEnabled: false,
+    );
+
+    final call = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'setSystemMediaNavigation',
+    );
+    expect(call.arguments, <String, Object?>{
+      'playerId': 7,
+      'previousEnabled': true,
+      'nextEnabled': false,
+    });
+
+    await player.dispose();
+  });
+
   test('apple EDR output mode is passed to native create', () async {
     final player = ErikaPlayer(
       outputMode: ErikaOutputMode.appleEdr,
@@ -1459,4 +1479,30 @@ void main() {
       expect(event.message, contains('audio_output_changed'));
     },
   );
+
+  test('player event parses kind 13 system media navigation request', () {
+    expect(ErikaEventKind.systemMediaNavigationRequested.index, 13);
+    final nextEvent = ErikaPlayerEvent.fromMap(<String, Object?>{
+      'playerId': 7,
+      'kind': 13,
+      'navigation': 'next',
+    });
+    final previousEvent = ErikaPlayerEvent.fromMap(<String, Object?>{
+      'playerId': 7,
+      'kind': 13.0,
+      'navigation': 'previous',
+    });
+    final unknownEvent = ErikaPlayerEvent.fromMap(<String, Object?>{
+      'playerId': 7,
+      'kind': 13,
+      'navigation': 'later',
+    });
+
+    expect(nextEvent.kind, ErikaEventKind.systemMediaNavigationRequested);
+    expect(nextEvent.systemMediaCommand, ErikaSystemMediaCommand.next);
+    expect(previousEvent.kind, ErikaEventKind.systemMediaNavigationRequested);
+    expect(previousEvent.systemMediaCommand, ErikaSystemMediaCommand.previous);
+    expect(unknownEvent.kind, ErikaEventKind.systemMediaNavigationRequested);
+    expect(unknownEvent.systemMediaCommand, isNull);
+  });
 }

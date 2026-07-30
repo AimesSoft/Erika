@@ -1700,6 +1700,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
   private var interruptedPlayerId: Int64?
   private var notificationObservers: [NSObjectProtocol] = []
   private var remoteCommandTargets: [(MPRemoteCommand, Any)] = []
+  private var systemMediaNavigation: [Int64: (previousEnabled: Bool, nextEnabled: Bool)] = [:]
 
   deinit {
     notificationObservers.forEach(NotificationCenter.default.removeObserver)
@@ -1727,9 +1728,11 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         let args = try dictionaryArgs(call.arguments)
         let playerId = try requiredInt64(args["playerId"], name: "playerId")
         players.removeValue(forKey: playerId)
+        systemMediaNavigation.removeValue(forKey: playerId)
         if activePlayerId == playerId {
           activePlayerId = nil
           clearNowPlayingInfo()
+          refreshRemoteCommands()
         }
         result(nil)
       case "open":
@@ -1748,6 +1751,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         let host = try playerHost(from: try dictionaryArgs(call.arguments))
         try host.play()
         activePlayerId = host.id
+        refreshRemoteCommands()
         updateNowPlayingInfo(for: host)
         result(nil)
       case "pause":
@@ -1777,6 +1781,17 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
           throw ErikaPluginError.invalidArguments("metadata is required.")
         }
         try applyMediaMetadata(metadata, to: host)
+        result(nil)
+      case "setSystemMediaNavigation":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        systemMediaNavigation[host.id] = (
+          previousEnabled: boolValue(args["previousEnabled"]) ?? false,
+          nextEnabled: boolValue(args["nextEnabled"]) ?? false
+        )
+        if activePlayerId == host.id {
+          refreshRemoteCommands()
+        }
         result(nil)
       case "setVolume":
         let args = try dictionaryArgs(call.arguments)
@@ -2242,6 +2257,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       self?.updateNowPlayingInfo(for: changedHost)
     }
     players[id] = host
+    systemMediaNavigation[id] = (previousEnabled: false, nextEnabled: false)
     startPollTimerIfNeeded()
     return id
   }
@@ -2287,6 +2303,13 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       }
       return self?.performRemoteSeek(positionEvent.positionTime) ?? .commandFailed
     }
+    addRemoteTarget(commands.previousTrackCommand) { [weak self] _ in
+      self?.emitSystemMediaNavigation("previous") ?? .commandFailed
+    }
+    addRemoteTarget(commands.nextTrackCommand) { [weak self] _ in
+      self?.emitSystemMediaNavigation("next") ?? .commandFailed
+    }
+    refreshRemoteCommands()
   }
 
   private func addRemoteTarget(
@@ -2365,6 +2388,44 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
     } catch {
       return .commandFailed
     }
+  }
+
+  private func emitSystemMediaNavigation(_ navigation: String) -> MPRemoteCommandHandlerStatus {
+    performOnMain {
+      guard let playerId = self.activePlayerId,
+            self.players[playerId] != nil,
+            let capabilities = self.systemMediaNavigation[playerId] else { return .noSuchContent }
+      let enabled = navigation == "previous"
+        ? capabilities.previousEnabled
+        : capabilities.nextEnabled
+      guard enabled else { return .noSuchContent }
+      Self.sharedEventSink?([
+        "playerId": playerId,
+        "kind": 13,
+        "navigation": navigation,
+      ])
+      return .success
+    }
+  }
+
+  private func performOnMain(
+    _ work: @escaping () -> MPRemoteCommandHandlerStatus
+  ) -> MPRemoteCommandHandlerStatus {
+    if Thread.isMainThread {
+      return work()
+    }
+    return DispatchQueue.main.sync(execute: work)
+  }
+
+  private func refreshRemoteCommands() {
+    let commands = MPRemoteCommandCenter.shared()
+    let enabled = activePlayerId.flatMap { players[$0] } != nil
+    remoteCommandTargets.forEach { command, _ in
+      command.isEnabled = enabled
+    }
+    let capabilities = activePlayerId.flatMap { systemMediaNavigation[$0] }
+    commands.previousTrackCommand.isEnabled = enabled && capabilities?.previousEnabled == true
+    commands.nextTrackCommand.isEnabled = enabled && capabilities?.nextEnabled == true
   }
 
   private func handleAudioInterruption(_ notification: Notification) {

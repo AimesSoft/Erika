@@ -3,6 +3,7 @@ package dev.aimesoft.erika_flutter
 import android.media.session.PlaybackState
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -82,5 +83,61 @@ class AndroidMediaStateTest {
         assertEquals(true, foregroundOnly.canPlay(activityActive = true))
         assertEquals(false, foregroundOnly.canPlay(activityActive = false))
         assertEquals(true, backgroundAllowed.canPlay(activityActive = false))
+    }
+
+    @Test
+    fun `system media navigation updates capabilities independently`() {
+        val state = updatedSystemMediaNavigation(
+            AndroidMediaState(playerId = 7L, nextEnabled = true),
+            mapOf("previousEnabled" to true, "nextEnabled" to false),
+        )
+
+        assertEquals(true, state.previousEnabled)
+        assertEquals(false, state.nextEnabled)
+    }
+
+    @Test
+    fun `system media navigation defaults missing capabilities to disabled`() {
+        val state = updatedSystemMediaNavigation(
+            AndroidMediaState(playerId = 7L, previousEnabled = true, nextEnabled = true),
+            emptyMap(),
+        )
+
+        assertEquals(false, state.previousEnabled)
+        assertEquals(false, state.nextEnabled)
+    }
+
+    @Test
+    fun `Android playback actions reflect navigation capabilities`() {
+        val base = AndroidMediaState(playerId = 7L)
+
+        assertEquals(0L, base.androidPlaybackActions() and PlaybackState.ACTION_SKIP_TO_PREVIOUS)
+        assertEquals(0L, base.androidPlaybackActions() and PlaybackState.ACTION_SKIP_TO_NEXT)
+        assertEquals(
+            PlaybackState.ACTION_SKIP_TO_PREVIOUS,
+            base.copy(previousEnabled = true).androidPlaybackActions() and
+                PlaybackState.ACTION_SKIP_TO_PREVIOUS,
+        )
+        assertEquals(
+            PlaybackState.ACTION_SKIP_TO_NEXT,
+            base.copy(nextEnabled = true).androidPlaybackActions() and
+                PlaybackState.ACTION_SKIP_TO_NEXT,
+        )
+    }
+
+    @Test
+    fun `enabled system media navigation creates kind 13 event`() {
+        val state = AndroidMediaState(playerId = 7L, previousEnabled = true)
+
+        assertEquals(
+            mapOf(
+                "playerId" to 7L,
+                "kind" to SYSTEM_MEDIA_NAVIGATION_EVENT_KIND,
+                "navigation" to SYSTEM_MEDIA_NAVIGATION_PREVIOUS,
+            ),
+            systemMediaNavigationEvent(state, SYSTEM_MEDIA_NAVIGATION_PREVIOUS),
+        )
+        assertNull(systemMediaNavigationEvent(state, SYSTEM_MEDIA_NAVIGATION_NEXT))
+        assertNull(systemMediaNavigationEvent(state, "unknown"))
     }
 }

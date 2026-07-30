@@ -799,6 +799,18 @@ class ErikaPlayer {
     });
   }
 
+  Future<void> setSystemMediaNavigation({
+    required bool previousEnabled,
+    required bool nextEnabled,
+  }) async {
+    final playerId = await ensureCreated();
+    await _invoke('setSystemMediaNavigation', <String, Object?>{
+      'playerId': playerId,
+      'previousEnabled': previousEnabled,
+      'nextEnabled': nextEnabled,
+    });
+  }
+
   Future<void> play() async {
     await _invokeForPlayer('play');
   }

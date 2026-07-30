@@ -70,6 +70,82 @@ await player.play();
 
 `allowBackgroundPlayback` 是播放器创建选项，播放器创建后不能动态修改。设为 `false` 时，App 进入后台会暂停播放，返回前台后保持暂停；设为 `true` 时，后台暂停视频解码但继续播放音频，返回前台后恢复视频。系统媒体面板支持播放、暂停和进度调整。封面应传入 JPEG、PNG 等完整编码图片字节，而不是原始像素数据。
 
+## 系统媒体上一项与下一项
+
+播放列表应用可以按当前条目启用系统媒体面板的上一项和下一项按钮。Erika 不会自行选择
+媒体，而是发出 `systemMediaNavigationRequested` 事件，让 Dart 始终作为播放列表的唯一
+数据源。当前条目变化后应同步更新按钮能力。
+
+```dart
+import 'dart:async';
+
+import 'package:erika_flutter/erika_flutter.dart';
+
+class PlaylistController {
+  final ErikaPlayer player = ErikaPlayer(allowBackgroundPlayback: true);
+  final List<({String title, String url})> items = <({String title, String url})>[
+    (title: '第 1 集', url: 'https://example.com/episode-1.mp4'),
+    (title: '第 2 集', url: 'https://example.com/episode-2.mp4'),
+  ];
+
+  StreamSubscription<ErikaPlayerEvent>? subscription;
+  int index = 0;
+  bool switching = false;
+
+  Future<void> initialize() async {
+    subscription = player.events.listen((ErikaPlayerEvent event) async {
+      if (event.kind != ErikaEventKind.systemMediaNavigationRequested) {
+        return;
+      }
+      switch (event.systemMediaCommand) {
+        case ErikaSystemMediaCommand.previous:
+          await openAt(index - 1);
+        case ErikaSystemMediaCommand.next:
+          await openAt(index + 1);
+        case null:
+          break;
+      }
+    });
+    await openAt(0);
+  }
+
+  Future<void> openAt(int newIndex) async {
+    if (switching || newIndex < 0 || newIndex >= items.length) {
+      return;
+    }
+    switching = true;
+    await player.setSystemMediaNavigation(
+      previousEnabled: false,
+      nextEnabled: false,
+    );
+    try {
+      final item = items[newIndex];
+      await player.open(
+        item.url,
+        metadata: ErikaMediaMetadata(title: item.title),
+      );
+      await player.play();
+      index = newIndex;
+    } finally {
+      switching = false;
+      await player.setSystemMediaNavigation(
+        previousEnabled: index > 0,
+        nextEnabled: index + 1 < items.length,
+      );
+    }
+  }
+
+  Future<void> dispose() async {
+    await subscription?.cancel();
+    await player.dispose();
+  }
+}
+```
+
+该能力默认关闭，并适用于 iOS、macOS、Android、Windows 和 HarmonyOS。切集期间应暂时
+关闭两个按钮并阻止重复请求；切换成功后再更新索引、metadata 和按钮能力。该 API 只上报
+`previous` 和 `next`，播放、暂停、停止与进度调整仍由各平台的原生系统媒体集成直接处理。
+
 ## Windows Setup
 
 Windows 插件（`ErikaFlutterPluginCApi`）在 CMake 构建期间通过 `build_erika_runtime.cmake` 构建 Erika C ABI runtime（`erika_capi.dll`），自动跟随 CMake 的 x64 或 ARM64 生成器架构，并把 DLL 部署到 app 旁边。依赖项目也可通过 CMake cache `ERIKA_WINDOWS_ARCH=x64|arm64` 或环境变量 `ERIKA_WINDOWS_ARCH` 显式选择；高级场景可直接设置 `ERIKA_NATIVE_TARGET=x86_64-pc-windows-msvc|aarch64-pc-windows-msvc`。需要：

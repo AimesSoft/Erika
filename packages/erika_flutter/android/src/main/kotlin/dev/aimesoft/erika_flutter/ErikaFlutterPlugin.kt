@@ -107,6 +107,10 @@ class ErikaFlutterPlugin :
                 override fun stop(playerId: Long) = performSystemMediaCommand(playerId, "stop")
                 override fun seek(playerId: Long, positionMicros: Long) =
                     performSystemMediaCommand(playerId, "seek", mapOf("positionMicros" to positionMicros))
+                override fun previous(playerId: Long) =
+                    emitSystemMediaNavigation(playerId, SYSTEM_MEDIA_NAVIGATION_PREVIOUS)
+                override fun next(playerId: Long) =
+                    emitSystemMediaNavigation(playerId, SYSTEM_MEDIA_NAVIGATION_NEXT)
             },
         )
         ErikaMediaCommandReceiver.commandHandler = mediaSession::dispatch
@@ -197,6 +201,7 @@ class ErikaFlutterPlugin :
                 "setOverlayFrame" -> setOverlayFrame(arguments(call), result)
                 "screenshot" -> captureFrame(arguments(call), result)
                 "setMediaMetadata" -> setMediaMetadata(arguments(call), result)
+                "setSystemMediaNavigation" -> setSystemMediaNavigation(arguments(call), result)
                 in NATIVE_METHODS -> invokePlayer(call.method, arguments(call), result)
                 else -> result.notImplemented()
             }
@@ -1542,6 +1547,25 @@ class ErikaFlutterPlugin :
             mediaSession.update(host.mediaState)
         }
         result.success(null)
+    }
+
+    private fun setSystemMediaNavigation(
+        arguments: Map<String, Any?>,
+        result: MethodChannel.Result,
+    ) {
+        val host = player(arguments)
+        host.setSystemMediaNavigation(arguments)
+        if (activeMediaPlayerId == host.handle) {
+            mediaSession.update(host.mediaState)
+        }
+        result.success(null)
+    }
+
+    private fun emitSystemMediaNavigation(playerId: Long, navigation: String) {
+        val host = players[playerId] ?: return
+        val event = systemMediaNavigationEvent(host.mediaState, navigation) ?: return
+        enqueuePendingEvent(host, AndroidPendingEvent.Success(event))
+        flushPendingEvents(host)
     }
 
     private fun performSystemMediaCommand(

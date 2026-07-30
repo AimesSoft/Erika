@@ -105,6 +105,86 @@ await player.play();
 
 `allowBackgroundPlayback` is a player creation option and cannot be changed after the native player has been created. When it is `false`, playback pauses as the app enters the background and remains paused on return. When it is `true`, video decoding is suspended while audio continues in the background, and video resumes when the app becomes active. Control Center supports play, pause, and position changes. Artwork must contain complete encoded image bytes in a format supported by `UIImage`, such as JPEG or PNG, rather than raw pixels.
 
+## System Media Navigation
+
+Playlist apps can enable the system previous and next buttons for the active
+item. Erika emits a `systemMediaNavigationRequested` event instead of choosing
+the next media item itself, so Dart remains the source of truth for the
+playlist. Update the capabilities whenever the active item changes.
+
+```dart
+import 'dart:async';
+
+import 'package:erika_flutter/erika_flutter.dart';
+
+class PlaylistController {
+  final ErikaPlayer player = ErikaPlayer(allowBackgroundPlayback: true);
+  final List<({String title, String url})> items = <({String title, String url})>[
+    (title: 'Episode 1', url: 'https://example.com/episode-1.mp4'),
+    (title: 'Episode 2', url: 'https://example.com/episode-2.mp4'),
+  ];
+
+  StreamSubscription<ErikaPlayerEvent>? subscription;
+  int index = 0;
+  bool switching = false;
+
+  Future<void> initialize() async {
+    subscription = player.events.listen((ErikaPlayerEvent event) async {
+      if (event.kind != ErikaEventKind.systemMediaNavigationRequested) {
+        return;
+      }
+      switch (event.systemMediaCommand) {
+        case ErikaSystemMediaCommand.previous:
+          await openAt(index - 1);
+        case ErikaSystemMediaCommand.next:
+          await openAt(index + 1);
+        case null:
+          break;
+      }
+    });
+    await openAt(0);
+  }
+
+  Future<void> openAt(int newIndex) async {
+    if (switching || newIndex < 0 || newIndex >= items.length) {
+      return;
+    }
+    switching = true;
+    await player.setSystemMediaNavigation(
+      previousEnabled: false,
+      nextEnabled: false,
+    );
+    try {
+      final item = items[newIndex];
+      await player.open(
+        item.url,
+        metadata: ErikaMediaMetadata(title: item.title),
+      );
+      await player.play();
+      index = newIndex;
+    } finally {
+      switching = false;
+      await player.setSystemMediaNavigation(
+        previousEnabled: index > 0,
+        nextEnabled: index + 1 < items.length,
+      );
+    }
+  }
+
+  Future<void> dispose() async {
+    await subscription?.cancel();
+    await player.dispose();
+  }
+}
+```
+
+The capabilities default to disabled and work on iOS, macOS, Android, Windows,
+and HarmonyOS. Disable both buttons and reject duplicate requests while an item
+is switching, then update the index, metadata, and capabilities after a
+successful switch. Only `previous` and `next` are emitted by this API. Play,
+pause, stop, and seek continue to be handled directly by the native
+system-media integration.
+
 ## Windows Setup
 
 The Windows plugin (`ErikaFlutterPluginCApi`) builds the Erika C ABI runtime

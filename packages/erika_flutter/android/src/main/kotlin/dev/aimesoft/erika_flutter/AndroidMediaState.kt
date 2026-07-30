@@ -15,6 +15,8 @@ internal data class AndroidMediaState(
     val durationMicros: Long = 0L,
     val playbackRate: Float = 1f,
     val allowBackgroundPlayback: Boolean = false,
+    val previousEnabled: Boolean = false,
+    val nextEnabled: Boolean = false,
 )
 
 internal fun AndroidMediaState.canPlay(activityActive: Boolean): Boolean =
@@ -32,6 +34,37 @@ internal fun androidMediaMetadata(arguments: Map<String, Any?>): AndroidMediaMet
         artwork = raw["artwork"] as? ByteArray,
     )
 }
+
+internal fun updatedSystemMediaNavigation(
+    state: AndroidMediaState,
+    arguments: Map<String, Any?>,
+): AndroidMediaState = state.copy(
+    previousEnabled = arguments["previousEnabled"] as? Boolean ?: false,
+    nextEnabled = arguments["nextEnabled"] as? Boolean ?: false,
+)
+
+internal fun systemMediaNavigationEvent(
+    state: AndroidMediaState,
+    navigation: String,
+): Map<String, Any?>? {
+    val enabled = when (navigation) {
+        SYSTEM_MEDIA_NAVIGATION_PREVIOUS -> state.previousEnabled
+        SYSTEM_MEDIA_NAVIGATION_NEXT -> state.nextEnabled
+        else -> false
+    }
+    if (!enabled) {
+        return null
+    }
+    return linkedMapOf(
+        "playerId" to state.playerId,
+        "kind" to SYSTEM_MEDIA_NAVIGATION_EVENT_KIND,
+        "navigation" to navigation,
+    )
+}
+
+internal const val SYSTEM_MEDIA_NAVIGATION_EVENT_KIND = 13
+internal const val SYSTEM_MEDIA_NAVIGATION_PREVIOUS = "previous"
+internal const val SYSTEM_MEDIA_NAVIGATION_NEXT = "next"
 
 internal fun updatedAndroidMediaState(
     state: AndroidMediaState,

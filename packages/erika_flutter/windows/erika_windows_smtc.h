@@ -16,6 +16,8 @@ enum class ErikaSmtcCommand {
   pause,
   toggle,
   seek,
+  previous,
+  next,
 };
 
 struct ErikaSmtcState {
@@ -30,6 +32,8 @@ struct ErikaSmtcState {
   double playback_rate = 1.0;
   bool playing = false;
   bool stopped = true;
+  bool previous_enabled = false;
+  bool next_enabled = false;
 };
 
 class ErikaWindowsSmtc {

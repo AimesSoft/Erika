@@ -53,6 +53,10 @@ internal class AndroidPlayerHost(
         mediaState = mediaState.copy(metadata = metadata)
     }
 
+    fun setSystemMediaNavigation(arguments: Map<String, Any?>) {
+        mediaState = updatedSystemMediaNavigation(mediaState, arguments)
+    }
+
     fun setPlaybackRate(rate: Float) {
         mediaState = mediaState.copy(playbackRate = rate)
     }
