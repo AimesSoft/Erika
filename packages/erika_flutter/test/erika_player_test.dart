@@ -415,11 +415,16 @@ void main() {
     });
     final player = ErikaPlayer();
 
-    final viewId = await player.attachWindowOverlay();
+    final viewId = await player.attachWindowOverlay(
+      flutterViewId: 17,
+      secondaryWindow: true,
+    );
     await player.setWindowOverlayFrame(
       frame: const Rect.fromLTWH(10, 20, 320, 180),
       visible: true,
       generation: 42,
+      flutterViewId: 17,
+      secondaryWindow: true,
       debugLabel: 'episode.mkv',
     );
     await player.detachWindowOverlay(generation: 42);
@@ -429,7 +434,11 @@ void main() {
       playerCalls
           .singleWhere((MethodCall call) => call.method == 'attachOverlay')
           .arguments,
-      <String, Object?>{'playerId': 7},
+      <String, Object?>{
+        'playerId': 7,
+        'flutterViewId': 17,
+        'secondaryWindow': true,
+      },
     );
     expect(
       playerCalls
@@ -444,6 +453,8 @@ void main() {
         'width': 320.0,
         'height': 180.0,
         'visible': true,
+        'flutterViewId': 17,
+        'secondaryWindow': true,
         'debugLabel': 'episode.mkv',
       },
     );
@@ -452,6 +463,38 @@ void main() {
           .singleWhere((MethodCall call) => call.method == 'detachOverlay')
           .arguments,
       <String, Object?>{'playerId': 7, 'generation': 42},
+    );
+
+    await player.dispose();
+  });
+
+  test('window overlay explicitly targets the main window by default',
+      () async {
+    final player = ErikaPlayer();
+
+    await player.attachWindowOverlay(flutterViewId: 3);
+    await player.setWindowOverlayFrame(
+      frame: const Rect.fromLTWH(0, 0, 640, 360),
+      visible: true,
+      generation: 7,
+      flutterViewId: 3,
+    );
+
+    expect(
+      playerCalls
+          .singleWhere((MethodCall call) => call.method == 'attachOverlay')
+          .arguments,
+      <String, Object?>{
+        'playerId': 7,
+        'flutterViewId': 3,
+        'secondaryWindow': false,
+      },
+    );
+    expect(
+      playerCalls
+          .singleWhere((MethodCall call) => call.method == 'setOverlayFrame')
+          .arguments,
+      containsPair('secondaryWindow', false),
     );
 
     await player.dispose();

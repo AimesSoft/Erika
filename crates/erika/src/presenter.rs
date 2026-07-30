@@ -442,6 +442,7 @@ struct AsyncDanmakuPlanRequest {
 struct AsyncDanmakuPlanResult {
     request: AsyncDanmakuPlanRequest,
     prepared: DfmPreparedLayout,
+    rasterizer: DanmakuTextRasterizer,
     window_start: Duration,
     window_end: Duration,
     elapsed: Duration,
@@ -455,6 +456,7 @@ struct AsyncDanmakuPlannerState {
     config: DanmakuLayoutConfig,
     rasterizer: DanmakuTextRasterizer,
     latest_request: Option<AsyncDanmakuPlanRequest>,
+    invalidate_stable_tracks: bool,
     shutdown: bool,
 }
 
@@ -468,6 +470,7 @@ struct AsyncDanmakuPlanner {
 struct CurrentDanmakuPrepared {
     request: AsyncDanmakuPlanRequest,
     prepared: DfmPreparedLayout,
+    rasterizer: DanmakuTextRasterizer,
     window_start: Duration,
     window_end: Duration,
 }
@@ -486,6 +489,7 @@ impl AsyncDanmakuPlanner {
             config,
             rasterizer,
             latest_request: None,
+            invalidate_stable_tracks: false,
             shutdown: false,
         };
         let shared = Arc::new((Mutex::new(state), Condvar::new()));
@@ -564,7 +568,10 @@ impl AsyncDanmakuPlanner {
         let (lock, cvar) = &*self.shared;
         let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(timeline) = timeline {
-            state.timeline = timeline;
+            if state.timeline != timeline {
+                state.timeline = timeline;
+                state.invalidate_stable_tracks = true;
+            }
         }
         if let Some(config) = config {
             state.config = config;
@@ -1031,6 +1038,9 @@ impl PresenterRuntime {
                 }
             }
             DanmakuConfigChange::Layout => {
+                if let Some(prepared) = &mut self.current_danmaku_prepared {
+                    prepared.prepared.apply_paint_config(&config);
+                }
                 self.danmaku_planner
                     .set_config(config, self.danmaku.rasterizer_clone());
                 self.bump_danmaku_generation_for_config_change();
@@ -1122,13 +1132,7 @@ impl PresenterRuntime {
         let sync_started = Instant::now();
         self.sync_media_time_from_player();
         let is_playing = self.is_playing();
-        self.danmaku_display_clock.sample(
-            time_seconds,
-            self.current_media_time,
-            self.current_generation,
-            is_playing,
-            self.playback_rate,
-        );
+        self.sample_danmaku_display_clock(time_seconds, is_playing);
         self.last_clock_sync_duration = sync_started.elapsed();
 
         let plan_started = Instant::now();
@@ -1594,6 +1598,7 @@ impl PresenterRuntime {
                 self.current_danmaku_prepared = Some(CurrentDanmakuPrepared {
                     request: result.request,
                     prepared: result.prepared,
+                    rasterizer: result.rasterizer,
                     window_start: result.window_start,
                     window_end: result.window_end,
                 });
@@ -1636,11 +1641,11 @@ impl PresenterRuntime {
             }
             return;
         }
-        let plan = self.danmaku.render_prepared_plan(
-            &prepared.prepared,
+        let layout = prepared.prepared.frame_layout(
             self.danmaku_display_clock.media_time,
             self.current_generation,
         );
+        let plan = prepared.rasterizer.render_plan(&layout);
         self.current_danmaku = Some(plan);
         self.record_current_danmaku_stats();
     }
@@ -1665,14 +1670,15 @@ impl PresenterRuntime {
         if !self.danmaku.config().enabled {
             return;
         }
-        if self
-            .current_danmaku_prepared
-            .as_ref()
-            .is_some_and(|prepared| {
-                self.danmaku_prepared_covers_current_time(prepared)
-                    && prepared.window_end.saturating_sub(media_time)
-                        > DANMAKU_PREPARE_REFRESH_MARGIN
-            })
+        if !self.danmaku_plan_replacement_pending
+            && self
+                .current_danmaku_prepared
+                .as_ref()
+                .is_some_and(|prepared| {
+                    self.danmaku_prepared_covers_current_time(prepared)
+                        && prepared.window_end.saturating_sub(media_time)
+                            > DANMAKU_PREPARE_REFRESH_MARGIN
+                })
         {
             return;
         }
@@ -1698,6 +1704,23 @@ impl PresenterRuntime {
             && Some(prepared.request.key.viewport) == self.current_danmaku_viewport
             && prepared.window_start <= self.current_media_time
             && self.current_media_time <= prepared.window_end
+    }
+
+    fn sample_danmaku_display_clock(
+        &mut self,
+        host_time_seconds: f64,
+        is_playing: bool,
+    ) -> Duration {
+        // Danmaku layout generations reject stale async plans, but they are
+        // not seeks. Only the player's playback generation may reset the
+        // monotonic display clock.
+        self.danmaku_display_clock.sample(
+            host_time_seconds,
+            self.current_media_time,
+            self.player.playback_generation(),
+            is_playing,
+            self.playback_rate,
+        )
     }
 
     fn sync_media_time_from_player(&mut self) {
@@ -2100,15 +2123,15 @@ impl PresenterRuntime {
     fn bump_danmaku_generation_for_config_change(&mut self) {
         bump_generation(&mut self.current_generation, &mut self.danmaku_generation);
         self.danmaku_planner.invalidate_requests();
-        self.current_danmaku_prepared = None;
 
         // Style/layout preparation runs on the async planner. Keep the last
-        // complete plan visible until its replacement is ready so a stream of
-        // slider updates cannot alternate between danmaku and an empty frame.
-        // The old plan is only a short-lived presentation fallback; retagging
-        // it lets renderers accept it for the new danmaku generation.
-        self.danmaku_plan_replacement_pending = retain_danmaku_plan_for_config_change(
+        // complete geometry moving until its replacement is ready so a stream
+        // of slider updates cannot freeze, flash, or restart current comments.
+        // Retagging both the prepared layout and its current render plan lets
+        // renderers accept this short-lived fallback for the new generation.
+        self.danmaku_plan_replacement_pending = retain_danmaku_state_for_config_change(
             &mut self.current_danmaku,
+            &mut self.current_danmaku_prepared,
             self.danmaku.config().enabled,
             self.current_generation,
         );
@@ -2589,20 +2612,32 @@ fn run_async_danmaku_planner(
             }
             seen_revision = state.revision;
             let config_update = (state.config_revision != applied_config_revision).then(|| {
+                let invalidate_stable_tracks = state.invalidate_stable_tracks;
+                state.invalidate_stable_tracks = false;
                 (
                     state.config_revision,
                     state.timeline.clone(),
                     state.config.clone(),
                     state.rasterizer.clone(),
+                    invalidate_stable_tracks,
                 )
             });
             (state.latest_request, config_update)
         };
 
-        if let Some((revision, next_timeline, next_config, next_rasterizer)) = config_update {
+        if let Some((
+            revision,
+            next_timeline,
+            next_config,
+            next_rasterizer,
+            invalidate_stable_tracks,
+        )) = config_update
+        {
             timeline = next_timeline;
             config = next_config;
-            engine.invalidate_stable_tracks();
+            if invalidate_stable_tracks {
+                engine.invalidate_stable_tracks();
+            }
             engine.set_config_with_rasterizer(config.clone(), next_rasterizer);
             applied_config_revision = revision;
         }
@@ -2617,11 +2652,13 @@ fn run_async_danmaku_planner(
             );
             engine.sync_timeline(&window);
             let prepared = engine.prepare(request.key.viewport, request.key.generation);
+            let rasterizer = engine.rasterizer_clone();
             let elapsed = started.elapsed();
             if results
                 .send(AsyncDanmakuPlanResult {
                     request,
                     prepared,
+                    rasterizer,
                     window_start,
                     window_end,
                     elapsed,
@@ -2701,20 +2738,24 @@ fn bump_generation(current_generation: &mut u64, danmaku_generation: &mut u64) {
         .max(*danmaku_generation);
 }
 
-fn retain_danmaku_plan_for_config_change(
+fn retain_danmaku_state_for_config_change(
     current: &mut Option<DanmakuRenderPlan>,
+    prepared: &mut Option<CurrentDanmakuPrepared>,
     enabled: bool,
     generation: u64,
 ) -> bool {
     if !enabled {
         *current = None;
+        *prepared = None;
         return false;
     }
-    let Some(plan) = current.as_mut() else {
-        return false;
-    };
-    plan.generation = generation;
-    true
+    if let Some(plan) = current.as_mut() {
+        plan.generation = generation;
+    }
+    if let Some(prepared) = prepared.as_mut() {
+        prepared.request.key.generation = generation;
+    }
+    current.is_some() || prepared.is_some()
 }
 
 fn duration_regressed(next: Duration, previous: Duration) -> bool {
@@ -3926,6 +3967,33 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     #[test]
     #[cfg(feature = "wgpu")]
+    fn layout_config_generation_does_not_reset_the_display_clock() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        let playback_generation = presenter.player.playback_generation();
+        presenter.current_media_time = Duration::from_secs(2);
+        presenter.sample_danmaku_display_clock(1.0, true);
+        presenter.current_media_time = Duration::from_millis(2050);
+        let before = presenter.sample_danmaku_display_clock(1.1, true);
+
+        let original_layout_generation = presenter.current_generation;
+        let mut config = DanmakuLayoutConfig::default();
+        config.font_size += 1.0;
+        presenter.set_danmaku_config(config);
+        assert!(presenter.current_generation > original_layout_generation);
+        assert_eq!(presenter.player.playback_generation(), playback_generation);
+
+        presenter.current_media_time = Duration::from_millis(2100);
+        let after = presenter.sample_danmaku_display_clock(1.2, true);
+        assert_eq!(after, Duration::from_millis(2200));
+        assert!(after > before);
+        assert_eq!(
+            presenter.danmaku_display_clock.last_step,
+            DanmakuClockStep::Advanced
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu")]
     fn idle_tick_does_not_render_test_pattern_by_default() {
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
 
@@ -4035,6 +4103,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         .unwrap();
         let mut stale_engine = DfmLayoutEngine::new(timeline, DanmakuLayoutConfig::default());
         let stale_prepared = stale_engine.prepare(viewport, 1);
+        let stale_rasterizer = stale_engine.rasterizer_clone();
 
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
         presenter.current_danmaku_viewport = Some(viewport);
@@ -4054,6 +4123,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 },
             },
             prepared: stale_prepared,
+            rasterizer: stale_rasterizer,
             window_start: Duration::ZERO,
             window_end: Duration::from_secs(10),
         });
@@ -4131,16 +4201,79 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             7,
             viewport,
         ));
+        let mut prepared = None;
 
-        assert!(retain_danmaku_plan_for_config_change(&mut current, true, 8));
+        assert!(retain_danmaku_state_for_config_change(
+            &mut current,
+            &mut prepared,
+            true,
+            8
+        ));
         assert_eq!(current.as_ref().map(|plan| plan.generation), Some(8));
 
-        assert!(!retain_danmaku_plan_for_config_change(
+        assert!(!retain_danmaku_state_for_config_change(
             &mut current,
+            &mut prepared,
             false,
             9
         ));
         assert!(current.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu")]
+    fn retained_config_fallback_keeps_scrolling_while_relayout_is_pending() {
+        let viewport = DanmakuViewport::new(640, 360);
+        let timeline = DanmakuTimeline::new(vec![crate::danmaku::DanmakuItem {
+            id: 1,
+            pts: Duration::ZERO,
+            text: "moving fallback".to_string(),
+            mode: DanmakuMode::Scroll,
+            font_size: 25.0,
+            color: crate::danmaku::DanmakuColor::WHITE,
+            opacity: 1.0,
+            is_self: false,
+        }])
+        .unwrap();
+        let mut fallback_engine = DfmLayoutEngine::new(timeline, DanmakuLayoutConfig::default());
+        let fallback_prepared = fallback_engine.prepare(viewport, 1);
+        let fallback_rasterizer = fallback_engine.rasterizer_clone();
+
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        presenter.current_danmaku_viewport = Some(viewport);
+        presenter.current_media_time = Duration::from_secs(1);
+        presenter.danmaku_display_clock.media_time = presenter.current_media_time;
+        presenter.current_danmaku_prepared = Some(CurrentDanmakuPrepared {
+            request: AsyncDanmakuPlanRequest {
+                key: DanmakuPlanKey {
+                    media_time: presenter.current_media_time,
+                    viewport,
+                    generation: presenter.current_generation,
+                },
+            },
+            prepared: fallback_prepared,
+            rasterizer: fallback_rasterizer,
+            window_start: Duration::ZERO,
+            window_end: Duration::from_secs(10),
+        });
+        presenter.refresh_current_danmaku_plan_from_prepared();
+        let first_x = presenter.current_danmaku.as_ref().unwrap().items[0].rect[0];
+
+        let mut config = DanmakuLayoutConfig::default();
+        config.font_size += 4.0;
+        presenter.set_danmaku_config(config);
+        assert!(presenter.danmaku_plan_replacement_pending);
+        assert!(presenter.current_danmaku_prepared.is_some());
+
+        presenter.danmaku_display_clock.media_time = Duration::from_millis(1200);
+        presenter.refresh_current_danmaku_plan_from_prepared();
+        let next = presenter.current_danmaku.as_ref().unwrap();
+
+        assert_eq!(next.media_time, Duration::from_millis(1200));
+        assert!(
+            next.items[0].rect[0] < first_x,
+            "the retained right-to-left comment must keep moving"
+        );
     }
 
     #[test]

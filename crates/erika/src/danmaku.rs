@@ -778,7 +778,9 @@ impl DfmPreparedLayout {
 
     pub(crate) fn apply_paint_config(&mut self, config: &DanmakuLayoutConfig) {
         let config = config.sanitized();
-        debug_assert!(self.config.layout_equivalent(&config));
+        // A layout replacement is prepared asynchronously. Its previous
+        // geometry can remain on screen as a moving fallback in the meantime,
+        // so paint-only fields must also be applicable across layout revisions.
         self.config.opacity = config.opacity;
         self.config.shadow_offset = config.shadow_offset;
         self.config.shadow_style = config.shadow_style;
@@ -1896,7 +1898,10 @@ impl DfmLayoutEngine {
         }
         if layout_changed {
             self.prepared = None;
-            self.invalidate_stable_tracks();
+            // Track assignments are preferences, not hard constraints. Keeping
+            // them across font-size and other layout changes lets overlapping
+            // items stay in the same logical lane; the retainer will reject a
+            // preference when the new geometry no longer fits.
             DanmakuConfigChange::Layout
         } else {
             if let Some(prepared) = &mut self.prepared {
@@ -2925,6 +2930,39 @@ mod tests {
         let frame = prepared.frame_layout(Duration::from_millis(500), 2);
         assert_close(frame.items[0].opacity, 0.4);
         assert_close(frame.items[0].shadow_alpha, 0.0);
+    }
+
+    #[test]
+    fn font_size_change_preserves_stable_track_preferences() {
+        let timeline = DanmakuTimeline::new(vec![
+            item(0.0, "first", DanmakuMode::Top),
+            item(0.1, "second", DanmakuMode::Top),
+            item(0.2, "third", DanmakuMode::Top),
+        ])
+        .unwrap();
+        let mut engine = DfmLayoutEngine::new(timeline, DanmakuLayoutConfig::default());
+        let viewport = DanmakuViewport::new(1280, 720);
+        let first = engine.prepare(viewport, 1);
+        let first_tracks = first
+            .items()
+            .iter()
+            .map(|item| (item.id, item.track_index))
+            .collect::<HashMap<_, _>>();
+
+        let mut config = engine.config().clone();
+        config.font_size += 2.0;
+        assert_eq!(engine.apply_config(config), DanmakuConfigChange::Layout);
+        assert_eq!(engine.stable_tracks, first_tracks);
+
+        let second = engine.prepare(viewport, 2);
+        for item in second.items() {
+            assert_eq!(
+                Some(&item.track_index),
+                first_tracks.get(&item.id),
+                "overlapping item {} changed logical track",
+                item.id
+            );
+        }
     }
 
     #[test]

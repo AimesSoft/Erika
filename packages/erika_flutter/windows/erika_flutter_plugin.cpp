@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <cwchar>
 #include <fstream>
 #include <filesystem>
 #include <iomanip>
@@ -26,6 +27,8 @@ namespace {
 constexpr int64_t kWindowOverlayViewId = -1;
 constexpr wchar_t kOverlayWindowClassName[] = L"ErikaFlutterVideoOverlay";
 constexpr wchar_t kFrameMessageWindowClassName[] = L"ErikaFlutterFrameScheduler";
+constexpr wchar_t kFlutterRegularHostWindowClassName[] =
+    L"FLUTTER_HOST_WINDOW";
 constexpr UINT kFrameTimerMessage = WM_APP + 1;
 constexpr double kFrameTimerMinFps = 1.0;
 constexpr double kFrameTimerMaxFps = 1000.0;
@@ -238,6 +241,35 @@ HWND RootHostWindow(HWND flutter_window) {
   }
   const HWND root = GetAncestor(flutter_window, GA_ROOT);
   return root != nullptr ? root : flutter_window;
+}
+
+struct FlutterRegularHostSearch {
+  DWORD process_id = 0;
+  HWND result = nullptr;
+};
+
+BOOL CALLBACK FindFlutterRegularHostWindow(HWND window, LPARAM parameter) {
+  auto* search = reinterpret_cast<FlutterRegularHostSearch*>(parameter);
+  DWORD process_id = 0;
+  GetWindowThreadProcessId(window, &process_id);
+  if (process_id != search->process_id) {
+    return TRUE;
+  }
+
+  wchar_t class_name[64] = {};
+  if (GetClassNameW(window, class_name, 64) == 0 ||
+      std::wcscmp(class_name, kFlutterRegularHostWindowClassName) != 0) {
+    return TRUE;
+  }
+  search->result = window;
+  return FALSE;
+}
+
+HWND ResolveFlutterRegularHostWindow() {
+  FlutterRegularHostSearch search{GetCurrentProcessId(), nullptr};
+  EnumWindows(FindFlutterRegularHostWindow,
+              reinterpret_cast<LPARAM>(&search));
+  return search.result;
 }
 
 int LogicalToPhysical(HWND hwnd, double value) {
@@ -1699,6 +1731,30 @@ HWND ErikaFlutterPlugin::FlutterWindow() const {
   return view->GetNativeWindow();
 }
 
+HWND ErikaFlutterPlugin::RequestedOverlayFlutterWindow() const {
+  if (!overlay_uses_secondary_window_) {
+    return FlutterWindow();
+  }
+  return ResolveFlutterRegularHostWindow();
+}
+
+void ErikaFlutterPlugin::UpdateOverlayTarget(const EncodableMap& args) {
+  const int64_t flutter_view_id =
+      Int64Value(FindArg(args, "flutterViewId")).value_or(0);
+  const bool secondary_window =
+      BoolValue(FindArg(args, "secondaryWindow")).value_or(false);
+  if (requested_flutter_view_id_ == flutter_view_id &&
+      overlay_uses_secondary_window_ == secondary_window) {
+    return;
+  }
+  requested_flutter_view_id_ = flutter_view_id;
+  overlay_uses_secondary_window_ = secondary_window;
+  DebugLog("overlay target changed flutterViewId=" +
+           std::to_string(flutter_view_id) +
+           " secondaryWindow=" +
+           std::string(secondary_window ? "true" : "false"));
+}
+
 double ErikaFlutterPlugin::BackingScale() const {
   return ScaleForWindow(FlutterWindow());
 }
@@ -2012,13 +2068,20 @@ std::optional<LRESULT> ErikaFlutterPlugin::OnTopLevelWindowProc(
 }
 
 ErikaFlutterPlugin::ErikaOverlayWindow& ErikaFlutterPlugin::EnsureOverlayWindow() {
-  HWND parent = FlutterWindow();
+  HWND parent = RequestedOverlayFlutterWindow();
   if (parent == nullptr) {
-    throw PluginError("No Flutter HWND is available for Erika overlay.");
+    throw PluginError(overlay_uses_secondary_window_
+                          ? "No detached Flutter HWND is available for Erika overlay."
+                          : "No Flutter HWND is available for Erika overlay.");
   }
   if (!overlay_window_ || overlay_window_->flutter != parent) {
     overlay_window_ = std::make_unique<ErikaOverlayWindow>(parent);
     StartFrameTimer();
+    for (auto& entry : players_) {
+      if (entry.second->attached_view_id == kWindowOverlayViewId) {
+        entry.second->AttachOverlay(*overlay_window_);
+      }
+    }
   }
   return *overlay_window_;
 }
@@ -2244,6 +2307,7 @@ void ErikaFlutterPlugin::HandleMethodCall(
       result->Success();
     } else if (method == "attachOverlay") {
       auto& host = PlayerFromArgs(args);
+      UpdateOverlayTarget(args);
       host.AttachOverlay(EnsureOverlayWindow());
       OnFrameTimer();
       result->Success(EncodableValue(kWindowOverlayViewId));
@@ -2263,13 +2327,21 @@ void ErikaFlutterPlugin::HandleMethodCall(
       }
       result->Success();
     } else if (method == "setOverlayFrame") {
+      const bool visible =
+          BoolValue(FindArg(args, "visible")).value_or(true);
+      const auto generation = Int64Value(FindArg(args, "generation"));
+      if (!visible && generation && overlay_window_ &&
+          *generation != overlay_window_->active_generation) {
+        result->Success();
+        return;
+      }
+      UpdateOverlayTarget(args);
       auto& overlay = EnsureOverlayWindow();
       overlay.SetFrame(DoubleValue(FindArg(args, "x")).value_or(0.0),
                        DoubleValue(FindArg(args, "y")).value_or(0.0),
                        DoubleValue(FindArg(args, "width")).value_or(0.0),
                        DoubleValue(FindArg(args, "height")).value_or(0.0),
-                       BoolValue(FindArg(args, "visible")).value_or(true),
-                       Int64Value(FindArg(args, "generation")),
+                       visible, generation,
                        StringValue(FindArg(args, "debugLabel")));
       ResizeAttachedOverlay();
       OnFrameTimer();
