@@ -1366,6 +1366,10 @@ class ErikaPlayer {
     });
   }
 
+  /// Attaches the shared native overlay to this player.
+  ///
+  /// Multi-view embedders can use [flutterViewId] and [secondaryWindow] to
+  /// identify the Flutter view that currently hosts the player widget.
   Future<int> attachWindowOverlay({
     int? flutterViewId,
     bool secondaryWindow = false,

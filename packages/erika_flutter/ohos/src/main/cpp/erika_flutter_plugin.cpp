@@ -3,7 +3,9 @@
 #include <napi/native_api.h>
 #include <native_window/external_window.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <unordered_map>
 
@@ -267,6 +269,63 @@ napi_value NativePollEvent(napi_env env, napi_callback_info info) {
   return result;
 }
 
+napi_value NativeCaptureFrame(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value args[3] = {};
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc < 3) {
+    return Null(env);
+  }
+  OhosPlayer* player = FindPlayer(GetInt64(env, args[0]));
+  if (player == nullptr) {
+    return Null(env);
+  }
+
+  const int32_t requested_width = GetInt32(env, args[1]);
+  const int32_t requested_height = GetInt32(env, args[2]);
+  if (requested_width <= 0 || requested_height <= 0) {
+    return Null(env);
+  }
+  const auto width = static_cast<uint32_t>(requested_width);
+  const auto height = static_cast<uint32_t>(requested_height);
+  const size_t width_size = static_cast<size_t>(width);
+  const size_t height_size = static_cast<size_t>(height);
+  if (height_size > std::numeric_limits<size_t>::max() / width_size ||
+      width_size * height_size >
+          std::numeric_limits<size_t>::max() / static_cast<size_t>(4)) {
+    return Null(env);
+  }
+  const size_t byte_count = width_size * height_size * 4;
+
+  napi_value array_buffer = nullptr;
+  void* rgba = nullptr;
+  if (napi_create_arraybuffer(env, byte_count, &rgba, &array_buffer) != napi_ok ||
+      rgba == nullptr) {
+    return Null(env);
+  }
+  const auto status = erika_presenter_capture_frame_rgba(
+      player->presenter,
+      width,
+      height,
+      static_cast<uint8_t*>(rgba),
+      byte_count);
+  if (status != ErikaStatus_Ok) {
+    return Null(env);
+  }
+
+  napi_value bytes = nullptr;
+  if (napi_create_typedarray(
+          env,
+          napi_uint8_array,
+          byte_count,
+          array_buffer,
+          0,
+          &bytes) != napi_ok) {
+    return Null(env);
+  }
+  return bytes;
+}
+
 napi_value Init(napi_env env, napi_value exports) {
   napi_property_descriptor descriptors[] = {
       {"nativeCreate", nullptr, NativeCreate, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -278,6 +337,7 @@ napi_value Init(napi_env env, napi_value exports) {
       {"nativeDetachSurface", nullptr, NativeDetachSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"nativeRenderTick", nullptr, NativeRenderTick, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"nativePollEvent", nullptr, NativePollEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"nativeCaptureFrame", nullptr, NativeCaptureFrame, nullptr, nullptr, nullptr, napi_default, nullptr},
   };
   napi_define_properties(
       env, exports, sizeof(descriptors) / sizeof(descriptors[0]), descriptors);
