@@ -177,7 +177,8 @@ fn android_glslc() -> PathBuf {
         ("windows", _) => "windows-x86_64",
         ("linux", "aarch64") => "linux-aarch64",
         ("linux", _) => "linux-x86_64",
-        ("macos", "aarch64") => "darwin-arm64",
+        // The macOS NDK package keeps the historical directory name even
+        // though its glslc executable is a universal x86_64/arm64 binary.
         ("macos", _) => "darwin-x86_64",
         (os, arch) => panic!("unsupported Android shader compiler host {os}/{arch}"),
     };
