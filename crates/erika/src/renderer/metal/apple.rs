@@ -1229,14 +1229,6 @@ impl MetalRendererImpl {
         let grew_pool = reusable_index.is_none();
         let index = match reusable_index {
             Some(index) => index,
-            // The pool is sized by how many frames Metal keeps in flight, which
-            // the drawable count bounds in practice. Cap it anyway so an
-            // offscreen path with no drawable backpressure cannot grow it
-            // without limit; past the cap the oldest slot is reused, which
-            // blocks until that command buffer retires.
-            None if slot_count >= DANMAKU_VERTEX_BUFFER_POOL_LIMIT => {
-                self.danmaku_vertex_buffer_cursor % slot_count
-            }
             None => {
                 self.danmaku_vertex_buffers
                     .push(DanmakuVertexBufferSlot::default());
@@ -2022,9 +2014,6 @@ struct DanmakuBatchUniforms {
 
 const DANMAKU_FILL_ATLAS_TEXTURE: u32 = 0;
 const DANMAKU_OUTLINE_ATLAS_TEXTURE: u32 = 1;
-/// Upper bound on pooled danmaku vertex buffers. Triple buffering plus slack
-/// covers every in-flight frame a Metal drawable chain allows.
-const DANMAKU_VERTEX_BUFFER_POOL_LIMIT: usize = 8;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

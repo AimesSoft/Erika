@@ -2630,6 +2630,12 @@ fn commit_playback_command_intent(
             .retain(|sender| sender.send(PlayerEvent::PositionChanged(position)).is_ok());
     }
     if let Some(state) = state {
+        if state == PlayerState::Paused {
+            // Publish the paused state and its parked clock under the same
+            // lock so snapshots cannot observe a paused player that still
+            // advances until the worker's next polling turn.
+            inner.playback_clock.pause(Instant::now());
+        }
         let previous = inner.state;
         inner.state = state;
         if previous != state {
@@ -3344,6 +3350,51 @@ mod tests {
             events.recv().unwrap(),
             PlayerEvent::StateChanged(PlayerState::Ready)
         );
+    }
+
+    #[test]
+    fn pause_publishes_a_parked_clock_with_the_paused_state() {
+        let player = Player::new(PlayerConfig::default());
+        let commands = install_test_runtime(&player, 1);
+        let anchor = Instant::now();
+        {
+            let mut inner = player.inner.lock().expect("player mutex poisoned");
+            inner.state = PlayerState::Playing;
+            inner.playback_clock = PlaybackClock::running_at(Duration::from_secs(10), anchor);
+        }
+
+        player.pause().unwrap();
+
+        assert!(matches!(
+            commands.recv_timeout(Duration::from_secs(1)).unwrap(),
+            PlaybackCommand::Pause { .. }
+        ));
+        let snapshot = player.playback_snapshot();
+        assert_eq!(snapshot.state, PlayerState::Paused);
+        assert!(!snapshot.clock.is_running());
+        assert_eq!(
+            snapshot.media_time_at(anchor + Duration::from_secs(60)),
+            snapshot.media_time()
+        );
+    }
+
+    #[test]
+    fn failed_pause_leaves_the_running_clock_unchanged() {
+        let player = Player::new(PlayerConfig::default());
+        let commands = install_test_runtime(&player, 1);
+        drop(commands);
+        {
+            let mut inner = player.inner.lock().expect("player mutex poisoned");
+            inner.state = PlayerState::Playing;
+            inner.playback_clock =
+                PlaybackClock::running_at(Duration::from_secs(10), Instant::now());
+        }
+
+        assert!(matches!(player.pause(), Err(PlayerError::Playback(_))));
+
+        let snapshot = player.playback_snapshot();
+        assert_eq!(snapshot.state, PlayerState::Playing);
+        assert!(snapshot.clock.is_running());
     }
 
     #[test]
