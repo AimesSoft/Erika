@@ -2,7 +2,7 @@ name: Release
 
 # Build prebuilt erika_capi bundles and attach them to a GitHub Release.
 #
-# Trigger: push a tag like `v0.1.3` to publish. Use the manual "Run workflow"
+# Trigger: push a tag like `v0.1.4` to publish. Use the manual "Run workflow"
 # button (workflow_dispatch) to dry-run the builds without publishing (the
 # publish job is gated on a tag ref).
 #
@@ -348,10 +348,13 @@ jobs:
           generate_release_notes: true
           body: |
             Prebuilt `erika_capi` C ABI bundles (static `lgpl` profile),
-            including Android arm64-v8a, armeabi-v7a, x86_64, and x86.
+            for macOS arm64, macOS x64, macOS universal, Windows x64,
+            Windows ARM64, iOS, and Android arm64-v8a, armeabi-v7a, x86_64,
+            and x86. OpenHarmony support is source-build only in this release.
 
             Each archive contains the library, `include/erika.h`, `LICENSE`
             (MPL-2.0), and `THIRD_PARTY_NOTICES.md`. See
             [docs/capi_reference.md](https://github.com/AimesSoft/Erika/blob/${{ github.ref_name }}/docs/capi_reference.md)
             and [docs/integration.md](https://github.com/AimesSoft/Erika/blob/${{ github.ref_name }}/docs/integration.md)
-            to integrate.
+            to integrate. Review [CHANGELOG.md](https://github.com/AimesSoft/Erika/blob/${{ github.ref_name }}/CHANGELOG.md)
+            before upgrading, especially the compatibility notes.

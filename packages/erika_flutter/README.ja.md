@@ -36,7 +36,7 @@ cargo build -p erika_capi
 
 ## Prebuilt package と source build
 
-`ERIKA_PREBUILT=1` を設定すると GitHub Release から prebuilt native library を取得します。`ERIKA_PREBUILT_TAG=v0.1.3` で plugin source と一致する Release tag を固定してください。download または展開に失敗した場合は source build に fallback します。local source を debug するときは `ERIKA_FORCE_SOURCE_BUILD=1` で prebuilt を無効化します。package 名と release 手順は [releasing.ja.md](../../docs/releasing.ja.md) を参照してください。
+`ERIKA_PREBUILT=1` を設定すると GitHub Release から prebuilt native library を取得します。`ERIKA_PREBUILT_TAG=v0.1.4` で plugin source と一致する Release tag を固定してください。download または展開に失敗した場合は source build に fallback します。local source を debug するときは `ERIKA_FORCE_SOURCE_BUILD=1` で prebuilt を無効化します。package 名と release 手順は [releasing.ja.md](../../docs/releasing.ja.md) を参照してください。
 
 source build の architecture は macOS では `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`、Windows では `ERIKA_WINDOWS_ARCH=x64|arm64`、Android では `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86` で選択します。native library を直接 build する場合、`xtask --target`、`ERIKA_NATIVE_TARGET`、`cargo build --target` は同じ target にしてください。詳細は [building.ja.md](../../docs/building.ja.md) を参照してください。
 

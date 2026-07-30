@@ -443,7 +443,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "erika"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "ab_glyph",
  "aho-corasick",
@@ -480,7 +480,7 @@ dependencies = [
 
 [[package]]
 name = "erika_capi"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "crossbeam-channel",
  "erika",
@@ -491,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "erika_ffmpeg_sys"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "bindgen 0.72.1",
  "libc",
@@ -2501,7 +2501,7 @@ checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 
 [[package]]
 name = "xtask"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "anyhow",
  "serde_json",
