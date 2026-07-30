@@ -880,6 +880,10 @@ enum PlaybackCommand {
         quiesced: bool,
         reply: Sender<()>,
     },
+    SetVideoDecodeSuspended {
+        suspended: bool,
+        reply: Sender<std::result::Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -1391,6 +1395,25 @@ impl Player {
 
     pub(crate) fn set_frame_output_quiesced(&self, quiesced: bool) -> Result<bool> {
         self.set_frame_output_quiesced_with_timeout(quiesced, FRAME_OUTPUT_BARRIER_TIMEOUT)
+    }
+
+    pub(crate) fn set_video_decode_suspended(&self, suspended: bool) -> Result<bool> {
+        let Some(commands) = self.optional_playback_commands() else {
+            return Ok(false);
+        };
+        let (reply, response) = bounded(1);
+        commands
+            .send(PlaybackCommand::SetVideoDecodeSuspended { suspended, reply })
+            .map_err(|_| PlayerError::Playback("playback worker is not running".to_string()))?;
+        response
+            .recv()
+            .map_err(|_| {
+                PlayerError::Playback(
+                    "playback worker stopped before acknowledging video decode mode".to_string(),
+                )
+            })?
+            .map_err(PlayerError::Playback)?;
+        Ok(true)
     }
 
     fn set_frame_output_quiesced_with_timeout(
@@ -2350,6 +2373,20 @@ fn handle_playback_command(
             );
             let _ = reply.send(());
         }
+        PlaybackCommand::SetVideoDecodeSuspended { suspended, reply } => {
+            let result = engine
+                .set_video_decode_suspended(suspended)
+                .map_err(|error| error.to_string());
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "player_video_decode",
+                    "stage": if suspended { "suspended" } else { "resumed_at_keyframe" },
+                    "generation": *playback_generation,
+                })
+                .to_string(),
+            );
+            let _ = reply.send(result);
+        }
         PlaybackCommand::Shutdown => return false,
     }
     true
@@ -3014,6 +3051,28 @@ mod tests {
     fn frame_output_barrier_is_a_noop_without_open_media() {
         let player = Player::new(PlayerConfig::default());
         assert!(!player.set_frame_output_quiesced(true).unwrap());
+    }
+
+    #[test]
+    fn video_decode_mode_is_a_noop_without_open_media() {
+        let player = Player::new(PlayerConfig::default());
+        assert!(!player.set_video_decode_suspended(true).unwrap());
+    }
+
+    #[test]
+    fn video_decode_mode_uses_an_acknowledged_worker_command() {
+        let player = Player::new(PlayerConfig::default());
+        let receiver = install_test_runtime(&player, 1);
+        let worker = thread::spawn(move || match receiver.recv().unwrap() {
+            PlaybackCommand::SetVideoDecodeSuspended {
+                suspended: true,
+                reply,
+            } => reply.send(Ok(())).unwrap(),
+            _ => panic!("unexpected playback command"),
+        });
+
+        assert!(player.set_video_decode_suspended(true).unwrap());
+        worker.join().unwrap();
     }
 
     #[test]

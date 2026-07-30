@@ -592,6 +592,9 @@ ErikaStatus erika_presenter_render_tick(
     ErikaPresenterHandle *handle,
     double time_seconds,
     ErikaPresenterStats *out_stats);
+ErikaStatus erika_presenter_audio_only_tick(
+    ErikaPresenterHandle *handle,
+    ErikaPresenterStats *out_stats);
 ErikaStatus erika_presenter_get_stats(
     ErikaPresenterHandle *handle,
     ErikaPresenterStats *out_stats);

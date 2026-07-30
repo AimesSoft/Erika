@@ -241,6 +241,7 @@ pub struct PresenterRuntime {
     last_audio_clock_report: Option<AudioClockReportState>,
     last_audio_runtime_stats: AudioOutputRuntimeStats,
     playback_rate: f64,
+    audio_only_tick_active: bool,
     latest_video_decoder: Option<VideoDecoderEvent>,
     current_overlay: Option<OverlayFrame>,
     debug_hud: DebugHud,
@@ -547,6 +548,7 @@ impl PresenterRuntime {
             last_audio_clock_report: None,
             last_audio_runtime_stats: AudioOutputRuntimeStats::default(),
             playback_rate: 1.0,
+            audio_only_tick_active: false,
             latest_video_decoder: None,
             current_overlay: None,
             debug_hud: DebugHud::new(),
@@ -879,6 +881,11 @@ impl PresenterRuntime {
     }
 
     pub fn render_tick(&mut self, time_seconds: f64) -> Result<PresenterStats> {
+        if self.audio_only_tick_active {
+            self.discard_pending_video_frames();
+            self.player.set_video_decode_suspended(false)?;
+            self.audio_only_tick_active = false;
+        }
         let tick_started = Instant::now();
         let pump_started = Instant::now();
         self.refresh_video_decoder_status();
@@ -1047,6 +1054,37 @@ impl PresenterRuntime {
             ));
         }
         Ok(self.stats)
+    }
+
+    pub fn audio_only_tick(&mut self) -> Result<PresenterStats> {
+        let tick_started = Instant::now();
+        if !self.audio_only_tick_active {
+            self.player.set_video_decode_suspended(true)?;
+            self.discard_pending_video_frames();
+            self.audio_only_tick_active = true;
+        }
+        let pump_started = Instant::now();
+        self.last_subtitle_pump_duration = Duration::ZERO;
+        self.last_video_pump_duration = Duration::ZERO;
+        self.report_audio_output_runtime_stats();
+        let audio_started = Instant::now();
+        self.pump_audio();
+        self.report_audio_output_runtime_stats();
+        self.last_audio_pump_duration = audio_started.elapsed();
+        let sync_started = Instant::now();
+        self.sync_media_time_from_player();
+        self.last_clock_sync_duration = sync_started.elapsed();
+        self.last_danmaku_plan_duration = Duration::ZERO;
+        self.last_render_duration = Duration::ZERO;
+        self.last_render_current_duration = Duration::ZERO;
+        self.last_render_test_duration = Duration::ZERO;
+        self.last_pump_duration = pump_started.elapsed();
+        self.last_tick_duration = tick_started.elapsed();
+        Ok(self.stats)
+    }
+
+    fn discard_pending_video_frames(&self) {
+        while self.video_frames.try_recv().is_ok() {}
     }
 
     fn debug_hud_snapshot(&self) -> DebugHudSnapshot {

@@ -404,6 +404,7 @@ private final class ErikaNativeLibrary {
   typealias AttachMetalLayerFn = @convention(c) (UnsafeMutableRawPointer?, UInt64, UInt32, UInt32, Double) -> Int32
   typealias ResizeSurfaceFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, Double) -> Int32
   typealias RenderTickFn = @convention(c) (UnsafeMutableRawPointer?, Double, UnsafeMutableRawPointer?) -> Int32
+  typealias AudioOnlyTickFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias CaptureFrameRgbaFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, UnsafeMutableRawPointer?, Int) -> Int32
   typealias PollEventFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias LastErrorMessageFn = @convention(c) () -> UnsafeMutablePointer<CChar>?
@@ -455,6 +456,7 @@ private final class ErikaNativeLibrary {
   let resizeSurface: ResizeSurfaceFn
   let detachSurface: CommandFn
   let renderTick: RenderTickFn
+  let audioOnlyTick: AudioOnlyTickFn
   let captureFrameRgba: CaptureFrameRgbaFn?
   let pollEvent: PollEventFn
   let lastErrorMessage: LastErrorMessageFn
@@ -516,6 +518,7 @@ private final class ErikaNativeLibrary {
     resizeSurface = try Self.load("erika_presenter_resize_surface", from: libraryHandle, as: ResizeSurfaceFn.self)
     detachSurface = try Self.load("erika_presenter_detach_surface", from: libraryHandle, as: CommandFn.self)
     renderTick = try Self.load("erika_presenter_render_tick", from: libraryHandle, as: RenderTickFn.self)
+    audioOnlyTick = try Self.load("erika_presenter_audio_only_tick", from: libraryHandle, as: AudioOnlyTickFn.self)
     captureFrameRgba = Self.loadOptional("erika_presenter_capture_frame_rgba", from: libraryHandle, as: CaptureFrameRgbaFn.self)
     pollEvent = try Self.load("erika_presenter_poll_event", from: libraryHandle, as: PollEventFn.self)
     lastErrorMessage = try Self.load("erika_last_error_message", from: libraryHandle, as: LastErrorMessageFn.self)
@@ -724,6 +727,11 @@ private final class ErikaPlayerHost {
   func setAppInBackground(_ value: Bool) {
     isAppInBackground = value
     updateTickDriver()
+  }
+
+  func prepareForInactiveApp() {
+    setAppInBackground(true)
+    audioOnlyTick(sendEvent: ErikaFlutterPlugin.sharedEventSink)
   }
 
   func setVolume(_ volume: Double) throws {
@@ -1077,6 +1085,19 @@ private final class ErikaPlayerHost {
     pollEvents(sendEvent: sendEvent)
   }
 
+  func audioOnlyTick(sendEvent: (([String: Any]) -> Void)?) {
+    var stats = ErikaPresenterStatsC()
+    let status = withUnsafeMutablePointer(to: &stats) { pointer in
+      library.audioOnlyTick(handle, UnsafeMutableRawPointer(pointer))
+    }
+    if status != 0 {
+      NSLog("ErikaFlutterPlugin: audio_only_tick failed with status \(status)")
+    } else {
+      latestPresenterStats = stats
+    }
+    pollEvents(sendEvent: sendEvent)
+  }
+
   func pollEvents(sendEvent: (([String: Any]) -> Void)?) {
     while true {
       var event = ErikaEventC()
@@ -1167,7 +1188,12 @@ private final class ErikaPlayerHost {
     let timer = DispatchSource.makeTimerSource(queue: .main)
     timer.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
     timer.setEventHandler { [weak self] in
-      self?.renderTick(sendEvent: ErikaFlutterPlugin.sharedEventSink)
+      guard let self else { return }
+      if self.isAppInBackground {
+        self.audioOnlyTick(sendEvent: ErikaFlutterPlugin.sharedEventSink)
+      } else {
+        self.renderTick(sendEvent: ErikaFlutterPlugin.sharedEventSink)
+      }
     }
     fallbackTimer = timer
     timer.resume()
@@ -2034,6 +2060,13 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
   private func configureSystemPlayback() {
     let center = NotificationCenter.default
     notificationObservers.append(center.addObserver(
+      forName: UIApplication.willResignActiveNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.players.values.forEach { $0.prepareForInactiveApp() }
+    })
+    notificationObservers.append(center.addObserver(
       forName: UIApplication.didEnterBackgroundNotification,
       object: nil,
       queue: .main
@@ -2041,7 +2074,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       self?.players.values.forEach { $0.setAppInBackground(true) }
     })
     notificationObservers.append(center.addObserver(
-      forName: UIApplication.willEnterForegroundNotification,
+      forName: UIApplication.didBecomeActiveNotification,
       object: nil,
       queue: .main
     ) { [weak self] _ in
