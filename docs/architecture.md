@@ -14,16 +14,16 @@ Rust Player Core
   source abstraction ─── file + HTTP range
   FFmpeg wrappers ────── custom AVIO, probe, demux, decode, seek, audio resample
   playback engine ────── video/audio tick, clock, frame scheduler
-  video decode ───────── VideoToolbox (macOS/iOS), D3D11VA (Windows), software fallback
-  audio output ───────── CoreAudio (macOS), AudioQueue (iOS), WASAPI (Windows), ring buffer
+  video decode ───────── VideoToolbox, D3D11VA, MediaCodec, AVCodec, software fallback
+  audio output ───────── CoreAudio, AudioQueue, WASAPI, AAudio, OHAudio, ring buffer
   overlay timeline ───── subtitle + danmaku composition
   renderer core ──────── color state, render graph, tone map, scaler policy
   Metal renderer ─────── zero-copy NV12/P010, HDR/EDR, subtitle/danmaku pass
   D3D11 renderer ─────── zero-copy D3D11VA, HDR10, subtitle/danmaku pass (Windows)
-  wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB
+  wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB, OHOS Vulkan
   presenter runtime ──── ties player + renderer + audio + overlays
-  C ABI ──────────────── 75 exported functions, two handle families
-  Flutter plugin ─────── macOS + iOS + Windows + Android native view embedding
+  C ABI ──────────────── 79 exported functions, two handle families
+  Flutter plugin ─────── macOS + iOS + Windows + Android + OpenHarmony embedding
 ```
 
 ## Native Dependencies
@@ -56,8 +56,8 @@ cargo run -p xtask -- deps status
 - **Demuxer** — owns `AVFormatContext`, optionally with a Rust-backed custom
   `AVIOContext` from `MediaSource`. Supports stream selection, reference-counted
   packets, and timestamp-based seek.
-- **Decoder** — software plus VideoToolbox, D3D11VA, and MediaCodec hardware
-  backends. Android software AV1 explicitly selects the source-built
+- **Decoder** — software plus VideoToolbox, D3D11VA, MediaCodec, and OpenHarmony
+  AVCodec hardware backends. Android software AV1 explicitly selects the source-built
   `libdav1d` decoder. Hardware frames preserve color metadata for the renderer's
   platform-specific import or upload path.
 - **AudioResampler** — wraps `libswresample`, converts to interleaved f32 PCM
@@ -101,9 +101,18 @@ enter an audio-only false `Playing` state.
   tracks. External tracks can be added/removed at runtime.
 - **libass renderer**: Statically linked, enabled by default. Accepts ASS
   scripts, calls `ass_render_frame`, imports alpha planes into Erika's overlay
-  system. macOS uses the CoreText font provider; iOS registers Erika's bundled
-  Droid Sans Fallback as an in-memory font and avoids inaccessible system font
-  paths.
+  system. macOS uses the CoreText font provider and Windows DirectWrite; every
+  other target runs without a system font provider (the vendored libass build
+  disables fontconfig), so Erika's bundled Droid Sans Fallback — registered as
+  an in-memory font on all platforms — is the family libass resolves by default.
+- **Subtitle style**: A custom font family and font file, colours, metrics
+  (size, outline, shadow, blur, spacing, scale), attributes, border style,
+  alignment and margins act as fallbacks that fill in what a script leaves
+  open, plus the styling of plain-text subtitles; the subtitle scale multiplies
+  the metrics. An `override_mask` promotes chosen fields to libass' selective
+  style override so they also replace what ASS dialogue events request, with the
+  override metrics renormalized so they land on the same pixels whatever
+  `PlayResY` a script declares.
 - **SubtitleRendererCore**: Renderer-facing boundary that tracks changed/unchanged
   frames to avoid redundant GPU uploads.
 
@@ -191,7 +200,12 @@ Second renderer backend for portability:
   surface is extended-linear, so screenshots never expose unclamped scRGB
   values as if they were SDR pixels.
 - Surface handle model covers macOS NSView, iOS UIView, Windows HWND,
-  X11/Wayland, Android native windows.
+  X11/Wayland, Android native windows, OpenHarmony `OHNativeWindow`.
+- OpenHarmony imports AVCodec Surface output as an `OHNativeBuffer`-backed
+  Vulkan external image and resolves YUV on the GPU with a Vulkan YCbCr
+  sampler, so decoded frames reach the wgpu compositor without a CPU copy.
+  Devices without the required Vulkan extensions fall back to software decode
+  and CPU upload, and the fallback is reported through the diagnostics events.
 - Android has bounded Vulkan/GLES backend recovery and explicit import,
   capability, quality-reduction, and device-failure diagnostics. Its
   high-headroom output is FP16 **extended-linear scRGB**, not HDR10/PQ: the
@@ -250,7 +264,7 @@ DanmakuEngine, and audio output. The host supplies a native surface and drives
 
 ## C ABI
 
-`erika_capi` exports 75 functions through two handle families:
+`erika_capi` exports 79 functions through two handle families:
 
 - **`ErikaHandle`** — player control and event polling. The host owns rendering.
 - **`ErikaPresenterHandle`** — Erika owns the full stack. The host provides a
@@ -266,7 +280,8 @@ Header: `crates/erika_capi/include/erika.h`
 
 ## Flutter Plugin
 
-`packages/erika_flutter` provides macOS, iOS, Windows, and Android Flutter embedding:
+`packages/erika_flutter` provides macOS, iOS, Windows, Android, and HarmonyOS
+Flutter embedding:
 
 - **Dart**: `ErikaPlayer` (commands + events), `ErikaWindowOverlayVideoView`
   (recommended window-hosted native surface — Metal on Apple, D3D11 swapchain on
@@ -287,6 +302,10 @@ Header: `crates/erika_capi/include/erika.h`
   Composition. The plugin coordinates Activity surface lifecycle, audio focus,
   noisy-route policy, HDR eligibility/headroom, and drives presentation from a
   shared frame scheduler only while players are active.
+- **HarmonyOS ArkTS/N-API plugin**: builds `liberika_capi.so` for
+  `aarch64-unknown-linux-ohos` through Hvigor/CMake, registers a Flutter
+  external texture, and attaches that texture's `OHNativeWindow` to the
+  presenter. Audio goes through OHAudio as interleaved f32 PCM.
 
 See `docs/flutter_embedding.md` for the embedding model and HDR strategy.
 
@@ -299,3 +318,4 @@ See `docs/flutter_embedding.md` for the embedding model and HDR strategy.
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
 | Android 8+ | MediaCodec / software | wgpu Vulkan with GLES fallback | AAudio | Available; SDR validated, extended-linear scRGB implementation awaits API 35 HDR-device acceptance |
+| HarmonyOS API 18+ | AVCodec (H.264/HEVC) / software | wgpu Vulkan, `OHNativeBuffer` zero-copy import | OHAudio | Available; validated on device, not yet covered by CI |

@@ -25,6 +25,36 @@
 - Danmaku screenshots no longer include danmaku; `capture_*` composites video
   and subtitles only.
 
+### Subtitle font fallback and style
+
+- libass now registers Erika's bundled Droid Sans Fallback on every platform,
+  not just iOS/Android, and targets without a system font provider (the
+  vendored libass build disables fontconfig) default to that family instead of
+  an unresolvable `Arial`.
+- Added a subtitle style: a custom font family and font file, text/outline
+  colours (`0xRRGGBBAA`), metrics (size, outline, shadow, blur, spacing, scale),
+  bold/italic/underline/strike-out, border style, alignment and margins. They act
+  as fallbacks — an ASS script keeps its own styling — and an `override_mask`
+  promotes chosen fields to libass' selective style override so they replace what
+  dialogue events request. The override metrics are renormalized against the
+  frame height, so they land on the same pixels whatever `PlayResY` a script
+  declares; override margins stay in script units, which libass does not
+  normalize. The existing subtitle scale still multiplies the metrics.
+- New C API: `erika_presenter_set_subtitle_font`,
+  `erika_presenter_set_subtitle_style`. New Dart API:
+  `ErikaPlayer.setSubtitleStyle`.
+
+### Native architectures and release artifacts
+
+- Added native Windows ARM64 dependency and `erika_capi` builds, plus the new
+  `erika-capi-windows-arm64.zip` release archive. Windows x64 and ARM64 CI run
+  on matching GitHub-hosted architectures.
+- Added selectable macOS arm64, x86_64, and universal builds and corresponding
+  architecture-specific release archives.
+- Re-enabled FFmpeg's optimized x86 assembly for shipped x86_64 builds. These
+  builds now require NASM and replace the previous C/compiler-vectorized FFmpeg
+  paths used while `--disable-x86asm` was enabled.
+
 ### Custom HTTP headers
 
 - Added `erika_open_with_headers` and `erika_presenter_open_with_headers`,

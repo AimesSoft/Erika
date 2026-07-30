@@ -5,6 +5,7 @@ BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android = "--target=aarch64-linux-android
 BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi = "--target=armv7a-linux-androideabi26"
 BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android = "--target=x86_64-linux-android26"
 BINDGEN_EXTRA_CLANG_ARGS_i686_linux_android = "--target=i686-linux-android26"
+BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_ohos = "--target=aarch64-unknown-linux-ohos"
 
 # soundtouch-ffi currently disables cc-rs' automatic PIC flag. Force PIC for
 # every Android target because its static C++ archive is linked into a cdylib.
@@ -16,3 +17,5 @@ CFLAGS_x86_64_linux_android = "-fPIC"
 CXXFLAGS_x86_64_linux_android = "-fPIC"
 CFLAGS_i686_linux_android = "-fPIC"
 CXXFLAGS_i686_linux_android = "-fPIC"
+CFLAGS_aarch64_unknown_linux_ohos = "-fPIC"
+CXXFLAGS_aarch64_unknown_linux_ohos = "-fPIC"

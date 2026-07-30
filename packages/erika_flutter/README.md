@@ -16,6 +16,8 @@ The plugin keeps Dart out of the hot path:
 - The Windows plugin builds and links the Erika C ABI DLL.
 - The Android plugin builds `liberika_capi.so` per ABI and drives its native
   surface from `Choreographer`.
+- The HarmonyOS plugin registers a Flutter external texture, attaches its
+  `OHNativeWindow` to Erika, and uses OHAudio for low-latency PCM output.
 - Erika owns playback, rendering, audio, timing, and overlays through
   `ErikaPresenterHandle`.
 
@@ -40,10 +42,12 @@ vsync ticks.
 
 ## macOS Setup
 
-The macOS plugin's podspec build phase builds the universal
-`liberika_capi.dylib` from source (or downloads a prebuilt one — see below) and
-bundles it into the app's `Contents/Frameworks`, codesigned, during the macOS
-app build. At runtime the plugin loads it via `dlopen`.
+The macOS plugin's podspec build phase builds and bundles a codesigned
+`liberika_capi.dylib`. It defaults to an arm64+x86_64 universal library. A
+consuming project can set `ERIKA_MACOS_ARCHS=arm64`, `x86_64`, or
+`arm64,x86_64`; `universal` remains the default. Prebuilt mode selects the
+matching `macos-arm64`, `macos-x64`, or `macos-universal` archive. At runtime
+the plugin loads the library via `dlopen`.
 
 Overrides: `ERIKA_CAPI_DYLIB` forces the runtime dylib path; `ERIKA_MACOS_CAPI_DYLIB`
 points the build phase at an explicit dylib to bundle instead of building.
@@ -60,6 +64,12 @@ When debugging local Erika source changes, set
 `ERIKA_FORCE_SOURCE_BUILD=1` to bypass the prebuilt download path even if the
 host app enables `ERIKA_PREBUILT=1`.
 
+For source builds, select macOS with `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`,
+Windows with `ERIKA_WINDOWS_ARCH=x64|arm64`, and Android with
+`ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86`. For direct native builds,
+`xtask --target`, `ERIKA_NATIVE_TARGET`, and `cargo build --target` must name the
+same target. See [building.md](../../docs/building.md).
+
 ## iOS Setup
 
 The iOS CocoaPod script phase builds the Erika native dependencies and C ABI
@@ -71,12 +81,16 @@ static library automatically during Xcode builds. Requirements:
 
 The Windows plugin (`ErikaFlutterPluginCApi`) builds the Erika C ABI runtime
 (`erika_capi.dll`) during the CMake build via `build_erika_runtime.cmake`,
-invoking cargo for the `x86_64-pc-windows-msvc` target and staging the DLL next
-to the app. Requirements:
+automatically following the CMake generator's x64 or ARM64 architecture and
+staging the DLL next to the app. A consuming project can explicitly select the
+architecture with the `ERIKA_WINDOWS_ARCH=x64|arm64` CMake cache entry or
+environment variable. Advanced integrations can set
+`ERIKA_NATIVE_TARGET=x86_64-pc-windows-msvc|aarch64-pc-windows-msvc` directly.
+Requirements:
 
-- Rust toolchain with the MSVC target (`rustup target add x86_64-pc-windows-msvc`)
-- Visual Studio Build Tools (MSVC) + Windows SDK
-- Native dependencies built into `third_party/dist/x86_64-pc-windows-msvc/`
+- Rust toolchain with the matching MSVC target (`rustup target add x86_64-pc-windows-msvc` or `rustup target add aarch64-pc-windows-msvc`)
+- Visual Studio Build Tools with x64/ARM64 C++ tools + Windows SDK
+- Native dependencies built into `third_party/dist/<target>/`
   (via the repo `xtask deps build` flow)
 
 Set `ERIKA_REPO_ROOT` if the plugin cannot locate the Erika checkout
@@ -102,6 +116,25 @@ specific fallback. On API 34+, the plugin observes
 to Erika, allowing wgpu to update subsequent frame targets and output status
 without reattaching the surface. On API 35 it also applies per-`SurfaceView`
 desired HDR headroom without changing the host window globally.
+
+## HarmonyOS Setup
+
+The HarmonyOS module requires DevEco Studio's OpenHarmony Native SDK and the
+Rust `aarch64-unknown-linux-ohos` target. Its Hvigor/CMake build compiles the
+LGPL FFmpeg/zlib dependencies and `liberika_capi.so`, then packages that runtime
+alongside `liberika_flutter.so`.
+
+Use `ErikaVideoView` on HarmonyOS. It registers a Flutter external texture,
+obtains the texture surface as an `OHNativeWindow`, and renders through wgpu
+Vulkan. Audio uses OHAudio with interleaved f32 PCM.
+
+Video decoding defaults to HarmonyOS AVCodec hardware decoding for H.264 and
+HEVC. AVCodec renders into a Surface whose `OHNativeBuffer` is imported as a
+Vulkan external image and resolved with a Vulkan YCbCr sampler, so frames reach
+the compositor without a CPU copy. Devices that do not expose the required
+Vulkan extensions fall back to FFmpeg software decoding and CPU upload; the
+fallback is reported through `VideoDecoderChanged` events and the presenter
+diagnostics rather than failing playback.
 
 ## HTTP Headers
 

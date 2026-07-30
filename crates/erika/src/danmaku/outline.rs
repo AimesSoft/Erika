@@ -57,8 +57,14 @@ mod tests {
     #[test]
     fn normal_and_thick_reproduce_the_legacy_multipliers() {
         for font_size in [20.0f32, 25.0, 30.0, 40.0, 60.0] {
-            assert_eq!(resolve_width_px(font_size, 2.0), legacy_width_px(font_size, 1.0));
-            assert_eq!(resolve_width_px(font_size, 3.0), legacy_width_px(font_size, 2.0));
+            assert_eq!(
+                resolve_width_px(font_size, 2.0),
+                legacy_width_px(font_size, 1.0)
+            );
+            assert_eq!(
+                resolve_width_px(font_size, 3.0),
+                legacy_width_px(font_size, 2.0)
+            );
             assert_eq!(
                 raster_radius(resolve_width_px(font_size, 3.0)),
                 raster_radius(legacy_width_px(font_size, 2.0))

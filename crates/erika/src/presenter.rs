@@ -21,7 +21,8 @@ use crate::apple::iosaudio::{IosAudioQueueOutput, IosAudioQueueOutputConfig};
     target_os = "android",
     target_os = "macos",
     target_os = "ios",
-    target_os = "windows"
+    target_os = "windows",
+    target_env = "ohos"
 )))]
 use crate::audio::BufferedAudioOutput;
 use crate::audio::{
@@ -31,7 +32,7 @@ use crate::core::{
     AudioOutputEvent, MediaRequest, PlatformSurface, PlaybackSnapshot, Player, PlayerAudioFrame,
     PlayerConfig, PlayerSubtitleFrame, PlayerVideoFrame, RenderFrameContext, RendererBackend,
     RendererBackendPreference, RendererRuntimeStats, SurfaceMetrics, TrackInfo, TrackSelection,
-    VideoFrameImportFailure,
+    VideoDecoderEvent, VideoFrameImportFailure,
 };
 use crate::danmaku::{
     DANMAKU_DEBUG_BUCKETS, DanmakuConfigChange, DanmakuDebugBucket, DanmakuLayoutConfig,
@@ -39,7 +40,10 @@ use crate::danmaku::{
     DanmakuTimeline, DanmakuTrackInfo, DanmakuTrackSource, DanmakuViewport, DfmLayoutEngine,
     DfmPreparedLayout, scroll_duration_for_viewport,
 };
+use crate::debug_hud::{DebugHud, DebugHudSnapshot};
 use crate::ffmpeg::DecoderBackend;
+#[cfg(target_env = "ohos")]
+use crate::ohos::ohaudio::{OHAudioOutput, OHAudioOutputConfig};
 use crate::overlay::{OverlayFrame, OverlayTimeline, OverlayViewport};
 #[cfg(any(target_os = "windows", target_os = "android"))]
 use crate::playback::VideoDecodePreference;
@@ -53,8 +57,8 @@ use crate::subtitle::{
     decoded_subtitle_frames_to_ass_script_with_style,
 };
 use crate::subtitle::{
-    DecodedSubtitleFrame, SubtitleAssStyle, SubtitleRendererCore, SubtitleTrackConfig,
-    SubtitleViewport, decoded_subtitle_frames_to_timeline,
+    DecodedSubtitleFrame, SubtitleAssStyle, SubtitleRendererCore, SubtitleStyleConfig,
+    SubtitleTrackConfig, SubtitleViewport, decoded_subtitle_frames_to_timeline,
 };
 use crate::trace;
 #[cfg(target_os = "windows")]
@@ -130,11 +134,19 @@ impl Default for PresenterAudioConfig {
                 ring_buffer: config.ring_buffer,
             }
         }
+        #[cfg(target_env = "ohos")]
+        {
+            let config = OHAudioOutputConfig::default();
+            Self {
+                ring_buffer: config.ring_buffer,
+            }
+        }
         #[cfg(not(any(
             target_os = "android",
             target_os = "macos",
             target_os = "ios",
-            target_os = "windows"
+            target_os = "windows",
+            target_env = "ohos"
         )))]
         {
             Self {
@@ -226,13 +238,16 @@ pub struct PresenterRuntime {
     video_frames: Receiver<PlayerVideoFrame>,
     audio_frames: Receiver<PlayerAudioFrame>,
     subtitle_frames: Receiver<PlayerSubtitleFrame>,
+    player_events: Receiver<crate::core::PlayerEvent>,
     audio_output: Box<dyn AudioOutputBackend>,
     audio_configured: bool,
     audio_started: bool,
     last_audio_clock_report: Option<AudioClockReportState>,
     last_audio_runtime_stats: AudioOutputRuntimeStats,
     playback_rate: f64,
+    latest_video_decoder: Option<VideoDecoderEvent>,
     current_overlay: Option<OverlayFrame>,
+    debug_hud: DebugHud,
     current_danmaku: Option<DanmakuRenderPlan>,
     current_danmaku_prepared: Option<CurrentDanmakuPrepared>,
     danmaku_plan_replacement_pending: bool,
@@ -242,6 +257,7 @@ pub struct PresenterRuntime {
     current_surface_metrics: Option<SurfaceMetrics>,
     current_danmaku_viewport: Option<DanmakuViewport>,
     subtitle_font_scale: f64,
+    subtitle_style: SubtitleStyleConfig,
     subtitles: SubtitleFrameState,
     overlay: OverlayTimeline,
     render_test_pattern_when_idle: bool,
@@ -567,15 +583,21 @@ impl PresenterRuntime {
         let renderer_preference = config.player.renderer;
         let renderer = build_renderer(renderer_preference, config.renderer)?;
         let supports_mediacodec_surface = renderer.supports_mediacodec_surface_frames();
+        #[cfg(target_env = "ohos")]
+        let ohos_avcodec_surface = renderer.ohos_avcodec_surface();
         resolve_presenter_player_config(
             &mut config.player,
             renderer_preference,
             supports_mediacodec_surface,
         );
+        #[cfg(target_env = "ohos")]
+        let player = Player::new_with_ohos_avcodec_surface(config.player, ohos_avcodec_surface);
+        #[cfg(not(target_env = "ohos"))]
         let player = Player::new(config.player);
         let video_frames = player.subscribe_video_frames();
         let audio_frames = player.subscribe_audio_frames();
         let subtitle_frames = player.subscribe_subtitle_frames();
+        let player_events = player.subscribe();
         let mut danmaku_session = config
             .danmaku
             .map(DanmakuSession::from_timeline)
@@ -591,13 +613,16 @@ impl PresenterRuntime {
             video_frames,
             audio_frames,
             subtitle_frames,
+            player_events,
             audio_output: build_audio_output(config.audio),
             audio_configured: false,
             audio_started: false,
             last_audio_clock_report: None,
             last_audio_runtime_stats: AudioOutputRuntimeStats::default(),
             playback_rate: 1.0,
+            latest_video_decoder: None,
             current_overlay: None,
+            debug_hud: DebugHud::new(),
             current_danmaku: None,
             current_danmaku_prepared: None,
             danmaku_plan_replacement_pending: false,
@@ -607,6 +632,7 @@ impl PresenterRuntime {
             current_surface_metrics: None,
             current_danmaku_viewport: None,
             subtitle_font_scale: DEFAULT_SUBTITLE_FONT_SCALE,
+            subtitle_style: SubtitleStyleConfig::default(),
             subtitles: SubtitleFrameState::default(),
             overlay: config.overlay,
             render_test_pattern_when_idle: config.render_test_pattern_when_idle,
@@ -706,6 +732,7 @@ impl PresenterRuntime {
         self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
         self.drain_pending_player_frames();
         self.current_generation = self.current_generation.saturating_add(1).max(1);
+        self.latest_video_decoder = None;
         let result = self.player.open(media);
         // Player::open joins the previous producer before returning, so this
         // second drain deterministically removes anything it emitted between
@@ -763,6 +790,7 @@ impl PresenterRuntime {
         self.bump_danmaku_generation();
         self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
         self.drain_pending_player_frames();
+        self.latest_video_decoder = None;
         let result = self.player.close();
         // Shutdown is joined at this point; no producer can refill a receiver.
         self.drain_pending_player_frames();
@@ -796,12 +824,49 @@ impl PresenterRuntime {
         self.audio_output.volume() as f64
     }
 
+    pub fn set_debug_hud_enabled(&mut self, enabled: bool) {
+        self.debug_hud.set_enabled(enabled);
+    }
+
+    pub fn debug_hud_enabled(&self) -> bool {
+        self.debug_hud.enabled()
+    }
+
     pub fn set_subtitle_scale(&mut self, scale: f64) {
         let scale = normalize_subtitle_font_scale(scale);
         if (self.subtitle_font_scale - scale).abs() < 0.001 {
             return;
         }
         self.subtitle_font_scale = scale;
+        self.refresh_current_overlay();
+    }
+
+    /// Sets the fallback subtitle font. An empty family or path clears that
+    /// half of the selection and restores the platform default.
+    pub fn set_subtitle_font(&mut self, family: String, file_path: String) {
+        let style = SubtitleStyleConfig {
+            font_family: family,
+            font_file_path: file_path,
+            ..self.subtitle_style.clone()
+        }
+        .normalized();
+        self.apply_subtitle_style(style);
+    }
+
+    pub fn set_subtitle_style(&mut self, style: SubtitleStyleConfig) {
+        self.apply_subtitle_style(style);
+    }
+
+    pub fn subtitle_style(&self) -> &SubtitleStyleConfig {
+        &self.subtitle_style
+    }
+
+    fn apply_subtitle_style(&mut self, style: SubtitleStyleConfig) {
+        let style = style.normalized();
+        if self.subtitle_style == style {
+            return;
+        }
+        self.subtitle_style = style;
         self.refresh_current_overlay();
     }
 
@@ -984,6 +1049,7 @@ impl PresenterRuntime {
     pub fn render_tick(&mut self, time_seconds: f64) -> Result<PresenterStats> {
         let tick_started = Instant::now();
         let pump_started = Instant::now();
+        self.refresh_video_decoder_status();
 
         let subtitle_started = Instant::now();
         self.pump_subtitles();
@@ -1027,8 +1093,51 @@ impl PresenterRuntime {
             plan_items,
         );
 
+        let hud_overlay = if self.debug_hud.enabled() {
+            let hud_snapshot = self.debug_hud_snapshot();
+            let hud_viewport = self
+                .current_overlay
+                .as_ref()
+                .map(|overlay| overlay.viewport)
+                .or_else(|| {
+                    self.current_surface_metrics.map(|metrics| {
+                        OverlayViewport::new(
+                            metrics.physical_extent.width,
+                            metrics.physical_extent.height,
+                        )
+                    })
+                });
+            let hud_plane = hud_viewport.and_then(|viewport| {
+                self.debug_hud
+                    .update(
+                        Instant::now(),
+                        viewport.width,
+                        viewport.height,
+                        hud_snapshot,
+                    )
+                    .cloned()
+            });
+            hud_plane.map(|plane| {
+                let viewport = hud_viewport.expect("HUD requires a viewport");
+                let mut overlay = self
+                    .current_overlay
+                    .clone()
+                    .unwrap_or_else(|| OverlayFrame {
+                        pts: self.current_media_time,
+                        viewport,
+                        subtitle_planes: Vec::new(),
+                        subtitle_alpha_planes: Vec::new(),
+                        subtitle_changed: false,
+                    });
+                overlay.subtitle_planes.push(plane);
+                overlay
+            })
+        } else {
+            None
+        };
+        let render_overlay = hud_overlay.as_ref().or(self.current_overlay.as_ref());
         let context = RenderFrameContext::new(self.current_media_time, self.current_generation)
-            .overlay(self.current_overlay.as_ref())
+            .overlay(render_overlay)
             .danmaku(self.current_danmaku.as_ref())
             .output_size(
                 self.current_surface_metrics
@@ -1109,6 +1218,94 @@ impl PresenterRuntime {
         Ok(self.stats)
     }
 
+    fn debug_hud_snapshot(&self) -> DebugHudSnapshot {
+        let selection = self.player.track_selection();
+        let tracks = self.player.tracks();
+        let selected = selection
+            .video
+            .and_then(|selected| tracks.iter().find(|track| track.id == selected));
+        let selected_audio = selection
+            .audio
+            .and_then(|selected| tracks.iter().find(|track| track.id == selected));
+        let renderer = self.renderer.runtime_stats();
+        let clock = self.audio_output.clock_snapshot();
+        let output = self.renderer.output_status();
+        let audio_runtime = self.audio_output.runtime_stats();
+        let surface = self.current_surface_metrics;
+        let decoder = self.latest_video_decoder.as_ref();
+        DebugHudSnapshot {
+            codec: selected.as_ref().and_then(|track| track.codec.clone()),
+            width: selected.as_ref().map_or(0, |track| track.width),
+            height: selected.as_ref().map_or(0, |track| track.height),
+            bit_rate: selected.as_ref().and_then(|track| track.bit_rate),
+            nominal_fps: selected
+                .as_ref()
+                .and_then(|track| track.frame_rate.as_ref())
+                .map(|rate| rate.frames_per_second()),
+            pixel_format: selected
+                .as_ref()
+                .and_then(|track| track.pixel_format.clone()),
+            profile: selected.as_ref().and_then(|track| track.profile.clone()),
+            decoder_requested_backend: decoder
+                .map(|event| event.requested_backend.as_str().to_string()),
+            decoder_previous_backend: decoder
+                .and_then(|event| event.previous_backend)
+                .map(|backend| backend.as_str().to_string()),
+            decoder_active_backend: decoder.map(|event| event.active_backend.as_str().to_string()),
+            decoder_codec: decoder.and_then(|event| event.codec.clone()),
+            decoder_pixel_format: decoder.and_then(|event| event.pixel_format.clone()),
+            decoder_line_sizes: decoder.and_then(|event| event.line_sizes),
+            decoder_fallback_count: decoder.map_or(0, |event| event.fallback_count),
+            decoder_stage: decoder.map(|event| event.stage.clone()),
+            decoder_reason: decoder.and_then(|event| event.reason.clone()),
+            player_state: format!("{:?}", self.player.state()).to_lowercase(),
+            media_time: self.current_media_time,
+            duration: self.player.duration(),
+            playback_rate: self.playback_rate,
+            surface_width: surface.map_or(0, |metrics| metrics.physical_extent.width),
+            surface_height: surface.map_or(0, |metrics| metrics.physical_extent.height),
+            decoded_video_frames: self.stats.decoded_video_frames,
+            rendered_video_frames: self.stats.rendered_video_frames,
+            dropped_video_frames: self.stats.video_frame_backpressure_drops,
+            hardware_video_frames: renderer.hardware_video_frames,
+            software_video_frames: renderer.software_video_frames,
+            zero_copy_video_frames: renderer.zero_copy_video_frames,
+            direct_zero_copy_video_frames: renderer.direct_zero_copy_video_frames,
+            shared_handle_video_frames: renderer.shared_handle_video_frames,
+            cpu_video_frame_fallbacks: renderer.cpu_video_frame_fallbacks,
+            import_failures: self.stats.import_failures,
+            render_failures: self.stats.render_failures,
+            render_duration: self.last_render_duration,
+            gpu_duration: renderer.last_gpu_duration,
+            audio_queued_frames: clock.map_or(0, |snapshot| snapshot.queued_frames),
+            audio_queued_duration: clock.and_then(|snapshot| snapshot.queued_duration),
+            audio_underflow_frames: clock.map_or(0, |snapshot| snapshot.underflow_frames),
+            audio_codec: selected_audio
+                .as_ref()
+                .and_then(|track| track.codec.clone()),
+            audio_sample_rate: selected_audio.as_ref().map_or(0, |track| track.sample_rate),
+            audio_channels: selected_audio.as_ref().map_or(0, |track| track.channels),
+            audio_recovery_state: audio_runtime.recovery_state.as_str().to_string(),
+            hdr_output_active: renderer.hdr10_output_active,
+            output_encoding: output.active_encoding.label().to_string(),
+            output_format: output.surface_format.label().to_string(),
+            output_headroom: output.active_headroom,
+            output_fallback: output.fallback_reason.label().to_string(),
+            danmaku_items: self
+                .current_danmaku
+                .as_ref()
+                .map_or(0, |plan| plan.items.len()),
+        }
+    }
+
+    fn refresh_video_decoder_status(&mut self) {
+        while let Ok(event) = self.player_events.try_recv() {
+            if let crate::core::PlayerEvent::VideoDecoderChanged(event) = event {
+                self.latest_video_decoder = Some(event);
+            }
+        }
+    }
+
     pub fn capture_frame_rgba(&mut self, width: u32, height: u32) -> Result<Option<Vec<u8>>> {
         if width == 0 || height == 0 {
             return Err(PlayerError::Renderer(
@@ -1147,7 +1344,7 @@ impl PresenterRuntime {
         self.subtitles.append_to_overlay(
             self.current_media_time,
             &mut capture_overlay,
-            subtitle_style,
+            &subtitle_style,
         );
         capture_overlay
     }
@@ -1333,6 +1530,7 @@ impl PresenterRuntime {
                                 DecoderBackend::MediaCodec
                                     | DecoderBackend::Software
                                     | DecoderBackend::VideoToolbox
+                                    | DecoderBackend::AvCodec
                             ) {
                                 self.rejected_video_import_route = Some(import_route);
                                 // The decoder transition must not race a local
@@ -1415,7 +1613,7 @@ impl PresenterRuntime {
             .render(pts, OverlayViewport::new(viewport.width, viewport.height));
         let subtitle_style = self.subtitle_ass_style(overlay.viewport);
         self.subtitles
-            .append_to_overlay(pts, &mut overlay, subtitle_style);
+            .append_to_overlay(pts, &mut overlay, &subtitle_style);
         if subtitle_diag_enabled() {
             eprintln!(
                 "[erika-subtitle-diag] stage=update_overlay pts={} gen={} video={}x{} overlay={}",
@@ -1599,7 +1797,7 @@ impl PresenterRuntime {
                 );
                 let subtitle_style = self.subtitle_ass_style(overlay.viewport);
                 self.subtitles
-                    .append_to_overlay(player_time, &mut overlay, subtitle_style);
+                    .append_to_overlay(player_time, &mut overlay, &subtitle_style);
                 if subtitle_diag_enabled() {
                     eprintln!(
                         "[erika-subtitle-diag] stage=clock_overlay player={} gen={} overlay_viewport={}x{} overlay={}",
@@ -1640,7 +1838,7 @@ impl PresenterRuntime {
         );
         let subtitle_style = self.subtitle_ass_style(overlay.viewport);
         self.subtitles
-            .append_to_overlay(self.current_media_time, &mut overlay, subtitle_style);
+            .append_to_overlay(self.current_media_time, &mut overlay, &subtitle_style);
         self.current_overlay = Some(overlay);
     }
 
@@ -1649,6 +1847,7 @@ impl PresenterRuntime {
             font_scale: self.subtitle_font_scale,
             play_res_width: viewport.width,
             play_res_height: viewport.height,
+            style: self.subtitle_style.clone(),
         }
     }
 
@@ -2788,11 +2987,18 @@ fn build_audio_output(config: PresenterAudioConfig) -> Box<dyn AudioOutputBacken
             ring_buffer: config.ring_buffer,
         }))
     }
+    #[cfg(target_env = "ohos")]
+    {
+        Box::new(OHAudioOutput::new(OHAudioOutputConfig {
+            ring_buffer: config.ring_buffer,
+        }))
+    }
     #[cfg(not(any(
         target_os = "android",
         target_os = "macos",
         target_os = "ios",
-        target_os = "windows"
+        target_os = "windows",
+        target_env = "ohos"
     )))]
     {
         Box::new(BufferedAudioOutput::new(config.ring_buffer))
@@ -2924,7 +3130,7 @@ impl SubtitleFrameState {
         &mut self,
         pts: Duration,
         overlay: &mut OverlayFrame,
-        style: SubtitleAssStyle,
+        style: &SubtitleAssStyle,
     ) {
         self.retain_at(pts);
         let mut subtitle_changed = false;
@@ -2932,7 +3138,7 @@ impl SubtitleFrameState {
         #[cfg(feature = "libass")]
         match self
             .ass_renderer
-            .render(pts, overlay.viewport, style.font_scale)
+            .render(pts, overlay.viewport, style.font_scale, &style.style)
         {
             Ok(Some(bitmaps)) => {
                 subtitle_changed |= bitmaps.changed;
@@ -2981,7 +3187,7 @@ impl SubtitleFrameState {
         pts: Duration,
         overlay: &mut OverlayFrame,
         frames: &[DecodedSubtitleFrame],
-        style: SubtitleAssStyle,
+        style: &SubtitleAssStyle,
     ) -> bool {
         match self
             .text_renderer
@@ -3014,7 +3220,7 @@ impl SubtitleFrameState {
         pts: Duration,
         overlay: &mut OverlayFrame,
         frames: &[DecodedSubtitleFrame],
-        _style: SubtitleAssStyle,
+        _style: &SubtitleAssStyle,
     ) -> bool {
         append_text_subtitles_debug(pts, overlay, frames);
         true
@@ -3028,6 +3234,7 @@ struct CachedAssTrackRenderer {
     track_id: Option<i64>,
     resources: Option<Arc<AssTrackResources>>,
     renderer: Option<LibassSubtitleRenderer>,
+    style: SubtitleStyleConfig,
 }
 
 #[cfg(feature = "libass")]
@@ -3068,10 +3275,11 @@ impl CachedAssTrackRenderer {
             || resources_changed
         {
             self.clear();
-            self.renderer = Some(LibassSubtitleRenderer::from_ass_track(
+            self.renderer = Some(LibassSubtitleRenderer::from_ass_track_with_style(
                 frame.track_id,
                 resources,
                 LibassRenderConfig::default(),
+                &self.style,
             )?);
             self.generation = generation;
             self.track_id = Some(frame.track_id);
@@ -3097,10 +3305,16 @@ impl CachedAssTrackRenderer {
         pts: Duration,
         viewport: OverlayViewport,
         font_scale: f64,
+        style: &SubtitleStyleConfig,
     ) -> crate::subtitle::Result<Option<SubtitleBitmapSet>> {
+        if &self.style != style {
+            self.style = style.clone();
+        }
         let Some(renderer) = self.renderer.as_mut() else {
             return Ok(None);
         };
+        renderer.set_play_res_height(viewport.height);
+        renderer.set_style(style);
         renderer.set_font_scale(font_scale);
         match renderer.render(SubtitleRenderRequest::new(
             pts,
@@ -3134,7 +3348,7 @@ impl CachedLibassTextRenderer {
         pts: Duration,
         viewport: OverlayViewport,
         frames: &[DecodedSubtitleFrame],
-        style: SubtitleAssStyle,
+        style: &SubtitleAssStyle,
     ) -> crate::subtitle::Result<Option<SubtitleBitmapSet>> {
         let fallback_end = pts.saturating_add(Duration::from_secs(24 * 60 * 60));
         let Some(script) =
@@ -3145,9 +3359,10 @@ impl CachedLibassTextRenderer {
             return Ok(None);
         };
         if self.script.as_ref() != Some(&script) {
-            self.renderer = Some(LibassSubtitleRenderer::from_ass_script(
+            self.renderer = Some(LibassSubtitleRenderer::from_ass_script_with_style(
                 script.as_bytes(),
                 LibassRenderConfig::default(),
+                &style.style,
             )?);
             self.script = Some(script);
         }
@@ -3155,6 +3370,9 @@ impl CachedLibassTextRenderer {
         let Some(renderer) = self.renderer.as_mut() else {
             return Ok(None);
         };
+        renderer.set_override_font_scale(style.font_scale);
+        renderer.set_play_res_height(style.play_res_height);
+        renderer.set_style(&style.style);
         match renderer.render(SubtitleRenderRequest::new(
             pts,
             viewport.width,
@@ -3506,7 +3724,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_secs(3),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
 
         assert_eq!(overlay.subtitle_planes.len(), 2);
@@ -3529,7 +3747,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_secs(4),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
 
         assert_eq!(overlay.subtitle_planes.len(), 1);
@@ -3545,7 +3763,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_millis(4500),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
 
         assert!(overlay.subtitle_planes.is_empty());
@@ -3560,7 +3778,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_secs(2),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
         assert_eq!(overlay.subtitle_planes.len(), 1);
 
@@ -3569,7 +3787,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_secs(3),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
 
         assert!(overlay.subtitle_planes.is_empty());
@@ -3589,7 +3807,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_secs(2),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
 
         #[cfg(feature = "libass")]
@@ -3623,7 +3841,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_millis(500),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
         assert!(overlay.subtitle_planes.is_empty());
         assert!(!overlay.subtitle_alpha_planes.is_empty());
@@ -3640,7 +3858,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_millis(750),
             &mut cleared,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
         assert!(cleared.subtitle_alpha_planes.is_empty());
         assert!(state.ass_renderer.renderer.is_none());
@@ -3678,7 +3896,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         state.append_to_overlay(
             Duration::from_millis(500),
             &mut overlay,
-            SubtitleAssStyle::default(),
+            &SubtitleAssStyle::default(),
         );
         assert!(overlay.subtitle_alpha_planes.is_empty());
     }
@@ -3694,12 +3912,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert_eq!(generation, 8);
     }
 
-
-
-
-
-
-
     #[test]
     fn danmaku_motion_trace_detects_only_opposite_scroll_direction() {
         assert!(danmaku_motion_backstep(DanmakuMode::Scroll, 500.0, 490.0) <= 0.0);
@@ -3714,7 +3926,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         );
         assert_eq!(danmaku_motion_backstep(DanmakuMode::Top, 100.0, 140.0), 0.0);
     }
-
 
     #[test]
     fn presenter_config_disables_idle_test_pattern_by_default() {

@@ -50,6 +50,21 @@ FP16 extended-linear scRGB 已实现完整的 `Rgba16Float` 协商和
 HDR 真机。显示器不支持 HDR、GLES、`TextureView`、缺少 FP16 或 dataspace 验证失败时都会
 继续 SDR 播放，并提供可查询的 fallback reason 和明确日志。
 
+## HarmonyOS Surface Strategies
+
+HarmonyOS 上请使用 `ErikaVideoView`。ArkTS 插件注册 Flutter 外部纹理，把该纹理的
+surface 取为 `OHNativeWindow` 并 attach 给 presenter；wgpu 随后通过 Vulkan 渲染，
+窗口系统集成走 `VK_OHOS_surface`。
+
+视频解码默认使用 HarmonyOS AVCodec（H.264 与 HEVC）。AVCodec 直接解码到 Surface，
+其 `OHNativeBuffer` 作为 Vulkan 外部图像导入，并由 Vulkan YCbCr sampler 解析，
+因此解码帧无需 CPU 拷贝即可到达合成器。字幕、弹幕和 overlay 与其他平台一样，
+在同一个 wgpu pass 里合成。
+
+缺少所需 Vulkan 扩展的设备回退到 FFmpeg 软解 + CPU 上传。回退通过
+`VideoDecoderChanged` 事件和 presenter 诊断上报，而不是让播放失败。HarmonyOS
+路径已在真机验证，但尚未纳入 CI。
+
 ## iOS Build Path
 
 iOS plugin 通过 CocoaPod script phase 把 Erika C ABI static library 链接进 app，并为目标 iOS architecture 构建 Rust `erika_capi` crate。
@@ -134,14 +149,40 @@ final status = await player.getUpscalerStatus();
 
 // Track management
 final tracks = await player.tracks();
+for (final track in tracks) {
+  if (track.kind == ErikaTrackKind.video && track.selected) {
+    print('${track.codec} ${track.width}x${track.height}');
+    print('${track.bitRate} bps / ${track.framesPerSecond} fps');
+    break;
+  }
+}
 await player.selectAudioTrack(trackId);
 await player.selectSubtitleTrack(trackId);
 await player.addExternalSubtitle('/path/to/subtitle.srt');
+await player.setSubtitleScale(1.2);
+// 字幕的回退外观（颜色为 0xRRGGBBAA）。省略的参数沿用该 player 上次应用的值；
+// 置起 overrideMask 的对应位还会覆盖 ASS 脚本自带的样式。
+await player.setSubtitleStyle(
+  fontFamily: 'Source Han Sans SC',
+  primaryColorRgba: 0xFFFFFFFF,
+  outlineColorRgba: 0x0000007F,
+  fontSize: 48,
+  outlineWidth: 2,
+  overrideMask:
+      kErikaSubtitleOverrideFontName |
+      kErikaSubtitleOverrideColors |
+      kErikaSubtitleOverrideFontSizeFields |
+      kErikaSubtitleOverrideBorder,
+);
 
 // Danmaku
 await player.loadDanmakuFile('/path/to/danmaku.xml');
 await player.addDanmakuTrackJson(jsonString, name: 'source', offset: Duration.zero);
 await player.setDanmakuConfig(fontSize: 30, displayArea: 0.5);
+
+// Native diagnostics HUD (disabled by default)
+await player.setDebugHudEnabled(true);
+final presenterStats = await player.getPresenterStats();
 
 // Events
 player.events.listen((event) {
@@ -150,6 +191,48 @@ player.events.listen((event) {
 
 await player.dispose();
 ```
+
+## 媒体轨道信息
+
+`tracks()` 返回每条嵌入或外挂轨道的 `ErikaTrackInfo`。视频轨道的 `codec`、`width`、
+`height`、`pixelFormat`、`profile`、`level`、`bitRate`、`frameRateNumerator` 和
+`frameRateDenominator` 可用于媒体详情页；音频轨道还包含 `sampleRate`、`channels` 和
+`sampleFormat`。
+
+- `bitRate` 单位为 bit/s。优先使用视频轨自身的编码参数；仅在单视频轨缺少该值、容器总码率
+  和所有其它音频轨码率均已知时，才以“容器总码率减去音频轨码率”估算。未知时为 `null`；它不是
+  实时瞬时码率，估算值也可能包含封装开销或其它非音频流的影响。
+- `frameRateNumerator` / `frameRateDenominator` 保留原始有理数，避免把 `30000/1001` 截断。
+  探测顺序为平均帧率、`r_frame_rate` 和 FFmpeg 的估算帧率；`framesPerSecond` 是 Dart 的便利
+  getter。对可变帧率内容它仍是平均、声明或估算值，而非每帧更新值。
+- `TracksChanged` 和 `TrackSelectionChanged` 事件的 `trackList` 会附带完整轨道列表。也可以在
+  收到事件后再次调用 `tracks()` 获取当前快照。
+
+```dart
+player.events.listen((event) {
+  if (event.kind == ErikaEventKind.tracksChanged) {
+    for (final track in event.trackList) {
+      if (track.kind == ErikaTrackKind.video && track.selected) {
+        print(track.toMap());
+        break;
+      }
+    }
+  }
+});
+```
+
+## 原生调试 HUD
+
+`setDebugHudEnabled(true)` 让 Erika 在原生视频合成中绘制诊断 HUD；它不经过 Dart 渲染，
+也不会改变 Flutter widget 层级。默认关闭，适合开发、性能分析和问题截图前的现场观察。
+
+HUD 以低频快照显示轨道编码/分辨率/码率/帧率、播放位置与倍速、实时解码与渲染 FPS、硬件或
+软件解码路径、零拷贝/回退计数、CPU/GPU 渲染耗时、音频队列与 underflow、HDR 输出协商和
+弹幕数量。实时 FPS 是相邻统计采样窗口的增量；其它帧数和失败数为 presenter 生命周期内的
+累计计数。HUD 不包含在 `screenshot()` 返回的离屏截图中。
+
+如需自行设计 UI，使用 `getPresenterStats()` 获取最近一次原生显示 tick 的统计快照；它不是
+HUD 的驱动机制，数据新鲜度取决于已挂载 surface 的显示循环。
 
 ## Neural Upscaler Status
 

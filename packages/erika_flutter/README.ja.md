@@ -12,6 +12,7 @@ Erika メディア再生エンジン向けの Flutter plugin です。
 - iOS plugin は Erika の static library を link します。
 - Windows plugin は Erika C ABI DLL を build して link します。
 - Android plugin は ABI ごとに `liberika_capi.so` を build し、`Choreographer` から native surface を駆動します。
+- HarmonyOS plugin は Flutter external texture を登録し、その `OHNativeWindow` を Erika に attach して、OHAudio で低レイテンシの PCM 出力を行います。
 - Erika は `ErikaPresenterHandle` を通じて playback、rendering、audio、timing、overlay を担当します。
 
 ## Video Surfaces
@@ -24,7 +25,7 @@ Windows では `ErikaWindowOverlayVideoView` が window-level の Direct3D 11 sw
 
 ## macOS Setup
 
-ローカル開発では macOS plugin が `dlopen` で Erika を読み込みます。`ERIKA_CAPI_DYLIB` で dynamic library path を上書きできます。未設定時は app bundle、実行ファイルディレクトリ、`$WORKSPACE/target/debug/liberika_capi.dylib` の順で探します。
+macOS CocoaPods build は既定で arm64+x86_64 universal dynamic library を生成します。依存 project は `ERIKA_MACOS_ARCHS=arm64`、`ERIKA_MACOS_ARCHS=x86_64`、または `ERIKA_MACOS_ARCHS=arm64,x86_64` で artifact architecture を選択できます。既定値は `universal` です。prebuilt mode は対応する `macos-arm64`、`macos-x64`、`macos-universal` archive を取得します。ローカル開発では plugin が `dlopen` で Erika を読み込み、`ERIKA_CAPI_DYLIB` で path を上書きできます。
 
 dynamic library を build するには：
 
@@ -32,6 +33,12 @@ dynamic library を build するには：
 cargo run -p xtask -- deps build --all --profile lgpl
 cargo build -p erika_capi
 ```
+
+## Prebuilt package と source build
+
+`ERIKA_PREBUILT=1` を設定すると GitHub Release から prebuilt native library を取得します。`ERIKA_PREBUILT_TAG=v0.1.3` で plugin source と一致する Release tag を固定してください。download または展開に失敗した場合は source build に fallback します。local source を debug するときは `ERIKA_FORCE_SOURCE_BUILD=1` で prebuilt を無効化します。package 名と release 手順は [releasing.ja.md](../../docs/releasing.ja.md) を参照してください。
+
+source build の architecture は macOS では `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`、Windows では `ERIKA_WINDOWS_ARCH=x64|arm64`、Android では `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86` で選択します。native library を直接 build する場合、`xtask --target`、`ERIKA_NATIVE_TARGET`、`cargo build --target` は同じ target にしてください。詳細は [building.ja.md](../../docs/building.ja.md) を参照してください。
 
 ## iOS Setup
 
@@ -41,11 +48,11 @@ iOS の CocoaPod script phase が、Xcode build 中に Erika の native dependen
 
 ## Windows Setup
 
-Windows plugin（`ErikaFlutterPluginCApi`）は CMake build 中に `build_erika_runtime.cmake` で Erika C ABI runtime（`erika_capi.dll`）を build し、`x86_64-pc-windows-msvc` target に対して cargo を呼び出し、DLL を app の隣に配置します。必要なもの：
+Windows plugin（`ErikaFlutterPluginCApi`）は CMake build 中に `build_erika_runtime.cmake` で Erika C ABI runtime（`erika_capi.dll`）を build し、CMake generator の x64 または ARM64 architecture に自動追従して DLL を app の隣に配置します。依存 project は CMake cache の `ERIKA_WINDOWS_ARCH=x64|arm64` または環境変数 `ERIKA_WINDOWS_ARCH` で明示的に選択できます。高度な用途では `ERIKA_NATIVE_TARGET=x86_64-pc-windows-msvc|aarch64-pc-windows-msvc` も指定できます。必要なもの：
 
-- MSVC target の Rust toolchain（`rustup target add x86_64-pc-windows-msvc`）
-- Visual Studio Build Tools (MSVC) + Windows SDK
-- `third_party/dist/x86_64-pc-windows-msvc/` に build 済みの native dependency（リポジトリの `xtask deps build` フロー）
+- 対応する MSVC target の Rust toolchain（`rustup target add x86_64-pc-windows-msvc` または `rustup target add aarch64-pc-windows-msvc`）
+- Visual Studio Build Tools の x64/ARM64 C++ tools + Windows SDK
+- `third_party/dist/<target>/` に build 済みの native dependency（リポジトリの `xtask deps build` フロー）
 
 plugin が Erika checkout を自動検出できない場合は `ERIKA_REPO_ROOT` を設定してください。
 
@@ -61,6 +68,24 @@ API 34+ では plugin が `Display.registerHdrSdrRatioChangedListener` を監視
 change を Erika に publish します。wgpu は surface を reattach せず後続 frame target と
 output status を更新します。API 35 では host の global Window を変更せず、`SurfaceView`
 ごとに desired HDR headroom も設定します。
+
+## HarmonyOS Setup
+
+HarmonyOS module には DevEco Studio の OpenHarmony Native SDK と Rust の
+`aarch64-unknown-linux-ohos` target が必要です。Hvigor/CMake build が LGPL の
+FFmpeg/zlib 依存と `liberika_capi.so` を compile し、その runtime を
+`liberika_flutter.so` と一緒に package します。
+
+HarmonyOS では `ErikaVideoView` を使ってください。Flutter external texture を登録し、
+その texture surface を `OHNativeWindow` として取得して、wgpu Vulkan で描画します。
+音声は OHAudio の interleaved f32 PCM です。
+
+video decode は既定で HarmonyOS AVCodec の hardware decode（H.264 / HEVC）です。
+AVCodec は Surface に描画し、その `OHNativeBuffer` を Vulkan external image として
+import して Vulkan YCbCr sampler で解決するため、フレームは CPU コピーなしで
+compositor に届きます。必要な Vulkan extension を持たない端末は FFmpeg software
+decode と CPU upload に fallback します。fallback は再生を失敗させず、
+`VideoDecoderChanged` event と presenter diagnostics から報告されます。
 
 ## HTTP ヘッダー
 

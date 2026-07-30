@@ -175,6 +175,17 @@ void        erika_track_info_free(ErikaTrackInfo *track);
 the currently selected video/audio/subtitle track ids (`-1` for none). Selecting
 the subtitle track id `-1` disables subtitles.
 
+`ErikaTrackInfo` exposes track metadata through `codec`, `width`, `height`,
+`pixel_format`, `profile`, and `level`. `bit_rate` is in bit/s, while
+`frame_rate_numerator` / `frame_rate_denominator` retain a video track's rational
+frame rate; `0` means the corresponding value is unknown. Frame rate is probed
+in average-frame-rate, `r_frame_rate`, then FFmpeg-guessed-frame-rate order.
+Bitrate prefers the track's own parameters; only a single video track with no
+bitrate and known container total plus every other audio-track bitrate is
+estimated as container bitrate minus audio bitrates. Neither value is an
+instantaneous bitrate or rendered FPS; an estimated bitrate can include
+container overhead or non-audio streams.
+
 ### State and events
 
 ```c
@@ -249,6 +260,8 @@ ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *, double rat
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *, double volume);   // 0.0–1.0
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *, int32_t mode);  // ErikaLumaUpscalerMode
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *, double scale);
+ErikaStatus erika_presenter_set_subtitle_font(ErikaPresenterHandle *, const char *family, const char *file_path);
+ErikaStatus erika_presenter_set_subtitle_style(ErikaPresenterHandle *, ErikaSubtitleStyle style);
 ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float headroom, bool known);
 ```
 
@@ -256,6 +269,64 @@ ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float he
 luma upscaler at runtime (see [`erika_presenter_get_upscaler_status`](#diagnostics-and-capture));
 Metal and capable wgpu/Vulkan renderers execute ArtCNN, while backends without
 compute retain native luma sampling and report an explicit `Inactive` fallback.
+
+`set_subtitle_font` and `set_subtitle_style` set the subtitle *fallback* look.
+An empty family or path clears that half of the selection. Colours are
+`0xRRGGBBAA`, defaulting to opaque white text (`0xFFFFFFFF`) and
+half-transparent black outline (`0x0000007F`). `font_size` (default `48`,
+clamped to `8..400`) and `outline_width` (default `2`, clamped to `0..32`) are in
+ASS script units and are still multiplied by `set_subtitle_scale`. A container
+ASS script keeps its own styling; these only fill in what the script leaves
+open, what the system cannot resolve, and the look of plain-text (SRT/WebVTT)
+subtitles.
+
+`ErikaSubtitleStyle` carries the full look, and out-of-range metrics are clamped
+rather than rejected:
+
+```c
+typedef struct ErikaSubtitleStyle {
+  const char *font_family;      /* NULL or empty keeps the platform default */
+  const char *font_file_path;
+  uint32_t primary_color_rgba;  /* 0xRRGGBBAA */
+  uint32_t outline_color_rgba;
+  double font_size;             /* 8..400   */
+  double outline_width;         /* 0..32    */
+  bool bold, italic, underline, strike_out;
+  double spacing;               /* -100..100 */
+  double scale_x_percent;       /* 1..1000, 100 = unscaled */
+  double scale_y_percent;
+  int32_t border_style;         /* 1 outline+shadow, 3 opaque box */
+  double shadow_depth;          /* 0..32 */
+  double blur;                  /* 0..100 */
+  int32_t alignment;            /* 1..9, numpad layout, 2 = bottom centre */
+  int32_t margin_left, margin_right, margin_vertical;
+  uint32_t override_mask;
+} ErikaSubtitleStyle;
+```
+
+`override_mask` decides which of those fields stop being fallbacks and instead
+replace what ASS dialogue events request, through libass' selective style
+override. It is a bitmask of the `ERIKA_SUBTITLE_OVERRIDE_*` macros in
+`erika.h`, which mirror libass' `ASS_OVERRIDE_BIT_*` values:
+
+| Macro | Replaces |
+| --- | --- |
+| `ERIKA_SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS` | `font_size`, `spacing`, `scale_x_percent`, `scale_y_percent` |
+| `ERIKA_SUBTITLE_OVERRIDE_FONT_NAME` | `font_family` |
+| `ERIKA_SUBTITLE_OVERRIDE_COLORS` | `primary_color_rgba`, `outline_color_rgba` |
+| `ERIKA_SUBTITLE_OVERRIDE_ATTRIBUTES` | `bold`, `italic`, `underline`, `strike_out` |
+| `ERIKA_SUBTITLE_OVERRIDE_BORDER` | `border_style`, `outline_width`, `shadow_depth` |
+| `ERIKA_SUBTITLE_OVERRIDE_ALIGNMENT` | `alignment` |
+| `ERIKA_SUBTITLE_OVERRIDE_MARGINS` | `margin_left`, `margin_right`, `margin_vertical` |
+| `ERIKA_SUBTITLE_OVERRIDE_BLUR` | `blur` |
+| `ERIKA_SUBTITLE_OVERRIDE_ALL` | every field above |
+
+`0` leaves every field a fallback, and unknown bits are dropped. Sizes stay
+resolution-independent when overridden — a `font_size` of `48` lands on the same
+pixels whatever `PlayResY` a script declares. Margins do not: libass leaves
+override margins in the script's own units, so on a container ASS track they
+scale with that script's `PlayResY`, while on plain-text subtitles (whose script
+Erika generates at the frame size) they are pixels.
 
 `ErikaHttpHeader` is defined as:
 
@@ -332,6 +403,7 @@ ErikaStatus erika_presenter_set_danmaku_global_offset(ErikaPresenterHandle *, in
 ErikaStatus erika_presenter_danmaku_tracks(ErikaPresenterHandle *, ErikaDanmakuTrackInfo *out_tracks, uintptr_t capacity, uintptr_t *out_len);
 ErikaStatus erika_presenter_clear_danmaku(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_set_danmaku_enabled(ErikaPresenterHandle *, bool enabled);
+ErikaStatus erika_presenter_set_debug_hud_enabled(ErikaPresenterHandle *, bool enabled);
 ErikaStatus erika_presenter_set_danmaku_config(ErikaPresenterHandle *, ErikaDanmakuConfig config);
 ErikaStatus erika_presenter_set_danmaku_config_ptr(ErikaPresenterHandle *, const ErikaDanmakuConfig *config);
 ErikaStatus erika_presenter_get_danmaku_config(ErikaPresenterHandle *, ErikaDanmakuConfig *out_config);
@@ -347,6 +419,14 @@ tracks. `set_danmaku_config` / `_ptr` apply the full `ErikaDanmakuConfig` (the
 `_ptr` variant avoids passing the struct by value); `get_danmaku_config` reads
 it back. See [danmaku_architecture.md](danmaku_architecture.md) for the layout
 engine. `set_danmaku_block_words_json` takes a JSON array of strings to filter.
+
+`set_debug_hud_enabled` is off by default. When enabled, the Presenter draws a
+native diagnostic HUD in the video composition. It shows track
+technical metadata, playback state, decoded/rendered FPS, decode and zero-copy
+route counters, render/audio state, HDR output, and danmaku item count. The HUD
+only appears when a video frame exists, does not require host-side stats polling,
+and does not populate `ErikaPresenterStats`. Off-screen `capture_frame_rgba`
+captures exclude the HUD.
 
 ### Surface and presentation
 
@@ -380,6 +460,7 @@ falls back to SDR and remains queryable.
 
 ```c
 ErikaStatus erika_presenter_render_tick(ErikaPresenterHandle *, double time_seconds, ErikaPresenterStats *out_stats);
+ErikaStatus erika_presenter_get_stats(ErikaPresenterHandle *, ErikaPresenterStats *out_stats);
 ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *, ErikaEvent *out_event);
 ```
 
@@ -389,6 +470,51 @@ display clock for the frame in seconds — Erika uses it for vsync-quantized
 scheduling, so pass the presentation timestamp, not wall-clock deltas. If
 `out_stats` is non-`NULL` it is filled with a snapshot of pipeline counters.
 `poll_event` is non-blocking and returns `NoEvent` when idle.
+
+`get_stats` fills the same `ErikaPresenterStats` snapshot without rendering a
+frame. Use it when the host samples counters on a different cadence from the
+display loop; it does not advance presentation.
+
+### JSON bridge
+
+For embedders whose platform channel already serializes structured arguments
+(the HarmonyOS ArkTS plugin, for example), the same presenter surface is
+available as JSON:
+
+```c
+char *erika_presenter_invoke_json(ErikaPresenterHandle *, const char *method,
+                                  const char *arguments_json);
+char *erika_presenter_render_tick_json(ErikaPresenterHandle *, double time_seconds);
+char *erika_presenter_poll_event_json(ErikaPresenterHandle *);
+```
+
+Every returned string is owned by Erika and must be released with
+`erika_string_free`. `poll_event_json` returns `NULL` — not an envelope — when
+no event is pending, so a `NULL` return is the idle case, not an error.
+
+All three wrap their result in an envelope:
+
+```json
+{ "ok": true,  "status": 0, "value": <result> }
+{ "ok": false, "status": 1, "error": "<message>" }
+```
+
+`arguments_json` must be a JSON object. `method` selects the operation and
+mirrors the C entry points: `open`, `play`, `pause`, `stop`, `close`, `seek`,
+`setPlaybackRate`, `setVolume`, `setUpscaler`, `setSubtitleScale`,
+`getUpscalerStatus`, `getOutputStatus`, `getPresenterStats`, `tracks`,
+`addExternalSubtitle`, `removeSubtitleTrack`, `selectAudioTrack`,
+`selectSubtitleTrack`, and the danmaku family (`loadDanmakuFile`,
+`loadDanmakuJson`, `addDanmakuTrackFile`, `addDanmakuTrackJson`,
+`removeDanmakuTrack`, `setDanmakuTrackEnabled`, `setDanmakuTrackOffset`,
+`setDanmakuGlobalOffset`, `danmakuTracks`, `clearDanmaku`, `setDanmakuEnabled`,
+`setDanmakuConfig`). An unknown method fails with `ok: false` rather than
+aborting. The authoritative dispatch table is
+`crates/erika_capi/src/presenter_json.rs`.
+
+The bridge is a convenience layer, not a second API: it calls the same
+functions documented above and carries no extra capability. Hosts that can pass
+structs across their platform channel should prefer the typed entry points.
 
 ### Diagnostics and capture
 
@@ -492,7 +618,9 @@ free(rgba);
 - **`ErikaTrackCounts`** / **`ErikaTrackSelection`** — per-kind counts / selected
   ids (`-1` = none).
 - **`ErikaTrackInfo`** — full per-track metadata; the six `char*` fields are
-  owned by the caller (free via `erika_track_info_free`).
+  owned by the caller (free via `erika_track_info_free`). Video tracks additionally
+  expose `bit_rate` (bit/s) and `frame_rate_numerator` /
+  `frame_rate_denominator` (`0` = unknown).
 - **`ErikaEvent`** — a tagged union-by-struct: `kind` selects which fields are
   meaningful (`state`, `duration_micros`, `position_micros`, `buffering`,
   `video`, `tracks`); `status` carries the code for `Error` events.

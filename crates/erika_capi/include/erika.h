@@ -11,8 +11,9 @@
  *   - ErikaHandle:          pull model. The host renders and pulls state.
  *   - ErikaPresenterHandle: push model. Erika owns decode/timing/audio/render;
  *                           the host gives it a surface and calls render_tick.
- *                           Compiled on macOS / iOS / Windows / Android; on other
- *                           targets erika_presenter_create returns NULL.
+ *                           Compiled on macOS / iOS / Windows / Android /
+ *                           OpenHarmony; on other targets
+ *                           erika_presenter_create returns NULL.
  *
  * Conventions:
  *   - Every fallible call returns ErikaStatus; Ok (0) and NoEvent are the only
@@ -107,6 +108,7 @@ typedef enum ErikaWgpuSurfaceKind {
   ErikaWgpuSurfaceKind_XlibWindow = 5,
   ErikaWgpuSurfaceKind_WaylandSurface = 6,
   ErikaWgpuSurfaceKind_AndroidNativeWindow = 7,
+  ErikaWgpuSurfaceKind_OhosNativeWindow = 8,
 } ErikaWgpuSurfaceKind;
 
 typedef enum ErikaFlutterTextureKind {
@@ -168,6 +170,45 @@ typedef struct ErikaPresenterConfig {
   float edr_headroom;
   int32_t luma_upscaler;
 } ErikaPresenterConfig;
+
+#define ERIKA_SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS (1u << 2)
+#define ERIKA_SUBTITLE_OVERRIDE_FONT_NAME (1u << 3)
+#define ERIKA_SUBTITLE_OVERRIDE_COLORS (1u << 4)
+#define ERIKA_SUBTITLE_OVERRIDE_ATTRIBUTES (1u << 5)
+#define ERIKA_SUBTITLE_OVERRIDE_BORDER (1u << 6)
+#define ERIKA_SUBTITLE_OVERRIDE_ALIGNMENT (1u << 7)
+#define ERIKA_SUBTITLE_OVERRIDE_MARGINS (1u << 8)
+#define ERIKA_SUBTITLE_OVERRIDE_BLUR (1u << 11)
+#define ERIKA_SUBTITLE_OVERRIDE_ALL                                              \
+  (ERIKA_SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS |                                   \
+   ERIKA_SUBTITLE_OVERRIDE_FONT_NAME | ERIKA_SUBTITLE_OVERRIDE_COLORS |         \
+   ERIKA_SUBTITLE_OVERRIDE_ATTRIBUTES | ERIKA_SUBTITLE_OVERRIDE_BORDER |        \
+   ERIKA_SUBTITLE_OVERRIDE_ALIGNMENT | ERIKA_SUBTITLE_OVERRIDE_MARGINS |        \
+   ERIKA_SUBTITLE_OVERRIDE_BLUR)
+
+typedef struct ErikaSubtitleStyle {
+  const char *font_family;
+  const char *font_file_path;
+  uint32_t primary_color_rgba;
+  uint32_t outline_color_rgba;
+  double font_size;
+  double outline_width;
+  bool bold;
+  bool italic;
+  bool underline;
+  bool strike_out;
+  double spacing;
+  double scale_x_percent;
+  double scale_y_percent;
+  int32_t border_style;
+  double shadow_depth;
+  double blur;
+  int32_t alignment;
+  int32_t margin_left;
+  int32_t margin_right;
+  int32_t margin_vertical;
+  uint32_t override_mask;
+} ErikaSubtitleStyle;
 
 typedef struct ErikaSurfaceOutputCapabilities {
   bool extended_linear;
@@ -270,6 +311,9 @@ typedef struct ErikaTrackInfo {
   char *sample_format;
   char *profile;
   int32_t level;
+  uint64_t bit_rate;
+  uint32_t frame_rate_numerator;
+  uint32_t frame_rate_denominator;
 } ErikaTrackInfo;
 
 typedef struct ErikaEvent {
@@ -405,7 +449,7 @@ ErikaStatus erika_attach_flutter_texture(
 
 ErikaStatus erika_detach_surface(ErikaHandle *handle);
 
-/* ===== ErikaPresenterHandle (push model) — macOS / iOS / Windows / Android ===== */
+/* ===== ErikaPresenterHandle (push model) — macOS / iOS / Windows / Android / OpenHarmony ===== */
 
 /* Lifecycle and configuration. A NULL return means creation failed; check
  * erika_last_error_message. Config selects output mode, EDR headroom, upscaler. */
@@ -436,6 +480,16 @@ ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *handle, doub
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *handle, double volume);
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *handle, int32_t mode);
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *handle, double scale);
+/* Fallback subtitle font. NULL or empty clears that half of the selection.
+ * A container ASS script keeps its own font unless the font-name override bit
+ * is passed through erika_presenter_set_subtitle_style. */
+ErikaStatus erika_presenter_set_subtitle_font(
+    ErikaPresenterHandle *handle,
+    const char *family,
+    const char *file_path);
+ErikaStatus erika_presenter_set_subtitle_style(
+    ErikaPresenterHandle *handle,
+    ErikaSubtitleStyle style);
 ErikaStatus erika_presenter_set_output_headroom(
     ErikaPresenterHandle *handle,
     float headroom,
@@ -502,6 +556,9 @@ ErikaStatus erika_presenter_danmaku_tracks(
     uintptr_t *out_len);
 ErikaStatus erika_presenter_clear_danmaku(ErikaPresenterHandle *handle);
 ErikaStatus erika_presenter_set_danmaku_enabled(
+    ErikaPresenterHandle *handle,
+    bool enabled);
+ErikaStatus erika_presenter_set_debug_hud_enabled(
     ErikaPresenterHandle *handle,
     bool enabled);
 ErikaStatus erika_presenter_set_danmaku_config(
@@ -584,7 +641,22 @@ ErikaStatus erika_presenter_render_tick(
     ErikaPresenterHandle *handle,
     double time_seconds,
     ErikaPresenterStats *out_stats);
+ErikaStatus erika_presenter_get_stats(
+    ErikaPresenterHandle *handle,
+    ErikaPresenterStats *out_stats);
 ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *handle, ErikaEvent *out_event);
+
+/* JSON bridge used by embedders whose platform channel already serializes
+ * structured arguments. Returned strings are owned by Erika and must be
+ * released with erika_string_free. poll_event_json returns NULL when idle. */
+char *erika_presenter_invoke_json(
+    ErikaPresenterHandle *handle,
+    const char *method,
+    const char *arguments_json);
+char *erika_presenter_render_tick_json(
+    ErikaPresenterHandle *handle,
+    double time_seconds);
+char *erika_presenter_poll_event_json(ErikaPresenterHandle *handle);
 
 /* Screenshot: render the current composited frame (video + subtitle + danmaku)
  * off-screen into a caller-allocated RGBA8 buffer at the requested size.

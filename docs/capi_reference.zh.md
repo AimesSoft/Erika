@@ -159,6 +159,13 @@ void        erika_track_info_free(ErikaTrackInfo *track);
 `erika_tracks` 遵循计数数组惯用法。`erika_track_selection` 报告当前选中的
 视频/音频/字幕轨 id（`-1` 表示无）。选择字幕轨 id `-1` 即关闭字幕。
 
+`ErikaTrackInfo` 的 `codec`、`width`、`height`、`pixel_format`、`profile`、`level` 是轨道
+元数据。`bit_rate` 的单位为 bit/s，`frame_rate_numerator` / `frame_rate_denominator` 是视频
+轨的有理帧率；`0` 表示对应值未知。帧率按平均帧率、`r_frame_rate`、FFmpeg 估算帧率的顺序
+探测。码率优先用轨自身参数；只在单视频轨缺少码率、容器总码率与所有其它音频轨码率均已知时，
+才以“容器总码率减去音频轨码率”估算。两者都不是播放中的瞬时码率或实时渲染 FPS，码率估算值
+还可能包含封装开销或其它非音频流。
+
 ### 状态与事件
 
 ```c
@@ -230,6 +237,8 @@ ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *, double rat
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *, double volume);   // 0.0–1.0
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *, int32_t mode);  // ErikaLumaUpscalerMode
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *, double scale);
+ErikaStatus erika_presenter_set_subtitle_font(ErikaPresenterHandle *, const char *family, const char *file_path);
+ErikaStatus erika_presenter_set_subtitle_style(ErikaPresenterHandle *, ErikaSubtitleStyle style);
 ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float headroom, bool known);
 ```
 
@@ -237,6 +246,57 @@ ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float he
 [`erika_presenter_get_upscaler_status`](#诊断与截图)）。Metal 与具备 compute 能力的
 wgpu/Vulkan renderer 会执行 ArtCNN；其他后端保留原生 luma sampling，并明确报告
 `Inactive` 回退。
+
+`set_subtitle_font` 与 `set_subtitle_style` 设置字幕的**回退**外观。family 或
+path 传空即清除该项。颜色为 `0xRRGGBBAA`，默认不透明白色文字（`0xFFFFFFFF`）与
+半透明黑色描边（`0x0000007F`）。`font_size`（默认 `48`，钳位 `8..400`）与
+`outline_width`（默认 `2`，钳位 `0..32`）以 ASS 脚本单位计，且仍会再乘上
+`set_subtitle_scale`。容器内的 ASS 脚本保留自带样式，这些值只用于补足脚本未指定的
+部分、系统解析不到的字体，以及纯文本（SRT/WebVTT）字幕的外观。
+
+`ErikaSubtitleStyle` 承载完整外观，越界的度量会被钳位而不是拒绝：
+
+```c
+typedef struct ErikaSubtitleStyle {
+  const char *font_family;      /* NULL 或空则回到平台默认 */
+  const char *font_file_path;
+  uint32_t primary_color_rgba;  /* 0xRRGGBBAA */
+  uint32_t outline_color_rgba;
+  double font_size;             /* 8..400   */
+  double outline_width;         /* 0..32    */
+  bool bold, italic, underline, strike_out;
+  double spacing;               /* -100..100 */
+  double scale_x_percent;       /* 1..1000，100 为原始比例 */
+  double scale_y_percent;
+  int32_t border_style;         /* 1 描边+阴影，3 不透明底框 */
+  double shadow_depth;          /* 0..32 */
+  double blur;                  /* 0..100 */
+  int32_t alignment;            /* 1..9，小键盘布局，2 为底部居中 */
+  int32_t margin_left, margin_right, margin_vertical;
+  uint32_t override_mask;
+} ErikaSubtitleStyle;
+```
+
+`override_mask` 决定哪些字段不再只是回退值，而是通过 libass 的 selective style
+override 覆盖 ASS 对白自带的样式。它是 `erika.h` 中 `ERIKA_SUBTITLE_OVERRIDE_*`
+宏的位掩码，与 libass 的 `ASS_OVERRIDE_BIT_*` 一一对应：
+
+| 宏 | 覆盖的字段 |
+| --- | --- |
+| `ERIKA_SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS` | `font_size`、`spacing`、`scale_x_percent`、`scale_y_percent` |
+| `ERIKA_SUBTITLE_OVERRIDE_FONT_NAME` | `font_family` |
+| `ERIKA_SUBTITLE_OVERRIDE_COLORS` | `primary_color_rgba`、`outline_color_rgba` |
+| `ERIKA_SUBTITLE_OVERRIDE_ATTRIBUTES` | `bold`、`italic`、`underline`、`strike_out` |
+| `ERIKA_SUBTITLE_OVERRIDE_BORDER` | `border_style`、`outline_width`、`shadow_depth` |
+| `ERIKA_SUBTITLE_OVERRIDE_ALIGNMENT` | `alignment` |
+| `ERIKA_SUBTITLE_OVERRIDE_MARGINS` | `margin_left`、`margin_right`、`margin_vertical` |
+| `ERIKA_SUBTITLE_OVERRIDE_BLUR` | `blur` |
+| `ERIKA_SUBTITLE_OVERRIDE_ALL` | 以上全部 |
+
+传 `0` 则全部保持回退语义，未知位会被丢弃。覆盖时字号仍与分辨率无关——`font_size`
+为 `48` 时，无论脚本声明何种 `PlayResY` 都落在同样的像素上。边距则不然：libass 让
+覆盖用的 margin 保持脚本自身的单位，因此在容器内的 ASS 轨上它随该脚本的 `PlayResY`
+缩放，而在纯文本字幕（Erika 按画面尺寸生成脚本）上就是像素。
 
 `ErikaHttpHeader` 定义如下：
 
@@ -304,6 +364,7 @@ ErikaStatus erika_presenter_set_danmaku_global_offset(ErikaPresenterHandle *, in
 ErikaStatus erika_presenter_danmaku_tracks(ErikaPresenterHandle *, ErikaDanmakuTrackInfo *out_tracks, uintptr_t capacity, uintptr_t *out_len);
 ErikaStatus erika_presenter_clear_danmaku(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_set_danmaku_enabled(ErikaPresenterHandle *, bool enabled);
+ErikaStatus erika_presenter_set_debug_hud_enabled(ErikaPresenterHandle *, bool enabled);
 ErikaStatus erika_presenter_set_danmaku_config(ErikaPresenterHandle *, ErikaDanmakuConfig config);
 ErikaStatus erika_presenter_set_danmaku_config_ptr(ErikaPresenterHandle *, const ErikaDanmakuConfig *config);
 ErikaStatus erika_presenter_get_danmaku_config(ErikaPresenterHandle *, ErikaDanmakuConfig *out_config);
@@ -318,6 +379,11 @@ ErikaStatus erika_presenter_set_danmaku_block_words_json(ErikaPresenterHandle *,
 传结构体）；`get_danmaku_config` 读回。布局引擎见
 [danmaku_architecture.md](danmaku_architecture.md)。`set_danmaku_block_words_json`
 接受一个字符串 JSON 数组用于过滤。
+
+`set_debug_hud_enabled` 默认关闭。开启后 Presenter 在原生视频合成中绘制诊断 HUD，显示轨道
+技术信息、播放状态、实时解码/渲染 FPS、解码/零拷贝路径、渲染和音频状态、
+HDR 输出以及弹幕数量。HUD 只在已有视频帧时显示；其统计不要求调用方轮询，也不会写入
+`ErikaPresenterStats`。`capture_frame_rgba` 的离屏截图不包含 HUD。
 
 ### Surface 与呈现
 
@@ -349,6 +415,7 @@ Android extended-linear 应把 Flutter Hybrid Composition `SurfaceView` 对应�
 
 ```c
 ErikaStatus erika_presenter_render_tick(ErikaPresenterHandle *, double time_seconds, ErikaPresenterStats *out_stats);
+ErikaStatus erika_presenter_get_stats(ErikaPresenterHandle *, ErikaPresenterStats *out_stats);
 ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *, ErikaEvent *out_event);
 ```
 
@@ -356,6 +423,45 @@ ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *, ErikaEvent *out_e
 帧调度器）。`time_seconds` 是该帧的宿主显示时钟（秒）——Erika 用它做 vsync 量化调度，
 所以传**呈现时间戳**，不是 wall-clock 增量。若 `out_stats` 非 `NULL`，会填入流水线
 计数器快照。`poll_event` 非阻塞，空闲时返回 `NoEvent`。
+
+`get_stats` 填入同样的 `ErikaPresenterStats` 快照，但不渲染帧。当宿主采样计数器的
+节奏与显示循环不同时用它；它不推进呈现。
+
+### JSON 桥
+
+对于平台通道本身就在序列化结构化参数的嵌入方（例如 HarmonyOS ArkTS 插件），
+同一套 presenter 接口也以 JSON 形式提供：
+
+```c
+char *erika_presenter_invoke_json(ErikaPresenterHandle *, const char *method,
+                                  const char *arguments_json);
+char *erika_presenter_render_tick_json(ErikaPresenterHandle *, double time_seconds);
+char *erika_presenter_poll_event_json(ErikaPresenterHandle *);
+```
+
+返回的字符串归 Erika 所有，必须用 `erika_string_free` 释放。`poll_event_json`
+在无事件时返回 `NULL`——不是信封——所以 `NULL` 表示空闲而非错误。
+
+三者的返回值都包在同一层信封里：
+
+```json
+{ "ok": true,  "status": 0, "value": <result> }
+{ "ok": false, "status": 1, "error": "<message>" }
+```
+
+`arguments_json` 必须是 JSON 对象。`method` 选择操作，与 C 入口一一对应：
+`open`、`play`、`pause`、`stop`、`close`、`seek`、`setPlaybackRate`、`setVolume`、
+`setUpscaler`、`setSubtitleScale`、`getUpscalerStatus`、`getOutputStatus`、
+`getPresenterStats`、`tracks`、`addExternalSubtitle`、`removeSubtitleTrack`、
+`selectAudioTrack`、`selectSubtitleTrack`，以及弹幕系列（`loadDanmakuFile`、
+`loadDanmakuJson`、`addDanmakuTrackFile`、`addDanmakuTrackJson`、
+`removeDanmakuTrack`、`setDanmakuTrackEnabled`、`setDanmakuTrackOffset`、
+`setDanmakuGlobalOffset`、`danmakuTracks`、`clearDanmaku`、`setDanmakuEnabled`、
+`setDanmakuConfig`）。未知 method 返回 `ok: false`，不会中止。权威分发表见
+`crates/erika_capi/src/presenter_json.rs`。
+
+这层桥只是便利封装，不是第二套 API：它调用的就是上面这些函数，没有额外能力。
+能在平台通道上传结构体的宿主应优先用类型化入口。
 
 ### 诊断与截图
 
@@ -453,7 +559,8 @@ free(rgba);
 - **`ErikaTrackCounts`** / **`ErikaTrackSelection`** —— 各类轨道计数 / 选中 id
   （`-1` = 无）。
 - **`ErikaTrackInfo`** —— 完整的每轨元数据；六个 `char*` 字段归调用方所有（用
-  `erika_track_info_free` 释放）。
+  `erika_track_info_free` 释放）。视频轨还包含 `bit_rate`（bit/s）和
+  `frame_rate_numerator` / `frame_rate_denominator`（`0` = unknown）。
 - **`ErikaEvent`** —— 用结构体表达的 tagged union：`kind` 决定哪些字段有意义
   （`state`、`duration_micros`、`position_micros`、`buffering`、`video`、`tracks`）；
   `Error` 事件由 `status` 携带状态码。

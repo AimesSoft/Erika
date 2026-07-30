@@ -11,7 +11,10 @@ use crate::audio::{AudioClockSnapshot, AudioOutputRuntimeStats};
 use crate::danmaku::DanmakuRenderPlan;
 use crate::ffmpeg::{DecoderBackend, Frame, PcmAudioFrame};
 use crate::overlay::OverlayFrame;
-use crate::playback::{PlaybackClock, PlaybackRunState, PlaybackSessionConfig, VideoPlaybackEngine};
+use crate::playback::{
+    PlaybackClock, PlaybackDecoderResources, PlaybackRunState, PlaybackSessionConfig,
+    VideoPlaybackEngine,
+};
 use crate::renderer::VideoFramePayload;
 use crate::subtitle::{DecodedSubtitleFrame, SubtitleTrackConfig};
 use crate::trace;
@@ -214,6 +217,38 @@ impl Default for TrackSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameRate {
+    pub numerator: u32,
+    pub denominator: u32,
+}
+
+impl FrameRate {
+    pub fn new(numerator: u32, denominator: u32) -> Option<Self> {
+        if numerator == 0 || denominator == 0 {
+            return None;
+        }
+        let divisor = greatest_common_divisor(numerator, denominator);
+        Some(Self {
+            numerator: numerator / divisor,
+            denominator: denominator / divisor,
+        })
+    }
+
+    pub fn frames_per_second(&self) -> f64 {
+        f64::from(self.numerator) / f64::from(self.denominator)
+    }
+}
+
+fn greatest_common_divisor(mut left: u32, mut right: u32) -> u32 {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackInfo {
     pub id: i64,
     pub kind: TrackKind,
@@ -228,6 +263,8 @@ pub struct TrackInfo {
     pub sample_format: Option<String>,
     pub profile: Option<String>,
     pub level: Option<i32>,
+    pub bit_rate: Option<u64>,
+    pub frame_rate: Option<FrameRate>,
     pub selected: bool,
     pub source: TrackSource,
     pub can_remove: bool,
@@ -249,6 +286,8 @@ impl TrackInfo {
             sample_format: None,
             profile: None,
             level: None,
+            bit_rate: None,
+            frame_rate: None,
             selected: false,
             source: TrackSource::Embedded,
             can_remove: false,
@@ -577,6 +616,7 @@ pub enum WgpuSurfaceKind {
     XlibWindow,
     WaylandSurface,
     AndroidNativeWindow,
+    OhosNativeWindow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -745,6 +785,11 @@ pub trait RendererBackend {
     /// decoder so unsupported Vulkan implementations start in ByteBuffer mode.
     fn supports_mediacodec_surface_frames(&self) -> bool {
         false
+    }
+
+    #[cfg(target_env = "ohos")]
+    fn ohos_avcodec_surface(&self) -> Option<Arc<crate::ohos::avcodec::OhosAvCodecSurface>> {
+        None
     }
 
     /// Switches the neural luma upscaler at runtime. Backends without an
@@ -929,6 +974,7 @@ impl Drop for PlaybackRuntime {
 pub struct Player {
     id: PlayerId,
     config: PlayerConfig,
+    decoder_resources: PlaybackDecoderResources,
     inner: Arc<Mutex<PlayerInner>>,
     lifecycle: Arc<Mutex<PlayerLifecycle>>,
 }
@@ -938,6 +984,7 @@ impl Player {
         Self {
             id: PlayerId::default(),
             config,
+            decoder_resources: PlaybackDecoderResources::default(),
             inner: Arc::new(Mutex::new(PlayerInner {
                 state: PlayerState::Idle,
                 ended: false,
@@ -960,6 +1007,16 @@ impl Player {
                 playback: None,
             })),
         }
+    }
+
+    #[cfg(target_env = "ohos")]
+    pub(crate) fn new_with_ohos_avcodec_surface(
+        config: PlayerConfig,
+        surface: Option<Arc<crate::ohos::avcodec::OhosAvCodecSurface>>,
+    ) -> Self {
+        let mut player = Self::new(config);
+        player.decoder_resources = PlaybackDecoderResources::with_ohos_avcodec_surface(surface);
+        player
     }
 
     pub fn id(&self) -> PlayerId {
@@ -1083,7 +1140,11 @@ impl Player {
             self.transition(PlayerState::Opening)?;
             epoch
         };
-        let mut engine = match VideoPlaybackEngine::open(&media, self.config.playback) {
+        let mut engine = match VideoPlaybackEngine::open_with_decoder_resources(
+            &media,
+            self.config.playback,
+            self.decoder_resources.clone(),
+        ) {
             Ok(engine) => engine,
             Err(error) => {
                 let error = PlayerError::Playback(error.to_string());
@@ -2210,7 +2271,9 @@ fn handle_playback_command(
                 return true;
             }
             match failure.decode_backend {
-                DecoderBackend::MediaCodec | DecoderBackend::VideoToolbox => {
+                DecoderBackend::MediaCodec
+                | DecoderBackend::VideoToolbox
+                | DecoderBackend::AvCodec => {
                     if let Err(error) = engine.handle_video_frame_import_failure(&failure) {
                         fail_video_import_from_worker(
                             engine,

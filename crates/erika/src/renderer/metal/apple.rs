@@ -2558,12 +2558,41 @@ float pq_inverse_eotf(float normalized_nits) {
     return pow((c1 + c2 * p) / max(1.0 + c3 * p, 0.000001), m2);
 }
 
+// BT.2100 HLG inverse OETF: nonlinear signal E' to scene linear light in
+// [0, 1]. Mirrors the Rust reference implementation in
+// `renderer/pipeline.rs` tests (`hlg_inverse_oetf`).
+float hlg_inverse_oetf(float encoded) {
+    constexpr float a = 0.17883277;
+    constexpr float b = 0.28466892;
+    constexpr float c = 0.55991073;
+    float e = max(encoded, 0.0);
+    if (e <= 0.5) {
+        return e * e / 3.0;
+    }
+    return (exp((e - c) / a) + b) / 12.0;
+}
+
 float3 transfer_to_source_reference_linear(float3 rgb, constant VideoUniforms& uniforms) {
     rgb = max(rgb, float3(0.0));
     if (uniforms.source_transfer == 3) {
         constexpr float pq_absolute_peak_nits = 10000.0;
         return float3(pq_eotf(rgb.r), pq_eotf(rgb.g), pq_eotf(rgb.b))
             * (pq_absolute_peak_nits / source_reference_white_nits(uniforms));
+    }
+    if (uniforms.source_transfer == 4) {
+        // HLG: inverse OETF to scene linear, then the BT.2100 OOTF (system
+        // gamma 1.2 at the 1000 nit nominal peak) to display linear,
+        // normalized to source reference white like the PQ branch above.
+        constexpr float hlg_nominal_peak_nits = 1000.0;
+        constexpr float hlg_system_gamma = 1.2;
+        float3 scene = float3(
+            hlg_inverse_oetf(rgb.r),
+            hlg_inverse_oetf(rgb.g),
+            hlg_inverse_oetf(rgb.b)
+        );
+        float scene_luma = max(dot(uniforms.luma_coefficients.xyz, scene), 0.000001);
+        return scene * (hlg_nominal_peak_nits * pow(scene_luma, hlg_system_gamma - 1.0)
+            / source_reference_white_nits(uniforms));
     }
     if (uniforms.source_transfer == 1) {
         return pow(rgb, float3(2.2));

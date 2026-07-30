@@ -54,6 +54,8 @@ xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,z
   `CC_FOR_BUILD` / `CXX_FOR_BUILD`。
 - 按需安装四个 Rust target:`aarch64-linux-android`、
   `armv7-linux-androideabi`、`x86_64-linux-android`、`i686-linux-android`。
+- HarmonyOS:DevEco Studio 的 OpenHarmony Native SDK(由 `OHOS_NDK_HOME` 或
+  `OHOS_SDK_NATIVE` 指向),以及 `aarch64-unknown-linux-ohos` Rust target。
 
 Android 最低 API 为 **26**;只在需要更高版本时用 `ANDROID_API_LEVEL` 覆盖。
 
@@ -97,16 +99,47 @@ cargo run -p xtask -- deps build --all --profile lgpl
 | `aarch64-apple-ios-sim` | iOS 模拟器(Apple Silicon) | |
 | `x86_64-apple-ios` | iOS 模拟器(Intel) | |
 | `x86_64-pc-windows-msvc`(或 `windows-x64`) | Windows | FFmpeg 里把 VideoToolbox 换成 D3D11VA/DXVA2。 |
+| `aarch64-pc-windows-msvc`(或 `windows-arm64`) | Windows ARM64 | 支持 ARM64 原生宿主和 x64 到 ARM64 交叉构建。 |
 | `aarch64-linux-android`(或 `arm64-v8a`) | Android arm64 | 主流真机 ABI。 |
 | `armv7-linux-androideabi`(或 `armeabi-v7a`) | Android ARMv7 | 32 位 ARM 兼容。 |
 | `x86_64-linux-android`(或 `android-x64`) | Android x86_64 | 模拟器与 x86_64 设备。 |
 | `i686-linux-android`(或 `x86`) | Android x86 | 32 位模拟器兼容;Android 共享库不允许对应的非 PIC 重定位,因此禁用 x86 汇编加速。 |
+| `aarch64-unknown-linux-ohos`(或 `ohos-arm64`) | HarmonyOS arm64 | 使用 DevEco Studio OpenHarmony Native SDK。 |
 
 部署最低版本默认 macOS `11.0` / iOS `13.0`,可用
 `MACOSX_DEPLOYMENT_TARGET` / `IPHONEOS_DEPLOYMENT_TARGET` 覆盖。
 
 Android 使用 `android-26`、`c++_shared`、PIC 静态依赖和所选 ABI 对应的 NDK LLVM
 工具链。
+
+HarmonyOS 使用 `OHOS_NDK_HOME` 或 `OHOS_SDK_NATIVE` 指向 DevEco Studio 的
+`openharmony/native` 目录，并通过其中的
+`aarch64-unknown-linux-ohos-clang` 构建 FFmpeg、zlib 和 Erika。Flutter 插件的
+Hvigor/CMake 构建会自动执行这条链路，并把 `liberika_capi.so` 与
+`liberika_flutter.so` 打入 HAP。
+
+### 选择源码构建架构
+
+Flutter 依赖项目通过 `ERIKA_MACOS_ARCHS=arm64|x86_64|universal` 选择 macOS 架构，通过 `ERIKA_WINDOWS_ARCH=x64|arm64` 选择 Windows 架构，通过 `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86` 选择 Android ABI。设置 `ERIKA_FORCE_SOURCE_BUILD=1` 可强制跳过预构建包。
+
+直接构建原生库时，三个目标参数必须一致：
+
+```sh
+cargo run -p xtask -- deps build --all --profile lgpl --target aarch64-apple-darwin
+ERIKA_NATIVE_PROFILE=lgpl ERIKA_NATIVE_TARGET=aarch64-apple-darwin \
+  cargo build -p erika_capi --release --target aarch64-apple-darwin
+```
+
+Windows ARM64 使用对应的 PowerShell 命令：
+
+```powershell
+cargo run -p xtask -- deps build --all --profile lgpl --target aarch64-pc-windows-msvc
+$env:ERIKA_NATIVE_PROFILE = "lgpl"
+$env:ERIKA_NATIVE_TARGET = "aarch64-pc-windows-msvc"
+cargo build -p erika_capi --release --target aarch64-pc-windows-msvc
+```
+
+`xtask --target`、`ERIKA_NATIVE_TARGET` 和 Cargo `--target` 必须相同，否则 Cargo 可能链接到其他架构的原生依赖。
 
 ### Windows PowerShell 构建 Android x86_64
 

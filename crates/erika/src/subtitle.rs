@@ -9,7 +9,7 @@ use std::{sync::Arc, time::Duration};
 
 use thiserror::Error;
 
-#[cfg(all(feature = "libass", any(target_os = "ios", target_os = "android")))]
+#[cfg(feature = "libass")]
 use crate::NIPAPLAY_FALLBACK_FONT;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -166,15 +166,40 @@ pub enum SubtitleFileFormat {
 
 impl SubtitleFileFormat {
     pub fn from_path(path: impl AsRef<str>) -> Option<Self> {
-        let path = path.as_ref();
-        let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
-        match extension.as_str() {
+        Self::from_extension(subtitle_path_extension(path.as_ref())?)
+    }
+
+    /// Like [`Self::from_path`] but for a full URI: any query string or
+    /// fragment is dropped first, so a signed sidecar URL such as
+    /// `https://host/sub.srt?token=...` is still recognised as SRT.
+    pub fn from_uri(uri: impl AsRef<str>) -> Option<Self> {
+        Self::from_path(uri_path_component(uri.as_ref()))
+    }
+
+    fn from_extension(extension: &str) -> Option<Self> {
+        match extension.to_ascii_lowercase().as_str() {
             "srt" => Some(Self::Srt),
             "vtt" | "webvtt" => Some(Self::WebVtt),
             "ass" | "ssa" => Some(Self::Ass),
             _ => None,
         }
     }
+}
+
+/// Strips a `?query` and `#fragment` so only the path is left. Applied before
+/// extension matching because subtitle URIs are not always bare paths.
+pub(crate) fn uri_path_component(uri: &str) -> &str {
+    let path = uri.split_once('#').map_or(uri, |(path, _)| path);
+    path.split_once('?').map_or(path, |(path, _)| path)
+}
+
+/// Returns the extension of the last path segment, or `None` when that segment
+/// carries no extension at all. Splitting on the segment rather than the whole
+/// string keeps a dot earlier in the path (`/a.b/subs`) from being mistaken for
+/// one.
+pub(crate) fn subtitle_path_extension(path: &str) -> Option<&str> {
+    let leaf = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    leaf.rsplit_once('.').map(|(_, extension)| extension)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -628,6 +653,40 @@ mod libass_ffi {
         pub opaque: *mut c_void,
     }
 
+    /// Mirrors `ASS_Style` from `ass_types.h`. libass keeps the layout stable
+    /// across 0.17.x releases; `name` is stored by pointer while `font_name` is
+    /// duplicated, so `name` must outlive the renderer.
+    #[repr(C)]
+    #[derive(Debug)]
+    pub struct AssStyle {
+        pub name: *mut c_char,
+        pub font_name: *mut c_char,
+        pub font_size: f64,
+        pub primary_colour: u32,
+        pub secondary_colour: u32,
+        pub outline_colour: u32,
+        pub back_colour: u32,
+        pub bold: c_int,
+        pub italic: c_int,
+        pub underline: c_int,
+        pub strike_out: c_int,
+        pub scale_x: f64,
+        pub scale_y: f64,
+        pub spacing: f64,
+        pub angle: f64,
+        pub border_style: c_int,
+        pub outline: f64,
+        pub shadow: f64,
+        pub alignment: c_int,
+        pub margin_l: c_int,
+        pub margin_r: c_int,
+        pub margin_v: c_int,
+        pub encoding: c_int,
+        pub treat_fontname_as_pattern: c_int,
+        pub blur: f64,
+        pub justify: c_int,
+    }
+
     unsafe extern "C" {
         pub fn ass_library_init() -> *mut AssLibrary;
         pub fn ass_library_done(library: *mut AssLibrary);
@@ -656,6 +715,8 @@ mod libass_ffi {
             glyph_max: c_int,
             bitmap_max_size: c_int,
         );
+        pub fn ass_set_selective_style_override_enabled(renderer: *mut AssRenderer, bits: c_int);
+        pub fn ass_set_selective_style_override(renderer: *mut AssRenderer, style: *mut AssStyle);
         pub fn ass_read_memory(
             library: *mut AssLibrary,
             buffer: *mut c_char,
@@ -686,6 +747,11 @@ mod libass_ffi {
     }
 }
 
+/// Style name handed to libass for the override style. libass stores this
+/// pointer without copying it, so it has to be `'static`.
+#[cfg(feature = "libass")]
+const ASS_OVERRIDE_STYLE_NAME: &CStr = c"Erika";
+
 #[cfg(feature = "libass")]
 const ASS_FONTPROVIDER_NONE: libc::c_int = 0;
 #[cfg(feature = "libass")]
@@ -708,11 +774,164 @@ impl Default for LibassRenderConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Text colour Erika falls back to when nothing else specifies one, as
+/// `0xRRGGBBAA` with alpha 255 meaning fully opaque.
+pub const DEFAULT_SUBTITLE_PRIMARY_COLOR_RGBA: u32 = 0xffff_ffff;
+/// Outline/shadow colour fallback, half-transparent black.
+pub const DEFAULT_SUBTITLE_OUTLINE_COLOR_RGBA: u32 = 0x0000_007f;
+/// Base subtitle font size in ASS script units, before the viewer's scale.
+pub const DEFAULT_SUBTITLE_FONT_SIZE: f64 = DEFAULT_ASS_FONT_SIZE;
+/// Base subtitle outline width in ASS script units, before the viewer's scale.
+pub const DEFAULT_SUBTITLE_OUTLINE_WIDTH: f64 = DEFAULT_ASS_OUTLINE;
+pub const SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS: u32 = 1 << 2;
+pub const SUBTITLE_OVERRIDE_FONT_NAME: u32 = 1 << 3;
+pub const SUBTITLE_OVERRIDE_COLORS: u32 = 1 << 4;
+pub const SUBTITLE_OVERRIDE_ATTRIBUTES: u32 = 1 << 5;
+pub const SUBTITLE_OVERRIDE_BORDER: u32 = 1 << 6;
+pub const SUBTITLE_OVERRIDE_ALIGNMENT: u32 = 1 << 7;
+pub const SUBTITLE_OVERRIDE_MARGINS: u32 = 1 << 8;
+pub const SUBTITLE_OVERRIDE_BLUR: u32 = 1 << 11;
+pub const SUBTITLE_OVERRIDE_LEGACY_FORCE: u32 = SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS
+    | SUBTITLE_OVERRIDE_FONT_NAME
+    | SUBTITLE_OVERRIDE_COLORS
+    | SUBTITLE_OVERRIDE_BORDER;
+pub const SUBTITLE_OVERRIDE_ALL: u32 = SUBTITLE_OVERRIDE_LEGACY_FORCE
+    | SUBTITLE_OVERRIDE_ATTRIBUTES
+    | SUBTITLE_OVERRIDE_ALIGNMENT
+    | SUBTITLE_OVERRIDE_MARGINS
+    | SUBTITLE_OVERRIDE_BLUR;
+
+/// User-chosen subtitle look. Empty strings mean "keep Erika's default", so
+/// [`SubtitleStyleConfig::default`] reproduces the built-in style exactly.
+///
+/// The font and colours act as *fallbacks*: a container ASS script keeps its
+/// own styling, and these only fill in what the script leaves open (or what the
+/// system cannot resolve). Set the corresponding `override_mask` bits to push
+/// configured fields onto dialogue events that specify their own style.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubtitleStyleConfig {
+    /// Family libass resolves when a script names no font, or names one that is
+    /// neither attached to the container nor installed.
+    pub font_family: String,
+    /// Font file loaded into libass and offered as the last-resort face.
+    pub font_file_path: String,
+    /// Text colour as `0xRRGGBBAA`.
+    pub primary_color_rgba: u32,
+    /// Outline and shadow colour as `0xRRGGBBAA`.
+    pub outline_color_rgba: u32,
+    /// Base font size in ASS script units, before the viewer's subtitle scale.
+    pub font_size: f64,
+    /// Base outline (border) width in ASS script units, before the scale.
+    pub outline_width: f64,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strike_out: bool,
+    pub spacing: f64,
+    pub scale_x_percent: f64,
+    pub scale_y_percent: f64,
+    pub border_style: i32,
+    pub shadow_depth: f64,
+    pub blur: f64,
+    pub alignment: i32,
+    /// Left margin. Unlike the sizes above, libass does not normalize override
+    /// margins against the script resolution, so these are script units rather
+    /// than pixels: on plain-text subtitles, whose generated script is authored
+    /// at the frame size, they are pixels, but on a container ASS track they are
+    /// relative to whatever `PlayResY` the script declares.
+    pub margin_left: i32,
+    /// Right margin, in the same units as [`Self::margin_left`].
+    pub margin_right: i32,
+    /// Bottom (or top, per `alignment`) margin, in the same units as
+    /// [`Self::margin_left`].
+    pub margin_vertical: i32,
+    pub override_mask: u32,
+}
+
+impl Default for SubtitleStyleConfig {
+    fn default() -> Self {
+        Self {
+            font_family: String::new(),
+            font_file_path: String::new(),
+            primary_color_rgba: DEFAULT_SUBTITLE_PRIMARY_COLOR_RGBA,
+            outline_color_rgba: DEFAULT_SUBTITLE_OUTLINE_COLOR_RGBA,
+            font_size: DEFAULT_ASS_FONT_SIZE,
+            outline_width: DEFAULT_ASS_OUTLINE,
+            bold: false,
+            italic: false,
+            underline: false,
+            strike_out: false,
+            spacing: 0.0,
+            scale_x_percent: 100.0,
+            scale_y_percent: 100.0,
+            border_style: 1,
+            shadow_depth: 0.0,
+            blur: 0.0,
+            alignment: 2,
+            margin_left: 48,
+            margin_right: 48,
+            margin_vertical: 54,
+            override_mask: 0,
+        }
+    }
+}
+
+impl SubtitleStyleConfig {
+    /// Trims caller-provided paths and family names, and clamps the metrics to
+    /// a range libass can render. An empty string stays the "unset" marker; a
+    /// non-finite metric falls back to Erika's default.
+    pub fn normalized(mut self) -> Self {
+        self.font_family = self.font_family.trim().to_string();
+        self.font_file_path = self.font_file_path.trim().to_string();
+        self.font_size = if self.font_size.is_finite() {
+            self.font_size.clamp(MIN_ASS_FONT_SIZE, MAX_ASS_FONT_SIZE)
+        } else {
+            DEFAULT_ASS_FONT_SIZE
+        };
+        self.outline_width = if self.outline_width.is_finite() {
+            self.outline_width.clamp(0.0, MAX_ASS_OUTLINE)
+        } else {
+            DEFAULT_ASS_OUTLINE
+        };
+        self.spacing = normalize_ass_metric(self.spacing, 0.0, -100.0, 100.0);
+        self.scale_x_percent = normalize_ass_metric(self.scale_x_percent, 100.0, 1.0, 1000.0);
+        self.scale_y_percent = normalize_ass_metric(self.scale_y_percent, 100.0, 1.0, 1000.0);
+        self.shadow_depth = normalize_ass_metric(self.shadow_depth, 0.0, 0.0, MAX_ASS_OUTLINE);
+        self.blur = normalize_ass_metric(self.blur, 0.0, 0.0, 100.0);
+        self.border_style = if matches!(self.border_style, 1 | 3) {
+            self.border_style
+        } else {
+            1
+        };
+        self.alignment = if (1..=9).contains(&self.alignment) {
+            self.alignment
+        } else {
+            2
+        };
+        self.margin_left = self.margin_left.clamp(0, 10_000);
+        self.margin_right = self.margin_right.clamp(0, 10_000);
+        self.margin_vertical = self.margin_vertical.clamp(0, 10_000);
+        self.override_mask &= SUBTITLE_OVERRIDE_ALL;
+        self
+    }
+
+    pub fn font_family(&self) -> Option<&str> {
+        let family = self.font_family.trim();
+        (!family.is_empty()).then_some(family)
+    }
+
+    pub fn font_file_path(&self) -> Option<&str> {
+        let path = self.font_file_path.trim();
+        (!path.is_empty()).then_some(path)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SubtitleAssStyle {
     pub font_scale: f64,
     pub play_res_width: u32,
     pub play_res_height: u32,
+    pub style: SubtitleStyleConfig,
 }
 
 impl Default for SubtitleAssStyle {
@@ -721,6 +940,7 @@ impl Default for SubtitleAssStyle {
             font_scale: 1.0,
             play_res_width: 1920,
             play_res_height: 1080,
+            style: SubtitleStyleConfig::default(),
         }
     }
 }
@@ -774,6 +994,19 @@ pub struct LibassSubtitleRenderer {
     track: NonNull<libass_ffi::AssTrack>,
     config: LibassRenderConfig,
     font_scale: f64,
+    override_font_scale: f64,
+    play_res_height: u32,
+    style: SubtitleStyleConfig,
+}
+
+/// Font selection currently installed in libass. `ass_set_fonts` rebuilds the
+/// font selector, which re-parses every attachment the library holds, so it may
+/// only run when this selection actually changes.
+#[cfg(feature = "libass")]
+#[derive(Debug, PartialEq)]
+struct LibassFontSelection {
+    family: CString,
+    default_font: Option<CString>,
 }
 
 #[cfg(feature = "libass")]
@@ -781,6 +1014,12 @@ pub struct LibassSubtitleRenderer {
 struct LibassRuntime {
     library: NonNull<libass_ffi::AssLibrary>,
     renderer: NonNull<libass_ffi::AssRenderer>,
+    track_id: i64,
+    loaded_font_files: HashSet<String>,
+    fonts: Option<LibassFontSelection>,
+    /// Counts `ass_set_fonts` calls. Only meaningful to the tests that pin how
+    /// rarely the font selector is rebuilt.
+    fonts_generation: u64,
     _log_context: Box<LibassLogContext>,
     _log_bridge: Box<libass_ffi::ErikaAssLogBridge>,
 }
@@ -798,8 +1037,9 @@ impl LibassRuntime {
         track_id: i64,
         fonts: &[SubtitleFontAttachment],
         config: LibassRenderConfig,
+        style: &SubtitleStyleConfig,
     ) -> Result<Self> {
-        unsafe {
+        let mut runtime = unsafe {
             let library = NonNull::new(libass_ffi::ass_library_init()).ok_or_else(|| {
                 SubtitleError::Libass("failed to initialize libass library".to_string())
             })?;
@@ -813,7 +1053,7 @@ impl LibassRuntime {
             });
             libass_ffi::erika_ass_install_log_bridge(library.as_ptr(), &mut *log_bridge);
             libass_ffi::ass_set_extract_fonts(library.as_ptr(), 1);
-            add_bundled_ass_fallback_font(library.as_ptr());
+            add_bundled_ass_fallback_font(library.as_ptr(), track_id);
             add_attached_ass_fonts(library.as_ptr(), track_id, fonts);
 
             let Some(renderer) = NonNull::new(libass_ffi::ass_renderer_init(library.as_ptr()))
@@ -823,26 +1063,224 @@ impl LibassRuntime {
                     "failed to initialize libass renderer".to_string(),
                 ));
             };
-            libass_ffi::ass_set_fonts(
-                renderer.as_ptr(),
-                std::ptr::null(),
-                default_ass_font_family_cstr().as_ptr(),
-                default_ass_font_provider(),
-                std::ptr::null(),
-                1,
-            );
             libass_ffi::ass_set_cache_limits(
                 renderer.as_ptr(),
                 config.glyph_cache_limit,
                 config.bitmap_cache_limit_mb,
             );
-            Ok(Self {
+            Self {
                 library,
                 renderer,
+                track_id,
+                loaded_font_files: HashSet::new(),
+                fonts: None,
+                fonts_generation: 0,
                 _log_context: log_context,
                 _log_bridge: log_bridge,
+            }
+        };
+        runtime.configure_style(style, 1.0, 288);
+        Ok(runtime)
+    }
+
+    /// Pushes the user style into libass: the custom face (if any) becomes a
+    /// known font and the last-resort font path, the custom family becomes the
+    /// default family, and `override_mask` decides which dialogue styling is
+    /// replaced instead of merely backfilled.
+    ///
+    /// Only the override metrics depend on `font_scale` and `play_res_height`,
+    /// and those are cheap to re-push; the font selection is left alone unless
+    /// the family or the font file changed.
+    fn configure_style(
+        &mut self,
+        style: &SubtitleStyleConfig,
+        font_scale: f64,
+        play_res_height: u32,
+    ) {
+        let fonts_changed = self.configure_fonts(style);
+        let override_bits = self.configure_style_override(style, font_scale, play_res_height);
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "subtitle_font_fallback",
+                "stage": "configured",
+                "trackId": self.track_id,
+                "defaultFamily": self.default_family().to_string_lossy(),
+                "fontProvider": default_ass_font_provider(),
+                "customFontFile": style.font_file_path(),
+                "fontsChanged": fonts_changed,
+                "fontsGeneration": self.fonts_generation,
+                "overrideBits": override_bits,
             })
+            .to_string(),
+        );
+    }
+
+    /// Installs the style's font selection, skipping libass entirely when it is
+    /// already the one in effect. `ass_set_fonts` frees the font selector and
+    /// builds a new one, which re-parses every font the library holds (the
+    /// bundled fallback, every container attachment, every custom face) and
+    /// empties the font, metrics and bitmap caches — far too much work to repeat
+    /// on a viewport resize. Returns whether libass was reconfigured.
+    fn configure_fonts(&mut self, style: &SubtitleStyleConfig) -> bool {
+        if let Some(path) = style.font_file_path() {
+            self.load_custom_font_file(path);
         }
+        let selection = LibassFontSelection {
+            family: style
+                .font_family()
+                .and_then(|family| CString::new(family).ok())
+                .unwrap_or_else(|| default_ass_font_family_cstr().to_owned()),
+            default_font: style
+                .font_file_path()
+                .and_then(|path| CString::new(path).ok()),
+        };
+        if self.fonts.as_ref() == Some(&selection) {
+            return false;
+        }
+        unsafe {
+            libass_ffi::ass_set_fonts(
+                self.renderer.as_ptr(),
+                selection
+                    .default_font
+                    .as_ref()
+                    .map_or(std::ptr::null(), |path| path.as_ptr()),
+                selection.family.as_ptr(),
+                default_ass_font_provider(),
+                std::ptr::null(),
+                1,
+            );
+        }
+        self.fonts = Some(selection);
+        self.fonts_generation += 1;
+        true
+    }
+
+    /// Family libass falls back to, which is also the family the override style
+    /// requests. Valid once [`Self::configure_fonts`] has run.
+    fn default_family(&self) -> &CStr {
+        match self.fonts.as_ref() {
+            Some(fonts) => &fonts.family,
+            None => default_ass_font_family_cstr(),
+        }
+    }
+
+    /// Enables libass' selective style override when the user asked for their
+    /// font and colours to win over the script's own dialogue styles. Returns
+    /// the enabled bits so callers can report them.
+    fn configure_style_override(
+        &self,
+        style: &SubtitleStyleConfig,
+        font_scale: f64,
+        play_res_height: u32,
+    ) -> libc::c_int {
+        let family = self.default_family();
+        let bits = (style.override_mask & SUBTITLE_OVERRIDE_ALL) as libc::c_int;
+        if bits != 0 {
+            unsafe {
+                libass_ffi::ass_set_selective_style_override_enabled(self.renderer.as_ptr(), 0);
+            }
+            let mut override_style = libass_ffi::AssStyle {
+                name: ASS_OVERRIDE_STYLE_NAME.as_ptr().cast_mut(),
+                font_name: family.as_ptr().cast_mut(),
+                font_size: selective_override_metric(style.font_size, font_scale, play_res_height),
+                primary_colour: libass_style_color(style.primary_color_rgba),
+                secondary_colour: libass_style_color(style.primary_color_rgba),
+                outline_colour: libass_style_color(style.outline_color_rgba),
+                back_colour: libass_style_color(style.outline_color_rgba),
+                bold: i32::from(style.bold),
+                italic: i32::from(style.italic),
+                underline: i32::from(style.underline),
+                strike_out: i32::from(style.strike_out),
+                scale_x: style.scale_x_percent / 100.0,
+                scale_y: style.scale_y_percent / 100.0,
+                spacing: selective_override_metric(style.spacing, font_scale, play_res_height),
+                angle: 0.0,
+                border_style: style.border_style,
+                outline: selective_override_metric(
+                    style.outline_width,
+                    font_scale,
+                    play_res_height,
+                ),
+                shadow: selective_override_metric(style.shadow_depth, font_scale, play_res_height),
+                alignment: style.alignment,
+                margin_l: style.margin_left,
+                margin_r: style.margin_right,
+                margin_v: style.margin_vertical,
+                encoding: 1,
+                treat_fontname_as_pattern: 0,
+                blur: selective_override_metric(style.blur, font_scale, play_res_height),
+                justify: 0,
+            };
+            unsafe {
+                libass_ffi::ass_set_selective_style_override(
+                    self.renderer.as_ptr(),
+                    &mut override_style,
+                );
+            }
+        }
+        unsafe {
+            libass_ffi::ass_set_selective_style_override_enabled(self.renderer.as_ptr(), bits);
+        }
+        bits
+    }
+
+    /// Loads a user-selected font file once per runtime. libass copies the
+    /// bytes, so the buffer does not have to outlive the call.
+    fn load_custom_font_file(&mut self, path: &str) {
+        if self.loaded_font_files.contains(path) {
+            return;
+        }
+        let reject = |reason: &str, bytes: usize| {
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "subtitle_custom_font",
+                    "stage": "rejected",
+                    "trackId": self.track_id,
+                    "path": path,
+                    "bytes": bytes,
+                    "reason": reason,
+                })
+                .to_string(),
+            );
+        };
+        let data = match std::fs::read(path) {
+            Ok(data) => data,
+            Err(error) => {
+                reject(&error.to_string(), 0);
+                return;
+            }
+        };
+        let Ok(data_size) = libc::c_int::try_from(data.len()) else {
+            reject("custom font exceeds libass integer range", data.len());
+            return;
+        };
+        let name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(path);
+        let Ok(name) = CString::new(name) else {
+            reject("custom font name contains an interior NUL", data.len());
+            return;
+        };
+        unsafe {
+            libass_ffi::ass_add_font(
+                self.library.as_ptr(),
+                name.as_ptr(),
+                data.as_ptr().cast(),
+                data_size,
+            );
+        }
+        self.loaded_font_files.insert(path.to_string());
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "subtitle_custom_font",
+                "stage": "loaded",
+                "trackId": self.track_id,
+                "path": path,
+                "bytes": data.len(),
+            })
+            .to_string(),
+        );
     }
 }
 
@@ -859,13 +1297,22 @@ impl Drop for LibassRuntime {
 #[cfg(feature = "libass")]
 impl LibassSubtitleRenderer {
     pub fn from_ass_script(script: impl AsRef<[u8]>, config: LibassRenderConfig) -> Result<Self> {
+        Self::from_ass_script_with_style(script, config, &SubtitleStyleConfig::default())
+    }
+
+    pub fn from_ass_script_with_style(
+        script: impl AsRef<[u8]>,
+        config: LibassRenderConfig,
+        style: &SubtitleStyleConfig,
+    ) -> Result<Self> {
         let script = script.as_ref();
         if script.is_empty() {
             return Err(SubtitleError::Libass("ASS script is empty".to_string()));
         }
 
+        let style = style.clone().normalized();
         let mut script = script.to_vec();
-        let runtime = LibassRuntime::new(-1, &[], config)?;
+        let runtime = LibassRuntime::new(-1, &[], config, &style)?;
         unsafe {
             let Some(track) = NonNull::new(libass_ffi::ass_read_memory(
                 runtime.library.as_ptr(),
@@ -877,12 +1324,14 @@ impl LibassSubtitleRenderer {
                     "failed to parse ASS script with libass".to_string(),
                 ));
             };
-
             Ok(Self {
                 runtime,
                 track,
                 config,
                 font_scale: 1.0,
+                override_font_scale: 1.0,
+                play_res_height: 288,
+                style,
             })
         }
     }
@@ -891,6 +1340,20 @@ impl LibassSubtitleRenderer {
         track_id: i64,
         resources: &AssTrackResources,
         config: LibassRenderConfig,
+    ) -> Result<Self> {
+        Self::from_ass_track_with_style(
+            track_id,
+            resources,
+            config,
+            &SubtitleStyleConfig::default(),
+        )
+    }
+
+    pub fn from_ass_track_with_style(
+        track_id: i64,
+        resources: &AssTrackResources,
+        config: LibassRenderConfig,
+        style: &SubtitleStyleConfig,
     ) -> Result<Self> {
         if resources.codec_private.is_empty() {
             crate::trace::diagnostic(
@@ -909,7 +1372,8 @@ impl LibassSubtitleRenderer {
         let private_size = i32::try_from(resources.codec_private.len()).map_err(|_| {
             SubtitleError::Libass("ASS CodecPrivate exceeds libass integer range".to_string())
         })?;
-        let runtime = LibassRuntime::new(track_id, &resources.fonts, config)?;
+        let style = style.clone().normalized();
+        let runtime = LibassRuntime::new(track_id, &resources.fonts, config, &style)?;
         unsafe {
             let track = NonNull::new(libass_ffi::ass_new_track(runtime.library.as_ptr()))
                 .ok_or_else(|| SubtitleError::Libass("failed to allocate ASS track".to_string()))?;
@@ -935,6 +1399,9 @@ impl LibassSubtitleRenderer {
                 track,
                 config,
                 font_scale: 1.0,
+                override_font_scale: 1.0,
+                play_res_height: 288,
+                style,
             })
         }
     }
@@ -970,8 +1437,57 @@ impl LibassSubtitleRenderer {
         unsafe { libass_ffi::ass_flush_events(self.track.as_ptr()) };
     }
 
+    /// Sets the scale libass applies to the whole script, including whatever the
+    /// selective style override replaced. Applied straight from
+    /// [`SubtitleRenderer::render`], so it needs no reconfiguration here.
     pub fn set_font_scale(&mut self, scale: f64) {
         self.font_scale = normalize_ass_font_scale(scale);
+    }
+
+    /// Sets the scale folded into the override metrics, for the plain-text path
+    /// where the generated header bakes the scale into a style the override then
+    /// replaces outright. Leave it at `1.0` on tracks that carry their own
+    /// script, where [`Self::set_font_scale`] already covers the override.
+    pub fn set_override_font_scale(&mut self, scale: f64) {
+        let scale = normalize_ass_font_scale(scale);
+        if self.override_font_scale == scale {
+            return;
+        }
+        self.override_font_scale = scale;
+        self.runtime
+            .configure_style(&self.style, self.override_font_scale, self.play_res_height);
+    }
+
+    /// Height the override metrics are normalized against, which must be the
+    /// height the frame is rendered at — not the script's own `PlayResY`. libass
+    /// scales the override style by `PlayResY / 288`, and cancelling that against
+    /// the frame height is what makes the metrics land on the same pixels as the
+    /// non-override baseline whatever `PlayResY` a script declares.
+    pub fn set_play_res_height(&mut self, play_res_height: u32) {
+        let play_res_height = play_res_height.max(1);
+        if self.play_res_height == play_res_height {
+            return;
+        }
+        self.play_res_height = play_res_height;
+        self.runtime
+            .configure_style(&self.style, self.override_font_scale, self.play_res_height);
+    }
+
+    /// Re-applies the user font and colours. Cheap and idempotent: an unchanged
+    /// style skips libass entirely, so callers can push the current style on
+    /// every frame.
+    pub fn set_style(&mut self, style: &SubtitleStyleConfig) {
+        let style = style.clone().normalized();
+        if self.style == style {
+            return;
+        }
+        self.runtime
+            .configure_style(&style, self.override_font_scale, self.play_res_height);
+        self.style = style;
+    }
+
+    pub fn style(&self) -> &SubtitleStyleConfig {
+        &self.style
     }
 
     pub fn config(&self) -> LibassRenderConfig {
@@ -1459,14 +1975,14 @@ pub fn decoded_subtitle_frames_to_ass_script<'a>(
     decoded_subtitle_frames_to_ass_script_with_style(
         frames,
         fallback_end,
-        SubtitleAssStyle::default(),
+        &SubtitleAssStyle::default(),
     )
 }
 
 pub fn decoded_subtitle_frames_to_ass_script_with_style<'a>(
     frames: impl IntoIterator<Item = &'a DecodedSubtitleFrame>,
     fallback_end: Duration,
-    style: SubtitleAssStyle,
+    style: &SubtitleAssStyle,
 ) -> Option<String> {
     let mut events = String::new();
     for frame in frames {
@@ -1637,12 +2153,25 @@ fn escape_ass_text(value: &str) -> String {
 
 const DEFAULT_ASS_FONT_SIZE: f64 = 48.0;
 const DEFAULT_ASS_OUTLINE: f64 = 2.0;
-#[cfg(any(target_os = "ios", target_os = "android"))]
-const DEFAULT_ASS_FONT_FAMILY: &str = "Droid Sans Fallback";
+const MIN_ASS_FONT_SIZE: f64 = 8.0;
+const MAX_ASS_FONT_SIZE: f64 = 400.0;
+const MAX_ASS_OUTLINE: f64 = 32.0;
+
+/// Attachment name Erika registers the bundled `assets/subfont.ttf` under.
+const BUNDLED_ASS_FALLBACK_FONT_NAME: &str = "subfont.ttf";
+/// Family name carried by the bundled fallback face. Keep in sync with the
+/// asset itself; `bundled_ass_fallback_family_matches_asset` locks the two.
+const BUNDLED_ASS_FALLBACK_FONT_FAMILY: &str = "Droid Sans Fallback";
+
 #[cfg(target_os = "macos")]
 const DEFAULT_ASS_FONT_FAMILY: &str = "PingFang SC";
-#[cfg(not(any(target_os = "ios", target_os = "android", target_os = "macos")))]
+#[cfg(target_os = "windows")]
 const DEFAULT_ASS_FONT_FAMILY: &str = "Arial";
+// Every other target renders without a system font provider (mobile selects
+// `ASS_FONTPROVIDER_NONE`, and the vendored libass build has fontconfig
+// disabled), so the bundled fallback family is the only one libass resolves.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const DEFAULT_ASS_FONT_FAMILY: &str = BUNDLED_ASS_FALLBACK_FONT_FAMILY;
 
 #[cfg(feature = "libass")]
 fn default_ass_font_provider() -> libc::c_int {
@@ -1657,12 +2186,12 @@ fn default_ass_font_provider() -> libc::c_int {
 
 #[cfg(feature = "libass")]
 fn default_ass_font_family_cstr() -> &'static CStr {
-    if cfg!(any(target_os = "ios", target_os = "android")) {
+    if cfg!(target_os = "macos") {
         c"Droid Sans Fallback"
-    } else if cfg!(target_os = "macos") {
-        c"PingFang SC"
-    } else {
+    } else if cfg!(target_os = "windows") {
         c"Arial"
+    } else {
+        c"Droid Sans Fallback"
     }
 }
 
@@ -1771,21 +2300,47 @@ unsafe fn add_attached_ass_fonts(
     }
 }
 
-#[cfg(all(feature = "libass", any(target_os = "ios", target_os = "android")))]
-unsafe fn add_bundled_ass_fallback_font(library: *mut libass_ffi::AssLibrary) {
-    debug_assert!(NIPAPLAY_FALLBACK_FONT.len() <= libc::c_int::MAX as usize);
+/// Registers the bundled CJK-capable face so libass always has a last-resort
+/// family. Container attachments and system faces still win when they cover the
+/// requested family, but a script that names a font nobody has - or one that
+/// covers none of the codepoints in the line - falls back here instead of
+/// rendering nothing.
+#[cfg(feature = "libass")]
+unsafe fn add_bundled_ass_fallback_font(library: *mut libass_ffi::AssLibrary, track_id: i64) {
+    let Ok(data_size) = libc::c_int::try_from(NIPAPLAY_FALLBACK_FONT.len()) else {
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "subtitle_font_fallback",
+                "stage": "rejected",
+                "trackId": track_id,
+                "name": BUNDLED_ASS_FALLBACK_FONT_NAME,
+                "bytes": NIPAPLAY_FALLBACK_FONT.len(),
+                "reason": "bundled fallback font exceeds libass integer range",
+            })
+            .to_string(),
+        );
+        return;
+    };
     unsafe {
         libass_ffi::ass_add_font(
             library,
             c"subfont.ttf".as_ptr(),
             NIPAPLAY_FALLBACK_FONT.as_ptr().cast(),
-            NIPAPLAY_FALLBACK_FONT.len() as libc::c_int,
+            data_size,
         );
     }
+    crate::trace::diagnostic(
+        serde_json::json!({
+            "event": "subtitle_font_fallback",
+            "stage": "loaded",
+            "trackId": track_id,
+            "name": BUNDLED_ASS_FALLBACK_FONT_NAME,
+            "family": BUNDLED_ASS_FALLBACK_FONT_FAMILY,
+            "bytes": NIPAPLAY_FALLBACK_FONT.len(),
+        })
+        .to_string(),
+    );
 }
-
-#[cfg(all(feature = "libass", not(any(target_os = "ios", target_os = "android"))))]
-unsafe fn add_bundled_ass_fallback_font(_library: *mut libass_ffi::AssLibrary) {}
 
 fn normalize_ass_font_scale(scale: f64) -> f64 {
     if scale.is_finite() {
@@ -1793,6 +2348,35 @@ fn normalize_ass_font_scale(scale: f64) -> f64 {
     } else {
         1.0
     }
+}
+
+fn normalize_ass_metric(value: f64, default: f64, min: f64, max: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(min, max)
+    } else {
+        default
+    }
+}
+
+#[cfg(feature = "libass")]
+fn selective_override_metric(value: f64, font_scale: f64, play_res_height: u32) -> f64 {
+    value * normalize_ass_font_scale(font_scale) * 288.0 / f64::from(play_res_height.max(1))
+}
+
+/// Formats `0xRRGGBBAA` as an ASS `&HAABBGGRR` literal, where ASS' leading byte
+/// is transparency rather than alpha.
+fn ass_color_tag(rgba: u32) -> String {
+    let [red, green, blue, alpha] = rgba.to_be_bytes();
+    let transparency = 0xff - alpha;
+    format!("&H{transparency:02X}{blue:02X}{green:02X}{red:02X}")
+}
+
+/// Converts `0xRRGGBBAA` to the colour representation `ASS_Style` uses, which
+/// keeps RGB in the high bytes and stores transparency in the low byte.
+#[cfg(feature = "libass")]
+fn libass_style_color(rgba: u32) -> u32 {
+    let [red, green, blue, alpha] = rgba.to_be_bytes();
+    u32::from_be_bytes([red, green, blue, 0xff - alpha])
 }
 
 fn ass_number(value: f64) -> String {
@@ -1804,11 +2388,26 @@ fn ass_number(value: f64) -> String {
     }
 }
 
-fn default_ass_script_header(style: SubtitleAssStyle) -> String {
+fn default_ass_script_header(style: &SubtitleAssStyle) -> String {
     let scale = normalize_ass_font_scale(style.font_scale);
-    let font_size = ass_number(DEFAULT_ASS_FONT_SIZE * scale);
-    let outline = ass_number(DEFAULT_ASS_OUTLINE * scale);
-    let font_family = DEFAULT_ASS_FONT_FAMILY;
+    let metrics = style.style.clone().normalized();
+    let font_size = ass_number(metrics.font_size * scale);
+    let outline = ass_number(metrics.outline_width * scale);
+    let shadow = ass_number(metrics.shadow_depth * scale);
+    let spacing = ass_number(metrics.spacing * scale);
+    let scale_x = ass_number(metrics.scale_x_percent);
+    let scale_y = ass_number(metrics.scale_y_percent);
+    let bold = i32::from(metrics.bold) * -1;
+    let italic = i32::from(metrics.italic) * -1;
+    let underline = i32::from(metrics.underline) * -1;
+    let strike_out = i32::from(metrics.strike_out) * -1;
+    let font_family = style
+        .style
+        .font_family()
+        .unwrap_or(DEFAULT_ASS_FONT_FAMILY)
+        .to_string();
+    let primary_color = ass_color_tag(style.style.primary_color_rgba);
+    let outline_color = ass_color_tag(style.style.outline_color_rgba);
     let play_res_width = style.play_res_width.max(1);
     let play_res_height = style.play_res_height.max(1);
     format!(
@@ -1819,11 +2418,16 @@ PlayResY: {play_res_height}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_family},{font_size},&H00FFFFFF,&H000000FF,&H80000000,&H80000000,0,0,0,0,100,100,0,0,1,{outline},0,2,48,48,54,1
+Style: Default,{font_family},{font_size},{primary_color},&H000000FF,{outline_color},{outline_color},{bold},{italic},{underline},{strike_out},{scale_x},{scale_y},{spacing},0,{border_style},{outline},{shadow},{alignment},{margin_left},{margin_right},{margin_vertical},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"#
+"#,
+        border_style = metrics.border_style,
+        alignment = metrics.alignment,
+        margin_left = metrics.margin_left,
+        margin_right = metrics.margin_right,
+        margin_vertical = metrics.margin_vertical,
     )
 }
 
@@ -1957,6 +2561,40 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     }
 
     #[test]
+    fn subtitle_file_format_ignores_query_strings_and_fragments() {
+        assert_eq!(
+            SubtitleFileFormat::from_uri("https://host/sub.srt?token=abc&x=1"),
+            Some(SubtitleFileFormat::Srt)
+        );
+        assert_eq!(
+            SubtitleFileFormat::from_uri("https://host/sub.ass#cue3"),
+            Some(SubtitleFileFormat::Ass)
+        );
+        // A dot inside the query must not be mistaken for the extension.
+        assert_eq!(
+            SubtitleFileFormat::from_uri("https://host/sub.vtt?sig=a.b.c"),
+            Some(SubtitleFileFormat::WebVtt)
+        );
+        assert_eq!(
+            SubtitleFileFormat::from_uri("https://host/sub.sup?t=1"),
+            None
+        );
+    }
+
+    #[test]
+    fn subtitle_path_extension_reads_the_last_segment_only() {
+        assert_eq!(subtitle_path_extension("/tmp/movie.en.srt"), Some("srt"));
+        assert_eq!(subtitle_path_extension("C:\\media\\movie.ass"), Some("ass"));
+        // A dot in a parent directory is not an extension.
+        assert_eq!(subtitle_path_extension("/media/season.1/subs"), None);
+        // Android hands us an fd URI that names no file at all.
+        assert_eq!(
+            subtitle_path_extension(uri_path_component("fd://42?offset=0&length=99")),
+            None
+        );
+    }
+
+    #[test]
     fn bitmap_plane_scales_from_subtitle_canvas_to_video_viewport() {
         let plane = SubtitleBitmapPlane::new(800, 905, 322, 60, Vec::new()).with_canvas(1920, 1080);
 
@@ -2015,7 +2653,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         let script = decoded_subtitle_frames_to_ass_script_with_style(
             [&frame],
             Duration::from_secs(5),
-            SubtitleAssStyle {
+            &SubtitleAssStyle {
                 font_scale: 1.5,
                 ..SubtitleAssStyle::default()
             },
@@ -2040,7 +2678,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         let script = decoded_subtitle_frames_to_ass_script_with_style(
             [&frame],
             Duration::from_secs(5),
-            SubtitleAssStyle {
+            &SubtitleAssStyle {
                 play_res_width: 1920,
                 play_res_height: 816,
                 ..SubtitleAssStyle::default()
@@ -2443,6 +3081,440 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert!(
             seen.iter()
                 .any(|message| message.contains("no style named"))
+        );
+    }
+
+    #[test]
+    fn default_subtitle_style_keeps_the_built_in_ass_colors() {
+        let header = default_ass_script_header(&SubtitleAssStyle::default());
+
+        assert!(header.contains(&format!(
+            "Style: Default,{DEFAULT_ASS_FONT_FAMILY},48,&H00FFFFFF,&H000000FF,&H80000000,&H80000000,"
+        )));
+    }
+
+    #[test]
+    fn subtitle_style_config_drives_the_generated_script_header() {
+        let style = SubtitleAssStyle {
+            style: SubtitleStyleConfig {
+                font_family: "  Erika Sans  ".to_string(),
+                primary_color_rgba: 0xff00_00ff,
+                outline_color_rgba: 0x0000_ff80,
+                ..SubtitleStyleConfig::default()
+            },
+            ..SubtitleAssStyle::default()
+        };
+
+        let header = default_ass_script_header(&style);
+
+        // Family is trimmed, and 0xRRGGBBAA becomes ASS' &HAABBGGRR with the
+        // leading byte carrying transparency instead of alpha.
+        assert!(header.contains("Style: Default,Erika Sans,48,&H000000FF,&H000000FF,&H7FFF0000,"));
+    }
+
+    #[test]
+    fn subtitle_style_config_drives_font_size_and_outline_width() {
+        let style = SubtitleAssStyle {
+            font_scale: 1.5,
+            style: SubtitleStyleConfig {
+                font_size: 30.0,
+                outline_width: 4.0,
+                ..SubtitleStyleConfig::default()
+            },
+            ..SubtitleAssStyle::default()
+        };
+
+        let header = default_ass_script_header(&style);
+
+        // Both metrics are multiplied by the viewer's subtitle scale.
+        assert!(header.contains(&format!("Style: Default,{DEFAULT_ASS_FONT_FAMILY},45,")));
+        assert!(header.contains(",1,6,0,2,48,48,54,1"));
+    }
+
+    #[test]
+    fn subtitle_style_config_drives_extended_ass_style_fields() {
+        let style = SubtitleAssStyle {
+            font_scale: 1.5,
+            style: SubtitleStyleConfig {
+                bold: true,
+                italic: true,
+                underline: true,
+                strike_out: true,
+                spacing: 2.0,
+                scale_x_percent: 90.0,
+                scale_y_percent: 110.0,
+                border_style: 3,
+                shadow_depth: 4.0,
+                alignment: 8,
+                margin_left: 12,
+                margin_right: 34,
+                margin_vertical: 56,
+                ..SubtitleStyleConfig::default()
+            },
+            ..SubtitleAssStyle::default()
+        };
+
+        let header = default_ass_script_header(&style);
+
+        assert!(header.contains(",-1,-1,-1,-1,90,110,3,0,3,3,6,8,12,34,56,1"));
+    }
+
+    #[test]
+    fn subtitle_style_config_clamps_metrics_and_rejects_non_finite() {
+        let clamped = SubtitleStyleConfig {
+            font_size: 10_000.0,
+            outline_width: -5.0,
+            ..SubtitleStyleConfig::default()
+        }
+        .normalized();
+        assert_eq!(clamped.font_size, MAX_ASS_FONT_SIZE);
+        assert_eq!(clamped.outline_width, 0.0);
+
+        let restored = SubtitleStyleConfig {
+            font_size: f64::NAN,
+            outline_width: f64::INFINITY,
+            ..SubtitleStyleConfig::default()
+        }
+        .normalized();
+        assert_eq!(restored.font_size, DEFAULT_SUBTITLE_FONT_SIZE);
+        assert_eq!(restored.outline_width, DEFAULT_SUBTITLE_OUTLINE_WIDTH);
+
+        let extended = SubtitleStyleConfig {
+            spacing: f64::NAN,
+            scale_x_percent: 0.0,
+            scale_y_percent: 10_000.0,
+            border_style: 2,
+            shadow_depth: f64::INFINITY,
+            blur: -1.0,
+            alignment: 10,
+            margin_left: -1,
+            margin_right: 20_000,
+            margin_vertical: -5,
+            override_mask: u32::MAX,
+            ..SubtitleStyleConfig::default()
+        }
+        .normalized();
+        assert_eq!(extended.spacing, 0.0);
+        assert_eq!(extended.scale_x_percent, 1.0);
+        assert_eq!(extended.scale_y_percent, 1000.0);
+        assert_eq!(extended.border_style, 1);
+        assert_eq!(extended.shadow_depth, 0.0);
+        assert_eq!(extended.blur, 0.0);
+        assert_eq!(extended.alignment, 2);
+        assert_eq!(extended.margin_left, 0);
+        assert_eq!(extended.margin_right, 10_000);
+        assert_eq!(extended.margin_vertical, 0);
+        assert_eq!(extended.override_mask, SUBTITLE_OVERRIDE_ALL);
+    }
+
+    #[test]
+    fn subtitle_override_masks_match_libass_selective_bits() {
+        assert_eq!(SUBTITLE_OVERRIDE_LEGACY_FORCE, 0x005c);
+        assert_eq!(SUBTITLE_OVERRIDE_ALL, 0x09fc);
+    }
+
+    #[test]
+    fn ass_color_tag_inverts_alpha_and_reverses_rgb() {
+        assert_eq!(ass_color_tag(0xffff_ffff), "&H00FFFFFF");
+        assert_eq!(ass_color_tag(0x0000_007f), "&H80000000");
+        assert_eq!(ass_color_tag(0x1234_5600), "&HFF563412");
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_style_color_moves_alpha_into_the_transparency_byte() {
+        assert_eq!(libass_style_color(0xffff_ffff), 0xffff_ff00);
+        assert_eq!(libass_style_color(0xff00_0000), 0xff00_00ff);
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn selective_override_metrics_cancel_libass_play_res_normalization() {
+        assert_eq!(selective_override_metric(48.0, 1.0, 288), 48.0);
+        assert_eq!(selective_override_metric(48.0, 1.0, 720), 19.2);
+        assert_eq!(selective_override_metric(48.0, 1.0, 1080), 12.8);
+        assert_eq!(selective_override_metric(48.0, 1.5, 1080), 19.2);
+        assert_eq!(selective_override_metric(2.0, 1.5, 1080), 0.8);
+    }
+
+    #[test]
+    fn bundled_ass_fallback_family_matches_asset() {
+        let mut database = fontdb::Database::new();
+        database.load_font_data(crate::NIPAPLAY_FALLBACK_FONT.to_vec());
+        let families = database
+            .faces()
+            .flat_map(|face| face.families.iter().map(|(family, _)| family.clone()))
+            .collect::<Vec<_>>();
+
+        assert!(
+            families
+                .iter()
+                .any(|family| family == BUNDLED_ASS_FALLBACK_FONT_FAMILY),
+            "bundled fallback font families {families:?} must contain {BUNDLED_ASS_FALLBACK_FONT_FAMILY}"
+        );
+        assert!(BUNDLED_ASS_FALLBACK_FONT_NAME.ends_with(".ttf"));
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn default_ass_font_family_matches_platform_fallback_policy() {
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            default_ass_font_family_cstr().to_str().unwrap(),
+            BUNDLED_ASS_FALLBACK_FONT_FAMILY
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            default_ass_font_family_cstr().to_str().unwrap(),
+            DEFAULT_ASS_FONT_FAMILY
+        );
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_forced_override_repaints_dialogue_in_the_configured_color() {
+        let request = SubtitleRenderRequest::new(Duration::from_millis(500), 640, 360);
+        let red = |bitmaps: &SubtitleBitmapSet| {
+            bitmaps.parts.iter().any(|part| {
+                let color = AssColor::from_libass_rgba(part.color_rgba);
+                color.red == 0xff && color.green == 0 && color.blue == 0
+            })
+        };
+
+        // The script paints white; a fallback-only style must not touch it.
+        let mut renderer = LibassSubtitleRenderer::from_ass_script(
+            SIMPLE_ASS_SCRIPT,
+            LibassRenderConfig::default(),
+        )
+        .unwrap();
+        let style = SubtitleStyleConfig {
+            primary_color_rgba: 0xff00_00ff,
+            ..SubtitleStyleConfig::default()
+        };
+        renderer.set_style(&style);
+        let SubtitleRenderOutput::Alpha(fallback) = renderer.render(request).unwrap() else {
+            panic!("libass renderer should produce alpha bitmap output");
+        };
+        assert!(!fallback.parts.is_empty());
+        assert!(
+            !red(&fallback),
+            "colors must stay a fallback until the color override bit is set"
+        );
+
+        renderer.set_style(&SubtitleStyleConfig {
+            override_mask: SUBTITLE_OVERRIDE_COLORS,
+            ..style
+        });
+        let SubtitleRenderOutput::Alpha(overridden) = renderer.render(request).unwrap() else {
+            panic!("libass renderer should produce alpha bitmap output");
+        };
+        assert!(red(&overridden), "forced override must repaint dialogue");
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_forced_override_uses_viewport_sized_metrics() {
+        let request = SubtitleRenderRequest::new(Duration::from_millis(500), 1920, 1080);
+        let tallest = |bitmaps: &SubtitleBitmapSet| {
+            bitmaps
+                .parts
+                .iter()
+                .map(|part| part.placement.height)
+                .max()
+                .unwrap_or(0)
+        };
+
+        let style = SubtitleStyleConfig {
+            font_size: 48.0,
+            outline_width: 2.0,
+            override_mask: SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS | SUBTITLE_OVERRIDE_BORDER,
+            ..SubtitleStyleConfig::default()
+        };
+        let mut heights = Vec::new();
+        for font_scale in [1.0, 1.5, 2.0] {
+            let mut renderer = LibassSubtitleRenderer::from_ass_script_with_style(
+                SIMPLE_ASS_SCRIPT,
+                LibassRenderConfig::default(),
+                &style,
+            )
+            .unwrap();
+            renderer.set_override_font_scale(font_scale);
+            renderer.set_play_res_height(1080);
+            let SubtitleRenderOutput::Alpha(overridden) = renderer.render(request).unwrap() else {
+                panic!("libass renderer should produce alpha bitmap output");
+            };
+
+            heights.push(tallest(&overridden));
+        }
+        assert!(heights[0] < heights[1]);
+        assert!(heights[1] < heights[2]);
+        assert!(heights[0] < 80);
+    }
+
+    /// `ass_set_fonts` rebuilds libass' font selector, re-parsing every font the
+    /// library holds. Metric-only changes arrive from the render path on every
+    /// resize and every scale tweak, so they must not reach it.
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_rebuilds_the_font_selector_only_when_the_font_selection_changes() {
+        let style = SubtitleStyleConfig {
+            override_mask: SUBTITLE_OVERRIDE_ALL,
+            ..SubtitleStyleConfig::default()
+        };
+        let mut renderer = LibassSubtitleRenderer::from_ass_script_with_style(
+            SIMPLE_ASS_SCRIPT,
+            LibassRenderConfig::default(),
+            &style,
+        )
+        .unwrap();
+        let installed = renderer.runtime.fonts_generation;
+        assert_eq!(
+            installed, 1,
+            "construction installs the font selection once"
+        );
+
+        renderer.set_play_res_height(1080);
+        renderer.set_play_res_height(720);
+        renderer.set_override_font_scale(1.5);
+        renderer.set_font_scale(2.0);
+        renderer.set_style(&SubtitleStyleConfig {
+            font_size: 64.0,
+            primary_color_rgba: 0xff00_00ff,
+            margin_vertical: 96,
+            ..style.clone()
+        });
+        assert_eq!(
+            renderer.runtime.fonts_generation, installed,
+            "metric and colour changes must not rebuild the font selector"
+        );
+
+        // A family that differs from every platform's default fallback.
+        renderer.set_style(&SubtitleStyleConfig {
+            font_family: "Erika Override Family".to_string(),
+            ..style
+        });
+        assert_eq!(
+            renderer.runtime.fonts_generation,
+            installed + 1,
+            "a new family must reach libass"
+        );
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_loads_a_custom_font_file_for_the_configured_family() {
+        // Keep the name unique so concurrent test runs cannot clobber each other.
+        let path = std::env::temp_dir().join(format!(
+            "erika_subtitle_custom_font_{}.ttf",
+            std::process::id()
+        ));
+        std::fs::write(&path, crate::NIPAPLAY_FALLBACK_FONT).unwrap();
+
+        let style = SubtitleStyleConfig {
+            font_family: BUNDLED_ASS_FALLBACK_FONT_FAMILY.to_string(),
+            font_file_path: path.to_string_lossy().to_string(),
+            ..SubtitleStyleConfig::default()
+        };
+        let mut renderer = LibassSubtitleRenderer::from_ass_script_with_style(
+            SIMPLE_ASS_SCRIPT,
+            LibassRenderConfig::default(),
+            &style,
+        )
+        .unwrap();
+
+        assert_eq!(renderer.style(), &style);
+        assert!(
+            renderer
+                .runtime
+                .loaded_font_files
+                .contains(&style.font_file_path)
+        );
+        let SubtitleRenderOutput::Alpha(bitmaps) = renderer
+            .render(SubtitleRenderRequest::new(
+                Duration::from_millis(500),
+                640,
+                360,
+            ))
+            .unwrap()
+        else {
+            panic!("libass renderer should produce alpha bitmap output");
+        };
+        assert!(!bitmaps.parts.is_empty());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_rejects_a_missing_custom_font_file_without_failing_the_renderer() {
+        let style = SubtitleStyleConfig {
+            font_file_path: "/erika/no/such/font.ttf".to_string(),
+            ..SubtitleStyleConfig::default()
+        };
+        let mut renderer = LibassSubtitleRenderer::from_ass_script_with_style(
+            SIMPLE_ASS_SCRIPT,
+            LibassRenderConfig::default(),
+            &style,
+        )
+        .unwrap();
+
+        assert!(renderer.runtime.loaded_font_files.is_empty());
+        let SubtitleRenderOutput::Alpha(bitmaps) = renderer
+            .render(SubtitleRenderRequest::new(
+                Duration::from_millis(500),
+                640,
+                360,
+            ))
+            .unwrap()
+        else {
+            panic!("libass renderer should produce alpha bitmap output");
+        };
+        assert!(!bitmaps.parts.is_empty());
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_falls_back_to_bundled_font_for_unavailable_family() {
+        const MISSING_FONT_ASS_SCRIPT: &str = r#"[Script Info]
+ScriptType: v4.00+
+PlayResX: 640
+PlayResY: 360
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Erika No Such Font 9c1f,32,&H00FFFFFF,&H000000FF,&H80000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,2,20,20,24,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,中文字幕 fallback
+"#;
+
+        let mut renderer = LibassSubtitleRenderer::from_ass_script(
+            MISSING_FONT_ASS_SCRIPT,
+            LibassRenderConfig::default(),
+        )
+        .unwrap();
+        let SubtitleRenderOutput::Alpha(bitmaps) = renderer
+            .render(SubtitleRenderRequest::new(
+                Duration::from_millis(500),
+                640,
+                360,
+            ))
+            .unwrap()
+        else {
+            panic!("libass renderer should produce alpha bitmap output");
+        };
+
+        assert!(
+            !bitmaps.parts.is_empty(),
+            "an unavailable style font must still rasterize through the bundled fallback"
+        );
+        let seen = renderer.runtime._log_context.seen.lock().unwrap();
+        assert!(
+            !seen.iter().any(|message| message
+                .to_ascii_lowercase()
+                .contains("failed to find any fallback")),
+            "libass reported no usable fallback font: {seen:?}"
         );
     }
 }

@@ -151,6 +151,9 @@ private struct ErikaTrackInfoC {
   var sampleFormat: UnsafeMutablePointer<CChar>?
   var profile: UnsafeMutablePointer<CChar>?
   var level: Int32 = 0
+  var bitRate: UInt64 = 0
+  var frameRateNumerator: UInt32 = 0
+  var frameRateDenominator: UInt32 = 0
 }
 
 private struct ErikaPresenterConfigC {
@@ -162,6 +165,30 @@ private struct ErikaPresenterConfigC {
   static func appleEdr(headroom: Float) -> ErikaPresenterConfigC {
     ErikaPresenterConfigC(outputMode: 1, edrHeadroom: max(1.0, headroom))
   }
+}
+
+private struct ErikaSubtitleStyleC {
+  var fontFamily: UnsafePointer<CChar>?
+  var fontFilePath: UnsafePointer<CChar>?
+  var primaryColorRgba: UInt32
+  var outlineColorRgba: UInt32
+  var fontSize: Double
+  var outlineWidth: Double
+  var bold: Bool
+  var italic: Bool
+  var underline: Bool
+  var strikeOut: Bool
+  var spacing: Double
+  var scaleXPercent: Double
+  var scaleYPercent: Double
+  var borderStyle: Int32
+  var shadowDepth: Double
+  var blur: Double
+  var alignment: Int32
+  var marginLeft: Int32
+  var marginRight: Int32
+  var marginVertical: Int32
+  var overrideMask: UInt32
 }
 
 private struct ErikaHttpHeader {
@@ -336,6 +363,15 @@ private final class ErikaNativeLibrary {
   typealias SetVolumeFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
   typealias SetUpscalerFn = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Int32
   typealias SetSubtitleScaleFn = @convention(c) (UnsafeMutableRawPointer?, Double) -> Int32
+  typealias SetSubtitleFontFn = @convention(c) (
+    UnsafeMutableRawPointer?,
+    UnsafePointer<CChar>?,
+    UnsafePointer<CChar>?
+  ) -> Int32
+  typealias SetSubtitleStyleFn = @convention(c) (
+    UnsafeMutableRawPointer?,
+    UnsafeRawPointer?
+  ) -> Int32
   typealias GetUpscalerStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias GetOutputStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias SelectTrackFn = @convention(c) (UnsafeMutableRawPointer?, Int64) -> Int32
@@ -355,6 +391,7 @@ private final class ErikaNativeLibrary {
   ) -> Int32
   typealias ClearDanmakuFn = @convention(c) (UnsafeMutableRawPointer?) -> Int32
   typealias SetDanmakuEnabledFn = @convention(c) (UnsafeMutableRawPointer?, Bool) -> Int32
+  typealias SetDebugHudEnabledFn = @convention(c) (UnsafeMutableRawPointer?, Bool) -> Int32
   typealias SetDanmakuConfigFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeRawPointer?) -> Int32
   typealias GetDanmakuConfigFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias SetDanmakuFontFn = @convention(c) (
@@ -381,6 +418,8 @@ private final class ErikaNativeLibrary {
   typealias RenderTickFn = @convention(c) (UnsafeMutableRawPointer?, Double, UnsafeMutableRawPointer?) -> Int32
   typealias CaptureFrameRgbaFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, UnsafeMutableRawPointer?, Int) -> Int32
   typealias PollEventFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
+  typealias LastErrorMessageFn = @convention(c) () -> UnsafeMutablePointer<CChar>?
+  typealias StringFreeFn = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
 
   static let shared = try? ErikaNativeLibrary()
 
@@ -398,6 +437,8 @@ private final class ErikaNativeLibrary {
   let setVolume: SetVolumeFn?
   let setUpscaler: SetUpscalerFn?
   let setSubtitleScale: SetSubtitleScaleFn?
+  let setSubtitleFont: SetSubtitleFontFn?
+  let setSubtitleStyle: SetSubtitleStyleFn?
   let getUpscalerStatus: GetUpscalerStatusFn?
   let getOutputStatus: GetOutputStatusFn?
   let selectAudioTrack: SelectTrackFn
@@ -415,6 +456,7 @@ private final class ErikaNativeLibrary {
   let danmakuTracks: TracksFn?
   let clearDanmaku: ClearDanmakuFn?
   let setDanmakuEnabled: SetDanmakuEnabledFn?
+  let setDebugHudEnabled: SetDebugHudEnabledFn?
   let setDanmakuConfig: SetDanmakuConfigFn?
   let getDanmakuConfig: GetDanmakuConfigFn?
   let setDanmakuFont: SetDanmakuFontFn?
@@ -429,6 +471,8 @@ private final class ErikaNativeLibrary {
   let renderTick: RenderTickFn
   let captureFrameRgba: CaptureFrameRgbaFn?
   let pollEvent: PollEventFn
+  let lastErrorMessage: LastErrorMessageFn
+  let stringFree: StringFreeFn
 
   private let libraryHandle: UnsafeMutableRawPointer
 
@@ -450,6 +494,8 @@ private final class ErikaNativeLibrary {
     setVolume = Self.loadOptional("erika_presenter_set_volume", from: libraryHandle, as: SetVolumeFn.self)
     setUpscaler = Self.loadOptional("erika_presenter_set_upscaler", from: libraryHandle, as: SetUpscalerFn.self)
     setSubtitleScale = Self.loadOptional("erika_presenter_set_subtitle_scale", from: libraryHandle, as: SetSubtitleScaleFn.self)
+    setSubtitleFont = Self.loadOptional("erika_presenter_set_subtitle_font", from: libraryHandle, as: SetSubtitleFontFn.self)
+    setSubtitleStyle = Self.loadOptional("erika_presenter_set_subtitle_style", from: libraryHandle, as: SetSubtitleStyleFn.self)
     getUpscalerStatus = Self.loadOptional("erika_presenter_get_upscaler_status", from: libraryHandle, as: GetUpscalerStatusFn.self)
     getOutputStatus = Self.loadOptional("erika_presenter_get_output_status", from: libraryHandle, as: GetOutputStatusFn.self)
     selectAudioTrack = try Self.load("erika_presenter_select_audio_track", from: libraryHandle, as: SelectTrackFn.self)
@@ -467,6 +513,7 @@ private final class ErikaNativeLibrary {
     danmakuTracks = Self.loadOptional("erika_presenter_danmaku_tracks", from: libraryHandle, as: TracksFn.self)
     clearDanmaku = Self.loadOptional("erika_presenter_clear_danmaku", from: libraryHandle, as: ClearDanmakuFn.self)
     setDanmakuEnabled = Self.loadOptional("erika_presenter_set_danmaku_enabled", from: libraryHandle, as: SetDanmakuEnabledFn.self)
+    setDebugHudEnabled = Self.loadOptional("erika_presenter_set_debug_hud_enabled", from: libraryHandle, as: SetDebugHudEnabledFn.self)
     setDanmakuConfig = Self.loadOptional("erika_presenter_set_danmaku_config_ptr", from: libraryHandle, as: SetDanmakuConfigFn.self)
     getDanmakuConfig = Self.loadOptional("erika_presenter_get_danmaku_config", from: libraryHandle, as: GetDanmakuConfigFn.self)
     setDanmakuFont = Self.loadOptional("erika_presenter_set_danmaku_font", from: libraryHandle, as: SetDanmakuFontFn.self)
@@ -481,6 +528,8 @@ private final class ErikaNativeLibrary {
     renderTick = try Self.load("erika_presenter_render_tick", from: libraryHandle, as: RenderTickFn.self)
     captureFrameRgba = Self.loadOptional("erika_presenter_capture_frame_rgba", from: libraryHandle, as: CaptureFrameRgbaFn.self)
     pollEvent = try Self.load("erika_presenter_poll_event", from: libraryHandle, as: PollEventFn.self)
+    lastErrorMessage = try Self.load("erika_last_error_message", from: libraryHandle, as: LastErrorMessageFn.self)
+    stringFree = try Self.load("erika_string_free", from: libraryHandle, as: StringFreeFn.self)
   }
 
   deinit {
@@ -594,6 +643,14 @@ private final class ErikaNativeLibrary {
     }
     return create()
   }
+
+  func currentEventMessage() -> String? {
+    guard let pointer = lastErrorMessage() else {
+      return nil
+    }
+    defer { stringFree(pointer) }
+    return String(validatingUTF8: pointer)
+  }
 }
 
 private final class ErikaPlayerHost {
@@ -700,6 +757,77 @@ private final class ErikaPlayerHost {
     }
     let clampedScale = scale.isFinite ? min(max(scale, 0.25), 4.0) : 1.0
     try check(setSubtitleScale(handle, clampedScale), operation: "set_subtitle_scale")
+  }
+
+  func setSubtitleFont(family: String?, filePath: String?) throws {
+    guard let setSubtitleFont = library.setSubtitleFont else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_set_subtitle_font")
+    }
+    let status = withOptionalCString(family ?? "") { familyCString in
+      withOptionalCString(filePath ?? "") { filePathCString in
+        setSubtitleFont(handle, familyCString, filePathCString)
+      }
+    }
+    try check(status, operation: "set_subtitle_font")
+  }
+
+  func setSubtitleStyle(
+    fontFamily: String?,
+    fontFilePath: String?,
+    primaryRgba: UInt32,
+    outlineRgba: UInt32,
+    fontSize: Double,
+    outlineWidth: Double,
+    bold: Bool,
+    italic: Bool,
+    underline: Bool,
+    strikeOut: Bool,
+    spacing: Double,
+    scaleXPercent: Double,
+    scaleYPercent: Double,
+    borderStyle: Int32,
+    shadowDepth: Double,
+    blur: Double,
+    alignment: Int32,
+    marginLeft: Int32,
+    marginRight: Int32,
+    marginVertical: Int32,
+    overrideMask: UInt32
+  ) throws {
+    guard let setSubtitleStyle = library.setSubtitleStyle else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_set_subtitle_style")
+    }
+    let status = withOptionalCString(fontFamily ?? "") { fontFamilyCString in
+      withOptionalCString(fontFilePath ?? "") { fontFilePathCString in
+        var style = ErikaSubtitleStyleC(
+          fontFamily: fontFamilyCString,
+          fontFilePath: fontFilePathCString,
+          primaryColorRgba: primaryRgba,
+          outlineColorRgba: outlineRgba,
+          fontSize: fontSize,
+          outlineWidth: outlineWidth,
+          bold: bold,
+          italic: italic,
+          underline: underline,
+          strikeOut: strikeOut,
+          spacing: spacing,
+          scaleXPercent: scaleXPercent,
+          scaleYPercent: scaleYPercent,
+          borderStyle: borderStyle,
+          shadowDepth: shadowDepth,
+          blur: blur,
+          alignment: alignment,
+          marginLeft: marginLeft,
+          marginRight: marginRight,
+          marginVertical: marginVertical,
+          overrideMask: overrideMask
+        )
+        return withUnsafePointer(to: &style) { pointer in
+          setSubtitleStyle(handle, UnsafeRawPointer(pointer))
+        }
+      }
+    }
+    try check(status, operation: "set_subtitle_style")
   }
 
   func upscalerStatus() throws -> [String: Any] {
@@ -861,6 +989,13 @@ private final class ErikaPlayerHost {
     }
     try check(setEnabled(handle, enabled), operation: "set_danmaku_enabled")
     currentDanmakuConfig.enabled = enabled ? 1 : 0
+  }
+
+  func setDebugHudEnabled(_ enabled: Bool) throws {
+    guard let setEnabled = library.setDebugHudEnabled else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_set_debug_hud_enabled")
+    }
+    try check(setEnabled(handle, enabled), operation: "set_debug_hud_enabled")
   }
 
   func danmakuConfigSnapshot() -> ErikaDanmakuConfigC {
@@ -1058,7 +1193,10 @@ private final class ErikaPlayerHost {
         library.pollEvent(handle, UnsafeMutableRawPointer(pointer))
       }
       if status == 0 {
-        sendEvent(event.toFlutterMap(playerId: id, host: self))
+        let message = event.kind == 9 || event.kind == 11 || event.kind == 12
+          ? library.currentEventMessage()
+          : nil
+        sendEvent(event.toFlutterMap(playerId: id, host: self, structuredMessage: message))
         continue
       }
       if status != 5 {
@@ -1224,7 +1362,11 @@ private final class ErikaPlayerHost {
 }
 
 private extension ErikaEventC {
-  func toFlutterMap(playerId: Int64, host: ErikaPlayerHost? = nil) -> [String: Any] {
+  func toFlutterMap(
+    playerId: Int64,
+    host: ErikaPlayerHost? = nil,
+    structuredMessage: String? = nil
+  ) -> [String: Any] {
     var map: [String: Any] = [
       "playerId": playerId,
       "kind": Int(kind),
@@ -1252,6 +1394,17 @@ private extension ErikaEventC {
         "audio": -1,
         "subtitle": -1,
       ]
+    }
+    if let structuredMessage,
+       let data = structuredMessage.data(using: .utf8),
+       let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+      if kind == 11 {
+        map["decoder"] = payload
+      } else if kind == 12 {
+        map["audio"] = payload
+      } else if kind == 9 {
+        map["error"] = structuredMessage
+      }
     }
     return map
   }
@@ -1360,6 +1513,9 @@ private extension ErikaTrackInfoC {
       "sampleFormat": sampleFormat.map { String(cString: $0) } as Any,
       "profile": profile.map { String(cString: $0) } as Any,
       "level": Int(level),
+      "bitRate": Int64(clamping: bitRate),
+      "frameRateNumerator": Int(frameRateNumerator),
+      "frameRateDenominator": Int(frameRateDenominator),
     ]
   }
 }
@@ -1780,6 +1936,53 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         }
         try host.setSubtitleScale(scale)
         result(nil)
+      case "setSubtitleStyle":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        if args.keys.contains("fontFamily") || args.keys.contains("fontFilePath") {
+          try host.setSubtitleFont(
+            family: args["fontFamily"] as? String,
+            filePath: args["fontFilePath"] as? String
+          )
+        }
+        if args.keys.contains("primaryColorRgba") || args.keys.contains("outlineColorRgba")
+          || args.keys.contains("fontSize") || args.keys.contains("outlineWidth")
+          || args.keys.contains("bold") || args.keys.contains("italic")
+          || args.keys.contains("underline") || args.keys.contains("strikeOut")
+          || args.keys.contains("spacing") || args.keys.contains("scaleXPercent")
+          || args.keys.contains("scaleYPercent") || args.keys.contains("borderStyle")
+          || args.keys.contains("shadowDepth") || args.keys.contains("blur")
+          || args.keys.contains("alignment") || args.keys.contains("marginLeft")
+          || args.keys.contains("marginRight") || args.keys.contains("marginVertical")
+          || args.keys.contains("overrideMask")
+        {
+          let primary = int64Value(args["primaryColorRgba"]) ?? 0xFFFF_FFFF
+          let outline = int64Value(args["outlineColorRgba"]) ?? 0x0000_007F
+          try host.setSubtitleStyle(
+            fontFamily: args["fontFamily"] as? String,
+            fontFilePath: args["fontFilePath"] as? String,
+            primaryRgba: UInt32(truncatingIfNeeded: primary),
+            outlineRgba: UInt32(truncatingIfNeeded: outline),
+            fontSize: doubleValue(args["fontSize"]) ?? 48.0,
+            outlineWidth: doubleValue(args["outlineWidth"]) ?? 2.0,
+            bold: boolValue(args["bold"]) ?? false,
+            italic: boolValue(args["italic"]) ?? false,
+            underline: boolValue(args["underline"]) ?? false,
+            strikeOut: boolValue(args["strikeOut"]) ?? false,
+            spacing: doubleValue(args["spacing"]) ?? 0.0,
+            scaleXPercent: doubleValue(args["scaleXPercent"]) ?? 100.0,
+            scaleYPercent: doubleValue(args["scaleYPercent"]) ?? 100.0,
+            borderStyle: int32Value(args["borderStyle"]) ?? 1,
+            shadowDepth: doubleValue(args["shadowDepth"]) ?? 0.0,
+            blur: doubleValue(args["blur"]) ?? 0.0,
+            alignment: int32Value(args["alignment"]) ?? 2,
+            marginLeft: int32Value(args["marginLeft"]) ?? 48,
+            marginRight: int32Value(args["marginRight"]) ?? 48,
+            marginVertical: int32Value(args["marginVertical"]) ?? 54,
+            overrideMask: UInt32(truncatingIfNeeded: int64Value(args["overrideMask"]) ?? 0)
+          )
+        }
+        result(nil)
       case "getUpscalerStatus":
         let args = try dictionaryArgs(call.arguments)
         result(try playerHost(from: args).upscalerStatus())
@@ -1789,6 +1992,10 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       case "getPresenterStats":
         let args = try dictionaryArgs(call.arguments)
         result(try playerHost(from: args).presenterStats())
+      case "setDebugHudEnabled":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).setDebugHudEnabled(boolValue(args["enabled"]) ?? false)
+        result(nil)
       case "addExternalSubtitle":
         let args = try dictionaryArgs(call.arguments)
         let host = try playerHost(from: args)

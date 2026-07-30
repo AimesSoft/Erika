@@ -244,6 +244,9 @@ class ErikaTrackInfo {
     this.sampleFormat,
     this.profile,
     this.level = 0,
+    this.bitRate,
+    this.frameRateNumerator = 0,
+    this.frameRateDenominator = 0,
   });
 
   factory ErikaTrackInfo.fromMap(Map<dynamic, dynamic> map) {
@@ -264,6 +267,9 @@ class ErikaTrackInfo {
       sampleFormat: map['sampleFormat'] as String?,
       profile: map['profile'] as String?,
       level: _asInt(map['level']),
+      bitRate: _asPositiveInt(map['bitRate']),
+      frameRateNumerator: _asInt(map['frameRateNumerator']),
+      frameRateDenominator: _asInt(map['frameRateDenominator']),
     );
   }
 
@@ -283,6 +289,16 @@ class ErikaTrackInfo {
   final String? sampleFormat;
   final String? profile;
   final int level;
+  final int? bitRate;
+  final int frameRateNumerator;
+  final int frameRateDenominator;
+
+  double? get framesPerSecond {
+    if (frameRateNumerator <= 0 || frameRateDenominator <= 0) {
+      return null;
+    }
+    return frameRateNumerator / frameRateDenominator;
+  }
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
@@ -302,6 +318,9 @@ class ErikaTrackInfo {
       'sampleFormat': sampleFormat,
       'profile': profile,
       'level': level,
+      'bitRate': bitRate,
+      'frameRateNumerator': frameRateNumerator,
+      'frameRateDenominator': frameRateDenominator,
     };
   }
 
@@ -316,6 +335,11 @@ class ErikaTrackInfo {
       return value.toInt();
     }
     return 0;
+  }
+
+  static int? _asPositiveInt(Object? value) {
+    final parsed = _asInt(value);
+    return parsed > 0 ? parsed : null;
   }
 
   static ErikaTrackKind _trackKindFromIndex(int index) {

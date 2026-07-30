@@ -672,6 +672,10 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   using SetVolumeFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
   using SetUpscalerFn = ErikaStatus (*)(ErikaPresenterHandle*, int32_t);
   using SetSubtitleScaleFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
+  using SetSubtitleFontFn =
+      ErikaStatus (*)(ErikaPresenterHandle*, const char*, const char*);
+  using SetSubtitleStyleFn =
+      ErikaStatus (*)(ErikaPresenterHandle*, ErikaSubtitleStyle);
   using GetUpscalerStatusFn =
       ErikaStatus (*)(ErikaPresenterHandle*, ErikaUpscalerStatus*);
   using GetOutputStatusFn =
@@ -696,6 +700,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
                       uintptr_t*);
   using ClearDanmakuFn = ErikaStatus (*)(ErikaPresenterHandle*);
   using SetDanmakuEnabledFn = ErikaStatus (*)(ErikaPresenterHandle*, bool);
+  using SetDebugHudEnabledFn = ErikaStatus (*)(ErikaPresenterHandle*, bool);
   using SetDanmakuConfigFn =
       ErikaStatus (*)(ErikaPresenterHandle*, const ErikaDanmakuConfig*);
   using GetDanmakuConfigFn =
@@ -780,6 +785,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   SetVolumeFn set_volume = nullptr;
   SetUpscalerFn set_upscaler = nullptr;
   SetSubtitleScaleFn set_subtitle_scale = nullptr;
+  SetSubtitleFontFn set_subtitle_font = nullptr;
+  SetSubtitleStyleFn set_subtitle_style = nullptr;
   GetUpscalerStatusFn get_upscaler_status = nullptr;
   GetOutputStatusFn get_output_status = nullptr;
   SelectTrackFn select_audio_track = nullptr;
@@ -797,6 +804,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   DanmakuTracksFn danmaku_tracks = nullptr;
   ClearDanmakuFn clear_danmaku = nullptr;
   SetDanmakuEnabledFn set_danmaku_enabled = nullptr;
+  SetDebugHudEnabledFn set_debug_hud_enabled = nullptr;
   SetDanmakuConfigFn set_danmaku_config = nullptr;
   GetDanmakuConfigFn get_danmaku_config = nullptr;
   SetDanmakuFontFn set_danmaku_font = nullptr;
@@ -839,6 +847,10 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
         LoadOptional<SetUpscalerFn>("erika_presenter_set_upscaler");
     set_subtitle_scale = LoadOptional<SetSubtitleScaleFn>(
         "erika_presenter_set_subtitle_scale");
+    set_subtitle_font =
+        LoadOptional<SetSubtitleFontFn>("erika_presenter_set_subtitle_font");
+    set_subtitle_style = LoadOptional<SetSubtitleStyleFn>(
+        "erika_presenter_set_subtitle_style");
     get_upscaler_status = LoadOptional<GetUpscalerStatusFn>(
         "erika_presenter_get_upscaler_status");
     get_output_status = LoadOptional<GetOutputStatusFn>(
@@ -873,6 +885,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
         LoadOptional<ClearDanmakuFn>("erika_presenter_clear_danmaku");
     set_danmaku_enabled = LoadOptional<SetDanmakuEnabledFn>(
         "erika_presenter_set_danmaku_enabled");
+    set_debug_hud_enabled = LoadOptional<SetDebugHudEnabledFn>(
+        "erika_presenter_set_debug_hud_enabled");
     set_danmaku_config = LoadOptional<SetDanmakuConfigFn>(
         "erika_presenter_set_danmaku_config_ptr");
     get_danmaku_config = LoadOptional<GetDanmakuConfigFn>(
@@ -980,6 +994,10 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
                 bool is_visible,
                 std::optional<int64_t> generation,
                 const std::optional<std::string>& debug_label) {
+    if (!is_visible && generation && active_generation != 0 &&
+        *generation != active_generation) {
+      return;
+    }
     if (generation) {
       active_generation = *generation;
     }
@@ -1078,6 +1096,7 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
   double logical_height = 1.0;
   bool visible = false;
   int64_t active_generation = 0;
+  int64_t owner_player_id = 0;
 };
 
 struct ErikaFlutterPlugin::PlayerHost {
@@ -1193,6 +1212,55 @@ struct ErikaFlutterPlugin::PlayerHost {
     }
     const double clamped = std::isfinite(scale) ? std::clamp(scale, 0.25, 4.0) : 1.0;
     Check(library->set_subtitle_scale(handle, clamped), "set_subtitle_scale");
+  }
+
+  void SetSubtitleFont(const std::optional<std::string>& family,
+                       const std::optional<std::string>& file_path) {
+    if (library->set_subtitle_font == nullptr) {
+      throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_subtitle_font");
+    }
+    Check(library->set_subtitle_font(handle, family ? family->c_str() : nullptr,
+                                     file_path ? file_path->c_str() : nullptr),
+          "set_subtitle_font");
+  }
+
+  void SetSubtitleStyle(const std::optional<std::string>& font_family,
+                        const std::optional<std::string>& font_file_path,
+                        uint32_t primary_rgba, uint32_t outline_rgba,
+                        double font_size, double outline_width, bool bold,
+                        bool italic, bool underline, bool strike_out,
+                        double spacing, double scale_x_percent,
+                        double scale_y_percent, int32_t border_style,
+                        double shadow_depth, double blur, int32_t alignment,
+                        int32_t margin_left, int32_t margin_right,
+                        int32_t margin_vertical, uint32_t override_mask) {
+    if (library->set_subtitle_style == nullptr) {
+      throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_subtitle_style");
+    }
+    ErikaSubtitleStyle style{};
+    style.font_family = font_family ? font_family->c_str() : nullptr;
+    style.font_file_path = font_file_path ? font_file_path->c_str() : nullptr;
+    style.primary_color_rgba = primary_rgba;
+    style.outline_color_rgba = outline_rgba;
+    style.font_size = font_size;
+    style.outline_width = outline_width;
+    style.bold = bold;
+    style.italic = italic;
+    style.underline = underline;
+    style.strike_out = strike_out;
+    style.spacing = spacing;
+    style.scale_x_percent = scale_x_percent;
+    style.scale_y_percent = scale_y_percent;
+    style.border_style = border_style;
+    style.shadow_depth = shadow_depth;
+    style.blur = blur;
+    style.alignment = alignment;
+    style.margin_left = margin_left;
+    style.margin_right = margin_right;
+    style.margin_vertical = margin_vertical;
+    style.override_mask = override_mask;
+    Check(library->set_subtitle_style(handle, style),
+          "set_subtitle_style");
   }
 
   EncodableValue GetUpscalerStatus() {
@@ -1363,6 +1431,15 @@ struct ErikaFlutterPlugin::PlayerHost {
     current_danmaku_config.enabled = enabled;
   }
 
+  void SetDebugHudEnabled(bool enabled) {
+    if (library->set_debug_hud_enabled == nullptr) {
+      throw PluginError(
+          "Missing Erika C ABI symbol: erika_presenter_set_debug_hud_enabled");
+    }
+    Check(library->set_debug_hud_enabled(handle, enabled),
+          "set_debug_hud_enabled");
+  }
+
   void SetDanmakuConfig(const ErikaDanmakuConfig& config) {
     if (library->set_danmaku_config == nullptr) {
       throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_danmaku_config_ptr");
@@ -1424,6 +1501,12 @@ struct ErikaFlutterPlugin::PlayerHost {
           {EncodableValue("profile"), NullableString(track.profile)},
           {EncodableValue("level"),
            EncodableValue(static_cast<int32_t>(track.level))},
+          {EncodableValue("bitRate"),
+           EncodableValue(static_cast<int64_t>(track.bit_rate))},
+          {EncodableValue("frameRateNumerator"),
+           EncodableValue(static_cast<int32_t>(track.frame_rate_numerator))},
+          {EncodableValue("frameRateDenominator"),
+           EncodableValue(static_cast<int32_t>(track.frame_rate_denominator))},
       }));
       library->free_track_info(&track);
     }
@@ -1448,6 +1531,9 @@ struct ErikaFlutterPlugin::PlayerHost {
     attached_hwnd = overlay.hwnd;
     attached_view_id = kWindowOverlayViewId;
     surface_attached = true;
+    attached_surface_width = width;
+    attached_surface_height = height;
+    attached_surface_scale = scale;
     start_time_seconds = NowSeconds();
   }
 
@@ -1455,9 +1541,19 @@ struct ErikaFlutterPlugin::PlayerHost {
     if (!surface_attached || attached_hwnd != overlay.hwnd) {
       return;
     }
-    Check(library->resize_surface(handle, overlay.PixelWidth(),
-                                  overlay.PixelHeight(), overlay.scale),
+    const uint32_t width = overlay.PixelWidth();
+    const uint32_t height = overlay.PixelHeight();
+    const double scale = overlay.scale;
+    if (width == attached_surface_width &&
+        height == attached_surface_height &&
+        std::abs(scale - attached_surface_scale) < 0.0001) {
+      return;
+    }
+    Check(library->resize_surface(handle, width, height, scale),
           "resize_surface", library->TakeLastError());
+    attached_surface_width = width;
+    attached_surface_height = height;
+    attached_surface_scale = scale;
   }
 
   void Detach(std::optional<int64_t> view_id) {
@@ -1467,6 +1563,9 @@ struct ErikaFlutterPlugin::PlayerHost {
     attached_hwnd = nullptr;
     attached_view_id = 0;
     surface_attached = false;
+    attached_surface_width = 0;
+    attached_surface_height = 0;
+    attached_surface_scale = 0.0;
     library->detach_surface(handle);
   }
 
@@ -1643,6 +1742,9 @@ struct ErikaFlutterPlugin::PlayerHost {
   HWND attached_hwnd = nullptr;
   int64_t attached_view_id = 0;
   bool surface_attached = false;
+  uint32_t attached_surface_width = 0;
+  uint32_t attached_surface_height = 0;
+  double attached_surface_scale = 0.0;
   double start_time_seconds = NowSeconds();
   ErikaDanmakuConfig current_danmaku_config = DefaultDanmakuConfig();
   ErikaPresenterStats latest_presenter_stats{};
@@ -2137,7 +2239,19 @@ int64_t ErikaFlutterPlugin::CreatePlayer(const EncodableValue* arguments) {
 }
 
 void ErikaFlutterPlugin::RemovePlayer(int64_t player_id) {
-  players_.erase(player_id);
+  const auto it = players_.find(player_id);
+  if (it == players_.end()) {
+    return;
+  }
+  // Hide the shared HWND before destroying the presenter. Presenter teardown
+  // may wait for decoder threads, and leaving the overlay visible during that
+  // wait exposes the transparent Flutter cutout as an apparently frozen app.
+  if (overlay_window_ && overlay_window_->owner_player_id == player_id) {
+    overlay_window_->SetFrame(0.0, 0.0, 0.0, 0.0, false, std::nullopt,
+                              std::nullopt);
+    overlay_window_->owner_player_id = 0;
+  }
+  players_.erase(it);
 }
 
 void ErikaFlutterPlugin::SendEvent(EncodableValue event) {
@@ -2206,12 +2320,72 @@ void ErikaFlutterPlugin::HandleMethodCall(
       PlayerFromArgs(args).SetSubtitleScale(
           DoubleValue(FindArg(args, "scale")).value_or(1.0));
       result->Success();
+    } else if (method == "setSubtitleStyle") {
+      auto& host = PlayerFromArgs(args);
+      const bool has_style = FindArg(args, "fontFamily") != nullptr ||
+                             FindArg(args, "fontFilePath") != nullptr ||
+                             FindArg(args, "primaryColorRgba") != nullptr ||
+                             FindArg(args, "outlineColorRgba") != nullptr ||
+                             FindArg(args, "fontSize") != nullptr ||
+                             FindArg(args, "outlineWidth") != nullptr ||
+                             FindArg(args, "bold") != nullptr ||
+                             FindArg(args, "italic") != nullptr ||
+                             FindArg(args, "underline") != nullptr ||
+                             FindArg(args, "strikeOut") != nullptr ||
+                             FindArg(args, "spacing") != nullptr ||
+                             FindArg(args, "scaleXPercent") != nullptr ||
+                             FindArg(args, "scaleYPercent") != nullptr ||
+                             FindArg(args, "borderStyle") != nullptr ||
+                             FindArg(args, "shadowDepth") != nullptr ||
+                             FindArg(args, "blur") != nullptr ||
+                             FindArg(args, "alignment") != nullptr ||
+                             FindArg(args, "marginLeft") != nullptr ||
+                             FindArg(args, "marginRight") != nullptr ||
+                             FindArg(args, "marginVertical") != nullptr ||
+                             FindArg(args, "overrideMask") != nullptr;
+      if (has_style) {
+        const int64_t primary =
+            Int64Value(FindArg(args, "primaryColorRgba")).value_or(0xFFFFFFFF);
+        const int64_t outline =
+            Int64Value(FindArg(args, "outlineColorRgba")).value_or(0x0000007F);
+        host.SetSubtitleStyle(
+            StringValue(FindArg(args, "fontFamily")),
+            StringValue(FindArg(args, "fontFilePath")),
+            static_cast<uint32_t>(primary), static_cast<uint32_t>(outline),
+            DoubleValue(FindArg(args, "fontSize")).value_or(48.0),
+            DoubleValue(FindArg(args, "outlineWidth")).value_or(2.0),
+            BoolValue(FindArg(args, "bold")).value_or(false),
+            BoolValue(FindArg(args, "italic")).value_or(false),
+            BoolValue(FindArg(args, "underline")).value_or(false),
+            BoolValue(FindArg(args, "strikeOut")).value_or(false),
+            DoubleValue(FindArg(args, "spacing")).value_or(0.0),
+            DoubleValue(FindArg(args, "scaleXPercent")).value_or(100.0),
+            DoubleValue(FindArg(args, "scaleYPercent")).value_or(100.0),
+            static_cast<int32_t>(
+                Int64Value(FindArg(args, "borderStyle")).value_or(1)),
+            DoubleValue(FindArg(args, "shadowDepth")).value_or(0.0),
+            DoubleValue(FindArg(args, "blur")).value_or(0.0),
+            static_cast<int32_t>(
+                Int64Value(FindArg(args, "alignment")).value_or(2)),
+            static_cast<int32_t>(
+                Int64Value(FindArg(args, "marginLeft")).value_or(48)),
+            static_cast<int32_t>(
+                Int64Value(FindArg(args, "marginRight")).value_or(48)),
+            static_cast<int32_t>(
+                Int64Value(FindArg(args, "marginVertical")).value_or(54)),
+            static_cast<uint32_t>(
+                Int64Value(FindArg(args, "overrideMask")).value_or(0)));
+      }
+      result->Success();
     } else if (method == "getUpscalerStatus") {
       result->Success(PlayerFromArgs(args).GetUpscalerStatus());
     } else if (method == "getOutputStatus") {
       result->Success(PlayerFromArgs(args).GetOutputStatus());
     } else if (method == "getPresenterStats") {
       result->Success(PlayerFromArgs(args).GetPresenterStats());
+    } else if (method == "setDebugHudEnabled") {
+      PlayerFromArgs(args).SetDebugHudEnabled(BoolArg(args, "enabled", false));
+      result->Success();
     } else if (method == "addExternalSubtitle") {
       const int64_t track_id =
           PlayerFromArgs(args).AddExternalSubtitle(RequiredString(args, "uri"));
@@ -2298,7 +2472,9 @@ void ErikaFlutterPlugin::HandleMethodCall(
         throw PluginError("Erika video view " + std::to_string(view_id) +
                           " was not found.");
       }
-      host.AttachOverlay(EnsureOverlayWindow());
+      auto& overlay = EnsureOverlayWindow();
+      host.AttachOverlay(overlay);
+      overlay.owner_player_id = host.id;
       OnFrameTimer();
       result->Success();
     } else if (method == "detachView") {
@@ -2308,7 +2484,9 @@ void ErikaFlutterPlugin::HandleMethodCall(
     } else if (method == "attachOverlay") {
       auto& host = PlayerFromArgs(args);
       UpdateOverlayTarget(args);
-      host.AttachOverlay(EnsureOverlayWindow());
+      auto& overlay = EnsureOverlayWindow();
+      host.AttachOverlay(overlay);
+      overlay.owner_player_id = host.id;
       OnFrameTimer();
       result->Success(EncodableValue(kWindowOverlayViewId));
     } else if (method == "detachOverlay") {
@@ -2324,6 +2502,9 @@ void ErikaFlutterPlugin::HandleMethodCall(
       if (overlay_window_) {
         overlay_window_->SetFrame(0.0, 0.0, 0.0, 0.0, false, generation,
                                   std::nullopt);
+        if (overlay_window_->owner_player_id == host.id) {
+          overlay_window_->owner_player_id = 0;
+        }
       }
       result->Success();
     } else if (method == "setOverlayFrame") {
@@ -2337,12 +2518,25 @@ void ErikaFlutterPlugin::HandleMethodCall(
       }
       UpdateOverlayTarget(args);
       auto& overlay = EnsureOverlayWindow();
+      const int64_t player_id = RequiredInt64(args, "playerId");
+      PlayerFromArgs(args);
+      if (!visible && overlay.owner_player_id != 0 &&
+          overlay.owner_player_id != player_id) {
+        result->Success();
+        return;
+      }
+      if (visible) {
+        overlay.owner_player_id = player_id;
+      }
       overlay.SetFrame(DoubleValue(FindArg(args, "x")).value_or(0.0),
                        DoubleValue(FindArg(args, "y")).value_or(0.0),
                        DoubleValue(FindArg(args, "width")).value_or(0.0),
                        DoubleValue(FindArg(args, "height")).value_or(0.0),
                        visible, generation,
                        StringValue(FindArg(args, "debugLabel")));
+      if (!visible && overlay.owner_player_id == player_id) {
+        overlay.owner_player_id = 0;
+      }
       ResizeAttachedOverlay();
       OnFrameTimer();
       result->Success();

@@ -16,6 +16,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ANDROID_API_LEVEL");
     println!("cargo:rerun-if-env-changed=ANDROID_NDK_HOME");
     println!("cargo:rerun-if-env-changed=ANDROID_NDK_ROOT");
+    println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.vert");
+    println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.frag");
+    println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.vert.spv");
+    println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.frag.spv");
 
     let ffmpeg_version_major = emit_ffmpeg_version_cfg();
     enforce_bundled_ffmpeg_version(ffmpeg_version_major);
@@ -275,6 +279,7 @@ fn inferred_native_target() -> Option<String> {
     let arch = env::var("CARGO_CFG_TARGET_ARCH").ok()?;
     match (os.as_str(), arch.as_str()) {
         ("windows", "x86_64") => Some("x86_64-pc-windows-msvc".to_string()),
+        ("windows", "aarch64") => Some("aarch64-pc-windows-msvc".to_string()),
         ("android", "aarch64") => Some("aarch64-linux-android".to_string()),
         ("android", "arm") => Some("armv7-linux-androideabi".to_string()),
         ("android", "x86_64") => Some("x86_64-linux-android".to_string()),

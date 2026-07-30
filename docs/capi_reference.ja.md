@@ -239,6 +239,8 @@ ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *, double rat
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *, double volume);   // 0.0–1.0
 ErikaStatus erika_presenter_set_upscaler(ErikaPresenterHandle *, int32_t mode);  // ErikaLumaUpscalerMode
 ErikaStatus erika_presenter_set_subtitle_scale(ErikaPresenterHandle *, double scale);
+ErikaStatus erika_presenter_set_subtitle_font(ErikaPresenterHandle *, const char *family, const char *file_path);
+ErikaStatus erika_presenter_set_subtitle_style(ErikaPresenterHandle *, ErikaSubtitleStyle style);
 ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float headroom, bool known);
 ```
 
@@ -246,6 +248,61 @@ ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float he
 スケーラを切り替えます（[`erika_presenter_get_upscaler_status`](#診断とスクリーンショット)
 参照）。Metal と compute-capable な wgpu/Vulkan renderer は ArtCNN を実行し、
 それ以外の backend は native luma sampling を維持して `Inactive` fallback を明示します。
+
+`set_subtitle_font` と `set_subtitle_style` は字幕の **fallback** の見た目を設定します。
+family や path が空ならその指定を解除します。色は `0xRRGGBBAA` で、既定は不透明な白の
+文字（`0xFFFFFFFF`）と半透明な黒の縁取り（`0x0000007F`）です。`font_size`（既定 `48`、
+`8..400` にクランプ）と `outline_width`（既定 `2`、`0..32` にクランプ）は ASS script 単位で、
+`set_subtitle_scale` がさらに掛かります。container の ASS script は自身の styling を保ち、
+これらは script が指定していない部分、system が解決できない font、そして plain-text
+（SRT/WebVTT）字幕の見た目を埋めるだけです。
+
+`ErikaSubtitleStyle` が見た目の全体を運びます。範囲外の値は拒否せずクランプされます：
+
+```c
+typedef struct ErikaSubtitleStyle {
+  const char *font_family;      /* NULL または空で platform 既定に戻す */
+  const char *font_file_path;
+  uint32_t primary_color_rgba;  /* 0xRRGGBBAA */
+  uint32_t outline_color_rgba;
+  double font_size;             /* 8..400   */
+  double outline_width;         /* 0..32    */
+  bool bold, italic, underline, strike_out;
+  double spacing;               /* -100..100 */
+  double scale_x_percent;       /* 1..1000、100 が等倍 */
+  double scale_y_percent;
+  int32_t border_style;         /* 1 = 縁取り+影、3 = 不透明ボックス */
+  double shadow_depth;          /* 0..32 */
+  double blur;                  /* 0..100 */
+  int32_t alignment;            /* 1..9、テンキー配置、2 = 下中央 */
+  int32_t margin_left, margin_right, margin_vertical;
+  uint32_t override_mask;
+} ErikaSubtitleStyle;
+```
+
+`override_mask` は、どの field を fallback から libass の selective style override
+に昇格させ、ASS dialogue が要求する styling を置き換えるかを決めます。`erika.h` の
+`ERIKA_SUBTITLE_OVERRIDE_*` マクロの bitmask で、libass の `ASS_OVERRIDE_BIT_*` に
+対応します：
+
+| マクロ | 置き換える field |
+| --- | --- |
+| `ERIKA_SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS` | `font_size`、`spacing`、`scale_x_percent`、`scale_y_percent` |
+| `ERIKA_SUBTITLE_OVERRIDE_FONT_NAME` | `font_family` |
+| `ERIKA_SUBTITLE_OVERRIDE_COLORS` | `primary_color_rgba`、`outline_color_rgba` |
+| `ERIKA_SUBTITLE_OVERRIDE_ATTRIBUTES` | `bold`、`italic`、`underline`、`strike_out` |
+| `ERIKA_SUBTITLE_OVERRIDE_BORDER` | `border_style`、`outline_width`、`shadow_depth` |
+| `ERIKA_SUBTITLE_OVERRIDE_ALIGNMENT` | `alignment` |
+| `ERIKA_SUBTITLE_OVERRIDE_MARGINS` | `margin_left`、`margin_right`、`margin_vertical` |
+| `ERIKA_SUBTITLE_OVERRIDE_BLUR` | `blur` |
+| `ERIKA_SUBTITLE_OVERRIDE_ALL` | 上記すべて |
+
+`0` ならすべて fallback のままで、未知の bit は捨てられます。override 時もサイズは
+解像度に依存せず、`font_size` が `48` なら script の `PlayResY` に関係なく同じ
+pixel になります。ただし margin は違います：libass は override の margin を script
+自身の単位のまま扱うため、container の ASS track ではその script の `PlayResY` に
+比例し、plain-text 字幕（Erika が frame サイズで script を生成する）では pixel に
+なります。
 
 `ErikaHttpHeader` は次のように定義されます：
 
@@ -303,6 +360,15 @@ ErikaStatus erika_presenter_tracks(ErikaPresenterHandle *, ErikaTrackInfo *out_t
 
 `ErikaHandle` のトラック関数と同じ意味論です。
 
+`ErikaTrackInfo` の `codec`、`width`、`height`、`pixel_format`、`profile`、`level` は
+track metadata です。`bit_rate` の単位は bit/s、`frame_rate_numerator` /
+`frame_rate_denominator` は video track の有理 frame rate です。`0` は unknown を表します。
+frame rate は average frame rate、`r_frame_rate`、FFmpeg guessed frame rate の順に probe されます。
+bitrate は track 自身の parameter を優先し、単一 video track の bitrate がなく、container total と
+他の全 audio track bitrate が既知の場合のみ、container bitrate から audio bitrate を引いて推定します。
+どちらも瞬間 bitrate や real-time render FPS ではなく、推定 bitrate には container overhead や
+non-audio stream が含まれる場合があります。
+
 ### 弾幕（ダンマク）
 
 ```c
@@ -317,6 +383,7 @@ ErikaStatus erika_presenter_set_danmaku_global_offset(ErikaPresenterHandle *, in
 ErikaStatus erika_presenter_danmaku_tracks(ErikaPresenterHandle *, ErikaDanmakuTrackInfo *out_tracks, uintptr_t capacity, uintptr_t *out_len);
 ErikaStatus erika_presenter_clear_danmaku(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_set_danmaku_enabled(ErikaPresenterHandle *, bool enabled);
+ErikaStatus erika_presenter_set_debug_hud_enabled(ErikaPresenterHandle *, bool enabled);
 ErikaStatus erika_presenter_set_danmaku_config(ErikaPresenterHandle *, ErikaDanmakuConfig config);
 ErikaStatus erika_presenter_set_danmaku_config_ptr(ErikaPresenterHandle *, const ErikaDanmakuConfig *config);
 ErikaStatus erika_presenter_get_danmaku_config(ErikaPresenterHandle *, ErikaDanmakuConfig *out_config);
@@ -332,6 +399,13 @@ XML（`*_file`、パス/URL）または JSON（`*_json`、インライン）。`
 値渡しを避ける）、`get_danmaku_config` で読み戻します。レイアウトエンジンは
 [danmaku_architecture.md](danmaku_architecture.md) を参照。
 `set_danmaku_block_words_json` はフィルタ用の文字列 JSON 配列を取ります。
+
+`set_debug_hud_enabled` は default で off です。on にすると Presenter は native video
+composition に diagnostic HUD を描画します。HUD は track technical metadata、
+playback state、decoded/rendered FPS、decode/zero-copy counters、render/audio state、HDR
+output、danmaku item count を表示します。video frame がある時だけ表示され、host による
+stats polling は不要で、`ErikaPresenterStats` にも書き込みません。off-screen
+`capture_frame_rgba` は HUD を含みません。
 
 ### Surface とプレゼンテーション
 
@@ -363,6 +437,7 @@ Erika は Vulkan、`Rgba16Float`、`ADATASPACE_SCRGB_LINEAR` も検証します�
 
 ```c
 ErikaStatus erika_presenter_render_tick(ErikaPresenterHandle *, double time_seconds, ErikaPresenterStats *out_stats);
+ErikaStatus erika_presenter_get_stats(ErikaPresenterHandle *, ErikaPresenterStats *out_stats);
 ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *, ErikaEvent *out_event);
 ```
 
@@ -372,6 +447,50 @@ Windows のフレームスケジューラなど）。`time_seconds` はそのフ
 **プレゼンテーションタイムスタンプ**を渡します。`out_stats` が非 `NULL` なら、パイプ
 ラインカウンタのスナップショットが書き込まれます。`poll_event` は非ブロッキングで、
 アイドル時は `NoEvent` を返します。
+
+`get_stats` は同じ `ErikaPresenterStats` スナップショットを、フレームを描画せずに
+書き込みます。ホストが表示ループとは別の周期でカウンタをサンプリングする場合に
+使ってください。プレゼンテーションは進みません。
+
+### JSON ブリッジ
+
+プラットフォームチャネルが既に構造化引数をシリアライズしている埋め込み側
+（例えば HarmonyOS ArkTS プラグイン）向けに、同じ presenter 面が JSON でも
+利用できます。
+
+```c
+char *erika_presenter_invoke_json(ErikaPresenterHandle *, const char *method,
+                                  const char *arguments_json);
+char *erika_presenter_render_tick_json(ErikaPresenterHandle *, double time_seconds);
+char *erika_presenter_poll_event_json(ErikaPresenterHandle *);
+```
+
+返される文字列は Erika が所有するため、`erika_string_free` で解放してください。
+`poll_event_json` はイベントが無いとき envelope ではなく `NULL` を返すので、
+`NULL` はエラーではなくアイドルを意味します。
+
+3 つとも結果を同じ envelope に包みます。
+
+```json
+{ "ok": true,  "status": 0, "value": <result> }
+{ "ok": false, "status": 1, "error": "<message>" }
+```
+
+`arguments_json` は JSON オブジェクトである必要があります。`method` は操作を選び、
+C エントリポイントに対応します: `open`、`play`、`pause`、`stop`、`close`、`seek`、
+`setPlaybackRate`、`setVolume`、`setUpscaler`、`setSubtitleScale`、
+`getUpscalerStatus`、`getOutputStatus`、`getPresenterStats`、`tracks`、
+`addExternalSubtitle`、`removeSubtitleTrack`、`selectAudioTrack`、
+`selectSubtitleTrack`、および danmaku 系（`loadDanmakuFile`、`loadDanmakuJson`、
+`addDanmakuTrackFile`、`addDanmakuTrackJson`、`removeDanmakuTrack`、
+`setDanmakuTrackEnabled`、`setDanmakuTrackOffset`、`setDanmakuGlobalOffset`、
+`danmakuTracks`、`clearDanmaku`、`setDanmakuEnabled`、`setDanmakuConfig`）。
+未知の method は abort せず `ok: false` を返します。正となる dispatch table は
+`crates/erika_capi/src/presenter_json.rs` です。
+
+このブリッジは利便性のためのレイヤーであり、2 つ目の API ではありません。上で
+説明した関数をそのまま呼ぶだけで、追加の機能はありません。プラットフォーム
+チャネルで構造体を渡せるホストは型付きエントリポイントを優先してください。
 
 ### 診断とスクリーンショット
 
@@ -473,7 +592,8 @@ free(rgba);
 - **`ErikaTrackCounts`** / **`ErikaTrackSelection`** —— 種別ごとの件数 / 選択 id
   （`-1` = 無し）。
 - **`ErikaTrackInfo`** —— トラックごとの全メタデータ。6 つの `char*` フィールドは
-  呼び出し側の所有（`erika_track_info_free` で解放）。
+  caller が所有（`erika_track_info_free` で解放）。video track はさらに `bit_rate`
+  （bit/s）と `frame_rate_numerator` / `frame_rate_denominator`（`0` = unknown）を持ちます。
 - **`ErikaEvent`** —— 構造体による tagged union：`kind` がどのフィールドが有効かを選ぶ
   （`state`、`duration_micros`、`position_micros`、`buffering`、`video`、`tracks`）。
   `Error` イベントは `status` がコードを運ぶ。

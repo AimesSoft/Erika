@@ -642,7 +642,9 @@ pub struct VideoUniforms {
     /// top-right, bottom-left and bottom-right luma subpixels. All modes retain
     /// the common transfer/gamut/tone-map handling.
     pub input_mode: u32,
-    pub reserved1: u32,
+    /// Leaves the shader output in target-reference-linear space so a backend
+    /// can composite overlays before applying the output transfer function.
+    pub scene_linear: u32,
     pub nits: [f32; 4],
     pub luma_coefficients: [f32; 4],
     pub gamut_matrix_rows: [[f32; 4]; 3],
@@ -659,7 +661,7 @@ impl VideoUniforms {
             tone_map: tone_map_code(pipeline.tone_map.operator),
             edr_output: u32::from(edr_output),
             input_mode: 0,
-            reserved1: 0,
+            scene_linear: 0,
             nits: [
                 pipeline.source.nominal_peak_nits,
                 pipeline.target.peak_nits,
@@ -683,6 +685,11 @@ impl VideoUniforms {
 
     pub fn packed_d2s_rgb_detail_input(mut self) -> Self {
         self.input_mode = 3;
+        self
+    }
+
+    pub fn scene_linear_output(mut self) -> Self {
+        self.scene_linear = 1;
         self
     }
 }
@@ -782,6 +789,142 @@ fn reference_white_for_transfer(transfer: TransferFunction) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reference implementation of the BT.2100 HLG inverse OETF used by the
+    /// video shaders' `transfer_to_source_reference_linear` (code 4). Nonlinear
+    /// signal E' maps to scene linear light in [0, 1]. Constants are spelled
+    /// exactly as in BT.2100 (and the shaders), hence the precision allow.
+    #[allow(clippy::excessive_precision)]
+    fn hlg_inverse_oetf(encoded: f32) -> f32 {
+        let a = 0.17883277_f32;
+        let b = 0.28466892_f32;
+        let c = 0.55991073_f32;
+        let e = encoded.max(0.0);
+        if e <= 0.5 {
+            e * e / 3.0
+        } else {
+            (((e - c) / a).exp() + b) / 12.0
+        }
+    }
+
+    /// Reference implementation of the shaders' full HLG decode: inverse OETF
+    /// to scene light, then the BT.2100 OOTF (system gamma 1.2 at the 1000 nit
+    /// nominal peak), normalized to source reference white exactly like the PQ
+    /// branch of the same shader function.
+    fn hlg_encoded_to_source_reference_linear(
+        encoded: [f32; 3],
+        luma: LumaCoefficients,
+        reference_white_nits: f32,
+    ) -> [f32; 3] {
+        let hlg_nominal_peak_nits = 1000.0_f32;
+        let hlg_system_gamma = 1.2_f32;
+        let scene = [
+            hlg_inverse_oetf(encoded[0]),
+            hlg_inverse_oetf(encoded[1]),
+            hlg_inverse_oetf(encoded[2]),
+        ];
+        let scene_luma = (luma.kr * scene[0] + luma.kg * scene[1] + luma.kb * scene[2]).max(1e-6);
+        let scale = hlg_nominal_peak_nits * scene_luma.powf(hlg_system_gamma - 1.0)
+            / reference_white_nits.max(1.0);
+        [scene[0] * scale, scene[1] * scale, scene[2] * scale]
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)]
+    fn hlg_inverse_oetf_matches_bt2100_anchors() {
+        assert!(hlg_inverse_oetf(0.0).abs() < 1e-7);
+        // E' = 0.5 sits exactly at the 1/12 scene light scale.
+        assert!((hlg_inverse_oetf(0.5) - 1.0 / 12.0).abs() < 1e-6);
+        // The quadratic and exponential branches are continuous at E' = 0.5.
+        let upper_at_half = (((0.5_f32 - 0.55991073) / 0.17883277).exp() + 0.28466892) / 12.0;
+        assert!((hlg_inverse_oetf(0.5) - upper_at_half).abs() < 1e-5);
+        // Full-scale signal decodes to unit scene light.
+        assert!((hlg_inverse_oetf(1.0) - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn hlg_full_scale_white_reaches_nominal_peak_over_reference_white() {
+        let luma = MatrixCoefficients::Bt2020NonConstantLuminance
+            .luma_coefficients(ColorPrimaries::Bt2020);
+
+        let rgb = hlg_encoded_to_source_reference_linear([1.0, 1.0, 1.0], luma, 203.0);
+
+        for channel in rgb {
+            assert!(
+                (channel - 1000.0 / 203.0).abs() < 0.01,
+                "expected {channel} to be near the 1000 nit peak over 203 nit reference white"
+            );
+        }
+    }
+
+    #[test]
+    fn hlg_reference_white_signal_lands_at_reference_white() {
+        // BT.2408: the 75% HLG signal displays at roughly 203 nits on the
+        // 1000 nit nominal display, i.e. 1.0 in source-reference-linear terms.
+        let luma = MatrixCoefficients::Bt2020NonConstantLuminance
+            .luma_coefficients(ColorPrimaries::Bt2020);
+
+        let rgb = hlg_encoded_to_source_reference_linear([0.75, 0.75, 0.75], luma, 203.0);
+
+        for channel in rgb {
+            assert!(
+                (channel - 1.0).abs() < 0.005,
+                "expected {channel} to be near 1.0 (203 nits over 203 nit reference white)"
+            );
+        }
+    }
+
+    #[test]
+    fn hlg_source_uniforms_use_code_4_and_thousand_nit_peak() {
+        let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Hlg);
+        let target = TargetColorState::sdr(ColorPrimaries::Bt709);
+        let pipeline = VideoRenderPipeline::new(source, target);
+
+        let uniforms = VideoUniforms::from_pipeline(&pipeline, false, false);
+
+        assert!(source.is_hdr());
+        assert_eq!(uniforms.source_transfer, 4);
+        assert_eq!(uniforms.nits[0], 1000.0);
+        assert_eq!(uniforms.nits[2], 203.0);
+        assert!(pipeline.requires_tone_mapping());
+    }
+
+    #[test]
+    fn hlg_decode_formula_is_identical_across_video_shaders() {
+        let shaders = [
+            include_str!("wgpu_video.wgsl"),
+            include_str!("metal/apple.rs"),
+            include_str!("d3d11.rs"),
+        ];
+        for shader in shaders {
+            assert!(shader.contains("hlg_inverse_oetf"));
+            assert!(shader.contains("0.17883277"));
+            assert!(shader.contains("0.28466892"));
+            assert!(shader.contains("0.55991073"));
+            assert!(shader.contains("e * e / 3.0"));
+            assert!(shader.contains("(exp((e - c) / a) + b) / 12.0"));
+            assert!(shader.contains("source_transfer == 4"));
+            assert!(shader.contains("hlg_nominal_peak_nits = 1000.0"));
+            assert!(shader.contains("hlg_system_gamma = 1.2"));
+            assert!(shader.contains("pow(scene_luma, hlg_system_gamma - 1.0)"));
+        }
+    }
+
+    #[test]
+    fn overlay_shaders_handle_sdr_ui_for_hdr_targets() {
+        let metal = include_str!("metal/apple.rs");
+        let d3d11 = include_str!("d3d11.rs");
+        assert!(metal.contains("float3 sdr_ui_color_to_target_output"));
+        assert!(metal.contains("pq_inverse_eotf(nits.r / pq_absolute_peak_nits)"));
+
+        // D3D11 composites into an FP16 reference-linear target, then applies
+        // PQ once in a full-screen encode pass after alpha blending.
+        assert!(d3d11.contains("if (ui_nits.y > 0.0)"));
+        assert!(d3d11.contains("max(ui_nits.x, 1.0) / max(ui_nits.y, 1.0)"));
+        assert!(d3d11.contains("float4 encode_ps_main"));
+        assert!(d3d11.contains("if (scene_linear != 0u)"));
+        assert!(d3d11.contains("PSSetShaderResources(0, Some(&[None]))"));
+    }
 
     #[test]
     fn hdr_pq_to_sdr_builds_tone_mapping_graph() {

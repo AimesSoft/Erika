@@ -10,28 +10,30 @@ use ::windows::Win32::Graphics::Direct3D::{
     D3D_SRV_DIMENSION_TEXTURE2DARRAY, ID3DBlob,
 };
 use ::windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_SHADER_RESOURCE, D3D11_BLEND_DESC,
-    D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_ONE, D3D11_BLEND_OP_ADD, D3D11_BLEND_SRC_ALPHA,
-    D3D11_BOX, D3D11_BUFFER_DESC, D3D11_COLOR_WRITE_ENABLE_ALL, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-    D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_VERTEX_DATA, D3D11_RENDER_TARGET_BLEND_DESC,
-    D3D11_SAMPLER_DESC, D3D11_SDK_VERSION, D3D11_SHADER_RESOURCE_VIEW_DESC,
-    D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA, D3D11_TEX2D_ARRAY_SRV,
-    D3D11_TEX2D_SRV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_VIEWPORT, D3D11CreateDevice,
-    ID3D11BlendState, ID3D11Buffer, ID3D11Device, ID3D11DeviceContext, ID3D11InputLayout,
-    ID3D11PixelShader, ID3D11RenderTargetView, ID3D11Resource, ID3D11SamplerState,
-    ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader,
+    D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
+    D3D11_BLEND_DESC, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_ONE, D3D11_BLEND_OP_ADD,
+    D3D11_BLEND_SRC_ALPHA, D3D11_BOX, D3D11_BUFFER_DESC, D3D11_COLOR_WRITE_ENABLE_ALL,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_VERTEX_DATA,
+    D3D11_RENDER_TARGET_BLEND_DESC, D3D11_SAMPLER_DESC, D3D11_SDK_VERSION,
+    D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA,
+    D3D11_TEX2D_ARRAY_SRV, D3D11_TEX2D_SRV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+    D3D11_VIEWPORT, D3D11CreateDevice, ID3D11BlendState, ID3D11Buffer, ID3D11Device,
+    ID3D11DeviceContext, ID3D11InputLayout, ID3D11PixelShader, ID3D11RenderTargetView,
+    ID3D11Resource, ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11Texture2D,
+    ID3D11VertexShader,
 };
 use ::windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
     DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, DXGI_COLOR_SPACE_TYPE, DXGI_FORMAT,
     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_P010, DXGI_FORMAT_R8_UNORM,
     DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
-    DXGI_FORMAT_R16_UNORM, DXGI_FORMAT_R16G16_UNORM, DXGI_FORMAT_R32G32_FLOAT, DXGI_SAMPLE_DESC,
+    DXGI_FORMAT_R16_UNORM, DXGI_FORMAT_R16G16_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT,
+    DXGI_FORMAT_R32G32_FLOAT, DXGI_SAMPLE_DESC,
 };
 use ::windows::Win32::Graphics::Dxgi::{
-    DXGI_HDR_METADATA_HDR10, DXGI_HDR_METADATA_TYPE_HDR10, DXGI_HDR_METADATA_TYPE_NONE,
-    DXGI_PRESENT, DXGI_PRESENT_PARAMETERS, DXGI_SCALING_STRETCH,
-    DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT, DXGI_SWAP_CHAIN_DESC1,
+    DXGI_ERROR_WAS_STILL_DRAWING, DXGI_HDR_METADATA_HDR10, DXGI_HDR_METADATA_TYPE_HDR10,
+    DXGI_HDR_METADATA_TYPE_NONE, DXGI_PRESENT_DO_NOT_WAIT, DXGI_PRESENT_PARAMETERS,
+    DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT, DXGI_SWAP_CHAIN_DESC1,
     DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter, IDXGIDevice,
     IDXGIFactory2, IDXGIResource, IDXGISwapChain1, IDXGISwapChain3, IDXGISwapChain4,
 };
@@ -78,8 +80,8 @@ cbuffer VideoConstants : register(b0) {
     uint target_transfer;
     uint tone_map;
     uint edr_output;
-    uint reserved0;
-    uint reserved1;
+    uint input_mode;
+    uint scene_linear;
     float4 nits;
     float4 luma_coefficients;
     float4 gamut_matrix_rows[3];
@@ -127,12 +129,41 @@ float pq_inverse_eotf(float normalized_nits) {
     return pow((c1 + c2 * p) / max(1.0 + c3 * p, 0.000001), m2);
 }
 
+// BT.2100 HLG inverse OETF: nonlinear signal E' to scene linear light in
+// [0, 1]. Mirrors the Rust reference implementation in
+// `renderer/pipeline.rs` tests (`hlg_inverse_oetf`).
+float hlg_inverse_oetf(float encoded) {
+    const float a = 0.17883277;
+    const float b = 0.28466892;
+    const float c = 0.55991073;
+    float e = max(encoded, 0.0);
+    if (e <= 0.5) {
+        return e * e / 3.0;
+    }
+    return (exp((e - c) / a) + b) / 12.0;
+}
+
 float3 transfer_to_source_reference_linear(float3 rgb_in) {
     float3 rgb = max(rgb_in, float3(0.0, 0.0, 0.0));
     if (source_transfer == 3u) {
         const float pq_absolute_peak_nits = 10000.0;
         return float3(pq_eotf(rgb.r), pq_eotf(rgb.g), pq_eotf(rgb.b))
             * (pq_absolute_peak_nits / source_reference_white_nits());
+    }
+    if (source_transfer == 4u) {
+        // HLG: inverse OETF to scene linear, then the BT.2100 OOTF (system
+        // gamma 1.2 at the 1000 nit nominal peak) to display linear,
+        // normalized to source reference white like the PQ branch above.
+        const float hlg_nominal_peak_nits = 1000.0;
+        const float hlg_system_gamma = 1.2;
+        float3 scene = float3(
+            hlg_inverse_oetf(rgb.r),
+            hlg_inverse_oetf(rgb.g),
+            hlg_inverse_oetf(rgb.b)
+        );
+        float scene_luma = max(dot(luma_coefficients.xyz, scene), 0.000001);
+        return scene * (hlg_nominal_peak_nits * pow(scene_luma, hlg_system_gamma - 1.0)
+            / source_reference_white_nits());
     }
     if (source_transfer == 1u) {
         return pow(rgb, float3(2.2, 2.2, 2.2));
@@ -180,6 +211,9 @@ float3 target_nits_to_reference_linear(float3 input_nits) {
 }
 
 float3 target_reference_linear_to_output(float3 rgb) {
+    if (scene_linear != 0u) {
+        return max(rgb, float3(0.0, 0.0, 0.0));
+    }
     if (target_transfer == 3u) {
         const float pq_absolute_peak_nits = 10000.0;
         float3 out_nits = max(rgb, float3(0.0, 0.0, 0.0)) * target_reference_white_nits();
@@ -202,6 +236,9 @@ float3 target_reference_linear_to_output(float3 rgb) {
 }
 
 float4 final_output(float3 rgb) {
+    if (scene_linear != 0u) {
+        return float4(max(rgb, float3(0.0, 0.0, 0.0)), 1.0);
+    }
     if (target_transfer == 3u) {
         return float4(clamp(rgb, float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0)), 1.0);
     }
@@ -256,6 +293,12 @@ float4 ps_main(VsOut input) : SV_Target {
     rgb = target_reference_linear_to_output(rgb);
     return final_output(rgb);
 }
+
+float4 encode_ps_main(VsOut input) : SV_Target {
+    float3 rgb = lumaTex.Sample(videoSampler, input.texcoord).rgb;
+    rgb = target_reference_linear_to_output(rgb);
+    return final_output(rgb);
+}
 "#;
 
 const OVERLAY_SHADER_SOURCE: &[u8] = br#"
@@ -276,10 +319,22 @@ cbuffer OverlayConstants : register(b0) {
     uint overlay_mode;
     uint reserved0;
     float4 color;
+    float4 ui_nits;
 };
 
 Texture2D overlayTex : register(t0);
 SamplerState overlaySampler : register(s0);
+
+// SDR keeps its existing gamma-space composition. For HDR10, ui_nits.y is
+// the scene target's reference white, so return reference-linear values and
+// let the final encode pass apply PQ after fixed-function alpha blending.
+float3 sdr_ui_color_to_target_output(float3 rgb) {
+    if (ui_nits.y > 0.0) {
+        float3 linear_rgb = pow(max(rgb, float3(0.0, 0.0, 0.0)), float3(2.2, 2.2, 2.2));
+        return linear_rgb * (max(ui_nits.x, 1.0) / max(ui_nits.y, 1.0));
+    }
+    return rgb;
+}
 
 VsOut overlay_vs_main(VsIn input) {
     float2 pixel = rect.xy + input.texcoord * rect.zw;
@@ -297,8 +352,10 @@ VsOut overlay_vs_main(VsIn input) {
 float4 overlay_ps_main(VsOut input) : SV_Target {
     float4 sampled = overlayTex.Sample(overlaySampler, input.texcoord);
     if (overlay_mode == 1u) {
-        return float4(color.rgb, color.a * sampled.r);
+        float3 rgb = sdr_ui_color_to_target_output(color.rgb);
+        return float4(rgb, color.a * sampled.r);
     }
+    sampled.rgb = sdr_ui_color_to_target_output(sampled.rgb);
     return sampled;
 }
 "#;
@@ -310,6 +367,9 @@ struct VideoVertex {
     texcoord: [f32; 2],
 }
 
+/// Overlay quad uniforms, byte-compatible with the HLSL `OverlayConstants`
+/// cbuffer (80 bytes, 16-byte aligned). `ui_nits.x` is SDR UI white and
+/// `ui_nits.y` is the target reference white when compositing scene-linear.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct OverlayUniforms {
@@ -319,9 +379,11 @@ struct OverlayUniforms {
     overlay_mode: u32,
     reserved0: u32,
     color: [f32; 4],
+    ui_nits: [f32; 4],
 }
 
 impl OverlayUniforms {
+    #[allow(clippy::too_many_arguments)]
     fn rgba_plane(
         x: i32,
         y: i32,
@@ -329,6 +391,7 @@ impl OverlayUniforms {
         height: u32,
         viewport_w: u32,
         viewport_h: u32,
+        target: TargetColorState,
     ) -> Self {
         Self {
             rect: [x as f32, y as f32, width as f32, height as f32],
@@ -337,6 +400,7 @@ impl OverlayUniforms {
             overlay_mode: 0,
             reserved0: 0,
             color: [1.0, 1.0, 1.0, 1.0],
+            ui_nits: overlay_ui_nits(target),
         }
     }
 
@@ -352,6 +416,7 @@ impl OverlayUniforms {
         atlas_h: u32,
         viewport_w: u32,
         viewport_h: u32,
+        target: TargetColorState,
     ) -> Self {
         let color = AssColor::from_libass_rgba(color_rgba);
         let aw = atlas_w.max(1) as f32;
@@ -378,6 +443,7 @@ impl OverlayUniforms {
                 f32::from(color.blue) / 255.0,
                 f32::from(color.alpha) / 255.0,
             ],
+            ui_nits: overlay_ui_nits(target),
         }
     }
 
@@ -387,6 +453,7 @@ impl OverlayUniforms {
         tex_rect: [f32; 4],
         viewport_w: u32,
         viewport_h: u32,
+        target: TargetColorState,
     ) -> Self {
         Self {
             rect,
@@ -395,7 +462,17 @@ impl OverlayUniforms {
             overlay_mode: 1,
             reserved0: 0,
             color,
+            ui_nits: overlay_ui_nits(target),
         }
+    }
+}
+
+fn overlay_ui_nits(target: TargetColorState) -> [f32; 4] {
+    if matches!(target.transfer, TransferFunction::Pq) {
+        let reference_white = target.reference_white_nits.max(1.0);
+        [reference_white, reference_white, 0.0, 0.0]
+    } else {
+        [100.0, 0.0, 0.0, 0.0]
     }
 }
 
@@ -431,6 +508,7 @@ struct D3d11DeviceState {
     context: ID3D11DeviceContext,
     vertex_shader: ID3D11VertexShader,
     pixel_shader: ID3D11PixelShader,
+    encode_pixel_shader: ID3D11PixelShader,
     input_layout: ID3D11InputLayout,
     vertex_buffer: ID3D11Buffer,
     constants: ID3D11Buffer,
@@ -448,6 +526,17 @@ struct AttachedSurface {
     output_mode: D3d11OutputMode,
     swapchain: Option<IDXGISwapChain1>,
     render_target: Option<ID3D11RenderTargetView>,
+    linear_render_target: Option<ID3D11RenderTargetView>,
+    linear_shader_resource: Option<ID3D11ShaderResourceView>,
+}
+
+impl AttachedSurface {
+    fn targets_ready(&self) -> bool {
+        self.swapchain.is_some()
+            && self.render_target.is_some()
+            && (!matches!(self.output_mode, D3d11OutputMode::Hdr10)
+                || (self.linear_render_target.is_some() && self.linear_shader_resource.is_some()))
+    }
 }
 
 struct ImportedVideoFrame {
@@ -539,12 +628,16 @@ impl D3d11OutputMode {
         }
     }
 
-    fn target_color_for_source(self, source: SourceColorState) -> TargetColorState {
-        let _ = source;
+    fn target_color(self) -> TargetColorState {
         match self {
             Self::Sdr => TargetColorState::sdr(ColorPrimaries::Bt709),
             Self::Hdr10 => TargetColorState::hdr10(ColorPrimaries::Bt2020),
         }
+    }
+
+    fn target_color_for_source(self, source: SourceColorState) -> TargetColorState {
+        let _ = source;
+        self.target_color()
     }
 }
 
@@ -651,6 +744,8 @@ impl D3d11Renderer {
         };
         trace("recreate_surface_targets: reset");
         surface.render_target = None;
+        surface.linear_render_target = None;
+        surface.linear_shader_resource = None;
         surface.swapchain = None;
         let output_mode = surface.output_mode;
         trace("recreate_surface_targets: create_swapchain");
@@ -673,6 +768,16 @@ impl D3d11Renderer {
             &state.device,
             surface.swapchain.as_ref().expect("swapchain just created"),
         )?);
+        if matches!(output_mode, D3d11OutputMode::Hdr10) {
+            trace("recreate_surface_targets: create_linear_render_target");
+            let (render_target, shader_resource) = create_linear_render_target(
+                &state.device,
+                surface.metrics.physical_extent.width,
+                surface.metrics.physical_extent.height,
+            )?;
+            surface.linear_render_target = Some(render_target);
+            surface.linear_shader_resource = Some(shader_resource);
+        }
         self.stats.surface_width = surface.metrics.physical_extent.width;
         self.stats.surface_height = surface.metrics.physical_extent.height;
         self.stats.hdr10_output_active = matches!(output_mode, D3d11OutputMode::Hdr10);
@@ -684,10 +789,7 @@ impl D3d11Renderer {
             self.stats.hdr10_output_active = false;
             return Ok(());
         };
-        if surface.output_mode == output_mode
-            && surface.swapchain.is_some()
-            && surface.render_target.is_some()
-        {
+        if surface.output_mode == output_mode && surface.targets_ready() {
             self.stats.hdr10_output_active = matches!(output_mode, D3d11OutputMode::Hdr10);
             return Ok(());
         }
@@ -850,6 +952,16 @@ impl D3d11Renderer {
         Ok((texture.clone(), D3d11VideoImportMode::DirectDecoderDevice))
     }
 
+    /// Target color state overlays are composited into: the attached surface's
+    /// swapchain encoding (PQ for HDR10, sRGB otherwise).
+    fn overlay_target_color(&self) -> TargetColorState {
+        self.surface
+            .as_ref()
+            .map(|surface| surface.output_mode)
+            .unwrap_or_default()
+            .target_color()
+    }
+
     fn prepare_overlay_draws(
         &mut self,
         frame: Option<&OverlayFrame>,
@@ -869,6 +981,7 @@ impl D3d11Renderer {
             as u64;
         let viewport_w = frame.viewport.width;
         let viewport_h = frame.viewport.height;
+        let target = self.overlay_target_color();
         let mut draws = Vec::new();
 
         for plane in &frame.subtitle_planes {
@@ -898,11 +1011,13 @@ impl D3d11Renderer {
             let (x, y, width, height) = plane.scaled_rect(viewport_w, viewport_h);
             draws.push(D3d11OverlayDraw {
                 texture,
-                constants: OverlayUniforms::rgba_plane(x, y, width, height, viewport_w, viewport_h),
+                constants: OverlayUniforms::rgba_plane(
+                    x, y, width, height, viewport_w, viewport_h, target,
+                ),
             });
         }
 
-        self.append_alpha_atlas_draws(frame, viewport_w, viewport_h, &mut draws)?;
+        self.append_alpha_atlas_draws(frame, viewport_w, viewport_h, target, &mut draws)?;
         Ok(draws)
     }
 
@@ -933,11 +1048,12 @@ impl D3d11Renderer {
         }
         let viewport_w = plan.viewport.width;
         let viewport_h = plan.viewport.height;
+        let target = self.overlay_target_color();
         let mut draws = Vec::with_capacity(plan.items.len() * 3);
         let (fill, outline) = self.prepare_danmaku_atlas_textures(atlas)?;
         for item in &plan.items {
             self.append_danmaku_glyph_draws(
-                item, &fill, &outline, viewport_w, viewport_h, &mut draws,
+                item, &fill, &outline, viewport_w, viewport_h, target, &mut draws,
             );
         }
         Ok(draws)
@@ -1034,6 +1150,7 @@ impl D3d11Renderer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn append_danmaku_glyph_draws(
         &self,
         item: &DanmakuGlyphInstance,
@@ -1041,6 +1158,7 @@ impl D3d11Renderer {
         outline_texture: &D3d11OverlayTexture,
         viewport_w: u32,
         viewport_h: u32,
+        target: TargetColorState,
         draws: &mut Vec<D3d11OverlayDraw>,
     ) {
         if item.shadow_rgba[3] > 0.0 {
@@ -1055,6 +1173,7 @@ impl D3d11Renderer {
                     item.tex_rect,
                     viewport_w,
                     viewport_h,
+                    target,
                 ),
             });
         }
@@ -1067,6 +1186,7 @@ impl D3d11Renderer {
                     item.tex_rect,
                     viewport_w,
                     viewport_h,
+                    target,
                 ),
             });
         }
@@ -1078,6 +1198,7 @@ impl D3d11Renderer {
                 item.tex_rect,
                 viewport_w,
                 viewport_h,
+                target,
             ),
         });
     }
@@ -1087,6 +1208,7 @@ impl D3d11Renderer {
         frame: &OverlayFrame,
         viewport_w: u32,
         viewport_h: u32,
+        target: TargetColorState,
         draws: &mut Vec<D3d11OverlayDraw>,
     ) -> Result<()> {
         let bitmaps = &frame.subtitle_alpha_planes;
@@ -1158,6 +1280,7 @@ impl D3d11Renderer {
                     atlas_height as u32,
                     viewport_w,
                     viewport_h,
+                    target,
                 ),
             });
         }
@@ -1179,6 +1302,19 @@ impl D3d11Renderer {
             .render_target
             .as_ref()
             .ok_or_else(|| PlayerError::Renderer("d3d11: no render target attached".to_string()))?;
+        let linear_target = if matches!(surface.output_mode, D3d11OutputMode::Hdr10) {
+            Some((
+                surface.linear_render_target.as_ref().ok_or_else(|| {
+                    PlayerError::Renderer("d3d11: no linear render target attached".to_string())
+                })?,
+                surface.linear_shader_resource.as_ref().ok_or_else(|| {
+                    PlayerError::Renderer("d3d11: no linear shader resource attached".to_string())
+                })?,
+            ))
+        } else {
+            None
+        };
+        let scene_rtv = linear_target.map_or(rtv, |(linear_rtv, _)| linear_rtv);
         let swapchain = surface
             .swapchain
             .as_ref()
@@ -1189,14 +1325,35 @@ impl D3d11Renderer {
         unsafe {
             state
                 .context
-                .ClearRenderTargetView(rtv, &[0.0, 0.0, 0.0, 1.0]);
+                .ClearRenderTargetView(scene_rtv, &[0.0, 0.0, 0.0, 1.0]);
         }
-        state.draw_video(video, rtv, target_rect)?;
+        state.draw_video(video, scene_rtv, target_rect)?;
         if !overlay_draws.is_empty() {
-            state.draw_overlays(&overlay_draws, rtv, physical.width, physical.height)?;
+            // Subtitle coordinates are produced in the video-frame viewport.
+            // Composite them through the same aspect-fit viewport as the video
+            // so resizing the window cannot stretch the subtitle independently.
+            state.draw_overlays(&overlay_draws, scene_rtv, target_rect)?;
         }
         if !danmaku_draws.is_empty() {
-            state.draw_overlays(&danmaku_draws, rtv, physical.width, physical.height)?;
+            state.draw_overlays(
+                &danmaku_draws,
+                scene_rtv,
+                D3d11DrawRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: physical.width.max(1) as f32,
+                    height: physical.height.max(1) as f32,
+                },
+            )?;
+        }
+        if let Some((_, linear_srv)) = linear_target {
+            state.draw_encode(
+                linear_srv,
+                rtv,
+                physical.width,
+                physical.height,
+                video.constants,
+            )?;
         }
         present_swapchain(swapchain, "IDXGISwapChain1::Present1")?;
         self.stats.rendered_frames += 1;
@@ -1216,7 +1373,7 @@ impl D3d11Renderer {
         if self
             .surface
             .as_ref()
-            .is_some_and(|surface| surface.swapchain.is_none() || surface.render_target.is_none())
+            .is_some_and(|surface| !surface.targets_ready())
         {
             self.recreate_surface_targets()?;
         }
@@ -1275,6 +1432,8 @@ impl RendererBackend for D3d11Renderer {
             output_mode: D3d11OutputMode::Sdr,
             swapchain: None,
             render_target: None,
+            linear_render_target: None,
+            linear_shader_resource: None,
         });
         self.hdr10_output_unavailable = false;
         self.stats.attached = true;
@@ -1308,6 +1467,8 @@ impl RendererBackend for D3d11Renderer {
     }
 
     fn render_test_frame(&mut self, time_seconds: f64) -> Result<()> {
+        // PQ code value zero is black, so the current clear-only test frame
+        // can safely bypass the scene-linear intermediate target.
         self.render_clear(time_seconds)
     }
 
@@ -1415,6 +1576,7 @@ impl D3d11DeviceState {
     fn new(device: ID3D11Device, context: ID3D11DeviceContext) -> Result<Self> {
         let vertex_blob = compile_shader("vs_main", "vs_4_0")?;
         let pixel_blob = compile_shader("ps_main", "ps_4_0")?;
+        let encode_pixel_blob = compile_shader("encode_ps_main", "ps_4_0")?;
         let overlay_vertex_blob =
             compile_shader_source(OVERLAY_SHADER_SOURCE, "overlay_vs_main", "vs_4_0")?;
         let overlay_pixel_blob =
@@ -1439,6 +1601,17 @@ impl D3d11DeviceState {
             }
             shader.ok_or_else(|| {
                 PlayerError::Renderer("d3d11: CreatePixelShader returned null".to_string())
+            })?
+        };
+        let encode_pixel_shader = {
+            let mut shader = None;
+            unsafe {
+                device
+                    .CreatePixelShader(blob_bytes(&encode_pixel_blob), None, Some(&mut shader))
+                    .map_err(|error| d3d_error("ID3D11Device::CreatePixelShader(encode)", error))?;
+            }
+            shader.ok_or_else(|| {
+                PlayerError::Renderer("d3d11: CreatePixelShader(encode) returned null".to_string())
             })?
         };
         let overlay_vertex_shader = {
@@ -1481,6 +1654,7 @@ impl D3d11DeviceState {
             context,
             vertex_shader,
             pixel_shader,
+            encode_pixel_shader,
             input_layout,
             vertex_buffer,
             constants,
@@ -1561,17 +1735,16 @@ impl D3d11DeviceState {
         &self,
         draws: &[D3d11OverlayDraw],
         render_target: &ID3D11RenderTargetView,
-        width: u32,
-        height: u32,
+        target: D3d11DrawRect,
     ) -> Result<()> {
         if draws.is_empty() {
             return Ok(());
         }
         let viewport = D3D11_VIEWPORT {
-            TopLeftX: 0.0,
-            TopLeftY: 0.0,
-            Width: width.max(1) as f32,
-            Height: height.max(1) as f32,
+            TopLeftX: target.x,
+            TopLeftY: target.y,
+            Width: target.width.max(1.0),
+            Height: target.height.max(1.0),
             MinDepth: 0.0,
             MaxDepth: 1.0,
         };
@@ -1626,6 +1799,73 @@ impl D3d11DeviceState {
             }
             self.context.PSSetShaderResources(0, Some(&[None]));
             self.context.OMSetBlendState(None, None, u32::MAX);
+        }
+        Ok(())
+    }
+
+    fn draw_encode(
+        &self,
+        scene: &ID3D11ShaderResourceView,
+        render_target: &ID3D11RenderTargetView,
+        width: u32,
+        height: u32,
+        mut constants: VideoUniforms,
+    ) -> Result<()> {
+        constants.scene_linear = 0;
+        let viewport = D3D11_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: width.max(1) as f32,
+            Height: height.max(1) as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let stride = mem::size_of::<VideoVertex>() as u32;
+        let offset = 0u32;
+        let vertices = video_vertices(D3d11TexRect::FULL);
+        unsafe {
+            self.context.UpdateSubresource(
+                &self.vertex_buffer,
+                0,
+                None,
+                vertices.as_ptr() as *const c_void,
+                0,
+                0,
+            );
+            self.context.UpdateSubresource(
+                &self.constants,
+                0,
+                None,
+                &constants as *const _ as *const c_void,
+                0,
+                0,
+            );
+            self.context.RSSetViewports(Some(&[viewport]));
+            self.context
+                .IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            self.context.IASetInputLayout(&self.input_layout);
+            self.context.IASetVertexBuffers(
+                0,
+                1,
+                Some(&Some(self.vertex_buffer.clone())),
+                Some(&stride),
+                Some(&offset),
+            );
+            self.context.VSSetShader(&self.vertex_shader, None);
+            self.context.PSSetShader(&self.encode_pixel_shader, None);
+            self.context
+                .PSSetConstantBuffers(0, Some(&[Some(self.constants.clone())]));
+            self.context
+                .PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
+            // Unbind the scene texture as an RTV before exposing it as an SRV.
+            self.context
+                .OMSetRenderTargets(Some(&[Some(render_target.clone())]), None);
+            self.context.OMSetBlendState(None, None, u32::MAX);
+            self.context
+                .PSSetShaderResources(0, Some(&[Some(scene.clone())]));
+            self.context.Draw(6, 0);
+            // The same texture becomes an RTV again on the next frame.
+            self.context.PSSetShaderResources(0, Some(&[None]));
         }
         Ok(())
     }
@@ -1823,6 +2063,68 @@ fn create_render_target(
     Ok(view)
 }
 
+fn create_linear_render_target(
+    device: &ID3D11Device,
+    width: u32,
+    height: u32,
+) -> Result<(ID3D11RenderTargetView, ID3D11ShaderResourceView)> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width.max(1),
+        Height: height.max(1),
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32 | D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+    let mut texture = None;
+    unsafe {
+        device
+            .CreateTexture2D(&desc, None, Some(&mut texture))
+            .map_err(|error| d3d_error("ID3D11Device::CreateTexture2D(linear target)", error))?;
+    }
+    let texture = texture.ok_or_else(|| {
+        PlayerError::Renderer("d3d11: linear render target texture was null".to_string())
+    })?;
+    let resource: ID3D11Resource = texture.cast().map_err(|error| {
+        d3d_error(
+            "ID3D11Texture2D::cast<ID3D11Resource>(linear target)",
+            error,
+        )
+    })?;
+    let mut render_target = None;
+    let mut shader_resource = None;
+    unsafe {
+        device
+            .CreateRenderTargetView(&resource, None, Some(&mut render_target))
+            .map_err(|error| {
+                d3d_error("ID3D11Device::CreateRenderTargetView(linear target)", error)
+            })?;
+        device
+            .CreateShaderResourceView(&resource, None, Some(&mut shader_resource))
+            .map_err(|error| {
+                d3d_error(
+                    "ID3D11Device::CreateShaderResourceView(linear target)",
+                    error,
+                )
+            })?;
+    }
+    Ok((
+        render_target.ok_or_else(|| {
+            PlayerError::Renderer("d3d11: linear render target view was null".to_string())
+        })?,
+        shader_resource.ok_or_else(|| {
+            PlayerError::Renderer("d3d11: linear shader resource view was null".to_string())
+        })?,
+    ))
+}
+
 fn present_swapchain(swapchain: &IDXGISwapChain1, operation: &'static str) -> Result<()> {
     let params = DXGI_PRESENT_PARAMETERS {
         DirtyRectsCount: 0,
@@ -1830,9 +2132,14 @@ fn present_swapchain(swapchain: &IDXGISwapChain1, operation: &'static str) -> Re
         pScrollRect: ptr::null_mut(),
         pScrollOffset: ptr::null_mut(),
     };
-    unsafe { swapchain.Present1(1, DXGI_PRESENT(0), &params) }
-        .ok()
-        .map_err(|error| d3d_error(operation, error))
+    let status = unsafe { swapchain.Present1(0, DXGI_PRESENT_DO_NOT_WAIT, &params) };
+    // Rendering shares the Windows platform thread with WM_MOVING. Never wait
+    // for a full DXGI queue here: dropping one presentation keeps window
+    // interaction responsive while decode/audio continue normally.
+    if status == DXGI_ERROR_WAS_STILL_DRAWING {
+        return Ok(());
+    }
+    status.ok().map_err(|error| d3d_error(operation, error))
 }
 
 fn create_plane_srv(
@@ -2228,11 +2535,16 @@ fn constants_for_frame(
     target: TargetColorState,
 ) -> VideoUniforms {
     let pipeline = VideoRenderPipeline::new(source, target);
-    VideoUniforms::from_pipeline(
+    let uniforms = VideoUniforms::from_pipeline(
         &pipeline,
         matches!(texture_format, D3d11VideoTextureFormat::P010),
         false,
-    )
+    );
+    if matches!(target.transfer, TransferFunction::Pq) {
+        uniforms.scene_linear_output()
+    } else {
+        uniforms
+    }
 }
 
 fn dxgi_hdr10_metadata(source: SourceColorState) -> DXGI_HDR_METADATA_HDR10 {
@@ -2422,6 +2734,7 @@ mod tests {
     fn d3d11_video_shader_compiles() {
         compile_shader("vs_main", "vs_4_0").unwrap();
         compile_shader("ps_main", "ps_4_0").unwrap();
+        compile_shader("encode_ps_main", "ps_4_0").unwrap();
     }
 
     #[test]
@@ -2462,6 +2775,37 @@ mod tests {
         assert_eq!(target.transfer, TransferFunction::Pq);
         assert_eq!(target.peak_nits, 10_000.0);
         assert_eq!(target.reference_white_nits, 203.0);
+    }
+
+    #[test]
+    fn hdr10_video_constants_request_scene_linear_output() {
+        let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq);
+        let hdr10 = constants_for_frame(
+            source,
+            D3d11VideoTextureFormat::P010,
+            D3d11OutputMode::Hdr10.target_color(),
+        );
+        let sdr = constants_for_frame(
+            source,
+            D3d11VideoTextureFormat::P010,
+            D3d11OutputMode::Sdr.target_color(),
+        );
+
+        assert_eq!(hdr10.scene_linear, 1);
+        assert_eq!(sdr.scene_linear, 0);
+    }
+
+    #[test]
+    fn overlay_uniforms_enable_scene_linear_only_for_hdr10() {
+        let hdr10 =
+            OverlayUniforms::rgba_plane(0, 0, 1, 1, 1, 1, D3d11OutputMode::Hdr10.target_color());
+        let sdr =
+            OverlayUniforms::rgba_plane(0, 0, 1, 1, 1, 1, D3d11OutputMode::Sdr.target_color());
+
+        assert_eq!(mem::size_of::<OverlayUniforms>(), 80);
+        assert_eq!(hdr10.ui_nits[0], 203.0);
+        assert_eq!(hdr10.ui_nits[1], 203.0);
+        assert_eq!(sdr.ui_nits[1], 0.0);
     }
 
     #[test]

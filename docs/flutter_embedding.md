@@ -75,6 +75,24 @@ API 35 HDR device. Unsupported displays, GLES, `TextureView`, missing FP16, or
 dataspace verification failures continue in SDR with a queryable fallback
 reason and explicit logs.
 
+## HarmonyOS Surface Strategies
+
+On HarmonyOS, use `ErikaVideoView`. The ArkTS plugin registers a Flutter
+external texture, takes that texture's surface as an `OHNativeWindow`, and
+attaches it to the presenter; wgpu then renders through Vulkan, using
+`VK_OHOS_surface` for window-system integration.
+
+Video decoding defaults to HarmonyOS AVCodec (H.264 and HEVC). AVCodec decodes
+straight into a Surface, whose `OHNativeBuffer` is imported as a Vulkan
+external image and resolved by a Vulkan YCbCr sampler, so decoded frames reach
+the compositor with no CPU copy. Subtitles, danmaku, and overlays composite in
+the same wgpu pass as every other platform.
+
+Devices missing the required Vulkan extensions fall back to FFmpeg software
+decode with CPU upload. The fallback is reported through `VideoDecoderChanged`
+events and presenter diagnostics instead of failing playback. The HarmonyOS
+path is validated on device but is not yet covered by CI.
+
 ## iOS Build Path
 
 The iOS plugin links the Erika C ABI static library into the app through a
@@ -167,14 +185,41 @@ final status = await player.getUpscalerStatus();
 
 // Track management
 final tracks = await player.tracks();
+for (final track in tracks) {
+  if (track.kind == ErikaTrackKind.video && track.selected) {
+    print('${track.codec} ${track.width}x${track.height}');
+    print('${track.bitRate} bps / ${track.framesPerSecond} fps');
+    break;
+  }
+}
 await player.selectAudioTrack(trackId);
 await player.selectSubtitleTrack(trackId);
 await player.addExternalSubtitle('/path/to/subtitle.srt');
+await player.setSubtitleScale(1.2);
+// Fallback subtitle look (colors are 0xRRGGBBAA). Omitted arguments keep
+// whatever this player last applied; overrideMask bits also replace the
+// styling an ASS script carries.
+await player.setSubtitleStyle(
+  fontFamily: 'Source Han Sans SC',
+  primaryColorRgba: 0xFFFFFFFF,
+  outlineColorRgba: 0x0000007F,
+  fontSize: 48,
+  outlineWidth: 2,
+  overrideMask:
+      kErikaSubtitleOverrideFontName |
+      kErikaSubtitleOverrideColors |
+      kErikaSubtitleOverrideFontSizeFields |
+      kErikaSubtitleOverrideBorder,
+);
 
 // Danmaku
 await player.loadDanmakuFile('/path/to/danmaku.xml');
 await player.addDanmakuTrackJson(jsonString, name: 'source', offset: Duration.zero);
 await player.setDanmakuConfig(fontSize: 30, displayArea: 0.5);
+
+// Native diagnostics HUD (disabled by default)
+await player.setDebugHudEnabled(true);
+final presenterStats = await player.getPresenterStats();
 
 // Events
 player.events.listen((event) {
@@ -183,6 +228,53 @@ player.events.listen((event) {
 
 await player.dispose();
 ```
+
+## Media Track Information
+
+`tracks()` returns an `ErikaTrackInfo` for every embedded or external track. A video track
+provides `codec`, `width`, `height`, `pixelFormat`, `profile`, `level`, `bitRate`,
+`frameRateNumerator`, and `frameRateDenominator`; audio tracks additionally provide
+`sampleRate`, `channels`, and `sampleFormat`.
+
+- `bitRate` is in bit/s. Erika prefers the video track's own codec parameters; only when there is
+  one video track with no bitrate and the container total plus every other audio-track bitrate are
+  known does it estimate video bitrate as container bitrate minus audio bitrates. It is `null` when
+  unavailable, is not an instantaneous runtime bitrate, and an estimate can include container
+  overhead or non-audio streams.
+- `frameRateNumerator` / `frameRateDenominator` retain the rational value, preventing values
+  such as `30000/1001` from being truncated. The probe order is average frame rate,
+  `r_frame_rate`, then FFmpeg's guessed frame rate. `framesPerSecond` is a Dart convenience
+  getter; for variable-frame-rate media it remains an average, declared, or guessed value.
+- `TracksChanged` and `TrackSelectionChanged` events include the complete `trackList`. Hosts may
+  also call `tracks()` again after either event to obtain a current snapshot.
+
+```dart
+player.events.listen((event) {
+  if (event.kind == ErikaEventKind.tracksChanged) {
+    for (final track in event.trackList) {
+      if (track.kind == ErikaTrackKind.video && track.selected) {
+        print(track.toMap());
+        break;
+      }
+    }
+  }
+});
+```
+
+## Native Debug HUD
+
+`setDebugHudEnabled(true)` makes Erika draw a diagnostic HUD in the native video composition. It
+does not render through Dart or alter the Flutter widget hierarchy. It is off by
+default and intended for development, performance analysis, and on-device diagnosis.
+
+The low-frequency HUD snapshot includes track codec/resolution/bitrate/frame rate, playback
+position and rate, decoded and rendered FPS, hardware/software decode route, zero-copy/fallback
+counters, CPU/GPU render times, audio queue and underflow, HDR output negotiation, and danmaku
+item count. FPS is derived from adjacent sampling windows; frame and failure counters are
+cumulative for the presenter lifetime. The HUD is excluded from `screenshot()` off-screen captures.
+
+For a custom UI, use `getPresenterStats()` to retrieve the latest native display-tick snapshot. It
+does not drive the HUD, and its freshness depends on an attached surface and active display loop.
 
 ## Neural Upscaler Status
 

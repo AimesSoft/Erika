@@ -15,7 +15,9 @@ wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 [dependencies]
 ab_glyph.workspace = true
 aho-corasick.workspace = true
+chardetng.workspace = true
 crossbeam-channel.workspace = true
+encoding_rs.workspace = true
 fontdb.workspace = true
 libc.workspace = true
 erika_ffmpeg_sys = { path = "../erika_ffmpeg_sys" }
@@ -27,7 +29,7 @@ smallvec.workspace = true
 soundtouch.workspace = true
 thiserror.workspace = true
 ureq.workspace = true
-wgpu = { version = "29.0.3", optional = true }
+wgpu = { version = "=29.0.3", optional = true }
 pollster = { version = "0.4.0", optional = true }
 bytemuck = { version = "1.25.0", features = ["derive"], optional = true }
 
@@ -53,6 +55,10 @@ windows = { workspace = true, features = [
 
 [target.'cfg(target_os = "android")'.dependencies]
 ash = "0.38.0"
+
+[target.'cfg(target_env = "ohos")'.dependencies]
+ash = "0.38.0"
+glow = "0.17.0"
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2.workspace = true
