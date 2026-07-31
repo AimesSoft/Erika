@@ -12,7 +12,7 @@ use ::windows::Win32::Graphics::Direct3D::{
 use ::windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
     D3D11_BLEND_DESC, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_ONE, D3D11_BLEND_OP_ADD,
-    D3D11_BLEND_SRC_ALPHA, D3D11_BUFFER_DESC, D3D11_COLOR_WRITE_ENABLE_ALL,
+    D3D11_BLEND_SRC_ALPHA, D3D11_BOX, D3D11_BUFFER_DESC, D3D11_COLOR_WRITE_ENABLE_ALL,
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_VERTEX_DATA,
     D3D11_RENDER_TARGET_BLEND_DESC, D3D11_SAMPLER_DESC, D3D11_SDK_VERSION,
     D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA,
@@ -44,7 +44,9 @@ use crate::core::{
     RenderFrameContext, RendererBackend, RendererRuntimeStats, Result, SurfaceMetrics,
     TransferFunction, WgpuSurfaceKind,
 };
-use crate::danmaku::{DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan};
+use crate::danmaku::{
+    DanmakuAtlasUpdate, DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan,
+};
 use crate::ffmpeg::Frame;
 use crate::overlay::OverlayFrame;
 use crate::renderer::metal::MetalRendererConfig;
@@ -1067,6 +1069,21 @@ impl D3d11Renderer {
                 return Ok((cache.fill.clone(), cache.outline.clone()));
             }
         }
+        let incremental = self.danmaku_atlas_cache.as_ref().and_then(|cache| {
+            atlas
+                .incremental_update_from(cache.version, cache.width, cache.height, cache.stride)
+                .map(|update| (cache.fill.clone(), cache.outline.clone(), update.clone()))
+        });
+        if let Some((fill, outline, update)) = incremental {
+            self.update_danmaku_atlas_texture(&fill, atlas, &atlas.fill_alpha, &update);
+            self.update_danmaku_atlas_texture(&outline, atlas, &atlas.outline_alpha, &update);
+            if let Some(cache) = &mut self.danmaku_atlas_cache {
+                cache.version = atlas.version;
+            }
+            self.stats.overlay_alpha_atlas_uploads += 1;
+            self.stats.overlay_alpha_atlas_reuses += 1;
+            return Ok((fill, outline));
+        }
 
         let (fill, outline) = {
             let state = self.state.as_ref().expect("device ensured");
@@ -1099,6 +1116,38 @@ impl D3d11Renderer {
             outline: outline.clone(),
         });
         Ok((fill, outline))
+    }
+
+    fn update_danmaku_atlas_texture(
+        &self,
+        texture: &D3d11OverlayTexture,
+        atlas: &DanmakuGlyphAtlas,
+        pixels: &[u8],
+        update: &DanmakuAtlasUpdate,
+    ) {
+        let offset = update.y as usize * atlas.stride + update.x as usize;
+        let update_box = D3D11_BOX {
+            left: update.x,
+            top: update.y,
+            front: 0,
+            right: update.x.saturating_add(update.width),
+            bottom: update.y.saturating_add(update.height),
+            back: 1,
+        };
+        unsafe {
+            self.state
+                .as_ref()
+                .expect("device ensured")
+                .context
+                .UpdateSubresource(
+                    &texture._texture,
+                    0,
+                    Some(&update_box as *const D3D11_BOX),
+                    pixels[offset..].as_ptr().cast::<c_void>(),
+                    atlas.stride as u32,
+                    0,
+                );
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

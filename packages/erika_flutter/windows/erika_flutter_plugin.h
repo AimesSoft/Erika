@@ -94,6 +94,8 @@ class ErikaFlutterPlugin : public flutter::Plugin {
                                               LPARAM lparam);
 
   ErikaOverlayWindow& EnsureOverlayWindow();
+  HWND RequestedOverlayFlutterWindow() const;
+  void UpdateOverlayTarget(const flutter::EncodableMap& args);
   PlayerHost& PlayerFromArgs(const flutter::EncodableMap& args);
   void ResizeAttachedOverlay();
   int64_t CreatePlayer(const flutter::EncodableValue* arguments);
@@ -112,6 +114,8 @@ class ErikaFlutterPlugin : public flutter::Plugin {
   std::unique_ptr<ErikaOverlayWindow> overlay_window_;
   std::unique_ptr<ErikaWindowsSmtc> smtc_;
   int64_t active_player_id_ = 0;
+  int64_t requested_flutter_view_id_ = 0;
+  bool overlay_uses_secondary_window_ = false;
   int64_t next_player_id_ = 1;
   int window_proc_delegate_id_ = 0;
   HWND frame_message_window_ = nullptr;

@@ -19,6 +19,11 @@ license files:
 | Windows ARM64 | `erika-capi-windows-arm64.zip` | `erika_capi.dll`, `erika_capi.dll.lib` (import), `erika_capi.lib` (static) |
 | iOS | `erika-capi-ios.zip` | `erika_capi.xcframework` (device + simulator) |
 | Android | `erika-capi-android.zip` | `liberika_capi.so`, `liberika_capi.a`, and `libc++_shared.so` for `arm64-v8a`, `armeabi-v7a`, `x86_64`, and `x86` |
+| OpenHarmony arm64 | `erika-capi-openharmony-arm64.zip` | `liberika_capi.so`, `liberika_flutter.so` |
+
+The OpenHarmony archive is built against the OpenHarmony 5.1.0 native SDK with
+compatible SDK version 18. It contains the C API runtime and Flutter N-API
+bridge; automatic `ERIKA_PREBUILT` consumption is not yet wired into Hvigor.
 
 The Android archive stores each ABI at `lib/android/<abi>/`. Flutter/Gradle
 consumers package `liberika_capi.so` together with the matching NDK
@@ -51,8 +56,8 @@ The release is fully automated by
    section, and bump `version` in the root `Cargo.toml` if appropriate.
 2. Tag and push:
    ```sh
-   git tag v0.1.3
-   git push origin v0.1.3
+   git tag v0.1.4
+   git push origin v0.1.4
    ```
 3. The workflow builds macOS arm64 on `macos-15` and macOS x64 on
    `macos-15-intel`, then combines those native-host outputs into the universal
@@ -88,7 +93,7 @@ Enable it by setting environment variables in the host app's build:
 | Variable | Effect |
 |----------|--------|
 | `ERIKA_PREBUILT=1` | Download the prebuilt `erika_capi` instead of building from source. |
-| `ERIKA_PREBUILT_TAG=v0.1.3` | Release tag to download (default `v0.1.3`). |
+| `ERIKA_PREBUILT_TAG=v0.1.4` | Release tag to download (default `v0.1.4`). |
 | `ERIKA_FORCE_SOURCE_BUILD=1` | Bypass the prebuilt path and build the local source, useful when debugging Erika changes through the Flutter plugin. |
 | `ERIKA_MACOS_ARCHS=universal|arm64|x86_64|arm64,x86_64` | Select the macOS source and prebuilt artifact architecture. |
 

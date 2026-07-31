@@ -673,7 +673,9 @@ class _ErikaWindowOverlayVideoViewState
     }
 
     try {
-      await widget.player.attachWindowOverlay();
+      await widget.player.attachWindowOverlay(
+        flutterViewId: View.of(context).viewId,
+      );
       _isBound = true;
       _scheduleFrameUpdate(force: true);
     } catch (error) {
@@ -753,6 +755,7 @@ class _ErikaWindowOverlayVideoViewState
         frame: rect,
         visible: visible,
         generation: _surfaceGeneration,
+        flutterViewId: View.of(context).viewId,
         debugLabel: widget.debugLabel,
       );
     } catch (error) {

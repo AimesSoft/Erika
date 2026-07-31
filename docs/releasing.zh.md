@@ -15,6 +15,11 @@
 | Windows ARM64 | `erika-capi-windows-arm64.zip` |
 | iOS | `erika-capi-ios.zip`，包含 device 和 simulator XCFramework slice |
 | Android | `erika-capi-android.zip`，包含 `arm64-v8a`、`armeabi-v7a`、`x86_64`、`x86` |
+| OpenHarmony arm64 | `erika-capi-openharmony-arm64.zip`，包含 `liberika_capi.so` 和 `liberika_flutter.so` |
+
+OpenHarmony 归档使用 OpenHarmony 5.1.0 Native SDK、compatible SDK 18 构建，
+包含 C API runtime 和 Flutter N-API bridge；Hvigor 暂未接入自动
+`ERIKA_PREBUILT` 下载。
 
 每个归档还包含 `include/erika.h`、`LICENSE`、`THIRD_PARTY_NOTICES.md`、依赖许可证和记录 tag/commit 的 `MANIFEST.txt`。原生依赖使用 `lgpl` profile 静态链接；Android 同时携带匹配 ABI 的 `libc++_shared.so`。
 
@@ -23,8 +28,8 @@
 Release 由 [release.yml](../.github/workflows/release.yml) 自动执行。推送 `v*` tag 才会创建 GitHub Release：
 
 ```sh
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 手动运行 `workflow_dispatch` 只生成 Actions Artifact，不发布可供 `ERIKA_PREBUILT_TAG` 下载的 GitHub Release。
@@ -35,7 +40,7 @@ macOS arm64 在 `macos-15` 原生构建，x64 在 `macos-15-intel` 原生构建�
 
 ```sh
 export ERIKA_PREBUILT=1
-export ERIKA_PREBUILT_TAG=v0.1.3
+export ERIKA_PREBUILT_TAG=v0.1.4
 ```
 
 建议始终显式固定 `ERIKA_PREBUILT_TAG`，保证插件源码和 C ABI 版本一致。下载或解压失败会回退源码构建；本地调试时设置：
@@ -59,7 +64,7 @@ export ERIKA_FORCE_SOURCE_BUILD=1
 Android 示例：
 
 ```sh
-ERIKA_PREBUILT=1 ERIKA_PREBUILT_TAG=v0.1.3 \
+ERIKA_PREBUILT=1 ERIKA_PREBUILT_TAG=v0.1.4 \
 ERIKA_ANDROID_ABIS=arm64-v8a,x86_64 flutter build apk
 ```
 

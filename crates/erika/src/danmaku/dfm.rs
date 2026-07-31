@@ -14,6 +14,7 @@ use super::dfm_core::{
     model::{DanmakuItem, DanmakuType, Duration, GlobalFlags},
     retainer::DanmakuRetainer,
 };
+use super::outline::resolve_width_px;
 use std::hash::{Hash, Hasher};
 
 const STATIC_DURATION_MS: i64 = 3800;
@@ -90,11 +91,6 @@ pub struct PreparedItem {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct FrameLayout {
-    pub items: Vec<FrameItem>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct FrameItem {
     pub item_index: usize,
     pub track_index: i32,
@@ -112,7 +108,7 @@ pub fn prepare_layout(request: PrepareRequest) -> Result<PreparedLayout, String>
     let scroll_dur_ms = (scroll_dur_secs * 1000.0) as i64;
     let global_flags = GlobalFlags::default();
     let outline_width = request.outline_width.max(0.0) as f32;
-    let outline_px = resolve_outline_px(font_size, outline_width);
+    let outline_px = resolve_width_px(font_size, outline_width);
 
     let mut items = request
         .items
@@ -323,7 +319,20 @@ fn track_index_from_y(y: f32, height: f32, track_gap_ratio: f32) -> i32 {
     ((y - 2.0).max(0.0) / track_height).round().max(0.0) as i32
 }
 
-pub fn layout_frame(layout: &PreparedLayout, current_time: f64) -> FrameLayout {
+pub fn frame_candidate_count(layout: &PreparedLayout, current_time: f64) -> usize {
+    let max_dur = layout
+        .scroll_duration_seconds
+        .max(layout.static_duration_seconds);
+    let start_idx = lower_bound(&layout.item_times, current_time - max_dur);
+    let end_idx = upper_bound(&layout.item_times, current_time);
+    end_idx.saturating_sub(start_idx)
+}
+
+pub fn for_each_frame_item(
+    layout: &PreparedLayout,
+    current_time: f64,
+    mut visit: impl FnMut(FrameItem),
+) {
     let width = layout.width;
     let scroll_dur = layout.scroll_duration_seconds;
     let static_dur = layout.static_duration_seconds;
@@ -331,7 +340,6 @@ pub fn layout_frame(layout: &PreparedLayout, current_time: f64) -> FrameLayout {
     let window_start = current_time - max_dur;
     let start_idx = lower_bound(&layout.item_times, window_start);
     let end_idx = upper_bound(&layout.item_times, current_time);
-    let mut frame_items = Vec::with_capacity(end_idx.saturating_sub(start_idx));
 
     for i in start_idx..end_idx {
         let item = &layout.items[i];
@@ -358,7 +366,7 @@ pub fn layout_frame(layout: &PreparedLayout, current_time: f64) -> FrameLayout {
         if item.y_position < 0.0 {
             continue;
         }
-        frame_items.push(FrameItem {
+        visit(FrameItem {
             item_index: i,
             track_index: item.track_index,
             x,
@@ -366,8 +374,6 @@ pub fn layout_frame(layout: &PreparedLayout, current_time: f64) -> FrameLayout {
             offstage_x,
         });
     }
-
-    FrameLayout { items: frame_items }
 }
 
 fn merge_duplicate_items(items: &mut [(u64, bool, f32, u32, DanmakuItem)]) {
@@ -403,14 +409,6 @@ fn fxhash_str(s: &str) -> u64 {
     let mut hasher = FxHasher::default();
     s.hash(&mut hasher);
     hasher.finish()
-}
-
-fn resolve_outline_px(font_size: f32, outline_width: f32) -> f32 {
-    let multiplier = outline_width.clamp(0.0, 4.0);
-    if multiplier <= 0.0 || !multiplier.is_finite() {
-        return 0.0;
-    }
-    (font_size * 0.06).clamp(1.0, 2.6) * multiplier
 }
 
 fn exceeds_max_line(

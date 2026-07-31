@@ -2,52 +2,117 @@
 
 ## Unreleased
 
-### Subtitle font fallback and style
+## 0.1.4 - 2026-07-30
 
-- libass now registers Erika's bundled Droid Sans Fallback on every platform,
-  not just iOS/Android, and targets without a system font provider (the
-  vendored libass build disables fontconfig) default to that family instead of
-  an unresolvable `Arial`.
-- Added a subtitle style: a custom font family and font file, text/outline
-  colours (`0xRRGGBBAA`), metrics (size, outline, shadow, blur, spacing, scale),
-  bold/italic/underline/strike-out, border style, alignment and margins. They act
-  as fallbacks — an ASS script keeps its own styling — and an `override_mask`
-  promotes chosen fields to libass' selective style override so they replace what
-  dialogue events request. The override metrics are renormalized against the
-  frame height, so they land on the same pixels whatever `PlayResY` a script
-  declares; override margins stay in script units, which libass does not
-  normalize. The existing subtitle scale still multiplies the metrics.
-- New C API: `erika_presenter_set_subtitle_font`,
-  `erika_presenter_set_subtitle_style`. New Dart API:
-  `ErikaPlayer.setSubtitleStyle`.
+### Compatibility notes
 
-### Native architectures and release artifacts
+- **`outline_width` is now a profile, not a multiplier.** `0` is off, `1` fine,
+  `2` normal, `3` thick; values above `3` clamp to thick. Normal and thick
+  reproduce exactly the widths the old continuous multiplier produced at `1.0`
+  and `2.0`, so a host that used to send `outline_width: 1.0` must now send
+  `2.0` to keep the same stroke. Left unmigrated, outlines render thinner —
+  at the default font size the rasterized radius halves from 2 px to 1 px.
+- **Danmaku font size is now interpreted as pixels per em.** `ab_glyph`'s
+  `PxScale` is an ascent-to-descent height, and the previous code passed the
+  em size straight into it, so text rendered smaller than requested by the
+  font's own height/em ratio. Text now matches the requested size, which means
+  existing users see larger danmaku on upgrade: the ratio is 1.0 for STHeiti
+  and Hiragino Sans GB, but 1.4 for PingFang SC (the default macOS face), so
+  the same configuration can render up to 40% larger and fit fewer tracks.
+  Hosts that want the previous look should lower their configured font size.
+- Scroll duration now scales with the viewport's logical width (×0.9 at 640 pt
+  up to ×1.3 at 1920 pt and wider) so a danmaku crosses wide windows in a
+  comparable amount of visual time. The same configuration therefore scrolls
+  more slowly on a large window than it did before.
+- Danmaku screenshots no longer include danmaku; `capture_*` composites video
+  and subtitles only. The debug HUD is also excluded from captures.
 
+### Platform support and release artifacts
+
+- Added an OpenHarmony player backend and Flutter plugin with AVCodec H.264/HEVC
+  hardware decoding, OHNativeBuffer/Vulkan zero-copy presentation, WGPU
+  composition, subtitles, danmaku, audio, diagnostics, and RGBA screenshots.
+  The release includes `erika-capi-openharmony-arm64.zip` with the C API runtime
+  and Flutter native bridge.
 - Added native Windows ARM64 dependency and `erika_capi` builds, plus the new
   `erika-capi-windows-arm64.zip` release archive. Windows x64 and ARM64 CI run
   on matching GitHub-hosted architectures.
 - Added selectable macOS arm64, x86_64, and universal builds and corresponding
   architecture-specific release archives.
-- Re-enabled FFmpeg's optimized x86 assembly for shipped x86_64 builds. These
-  builds now require NASM and replace the previous C/compiler-vectorized FFmpeg
-  paths used while `--disable-x86asm` was enabled.
+- Fixed Android source builds on Apple Silicon by selecting the universal
+  `glslc` shipped in the NDK's `darwin-x86_64` tools directory.
+- Re-enabled FFmpeg's optimized x86 assembly for shipped x86_64 builds. Source
+  builds for these targets now require NASM.
 
-### Custom HTTP headers
+### Playback, rendering, and window integration
 
-- Added `erika_open_with_headers` and `erika_presenter_open_with_headers`,
-  which carry caller-supplied headers (`Authorization`, session cookies, …)
-  on the `HEAD` probe, every ranged `GET`, and the prefetch thread. The C ABI
-  now exports 75 functions.
-- `erika_open` and `erika_presenter_open` are unchanged and delegate to the new
-  entry points with an empty header list.
-- `ErikaPlayer.open` accepts `httpHeaders` on Android, iOS, macOS, and Windows.
-  When the loaded native library predates these exports, an open that carries
-  headers now fails with an explicit error instead of silently dropping them.
-- Headers Erika derives itself (`Range`, `Host`, `Content-Length`,
-  `Transfer-Encoding`, `Connection`) are rejected at the ABI boundary, as are
-  header names and values that are not valid HTTP field tokens.
-- External subtitle and danmaku sidecar loads still use the headerless path;
-  they do not yet inherit the request's headers.
+- Published the shared playback clock directly and made frame snapshots sample
+  time, state, and generation atomically. Danmaku, subtitles, and rendering now
+  use the same time base without a separate forward-only display clock.
+- Paused seeks now decode and present the requested preview frame while keeping
+  the media clock frozen. Seek preroll, EOF, immediate pause-after-seek, and
+  resume startup races no longer produce clock rollback, worker spin, or a
+  prolonged black frame.
+- Separated audio and video demux demand so audio backpressure cannot stall video
+  packet scanning, while retaining a bounded decoded-audio queue. Switching or
+  adding subtitles no longer resets audio/video demux selection.
+- Reworked macOS presentation around `CVDisplayLink`, coalesced slow frames, and
+  retargeted the display link after screen changes. Reduced redundant overlay
+  attachment and GPU resource work during resize and window migration.
+- Added multi-`FlutterView` and secondary-window targeting to the desktop overlay
+  API. macOS and Windows overlays now follow a player between host windows while
+  preserving surface, visibility, generation, and aspect-fit state.
+- Improved Windows D3D11 overlay lifetime, non-blocking presentation, and resume
+  seek handling. Subtitles are composited in the video viewport while danmaku
+  remains in the full-window viewport.
+
+### Danmaku and subtitles
+
+- Aligned danmaku collision bounds with rasterized outlines, corrected
+  shadow/outline/text layer ordering, stabilized track preference, and limited
+  high-density overlap to overflow tracks.
+- Kept the previous danmaku plan moving while asynchronous relayout completes;
+  paint-only settings reuse layout, visibility changes apply immediately, and
+  stale plans cannot reappear after danmaku is disabled.
+- Added incremental glyph-atlas uploads and reusable Metal instance buffers, and
+  reduced per-frame DFM allocation and candidate traversal overhead.
+- Added charset detection and transcoding for external text subtitles, including
+  GBK, Big5, Shift_JIS, and UTF-16, with UTF-8 passthrough and guarded fallback
+  for low-confidence or binary input.
+- libass now registers Erika's bundled Droid Sans Fallback on every platform,
+  not just iOS/Android, and targets without a system font provider default to
+  that family instead of an unresolvable `Arial`.
+- Added subtitle fallback and selective override styling: custom font family and
+  file, RGBA colours, metrics, text attributes, border, alignment, margins, and
+  blur. New entry points are `erika_presenter_set_subtitle_font`,
+  `erika_presenter_set_subtitle_style`, and `ErikaPlayer.setSubtitleStyle`.
+
+### Networking and media diagnostics
+
+- Added `erika_open_with_headers` and `erika_presenter_open_with_headers`.
+  `ErikaPlayer.open` accepts `httpHeaders` on Android, iOS, macOS, and Windows,
+  and applies them to the probe, ranged reads, retries, and prefetch requests.
+  The original open functions remain compatible and use an empty header list.
+- Rejects caller-supplied transport headers managed by Erika and invalid HTTP
+  field names or values. External subtitle and danmaku sidecars remain on the
+  headerless path and do not inherit media request headers.
+- Hardened HTTP range input against ignored `Range` requests, incorrect response
+  offsets, transient request/body failures, partial responses, duplicate
+  prefetch downloads, and false EOF. Retries are bounded across the complete
+  fetch operation.
+- Added track bitrate and rational frame-rate metadata across Rust, C, and Dart,
+  plus an opt-in native debug HUD for decoder, renderer, GPU, audio, output/HDR,
+  and danmaku diagnostics.
+
+### Audio, colour, and codec updates
+
+- Normalized surround-to-stereo downmix matrices to prevent clipping.
+- Added smooth per-callback volume ramps on all audio backends and WASAPI device
+  loss recovery with observable recovery state and bounded backoff.
+- Added BT.2100 HLG decoding on Metal, WGPU, and D3D11, and correct PQ encoding
+  for D3D11 overlays on HDR10 output.
+- Upgraded FFmpeg to 8.1.2, improved Darwin AV1 hardware decode/import handling,
+  and preserved the last frame during seek loading instead of flashing black.
 
 ## 0.1.3 - 2026-07-17
 
