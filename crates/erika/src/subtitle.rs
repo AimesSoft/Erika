@@ -1021,6 +1021,7 @@ pub struct LibassSubtitleRenderer {
 struct LibassFontSelection {
     family: CString,
     default_font: Option<CString>,
+    memory_family: Option<CString>,
 }
 
 #[cfg(feature = "libass")]
@@ -1161,12 +1162,13 @@ impl LibassRuntime {
             family: style
                 .font_family()
                 .and_then(|family| CString::new(family).ok())
-                .or(memory_family)
+                .or_else(|| memory_family.clone())
                 .unwrap_or_else(|| default_ass_font_family_cstr().to_owned()),
             default_font: style
                 .font_file_path()
                 .filter(|path| self.custom_font_file_is_current(path))
                 .and_then(|path| CString::new(path).ok()),
+            memory_family,
         };
         if self.fonts.as_ref() == Some(&selection) {
             return false;
