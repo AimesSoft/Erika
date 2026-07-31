@@ -3467,6 +3467,7 @@ impl CachedAssTrackRenderer {
         self.track_id = None;
         self.resources = None;
         self.renderer = None;
+        self.memory_font_revision = 0;
         self.chunks.clear();
     }
 
@@ -4146,6 +4147,52 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             &SubtitleAssStyle::default(),
         );
         assert!(overlay.subtitle_alpha_planes.is_empty());
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn subtitle_state_resets_memory_font_revision_on_clear() {
+        let header = ass_test_header();
+        let resources = Arc::new(AssTrackResources::new(
+            2,
+            Arc::<[u8]>::from(header.as_bytes()),
+            Arc::<[crate::subtitle::SubtitleFontAttachment]>::from([]),
+        ));
+        let mut state = SubtitleFrameState::default();
+
+        // Simulate memory fonts having been installed at revision 5.
+        state.ass_renderer.memory_font_revision = 5;
+
+        // Push an ASS frame with a different track_id to trigger clear() via
+        // process_frame when the track_id doesn't match.
+        state.push(ass_subtitle_frame(
+            3,
+            1,
+            Duration::ZERO,
+            Duration::from_secs(2),
+            1,
+            resources,
+        ));
+
+        // Regression: clear() must reset memory_font_revision so that the
+        // next render() call detects the mismatch and rebuilds the renderer
+        // with the current memory-font snapshot.
+        assert_eq!(
+            state.ass_renderer.memory_font_revision, 0,
+            "memory_font_revision should be reset to 0 after clear()"
+        );
+
+        // When render() is called with a non-zero revision, it should
+        // trigger a rebuild with memory fonts and update the field.
+        let mut overlay = empty_overlay();
+        let mut style = SubtitleAssStyle::default();
+        style.memory_font_revision = 5;
+        state.append_to_overlay(Duration::from_millis(500), &mut overlay, &style);
+
+        assert_eq!(
+            state.ass_renderer.memory_font_revision, 5,
+            "memory_font_revision should be updated after render() rebuilds with memory fonts"
+        );
     }
 
     #[test]
