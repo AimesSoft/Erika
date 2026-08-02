@@ -24,6 +24,8 @@ flutter:
         pluginClass: ErikaFlutterPlugin
       ios:
         pluginClass: ErikaFlutterPlugin
+      tvos:
+        pluginClass: ErikaFlutterPlugin
       macos:
         pluginClass: ErikaFlutterPlugin
       windows:

@@ -25,6 +25,9 @@ xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,z
 - クロスターゲットでは対応する Rust std target を追加：
   `rustup target add aarch64-apple-ios` や
   `rustup target add x86_64-pc-windows-msvc`。
+- Rust では tvOS target は現在 tier 3 です。`rust-src` component 付きの
+  nightly を導入し、`rustup target add` ではなく Cargo の `-Z build-std`
+  を使用します。
 
 ### ビルドツール —— macOS / Unix ホスト
 
@@ -94,6 +97,9 @@ cargo run -p xtask -- deps build --all --profile lgpl
 | `aarch64-apple-ios` | iOS 実機 | |
 | `aarch64-apple-ios-sim` | iOS sim（Apple Silicon） | |
 | `x86_64-apple-ios` | iOS sim（Intel） | |
+| `aarch64-apple-tvos` | tvOS 実機 | nightly + `rust-src` が必要。 |
+| `aarch64-apple-tvos-sim` | tvOS sim（Apple Silicon） | nightly + `rust-src` が必要。 |
+| `x86_64-apple-tvos` | tvOS sim（Intel） | nightly + `rust-src` が必要。 |
 | `x86_64-pc-windows-msvc`（または `windows-x64`） | Windows | FFmpeg で VideoToolbox を D3D11VA/DXVA2 に置換。 |
 | `aarch64-pc-windows-msvc`（または `windows-arm64`） | Windows ARM64 | ARM64 native host と x64 から ARM64 への cross build をサポート。 |
 | `aarch64-linux-android`（`arm64-v8a`） | Android arm64 | |
@@ -102,8 +108,9 @@ cargo run -p xtask -- deps build --all --profile lgpl
 | `i686-linux-android`（`x86`） | Android x86 | Android 共有ライブラリで非 PIC 再配置を避けるため、x86 アセンブリ高速化を無効化。 |
 | `aarch64-unknown-linux-ohos`（`ohos-arm64`） | HarmonyOS arm64 | DevEco Studio の OpenHarmony Native SDK を使用。`OHOS_NDK_HOME` または `OHOS_SDK_NATIVE` と `aarch64-unknown-linux-ohos` Rust target が必要。 |
 
-デプロイ最小バージョンは既定で macOS `11.0` / iOS `13.0`。
-`MACOSX_DEPLOYMENT_TARGET` / `IPHONEOS_DEPLOYMENT_TARGET` で上書き可能。
+デプロイ最小バージョンは既定で macOS `11.0` / iOS `13.0` / tvOS `13.0`。
+`MACOSX_DEPLOYMENT_TARGET` / `IPHONEOS_DEPLOYMENT_TARGET` /
+`TVOS_DEPLOYMENT_TARGET` で上書き可能。
 
 HarmonyOS build は `OHOS_NDK_HOME` または `OHOS_SDK_NATIVE` が指す DevEco Studio の
 `openharmony/native` ディレクトリを使い、その中の `aarch64-unknown-linux-ohos-clang`
@@ -121,6 +128,19 @@ native library を直接 build する場合、3 つの target 指定を一致さ
 cargo run -p xtask -- deps build --all --profile lgpl --target aarch64-apple-darwin
 ERIKA_NATIVE_PROFILE=lgpl ERIKA_NATIVE_TARGET=aarch64-apple-darwin \
   cargo build -p erika_capi --release --target aarch64-apple-darwin
+```
+
+Rust の tvOS target は tier 3 のため、直接 build する場合は nightly と
+`rust-src` から standard library を build します：
+
+```sh
+rustup toolchain install nightly --component rust-src
+cargo run -p xtask -- deps build --all --profile lgpl \
+  --target aarch64-apple-tvos-sim
+ERIKA_NATIVE_PROFILE=lgpl ERIKA_NATIVE_TARGET=aarch64-apple-tvos-sim \
+  cargo +nightly rustc -Z build-std=std,panic_abort -p erika_capi --release \
+  --target aarch64-apple-tvos-sim --no-default-features --features libass \
+  --lib --crate-type staticlib
 ```
 
 Windows ARM64 では対応する PowerShell command を使います：

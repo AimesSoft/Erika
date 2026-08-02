@@ -7,9 +7,10 @@ Erika メディア再生エンジン向けの Flutter plugin です。
 この plugin は Dart を hot path から外します。
 
 - Dart は低頻度の player command と event stream だけを公開します。
-- native plugin は 2 種類の surface を提供します。推奨は `ErikaWindowOverlayVideoView`（macOS/iOS は Metal、Windows は D3D11 swapchain）、platform view 用は `ErikaVideoView` です。Android では両方が同じ native-view selector を使い、SDR は実体のある `TextureView`、extended-linear request は Hybrid Composition `SurfaceView` になります。
+- native plugin は 2 種類の surface を提供します。推奨は `ErikaWindowOverlayVideoView`（macOS/iOS/tvOS は Metal、Windows は D3D11 swapchain）、platform view 用は `ErikaVideoView` です。Android では両方が同じ native-view selector を使い、SDR は実体のある `TextureView`、extended-linear request は Hybrid Composition `SurfaceView` になります。
 - macOS plugin は Erika の dynamic library を読み込みます。
 - iOS plugin は Erika の static library を link します。
+- tvOS plugin は Erika の static library を link し、Apple TV platform view で Metal layer を host します。
 - Windows plugin は Erika C ABI DLL を build して link します。
 - Android plugin は ABI ごとに `liberika_capi.so` を build し、`Choreographer` から native surface を駆動します。
 - HarmonyOS plugin は Flutter external texture を登録し、その `OHNativeWindow` を Erika に attach して、OHAudio で低レイテンシの PCM 出力を行います。
@@ -17,7 +18,7 @@ Erika メディア再生エンジン向けの Flutter plugin です。
 
 ## Video Surfaces
 
-フルプレイヤーの macOS/iOS UI では `ErikaWindowOverlayVideoView` を使うのが推奨です。Flutter の layout では矩形領域を予約しつつ、plugin が横に native `CAMetalLayer` を持ち、video を Flutter platform-view compositor の外に置きます。
+フルプレイヤーの macOS/iOS/tvOS UI では `ErikaWindowOverlayVideoView` を使うのが推奨です。Flutter の layout では矩形領域を予約しつつ、plugin が横に native `CAMetalLayer` を持ち、video を Flutter platform-view compositor の外に置きます。
 
 Windows では `ErikaWindowOverlayVideoView` が window-level の Direct3D 11 swapchain を sibling surface として host し、同じ overlay モデルに従います。
 
@@ -45,6 +46,18 @@ source build の architecture は macOS では `ERIKA_MACOS_ARCHS=arm64|x86_64|u
 iOS の CocoaPod script phase が、Xcode build 中に Erika の native dependency と C ABI static library を自動 build します。対応する iOS target の Rust toolchain が必要です。
 
 - `rustup target add aarch64-apple-ios`
+
+## tvOS Setup
+
+tvOS の CocoaPod script phase が、Apple TV 実機または simulator 向けの native
+dependency と C ABI static library を Xcode build 中に自動 build します。Rust の
+tvOS target は tier 3 のため、source component 付き nightly が必要です：
+
+- `rustup toolchain install nightly --component rust-src`
+
+script は現在の Xcode SDK と architecture から `aarch64-apple-tvos`、
+`aarch64-apple-tvos-sim`、または `x86_64-apple-tvos` を選び、
+`-Z build-std=std,panic_abort` で compile します。
 
 ## Windows Setup
 

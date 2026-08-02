@@ -20,12 +20,12 @@ use crate::renderer::output::{
     ActiveOutputEncoding, OutputFallbackReason, OutputRuntimeStatus, OutputSurfaceFormat,
 };
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
 mod apple;
 // Public for integration tests (numeric verification against ONNX
 // references); not part of the stable API surface.
 #[doc(hidden)]
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
 pub mod upscaler;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,9 +57,9 @@ impl ClearColor {
 }
 
 pub struct MetalRenderer {
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
     inner: apple::MetalRendererImpl,
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
     _unsupported: (),
     current_frame: Option<ImportedVideoFrame>,
     current_frame_visible: bool,
@@ -105,7 +105,7 @@ pub(crate) fn metal_target_color(
             crate::renderer::pipeline::TargetColorState::sdr(ColorPrimaries::Bt709)
         }
         MetalOutputMode::AppleEdr { headroom } | MetalOutputMode::ExtendedLinear { headroom } => {
-            #[cfg(target_os = "ios")]
+            #[cfg(any(target_os = "ios", target_os = "tvos"))]
             {
                 let _ = source;
                 let headroom = headroom.max(1.0);
@@ -118,7 +118,7 @@ pub(crate) fn metal_target_color(
                 };
             }
 
-            #[cfg(not(target_os = "ios"))]
+            #[cfg(not(any(target_os = "ios", target_os = "tvos")))]
             {
                 let primaries = match (source.transfer, source.primaries) {
                     (TransferFunction::Pq, ColorPrimaries::Unknown) => ColorPrimaries::Bt2020,
@@ -210,9 +210,9 @@ pub struct ImportedVideoFrameInfo {
 pub struct ImportedVideoFrame {
     info: ImportedVideoFrameInfo,
     source_color: SourceColorState,
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
     inner: Option<apple::ImportedVideoFrameTextures>,
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
     _unsupported: (),
 }
 
@@ -222,11 +222,11 @@ impl ImportedVideoFrame {
     }
 
     pub fn plane_count(&self) -> usize {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             self.inner.as_ref().map_or(0, |inner| inner.plane_count())
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
             0
         }
@@ -357,7 +357,7 @@ impl MetalRenderer {
     }
 
     pub fn with_config(_config: MetalRendererConfig) -> Result<Self> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             Ok(Self {
                 inner: apple::MetalRendererImpl::new(_config)?,
@@ -370,7 +370,7 @@ impl MetalRenderer {
                 output_mode: _config.output_mode,
             })
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
             Err(PlayerError::Renderer(
                 "Metal renderer is only available on Apple platforms for v0".to_string(),
@@ -383,11 +383,11 @@ impl MetalRenderer {
         layer: *mut c_void,
         metrics: SurfaceMetrics,
     ) -> Result<()> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             unsafe { self.inner.attach_raw_layer(layer, metrics) }
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
             let _ = (layer, metrics);
             Err(PlayerError::Renderer(
@@ -400,7 +400,7 @@ impl MetalRenderer {
         &mut self,
         source: VideoFrameTextureSource,
     ) -> Result<ImportedVideoFrame> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             let imported = unsafe { self.inner.import_video_frame_textures(source) }?;
             let source_color =
@@ -412,7 +412,7 @@ impl MetalRenderer {
                 inner: Some(imported.textures),
             })
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
             let _ = source;
             Err(PlayerError::Renderer(
@@ -422,11 +422,11 @@ impl MetalRenderer {
     }
 
     pub fn render_video_frame(&mut self, frame: VideoRenderFrame<'_>) -> Result<()> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             self.inner.render_video_frame(frame)
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
             let _ = frame;
             Err(PlayerError::Renderer(
@@ -440,11 +440,11 @@ impl MetalRenderer {
         frame: VideoRenderFrame<'_>,
         overlay: OverlayRenderFrame<'_>,
     ) -> Result<()> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             self.inner.render_video_frame_with_overlay(frame, overlay)
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
             let _ = (frame, overlay);
             Err(PlayerError::Renderer(
@@ -459,12 +459,12 @@ impl MetalRenderer {
         overlay: Option<OverlayRenderFrame<'_>>,
         danmaku: Option<DanmakuRenderFrame<'_>>,
     ) -> Result<()> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             self.inner
                 .render_video_frame_with_context(frame, overlay, danmaku)
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
             let _ = (frame, overlay, danmaku);
             Err(PlayerError::Renderer(
@@ -481,12 +481,12 @@ impl MetalRenderer {
         width: u32,
         height: u32,
     ) -> Result<Vec<u8>> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             self.inner
                 .capture_video_frame_rgba(frame, overlay, danmaku, width, height)
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
             let _ = (frame, overlay, danmaku, width, height);
             Err(PlayerError::Renderer(
@@ -496,11 +496,11 @@ impl MetalRenderer {
     }
 
     pub fn render_overlay_frame(&mut self, overlay: OverlayRenderFrame<'_>) -> Result<()> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             self.inner.render_overlay_frame(overlay)
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
             let _ = overlay;
             Err(PlayerError::Renderer(
@@ -514,7 +514,7 @@ impl MetalRenderer {
         frame: OverlayRenderFrame<'_>,
     ) -> Result<PreparedOverlayFrameInfo> {
         let info = inspect_overlay_frame(frame.frame)?;
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             self.inner.record_prepared_overlay_frame(info);
         }
@@ -556,7 +556,7 @@ impl MetalRenderer {
         frame: &PlanarFrame,
         color_range: ColorRange,
     ) -> Result<ImportedVideoFrame> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             let result = self
                 .inner
@@ -567,7 +567,7 @@ impl MetalRenderer {
                 inner: Some(result.textures),
             })
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
             let _ = (frame, color_range);
             Err(PlayerError::Renderer(
@@ -577,11 +577,11 @@ impl MetalRenderer {
     }
 
     pub fn stats(&self) -> MetalRendererStats {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             self.inner.stats()
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
             MetalRendererStats::default()
         }
@@ -658,7 +658,7 @@ impl RendererBackend for MetalRenderer {
     }
 
     fn detach_surface(&mut self) -> Result<()> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             self.inner.detach_surface();
         }
@@ -666,11 +666,11 @@ impl RendererBackend for MetalRenderer {
     }
 
     fn resize_surface(&mut self, metrics: SurfaceMetrics) -> Result<()> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             self.inner.resize_surface(metrics);
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
             let _ = metrics;
         }
@@ -682,7 +682,7 @@ impl RendererBackend for MetalRenderer {
         self.current_frame_visible = false;
         self.current_media_time = Duration::ZERO;
         self.current_generation = 1;
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             if self.inner.has_surface() {
                 self.inner.render_clear(ClearColor::black())?;
@@ -696,7 +696,7 @@ impl RendererBackend for MetalRenderer {
     }
 
     fn render_test_frame(&mut self, time_seconds: f64) -> Result<()> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             let started = std::time::Instant::now();
             self.inner.render_clear(ClearColor::animated(time_seconds))
@@ -711,7 +711,7 @@ impl RendererBackend for MetalRenderer {
                     result
                 })
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
             let _ = time_seconds;
             Err(PlayerError::Renderer(
@@ -919,11 +919,11 @@ impl RendererBackend for MetalRenderer {
     }
 
     fn set_luma_upscaler(&mut self, mode: crate::renderer::pipeline::LumaUpscalerMode) {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             self.inner.set_luma_upscaler(mode);
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
             let _ = mode;
         }
@@ -955,9 +955,9 @@ mod tests {
                 planes: Vec::new(),
             },
             source_color,
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
             inner: None,
-            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+            #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
             _unsupported: (),
         }
     }

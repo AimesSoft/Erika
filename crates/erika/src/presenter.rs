@@ -15,12 +15,12 @@ use crossbeam_channel::{Receiver, Sender};
 use crate::android::aaudio::{AAudioOutput, AAudioOutputConfig};
 #[cfg(target_os = "macos")]
 use crate::apple::coreaudio::{CoreAudioOutput, CoreAudioOutputConfig};
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "tvos"))]
 use crate::apple::iosaudio::{IosAudioQueueOutput, IosAudioQueueOutputConfig};
 #[cfg(not(any(
     target_os = "android",
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_env = "ohos"
 )))]
@@ -47,7 +47,7 @@ use crate::ohos::ohaudio::{OHAudioOutput, OHAudioOutputConfig};
 use crate::overlay::{OverlayFrame, OverlayTimeline, OverlayViewport};
 #[cfg(any(target_os = "windows", target_os = "android"))]
 use crate::playback::VideoDecodePreference;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
 use crate::renderer::metal::MetalRenderer;
 use crate::renderer::metal::MetalRendererConfig;
 #[cfg(feature = "libass")]
@@ -113,7 +113,7 @@ impl Default for PresenterAudioConfig {
                 ring_buffer: config.ring_buffer,
             }
         }
-        #[cfg(target_os = "ios")]
+        #[cfg(any(target_os = "ios", target_os = "tvos"))]
         {
             let config = IosAudioQueueOutputConfig::default();
             Self {
@@ -144,7 +144,7 @@ impl Default for PresenterAudioConfig {
         #[cfg(not(any(
             target_os = "android",
             target_os = "macos",
-            target_os = "ios",
+            any(target_os = "ios", target_os = "tvos"),
             target_os = "windows",
             target_env = "ohos"
         )))]
@@ -2893,7 +2893,7 @@ fn build_renderer(
     _metal_config: MetalRendererConfig,
 ) -> Result<Box<dyn RendererBackend>> {
     match preference {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         RendererBackendPreference::PlatformNative | RendererBackendPreference::Auto => {
             Ok(Box::new(MetalRenderer::with_config(_metal_config)?))
         }
@@ -2903,7 +2903,12 @@ fn build_renderer(
                 crate::renderer::d3d11::D3d11Renderer::with_config(_metal_config)?,
             ))
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "windows"
+        )))]
         RendererBackendPreference::PlatformNative | RendererBackendPreference::Auto => {
             build_wgpu_renderer(_metal_config)
         }
@@ -2968,7 +2973,7 @@ fn build_audio_output(config: PresenterAudioConfig) -> Box<dyn AudioOutputBacken
             ring_buffer: config.ring_buffer,
         }))
     }
-    #[cfg(target_os = "ios")]
+    #[cfg(any(target_os = "ios", target_os = "tvos"))]
     {
         Box::new(IosAudioQueueOutput::new(IosAudioQueueOutputConfig {
             ring_buffer: config.ring_buffer,
@@ -2996,7 +3001,7 @@ fn build_audio_output(config: PresenterAudioConfig) -> Box<dyn AudioOutputBacken
     #[cfg(not(any(
         target_os = "android",
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_env = "ohos"
     )))]

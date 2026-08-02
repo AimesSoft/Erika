@@ -257,14 +257,14 @@ impl MetalRendererImpl {
         layer: &CAMetalLayer,
         source: crate::renderer::pipeline::SourceColorState,
     ) {
-        #[cfg(target_os = "ios")]
+        #[cfg(any(target_os = "ios", target_os = "tvos"))]
         {
             let _ = layer;
             let _ = source;
             return;
         }
 
-        #[cfg(not(target_os = "ios"))]
+        #[cfg(not(any(target_os = "ios", target_os = "tvos")))]
         {
             if !self.output_mode.is_edr() {
                 return;

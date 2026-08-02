@@ -19,6 +19,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ANDROID_SDK_ROOT");
     println!("cargo:rerun-if-env-changed=OHOS_NDK_HOME");
     println!("cargo:rerun-if-env-changed=OHOS_SDK_NATIVE");
+    println!("cargo:rerun-if-env-changed=TVOS_DEPLOYMENT_TARGET");
 
     let dist_dir = ffmpeg_dist_dir();
     let zlib_dir = native_dep_dir("ERIKA_ZLIB_DIR", "zlib");
@@ -36,7 +37,7 @@ fn main() {
 
     if matches!(
         env::var("CARGO_CFG_TARGET_OS").as_deref(),
-        Ok("android" | "macos" | "ios")
+        Ok("android" | "macos" | "ios" | "tvos")
     ) {
         for archive in [
             "libavdevice.a",
@@ -72,7 +73,7 @@ fn main() {
     }
     if matches!(
         env::var("CARGO_CFG_TARGET_OS").as_deref(),
-        Ok("android" | "macos" | "ios")
+        Ok("android" | "macos" | "ios" | "tvos")
     ) {
         let dav1d_header = dav1d_dir.join("include/dav1d/dav1d.h");
         let dav1d_archive = dav1d_dir.join("lib/libdav1d.a");
@@ -98,7 +99,7 @@ fn main() {
     );
     if matches!(
         env::var("CARGO_CFG_TARGET_OS").as_deref(),
-        Ok("android" | "macos" | "ios")
+        Ok("android" | "macos" | "ios" | "tvos")
     ) {
         println!(
             "cargo:rustc-link-search=native={}",
@@ -114,7 +115,7 @@ fn main() {
     println!("cargo:rustc-link-lib=static=avutil");
     if matches!(
         env::var("CARGO_CFG_TARGET_OS").as_deref(),
-        Ok("android" | "macos" | "ios")
+        Ok("android" | "macos" | "ios" | "tvos")
     ) {
         println!("cargo:rustc-link-lib=static=dav1d");
     }
@@ -126,7 +127,7 @@ fn main() {
 
     if matches!(
         env::var("CARGO_CFG_TARGET_OS").as_deref(),
-        Ok("macos" | "ios")
+        Ok("macos" | "ios" | "tvos")
     ) {
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
         println!("cargo:rustc-link-lib=framework=CoreMedia");
@@ -512,6 +513,11 @@ fn inferred_native_target() -> Option<String> {
         ("android", "x86_64") => Some("x86_64-linux-android".to_string()),
         ("android", "x86") => Some("i686-linux-android".to_string()),
         ("ios", _) => Some("ios".to_string()),
+        ("tvos", "aarch64") if env::var("CARGO_CFG_TARGET_ABI").as_deref() == Ok("sim") => {
+            Some("aarch64-apple-tvos-sim".to_string())
+        }
+        ("tvos", "aarch64") => Some("aarch64-apple-tvos".to_string()),
+        ("tvos", "x86_64") => Some("x86_64-apple-tvos".to_string()),
         _ => None,
     }
 }

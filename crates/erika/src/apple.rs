@@ -19,7 +19,7 @@ pub enum AppleDecodeBackend {
     Software,
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "tvos"))]
 pub mod iosaudio {
     use std::ffi::c_void;
     use std::ptr::{self, NonNull};

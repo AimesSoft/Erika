@@ -60,7 +60,7 @@ ash = "0.38.0"
 ash = "0.38.0"
 glow = "0.17.0"
 
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))'.dependencies]
 objc2.workspace = true
 objc2-core-foundation.workspace = true
 objc2-core-graphics = { workspace = true, features = ["CGColorSpace"] }
@@ -69,6 +69,6 @@ objc2-foundation.workspace = true
 objc2-metal.workspace = true
 objc2-quartz-core.workspace = true
 
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dev-dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))'.dev-dependencies]
 objc2.workspace = true
 objc2-metal.workspace = true

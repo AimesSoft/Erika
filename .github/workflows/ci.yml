@@ -17,6 +17,7 @@ concurrency:
 env:
   PROFILE: lgpl
   IPHONEOS_DEPLOYMENT_TARGET: "13.0"
+  TVOS_DEPLOYMENT_TARGET: "13.0"
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
@@ -136,6 +137,37 @@ jobs:
           ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="aarch64-apple-ios" \
           cargo rustc --locked -p erika_capi --lib --release \
               --target aarch64-apple-ios \
+              --no-default-features --features libass --crate-type staticlib
+
+  tvos:
+    name: tvOS simulator staticlib
+    runs-on: macos-14
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - name: Install native build tools
+        run: brew install nasm meson ninja pkg-config
+      - name: Cache native dependencies
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: native-v2-tvos-simulator-aarch64-min${{ env.TVOS_DEPLOYMENT_TARGET }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
+      - name: Build tvOS native dependencies
+        run: >-
+          cargo run --locked -p xtask -- deps build --all
+          --profile "$PROFILE" --target aarch64-apple-tvos-sim
+      - name: Compile tvOS static library
+        run: |
+          TVOS_SDKROOT="$(xcrun --sdk appletvsimulator --show-sdk-path)"
+          export SDKROOT="$TVOS_SDKROOT"
+          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_tvos_sim="--target=arm64-apple-tvos${TVOS_DEPLOYMENT_TARGET}-simulator -isysroot $TVOS_SDKROOT"
+          ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="aarch64-apple-tvos-sim" \
+          cargo +nightly rustc -Z build-std=std,panic_abort --locked \
+              -p erika_capi --lib --release \
+              --target aarch64-apple-tvos-sim \
               --no-default-features --features libass --crate-type staticlib
 
   windows:

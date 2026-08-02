@@ -937,6 +937,31 @@ impl MediaSource for HttpRangeSource {
                         .get("content-length")
                         .and_then(|value| value.to_str().ok())
                         .and_then(|value| value.parse::<u64>().ok());
+                    // Some streaming servers synthesize an empty HEAD body and
+                    // incorrectly report that body length as the media length.
+                    // A zero-byte media resource is not useful to the demuxer,
+                    // so verify it with a one-byte range request before caching
+                    // the value. Content-Range carries the actual object size.
+                    if length == Some(0) {
+                        http_trace_log(format!(
+                            "[erika-http-trace] stage=head_zero_length_fallback status={} elapsed_ms={:.3}",
+                            status,
+                            started.elapsed().as_secs_f64() * 1000.0,
+                        ));
+                        return match probe_http_total_length(
+                            &self.agent,
+                            &self.uri,
+                            &self.http_headers,
+                        ) {
+                            Ok(total_length) => {
+                                self.content_length = total_length;
+                                Ok(self.content_length)
+                            }
+                            Err(error) => Err(SourceError::Http(format!(
+                                "HEAD reported Content-Length: 0 and range probe failed: {error}"
+                            ))),
+                        };
+                    }
                     self.content_length = length;
                     http_trace_log(format!(
                         "[erika-http-trace] stage=head_response status={} length={} elapsed_ms={:.3}",
@@ -1774,6 +1799,22 @@ mod tests {
         ]);
         let mut source = HttpRangeSource::new(uri);
         assert_eq!(source.len().unwrap(), Some(1234));
+        assert!(recv_request_head(&requests).starts_with("head"));
+        let probe = recv_request_head(&requests);
+        assert!(probe.starts_with("get"));
+        assert!(probe.contains("range: bytes=0-0"));
+    }
+
+    #[test]
+    fn len_falls_back_to_range_probe_when_head_reports_zero() {
+        let (uri, requests) = spawn_mock_http_server(vec![
+            MockResponse::immediate(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            ),
+            MockResponse::immediate(http_206_response(0, 911_198_509, b"z")),
+        ]);
+        let mut source = HttpRangeSource::new(uri);
+        assert_eq!(source.len().unwrap(), Some(911_198_509));
         assert!(recv_request_head(&requests).starts_with("head"));
         let probe = recv_request_head(&requests);
         assert!(probe.starts_with("get"));

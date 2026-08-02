@@ -311,6 +311,9 @@ enum NativeTarget {
     Aarch64Ios,
     Aarch64IosSimulator,
     X86_64IosSimulator,
+    Aarch64Tvos,
+    Aarch64TvosSimulator,
+    X86_64TvosSimulator,
     X86_64WindowsMsvc,
     Aarch64WindowsMsvc,
     Aarch64Android,
@@ -329,6 +332,9 @@ impl NativeTarget {
             "aarch64-apple-ios" => Ok(Self::Aarch64Ios),
             "aarch64-apple-ios-sim" => Ok(Self::Aarch64IosSimulator),
             "x86_64-apple-ios" => Ok(Self::X86_64IosSimulator),
+            "aarch64-apple-tvos" => Ok(Self::Aarch64Tvos),
+            "aarch64-apple-tvos-sim" => Ok(Self::Aarch64TvosSimulator),
+            "x86_64-apple-tvos" => Ok(Self::X86_64TvosSimulator),
             "x86_64-pc-windows-msvc" | "windows-x64" => Ok(Self::X86_64WindowsMsvc),
             "aarch64-pc-windows-msvc" | "windows-arm64" => Ok(Self::Aarch64WindowsMsvc),
             "aarch64-linux-android" | "arm64-v8a" => Ok(Self::Aarch64Android),
@@ -348,6 +354,9 @@ impl NativeTarget {
             Self::Aarch64Ios => Some("aarch64-apple-ios"),
             Self::Aarch64IosSimulator => Some("aarch64-apple-ios-sim"),
             Self::X86_64IosSimulator => Some("x86_64-apple-ios"),
+            Self::Aarch64Tvos => Some("aarch64-apple-tvos"),
+            Self::Aarch64TvosSimulator => Some("aarch64-apple-tvos-sim"),
+            Self::X86_64TvosSimulator => Some("x86_64-apple-tvos"),
             Self::X86_64WindowsMsvc => Some("x86_64-pc-windows-msvc"),
             Self::Aarch64WindowsMsvc => Some("aarch64-pc-windows-msvc"),
             Self::Aarch64Android => Some("aarch64-linux-android"),
@@ -364,6 +373,8 @@ impl NativeTarget {
             Self::Aarch64Macos | Self::X86_64Macos => Some("macosx"),
             Self::Aarch64Ios => Some("iphoneos"),
             Self::Aarch64IosSimulator | Self::X86_64IosSimulator => Some("iphonesimulator"),
+            Self::Aarch64Tvos => Some("appletvos"),
+            Self::Aarch64TvosSimulator | Self::X86_64TvosSimulator => Some("appletvsimulator"),
             Self::X86_64WindowsMsvc
             | Self::Aarch64WindowsMsvc
             | Self::Aarch64Android
@@ -377,8 +388,14 @@ impl NativeTarget {
     fn ffmpeg_arch(self) -> Option<&'static str> {
         match self {
             Self::Host => None,
-            Self::Aarch64Macos | Self::Aarch64Ios | Self::Aarch64IosSimulator => Some("arm64"),
-            Self::X86_64Macos | Self::X86_64IosSimulator => Some("x86_64"),
+            Self::Aarch64Macos
+            | Self::Aarch64Ios
+            | Self::Aarch64IosSimulator
+            | Self::Aarch64Tvos
+            | Self::Aarch64TvosSimulator => Some("arm64"),
+            Self::X86_64Macos | Self::X86_64IosSimulator | Self::X86_64TvosSimulator => {
+                Some("x86_64")
+            }
             Self::X86_64WindowsMsvc => Some("x86_64"),
             Self::Aarch64WindowsMsvc => Some("aarch64"),
             Self::Aarch64Android => Some("aarch64"),
@@ -392,8 +409,14 @@ impl NativeTarget {
     fn meson_cpu_family(self) -> Option<&'static str> {
         match self {
             Self::Host => None,
-            Self::Aarch64Macos | Self::Aarch64Ios | Self::Aarch64IosSimulator => Some("aarch64"),
-            Self::X86_64Macos | Self::X86_64IosSimulator => Some("x86_64"),
+            Self::Aarch64Macos
+            | Self::Aarch64Ios
+            | Self::Aarch64IosSimulator
+            | Self::Aarch64Tvos
+            | Self::Aarch64TvosSimulator => Some("aarch64"),
+            Self::X86_64Macos | Self::X86_64IosSimulator | Self::X86_64TvosSimulator => {
+                Some("x86_64")
+            }
             Self::X86_64WindowsMsvc => Some("x86_64"),
             Self::Aarch64WindowsMsvc => Some("aarch64"),
             Self::Aarch64Android => Some("aarch64"),
@@ -407,8 +430,14 @@ impl NativeTarget {
     fn meson_cpu(self) -> Option<&'static str> {
         match self {
             Self::Host => None,
-            Self::Aarch64Macos | Self::Aarch64Ios | Self::Aarch64IosSimulator => Some("arm64"),
-            Self::X86_64Macos | Self::X86_64IosSimulator => Some("x86_64"),
+            Self::Aarch64Macos
+            | Self::Aarch64Ios
+            | Self::Aarch64IosSimulator
+            | Self::Aarch64Tvos
+            | Self::Aarch64TvosSimulator => Some("arm64"),
+            Self::X86_64Macos | Self::X86_64IosSimulator | Self::X86_64TvosSimulator => {
+                Some("x86_64")
+            }
             Self::X86_64WindowsMsvc => Some("x86_64"),
             Self::Aarch64WindowsMsvc => Some("arm64"),
             Self::Aarch64Android => Some("aarch64"),
@@ -446,6 +475,13 @@ impl NativeTarget {
         )
     }
 
+    fn is_tvos(self) -> bool {
+        matches!(
+            self,
+            Self::Aarch64Tvos | Self::Aarch64TvosSimulator | Self::X86_64TvosSimulator
+        )
+    }
+
     fn is_windows(self) -> bool {
         matches!(self, Self::X86_64WindowsMsvc | Self::Aarch64WindowsMsvc)
             || (matches!(self, Self::Host) && cfg!(windows))
@@ -459,6 +495,9 @@ impl NativeTarget {
                 | Self::Aarch64Ios
                 | Self::Aarch64IosSimulator
                 | Self::X86_64IosSimulator
+                | Self::Aarch64Tvos
+                | Self::Aarch64TvosSimulator
+                | Self::X86_64TvosSimulator
         ) || (matches!(self, Self::Host) && cfg!(target_vendor = "apple"))
     }
 
@@ -488,6 +527,14 @@ impl NativeTarget {
             Self::Aarch64IosSimulator | Self::X86_64IosSimulator => Some((
                 env::var("IPHONEOS_DEPLOYMENT_TARGET").unwrap_or_else(|_| "13.0".to_string()),
                 "-mios-simulator-version-min",
+            )),
+            Self::Aarch64Tvos => Some((
+                env::var("TVOS_DEPLOYMENT_TARGET").unwrap_or_else(|_| "13.0".to_string()),
+                "-mtvos-version-min",
+            )),
+            Self::Aarch64TvosSimulator | Self::X86_64TvosSimulator => Some((
+                env::var("TVOS_DEPLOYMENT_TARGET").unwrap_or_else(|_| "13.0".to_string()),
+                "-mtvos-simulator-version-min",
             )),
             Self::X86_64WindowsMsvc
             | Self::Aarch64WindowsMsvc
@@ -1139,7 +1186,10 @@ fn dav1d_asm_enabled(target: NativeTarget) -> bool {
 fn dav1d_requires_nasm(target: NativeTarget) -> bool {
     matches!(
         target,
-        NativeTarget::X86_64Macos | NativeTarget::X86_64IosSimulator | NativeTarget::X86_64Android
+        NativeTarget::X86_64Macos
+            | NativeTarget::X86_64IosSimulator
+            | NativeTarget::X86_64TvosSimulator
+            | NativeTarget::X86_64Android
     )
 }
 
@@ -1148,6 +1198,7 @@ fn ffmpeg_requires_nasm(target: NativeTarget) -> bool {
         target,
         NativeTarget::X86_64Macos
             | NativeTarget::X86_64IosSimulator
+            | NativeTarget::X86_64TvosSimulator
             | NativeTarget::X86_64WindowsMsvc
             | NativeTarget::X86_64Android
     ) || (matches!(target, NativeTarget::Host) && cfg!(target_arch = "x86_64"))
@@ -1596,6 +1647,8 @@ fn apply_cmake_apple_target(command: &mut Command, target: NativeTarget) -> Resu
         ));
     if target.is_ios() {
         command.arg("-DCMAKE_SYSTEM_NAME=iOS");
+    } else if target.is_tvos() {
+        command.arg("-DCMAKE_SYSTEM_NAME=tvOS");
     }
     apply_apple_target_env(command, target)
 }
@@ -1747,6 +1800,8 @@ fn apply_apple_target_env(command: &mut Command, target: NativeTarget) -> Result
     command.env("SDKROOT", &config.sdk_root);
     if target.is_ios() {
         command.env("IPHONEOS_DEPLOYMENT_TARGET", &config.deployment_target);
+    } else if target.is_tvos() {
+        command.env("TVOS_DEPLOYMENT_TARGET", &config.deployment_target);
     } else {
         command.env("MACOSX_DEPLOYMENT_TARGET", &config.deployment_target);
     }
@@ -2536,6 +2591,11 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
             | NativeTarget::Aarch64IosSimulator
             | NativeTarget::X86_64IosSimulator => {
                 configure.env("IPHONEOS_DEPLOYMENT_TARGET", &config.deployment_target);
+            }
+            NativeTarget::Aarch64Tvos
+            | NativeTarget::Aarch64TvosSimulator
+            | NativeTarget::X86_64TvosSimulator => {
+                configure.env("TVOS_DEPLOYMENT_TARGET", &config.deployment_target);
             }
             NativeTarget::Host
             | NativeTarget::X86_64WindowsMsvc
@@ -4633,10 +4693,49 @@ mod tests {
     }
 
     #[test]
+    fn tvos_targets_map_to_rust_sdks_and_native_architectures() {
+        let cases = [
+            (
+                "aarch64-apple-tvos",
+                NativeTarget::Aarch64Tvos,
+                "appletvos",
+                "arm64",
+                "arm64",
+            ),
+            (
+                "aarch64-apple-tvos-sim",
+                NativeTarget::Aarch64TvosSimulator,
+                "appletvsimulator",
+                "arm64",
+                "arm64",
+            ),
+            (
+                "x86_64-apple-tvos",
+                NativeTarget::X86_64TvosSimulator,
+                "appletvsimulator",
+                "x86_64",
+                "x86_64",
+            ),
+        ];
+
+        for (triple, expected, sdk, ffmpeg_arch, meson_cpu) in cases {
+            let target = NativeTarget::parse(triple).unwrap();
+            assert_eq!(target, expected);
+            assert!(target.is_tvos());
+            assert!(target.is_apple());
+            assert_eq!(target.triple(), Some(triple));
+            assert_eq!(target.sdk(), Some(sdk));
+            assert_eq!(target.ffmpeg_arch(), Some(ffmpeg_arch));
+            assert_eq!(target.meson_cpu(), Some(meson_cpu));
+        }
+    }
+
+    #[test]
     fn x86_64_targets_keep_ffmpeg_assembly_enabled() {
         for target in [
             NativeTarget::X86_64Macos,
             NativeTarget::X86_64IosSimulator,
+            NativeTarget::X86_64TvosSimulator,
             NativeTarget::X86_64WindowsMsvc,
             NativeTarget::X86_64Android,
         ] {
@@ -4699,7 +4798,11 @@ mod tests {
 
     #[test]
     fn apple_ffmpeg_plan_enables_videotoolbox_with_dav1d_fallback() {
-        for target in [NativeTarget::Aarch64Macos, NativeTarget::Aarch64Ios] {
+        for target in [
+            NativeTarget::Aarch64Macos,
+            NativeTarget::Aarch64Ios,
+            NativeTarget::Aarch64Tvos,
+        ] {
             let flags = NativeDependencyProfile::Lgpl.ffmpeg_configure_flags_for_target(target);
             assert!(flags.contains(&"--enable-videotoolbox"));
             assert!(flags.contains(&"--enable-libdav1d"));
@@ -4727,6 +4830,7 @@ mod tests {
     fn x86_64_dav1d_targets_require_nasm() {
         assert!(dav1d_requires_nasm(NativeTarget::X86_64Macos));
         assert!(dav1d_requires_nasm(NativeTarget::X86_64IosSimulator));
+        assert!(dav1d_requires_nasm(NativeTarget::X86_64TvosSimulator));
         assert!(dav1d_requires_nasm(NativeTarget::X86_64Android));
         assert!(!dav1d_requires_nasm(NativeTarget::Aarch64Macos));
         assert!(!dav1d_requires_nasm(NativeTarget::Aarch64Ios));
@@ -4969,7 +5073,7 @@ fn print_help() {
     println!("  cargo run -p xtask -- deps fetch --profile lgpl [--all]");
     println!("  cargo run -p xtask -- deps status --profile lgpl");
     println!(
-        "  cargo run -p xtask -- deps build --profile lgpl [--target host|aarch64-apple-darwin|x86_64-apple-darwin|aarch64-apple-ios|aarch64-apple-ios-sim|x86_64-apple-ios|x86_64-pc-windows-msvc|aarch64-pc-windows-msvc|aarch64-linux-android|armv7-linux-androideabi|x86_64-linux-android|i686-linux-android] [--force] [--jobs N]"
+        "  cargo run -p xtask -- deps build --profile lgpl [--target host|aarch64-apple-darwin|x86_64-apple-darwin|aarch64-apple-ios|aarch64-apple-ios-sim|x86_64-apple-ios|aarch64-apple-tvos|aarch64-apple-tvos-sim|x86_64-apple-tvos|x86_64-pc-windows-msvc|aarch64-pc-windows-msvc|aarch64-linux-android|armv7-linux-androideabi|x86_64-linux-android|i686-linux-android] [--force] [--jobs N]"
     );
     println!("  cargo run -p xtask -- check cargo-patches");
     println!("  cargo run -p xtask -- check license");

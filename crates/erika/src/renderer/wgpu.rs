@@ -1,6 +1,6 @@
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "android",
     target_env = "ohos"
 ))]
@@ -22,7 +22,7 @@ use crate::android::{AndroidDataSpaceErrorKind, AndroidNativeWindow};
 #[cfg(any(
     target_os = "android",
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_env = "ohos"
 ))]
@@ -3293,7 +3293,7 @@ impl WgpuRenderer {
         #[cfg(not(any(
             target_os = "android",
             target_os = "macos",
-            target_os = "ios",
+            any(target_os = "ios", target_os = "tvos"),
             target_os = "windows",
             target_env = "ohos"
         )))]
@@ -3307,7 +3307,7 @@ impl WgpuRenderer {
         #[cfg(any(
             target_os = "android",
             target_os = "macos",
-            target_os = "ios",
+            any(target_os = "ios", target_os = "tvos"),
             target_os = "windows",
             target_env = "ohos"
         ))]
@@ -3319,7 +3319,7 @@ impl WgpuRenderer {
             // Android we additionally acquire an ANativeWindow reference retained by
             // `AttachedSurface`, so the raw handle outlives the wgpu surface.
             let target = match handle.kind {
-                #[cfg(any(target_os = "macos", target_os = "ios"))]
+                #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
                 WgpuSurfaceKind::MacOsCaMetalLayer => {
                     wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(handle.raw_window as *mut c_void)
                 }

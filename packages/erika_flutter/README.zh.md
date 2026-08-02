@@ -7,9 +7,10 @@ Erika 媒体播放引擎的 Flutter plugin。
 插件让 Dart 不进入热路径：
 
 - Dart 只暴露低频播放器命令和事件流。
-- 原生插件提供两种 surface：推荐的 `ErikaWindowOverlayVideoView`（macOS/iOS 为 Metal，Windows 为 D3D11 swapchain），以及 platform view 用的 `ErikaVideoView`。Android 上两者都通过同一套原生 view 选择器：SDR 使用真实 `TextureView`，请求 extended-linear 时使用 Hybrid Composition `SurfaceView`。
+- 原生插件提供两种 surface：推荐的 `ErikaWindowOverlayVideoView`（macOS/iOS/tvOS 为 Metal，Windows 为 D3D11 swapchain），以及 platform view 用的 `ErikaVideoView`。Android 上两者都通过同一套原生 view 选择器：SDR 使用真实 `TextureView`，请求 extended-linear 时使用 Hybrid Composition `SurfaceView`。
 - macOS 插件加载 Erika 动态库。
 - iOS 插件链接 Erika 静态库。
+- tvOS 插件链接 Erika 静态库，并在 Apple TV platform view 中承载 Metal layer。
 - Windows 插件构建并链接 Erika C ABI DLL。
 - Android 插件按 ABI 构建 `liberika_capi.so`，并由 `Choreographer` 驱动原生 surface。
 - HarmonyOS 插件注册 Flutter 外部纹理，把它的 `OHNativeWindow` attach 给 Erika，并用 OHAudio 做低延迟 PCM 输出。
@@ -17,7 +18,7 @@ Erika 媒体播放引擎的 Flutter plugin。
 
 ## Video Surfaces
 
-全播放器 macOS/iOS UI 推荐使用 `ErikaWindowOverlayVideoView`。它会在 Flutter 布局中预留矩形区域，同时插件在旁边托管一个原生 `CAMetalLayer`，让视频保持在 Flutter platform-view compositor 之外。
+全播放器 macOS/iOS/tvOS UI 推荐使用 `ErikaWindowOverlayVideoView`。它会在 Flutter 布局中预留矩形区域，同时插件在旁边托管一个原生 `CAMetalLayer`，让视频保持在 Flutter platform-view compositor 之外。
 
 Windows 上 `ErikaWindowOverlayVideoView` 以 sibling surface 的形式托管一个 window-level Direct3D 11 swapchain，遵循同样的 overlay 模型。
 
@@ -45,6 +46,18 @@ cargo build -p erika_capi
 iOS CocoaPod script phase 会在 Xcode 构建期间自动构建 Erika 原生依赖和 C ABI static library。需要安装对应 iOS target 的 Rust toolchain：
 
 - `rustup target add aarch64-apple-ios`
+
+## tvOS Setup
+
+tvOS CocoaPod script phase 会在 Xcode 构建期间自动为 Apple TV 真机或模拟器构建
+原生依赖和 C ABI 静态库。Rust 的 tvOS 目标属于 tier 3，因此需要安装带源码组件的
+nightly：
+
+- `rustup toolchain install nightly --component rust-src`
+
+脚本会根据当前 Xcode SDK 与架构选择 `aarch64-apple-tvos`、
+`aarch64-apple-tvos-sim` 或 `x86_64-apple-tvos`，并通过
+`-Z build-std=std,panic_abort` 完成编译。
 
 ## Windows Setup
 
