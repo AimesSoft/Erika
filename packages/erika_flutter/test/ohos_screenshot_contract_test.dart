@@ -27,4 +27,42 @@ void main() {
       contains('{"nativeCaptureFrame", nullptr, NativeCaptureFrame'),
     );
   });
+
+  test('OpenHarmony exposes the complete subtitle memory font API', () {
+    final plugin = File(
+      'ohos/src/main/ets/components/plugin/ErikaFlutterPlugin.ets',
+    ).readAsStringSync();
+    final nativeBridge = File(
+      'ohos/src/main/cpp/erika_flutter_plugin.cpp',
+    ).readAsStringSync();
+    final jsonBridge = File(
+      '../../crates/erika_capi/src/presenter_json.rs',
+    ).readAsStringSync();
+
+    expect(plugin, contains("call.method === 'registerSubtitleMemoryFont'"));
+    expect(plugin, contains('nativeRegisterSubtitleMemoryFont('));
+    for (final method in <String>[
+      'selectSubtitleMemoryFonts',
+      'clearSubtitleMemoryFonts',
+      'getSubtitleMemoryFontStatus',
+    ]) {
+      expect(plugin, contains("'$method'"));
+      expect(jsonBridge, contains('"$method"'));
+    }
+    expect(
+      nativeBridge,
+      contains('napi_value NativeRegisterSubtitleMemoryFont('),
+    );
+    expect(
+      nativeBridge,
+      contains('erika_presenter_register_subtitle_memory_font('),
+    );
+    expect(
+      nativeBridge,
+      contains(
+        '{"nativeRegisterSubtitleMemoryFont", nullptr, '
+        'NativeRegisterSubtitleMemoryFont',
+      ),
+    );
+  });
 }

@@ -120,6 +120,7 @@ struct SubtitleMemoryFonts {
     registered: HashMap<u64, SubtitleMemoryFontEntry>,
     selected_ids: Vec<u64>,
     generation: u64,
+    selection_generation: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -979,7 +980,7 @@ impl PresenterRuntime {
                 faces,
             },
         );
-        self.bump_subtitle_memory_font_revision();
+        self.bump_subtitle_memory_font_registry_generation();
         Ok(id)
     }
 
@@ -999,7 +1000,7 @@ impl PresenterRuntime {
         self.subtitle_memory_fonts
             .selected_ids
             .extend_from_slice(ids);
-        self.bump_subtitle_memory_font_revision();
+        self.bump_subtitle_memory_font_selection_generation();
         Ok(())
     }
 
@@ -1009,7 +1010,7 @@ impl PresenterRuntime {
         }
         self.subtitle_memory_fonts.registered.clear();
         self.subtitle_memory_fonts.selected_ids.clear();
-        self.bump_subtitle_memory_font_revision();
+        self.bump_subtitle_memory_font_selection_generation();
     }
 
     pub fn subtitle_memory_font_status(&self) -> SubtitleMemoryFontStatus {
@@ -1036,9 +1037,17 @@ impl PresenterRuntime {
         })
     }
 
-    fn bump_subtitle_memory_font_revision(&mut self) {
+    fn bump_subtitle_memory_font_registry_generation(&mut self) {
         self.subtitle_memory_fonts.generation =
             self.subtitle_memory_fonts.generation.saturating_add(1);
+    }
+
+    fn bump_subtitle_memory_font_selection_generation(&mut self) {
+        self.bump_subtitle_memory_font_registry_generation();
+        self.subtitle_memory_fonts.selection_generation = self
+            .subtitle_memory_fonts
+            .selection_generation
+            .saturating_add(1);
         let selection = self.danmaku_font_selection();
         self.danmaku.set_font_selection(selection.clone());
         self.danmaku_planner.set_font_selection(selection);
@@ -1059,7 +1068,10 @@ impl PresenterRuntime {
                     .map(|font| font.attachment.clone())
             })
             .collect::<Vec<_>>();
-        DanmakuFontSelection::new(self.subtitle_memory_fonts.generation, Arc::from(fonts))
+        DanmakuFontSelection::new(
+            self.subtitle_memory_fonts.selection_generation,
+            Arc::from(fonts),
+        )
     }
 
     fn apply_subtitle_style(&mut self, style: SubtitleStyleConfig) {
@@ -2061,7 +2073,7 @@ impl PresenterRuntime {
             play_res_height: viewport.height,
             style: self.subtitle_style.clone(),
             memory_fonts: Arc::from(memory_fonts),
-            memory_font_revision: self.subtitle_memory_fonts.generation,
+            memory_font_revision: self.subtitle_memory_fonts.selection_generation,
         }
     }
 
@@ -4192,6 +4204,32 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert_eq!(
             state.ass_renderer.memory_font_revision, 5,
             "memory_font_revision should be updated after render() rebuilds with memory fonts"
+        );
+    }
+
+    #[test]
+    fn registering_an_unselected_memory_font_does_not_invalidate_renderers() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        let danmaku_generation = presenter.danmaku_font_selection().generation;
+        let subtitle_revision = presenter
+            .subtitle_ass_style(OverlayViewport::new(640, 360))
+            .memory_font_revision;
+
+        let id = presenter
+            .register_subtitle_font_bytes(crate::NIPAPLAY_FALLBACK_FONT)
+            .unwrap();
+
+        assert!(id > 0);
+        assert_eq!(presenter.subtitle_memory_font_status().generation, 1);
+        assert_eq!(
+            presenter.danmaku_font_selection().generation,
+            danmaku_generation
+        );
+        assert_eq!(
+            presenter
+                .subtitle_ass_style(OverlayViewport::new(640, 360))
+                .memory_font_revision,
+            subtitle_revision
         );
     }
 

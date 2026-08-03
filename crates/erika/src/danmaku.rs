@@ -16,7 +16,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ab_glyph::{Font, FontArc, FontVec, Glyph, GlyphId, ScaleFont};
+use ab_glyph::{
+    CodepointIdIter, Font, FontArc, FontRef, FontVec, Glyph, GlyphId, GlyphSvg, Outline, ScaleFont,
+    v2,
+};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -2517,10 +2520,10 @@ fn load_selected_fonts(
     let mut fonts = Vec::new();
     for attachment in attachments {
         let mut database = fontdb::Database::new();
-        database.load_font_data(attachment.data.to_vec());
-        let face_ids = database.faces().map(|face| face.id).collect::<Vec<_>>();
-        for face_id in face_ids {
-            if let Some(font) = load_fontdb_face(&database, face_id) {
+        database.load_font_source(fontdb::Source::Binary(Arc::new(attachment.data.clone())));
+        let face_indices = database.faces().map(|face| face.index).collect::<Vec<_>>();
+        for face_index in face_indices {
+            if let Some(font) = load_shared_font_data(attachment.data.clone(), face_index) {
                 let id = first_font_id.saturating_add(fonts.len() as u32);
                 fonts.push(DanmakuFontFace::new(id, font));
             }
@@ -2626,6 +2629,99 @@ fn load_font_data(data: Vec<u8>, face_index: u32) -> Option<FontArc> {
     FontVec::try_from_vec_and_index(data, face_index)
         .map(FontArc::new)
         .ok()
+}
+
+#[derive(Clone)]
+struct SharedFont {
+    // This field must be dropped before `data`, because its internal references
+    // point into the allocation kept alive by `data`.
+    font: FontRef<'static>,
+    data: Arc<[u8]>,
+}
+
+impl SharedFont {
+    fn try_new(data: Arc<[u8]>, face_index: u32) -> Option<Self> {
+        // SAFETY: `bytes` points into the allocation owned by `data`. The Arc is
+        // stored in the same value and is declared after `font`, so it remains
+        // alive until all references held by FontRef have been dropped.
+        let bytes = unsafe { std::slice::from_raw_parts(data.as_ptr(), data.len()) };
+        let font = FontRef::try_from_slice_and_index(bytes, face_index).ok()?;
+        Some(Self { font, data })
+    }
+}
+
+impl Font for SharedFont {
+    fn units_per_em(&self) -> Option<f32> {
+        self.font.units_per_em()
+    }
+
+    fn ascent_unscaled(&self) -> f32 {
+        self.font.ascent_unscaled()
+    }
+
+    fn descent_unscaled(&self) -> f32 {
+        self.font.descent_unscaled()
+    }
+
+    fn line_gap_unscaled(&self) -> f32 {
+        self.font.line_gap_unscaled()
+    }
+
+    fn italic_angle(&self) -> f32 {
+        self.font.italic_angle()
+    }
+
+    fn glyph_id(&self, c: char) -> GlyphId {
+        self.font.glyph_id(c)
+    }
+
+    fn h_advance_unscaled(&self, id: GlyphId) -> f32 {
+        self.font.h_advance_unscaled(id)
+    }
+
+    fn h_side_bearing_unscaled(&self, id: GlyphId) -> f32 {
+        self.font.h_side_bearing_unscaled(id)
+    }
+
+    fn v_advance_unscaled(&self, id: GlyphId) -> f32 {
+        self.font.v_advance_unscaled(id)
+    }
+
+    fn v_side_bearing_unscaled(&self, id: GlyphId) -> f32 {
+        self.font.v_side_bearing_unscaled(id)
+    }
+
+    fn kern_unscaled(&self, first: GlyphId, second: GlyphId) -> f32 {
+        self.font.kern_unscaled(first, second)
+    }
+
+    fn outline(&self, id: GlyphId) -> Option<Outline> {
+        self.font.outline(id)
+    }
+
+    fn glyph_count(&self) -> usize {
+        self.font.glyph_count()
+    }
+
+    fn codepoint_ids(&self) -> CodepointIdIter<'_> {
+        self.font.codepoint_ids()
+    }
+
+    fn glyph_raster_image2(&self, id: GlyphId, pixel_size: u16) -> Option<v2::GlyphImage<'_>> {
+        self.font.glyph_raster_image2(id, pixel_size)
+    }
+
+    fn glyph_svg_image(&self, id: GlyphId) -> Option<GlyphSvg<'_>> {
+        self.font.glyph_svg_image(id)
+    }
+
+    fn font_data(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+fn load_shared_font_data(data: Arc<[u8]>, face_index: u32) -> Option<FontArc> {
+    SharedFont::try_new(data, face_index).map(FontArc::new)
 }
 
 fn load_default_font() -> Option<FontArc> {
@@ -3590,5 +3686,15 @@ mod tests {
         let second = load_fontdb_face(&db, second_id).unwrap();
 
         assert_eq!(second.units_per_em(), Some(512.0));
+    }
+
+    #[test]
+    fn selected_collection_faces_share_the_attachment_allocation() {
+        let attachment = selected_font(test_ttc());
+        let fonts = load_selected_fonts(std::slice::from_ref(&attachment), 1);
+
+        assert_eq!(fonts.len(), 2);
+        assert_eq!(fonts[0].font.font_data().as_ptr(), attachment.data.as_ptr());
+        assert_eq!(fonts[1].font.font_data().as_ptr(), attachment.data.as_ptr());
     }
 }

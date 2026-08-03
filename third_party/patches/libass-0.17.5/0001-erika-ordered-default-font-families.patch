@@ -1,0 +1,47 @@
+--- a/libass/ass_fontselect.c
++++ b/libass/ass_fontselect.c
+@@ -870,6 +870,33 @@ static char *select_font(ASS_FontSelector *priv,
+     return result;
+ }
+ 
++/* Erika passes an ASCII unit-separator-delimited list as default_family.
++ * Keep the public libass ABI unchanged while allowing application-supplied
++ * memory fonts to be tried in their selected order on every font provider. */
++static char *select_default_font(ASS_FontSelector *priv,
++                                 unsigned bold, unsigned italic,
++                                 int *index, char **postscript_name, int *uid,
++                                 ASS_FontStream *stream, uint32_t code)
++{
++    const char *start = priv->family_default;
++    while (start && *start) {
++        const char *end = strchr(start, '\x1f');
++        size_t length = end ? (size_t) (end - start) : strlen(start);
++        char *family = strndup(start, length);
++        if (!family)
++            return NULL;
++        char *result = select_font(priv, family, false, bold, italic,
++                                   index, postscript_name, uid, stream, code);
++        free(family);
++        if (result)
++            return result;
++        if (!end)
++            break;
++        start = end + 1;
++    }
++    return NULL;
++}
++
+ 
+ /**
+  * \brief Find a font. Use default family or path if necessary.
+@@ -896,8 +923,8 @@ char *ass_font_select(ASS_FontSelector *priv,
+                 postscript_name, uid, data, code);
+ 
+     if (!res && priv->family_default) {
+-        res = select_font(priv, priv->family_default, false, bold,
+-                italic, index, postscript_name, uid, data, code);
++        res = select_default_font(priv, bold, italic, index,
++                postscript_name, uid, data, code);
+         if (res)
+             ass_msg(priv->library, MSGL_WARN, "fontselect: Using default "
+                     "font family: (%s, %d, %d) -> %s, %d, %s",
