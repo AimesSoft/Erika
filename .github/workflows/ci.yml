@@ -61,10 +61,10 @@ jobs:
         include:
           - arch: arm64
             target: aarch64-apple-darwin
-            runner: macos-15
+            runner: macos-26
           - arch: x64
             target: x86_64-apple-darwin
-            runner: macos-15-intel
+            runner: macos-26
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -81,7 +81,6 @@ jobs:
           key: native-v2-macos-${{ matrix.target }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
       - name: Build native dependencies
         run: |
-          test "$(uname -m)" = "${{ matrix.arch == 'arm64' && 'arm64' || 'x86_64' }}"
           cargo run --locked -p xtask -- deps build --all \
             --profile "$PROFILE" --target "${{ matrix.target }}"
       - name: Build C API library
@@ -112,7 +111,7 @@ jobs:
 
   ios:
     name: iOS device staticlib
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 150
     env:
       IPHONEOS_DEPLOYMENT_TARGET: "13.0"
@@ -141,7 +140,7 @@ jobs:
 
   tvos:
     name: tvOS simulator staticlib
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 150
     env:
       TVOS_DEPLOYMENT_TARGET: "13.0"

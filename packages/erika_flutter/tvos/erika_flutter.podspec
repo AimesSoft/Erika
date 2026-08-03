@@ -23,11 +23,15 @@ Pod::Spec.new do |s|
     erika_presenter_poll_event
     erika_presenter_remove_danmaku_track
     erika_presenter_remove_subtitle_track
+    erika_presenter_register_subtitle_memory_font
     erika_presenter_render_tick
     erika_presenter_resize_surface
     erika_presenter_seek
     erika_presenter_select_audio_track
     erika_presenter_select_subtitle_track
+    erika_presenter_select_subtitle_memory_fonts
+    erika_presenter_clear_subtitle_memory_fonts
+    erika_presenter_get_subtitle_memory_font_status
     erika_presenter_set_danmaku_block_words_json
     erika_presenter_set_danmaku_config_ptr
     erika_presenter_set_danmaku_enabled
@@ -43,13 +47,14 @@ Pod::Spec.new do |s|
     erika_presenter_track_selection
     erika_presenter_tracks
     erika_track_info_free
+    erika_subtitle_memory_font_status_free
   ]
   erika_cabi_undefined_flags = erika_cabi_symbols
     .map { |symbol| "-Wl,-u,_#{symbol}" }
     .join(' ')
 
   s.name             = 'erika_flutter'
-  s.version          = '0.1.4'
+  s.version          = '0.1.5'
   s.summary          = 'Flutter embedder glue for the Erika Rust media engine.'
   s.description      = <<-DESC
 Flutter tvOS plugin that hosts a CAMetalLayer and drives Erika through its C ABI.
@@ -152,11 +157,11 @@ ERIKA_DAV1D_MARKER="$ERIKA_ROOT/third_party/build/$RUST_TARGET/$ERIKA_NATIVE_PRO
 
 # Optional: use a prebuilt static lib from a GitHub Release (opt-in).
 # Enable with ERIKA_PREBUILT=1; ERIKA_PREBUILT_TAG selects the tag (default
-# v0.1.4). Any failure falls through to the source build below, so enabling it
+# v0.1.5). Any failure falls through to the source build below, so enabling it
 # never breaks a build. ERIKA_TVOS_CAPI_STATICLIB still takes precedence.
 PREBUILT_LIB=""
 if [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ] && [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_TVOS_CAPI_STATICLIB:-}" ]; then
-  PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.4}"
+  PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.5}"
   PREBUILT_WORK="$ERIKA_ROOT/target/erika-prebuilt-tvos"
   PREBUILT_ZIP="$PREBUILT_WORK/erika-capi-tvos.zip"
   PREBUILT_URL="https://github.com/AimesSoft/Erika/releases/download/$PREBUILT_TAG/erika-capi-tvos.zip"
