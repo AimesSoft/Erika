@@ -1885,7 +1885,7 @@ pub unsafe extern "C" fn erika_presenter_register_subtitle_memory_font(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1911,7 +1911,7 @@ pub unsafe extern "C" fn erika_presenter_select_subtitle_memory_fonts(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1928,7 +1928,7 @@ pub unsafe extern "C" fn erika_presenter_clear_subtitle_memory_fonts(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1967,7 +1967,7 @@ pub unsafe extern "C" fn erika_subtitle_memory_font_status_free(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2013,7 +2013,7 @@ pub unsafe extern "C" fn erika_subtitle_memory_font_info_free(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3727,7 +3727,7 @@ fn danmaku_track_info_to_c(track: &DanmakuTrackInfo) -> ErikaDanmakuTrackInfo {
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3749,7 +3749,7 @@ fn subtitle_memory_font_status_to_c(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3774,7 +3774,7 @@ fn subtitle_memory_font_info_to_c(info: SubtitleMemoryFontInfo) -> ErikaSubtitle
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -4852,7 +4852,7 @@ mod tests {
 
     #[cfg(any(
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
@@ -4915,7 +4915,7 @@ mod tests {
 
     #[cfg(any(
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
