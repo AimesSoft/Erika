@@ -43,6 +43,10 @@ const LIBASS_URLS: &[&str] = &[
     "https://github.com/libass/libass/releases/download/0.17.5/libass-0.17.5.tar.xz",
     "https://codeload.github.com/libass/libass/tar.gz/refs/tags/0.17.5",
 ];
+const LIBASS_PATCHSET_VERSION: &str = "erika-ordered-font-fallback-v1";
+const LIBASS_BUILD_VERSION: &str = "0.17.5+erika-ordered-font-fallback-v1";
+const LIBASS_PATCHES: &[&str] =
+    &["third_party/patches/libass-0.17.5/0001-erika-ordered-default-font-families.patch"];
 
 const HARFBUZZ_ARCHIVE: &str = "harfbuzz-14.2.1.tar.xz";
 const HARFBUZZ_DIR: &str = "harfbuzz-14.2.1";
@@ -782,6 +786,7 @@ fn fetch_dependency_sources(layout: &WorkspaceLayout, all: bool) -> Result<()> {
     }
     if all {
         fetch_and_extract(layout, LIBASS_URLS, LIBASS_ARCHIVE, LIBASS_DIR, None)?;
+        apply_libass_patches(layout)?;
         fetch_and_extract(layout, HARFBUZZ_URLS, HARFBUZZ_ARCHIVE, HARFBUZZ_DIR, None)?;
         fetch_and_extract(layout, FREETYPE_URLS, FREETYPE_ARCHIVE, FREETYPE_DIR, None)?;
         fetch_and_extract(layout, FRIBIDI_URLS, FRIBIDI_ARCHIVE, FRIBIDI_DIR, None)?;
@@ -1401,7 +1406,7 @@ fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     if marker_has_version(
         &layout.libass_build_marker,
         "libass",
-        LIBASS_VERSION,
+        LIBASS_BUILD_VERSION,
         options.target,
     ) && !options.force
     {
@@ -1496,7 +1501,7 @@ fn build_libass(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     write_marker(
         &layout.libass_build_marker,
         "libass",
-        LIBASS_VERSION,
+        LIBASS_BUILD_VERSION,
         &layout.libass_prefix,
         options.target,
     )
@@ -2016,6 +2021,40 @@ fn apply_ffmpeg_patch_files(layout: &WorkspaceLayout) -> Result<PatchApplication
         }
     }
     Ok(application)
+}
+
+fn apply_libass_patches(layout: &WorkspaceLayout) -> Result<()> {
+    let mut application = PatchApplication::AlreadyApplied;
+    for relative_path in LIBASS_PATCHES {
+        let patch_path = layout.root.join(relative_path);
+        let patch = fs::read_to_string(&patch_path)
+            .with_context(|| format!("read libass patch {}", patch_path.display()))?;
+        if apply_unified_patch(&layout.libass_source_dir, &patch)
+            .with_context(|| format!("apply libass patch {}", patch_path.display()))?
+            == PatchApplication::Applied
+        {
+            application = PatchApplication::Applied;
+        }
+    }
+    fs::write(
+        layout.libass_source_dir.join(".erika-patchset"),
+        format!("{LIBASS_PATCHSET_VERSION}\n"),
+    )
+    .with_context(|| {
+        format!(
+            "write libass patch stamp in {}",
+            layout.libass_source_dir.display()
+        )
+    })?;
+    match application {
+        PatchApplication::Applied => {
+            println!("applied libass patch set {LIBASS_PATCHSET_VERSION}")
+        }
+        PatchApplication::AlreadyApplied => {
+            println!("reuse libass patch set {LIBASS_PATCHSET_VERSION}")
+        }
+    }
+    Ok(())
 }
 
 fn refresh_ffmpeg_source(layout: &WorkspaceLayout) -> Result<()> {

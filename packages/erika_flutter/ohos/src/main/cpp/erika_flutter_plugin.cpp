@@ -154,6 +154,41 @@ napi_value NativeInvoke(napi_env env, napi_callback_info info) {
   return result;
 }
 
+napi_value NativeRegisterSubtitleMemoryFont(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value args[2] = {};
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc < 2) {
+    napi_value result = nullptr;
+    napi_create_array_with_length(env, 2, &result);
+    napi_set_element(env, result, 0, Int32(env, ErikaStatus_NullPointer));
+    napi_set_element(env, result, 1, Int64(env, 0));
+    return result;
+  }
+  OhosPlayer* player = FindPlayer(GetInt64(env, args[0]));
+  bool is_typed_array = false;
+  napi_is_typedarray(env, args[1], &is_typed_array);
+  napi_typedarray_type array_type = napi_uint8_array;
+  size_t byte_count = 0;
+  void* bytes = nullptr;
+  napi_value array_buffer = nullptr;
+  size_t byte_offset = 0;
+  const bool valid_bytes = is_typed_array &&
+      napi_get_typedarray_info(
+          env, args[1], &array_type, &byte_count, &bytes, &array_buffer, &byte_offset) == napi_ok &&
+      (array_type == napi_uint8_array || array_type == napi_uint8_clamped_array);
+  uint64_t font_id = 0;
+  const auto status = player == nullptr || !valid_bytes
+      ? ErikaStatus_NullPointer
+      : erika_presenter_register_subtitle_memory_font(
+            player->presenter, static_cast<const uint8_t*>(bytes), byte_count, &font_id);
+  napi_value result = nullptr;
+  napi_create_array_with_length(env, 2, &result);
+  napi_set_element(env, result, 0, Int32(env, status));
+  napi_set_element(env, result, 1, Int64(env, static_cast<int64_t>(font_id)));
+  return result;
+}
+
 napi_value NativeAttachSurface(napi_env env, napi_callback_info info) {
   size_t argc = 5;
   napi_value args[5] = {};
@@ -332,6 +367,7 @@ napi_value Init(napi_env env, napi_value exports) {
       {"nativeLastError", nullptr, NativeLastError, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"nativeDestroy", nullptr, NativeDestroy, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"nativeInvoke", nullptr, NativeInvoke, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"nativeRegisterSubtitleMemoryFont", nullptr, NativeRegisterSubtitleMemoryFont, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"nativeAttachSurface", nullptr, NativeAttachSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"nativeResizeSurface", nullptr, NativeResizeSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"nativeDetachSurface", nullptr, NativeDetachSurface, nullptr, nullptr, nullptr, napi_default, nullptr},

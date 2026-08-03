@@ -22,6 +22,14 @@ void main() {
       return switch (call.method) {
         'create' => 7,
         'dispose' => null,
+        'registerSubtitleMemoryFont' => 41,
+        'getSubtitleMemoryFontStatus' => <String, Object?>{
+            'registeredCount': 2,
+            'registeredBytes': 4096,
+            'selectedCount': 1,
+            'generation': 3,
+            'selectedIds': <int>[41],
+          },
         _ => null,
       };
     });
@@ -66,6 +74,62 @@ void main() {
       'uri': 'https://example.test/video.mkv',
       'httpHeaders': <String, String>{'Authorization': 'Bearer secret'},
     });
+    await player.dispose();
+  });
+
+  test('subtitle memory font methods preserve typed data and IDs', () async {
+    final player = ErikaPlayer();
+    final data = Uint8List.fromList(<int>[0, 1, 2, 255]);
+
+    expect(await player.registerSubtitleMemoryFont(data), 41);
+    await player.selectSubtitleMemoryFonts(<int>[41, 42]);
+    final status = await player.getSubtitleMemoryFontStatus();
+    await player.clearSubtitleMemoryFonts();
+
+    final register = playerCalls.singleWhere(
+      (call) => call.method == 'registerSubtitleMemoryFont',
+    );
+    expect(register.arguments, <String, Object?>{'playerId': 7, 'data': data});
+    final select = playerCalls.singleWhere(
+      (call) => call.method == 'selectSubtitleMemoryFonts',
+    );
+    expect(select.arguments, <String, Object?>{
+      'playerId': 7,
+      'fontIds': <int>[41, 42],
+    });
+    expect(status.registeredCount, 2);
+    expect(status.registeredBytes, 4096);
+    expect(status.selectedCount, 1);
+    expect(status.generation, 3);
+    expect(status.selectedIds, <int>[41]);
+    expect(
+      playerCalls
+          .singleWhere(
+            (call) => call.method == 'clearSubtitleMemoryFonts',
+          )
+          .arguments,
+      <String, Object?>{'playerId': 7},
+    );
+    await player.dispose();
+  });
+
+  test('subtitle memory font arguments are validated before channel calls',
+      () async {
+    final player = ErikaPlayer();
+
+    await expectLater(
+      player.registerSubtitleMemoryFont(Uint8List(0)),
+      throwsArgumentError,
+    );
+    await expectLater(
+      player.selectSubtitleMemoryFonts(<int>[1, 1]),
+      throwsArgumentError,
+    );
+    await expectLater(
+      player.selectSubtitleMemoryFonts(<int>[0]),
+      throwsArgumentError,
+    );
+    expect(playerCalls, isEmpty);
     await player.dispose();
   });
 

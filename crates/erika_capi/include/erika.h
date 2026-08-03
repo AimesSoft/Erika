@@ -242,6 +242,30 @@ typedef struct ErikaOutputStatus {
   uint64_t extended_linear_frames;
 } ErikaOutputStatus;
 
+typedef struct ErikaSubtitleMemoryFontStatus {
+  uintptr_t registered_count;
+  uintptr_t registered_bytes;
+  uintptr_t selected_count;
+  uint64_t generation;
+  uint64_t *selected_ids;
+} ErikaSubtitleMemoryFontStatus;
+
+typedef struct ErikaSubtitleMemoryFontFace {
+  uint32_t index;
+  char *families_json;
+  char *post_script_name;
+  uint16_t weight;
+  bool italic;
+  bool monospaced;
+} ErikaSubtitleMemoryFontFace;
+
+typedef struct ErikaSubtitleMemoryFontInfo {
+  uint64_t id;
+  uintptr_t byte_len;
+  ErikaSubtitleMemoryFontFace *faces;
+  uintptr_t face_count;
+} ErikaSubtitleMemoryFontInfo;
+
 typedef struct ErikaDanmakuConfig {
   bool enabled;
   /* NipaPlay/Flutter logical danmaku font size. Erika uses the NipaPlay
@@ -487,9 +511,29 @@ ErikaStatus erika_presenter_set_subtitle_font(
     ErikaPresenterHandle *handle,
     const char *family,
     const char *file_path);
+ErikaStatus erika_presenter_register_subtitle_memory_font(
+    ErikaPresenterHandle *handle,
+    const uint8_t *data,
+    uintptr_t data_len,
+    uint64_t *out_font_id);
+ErikaStatus erika_presenter_select_subtitle_memory_fonts(
+    ErikaPresenterHandle *handle,
+    const uint64_t *font_ids,
+    uintptr_t font_count);
+ErikaStatus erika_presenter_clear_subtitle_memory_fonts(ErikaPresenterHandle *handle);
+ErikaStatus erika_presenter_get_subtitle_memory_font_status(
+    ErikaPresenterHandle *handle,
+    ErikaSubtitleMemoryFontStatus *out_status);
 ErikaStatus erika_presenter_set_subtitle_style(
     ErikaPresenterHandle *handle,
     ErikaSubtitleStyle style);
+void erika_subtitle_memory_font_status_free(
+    ErikaSubtitleMemoryFontStatus *status);
+ErikaStatus erika_presenter_get_subtitle_memory_font_info(
+    ErikaPresenterHandle *handle,
+    uint64_t font_id,
+    ErikaSubtitleMemoryFontInfo *out_info);
+void erika_subtitle_memory_font_info_free(ErikaSubtitleMemoryFontInfo *info);
 ErikaStatus erika_presenter_set_output_headroom(
     ErikaPresenterHandle *handle,
     float headroom,

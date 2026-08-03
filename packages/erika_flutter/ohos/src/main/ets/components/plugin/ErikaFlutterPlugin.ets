@@ -126,6 +126,10 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
       this.captureFrame(args, result);
       return;
     }
+    if (call.method === 'registerSubtitleMemoryFont') {
+      this.registerSubtitleMemoryFont(args, result);
+      return;
+    }
     if (this.isNativePlayerMethod(call.method)) {
       this.invokePlayer(call.method, args, result);
       return;
@@ -336,6 +340,27 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
     this.drainEvents(playerId);
   }
 
+  private registerSubtitleMemoryFont(
+    args: Map<string, ESObject>,
+    result: MethodResult,
+  ): void {
+    const playerId = this.numberArg(args, 'playerId', 0);
+    if (!this.players.has(playerId)) {
+      result.error('ERIKA_ERROR', 'Unknown Erika player ' + playerId, null);
+      return;
+    }
+    const data = args.get('data') as Uint8Array;
+    const response = erikaNative.nativeRegisterSubtitleMemoryFont(
+      playerId,
+      data,
+    ) as Array<number>;
+    const status = response[0] ?? 1;
+    if (!this.completeStatus(status, result, 'register subtitle memory font')) {
+      return;
+    }
+    result.success(response[1] ?? 0);
+  }
+
   private startFrameLoop(): void {
     if (this.frameTimer >= 0) {
       return;
@@ -426,6 +451,8 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
     return [
       'open', 'play', 'pause', 'stop', 'close', 'seek',
       'setPlaybackRate', 'setVolume', 'setUpscaler', 'setSubtitleScale',
+      'selectSubtitleMemoryFonts', 'clearSubtitleMemoryFonts',
+      'getSubtitleMemoryFontStatus',
       'getUpscalerStatus', 'getOutputStatus', 'getPresenterStats',
       'addExternalSubtitle', 'removeSubtitleTrack',
       'loadDanmakuFile', 'loadDanmakuJson',

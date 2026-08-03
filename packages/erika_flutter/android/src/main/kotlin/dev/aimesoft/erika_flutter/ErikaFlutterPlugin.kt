@@ -179,6 +179,7 @@ class ErikaFlutterPlugin :
                 "detachOverlay" -> detachOverlay(arguments(call), result)
                 "setOverlayFrame" -> setOverlayFrame(arguments(call), result)
                 "screenshot" -> captureFrame(arguments(call), result)
+                "registerSubtitleMemoryFont" -> registerSubtitleMemoryFont(arguments(call), result)
                 in NATIVE_METHODS -> invokePlayer(call.method, arguments(call), result)
                 else -> result.notImplemented()
             }
@@ -484,6 +485,17 @@ class ErikaFlutterPlugin :
 
         val prepared = prepareNativeArguments(method, arguments)
         invokePreparedPlayer(host, method, prepared, result)
+    }
+
+    private fun registerSubtitleMemoryFont(
+        arguments: Map<String, Any?>,
+        result: MethodChannel.Result,
+    ) {
+        val host = player(arguments)
+        val data = arguments["data"] as? ByteArray
+            ?: throw IllegalArgumentException("Missing byte array argument 'data'")
+        complete(result, NativeJson.decodeResponse(ErikaNative.nativeRegisterSubtitleMemoryFont(host.handle, data)))
+        host.requestRender()
     }
 
     private fun invokePreparedPlayer(
@@ -1693,6 +1705,8 @@ class ErikaFlutterPlugin :
             "setUpscaler",
             "setSubtitleScale",
             "setSubtitleStyle",
+            "selectSubtitleMemoryFonts",
+            "clearSubtitleMemoryFonts",
             "addExternalSubtitle",
             "removeSubtitleTrack",
             "loadDanmakuFile",
@@ -1723,6 +1737,9 @@ class ErikaFlutterPlugin :
             "setUpscaler",
             "setSubtitleScale",
             "setSubtitleStyle",
+            "selectSubtitleMemoryFonts",
+            "clearSubtitleMemoryFonts",
+            "getSubtitleMemoryFontStatus",
             "getUpscalerStatus",
             "getOutputStatus",
             "getPresenterStats",

@@ -32,5 +32,11 @@ void main() {
     expect(source, contains('temporaryFiles.toList()'));
     expect(source, contains('insufficient_disk_budget'));
     expect(source, contains('max_bytes_exceeded'));
+
+    expect(plugin, contains('registerSubtitleMemoryFont'));
+    expect(plugin, contains('selectSubtitleMemoryFonts'));
+    expect(plugin, contains('clearSubtitleMemoryFonts'));
+    expect(plugin, contains('getSubtitleMemoryFontStatus'));
+    expect(plugin, contains('nativeRegisterSubtitleMemoryFont'));
   });
 }
