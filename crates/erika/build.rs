@@ -16,6 +16,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ANDROID_API_LEVEL");
     println!("cargo:rerun-if-env-changed=ANDROID_NDK_HOME");
     println!("cargo:rerun-if-env-changed=ANDROID_NDK_ROOT");
+    println!("cargo:rerun-if-env-changed=TVOS_DEPLOYMENT_TARGET");
     println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.vert");
     println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.frag");
     println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.vert.spv");
@@ -25,7 +26,7 @@ fn main() {
     enforce_bundled_ffmpeg_version(ffmpeg_version_major);
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").ok();
-    if target_os.as_deref() == Some("ios") {
+    if matches!(target_os.as_deref(), Some("ios" | "tvos")) {
         println!("cargo:rustc-link-lib=framework=AudioToolbox");
     } else if target_os.as_deref() == Some("android") {
         for lib in [
@@ -113,7 +114,7 @@ fn main() {
 
     if target_os.as_deref() == Some("windows") {
         println!("cargo:rustc-link-lib=dwrite");
-    } else if matches!(target_os.as_deref(), Some("ios" | "macos")) {
+    } else if matches!(target_os.as_deref(), Some("ios" | "tvos" | "macos")) {
         if target_os.as_deref() == Some("macos") {
             println!("cargo:rustc-link-lib=framework=ApplicationServices");
         }
@@ -286,6 +287,11 @@ fn inferred_native_target() -> Option<String> {
         ("android", "x86_64") => Some("x86_64-linux-android".to_string()),
         ("android", "x86") => Some("i686-linux-android".to_string()),
         ("ios", _) => Some("ios".to_string()),
+        ("tvos", "aarch64") if env::var("CARGO_CFG_TARGET_ABI").as_deref() == Ok("sim") => {
+            Some("aarch64-apple-tvos-sim".to_string())
+        }
+        ("tvos", "aarch64") => Some("aarch64-apple-tvos".to_string()),
+        ("tvos", "x86_64") => Some("x86_64-apple-tvos".to_string()),
         _ => None,
     }
 }

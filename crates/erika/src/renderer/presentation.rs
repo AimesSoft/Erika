@@ -60,22 +60,34 @@ impl PresentationLayout {
         }
     }
 
-    #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "ios", target_os = "tvos")),
+        allow(dead_code)
+    )]
     pub(crate) fn is_source_upscaled(self) -> bool {
         self.target_rect[2] > self.source_width
     }
 
-    #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "ios", target_os = "tvos")),
+        allow(dead_code)
+    )]
     pub(crate) fn video_viewport(self) -> [f32; 4] {
         [self.drawable_width, self.drawable_height, 0.0, 0.0]
     }
 
-    #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "ios", target_os = "tvos")),
+        allow(dead_code)
+    )]
     pub(crate) fn overlay_viewport(self) -> [f32; 2] {
         [self.drawable_width, self.drawable_height]
     }
 
-    #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "ios", target_os = "tvos")),
+        allow(dead_code)
+    )]
     pub(crate) fn map_source_rect(self, x: f32, y: f32, width: f32, height: f32) -> [f32; 4] {
         let scale_x = self.target_rect[2] / self.source_width;
         let scale_y = self.target_rect[3] / self.source_height;

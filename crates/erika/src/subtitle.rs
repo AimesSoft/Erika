@@ -2175,7 +2175,11 @@ const DEFAULT_ASS_FONT_FAMILY: &str = BUNDLED_ASS_FALLBACK_FONT_FAMILY;
 
 #[cfg(feature = "libass")]
 fn default_ass_font_provider() -> libc::c_int {
-    if cfg!(any(target_os = "ios", target_os = "android")) {
+    if cfg!(any(
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "android"
+    )) {
         ASS_FONTPROVIDER_NONE
     } else if cfg!(target_os = "macos") {
         ASS_FONTPROVIDER_CORETEXT

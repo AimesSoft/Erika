@@ -537,7 +537,7 @@ impl VideoDecodePreference {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
 impl Default for VideoDecodePreference {
     fn default() -> Self {
         Self::VideoToolbox
@@ -567,7 +567,7 @@ impl Default for VideoDecodePreference {
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1603,8 +1603,12 @@ impl PlaybackSession {
         let decoder_alive = self.video_decoder.is_some();
         let discarded = self.discard_queued_frames_and_packets();
         trace_discarded_playback_queues("seek_before_decoder_transition", discarded, decoder_alive);
-        let bypass_seek_keyframe_gate = cfg!(any(target_os = "macos", target_os = "ios"))
-            && self.active_video_decoder_backend() == Some(DecoderBackend::VideoToolbox)
+        let bypass_seek_keyframe_gate = cfg!(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos"
+        )) && self.active_video_decoder_backend()
+            == Some(DecoderBackend::VideoToolbox)
             && self.active_video_codec_is_av1();
         self.video_fallback_waiting_for_keyframe =
             self.video_decoder.is_some() && !bypass_seek_keyframe_gate;

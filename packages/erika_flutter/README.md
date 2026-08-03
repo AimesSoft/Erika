@@ -6,13 +6,15 @@ The plugin keeps Dart out of the hot path:
 
 - Dart exposes low-frequency player commands and event streams.
 - The native plugins expose two surface strategies: `ErikaWindowOverlayVideoView`
-  for the recommended window-hosted overlay path (Metal on macOS/iOS, a D3D11
+  for the recommended window-hosted overlay path (Metal on macOS/iOS/tvOS, a D3D11
   swapchain on Windows), and `ErikaVideoView` for platform-view embedding. On
   Android both widgets route through the same native-view selector: SDR uses a
   real `TextureView`, while requested extended-linear output uses a
   `SurfaceView` with Hybrid Composition.
 - The macOS plugin loads the Erika dynamic library.
 - The iOS plugin links the Erika static library.
+- The tvOS plugin links the Erika static library and hosts its Metal layer in an
+  Apple TV platform view.
 - The Windows plugin builds and links the Erika C ABI DLL.
 - The Android plugin builds `liberika_capi.so` per ABI and drives its native
   surface from `Choreographer`.
@@ -23,7 +25,7 @@ The plugin keeps Dart out of the hot path:
 
 ## Video Surfaces
 
-Use `ErikaWindowOverlayVideoView` for full-player macOS/iOS UIs. It reserves a
+Use `ErikaWindowOverlayVideoView` for full-player macOS/iOS/tvOS UIs. It reserves a
 Flutter layout rect while the plugin hosts a sibling native `CAMetalLayer`, so
 video stays outside Flutter's platform-view compositor.
 
@@ -76,6 +78,18 @@ The iOS CocoaPod script phase builds the Erika native dependencies and C ABI
 static library automatically during Xcode builds. Requirements:
 
 - Rust toolchain with the appropriate iOS target (`rustup target add aarch64-apple-ios`)
+
+## tvOS Setup
+
+The tvOS CocoaPod script phase builds the native dependencies and C ABI static
+library automatically for Apple TV devices and simulators. Rust's tvOS targets
+are tier 3, so install nightly with its source component:
+
+- `rustup toolchain install nightly --component rust-src`
+
+The script selects `aarch64-apple-tvos`, `aarch64-apple-tvos-sim`, or
+`x86_64-apple-tvos` from the active Xcode SDK and architecture, then compiles it
+with `-Z build-std=std,panic_abort`.
 
 ## Windows Setup
 

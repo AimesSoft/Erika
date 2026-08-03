@@ -10,4 +10,5 @@
 /packages/erika_flutter/android/build/
 /packages/erika_flutter/android/local.properties
 /packages/erika_flutter/ios/native/
+/packages/erika_flutter/tvos/native/
 .DS_Store

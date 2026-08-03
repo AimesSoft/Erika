@@ -24,6 +24,8 @@ xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,z
 - For cross-targets, add the Rust std target, e.g.
   `rustup target add aarch64-apple-ios` or
   `rustup target add x86_64-pc-windows-msvc`.
+- Rust currently treats tvOS targets as tier 3. Install nightly with `rust-src`;
+  tvOS builds use Cargo's `-Z build-std` instead of `rustup target add`.
 
 ### Build tools — macOS / Unix host
 
@@ -109,6 +111,9 @@ Subcommands: `plan` (print the plan), `fetch` (download sources only),
 | `aarch64-apple-ios` | iOS device | |
 | `aarch64-apple-ios-sim` | iOS sim (Apple Silicon) | |
 | `x86_64-apple-ios` | iOS sim (Intel) | |
+| `aarch64-apple-tvos` | tvOS device | Requires nightly + `rust-src`. |
+| `aarch64-apple-tvos-sim` | tvOS sim (Apple Silicon) | Requires nightly + `rust-src`. |
+| `x86_64-apple-tvos` | tvOS sim (Intel) | Requires nightly + `rust-src`. |
 | `x86_64-pc-windows-msvc` (or `windows-x64`) | Windows | Swaps VideoToolbox for D3D11VA/DXVA2 in FFmpeg. |
 | `aarch64-pc-windows-msvc` (or `windows-arm64`) | Windows ARM64 | Supports native ARM64 hosts and x64-to-ARM64 cross builds. |
 | `aarch64-linux-android` (or `arm64-v8a`) | Android arm64 | Flutter/Play primary device ABI. |
@@ -117,8 +122,9 @@ Subcommands: `plan` (print the plan), `fetch` (download sources only),
 | `i686-linux-android` (or `x86`) | Android x86 | 32-bit emulator compatibility ABI; x86 assembly acceleration is disabled because Android shared libraries cannot contain its non-PIC relocations. |
 | `aarch64-unknown-linux-ohos` (or `ohos-arm64`) | HarmonyOS arm64 | Uses the DevEco Studio OpenHarmony Native SDK. |
 
-Deployment minimums default to macOS `11.0` / iOS `13.0` and can be overridden
-with `MACOSX_DEPLOYMENT_TARGET` / `IPHONEOS_DEPLOYMENT_TARGET`.
+Deployment minimums default to macOS `11.0` / iOS `13.0` / tvOS `13.0` and can
+be overridden with `MACOSX_DEPLOYMENT_TARGET` /
+`IPHONEOS_DEPLOYMENT_TARGET` / `TVOS_DEPLOYMENT_TARGET`.
 
 Android builds use `android-26`, `c++_shared`, PIC static dependencies, and the
 NDK LLVM toolchain selected for the requested ABI.
@@ -142,6 +148,19 @@ For direct native builds, keep all three target selectors identical:
 cargo run -p xtask -- deps build --all --profile lgpl --target aarch64-apple-darwin
 ERIKA_NATIVE_PROFILE=lgpl ERIKA_NATIVE_TARGET=aarch64-apple-darwin \
   cargo build -p erika_capi --release --target aarch64-apple-darwin
+```
+
+Because Rust's tvOS targets are tier 3, direct tvOS builds use nightly and build
+the standard library from `rust-src`:
+
+```sh
+rustup toolchain install nightly --component rust-src
+cargo run -p xtask -- deps build --all --profile lgpl \
+  --target aarch64-apple-tvos-sim
+ERIKA_NATIVE_PROFILE=lgpl ERIKA_NATIVE_TARGET=aarch64-apple-tvos-sim \
+  cargo +nightly rustc -Z build-std=std,panic_abort -p erika_capi --release \
+  --target aarch64-apple-tvos-sim --no-default-features --features libass \
+  --lib --crate-type staticlib
 ```
 
 On Windows ARM64, use the equivalent PowerShell commands:

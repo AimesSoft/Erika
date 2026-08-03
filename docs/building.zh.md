@@ -22,6 +22,8 @@ xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,z
 - 交叉目标需安装对应 Rust std target,如
   `rustup target add aarch64-apple-ios` 或
   `rustup target add x86_64-pc-windows-msvc`。
+- Rust 当前将 tvOS 目标列为 tier 3。请安装带 `rust-src` 的 nightly；tvOS
+  通过 Cargo 的 `-Z build-std` 构建，不使用 `rustup target add`。
 
 ### 构建工具 —— macOS / Unix 宿主
 
@@ -98,6 +100,9 @@ cargo run -p xtask -- deps build --all --profile lgpl
 | `aarch64-apple-ios` | iOS 设备 | |
 | `aarch64-apple-ios-sim` | iOS 模拟器(Apple Silicon) | |
 | `x86_64-apple-ios` | iOS 模拟器(Intel) | |
+| `aarch64-apple-tvos` | tvOS 设备 | 需要 nightly + `rust-src`。 |
+| `aarch64-apple-tvos-sim` | tvOS 模拟器(Apple Silicon) | 需要 nightly + `rust-src`。 |
+| `x86_64-apple-tvos` | tvOS 模拟器(Intel) | 需要 nightly + `rust-src`。 |
 | `x86_64-pc-windows-msvc`(或 `windows-x64`) | Windows | FFmpeg 里把 VideoToolbox 换成 D3D11VA/DXVA2。 |
 | `aarch64-pc-windows-msvc`(或 `windows-arm64`) | Windows ARM64 | 支持 ARM64 原生宿主和 x64 到 ARM64 交叉构建。 |
 | `aarch64-linux-android`(或 `arm64-v8a`) | Android arm64 | 主流真机 ABI。 |
@@ -106,8 +111,9 @@ cargo run -p xtask -- deps build --all --profile lgpl
 | `i686-linux-android`(或 `x86`) | Android x86 | 32 位模拟器兼容;Android 共享库不允许对应的非 PIC 重定位,因此禁用 x86 汇编加速。 |
 | `aarch64-unknown-linux-ohos`(或 `ohos-arm64`) | HarmonyOS arm64 | 使用 DevEco Studio OpenHarmony Native SDK。 |
 
-部署最低版本默认 macOS `11.0` / iOS `13.0`,可用
-`MACOSX_DEPLOYMENT_TARGET` / `IPHONEOS_DEPLOYMENT_TARGET` 覆盖。
+部署最低版本默认 macOS `11.0` / iOS `13.0` / tvOS `13.0`，可用
+`MACOSX_DEPLOYMENT_TARGET` / `IPHONEOS_DEPLOYMENT_TARGET` /
+`TVOS_DEPLOYMENT_TARGET` 覆盖。
 
 Android 使用 `android-26`、`c++_shared`、PIC 静态依赖和所选 ABI 对应的 NDK LLVM
 工具链。
@@ -128,6 +134,19 @@ Flutter 依赖项目通过 `ERIKA_MACOS_ARCHS=arm64|x86_64|universal` 选择 mac
 cargo run -p xtask -- deps build --all --profile lgpl --target aarch64-apple-darwin
 ERIKA_NATIVE_PROFILE=lgpl ERIKA_NATIVE_TARGET=aarch64-apple-darwin \
   cargo build -p erika_capi --release --target aarch64-apple-darwin
+```
+
+Rust 的 tvOS 目标属于 tier 3，直接构建时需要 nightly 并从 `rust-src`
+构建标准库：
+
+```sh
+rustup toolchain install nightly --component rust-src
+cargo run -p xtask -- deps build --all --profile lgpl \
+  --target aarch64-apple-tvos-sim
+ERIKA_NATIVE_PROFILE=lgpl ERIKA_NATIVE_TARGET=aarch64-apple-tvos-sim \
+  cargo +nightly rustc -Z build-std=std,panic_abort -p erika_capi --release \
+  --target aarch64-apple-tvos-sim --no-default-features --features libass \
+  --lib --crate-type staticlib
 ```
 
 Windows ARM64 使用对应的 PowerShell 命令：

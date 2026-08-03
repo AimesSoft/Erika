@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 mod android_jni;
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -22,7 +22,7 @@ mod presenter_json;
 use crossbeam_channel::Receiver;
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -30,7 +30,7 @@ use crossbeam_channel::Receiver;
 use erika::LumaUpscalerBackendStatus;
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -41,7 +41,7 @@ use erika::danmaku::{
 };
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -49,7 +49,7 @@ use erika::danmaku::{
 use erika::presenter::{PresenterConfig, PresenterRuntime, PresenterRuntimeSnapshot};
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -61,7 +61,7 @@ use erika::renderer::output::{
 };
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -69,7 +69,7 @@ use erika::renderer::output::{
 use erika::renderer::pipeline::LumaUpscalerMode;
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -658,7 +658,7 @@ pub struct ErikaHandle {
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1081,7 +1081,7 @@ pub unsafe extern "C" fn erika_poll_event(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1098,7 +1098,7 @@ pub extern "C" fn erika_presenter_create() -> *mut ErikaPresenterHandle {
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1110,7 +1110,7 @@ pub extern "C" fn erika_presenter_create() -> *mut std::ffi::c_void {
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1124,7 +1124,7 @@ pub extern "C" fn erika_presenter_create_with_config(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1143,7 +1143,7 @@ pub extern "C" fn erika_presenter_create_with_output_mode(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1157,7 +1157,7 @@ pub extern "C" fn erika_presenter_create_with_config(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1172,7 +1172,7 @@ pub extern "C" fn erika_presenter_create_with_output_mode(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1189,7 +1189,7 @@ pub unsafe extern "C" fn erika_presenter_open_with_headers(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1272,7 +1272,7 @@ fn report_capi_panic(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1310,7 +1310,7 @@ fn presenter_config_from_c(config: ErikaPresenterConfig) -> PresenterConfig {
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1344,7 +1344,7 @@ fn subtitle_style_from_c(style: ErikaSubtitleStyle) -> Result<SubtitleStyleConfi
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1359,7 +1359,7 @@ fn luma_upscaler_mode_from_c(mode: i32) -> LumaUpscalerMode {
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1374,7 +1374,7 @@ fn luma_upscaler_mode_to_c(mode: LumaUpscalerMode) -> i32 {
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1393,7 +1393,7 @@ fn upscaler_backend_status_to_c(status: LumaUpscalerBackendStatus) -> i32 {
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1515,7 +1515,7 @@ fn danmaku_block_words_from_json(json: &str) -> Result<Vec<String>, ErikaStatus>
 #[cfg(all(
     any(
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
@@ -1528,7 +1528,7 @@ fn metal_output_mode_from_c(config: ErikaPresenterConfig) -> MetalOutputMode {
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1542,7 +1542,7 @@ pub unsafe extern "C" fn erika_presenter_destroy(handle: *mut ErikaPresenterHand
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1552,7 +1552,7 @@ pub unsafe extern "C" fn erika_presenter_destroy(_handle: *mut std::ffi::c_void)
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1567,7 +1567,7 @@ pub unsafe extern "C" fn erika_presenter_open(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1606,7 +1606,7 @@ pub unsafe extern "C" fn erika_presenter_open_with_headers(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1625,7 +1625,7 @@ pub unsafe extern "C" fn erika_presenter_play(handle: *mut ErikaPresenterHandle)
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1644,7 +1644,7 @@ pub unsafe extern "C" fn erika_presenter_pause(handle: *mut ErikaPresenterHandle
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1658,7 +1658,7 @@ pub unsafe extern "C" fn erika_presenter_stop(handle: *mut ErikaPresenterHandle)
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1672,7 +1672,7 @@ pub unsafe extern "C" fn erika_presenter_close(handle: *mut ErikaPresenterHandle
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1700,7 +1700,7 @@ pub unsafe extern "C" fn erika_presenter_seek(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1717,7 +1717,7 @@ pub unsafe extern "C" fn erika_presenter_set_playback_rate(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1735,7 +1735,7 @@ pub unsafe extern "C" fn erika_presenter_set_volume(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1755,7 +1755,7 @@ pub unsafe extern "C" fn erika_presenter_set_upscaler(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1775,7 +1775,7 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
 /// clears that half of the selection and restores the platform default.
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1796,7 +1796,7 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_font(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1818,7 +1818,7 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_style(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1842,7 +1842,7 @@ pub unsafe extern "C" fn erika_presenter_set_output_headroom(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1864,7 +1864,7 @@ pub unsafe extern "C" fn erika_presenter_get_upscaler_status(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1886,7 +1886,7 @@ pub unsafe extern "C" fn erika_presenter_get_output_status(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1917,7 +1917,7 @@ pub unsafe extern "C" fn erika_presenter_add_external_subtitle(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1933,7 +1933,7 @@ pub unsafe extern "C" fn erika_presenter_add_external_subtitle(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1949,7 +1949,7 @@ pub unsafe extern "C" fn erika_presenter_set_output_headroom(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1966,7 +1966,7 @@ pub unsafe extern "C" fn erika_presenter_remove_subtitle_track(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1987,7 +1987,7 @@ pub unsafe extern "C" fn erika_presenter_select_audio_track(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2008,7 +2008,7 @@ pub unsafe extern "C" fn erika_presenter_select_subtitle_track(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2038,7 +2038,7 @@ pub unsafe extern "C" fn erika_presenter_load_danmaku_file(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2068,7 +2068,7 @@ pub unsafe extern "C" fn erika_presenter_load_danmaku_json(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2111,7 +2111,7 @@ pub unsafe extern "C" fn erika_presenter_add_danmaku_track_file(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2151,7 +2151,7 @@ pub unsafe extern "C" fn erika_presenter_add_danmaku_track_json(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2172,7 +2172,7 @@ pub unsafe extern "C" fn erika_presenter_remove_danmaku_track(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2197,7 +2197,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_track_enabled(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2222,7 +2222,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_track_offset(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2240,7 +2240,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_global_offset(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2267,7 +2267,7 @@ pub unsafe extern "C" fn erika_presenter_danmaku_tracks(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2284,7 +2284,7 @@ pub unsafe extern "C" fn erika_presenter_clear_danmaku(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2302,7 +2302,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_enabled(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2320,7 +2320,7 @@ pub unsafe extern "C" fn erika_presenter_set_debug_hud_enabled(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2345,7 +2345,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_config(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2363,7 +2363,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_config_ptr(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2391,7 +2391,7 @@ pub unsafe extern "C" fn erika_presenter_get_danmaku_config(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2412,7 +2412,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_font(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2444,7 +2444,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_block_words_json(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2465,7 +2465,7 @@ pub unsafe extern "C" fn erika_presenter_track_selection(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2487,7 +2487,7 @@ pub unsafe extern "C" fn erika_presenter_tracks(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2502,7 +2502,7 @@ pub unsafe extern "C" fn erika_presenter_remove_subtitle_track(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2517,7 +2517,7 @@ pub unsafe extern "C" fn erika_presenter_select_audio_track(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2532,7 +2532,7 @@ pub unsafe extern "C" fn erika_presenter_select_subtitle_track(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2547,7 +2547,7 @@ pub unsafe extern "C" fn erika_presenter_track_selection(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2564,7 +2564,7 @@ pub unsafe extern "C" fn erika_presenter_tracks(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2579,7 +2579,7 @@ pub unsafe extern "C" fn erika_presenter_set_playback_rate(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2594,7 +2594,7 @@ pub unsafe extern "C" fn erika_presenter_set_volume(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2609,7 +2609,7 @@ pub unsafe extern "C" fn erika_presenter_set_upscaler(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2624,7 +2624,7 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_scale(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2640,7 +2640,7 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_font(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2655,7 +2655,7 @@ pub unsafe extern "C" fn erika_presenter_set_subtitle_style(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2673,7 +2673,7 @@ pub unsafe extern "C" fn erika_presenter_get_upscaler_status(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2691,7 +2691,7 @@ pub unsafe extern "C" fn erika_presenter_get_output_status(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2706,7 +2706,7 @@ pub unsafe extern "C" fn erika_presenter_load_danmaku_file(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2721,7 +2721,7 @@ pub unsafe extern "C" fn erika_presenter_load_danmaku_json(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2742,7 +2742,7 @@ pub unsafe extern "C" fn erika_presenter_add_danmaku_track_file(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2763,7 +2763,7 @@ pub unsafe extern "C" fn erika_presenter_add_danmaku_track_json(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2778,7 +2778,7 @@ pub unsafe extern "C" fn erika_presenter_remove_danmaku_track(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2794,7 +2794,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_track_enabled(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2810,7 +2810,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_track_offset(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2825,7 +2825,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_global_offset(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2845,7 +2845,7 @@ pub unsafe extern "C" fn erika_presenter_danmaku_tracks(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2859,7 +2859,7 @@ pub unsafe extern "C" fn erika_presenter_clear_danmaku(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2874,7 +2874,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_enabled(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2889,7 +2889,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_config(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2907,7 +2907,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_config_ptr(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2925,7 +2925,7 @@ pub unsafe extern "C" fn erika_presenter_get_danmaku_config(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2941,7 +2941,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_font(
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2959,7 +2959,7 @@ pub unsafe extern "C" fn erika_presenter_set_danmaku_block_words_json(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -2984,7 +2984,7 @@ pub unsafe extern "C" fn erika_presenter_attach_metal_layer(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3015,7 +3015,7 @@ pub unsafe extern "C" fn erika_presenter_attach_wgpu_surface(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3046,7 +3046,7 @@ pub unsafe extern "C" fn erika_presenter_attach_wgpu_surface_with_output_capabil
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3075,7 +3075,7 @@ pub unsafe extern "C" fn erika_presenter_attach_windows_hwnd(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3094,7 +3094,7 @@ pub unsafe extern "C" fn erika_presenter_resize_surface(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3110,7 +3110,7 @@ pub unsafe extern "C" fn erika_presenter_detach_surface(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3138,7 +3138,7 @@ pub unsafe extern "C" fn erika_presenter_render_tick(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3161,7 +3161,7 @@ pub unsafe extern "C" fn erika_presenter_get_stats(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3201,7 +3201,7 @@ pub unsafe extern "C" fn erika_presenter_capture_frame_rgba(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3230,7 +3230,7 @@ fn capture_presenter_frame_rgba(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3315,7 +3315,7 @@ fn with_handle_mut(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3780,7 +3780,7 @@ fn duration_micros_u64(duration: Duration) -> u64 {
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -3831,7 +3831,7 @@ fn presenter_stats_to_c(snapshot: PresenterRuntimeSnapshot) -> ErikaPresenterSta
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -4246,7 +4246,7 @@ mod tests {
 
     #[cfg(any(
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
@@ -4264,7 +4264,7 @@ mod tests {
 
     #[cfg(any(
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
@@ -4285,7 +4285,7 @@ mod tests {
 
     #[cfg(any(
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
@@ -4312,7 +4312,7 @@ mod tests {
 
     #[cfg(any(
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
@@ -4341,7 +4341,7 @@ mod tests {
 
     #[cfg(any(
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
@@ -4379,7 +4379,7 @@ mod tests {
 
     #[cfg(any(
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
@@ -4433,7 +4433,7 @@ mod tests {
 
     #[cfg(any(
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
@@ -4451,7 +4451,7 @@ mod tests {
 
     #[cfg(any(
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
@@ -4487,7 +4487,7 @@ mod tests {
 
     #[cfg(any(
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
@@ -4534,7 +4534,7 @@ mod tests {
 
     #[cfg(any(
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
@@ -4609,7 +4609,7 @@ mod tests {
 
     #[cfg(any(
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_os = "android",
         target_env = "ohos"
