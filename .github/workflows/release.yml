@@ -27,8 +27,6 @@ permissions:
 
 env:
   PROFILE: lgpl
-  IPHONEOS_DEPLOYMENT_TARGET: "13.0"
-  TVOS_DEPLOYMENT_TARGET: "13.0"
   ANDROID_API_LEVEL: "26"
   ANDROID_NDK_VERSION: "29.0.14206865"
   CARGO_TERM_COLOR: always
@@ -39,6 +37,8 @@ jobs:
     name: macOS ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     strategy:
       fail-fast: false
       matrix:
@@ -119,6 +119,8 @@ jobs:
     name: iOS (XCFramework)
     runs-on: macos-26
     timeout-minutes: 180
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: "13.0"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -168,6 +170,8 @@ jobs:
     name: tvOS (XCFramework)
     runs-on: macos-26
     timeout-minutes: 240
+    env:
+      TVOS_DEPLOYMENT_TARGET: "13.0"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
