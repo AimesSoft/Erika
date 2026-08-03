@@ -647,13 +647,18 @@ fn probe_http_total_length(
     for (name, value) in http_headers {
         request = request.header(name, value);
     }
-    let response = request.call().map_err(|error| {
-        http_trace_log(format!(
-            "{{\"event\":\"http_length_probe_error\",\"phase\":\"request\",\"error\":\"{}\"}}",
-            json_escape(&error.to_string()),
-        ));
-        SourceError::Http(error.to_string())
-    })?;
+    let response = request
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .map_err(|error| {
+            http_trace_log(format!(
+                "{{\"event\":\"http_length_probe_error\",\"phase\":\"request\",\"error\":\"{}\"}}",
+                json_escape(&error.to_string()),
+            ));
+            SourceError::Http(error.to_string())
+        })?;
     let status = response.status().as_u16();
     let header = |name: &str| {
         response
@@ -663,12 +668,19 @@ fn probe_http_total_length(
             .map(str::to_string)
     };
     let total_length = match status {
-        206 => header("content-range")
+        206 | 416 => header("content-range")
             .as_deref()
             .and_then(parse_content_range_total),
         // Range was ignored; Content-Length is the whole object, which is
         // exactly the total being probed for.
         200 => header("content-length").and_then(|value| value.trim().parse::<u64>().ok()),
+        status if status >= 400 => {
+            let error = SourceError::Http(format!("http status: {status}"));
+            http_trace_log(format!(
+                "{{\"event\":\"http_length_probe_error\",\"phase\":\"status\",\"status\":{status}}}"
+            ));
+            return Err(error);
+        }
         _ => None,
     };
     http_trace_log(format!(
@@ -1552,6 +1564,15 @@ mod tests {
     }
 
     #[test]
+    fn length_probe_keeps_non_range_http_statuses_as_errors() {
+        let (uri, _requests) = spawn_mock_http_server(vec![MockResponse::immediate(
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        )]);
+        let error = probe_http_total_length(&http_agent(), &uri, &[]).unwrap_err();
+        assert!(error.to_string().contains("404"));
+    }
+
+    #[test]
     fn http_range_rejects_status_200_for_nonzero_offset() {
         let body = vec![b'a'; 100];
         let (uri, requests) = spawn_mock_http_server(vec![MockResponse::immediate(
@@ -1815,6 +1836,25 @@ mod tests {
         ]);
         let mut source = HttpRangeSource::new(uri);
         assert_eq!(source.len().unwrap(), Some(911_198_509));
+        assert!(recv_request_head(&requests).starts_with("head"));
+        let probe = recv_request_head(&requests);
+        assert!(probe.starts_with("get"));
+        assert!(probe.contains("range: bytes=0-0"));
+    }
+
+    #[test]
+    fn len_preserves_zero_when_range_probe_confirms_empty_resource() {
+        let (uri, requests) = spawn_mock_http_server(vec![
+            MockResponse::immediate(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            ),
+            MockResponse::immediate(
+                b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_vec(),
+            ),
+        ]);
+        let mut source = HttpRangeSource::new(uri);
+        assert_eq!(source.len().unwrap(), Some(0));
         assert!(recv_request_head(&requests).starts_with("head"));
         let probe = recv_request_head(&requests);
         assert!(probe.starts_with("get"));

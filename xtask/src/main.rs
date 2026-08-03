@@ -1797,6 +1797,7 @@ fn apply_apple_target_env(command: &mut Command, target: NativeTarget) -> Result
     let Some(config) = apple_toolchain(target)? else {
         return Ok(());
     };
+    clear_apple_deployment_target_env(command);
     command.env("SDKROOT", &config.sdk_root);
     if target.is_ios() {
         command.env("IPHONEOS_DEPLOYMENT_TARGET", &config.deployment_target);
@@ -1806,6 +1807,16 @@ fn apply_apple_target_env(command: &mut Command, target: NativeTarget) -> Result
         command.env("MACOSX_DEPLOYMENT_TARGET", &config.deployment_target);
     }
     Ok(())
+}
+
+fn clear_apple_deployment_target_env(command: &mut Command) {
+    for name in [
+        "MACOSX_DEPLOYMENT_TARGET",
+        "IPHONEOS_DEPLOYMENT_TARGET",
+        "TVOS_DEPLOYMENT_TARGET",
+    ] {
+        command.env_remove(name);
+    }
 }
 
 fn apple_arch_flags(config: &AppleToolchain) -> Vec<String> {
@@ -2582,6 +2593,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
                 ffmpeg_flag_path_arg(&layout.dav1d_prefix.join("lib"))
             ));
         }
+        clear_apple_deployment_target_env(&mut configure);
         configure.env("SDKROOT", &config.sdk_root);
         match options.target {
             NativeTarget::Aarch64Macos | NativeTarget::X86_64Macos => {
@@ -4661,6 +4673,29 @@ fn command_display(command: &Command) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apple_child_commands_remove_inherited_deployment_targets() {
+        let mut command = Command::new("tool");
+        command
+            .env("MACOSX_DEPLOYMENT_TARGET", "11.0")
+            .env("IPHONEOS_DEPLOYMENT_TARGET", "13.0")
+            .env("TVOS_DEPLOYMENT_TARGET", "13.0");
+
+        clear_apple_deployment_target_env(&mut command);
+
+        for name in [
+            "MACOSX_DEPLOYMENT_TARGET",
+            "IPHONEOS_DEPLOYMENT_TARGET",
+            "TVOS_DEPLOYMENT_TARGET",
+        ] {
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(key, value)| { key == OsStr::new(name) && value.is_none() })
+            );
+        }
+    }
 
     #[test]
     fn windows_targets_map_to_rust_and_native_architectures() {

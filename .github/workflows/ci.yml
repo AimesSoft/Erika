@@ -16,8 +16,6 @@ concurrency:
 
 env:
   PROFILE: lgpl
-  IPHONEOS_DEPLOYMENT_TARGET: "13.0"
-  TVOS_DEPLOYMENT_TARGET: "13.0"
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
@@ -116,6 +114,8 @@ jobs:
     name: iOS device staticlib
     runs-on: macos-14
     timeout-minutes: 150
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: "13.0"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -143,6 +143,8 @@ jobs:
     name: tvOS simulator staticlib
     runs-on: macos-14
     timeout-minutes: 150
+    env:
+      TVOS_DEPLOYMENT_TARGET: "13.0"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
