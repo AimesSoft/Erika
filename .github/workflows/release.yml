@@ -121,6 +121,8 @@ jobs:
     timeout-minutes: 180
     env:
       IPHONEOS_DEPLOYMENT_TARGET: "13.0"
+      LANG: C
+      LC_ALL: C
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -138,7 +140,17 @@ jobs:
         # staticlib via `cargo rustc --crate-type staticlib` so the cdylib link
         # (which iOS does not use and which fails to resolve here) is skipped.
         run: |
-          for T in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
+          set -euo pipefail
+          for ENTRY in \
+            "aarch64-apple-ios|iphoneos|arm64-apple-ios${IPHONEOS_DEPLOYMENT_TARGET}" \
+            "aarch64-apple-ios-sim|iphonesimulator|arm64-apple-ios${IPHONEOS_DEPLOYMENT_TARGET}-simulator" \
+            "x86_64-apple-ios|iphonesimulator|x86_64-apple-ios${IPHONEOS_DEPLOYMENT_TARGET}-simulator"
+          do
+            IFS='|' read -r T SDK CLANG_TARGET <<< "$ENTRY"
+            SDKROOT="$(xcrun --sdk "$SDK" --show-sdk-path)"
+            BINDGEN_KEY="${T//-/_}"
+            export SDKROOT
+            export "BINDGEN_EXTRA_CLANG_ARGS_${BINDGEN_KEY}=--target=${CLANG_TARGET} -isysroot ${SDKROOT}"
             cargo run -p xtask -- deps build --all --profile "$PROFILE" --target "$T"
             ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
             cargo rustc -p erika_capi --lib --release --target "$T" \
@@ -172,6 +184,8 @@ jobs:
     timeout-minutes: 240
     env:
       TVOS_DEPLOYMENT_TARGET: "13.0"
+      LANG: C
+      LC_ALL: C
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
