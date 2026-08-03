@@ -33,4 +33,21 @@ void main() {
       }
     });
   }
+
+  test('release builds complete Apple XCFrameworks on macOS 26', () {
+    final workflow = File(
+      '../../.github/workflows/release.yml',
+    ).readAsStringSync();
+
+    for (final target in <String>[
+      'aarch64-apple-tvos',
+      'aarch64-apple-tvos-sim',
+      'x86_64-apple-tvos',
+    ]) {
+      expect(workflow, contains(target));
+    }
+    expect(workflow, contains('dist/erika-capi-tvos.zip'));
+    expect(workflow, contains('runs-on: macos-26'));
+    expect(workflow, isNot(contains('macos-15-intel')));
+  });
 }

@@ -83,10 +83,10 @@ Android 最低版本仍为 API 26。Extended-linear 还要求 native-window data
 
 ## HarmonyOS Setup
 
-HarmonyOS 模块需要 DevEco Studio 的 OpenHarmony Native SDK 和 Rust 的
-`aarch64-unknown-linux-ohos` target。它的 Hvigor/CMake 构建会编译 LGPL 的
-FFmpeg/zlib 依赖和 `liberika_capi.so`，然后把这套运行时和 `liberika_flutter.so`
-一起打包。
+HarmonyOS 模块需要 DevEco Studio 的 OpenHarmony Native SDK。设置
+`ERIKA_PREBUILT=1` 后，CMake 会从指定 Release 下载 `liberika_capi.so`，并与
+`liberika_flutter.so` 一起打包；否则需要 Rust 的 `aarch64-unknown-linux-ohos`
+target，并从源码构建 LGPL 原生依赖和 runtime。下载失败会自动回退源码构建。
 
 HarmonyOS 上请使用 `ErikaVideoView`。它注册 Flutter 外部纹理，把纹理 surface 取为
 `OHNativeWindow`，并通过 wgpu Vulkan 渲染。音频走 OHAudio，交错 f32 PCM。

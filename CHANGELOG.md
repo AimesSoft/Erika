@@ -11,6 +11,11 @@
   VideoToolbox integration, subtitles, danmaku, screenshots, and HTTP sources.
 - Added `erika-capi-tvos.zip`, containing a tvOS device and universal simulator
   `erika_capi.xcframework`, to the automated GitHub Release workflow.
+- Added opt-in OpenHarmony prebuilt consumption: the plugin CMake build can
+  download the tagged `liberika_capi.so`, stage it beside
+  `liberika_flutter.so`, and fall back to a source build on failure.
+- Unified macOS, iOS, and tvOS CI/release builds on macOS 26 runners; macOS x64
+  is cross-built alongside arm64 before the universal archive is assembled.
 - Fixed tvOS platform detection during native dependency builds and accepted
   valid zero-length HTTP resources without misclassifying them as truncated.
 

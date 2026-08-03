@@ -19,8 +19,10 @@
 | OpenHarmony arm64 | `erika-capi-openharmony-arm64.zip`、`liberika_capi.so` と `liberika_flutter.so` |
 
 OpenHarmony archive は OpenHarmony 5.1.0 Native SDK、compatible SDK 18 で
-build され、C API runtime と Flutter N-API bridge を含みます。Hvigor の
-`ERIKA_PREBUILT` 自動 download はまだ実装されていません。
+build され、C API runtime と Flutter N-API bridge を含みます。
+`ERIKA_PREBUILT=1` の場合、plugin CMake は対応する tag を download し、prebuilt
+runtime を link して N-API bridge とともに HAR/HAP に package します。download
+失敗時は source build に fallback します。
 
 各 archive には `include/erika.h`、`LICENSE`、`THIRD_PARTY_NOTICES.md`、dependency license、tag/commit を記録する `MANIFEST.txt` も含まれます。native dependency は `lgpl` profile で static link され、Android は ABI に対応する `libc++_shared.so` も含みます。
 
@@ -35,7 +37,7 @@ git push origin v0.1.5
 
 `workflow_dispatch` の手動実行は Actions Artifact のみを生成し、`ERIKA_PREBUILT_TAG` から取得できる GitHub Release は公開しません。
 
-macOS arm64 は `macos-15`、x64 は `macos-15-intel` で native build し、その後 universal package を合成します。Windows x64 は `windows-latest`、ARM64 は `windows-11-arm` で native build します。
+macOS arm64 と x64 はどちらも `macos-26` で cross build し、その後 universal package を合成します。iOS と tvOS の XCFramework も `macos-26` を使用します。Windows x64 は `windows-latest`、ARM64 は `windows-11-arm` で native build します。
 
 ## Flutter で prebuilt を使用
 

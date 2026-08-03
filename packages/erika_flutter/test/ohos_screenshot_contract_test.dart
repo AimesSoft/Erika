@@ -65,4 +65,23 @@ void main() {
       ),
     );
   });
+
+  test('OpenHarmony can consume and package the prebuilt runtime', () {
+    final cmake = File(
+      'ohos/src/main/cpp/CMakeLists.txt',
+    ).readAsStringSync();
+
+    expect(cmake, contains(r'$ENV{ERIKA_PREBUILT}'));
+    expect(cmake, contains(r'$ENV{ERIKA_PREBUILT_TAG}'));
+    expect(
+      cmake,
+      contains('erika-capi-openharmony-arm64.zip'),
+    );
+    expect(cmake, contains('ERIKA_USE_PREBUILT'));
+    expect(cmake, contains('copy_if_different'));
+    expect(
+      cmake,
+      contains(r'$<TARGET_FILE_DIR:${PLUGIN_NAME}>/liberika_capi.so'),
+    );
+  });
 }

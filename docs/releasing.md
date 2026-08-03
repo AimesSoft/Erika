@@ -24,7 +24,9 @@ license files:
 
 The OpenHarmony archive is built against the OpenHarmony 5.1.0 native SDK with
 compatible SDK version 18. It contains the C API runtime and Flutter N-API
-bridge; automatic `ERIKA_PREBUILT` consumption is not yet wired into Hvigor.
+bridge. With `ERIKA_PREBUILT=1`, the plugin CMake build downloads the matching
+tag, links the prebuilt runtime, and packages it beside the locally linked N-API
+bridge; a failed download falls back to the source build.
 
 The Android archive stores each ABI at `lib/android/<abi>/`. Flutter/Gradle
 consumers package `liberika_capi.so` together with the matching NDK
@@ -60,11 +62,11 @@ The release is fully automated by
    git tag v0.1.5
    git push origin v0.1.5
    ```
-3. The workflow builds macOS arm64 on `macos-15` and macOS x64 on
-   `macos-15-intel`, then combines those native-host outputs into the universal
-   bundle. Windows x64 runs on `windows-latest` and Windows ARM64 runs natively
-   on `windows-11-arm`. It also builds the iOS / tvOS / Android bundles and attaches
-   all archives to a new GitHub Release for that tag.
+3. The workflow cross-builds macOS arm64 and x64 on `macos-26`, then combines
+   those outputs into the universal bundle. iOS and tvOS XCFrameworks also use
+   `macos-26`. Windows x64 runs on `windows-latest` and Windows ARM64 runs
+   natively on `windows-11-arm`. It also builds the Android and OpenHarmony
+   bundles and attaches all archives to a new GitHub Release for that tag.
 
 To dry-run the builds without publishing, trigger the workflow manually
 ("Run workflow" / `workflow_dispatch`) — the build jobs run, but the publish job
@@ -108,6 +110,9 @@ Enable it by setting environment variables in the host app's build:
   that way before relying on it.
 - **tvOS** (podspec): downloads `erika-capi-tvos.zip` and selects the device or
   universal simulator slice from its XCFramework.
+- **OpenHarmony** (plugin CMake): downloads
+  `erika-capi-openharmony-arm64.zip`, links its `liberika_capi.so`, and stages
+  that runtime beside `liberika_flutter.so` for HAR/HAP packaging.
 - **macOS** (podspec `script_phase`): downloads the arm64, x64, or universal
   archive selected by `ERIKA_MACOS_ARCHS` and bundles its dylib into the app's
   `Contents/Frameworks` (`install_name @rpath`, codesigned). Without

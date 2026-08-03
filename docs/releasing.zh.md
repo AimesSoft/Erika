@@ -19,8 +19,9 @@
 | OpenHarmony arm64 | `erika-capi-openharmony-arm64.zip`，包含 `liberika_capi.so` 和 `liberika_flutter.so` |
 
 OpenHarmony 归档使用 OpenHarmony 5.1.0 Native SDK、compatible SDK 18 构建，
-包含 C API runtime 和 Flutter N-API bridge；Hvigor 暂未接入自动
-`ERIKA_PREBUILT` 下载。
+包含 C API runtime 和 Flutter N-API bridge。设置 `ERIKA_PREBUILT=1` 后，插件
+CMake 会下载匹配 tag 的归档、链接预构建 runtime，并把它与本地链接的 N-API bridge
+一起打入 HAR/HAP；下载失败时自动回退源码构建。
 
 每个归档还包含 `include/erika.h`、`LICENSE`、`THIRD_PARTY_NOTICES.md`、依赖许可证和记录 tag/commit 的 `MANIFEST.txt`。原生依赖使用 `lgpl` profile 静态链接；Android 同时携带匹配 ABI 的 `libc++_shared.so`。
 
@@ -35,7 +36,7 @@ git push origin v0.1.5
 
 手动运行 `workflow_dispatch` 只生成 Actions Artifact，不发布可供 `ERIKA_PREBUILT_TAG` 下载的 GitHub Release。
 
-macOS arm64 在 `macos-15` 原生构建，x64 在 `macos-15-intel` 原生构建，然后合并 universal 包。Windows x64 在 `windows-latest` 构建，ARM64 在 `windows-11-arm` 原生构建。
+macOS arm64 和 x64 都在 `macos-26` 交叉构建，然后合并 universal 包；iOS 和 tvOS XCFramework 同样使用 `macos-26`。Windows x64 在 `windows-latest` 构建，ARM64 在 `windows-11-arm` 原生构建。
 
 ## Flutter 使用预构建包
 

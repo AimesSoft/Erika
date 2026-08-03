@@ -84,10 +84,11 @@ output status を更新します。API 35 では host の global Window を変�
 
 ## HarmonyOS Setup
 
-HarmonyOS module には DevEco Studio の OpenHarmony Native SDK と Rust の
-`aarch64-unknown-linux-ohos` target が必要です。Hvigor/CMake build が LGPL の
-FFmpeg/zlib 依存と `liberika_capi.so` を compile し、その runtime を
-`liberika_flutter.so` と一緒に package します。
+HarmonyOS module には DevEco Studio の OpenHarmony Native SDK が必要です。
+`ERIKA_PREBUILT=1` の場合、CMake は指定 Release から `liberika_capi.so` を
+download して `liberika_flutter.so` と一緒に package します。それ以外では Rust
+の `aarch64-unknown-linux-ohos` target が必要で、LGPL native dependency と runtime
+を source build します。download 失敗時は source build に fallback します。
 
 HarmonyOS では `ErikaVideoView` を使ってください。Flutter external texture を登録し、
 その texture surface を `OHNativeWindow` として取得して、wgpu Vulkan で描画します。

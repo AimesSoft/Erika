@@ -44,13 +44,11 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            host_arch: arm64
             target: aarch64-apple-darwin
-            runner: macos-15
+            runner: macos-26
           - arch: x64
-            host_arch: x86_64
             target: x86_64-apple-darwin
-            runner: macos-15-intel
+            runner: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -65,7 +63,6 @@ jobs:
           key: native-v2-macos-${{ matrix.target }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
       - name: Build native deps + erika_capi
         run: |
-          test "$(uname -m)" = "${{ matrix.host_arch }}"
           cargo run -p xtask -- deps build --all --profile "$PROFILE" --target "${{ matrix.target }}"
           ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="${{ matrix.target }}" \
             cargo build -p erika_capi --release --target "${{ matrix.target }}"
@@ -91,7 +88,7 @@ jobs:
   macos-universal:
     name: macOS universal
     needs: macos
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -120,7 +117,7 @@ jobs:
 
   ios:
     name: iOS (XCFramework)
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
@@ -169,7 +166,7 @@ jobs:
 
   tvos:
     name: tvOS (XCFramework)
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4

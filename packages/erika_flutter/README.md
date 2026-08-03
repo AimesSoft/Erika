@@ -59,8 +59,8 @@ points the build phase at an explicit dylib to bundle instead of building.
 To skip building Erika (and FFmpeg) from source, set `ERIKA_PREBUILT=1` in the
 app build to download the prebuilt `erika_capi` from a GitHub Release
 (`ERIKA_PREBUILT_TAG` selects the tag, default `v0.1.5`). Supported on macOS,
-Windows, iOS, tvOS, and Android; any failure falls back to the source build. See
-[`docs/releasing.md`](../../docs/releasing.md).
+Windows, iOS, tvOS, Android, and OpenHarmony; any failure falls back to the
+source build. See [`docs/releasing.md`](../../docs/releasing.md).
 
 When debugging local Erika source changes, set
 `ERIKA_FORCE_SOURCE_BUILD=1` to bypass the prebuilt download path even if the
@@ -133,10 +133,11 @@ desired HDR headroom without changing the host window globally.
 
 ## HarmonyOS Setup
 
-The HarmonyOS module requires DevEco Studio's OpenHarmony Native SDK and the
-Rust `aarch64-unknown-linux-ohos` target. Its Hvigor/CMake build compiles the
-LGPL FFmpeg/zlib dependencies and `liberika_capi.so`, then packages that runtime
-alongside `liberika_flutter.so`.
+The HarmonyOS module requires DevEco Studio's OpenHarmony Native SDK. With
+`ERIKA_PREBUILT=1`, its CMake build downloads `liberika_capi.so` from the
+selected release and packages it beside `liberika_flutter.so`; otherwise it
+requires the Rust `aarch64-unknown-linux-ohos` target and builds the LGPL native
+dependencies and runtime from source. Download failures fall back to source.
 
 Use `ErikaVideoView` on HarmonyOS. It registers a Flutter external texture,
 obtains the texture surface as an `OHNativeWindow`, and renders through wgpu
