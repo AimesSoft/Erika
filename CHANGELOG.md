@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+## 0.1.5 - 2026-08-03
+
+### Platform support and release artifacts
+
+- Added the tvOS Flutter plugin and native target support for Apple TV devices
+  and arm64/x86_64 simulators, including Metal presentation, Apple audio and
+  VideoToolbox integration, subtitles, danmaku, screenshots, and HTTP sources.
+- Added `erika-capi-tvos.zip`, containing a tvOS device and universal simulator
+  `erika_capi.xcframework`, to the automated GitHub Release workflow.
+- Fixed tvOS platform detection during native dependency builds and accepted
+  valid zero-length HTTP resources without misclassifying them as truncated.
+
+### Subtitle memory fonts
+
+- Added an in-memory subtitle font registry across Rust, the C API, Dart, and
+  every native Flutter embedding. Hosts can inspect font faces, select ordered
+  fallback sets, replace font data, and clear the registry without writing font
+  files to disk.
+- Preserved ordered fallback in the bundled libass build, shared TTC/OTC data
+  across faces, and invalidated renderer caches when a same-path font is
+  replaced so active subtitle tracks immediately use the new data.
+- Kept registry and selected-font generations separate, replayed libass codec
+  private data after renderer recreation, and added OpenHarmony and tvOS C API
+  coverage for the complete memory-font surface.
+
+### Playback recovery
+
+- Added explicit buffering transitions when audio and video input starves. The
+  playback clock now freezes during a stall and reanchors to recovered media
+  time instead of running ahead and causing a prolonged frame drop or black
+  screen after data resumes.
+
 ## 0.1.4 - 2026-07-30
 
 ### Compatibility notes

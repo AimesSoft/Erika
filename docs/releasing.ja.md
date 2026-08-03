@@ -14,6 +14,7 @@
 | Windows x64 | `erika-capi-windows-x64.zip` |
 | Windows ARM64 | `erika-capi-windows-arm64.zip` |
 | iOS | `erika-capi-ios.zip`、device と simulator の XCFramework slice |
+| tvOS | `erika-capi-tvos.zip`、device と arm64/x86_64 simulator の XCFramework slice |
 | Android | `erika-capi-android.zip`、`arm64-v8a`、`armeabi-v7a`、`x86_64`、`x86` |
 | OpenHarmony arm64 | `erika-capi-openharmony-arm64.zip`、`liberika_capi.so` と `liberika_flutter.so` |
 
@@ -28,8 +29,8 @@ build され、C API runtime と Flutter N-API bridge を含みます。Hvigor �
 Release は [release.yml](../.github/workflows/release.yml) で自動化されています。GitHub Release を作成するには `v*` tag を push します：
 
 ```sh
-git tag v0.1.4
-git push origin v0.1.4
+git tag v0.1.5
+git push origin v0.1.5
 ```
 
 `workflow_dispatch` の手動実行は Actions Artifact のみを生成し、`ERIKA_PREBUILT_TAG` から取得できる GitHub Release は公開しません。
@@ -40,7 +41,7 @@ macOS arm64 は `macos-15`、x64 は `macos-15-intel` で native build し、そ
 
 ```sh
 export ERIKA_PREBUILT=1
-export ERIKA_PREBUILT_TAG=v0.1.4
+export ERIKA_PREBUILT_TAG=v0.1.5
 ```
 
 plugin source と C ABI の version を一致させるため、`ERIKA_PREBUILT_TAG` を明示的に固定することを推奨します。download または展開に失敗した場合は source build に fallback します。local debug では次を設定します：
@@ -60,11 +61,12 @@ Platform architecture の選択：
 | Windows | `ERIKA_WINDOWS_ARCH=arm64` | `windows-arm64` |
 | Android | `ERIKA_ANDROID_ABIS=<list>` | 共通 Android package から ABI を選択 |
 | iOS | Xcode platform/arch に従う | 共通 iOS XCFramework から slice を選択 |
+| tvOS | Xcode platform/arch に従う | 共通 tvOS XCFramework から slice を選択 |
 
 Android の例：
 
 ```sh
-ERIKA_PREBUILT=1 ERIKA_PREBUILT_TAG=v0.1.4 \
+ERIKA_PREBUILT=1 ERIKA_PREBUILT_TAG=v0.1.5 \
 ERIKA_ANDROID_ABIS=arm64-v8a,x86_64 flutter build apk
 ```
 

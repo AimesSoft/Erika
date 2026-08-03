@@ -200,7 +200,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "capi_smoke"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika_capi",
 ]
@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "coreaudio_smoke"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "crossbeam-channel",
  "erika",
@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "danmaku_perf_lab"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cc",
  "erika",
@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "danmaku_sync_smoke"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
 ]
@@ -443,7 +443,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "erika"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ab_glyph",
  "aho-corasick",
@@ -480,7 +480,7 @@ dependencies = [
 
 [[package]]
 name = "erika_capi"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "crossbeam-channel",
  "erika",
@@ -491,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "erika_ffmpeg_sys"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bindgen 0.72.1",
  "libc",
@@ -508,42 +508,42 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg_audio_decode"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
 ]
 
 [[package]]
 name = "ffmpeg_decode"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
 ]
 
 [[package]]
 name = "ffmpeg_demux"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
 ]
 
 [[package]]
 name = "ffmpeg_probe"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
 ]
 
 [[package]]
 name = "ffmpeg_probe_source"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
 ]
 
 [[package]]
 name = "ffmpeg_videotoolbox"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
 ]
@@ -941,7 +941,7 @@ checksum = "616ec5685824bcc94416c6d4a7a446eea774a31efd7062c8480ba6fd06d7a6e5"
 
 [[package]]
 name = "macos_native_demo"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cc",
  "crossbeam-channel",
@@ -965,14 +965,14 @@ dependencies = [
 
 [[package]]
 name = "metal_import_videotoolbox"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
 ]
 
 [[package]]
 name = "metal_overlay_check"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cc",
  "erika",
@@ -980,7 +980,7 @@ dependencies = [
 
 [[package]]
 name = "metal_presenter_check"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cc",
  "erika",
@@ -1311,21 +1311,21 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "playback_audio_tick"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
 ]
 
 [[package]]
 name = "playback_tick"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
 ]
 
 [[package]]
 name = "player_tick"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "crossbeam-channel",
  "erika",
@@ -1484,7 +1484,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "render_pipeline_plan"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
 ]
@@ -2173,7 +2173,7 @@ dependencies = [
 
 [[package]]
 name = "wgpu_decode_png"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
  "png",
@@ -2181,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "wgpu_overlay_png"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
  "png",
@@ -2189,7 +2189,7 @@ dependencies = [
 
 [[package]]
 name = "wgpu_video_png"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
  "png",
@@ -2197,7 +2197,7 @@ dependencies = [
 
 [[package]]
 name = "wgpu_window_check"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cc",
  "erika",
@@ -2436,7 +2436,7 @@ checksum = "240948bc05c5e7c6dabba28bf89d89ffce3e303022809e73deaefe4f6ec56c66"
 
 [[package]]
 name = "windows_native_demo"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "erika",
  "windows-sys 0.61.2",
@@ -2501,7 +2501,7 @@ checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 
 [[package]]
 name = "xtask"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "serde_json",
