@@ -21,13 +21,14 @@ Both families are declared in `crates/erika_capi/include/erika.h`.
 ## Apple Surface Strategies
 
 The Apple HDR path uses a native Metal-backed surface, not Flutter Texture.
-The Flutter plugin intentionally exposes two native surface strategies on both
-macOS and iOS so hosts can pick the composition model that matches their UI.
+The Flutter plugin intentionally exposes two native surface strategies on
+macOS, iOS, and tvOS so hosts can pick the composition model that matches their
+UI.
 
 ### ErikaVideoView (Platform View)
 
 Standard Flutter platform view backed by `NSView`/`CAMetalLayer` on macOS and
-`UIView`/`CAMetalLayer` on iOS. The plugin creates a native video view
+`UIView`/`CAMetalLayer` on iOS/tvOS. The plugin creates a native video view
 registered as `erika_flutter/video_view`, attaches it to the presenter, and
 drives rendering from a display link.
 
@@ -51,9 +52,9 @@ overlay that sits outside Flutter's platform-view compositor:
 
 The overlay path is the recommended path for NipaPlay and other full-player
 UIs. It keeps video presentation owned by Erika/Metal while Flutter remains a
-control and layout layer. On iOS the native side uses `UIWindow` plus a sibling
-`UIView`/`CAMetalLayer`; on macOS it uses the host `NSWindow` plus a sibling
-`NSView`/`CAMetalLayer`.
+control and layout layer. On iOS/tvOS the native side uses a window plus a
+sibling `UIView`/`CAMetalLayer`; on macOS it uses the host `NSWindow` plus a
+sibling `NSView`/`CAMetalLayer`.
 
 Touch events pass through both native video strategies, so Flutter controls can
 remain above or around the video surface.
@@ -98,6 +99,14 @@ path is validated on device but is not yet covered by CI.
 The iOS plugin links the Erika C ABI static library into the app through a
 CocoaPod script phase that builds the Rust `erika_capi` crate for the target iOS
 architecture.
+
+## tvOS Build Path
+
+The tvOS plugin links the Erika C ABI static library through its CocoaPod script
+phase and builds it for tvOS devices and simulators. It supports tvOS 13+,
+arm64 devices, and arm64/x86_64 simulators. See
+[`packages/erika_flutter/README.md`](../packages/erika_flutter/README.md) for
+nightly, prebuilt-bundle, and source-build options.
 
 ## Minimal Presenter Flow
 
@@ -164,7 +173,7 @@ await player.open(
 );
 await player.play();
 
-// Preferred for full-player UIs on macOS/iOS:
+// Preferred for full-player UIs on macOS/iOS/tvOS:
 ErikaWindowOverlayVideoView(player: player)
 
 // Compatibility/diagnostic platform-view path:

@@ -15,11 +15,11 @@ C ABI の entrypoint family は 2 つあります。
 
 ## Apple Surface Strategies
 
-Apple HDR path は Flutter Texture ではなく native Metal-backed surface を使います。Flutter plugin は macOS / iOS ともに 2 つの native surface strategy を公開し、host が UI に合う composition model を選べるようにしています。
+Apple HDR path は Flutter Texture ではなく native Metal-backed surface を使います。Flutter plugin は macOS / iOS / tvOS に 2 つの native surface strategy を公開し、host が UI に合う composition model を選べるようにしています。
 
 ### ErikaVideoView (Platform View)
 
-標準的な Flutter platform view です。macOS では `NSView`/`CAMetalLayer`、iOS では `UIView`/`CAMetalLayer` で実装されます。plugin は `erika_flutter/video_view` として登録された native video view を作り、presenter に attach し、display link から描画を駆動します。
+標準的な Flutter platform view です。macOS では `NSView`/`CAMetalLayer`、iOS / tvOS では `UIView`/`CAMetalLayer` で実装されます。plugin は `erika_flutter/video_view` として登録された native video view を作り、presenter に attach し、display link から描画を駆動します。
 
 simple embedder や診断用途には便利です。macOS では AppKit/Flutter platform view composition の都合で black flicker などの compositor artifact が出ることがあるため、production path としては推奨されません。
 
@@ -33,7 +33,7 @@ HDR/EDR の推奨 path は、Flutter の platform-view compositor の外側に�
 4. widget は位置を追跡し、surface generation number 付きで geometry update を送るため、dispose 済み widget からの古い hide call が新しく attach された surface に影響しません。
 5. attach retry は exponential backoff で window readiness のタイミングを吸収します。
 
-この overlay path は NipaPlay や他の full-player UI に推奨です。video presentation は Erika/Metal が持ち、Flutter は control / layout layer に専念できます。iOS では `UIWindow` + sibling `UIView`/`CAMetalLayer`、macOS では host `NSWindow` + sibling `NSView`/`CAMetalLayer` を使います。
+この overlay path は NipaPlay や他の full-player UI に推奨です。video presentation は Erika/Metal が持ち、Flutter は control / layout layer に専念できます。iOS / tvOS では window + sibling `UIView`/`CAMetalLayer`、macOS では host `NSWindow` + sibling `NSView`/`CAMetalLayer` を使います。
 
 touch events は両方の native video strategy を通過するので、Flutter controls を video surface の上や周囲に置けます。
 
@@ -74,6 +74,10 @@ CI では未カバーです。
 ## iOS Build Path
 
 iOS plugin は CocoaPod script phase 経由で Erika C ABI static library を app にリンクし、対象 iOS architecture 向けに Rust の `erika_capi` crate をビルドします。
+
+## tvOS Build Path
+
+tvOS plugin は CocoaPod script phase 経由で Apple TV 実機と simulator 向けに Erika C ABI static library をビルド・リンクします。tvOS 13+、arm64 実機、arm64/x86_64 simulator に対応します。Rust nightly、prebuilt bundle、source build の詳細は [`packages/erika_flutter/README.ja.md`](../packages/erika_flutter/README.ja.md) を参照してください。
 
 ## Minimal Presenter Flow
 
@@ -138,7 +142,7 @@ await player.open(
 );
 await player.play();
 
-// Preferred for full-player UIs on macOS/iOS:
+// Preferred for full-player UIs on macOS/iOS/tvOS:
 ErikaWindowOverlayVideoView(player: player)
 
 // Compatibility/diagnostic platform-view path:

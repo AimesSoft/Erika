@@ -20,7 +20,7 @@ Erika 暴露两个相互独立的入口，每个集成选其一。
 | `ErikaPresenterHandle` | **推送（Push）** | Erika | 你把一个原生 surface 交给 Erika，每个显示帧调一次 `render_tick`。Erika 负责解码、时序、音频、overlay 和呈现。 |
 
 `ErikaPresenterHandle` 是推荐路径，也是 Flutter 插件和原生 demo 所用的。它只在
-**macOS、iOS、Windows、Android** 上编译。其它平台上 `erika_presenter_create` 仍然
+**macOS、iOS、tvOS、Windows、Android** 上编译。其它平台上 `erika_presenter_create` 仍然
 导出但返回 `NULL`，presenter 族的其余函数不存在——请按平台守卫 presenter 用法。
 
 两个族不共享状态；一个进程可同时使用两者，但单个媒体会话只活在一个 handle 里。
@@ -204,7 +204,7 @@ Android extended-linear 输出。
 ## `ErikaPresenterHandle` —— 推送模型
 
 Erika 拥有完整栈；宿主提供 surface 并调用 `render_tick`。
-**macOS / iOS / Windows / Android。**
+**macOS / iOS / tvOS / Windows / Android。**
 
 ### 生命周期与配置
 
@@ -396,7 +396,7 @@ ErikaStatus erika_presenter_resize_surface(ErikaPresenterHandle *, uint32_t w, u
 ErikaStatus erika_presenter_detach_surface(ErikaPresenterHandle *);
 ```
 
-macOS/iOS 用 `attach_metal_layer`（`CAMetalLayer*`），Windows 用
+macOS/iOS/tvOS 用 `attach_metal_layer`（`CAMetalLayer*`），Windows 用
 `attach_windows_hwnd`（它是 `attach_wgpu_surface` + kind `WindowsHwnd` 的便捷封装，
 传 `HWND` + `HINSTANCE`）。绑定到 surface 的渲染后端（原生 Metal、原生 Direct3D 11
 或 wgpu）由 presenter 配置决定，而非 attach 调用决定。drawable 尺寸或 scale 变化时

@@ -16,7 +16,7 @@ Erika 是 NipaPlay 的自研播放内核:一个 Rust 引擎,从 demux/decode 一
 crates/erika              核心引擎(库)
 crates/erika_capi         C ABI 导出层  →  erika.h
 crates/erika_ffmpeg_sys   FFmpeg bindgen 绑定
-packages/erika_flutter    Flutter 插件(macOS + iOS + Windows + Android)
+packages/erika_flutter    Flutter 插件(macOS + iOS + tvOS + Windows + Android + HarmonyOS)
 examples/                 验证 / 冒烟 / demo 程序
 xtask/                    原生依赖构建编排
 docs/                     架构与接入文档
@@ -36,7 +36,7 @@ third_party/              构建出的原生依赖(gitignore 输出)
 | `danmaku` | Bilibili XML/JSON 解析、碰撞避让布局、glyph atlas。 |
 | `presenter` | `PresenterRuntime`——串起 player + renderer + audio + overlay;`render_tick` 所驱动的对象。 |
 | `source` | `MediaSource` trait——file + HTTP range。 |
-| `apple` / `windows` / `android` | 平台胶水:CoreAudio/AudioQueue/VideoToolbox/Metal 互操作;WASAPI;AAudio/MediaCodec/native-window 互操作。 |
+| `apple` / `windows` / `android` | 平台胶水:CoreAudio/AudioQueue/VideoToolbox/Metal 互操作（macOS/iOS/tvOS）;WASAPI;AAudio/MediaCodec/native-window 互操作。 |
 
 ## 运行时模型
 
@@ -81,7 +81,7 @@ third_party/              构建出的原生依赖(gitignore 输出)
 - **尊重所有权。** 交出的字符串归调用方所有、由配套 `*_free` 释放;新增的要在
   [capi_reference.md](docs/capi_reference.md) 里记录。
 - **同步重生成 / 手改 `erika.h`** 以匹配,并给新函数加注释。
-- **⚠️ 同步 Swift 镜像结构体。** macOS/iOS 插件在 Swift 侧手写镜像了 C 结构体(如
+- **⚠️ 同步 Swift 镜像结构体。** macOS/iOS/tvOS 插件在 Swift 侧手写镜像了 C 结构体(如
   `ErikaPresenterStats`)。若你改了 `erika.h` 里的结构体,必须**同时**更新
   `packages/erika_flutter` 里的**两个** Swift 镜像文件;不匹配会破坏栈,可能表现为
   误导性的 autorelease-pool 崩溃,而非明显的布局错误。

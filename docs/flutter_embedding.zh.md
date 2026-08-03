@@ -15,11 +15,11 @@ Erika 不是 Flutter 视频渲染器。Flutter 只是可选宿主 UI。播放器
 
 ## Apple Surface Strategies
 
-Apple HDR 路径使用 native Metal-backed surface，而不是 Flutter Texture。Flutter plugin 在 macOS 和 iOS 上都提供两种 native surface 策略，方便宿主按 UI 结构选择合适的合成模型。
+Apple HDR 路径使用 native Metal-backed surface，而不是 Flutter Texture。Flutter plugin 在 macOS、iOS 和 tvOS 上都提供两种 native surface 策略，方便宿主按 UI 结构选择合适的合成模型。
 
 ### ErikaVideoView (Platform View)
 
-标准 Flutter platform view，macOS 上由 `NSView`/`CAMetalLayer` 提供，iOS 上由 `UIView`/`CAMetalLayer` 提供。plugin 会创建注册为 `erika_flutter/video_view` 的 native video view，attach 到 presenter，并通过 display link 驱动渲染。
+标准 Flutter platform view，macOS 上由 `NSView`/`CAMetalLayer` 提供，iOS/tvOS 上由 `UIView`/`CAMetalLayer` 提供。plugin 会创建注册为 `erika_flutter/video_view` 的 native video view，attach 到 presenter，并通过 display link 驱动渲染。
 
 这个路径适合简单嵌入和诊断。macOS 上它不是推荐的生产路径，因为 AppKit/Flutter platform view 合成可能出现黑屏闪烁或其他 compositor artifacts。
 
@@ -33,7 +33,7 @@ Apple HDR 路径使用 native Metal-backed surface，而不是 Flutter Texture�
 4. widget 跟踪自身位置，并通过 surface generation number 发送几何更新，因此已销毁 widget 的旧 hide 调用不会影响新 attach 的 surface。
 5. attach retry 使用 exponential backoff 处理 window readiness 时机。
 
-这个 overlay 路径是 NipaPlay 和其他 full-player UI 的推荐方案。它让视频呈现由 Erika/Metal 持有，而 Flutter 继续承担控制层和布局层。iOS 上 native side 使用 `UIWindow` 加 sibling `UIView`/`CAMetalLayer`；macOS 上使用 host `NSWindow` 加 sibling `NSView`/`CAMetalLayer`。
+这个 overlay 路径是 NipaPlay 和其他 full-player UI 的推荐方案。它让视频呈现由 Erika/Metal 持有，而 Flutter 继续承担控制层和布局层。iOS/tvOS 上 native side 使用 window 加 sibling `UIView`/`CAMetalLayer`；macOS 上使用 host `NSWindow` 加 sibling `NSView`/`CAMetalLayer`。
 
 触摸事件会穿透两种 native video strategy，因此 Flutter controls 可以保持在视频 surface 上方或周围。
 
@@ -68,6 +68,10 @@ surface 取为 `OHNativeWindow` 并 attach 给 presenter；wgpu 随后通过 Vul
 ## iOS Build Path
 
 iOS plugin 通过 CocoaPod script phase 把 Erika C ABI static library 链接进 app，并为目标 iOS architecture 构建 Rust `erika_capi` crate。
+
+## tvOS Build Path
+
+tvOS plugin 通过 CocoaPod script phase 为 Apple TV 真机和模拟器构建并链接 Erika C ABI static library；支持 tvOS 13+、arm64 真机，以及 arm64/x86_64 模拟器。详细的 Rust nightly、预构建包和源码构建选项见 [`packages/erika_flutter/README.zh.md`](../packages/erika_flutter/README.zh.md)。
 
 ## Minimal Presenter Flow
 
@@ -131,7 +135,7 @@ await player.open(
 );
 await player.play();
 
-// Preferred for full-player UIs on macOS/iOS:
+// Preferred for full-player UIs on macOS/iOS/tvOS:
 ErikaWindowOverlayVideoView(player: player)
 
 // Compatibility / diagnostic platform-view path:

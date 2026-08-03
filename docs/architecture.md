@@ -23,7 +23,7 @@ Rust Player Core
   wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB, OHOS Vulkan
   presenter runtime ──── ties player + renderer + audio + overlays
   C ABI ──────────────── 79 exported functions, two handle families
-  Flutter plugin ─────── macOS + iOS + Windows + Android + OpenHarmony embedding
+  Flutter plugin ─────── macOS + iOS + tvOS + Windows + Android + OpenHarmony embedding
 ```
 
 ## Native Dependencies
@@ -135,7 +135,7 @@ Rust. See `docs/danmaku_architecture.md` for the full design.
 
 ## Renderer
 
-### Metal Renderer (macOS/iOS)
+### Metal Renderer (macOS/iOS/tvOS)
 
 The primary renderer for Apple platforms:
 
@@ -280,7 +280,7 @@ Header: `crates/erika_capi/include/erika.h`
 
 ## Flutter Plugin
 
-`packages/erika_flutter` provides macOS, iOS, Windows, Android, and HarmonyOS
+`packages/erika_flutter` provides macOS, iOS, tvOS, Windows, Android, and HarmonyOS
 Flutter embedding:
 
 - **Dart**: `ErikaPlayer` (commands + events), `ErikaWindowOverlayVideoView`
@@ -292,6 +292,9 @@ Flutter embedding:
 - **iOS Swift plugin**: Links `liberika_capi.a` statically, creates either
   `UIWindow`-hosted overlay or `UIView`/`CAMetalLayer` platform view surfaces,
   and uses the same presenter model.
+- **tvOS Swift plugin**: Links `liberika_capi.a` statically, presents through a
+  `UIView`/`CAMetalLayer` platform view on Apple TV, and uses the same presenter
+  model; supports tvOS devices and arm64/x86_64 simulators.
 - **Windows C++ plugin** (`ErikaFlutterPluginCApi`): builds and links
   `erika_capi.dll` via CMake (`build_erika_runtime.cmake`, cargo target
   `x86_64-pc-windows-msvc`), hosts a window-level D3D11 swapchain, and drives
@@ -315,6 +318,7 @@ See `docs/flutter_embedding.md` for the embedding model and HDR strategy.
 |----------|--------|--------|-------|--------|
 | macOS 14+ | VideoToolbox | Metal | CoreAudio | Available |
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | Available |
+| tvOS 13+ (Apple TV) | VideoToolbox | Metal | AudioQueue | Available |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
 | Android 8+ | MediaCodec / software | wgpu Vulkan with GLES fallback | AAudio | Available; SDR validated, extended-linear scRGB implementation awaits API 35 HDR-device acceptance |

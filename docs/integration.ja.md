@@ -23,7 +23,7 @@ Rust の `PresenterRuntime` を直接駆動します。以下の C ABI 呼び出
 `ErikaHandle` は、独自コンポジタを持ち Erika の decode/timing/state だけが欲しいホスト
 向けです。本ガイドの残りは presenter ベースです。
 
-presenter ファミリーは **macOS / iOS / Windows / Android** でコンパイルされます。
+presenter ファミリーは **macOS / iOS / tvOS / Windows / Android** でコンパイルされます。
 
 ## 2. ライフサイクル
 
@@ -61,7 +61,7 @@ sampling を維持し、`Inactive` status と fallback reason を明示します
 Erika は所有する surface に直接描画します。幅・高さは**物理ピクセル**、`scale` は
 DPI/backing 係数です。
 
-### macOS / iOS —— `CAMetalLayer`
+### macOS / iOS / tvOS —— `CAMetalLayer`
 
 `CAMetalLayer` を作りサイズを設定し、そのポインタを Erika に渡します：
 
@@ -152,7 +152,7 @@ erika_presenter_play(p);
 
 ## 6. レンダーループ
 
-surface の表示タイマー——`CADisplayLink`（iOS）/ `CVDisplayLink` または `CADisplayLink`
+surface の表示タイマー——`CADisplayLink`（iOS/tvOS）/ `CVDisplayLink` または `CADisplayLink`
 （macOS）/ Windows のフレームスケジューラ / Android `Choreographer`——から `render_tick` を駆動します。そのフレームの
 **プレゼンテーション時刻（秒）**を単調なホストクロックから渡します。Erika は vsync 量子化
 スケジューリングに使うので、差分ではなく絶対タイムスタンプを渡します。
@@ -251,7 +251,7 @@ handle を包み、返された文字列 / `ErikaTrackInfo` レコードは対�
 bridging header か `erika.h` への module map で C ABI を取り込みます。`CAMetalLayer` は
 `unsafeBitCast(layer, to: UInt64.self)` または `UInt64(UInt(bitPattern: ...))` でキャスト。
 `CADisplayLink`/`CVDisplayLink` のコールバックから `erika_presenter_render_tick` を駆動します。
-macOS/iOS の Flutter Swift プラグインも同じ C ABI 上でこれを行っています。
+macOS/iOS/tvOS の Flutter Swift プラグインも同じ C ABI 上でこれを行っています。
 
 ### Dart FFI
 

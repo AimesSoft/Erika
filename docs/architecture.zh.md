@@ -20,7 +20,7 @@ Rust Player Core
   wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB, OHOS Vulkan
   presenter runtime ──── ties player + renderer + audio + overlays
   C ABI ──────────────── 79 exported functions, two handle families
-  Flutter plugin ─────── macOS + iOS + Windows + Android + OpenHarmony embedding
+  Flutter plugin ─────── macOS + iOS + tvOS + Windows + Android + OpenHarmony embedding
 ```
 
 ## 原生依赖
@@ -90,7 +90,7 @@ cargo run -p xtask -- deps status
 
 ## 渲染器
 
-### Metal Renderer（macOS/iOS）
+### Metal Renderer（macOS/iOS/tvOS）
 
 Apple 平台的主渲染器：
 
@@ -163,11 +163,12 @@ Header：`crates/erika_capi/include/erika.h`
 
 ## Flutter Plugin
 
-`packages/erika_flutter` 提供 macOS、iOS、Windows、Android 和 HarmonyOS 的 Flutter embedding：
+`packages/erika_flutter` 提供 macOS、iOS、tvOS、Windows、Android 和 HarmonyOS 的 Flutter embedding：
 
 - **Dart**：`ErikaPlayer`（命令 + 事件）、`ErikaWindowOverlayVideoView`（推荐的 window-hosted native surface——Apple 上是 Metal，Windows 上是 D3D11 swapchain）、`ErikaVideoView`（兼容 platform view）。
 - **macOS Swift plugin**：加载 `liberika_capi.dylib`，创建 `NSWindow` overlay 或 `NSView`/`CAMetalLayer` platform view，并通过 display link 驱动 `render_tick`。
 - **iOS Swift plugin**：静态链接 `liberika_capi.a`，创建 `UIWindow` overlay 或 `UIView`/`CAMetalLayer` platform view，并沿用同一 presenter 模型。
+- **tvOS Swift plugin**：静态链接 `liberika_capi.a`，在 Apple TV 的 `UIView`/`CAMetalLayer` platform view 中呈现，并沿用同一 presenter 模型；支持 tvOS 真机和 arm64/x86_64 模拟器。
 - **Windows C++ plugin**（`ErikaFlutterPluginCApi`）：通过 CMake（`build_erika_runtime.cmake`，cargo target `x86_64-pc-windows-msvc`）构建并链接 `erika_capi.dll`，host 一个 window-level D3D11 swapchain，并由帧调度器驱动 `render_tick`。
 - **Android Kotlin/JNI plugin**：为 Android ABI 构建 Rust runtime，每个 player 持有独立原生 surface。SDR 使用 `TextureView`；请求 extended-linear 时，通过 Flutter Hybrid Composition 使用 `SurfaceView`。插件协调 Activity surface lifecycle、音频焦点、noisy-route、HDR eligibility/headroom，并只在存在活跃 player 时驱动共享帧调度器。
 - **HarmonyOS ArkTS/N-API plugin**：通过 Hvigor/CMake 为 `aarch64-unknown-linux-ohos` 构建 `liberika_capi.so`，注册 Flutter 外部纹理，并把该纹理的 `OHNativeWindow` attach 给 presenter。音频经 OHAudio 以交错 f32 PCM 输出。
@@ -180,6 +181,7 @@ Embedding 模型和 HDR 策略见 `docs/flutter_embedding.md`。
 |----------|--------|--------|-------|--------|
 | macOS 14+ | VideoToolbox | Metal | CoreAudio | Available |
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | Available |
+| tvOS 13+ (Apple TV) | VideoToolbox | Metal | AudioQueue | Available |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
 | Android 8+ | MediaCodec / software | wgpu Vulkan + GLES fallback | AAudio | Available；SDR 已验证，extended-linear scRGB 等待 API 35 HDR 真机验收 |

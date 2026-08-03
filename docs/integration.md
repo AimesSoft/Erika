@@ -24,7 +24,7 @@ Use `ErikaPresenterHandle` unless you have a reason to render yourself. The
 pull-model `ErikaHandle` is for hosts that own their compositor and only want
 Erika's decode/timing/state. The rest of this guide is presenter-based.
 
-The presenter family is compiled on **macOS, iOS, Windows, and Android**.
+The presenter family is compiled on **macOS, iOS, tvOS, Windows, and Android**.
 
 ## 2. The lifecycle
 
@@ -65,7 +65,7 @@ capable Vulkan-class adapters, including Android. Backends without compute
 Erika renders directly into a platform surface you own. Width/height are
 **physical pixels**; `scale` is the DPI/backing factor.
 
-### macOS / iOS — `CAMetalLayer`
+### macOS / iOS / tvOS — `CAMetalLayer`
 
 Create a `CAMetalLayer`, size it, then hand its pointer to Erika:
 
@@ -165,7 +165,7 @@ erika_presenter_play(p);
 ## 6. The render loop
 
 Drive `render_tick` from the surface's display timer — `CADisplayLink`
-(iOS) / `CVDisplayLink` or `CADisplayLink` (macOS) / a frame scheduler on
+(iOS/tvOS) / `CVDisplayLink` or `CADisplayLink` (macOS) / a frame scheduler on
 Windows / `Choreographer` on Android. Pass the frame's **presentation time in
 seconds** from a monotonic host clock; Erika uses it for vsync-quantized
 scheduling, so pass an absolute timestamp, not a delta.
@@ -268,7 +268,7 @@ are done — the ABI is plain C. In C++ wrap the handle in an RAII type that cal
 Import the C ABI through a bridging header or a module map over `erika.h`. Cast
 the `CAMetalLayer` with `unsafeBitCast(layer, to: UInt64.self)` or
 `UInt64(UInt(bitPattern: ...))`. Drive `erika_presenter_render_tick` from a
-`CADisplayLink`/`CVDisplayLink` callback. This is what the macOS/iOS Flutter
+`CADisplayLink`/`CVDisplayLink` callback. This is what the macOS/iOS/tvOS Flutter
 Swift plugins do over the same C ABI.
 
 ### Dart FFI
