@@ -3358,7 +3358,7 @@ pub unsafe extern "C" fn erika_presenter_audio_only_tick(
 
 #[cfg(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
