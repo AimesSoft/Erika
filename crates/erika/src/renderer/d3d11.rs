@@ -2,7 +2,7 @@ use std::ffi::c_void;
 use std::mem;
 use std::ptr;
 
-use ::windows::Win32::Foundation::{HANDLE, HMODULE, HWND};
+use ::windows::Win32::Foundation::{HMODULE, HWND};
 use ::windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
 use ::windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1,
@@ -18,9 +18,9 @@ use ::windows::Win32::Graphics::Direct3D11::{
     D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA,
     D3D11_TEX2D_ARRAY_SRV, D3D11_TEX2D_SRV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     D3D11_VIEWPORT, D3D11CreateDevice, ID3D11BlendState, ID3D11Buffer, ID3D11Device,
-    ID3D11DeviceContext, ID3D11InputLayout, ID3D11PixelShader, ID3D11RenderTargetView,
-    ID3D11Resource, ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11Texture2D,
-    ID3D11VertexShader,
+    ID3D11DeviceContext, ID3D11InputLayout, ID3D11Multithread, ID3D11PixelShader,
+    ID3D11RenderTargetView, ID3D11Resource, ID3D11SamplerState, ID3D11ShaderResourceView,
+    ID3D11Texture2D, ID3D11VertexShader,
 };
 use ::windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
@@ -35,7 +35,7 @@ use ::windows::Win32::Graphics::Dxgi::{
     DXGI_HDR_METADATA_TYPE_NONE, DXGI_PRESENT_DO_NOT_WAIT, DXGI_PRESENT_PARAMETERS,
     DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT, DXGI_SWAP_CHAIN_DESC1,
     DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter, IDXGIDevice,
-    IDXGIFactory2, IDXGIResource, IDXGISwapChain1, IDXGISwapChain3, IDXGISwapChain4,
+    IDXGIFactory2, IDXGISwapChain1, IDXGISwapChain3, IDXGISwapChain4,
 };
 use ::windows::core::{Interface, PCSTR};
 
@@ -600,12 +600,6 @@ impl D3d11TexRect {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum D3d11VideoImportMode {
-    DirectDecoderDevice,
-    SharedHandle,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum D3d11OutputMode {
     #[default]
@@ -729,6 +723,11 @@ impl D3d11Renderer {
     }
 
     fn set_device(&mut self, device: ID3D11Device, context: ID3D11DeviceContext) -> Result<()> {
+        if let Ok(multithread) = device.cast::<ID3D11Multithread>() {
+            unsafe {
+                let _ = multithread.SetMultithreadProtected(true);
+            }
+        }
         let state = D3d11DeviceState::new(device, context)?;
         self.state = Some(state);
         self.recreate_surface_targets()?;
@@ -877,7 +876,7 @@ impl D3d11Renderer {
                 PlayerError::Renderer(format!("d3d11: av_frame_ref failed: {error}"))
             })?;
         let source_texture = clone_d3d11_texture(texture_ref.raw_texture())?;
-        let (texture, import_mode) = self.import_texture_for_current_device(&source_texture)?;
+        let texture = self.import_texture_for_current_device(&source_texture)?;
 
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         unsafe { texture.GetDesc(&mut desc) };
@@ -907,14 +906,7 @@ impl D3d11Renderer {
             .map_err(|error| d3d11va_srv_error(error, &desc, array_index))?;
         self.stats.hardware_video_frames += 1;
         self.stats.zero_copy_video_frames += 1;
-        match import_mode {
-            D3d11VideoImportMode::DirectDecoderDevice => {
-                self.stats.direct_zero_copy_video_frames += 1;
-            }
-            D3d11VideoImportMode::SharedHandle => {
-                self.stats.shared_handle_video_frames += 1;
-            }
-        }
+        self.stats.direct_zero_copy_video_frames += 1;
         self.current_video = Some(ImportedVideoFrame {
             _frame: retained_frame,
             _texture: texture,
@@ -937,19 +929,21 @@ impl D3d11Renderer {
     fn import_texture_for_current_device(
         &mut self,
         texture: &ID3D11Texture2D,
-    ) -> Result<(ID3D11Texture2D, D3d11VideoImportMode)> {
+    ) -> Result<ID3D11Texture2D> {
         if let Some(state) = self.state.as_ref() {
             let frame_device = unsafe { texture.GetDevice() }
                 .map_err(|error| d3d_error("ID3D11Texture2D::GetDevice", error))?;
             if state.device.as_raw() == frame_device.as_raw() {
-                return Ok((texture.clone(), D3d11VideoImportMode::DirectDecoderDevice));
+                return Ok(texture.clone());
             }
-            return open_shared_texture_on_device(&state.device, texture)
-                .map(|texture| (texture, D3d11VideoImportMode::SharedHandle));
+            trace(
+                "switching renderer to the decoder D3D11 device to avoid unsynchronized \
+                 cross-device surface reuse",
+            );
         }
 
         self.ensure_device_for_texture(texture)?;
-        Ok((texture.clone(), D3d11VideoImportMode::DirectDecoderDevice))
+        Ok(texture.clone())
     }
 
     /// Target color state overlays are composited into: the attached surface's
@@ -2176,35 +2170,6 @@ fn create_plane_srv(
             })?;
     }
     view.ok_or_else(|| PlayerError::Renderer("d3d11: shader resource view was null".to_string()))
-}
-
-fn open_shared_texture_on_device(
-    device: &ID3D11Device,
-    texture: &ID3D11Texture2D,
-) -> Result<ID3D11Texture2D> {
-    let shared_handle = d3d11_shared_handle(texture)?;
-    let mut imported = None;
-    unsafe {
-        device
-            .OpenSharedResource::<ID3D11Texture2D>(shared_handle, &mut imported)
-            .map_err(|error| d3d_error("ID3D11Device::OpenSharedResource(D3D11VA)", error))?;
-    }
-    imported
-        .ok_or_else(|| PlayerError::Renderer("d3d11: shared texture import was null".to_string()))
-}
-
-fn d3d11_shared_handle(texture: &ID3D11Texture2D) -> Result<HANDLE> {
-    let resource: IDXGIResource = texture
-        .cast()
-        .map_err(|error| d3d_error("ID3D11Texture2D::cast<IDXGIResource>", error))?;
-    let handle = unsafe { resource.GetSharedHandle() }
-        .map_err(|error| d3d_error("IDXGIResource::GetSharedHandle(D3D11VA)", error))?;
-    if handle.is_invalid() {
-        return Err(PlayerError::Renderer(
-            "d3d11: D3D11VA texture did not expose a valid shared handle".to_string(),
-        ));
-    }
-    Ok(handle)
 }
 
 fn create_overlay_texture(
