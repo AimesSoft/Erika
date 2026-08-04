@@ -19,9 +19,8 @@ namespace {
 
 winrt::Windows::Foundation::TimeSpan MicrosToTimeSpan(uint64_t micros) {
   using namespace std::chrono;
-  return winrt::Windows::Foundation::TimeSpan(
-      duration_cast<winrt::Windows::Foundation::TimeSpan::duration>(
-          microseconds(micros)));
+  return duration_cast<winrt::Windows::Foundation::TimeSpan>(
+      microseconds(micros));
 }
 
 winrt::Windows::Storage::Streams::IRandomAccessStream ArtworkStream(

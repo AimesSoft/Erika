@@ -1,6 +1,9 @@
 #ifndef FLUTTER_PLUGIN_ERIKA_WINDOWS_SMTC_H_
 #define FLUTTER_PLUGIN_ERIKA_WINDOWS_SMTC_H_
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 #include <cstdint>
