@@ -84,4 +84,23 @@ void main() {
       contains(r'$<TARGET_FILE_DIR:${PLUGIN_NAME}>/liberika_capi.so'),
     );
   });
+
+  test('OpenHarmony media controls avoid implicit ESObject types', () {
+    final plugin = File(
+      'ohos/src/main/ets/components/plugin/ErikaFlutterPlugin.ets',
+    ).readAsStringSync();
+
+    for (final declaration in <String>[
+      "const metadataValue: ESObject = args.get('metadata');",
+      'const nativeArgs: Map<string, ESObject> =',
+      'const metadata: Map<string, ESObject> =',
+      "const titleValue: ESObject = metadata.get('title');",
+      "const artist: ESObject = metadata.get('artist');",
+      "const album: ESObject = metadata.get('album');",
+      "const artwork: ESObject = metadata.get('artwork');",
+      'const args: Map<string, ESObject> =',
+    ]) {
+      expect(plugin, contains(declaration));
+    }
+  });
 }

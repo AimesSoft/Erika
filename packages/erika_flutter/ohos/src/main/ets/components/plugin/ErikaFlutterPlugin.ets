@@ -258,7 +258,7 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
   }
 
   private openPlayer(args: Map<string, ESObject>, result: MethodResult): void {
-    const metadataValue = args.get('metadata');
+    const metadataValue: ESObject = args.get('metadata');
     let metadata: ErikaMediaMetadata | null = null;
     if (metadataValue !== undefined && metadataValue !== null) {
       metadata = this.parseMediaMetadata(metadataValue);
@@ -268,7 +268,7 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
       }
     }
     const playerId = this.numberArg(args, 'playerId', 0);
-    const nativeArgs = new Map<string, ESObject>(args);
+    const nativeArgs: Map<string, ESObject> = new Map<string, ESObject>(args);
     nativeArgs.delete('metadata');
     if (!this.invokePlayerNative('open', nativeArgs, result)) {
       return;
@@ -530,15 +530,15 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
     if (!(value instanceof Map)) {
       return null;
     }
-    const metadata = value as Map<string, ESObject>;
-    const titleValue = metadata.get('title');
+    const metadata: Map<string, ESObject> = value as Map<string, ESObject>;
+    const titleValue: ESObject = metadata.get('title');
     if (typeof titleValue !== 'string' || titleValue.length === 0) {
       return null;
     }
     const parsed: ErikaMediaMetadata = { title: titleValue };
-    const artist = metadata.get('artist');
-    const album = metadata.get('album');
-    const artwork = metadata.get('artwork');
+    const artist: ESObject = metadata.get('artist');
+    const album: ESObject = metadata.get('album');
+    const artwork: ESObject = metadata.get('artwork');
     if (typeof artist === 'string') {
       parsed.artist = artist;
     }
@@ -631,7 +631,8 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
     if (!this.players.has(playerId)) {
       return;
     }
-    const args = extra ?? new Map<string, ESObject>();
+    const args: Map<string, ESObject> =
+      extra ?? new Map<string, ESObject>();
     args.set('playerId', playerId);
     const raw = erikaNative.nativeInvoke(
       playerId,
