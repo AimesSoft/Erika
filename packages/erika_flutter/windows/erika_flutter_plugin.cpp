@@ -30,6 +30,7 @@ constexpr wchar_t kFrameMessageWindowClassName[] = L"ErikaFlutterFrameScheduler"
 constexpr wchar_t kFlutterRegularHostWindowClassName[] =
     L"FLUTTER_HOST_WINDOW";
 constexpr UINT kFrameTimerMessage = WM_APP + 1;
+constexpr UINT kSmtcMessage = WM_APP + 2;
 constexpr double kFrameTimerMinFps = 1.0;
 constexpr double kFrameTimerMaxFps = 1000.0;
 constexpr double kFrameTimerDefaultFps = 60.0;
@@ -1145,6 +1146,7 @@ struct ErikaFlutterPlugin::PlayerHost {
              std::shared_ptr<ErikaNativeLibrary> native_library,
              ErikaPresenterConfig config)
       : id(player_id), library(std::move(native_library)) {
+    smtc_state.player_id = player_id;
     handle = library->CreatePresenter(config);
     if (handle == nullptr) {
       std::string message = "erika_presenter_create returned null";
@@ -1212,14 +1214,73 @@ struct ErikaFlutterPlugin::PlayerHost {
     Check(library->open(handle, uri.c_str()), "open", library->TakeLastError());
   }
 
-  void Play() { Check(library->play(handle), "play", library->TakeLastError()); }
-  void Pause() { Check(library->pause(handle), "pause", library->TakeLastError()); }
-  void Stop() { Check(library->stop(handle), "stop", library->TakeLastError()); }
-  void Close() { Check(library->close(handle), "close", library->TakeLastError()); }
+  void SetMediaMetadata(const EncodableMap& metadata) {
+    const auto title = StringValue(FindArg(metadata, "title"));
+    if (!title || title->empty()) {
+      throw PluginError("metadata.title is required.");
+    }
+    smtc_state.title = *title;
+    smtc_state.artist = StringValue(FindArg(metadata, "artist")).value_or("");
+    smtc_state.album = StringValue(FindArg(metadata, "album")).value_or("");
+    smtc_state.artwork.clear();
+    if (const auto* value = FindArg(metadata, "artwork"); value != nullptr) {
+      if (const auto* bytes = std::get_if<std::vector<uint8_t>>(value)) {
+        smtc_state.artwork = *bytes;
+      } else if (!std::holds_alternative<std::monostate>(*value)) {
+        throw PluginError("metadata.artwork must contain image bytes.");
+      }
+    }
+    ++smtc_state.metadata_revision;
+  }
+
+  void ClearMediaMetadata() {
+    smtc_state.title.clear();
+    smtc_state.artist.clear();
+    smtc_state.album.clear();
+    smtc_state.artwork.clear();
+    ++smtc_state.metadata_revision;
+  }
+
+  void PrepareForOpen() {
+    smtc_state.playing = false;
+    smtc_state.stopped = false;
+    smtc_state.duration_micros = 0;
+    smtc_state.position_micros = 0;
+  }
+
+  void SetSystemMediaNavigation(bool previous_enabled, bool next_enabled) {
+    smtc_state.previous_enabled = previous_enabled;
+    smtc_state.next_enabled = next_enabled;
+  }
+
+  void Play() {
+    Check(library->play(handle), "play", library->TakeLastError());
+    smtc_state.playing = true;
+    smtc_state.stopped = false;
+  }
+  void Pause() {
+    Check(library->pause(handle), "pause", library->TakeLastError());
+    smtc_state.playing = false;
+    smtc_state.stopped = false;
+  }
+  void Stop() {
+    Check(library->stop(handle), "stop", library->TakeLastError());
+    smtc_state.playing = false;
+    smtc_state.stopped = true;
+    smtc_state.position_micros = 0;
+  }
+  void Close() {
+    Check(library->close(handle), "close", library->TakeLastError());
+    smtc_state.playing = false;
+    smtc_state.stopped = true;
+    smtc_state.duration_micros = 0;
+    smtc_state.position_micros = 0;
+  }
 
   void Seek(uint64_t position_micros) {
     Check(library->seek(handle, position_micros), "seek",
           library->TakeLastError());
+    smtc_state.position_micros = position_micros;
   }
 
   void SetPlaybackRate(double rate) {
@@ -1228,6 +1289,7 @@ struct ErikaFlutterPlugin::PlayerHost {
     }
     Check(library->set_playback_rate(handle, rate), "set_playback_rate",
           library->TakeLastError());
+    smtc_state.playback_rate = rate;
   }
 
   void SetVolume(double volume) {
@@ -1677,13 +1739,20 @@ struct ErikaFlutterPlugin::PlayerHost {
   }
 
   void PollEvents(flutter::EventSink<EncodableValue>* event_sink) {
-    if (event_sink == nullptr) {
-      return;
-    }
     while (true) {
       ErikaEvent event{};
       const auto status = library->poll_event(handle, &event);
       if (status == ErikaStatus_Ok) {
+        if (event.kind == ErikaEventKind_StateChanged) {
+          smtc_state.playing = event.state == ErikaState_Playing;
+          smtc_state.stopped = event.state == ErikaState_Stopped ||
+                               event.state == ErikaState_Closed ||
+                               event.state == ErikaState_Idle;
+        } else if (event.kind == ErikaEventKind_DurationChanged) {
+          smtc_state.duration_micros = event.duration_micros;
+        } else if (event.kind == ErikaEventKind_PositionChanged) {
+          smtc_state.position_micros = event.position_micros;
+        }
         if (event.kind == ErikaEventKind_Error) {
           DebugLog("player " + std::to_string(id) +
                    " event error status=ErikaStatus_" +
@@ -1691,7 +1760,9 @@ struct ErikaFlutterPlugin::PlayerHost {
                    std::to_string(static_cast<int>(event.status)) + "): " +
                    library->TakeLastError());
         }
-        event_sink->Success(EventToMap(event));
+        if (event_sink != nullptr) {
+          event_sink->Success(EventToMap(event));
+        }
         continue;
       }
       if (status != ErikaStatus_NoEvent) {
@@ -1828,6 +1899,7 @@ struct ErikaFlutterPlugin::PlayerHost {
   }
 
   int64_t id = 0;
+  ErikaSmtcState smtc_state{};
   std::shared_ptr<ErikaNativeLibrary> library;
   ErikaPresenterHandle* handle = nullptr;
   HWND attached_hwnd = nullptr;
@@ -1893,6 +1965,7 @@ ErikaFlutterPlugin::ErikaFlutterPlugin(
 
 ErikaFlutterPlugin::~ErikaFlutterPlugin() {
   StopFrameTimer();
+  smtc_.reset();
   DestroyFrameMessageWindow();
   if (window_proc_delegate_id_ != 0) {
     registrar_->UnregisterTopLevelWindowProcDelegate(window_proc_delegate_id_);
@@ -2196,6 +2269,11 @@ LRESULT CALLBACK ErikaFlutterPlugin::FrameMessageWindowProc(HWND hwnd,
     }
     return 0;
   }
+  if (message == kSmtcMessage && plugin != nullptr) {
+    plugin->HandleSmtcCommand(static_cast<ErikaSmtcCommand>(wparam),
+                              static_cast<uint64_t>(lparam));
+    return 0;
+  }
 
   if (message == WM_NCDESTROY && plugin != nullptr) {
     if (plugin->frame_message_window_ == hwnd) {
@@ -2218,6 +2296,7 @@ void ErikaFlutterPlugin::OnFrameTimer() {
   for (auto& entry : players_) {
     entry.second->RenderTick(event_sink_.get());
   }
+  RefreshSmtc();
   if (trace_enabled) {
     tick_count += 1;
     const auto elapsed = std::chrono::duration<double, std::milli>(
@@ -2252,6 +2331,7 @@ std::optional<LRESULT> ErikaFlutterPlugin::OnTopLevelWindowProc(
   }
   if (message == WM_DESTROY) {
     StopFrameTimer();
+    smtc_.reset();
     for (auto& entry : players_) {
       entry.second->Detach(std::nullopt);
     }
@@ -2329,6 +2409,89 @@ int64_t ErikaFlutterPlugin::CreatePlayer(const EncodableValue* arguments) {
   return id;
 }
 
+void ErikaFlutterPlugin::EnsureSmtc() {
+  if (smtc_) {
+    return;
+  }
+  HWND window = RootHostWindow(FlutterWindow());
+  if (window == nullptr) {
+    return;
+  }
+  HWND message_window = EnsureFrameMessageWindow();
+  if (message_window == nullptr) {
+    return;
+  }
+  smtc_ = std::make_unique<ErikaWindowsSmtc>(
+      window, [message_window](ErikaSmtcCommand command,
+                               uint64_t position_micros) {
+        PostMessageW(message_window, kSmtcMessage,
+                     static_cast<WPARAM>(command),
+                     static_cast<LPARAM>(position_micros));
+      });
+  if (!smtc_->available()) {
+    smtc_.reset();
+  }
+}
+
+void ErikaFlutterPlugin::SetActivePlayer(int64_t player_id) {
+  active_player_id_ = player_id;
+  EnsureSmtc();
+  RefreshSmtc();
+}
+
+void ErikaFlutterPlugin::RefreshSmtc() {
+  if (!smtc_ || active_player_id_ == 0) {
+    return;
+  }
+  const auto it = players_.find(active_player_id_);
+  if (it == players_.end()) {
+    smtc_->Clear();
+    active_player_id_ = 0;
+    return;
+  }
+  smtc_->Update(it->second->smtc_state);
+}
+
+void ErikaFlutterPlugin::HandleSmtcCommand(ErikaSmtcCommand command,
+                                           uint64_t position_micros) {
+  const auto it = players_.find(active_player_id_);
+  if (it == players_.end()) {
+    return;
+  }
+  try {
+    if (command == ErikaSmtcCommand::play) {
+      it->second->Play();
+    } else if (command == ErikaSmtcCommand::pause) {
+      it->second->Pause();
+    } else if (command == ErikaSmtcCommand::toggle) {
+      if (it->second->smtc_state.playing) {
+        it->second->Pause();
+      } else {
+        it->second->Play();
+      }
+    } else if (command == ErikaSmtcCommand::seek) {
+      it->second->Seek(position_micros);
+    } else if (command == ErikaSmtcCommand::previous ||
+               command == ErikaSmtcCommand::next) {
+      const bool enabled = command == ErikaSmtcCommand::previous
+                               ? it->second->smtc_state.previous_enabled
+                               : it->second->smtc_state.next_enabled;
+      if (enabled) {
+        SendEvent(EncodableValue(EncodableMap{
+            {EncodableValue("playerId"), EncodableValue(active_player_id_)},
+            {EncodableValue("kind"), EncodableValue(13)},
+            {EncodableValue("navigation"),
+             EncodableValue(command == ErikaSmtcCommand::previous ? "previous"
+                                                                   : "next")},
+        }));
+      }
+    }
+    OnFrameTimer();
+  } catch (const std::exception& error) {
+    DebugLog(std::string("SMTC command failed: ") + error.what());
+  }
+}
+
 void ErikaFlutterPlugin::RemovePlayer(int64_t player_id) {
   const auto it = players_.find(player_id);
   if (it == players_.end()) {
@@ -2341,6 +2504,12 @@ void ErikaFlutterPlugin::RemovePlayer(int64_t player_id) {
     overlay_window_->SetFrame(0.0, 0.0, 0.0, 0.0, false, std::nullopt,
                               std::nullopt);
     overlay_window_->owner_player_id = 0;
+  }
+  if (active_player_id_ == player_id) {
+    active_player_id_ = 0;
+    if (smtc_) {
+      smtc_->Clear();
+    }
   }
   players_.erase(it);
 }
@@ -2370,11 +2539,26 @@ void ErikaFlutterPlugin::HandleMethodCall(
       OnFrameTimer();
       result->Success();
     } else if (method == "open") {
-      PlayerFromArgs(args).Open(RequiredString(args, "uri"), args);
+      auto& player = PlayerFromArgs(args);
+      if (const auto* value = FindArg(args, "metadata"); value != nullptr) {
+        if (const auto* metadata = std::get_if<EncodableMap>(value)) {
+          player.SetMediaMetadata(*metadata);
+        } else if (std::holds_alternative<std::monostate>(*value)) {
+          player.ClearMediaMetadata();
+        } else {
+          throw PluginError("metadata must be a map.");
+        }
+      } else {
+        player.ClearMediaMetadata();
+      }
+      player.PrepareForOpen();
+      player.Open(RequiredString(args, "uri"), args);
       OnFrameTimer();
       result->Success();
     } else if (method == "play") {
-      PlayerFromArgs(args).Play();
+      auto& player = PlayerFromArgs(args);
+      player.Play();
+      SetActivePlayer(player.id);
       OnFrameTimer();
       result->Success();
     } else if (method == "pause") {
@@ -2398,6 +2582,21 @@ void ErikaFlutterPlugin::HandleMethodCall(
     } else if (method == "setPlaybackRate") {
       PlayerFromArgs(args).SetPlaybackRate(
           DoubleValue(FindArg(args, "rate")).value_or(1.0));
+      result->Success();
+    } else if (method == "setMediaMetadata") {
+      const auto* value = FindArg(args, "metadata");
+      const auto* metadata = value == nullptr ? nullptr : std::get_if<EncodableMap>(value);
+      if (metadata == nullptr) {
+        throw PluginError("metadata is required.");
+      }
+      PlayerFromArgs(args).SetMediaMetadata(*metadata);
+      RefreshSmtc();
+      result->Success();
+    } else if (method == "setSystemMediaNavigation") {
+      PlayerFromArgs(args).SetSystemMediaNavigation(
+          BoolValue(FindArg(args, "previousEnabled")).value_or(false),
+          BoolValue(FindArg(args, "nextEnabled")).value_or(false));
+      RefreshSmtc();
       result->Success();
     } else if (method == "setVolume") {
       PlayerFromArgs(args).SetVolume(

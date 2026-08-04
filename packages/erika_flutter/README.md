@@ -51,6 +51,10 @@ consuming project can set `ERIKA_MACOS_ARCHS=arm64`, `x86_64`, or
 matching `macos-arm64`, `macos-x64`, or `macos-universal` archive. At runtime
 the plugin loads the library via `dlopen`.
 
+The macOS plugin publishes title, artist, album, artwork, playback state, and
+timeline through Now Playing, and handles system play, pause, stop, and seek
+commands through Remote Command Center.
+
 Overrides: `ERIKA_CAPI_DYLIB` forces the runtime dylib path; `ERIKA_MACOS_CAPI_DYLIB`
 points the build phase at an explicit dylib to bundle instead of building.
 
@@ -78,6 +82,110 @@ The iOS CocoaPod script phase builds the Erika native dependencies and C ABI
 static library automatically during Xcode builds. Requirements:
 
 - Rust toolchain with the appropriate iOS target (`rustup target add aarch64-apple-ios`)
+
+The host app must enable **Background Modes > Audio, AirPlay, and Picture in Picture** under Xcode's Signing & Capabilities, or add `audio` to `UIBackgroundModes` in `Info.plist`. The player registers Now Playing metadata and playback controls with Control Center. Pass an `ErikaMediaMetadata` value to provide the title, artist, album, and encoded artwork bytes.
+
+Background playback is disabled by default. Create the player with `ErikaPlayer(allowBackgroundPlayback: true)` to keep audio playing in the background. iOS does not guarantee continued background playback unless the host app also enables the Background Mode described above.
+
+```dart
+final player = ErikaPlayer(
+  allowBackgroundPlayback: true,
+);
+
+final artwork = await rootBundle.load('assets/cover.jpg');
+await player.open(
+  mediaUrl,
+  metadata: ErikaMediaMetadata(
+    title: 'Title',
+    artist: 'Artist',
+    album: 'Album',
+    artwork: artwork.buffer.asUint8List(),
+  ),
+);
+await player.play();
+```
+
+`allowBackgroundPlayback` is a player creation option and cannot be changed after the native player has been created. When it is `false`, playback pauses as the app enters the background and remains paused on return. When it is `true`, video decoding is suspended while audio continues in the background, and video resumes when the app becomes active. Control Center supports play, pause, and position changes. Artwork must contain complete encoded image bytes in a format supported by `UIImage`, such as JPEG or PNG, rather than raw pixels.
+
+## System Media Navigation
+
+Playlist apps can enable the system previous and next buttons for the active
+item. Erika emits a `systemMediaNavigationRequested` event instead of choosing
+the next media item itself, so Dart remains the source of truth for the
+playlist. Update the capabilities whenever the active item changes.
+
+```dart
+import 'dart:async';
+
+import 'package:erika_flutter/erika_flutter.dart';
+
+class PlaylistController {
+  final ErikaPlayer player = ErikaPlayer(allowBackgroundPlayback: true);
+  final List<({String title, String url})> items = <({String title, String url})>[
+    (title: 'Episode 1', url: 'https://example.com/episode-1.mp4'),
+    (title: 'Episode 2', url: 'https://example.com/episode-2.mp4'),
+  ];
+
+  StreamSubscription<ErikaPlayerEvent>? subscription;
+  int index = 0;
+  bool switching = false;
+
+  Future<void> initialize() async {
+    subscription = player.events.listen((ErikaPlayerEvent event) async {
+      if (event.kind != ErikaEventKind.systemMediaNavigationRequested) {
+        return;
+      }
+      switch (event.systemMediaCommand) {
+        case ErikaSystemMediaCommand.previous:
+          await openAt(index - 1);
+        case ErikaSystemMediaCommand.next:
+          await openAt(index + 1);
+        case null:
+          break;
+      }
+    });
+    await openAt(0);
+  }
+
+  Future<void> openAt(int newIndex) async {
+    if (switching || newIndex < 0 || newIndex >= items.length) {
+      return;
+    }
+    switching = true;
+    await player.setSystemMediaNavigation(
+      previousEnabled: false,
+      nextEnabled: false,
+    );
+    try {
+      final item = items[newIndex];
+      await player.open(
+        item.url,
+        metadata: ErikaMediaMetadata(title: item.title),
+      );
+      await player.play();
+      index = newIndex;
+    } finally {
+      switching = false;
+      await player.setSystemMediaNavigation(
+        previousEnabled: index > 0,
+        nextEnabled: index + 1 < items.length,
+      );
+    }
+  }
+
+  Future<void> dispose() async {
+    await subscription?.cancel();
+    await player.dispose();
+  }
+}
+```
+
+The capabilities default to disabled and work on iOS, tvOS, macOS, Android,
+Windows, and HarmonyOS. Disable both buttons and reject duplicate requests while an item
+is switching, then update the index, metadata, and capabilities after a
+successful switch. Only `previous` and `next` are emitted by this API. Play,
+pause, stop, and seek continue to be handled directly by the native
+system-media integration.
 
 ## tvOS Setup
 
@@ -110,6 +218,11 @@ Requirements:
 Set `ERIKA_REPO_ROOT` if the plugin cannot locate the Erika checkout
 automatically.
 
+The Windows plugin publishes title, artist, album, artwork, playback state, and
+timeline through System Media Transport Controls (SMTC), and handles system
+play, pause, and seek commands. A Windows SDK with C++/WinRT is required; the
+plugin links the required WinRT system libraries automatically.
+
 ## Android Setup
 
 The Android Gradle plugin invokes Erika's `xtask` dependency build and then
@@ -122,6 +235,15 @@ this with `-PerikaAndroidAbis=arm64-v8a,x86_64` or `ERIKA_ANDROID_ABIS`.
 Android `content://` media and subtitle URIs are opened through
 `ContentResolver`, detached, and passed to Erika as owned `fd://` sources with
 their provider offset and length.
+
+Android uses MediaSession and a media notification for lock-screen, Bluetooth,
+and system media controls. With `allowBackgroundPlayback: true`, a
+`mediaPlayback` foreground service keeps audio running while video decoding is
+suspended. The plugin manifest declares the foreground-service and Android 13+
+notification permissions, but the host app must request `POST_NOTIFICATIONS`
+at runtime as appropriate for its product flow. If permission is denied, the
+media session remains available while notification visibility depends on the
+Android version and system policy.
 
 Android's minimum remains API 26. Extended-linear output additionally needs the
 native-window dataspace API (API 28+); API 26/27 continue in SDR and report the
@@ -138,6 +260,9 @@ The HarmonyOS module requires DevEco Studio's OpenHarmony Native SDK. With
 selected release and packages it beside `liberika_flutter.so`; otherwise it
 requires the Rust `aarch64-unknown-linux-ohos` target and builds the LGPL native
 dependencies and runtime from source. Download failures fall back to source.
+
+HarmonyOS uses AVSession to publish metadata, artwork, playback state, position,
+and playback rate, and handles system play, pause, stop, and seek commands.
 
 Use `ErikaVideoView` on HarmonyOS. It registers a Flutter external texture,
 obtains the texture surface as an `OHNativeWindow`, and renders through wgpu

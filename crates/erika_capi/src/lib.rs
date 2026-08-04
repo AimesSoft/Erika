@@ -3339,6 +3339,31 @@ pub unsafe extern "C" fn erika_presenter_render_tick(
     target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_audio_only_tick(
+    handle: *mut ErikaPresenterHandle,
+    out_stats: *mut ErikaPresenterStats,
+) -> ErikaStatus {
+    with_presenter_mut(handle, |handle| match handle.presenter.audio_only_tick() {
+        Ok(_stats) => {
+            if !out_stats.is_null() {
+                let snapshot = handle.presenter.runtime_snapshot();
+                unsafe { *out_stats = presenter_stats_to_c(snapshot) };
+            }
+            clear_last_error();
+            ErikaStatus::Ok
+        }
+        Err(error) => player_error(format!("audio_only_tick failed: {error}")),
+    })
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_get_stats(
     handle: *mut ErikaPresenterHandle,
     out_stats: *mut ErikaPresenterStats,

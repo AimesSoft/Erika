@@ -48,6 +48,7 @@ class ErikaFlutterPlugin :
     private lateinit var eventChannel: EventChannel
     private lateinit var choreographer: Choreographer
     private lateinit var audioFocus: ErikaAudioFocus
+    private lateinit var mediaSession: ErikaMediaSession
     private lateinit var mainHandler: Handler
     private lateinit var contentPreparationExecutor: ExecutorService
     @Volatile
@@ -59,6 +60,7 @@ class ErikaFlutterPlugin :
     private var attachedToEngine = false
     private var activityLifecycle: Lifecycle? = null
     private var activityActive = false
+    private var activeMediaPlayerId: Long? = null
 
     internal val isActivityActive: Boolean
         get() = attachedToEngine && activityActive
@@ -97,6 +99,22 @@ class ErikaFlutterPlugin :
             onFocusLoss = ::handleAudioFocusLoss,
             onFocusGain = ::handleAudioFocusGain,
         )
+        mediaSession = ErikaMediaSession(
+            applicationContext,
+            object : ErikaMediaCommandHandler {
+                override fun play(playerId: Long) = performSystemMediaCommand(playerId, "play")
+                override fun pause(playerId: Long) = performSystemMediaCommand(playerId, "pause")
+                override fun stop(playerId: Long) = performSystemMediaCommand(playerId, "stop")
+                override fun seek(playerId: Long, positionMicros: Long) =
+                    performSystemMediaCommand(playerId, "seek", mapOf("positionMicros" to positionMicros))
+                override fun previous(playerId: Long) =
+                    emitSystemMediaNavigation(playerId, SYSTEM_MEDIA_NAVIGATION_PREVIOUS)
+                override fun next(playerId: Long) =
+                    emitSystemMediaNavigation(playerId, SYSTEM_MEDIA_NAVIGATION_NEXT)
+            },
+        )
+        ErikaMediaCommandReceiver.register(this, mediaSession::dispatch)
+        ErikaMediaPlaybackService.registerTickHandler(this, ::performBackgroundPlaybackTick)
         methodChannel = MethodChannel(binding.binaryMessenger, PLAYER_CHANNEL)
         eventChannel = EventChannel(binding.binaryMessenger, EVENT_CHANNEL)
         methodChannel.setMethodCallHandler(this)
@@ -127,6 +145,9 @@ class ErikaFlutterPlugin :
             contentPreparationExecutor.shutdownNow()
         }
         audioFocus.abandon()
+        ErikaMediaCommandReceiver.unregister(this)
+        ErikaMediaPlaybackService.unregisterTickHandler(this)
+        mediaSession.release()
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
@@ -179,6 +200,8 @@ class ErikaFlutterPlugin :
                 "detachOverlay" -> detachOverlay(arguments(call), result)
                 "setOverlayFrame" -> setOverlayFrame(arguments(call), result)
                 "screenshot" -> captureFrame(arguments(call), result)
+                "setMediaMetadata" -> setMediaMetadata(arguments(call), result)
+                "setSystemMediaNavigation" -> setSystemMediaNavigation(arguments(call), result)
                 "registerSubtitleMemoryFont" -> registerSubtitleMemoryFont(arguments(call), result)
                 in NATIVE_METHODS -> invokePlayer(call.method, arguments(call), result)
                 else -> result.notImplemented()
@@ -285,7 +308,11 @@ class ErikaFlutterPlugin :
             )
             return
         }
-        players[handle] = AndroidPlayerHost(handle, outputMode)
+        players[handle] = AndroidPlayerHost(
+            handle,
+            outputMode,
+            arguments["allowBackgroundPlayback"] == true,
+        )
         result.success(handle)
     }
 
@@ -302,6 +329,11 @@ class ErikaFlutterPlugin :
         abandonAudioFocusIfIdle()
         runCatching(host::destroy).onFailure { error ->
             Log.e(TAG, "Unable to destroy Erika player ${host.handle}", error)
+        }
+        if (activeMediaPlayerId == host.handle) {
+            activeMediaPlayerId = null
+            ErikaMediaCommandReceiver.deactivate(this)
+            mediaSession.clear(host.handle)
         }
         refreshFrameScheduling()
     }
@@ -463,6 +495,13 @@ class ErikaFlutterPlugin :
         result: MethodChannel.Result,
     ) {
         val host = player(arguments)
+        if (method == "open") {
+            val metadata = arguments["metadata"]
+            if (metadata != null && metadata !is Map<*, *>) {
+                throw IllegalArgumentException("metadata must be a map")
+            }
+            host.prepareForOpen(metadata?.let { androidMediaMetadata(arguments) })
+        }
         if (method == "play") {
             playWithAudioFocus(host, result)
             return
@@ -521,6 +560,12 @@ class ErikaFlutterPlugin :
         }
         if (response.ok && method in RENDER_REQUEST_METHODS) {
             host.requestRender()
+        }
+        if (response.ok && method == "setPlaybackRate") {
+            host.setPlaybackRate((prepared.arguments["rate"] as? Number)?.toFloat() ?: 1f)
+            if (activeMediaPlayerId == host.handle) {
+                mediaSession.update(host.mediaState)
+            }
         }
         drainEvents(host)
         refreshFrameScheduling()
@@ -691,7 +736,8 @@ class ErikaFlutterPlugin :
     private fun playWithAudioFocus(host: AndroidPlayerHost, result: MethodChannel.Result) {
         host.requestPlayback()
         refreshFrameScheduling()
-        if (!isActivityActive) {
+        if (!host.mediaState.canPlay(isActivityActive)) {
+            host.cancelPlaybackIntent()
             result.success(null)
             return
         }
@@ -715,6 +761,9 @@ class ErikaFlutterPlugin :
                 }
                 if (response.ok) {
                     host.playbackStarted()
+                    activeMediaPlayerId = host.handle
+                    ErikaMediaCommandReceiver.activate(this)
+                    mediaSession.update(host.mediaState.copy(playbackState = PLAYING_STATE))
                 } else {
                     host.cancelPlaybackIntent()
                     abandonAudioFocusIfIdle()
@@ -782,8 +831,16 @@ class ErikaFlutterPlugin :
 
     private fun suspendForActivityStop() {
         cancelFrameCallback()
-        val hostsToPause = players.values.toList().filter(AndroidPlayerHost::suspendPlayback)
-        audioFocus.abandon()
+        val hostsToPause = players.values.toList().filter { host ->
+            !host.mediaState.allowBackgroundPlayback && host.cancelPlaybackIntent()
+        }
+        if (players.values.none { host ->
+                host.mediaState.allowBackgroundPlayback &&
+                    host.playbackPhase != AndroidPlaybackPhase.PAUSED
+            }
+        ) {
+            audioFocus.abandon()
+        }
         hostsToPause.forEach { host ->
             runCatching { host.invoke("pause", emptyMap()) }
                 .onSuccess { response ->
@@ -841,7 +898,7 @@ class ErikaFlutterPlugin :
     }
 
     private fun startPendingPlayback(host: AndroidPlayerHost, source: String) {
-        if (!isActivityActive ||
+        if (!host.mediaState.canPlay(isActivityActive) ||
             !audioFocus.focusGranted ||
             host.playbackPhase != AndroidPlaybackPhase.PENDING
         ) {
@@ -871,6 +928,9 @@ class ErikaFlutterPlugin :
     ): PreparedNativeArguments {
         val nativeArguments = arguments.toMutableMap()
         nativeArguments.remove("playerId")
+        if (method == "open") {
+            nativeArguments.remove("metadata")
+        }
         if (method !in URI_METHODS) {
             return PreparedNativeArguments(nativeArguments, null)
         }
@@ -1270,11 +1330,14 @@ class ErikaFlutterPlugin :
     }
 
     private fun handleAudioFocusGain() {
-        if (!isActivityActive || !audioFocus.focusGranted) {
+        if (!audioFocus.focusGranted) {
             return
         }
         players.values.toList()
-            .filter { it.playbackPhase == AndroidPlaybackPhase.PENDING }
+            .filter {
+                it.playbackPhase == AndroidPlaybackPhase.PENDING &&
+                    (isActivityActive || it.mediaState.allowBackgroundPlayback)
+            }
             .forEach { host -> startPendingPlayback(host, "audio focus") }
         refreshFrameScheduling()
     }
@@ -1316,6 +1379,23 @@ class ErikaFlutterPlugin :
             frameScheduled = true
             choreographer.postFrameCallback(frameCallback)
         }
+    }
+
+    private fun performBackgroundPlaybackTick(@Suppress("UNUSED_PARAMETER") timeSeconds: Double) {
+        if (isActivityActive) {
+            return
+        }
+        players.values.toList()
+            .filter {
+                it.mediaState.allowBackgroundPlayback &&
+                    it.playbackPhase == AndroidPlaybackPhase.PLAYING
+            }
+            .forEach { host ->
+                runCatching { host.audioOnlyTick() }
+                    .onSuccess { response -> reportRenderResponse(host, response) }
+                    .onFailure { error -> reportRenderException(host, error) }
+            }
+        players.values.toList().forEach(::drainEvents)
     }
 
     private fun cancelFrameCallback() {
@@ -1464,12 +1544,78 @@ class ErikaFlutterPlugin :
                 )
             }
             latestPlaybackState = updatedPlaybackState(latestPlaybackState, event)
+            host.updateMediaState(event)
             enqueuePendingEvent(host, AndroidPendingEvent.Success(event))
         }
         latestPlaybackState?.let { state ->
             observeNativePlaybackState(host, state)
         }
+        if (activeMediaPlayerId == host.handle) {
+            mediaSession.update(host.mediaState)
+        }
         flushPendingEvents(host)
+    }
+
+    private fun setMediaMetadata(arguments: Map<String, Any?>, result: MethodChannel.Result) {
+        val host = player(arguments)
+        host.setMediaMetadata(androidMediaMetadata(arguments))
+        if (activeMediaPlayerId == host.handle) {
+            mediaSession.update(host.mediaState)
+        }
+        result.success(null)
+    }
+
+    private fun setSystemMediaNavigation(
+        arguments: Map<String, Any?>,
+        result: MethodChannel.Result,
+    ) {
+        val host = player(arguments)
+        host.setSystemMediaNavigation(arguments)
+        if (activeMediaPlayerId == host.handle) {
+            mediaSession.update(host.mediaState)
+        }
+        result.success(null)
+    }
+
+    private fun emitSystemMediaNavigation(playerId: Long, navigation: String) {
+        val host = players[playerId] ?: return
+        val event = systemMediaNavigationEvent(host.mediaState, navigation) ?: return
+        enqueuePendingEvent(host, AndroidPendingEvent.Success(event))
+        flushPendingEvents(host)
+    }
+
+    private fun performSystemMediaCommand(
+        playerId: Long,
+        method: String,
+        arguments: Map<String, Any?> = emptyMap(),
+    ) {
+        val host = players[playerId] ?: return
+        if (method == "play") {
+            if (!host.mediaState.canPlay(isActivityActive)) {
+                return
+            }
+            host.requestPlayback()
+            val granted = runCatching { audioFocus.request() }.getOrNull()
+            if (granted != AudioFocusGrant.GRANTED) {
+                return
+            }
+        } else if (method in PLAYBACK_INTENT_CANCEL_METHODS) {
+            host.cancelPlaybackIntent()
+        }
+        runCatching { host.invoke(method, arguments) }
+            .onSuccess { response ->
+                if (response.ok && method == "play") {
+                    host.playbackStarted()
+                    activeMediaPlayerId = host.handle
+                    ErikaMediaCommandReceiver.activate(this)
+                }
+                drainEvents(host)
+                if (activeMediaPlayerId == host.handle) {
+                    mediaSession.update(host.mediaState)
+                }
+                refreshFrameScheduling()
+            }
+            .onFailure { error -> Log.e(TAG, "System media $method threw", error) }
     }
 
     private fun observeNativePlaybackState(host: AndroidPlayerHost, state: Int) {

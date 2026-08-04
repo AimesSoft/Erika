@@ -60,6 +60,21 @@ void main() {
     await player.dispose();
   });
 
+  test('background playback is opt-in at player creation', () async {
+    final player = ErikaPlayer(allowBackgroundPlayback: true);
+
+    expect(await player.ensureCreated(), 7);
+
+    final createCall = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'create',
+    );
+    expect(createCall.arguments, <String, Object?>{
+      'allowBackgroundPlayback': true,
+    });
+
+    await player.dispose();
+  });
+
   test('open forwards HTTP headers without exposing them elsewhere', () async {
     final player = ErikaPlayer();
 
@@ -73,6 +88,7 @@ void main() {
       'playerId': 7,
       'uri': 'https://example.test/video.mkv',
       'httpHeaders': <String, String>{'Authorization': 'Bearer secret'},
+      'metadata': null,
     });
     await player.dispose();
   });
@@ -149,10 +165,12 @@ void main() {
     expect(openCalls[0].arguments, <String, Object?>{
       'playerId': 7,
       'uri': 'https://example.test/null.mkv',
+      'metadata': null,
     });
     expect(openCalls[1].arguments, <String, Object?>{
       'playerId': 7,
       'uri': 'https://example.test/empty.mkv',
+      'metadata': null,
     });
 
     await player.dispose();
@@ -181,6 +199,69 @@ void main() {
         'X-Empty': '',
         'X-Request-ID': 'request-123',
       },
+      'metadata': null,
+    });
+
+    await player.dispose();
+  });
+
+  test('media metadata is forwarded for system now playing info', () async {
+    final player = ErikaPlayer();
+    final artwork = Uint8List.fromList(<int>[1, 2, 3, 4]);
+    final metadata = ErikaMediaMetadata(
+      title: 'Episode 1',
+      artist: 'Erika',
+      album: 'Season 1',
+      artwork: artwork,
+    );
+
+    await player.open('https://example.test/video.mkv', metadata: metadata);
+    await player.setMediaMetadata(metadata);
+
+    final openCall = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'open',
+    );
+    expect(openCall.arguments, <String, Object?>{
+      'playerId': 7,
+      'uri': 'https://example.test/video.mkv',
+      'metadata': <String, Object>{
+        'title': 'Episode 1',
+        'artist': 'Erika',
+        'album': 'Season 1',
+        'artwork': artwork,
+      },
+    });
+    final metadataCall = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'setMediaMetadata',
+    );
+    expect(metadataCall.arguments, <String, Object?>{
+      'playerId': 7,
+      'metadata': <String, Object>{
+        'title': 'Episode 1',
+        'artist': 'Erika',
+        'album': 'Season 1',
+        'artwork': artwork,
+      },
+    });
+
+    await player.dispose();
+  });
+
+  test('system media navigation capabilities are forwarded', () async {
+    final player = ErikaPlayer();
+
+    await player.setSystemMediaNavigation(
+      previousEnabled: true,
+      nextEnabled: false,
+    );
+
+    final call = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'setSystemMediaNavigation',
+    );
+    expect(call.arguments, <String, Object?>{
+      'playerId': 7,
+      'previousEnabled': true,
+      'nextEnabled': false,
     });
 
     await player.dispose();
@@ -1540,4 +1621,30 @@ void main() {
       expect(event.message, contains('audio_output_changed'));
     },
   );
+
+  test('player event parses kind 13 system media navigation request', () {
+    expect(ErikaEventKind.systemMediaNavigationRequested.index, 13);
+    final nextEvent = ErikaPlayerEvent.fromMap(<String, Object?>{
+      'playerId': 7,
+      'kind': 13,
+      'navigation': 'next',
+    });
+    final previousEvent = ErikaPlayerEvent.fromMap(<String, Object?>{
+      'playerId': 7,
+      'kind': 13.0,
+      'navigation': 'previous',
+    });
+    final unknownEvent = ErikaPlayerEvent.fromMap(<String, Object?>{
+      'playerId': 7,
+      'kind': 13,
+      'navigation': 'later',
+    });
+
+    expect(nextEvent.kind, ErikaEventKind.systemMediaNavigationRequested);
+    expect(nextEvent.systemMediaCommand, ErikaSystemMediaCommand.next);
+    expect(previousEvent.kind, ErikaEventKind.systemMediaNavigationRequested);
+    expect(previousEvent.systemMediaCommand, ErikaSystemMediaCommand.previous);
+    expect(unknownEvent.kind, ErikaEventKind.systemMediaNavigationRequested);
+    expect(unknownEvent.systemMediaCommand, isNull);
+  });
 }

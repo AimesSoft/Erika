@@ -34,6 +34,22 @@ void main() {
     });
   }
 
+  test('tvOS exposes Now Playing metadata and remote commands', () {
+    final plugin = File(
+      'tvos/Classes/ErikaFlutterPlugin.swift',
+    ).readAsStringSync();
+    final podspec = File(
+      'tvos/erika_flutter.podspec',
+    ).readAsStringSync();
+
+    expect(plugin, contains('import MediaPlayer'));
+    expect(plugin, contains('MPNowPlayingInfoCenter.default()'));
+    expect(plugin, contains('MPRemoteCommandCenter.shared()'));
+    expect(plugin, contains('case "setMediaMetadata"'));
+    expect(plugin, contains('case "setSystemMediaNavigation"'));
+    expect(podspec, contains('-framework MediaPlayer'));
+  });
+
   test('release builds complete Apple XCFrameworks on macOS 26', () {
     final workflow = File(
       '../../.github/workflows/release.yml',

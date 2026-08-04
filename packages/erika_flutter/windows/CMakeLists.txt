@@ -53,6 +53,8 @@ endif()
 list(APPEND PLUGIN_SOURCES
   "erika_flutter_plugin.cpp"
   "erika_flutter_plugin.h"
+  "erika_windows_smtc.cpp"
+  "erika_windows_smtc.h"
 )
 
 add_library(${PLUGIN_NAME} SHARED
@@ -76,7 +78,7 @@ target_include_directories(${PLUGIN_NAME} PRIVATE
   "${ERIKA_REPO_ROOT}/crates/erika_capi/include")
 target_compile_definitions(${PLUGIN_NAME} PRIVATE
   ERIKA_REPO_ROOT_PATH="${ERIKA_REPO_ROOT}")
-target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
+target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin runtimeobject windowsapp shcore shlwapi)
 
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
 set(ERIKA_WINDOWS_ARCH "" CACHE STRING

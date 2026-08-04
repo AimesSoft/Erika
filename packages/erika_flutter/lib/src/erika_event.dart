@@ -23,6 +23,12 @@ enum ErikaEventKind {
   trackSelectionChanged,
   videoDecoderChanged,
   audioOutputChanged,
+  systemMediaNavigationRequested,
+}
+
+enum ErikaSystemMediaCommand {
+  previous,
+  next,
 }
 
 enum ErikaTrackKind {
@@ -374,6 +380,7 @@ class ErikaPlayerEvent {
     this.message,
     this.decoder,
     this.audio,
+    this.systemMediaCommand,
   });
 
   factory ErikaPlayerEvent.fromMap(Map<dynamic, dynamic> map) {
@@ -405,6 +412,11 @@ class ErikaPlayerEvent {
           ErikaAudioOutputInfo.fromMap(value),
         _ => null,
       },
+      systemMediaCommand: switch (map['navigation']) {
+        'previous' => ErikaSystemMediaCommand.previous,
+        'next' => ErikaSystemMediaCommand.next,
+        _ => null,
+      },
     );
   }
 
@@ -423,6 +435,7 @@ class ErikaPlayerEvent {
   final String? message;
   final ErikaVideoDecoderInfo? decoder;
   final ErikaAudioOutputInfo? audio;
+  final ErikaSystemMediaCommand? systemMediaCommand;
 
   static int _asInt(Object? value) {
     if (value is int) {

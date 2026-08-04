@@ -689,6 +689,7 @@ pub struct PlaybackSession {
     audio_resampler: Option<AudioResampler>,
     audio_output: PcmFormat,
     audio_output_active: bool,
+    video_decode_suspended: bool,
     info: OpenedMediaInfo,
     video_frames: VecDeque<DecodedVideoFrame>,
     audio_frames: VecDeque<PcmAudioFrame>,
@@ -1126,6 +1127,7 @@ impl PlaybackSession {
             audio_resampler: None,
             audio_output: config.audio_output,
             audio_output_active: true,
+            video_decode_suspended: false,
             info,
             video_frames: VecDeque::new(),
             audio_frames: VecDeque::new(),
@@ -1206,6 +1208,38 @@ impl PlaybackSession {
         self.video_frames.clear();
         self.pending_video_packets.clear();
         discarded
+    }
+
+    fn set_video_decode_suspended(&mut self, suspended: bool) {
+        if self.video_decode_suspended == suspended {
+            return;
+        }
+        self.video_decode_suspended = suspended;
+        let discarded = self.discard_video_frames_and_packets();
+        trace_discarded_playback_queues(
+            if suspended {
+                "video_decode_suspend"
+            } else {
+                "video_decode_resume"
+            },
+            discarded,
+            self.video_decoder.is_some(),
+        );
+        self.reset_video_packet_stall_state();
+        if !suspended {
+            if let Some(decoder) = &mut self.video_decoder {
+                decoder.flush();
+            }
+            self.video_fallback_waiting_for_keyframe = self.video_decoder.is_some();
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "video_decoder_recovery_waiting_for_keyframe",
+                    "stage": "foreground_resume",
+                    "backend": self.active_video_decoder_backend().map(DecoderBackend::as_str),
+                })
+                .to_string(),
+            );
+        }
     }
 
     fn selected_video_codec(&self) -> Option<String> {
@@ -1980,10 +2014,10 @@ impl PlaybackSession {
     }
 
     fn pump_once(&mut self, demand: PlaybackPumpDemand) -> Result<bool> {
-        if self.route_pending_video_packets()? {
+        if !self.video_decode_suspended && self.route_pending_video_packets()? {
             return Ok(true);
         }
-        if !self.pending_video_packets.is_empty() {
+        if !self.video_decode_suspended && !self.pending_video_packets.is_empty() {
             return Ok(false);
         }
         if audio_queue_blocks_demux(
@@ -2017,6 +2051,9 @@ impl PlaybackSession {
             .as_ref()
             .is_some_and(|decoder| packet.stream_index() == decoder.stream_index())
         {
+            if self.video_decode_suspended {
+                return Ok(());
+            }
             if self.should_defer_video_packet() {
                 self.pending_video_packets.push_back(packet);
                 return Ok(());
@@ -2765,11 +2802,13 @@ impl PlaybackSession {
         }
 
         let mut made_progress = false;
-        while self.route_pending_video_packets()? {
-            made_progress = true;
-        }
-        if !self.pending_video_packets.is_empty() {
-            return Ok(made_progress);
+        if !self.video_decode_suspended {
+            while self.route_pending_video_packets()? {
+                made_progress = true;
+            }
+            if !self.pending_video_packets.is_empty() {
+                return Ok(made_progress);
+            }
         }
 
         self.eof_drain_polls = self.eof_drain_polls.saturating_add(1);
@@ -2779,7 +2818,7 @@ impl PlaybackSession {
         if let Some(decoder) = self
             .video_decoder
             .as_mut()
-            .filter(|decoder| !decoder.is_end_of_stream())
+            .filter(|decoder| !self.video_decode_suspended && !decoder.is_end_of_stream())
         {
             if !decoder.eof_sent() {
                 match decoder.send_eof() {
@@ -2812,10 +2851,11 @@ impl PlaybackSession {
             self.eof_drain_last_progress_at = Some(now);
         }
 
-        let video_complete = self
-            .video_decoder
-            .as_ref()
-            .is_none_or(Decoder::is_end_of_stream);
+        let video_complete = self.video_decode_suspended
+            || self
+                .video_decoder
+                .as_ref()
+                .is_none_or(Decoder::is_end_of_stream);
         let audio_complete = self
             .audio_decoder
             .as_ref()
@@ -3696,6 +3736,32 @@ pub struct VideoPlaybackEngine {
     video_seek_preroll_started_at: Option<Instant>,
     video_seek_preroll_dropped_frames: u64,
     last_video_seek_preroll_log: Option<Instant>,
+}
+
+impl VideoPlaybackEngine {
+    pub fn set_video_decode_suspended(&mut self, suspended: bool) -> Result<()> {
+        let resume_position = (!suspended).then(|| self.media_time_at(Instant::now()));
+        if suspended {
+            self.pending_frame = None;
+        }
+        if let Some(position) = resume_position {
+            self.session.video_decode_suspended = false;
+            self.session.seek_with_decoder_flush(position, true, true)?;
+        } else {
+            self.session.set_video_decode_suspended(true);
+        }
+        if !suspended {
+            self.pending_frame = None;
+            self.pending_audio = None;
+            self.pending_subtitle = None;
+            self.last_presented_pts = None;
+            self.waiting_for_first_frame = true;
+            self.video_seek_floor = resume_position;
+            self.audio_seek_floor = resume_position;
+            self.reset_video_seek_preroll_budget(Instant::now());
+        }
+        Ok(())
+    }
 }
 
 unsafe impl Send for VideoPlaybackEngine {}
@@ -5381,6 +5447,38 @@ mod tests {
         assert_eq!(engine.info().selected_video_track, Some(0));
         assert_eq!(engine.info().selected_audio_track, Some(1));
         engine
+    }
+
+    #[test]
+    fn audio_only_mode_discards_video_packets_and_resumes_at_keyframe() {
+        let mut engine = playback_fixture_engine();
+        let started_at = Instant::now();
+        engine.play_at(started_at);
+        engine.set_video_decode_suspended(true).unwrap();
+
+        let deadline = Instant::now() + FIXTURE_WAIT_TIMEOUT;
+        let mut decoded_audio_frames = 0;
+        while decoded_audio_frames < 80 {
+            if engine.next_audio_frame().unwrap().is_some() {
+                decoded_audio_frames += 1;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out pumping audio-only playback"
+            );
+            thread::yield_now();
+        }
+
+        assert!(engine.session.video_frames.is_empty());
+        assert!(engine.session.pending_video_packets.is_empty());
+        assert!(engine.session.video_decode_suspended);
+
+        engine.set_video_decode_suspended(false).unwrap();
+
+        assert!(!engine.session.video_decode_suspended);
+        assert!(engine.session.video_fallback_waiting_for_keyframe);
+        let _ = next_fixture_video_at(&mut engine, started_at);
+        assert!(!engine.session.video_fallback_waiting_for_keyframe);
     }
 
     fn next_fixture_video_at(engine: &mut VideoPlaybackEngine, now: Instant) -> TimedVideoFrame {

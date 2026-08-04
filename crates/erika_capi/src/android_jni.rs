@@ -637,6 +637,23 @@ pub extern "system" fn Java_dev_aimesoft_erika_1flutter_ErikaNative_nativeRender
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_aimesoft_erika_1flutter_ErikaNative_nativeAudioOnlyTick(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jstring {
+    let response = catch_unwind(AssertUnwindSafe(|| {
+        with_registered_presenter(handle, "audioOnlyTick", |presenter| {
+            let mut stats = ErikaPresenterStats::default();
+            call_status(unsafe { erika_presenter_audio_only_tick(presenter.handle, &mut stats) })?;
+            presenter.latest_stats = stats;
+            Ok(stats_to_json(stats))
+        })
+    }));
+    response_to_jstring(&mut env, response)
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_aimesoft_erika_1flutter_ErikaNative_nativePollEvent(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,

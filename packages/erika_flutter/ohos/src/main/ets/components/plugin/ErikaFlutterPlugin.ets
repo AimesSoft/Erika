@@ -1,4 +1,6 @@
 import {
+  AbilityAware,
+  AbilityPluginBinding,
   EventChannel,
   EventSink,
   FlutterPlugin,
@@ -10,6 +12,9 @@ import {
   StandardMethodCodec,
   SurfaceTextureEntry,
 } from '@ohos/flutter_ohos';
+import { common, UIAbility } from '@kit.AbilityKit';
+import { avSession } from '@kit.AVSessionKit';
+import { image } from '@kit.ImageKit';
 import erikaNative from 'liberika_flutter.so';
 
 interface NativeResponse {
@@ -28,17 +33,53 @@ interface ErikaTexture {
   playerId: number;
 }
 
+interface ErikaMediaMetadata {
+  title: string;
+  artist?: string;
+  album?: string;
+  artwork?: Uint8Array;
+}
+
+interface ErikaMediaState {
+  playbackState: number;
+  positionMicros: number;
+  durationMicros: number;
+  playbackRate: number;
+}
+
+interface ErikaMediaNavigation {
+  previousEnabled: boolean;
+  nextEnabled: boolean;
+}
+
 const PLAYER_CHANNEL: string = 'erika_flutter/player';
 const EVENT_CHANNEL: string = 'erika_flutter/events';
 const FRAME_INTERVAL_MS: number = 16;
+const STATE_CHANGED_EVENT_KIND: number = 1;
+const DURATION_CHANGED_EVENT_KIND: number = 2;
+const POSITION_CHANGED_EVENT_KIND: number = 3;
+const SYSTEM_MEDIA_NAVIGATION_EVENT_KIND: number = 13;
+const PLAYING_STATE: number = 3;
+const PAUSED_STATE: number = 4;
+const STOPPED_STATE: number = 5;
+const CLOSED_STATE: number = 6;
+const ERROR_STATE: number = 7;
 
-export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHandler {
+export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHandler, AbilityAware {
   private binding: FlutterPluginBinding | null = null;
+  private ability: UIAbility | null = null;
   private methodChannel: MethodChannel | null = null;
   private eventChannel: EventChannel | null = null;
   private eventSink: EventSink | null = null;
   private players: Set<number> = new Set();
   private textures: Map<number, ErikaTexture> = new Map();
+  private mediaMetadata: Map<number, ErikaMediaMetadata> = new Map();
+  private mediaStates: Map<number, ErikaMediaState> = new Map();
+  private mediaNavigation: Map<number, ErikaMediaNavigation> = new Map();
+  private currentPlayerId: number = 0;
+  private currentSession: avSession.AVSession | null = null;
+  private sessionPromise: Promise<avSession.AVSession | null> | null = null;
+  private sessionGeneration: number = 0;
   private frameTimer: number = -1;
 
   getUniqueClassName(): string {
@@ -84,12 +125,26 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
       erikaNative.nativeDestroy(playerId);
     });
     this.players.clear();
+    this.mediaMetadata.clear();
+    this.mediaStates.clear();
+    this.mediaNavigation.clear();
+    this.currentPlayerId = 0;
+    this.destroyAVSession();
     this.methodChannel?.setMethodCallHandler(null);
     this.eventChannel?.setStreamHandler(null);
     this.methodChannel = null;
     this.eventChannel = null;
     this.eventSink = null;
     this.binding = null;
+  }
+
+  onAttachedToAbility(binding: AbilityPluginBinding): void {
+    this.ability = binding.getAbility();
+  }
+
+  onDetachedFromAbility(): void {
+    this.ability = null;
+    this.destroyAVSession();
   }
 
   onMethodCall(call: MethodCall, result: MethodResult): void {
@@ -126,6 +181,18 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
       this.captureFrame(args, result);
       return;
     }
+    if (call.method === 'setMediaMetadata') {
+      this.setMediaMetadata(args, result);
+      return;
+    }
+    if (call.method === 'setSystemMediaNavigation') {
+      this.setSystemMediaNavigation(args, result);
+      return;
+    }
+    if (call.method === 'open') {
+      this.openPlayer(args, result);
+      return;
+    }
     if (call.method === 'registerSubtitleMemoryFont') {
       this.registerSubtitleMemoryFont(args, result);
       return;
@@ -156,6 +223,16 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
       return;
     }
     this.players.add(playerId);
+    this.mediaStates.set(playerId, {
+      playbackState: 0,
+      positionMicros: 0,
+      durationMicros: 0,
+      playbackRate: 1.0,
+    });
+    this.mediaNavigation.set(playerId, {
+      previousEnabled: false,
+      nextEnabled: false,
+    });
     result.success(playerId);
   }
 
@@ -170,7 +247,90 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
     if (this.players.delete(playerId)) {
       erikaNative.nativeDestroy(playerId);
     }
+    this.mediaMetadata.delete(playerId);
+    this.mediaStates.delete(playerId);
+    this.mediaNavigation.delete(playerId);
+    if (this.currentPlayerId === playerId) {
+      this.currentPlayerId = 0;
+      this.deactivateAVSession();
+    }
     result.success(null);
+  }
+
+  private openPlayer(args: Map<string, ESObject>, result: MethodResult): void {
+    const metadataValue = args.get('metadata');
+    let metadata: ErikaMediaMetadata | null = null;
+    if (metadataValue !== undefined && metadataValue !== null) {
+      metadata = this.parseMediaMetadata(metadataValue);
+      if (metadata === null) {
+        result.error('INVALID_ARGUMENT', 'metadata.title is required', null);
+        return;
+      }
+    }
+    const playerId = this.numberArg(args, 'playerId', 0);
+    const nativeArgs = new Map<string, ESObject>(args);
+    nativeArgs.delete('metadata');
+    if (!this.invokePlayerNative('open', nativeArgs, result)) {
+      return;
+    }
+    const state = this.mediaStates.get(playerId);
+    if (state !== undefined) {
+      state.playbackState = 0;
+      state.positionMicros = 0;
+      state.durationMicros = 0;
+    }
+    if (metadata !== null) {
+      this.mediaMetadata.set(playerId, metadata);
+      if (this.currentPlayerId === playerId) {
+        this.publishMediaMetadata(playerId, metadata);
+      }
+    } else {
+      this.mediaMetadata.delete(playerId);
+      if (this.currentPlayerId === playerId) {
+        this.destroyAVSession();
+      }
+    }
+    if (this.currentPlayerId === playerId) {
+      this.publishPlaybackState(playerId);
+    }
+  }
+
+  private setMediaMetadata(args: Map<string, ESObject>, result: MethodResult): void {
+    const playerId = this.numberArg(args, 'playerId', 0);
+    if (!this.players.has(playerId)) {
+      result.error('ERIKA_ERROR', 'Unknown Erika player ' + playerId, null);
+      return;
+    }
+    const metadata = this.parseMediaMetadata(args.get('metadata'));
+    if (metadata === null) {
+      result.error('INVALID_ARGUMENT', 'metadata.title is required', null);
+      return;
+    }
+    this.mediaMetadata.set(playerId, metadata);
+    result.success(null);
+    if (this.currentPlayerId === playerId) {
+      this.publishMediaMetadata(playerId, metadata);
+    }
+  }
+
+  private setSystemMediaNavigation(
+    args: Map<string, ESObject>,
+    result: MethodResult,
+  ): void {
+    const playerId = this.numberArg(args, 'playerId', 0);
+    if (!this.players.has(playerId)) {
+      result.error('ERIKA_ERROR', 'Unknown Erika player ' + playerId, null);
+      return;
+    }
+    this.mediaNavigation.set(playerId, {
+      previousEnabled: args.get('previousEnabled') === true,
+      nextEnabled: args.get('nextEnabled') === true,
+    });
+    result.success(null);
+    const metadata = this.mediaMetadata.get(playerId);
+    if (metadata !== undefined && this.currentPlayerId === playerId) {
+      this.publishMediaMetadata(playerId, metadata);
+    }
   }
 
   private createTexture(args: Map<string, ESObject>, result: MethodResult): void {
@@ -320,10 +480,35 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
     args: Map<string, ESObject>,
     result: MethodResult,
   ): void {
+    if (!this.invokePlayerNative(method, args, result)) {
+      return;
+    }
+    const playerId = this.numberArg(args, 'playerId', 0);
+    if (method === 'play') {
+      this.currentPlayerId = playerId;
+      const metadata = this.mediaMetadata.get(playerId);
+      if (metadata !== undefined) {
+        this.publishMediaMetadata(playerId, metadata);
+      }
+      this.publishPlaybackState(playerId);
+    } else if (method === 'setPlaybackRate') {
+      const state = this.mediaStates.get(playerId);
+      if (state !== undefined) {
+        state.playbackRate = this.numberArg(args, 'rate', 1.0);
+      }
+      this.publishPlaybackState(playerId);
+    }
+  }
+
+  private invokePlayerNative(
+    method: string,
+    args: Map<string, ESObject>,
+    result: MethodResult,
+  ): boolean {
     const playerId = this.numberArg(args, 'playerId', 0);
     if (!this.players.has(playerId)) {
       result.error('ERIKA_ERROR', 'Unknown Erika player ' + playerId, null);
-      return;
+      return false;
     }
     const argumentsJson = JSON.stringify(this.mapToObject(args));
     const raw = erikaNative.nativeInvoke(playerId, method, argumentsJson) as string;
@@ -334,10 +519,239 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
         response.error ?? ('Erika native method failed with status ' + response.status),
         response,
       );
-      return;
+      return false;
     }
     result.success(response.value ?? null);
     this.drainEvents(playerId);
+    return true;
+  }
+
+  private parseMediaMetadata(value: ESObject): ErikaMediaMetadata | null {
+    if (!(value instanceof Map)) {
+      return null;
+    }
+    const metadata = value as Map<string, ESObject>;
+    const titleValue = metadata.get('title');
+    if (typeof titleValue !== 'string' || titleValue.length === 0) {
+      return null;
+    }
+    const parsed: ErikaMediaMetadata = { title: titleValue };
+    const artist = metadata.get('artist');
+    const album = metadata.get('album');
+    const artwork = metadata.get('artwork');
+    if (typeof artist === 'string') {
+      parsed.artist = artist;
+    }
+    if (typeof album === 'string') {
+      parsed.album = album;
+    }
+    if (artwork instanceof Uint8Array) {
+      parsed.artwork = artwork;
+    }
+    return parsed;
+  }
+
+  private async ensureAVSession(): Promise<avSession.AVSession | null> {
+    if (this.currentSession !== null) {
+      return this.currentSession;
+    }
+    if (this.sessionPromise !== null) {
+      return this.sessionPromise;
+    }
+    const context = this.ability?.context as common.UIAbilityContext | undefined;
+    if (context === undefined) {
+      return null;
+    }
+    const generation = this.sessionGeneration;
+    const promise = this.createAVSession(context, generation);
+    this.sessionPromise = promise;
+    const session = await promise;
+    if (this.sessionPromise === promise) {
+      this.sessionPromise = null;
+    }
+    return session;
+  }
+
+  private async createAVSession(
+    context: common.UIAbilityContext,
+    generation: number,
+  ): Promise<avSession.AVSession | null> {
+    let session: avSession.AVSession | null = null;
+    try {
+      session = await avSession.createAVSession(context, 'ErikaVideoPlayer', 'video');
+      if (generation !== this.sessionGeneration || this.ability?.context !== context) {
+        await session.destroy().catch((): void => {});
+        return null;
+      }
+      this.registerAVSessionCommands(session);
+      await session.activate();
+      if (generation !== this.sessionGeneration || this.ability?.context !== context) {
+        await session.destroy().catch((): void => {});
+        return null;
+      }
+      this.currentSession = session;
+      return session;
+    } catch (_) {
+      await session?.destroy().catch((): void => {});
+      return null;
+    }
+  }
+
+  private registerAVSessionCommands(session: avSession.AVSession): void {
+    session.on('play', (): void => this.invokeFromAVSession('play'));
+    session.on('pause', (): void => this.invokeFromAVSession('pause'));
+    session.on('stop', (): void => this.invokeFromAVSession('stop'));
+    session.on('seek', (time: number): void => {
+      this.invokeFromAVSession('seek', new Map<string, ESObject>([
+        ['positionMicros', time * 1000],
+      ]));
+    });
+    session.on('playPrevious', (): void => this.emitSystemMediaNavigation('previous'));
+    session.on('playNext', (): void => this.emitSystemMediaNavigation('next'));
+  }
+
+  private emitSystemMediaNavigation(navigation: string): void {
+    const playerId = this.currentPlayerId;
+    const capabilities = this.mediaNavigation.get(playerId);
+    const enabled = navigation === 'previous'
+      ? capabilities?.previousEnabled === true
+      : capabilities?.nextEnabled === true;
+    if (!this.players.has(playerId) || !enabled) {
+      return;
+    }
+    this.eventSink?.success({
+      playerId: playerId,
+      kind: SYSTEM_MEDIA_NAVIGATION_EVENT_KIND,
+      navigation: navigation,
+    });
+  }
+
+  private invokeFromAVSession(method: string, extra?: Map<string, ESObject>): void {
+    const playerId = this.currentPlayerId;
+    if (!this.players.has(playerId)) {
+      return;
+    }
+    const args = extra ?? new Map<string, ESObject>();
+    args.set('playerId', playerId);
+    const raw = erikaNative.nativeInvoke(
+      playerId,
+      method,
+      JSON.stringify(this.mapToObject(args)),
+    ) as string;
+    const response = JSON.parse(raw) as NativeResponse;
+    if (response.ok) {
+      this.drainEvents(playerId);
+    }
+  }
+
+  private async publishMediaMetadata(
+    playerId: number,
+    metadata: ErikaMediaMetadata,
+  ): Promise<void> {
+    const session = await this.ensureAVSession();
+    if (session === null || this.currentPlayerId !== playerId ||
+      this.mediaMetadata.get(playerId) !== metadata) {
+      return;
+    }
+    const avMetadata: avSession.AVMetadata = {
+      assetId: 'erika-' + playerId,
+      title: metadata.title,
+    };
+    const capabilities = this.mediaNavigation.get(playerId);
+    if (capabilities?.previousEnabled === true) {
+      avMetadata.previousAssetId = 'erika-previous-' + playerId;
+    }
+    if (capabilities?.nextEnabled === true) {
+      avMetadata.nextAssetId = 'erika-next-' + playerId;
+    }
+    if (metadata.artist !== undefined) {
+      avMetadata.artist = metadata.artist;
+    }
+    if (metadata.album !== undefined) {
+      avMetadata.album = metadata.album;
+    }
+    let mediaImage: image.PixelMap | null = null;
+    if (metadata.artwork !== undefined) {
+      let source: image.ImageSource | null = null;
+      try {
+        const bytes = metadata.artwork;
+        const artwork = new Uint8Array(bytes.byteLength);
+        artwork.set(bytes);
+        source = image.createImageSource(artwork.buffer as ArrayBuffer);
+        mediaImage = await source.createPixelMap();
+        avMetadata.mediaImage = mediaImage;
+      } catch (_) {
+      } finally {
+        await source?.release().catch((): void => {});
+      }
+    }
+    const state = this.mediaStates.get(playerId);
+    if (state !== undefined && state.durationMicros > 0) {
+      avMetadata.duration = state.durationMicros / 1000.0;
+    }
+    if (this.currentPlayerId !== playerId || this.mediaMetadata.get(playerId) !== metadata) {
+      await mediaImage?.release().catch((): void => {});
+      return;
+    }
+    await session.setAVMetadata(avMetadata).catch((): void => {});
+    await mediaImage?.release().catch((): void => {});
+  }
+
+  private async publishPlaybackState(playerId: number): Promise<void> {
+    const mediaState = this.mediaStates.get(playerId);
+    if (mediaState === undefined || this.currentPlayerId !== playerId) {
+      return;
+    }
+    const session = await this.ensureAVSession();
+    if (session === null || this.currentPlayerId !== playerId) {
+      return;
+    }
+    await session.activate().catch((): void => {});
+    await session.setAVPlaybackState({
+      state: this.avPlaybackState(mediaState.playbackState),
+      speed: mediaState.playbackState === PLAYING_STATE ? mediaState.playbackRate : 0,
+      position: {
+        elapsedTime: mediaState.positionMicros / 1000.0,
+        updateTime: Date.now(),
+      },
+      duration: mediaState.durationMicros / 1000.0,
+    }).catch((): void => {});
+    if (mediaState.playbackState === CLOSED_STATE || mediaState.playbackState === ERROR_STATE) {
+      this.deactivateAVSession();
+    }
+  }
+
+  private avPlaybackState(state: number): avSession.PlaybackState {
+    if (state === PLAYING_STATE) {
+      return avSession.PlaybackState.PLAYBACK_STATE_PLAY;
+    }
+    if (state === PAUSED_STATE) {
+      return avSession.PlaybackState.PLAYBACK_STATE_PAUSE;
+    }
+    if (state === STOPPED_STATE) {
+      return avSession.PlaybackState.PLAYBACK_STATE_STOP;
+    }
+    if (state === CLOSED_STATE) {
+      return avSession.PlaybackState.PLAYBACK_STATE_RELEASED;
+    }
+    if (state === ERROR_STATE) {
+      return avSession.PlaybackState.PLAYBACK_STATE_ERROR;
+    }
+    return avSession.PlaybackState.PLAYBACK_STATE_PREPARE;
+  }
+
+  private deactivateAVSession(): void {
+    this.sessionGeneration += 1;
+    this.sessionPromise = null;
+    this.currentSession?.deactivate().catch((): void => {});
+  }
+
+  private destroyAVSession(): void {
+    const session = this.currentSession;
+    this.sessionGeneration += 1;
+    this.currentSession = null;
+    this.sessionPromise = null;
+    session?.destroy().catch((): void => {});
   }
 
   private registerSubtitleMemoryFont(
@@ -401,7 +815,41 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
       }
       const event: ESObject = response.value;
       event.playerId = playerId;
+      this.observeMediaEvent(playerId, event);
       sink.success(event);
+    }
+  }
+
+  private observeMediaEvent(playerId: number, event: ESObject): void {
+    const mediaState = this.mediaStates.get(playerId);
+    if (mediaState === undefined) {
+      return;
+    }
+    const kind = typeof event.kind === 'number' ? event.kind as number : 0;
+    if (kind === STATE_CHANGED_EVENT_KIND) {
+      mediaState.playbackState = typeof event.state === 'number'
+        ? event.state as number
+        : mediaState.playbackState;
+    }
+    if (kind === POSITION_CHANGED_EVENT_KIND && typeof event.positionMicros === 'number') {
+      mediaState.positionMicros = Math.max(0, event.positionMicros as number);
+    }
+    if ((kind === DURATION_CHANGED_EVENT_KIND || kind === STATE_CHANGED_EVENT_KIND) &&
+      typeof event.durationMicros === 'number') {
+      mediaState.durationMicros = Math.max(0, event.durationMicros as number);
+    }
+    if (this.currentPlayerId !== playerId) {
+      return;
+    }
+    if (kind === DURATION_CHANGED_EVENT_KIND) {
+      const metadata = this.mediaMetadata.get(playerId);
+      if (metadata !== undefined) {
+        this.publishMediaMetadata(playerId, metadata);
+      }
+    }
+    if (kind === STATE_CHANGED_EVENT_KIND || kind === DURATION_CHANGED_EVENT_KIND ||
+      kind === POSITION_CHANGED_EVENT_KIND) {
+      this.publishPlaybackState(playerId);
     }
   }
 

@@ -4,6 +4,20 @@
 
 ## 0.1.5 - 2026-08-03
 
+### System media controls and background audio
+
+- Added Now Playing metadata, playback state, timeline, play/pause/seek, and
+  previous/next navigation controls across iOS, tvOS, macOS, Android, Windows,
+  and OpenHarmony.
+- Added opt-in background audio playback for iOS and Android while suspending
+  video decoding, with bounded playback-worker barriers so lifecycle callbacks
+  cannot block an application thread indefinitely.
+- Cleared stale metadata when opening media without `ErikaMediaMetadata`, made
+  pause/play sequencing deterministic, and isolated Android media callbacks
+  across multiple Flutter engines.
+- Cached Android artwork and avoided rebuilding media notifications when native
+  playback state has not changed.
+
 ### Platform support and release artifacts
 
 - Added the tvOS Flutter plugin and native target support for Apple TV devices
