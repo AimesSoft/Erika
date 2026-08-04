@@ -2,12 +2,13 @@ name: Release
 
 # Build prebuilt erika_capi bundles and attach them to a GitHub Release.
 #
-# Trigger: push a tag like `v0.1.4` to publish. Use the manual "Run workflow"
+# Trigger: push a tag like `v0.1.5` to publish. Use the manual "Run workflow"
 # button (workflow_dispatch) to dry-run the builds without publishing (the
 # publish job is gated on a tag ref).
 #
 # Bundles (per platform): liberika_capi.{dylib,a} / erika_capi.dll + libs /
-# erika_capi.xcframework / Android ABI archives / OpenHarmony shared libraries,
+# iOS/tvOS erika_capi.xcframework bundles / Android ABI archives /
+# OpenHarmony shared libraries,
 # plus erika.h, LICENSE (MPL-2.0), and THIRD_PARTY_NOTICES.md. Native deps
 # (FFmpeg/libass/...) are statically linked via the `lgpl` profile.
 #
@@ -26,7 +27,6 @@ permissions:
 
 env:
   PROFILE: lgpl
-  IPHONEOS_DEPLOYMENT_TARGET: "13.0"
   ANDROID_API_LEVEL: "26"
   ANDROID_NDK_VERSION: "29.0.14206865"
   CARGO_TERM_COLOR: always
@@ -37,18 +37,18 @@ jobs:
     name: macOS ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: arm64
-            host_arch: arm64
             target: aarch64-apple-darwin
-            runner: macos-15
+            runner: macos-26
           - arch: x64
-            host_arch: x86_64
             target: x86_64-apple-darwin
-            runner: macos-15-intel
+            runner: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -63,7 +63,6 @@ jobs:
           key: native-v2-macos-${{ matrix.target }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
       - name: Build native deps + erika_capi
         run: |
-          test "$(uname -m)" = "${{ matrix.host_arch }}"
           cargo run -p xtask -- deps build --all --profile "$PROFILE" --target "${{ matrix.target }}"
           ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="${{ matrix.target }}" \
             cargo build -p erika_capi --release --target "${{ matrix.target }}"
@@ -89,7 +88,7 @@ jobs:
   macos-universal:
     name: macOS universal
     needs: macos
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -118,8 +117,12 @@ jobs:
 
   ios:
     name: iOS (XCFramework)
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 180
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: "13.0"
+      LANG: C
+      LC_ALL: C
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -137,7 +140,17 @@ jobs:
         # staticlib via `cargo rustc --crate-type staticlib` so the cdylib link
         # (which iOS does not use and which fails to resolve here) is skipped.
         run: |
-          for T in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
+          set -euo pipefail
+          for ENTRY in \
+            "aarch64-apple-ios|iphoneos|arm64-apple-ios${IPHONEOS_DEPLOYMENT_TARGET}" \
+            "aarch64-apple-ios-sim|iphonesimulator|arm64-apple-ios${IPHONEOS_DEPLOYMENT_TARGET}-simulator" \
+            "x86_64-apple-ios|iphonesimulator|x86_64-apple-ios${IPHONEOS_DEPLOYMENT_TARGET}-simulator"
+          do
+            IFS='|' read -r T SDK CLANG_TARGET <<< "$ENTRY"
+            SDKROOT="$(xcrun --sdk "$SDK" --show-sdk-path)"
+            BINDGEN_KEY="${T//-/_}"
+            export SDKROOT
+            export "BINDGEN_EXTRA_CLANG_ARGS_${BINDGEN_KEY}=--target=${CLANG_TARGET} -isysroot ${SDKROOT}"
             cargo run -p xtask -- deps build --all --profile "$PROFILE" --target "$T"
             ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
             cargo rustc -p erika_capi --lib --release --target "$T" \
@@ -163,6 +176,67 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: erika-capi-ios
+          path: dist/*.zip
+
+  tvos:
+    name: tvOS (XCFramework)
+    runs-on: macos-26
+    timeout-minutes: 240
+    env:
+      TVOS_DEPLOYMENT_TARGET: "13.0"
+      LANG: C
+      LC_ALL: C
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - name: Install native build tools
+        run: brew install nasm meson ninja pkg-config
+      - name: Cache native dependencies
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: native-v2-tvos-release-all-min${{ env.TVOS_DEPLOYMENT_TARGET }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
+      - name: Build native deps + erika_capi (device + simulators)
+        run: |
+          set -euo pipefail
+          for ENTRY in \
+            "aarch64-apple-tvos|appletvos|arm64-apple-tvos${TVOS_DEPLOYMENT_TARGET}" \
+            "aarch64-apple-tvos-sim|appletvsimulator|arm64-apple-tvos${TVOS_DEPLOYMENT_TARGET}-simulator" \
+            "x86_64-apple-tvos|appletvsimulator|x86_64-apple-tvos${TVOS_DEPLOYMENT_TARGET}-simulator"
+          do
+            IFS='|' read -r T SDK CLANG_TARGET <<< "$ENTRY"
+            SDKROOT="$(xcrun --sdk "$SDK" --show-sdk-path)"
+            BINDGEN_KEY="${T//-/_}"
+            export SDKROOT
+            export "BINDGEN_EXTRA_CLANG_ARGS_${BINDGEN_KEY}=--target=${CLANG_TARGET} -isysroot ${SDKROOT}"
+            cargo run --locked -p xtask -- deps build --all \
+              --profile "$PROFILE" --target "$T"
+            ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
+              cargo +nightly rustc -Z build-std=std,panic_abort --locked \
+                -p erika_capi --lib --release --target "$T" \
+                --no-default-features --features libass --crate-type staticlib
+          done
+      - name: Assemble XCFramework
+        run: |
+          mkdir -p out hdr
+          cp crates/erika_capi/include/erika.h hdr/erika.h
+          lipo -create \
+            target/aarch64-apple-tvos-sim/release/liberika_capi.a \
+            target/x86_64-apple-tvos/release/liberika_capi.a \
+            -output out/liberika_capi-sim.a
+          xcodebuild -create-xcframework \
+            -library target/aarch64-apple-tvos/release/liberika_capi.a -headers hdr \
+            -library out/liberika_capi-sim.a -headers hdr \
+            -output out/erika_capi.xcframework
+      - name: Package
+        run: |
+          bash packaging/bundle.sh erika-capi-tvos \
+            dist/erika-capi-tvos.zip out/erika_capi.xcframework
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erika-capi-tvos
           path: dist/*.zip
 
   windows:
@@ -449,7 +523,7 @@ jobs:
 
   release:
     name: Publish Release
-    needs: [macos, macos-universal, ios, windows, android, openharmony]
+    needs: [macos, macos-universal, ios, tvos, windows, android, openharmony]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -466,8 +540,8 @@ jobs:
           body: |
             Prebuilt `erika_capi` C ABI bundles (static `lgpl` profile),
             for macOS arm64, macOS x64, macOS universal, Windows x64,
-            Windows ARM64, iOS, and Android arm64-v8a, armeabi-v7a, x86_64,
-            and x86, plus OpenHarmony arm64.
+            Windows ARM64, iOS, tvOS, and Android arm64-v8a, armeabi-v7a,
+            x86_64, and x86, plus OpenHarmony arm64.
 
             Each archive contains the library, `include/erika.h`, `LICENSE`
             (MPL-2.0), and `THIRD_PARTY_NOTICES.md`. See

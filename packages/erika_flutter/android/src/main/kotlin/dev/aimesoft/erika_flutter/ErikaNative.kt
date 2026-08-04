@@ -25,6 +25,9 @@ internal object ErikaNative {
     ): String
 
     @JvmStatic
+    external fun nativeRegisterSubtitleMemoryFont(handle: Long, data: ByteArray): String
+
+    @JvmStatic
     external fun nativeAttachSurface(
         handle: Long,
         surface: Surface,

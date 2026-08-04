@@ -1,119 +1,131 @@
-import AppKit
-import CoreVideo
 import Darwin
-import FlutterMacOS
-import Metal
+import AVFoundation
+import Flutter
 import MediaPlayer
+import Metal
 import ObjectiveC.runtime
 import QuartzCore
+import UIKit
 
 private let erikaWindowHostedVideoSurfaceId: Int64 = -1
 private let erikaDebugLabelsEnabled =
   ProcessInfo.processInfo.environment["ERIKA_DEBUG_LABELS"] == "1"
-private let erikaWindowOverlayTraceEnabled =
-  ProcessInfo.processInfo.environment["ERIKA_WINDOW_OVERLAY_TRACE"] == "1"
-private let erikaDefaultDisplayFps = 60.0
-private let erikaDisplayFpsEpsilon = 0.5
 
-private func erikaWindowOverlayTrace(_ message: @autoclosure () -> String) {
-  guard erikaWindowOverlayTraceEnabled else {
-    return
-  }
-  NSLog("[ErikaWindowOverlay] %@", message())
+private func erikaHdrWrite(_ message: String) {
+  fputs("ErikaHDR[tvOS]: \(message)\n", stderr)
+  fflush(stderr)
 }
 
-/// Drives rendering from the display's vertical refresh instead of a main-run-loop
-/// `Timer`. The callback stays coalesced while a render is in progress so a slow
-/// `CAMetalLayer.nextDrawable()` cannot build up timer callbacks and then replay
-/// them in a burst.
-private final class ErikaDisplayLinkDriver {
-  private let onTick: () -> Void
-  private let stateLock = NSLock()
-  private var displayLink: CVDisplayLink?
-  private var tickQueued = false
-  private var invalidated = false
+private func erikaHdrLog(_ enabled: Bool, _ message: String) {
+  if enabled {
+    erikaHdrWrite(message)
+  }
+}
 
-  init?(displayID: CGDirectDisplayID, onTick: @escaping () -> Void) {
-    self.onTick = onTick
+private func erikaHdrEnvironmentEnabled() -> Bool {
+  guard let value = ProcessInfo.processInfo.environment["ERIKA_HDR_DEBUG"] else {
+    return false
+  }
+  switch value.lowercased() {
+  case "1", "true", "yes", "on":
+    return true
+  default:
+    return false
+  }
+}
 
-    var link: CVDisplayLink?
-    guard CVDisplayLinkCreateWithCGDisplay(displayID, &link) == kCVReturnSuccess,
-          let link else {
-      return nil
+private func erikaOutputModeLabel(_ config: ErikaPresenterConfigC) -> String {
+  config.outputMode == 1
+    ? String(format: "AppleEdr(headroom=%.2f)", config.edrHeadroom)
+    : "Sdr"
+}
+
+private func erikaScreenSummary(_ screen: UIScreen?) -> String {
+  guard let screen else {
+    return "screen=nil"
+  }
+  var parts = [
+    "scale=\(screen.scale)",
+    "nativeScale=\(screen.nativeScale)",
+    "gamut=\(screen.traitCollection.displayGamut.rawValue)",
+  ]
+  if #available(tvOS 16.0, *) {
+    parts.append("currentEDR=\(String(format: "%.3f", screen.currentEDRHeadroom))")
+    parts.append("potentialEDR=\(String(format: "%.3f", screen.potentialEDRHeadroom))")
+  }
+  return parts.joined(separator: " ")
+}
+
+private func erikaLayerValue(_ layer: CAMetalLayer, selector name: String) -> String {
+  let selector = Selector(name)
+  guard layer.responds(to: selector) else {
+    return "unavailable"
+  }
+  return String(describing: layer.value(forKey: name) ?? "nil")
+}
+
+private func erikaConfigureLayerDynamicRange(_ layer: CAMetalLayer, config: ErikaPresenterConfigC) {
+  if config.outputMode == 1 {
+    layer.contentsFormat = .RGBA16Float
+    if #available(tvOS 18.0, *) {
+      layer.toneMapMode = .ifSupported
     }
-    displayLink = link
-
-    let status = CVDisplayLinkSetOutputCallback(
-      link,
-      { _, _, _, _, _, context in
-        guard let context else {
-          return kCVReturnError
-        }
-        let driver = Unmanaged<ErikaDisplayLinkDriver>
-          .fromOpaque(context)
-          .takeUnretainedValue()
-        driver.displayDidRefresh()
-        return kCVReturnSuccess
-      },
-      Unmanaged.passUnretained(self).toOpaque()
-    )
-    guard status == kCVReturnSuccess else {
-      displayLink = nil
-      return nil
+    if #available(tvOS 26.0, *) {
+      layer.preferredDynamicRange = .high
+      layer.contentsHeadroom = CGFloat(max(config.edrHeadroom, 1.0))
+    }
+  } else {
+    layer.contentsFormat = .RGBA8Uint
+    if #available(tvOS 18.0, *) {
+      layer.toneMapMode = .automatic
+    }
+    if #available(tvOS 26.0, *) {
+      layer.preferredDynamicRange = .standard
+      layer.contentsHeadroom = 0.0
     }
   }
+}
 
-  deinit {
-    invalidate()
+private func erikaLayerSummary(_ layer: CAMetalLayer) -> String {
+  let wantsEDR = "unavailable"
+  let toneMapMode: String
+  if #available(tvOS 18.0, *) {
+    toneMapMode = String(describing: layer.toneMapMode)
+  } else {
+    toneMapMode = "unavailable"
   }
-
-  func start() -> Bool {
-    guard let displayLink else {
-      return false
-    }
-    return CVDisplayLinkStart(displayLink) == kCVReturnSuccess
+  let preferredDynamicRange: String
+  if #available(tvOS 26.0, *) {
+    preferredDynamicRange = String(describing: layer.preferredDynamicRange)
+  } else {
+    preferredDynamicRange = "unavailable"
   }
-
-  func invalidate() {
-    stateLock.lock()
-    invalidated = true
-    stateLock.unlock()
-
-    if let displayLink, CVDisplayLinkIsRunning(displayLink) {
-      CVDisplayLinkStop(displayLink)
-    }
-    displayLink = nil
+  let contentsHeadroom: String
+  if #available(tvOS 26.0, *) {
+    contentsHeadroom = String(format: "%.3f", layer.contentsHeadroom)
+  } else {
+    contentsHeadroom = "unavailable"
   }
+  let colorSpace = layer.colorspace?.name.map { String(describing: $0) } ?? "nil"
+  return [
+    "pixelFormat=\(layer.pixelFormat.rawValue)",
+    "drawable=\(Int(layer.drawableSize.width))x\(Int(layer.drawableSize.height))",
+    "framebufferOnly=\(layer.framebufferOnly)",
+    "opaque=\(layer.isOpaque)",
+    "contentsFormat=\(layer.contentsFormat)",
+    "wantsEDR=\(wantsEDR)",
+    "toneMapMode=\(toneMapMode)",
+    "preferredDynamicRange=\(preferredDynamicRange)",
+    "contentsHeadroom=\(contentsHeadroom)",
+    "edrMetadata=\(erikaLayerValue(layer, selector: "EDRMetadata"))",
+    "colorspace=\(colorSpace)",
+  ].joined(separator: " ")
+}
 
-  private func displayDidRefresh() {
-    stateLock.lock()
-    guard !invalidated, !tickQueued else {
-      stateLock.unlock()
-      return
-    }
-    tickQueued = true
-    stateLock.unlock()
-
-    DispatchQueue.main.async { [weak self] in
-      guard let self else {
-        return
-      }
-
-      self.stateLock.lock()
-      let shouldRender = !self.invalidated
-      self.stateLock.unlock()
-
-      if shouldRender {
-        self.onTick()
-      }
-
-      // Keep tickQueued set throughout onTick(). Any display refresh received
-      // while Metal is blocked is deliberately dropped rather than replayed.
-      self.stateLock.lock()
-      self.tickQueued = false
-      self.stateLock.unlock()
-    }
-  }
+private struct ErikaTrackSelectionC {
+  var video: Int64 = -1
+  var audio: Int64 = -1
+  var subtitle: Int64 = -1
 }
 
 private struct ErikaVideoParamsC {
@@ -127,12 +139,6 @@ private struct ErikaTrackCountsC {
   var video: UInt32 = 0
   var audio: UInt32 = 0
   var subtitle: UInt32 = 0
-}
-
-private struct ErikaTrackSelectionC {
-  var video: Int64 = -1
-  var audio: Int64 = -1
-  var subtitle: Int64 = -1
 }
 
 private struct ErikaTrackInfoC {
@@ -282,9 +288,10 @@ private struct ErikaOutputStatusC {
   var extendedLinearFrames: UInt64 = 0
 }
 
+private let erikaDefaultDisplayFps = 60
+
 private struct ErikaDanmakuConfigC {
   var enabled: UInt8 = 1
-  // NipaPlay/Flutter logical font size; Erika applies the surface scale internally.
   var fontSize: Float = 30.0
   var opacity: Float = 1.0
   var displayArea: Float = 1.0
@@ -323,13 +330,13 @@ private enum ErikaPluginError: Error, CustomStringConvertible {
   case viewNotFound(Int64)
   case overlayNotAvailable
   case presenterCreateFailed
-  case erikaStatus(String, Int32)
+  case erikaStatus(String, Int32, String?)
   case libraryLoadFailed(String, String?)
 
   var description: String {
     switch self {
     case .libraryNotFound(let paths):
-      return "Unable to load liberika_capi.dylib. Tried: \(paths.joined(separator: ", "))"
+      return "Unable to load Erika C ABI. Tried: \(paths.joined(separator: ", "))"
     case .symbolMissing(let symbol):
       return "Missing Erika C ABI symbol: \(symbol)"
     case .httpHeadersUnsupported:
@@ -344,7 +351,10 @@ private enum ErikaPluginError: Error, CustomStringConvertible {
       return "No window-hosted Erika overlay is available."
     case .presenterCreateFailed:
       return "erika_presenter_create returned null."
-    case .erikaStatus(let operation, let status):
+    case .erikaStatus(let operation, let status, let detail):
+      if let detail, !detail.isEmpty {
+        return "\(operation) failed with ErikaStatus \(status): \(detail)"
+      }
       return "\(operation) failed with ErikaStatus \(status)."
     case .libraryLoadFailed(let path, let detail):
       if let detail, !detail.isEmpty {
@@ -356,11 +366,6 @@ private enum ErikaPluginError: Error, CustomStringConvertible {
 }
 
 private final class ErikaNativeLibrary {
-  // This symbol was added after ErikaTrackInfo gained its extended media
-  // metadata fields. Loading an older dylib with the current Swift struct
-  // would use a different record stride and corrupt the following pointers.
-  private static let currentTrackInfoAbiSymbol = "erika_presenter_get_output_status"
-
   typealias CreateFn = @convention(c) () -> UnsafeMutableRawPointer?
   typealias CreateWithOutputModeFn = @convention(c) (Int32, Float) -> UnsafeMutableRawPointer?
   typealias DestroyFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
@@ -493,10 +498,16 @@ private final class ErikaNativeLibrary {
   let stringFree: StringFreeFn
 
   private let libraryHandle: UnsafeMutableRawPointer
+  let path: String
 
   private init() throws {
     let loaded = try Self.openLibrary()
     libraryHandle = loaded.handle
+    path = loaded.path
+    erikaHdrLog(
+      erikaHdrEnvironmentEnabled(),
+      "loaded native library from \(path)"
+    )
 
     create = try Self.load("erika_presenter_create", from: libraryHandle, as: CreateFn.self)
     createWithOutputMode = Self.loadOptional("erika_presenter_create_with_output_mode", from: libraryHandle, as: CreateWithOutputModeFn.self)
@@ -555,95 +566,45 @@ private final class ErikaNativeLibrary {
     stringFree = try Self.load("erika_string_free", from: libraryHandle, as: StringFreeFn.self)
   }
 
-  deinit {
-    dlclose(libraryHandle)
-  }
-
   private static func openLibrary() throws -> (handle: UnsafeMutableRawPointer, path: String) {
-    let environment = ProcessInfo.processInfo.environment
-    let bundle = Bundle(for: ErikaFlutterPlugin.self)
-    var candidates: [String] = []
+    var failures: [ErikaPluginError] = []
+    if let handle = dlopen(nil, RTLD_NOW), dlsym(handle, "erika_presenter_create") != nil {
+      return (handle, "main executable")
+    }
 
-    if let explicitPath = environment["ERIKA_CAPI_DYLIB"], !explicitPath.isEmpty {
-      candidates.append(explicitPath)
+    var candidates: [String] = []
+    let environment = ProcessInfo.processInfo.environment
+    if let override = environment["ERIKA_CAPI_DYLIB"], !override.isEmpty {
+      candidates.append(override)
     }
-    // CocoaPods builds the dylib inside the plugin framework. Prefer that
-    // freshly built copy over an app-level dylib that may be left behind by an
-    // older build.
-    if let appFrameworksPath = Bundle.main.privateFrameworksPath {
-      candidates.append(
-        URL(fileURLWithPath: appFrameworksPath)
-          .appendingPathComponent(
-            "erika_flutter.framework/Versions/A/Frameworks/liberika_capi.dylib"
-          )
-          .path
-      )
-    }
-    if let pluginExecutablePath = bundle.executablePath {
-      candidates.append(
-        URL(fileURLWithPath: pluginExecutablePath)
-          .deletingLastPathComponent()
-          .appendingPathComponent("Frameworks/liberika_capi.dylib")
-          .path
-      )
-    }
-    if let pluginFrameworksPath = bundle.privateFrameworksPath {
-      candidates.append(
-        URL(fileURLWithPath: pluginFrameworksPath)
-          .appendingPathComponent("liberika_capi.dylib")
-          .path
-      )
+    let bundle = Bundle(for: ErikaFlutterPlugin.self)
+    if let pluginExecutable = bundle.executablePath {
+      candidates.append(pluginExecutable)
     }
     if let resourcePath = bundle.path(forResource: "liberika_capi", ofType: "dylib") {
       candidates.append(resourcePath)
     }
-    if let frameworkPath = Bundle.main.privateFrameworksPath {
-      candidates.append(URL(fileURLWithPath: frameworkPath).appendingPathComponent("liberika_capi.dylib").path)
+    if let frameworksPath = Bundle.main.privateFrameworksPath {
+      candidates.append(URL(fileURLWithPath: frameworksPath).appendingPathComponent("liberika_capi.dylib").path)
     }
     if let executablePath = Bundle.main.executablePath {
       let executableDirectory = URL(fileURLWithPath: executablePath).deletingLastPathComponent().path
       candidates.append(URL(fileURLWithPath: executableDirectory).appendingPathComponent("liberika_capi.dylib").path)
     }
-    if let sourceTreePath = Self.sourceTreeDebugLibraryPath() {
-      candidates.append(sourceTreePath)
-    }
-    candidates.append("liberika_capi.dylib")
 
-    var failures: [ErikaPluginError] = []
     for path in candidates {
       if let handle = dlopen(path, RTLD_NOW | RTLD_LOCAL) {
-        guard dlsym(handle, currentTrackInfoAbiSymbol) != nil else {
-          dlclose(handle)
-          failures.append(
-            .libraryLoadFailed(
-              path,
-              "incompatible Erika C ABI: missing \(currentTrackInfoAbiSymbol)"
-            )
-          )
-          continue
+        if dlsym(handle, "erika_presenter_create") != nil {
+          return (handle, path)
         }
-        NSLog("ErikaFlutterPlugin: loaded Erika C API from \(path)")
-        return (handle, path)
+        dlclose(handle)
+        failures.append(.libraryLoadFailed(path, "erika_presenter_create not found"))
+        continue
       }
       let detail = dlerror().map { String(cString: $0) }
       failures.append(.libraryLoadFailed(path, detail))
     }
     throw ErikaPluginError.libraryNotFound(failures.map(String.init(describing:)))
-  }
-
-  fileprivate static func sourceTreeDebugLibraryPath() -> String? {
-    let sourceFile = URL(fileURLWithPath: #filePath)
-    let erikaRoot = sourceFile
-      .deletingLastPathComponent() // Classes
-      .deletingLastPathComponent() // macos
-      .deletingLastPathComponent() // erika_flutter
-      .deletingLastPathComponent() // packages
-      .deletingLastPathComponent() // Erika repo root
-    return erikaRoot
-      .appendingPathComponent("target")
-      .appendingPathComponent("debug")
-      .appendingPathComponent("liberika_capi.dylib")
-      .path
   }
 
   private static func load<T>(_ symbol: String, from handle: UnsafeMutableRawPointer, as type: T.Type) throws -> T {
@@ -682,14 +643,13 @@ private final class ErikaPlayerHost {
   private let library: ErikaNativeLibrary
   private let handle: UnsafeMutableRawPointer
   private weak var attachedView: ErikaMetalSurfaceView?
-  private var attachedViewId: Int64?
-  private var displayLinkDriver: ErikaDisplayLinkDriver?
-  private var displayLinkDisplayID: CGDirectDisplayID?
-  private var displayConfigurationObservers: [NSObjectProtocol] = []
-  private var displayTimer: Timer?
-  private var displayTimerFps: Double = 0.0
+  private var displayLink: CADisplayLink?
+  private var displayLinkProxy: DisplayLinkProxy?
   private var startTimeSeconds: CFTimeInterval = CACurrentMediaTime()
   private var currentDanmakuConfig = ErikaDanmakuConfigC()
+  private let hdrDebug: Bool
+  private let presenterConfig: ErikaPresenterConfigC
+  private var loggedFirstRenderedVideoFrame = false
   private var latestPresenterStats = ErikaPresenterStatsC()
   private(set) var nowPlayingTitle = ""
   private(set) var nowPlayingArtist: String?
@@ -698,41 +658,34 @@ private final class ErikaPlayerHost {
   private(set) var durationSeconds: Double?
   private(set) var positionSeconds = 0.0
   private(set) var playbackRate = 1.0
-  private(set) var playbackState = 0
-  private var positionUpdateTime = ProcessInfo.processInfo.systemUptime
+  private(set) var isPlaying = false
   var onNowPlayingChanged: ((ErikaPlayerHost) -> Void)?
 
-  var isPlaying: Bool { playbackState == 3 }
-
-  var isStopped: Bool { playbackState == 5 || playbackState == 6 || playbackState == 7 }
-
-  var nowPlayingPositionSeconds: Double {
-    guard isPlaying else { return positionSeconds }
-    return positionSeconds +
-      max(0, ProcessInfo.processInfo.systemUptime - positionUpdateTime) * playbackRate
-  }
-
-  init(id: Int64, library: ErikaNativeLibrary, config: ErikaPresenterConfigC) throws {
+  init(id: Int64, library: ErikaNativeLibrary, config: ErikaPresenterConfigC, hdrDebug: Bool) throws {
     self.id = id
     self.library = library
+    self.hdrDebug = hdrDebug
+    presenterConfig = config
     guard let handle = library.createPresenter(config: config) else {
       throw ErikaPluginError.presenterCreateFailed
     }
     self.handle = handle
-    refreshDanmakuConfigSnapshot()
+    erikaHdrLog(
+      hdrDebug,
+      "created presenter player=\(id) mode=\(erikaOutputModeLabel(config)) library=\(library.path) createWithOutputMode=\(library.createWithOutputMode != nil)"
+    )
   }
 
   deinit {
-    stopDisplayDriver()
+    displayLink?.invalidate()
     _ = library.detachSurface(handle)
     library.destroy(handle)
   }
 
   func open(uri: String, httpHeaders: [String: String]) throws {
-    playbackState = 0
+    isPlaying = false
     positionSeconds = 0
     durationSeconds = nil
-    positionUpdateTime = ProcessInfo.processInfo.systemUptime
     if nowPlayingTitle.isEmpty {
       let fallbackTitle = URL(string: uri)?.lastPathComponent.removingPercentEncoding
         ?? URL(fileURLWithPath: uri).lastPathComponent
@@ -759,30 +712,38 @@ private final class ErikaPlayerHost {
         try check(openWithHeaders(handle, cString, buffer.baseAddress.map(UnsafeRawPointer.init), UInt(headers.count)), operation: "open")
       }
     }
-    onNowPlayingChanged?(self)
+    notifyNowPlayingChanged()
   }
 
   func play() throws {
+    try configureAudioSessionForPlayback()
     try check(library.play(handle), operation: "play")
+    isPlaying = true
+    notifyNowPlayingChanged()
   }
-
   func pause() throws {
     try check(library.pause(handle), operation: "pause")
+    isPlaying = false
+    notifyNowPlayingChanged()
   }
-
   func stop() throws {
     try check(library.stop(handle), operation: "stop")
+    isPlaying = false
+    positionSeconds = 0
+    notifyNowPlayingChanged()
   }
-
   func close() throws {
     try check(library.close(handle), operation: "close")
+    isPlaying = false
+    positionSeconds = 0
+    durationSeconds = nil
+    notifyNowPlayingChanged()
   }
 
   func seek(positionMicros: UInt64) throws {
     try check(library.seek(handle, positionMicros), operation: "seek")
     positionSeconds = Double(positionMicros) / 1_000_000
-    positionUpdateTime = ProcessInfo.processInfo.systemUptime
-    onNowPlayingChanged?(self)
+    notifyNowPlayingChanged()
   }
 
   func setPlaybackRate(_ rate: Double) throws {
@@ -790,16 +751,14 @@ private final class ErikaPlayerHost {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_playback_rate")
     }
     try check(setRate(handle, rate), operation: "set_playback_rate")
-    positionSeconds = nowPlayingPositionSeconds
-    positionUpdateTime = ProcessInfo.processInfo.systemUptime
     playbackRate = rate
-    onNowPlayingChanged?(self)
+    notifyNowPlayingChanged()
   }
 
   func setMediaMetadata(title: String, artist: String?, album: String?, artworkData: Data?) throws {
     let artwork: MPMediaItemArtwork?
     if let artworkData {
-      guard let image = NSImage(data: artworkData) else {
+      guard let image = UIImage(data: artworkData) else {
         throw ErikaPluginError.invalidArguments("metadata.artwork must contain a supported image.")
       }
       artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
@@ -810,7 +769,7 @@ private final class ErikaPlayerHost {
     nowPlayingArtist = artist
     nowPlayingAlbum = album
     nowPlayingArtwork = artwork
-    onNowPlayingChanged?(self)
+    notifyNowPlayingChanged()
   }
 
   func clearMediaMetadata() {
@@ -818,7 +777,7 @@ private final class ErikaPlayerHost {
     nowPlayingArtist = nil
     nowPlayingAlbum = nil
     nowPlayingArtwork = nil
-    onNowPlayingChanged?(self)
+    notifyNowPlayingChanged()
   }
 
   func setVolume(_ volume: Double) throws {
@@ -928,31 +887,55 @@ private final class ErikaPlayerHost {
   }
 
   func registerSubtitleMemoryFont(_ data: Data) throws -> UInt64 {
-    guard let register = library.registerSubtitleMemoryFont else { throw ErikaPluginError.symbolMissing("erika_presenter_register_subtitle_memory_font") }
+    guard let register = library.registerSubtitleMemoryFont else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_register_subtitle_memory_font")
+    }
     var fontId: UInt64 = 0
-    let status = data.withUnsafeBytes { register(handle, $0.bindMemory(to: UInt8.self).baseAddress, UInt(data.count), &fontId) }
+    let status = data.withUnsafeBytes { bytes in
+      register(handle, bytes.bindMemory(to: UInt8.self).baseAddress, UInt(data.count), &fontId)
+    }
     try check(status, operation: "register_subtitle_memory_font")
     return fontId
   }
 
   func selectSubtitleMemoryFonts(_ fontIds: [UInt64]) throws {
-    guard let select = library.selectSubtitleMemoryFonts else { throw ErikaPluginError.symbolMissing("erika_presenter_select_subtitle_memory_fonts") }
-    try fontIds.withUnsafeBufferPointer { try check(select(handle, $0.baseAddress, UInt($0.count)), operation: "select_subtitle_memory_fonts") }
+    guard let select = library.selectSubtitleMemoryFonts else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_select_subtitle_memory_fonts")
+    }
+    try fontIds.withUnsafeBufferPointer { buffer in
+      try check(select(handle, buffer.baseAddress, UInt(buffer.count)), operation: "select_subtitle_memory_fonts")
+    }
   }
 
   func clearSubtitleMemoryFonts() throws {
-    guard let clear = library.clearSubtitleMemoryFonts else { throw ErikaPluginError.symbolMissing("erika_presenter_clear_subtitle_memory_fonts") }
+    guard let clear = library.clearSubtitleMemoryFonts else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_clear_subtitle_memory_fonts")
+    }
     try check(clear(handle), operation: "clear_subtitle_memory_fonts")
   }
 
   func subtitleMemoryFontStatus() throws -> [String: Any] {
-    guard let getStatus = library.getSubtitleMemoryFontStatus else { throw ErikaPluginError.symbolMissing("erika_presenter_get_subtitle_memory_font_status") }
+    guard let getStatus = library.getSubtitleMemoryFontStatus else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_get_subtitle_memory_font_status")
+    }
     var status = ErikaSubtitleMemoryFontStatusC()
     defer {
-      if let freeStatus = library.freeSubtitleMemoryFontStatus { withUnsafeMutablePointer(to: &status) { freeStatus(UnsafeMutableRawPointer($0)) } }
+      if let freeStatus = library.freeSubtitleMemoryFontStatus {
+        withUnsafeMutablePointer(to: &status) { freeStatus(UnsafeMutableRawPointer($0)) }
+      }
     }
-    try withUnsafeMutablePointer(to: &status) { try check(getStatus(handle, UnsafeMutableRawPointer($0)), operation: "get_subtitle_memory_font_status") }
-    return ["registeredCount": Int(status.registeredCount), "registeredBytes": Int(status.registeredBytes), "selectedCount": Int(status.selectedCount), "generation": Int64(clamping: status.generation), "selectedIds": status.selectedIds.map { pointer in (0..<Int(status.selectedCount)).map { Int64(clamping: pointer[$0]) } } ?? []]
+    try withUnsafeMutablePointer(to: &status) { pointer in
+      try check(getStatus(handle, UnsafeMutableRawPointer(pointer)), operation: "get_subtitle_memory_font_status")
+    }
+    return [
+      "registeredCount": Int(status.registeredCount),
+      "registeredBytes": Int(status.registeredBytes),
+      "selectedCount": Int(status.selectedCount),
+      "generation": Int64(clamping: status.generation),
+      "selectedIds": status.selectedIds.map { pointer in
+        (0..<Int(status.selectedCount)).map { Int64(clamping: pointer[$0]) }
+      } ?? [],
+    ]
   }
 
   func outputStatus() throws -> [String: Any] {
@@ -974,19 +957,13 @@ private final class ErikaPlayerHost {
   func addExternalSubtitle(uri: String) throws -> Int64 {
     var trackId: Int64 = 0
     try uri.withCString { cString in
-      try check(
-        library.addExternalSubtitle(handle, cString, &trackId),
-        operation: "add_external_subtitle"
-      )
+      try check(library.addExternalSubtitle(handle, cString, &trackId), operation: "add_external_subtitle")
     }
     return trackId
   }
 
   func removeSubtitleTrack(trackId: Int64) throws {
-    try check(
-      library.removeSubtitleTrack(handle, trackId),
-      operation: "remove_subtitle_track"
-    )
+    try check(library.removeSubtitleTrack(handle, trackId), operation: "remove_subtitle_track")
   }
 
   func loadDanmakuFile(uri: String) throws {
@@ -1069,9 +1046,7 @@ private final class ErikaPlayerHost {
     }
     var count: Int = 0
     try check(danmakuTracks(handle, nil, 0, &count), operation: "danmaku_tracks_len")
-    if count <= 0 {
-      return []
-    }
+    if count <= 0 { return [] }
     var tracks = Array(repeating: ErikaDanmakuTrackInfoC(), count: count)
     var written: Int = 0
     let status = tracks.withUnsafeMutableBufferPointer { buffer in
@@ -1144,10 +1119,8 @@ private final class ErikaPlayerHost {
     guard let setFont = library.setDanmakuFont else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_danmaku_font")
     }
-    let family = family ?? ""
-    let filePath = filePath ?? ""
-    let status = withOptionalCString(family) { familyCString in
-      withOptionalCString(filePath) { filePathCString in
+    let status = withOptionalCString(family ?? "") { familyCString in
+      withOptionalCString(filePath ?? "") { filePathCString in
         setFont(handle, familyCString, filePathCString)
       }
     }
@@ -1166,29 +1139,17 @@ private final class ErikaPlayerHost {
   }
 
   func selectAudioTrack(trackId: Int64?) throws {
-    try check(
-      library.selectAudioTrack(handle, trackId ?? -1),
-      operation: "select_audio_track"
-    )
+    try check(library.selectAudioTrack(handle, trackId ?? -1), operation: "select_audio_track")
   }
 
   func selectSubtitleTrack(trackId: Int64?) throws {
-    try check(
-      library.selectSubtitleTrack(handle, trackId ?? -1),
-      operation: "select_subtitle_track"
-    )
+    try check(library.selectSubtitleTrack(handle, trackId ?? -1), operation: "select_subtitle_track")
   }
 
   func tracks() throws -> [[String: Any]] {
     var count: Int = 0
-    try check(
-      library.tracks(handle, nil, 0, &count),
-      operation: "tracks_len"
-    )
-    if count <= 0 {
-      return []
-    }
-
+    try check(library.tracks(handle, nil, 0, &count), operation: "tracks_len")
+    if count <= 0 { return [] }
     var tracks = Array(repeating: ErikaTrackInfoC(), count: count)
     var written: Int = 0
     let status = tracks.withUnsafeMutableBufferPointer { buffer in
@@ -1243,40 +1204,26 @@ private final class ErikaPlayerHost {
   }
 
   func attach(view: ErikaMetalSurfaceView) throws {
-    // Moving the surface between windows re-attaches an already running
-    // player. Only a genuinely new attachment restarts the host clock; a
-    // migration must not rewind the timeline the engine is already on.
-    let isReattach = attachedView != nil
     attachedView = view
-    attachedViewId = view.platformViewId
     view.attachedPlayerId = id
-    erikaWindowOverlayTrace(
-      "attach player=\(id) surface=\(view.platformViewId) " +
-      "window=\((view as? NSView)?.window?.windowNumber ?? -1) " +
-      "drawable=\(view.metalLayer.drawableSize) reattach=\(isReattach)"
-    )
     try attachOrResize(view: view, attach: true)
-    startDisplayDriverIfNeeded(resetClock: !isReattach)
+    startDisplayLinkIfNeeded()
   }
 
   func detach(viewId: Int64?) {
-    guard viewId == nil || attachedViewId == viewId else {
-      return
-    }
+    guard viewId == nil || attachedView?.platformViewId == viewId else { return }
     attachedView?.attachedPlayerId = nil
     attachedView = nil
-    attachedViewId = nil
-    stopDisplayDriver()
+    displayLink?.invalidate()
+    displayLink = nil
+    displayLinkProxy = nil
     _ = library.detachSurface(handle)
   }
 
   func resizeFromAttachedView() {
-    guard let view = attachedView else {
-      return
-    }
+    guard let view = attachedView else { return }
     do {
       try attachOrResize(view: view, attach: false)
-      startDisplayDriverIfNeeded(resetClock: false)
     } catch {
       NSLog("ErikaFlutterPlugin: resize failed: \(error)")
     }
@@ -1293,6 +1240,15 @@ private final class ErikaPlayerHost {
     } else {
       latestPresenterStats = stats
     }
+    if hdrDebug && !loggedFirstRenderedVideoFrame && stats.renderedVideoFrames > 0 {
+      loggedFirstRenderedVideoFrame = true
+      let layer = attachedView.map { erikaLayerSummary($0.metalLayer) } ?? "layer=nil"
+      let screen = erikaScreenSummary(attachedView?.window?.screen ?? UIScreen.main)
+      erikaHdrLog(
+        true,
+        "first rendered frame player=\(id) mode=\(erikaOutputModeLabel(presenterConfig)) decoded=\(stats.decodedVideoFrames) rendered=\(stats.renderedVideoFrames) test=\(stats.renderedTestFrames) \(screen) \(layer)"
+      )
+    }
     pollEvents(sendEvent: sendEvent)
   }
 
@@ -1303,26 +1259,23 @@ private final class ErikaPlayerHost {
         library.pollEvent(handle, UnsafeMutableRawPointer(pointer))
       }
       if status == 0 {
-        if event.kind == 1 {
-          positionSeconds = nowPlayingPositionSeconds
-          positionUpdateTime = ProcessInfo.processInfo.systemUptime
-          playbackState = Int(event.state)
-          if isStopped {
-            positionSeconds = 0
-          }
-          if playbackState == 6 {
-            durationSeconds = nil
-          }
-        } else if event.kind == 2 {
-          durationSeconds = event.durationMicros >= 0
-            ? Double(event.durationMicros) / 1_000_000
-            : nil
-        } else if event.kind == 3 {
+        if event.durationMicros >= 0 {
+          durationSeconds = Double(event.durationMicros) / 1_000_000
+        }
+        if event.kind == 3 {
           positionSeconds = Double(event.positionMicros) / 1_000_000
-          positionUpdateTime = ProcessInfo.processInfo.systemUptime
+        }
+        if event.kind == 1 {
+          isPlaying = event.state == 3
         }
         if event.kind == 1 || event.kind == 2 || event.kind == 3 {
-          onNowPlayingChanged?(self)
+          notifyNowPlayingChanged()
+        }
+        if event.kind == 6 {
+          erikaHdrLog(
+            hdrDebug,
+            "video params player=\(id) width=\(event.video.width) height=\(event.video.height) primaries=\(event.video.primaries) transfer=\(event.video.transfer)"
+          )
         }
         let message = event.kind == 9 || event.kind == 11 || event.kind == 12
           ? library.currentEventMessage()
@@ -1338,157 +1291,1344 @@ private final class ErikaPlayerHost {
   }
 
   private func attachOrResize(view: ErikaMetalSurfaceView, attach: Bool) throws {
+    erikaConfigureLayerDynamicRange(view.metalLayer, config: presenterConfig)
     view.updateDrawableSize()
     let width = UInt32(max(1.0, view.metalLayer.drawableSize.width).rounded())
     let height = UInt32(max(1.0, view.metalLayer.drawableSize.height).rounded())
-    let scale = view.currentBackingScale
+    let scale = view.currentScale
     if attach {
       let rawLayer = UInt64(UInt(bitPattern: Unmanaged.passUnretained(view.metalLayer).toOpaque()))
-      try check(
-        library.attachMetalLayer(handle, rawLayer, width, height, scale),
-        operation: "attach_metal_layer"
+      try check(library.attachMetalLayer(handle, rawLayer, width, height, scale), operation: "attach_metal_layer")
+      erikaHdrLog(
+        hdrDebug,
+        "attached layer player=\(id) view=\(view.platformViewId) physical=\(width)x\(height) scale=\(String(format: "%.3f", scale)) \(erikaScreenSummary(view.window?.screen ?? UIScreen.main)) \(erikaLayerSummary(view.metalLayer))"
       )
     } else {
-      try check(
-        library.resizeSurface(handle, width, height, scale),
-        operation: "resize_surface"
+      try check(library.resizeSurface(handle, width, height, scale), operation: "resize_surface")
+      erikaHdrLog(
+        hdrDebug,
+        "resized layer player=\(id) view=\(view.platformViewId) physical=\(width)x\(height) scale=\(String(format: "%.3f", scale)) \(erikaLayerSummary(view.metalLayer))"
       )
     }
   }
 
-  private func startDisplayDriverIfNeeded(resetClock: Bool) {
-    if resetClock {
-      startTimeSeconds = CACurrentMediaTime()
+  private func startDisplayLinkIfNeeded() {
+    guard displayLink == nil else { return }
+    startTimeSeconds = CACurrentMediaTime()
+    let proxy = DisplayLinkProxy { [weak self] in
+      self?.renderTick(sendEvent: ErikaFlutterPlugin.sharedEventSink)
     }
-
-    // Keep the explicit FPS override as a diagnostic escape hatch. Normal
-    // playback follows the actual display refresh through CVDisplayLink.
-    if ProcessInfo.processInfo.environment["ERIKA_FLUTTER_TARGET_FPS"] == nil {
-      let displayID = resolvedDisplayID()
-      if displayLinkDriver != nil && displayLinkDisplayID == displayID {
-        return
-      }
-
-      stopDisplayDriver()
-      let driver = ErikaDisplayLinkDriver(displayID: displayID) { [weak self] in
-        guard let self else {
-          return
-        }
-        self.renderTick(sendEvent: ErikaFlutterPlugin.sharedEventSink)
-      }
-      if let driver, driver.start() {
-        displayLinkDriver = driver
-        displayLinkDisplayID = displayID
-        observeDisplayConfigurationChanges()
-        return
-      }
-    }
-
-    startFallbackDisplayTimerIfNeeded()
+    let link = CADisplayLink(target: proxy, selector: #selector(DisplayLinkProxy.tick))
+    link.preferredFramesPerSecond = resolvedDisplayLinkFps()
+    link.add(to: .main, forMode: .common)
+    displayLinkProxy = proxy
+    displayLink = link
   }
 
-  /// Re-targets the display link when the window changes screen, or when the
-  /// screen layout itself changes.
-  ///
-  /// A `CVDisplayLink` is bound to the display it was created for. Without
-  /// this, dragging the window to a second screen keeps it ticking at the old
-  /// refresh rate, and unplugging that screen stops the callbacks entirely —
-  /// with the fallback timer already torn down, rendering would simply stop.
-  private func observeDisplayConfigurationChanges() {
-    guard displayConfigurationObservers.isEmpty else {
-      return
-    }
-    let center = NotificationCenter.default
-    for name in [
-      NSWindow.didChangeScreenNotification,
-      NSApplication.didChangeScreenParametersNotification,
-    ] {
-      let observer = center.addObserver(
-        forName: name,
-        object: nil,
-        queue: .main
-      ) { [weak self] _ in
-        self?.retargetDisplayDriverIfScreenChanged()
-      }
-      displayConfigurationObservers.append(observer)
-    }
+  private func notifyNowPlayingChanged() {
+    onNowPlayingChanged?(self)
   }
 
-  private func retargetDisplayDriverIfScreenChanged() {
-    guard displayLinkDriver != nil else {
-      return
-    }
-    let displayID = resolvedDisplayID()
-    guard displayID != displayLinkDisplayID else {
-      return
-    }
-    // Rebuild on the new display; never reset the host clock, this is not a
-    // new playback session.
-    startDisplayDriverIfNeeded(resetClock: false)
-  }
-
-  private func stopObservingDisplayConfigurationChanges() {
-    for observer in displayConfigurationObservers {
-      NotificationCenter.default.removeObserver(observer)
-    }
-    displayConfigurationObservers.removeAll()
-  }
-
-  private func startFallbackDisplayTimerIfNeeded() {
-    let targetFps = resolvedDisplayTimerFps()
-    if displayTimer != nil && abs(displayTimerFps - targetFps) <= erikaDisplayFpsEpsilon {
-      return
-    }
-    stopDisplayDriver()
-    let timer = Timer(timeInterval: 1.0 / targetFps, repeats: true) { [weak self] _ in
-      guard let self else {
-        return
-      }
-      self.renderTick(sendEvent: ErikaFlutterPlugin.sharedEventSink)
-    }
-    displayTimer = timer
-    displayTimerFps = targetFps
-    RunLoop.main.add(timer, forMode: .common)
-  }
-
-  private func stopDisplayDriver() {
-    stopObservingDisplayConfigurationChanges()
-    displayLinkDriver?.invalidate()
-    displayLinkDriver = nil
-    displayLinkDisplayID = nil
-    displayTimer?.invalidate()
-    displayTimer = nil
-    displayTimerFps = 0.0
-  }
-
-  private func resolvedDisplayID() -> CGDirectDisplayID {
-    let screen = (attachedView as? NSView)?.window?.screen ?? NSScreen.main
-    let screenNumberKey = NSDeviceDescriptionKey("NSScreenNumber")
-    if let number = screen?.deviceDescription[screenNumberKey] as? NSNumber {
-      return CGDirectDisplayID(number.uint32Value)
-    }
-    return CGMainDisplayID()
-  }
-
-  private func resolvedDisplayTimerFps() -> Double {
+  private func resolvedDisplayLinkFps() -> Int {
     if let override = ProcessInfo.processInfo.environment["ERIKA_FLUTTER_TARGET_FPS"],
-       let fps = Double(override), fps.isFinite, fps > 0.0 {
-      return min(max(fps, 1.0), 1000.0)
+       let fps = Int(override), fps > 0 {
+      return min(max(fps, 1), 1000)
     }
-    let screen = (attachedView as? NSView)?.window?.screen ?? NSScreen.main
-    if #available(macOS 12.0, *), let screen = screen {
-      let fps = Double(screen.maximumFramesPerSecond)
-      if fps.isFinite && fps > 0.0 {
-        return fps
-      }
-    }
-    return erikaDefaultDisplayFps
+    let fps = attachedView?.window?.screen.maximumFramesPerSecond ?? UIScreen.main.maximumFramesPerSecond
+    return fps > 0 ? fps : erikaDefaultDisplayFps
   }
 
   private func check(_ status: Int32, operation: String) throws {
     if status != 0 {
-      throw ErikaPluginError.erikaStatus(operation, status)
+      throw ErikaPluginError.erikaStatus(
+        operation,
+        status,
+        library.currentEventMessage()
+      )
     }
+  }
+
+  private func configureAudioSessionForPlayback() throws {
+    let session = AVAudioSession.sharedInstance()
+    try session.setCategory(.playback, mode: .moviePlayback, options: [])
+    try session.setActive(true)
+  }
+}
+
+private final class DisplayLinkProxy: NSObject {
+  private let body: () -> Void
+
+  init(_ body: @escaping () -> Void) {
+    self.body = body
+  }
+
+  @objc func tick() {
+    body()
+  }
+}
+
+private protocol ErikaMetalSurfaceView: AnyObject {
+  var platformViewId: Int64 { get }
+  var metalLayer: CAMetalLayer { get }
+  var attachedPlayerId: Int64? { get set }
+  var bounds: CGRect { get }
+  var window: UIWindow? { get }
+  var currentScale: Double { get }
+
+  func updateDrawableSize()
+  func pngSnapshotData() -> Data?
+}
+
+private final class WeakErikaVideoPlatformViewBox {
+  weak var view: ErikaMetalSurfaceView?
+
+  init(view: ErikaMetalSurfaceView) {
+    self.view = view
+  }
+}
+
+private final class ErikaMetalUIView: UIView, ErikaMetalSurfaceView {
+  let platformViewId: Int64
+  weak var plugin: ErikaFlutterPlugin?
+  var attachedPlayerId: Int64?
+
+  override class var layerClass: AnyClass { CAMetalLayer.self }
+
+  var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
+
+  var currentScale: Double {
+    Double(max(1.0, window?.screen.scale ?? UIScreen.main.scale))
+  }
+
+  init(frame: CGRect, viewId: Int64, arguments: Any?, plugin: ErikaFlutterPlugin?) {
+    platformViewId = viewId
+    self.plugin = plugin
+    super.init(frame: frame)
+    isOpaque = true
+    isUserInteractionEnabled = false
+    backgroundColor = .black
+    contentScaleFactor = CGFloat(currentScale)
+    metalLayer.pixelFormat = .bgra8Unorm
+    metalLayer.framebufferOnly = true
+    metalLayer.isOpaque = true
+    metalLayer.backgroundColor = UIColor.black.cgColor
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  deinit {
+    plugin?.unregisterView(viewId: platformViewId)
+  }
+
+  override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+    false
+  }
+
+  override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+    nil
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    updateDrawableSize()
+    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
+  }
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    updateDrawableSize()
+    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
+  }
+
+  func updateDrawableSize() {
+    let scale = CGFloat(currentScale)
+    contentScaleFactor = scale
+    metalLayer.contentsScale = scale
+    // metalLayer is this view's *backing* layer (layerClass == CAMetalLayer);
+    // UIKit already syncs its frame to the view. Setting it to `bounds` would
+    // move the backing layer to the superlayer origin, rendering the video at
+    // (0,0) instead of the view's frame (visible once the view isn't full-screen).
+    metalLayer.drawableSize = CGSize(
+      width: max(1.0, bounds.width * scale),
+      height: max(1.0, bounds.height * scale)
+    )
+  }
+
+  func pngSnapshotData() -> Data? {
+    snapshotPngData(of: self)
+  }
+}
+
+private final class ErikaWindowOverlayView: UIView, ErikaMetalSurfaceView {
+  let platformViewId: Int64 = erikaWindowHostedVideoSurfaceId
+  weak var plugin: ErikaFlutterPlugin?
+  var attachedPlayerId: Int64?
+
+  private var overlayFrameGeneration: Int64?
+  private var debugLabelView: UILabel?
+
+  /// Generation of the widget that currently owns this shared overlay surface.
+  /// Used to reject stale detach calls from disposed widgets.
+  var activeGeneration: Int64? { overlayFrameGeneration }
+
+  override class var layerClass: AnyClass { CAMetalLayer.self }
+
+  var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
+
+  var currentScale: Double {
+    Double(max(1.0, window?.screen.scale ?? UIScreen.main.scale))
+  }
+
+  init(plugin: ErikaFlutterPlugin?) {
+    self.plugin = plugin
+    super.init(frame: .zero)
+    isOpaque = true
+    isHidden = true
+    isUserInteractionEnabled = false
+    backgroundColor = .black
+    contentScaleFactor = CGFloat(currentScale)
+    autoresizingMask = []
+    metalLayer.pixelFormat = .bgra8Unorm
+    metalLayer.framebufferOnly = true
+    metalLayer.isOpaque = true
+    metalLayer.backgroundColor = UIColor.black.cgColor
+    layer.actions = [
+      "bounds": NSNull(),
+      "frame": NSNull(),
+      "position": NSNull(),
+    ]
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  deinit {
+    plugin?.detachOverlayView(self)
+  }
+
+  override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+    false
+  }
+
+  override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+    nil
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    updateDrawableSize()
+    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
+  }
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    updateDrawableSize()
+    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
+  }
+
+  func updateOverlayFrame(
+    _ frame: CGRect?,
+    visible: Bool,
+    debugLabel: String?,
+    generation: Int64?
+  ) {
+    if visible {
+      overlayFrameGeneration = generation
+    } else if let generation,
+              let overlayFrameGeneration,
+              generation != overlayFrameGeneration {
+      return
+    }
+
+    updateDebugLabel(debugLabel)
+    let shouldShow = visible &&
+      (frame?.width ?? 0) > 0 &&
+      (frame?.height ?? 0) > 0
+
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    defer { CATransaction.commit() }
+
+    guard shouldShow, let frame else {
+      isHidden = true
+      return
+    }
+
+    let resolvedFrame = frame.integral
+    if self.frame != resolvedFrame {
+      self.frame = resolvedFrame
+    }
+    isHidden = false
+    updateDrawableSize()
+    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
+  }
+
+  func updateDrawableSize() {
+    let scale = CGFloat(currentScale)
+    contentScaleFactor = scale
+    metalLayer.contentsScale = scale
+    // metalLayer is this view's *backing* layer (layerClass == CAMetalLayer);
+    // UIKit already syncs its frame to the view. Setting it to `bounds` would
+    // move the backing layer to the superlayer origin, rendering the video at
+    // (0,0) instead of the view's frame (visible once the view isn't full-screen).
+    metalLayer.drawableSize = CGSize(
+      width: max(1.0, bounds.width * scale),
+      height: max(1.0, bounds.height * scale)
+    )
+  }
+
+  func pngSnapshotData() -> Data? {
+    snapshotPngData(of: self)
+  }
+
+  private func updateDebugLabel(_ text: String?) {
+    guard erikaDebugLabelsEnabled, let text, !text.isEmpty else {
+      debugLabelView?.removeFromSuperview()
+      debugLabelView = nil
+      return
+    }
+    let label = debugLabelView ?? UILabel()
+    if debugLabelView == nil {
+      label.textColor = UIColor(white: 1.0, alpha: 0.45)
+      label.font = UIFont.systemFont(ofSize: 12, weight: .medium)
+      label.translatesAutoresizingMaskIntoConstraints = false
+      addSubview(label)
+      NSLayoutConstraint.activate([
+        label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+        label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+      ])
+      debugLabelView = label
+    }
+    label.text = text
+  }
+}
+
+private func snapshotPngData(of view: UIView) -> Data? {
+  guard view.bounds.width > 0, view.bounds.height > 0 else {
+    return nil
+  }
+  let format = UIGraphicsImageRendererFormat()
+  format.scale = view.window?.screen.scale ?? UIScreen.main.scale
+  format.opaque = view.isOpaque
+  let renderer = UIGraphicsImageRenderer(bounds: view.bounds, format: format)
+  let image = renderer.image { _ in
+    view.drawHierarchy(in: view.bounds, afterScreenUpdates: false)
+  }
+  return image.pngData()
+}
+
+private final class ErikaVideoPlatformView: NSObject, FlutterPlatformView {
+  let metalView: ErikaMetalUIView
+
+  init(frame: CGRect, viewId: Int64, arguments: Any?, plugin: ErikaFlutterPlugin?) {
+    metalView = ErikaMetalUIView(frame: frame, viewId: viewId, arguments: arguments, plugin: plugin)
+    super.init()
+  }
+
+  func view() -> UIView {
+    metalView
+  }
+}
+
+private final class ErikaVideoViewFactory: NSObject, FlutterPlatformViewFactory {
+  private weak var plugin: ErikaFlutterPlugin?
+
+  init(plugin: ErikaFlutterPlugin) {
+    self.plugin = plugin
+    super.init()
+  }
+
+  func createArgsCodec() -> FlutterMessageCodec & NSObjectProtocol {
+    FlutterStandardMessageCodec.sharedInstance()
+  }
+
+  func create(
+    withFrame frame: CGRect,
+    viewIdentifier viewId: Int64,
+    arguments args: Any?
+  ) -> FlutterPlatformView {
+    let platformView = ErikaVideoPlatformView(frame: frame, viewId: viewId, arguments: args, plugin: plugin)
+    plugin?.registerView(platformView.metalView, viewId: viewId)
+    return platformView
+  }
+}
+
+private enum ErikaAssociatedObjectKeys {
+  static var windowOverlayView: UInt8 = 0
+}
+
+private extension UIWindow {
+  var erikaWindowOverlayView: ErikaWindowOverlayView? {
+    get {
+      objc_getAssociatedObject(
+        self,
+        &ErikaAssociatedObjectKeys.windowOverlayView
+      ) as? ErikaWindowOverlayView
+    }
+    set {
+      objc_setAssociatedObject(
+        self,
+        &ErikaAssociatedObjectKeys.windowOverlayView,
+        newValue,
+        .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+      )
+    }
+  }
+}
+
+public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
+  static var sharedEventSink: FlutterEventSink?
+
+  private static let playerChannelName = "erika_flutter/player"
+  private static let eventsChannelName = "erika_flutter/events"
+  private static let videoViewType = "erika_flutter/video_view"
+
+  private var players: [Int64: ErikaPlayerHost] = [:]
+  private var views: [Int64: WeakErikaVideoPlatformViewBox] = [:]
+  private var nextPlayerId: Int64 = 1
+  private var pollTimer: Timer?
+  private var activePlayerId: Int64?
+  private var remoteCommandTargets: [(MPRemoteCommand, Any)] = []
+  private var systemMediaNavigation: [Int64: (previousEnabled: Bool, nextEnabled: Bool)] = [:]
+
+  deinit {
+    remoteCommandTargets.forEach { command, target in
+      command.removeTarget(target)
+    }
+  }
+
+  public static func register(with registrar: FlutterPluginRegistrar) {
+    let instance = ErikaFlutterPlugin()
+    instance.configureSystemPlayback()
+    let playerChannel = FlutterMethodChannel(name: playerChannelName, binaryMessenger: registrar.messenger())
+    let eventsChannel = FlutterEventChannel(name: eventsChannelName, binaryMessenger: registrar.messenger())
+    registrar.addMethodCallDelegate(instance, channel: playerChannel)
+    eventsChannel.setStreamHandler(instance)
+    registrar.register(ErikaVideoViewFactory(plugin: instance), withId: videoViewType)
+  }
+
+  public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    do {
+      switch call.method {
+      case "create":
+        result(try createPlayer(arguments: call.arguments))
+      case "dispose":
+        let args = try dictionaryArgs(call.arguments)
+        let playerId = try requiredInt64(args["playerId"], name: "playerId")
+        players.removeValue(forKey: playerId)
+        systemMediaNavigation.removeValue(forKey: playerId)
+        if activePlayerId == playerId {
+          activePlayerId = nil
+          clearNowPlayingInfo()
+          refreshRemoteCommands()
+        }
+        result(nil)
+      case "open":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        guard let uri = args["uri"] as? String, !uri.isEmpty else {
+          throw ErikaPluginError.invalidArguments("uri is required.")
+        }
+        let headers = (args["httpHeaders"] as? [String: String]) ?? [:]
+        if let metadata = args["metadata"] as? [String: Any] {
+          try applyMediaMetadata(metadata, to: host)
+        } else {
+          host.clearMediaMetadata()
+        }
+        try host.open(uri: uri, httpHeaders: headers)
+        result(nil)
+      case "play":
+        let host = try playerHost(from: try dictionaryArgs(call.arguments))
+        try host.play()
+        activePlayerId = host.id
+        refreshRemoteCommands()
+        updateNowPlayingInfo(for: host)
+        result(nil)
+      case "pause":
+        try playerHost(from: try dictionaryArgs(call.arguments)).pause()
+        result(nil)
+      case "stop":
+        try playerHost(from: try dictionaryArgs(call.arguments)).stop()
+        result(nil)
+      case "close":
+        try playerHost(from: try dictionaryArgs(call.arguments)).close()
+        result(nil)
+      case "seek":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).seek(positionMicros: try requiredUInt64(args["positionMicros"], name: "positionMicros"))
+        result(nil)
+      case "setPlaybackRate":
+        let args = try dictionaryArgs(call.arguments)
+        guard let rate = doubleValue(args["rate"]) else {
+          throw ErikaPluginError.invalidArguments("rate is required.")
+        }
+        try playerHost(from: args).setPlaybackRate(rate)
+        result(nil)
+      case "setMediaMetadata":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        guard let metadata = args["metadata"] as? [String: Any] else {
+          throw ErikaPluginError.invalidArguments("metadata is required.")
+        }
+        try applyMediaMetadata(metadata, to: host)
+        result(nil)
+      case "setSystemMediaNavigation":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        systemMediaNavigation[host.id] = (
+          previousEnabled: boolValue(args["previousEnabled"]) ?? false,
+          nextEnabled: boolValue(args["nextEnabled"]) ?? false
+        )
+        if activePlayerId == host.id {
+          refreshRemoteCommands()
+        }
+        result(nil)
+      case "setVolume":
+        let args = try dictionaryArgs(call.arguments)
+        guard let volume = doubleValue(args["volume"]) else {
+          throw ErikaPluginError.invalidArguments("volume is required.")
+        }
+        try playerHost(from: args).setVolume(volume)
+        result(nil)
+      case "setUpscaler":
+        let args = try dictionaryArgs(call.arguments)
+        guard let mode = int32Value(args["mode"]) else {
+          throw ErikaPluginError.invalidArguments("mode is required.")
+        }
+        try playerHost(from: args).setUpscaler(mode: mode)
+        result(nil)
+      case "setSubtitleScale":
+        let args = try dictionaryArgs(call.arguments)
+        guard let scale = doubleValue(args["scale"]) else {
+          throw ErikaPluginError.invalidArguments("scale is required.")
+        }
+        try playerHost(from: args).setSubtitleScale(scale)
+        result(nil)
+      case "registerSubtitleMemoryFont":
+        let args = try dictionaryArgs(call.arguments)
+        guard let data = args["data"] as? FlutterStandardTypedData else {
+          throw ErikaPluginError.invalidArguments("data is required.")
+        }
+        result(Int64(clamping: try playerHost(from: args).registerSubtitleMemoryFont(data.data)))
+      case "selectSubtitleMemoryFonts":
+        let args = try dictionaryArgs(call.arguments)
+        let ids = (args["fontIds"] as? [NSNumber] ?? []).map { $0.uint64Value }
+        try playerHost(from: args).selectSubtitleMemoryFonts(ids)
+        result(nil)
+      case "clearSubtitleMemoryFonts":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).clearSubtitleMemoryFonts()
+        result(nil)
+      case "getSubtitleMemoryFontStatus":
+        let args = try dictionaryArgs(call.arguments)
+        result(try playerHost(from: args).subtitleMemoryFontStatus())
+      case "setSubtitleStyle":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        if args.keys.contains("fontFamily") || args.keys.contains("fontFilePath") {
+          try host.setSubtitleFont(
+            family: args["fontFamily"] as? String,
+            filePath: args["fontFilePath"] as? String
+          )
+        }
+        if args.keys.contains("primaryColorRgba") || args.keys.contains("outlineColorRgba")
+          || args.keys.contains("fontSize") || args.keys.contains("outlineWidth")
+          || args.keys.contains("bold") || args.keys.contains("italic")
+          || args.keys.contains("underline") || args.keys.contains("strikeOut")
+          || args.keys.contains("spacing") || args.keys.contains("scaleXPercent")
+          || args.keys.contains("scaleYPercent") || args.keys.contains("borderStyle")
+          || args.keys.contains("shadowDepth") || args.keys.contains("blur")
+          || args.keys.contains("alignment") || args.keys.contains("marginLeft")
+          || args.keys.contains("marginRight") || args.keys.contains("marginVertical")
+          || args.keys.contains("overrideMask")
+        {
+          let primary = int64Value(args["primaryColorRgba"]) ?? 0xFFFF_FFFF
+          let outline = int64Value(args["outlineColorRgba"]) ?? 0x0000_007F
+          try host.setSubtitleStyle(
+            fontFamily: args["fontFamily"] as? String,
+            fontFilePath: args["fontFilePath"] as? String,
+            primaryRgba: UInt32(truncatingIfNeeded: primary),
+            outlineRgba: UInt32(truncatingIfNeeded: outline),
+            fontSize: doubleValue(args["fontSize"]) ?? 48.0,
+            outlineWidth: doubleValue(args["outlineWidth"]) ?? 2.0,
+            bold: boolValue(args["bold"]) ?? false,
+            italic: boolValue(args["italic"]) ?? false,
+            underline: boolValue(args["underline"]) ?? false,
+            strikeOut: boolValue(args["strikeOut"]) ?? false,
+            spacing: doubleValue(args["spacing"]) ?? 0.0,
+            scaleXPercent: doubleValue(args["scaleXPercent"]) ?? 100.0,
+            scaleYPercent: doubleValue(args["scaleYPercent"]) ?? 100.0,
+            borderStyle: int32Value(args["borderStyle"]) ?? 1,
+            shadowDepth: doubleValue(args["shadowDepth"]) ?? 0.0,
+            blur: doubleValue(args["blur"]) ?? 0.0,
+            alignment: int32Value(args["alignment"]) ?? 2,
+            marginLeft: int32Value(args["marginLeft"]) ?? 48,
+            marginRight: int32Value(args["marginRight"]) ?? 48,
+            marginVertical: int32Value(args["marginVertical"]) ?? 54,
+            overrideMask: UInt32(truncatingIfNeeded: int64Value(args["overrideMask"]) ?? 0)
+          )
+        }
+        result(nil)
+      case "getUpscalerStatus":
+        let args = try dictionaryArgs(call.arguments)
+        result(try playerHost(from: args).upscalerStatus())
+      case "getOutputStatus":
+        let args = try dictionaryArgs(call.arguments)
+        result(try playerHost(from: args).outputStatus())
+      case "getPresenterStats":
+        let args = try dictionaryArgs(call.arguments)
+        result(try playerHost(from: args).presenterStats())
+      case "setDebugHudEnabled":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).setDebugHudEnabled(boolValue(args["enabled"]) ?? false)
+        result(nil)
+      case "addExternalSubtitle":
+        let args = try dictionaryArgs(call.arguments)
+        guard let uri = args["uri"] as? String, !uri.isEmpty else {
+          throw ErikaPluginError.invalidArguments("uri is required.")
+        }
+        result(try playerHost(from: args).addExternalSubtitle(uri: uri))
+      case "removeSubtitleTrack":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).removeSubtitleTrack(trackId: try requiredInt64(args["trackId"], name: "trackId"))
+        result(nil)
+      case "loadDanmakuFile":
+        let args = try dictionaryArgs(call.arguments)
+        guard let uri = args["uri"] as? String, !uri.isEmpty else {
+          throw ErikaPluginError.invalidArguments("uri is required.")
+        }
+        try playerHost(from: args).loadDanmakuFile(uri: uri)
+        result(nil)
+      case "loadDanmakuJson":
+        let args = try dictionaryArgs(call.arguments)
+        guard let json = args["json"] as? String, !json.isEmpty else {
+          throw ErikaPluginError.invalidArguments("json is required.")
+        }
+        try playerHost(from: args).loadDanmakuJson(json)
+        result(nil)
+      case "addDanmakuTrackFile":
+        let args = try dictionaryArgs(call.arguments)
+        guard let uri = args["uri"] as? String, !uri.isEmpty else {
+          throw ErikaPluginError.invalidArguments("uri is required.")
+        }
+        result(Int64(clamping: try playerHost(from: args).addDanmakuTrackFile(
+          uri: uri,
+          name: args["name"] as? String,
+          offsetMicros: int64Value(args["offsetMicros"]) ?? 0
+        )))
+      case "addDanmakuTrackJson":
+        let args = try dictionaryArgs(call.arguments)
+        guard let json = args["json"] as? String, !json.isEmpty else {
+          throw ErikaPluginError.invalidArguments("json is required.")
+        }
+        result(Int64(clamping: try playerHost(from: args).addDanmakuTrackJson(
+          json,
+          name: args["name"] as? String,
+          offsetMicros: int64Value(args["offsetMicros"]) ?? 0
+        )))
+      case "removeDanmakuTrack":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).removeDanmakuTrack(trackId: try requiredUInt64(args["trackId"], name: "trackId"))
+        result(nil)
+      case "setDanmakuTrackEnabled":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).setDanmakuTrackEnabled(
+          trackId: try requiredUInt64(args["trackId"], name: "trackId"),
+          enabled: boolValue(args["enabled"]) ?? true
+        )
+        result(nil)
+      case "setDanmakuTrackOffset":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).setDanmakuTrackOffset(
+          trackId: try requiredUInt64(args["trackId"], name: "trackId"),
+          offsetMicros: int64Value(args["offsetMicros"]) ?? 0
+        )
+        result(nil)
+      case "setDanmakuGlobalOffset":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).setDanmakuGlobalOffset(offsetMicros: int64Value(args["offsetMicros"]) ?? 0)
+        result(nil)
+      case "danmakuTracks":
+        result(try playerHost(from: try dictionaryArgs(call.arguments)).danmakuTracks())
+      case "clearDanmaku":
+        try playerHost(from: try dictionaryArgs(call.arguments)).clearDanmaku()
+        result(nil)
+      case "setDanmakuEnabled":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).setDanmakuEnabled(boolValue(args["enabled"]) ?? true)
+        result(nil)
+      case "setDanmakuConfig":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        try host.setDanmakuConfig(
+          danmakuConfig(from: args, base: host.danmakuConfigSnapshot())
+        )
+        if args.keys.contains("customFontFamily") || args.keys.contains("customFontFilePath") {
+          try host.setDanmakuFont(
+            family: args["customFontFamily"] as? String,
+            filePath: args["customFontFilePath"] as? String
+          )
+        }
+        if let blockWordsJson = args["blockWordsJson"] as? String {
+          try host.setDanmakuBlockWordsJson(blockWordsJson)
+        }
+        result(nil)
+      case "selectAudioTrack":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).selectAudioTrack(trackId: optionalTrackId(args["trackId"]))
+        result(nil)
+      case "selectSubtitleTrack":
+        let args = try dictionaryArgs(call.arguments)
+        try playerHost(from: args).selectSubtitleTrack(trackId: optionalTrackId(args["trackId"]))
+        result(nil)
+      case "tracks":
+        result(try playerHost(from: try dictionaryArgs(call.arguments)).tracks())
+      case "screenshot":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        let view = try optionalVideoView(from: args, host: host)
+        let width = int64Value(args["width"]).map(Int.init)
+        let height = int64Value(args["height"]).map(Int.init)
+        if let data = host.screenshot(view: view, width: width, height: height) {
+          result(FlutterStandardTypedData(bytes: data))
+        } else {
+          result(nil)
+        }
+      case "attachView":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        let viewId = try requiredInt64(args["viewId"], name: "viewId")
+        guard let view = views[viewId]?.view else {
+          throw ErikaPluginError.viewNotFound(viewId)
+        }
+        try host.attach(view: view)
+        result(nil)
+      case "detachView":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        let viewId = try requiredInt64(args["viewId"], name: "viewId")
+        host.detach(viewId: viewId)
+        result(nil)
+      case "attachOverlay":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        let overlay = try ensureWindowOverlayInstalled()
+        try host.attach(view: overlay)
+        result(erikaWindowHostedVideoSurfaceId)
+      case "detachOverlay":
+        let args = try dictionaryArgs(call.arguments)
+        let host = try playerHost(from: args)
+        let generation = int64Value(args["generation"])
+        let overlay = resolveWindowOverlay()
+        // A disposing widget can fire detachOverlay after a newer widget has
+        // already re-attached the shared overlay surface. Skip the teardown so
+        // the stale detach cannot stop the live surface's display link and
+        // leave a frozen, non-rendering overlay on screen.
+        if let generation,
+           let activeGeneration = overlay?.activeGeneration,
+           generation != activeGeneration {
+          result(nil)
+          return
+        }
+        host.detach(viewId: erikaWindowHostedVideoSurfaceId)
+        overlay?.updateOverlayFrame(
+          nil,
+          visible: false,
+          debugLabel: nil,
+          generation: generation
+        )
+        result(nil)
+      case "setOverlayFrame":
+        let args = try dictionaryArgs(call.arguments)
+        let overlay = try ensureWindowOverlayInstalled()
+        let visible = boolValue(args["visible"]) ?? true
+        let frame = convertedOverlayRect(from: args, targetView: overlay)
+        overlay.updateOverlayFrame(
+          frame,
+          visible: visible,
+          debugLabel: args["debugLabel"] as? String,
+          generation: int64Value(args["generation"])
+        )
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    } catch {
+      result(flutterError(error))
+    }
+  }
+
+  public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    Self.sharedEventSink = events
+    startPollTimerIfNeeded()
+    return nil
+  }
+
+  public func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    Self.sharedEventSink = nil
+    pollTimer?.invalidate()
+    pollTimer = nil
+    return nil
+  }
+
+  fileprivate func registerView(_ view: ErikaMetalSurfaceView, viewId: Int64) {
+    views[viewId] = WeakErikaVideoPlatformViewBox(view: view)
+  }
+
+  fileprivate func unregisterView(viewId: Int64) {
+    views.removeValue(forKey: viewId)
+    for host in players.values {
+      host.detach(viewId: viewId)
+    }
+  }
+
+  fileprivate func resizePlayerAttachedToView(viewId: Int64) {
+    for host in players.values {
+      if let attachedPlayerId = views[viewId]?.view?.attachedPlayerId,
+         attachedPlayerId == host.id {
+        host.resizeFromAttachedView()
+      }
+    }
+  }
+
+  fileprivate func detachOverlayView(_ view: ErikaWindowOverlayView) {
+    for host in players.values {
+      host.detach(viewId: view.platformViewId)
+    }
+    if views[view.platformViewId]?.view === view {
+      views.removeValue(forKey: view.platformViewId)
+    }
+    if view.window?.erikaWindowOverlayView === view {
+      view.window?.erikaWindowOverlayView = nil
+    }
+  }
+
+  private func ensureWindowOverlayInstalled() throws -> ErikaWindowOverlayView {
+    if let existing = resolveWindowOverlay(),
+       existing.superview != nil {
+      return existing
+    }
+
+    guard let flutterHostView = currentFlutterHostView() else {
+      throw ErikaPluginError.overlayNotAvailable
+    }
+    guard let hostWindow = flutterHostView.window else {
+      throw ErikaPluginError.overlayNotAvailable
+    }
+    let hostSuperview = flutterHostView.superview ?? hostWindow
+
+    prepareFlutterHostViewForWindowOverlay(flutterHostView)
+
+    let overlay = hostWindow.erikaWindowOverlayView ??
+      ErikaWindowOverlayView(plugin: self)
+    overlay.plugin = self
+
+    if overlay.superview !== hostSuperview {
+      overlay.removeFromSuperview()
+      overlay.frame = .zero
+    }
+    if flutterHostView.superview === hostSuperview,
+       shouldPlaceWindowOverlayAboveFlutter() {
+      hostSuperview.insertSubview(overlay, aboveSubview: flutterHostView)
+    } else if flutterHostView.superview === hostSuperview {
+      hostSuperview.insertSubview(overlay, belowSubview: flutterHostView)
+    } else if shouldPlaceWindowOverlayAboveFlutter() {
+      hostSuperview.addSubview(overlay)
+    } else {
+      hostSuperview.insertSubview(overlay, at: 0)
+    }
+
+    hostWindow.erikaWindowOverlayView = overlay
+    registerView(overlay, viewId: overlay.platformViewId)
+    return overlay
+  }
+
+  private func resolveWindowOverlay() -> ErikaWindowOverlayView? {
+    for window in activeWindows() {
+      if let overlay = window.erikaWindowOverlayView {
+        return overlay
+      }
+    }
+    return nil
+  }
+
+  private func currentFlutterHostView() -> UIView? {
+    for window in activeWindows() {
+      if let controller = findFlutterViewController(from: window.rootViewController) {
+        return controller.view
+      }
+    }
+    return activeWindows().first?.rootViewController?.view
+  }
+
+  private func activeWindows() -> [UIWindow] {
+    let scenes = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .filter {
+        $0.activationState == .foregroundActive ||
+          $0.activationState == .foregroundInactive
+      }
+    let windows = scenes.flatMap(\.windows).filter { !$0.isHidden }
+    return windows.sorted { lhs, rhs in
+      if lhs.isKeyWindow != rhs.isKeyWindow {
+        return lhs.isKeyWindow
+      }
+      return lhs.windowLevel.rawValue > rhs.windowLevel.rawValue
+    }
+  }
+
+  private func findFlutterViewController(from controller: UIViewController?) -> FlutterViewController? {
+    guard let controller else {
+      return nil
+    }
+    if let flutter = controller as? FlutterViewController {
+      return flutter
+    }
+    if let presented = findFlutterViewController(from: controller.presentedViewController) {
+      return presented
+    }
+    if let navigation = controller as? UINavigationController,
+       let visible = findFlutterViewController(from: navigation.visibleViewController) {
+      return visible
+    }
+    if let tab = controller as? UITabBarController,
+       let selected = findFlutterViewController(from: tab.selectedViewController) {
+      return selected
+    }
+    for child in controller.children {
+      if let flutter = findFlutterViewController(from: child) {
+        return flutter
+      }
+    }
+    return nil
+  }
+
+  private func prepareFlutterHostViewForWindowOverlay(_ view: UIView) {
+    if shouldPlaceWindowOverlayAboveFlutter() {
+      return
+    }
+    view.isOpaque = false
+    view.backgroundColor = .clear
+    view.layer.isOpaque = false
+    view.layer.backgroundColor = UIColor.clear.cgColor
+    view.window?.backgroundColor = .black
+  }
+
+  private func shouldPlaceWindowOverlayAboveFlutter() -> Bool {
+    let environment = ProcessInfo.processInfo.environment
+    if environment["ERIKA_WINDOW_OVERLAY_BELOW"] == "1" {
+      return false
+    }
+    return environment["ERIKA_WINDOW_OVERLAY_ABOVE"] == "1"
+  }
+
+  private func convertedOverlayRect(
+    from args: [String: Any],
+    targetView: UIView
+  ) -> CGRect? {
+    guard let x = doubleValue(args["x"]),
+          let y = doubleValue(args["y"]),
+          let width = doubleValue(args["width"]),
+          let height = doubleValue(args["height"]) else {
+      return nil
+    }
+    guard width > 0, height > 0 else {
+      return nil
+    }
+    guard let flutterHostView = currentFlutterHostView(),
+          let targetSuperview = targetView.superview else {
+      return CGRect(x: x, y: y, width: width, height: height)
+    }
+    let rect = CGRect(x: x, y: y, width: width, height: height)
+    return flutterHostView.convert(rect, to: targetSuperview)
+  }
+
+  private func createPlayer(arguments: Any?) throws -> Int64 {
+    guard let library = ErikaNativeLibrary.shared else {
+      throw ErikaPluginError.libraryNotFound(["main executable", "ERIKA_CAPI_DYLIB", "app bundle"])
+    }
+    let args = arguments as? [String: Any]
+    let hdrDebug = boolValue(args?["hdrDebug"]) ??
+      boolEnvironmentFlag("ERIKA_HDR_DEBUG", environment: ProcessInfo.processInfo.environment)
+    let config = presenterConfigForNewPlayer(arguments: arguments, hdrDebug: hdrDebug)
+    let id = nextPlayerId
+    nextPlayerId += 1
+    let host = try ErikaPlayerHost(id: id, library: library, config: config, hdrDebug: hdrDebug)
+    host.onNowPlayingChanged = { [weak self] changedHost in
+      guard self?.activePlayerId == changedHost.id else { return }
+      self?.updateNowPlayingInfo(for: changedHost)
+    }
+    players[id] = host
+    systemMediaNavigation[id] = (previousEnabled: false, nextEnabled: false)
+    startPollTimerIfNeeded()
+    return id
+  }
+
+  private func configureSystemPlayback() {
+    let commands = MPRemoteCommandCenter.shared()
+    addRemoteTarget(commands.playCommand) { [weak self] _ in
+      self?.performRemotePlay() ?? .commandFailed
+    }
+    addRemoteTarget(commands.pauseCommand) { [weak self] _ in
+      self?.performRemotePause() ?? .commandFailed
+    }
+    addRemoteTarget(commands.togglePlayPauseCommand) { [weak self] _ in
+      self?.performRemoteToggle() ?? .commandFailed
+    }
+    addRemoteTarget(commands.changePlaybackPositionCommand) { [weak self] event in
+      guard let positionEvent = event as? MPChangePlaybackPositionCommandEvent else {
+        return .commandFailed
+      }
+      return self?.performRemoteSeek(positionEvent.positionTime) ?? .commandFailed
+    }
+    addRemoteTarget(commands.previousTrackCommand) { [weak self] _ in
+      self?.emitSystemMediaNavigation("previous") ?? .commandFailed
+    }
+    addRemoteTarget(commands.nextTrackCommand) { [weak self] _ in
+      self?.emitSystemMediaNavigation("next") ?? .commandFailed
+    }
+    refreshRemoteCommands()
+  }
+
+  private func addRemoteTarget(
+    _ command: MPRemoteCommand,
+    handler: @escaping (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus
+  ) {
+    let target = command.addTarget(handler: handler)
+    remoteCommandTargets.append((command, target))
+  }
+
+  private func applyMediaMetadata(_ metadata: [String: Any], to host: ErikaPlayerHost) throws {
+    guard let title = metadata["title"] as? String, !title.isEmpty else {
+      throw ErikaPluginError.invalidArguments("metadata.title is required.")
+    }
+    try host.setMediaMetadata(
+      title: title,
+      artist: metadata["artist"] as? String,
+      album: metadata["album"] as? String,
+      artworkData: (metadata["artwork"] as? FlutterStandardTypedData)?.data
+    )
+  }
+
+  private func updateNowPlayingInfo(for host: ErikaPlayerHost) {
+    var info: [String: Any] = [
+      MPMediaItemPropertyTitle: host.nowPlayingTitle,
+      MPNowPlayingInfoPropertyElapsedPlaybackTime: host.positionSeconds,
+      MPNowPlayingInfoPropertyPlaybackRate: host.isPlaying ? host.playbackRate : 0,
+      MPNowPlayingInfoPropertyDefaultPlaybackRate: host.playbackRate,
+      MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.video.rawValue,
+    ]
+    if let artist = host.nowPlayingArtist { info[MPMediaItemPropertyArtist] = artist }
+    if let album = host.nowPlayingAlbum { info[MPMediaItemPropertyAlbumTitle] = album }
+    if let artwork = host.nowPlayingArtwork { info[MPMediaItemPropertyArtwork] = artwork }
+    if let duration = host.durationSeconds { info[MPMediaItemPropertyPlaybackDuration] = duration }
+    let center = MPNowPlayingInfoCenter.default()
+    center.nowPlayingInfo = info
+    center.playbackState = host.isPlaying ? .playing : .paused
+  }
+
+  private func clearNowPlayingInfo() {
+    let center = MPNowPlayingInfoCenter.default()
+    center.nowPlayingInfo = nil
+    center.playbackState = .stopped
+  }
+
+  private func performRemotePlay() -> MPRemoteCommandHandlerStatus {
+    guard let host = activePlayerId.flatMap({ players[$0] }) else { return .noSuchContent }
+    do {
+      try host.play()
+      return .success
+    } catch {
+      return .commandFailed
+    }
+  }
+
+  private func performRemotePause() -> MPRemoteCommandHandlerStatus {
+    guard let host = activePlayerId.flatMap({ players[$0] }) else { return .noSuchContent }
+    do {
+      try host.pause()
+      return .success
+    } catch {
+      return .commandFailed
+    }
+  }
+
+  private func performRemoteToggle() -> MPRemoteCommandHandlerStatus {
+    guard let host = activePlayerId.flatMap({ players[$0] }) else { return .noSuchContent }
+    return host.isPlaying ? performRemotePause() : performRemotePlay()
+  }
+
+  private func performRemoteSeek(_ position: TimeInterval) -> MPRemoteCommandHandlerStatus {
+    guard let host = activePlayerId.flatMap({ players[$0] }) else { return .noSuchContent }
+    do {
+      try host.seek(positionMicros: UInt64(max(0, position) * 1_000_000))
+      return .success
+    } catch {
+      return .commandFailed
+    }
+  }
+
+  private func emitSystemMediaNavigation(_ navigation: String) -> MPRemoteCommandHandlerStatus {
+    performOnMain {
+      guard let playerId = self.activePlayerId,
+            self.players[playerId] != nil,
+            let capabilities = self.systemMediaNavigation[playerId] else {
+        return .noSuchContent
+      }
+      let enabled = navigation == "previous"
+        ? capabilities.previousEnabled
+        : capabilities.nextEnabled
+      guard enabled else { return .noSuchContent }
+      Self.sharedEventSink?([
+        "playerId": playerId,
+        "kind": 13,
+        "navigation": navigation,
+      ])
+      return .success
+    }
+  }
+
+  private func performOnMain(
+    _ work: @escaping () -> MPRemoteCommandHandlerStatus
+  ) -> MPRemoteCommandHandlerStatus {
+    if Thread.isMainThread {
+      return work()
+    }
+    return DispatchQueue.main.sync(execute: work)
+  }
+
+  private func refreshRemoteCommands() {
+    let commands = MPRemoteCommandCenter.shared()
+    let enabled = activePlayerId.flatMap { players[$0] } != nil
+    remoteCommandTargets.forEach { command, _ in
+      command.isEnabled = enabled
+    }
+    let capabilities = activePlayerId.flatMap { systemMediaNavigation[$0] }
+    commands.previousTrackCommand.isEnabled = enabled && capabilities?.previousEnabled == true
+    commands.nextTrackCommand.isEnabled = enabled && capabilities?.nextEnabled == true
+  }
+
+  private func presenterConfigForNewPlayer(arguments: Any?, hdrDebug: Bool) -> ErikaPresenterConfigC {
+    if let args = arguments as? [String: Any], let explicitMode = int32Value(args["outputMode"]) {
+      let headroom = floatValue(args["edrHeadroom"]) ?? 4.0
+      let config = explicitMode == 1 ? ErikaPresenterConfigC.appleEdr(headroom: headroom) : .sdr
+      erikaHdrLog(
+        hdrDebug,
+        "create explicit outputMode=\(explicitMode) requestedHeadroom=\(String(format: "%.3f", headroom)) selected=\(erikaOutputModeLabel(config))"
+      )
+      return config
+    }
+    let headroom = resolvedEdrHeadroom(hdrDebug: hdrDebug)
+    let config = headroom > 1.0 ? ErikaPresenterConfigC.appleEdr(headroom: headroom) : .sdr
+    erikaHdrLog(
+      hdrDebug,
+      "create auto selected=\(erikaOutputModeLabel(config)) resolvedHeadroom=\(String(format: "%.3f", headroom))"
+    )
+    return config
+  }
+
+  private func resolvedEdrHeadroom(hdrDebug: Bool) -> Float {
+    let environment = ProcessInfo.processInfo.environment
+    if boolEnvironmentFlag("ERIKA_DISABLE_EDR", environment: environment) {
+      erikaHdrLog(hdrDebug, "EDR disabled by ERIKA_DISABLE_EDR")
+      return 1.0
+    }
+    if let override = floatEnvironmentValue("ERIKA_EDR_HEADROOM", environment: environment), override > 1.0 {
+      erikaHdrLog(hdrDebug, "EDR headroom override ERIKA_EDR_HEADROOM=\(String(format: "%.3f", override))")
+      return override
+    }
+    let screenHeadroom = currentScreenEdrHeadroom(hdrDebug: hdrDebug)
+    if screenHeadroom > 1.0 { return screenHeadroom }
+    if boolEnvironmentFlag("ERIKA_ENABLE_EDR", environment: environment) {
+      erikaHdrLog(hdrDebug, "EDR forced by ERIKA_ENABLE_EDR")
+      return 4.0
+    }
+    return 1.0
+  }
+
+  private func currentScreenEdrHeadroom(hdrDebug: Bool) -> Float {
+    let screen = UIScreen.main
+    var samples: [String] = []
+    for key in ["potentialEDRHeadroom", "currentEDRHeadroom", "maximumPotentialExtendedDynamicRangeColorComponentValue"] {
+      let selector = Selector(key)
+      if screen.responds(to: selector), let number = screen.value(forKey: key) as? NSNumber {
+        let value = number.floatValue
+        samples.append("\(key)=\(String(format: "%.3f", value))")
+        if value.isFinite && value > 1.0 {
+          erikaHdrLog(
+            hdrDebug,
+            "screen headroom selected \(key)=\(String(format: "%.3f", value)) \(erikaScreenSummary(screen)) samples=[\(samples.joined(separator: ", "))]"
+          )
+          return value
+        }
+      } else {
+        samples.append("\(key)=unavailable")
+      }
+    }
+    erikaHdrLog(
+      hdrDebug,
+      "screen headroom fallback=1.000 \(erikaScreenSummary(screen)) samples=[\(samples.joined(separator: ", "))]"
+    )
+    return 1.0
+  }
+
+  private func startPollTimerIfNeeded() {
+    guard pollTimer == nil else { return }
+    let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+      guard let self else { return }
+      let sink = Self.sharedEventSink
+      for host in self.players.values {
+        host.pollEvents(sendEvent: sink)
+      }
+    }
+    pollTimer = timer
+    RunLoop.main.add(timer, forMode: .common)
+  }
+
+  private func playerHost(from args: [String: Any]) throws -> ErikaPlayerHost {
+    let playerId = try requiredInt64(args["playerId"], name: "playerId")
+    guard let host = players[playerId] else {
+      throw ErikaPluginError.playerNotFound(playerId)
+    }
+    return host
+  }
+
+  private func optionalVideoView(
+    from args: [String: Any],
+    host: ErikaPlayerHost
+  ) throws -> ErikaMetalSurfaceView? {
+    guard let viewId = int64Value(args["viewId"]) else {
+      return nil
+    }
+    guard let view = views[viewId]?.view,
+          view.attachedPlayerId == host.id else {
+      throw ErikaPluginError.viewNotFound(viewId)
+    }
+    return view
+  }
+
+  private func optionalTrackId(_ value: Any?) throws -> Int64? {
+    if value == nil || value is NSNull { return nil }
+    guard let trackId = int64Value(value) else {
+      throw ErikaPluginError.invalidArguments("trackId must be an integer or null.")
+    }
+    return trackId >= 0 ? trackId : nil
+  }
+
+  private func danmakuConfig(
+    from args: [String: Any],
+    base: ErikaDanmakuConfigC
+  ) -> ErikaDanmakuConfigC {
+    var config = base
+    if let value = boolValue(args["enabled"]) { config.enabled = value ? 1 : 0 }
+    if let value = doubleValue(args["fontSize"]) { config.fontSize = Float(value) }
+    if let value = doubleValue(args["opacity"]) { config.opacity = Float(value) }
+    if let value = doubleValue(args["displayArea"]) { config.displayArea = Float(value) }
+    if let value = doubleValue(args["scrollDurationSeconds"]) { config.scrollDurationSeconds = Float(value) }
+    if let value = doubleValue(args["scrollSpeedFactor"]) { config.scrollSpeedFactor = Float(value) }
+    if let value = doubleValue(args["trackGapRatio"]) { config.trackGapRatio = Float(value) }
+    if let value = doubleValue(args["outlineWidth"]) { config.outlineWidth = Float(value) }
+    if let value = doubleValue(args["shadowOffsetX"]) { config.shadowOffsetX = Float(value) }
+    if let value = doubleValue(args["shadowOffsetY"]) { config.shadowOffsetY = Float(value) }
+    if let value = boolValue(args["mergeDuplicates"]) { config.mergeDuplicates = value ? 1 : 0 }
+    if let value = boolValue(args["allowStacking"]) { config.allowStacking = value ? 1 : 0 }
+    if let value = boolValue(args["allowScrollOverwrite"]) { config.allowScrollOverwrite = value ? 1 : 0 }
+    if let value = int64Value(args["maxQuantity"]), value > 0 { config.maxQuantity = UInt32(clamping: value) }
+    if let value = int64Value(args["maxLinesPerMode"]), value > 0 { config.maxLinesPerMode = UInt32(clamping: value) }
+    if let value = boolValue(args["blockTop"]) { config.blockTop = value ? 1 : 0 }
+    if let value = boolValue(args["blockBottom"]) { config.blockBottom = value ? 1 : 0 }
+    if let value = boolValue(args["blockScroll"]) { config.blockScroll = value ? 1 : 0 }
+    if let value = int64Value(args["shadowStyle"]) { config.shadowStyle = Int32(clamping: value) }
+    return config
+  }
+
+  private func dictionaryArgs(_ arguments: Any?) throws -> [String: Any] {
+    guard let args = arguments as? [String: Any] else {
+      throw ErikaPluginError.invalidArguments("Arguments must be a dictionary.")
+    }
+    return args
+  }
+
+  private func int32Value(_ value: Any?) -> Int32? {
+    if let value = value as? Int32 { return value }
+    if let value = value as? NSNumber { return value.int32Value }
+    if let value = value as? String { return Int32(value) }
+    return nil
+  }
+
+  private func int64Value(_ value: Any?) -> Int64? {
+    if let value = value as? Int64 { return value }
+    if let value = value as? NSNumber { return value.int64Value }
+    if let value = value as? String { return Int64(value) }
+    return nil
+  }
+
+  private func doubleValue(_ value: Any?) -> Double? {
+    if let value = value as? Double { return value }
+    if let value = value as? NSNumber { return value.doubleValue }
+    if let value = value as? String { return Double(value) }
+    return nil
+  }
+
+  private func floatValue(_ value: Any?) -> Float? {
+    if let value = value as? Float, value.isFinite { return value }
+    if let value = value as? Double, value.isFinite { return Float(value) }
+    if let value = value as? NSNumber {
+      let result = value.floatValue
+      return result.isFinite ? result : nil
+    }
+    if let value = value as? String, let result = Float(value), result.isFinite { return result }
+    return nil
+  }
+
+  private func boolValue(_ value: Any?) -> Bool? {
+    if let value = value as? Bool { return value }
+    if let value = value as? NSNumber { return value.boolValue }
+    if let value = value as? String {
+      switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+      case "1", "true", "yes", "on": return true
+      case "0", "false", "no", "off": return false
+      default: return nil
+      }
+    }
+    return nil
+  }
+
+  private func requiredInt64(_ value: Any?, name: String) throws -> Int64 {
+    if let value = int64Value(value) { return value }
+    throw ErikaPluginError.invalidArguments("\(name) is required.")
+  }
+
+  private func requiredUInt64(_ value: Any?, name: String) throws -> UInt64 {
+    if let value = value as? UInt64 { return value }
+    if let value = value as? Int64, value >= 0 { return UInt64(value) }
+    if let value = value as? NSNumber { return value.uint64Value }
+    if let value = value as? String, let parsed = UInt64(value) { return parsed }
+    throw ErikaPluginError.invalidArguments("\(name) is required.")
+  }
+
+  private func boolEnvironmentFlag(_ name: String, environment: [String: String]) -> Bool {
+    switch environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "1", "true", "yes", "on": return true
+    default: return false
+    }
+  }
+
+  private func floatEnvironmentValue(_ name: String, environment: [String: String]) -> Float? {
+    guard let raw = environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !raw.isEmpty,
+          let value = Float(raw),
+          value.isFinite else {
+      return nil
+    }
+    return value
+  }
+
+  private func flutterError(_ error: Error) -> FlutterError {
+    FlutterError(code: "ERIKA_ERROR", message: String(describing: error), details: nil)
   }
 }
 
@@ -1543,11 +2683,7 @@ private extension ErikaEventC {
 
 private extension ErikaTrackSelectionC {
   func toFlutterMap() -> [String: Any] {
-    [
-      "video": Int(video),
-      "audio": Int(audio),
-      "subtitle": Int(subtitle),
-    ]
+    ["video": Int(video), "audio": Int(audio), "subtitle": Int(subtitle)]
   }
 }
 
@@ -1668,1481 +2804,5 @@ private func withOptionalCString<R>(_ value: String?, _ body: (UnsafePointer<CCh
   guard let value, !value.isEmpty else {
     return body(nil)
   }
-  return value.withCString { pointer in
-    body(pointer)
-  }
-}
-
-private protocol ErikaMetalSurfaceView: AnyObject {
-  var platformViewId: Int64 { get }
-  var metalLayer: CAMetalLayer { get }
-  var attachedPlayerId: Int64? { get set }
-  var bounds: NSRect { get }
-  var currentBackingScale: Double { get }
-
-  func updateDrawableSize()
-  func pngSnapshotData() -> Data?
-}
-
-private final class WeakErikaVideoPlatformViewBox {
-  weak var view: (NSView & ErikaMetalSurfaceView)?
-
-  init(view: NSView & ErikaMetalSurfaceView) {
-    self.view = view
-  }
-}
-
-final class ErikaVideoPlatformView: NSView, ErikaMetalSurfaceView {
-  let platformViewId: Int64
-  let metalLayer: CAMetalLayer
-
-  weak var plugin: ErikaFlutterPlugin?
-  var attachedPlayerId: Int64?
-
-  var currentBackingScale: Double {
-    let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1.0
-    return Double(max(1.0, scale))
-  }
-
-  init(viewId: Int64, arguments: Any?, plugin: ErikaFlutterPlugin?) {
-    platformViewId = viewId
-    self.plugin = plugin
-    metalLayer = CAMetalLayer()
-    super.init(frame: .zero)
-
-    wantsLayer = true
-    metalLayer.pixelFormat = .bgra8Unorm
-    metalLayer.framebufferOnly = true
-    metalLayer.isOpaque = true
-    metalLayer.backgroundColor = NSColor.black.cgColor
-    layer = metalLayer
-    layerContentsRedrawPolicy = .duringViewResize
-    autoresizingMask = [.width, .height]
-
-    if let params = arguments as? [String: Any],
-       let debugLabel = params["debugLabel"] as? String,
-       !debugLabel.isEmpty,
-       ProcessInfo.processInfo.environment["ERIKA_DEBUG_LABELS"] == "1" {
-      let label = NSTextField(labelWithString: debugLabel)
-      label.textColor = NSColor(white: 1.0, alpha: 0.4)
-      label.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-      label.translatesAutoresizingMaskIntoConstraints = false
-      addSubview(label)
-      NSLayoutConstraint.activate([
-        label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-        label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
-      ])
-    }
-  }
-
-  required init?(coder: NSCoder) {
-    fatalError("init(coder:) has not been implemented")
-  }
-
-  deinit {
-    plugin?.unregisterView(viewId: platformViewId)
-  }
-
-  override func layout() {
-    super.layout()
-    updateDrawableSize()
-    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
-  }
-
-  override func viewDidMoveToWindow() {
-    super.viewDidMoveToWindow()
-    updateDrawableSize()
-    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
-  }
-
-  override func viewDidChangeBackingProperties() {
-    super.viewDidChangeBackingProperties()
-    updateDrawableSize()
-    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
-  }
-
-  func updateDrawableSize() {
-    let scale = CGFloat(currentBackingScale)
-    let width = max(1.0, bounds.width * scale)
-    let height = max(1.0, bounds.height * scale)
-    metalLayer.frame = bounds
-    metalLayer.drawableSize = CGSize(width: width, height: height)
-  }
-
-  func pngSnapshotData() -> Data? {
-    snapshotPngData(of: self)
-  }
-}
-
-final class ErikaWindowOverlayView: NSView, ErikaMetalSurfaceView {
-  let platformViewId: Int64 = erikaWindowHostedVideoSurfaceId
-  let metalLayer: CAMetalLayer
-
-  weak var plugin: ErikaFlutterPlugin?
-  var attachedPlayerId: Int64?
-
-  private var overlayFrameGeneration: Int64?
-  private var lastTraceSignature: String?
-
-  /// Generation of the widget that currently owns this shared overlay surface.
-  /// Used to reject stale detach calls from disposed widgets.
-  var activeGeneration: Int64? { overlayFrameGeneration }
-
-  var currentBackingScale: Double {
-    let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1.0
-    return Double(max(1.0, scale))
-  }
-
-  init(plugin: ErikaFlutterPlugin?) {
-    self.plugin = plugin
-    metalLayer = CAMetalLayer()
-    super.init(frame: .zero)
-
-    wantsLayer = true
-    metalLayer.pixelFormat = .bgra8Unorm
-    metalLayer.framebufferOnly = true
-    metalLayer.isOpaque = true
-    metalLayer.backgroundColor = NSColor.black.cgColor
-    layer = metalLayer
-    layerContentsRedrawPolicy = .duringViewResize
-    autoresizingMask = [.width, .height]
-    isHidden = true
-    layer?.actions = [
-      "bounds": NSNull(),
-      "frame": NSNull(),
-      "position": NSNull(),
-    ]
-  }
-
-  required init?(coder: NSCoder) {
-    fatalError("init(coder:) has not been implemented")
-  }
-
-  deinit {
-    plugin?.detachOverlayView(self)
-  }
-
-  override func hitTest(_ point: NSPoint) -> NSView? {
-    nil
-  }
-
-  override func layout() {
-    super.layout()
-    updateDrawableSize()
-    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
-  }
-
-  override func viewDidMoveToWindow() {
-    super.viewDidMoveToWindow()
-    erikaWindowOverlayTrace(
-      "surface moved window=\(window?.windowNumber ?? -1) frame=\(frame)"
-    )
-    updateDrawableSize()
-    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
-  }
-
-  override func viewDidChangeBackingProperties() {
-    super.viewDidChangeBackingProperties()
-    updateDrawableSize()
-    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
-  }
-
-  func updateOverlayFrame(_ frame: CGRect?, visible: Bool, debugLabel: String?, generation: Int64?) {
-    if visible {
-      overlayFrameGeneration = generation
-    } else if let generation,
-              let overlayFrameGeneration,
-              generation != overlayFrameGeneration {
-      return
-    }
-
-    toolTip = erikaDebugLabelsEnabled ? debugLabel : nil
-    let shouldShow = visible &&
-      (frame?.width ?? 0) > 0 &&
-      (frame?.height ?? 0) > 0
-    if erikaWindowOverlayTraceEnabled {
-      let signature =
-        "\(window?.windowNumber ?? -1)|\(visible)|\(generation ?? -1)|\(String(describing: frame))"
-      if signature != lastTraceSignature {
-        lastTraceSignature = signature
-        erikaWindowOverlayTrace(
-          "frame window=\(window?.windowNumber ?? -1) visible=\(visible) " +
-          "generation=\(generation ?? -1) requested=\(String(describing: frame))"
-        )
-      }
-    }
-
-    CATransaction.begin()
-    CATransaction.setDisableActions(true)
-    defer { CATransaction.commit() }
-
-    guard shouldShow, let frame else {
-      isHidden = true
-      return
-    }
-
-    let resolvedFrame = frame.integral
-    if self.frame != resolvedFrame {
-      self.frame = resolvedFrame
-    }
-    isHidden = false
-    updateDrawableSize()
-    plugin?.resizePlayerAttachedToView(viewId: platformViewId)
-  }
-
-  func updateDrawableSize() {
-    let scale = CGFloat(currentBackingScale)
-    let width = max(1.0, bounds.width * scale)
-    let height = max(1.0, bounds.height * scale)
-    metalLayer.frame = bounds
-    metalLayer.drawableSize = CGSize(width: width, height: height)
-  }
-
-  func pngSnapshotData() -> Data? {
-    snapshotPngData(of: self)
-  }
-}
-
-private func snapshotPngData(of view: NSView) -> Data? {
-  guard view.bounds.width > 0, view.bounds.height > 0 else {
-    return nil
-  }
-  guard let representation = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
-    return nil
-  }
-  view.cacheDisplay(in: view.bounds, to: representation)
-  return representation.representation(using: .png, properties: [:])
-}
-
-final class ErikaVideoViewFactory: NSObject, FlutterPlatformViewFactory {
-  private weak var plugin: ErikaFlutterPlugin?
-
-  init(plugin: ErikaFlutterPlugin) {
-    self.plugin = plugin
-    super.init()
-  }
-
-  func createArgsCodec() -> (FlutterMessageCodec & NSObjectProtocol)? {
-    FlutterStandardMessageCodec.sharedInstance()
-  }
-
-  func create(withViewIdentifier viewId: Int64, arguments args: Any?) -> NSView {
-    let view = ErikaVideoPlatformView(viewId: viewId, arguments: args, plugin: plugin)
-    plugin?.registerView(view, viewId: viewId)
-    return view
-  }
-}
-
-private enum ErikaAssociatedObjectKeys {
-  static var windowOverlayView: UInt8 = 0
-}
-
-private extension NSWindow {
-  var erikaWindowOverlayView: ErikaWindowOverlayView? {
-    get {
-      objc_getAssociatedObject(
-        self,
-        &ErikaAssociatedObjectKeys.windowOverlayView
-      ) as? ErikaWindowOverlayView
-    }
-    set {
-      objc_setAssociatedObject(
-        self,
-        &ErikaAssociatedObjectKeys.windowOverlayView,
-        newValue,
-        .OBJC_ASSOCIATION_RETAIN_NONATOMIC
-      )
-    }
-  }
-}
-
-public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
-  static var sharedEventSink: FlutterEventSink?
-
-  private static let playerChannelName = "erika_flutter/player"
-  private static let eventsChannelName = "erika_flutter/events"
-  private static let videoViewType = "erika_flutter/video_view"
-
-  private var players: [Int64: ErikaPlayerHost] = [:]
-  private var views: [Int64: WeakErikaVideoPlatformViewBox] = [:]
-  private weak var flutterHostView: NSView?
-  private weak var flutterHostViewController: NSViewController?
-  private var requestedFlutterViewIdentifier: Int64?
-  private var requestedSecondaryWindow = false
-  private var windowOverlayPlayerIds: Set<Int64> = []
-  private var nextPlayerId: Int64 = 1
-  private var pollTimer: Timer?
-  private var activePlayerId: Int64?
-  private var remoteCommandTargets: [(MPRemoteCommand, Any)] = []
-  private var systemMediaNavigation: [Int64: (previousEnabled: Bool, nextEnabled: Bool)] = [:]
-
-  init(flutterHostView: NSView?, flutterHostViewController: NSViewController?) {
-    self.flutterHostView = flutterHostView
-    self.flutterHostViewController = flutterHostViewController
-    super.init()
-  }
-
-  deinit {
-    pollTimer?.invalidate()
-    clearNowPlayingInfo()
-    remoteCommandTargets.forEach { command, target in
-      command.isEnabled = false
-      command.removeTarget(target)
-    }
-  }
-
-  public static func register(with registrar: FlutterPluginRegistrar) {
-    let instance = ErikaFlutterPlugin(
-      flutterHostView: registrar.view,
-      flutterHostViewController: registrar.viewController
-    )
-    instance.configureSystemPlayback()
-    let playerChannel = FlutterMethodChannel(
-      name: playerChannelName,
-      binaryMessenger: registrar.messenger
-    )
-    let eventsChannel = FlutterEventChannel(
-      name: eventsChannelName,
-      binaryMessenger: registrar.messenger
-    )
-    registrar.addMethodCallDelegate(instance, channel: playerChannel)
-    eventsChannel.setStreamHandler(instance)
-    registrar.register(ErikaVideoViewFactory(plugin: instance), withId: videoViewType)
-  }
-
-  public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-    do {
-      switch call.method {
-      case "create":
-        result(try createPlayer(arguments: call.arguments))
-      case "dispose":
-        let args = try dictionaryArgs(call.arguments)
-        let playerId = try requiredInt64(args["playerId"], name: "playerId")
-        windowOverlayPlayerIds.remove(playerId)
-        players.removeValue(forKey: playerId)
-        systemMediaNavigation.removeValue(forKey: playerId)
-        if activePlayerId == playerId {
-          activePlayerId = nil
-          clearNowPlayingInfo()
-          refreshRemoteCommands()
-        }
-        result(nil)
-      case "open":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        guard let uri = args["uri"] as? String, !uri.isEmpty else {
-          throw ErikaPluginError.invalidArguments("uri is required.")
-        }
-        let headers = (args["httpHeaders"] as? [String: String]) ?? [:]
-        if let metadata = args["metadata"] as? [String: Any] {
-          try applyMediaMetadata(metadata, to: host)
-        } else {
-          host.clearMediaMetadata()
-        }
-        try host.open(uri: uri, httpHeaders: headers)
-        result(nil)
-      case "play":
-        let host = try playerHost(from: try dictionaryArgs(call.arguments))
-        try host.play()
-        activePlayerId = host.id
-        refreshRemoteCommands()
-        publishNowPlayingInfo(for: host)
-        result(nil)
-      case "pause":
-        try playerHost(from: try dictionaryArgs(call.arguments)).pause()
-        result(nil)
-      case "stop":
-        try playerHost(from: try dictionaryArgs(call.arguments)).stop()
-        result(nil)
-      case "close":
-        try playerHost(from: try dictionaryArgs(call.arguments)).close()
-        result(nil)
-      case "seek":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        let positionMicros = try requiredUInt64(args["positionMicros"], name: "positionMicros")
-        try host.seek(positionMicros: positionMicros)
-        result(nil)
-      case "setPlaybackRate":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        guard let rate = doubleValue(args["rate"]) else {
-          throw ErikaPluginError.invalidArguments("rate is required.")
-        }
-        try host.setPlaybackRate(rate)
-        result(nil)
-      case "setMediaMetadata":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        guard let metadata = args["metadata"] as? [String: Any] else {
-          throw ErikaPluginError.invalidArguments("metadata is required.")
-        }
-        try applyMediaMetadata(metadata, to: host)
-        result(nil)
-      case "setSystemMediaNavigation":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        systemMediaNavigation[host.id] = (
-          previousEnabled: boolValue(args["previousEnabled"]) ?? false,
-          nextEnabled: boolValue(args["nextEnabled"]) ?? false
-        )
-        if activePlayerId == host.id {
-          refreshRemoteCommands()
-          publishNowPlayingInfo(for: host)
-        }
-        result(nil)
-      case "setVolume":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        guard let volume = doubleValue(args["volume"]) else {
-          throw ErikaPluginError.invalidArguments("volume is required.")
-        }
-        try host.setVolume(volume)
-        result(nil)
-      case "setUpscaler":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        guard let mode = int32Value(args["mode"]) else {
-          throw ErikaPluginError.invalidArguments("mode is required.")
-        }
-        try host.setUpscaler(mode: mode)
-        result(nil)
-      case "setSubtitleScale":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        guard let scale = doubleValue(args["scale"]) else {
-          throw ErikaPluginError.invalidArguments("scale is required.")
-        }
-        try host.setSubtitleScale(scale)
-        result(nil)
-      case "registerSubtitleMemoryFont":
-        let args = try dictionaryArgs(call.arguments)
-        guard let data = args["data"] as? FlutterStandardTypedData else { throw ErikaPluginError.invalidArguments("data is required.") }
-        result(Int64(clamping: try playerHost(from: args).registerSubtitleMemoryFont(data.data)))
-      case "selectSubtitleMemoryFonts":
-        let args = try dictionaryArgs(call.arguments)
-        try playerHost(from: args).selectSubtitleMemoryFonts((args["fontIds"] as? [NSNumber] ?? []).map { $0.uint64Value })
-        result(nil)
-      case "clearSubtitleMemoryFonts":
-        let args = try dictionaryArgs(call.arguments)
-        try playerHost(from: args).clearSubtitleMemoryFonts()
-        result(nil)
-      case "getSubtitleMemoryFontStatus":
-        let args = try dictionaryArgs(call.arguments)
-        result(try playerHost(from: args).subtitleMemoryFontStatus())
-      case "setSubtitleStyle":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        if args.keys.contains("fontFamily") || args.keys.contains("fontFilePath") {
-          try host.setSubtitleFont(
-            family: args["fontFamily"] as? String,
-            filePath: args["fontFilePath"] as? String
-          )
-        }
-        if args.keys.contains("primaryColorRgba") || args.keys.contains("outlineColorRgba")
-          || args.keys.contains("fontSize") || args.keys.contains("outlineWidth")
-          || args.keys.contains("bold") || args.keys.contains("italic")
-          || args.keys.contains("underline") || args.keys.contains("strikeOut")
-          || args.keys.contains("spacing") || args.keys.contains("scaleXPercent")
-          || args.keys.contains("scaleYPercent") || args.keys.contains("borderStyle")
-          || args.keys.contains("shadowDepth") || args.keys.contains("blur")
-          || args.keys.contains("alignment") || args.keys.contains("marginLeft")
-          || args.keys.contains("marginRight") || args.keys.contains("marginVertical")
-          || args.keys.contains("overrideMask")
-        {
-          let primary = int64Value(args["primaryColorRgba"]) ?? 0xFFFF_FFFF
-          let outline = int64Value(args["outlineColorRgba"]) ?? 0x0000_007F
-          try host.setSubtitleStyle(
-            fontFamily: args["fontFamily"] as? String,
-            fontFilePath: args["fontFilePath"] as? String,
-            primaryRgba: UInt32(truncatingIfNeeded: primary),
-            outlineRgba: UInt32(truncatingIfNeeded: outline),
-            fontSize: doubleValue(args["fontSize"]) ?? 48.0,
-            outlineWidth: doubleValue(args["outlineWidth"]) ?? 2.0,
-            bold: boolValue(args["bold"]) ?? false,
-            italic: boolValue(args["italic"]) ?? false,
-            underline: boolValue(args["underline"]) ?? false,
-            strikeOut: boolValue(args["strikeOut"]) ?? false,
-            spacing: doubleValue(args["spacing"]) ?? 0.0,
-            scaleXPercent: doubleValue(args["scaleXPercent"]) ?? 100.0,
-            scaleYPercent: doubleValue(args["scaleYPercent"]) ?? 100.0,
-            borderStyle: int32Value(args["borderStyle"]) ?? 1,
-            shadowDepth: doubleValue(args["shadowDepth"]) ?? 0.0,
-            blur: doubleValue(args["blur"]) ?? 0.0,
-            alignment: int32Value(args["alignment"]) ?? 2,
-            marginLeft: int32Value(args["marginLeft"]) ?? 48,
-            marginRight: int32Value(args["marginRight"]) ?? 48,
-            marginVertical: int32Value(args["marginVertical"]) ?? 54,
-            overrideMask: UInt32(truncatingIfNeeded: int64Value(args["overrideMask"]) ?? 0)
-          )
-        }
-        result(nil)
-      case "getUpscalerStatus":
-        let args = try dictionaryArgs(call.arguments)
-        result(try playerHost(from: args).upscalerStatus())
-      case "getOutputStatus":
-        let args = try dictionaryArgs(call.arguments)
-        result(try playerHost(from: args).outputStatus())
-      case "getPresenterStats":
-        let args = try dictionaryArgs(call.arguments)
-        result(try playerHost(from: args).presenterStats())
-      case "setDebugHudEnabled":
-        let args = try dictionaryArgs(call.arguments)
-        try playerHost(from: args).setDebugHudEnabled(boolValue(args["enabled"]) ?? false)
-        result(nil)
-      case "addExternalSubtitle":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        guard let uri = args["uri"] as? String, !uri.isEmpty else {
-          throw ErikaPluginError.invalidArguments("uri is required.")
-        }
-        result(try host.addExternalSubtitle(uri: uri))
-      case "removeSubtitleTrack":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        let trackId = try requiredInt64(args["trackId"], name: "trackId")
-        try host.removeSubtitleTrack(trackId: trackId)
-        result(nil)
-      case "loadDanmakuFile":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        guard let uri = args["uri"] as? String, !uri.isEmpty else {
-          throw ErikaPluginError.invalidArguments("uri is required.")
-        }
-        try host.loadDanmakuFile(uri: uri)
-        result(nil)
-      case "loadDanmakuJson":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        guard let json = args["json"] as? String, !json.isEmpty else {
-          throw ErikaPluginError.invalidArguments("json is required.")
-        }
-        try host.loadDanmakuJson(json)
-        result(nil)
-      case "addDanmakuTrackFile":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        guard let uri = args["uri"] as? String, !uri.isEmpty else {
-          throw ErikaPluginError.invalidArguments("uri is required.")
-        }
-        let offsetMicros = int64Value(args["offsetMicros"]) ?? 0
-        result(Int64(clamping: try host.addDanmakuTrackFile(
-          uri: uri,
-          name: args["name"] as? String,
-          offsetMicros: offsetMicros
-        )))
-      case "addDanmakuTrackJson":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        guard let json = args["json"] as? String, !json.isEmpty else {
-          throw ErikaPluginError.invalidArguments("json is required.")
-        }
-        let offsetMicros = int64Value(args["offsetMicros"]) ?? 0
-        result(Int64(clamping: try host.addDanmakuTrackJson(
-          json,
-          name: args["name"] as? String,
-          offsetMicros: offsetMicros
-        )))
-      case "removeDanmakuTrack":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        try host.removeDanmakuTrack(trackId: try requiredUInt64(args["trackId"], name: "trackId"))
-        result(nil)
-      case "setDanmakuTrackEnabled":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        try host.setDanmakuTrackEnabled(
-          trackId: try requiredUInt64(args["trackId"], name: "trackId"),
-          enabled: boolValue(args["enabled"]) ?? true
-        )
-        result(nil)
-      case "setDanmakuTrackOffset":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        try host.setDanmakuTrackOffset(
-          trackId: try requiredUInt64(args["trackId"], name: "trackId"),
-          offsetMicros: int64Value(args["offsetMicros"]) ?? 0
-        )
-        result(nil)
-      case "setDanmakuGlobalOffset":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        try host.setDanmakuGlobalOffset(offsetMicros: int64Value(args["offsetMicros"]) ?? 0)
-        result(nil)
-      case "danmakuTracks":
-        let host = try playerHost(from: try dictionaryArgs(call.arguments))
-        result(try host.danmakuTracks())
-      case "clearDanmaku":
-        let host = try playerHost(from: try dictionaryArgs(call.arguments))
-        try host.clearDanmaku()
-        result(nil)
-      case "setDanmakuEnabled":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        try host.setDanmakuEnabled(boolValue(args["enabled"]) ?? true)
-        result(nil)
-      case "setDanmakuConfig":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        try host.setDanmakuConfig(
-          danmakuConfig(from: args, base: host.danmakuConfigSnapshot())
-        )
-        if args.keys.contains("customFontFamily") || args.keys.contains("customFontFilePath") {
-          try host.setDanmakuFont(
-            family: args["customFontFamily"] as? String,
-            filePath: args["customFontFilePath"] as? String
-          )
-        }
-        if let blockWordsJson = args["blockWordsJson"] as? String {
-          try host.setDanmakuBlockWordsJson(blockWordsJson)
-        }
-        result(nil)
-      case "selectAudioTrack":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        try host.selectAudioTrack(trackId: optionalTrackId(args["trackId"]))
-        result(nil)
-      case "selectSubtitleTrack":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        try host.selectSubtitleTrack(trackId: optionalTrackId(args["trackId"]))
-        result(nil)
-      case "tracks":
-        let host = try playerHost(from: try dictionaryArgs(call.arguments))
-        result(try host.tracks())
-      case "screenshot":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        let view = try optionalVideoView(from: args, host: host)
-        let width = int64Value(args["width"]).map(Int.init)
-        let height = int64Value(args["height"]).map(Int.init)
-        if let data = host.screenshot(view: view, width: width, height: height) {
-          result(FlutterStandardTypedData(bytes: data))
-        } else {
-          result(nil)
-        }
-      case "attachView":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        let viewId = try requiredInt64(args["viewId"], name: "viewId")
-        guard let view = views[viewId]?.view else {
-          throw ErikaPluginError.viewNotFound(viewId)
-        }
-        try host.attach(view: view)
-        result(nil)
-      case "detachView":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        let viewId = try requiredInt64(args["viewId"], name: "viewId")
-        host.detach(viewId: viewId)
-        if viewId == erikaWindowHostedVideoSurfaceId {
-          windowOverlayPlayerIds.remove(host.id)
-        }
-        result(nil)
-      case "attachOverlay":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        updateRequestedFlutterView(from: args)
-        let installation = try ensureWindowOverlayInstalled()
-        erikaWindowOverlayTrace(
-          "attach request player=\(host.id) flutterView=\(requestedFlutterViewIdentifier ?? -1) " +
-          "secondary=\(requestedSecondaryWindow) targetWindow=\(installation.hostWindow.windowNumber)"
-        )
-        let overlay = installation.overlay
-        try host.attach(view: overlay)
-        windowOverlayPlayerIds.insert(host.id)
-        result(erikaWindowHostedVideoSurfaceId)
-      case "detachOverlay":
-        let args = try dictionaryArgs(call.arguments)
-        let host = try playerHost(from: args)
-        let generation = int64Value(args["generation"])
-        let overlay = resolveWindowOverlay()
-        // A disposing widget can fire detachOverlay after a newer widget has
-        // already re-attached the shared overlay surface. Skip the teardown so
-        // the stale detach cannot stop the live surface's display link and
-        // leave a frozen, non-rendering overlay on screen.
-        if let generation,
-           let activeGeneration = overlay?.activeGeneration,
-           generation != activeGeneration {
-          result(nil)
-          return
-        }
-        host.detach(viewId: erikaWindowHostedVideoSurfaceId)
-        windowOverlayPlayerIds.remove(host.id)
-        overlay?.updateOverlayFrame(nil, visible: false, debugLabel: nil, generation: generation)
-        result(nil)
-      case "setOverlayFrame":
-        let args = try dictionaryArgs(call.arguments)
-        let visible = boolValue(args["visible"]) ?? true
-        let generation = int64Value(args["generation"])
-        if !visible,
-           let generation,
-           let activeGeneration = resolveWindowOverlay()?.activeGeneration,
-           generation != activeGeneration {
-          result(nil)
-          return
-        }
-        updateRequestedFlutterView(from: args)
-        let installation = try ensureWindowOverlayInstalled()
-        let overlay = installation.overlay
-        let frame = convertedOverlayRect(
-          from: args,
-          sourceView: installation.flutterHostView,
-          targetView: overlay
-        )
-        overlay.updateOverlayFrame(
-          frame,
-          visible: visible,
-          debugLabel: args["debugLabel"] as? String,
-          generation: generation
-        )
-        if installation.movedBetweenWindows {
-          // A wgpu/Metal surface retains the CAMetalLayer pointer, but moving
-          // that layer into another NSWindow invalidates its drawable chain on
-          // some macOS/Flutter combinations. Re-attach after the new frame and
-          // backing scale are known so rendering resumes in the destination.
-          for playerId in windowOverlayPlayerIds {
-            if let attachedHost = players[playerId] {
-              try attachedHost.attach(view: overlay)
-            }
-          }
-        }
-        result(nil)
-      default:
-        result(FlutterMethodNotImplemented)
-      }
-    } catch {
-      result(flutterError(error))
-    }
-  }
-
-  public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
-    Self.sharedEventSink = events
-    startPollTimerIfNeeded()
-    return nil
-  }
-
-  public func onCancel(withArguments arguments: Any?) -> FlutterError? {
-    Self.sharedEventSink = nil
-    return nil
-  }
-
-  fileprivate func registerView(_ view: NSView & ErikaMetalSurfaceView, viewId: Int64) {
-    views[viewId] = WeakErikaVideoPlatformViewBox(view: view)
-  }
-
-  fileprivate func unregisterView(viewId: Int64) {
-    views.removeValue(forKey: viewId)
-    for host in players.values {
-      host.detach(viewId: viewId)
-    }
-  }
-
-  fileprivate func resizePlayerAttachedToView(viewId: Int64) {
-    for host in players.values {
-      if let attachedPlayerId = views[viewId]?.view?.attachedPlayerId,
-         attachedPlayerId == host.id {
-        host.resizeFromAttachedView()
-      }
-    }
-  }
-
-  fileprivate func detachOverlayView(_ view: ErikaWindowOverlayView) {
-    for host in players.values {
-      host.detach(viewId: view.platformViewId)
-    }
-    if views[view.platformViewId]?.view === view {
-      views.removeValue(forKey: view.platformViewId)
-    }
-    if view.window?.erikaWindowOverlayView === view {
-      view.window?.erikaWindowOverlayView = nil
-    }
-  }
-
-  private struct WindowOverlayInstallation {
-    let overlay: ErikaWindowOverlayView
-    let flutterHostView: NSView
-    let hostWindow: NSWindow
-    let movedBetweenWindows: Bool
-  }
-
-  private func ensureWindowOverlayInstalled() throws -> WindowOverlayInstallation {
-    guard let activeFlutterHostView else {
-      erikaWindowOverlayTrace(
-        "target unavailable flutterView=\(requestedFlutterViewIdentifier ?? -1) " +
-        "secondary=\(requestedSecondaryWindow); refusing main-window fallback"
-      )
-      throw ErikaPluginError.overlayNotAvailable
-    }
-    guard let hostWindow = activeFlutterHostView.window else {
-      throw ErikaPluginError.overlayNotAvailable
-    }
-    guard let hostSuperview = activeFlutterHostView.superview else {
-      throw ErikaPluginError.overlayNotAvailable
-    }
-
-    let existingOverlay = resolveWindowOverlay()
-    // `setOverlayFrame` runs on every geometry update. Once the overlay is
-    // already mounted in the right place there is nothing to install, and
-    // re-adding it would restart the whole attach path (viewDidMoveToWindow →
-    // updateDrawableSize → resize → display driver) on every resize frame.
-    if let existingOverlay,
-       existingOverlay.superview === hostSuperview,
-       existingOverlay.window === hostWindow {
-      existingOverlay.plugin = self
-      return WindowOverlayInstallation(
-        overlay: existingOverlay,
-        flutterHostView: activeFlutterHostView,
-        hostWindow: hostWindow,
-        movedBetweenWindows: false
-      )
-    }
-
-    prepareFlutterHostViewForWindowOverlay(activeFlutterHostView)
-
-    let overlay = existingOverlay ??
-      hostWindow.erikaWindowOverlayView ??
-      ErikaWindowOverlayView(plugin: self)
-    let previousWindow = overlay.window
-    overlay.plugin = self
-
-    if overlay.superview !== hostSuperview {
-      overlay.removeFromSuperview()
-      overlay.frame = .zero
-      overlay.translatesAutoresizingMaskIntoConstraints = true
-    }
-    hostSuperview.addSubview(
-      overlay,
-      positioned: shouldPlaceWindowOverlayAboveFlutter() ? .above : .below,
-      relativeTo: activeFlutterHostView
-    )
-
-    if previousWindow !== hostWindow {
-      previousWindow?.erikaWindowOverlayView = nil
-      erikaWindowOverlayTrace(
-        "move surface flutterView=\(requestedFlutterViewIdentifier ?? -1) " +
-        "secondary=\(requestedSecondaryWindow) " +
-        "window=\(previousWindow?.windowNumber ?? -1)->\(hostWindow.windowNumber)"
-      )
-    }
-    hostWindow.erikaWindowOverlayView = overlay
-    registerView(overlay, viewId: overlay.platformViewId)
-    if existingOverlay == nil {
-      for playerId in windowOverlayPlayerIds {
-        if let host = players[playerId] {
-          try host.attach(view: overlay)
-        }
-      }
-    }
-    return WindowOverlayInstallation(
-      overlay: overlay,
-      flutterHostView: activeFlutterHostView,
-      hostWindow: hostWindow,
-      movedBetweenWindows: existingOverlay != nil && previousWindow !== hostWindow
-    )
-  }
-
-  private func updateRequestedFlutterView(from args: [String: Any]) {
-    if let flutterViewIdentifier = int64Value(args["flutterViewId"]) {
-      requestedFlutterViewIdentifier = flutterViewIdentifier
-    }
-    if let secondaryWindow = boolValue(args["secondaryWindow"]) {
-      requestedSecondaryWindow = secondaryWindow
-    }
-  }
-
-  /// The player widget can move between FlutterViews without rebuilding its
-  /// State. Resolve the native host from the view id sent by Dart so the same
-  /// Metal overlay follows the widget into (and back out of) a detached window.
-  private var activeFlutterHostView: NSView? {
-    if let requestedFlutterViewIdentifier {
-      return NSApp.windows
-        .compactMap({ $0.contentViewController as? FlutterViewController })
-        .first(where: {
-          Int64($0.viewIdentifier) == requestedFlutterViewIdentifier
-        })?
-        .view
-    }
-    if let keyController = NSApp.keyWindow?.contentViewController
-        as? FlutterViewController {
-      return keyController.view
-    }
-    if let mainController = NSApp.mainWindow?.contentViewController
-        as? FlutterViewController {
-      return mainController.view
-    }
-    return flutterHostView ?? flutterHostViewController?.view
-  }
-
-  private func resolveWindowOverlay() -> ErikaWindowOverlayView? {
-    if let hostWindow = activeFlutterHostView?.window,
-       let overlay = hostWindow.erikaWindowOverlayView {
-      return overlay
-    }
-    if let hostWindow = flutterHostView?.window,
-       let overlay = hostWindow.erikaWindowOverlayView {
-      return overlay
-    }
-    if let hostWindow = flutterHostViewController?.view.window,
-       let overlay = hostWindow.erikaWindowOverlayView {
-      return overlay
-    }
-    if let overlay = NSApp.keyWindow?.erikaWindowOverlayView {
-      return overlay
-    }
-    if let overlay = NSApp.mainWindow?.erikaWindowOverlayView {
-      return overlay
-    }
-    return NSApp.windows.compactMap(\.erikaWindowOverlayView).first
-  }
-
-  private func shouldPlaceWindowOverlayAboveFlutter() -> Bool {
-    let environment = ProcessInfo.processInfo.environment
-    if environment["ERIKA_WINDOW_OVERLAY_BELOW"] == "1" {
-      return false
-    }
-    return environment["ERIKA_WINDOW_OVERLAY_ABOVE"] == "1"
-  }
-
-  private func prepareFlutterHostViewForWindowOverlay(_ view: NSView) {
-    if shouldPlaceWindowOverlayAboveFlutter() {
-      return
-    }
-    view.wantsLayer = true
-    view.layer?.isOpaque = false
-    view.layer?.backgroundColor = NSColor.clear.cgColor
-    if let targetController = view.window?.contentViewController
-        as? FlutterViewController {
-      targetController.backgroundColor = .clear
-    }
-    view.window?.isOpaque = false
-    view.window?.backgroundColor = .clear
-  }
-
-  private func convertedOverlayRect(
-    from args: [String: Any],
-    sourceView: NSView,
-    targetView: NSView
-  ) -> CGRect? {
-    guard let x = doubleValue(args["x"]),
-          let y = doubleValue(args["y"]),
-          let width = doubleValue(args["width"]),
-          let height = doubleValue(args["height"]) else {
-      return nil
-    }
-    guard width > 0, height > 0 else {
-      return nil
-    }
-    guard let targetSuperview = targetView.superview else {
-      return CGRect(x: x, y: y, width: width, height: height)
-    }
-    let sourceY = sourceView.isFlipped
-      ? y
-      : sourceView.bounds.height - y - height
-    let rect = CGRect(x: x, y: sourceY, width: width, height: height)
-    return sourceView.convert(rect, to: targetSuperview)
-  }
-
-  private func createPlayer(arguments: Any?) throws -> Int64 {
-    guard let library = ErikaNativeLibrary.shared else {
-      throw ErikaPluginError.libraryNotFound([
-        ProcessInfo.processInfo.environment["ERIKA_CAPI_DYLIB"] ?? "",
-        ErikaNativeLibrary.sourceTreeDebugLibraryPath() ?? "",
-        "liberika_capi.dylib",
-      ].filter { !$0.isEmpty })
-    }
-    let id = nextPlayerId
-    nextPlayerId += 1
-    let host = try ErikaPlayerHost(
-      id: id,
-      library: library,
-      config: presenterConfigForNewPlayer(arguments: arguments)
-    )
-    host.onNowPlayingChanged = { [weak self] changedHost in
-      guard self?.activePlayerId == changedHost.id else { return }
-      self?.handleNowPlayingChanged(for: changedHost)
-    }
-    players[id] = host
-    systemMediaNavigation[id] = (previousEnabled: false, nextEnabled: false)
-    startPollTimerIfNeeded()
-    return id
-  }
-
-  private func configureSystemPlayback() {
-    let commands = MPRemoteCommandCenter.shared()
-    addRemoteTarget(commands.playCommand) { [weak self] _ in
-      self?.performRemoteCommand { try $0.play() } ?? .commandFailed
-    }
-    addRemoteTarget(commands.pauseCommand) { [weak self] _ in
-      self?.performRemoteCommand { try $0.pause() } ?? .commandFailed
-    }
-    addRemoteTarget(commands.togglePlayPauseCommand) { [weak self] _ in
-      self?.performRemoteCommand { host in
-        if host.isPlaying {
-          try host.pause()
-        } else {
-          try host.play()
-        }
-      } ?? .commandFailed
-    }
-    addRemoteTarget(commands.stopCommand) { [weak self] _ in
-      self?.performRemoteCommand { try $0.stop() } ?? .commandFailed
-    }
-    addRemoteTarget(commands.changePlaybackPositionCommand) { [weak self] event in
-      guard let positionEvent = event as? MPChangePlaybackPositionCommandEvent else {
-        return .commandFailed
-      }
-      return self?.performRemoteSeek(positionEvent.positionTime) ?? .commandFailed
-    }
-    addRemoteTarget(commands.previousTrackCommand) { [weak self] _ in
-      self?.emitSystemMediaNavigation("previous") ?? .commandFailed
-    }
-    addRemoteTarget(commands.nextTrackCommand) { [weak self] _ in
-      self?.emitSystemMediaNavigation("next") ?? .commandFailed
-    }
-    refreshRemoteCommands()
-  }
-
-  private func addRemoteTarget(
-    _ command: MPRemoteCommand,
-    handler: @escaping (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus
-  ) {
-    command.isEnabled = false
-    let target = command.addTarget(handler: handler)
-    remoteCommandTargets.append((command, target))
-  }
-
-  private func applyMediaMetadata(_ metadata: [String: Any], to host: ErikaPlayerHost) throws {
-    guard let title = metadata["title"] as? String, !title.isEmpty else {
-      throw ErikaPluginError.invalidArguments("metadata.title is required.")
-    }
-    try host.setMediaMetadata(
-      title: title,
-      artist: metadata["artist"] as? String,
-      album: metadata["album"] as? String,
-      artworkData: (metadata["artwork"] as? FlutterStandardTypedData)?.data
-    )
-  }
-
-  private func handleNowPlayingChanged(for host: ErikaPlayerHost) {
-    if host.playbackState == 6 {
-      activePlayerId = nil
-      clearNowPlayingInfo()
-      refreshRemoteCommands()
-      return
-    }
-    publishNowPlayingInfo(for: host)
-  }
-
-  private func publishNowPlayingInfo(
-    for host: ErikaPlayerHost,
-    playbackState: MPNowPlayingPlaybackState? = nil
-  ) {
-    let resolvedPlaybackState = playbackState ??
-      (host.isPlaying ? .playing : host.isStopped ? .stopped : .paused)
-    var info: [String: Any] = [
-      MPMediaItemPropertyTitle: host.nowPlayingTitle,
-      MPNowPlayingInfoPropertyElapsedPlaybackTime: host.nowPlayingPositionSeconds,
-      MPNowPlayingInfoPropertyPlaybackRate: resolvedPlaybackState == .playing ? host.playbackRate : 0,
-      MPNowPlayingInfoPropertyDefaultPlaybackRate: host.playbackRate,
-      MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.video.rawValue,
-    ]
-    if let artist = host.nowPlayingArtist { info[MPMediaItemPropertyArtist] = artist }
-    if let album = host.nowPlayingAlbum { info[MPMediaItemPropertyAlbumTitle] = album }
-    if let artwork = host.nowPlayingArtwork { info[MPMediaItemPropertyArtwork] = artwork }
-    if let duration = host.durationSeconds { info[MPMediaItemPropertyPlaybackDuration] = duration }
-    let center = MPNowPlayingInfoCenter.default()
-    center.nowPlayingInfo = info
-    center.playbackState = resolvedPlaybackState
-  }
-
-  private func clearNowPlayingInfo() {
-    let center = MPNowPlayingInfoCenter.default()
-    center.nowPlayingInfo = nil
-    center.playbackState = .stopped
-  }
-
-  private func activePlayer() -> ErikaPlayerHost? {
-    activePlayerId.flatMap { players[$0] }
-  }
-
-  private func performRemoteCommand(
-    _ command: @escaping (ErikaPlayerHost) throws -> Void
-  ) -> MPRemoteCommandHandlerStatus {
-    performOnMain {
-      guard let host = self.activePlayer() else { return .noSuchContent }
-      do {
-        try command(host)
-        return .success
-      } catch {
-        return .commandFailed
-      }
-    }
-  }
-
-  private func performRemoteSeek(_ position: TimeInterval) -> MPRemoteCommandHandlerStatus {
-    guard position.isFinite else { return .commandFailed }
-    return performRemoteCommand { host in
-      let duration = host.durationSeconds ?? position
-      let boundedPosition = min(max(0, position), max(0, duration))
-      try host.seek(positionMicros: UInt64(boundedPosition * 1_000_000))
-    }
-  }
-
-  private func emitSystemMediaNavigation(_ navigation: String) -> MPRemoteCommandHandlerStatus {
-    performOnMain {
-      guard let playerId = self.activePlayerId,
-            self.players[playerId] != nil,
-            let capabilities = self.systemMediaNavigation[playerId] else { return .noSuchContent }
-      let enabled = navigation == "previous"
-        ? capabilities.previousEnabled
-        : capabilities.nextEnabled
-      guard enabled else { return .noSuchContent }
-      Self.sharedEventSink?([
-        "playerId": playerId,
-        "kind": 13,
-        "navigation": navigation,
-      ])
-      return .success
-    }
-  }
-
-  private func performOnMain(
-    _ work: @escaping () -> MPRemoteCommandHandlerStatus
-  ) -> MPRemoteCommandHandlerStatus {
-    if Thread.isMainThread {
-      return work()
-    }
-    return DispatchQueue.main.sync(execute: work)
-  }
-
-  private func refreshRemoteCommands() {
-    let commands = MPRemoteCommandCenter.shared()
-    let enabled = activePlayer() != nil
-    remoteCommandTargets.forEach { command, _ in
-      command.isEnabled = enabled
-    }
-    let capabilities = activePlayerId.flatMap { systemMediaNavigation[$0] }
-    commands.previousTrackCommand.isEnabled = enabled && capabilities?.previousEnabled == true
-    commands.nextTrackCommand.isEnabled = enabled && capabilities?.nextEnabled == true
-  }
-
-  private func presenterConfigForNewPlayer(arguments: Any?) throws -> ErikaPresenterConfigC {
-    if let args = arguments as? [String: Any],
-       let explicitMode = int32Value(args["outputMode"]) {
-      let headroom = floatValue(args["edrHeadroom"]) ?? 4.0
-      switch explicitMode {
-      case 1:
-        return .appleEdr(headroom: headroom)
-      default:
-        return .sdr
-      }
-    }
-
-    let headroom = resolvedEdrHeadroom()
-    if headroom > 1.0 {
-      NSLog("ErikaFlutterPlugin: using Apple EDR output, headroom \(headroom)x")
-      return .appleEdr(headroom: headroom)
-    }
-    return .sdr
-  }
-
-  private func resolvedEdrHeadroom() -> Float {
-    let environment = ProcessInfo.processInfo.environment
-    if boolEnvironmentFlag("ERIKA_DISABLE_EDR", environment: environment) {
-      return 1.0
-    }
-    if let override = floatEnvironmentValue("ERIKA_EDR_HEADROOM", environment: environment),
-       override > 1.0 {
-      return override
-    }
-
-    let screenHeadroom = currentScreenEdrHeadroom()
-    if screenHeadroom > 1.0 {
-      return screenHeadroom
-    }
-    if boolEnvironmentFlag("ERIKA_ENABLE_EDR", environment: environment) {
-      return 4.0
-    }
-    return 1.0
-  }
-
-  private func currentScreenEdrHeadroom() -> Float {
-    let screen = flutterHostView?.window?.screen ??
-      flutterHostViewController?.view.window?.screen ??
-      NSApp.keyWindow?.screen ??
-      NSApp.mainWindow?.screen ??
-      NSScreen.main
-    guard let screen else {
-      return 1.0
-    }
-
-    let key = "maximumPotentialExtendedDynamicRangeColorComponentValue"
-    guard screen.responds(to: Selector((key))),
-          let number = screen.value(forKey: key) as? NSNumber else {
-      return 1.0
-    }
-    return max(1.0, number.floatValue)
-  }
-
-  private func boolEnvironmentFlag(
-    _ name: String,
-    environment: [String: String]
-  ) -> Bool {
-    switch environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-    case "1", "true", "yes", "on":
-      return true
-    default:
-      return false
-    }
-  }
-
-  private func floatEnvironmentValue(
-    _ name: String,
-    environment: [String: String]
-  ) -> Float? {
-    guard let raw = environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines),
-          !raw.isEmpty,
-          let value = Float(raw),
-          value.isFinite else {
-      return nil
-    }
-    return value
-  }
-
-  private func int32Value(_ value: Any?) -> Int32? {
-    if let value = value as? Int32 {
-      return value
-    }
-    if let value = value as? NSNumber {
-      return value.int32Value
-    }
-    if let value = value as? String {
-      return Int32(value)
-    }
-    return nil
-  }
-
-  private func floatValue(_ value: Any?) -> Float? {
-    if let value = value as? Float, value.isFinite {
-      return value
-    }
-    if let value = value as? Double, value.isFinite {
-      return Float(value)
-    }
-    if let value = value as? NSNumber {
-      let result = value.floatValue
-      return result.isFinite ? result : nil
-    }
-    if let value = value as? String,
-       let result = Float(value),
-       result.isFinite {
-      return result
-    }
-    return nil
-  }
-
-  private func playerHost(from args: [String: Any]) throws -> ErikaPlayerHost {
-    let playerId = try requiredInt64(args["playerId"], name: "playerId")
-    guard let host = players[playerId] else {
-      throw ErikaPluginError.playerNotFound(playerId)
-    }
-    return host
-  }
-
-  private func optionalVideoView(
-    from args: [String: Any],
-    host: ErikaPlayerHost
-  ) throws -> (NSView & ErikaMetalSurfaceView)? {
-    guard let viewId = int64Value(args["viewId"]) else {
-      return nil
-    }
-    guard let view = views[viewId]?.view,
-          view.attachedPlayerId == host.id else {
-      throw ErikaPluginError.viewNotFound(viewId)
-    }
-    return view
-  }
-
-  private func optionalTrackId(_ value: Any?) throws -> Int64? {
-    if value == nil || value is NSNull {
-      return nil
-    }
-    guard let trackId = int64Value(value) else {
-      throw ErikaPluginError.invalidArguments("trackId must be an integer or null.")
-    }
-    return trackId >= 0 ? trackId : nil
-  }
-
-  private func danmakuConfig(
-    from args: [String: Any],
-    base: ErikaDanmakuConfigC
-  ) -> ErikaDanmakuConfigC {
-    var config = base
-    if let value = boolValue(args["enabled"]) {
-      config.enabled = value ? 1 : 0
-    }
-    if let value = doubleValue(args["fontSize"]) {
-      config.fontSize = Float(value)
-    }
-    if let value = doubleValue(args["opacity"]) {
-      config.opacity = Float(value)
-    }
-    if let value = doubleValue(args["displayArea"]) {
-      config.displayArea = Float(value)
-    }
-    if let value = doubleValue(args["scrollDurationSeconds"]) {
-      config.scrollDurationSeconds = Float(value)
-    }
-    if let value = doubleValue(args["scrollSpeedFactor"]) {
-      config.scrollSpeedFactor = Float(value)
-    }
-    if let value = doubleValue(args["trackGapRatio"]) {
-      config.trackGapRatio = Float(value)
-    }
-    if let value = doubleValue(args["outlineWidth"]) {
-      config.outlineWidth = Float(value)
-    }
-    if let value = doubleValue(args["shadowOffsetX"]) {
-      config.shadowOffsetX = Float(value)
-    }
-    if let value = doubleValue(args["shadowOffsetY"]) {
-      config.shadowOffsetY = Float(value)
-    }
-    if let value = boolValue(args["mergeDuplicates"]) {
-      config.mergeDuplicates = value ? 1 : 0
-    }
-    if let value = boolValue(args["allowStacking"]) {
-      config.allowStacking = value ? 1 : 0
-    }
-    if let value = boolValue(args["allowScrollOverwrite"]) {
-      config.allowScrollOverwrite = value ? 1 : 0
-    }
-    if let value = int64Value(args["maxQuantity"]), value > 0 {
-      config.maxQuantity = UInt32(clamping: value)
-    }
-    if let value = int64Value(args["maxLinesPerMode"]), value > 0 {
-      config.maxLinesPerMode = UInt32(clamping: value)
-    }
-    if let value = boolValue(args["blockTop"]) {
-      config.blockTop = value ? 1 : 0
-    }
-    if let value = boolValue(args["blockBottom"]) {
-      config.blockBottom = value ? 1 : 0
-    }
-    if let value = boolValue(args["blockScroll"]) {
-      config.blockScroll = value ? 1 : 0
-    }
-    if let value = int64Value(args["shadowStyle"]) {
-      config.shadowStyle = Int32(clamping: value)
-    }
-    return config
-  }
-
-  private func startPollTimerIfNeeded() {
-    guard pollTimer == nil else {
-      return
-    }
-    let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
-      guard let self else {
-        return
-      }
-      let sink = Self.sharedEventSink
-      for host in self.players.values {
-        host.pollEvents(sendEvent: sink)
-      }
-    }
-    pollTimer = timer
-    RunLoop.main.add(timer, forMode: .common)
-  }
-
-  private func dictionaryArgs(_ arguments: Any?) throws -> [String: Any] {
-    guard let args = arguments as? [String: Any] else {
-      throw ErikaPluginError.invalidArguments("Arguments must be a dictionary.")
-    }
-    return args
-  }
-
-  private func int64Value(_ value: Any?) -> Int64? {
-    if let value = value as? Int64 {
-      return value
-    }
-    if let value = value as? NSNumber {
-      return value.int64Value
-    }
-    if let value = value as? String {
-      return Int64(value)
-    }
-    return nil
-  }
-
-  private func doubleValue(_ value: Any?) -> Double? {
-    if let value = value as? Double {
-      return value
-    }
-    if let value = value as? NSNumber {
-      return value.doubleValue
-    }
-    if let value = value as? String {
-      return Double(value)
-    }
-    return nil
-  }
-
-  private func boolValue(_ value: Any?) -> Bool? {
-    if let value = value as? Bool {
-      return value
-    }
-    if let value = value as? NSNumber {
-      return value.boolValue
-    }
-    if let value = value as? String {
-      switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-      case "1", "true", "yes", "on":
-        return true
-      case "0", "false", "no", "off":
-        return false
-      default:
-        return nil
-      }
-    }
-    return nil
-  }
-
-  private func requiredInt64(_ value: Any?, name: String) throws -> Int64 {
-    if let value = value as? Int64 {
-      return value
-    }
-    if let value = value as? NSNumber {
-      return value.int64Value
-    }
-    if let value = value as? String, let parsed = Int64(value) {
-      return parsed
-    }
-    throw ErikaPluginError.invalidArguments("\(name) is required.")
-  }
-
-  private func requiredUInt64(_ value: Any?, name: String) throws -> UInt64 {
-    if let value = value as? UInt64 {
-      return value
-    }
-    if let value = value as? Int64, value >= 0 {
-      return UInt64(value)
-    }
-    if let value = value as? NSNumber {
-      return value.uint64Value
-    }
-    if let value = value as? String, let parsed = UInt64(value) {
-      return parsed
-    }
-    throw ErikaPluginError.invalidArguments("\(name) is required.")
-  }
-
-  private func flutterError(_ error: Error) -> FlutterError {
-    FlutterError(
-      code: "ERIKA_ERROR",
-      message: String(describing: error),
-      details: nil
-    )
-  }
+  return value.withCString { pointer in body(pointer) }
 }

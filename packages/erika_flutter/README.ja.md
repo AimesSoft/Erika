@@ -7,9 +7,10 @@ Erika メディア再生エンジン向けの Flutter plugin です。
 この plugin は Dart を hot path から外します。
 
 - Dart は低頻度の player command と event stream だけを公開します。
-- native plugin は 2 種類の surface を提供します。推奨は `ErikaWindowOverlayVideoView`（macOS/iOS は Metal、Windows は D3D11 swapchain）、platform view 用は `ErikaVideoView` です。Android では両方が同じ native-view selector を使い、SDR は実体のある `TextureView`、extended-linear request は Hybrid Composition `SurfaceView` になります。
+- native plugin は 2 種類の surface を提供します。推奨は `ErikaWindowOverlayVideoView`（macOS/iOS/tvOS は Metal、Windows は D3D11 swapchain）、platform view 用は `ErikaVideoView` です。Android では両方が同じ native-view selector を使い、SDR は実体のある `TextureView`、extended-linear request は Hybrid Composition `SurfaceView` になります。
 - macOS plugin は Erika の dynamic library を読み込みます。
 - iOS plugin は Erika の static library を link します。
+- tvOS plugin は Erika の static library を link し、Apple TV platform view で Metal layer を host します。
 - Windows plugin は Erika C ABI DLL を build して link します。
 - Android plugin は ABI ごとに `liberika_capi.so` を build し、`Choreographer` から native surface を駆動します。
 - HarmonyOS plugin は Flutter external texture を登録し、その `OHNativeWindow` を Erika に attach して、OHAudio で低レイテンシの PCM 出力を行います。
@@ -17,7 +18,7 @@ Erika メディア再生エンジン向けの Flutter plugin です。
 
 ## Video Surfaces
 
-フルプレイヤーの macOS/iOS UI では `ErikaWindowOverlayVideoView` を使うのが推奨です。Flutter の layout では矩形領域を予約しつつ、plugin が横に native `CAMetalLayer` を持ち、video を Flutter platform-view compositor の外に置きます。
+フルプレイヤーの macOS/iOS/tvOS UI では `ErikaWindowOverlayVideoView` を使うのが推奨です。Flutter の layout では矩形領域を予約しつつ、plugin が横に native `CAMetalLayer` を持ち、video を Flutter platform-view compositor の外に置きます。
 
 Windows では `ErikaWindowOverlayVideoView` が window-level の Direct3D 11 swapchain を sibling surface として host し、同じ overlay モデルに従います。
 
@@ -36,7 +37,7 @@ cargo build -p erika_capi
 
 ## Prebuilt package と source build
 
-`ERIKA_PREBUILT=1` を設定すると GitHub Release から prebuilt native library を取得します。`ERIKA_PREBUILT_TAG=v0.1.4` で plugin source と一致する Release tag を固定してください。download または展開に失敗した場合は source build に fallback します。local source を debug するときは `ERIKA_FORCE_SOURCE_BUILD=1` で prebuilt を無効化します。package 名と release 手順は [releasing.ja.md](../../docs/releasing.ja.md) を参照してください。
+`ERIKA_PREBUILT=1` を設定すると GitHub Release から prebuilt native library を取得します。`ERIKA_PREBUILT_TAG=v0.1.5` で plugin source と一致する Release tag を固定してください。download または展開に失敗した場合は source build に fallback します。local source を debug するときは `ERIKA_FORCE_SOURCE_BUILD=1` で prebuilt を無効化します。package 名と release 手順は [releasing.ja.md](../../docs/releasing.ja.md) を参照してください。
 
 source build の architecture は macOS では `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`、Windows では `ERIKA_WINDOWS_ARCH=x64|arm64`、Android では `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86` で選択します。native library を直接 build する場合、`xtask --target`、`ERIKA_NATIVE_TARGET`、`cargo build --target` は同じ target にしてください。詳細は [building.ja.md](../../docs/building.ja.md) を参照してください。
 
@@ -145,11 +146,23 @@ class PlaylistController {
 }
 ```
 
-capability は既定で無効で、iOS、macOS、Android、Windows、HarmonyOS に対応します。
+capability は既定で無効で、iOS、tvOS、macOS、Android、Windows、HarmonyOS に対応します。
 item の切り替え中は両方の button を一時的に無効化して重複 request を拒否し、切り替え
 成功後に index、metadata、capability を更新してください。この API が通知するのは
 `previous` と `next` のみです。再生、一時停止、停止、seek は引き続き各 platform の
 native system-media integration が直接処理します。
+
+## tvOS Setup
+
+tvOS の CocoaPod script phase が、Apple TV 実機または simulator 向けの native
+dependency と C ABI static library を Xcode build 中に自動 build します。Rust の
+tvOS target は tier 3 のため、source component 付き nightly が必要です：
+
+- `rustup toolchain install nightly --component rust-src`
+
+script は現在の Xcode SDK と architecture から `aarch64-apple-tvos`、
+`aarch64-apple-tvos-sim`、または `x86_64-apple-tvos` を選び、
+`-Z build-std=std,panic_abort` で compile します。
 
 ## Windows Setup
 
@@ -180,10 +193,11 @@ output status を更新します。API 35 では host の global Window を変�
 
 ## HarmonyOS Setup
 
-HarmonyOS module には DevEco Studio の OpenHarmony Native SDK と Rust の
-`aarch64-unknown-linux-ohos` target が必要です。Hvigor/CMake build が LGPL の
-FFmpeg/zlib 依存と `liberika_capi.so` を compile し、その runtime を
-`liberika_flutter.so` と一緒に package します。
+HarmonyOS module には DevEco Studio の OpenHarmony Native SDK が必要です。
+`ERIKA_PREBUILT=1` の場合、CMake は指定 Release から `liberika_capi.so` を
+download して `liberika_flutter.so` と一緒に package します。それ以外では Rust
+の `aarch64-unknown-linux-ohos` target が必要で、LGPL native dependency と runtime
+を source build します。download 失敗時は source build に fallback します。
 
 HarmonyOS は AVSession を通じて metadata、artwork、再生状態、位置、再生速度を公開し、system の再生、一時停止、停止、seek command を処理します。
 

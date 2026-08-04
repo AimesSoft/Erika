@@ -210,6 +210,36 @@ class ErikaOutputStatus {
   }
 }
 
+class ErikaSubtitleMemoryFontStatus {
+  const ErikaSubtitleMemoryFontStatus({
+    required this.registeredCount,
+    required this.registeredBytes,
+    required this.selectedCount,
+    required this.generation,
+    required this.selectedIds,
+  });
+
+  final int registeredCount;
+  final int registeredBytes;
+  final int selectedCount;
+  final int generation;
+  final List<int> selectedIds;
+
+  factory ErikaSubtitleMemoryFontStatus.fromMap(Map<dynamic, dynamic> map) {
+    return ErikaSubtitleMemoryFontStatus(
+      registeredCount: (map['registeredCount'] as num?)?.toInt() ?? 0,
+      registeredBytes: (map['registeredBytes'] as num?)?.toInt() ?? 0,
+      selectedCount: (map['selectedCount'] as num?)?.toInt() ?? 0,
+      generation: (map['generation'] as num?)?.toInt() ?? 0,
+      selectedIds: List<int>.unmodifiable(
+        (map['selectedIds'] as List<dynamic>? ?? const <dynamic>[])
+            .whereType<num>()
+            .map((value) => value.toInt()),
+      ),
+    );
+  }
+}
+
 enum ErikaUpscalerMode {
   off(0),
   artCnnC4F16(1),
@@ -787,7 +817,7 @@ class ErikaPlayer {
       'uri': uri,
       if (httpHeaders != null && httpHeaders.isNotEmpty)
         'httpHeaders': httpHeaders,
-      if (metadata != null) 'metadata': metadata.toMap(),
+      'metadata': metadata?.toMap(),
     });
   }
 
@@ -866,6 +896,51 @@ class ErikaPlayer {
       'playerId': playerId,
       'scale': clampedScale,
     });
+  }
+
+  Future<int> registerSubtitleMemoryFont(Uint8List data) async {
+    if (data.isEmpty) {
+      throw ArgumentError.value(data, 'data', 'must not be empty');
+    }
+    final playerId = await ensureCreated();
+    final fontId = await _channel.invokeMethod<int>(
+      'registerSubtitleMemoryFont',
+      <String, Object?>{'playerId': playerId, 'data': data},
+    );
+    if (fontId == null) {
+      throw StateError(
+          'Erika subtitle memory font registration returned null.');
+    }
+    return fontId;
+  }
+
+  Future<void> selectSubtitleMemoryFonts(Iterable<int> fontIds) async {
+    final ids = List<int>.unmodifiable(fontIds);
+    if (ids.any((id) => id <= 0) || ids.toSet().length != ids.length) {
+      throw ArgumentError.value(
+          fontIds, 'fontIds', 'must contain unique positive IDs');
+    }
+    final playerId = await ensureCreated();
+    await _invoke('selectSubtitleMemoryFonts', <String, Object?>{
+      'playerId': playerId,
+      'fontIds': ids,
+    });
+  }
+
+  Future<void> clearSubtitleMemoryFonts() async {
+    await _invokeForPlayer('clearSubtitleMemoryFonts');
+  }
+
+  Future<ErikaSubtitleMemoryFontStatus> getSubtitleMemoryFontStatus() async {
+    final playerId = await ensureCreated();
+    final status = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+      'getSubtitleMemoryFontStatus',
+      <String, Object?>{'playerId': playerId},
+    );
+    if (status == null) {
+      throw StateError('Erika subtitle memory font status returned null.');
+    }
+    return ErikaSubtitleMemoryFontStatus.fromMap(status);
   }
 
   /// Sets the subtitle style.

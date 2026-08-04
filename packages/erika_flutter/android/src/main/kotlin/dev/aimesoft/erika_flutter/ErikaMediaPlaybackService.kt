@@ -14,7 +14,7 @@ class ErikaMediaPlaybackService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private val tick = object : Runnable {
         override fun run() {
-            tickHandler?.invoke(SystemClock.elapsedRealtimeNanos().toDouble() / 1_000_000_000.0)
+            dispatchTick(SystemClock.elapsedRealtimeNanos().toDouble() / 1_000_000_000.0)
             handler.postDelayed(this, TICK_INTERVAL_MILLIS)
         }
     }
@@ -58,7 +58,22 @@ class ErikaMediaPlaybackService : Service() {
         private const val EXTRA_NOTIFICATION = "notification"
         private const val NOTIFICATION_ID = 0x4552494B
         private const val TICK_INTERVAL_MILLIS = 16L
-        internal var tickHandler: ((Double) -> Unit)? = null
+        private val tickHandlers = LinkedHashMap<Any, (Double) -> Unit>()
+
+        @Synchronized
+        fun registerTickHandler(owner: Any, handler: (Double) -> Unit) {
+            tickHandlers[owner] = handler
+        }
+
+        @Synchronized
+        fun unregisterTickHandler(owner: Any) {
+            tickHandlers.remove(owner)
+        }
+
+        private fun dispatchTick(timeSeconds: Double) {
+            val handlers = synchronized(this) { tickHandlers.values.toList() }
+            handlers.forEach { it(timeSeconds) }
+        }
 
         fun start(context: Context, notification: Notification) {
             val intent = Intent(context, ErikaMediaPlaybackService::class.java)

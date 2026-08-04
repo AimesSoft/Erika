@@ -537,7 +537,7 @@ impl VideoDecodePreference {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
 impl Default for VideoDecodePreference {
     fn default() -> Self {
         Self::VideoToolbox
@@ -567,7 +567,7 @@ impl Default for VideoDecodePreference {
 
 #[cfg(not(any(
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
     target_env = "ohos"
@@ -1637,8 +1637,12 @@ impl PlaybackSession {
         let decoder_alive = self.video_decoder.is_some();
         let discarded = self.discard_queued_frames_and_packets();
         trace_discarded_playback_queues("seek_before_decoder_transition", discarded, decoder_alive);
-        let bypass_seek_keyframe_gate = cfg!(any(target_os = "macos", target_os = "ios"))
-            && self.active_video_decoder_backend() == Some(DecoderBackend::VideoToolbox)
+        let bypass_seek_keyframe_gate = cfg!(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos"
+        )) && self.active_video_decoder_backend()
+            == Some(DecoderBackend::VideoToolbox)
             && self.active_video_codec_is_av1();
         self.video_fallback_waiting_for_keyframe =
             self.video_decoder.is_some() && !bypass_seek_keyframe_gate;
@@ -1660,14 +1664,7 @@ impl PlaybackSession {
         let video_decoder_reopened = self.reopen_mediacodec_video_decoder_for_seek(position)?;
         #[cfg(target_env = "ohos")]
         let video_decoder_reopened = self.reopen_avcodec_video_decoder_for_seek(position)?;
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        let video_decoder_reopened = self.reopen_videotoolbox_video_decoder_for_seek(position)?;
-        #[cfg(not(any(
-            target_os = "android",
-            target_os = "macos",
-            target_os = "ios",
-            target_env = "ohos"
-        )))]
+        #[cfg(not(any(target_os = "android", target_env = "ohos")))]
         let video_decoder_reopened = false;
 
         if !video_decoder_reopened {
@@ -1694,77 +1691,6 @@ impl PlaybackSession {
         self.audio_resampler = None;
         self.reset_eof_drain_state();
         Ok(())
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    fn reopen_videotoolbox_video_decoder_for_seek(&mut self, position: Duration) -> Result<bool> {
-        let Some(previous_decoder) = self.video_decoder.as_ref() else {
-            return Ok(false);
-        };
-        if previous_decoder.backend() != DecoderBackend::VideoToolbox {
-            return Ok(false);
-        }
-        let stream_index = previous_decoder.stream_index();
-        let codec = codec_parameters_for(&self.codec_parameters, stream_index)?.codec_name();
-        self.mark_video_decoder_unavailable(format!(
-            "VideoToolbox decoder is being reopened for seek to {:.3}s",
-            position.as_secs_f64(),
-        ));
-        drop(self.video_decoder.take());
-        let parameters = codec_parameters_for(&self.codec_parameters, stream_index)?;
-        trace::diagnostic(
-            serde_json::json!({
-                "event": "apple_videotoolbox_seek_reopen",
-                "stage": "begin",
-                "codec": codec.as_deref(),
-                "targetSeconds": position.as_secs_f64(),
-            })
-            .to_string(),
-        );
-        match Decoder::open_owned_with_config(parameters, DecoderConfig::videotoolbox()) {
-            Ok(decoder) => {
-                self.video_decoder = Some(decoder);
-                self.info.video_decode_backend = Some(DecoderBackend::VideoToolbox);
-                self.clear_video_decoder_unavailable();
-                let event = VideoDecoderEvent {
-                    stage: "seek_reopen_videotoolbox".to_string(),
-                    requested_backend: DecoderBackend::VideoToolbox,
-                    previous_backend: Some(DecoderBackend::VideoToolbox),
-                    active_backend: DecoderBackend::VideoToolbox,
-                    fallback_count: self.video_decoder_fallbacks,
-                    codec: codec.clone(),
-                    pixel_format: None,
-                    line_sizes: None,
-                    reason: None,
-                };
-                trace::diagnostic(event.structured_message());
-                self.video_decoder_events.push_back(event);
-                trace::diagnostic(
-                    serde_json::json!({
-                        "event": "apple_videotoolbox_seek_reopen",
-                        "stage": "ready",
-                        "codec": codec.as_deref(),
-                        "targetSeconds": position.as_secs_f64(),
-                    })
-                    .to_string(),
-                );
-                Ok(true)
-            }
-            Err(error) => {
-                let reason = error.to_string();
-                trace::diagnostic(
-                    serde_json::json!({
-                        "event": "apple_videotoolbox_seek_reopen",
-                        "stage": "failed",
-                        "codec": codec.as_deref(),
-                        "targetSeconds": position.as_secs_f64(),
-                        "reason": reason.as_str(),
-                    })
-                    .to_string(),
-                );
-                Err(PlaybackError::Ffmpeg(error))
-            }
-        }
     }
 
     #[cfg(target_os = "android")]

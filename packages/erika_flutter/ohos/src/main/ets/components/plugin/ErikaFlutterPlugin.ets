@@ -193,6 +193,10 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
       this.openPlayer(args, result);
       return;
     }
+    if (call.method === 'registerSubtitleMemoryFont') {
+      this.registerSubtitleMemoryFont(args, result);
+      return;
+    }
     if (this.isNativePlayerMethod(call.method)) {
       this.invokePlayer(call.method, args, result);
       return;
@@ -269,12 +273,26 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
     if (!this.invokePlayerNative('open', nativeArgs, result)) {
       return;
     }
-    this.currentPlayerId = playerId;
+    const state = this.mediaStates.get(playerId);
+    if (state !== undefined) {
+      state.playbackState = 0;
+      state.positionMicros = 0;
+      state.durationMicros = 0;
+    }
     if (metadata !== null) {
       this.mediaMetadata.set(playerId, metadata);
-      this.publishMediaMetadata(playerId, metadata);
+      if (this.currentPlayerId === playerId) {
+        this.publishMediaMetadata(playerId, metadata);
+      }
+    } else {
+      this.mediaMetadata.delete(playerId);
+      if (this.currentPlayerId === playerId) {
+        this.destroyAVSession();
+      }
     }
-    this.publishPlaybackState(playerId);
+    if (this.currentPlayerId === playerId) {
+      this.publishPlaybackState(playerId);
+    }
   }
 
   private setMediaMetadata(args: Map<string, ESObject>, result: MethodResult): void {
@@ -289,11 +307,10 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
       return;
     }
     this.mediaMetadata.set(playerId, metadata);
-    if (this.currentPlayerId === 0) {
-      this.currentPlayerId = playerId;
-    }
     result.success(null);
-    this.publishMediaMetadata(playerId, metadata);
+    if (this.currentPlayerId === playerId) {
+      this.publishMediaMetadata(playerId, metadata);
+    }
   }
 
   private setSystemMediaNavigation(
@@ -737,6 +754,27 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
     session?.destroy().catch((): void => {});
   }
 
+  private registerSubtitleMemoryFont(
+    args: Map<string, ESObject>,
+    result: MethodResult,
+  ): void {
+    const playerId = this.numberArg(args, 'playerId', 0);
+    if (!this.players.has(playerId)) {
+      result.error('ERIKA_ERROR', 'Unknown Erika player ' + playerId, null);
+      return;
+    }
+    const data = args.get('data') as Uint8Array;
+    const response = erikaNative.nativeRegisterSubtitleMemoryFont(
+      playerId,
+      data,
+    ) as Array<number>;
+    const status = response[0] ?? 1;
+    if (!this.completeStatus(status, result, 'register subtitle memory font')) {
+      return;
+    }
+    result.success(response[1] ?? 0);
+  }
+
   private startFrameLoop(): void {
     if (this.frameTimer >= 0) {
       return;
@@ -861,6 +899,8 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
     return [
       'open', 'play', 'pause', 'stop', 'close', 'seek',
       'setPlaybackRate', 'setVolume', 'setUpscaler', 'setSubtitleScale',
+      'selectSubtitleMemoryFonts', 'clearSubtitleMemoryFonts',
+      'getSubtitleMemoryFontStatus',
       'getUpscalerStatus', 'getOutputStatus', 'getPresenterStats',
       'addExternalSubtitle', 'removeSubtitleTrack',
       'loadDanmakuFile', 'loadDanmakuJson',

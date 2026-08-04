@@ -17,7 +17,7 @@ Erika は NipaPlay の自社開発再生コアです：demux/decode から GPU �
 crates/erika              コアエンジン（ライブラリ）
 crates/erika_capi         C ABI エクスポート層  →  erika.h
 crates/erika_ffmpeg_sys   FFmpeg bindgen バインディング
-packages/erika_flutter    Flutter プラグイン（macOS + iOS + Windows + Android）
+packages/erika_flutter    Flutter プラグイン（macOS + iOS + tvOS + Windows + Android + HarmonyOS）
 examples/                 検証 / スモーク / demo バイナリ
 xtask/                    ネイティブ依存ビルドのオーケストレーション
 docs/                     アーキテクチャと組み込みドキュメント
@@ -87,7 +87,7 @@ third_party/              ビルドされたネイティブ依存（gitignore �
 - **所有権を守る。** 渡す文字列は呼び出し側の所有で対応する `*_free` で解放。新しいものは
   [capi_reference.md](docs/capi_reference.md) に記載。
 - **`erika.h` を合わせて再生成 / 手編集**し、新関数に注釈を付ける。
-- **⚠️ Swift のミラー構造体を同期。** macOS/iOS プラグインは C 構造体（例：
+- **⚠️ Swift のミラー構造体を同期。** macOS/iOS/tvOS プラグインは C 構造体（例：
   `ErikaPresenterStats`）を Swift 側で手でミラーしています。`erika.h` の構造体を変更したら、
   `packages/erika_flutter` 内の**両方**の Swift ミラーファイルを更新してください。不一致は
   スタックを破壊し、明白なレイアウトエラーではなく誤解を招く autorelease-pool クラッシュ

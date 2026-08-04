@@ -10,16 +10,21 @@ mod outline;
 mod typography;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ab_glyph::{Font, FontArc, FontVec, Glyph, GlyphId, ScaleFont};
+use ab_glyph::{
+    CodepointIdIter, Font, FontArc, FontRef, FontVec, Glyph, GlyphId, GlyphSvg, Outline, ScaleFont,
+    v2,
+};
 use serde_json::Value;
 use thiserror::Error;
 
 use crate::NIPAPLAY_FALLBACK_FONT;
+use crate::subtitle::SubtitleFontAttachment;
 use crate::text::TextShaper;
 use outline::{raster_radius, resolve_width_px};
 use typography::{
@@ -38,6 +43,7 @@ const SCROLL_DURATION_MAX_WIDTH_SCALE: f32 = 1.3;
 const DEFAULT_DANMAKU_TRACK_ID: u64 = 1;
 const TRACK_ID_SHIFT: u64 = 48;
 const ITEM_ID_MASK: u64 = (1u64 << TRACK_ID_SHIFT) - 1;
+const MAX_CUSTOM_DANMAKU_FONT_BYTES: u64 = 64 * 1024 * 1024;
 pub const DANMAKU_DEBUG_BUCKETS: usize = 16;
 
 #[derive(Debug, Error)]
@@ -180,6 +186,8 @@ pub struct DanmakuLayoutConfig {
     pub shadow_style: DanmakuShadowStyle,
     pub custom_font_family: String,
     pub custom_font_file_path: String,
+    #[doc(hidden)]
+    pub custom_font_face_index: u32,
     pub merge_duplicates: bool,
     pub allow_stacking: bool,
     pub allow_scroll_overwrite: bool,
@@ -236,6 +244,7 @@ impl Default for DanmakuLayoutConfig {
             shadow_style: DanmakuShadowStyle::Strong,
             custom_font_family: String::new(),
             custom_font_file_path: String::new(),
+            custom_font_face_index: 0,
             merge_duplicates: false,
             allow_stacking: false,
             allow_scroll_overwrite: true,
@@ -1134,6 +1143,21 @@ struct DanmakuFontFace {
     font: Arc<FontArc>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DanmakuFontSelection {
+    pub generation: u64,
+    pub fonts: Arc<[SubtitleFontAttachment]>,
+}
+
+impl DanmakuFontSelection {
+    pub fn new(generation: u64, fonts: impl Into<Arc<[SubtitleFontAttachment]>>) -> Self {
+        Self {
+            generation,
+            fonts: fonts.into(),
+        }
+    }
+}
+
 impl DanmakuFontFace {
     fn new(id: u32, font: FontArc) -> Self {
         Self {
@@ -1302,6 +1326,8 @@ impl TextLayoutCacheKey {
 pub struct DanmakuTextRasterizer {
     shaper: TextShaper,
     primary_font: Option<DanmakuFontFace>,
+    selected_fonts: Arc<[DanmakuFontFace]>,
+    selected_before_primary: bool,
     fallback_fonts: Arc<Mutex<SystemFontFallback>>,
     glyph_cache: Arc<Mutex<HashMap<GlyphCacheKey, Arc<RasterizedGlyph>>>>,
     text_layout_cache: Arc<Mutex<HashMap<TextLayoutCacheKey, Arc<PreparedTextLayout>>>>,
@@ -1319,6 +1345,8 @@ impl DanmakuTextRasterizer {
         Self {
             shaper,
             primary_font: load_default_font().map(|font| DanmakuFontFace::new(0, font)),
+            selected_fonts: Arc::from([]),
+            selected_before_primary: false,
             fallback_fonts: Arc::new(Mutex::new(SystemFontFallback::new(1))),
             glyph_cache: Arc::new(Mutex::new(HashMap::new())),
             text_layout_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -1327,15 +1355,30 @@ impl DanmakuTextRasterizer {
     }
 
     pub fn for_config(config: &DanmakuLayoutConfig) -> Self {
+        Self::for_config_and_selection(config, &DanmakuFontSelection::default())
+    }
+
+    pub fn for_config_and_selection(
+        config: &DanmakuLayoutConfig,
+        selection: &DanmakuFontSelection,
+    ) -> Self {
         let shaper = TextShaper::default();
+        let primary_font = load_configured_font(
+            &config.custom_font_family,
+            &config.custom_font_file_path,
+            config.custom_font_face_index,
+        )
+        .map(|font| DanmakuFontFace::new(0, font));
+        let first_selected_id = u32::from(primary_font.is_some());
+        let selected_fonts = load_selected_fonts(&selection.fonts, first_selected_id);
+        let next_font_id = first_selected_id.saturating_add(selected_fonts.len() as u32);
         Self {
             shaper,
-            primary_font: load_configured_font(
-                &config.custom_font_family,
-                &config.custom_font_file_path,
-            )
-            .map(|font| DanmakuFontFace::new(0, font)),
-            fallback_fonts: Arc::new(Mutex::new(SystemFontFallback::new(1))),
+            primary_font,
+            selected_fonts: Arc::from(selected_fonts),
+            selected_before_primary: config.custom_font_family.is_empty()
+                && config.custom_font_file_path.is_empty(),
+            fallback_fonts: Arc::new(Mutex::new(SystemFontFallback::new(next_font_id))),
             glyph_cache: Arc::new(Mutex::new(HashMap::new())),
             text_layout_cache: Arc::new(Mutex::new(HashMap::new())),
             glyph_atlas: Arc::new(Mutex::new(PersistentGlyphAtlas::new())),
@@ -1477,8 +1520,18 @@ impl DanmakuTextRasterizer {
     }
 
     fn resolve_font(&self, ch: char) -> Option<DanmakuFontFace> {
+        if self.selected_before_primary {
+            if let Some(font) = self.selected_fonts.iter().find(|font| font.has_glyph(ch)) {
+                return Some(font.clone());
+            }
+        }
         if let Some(font) = &self.primary_font {
             if font.has_glyph(ch) {
+                return Some(font.clone());
+            }
+        }
+        if !self.selected_before_primary {
+            if let Some(font) = self.selected_fonts.iter().find(|font| font.has_glyph(ch)) {
                 return Some(font.clone());
             }
         }
@@ -1839,6 +1892,7 @@ pub struct DfmLayoutEngine {
     timeline: DanmakuTimeline,
     config: DanmakuLayoutConfig,
     rasterizer: DanmakuTextRasterizer,
+    font_selection: DanmakuFontSelection,
     prepared: Option<DfmPreparedLayout>,
     stable_tracks: HashMap<u64, usize>,
     stable_viewport: Option<DanmakuViewport>,
@@ -1852,6 +1906,7 @@ impl DfmLayoutEngine {
             timeline,
             config,
             rasterizer,
+            font_selection: DanmakuFontSelection::default(),
             prepared: None,
             stable_tracks: HashMap::new(),
             stable_viewport: None,
@@ -1892,10 +1947,12 @@ impl DfmLayoutEngine {
         let re_enabling = !self.config.enabled && config.enabled;
         let layout_changed = re_enabling || !self.config.layout_equivalent(&config);
         let font_changed = self.config.custom_font_family != config.custom_font_family
-            || self.config.custom_font_file_path != config.custom_font_file_path;
+            || self.config.custom_font_file_path != config.custom_font_file_path
+            || self.config.custom_font_face_index != config.custom_font_face_index;
         self.config = config;
         if font_changed {
-            self.rasterizer = DanmakuTextRasterizer::for_config(&self.config);
+            self.rasterizer =
+                DanmakuTextRasterizer::for_config_and_selection(&self.config, &self.font_selection);
         }
         if layout_changed {
             self.prepared = None;
@@ -1910,6 +1967,17 @@ impl DfmLayoutEngine {
             }
             DanmakuConfigChange::PaintOnly
         }
+    }
+
+    pub fn set_font_selection(&mut self, selection: DanmakuFontSelection) -> bool {
+        if self.font_selection.generation == selection.generation {
+            return false;
+        }
+        self.rasterizer = DanmakuTextRasterizer::for_config_and_selection(&self.config, &selection);
+        self.font_selection = selection;
+        self.prepared = None;
+        self.invalidate_stable_tracks();
+        true
     }
 
     pub fn config(&self) -> &DanmakuLayoutConfig {
@@ -2411,11 +2479,27 @@ fn sanitize_f32(value: f32, fallback: f32) -> f32 {
     if value.is_finite() { value } else { fallback }
 }
 
-fn load_configured_font(family: &str, file_path: &str) -> Option<FontArc> {
+fn load_configured_font(family: &str, file_path: &str, face_index: u32) -> Option<FontArc> {
     let file_path = file_path.trim();
     if !file_path.is_empty() {
-        if let Some(font) = load_font_from_path(Path::new(file_path)) {
-            return Some(font);
+        match load_font_from_path(Path::new(file_path), face_index) {
+            Ok(font) => return Some(font),
+            Err(error) => {
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "danmaku_custom_font",
+                        "stage": "rejected",
+                        "path": file_path,
+                        "faceIndex": face_index,
+                        "bytes": error.bytes,
+                        "maxBytes": MAX_CUSTOM_DANMAKU_FONT_BYTES,
+                        "reason": error.reason,
+                        "detail": error.detail,
+                        "fallback": if family.trim().is_empty() { "default" } else { "family_then_default" },
+                    })
+                    .to_string(),
+                );
+            }
         }
     }
 
@@ -2429,21 +2513,97 @@ fn load_configured_font(family: &str, file_path: &str) -> Option<FontArc> {
     load_default_font()
 }
 
-fn load_font_from_path(path: &Path) -> Option<FontArc> {
-    if let Ok(bytes) = fs::read(path) {
-        if let Ok(font) = FontArc::try_from_vec(bytes) {
-            return Some(font);
+fn load_selected_fonts(
+    attachments: &[SubtitleFontAttachment],
+    first_font_id: u32,
+) -> Vec<DanmakuFontFace> {
+    let mut fonts = Vec::new();
+    for attachment in attachments {
+        let mut database = fontdb::Database::new();
+        database.load_font_source(fontdb::Source::Binary(Arc::new(attachment.data.clone())));
+        let face_indices = database.faces().map(|face| face.index).collect::<Vec<_>>();
+        for face_index in face_indices {
+            if let Some(font) = load_shared_font_data(attachment.data.clone(), face_index) {
+                let id = first_font_id.saturating_add(fonts.len() as u32);
+                fonts.push(DanmakuFontFace::new(id, font));
+            }
         }
+    }
+    fonts
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CustomDanmakuFontError {
+    reason: &'static str,
+    detail: String,
+    bytes: u64,
+}
+
+fn load_font_from_path(
+    path: &Path,
+    face_index: u32,
+) -> std::result::Result<FontArc, CustomDanmakuFontError> {
+    let metadata = fs::metadata(path).map_err(|error| CustomDanmakuFontError {
+        reason: "metadata_failed",
+        detail: error.to_string(),
+        bytes: 0,
+    })?;
+    let bytes = metadata.len();
+    if !metadata.is_file() {
+        return Err(CustomDanmakuFontError {
+            reason: "not_regular_file",
+            detail: "custom font path is not a regular file".to_string(),
+            bytes,
+        });
+    }
+    if bytes > MAX_CUSTOM_DANMAKU_FONT_BYTES {
+        return Err(CustomDanmakuFontError {
+            reason: "file_too_large",
+            detail: format!(
+                "custom font exceeds {} byte limit",
+                MAX_CUSTOM_DANMAKU_FONT_BYTES
+            ),
+            bytes,
+        });
+    }
+
+    let file = File::open(path).map_err(|error| CustomDanmakuFontError {
+        reason: "read_failed",
+        detail: error.to_string(),
+        bytes,
+    })?;
+    let mut data = Vec::with_capacity(usize::try_from(bytes).unwrap_or(0));
+    file.take(MAX_CUSTOM_DANMAKU_FONT_BYTES + 1)
+        .read_to_end(&mut data)
+        .map_err(|error| CustomDanmakuFontError {
+            reason: "read_failed",
+            detail: error.to_string(),
+            bytes,
+        })?;
+    if data.len() as u64 > MAX_CUSTOM_DANMAKU_FONT_BYTES {
+        return Err(CustomDanmakuFontError {
+            reason: "file_too_large",
+            detail: format!(
+                "custom font exceeds {} byte limit",
+                MAX_CUSTOM_DANMAKU_FONT_BYTES
+            ),
+            bytes: data.len() as u64,
+        });
+    }
+    if let Some(font) = load_font_data(data.clone(), face_index) {
+        return Ok(font);
     }
 
     let mut db = fontdb::Database::new();
-    db.load_font_file(path).ok()?;
+    db.load_font_data(data);
     db.faces()
-        .next()
-        .and_then(|face| {
-            db.with_face_data(face.id, |data, _| FontArc::try_from_vec(data.to_vec()).ok())
+        .find(|face| face.index == face_index)
+        .and_then(|face| load_fontdb_face(&db, face.id))
+        .ok_or_else(|| CustomDanmakuFontError {
+            reason: "invalid_font",
+            detail: format!("font contains no loadable face at index {face_index}"),
+            bytes,
         })
-        .flatten()
 }
 
 fn load_font_family(family: &str) -> Option<FontArc> {
@@ -2455,9 +2615,113 @@ fn load_font_family(family: &str) -> Option<FontArc> {
         stretch: fontdb::Stretch::Normal,
         style: fontdb::Style::Normal,
     };
-    db.query(&query)
-        .and_then(|id| db.with_face_data(id, |data, _| FontArc::try_from_vec(data.to_vec()).ok()))
-        .flatten()
+    db.query(&query).and_then(|id| load_fontdb_face(&db, id))
+}
+
+fn load_fontdb_face(db: &fontdb::Database, id: fontdb::ID) -> Option<FontArc> {
+    db.with_face_data(id, |data, face_index| {
+        load_font_data(data.to_vec(), face_index)
+    })
+    .flatten()
+}
+
+fn load_font_data(data: Vec<u8>, face_index: u32) -> Option<FontArc> {
+    FontVec::try_from_vec_and_index(data, face_index)
+        .map(FontArc::new)
+        .ok()
+}
+
+#[derive(Clone)]
+struct SharedFont {
+    // This field must be dropped before `data`, because its internal references
+    // point into the allocation kept alive by `data`.
+    font: FontRef<'static>,
+    data: Arc<[u8]>,
+}
+
+impl SharedFont {
+    fn try_new(data: Arc<[u8]>, face_index: u32) -> Option<Self> {
+        // SAFETY: `bytes` points into the allocation owned by `data`. The Arc is
+        // stored in the same value and is declared after `font`, so it remains
+        // alive until all references held by FontRef have been dropped.
+        let bytes = unsafe { std::slice::from_raw_parts(data.as_ptr(), data.len()) };
+        let font = FontRef::try_from_slice_and_index(bytes, face_index).ok()?;
+        Some(Self { font, data })
+    }
+}
+
+impl Font for SharedFont {
+    fn units_per_em(&self) -> Option<f32> {
+        self.font.units_per_em()
+    }
+
+    fn ascent_unscaled(&self) -> f32 {
+        self.font.ascent_unscaled()
+    }
+
+    fn descent_unscaled(&self) -> f32 {
+        self.font.descent_unscaled()
+    }
+
+    fn line_gap_unscaled(&self) -> f32 {
+        self.font.line_gap_unscaled()
+    }
+
+    fn italic_angle(&self) -> f32 {
+        self.font.italic_angle()
+    }
+
+    fn glyph_id(&self, c: char) -> GlyphId {
+        self.font.glyph_id(c)
+    }
+
+    fn h_advance_unscaled(&self, id: GlyphId) -> f32 {
+        self.font.h_advance_unscaled(id)
+    }
+
+    fn h_side_bearing_unscaled(&self, id: GlyphId) -> f32 {
+        self.font.h_side_bearing_unscaled(id)
+    }
+
+    fn v_advance_unscaled(&self, id: GlyphId) -> f32 {
+        self.font.v_advance_unscaled(id)
+    }
+
+    fn v_side_bearing_unscaled(&self, id: GlyphId) -> f32 {
+        self.font.v_side_bearing_unscaled(id)
+    }
+
+    fn kern_unscaled(&self, first: GlyphId, second: GlyphId) -> f32 {
+        self.font.kern_unscaled(first, second)
+    }
+
+    fn outline(&self, id: GlyphId) -> Option<Outline> {
+        self.font.outline(id)
+    }
+
+    fn glyph_count(&self) -> usize {
+        self.font.glyph_count()
+    }
+
+    fn codepoint_ids(&self) -> CodepointIdIter<'_> {
+        self.font.codepoint_ids()
+    }
+
+    fn glyph_raster_image2(&self, id: GlyphId, pixel_size: u16) -> Option<v2::GlyphImage<'_>> {
+        self.font.glyph_raster_image2(id, pixel_size)
+    }
+
+    fn glyph_svg_image(&self, id: GlyphId) -> Option<GlyphSvg<'_>> {
+        self.font.glyph_svg_image(id)
+    }
+
+    fn font_data(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+fn load_shared_font_data(data: Arc<[u8]>, face_index: u32) -> Option<FontArc> {
+    SharedFont::try_new(data, face_index).map(FontArc::new)
 }
 
 fn load_default_font() -> Option<FontArc> {
@@ -2483,13 +2747,7 @@ fn load_default_font() -> Option<FontArc> {
             stretch: fontdb::Stretch::Normal,
             style: fontdb::Style::Normal,
         };
-        if let Some(font) = db
-            .query(&query)
-            .and_then(|id| {
-                db.with_face_data(id, |data, _| FontArc::try_from_vec(data.to_vec()).ok())
-            })
-            .flatten()
-        {
+        if let Some(font) = db.query(&query).and_then(|id| load_fontdb_face(&db, id)) {
             return Some(font);
         }
     }
@@ -2509,10 +2767,7 @@ fn load_default_font() -> Option<FontArc> {
         "C:\\Windows\\Fonts\\arial.ttf",
     ];
     for path in CANDIDATES {
-        let Ok(bytes) = fs::read(path) else {
-            continue;
-        };
-        if let Ok(font) = FontArc::try_from_vec(bytes) {
+        if let Ok(font) = load_font_from_path(Path::new(path), 0) {
             return Some(font);
         }
     }
@@ -2649,6 +2904,39 @@ fn dilate_alpha(input: &[u8], width: u32, height: u32, stride: usize, radius: i3
 mod tests {
     use super::*;
 
+    fn test_ttc() -> Vec<u8> {
+        let source = NIPAPLAY_FALLBACK_FONT;
+        let face_count = 2u32;
+        let header_len = 12 + face_count as usize * 4;
+        let first_offset = (header_len + 3) & !3;
+        let second_offset = (first_offset + source.len() + 3) & !3;
+        let mut collection = vec![0; second_offset + source.len()];
+        collection[0..4].copy_from_slice(b"ttcf");
+        collection[4..8].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        collection[8..12].copy_from_slice(&face_count.to_be_bytes());
+        collection[12..16].copy_from_slice(&(first_offset as u32).to_be_bytes());
+        collection[16..20].copy_from_slice(&(second_offset as u32).to_be_bytes());
+
+        for (face_index, face_offset) in [first_offset, second_offset].into_iter().enumerate() {
+            collection[face_offset..face_offset + source.len()].copy_from_slice(source);
+            let table_count = u16::from_be_bytes([source[4], source[5]]) as usize;
+            for table_index in 0..table_count {
+                let record = 12 + table_index * 16;
+                let source_offset =
+                    u32::from_be_bytes(source[record + 8..record + 12].try_into().unwrap())
+                        as usize;
+                let collection_record = face_offset + record + 8;
+                collection[collection_record..collection_record + 4]
+                    .copy_from_slice(&((face_offset + source_offset) as u32).to_be_bytes());
+                if face_index == 1 && &source[record..record + 4] == b"head" {
+                    collection[face_offset + source_offset + 18..face_offset + source_offset + 20]
+                        .copy_from_slice(&512u16.to_be_bytes());
+                }
+            }
+        }
+        collection
+    }
+
     fn item(time: f64, text: &str, mode: DanmakuMode) -> DanmakuItem {
         DanmakuItem {
             id: 0,
@@ -2667,6 +2955,10 @@ mod tests {
             (actual - expected).abs() < 0.001,
             "expected {actual} to be close to {expected}"
         );
+    }
+
+    fn selected_font(data: Vec<u8>) -> SubtitleFontAttachment {
+        SubtitleFontAttachment::new("selected", None, Vec::new(), Arc::<[u8]>::from(data))
     }
 
     #[test]
@@ -3039,6 +3331,44 @@ mod tests {
     }
 
     #[test]
+    fn selected_memory_fonts_fallback_in_selection_order() {
+        let first = selected_font(NIPAPLAY_FALLBACK_FONT.to_vec());
+        let second = selected_font(test_ttc());
+        let selection = DanmakuFontSelection::new(1, Arc::from(vec![first, second]));
+        let rasterizer = DanmakuTextRasterizer::for_config_and_selection(
+            &DanmakuLayoutConfig::default(),
+            &selection,
+        );
+
+        let resolved = rasterizer
+            .resolve_font('A')
+            .expect("selected font resolves");
+
+        assert_eq!(resolved.id, 1);
+    }
+
+    #[test]
+    fn font_selection_generation_atomically_invalidates_rasterizer_caches() {
+        let timeline = DanmakuTimeline::new(vec![item(0.0, "cache", DanmakuMode::Top)]).unwrap();
+        let mut engine = DfmLayoutEngine::new(timeline, DanmakuLayoutConfig::default());
+        let viewport = DanmakuViewport::new(640, 360);
+        let first = engine.render_plan(Duration::from_millis(500), viewport, 1);
+        let first_atlas = first.atlas.expect("first atlas exists");
+        let selection = DanmakuFontSelection::new(
+            2,
+            Arc::from(vec![selected_font(NIPAPLAY_FALLBACK_FONT.to_vec())]),
+        );
+
+        assert!(engine.set_font_selection(selection.clone()));
+        assert!(!engine.set_font_selection(selection));
+        assert!(engine.prepared.is_none());
+        let second = engine.render_plan(Duration::from_millis(500), viewport, 2);
+        let second_atlas = second.atlas.expect("second atlas exists");
+
+        assert!(!Arc::ptr_eq(&first_atlas, &second_atlas));
+    }
+
+    #[test]
     fn layout_font_size_uses_nipaplay_logical_units_across_resize() {
         let timeline = DanmakuTimeline::new(vec![DanmakuItem {
             font_size: DEFAULT_SOURCE_FONT_SIZE,
@@ -3276,5 +3606,95 @@ mod tests {
         let prepared = engine.prepare(DanmakuViewport::new(640, 360), 1);
 
         assert_eq!(prepared.items().len(), 0);
+    }
+
+    #[test]
+    fn custom_font_rejects_oversized_file_from_metadata() {
+        let path = std::env::temp_dir().join(format!(
+            "erika_danmaku_oversized_font_{}.ttf",
+            std::process::id()
+        ));
+        let file = File::create(&path).unwrap();
+        file.set_len(MAX_CUSTOM_DANMAKU_FONT_BYTES + 1).unwrap();
+
+        let error = load_font_from_path(&path, 0).unwrap_err();
+
+        assert_eq!(error.reason, "file_too_large");
+        assert_eq!(error.bytes, MAX_CUSTOM_DANMAKU_FONT_BYTES + 1);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn custom_font_rejects_non_regular_file_from_metadata() {
+        let error = load_font_from_path(std::env::temp_dir().as_path(), 0).unwrap_err();
+
+        assert_eq!(error.reason, "not_regular_file");
+    }
+
+    #[test]
+    fn custom_font_reports_invalid_font_structure() {
+        let path = std::env::temp_dir().join(format!(
+            "erika_danmaku_invalid_font_{}.ttf",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"not a font").unwrap();
+
+        let error = load_font_from_path(&path, 0).unwrap_err();
+
+        assert_eq!(error.reason, "invalid_font");
+        assert_eq!(error.bytes, 10);
+        assert!(!error.detail.is_empty());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn invalid_custom_font_keeps_default_fallback() {
+        let path = std::env::temp_dir().join(format!(
+            "erika_danmaku_fallback_font_{}.ttf",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"not a font").unwrap();
+
+        let font = load_configured_font("", path.to_str().unwrap(), 0);
+
+        assert!(font.is_some());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn custom_font_path_uses_configured_collection_face_index() {
+        let path = std::env::temp_dir().join(format!(
+            "erika_danmaku_collection_font_{}.ttc",
+            std::process::id()
+        ));
+        std::fs::write(&path, test_ttc()).unwrap();
+
+        let first = load_font_from_path(&path, 0).unwrap();
+        let second = load_font_from_path(&path, 1).unwrap();
+
+        assert_ne!(first.units_per_em(), second.units_per_em());
+        assert_eq!(second.units_per_em(), Some(512.0));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn fontdb_face_loader_uses_queried_collection_face_index() {
+        let mut db = fontdb::Database::new();
+        db.load_font_data(test_ttc());
+        let second_id = db.faces().find(|face| face.index == 1).unwrap().id;
+
+        let second = load_fontdb_face(&db, second_id).unwrap();
+
+        assert_eq!(second.units_per_em(), Some(512.0));
+    }
+
+    #[test]
+    fn selected_collection_faces_share_the_attachment_allocation() {
+        let attachment = selected_font(test_ttc());
+        let fonts = load_selected_fonts(std::slice::from_ref(&attachment), 1);
+
+        assert_eq!(fonts.len(), 2);
+        assert_eq!(fonts[0].font.font_data().as_ptr(), attachment.data.as_ptr());
+        assert_eq!(fonts[1].font.font_data().as_ptr(), attachment.data.as_ptr());
     }
 }

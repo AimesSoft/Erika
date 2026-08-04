@@ -22,7 +22,7 @@ Erika exposes two independent entry points. Pick one per integration.
 | `ErikaPresenterHandle` | **Push** | Erika | You give Erika a native surface and call `render_tick` once per display frame. Erika owns decode, timing, audio, overlays, and presentation. |
 
 `ErikaPresenterHandle` is the recommended path and what the Flutter plugin and
-the native demos use. It is compiled on **macOS, iOS, Windows, and Android**.
+the native demos use. It is compiled on **macOS, iOS, tvOS, Windows, and Android**.
 On other targets `erika_presenter_create` is still exported but returns `NULL`,
 and the rest of the presenter family is absent — guard presenter usage by
 platform.
@@ -225,7 +225,7 @@ capabilities and therefore cannot activate Android extended-linear output.
 ## `ErikaPresenterHandle` — push model
 
 Erika owns the full stack; the host supplies a surface and calls `render_tick`.
-**macOS / iOS / Windows / Android.**
+**macOS / iOS / tvOS / Windows / Android.**
 
 ### Lifecycle and configuration
 
@@ -439,7 +439,7 @@ ErikaStatus erika_presenter_resize_surface(ErikaPresenterHandle *, uint32_t w, u
 ErikaStatus erika_presenter_detach_surface(ErikaPresenterHandle *);
 ```
 
-Use `attach_metal_layer` on macOS/iOS (a `CAMetalLayer*`), and
+Use `attach_metal_layer` on macOS/iOS/tvOS (a `CAMetalLayer*`), and
 `attach_windows_hwnd` on Windows (it is a convenience wrapper over
 `attach_wgpu_surface` with kind `WindowsHwnd`, passing `HWND` + `HINSTANCE`).
 The renderer backend bound to the surface (native Metal, native Direct3D 11, or

@@ -1,9 +1,12 @@
 #[cfg(feature = "libass")]
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ffi::{CStr, CString},
+    fs::File,
+    io::Read,
     ptr::NonNull,
     sync::Mutex,
+    time::SystemTime,
 };
 use std::{sync::Arc, time::Duration};
 
@@ -42,6 +45,9 @@ pub struct SubtitleFontAttachment {
     pub families: Vec<String>,
     pub data: Arc<[u8]>,
 }
+
+pub const MAX_MEMORY_SUBTITLE_FONT_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_MEMORY_SUBTITLE_FONT_TOTAL_BYTES: usize = 128 * 1024 * 1024;
 
 impl SubtitleFontAttachment {
     pub fn new(
@@ -759,6 +765,9 @@ const ASS_FONTPROVIDER_AUTODETECT: libc::c_int = 1;
 #[cfg(feature = "libass")]
 const ASS_FONTPROVIDER_CORETEXT: libc::c_int = 2;
 
+#[cfg(feature = "libass")]
+const MAX_CUSTOM_SUBTITLE_FONT_BYTES: u64 = 64 * 1024 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LibassRenderConfig {
     pub glyph_cache_limit: i32,
@@ -932,6 +941,8 @@ pub struct SubtitleAssStyle {
     pub play_res_width: u32,
     pub play_res_height: u32,
     pub style: SubtitleStyleConfig,
+    pub memory_fonts: Arc<[SubtitleFontAttachment]>,
+    pub memory_font_revision: u64,
 }
 
 impl Default for SubtitleAssStyle {
@@ -941,6 +952,8 @@ impl Default for SubtitleAssStyle {
             play_res_width: 1920,
             play_res_height: 1080,
             style: SubtitleStyleConfig::default(),
+            memory_fonts: Arc::from([]),
+            memory_font_revision: 0,
         }
     }
 }
@@ -992,11 +1005,24 @@ impl LibassRenderPlan {
 pub struct LibassSubtitleRenderer {
     runtime: LibassRuntime,
     track: NonNull<libass_ffi::AssTrack>,
+    source: LibassTrackSource,
+    chunks: Vec<(String, Duration, Option<Duration>)>,
     config: LibassRenderConfig,
     font_scale: f64,
     override_font_scale: f64,
     play_res_height: u32,
     style: SubtitleStyleConfig,
+    memory_fonts: Arc<[SubtitleFontAttachment]>,
+}
+
+#[cfg(feature = "libass")]
+#[derive(Debug, Clone)]
+enum LibassTrackSource {
+    Script(Arc<[u8]>),
+    Track {
+        track_id: i64,
+        resources: AssTrackResources,
+    },
 }
 
 /// Font selection currently installed in libass. `ass_set_fonts` rebuilds the
@@ -1015,13 +1041,22 @@ struct LibassRuntime {
     library: NonNull<libass_ffi::AssLibrary>,
     renderer: NonNull<libass_ffi::AssRenderer>,
     track_id: i64,
-    loaded_font_files: HashSet<String>,
+    loaded_font_files: HashMap<String, CustomFontFileIdentity>,
+    observed_font_files: HashMap<String, CustomFontFileIdentity>,
     fonts: Option<LibassFontSelection>,
     /// Counts `ass_set_fonts` calls. Only meaningful to the tests that pin how
     /// rarely the font selector is rebuilt.
     fonts_generation: u64,
+    custom_font_loads: u64,
     _log_context: Box<LibassLogContext>,
     _log_bridge: Box<libass_ffi::ErikaAssLogBridge>,
+}
+
+#[cfg(feature = "libass")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CustomFontFileIdentity {
+    modified: SystemTime,
+    size: u64,
 }
 
 #[cfg(feature = "libass")]
@@ -1036,6 +1071,7 @@ impl LibassRuntime {
     fn new(
         track_id: i64,
         fonts: &[SubtitleFontAttachment],
+        memory_fonts: &[SubtitleFontAttachment],
         config: LibassRenderConfig,
         style: &SubtitleStyleConfig,
     ) -> Result<Self> {
@@ -1054,6 +1090,7 @@ impl LibassRuntime {
             libass_ffi::erika_ass_install_log_bridge(library.as_ptr(), &mut *log_bridge);
             libass_ffi::ass_set_extract_fonts(library.as_ptr(), 1);
             add_bundled_ass_fallback_font(library.as_ptr(), track_id);
+            add_attached_ass_fonts(library.as_ptr(), track_id, memory_fonts);
             add_attached_ass_fonts(library.as_ptr(), track_id, fonts);
 
             let Some(renderer) = NonNull::new(libass_ffi::ass_renderer_init(library.as_ptr()))
@@ -1072,14 +1109,16 @@ impl LibassRuntime {
                 library,
                 renderer,
                 track_id,
-                loaded_font_files: HashSet::new(),
+                loaded_font_files: HashMap::new(),
+                observed_font_files: HashMap::new(),
                 fonts: None,
                 fonts_generation: 0,
+                custom_font_loads: 0,
                 _log_context: log_context,
                 _log_bridge: log_bridge,
             }
         };
-        runtime.configure_style(style, 1.0, 288);
+        runtime.configure_style(style, memory_fonts, 1.0, 288);
         Ok(runtime)
     }
 
@@ -1094,10 +1133,11 @@ impl LibassRuntime {
     fn configure_style(
         &mut self,
         style: &SubtitleStyleConfig,
+        memory_fonts: &[SubtitleFontAttachment],
         font_scale: f64,
         play_res_height: u32,
     ) {
-        let fonts_changed = self.configure_fonts(style);
+        let fonts_changed = self.configure_fonts(style, memory_fonts);
         let override_bits = self.configure_style_override(style, font_scale, play_res_height);
         crate::trace::diagnostic(
             serde_json::json!({
@@ -1121,17 +1161,31 @@ impl LibassRuntime {
     /// bundled fallback, every container attachment, every custom face) and
     /// empties the font, metrics and bitmap caches — far too much work to repeat
     /// on a viewport resize. Returns whether libass was reconfigured.
-    fn configure_fonts(&mut self, style: &SubtitleStyleConfig) -> bool {
+    fn configure_fonts(
+        &mut self,
+        style: &SubtitleStyleConfig,
+        memory_fonts: &[SubtitleFontAttachment],
+    ) -> bool {
         if let Some(path) = style.font_file_path() {
             self.load_custom_font_file(path);
         }
+        let mut fallback_families = Vec::new();
+        if let Some(family) = style.font_family() {
+            fallback_families.push(family.to_string());
+        }
+        for font in memory_fonts {
+            fallback_families.extend(font.families.iter().cloned());
+        }
+        fallback_families.push(BUNDLED_ASS_FALLBACK_FONT_FAMILY.to_string());
+        let mut seen = HashSet::new();
+        fallback_families.retain(|family| !family.is_empty() && seen.insert(family.clone()));
+        let family = CString::new(fallback_families.join("\u{1f}"))
+            .unwrap_or_else(|_| default_ass_font_family_cstr().to_owned());
         let selection = LibassFontSelection {
-            family: style
-                .font_family()
-                .and_then(|family| CString::new(family).ok())
-                .unwrap_or_else(|| default_ass_font_family_cstr().to_owned()),
+            family,
             default_font: style
                 .font_file_path()
+                .filter(|path| self.custom_font_file_is_current(path))
                 .and_then(|path| CString::new(path).ok()),
         };
         if self.fonts.as_ref() == Some(&selection) {
@@ -1226,10 +1280,7 @@ impl LibassRuntime {
 
     /// Loads a user-selected font file once per runtime. libass copies the
     /// bytes, so the buffer does not have to outlive the call.
-    fn load_custom_font_file(&mut self, path: &str) {
-        if self.loaded_font_files.contains(path) {
-            return;
-        }
+    fn load_custom_font_file(&mut self, path: &str) -> bool {
         let reject = |reason: &str, bytes: usize| {
             crate::trace::diagnostic(
                 serde_json::json!({
@@ -1243,16 +1294,82 @@ impl LibassRuntime {
                 .to_string(),
             );
         };
-        let data = match std::fs::read(path) {
-            Ok(data) => data,
+        let mut file = match File::open(path) {
+            Ok(file) => file,
             Err(error) => {
                 reject(&error.to_string(), 0);
-                return;
+                return false;
             }
         };
+        let metadata = match file.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                reject(&error.to_string(), 0);
+                return false;
+            }
+        };
+        if !metadata.is_file() {
+            reject("custom font path is not a regular file", 0);
+            return false;
+        }
+        let size = metadata.len();
+        let modified = match metadata.modified() {
+            Ok(modified) => modified,
+            Err(error) => {
+                reject(
+                    &error.to_string(),
+                    usize::try_from(size).unwrap_or(usize::MAX),
+                );
+                return false;
+            }
+        };
+        let identity = CustomFontFileIdentity { modified, size };
+        self.observed_font_files.insert(path.to_string(), identity);
+        if size == 0 {
+            reject("custom font file is empty", 0);
+            return false;
+        }
+        if size > MAX_CUSTOM_SUBTITLE_FONT_BYTES {
+            reject(
+                "custom font byte limit exceeded",
+                usize::try_from(size).unwrap_or(usize::MAX),
+            );
+            return false;
+        }
+        if self.loaded_font_files.get(path) == Some(&identity) {
+            return false;
+        }
+        let mut data = Vec::with_capacity(size as usize);
+        let read_result = (&mut file)
+            .take(MAX_CUSTOM_SUBTITLE_FONT_BYTES + 1)
+            .read_to_end(&mut data);
+        if let Err(error) = read_result {
+            reject(&error.to_string(), data.len());
+            return false;
+        }
+        if data.len() as u64 != size {
+            reject("custom font changed while being read", data.len());
+            return false;
+        }
+        let current_identity = file.metadata().ok().and_then(|metadata| {
+            Some(CustomFontFileIdentity {
+                modified: metadata.modified().ok()?,
+                size: metadata.len(),
+            })
+        });
+        if current_identity != Some(identity) {
+            reject("custom font changed while being read", data.len());
+            return false;
+        }
+        let mut database = fontdb::Database::new();
+        database.load_font_data(data.clone());
+        if database.faces().next().is_none() {
+            reject("font parser found no faces", data.len());
+            return false;
+        }
         let Ok(data_size) = libc::c_int::try_from(data.len()) else {
             reject("custom font exceeds libass integer range", data.len());
-            return;
+            return false;
         };
         let name = std::path::Path::new(path)
             .file_name()
@@ -1260,7 +1377,7 @@ impl LibassRuntime {
             .unwrap_or(path);
         let Ok(name) = CString::new(name) else {
             reject("custom font name contains an interior NUL", data.len());
-            return;
+            return false;
         };
         unsafe {
             libass_ffi::ass_add_font(
@@ -1270,7 +1387,8 @@ impl LibassRuntime {
                 data_size,
             );
         }
-        self.loaded_font_files.insert(path.to_string());
+        self.loaded_font_files.insert(path.to_string(), identity);
+        self.custom_font_loads = self.custom_font_loads.saturating_add(1);
         crate::trace::diagnostic(
             serde_json::json!({
                 "event": "subtitle_custom_font",
@@ -1281,7 +1399,27 @@ impl LibassRuntime {
             })
             .to_string(),
         );
+        true
     }
+
+    fn custom_font_file_is_current(&self, path: &str) -> bool {
+        let Some(loaded) = self.loaded_font_files.get(path) else {
+            return false;
+        };
+        custom_font_file_identity(path).is_some_and(|identity| identity == *loaded)
+    }
+}
+
+#[cfg(feature = "libass")]
+fn custom_font_file_identity(path: &str) -> Option<CustomFontFileIdentity> {
+    let metadata = File::open(path).ok()?.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    Some(CustomFontFileIdentity {
+        modified: metadata.modified().ok()?,
+        size: metadata.len(),
+    })
 }
 
 #[cfg(feature = "libass")]
@@ -1305,19 +1443,28 @@ impl LibassSubtitleRenderer {
         config: LibassRenderConfig,
         style: &SubtitleStyleConfig,
     ) -> Result<Self> {
-        let script = script.as_ref();
+        Self::from_ass_script_with_style_and_fonts(script, config, style, Arc::from([]))
+    }
+
+    pub fn from_ass_script_with_style_and_fonts(
+        script: impl AsRef<[u8]>,
+        config: LibassRenderConfig,
+        style: &SubtitleStyleConfig,
+        memory_fonts: Arc<[SubtitleFontAttachment]>,
+    ) -> Result<Self> {
+        let script = Arc::<[u8]>::from(script.as_ref());
         if script.is_empty() {
             return Err(SubtitleError::Libass("ASS script is empty".to_string()));
         }
 
         let style = style.clone().normalized();
-        let mut script = script.to_vec();
-        let runtime = LibassRuntime::new(-1, &[], config, &style)?;
+        let mut script_buffer = script.to_vec();
+        let runtime = LibassRuntime::new(-1, &[], &memory_fonts, config, &style)?;
         unsafe {
             let Some(track) = NonNull::new(libass_ffi::ass_read_memory(
                 runtime.library.as_ptr(),
-                script.as_mut_ptr().cast(),
-                script.len(),
+                script_buffer.as_mut_ptr().cast(),
+                script_buffer.len(),
                 std::ptr::null(),
             )) else {
                 return Err(SubtitleError::Libass(
@@ -1327,11 +1474,14 @@ impl LibassSubtitleRenderer {
             Ok(Self {
                 runtime,
                 track,
+                source: LibassTrackSource::Script(script),
+                chunks: Vec::new(),
                 config,
                 font_scale: 1.0,
                 override_font_scale: 1.0,
                 play_res_height: 288,
                 style,
+                memory_fonts,
             })
         }
     }
@@ -1355,6 +1505,16 @@ impl LibassSubtitleRenderer {
         config: LibassRenderConfig,
         style: &SubtitleStyleConfig,
     ) -> Result<Self> {
+        Self::from_ass_track_with_style_and_fonts(track_id, resources, config, style, Arc::from([]))
+    }
+
+    pub fn from_ass_track_with_style_and_fonts(
+        track_id: i64,
+        resources: &AssTrackResources,
+        config: LibassRenderConfig,
+        style: &SubtitleStyleConfig,
+        memory_fonts: Arc<[SubtitleFontAttachment]>,
+    ) -> Result<Self> {
         if resources.codec_private.is_empty() {
             crate::trace::diagnostic(
                 serde_json::json!({
@@ -1373,7 +1533,8 @@ impl LibassSubtitleRenderer {
             SubtitleError::Libass("ASS CodecPrivate exceeds libass integer range".to_string())
         })?;
         let style = style.clone().normalized();
-        let runtime = LibassRuntime::new(track_id, &resources.fonts, config, &style)?;
+        let runtime =
+            LibassRuntime::new(track_id, &resources.fonts, &memory_fonts, config, &style)?;
         unsafe {
             let track = NonNull::new(libass_ffi::ass_new_track(runtime.library.as_ptr()))
                 .ok_or_else(|| SubtitleError::Libass("failed to allocate ASS track".to_string()))?;
@@ -1397,11 +1558,17 @@ impl LibassSubtitleRenderer {
             Ok(Self {
                 runtime,
                 track,
+                source: LibassTrackSource::Track {
+                    track_id,
+                    resources: resources.clone(),
+                },
+                chunks: Vec::new(),
                 config,
                 font_scale: 1.0,
                 override_font_scale: 1.0,
                 play_res_height: 288,
                 style,
+                memory_fonts,
             })
         }
     }
@@ -1430,11 +1597,13 @@ impl LibassSubtitleRenderer {
                 duration_ms,
             );
         }
+        self.chunks.push((chunk.to_string(), start, end));
         Ok(())
     }
 
     pub fn flush_events(&mut self) {
         unsafe { libass_ffi::ass_flush_events(self.track.as_ptr()) };
+        self.chunks.clear();
     }
 
     /// Sets the scale libass applies to the whole script, including whatever the
@@ -1454,8 +1623,12 @@ impl LibassSubtitleRenderer {
             return;
         }
         self.override_font_scale = scale;
-        self.runtime
-            .configure_style(&self.style, self.override_font_scale, self.play_res_height);
+        self.runtime.configure_style(
+            &self.style,
+            &self.memory_fonts,
+            self.override_font_scale,
+            self.play_res_height,
+        );
     }
 
     /// Height the override metrics are normalized against, which must be the
@@ -1469,8 +1642,12 @@ impl LibassSubtitleRenderer {
             return;
         }
         self.play_res_height = play_res_height;
-        self.runtime
-            .configure_style(&self.style, self.override_font_scale, self.play_res_height);
+        self.runtime.configure_style(
+            &self.style,
+            &self.memory_fonts,
+            self.override_font_scale,
+            self.play_res_height,
+        );
     }
 
     /// Re-applies the user font and colours. Cheap and idempotent: an unchanged
@@ -1478,12 +1655,72 @@ impl LibassSubtitleRenderer {
     /// every frame.
     pub fn set_style(&mut self, style: &SubtitleStyleConfig) {
         let style = style.clone().normalized();
+        let font_path_changed = self.style.font_file_path() != style.font_file_path();
+        let loaded_font_changed = style.font_file_path().is_some_and(|path| {
+            let current = custom_font_file_identity(path);
+            self.runtime.observed_font_files.get(path).copied() != current
+                || current.is_none() && self.runtime.loaded_font_files.contains_key(path)
+        });
+        if font_path_changed || loaded_font_changed {
+            if let Err(error) = self.rebuild_for_style(&style) {
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "subtitle_custom_font",
+                        "stage": "runtime_rebuild_failed",
+                        "trackId": self.runtime.track_id,
+                        "path": style.font_file_path(),
+                        "reason": error.to_string(),
+                    })
+                    .to_string(),
+                );
+            }
+            return;
+        }
         if self.style == style {
             return;
         }
-        self.runtime
-            .configure_style(&style, self.override_font_scale, self.play_res_height);
+        self.runtime.configure_style(
+            &style,
+            &self.memory_fonts,
+            self.override_font_scale,
+            self.play_res_height,
+        );
         self.style = style;
+    }
+
+    fn rebuild_for_style(&mut self, style: &SubtitleStyleConfig) -> Result<()> {
+        let mut replacement = match &self.source {
+            LibassTrackSource::Script(script) => Self::from_ass_script_with_style_and_fonts(
+                script,
+                self.config,
+                style,
+                self.memory_fonts.clone(),
+            )?,
+            LibassTrackSource::Track {
+                track_id,
+                resources,
+            } => Self::from_ass_track_with_style_and_fonts(
+                *track_id,
+                resources,
+                self.config,
+                style,
+                self.memory_fonts.clone(),
+            )?,
+        };
+        for (chunk, start, end) in &self.chunks {
+            replacement.process_chunk(chunk, *start, *end)?;
+        }
+        replacement.font_scale = self.font_scale;
+        replacement.override_font_scale = self.override_font_scale;
+        replacement.play_res_height = self.play_res_height;
+        replacement.runtime.configure_style(
+            style,
+            &replacement.memory_fonts,
+            replacement.override_font_scale,
+            replacement.play_res_height,
+        );
+        *self = replacement;
+        Ok(())
     }
 
     pub fn style(&self) -> &SubtitleStyleConfig {
@@ -2175,7 +2412,11 @@ const DEFAULT_ASS_FONT_FAMILY: &str = BUNDLED_ASS_FALLBACK_FONT_FAMILY;
 
 #[cfg(feature = "libass")]
 fn default_ass_font_provider() -> libc::c_int {
-    if cfg!(any(target_os = "ios", target_os = "android")) {
+    if cfg!(any(
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "android"
+    )) {
         ASS_FONTPROVIDER_NONE
     } else if cfg!(target_os = "macos") {
         ASS_FONTPROVIDER_CORETEXT
@@ -3402,6 +3643,83 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     #[cfg(feature = "libass")]
     #[test]
+    fn libass_memory_font_family_chain_preserves_selection_order() {
+        let fonts = Arc::from(vec![
+            SubtitleFontAttachment::new(
+                "first.ttf",
+                None,
+                vec!["First Family".to_string()],
+                crate::NIPAPLAY_FALLBACK_FONT,
+            ),
+            SubtitleFontAttachment::new(
+                "second.ttf",
+                None,
+                vec!["Second Family".to_string()],
+                crate::NIPAPLAY_FALLBACK_FONT,
+            ),
+        ]);
+        let renderer = LibassSubtitleRenderer::from_ass_script_with_style_and_fonts(
+            SIMPLE_ASS_SCRIPT,
+            LibassRenderConfig::default(),
+            &SubtitleStyleConfig::default(),
+            fonts,
+        )
+        .unwrap();
+
+        assert_eq!(
+            renderer.runtime.default_family().to_bytes(),
+            b"First Family\x1fSecond Family\x1fDroid Sans Fallback"
+        );
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_tries_later_default_families_when_an_earlier_one_is_missing() {
+        let script = SIMPLE_ASS_SCRIPT.replace("Arial", "Erika Definitely Missing");
+        let fonts = Arc::from(vec![
+            SubtitleFontAttachment::new(
+                "missing.ttf",
+                None,
+                vec!["Erika Missing Memory Family".to_string()],
+                Arc::<[u8]>::from(b"not a font".as_slice()),
+            ),
+            SubtitleFontAttachment::new(
+                "fallback.ttf",
+                None,
+                vec![BUNDLED_ASS_FALLBACK_FONT_FAMILY.to_string()],
+                crate::NIPAPLAY_FALLBACK_FONT,
+            ),
+        ]);
+        let mut renderer = LibassSubtitleRenderer::from_ass_script_with_style_and_fonts(
+            script,
+            LibassRenderConfig::default(),
+            &SubtitleStyleConfig::default(),
+            fonts,
+        )
+        .unwrap();
+
+        let SubtitleRenderOutput::Alpha(bitmaps) = renderer
+            .render(SubtitleRenderRequest::new(
+                Duration::from_millis(500),
+                640,
+                360,
+            ))
+            .unwrap()
+        else {
+            panic!("libass renderer should produce alpha bitmap output");
+        };
+        assert!(!bitmaps.parts.is_empty());
+        let messages = renderer.runtime._log_context.seen.lock().unwrap();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("Using default font family")),
+            "the patched selector must advance past the missing first family"
+        );
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
     fn libass_loads_a_custom_font_file_for_the_configured_family() {
         // Keep the name unique so concurrent test runs cannot clobber each other.
         let path = std::env::temp_dir().join(format!(
@@ -3427,7 +3745,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             renderer
                 .runtime
                 .loaded_font_files
-                .contains(&style.font_file_path)
+                .contains_key(&style.font_file_path)
         );
         let SubtitleRenderOutput::Alpha(bitmaps) = renderer
             .render(SubtitleRenderRequest::new(
@@ -3470,6 +3788,122 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             panic!("libass renderer should produce alpha bitmap output");
         };
         assert!(!bitmaps.parts.is_empty());
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_loads_a_custom_font_that_appears_after_initial_configuration() {
+        let path = std::env::temp_dir().join(format!(
+            "erika_subtitle_late_custom_font_{}.ttf",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let style = SubtitleStyleConfig {
+            font_file_path: path.to_string_lossy().to_string(),
+            ..SubtitleStyleConfig::default()
+        };
+        let mut renderer = LibassSubtitleRenderer::from_ass_script_with_style(
+            SIMPLE_ASS_SCRIPT,
+            LibassRenderConfig::default(),
+            &style,
+        )
+        .unwrap();
+        assert!(renderer.runtime.loaded_font_files.is_empty());
+
+        std::fs::write(&path, crate::NIPAPLAY_FALLBACK_FONT).unwrap();
+        renderer.set_style(&style);
+
+        assert!(
+            renderer
+                .runtime
+                .loaded_font_files
+                .contains_key(&style.font_file_path)
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_rejects_an_oversized_custom_font_before_reading_it() {
+        let path = std::env::temp_dir().join(format!(
+            "erika_subtitle_oversized_custom_font_{}.ttf",
+            std::process::id()
+        ));
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_CUSTOM_SUBTITLE_FONT_BYTES + 1).unwrap();
+        let style = SubtitleStyleConfig {
+            font_file_path: path.to_string_lossy().to_string(),
+            ..SubtitleStyleConfig::default()
+        };
+
+        let renderer = LibassSubtitleRenderer::from_ass_script_with_style(
+            SIMPLE_ASS_SCRIPT,
+            LibassRenderConfig::default(),
+            &style,
+        )
+        .unwrap();
+
+        assert!(renderer.runtime.loaded_font_files.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_rejects_a_non_font_custom_file() {
+        let path = std::env::temp_dir().join(format!(
+            "erika_subtitle_invalid_custom_font_{}.ttf",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"not a font").unwrap();
+        let style = SubtitleStyleConfig {
+            font_file_path: path.to_string_lossy().to_string(),
+            ..SubtitleStyleConfig::default()
+        };
+
+        let renderer = LibassSubtitleRenderer::from_ass_script_with_style(
+            SIMPLE_ASS_SCRIPT,
+            LibassRenderConfig::default(),
+            &style,
+        )
+        .unwrap();
+
+        assert!(renderer.runtime.loaded_font_files.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(feature = "libass")]
+    #[test]
+    fn libass_reloads_a_changed_custom_font_at_the_same_path() {
+        let path = std::env::temp_dir().join(format!(
+            "erika_subtitle_replaced_custom_font_{}.ttf",
+            std::process::id()
+        ));
+        std::fs::write(&path, crate::NIPAPLAY_FALLBACK_FONT).unwrap();
+        let style = SubtitleStyleConfig {
+            font_file_path: path.to_string_lossy().to_string(),
+            ..SubtitleStyleConfig::default()
+        };
+        let mut renderer = LibassSubtitleRenderer::from_ass_script_with_style(
+            SIMPLE_ASS_SCRIPT,
+            LibassRenderConfig::default(),
+            &style,
+        )
+        .unwrap();
+        let initial = renderer.runtime.loaded_font_files[&style.font_file_path];
+
+        let mut replacement = crate::NIPAPLAY_FALLBACK_FONT.to_vec();
+        replacement.push(0);
+        std::fs::write(&path, replacement).unwrap();
+        renderer.set_style(&style);
+
+        let replaced = renderer.runtime.loaded_font_files[&style.font_file_path];
+        assert_ne!(initial, replaced);
+        assert_eq!(replaced.size, initial.size + 1);
+        assert_eq!(
+            renderer.runtime.custom_font_loads, 1,
+            "same-path replacement must use a fresh libass library instead of appending another face",
+        );
+        let _ = std::fs::remove_file(path);
     }
 
     #[cfg(feature = "libass")]

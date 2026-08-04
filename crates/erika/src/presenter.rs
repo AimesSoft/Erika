@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     fs::OpenOptions,
     io::Write,
@@ -15,12 +15,12 @@ use crossbeam_channel::{Receiver, Sender};
 use crate::android::aaudio::{AAudioOutput, AAudioOutputConfig};
 #[cfg(target_os = "macos")]
 use crate::apple::coreaudio::{CoreAudioOutput, CoreAudioOutputConfig};
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "tvos"))]
 use crate::apple::iosaudio::{IosAudioQueueOutput, IosAudioQueueOutputConfig};
 #[cfg(not(any(
     target_os = "android",
     target_os = "macos",
-    target_os = "ios",
+    any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_env = "ohos"
 )))]
@@ -35,10 +35,10 @@ use crate::core::{
     VideoDecoderEvent, VideoFrameImportFailure,
 };
 use crate::danmaku::{
-    DANMAKU_DEBUG_BUCKETS, DanmakuConfigChange, DanmakuDebugBucket, DanmakuLayoutConfig,
-    DanmakuMode, DanmakuPreparedStats, DanmakuRenderPlan, DanmakuSession, DanmakuTextRasterizer,
-    DanmakuTimeline, DanmakuTrackInfo, DanmakuTrackSource, DanmakuViewport, DfmLayoutEngine,
-    DfmPreparedLayout, scroll_duration_for_viewport,
+    DANMAKU_DEBUG_BUCKETS, DanmakuConfigChange, DanmakuDebugBucket, DanmakuFontSelection,
+    DanmakuLayoutConfig, DanmakuMode, DanmakuPreparedStats, DanmakuRenderPlan, DanmakuSession,
+    DanmakuTextRasterizer, DanmakuTimeline, DanmakuTrackInfo, DanmakuTrackSource, DanmakuViewport,
+    DfmLayoutEngine, DfmPreparedLayout, scroll_duration_for_viewport,
 };
 use crate::debug_hud::{DebugHud, DebugHudSnapshot};
 use crate::ffmpeg::DecoderBackend;
@@ -47,7 +47,7 @@ use crate::ohos::ohaudio::{OHAudioOutput, OHAudioOutputConfig};
 use crate::overlay::{OverlayFrame, OverlayTimeline, OverlayViewport};
 #[cfg(any(target_os = "windows", target_os = "android"))]
 use crate::playback::VideoDecodePreference;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
 use crate::renderer::metal::MetalRenderer;
 use crate::renderer::metal::MetalRendererConfig;
 #[cfg(feature = "libass")]
@@ -57,7 +57,8 @@ use crate::subtitle::{
     decoded_subtitle_frames_to_ass_script_with_style,
 };
 use crate::subtitle::{
-    DecodedSubtitleFrame, SubtitleAssStyle, SubtitleRendererCore, SubtitleStyleConfig,
+    DecodedSubtitleFrame, MAX_MEMORY_SUBTITLE_FONT_BYTES, MAX_MEMORY_SUBTITLE_FONT_TOTAL_BYTES,
+    SubtitleAssStyle, SubtitleFontAttachment, SubtitleRendererCore, SubtitleStyleConfig,
     SubtitleTrackConfig, SubtitleViewport, decoded_subtitle_frames_to_timeline,
 };
 use crate::trace;
@@ -80,6 +81,47 @@ const DANMAKU_PLAN_LOOKBACK_PADDING: Duration = Duration::from_secs(2);
 const DANMAKU_MOTION_TRACE_INTERVAL: Duration = Duration::from_millis(500);
 const DANMAKU_MOTION_BACKSTEP_EPSILON: f32 = 0.5;
 const DEFAULT_SUBTITLE_FONT_SCALE: f64 = 1.0;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SubtitleMemoryFontStatus {
+    pub registered_count: usize,
+    pub registered_bytes: usize,
+    pub selected_count: usize,
+    pub generation: u64,
+    pub selected_ids: Vec<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubtitleMemoryFontFace {
+    pub index: u32,
+    pub families: Vec<String>,
+    pub post_script_name: String,
+    pub weight: u16,
+    pub italic: bool,
+    pub monospaced: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubtitleMemoryFontInfo {
+    pub id: u64,
+    pub byte_len: usize,
+    pub faces: Vec<SubtitleMemoryFontFace>,
+}
+
+#[derive(Debug, Clone)]
+struct SubtitleMemoryFontEntry {
+    attachment: SubtitleFontAttachment,
+    faces: Vec<SubtitleMemoryFontFace>,
+}
+
+#[derive(Debug, Default)]
+struct SubtitleMemoryFonts {
+    next_id: u64,
+    registered: HashMap<u64, SubtitleMemoryFontEntry>,
+    selected_ids: Vec<u64>,
+    generation: u64,
+    selection_generation: u64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TransitionFramePolicy {
@@ -113,7 +155,7 @@ impl Default for PresenterAudioConfig {
                 ring_buffer: config.ring_buffer,
             }
         }
-        #[cfg(target_os = "ios")]
+        #[cfg(any(target_os = "ios", target_os = "tvos"))]
         {
             let config = IosAudioQueueOutputConfig::default();
             Self {
@@ -144,7 +186,7 @@ impl Default for PresenterAudioConfig {
         #[cfg(not(any(
             target_os = "android",
             target_os = "macos",
-            target_os = "ios",
+            any(target_os = "ios", target_os = "tvos"),
             target_os = "windows",
             target_env = "ohos"
         )))]
@@ -259,6 +301,7 @@ pub struct PresenterRuntime {
     current_danmaku_viewport: Option<DanmakuViewport>,
     subtitle_font_scale: f64,
     subtitle_style: SubtitleStyleConfig,
+    subtitle_memory_fonts: SubtitleMemoryFonts,
     subtitles: SubtitleFrameState,
     overlay: OverlayTimeline,
     render_test_pattern_when_idle: bool,
@@ -423,6 +466,18 @@ impl AsyncDanmakuPlanner {
         // Do not wake or invalidate an in-flight layout for a renderer-only
         // change. The worker will adopt this revision before its next request.
         state.config_revision = state.config_revision.saturating_add(1);
+    }
+
+    fn set_font_selection(&mut self, font_selection: DanmakuFontSelection) {
+        self.last_requested = None;
+        let (lock, cvar) = &*self.shared;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.rasterizer =
+            DanmakuTextRasterizer::for_config_and_selection(&state.config, &font_selection);
+        state.latest_request = None;
+        state.config_revision = state.config_revision.saturating_add(1);
+        state.revision = state.revision.saturating_add(1);
+        cvar.notify_one();
     }
 
     fn invalidate_requests(&mut self) {
@@ -635,6 +690,7 @@ impl PresenterRuntime {
             current_danmaku_viewport: None,
             subtitle_font_scale: DEFAULT_SUBTITLE_FONT_SCALE,
             subtitle_style: SubtitleStyleConfig::default(),
+            subtitle_memory_fonts: SubtitleMemoryFonts::default(),
             subtitles: SubtitleFrameState::default(),
             overlay: config.overlay,
             render_test_pattern_when_idle: config.render_test_pattern_when_idle,
@@ -861,6 +917,163 @@ impl PresenterRuntime {
 
     pub fn subtitle_style(&self) -> &SubtitleStyleConfig {
         &self.subtitle_style
+    }
+
+    pub fn register_subtitle_font_bytes(&mut self, data: &[u8]) -> Result<u64> {
+        if data.is_empty() || data.len() > MAX_MEMORY_SUBTITLE_FONT_BYTES {
+            return Err(PlayerError::Playback(
+                "subtitle memory font size is invalid".to_string(),
+            ));
+        }
+        let registered_bytes = self
+            .subtitle_memory_fonts
+            .registered
+            .values()
+            .try_fold(0usize, |total, font| {
+                total.checked_add(font.attachment.byte_len())
+            });
+        if registered_bytes
+            .and_then(|total| total.checked_add(data.len()))
+            .is_none_or(|total| total > MAX_MEMORY_SUBTITLE_FONT_TOTAL_BYTES)
+        {
+            return Err(PlayerError::Playback(
+                "subtitle memory font total byte limit exceeded".to_string(),
+            ));
+        }
+        let mut database = fontdb::Database::new();
+        database.load_font_data(data.to_vec());
+        let faces = database
+            .faces()
+            .map(|face| SubtitleMemoryFontFace {
+                index: face.index,
+                families: face
+                    .families
+                    .iter()
+                    .map(|(family, _)| family.clone())
+                    .collect(),
+                post_script_name: face.post_script_name.clone(),
+                weight: face.weight.0,
+                italic: face.style == fontdb::Style::Italic,
+                monospaced: face.monospaced,
+            })
+            .collect::<Vec<_>>();
+        let mut families = faces
+            .iter()
+            .flat_map(|face| face.families.iter().cloned())
+            .collect::<Vec<_>>();
+        families.sort();
+        families.dedup();
+        if families.is_empty() {
+            return Err(PlayerError::Playback(
+                "subtitle memory font contains no faces".to_string(),
+            ));
+        }
+        self.subtitle_memory_fonts.next_id = self.subtitle_memory_fonts.next_id.saturating_add(1);
+        let id = self.subtitle_memory_fonts.next_id.max(1);
+        self.subtitle_memory_fonts.registered.insert(
+            id,
+            SubtitleMemoryFontEntry {
+                attachment: SubtitleFontAttachment::new(
+                    format!("memory-subtitle-font-{id}"),
+                    None,
+                    families,
+                    Arc::<[u8]>::from(data),
+                ),
+                faces,
+            },
+        );
+        self.bump_subtitle_memory_font_registry_generation();
+        Ok(id)
+    }
+
+    pub fn select_subtitle_memory_fonts(&mut self, ids: &[u64]) -> Result<()> {
+        let mut seen = HashSet::with_capacity(ids.len());
+        if ids.iter().any(|id| {
+            *id == 0 || !self.subtitle_memory_fonts.registered.contains_key(id) || !seen.insert(*id)
+        }) {
+            return Err(PlayerError::Playback(
+                "subtitle memory font selection contains an invalid id".to_string(),
+            ));
+        }
+        if self.subtitle_memory_fonts.selected_ids == ids {
+            return Ok(());
+        }
+        self.subtitle_memory_fonts.selected_ids.clear();
+        self.subtitle_memory_fonts
+            .selected_ids
+            .extend_from_slice(ids);
+        self.bump_subtitle_memory_font_selection_generation();
+        Ok(())
+    }
+
+    pub fn clear_subtitle_memory_fonts(&mut self) {
+        if self.subtitle_memory_fonts.registered.is_empty() {
+            return;
+        }
+        self.subtitle_memory_fonts.registered.clear();
+        self.subtitle_memory_fonts.selected_ids.clear();
+        self.bump_subtitle_memory_font_selection_generation();
+    }
+
+    pub fn subtitle_memory_font_status(&self) -> SubtitleMemoryFontStatus {
+        SubtitleMemoryFontStatus {
+            registered_count: self.subtitle_memory_fonts.registered.len(),
+            registered_bytes: self
+                .subtitle_memory_fonts
+                .registered
+                .values()
+                .map(|font| font.attachment.byte_len())
+                .sum(),
+            selected_count: self.subtitle_memory_fonts.selected_ids.len(),
+            generation: self.subtitle_memory_fonts.generation,
+            selected_ids: self.subtitle_memory_fonts.selected_ids.clone(),
+        }
+    }
+
+    pub fn subtitle_memory_font_info(&self, id: u64) -> Option<SubtitleMemoryFontInfo> {
+        let font = self.subtitle_memory_fonts.registered.get(&id)?;
+        Some(SubtitleMemoryFontInfo {
+            id,
+            byte_len: font.attachment.byte_len(),
+            faces: font.faces.clone(),
+        })
+    }
+
+    fn bump_subtitle_memory_font_registry_generation(&mut self) {
+        self.subtitle_memory_fonts.generation =
+            self.subtitle_memory_fonts.generation.saturating_add(1);
+    }
+
+    fn bump_subtitle_memory_font_selection_generation(&mut self) {
+        self.bump_subtitle_memory_font_registry_generation();
+        self.subtitle_memory_fonts.selection_generation = self
+            .subtitle_memory_fonts
+            .selection_generation
+            .saturating_add(1);
+        let selection = self.danmaku_font_selection();
+        self.danmaku.set_font_selection(selection.clone());
+        self.danmaku_planner.set_font_selection(selection);
+        self.clear_current_danmaku_state();
+        self.bump_danmaku_generation();
+        self.refresh_current_overlay();
+    }
+
+    fn danmaku_font_selection(&self) -> DanmakuFontSelection {
+        let fonts = self
+            .subtitle_memory_fonts
+            .selected_ids
+            .iter()
+            .filter_map(|id| {
+                self.subtitle_memory_fonts
+                    .registered
+                    .get(id)
+                    .map(|font| font.attachment.clone())
+            })
+            .collect::<Vec<_>>();
+        DanmakuFontSelection::new(
+            self.subtitle_memory_fonts.selection_generation,
+            Arc::from(fonts),
+        )
     }
 
     fn apply_subtitle_style(&mut self, style: SubtitleStyleConfig) {
@@ -1881,11 +2094,24 @@ impl PresenterRuntime {
     }
 
     fn subtitle_ass_style(&self, viewport: OverlayViewport) -> SubtitleAssStyle {
+        let memory_fonts = self
+            .subtitle_memory_fonts
+            .selected_ids
+            .iter()
+            .filter_map(|id| {
+                self.subtitle_memory_fonts
+                    .registered
+                    .get(id)
+                    .map(|font| font.attachment.clone())
+            })
+            .collect::<Vec<_>>();
         SubtitleAssStyle {
             font_scale: self.subtitle_font_scale,
             play_res_width: viewport.width,
             play_res_height: viewport.height,
             style: self.subtitle_style.clone(),
+            memory_fonts: Arc::from(memory_fonts),
+            memory_font_revision: self.subtitle_memory_fonts.selection_generation,
         }
     }
 
@@ -2931,7 +3157,7 @@ fn build_renderer(
     _metal_config: MetalRendererConfig,
 ) -> Result<Box<dyn RendererBackend>> {
     match preference {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         RendererBackendPreference::PlatformNative | RendererBackendPreference::Auto => {
             Ok(Box::new(MetalRenderer::with_config(_metal_config)?))
         }
@@ -2941,7 +3167,12 @@ fn build_renderer(
                 crate::renderer::d3d11::D3d11Renderer::with_config(_metal_config)?,
             ))
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "windows"
+        )))]
         RendererBackendPreference::PlatformNative | RendererBackendPreference::Auto => {
             build_wgpu_renderer(_metal_config)
         }
@@ -3006,7 +3237,7 @@ fn build_audio_output(config: PresenterAudioConfig) -> Box<dyn AudioOutputBacken
             ring_buffer: config.ring_buffer,
         }))
     }
-    #[cfg(target_os = "ios")]
+    #[cfg(any(target_os = "ios", target_os = "tvos"))]
     {
         Box::new(IosAudioQueueOutput::new(IosAudioQueueOutputConfig {
             ring_buffer: config.ring_buffer,
@@ -3034,7 +3265,7 @@ fn build_audio_output(config: PresenterAudioConfig) -> Box<dyn AudioOutputBacken
     #[cfg(not(any(
         target_os = "android",
         target_os = "macos",
-        target_os = "ios",
+        any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
         target_env = "ohos"
     )))]
@@ -3174,10 +3405,14 @@ impl SubtitleFrameState {
         let mut subtitle_changed = false;
 
         #[cfg(feature = "libass")]
-        match self
-            .ass_renderer
-            .render(pts, overlay.viewport, style.font_scale, &style.style)
-        {
+        match self.ass_renderer.render(
+            pts,
+            overlay.viewport,
+            style.font_scale,
+            &style.style,
+            &style.memory_fonts,
+            style.memory_font_revision,
+        ) {
             Ok(Some(bitmaps)) => {
                 subtitle_changed |= bitmaps.changed;
                 overlay.subtitle_alpha_planes.extend(bitmaps.parts);
@@ -3273,6 +3508,8 @@ struct CachedAssTrackRenderer {
     resources: Option<Arc<AssTrackResources>>,
     renderer: Option<LibassSubtitleRenderer>,
     style: SubtitleStyleConfig,
+    memory_font_revision: u64,
+    chunks: Vec<(String, Duration, Option<Duration>)>,
 }
 
 #[cfg(feature = "libass")]
@@ -3285,6 +3522,8 @@ impl CachedAssTrackRenderer {
         self.track_id = None;
         self.resources = None;
         self.renderer = None;
+        self.memory_font_revision = 0;
+        self.chunks.clear();
     }
 
     fn clear_track(&mut self, track_id: i64) {
@@ -3334,6 +3573,7 @@ impl CachedAssTrackRenderer {
             .filter(|segment| segment.format == crate::subtitle::SubtitleTextFormat::Ass)
         {
             renderer.process_chunk(&segment.text, start, frame.end)?;
+            self.chunks.push((segment.text.clone(), start, frame.end));
         }
         Ok(true)
     }
@@ -3344,7 +3584,25 @@ impl CachedAssTrackRenderer {
         viewport: OverlayViewport,
         font_scale: f64,
         style: &SubtitleStyleConfig,
+        memory_fonts: &Arc<[SubtitleFontAttachment]>,
+        memory_font_revision: u64,
     ) -> crate::subtitle::Result<Option<SubtitleBitmapSet>> {
+        if self.memory_font_revision != memory_font_revision {
+            if let (Some(track_id), Some(resources)) = (self.track_id, self.resources.as_ref()) {
+                let mut renderer = LibassSubtitleRenderer::from_ass_track_with_style_and_fonts(
+                    track_id,
+                    resources,
+                    LibassRenderConfig::default(),
+                    style,
+                    memory_fonts.clone(),
+                )?;
+                for (chunk, start, end) in &self.chunks {
+                    renderer.process_chunk(chunk, *start, *end)?;
+                }
+                self.renderer = Some(renderer);
+            }
+            self.memory_font_revision = memory_font_revision;
+        }
         if &self.style != style {
             self.style = style.clone();
         }
@@ -3372,6 +3630,7 @@ impl CachedAssTrackRenderer {
 struct CachedLibassTextRenderer {
     script: Option<String>,
     renderer: Option<LibassSubtitleRenderer>,
+    memory_font_revision: u64,
 }
 
 #[cfg(feature = "libass")]
@@ -3396,13 +3655,19 @@ impl CachedLibassTextRenderer {
             self.renderer = None;
             return Ok(None);
         };
-        if self.script.as_ref() != Some(&script) {
-            self.renderer = Some(LibassSubtitleRenderer::from_ass_script_with_style(
-                script.as_bytes(),
-                LibassRenderConfig::default(),
-                &style.style,
-            )?);
+        if self.script.as_ref() != Some(&script)
+            || self.memory_font_revision != style.memory_font_revision
+        {
+            self.renderer = Some(
+                LibassSubtitleRenderer::from_ass_script_with_style_and_fonts(
+                    script.as_bytes(),
+                    LibassRenderConfig::default(),
+                    &style.style,
+                    style.memory_fonts.clone(),
+                )?,
+            );
             self.script = Some(script);
+            self.memory_font_revision = style.memory_font_revision;
         }
 
         let Some(renderer) = self.renderer.as_mut() else {
@@ -3939,6 +4204,78 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert!(overlay.subtitle_alpha_planes.is_empty());
     }
 
+    #[cfg(feature = "libass")]
+    #[test]
+    fn subtitle_state_resets_memory_font_revision_on_clear() {
+        let header = ass_test_header();
+        let resources = Arc::new(AssTrackResources::new(
+            2,
+            Arc::<[u8]>::from(header.as_bytes()),
+            Arc::<[crate::subtitle::SubtitleFontAttachment]>::from([]),
+        ));
+        let mut state = SubtitleFrameState::default();
+
+        // Simulate memory fonts having been installed at revision 5.
+        state.ass_renderer.memory_font_revision = 5;
+
+        // Push an ASS frame with a different track_id to trigger clear() via
+        // process_frame when the track_id doesn't match.
+        state.push(ass_subtitle_frame(
+            3,
+            1,
+            Duration::ZERO,
+            Duration::from_secs(2),
+            1,
+            resources,
+        ));
+
+        // Regression: clear() must reset memory_font_revision so that the
+        // next render() call detects the mismatch and rebuilds the renderer
+        // with the current memory-font snapshot.
+        assert_eq!(
+            state.ass_renderer.memory_font_revision, 0,
+            "memory_font_revision should be reset to 0 after clear()"
+        );
+
+        // When render() is called with a non-zero revision, it should
+        // trigger a rebuild with memory fonts and update the field.
+        let mut overlay = empty_overlay();
+        let mut style = SubtitleAssStyle::default();
+        style.memory_font_revision = 5;
+        state.append_to_overlay(Duration::from_millis(500), &mut overlay, &style);
+
+        assert_eq!(
+            state.ass_renderer.memory_font_revision, 5,
+            "memory_font_revision should be updated after render() rebuilds with memory fonts"
+        );
+    }
+
+    #[test]
+    fn registering_an_unselected_memory_font_does_not_invalidate_renderers() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        let danmaku_generation = presenter.danmaku_font_selection().generation;
+        let subtitle_revision = presenter
+            .subtitle_ass_style(OverlayViewport::new(640, 360))
+            .memory_font_revision;
+
+        let id = presenter
+            .register_subtitle_font_bytes(crate::NIPAPLAY_FALLBACK_FONT)
+            .unwrap();
+
+        assert!(id > 0);
+        assert_eq!(presenter.subtitle_memory_font_status().generation, 1);
+        assert_eq!(
+            presenter.danmaku_font_selection().generation,
+            danmaku_generation
+        );
+        assert_eq!(
+            presenter
+                .subtitle_ass_style(OverlayViewport::new(640, 360))
+                .memory_font_revision,
+            subtitle_revision
+        );
+    }
+
     #[test]
     fn danmaku_generation_bump_clears_stale_plans_after_seek() {
         let mut generation = 7;
@@ -3963,6 +4300,42 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             6.0
         );
         assert_eq!(danmaku_motion_backstep(DanmakuMode::Top, 100.0, 140.0), 0.0);
+    }
+
+    #[test]
+    fn async_danmaku_planner_applies_font_selection_generation() {
+        let engine = danmaku_engine("async font");
+        let timeline = DanmakuTimeline::new(vec![danmaku_item(1, 1.0, "async font")]).unwrap();
+        let mut planner =
+            AsyncDanmakuPlanner::new(engine, timeline, DanmakuLayoutConfig::default());
+        let selection = DanmakuFontSelection::new(
+            9,
+            Arc::from(vec![SubtitleFontAttachment::new(
+                "memory",
+                None,
+                Vec::new(),
+                Arc::<[u8]>::from(crate::NIPAPLAY_FALLBACK_FONT),
+            )]),
+        );
+        planner.set_font_selection(selection);
+        let key = DanmakuPlanKey {
+            media_time: Duration::from_secs(1),
+            viewport: DanmakuViewport::new(640, 360),
+            generation: 9,
+        };
+        planner.request_plan(key);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let result = loop {
+            if let Some(result) = planner.try_recv() {
+                break result;
+            }
+            assert!(Instant::now() < deadline, "async planner timed out");
+            thread::sleep(Duration::from_millis(10));
+        };
+
+        assert_eq!(result.request.key, key);
+        assert!(!result.prepared.items().is_empty());
     }
 
     #[test]

@@ -119,6 +119,16 @@ unsafe fn invoke(
         "setSubtitleScale" => status_value(unsafe {
             erika_presenter_set_subtitle_scale(handle, required_f64(args, "scale")?)
         }),
+        "selectSubtitleMemoryFonts" => {
+            let ids = required_u64_array(args, "fontIds")?;
+            status_value(unsafe {
+                erika_presenter_select_subtitle_memory_fonts(handle, ids.as_ptr(), ids.len())
+            })
+        }
+        "clearSubtitleMemoryFonts" => {
+            status_value(unsafe { erika_presenter_clear_subtitle_memory_fonts(handle) })
+        }
+        "getSubtitleMemoryFontStatus" => unsafe { subtitle_memory_font_status_json(handle) },
         "getUpscalerStatus" => {
             let mut status = ErikaUpscalerStatus::default();
             call_status(unsafe { erika_presenter_get_upscaler_status(handle, &mut status) })?;
@@ -347,6 +357,27 @@ unsafe fn danmaku_tracks_json(handle: *mut ErikaPresenterHandle) -> Result<Value
     ))
 }
 
+unsafe fn subtitle_memory_font_status_json(
+    handle: *mut ErikaPresenterHandle,
+) -> Result<Value, String> {
+    let mut status = ErikaSubtitleMemoryFontStatus::default();
+    call_status(unsafe { erika_presenter_get_subtitle_memory_font_status(handle, &mut status) })?;
+    let selected_ids = if status.selected_count == 0 || status.selected_ids.is_null() {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(status.selected_ids, status.selected_count) }.to_vec()
+    };
+    let value = json!({
+        "registeredCount": status.registered_count,
+        "registeredBytes": status.registered_bytes,
+        "selectedCount": status.selected_count,
+        "generation": status.generation,
+        "selectedIds": selected_ids,
+    });
+    unsafe { erika_subtitle_memory_font_status_free(&mut status) };
+    Ok(value)
+}
+
 struct HttpHeaders {
     _strings: Vec<CString>,
     headers: Vec<ErikaHttpHeader>,
@@ -529,6 +560,19 @@ fn required_u64(args: &Map<String, Value>, name: &str) -> Result<u64, String> {
         .ok_or_else(|| format!("{name} must be non-negative"))
 }
 
+fn required_u64_array(args: &Map<String, Value>, name: &str) -> Result<Vec<u64>, String> {
+    args.get(name)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{name} must be an array"))?
+        .iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .ok_or_else(|| format!("{name} must contain only unsigned integers"))
+        })
+        .collect()
+}
+
 fn required_f64(args: &Map<String, Value>, name: &str) -> Result<f64, String> {
     args.get(name)
         .and_then(Value::as_f64)
@@ -610,6 +654,31 @@ mod tests {
         unsafe { erika_string_free(response) };
         assert_eq!(value.get("ok"), Some(&Value::Bool(true)));
         assert!(value.get("value").is_some_and(Value::is_object));
+
+        unsafe { erika_presenter_destroy(handle) };
+    }
+
+    #[test]
+    fn json_bridge_exposes_memory_font_selection_and_status() {
+        let handle = erika_presenter_create();
+        assert!(!handle.is_null());
+
+        for (method, arguments) in [
+            (c"selectSubtitleMemoryFonts", c"{\"fontIds\":[]}"),
+            (c"getSubtitleMemoryFontStatus", c"{}"),
+            (c"clearSubtitleMemoryFonts", c"{}"),
+        ] {
+            let response =
+                unsafe { erika_presenter_invoke_json(handle, method.as_ptr(), arguments.as_ptr()) };
+            assert!(!response.is_null());
+            let value: Value = unsafe { CStr::from_ptr(response) }
+                .to_str()
+                .ok()
+                .and_then(|response| serde_json::from_str(response).ok())
+                .expect("memory font JSON method returns valid JSON");
+            unsafe { erika_string_free(response) };
+            assert_eq!(value.get("ok"), Some(&Value::Bool(true)));
+        }
 
         unsafe { erika_presenter_destroy(handle) };
     }

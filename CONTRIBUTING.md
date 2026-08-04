@@ -18,7 +18,7 @@ See also: [architecture.md](docs/architecture.md) (engine design),
 crates/erika              Core engine (library)
 crates/erika_capi         C ABI export layer  →  erika.h
 crates/erika_ffmpeg_sys   FFmpeg bindgen bindings
-packages/erika_flutter    Flutter plugin (macOS + iOS + Windows + Android)
+packages/erika_flutter    Flutter plugin (macOS + iOS + tvOS + Windows + Android + HarmonyOS)
 examples/                 Validation / smoke / demo binaries
 xtask/                    Native dependency build orchestration
 docs/                     Architecture and integration docs
@@ -38,7 +38,7 @@ third_party/              Built native deps (gitignored output)
 | `danmaku` | Bilibili XML/JSON parsing, collision-avoidance layout, glyph atlas. |
 | `presenter` | `PresenterRuntime` — ties player + renderer + audio + overlays; what `render_tick` drives. |
 | `source` | `MediaSource` trait — file + HTTP range. |
-| `apple` / `windows` / `android` | Platform glue: CoreAudio/AudioQueue/VideoToolbox/Metal interop; WASAPI; AAudio/MediaCodec/native-window interop. |
+| `apple` / `windows` / `android` | Platform glue: CoreAudio/AudioQueue/VideoToolbox/Metal interop (macOS/iOS/tvOS); WASAPI; AAudio/MediaCodec/native-window interop. |
 
 ## Runtime model
 
@@ -92,7 +92,7 @@ change it:
 - **Honor ownership.** Strings handed out are caller-owned and freed via the
   matching `*_free`; document new ones in [capi_reference.md](docs/capi_reference.md).
 - **Regenerate / hand-edit `erika.h`** to match, and annotate new functions.
-- **⚠️ Sync the Swift mirror structs.** The macOS/iOS plugins hand-mirror C
+- **⚠️ Sync the Swift mirror structs.** The macOS/iOS/tvOS plugins hand-mirror C
   structs (e.g. `ErikaPresenterStats`) on the Swift side. If you change a struct
   in `erika.h`, update **both** Swift mirror files in `packages/erika_flutter`;
   a mismatch corrupts the stack and can surface as a misleading autorelease-pool

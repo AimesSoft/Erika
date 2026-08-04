@@ -49,8 +49,17 @@ internal class AndroidPlayerHost(
 
     fun cancelPlaybackIntent(): Boolean = playbackTracker.cancelPlaybackIntent()
 
-    fun setMediaMetadata(metadata: AndroidMediaMetadata) {
+    fun setMediaMetadata(metadata: AndroidMediaMetadata?) {
         mediaState = mediaState.copy(metadata = metadata)
+    }
+
+    fun prepareForOpen(metadata: AndroidMediaMetadata?) {
+        mediaState = mediaState.copy(
+            metadata = metadata,
+            playbackState = 0,
+            positionMicros = 0L,
+            durationMicros = 0L,
+        )
     }
 
     fun setSystemMediaNavigation(arguments: Map<String, Any?>) {

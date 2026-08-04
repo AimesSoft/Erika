@@ -22,7 +22,7 @@ Erika は独立した 2 つのエントリーポイントを公開します。�
 | `ErikaPresenterHandle` | **プッシュ** | Erika | native surface を Erika に渡し、表示フレームごとに `render_tick` を 1 回呼ぶ。Erika が decode・timing・audio・overlay・presentation を所有する。 |
 
 `ErikaPresenterHandle` が推奨パスで、Flutter plugin と native demo もこれを使います。
-コンパイルされるのは **macOS / iOS / Windows / Android**。他のターゲットでは
+コンパイルされるのは **macOS / iOS / tvOS / Windows / Android**。他のターゲットでは
 `erika_presenter_create` は export されますが `NULL` を返し、presenter ファミリーの
 残りは存在しません——presenter の利用はプラットフォームでガードしてください。
 
@@ -206,7 +206,7 @@ capabilities を渡すため Android extended-linear output は active になり
 ## `ErikaPresenterHandle` —— プッシュモデル
 
 Erika がフルスタックを所有し、ホストは surface を提供して `render_tick` を呼びます。
-**macOS / iOS / Windows / Android。**
+**macOS / iOS / tvOS / Windows / Android。**
 
 ### ライフサイクルと設定
 
@@ -418,7 +418,7 @@ ErikaStatus erika_presenter_resize_surface(ErikaPresenterHandle *, uint32_t w, u
 ErikaStatus erika_presenter_detach_surface(ErikaPresenterHandle *);
 ```
 
-macOS/iOS は `attach_metal_layer`（`CAMetalLayer*`）、Windows は `attach_windows_hwnd`
+macOS/iOS/tvOS は `attach_metal_layer`（`CAMetalLayer*`）、Windows は `attach_windows_hwnd`
 （`attach_wgpu_surface` + kind `WindowsHwnd` の便利ラッパで、`HWND` + `HINSTANCE` を渡す）。
 surface に紐づくレンダラ backend（native Metal、native Direct3D 11、wgpu）は attach 呼び
 出しではなく presenter 設定で決まります。drawable サイズや scale が変わったら

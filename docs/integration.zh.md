@@ -22,7 +22,7 @@ overlay 和呈现,宿主提供一个 surface 并每帧调一次 `render_tick`。
 除非你有理由自己渲染,否则用 `ErikaPresenterHandle`。拉取模型的 `ErikaHandle` 适合
 拥有自己合成器、只想要 Erika 解码/时序/状态的宿主。本指南其余部分都基于 presenter。
 
-presenter 族在 **macOS、iOS、Windows 和 Android** 上编译。
+presenter 族在 **macOS、iOS、tvOS、Windows 和 Android** 上编译。
 
 ## 2. 生命周期
 
@@ -60,7 +60,7 @@ wgpu 实现。GLES 3.0 和 D3D11 等无 compute 后端会保留原生 luma sampl
 Erika 直接渲染进你拥有的平台 surface。宽高单位是**物理像素**,`scale` 是 DPI/backing
 因子。
 
-### macOS / iOS —— `CAMetalLayer`
+### macOS / iOS / tvOS —— `CAMetalLayer`
 
 创建一个 `CAMetalLayer`,设好尺寸,再把它的指针交给 Erika:
 
@@ -148,7 +148,7 @@ erika_presenter_play(p);
 
 ## 6. 渲染循环
 
-从 surface 的显示定时器驱动 `render_tick`——`CADisplayLink`（iOS）/ `CVDisplayLink`
+从 surface 的显示定时器驱动 `render_tick`——`CADisplayLink`（iOS/tvOS）/ `CVDisplayLink`
 或 `CADisplayLink`（macOS）/ Windows 的帧调度器 / Android `Choreographer`。传该帧的
 **呈现时间(秒)**,取自单调宿主时钟;Erika 用它做 vsync 量化调度,所以传绝对时间戳,
 不是增量。
@@ -241,7 +241,7 @@ include `erika.h`,链接库(见 [building.zh.md](building.zh.md)),就这么简�
 通过 bridging header 或对 `erika.h` 的 module map 引入 C ABI。用
 `unsafeBitCast(layer, to: UInt64.self)` 或 `UInt64(UInt(bitPattern: ...))` 转
 `CAMetalLayer`。从 `CADisplayLink`/`CVDisplayLink` 回调驱动
-`erika_presenter_render_tick`。macOS/iOS 的 Flutter Swift 插件就是在同一 C ABI 上这么做。
+`erika_presenter_render_tick`。macOS/iOS/tvOS 的 Flutter Swift 插件就是在同一 C ABI 上这么做。
 
 ### Dart FFI
 

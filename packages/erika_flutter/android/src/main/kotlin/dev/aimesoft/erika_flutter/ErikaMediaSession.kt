@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadata
 import android.media.session.MediaSession
@@ -31,6 +32,9 @@ internal class ErikaMediaSession(
         applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     private val session = MediaSession(applicationContext, SESSION_TAG)
     private var activeState: AndroidMediaState? = null
+    private var publishedState: AndroidMediaState? = null
+    private var cachedArtworkBytes: ByteArray? = null
+    private var cachedArtwork: Bitmap? = null
     private var playbackServiceActive = false
 
     init {
@@ -58,30 +62,55 @@ internal class ErikaMediaSession(
 
     fun update(state: AndroidMediaState) {
         activeState = state
-        val metadata = state.metadata
-        val metadataBuilder = MediaMetadata.Builder()
-            .putString(MediaMetadata.METADATA_KEY_TITLE, metadata?.title ?: applicationContext.applicationInfo.loadLabel(applicationContext.packageManager).toString())
-            .putLong(MediaMetadata.METADATA_KEY_DURATION, state.durationMicros / 1_000L)
-        metadata?.artist?.let { metadataBuilder.putString(MediaMetadata.METADATA_KEY_ARTIST, it) }
-        metadata?.album?.let { metadataBuilder.putString(MediaMetadata.METADATA_KEY_ALBUM, it) }
-        metadata?.artwork?.let { bytes ->
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let {
+        val previous = publishedState
+        val metadataChanged = previous == null ||
+            !sameMetadata(previous.metadata, state.metadata) ||
+            previous.durationMicros != state.durationMicros
+        if (metadataChanged) {
+            val metadata = state.metadata
+            val metadataBuilder = MediaMetadata.Builder()
+                .putString(
+                    MediaMetadata.METADATA_KEY_TITLE,
+                    metadata?.title
+                        ?: applicationContext.applicationInfo.loadLabel(applicationContext.packageManager).toString(),
+                )
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, state.durationMicros / 1_000L)
+            metadata?.artist?.let { metadataBuilder.putString(MediaMetadata.METADATA_KEY_ARTIST, it) }
+            metadata?.album?.let { metadataBuilder.putString(MediaMetadata.METADATA_KEY_ALBUM, it) }
+            artworkBitmap(metadata?.artwork)?.let {
                 metadataBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it)
             }
+            session.setMetadata(metadataBuilder.build())
         }
-        session.setMetadata(metadataBuilder.build())
-        session.setPlaybackState(
-            PlaybackState.Builder()
-                .setActions(state.androidPlaybackActions())
-                .setState(
-                    state.playbackState.toAndroidPlaybackState(),
-                    state.positionMicros / 1_000L,
-                    if (state.playbackState == PLAYING_STATE) state.playbackRate else 0f,
-                )
-                .build(),
-        )
-        session.isActive = state.playbackState !in setOf(CLOSED_STATE, ERROR_STATE)
-        if (session.isActive) {
+
+        val playbackChanged = previous == null ||
+            previous.playbackState != state.playbackState ||
+            previous.positionMicros != state.positionMicros ||
+            previous.playbackRate != state.playbackRate ||
+            previous.previousEnabled != state.previousEnabled ||
+            previous.nextEnabled != state.nextEnabled
+        if (playbackChanged) {
+            session.setPlaybackState(
+                PlaybackState.Builder()
+                    .setActions(state.androidPlaybackActions())
+                    .setState(
+                        state.playbackState.toAndroidPlaybackState(),
+                        state.positionMicros / 1_000L,
+                        if (state.playbackState == PLAYING_STATE) state.playbackRate else 0f,
+                    )
+                    .build(),
+            )
+        }
+
+        val wasActive = previous?.playbackState !in setOf(null, CLOSED_STATE, ERROR_STATE)
+        val isActive = state.playbackState !in setOf(CLOSED_STATE, ERROR_STATE)
+        if (wasActive != isActive) {
+            session.isActive = isActive
+        }
+        val notificationChanged = previous == null || metadataChanged ||
+            previous.playbackState != state.playbackState ||
+            previous.allowBackgroundPlayback != state.allowBackgroundPlayback
+        if (isActive && notificationChanged) {
             val notification = notification(state)
             if (state.shouldUsePlaybackService()) {
                 if (playbackServiceActive) {
@@ -94,10 +123,11 @@ internal class ErikaMediaSession(
                 stopPlaybackService()
                 notificationManager.notify(NOTIFICATION_ID, notification)
             }
-        } else {
+        } else if (!isActive && wasActive) {
             stopPlaybackService()
             notificationManager.cancel(NOTIFICATION_ID)
         }
+        publishedState = state
     }
 
     fun dispatch(action: String) {
@@ -114,6 +144,9 @@ internal class ErikaMediaSession(
             return
         }
         activeState = null
+        publishedState = null
+        cachedArtworkBytes = null
+        cachedArtwork = null
         stopPlaybackService()
         notificationManager.cancel(NOTIFICATION_ID)
         session.setMetadata(null)
@@ -125,6 +158,9 @@ internal class ErikaMediaSession(
 
     fun release() {
         activeState = null
+        publishedState = null
+        cachedArtworkBytes = null
+        cachedArtwork = null
         stopPlaybackService()
         notificationManager.cancel(NOTIFICATION_ID)
         session.isActive = false
@@ -168,9 +204,7 @@ internal class ErikaMediaSession(
                     commandIntent(if (playing) ACTION_PAUSE else ACTION_PLAY),
                 ).build(),
             )
-        state.metadata?.artwork?.let { bytes ->
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let(builder::setLargeIcon)
-        }
+        artworkBitmap(state.metadata?.artwork)?.let(builder::setLargeIcon)
         applicationContext.packageManager.getLaunchIntentForPackage(applicationContext.packageName)?.let {
             builder.setContentIntent(
                 PendingIntent.getActivity(
@@ -182,6 +216,37 @@ internal class ErikaMediaSession(
             )
         }
         return builder.build()
+    }
+
+    private fun artworkBitmap(bytes: ByteArray?): Bitmap? {
+        if (bytes == null) {
+            cachedArtworkBytes = null
+            cachedArtwork = null
+            return null
+        }
+        if (cachedArtworkBytes?.contentEquals(bytes) == true) {
+            return cachedArtwork
+        }
+        cachedArtworkBytes = bytes.copyOf()
+        cachedArtwork = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        return cachedArtwork
+    }
+
+    private fun sameMetadata(left: AndroidMediaMetadata?, right: AndroidMediaMetadata?): Boolean {
+        if (left === right) {
+            return true
+        }
+        if (left == null || right == null) {
+            return false
+        }
+        return left.title == right.title &&
+            left.artist == right.artist &&
+            left.album == right.album &&
+            when {
+                left.artwork === right.artwork -> true
+                left.artwork == null || right.artwork == null -> false
+                else -> left.artwork.contentEquals(right.artwork)
+            }
     }
 
     private fun commandIntent(action: String): PendingIntent = PendingIntent.getBroadcast(

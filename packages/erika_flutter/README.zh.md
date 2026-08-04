@@ -7,9 +7,10 @@ Erika 媒体播放引擎的 Flutter plugin。
 插件让 Dart 不进入热路径：
 
 - Dart 只暴露低频播放器命令和事件流。
-- 原生插件提供两种 surface：推荐的 `ErikaWindowOverlayVideoView`（macOS/iOS 为 Metal，Windows 为 D3D11 swapchain），以及 platform view 用的 `ErikaVideoView`。Android 上两者都通过同一套原生 view 选择器：SDR 使用真实 `TextureView`，请求 extended-linear 时使用 Hybrid Composition `SurfaceView`。
+- 原生插件提供两种 surface：推荐的 `ErikaWindowOverlayVideoView`（macOS/iOS/tvOS 为 Metal，Windows 为 D3D11 swapchain），以及 platform view 用的 `ErikaVideoView`。Android 上两者都通过同一套原生 view 选择器：SDR 使用真实 `TextureView`，请求 extended-linear 时使用 Hybrid Composition `SurfaceView`。
 - macOS 插件加载 Erika 动态库。
 - iOS 插件链接 Erika 静态库。
+- tvOS 插件链接 Erika 静态库，并在 Apple TV platform view 中承载 Metal layer。
 - Windows 插件构建并链接 Erika C ABI DLL。
 - Android 插件按 ABI 构建 `liberika_capi.so`，并由 `Choreographer` 驱动原生 surface。
 - HarmonyOS 插件注册 Flutter 外部纹理，把它的 `OHNativeWindow` attach 给 Erika，并用 OHAudio 做低延迟 PCM 输出。
@@ -17,7 +18,7 @@ Erika 媒体播放引擎的 Flutter plugin。
 
 ## Video Surfaces
 
-全播放器 macOS/iOS UI 推荐使用 `ErikaWindowOverlayVideoView`。它会在 Flutter 布局中预留矩形区域，同时插件在旁边托管一个原生 `CAMetalLayer`，让视频保持在 Flutter platform-view compositor 之外。
+全播放器 macOS/iOS/tvOS UI 推荐使用 `ErikaWindowOverlayVideoView`。它会在 Flutter 布局中预留矩形区域，同时插件在旁边托管一个原生 `CAMetalLayer`，让视频保持在 Flutter platform-view compositor 之外。
 
 Windows 上 `ErikaWindowOverlayVideoView` 以 sibling surface 的形式托管一个 window-level Direct3D 11 swapchain，遵循同样的 overlay 模型。
 
@@ -36,7 +37,7 @@ cargo build -p erika_capi
 
 ## 预构建包与源码构建
 
-设置 `ERIKA_PREBUILT=1` 可从 GitHub Release 下载预构建原生库，`ERIKA_PREBUILT_TAG=v0.1.4` 用于固定与当前插件源码匹配的 Release tag。下载或解压失败时会回退源码构建。调试本地源码时设置 `ERIKA_FORCE_SOURCE_BUILD=1` 强制绕过预构建包。完整包名和发布方式见 [releasing.zh.md](../../docs/releasing.zh.md)。
+设置 `ERIKA_PREBUILT=1` 可从 GitHub Release 下载预构建原生库，`ERIKA_PREBUILT_TAG=v0.1.5` 用于固定与当前插件源码匹配的 Release tag。下载或解压失败时会回退源码构建。调试本地源码时设置 `ERIKA_FORCE_SOURCE_BUILD=1` 强制绕过预构建包。完整包名和发布方式见 [releasing.zh.md](../../docs/releasing.zh.md)。
 
 源码构建时，macOS 使用 `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`，Windows 使用 `ERIKA_WINDOWS_ARCH=x64|arm64`，Android 使用 `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86`。直接构建原生库时，`xtask --target`、`ERIKA_NATIVE_TARGET` 和 `cargo build --target` 必须使用同一个 target。详细示例见 [building.zh.md](../../docs/building.zh.md)。
 
@@ -46,7 +47,7 @@ iOS CocoaPod script phase 会在 Xcode 构建期间自动构建 Erika 原生依�
 
 - `rustup target add aarch64-apple-ios`
 
-宿主应用必须在 Xcode 的 Signing & Capabilities 中启用 Background Modes > Audio, AirPlay, and Picture in Picture，或在 `Info.plist` 的 `UIBackgroundModes` 中加入 `audio`。iOS 和 macOS 会注册 Now Playing 信息及系统播放控制；建议通过 `ErikaMediaMetadata` 提供标题、作者、专辑和封面图片字节。
+宿主应用必须在 Xcode 的 Signing & Capabilities 中启用 Background Modes > Audio, AirPlay, and Picture in Picture，或在 `Info.plist` 的 `UIBackgroundModes` 中加入 `audio`。iOS、tvOS 和 macOS 会注册 Now Playing 信息及系统播放控制；建议通过 `ErikaMediaMetadata` 提供标题、作者、专辑和封面图片字节。
 
 后台播放默认关闭。需要后台继续播放音频时，创建播放器时设置 `ErikaPlayer(allowBackgroundPlayback: true)`。宿主未启用上述 Background Mode 时，即使设置该选项，iOS 也不会保证后台持续播放。
 
@@ -142,9 +143,21 @@ class PlaylistController {
 }
 ```
 
-该能力默认关闭，并适用于 iOS、macOS、Android、Windows 和 HarmonyOS。切集期间应暂时
+该能力默认关闭，并适用于 iOS、tvOS、macOS、Android、Windows 和 HarmonyOS。切集期间应暂时
 关闭两个按钮并阻止重复请求；切换成功后再更新索引、metadata 和按钮能力。该 API 只上报
 `previous` 和 `next`，播放、暂停、停止与进度调整仍由各平台的原生系统媒体集成直接处理。
+
+## tvOS Setup
+
+tvOS CocoaPod script phase 会在 Xcode 构建期间自动为 Apple TV 真机或模拟器构建
+原生依赖和 C ABI 静态库。Rust 的 tvOS 目标属于 tier 3，因此需要安装带源码组件的
+nightly：
+
+- `rustup toolchain install nightly --component rust-src`
+
+脚本会根据当前 Xcode SDK 与架构选择 `aarch64-apple-tvos`、
+`aarch64-apple-tvos-sim` 或 `x86_64-apple-tvos`，并通过
+`-Z build-std=std,panic_abort` 完成编译。
 
 ## Windows Setup
 
@@ -174,10 +187,10 @@ Android 最低版本仍为 API 26。Extended-linear 还要求 native-window data
 
 ## HarmonyOS Setup
 
-HarmonyOS 模块需要 DevEco Studio 的 OpenHarmony Native SDK 和 Rust 的
-`aarch64-unknown-linux-ohos` target。它的 Hvigor/CMake 构建会编译 LGPL 的
-FFmpeg/zlib 依赖和 `liberika_capi.so`，然后把这套运行时和 `liberika_flutter.so`
-一起打包。
+HarmonyOS 模块需要 DevEco Studio 的 OpenHarmony Native SDK。设置
+`ERIKA_PREBUILT=1` 后，CMake 会从指定 Release 下载 `liberika_capi.so`，并与
+`liberika_flutter.so` 一起打包；否则需要 Rust 的 `aarch64-unknown-linux-ohos`
+target，并从源码构建 LGPL 原生依赖和 runtime。下载失败会自动回退源码构建。
 
 HarmonyOS 使用 AVSession 发布媒体元数据、封面、播放状态、进度和倍速，并接收系统播放、暂停、停止及进度调整命令。
 

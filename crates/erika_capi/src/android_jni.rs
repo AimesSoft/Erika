@@ -10,7 +10,7 @@ use std::thread::{self, ThreadId};
 
 use erika::source::{AndroidOwnedFdRegistration, register_android_owned_fd};
 use jni::JNIEnv;
-use jni::objects::{JClass, JObject, JString};
+use jni::objects::{JByteArray, JClass, JObject, JString};
 use jni::sys::{
     JNI_ERR, JNI_VERSION_1_6, JavaVM, jboolean, jbyteArray, jdouble, jfloat, jint, jlong, jstring,
 };
@@ -496,6 +496,33 @@ pub extern "system" fn Java_dev_aimesoft_erika_1flutter_ErikaNative_nativeInvoke
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_aimesoft_erika_1flutter_ErikaNative_nativeRegisterSubtitleMemoryFont(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+    data: JByteArray<'_>,
+) -> jstring {
+    let response = catch_unwind(AssertUnwindSafe(|| {
+        let bytes = env
+            .convert_byte_array(&data)
+            .map_err(|error| format!("invalid subtitle memory font byte array: {error}"))?;
+        with_registered_presenter(handle, "registerSubtitleMemoryFont", |presenter| {
+            let mut font_id = 0;
+            call_status(unsafe {
+                erika_presenter_register_subtitle_memory_font(
+                    presenter.handle,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    &mut font_id,
+                )
+            })?;
+            Ok(json!(font_id))
+        })
+    }));
+    response_to_jstring(&mut env, response)
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_aimesoft_erika_1flutter_ErikaNative_nativeAttachSurface(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
@@ -808,6 +835,20 @@ unsafe fn invoke_presenter(
             call_status(unsafe { erika_presenter_set_subtitle_style(handle, style) })?;
             Ok(Value::Null)
         }
+        "selectSubtitleMemoryFonts" => {
+            let ids = required_u64_array(args, "fontIds")?;
+            status_value(unsafe {
+                erika_presenter_select_subtitle_memory_fonts(handle, ids.as_ptr(), ids.len())
+            })
+        }
+        "clearSubtitleMemoryFonts" => {
+            status_value(unsafe { erika_presenter_clear_subtitle_memory_fonts(handle) })
+        }
+        "getSubtitleMemoryFontStatus" => unsafe { subtitle_memory_font_status_json(handle) },
+        "getSubtitleMemoryFontInfo" => {
+            let font_id = required_u64(args, "fontId")?;
+            unsafe { subtitle_memory_font_info_json(handle, font_id) }
+        }
         "setOutputHeadroom" => {
             let headroom = required_f64(args, "headroom")? as f32;
             let known =
@@ -1046,6 +1087,67 @@ unsafe fn presenter_track_selection_json(
         "audio": selection.audio,
         "subtitle": selection.subtitle,
     }))
+}
+
+unsafe fn subtitle_memory_font_status_json(
+    handle: *mut ErikaPresenterHandle,
+) -> Result<Value, String> {
+    let mut status = ErikaSubtitleMemoryFontStatus::default();
+    call_status(unsafe { erika_presenter_get_subtitle_memory_font_status(handle, &mut status) })?;
+    let selected_ids = if status.selected_count == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(status.selected_ids, status.selected_count) }.to_vec()
+    };
+    let value = json!({
+        "registeredCount": status.registered_count,
+        "registeredBytes": status.registered_bytes,
+        "selectedCount": status.selected_count,
+        "generation": status.generation,
+        "selectedIds": selected_ids,
+    });
+    unsafe { erika_subtitle_memory_font_status_free(&mut status) };
+    Ok(value)
+}
+
+unsafe fn subtitle_memory_font_info_json(
+    handle: *mut ErikaPresenterHandle,
+    font_id: u64,
+) -> Result<Value, String> {
+    let mut info = ErikaSubtitleMemoryFontInfo::default();
+    call_status(unsafe {
+        erika_presenter_get_subtitle_memory_font_info(handle, font_id, &mut info)
+    })?;
+    let faces = if info.face_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(info.faces, info.face_count) }
+    };
+    let faces = faces
+        .iter()
+        .map(|face| {
+            let families_json = unsafe { borrowed_c_string(face.families_json) };
+            let families = families_json
+                .as_deref()
+                .and_then(|value| serde_json::from_str::<Value>(value).ok())
+                .unwrap_or_else(|| Value::Array(Vec::new()));
+            json!({
+                "index": face.index,
+                "families": families,
+                "postScriptName": unsafe { borrowed_c_string(face.post_script_name) },
+                "weight": face.weight,
+                "italic": face.italic,
+                "monospaced": face.monospaced,
+            })
+        })
+        .collect::<Vec<_>>();
+    let value = json!({
+        "id": info.id,
+        "byteLen": info.byte_len,
+        "faces": faces,
+    });
+    unsafe { erika_subtitle_memory_font_info_free(&mut info) };
+    Ok(value)
 }
 
 unsafe fn presenter_danmaku_tracks_json(
@@ -1420,6 +1522,20 @@ fn required_u64(args: &Map<String, Value>, name: &str) -> Result<u64, String> {
         .ok_or_else(|| format!("{name} is required"))
 }
 
+fn required_u64_array(args: &Map<String, Value>, name: &str) -> Result<Vec<u64>, String> {
+    args.get(name)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{name} is required"))?
+        .iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_i64().and_then(|value| value.try_into().ok()))
+                .ok_or_else(|| format!("{name} must contain unsigned integers"))
+        })
+        .collect()
+}
+
 fn required_f64(args: &Map<String, Value>, name: &str) -> Result<f64, String> {
     args.get(name)
         .and_then(Value::as_f64)
@@ -1754,5 +1870,16 @@ mod tests {
         assert_eq!(value["audioLastErrorCode"], -899);
         assert_eq!(value["audioRecoveryCount"], 2);
         assert_eq!(value["videoFrameBackpressureDrops"], 5);
+    }
+
+    #[test]
+    fn parses_subtitle_memory_font_ids() {
+        let args = json!({"fontIds": [1, 2, 3]});
+        assert_eq!(
+            required_u64_array(args.as_object().unwrap(), "fontIds").unwrap(),
+            vec![1, 2, 3]
+        );
+        let invalid = json!({"fontIds": [1, -2]});
+        assert!(required_u64_array(invalid.as_object().unwrap(), "fontIds").is_err());
     }
 }

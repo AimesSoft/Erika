@@ -57,16 +57,20 @@ Pod::Spec.new do |s|
   s.version          = '0.1.5'
   s.summary          = 'Flutter embedder glue for the Erika Rust media engine.'
   s.description      = <<-DESC
-Flutter iOS plugin that hosts a CAMetalLayer and drives Erika through its C ABI.
+Flutter tvOS plugin that hosts a CAMetalLayer and drives Erika through its C ABI.
                        DESC
   s.homepage         = 'https://github.com/AimesSoft/Erika'
   s.license          = { :type => 'MPL-2.0' }
   s.author           = { 'AimesSoft' => 'dev@aimesoft.com' }
   s.source           = { :path => '.' }
   s.source_files     = 'Classes/**/*'
-  s.dependency 'Flutter'
-  s.platform = :ios, '13.0'
+  # Flutter.framework is supplied by the flutter-tvos host app.
+  s.platform = :tvos, '13.0'
   s.swift_version = '5.0'
+  s.xcconfig = {
+    'FRAMEWORK_SEARCH_PATHS' => '"${PODS_ROOT}/../Flutter"',
+    'OTHER_SWIFT_FLAGS' => '$(inherited) -DTARGET_OS_TV',
+  }
   s.script_phase = {
     :name => 'Build Erika C ABI',
     :execution_position => :before_compile,
@@ -77,8 +81,8 @@ set -eu
 
 export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-PLUGIN_IOS_DIR="$(cd "$PODS_TARGET_SRCROOT" && pwd -P)"
-ERIKA_ROOT="$(cd "$PLUGIN_IOS_DIR/../../.." && pwd -P)"
+PLUGIN_TVOS_DIR="$(cd "$PODS_TARGET_SRCROOT" && pwd -P)"
+ERIKA_ROOT="$(cd "$PLUGIN_TVOS_DIR/../../.." && pwd -P)"
 ERIKA_NATIVE_PROFILE="${ERIKA_NATIVE_PROFILE:-lgpl}"
 HOST_JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 ARCH="${CURRENT_ARCH:-}"
@@ -86,30 +90,30 @@ if [ -z "$ARCH" ] || [ "$ARCH" = "undefined_arch" ]; then
   ARCH="${ARCHS%% *}"
 fi
 
-case "${PLATFORM_NAME:-iphoneos}" in
-  iphoneos)
-    RUST_TARGET="aarch64-apple-ios"
-    BINDGEN_CLANG_TARGET="arm64-apple-ios"
-    BINDGEN_SDK="iphoneos"
+case "${PLATFORM_NAME:-appletvos}" in
+  appletvos)
+    RUST_TARGET="aarch64-apple-tvos"
+    BINDGEN_CLANG_TARGET="arm64-apple-tvos"
+    BINDGEN_SDK="appletvos"
     ;;
-  iphonesimulator)
+  appletvsimulator)
     if [ "$ARCH" = "x86_64" ]; then
-      RUST_TARGET="x86_64-apple-ios"
-      BINDGEN_CLANG_TARGET="x86_64-apple-ios-simulator"
+      RUST_TARGET="x86_64-apple-tvos"
+      BINDGEN_CLANG_TARGET="x86_64-apple-tvos-simulator"
     else
-      RUST_TARGET="aarch64-apple-ios-sim"
-      BINDGEN_CLANG_TARGET="arm64-apple-ios-simulator"
+      RUST_TARGET="aarch64-apple-tvos-sim"
+      BINDGEN_CLANG_TARGET="arm64-apple-tvos-simulator"
     fi
-    BINDGEN_SDK="iphonesimulator"
+    BINDGEN_SDK="appletvsimulator"
     ;;
   *)
-    echo "error: unsupported Erika iOS platform: ${PLATFORM_NAME:-unknown}" >&2
+    echo "error: unsupported Erika tvOS platform: ${PLATFORM_NAME:-unknown}" >&2
     exit 1
     ;;
 esac
 
-if [ -n "${ERIKA_IOS_CAPI_PROFILE:-}" ]; then
-  CARGO_PROFILE="$ERIKA_IOS_CAPI_PROFILE"
+if [ -n "${ERIKA_TVOS_CAPI_PROFILE:-}" ]; then
+  CARGO_PROFILE="$ERIKA_TVOS_CAPI_PROFILE"
 elif [ "${CONFIGURATION:-Debug}" = "Release" ]; then
   CARGO_PROFILE="release"
 else
@@ -121,13 +125,20 @@ if [ "$CARGO_PROFILE" = "release" ]; then
 elif [ "$CARGO_PROFILE" = "debug" ]; then
   CARGO_ARGS=""
 else
-  echo "error: unsupported ERIKA_IOS_CAPI_PROFILE=$CARGO_PROFILE" >&2
+  echo "error: unsupported ERIKA_TVOS_CAPI_PROFILE=$CARGO_PROFILE" >&2
   exit 1
 fi
 
-if command -v rustup >/dev/null 2>&1; then
-  rustup target add "$RUST_TARGET"
+if ! command -v rustup >/dev/null 2>&1; then
+  echo "error: rustup is required to build Erika for tvOS" >&2
+  exit 1
 fi
+if ! rustup run nightly rustc --version >/dev/null 2>&1; then
+  rustup toolchain install nightly --profile minimal --component rust-src
+elif ! rustup component list --toolchain nightly --installed | grep -q '^rust-src'; then
+  rustup component add rust-src --toolchain nightly
+fi
+export TVOS_DEPLOYMENT_TARGET="${TVOS_DEPLOYMENT_TARGET:-13.0}"
 
 BINDGEN_SDKROOT="$(xcrun --sdk "$BINDGEN_SDK" --show-sdk-path)"
 BINDGEN_TARGET_ENV="$(echo "$RUST_TARGET" | tr '-' '_')"
@@ -147,22 +158,22 @@ ERIKA_DAV1D_MARKER="$ERIKA_ROOT/third_party/build/$RUST_TARGET/$ERIKA_NATIVE_PRO
 # Optional: use a prebuilt static lib from a GitHub Release (opt-in).
 # Enable with ERIKA_PREBUILT=1; ERIKA_PREBUILT_TAG selects the tag (default
 # v0.1.5). Any failure falls through to the source build below, so enabling it
-# never breaks a build. ERIKA_IOS_CAPI_STATICLIB still takes precedence.
+# never breaks a build. ERIKA_TVOS_CAPI_STATICLIB still takes precedence.
 PREBUILT_LIB=""
-if [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ] && [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_IOS_CAPI_STATICLIB:-}" ]; then
+if [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ] && [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_TVOS_CAPI_STATICLIB:-}" ]; then
   PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.5}"
-  PREBUILT_WORK="$ERIKA_ROOT/target/erika-prebuilt-ios"
-  PREBUILT_ZIP="$PREBUILT_WORK/erika-capi-ios.zip"
-  PREBUILT_URL="https://github.com/AimesSoft/Erika/releases/download/$PREBUILT_TAG/erika-capi-ios.zip"
+  PREBUILT_WORK="$ERIKA_ROOT/target/erika-prebuilt-tvos"
+  PREBUILT_ZIP="$PREBUILT_WORK/erika-capi-tvos.zip"
+  PREBUILT_URL="https://github.com/AimesSoft/Erika/releases/download/$PREBUILT_TAG/erika-capi-tvos.zip"
   rm -rf "$PREBUILT_WORK"
   mkdir -p "$PREBUILT_WORK"
   echo "Erika: downloading prebuilt $PREBUILT_URL"
   if curl -fSL --retry 3 -o "$PREBUILT_ZIP" "$PREBUILT_URL" && unzip -oq "$PREBUILT_ZIP" -d "$PREBUILT_WORK"; then
     XCF="$(find "$PREBUILT_WORK" -type d -name 'erika_capi.xcframework' | head -1)"
     if [ -n "$XCF" ]; then
-      case "${PLATFORM_NAME:-iphoneos}" in
-        iphonesimulator) SLICE="$(find "$XCF" -maxdepth 1 -type d -name '*simulator*' | head -1)" ;;
-        *) SLICE="$(find "$XCF" -maxdepth 1 -type d -name 'ios-*' ! -name '*simulator*' | head -1)" ;;
+      case "${PLATFORM_NAME:-appletvos}" in
+        appletvsimulator) SLICE="$(find "$XCF" -maxdepth 1 -type d -name '*simulator*' | head -1)" ;;
+        *) SLICE="$(find "$XCF" -maxdepth 1 -type d -name 'tvos-*' ! -name '*simulator*' | head -1)" ;;
       esac
       if [ -n "${SLICE:-}" ] && [ -f "$SLICE/liberika_capi.a" ]; then
         PREBUILT_LIB="$SLICE/liberika_capi.a"
@@ -173,8 +184,8 @@ if [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ] && [ "${ERIKA_PREBUILT:-0}" = "1"
   [ -n "$PREBUILT_LIB" ] || echo "Erika: prebuilt unavailable; building from source"
 fi
 
-if [ -n "${ERIKA_IOS_CAPI_STATICLIB:-}" ]; then
-  LIB_SOURCE="$ERIKA_IOS_CAPI_STATICLIB"
+if [ -n "${ERIKA_TVOS_CAPI_STATICLIB:-}" ]; then
+  LIB_SOURCE="$ERIKA_TVOS_CAPI_STATICLIB"
 elif [ -n "$PREBUILT_LIB" ]; then
   LIB_SOURCE="$PREBUILT_LIB"
 else
@@ -184,12 +195,12 @@ else
   fi
   LIB_SOURCE="$ERIKA_ROOT/target/$RUST_TARGET/$CARGO_PROFILE/liberika_capi.a"
   echo "Building Erika C ABI staticlib for $RUST_TARGET ($CARGO_PROFILE)"
-  (cd "$ERIKA_ROOT" && ERIKA_NATIVE_PROFILE="$ERIKA_NATIVE_PROFILE" ERIKA_NATIVE_TARGET="$RUST_TARGET" ERIKA_FFMPEG_DIR="$ERIKA_FFMPEG_DIR" ERIKA_DAV1D_DIR="$ERIKA_DAV1D_DIR" ERIKA_LIBASS_DIR="$ERIKA_LIBASS_DIR" ERIKA_FREETYPE_DIR="$ERIKA_FREETYPE_DIR" ERIKA_HARFBUZZ_DIR="$ERIKA_HARFBUZZ_DIR" ERIKA_FRIBIDI_DIR="$ERIKA_FRIBIDI_DIR" cargo rustc -p erika_capi --target "$RUST_TARGET" --no-default-features --features libass $CARGO_ARGS --lib --crate-type staticlib)
+  (cd "$ERIKA_ROOT" && ERIKA_NATIVE_PROFILE="$ERIKA_NATIVE_PROFILE" ERIKA_NATIVE_TARGET="$RUST_TARGET" ERIKA_FFMPEG_DIR="$ERIKA_FFMPEG_DIR" ERIKA_DAV1D_DIR="$ERIKA_DAV1D_DIR" ERIKA_LIBASS_DIR="$ERIKA_LIBASS_DIR" ERIKA_FREETYPE_DIR="$ERIKA_FREETYPE_DIR" ERIKA_HARFBUZZ_DIR="$ERIKA_HARFBUZZ_DIR" ERIKA_FRIBIDI_DIR="$ERIKA_FRIBIDI_DIR" cargo +nightly rustc -Z build-std=std,panic_abort -p erika_capi --target "$RUST_TARGET" --no-default-features --features libass $CARGO_ARGS --lib --crate-type staticlib)
 fi
 
 if [ ! -f "$LIB_SOURCE" ]; then
   echo "error: Erika C ABI static library not found: $LIB_SOURCE" >&2
-  echo "       Build it with: cargo rustc -p erika_capi --target $RUST_TARGET $CARGO_ARGS --lib --crate-type staticlib" >&2
+  echo "       Build it with: cargo +nightly rustc -Z build-std=std,panic_abort -p erika_capi --target $RUST_TARGET $CARGO_ARGS --lib --crate-type staticlib" >&2
   exit 1
 fi
 
@@ -202,7 +213,7 @@ fi
   }
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
-    'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386',
-    'OTHER_LDFLAGS' => "$(inherited) \"$(PODS_TARGET_SRCROOT)/native/liberika_capi.a\" #{erika_cabi_undefined_flags} -framework AVFoundation -framework AudioToolbox -framework QuartzCore -framework Metal -framework CoreVideo -framework CoreMedia -framework VideoToolbox -framework CoreText -framework CoreFoundation -framework CoreGraphics -framework Foundation -liconv -lbz2 -lz",
+    'EXCLUDED_ARCHS[sdk=appletvsimulator*]' => 'i386',
+    'OTHER_LDFLAGS' => "$(inherited) \"$(PODS_TARGET_SRCROOT)/native/liberika_capi.a\" #{erika_cabi_undefined_flags} -framework AVFoundation -framework AudioToolbox -framework MediaPlayer -framework QuartzCore -framework Metal -framework CoreVideo -framework CoreMedia -framework VideoToolbox -framework CoreText -framework CoreFoundation -framework CoreGraphics -framework Foundation -liconv -lbz2 -lz",
   }
 end

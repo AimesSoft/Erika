@@ -20,7 +20,7 @@ Rust Player Core
   wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB, OHOS Vulkan
   presenter runtime ──── ties player + renderer + audio + overlays
   C ABI ──────────────── 79 exported functions, two handle families
-  Flutter plugin ─────── macOS + iOS + Windows + Android + OpenHarmony embedding
+  Flutter plugin ─────── macOS + iOS + tvOS + Windows + Android + OpenHarmony embedding
 ```
 
 ## ネイティブ依存関係
@@ -90,7 +90,7 @@ Decoder availability は session invariant です。video track が選択され�
 
 ## レンダラー
 
-### Metal Renderer（macOS/iOS）
+### Metal Renderer（macOS/iOS/tvOS）
 
 Apple platform の主 renderer です。
 
@@ -163,11 +163,12 @@ Header: `crates/erika_capi/include/erika.h`
 
 ## Flutter Plugin
 
-`packages/erika_flutter` は macOS / iOS / Windows / Android / HarmonyOS の Flutter embedding を提供します。
+`packages/erika_flutter` は macOS / iOS / tvOS / Windows / Android / HarmonyOS の Flutter embedding を提供します。
 
 - **Dart**: `ErikaPlayer`（commands + events）、`ErikaWindowOverlayVideoView`（推奨の window-hosted native surface——Apple では Metal、Windows では D3D11 swapchain）、`ErikaVideoView`（compatibility platform view）。
 - **macOS Swift plugin**: `liberika_capi.dylib` を読み込み、`NSWindow` overlay または `NSView`/`CAMetalLayer` platform view surface を作成し、display link から `render_tick` を駆動します。
 - **iOS Swift plugin**: `liberika_capi.a` を static link し、`UIWindow` overlay または `UIView`/`CAMetalLayer` platform view surface を作成し、同じ presenter model を使います。
+- **tvOS Swift plugin**: `liberika_capi.a` を static link し、Apple TV の `UIView`/`CAMetalLayer` platform view で表示し、同じ presenter model を使います。tvOS 実機と arm64/x86_64 simulator に対応します。
 - **Windows C++ plugin**（`ErikaFlutterPluginCApi`）: CMake（`build_erika_runtime.cmake`、cargo target `x86_64-pc-windows-msvc`）で `erika_capi.dll` をビルド・リンクし、window-level D3D11 swapchain を host し、frame scheduler から `render_tick` を駆動します。
 - **Android Kotlin/JNI plugin**: Android ABI 向け Rust runtime をビルドし、player ごとに独立した native surface を持ちます。SDR は `TextureView`、extended-linear の要求時は Flutter Hybrid Composition の `SurfaceView` を使います。Activity surface lifecycle、audio focus、noisy-route policy、HDR eligibility/headroom を調整し、active player がある間だけ shared frame scheduler を駆動します。
 - **HarmonyOS ArkTS/N-API plugin**: Hvigor/CMake で `aarch64-unknown-linux-ohos` 向けに `liberika_capi.so` をビルドし、Flutter external texture を登録して、その texture の `OHNativeWindow` を presenter に attach します。音声は OHAudio を通じて interleaved f32 PCM で出力します。
@@ -180,6 +181,7 @@ embedding model と HDR strategy は `docs/flutter_embedding.md` を参照して
 |----------|--------|--------|-------|--------|
 | macOS 14+ | VideoToolbox | Metal | CoreAudio | Available |
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | Available |
+| tvOS 13+ (Apple TV) | VideoToolbox | Metal | AudioQueue | Available |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
 | Android 8+ | MediaCodec / software | wgpu Vulkan + GLES fallback | AAudio | Available。SDR は検証済み、extended-linear scRGB は API 35 HDR 実機 acceptance 待ち |

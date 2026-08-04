@@ -1256,7 +1256,18 @@ impl Player {
         };
         commands
             .send(PlaybackCommand::Pause { sequence })
-            .map_err(|_| PlayerError::Playback("playback worker is not running".to_string()))
+            .map_err(|_| PlayerError::Playback("playback worker is not running".to_string()))?;
+        // Publish the paused intent immediately so a sequential pause/play pair
+        // cannot race the worker and observe a stale Playing state. The worker
+        // still replaces the parked clock with its authoritative media time.
+        let _ = commit_playback_command_intent(
+            &self.inner,
+            sequence,
+            None,
+            None,
+            Some(PlayerState::Paused),
+        );
+        Ok(())
     }
 
     pub fn seek(&self, position: Duration) -> Result<()> {
@@ -1436,21 +1447,54 @@ impl Player {
     }
 
     pub(crate) fn set_video_decode_suspended(&self, suspended: bool) -> Result<bool> {
+        self.set_video_decode_suspended_with_timeout(suspended, FRAME_OUTPUT_BARRIER_TIMEOUT)
+    }
+
+    fn set_video_decode_suspended_with_timeout(
+        &self,
+        suspended: bool,
+        timeout: Duration,
+    ) -> Result<bool> {
         let Some(commands) = self.optional_playback_commands() else {
             return Ok(false);
         };
         let (reply, response) = bounded(1);
-        commands
-            .send(PlaybackCommand::SetVideoDecodeSuspended { suspended, reply })
-            .map_err(|_| PlayerError::Playback("playback worker is not running".to_string()))?;
-        response
-            .recv()
-            .map_err(|_| {
-                PlayerError::Playback(
+        let requested_at = Instant::now();
+        match commands.send_timeout(
+            PlaybackCommand::SetVideoDecodeSuspended { suspended, reply },
+            timeout,
+        ) {
+            Ok(()) => {}
+            Err(crossbeam_channel::SendTimeoutError::Timeout(_)) => {
+                return Err(PlayerError::Playback(format!(
+                    "timed out after {} ms while sending video decode mode to the playback worker",
+                    timeout.as_millis(),
+                )));
+            }
+            Err(crossbeam_channel::SendTimeoutError::Disconnected(_)) => {
+                return Err(PlayerError::Playback(
+                    "playback worker is not running".to_string(),
+                ));
+            }
+        }
+        let remaining = timeout.saturating_sub(requested_at.elapsed());
+        match response.recv_timeout(remaining) {
+            Ok(result) => result.map_err(PlayerError::Playback)?,
+            Err(RecvTimeoutError::Timeout) => {
+                if suspended {
+                    enqueue_video_decode_resume_after_timeout(&commands);
+                }
+                return Err(PlayerError::Playback(format!(
+                    "playback worker did not acknowledge video decode mode within {} ms",
+                    timeout.as_millis(),
+                )));
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(PlayerError::Playback(
                     "playback worker stopped before acknowledging video decode mode".to_string(),
-                )
-            })?
-            .map_err(PlayerError::Playback)?;
+                ));
+            }
+        }
         Ok(true)
     }
 
@@ -2903,6 +2947,15 @@ fn enqueue_frame_output_resume_after_timeout(commands: &Sender<PlaybackCommand>)
     }
 }
 
+fn enqueue_video_decode_resume_after_timeout(commands: &Sender<PlaybackCommand>) {
+    let (reply, response) = bounded(1);
+    drop(response);
+    let _ = commands.try_send(PlaybackCommand::SetVideoDecodeSuspended {
+        suspended: false,
+        reply,
+    });
+}
+
 fn set_state_from_worker(inner: &Arc<Mutex<PlayerInner>>, next: PlayerState) {
     let previous = {
         let mut inner = inner.lock().expect("player mutex poisoned");
@@ -3256,7 +3309,7 @@ mod tests {
     #[test]
     fn video_decode_mode_uses_an_acknowledged_worker_command() {
         let player = Player::new(PlayerConfig::default());
-        let receiver = install_test_runtime(&player, 1);
+        let receiver = install_test_runtime(&player, 2);
         let worker = thread::spawn(move || match receiver.recv().unwrap() {
             PlaybackCommand::SetVideoDecodeSuspended {
                 suspended: true,
@@ -3267,6 +3320,39 @@ mod tests {
 
         assert!(player.set_video_decode_suspended(true).unwrap());
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn video_decode_mode_reports_an_unresponsive_worker() {
+        let player = Player::new(PlayerConfig::default());
+        let receiver = install_test_runtime(&player, 2);
+        let started = Instant::now();
+
+        let error = player
+            .set_video_decode_suspended_with_timeout(true, Duration::from_millis(25))
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("did not acknowledge video decode mode")
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
+            PlaybackCommand::SetVideoDecodeSuspended {
+                suspended: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
+            PlaybackCommand::SetVideoDecodeSuspended {
+                suspended: false,
+                ..
+            }
+        ));
+        drop(receiver);
     }
 
     #[test]
@@ -3546,7 +3632,7 @@ mod tests {
     }
 
     #[test]
-    fn pause_waits_for_worker_position_before_paused_state() {
+    fn pause_publishes_intent_before_worker_position() {
         let player = Player::new(PlayerConfig::default());
         let events = player.subscribe();
         let commands = install_test_runtime(&player, 1);
@@ -3563,8 +3649,11 @@ mod tests {
             PlaybackCommand::Pause { sequence } => sequence,
             _ => panic!("expected pause command"),
         };
-        assert_eq!(player.state(), PlayerState::Playing);
-        assert!(events.try_recv().is_err());
+        assert_eq!(player.state(), PlayerState::Paused);
+        assert_eq!(
+            events.recv().unwrap(),
+            PlayerEvent::StateChanged(PlayerState::Paused)
+        );
 
         let position = Duration::from_millis(9_250);
         assert!(commit_playback_command_intent(
@@ -3578,10 +3667,7 @@ mod tests {
             events.recv().unwrap(),
             PlayerEvent::PositionChanged(position)
         );
-        assert_eq!(
-            events.recv().unwrap(),
-            PlayerEvent::StateChanged(PlayerState::Paused)
-        );
+        assert!(events.try_recv().is_err());
         assert_eq!(player.current_media_time(), position);
         assert_eq!(player.state(), PlayerState::Paused);
         let snapshot = player.playback_snapshot();

@@ -113,8 +113,8 @@ class ErikaFlutterPlugin :
                     emitSystemMediaNavigation(playerId, SYSTEM_MEDIA_NAVIGATION_NEXT)
             },
         )
-        ErikaMediaCommandReceiver.commandHandler = mediaSession::dispatch
-        ErikaMediaPlaybackService.tickHandler = ::performBackgroundPlaybackTick
+        ErikaMediaCommandReceiver.register(this, mediaSession::dispatch)
+        ErikaMediaPlaybackService.registerTickHandler(this, ::performBackgroundPlaybackTick)
         methodChannel = MethodChannel(binding.binaryMessenger, PLAYER_CHANNEL)
         eventChannel = EventChannel(binding.binaryMessenger, EVENT_CHANNEL)
         methodChannel.setMethodCallHandler(this)
@@ -145,8 +145,8 @@ class ErikaFlutterPlugin :
             contentPreparationExecutor.shutdownNow()
         }
         audioFocus.abandon()
-        ErikaMediaCommandReceiver.commandHandler = null
-        ErikaMediaPlaybackService.tickHandler = null
+        ErikaMediaCommandReceiver.unregister(this)
+        ErikaMediaPlaybackService.unregisterTickHandler(this)
         mediaSession.release()
     }
 
@@ -202,6 +202,7 @@ class ErikaFlutterPlugin :
                 "screenshot" -> captureFrame(arguments(call), result)
                 "setMediaMetadata" -> setMediaMetadata(arguments(call), result)
                 "setSystemMediaNavigation" -> setSystemMediaNavigation(arguments(call), result)
+                "registerSubtitleMemoryFont" -> registerSubtitleMemoryFont(arguments(call), result)
                 in NATIVE_METHODS -> invokePlayer(call.method, arguments(call), result)
                 else -> result.notImplemented()
             }
@@ -331,6 +332,7 @@ class ErikaFlutterPlugin :
         }
         if (activeMediaPlayerId == host.handle) {
             activeMediaPlayerId = null
+            ErikaMediaCommandReceiver.deactivate(this)
             mediaSession.clear(host.handle)
         }
         refreshFrameScheduling()
@@ -494,9 +496,11 @@ class ErikaFlutterPlugin :
     ) {
         val host = player(arguments)
         if (method == "open") {
-            (arguments["metadata"] as? Map<*, *>)?.let {
-                host.setMediaMetadata(androidMediaMetadata(arguments))
+            val metadata = arguments["metadata"]
+            if (metadata != null && metadata !is Map<*, *>) {
+                throw IllegalArgumentException("metadata must be a map")
             }
+            host.prepareForOpen(metadata?.let { androidMediaMetadata(arguments) })
         }
         if (method == "play") {
             playWithAudioFocus(host, result)
@@ -520,6 +524,17 @@ class ErikaFlutterPlugin :
 
         val prepared = prepareNativeArguments(method, arguments)
         invokePreparedPlayer(host, method, prepared, result)
+    }
+
+    private fun registerSubtitleMemoryFont(
+        arguments: Map<String, Any?>,
+        result: MethodChannel.Result,
+    ) {
+        val host = player(arguments)
+        val data = arguments["data"] as? ByteArray
+            ?: throw IllegalArgumentException("Missing byte array argument 'data'")
+        complete(result, NativeJson.decodeResponse(ErikaNative.nativeRegisterSubtitleMemoryFont(host.handle, data)))
+        host.requestRender()
     }
 
     private fun invokePreparedPlayer(
@@ -747,6 +762,7 @@ class ErikaFlutterPlugin :
                 if (response.ok) {
                     host.playbackStarted()
                     activeMediaPlayerId = host.handle
+                    ErikaMediaCommandReceiver.activate(this)
                     mediaSession.update(host.mediaState.copy(playbackState = PLAYING_STATE))
                 } else {
                     host.cancelPlaybackIntent()
@@ -1591,6 +1607,7 @@ class ErikaFlutterPlugin :
                 if (response.ok && method == "play") {
                     host.playbackStarted()
                     activeMediaPlayerId = host.handle
+                    ErikaMediaCommandReceiver.activate(this)
                 }
                 drainEvents(host)
                 if (activeMediaPlayerId == host.handle) {
@@ -1834,6 +1851,8 @@ class ErikaFlutterPlugin :
             "setUpscaler",
             "setSubtitleScale",
             "setSubtitleStyle",
+            "selectSubtitleMemoryFonts",
+            "clearSubtitleMemoryFonts",
             "addExternalSubtitle",
             "removeSubtitleTrack",
             "loadDanmakuFile",
@@ -1864,6 +1883,9 @@ class ErikaFlutterPlugin :
             "setUpscaler",
             "setSubtitleScale",
             "setSubtitleStyle",
+            "selectSubtitleMemoryFonts",
+            "clearSubtitleMemoryFonts",
+            "getSubtitleMemoryFontStatus",
             "getUpscalerStatus",
             "getOutputStatus",
             "getPresenterStats",

@@ -6,13 +6,15 @@ The plugin keeps Dart out of the hot path:
 
 - Dart exposes low-frequency player commands and event streams.
 - The native plugins expose two surface strategies: `ErikaWindowOverlayVideoView`
-  for the recommended window-hosted overlay path (Metal on macOS/iOS, a D3D11
+  for the recommended window-hosted overlay path (Metal on macOS/iOS/tvOS, a D3D11
   swapchain on Windows), and `ErikaVideoView` for platform-view embedding. On
   Android both widgets route through the same native-view selector: SDR uses a
   real `TextureView`, while requested extended-linear output uses a
   `SurfaceView` with Hybrid Composition.
 - The macOS plugin loads the Erika dynamic library.
 - The iOS plugin links the Erika static library.
+- The tvOS plugin links the Erika static library and hosts its Metal layer in an
+  Apple TV platform view.
 - The Windows plugin builds and links the Erika C ABI DLL.
 - The Android plugin builds `liberika_capi.so` per ABI and drives its native
   surface from `Choreographer`.
@@ -23,7 +25,7 @@ The plugin keeps Dart out of the hot path:
 
 ## Video Surfaces
 
-Use `ErikaWindowOverlayVideoView` for full-player macOS/iOS UIs. It reserves a
+Use `ErikaWindowOverlayVideoView` for full-player macOS/iOS/tvOS UIs. It reserves a
 Flutter layout rect while the plugin hosts a sibling native `CAMetalLayer`, so
 video stays outside Flutter's platform-view compositor.
 
@@ -60,9 +62,9 @@ points the build phase at an explicit dylib to bundle instead of building.
 
 To skip building Erika (and FFmpeg) from source, set `ERIKA_PREBUILT=1` in the
 app build to download the prebuilt `erika_capi` from a GitHub Release
-(`ERIKA_PREBUILT_TAG` selects the tag, default `v0.1.4`). Supported on macOS,
-Windows, iOS, and Android; any failure falls back to the source build. See
-[`docs/releasing.md`](../../docs/releasing.md).
+(`ERIKA_PREBUILT_TAG` selects the tag, default `v0.1.5`). Supported on macOS,
+Windows, iOS, tvOS, Android, and OpenHarmony; any failure falls back to the
+source build. See [`docs/releasing.md`](../../docs/releasing.md).
 
 When debugging local Erika source changes, set
 `ERIKA_FORCE_SOURCE_BUILD=1` to bypass the prebuilt download path even if the
@@ -178,12 +180,24 @@ class PlaylistController {
 }
 ```
 
-The capabilities default to disabled and work on iOS, macOS, Android, Windows,
-and HarmonyOS. Disable both buttons and reject duplicate requests while an item
+The capabilities default to disabled and work on iOS, tvOS, macOS, Android,
+Windows, and HarmonyOS. Disable both buttons and reject duplicate requests while an item
 is switching, then update the index, metadata, and capabilities after a
 successful switch. Only `previous` and `next` are emitted by this API. Play,
 pause, stop, and seek continue to be handled directly by the native
 system-media integration.
+
+## tvOS Setup
+
+The tvOS CocoaPod script phase builds the native dependencies and C ABI static
+library automatically for Apple TV devices and simulators. Rust's tvOS targets
+are tier 3, so install nightly with its source component:
+
+- `rustup toolchain install nightly --component rust-src`
+
+The script selects `aarch64-apple-tvos`, `aarch64-apple-tvos-sim`, or
+`x86_64-apple-tvos` from the active Xcode SDK and architecture, then compiles it
+with `-Z build-std=std,panic_abort`.
 
 ## Windows Setup
 
@@ -241,10 +255,11 @@ desired HDR headroom without changing the host window globally.
 
 ## HarmonyOS Setup
 
-The HarmonyOS module requires DevEco Studio's OpenHarmony Native SDK and the
-Rust `aarch64-unknown-linux-ohos` target. Its Hvigor/CMake build compiles the
-LGPL FFmpeg/zlib dependencies and `liberika_capi.so`, then packages that runtime
-alongside `liberika_flutter.so`.
+The HarmonyOS module requires DevEco Studio's OpenHarmony Native SDK. With
+`ERIKA_PREBUILT=1`, its CMake build downloads `liberika_capi.so` from the
+selected release and packages it beside `liberika_flutter.so`; otherwise it
+requires the Rust `aarch64-unknown-linux-ohos` target and builds the LGPL native
+dependencies and runtime from source. Download failures fall back to source.
 
 HarmonyOS uses AVSession to publish metadata, artwork, playback state, position,
 and playback rate, and handles system play, pause, stop, and seek commands.
