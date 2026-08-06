@@ -39,6 +39,20 @@ git push origin v0.1.5
 
 macOS arm64 と x64 はどちらも `macos-26` で cross build し、その後 universal package を合成します。iOS と tvOS の XCFramework も `macos-26` を使用します。Windows x64 は `windows-latest`、ARM64 は `windows-11-arm` で native build します。
 
+## Release 前の検証
+
+`v*` tag を push する前に、clean worktree で次を実行して結果を記録してください。
+
+```sh
+cargo fmt --all -- --check
+cargo test -p erika -p erika_capi
+cargo test --workspace
+cargo clippy -p erika -p erika_capi --all-targets -- -D warnings
+```
+
+さらに、影響を受ける example を compile し、公開 `erika.h` と C ABI reference / Flutter
+FFI glue の整合性、各 archive の manifest と license、NipaPlay で固定した prebuilt tag を確認してから Release Notes を公開してください。
+
 ## Flutter で prebuilt を使用
 
 ```sh

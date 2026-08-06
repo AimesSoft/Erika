@@ -72,6 +72,21 @@ To dry-run the builds without publishing, trigger the workflow manually
 ("Run workflow" / `workflow_dispatch`) — the build jobs run, but the publish job
 is skipped because it is gated on a tag ref.
 
+## Pre-release validation
+
+Before pushing a `v*` tag, use a clean worktree and record:
+
+```sh
+cargo fmt --all -- --check
+cargo test -p erika -p erika_capi
+cargo test --workspace
+cargo clippy -p erika -p erika_capi --all-targets -- -D warnings
+```
+
+Also compile affected examples, compare the public `erika.h` header with the C
+ABI reference and Flutter FFI glue, inspect every archive manifest/license, and
+verify the pinned prebuilt tag in NipaPlay before publishing release notes.
+
 ## Packaging
 
 [`packaging/bundle.sh`](../packaging/bundle.sh) stages and zips a bundle from a

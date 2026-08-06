@@ -22,9 +22,12 @@ Erika は独立した 2 つのエントリーポイントを公開します。�
 | `ErikaPresenterHandle` | **プッシュ** | Erika | native surface を Erika に渡し、表示フレームごとに `render_tick` を 1 回呼ぶ。Erika が decode・timing・audio・overlay・presentation を所有する。 |
 
 `ErikaPresenterHandle` が推奨パスで、Flutter plugin と native demo もこれを使います。
-コンパイルされるのは **macOS / iOS / tvOS / Windows / Android**。他のターゲットでは
-`erika_presenter_create` は export されますが `NULL` を返し、presenter ファミリーの
-残りは存在しません——presenter の利用はプラットフォームでガードしてください。
+コンパイルされるのは **macOS / iOS / tvOS / Windows / Android / HarmonyOS**。surface attach は
+platform ごとに異なり、Apple は Metal、Windows は HWND/D3D11、Android/HarmonyOS は
+wgpu/Vulkan surface を使います。HarmonyOS Flutter bridge は ArkTS platform channel が
+構造化値を serialize して渡すため、presenter の JSON helper を使います。未対応 target では
+`erika_presenter_create` が export されても `NULL` を返す場合があるため、platform guard と
+create 成功の両方を確認してください。
 
 2 つのファミリーは状態を共有しません。1 プロセスで両方使えますが、1 つのメディア
 セッションは正確に 1 つの handle に属します。
@@ -206,7 +209,7 @@ capabilities を渡すため Android extended-linear output は active になり
 ## `ErikaPresenterHandle` —— プッシュモデル
 
 Erika がフルスタックを所有し、ホストは surface を提供して `render_tick` を呼びます。
-**macOS / iOS / tvOS / Windows / Android。**
+**macOS / iOS / tvOS / Windows / Android / HarmonyOS。**
 
 ### ライフサイクルと設定
 

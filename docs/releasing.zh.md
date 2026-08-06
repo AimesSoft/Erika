@@ -38,6 +38,25 @@ git push origin v0.1.5
 
 macOS arm64 和 x64 都在 `macos-26` 交叉构建，然后合并 universal 包；iOS 和 tvOS XCFramework 同样使用 `macos-26`。Windows x64 在 `windows-latest` 构建，ARM64 在 `windows-11-arm` 原生构建。
 
+## 发布前检查
+
+在推送 `v*` tag 前，维护者应在干净工作树中完成并记录：
+
+```sh
+cargo fmt --all -- --check
+cargo test -p erika -p erika_capi
+cargo test --workspace
+cargo clippy -p erika -p erika_capi --all-targets -- -D warnings
+```
+
+此外还应：
+
+- 编译受影响的平台示例，避免示例继续引用已删除的 C ABI、uniform 或配置字段；
+- 对比 `crates/erika_capi/include/erika.h`，同步 C ABI 参考文档和 Flutter FFI glue；
+- 检查每个预编译归档的 `MANIFEST.txt`、LICENSE、第三方声明及目标架构；
+- 更新 package README、CHANGELOG 和 [平台能力矩阵](platform_matrix.zh.md)；
+- 在 NipaPlay 中验证固定的 `ERIKA_PREBUILT_TAG`，并同步 NipaPlay 的 pin 与 Release Notes。
+
 ## Flutter 使用预构建包
 
 ```sh
