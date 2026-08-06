@@ -2751,6 +2751,9 @@ impl PresenterRuntime {
             if pumped >= frame_limit || started.elapsed() >= time_budget {
                 break;
             }
+            if !self.audio_output.can_accept_audio_frame() {
+                break;
+            }
             match self.audio_frames.try_recv() {
                 Ok(frame) => {
                     if frame.generation != self.player.playback_generation() {

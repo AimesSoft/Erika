@@ -16,7 +16,7 @@ pub mod ohaudio {
     use crate::audio::{
         AudioClockSnapshot, AudioOutputBackend, AudioOutputRuntimeStats, AudioOutputState,
         AudioPushResult, AudioRecoveryState, AudioRingBuffer, AudioRingBufferConfig,
-        AudioRingBufferStats, normalize_volume,
+        AudioRingBufferStats, audio_output_queue_has_capacity, normalize_volume,
     };
     use crate::ffmpeg::{PcmAudioFrame, PcmFormat, PcmSampleFormat};
     use crate::trace;
@@ -628,6 +628,16 @@ pub mod ohaudio {
             }
         }
 
+        pub fn can_accept_audio_frame(&self) -> bool {
+            let Ok(control) = self.control.lock() else {
+                return true;
+            };
+            let (Some(callback), Some(format)) = (&control.callback, control.format) else {
+                return true;
+            };
+            audio_output_queue_has_capacity(callback.ring.stats().queued_frames, format.sample_rate)
+        }
+
         pub fn push(&self, frame: PcmAudioFrame) -> Result<AudioPushResult> {
             let mut control = lock(&self.control)?;
             self.recover_disconnected_stream_locked(&mut control)?;
@@ -955,6 +965,10 @@ pub mod ohaudio {
 
         fn set_playback_rate(&mut self, rate: f64) {
             OHAudioOutput::set_playback_rate(self, rate);
+        }
+
+        fn can_accept_audio_frame(&self) -> bool {
+            OHAudioOutput::can_accept_audio_frame(self)
         }
 
         fn push(&mut self, frame: PcmAudioFrame) -> crate::audio::Result<AudioPushResult> {

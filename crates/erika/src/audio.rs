@@ -12,7 +12,8 @@ pub(crate) mod spsc;
 
 // Keep enough old-rate PCM to cover SoundTouch startup and one normal output
 // prefill. The presenter commits the media clock at the end of this bridge.
-const RATE_CHANGE_AUDIO_BRIDGE: Duration = Duration::from_millis(250);
+pub(crate) const AUDIO_OUTPUT_QUEUE_HIGH_WATER: Duration = Duration::from_millis(250);
+const RATE_CHANGE_AUDIO_BRIDGE: Duration = AUDIO_OUTPUT_QUEUE_HIGH_WATER;
 const SOUNDTOUCH_SEQUENCE_MS: i32 = 25;
 const SOUNDTOUCH_SEEK_WINDOW_MS: i32 = 12;
 const SOUNDTOUCH_OVERLAP_MS: i32 = 6;
@@ -33,6 +34,22 @@ pub enum AudioError {
 }
 
 pub type Result<T> = std::result::Result<T, AudioError>;
+
+/// Whether another decoded frame may enter an output queue without exceeding
+/// the bounded latency budget used for playback-rate transitions.
+#[cfg(any(test, target_os = "android", target_env = "ohos"))]
+pub(crate) fn audio_output_queue_has_capacity(queued_frames: usize, sample_rate: u32) -> bool {
+    if sample_rate == 0 {
+        return true;
+    }
+    let high_water_frames = usize::try_from(
+        (sample_rate as u64).saturating_mul(AUDIO_OUTPUT_QUEUE_HIGH_WATER.as_millis() as u64)
+            / 1_000,
+    )
+    .unwrap_or(usize::MAX)
+    .max(1);
+    queued_frames < high_water_frames
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioOutputState {
@@ -760,6 +777,12 @@ pub trait AudioOutputBackend {
     fn set_volume(&mut self, volume: f32);
     fn volume(&self) -> f32;
     fn set_playback_rate(&mut self, _rate: f64) {}
+    /// Returns false while the output owns enough queued PCM to preserve the
+    /// bounded playback-rate transition latency. The presenter leaves decoded
+    /// frames in the worker channel, which applies backpressure safely.
+    fn can_accept_audio_frame(&self) -> bool {
+        true
+    }
     fn push(&mut self, frame: PcmAudioFrame) -> Result<AudioPushResult>;
     fn state(&self) -> AudioOutputState;
     fn stats(&self) -> AudioRingBufferStats;
@@ -1058,6 +1081,15 @@ mod tests {
         assert_eq!(output.volume(), 0.0);
         output.set_volume(f32::NAN);
         assert_eq!(output.volume(), 1.0);
+    }
+
+    #[test]
+    fn output_queue_high_water_bounds_rate_transition_latency() {
+        assert!(audio_output_queue_has_capacity(11_999, 48_000));
+        assert!(!audio_output_queue_has_capacity(12_000, 48_000));
+        assert!(audio_output_queue_has_capacity(11_024, 44_100));
+        assert!(!audio_output_queue_has_capacity(11_025, 44_100));
+        assert!(audio_output_queue_has_capacity(usize::MAX, 0));
     }
 
     #[test]
