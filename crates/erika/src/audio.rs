@@ -10,7 +10,9 @@ use crate::trace;
 
 pub(crate) mod spsc;
 
-const RATE_CHANGE_AUDIO_BRIDGE: Duration = Duration::from_millis(80);
+// Keep enough old-rate PCM to cover SoundTouch startup and one normal output
+// prefill. The presenter commits the media clock at the end of this bridge.
+const RATE_CHANGE_AUDIO_BRIDGE: Duration = Duration::from_millis(250);
 const SOUNDTOUCH_SEQUENCE_MS: i32 = 25;
 const SOUNDTOUCH_SEEK_WINDOW_MS: i32 = 12;
 const SOUNDTOUCH_OVERLAP_MS: i32 = 6;
@@ -287,6 +289,7 @@ struct AudioTempoProcessor {
     playback_rate: f64,
     processor: SoundTouch,
     pending_pts: Option<Duration>,
+    scratch: Vec<f32>,
 }
 
 impl AudioTempoProcessor {
@@ -306,6 +309,7 @@ impl AudioTempoProcessor {
             playback_rate,
             processor,
             pending_pts: None,
+            scratch: Vec::new(),
         }
     }
 
@@ -314,7 +318,7 @@ impl AudioTempoProcessor {
             && (self.playback_rate - normalize_playback_rate(playback_rate)).abs() < 0.001
     }
 
-    fn process(&mut self, frame: PcmAudioFrame) -> (Vec<f32>, Option<Duration>, f64) {
+    fn process(&mut self, mut frame: PcmAudioFrame) -> (Vec<f32>, Option<Duration>, f64) {
         let channels = self.format.channels.max(1) as usize;
         let input_frames = frame.samples.len() / channels;
         if input_frames == 0 {
@@ -324,9 +328,14 @@ impl AudioTempoProcessor {
             self.pending_pts = frame.pts;
         }
         self.processor.put_samples(&frame.samples, input_frames);
-        let output = self.receive_available();
+        // Reuse the decoder-owned allocation for the transformed output and
+        // keep the SoundTouch scratch buffer on the processor. This path runs
+        // from the display-driven presenter, so avoiding fresh allocations
+        // directly protects the next frame deadline after a rate change.
+        frame.samples.clear();
+        self.receive_available_into(&mut frame.samples);
         let start = self.pending_pts;
-        let output_frames = output.len() / channels;
+        let output_frames = frame.samples.len() / channels;
         if output_frames > 0 {
             if let Some(start) = self.pending_pts {
                 self.pending_pts = offset_pts_scaled(
@@ -337,25 +346,25 @@ impl AudioTempoProcessor {
                 );
             }
         }
-        (output, start, self.playback_rate)
+        (frame.samples, start, self.playback_rate)
     }
 
-    fn receive_available(&mut self) -> Vec<f32> {
+    fn receive_available_into(&mut self, output: &mut Vec<f32>) {
         const OUTPUT_FRAMES: usize = 4096;
         let channels = self.format.channels.max(1) as usize;
-        let mut chunk = vec![0.0f32; OUTPUT_FRAMES * channels];
-        let mut output = Vec::new();
+        self.scratch.resize(OUTPUT_FRAMES * channels, 0.0);
         loop {
-            let frames = self.processor.receive_samples(&mut chunk, OUTPUT_FRAMES);
+            let frames = self
+                .processor
+                .receive_samples(&mut self.scratch, OUTPUT_FRAMES);
             if frames == 0 {
                 break;
             }
-            output.extend_from_slice(&chunk[..frames * channels]);
+            output.extend_from_slice(&self.scratch[..frames * channels]);
             if frames < OUTPUT_FRAMES {
                 break;
             }
         }
-        output
     }
 }
 
@@ -462,6 +471,10 @@ impl AudioRingBuffer {
         if (self.playback_rate - rate).abs() <= 0.001 {
             return;
         }
+
+        // Samples already in this queue were processed at the previous rate.
+        // Retain a bounded bridge while SoundTouch warms up for the new rate;
+        // the presenter changes the media clock when this bridge has played.
         self.playback_rate = rate;
         self.tempo_processor = None;
         self.trim_queued_to_front_frames(self.rate_change_bridge_frames());
@@ -1251,7 +1264,7 @@ mod tests {
     }
 
     #[test]
-    fn ring_buffer_rate_change_keeps_short_audio_bridge() {
+    fn ring_buffer_rate_change_keeps_a_full_prefill_bridge() {
         let mut buffer = AudioRingBuffer::with_format(
             AudioRingBufferConfig {
                 capacity_frames: 48_000,
@@ -1261,16 +1274,21 @@ mod tests {
         )
         .unwrap();
         buffer
-            .push_frame(timed_frame(Duration::from_secs(4), 4_800))
+            .push_frame(timed_frame(Duration::from_secs(4), 24_000))
             .unwrap();
 
         buffer.set_playback_rate(2.0);
 
-        assert_eq!(buffer.clock_snapshot().queued_frames, 3_840);
+        assert_eq!(buffer.clock_snapshot().queued_frames, 12_000);
         assert_eq!(
             buffer.clock_snapshot().media_time,
             Some(Duration::from_secs(4))
         );
+
+        let mut output = vec![0.0; 12_000 * 2];
+        let result = buffer.read_interleaved(&mut output).unwrap();
+        assert_eq!(result.frames, 12_000);
+        assert_eq!(result.underflow_frames, 0);
     }
 
     #[test]

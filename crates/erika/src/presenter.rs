@@ -69,8 +69,11 @@ use crate::{PlayerError, Result};
 const AUDIO_START_BUFFER: Duration = Duration::from_millis(250);
 const AUDIO_PUMP_FRAME_LIMIT: usize = 16;
 const AUDIO_PUMP_TIME_BUDGET: Duration = Duration::from_millis(4);
-const AUDIO_FAST_RATE_PUMP_FRAME_LIMIT: usize = 48;
-const AUDIO_FAST_RATE_PUMP_TIME_BUDGET: Duration = Duration::from_millis(8);
+// The audio transform currently runs on the display-driven presenter path.
+// Keep a rate-change refill bounded to one normal audio-pump slice so it
+// cannot consume an entire render frame while SoundTouch is warming up.
+const AUDIO_FAST_RATE_PUMP_FRAME_LIMIT: usize = 24;
+const AUDIO_FAST_RATE_PUMP_TIME_BUDGET: Duration = Duration::from_millis(4);
 const PLAYBACK_RATE_EPSILON: f64 = 0.001;
 const VIDEO_PUMP_FRAME_LIMIT: usize = 8;
 const VIDEO_PUMP_TIME_BUDGET: Duration = Duration::from_millis(4);
@@ -287,6 +290,7 @@ pub struct PresenterRuntime {
     last_audio_clock_report: Option<AudioClockReportState>,
     last_audio_runtime_stats: AudioOutputRuntimeStats,
     playback_rate: f64,
+    pending_playback_rate: Option<PendingPlaybackRate>,
     audio_only_tick_active: bool,
     latest_video_decoder: Option<VideoDecoderEvent>,
     current_overlay: Option<OverlayFrame>,
@@ -357,6 +361,12 @@ struct AudioClockReportState {
     queued_frames: usize,
     read_frames: u64,
     underflow_frames: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingPlaybackRate {
+    rate: f64,
+    commit_at: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -676,6 +686,7 @@ impl PresenterRuntime {
             last_audio_clock_report: None,
             last_audio_runtime_stats: AudioOutputRuntimeStats::default(),
             playback_rate: 1.0,
+            pending_playback_rate: None,
             audio_only_tick_active: false,
             latest_video_decoder: None,
             current_overlay: None,
@@ -867,10 +878,28 @@ impl PresenterRuntime {
 
     pub fn set_playback_rate(&mut self, rate: f64) -> Result<()> {
         let next_rate = normalize_playback_rate(rate);
-        self.player.set_playback_rate(next_rate)?;
-        self.playback_rate = next_rate;
         self.audio_output.set_playback_rate(next_rate);
         self.last_audio_clock_report = None;
+
+        let bridge = self
+            .audio_started
+            .then(|| self.audio_output.clock_snapshot())
+            .flatten()
+            .and_then(|snapshot| snapshot.queued_duration)
+            .filter(|duration| !duration.is_zero());
+        if self.is_playing()
+            && let Some(bridge) = bridge
+        {
+            self.pending_playback_rate = Some(PendingPlaybackRate {
+                rate: next_rate,
+                commit_at: Instant::now() + bridge,
+            });
+            return Ok(());
+        }
+
+        self.player.set_playback_rate(next_rate)?;
+        self.playback_rate = next_rate;
+        self.pending_playback_rate = None;
         Ok(())
     }
 
@@ -1268,6 +1297,7 @@ impl PresenterRuntime {
             self.audio_only_tick_active = false;
         }
         let tick_started = Instant::now();
+        self.commit_pending_playback_rate()?;
         let pump_started = Instant::now();
         self.refresh_video_decoder_status();
 
@@ -1440,6 +1470,7 @@ impl PresenterRuntime {
 
     pub fn audio_only_tick(&mut self) -> Result<PresenterStats> {
         let tick_started = Instant::now();
+        self.commit_pending_playback_rate()?;
         if !self.audio_only_tick_active {
             self.player.set_video_decode_suspended(true)?;
             self.discard_pending_video_frames();
@@ -2739,14 +2770,10 @@ impl PresenterRuntime {
     }
 
     fn audio_pump_limits(&self) -> (usize, Duration) {
-        if (self.playback_rate - 1.0).abs() > PLAYBACK_RATE_EPSILON {
-            (
-                AUDIO_FAST_RATE_PUMP_FRAME_LIMIT,
-                AUDIO_FAST_RATE_PUMP_TIME_BUDGET,
-            )
-        } else {
-            (AUDIO_PUMP_FRAME_LIMIT, AUDIO_PUMP_TIME_BUDGET)
-        }
+        let rate = self
+            .pending_playback_rate
+            .map_or(self.playback_rate, |pending| pending.rate);
+        audio_pump_limits_for_rate(rate)
     }
 
     fn report_audio_clock_snapshot(&mut self) {
@@ -2848,7 +2875,22 @@ impl PresenterRuntime {
         }
         self.audio_configured = false;
         self.audio_started = false;
+        self.pending_playback_rate = None;
         self.last_audio_clock_report = None;
+    }
+
+    fn commit_pending_playback_rate(&mut self) -> Result<()> {
+        let Some(pending) = self.pending_playback_rate else {
+            return Ok(());
+        };
+        if !self.is_playing() || Instant::now() < pending.commit_at {
+            return Ok(());
+        }
+        self.player.set_playback_rate(pending.rate)?;
+        self.playback_rate = pending.rate;
+        self.pending_playback_rate = None;
+        self.last_audio_clock_report = None;
+        Ok(())
     }
 
     fn report_audio_output_runtime_stats(&mut self) {
@@ -2878,6 +2920,17 @@ fn normalize_playback_rate(rate: f64) -> f64 {
         rate
     } else {
         1.0
+    }
+}
+
+fn audio_pump_limits_for_rate(rate: f64) -> (usize, Duration) {
+    if (rate - 1.0).abs() > PLAYBACK_RATE_EPSILON {
+        (
+            AUDIO_FAST_RATE_PUMP_FRAME_LIMIT,
+            AUDIO_FAST_RATE_PUMP_TIME_BUDGET,
+        )
+    } else {
+        (AUDIO_PUMP_FRAME_LIMIT, AUDIO_PUMP_TIME_BUDGET)
     }
 }
 
@@ -4341,6 +4394,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     #[test]
     fn presenter_config_disables_idle_test_pattern_by_default() {
         assert!(!PresenterConfig::default().render_test_pattern_when_idle);
+    }
+
+    #[test]
+    fn playback_rate_uses_fast_audio_pump_limits() {
+        assert_eq!(
+            audio_pump_limits_for_rate(1.0),
+            (AUDIO_PUMP_FRAME_LIMIT, AUDIO_PUMP_TIME_BUDGET)
+        );
+        assert_eq!(
+            audio_pump_limits_for_rate(2.0),
+            (
+                AUDIO_FAST_RATE_PUMP_FRAME_LIMIT,
+                AUDIO_FAST_RATE_PUMP_TIME_BUDGET
+            )
+        );
     }
 
     #[test]
