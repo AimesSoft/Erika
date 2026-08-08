@@ -23,7 +23,9 @@ Rust の `PresenterRuntime` を直接駆動します。以下の C ABI 呼び出
 `ErikaHandle` は、独自コンポジタを持ち Erika の decode/timing/state だけが欲しいホスト
 向けです。本ガイドの残りは presenter ベースです。
 
-presenter ファミリーは **macOS / iOS / tvOS / Windows / Android** でコンパイルされます。
+presenter ファミリーは **macOS / iOS / tvOS / Windows / Android / HarmonyOS** でコンパイルされます。
+native host API は platform ごとに異なります。HarmonyOS Flutter host は desktop sample を
+そのまま再現するのではなく、通常 plugin の ArkTS JSON bridge を使います。
 
 ## 2. ライフサイクル
 

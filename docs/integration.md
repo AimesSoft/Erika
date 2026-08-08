@@ -24,7 +24,10 @@ Use `ErikaPresenterHandle` unless you have a reason to render yourself. The
 pull-model `ErikaHandle` is for hosts that own their compositor and only want
 Erika's decode/timing/state. The rest of this guide is presenter-based.
 
-The presenter family is compiled on **macOS, iOS, tvOS, Windows, and Android**.
+The presenter family is compiled on **macOS, iOS, tvOS, Windows, Android, and
+HarmonyOS**. The native host API is platform-specific; HarmonyOS Flutter hosts
+normally use the plugin's ArkTS JSON bridge rather than reproducing the desktop
+sample code.
 
 ## 2. The lifecycle
 

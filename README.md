@@ -25,7 +25,7 @@
 - **字幕** — SRT / WebVTT / ASS 解析，libass 渲染 (静态链接)，嵌入与外挂字幕轨
 - **弹幕** — Bilibili XML / JSON 解析，DFM+ 碰撞避让布局引擎，glyph atlas 原生 GPU 渲染
 - **播放引擎** — play / pause / stop / seek / 倍速，音频主时钟同步，vsync 量化调度
-- **C ABI** — 79 个导出函数，opaque handle 设计，可从 C / C++ / Swift / Dart FFI / 任何 FFI 语言调用
+- **C ABI** — opaque handle 设计，可从 C / C++ / Swift / Dart FFI / 任何 FFI 语言调用；以 `erika.h` 中的导出声明为准
 - **Flutter 插件** — macOS + iOS + tvOS + Windows + Android + HarmonyOS 原生视图/Texture 嵌入
 - **wgpu 后端** — Android 播放、overlay、截图与 Vulkan/GLES 恢复路径可用；HarmonyOS 走 Vulkan，用 OHNativeWindow 呈现、OHNativeBuffer 零拷贝导入；Linux 仍在规划中
 
@@ -112,6 +112,7 @@ docs/                     架构与嵌入文档
 - [原生接入指南](docs/integration.zh.md) — C/C++/Win32/Swift 等非 Flutter 宿主的端到端嵌入
 - [构建与依赖指南](docs/building.zh.md) — xtask、native 依赖、交叉编译
 - [Flutter 嵌入](docs/flutter_embedding.zh.md) ・ [弹幕架构](docs/danmaku_architecture.md)
+- [平台能力矩阵](docs/platform_matrix.zh.md) — 区分可编译、CI 覆盖、真机验收与预编译发布
 - [发布与预编译产物](docs/releasing.md) — 各平台预编译 `erika_capi` 库下载与打包(英文)
 - [贡献 / 开发者指南](CONTRIBUTING.zh.md) — 仓库布局、线程模型、新增平台后端
 

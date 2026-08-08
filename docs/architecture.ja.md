@@ -19,7 +19,7 @@ Rust Player Core
   D3D11 renderer ─────── zero-copy D3D11VA, HDR10, subtitle/danmaku pass (Windows)
   wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB, OHOS Vulkan
   presenter runtime ──── ties player + renderer + audio + overlays
-  C ABI ──────────────── 79 exported functions, two handle families
+  C ABI ──────────────── versioned public header、2 つの handle ファミリー
   Flutter plugin ─────── macOS + iOS + tvOS + Windows + Android + OpenHarmony embedding
 ```
 

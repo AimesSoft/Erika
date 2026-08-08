@@ -22,10 +22,13 @@ Erika exposes two independent entry points. Pick one per integration.
 | `ErikaPresenterHandle` | **Push** | Erika | You give Erika a native surface and call `render_tick` once per display frame. Erika owns decode, timing, audio, overlays, and presentation. |
 
 `ErikaPresenterHandle` is the recommended path and what the Flutter plugin and
-the native demos use. It is compiled on **macOS, iOS, tvOS, Windows, and Android**.
-On other targets `erika_presenter_create` is still exported but returns `NULL`,
-and the rest of the presenter family is absent — guard presenter usage by
-platform.
+the native demos use. It is compiled on **macOS, iOS, tvOS, Windows, Android,
+and HarmonyOS**. Surface attachment is platform-specific: Apple uses Metal,
+Windows uses HWND/D3D11, and Android/HarmonyOS use wgpu/Vulkan surfaces. The
+HarmonyOS Flutter bridge uses the JSON presenter helpers because ArkTS platform
+channels already exchange structured serialized values. On unsupported targets
+`erika_presenter_create` may be exported but returns `NULL`; guard presenter
+usage by platform and by a successful create call.
 
 The two families do not share state; a process may use both, but a given media
 session lives in exactly one handle.
@@ -225,7 +228,7 @@ capabilities and therefore cannot activate Android extended-linear output.
 ## `ErikaPresenterHandle` — push model
 
 Erika owns the full stack; the host supplies a surface and calls `render_tick`.
-**macOS / iOS / tvOS / Windows / Android.**
+**macOS / iOS / tvOS / Windows / Android / HarmonyOS.**
 
 ### Lifecycle and configuration
 

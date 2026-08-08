@@ -25,7 +25,7 @@ The host application provides a rendering surface and sends playback commands â€
 - **Subtitles** -- SRT / WebVTT / ASS parsing, libass rendering (statically linked), embedded and external subtitle tracks
 - **Danmaku** -- Bilibili XML / JSON parsing, DFM+ collision-aware lane layout engine, glyph atlas native GPU rendering
 - **Playback engine** -- play / pause / stop / seek / rate control, audio-master clock discipline, vsync-quantized frame scheduling
-- **C ABI** -- 79 exported functions, opaque handle design, callable from C / C++ / Swift / Dart FFI / any FFI-capable language
+- **C ABI** -- opaque handle design with a versioned public header; callable from C / C++ / Swift / Dart FFI / any FFI-capable language. See `erika.h` for the authoritative export set.
 - **Flutter plugin** -- macOS + iOS + tvOS + Windows + Android + HarmonyOS native view/Texture embedding with platform-native high-dynamic-range surface paths
 - **wgpu backend** -- Android playback, overlays, capture, and bounded Vulkan/GLES recovery are available; HarmonyOS runs on Vulkan, presenting through OHNativeWindow with OHNativeBuffer zero-copy import; Linux remains planned
 
@@ -79,7 +79,7 @@ Erika provides two C ABI entrypoint families for different embedding scenarios:
 | `ErikaHandle` | Host manages its own render loop | Host pulls frame data |
 | `ErikaPresenterHandle` | Erika owns the full playback stack | Host provides a surface and drives `render_tick` |
 
-Header: [`crates/erika_capi/include/erika.h`](crates/erika_capi/include/erika.h)
+Header: [`crates/erika_capi/include/erika.h`](../crates/erika_capi/include/erika.h)
 
 ## Platform Support
 
