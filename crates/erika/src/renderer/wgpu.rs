@@ -19,6 +19,8 @@ use wgpu::util::DeviceExt;
 
 #[cfg(target_os = "android")]
 use crate::android::{AndroidDataSpaceErrorKind, AndroidNativeWindow};
+#[cfg(target_os = "android")]
+use crate::core::ColorPrimaries;
 #[cfg(any(
     target_os = "android",
     target_os = "macos",
@@ -38,8 +40,8 @@ use crate::ffmpeg::{DecoderBackend, PlanarFrame, PlanarFrameConversionError, Pla
 use crate::overlay::OverlayFrame;
 #[cfg(target_os = "android")]
 use crate::renderer::android_vulkan::{
-    AndroidAhbConversionError, AndroidAhbCrop, AndroidAhbFrameDescription, AndroidVulkanInterop,
-    retire_ahb_conversion_after_submission,
+    AndroidAhbConversionError, AndroidAhbCrop, AndroidAhbFrameDescription,
+    AndroidAhbIntermediateFormat, AndroidVulkanInterop, retire_ahb_conversion_after_submission,
 };
 #[cfg(target_env = "ohos")]
 use crate::renderer::ohos_vulkan::{
@@ -380,6 +382,27 @@ fn source_color_for_player_frame(frame: &PlayerVideoFrame) -> SourceColorState {
     .hdr_metadata(frame.frame.hdr_metadata())
 }
 
+#[cfg(target_os = "android")]
+fn android_ahb_intermediate_format(
+    source: SourceColorState,
+    interop: &AndroidVulkanInterop,
+) -> AndroidAhbIntermediateFormat {
+    // HDR and wide-gamut SDR retain the floating-point target so gamut conversion and tone
+    // mapping can preserve values outside the normalized range. Ordinary SDR uses a packed
+    // 10-bit target, halving intermediate-frame storage without reducing 10-bit decode precision.
+    if source.is_hdr()
+        || matches!(
+            source.primaries,
+            ColorPrimaries::DisplayP3 | ColorPrimaries::Bt2020
+        )
+        || !interop.supports_rgb10a2_intermediate()
+    {
+        AndroidAhbIntermediateFormat::Rgba16Float
+    } else {
+        AndroidAhbIntermediateFormat::Rgb10a2Unorm
+    }
+}
+
 /// The currently uploaded video frame: source textures plus the common color
 /// uniforms. Retained so the presenter can re-present it across vsync ticks.
 struct UploadedVideoFrame {
@@ -491,6 +514,8 @@ pub struct WgpuRenderer {
     sdr_hdr_output_reported: bool,
     #[cfg(target_os = "android")]
     android_shared_frame_reported: bool,
+    #[cfg(target_os = "android")]
+    android_downscaled_frame_reported: bool,
     #[cfg(target_env = "ohos")]
     ohos_shared_frame_reported: bool,
     stats: WgpuRendererStats,
@@ -689,7 +714,7 @@ fn ohos_vulkan_video_enabled() -> bool {
     })
 }
 
-#[cfg(target_env = "ohos")]
+#[cfg_attr(not(any(target_os = "android", target_env = "ohos")), allow(dead_code))]
 fn fit_extent_without_upscale(
     source_width: u32,
     source_height: u32,
@@ -708,14 +733,24 @@ fn fit_extent_without_upscale(
         > u64::from(source_height) * u64::from(max_width)
     {
         let height = (u64::from(source_height) * u64::from(max_width)
-            + u64::from(source_width) / 2)
+            + u64::from(source_width).saturating_sub(1))
             / u64::from(source_width);
-        (max_width, u32::try_from(height).unwrap_or(1).max(1))
+        (
+            max_width,
+            u32::try_from(height)
+                .unwrap_or(max_height)
+                .clamp(1, max_height),
+        )
     } else {
         let width = (u64::from(source_width) * u64::from(max_height)
-            + u64::from(source_height) / 2)
+            + u64::from(source_height).saturating_sub(1))
             / u64::from(source_height);
-        (u32::try_from(width).unwrap_or(1).max(1), max_height)
+        (
+            u32::try_from(width)
+                .unwrap_or(max_width)
+                .clamp(1, max_width),
+            max_height,
+        )
     }
 }
 
@@ -1383,6 +1418,8 @@ impl WgpuRenderer {
             sdr_hdr_output_reported: false,
             #[cfg(target_os = "android")]
             android_shared_frame_reported: false,
+            #[cfg(target_os = "android")]
+            android_downscaled_frame_reported: false,
             #[cfg(target_env = "ohos")]
             ohos_shared_frame_reported: false,
             stats: WgpuRendererStats::default(),
@@ -1884,18 +1921,33 @@ impl WgpuRenderer {
         let timestamp_ns = image.timestamp_ns();
         let owner: std::sync::Arc<dyn std::any::Any + Send + Sync> = image.clone();
         let hardware_buffer = image.hardware_buffer().cast::<ash::vk::AHardwareBuffer>();
+        let crop = AndroidAhbCrop {
+            left: crop.left as u32,
+            top: crop.top as u32,
+            right: crop.right as u32,
+            bottom: crop.bottom as u32,
+        };
+        let visible_width = crop.right.saturating_sub(crop.left);
+        let visible_height = crop.bottom.saturating_sub(crop.top);
+        let (output_width, output_height) =
+            self.android_ahb_conversion_extent(visible_width, visible_height);
+        let source_color = source_color_for_player_frame(frame);
+        let output_format = android_ahb_intermediate_format(
+            source_color,
+            self.android_vulkan
+                .as_ref()
+                .expect("Android Vulkan interop checked"),
+        );
         let frame_description = AndroidAhbFrameDescription {
             hardware_buffer,
             buffer_width: description.width,
             buffer_height: description.height,
-            crop: AndroidAhbCrop {
-                left: crop.left as u32,
-                top: crop.top as u32,
-                right: crop.right as u32,
-                bottom: crop.bottom as u32,
-            },
+            crop,
+            output_width,
+            output_height,
             color_range: frame.frame.color_range(),
             matrix_coefficients: frame.frame.matrix_coefficients(),
+            output_format,
             owner,
         };
         let mut state_encoder =
@@ -1927,7 +1979,6 @@ impl WgpuRenderer {
                 "stage=android_ahardwarebuffer_conversion reason={error}"
             )),
         })?;
-        let source_color = source_color_for_player_frame(frame);
         let uniforms = self.video_uniforms_for_frame(frame, false);
         // Preserve this order: the wgpu command buffer establishes the tracked
         // COLOR_ATTACHMENT state, then the raw Vulkan command buffer overwrites
@@ -1936,6 +1987,7 @@ impl WgpuRenderer {
             .queue
             .submit([state_encoder.finish(), conversion_encoder.finish()]);
         let _ = submission;
+        let conversion_output_format = conversion.output_format;
         retire_ahb_conversion_after_submission(&self.queue, conversion.pending);
         self.upload_converted_rgb_texture(
             conversion.texture,
@@ -1947,8 +1999,13 @@ impl WgpuRenderer {
         self.stats.hardware_video_frames += 1;
         self.stats.zero_copy_video_frames += 1;
         self.stats.shared_handle_video_frames += 1;
-        if !self.android_shared_frame_reported {
+        let conversion_downscaled =
+            conversion.width < visible_width || conversion.height < visible_height;
+        if !self.android_shared_frame_reported
+            || (conversion_downscaled && !self.android_downscaled_frame_reported)
+        {
             self.android_shared_frame_reported = true;
+            self.android_downscaled_frame_reported |= conversion_downscaled;
             crate::trace::diagnostic(
                 serde_json::json!({
                     "event": "video_frame_import",
@@ -1959,6 +2016,9 @@ impl WgpuRenderer {
                     "bufferHeight": description.height,
                     "visibleWidth": conversion.width,
                     "visibleHeight": conversion.height,
+                    "decodedVisibleWidth": visible_width,
+                    "decodedVisibleHeight": visible_height,
+                    "conversionDownscaled": conversion_downscaled,
                     "crop": {
                         "left": crop.left,
                         "top": crop.top,
@@ -1966,12 +2026,26 @@ impl WgpuRenderer {
                         "bottom": crop.bottom,
                     },
                     "directPlaneSampling": false,
-                    "conversionTarget": "rgba16float",
+                    "conversionTarget": conversion_output_format.diagnostic_name(),
+                    "conversionTargetBytesPerPixel": conversion_output_format.bytes_per_pixel(),
                 })
                 .to_string(),
             );
         }
         Ok(())
+    }
+
+    #[cfg(target_os = "android")]
+    fn android_ahb_conversion_extent(&self, source_width: u32, source_height: u32) -> (u32, u32) {
+        let Some(surface) = self.surface.as_ref() else {
+            return (source_width, source_height);
+        };
+        fit_extent_without_upscale(
+            source_width,
+            source_height,
+            surface.config.width,
+            surface.config.height,
+        )
     }
 
     #[cfg(any(target_os = "android", target_env = "ohos"))]

@@ -16,8 +16,43 @@ use crate::renderer::pipeline::{ColorRange, MatrixCoefficients};
 
 const ANDROID_HARDWARE_BUFFER_USAGE_GPU_SAMPLED_IMAGE: u64 = 1 << 8;
 const ANDROID_HARDWARE_BUFFER_USAGE_PROTECTED_CONTENT: u64 = 1 << 14;
-const OUTPUT_VK_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 const MAX_PENDING_AHB_CONVERSIONS: usize = 3;
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub(crate) enum AndroidAhbIntermediateFormat {
+    Rgb10a2Unorm,
+    Rgba16Float,
+}
+
+impl AndroidAhbIntermediateFormat {
+    fn wgpu(self) -> wgpu::TextureFormat {
+        match self {
+            Self::Rgb10a2Unorm => wgpu::TextureFormat::Rgb10a2Unorm,
+            Self::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
+        }
+    }
+
+    fn vk(self) -> vk::Format {
+        match self {
+            Self::Rgb10a2Unorm => vk::Format::A2B10G10R10_UNORM_PACK32,
+            Self::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
+        }
+    }
+
+    pub(crate) fn diagnostic_name(self) -> &'static str {
+        match self {
+            Self::Rgb10a2Unorm => "rgb10a2unorm",
+            Self::Rgba16Float => "rgba16float",
+        }
+    }
+
+    pub(crate) fn bytes_per_pixel(self) -> u32 {
+        match self {
+            Self::Rgb10a2Unorm => 4,
+            Self::Rgba16Float => 8,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct YcbcrDescriptorBudgetPolicy {
@@ -68,8 +103,13 @@ pub(crate) struct AndroidAhbFrameDescription {
     pub buffer_width: u32,
     pub buffer_height: u32,
     pub crop: AndroidAhbCrop,
+    /// Size of the intermediate RGB texture. This may be smaller than the decoded crop when the
+    /// presentation surface is smaller than the video.
+    pub output_width: u32,
+    pub output_height: u32,
     pub color_range: ColorRange,
     pub matrix_coefficients: MatrixCoefficients,
+    pub output_format: AndroidAhbIntermediateFormat,
     pub owner: Arc<dyn Any + Send + Sync>,
 }
 
@@ -77,6 +117,7 @@ pub(crate) struct AndroidAhbConversion {
     pub texture: wgpu::Texture,
     pub width: u32,
     pub height: u32,
+    pub output_format: AndroidAhbIntermediateFormat,
     /// Must be retained until the queue submission containing the conversion has completed.
     pub pending: PendingAndroidAhbConversion,
 }
@@ -194,7 +235,11 @@ struct ConversionCacheKey {
 }
 
 impl ConversionCacheKey {
-    fn new(properties: &AhbProperties, parameters: ConversionParameters) -> Self {
+    fn new(
+        properties: &AhbProperties,
+        parameters: ConversionParameters,
+        output_format: AndroidAhbIntermediateFormat,
+    ) -> Self {
         Self {
             format: properties.import_format().as_raw(),
             external_format: properties.external_format,
@@ -207,7 +252,7 @@ impl ConversionCacheKey {
             x_chroma_offset: properties.suggested_x_chroma_offset.as_raw(),
             y_chroma_offset: properties.suggested_y_chroma_offset.as_raw(),
             chroma_filter: parameters.chroma_filter.as_raw(),
-            output_format: OUTPUT_VK_FORMAT.as_raw(),
+            output_format: output_format.vk().as_raw(),
         }
     }
 }
@@ -305,6 +350,7 @@ pub(crate) struct AndroidVulkanInterop {
     pub(crate) physical_device: vk::PhysicalDevice,
     pub(crate) queue_family_index: u32,
     pub(crate) ahardware_buffer: ash::android::external_memory_android_hardware_buffer::Device,
+    supports_rgb10a2_intermediate: bool,
     conversion_cache: Mutex<HashMap<ConversionCacheKey, Arc<CachedAndroidAhbConversion>>>,
     pending_conversions: Arc<AtomicUsize>,
     descriptor_budget_limit: u32,
@@ -313,7 +359,11 @@ pub(crate) struct AndroidVulkanInterop {
 }
 
 impl AndroidVulkanInterop {
-    /// Imports and converts one decoded AHardwareBuffer into an ordinary wgpu RGBA16F texture.
+    pub(crate) fn supports_rgb10a2_intermediate(&self) -> bool {
+        self.supports_rgb10a2_intermediate
+    }
+
+    /// Imports and converts one decoded AHardwareBuffer into an ordinary wgpu RGB texture.
     ///
     /// The function first uses `state_encoder` for a wgpu clear pass that establishes the output
     /// texture's tracked state, then records the native Vulkan YCbCr conversion through
@@ -336,7 +386,8 @@ impl AndroidVulkanInterop {
         frame: AndroidAhbFrameDescription,
     ) -> Result<AndroidAhbConversion, AndroidAhbConversionError> {
         self.validate_wgpu_device(wgpu_device)?;
-        let (width, height) = validate_frame_description(&frame, wgpu_device)?;
+        let (visible_width, visible_height, mut output_width, mut output_height) =
+            validate_frame_description(&frame, wgpu_device)?;
         // Native wgpu callbacks are driven by device polling. Service completed
         // submissions before enforcing the bounded AHB retirement queue so a
         // completed conversion never leaves the zero-copy path permanently full.
@@ -350,15 +401,26 @@ impl AndroidVulkanInterop {
             buffer_width,
             buffer_height,
             crop,
+            output_width: _,
+            output_height: _,
             color_range,
             matrix_coefficients,
+            output_format,
             owner,
         } = frame;
 
         let properties = unsafe { self.query_ahb_properties(hardware_buffer)? };
         validate_ahb_format(&properties)?;
         let conversion = conversion_parameters(&properties, color_range, matrix_coefficients)?;
-        let cached = unsafe { self.cached_conversion(wgpu_device, &properties, conversion)? };
+        // Minifying with nearest sampling is visibly worse than the existing full-resolution
+        // conversion. Only apply the surface-sized optimization when the imported YCbCr format
+        // advertises linear filtering.
+        if conversion.chroma_filter != vk::Filter::LINEAR {
+            output_width = visible_width;
+            output_height = visible_height;
+        }
+        let cached =
+            unsafe { self.cached_conversion(wgpu_device, &properties, conversion, output_format)? };
         let mut pending =
             PendingAndroidAhbConversion::new(self, owner, Arc::clone(&cached), reservation);
 
@@ -394,16 +456,16 @@ impl AndroidVulkanInterop {
         };
 
         let output = wgpu_device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("erika-android-ahb-rgba16f"),
+            label: Some("erika-android-ahb-rgb"),
             size: wgpu::Extent3d {
-                width,
-                height,
+                width: output_width,
+                height: output_height,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
+            format: output_format.wgpu(),
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -414,14 +476,15 @@ impl AndroidVulkanInterop {
                 .ok_or_else(|| "stage=access_output_texture reason=not_vulkan".to_string())?;
             texture.raw_handle()
         };
-        pending.output_view = unsafe { create_output_image_view(&self.device, output_image)? };
+        pending.output_view =
+            unsafe { create_output_image_view(&self.device, output_image, output_format.vk())? };
         pending.framebuffer = unsafe {
             create_output_framebuffer(
                 &self.device,
                 cached.render_pass,
                 pending.output_view,
-                width,
-                height,
+                output_width,
+                output_height,
             )?
         };
         let (descriptor_pool, descriptor_set) = unsafe {
@@ -436,8 +499,8 @@ impl AndroidVulkanInterop {
         let crop_transform = [
             crop.left as f32 / buffer_width as f32,
             crop.top as f32 / buffer_height as f32,
-            width as f32 / buffer_width as f32,
-            height as f32 / buffer_height as f32,
+            visible_width as f32 / buffer_width as f32,
+            visible_height as f32 / buffer_height as f32,
         ];
         let record_result = unsafe {
             conversion_encoder.as_hal_mut::<wgpu::hal::vulkan::Api, _, _>(|hal_encoder| {
@@ -461,8 +524,8 @@ impl AndroidVulkanInterop {
                     cached.pipeline,
                     cached.pipeline_layout,
                     descriptor_set,
-                    width,
-                    height,
+                    output_width,
+                    output_height,
                     crop_transform,
                 );
                 Ok(())
@@ -472,8 +535,9 @@ impl AndroidVulkanInterop {
 
         Ok(AndroidAhbConversion {
             texture: output,
-            width,
-            height,
+            width: output_width,
+            height: output_height,
+            output_format,
             pending,
         })
     }
@@ -605,8 +669,9 @@ impl AndroidVulkanInterop {
         wgpu_device: &wgpu::Device,
         properties: &AhbProperties,
         parameters: ConversionParameters,
+        output_format: AndroidAhbIntermediateFormat,
     ) -> Result<Arc<CachedAndroidAhbConversion>, String> {
-        let key = ConversionCacheKey::new(properties, parameters);
+        let key = ConversionCacheKey::new(properties, parameters, output_format);
         let mut cache = self
             .conversion_cache
             .lock()
@@ -635,7 +700,8 @@ impl AndroidVulkanInterop {
             unsafe { create_descriptor_set_layout(&self.device, cached.sampler)? };
         cached.pipeline_layout =
             unsafe { create_pipeline_layout(&self.device, cached.descriptor_set_layout)? };
-        cached.render_pass = unsafe { create_output_render_pass(&self.device)? };
+        cached.render_pass =
+            unsafe { create_output_render_pass(&self.device, output_format.vk())? };
         cached.vertex_shader = unsafe {
             create_shader_module(
                 &self.device,
@@ -824,7 +890,7 @@ struct ConversionParameters {
 fn validate_frame_description(
     frame: &AndroidAhbFrameDescription,
     device: &wgpu::Device,
-) -> Result<(u32, u32), String> {
+) -> Result<(u32, u32, u32, u32), String> {
     if frame.buffer_width == 0 || frame.buffer_height == 0 {
         return Err(format!(
             "stage=validate_ahb_frame reason=zero_buffer_extent width={} height={}",
@@ -866,16 +932,33 @@ fn validate_frame_description(
             crop.left, crop.top, crop.right, crop.bottom, frame.buffer_width, frame.buffer_height
         ));
     }
-    let width = crop.right - crop.left;
-    let height = crop.bottom - crop.top;
-    let max_dimension = device.limits().max_texture_dimension_2d;
-    if width > max_dimension || height > max_dimension {
+    let visible_width = crop.right - crop.left;
+    let visible_height = crop.bottom - crop.top;
+    if frame.output_width == 0 || frame.output_height == 0 {
         return Err(format!(
-            "stage=validate_ahb_frame reason=visible_extent_exceeds_device_limit visible={}x{} max={max_dimension}",
-            width, height
+            "stage=validate_ahb_frame reason=zero_output_extent width={} height={}",
+            frame.output_width, frame.output_height
         ));
     }
-    Ok((width, height))
+    if frame.output_width > visible_width || frame.output_height > visible_height {
+        return Err(format!(
+            "stage=validate_ahb_frame reason=output_extent_upscales_source output={}x{} visible={}x{}",
+            frame.output_width, frame.output_height, visible_width, visible_height
+        ));
+    }
+    let max_dimension = device.limits().max_texture_dimension_2d;
+    if frame.output_width > max_dimension || frame.output_height > max_dimension {
+        return Err(format!(
+            "stage=validate_ahb_frame reason=output_extent_exceeds_device_limit output={}x{} max={max_dimension}",
+            frame.output_width, frame.output_height
+        ));
+    }
+    Ok((
+        visible_width,
+        visible_height,
+        frame.output_width,
+        frame.output_height,
+    ))
 }
 
 fn validate_ahb_format(properties: &AhbProperties) -> Result<(), String> {
@@ -1091,9 +1174,12 @@ unsafe fn create_pipeline_layout(
         .map_err(|error| vk_stage_error("create_ahb_pipeline_layout", error))
 }
 
-unsafe fn create_output_render_pass(device: &ash::Device) -> Result<vk::RenderPass, String> {
+unsafe fn create_output_render_pass(
+    device: &ash::Device,
+    output_format: vk::Format,
+) -> Result<vk::RenderPass, String> {
     let attachments = [vk::AttachmentDescription::default()
-        .format(OUTPUT_VK_FORMAT)
+        .format(output_format)
         .samples(vk::SampleCountFlags::TYPE_1)
         .load_op(vk::AttachmentLoadOp::DONT_CARE)
         .store_op(vk::AttachmentStoreOp::STORE)
@@ -1217,6 +1303,9 @@ fn establish_wgpu_output_state(encoder: &mut wgpu::CommandEncoder, texture: &wgp
             resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                // Keep this store even though the following native Vulkan pass overwrites the
+                // texture. Discard produced black frames on the tested Adreno 830 because the raw
+                // conversion pass sits outside wgpu's resource tracking.
                 store: wgpu::StoreOp::Store,
             },
         })],
@@ -1230,11 +1319,12 @@ fn establish_wgpu_output_state(encoder: &mut wgpu::CommandEncoder, texture: &wgp
 unsafe fn create_output_image_view(
     device: &ash::Device,
     image: vk::Image,
+    output_format: vk::Format,
 ) -> Result<vk::ImageView, String> {
     let create_info = vk::ImageViewCreateInfo::default()
         .image(image)
         .view_type(vk::ImageViewType::TYPE_2D)
-        .format(OUTPUT_VK_FORMAT)
+        .format(output_format)
         .subresource_range(vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
             base_mip_level: 0,
@@ -1544,6 +1634,13 @@ pub(crate) fn create_device() -> Result<AndroidVulkanDeviceContext, String> {
     let supports_16bit_norm = adapter
         .features()
         .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
+    let rgb10a2_features = adapter.get_texture_format_features(wgpu::TextureFormat::Rgb10a2Unorm);
+    let supports_rgb10a2_intermediate = rgb10a2_features
+        .allowed_usages
+        .contains(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING)
+        && rgb10a2_features
+            .flags
+            .contains(wgpu::TextureFormatFeatureFlags::FILTERABLE);
     let required_features = if supports_16bit_norm {
         wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
     } else {
@@ -1658,6 +1755,7 @@ pub(crate) fn create_device() -> Result<AndroidVulkanDeviceContext, String> {
             device: raw_device,
             physical_device: hal_device.raw_physical_device(),
             queue_family_index: hal_device.queue_family_index(),
+            supports_rgb10a2_intermediate,
             conversion_cache: Mutex::new(HashMap::new()),
             pending_conversions: Arc::new(AtomicUsize::new(0)),
             descriptor_budget_limit: descriptor_budget_policy.limit,
