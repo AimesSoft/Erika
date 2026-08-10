@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'erika_flutter'
-  s.version          = '0.1.5'
+  s.version          = '0.1.6'
   s.summary          = 'Flutter embedder glue for the Erika Rust media engine.'
   s.description      = <<-DESC
 Flutter macOS plugin that hosts a CAMetalLayer and drives Erika through its C ABI.
@@ -96,7 +96,7 @@ fi
 
 OUTPUT_DYLIB=""
 if [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ] && [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_MACOS_CAPI_DYLIB:-}" ]; then
-  PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.5}"
+  PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.6}"
   PREBUILT_WORK="$ERIKA_ROOT/target/erika-prebuilt-macos-$PREBUILT_ARCH"
   PREBUILT_ZIP="$PREBUILT_WORK/erika-capi-macos-$PREBUILT_ARCH.zip"
   PREBUILT_URL="https://github.com/AimesSoft/Erika/releases/download/$PREBUILT_TAG/erika-capi-macos-$PREBUILT_ARCH.zip"
