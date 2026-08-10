@@ -71,7 +71,7 @@ fn bt709_limited_uniforms() -> VideoUniforms {
         tone_map: 0,
         edr_output: 0,
         input_mode: 0,
-        reserved1: 0,
+        scene_linear: 0,
         nits: [100.0, 100.0, 100.0, 100.0],
         luma_coefficients: [0.2126, 0.7152, 0.0722, 0.0],
         gamut_matrix_rows: [
