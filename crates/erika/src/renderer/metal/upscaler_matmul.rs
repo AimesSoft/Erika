@@ -24,7 +24,8 @@ use objc2_foundation::{NSRange, NSString};
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder,
     MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLLibrary, MTLPixelFormat,
-    MTLResourceOptions, MTLSize, MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureUsage,
+    MTLResource, MTLResourceOptions, MTLSize, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
+    MTLTextureUsage,
 };
 
 use crate::core::{PlayerError, Result};
@@ -91,6 +92,17 @@ pub(super) struct Resources {
 impl Resources {
     pub(super) fn mode(&self) -> LumaUpscalerMode {
         self.mode
+    }
+
+    pub(super) fn allocated_bytes(&self) -> u64 {
+        let pool_bytes = self.pool.as_ref().map_or(0, |pool| {
+            pool.features
+                .iter()
+                .fold(pool.output.allocatedSize() as u64, |total, buffer| {
+                    total.saturating_add(buffer.allocatedSize() as u64)
+                })
+        });
+        (self.weights.allocatedSize() as u64).saturating_add(pool_bytes)
     }
 }
 

@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use crate::core::{
     ColorPrimaries, LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame,
-    RenderFrameContext, RendererBackend, RendererFrameCapture, RendererRuntimeStats, Result,
-    SurfaceMetrics, TransferFunction,
+    RenderFrameContext, RendererBackend, RendererFrameCapture, RendererResourceStats,
+    RendererRuntimeStats, Result, SurfaceMetrics, TransferFunction,
 };
 use crate::danmaku::DanmakuRenderPlan;
 use crate::ffmpeg::{Frame, PlanarFrame};
@@ -88,7 +88,7 @@ impl Default for MetalRendererConfig {
 #[allow(dead_code)]
 pub(crate) fn metal_drawable_pixel_format(mode: MetalOutputMode) -> MetalDrawablePixelFormat {
     match mode {
-        MetalOutputMode::Sdr => MetalDrawablePixelFormat::Bgra8Unorm,
+        MetalOutputMode::Sdr | MetalOutputMode::Auto { .. } => MetalDrawablePixelFormat::Bgra8Unorm,
         MetalOutputMode::AppleEdr { .. } | MetalOutputMode::ExtendedLinear { .. } => {
             MetalDrawablePixelFormat::Rgba16Float
         }
@@ -101,7 +101,7 @@ pub(crate) fn metal_target_color(
     source: SourceColorState,
 ) -> crate::renderer::pipeline::TargetColorState {
     match mode {
-        MetalOutputMode::Sdr => {
+        MetalOutputMode::Sdr | MetalOutputMode::Auto { .. } => {
             crate::renderer::pipeline::TargetColorState::sdr(ColorPrimaries::Bt709)
         }
         MetalOutputMode::AppleEdr { headroom } | MetalOutputMode::ExtendedLinear { headroom } => {
@@ -170,6 +170,10 @@ pub struct MetalRendererStats {
     pub upscaled_frames: u64,
     pub last_upscaler_encode_duration: Duration,
     pub last_gpu_duration: Duration,
+    pub hdr_source_frames: u64,
+    pub edr_rendered_frames: u64,
+    pub sdr_tonemap_frames: u64,
+    pub output_mode_switches: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,6 +229,19 @@ impl ImportedVideoFrame {
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             self.inner.as_ref().map_or(0, |inner| inner.plane_count())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
+        {
+            0
+        }
+    }
+
+    fn allocated_bytes(&self) -> u64 {
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        {
+            self.inner
+                .as_ref()
+                .map_or(0, |inner| inner.allocated_bytes())
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
@@ -875,9 +892,9 @@ impl RendererBackend for MetalRenderer {
                 .saturating_sub(self.software_upload_counter),
             shared_handle_video_frames: 0,
             cpu_video_frame_fallbacks: self.software_upload_counter,
-            hdr_source_frames: 0,
+            hdr_source_frames: stats.hdr_source_frames,
             hdr10_output_frames: 0,
-            sdr_tonemap_frames: 0,
+            sdr_tonemap_frames: stats.sdr_tonemap_frames,
             hdr10_metadata_updates: 0,
             hdr10_metadata_failures: 0,
             hdr10_output_failures: 0,
@@ -885,10 +902,33 @@ impl RendererBackend for MetalRenderer {
         }
     }
 
+    fn resource_stats(&self) -> RendererResourceStats {
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        {
+            let mut stats = self.inner.resource_stats();
+            stats.video_frame_bytes = self
+                .current_frame
+                .as_ref()
+                .map_or(0, ImportedVideoFrame::allocated_bytes);
+            stats.renderer_tracked_bytes = stats
+                .renderer_tracked_bytes
+                .saturating_add(stats.video_frame_bytes);
+            stats
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
+        {
+            RendererResourceStats::default()
+        }
+    }
+
     fn output_status(&self) -> OutputRuntimeStatus {
         let stats = self.stats();
         let attached = stats.drawable_width > 0 && stats.drawable_height > 0;
-        let extended = attached && self.output_mode.is_edr();
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        let active_output_mode = self.inner.active_output_mode();
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
+        let active_output_mode = self.output_mode.resolve_for_source(false);
+        let extended = attached && active_output_mode.is_edr();
         OutputRuntimeStatus {
             requested_mode: self.output_mode,
             active_encoding: if extended {
@@ -904,7 +944,7 @@ impl RendererBackend for MetalRenderer {
             native_data_space: -1,
             requested_headroom: self.output_mode.headroom(),
             active_headroom: if extended {
-                self.output_mode.headroom()
+                active_output_mode.headroom()
             } else {
                 1.0
             },
@@ -914,7 +954,7 @@ impl RendererBackend for MetalRenderer {
             fallback_count: 0,
             data_space_failures: 0,
             headroom_updates: 0,
-            extended_linear_frames: if extended { stats.rendered_frames } else { 0 },
+            extended_linear_frames: stats.edr_rendered_frames,
         }
     }
 
@@ -1049,6 +1089,21 @@ mod tests {
         assert_eq!(target.transfer, TransferFunction::Srgb);
         assert_eq!(target.peak_nits, 100.0);
         assert_eq!(target.edr_headroom, 1.0);
+    }
+
+    #[test]
+    fn metal_auto_output_starts_sdr_and_promotes_for_hdr() {
+        let automatic = MetalOutputMode::auto(4.0);
+
+        assert_eq!(
+            metal_drawable_pixel_format(automatic),
+            MetalDrawablePixelFormat::Bgra8Unorm
+        );
+        assert_eq!(automatic.resolve_for_source(false), MetalOutputMode::Sdr);
+        assert_eq!(
+            automatic.resolve_for_source(true),
+            MetalOutputMode::apple_edr(4.0)
+        );
     }
 
     #[test]

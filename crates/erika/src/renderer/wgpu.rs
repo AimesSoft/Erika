@@ -581,7 +581,7 @@ fn select_wgpu_surface_output(
 ) -> Option<WgpuSurfaceOutputSelection> {
     let sdr_format = preferred_sdr_surface_format(formats)?;
     let fallback_reason = match requested {
-        OutputMode::Sdr => OutputFallbackReason::None,
+        OutputMode::Sdr | OutputMode::Auto { .. } => OutputFallbackReason::None,
         OutputMode::AppleEdr { .. } => OutputFallbackReason::LegacyAppleEdrUnsupported,
         OutputMode::ExtendedLinear { .. } if !capabilities.extended_linear => {
             if capabilities.fallback_reason == OutputFallbackReason::None {

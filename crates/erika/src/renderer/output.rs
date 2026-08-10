@@ -17,6 +17,12 @@ pub enum OutputMode {
     ExtendedLinear {
         headroom: f32,
     },
+    /// Selects SDR or Apple EDR from the decoded source color state. The
+    /// renderer starts with an 8-bit SDR surface and promotes it only for a
+    /// genuine HDR source (PQ, HLG, or HDR luminance metadata).
+    Auto {
+        headroom: f32,
+    },
 }
 
 impl OutputMode {
@@ -33,6 +39,20 @@ impl OutputMode {
         }
     }
 
+    pub fn auto(headroom: f32) -> Self {
+        Self::Auto {
+            headroom: normalized_headroom(headroom),
+        }
+    }
+
+    pub fn resolve_for_source(self, source_is_hdr: bool) -> Self {
+        match self {
+            Self::Auto { headroom } if source_is_hdr && headroom > 1.0 => Self::apple_edr(headroom),
+            Self::Auto { .. } => Self::Sdr,
+            explicit => explicit,
+        }
+    }
+
     pub fn is_edr(self) -> bool {
         matches!(self, Self::AppleEdr { .. } | Self::ExtendedLinear { .. })
     }
@@ -44,9 +64,9 @@ impl OutputMode {
     pub fn headroom(self) -> f32 {
         match self {
             Self::Sdr => 1.0,
-            Self::AppleEdr { headroom } | Self::ExtendedLinear { headroom } => {
-                normalized_headroom(headroom)
-            }
+            Self::AppleEdr { headroom }
+            | Self::ExtendedLinear { headroom }
+            | Self::Auto { headroom } => normalized_headroom(headroom),
         }
     }
 }
@@ -268,6 +288,7 @@ impl OutputDescription {
             OutputMode::Sdr => Self::sdr(),
             OutputMode::AppleEdr { headroom } => Self::apple_edr(headroom),
             OutputMode::ExtendedLinear { headroom } => Self::extended_linear(headroom),
+            OutputMode::Auto { .. } => Self::sdr(),
         }
     }
 
@@ -311,6 +332,25 @@ mod tests {
         assert_eq!(OutputMode::extended_linear(f32::NAN).headroom(), 1.0);
         assert_eq!(OutputMode::extended_linear(0.25).headroom(), 1.0);
         assert_eq!(OutputMode::extended_linear(20_000.0).headroom(), 10_000.0);
+    }
+
+    #[test]
+    fn automatic_output_promotes_only_real_hdr_sources() {
+        let automatic = OutputMode::auto(4.0);
+
+        assert_eq!(automatic.resolve_for_source(false), OutputMode::Sdr);
+        assert_eq!(
+            automatic.resolve_for_source(true),
+            OutputMode::apple_edr(4.0)
+        );
+        assert_eq!(
+            OutputMode::auto(1.0).resolve_for_source(true),
+            OutputMode::Sdr
+        );
+        assert_eq!(
+            OutputDescription::requested(automatic),
+            OutputDescription::sdr()
+        );
     }
 
     #[test]
