@@ -41,7 +41,11 @@ class AndroidMediaStateTest {
         var state = AndroidMediaState(playerId = 7L)
         state = updatedAndroidMediaState(
             state,
-            mapOf("kind" to 1, "state" to 3, "durationMicros" to 9_000_000L),
+            mapOf("kind" to 2, "durationMicros" to 9_000_000L),
+        )
+        state = updatedAndroidMediaState(
+            state,
+            mapOf("kind" to 1, "state" to 3, "durationMicros" to -1L),
         )
         state = updatedAndroidMediaState(
             state,
@@ -51,6 +55,25 @@ class AndroidMediaStateTest {
         assertEquals(3, state.playbackState)
         assertEquals(9_000_000L, state.durationMicros)
         assertEquals(2_500_000L, state.positionMicros)
+    }
+
+    @Test
+    fun `closed state clears content metadata position and duration`() {
+        val state = updatedAndroidMediaState(
+            AndroidMediaState(
+                playerId = 7L,
+                metadata = AndroidMediaMetadata("Episode 1", "Erika", null, null),
+                playbackState = 3,
+                positionMicros = 2_500_000L,
+                durationMicros = 9_000_000L,
+            ),
+            mapOf("kind" to STATE_CHANGED_EVENT_KIND, "state" to ANDROID_CLOSED_PLAYBACK_STATE),
+        )
+
+        assertNull(state.metadata)
+        assertEquals(ANDROID_CLOSED_PLAYBACK_STATE, state.playbackState)
+        assertEquals(0L, state.positionMicros)
+        assertEquals(0L, state.durationMicros)
     }
 
     @Test

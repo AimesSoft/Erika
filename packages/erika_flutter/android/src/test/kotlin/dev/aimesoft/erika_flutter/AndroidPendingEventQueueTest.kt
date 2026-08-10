@@ -14,6 +14,7 @@ class AndroidPendingEventQueueTest {
             code = "ERIKA_ERROR",
             message = "native poll failed",
             details = mapOf("playerId" to 7L),
+            contentGeneration = null,
         )
         val third = successEvent(3)
 
@@ -63,6 +64,44 @@ class AndroidPendingEventQueueTest {
     }
 
     @Test
+    fun `content boundary drops stale media events but preserves host events`() {
+        val queue = AndroidPendingEventQueue(capacity = 5)
+        val oldState = AndroidPendingEvent.Success(
+            value = mapOf("kind" to 1, "state" to 3),
+            contentGeneration = 1L,
+        )
+        val surface = AndroidPendingEvent.Success(
+            value = mapOf("kind" to ANDROID_SURFACE_ATTACHED_EVENT_KIND),
+            contentGeneration = null,
+        )
+        val hostError = AndroidPendingEvent.Error(
+            code = "ERIKA_ERROR",
+            message = "poll failed",
+            details = mapOf("playerId" to 7L),
+            contentGeneration = null,
+        )
+        val staleRenderError = AndroidPendingEvent.Success(
+            value = mapOf("kind" to 9, "hostStage" to "renderTick"),
+            contentGeneration = 1L,
+        )
+        val currentPosition = AndroidPendingEvent.Success(
+            value = mapOf("kind" to ANDROID_POSITION_CHANGED_EVENT_KIND),
+            contentGeneration = 2L,
+        )
+        queue.enqueue(oldState)
+        queue.enqueue(surface)
+        queue.enqueue(hostError)
+        queue.enqueue(staleRenderError)
+        queue.enqueue(currentPosition)
+
+        assertEquals(2, queue.discardStaleContentEvents(currentContentGeneration = 2L))
+        assertEquals(surface, queue.removeFirst())
+        assertEquals(hostError, queue.removeFirst())
+        assertEquals(currentPosition, queue.removeFirst())
+        assertNull(queue.firstOrNull())
+    }
+
+    @Test
     fun `events queued before listen and after cancel flush in original order`() {
         val queue = AndroidPendingEventQueue(capacity = 4)
         val delivered = mutableListOf<AndroidPendingEvent>()
@@ -89,5 +128,8 @@ class AndroidPendingEventQueueTest {
     }
 
     private fun successEvent(sequence: Int): AndroidPendingEvent.Success =
-        AndroidPendingEvent.Success(mapOf("sequence" to sequence))
+        AndroidPendingEvent.Success(
+            value = mapOf("sequence" to sequence),
+            contentGeneration = null,
+        )
 }
