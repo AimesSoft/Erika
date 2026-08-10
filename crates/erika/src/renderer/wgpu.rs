@@ -4923,6 +4923,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn conversion_extent_caps_4k_to_the_display_without_upscaling_smaller_video() {
+        assert_eq!(
+            fit_extent_without_upscale(3840, 2160, 2800, 1264),
+            (2248, 1264)
+        );
+        assert_eq!(
+            fit_extent_without_upscale(1920, 1080, 2800, 1264),
+            (1920, 1080)
+        );
+        assert_eq!(
+            fit_extent_without_upscale(2160, 3840, 1264, 2800),
+            (1264, 2248)
+        );
+    }
+
+    #[test]
     fn backend_candidate_recovery_order_rotates_and_excludes_attempted_backends() {
         assert_eq!(backend_candidate_order(4, 2, &[]), vec![2, 3, 0, 1]);
         assert_eq!(backend_candidate_order(4, 2, &[2, 0]), vec![3, 1]);

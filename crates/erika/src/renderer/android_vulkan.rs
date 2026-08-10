@@ -1898,7 +1898,29 @@ fn ycbcr_descriptor_budget_policy(
 
 #[cfg(test)]
 mod tests {
-    use super::{android_custom_vulkan_instance_flags, next_descriptor_budget};
+    use super::{
+        AndroidAhbIntermediateFormat, android_custom_vulkan_instance_flags, next_descriptor_budget,
+    };
+
+    #[test]
+    fn ahb_intermediate_formats_match_wgpu_vulkan_layouts() {
+        assert_eq!(
+            AndroidAhbIntermediateFormat::Rgb10a2Unorm.wgpu(),
+            wgpu::TextureFormat::Rgb10a2Unorm
+        );
+        assert_eq!(
+            AndroidAhbIntermediateFormat::Rgb10a2Unorm.vk(),
+            ash::vk::Format::A2B10G10R10_UNORM_PACK32
+        );
+        assert_eq!(
+            AndroidAhbIntermediateFormat::Rgb10a2Unorm.bytes_per_pixel(),
+            4
+        );
+        assert_eq!(
+            AndroidAhbIntermediateFormat::Rgba16Float.bytes_per_pixel(),
+            8
+        );
+    }
 
     #[test]
     fn custom_vulkan_instance_disables_debug_utils_but_keeps_validation() {
