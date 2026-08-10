@@ -61,6 +61,15 @@ class ErikaFlutterPlugin :
     private var activityLifecycle: Lifecycle? = null
     private var activityActive = false
     private var activeMediaPlayerId: Long? = null
+    private val eventPollRunnable = object : Runnable {
+        override fun run() {
+            if (!attachedToEngine) {
+                return
+            }
+            players.values.toList().forEach(::drainEvents)
+            mainHandler.postDelayed(this, EVENT_POLL_INTERVAL_MS)
+        }
+    }
 
     internal val isActivityActive: Boolean
         get() = attachedToEngine && activityActive
@@ -75,6 +84,10 @@ class ErikaFlutterPlugin :
             return@FrameCallback
         }
         val timeSeconds = frameTimeNanos.toDouble() / 1_000_000_000.0
+        // Android's JNI registry deliberately binds each presenter to its
+        // creator thread. Keep the native tick here until presenter creation,
+        // every command, surface lifecycle, and destruction can move together
+        // onto one dedicated thread; moving only this call returns wrong_thread.
         tickingPlayers.forEach { host ->
             try {
                 runCatching { host.renderTick(timeSeconds) }
@@ -84,7 +97,6 @@ class ErikaFlutterPlugin :
                 host.markRenderAttempted()
             }
         }
-        players.values.toList().forEach(::drainEvents)
         refreshFrameScheduling()
     }
 
@@ -128,12 +140,14 @@ class ErikaFlutterPlugin :
             ErikaAndroidVideoViewFactory(this, useHdrSurface = true),
         )
         attachedToEngine = true
+        mainHandler.post(eventPollRunnable)
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         detachFromActivity()
         attachedToEngine = false
         cancelFrameCallback()
+        mainHandler.removeCallbacks(eventPollRunnable)
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
         eventSink = null
@@ -1502,7 +1516,7 @@ class ErikaFlutterPlugin :
 
     private fun drainEvents(host: AndroidPlayerHost) {
         var latestPlaybackState: Int? = null
-        for (index in 0 until MAX_EVENTS_PER_FRAME) {
+        for (index in 0 until MAX_EVENTS_PER_POLL) {
             val response = try {
                 host.pollEvent()
             } catch (error: Throwable) {
@@ -1810,7 +1824,8 @@ class ErikaFlutterPlugin :
         private const val EVENT_CHANNEL = "erika_flutter/events"
         private const val VIDEO_VIEW_TYPE = "erika_flutter/video_view"
         private const val HDR_VIDEO_VIEW_TYPE = "erika_flutter/hdr_video_view"
-        private const val MAX_EVENTS_PER_FRAME = 256
+        private const val MAX_EVENTS_PER_POLL = 256
+        private const val EVENT_POLL_INTERVAL_MS = 50L
         private const val EVENT_OVERFLOW_LOG_INTERVAL = 256L
         private const val NO_EVENT_STATUS = 5
         private const val ERROR_EVENT_KIND = 9
