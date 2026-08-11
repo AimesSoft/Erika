@@ -247,7 +247,7 @@ impl Default for DanmakuLayoutConfig {
             custom_font_face_index: 0,
             merge_duplicates: false,
             allow_stacking: false,
-            allow_scroll_overwrite: true,
+            allow_scroll_overwrite: false,
             max_quantity: None,
             max_lines_per_mode: None,
             block_top: false,
@@ -3044,6 +3044,44 @@ mod tests {
         assert!(
             max_y < 360.0,
             "scroll rows should still stay inside the viewport, got max y {max_y}"
+        );
+    }
+
+    #[test]
+    fn dense_default_layout_keeps_using_the_full_display_area() {
+        let timeline = DanmakuTimeline::new(
+            (0..960)
+                .map(|index| {
+                    let mut entry = item(
+                        index as f64 / 80.0,
+                        &format!("dense default {index}"),
+                        DanmakuMode::Scroll,
+                    );
+                    entry.id = index + 1;
+                    entry
+                })
+                .collect(),
+        )
+        .unwrap();
+        let config = DanmakuLayoutConfig {
+            merge_duplicates: false,
+            display_area: 1.0,
+            ..DanmakuLayoutConfig::default()
+        };
+        let mut engine = DfmLayoutEngine::new(timeline, config);
+        let viewport = DanmakuViewport::new(640, 360);
+        let prepared = engine.prepare(viewport, 7);
+        let frame = prepared.frame_layout(Duration::from_secs_f64(10.0), 7);
+        let max_y = frame
+            .items
+            .iter()
+            .filter(|item| item.mode == DanmakuMode::Scroll)
+            .map(|item| item.y)
+            .fold(0.0, f32::max);
+
+        assert!(
+            max_y > viewport.height as f32 * 0.75,
+            "dense default layout must keep using the full display area; max y={max_y}"
         );
     }
 
