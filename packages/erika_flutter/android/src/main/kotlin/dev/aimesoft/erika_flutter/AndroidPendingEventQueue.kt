@@ -1,12 +1,19 @@
 package dev.aimesoft.erika_flutter
 
 internal sealed interface AndroidPendingEvent {
-    data class Success(val value: Map<String, Any?>) : AndroidPendingEvent
+    /** Null marks a presenter/Surface event that may cross an Open boundary. */
+    val contentGeneration: Long?
+
+    data class Success(
+        val value: Map<String, Any?>,
+        override val contentGeneration: Long?,
+    ) : AndroidPendingEvent
 
     data class Error(
         val code: String,
         val message: String,
         val details: Map<String, Any?>,
+        override val contentGeneration: Long?,
     ) : AndroidPendingEvent
 }
 
@@ -49,6 +56,14 @@ internal class AndroidPendingEventQueue(
     fun firstOrNull(): AndroidPendingEvent? = events.firstOrNull()
 
     fun removeFirst(): AndroidPendingEvent = events.removeFirst()
+
+    fun discardStaleContentEvents(currentContentGeneration: Long): Int {
+        val originalSize = events.size
+        events.removeAll { event ->
+            event.contentGeneration?.let { it != currentContentGeneration } == true
+        }
+        return originalSize - events.size
+    }
 
     fun clear() {
         events.clear()

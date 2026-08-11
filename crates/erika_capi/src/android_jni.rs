@@ -712,6 +712,58 @@ pub extern "system" fn Java_dev_aimesoft_erika_1flutter_ErikaNative_nativePollEv
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_aimesoft_erika_1flutter_ErikaNative_nativePlaybackState(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jint {
+    let state = catch_unwind(AssertUnwindSafe(|| {
+        with_registered_presenter(handle, "playbackState", |presenter| {
+            let handle = unsafe { presenter.handle.as_ref() }
+                .ok_or_else(|| "Android presenter handle is null".to_string())?;
+            Ok(state_to_c(handle.presenter.player().state()) as jint)
+        })
+    }));
+    match state {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            set_last_error(error);
+            -1
+        }
+        Err(_) => {
+            set_last_error("panic while reading Erika Android playback state");
+            -1
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_aimesoft_erika_1flutter_ErikaNative_nativePlaybackIntentState(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jint {
+    let state = catch_unwind(AssertUnwindSafe(|| {
+        with_registered_presenter(handle, "playbackIntentState", |presenter| {
+            let handle = unsafe { presenter.handle.as_ref() }
+                .ok_or_else(|| "Android presenter handle is null".to_string())?;
+            Ok(state_to_c(handle.presenter.player().playback_intent_state()) as jint)
+        })
+    }));
+    match state {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            set_last_error(error);
+            -1
+        }
+        Err(_) => {
+            set_last_error("panic while reading Erika Android playback intent state");
+            -1
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_aimesoft_erika_1flutter_ErikaNative_nativeCaptureFrame(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,

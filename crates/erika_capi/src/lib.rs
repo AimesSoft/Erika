@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::env;
 use std::ffi::{CStr, CString, c_char};
 use std::fs::{OpenOptions, create_dir_all};
@@ -718,6 +719,7 @@ pub struct ErikaHandle {
 pub struct ErikaPresenterHandle {
     presenter: PresenterRuntime,
     events: Receiver<PlayerEvent>,
+    pending_events: VecDeque<PlayerEvent>,
 }
 
 #[repr(C)]
@@ -1255,7 +1257,11 @@ fn create_presenter_handle(config: PresenterConfig) -> *mut ErikaPresenterHandle
     match created {
         Ok(Ok((presenter, events))) => {
             clear_last_error();
-            let handle = Box::into_raw(Box::new(ErikaPresenterHandle { presenter, events }));
+            let handle = Box::into_raw(Box::new(ErikaPresenterHandle {
+                presenter,
+                events,
+                pending_events: VecDeque::new(),
+            }));
             capi_trace(format!("fn=create_presenter_handle.done handle={handle:p}"));
             handle
         }
@@ -1661,6 +1667,80 @@ pub unsafe extern "C" fn erika_presenter_open(
     target_os = "android",
     target_env = "ohos"
 ))]
+fn retain_presenter_events_from_latest_open(handle: &mut ErikaPresenterHandle) {
+    retain_presenter_events_from_latest_state(handle, PlayerState::Opening, "open", true);
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+fn retain_presenter_events_from_latest_state(
+    handle: &mut ErikaPresenterHandle,
+    boundary_state: PlayerState,
+    boundary_name: &str,
+    preserve_surface_lifecycle: bool,
+) {
+    let mut drained = handle.events.try_iter().collect::<Vec<_>>();
+    let Some(boundary) = drained
+        .iter()
+        .rposition(|event| *event == PlayerEvent::StateChanged(boundary_state))
+    else {
+        // Argument/state validation can reject Open before Player::open establishes
+        // a boundary. Preserve everything in that case.
+        handle.pending_events.extend(drained);
+        return;
+    };
+    let mut latest_boundary_events = drained.split_off(boundary);
+    let stale_event_count = handle.pending_events.len().saturating_add(drained.len());
+    if preserve_surface_lifecycle {
+        handle
+            .pending_events
+            .retain(presenter_event_is_surface_lifecycle);
+        handle.pending_events.extend(
+            drained
+                .into_iter()
+                .filter(presenter_event_is_surface_lifecycle),
+        );
+    } else {
+        handle.pending_events.clear();
+    }
+    let preserved_events = handle.pending_events.len();
+    handle
+        .pending_events
+        .extend(latest_boundary_events.drain(..));
+    let discarded_events = stale_event_count.saturating_sub(preserved_events);
+    if discarded_events > 0 {
+        capi_trace(format!(
+            "fn=erika_presenter_{boundary_name}.discard_stale_events handle={handle:p} count={discarded_events}"
+        ));
+    }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+fn presenter_event_is_surface_lifecycle(event: &PlayerEvent) -> bool {
+    matches!(
+        event,
+        PlayerEvent::SurfaceAttached(_) | PlayerEvent::SurfaceDetached
+    )
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_open_with_headers(
     handle: *mut ErikaPresenterHandle,
@@ -1686,6 +1766,7 @@ pub unsafe extern "C" fn erika_presenter_open_with_headers(
                 .presenter
                 .open(MediaRequest::new(uri).with_http_headers(headers)),
         );
+        retain_presenter_events_from_latest_open(handle);
         capi_trace(format!(
             "fn=erika_presenter_open.done handle={handle:p} status={status:?}"
         ));
@@ -1755,7 +1836,9 @@ pub unsafe extern "C" fn erika_presenter_stop(handle: *mut ErikaPresenterHandle)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_close(handle: *mut ErikaPresenterHandle) -> ErikaStatus {
     with_presenter_mut(handle, |handle| {
-        status_from_player_result(handle.presenter.close())
+        let status = status_from_player_result(handle.presenter.close());
+        retain_presenter_events_from_latest_state(handle, PlayerState::Closed, "close", false);
+        status
     })
 }
 
@@ -3565,7 +3648,12 @@ pub unsafe extern "C" fn erika_presenter_poll_event(
     }
     match catch_unwind(AssertUnwindSafe(|| {
         let handle = unsafe { &mut *handle };
-        match handle.events.try_recv() {
+        let next_event = handle
+            .pending_events
+            .pop_front()
+            .map(Ok)
+            .unwrap_or_else(|| handle.events.try_recv());
+        match next_event {
             Ok(event) => {
                 let event = event_to_c(event);
                 let preserves_message = matches!(
@@ -4641,6 +4729,118 @@ mod tests {
         );
         let handle = erika_presenter_create();
         assert!(!handle.is_null());
+        unsafe { erika_presenter_destroy(handle) };
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        any(target_os = "ios", target_os = "tvos"),
+        target_os = "windows",
+        target_os = "android",
+        target_env = "ohos"
+    ))]
+    #[test]
+    fn presenter_open_discards_events_from_the_previous_content_boundary() {
+        let handle = erika_presenter_create();
+        assert!(!handle.is_null());
+        let first = CString::new("/tmp/erika-capi-missing-first.mp4").unwrap();
+        let second = CString::new("/tmp/erika-capi-missing-second.mp4").unwrap();
+
+        assert_eq!(
+            unsafe { erika_presenter_open(handle, first.as_ptr()) },
+            ErikaStatus::PlayerError
+        );
+        assert_eq!(
+            unsafe { erika_presenter_open(handle, second.as_ptr()) },
+            ErikaStatus::PlayerError
+        );
+
+        let mut event = ErikaEvent::default();
+        let mut delivered = 0usize;
+        let mut saw_buffering_reset = false;
+        while unsafe { erika_presenter_poll_event(handle, &mut event) } == ErikaStatus::Ok {
+            delivered += 1;
+            saw_buffering_reset |=
+                event.kind == ErikaEventKind::BufferingChanged && !event.buffering;
+        }
+        assert_eq!(
+            delivered, 4,
+            "only the second failed Open may remain queued"
+        );
+        assert!(
+            saw_buffering_reset,
+            "Open must reset the previous content's buffering state",
+        );
+
+        assert_eq!(
+            unsafe { erika_presenter_open(handle, first.as_ptr()) },
+            ErikaStatus::PlayerError
+        );
+        assert_eq!(unsafe { erika_presenter_close(handle) }, ErikaStatus::Ok);
+        let mut closed_events = Vec::new();
+        while unsafe { erika_presenter_poll_event(handle, &mut event) } == ErikaStatus::Ok {
+            closed_events.push((event.kind, event.state, event.buffering));
+        }
+        assert_eq!(
+            closed_events,
+            vec![
+                (ErikaEventKind::StateChanged, ErikaState::Closed, false,),
+                (ErikaEventKind::BufferingChanged, ErikaState::Idle, false,),
+            ],
+            "Close must retire failed Open events and reset buffering",
+        );
+
+        unsafe { erika_presenter_destroy(handle) };
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        any(target_os = "ios", target_os = "tvos"),
+        target_os = "windows",
+        target_os = "android",
+        target_env = "ohos"
+    ))]
+    #[test]
+    fn presenter_open_preserves_surface_lifecycle_events() {
+        let handle = erika_presenter_create();
+        assert!(!handle.is_null());
+        let missing = CString::new("/tmp/erika-capi-missing-surface-boundary.mp4").unwrap();
+
+        unsafe { &mut *handle }
+            .presenter
+            .player()
+            .attach_surface(PlatformSurface::Metal(MetalSurfaceHandle::new(
+                42, 1920, 1080, 2.0,
+            )))
+            .unwrap();
+        assert_eq!(
+            unsafe { erika_presenter_open(handle, missing.as_ptr()) },
+            ErikaStatus::PlayerError
+        );
+
+        let mut event = ErikaEvent::default();
+        assert_eq!(
+            unsafe { erika_presenter_poll_event(handle, &mut event) },
+            ErikaStatus::Ok
+        );
+        assert_eq!(event.kind, ErikaEventKind::SurfaceAttached);
+        while unsafe { erika_presenter_poll_event(handle, &mut event) } == ErikaStatus::Ok {}
+
+        unsafe { &mut *handle }
+            .presenter
+            .player()
+            .detach_surface()
+            .unwrap();
+        assert_eq!(
+            unsafe { erika_presenter_open(handle, missing.as_ptr()) },
+            ErikaStatus::PlayerError
+        );
+        assert_eq!(
+            unsafe { erika_presenter_poll_event(handle, &mut event) },
+            ErikaStatus::Ok
+        );
+        assert_eq!(event.kind, ErikaEventKind::SurfaceDetached);
+
         unsafe { erika_presenter_destroy(handle) };
     }
 

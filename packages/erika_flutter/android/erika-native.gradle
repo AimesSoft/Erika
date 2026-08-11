@@ -89,7 +89,7 @@ def skipNativeBuild = (project.findProperty("erikaSkipNativeBuild")
     ?: "false").toString().toBoolean()
 def forceSourceBuild = (System.getenv("ERIKA_FORCE_SOURCE_BUILD") ?: "0") == "1"
 def usePrebuilt = (System.getenv("ERIKA_PREBUILT") ?: "0") == "1" && !forceSourceBuild
-def prebuiltTag = System.getenv("ERIKA_PREBUILT_TAG") ?: "v0.1.5"
+def prebuiltTag = System.getenv("ERIKA_PREBUILT_TAG") ?: "v0.1.6"
 def prebuiltCacheKey = prebuiltTag.replaceAll(/[^A-Za-z0-9._-]/, "_")
 def prebuiltCacheDirectory = new File(
     gradle.gradleUserHomeDir,

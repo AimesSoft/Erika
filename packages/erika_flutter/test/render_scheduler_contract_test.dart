@@ -38,15 +38,16 @@ void main() {
     });
   }
 
-  test('Android decouples event polling without violating JNI affinity', () {
+  test('Android polls events on the presenter thread with adaptive scheduling', () {
     final plugin = File(
       'android/src/main/kotlin/dev/aimesoft/erika_flutter/'
       'ErikaFlutterPlugin.kt',
     ).readAsStringSync();
 
     expect(plugin, contains('private val eventPollRunnable'));
-    expect(plugin, contains('EVENT_POLL_INTERVAL_MS = 50L'));
-    expect(plugin, contains('moving only this call returns wrong_thread'));
+    expect(plugin, contains('private fun scheduleEventPoll()'));
+    expect(plugin, contains('presenterThread.post {'));
+    expect(plugin, contains('androidEventPollDelayMillis('));
 
     final frameStart = plugin.indexOf(
       'private val frameCallback = Choreographer.FrameCallback',

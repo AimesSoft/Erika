@@ -723,7 +723,11 @@ pub mod aaudio {
             let mut control = lock(&self.control)?;
             let close_result = self.close_stream_locked(
                 &mut control,
-                previous_state == STATE_PLAYING || previous_state == STATE_PAUSED,
+                // Closing a paused AAudio stream already performs the required
+                // teardown. Some implementations reject requestStop while the
+                // stream is paused, which would otherwise turn a successful
+                // reset into a spurious presenter audio failure.
+                previous_state == STATE_PLAYING,
             );
             control.clear_queue();
             control.callback = None;

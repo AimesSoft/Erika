@@ -30,8 +30,8 @@ CMake 会下载匹配 tag 的归档、链接预构建 runtime，并把它与本�
 Release 由 [release.yml](../.github/workflows/release.yml) 自动执行。推送 `v*` tag 才会创建 GitHub Release：
 
 ```sh
-git tag v0.1.5
-git push origin v0.1.5
+git tag v0.1.6
+git push origin v0.1.6
 ```
 
 手动运行 `workflow_dispatch` 只生成 Actions Artifact，不发布可供 `ERIKA_PREBUILT_TAG` 下载的 GitHub Release。
@@ -61,7 +61,7 @@ cargo clippy -p erika -p erika_capi --all-targets -- -D warnings
 
 ```sh
 export ERIKA_PREBUILT=1
-export ERIKA_PREBUILT_TAG=v0.1.5
+export ERIKA_PREBUILT_TAG=v0.1.6
 ```
 
 建议始终显式固定 `ERIKA_PREBUILT_TAG`，保证插件源码和 C ABI 版本一致。下载或解压失败会回退源码构建；本地调试时设置：
@@ -86,7 +86,7 @@ export ERIKA_FORCE_SOURCE_BUILD=1
 Android 示例：
 
 ```sh
-ERIKA_PREBUILT=1 ERIKA_PREBUILT_TAG=v0.1.5 \
+ERIKA_PREBUILT=1 ERIKA_PREBUILT_TAG=v0.1.6 \
 ERIKA_ANDROID_ABIS=arm64-v8a,x86_64 flutter build apk
 ```
 
