@@ -31,8 +31,8 @@ runtime を link して N-API bridge とともに HAR/HAP に package します�
 Release は [release.yml](../.github/workflows/release.yml) で自動化されています。GitHub Release を作成するには `v*` tag を push します：
 
 ```sh
-git tag v0.1.5
-git push origin v0.1.5
+git tag v0.1.6
+git push origin v0.1.6
 ```
 
 `workflow_dispatch` の手動実行は Actions Artifact のみを生成し、`ERIKA_PREBUILT_TAG` から取得できる GitHub Release は公開しません。
@@ -57,7 +57,7 @@ FFI glue の整合性、各 archive の manifest と license、NipaPlay で固�
 
 ```sh
 export ERIKA_PREBUILT=1
-export ERIKA_PREBUILT_TAG=v0.1.5
+export ERIKA_PREBUILT_TAG=v0.1.6
 ```
 
 plugin source と C ABI の version を一致させるため、`ERIKA_PREBUILT_TAG` を明示的に固定することを推奨します。download または展開に失敗した場合は source build に fallback します。local debug では次を設定します：
@@ -82,7 +82,7 @@ Platform architecture の選択：
 Android の例：
 
 ```sh
-ERIKA_PREBUILT=1 ERIKA_PREBUILT_TAG=v0.1.5 \
+ERIKA_PREBUILT=1 ERIKA_PREBUILT_TAG=v0.1.6 \
 ERIKA_ANDROID_ABIS=arm64-v8a,x86_64 flutter build apk
 ```
 

@@ -4250,6 +4250,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         );
     }
 
+    #[cfg(feature = "wgpu")]
     #[test]
     fn registering_an_unselected_memory_font_does_not_invalidate_renderers() {
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();

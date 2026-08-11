@@ -14,6 +14,9 @@ internal data class NativeResponse(
     }
 }
 
+internal fun normalizedOptionalEventResponse(response: NativeResponse?): NativeResponse? =
+    response?.takeUnless { it.ok && it.value == null }
+
 internal object NativeJson {
     fun encodeArguments(arguments: Map<String, Any?>): String {
         val json = JSONObject()
@@ -36,6 +39,18 @@ internal object NativeJson {
         }
         val value = if (json.has("value")) fromJsonValue(json.opt("value")) else null
         return NativeResponse(ok, status, error, value)
+    }
+
+    /**
+     * Event polling uses a successful null payload to represent an empty native queue.
+     * Normalize both that representation and an actual JNI null to Kotlin null so callers
+     * do not spin while treating empty responses as real events.
+     */
+    fun decodeOptionalEventResponse(raw: String?): NativeResponse? {
+        if (raw == null) {
+            return null
+        }
+        return normalizedOptionalEventResponse(decodeResponse(raw))
     }
 
     private fun toJsonValue(value: Any?): Any = when (value) {
