@@ -60,7 +60,8 @@ const int kErikaSubtitleOverrideAll = kErikaSubtitleOverrideFontSizeFields |
 enum ErikaOutputMode {
   sdr(0),
   appleEdr(1),
-  extendedLinear(2);
+  extendedLinear(2),
+  auto(3);
 
   const ErikaOutputMode(this.nativeValue);
 
@@ -70,6 +71,7 @@ enum ErikaOutputMode {
     return switch (value) {
       1 => ErikaOutputMode.appleEdr,
       2 => ErikaOutputMode.extendedLinear,
+      3 => ErikaOutputMode.auto,
       _ => ErikaOutputMode.sdr,
     };
   }
@@ -206,6 +208,61 @@ class ErikaOutputStatus {
       dataSpaceFailures: (map['dataSpaceFailures'] as num?)?.toInt() ?? 0,
       headroomUpdates: (map['headroomUpdates'] as num?)?.toInt() ?? 0,
       extendedLinearFrames: (map['extendedLinearFrames'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+class ErikaPresenterResourceStatus {
+  const ErikaPresenterResourceStatus({
+    required this.deviceCurrentAllocatedBytes,
+    required this.deviceRecommendedWorkingSetBytes,
+    required this.drawableEstimatedBytes,
+    required this.videoFrameBytes,
+    required this.overlayAtlasBytes,
+    required this.danmakuAtlasBytes,
+    required this.danmakuVertexBufferBytes,
+    required this.upscalerBytes,
+    required this.rendererTrackedBytes,
+    required this.presenterCpuDanmakuAtlasBytes,
+    required this.drawableCount,
+    required this.outputModeSwitches,
+  });
+
+  /// Metal's process-wide counter for the current device. This can include
+  /// allocations from other Erika presenters and other Metal users.
+  final int deviceCurrentAllocatedBytes;
+  final int deviceRecommendedWorkingSetBytes;
+  final int drawableEstimatedBytes;
+  final int videoFrameBytes;
+  final int overlayAtlasBytes;
+  final int danmakuAtlasBytes;
+  final int danmakuVertexBufferBytes;
+  final int upscalerBytes;
+  final int rendererTrackedBytes;
+  final int presenterCpuDanmakuAtlasBytes;
+  final int drawableCount;
+  final int outputModeSwitches;
+
+  factory ErikaPresenterResourceStatus.fromMap(Map<dynamic, dynamic> map) {
+    int value(String key) => (map[key] as num?)?.toInt() ?? 0;
+
+    return ErikaPresenterResourceStatus(
+      deviceCurrentAllocatedBytes: value('deviceCurrentAllocatedBytes'),
+      deviceRecommendedWorkingSetBytes: value(
+        'deviceRecommendedWorkingSetBytes',
+      ),
+      drawableEstimatedBytes: value('drawableEstimatedBytes'),
+      videoFrameBytes: value('videoFrameBytes'),
+      overlayAtlasBytes: value('overlayAtlasBytes'),
+      danmakuAtlasBytes: value('danmakuAtlasBytes'),
+      danmakuVertexBufferBytes: value('danmakuVertexBufferBytes'),
+      upscalerBytes: value('upscalerBytes'),
+      rendererTrackedBytes: value('rendererTrackedBytes'),
+      presenterCpuDanmakuAtlasBytes: value(
+        'presenterCpuDanmakuAtlasBytes',
+      ),
+      drawableCount: value('drawableCount'),
+      outputModeSwitches: value('outputModeSwitches'),
     );
   }
 }
@@ -1084,6 +1141,18 @@ class ErikaPlayer {
       throw StateError('Erika output status returned null.');
     }
     return ErikaOutputStatus.fromMap(status);
+  }
+
+  Future<ErikaPresenterResourceStatus> getResourceStatus() async {
+    final playerId = await ensureCreated();
+    final status = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+      'getResourceStatus',
+      <String, Object?>{'playerId': playerId},
+    );
+    if (status == null) {
+      throw StateError('Erika resource status returned null.');
+    }
+    return ErikaPresenterResourceStatus.fromMap(status);
   }
 
   Future<ErikaPresenterStats> getPresenterStats() async {

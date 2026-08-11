@@ -36,7 +36,7 @@ use objc2_metal::{
 };
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder,
-    MTLCommandQueue, MTLDevice, MTLDrawable, MTLRenderPassDescriptor, MTLTexture,
+    MTLCommandQueue, MTLDevice, MTLDrawable, MTLRenderPassDescriptor, MTLResource, MTLTexture,
 };
 use objc2_metal::{
     MTLLibrary, MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPipelineDescriptor,
@@ -44,8 +44,10 @@ use objc2_metal::{
 };
 use objc2_metal::{MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerState};
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
+#[cfg(any(target_os = "ios", target_os = "tvos"))]
+use objc2_quartz_core::{kCAContentsFormatRGBA8Uint, kCAContentsFormatRGBA16Float};
 
-use crate::core::{ColorPrimaries, SurfaceMetrics, TransferFunction};
+use crate::core::{ColorPrimaries, RendererResourceStats, SurfaceMetrics, TransferFunction};
 use crate::danmaku::{DanmakuAtlasUpdate, DanmakuGlyphAtlas, DanmakuRenderPlan};
 use crate::renderer::metal::upscaler::LumaUpscaler;
 use crate::renderer::metal::{
@@ -54,8 +56,8 @@ use crate::renderer::metal::{
     MetalRendererStats, OverlayRenderFrame, PreparedOverlayFrameInfo, VideoFrameTextureSource,
     VideoRenderFrame, fourcc_string, metal_drawable_pixel_format, metal_target_color,
 };
-use crate::renderer::pipeline::TargetColorState;
 use crate::renderer::pipeline::{ColorRange, LumaUpscalerMode, ToneMapOperator};
+use crate::renderer::pipeline::{SourceColorState, TargetColorState};
 use crate::renderer::presentation::PresentationLayout as VideoPresentationLayout;
 use crate::subtitle::{AssColor, SubtitleAlphaBitmap};
 use crate::trace;
@@ -78,6 +80,12 @@ pub struct ImportedVideoFrameTextures {
 impl ImportedVideoFrameTextures {
     pub fn plane_count(&self) -> usize {
         self.planes.len()
+    }
+
+    pub fn allocated_bytes(&self) -> u64 {
+        self.planes.iter().fold(0, |total, plane| {
+            total.saturating_add(plane.metal_texture.allocatedSize() as u64)
+        })
     }
 }
 
@@ -108,6 +116,7 @@ pub struct ImportedVideoFrameResult {
 pub struct MetalRendererImpl {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    requested_output_mode: MetalOutputMode,
     output_mode: MetalOutputMode,
     drawable_pixel_format: MetalDrawablePixelFormat,
     layer: Option<Retained<CAMetalLayer>>,
@@ -122,6 +131,7 @@ pub struct MetalRendererImpl {
     danmaku_vertex_buffer_cursor: usize,
     danmaku_vertex_buffer_acquisitions: u64,
     upscaler: LumaUpscaler,
+    last_submitted_command_buffer: Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>>,
     pending_gpu_timing: Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>>,
     stats: MetalRendererStats,
     layer_color_space_label: &'static str,
@@ -148,11 +158,13 @@ impl MetalRendererImpl {
         let queue = device
             .newCommandQueue()
             .ok_or_else(|| PlayerError::Renderer("newCommandQueue returned nil".to_string()))?;
+        let initial_output_mode = config.output_mode.resolve_for_source(false);
         Ok(Self {
             device,
             queue,
-            output_mode: config.output_mode,
-            drawable_pixel_format: metal_drawable_pixel_format(config.output_mode),
+            requested_output_mode: config.output_mode,
+            output_mode: initial_output_mode,
+            drawable_pixel_format: metal_drawable_pixel_format(initial_output_mode),
             layer: None,
             texture_cache: None,
             video_pipeline: None,
@@ -169,6 +181,7 @@ impl MetalRendererImpl {
                 upscaler.set_mode(config.luma_upscaler);
                 upscaler
             },
+            last_submitted_command_buffer: None,
             pending_gpu_timing: None,
             stats: MetalRendererStats::default(),
             layer_color_space_label: "unconfigured",
@@ -220,10 +233,122 @@ impl MetalRendererImpl {
         stats
     }
 
+    pub fn resource_stats(&self) -> RendererResourceStats {
+        let drawable_count = self.layer.as_ref().map_or(0, |layer| {
+            layer.maximumDrawableCount().min(u32::MAX as usize) as u32
+        });
+        let drawable_bytes_per_pixel = match self.drawable_pixel_format {
+            MetalDrawablePixelFormat::Bgra8Unorm => 4u64,
+            MetalDrawablePixelFormat::Rgba16Float => 8u64,
+        };
+        let drawable_estimated_bytes = u64::from(self.stats.drawable_width)
+            .saturating_mul(u64::from(self.stats.drawable_height))
+            .saturating_mul(drawable_bytes_per_pixel)
+            .saturating_mul(u64::from(drawable_count));
+        let overlay_atlas_bytes = self
+            .overlay_alpha_atlas_cache
+            .as_ref()
+            .map_or(0, |cache| cache.texture.allocatedSize() as u64);
+        let danmaku_atlas_bytes = self.danmaku_alpha_atlas_cache.as_ref().map_or(0, |cache| {
+            (cache.fill_texture.allocatedSize() as u64)
+                .saturating_add(cache.outline_texture.allocatedSize() as u64)
+        });
+        let danmaku_vertex_buffer_bytes =
+            self.danmaku_vertex_buffers
+                .iter()
+                .fold(0u64, |total, slot| {
+                    total.saturating_add(
+                        slot.buffer
+                            .as_ref()
+                            .map_or(0, |buffer| buffer.allocatedSize() as u64),
+                    )
+                });
+        let upscaler_bytes = self.upscaler.allocated_bytes();
+        let renderer_tracked_bytes = drawable_estimated_bytes
+            .saturating_add(overlay_atlas_bytes)
+            .saturating_add(danmaku_atlas_bytes)
+            .saturating_add(danmaku_vertex_buffer_bytes)
+            .saturating_add(upscaler_bytes);
+
+        let device_recommended_working_set_bytes = if self
+            .device
+            .respondsToSelector(objc2::sel!(recommendedMaxWorkingSetSize))
+        {
+            self.device.recommendedMaxWorkingSetSize()
+        } else {
+            0
+        };
+
+        RendererResourceStats {
+            device_current_allocated_bytes: self.device.currentAllocatedSize() as u64,
+            device_recommended_working_set_bytes,
+            drawable_estimated_bytes,
+            overlay_atlas_bytes,
+            danmaku_atlas_bytes,
+            danmaku_vertex_buffer_bytes,
+            upscaler_bytes,
+            renderer_tracked_bytes,
+            drawable_count,
+            output_mode_switches: self.stats.output_mode_switches,
+            ..RendererResourceStats::default()
+        }
+    }
+
+    pub fn active_output_mode(&self) -> MetalOutputMode {
+        self.output_mode
+    }
+
+    fn select_output_mode_for_source(&mut self, source: SourceColorState) {
+        let source_is_hdr = source.is_hdr();
+        if source_is_hdr {
+            self.stats.hdr_source_frames = self.stats.hdr_source_frames.saturating_add(1);
+        }
+        let selected = self.requested_output_mode.resolve_for_source(source_is_hdr);
+        if selected != self.output_mode {
+            self.set_output_mode(selected);
+        }
+        if source_is_hdr && !self.output_mode.is_edr() {
+            self.stats.sdr_tonemap_frames = self.stats.sdr_tonemap_frames.saturating_add(1);
+        }
+    }
+
+    fn set_output_mode(&mut self, output_mode: MetalOutputMode) {
+        if self.output_mode == output_mode {
+            return;
+        }
+        // CAMetalLayer requires all drawables using the old pixel format to be
+        // released before its format changes. Waiting for the most recently
+        // submitted buffer is sufficient because this renderer uses one FIFO
+        // Metal command queue.
+        if let Some(submitted) = self.last_submitted_command_buffer.take() {
+            submitted.waitUntilCompleted();
+        }
+        if let Some(pending) = self.pending_gpu_timing.take() {
+            pending.waitUntilCompleted();
+            if pending.status() == MTLCommandBufferStatus::Completed {
+                let seconds = (pending.GPUEndTime() - pending.GPUStartTime()).max(0.0);
+                self.stats.last_gpu_duration = Duration::from_secs_f64(seconds);
+            }
+        }
+        let previous = self.output_mode;
+        self.output_mode = output_mode;
+        self.stats.output_mode_switches = self.stats.output_mode_switches.saturating_add(1);
+        self.logged_first_video_frame = false;
+        if let Some(layer) = self.layer.as_ref().cloned() {
+            self.configure_layer_output(&layer);
+        }
+        if hdr_debug_enabled() {
+            eprintln!(
+                "ErikaHDR: automatic output switch requested={:?} previous={:?} active={:?}",
+                self.requested_output_mode, previous, self.output_mode,
+            );
+        }
+    }
+
     fn configure_layer_output(&mut self, layer: &CAMetalLayer) {
         self.drawable_pixel_format = metal_drawable_pixel_format(self.output_mode);
         layer.setPixelFormat(metal_pixel_format(self.drawable_pixel_format));
-        set_layer_edr_enabled(layer, self.output_mode.is_edr());
+        configure_layer_dynamic_range(layer, self.output_mode.is_edr());
         let (color_space_name, color_space_label) = if self.output_mode.is_edr() {
             edr_layer_color_space(None)
         } else {
@@ -342,6 +467,7 @@ impl MetalRendererImpl {
                 ProtocolObject::from_ref(&*drawable);
             command_buffer.presentDrawable(drawable_ref);
             command_buffer.commit();
+            self.last_submitted_command_buffer = Some(command_buffer);
         }
 
         self.stats.rendered_frames += 1;
@@ -441,6 +567,7 @@ impl MetalRendererImpl {
                 ProtocolObject::from_ref(&*drawable);
             command_buffer.presentDrawable(drawable_ref);
             command_buffer.commit();
+            self.last_submitted_command_buffer = Some(command_buffer);
         }
 
         self.stats.rendered_frames += 1;
@@ -488,6 +615,7 @@ impl MetalRendererImpl {
         };
 
         let source_color = frame.pipeline.source;
+        self.select_output_mode_for_source(source_color);
         self.configure_layer_source_color(&layer, source_color);
         frame.pipeline = frame
             .pipeline
@@ -665,10 +793,14 @@ impl MetalRendererImpl {
                 ProtocolObject::from_ref(&*drawable);
             command_buffer.presentDrawable(drawable_ref);
             command_buffer.commit();
+            self.last_submitted_command_buffer = Some(command_buffer.clone());
             self.pending_gpu_timing = Some(command_buffer);
         }
 
         self.stats.rendered_frames += 1;
+        if self.output_mode.is_edr() {
+            self.stats.edr_rendered_frames = self.stats.edr_rendered_frames.saturating_add(1);
+        }
         if danmaku_item_count > 0 {
             self.stats.danmaku_passes += 1;
             self.stats.danmaku_items += danmaku_item_count as u64;
@@ -1853,7 +1985,22 @@ impl MetalRendererImpl {
     }
 }
 
-fn set_layer_edr_enabled(layer: &CAMetalLayer, enabled: bool) {
+fn configure_layer_dynamic_range(layer: &CAMetalLayer, enabled: bool) {
+    // On macOS, CAMetalLayer scales `drawableSize` through its Retina backing
+    // scale. Setting CALayer.contentsFormat there makes Core Animation treat
+    // the drawable like 1x layer contents and clips the right/bottom at 2x.
+    // UIKit/tvOS layers need contentsFormat to stay aligned with pixelFormat.
+    #[cfg(any(target_os = "ios", target_os = "tvos"))]
+    {
+        let contents_format = unsafe {
+            if enabled {
+                kCAContentsFormatRGBA16Float
+            } else {
+                kCAContentsFormatRGBA8Uint
+            }
+        };
+        layer.setContentsFormat(contents_format);
+    }
     if layer.respondsToSelector(objc2::sel!(setWantsExtendedDynamicRangeContent:)) {
         layer.setWantsExtendedDynamicRangeContent(enabled);
     }

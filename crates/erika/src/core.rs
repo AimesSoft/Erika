@@ -777,6 +777,10 @@ pub trait RendererBackend {
         RendererRuntimeStats::default()
     }
 
+    fn resource_stats(&self) -> RendererResourceStats {
+        RendererResourceStats::default()
+    }
+
     fn output_status(&self) -> crate::renderer::output::OutputRuntimeStatus {
         crate::renderer::output::OutputRuntimeStatus::default()
     }
@@ -851,6 +855,25 @@ pub struct RendererRuntimeStats {
     pub hdr10_metadata_failures: u64,
     pub hdr10_output_failures: u64,
     pub hdr10_output_active: bool,
+}
+
+/// Snapshot of memory visible from the renderer. Individual fields describe
+/// resources tracked by Erika; `device_current_allocated_bytes` is Metal's
+/// process-wide device counter and can therefore include driver allocations
+/// that do not belong to a single presenter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RendererResourceStats {
+    pub device_current_allocated_bytes: u64,
+    pub device_recommended_working_set_bytes: u64,
+    pub drawable_estimated_bytes: u64,
+    pub video_frame_bytes: u64,
+    pub overlay_atlas_bytes: u64,
+    pub danmaku_atlas_bytes: u64,
+    pub danmaku_vertex_buffer_bytes: u64,
+    pub upscaler_bytes: u64,
+    pub renderer_tracked_bytes: u64,
+    pub drawable_count: u32,
+    pub output_mode_switches: u64,
 }
 
 struct PlayerInner {
