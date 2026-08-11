@@ -3085,6 +3085,7 @@ class ErikaFlutterPlugin :
             "getUpscalerStatus",
             "getOutputStatus",
             "getPresenterStats",
+            "getResourceStatus",
             "setDebugHudEnabled",
             "addExternalSubtitle",
             "removeSubtitleTrack",

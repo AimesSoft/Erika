@@ -903,6 +903,7 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
       'selectSubtitleMemoryFonts', 'clearSubtitleMemoryFonts',
       'getSubtitleMemoryFontStatus',
       'getUpscalerStatus', 'getOutputStatus', 'getPresenterStats',
+      'getResourceStatus',
       'addExternalSubtitle', 'removeSubtitleTrack',
       'loadDanmakuFile', 'loadDanmakuJson',
       'addDanmakuTrackFile', 'addDanmakuTrackJson',

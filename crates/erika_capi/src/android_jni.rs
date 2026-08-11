@@ -918,6 +918,13 @@ unsafe fn invoke_presenter(
             Ok(output_status_to_json(status_value))
         }
         "getPresenterStats" => Ok(stats_to_json(presenter.latest_stats)),
+        "getResourceStatus" => {
+            let mut status_value = ErikaPresenterResourceStatus::default();
+            call_status(unsafe {
+                erika_presenter_get_resource_status(handle, &mut status_value)
+            })?;
+            Ok(resource_status_to_json(status_value))
+        }
         "setDebugHudEnabled" => {
             let enabled =
                 optional_bool(args, "enabled").ok_or_else(|| "enabled is required".to_string())?;
@@ -1319,6 +1326,23 @@ fn output_status_to_json(status: ErikaOutputStatus) -> Value {
         "dataSpaceFailures": status.data_space_failures,
         "headroomUpdates": status.headroom_updates,
         "extendedLinearFrames": status.extended_linear_frames,
+    })
+}
+
+fn resource_status_to_json(status: ErikaPresenterResourceStatus) -> Value {
+    json!({
+        "deviceCurrentAllocatedBytes": status.device_current_allocated_bytes,
+        "deviceRecommendedWorkingSetBytes": status.device_recommended_working_set_bytes,
+        "drawableEstimatedBytes": status.drawable_estimated_bytes,
+        "videoFrameBytes": status.video_frame_bytes,
+        "overlayAtlasBytes": status.overlay_atlas_bytes,
+        "danmakuAtlasBytes": status.danmaku_atlas_bytes,
+        "danmakuVertexBufferBytes": status.danmaku_vertex_buffer_bytes,
+        "upscalerBytes": status.upscaler_bytes,
+        "rendererTrackedBytes": status.renderer_tracked_bytes,
+        "presenterCpuDanmakuAtlasBytes": status.presenter_cpu_danmaku_atlas_bytes,
+        "drawableCount": status.drawable_count,
+        "outputModeSwitches": status.output_mode_switches,
     })
 }
 
