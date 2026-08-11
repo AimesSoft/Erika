@@ -3,6 +3,38 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('macOS renders on CVDisplayLink without a per-frame GCD hop', () {
+    final plugin = File(
+      'macos/Classes/ErikaFlutterPlugin.swift',
+    ).readAsStringSync();
+
+    final driverStart = plugin.indexOf(
+      'private final class ErikaDisplayLinkDriver',
+    );
+    final firstStruct = plugin.indexOf(
+      'private struct ErikaVideoParamsC',
+      driverStart,
+    );
+    expect(driverStart, greaterThanOrEqualTo(0));
+    expect(firstStruct, greaterThan(driverStart));
+    final driver = plugin.substring(driverStart, firstStruct);
+    expect(driver, contains('CVDisplayLinkSetOutputCallback'));
+    expect(driver, contains('onTick()'));
+    expect(driver, isNot(contains('renderQueue.async')));
+    expect(driver, isNot(contains('DispatchQueue.main.async')));
+  });
+
+  test('macOS event polling is coalescible and stops with the last player', () {
+    final plugin = File(
+      'macos/Classes/ErikaFlutterPlugin.swift',
+    ).readAsStringSync();
+
+    expect(plugin, contains('timer.tolerance = 0.01'));
+    expect(plugin, contains('private func stopPollTimerIfIdle()'));
+    expect(plugin, contains('players.removeValue(forKey: playerId)'));
+    expect(plugin, contains('stopPollTimerIfIdle()'));
+  });
+
   for (final entry in <(String, String)>[
     ('ios', 'scheduleTick()'),
     ('tvos', 'scheduleRenderTick()'),
