@@ -146,9 +146,7 @@ unsafe fn invoke(
         }
         "getResourceStatus" => {
             let mut status = ErikaPresenterResourceStatus::default();
-            call_status(unsafe {
-                erika_presenter_get_resource_status(handle, &mut status)
-            })?;
+            call_status(unsafe { erika_presenter_get_resource_status(handle, &mut status) })?;
             Ok(resource_status_json(status))
         }
         "addExternalSubtitle" => {
@@ -688,11 +686,7 @@ mod tests {
         assert!(!handle.is_null());
 
         let response = unsafe {
-            erika_presenter_invoke_json(
-                handle,
-                c"getResourceStatus".as_ptr(),
-                c"{}".as_ptr(),
-            )
+            erika_presenter_invoke_json(handle, c"getResourceStatus".as_ptr(), c"{}".as_ptr())
         };
         assert!(!response.is_null());
         let value: Value = unsafe { CStr::from_ptr(response) }

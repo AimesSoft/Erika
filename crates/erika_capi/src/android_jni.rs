@@ -920,9 +920,7 @@ unsafe fn invoke_presenter(
         "getPresenterStats" => Ok(stats_to_json(presenter.latest_stats)),
         "getResourceStatus" => {
             let mut status_value = ErikaPresenterResourceStatus::default();
-            call_status(unsafe {
-                erika_presenter_get_resource_status(handle, &mut status_value)
-            })?;
+            call_status(unsafe { erika_presenter_get_resource_status(handle, &mut status_value) })?;
             Ok(resource_status_to_json(status_value))
         }
         "setDebugHudEnabled" => {
