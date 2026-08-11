@@ -364,6 +364,7 @@ pub enum ErikaPresenterOutputMode {
     Sdr = 0,
     AppleEdr = 1,
     ExtendedLinear = 2,
+    Auto = 3,
 }
 
 #[repr(C)]
@@ -385,6 +386,7 @@ impl ErikaPresenterOutputMode {
         match value {
             1 => Self::AppleEdr,
             2 => Self::ExtendedLinear,
+            3 => Self::Auto,
             _ => Self::Sdr,
         }
     }
@@ -544,6 +546,23 @@ pub struct ErikaOutputStatus {
     pub data_space_failures: u64,
     pub headroom_updates: u64,
     pub extended_linear_frames: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ErikaPresenterResourceStatus {
+    pub device_current_allocated_bytes: u64,
+    pub device_recommended_working_set_bytes: u64,
+    pub drawable_estimated_bytes: u64,
+    pub video_frame_bytes: u64,
+    pub overlay_atlas_bytes: u64,
+    pub danmaku_atlas_bytes: u64,
+    pub danmaku_vertex_buffer_bytes: u64,
+    pub upscaler_bytes: u64,
+    pub renderer_tracked_bytes: u64,
+    pub presenter_cpu_danmaku_atlas_bytes: u64,
+    pub drawable_count: u32,
+    pub output_mode_switches: u64,
 }
 
 impl Default for ErikaOutputStatus {
@@ -1328,6 +1347,14 @@ fn presenter_config_from_c(config: ErikaPresenterConfig) -> PresenterConfig {
             };
             MetalOutputMode::extended_linear(headroom)
         }
+        ErikaPresenterOutputMode::Auto => {
+            let headroom = if config.edr_headroom.is_finite() {
+                config.edr_headroom
+            } else {
+                1.0
+            };
+            MetalOutputMode::auto(headroom)
+        }
         ErikaPresenterOutputMode::Sdr => MetalOutputMode::Sdr,
     };
 
@@ -1447,6 +1474,7 @@ fn output_status_to_c(status: OutputRuntimeStatus) -> ErikaOutputStatus {
         OutputMode::Sdr => ErikaPresenterOutputMode::Sdr as i32,
         OutputMode::AppleEdr { .. } => ErikaPresenterOutputMode::AppleEdr as i32,
         OutputMode::ExtendedLinear { .. } => ErikaPresenterOutputMode::ExtendedLinear as i32,
+        OutputMode::Auto { .. } => ErikaPresenterOutputMode::Auto as i32,
     };
     let active_encoding = match status.active_encoding {
         ActiveOutputEncoding::SdrSrgb => 0,
@@ -1473,6 +1501,33 @@ fn output_status_to_c(status: OutputRuntimeStatus) -> ErikaOutputStatus {
         data_space_failures: status.data_space_failures,
         headroom_updates: status.headroom_updates,
         extended_linear_frames: status.extended_linear_frames,
+    }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+fn resource_status_to_c(snapshot: PresenterRuntimeSnapshot) -> ErikaPresenterResourceStatus {
+    let resources = snapshot.resources;
+    ErikaPresenterResourceStatus {
+        device_current_allocated_bytes: resources.device_current_allocated_bytes,
+        device_recommended_working_set_bytes: resources.device_recommended_working_set_bytes,
+        drawable_estimated_bytes: resources.drawable_estimated_bytes,
+        video_frame_bytes: resources.video_frame_bytes,
+        overlay_atlas_bytes: resources.overlay_atlas_bytes,
+        danmaku_atlas_bytes: resources.danmaku_atlas_bytes,
+        danmaku_vertex_buffer_bytes: resources.danmaku_vertex_buffer_bytes,
+        upscaler_bytes: resources.upscaler_bytes,
+        renderer_tracked_bytes: resources.renderer_tracked_bytes,
+        presenter_cpu_danmaku_atlas_bytes: snapshot
+            .current_danmaku_atlas_bytes
+            .min(u64::MAX as usize) as u64,
+        drawable_count: resources.drawable_count,
+        output_mode_switches: resources.output_mode_switches,
     }
 }
 
@@ -2087,6 +2142,28 @@ pub unsafe extern "C" fn erika_presenter_get_output_status(
     target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_get_resource_status(
+    handle: *mut ErikaPresenterHandle,
+    out_status: *mut ErikaPresenterResourceStatus,
+) -> ErikaStatus {
+    if out_status.is_null() {
+        return ErikaStatus::NullPointer;
+    }
+    with_presenter_mut(handle, |handle| {
+        let status = resource_status_to_c(handle.presenter.runtime_snapshot());
+        unsafe { *out_status = status };
+        ErikaStatus::Ok
+    })
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_add_external_subtitle(
     handle: *mut ErikaPresenterHandle,
     uri: *const c_char,
@@ -2123,6 +2200,24 @@ pub unsafe extern "C" fn erika_presenter_add_external_subtitle(
     _uri: *const c_char,
     _out_track_id: *mut i64,
 ) -> ErikaStatus {
+    ErikaStatus::PlayerError
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+)))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_get_resource_status(
+    _handle: *mut std::ffi::c_void,
+    out_status: *mut ErikaPresenterResourceStatus,
+) -> ErikaStatus {
+    if out_status.is_null() {
+        return ErikaStatus::NullPointer;
+    }
     ErikaStatus::PlayerError
 }
 
@@ -4726,6 +4821,37 @@ mod tests {
         target_env = "ohos"
     ))]
     #[test]
+    fn c_presenter_reports_resource_status_without_changing_stats_abi() {
+        assert_eq!(
+            unsafe {
+                erika_presenter_get_resource_status(std::ptr::null_mut(), std::ptr::null_mut())
+            },
+            ErikaStatus::NullPointer
+        );
+
+        let handle = erika_presenter_create();
+        assert!(!handle.is_null());
+        let mut status = ErikaPresenterResourceStatus::default();
+        assert_eq!(
+            unsafe { erika_presenter_get_resource_status(handle, &mut status) },
+            ErikaStatus::Ok
+        );
+        assert_eq!(status.drawable_estimated_bytes, 0);
+        assert_eq!(status.video_frame_bytes, 0);
+        assert_eq!(status.renderer_tracked_bytes, 0);
+        assert_eq!(status.drawable_count, 0);
+        assert_eq!(status.output_mode_switches, 0);
+        unsafe { erika_presenter_destroy(handle) };
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        any(target_os = "ios", target_os = "tvos"),
+        target_os = "windows",
+        target_os = "android",
+        target_env = "ohos"
+    ))]
+    #[test]
     fn c_presenter_can_be_created_with_edr_config() {
         let handle = erika_presenter_create_with_config(ErikaPresenterConfig {
             output_mode: ErikaPresenterOutputMode::AppleEdr as i32,
@@ -4800,6 +4926,14 @@ mod tests {
                 ..ErikaPresenterConfig::default()
             }),
             MetalOutputMode::extended_linear(3.0)
+        );
+        assert_eq!(
+            metal_output_mode_from_c(ErikaPresenterConfig {
+                output_mode: ErikaPresenterOutputMode::Auto as i32,
+                edr_headroom: 2.5,
+                ..ErikaPresenterConfig::default()
+            }),
+            MetalOutputMode::auto(2.5)
         );
         assert_eq!(
             metal_output_mode_from_c(ErikaPresenterConfig {

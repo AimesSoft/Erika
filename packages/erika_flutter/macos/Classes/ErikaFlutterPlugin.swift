@@ -172,6 +172,10 @@ private struct ErikaPresenterConfigC {
   static func appleEdr(headroom: Float) -> ErikaPresenterConfigC {
     ErikaPresenterConfigC(outputMode: 1, edrHeadroom: max(1.0, headroom))
   }
+
+  static func auto(headroom: Float) -> ErikaPresenterConfigC {
+    ErikaPresenterConfigC(outputMode: 3, edrHeadroom: max(1.0, headroom))
+  }
 }
 
 private struct ErikaSubtitleStyleC {
@@ -288,6 +292,22 @@ private struct ErikaOutputStatusC {
   var extendedLinearFrames: UInt64 = 0
 }
 
+// Keep field order and types aligned with `ErikaPresenterResourceStatus` in erika.h.
+private struct ErikaPresenterResourceStatusC {
+  var deviceCurrentAllocatedBytes: UInt64 = 0
+  var deviceRecommendedWorkingSetBytes: UInt64 = 0
+  var drawableEstimatedBytes: UInt64 = 0
+  var videoFrameBytes: UInt64 = 0
+  var overlayAtlasBytes: UInt64 = 0
+  var danmakuAtlasBytes: UInt64 = 0
+  var danmakuVertexBufferBytes: UInt64 = 0
+  var upscalerBytes: UInt64 = 0
+  var rendererTrackedBytes: UInt64 = 0
+  var presenterCpuDanmakuAtlasBytes: UInt64 = 0
+  var drawableCount: UInt32 = 0
+  var outputModeSwitches: UInt64 = 0
+}
+
 private struct ErikaDanmakuConfigC {
   var enabled: UInt8 = 1
   // NipaPlay/Flutter logical font size; Erika applies the surface scale internally.
@@ -393,6 +413,7 @@ private final class ErikaNativeLibrary {
   typealias FreeSubtitleMemoryFontStatusFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
   typealias GetUpscalerStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias GetOutputStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
+  typealias GetResourceStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias SelectTrackFn = @convention(c) (UnsafeMutableRawPointer?, Int64) -> Int32
   typealias AddExternalSubtitleFn = @convention(c) (
     UnsafeMutableRawPointer?,
@@ -465,6 +486,7 @@ private final class ErikaNativeLibrary {
   let freeSubtitleMemoryFontStatus: FreeSubtitleMemoryFontStatusFn?
   let getUpscalerStatus: GetUpscalerStatusFn?
   let getOutputStatus: GetOutputStatusFn?
+  let getResourceStatus: GetResourceStatusFn?
   let selectAudioTrack: SelectTrackFn
   let selectSubtitleTrack: SelectTrackFn
   let addExternalSubtitle: AddExternalSubtitleFn
@@ -527,6 +549,7 @@ private final class ErikaNativeLibrary {
     freeSubtitleMemoryFontStatus = Self.loadOptional("erika_subtitle_memory_font_status_free", from: libraryHandle, as: FreeSubtitleMemoryFontStatusFn.self)
     getUpscalerStatus = Self.loadOptional("erika_presenter_get_upscaler_status", from: libraryHandle, as: GetUpscalerStatusFn.self)
     getOutputStatus = Self.loadOptional("erika_presenter_get_output_status", from: libraryHandle, as: GetOutputStatusFn.self)
+    getResourceStatus = Self.loadOptional("erika_presenter_get_resource_status", from: libraryHandle, as: GetResourceStatusFn.self)
     selectAudioTrack = try Self.load("erika_presenter_select_audio_track", from: libraryHandle, as: SelectTrackFn.self)
     selectSubtitleTrack = try Self.load("erika_presenter_select_subtitle_track", from: libraryHandle, as: SelectTrackFn.self)
     addExternalSubtitle = try Self.load("erika_presenter_add_external_subtitle", from: libraryHandle, as: AddExternalSubtitleFn.self)
@@ -1021,6 +1044,20 @@ private final class ErikaPlayerHost {
       }
     }
     try check(result, operation: "get_output_status")
+    return status.toFlutterMap()
+  }
+
+  func resourceStatus() throws -> [String: Any] {
+    guard let getStatus = library.getResourceStatus else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_get_resource_status")
+    }
+    var status = ErikaPresenterResourceStatusC()
+    let result = withNativeCall {
+      withUnsafeMutablePointer(to: &status) { pointer in
+        getStatus(handle, UnsafeMutableRawPointer(pointer))
+      }
+    }
+    try check(result, operation: "get_resource_status")
     return status.toFlutterMap()
   }
 
@@ -1711,6 +1748,25 @@ private extension ErikaOutputStatusC {
   }
 }
 
+private extension ErikaPresenterResourceStatusC {
+  func toFlutterMap() -> [String: Any] {
+    [
+      "deviceCurrentAllocatedBytes": Int64(clamping: deviceCurrentAllocatedBytes),
+      "deviceRecommendedWorkingSetBytes": Int64(clamping: deviceRecommendedWorkingSetBytes),
+      "drawableEstimatedBytes": Int64(clamping: drawableEstimatedBytes),
+      "videoFrameBytes": Int64(clamping: videoFrameBytes),
+      "overlayAtlasBytes": Int64(clamping: overlayAtlasBytes),
+      "danmakuAtlasBytes": Int64(clamping: danmakuAtlasBytes),
+      "danmakuVertexBufferBytes": Int64(clamping: danmakuVertexBufferBytes),
+      "upscalerBytes": Int64(clamping: upscalerBytes),
+      "rendererTrackedBytes": Int64(clamping: rendererTrackedBytes),
+      "presenterCpuDanmakuAtlasBytes": Int64(clamping: presenterCpuDanmakuAtlasBytes),
+      "drawableCount": Int(drawableCount),
+      "outputModeSwitches": Int64(clamping: outputModeSwitches),
+    ]
+  }
+}
+
 private extension ErikaPresenterStatsC {
   func toFlutterMap() -> [String: Any] {
     [
@@ -2310,6 +2366,9 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       case "getOutputStatus":
         let args = try dictionaryArgs(call.arguments)
         result(try playerHost(from: args).outputStatus())
+      case "getResourceStatus":
+        let args = try dictionaryArgs(call.arguments)
+        result(try playerHost(from: args).resourceStatus())
       case "getPresenterStats":
         let args = try dictionaryArgs(call.arguments)
         result(try playerHost(from: args).presenterStats())
@@ -2961,17 +3020,18 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       switch explicitMode {
       case 1:
         return .appleEdr(headroom: headroom)
+      case 2:
+        return ErikaPresenterConfigC(outputMode: 2, edrHeadroom: max(1.0, headroom))
+      case 3:
+        return .auto(headroom: headroom)
       default:
         return .sdr
       }
     }
 
     let headroom = resolvedEdrHeadroom()
-    if headroom > 1.0 {
-      NSLog("ErikaFlutterPlugin: using Apple EDR output, headroom \(headroom)x")
-      return .appleEdr(headroom: headroom)
-    }
-    return .sdr
+    NSLog("ErikaFlutterPlugin: using automatic Apple output, headroom \(headroom)x")
+    return .auto(headroom: headroom)
   }
 
   private func resolvedEdrHeadroom() -> Float {

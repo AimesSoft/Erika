@@ -29,8 +29,9 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLComputeCommandEncoder,
-    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLPixelFormat, MTLResourceOptions, MTLSize,
-    MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
+    MTLComputePipelineState, MTLDevice, MTLLibrary, MTLPixelFormat, MTLResource,
+    MTLResourceOptions, MTLSize, MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType,
+    MTLTextureUsage,
 };
 
 use crate::core::{LumaUpscalerBackendStatus, PlayerError, Result};
@@ -184,6 +185,23 @@ impl LumaUpscaler {
 
     pub fn auto_matmul_fallbacks(&self) -> u64 {
         self.auto_matmul_fallbacks
+    }
+
+    pub fn allocated_bytes(&self) -> u64 {
+        match self.resources.as_ref() {
+            Some(BackendResources::Scalar(resources)) => {
+                let pool_bytes = resources.pool.as_ref().map_or(0, |pool| {
+                    pool.features
+                        .iter()
+                        .fold(pool.output.allocatedSize() as u64, |total, texture| {
+                            total.saturating_add(texture.allocatedSize() as u64)
+                        })
+                });
+                (resources.weights.allocatedSize() as u64).saturating_add(pool_bytes)
+            }
+            Some(BackendResources::Matmul(resources)) => resources.allocated_bytes(),
+            None => 0,
+        }
     }
 
     fn record_auto_matmul_failure(&mut self, error: &PlayerError) {

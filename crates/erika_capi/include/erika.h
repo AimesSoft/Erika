@@ -124,6 +124,7 @@ typedef enum ErikaPresenterOutputMode {
   ErikaPresenterOutputMode_Sdr = 0,
   ErikaPresenterOutputMode_AppleEdr = 1,
   ErikaPresenterOutputMode_ExtendedLinear = 2,
+  ErikaPresenterOutputMode_Auto = 3,
 } ErikaPresenterOutputMode;
 
 typedef enum ErikaActiveOutputEncoding {
@@ -241,6 +242,24 @@ typedef struct ErikaOutputStatus {
   uint64_t headroom_updates;
   uint64_t extended_linear_frames;
 } ErikaOutputStatus;
+
+/* Renderer memory snapshot. Per-resource fields are allocations tracked by
+ * one presenter. device_current_allocated_bytes is Metal's device-wide
+ * process counter and may include allocations owned by other presenters. */
+typedef struct ErikaPresenterResourceStatus {
+  uint64_t device_current_allocated_bytes;
+  uint64_t device_recommended_working_set_bytes;
+  uint64_t drawable_estimated_bytes;
+  uint64_t video_frame_bytes;
+  uint64_t overlay_atlas_bytes;
+  uint64_t danmaku_atlas_bytes;
+  uint64_t danmaku_vertex_buffer_bytes;
+  uint64_t upscaler_bytes;
+  uint64_t renderer_tracked_bytes;
+  uint64_t presenter_cpu_danmaku_atlas_bytes;
+  uint32_t drawable_count;
+  uint64_t output_mode_switches;
+} ErikaPresenterResourceStatus;
 
 typedef struct ErikaSubtitleMemoryFontStatus {
   uintptr_t registered_count;
@@ -544,6 +563,9 @@ ErikaStatus erika_presenter_get_upscaler_status(
 ErikaStatus erika_presenter_get_output_status(
     ErikaPresenterHandle *handle,
     ErikaOutputStatus *out_status);
+ErikaStatus erika_presenter_get_resource_status(
+    ErikaPresenterHandle *handle,
+    ErikaPresenterResourceStatus *out_status);
 ErikaStatus erika_presenter_add_external_subtitle(
     ErikaPresenterHandle *handle,
     const char *uri,
