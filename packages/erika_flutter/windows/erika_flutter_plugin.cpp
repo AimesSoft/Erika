@@ -658,6 +658,36 @@ EncodableValue OutputStatusToMap(const ErikaOutputStatus& status) {
   return EncodableValue(std::move(map));
 }
 
+EncodableValue ResourceStatusToMap(const ErikaPresenterResourceStatus& status) {
+  EncodableMap map;
+  map[EncodableValue("deviceCurrentAllocatedBytes")] =
+      EncodableValue(static_cast<int64_t>(status.device_current_allocated_bytes));
+  map[EncodableValue("deviceRecommendedWorkingSetBytes")] =
+      EncodableValue(
+          static_cast<int64_t>(status.device_recommended_working_set_bytes));
+  map[EncodableValue("drawableEstimatedBytes")] =
+      EncodableValue(static_cast<int64_t>(status.drawable_estimated_bytes));
+  map[EncodableValue("videoFrameBytes")] =
+      EncodableValue(static_cast<int64_t>(status.video_frame_bytes));
+  map[EncodableValue("overlayAtlasBytes")] =
+      EncodableValue(static_cast<int64_t>(status.overlay_atlas_bytes));
+  map[EncodableValue("danmakuAtlasBytes")] =
+      EncodableValue(static_cast<int64_t>(status.danmaku_atlas_bytes));
+  map[EncodableValue("danmakuVertexBufferBytes")] =
+      EncodableValue(static_cast<int64_t>(status.danmaku_vertex_buffer_bytes));
+  map[EncodableValue("upscalerBytes")] =
+      EncodableValue(static_cast<int64_t>(status.upscaler_bytes));
+  map[EncodableValue("rendererTrackedBytes")] =
+      EncodableValue(static_cast<int64_t>(status.renderer_tracked_bytes));
+  map[EncodableValue("presenterCpuDanmakuAtlasBytes")] =
+      EncodableValue(static_cast<int64_t>(status.presenter_cpu_danmaku_atlas_bytes));
+  map[EncodableValue("drawableCount")] =
+      EncodableValue(static_cast<int64_t>(status.drawable_count));
+  map[EncodableValue("outputModeSwitches")] =
+      EncodableValue(static_cast<int64_t>(status.output_mode_switches));
+  return EncodableValue(std::move(map));
+}
+
 EncodableValue SubtitleMemoryFontStatusToMap(
     const ErikaSubtitleMemoryFontStatus& status) {
   EncodableList selected_ids;
@@ -707,6 +737,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
       ErikaStatus (*)(ErikaPresenterHandle*, ErikaUpscalerStatus*);
   using GetOutputStatusFn =
       ErikaStatus (*)(ErikaPresenterHandle*, ErikaOutputStatus*);
+  using GetResourceStatusFn =
+      ErikaStatus (*)(ErikaPresenterHandle*, ErikaPresenterResourceStatus*);
   using SelectTrackFn = ErikaStatus (*)(ErikaPresenterHandle*, int64_t);
   using AddExternalSubtitleFn =
       ErikaStatus (*)(ErikaPresenterHandle*, const char*, int64_t*);
@@ -821,6 +853,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   void (*free_subtitle_memory_font_status)(ErikaSubtitleMemoryFontStatus*) = nullptr;
   GetUpscalerStatusFn get_upscaler_status = nullptr;
   GetOutputStatusFn get_output_status = nullptr;
+  GetResourceStatusFn get_resource_status = nullptr;
   SelectTrackFn select_audio_track = nullptr;
   SelectTrackFn select_subtitle_track = nullptr;
   AddExternalSubtitleFn add_external_subtitle = nullptr;
@@ -897,6 +930,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
         "erika_presenter_get_upscaler_status");
     get_output_status = LoadOptional<GetOutputStatusFn>(
         "erika_presenter_get_output_status");
+    get_resource_status = LoadOptional<GetResourceStatusFn>(
+        "erika_presenter_get_resource_status");
     select_audio_track =
         LoadRequired<SelectTrackFn>("erika_presenter_select_audio_track");
     select_subtitle_track =
@@ -1436,6 +1471,19 @@ struct ErikaFlutterPlugin::PlayerHost {
       Check(result, "get_output_status", library->TakeLastError());
     }
     return OutputStatusToMap(status);
+  }
+
+  EncodableValue GetResourceStatus() {
+    if (library->get_resource_status == nullptr) {
+      throw PluginError(
+          "Missing Erika C ABI symbol: erika_presenter_get_resource_status");
+    }
+    ErikaPresenterResourceStatus status{};
+    const ErikaStatus result = library->get_resource_status(handle, &status);
+    if (result != ErikaStatus_Ok) {
+      Check(result, "get_resource_status", library->TakeLastError());
+    }
+    return ResourceStatusToMap(status);
   }
 
   EncodableValue GetPresenterStats() const {
@@ -2692,6 +2740,8 @@ void ErikaFlutterPlugin::HandleMethodCall(
       result->Success(PlayerFromArgs(args).GetOutputStatus());
     } else if (method == "getPresenterStats") {
       result->Success(PlayerFromArgs(args).GetPresenterStats());
+    } else if (method == "getResourceStatus") {
+      result->Success(PlayerFromArgs(args).GetResourceStatus());
     } else if (method == "setDebugHudEnabled") {
       PlayerFromArgs(args).SetDebugHudEnabled(
           BoolValue(FindArg(args, "enabled")).value_or(false));
