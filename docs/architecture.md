@@ -144,7 +144,7 @@ The primary renderer for Apple platforms:
 - Tone mapping: Mobius, Reinhard, clip operators with absolute nits.
 - SDR output (`BGRA8Unorm`) and Apple EDR output (`RGBA16Float` with EDR
   headroom).
-- Neural luma upscaler (`LumaUpscalerMode`): ArtCNN C4F16/C4F32 2x doublers
+- Neural luma upscaler (`LumaUpscalerMode`): ArtCNN C4F16/C4F16 DS/C4F32 2x doublers
   as Metal compute passes on the decoded Y plane, encoded on the same command
   buffer ahead of the render pass (`renderer/metal/upscaler.rs`). Chroma keeps
   its source resolution. Engages only when the video is displayed above source
@@ -190,7 +190,7 @@ Second renderer backend for portability:
   decoder callback context is still alive; presenter and GPU recovery never
   retain the decoder-owned AVFrame.
 - Color space conversion, tone mapping (same pipeline model as Metal).
-- Tiled ArtCNN C4F16/C4F32 compute (`renderer/wgpu_artcnn.rs`) with bounded
+- Tiled ArtCNN C4F16/C4F16 DS/C4F32 compute (`renderer/wgpu_artcnn.rs`) with bounded
   feature textures and a source-sized packed DepthToSpace output. It accepts
   both native luma planes and Android's converted nonlinear RGB texture while
   preserving chroma as `rgb + (Y_sr - Y)`. GLES 3.0 reports `Inactive` with a

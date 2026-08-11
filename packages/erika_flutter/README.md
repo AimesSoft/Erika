@@ -396,8 +396,8 @@ multiple players, and SDR screenshot checks.
 Select ArtCNN at creation time, or switch it later at runtime:
 
 ```dart
-final player = ErikaPlayer(upscaler: ErikaUpscalerMode.artCnnC4F16);
-await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16);
+final player = ErikaPlayer(upscaler: ErikaUpscalerMode.artCnnC4F16Ds);
+await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16Ds);
 ```
 
 Use `ErikaUpscalerMode.off` to disable it. Call

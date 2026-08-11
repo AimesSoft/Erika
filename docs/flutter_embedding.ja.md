@@ -155,7 +155,7 @@ await player.setVolume(0.8);
 await player.setPlaybackRate(1.5);
 
 // Neural upscaler (anime luma 2x; Apple Metal / Android Vulkan)
-await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16); // off / artCnnC4F16 / artCnnC4F32
+await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16Ds); // 目立つ劣化があるソース向けの推奨値
 final status = await player.getUpscalerStatus();
 
 // Track management

@@ -344,6 +344,15 @@ fn c4f16_wgpu_matches_onnx_across_tile_seams() {
 }
 
 #[test]
+fn c4f16_ds_wgpu_matches_onnx_across_tile_seams() {
+    check_model(
+        LumaUpscalerMode::ArtCnnC4F16Ds,
+        include_bytes!("data/artcnn/c4f16/input_128x72.f32"),
+        include_bytes!("data/artcnn/c4f16_ds/output_256x144.f32"),
+    );
+}
+
+#[test]
 fn c4f32_wgpu_matches_onnx_across_tile_seams() {
     check_model(
         LumaUpscalerMode::ArtCnnC4F32,

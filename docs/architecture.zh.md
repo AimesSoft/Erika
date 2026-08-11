@@ -98,7 +98,7 @@ Apple 平台的主渲染器：
 - YCbCr 采样、transfer decode、gamut mapping（BT.2020→BT.709、Display P3→BT.709）。
 - Tone mapping：Mobius、Reinhard、clip，支持绝对 nits。
 - SDR 输出（`BGRA8Unorm`）与 Apple EDR 输出（`RGBA16Float` + EDR headroom）。
-- 神经亮度超分（`LumaUpscalerMode`）：ArtCNN C4F16/C4F32 2x doubler，以 Metal compute pass 跑在解码后的 Y plane 上，并与 render pass 使用同一 command buffer（`renderer/metal/upscaler.rs`）。色度保持原分辨率。仅在视频显示尺寸大于源分辨率时启用；网络输出会按解码帧缓存，重复 vsync tick 直接复用结果。权重来自上游 ONNX 发布（`assets/artcnn/`），并用 `tests/artcnn_upscaler.rs` 中的 onnxruntime 参考验证。提供 `simdgroup_matrix` matmul 后端（Apple Silicon 默认）和 scalar texture fallback；两者都在后台线程编译，编译完成前播放会先以未放大状态继续。blob 校验、模型布局、执行策略和 frame-token cache 已抽到平台中立的 `renderer/artcnn.rs`，并由 wgpu 后端共同使用。
+- 神经亮度超分（`LumaUpscalerMode`）：ArtCNN C4F16/C4F16 DS/C4F32 2x doubler，以 Metal compute pass 跑在解码后的 Y plane 上，并与 render pass 使用同一 command buffer（`renderer/metal/upscaler.rs`）。色度保持原分辨率。仅在视频显示尺寸大于源分辨率时启用；网络输出会按解码帧缓存，重复 vsync tick 直接复用结果。权重来自上游 ONNX 发布（`assets/artcnn/`），并用 `tests/artcnn_upscaler.rs` 中的 onnxruntime 参考验证。提供 `simdgroup_matrix` matmul 后端（Apple Silicon 默认）和 scalar texture fallback；两者都在后台线程编译，编译完成前播放会先以未放大状态继续。blob 校验、模型布局、执行策略和 frame-token cache 已抽到平台中立的 `renderer/artcnn.rs`，并由 wgpu 后端共同使用。
 - 字幕 overlay：RGBA plane 上传与 alpha blending。
 - 弹幕：来自 atlas 的 instanced glyph quad 绘制（shadow → outline → fill）。
 - 呈现布局保持源宽高比。
@@ -122,7 +122,7 @@ Windows 平台的原生渲染器（`renderer/d3d11.rs`）：
 - Android 通过 AHardwareBuffer/Vulkan 导入 MediaCodec Surface；原生互操作不可用时明确切到 ByteBuffer/CPU upload。
 - 公共 `renderer/frame.rs` 边界统一携带尺寸/色彩元数据，以及 FFmpeg 解码帧或独立的 prepared AHardwareBuffer。MediaCodec Surface 的 AVFrame 会在 playback worker 上、decoder callback context 仍存活时释放；presenter 与 GPU recovery 不再持有 decoder-owned AVFrame。
 - 色彩空间转换、tone mapping（与 Metal 保持同一流水线模型）。
-- 分块执行 ArtCNN C4F16/C4F32（`renderer/wgpu_artcnn.rs`），用有界 feature texture 和源分辨率 packed DepthToSpace 输出控制显存。既支持原生 luma plane，也支持 Android 已转换的 nonlinear RGB texture，并通过 `rgb + (Y_sr - Y)` 保持色度。GLES 3.0 不尝试 compute，而是明确报告 `Inactive` 和 `native_luma_sampling` 回退。
+- 分块执行 ArtCNN C4F16/C4F16 DS/C4F32（`renderer/wgpu_artcnn.rs`），用有界 feature texture 和源分辨率 packed DepthToSpace 输出控制显存。既支持原生 luma plane，也支持 Android 已转换的 nonlinear RGB texture，并通过 `rgb + (Y_sr - Y)` 保持色度。GLES 3.0 不尝试 compute，而是明确报告 `Inactive` 和 `native_luma_sampling` 回退。
 - 字幕/弹幕合成、截图，以及可用于无头验证的离屏 render target。即使显示 surface 是 extended-linear，截图也始终离屏渲染到 SDR RGBA8 target，避免把未映射的 scRGB 值当成 SDR 像素输出。
 - 表面句柄模型覆盖 macOS NSView、iOS UIView、Windows HWND、X11/Wayland、Android native window、OpenHarmony `OHNativeWindow`。
 - OpenHarmony 把 AVCodec 的 Surface 输出作为 `OHNativeBuffer` 支撑的 Vulkan 外部图像导入，并用 Vulkan YCbCr sampler 在 GPU 上完成 YUV 转换，解码帧无需 CPU 拷贝即可进入 wgpu 合成器。缺少所需 Vulkan 扩展的设备回退到软解 + CPU 上传，回退过程通过诊断事件上报。

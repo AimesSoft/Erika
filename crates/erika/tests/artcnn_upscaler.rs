@@ -218,6 +218,16 @@ fn artcnn_c4f16_scalar_matches_onnx_reference() {
 }
 
 #[test]
+fn artcnn_c4f16_ds_scalar_matches_onnx_reference() {
+    check_against_reference(
+        LumaUpscalerMode::ArtCnnC4F16Ds,
+        UpscalerBackend::Scalar,
+        include_bytes!("data/artcnn/c4f16/input_128x72.f32"),
+        include_bytes!("data/artcnn/c4f16_ds/output_256x144.f32"),
+    );
+}
+
+#[test]
 fn artcnn_c4f32_scalar_matches_onnx_reference() {
     check_against_reference(
         LumaUpscalerMode::ArtCnnC4F32,
@@ -238,6 +248,16 @@ fn artcnn_c4f16_matmul_matches_onnx_reference() {
 }
 
 #[test]
+fn artcnn_c4f16_ds_matmul_matches_onnx_reference() {
+    check_against_reference(
+        LumaUpscalerMode::ArtCnnC4F16Ds,
+        UpscalerBackend::SimdgroupMatrix,
+        include_bytes!("data/artcnn/c4f16/input_128x72.f32"),
+        include_bytes!("data/artcnn/c4f16_ds/output_256x144.f32"),
+    );
+}
+
+#[test]
 fn artcnn_c4f32_matmul_matches_onnx_reference() {
     check_against_reference(
         LumaUpscalerMode::ArtCnnC4F32,
@@ -253,7 +273,11 @@ fn artcnn_c4f32_matmul_matches_onnx_reference() {
 #[ignore]
 fn bench_1080p_gpu_time() {
     for backend in [UpscalerBackend::Scalar, UpscalerBackend::SimdgroupMatrix] {
-        for mode in [LumaUpscalerMode::ArtCnnC4F16, LumaUpscalerMode::ArtCnnC4F32] {
+        for mode in [
+            LumaUpscalerMode::ArtCnnC4F16,
+            LumaUpscalerMode::ArtCnnC4F16Ds,
+            LumaUpscalerMode::ArtCnnC4F32,
+        ] {
             bench_mode(mode, backend, 1920, 1080, 30);
             bench_mode(mode, backend, 960, 540, 30);
         }
@@ -331,7 +355,7 @@ fn bench_mode(
 /// File-driven harness for offline quality comparisons. Reads a raw f32 luma
 /// plane, upscales it with the requested variant, writes raw f32 output.
 /// Driven by env vars: ERIKA_SR_IN, ERIKA_SR_W, ERIKA_SR_H, ERIKA_SR_OUT,
-/// ERIKA_SR_MODE (c4f16|c4f32).
+/// ERIKA_SR_MODE (c4f16|c4f16-ds|c4f32).
 #[test]
 #[ignore]
 fn dump_upscaled_from_env() {
@@ -340,6 +364,7 @@ fn dump_upscaled_from_env() {
     let width: usize = std::env::var("ERIKA_SR_W").expect("W").parse().expect("W");
     let height: usize = std::env::var("ERIKA_SR_H").expect("H").parse().expect("H");
     let mode = match std::env::var("ERIKA_SR_MODE").as_deref() {
+        Ok("c4f16-ds") => LumaUpscalerMode::ArtCnnC4F16Ds,
         Ok("c4f32") => LumaUpscalerMode::ArtCnnC4F32,
         _ => LumaUpscalerMode::ArtCnnC4F16,
     };

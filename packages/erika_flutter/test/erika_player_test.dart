@@ -341,7 +341,7 @@ void main() {
   });
 
   test('initial upscaler mode is passed to native create', () async {
-    final player = ErikaPlayer(upscaler: ErikaUpscalerMode.artCnnC4F32);
+    final player = ErikaPlayer(upscaler: ErikaUpscalerMode.artCnnC4F16Ds);
 
     expect(await player.ensureCreated(), 7);
 
@@ -349,7 +349,7 @@ void main() {
       (MethodCall call) => call.method == 'create',
     );
     final arguments = createCall.arguments as Map<Object?, Object?>;
-    expect(arguments['upscaler'], ErikaUpscalerMode.artCnnC4F32.nativeValue);
+    expect(arguments['upscaler'], ErikaUpscalerMode.artCnnC4F16Ds.nativeValue);
 
     await player.dispose();
   });
@@ -1039,6 +1039,13 @@ void main() {
     });
 
     await player.dispose();
+  });
+
+  test('DS upscaler status mode is decoded from native presenter', () {
+    expect(
+      ErikaUpscalerMode.fromNativeValue(3),
+      ErikaUpscalerMode.artCnnC4F16Ds,
+    );
   });
 
   test('upscaler status is decoded from native presenter', () async {

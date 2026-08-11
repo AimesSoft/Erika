@@ -311,8 +311,8 @@ Windows D3D11 Flutter 路径不返回截图字节。
 可以在创建时选择 ArtCNN，也可以在运行时切换：
 
 ```dart
-final player = ErikaPlayer(upscaler: ErikaUpscalerMode.artCnnC4F16);
-await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16);
+final player = ErikaPlayer(upscaler: ErikaUpscalerMode.artCnnC4F16Ds);
+await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16Ds);
 ```
 
 使用 `ErikaUpscalerMode.off` 关闭。`player.getUpscalerStatus()` 会返回请求模式、当前后端、fallback 次数、超分帧数和最近 GPU timing。Apple 使用 Metal；Android 对 planar 与 MediaCodec Surface 帧都使用 wgpu/Vulkan compute。GLES 3.0 会保持普通播放，并明确报告 `inactive` 回退。

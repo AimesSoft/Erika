@@ -325,8 +325,8 @@ multiple player、SDR screenshot の acceptance が必要です。
 作成時に ArtCNN を選択することも、runtime で切り替えることもできます。
 
 ```dart
-final player = ErikaPlayer(upscaler: ErikaUpscalerMode.artCnnC4F16);
-await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16);
+final player = ErikaPlayer(upscaler: ErikaUpscalerMode.artCnnC4F16Ds);
+await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16Ds);
 ```
 
 `ErikaUpscalerMode.off` で無効化します。`player.getUpscalerStatus()` では要求モード、実行 backend、fallback 回数、upscaled frame 数、最近の GPU timing を確認できます。Apple は Metal、Android は planar と MediaCodec Surface frame の両方で wgpu/Vulkan compute を使います。GLES 3.0 は通常再生を維持し、明示的な `inactive` fallback を報告します。

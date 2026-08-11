@@ -336,6 +336,8 @@ pub enum LumaUpscalerMode {
     Off,
     /// ArtCNN C4F16 (~12K parameters), lightweight real-time anime doubler.
     ArtCnnC4F16,
+    /// ArtCNN C4F16 DS, denoising and sharpening for degraded anime sources.
+    ArtCnnC4F16Ds,
     /// ArtCNN C4F32 (~48K parameters), higher quality real-time doubler.
     ArtCnnC4F32,
 }
