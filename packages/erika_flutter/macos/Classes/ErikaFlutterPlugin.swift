@@ -23,24 +23,19 @@ private func erikaWindowOverlayTrace(_ message: @autoclosure () -> String) {
 }
 
 /// Drives rendering from the display's vertical refresh instead of a main-run-loop
-/// `Timer`. The callback stays coalesced while a render is in progress so a slow
-/// `CAMetalLayer.nextDrawable()` cannot build up timer callbacks and then replay
-/// them in a burst.
+/// `Timer`. `CVDisplayLink` already owns a dedicated high-priority callback
+/// thread, so render directly there instead of waking a second GCD worker for
+/// every frame. The callback stays coalesced while a render is in progress so a
+/// slow `CAMetalLayer.nextDrawable()` cannot build up callbacks and replay them.
 private final class ErikaDisplayLinkDriver {
   private let onTick: () -> Void
-  private let renderQueue: DispatchQueue
   private let stateLock = NSLock()
   private var displayLink: CVDisplayLink?
   private var tickQueued = false
   private var invalidated = false
 
-  init?(
-    displayID: CGDirectDisplayID,
-    renderQueue: DispatchQueue,
-    onTick: @escaping () -> Void
-  ) {
+  init?(displayID: CGDirectDisplayID, onTick: @escaping () -> Void) {
     self.onTick = onTick
-    self.renderQueue = renderQueue
 
     var link: CVDisplayLink?
     guard CVDisplayLinkCreateWithCGDisplay(displayID, &link) == kCVReturnSuccess,
@@ -100,25 +95,19 @@ private final class ErikaDisplayLinkDriver {
     tickQueued = true
     stateLock.unlock()
 
-    renderQueue.async { [weak self] in
-      guard let self else {
-        return
-      }
+    stateLock.lock()
+    let shouldRender = !invalidated
+    stateLock.unlock()
 
-      self.stateLock.lock()
-      let shouldRender = !self.invalidated
-      self.stateLock.unlock()
-
-      if shouldRender {
-        self.onTick()
-      }
-
-      // Keep tickQueued set throughout onTick(). Any display refresh received
-      // while Metal is blocked is deliberately dropped rather than replayed.
-      self.stateLock.lock()
-      self.tickQueued = false
-      self.stateLock.unlock()
+    if shouldRender {
+      onTick()
     }
+
+    // Keep tickQueued set throughout onTick(). Any display refresh received
+    // while Metal is blocked is deliberately dropped rather than replayed.
+    stateLock.lock()
+    tickQueued = false
+    stateLock.unlock()
   }
 }
 
@@ -1529,10 +1518,7 @@ private final class ErikaPlayerHost {
       }
 
       stopDisplayDriver()
-      let driver = ErikaDisplayLinkDriver(
-        displayID: displayID,
-        renderQueue: renderQueue
-      ) { [weak self] in
+      let driver = ErikaDisplayLinkDriver(displayID: displayID) { [weak self] in
         guard let self else {
           return
         }
@@ -2203,6 +2189,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         let playerId = try requiredInt64(args["playerId"], name: "playerId")
         windowOverlayPlayerIds.remove(playerId)
         players.removeValue(forKey: playerId)
+        stopPollTimerIfIdle()
         systemMediaNavigation.removeValue(forKey: playerId)
         if activePlayerId == playerId {
           activePlayerId = nil
@@ -3239,8 +3226,19 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         host.pollEvents(sendEvent: sink)
       }
     }
+    // Event delivery does not require a hard 50 ms deadline. Let macOS
+    // coalesce this maintenance poll with nearby UI/audio work.
+    timer.tolerance = 0.01
     pollTimer = timer
     RunLoop.main.add(timer, forMode: .common)
+  }
+
+  private func stopPollTimerIfIdle() {
+    guard players.isEmpty else {
+      return
+    }
+    pollTimer?.invalidate()
+    pollTimer = nil
   }
 
   private func dictionaryArgs(_ arguments: Any?) throws -> [String: Any] {
