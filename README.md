@@ -2,8 +2,8 @@
 
 # Erika
 
-> 「GOOD！我是Erika，是NipaPlay里继mdk、video player、libmpv、media kit之后的第五个播放器内核。」
-> 「即便算上你，也只有四个播放器内核！」
+> 「GOOD！我是Erika，是NipaPlay里继mdk、video player、Media Kit（libmpv）之后的第四个播放器内核。」
+> 「即便算上你，也只有三个播放器内核！」
 
 **NipaPlay 的自研播放内核。** Rust 实现，可嵌入，从解码到渲染一手包办。
 

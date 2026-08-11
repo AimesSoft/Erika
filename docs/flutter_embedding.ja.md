@@ -77,7 +77,7 @@ iOS plugin は CocoaPod script phase 経由で Erika C ABI static library を ap
 
 ## tvOS Build Path
 
-tvOS plugin は CocoaPod script phase 経由で Apple TV 実機と simulator 向けに Erika C ABI static library をビルド・リンクします。tvOS 13+、arm64 実機、arm64/x86_64 simulator に対応します。Rust nightly、prebuilt bundle、source build の詳細は [`packages/erika_flutter/README.ja.md`](../packages/erika_flutter/README.ja.md) を参照してください。
+tvOS plugin は CocoaPod script phase 経由で Apple TV 実機と simulator 向けに Erika C ABI static library をビルド・リンクします。tvOS 13+、arm64 実機、arm64/x86_64 simulator に対応します。NipaPlay の television target は Erika を強制選択するため、tvOS では Media Kit（libmpv）、MDK、Video Player へ切り替えられません。Rust nightly、prebuilt bundle、source build の詳細は [`packages/erika_flutter/README.ja.md`](../packages/erika_flutter/README.ja.md) を参照してください。
 
 ## Minimal Presenter Flow
 

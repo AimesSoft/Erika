@@ -2,8 +2,8 @@
 
 # Erika
 
-> "GOOD! I'm Erika, the fifth player kernel in NipaPlay after mdk, video player, libmpv, and media kit."
-> "Even counting you, there are only four player kernels!"
+> "GOOD! I'm Erika, the fourth player kernel in NipaPlay after MDK, Video Player, and Media Kit (libmpv)."
+> "Even counting you, there are only three player kernels!"
 
 **The in-house playback core of NipaPlay.** Written in Rust, embeddable, handling everything from decode to render.
 

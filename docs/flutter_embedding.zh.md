@@ -71,7 +71,7 @@ iOS plugin 通过 CocoaPod script phase 把 Erika C ABI static library 链接进
 
 ## tvOS Build Path
 
-tvOS plugin 通过 CocoaPod script phase 为 Apple TV 真机和模拟器构建并链接 Erika C ABI static library；支持 tvOS 13+、arm64 真机，以及 arm64/x86_64 模拟器。详细的 Rust nightly、预构建包和源码构建选项见 [`packages/erika_flutter/README.zh.md`](../packages/erika_flutter/README.zh.md)。
+tvOS plugin 通过 CocoaPod script phase 为 Apple TV 真机和模拟器构建并链接 Erika C ABI static library；支持 tvOS 13+、arm64 真机，以及 arm64/x86_64 模拟器。NipaPlay 的电视设备路径会强制选择 Erika，不能切换到 Media Kit（libmpv）、MDK 或 Video Player。详细的 Rust nightly、预构建包和源码构建选项见 [`packages/erika_flutter/README.zh.md`](../packages/erika_flutter/README.zh.md)。
 
 ## Minimal Presenter Flow
 

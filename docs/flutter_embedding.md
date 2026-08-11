@@ -104,7 +104,9 @@ architecture.
 
 The tvOS plugin links the Erika C ABI static library through its CocoaPod script
 phase and builds it for tvOS devices and simulators. It supports tvOS 13+,
-arm64 devices, and arm64/x86_64 simulators. See
+arm64 devices, and arm64/x86_64 simulators. NipaPlay forces Erika for its
+television targets, so tvOS cannot switch to Media Kit (libmpv), MDK, or Video
+Player. See
 [`packages/erika_flutter/README.md`](../packages/erika_flutter/README.md) for
 nightly, prebuilt-bundle, and source-build options.
 

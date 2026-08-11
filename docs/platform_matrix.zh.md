@@ -1,12 +1,12 @@
 # Erika 平台能力矩阵
 
-本文把“能编译”“CI 构建覆盖”“真机验收”和“有可下载预编译包”分开描述。任何一项为真，都不自动代表其它三项为真。
+本文把“能编译”“CI 构建覆盖”“真机验收”和“有可下载预编译包”分开描述。任何一项为真，都不自动代表其它三项为真。Erika 当前已支持 NipaPlay 的所有原生客户端目标，**仅 Linux 尚未支持**；在 NipaPlay 的电视设备（包括 tvOS）上，播放器工厂会强制选择 Erika。
 
 | 平台 | 主要解码/渲染 | C ABI presenter | CI/产物 | 真机验收状态 |
 |---|---|---|---|---|
 | macOS | VideoToolbox + Metal | 是 | CI 与预编译包 | 持续维护；HDR/EDR 依显示器和系统而定 |
 | iOS | VideoToolbox + Metal | 是 | CI 与 XCFramework | 持续维护；需使用真机验证 HDR/后台行为 |
-| tvOS | VideoToolbox + Metal | 是 | CI 与 XCFramework | 开发者预览；真机与模拟器分别记录 |
+| tvOS | VideoToolbox + Metal | 是 | CI 与 XCFramework | 支持；NipaPlay 电视端强制使用 Erika，真机与模拟器分别记录 |
 | Windows x64/ARM64 | D3D11VA + D3D11 | 是 | CI 与预编译包 | 持续维护；HDR10 受显示器、驱动和系统设置影响 |
 | Android | MediaCodec/软解 + wgpu | 是 | CI 与预编译包 | SDR 已验证；API 35 HDR active path 仍需真机验收 |
 | HarmonyOS | AVCodec/软解 + wgpu Vulkan | 是 | 预编译包；CI 覆盖需以 workflow 为准 | 已有真机验证，尚未纳入完整 CI 验收 |

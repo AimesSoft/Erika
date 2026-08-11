@@ -2,8 +2,8 @@
 
 # Erika
 
-> 「GOOD！私はErika、NipaPlayにおいてmdk、video player、libmpv、media kitに次ぐ5番目のプレイヤーカーネルです。」
-> 「あなたを数えても、プレイヤーカーネルは4つだけ！」
+> 「GOOD！私はErika、NipaPlayにおいてmdk、video player、Media Kit（libmpv）に次ぐ4番目のプレイヤーカーネルです。」
+> 「あなたを数えても、プレイヤーカーネルは3つだけ！」
 
 **NipaPlay の自社開発再生コア。** Rust 実装、組み込み可能、デコードからレンダリングまで一手に引き受けます。
 
