@@ -42,6 +42,22 @@ void main() {
 
       expect(plugin, contains('if attach || presenterConfig.outputMode != 3'));
     });
+
+    test('$platform presenter stats returns its Flutter map', () {
+      final plugin = File(
+        '$platform/Classes/ErikaFlutterPlugin.swift',
+      ).readAsStringSync();
+
+      expect(
+        plugin,
+        contains(
+          'func presenterStats() -> [String: Any] {\n'
+          '    nativeCallLock.lock()\n'
+          '    defer { nativeCallLock.unlock() }\n'
+          '    return latestPresenterStats.toFlutterMap()',
+        ),
+      );
+    });
   }
 
   test('Metal limits contentsFormat switching to UIKit and tvOS', () {

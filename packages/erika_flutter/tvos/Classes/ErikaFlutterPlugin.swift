@@ -1055,7 +1055,7 @@ private final class ErikaPlayerHost {
   func presenterStats() -> [String: Any] {
     nativeCallLock.lock()
     defer { nativeCallLock.unlock() }
-    latestPresenterStats.toFlutterMap()
+    return latestPresenterStats.toFlutterMap()
   }
 
   func addExternalSubtitle(uri: String) throws -> Int64 {
