@@ -238,6 +238,7 @@ pub struct PresenterStats {
 pub struct PresenterRuntimeSnapshot {
     pub stats: PresenterStats,
     pub renderer: RendererRuntimeStats,
+    pub resources: crate::core::RendererResourceStats,
     pub output: crate::renderer::output::OutputRuntimeStatus,
     pub audio_output_queued_duration: Option<Duration>,
     pub audio_output_queued_frames: usize,
@@ -1656,6 +1657,7 @@ impl PresenterRuntime {
 
     pub fn runtime_snapshot(&self) -> PresenterRuntimeSnapshot {
         let renderer = self.renderer.runtime_stats();
+        let resources = self.renderer.resource_stats();
         let output = self.renderer.output_status();
         let (current_danmaku_items, current_danmaku_atlas_version, current_danmaku_atlas_bytes) =
             self.current_danmaku.as_ref().map_or((0, 0, 0), |plan| {
@@ -1674,6 +1676,7 @@ impl PresenterRuntime {
         PresenterRuntimeSnapshot {
             stats: self.stats,
             renderer,
+            resources,
             output,
             audio_output_queued_duration: audio_snapshot
                 .and_then(|snapshot| snapshot.queued_duration),
@@ -4331,6 +4334,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         );
     }
 
+    #[cfg(feature = "wgpu")]
     #[test]
     fn registering_an_unselected_memory_font_does_not_invalidate_renderers() {
         let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();

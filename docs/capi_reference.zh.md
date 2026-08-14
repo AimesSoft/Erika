@@ -19,9 +19,12 @@ Erika 暴露两个相互独立的入口，每个集成选其一。
 | `ErikaHandle` | **拉取（Pull）** | 宿主 | 你拥有渲染循环、自己拉取解码帧 / 驱动自己的合成器。 |
 | `ErikaPresenterHandle` | **推送（Push）** | Erika | 你把一个原生 surface 交给 Erika，每个显示帧调一次 `render_tick`。Erika 负责解码、时序、音频、overlay 和呈现。 |
 
-`ErikaPresenterHandle` 是推荐路径，也是 Flutter 插件和原生 demo 所用的。它只在
-**macOS、iOS、tvOS、Windows、Android** 上编译。其它平台上 `erika_presenter_create` 仍然
-导出但返回 `NULL`，presenter 族的其余函数不存在——请按平台守卫 presenter 用法。
+`ErikaPresenterHandle` 是推荐路径，也是 Flutter 插件和原生 demo 所用的。它在
+**macOS、iOS、tvOS、Windows、Android、HarmonyOS** 上编译。surface attach 按平台不同：
+Apple 使用 Metal，Windows 使用 HWND/D3D11，Android/HarmonyOS 使用 wgpu/Vulkan surface。
+HarmonyOS Flutter bridge 因 ArkTS 平台通道本身传递序列化结构化值，使用 presenter 的 JSON
+辅助入口。其它不支持的平台上 `erika_presenter_create` 可能仍导出但返回 `NULL`；请同时按平台
+守卫 presenter 用法，并检查 create 是否成功。
 
 两个族不共享状态；一个进程可同时使用两者，但单个媒体会话只活在一个 handle 里。
 
@@ -204,7 +207,7 @@ Android extended-linear 输出。
 ## `ErikaPresenterHandle` —— 推送模型
 
 Erika 拥有完整栈；宿主提供 surface 并调用 `render_tick`。
-**macOS / iOS / tvOS / Windows / Android。**
+**macOS / iOS / tvOS / Windows / Android / HarmonyOS。**
 
 ### 生命周期与配置
 

@@ -144,6 +144,11 @@ unsafe fn invoke(
             call_status(unsafe { erika_presenter_get_stats(handle, &mut stats) })?;
             Ok(stats_json(stats))
         }
+        "getResourceStatus" => {
+            let mut status = ErikaPresenterResourceStatus::default();
+            call_status(unsafe { erika_presenter_get_resource_status(handle, &mut status) })?;
+            Ok(resource_status_json(status))
+        }
         "addExternalSubtitle" => {
             let uri = required_c_string(required_string(args, "uri")?, "uri")?;
             let mut track_id = -1;
@@ -485,6 +490,23 @@ fn output_status_json(status: ErikaOutputStatus) -> Value {
     })
 }
 
+fn resource_status_json(status: ErikaPresenterResourceStatus) -> Value {
+    json!({
+        "deviceCurrentAllocatedBytes": status.device_current_allocated_bytes,
+        "deviceRecommendedWorkingSetBytes": status.device_recommended_working_set_bytes,
+        "drawableEstimatedBytes": status.drawable_estimated_bytes,
+        "videoFrameBytes": status.video_frame_bytes,
+        "overlayAtlasBytes": status.overlay_atlas_bytes,
+        "danmakuAtlasBytes": status.danmaku_atlas_bytes,
+        "danmakuVertexBufferBytes": status.danmaku_vertex_buffer_bytes,
+        "upscalerBytes": status.upscaler_bytes,
+        "rendererTrackedBytes": status.renderer_tracked_bytes,
+        "presenterCpuDanmakuAtlasBytes": status.presenter_cpu_danmaku_atlas_bytes,
+        "drawableCount": status.drawable_count,
+        "outputModeSwitches": status.output_mode_switches,
+    })
+}
+
 fn response_string(result: std::thread::Result<Result<Value, String>>) -> *mut c_char {
     match result {
         Ok(Ok(value)) => owned_json(success_response(value)),
@@ -654,6 +676,46 @@ mod tests {
         unsafe { erika_string_free(response) };
         assert_eq!(value.get("ok"), Some(&Value::Bool(true)));
         assert!(value.get("value").is_some_and(Value::is_object));
+
+        unsafe { erika_presenter_destroy(handle) };
+    }
+
+    #[test]
+    fn json_bridge_exposes_resource_status() {
+        let handle = erika_presenter_create();
+        assert!(!handle.is_null());
+
+        let response = unsafe {
+            erika_presenter_invoke_json(handle, c"getResourceStatus".as_ptr(), c"{}".as_ptr())
+        };
+        assert!(!response.is_null());
+        let value: Value = unsafe { CStr::from_ptr(response) }
+            .to_str()
+            .ok()
+            .and_then(|response| serde_json::from_str(response).ok())
+            .expect("JSON bridge returns valid UTF-8 JSON");
+        unsafe { erika_string_free(response) };
+        assert_eq!(value.get("ok"), Some(&Value::Bool(true)));
+        let status = value
+            .get("value")
+            .and_then(Value::as_object)
+            .expect("getResourceStatus returns an object");
+        for field in [
+            "deviceCurrentAllocatedBytes",
+            "deviceRecommendedWorkingSetBytes",
+            "drawableEstimatedBytes",
+            "videoFrameBytes",
+            "overlayAtlasBytes",
+            "danmakuAtlasBytes",
+            "danmakuVertexBufferBytes",
+            "upscalerBytes",
+            "rendererTrackedBytes",
+            "presenterCpuDanmakuAtlasBytes",
+            "drawableCount",
+            "outputModeSwitches",
+        ] {
+            assert!(status.contains_key(field), "missing field: {field}");
+        }
 
         unsafe { erika_presenter_destroy(handle) };
     }

@@ -71,21 +71,37 @@ internal fun updatedAndroidMediaState(
     event: Map<*, *>,
 ): AndroidMediaState {
     val kind = (event["kind"] as? Number)?.toInt()
+    val playbackState = if (kind == STATE_CHANGED_EVENT_KIND) {
+        (event["state"] as? Number)?.toInt() ?: state.playbackState
+    } else {
+        state.playbackState
+    }
+    if (kind == STATE_CHANGED_EVENT_KIND && playbackState == ANDROID_CLOSED_PLAYBACK_STATE) {
+        return closedAndroidMediaState(state, playbackState)
+    }
     return state.copy(
-        playbackState = if (kind == STATE_CHANGED_EVENT_KIND) {
-            (event["state"] as? Number)?.toInt() ?: state.playbackState
-        } else {
-            state.playbackState
-        },
+        playbackState = playbackState,
         positionMicros = if (kind == 3) {
             ((event["positionMicros"] as? Number)?.toLong() ?: state.positionMicros).coerceAtLeast(0L)
         } else {
             state.positionMicros
         },
-        durationMicros = if (kind == 2 || kind == STATE_CHANGED_EVENT_KIND) {
+        durationMicros = if (kind == ANDROID_DURATION_CHANGED_EVENT_KIND) {
             ((event["durationMicros"] as? Number)?.toLong() ?: state.durationMicros).coerceAtLeast(0L)
         } else {
             state.durationMicros
         },
     )
 }
+
+internal fun closedAndroidMediaState(
+    state: AndroidMediaState,
+    playbackState: Int = ANDROID_CLOSED_PLAYBACK_STATE,
+): AndroidMediaState = state.copy(
+    metadata = null,
+    playbackState = playbackState,
+    positionMicros = 0L,
+    durationMicros = 0L,
+)
+
+internal const val ANDROID_CLOSED_PLAYBACK_STATE = 6

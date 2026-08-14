@@ -60,6 +60,11 @@ void main() {
     await player.dispose();
   });
 
+  test('automatic output mode keeps the C ABI value 3', () {
+    expect(ErikaOutputMode.auto.nativeValue, 3);
+    expect(ErikaOutputMode.fromNativeValue(3), ErikaOutputMode.auto);
+  });
+
   test('background playback is opt-in at player creation', () async {
     final player = ErikaPlayer(allowBackgroundPlayback: true);
 
@@ -1128,6 +1133,49 @@ void main() {
       await player.dispose();
     },
   );
+
+  test('renderer resource status is decoded from native presenter', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(playerChannel, (MethodCall call) async {
+      playerCalls.add(call);
+      return switch (call.method) {
+        'create' => 7,
+        'getResourceStatus' => <String, Object?>{
+            'deviceCurrentAllocatedBytes': 1000000000,
+            'deviceRecommendedWorkingSetBytes': 8000000000,
+            'drawableEstimatedBytes': 99532800,
+            'videoFrameBytes': 24883200,
+            'overlayAtlasBytes': 2097152,
+            'danmakuAtlasBytes': 4194304,
+            'danmakuVertexBufferBytes': 65536,
+            'upscalerBytes': 0,
+            'rendererTrackedBytes': 130772992,
+            'presenterCpuDanmakuAtlasBytes': 4194304,
+            'drawableCount': 3,
+            'outputModeSwitches': 1,
+          },
+        'dispose' => null,
+        _ => null,
+      };
+    });
+
+    final player = ErikaPlayer();
+    final status = await player.getResourceStatus();
+
+    expect(status.deviceCurrentAllocatedBytes, 1000000000);
+    expect(status.drawableEstimatedBytes, 99532800);
+    expect(status.videoFrameBytes, 24883200);
+    expect(status.rendererTrackedBytes, 130772992);
+    expect(status.drawableCount, 3);
+    expect(status.outputModeSwitches, 1);
+
+    final call = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'getResourceStatus',
+    );
+    expect(call.arguments, <String, Object?>{'playerId': 7});
+
+    await player.dispose();
+  });
 
   test('subtitle style forwards font and colors with defaults', () async {
     final player = ErikaPlayer();

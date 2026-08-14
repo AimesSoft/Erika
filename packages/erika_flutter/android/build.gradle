@@ -47,6 +47,9 @@ repositories {
 dependencies {
     implementation "androidx.lifecycle:lifecycle-common:2.8.7"
     testImplementation "junit:junit:4.13.2"
+    // android.jar ships throwing org.json stubs for local JVM tests. Use the
+    // real implementation so NativeJson tests exercise the production decoder.
+    testImplementation "org.json:json:20180813"
 }
 
 apply from: "erika-native.gradle"

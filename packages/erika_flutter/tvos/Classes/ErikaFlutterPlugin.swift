@@ -35,9 +35,16 @@ private func erikaHdrEnvironmentEnabled() -> Bool {
 }
 
 private func erikaOutputModeLabel(_ config: ErikaPresenterConfigC) -> String {
-  config.outputMode == 1
-    ? String(format: "AppleEdr(headroom=%.2f)", config.edrHeadroom)
-    : "Sdr"
+  switch config.outputMode {
+  case 1:
+    return String(format: "AppleEdr(headroom=%.2f)", config.edrHeadroom)
+  case 2:
+    return String(format: "ExtendedLinear(headroom=%.2f)", config.edrHeadroom)
+  case 3:
+    return String(format: "Auto(headroom=%.2f)", config.edrHeadroom)
+  default:
+    return "Sdr"
+  }
 }
 
 private func erikaScreenSummary(_ screen: UIScreen?) -> String {
@@ -65,7 +72,7 @@ private func erikaLayerValue(_ layer: CAMetalLayer, selector name: String) -> St
 }
 
 private func erikaConfigureLayerDynamicRange(_ layer: CAMetalLayer, config: ErikaPresenterConfigC) {
-  if config.outputMode == 1 {
+  if config.outputMode == 1 || config.outputMode == 2 {
     layer.contentsFormat = .RGBA16Float
     if #available(tvOS 18.0, *) {
       layer.toneMapMode = .ifSupported
@@ -74,11 +81,16 @@ private func erikaConfigureLayerDynamicRange(_ layer: CAMetalLayer, config: Erik
       layer.preferredDynamicRange = .high
       layer.contentsHeadroom = CGFloat(max(config.edrHeadroom, 1.0))
     }
-  } else {
-    layer.contentsFormat = .RGBA8Uint
-    if #available(tvOS 18.0, *) {
-      layer.toneMapMode = .automatic
-    }
+    return
+  }
+
+  layer.contentsFormat = .RGBA8Uint
+  if #available(tvOS 18.0, *) {
+    layer.toneMapMode = .automatic
+  }
+  // Auto is initialized in SDR, but the native renderer owns later changes.
+  // Do not pin preferredDynamicRange/contentsHeadroom to SDR here.
+  if config.outputMode != 3 {
     if #available(tvOS 26.0, *) {
       layer.preferredDynamicRange = .standard
       layer.contentsHeadroom = 0.0
@@ -171,6 +183,10 @@ private struct ErikaPresenterConfigC {
 
   static func appleEdr(headroom: Float) -> ErikaPresenterConfigC {
     ErikaPresenterConfigC(outputMode: 1, edrHeadroom: max(1.0, headroom))
+  }
+
+  static func auto(headroom: Float) -> ErikaPresenterConfigC {
+    ErikaPresenterConfigC(outputMode: 3, edrHeadroom: max(1.0, headroom))
   }
 }
 
@@ -288,6 +304,22 @@ private struct ErikaOutputStatusC {
   var extendedLinearFrames: UInt64 = 0
 }
 
+// Keep field order and types aligned with `ErikaPresenterResourceStatus` in erika.h.
+private struct ErikaPresenterResourceStatusC {
+  var deviceCurrentAllocatedBytes: UInt64 = 0
+  var deviceRecommendedWorkingSetBytes: UInt64 = 0
+  var drawableEstimatedBytes: UInt64 = 0
+  var videoFrameBytes: UInt64 = 0
+  var overlayAtlasBytes: UInt64 = 0
+  var danmakuAtlasBytes: UInt64 = 0
+  var danmakuVertexBufferBytes: UInt64 = 0
+  var upscalerBytes: UInt64 = 0
+  var rendererTrackedBytes: UInt64 = 0
+  var presenterCpuDanmakuAtlasBytes: UInt64 = 0
+  var drawableCount: UInt32 = 0
+  var outputModeSwitches: UInt64 = 0
+}
+
 private let erikaDefaultDisplayFps = 60
 
 private struct ErikaDanmakuConfigC {
@@ -392,6 +424,7 @@ private final class ErikaNativeLibrary {
   typealias FreeSubtitleMemoryFontStatusFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
   typealias GetUpscalerStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias GetOutputStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
+  typealias GetResourceStatusFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias SelectTrackFn = @convention(c) (UnsafeMutableRawPointer?, Int64) -> Int32
   typealias AddExternalSubtitleFn = @convention(c) (
     UnsafeMutableRawPointer?,
@@ -464,6 +497,7 @@ private final class ErikaNativeLibrary {
   let freeSubtitleMemoryFontStatus: FreeSubtitleMemoryFontStatusFn?
   let getUpscalerStatus: GetUpscalerStatusFn?
   let getOutputStatus: GetOutputStatusFn?
+  let getResourceStatus: GetResourceStatusFn?
   let selectAudioTrack: SelectTrackFn
   let selectSubtitleTrack: SelectTrackFn
   let addExternalSubtitle: AddExternalSubtitleFn
@@ -532,6 +566,7 @@ private final class ErikaNativeLibrary {
     freeSubtitleMemoryFontStatus = Self.loadOptional("erika_subtitle_memory_font_status_free", from: libraryHandle, as: FreeSubtitleMemoryFontStatusFn.self)
     getUpscalerStatus = Self.loadOptional("erika_presenter_get_upscaler_status", from: libraryHandle, as: GetUpscalerStatusFn.self)
     getOutputStatus = Self.loadOptional("erika_presenter_get_output_status", from: libraryHandle, as: GetOutputStatusFn.self)
+    getResourceStatus = Self.loadOptional("erika_presenter_get_resource_status", from: libraryHandle, as: GetResourceStatusFn.self)
     selectAudioTrack = try Self.load("erika_presenter_select_audio_track", from: libraryHandle, as: SelectTrackFn.self)
     selectSubtitleTrack = try Self.load("erika_presenter_select_subtitle_track", from: libraryHandle, as: SelectTrackFn.self)
     addExternalSubtitle = try Self.load("erika_presenter_add_external_subtitle", from: libraryHandle, as: AddExternalSubtitleFn.self)
@@ -642,6 +677,9 @@ private final class ErikaPlayerHost {
 
   private let library: ErikaNativeLibrary
   private let handle: UnsafeMutableRawPointer
+  private let renderQueue: DispatchQueue
+  private let nativeCallLock = NSRecursiveLock()
+  private let renderSubmissionLock = NSLock()
   private weak var attachedView: ErikaMetalSurfaceView?
   private var displayLink: CADisplayLink?
   private var displayLinkProxy: DisplayLinkProxy?
@@ -649,8 +687,10 @@ private final class ErikaPlayerHost {
   private var currentDanmakuConfig = ErikaDanmakuConfigC()
   private let hdrDebug: Bool
   private let presenterConfig: ErikaPresenterConfigC
+  private var loggedRenderThread = false
   private var loggedFirstRenderedVideoFrame = false
   private var latestPresenterStats = ErikaPresenterStatsC()
+  private var renderTickQueued = false
   private(set) var nowPlayingTitle = ""
   private(set) var nowPlayingArtist: String?
   private(set) var nowPlayingAlbum: String?
@@ -665,6 +705,10 @@ private final class ErikaPlayerHost {
     self.id = id
     self.library = library
     self.hdrDebug = hdrDebug
+    renderQueue = DispatchQueue(
+      label: "dev.aimesoft.erika.render.tvos.\(id)",
+      qos: .userInteractive
+    )
     presenterConfig = config
     guard let handle = library.createPresenter(config: config) else {
       throw ErikaPluginError.presenterCreateFailed
@@ -678,11 +722,21 @@ private final class ErikaPlayerHost {
 
   deinit {
     displayLink?.invalidate()
-    _ = library.detachSurface(handle)
-    library.destroy(handle)
+    withNativeCall {
+      _ = library.detachSurface(handle)
+      library.destroy(handle)
+    }
+  }
+
+  private func withNativeCall<T>(_ operation: () throws -> T) rethrows -> T {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
+    return try operation()
   }
 
   func open(uri: String, httpHeaders: [String: String]) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     isPlaying = false
     positionSeconds = 0
     durationSeconds = nil
@@ -716,23 +770,31 @@ private final class ErikaPlayerHost {
   }
 
   func play() throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     try configureAudioSessionForPlayback()
     try check(library.play(handle), operation: "play")
     isPlaying = true
     notifyNowPlayingChanged()
   }
   func pause() throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     try check(library.pause(handle), operation: "pause")
     isPlaying = false
     notifyNowPlayingChanged()
   }
   func stop() throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     try check(library.stop(handle), operation: "stop")
     isPlaying = false
     positionSeconds = 0
     notifyNowPlayingChanged()
   }
   func close() throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     try check(library.close(handle), operation: "close")
     isPlaying = false
     positionSeconds = 0
@@ -741,12 +803,16 @@ private final class ErikaPlayerHost {
   }
 
   func seek(positionMicros: UInt64) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     try check(library.seek(handle, positionMicros), operation: "seek")
     positionSeconds = Double(positionMicros) / 1_000_000
     notifyNowPlayingChanged()
   }
 
   func setPlaybackRate(_ rate: Double) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let setRate = library.setPlaybackRate else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_playback_rate")
     }
@@ -781,6 +847,8 @@ private final class ErikaPlayerHost {
   }
 
   func setVolume(_ volume: Double) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let setVolume = library.setVolume else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_volume")
     }
@@ -789,6 +857,8 @@ private final class ErikaPlayerHost {
   }
 
   func setUpscaler(mode: Int32) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let setUpscaler = library.setUpscaler else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_upscaler")
     }
@@ -796,6 +866,8 @@ private final class ErikaPlayerHost {
   }
 
   func setSubtitleScale(_ scale: Double) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let setSubtitleScale = library.setSubtitleScale else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_subtitle_scale")
     }
@@ -804,6 +876,8 @@ private final class ErikaPlayerHost {
   }
 
   func setSubtitleFont(family: String?, filePath: String?) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let setSubtitleFont = library.setSubtitleFont else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_subtitle_font")
     }
@@ -838,6 +912,8 @@ private final class ErikaPlayerHost {
     marginVertical: Int32,
     overrideMask: UInt32
   ) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let setSubtitleStyle = library.setSubtitleStyle else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_subtitle_style")
     }
@@ -875,6 +951,8 @@ private final class ErikaPlayerHost {
   }
 
   func upscalerStatus() throws -> [String: Any] {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let getStatus = library.getUpscalerStatus else {
       throw ErikaPluginError.symbolMissing("erika_presenter_get_upscaler_status")
     }
@@ -887,6 +965,8 @@ private final class ErikaPlayerHost {
   }
 
   func registerSubtitleMemoryFont(_ data: Data) throws -> UInt64 {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let register = library.registerSubtitleMemoryFont else {
       throw ErikaPluginError.symbolMissing("erika_presenter_register_subtitle_memory_font")
     }
@@ -899,6 +979,8 @@ private final class ErikaPlayerHost {
   }
 
   func selectSubtitleMemoryFonts(_ fontIds: [UInt64]) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let select = library.selectSubtitleMemoryFonts else {
       throw ErikaPluginError.symbolMissing("erika_presenter_select_subtitle_memory_fonts")
     }
@@ -908,6 +990,8 @@ private final class ErikaPlayerHost {
   }
 
   func clearSubtitleMemoryFonts() throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let clear = library.clearSubtitleMemoryFonts else {
       throw ErikaPluginError.symbolMissing("erika_presenter_clear_subtitle_memory_fonts")
     }
@@ -915,6 +999,8 @@ private final class ErikaPlayerHost {
   }
 
   func subtitleMemoryFontStatus() throws -> [String: Any] {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let getStatus = library.getSubtitleMemoryFontStatus else {
       throw ErikaPluginError.symbolMissing("erika_presenter_get_subtitle_memory_font_status")
     }
@@ -939,6 +1025,8 @@ private final class ErikaPlayerHost {
   }
 
   func outputStatus() throws -> [String: Any] {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let getStatus = library.getOutputStatus else {
       throw ErikaPluginError.symbolMissing("erika_presenter_get_output_status")
     }
@@ -950,11 +1038,29 @@ private final class ErikaPlayerHost {
     return status.toFlutterMap()
   }
 
+  func resourceStatus() throws -> [String: Any] {
+    guard let getStatus = library.getResourceStatus else {
+      throw ErikaPluginError.symbolMissing("erika_presenter_get_resource_status")
+    }
+    var status = ErikaPresenterResourceStatusC()
+    let result = withNativeCall {
+      withUnsafeMutablePointer(to: &status) { pointer in
+        getStatus(handle, UnsafeMutableRawPointer(pointer))
+      }
+    }
+    try check(result, operation: "get_resource_status")
+    return status.toFlutterMap()
+  }
+
   func presenterStats() -> [String: Any] {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     latestPresenterStats.toFlutterMap()
   }
 
   func addExternalSubtitle(uri: String) throws -> Int64 {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     var trackId: Int64 = 0
     try uri.withCString { cString in
       try check(library.addExternalSubtitle(handle, cString, &trackId), operation: "add_external_subtitle")
@@ -963,10 +1069,14 @@ private final class ErikaPlayerHost {
   }
 
   func removeSubtitleTrack(trackId: Int64) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     try check(library.removeSubtitleTrack(handle, trackId), operation: "remove_subtitle_track")
   }
 
   func loadDanmakuFile(uri: String) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let load = library.loadDanmakuFile else {
       throw ErikaPluginError.symbolMissing("erika_presenter_load_danmaku_file")
     }
@@ -976,6 +1086,8 @@ private final class ErikaPlayerHost {
   }
 
   func loadDanmakuJson(_ json: String) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let load = library.loadDanmakuJson else {
       throw ErikaPluginError.symbolMissing("erika_presenter_load_danmaku_json")
     }
@@ -985,6 +1097,8 @@ private final class ErikaPlayerHost {
   }
 
   func addDanmakuTrackFile(uri: String, name: String?, offsetMicros: Int64) throws -> UInt64 {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let add = library.addDanmakuTrackFile else {
       throw ErikaPluginError.symbolMissing("erika_presenter_add_danmaku_track_file")
     }
@@ -999,6 +1113,8 @@ private final class ErikaPlayerHost {
   }
 
   func addDanmakuTrackJson(_ json: String, name: String?, offsetMicros: Int64) throws -> UInt64 {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let add = library.addDanmakuTrackJson else {
       throw ErikaPluginError.symbolMissing("erika_presenter_add_danmaku_track_json")
     }
@@ -1013,6 +1129,8 @@ private final class ErikaPlayerHost {
   }
 
   func removeDanmakuTrack(trackId: UInt64) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let remove = library.removeDanmakuTrack else {
       throw ErikaPluginError.symbolMissing("erika_presenter_remove_danmaku_track")
     }
@@ -1020,6 +1138,8 @@ private final class ErikaPlayerHost {
   }
 
   func setDanmakuTrackEnabled(trackId: UInt64, enabled: Bool) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let setEnabled = library.setDanmakuTrackEnabled else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_danmaku_track_enabled")
     }
@@ -1027,6 +1147,8 @@ private final class ErikaPlayerHost {
   }
 
   func setDanmakuTrackOffset(trackId: UInt64, offsetMicros: Int64) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let setOffset = library.setDanmakuTrackOffset else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_danmaku_track_offset")
     }
@@ -1034,6 +1156,8 @@ private final class ErikaPlayerHost {
   }
 
   func setDanmakuGlobalOffset(offsetMicros: Int64) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let setOffset = library.setDanmakuGlobalOffset else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_danmaku_global_offset")
     }
@@ -1041,6 +1165,8 @@ private final class ErikaPlayerHost {
   }
 
   func danmakuTracks() throws -> [[String: Any]] {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let danmakuTracks = library.danmakuTracks else {
       throw ErikaPluginError.symbolMissing("erika_presenter_danmaku_tracks")
     }
@@ -1065,6 +1191,8 @@ private final class ErikaPlayerHost {
   }
 
   func clearDanmaku() throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let clear = library.clearDanmaku else {
       throw ErikaPluginError.symbolMissing("erika_presenter_clear_danmaku")
     }
@@ -1072,6 +1200,8 @@ private final class ErikaPlayerHost {
   }
 
   func setDanmakuEnabled(_ enabled: Bool) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let setEnabled = library.setDanmakuEnabled else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_danmaku_enabled")
     }
@@ -1080,6 +1210,8 @@ private final class ErikaPlayerHost {
   }
 
   func setDebugHudEnabled(_ enabled: Bool) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let setEnabled = library.setDebugHudEnabled else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_debug_hud_enabled")
     }
@@ -1091,6 +1223,8 @@ private final class ErikaPlayerHost {
   }
 
   private func refreshDanmakuConfigSnapshot() {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let getConfig = library.getDanmakuConfig else {
       return
     }
@@ -1104,6 +1238,8 @@ private final class ErikaPlayerHost {
   }
 
   func setDanmakuConfig(_ config: ErikaDanmakuConfigC) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let setConfig = library.setDanmakuConfig else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_danmaku_config_ptr")
     }
@@ -1116,6 +1252,8 @@ private final class ErikaPlayerHost {
   }
 
   func setDanmakuFont(family: String?, filePath: String?) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let setFont = library.setDanmakuFont else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_danmaku_font")
     }
@@ -1129,6 +1267,8 @@ private final class ErikaPlayerHost {
   }
 
   func setDanmakuBlockWordsJson(_ json: String) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard let setBlockWords = library.setDanmakuBlockWords else {
       throw ErikaPluginError.symbolMissing("erika_presenter_set_danmaku_block_words_json")
     }
@@ -1139,14 +1279,20 @@ private final class ErikaPlayerHost {
   }
 
   func selectAudioTrack(trackId: Int64?) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     try check(library.selectAudioTrack(handle, trackId ?? -1), operation: "select_audio_track")
   }
 
   func selectSubtitleTrack(trackId: Int64?) throws {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     try check(library.selectSubtitleTrack(handle, trackId ?? -1), operation: "select_subtitle_track")
   }
 
   func tracks() throws -> [[String: Any]] {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     var count: Int = 0
     try check(library.tracks(handle, nil, 0, &count), operation: "tracks_len")
     if count <= 0 { return [] }
@@ -1166,6 +1312,8 @@ private final class ErikaPlayerHost {
   }
 
   func trackSelection() throws -> [String: Any] {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     var selection = ErikaTrackSelectionC()
     let status = withUnsafeMutablePointer(to: &selection) { pointer in
       library.trackSelection(handle, UnsafeMutableRawPointer(pointer))
@@ -1175,6 +1323,8 @@ private final class ErikaPlayerHost {
   }
 
   func captureFrameRgba(width: Int, height: Int) -> Data? {
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
     guard width > 0, height > 0, let captureFrameRgba = library.captureFrameRgba else {
       return nil
     }
@@ -1217,7 +1367,9 @@ private final class ErikaPlayerHost {
     displayLink?.invalidate()
     displayLink = nil
     displayLinkProxy = nil
-    _ = library.detachSurface(handle)
+    withNativeCall {
+      _ = library.detachSurface(handle)
+    }
   }
 
   func resizeFromAttachedView() {
@@ -1229,69 +1381,111 @@ private final class ErikaPlayerHost {
     }
   }
 
-  func renderTick(sendEvent: (([String: Any]) -> Void)?) {
-    let timeSeconds = CACurrentMediaTime() - startTimeSeconds
+  func renderTick() {
+    if !loggedRenderThread {
+      loggedRenderThread = true
+      erikaHdrLog(
+        hdrDebug,
+        "render driver player=\(id) mainThread=\(Thread.isMainThread)"
+      )
+    }
     var stats = ErikaPresenterStatsC()
-    let status = withUnsafeMutablePointer(to: &stats) { pointer in
-      library.renderTick(handle, timeSeconds, UnsafeMutableRawPointer(pointer))
+    let status = withNativeCall {
+      let timeSeconds = CACurrentMediaTime() - startTimeSeconds
+      let status = withUnsafeMutablePointer(to: &stats) { pointer in
+        library.renderTick(handle, timeSeconds, UnsafeMutableRawPointer(pointer))
+      }
+      if status == 0 {
+        latestPresenterStats = stats
+      }
+      return status
     }
     if status != 0 {
       NSLog("ErikaFlutterPlugin: render_tick failed with status \(status)")
-    } else {
-      latestPresenterStats = stats
     }
-    if hdrDebug && !loggedFirstRenderedVideoFrame && stats.renderedVideoFrames > 0 {
-      loggedFirstRenderedVideoFrame = true
-      let layer = attachedView.map { erikaLayerSummary($0.metalLayer) } ?? "layer=nil"
-      let screen = erikaScreenSummary(attachedView?.window?.screen ?? UIScreen.main)
-      erikaHdrLog(
-        true,
-        "first rendered frame player=\(id) mode=\(erikaOutputModeLabel(presenterConfig)) decoded=\(stats.decodedVideoFrames) rendered=\(stats.renderedVideoFrames) test=\(stats.renderedTestFrames) \(screen) \(layer)"
-      )
+    if hdrDebug && stats.renderedVideoFrames > 0 {
+      let statsSnapshot = stats
+      DispatchQueue.main.async { [weak self] in
+        self?.logFirstRenderedVideoFrameIfNeeded(statsSnapshot)
+      }
     }
-    pollEvents(sendEvent: sendEvent)
   }
 
   func pollEvents(sendEvent: (([String: Any]) -> Void)?) {
-    while true {
-      var event = ErikaEventC()
-      let status = withUnsafeMutablePointer(to: &event) { pointer in
-        library.pollEvent(handle, UnsafeMutableRawPointer(pointer))
+    withNativeCall {
+      while true {
+        var event = ErikaEventC()
+        let status = withUnsafeMutablePointer(to: &event) { pointer in
+          library.pollEvent(handle, UnsafeMutableRawPointer(pointer))
+        }
+        if status == 0 {
+          if event.durationMicros >= 0 {
+            durationSeconds = Double(event.durationMicros) / 1_000_000
+          }
+          if event.kind == 3 {
+            positionSeconds = Double(event.positionMicros) / 1_000_000
+          }
+          if event.kind == 1 {
+            isPlaying = event.state == 3
+          }
+          if event.kind == 1 || event.kind == 2 || event.kind == 3 {
+            notifyNowPlayingChanged()
+          }
+          if event.kind == 6 {
+            erikaHdrLog(
+              hdrDebug,
+              "video params player=\(id) width=\(event.video.width) height=\(event.video.height) primaries=\(event.video.primaries) transfer=\(event.video.transfer)"
+            )
+          }
+          let message = event.kind == 9 || event.kind == 11 || event.kind == 12
+            ? library.currentEventMessage()
+            : nil
+          sendEvent?(event.toFlutterMap(playerId: id, host: self, structuredMessage: message))
+          continue
+        }
+        if status != 5 {
+          NSLog("ErikaFlutterPlugin: poll_event failed with status \(status)")
+        }
+        break
       }
-      if status == 0 {
-        if event.durationMicros >= 0 {
-          durationSeconds = Double(event.durationMicros) / 1_000_000
-        }
-        if event.kind == 3 {
-          positionSeconds = Double(event.positionMicros) / 1_000_000
-        }
-        if event.kind == 1 {
-          isPlaying = event.state == 3
-        }
-        if event.kind == 1 || event.kind == 2 || event.kind == 3 {
-          notifyNowPlayingChanged()
-        }
-        if event.kind == 6 {
-          erikaHdrLog(
-            hdrDebug,
-            "video params player=\(id) width=\(event.video.width) height=\(event.video.height) primaries=\(event.video.primaries) transfer=\(event.video.transfer)"
-          )
-        }
-        let message = event.kind == 9 || event.kind == 11 || event.kind == 12
-          ? library.currentEventMessage()
-          : nil
-        sendEvent?(event.toFlutterMap(playerId: id, host: self, structuredMessage: message))
-        continue
-      }
-      if status != 5 {
-        NSLog("ErikaFlutterPlugin: poll_event failed with status \(status)")
-      }
-      break
     }
   }
 
+  private func scheduleRenderTick() {
+    renderSubmissionLock.lock()
+    guard !renderTickQueued else {
+      renderSubmissionLock.unlock()
+      return
+    }
+    renderTickQueued = true
+    renderSubmissionLock.unlock()
+
+    renderQueue.async { [weak self] in
+      guard let self else { return }
+      self.renderTick()
+      self.renderSubmissionLock.lock()
+      self.renderTickQueued = false
+      self.renderSubmissionLock.unlock()
+    }
+  }
+
+  private func logFirstRenderedVideoFrameIfNeeded(_ stats: ErikaPresenterStatsC) {
+    guard hdrDebug, !loggedFirstRenderedVideoFrame else { return }
+    loggedFirstRenderedVideoFrame = true
+    let layer = attachedView.map { erikaLayerSummary($0.metalLayer) } ?? "layer=nil"
+    let screen = erikaScreenSummary(attachedView?.window?.screen ?? UIScreen.main)
+    erikaHdrLog(
+      true,
+      "first rendered frame player=\(id) mode=\(erikaOutputModeLabel(presenterConfig)) decoded=\(stats.decodedVideoFrames) rendered=\(stats.renderedVideoFrames) test=\(stats.renderedTestFrames) \(screen) \(layer)"
+    )
+  }
+
   private func attachOrResize(view: ErikaMetalSurfaceView, attach: Bool) throws {
-    erikaConfigureLayerDynamicRange(view.metalLayer, config: presenterConfig)
+    nativeCallLock.lock()
+    defer { nativeCallLock.unlock() }
+    if attach || presenterConfig.outputMode != 3 {
+      erikaConfigureLayerDynamicRange(view.metalLayer, config: presenterConfig)
+    }
     view.updateDrawableSize()
     let width = UInt32(max(1.0, view.metalLayer.drawableSize.width).rounded())
     let height = UInt32(max(1.0, view.metalLayer.drawableSize.height).rounded())
@@ -1314,9 +1508,11 @@ private final class ErikaPlayerHost {
 
   private func startDisplayLinkIfNeeded() {
     guard displayLink == nil else { return }
-    startTimeSeconds = CACurrentMediaTime()
+    withNativeCall {
+      startTimeSeconds = CACurrentMediaTime()
+    }
     let proxy = DisplayLinkProxy { [weak self] in
-      self?.renderTick(sendEvent: ErikaFlutterPlugin.sharedEventSink)
+      self?.scheduleRenderTick()
     }
     let link = CADisplayLink(target: proxy, selector: #selector(DisplayLinkProxy.tick))
     link.preferredFramesPerSecond = resolvedDisplayLinkFps()
@@ -1878,6 +2074,9 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       case "getOutputStatus":
         let args = try dictionaryArgs(call.arguments)
         result(try playerHost(from: args).outputStatus())
+      case "getResourceStatus":
+        let args = try dictionaryArgs(call.arguments)
+        result(try playerHost(from: args).resourceStatus())
       case "getPresenterStats":
         let args = try dictionaryArgs(call.arguments)
         result(try playerHost(from: args).presenterStats())
@@ -2414,7 +2613,17 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
   private func presenterConfigForNewPlayer(arguments: Any?, hdrDebug: Bool) -> ErikaPresenterConfigC {
     if let args = arguments as? [String: Any], let explicitMode = int32Value(args["outputMode"]) {
       let headroom = floatValue(args["edrHeadroom"]) ?? 4.0
-      let config = explicitMode == 1 ? ErikaPresenterConfigC.appleEdr(headroom: headroom) : .sdr
+      let config: ErikaPresenterConfigC
+      switch explicitMode {
+      case 1:
+        config = .appleEdr(headroom: headroom)
+      case 2:
+        config = ErikaPresenterConfigC(outputMode: 2, edrHeadroom: max(1.0, headroom))
+      case 3:
+        config = .auto(headroom: headroom)
+      default:
+        config = .sdr
+      }
       erikaHdrLog(
         hdrDebug,
         "create explicit outputMode=\(explicitMode) requestedHeadroom=\(String(format: "%.3f", headroom)) selected=\(erikaOutputModeLabel(config))"
@@ -2422,7 +2631,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       return config
     }
     let headroom = resolvedEdrHeadroom(hdrDebug: hdrDebug)
-    let config = headroom > 1.0 ? ErikaPresenterConfigC.appleEdr(headroom: headroom) : .sdr
+    let config = ErikaPresenterConfigC.auto(headroom: headroom)
     erikaHdrLog(
       hdrDebug,
       "create auto selected=\(erikaOutputModeLabel(config)) resolvedHeadroom=\(String(format: "%.3f", headroom))"
@@ -2477,7 +2686,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
 
   private func startPollTimerIfNeeded() {
     guard pollTimer == nil else { return }
-    let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+    let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
       guard let self else { return }
       let sink = Self.sharedEventSink
       for host in self.players.values {
@@ -2716,6 +2925,25 @@ private extension ErikaOutputStatusC {
       "dataSpaceFailures": Int64(clamping: dataSpaceFailures),
       "headroomUpdates": Int64(clamping: headroomUpdates),
       "extendedLinearFrames": Int64(clamping: extendedLinearFrames),
+    ]
+  }
+}
+
+private extension ErikaPresenterResourceStatusC {
+  func toFlutterMap() -> [String: Any] {
+    [
+      "deviceCurrentAllocatedBytes": Int64(clamping: deviceCurrentAllocatedBytes),
+      "deviceRecommendedWorkingSetBytes": Int64(clamping: deviceRecommendedWorkingSetBytes),
+      "drawableEstimatedBytes": Int64(clamping: drawableEstimatedBytes),
+      "videoFrameBytes": Int64(clamping: videoFrameBytes),
+      "overlayAtlasBytes": Int64(clamping: overlayAtlasBytes),
+      "danmakuAtlasBytes": Int64(clamping: danmakuAtlasBytes),
+      "danmakuVertexBufferBytes": Int64(clamping: danmakuVertexBufferBytes),
+      "upscalerBytes": Int64(clamping: upscalerBytes),
+      "rendererTrackedBytes": Int64(clamping: rendererTrackedBytes),
+      "presenterCpuDanmakuAtlasBytes": Int64(clamping: presenterCpuDanmakuAtlasBytes),
+      "drawableCount": Int(drawableCount),
+      "outputModeSwitches": Int64(clamping: outputModeSwitches),
     ]
   }
 }

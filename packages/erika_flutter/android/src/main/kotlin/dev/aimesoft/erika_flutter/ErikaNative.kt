@@ -61,5 +61,11 @@ internal object ErikaNative {
     external fun nativePollEvent(handle: Long): String?
 
     @JvmStatic
+    external fun nativePlaybackState(handle: Long): Int
+
+    @JvmStatic
+    external fun nativePlaybackIntentState(handle: Long): Int
+
+    @JvmStatic
     external fun nativeCaptureFrame(handle: Long, width: Int, height: Int): ByteArray?
 }

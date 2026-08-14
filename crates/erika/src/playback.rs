@@ -71,6 +71,29 @@ const SUBTITLE_FRAME_QUEUE_LIMIT: usize = 32;
 const EXTERNAL_SUBTITLE_LOOKAHEAD: Duration = Duration::from_secs(5);
 const DEFAULT_AUDIO_LEAD_TIME: Duration = Duration::from_millis(120);
 const STREAMING_AUDIO_LEAD_TIME: Duration = Duration::from_millis(1500);
+const DEFAULT_BUFFER_RECOVERY_AUDIO: Duration = Duration::from_millis(100);
+const STREAMING_BUFFER_RECOVERY_AUDIO: Duration = Duration::from_millis(250);
+// The worker polls Playing every 2 ms. Pace buffering drains so video cannot
+// race far ahead while the audio output reports its next recovery snapshot.
+const BUFFERING_VIDEO_DRAIN_INTERVAL: Duration = Duration::from_millis(8);
+const BUFFERING_VIDEO_MAX_ADVANCE: Duration = Duration::from_millis(500);
+const BUFFERING_VIDEO_MAX_DRAINED_FRAMES: usize = 64;
+// When a surface decoder temporarily rejects a packet, audio demand may scan
+// past a bounded run of interleaved video packets instead of letting that one
+// packet stall audio prefill and EOF discovery. The packets remain compressed
+// and ordered for later video decoding; the cap bounds memory and prevents an
+// ordinary audio-only consumer from reading arbitrarily far ahead. Buffering
+// recovery may advance beyond this queue cap by releasing decoded video frames
+// under the stricter scan watchdog below.
+const AUDIO_DEMAND_PENDING_VIDEO_PACKET_LIMIT: usize = 64;
+// Buffering recovery is allowed to discard queued decoded video frames so it
+// can scan past an unusually long run of interleaved video packets and reach
+// audio again. Keep that exceptional scan finite even for a sparse, finished,
+// or corrupt audio track; exhaustion falls back to video-clock playback rather
+// than turning valid video-only tails into fatal errors.
+const BUFFERING_AUDIO_VIDEO_SCAN_PACKET_LIMIT: usize = 4096;
+const BUFFERING_AUDIO_VIDEO_SCAN_BYTE_LIMIT: usize = 256 * 1024 * 1024;
+const BUFFERING_AUDIO_VIDEO_SCAN_TIMEOUT: Duration = Duration::from_secs(5);
 const OUTPUT_AUDIO_CLOCK_STALE_TOLERANCE: Duration = Duration::from_millis(250);
 const DEMUX_PACKET_QUEUE_LIMIT: usize = 512;
 const SEEK_PREROLL_DECODE_TIME_BUDGET: Duration = Duration::from_millis(5);
@@ -152,6 +175,13 @@ enum PumpInput {
 enum PlaybackPumpDemand {
     Video,
     Audio,
+    BufferingAudio,
+}
+
+impl PlaybackPumpDemand {
+    fn is_audio(self) -> bool {
+        matches!(self, Self::Audio | Self::BufferingAudio)
+    }
 }
 
 struct AsyncDemuxer {
@@ -702,6 +732,9 @@ pub struct PlaybackSession {
     video_decoder_fallbacks: u64,
     video_decoder_events: VecDeque<VideoDecoderEvent>,
     queue_limits: PlaybackQueueLimits,
+    buffer_recovery_audio: Duration,
+    buffering_audio_video_scan: BufferingAudioVideoScan,
+    buffering_audio_recovery_suspended: bool,
     demux_eof: bool,
     video_packet_stall_polls: u64,
     video_packet_stall_logged: bool,
@@ -710,6 +743,15 @@ pub struct PlaybackSession {
     eof_drain_pending_logged: bool,
     eof_drain_last_progress_at: Option<Instant>,
     eof: bool,
+}
+
+#[derive(Debug, Default)]
+struct BufferingAudioVideoScan {
+    active_time: Duration,
+    packets: usize,
+    bytes: usize,
+    discarded_frames: usize,
+    baseline_media_time: Option<Duration>,
 }
 
 fn open_video_decoder(
@@ -1140,6 +1182,9 @@ impl PlaybackSession {
             video_decoder_fallbacks,
             video_decoder_events,
             queue_limits,
+            buffer_recovery_audio: buffer_recovery_audio_for_request(request),
+            buffering_audio_video_scan: BufferingAudioVideoScan::default(),
+            buffering_audio_recovery_suspended: false,
             demux_eof: false,
             video_packet_stall_polls: 0,
             video_packet_stall_logged: false,
@@ -1196,6 +1241,7 @@ impl PlaybackSession {
         self.audio_frames.clear();
         self.subtitle_frames.clear();
         self.pending_video_packets.clear();
+        self.reset_buffering_audio_video_scan();
         discarded
     }
 
@@ -1207,6 +1253,7 @@ impl PlaybackSession {
         };
         self.video_frames.clear();
         self.pending_video_packets.clear();
+        self.reset_buffering_audio_video_scan();
         discarded
     }
 
@@ -1261,6 +1308,14 @@ impl PlaybackSession {
 
     pub fn is_eof(&self) -> bool {
         self.eof
+    }
+
+    fn audio_decoder_is_eof(&self) -> bool {
+        self.demux_eof
+            && self
+                .audio_decoder
+                .as_ref()
+                .is_none_or(Decoder::is_end_of_stream)
     }
 
     fn has_queued_video_frames(&self) -> bool {
@@ -1390,13 +1445,19 @@ impl PlaybackSession {
         max_packets: usize,
         max_duration: Duration,
     ) -> Result<Option<PcmAudioFrame>> {
-        self.next_audio_frame_bounded_where(max_packets, max_duration, |_| true)
+        self.next_audio_frame_bounded_where(
+            max_packets,
+            max_duration,
+            PlaybackPumpDemand::Audio,
+            |_| true,
+        )
     }
 
     fn next_audio_frame_bounded_where(
         &mut self,
         max_packets: usize,
         max_duration: Duration,
+        demand: PlaybackPumpDemand,
         mut keep_frame: impl FnMut(&mut PcmAudioFrame) -> bool,
     ) -> Result<Option<PcmAudioFrame>> {
         if self.audio_decoder.is_none() {
@@ -1415,11 +1476,16 @@ impl PlaybackSession {
             started,
             max_duration,
         );
-        while frame.is_none() && !self.eof && pumped_packets < max_packets {
+        while frame.is_none()
+            && !self.eof
+            && pumped_packets < max_packets
+            && !(demand == PlaybackPumpDemand::BufferingAudio
+                && self.buffering_audio_recovery_suspended)
+        {
             if started.elapsed() >= max_duration {
                 break;
             }
-            if self.pump_once(PlaybackPumpDemand::Audio)? {
+            if self.pump_once(demand)? {
                 pumped_packets = pumped_packets.saturating_add(1);
                 frame = pop_matching_audio_frame(
                     &mut self.audio_frames,
@@ -1451,6 +1517,15 @@ impl PlaybackSession {
                 self.pending_video_packets.len(),
                 started.elapsed().as_secs_f64() * 1000.0,
             ));
+        }
+        if frame.is_some() && demand == PlaybackPumpDemand::BufferingAudio {
+            // Packet/byte/time limits watch for progress since the last audio
+            // frame. Keep the video-advance budget cumulative for the entire
+            // buffering episode. Do not re-enable audio starvation yet: a
+            // sparse track may have produced a frame whose PTS is still far
+            // ahead of the paused clock. The engine clears suspension only
+            // once that frame enters the audio lead window.
+            self.reset_buffering_audio_video_scan_progress();
         }
         Ok(frame)
     }
@@ -2013,11 +2088,170 @@ impl PlaybackSession {
         );
     }
 
+    fn reset_buffering_audio_video_scan(&mut self) {
+        self.buffering_audio_video_scan = BufferingAudioVideoScan::default();
+        self.buffering_audio_recovery_suspended = false;
+    }
+
+    fn begin_buffering_audio_video_scan(&mut self, media_time: Duration) {
+        self.buffering_audio_video_scan = BufferingAudioVideoScan {
+            baseline_media_time: Some(media_time),
+            ..BufferingAudioVideoScan::default()
+        };
+    }
+
+    fn finish_buffering_audio_video_scan(&mut self) {
+        // Keep `buffering_audio_recovery_suspended` until a real audio frame,
+        // seek, or stream reset. This prevents a legitimate video-only tail
+        // from entering the same futile buffering scan over and over.
+        self.buffering_audio_video_scan = BufferingAudioVideoScan::default();
+    }
+
+    fn reset_buffering_audio_video_scan_progress(&mut self) {
+        let scan = &mut self.buffering_audio_video_scan;
+        scan.active_time = Duration::ZERO;
+        scan.packets = 0;
+        scan.bytes = 0;
+    }
+
+    fn buffering_video_advance_allowed(&self, pts: Option<Duration>) -> bool {
+        let scan = &self.buffering_audio_video_scan;
+        if scan.discarded_frames >= BUFFERING_VIDEO_MAX_DRAINED_FRAMES {
+            return false;
+        }
+        !scan
+            .baseline_media_time
+            .zip(pts)
+            .is_some_and(|(baseline, pts)| {
+                pts.saturating_sub(baseline) > BUFFERING_VIDEO_MAX_ADVANCE
+            })
+    }
+
+    fn record_buffering_video_advance(&mut self) {
+        self.buffering_audio_video_scan.discarded_frames = self
+            .buffering_audio_video_scan
+            .discarded_frames
+            .saturating_add(1);
+    }
+
+    fn resume_buffering_audio_recovery(&mut self) {
+        self.buffering_audio_recovery_suspended = false;
+    }
+
+    fn suspend_buffering_audio_recovery(&mut self, stage: &'static str, reason: String) {
+        if self.buffering_audio_recovery_suspended {
+            return;
+        }
+        self.buffering_audio_recovery_suspended = true;
+        let scan = &self.buffering_audio_video_scan;
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "buffering_audio_recovery",
+                "stage": stage,
+                "videoPackets": scan.packets,
+                "videoBytes": scan.bytes,
+                "activeSeconds": scan.active_time.as_secs_f64(),
+                "pendingVideoPackets": self.pending_video_packets.len(),
+                "discardedVideoFrames": scan.discarded_frames,
+                "reason": reason,
+            })
+            .to_string(),
+        );
+    }
+
+    fn observe_buffering_audio_video_packet(
+        &mut self,
+        packet_bytes: usize,
+        active_time: Duration,
+    ) -> Result<()> {
+        let scan = &mut self.buffering_audio_video_scan;
+        scan.active_time = scan.active_time.saturating_add(active_time);
+        scan.packets = scan.packets.saturating_add(1);
+        scan.bytes = scan.bytes.saturating_add(packet_bytes);
+        if scan.packets <= BUFFERING_AUDIO_VIDEO_SCAN_PACKET_LIMIT
+            && scan.bytes <= BUFFERING_AUDIO_VIDEO_SCAN_BYTE_LIMIT
+            && scan.active_time <= BUFFERING_AUDIO_VIDEO_SCAN_TIMEOUT
+        {
+            return Ok(());
+        }
+
+        let reason = format!(
+            "audio recovery scanned {} video packets / {} bytes for {:.3}s without producing audio (pending_video_packets={}, discarded_video_frames={})",
+            scan.packets,
+            scan.bytes,
+            scan.active_time.as_secs_f64(),
+            self.pending_video_packets.len(),
+            scan.discarded_frames,
+        );
+        // Reaching this watchdog means audio recovery should stop doing
+        // speculative work, not that the media is invalid. The selected audio
+        // track may legitimately end before a long video tail. Video pumping
+        // continues and a later audio frame can re-enable audio recovery.
+        self.suspend_buffering_audio_recovery("scan_limit", reason);
+        Ok(())
+    }
+
+    fn release_video_frame_for_buffering_audio_scan(&mut self) -> bool {
+        if self.pending_video_packets.is_empty()
+            || self.video_frames.len() < self.active_video_frame_queue_limit()
+        {
+            return false;
+        }
+        let frame_pts = self
+            .video_frames
+            .front()
+            .and_then(DecodedVideoFrame::pts)
+            .and_then(|pts| pts.as_duration());
+        if !self.buffering_video_advance_allowed(frame_pts) {
+            let reason = format!(
+                "audio recovery reached the shared video advance budget (frames={}, max_frames={}, baseline_seconds={:?}, next_pts_seconds={:?}, max_advance_seconds={:.3})",
+                self.buffering_audio_video_scan.discarded_frames,
+                BUFFERING_VIDEO_MAX_DRAINED_FRAMES,
+                self.buffering_audio_video_scan
+                    .baseline_media_time
+                    .map(|value| value.as_secs_f64()),
+                frame_pts.map(|value| value.as_secs_f64()),
+                BUFFERING_VIDEO_MAX_ADVANCE.as_secs_f64(),
+            );
+            self.suspend_buffering_audio_recovery("video_advance_limit", reason);
+            return false;
+        }
+        if self.video_frames.pop_front().is_none() {
+            return false;
+        }
+        self.record_buffering_video_advance();
+        let scan = &self.buffering_audio_video_scan;
+        if scan.discarded_frames == 1 || scan.discarded_frames.is_power_of_two() {
+            trace::diagnostic(
+                serde_json::json!({
+                    "event": "buffering_audio_recovery",
+                    "stage": "release_video_backpressure",
+                    "discardedVideoFrames": scan.discarded_frames,
+                    "scannedVideoPackets": scan.packets,
+                    "pendingVideoPackets": self.pending_video_packets.len(),
+                    "queuedVideoFrames": self.video_frames.len(),
+                })
+                .to_string(),
+            );
+        }
+        true
+    }
+
     fn pump_once(&mut self, demand: PlaybackPumpDemand) -> Result<bool> {
-        if !self.video_decode_suspended && self.route_pending_video_packets()? {
+        if demand == PlaybackPumpDemand::BufferingAudio {
+            // Once both decoded and compressed video queues reach their caps,
+            // release one already-decoded frame. This preserves compressed
+            // packet order while guaranteeing that the next audio recovery
+            // poll can continue toward a later interleaved audio packet.
+            let _ = self.release_video_frame_for_buffering_audio_scan();
+        }
+        if !self.video_decode_suspended && self.route_pending_video_packets(demand)? {
             return Ok(true);
         }
-        if !self.video_decode_suspended && !self.pending_video_packets.is_empty() {
+        if !self.video_decode_suspended
+            && !self.pending_video_packets.is_empty()
+            && !audio_demand_may_scan_past_pending_video(demand, self.pending_video_packets.len())
+        {
             return Ok(false);
         }
         if audio_queue_blocks_demux(
@@ -2029,23 +2263,23 @@ impl PlaybackSession {
             return Ok(false);
         }
         if self.demux_eof {
-            return self.finish_decoders();
+            return self.finish_decoders(demand);
         }
         match self.demuxer.poll()? {
             PumpInput::Packet(packet) => {
-                self.route_packet(packet)?;
+                self.route_packet(packet, demand)?;
                 Ok(true)
             }
             PumpInput::Eof => {
                 self.demux_eof = true;
-                let _ = self.finish_decoders()?;
+                let _ = self.finish_decoders(demand)?;
                 Ok(true)
             }
             PumpInput::Empty => Ok(false),
         }
     }
 
-    fn route_packet(&mut self, packet: ffmpeg::Packet) -> Result<()> {
+    fn route_packet(&mut self, packet: ffmpeg::Packet, demand: PlaybackPumpDemand) -> Result<()> {
         if self
             .video_decoder
             .as_ref()
@@ -2054,11 +2288,31 @@ impl PlaybackSession {
             if self.video_decode_suspended {
                 return Ok(());
             }
-            if self.should_defer_video_packet() {
+            let packet_bytes = packet.size();
+            let scan_started = (demand == PlaybackPumpDemand::BufferingAudio).then(Instant::now);
+            // Once a packet is pending, preserve decode order while an audio
+            // pump scans across the interleaved stream. Normal audio demand
+            // stops at the compressed queue cap; buffering recovery may free
+            // a decoded frame to keep moving, but its packet/byte/time watchdog
+            // turns a stream with no later audio into an explicit error.
+            if !self.pending_video_packets.is_empty()
+                || self.should_defer_video_packet()
+                || video_queue_blocks_audio_driven_decode(
+                    demand,
+                    self.video_frames.len(),
+                    self.active_video_frame_queue_limit(),
+                )
+            {
                 self.pending_video_packets.push_back(packet);
+                if let Some(started) = scan_started {
+                    self.observe_buffering_audio_video_packet(packet_bytes, started.elapsed())?;
+                }
                 return Ok(());
             }
-            let _ = self.route_video_packet(packet)?;
+            let _ = self.route_video_packet(packet, demand)?;
+            if let Some(started) = scan_started {
+                self.observe_buffering_audio_video_packet(packet_bytes, started.elapsed())?;
+            }
             return Ok(());
         }
 
@@ -2168,14 +2422,20 @@ impl PlaybackSession {
         }
     }
 
-    fn route_pending_video_packets(&mut self) -> Result<bool> {
+    fn route_pending_video_packets(&mut self, demand: PlaybackPumpDemand) -> Result<bool> {
         let mut routed_any = false;
-        while !self.should_defer_video_packet() {
+        while !self.should_defer_video_packet()
+            && !video_queue_blocks_audio_driven_decode(
+                demand,
+                self.video_frames.len(),
+                self.active_video_frame_queue_limit(),
+            )
+        {
             let Some(packet) = self.pending_video_packets.pop_front() else {
                 self.reset_video_packet_stall_state();
                 return Ok(routed_any);
             };
-            if !self.route_video_packet(packet)? {
+            if !self.route_video_packet(packet, demand)? {
                 self.observe_video_packet_stall()?;
                 return Ok(routed_any);
             }
@@ -2257,7 +2517,11 @@ impl PlaybackSession {
         self.video_packet_stall_started_at = None;
     }
 
-    fn route_video_packet(&mut self, packet: ffmpeg::Packet) -> Result<bool> {
+    fn route_video_packet(
+        &mut self,
+        packet: ffmpeg::Packet,
+        demand: PlaybackPumpDemand,
+    ) -> Result<bool> {
         if self.video_fallback_waiting_for_keyframe {
             if !packet.is_key() {
                 return Ok(true);
@@ -2285,9 +2549,8 @@ impl PlaybackSession {
             );
         }
 
-        let video_frame_limit = self.active_video_frame_queue_limit();
         let before_frames = self.video_frames.len();
-        match self.route_video_packet_with_active_decoder(&packet, video_frame_limit) {
+        match self.route_video_packet_with_active_decoder(&packet, demand) {
             Ok(Some(progress)) => Ok(progress),
             Ok(None) => {
                 self.pending_video_packets.push_front(packet);
@@ -2328,7 +2591,7 @@ impl PlaybackSession {
                     );
                     return Ok(true);
                 }
-                match self.route_video_packet_with_active_decoder(&packet, video_frame_limit)? {
+                match self.route_video_packet_with_active_decoder(&packet, demand)? {
                     Some(progress) => Ok(progress),
                     None => {
                         self.pending_video_packets.push_front(packet);
@@ -2359,7 +2622,7 @@ impl PlaybackSession {
                     );
                     return Ok(true);
                 }
-                match self.route_video_packet_with_active_decoder(&packet, video_frame_limit)? {
+                match self.route_video_packet_with_active_decoder(&packet, demand)? {
                     Some(progress) => Ok(progress),
                     None => {
                         self.pending_video_packets.push_front(packet);
@@ -2387,7 +2650,7 @@ impl PlaybackSession {
                     );
                     return Ok(true);
                 }
-                match self.route_video_packet_with_active_decoder(&packet, video_frame_limit)? {
+                match self.route_video_packet_with_active_decoder(&packet, demand)? {
                     Some(progress) => Ok(progress),
                     None => {
                         self.pending_video_packets.push_front(packet);
@@ -2402,22 +2665,28 @@ impl PlaybackSession {
     fn route_video_packet_with_active_decoder(
         &mut self,
         packet: &ffmpeg::Packet,
-        video_frame_limit: usize,
+        demand: PlaybackPumpDemand,
     ) -> Result<Option<bool>> {
-        let decoder = self.video_decoder.as_mut().expect("video decoder exists");
-        match decoder.send_packet(packet) {
+        let send_result = self
+            .video_decoder
+            .as_mut()
+            .expect("video decoder exists")
+            .send_packet(packet);
+        match send_result {
             Ok(()) => {
-                drain_video_frames(decoder, &mut self.video_frames)?;
-                trim_video_queue(&mut self.video_frames, video_frame_limit);
+                let _ = self.drain_and_trim_video_frames(demand)?;
                 Ok(Some(true))
             }
             Err(error) if error.is_again() => {
-                drain_video_frames(decoder, &mut self.video_frames)?;
-                trim_video_queue(&mut self.video_frames, video_frame_limit);
-                match decoder.send_packet(packet) {
+                let _ = self.drain_and_trim_video_frames(demand)?;
+                let retry_result = self
+                    .video_decoder
+                    .as_mut()
+                    .expect("video decoder exists")
+                    .send_packet(packet);
+                match retry_result {
                     Ok(()) => {
-                        drain_video_frames(decoder, &mut self.video_frames)?;
-                        trim_video_queue(&mut self.video_frames, video_frame_limit);
+                        let _ = self.drain_and_trim_video_frames(demand)?;
                         Ok(Some(true))
                     }
                     Err(error) if error.is_again() => Ok(None),
@@ -2426,6 +2695,54 @@ impl PlaybackSession {
             }
             Err(error) => Err(error.into()),
         }
+    }
+
+    fn drain_and_trim_video_frames(
+        &mut self,
+        demand: PlaybackPumpDemand,
+    ) -> Result<DecoderDrainStatus> {
+        let status = drain_video_frames(
+            self.video_decoder.as_mut().expect("video decoder exists"),
+            &mut self.video_frames,
+        )?;
+        let video_frame_limit = self.active_video_frame_queue_limit();
+        if demand != PlaybackPumpDemand::BufferingAudio {
+            trim_video_queue(&mut self.video_frames, video_frame_limit);
+            return Ok(status);
+        }
+
+        let excess = self.video_frames.len().saturating_sub(video_frame_limit);
+        let droppable = buffering_video_trim_droppable(
+            self.video_frames
+                .iter()
+                .take(excess)
+                .map(|frame| frame.pts().and_then(|timestamp| timestamp.as_duration())),
+            self.buffering_audio_video_scan.discarded_frames,
+            self.buffering_audio_video_scan.baseline_media_time,
+        );
+        for _ in 0..droppable {
+            let _ = self.video_frames.pop_front();
+            self.record_buffering_video_advance();
+        }
+        if droppable < excess {
+            let next_pts = self
+                .video_frames
+                .front()
+                .and_then(DecodedVideoFrame::pts)
+                .and_then(|timestamp| timestamp.as_duration());
+            let reason = format!(
+                "audio recovery decoder output reached the shared video advance budget (frames={}, max_frames={}, baseline_seconds={:?}, next_pts_seconds={:?}, max_advance_seconds={:.3})",
+                self.buffering_audio_video_scan.discarded_frames,
+                BUFFERING_VIDEO_MAX_DRAINED_FRAMES,
+                self.buffering_audio_video_scan
+                    .baseline_media_time
+                    .map(|value| value.as_secs_f64()),
+                next_pts.map(|value| value.as_secs_f64()),
+                BUFFERING_VIDEO_MAX_ADVANCE.as_secs_f64(),
+            );
+            self.suspend_buffering_audio_recovery("video_decode_trim_limit", reason);
+        }
+        Ok(status)
     }
 
     fn active_video_decoder_backend(&self) -> Option<DecoderBackend> {
@@ -2796,38 +3113,44 @@ impl PlaybackSession {
         }
     }
 
-    fn finish_decoders(&mut self) -> Result<bool> {
+    fn finish_decoders(&mut self, demand: PlaybackPumpDemand) -> Result<bool> {
         if self.eof {
             return Ok(false);
         }
 
         let mut made_progress = false;
         if !self.video_decode_suspended {
-            while self.route_pending_video_packets()? {
+            while self.route_pending_video_packets(demand)? {
                 made_progress = true;
             }
-            if !self.pending_video_packets.is_empty() {
-                return Ok(made_progress);
-            }
         }
+        let video_packets_pending = !self.pending_video_packets.is_empty();
 
         self.eof_drain_polls = self.eof_drain_polls.saturating_add(1);
         let now = Instant::now();
         self.eof_drain_last_progress_at.get_or_insert(now);
 
-        if let Some(decoder) = self
-            .video_decoder
-            .as_mut()
-            .filter(|decoder| !self.video_decode_suspended && !decoder.is_end_of_stream())
-        {
-            if !decoder.eof_sent() {
-                match decoder.send_eof() {
+        if self.video_decoder.as_ref().is_some_and(|decoder| {
+            !self.video_decode_suspended && !video_packets_pending && !decoder.is_end_of_stream()
+        }) {
+            if !self
+                .video_decoder
+                .as_ref()
+                .expect("video decoder exists")
+                .eof_sent()
+            {
+                match self
+                    .video_decoder
+                    .as_mut()
+                    .expect("video decoder exists")
+                    .send_eof()
+                {
                     Ok(()) => made_progress = true,
                     Err(error) if error.is_again() => {}
                     Err(error) => return Err(error.into()),
                 }
             }
-            let status = drain_video_frames(decoder, &mut self.video_frames)?;
+            let status = self.drain_and_trim_video_frames(demand)?;
             made_progress |= status.made_progress();
         }
         if self
@@ -2852,10 +3175,11 @@ impl PlaybackSession {
         }
 
         let video_complete = self.video_decode_suspended
-            || self
-                .video_decoder
-                .as_ref()
-                .is_none_or(Decoder::is_end_of_stream);
+            || (!video_packets_pending
+                && self
+                    .video_decoder
+                    .as_ref()
+                    .is_none_or(Decoder::is_end_of_stream));
         let audio_complete = self
             .audio_decoder
             .as_ref()
@@ -2998,6 +3322,21 @@ impl PlaybackSession {
     }
 }
 
+fn audio_demand_may_scan_past_pending_video(
+    demand: PlaybackPumpDemand,
+    pending_video_packets: usize,
+) -> bool {
+    demand.is_audio() && pending_video_packets < AUDIO_DEMAND_PENDING_VIDEO_PACKET_LIMIT
+}
+
+fn video_queue_blocks_audio_driven_decode(
+    demand: PlaybackPumpDemand,
+    queued_video_frames: usize,
+    video_frame_limit: usize,
+) -> bool {
+    demand.is_audio() && queued_video_frames >= video_frame_limit
+}
+
 fn audio_queue_blocks_demux(
     demand: PlaybackPumpDemand,
     audio_output_active: bool,
@@ -3019,7 +3358,7 @@ fn audio_queue_blocks_demux(
         return false;
     }
     let limit = match demand {
-        PlaybackPumpDemand::Audio => audio_frame_limit,
+        PlaybackPumpDemand::Audio | PlaybackPumpDemand::BufferingAudio => audio_frame_limit,
         PlaybackPumpDemand::Video => audio_frame_limit.max(VIDEO_DEMAND_AUDIO_FRAME_CEILING),
     };
     queued_audio_frames >= limit
@@ -3718,6 +4057,7 @@ pub struct VideoPlaybackEngine {
     state: PlaybackRunState,
     clock: PlaybackClock,
     timing: PlaybackTimingConfig,
+    buffer_recovery_audio: Duration,
     pending_frame: Option<DecodedVideoFrame>,
     pending_audio: Option<PcmAudioFrame>,
     pending_subtitle: Option<DecodedSubtitleFrame>,
@@ -3730,6 +4070,8 @@ pub struct VideoPlaybackEngine {
     waiting_for_first_frame: bool,
     buffering: bool,
     buffering_video_pts: Option<Duration>,
+    last_buffering_video_drain_at: Option<Instant>,
+    buffering_video_drained_frames: usize,
     paused_seek_frame_pending: bool,
     video_seek_floor: Option<Duration>,
     audio_seek_floor: Option<Duration>,
@@ -3820,11 +4162,13 @@ impl VideoPlaybackEngine {
         session: PlaybackSession,
         timing: PlaybackTimingConfig,
     ) -> Self {
+        let buffer_recovery_audio = session.buffer_recovery_audio;
         Self {
             session,
             state: PlaybackRunState::Paused,
             clock: PlaybackClock::default(),
             timing,
+            buffer_recovery_audio,
             pending_frame: None,
             pending_audio: None,
             pending_subtitle: None,
@@ -3837,6 +4181,8 @@ impl VideoPlaybackEngine {
             waiting_for_first_frame: false,
             buffering: false,
             buffering_video_pts: None,
+            last_buffering_video_drain_at: None,
+            buffering_video_drained_frames: 0,
             paused_seek_frame_pending: false,
             video_seek_floor: None,
             audio_seek_floor: None,
@@ -3911,6 +4257,42 @@ impl VideoPlaybackEngine {
             )?;
         }
         Ok(changed)
+    }
+
+    #[cfg(target_os = "android")]
+    fn prepare_pending_mediacodec_frame(&mut self) -> Result<bool> {
+        let preparation = self
+            .pending_frame
+            .as_ref()
+            .expect("pending frame exists")
+            .frame
+            .prepare_mediacodec_image();
+        if let Err(error) = preparation {
+            if error.is_android_mediacodec_backpressure() {
+                // Keep the already-released frame pending. A later worker tick
+                // retries only ImageReader acquisition; it must never release
+                // the codec token twice.
+                return Ok(false);
+            }
+            let pending = self.pending_frame.as_ref().expect("pending frame exists");
+            let failure = VideoFrameImportFailure {
+                decode_backend: pending.decode_backend,
+                mediacodec_surface: pending.frame.is_mediacodec(),
+                codec: self.session.selected_video_codec(),
+                pixel_format: pending.frame.pixel_format(),
+                line_sizes: pending.frame.line_sizes(),
+                width: pending.frame.width(),
+                height: pending.frame.height(),
+                generation: 0,
+                reason: format!("stage=android_mediacodec_worker_prepare reason={error}"),
+            };
+            trace::diagnostic(failure.structured_message());
+            if self.handle_video_frame_failure("surface_delivery", &failure)? {
+                return Ok(false);
+            }
+            return Err(error.into());
+        }
+        Ok(true)
     }
 
     fn finish_video_decoder_fallback(
@@ -4048,6 +4430,8 @@ impl VideoPlaybackEngine {
         self.eof = false;
         self.buffering = false;
         self.buffering_video_pts = None;
+        self.last_buffering_video_drain_at = None;
+        self.buffering_video_drained_frames = 0;
         self.waiting_for_first_frame = self.state == PlaybackRunState::Playing;
         self.paused_seek_frame_pending = self.state == PlaybackRunState::Paused;
         self.video_seek_floor = Some(media_time);
@@ -4073,7 +4457,17 @@ impl VideoPlaybackEngine {
     }
 
     pub(crate) fn has_audio_output(&self) -> bool {
-        self.audio_output_active && self.info().selected_audio_track.is_some()
+        self.audio_output_active
+            && self.info().selected_audio_track.is_some()
+            && !self.session.buffering_audio_recovery_suspended
+    }
+
+    pub(crate) fn buffering_audio_is_exhausted(&self) -> bool {
+        self.buffering
+            && (self.session.buffering_audio_recovery_suspended
+                || (self.session.audio_decoder_is_eof()
+                    && self.pending_audio.is_none()
+                    && !self.session.has_queued_audio_frames()))
     }
 
     pub(crate) fn has_video_output(&self) -> bool {
@@ -4086,8 +4480,11 @@ impl VideoPlaybackEngine {
         }
         let media_time = self.clock.media_time_at(now);
         self.clock.pause(now);
+        self.session.begin_buffering_audio_video_scan(media_time);
         self.buffering = true;
         self.buffering_video_pts = None;
+        self.last_buffering_video_drain_at = None;
+        self.buffering_video_drained_frames = 0;
         trace::log(format!(
             "[erika-clock-trace] stage=buffering_begin media={}",
             trace::duration_label(Some(media_time)),
@@ -4107,8 +4504,11 @@ impl VideoPlaybackEngine {
         let before = self.clock.media_time_at(now);
         self.clock.sync_to(reference_time, now, source);
         self.clock.play(now);
+        self.session.finish_buffering_audio_video_scan();
         self.buffering = false;
         self.buffering_video_pts = None;
+        self.last_buffering_video_drain_at = None;
+        self.buffering_video_drained_frames = 0;
         trace::log(format!(
             "[erika-clock-trace] stage=buffering_resume before={} reference={} after={} source={:?}",
             trace::duration_label(Some(before)),
@@ -4232,6 +4632,8 @@ impl VideoPlaybackEngine {
         self.state = PlaybackRunState::Playing;
         self.buffering = false;
         self.buffering_video_pts = None;
+        self.last_buffering_video_drain_at = None;
+        self.buffering_video_drained_frames = 0;
         self.waiting_for_first_frame = waiting_for_first_frame;
         self.paused_seek_frame_pending = false;
         self.rebase_progress_watchdogs();
@@ -4269,6 +4671,8 @@ impl VideoPlaybackEngine {
         self.state = PlaybackRunState::Paused;
         self.buffering = false;
         self.buffering_video_pts = None;
+        self.last_buffering_video_drain_at = None;
+        self.buffering_video_drained_frames = 0;
         self.waiting_for_first_frame = false;
         self.paused_seek_frame_pending = seek_frame_pending;
     }
@@ -4310,6 +4714,8 @@ impl VideoPlaybackEngine {
         self.waiting_for_first_frame = false;
         self.buffering = false;
         self.buffering_video_pts = None;
+        self.last_buffering_video_drain_at = None;
+        self.buffering_video_drained_frames = 0;
         self.paused_seek_frame_pending = false;
         self.video_seek_floor = Some(Duration::ZERO);
         self.audio_seek_floor = Some(Duration::ZERO);
@@ -4367,6 +4773,8 @@ impl VideoPlaybackEngine {
         self.state = state_after;
         self.buffering = false;
         self.buffering_video_pts = None;
+        self.last_buffering_video_drain_at = None;
+        self.buffering_video_drained_frames = 0;
         self.waiting_for_first_frame = state_after == PlaybackRunState::Playing;
         self.paused_seek_frame_pending = state_after == PlaybackRunState::Paused;
         self.video_seek_floor = Some(position);
@@ -4421,6 +4829,10 @@ impl VideoPlaybackEngine {
 
     pub fn timing_config(&self) -> PlaybackTimingConfig {
         self.timing
+    }
+
+    pub(crate) fn buffer_recovery_audio(&self) -> Duration {
+        self.buffer_recovery_audio
     }
 
     pub fn set_timing_config(&mut self, timing: PlaybackTimingConfig) {
@@ -4537,19 +4949,22 @@ impl VideoPlaybackEngine {
         let pts = frame.pts;
         let now = now();
         let media_time = self.clock.media_time_at(now);
-        // While buffering, the media clock is parked on the reference frame
-        // (seek target or first frame) and only starts once buffering resumes.
-        // Enforcing the lead-time gate here would hold every later audio frame
-        // forever, yet the buffering tracker cannot resume until the audio
-        // output starts and reports a clock snapshot with enough queued PCM.
-        // Let audio flow while buffering so that path can complete.
-        if !self.buffering
-            && pts.is_some_and(|pts| pts > media_time + self.timing.audio_lead_time)
-        {
+        if pts.is_some_and(|pts| pts > media_time + self.timing.audio_lead_time) {
+            if self.buffering || self.session.buffering_audio_recovery_suspended {
+                self.session.suspend_buffering_audio_recovery(
+                    "future_audio_frame",
+                    format!(
+                        "next audio frame at {:.3}s is ahead of the {:.3}s playback clock lead window",
+                        pts.map_or(0.0, |value| value.as_secs_f64()),
+                        media_time.as_secs_f64(),
+                    ),
+                );
+            }
             return Ok(None);
         }
 
         let frame = self.pending_audio.take().expect("pending audio exists");
+        self.session.resume_buffering_audio_recovery();
         let late_by = pts.and_then(|pts| media_time.checked_sub(pts));
         Ok(Some(TimedAudioFrame {
             frame,
@@ -4575,13 +4990,22 @@ impl VideoPlaybackEngine {
         let pts = frame.pts;
         let now = Instant::now();
         let media_time = self.clock.media_time_at(now);
-        if !self.buffering
-            && pts.is_some_and(|pts| pts > media_time + self.timing.audio_lead_time)
-        {
+        if pts.is_some_and(|pts| pts > media_time + self.timing.audio_lead_time) {
+            if self.buffering || self.session.buffering_audio_recovery_suspended {
+                self.session.suspend_buffering_audio_recovery(
+                    "future_audio_frame",
+                    format!(
+                        "next audio frame at {:.3}s is ahead of the {:.3}s playback clock lead window",
+                        pts.map_or(0.0, |value| value.as_secs_f64()),
+                        media_time.as_secs_f64(),
+                    ),
+                );
+            }
             return Ok(None);
         }
 
         let frame = self.pending_audio.take().expect("pending audio exists");
+        self.session.resume_buffering_audio_recovery();
         let late_by = pts.and_then(|pts| media_time.checked_sub(pts));
         Ok(Some(TimedAudioFrame {
             frame,
@@ -4643,6 +5067,34 @@ impl VideoPlaybackEngine {
             return Ok(None);
         }
         if self.buffering && self.buffering_video_pts.is_some() {
+            // The first buffering frame remains visible in the presenter, but
+            // interleaved audio cannot refill unless video demux keeps moving.
+            // Pace later drains instead of consuming one frame per 2 ms worker
+            // poll. For MediaCodec this still releases output tokens without
+            // sending an unprepared Surface frame across the worker boundary.
+            let drain_now = now();
+            if self.last_buffering_video_drain_at.is_some_and(|last| {
+                drain_now.saturating_duration_since(last) < BUFFERING_VIDEO_DRAIN_INTERVAL
+            }) {
+                return Ok(None);
+            }
+            self.ensure_pending_frame_with_now(&mut || drain_now)?;
+            let Some(frame) = self.pending_frame.as_ref() else {
+                return Ok(None);
+            };
+            let frame_pts = frame.pts().and_then(|pts| pts.as_duration());
+            if !self.session.buffering_video_advance_allowed(frame_pts) {
+                // Keep this frame parked. Audio demand may continue scanning
+                // across a bounded compressed-video queue, but video content
+                // must never be discarded without limit when audio is missing
+                // or corrupt.
+                return Ok(None);
+            }
+            let _ = self.pending_frame.take();
+            self.session.record_buffering_video_advance();
+            self.buffering_video_drained_frames =
+                self.buffering_video_drained_frames.saturating_add(1);
+            self.last_buffering_video_drain_at = Some(drain_now);
             return Ok(None);
         }
         let tick_started = Instant::now();
@@ -4706,14 +5158,20 @@ impl VideoPlaybackEngine {
             }
 
             if self.buffering {
+                #[cfg(target_os = "android")]
+                if !self.prepare_pending_mediacodec_frame()? {
+                    return Ok(None);
+                }
                 let frame = self.pending_frame.take().expect("pending frame exists");
                 self.last_presented_pts = pts;
-                self.buffering_video_pts = pts.or(Some(self.media_time_at(now())));
+                let presented_at = now();
+                self.buffering_video_pts = pts.or(Some(self.media_time_at(presented_at)));
+                self.last_buffering_video_drain_at = Some(presented_at);
                 return Ok(Some(TimedVideoFrame {
                     frame: frame.frame,
                     decode_backend: frame.decode_backend,
                     pts,
-                    media_time: self.media_time_at(now()),
+                    media_time: self.media_time_at(presented_at),
                     late_by: None,
                 }));
             }
@@ -4733,43 +5191,8 @@ impl VideoPlaybackEngine {
                 }
                 decision => {
                     #[cfg(target_os = "android")]
-                    if let Err(error) = self
-                        .pending_frame
-                        .as_ref()
-                        .expect("pending frame exists")
-                        .frame
-                        .prepare_mediacodec_image()
-                    {
-                        if error.is_android_mediacodec_backpressure() {
-                            // Keep the already-released frame pending. A later
-                            // worker tick retries only ImageReader acquisition;
-                            // it must never release the codec token twice or
-                            // turn transient AImage capacity into decoder fallback.
-                            return Ok(None);
-                        }
-                        // Delivery failed before the renderer ever received the
-                        // frame, so recover on this playback worker immediately.
-                        // This also freezes the old Surface route before another
-                        // codec buffer can be released into a broken ImageReader.
-                        let pending = self.pending_frame.as_ref().expect("pending frame exists");
-                        let failure = VideoFrameImportFailure {
-                            decode_backend: pending.decode_backend,
-                            mediacodec_surface: pending.frame.is_mediacodec(),
-                            codec: self.session.selected_video_codec(),
-                            pixel_format: pending.frame.pixel_format(),
-                            line_sizes: pending.frame.line_sizes(),
-                            width: pending.frame.width(),
-                            height: pending.frame.height(),
-                            generation: 0,
-                            reason: format!(
-                                "stage=android_mediacodec_worker_prepare reason={error}"
-                            ),
-                        };
-                        trace::diagnostic(failure.structured_message());
-                        if self.handle_video_frame_failure("surface_delivery", &failure)? {
-                            return Ok(None);
-                        }
-                        return Err(error.into());
+                    if !self.prepare_pending_mediacodec_frame()? {
+                        return Ok(None);
                     }
                     let frame = self.pending_frame.take().expect("pending frame exists");
                     self.last_presented_pts = pts;
@@ -4942,6 +5365,8 @@ impl VideoPlaybackEngine {
             self.state = PlaybackRunState::Ended;
             self.buffering = false;
             self.buffering_video_pts = None;
+            self.last_buffering_video_drain_at = None;
+            self.buffering_video_drained_frames = 0;
             let eof_now = now();
             let media_time = self
                 .info()
@@ -5029,9 +5454,15 @@ impl VideoPlaybackEngine {
             return Ok(());
         }
         let audio_seek_floor = &mut self.audio_seek_floor;
+        let demand = if self.buffering {
+            PlaybackPumpDemand::BufferingAudio
+        } else {
+            PlaybackPumpDemand::Audio
+        };
         self.pending_audio = self.session.next_audio_frame_bounded_where(
             max_packets,
             max_decode_duration,
+            demand,
             |frame| keep_audio_frame_after_seek_floor(audio_seek_floor, frame),
         )?;
         Ok(())
@@ -5110,10 +5541,20 @@ fn playback_timing_for_request(
     request: &MediaRequest,
     mut timing: PlaybackTimingConfig,
 ) -> PlaybackTimingConfig {
-    if request_uses_http_source(request) && timing.audio_lead_time == DEFAULT_AUDIO_LEAD_TIME {
-        timing.audio_lead_time = STREAMING_AUDIO_LEAD_TIME;
+    if request_uses_http_source(request) {
+        if timing.audio_lead_time == DEFAULT_AUDIO_LEAD_TIME {
+            timing.audio_lead_time = STREAMING_AUDIO_LEAD_TIME;
+        }
     }
     timing
+}
+
+fn buffer_recovery_audio_for_request(request: &MediaRequest) -> Duration {
+    if request_uses_http_source(request) {
+        STREAMING_BUFFER_RECOVERY_AUDIO
+    } else {
+        DEFAULT_BUFFER_RECOVERY_AUDIO
+    }
 }
 
 fn request_uses_http_source(request: &MediaRequest) -> bool {
@@ -5314,6 +5755,25 @@ fn trim_video_queue<T>(frames: &mut VecDeque<T>, limit: usize) {
     }
 }
 
+fn buffering_video_trim_droppable(
+    frame_pts: impl IntoIterator<Item = Option<Duration>>,
+    already_discarded: usize,
+    baseline_media_time: Option<Duration>,
+) -> usize {
+    let remaining_frames = BUFFERING_VIDEO_MAX_DRAINED_FRAMES.saturating_sub(already_discarded);
+    frame_pts
+        .into_iter()
+        .take(remaining_frames)
+        .take_while(|pts| {
+            !baseline_media_time
+                .zip(*pts)
+                .is_some_and(|(baseline, pts)| {
+                    pts.saturating_sub(baseline) > BUFFERING_VIDEO_MAX_ADVANCE
+                })
+        })
+        .count()
+}
+
 fn trim_subtitle_queue(frames: &mut VecDeque<DecodedSubtitleFrame>, limit: usize) {
     while frames.len() > limit {
         let _ = frames.pop_front();
@@ -5427,7 +5887,12 @@ mod tests {
     const FIXTURE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
     fn playback_fixture_path() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/playback/playback-fixture.mkv")
+        std::env::var_os("ERIKA_PLAYBACK_FIXTURE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("testdata/playback/playback-fixture.mkv")
+            })
     }
 
     fn playback_fixture_engine() -> VideoPlaybackEngine {
@@ -6629,6 +7094,98 @@ mod tests {
     }
 
     #[test]
+    fn buffering_drains_only_a_bounded_video_recovery_window() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+        let stalled_at = t0 + Duration::from_secs(2);
+        assert!(engine.begin_buffering_at(stalled_at));
+
+        let _ = next_fixture_video_at(&mut engine, stalled_at);
+        let visible_buffering_pts = engine.buffering_video_pts();
+        assert!(visible_buffering_pts.is_some());
+        assert!(engine.pending_frame.is_none());
+        assert_eq!(engine.last_buffering_video_drain_at, Some(stalled_at));
+
+        let too_soon = stalled_at + BUFFERING_VIDEO_DRAIN_INTERVAL - Duration::from_millis(1);
+        assert!(engine.tick_at(too_soon).unwrap().is_none());
+        assert_eq!(engine.last_buffering_video_drain_at, Some(stalled_at));
+
+        let next_drain = stalled_at + BUFFERING_VIDEO_DRAIN_INTERVAL;
+        assert!(engine.tick_at(next_drain).unwrap().is_none());
+        assert!(engine.pending_frame.is_none());
+        assert_eq!(engine.buffering_video_pts(), visible_buffering_pts);
+        assert_eq!(engine.last_buffering_video_drain_at, Some(next_drain));
+
+        for index in 2..=200 {
+            let _ = engine
+                .tick_at(stalled_at + BUFFERING_VIDEO_DRAIN_INTERVAL * index)
+                .unwrap();
+        }
+        let parked = engine
+            .pending_frame
+            .as_ref()
+            .expect("video must stop advancing once the recovery window is full");
+        let parked_pts = parked
+            .pts()
+            .and_then(|pts| pts.as_duration())
+            .expect("fixture video pts");
+        assert!(
+            engine.buffering_video_drained_frames == BUFFERING_VIDEO_MAX_DRAINED_FRAMES
+                || parked_pts > engine.media_time_at(stalled_at) + BUFFERING_VIDEO_MAX_ADVANCE
+        );
+        assert!(engine.buffering_video_drained_frames <= BUFFERING_VIDEO_MAX_DRAINED_FRAMES);
+    }
+
+    #[test]
+    fn buffering_video_recovery_stays_bounded_without_audio_progress() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+        let stalled_at = t0 + Duration::from_secs(2);
+        assert!(engine.begin_buffering_at(stalled_at));
+
+        engine.pending_audio = None;
+        let _ = engine.session.discard_queued_audio_frames();
+        engine.session.audio_decoder = None;
+
+        let _ = next_fixture_video_at(&mut engine, stalled_at);
+        assert!(engine.buffering_video_pts().is_some());
+        let audio_scan_deadline = Instant::now() + FIXTURE_WAIT_TIMEOUT;
+        while engine.session.pending_video_packets.is_empty()
+            && !engine.session.demux_eof
+            && Instant::now() < audio_scan_deadline
+        {
+            let _ = engine.session.pump_once(PlaybackPumpDemand::Audio).unwrap();
+            thread::yield_now();
+        }
+        assert!(
+            !engine.session.pending_video_packets.is_empty(),
+            "audio recovery scan must park compressed video before EOF (decoded={}, demux_eof={}, eof={})",
+            engine.session.video_frames.len(),
+            engine.session.demux_eof,
+            engine.session.eof,
+        );
+        assert!(
+            engine.session.pending_video_packets.len() <= AUDIO_DEMAND_PENDING_VIDEO_PACKET_LIMIT
+        );
+        assert!(!engine.session.demux_eof);
+
+        for index in 1..=200 {
+            let _ = engine
+                .tick_at(stalled_at + BUFFERING_VIDEO_DRAIN_INTERVAL * index)
+                .unwrap();
+        }
+
+        assert!(engine.pending_frame.is_some());
+        assert!(engine.buffering_video_drained_frames <= BUFFERING_VIDEO_MAX_DRAINED_FRAMES);
+        assert_eq!(engine.state(), PlaybackRunState::Playing);
+        assert!(engine.is_buffering());
+    }
+
+    #[test]
     fn buffering_resume_allows_controlled_backward_reanchor() {
         let mut engine = playback_fixture_engine();
         let t0 = Instant::now();
@@ -6646,6 +7203,30 @@ mod tests {
             engine.media_time_at(stalled_at + Duration::from_secs(1)),
             Duration::from_secs(4)
         );
+    }
+
+    #[test]
+    fn activating_before_queued_pause_preserves_paused_seek_preview() {
+        for starts_stopped in [false, true] {
+            let mut engine = playback_fixture_engine();
+            let t0 = Instant::now();
+            if starts_stopped {
+                engine.stop_checked_at(t0).unwrap();
+                assert_eq!(engine.state(), PlaybackRunState::Stopped);
+            }
+
+            engine
+                .play_checked_at(t0 + Duration::from_millis(1))
+                .unwrap();
+            engine.pause_at(t0 + Duration::from_millis(2));
+            assert_eq!(engine.state(), PlaybackRunState::Paused);
+
+            engine
+                .seek_at(Duration::from_secs(2), t0 + Duration::from_millis(3))
+                .unwrap();
+            assert_eq!(engine.state(), PlaybackRunState::Paused);
+            assert!(engine.has_pending_paused_seek_frame());
+        }
     }
 
     #[test]
@@ -6782,6 +7363,10 @@ mod tests {
         let timing = playback_timing_for_request(&request, PlaybackTimingConfig::default());
 
         assert_eq!(timing.audio_lead_time, STREAMING_AUDIO_LEAD_TIME);
+        assert_eq!(
+            buffer_recovery_audio_for_request(&request),
+            STREAMING_BUFFER_RECOVERY_AUDIO,
+        );
     }
 
     #[test]
@@ -6794,6 +7379,10 @@ mod tests {
         let timing = playback_timing_for_request(&request, custom);
 
         assert_eq!(timing.audio_lead_time, Duration::from_millis(750));
+        assert_eq!(
+            buffer_recovery_audio_for_request(&request),
+            STREAMING_BUFFER_RECOVERY_AUDIO,
+        );
     }
 
     #[test]
@@ -6802,6 +7391,33 @@ mod tests {
         let timing = playback_timing_for_request(&request, PlaybackTimingConfig::default());
 
         assert_eq!(timing.audio_lead_time, DEFAULT_AUDIO_LEAD_TIME);
+        assert_eq!(
+            buffer_recovery_audio_for_request(&request),
+            DEFAULT_BUFFER_RECOVERY_AUDIO,
+        );
+    }
+
+    #[test]
+    fn playback_session_recovery_threshold_survives_engine_construction() {
+        let path = playback_fixture_path();
+        let request = MediaRequest {
+            uri: path.to_string_lossy().into_owned(),
+            source_hint: MediaSourceHint::LocalFile,
+            http_headers: Vec::new(),
+        };
+        let config = PlaybackSessionConfig {
+            video_decode: VideoDecodePreference::Software,
+            ..PlaybackSessionConfig::default()
+        };
+        let mut session = PlaybackSession::open(&request, config).unwrap();
+        session.buffer_recovery_audio = STREAMING_BUFFER_RECOVERY_AUDIO;
+
+        let engine = VideoPlaybackEngine::from_session(session);
+
+        assert_eq!(
+            engine.buffer_recovery_audio(),
+            STREAMING_BUFFER_RECOVERY_AUDIO
+        );
     }
 
     #[test]
@@ -6820,6 +7436,322 @@ mod tests {
         let limits = PlaybackQueueLimits::for_request(&request);
 
         assert_eq!(limits, PlaybackQueueLimits::default());
+    }
+
+    #[test]
+    fn audio_demand_scans_past_only_a_bounded_pending_video_run() {
+        assert!(audio_demand_may_scan_past_pending_video(
+            PlaybackPumpDemand::Audio,
+            1,
+        ));
+        assert!(audio_demand_may_scan_past_pending_video(
+            PlaybackPumpDemand::Audio,
+            AUDIO_DEMAND_PENDING_VIDEO_PACKET_LIMIT - 1,
+        ));
+        assert!(!audio_demand_may_scan_past_pending_video(
+            PlaybackPumpDemand::Audio,
+            AUDIO_DEMAND_PENDING_VIDEO_PACKET_LIMIT,
+        ));
+        assert!(!audio_demand_may_scan_past_pending_video(
+            PlaybackPumpDemand::BufferingAudio,
+            AUDIO_DEMAND_PENDING_VIDEO_PACKET_LIMIT,
+        ));
+        assert!(!audio_demand_may_scan_past_pending_video(
+            PlaybackPumpDemand::Video,
+            1,
+        ));
+    }
+
+    #[test]
+    fn audio_demand_stops_decoding_when_the_video_frame_queue_is_full() {
+        assert!(!video_queue_blocks_audio_driven_decode(
+            PlaybackPumpDemand::Audio,
+            7,
+            8,
+        ));
+        assert!(video_queue_blocks_audio_driven_decode(
+            PlaybackPumpDemand::Audio,
+            8,
+            8,
+        ));
+        assert!(video_queue_blocks_audio_driven_decode(
+            PlaybackPumpDemand::BufferingAudio,
+            8,
+            8,
+        ));
+        assert!(!video_queue_blocks_audio_driven_decode(
+            PlaybackPumpDemand::Video,
+            8,
+            8,
+        ));
+    }
+
+    #[test]
+    fn buffering_audio_demand_crosses_a_full_pending_video_packet_run() {
+        let mut engine = playback_fixture_engine();
+        let deadline = Instant::now() + FIXTURE_WAIT_TIMEOUT;
+        while engine.session.pending_video_packets.len() < AUDIO_DEMAND_PENDING_VIDEO_PACKET_LIMIT
+            && !engine.session.demux_eof
+            && Instant::now() < deadline
+        {
+            engine.session.audio_frames.clear();
+            let _ = engine.session.pump_once(PlaybackPumpDemand::Audio).unwrap();
+            thread::yield_now();
+        }
+        assert_eq!(
+            engine.session.pending_video_packets.len(),
+            AUDIO_DEMAND_PENDING_VIDEO_PACKET_LIMIT,
+            "fixture must reach the compressed-video cap before EOF"
+        );
+        assert_eq!(
+            engine.session.video_frames.len(),
+            engine.session.active_video_frame_queue_limit(),
+            "decoded video backpressure must also be active"
+        );
+
+        engine.session.audio_frames.clear();
+        let recovery_deadline = Instant::now() + FIXTURE_WAIT_TIMEOUT;
+        while engine.session.audio_frames.is_empty()
+            && !engine.session.eof
+            && Instant::now() < recovery_deadline
+        {
+            engine
+                .session
+                .pump_once(PlaybackPumpDemand::BufferingAudio)
+                .unwrap();
+            thread::yield_now();
+        }
+
+        assert!(
+            !engine.session.audio_frames.is_empty(),
+            "buffering recovery must scan beyond the 64-packet video run"
+        );
+        assert!(engine.session.buffering_audio_video_scan.discarded_frames > 0);
+        assert!(
+            engine.session.pending_video_packets.len() <= AUDIO_DEMAND_PENDING_VIDEO_PACKET_LIMIT
+        );
+    }
+
+    #[test]
+    fn buffering_audio_video_scan_becomes_nonfatal_at_its_packet_limit() {
+        let mut engine = playback_fixture_engine();
+        for _ in 0..BUFFERING_AUDIO_VIDEO_SCAN_PACKET_LIMIT {
+            engine
+                .session
+                .observe_buffering_audio_video_packet(1, Duration::ZERO)
+                .unwrap();
+        }
+        engine
+            .session
+            .observe_buffering_audio_video_packet(1, Duration::ZERO)
+            .expect("a long video-only tail must not become a fatal playback error");
+        assert!(engine.session.buffering_audio_recovery_suspended);
+        assert!(!engine.has_audio_output());
+    }
+
+    #[test]
+    fn buffering_audio_video_scan_charges_only_active_work() {
+        let mut engine = playback_fixture_engine();
+        engine.session.buffering_audio_video_scan.active_time =
+            BUFFERING_AUDIO_VIDEO_SCAN_TIMEOUT - Duration::from_millis(1);
+
+        // Arbitrarily long network idle produces no active work sample. The
+        // next cheap packet must therefore remain below the watchdog limit.
+        engine
+            .session
+            .observe_buffering_audio_video_packet(1, Duration::ZERO)
+            .unwrap();
+
+        engine
+            .session
+            .observe_buffering_audio_video_packet(1, Duration::from_millis(2))
+            .expect("watchdog exhaustion must remain a nonfatal recovery state");
+        assert!(engine.session.buffering_audio_recovery_suspended);
+    }
+
+    #[test]
+    fn buffering_audio_progress_preserves_the_episode_video_advance_budget() {
+        let mut engine = playback_fixture_engine();
+        engine
+            .session
+            .begin_buffering_audio_video_scan(Duration::from_secs(10));
+        engine.session.buffering_audio_video_scan.packets = 123;
+        engine.session.buffering_audio_video_scan.bytes = 456;
+        engine.session.buffering_audio_video_scan.active_time = Duration::from_secs(1);
+        for _ in 0..7 {
+            engine.session.record_buffering_video_advance();
+        }
+
+        engine.session.reset_buffering_audio_video_scan_progress();
+
+        assert_eq!(engine.session.buffering_audio_video_scan.packets, 0);
+        assert_eq!(engine.session.buffering_audio_video_scan.bytes, 0);
+        assert_eq!(
+            engine.session.buffering_audio_video_scan.active_time,
+            Duration::ZERO
+        );
+        assert_eq!(
+            engine.session.buffering_audio_video_scan.discarded_frames,
+            7
+        );
+        assert_eq!(
+            engine
+                .session
+                .buffering_audio_video_scan
+                .baseline_media_time,
+            Some(Duration::from_secs(10))
+        );
+    }
+
+    #[test]
+    fn buffering_session_and_engine_share_one_video_advance_budget() {
+        let mut engine = playback_fixture_engine();
+        let baseline = Duration::from_secs(10);
+        engine.session.begin_buffering_audio_video_scan(baseline);
+
+        for _ in 0..BUFFERING_VIDEO_MAX_DRAINED_FRAMES {
+            assert!(
+                engine
+                    .session
+                    .buffering_video_advance_allowed(Some(baseline + Duration::from_millis(100)))
+            );
+            engine.session.record_buffering_video_advance();
+        }
+        assert!(
+            !engine
+                .session
+                .buffering_video_advance_allowed(Some(baseline + Duration::from_millis(100)))
+        );
+
+        engine.session.begin_buffering_audio_video_scan(baseline);
+        assert!(!engine.session.buffering_video_advance_allowed(Some(
+            baseline + BUFFERING_VIDEO_MAX_ADVANCE + Duration::from_millis(1)
+        )));
+    }
+
+    #[test]
+    fn buffering_decoder_batch_trim_cannot_cross_the_shared_budget() {
+        let baseline = Duration::from_secs(10);
+        let frame_pts = [
+            Some(baseline + Duration::from_millis(100)),
+            Some(baseline + Duration::from_millis(200)),
+            Some(baseline + Duration::from_millis(300)),
+        ];
+
+        assert_eq!(
+            buffering_video_trim_droppable(
+                frame_pts,
+                BUFFERING_VIDEO_MAX_DRAINED_FRAMES - 1,
+                Some(baseline),
+            ),
+            1,
+            "a multi-frame decoder drain may only consume the remaining frame budget"
+        );
+        assert_eq!(
+            buffering_video_trim_droppable(
+                [
+                    Some(baseline + Duration::from_millis(400)),
+                    Some(baseline + BUFFERING_VIDEO_MAX_ADVANCE + Duration::from_millis(1)),
+                    Some(baseline + Duration::from_millis(450)),
+                ],
+                0,
+                Some(baseline),
+            ),
+            1,
+            "trimming must stop at the first frame beyond the PTS advance budget"
+        );
+    }
+
+    #[test]
+    fn buffering_treats_a_finished_audio_decoder_as_exhausted() {
+        let mut engine = playback_fixture_engine();
+        let now = Instant::now();
+        engine.play_at(now);
+        assert!(engine.begin_buffering_at(now + Duration::from_millis(500)));
+
+        engine.pending_audio = None;
+        engine.session.audio_frames.clear();
+        engine.session.demux_eof = true;
+        engine.session.audio_decoder = None;
+
+        assert!(engine.has_audio_output());
+        assert!(engine.buffering_audio_is_exhausted());
+    }
+
+    #[test]
+    fn nonfatal_audio_recovery_exhaustion_survives_resume_until_audio_returns() {
+        let mut engine = playback_fixture_engine();
+        let now = Instant::now();
+        engine.play_at(now);
+        assert!(engine.begin_buffering_at(now + Duration::from_millis(500)));
+        engine.session.audio_frames.clear();
+        for _ in 0..=BUFFERING_AUDIO_VIDEO_SCAN_PACKET_LIMIT {
+            engine
+                .session
+                .observe_buffering_audio_video_packet(1, Duration::ZERO)
+                .unwrap();
+        }
+
+        assert!(engine.buffering_audio_is_exhausted());
+        assert!(engine.resume_buffering_at(
+            Duration::from_secs(1),
+            PlaybackClockSource::Wall,
+            now + Duration::from_secs(1),
+        ));
+        assert!(engine.session.buffering_audio_recovery_suspended);
+        assert!(!engine.has_audio_output());
+
+        let deadline = Instant::now() + FIXTURE_WAIT_TIMEOUT;
+        while engine.session.audio_frames.is_empty()
+            && !engine.session.eof
+            && Instant::now() < deadline
+        {
+            let _ = engine.session.pump_once(PlaybackPumpDemand::Audio).unwrap();
+            thread::yield_now();
+        }
+        let recovered = engine
+            .session
+            .next_audio_frame_bounded(1, Duration::from_millis(10))
+            .unwrap()
+            .expect("fixture must eventually provide audio again");
+        assert!(
+            engine.session.buffering_audio_recovery_suspended,
+            "decoding a sparse future frame must not re-enable starvation early"
+        );
+        engine.pending_audio = Some(recovered);
+        assert!(
+            engine
+                .tick_audio_at(now + Duration::from_secs(60))
+                .unwrap()
+                .is_some(),
+            "the recovered frame must become deliverable once its PTS is ready"
+        );
+        assert!(!engine.session.buffering_audio_recovery_suspended);
+        assert!(engine.has_audio_output());
+    }
+
+    #[test]
+    fn sparse_future_audio_resumes_wall_clock_without_rebuffering() {
+        let mut engine = playback_fixture_engine();
+        let now = Instant::now();
+        engine.play_at(now);
+        assert!(engine.begin_buffering_at(now));
+        engine.pending_audio = Some(pcm_frame(Duration::from_secs(5), 1));
+
+        assert!(engine.tick_audio_at(now).unwrap().is_none());
+        assert!(engine.session.buffering_audio_recovery_suspended);
+        assert!(engine.buffering_audio_is_exhausted());
+        assert!(engine.resume_buffering_at(Duration::ZERO, PlaybackClockSource::Wall, now,));
+        assert!(!engine.has_audio_output());
+
+        assert!(
+            engine
+                .tick_audio_at(now + Duration::from_secs(5))
+                .unwrap()
+                .is_some()
+        );
+        assert!(!engine.session.buffering_audio_recovery_suspended);
+        assert!(engine.has_audio_output());
     }
 
     #[test]

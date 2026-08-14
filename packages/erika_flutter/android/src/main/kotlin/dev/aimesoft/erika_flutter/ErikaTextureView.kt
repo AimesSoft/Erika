@@ -1,5 +1,6 @@
 package dev.aimesoft.erika_flutter
 
+import android.annotation.TargetApi
 import android.content.Context
 import android.graphics.SurfaceTexture
 import android.graphics.PixelFormat
@@ -55,15 +56,29 @@ internal class ErikaAndroidVideoView(
     private val mainHandler = Handler(Looper.getMainLooper())
     private var outputSurface: Surface? = null
     private var ownsOutputSurface = false
+    private val deferredSurfaceReleases = mutableListOf<Surface>()
+    private var outputSurfaceTexture: SurfaceTexture? = null
+    private val deferredSurfaceTextureReleases = mutableListOf<SurfaceTexture>()
     private var surfacePixelWidth = 0
     private var surfacePixelHeight = 0
     private var boundHost: AndroidPlayerHost? = null
+    private val hostsAwaitingNativeDestroy = mutableSetOf<AndroidPlayerHost>()
     private var pendingBind: PendingViewBind? = null
+    private val pendingBindCompletions = mutableListOf<PendingViewCompletion>()
+    private val pendingUnbindCompletions = mutableListOf<PendingViewCompletion>()
+    private var nativeAttachPending = false
+    private var nativeDetachPending = false
+    private var nativeResizePending = false
+    private var pendingResizeRequest: PendingSurfaceResize? = null
     private var nativeDetachRetryPending = false
+    private var lifecycleSurfaceSuspended = false
+    private var lifecycleDetachPending = false
     private var unbindRequested = false
     private var disposeRequested = false
     private var disposed = false
+    private val surfaceBindingGenerations = AndroidSurfaceBindingGenerationTracker()
     private val surfaceRecoveryTokens = AndroidSurfaceRecoveryTokenSource()
+    private val surfaceRecoveryAttempts = AndroidSurfaceRecoveryAttemptTracker()
     private var surfaceRecoveryRunnable: Runnable? = null
     private var observedHdrDisplay: Display? = null
     private var hdrRatioListenerRegistered = false
@@ -153,10 +168,16 @@ internal class ErikaAndroidVideoView(
         stopHdrHeadroomObservation(publishUnknown = false)
         cancelSurfaceRecovery()
         disposed = true
-        pendingBind = null
+        failPendingBind(
+            NativeResponse(false, -1, "Android video view $viewId was disposed", null),
+        )
+        failAllViewCompletions("Android video view $viewId was disposed")
         nativeDetachRetryPending = false
+        lifecycleDetachPending = false
+        lifecycleSurfaceSuspended = false
         unbindRequested = false
         releaseSurface()
+        releaseDeferredSurfacesIfIdle()
         textureView?.surfaceTextureListener = null
         surfaceView?.holder?.removeCallback(this)
         nativeView.removeOnAttachStateChangeListener(attachStateListener)
@@ -164,6 +185,12 @@ internal class ErikaAndroidVideoView(
     }
 
     fun bind(host: AndroidPlayerHost): NativeResponse {
+        val renewingBinding = boundHost === host &&
+            (unbindRequested || lifecycleSurfaceSuspended || lifecycleDetachPending)
+        if (renewingBinding) {
+            advanceSurfaceBindingGeneration(host)
+        }
+        lifecycleSurfaceSuspended = false
         if (disposed || disposeRequested) {
             return NativeResponse(false, -1, "Android video view $viewId is disposed", null)
         }
@@ -172,21 +199,28 @@ internal class ErikaAndroidVideoView(
                 clearPendingBind()
                 val response = unbind(currentHost)
                 if (!response.ok) {
-                    queuePendingBind(host, this)
                     return response
+                }
+                if (boundHost === currentHost) {
+                    queuePendingBind(host, this)
+                    return NativeResponse.success()
                 }
             }
             host.attachedView?.takeIf { it !== this }?.let { previousView ->
                 previousView.clearPendingBind()
                 val response = previousView.unbind(host)
                 if (!response.ok) {
-                    previousView.queuePendingBind(host, this)
                     return response
+                }
+                if (host.attachedView === previousView) {
+                    previousView.queuePendingBind(host, this)
+                    return NativeResponse.success()
                 }
             }
             boundHost = host
             host.attachedView = this
             lastPublishedHdrHeadroom = null
+            advanceSurfaceBindingGeneration(host)
         }
         unbindRequested = false
         cancelSurfaceRecovery()
@@ -195,6 +229,27 @@ internal class ErikaAndroidVideoView(
         refreshHdrHeadroomObservation()
         plugin.onPlayerRenderStateChanged()
         return attempt.response
+    }
+
+    fun bindAsync(
+        host: AndroidPlayerHost,
+        onComplete: (NativeResponse) -> Unit,
+    ) {
+        val response = bind(host)
+        when {
+            !response.ok -> onComplete(response)
+            boundHost === host &&
+                !nativeAttachPending &&
+                !nativeDetachPending &&
+                !nativeDetachRetryPending &&
+                !lifecycleDetachPending ->
+                onComplete(NativeResponse.success())
+            else -> pendingBindCompletions += PendingViewCompletion(
+                host,
+                surfaceBindingGenerations.currentGeneration,
+                onComplete,
+            )
+        }
     }
 
     fun unbind(expectedHost: AndroidPlayerHost? = null): NativeResponse {
@@ -209,17 +264,52 @@ internal class ErikaAndroidVideoView(
         if (expectedHost != null && host !== expectedHost) {
             return NativeResponse.success()
         }
+        if (!unbindRequested) {
+            advanceSurfaceBindingGeneration()
+            completeBindCompletions(
+                host,
+                NativeResponse(false, -1, "Android surface bind was superseded by unbind", null),
+                generation = null,
+            )
+        }
         unbindRequested = true
         stopHdrHeadroomObservation(publishUnknown = true)
         cancelSurfaceRecovery()
+        if (!androidUnbindNeedsNewSurfaceDetach(lifecycleDetachPending)) {
+            // The already queued lifecycle detach owns this unbind. Its real
+            // callback will complete the unbind or report the native failure.
+            return NativeResponse.success()
+        }
         val response = detachNativeSurface(host)
-        plugin.reportSurfaceResponse(host, "detachSurface", response)
+        reportImmediateSurfaceAttempt(host, SurfaceAttempt("detachSurface", response))
         if (!response.ok) {
             startSurfaceRecovery(host, "detachSurface", response)
             return response
         }
         completeUnbind(host)
         return response
+    }
+
+    fun unbindAsync(
+        expectedHost: AndroidPlayerHost,
+        onComplete: (NativeResponse) -> Unit,
+    ) {
+        val host = boundHost
+        if (host == null || host !== expectedHost) {
+            onComplete(NativeResponse.success())
+            return
+        }
+        val response = unbind(host)
+        when {
+            !response.ok -> onComplete(response)
+            boundHost !== host ->
+                onComplete(NativeResponse.success())
+            else -> pendingUnbindCompletions += PendingViewCompletion(
+                host,
+                surfaceBindingGenerations.currentGeneration,
+                onComplete,
+            )
+        }
     }
 
     fun suspendSurface(): NativeResponse {
@@ -231,7 +321,7 @@ internal class ErikaAndroidVideoView(
         stopHdrHeadroomObservation(publishUnknown = true)
         cancelSurfaceRecovery()
         val response = detachNativeSurface(host)
-        plugin.reportSurfaceResponse(host, "detachSurface", response)
+        reportImmediateSurfaceAttempt(host, SurfaceAttempt("detachSurface", response))
         if (!response.ok) {
             startSurfaceRecovery(host, "detachSurface", response)
         }
@@ -239,8 +329,99 @@ internal class ErikaAndroidVideoView(
         return response
     }
 
+    fun suspendSurfaceAsync() {
+        val host = boundHost ?: return
+        lifecycleSurfaceSuspended = true
+        if (unbindRequested || disposeRequested) {
+            unbind(host)
+            return
+        }
+        unbindRequested = false
+        // The detach queued below owns the lifecycle transition. Avoid a synchronous
+        // setOutputHeadroom JNI call on the UI thread while the presenter may still be
+        // finishing an in-flight frame.
+        stopHdrHeadroomObservation(publishUnknown = false)
+        cancelSurfaceRecovery()
+        if (
+            androidShouldRetainSurfaceDuringActivityStop(
+                usesTextureView = textureView != null,
+                outputSurfaceValid = outputSurface?.isValid == true,
+            )
+        ) {
+            // TextureView will call onSurfaceTextureDestroyed if the buffer
+            // queue is actually retired. Until then, retaining the native
+            // surface avoids a detach/reattach cycle against the same queue.
+            plugin.onPlayerRenderStateChanged()
+            return
+        }
+        if (lifecycleDetachPending) {
+            return
+        }
+        advanceSurfaceBindingGeneration(host)
+        lifecycleDetachPending = true
+        val posted = host.detachSurfaceAsync { result ->
+            mainHandler.post {
+                lifecycleDetachPending = false
+                if (boundHost !== host || host.isDestroyed) {
+                    if (host.isDestroyed) {
+                        completeUnbindCompletions(
+                            host,
+                            NativeResponse(false, -1, "Erika player ${host.handle} was destroyed", null),
+                        )
+                    }
+                    return@post
+                }
+                val response = result.getOrElse { error ->
+                    surfaceOperationException(host, "detachSurface", error)
+                }
+                nativeDetachRetryPending = !response.ok && host.surfaceAttached
+                releaseDeferredSurfacesIfIdle()
+                if (response.ok) {
+                    attachedDisplayId = null
+                    attachedDisplayHdrSupported = null
+                }
+                plugin.reportSurfaceResponse(host, "detachSurface", response)
+                if (!response.ok) {
+                    completeUnbindCompletions(host, response)
+                    failPendingBind(response)
+                }
+                if (androidDetachCompletesSupersededUnbind(
+                        nativeDetachSucceeded = response.ok,
+                        unbindRequested = unbindRequested,
+                        disposeRequested = disposeRequested,
+                    )
+                ) {
+                    completeUnbindCompletions(host, NativeResponse.success())
+                }
+                when {
+                    !response.ok -> {
+                        startSurfaceRecovery(host, "detachSurface", response)
+                    }
+                    unbindRequested || disposeRequested -> completeUnbind(host)
+                    !lifecycleSurfaceSuspended && plugin.isActivityActive -> resumeSurface()
+                }
+                plugin.onPlayerRenderStateChanged()
+            }
+        }
+        if (!posted) {
+            lifecycleDetachPending = false
+            val response = NativeResponse(
+                false,
+                -1,
+                "Android presenter thread rejected lifecycle surface detach",
+                null,
+            )
+            plugin.reportSurfaceResponse(host, "detachSurface", response)
+            startSurfaceRecovery(host, "detachSurface", response)
+        }
+    }
+
     fun resumeSurface(): NativeResponse {
         val host = boundHost ?: return NativeResponse.success()
+        lifecycleSurfaceSuspended = false
+        if (lifecycleDetachPending) {
+            return NativeResponse.success()
+        }
         if (unbindRequested || disposeRequested) {
             return unbind(host)
         }
@@ -269,27 +450,52 @@ internal class ErikaAndroidVideoView(
     fun pixelHeight(): Int = surfacePixelHeight.takeIf { it > 0 } ?: nativeView.height
 
     internal fun onPlayerDestroyed(host: AndroidPlayerHost) {
+        hostsAwaitingNativeDestroy -= host
+        val response = NativeResponse(
+            false,
+            -1,
+            "Erika player ${host.handle} was destroyed",
+            null,
+        )
         if (pendingBind?.host === host) {
-            pendingBind = null
+            failPendingBind(response)
         }
         if (boundHost !== host) {
+            completeBindCompletions(host, response, generation = null)
+            completeUnbindCompletions(host, response, generation = null)
+            releaseDeferredSurfacesIfIdle()
             return
         }
         val deferredBind = takePendingBind()
         cancelSurfaceRecovery()
         nativeDetachRetryPending = false
+        lifecycleDetachPending = false
+        lifecycleSurfaceSuspended = false
         unbindRequested = false
         boundHost = null
+        completeBindCompletions(host, response, generation = null)
+        completeUnbindCompletions(host, response, generation = null)
         if (disposeRequested) {
             finishDispose()
         }
+        releaseDeferredSurfacesIfIdle()
         resumePendingBind(deferredBind)
         plugin.onPlayerRenderStateChanged()
     }
 
+    internal fun onPlayerDestroyQueued(host: AndroidPlayerHost) {
+        hostsAwaitingNativeDestroy += host
+    }
+
     override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
         surfaceTexture.setDefaultBufferSize(max(1, width), max(1, height))
-        onNativeSurfaceAvailable(Surface(surfaceTexture), width, height, ownsSurface = true)
+        onNativeSurfaceAvailable(
+            Surface(surfaceTexture),
+            width,
+            height,
+            ownsSurface = true,
+            surfaceTexture = surfaceTexture,
+        )
     }
 
     override fun onSurfaceTextureSizeChanged(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
@@ -298,7 +504,7 @@ internal class ErikaAndroidVideoView(
     }
 
     override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean =
-        onNativeSurfaceDestroyed()
+        onNativeSurfaceDestroyed(surfaceTexture)
 
     override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) = Unit
 
@@ -308,19 +514,26 @@ internal class ErikaAndroidVideoView(
             nativeView.width,
             nativeView.height,
             ownsSurface = false,
+            surfaceTexture = null,
         )
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         if (outputSurface == null) {
-            onNativeSurfaceAvailable(holder.surface, width, height, ownsSurface = false)
+            onNativeSurfaceAvailable(
+                holder.surface,
+                width,
+                height,
+                ownsSurface = false,
+                surfaceTexture = null,
+            )
         } else {
             onNativeSurfaceSizeChanged(width, height)
         }
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        onNativeSurfaceDestroyed()
+        onNativeSurfaceDestroyed(null)
     }
 
     override fun surfaceRedrawNeeded(holder: SurfaceHolder) {
@@ -333,19 +546,31 @@ internal class ErikaAndroidVideoView(
         width: Int,
         height: Int,
         ownsSurface: Boolean,
+        surfaceTexture: SurfaceTexture?,
     ) {
+        advanceSurfaceBindingGeneration(boundHost)
         cancelSurfaceRecovery()
         surfacePixelWidth = max(1, width)
         surfacePixelHeight = max(1, height)
         var detachResponse = NativeResponse.success()
         val host = boundHost
-        if (host != null && (host.surfaceAttached || nativeDetachRetryPending)) {
+        if (host != null &&
+            (host.surfaceAttached || nativeAttachPending || nativeDetachRetryPending)
+        ) {
             detachResponse = detachNativeSurface(host)
-            plugin.reportSurfaceResponse(host, "detachSurface", detachResponse)
+            reportImmediateSurfaceAttempt(
+                host,
+                SurfaceAttempt("detachSurface", detachResponse),
+            )
         }
+        val previousSurfaceTexture = outputSurfaceTexture
         releaseSurface()
+        if (previousSurfaceTexture != null && previousSurfaceTexture !== surfaceTexture) {
+            deferOrReleaseSurfaceTexture(previousSurfaceTexture)
+        }
         outputSurface = surface
         ownsOutputSurface = ownsSurface
+        outputSurfaceTexture = surfaceTexture
         if (!detachResponse.ok) {
             if (host != null) {
                 startSurfaceRecovery(host, "detachSurface", detachResponse)
@@ -372,7 +597,7 @@ internal class ErikaAndroidVideoView(
         val host = boundHost ?: return
         if (unbindRequested || disposeRequested) {
             val response = detachNativeSurface(host)
-            plugin.reportSurfaceResponse(host, "detachSurface", response)
+            reportImmediateSurfaceAttempt(host, SurfaceAttempt("detachSurface", response))
             if (response.ok) {
                 completeUnbind(host)
             } else {
@@ -385,11 +610,7 @@ internal class ErikaAndroidVideoView(
             val attempt = attachIfReady(host)
             handleImmediateAttempt(host, attempt)
         } else if (host.surfaceAttached) {
-            plugin.reportSurfaceResponse(
-                host,
-                "resizeSurface",
-                host.resizeSurface(metrics.width, metrics.height, metrics.scale),
-            )
+            handleImmediateAttempt(host, resizeNativeSurface(host, metrics))
         } else {
             val attempt = attachIfReady(host)
             handleImmediateAttempt(host, attempt)
@@ -398,24 +619,47 @@ internal class ErikaAndroidVideoView(
         plugin.onPlayerRenderStateChanged()
     }
 
-    private fun onNativeSurfaceDestroyed(): Boolean {
+    private fun onNativeSurfaceDestroyed(surfaceTexture: SurfaceTexture?): Boolean {
+        advanceSurfaceBindingGeneration(boundHost)
         stopHdrHeadroomObservation(publishUnknown = true)
         cancelSurfaceRecovery()
         val host = boundHost
         val response = host?.let { host ->
-            val response = detachNativeSurface(host)
-            plugin.reportSurfaceResponse(host, "detachSurface", response)
+            val response = if (surfaceTexture != null) {
+                detachNativeSurface(host)
+            } else {
+                host.detachSurfaceForSystemDestroy()
+            }
+            if (surfaceTexture == null) {
+                plugin.reportSurfaceResponse(host, "detachSurface", response)
+            } else {
+                reportImmediateSurfaceAttempt(
+                    host,
+                    SurfaceAttempt("detachSurface", response),
+                )
+            }
             response
         } ?: NativeResponse.success()
         val decision = androidSurfaceDestroyDecision(response.ok)
-        nativeDetachRetryPending = decision.retryNativeDetach
+        // A timed-out SurfaceView barrier remains queued on the serial presenter. Keep the
+        // native attachment explicit as well: the serialized retry then observes the first
+        // detach's final state before any replacement attach or unbind can complete.
+        val retryNativeDetach = androidSurfaceDestroyNeedsRetry(
+            nativeDetachSucceeded = response.ok,
+            hostDestroying = host?.isDestroyed == true,
+        )
+        nativeDetachRetryPending = retryNativeDetach
         releaseSurface()
+        if (outputSurfaceTexture === surfaceTexture) {
+            outputSurfaceTexture = null
+        }
+        surfaceTexture?.let(::deferOrReleaseSurfaceTexture)
         surfacePixelWidth = 0
         surfacePixelHeight = 0
         if (host != null) {
             if (response.ok && (unbindRequested || disposeRequested)) {
                 completeUnbind(host)
-            } else if (decision.retryNativeDetach) {
+            } else if (retryNativeDetach) {
                 startSurfaceRecovery(host, "detachSurface", response)
             }
         }
@@ -429,6 +673,9 @@ internal class ErikaAndroidVideoView(
             if (!response.ok) {
                 return SurfaceAttempt("detachSurface", response)
             }
+        }
+        if (nativeDetachPending) {
+            return SurfaceAttempt("detachSurface", NativeResponse.success())
         }
         if (!plugin.isActivityActive || host.surfaceAttached) {
             return SurfaceAttempt("attachSurface", NativeResponse.success())
@@ -466,25 +713,103 @@ internal class ErikaAndroidVideoView(
                 "fallbackReason=${androidOutputFallbackReasonLabel(outputCapability.fallbackReason)}" +
                 "(${outputCapability.fallbackReason})",
         )
-        val response = try {
-                host.attachSurface(
-                    surface,
-                    metrics.width,
-                    metrics.height,
-                    metrics.scale,
-                    outputCapability.extendedLinearEligible,
-                    directComposition,
-                    requestedHdrHeadroom,
-                    outputCapability.fallbackReason,
-                )
-            } catch (error: Throwable) {
-                surfaceOperationException(host, "attachSurface", error)
-            }
-        if (response.ok) {
-            attachedDisplayId = display?.displayId
-            attachedDisplayHdrSupported = displayHdrSupported
+        if (nativeAttachPending) {
+            return SurfaceAttempt("attachSurface", NativeResponse.success())
         }
-        return SurfaceAttempt("attachSurface", response)
+        nativeAttachPending = true
+        val bindingGeneration = surfaceBindingGenerations.currentGeneration
+        val posted = host.attachSurfaceAsync(
+            surface,
+            metrics.width,
+            metrics.height,
+            metrics.scale,
+            outputCapability.extendedLinearEligible,
+            directComposition,
+            requestedHdrHeadroom,
+            outputCapability.fallbackReason,
+        ) { result ->
+            mainHandler.post {
+                nativeAttachPending = false
+                releaseDeferredSurfacesIfIdle()
+                if (host.isDestroyed) {
+                    completeBindCompletions(
+                        host,
+                        NativeResponse(false, -1, "Erika player ${host.handle} was destroyed", null),
+                    )
+                    return@post
+                }
+                val response = result.getOrElse { error ->
+                    surfaceOperationException(host, "attachSurface", error)
+                }
+                val callbackIsCurrent = surfaceBindingGenerations.isCurrent(bindingGeneration) &&
+                    boundHost === host && outputSurface === surface
+                if (!callbackIsCurrent) {
+                    handleStaleAttachCompletion(host, response)
+                    return@post
+                }
+                if (response.ok) {
+                    finishSurfaceRecovery(host, "attachSurface")
+                    attachedDisplayId = display?.displayId
+                    attachedDisplayHdrSupported = displayHdrSupported
+                    val latestMetrics = surfaceMetrics(pixelWidth(), pixelHeight())
+                    if (boundHost === host && latestMetrics != metrics) {
+                        handleImmediateAttempt(host, resizeNativeSurface(host, latestMetrics))
+                    }
+                }
+                plugin.reportSurfaceResponse(host, "attachSurface", response)
+                completeBindCompletions(host, response, bindingGeneration)
+                when {
+                    !response.ok && boundHost === host ->
+                        startSurfaceRecovery(host, "attachSurface", response)
+                    boundHost === host && (unbindRequested || disposeRequested) ->
+                        unbind(host)
+                    boundHost === host && outputSurface !== surface -> {
+                        val detach = detachNativeSurface(host)
+                        if (!detach.ok) {
+                            startSurfaceRecovery(host, "detachSurface", detach)
+                        }
+                    }
+                }
+                plugin.onPlayerRenderStateChanged()
+            }
+        }
+        if (!posted) {
+            nativeAttachPending = false
+            return SurfaceAttempt(
+                "attachSurface",
+                NativeResponse(false, -1, "Android presenter thread is unavailable", null),
+            )
+        }
+        return SurfaceAttempt("attachSurface", NativeResponse.success())
+    }
+
+    /**
+     * A retired attach still changed native attachment state, but it no longer
+     * owns any Dart completion or error reporting. Reconcile that physical
+     * result into the newest binding instead of letting it pollute the request
+     * that replaced it.
+     */
+    private fun handleStaleAttachCompletion(
+        host: AndroidPlayerHost,
+        response: NativeResponse,
+    ) {
+        Log.i(
+            TAG,
+            "surfaceAttachCompletionIgnored playerId=${host.handle} viewId=$viewId " +
+                "status=${response.status} error=${response.error.orEmpty()}",
+        )
+        if (host.isDestroyed || boundHost !== host) {
+            return
+        }
+        if (response.ok && host.surfaceAttached) {
+            val detach = detachNativeSurface(host)
+            handleImmediateAttempt(host, SurfaceAttempt("detachSurface", detach))
+            return
+        }
+        if (!unbindRequested && !disposeRequested && !lifecycleSurfaceSuspended) {
+            handleImmediateAttempt(host, attachIfReady(host))
+        }
+        plugin.onPlayerRenderStateChanged()
     }
 
     private fun displaySupportsHdr(display: Display): Boolean {
@@ -539,7 +864,10 @@ internal class ErikaAndroidVideoView(
             )
             stopHdrHeadroomObservation(publishUnknown = false)
             val detachResponse = detachNativeSurface(host)
-            plugin.reportSurfaceResponse(host, "detachSurface", detachResponse)
+            reportImmediateSurfaceAttempt(
+                host,
+                SurfaceAttempt("detachSurface", detachResponse),
+            )
             if (!detachResponse.ok) {
                 startSurfaceRecovery(host, "detachSurface", detachResponse)
                 return
@@ -588,6 +916,7 @@ internal class ErikaAndroidVideoView(
         publishHdrHeadroom(host, display, ratioAvailable)
     }
 
+    @TargetApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
     private fun publishHdrHeadroom(
         host: AndroidPlayerHost,
         display: Display,
@@ -610,23 +939,35 @@ internal class ErikaAndroidVideoView(
         if (lastPublishedHdrHeadroom == state) {
             return
         }
-        val response = try {
-            host.setOutputHeadroom(state.headroom, state.known)
-        } catch (error: Throwable) {
-            surfaceOperationException(host, "setOutputHeadroom", error)
+        val posted = host.setOutputHeadroomAsync(state.headroom, state.known) { result ->
+            mainHandler.post {
+                if (boundHost !== host || host.isDestroyed) {
+                    return@post
+                }
+                val response = result.getOrElse { error ->
+                    surfaceOperationException(host, "setOutputHeadroom", error)
+                }
+                if (!response.ok) {
+                    plugin.reportSurfaceResponse(host, "setOutputHeadroom", response)
+                } else {
+                    lastPublishedHdrHeadroom = state
+                }
+                Log.i(
+                    TAG,
+                    "surfaceHeadroom playerId=${host.handle} viewId=$viewId " +
+                        "displayId=${display.displayId} ratio=${state.headroom} " +
+                        "known=${state.known} requested=$requestedHdrHeadroom " +
+                        "status=${response.status} error=${response.error.orEmpty()}",
+                )
+            }
         }
-        if (!response.ok) {
-            plugin.reportSurfaceResponse(host, "setOutputHeadroom", response)
-        } else {
-            lastPublishedHdrHeadroom = state
+        if (!posted) {
+            plugin.reportSurfaceResponse(
+                host,
+                "setOutputHeadroom",
+                NativeResponse(false, -1, "Android presenter thread is unavailable", null),
+            )
         }
-        Log.i(
-            TAG,
-            "surfaceHeadroom playerId=${host.handle} viewId=$viewId " +
-                "displayId=${display.displayId} ratio=${state.headroom} " +
-                "known=${state.known} requested=$requestedHdrHeadroom " +
-                "status=${response.status} error=${response.error.orEmpty()}",
-        )
     }
 
     private fun stopHdrHeadroomObservation(publishUnknown: Boolean) {
@@ -650,38 +991,165 @@ internal class ErikaAndroidVideoView(
                 if (lastPublishedHdrHeadroom == unknown) {
                     return@let
                 }
-                runCatching { host.setOutputHeadroom(unknown.headroom, unknown.known) }
-                    .onSuccess { response ->
+                host.setOutputHeadroomAsync(unknown.headroom, unknown.known) { result ->
+                    mainHandler.post {
+                        if (boundHost !== host || host.isDestroyed) {
+                            return@post
+                        }
+                        val response = result.getOrElse { error ->
+                            surfaceOperationException(host, "setOutputHeadroom", error)
+                        }
                         if (response.ok) {
                             lastPublishedHdrHeadroom = unknown
                         } else {
                             plugin.reportSurfaceResponse(host, "setOutputHeadroom", response)
                         }
                     }
-                    .onFailure { error ->
-                        Log.w(
-                            TAG,
-                            "setOutputHeadroom unknown failed playerId=${host.handle} " +
-                                "viewId=$viewId",
-                            error,
-                        )
-                    }
+                }
             }
         }
     }
 
     private fun detachNativeSurface(host: AndroidPlayerHost): NativeResponse {
-        val response = try {
-            host.detachSurface()
-        } catch (error: Throwable) {
-            surfaceOperationException(host, "detachSurface", error)
+        if ((!host.surfaceAttached && !nativeAttachPending) || host.isDestroyed) {
+            return NativeResponse.success()
         }
-        nativeDetachRetryPending = !response.ok && host.surfaceAttached
-        if (response.ok) {
-            attachedDisplayId = null
-            attachedDisplayHdrSupported = null
+        if (nativeDetachPending) {
+            return NativeResponse.success()
         }
-        return response
+        nativeDetachPending = true
+        val posted = host.detachSurfaceAsync { result ->
+            mainHandler.post {
+                nativeDetachPending = false
+                val response = result.getOrElse { error ->
+                    surfaceOperationException(host, "detachSurface", error)
+                }
+                nativeDetachRetryPending = !response.ok && host.surfaceAttached
+                if (response.ok) {
+                    finishSurfaceRecovery(host, "detachSurface")
+                    attachedDisplayId = null
+                    attachedDisplayHdrSupported = null
+                }
+                plugin.reportSurfaceResponse(host, "detachSurface", response)
+                releaseDeferredSurfacesIfIdle()
+                if (!response.ok) {
+                    completeUnbindCompletions(host, response)
+                    failPendingBind(response)
+                }
+                if (androidDetachCompletesSupersededUnbind(
+                        nativeDetachSucceeded = response.ok,
+                        unbindRequested = unbindRequested,
+                        disposeRequested = disposeRequested,
+                    )
+                ) {
+                    completeUnbindCompletions(host, NativeResponse.success())
+                }
+                if (boundHost === host && !host.isDestroyed) {
+                    when {
+                        !response.ok -> {
+                            startSurfaceRecovery(host, "detachSurface", response)
+                        }
+                        unbindRequested || disposeRequested -> completeUnbind(host)
+                        !lifecycleSurfaceSuspended -> {
+                            val attempt = attachIfReady(host)
+                            handleImmediateAttempt(host, attempt)
+                            if (attempt.response.ok && !nativeAttachPending) {
+                                completeBindCompletions(host, NativeResponse.success())
+                            }
+                        }
+                    }
+                }
+                plugin.onPlayerRenderStateChanged()
+            }
+        }
+        if (!posted) {
+            nativeDetachPending = false
+            return NativeResponse(
+                false,
+                -1,
+                "Android presenter thread rejected surface detach",
+                null,
+            )
+        }
+        return NativeResponse.success()
+    }
+
+    private fun resizeNativeSurface(
+        host: AndroidPlayerHost,
+        metrics: AndroidSurfaceMetrics,
+    ): SurfaceAttempt {
+        if (host.isDestroyed) {
+            pendingResizeRequest = null
+            return SurfaceAttempt("resizeSurface", NativeResponse.success())
+        }
+        pendingResizeRequest = PendingSurfaceResize(
+            host = host,
+            surface = outputSurface,
+            generation = surfaceBindingGenerations.currentGeneration,
+            metrics = metrics,
+        )
+        if (nativeResizePending) {
+            return SurfaceAttempt("resizeSurface", NativeResponse.success())
+        }
+        val next = pendingResizeRequest
+            ?: return SurfaceAttempt("resizeSurface", NativeResponse.success())
+        pendingResizeRequest = null
+        nativeResizePending = true
+        val posted = host.resizeSurfaceAsync(
+            next.metrics.width,
+            next.metrics.height,
+            next.metrics.scale,
+        ) { result ->
+            mainHandler.post {
+                nativeResizePending = false
+                val response = if (host.isDestroyed) {
+                    null
+                } else {
+                    result.getOrElse { error ->
+                        surfaceOperationException(host, "resizeSurface", error)
+                    }
+                }
+                val callbackIsCurrent = androidSurfaceCallbackIsCurrent(
+                    callbackGeneration = next.generation,
+                    currentGeneration = surfaceBindingGenerations.currentGeneration,
+                    hostStillBound = boundHost === next.host,
+                    surfaceStillCurrent = outputSurface === next.surface,
+                )
+                if (callbackIsCurrent && response != null) {
+                    plugin.reportSurfaceResponse(host, "resizeSurface", response)
+                    if (response.ok) {
+                        finishSurfaceRecovery(host, "resizeSurface")
+                    } else {
+                        startSurfaceRecovery(host, "resizeSurface", response, next.metrics)
+                    }
+                }
+                val pending = pendingResizeRequest
+                if (pending != null) {
+                    val pendingIsCurrent = androidSurfaceCallbackIsCurrent(
+                        callbackGeneration = pending.generation,
+                        currentGeneration = surfaceBindingGenerations.currentGeneration,
+                        hostStillBound = boundHost === pending.host,
+                        surfaceStillCurrent = outputSurface === pending.surface,
+                    )
+                    pendingResizeRequest = null
+                    if (pendingIsCurrent) {
+                        handleImmediateAttempt(
+                            pending.host,
+                            resizeNativeSurface(pending.host, pending.metrics),
+                        )
+                    }
+                }
+                plugin.onPlayerRenderStateChanged()
+            }
+        }
+        if (!posted) {
+            nativeResizePending = false
+            return SurfaceAttempt(
+                "resizeSurface",
+                NativeResponse(false, -1, "Android presenter thread is unavailable", null),
+            )
+        }
+        return SurfaceAttempt("resizeSurface", NativeResponse.success())
     }
 
     private fun surfaceOperationException(
@@ -700,26 +1168,51 @@ internal class ErikaAndroidVideoView(
     }
 
     private fun handleImmediateAttempt(host: AndroidPlayerHost, attempt: SurfaceAttempt) {
-        plugin.reportSurfaceResponse(host, attempt.operation, attempt.response)
+        if (!reportImmediateSurfaceAttempt(host, attempt)) {
+            return
+        }
         if (!attempt.response.ok) {
             startSurfaceRecovery(host, attempt.operation, attempt.response)
         }
+    }
+
+    /** Returns false while the native operation is merely queued/in flight. */
+    private fun reportImmediateSurfaceAttempt(
+        host: AndroidPlayerHost,
+        attempt: SurfaceAttempt,
+    ): Boolean {
+        if (
+            androidSurfaceOperationIsPending(
+                operation = attempt.operation,
+                nativeAttachPending = nativeAttachPending,
+                nativeDetachPending = nativeDetachPending,
+                nativeResizePending = nativeResizePending,
+            )
+        ) {
+            return false
+        }
+        plugin.reportSurfaceResponse(host, attempt.operation, attempt.response)
+        return true
     }
 
     private fun startSurfaceRecovery(
         host: AndroidPlayerHost,
         operation: String,
         response: NativeResponse,
+        resizeMetrics: AndroidSurfaceMetrics? = null,
     ) {
         if (disposed || boundHost !== host) {
             return
         }
+        val generation = surfaceRecoveryTokens.currentToken
+        val retryAttempt = surfaceRecoveryAttempts.recordFailure(generation, operation)
         scheduleSurfaceRecovery(
             host = host,
-            generation = surfaceRecoveryTokens.currentToken,
+            generation = generation,
             failedOperation = operation,
             failedResponse = response,
-            retryAttempt = 1,
+            retryAttempt = retryAttempt,
+            resizeMetrics = resizeMetrics,
         )
     }
 
@@ -729,6 +1222,7 @@ internal class ErikaAndroidVideoView(
         failedOperation: String,
         failedResponse: NativeResponse,
         retryAttempt: Int,
+        resizeMetrics: AndroidSurfaceMetrics?,
     ) {
         if (disposed || boundHost !== host || !surfaceRecoveryTokens.isCurrent(generation)) {
             return
@@ -736,15 +1230,13 @@ internal class ErikaAndroidVideoView(
         val delayMillis = androidSurfaceRecoveryDelayMillis(retryAttempt)
         if (delayMillis == null) {
             surfaceRecoveryRunnable = null
-            plugin.reportSurfaceRecoveryExhausted(
-                host = host,
-                viewId = viewId,
-                operation = failedOperation,
-                generation = generation,
-                retryAttempts = retryAttempt - 1,
-                response = failedResponse,
+            reportSurfaceRecoveryExhaustedOnce(
+                host,
+                generation,
+                failedOperation,
+                retryAttempt - 1,
+                failedResponse,
             )
-            plugin.onPlayerRenderStateChanged()
             return
         }
 
@@ -755,36 +1247,27 @@ internal class ErikaAndroidVideoView(
                 "retryAttempt=$retryAttempt delayMs=$delayMillis " +
                 "status=${failedResponse.status} error=${failedResponse.error.orEmpty()}",
         )
+        surfaceRecoveryRunnable?.let(mainHandler::removeCallbacks)
         val runnable = Runnable {
             if (disposed || boundHost !== host || !surfaceRecoveryTokens.isCurrent(generation)) {
                 return@Runnable
             }
             surfaceRecoveryRunnable = null
-            val failure = performSurfaceRecovery(host)
-            if (failure == null) {
-                Log.i(
+            when (val result = performSurfaceRecovery(host, failedOperation, resizeMetrics)) {
+                SurfaceRecoveryResult.Complete -> finishSurfaceRecovery(host, failedOperation)
+                SurfaceRecoveryResult.Pending -> Log.d(
                     TAG,
-                    "surfaceRecoverySucceeded playerId=${host.handle} viewId=$viewId " +
-                        "generation=$generation retryAttempt=$retryAttempt",
+                    "surfaceRecoveryDispatched playerId=${host.handle} viewId=$viewId " +
+                        "operation=$failedOperation generation=$generation " +
+                        "retryAttempt=$retryAttempt",
                 )
-                if (
-                    androidShouldRefreshHdrHeadroomAfterRecovery(
-                        hostStillBound = boundHost === host,
-                        surfaceAttached = host.surfaceAttached,
-                        disposed = disposed,
-                        disposeRequested = disposeRequested,
-                        unbindRequested = unbindRequested,
-                    )
-                ) {
-                    refreshHdrHeadroomObservation()
-                }
-            } else {
-                scheduleSurfaceRecovery(
+                is SurfaceRecoveryResult.Failed -> startSurfaceRecovery(
                     host = host,
-                    generation = generation,
-                    failedOperation = failure.operation,
-                    failedResponse = failure.response,
-                    retryAttempt = retryAttempt + 1,
+                    operation = result.attempt.operation,
+                    response = result.attempt.response,
+                    resizeMetrics = resizeMetrics.takeIf {
+                        result.attempt.operation == "resizeSurface"
+                    },
                 )
             }
             plugin.onPlayerRenderStateChanged()
@@ -792,37 +1275,139 @@ internal class ErikaAndroidVideoView(
         surfaceRecoveryRunnable = runnable
         if (!mainHandler.postDelayed(runnable, delayMillis)) {
             surfaceRecoveryRunnable = null
-            plugin.reportSurfaceRecoveryExhausted(
-                host = host,
-                viewId = viewId,
-                operation = failedOperation,
-                generation = generation,
-                retryAttempts = retryAttempt - 1,
-                response = failedResponse,
+            reportSurfaceRecoveryExhaustedOnce(
+                host,
+                generation,
+                failedOperation,
+                retryAttempt - 1,
+                failedResponse,
             )
         }
     }
 
-    /** Returns the operation that still failed, or null once recovery is complete. */
-    private fun performSurfaceRecovery(host: AndroidPlayerHost): SurfaceAttempt? {
+    private fun reportSurfaceRecoveryExhaustedOnce(
+        host: AndroidPlayerHost,
+        generation: Long,
+        failedOperation: String,
+        retryAttempts: Int,
+        failedResponse: NativeResponse,
+    ) {
+        if (!surfaceRecoveryAttempts.markExhaustionReported(generation, failedOperation)) {
+            return
+        }
+        plugin.reportSurfaceRecoveryExhausted(
+            host = host,
+            viewId = viewId,
+            operation = failedOperation,
+            generation = generation,
+            retryAttempts = retryAttempts,
+            response = failedResponse,
+        )
+        retireHostAfterSurfaceRecoveryExhaustionIfNeeded(host, failedOperation)
+        plugin.onPlayerRenderStateChanged()
+    }
+
+    private fun retireHostAfterSurfaceRecoveryExhaustionIfNeeded(
+        host: AndroidPlayerHost,
+        failedOperation: String,
+    ) {
+        if (
+            androidSurfaceRecoveryExhaustionRequiresHostRetirement(
+                failedOperation = failedOperation,
+                nativeDetachRetryPending = nativeDetachRetryPending,
+                unbindRequested = unbindRequested,
+                disposeRequested = disposeRequested,
+            )
+        ) {
+            plugin.retirePlayerAfterSurfaceRecoveryExhausted(host)
+        }
+    }
+
+    private fun performSurfaceRecovery(
+        host: AndroidPlayerHost,
+        failedOperation: String,
+        resizeMetrics: AndroidSurfaceMetrics?,
+    ): SurfaceRecoveryResult {
+        if (nativeAttachPending || nativeDetachPending || nativeResizePending) {
+            return SurfaceRecoveryResult.Pending
+        }
         if (nativeDetachRetryPending || unbindRequested || disposeRequested) {
             val detachResponse = detachNativeSurface(host)
-            plugin.reportSurfaceResponse(host, "detachSurface", detachResponse)
+            reportImmediateSurfaceAttempt(
+                host,
+                SurfaceAttempt("detachSurface", detachResponse),
+            )
             if (!detachResponse.ok) {
-                return SurfaceAttempt("detachSurface", detachResponse)
+                return SurfaceRecoveryResult.Failed(
+                    SurfaceAttempt("detachSurface", detachResponse),
+                )
+            }
+            if (nativeDetachPending) {
+                return SurfaceRecoveryResult.Pending
             }
             if (unbindRequested || disposeRequested) {
                 completeUnbind(host)
-                return null
+                return SurfaceRecoveryResult.Complete
+            }
+        }
+
+        if (failedOperation == "resizeSurface" && host.surfaceAttached) {
+            val attempt = resizeNativeSurface(
+                host,
+                resizeMetrics ?: surfaceMetrics(pixelWidth(), pixelHeight()),
+            )
+            reportImmediateSurfaceAttempt(host, attempt)
+            if (!attempt.response.ok) {
+                return SurfaceRecoveryResult.Failed(attempt)
+            }
+            return if (nativeResizePending) {
+                SurfaceRecoveryResult.Pending
+            } else {
+                SurfaceRecoveryResult.Complete
             }
         }
 
         val attachAttempt = attachIfReady(host)
-        plugin.reportSurfaceResponse(host, attachAttempt.operation, attachAttempt.response)
-        return attachAttempt.takeUnless { it.response.ok }
+        reportImmediateSurfaceAttempt(host, attachAttempt)
+        if (!attachAttempt.response.ok) {
+            return SurfaceRecoveryResult.Failed(attachAttempt)
+        }
+        return if (nativeAttachPending) {
+            SurfaceRecoveryResult.Pending
+        } else {
+            SurfaceRecoveryResult.Complete
+        }
+    }
+
+    private fun finishSurfaceRecovery(host: AndroidPlayerHost, operation: String) {
+        val generation = surfaceRecoveryTokens.currentToken
+        if (!surfaceRecoveryAttempts.complete(generation, operation)) {
+            return
+        }
+        surfaceRecoveryRunnable?.let(mainHandler::removeCallbacks)
+        surfaceRecoveryRunnable = null
+        Log.i(
+            TAG,
+            "surfaceRecoverySucceeded playerId=${host.handle} viewId=$viewId " +
+                "operation=$operation generation=$generation",
+        )
+        if (
+            androidShouldRefreshHdrHeadroomAfterRecovery(
+                hostStillBound = boundHost === host,
+                surfaceAttached = host.surfaceAttached,
+                disposed = disposed,
+                disposeRequested = disposeRequested,
+                unbindRequested = unbindRequested,
+            )
+        ) {
+            refreshHdrHeadroomObservation()
+        }
     }
 
     private fun completeUnbind(host: AndroidPlayerHost) {
+        if (nativeAttachPending || nativeDetachPending) {
+            return
+        }
         val deferredBind = takePendingBind()
         stopHdrHeadroomObservation(publishUnknown = false)
         cancelSurfaceRecovery()
@@ -835,6 +1420,8 @@ internal class ErikaAndroidVideoView(
         }
         lastPublishedHdrHeadroom = null
         unbindRequested = false
+        lifecycleSurfaceSuspended = false
+        completeUnbindCompletions(host, NativeResponse.success())
         if (disposeRequested) {
             finishDispose()
         }
@@ -852,7 +1439,14 @@ internal class ErikaAndroidVideoView(
     }
 
     private fun clearPendingBind() {
-        pendingBind = null
+        failPendingBind(
+            NativeResponse(false, -1, "Android surface bind was superseded", null),
+        )
+    }
+
+    private fun failPendingBind(response: NativeResponse) {
+        val deferred = takePendingBind() ?: return
+        deferred.targetView.completeBindCompletions(deferred.host, response)
     }
 
     private fun takePendingBind(): PendingViewBind? {
@@ -887,6 +1481,10 @@ internal class ErikaAndroidVideoView(
                     "targetAcceptsHost=$targetAcceptsHost " +
                     "hostAcceptsTarget=$hostAcceptsTarget",
             )
+            targetView.completeBindCompletions(
+                pending.host,
+                NativeResponse(false, -1, "Deferred surface bind was cancelled", null),
+            )
             return
         }
         Log.i(
@@ -897,15 +1495,25 @@ internal class ErikaAndroidVideoView(
         runCatching { targetView.bind(pending.host) }
             .onSuccess { response ->
                 if (!response.ok) {
+                    targetView.completeBindCompletions(pending.host, response)
                     Log.w(
                         TAG,
                         "surfaceBindDeferredStillPending playerId=${pending.host.handle} " +
                             "sourceViewId=$viewId targetViewId=${targetView.viewId} " +
                             "status=${response.status} error=${response.error.orEmpty()}",
                     )
+                } else if (!targetView.nativeAttachPending) {
+                    targetView.completeBindCompletions(
+                        pending.host,
+                        NativeResponse.success(),
+                    )
                 }
             }
             .onFailure { error ->
+                targetView.completeBindCompletions(
+                    pending.host,
+                    NativeResponse(false, -1, error.message ?: "Deferred surface bind threw", null),
+                )
                 Log.e(
                     TAG,
                     "surfaceBindDeferredFailed playerId=${pending.host.handle} " +
@@ -915,8 +1523,70 @@ internal class ErikaAndroidVideoView(
             }
     }
 
+    private fun completeBindCompletions(
+        host: AndroidPlayerHost,
+        response: NativeResponse,
+        generation: Long? = surfaceBindingGenerations.currentGeneration,
+    ) {
+        completeViewCompletions(pendingBindCompletions, host, response, generation)
+    }
+
+    private fun completeUnbindCompletions(
+        host: AndroidPlayerHost,
+        response: NativeResponse,
+        generation: Long? = null,
+    ) {
+        completeViewCompletions(pendingUnbindCompletions, host, response, generation)
+    }
+
+    private fun completeViewCompletions(
+        completions: MutableList<PendingViewCompletion>,
+        host: AndroidPlayerHost,
+        response: NativeResponse,
+        generation: Long?,
+    ) {
+        val callbacks = mutableListOf<(NativeResponse) -> Unit>()
+        val iterator = completions.iterator()
+        while (iterator.hasNext()) {
+            val completion = iterator.next()
+            if (completion.host === host && androidSurfaceCompletionMatchesGeneration(
+                    completionGeneration = completion.generation,
+                    callbackGeneration = generation,
+                )
+            ) {
+                iterator.remove()
+                callbacks += completion.onComplete
+            }
+        }
+        callbacks.forEach { callback -> callback(response) }
+    }
+
+    private fun advanceSurfaceBindingGeneration(
+        migratePendingBindForHost: AndroidPlayerHost? = null,
+    ): Long {
+        val generation = surfaceBindingGenerations.advance()
+        pendingResizeRequest = pendingResizeRequest
+            ?.takeIf { request -> request.generation == generation }
+        if (migratePendingBindForHost != null) {
+            pendingBindCompletions
+                .filter { completion -> completion.host === migratePendingBindForHost }
+                .forEach { completion -> completion.generation = generation }
+        }
+        return generation
+    }
+
+    private fun failAllViewCompletions(message: String) {
+        val response = NativeResponse(false, -1, message, null)
+        val callbacks = (pendingBindCompletions + pendingUnbindCompletions)
+            .map(PendingViewCompletion::onComplete)
+        pendingBindCompletions.clear()
+        pendingUnbindCompletions.clear()
+        callbacks.forEach { callback -> callback(response) }
+    }
+
     private fun cancelSurfaceRecovery() {
         surfaceRecoveryTokens.invalidate()
+        surfaceRecoveryAttempts.reset()
         surfaceRecoveryRunnable?.let(mainHandler::removeCallbacks)
         surfaceRecoveryRunnable = null
     }
@@ -934,20 +1604,74 @@ internal class ErikaAndroidVideoView(
 
     private fun releaseSurface() {
         if (ownsOutputSurface) {
-            outputSurface?.release()
+            outputSurface?.let { surface ->
+                if (surfaceReleaseMustWait()) {
+                    deferredSurfaceReleases += surface
+                } else {
+                    surface.release()
+                }
+            }
         }
         outputSurface = null
         ownsOutputSurface = false
     }
+
+    private fun releaseDeferredSurfacesIfIdle() {
+        if (surfaceReleaseMustWait()) {
+            return
+        }
+        deferredSurfaceReleases.forEach(Surface::release)
+        deferredSurfaceReleases.clear()
+        deferredSurfaceTextureReleases.forEach(SurfaceTexture::release)
+        deferredSurfaceTextureReleases.clear()
+    }
+
+    private fun deferOrReleaseSurfaceTexture(surfaceTexture: SurfaceTexture) {
+        if (surfaceReleaseMustWait()) {
+            if (deferredSurfaceTextureReleases.none { it === surfaceTexture }) {
+                deferredSurfaceTextureReleases += surfaceTexture
+            }
+        } else {
+            surfaceTexture.release()
+        }
+    }
+
+    private fun surfaceReleaseMustWait(): Boolean =
+        nativeAttachPending ||
+            nativeDetachPending ||
+            lifecycleDetachPending ||
+            nativeDetachRetryPending ||
+            boundHost?.surfaceAttached == true ||
+            boundHost?.isNativeDestroyPending == true ||
+            hostsAwaitingNativeDestroy.isNotEmpty()
 
     private data class SurfaceAttempt(
         val operation: String,
         val response: NativeResponse,
     )
 
+    private sealed interface SurfaceRecoveryResult {
+        data object Complete : SurfaceRecoveryResult
+        data object Pending : SurfaceRecoveryResult
+        data class Failed(val attempt: SurfaceAttempt) : SurfaceRecoveryResult
+    }
+
     private data class PendingViewBind(
         val host: AndroidPlayerHost,
         val targetView: ErikaAndroidVideoView,
+    )
+
+    private data class PendingViewCompletion(
+        val host: AndroidPlayerHost,
+        var generation: Long,
+        val onComplete: (NativeResponse) -> Unit,
+    )
+
+    private data class PendingSurfaceResize(
+        val host: AndroidPlayerHost,
+        val surface: Surface?,
+        val generation: Long,
+        val metrics: AndroidSurfaceMetrics,
     )
 
     private companion object {

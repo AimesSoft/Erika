@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::env;
 use std::ffi::{CStr, CString, c_char};
 use std::fs::{OpenOptions, create_dir_all};
@@ -364,6 +365,7 @@ pub enum ErikaPresenterOutputMode {
     Sdr = 0,
     AppleEdr = 1,
     ExtendedLinear = 2,
+    Auto = 3,
 }
 
 #[repr(C)]
@@ -385,6 +387,7 @@ impl ErikaPresenterOutputMode {
         match value {
             1 => Self::AppleEdr,
             2 => Self::ExtendedLinear,
+            3 => Self::Auto,
             _ => Self::Sdr,
         }
     }
@@ -546,6 +549,23 @@ pub struct ErikaOutputStatus {
     pub extended_linear_frames: u64,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ErikaPresenterResourceStatus {
+    pub device_current_allocated_bytes: u64,
+    pub device_recommended_working_set_bytes: u64,
+    pub drawable_estimated_bytes: u64,
+    pub video_frame_bytes: u64,
+    pub overlay_atlas_bytes: u64,
+    pub danmaku_atlas_bytes: u64,
+    pub danmaku_vertex_buffer_bytes: u64,
+    pub upscaler_bytes: u64,
+    pub renderer_tracked_bytes: u64,
+    pub presenter_cpu_danmaku_atlas_bytes: u64,
+    pub drawable_count: u32,
+    pub output_mode_switches: u64,
+}
+
 impl Default for ErikaOutputStatus {
     fn default() -> Self {
         output_status_to_c(OutputRuntimeStatus::default())
@@ -699,6 +719,7 @@ pub struct ErikaHandle {
 pub struct ErikaPresenterHandle {
     presenter: PresenterRuntime,
     events: Receiver<PlayerEvent>,
+    pending_events: VecDeque<PlayerEvent>,
 }
 
 #[repr(C)]
@@ -1236,7 +1257,11 @@ fn create_presenter_handle(config: PresenterConfig) -> *mut ErikaPresenterHandle
     match created {
         Ok(Ok((presenter, events))) => {
             clear_last_error();
-            let handle = Box::into_raw(Box::new(ErikaPresenterHandle { presenter, events }));
+            let handle = Box::into_raw(Box::new(ErikaPresenterHandle {
+                presenter,
+                events,
+                pending_events: VecDeque::new(),
+            }));
             capi_trace(format!("fn=create_presenter_handle.done handle={handle:p}"));
             handle
         }
@@ -1327,6 +1352,14 @@ fn presenter_config_from_c(config: ErikaPresenterConfig) -> PresenterConfig {
                 1.0
             };
             MetalOutputMode::extended_linear(headroom)
+        }
+        ErikaPresenterOutputMode::Auto => {
+            let headroom = if config.edr_headroom.is_finite() {
+                config.edr_headroom
+            } else {
+                1.0
+            };
+            MetalOutputMode::auto(headroom)
         }
         ErikaPresenterOutputMode::Sdr => MetalOutputMode::Sdr,
     };
@@ -1447,6 +1480,7 @@ fn output_status_to_c(status: OutputRuntimeStatus) -> ErikaOutputStatus {
         OutputMode::Sdr => ErikaPresenterOutputMode::Sdr as i32,
         OutputMode::AppleEdr { .. } => ErikaPresenterOutputMode::AppleEdr as i32,
         OutputMode::ExtendedLinear { .. } => ErikaPresenterOutputMode::ExtendedLinear as i32,
+        OutputMode::Auto { .. } => ErikaPresenterOutputMode::Auto as i32,
     };
     let active_encoding = match status.active_encoding {
         ActiveOutputEncoding::SdrSrgb => 0,
@@ -1473,6 +1507,33 @@ fn output_status_to_c(status: OutputRuntimeStatus) -> ErikaOutputStatus {
         data_space_failures: status.data_space_failures,
         headroom_updates: status.headroom_updates,
         extended_linear_frames: status.extended_linear_frames,
+    }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+fn resource_status_to_c(snapshot: PresenterRuntimeSnapshot) -> ErikaPresenterResourceStatus {
+    let resources = snapshot.resources;
+    ErikaPresenterResourceStatus {
+        device_current_allocated_bytes: resources.device_current_allocated_bytes,
+        device_recommended_working_set_bytes: resources.device_recommended_working_set_bytes,
+        drawable_estimated_bytes: resources.drawable_estimated_bytes,
+        video_frame_bytes: resources.video_frame_bytes,
+        overlay_atlas_bytes: resources.overlay_atlas_bytes,
+        danmaku_atlas_bytes: resources.danmaku_atlas_bytes,
+        danmaku_vertex_buffer_bytes: resources.danmaku_vertex_buffer_bytes,
+        upscaler_bytes: resources.upscaler_bytes,
+        renderer_tracked_bytes: resources.renderer_tracked_bytes,
+        presenter_cpu_danmaku_atlas_bytes: snapshot
+            .current_danmaku_atlas_bytes
+            .min(u64::MAX as usize) as u64,
+        drawable_count: resources.drawable_count,
+        output_mode_switches: resources.output_mode_switches,
     }
 }
 
@@ -1606,6 +1667,80 @@ pub unsafe extern "C" fn erika_presenter_open(
     target_os = "android",
     target_env = "ohos"
 ))]
+fn retain_presenter_events_from_latest_open(handle: &mut ErikaPresenterHandle) {
+    retain_presenter_events_from_latest_state(handle, PlayerState::Opening, "open", true);
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+fn retain_presenter_events_from_latest_state(
+    handle: &mut ErikaPresenterHandle,
+    boundary_state: PlayerState,
+    boundary_name: &str,
+    preserve_surface_lifecycle: bool,
+) {
+    let mut drained = handle.events.try_iter().collect::<Vec<_>>();
+    let Some(boundary) = drained
+        .iter()
+        .rposition(|event| *event == PlayerEvent::StateChanged(boundary_state))
+    else {
+        // Argument/state validation can reject Open before Player::open establishes
+        // a boundary. Preserve everything in that case.
+        handle.pending_events.extend(drained);
+        return;
+    };
+    let mut latest_boundary_events = drained.split_off(boundary);
+    let stale_event_count = handle.pending_events.len().saturating_add(drained.len());
+    if preserve_surface_lifecycle {
+        handle
+            .pending_events
+            .retain(presenter_event_is_surface_lifecycle);
+        handle.pending_events.extend(
+            drained
+                .into_iter()
+                .filter(presenter_event_is_surface_lifecycle),
+        );
+    } else {
+        handle.pending_events.clear();
+    }
+    let preserved_events = handle.pending_events.len();
+    handle
+        .pending_events
+        .extend(latest_boundary_events.drain(..));
+    let discarded_events = stale_event_count.saturating_sub(preserved_events);
+    if discarded_events > 0 {
+        capi_trace(format!(
+            "fn=erika_presenter_{boundary_name}.discard_stale_events handle={handle:p} count={discarded_events}"
+        ));
+    }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+fn presenter_event_is_surface_lifecycle(event: &PlayerEvent) -> bool {
+    matches!(
+        event,
+        PlayerEvent::SurfaceAttached(_) | PlayerEvent::SurfaceDetached
+    )
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_open_with_headers(
     handle: *mut ErikaPresenterHandle,
@@ -1631,6 +1766,7 @@ pub unsafe extern "C" fn erika_presenter_open_with_headers(
                 .presenter
                 .open(MediaRequest::new(uri).with_http_headers(headers)),
         );
+        retain_presenter_events_from_latest_open(handle);
         capi_trace(format!(
             "fn=erika_presenter_open.done handle={handle:p} status={status:?}"
         ));
@@ -1700,7 +1836,9 @@ pub unsafe extern "C" fn erika_presenter_stop(handle: *mut ErikaPresenterHandle)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_close(handle: *mut ErikaPresenterHandle) -> ErikaStatus {
     with_presenter_mut(handle, |handle| {
-        status_from_player_result(handle.presenter.close())
+        let status = status_from_player_result(handle.presenter.close());
+        retain_presenter_events_from_latest_state(handle, PlayerState::Closed, "close", false);
+        status
     })
 }
 
@@ -2087,6 +2225,28 @@ pub unsafe extern "C" fn erika_presenter_get_output_status(
     target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_get_resource_status(
+    handle: *mut ErikaPresenterHandle,
+    out_status: *mut ErikaPresenterResourceStatus,
+) -> ErikaStatus {
+    if out_status.is_null() {
+        return ErikaStatus::NullPointer;
+    }
+    with_presenter_mut(handle, |handle| {
+        let status = resource_status_to_c(handle.presenter.runtime_snapshot());
+        unsafe { *out_status = status };
+        ErikaStatus::Ok
+    })
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_add_external_subtitle(
     handle: *mut ErikaPresenterHandle,
     uri: *const c_char,
@@ -2123,6 +2283,24 @@ pub unsafe extern "C" fn erika_presenter_add_external_subtitle(
     _uri: *const c_char,
     _out_track_id: *mut i64,
 ) -> ErikaStatus {
+    ErikaStatus::PlayerError
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+)))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_get_resource_status(
+    _handle: *mut std::ffi::c_void,
+    out_status: *mut ErikaPresenterResourceStatus,
+) -> ErikaStatus {
+    if out_status.is_null() {
+        return ErikaStatus::NullPointer;
+    }
     ErikaStatus::PlayerError
 }
 
@@ -3470,7 +3648,12 @@ pub unsafe extern "C" fn erika_presenter_poll_event(
     }
     match catch_unwind(AssertUnwindSafe(|| {
         let handle = unsafe { &mut *handle };
-        match handle.events.try_recv() {
+        let next_event = handle
+            .pending_events
+            .pop_front()
+            .map(Ok)
+            .unwrap_or_else(|| handle.events.try_recv());
+        match next_event {
             Ok(event) => {
                 let event = event_to_c(event);
                 let preserves_message = matches!(
@@ -4557,6 +4740,118 @@ mod tests {
         target_env = "ohos"
     ))]
     #[test]
+    fn presenter_open_discards_events_from_the_previous_content_boundary() {
+        let handle = erika_presenter_create();
+        assert!(!handle.is_null());
+        let first = CString::new("/tmp/erika-capi-missing-first.mp4").unwrap();
+        let second = CString::new("/tmp/erika-capi-missing-second.mp4").unwrap();
+
+        assert_eq!(
+            unsafe { erika_presenter_open(handle, first.as_ptr()) },
+            ErikaStatus::PlayerError
+        );
+        assert_eq!(
+            unsafe { erika_presenter_open(handle, second.as_ptr()) },
+            ErikaStatus::PlayerError
+        );
+
+        let mut event = ErikaEvent::default();
+        let mut delivered = 0usize;
+        let mut saw_buffering_reset = false;
+        while unsafe { erika_presenter_poll_event(handle, &mut event) } == ErikaStatus::Ok {
+            delivered += 1;
+            saw_buffering_reset |=
+                event.kind == ErikaEventKind::BufferingChanged && !event.buffering;
+        }
+        assert_eq!(
+            delivered, 4,
+            "only the second failed Open may remain queued"
+        );
+        assert!(
+            saw_buffering_reset,
+            "Open must reset the previous content's buffering state",
+        );
+
+        assert_eq!(
+            unsafe { erika_presenter_open(handle, first.as_ptr()) },
+            ErikaStatus::PlayerError
+        );
+        assert_eq!(unsafe { erika_presenter_close(handle) }, ErikaStatus::Ok);
+        let mut closed_events = Vec::new();
+        while unsafe { erika_presenter_poll_event(handle, &mut event) } == ErikaStatus::Ok {
+            closed_events.push((event.kind, event.state, event.buffering));
+        }
+        assert_eq!(
+            closed_events,
+            vec![
+                (ErikaEventKind::StateChanged, ErikaState::Closed, false,),
+                (ErikaEventKind::BufferingChanged, ErikaState::Idle, false,),
+            ],
+            "Close must retire failed Open events and reset buffering",
+        );
+
+        unsafe { erika_presenter_destroy(handle) };
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        any(target_os = "ios", target_os = "tvos"),
+        target_os = "windows",
+        target_os = "android",
+        target_env = "ohos"
+    ))]
+    #[test]
+    fn presenter_open_preserves_surface_lifecycle_events() {
+        let handle = erika_presenter_create();
+        assert!(!handle.is_null());
+        let missing = CString::new("/tmp/erika-capi-missing-surface-boundary.mp4").unwrap();
+
+        unsafe { &mut *handle }
+            .presenter
+            .player()
+            .attach_surface(PlatformSurface::Metal(MetalSurfaceHandle::new(
+                42, 1920, 1080, 2.0,
+            )))
+            .unwrap();
+        assert_eq!(
+            unsafe { erika_presenter_open(handle, missing.as_ptr()) },
+            ErikaStatus::PlayerError
+        );
+
+        let mut event = ErikaEvent::default();
+        assert_eq!(
+            unsafe { erika_presenter_poll_event(handle, &mut event) },
+            ErikaStatus::Ok
+        );
+        assert_eq!(event.kind, ErikaEventKind::SurfaceAttached);
+        while unsafe { erika_presenter_poll_event(handle, &mut event) } == ErikaStatus::Ok {}
+
+        unsafe { &mut *handle }
+            .presenter
+            .player()
+            .detach_surface()
+            .unwrap();
+        assert_eq!(
+            unsafe { erika_presenter_open(handle, missing.as_ptr()) },
+            ErikaStatus::PlayerError
+        );
+        assert_eq!(
+            unsafe { erika_presenter_poll_event(handle, &mut event) },
+            ErikaStatus::Ok
+        );
+        assert_eq!(event.kind, ErikaEventKind::SurfaceDetached);
+
+        unsafe { erika_presenter_destroy(handle) };
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        any(target_os = "ios", target_os = "tvos"),
+        target_os = "windows",
+        target_os = "android",
+        target_env = "ohos"
+    ))]
+    #[test]
     fn presenter_capture_distinguishes_absent_frame_from_capture_failure() {
         let handle = erika_presenter_create();
         assert!(!handle.is_null());
@@ -4726,6 +5021,37 @@ mod tests {
         target_env = "ohos"
     ))]
     #[test]
+    fn c_presenter_reports_resource_status_without_changing_stats_abi() {
+        assert_eq!(
+            unsafe {
+                erika_presenter_get_resource_status(std::ptr::null_mut(), std::ptr::null_mut())
+            },
+            ErikaStatus::NullPointer
+        );
+
+        let handle = erika_presenter_create();
+        assert!(!handle.is_null());
+        let mut status = ErikaPresenterResourceStatus::default();
+        assert_eq!(
+            unsafe { erika_presenter_get_resource_status(handle, &mut status) },
+            ErikaStatus::Ok
+        );
+        assert_eq!(status.drawable_estimated_bytes, 0);
+        assert_eq!(status.video_frame_bytes, 0);
+        assert_eq!(status.renderer_tracked_bytes, 0);
+        assert_eq!(status.drawable_count, 0);
+        assert_eq!(status.output_mode_switches, 0);
+        unsafe { erika_presenter_destroy(handle) };
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        any(target_os = "ios", target_os = "tvos"),
+        target_os = "windows",
+        target_os = "android",
+        target_env = "ohos"
+    ))]
+    #[test]
     fn c_presenter_can_be_created_with_edr_config() {
         let handle = erika_presenter_create_with_config(ErikaPresenterConfig {
             output_mode: ErikaPresenterOutputMode::AppleEdr as i32,
@@ -4800,6 +5126,14 @@ mod tests {
                 ..ErikaPresenterConfig::default()
             }),
             MetalOutputMode::extended_linear(3.0)
+        );
+        assert_eq!(
+            metal_output_mode_from_c(ErikaPresenterConfig {
+                output_mode: ErikaPresenterOutputMode::Auto as i32,
+                edr_headroom: 2.5,
+                ..ErikaPresenterConfig::default()
+            }),
+            MetalOutputMode::auto(2.5)
         );
         assert_eq!(
             metal_output_mode_from_c(ErikaPresenterConfig {

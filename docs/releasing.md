@@ -59,8 +59,8 @@ The release is fully automated by
    section, and bump `version` in the root `Cargo.toml` if appropriate.
 2. Tag and push:
    ```sh
-   git tag v0.1.5
-   git push origin v0.1.5
+   git tag v0.1.6
+   git push origin v0.1.6
    ```
 3. The workflow cross-builds macOS arm64 and x64 on `macos-26`, then combines
    those outputs into the universal bundle. iOS and tvOS XCFrameworks also use
@@ -71,6 +71,21 @@ The release is fully automated by
 To dry-run the builds without publishing, trigger the workflow manually
 ("Run workflow" / `workflow_dispatch`) — the build jobs run, but the publish job
 is skipped because it is gated on a tag ref.
+
+## Pre-release validation
+
+Before pushing a `v*` tag, use a clean worktree and record:
+
+```sh
+cargo fmt --all -- --check
+cargo test -p erika -p erika_capi
+cargo test --workspace
+cargo clippy -p erika -p erika_capi --all-targets -- -D warnings
+```
+
+Also compile affected examples, compare the public `erika.h` header with the C
+ABI reference and Flutter FFI glue, inspect every archive manifest/license, and
+verify the pinned prebuilt tag in NipaPlay before publishing release notes.
 
 ## Packaging
 
@@ -96,7 +111,7 @@ Enable it by setting environment variables in the host app's build:
 | Variable | Effect |
 |----------|--------|
 | `ERIKA_PREBUILT=1` | Download the prebuilt `erika_capi` instead of building from source. |
-| `ERIKA_PREBUILT_TAG=v0.1.5` | Release tag to download (default `v0.1.5`). |
+| `ERIKA_PREBUILT_TAG=v0.1.6` | Release tag to download (default `v0.1.6`). |
 | `ERIKA_FORCE_SOURCE_BUILD=1` | Bypass the prebuilt path and build the local source, useful when debugging Erika changes through the Flutter plugin. |
 | `ERIKA_MACOS_ARCHS=universal|arm64|x86_64|arm64,x86_64` | Select the macOS source and prebuilt artifact architecture. |
 
