@@ -398,13 +398,13 @@ fn android_ndk_root() -> Option<PathBuf> {
             add_sdk_ndk_candidates(&mut candidates, &PathBuf::from(root));
         }
     }
-    if cfg!(windows) {
-        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-            add_sdk_ndk_candidates(
-                &mut candidates,
-                &PathBuf::from(local_app_data).join("Android/Sdk"),
-            );
-        }
+    if cfg!(windows)
+        && let Some(local_app_data) = env::var_os("LOCALAPPDATA")
+    {
+        add_sdk_ndk_candidates(
+            &mut candidates,
+            &PathBuf::from(local_app_data).join("Android/Sdk"),
+        );
     }
     candidates.into_iter().find(|path| {
         path.join("build/cmake/android.toolchain.cmake").is_file()

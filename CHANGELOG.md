@@ -2,8 +2,24 @@
 
 ## Unreleased
 
+## 0.1.6 - 2026-08-14
+
+### Rendering and playback
+
 - Added the ArtCNN C4F16 DS denoising/sharpening luma upscaler for degraded
   anime sources across the Rust, C, Flutter, Metal, and wgpu interfaces.
+- Moved Android and macOS presenter rendering off the application UI/main
+  thread, reduced Android AHardwareBuffer conversion bandwidth, and prevented
+  D3D11 frame reuse across devices.
+- Added source-aware SDR/EDR output selection on Apple platforms and exposed
+  resource status through the Android, Windows, and OpenHarmony integrations.
+
+### Integration and behavior
+
+- Disabled danmaku scroll overwrite by default, preserving already-stable
+  comments during dense playback.
+- Restored the Windows system-media-controls build and made the OpenHarmony
+  Flutter plugin's ArkTS declarations explicit.
 
 ## 0.1.5 - 2026-08-03
 
