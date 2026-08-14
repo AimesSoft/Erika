@@ -4537,7 +4537,15 @@ impl VideoPlaybackEngine {
         let pts = frame.pts;
         let now = now();
         let media_time = self.clock.media_time_at(now);
-        if pts.is_some_and(|pts| pts > media_time + self.timing.audio_lead_time) {
+        // While buffering, the media clock is parked on the reference frame
+        // (seek target or first frame) and only starts once buffering resumes.
+        // Enforcing the lead-time gate here would hold every later audio frame
+        // forever, yet the buffering tracker cannot resume until the audio
+        // output starts and reports a clock snapshot with enough queued PCM.
+        // Let audio flow while buffering so that path can complete.
+        if !self.buffering
+            && pts.is_some_and(|pts| pts > media_time + self.timing.audio_lead_time)
+        {
             return Ok(None);
         }
 
@@ -4567,7 +4575,9 @@ impl VideoPlaybackEngine {
         let pts = frame.pts;
         let now = Instant::now();
         let media_time = self.clock.media_time_at(now);
-        if pts.is_some_and(|pts| pts > media_time + self.timing.audio_lead_time) {
+        if !self.buffering
+            && pts.is_some_and(|pts| pts > media_time + self.timing.audio_lead_time)
+        {
             return Ok(None);
         }
 
