@@ -51,7 +51,7 @@ frame appear immediately.
 ErikaPresenterConfig cfg = {
     .output_mode  = ErikaPresenterOutputMode_Sdr,   // AppleEdr or Android ExtendedLinear
     .edr_headroom = 1.0f,                            // requested content-headroom ceiling
-    .luma_upscaler = ErikaLumaUpscalerMode_Off,      // or ArtCnnC4F16 / C4F32
+    .luma_upscaler = ErikaLumaUpscalerMode_Off,      // or ArtCnnC4F16 / C4F16Ds / C4F32
 };
 ErikaPresenterHandle *p = erika_presenter_create_with_config(cfg);
 if (!p) { /* read erika_last_error_message() */ }

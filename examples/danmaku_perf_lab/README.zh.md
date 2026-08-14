@@ -58,14 +58,14 @@ cargo run --release -p danmaku_perf_lab -- \
 
 ## Neural upscaler comparison
 
-`--upscaler off|artcnn-c4f16|artcnn-c4f32` 用来选择 Metal 神经亮度 doubler。用同一段视频分别跑不同模式，再比较 JSONL 字段 `upscaler_backend`、`upscaler_fallbacks`、`upscaler_encode_ms`、`gpu_frame_ms`、`upscaled_frames` 和 `fps`：
+`--upscaler off|artcnn-c4f16|artcnn-c4f16-ds|artcnn-c4f32` 用来选择 Metal 神经亮度 doubler。用同一段视频分别跑不同模式，再比较 JSONL 字段 `upscaler_backend`、`upscaler_fallbacks`、`upscaler_encode_ms`、`gpu_frame_ms`、`upscaled_frames` 和 `fps`。DS 变体使用与 C4F16 相同的结构和计算成本，面向严重压制片源的降噪与锐化：
 
 ```sh
 cargo run --release -p danmaku_perf_lab -- \
   --window --hide-panel --items 1 \
   --video /path/to/anime_720p.mp4 \
   --target-fps 60 \
-  --upscaler artcnn-c4f16 \
+  --upscaler artcnn-c4f16-ds \
   --metrics-log /tmp/erika_sr.jsonl \
   --auto-exit 25
 ```
@@ -104,4 +104,3 @@ cargo run -p danmaku_perf_lab -- \
 - `danmaku_vertex_bytes`：当前 frame 写入 Metal instance buffer 的字节数。
 
 这个 lab 是 Metal/WGPU 弹幕 batching 工作的基线。
-

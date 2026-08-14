@@ -58,14 +58,14 @@ cargo run --release -p danmaku_perf_lab -- \
 
 ## Neural upscaler comparison
 
-`--upscaler off|artcnn-c4f16|artcnn-c4f32` で Metal の neural luma doubler を選びます。同じ clip を各 mode で走らせ、JSONL の `upscaler_backend`、`upscaler_fallbacks`、`upscaler_encode_ms`、`gpu_frame_ms`、`upscaled_frames`、`fps` を比較してください。
+`--upscaler off|artcnn-c4f16|artcnn-c4f16-ds|artcnn-c4f32` で Metal の neural luma doubler を選びます。同じ clip を各 mode で走らせ、JSONL の `upscaler_backend`、`upscaler_fallbacks`、`upscaler_encode_ms`、`gpu_frame_ms`、`upscaled_frames`、`fps` を比較してください。DS variant は C4F16 と同じ構造と計算コストで、強く圧縮されたソース向けに denoise/sharpen されています。
 
 ```sh
 cargo run --release -p danmaku_perf_lab -- \
   --window --hide-panel --items 1 \
   --video /path/to/anime_720p.mp4 \
   --target-fps 60 \
-  --upscaler artcnn-c4f16 \
+  --upscaler artcnn-c4f16-ds \
   --metrics-log /tmp/erika_sr.jsonl \
   --auto-exit 25
 ```
@@ -104,4 +104,3 @@ window JSONL で見るべき field:
 - `danmaku_vertex_bytes`: current frame で Metal instance buffer に書き込まれた byte 数。
 
 この lab は Metal/WGPU 弾幕 batching 作業の baseline です。
-

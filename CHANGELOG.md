@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added the ArtCNN C4F16 DS denoising/sharpening luma upscaler for degraded
+  anime sources across the Rust, C, Flutter, Metal, and wgpu interfaces.
+
 ## 0.1.5 - 2026-08-03
 
 ### System media controls and background audio

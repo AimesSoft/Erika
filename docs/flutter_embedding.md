@@ -186,7 +186,7 @@ await player.setVolume(0.8);
 await player.setPlaybackRate(1.5);
 
 // Neural upscaler (anime luma 2x; Apple Metal / Android Vulkan)
-await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16); // off / artCnnC4F16 / artCnnC4F32
+await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16Ds); // recommended for visibly degraded sources
 final status = await player.getUpscalerStatus();
 // status.requestedMode  -- what was requested
 // status.activeBackend  -- off / inactive / building / scalar / simdgroupMatrix
@@ -300,7 +300,8 @@ so the host should poll `getUpscalerStatus` to drive its UI:
 
 The upscaler only engages when the drawable shows the video larger than its
 source resolution, so a 1080p source in a 1080p (or smaller) view stays
-`inactive`. C4F16 is the real-time recommendation. On Apple, C4F32 generally
+`inactive`. C4F16 is the real-time recommendation; C4F16 DS targets heavily
+compressed or noisy sources at the same compute cost. On Apple, C4F32 generally
 needs an M-Pro/Max-class GPU at 1080p input; on Android, both models use Vulkan
 compute and GLES reports an explicit `inactive` fallback. See
 `docs/architecture.md` for the renderer-side design.

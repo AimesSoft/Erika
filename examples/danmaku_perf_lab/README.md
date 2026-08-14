@@ -82,17 +82,20 @@ for visual sanity checks.
 
 ## Neural upscaler comparison
 
-`--upscaler off|artcnn-c4f16|artcnn-c4f32` selects the Metal neural luma
+`--upscaler off|artcnn-c4f16|artcnn-c4f16-ds|artcnn-c4f32` selects the Metal neural luma
 doubler. Run the same clip with each mode and compare the JSONL fields
 `upscaler_backend`, `upscaler_fallbacks`, `upscaler_encode_ms`,
 `gpu_frame_ms`, `upscaled_frames`, and `fps`:
+
+The DS variant uses the C4F16 topology and compute cost but is trained to
+denoise and sharpen heavily compressed sources.
 
 ```sh
 cargo run --release -p danmaku_perf_lab -- \
   --window --hide-panel --items 1 \
   --video /path/to/anime_720p.mp4 \
   --target-fps 60 \
-  --upscaler artcnn-c4f16 \
+  --upscaler artcnn-c4f16-ds \
   --metrics-log /tmp/erika_sr.jsonl \
   --auto-exit 25
 ```

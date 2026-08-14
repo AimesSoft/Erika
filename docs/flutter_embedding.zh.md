@@ -148,7 +148,7 @@ await player.setVolume(0.8);
 await player.setPlaybackRate(1.5);
 
 // Neural upscaler (anime luma 2x; Apple Metal / Android Vulkan)
-await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16); // off / artCnnC4F16 / artCnnC4F32
+await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16Ds); // 推荐用于有明显劣化的片源
 final status = await player.getUpscalerStatus();
 
 // Track management
@@ -251,7 +251,7 @@ HUD 的驱动机制，数据新鲜度取决于已挂载 surface 的显示循环�
 | `simdgroupMatrix` | 运行在 `simdgroup_matrix` backend 上（Apple Silicon 默认）。 |
 
 只有当 drawable 显示的视频尺寸大于源分辨率时，upscaler 才会生效，所以 1080p 源在
-1080p（或更小）视图里会保持 `inactive`。C4F16 是实时推荐；Apple 上的 C4F32 在 1080p
+1080p（或更小）视图里会保持 `inactive`。C4F16 是实时推荐；C4F16 DS 以相同算力成本面向严重压制或噪声片源；Apple 上的 C4F32 在 1080p
 输入下通常需要 M-Pro/Max 级别 GPU。Android 上两个模型都使用 Vulkan compute，GLES 会
 明确报告 `inactive` fallback。渲染器侧设计见 `docs/architecture.md`。
 

@@ -31,6 +31,7 @@ fn mode_label(mode: LumaUpscalerMode) -> &'static str {
     match mode {
         LumaUpscalerMode::Off => "off",
         LumaUpscalerMode::ArtCnnC4F16 => "artcnn_c4f16",
+        LumaUpscalerMode::ArtCnnC4F16Ds => "artcnn_c4f16_ds",
         LumaUpscalerMode::ArtCnnC4F32 => "artcnn_c4f32",
     }
 }

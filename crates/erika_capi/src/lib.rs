@@ -399,6 +399,7 @@ pub enum ErikaLumaUpscalerMode {
     Off = 0,
     ArtCnnC4F16 = 1,
     ArtCnnC4F32 = 2,
+    ArtCnnC4F16Ds = 3,
 }
 
 impl ErikaLumaUpscalerMode {
@@ -406,6 +407,7 @@ impl ErikaLumaUpscalerMode {
         match value {
             1 => Self::ArtCnnC4F16,
             2 => Self::ArtCnnC4F32,
+            3 => Self::ArtCnnC4F16Ds,
             _ => Self::Off,
         }
     }
@@ -1420,6 +1422,7 @@ fn luma_upscaler_mode_from_c(mode: i32) -> LumaUpscalerMode {
         ErikaLumaUpscalerMode::Off => LumaUpscalerMode::Off,
         ErikaLumaUpscalerMode::ArtCnnC4F16 => LumaUpscalerMode::ArtCnnC4F16,
         ErikaLumaUpscalerMode::ArtCnnC4F32 => LumaUpscalerMode::ArtCnnC4F32,
+        ErikaLumaUpscalerMode::ArtCnnC4F16Ds => LumaUpscalerMode::ArtCnnC4F16Ds,
     }
 }
 
@@ -1435,6 +1438,7 @@ fn luma_upscaler_mode_to_c(mode: LumaUpscalerMode) -> i32 {
         LumaUpscalerMode::Off => ErikaLumaUpscalerMode::Off as i32,
         LumaUpscalerMode::ArtCnnC4F16 => ErikaLumaUpscalerMode::ArtCnnC4F16 as i32,
         LumaUpscalerMode::ArtCnnC4F32 => ErikaLumaUpscalerMode::ArtCnnC4F32 as i32,
+        LumaUpscalerMode::ArtCnnC4F16Ds => ErikaLumaUpscalerMode::ArtCnnC4F16Ds as i32,
     }
 }
 
@@ -5352,6 +5356,15 @@ mod tests {
             .renderer
             .luma_upscaler,
             LumaUpscalerMode::ArtCnnC4F16
+        );
+        assert_eq!(
+            presenter_config_from_c(ErikaPresenterConfig {
+                luma_upscaler: ErikaLumaUpscalerMode::ArtCnnC4F16Ds as i32,
+                ..ErikaPresenterConfig::default()
+            })
+            .renderer
+            .luma_upscaler,
+            LumaUpscalerMode::ArtCnnC4F16Ds
         );
         assert_eq!(
             presenter_config_from_c(ErikaPresenterConfig {

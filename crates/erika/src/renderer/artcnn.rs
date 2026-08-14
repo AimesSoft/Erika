@@ -7,6 +7,7 @@ use crate::core::{PlayerError, Result};
 use crate::renderer::pipeline::LumaUpscalerMode;
 
 const BLOB_C4F16: &[u8] = include_bytes!("../../assets/artcnn/artcnn_c4f16.bin");
+const BLOB_C4F16_DS: &[u8] = include_bytes!("../../assets/artcnn/artcnn_c4f16_ds.bin");
 const BLOB_C4F32: &[u8] = include_bytes!("../../assets/artcnn/artcnn_c4f32.bin");
 
 pub const BLOB_MAGIC: u32 = 0x4E4E_4341; // "ACNN"
@@ -108,7 +109,7 @@ impl ArtCnnModelLayout {
     pub fn for_mode(mode: LumaUpscalerMode) -> Option<Self> {
         let feature_count = match mode {
             LumaUpscalerMode::Off => return None,
-            LumaUpscalerMode::ArtCnnC4F16 => 16,
+            LumaUpscalerMode::ArtCnnC4F16 | LumaUpscalerMode::ArtCnnC4F16Ds => 16,
             LumaUpscalerMode::ArtCnnC4F32 => 32,
         };
         let feature_slices = (feature_count / FEATURE_SLICE_WIDTH) as u32;
@@ -139,6 +140,7 @@ pub fn model_for_mode(mode: LumaUpscalerMode) -> Result<ArtCnnModel<'static>> {
     let blob = match mode {
         LumaUpscalerMode::Off => None,
         LumaUpscalerMode::ArtCnnC4F16 => Some(BLOB_C4F16),
+        LumaUpscalerMode::ArtCnnC4F16Ds => Some(BLOB_C4F16_DS),
         LumaUpscalerMode::ArtCnnC4F32 => Some(BLOB_C4F32),
     }
     .ok_or_else(no_weights)?;
@@ -227,7 +229,7 @@ impl ArtCnnExecutionPolicy {
     ) -> Self {
         let default_scalar_block = match mode {
             LumaUpscalerMode::Off => (1, 1),
-            LumaUpscalerMode::ArtCnnC4F16 => (2, 2),
+            LumaUpscalerMode::ArtCnnC4F16 | LumaUpscalerMode::ArtCnnC4F16Ds => (2, 2),
             LumaUpscalerMode::ArtCnnC4F32 => (2, 1),
         };
         Self {
@@ -312,6 +314,12 @@ mod tests {
                 conv6_b: 3_084,
             }
         );
+
+        let c4f16_ds = model_for_mode(LumaUpscalerMode::ArtCnnC4F16Ds).unwrap();
+        assert_eq!(c4f16_ds.header.feature_count, 16);
+        assert_eq!(c4f16_ds.layout, c4f16.layout);
+        assert_eq!(c4f16_ds.payload.len(), 24_680);
+        assert_ne!(c4f16_ds.payload, c4f16.payload);
 
         let c4f32 = model_for_mode(LumaUpscalerMode::ArtCnnC4F32).unwrap();
         assert_eq!(c4f32.header.feature_count, 32);

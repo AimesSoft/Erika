@@ -156,6 +156,7 @@ typedef enum ErikaLumaUpscalerMode {
   ErikaLumaUpscalerMode_Off = 0,
   ErikaLumaUpscalerMode_ArtCnnC4F16 = 1,
   ErikaLumaUpscalerMode_ArtCnnC4F32 = 2,
+  ErikaLumaUpscalerMode_ArtCnnC4F16Ds = 3,
 } ErikaLumaUpscalerMode;
 
 typedef enum ErikaUpscalerBackendStatus {

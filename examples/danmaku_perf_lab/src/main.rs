@@ -42,7 +42,7 @@ fn main() {
              [--font-size N] [--display-area N] [--scroll-duration N] [--scroll-overwrite] \
              [--window-size WxH] [--hide-panel] [--surface-scale N] [--target-fps N] \
              [--start-time SECONDS] [--self-every N] [--metrics-log PATH] [--auto-exit SECONDS] \
-             [--upscaler off|artcnn-c4f16|artcnn-c4f32] \
+             [--upscaler off|artcnn-c4f16|artcnn-c4f16-ds|artcnn-c4f32] \
              [--pattern mixed|scroll|fixed|dense]"
         );
         process::exit(2);
@@ -652,6 +652,7 @@ fn upscaler_label(mode: LumaUpscalerMode) -> &'static str {
     match mode {
         LumaUpscalerMode::Off => "off",
         LumaUpscalerMode::ArtCnnC4F16 => "artcnn-c4f16",
+        LumaUpscalerMode::ArtCnnC4F16Ds => "artcnn-c4f16-ds",
         LumaUpscalerMode::ArtCnnC4F32 => "artcnn-c4f32",
     }
 }
@@ -1424,10 +1425,11 @@ fn parse_args(args: &[String]) -> Result<PerfOptions, String> {
                 options.luma_upscaler = match value.as_str() {
                     "off" => LumaUpscalerMode::Off,
                     "artcnn-c4f16" => LumaUpscalerMode::ArtCnnC4F16,
+                    "artcnn-c4f16-ds" => LumaUpscalerMode::ArtCnnC4F16Ds,
                     "artcnn-c4f32" => LumaUpscalerMode::ArtCnnC4F32,
                     other => {
                         return Err(format!(
-                            "invalid --upscaler value: {other} (expected off|artcnn-c4f16|artcnn-c4f32)"
+                            "invalid --upscaler value: {other} (expected off|artcnn-c4f16|artcnn-c4f16-ds|artcnn-c4f32)"
                         ));
                     }
                 };
@@ -1633,5 +1635,13 @@ mod tests {
         assert_eq!(options.width, 1280);
         assert_eq!(options.height, 720);
         assert_eq!(options.pattern, PerfPattern::Dense);
+    }
+
+    #[test]
+    fn parse_args_accepts_c4f16_ds_upscaler() {
+        let options =
+            parse_args(&["--upscaler".to_string(), "artcnn-c4f16-ds".to_string()]).unwrap();
+
+        assert_eq!(options.luma_upscaler, LumaUpscalerMode::ArtCnnC4F16Ds);
     }
 }

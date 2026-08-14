@@ -300,7 +300,8 @@ class ErikaSubtitleMemoryFontStatus {
 enum ErikaUpscalerMode {
   off(0),
   artCnnC4F16(1),
-  artCnnC4F32(2);
+  artCnnC4F32(2),
+  artCnnC4F16Ds(3);
 
   const ErikaUpscalerMode(this.nativeValue);
 
@@ -310,6 +311,7 @@ enum ErikaUpscalerMode {
     return switch (value) {
       1 => ErikaUpscalerMode.artCnnC4F16,
       2 => ErikaUpscalerMode.artCnnC4F32,
+      3 => ErikaUpscalerMode.artCnnC4F16Ds,
       _ => ErikaUpscalerMode.off,
     };
   }
