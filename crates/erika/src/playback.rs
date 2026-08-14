@@ -4465,19 +4465,10 @@ impl VideoPlaybackEngine {
         if self.state != PlaybackRunState::Playing || self.buffering {
             return None;
         }
-        if (self.clock.rate() - 1.0).abs() > 0.001 {
-            trace::log(format!(
-                "[erika-clock-trace] stage=output_audio_clock_skip reason=playback_rate rate={:.3} media={} queued={} queued_frames={} read={} written={} underflow={}",
-                self.clock.rate(),
-                trace::duration_label(snapshot.media_time),
-                trace::duration_label(snapshot.queued_duration),
-                snapshot.queued_frames,
-                snapshot.read_frames,
-                snapshot.written_frames,
-                snapshot.underflow_frames,
-            ));
-            return None;
-        }
+        // AudioRingBuffer keeps media-time segments rate-aware, including the
+        // SoundTouch output ratio. Once a rate transition is committed by the
+        // presenter, the audio clock is therefore valid at every playback
+        // rate and must remain available to correct the video clock.
         let media_time = snapshot.media_time?;
         let audio_reference_time = media_time.saturating_add(
             snapshot
@@ -6117,7 +6108,7 @@ mod tests {
     }
 
     #[test]
-    fn playback_fixture_non_unit_rate_rejects_audio_master_correction() {
+    fn playback_fixture_non_unit_rate_uses_audio_master_correction() {
         let mut engine = playback_fixture_engine();
         let t0 = Instant::now();
         engine.play_at(t0);
@@ -6139,11 +6130,17 @@ mod tests {
             sync_at,
         );
 
-        assert!(correction.is_none());
-        assert_eq!(engine.clock_snapshot_at(sync_at), before);
         assert_eq!(before.media_time, Duration::from_millis(300));
         assert_eq!(before.source, PlaybackClockSource::Wall);
         assert_eq!(before.rate, 2.0);
+
+        let correction = correction.expect("audio clock remains authoritative at 2x");
+        assert_eq!(correction.source, PlaybackClockSource::Audio);
+        assert!(correction.snapped);
+        let after = engine.clock_snapshot_at(sync_at);
+        assert_eq!(after.media_time, Duration::from_secs(5));
+        assert_eq!(after.source, PlaybackClockSource::Audio);
+        assert_eq!(after.rate, 2.0);
     }
 
     #[test]

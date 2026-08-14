@@ -822,6 +822,20 @@ impl PresenterRuntime {
 
     pub fn pause(&mut self) -> Result<()> {
         let result = self.player.pause();
+        let pending_rate = self.pending_playback_rate.map(|pending| pending.rate);
+        if let Some(rate) = pending_rate {
+            // A pending transition is measured against wall time while the
+            // output is running. Pausing that output would otherwise leave the
+            // old-rate bridge queued but allow the stale deadline to commit on
+            // the next play. Flush the bridge and commit the requested rate
+            // while the clock is parked.
+            self.reset_audio_output();
+            let rate_result = self.player.set_playback_rate(rate);
+            if rate_result.is_ok() {
+                self.playback_rate = rate;
+            }
+            return result.and(rate_result);
+        }
         if let Err(error) = self.audio_output.pause() {
             self.stats.audio_failures += 1;
             eprintln!("Erika presenter audio pause failed: {error}");
@@ -882,9 +896,8 @@ impl PresenterRuntime {
         self.last_audio_clock_report = None;
 
         let bridge = self
-            .audio_started
-            .then(|| self.audio_output.clock_snapshot())
-            .flatten()
+            .audio_output
+            .clock_snapshot()
             .and_then(|snapshot| snapshot.queued_duration)
             .filter(|duration| !duration.is_zero());
         if self.is_playing()
@@ -897,6 +910,12 @@ impl PresenterRuntime {
             return Ok(());
         }
 
+        // A paused output keeps its queued PCM. Discard it before committing a
+        // new rate so a later resume cannot play old-rate samples while the
+        // player clock is already running at the new rate.
+        if !self.is_playing() && bridge.is_some() {
+            self.reset_audio_output();
+        }
         self.player.set_playback_rate(next_rate)?;
         self.playback_rate = next_rate;
         self.pending_playback_rate = None;
@@ -2780,6 +2799,12 @@ impl PresenterRuntime {
     }
 
     fn report_audio_clock_snapshot(&mut self) {
+        // During a rate transition the audio ring already uses the requested
+        // rate while the player clock still uses the old one. Do not enqueue a
+        // mixed-rate clock sample; the first sample after commit is coherent.
+        if self.pending_playback_rate.is_some() {
+            return;
+        }
         let Some(snapshot) = self.audio_output.clock_snapshot() else {
             return;
         };
