@@ -170,6 +170,11 @@ The native renderer for Windows (`renderer/d3d11.rs`):
   are shared into the render device, no CPU round-trip.
 - YCbCr sampling and color space conversion (HLSL shaders), same pipeline model
   as Metal.
+- Tiled ArtCNN C4F16/C4F16 DS/C4F32 compute on the zero-copy D3D11VA luma plane, using
+  bounded RGBA16F feature arrays, a source-sized packed DepthToSpace output,
+  and decoded-frame caching. It runs only when the presented video is larger
+  than its source and reports an explicit `Inactive` fallback below feature
+  level 11.0 or after an optional compute failure.
 - HDR10 output via an `R10G10B10A2_UNORM` swapchain with `DXGI_HDR_METADATA_HDR10`,
   with SDR (`BGRA8`) fallback.
 - Subtitle overlay alpha-atlas upload and blending; instanced danmaku glyph

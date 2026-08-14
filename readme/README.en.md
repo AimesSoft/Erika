@@ -20,7 +20,7 @@ The host application provides a rendering surface and sends playback commands â€
 - **HDR/EDR output** -- Apple EDR, Windows HDR10, and Android FP16 extended-linear scRGB negotiation with explicit SDR fallback
 - **Native Metal renderer** -- YCbCr sampling, color space conversion, tone mapping, subtitle/danmaku compositing in a single render pass (macOS/iOS/tvOS)
 - **Native Direct3D 11 renderer** -- Windows: D3D11VA zero-copy texture interop, YCbCr sampling, HDR10 output, subtitle/danmaku overlay compositing
-- **Neural upscaling** -- ArtCNN anime luma 2x super-resolution using Metal and wgpu/Vulkan compute, integrated into the rendering pipeline
+- **Neural upscaling** -- ArtCNN anime luma 2x super-resolution using Metal, D3D11, and wgpu/Vulkan compute, integrated into the rendering pipeline
 - **Audio output** -- CoreAudio (macOS) / AudioQueue (iOS/tvOS) / WASAPI (Windows) / AAudio (Android) / OHAudio (HarmonyOS), f32 PCM ring buffer, audio clock synchronization
 - **Subtitles** -- SRT / WebVTT / ASS parsing, libass rendering (statically linked), embedded and external subtitle tracks
 - **Danmaku** -- Bilibili XML / JSON parsing, DFM+ collision-aware lane layout engine, glyph atlas native GPU rendering

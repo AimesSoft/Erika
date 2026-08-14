@@ -270,8 +270,9 @@ ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float he
 
 `set_playback_rate(1.0)` is normal speed. `set_upscaler` switches the neural
 luma upscaler at runtime (see [`erika_presenter_get_upscaler_status`](#diagnostics-and-capture));
-Metal and capable wgpu/Vulkan renderers execute ArtCNN, while backends without
-compute retain native luma sampling and report an explicit `Inactive` fallback.
+Metal, D3D11 feature level 11+, and compute-capable wgpu renderers execute
+ArtCNN, while backends without compute retain native luma sampling and report
+an explicit `Inactive` fallback.
 
 `set_subtitle_font` and `set_subtitle_style` set the subtitle *fallback* look.
 An empty family or path clears that half of the selection. Colours are

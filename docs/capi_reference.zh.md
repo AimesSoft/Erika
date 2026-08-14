@@ -247,7 +247,7 @@ ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float he
 
 `set_playback_rate(1.0)` 为正常速度。`set_upscaler` 在运行时切换神经亮度超分（见
 [`erika_presenter_get_upscaler_status`](#诊断与截图)）。Metal 与具备 compute 能力的
-wgpu/Vulkan renderer 会执行 ArtCNN；其他后端保留原生 luma sampling，并明确报告
+wgpu renderer，以及 feature level 11.0+ 的 D3D11 renderer 会执行 ArtCNN；其他后端保留原生 luma sampling，并明确报告
 `Inactive` 回退。
 
 `set_subtitle_font` 与 `set_subtitle_style` 设置字幕的**回退**外观。family 或

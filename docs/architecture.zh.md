@@ -109,6 +109,7 @@ Windows 平台的原生渲染器（`renderer/d3d11.rs`）：
 
 - 零拷贝 D3D11VA 解码纹理互操作：解码出的 `ID3D11Texture2D` 表面共享进渲染设备，不经过 CPU。
 - YCbCr 采样与色彩空间转换（HLSL shader），与 Metal 保持同一流水线模型。
+- 在零拷贝 D3D11VA luma plane 上分块执行 ArtCNN C4F16/C4F16 DS/C4F32，复用有界 RGBA16F feature array，并输出源分辨率 packed DepthToSpace 纹理和按解码帧缓存。仅当视频显示尺寸大于源尺寸时运行；低于 feature level 11.0 或可选 compute 失败时明确报告 `Inactive` 回退。
 - HDR10 输出：`R10G10B10A2_UNORM` swapchain + `DXGI_HDR_METADATA_HDR10`，并提供 SDR（`BGRA8`）回退。
 - 字幕 overlay alpha-atlas 上传与 blending；来自 atlas 的 instanced 弹幕 glyph quad 绘制。
 - window-hosted swapchain，由 `render_tick` 驱动。
