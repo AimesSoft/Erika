@@ -49,6 +49,7 @@ use crate::danmaku::{
 };
 use crate::ffmpeg::Frame;
 use crate::overlay::OverlayFrame;
+use crate::renderer::d3d11_artcnn::D3d11ArtCnn;
 use crate::renderer::metal::MetalRendererConfig;
 use crate::renderer::output::{
     ActiveOutputEncoding, OutputFallbackReason, OutputRuntimeStatus, OutputSurfaceFormat,
@@ -85,6 +86,9 @@ cbuffer VideoConstants : register(b0) {
     float4 nits;
     float4 luma_coefficients;
     float4 gamut_matrix_rows[3];
+    // xy scales native/packed luma coordinates; zw scales native chroma.
+    // D3D11VA textures can be allocation-aligned beyond the visible frame.
+    float4 texture_scales;
 };
 
 Texture2D lumaTex : register(t0);
@@ -271,9 +275,53 @@ VsOut vs_main(VsIn input) {
     return output;
 }
 
+float packed_luma_texel(int2 virtual_coord_in, int2 virtual_size) {
+    int2 virtual_coord = clamp(virtual_coord_in, int2(0, 0), virtual_size - int2(1, 1));
+    int2 packed_coord = virtual_coord >> int2(1, 1);
+    float4 packed = lumaTex.Load(int3(packed_coord, 0));
+    uint component = uint((virtual_coord.y & 1) * 2 + (virtual_coord.x & 1));
+    if (component == 0) {
+        return packed.r;
+    }
+    if (component == 1) {
+        return packed.g;
+    }
+    if (component == 2) {
+        return packed.b;
+    }
+    return packed.a;
+}
+
+// Reconstruct bilinear sampling of the virtual 2W x 2H luma texture stored
+// as packed TL/TR/BL/BR RGBA texels by the D3D11 ArtCNN compute pass.
+float sample_packed_luma(float2 texcoord) {
+    uint packed_width;
+    uint packed_height;
+    lumaTex.GetDimensions(packed_width, packed_height);
+    int2 virtual_size = int2(packed_width, packed_height) * int2(2, 2);
+    float2 sample_position = saturate(texcoord) * float2(virtual_size) - float2(0.5, 0.5);
+    int2 lo = int2(floor(sample_position));
+    float2 fraction = frac(sample_position);
+    float y0 = lerp(
+        packed_luma_texel(lo, virtual_size),
+        packed_luma_texel(lo + int2(1, 0), virtual_size),
+        fraction.x
+    );
+    float y1 = lerp(
+        packed_luma_texel(lo + int2(0, 1), virtual_size),
+        packed_luma_texel(lo + int2(1, 1), virtual_size),
+        fraction.x
+    );
+    return lerp(y0, y1, fraction.y);
+}
+
 float4 ps_main(VsOut input) : SV_Target {
-    float y_sample = lumaTex.Sample(videoSampler, input.texcoord).r;
-    float2 cbcr_sample = chromaTex.Sample(videoSampler, input.texcoord).rg;
+    float2 luma_coord = input.texcoord * texture_scales.xy;
+    float2 chroma_coord = input.texcoord * texture_scales.zw;
+    float y_sample = input_mode == 2u
+        ? sample_packed_luma(luma_coord)
+        : lumaTex.Sample(videoSampler, luma_coord).r;
+    float2 cbcr_sample = chromaTex.Sample(videoSampler, chroma_coord).rg;
     float y;
     float2 cbcr;
     expand_ycbcr_range(y_sample, cbcr_sample, y, cbcr);
@@ -365,6 +413,13 @@ float4 overlay_ps_main(VsOut input) : SV_Target {
 struct VideoVertex {
     position: [f32; 2],
     texcoord: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct D3d11VideoConstants {
+    common: VideoUniforms,
+    texture_scales: [f32; 4],
 }
 
 /// Overlay quad uniforms, byte-compatible with the HLSL `OverlayConstants`
@@ -548,6 +603,7 @@ struct ImportedVideoFrame {
     height: u32,
     tex_rect: D3d11TexRect,
     _array_index: u32,
+    frame_token: u64,
     constants: VideoUniforms,
 }
 
@@ -671,6 +727,8 @@ pub struct D3d11Renderer {
     danmaku_atlas_cache: Option<D3d11DanmakuAtlasCache>,
     requested_output_mode: crate::renderer::output::OutputMode,
     upscaler_mode: LumaUpscalerMode,
+    upscaler: D3d11ArtCnn,
+    next_frame_token: u64,
     hdr10_output_unavailable: bool,
     stats: D3d11RendererStats,
 }
@@ -688,6 +746,8 @@ impl D3d11Renderer {
             danmaku_atlas_cache: None,
             requested_output_mode: config.output_mode,
             upscaler_mode: config.luma_upscaler,
+            upscaler: D3d11ArtCnn::default(),
+            next_frame_token: 0,
             hdr10_output_unavailable: false,
             stats: D3d11RendererStats::default(),
         })
@@ -729,6 +789,12 @@ impl D3d11Renderer {
             }
         }
         let state = D3d11DeviceState::new(device, context)?;
+        if let Err(error) = self
+            .upscaler
+            .attach_device(&state.device, self.upscaler_mode)
+        {
+            report_upscaler_failure("pipeline_build", self.upscaler_mode, &error);
+        }
         self.state = Some(state);
         self.recreate_surface_targets()?;
         Ok(())
@@ -904,6 +970,8 @@ impl D3d11Renderer {
             .map_err(|error| d3d11va_srv_error(error, &desc, array_index))?;
         let chroma = create_plane_srv(state, &texture, array_index, texture_format.chroma_srv())
             .map_err(|error| d3d11va_srv_error(error, &desc, array_index))?;
+        let frame_token = self.next_frame_token;
+        self.next_frame_token = self.next_frame_token.wrapping_add(1);
         self.stats.hardware_video_frames += 1;
         self.stats.zero_copy_video_frames += 1;
         self.stats.direct_zero_copy_video_frames += 1;
@@ -921,6 +989,7 @@ impl D3d11Renderer {
                 desc.Height,
             ),
             _array_index: array_index,
+            frame_token,
             constants: constants_for_frame(source_color, texture_format, target_color),
         });
         Ok(())
@@ -1289,6 +1358,49 @@ impl D3d11Renderer {
         self.ensure_surface_ready()?;
         let overlay_draws = self.prepare_overlay_draws(context.overlay)?;
         let danmaku_draws = self.prepare_danmaku_draws(context.danmaku)?;
+        let (video_width, video_height, frame_token, native_luma) = {
+            let video = self.current_video.as_ref().expect("video checked");
+            (
+                video.width,
+                video.height,
+                video.frame_token,
+                video.luma.clone(),
+            )
+        };
+        let physical = self
+            .surface
+            .as_ref()
+            .expect("surface ensured")
+            .metrics
+            .physical_extent;
+        let target_rect =
+            aspect_fit_rect(video_width, video_height, physical.width, physical.height);
+        let upscale_requested = self.upscaler_mode.is_enabled()
+            && self.upscaler.status() == LumaUpscalerBackendStatus::Scalar
+            && target_rect.width > video_width as f32;
+        let upscaled_luma = if upscale_requested {
+            let (device, device_context) = {
+                let state = self.state.as_ref().expect("device ensured");
+                (state.device.clone(), state.context.clone())
+            };
+            match self.upscaler.encode(
+                &device,
+                &device_context,
+                &native_luma,
+                video_width,
+                video_height,
+                Some(frame_token),
+            ) {
+                Ok(output) => output,
+                Err(error) => {
+                    self.upscaler.record_runtime_failure(&error);
+                    report_upscaler_failure("frame_encode", self.upscaler_mode, &error);
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let video = self.current_video.as_ref().expect("video checked");
         let state = self.state.as_ref().expect("device ensured");
         let surface = self.surface.as_ref().expect("surface ensured");
@@ -1313,15 +1425,12 @@ impl D3d11Renderer {
             .swapchain
             .as_ref()
             .ok_or_else(|| PlayerError::Renderer("d3d11: no swapchain attached".to_string()))?;
-        let physical = surface.metrics.physical_extent;
-        let target_rect =
-            aspect_fit_rect(video.width, video.height, physical.width, physical.height);
         unsafe {
             state
                 .context
                 .ClearRenderTargetView(scene_rtv, &[0.0, 0.0, 0.0, 1.0]);
         }
-        state.draw_video(video, scene_rtv, target_rect)?;
+        state.draw_video(video, upscaled_luma.as_ref(), scene_rtv, target_rect)?;
         if !overlay_draws.is_empty() {
             // Subtitle coordinates are produced in the video-frame viewport.
             // Composite them through the same aspect-fit viewport as the video
@@ -1525,11 +1634,14 @@ impl RendererBackend for D3d11Renderer {
             hdr10_output_failures: self.stats.hdr10_output_failures,
             hdr10_output_active: self.stats.hdr10_output_active,
             upscaler_mode: self.upscaler_mode,
-            upscaler_backend: if self.upscaler_mode.is_enabled() {
-                LumaUpscalerBackendStatus::Inactive
+            upscaler_backend: if self.upscaler_mode.is_enabled() && self.state.is_none() {
+                LumaUpscalerBackendStatus::Building
             } else {
-                LumaUpscalerBackendStatus::Off
+                self.upscaler.status()
             },
+            upscaler_fallbacks: self.upscaler.fallback_count(),
+            upscaled_frames: self.upscaler.upscaled_frames(),
+            last_upscaler_encode_duration: self.upscaler.last_encode_duration(),
             ..Default::default()
         }
     }
@@ -1563,6 +1675,11 @@ impl RendererBackend for D3d11Renderer {
 
     fn set_luma_upscaler(&mut self, mode: LumaUpscalerMode) {
         self.upscaler_mode = mode;
+        if let Some(state) = self.state.as_ref() {
+            if let Err(error) = self.upscaler.set_mode(&state.device, mode) {
+                report_upscaler_failure("mode_switch", mode, &error);
+            }
+        }
     }
 }
 
@@ -1664,6 +1781,7 @@ impl D3d11DeviceState {
     fn draw_video(
         &self,
         video: &ImportedVideoFrame,
+        upscaled_luma: Option<&ID3D11ShaderResourceView>,
         render_target: &ID3D11RenderTargetView,
         target: D3d11DrawRect,
     ) -> Result<()> {
@@ -1677,7 +1795,28 @@ impl D3d11DeviceState {
         };
         let stride = mem::size_of::<VideoVertex>() as u32;
         let offset = 0u32;
-        let vertices = video_vertices(video.tex_rect);
+        let vertices = video_vertices(D3d11TexRect::FULL);
+        let mut common = video.constants;
+        if upscaled_luma.is_some() {
+            common = common.packed_d2s_luma_input();
+        }
+        let constants = D3d11VideoConstants {
+            common,
+            texture_scales: [
+                if upscaled_luma.is_some() {
+                    1.0
+                } else {
+                    video.tex_rect.width
+                },
+                if upscaled_luma.is_some() {
+                    1.0
+                } else {
+                    video.tex_rect.height
+                },
+                video.tex_rect.width,
+                video.tex_rect.height,
+            ],
+        };
         unsafe {
             self.context.UpdateSubresource(
                 &self.vertex_buffer,
@@ -1691,7 +1830,7 @@ impl D3d11DeviceState {
                 &self.constants,
                 0,
                 None,
-                &video.constants as *const _ as *const c_void,
+                &constants as *const _ as *const c_void,
                 0,
                 0,
             );
@@ -1712,7 +1851,10 @@ impl D3d11DeviceState {
                 .PSSetConstantBuffers(0, Some(&[Some(self.constants.clone())]));
             self.context.PSSetShaderResources(
                 0,
-                Some(&[Some(video.luma.clone()), Some(video.chroma.clone())]),
+                Some(&[
+                    Some(upscaled_luma.cloned().unwrap_or_else(|| video.luma.clone())),
+                    Some(video.chroma.clone()),
+                ]),
             );
             self.context
                 .PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
@@ -1806,6 +1948,10 @@ impl D3d11DeviceState {
         mut constants: VideoUniforms,
     ) -> Result<()> {
         constants.scene_linear = 0;
+        let constants = D3d11VideoConstants {
+            common: constants,
+            texture_scales: [1.0; 4],
+        };
         let viewport = D3D11_VIEWPORT {
             TopLeftX: 0.0,
             TopLeftY: 0.0,
@@ -2339,7 +2485,7 @@ fn video_vertices(tex_rect: D3d11TexRect) -> [VideoVertex; 6] {
 
 fn create_constants_buffer(device: &ID3D11Device) -> Result<ID3D11Buffer> {
     let desc = D3D11_BUFFER_DESC {
-        ByteWidth: mem::size_of::<VideoUniforms>() as u32,
+        ByteWidth: mem::size_of::<D3d11VideoConstants>() as u32,
         Usage: D3D11_USAGE_DEFAULT,
         BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
         CPUAccessFlags: 0,
@@ -2614,6 +2760,22 @@ fn trace(message: &str) {
     }
 }
 
+fn report_upscaler_failure(stage: &str, mode: LumaUpscalerMode, error: &PlayerError) {
+    eprintln!("Erika D3D11 ArtCNN disabled after {stage} failure: {error}");
+    crate::trace::diagnostic(
+        serde_json::json!({
+            "event": "luma_upscaler",
+            "stage": stage,
+            "renderer": "d3d11",
+            "requestedMode": format!("{mode:?}"),
+            "activeBackend": "inactive",
+            "reason": error.to_string(),
+            "fallback": "native_luma_sampling",
+        })
+        .to_string(),
+    );
+}
+
 fn d3d11va_srv_error(
     error: PlayerError,
     desc: &D3D11_TEXTURE2D_DESC,
@@ -2692,7 +2854,7 @@ mod tests {
 
         let stats = renderer.runtime_stats();
         assert_eq!(stats.upscaler_mode, LumaUpscalerMode::ArtCnnC4F16);
-        assert_eq!(stats.upscaler_backend, LumaUpscalerBackendStatus::Inactive);
+        assert_eq!(stats.upscaler_backend, LumaUpscalerBackendStatus::Building);
     }
 
     #[test]

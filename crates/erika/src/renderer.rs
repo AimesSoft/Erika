@@ -4,6 +4,8 @@ pub(crate) mod android_vulkan;
 pub mod artcnn;
 #[cfg(target_os = "windows")]
 pub mod d3d11;
+#[cfg(target_os = "windows")]
+mod d3d11_artcnn;
 mod frame;
 pub mod metal;
 #[cfg(all(feature = "wgpu", target_env = "ohos"))]

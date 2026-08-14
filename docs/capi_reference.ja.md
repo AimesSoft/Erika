@@ -249,7 +249,7 @@ ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float he
 
 `set_playback_rate(1.0)` が通常速度。`set_upscaler` はランタイムで神経輝度アップ
 スケーラを切り替えます（[`erika_presenter_get_upscaler_status`](#診断とスクリーンショット)
-参照）。Metal と compute-capable な wgpu/Vulkan renderer は ArtCNN を実行し、
+参照）。Metal、feature level 11.0+ の D3D11、compute-capable な wgpu renderer は ArtCNN を実行し、
 それ以外の backend は native luma sampling を維持して `Inactive` fallback を明示します。
 
 `set_subtitle_font` と `set_subtitle_style` は字幕の **fallback** の見た目を設定します。

@@ -109,6 +109,7 @@ Windows のネイティブ renderer（`renderer/d3d11.rs`）：
 
 - ゼロコピー D3D11VA デコードテクスチャ相互運用：デコードされた `ID3D11Texture2D` surface を render device に共有し、CPU を経由しません。
 - YCbCr サンプリングと色空間変換（HLSL shader）、Metal と同じ pipeline model。
+- ゼロコピー D3D11VA luma plane 上で ArtCNN C4F16/C4F16 DS/C4F32 を tiled compute。bounded RGBA16F feature array、source-sized packed DepthToSpace output、decoded-frame cache を使います。動画の表示サイズが source より大きい場合だけ実行し、feature level 11.0 未満または optional compute failure 時は `Inactive` fallback を明示します。
 - HDR10 出力：`R10G10B10A2_UNORM` swapchain + `DXGI_HDR_METADATA_HDR10`、SDR（`BGRA8`）fallback あり。
 - 字幕 overlay の alpha-atlas upload と blending、atlas からの instanced danmaku glyph quad 描画。
 - `render_tick` で駆動される window-hosted swapchain。
