@@ -537,6 +537,26 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - name: Verify release versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(awk -F': ' '$1 == "version" {print $2; exit}' packages/erika_flutter/pubspec.yaml)"
+          native_version="$(awk -F= '$1 == "ERIKA_NATIVE_VERSION" {print $2; exit}' packages/erika_flutter/native_artifacts.properties)"
+          if [[ ! "$tag_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must use the v1.2.3 format: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          if [[ -z "$package_version" || "$package_version" != "$tag_version" ]]; then
+            echo "Tag version ($tag_version) does not match package version ($package_version)." >&2
+            exit 1
+          fi
+          if [[ -z "$native_version" || "$native_version" != "$tag_version" ]]; then
+            echo "Tag version ($tag_version) does not match native artifact version ($native_version)." >&2
+            exit 1
+          fi
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -571,3 +591,14 @@ jobs:
             and [docs/integration.md](https://github.com/AimesSoft/Erika/blob/${{ github.ref_name }}/docs/integration.md)
             to integrate. Review [CHANGELOG.md](https://github.com/AimesSoft/Erika/blob/${{ github.ref_name }}/CHANGELOG.md)
             before upgrading, especially the compatibility notes.
+
+  publish-pub:
+    name: Publish erika_flutter to pub.dev
+    needs: release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      id-token: write
+    uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
+    with:
+      working-directory: packages/erika_flutter
