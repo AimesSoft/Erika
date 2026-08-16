@@ -317,7 +317,12 @@ tasks.register("buildErikaAndroidRuntime") {
                         logger.lifecycle(
                             "Downloading Erika Android $abi prebuilt $prebuiltTag from $prebuiltUrl",
                         )
-                        ant.get(src: prebuiltUrl, dest: temporaryArchive, verbose: true)
+                        ant.get(
+                            src: prebuiltUrl,
+                            dest: temporaryArchive,
+                            verbose: true,
+                            retries: 3,
+                        )
                         try {
                             Files.move(
                                 temporaryArchive.toPath(),
@@ -377,7 +382,8 @@ tasks.register("buildErikaAndroidRuntime") {
                 project.delete(generatedJniLibs.get().asFile)
                 throw new GradleException(
                     "Unable to use Erika Android prebuilt $prebuiltTag. " +
-                        "Set ERIKA_FORCE_SOURCE_BUILD=1 only when building from an Erika checkout.",
+                        "Set ERIKA_FORCE_SOURCE_BUILD=1 only when building from an Erika checkout. " +
+                        "Cause: ${error.message}",
                     error,
                 )
             }
