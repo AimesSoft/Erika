@@ -31,13 +31,38 @@ Flutter Android 构建按实际请求的 ABI 下载对应
 `erika-flutter-android-<abi>.zip`，不会下载其他架构或仅供原生嵌入使用的静态 `.a`。
 合并的 `erika-capi-android.zip` 继续提供给需要多 ABI 或静态链接的 C/C++ 使用者。
 
+## 发布 Flutter package
+
+`erika_flutter` 独立发布在 [pub.dev](https://pub.dev/packages/erika_flutter)。
+`0.1.7` 是首个 standalone package release，支持 macOS、iOS、tvOS、Windows、Android
+和 HarmonyOS/OpenHarmony。package archive 包含插件源码、package `LICENSE`、README、
+example 和固定 native artifact manifest；平台构建会下载匹配的 GitHub Release 归档并校验 SHA-256。
+
+在干净工作树中从 package 目录执行：
+
+```sh
+cd packages/erika_flutter
+dart pub publish --dry-run
+dart pub publish
+```
+
+合并前由 [flutter-package.yml](../.github/workflows/flutter-package.yml) 执行 isolated
+package 和各平台 consumer 检查。Linux 和 Web 目前还不是 package 发布目标。
+
+### pub.dev publisher 身份
+
+`unverified uploader` 表示 package 由未关联已验证 pub.dev publisher 的账号上传。
+这不表示 package 校验、License 或构建失败。要显示已验证 publisher，需要创建或加入
+自己控制域名对应的 pub.dev publisher，完成域名验证后，再把 package ownership 转移给该 publisher。
+
 ## 创建 Release
 
 Release 由 [release.yml](../.github/workflows/release.yml) 自动执行。推送 `v*` tag 才会创建 GitHub Release：
 
 ```sh
-git tag v0.1.7
-git push origin v0.1.7
+VERSION=0.1.8
+git tag "v${VERSION}"
+git push origin "v${VERSION}"
 ```
 
 手动运行 `workflow_dispatch` 只生成 Actions Artifact，不发布可供 `ERIKA_PREBUILT_TAG` 下载的 GitHub Release。

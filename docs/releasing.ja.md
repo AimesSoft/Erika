@@ -33,13 +33,40 @@ Flutter Android build は要求された ABI の
 embedder 専用の static `.a` は download しません。combined
 `erika-capi-android.zip` は multi-ABI / static link の C/C++ consumer 向けに維持します。
 
+## Flutter package の公開
+
+`erika_flutter` は [pub.dev](https://pub.dev/packages/erika_flutter) で独立して公開します。
+`0.1.7` は最初の standalone package release で、macOS、iOS、tvOS、Windows、Android、
+HarmonyOS/OpenHarmony に対応します。package archive には plugin source、package
+`LICENSE`、README、example、version 固定の native artifact manifest が含まれ、platform
+build は対応する GitHub Release archive を download して SHA-256 を検証します。
+
+clean worktree から package directory で実行します：
+
+```sh
+cd packages/erika_flutter
+dart pub publish --dry-run
+dart pub publish
+```
+
+merge 前に [flutter-package.yml](../.github/workflows/flutter-package.yml) が isolated package
+と各 platform consumer を検証します。Linux と Web はまだ package 公開対象ではありません。
+
+### pub.dev publisher identity
+
+`unverified uploader` は、検証済み pub.dev publisher に紐付いていない account が package を
+upload したことを示します。package validation、License、build の失敗ではありません。検証済み
+publisher を表示するには、管理している domain の pub.dev publisher を作成または参加し、domain
+verification を完了してから package ownership をその publisher に移します。
+
 ## Release の作成
 
 Release は [release.yml](../.github/workflows/release.yml) で自動化されています。GitHub Release を作成するには `v*` tag を push します：
 
 ```sh
-git tag v0.1.7
-git push origin v0.1.7
+VERSION=0.1.8
+git tag "v${VERSION}"
+git push origin "v${VERSION}"
 ```
 
 `workflow_dispatch` の手動実行は Actions Artifact のみを生成し、`ERIKA_PREBUILT_TAG` から取得できる GitHub Release は公開しません。
