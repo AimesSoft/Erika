@@ -7,7 +7,7 @@ on:
       - ".github/workflows/flutter-package.yml"
       - "packages/erika_flutter/**"
   push:
-    branches: [main, "codex/**"]
+    branches: [main]
     paths:
       - ".github/workflows/flutter-package.yml"
       - "packages/erika_flutter/**"
