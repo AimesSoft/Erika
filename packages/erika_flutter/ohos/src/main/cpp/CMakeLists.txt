@@ -5,25 +5,47 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(PLUGIN_NAME erika_flutter_plugin)
 
-get_filename_component(
-  ERIKA_ROOT
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../.."
-  REALPATH
-)
-set(ERIKA_TARGET aarch64-unknown-linux-ohos)
-set(ERIKA_RUNTIME
-  "${ERIKA_ROOT}/target/${ERIKA_TARGET}/release/liberika_capi.so"
-)
+get_filename_component(ERIKA_PACKAGE_ROOT
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." REALPATH)
+set(ERIKA_ARTIFACT_MANIFEST
+  "${ERIKA_PACKAGE_ROOT}/native_artifacts.properties")
+if(NOT EXISTS "${ERIKA_ARTIFACT_MANIFEST}")
+  message(FATAL_ERROR
+    "Erika native artifact manifest is missing: ${ERIKA_ARTIFACT_MANIFEST}")
+endif()
 
-set(ERIKA_USE_PREBUILT OFF)
-if(
-  "$ENV{ERIKA_PREBUILT}" STREQUAL "1"
-  AND NOT "$ENV{ERIKA_FORCE_SOURCE_BUILD}" STREQUAL "1"
-)
+function(erika_read_artifact_property key output)
+  file(STRINGS "${ERIKA_ARTIFACT_MANIFEST}" value REGEX "^${key}=")
+  if(NOT value)
+    message(FATAL_ERROR "Missing ${key} in ${ERIKA_ARTIFACT_MANIFEST}")
+  endif()
+  list(GET value 0 value)
+  string(REGEX REPLACE "^[^=]+=" "" value "${value}")
+  set(${output} "${value}" PARENT_SCOPE)
+endfunction()
+
+erika_read_artifact_property(ERIKA_NATIVE_VERSION ERIKA_NATIVE_VERSION)
+erika_read_artifact_property(
+  ERIKA_OPENHARMONY_ARM64_SHA256 ERIKA_DEFAULT_PREBUILT_SHA256)
+set(ERIKA_DEFAULT_PREBUILT_TAG "v${ERIKA_NATIVE_VERSION}")
+set(ERIKA_TARGET aarch64-unknown-linux-ohos)
+set(ERIKA_RUNTIME "")
+
+set(ERIKA_USE_PREBUILT ON)
+if(NOT "$ENV{ERIKA_FORCE_SOURCE_BUILD}" STREQUAL "1")
   if("$ENV{ERIKA_PREBUILT_TAG}" STREQUAL "")
-    set(ERIKA_PREBUILT_TAG "v0.1.6")
+    set(ERIKA_PREBUILT_TAG "${ERIKA_DEFAULT_PREBUILT_TAG}")
   else()
     set(ERIKA_PREBUILT_TAG "$ENV{ERIKA_PREBUILT_TAG}")
+  endif()
+  if("$ENV{ERIKA_PREBUILT_SHA256}" STREQUAL "")
+    if(NOT ERIKA_PREBUILT_TAG STREQUAL ERIKA_DEFAULT_PREBUILT_TAG)
+      message(FATAL_ERROR
+        "ERIKA_PREBUILT_SHA256 is required when ERIKA_PREBUILT_TAG overrides ${ERIKA_DEFAULT_PREBUILT_TAG}")
+    endif()
+    set(ERIKA_PREBUILT_SHA256 "${ERIKA_DEFAULT_PREBUILT_SHA256}")
+  else()
+    set(ERIKA_PREBUILT_SHA256 "$ENV{ERIKA_PREBUILT_SHA256}")
   endif()
   string(REGEX REPLACE "[^A-Za-z0-9._-]" "_" ERIKA_PREBUILT_CACHE_KEY
     "${ERIKA_PREBUILT_TAG}"
@@ -41,12 +63,21 @@ if(
     "https://github.com/AimesSoft/Erika/releases/download/${ERIKA_PREBUILT_TAG}/erika-capi-openharmony-arm64.zip"
   )
 
+  if(EXISTS "${ERIKA_PREBUILT_ZIP}")
+    file(SHA256 "${ERIKA_PREBUILT_ZIP}" ERIKA_CACHED_PREBUILT_SHA256)
+    if(NOT ERIKA_CACHED_PREBUILT_SHA256 STREQUAL ERIKA_PREBUILT_SHA256)
+      file(REMOVE "${ERIKA_PREBUILT_ZIP}" "${ERIKA_PREBUILT_RUNTIME}")
+    endif()
+  elseif(EXISTS "${ERIKA_PREBUILT_RUNTIME}")
+    file(REMOVE "${ERIKA_PREBUILT_RUNTIME}")
+  endif()
   if(NOT EXISTS "${ERIKA_PREBUILT_RUNTIME}")
     file(MAKE_DIRECTORY "${ERIKA_PREBUILT_DIR}")
     message(STATUS "Erika: downloading prebuilt ${ERIKA_PREBUILT_URL}")
     file(
       DOWNLOAD "${ERIKA_PREBUILT_URL}" "${ERIKA_PREBUILT_ZIP}"
       STATUS ERIKA_PREBUILT_DOWNLOAD_STATUS
+      EXPECTED_HASH "SHA256=${ERIKA_PREBUILT_SHA256}"
       SHOW_PROGRESS
       TLS_VERIFY ON
       TIMEOUT 120
@@ -59,11 +90,14 @@ if(
         WORKING_DIRECTORY "${ERIKA_PREBUILT_DIR}"
         RESULT_VARIABLE ERIKA_PREBUILT_EXTRACT_STATUS
       )
+      if(NOT ERIKA_PREBUILT_EXTRACT_STATUS EQUAL 0)
+        message(FATAL_ERROR
+          "Failed to extract Erika prebuilt ${ERIKA_PREBUILT_TAG}")
+      endif()
     else()
       list(GET ERIKA_PREBUILT_DOWNLOAD_STATUS 1 ERIKA_PREBUILT_DOWNLOAD_MESSAGE)
-      message(WARNING
-        "Erika: prebuilt download failed (${ERIKA_PREBUILT_DOWNLOAD_MESSAGE}); building from source"
-      )
+      message(FATAL_ERROR
+        "Erika prebuilt download or checksum verification failed: ${ERIKA_PREBUILT_DOWNLOAD_MESSAGE}. Set ERIKA_FORCE_SOURCE_BUILD=1 only from an Erika checkout.")
     endif()
   endif()
 
@@ -76,11 +110,24 @@ if(
   endif()
   if(ERIKA_PREBUILT_RUNTIME_VALID)
     set(ERIKA_RUNTIME "${ERIKA_PREBUILT_RUNTIME}")
-    set(ERIKA_USE_PREBUILT ON)
     message(STATUS "Erika: using prebuilt ${ERIKA_PREBUILT_TAG}")
   else()
-    message(STATUS "Erika: prebuilt unavailable; building from source")
+    message(FATAL_ERROR
+      "Erika prebuilt ${ERIKA_PREBUILT_TAG} did not contain liberika_capi.so")
   endif()
+else()
+  set(ERIKA_USE_PREBUILT OFF)
+  if(NOT "$ENV{ERIKA_REPO_ROOT}" STREQUAL "")
+    file(TO_CMAKE_PATH "$ENV{ERIKA_REPO_ROOT}" ERIKA_ROOT)
+  else()
+    get_filename_component(ERIKA_ROOT "${ERIKA_PACKAGE_ROOT}/../.." REALPATH)
+  endif()
+  if(NOT EXISTS "${ERIKA_ROOT}/crates/erika_capi/Cargo.toml")
+    message(FATAL_ERROR
+      "ERIKA_FORCE_SOURCE_BUILD=1 requires an Erika checkout; set ERIKA_REPO_ROOT")
+  endif()
+  set(ERIKA_RUNTIME
+    "${ERIKA_ROOT}/target/${ERIKA_TARGET}/release/liberika_capi.so")
 endif()
 
 if(NOT DEFINED OHOS_SDK_NATIVE)
@@ -154,7 +201,7 @@ set_target_properties(${PLUGIN_NAME} PROPERTIES
 )
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
-  "${ERIKA_ROOT}/crates/erika_capi/include"
+  "${ERIKA_PACKAGE_ROOT}/native/include"
 )
 target_compile_options(${PLUGIN_NAME} PRIVATE
   -fno-exceptions

@@ -1,14 +1,11 @@
 cmake_minimum_required(VERSION 3.14)
 
-if(NOT DEFINED ERIKA_REPO_ROOT OR ERIKA_REPO_ROOT STREQUAL "")
-  message(FATAL_ERROR "ERIKA_REPO_ROOT is required")
-endif()
-if(NOT DEFINED CARGO_EXECUTABLE OR CARGO_EXECUTABLE STREQUAL "")
-  set(CARGO_EXECUTABLE cargo)
-endif()
-if(NOT DEFINED ERIKA_NATIVE_TARGET OR ERIKA_NATIVE_TARGET STREQUAL "")
-  set(ERIKA_NATIVE_TARGET "x86_64-pc-windows-msvc")
-endif()
+foreach(required ERIKA_PACKAGE_ROOT ERIKA_RUNTIME_OUT ERIKA_CACHE_ROOT
+    ERIKA_NATIVE_TARGET)
+  if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
+    message(FATAL_ERROR "${required} is required")
+  endif()
+endforeach()
 if(NOT DEFINED ERIKA_NATIVE_PROFILE OR ERIKA_NATIVE_PROFILE STREQUAL "")
   set(ERIKA_NATIVE_PROFILE "lgpl")
 endif()
@@ -20,6 +17,121 @@ if(NOT ERIKA_NATIVE_TARGET STREQUAL "x86_64-pc-windows-msvc" AND
   message(FATAL_ERROR "Unsupported Erika Windows target: ${ERIKA_NATIVE_TARGET}")
 endif()
 
+set(ERIKA_ARTIFACT_MANIFEST
+  "${ERIKA_PACKAGE_ROOT}/native_artifacts.properties")
+if(NOT EXISTS "${ERIKA_ARTIFACT_MANIFEST}")
+  message(FATAL_ERROR
+    "Erika native artifact manifest is missing: ${ERIKA_ARTIFACT_MANIFEST}")
+endif()
+
+function(erika_read_artifact_property key output)
+  file(STRINGS "${ERIKA_ARTIFACT_MANIFEST}" value REGEX "^${key}=")
+  if(NOT value)
+    message(FATAL_ERROR "Missing ${key} in ${ERIKA_ARTIFACT_MANIFEST}")
+  endif()
+  list(GET value 0 value)
+  string(REGEX REPLACE "^[^=]+=" "" value "${value}")
+  set(${output} "${value}" PARENT_SCOPE)
+endfunction()
+
+erika_read_artifact_property(ERIKA_NATIVE_VERSION ERIKA_NATIVE_VERSION)
+set(ERIKA_DEFAULT_PREBUILT_TAG "v${ERIKA_NATIVE_VERSION}")
+if(ERIKA_NATIVE_TARGET STREQUAL "aarch64-pc-windows-msvc")
+  set(ERIKA_ASSET_ARCH "arm64")
+  erika_read_artifact_property(
+    ERIKA_WINDOWS_ARM64_SHA256 ERIKA_DEFAULT_PREBUILT_SHA256)
+else()
+  set(ERIKA_ASSET_ARCH "x64")
+  erika_read_artifact_property(
+    ERIKA_WINDOWS_X64_SHA256 ERIKA_DEFAULT_PREBUILT_SHA256)
+endif()
+
+if(NOT "$ENV{ERIKA_FORCE_SOURCE_BUILD}" STREQUAL "1")
+  if("$ENV{ERIKA_PREBUILT_TAG}" STREQUAL "")
+    set(ERIKA_PREBUILT_TAG "${ERIKA_DEFAULT_PREBUILT_TAG}")
+  else()
+    set(ERIKA_PREBUILT_TAG "$ENV{ERIKA_PREBUILT_TAG}")
+  endif()
+  if("$ENV{ERIKA_PREBUILT_SHA256}" STREQUAL "")
+    if(NOT ERIKA_PREBUILT_TAG STREQUAL ERIKA_DEFAULT_PREBUILT_TAG)
+      message(FATAL_ERROR
+        "ERIKA_PREBUILT_SHA256 is required when ERIKA_PREBUILT_TAG overrides ${ERIKA_DEFAULT_PREBUILT_TAG}")
+    endif()
+    set(ERIKA_PREBUILT_SHA256 "${ERIKA_DEFAULT_PREBUILT_SHA256}")
+  else()
+    set(ERIKA_PREBUILT_SHA256 "$ENV{ERIKA_PREBUILT_SHA256}")
+  endif()
+
+  string(REGEX REPLACE "[^A-Za-z0-9._-]" "_"
+    ERIKA_CACHE_TAG "${ERIKA_PREBUILT_TAG}")
+  set(ERIKA_WORK
+    "${ERIKA_CACHE_ROOT}/${ERIKA_CACHE_TAG}-${ERIKA_ASSET_ARCH}")
+  set(ERIKA_ZIP "${ERIKA_WORK}/bundle.zip")
+  set(ERIKA_URL
+    "https://github.com/AimesSoft/Erika/releases/download/${ERIKA_PREBUILT_TAG}/erika-capi-windows-${ERIKA_ASSET_ARCH}.zip")
+
+  if(EXISTS "${ERIKA_ZIP}")
+    file(SHA256 "${ERIKA_ZIP}" ERIKA_CACHED_SHA256)
+    if(NOT ERIKA_CACHED_SHA256 STREQUAL ERIKA_PREBUILT_SHA256)
+      file(REMOVE "${ERIKA_ZIP}" "${ERIKA_RUNTIME_OUT}")
+    endif()
+  endif()
+  if(NOT EXISTS "${ERIKA_ZIP}")
+    file(MAKE_DIRECTORY "${ERIKA_WORK}")
+    message(STATUS "Erika: downloading prebuilt ${ERIKA_URL}")
+    file(DOWNLOAD "${ERIKA_URL}" "${ERIKA_ZIP}"
+      EXPECTED_HASH "SHA256=${ERIKA_PREBUILT_SHA256}"
+      STATUS ERIKA_DOWNLOAD_STATUS
+      SHOW_PROGRESS
+      TLS_VERIFY ON
+      TIMEOUT 900)
+    list(GET ERIKA_DOWNLOAD_STATUS 0 ERIKA_DOWNLOAD_CODE)
+    if(NOT ERIKA_DOWNLOAD_CODE EQUAL 0)
+      list(GET ERIKA_DOWNLOAD_STATUS 1 ERIKA_DOWNLOAD_MESSAGE)
+      message(FATAL_ERROR
+        "Erika prebuilt download or checksum verification failed: ${ERIKA_DOWNLOAD_MESSAGE}. Set ERIKA_FORCE_SOURCE_BUILD=1 only from an Erika checkout.")
+    endif()
+  endif()
+
+  if(NOT EXISTS "${ERIKA_RUNTIME_OUT}")
+    file(REMOVE_RECURSE "${ERIKA_WORK}/unpacked")
+    file(MAKE_DIRECTORY "${ERIKA_WORK}/unpacked")
+    execute_process(
+      COMMAND "${CMAKE_COMMAND}" -E tar xf "${ERIKA_ZIP}"
+      WORKING_DIRECTORY "${ERIKA_WORK}/unpacked"
+      RESULT_VARIABLE ERIKA_EXTRACT_RESULT)
+    if(NOT ERIKA_EXTRACT_RESULT EQUAL 0)
+      message(FATAL_ERROR
+        "Failed to extract Erika prebuilt ${ERIKA_PREBUILT_TAG}")
+    endif()
+    file(GLOB_RECURSE ERIKA_FOUND_DLL
+      "${ERIKA_WORK}/unpacked/*/lib/erika_capi.dll")
+    if(NOT ERIKA_FOUND_DLL)
+      message(FATAL_ERROR
+        "Erika prebuilt ${ERIKA_PREBUILT_TAG} did not contain erika_capi.dll")
+    endif()
+    list(GET ERIKA_FOUND_DLL 0 ERIKA_SOURCE_DLL)
+    get_filename_component(ERIKA_RUNTIME_DIR "${ERIKA_RUNTIME_OUT}" DIRECTORY)
+    file(MAKE_DIRECTORY "${ERIKA_RUNTIME_DIR}")
+    file(COPY "${ERIKA_SOURCE_DLL}" DESTINATION "${ERIKA_RUNTIME_DIR}")
+  endif()
+  message(STATUS
+    "Erika: using verified prebuilt ${ERIKA_PREBUILT_TAG} -> ${ERIKA_RUNTIME_OUT}")
+  return()
+endif()
+
+if(NOT "$ENV{ERIKA_REPO_ROOT}" STREQUAL "")
+  file(TO_CMAKE_PATH "$ENV{ERIKA_REPO_ROOT}" ERIKA_REPO_ROOT)
+else()
+  get_filename_component(ERIKA_REPO_ROOT
+    "${ERIKA_PACKAGE_ROOT}/../.." REALPATH)
+endif()
+if(NOT EXISTS "${ERIKA_REPO_ROOT}/crates/erika_capi/Cargo.toml")
+  message(FATAL_ERROR
+    "ERIKA_FORCE_SOURCE_BUILD=1 requires an Erika checkout; set ERIKA_REPO_ROOT")
+endif()
+find_program(CARGO_EXECUTABLE cargo REQUIRED)
+
 set(ERIKA_NATIVE_DIST_DIR
   "${ERIKA_REPO_ROOT}/third_party/dist/${ERIKA_NATIVE_TARGET}/${ERIKA_NATIVE_PROFILE}")
 set(ERIKA_FFMPEG_DIR "${ERIKA_NATIVE_DIST_DIR}/ffmpeg")
@@ -30,148 +142,41 @@ set(ERIKA_FRIBIDI_DIR "${ERIKA_NATIVE_DIST_DIR}/fribidi")
 
 function(erika_native_deps_ready output)
   set(ready TRUE)
-  set(ffmpeg_version_header "${ERIKA_FFMPEG_DIR}/include/libavutil/version.h")
-  if(NOT EXISTS "${ffmpeg_version_header}")
-    set(ready FALSE)
-  else()
-    file(STRINGS "${ffmpeg_version_header}" ffmpeg_version_major
-      REGEX "^#define[ \t]+LIBAVUTIL_VERSION_MAJOR[ \t]+[0-9]+")
-    if(ffmpeg_version_major MATCHES "([0-9]+)$")
-      set(ffmpeg_version_major "${CMAKE_MATCH_1}")
-      if(ffmpeg_version_major LESS 60)
-        set(ready FALSE)
-      endif()
-    else()
-      set(ready FALSE)
-    endif()
-  endif()
-  foreach(dep_dir
-      "${ERIKA_LIBASS_DIR}"
-      "${ERIKA_FREETYPE_DIR}"
-      "${ERIKA_HARFBUZZ_DIR}"
-      "${ERIKA_FRIBIDI_DIR}")
-    if(NOT EXISTS "${dep_dir}/lib")
+  foreach(path
+      "${ERIKA_FFMPEG_DIR}/include/libavutil/version.h"
+      "${ERIKA_LIBASS_DIR}/lib"
+      "${ERIKA_FREETYPE_DIR}/lib"
+      "${ERIKA_HARFBUZZ_DIR}/lib"
+      "${ERIKA_FRIBIDI_DIR}/lib")
+    if(NOT EXISTS "${path}")
       set(ready FALSE)
     endif()
   endforeach()
   set(${output} "${ready}" PARENT_SCOPE)
 endfunction()
 
-if("$ENV{ERIKA_PREBUILT}" STREQUAL "1")
-  if(ERIKA_BUILD_CONFIG STREQUAL "Debug")
-    set(_erika_cfg_dir "debug")
-  else()
-    set(_erika_cfg_dir "release")
-  endif()
-  set(_erika_tag "v0.1.6")
-  if(NOT "$ENV{ERIKA_PREBUILT_TAG}" STREQUAL "")
-    set(_erika_tag "$ENV{ERIKA_PREBUILT_TAG}")
-  endif()
-  if(ERIKA_NATIVE_TARGET STREQUAL "aarch64-pc-windows-msvc")
-    set(_erika_asset_arch "arm64")
-  else()
-    set(_erika_asset_arch "x64")
-  endif()
-  set(_erika_target_dir
-    "${ERIKA_REPO_ROOT}/target/${ERIKA_NATIVE_TARGET}/${_erika_cfg_dir}")
-  set(_erika_dll_out "${_erika_target_dir}/erika_capi.dll")
-  set(_erika_tag_marker "${_erika_dll_out}.prebuilt-tag")
-  if(EXISTS "${_erika_dll_out}" AND EXISTS "${_erika_tag_marker}")
-    file(READ "${_erika_tag_marker}" _erika_cached_tag)
-    string(STRIP "${_erika_cached_tag}" _erika_cached_tag)
-    if("${_erika_cached_tag}" STREQUAL "${_erika_tag}")
-      message(STATUS "Erika: reusing prebuilt ${_erika_tag} -> ${_erika_dll_out}")
-      return()
-    endif()
-  endif()
-  file(REMOVE
-    "${_erika_dll_out}"
-    "${_erika_target_dir}/erika_capi.dll.lib"
-    "${_erika_target_dir}/erika_capi.lib"
-    "${_erika_tag_marker}")
-  set(_erika_url
-    "https://github.com/AimesSoft/Erika/releases/download/${_erika_tag}/erika-capi-windows-${_erika_asset_arch}.zip")
-  set(_erika_work
-    "${ERIKA_REPO_ROOT}/target/erika-prebuilt-windows-${_erika_asset_arch}")
-  set(_erika_zip "${_erika_work}/bundle.zip")
-  file(REMOVE_RECURSE "${_erika_work}")
-  file(MAKE_DIRECTORY "${_erika_work}")
-  message(STATUS "Erika: downloading prebuilt ${_erika_url}")
-  file(DOWNLOAD "${_erika_url}" "${_erika_zip}" STATUS _erika_dl TIMEOUT 900)
-  list(GET _erika_dl 0 _erika_dl_code)
-  if(_erika_dl_code EQUAL 0)
-    execute_process(
-      COMMAND "${CMAKE_COMMAND}" -E tar xf "${_erika_zip}"
-      WORKING_DIRECTORY "${_erika_work}"
-      RESULT_VARIABLE _erika_unzip)
-    file(GLOB_RECURSE _erika_found_dll "${_erika_work}/*/lib/erika_capi.dll")
-    if(_erika_unzip EQUAL 0 AND _erika_found_dll)
-      list(GET _erika_found_dll 0 _erika_src_dll)
-      get_filename_component(_erika_src_lib_dir "${_erika_src_dll}" DIRECTORY)
-      file(MAKE_DIRECTORY "${_erika_target_dir}")
-      file(COPY "${_erika_src_dll}"
-        DESTINATION "${_erika_target_dir}")
-      foreach(_erika_extra erika_capi.dll.lib erika_capi.lib)
-        if(EXISTS "${_erika_src_lib_dir}/${_erika_extra}")
-          file(COPY "${_erika_src_lib_dir}/${_erika_extra}"
-            DESTINATION "${_erika_target_dir}")
-        endif()
-      endforeach()
-      if(EXISTS "${_erika_dll_out}")
-        file(WRITE "${_erika_tag_marker}" "${_erika_tag}\n")
-        message(STATUS "Erika: installed prebuilt ${_erika_tag} -> ${_erika_dll_out}")
-        return()
-      endif()
-    endif()
-    message(WARNING "Erika: prebuilt extract failed; building from source")
-  else()
-    message(WARNING "Erika: prebuilt download failed (${_erika_dl}); building from source")
-  endif()
-  file(REMOVE "${_erika_tag_marker}")
-else()
-  # A source build replaces any DLL previously installed by the prebuilt path.
-  # Drop its tag marker so a later prebuilt build cannot mistake the source DLL
-  # for the cached release artifact.
-  if(ERIKA_BUILD_CONFIG STREQUAL "Debug")
-    set(_erika_source_cfg_dir "debug")
-  else()
-    set(_erika_source_cfg_dir "release")
-  endif()
-  file(REMOVE
-    "${ERIKA_REPO_ROOT}/target/${ERIKA_NATIVE_TARGET}/${_erika_source_cfg_dir}/erika_capi.dll.prebuilt-tag")
-endif()
-
 erika_native_deps_ready(ERIKA_NATIVE_DEPS_READY)
 if(NOT ERIKA_NATIVE_DEPS_READY)
-  message(STATUS
-    "Erika native dependency bundle missing; building ${ERIKA_NATIVE_TARGET}/${ERIKA_NATIVE_PROFILE}")
   execute_process(
     COMMAND "${CARGO_EXECUTABLE}" run -p xtask -- deps build
       --profile "${ERIKA_NATIVE_PROFILE}"
       --target "${ERIKA_NATIVE_TARGET}"
       --all
     WORKING_DIRECTORY "${ERIKA_REPO_ROOT}"
-    RESULT_VARIABLE ERIKA_DEPS_RESULT
-  )
+    RESULT_VARIABLE ERIKA_DEPS_RESULT)
   if(NOT ERIKA_DEPS_RESULT EQUAL 0)
     message(FATAL_ERROR
-      "Failed to build Erika native dependencies with xtask (exit ${ERIKA_DEPS_RESULT})")
+      "Failed to build Erika native dependencies (exit ${ERIKA_DEPS_RESULT})")
   endif()
-
-  erika_native_deps_ready(ERIKA_NATIVE_DEPS_READY)
-  if(NOT ERIKA_NATIVE_DEPS_READY)
-    message(FATAL_ERROR
-      "Erika native dependencies did not appear under ${ERIKA_NATIVE_DIST_DIR} after xtask")
-  endif()
-else()
-  message(STATUS "Using Erika native dependencies from ${ERIKA_NATIVE_DIST_DIR}")
 endif()
 
 set(ERIKA_CARGO_ARGS build -p erika_capi --target "${ERIKA_NATIVE_TARGET}")
 if(NOT ERIKA_BUILD_CONFIG STREQUAL "Debug")
   list(APPEND ERIKA_CARGO_ARGS --release)
+  set(ERIKA_CARGO_PROFILE release)
+else()
+  set(ERIKA_CARGO_PROFILE debug)
 endif()
-
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E env
     "ERIKA_NATIVE_TARGET=${ERIKA_NATIVE_TARGET}"
@@ -183,9 +188,17 @@ execute_process(
     "ERIKA_FRIBIDI_DIR=${ERIKA_FRIBIDI_DIR}"
     "${CARGO_EXECUTABLE}" ${ERIKA_CARGO_ARGS}
   WORKING_DIRECTORY "${ERIKA_REPO_ROOT}"
-  RESULT_VARIABLE ERIKA_CAPI_RESULT
-)
+  RESULT_VARIABLE ERIKA_CAPI_RESULT)
 if(NOT ERIKA_CAPI_RESULT EQUAL 0)
   message(FATAL_ERROR
-    "Failed to build Erika C API runtime for ${ERIKA_BUILD_CONFIG} (exit ${ERIKA_CAPI_RESULT})")
+    "Failed to build Erika C API runtime (exit ${ERIKA_CAPI_RESULT})")
 endif()
+
+set(ERIKA_SOURCE_DLL
+  "${ERIKA_REPO_ROOT}/target/${ERIKA_NATIVE_TARGET}/${ERIKA_CARGO_PROFILE}/erika_capi.dll")
+if(NOT EXISTS "${ERIKA_SOURCE_DLL}")
+  message(FATAL_ERROR "Erika source build did not produce ${ERIKA_SOURCE_DLL}")
+endif()
+get_filename_component(ERIKA_RUNTIME_DIR "${ERIKA_RUNTIME_OUT}" DIRECTORY)
+file(MAKE_DIRECTORY "${ERIKA_RUNTIME_DIR}")
+file(COPY "${ERIKA_SOURCE_DLL}" DESTINATION "${ERIKA_RUNTIME_DIR}")

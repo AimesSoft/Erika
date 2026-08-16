@@ -1,0 +1,207 @@
+name: Flutter package
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/flutter-package.yml"
+      - "packages/erika_flutter/**"
+  push:
+    branches: [main, "codex/**"]
+    paths:
+      - ".github/workflows/flutter-package.yml"
+      - "packages/erika_flutter/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flutter-package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PUB_HOSTED_URL: https://pub.dev
+
+jobs:
+  package:
+    name: Pub package (isolated)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Validate package
+        working-directory: packages/erika_flutter
+        run: |
+          flutter pub get
+          flutter analyze --no-pub
+          flutter test --no-pub --reporter expanded
+          flutter pub publish --dry-run
+      - name: Test outside the monorepo
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/erika-standalone"
+          mkdir -p "$root/erika_flutter"
+          git archive HEAD:packages/erika_flutter | tar -x -C "$root/erika_flutter"
+          test ! -e "$root/crates"
+          cd "$root/erika_flutter"
+          flutter pub get
+          flutter analyze --no-pub
+          flutter test --no-pub --reporter expanded
+
+  android:
+    name: Android app from isolated package
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: actions/cache@v4
+        with:
+          path: ~/.gradle/caches/erika
+          key: erika-flutter-android-${{ hashFiles('packages/erika_flutter/native_artifacts.properties') }}
+      - name: Create isolated consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/erika-android"
+          mkdir -p "$root/erika_flutter"
+          git archive HEAD:packages/erika_flutter | tar -x -C "$root/erika_flutter"
+          flutter create --platforms=android --project-name erika_consumer "$root/app"
+          cd "$root/app"
+          flutter pub add erika_flutter --path ../erika_flutter
+          flutter build apk --debug --target-platform android-arm64
+
+  apple:
+    name: ${{ matrix.name }} app from isolated package
+    needs: package
+    runs-on: macos-26
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: iOS simulator
+            platform: ios
+            build: flutter build ios --simulator --debug --no-codesign
+          - name: macOS
+            platform: macos
+            build: flutter build macos --debug
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/erika-prebuilt-cache
+          key: erika-flutter-${{ matrix.platform }}-${{ hashFiles('packages/erika_flutter/native_artifacts.properties') }}
+      - name: Create isolated consumer
+        shell: bash
+        env:
+          ERIKA_PREBUILT_CACHE_DIR: ${{ runner.temp }}/erika-prebuilt-cache
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/erika-${{ matrix.platform }}"
+          mkdir -p "$root/erika_flutter"
+          git archive HEAD:packages/erika_flutter | tar -x -C "$root/erika_flutter"
+          flutter create --platforms=${{ matrix.platform }} --project-name erika_consumer "$root/app"
+          cd "$root/app"
+          flutter pub add erika_flutter --path ../erika_flutter
+          ${{ matrix.build }}
+
+  tvos:
+    name: tvOS runtime from isolated package
+    needs: package
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/erika-prebuilt-cache
+          key: erika-flutter-tvos-${{ hashFiles('packages/erika_flutter/native_artifacts.properties') }}
+      - name: Verify tvOS simulator runtime
+        shell: bash
+        env:
+          ERIKA_PREBUILT_CACHE_DIR: ${{ runner.temp }}/erika-prebuilt-cache
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/erika-tvos"
+          mkdir -p "$root/erika_flutter"
+          git archive HEAD:packages/erika_flutter | tar -x -C "$root/erika_flutter"
+          sh "$root/erika_flutter/native/prepare_apple_prebuilt.sh" \
+            tvos appletvsimulator arm64 "$root/liberika_capi.a"
+          lipo -info "$root/liberika_capi.a" | grep -Eq 'arm64|Non-fat'
+
+  windows:
+    name: Windows app from isolated package
+    needs: package
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Create isolated consumer
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "erika-windows"
+          $package = Join-Path $root "erika_flutter"
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          git archive HEAD:packages/erika_flutter -o (Join-Path $root "package.tar")
+          tar -xf (Join-Path $root "package.tar") -C $package
+          flutter create --platforms=windows --project-name erika_consumer (Join-Path $root "app")
+          Set-Location (Join-Path $root "app")
+          flutter pub add erika_flutter --path ../erika_flutter
+          flutter build windows --debug
+
+  openharmony:
+    name: OpenHarmony bridge from isolated package
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup OpenHarmony SDK
+        id: ohos_sdk
+        uses: openharmony-rs/setup-ohos-sdk@b312caf8a43bb836aa24c08f65f97e1f09a89cad
+        with:
+          version: "5.1.0"
+          components: native
+          cache: true
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build
+      - name: Build isolated bridge
+        shell: bash
+        env:
+          NATIVE_ROOT: ${{ steps.ohos_sdk.outputs.ohos_sdk_native }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/erika-ohos"
+          mkdir -p "$root/erika_flutter"
+          git archive HEAD:packages/erika_flutter | tar -x -C "$root/erika_flutter"
+          cmake -S "$root/erika_flutter/ohos/src/main/cpp" \
+            -B "$root/build" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$NATIVE_ROOT/build/cmake/ohos.toolchain.cmake" \
+            -DOHOS_ARCH=arm64-v8a \
+            -DOHOS_SDK_NATIVE="$NATIVE_ROOT"
+          cmake --build "$root/build" --target erika_flutter_plugin
+          test -f "$(find "$root/build" -type f -name 'liberika_flutter.so' -print -quit)"
+          test -f "$(find "$root/build" -type f -name 'liberika_capi.so' -print -quit)"

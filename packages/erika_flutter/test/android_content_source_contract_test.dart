@@ -63,7 +63,8 @@ void main() {
     final resumeBody = plugin.substring(resumeStart, resumePendingStart);
     expect(suspendBody, contains('host.cancelPlaybackIntent()'));
     expect(suspendBody, isNot(contains('host.suspendPlayback()')));
-    expect(suspendBody, contains('postBackgroundCommand(host, "lifecycle", "pause")'));
+    expect(suspendBody,
+        contains('postBackgroundCommand(host, "lifecycle", "pause")'));
     expect(suspendBody, contains('view::suspendSurfaceAsync'));
     expect(suspendBody, isNot(contains('host.invoke("pause"')));
     expect(
@@ -90,7 +91,8 @@ void main() {
     ).readAsStringSync();
 
     expect(plugin, contains('presenterCreates.registerIfCurrent'));
-    expect(plugin, contains('presenterCreates.detach(retiringPresenterThread)'));
+    expect(
+        plugin, contains('presenterCreates.detach(retiringPresenterThread)'));
     expect(plugin, contains('view.bindAsync(host)'));
     expect(plugin, contains('view.unbindAsync(host)'));
     expect(plugin, contains('host.prepareForOpen('));
@@ -127,13 +129,17 @@ void main() {
     expect(presenter, contains('androidPresenterTaskResult(block)'));
   });
 
-  test('Android prebuilt tag follows the Flutter package version', () {
+  test('Android prebuilt tag follows the shared native artifact manifest', () {
     final pubspec = File('pubspec.yaml').readAsStringSync();
     final gradle = File('android/erika-native.gradle').readAsStringSync();
+    final artifacts = File('native_artifacts.properties').readAsStringSync();
     final version = RegExp(r'^version:\s*(\S+)', multiLine: true)
         .firstMatch(pubspec)!
         .group(1)!;
 
-    expect(gradle, contains('?: "v$version"'));
+    expect(artifacts, contains('ERIKA_NATIVE_VERSION=$version'));
+    expect(gradle, contains(r'defaultPrebuiltTag = "v$nativeVersion"'));
+    expect(gradle, contains('MessageDigest.getInstance("SHA-256")'));
+    expect(gradle, contains('def usePrebuilt = !forceSourceBuild'));
   });
 }

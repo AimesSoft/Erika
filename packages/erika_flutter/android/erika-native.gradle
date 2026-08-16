@@ -1,9 +1,35 @@
 import java.util.Locale
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import org.gradle.process.ExecOperations
 
 def execOperations = project.services.get(ExecOperations)
+
+def artifactPropertiesFile = new File(project.projectDir.parentFile, "native_artifacts.properties")
+if (!artifactPropertiesFile.isFile()) {
+    throw new GradleException("Erika native artifact manifest is missing: $artifactPropertiesFile")
+}
+def artifactProperties = new Properties()
+artifactPropertiesFile.withInputStream { artifactProperties.load(it) }
+def nativeVersion = artifactProperties.getProperty("ERIKA_NATIVE_VERSION")
+def defaultPrebuiltTag = "v$nativeVersion"
+def defaultPrebuiltSha256 = artifactProperties.getProperty("ERIKA_ANDROID_SHA256")
+if (nativeVersion == null || defaultPrebuiltSha256 == null) {
+    throw new GradleException("Erika native artifact manifest is incomplete: $artifactPropertiesFile")
+}
+
+def sha256 = { File input ->
+    def digest = MessageDigest.getInstance("SHA-256")
+    input.withInputStream { stream ->
+        byte[] buffer = new byte[1024 * 1024]
+        int read
+        while ((read = stream.read(buffer)) != -1) {
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().collect { String.format("%02x", it & 0xff) }.join()
+}
 
 def findErikaRepoRoot = {
     def configured = System.getenv("ERIKA_REPO_ROOT")
@@ -88,8 +114,10 @@ def skipNativeBuild = (project.findProperty("erikaSkipNativeBuild")
     ?: System.getenv("ERIKA_ANDROID_SKIP_NATIVE_BUILD")
     ?: "false").toString().toBoolean()
 def forceSourceBuild = (System.getenv("ERIKA_FORCE_SOURCE_BUILD") ?: "0") == "1"
-def usePrebuilt = (System.getenv("ERIKA_PREBUILT") ?: "0") == "1" && !forceSourceBuild
-def prebuiltTag = System.getenv("ERIKA_PREBUILT_TAG") ?: "v0.1.6"
+def usePrebuilt = !forceSourceBuild
+def prebuiltTag = System.getenv("ERIKA_PREBUILT_TAG") ?: defaultPrebuiltTag
+def configuredPrebuiltSha256 = System.getenv("ERIKA_PREBUILT_SHA256")
+def prebuiltSha256 = configuredPrebuiltSha256 ?: defaultPrebuiltSha256
 def prebuiltCacheKey = prebuiltTag.replaceAll(/[^A-Za-z0-9._-]/, "_")
 def prebuiltCacheDirectory = new File(
     gradle.gradleUserHomeDir,
@@ -237,7 +265,21 @@ tasks.register("buildErikaAndroidRuntime") {
 
         if (usePrebuilt) {
             try {
+                if (prebuiltTag != defaultPrebuiltTag && configuredPrebuiltSha256 == null) {
+                    throw new GradleException(
+                        "ERIKA_PREBUILT_SHA256 is required when ERIKA_PREBUILT_TAG overrides $defaultPrebuiltTag",
+                    )
+                }
                 prebuiltCacheDirectory.mkdirs()
+                if (prebuiltArchive.isFile()) {
+                    def cachedSha256 = sha256(prebuiltArchive)
+                    if (!cachedSha256.equalsIgnoreCase(prebuiltSha256)) {
+                        logger.warn(
+                            "Discarding Erika Android prebuilt with invalid checksum: $prebuiltArchive",
+                        )
+                        project.delete(prebuiltArchive)
+                    }
+                }
                 if (!prebuiltArchive.isFile()) {
                     def temporaryArchive = new File(
                         prebuiltCacheDirectory,
@@ -263,6 +305,14 @@ tasks.register("buildErikaAndroidRuntime") {
                 } else {
                     logger.lifecycle(
                         "Using cached Erika Android prebuilt $prebuiltTag from $prebuiltArchive",
+                    )
+                }
+
+                def actualSha256 = sha256(prebuiltArchive)
+                if (!actualSha256.equalsIgnoreCase(prebuiltSha256)) {
+                    project.delete(prebuiltArchive)
+                    throw new GradleException(
+                        "Erika Android prebuilt checksum mismatch: expected $prebuiltSha256, got $actualSha256",
                     )
                 }
 
@@ -298,12 +348,12 @@ tasks.register("buildErikaAndroidRuntime") {
                 )
                 return
             } catch (Exception error) {
-                logger.warn(
-                    "Unable to use Erika Android prebuilt $prebuiltTag; " +
-                        "falling back to a source build: ${error.message}",
-                )
                 project.delete(generatedJniLibs.get().asFile)
-                project.delete(prebuiltArchive)
+                throw new GradleException(
+                    "Unable to use Erika Android prebuilt $prebuiltTag. " +
+                        "Set ERIKA_FORCE_SOURCE_BUILD=1 only when building from an Erika checkout.",
+                    error,
+                )
             }
         }
 

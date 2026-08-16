@@ -82,7 +82,8 @@ set -eu
 export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 PLUGIN_TVOS_DIR="$(cd "$PODS_TARGET_SRCROOT" && pwd -P)"
-ERIKA_ROOT="$(cd "$PLUGIN_TVOS_DIR/../../.." && pwd -P)"
+PACKAGE_ROOT="$(cd "$PLUGIN_TVOS_DIR/.." && pwd -P)"
+OUTPUT_LIB="$PODS_TARGET_SRCROOT/native/liberika_capi.a"
 ERIKA_NATIVE_PROFILE="${ERIKA_NATIVE_PROFILE:-lgpl}"
 HOST_JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 ARCH="${CURRENT_ARCH:-}"
@@ -119,7 +120,6 @@ elif [ "${CONFIGURATION:-Debug}" = "Release" ]; then
 else
   CARGO_PROFILE="debug"
 fi
-
 if [ "$CARGO_PROFILE" = "release" ]; then
   CARGO_ARGS="--release"
 elif [ "$CARGO_PROFILE" = "debug" ]; then
@@ -129,83 +129,57 @@ else
   exit 1
 fi
 
-if ! command -v rustup >/dev/null 2>&1; then
-  echo "error: rustup is required to build Erika for tvOS" >&2
-  exit 1
-fi
-if ! rustup run nightly rustc --version >/dev/null 2>&1; then
-  rustup toolchain install nightly --profile minimal --component rust-src
-elif ! rustup component list --toolchain nightly --installed | grep -q '^rust-src'; then
-  rustup component add rust-src --toolchain nightly
-fi
-export TVOS_DEPLOYMENT_TARGET="${TVOS_DEPLOYMENT_TARGET:-13.0}"
-
-BINDGEN_SDKROOT="$(xcrun --sdk "$BINDGEN_SDK" --show-sdk-path)"
-BINDGEN_TARGET_ENV="$(echo "$RUST_TARGET" | tr '-' '_')"
-export "BINDGEN_EXTRA_CLANG_ARGS_$BINDGEN_TARGET_ENV=--target=$BINDGEN_CLANG_TARGET -isysroot $BINDGEN_SDKROOT"
-
-if [ -z "${ERIKA_FFMPEG_DIR:-}" ]; then
-  ERIKA_FFMPEG_DIR="$ERIKA_ROOT/third_party/dist/$RUST_TARGET/$ERIKA_NATIVE_PROFILE/ffmpeg"
-fi
-ERIKA_TARGET_DIST="$ERIKA_ROOT/third_party/dist/$RUST_TARGET/$ERIKA_NATIVE_PROFILE"
-ERIKA_DAV1D_DIR="${ERIKA_DAV1D_DIR:-$ERIKA_TARGET_DIST/dav1d}"
-ERIKA_LIBASS_DIR="${ERIKA_LIBASS_DIR:-$ERIKA_TARGET_DIST/libass}"
-ERIKA_FREETYPE_DIR="${ERIKA_FREETYPE_DIR:-$ERIKA_TARGET_DIST/freetype}"
-ERIKA_HARFBUZZ_DIR="${ERIKA_HARFBUZZ_DIR:-$ERIKA_TARGET_DIST/harfbuzz}"
-ERIKA_FRIBIDI_DIR="${ERIKA_FRIBIDI_DIR:-$ERIKA_TARGET_DIST/fribidi}"
-ERIKA_DAV1D_MARKER="$ERIKA_ROOT/third_party/build/$RUST_TARGET/$ERIKA_NATIVE_PROFILE/dav1d/dav1d-built.txt"
-
-# Optional: use a prebuilt static lib from a GitHub Release (opt-in).
-# Enable with ERIKA_PREBUILT=1; ERIKA_PREBUILT_TAG selects the tag (default
-# v0.1.6). Any failure falls through to the source build below, so enabling it
-# never breaks a build. ERIKA_TVOS_CAPI_STATICLIB still takes precedence.
-PREBUILT_LIB=""
-if [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ] && [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_TVOS_CAPI_STATICLIB:-}" ]; then
-  PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.6}"
-  PREBUILT_WORK="$ERIKA_ROOT/target/erika-prebuilt-tvos"
-  PREBUILT_ZIP="$PREBUILT_WORK/erika-capi-tvos.zip"
-  PREBUILT_URL="https://github.com/AimesSoft/Erika/releases/download/$PREBUILT_TAG/erika-capi-tvos.zip"
-  rm -rf "$PREBUILT_WORK"
-  mkdir -p "$PREBUILT_WORK"
-  echo "Erika: downloading prebuilt $PREBUILT_URL"
-  if curl -fSL --retry 3 -o "$PREBUILT_ZIP" "$PREBUILT_URL" && unzip -oq "$PREBUILT_ZIP" -d "$PREBUILT_WORK"; then
-    XCF="$(find "$PREBUILT_WORK" -type d -name 'erika_capi.xcframework' | head -1)"
-    if [ -n "$XCF" ]; then
-      case "${PLATFORM_NAME:-appletvos}" in
-        appletvsimulator) SLICE="$(find "$XCF" -maxdepth 1 -type d -name '*simulator*' | head -1)" ;;
-        *) SLICE="$(find "$XCF" -maxdepth 1 -type d -name 'tvos-*' ! -name '*simulator*' | head -1)" ;;
-      esac
-      if [ -n "${SLICE:-}" ] && [ -f "$SLICE/liberika_capi.a" ]; then
-        PREBUILT_LIB="$SLICE/liberika_capi.a"
-        echo "Erika: using prebuilt $PREBUILT_TAG -> $PREBUILT_LIB"
-      fi
-    fi
-  fi
-  [ -n "$PREBUILT_LIB" ] || echo "Erika: prebuilt unavailable; building from source"
-fi
-
-if [ -n "${ERIKA_TVOS_CAPI_STATICLIB:-}" ]; then
-  LIB_SOURCE="$ERIKA_TVOS_CAPI_STATICLIB"
-elif [ -n "$PREBUILT_LIB" ]; then
-  LIB_SOURCE="$PREBUILT_LIB"
-else
-  if [ ! -f "$ERIKA_FFMPEG_DIR/include/libavformat/avformat.h" ] || [ ! -f "$ERIKA_DAV1D_DIR/include/dav1d/dav1d.h" ] || [ ! -f "$ERIKA_DAV1D_DIR/lib/libdav1d.a" ] || [ ! -f "$ERIKA_DAV1D_MARKER" ] || ! grep -qx 'dav1d=1.5.1' "$ERIKA_DAV1D_MARKER" || [ ! -f "$ERIKA_LIBASS_DIR/lib/libass.a" ]; then
-    echo "Building Erika native dependencies for $RUST_TARGET ($ERIKA_NATIVE_PROFILE, with libass)"
-    (cd "$ERIKA_ROOT" && cargo run -p xtask -- deps build --all --profile "$ERIKA_NATIVE_PROFILE" --target "$RUST_TARGET" --jobs "$HOST_JOBS")
-  fi
-  LIB_SOURCE="$ERIKA_ROOT/target/$RUST_TARGET/$CARGO_PROFILE/liberika_capi.a"
-  echo "Building Erika C ABI staticlib for $RUST_TARGET ($CARGO_PROFILE)"
-  (cd "$ERIKA_ROOT" && ERIKA_NATIVE_PROFILE="$ERIKA_NATIVE_PROFILE" ERIKA_NATIVE_TARGET="$RUST_TARGET" ERIKA_FFMPEG_DIR="$ERIKA_FFMPEG_DIR" ERIKA_DAV1D_DIR="$ERIKA_DAV1D_DIR" ERIKA_LIBASS_DIR="$ERIKA_LIBASS_DIR" ERIKA_FREETYPE_DIR="$ERIKA_FREETYPE_DIR" ERIKA_HARFBUZZ_DIR="$ERIKA_HARFBUZZ_DIR" ERIKA_FRIBIDI_DIR="$ERIKA_FRIBIDI_DIR" cargo +nightly rustc -Z build-std=std,panic_abort -p erika_capi --target "$RUST_TARGET" --no-default-features --features libass $CARGO_ARGS --lib --crate-type staticlib)
-fi
-
-if [ ! -f "$LIB_SOURCE" ]; then
-  echo "error: Erika C ABI static library not found: $LIB_SOURCE" >&2
-  echo "       Build it with: cargo +nightly rustc -Z build-std=std,panic_abort -p erika_capi --target $RUST_TARGET $CARGO_ARGS --lib --crate-type staticlib" >&2
-  exit 1
-fi
-
 mkdir -p "$PODS_TARGET_SRCROOT/native"
-cp "$LIB_SOURCE" "$PODS_TARGET_SRCROOT/native/liberika_capi.a"
+if [ -n "${ERIKA_TVOS_CAPI_STATICLIB:-}" ]; then
+  cp "$ERIKA_TVOS_CAPI_STATICLIB" "$OUTPUT_LIB"
+elif [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ]; then
+  sh "$PACKAGE_ROOT/native/prepare_apple_prebuilt.sh"     tvos "${PLATFORM_NAME:-appletvos}" "$ARCH" "$OUTPUT_LIB"
+else
+  if [ -n "${ERIKA_REPO_ROOT:-}" ]; then
+    SOURCE_ROOT="$ERIKA_REPO_ROOT"
+  elif [ -n "${ERIKA_ROOT:-}" ]; then
+    SOURCE_ROOT="$ERIKA_ROOT"
+  else
+    SOURCE_ROOT="$(cd "$PACKAGE_ROOT/../.." && pwd -P)"
+  fi
+  if [ ! -f "$SOURCE_ROOT/crates/erika_capi/Cargo.toml" ]; then
+    echo "error: ERIKA_FORCE_SOURCE_BUILD=1 requires an Erika checkout; set ERIKA_REPO_ROOT" >&2
+    exit 1
+  fi
+  if ! command -v rustup >/dev/null 2>&1; then
+    echo "error: rustup is required for an Erika tvOS source build" >&2
+    exit 1
+  fi
+  if ! rustup run nightly rustc --version >/dev/null 2>&1; then
+    rustup toolchain install nightly --profile minimal --component rust-src
+  elif ! rustup component list --toolchain nightly --installed | grep -q '^rust-src'; then
+    rustup component add rust-src --toolchain nightly
+  fi
+  export TVOS_DEPLOYMENT_TARGET="${TVOS_DEPLOYMENT_TARGET:-13.0}"
+  BINDGEN_SDKROOT="$(xcrun --sdk "$BINDGEN_SDK" --show-sdk-path)"
+  BINDGEN_TARGET_ENV="$(echo "$RUST_TARGET" | tr '-' '_')"
+  export "BINDGEN_EXTRA_CLANG_ARGS_$BINDGEN_TARGET_ENV=--target=$BINDGEN_CLANG_TARGET -isysroot $BINDGEN_SDKROOT"
+
+  ERIKA_TARGET_DIST="$SOURCE_ROOT/third_party/dist/$RUST_TARGET/$ERIKA_NATIVE_PROFILE"
+  ERIKA_FFMPEG_DIR="${ERIKA_FFMPEG_DIR:-$ERIKA_TARGET_DIST/ffmpeg}"
+  ERIKA_DAV1D_DIR="${ERIKA_DAV1D_DIR:-$ERIKA_TARGET_DIST/dav1d}"
+  ERIKA_LIBASS_DIR="${ERIKA_LIBASS_DIR:-$ERIKA_TARGET_DIST/libass}"
+  ERIKA_FREETYPE_DIR="${ERIKA_FREETYPE_DIR:-$ERIKA_TARGET_DIST/freetype}"
+  ERIKA_HARFBUZZ_DIR="${ERIKA_HARFBUZZ_DIR:-$ERIKA_TARGET_DIST/harfbuzz}"
+  ERIKA_FRIBIDI_DIR="${ERIKA_FRIBIDI_DIR:-$ERIKA_TARGET_DIST/fribidi}"
+  ERIKA_DAV1D_MARKER="$SOURCE_ROOT/third_party/build/$RUST_TARGET/$ERIKA_NATIVE_PROFILE/dav1d/dav1d-built.txt"
+
+  if [ ! -f "$ERIKA_FFMPEG_DIR/include/libavformat/avformat.h" ] || [ ! -f "$ERIKA_DAV1D_DIR/include/dav1d/dav1d.h" ] || [ ! -f "$ERIKA_DAV1D_DIR/lib/libdav1d.a" ] || [ ! -f "$ERIKA_DAV1D_MARKER" ] || ! grep -qx 'dav1d=1.5.1' "$ERIKA_DAV1D_MARKER" || [ ! -f "$ERIKA_LIBASS_DIR/lib/libass.a" ]; then
+    (cd "$SOURCE_ROOT" && cargo run -p xtask -- deps build --all --profile "$ERIKA_NATIVE_PROFILE" --target "$RUST_TARGET" --jobs "$HOST_JOBS")
+  fi
+  (cd "$SOURCE_ROOT" && ERIKA_NATIVE_PROFILE="$ERIKA_NATIVE_PROFILE" ERIKA_NATIVE_TARGET="$RUST_TARGET" ERIKA_FFMPEG_DIR="$ERIKA_FFMPEG_DIR" ERIKA_DAV1D_DIR="$ERIKA_DAV1D_DIR" ERIKA_LIBASS_DIR="$ERIKA_LIBASS_DIR" ERIKA_FREETYPE_DIR="$ERIKA_FREETYPE_DIR" ERIKA_HARFBUZZ_DIR="$ERIKA_HARFBUZZ_DIR" ERIKA_FRIBIDI_DIR="$ERIKA_FRIBIDI_DIR" cargo +nightly rustc -Z build-std=std,panic_abort -p erika_capi --target "$RUST_TARGET" --no-default-features --features libass $CARGO_ARGS --lib --crate-type staticlib)
+  cp "$SOURCE_ROOT/target/$RUST_TARGET/$CARGO_PROFILE/liberika_capi.a" "$OUTPUT_LIB"
+fi
+
+if [ ! -f "$OUTPUT_LIB" ]; then
+  echo "error: Erika C ABI static library not found: $OUTPUT_LIB" >&2
+  exit 1
+fi
 if [ -f "$OBJROOT/XCBuildData/build.db" ]; then
   ln -fs "$OBJROOT/XCBuildData/build.db" "$BUILT_PRODUCTS_DIR/erika_capi_phony"
 fi

@@ -35,9 +35,6 @@ void main() {
     final nativeBridge = File(
       'ohos/src/main/cpp/erika_flutter_plugin.cpp',
     ).readAsStringSync();
-    final jsonBridge = File(
-      '../../crates/erika_capi/src/presenter_json.rs',
-    ).readAsStringSync();
 
     expect(plugin, contains("call.method === 'registerSubtitleMemoryFont'"));
     expect(plugin, contains('nativeRegisterSubtitleMemoryFont('));
@@ -47,7 +44,6 @@ void main() {
       'getSubtitleMemoryFontStatus',
     ]) {
       expect(plugin, contains("'$method'"));
-      expect(jsonBridge, contains('"$method"'));
     }
     expect(
       nativeBridge,
@@ -71,13 +67,15 @@ void main() {
       'ohos/src/main/cpp/CMakeLists.txt',
     ).readAsStringSync();
 
-    expect(cmake, contains(r'$ENV{ERIKA_PREBUILT}'));
+    expect(cmake, contains(r'$ENV{ERIKA_FORCE_SOURCE_BUILD}'));
     expect(cmake, contains(r'$ENV{ERIKA_PREBUILT_TAG}'));
+    expect(cmake, contains('EXPECTED_HASH'));
     expect(
       cmake,
       contains('erika-capi-openharmony-arm64.zip'),
     );
     expect(cmake, contains('ERIKA_USE_PREBUILT'));
+    expect(cmake, contains('ERIKA_PACKAGE_ROOT}/native/include'));
     expect(cmake, contains('copy_if_different'));
     expect(
       cmake,
