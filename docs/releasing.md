@@ -40,6 +40,7 @@ embedders that prefer static linkage.
 Every archive also includes `include/erika.h`, `LICENSE` (Erika, MPL-2.0),
 `THIRD_PARTY_NOTICES.md`, applicable dependency and embedded asset license texts
 under `licenses/`, and a `MANIFEST.txt` recording the tag/commit.
+Every GitHub Release also includes `SHA256SUMS` with the digest of each archive.
 
 The native dependencies (FFmpeg, libass, FreeType, HarfBuzz, FriBidi, zlib, and
 Android's dav1d AV1 software decoder) are **statically linked** via the `lgpl`

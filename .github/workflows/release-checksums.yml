@@ -1,0 +1,55 @@
+name: Release checksums
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing Erika release tag to verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  checksums:
+    name: Verify and publish SHA256SUMS
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Download release archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.zip' \
+            --dir release-assets
+          test -n "$(find release-assets -maxdepth 1 -type f -name '*.zip' -print -quit)"
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          (
+            cd release-assets
+            shasum -a 256 *.zip
+          ) > release-assets/SHA256SUMS
+          test -s release-assets/SHA256SUMS
+          cat release-assets/SHA256SUMS
+          cat release-assets/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SHA256SUMS-${{ inputs.tag }}
+          path: release-assets/SHA256SUMS
+          if-no-files-found: error
+      - name: Attach checksums to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: >-
+          gh release upload "$TAG" release-assets/SHA256SUMS
+          --repo "$GITHUB_REPOSITORY" --clobber
