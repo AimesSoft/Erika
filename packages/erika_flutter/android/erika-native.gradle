@@ -294,11 +294,11 @@ tasks.register("buildErikaAndroidRuntime") {
                     def prebuiltName = "erika-flutter-android-$abi"
                     def prebuiltArchive = new File(
                         prebuiltCacheDirectory,
-                        "$prebuiltName.zip",
+                        "${prebuiltName}.zip",
                     )
                     def prebuiltUrl =
                         "https://github.com/AimesSoft/Erika/releases/download/" +
-                        "$prebuiltTag/$prebuiltName.zip"
+                        "$prebuiltTag/${prebuiltName}.zip"
                     if (prebuiltArchive.isFile()) {
                         def cachedSha256 = sha256(prebuiltArchive)
                         if (!cachedSha256.equalsIgnoreCase(prebuiltSha256)) {
@@ -357,8 +357,8 @@ tasks.register("buildErikaAndroidRuntime") {
                         from(project.zipTree(prebuiltArchive)) {
                             include "lib/liberika_capi.so"
                             include "lib/libc++_shared.so"
-                            include "$prebuiltName/lib/liberika_capi.so"
-                            include "$prebuiltName/lib/libc++_shared.so"
+                            include "${prebuiltName}/lib/liberika_capi.so"
+                            include "${prebuiltName}/lib/libc++_shared.so"
                             eachFile { details -> details.path = details.name }
                             includeEmptyDirs = false
                         }
