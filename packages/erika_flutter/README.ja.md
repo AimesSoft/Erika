@@ -37,7 +37,8 @@ cargo build -p erika_capi
 
 ## Prebuilt package と source build
 
-plugin は既定で現在の version に対応する `v0.1.6` native library を download し、SHA-256 を検証します。download または検証の失敗は明示的な error になり、source build へ暗黙に fallback しません。Erika checkout の local source を debug するときだけ `ERIKA_FORCE_SOURCE_BUILD=1` を設定してください。custom `ERIKA_PREBUILT_TAG` には対応する `ERIKA_PREBUILT_SHA256` も必要です。詳細は [release guide](https://github.com/AimesSoft/Erika/blob/main/docs/releasing.ja.md) を参照してください。
+plugin は既定で現在の version に対応する `v0.1.7` native library を download し、SHA-256 を検証します。download または検証の失敗は明示的な error になり、source build へ暗黙に fallback しません。Erika checkout の local source を debug するときだけ `ERIKA_FORCE_SOURCE_BUILD=1` を設定してください。custom `ERIKA_PREBUILT_TAG` の single-ABI build には対応する `ERIKA_PREBUILT_SHA256` が必要です。Android multi-ABI build では `ERIKA_PREBUILT_SHA256_ARM64_V8A`、`ERIKA_PREBUILT_SHA256_ARMEABI_V7A`、`ERIKA_PREBUILT_SHA256_X86_64`、`ERIKA_PREBUILT_SHA256_X86` を ABI ごとに指定します。詳細は [release guide](https://github.com/AimesSoft/Erika/blob/main/docs/releasing.ja.md) を参照してください。
+Android は要求された ABI ごとに約 20–22MB の runtime archive だけを download し、4 ABI combined C API bundle や static library は取得しません。
 
 source build の architecture は macOS では `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`、Windows では `ERIKA_WINDOWS_ARCH=x64|arm64`、Android では `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86` で選択します。native library を直接 build する場合、`xtask --target`、`ERIKA_NATIVE_TARGET`、`cargo build --target` は同じ target にしてください。詳細は [build guide](https://github.com/AimesSoft/Erika/blob/main/docs/building.ja.md) を参照してください。
 

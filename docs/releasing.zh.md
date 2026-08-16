@@ -67,7 +67,9 @@ cargo clippy -p erika -p erika_capi --all-targets -- -D warnings
 
 插件默认使用 package 内固定的 release tag 和 SHA-256。覆盖
 `ERIKA_PREBUILT_TAG` 时必须同时提供匹配的 `ERIKA_PREBUILT_SHA256`，保证插件源码和
-C ABI 版本一致。下载、解压或校验失败会明确报错；本地源码调试时设置：
+C ABI 版本一致。Android 多 ABI 构建需按 ABI 提供
+`ERIKA_PREBUILT_SHA256_ARM64_V8A`、`ERIKA_PREBUILT_SHA256_ARMEABI_V7A`、
+`ERIKA_PREBUILT_SHA256_X86_64` 和 `ERIKA_PREBUILT_SHA256_X86`。下载、解压或校验失败会明确报错；本地源码调试时设置：
 
 ```sh
 export ERIKA_FORCE_SOURCE_BUILD=1

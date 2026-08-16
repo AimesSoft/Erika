@@ -57,4 +57,20 @@ void main() {
     expect(files, contains('SHA-256'));
     expect(files, isNot(contains('falling back to a source build')));
   });
+
+  test('Android downloads verified per-ABI Flutter runtimes', () {
+    final android = File('android/erika-native.gradle').readAsStringSync();
+    final artifacts = File('native_artifacts.properties').readAsStringSync();
+
+    expect(android, contains('erika-flutter-android-\$abi'));
+    expect(android, isNot(contains('erika-capi-android.zip')));
+    for (final property in <String>[
+      'ERIKA_ANDROID_ARM64_V8A_SHA256',
+      'ERIKA_ANDROID_ARMEABI_V7A_SHA256',
+      'ERIKA_ANDROID_X86_64_SHA256',
+      'ERIKA_ANDROID_X86_SHA256',
+    ]) {
+      expect(artifacts, contains('$property='), reason: property);
+    }
+  });
 }

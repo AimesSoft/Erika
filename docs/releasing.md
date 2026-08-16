@@ -118,6 +118,7 @@ The following environment variables customize that behavior:
 |----------|--------|
 | `ERIKA_PREBUILT_TAG=v0.1.7` | Override the package-pinned release tag. Also requires `ERIKA_PREBUILT_SHA256`. |
 | `ERIKA_PREBUILT_SHA256=...` | Expected digest when overriding the release tag. |
+| `ERIKA_PREBUILT_SHA256_<ABI>=...` | Per-ABI digest for custom multi-ABI Android builds; suffixes are `ARM64_V8A`, `ARMEABI_V7A`, `X86_64`, and `X86`. |
 | `ERIKA_FORCE_SOURCE_BUILD=1` | Bypass the prebuilt path and build the local source, useful when debugging Erika changes through the Flutter plugin. |
 | `ERIKA_MACOS_ARCHS=universal|arm64|x86_64|arm64,x86_64` | Select the macOS source and prebuilt artifact architecture. |
 
@@ -147,7 +148,9 @@ The following environment variables customize that behavior:
 
 The package pins its native tag and SHA-256 values. If you override the tag,
 provide the matching digest so the C ABI in the package header and the prebuilt
-library cannot drift silently.
+library cannot drift silently. A single-ABI Android build may use the generic
+digest variable; a multi-ABI Android build requires each selected ABI's
+specific variable.
 
 ## Consuming a bundle
 
