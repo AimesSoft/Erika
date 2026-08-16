@@ -16,6 +16,7 @@
 | iOS | `erika-capi-ios.zip`，包含 device 和 simulator XCFramework slice |
 | tvOS | `erika-capi-tvos.zip`，包含 device 和 arm64/x86_64 simulator XCFramework slice |
 | Android | `erika-capi-android.zip`，包含 `arm64-v8a`、`armeabi-v7a`、`x86_64`、`x86` |
+| Flutter Android | `erika-flutter-android-<abi>.zip`，每个归档只包含一个 ABI 的 shared runtime |
 | OpenHarmony arm64 | `erika-capi-openharmony-arm64.zip`，包含 `liberika_capi.so` 和 `liberika_flutter.so` |
 
 OpenHarmony 归档使用 OpenHarmony 5.1.0 Native SDK、compatible SDK 18 构建，
@@ -25,6 +26,10 @@ release、校验 SHA-256、链接预构建 runtime，并把它与本地链接的
 `ERIKA_FORCE_SOURCE_BUILD=1` 才会从源码构建。
 
 每个归档还包含 `include/erika.h`、`LICENSE`、`THIRD_PARTY_NOTICES.md`、依赖许可证和记录 tag/commit 的 `MANIFEST.txt`。原生依赖使用 `lgpl` profile 静态链接；Android 同时携带匹配 ABI 的 `libc++_shared.so`。
+
+Flutter Android 构建按实际请求的 ABI 下载对应
+`erika-flutter-android-<abi>.zip`，不会下载其他架构或仅供原生嵌入使用的静态 `.a`。
+合并的 `erika-capi-android.zip` 继续提供给需要多 ABI 或静态链接的 C/C++ 使用者。
 
 ## 创建 Release
 

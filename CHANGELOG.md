@@ -11,6 +11,8 @@
 - Made verified, version-pinned native release bundles the default on Android,
   Apple platforms, Windows, and OpenHarmony; source builds are now explicitly
   selected with `ERIKA_FORCE_SOURCE_BUILD=1`.
+- Added per-ABI Flutter Android runtime archives so app builds download only
+  the requested architecture and omit the native-embedder static library.
 - Added isolated GitHub Actions consumers for Android, iOS, macOS, tvOS,
   Windows, and OpenHarmony so package builds cannot depend on the monorepo.
 

@@ -398,8 +398,16 @@ jobs:
       - name: Package
         shell: bash
         run: |
+          set -euo pipefail
           ERIKA_NATIVE_PROFILE="$PROFILE" bash packaging/bundle.sh \
             erika-capi-android dist/erika-capi-android.zip out/android
+          for ABI in arm64-v8a armeabi-v7a x86_64 x86; do
+            ERIKA_NATIVE_PROFILE="$PROFILE" bash packaging/bundle.sh \
+              "erika-flutter-android-$ABI" \
+              "dist/erika-flutter-android-$ABI.zip" \
+              "out/android/$ABI/liberika_capi.so" \
+              "out/android/$ABI/libc++_shared.so"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: erika-capi-android
