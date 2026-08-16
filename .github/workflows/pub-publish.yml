@@ -1,0 +1,35 @@
+name: Publish erika_flutter to pub.dev
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+jobs:
+  verify:
+    name: Verify package version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Match tag and package versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(awk -F': ' '$1 == "version" {print $2; exit}' packages/erika_flutter/pubspec.yaml)"
+          if [[ -z "$package_version" || "$package_version" != "$tag_version" ]]; then
+            echo "Tag version ($tag_version) does not match package version ($package_version)." >&2
+            exit 1
+          fi
+
+  publish:
+    name: Publish to pub.dev
+    needs: verify
+    permissions:
+      contents: read
+      id-token: write
+    uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
+    with:
+      working-directory: packages/erika_flutter
