@@ -98,22 +98,22 @@ case "$PLATFORM:$SDK_NAME" in
   ios:iphonesimulator)
     XCF="$(find "$UNPACKED" -type d -name 'erika_capi.xcframework' -print -quit)"
     SLICE="$(find "$XCF" -maxdepth 1 -type d -name '*simulator*' -print -quit)"
-    SOURCE="$SLICE/liberika_capi.a"
+    SOURCE="$(find "$SLICE" -maxdepth 1 -type f -name '*.a' -print -quit)"
     ;;
   ios:*)
     XCF="$(find "$UNPACKED" -type d -name 'erika_capi.xcframework' -print -quit)"
     SLICE="$(find "$XCF" -maxdepth 1 -type d -name 'ios-*' ! -name '*simulator*' -print -quit)"
-    SOURCE="$SLICE/liberika_capi.a"
+    SOURCE="$(find "$SLICE" -maxdepth 1 -type f -name '*.a' -print -quit)"
     ;;
   tvos:appletvsimulator)
     XCF="$(find "$UNPACKED" -type d -name 'erika_capi.xcframework' -print -quit)"
     SLICE="$(find "$XCF" -maxdepth 1 -type d -name '*simulator*' -print -quit)"
-    SOURCE="$SLICE/liberika_capi.a"
+    SOURCE="$(find "$SLICE" -maxdepth 1 -type f -name '*.a' -print -quit)"
     ;;
   tvos:*)
     XCF="$(find "$UNPACKED" -type d -name 'erika_capi.xcframework' -print -quit)"
     SLICE="$(find "$XCF" -maxdepth 1 -type d -name 'tvos-*' ! -name '*simulator*' -print -quit)"
-    SOURCE="$SLICE/liberika_capi.a"
+    SOURCE="$(find "$SLICE" -maxdepth 1 -type f -name '*.a' -print -quit)"
     ;;
 esac
 

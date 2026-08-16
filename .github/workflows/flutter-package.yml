@@ -78,6 +78,7 @@ jobs:
           git archive HEAD:packages/erika_flutter | tar -x -C "$root/erika_flutter"
           flutter create --platforms=android --project-name erika_consumer "$root/app"
           cd "$root/app"
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 26/' android/app/build.gradle.kts
           flutter pub add erika_flutter --path ../erika_flutter
           flutter build apk --debug --target-platform android-arm64
 
