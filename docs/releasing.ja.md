@@ -16,6 +16,7 @@
 | iOS | `erika-capi-ios.zip`、device と simulator の XCFramework slice |
 | tvOS | `erika-capi-tvos.zip`、device と arm64/x86_64 simulator の XCFramework slice |
 | Android | `erika-capi-android.zip`、`arm64-v8a`、`armeabi-v7a`、`x86_64`、`x86` |
+| Flutter Android | `erika-flutter-android-<abi>.zip`、1 archive あたり 1 ABI の shared runtime |
 | OpenHarmony arm64 | `erika-capi-openharmony-arm64.zip`、`liberika_capi.so` と `liberika_flutter.so` |
 
 OpenHarmony archive は OpenHarmony 5.1.0 Native SDK、compatible SDK 18 で
@@ -26,6 +27,11 @@ Flutter plugin は package で固定された release を既定で download し�
 `ERIKA_FORCE_SOURCE_BUILD=1` を設定した場合だけ有効になります。
 
 各 archive には `include/erika.h`、`LICENSE`、`THIRD_PARTY_NOTICES.md`、dependency license、tag/commit を記録する `MANIFEST.txt` も含まれます。native dependency は `lgpl` profile で static link され、Android は ABI に対応する `libc++_shared.so` も含みます。
+
+Flutter Android build は要求された ABI の
+`erika-flutter-android-<abi>.zip` だけを download し、他 architecture や native
+embedder 専用の static `.a` は download しません。combined
+`erika-capi-android.zip` は multi-ABI / static link の C/C++ consumer 向けに維持します。
 
 ## Release の作成
 

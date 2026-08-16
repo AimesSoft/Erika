@@ -20,6 +20,7 @@ license files:
 | iOS | `erika-capi-ios.zip` | `erika_capi.xcframework` (device + simulator) |
 | tvOS | `erika-capi-tvos.zip` | `erika_capi.xcframework` (device + arm64/x86_64 simulator) |
 | Android | `erika-capi-android.zip` | `liberika_capi.so`, `liberika_capi.a`, and `libc++_shared.so` for `arm64-v8a`, `armeabi-v7a`, `x86_64`, and `x86` |
+| Flutter Android | `erika-flutter-android-<abi>.zip` | `liberika_capi.so` and `libc++_shared.so` for one requested ABI |
 | OpenHarmony arm64 | `erika-capi-openharmony-arm64.zip` | `liberika_capi.so`, `liberika_flutter.so` |
 
 The OpenHarmony archive is built against the OpenHarmony 5.1.0 native SDK with
@@ -30,9 +31,11 @@ locally linked N-API bridge. Download and verification failures are explicit;
 source builds are enabled only with `ERIKA_FORCE_SOURCE_BUILD=1`.
 
 The Android archive stores each ABI at `lib/android/<abi>/`. Flutter/Gradle
-consumers package `liberika_capi.so` together with the matching NDK
-`libc++_shared.so`; `liberika_capi.a` is included for native embedders that
-prefer static linkage.
+consumers instead download one `erika-flutter-android-<abi>.zip` per requested
+ABI and package `liberika_capi.so` together with the matching NDK
+`libc++_shared.so`. They do not download other architectures or the static
+library. The combined C API archive retains `liberika_capi.a` for native
+embedders that prefer static linkage.
 
 Every archive also includes `include/erika.h`, `LICENSE` (Erika, MPL-2.0),
 `THIRD_PARTY_NOTICES.md`, applicable dependency and embedded asset license texts
@@ -135,10 +138,11 @@ The following environment variables customize that behavior:
   `Contents/Frameworks` (`install_name @rpath`, codesigned). With
   `ERIKA_FORCE_SOURCE_BUILD=1`, the same phase builds the selected architecture from source.
   `ERIKA_MACOS_CAPI_DYLIB` can point at an explicit dylib instead.
-- **Android** (`erika-native.gradle`): downloads `erika-capi-android.zip` and
-  stages `liberika_capi.so` plus `libc++_shared.so` for the requested Flutter
-  ABIs. Native C/C++ embedders may instead link the bundled static archive and
-  provide the matching C++ runtime themselves.
+- **Android** (`erika-native.gradle`): downloads only the ABI-specific
+  `erika-flutter-android-<abi>.zip` assets requested by the Flutter build and
+  stages `liberika_capi.so` plus `libc++_shared.so`. Native C/C++ embedders may
+  instead use the combined `erika-capi-android.zip`, link its static archive,
+  and provide the matching C++ runtime themselves.
 
 The package pins its native tag and SHA-256 values. If you override the tag,
 provide the matching digest so the C ABI in the package header and the prebuilt

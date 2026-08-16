@@ -1,0 +1,77 @@
+name: Android Flutter release assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing Erika release tag to augment
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package per-ABI Flutter runtimes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Download the verified release build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/android-release" "$RUNNER_TEMP/android-unpacked"
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern erika-capi-android.zip \
+            --dir "$RUNNER_TEMP/android-release"
+          unzip -q "$RUNNER_TEMP/android-release/erika-capi-android.zip" \
+            -d "$RUNNER_TEMP/android-unpacked"
+      - name: Package one runtime per ABI
+        env:
+          TAG: ${{ inputs.tag }}
+          ERIKA_NATIVE_PROFILE: lgpl
+        run: |
+          set -euo pipefail
+          android_root="$(find "$RUNNER_TEMP/android-unpacked" \
+            -type d -path '*/lib/android' -print -quit)"
+          test -n "$android_root"
+          for ABI in arm64-v8a armeabi-v7a x86_64 x86; do
+            runtime="$android_root/$ABI/liberika_capi.so"
+            cxx="$android_root/$ABI/libc++_shared.so"
+            test -s "$runtime"
+            test -s "$cxx"
+            GITHUB_REF_NAME="$TAG" bash packaging/bundle.sh \
+              "erika-flutter-android-$ABI" \
+              "dist/erika-flutter-android-$ABI.zip" \
+              "$runtime" "$cxx"
+          done
+          for archive in dist/erika-flutter-android-*.zip; do
+            unzip -Z1 "$archive" | grep -Eq '/lib/liberika_capi\.so$'
+            unzip -Z1 "$archive" | grep -Eq '/lib/libc\+\+_shared\.so$'
+            if unzip -Z1 "$archive" | grep -Eq '\.a$|/android/'; then
+              echo "error: unexpected static library or nested ABI in $archive" >&2
+              exit 1
+            fi
+          done
+          shasum -a 256 dist/erika-flutter-android-*.zip | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erika-flutter-android-${{ inputs.tag }}
+          path: dist/erika-flutter-android-*.zip
+          if-no-files-found: error
+      - name: Attach runtimes to the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: >-
+          gh release upload "$TAG" dist/erika-flutter-android-*.zip
+          --repo "$GITHUB_REPOSITORY" --clobber
