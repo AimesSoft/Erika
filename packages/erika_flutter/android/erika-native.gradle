@@ -14,8 +14,7 @@ def artifactProperties = new Properties()
 artifactPropertiesFile.withInputStream { artifactProperties.load(it) }
 def nativeVersion = artifactProperties.getProperty("ERIKA_NATIVE_VERSION")
 def defaultPrebuiltTag = "v$nativeVersion"
-def defaultPrebuiltSha256 = artifactProperties.getProperty("ERIKA_ANDROID_SHA256")
-if (nativeVersion == null || defaultPrebuiltSha256 == null) {
+if (nativeVersion == null) {
     throw new GradleException("Erika native artifact manifest is incomplete: $artifactPropertiesFile")
 }
 
@@ -58,21 +57,25 @@ def abiDefinitions = [
         rustTarget: "aarch64-linux-android",
         clangTarget: "aarch64-linux-android",
         cxxRuntimeTarget: "aarch64-linux-android",
+        shaProperty: "ERIKA_ANDROID_ARM64_V8A_SHA256",
     ],
     "armeabi-v7a": [
         rustTarget: "armv7-linux-androideabi",
         clangTarget: "armv7a-linux-androideabi",
         cxxRuntimeTarget: "arm-linux-androideabi",
+        shaProperty: "ERIKA_ANDROID_ARMEABI_V7A_SHA256",
     ],
     "x86_64": [
         rustTarget: "x86_64-linux-android",
         clangTarget: "x86_64-linux-android",
         cxxRuntimeTarget: "x86_64-linux-android",
+        shaProperty: "ERIKA_ANDROID_X86_64_SHA256",
     ],
     "x86": [
         rustTarget: "i686-linux-android",
         clangTarget: "i686-linux-android",
         cxxRuntimeTarget: "i686-linux-android",
+        shaProperty: "ERIKA_ANDROID_X86_SHA256",
     ],
 ]
 
@@ -110,6 +113,19 @@ def requestedAbis = {
 }
 
 def selectedAbis = requestedAbis()
+selectedAbis.each { abi ->
+    if (!abiDefinitions.containsKey(abi)) {
+        throw new GradleException(
+            "Unsupported Erika Android ABI '$abi'; expected one of ${abiDefinitions.keySet()}",
+        )
+    }
+    def shaProperty = abiDefinitions[abi].shaProperty
+    if (artifactProperties.getProperty(shaProperty) == null) {
+        throw new GradleException(
+            "Erika native artifact manifest is missing $shaProperty: $artifactPropertiesFile",
+        )
+    }
+}
 def skipNativeBuild = (project.findProperty("erikaSkipNativeBuild")
     ?: System.getenv("ERIKA_ANDROID_SKIP_NATIVE_BUILD")
     ?: "false").toString().toBoolean()
@@ -117,21 +133,28 @@ def forceSourceBuild = (System.getenv("ERIKA_FORCE_SOURCE_BUILD") ?: "0") == "1"
 def usePrebuilt = !forceSourceBuild
 def prebuiltTag = System.getenv("ERIKA_PREBUILT_TAG") ?: defaultPrebuiltTag
 def configuredPrebuiltSha256 = System.getenv("ERIKA_PREBUILT_SHA256")
-def prebuiltSha256 = configuredPrebuiltSha256 ?: defaultPrebuiltSha256
 def prebuiltCacheKey = prebuiltTag.replaceAll(/[^A-Za-z0-9._-]/, "_")
 def prebuiltCacheDirectory = new File(
     gradle.gradleUserHomeDir,
     "caches/erika/$prebuiltCacheKey",
 )
-def prebuiltArchive = new File(prebuiltCacheDirectory, "erika-capi-android.zip")
-def prebuiltUrl =
-    "https://github.com/AimesSoft/Erika/releases/download/$prebuiltTag/erika-capi-android.zip"
-selectedAbis.each { abi ->
-    if (!abiDefinitions.containsKey(abi)) {
-        throw new GradleException(
-            "Unsupported Erika Android ABI '$abi'; expected one of ${abiDefinitions.keySet()}",
-        )
+def prebuiltSha256ForAbi = { String abi ->
+    def abiKey = abi.toUpperCase(Locale.ROOT).replaceAll(/[^A-Z0-9]/, "_")
+    def configuredForAbi = System.getenv("ERIKA_PREBUILT_SHA256_$abiKey")
+    if (configuredForAbi != null && !configuredForAbi.trim().isEmpty()) {
+        return configuredForAbi
     }
+    if (selectedAbis.size() == 1 && configuredPrebuiltSha256 != null &&
+        !configuredPrebuiltSha256.trim().isEmpty()) {
+        return configuredPrebuiltSha256
+    }
+    if (prebuiltTag == defaultPrebuiltTag) {
+        return artifactProperties.getProperty(abiDefinitions[abi].shaProperty)
+    }
+    throw new GradleException(
+        "ERIKA_PREBUILT_SHA256_$abiKey is required when ERIKA_PREBUILT_TAG " +
+            "overrides $defaultPrebuiltTag for $abi",
+    )
 }
 
 android.defaultConfig.ndk.abiFilters.addAll(selectedAbis)
@@ -265,69 +288,72 @@ tasks.register("buildErikaAndroidRuntime") {
 
         if (usePrebuilt) {
             try {
-                if (prebuiltTag != defaultPrebuiltTag && configuredPrebuiltSha256 == null) {
-                    throw new GradleException(
-                        "ERIKA_PREBUILT_SHA256 is required when ERIKA_PREBUILT_TAG overrides $defaultPrebuiltTag",
-                    )
-                }
                 prebuiltCacheDirectory.mkdirs()
-                if (prebuiltArchive.isFile()) {
-                    def cachedSha256 = sha256(prebuiltArchive)
-                    if (!cachedSha256.equalsIgnoreCase(prebuiltSha256)) {
-                        logger.warn(
-                            "Discarding Erika Android prebuilt with invalid checksum: $prebuiltArchive",
-                        )
-                        project.delete(prebuiltArchive)
-                    }
-                }
-                if (!prebuiltArchive.isFile()) {
-                    def temporaryArchive = new File(
-                        prebuiltCacheDirectory,
-                        "${prebuiltArchive.name}.part",
-                    )
-                    project.delete(temporaryArchive)
-                    logger.lifecycle("Downloading Erika Android prebuilt $prebuiltTag from $prebuiltUrl")
-                    ant.get(src: prebuiltUrl, dest: temporaryArchive, verbose: true)
-                    try {
-                        Files.move(
-                            temporaryArchive.toPath(),
-                            prebuiltArchive.toPath(),
-                            StandardCopyOption.REPLACE_EXISTING,
-                            StandardCopyOption.ATOMIC_MOVE,
-                        )
-                    } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
-                        Files.move(
-                            temporaryArchive.toPath(),
-                            prebuiltArchive.toPath(),
-                            StandardCopyOption.REPLACE_EXISTING,
-                        )
-                    }
-                } else {
-                    logger.lifecycle(
-                        "Using cached Erika Android prebuilt $prebuiltTag from $prebuiltArchive",
-                    )
-                }
-
-                def actualSha256 = sha256(prebuiltArchive)
-                if (!actualSha256.equalsIgnoreCase(prebuiltSha256)) {
-                    project.delete(prebuiltArchive)
-                    throw new GradleException(
-                        "Erika Android prebuilt checksum mismatch: expected $prebuiltSha256, got $actualSha256",
-                    )
-                }
-
                 selectedAbis.each { abi ->
+                    def prebuiltSha256 = prebuiltSha256ForAbi(abi)
+                    def prebuiltName = "erika-flutter-android-$abi"
+                    def prebuiltArchive = new File(
+                        prebuiltCacheDirectory,
+                        "$prebuiltName.zip",
+                    )
+                    def prebuiltUrl =
+                        "https://github.com/AimesSoft/Erika/releases/download/" +
+                        "$prebuiltTag/$prebuiltName.zip"
+                    if (prebuiltArchive.isFile()) {
+                        def cachedSha256 = sha256(prebuiltArchive)
+                        if (!cachedSha256.equalsIgnoreCase(prebuiltSha256)) {
+                            logger.warn(
+                                "Discarding Erika Android prebuilt with invalid checksum: $prebuiltArchive",
+                            )
+                            project.delete(prebuiltArchive)
+                        }
+                    }
+                    if (!prebuiltArchive.isFile()) {
+                        def temporaryArchive = new File(
+                            prebuiltCacheDirectory,
+                            "${prebuiltArchive.name}.part",
+                        )
+                        project.delete(temporaryArchive)
+                        logger.lifecycle(
+                            "Downloading Erika Android $abi prebuilt $prebuiltTag from $prebuiltUrl",
+                        )
+                        ant.get(src: prebuiltUrl, dest: temporaryArchive, verbose: true)
+                        try {
+                            Files.move(
+                                temporaryArchive.toPath(),
+                                prebuiltArchive.toPath(),
+                                StandardCopyOption.REPLACE_EXISTING,
+                                StandardCopyOption.ATOMIC_MOVE,
+                            )
+                        } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
+                            Files.move(
+                                temporaryArchive.toPath(),
+                                prebuiltArchive.toPath(),
+                                StandardCopyOption.REPLACE_EXISTING,
+                            )
+                        }
+                    } else {
+                        logger.lifecycle(
+                            "Using cached Erika Android $abi prebuilt $prebuiltTag from $prebuiltArchive",
+                        )
+                    }
+
+                    def actualSha256 = sha256(prebuiltArchive)
+                    if (!actualSha256.equalsIgnoreCase(prebuiltSha256)) {
+                        project.delete(prebuiltArchive)
+                        throw new GradleException(
+                            "Erika Android $abi prebuilt checksum mismatch: " +
+                                "expected $prebuiltSha256, got $actualSha256",
+                        )
+                    }
+
                     def destination = generatedJniLibs.get().dir(abi).asFile
                     project.copy {
                         from(project.zipTree(prebuiltArchive)) {
-                            // Official release bundles have an
-                            // erika-capi-android/ top-level directory. Keep
-                            // accepting a flat lib/ layout as well for mirrors
-                            // and locally produced archives.
-                            include "lib/android/$abi/liberika_capi.so"
-                            include "lib/android/$abi/libc++_shared.so"
-                            include "erika-capi-android/lib/android/$abi/liberika_capi.so"
-                            include "erika-capi-android/lib/android/$abi/libc++_shared.so"
+                            include "lib/liberika_capi.so"
+                            include "lib/libc++_shared.so"
+                            include "$prebuiltName/lib/liberika_capi.so"
+                            include "$prebuiltName/lib/libc++_shared.so"
                             eachFile { details -> details.path = details.name }
                             includeEmptyDirs = false
                         }

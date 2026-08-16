@@ -64,7 +64,9 @@ FFI glue の整合性、各 archive の manifest と license、NipaPlay で固�
 
 plugin は package 内で固定された release tag と SHA-256 を既定で使用します。
 `ERIKA_PREBUILT_TAG` を上書きする場合は、対応する `ERIKA_PREBUILT_SHA256` も必須です。
-download、展開、検証の失敗は明示的な error になります。local source debug では次を設定します：
+Android multi-ABI build では `ERIKA_PREBUILT_SHA256_ARM64_V8A`、
+`ERIKA_PREBUILT_SHA256_ARMEABI_V7A`、`ERIKA_PREBUILT_SHA256_X86_64`、
+`ERIKA_PREBUILT_SHA256_X86` を ABI ごとに指定します。download、展開、検証の失敗は明示的な error になります。local source debug では次を設定します：
 
 ```sh
 export ERIKA_FORCE_SOURCE_BUILD=1

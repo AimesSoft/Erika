@@ -61,15 +61,20 @@ points the build phase at an explicit dylib to bundle instead of building.
 
 ## Native binaries
 
-The plugin downloads the matching `v0.1.6` native runtime by default on macOS,
+The plugin downloads the matching `v0.1.7` native runtime by default on macOS,
 Windows, iOS, tvOS, Android, and OpenHarmony. Every archive is pinned by SHA-256;
 a missing or invalid archive fails with an explicit error instead of silently
 requiring a Rust, FFmpeg, or NDK toolchain. See the
 [release guide](https://github.com/AimesSoft/Erika/blob/main/docs/releasing.md).
+Android downloads one approximately 20–22 MB runtime archive per requested ABI;
+it does not fetch the four-ABI C API bundle or its static libraries.
 
 When debugging local Erika changes from an Erika checkout, set
 `ERIKA_FORCE_SOURCE_BUILD=1`. A custom `ERIKA_PREBUILT_TAG` must be accompanied
-by the matching `ERIKA_PREBUILT_SHA256`.
+by the matching `ERIKA_PREBUILT_SHA256`. A custom multi-ABI Android build uses
+the per-ABI variables `ERIKA_PREBUILT_SHA256_ARM64_V8A`,
+`ERIKA_PREBUILT_SHA256_ARMEABI_V7A`, `ERIKA_PREBUILT_SHA256_X86_64`, and
+`ERIKA_PREBUILT_SHA256_X86` instead.
 
 For source builds, select macOS with `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`,
 Windows with `ERIKA_WINDOWS_ARCH=x64|arm64`, and Android with
