@@ -70,6 +70,19 @@ ErikaWindowOverlayVideoView(player: player)
 ErikaVideoView(player: player)
 ```
 
+### Flutter パッケージ
+
+`erika_flutter` 0.1.7 は [pub.dev](https://pub.dev/packages/erika_flutter) で公開されています。
+macOS、iOS、tvOS、Windows、Android、HarmonyOS/OpenHarmony に対応しています。
+Flutter アプリには次のコマンドで追加できます：
+
+```sh
+flutter pub add erika_flutter
+```
+
+platform build 時に対応する検証済み native runtime を download します。Android
+では選択された ABI の archive だけを download します。Linux と Web はまだ公開対象ではありません。
+
 ## C ABI インターフェースファミリー
 
 異なる組み込みシナリオに対応する二つの C ABI エントリーポイントファミリーを提供します：

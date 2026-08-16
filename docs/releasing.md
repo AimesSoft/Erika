@@ -54,6 +54,35 @@ Linux is **not yet published**. Android is cross-built with NDK r29 at API 26;
 the four ABI archives are reproducible through the same `xtask` dependency
 pipeline as Apple and Windows.
 
+## Publishing the Flutter package
+
+`erika_flutter` is published separately on [pub.dev](https://pub.dev/packages/erika_flutter).
+Version `0.1.7` is the first standalone package release and supports macOS,
+iOS, tvOS, Windows, Android, and HarmonyOS/OpenHarmony. The package archive
+contains the plugin sources, package `LICENSE`, README files, examples, and the
+version-pinned native artifact manifest; platform builds fetch the matching
+GitHub Release archives and verify their SHA-256 values.
+
+From a clean worktree, validate and publish the package from its directory:
+
+```sh
+cd packages/erika_flutter
+dart pub publish --dry-run
+dart pub publish
+```
+
+The isolated package and platform consumer checks run from
+[`.github/workflows/flutter-package.yml`](../.github/workflows/flutter-package.yml)
+before a package release is merged. Linux and Web are not package targets yet.
+
+### Pub.dev publisher identity
+
+`unverified uploader` means the package was uploaded by a pub.dev account that
+is not associated with a verified pub.dev publisher. It does not indicate a
+package validation, license, or build failure. To show a verified publisher,
+create or join a pub.dev publisher for a domain you control and complete the
+domain verification, then transfer ownership of the package to that publisher.
+
 ## How to cut a release
 
 The release is fully automated by
@@ -64,8 +93,9 @@ The release is fully automated by
    section, and bump `version` in the root `Cargo.toml` if appropriate.
 2. Tag and push:
    ```sh
-   git tag v0.1.7
-   git push origin v0.1.7
+   VERSION=0.1.8
+   git tag "v${VERSION}"
+   git push origin "v${VERSION}"
    ```
 3. The workflow cross-builds macOS arm64 and x64 on `macos-26`, then combines
    those outputs into the universal bundle. iOS and tvOS XCFrameworks also use
