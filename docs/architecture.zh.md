@@ -30,7 +30,7 @@ Rust Player Core
 | 依赖 | 版本 | 作用 |
 |------|------|------|
 | FFmpeg | 8.1.2 | Demux、decode、audio resample、平台硬解 |
-| dav1d | 1.5.1 | Android AV1 软解回退（8-bit 与高位深） |
+| dav1d | 1.5.1 | 非 Windows 目标的 AV1 软解回退（8-bit 与高位深） |
 | libass | 0.17.5 | ASS 字幕渲染 |
 | FreeType | 2.14.3 | 字体栅格化（libass 依赖） |
 | HarfBuzz | 14.2.1 | 文本 shaping（libass 依赖） |
@@ -60,7 +60,7 @@ cargo run -p xtask -- deps status
 
 `VideoPlaybackEngine` 增加时钟驱动播放：
 
-- 播放、暂停、停止、seek、倍速控制、EOF 检测。
+- 播放、暂停、停止、seek、倍速控制（音频经 SoundTouch）、EOF 检测。
 - `PlaybackClock`：带音频主时钟约束的 media-time 锚点（deadband 校正、逐帧有界调整、大漂移 snap）。
 - `VideoFrameScheduler`：为解码后的视频帧决定 present / wait / drop。
 - `DisplaySyncState`：携带残余帧时长误差的 vsync 量化器。
@@ -153,7 +153,7 @@ Windows 平台的原生渲染器（`renderer/d3d11.rs`）：
 
 ## C ABI
 
-`erika_capi` 通过两组 handle family 导出 79 个函数：
+`erika_capi` 通过两组 handle family 导出 88 个函数：
 
 - **`ErikaHandle`**：播放器控制与事件轮询，渲染由宿主管理。
 - **`ErikaPresenterHandle`**：Erika 持有完整栈，宿主只需提供 surface 并调用 `render_tick`。
@@ -180,10 +180,10 @@ Embedding 模型和 HDR 策略见 `docs/flutter_embedding.md`。
 
 | Platform | Decode | Render | Audio | Status |
 |----------|--------|--------|-------|--------|
-| macOS 14+ | VideoToolbox | Metal | CoreAudio | Available |
-| iOS 16+ | VideoToolbox | Metal | AudioQueue | Available |
+| macOS 11+ | VideoToolbox | Metal | CoreAudio | Available |
+| iOS 13+ | VideoToolbox | Metal | AudioQueue | Available |
 | tvOS 13+ (Apple TV) | VideoToolbox | Metal | AudioQueue | Available |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
 | Android 8+ | MediaCodec / software | wgpu Vulkan + GLES fallback | AAudio | Available；SDR 已验证，extended-linear scRGB 等待 API 35 HDR 真机验收 |
-| HarmonyOS API 18+ | AVCodec（H.264/HEVC）/ software | wgpu Vulkan，`OHNativeBuffer` 零拷贝导入 | OHAudio | Available；已在真机验证，尚未纳入 CI |
+| HarmonyOS API 18+ | AVCodec（H.264/HEVC）/ software | wgpu Vulkan，`OHNativeBuffer` 零拷贝导入 | OHAudio | Available；已在真机验证，CI 构建 OpenHarmony C ABI 但无设备侧运行验证 |

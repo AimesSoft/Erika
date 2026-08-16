@@ -476,7 +476,7 @@ char *erika_presenter_poll_event_json(ErikaPresenterHandle *);
 
 ```json
 { "ok": true,  "status": 0, "value": <result> }
-{ "ok": false, "status": 1, "error": "<message>" }
+{ "ok": false, "status": 3, "error": "<message>" }
 ```
 
 `arguments_json` は JSON オブジェクトである必要があります。`method` は操作を選び、
@@ -487,7 +487,9 @@ C エントリポイントに対応します: `open`、`play`、`pause`、`stop`
 `selectSubtitleTrack`、および danmaku 系（`loadDanmakuFile`、`loadDanmakuJson`、
 `addDanmakuTrackFile`、`addDanmakuTrackJson`、`removeDanmakuTrack`、
 `setDanmakuTrackEnabled`、`setDanmakuTrackOffset`、`setDanmakuGlobalOffset`、
-`danmakuTracks`、`clearDanmaku`、`setDanmakuEnabled`、`setDanmakuConfig`）。
+`danmakuTracks`、`clearDanmaku`、`setDanmakuEnabled`、`setDanmakuConfig`）、および
+字幕フォント・リソース状態系（`selectSubtitleMemoryFonts`、
+`clearSubtitleMemoryFonts`、`getSubtitleMemoryFontStatus`、`getResourceStatus`）。
 未知の method は abort せず `ok: false` を返します。正となる dispatch table は
 `crates/erika_capi/src/presenter_json.rs` です。
 
@@ -541,7 +543,7 @@ Fallback value は ABI-stable です。新しい reason は末尾へ追加し、
 | 7 | `SurfaceConfigureFailed` | `surface_configure_failed` | requested output surface configure failure。 |
 | 8 | `LegacyAppleEdrUnsupported` | `legacy_apple_edr_unsupported` | Apple EDR 未実装 backend でこの mode を要求。 |
 
-`capture_frame_rgba` は**スクリーンショット**です。現在の合成フレーム（映像 + 字幕 +
+`capture_frame_rgba` は**スクリーンショット**です。現在の合成フレーム（映像 + 字幕（弾幕は含みません） +
 弾幕）を、要求した `width`×`height`（表示 surface サイズとは独立）で呼び出し側確保の
 RGBA8 バッファにオフスクリーン描画します。`out_capacity` は少なくとも `width*height*4`。
 フレームがまだ無いときは `PlayerError` を返します。Metal と wgpu（Android を含む）は
@@ -563,12 +565,12 @@ free(rgba);
 | 列挙 | 値 |
 |------|----|
 | `ErikaState` | `Idle` `Opening` `Ready` `Playing` `Paused` `Stopped` `Closed` `Error` |
-| `ErikaEventKind` | `None` `StateChanged` `DurationChanged` `PositionChanged` `TracksChanged` `BufferingChanged` `VideoParamsChanged` `SurfaceAttached` `SurfaceDetached` `Error` `TrackSelectionChanged` |
+| `ErikaEventKind` | `None` `StateChanged` `DurationChanged` `PositionChanged` `TracksChanged` `BufferingChanged` `VideoParamsChanged` `VideoDecoderChanged` `AudioOutputChanged` `SurfaceAttached` `SurfaceDetached` `Error` `TrackSelectionChanged` |
 | `ErikaTrackKind` | `Video` `Audio` `Subtitle` |
 | `ErikaTrackSource` | `Embedded` `External` |
-| `ErikaWgpuSurfaceKind` | `Unknown` `MacOsNsView` `MacOsCaMetalLayer` `IosUiView` `WindowsHwnd` `XlibWindow` `WaylandSurface` `AndroidNativeWindow` |
+| `ErikaWgpuSurfaceKind` | `Unknown` `MacOsNsView` `MacOsCaMetalLayer` `IosUiView` `WindowsHwnd` `XlibWindow` `WaylandSurface` `AndroidNativeWindow` `OhosNativeWindow` |
 | `ErikaFlutterTextureKind` | `Unknown` `MacOsTextureRegistrar` `IosTextureRegistrar` `AndroidSurfaceTexture` `WindowsTextureRegistrar` `LinuxTextureRegistrar` |
-| `ErikaPresenterOutputMode` | `Sdr` `AppleEdr` `ExtendedLinear` |
+| `ErikaPresenterOutputMode` | `Auto` `Sdr` `AppleEdr` `ExtendedLinear` |
 | `ErikaActiveOutputEncoding` | `SdrSrgb` `AppleEdr` `AndroidExtendedLinearScRgb` `Hdr10Pq` |
 | `ErikaOutputSurfaceFormat` | `EightBitUnorm` `TenBitUnorm` `SixteenBitFloat` |
 | `ErikaOutputFallbackReason` | `None` `DisplayHdrUnsupported` `HybridCompositionRequired` `WgpuBackendNotVulkan` `Rgba16FloatSurfaceFormatUnavailable` `NativeWindowDataSpaceApiUnavailable` `ScrgbDataSpaceVerificationFailed` `SurfaceConfigureFailed` `LegacyAppleEdrUnsupported` |

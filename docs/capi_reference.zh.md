@@ -449,7 +449,7 @@ char *erika_presenter_poll_event_json(ErikaPresenterHandle *);
 
 ```json
 { "ok": true,  "status": 0, "value": <result> }
-{ "ok": false, "status": 1, "error": "<message>" }
+{ "ok": false, "status": 3, "error": "<message>" }
 ```
 
 `arguments_json` 必须是 JSON 对象。`method` 选择操作，与 C 入口一一对应：
@@ -460,7 +460,9 @@ char *erika_presenter_poll_event_json(ErikaPresenterHandle *);
 `loadDanmakuJson`、`addDanmakuTrackFile`、`addDanmakuTrackJson`、
 `removeDanmakuTrack`、`setDanmakuTrackEnabled`、`setDanmakuTrackOffset`、
 `setDanmakuGlobalOffset`、`danmakuTracks`、`clearDanmaku`、`setDanmakuEnabled`、
-`setDanmakuConfig`）。未知 method 返回 `ok: false`，不会中止。权威分发表见
+`setDanmakuConfig`），以及字幕字体与资源状态系列（`selectSubtitleMemoryFonts`、
+`clearSubtitleMemoryFonts`、`getSubtitleMemoryFontStatus`、`getResourceStatus`）。
+未知 method 返回 `ok: false`，不会中止。权威分发表见
 `crates/erika_capi/src/presenter_json.rs`。
 
 这层桥只是便利封装，不是第二套 API：它调用的就是上面这些函数，没有额外能力。
@@ -511,7 +513,7 @@ Fallback 数值是稳定 ABI；新增原因只能追加，不能重排 `0..8`：
 | 7 | `SurfaceConfigureFailed` | `surface_configure_failed` | 请求的输出 surface configure 失败。 |
 | 8 | `LegacyAppleEdrUnsupported` | `legacy_apple_edr_unsupported` | 在未实现 Apple EDR 的 backend 上请求了该模式。 |
 
-`capture_frame_rgba` 是**截图**：把当前合成帧（视频 + 字幕 + 弹幕）离屏渲染进调用方
+`capture_frame_rgba` 是**截图**：把当前合成帧（视频 + 字幕，不含弹幕）离屏渲染进调用方
 分配的 RGBA8 缓冲，按请求的 `width`×`height`（与显示 surface 尺寸无关）。
 `out_capacity` 至少为 `width*height*4`。尚无可用帧时返回 `PlayerError`。Metal 与
 wgpu（包括 Android）已实现截图；当前 D3D11 backend 尚未实现。截图始终使用 SDR RGBA8
@@ -532,12 +534,12 @@ free(rgba);
 | 枚举 | 取值 |
 |------|------|
 | `ErikaState` | `Idle` `Opening` `Ready` `Playing` `Paused` `Stopped` `Closed` `Error` |
-| `ErikaEventKind` | `None` `StateChanged` `DurationChanged` `PositionChanged` `TracksChanged` `BufferingChanged` `VideoParamsChanged` `SurfaceAttached` `SurfaceDetached` `Error` `TrackSelectionChanged` |
+| `ErikaEventKind` | `None` `StateChanged` `DurationChanged` `PositionChanged` `TracksChanged` `BufferingChanged` `VideoParamsChanged` `VideoDecoderChanged` `AudioOutputChanged` `SurfaceAttached` `SurfaceDetached` `Error` `TrackSelectionChanged` |
 | `ErikaTrackKind` | `Video` `Audio` `Subtitle` |
 | `ErikaTrackSource` | `Embedded` `External` |
-| `ErikaWgpuSurfaceKind` | `Unknown` `MacOsNsView` `MacOsCaMetalLayer` `IosUiView` `WindowsHwnd` `XlibWindow` `WaylandSurface` `AndroidNativeWindow` |
+| `ErikaWgpuSurfaceKind` | `Unknown` `MacOsNsView` `MacOsCaMetalLayer` `IosUiView` `WindowsHwnd` `XlibWindow` `WaylandSurface` `AndroidNativeWindow` `OhosNativeWindow` |
 | `ErikaFlutterTextureKind` | `Unknown` `MacOsTextureRegistrar` `IosTextureRegistrar` `AndroidSurfaceTexture` `WindowsTextureRegistrar` `LinuxTextureRegistrar` |
-| `ErikaPresenterOutputMode` | `Sdr` `AppleEdr` `ExtendedLinear` |
+| `ErikaPresenterOutputMode` | `Auto` `Sdr` `AppleEdr` `ExtendedLinear` |
 | `ErikaActiveOutputEncoding` | `SdrSrgb` `AppleEdr` `AndroidExtendedLinearScRgb` `Hdr10Pq` |
 | `ErikaOutputSurfaceFormat` | `EightBitUnorm` `TenBitUnorm` `SixteenBitFloat` |
 | `ErikaOutputFallbackReason` | `None` `DisplayHdrUnsupported` `HybridCompositionRequired` `WgpuBackendNotVulkan` `Rgba16FloatSurfaceFormatUnavailable` `NativeWindowDataSpaceApiUnavailable` `ScrgbDataSpaceVerificationFailed` `SurfaceConfigureFailed` `LegacyAppleEdrUnsupported` |

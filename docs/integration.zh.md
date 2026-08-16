@@ -52,8 +52,8 @@ if (!p) { /* 读取 erika_last_error_message() */ }
 
 `erika_presenter_create()` 用默认值（SDR、无超分）。神经亮度超分在 Apple 平台由
 Metal 实现，在包括 Android 在内、具备 compute 能力的 Vulkan/wgpu adapter 上由
-wgpu 实现。GLES 3.0 和 D3D11 等无 compute 后端会保留原生 luma sampling，并明确
-报告 `Inactive` 状态和回退原因。
+wgpu 实现，Windows 上由 D3D11 compute 实现。无 compute 的后端（主要是 GLES 3.0）会保留原生
+luma sampling，并明确报告 `Inactive` 状态和回退原因。
 
 ## 4. Attach 一个 surface
 
@@ -208,7 +208,7 @@ while (erika_presenter_poll_event(p, &ev) == ErikaStatus_Ok) {
 - **超分:** `set_upscaler(mode)`;用 `get_upscaler_status` 检视。
 - **输出:** 用 `erika_presenter_get_output_status` 检视实际模式和 fallback counters。
   Android 原生宿主用 `erika_presenter_set_output_headroom` 发布动态显示 ratio。
-  `capture_frame_rgba` 始终输出视频 + 字幕 + 弹幕的 SDR RGBA8 截图，即使显示输出是
+  `capture_frame_rgba` 始终输出视频 + 字幕（不含弹幕）的 SDR RGBA8 截图，即使显示输出是
   extended-linear。
 
 ## 9. 释放

@@ -69,15 +69,15 @@ compositor に届きます。字幕・danmaku・overlay は他 platform と同�
 必要な Vulkan extension が無い端末は FFmpeg software decode と CPU upload に
 fallback します。fallback は再生を失敗させず、`VideoDecoderChanged` event と
 presenter diagnostics から報告されます。HarmonyOS path は実機で検証済みですが、
-CI では未カバーです。
+CI は OpenHarmony C ABI をビルドしますが、デバイス側の実行検証はありません。
 
 ## iOS Build Path
 
-iOS plugin は CocoaPod script phase 経由で Erika C ABI static library を app にリンクし、対象 iOS architecture 向けに Rust の `erika_capi` crate をビルドします。
+iOS plugin は CocoaPod script phase 経由で Erika C ABI static library を app にリンクします。既定では一致する prebuilt アーカイブをダウンロードし、`ERIKA_FORCE_SOURCE_BUILD=1`（`ERIKA_REPO_ROOT` と併用）で初めて対象 iOS architecture 向けに Rust の `erika_capi` crate をビルドします。
 
 ## tvOS Build Path
 
-tvOS plugin は CocoaPod script phase 経由で Apple TV 実機と simulator 向けに Erika C ABI static library をビルド・リンクします。tvOS 13+、arm64 実機、arm64/x86_64 simulator に対応します。Rust nightly、prebuilt bundle、source build の詳細は [`packages/erika_flutter/README.ja.md`](../packages/erika_flutter/README.ja.md) を参照してください。
+tvOS plugin は CocoaPod script phase 経由で Erika C ABI static library をリンクします。iOS と同様に既定では prebuilt アーカイブをダウンロードし、`ERIKA_FORCE_SOURCE_BUILD=1` のときのみソースビルドします。tvOS 13+、arm64 実機、arm64/x86_64 simulator に対応します。Rust nightly、prebuilt bundle、source build の詳細は [`packages/erika_flutter/README.ja.md`](../packages/erika_flutter/README.ja.md) を参照してください。
 
 ## Minimal Presenter Flow
 
@@ -242,7 +242,7 @@ output negotiation、danmaku item count を表示します。FPS は隣接 sampl
 |-----------------|------|
 | `off` | どの mode も要求されていない。 |
 | `building` | kernel を compile 中（その mode の初回使用）。準備完了まで frame は未拡大で描画される。 |
-| `inactive` | mode は要求されたが、この frame では適用されていない。たとえば video の表示サイズが source resolution を超えていない、または source が HDR（upscaler は SDR luma のみ処理）など。 |
+| `inactive` | mode は要求されたが適用されていない——kernel が未準備（かつビルド中でもない）、または backend が fallback/failure を記録した。 |
 | `scalar` | Metal scalar または wgpu compute backend で動作中。 |
 | `simdgroupMatrix` | `simdgroup_matrix` backend で動作中（Apple Silicon の既定）。 |
 

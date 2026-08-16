@@ -3,8 +3,8 @@
 > Translations: [中文](building.zh.md) · [日本語](building.ja.md)
 
 Erika is a Rust workspace that links a set of **statically built native
-dependencies** (FFmpeg, Android's dav1d AV1 fallback, and optionally the libass
-subtitle stack). Those native libraries are not vendored — you build them once with the `xtask` orchestrator,
+dependencies** (FFmpeg, dav1d as the non-Windows AV1 fallback, and optionally
+the libass subtitle stack). Those native libraries are not vendored — you build them once with the `xtask` orchestrator,
 which stages them under `third_party/dist/`, and the Rust crates link against
 that staging directory.
 
@@ -24,8 +24,9 @@ xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,z
 - For cross-targets, add the Rust std target, e.g.
   `rustup target add aarch64-apple-ios` or
   `rustup target add x86_64-pc-windows-msvc`.
-- Rust currently treats tvOS targets as tier 3. Install nightly with `rust-src`;
-  tvOS builds use Cargo's `-Z build-std` instead of `rustup target add`.
+- tvOS targets are tier 2 as of Rust 1.84, but Erika still builds them with
+  nightly and Cargo's `-Z build-std` (a `panic_abort` std). Install nightly
+  with `rust-src` instead of `rustup target add`.
 
 ### Build tools — macOS / Unix host
 
@@ -81,7 +82,7 @@ Erika's Android minimum is API **26**. Override it with
 cargo run -p xtask -- deps plan
 cargo run -p xtask -- deps status
 
-# Build the baseline set (zlib + FFmpeg; Android also builds dav1d) — LGPL profile
+# Build the baseline set (zlib + FFmpeg; dav1d on Android and Apple targets) — LGPL profile
 cargo run -p xtask -- deps build --profile lgpl
 
 # Build everything, including the libass subtitle stack
@@ -97,7 +98,7 @@ Subcommands: `plan` (print the plan), `fetch` (download sources only),
 |------|--------|---------|---------|
 | `--profile` | `lgpl`, `gpl-full` | `lgpl` | FFmpeg license profile (see below). |
 | `--target` | see targets table | `host` | Cross-compile target. |
-| `--all` | — | off | Also build libass + FreeType + HarfBuzz + FriBidi (subtitle rendering). The baseline is zlib + FFmpeg, plus dav1d for Android targets. |
+| `--all` | — | off | Also build libass + FreeType + HarfBuzz + FriBidi (subtitle rendering). The baseline is zlib + FFmpeg, plus dav1d for Android and Apple targets. |
 | `--force` | — | off | Rebuild even if up-to-date markers exist. |
 | `--jobs N` | integer | auto | Parallelism for the native builds. |
 
@@ -150,8 +151,8 @@ ERIKA_NATIVE_PROFILE=lgpl ERIKA_NATIVE_TARGET=aarch64-apple-darwin \
   cargo build -p erika_capi --release --target aarch64-apple-darwin
 ```
 
-Because Rust's tvOS targets are tier 3, direct tvOS builds use nightly and build
-the standard library from `rust-src`:
+Direct tvOS builds use nightly and build the standard library from `rust-src`
+(the CI pipeline runs `-Z build-std=std,panic_abort`):
 
 ```sh
 rustup toolchain install nightly --component rust-src
@@ -215,7 +216,8 @@ The native build is split into profiles so the license boundary is explicit:
 - **`lgpl`** (default) — FFmpeg configured `--disable-gpl --enable-version3`,
   static, no network, file protocol only, a curated demuxer/decoder/parser set,
   zlib enabled, plus VideoToolbox (Apple), D3D11VA/DXVA2 (Windows), or
-  JNI/MediaCodec plus source-built dav1d AV1 software fallback (Android).
+  JNI/MediaCodec plus source-built dav1d AV1 software fallback (Android and
+  Apple targets).
 - **`gpl-full`** — the same set with `--enable-gpl`. Use only if you accept GPL
   terms for the resulting binary.
 
@@ -281,8 +283,9 @@ pipeline, preserving subtitles, danmaku, and screenshots. This is hardware
 decode with a CPU upload, not a zero-copy Surface path; metrics must report it
 accordingly. If AV1 MediaCodec cannot open or fails while decoding, the software
 path explicitly selects FFmpeg's `libdav1d` decoder. `xtask` builds dav1d 1.5.1
-from source for every Android ABI with both 8-bit and high-bit-depth support;
-the 32-bit x86 slice disables assembly to preserve PIC safety.
+from source for every Android ABI and the Apple targets, with both 8-bit and
+high-bit-depth support; the 32-bit Android x86 slice disables assembly to
+preserve PIC safety.
 
 ### Verify Android output negotiation
 
@@ -352,8 +355,9 @@ decode and zero-copy interop are engaged.
   `Rgba16Float` (`4`), unavailable dataspace API (`5`), or failed
   `SCRGB_LINEAR` verification (`6`). Codes `7` and `8` identify surface
   configuration failure and an Apple-EDR request on an unsupported backend.
-- **Legacy FFmpeg rejected** — install/build the 7.x bundle; don't rely on a
-  system FFmpeg.
+- **Legacy FFmpeg rejected** — the native core requires the 8.x bundle
+  (`libavutil >= 60`) and fails at build time otherwise; the check is skipped
+  only when `ERIKA_ALLOW_LEGACY_FFMPEG=1` is set for local experiments.
 - **License check fails** — your profile mixes GPL and LGPL artifacts; rebuild
   deps with a single `--profile`.
 

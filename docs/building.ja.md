@@ -2,7 +2,7 @@
 
 > 翻訳：[English](building.md) · [中文](building.zh.md)
 
-Erika は一連の**静的ビルドされたネイティブ依存**（FFmpeg、Android の dav1d AV1
+Erika は一連の**静的ビルドされたネイティブ依存**（FFmpeg、非 Windows ターゲットの dav1d AV1
 ソフトウェアフォールバック、オプションの libass 字幕スタック）をリンクする Rust workspace です。これらのネイティブライブラリは vendoring
 されていません——`xtask` オーケストレータで一度ビルドすると `third_party/dist/` 配下に
 配置され、Rust crate がそのステージングディレクトリをリンクします。

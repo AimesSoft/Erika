@@ -42,8 +42,8 @@ create ──▶ attach surface ──▶ open ──▶ play ──▶ (render_
 `open` and `play` are asynchronous. The handle moves through
 `Opening → Ready → Playing`; observe transitions and failures via events rather
 than blocking. You can attach the surface
-before or after `open`, but attaching first lets the idle test pattern / first
-frame appear immediately.
+before or after `open`; attaching first means the first decoded frame appears
+on the next tick instead of waiting for a late attach.
 
 ## 3. Create the presenter
 
@@ -58,10 +58,10 @@ if (!p) { /* read erika_last_error_message() */ }
 ```
 
 `erika_presenter_create()` uses defaults (SDR, no upscaler). The neural luma
-upscaler is implemented by Metal on Apple platforms and by wgpu compute on
-capable Vulkan-class adapters, including Android. Backends without compute
-(notably GLES 3.0 and D3D11) retain native luma sampling and report an explicit
-`Inactive` status and fallback reason.
+upscaler is implemented by Metal on Apple platforms, D3D11 compute on Windows,
+and wgpu compute on capable Vulkan-class adapters, including Android. Backends
+without compute (notably GLES 3.0) retain native luma sampling and report an
+explicit `Inactive` status and fallback reason.
 
 ## 4. Attach a surface
 
@@ -234,7 +234,7 @@ All of these are safe to call live, between ticks:
 - **Output:** inspect the actual mode and fallback counters with
   `erika_presenter_get_output_status`; Android native hosts publish dynamic
   display ratios with `erika_presenter_set_output_headroom`. `capture_frame_rgba`
-  always produces an SDR RGBA8 screenshot of video + subtitle + danmaku, even
+  always produces an SDR RGBA8 screenshot of video + subtitle (danmaku excluded), even
   when the display output is extended-linear.
 
 ## 9. Teardown
