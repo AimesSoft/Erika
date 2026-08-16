@@ -38,16 +38,33 @@ Flutter Android 构建按实际请求的 ABI 下载对应
 和 HarmonyOS/OpenHarmony。package archive 包含插件源码、package `LICENSE`、README、
 example 和固定 native artifact manifest；平台构建会下载匹配的 GitHub Release 归档并校验 SHA-256。
 
-在干净工作树中从 package 目录执行：
+发布前先在干净工作树中从 package 目录验证：
 
 ```sh
 cd packages/erika_flutter
 dart pub publish --dry-run
-dart pub publish
 ```
 
 合并前由 [flutter-package.yml](../.github/workflows/flutter-package.yml) 执行 isolated
 package 和各平台 consumer 检查。Linux 和 Web 目前还不是 package 发布目标。
+
+pub.dev 发布由 [pub-publish.yml](../.github/workflows/pub-publish.yml) 自动执行。原生归档包含
+构建时间，因此 package 固定的 SHA-256 只能在对应 GitHub Release 创建后更新。发布顺序为：
+
+1. 按下文步骤推送 `v0.1.8`，等待原生 GitHub Release 和 `SHA256SUMS` 完成；
+2. 将 `packages/erika_flutter/pubspec.yaml`、`native_artifacts.properties` 和 CHANGELOG
+   更新到同一版本，并把 Release 中 12 个平台归档的哈希写入 manifest；
+3. 合并并确认 Flutter package 检查通过后，在该提交上推送独立 package tag：
+
+   ```sh
+   VERSION=0.1.8
+   git tag "erika_flutter-v${VERSION}"
+   git push origin "erika_flutter-v${VERSION}"
+   ```
+
+Action 会先校验 package 版本、native 版本和 GitHub Release 的全部 SHA-256，再通过
+pub.dev OIDC 发布，不保存长期上传密钥。pub.dev Admin 的一次性配置为 repository
+`AimesSoft/Erika`、tag pattern `erika_flutter-v{{version}}`。
 
 ### pub.dev publisher 身份
 

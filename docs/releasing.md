@@ -63,17 +63,39 @@ contains the plugin sources, package `LICENSE`, README files, examples, and the
 version-pinned native artifact manifest; platform builds fetch the matching
 GitHub Release archives and verify their SHA-256 values.
 
-From a clean worktree, validate and publish the package from its directory:
+From a clean worktree, validate the package from its directory:
 
 ```sh
 cd packages/erika_flutter
 dart pub publish --dry-run
-dart pub publish
 ```
 
 The isolated package and platform consumer checks run from
 [`.github/workflows/flutter-package.yml`](../.github/workflows/flutter-package.yml)
 before a package release is merged. Linux and Web are not package targets yet.
+
+Publishing to pub.dev is automated by
+[`.github/workflows/pub-publish.yml`](../.github/workflows/pub-publish.yml).
+Native archives include build metadata, so the package-pinned SHA-256 values can
+only be updated after the corresponding GitHub Release exists. Use this order:
+
+1. Push `v0.1.8` as described below and wait for the native GitHub Release and
+   its `SHA256SUMS` asset.
+2. Update `packages/erika_flutter/pubspec.yaml`, `native_artifacts.properties`,
+   and the changelog to the same version. Copy all 12 platform archive digests
+   from the Release into the native artifact manifest.
+3. Merge after the Flutter package checks pass, then tag that package commit:
+
+   ```sh
+   VERSION=0.1.8
+   git tag "erika_flutter-v${VERSION}"
+   git push origin "erika_flutter-v${VERSION}"
+   ```
+
+The action verifies the package version, native version, and every pinned
+SHA-256 against the GitHub Release before publishing through pub.dev OIDC. The
+one-time pub.dev Admin configuration is repository `AimesSoft/Erika` with tag
+pattern `erika_flutter-v{{version}}`; no long-lived upload secret is stored.
 
 ### Pub.dev publisher identity
 
