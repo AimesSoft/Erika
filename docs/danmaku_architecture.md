@@ -84,7 +84,7 @@ flowchart LR
 
 这一段的输入应保持 NipaPlay DFM+ 的抽象：规范化弹幕 item、viewport、字体测量结果、用户配置。Erika 可以用自己的 Rust 类型承载这些字段，但字段语义要对齐 NipaPlay：时间、文本、type_code、颜色、is_me、paint_width/paint_height、display_area、scroll_duration、allow_stacking、merge、max_quantity、max_lines、track_gap、outline、block_words 等都应进入 DFM+ prepare。
 
-在 DFM+ 之前，Erika 现在多了一层 `DanmakuSession`。它不参与布局算法，只负责把播放器/Flutter 传入的弹幕输入面整理成 DFM+ 能消费的一条 active timeline：多个弹幕轨可以同时启用，按轨 offset 和全局 offset 会在 active timeline 构建时应用，源 item id 会加上 track id 前缀以避免多轨合并后的 id 冲突。seek 不应该因为 generation 改变而重新 prepare；prepare 的失效条件应是 timeline/session 内容、viewport 或 config 变化，generation 只盖在当前帧输出上用于 renderer gate。
+在 DFM+ 之前，Erika 现在多了一层 `DanmakuSession`。它不参与布局算法，只负责把播放器/Flutter 传入的弹幕输入面整理成 DFM+ 能消费的一条 active timeline：多个弹幕轨可以同时启用，按轨 offset 和全局 offset 会在 active timeline 构建时应用，源 item id 会加上 track id 前缀以避免多轨合并后的 id 冲突。prepare 在独立 worker 上异步执行，plan 请求以 `{media_time, viewport, generation}` 为 key，其中任何一项变化都会触发重新 prepare；结果 plan 只覆盖一个时间窗口，播放时间离开窗口即作废，seek 后旧窗口的 plan 不会被继续使用。
 
 这一段的输出也应保持 NipaPlay DFM+ 的抽象：prepared layout 保存稳定布局结果；frame query 只根据 media time 输出当前 visible items 的 index 和位置。Erika 之后再把 item_index 对应的文本、颜色、字号、描边等样式转换成 `DanmakuFrameLayout` 和 `DanmakuRenderPlan`。
 
@@ -125,7 +125,7 @@ Flutter wrapper 已经对应暴露 `addDanmakuTrackFile`、`addDanmakuTrackJson`
 
 `PlayerVideoFrame` 带有 `pts`、`media_time` 和 `generation`。presenter 在 `pump_video` 上传视频帧后，用 `frame.pts.unwrap_or(frame.media_time)` 作为当前弹幕查询时间。之后 `update_overlay` 用同一个 pts 生成字幕 overlay 和 danmaku render plan。最终 renderer 收到 `RenderFrameContext { media_time, generation, overlay, danmaku }`。
 
-renderer 会 gate 掉不匹配的弹幕 plan。Metal 和 WGPU 都要求 plan 的 `generation` 等于 context generation，plan 的 `media_time` 等于 context media_time，并且 viewport 与当前输出尺寸一致。这样 seek、stop、close、弹幕轨切换或配置变化后，旧 generation 的弹幕 plan 不会继续进入渲染。
+renderer 会 gate 掉不匹配的弹幕 plan。Metal 和 WGPU 都要求 plan 的 `generation` 等于 context generation，并且 viewport 与当前输出尺寸一致；media_time 匹配由 presenter 的窗口化 plan 负责——每个 plan 带 `[window_start, window_end]`，播放时间离开窗口后旧 plan 不再进入渲染，renderer 不需要再核对时间。这样 seek、stop、close、弹幕轨切换或配置变化后，旧 generation 或旧窗口的弹幕 plan 不会继续进入渲染。
 
 这个契约的含义是：弹幕位置不是“暂停时不动”这么简单，而是任何时刻都由视频 media timeline 决定。播放位置连续推进时，滚动弹幕随 media time 流式变化；pause 时 media time 不变，所以弹幕位置不变；seek 后 media time 跳到新位置，prepared layout 根据新时间直接查询对应弹幕，旧 plan 因 generation 不匹配被丢弃。
 

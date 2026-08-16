@@ -127,7 +127,7 @@ Flutter wrapper は `addDanmakuTrackFile`、`addDanmakuTrackJson`、`removeDanma
 
 `PlayerVideoFrame` は `pts`、`media_time`、`generation` を持ちます。presenter が `pump_video` で frame を upload した後、`frame.pts.unwrap_or(frame.media_time)` を現在の弾幕 query time として使います。その後 `update_overlay` が同じ PTS を使って subtitle overlay と danmaku render plan を生成します。最終的に renderer は `RenderFrameContext { media_time, generation, overlay, danmaku }` を受け取ります。
 
-renderer は不一致の danmaku plan を gate で落とします。Metal / WGPU ともに plan の `generation` が context generation と一致し、plan の `media_time` が context media time と一致し、viewport が現在の出力サイズに一致する必要があります。これにより seek、stop、close、track switch、config change の後に古い plan が描画され続けることを防ぎます。
+renderer は不一致の danmaku plan を gate で落とします。Metal / WGPU ともに plan の `generation` が context generation と一致し、viewport が現在の出力サイズに一致する必要があります。media_time の照合は presenter の windowed plan が担います——各 plan は `[window_start, window_end]` を持ち、再生時間が window を外れると古い plan は描画に回りません。これにより seek、stop、close、track switch、config change の後に古い generation / 古い window の plan が描画され続けることを防ぎます。
 
 つまり、弾幕位置は「pause 中に止まる」だけではありません。常に video media timeline によって決まります。再生中は media time に合わせて scrolling 弾幕が流れ、pause 中は media time が変わらないので位置も変わらず、seek 後は新しい media time を直接 query し、古い plan は generation 不一致で破棄されます。
 

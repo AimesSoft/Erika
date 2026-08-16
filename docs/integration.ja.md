@@ -55,8 +55,8 @@ if (!p) { /* erika_last_error_message() を読む */ }
 
 `erika_presenter_create()` は既定値（SDR、アップスケーラ無し）。神経輝度アップスケーラは
 Apple platform では Metal、Android を含む compute-capable Vulkan/wgpu adapter では
-wgpu が実行します。GLES 3.0 や D3D11 のような compute 非対応 backend は native luma
-sampling を維持し、`Inactive` status と fallback reason を明示します。
+wgpu、Windows では D3D11 compute が実行します。compute 非対応 backend（主に GLES 3.0）は
+native luma sampling を維持し、`Inactive` status と fallback reason を明示します。
 
 ## 4. surface を attach する
 
@@ -218,7 +218,7 @@ sleep で 60 Hz を近似できます。
 - **出力:** `erika_presenter_get_output_status` で active mode と fallback counter を確認。
   Android native host は `erika_presenter_set_output_headroom` で dynamic display ratio を
   publish します。`capture_frame_rgba` は display output が extended-linear の場合も、映像 +
-  字幕 + 弾幕を SDR RGBA8 screenshot として返します。
+  字幕（弾幕は含みません）を SDR RGBA8 screenshot として返します。
 
 ## 9. 解放
 

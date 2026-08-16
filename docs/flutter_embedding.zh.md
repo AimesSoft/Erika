@@ -63,15 +63,15 @@ surface 取为 `OHNativeWindow` 并 attach 给 presenter；wgpu 随后通过 Vul
 
 缺少所需 Vulkan 扩展的设备回退到 FFmpeg 软解 + CPU 上传。回退通过
 `VideoDecoderChanged` 事件和 presenter 诊断上报，而不是让播放失败。HarmonyOS
-路径已在真机验证，但尚未纳入 CI。
+路径已在真机验证；CI 构建 OpenHarmony C ABI，但无设备侧运行验证。
 
 ## iOS Build Path
 
-iOS plugin 通过 CocoaPod script phase 把 Erika C ABI static library 链接进 app，并为目标 iOS architecture 构建 Rust `erika_capi` crate。
+iOS plugin 通过 CocoaPod script phase 把 Erika C ABI static library 链接进 app。默认下载匹配的预构建归档；设 `ERIKA_FORCE_SOURCE_BUILD=1`（配合 `ERIKA_REPO_ROOT`）才会为目标 iOS architecture 从源码构建 Rust `erika_capi` crate。
 
 ## tvOS Build Path
 
-tvOS plugin 通过 CocoaPod script phase 为 Apple TV 真机和模拟器构建并链接 Erika C ABI static library；支持 tvOS 13+、arm64 真机，以及 arm64/x86_64 模拟器。详细的 Rust nightly、预构建包和源码构建选项见 [`packages/erika_flutter/README.zh.md`](../packages/erika_flutter/README.zh.md)。
+tvOS plugin 通过 CocoaPod script phase 链接 Erika C ABI static library；与 iOS 一样默认下载预构建归档，`ERIKA_FORCE_SOURCE_BUILD=1` 时才从源码构建。支持 tvOS 13+、arm64 真机，以及 arm64/x86_64 模拟器。详细的 Rust nightly、预构建包和源码构建选项见 [`packages/erika_flutter/README.zh.md`](../packages/erika_flutter/README.zh.md)。
 
 ## Minimal Presenter Flow
 
@@ -246,7 +246,7 @@ HUD 的驱动机制，数据新鲜度取决于已挂载 surface 的显示循环�
 |-----------------|------|
 | `off` | 没有请求任何模式。 |
 | `building` | kernel 正在编译（首次使用该模式）；在准备好之前视频会保持未放大。 |
-| `inactive` | 请求了模式，但这一帧没有生效，例如视频显示尺寸没有超过源分辨率，或源视频是 HDR（upscaler 只处理 SDR luma）。 |
+| `inactive` | 请求了模式但未生效——内核未就绪（且不在编译中），或后端记录了回退/失败。 |
 | `scalar` | 运行在 Metal scalar 或 wgpu compute backend 上。 |
 | `simdgroupMatrix` | 运行在 `simdgroup_matrix` backend 上（Apple Silicon 默认）。 |
 
