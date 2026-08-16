@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.1.7 - 2026-08-16
+
+### Flutter package distribution
+
+- Prepared `erika_flutter` for its first pub.dev release with package-local
+  licensing, changelog, metadata, examples, and standalone package tests.
+- Made verified, version-pinned native release bundles the default on Android,
+  Apple platforms, Windows, and OpenHarmony; source builds are now explicitly
+  selected with `ERIKA_FORCE_SOURCE_BUILD=1`.
+- Added isolated GitHub Actions consumers for Android, iOS, macOS, tvOS,
+  Windows, and OpenHarmony so package builds cannot depend on the monorepo.
+
 ## 0.1.6 - 2026-08-14
 
 ### Rendering and playback

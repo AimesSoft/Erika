@@ -24,9 +24,10 @@ license files:
 
 The OpenHarmony archive is built against the OpenHarmony 5.1.0 native SDK with
 compatible SDK version 18. It contains the C API runtime and Flutter N-API
-bridge. With `ERIKA_PREBUILT=1`, the plugin CMake build downloads the matching
-tag, links the prebuilt runtime, and packages it beside the locally linked N-API
-bridge; a failed download falls back to the source build.
+bridge. The Flutter plugin downloads the package-pinned release by default,
+verifies its SHA-256, links the prebuilt runtime, and packages it beside the
+locally linked N-API bridge. Download and verification failures are explicit;
+source builds are enabled only with `ERIKA_FORCE_SOURCE_BUILD=1`.
 
 The Android archive stores each ABI at `lib/android/<abi>/`. Flutter/Gradle
 consumers package `liberika_capi.so` together with the matching NDK
@@ -59,8 +60,8 @@ The release is fully automated by
    section, and bump `version` in the root `Cargo.toml` if appropriate.
 2. Tag and push:
    ```sh
-   git tag v0.1.6
-   git push origin v0.1.6
+   git tag v0.1.7
+   git push origin v0.1.7
    ```
 3. The workflow cross-builds macOS arm64 and x64 on `macos-26`, then combines
    those outputs into the universal bundle. iOS and tvOS XCFrameworks also use
@@ -99,19 +100,20 @@ bash packaging/bundle.sh erika-capi-macos-universal \
   dist/erika-capi-macos-universal.zip out/liberika_capi.dylib out/liberika_capi.a
 ```
 
-## Consuming prebuilt bundles from the Flutter plugin (opt-in)
+## Consuming prebuilt bundles from the Flutter plugin
 
 The `erika_flutter` plugin can download a prebuilt bundle from a release instead
 of building Erika from source, which avoids compiling FFmpeg in the host app's
-build. It is **opt-in** and always falls back to the source build on any
-failure, so enabling it cannot break a build.
+build. Verified prebuilt bundles are the default. Download, extraction, or
+checksum failures stop with an actionable error instead of silently requiring a
+Rust and native dependency toolchain.
 
-Enable it by setting environment variables in the host app's build:
+The following environment variables customize that behavior:
 
 | Variable | Effect |
 |----------|--------|
-| `ERIKA_PREBUILT=1` | Download the prebuilt `erika_capi` instead of building from source. |
-| `ERIKA_PREBUILT_TAG=v0.1.6` | Release tag to download (default `v0.1.6`). |
+| `ERIKA_PREBUILT_TAG=v0.1.7` | Override the package-pinned release tag. Also requires `ERIKA_PREBUILT_SHA256`. |
+| `ERIKA_PREBUILT_SHA256=...` | Expected digest when overriding the release tag. |
 | `ERIKA_FORCE_SOURCE_BUILD=1` | Bypass the prebuilt path and build the local source, useful when debugging Erika changes through the Flutter plugin. |
 | `ERIKA_MACOS_ARCHS=universal|arm64|x86_64|arm64,x86_64` | Select the macOS source and prebuilt artifact architecture. |
 
@@ -130,17 +132,17 @@ Enable it by setting environment variables in the host app's build:
   that runtime beside `liberika_flutter.so` for HAR/HAP packaging.
 - **macOS** (podspec `script_phase`): downloads the arm64, x64, or universal
   archive selected by `ERIKA_MACOS_ARCHS` and bundles its dylib into the app's
-  `Contents/Frameworks` (`install_name @rpath`, codesigned). Without
-  `ERIKA_PREBUILT`, the same phase builds the selected architecture from source.
+  `Contents/Frameworks` (`install_name @rpath`, codesigned). With
+  `ERIKA_FORCE_SOURCE_BUILD=1`, the same phase builds the selected architecture from source.
   `ERIKA_MACOS_CAPI_DYLIB` can point at an explicit dylib instead.
 - **Android** (`erika-native.gradle`): downloads `erika-capi-android.zip` and
   stages `liberika_capi.so` plus `libc++_shared.so` for the requested Flutter
   ABIs. Native C/C++ embedders may instead link the bundled static archive and
   provide the matching C++ runtime themselves.
 
-Pin `ERIKA_PREBUILT_TAG` to a release whose Erika source matches the plugin
-revision you build against, so the C ABI in the header and the prebuilt library
-agree.
+The package pins its native tag and SHA-256 values. If you override the tag,
+provide the matching digest so the C ABI in the package header and the prebuilt
+library cannot drift silently.
 
 ## Consuming a bundle
 
