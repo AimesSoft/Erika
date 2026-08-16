@@ -41,16 +41,35 @@ HarmonyOS/OpenHarmony に対応します。package archive には plugin source�
 `LICENSE`、README、example、version 固定の native artifact manifest が含まれ、platform
 build は対応する GitHub Release archive を download して SHA-256 を検証します。
 
-clean worktree から package directory で実行します：
+公開前に clean worktree の package directory で検証します：
 
 ```sh
 cd packages/erika_flutter
 dart pub publish --dry-run
-dart pub publish
 ```
 
 merge 前に [flutter-package.yml](../.github/workflows/flutter-package.yml) が isolated package
 と各 platform consumer を検証します。Linux と Web はまだ package 公開対象ではありません。
+
+pub.dev への公開は [pub-publish.yml](../.github/workflows/pub-publish.yml) が自動実行します。
+native archive には build metadata が含まれるため、package に固定する SHA-256 は対応する
+GitHub Release の作成後に更新します。公開順序は次の通りです：
+
+1. 下記の手順で `v0.1.8` を push し、native GitHub Release と `SHA256SUMS` の完了を待つ；
+2. `packages/erika_flutter/pubspec.yaml`、`native_artifacts.properties`、CHANGELOG を同じ
+   version に更新し、Release にある 12 platform archive の digest を manifest に反映する；
+3. Flutter package check の成功後に merge し、その commit に独立した package tag を push する：
+
+   ```sh
+   VERSION=0.1.8
+   git tag "erika_flutter-v${VERSION}"
+   git push origin "erika_flutter-v${VERSION}"
+   ```
+
+Action は package version、native version、GitHub Release の全 SHA-256 を検証してから
+pub.dev OIDC で公開します。long-lived upload secret は保存しません。pub.dev Admin の
+one-time 設定は repository `AimesSoft/Erika`、tag pattern
+`erika_flutter-v{{version}}` です。
 
 ### pub.dev publisher identity
 
