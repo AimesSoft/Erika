@@ -44,7 +44,8 @@ vsync ticks.
 
 ## macOS Setup
 
-The macOS plugin's podspec build phase builds and bundles a codesigned
+The macOS plugin's podspec build phase downloads and bundles a verified,
+codesigned
 `liberika_capi.dylib`. It defaults to an arm64+x86_64 universal library. A
 consuming project can set `ERIKA_MACOS_ARCHS=arm64`, `x86_64`, or
 `arm64,x86_64`; `universal` remains the default. Prebuilt mode selects the
@@ -58,30 +59,29 @@ commands through Remote Command Center.
 Overrides: `ERIKA_CAPI_DYLIB` forces the runtime dylib path; `ERIKA_MACOS_CAPI_DYLIB`
 points the build phase at an explicit dylib to bundle instead of building.
 
-## Prebuilt binaries (opt-in)
+## Native binaries
 
-To skip building Erika (and FFmpeg) from source, set `ERIKA_PREBUILT=1` in the
-app build to download the prebuilt `erika_capi` from a GitHub Release
-(`ERIKA_PREBUILT_TAG` selects the tag, default `v0.1.6`). Supported on macOS,
-Windows, iOS, tvOS, Android, and OpenHarmony; any failure falls back to the
-source build. See [`docs/releasing.md`](../../docs/releasing.md).
+The plugin downloads the matching `v0.1.6` native runtime by default on macOS,
+Windows, iOS, tvOS, Android, and OpenHarmony. Every archive is pinned by SHA-256;
+a missing or invalid archive fails with an explicit error instead of silently
+requiring a Rust, FFmpeg, or NDK toolchain. See the
+[release guide](https://github.com/AimesSoft/Erika/blob/main/docs/releasing.md).
 
-When debugging local Erika source changes, set
-`ERIKA_FORCE_SOURCE_BUILD=1` to bypass the prebuilt download path even if the
-host app enables `ERIKA_PREBUILT=1`.
+When debugging local Erika changes from an Erika checkout, set
+`ERIKA_FORCE_SOURCE_BUILD=1`. A custom `ERIKA_PREBUILT_TAG` must be accompanied
+by the matching `ERIKA_PREBUILT_SHA256`.
 
 For source builds, select macOS with `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`,
 Windows with `ERIKA_WINDOWS_ARCH=x64|arm64`, and Android with
 `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86`. For direct native builds,
 `xtask --target`, `ERIKA_NATIVE_TARGET`, and `cargo build --target` must name the
-same target. See [building.md](../../docs/building.md).
+same target. See the
+[build guide](https://github.com/AimesSoft/Erika/blob/main/docs/building.md).
 
 ## iOS Setup
 
-The iOS CocoaPod script phase builds the Erika native dependencies and C ABI
-static library automatically during Xcode builds. Requirements:
-
-- Rust toolchain with the appropriate iOS target (`rustup target add aarch64-apple-ios`)
+The iOS CocoaPod script phase downloads the verified C ABI static library.
+Rust is required only for an explicit source build.
 
 The host app must enable **Background Modes > Audio, AirPlay, and Picture in Picture** under Xcode's Signing & Capabilities, or add `audio` to `UIBackgroundModes` in `Info.plist`. The player registers Now Playing metadata and playback controls with Control Center. Pass an `ErikaMediaMetadata` value to provide the title, artist, album, and encoded artwork bytes.
 
@@ -189,9 +189,9 @@ system-media integration.
 
 ## tvOS Setup
 
-The tvOS CocoaPod script phase builds the native dependencies and C ABI static
-library automatically for Apple TV devices and simulators. Rust's tvOS targets
-are tier 3, so install nightly with its source component:
+The tvOS CocoaPod script phase downloads the verified C ABI static library for
+Apple TV devices and simulators. An explicit source build uses Rust's tier-3
+tvOS targets and requires nightly with its source component:
 
 - `rustup toolchain install nightly --component rust-src`
 
@@ -201,22 +201,23 @@ with `-Z build-std=std,panic_abort`.
 
 ## Windows Setup
 
-The Windows plugin (`ErikaFlutterPluginCApi`) builds the Erika C ABI runtime
-(`erika_capi.dll`) during the CMake build via `build_erika_runtime.cmake`,
+The Windows plugin (`ErikaFlutterPluginCApi`) downloads the verified Erika C ABI
+runtime (`erika_capi.dll`) during the CMake build,
 automatically following the CMake generator's x64 or ARM64 architecture and
 staging the DLL next to the app. A consuming project can explicitly select the
 architecture with the `ERIKA_WINDOWS_ARCH=x64|arm64` CMake cache entry or
 environment variable. Advanced integrations can set
 `ERIKA_NATIVE_TARGET=x86_64-pc-windows-msvc|aarch64-pc-windows-msvc` directly.
-Requirements:
+Normal consumers only need Visual Studio Build Tools with C++/WinRT and a
+Windows SDK. An explicit source build additionally requires:
 
 - Rust toolchain with the matching MSVC target (`rustup target add x86_64-pc-windows-msvc` or `rustup target add aarch64-pc-windows-msvc`)
 - Visual Studio Build Tools with x64/ARM64 C++ tools + Windows SDK
 - Native dependencies built into `third_party/dist/<target>/`
   (via the repo `xtask deps build` flow)
 
-Set `ERIKA_REPO_ROOT` if the plugin cannot locate the Erika checkout
-automatically.
+Set `ERIKA_REPO_ROOT` together with `ERIKA_FORCE_SOURCE_BUILD=1` when developing
+against an Erika checkout.
 
 The Windows plugin publishes title, artist, album, artwork, playback state, and
 timeline through System Media Transport Controls (SMTC), and handles system
@@ -225,11 +226,10 @@ plugin links the required WinRT system libraries automatically.
 
 ## Android Setup
 
-The Android Gradle plugin invokes Erika's `xtask` dependency build and then
-builds `erika_capi` with Cargo for the selected ABI. Install the Android NDK and
-the corresponding Rust targets. Android API 26 or newer is required. The
-generated `jniLibs` include both `liberika_capi.so` and the matching NDK
-`libc++_shared.so`. By default arm64 and x86_64 are built; override
+The Android Gradle plugin downloads the verified runtime for each selected ABI.
+Android API 26 or newer is required. The generated `jniLibs` include both
+`liberika_capi.so` and the matching NDK `libc++_shared.so`. By default arm64 and
+x86_64 are selected; override
 this with `-PerikaAndroidAbis=arm64-v8a,x86_64` or `ERIKA_ANDROID_ABIS`.
 
 Android `content://` media and subtitle URIs are opened through
@@ -255,11 +255,10 @@ desired HDR headroom without changing the host window globally.
 
 ## HarmonyOS Setup
 
-The HarmonyOS module requires DevEco Studio's OpenHarmony Native SDK. With
-`ERIKA_PREBUILT=1`, its CMake build downloads `liberika_capi.so` from the
-selected release and packages it beside `liberika_flutter.so`; otherwise it
-requires the Rust `aarch64-unknown-linux-ohos` target and builds the LGPL native
-dependencies and runtime from source. Download failures fall back to source.
+The HarmonyOS module requires DevEco Studio's OpenHarmony Native SDK. Its CMake
+build downloads and verifies `liberika_capi.so`, then packages it beside
+`liberika_flutter.so`. Rust and the `aarch64-unknown-linux-ohos` target are only
+required when `ERIKA_FORCE_SOURCE_BUILD=1` is explicitly selected.
 
 HarmonyOS uses AVSession to publish metadata, artwork, playback state, position,
 and playback rate, and handles system play, pause, stop, and seek commands.

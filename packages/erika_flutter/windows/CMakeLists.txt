@@ -10,44 +10,13 @@ cmake_policy(VERSION 3.14...3.25)
 set(PLUGIN_NAME "erika_flutter_plugin")
 
 get_filename_component(ERIKA_FLUTTER_PACKAGE_DIR
-  "${CMAKE_CURRENT_SOURCE_DIR}/.."
-  REALPATH)
-if(IS_SYMLINK "${CMAKE_CURRENT_SOURCE_DIR}/..")
-  file(READ_SYMLINK "${CMAKE_CURRENT_SOURCE_DIR}/.."
-    ERIKA_FLUTTER_PACKAGE_LINK_TARGET)
-  file(TO_CMAKE_PATH "${ERIKA_FLUTTER_PACKAGE_LINK_TARGET}"
-    ERIKA_FLUTTER_PACKAGE_LINK_TARGET)
-  string(REGEX REPLACE "^/\\?\\?/" ""
-    ERIKA_FLUTTER_PACKAGE_LINK_TARGET "${ERIKA_FLUTTER_PACKAGE_LINK_TARGET}")
-  get_filename_component(ERIKA_FLUTTER_PACKAGE_DIR
-    "${ERIKA_FLUTTER_PACKAGE_LINK_TARGET}"
-    REALPATH)
-endif()
-get_filename_component(ERIKA_REPO_ROOT
-  "${ERIKA_FLUTTER_PACKAGE_DIR}/../.."
-  REALPATH)
-if(DEFINED ENV{ERIKA_REPO_ROOT} AND
-    EXISTS "$ENV{ERIKA_REPO_ROOT}/crates/erika_capi/include/erika.h")
-  file(TO_CMAKE_PATH "$ENV{ERIKA_REPO_ROOT}" ERIKA_REPO_ROOT)
-endif()
-if(NOT EXISTS "${ERIKA_REPO_ROOT}/crates/erika_capi/include/erika.h")
-  set(_ERIKA_SEARCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-  foreach(_ERIKA_SEARCH_DEPTH RANGE 0 12)
-    if(EXISTS "${_ERIKA_SEARCH_DIR}/crates/erika_capi/include/erika.h")
-      get_filename_component(ERIKA_REPO_ROOT "${_ERIKA_SEARCH_DIR}" REALPATH)
-      break()
-    endif()
-    get_filename_component(_ERIKA_PARENT_DIR "${_ERIKA_SEARCH_DIR}/.." REALPATH)
-    if(_ERIKA_PARENT_DIR STREQUAL _ERIKA_SEARCH_DIR)
-      break()
-    endif()
-    set(_ERIKA_SEARCH_DIR "${_ERIKA_PARENT_DIR}")
-  endforeach()
-endif()
-if(NOT EXISTS "${ERIKA_REPO_ROOT}/crates/erika_capi/include/erika.h")
+  "${CMAKE_CURRENT_SOURCE_DIR}/.." REALPATH)
+set(ERIKA_NATIVE_HEADER_DIR
+  "${ERIKA_FLUTTER_PACKAGE_DIR}/native/include")
+if(NOT EXISTS "${ERIKA_NATIVE_HEADER_DIR}/erika.h")
   message(FATAL_ERROR
-    "Unable to locate Erika repo root from ${CMAKE_CURRENT_SOURCE_DIR}. "
-    "Set ERIKA_REPO_ROOT to the Erika checkout.")
+    "Erika C API header is missing from the Flutter package: "
+    "${ERIKA_NATIVE_HEADER_DIR}/erika.h")
 endif()
 
 list(APPEND PLUGIN_SOURCES
@@ -70,17 +39,17 @@ endif()
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   CXX_VISIBILITY_PRESET hidden)
-target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
+target_compile_definitions(${PLUGIN_NAME} PRIVATE
+  FLUTTER_PLUGIN_IMPL
+  _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
 
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_include_directories(${PLUGIN_NAME} PRIVATE
-  "${ERIKA_REPO_ROOT}/crates/erika_capi/include")
-target_compile_definitions(${PLUGIN_NAME} PRIVATE
-  ERIKA_REPO_ROOT_PATH="${ERIKA_REPO_ROOT}")
-target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin runtimeobject windowsapp shcore shlwapi)
+  "${ERIKA_NATIVE_HEADER_DIR}")
+target_link_libraries(${PLUGIN_NAME} PRIVATE
+  flutter flutter_wrapper_plugin runtimeobject windowsapp shcore shlwapi)
 
-find_program(CARGO_EXECUTABLE cargo REQUIRED)
 set(ERIKA_WINDOWS_ARCH "" CACHE STRING
   "Erika Windows architecture: x64, x86_64, arm64, or aarch64")
 set(ERIKA_NATIVE_TARGET "" CACHE STRING
@@ -91,11 +60,13 @@ set(ERIKA_NATIVE_PROFILE "lgpl" CACHE STRING
 if(ERIKA_NATIVE_TARGET STREQUAL "")
   if(NOT ERIKA_WINDOWS_ARCH STREQUAL "")
     set(_ERIKA_WINDOWS_ARCH "${ERIKA_WINDOWS_ARCH}")
-  elseif(DEFINED ENV{ERIKA_WINDOWS_ARCH} AND NOT "$ENV{ERIKA_WINDOWS_ARCH}" STREQUAL "")
+  elseif(DEFINED ENV{ERIKA_WINDOWS_ARCH} AND
+      NOT "$ENV{ERIKA_WINDOWS_ARCH}" STREQUAL "")
     set(_ERIKA_WINDOWS_ARCH "$ENV{ERIKA_WINDOWS_ARCH}")
   elseif(NOT CMAKE_GENERATOR_PLATFORM STREQUAL "")
     set(_ERIKA_WINDOWS_ARCH "${CMAKE_GENERATOR_PLATFORM}")
-  elseif(DEFINED CMAKE_VS_PLATFORM_NAME AND NOT CMAKE_VS_PLATFORM_NAME STREQUAL "")
+  elseif(DEFINED CMAKE_VS_PLATFORM_NAME AND
+      NOT CMAKE_VS_PLATFORM_NAME STREQUAL "")
     set(_ERIKA_WINDOWS_ARCH "${CMAKE_VS_PLATFORM_NAME}")
   else()
     set(_ERIKA_WINDOWS_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
@@ -118,18 +89,21 @@ if(NOT ERIKA_NATIVE_TARGET STREQUAL "x86_64-pc-windows-msvc" AND
     "Unsupported Erika Windows Rust target: ${ERIKA_NATIVE_TARGET}")
 endif()
 
+set(ERIKA_RUNTIME_DIR
+  "${CMAKE_CURRENT_BINARY_DIR}/erika_runtime")
 set(ERIKA_CAPI_DLL_PATH
-  "${ERIKA_REPO_ROOT}/target/${ERIKA_NATIVE_TARGET}/$<IF:$<CONFIG:Debug>,debug,release>/erika_capi.dll")
+  "${ERIKA_RUNTIME_DIR}/erika_capi.dll")
 add_custom_target(erika_capi_runtime
   COMMAND "${CMAKE_COMMAND}"
-    "-DERIKA_REPO_ROOT=${ERIKA_REPO_ROOT}"
-    "-DCARGO_EXECUTABLE=${CARGO_EXECUTABLE}"
+    "-DERIKA_PACKAGE_ROOT=${ERIKA_FLUTTER_PACKAGE_DIR}"
+    "-DERIKA_RUNTIME_OUT=${ERIKA_CAPI_DLL_PATH}"
+    "-DERIKA_CACHE_ROOT=${CMAKE_CURRENT_BINARY_DIR}/erika_prebuilt_cache"
     "-DERIKA_NATIVE_TARGET=${ERIKA_NATIVE_TARGET}"
     "-DERIKA_NATIVE_PROFILE=${ERIKA_NATIVE_PROFILE}"
     "-DERIKA_BUILD_CONFIG=$<CONFIG>"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/build_erika_runtime.cmake"
-  WORKING_DIRECTORY "${ERIKA_REPO_ROOT}"
-  COMMENT "Building Erika native dependencies and C API runtime for $<CONFIG>"
+  WORKING_DIRECTORY "${ERIKA_FLUTTER_PACKAGE_DIR}"
+  COMMENT "Preparing Erika native runtime for $<CONFIG>"
   VERBATIM
 )
 add_dependencies(${PLUGIN_NAME} erika_capi_runtime)

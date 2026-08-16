@@ -51,6 +51,25 @@ jobs:
       - name: Test Flutter package
         working-directory: packages/erika_flutter
         run: flutter test --no-pub --reporter expanded
+      - name: Validate pub package
+        working-directory: packages/erika_flutter
+        env:
+          PUB_HOSTED_URL: https://pub.dev
+        run: flutter pub publish --dry-run
+      - name: Test Flutter package outside the monorepo
+        env:
+          PUB_HOSTED_URL: https://pub.dev
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          mkdir -p "$work/erika_flutter"
+          git archive HEAD:packages/erika_flutter | tar -x -C "$work/erika_flutter"
+          test ! -e "$work/crates"
+          cd "$work/erika_flutter"
+          flutter pub get
+          flutter analyze --no-pub
+          flutter test --no-pub --reporter expanded
 
   rust-macos:
     name: Rust (macOS ${{ matrix.arch }})

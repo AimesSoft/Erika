@@ -22,16 +22,7 @@ set -eu
 export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 PLUGIN_MACOS_DIR="$(cd "$PODS_TARGET_SRCROOT" && pwd -P)"
-if [ -n "${ERIKA_ROOT:-}" ] && [ -f "$ERIKA_ROOT/Cargo.toml" ]; then
-  ERIKA_ROOT="$(cd "$ERIKA_ROOT" && pwd -P)"
-else
-  ERIKA_ROOT="$(cd "$PLUGIN_MACOS_DIR/../../.." && pwd -P)"
-fi
-if [ ! -f "$ERIKA_ROOT/Cargo.toml" ]; then
-  echo "error: cannot locate Erika source root (Cargo.toml) from $PLUGIN_MACOS_DIR" >&2
-  exit 1
-fi
-
+PACKAGE_ROOT="$(cd "$PLUGIN_MACOS_DIR/.." && pwd -P)"
 ERIKA_NATIVE_PROFILE="${ERIKA_NATIVE_PROFILE:-lgpl}"
 HOST_JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
@@ -94,43 +85,36 @@ if [ -z "$PREBUILT_ARCH" ]; then
   esac
 fi
 
-OUTPUT_DYLIB=""
-if [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ] && [ "${ERIKA_PREBUILT:-0}" = "1" ] && [ -z "${ERIKA_MACOS_CAPI_DYLIB:-}" ]; then
-  PREBUILT_TAG="${ERIKA_PREBUILT_TAG:-v0.1.6}"
-  PREBUILT_WORK="$ERIKA_ROOT/target/erika-prebuilt-macos-$PREBUILT_ARCH"
-  PREBUILT_ZIP="$PREBUILT_WORK/erika-capi-macos-$PREBUILT_ARCH.zip"
-  PREBUILT_URL="https://github.com/AimesSoft/Erika/releases/download/$PREBUILT_TAG/erika-capi-macos-$PREBUILT_ARCH.zip"
-  rm -rf "$PREBUILT_WORK"
-  mkdir -p "$PREBUILT_WORK"
-  echo "Erika: downloading prebuilt $PREBUILT_URL"
-  if curl -fSL --retry 3 -o "$PREBUILT_ZIP" "$PREBUILT_URL" && unzip -oq "$PREBUILT_ZIP" -d "$PREBUILT_WORK"; then
-    CAND="$(find "$PREBUILT_WORK" -type f -name 'liberika_capi.dylib' | head -1)"
-    if [ -n "$CAND" ]; then
-      OUTPUT_DYLIB="$CAND"
-      echo "Erika: using prebuilt $PREBUILT_TAG -> $CAND"
-    fi
-  fi
-  [ -n "$OUTPUT_DYLIB" ] || echo "Erika: prebuilt unavailable; building from source"
-fi
-
+SOURCE_DYLIB=""
 if [ -n "${ERIKA_MACOS_CAPI_DYLIB:-}" ]; then
-  OUTPUT_DYLIB="$ERIKA_MACOS_CAPI_DYLIB"
-elif [ -z "$OUTPUT_DYLIB" ]; then
+  SOURCE_DYLIB="$ERIKA_MACOS_CAPI_DYLIB"
+elif [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ]; then
+  sh "$PACKAGE_ROOT/native/prepare_apple_prebuilt.sh"     macos macos "$PREBUILT_ARCH" "$DEST_DYLIB"
+else
+  if [ -n "${ERIKA_REPO_ROOT:-}" ]; then
+    SOURCE_ROOT="$ERIKA_REPO_ROOT"
+  elif [ -n "${ERIKA_ROOT:-}" ]; then
+    SOURCE_ROOT="$ERIKA_ROOT"
+  else
+    SOURCE_ROOT="$(cd "$PACKAGE_ROOT/../.." && pwd -P)"
+  fi
+  if [ ! -f "$SOURCE_ROOT/crates/erika_capi/Cargo.toml" ]; then
+    echo "error: ERIKA_FORCE_SOURCE_BUILD=1 requires an Erika checkout; set ERIKA_REPO_ROOT" >&2
+    exit 1
+  fi
   if command -v rustup >/dev/null 2>&1; then
     rustup target add $RUST_TARGETS
   fi
   LIPO_INPUTS=""
   for RUST_TARGET in $RUST_TARGETS; do
-    DIST="$ERIKA_ROOT/third_party/dist/$RUST_TARGET/$ERIKA_NATIVE_PROFILE"
+    DIST="$SOURCE_ROOT/third_party/dist/$RUST_TARGET/$ERIKA_NATIVE_PROFILE"
     DAV1D_DIR="$DIST/dav1d"
-    DAV1D_MARKER="$ERIKA_ROOT/third_party/build/$RUST_TARGET/$ERIKA_NATIVE_PROFILE/dav1d/dav1d-built.txt"
+    DAV1D_MARKER="$SOURCE_ROOT/third_party/build/$RUST_TARGET/$ERIKA_NATIVE_PROFILE/dav1d/dav1d-built.txt"
     if [ ! -f "$DIST/ffmpeg/include/libavformat/avformat.h" ] || [ ! -f "$DAV1D_DIR/include/dav1d/dav1d.h" ] || [ ! -f "$DAV1D_DIR/lib/libdav1d.a" ] || [ ! -f "$DAV1D_MARKER" ] || ! grep -qx 'dav1d=1.5.1' "$DAV1D_MARKER" || [ ! -f "$DIST/libass/lib/libass.a" ]; then
-      echo "Building Erika native dependencies for $RUST_TARGET ($ERIKA_NATIVE_PROFILE, with libass)"
-      (cd "$ERIKA_ROOT" && cargo run -p xtask -- deps build --all --profile "$ERIKA_NATIVE_PROFILE" --target "$RUST_TARGET" --jobs "$HOST_JOBS")
+      (cd "$SOURCE_ROOT" && cargo run -p xtask -- deps build --all --profile "$ERIKA_NATIVE_PROFILE" --target "$RUST_TARGET" --jobs "$HOST_JOBS")
     fi
-    echo "Building Erika C ABI dylib for $RUST_TARGET ($CARGO_PROFILE)"
-    (cd "$ERIKA_ROOT" && ERIKA_NATIVE_PROFILE="$ERIKA_NATIVE_PROFILE" ERIKA_NATIVE_TARGET="$RUST_TARGET" ERIKA_FFMPEG_DIR="$DIST/ffmpeg" ERIKA_DAV1D_DIR="$DAV1D_DIR" ERIKA_LIBASS_DIR="$DIST/libass" ERIKA_FREETYPE_DIR="$DIST/freetype" ERIKA_HARFBUZZ_DIR="$DIST/harfbuzz" ERIKA_FRIBIDI_DIR="$DIST/fribidi" cargo build -p erika_capi --target "$RUST_TARGET" --no-default-features --features libass $CARGO_ARGS)
-    ARCH_DYLIB="$ERIKA_ROOT/target/$RUST_TARGET/$CARGO_PROFILE/liberika_capi.dylib"
+    (cd "$SOURCE_ROOT" && ERIKA_NATIVE_PROFILE="$ERIKA_NATIVE_PROFILE" ERIKA_NATIVE_TARGET="$RUST_TARGET" ERIKA_FFMPEG_DIR="$DIST/ffmpeg" ERIKA_DAV1D_DIR="$DAV1D_DIR" ERIKA_LIBASS_DIR="$DIST/libass" ERIKA_FREETYPE_DIR="$DIST/freetype" ERIKA_HARFBUZZ_DIR="$DIST/harfbuzz" ERIKA_FRIBIDI_DIR="$DIST/fribidi" cargo build -p erika_capi --target "$RUST_TARGET" --no-default-features --features libass $CARGO_ARGS)
+    ARCH_DYLIB="$SOURCE_ROOT/target/$RUST_TARGET/$CARGO_PROFILE/liberika_capi.dylib"
     if [ ! -f "$ARCH_DYLIB" ]; then
       echo "error: $ARCH_DYLIB was not produced by the Erika build" >&2
       exit 1
@@ -138,20 +122,25 @@ elif [ -z "$OUTPUT_DYLIB" ]; then
     LIPO_INPUTS="$LIPO_INPUTS $ARCH_DYLIB"
   done
   if [ "$(printf '%s\n' $RUST_TARGETS | wc -l | xargs)" = "1" ]; then
-    OUTPUT_DYLIB="$ARCH_DYLIB"
+    SOURCE_DYLIB="$ARCH_DYLIB"
   else
-    OUTPUT_DYLIB="$ERIKA_ROOT/target/erika-macos-universal/liberika_capi.dylib"
-    mkdir -p "$(dirname "$OUTPUT_DYLIB")"
-    lipo -create $LIPO_INPUTS -output "$OUTPUT_DYLIB"
+    SOURCE_DYLIB="$SOURCE_ROOT/target/erika-macos-universal/liberika_capi.dylib"
+    mkdir -p "$(dirname "$SOURCE_DYLIB")"
+    lipo -create $LIPO_INPUTS -output "$SOURCE_DYLIB"
   fi
 fi
 
-if [ ! -f "$OUTPUT_DYLIB" ]; then
-  echo "error: Erika C ABI dylib not found: $OUTPUT_DYLIB" >&2
+if [ -n "$SOURCE_DYLIB" ]; then
+  if [ ! -f "$SOURCE_DYLIB" ]; then
+    echo "error: Erika C ABI dylib not found: $SOURCE_DYLIB" >&2
+    exit 1
+  fi
+  cp "$SOURCE_DYLIB" "$DEST_DYLIB"
+fi
+if [ ! -f "$DEST_DYLIB" ]; then
+  echo "error: Erika C ABI dylib not found: $DEST_DYLIB" >&2
   exit 1
 fi
-
-cp "$OUTPUT_DYLIB" "$DEST_DYLIB"
 install_name_tool -id "@rpath/liberika_capi.dylib" "$DEST_DYLIB"
 codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" "$DEST_DYLIB"
     SCRIPT

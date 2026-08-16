@@ -37,9 +37,9 @@ cargo build -p erika_capi
 
 ## 预构建包与源码构建
 
-设置 `ERIKA_PREBUILT=1` 可从 GitHub Release 下载预构建原生库，`ERIKA_PREBUILT_TAG=v0.1.6` 用于固定与当前插件源码匹配的 Release tag。下载或解压失败时会回退源码构建。调试本地源码时设置 `ERIKA_FORCE_SOURCE_BUILD=1` 强制绕过预构建包。完整包名和发布方式见 [releasing.zh.md](../../docs/releasing.zh.md)。
+插件默认下载与当前版本对应的 `v0.1.6` 原生库，并校验 SHA-256。下载失败或校验不一致会明确报错，不会静默回退源码构建。只有在 Erika checkout 中调试源码时才设置 `ERIKA_FORCE_SOURCE_BUILD=1`。自定义 `ERIKA_PREBUILT_TAG` 时必须同时提供对应的 `ERIKA_PREBUILT_SHA256`。完整发布方式见 [发布指南](https://github.com/AimesSoft/Erika/blob/main/docs/releasing.zh.md)。
 
-源码构建时，macOS 使用 `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`，Windows 使用 `ERIKA_WINDOWS_ARCH=x64|arm64`，Android 使用 `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86`。直接构建原生库时，`xtask --target`、`ERIKA_NATIVE_TARGET` 和 `cargo build --target` 必须使用同一个 target。详细示例见 [building.zh.md](../../docs/building.zh.md)。
+源码构建时，macOS 使用 `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`，Windows 使用 `ERIKA_WINDOWS_ARCH=x64|arm64`，Android 使用 `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86`。直接构建原生库时，`xtask --target`、`ERIKA_NATIVE_TARGET` 和 `cargo build --target` 必须使用同一个 target。详细示例见 [构建指南](https://github.com/AimesSoft/Erika/blob/main/docs/building.zh.md)。
 
 ## iOS Setup
 
@@ -187,10 +187,9 @@ Android 最低版本仍为 API 26。Extended-linear 还要求 native-window data
 
 ## HarmonyOS Setup
 
-HarmonyOS 模块需要 DevEco Studio 的 OpenHarmony Native SDK。设置
-`ERIKA_PREBUILT=1` 后，CMake 会从指定 Release 下载 `liberika_capi.so`，并与
-`liberika_flutter.so` 一起打包；否则需要 Rust 的 `aarch64-unknown-linux-ohos`
-target，并从源码构建 LGPL 原生依赖和 runtime。下载失败会自动回退源码构建。
+HarmonyOS 模块需要 DevEco Studio 的 OpenHarmony Native SDK。CMake 默认下载并校验
+`liberika_capi.so`，再与 `liberika_flutter.so` 一起打包。只有显式设置
+`ERIKA_FORCE_SOURCE_BUILD=1` 时才需要 Rust 的 `aarch64-unknown-linux-ohos` target。
 
 HarmonyOS 使用 AVSession 发布媒体元数据、封面、播放状态、进度和倍速，并接收系统播放、暂停、停止及进度调整命令。
 

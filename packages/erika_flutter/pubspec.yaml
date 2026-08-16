@@ -1,7 +1,21 @@
 name: erika_flutter
-description: Flutter embedder glue for the Erika Rust media engine.
+description: Cross-platform Flutter media player powered by Erika, with hardware decoding, HDR video, ASS subtitles, danmaku, and system media controls.
 version: 0.1.6
+# Kept as a release safety latch while standalone package validation is being
+# added. Remove only in the final version/tag publication change.
 publish_to: none
+
+homepage: https://github.com/AimesSoft/Erika
+repository: https://github.com/AimesSoft/Erika
+issue_tracker: https://github.com/AimesSoft/Erika/issues
+documentation: https://github.com/AimesSoft/Erika/tree/main/docs
+
+topics:
+  - video-player
+  - media-player
+  - ffmpeg
+  - rust
+  - hdr
 
 environment:
   sdk: ">=3.5.0 <4.0.0"

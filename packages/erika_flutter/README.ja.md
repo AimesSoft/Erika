@@ -37,9 +37,9 @@ cargo build -p erika_capi
 
 ## Prebuilt package と source build
 
-`ERIKA_PREBUILT=1` を設定すると GitHub Release から prebuilt native library を取得します。`ERIKA_PREBUILT_TAG=v0.1.6` で plugin source と一致する Release tag を固定してください。download または展開に失敗した場合は source build に fallback します。local source を debug するときは `ERIKA_FORCE_SOURCE_BUILD=1` で prebuilt を無効化します。package 名と release 手順は [releasing.ja.md](../../docs/releasing.ja.md) を参照してください。
+plugin は既定で現在の version に対応する `v0.1.6` native library を download し、SHA-256 を検証します。download または検証の失敗は明示的な error になり、source build へ暗黙に fallback しません。Erika checkout の local source を debug するときだけ `ERIKA_FORCE_SOURCE_BUILD=1` を設定してください。custom `ERIKA_PREBUILT_TAG` には対応する `ERIKA_PREBUILT_SHA256` も必要です。詳細は [release guide](https://github.com/AimesSoft/Erika/blob/main/docs/releasing.ja.md) を参照してください。
 
-source build の architecture は macOS では `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`、Windows では `ERIKA_WINDOWS_ARCH=x64|arm64`、Android では `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86` で選択します。native library を直接 build する場合、`xtask --target`、`ERIKA_NATIVE_TARGET`、`cargo build --target` は同じ target にしてください。詳細は [building.ja.md](../../docs/building.ja.md) を参照してください。
+source build の architecture は macOS では `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`、Windows では `ERIKA_WINDOWS_ARCH=x64|arm64`、Android では `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86` で選択します。native library を直接 build する場合、`xtask --target`、`ERIKA_NATIVE_TARGET`、`cargo build --target` は同じ target にしてください。詳細は [build guide](https://github.com/AimesSoft/Erika/blob/main/docs/building.ja.md) を参照してください。
 
 macOS plugin は Now Playing を通じてタイトル、アーティスト、アルバム、artwork、再生状態、timeline を公開し、Remote Command Center からの再生、一時停止、停止、seek を処理します。
 
@@ -193,11 +193,10 @@ output status を更新します。API 35 では host の global Window を変�
 
 ## HarmonyOS Setup
 
-HarmonyOS module には DevEco Studio の OpenHarmony Native SDK が必要です。
-`ERIKA_PREBUILT=1` の場合、CMake は指定 Release から `liberika_capi.so` を
-download して `liberika_flutter.so` と一緒に package します。それ以外では Rust
-の `aarch64-unknown-linux-ohos` target が必要で、LGPL native dependency と runtime
-を source build します。download 失敗時は source build に fallback します。
+HarmonyOS module には DevEco Studio の OpenHarmony Native SDK が必要です。CMake は
+既定で `liberika_capi.so` を download、検証し、`liberika_flutter.so` と一緒に package
+します。Rust の `aarch64-unknown-linux-ohos` target は
+`ERIKA_FORCE_SOURCE_BUILD=1` を明示した source build でのみ必要です。
 
 HarmonyOS は AVSession を通じて metadata、artwork、再生状態、位置、再生速度を公開し、system の再生、一時停止、停止、seek command を処理します。
 
