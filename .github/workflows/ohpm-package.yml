@@ -80,9 +80,9 @@ jobs:
           set -euo pipefail
           npm config set @ohos:registry https://repo.harmonyos.com/npm/
           npm install --no-save --package-lock=false \
-            @ohos/hvigor@5 \
-            @ohos/hvigor-ohos-plugin@5
-          ./node_modules/.bin/hvigor --version
+            @ohos/hvigor@5.19.8 \
+            @ohos/hvigor-ohos-plugin@5.19.8
+          node node_modules/@ohos/hvigor/bin/hvigor.js --version
 
       - name: Build the HAR with Hvigor
         working-directory: packages/erika_ohos
@@ -92,7 +92,7 @@ jobs:
           OHOS_SDK_HOME: ${{ steps.ohos_sdk.outputs.ohos-base-sdk-home }}
         run: |
           set -euo pipefail
-          ./node_modules/.bin/hvigor \
+          node node_modules/@ohos/hvigor/bin/hvigor.js \
             --mode module \
             -p product=default \
             -p buildMode=release \
