@@ -1,0 +1,6 @@
+.hvigor/
+.ohpm/
+build/
+libs/
+src/main/cpp/liberika_capi.so
+*.tgz

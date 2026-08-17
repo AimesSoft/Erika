@@ -1,0 +1,14 @@
+{
+  "name": "@aimesoft/erika",
+  "version": "0.1.7",
+  "description": "Native ArkTS media SDK powered by the Erika engine",
+  "main": "Index.ets",
+  "author": "AimesSoft",
+  "license": "MPL-2.0",
+  "keywords": [
+    "media",
+    "video-player",
+    "harmonyos",
+    "openharmony"
+  ]
+}

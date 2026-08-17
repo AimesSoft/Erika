@@ -1,0 +1,129 @@
+name: OpenHarmony ArkTS SDK
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/ohpm-package.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/erika_capi/include/**"
+      - "packages/erika_ohos/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ohpm-package.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/erika_capi/include/**"
+      - "packages/erika_ohos/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ohpm-package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ERIKA_NATIVE_VERSION: "0.1.7"
+  ERIKA_NATIVE_SHA256: "492afbab9ae9f20f55ce6ae2212094ece6f6c0cca1bee96ddffc175068afa396"
+
+jobs:
+  package:
+    name: Build ArkTS package (OpenHarmony arm64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: openharmony-rs/setup-ohos-sdk@b312caf8a43bb836aa24c08f65f97e1f09a89cad
+        id: ohos_sdk
+        with:
+          version: "5.1.0"
+          components: native
+          cache: true
+
+      - name: Install native package tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build unzip
+
+      - name: Download and verify the matching Erika runtime
+        shell: bash
+        env:
+          NATIVE_ROOT: ${{ steps.ohos_sdk.outputs.ohos_sdk_native }}
+        run: |
+          set -euo pipefail
+          runtime_dir="$RUNNER_TEMP/erika-runtime"
+          mkdir -p "$runtime_dir" packages/erika_ohos/src/main/cpp
+          runtime_zip="$runtime_dir/erika-capi-openharmony-arm64.zip"
+          curl --fail --location --retry 5 --retry-all-errors \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${ERIKA_NATIVE_VERSION}/erika-capi-openharmony-arm64.zip" \
+            --output "$runtime_zip"
+          printf '%s  %s\n' "$ERIKA_NATIVE_SHA256" "$runtime_zip" | sha256sum --check
+          unzip -q "$runtime_zip" -d "$runtime_dir/unpacked"
+          runtime="$(find "$runtime_dir/unpacked" -type f -name liberika_capi.so -print -quit)"
+          test -n "$runtime"
+          cp "$runtime" packages/erika_ohos/src/main/cpp/liberika_capi.so
+          test -f packages/erika_ohos/src/main/cpp/liberika_capi.so
+
+      - name: Build the N-API bridge
+        shell: bash
+        env:
+          OHOS_SDK_NATIVE: ${{ steps.ohos_sdk.outputs.ohos_sdk_native }}
+        run: |
+          set -euo pipefail
+          cmake -S packages/erika_ohos/src/main/cpp \
+            -B "$RUNNER_TEMP/erika-ohos-bridge" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$OHOS_SDK_NATIVE/build/cmake/ohos.toolchain.cmake" \
+            -DOHOS_SDK_NATIVE="$OHOS_SDK_NATIVE"
+          cmake --build "$RUNNER_TEMP/erika-ohos-bridge" --target erika_ohos
+
+      - name: Assemble and validate the OHPM archive
+        shell: bash
+        env:
+          OHOS_SDK_NATIVE: ${{ steps.ohos_sdk.outputs.ohos_sdk_native }}
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/erika-ohos-package/package"
+          mkdir -p "$stage/src/main/ets" "$stage/src/main" "$stage/libs/arm64-v8a"
+          cp packages/erika_ohos/oh-package.json5 "$stage/"
+          cp packages/erika_ohos/Index.ets "$stage/"
+          cp packages/erika_ohos/build-profile.json5 packages/erika_ohos/hvigorfile.ts "$stage/"
+          cp packages/erika_ohos/src/main/module.json5 "$stage/src/main/"
+          cp packages/erika_ohos/src/main/ets/ErikaPlayer.ets "$stage/src/main/ets/"
+          cp packages/erika_ohos/README.md packages/erika_ohos/LICENSE \
+            packages/erika_ohos/CHANGELOG.md packages/erika_ohos/THIRD_PARTY_NOTICES.md "$stage/"
+          bridge="$(find "$RUNNER_TEMP/erika-ohos-bridge" -type f -name liberika_ohos.so -print -quit)"
+          test -n "$bridge"
+          cp "$bridge" "$stage/libs/arm64-v8a/liberika_ohos.so"
+          cp packages/erika_ohos/src/main/cpp/liberika_capi.so \
+            "$stage/libs/arm64-v8a/liberika_capi.so"
+
+          package_archive="$RUNNER_TEMP/erika-0.1.7.tgz"
+          tar -czf "$package_archive" -C "$RUNNER_TEMP/erika-ohos-package" package
+          tar -tzf "$package_archive" | tee "$RUNNER_TEMP/erika-contents.txt"
+          for required in \
+            package/oh-package.json5 \
+            package/Index.ets \
+            package/LICENSE \
+            package/CHANGELOG.md \
+            package/THIRD_PARTY_NOTICES.md \
+            package/libs/arm64-v8a/liberika_ohos.so \
+            package/libs/arm64-v8a/liberika_capi.so; do
+            grep -Fxq "$required" "$RUNNER_TEMP/erika-contents.txt"
+          done
+
+          readelf="$OHOS_SDK_NATIVE/llvm/bin/llvm-readelf"
+          "$readelf" -h "$stage/libs/arm64-v8a/liberika_ohos.so" | grep -Eq 'Machine:.*AArch64'
+          "$readelf" -h "$stage/libs/arm64-v8a/liberika_capi.so" | grep -Eq 'Machine:.*AArch64'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erika-ohos-0.1.7
+          path: ${{ runner.temp }}/erika-0.1.7.tgz
+          if-no-files-found: error
