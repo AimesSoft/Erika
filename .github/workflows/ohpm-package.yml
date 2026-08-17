@@ -8,6 +8,7 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "crates/erika_capi/include/**"
+      - "examples/ohos_arkts/**"
       - "packages/erika_ohos/**"
   push:
     branches: [main]
@@ -16,6 +17,7 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "crates/erika_capi/include/**"
+      - "examples/ohos_arkts/**"
       - "packages/erika_ohos/**"
   workflow_dispatch:
 
@@ -85,16 +87,18 @@ jobs:
           node node_modules/@ohos/hvigor/bin/hvigor.js --version
 
       - name: Build the HAR with Hvigor
-        working-directory: packages/erika_ohos
+        working-directory: examples/ohos_arkts
         shell: bash
         env:
           DEVECO_SDK_HOME: ${{ steps.ohos_sdk.outputs.ohos-base-sdk-home }}
           OHOS_SDK_HOME: ${{ steps.ohos_sdk.outputs.ohos-base-sdk-home }}
         run: |
           set -euo pipefail
+          ln -s "$GITHUB_WORKSPACE/packages/erika_ohos/node_modules" node_modules
           node node_modules/@ohos/hvigor/bin/hvigor.js \
             --mode module \
             -p product=default \
+            -p module=erika@default \
             -p buildMode=release \
             assembleHar \
             --no-daemon
