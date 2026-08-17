@@ -1,6 +1,10 @@
 .hvigor/
 .ohpm/
 build/
+node_modules/
+oh_modules/
+package-lock.json
+oh-package-lock.json5
 libs/
 src/main/cpp/liberika_capi.so
 *.tgz
