@@ -3,7 +3,11 @@
   "version": "0.1.7",
   "description": "Native ArkTS media SDK powered by the Erika engine",
   "main": "Index.ets",
-  "author": "AimesSoft",
+  "author": {
+    "name": "AIMESSOFT",
+    "url": "https://github.com/AimesSoft/Erika",
+    "email": "dev@aimesoft.com"
+  },
   "license": "MPL-2.0",
   "keywords": [
     "media",
