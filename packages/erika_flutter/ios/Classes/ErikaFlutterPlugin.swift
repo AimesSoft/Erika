@@ -1986,11 +1986,13 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
   private var pollTimer: Timer?
   private var activePlayerId: Int64?
   private var interruptedPlayerId: Int64?
+  private var interruptionResumeWorkItem: DispatchWorkItem?
   private var notificationObservers: [NSObjectProtocol] = []
   private var remoteCommandTargets: [(MPRemoteCommand, Any)] = []
   private var systemMediaNavigation: [Int64: (previousEnabled: Bool, nextEnabled: Bool)] = [:]
 
   deinit {
+    interruptionResumeWorkItem?.cancel()
     notificationObservers.forEach(NotificationCenter.default.removeObserver)
     remoteCommandTargets.forEach { command, target in
       command.removeTarget(target)
@@ -2017,6 +2019,11 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         let playerId = try requiredInt64(args["playerId"], name: "playerId")
         players.removeValue(forKey: playerId)
         systemMediaNavigation.removeValue(forKey: playerId)
+        if interruptedPlayerId == playerId {
+          interruptionResumeWorkItem?.cancel()
+          interruptionResumeWorkItem = nil
+          interruptedPlayerId = nil
+        }
         if activePlayerId == playerId {
           activePlayerId = nil
           clearNowPlayingInfo()
@@ -2744,20 +2751,57 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
           let type = AVAudioSession.InterruptionType(rawValue: rawType),
           let host = activePlayerId.flatMap({ players[$0] }) else { return }
     if type == .began {
+      interruptionResumeWorkItem?.cancel()
+      interruptionResumeWorkItem = nil
       interruptedPlayerId = host.isPlaying ? host.id : nil
       if host.isPlaying {
-        try? host.pause()
+        do {
+          try host.pause()
+        } catch {
+          NSLog("ErikaFlutterPlugin: audio interruption pause failed: \(error)")
+        }
       }
       return
     }
     guard let rawOptions = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt,
           AVAudioSession.InterruptionOptions(rawValue: rawOptions).contains(.shouldResume),
           interruptedPlayerId == host.id else {
+      interruptionResumeWorkItem?.cancel()
+      interruptionResumeWorkItem = nil
       interruptedPlayerId = nil
       return
     }
-    interruptedPlayerId = nil
-    try? host.play()
+    resumeInterruptedPlayback(host, attempt: 0)
+  }
+
+  private func resumeInterruptedPlayback(_ host: ErikaPlayerHost, attempt: Int) {
+    guard interruptedPlayerId == host.id, activePlayerId == host.id else { return }
+    do {
+      // ErikaPlayerHost.play() configures the playback category and calls
+      // setActive(true) before sending the native play command.
+      try host.play()
+      interruptionResumeWorkItem = nil
+      interruptedPlayerId = nil
+    } catch {
+      let maxAttempts = 3
+      guard attempt < maxAttempts else {
+        interruptionResumeWorkItem = nil
+        interruptedPlayerId = nil
+        NSLog("ErikaFlutterPlugin: audio interruption resume failed after \(maxAttempts + 1) attempts: \(error)")
+        return
+      }
+      NSLog("ErikaFlutterPlugin: audio interruption resume attempt \(attempt + 1) failed: \(error)")
+      let workItem = DispatchWorkItem { [weak self, weak host] in
+        guard let self, let host else { return }
+        self.interruptionResumeWorkItem = nil
+        self.resumeInterruptedPlayback(host, attempt: attempt + 1)
+      }
+      interruptionResumeWorkItem = workItem
+      DispatchQueue.main.asyncAfter(
+        deadline: .now() + .milliseconds(100),
+        execute: workItem
+      )
+    }
   }
 
   private func presenterConfigForNewPlayer(arguments: Any?, hdrDebug: Bool) -> ErikaPresenterConfigC {

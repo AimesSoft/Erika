@@ -293,6 +293,7 @@ pub struct PresenterRuntime {
     playback_rate: f64,
     pending_playback_rate: Option<PendingPlaybackRate>,
     audio_only_tick_active: bool,
+    resume_pending: bool,
     latest_video_decoder: Option<VideoDecoderEvent>,
     current_overlay: Option<OverlayFrame>,
     debug_hud: DebugHud,
@@ -689,6 +690,7 @@ impl PresenterRuntime {
             playback_rate: 1.0,
             pending_playback_rate: None,
             audio_only_tick_active: false,
+            resume_pending: false,
             latest_video_decoder: None,
             current_overlay: None,
             debug_hud: DebugHud::new(),
@@ -815,6 +817,7 @@ impl PresenterRuntime {
 
     pub fn open(&mut self, media: MediaRequest) -> Result<()> {
         self.quiesce_frame_output("open")?;
+        self.reset_video_decode_resume_state();
         self.reset_audio_output_with_committed_rate();
         self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
         self.drain_pending_player_frames();
@@ -835,6 +838,7 @@ impl PresenterRuntime {
 
     pub fn play(&mut self) -> Result<()> {
         if self.player.is_stopped_at_end() {
+            self.reset_video_decode_resume_state();
             self.reset_audio_output_with_committed_rate();
             self.drain_pending_player_frames();
             self.bump_danmaku_generation();
@@ -879,6 +883,7 @@ impl PresenterRuntime {
     pub fn stop(&mut self) -> Result<()> {
         let quiesced = self.quiesce_frame_output("stop")?;
         let result = self.player.stop();
+        self.reset_video_decode_resume_state();
         self.reset_audio_output_with_committed_rate();
         self.bump_danmaku_generation();
         self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
@@ -888,6 +893,7 @@ impl PresenterRuntime {
 
     pub fn close(&mut self) -> Result<()> {
         self.quiesce_frame_output("close")?;
+        self.reset_video_decode_resume_state();
         self.reset_audio_output_with_committed_rate();
         self.bump_danmaku_generation();
         self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
@@ -1342,9 +1348,25 @@ impl PresenterRuntime {
 
     pub fn render_tick(&mut self, time_seconds: f64) -> Result<PresenterStats> {
         if self.audio_only_tick_active {
-            self.discard_pending_video_frames();
-            self.player.set_video_decode_suspended(false)?;
-            self.audio_only_tick_active = false;
+            if self.resume_pending {
+                self.try_resume_video_decode();
+            } else {
+                // Returning to the foreground can race the layer's first
+                // drawable. Arm the resume on this tick and let a later tick
+                // perform the decoder seek/flush after the surface is ready.
+                self.discard_pending_video_frames();
+                self.resume_pending = true;
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "player_video_decode",
+                        "stage": "resume_pending",
+                        "reason": "foreground_render_tick",
+                    })
+                    .to_string(),
+                );
+            }
+        } else {
+            self.resume_pending = false;
         }
         let tick_started = Instant::now();
         self.commit_pending_playback_rate()?;
@@ -1445,6 +1467,13 @@ impl PresenterRuntime {
                 self.current_surface_metrics
                     .map_or(0, |metrics| metrics.physical_extent.height),
             );
+        if self.resume_pending && !self.surface_is_ready() {
+            self.last_render_duration = Duration::ZERO;
+            self.last_render_current_duration = Duration::ZERO;
+            self.last_render_test_duration = Duration::ZERO;
+            self.last_tick_duration = tick_started.elapsed();
+            return Ok(self.stats);
+        }
         let render_started = Instant::now();
         let render_result = self.renderer.render_current_frame(context);
         self.last_render_current_duration = render_started.elapsed();
@@ -1521,6 +1550,10 @@ impl PresenterRuntime {
     pub fn audio_only_tick(&mut self) -> Result<PresenterStats> {
         let tick_started = Instant::now();
         self.commit_pending_playback_rate()?;
+        // A background tick starts a new foreground-resume window. If a
+        // previous foreground attempt failed, do not carry its pending flag
+        // into the next foreground frame.
+        self.resume_pending = false;
         if !self.audio_only_tick_active {
             self.player.set_video_decode_suspended(true)?;
             self.discard_pending_video_frames();
@@ -1548,6 +1581,57 @@ impl PresenterRuntime {
 
     fn discard_pending_video_frames(&self) {
         while self.video_frames.try_recv().is_ok() {}
+    }
+
+    fn reset_video_decode_resume_state(&mut self) {
+        self.audio_only_tick_active = false;
+        self.resume_pending = false;
+    }
+
+    fn surface_is_ready(&self) -> bool {
+        let Some(metrics) = self.current_surface_metrics else {
+            return false;
+        };
+        let renderer = self.renderer.runtime_stats();
+        metrics.physical_extent.width > 0
+            && metrics.physical_extent.height > 0
+            && renderer.attached
+            && renderer.surface_width > 0
+            && renderer.surface_height > 0
+    }
+
+    fn try_resume_video_decode(&mut self) {
+        if !self.surface_is_ready() {
+            return;
+        }
+
+        self.discard_pending_video_frames();
+        match self.player.set_video_decode_suspended(false) {
+            Ok(_) => {
+                self.audio_only_tick_active = false;
+                self.resume_pending = false;
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "player_video_decode",
+                        "stage": "resumed_at_keyframe",
+                    })
+                    .to_string(),
+                );
+            }
+            Err(error) => {
+                // A worker timeout or transient lifecycle race must not turn
+                // the render loop into a terminal C ABI error. Keep both
+                // flags set so the next display tick retries the transition.
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "player_video_decode",
+                        "stage": "resume_retry_pending",
+                        "reason": error.to_string(),
+                    })
+                    .to_string(),
+                );
+            }
+        }
     }
 
     fn debug_hud_snapshot(&self) -> DebugHudSnapshot {
@@ -4656,6 +4740,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             presenter.runtime_snapshot().last_render_test_duration,
             Duration::ZERO
         );
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu")]
+    fn foreground_tick_keeps_video_resume_pending_until_surface_is_ready() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        presenter.audio_only_tick_active = true;
+
+        presenter.render_tick(0.0).unwrap();
+        assert!(presenter.audio_only_tick_active);
+        assert!(presenter.resume_pending);
+
+        presenter.render_tick(0.016).unwrap();
+        assert!(presenter.audio_only_tick_active);
+        assert!(presenter.resume_pending);
+
+        presenter.audio_only_tick().unwrap();
+        assert!(presenter.audio_only_tick_active);
+        assert!(!presenter.resume_pending);
     }
 
     #[test]

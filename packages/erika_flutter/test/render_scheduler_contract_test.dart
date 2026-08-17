@@ -70,6 +70,18 @@ void main() {
     });
   }
 
+  test('iOS retries audio-session activation after an allowed interruption', () {
+    final plugin = File(
+      'ios/Classes/ErikaFlutterPlugin.swift',
+    ).readAsStringSync();
+
+    expect(plugin, contains('AVAudioSession.interruptionNotification'));
+    expect(plugin, contains('try session.setActive(true)'));
+    expect(plugin, contains('private func resumeInterruptedPlayback'));
+    expect(plugin, contains('interruptionResumeWorkItem'));
+    expect(plugin, contains('guard attempt < maxAttempts else'));
+  });
+
   test('Android polls events on the presenter thread with adaptive scheduling', () {
     final plugin = File(
       'android/src/main/kotlin/dev/aimesoft/erika_flutter/'

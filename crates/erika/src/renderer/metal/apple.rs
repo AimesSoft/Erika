@@ -703,7 +703,7 @@ impl MetalRendererImpl {
             let Some(drawable): Option<Retained<ProtocolObject<dyn CAMetalDrawable>>> =
                 layer.nextDrawable()
             else {
-                return Err(PlayerError::Renderer(
+                return Err(PlayerError::RendererBackpressure(
                     "CAMetalLayer nextDrawable returned nil".to_string(),
                 ));
             };

@@ -803,6 +803,18 @@ impl RendererBackend for MetalRenderer {
             danmaku.map(DanmakuRenderFrame::new),
         );
         self.current_frame = Some(frame);
+        let rendered = match result {
+            Ok(()) => Ok(true),
+            Err(PlayerError::RendererBackpressure(reason)) => {
+                if trace::enabled() {
+                    trace::log(format!(
+                        "[erika-render-trace] stage=render_current_frame skipped reason={reason}"
+                    ));
+                }
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        };
         if trace::enabled() {
             trace::log(format!(
                 "[erika-render-trace] stage=render_current_frame gen={} media={} output={}x{} danmaku={} elapsed_ms={:.3} result={}",
@@ -812,10 +824,10 @@ impl RendererBackend for MetalRenderer {
                 context.output_height,
                 danmaku.as_ref().map_or(0, |plan| plan.items.len()),
                 started.elapsed().as_secs_f64() * 1000.0,
-                result.is_ok(),
+                rendered.as_ref().is_ok_and(|rendered| *rendered),
             ));
         }
-        result.map(|()| true)
+        rendered
     }
 
     fn capture_current_frame(
