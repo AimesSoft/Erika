@@ -3,8 +3,8 @@
     "products": [
       {
         "name": "default",
-        "targetSdkVersion": "5.1.0(18)",
-        "compatibleSdkVersion": "5.1.0(18)",
+        "compileSdkVersion": 18,
+        "compatibleSdkVersion": 18,
         "runtimeOS": "OpenHarmony"
       }
     ],
