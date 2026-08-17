@@ -1,4 +1,4 @@
-# @aimesoft/erika
+# erika
 
 Native ArkTS/HarmonyOS SDK powered by Erika. This package is independent of
 Flutter and exposes the Erika presenter through an ArkTS-friendly API.
@@ -9,7 +9,7 @@ provides an `XComponent` surface id through `attachSurface()` and drives
 `renderTick()` from its frame scheduler.
 
 ```ts
-import { ErikaPlayer } from '@aimesoft/erika';
+import { ErikaPlayer } from 'erika';
 
 const player = new ErikaPlayer();
 const surfaceId = BigInt(xComponentController.getXComponentSurfaceId());
