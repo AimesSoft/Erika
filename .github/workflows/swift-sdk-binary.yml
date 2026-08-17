@@ -1,0 +1,99 @@
+name: Swift SDK Binary
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/swift-sdk-binary.yml"
+      - "packaging/build_swift_xcframework.sh"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing Erika native release version
+        required: true
+        default: "0.1.7"
+        type: string
+      upload:
+        description: Attach the Swift XCFramework to the existing release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Assemble Apple XCFramework
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version || '0.1.7' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download existing Apple release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloads output
+          gh release download "v${VERSION}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir downloads \
+            --pattern SHA256SUMS \
+            --pattern erika-capi-macos-universal.zip \
+            --pattern erika-capi-ios.zip \
+            --pattern erika-capi-tvos.zip
+
+      - name: Verify release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd downloads
+          for archive in \
+            erika-capi-macos-universal.zip \
+            erika-capi-ios.zip \
+            erika-capi-tvos.zip
+          do
+            expected="$(awk -v file="$archive" '$2 == file { print $1 }' SHA256SUMS)"
+            test -n "$expected"
+            printf '%s  %s\n' "$expected" "$archive" | shasum -a 256 --check
+          done
+
+      - name: Assemble SwiftPM binary target
+        id: binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="output/erika-swift-core-${VERSION}.xcframework.zip"
+          bash packaging/build_swift_xcframework.sh downloads "$archive"
+          checksum="$(swift package compute-checksum "$archive")"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Erika Swift core ${VERSION}"
+            echo
+            echo "SwiftPM checksum: \`$checksum\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erika-swift-core-${{ env.VERSION }}
+          path: ${{ steps.binary.outputs.archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Attach binary target to the native release
+        if: github.event_name == 'workflow_dispatch' && inputs.upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="${{ steps.binary.outputs.archive }}"
+          name="$(basename "$archive")"
+          existing="$(gh release view "v${VERSION}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json assets \
+            --jq ".assets[] | select(.name == \"$name\") | .name")"
+          test -z "$existing"
+          gh release upload "v${VERSION}" "$archive" --repo "$GITHUB_REPOSITORY"
