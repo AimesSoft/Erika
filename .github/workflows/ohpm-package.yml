@@ -1,0 +1,292 @@
+name: OpenHarmony ArkTS SDK
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/ohpm-package.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/erika_capi/include/**"
+      - "examples/ohos_arkts/**"
+      - "packages/erika_ohos/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ohpm-package.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/erika_capi/include/**"
+      - "examples/ohos_arkts/**"
+      - "packages/erika_ohos/**"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the validated HAR to OHPM
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ohpm-package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ERIKA_NATIVE_VERSION: "0.1.7"
+  ERIKA_NATIVE_SHA256: "492afbab9ae9f20f55ce6ae2212094ece6f6c0cca1bee96ddffc175068afa396"
+  OHPM_CLI_URL: "https://repo.huaweicloud.com/harmonyos/ohpm/5.1.0/commandline-tools-linux-x64-5.1.0.840.zip"
+  OHPM_CLI_SHA256: "1dcefa4741dc289277560b2802040e0c45b433898d8db453d711d5376e0478f1"
+
+jobs:
+  package:
+    name: Build ArkTS package (OpenHarmony arm64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: openharmony-rs/setup-ohos-sdk@b312caf8a43bb836aa24c08f65f97e1f09a89cad
+        id: ohos_sdk
+        with:
+          version: "5.1.0"
+          components: "native;ets;js;toolchains;previewer"
+          fixup-path: true
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install native package tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build unzip
+
+      - name: Download and verify the matching Erika runtime
+        shell: bash
+        env:
+          NATIVE_ROOT: ${{ steps.ohos_sdk.outputs.ohos_sdk_native }}
+        run: |
+          set -euo pipefail
+          runtime_dir="$RUNNER_TEMP/erika-runtime"
+          mkdir -p "$runtime_dir" packages/erika_ohos/src/main/cpp
+          runtime_zip="$runtime_dir/erika-capi-openharmony-arm64.zip"
+          curl --fail --location --retry 5 --retry-all-errors \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${ERIKA_NATIVE_VERSION}/erika-capi-openharmony-arm64.zip" \
+            --output "$runtime_zip"
+          printf '%s  %s\n' "$ERIKA_NATIVE_SHA256" "$runtime_zip" | sha256sum --check
+          unzip -q "$runtime_zip" -d "$runtime_dir/unpacked"
+          runtime="$(find "$runtime_dir/unpacked" -type f -name liberika_capi.so -print -quit)"
+          test -n "$runtime"
+          cp "$runtime" packages/erika_ohos/src/main/cpp/liberika_capi.so
+          test -f packages/erika_ohos/src/main/cpp/liberika_capi.so
+
+      - name: Install Hvigor
+        working-directory: packages/erika_ohos
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm config set @ohos:registry https://repo.harmonyos.com/npm/
+          npm install --no-save --package-lock=false \
+            @ohos/hvigor@5.19.8 \
+            @ohos/hvigor-ohos-plugin@5.19.8
+          node node_modules/@ohos/hvigor/bin/hvigor.js --version
+
+      - name: Build the HAR with Hvigor
+        working-directory: examples/ohos_arkts
+        shell: bash
+        env:
+          DEVECO_SDK_HOME: ${{ steps.ohos_sdk.outputs.ohos-base-sdk-home }}
+          OHOS_SDK_HOME: ${{ steps.ohos_sdk.outputs.ohos-base-sdk-home }}
+        run: |
+          set -euo pipefail
+          ln -s "$GITHUB_WORKSPACE/packages/erika_ohos/node_modules" node_modules
+          node node_modules/@ohos/hvigor/bin/hvigor.js \
+            --mode module \
+            -p product=default \
+            -p module=erika@default \
+            -p buildMode=release \
+            assembleHar \
+            --no-daemon \
+            --accept-license
+
+      - name: Build the N-API bridge independently
+        shell: bash
+        env:
+          OHOS_SDK_NATIVE: ${{ steps.ohos_sdk.outputs.ohos_sdk_native }}
+        run: |
+          set -euo pipefail
+          cmake -S packages/erika_ohos/src/main/cpp \
+            -B "$RUNNER_TEMP/erika-ohos-bridge" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$OHOS_SDK_NATIVE/build/cmake/ohos.toolchain.cmake" \
+            -DOHOS_SDK_NATIVE="$OHOS_SDK_NATIVE"
+          cmake --build "$RUNNER_TEMP/erika-ohos-bridge" --target erika_ohos
+
+      - name: Validate the HAR
+        shell: bash
+        env:
+          OHOS_SDK_NATIVE: ${{ steps.ohos_sdk.outputs.ohos_sdk_native }}
+        run: |
+          set -euo pipefail
+          har="packages/erika_ohos/build/default/outputs/default/erika.har"
+          test -s "$har"
+          cp "$har" "$RUNNER_TEMP/erika-0.1.7.har"
+          mkdir -p "$RUNNER_TEMP/erika-har"
+          tar -xzf "$har" -C "$RUNNER_TEMP/erika-har"
+
+          bridge="$RUNNER_TEMP/erika-har/package/libs/arm64-v8a/liberika_ohos.so"
+          runtime="$RUNNER_TEMP/erika-har/package/libs/arm64-v8a/liberika_capi.so"
+          test -f "$RUNNER_TEMP/erika-har/package/Index.ets"
+          test -f "$bridge"
+          test -f "$runtime"
+
+          readelf="$OHOS_SDK_NATIVE/llvm/bin/llvm-readelf"
+          "$readelf" -h "$bridge" | grep -Eq 'Machine:.*AArch64'
+          "$readelf" -h "$runtime" | grep -Eq 'Machine:.*AArch64'
+
+      - name: Install the HAR in the smoke-test application
+        shell: bash
+        run: |
+          set -euo pipefail
+          har="packages/erika_ohos/build/default/outputs/default/erika.har"
+          cp "$har" examples/ohos_arkts/erika-0.1.7.har
+          package_dir="examples/ohos_arkts/entry/oh_modules/@aimesoft/erika"
+          mkdir -p "$package_dir"
+          tar -xzf "$har" --strip-components=1 -C "$package_dir"
+
+      - name: Build an application that consumes the HAR
+        working-directory: examples/ohos_arkts
+        shell: bash
+        env:
+          DEVECO_SDK_HOME: ${{ steps.ohos_sdk.outputs.ohos-base-sdk-home }}
+          OHOS_SDK_HOME: ${{ steps.ohos_sdk.outputs.ohos-base-sdk-home }}
+        run: |
+          set -euo pipefail
+          node node_modules/@ohos/hvigor/bin/hvigor.js \
+            --mode module \
+            -p product=default \
+            -p module=entry@default \
+            -p buildMode=release \
+            assembleHap \
+            --no-daemon \
+            --accept-license
+
+      - name: Validate the HAP
+        shell: bash
+        env:
+          OHOS_SDK_NATIVE: ${{ steps.ohos_sdk.outputs.ohos_sdk_native }}
+        run: |
+          set -euo pipefail
+          hap="$(find examples/ohos_arkts/entry/build -type f -name '*.hap' -print -quit)"
+          test -n "$hap"
+          test -s "$hap"
+          cp "$hap" "$RUNNER_TEMP/erika-ohos-smoke.hap"
+
+          hap_dir="$RUNNER_TEMP/erika-ohos-smoke"
+          mkdir -p "$hap_dir"
+          unzip -q "$hap" -d "$hap_dir"
+
+          bridge="$hap_dir/libs/arm64-v8a/liberika_ohos.so"
+          runtime="$hap_dir/libs/arm64-v8a/liberika_capi.so"
+          test -f "$hap_dir/ets/modules.abc"
+          test -f "$bridge"
+          test -f "$runtime"
+
+          readelf="$OHOS_SDK_NATIVE/llvm/bin/llvm-readelf"
+          "$readelf" -h "$bridge" | grep -Eq 'Machine:.*AArch64'
+          "$readelf" -h "$runtime" | grep -Eq 'Machine:.*AArch64'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erika-ohos-0.1.7
+          path: |
+            ${{ runner.temp }}/erika-0.1.7.har
+            ${{ runner.temp }}/erika-ohos-smoke.hap
+          if-no-files-found: error
+
+  publish:
+    name: Publish ArkTS package to OHPM
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: ohpm
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: erika-ohos-0.1.7
+          path: ${{ runner.temp }}/erika-ohos-release
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install the official OHPM CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y expect unzip
+
+          archive="$RUNNER_TEMP/ohpm-commandline.zip"
+          curl --fail --location --retry 5 --retry-all-errors \
+            "$OHPM_CLI_URL" \
+            --output "$archive"
+          printf '%s  %s\n' "$OHPM_CLI_SHA256" "$archive" | sha256sum --check
+          unzip -q "$archive" 'command-line-tools/ohpm/*' -d "$RUNNER_TEMP"
+          node "$RUNNER_TEMP/command-line-tools/ohpm/bin/pm-cli.js" --version
+
+      - name: Publish the HAR
+        shell: bash
+        env:
+          OHPM_PUBLISH_ID: ${{ secrets.OHPM_PUBLISH_ID }}
+          OHPM_PRIVATE_KEY: ${{ secrets.OHPM_PRIVATE_KEY }}
+          OHPM_KEY_PASSPHRASE: ${{ secrets.OHPM_KEY_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          test -n "$OHPM_PUBLISH_ID"
+          test -n "$OHPM_PRIVATE_KEY"
+          test -n "$OHPM_KEY_PASSPHRASE"
+
+          har="$(find "$RUNNER_TEMP/erika-ohos-release" -type f -name '*.har' -print -quit)"
+          test -n "$har"
+          test -s "$har"
+
+          private_key="$RUNNER_TEMP/ohpm-publish-key.pem"
+          umask 077
+          printf '%s\n' "$OHPM_PRIVATE_KEY" > "$private_key"
+
+          export OHPM_CLI="$RUNNER_TEMP/command-line-tools/ohpm/bin/pm-cli.js"
+          export OHPM_HAR="$har"
+          export OHPM_KEY_PATH="$private_key"
+
+          expect <<'EXPECT'
+          set timeout 3600
+          set prompt_count 0
+          spawn -noecho node $env(OHPM_CLI) publish $env(OHPM_HAR) \
+            --publish_registry https://ohpm.openharmony.cn/ohpm \
+            --publish_id $env(OHPM_PUBLISH_ID) \
+            --key_path $env(OHPM_KEY_PATH)
+          expect {
+            "what is your passphrase of the private key:" {
+              incr prompt_count
+              if {$prompt_count > 1} {
+                exit 1
+              }
+              send -- "$env(OHPM_KEY_PASSPHRASE)\r"
+              exp_continue
+            }
+            eof {
+              catch wait result
+              exit [lindex $result 3]
+            }
+            timeout {
+              exit 1
+            }
+          }
+          EXPECT
