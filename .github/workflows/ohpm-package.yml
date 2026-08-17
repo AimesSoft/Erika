@@ -45,6 +45,7 @@ jobs:
         with:
           version: "5.1.0"
           components: "native;ets;js;toolchains"
+          fixup-path: true
           cache: true
 
       - uses: actions/setup-node@v4
