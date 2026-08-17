@@ -8,6 +8,14 @@ N-API bridge and the matching `liberika_capi.so` runtime. A host application
 provides an `XComponent` surface id through `attachSurface()` and drives
 `renderTick()` from its frame scheduler.
 
+## Installation
+
+```sh
+ohpm install erika
+```
+
+## Usage
+
 ```ts
 import { ErikaPlayer } from 'erika';
 
