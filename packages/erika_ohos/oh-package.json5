@@ -4,9 +4,8 @@
   "description": "Native ArkTS media SDK powered by the Erika engine",
   "main": "Index.ets",
   "author": {
-    "name": "AIMESSOFT",
-    "url": "https://github.com/AimesSoft/Erika",
-    "email": "dev@aimesoft.com"
+    "name": "Shinokawa",
+    "url": "https://github.com/Shinokawa"
   },
   "license": "MPL-2.0",
   "keywords": [
