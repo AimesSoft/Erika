@@ -230,6 +230,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y expect unzip
+
           archive="$RUNNER_TEMP/ohpm-commandline.zip"
           curl --fail --location --retry 5 --retry-all-errors \
             "$OHPM_CLI_URL" \
@@ -243,10 +246,12 @@ jobs:
         env:
           OHPM_PUBLISH_ID: ${{ secrets.OHPM_PUBLISH_ID }}
           OHPM_PRIVATE_KEY: ${{ secrets.OHPM_PRIVATE_KEY }}
+          OHPM_KEY_PASSPHRASE: ${{ secrets.OHPM_KEY_PASSPHRASE }}
         run: |
           set -euo pipefail
           test -n "$OHPM_PUBLISH_ID"
           test -n "$OHPM_PRIVATE_KEY"
+          test -n "$OHPM_KEY_PASSPHRASE"
 
           har="$(find "$RUNNER_TEMP/erika-ohos-release" -type f -name '*.har' -print -quit)"
           test -n "$har"
@@ -256,7 +261,32 @@ jobs:
           umask 077
           printf '%s\n' "$OHPM_PRIVATE_KEY" > "$private_key"
 
-          node "$RUNNER_TEMP/command-line-tools/ohpm/bin/pm-cli.js" publish "$har" \
+          export OHPM_CLI="$RUNNER_TEMP/command-line-tools/ohpm/bin/pm-cli.js"
+          export OHPM_HAR="$har"
+          export OHPM_KEY_PATH="$private_key"
+
+          expect <<'EXPECT'
+          set timeout 3600
+          set prompt_count 0
+          spawn -noecho node $env(OHPM_CLI) publish $env(OHPM_HAR) \
             --publish_registry https://ohpm.openharmony.cn/ohpm \
-            --publish_id "$OHPM_PUBLISH_ID" \
-            --key_path "$private_key"
+            --publish_id $env(OHPM_PUBLISH_ID) \
+            --key_path $env(OHPM_KEY_PATH)
+          expect {
+            "what is your passphrase of the private key:" {
+              incr prompt_count
+              if {$prompt_count > 1} {
+                exit 1
+              }
+              send -- "$env(OHPM_KEY_PASSPHRASE)\r"
+              exp_continue
+            }
+            eof {
+              catch wait result
+              exit [lindex $result 3]
+            }
+            timeout {
+              exit 1
+            }
+          }
+          EXPECT
