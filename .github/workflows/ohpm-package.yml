@@ -20,6 +20,12 @@ on:
       - "examples/ohos_arkts/**"
       - "packages/erika_ohos/**"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the validated HAR to OHPM
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -31,6 +37,8 @@ concurrency:
 env:
   ERIKA_NATIVE_VERSION: "0.1.7"
   ERIKA_NATIVE_SHA256: "492afbab9ae9f20f55ce6ae2212094ece6f6c0cca1bee96ddffc175068afa396"
+  OHPM_CLI_URL: "https://repo.huaweicloud.com/harmonyos/ohpm/5.1.0/commandline-tools-linux-x64-5.1.0.840.zip"
+  OHPM_CLI_SHA256: "1dcefa4741dc289277560b2802040e0c45b433898d8db453d711d5376e0478f1"
 
 jobs:
   package:
@@ -170,12 +178,28 @@ jobs:
 
       - name: Validate the HAP
         shell: bash
+        env:
+          OHOS_SDK_NATIVE: ${{ steps.ohos_sdk.outputs.ohos_sdk_native }}
         run: |
           set -euo pipefail
           hap="$(find examples/ohos_arkts/entry/build -type f -name '*.hap' -print -quit)"
           test -n "$hap"
           test -s "$hap"
           cp "$hap" "$RUNNER_TEMP/erika-ohos-smoke.hap"
+
+          hap_dir="$RUNNER_TEMP/erika-ohos-smoke"
+          mkdir -p "$hap_dir"
+          unzip -q "$hap" -d "$hap_dir"
+
+          bridge="$hap_dir/libs/arm64-v8a/liberika_ohos.so"
+          runtime="$hap_dir/libs/arm64-v8a/liberika_capi.so"
+          test -f "$hap_dir/ets/modules.abc"
+          test -f "$bridge"
+          test -f "$runtime"
+
+          readelf="$OHOS_SDK_NATIVE/llvm/bin/llvm-readelf"
+          "$readelf" -h "$bridge" | grep -Eq 'Machine:.*AArch64'
+          "$readelf" -h "$runtime" | grep -Eq 'Machine:.*AArch64'
 
       - uses: actions/upload-artifact@v4
         with:
@@ -184,3 +208,55 @@ jobs:
             ${{ runner.temp }}/erika-0.1.7.har
             ${{ runner.temp }}/erika-ohos-smoke.hap
           if-no-files-found: error
+
+  publish:
+    name: Publish ArkTS package to OHPM
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: ohpm
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: erika-ohos-0.1.7
+          path: ${{ runner.temp }}/erika-ohos-release
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install the official OHPM CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/ohpm-commandline.zip"
+          curl --fail --location --retry 5 --retry-all-errors \
+            "$OHPM_CLI_URL" \
+            --output "$archive"
+          printf '%s  %s\n' "$OHPM_CLI_SHA256" "$archive" | sha256sum --check
+          unzip -q "$archive" 'command-line-tools/ohpm/*' -d "$RUNNER_TEMP"
+          node "$RUNNER_TEMP/command-line-tools/ohpm/bin/pm-cli.js" --version
+
+      - name: Publish the HAR
+        shell: bash
+        env:
+          OHPM_PUBLISH_ID: ${{ secrets.OHPM_PUBLISH_ID }}
+          OHPM_PRIVATE_KEY: ${{ secrets.OHPM_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$OHPM_PUBLISH_ID"
+          test -n "$OHPM_PRIVATE_KEY"
+
+          har="$(find "$RUNNER_TEMP/erika-ohos-release" -type f -name '*.har' -print -quit)"
+          test -n "$har"
+          test -s "$har"
+
+          private_key="$RUNNER_TEMP/ohpm-publish-key.pem"
+          umask 077
+          printf '%s\n' "$OHPM_PRIVATE_KEY" > "$private_key"
+
+          node "$RUNNER_TEMP/command-line-tools/ohpm/bin/pm-cli.js" publish "$har" \
+            --publish_registry https://ohpm.openharmony.cn/ohpm \
+            --publish_id "$OHPM_PUBLISH_ID" \
+            --key_path "$private_key"
