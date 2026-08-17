@@ -102,7 +102,8 @@ jobs:
             -p module=erika@default \
             -p buildMode=release \
             assembleHar \
-            --no-daemon
+            --no-daemon \
+            --accept-license
 
       - name: Build the N-API bridge independently
         shell: bash
