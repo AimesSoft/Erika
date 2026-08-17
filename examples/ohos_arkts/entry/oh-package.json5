@@ -6,6 +6,6 @@
   "author": "AimesSoft",
   "license": "MPL-2.0",
   "dependencies": {
-    "@aimessoft/erika": "file:../erika-0.1.7.har"
+    "erika": "file:../erika-0.1.7.har"
   }
 }

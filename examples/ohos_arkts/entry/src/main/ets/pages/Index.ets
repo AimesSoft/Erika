@@ -1,4 +1,4 @@
-import { ErikaPlayer } from '@aimessoft/erika';
+import { ErikaPlayer } from 'erika';
 
 class ErikaSurfaceController extends XComponentController {
   private readonly player: ErikaPlayer = new ErikaPlayer();

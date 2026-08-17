@@ -1,5 +1,5 @@
 {
-  "name": "@aimessoft/erika",
+  "name": "erika",
   "version": "0.1.7",
   "description": "Native ArkTS media SDK powered by the Erika engine",
   "main": "Index.ets",
