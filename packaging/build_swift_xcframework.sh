@@ -64,7 +64,12 @@ xcodebuild -create-xcframework \
   -output "$XCFRAMEWORK"
 
 test ! -e "$OUTPUT_ZIP"
-ditto -c -k --sequesterRsrc --keepParent "$XCFRAMEWORK" "$OUTPUT_ZIP"
+(
+  cd "$WORK_DIR"
+  find CErika.xcframework -exec touch -t 198001010000 {} +
+  find CErika.xcframework -print | LC_ALL=C sort | \
+    COPYFILE_DISABLE=1 zip -X -q "$OUTPUT_ZIP" -@
+)
 unzip -tq "$OUTPUT_ZIP"
 
 echo "SwiftPM checksum: $(swift package compute-checksum "$OUTPUT_ZIP")"
