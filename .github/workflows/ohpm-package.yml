@@ -155,7 +155,7 @@ jobs:
           set -euo pipefail
           har="packages/erika_ohos/build/default/outputs/default/erika.har"
           cp "$har" examples/ohos_arkts/erika-0.1.7.har
-          package_dir="examples/ohos_arkts/entry/oh_modules/@aimesoft/erika"
+          package_dir="examples/ohos_arkts/entry/oh_modules/@aimessoft/erika"
           mkdir -p "$package_dir"
           tar -xzf "$har" --strip-components=1 -C "$package_dir"
 
