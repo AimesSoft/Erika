@@ -19,6 +19,16 @@
   },
   "modules": [
     {
+      "name": "erika",
+      "srcPath": "../../packages/erika_ohos",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": ["default"]
+        }
+      ]
+    },
+    {
       "name": "entry",
       "srcPath": "./entry",
       "targets": [
