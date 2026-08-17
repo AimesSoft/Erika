@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Erika HAR consumer"
+    },
+    {
+      "name": "entry_ability_desc",
+      "value": "Erika HAR consumer"
+    },
+    {
+      "name": "entry_ability_label",
+      "value": "Erika"
+    }
+  ]
+}

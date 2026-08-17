@@ -5,6 +5,7 @@
         "name": "default",
         "compileSdkVersion": 18,
         "compatibleSdkVersion": 18,
+        "targetSdkVersion": 18,
         "runtimeOS": "OpenHarmony"
       }
     ],
