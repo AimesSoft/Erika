@@ -789,6 +789,11 @@ pub trait AudioOutputBackend {
     fn clock_snapshot(&self) -> Option<AudioClockSnapshot> {
         None
     }
+    /// Duration of PCM already submitted to the platform output but not
+    /// represented by `AudioClockSnapshot::queued_duration`.
+    fn queued_output_duration(&self) -> Duration {
+        Duration::ZERO
+    }
     fn runtime_stats(&self) -> AudioOutputRuntimeStats {
         AudioOutputRuntimeStats::default()
     }

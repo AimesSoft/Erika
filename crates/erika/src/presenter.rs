@@ -798,6 +798,7 @@ impl PresenterRuntime {
 
     pub fn open(&mut self, media: MediaRequest) -> Result<()> {
         self.quiesce_frame_output("open")?;
+        self.pending_playback_rate = None;
         self.reset_audio_output();
         self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
         self.drain_pending_player_frames();
@@ -813,6 +814,7 @@ impl PresenterRuntime {
 
     pub fn play(&mut self) -> Result<()> {
         if self.player.is_stopped_at_end() {
+            self.pending_playback_rate = None;
             self.reset_audio_output();
             self.drain_pending_player_frames();
             self.bump_danmaku_generation();
@@ -823,18 +825,14 @@ impl PresenterRuntime {
 
     pub fn pause(&mut self) -> Result<()> {
         let result = self.player.pause();
-        let pending_rate = self.pending_playback_rate.map(|pending| pending.rate);
-        if let Some(rate) = pending_rate {
+        if self.pending_playback_rate.is_some() {
             // A pending transition is measured against wall time while the
             // output is running. Pausing that output would otherwise leave the
             // old-rate bridge queued but allow the stale deadline to commit on
             // the next play. Flush the bridge and commit the requested rate
             // while the clock is parked.
             self.reset_audio_output();
-            let rate_result = self.player.set_playback_rate(rate);
-            if rate_result.is_ok() {
-                self.playback_rate = rate;
-            }
+            let rate_result = self.commit_pending_playback_rate_now();
             return result.and(rate_result);
         }
         if let Err(error) = self.audio_output.pause() {
@@ -861,6 +859,7 @@ impl PresenterRuntime {
     pub fn stop(&mut self) -> Result<()> {
         let quiesced = self.quiesce_frame_output("stop")?;
         let result = self.player.stop();
+        self.pending_playback_rate = None;
         self.reset_audio_output();
         self.bump_danmaku_generation();
         self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
@@ -870,6 +869,7 @@ impl PresenterRuntime {
 
     pub fn close(&mut self) -> Result<()> {
         self.quiesce_frame_output("close")?;
+        self.pending_playback_rate = None;
         self.reset_audio_output();
         self.bump_danmaku_generation();
         self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
@@ -884,23 +884,30 @@ impl PresenterRuntime {
     pub fn seek(&mut self, position: Duration) -> Result<()> {
         let quiesced = self.quiesce_frame_output("seek")?;
         let result = self.player.seek(position);
+        let rate_result = self.commit_pending_playback_rate_now();
         self.reset_audio_output();
         self.bump_danmaku_generation();
         self.clear_playback_visual_state(position, TransitionFramePolicy::PreserveRendererSnapshot);
         let transition = self.finish_frame_output_transition("seek", quiesced, true);
-        result.and(transition)
+        result.and(rate_result).and(transition)
     }
 
     pub fn set_playback_rate(&mut self, rate: f64) -> Result<()> {
         let next_rate = normalize_playback_rate(rate);
+        if playback_rate_request_is_idempotent(
+            self.playback_rate,
+            self.pending_playback_rate,
+            next_rate,
+        ) {
+            return Ok(());
+        }
         self.audio_output.set_playback_rate(next_rate);
         self.last_audio_clock_report = None;
 
-        let bridge = self
-            .audio_output
-            .clock_snapshot()
-            .and_then(|snapshot| snapshot.queued_duration)
-            .filter(|duration| !duration.is_zero());
+        let bridge = audio_transition_bridge(
+            self.audio_output.clock_snapshot(),
+            self.audio_output.queued_output_duration(),
+        );
         if self.is_playing()
             && let Some(bridge) = bridge
         {
@@ -1278,6 +1285,7 @@ impl PresenterRuntime {
     pub fn select_audio_track(&mut self, track_id: Option<i64>) -> Result<()> {
         let quiesced = self.quiesce_frame_output("select_audio_track")?;
         let result = self.player.select_audio_track(track_id);
+        let rate_result = self.commit_pending_playback_rate_now();
         self.reset_audio_output();
         self.bump_danmaku_generation();
         self.clear_playback_visual_state(
@@ -1285,12 +1293,13 @@ impl PresenterRuntime {
             TransitionFramePolicy::PreserveTrackSwitchFrame,
         );
         let transition = self.finish_frame_output_transition("select_audio_track", quiesced, true);
-        result.and(transition)
+        result.and(rate_result).and(transition)
     }
 
     pub fn select_subtitle_track(&mut self, track_id: Option<i64>) -> Result<()> {
         let quiesced = self.quiesce_frame_output("select_subtitle_track")?;
         let result = self.player.select_subtitle_track(track_id);
+        let rate_result = self.commit_pending_playback_rate_now();
         self.reset_audio_output();
         self.bump_danmaku_generation();
         self.clear_playback_visual_state(
@@ -1299,7 +1308,7 @@ impl PresenterRuntime {
         );
         let transition =
             self.finish_frame_output_transition("select_subtitle_track", quiesced, true);
-        result.and(transition)
+        result.and(rate_result).and(transition)
     }
 
     pub fn tracks(&self) -> Vec<TrackInfo> {
@@ -2906,7 +2915,6 @@ impl PresenterRuntime {
         }
         self.audio_configured = false;
         self.audio_started = false;
-        self.pending_playback_rate = None;
         self.last_audio_clock_report = None;
     }
 
@@ -2917,8 +2925,15 @@ impl PresenterRuntime {
         if !self.is_playing() || Instant::now() < pending.commit_at {
             return Ok(());
         }
-        self.player.set_playback_rate(pending.rate)?;
-        self.playback_rate = pending.rate;
+        self.commit_pending_playback_rate_now()
+    }
+
+    fn commit_pending_playback_rate_now(&mut self) -> Result<()> {
+        let Some(rate) = self.pending_playback_rate.map(|pending| pending.rate) else {
+            return Ok(());
+        };
+        self.player.set_playback_rate(rate)?;
+        self.playback_rate = rate;
         self.pending_playback_rate = None;
         self.last_audio_clock_report = None;
         Ok(())
@@ -2952,6 +2967,29 @@ fn normalize_playback_rate(rate: f64) -> f64 {
     } else {
         1.0
     }
+}
+
+fn playback_rate_matches(lhs: f64, rhs: f64) -> bool {
+    (lhs - rhs).abs() <= PLAYBACK_RATE_EPSILON
+}
+
+fn playback_rate_request_is_idempotent(
+    current_rate: f64,
+    pending: Option<PendingPlaybackRate>,
+    next_rate: f64,
+) -> bool {
+    pending.is_some_and(|pending| playback_rate_matches(pending.rate, next_rate))
+        || (pending.is_none() && playback_rate_matches(current_rate, next_rate))
+}
+
+fn audio_transition_bridge(
+    snapshot: Option<AudioClockSnapshot>,
+    queued_output_duration: Duration,
+) -> Option<Duration> {
+    snapshot
+        .and_then(|snapshot| snapshot.queued_duration)
+        .map(|duration| duration.saturating_add(queued_output_duration))
+        .filter(|duration| !duration.is_zero())
 }
 
 fn audio_pump_limits_for_rate(rate: f64) -> (usize, Duration) {
@@ -4426,6 +4464,67 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     #[test]
     fn presenter_config_disables_idle_test_pattern_by_default() {
         assert!(!PresenterConfig::default().render_test_pattern_when_idle);
+    }
+
+    #[test]
+    fn repeated_playback_rate_request_keeps_pending_transition_deadline() {
+        let deadline = Instant::now() + Duration::from_millis(250);
+        let pending = PendingPlaybackRate {
+            rate: 2.0,
+            commit_at: deadline,
+        };
+
+        assert!(playback_rate_request_is_idempotent(1.0, Some(pending), 2.0));
+        assert_eq!(pending.commit_at, deadline);
+        assert!(playback_rate_request_is_idempotent(2.0, None, 2.0));
+        assert!(!playback_rate_request_is_idempotent(
+            1.0,
+            Some(pending),
+            1.5
+        ));
+    }
+
+    #[test]
+    fn audio_transition_bridge_includes_platform_output_duration() {
+        let snapshot = AudioClockSnapshot {
+            media_time: Some(Duration::from_secs(1)),
+            queued_duration: Some(Duration::from_millis(250)),
+            queued_frames: 12_000,
+            read_frames: 0,
+            written_frames: 12_000,
+            underflow_frames: 0,
+        };
+
+        assert_eq!(
+            audio_transition_bridge(Some(snapshot), Duration::from_millis(60)),
+            Some(Duration::from_millis(310))
+        );
+        assert_eq!(
+            audio_transition_bridge(
+                Some(AudioClockSnapshot {
+                    queued_duration: Some(Duration::ZERO),
+                    ..snapshot
+                }),
+                Duration::from_millis(60),
+            ),
+            Some(Duration::from_millis(60))
+        );
+    }
+
+    #[cfg(feature = "wgpu")]
+    #[test]
+    fn audio_reset_preserves_pending_rate_for_transition() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        presenter.pending_playback_rate = Some(PendingPlaybackRate {
+            rate: 2.0,
+            commit_at: Instant::now(),
+        });
+
+        presenter.reset_audio_output();
+        assert_eq!(
+            presenter.pending_playback_rate.map(|pending| pending.rate),
+            Some(2.0)
+        );
     }
 
     #[test]

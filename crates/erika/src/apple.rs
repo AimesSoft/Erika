@@ -27,6 +27,7 @@ pub mod iosaudio {
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
     };
+    use std::time::Duration;
 
     use thiserror::Error;
 
@@ -148,6 +149,10 @@ pub mod iosaudio {
         // Gain the previous callback ended on; only the serialized AudioQueue
         // callback reads and writes it, so Relaxed ordering suffices.
         last_applied_volume: AtomicU32,
+        // AudioQueue keeps these buffers in flight after the ring has handed
+        // them to the platform. The presenter includes their duration in a
+        // playback-rate transition bridge.
+        in_flight_buffers: AtomicU32,
         channels: usize,
     }
 
@@ -182,6 +187,7 @@ pub mod iosaudio {
                 buffer: Arc::clone(&self.buffer),
                 volume: Arc::clone(&self.volume),
                 last_applied_volume: AtomicU32::new(self.volume.load(Ordering::Relaxed)),
+                in_flight_buffers: AtomicU32::new(0),
                 channels: format.channels.max(1) as usize,
             });
             let state = NonNull::new(Box::into_raw(state)).expect("Box::into_raw is non-null");
@@ -302,6 +308,14 @@ pub mod iosaudio {
             Ok(buffer.clock_snapshot())
         }
 
+        pub fn queued_output_duration(&self) -> Duration {
+            let in_flight = self
+                .callback_state
+                .map(|state| unsafe { state.as_ref().in_flight_buffers.load(Ordering::Acquire) })
+                .unwrap_or(0);
+            Duration::from_millis(in_flight as u64 * BUFFER_MILLIS as u64)
+        }
+
         fn dispose_queue(&mut self, immediate: bool) -> Result<()> {
             if let Some(queue) = self.queue.take() {
                 let status = unsafe { AudioQueueDispose(queue, immediate as Boolean) };
@@ -378,6 +392,10 @@ pub mod iosaudio {
         fn clock_snapshot(&self) -> Option<AudioClockSnapshot> {
             self.clock_snapshot().ok()
         }
+
+        fn queued_output_duration(&self) -> Duration {
+            IosAudioQueueOutput::queued_output_duration(self)
+        }
     }
 
     unsafe extern "C" fn audio_queue_output_callback(
@@ -389,6 +407,12 @@ pub mod iosaudio {
             return;
         }
         let state = unsafe { &*(user_data as *const CallbackState) };
+        let _ =
+            state
+                .in_flight_buffers
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                    count.checked_sub(1)
+                });
         let _ = fill_audio_queue_buffer(queue, audio_buffer, state);
     }
 
@@ -432,10 +456,14 @@ pub mod iosaudio {
             .last_applied_volume
             .store(reached.to_bits(), Ordering::Relaxed);
         buffer.audio_data_byte_size = buffer.audio_data_bytes_capacity;
-        check_status(
+        let result = check_status(
             unsafe { AudioQueueEnqueueBuffer(queue, audio_buffer, 0, ptr::null()) },
             "AudioQueueEnqueueBuffer",
-        )
+        );
+        if result.is_ok() {
+            state.in_flight_buffers.fetch_add(1, Ordering::Release);
+        }
+        result
     }
 
     fn audio_stream_description(format: PcmFormat) -> AudioStreamBasicDescription {
