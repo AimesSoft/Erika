@@ -1,0 +1,8 @@
+{
+  "app": {
+    "bundleName": "com.aimesoft.erika.ohos.ci",
+    "vendor": "AimesSoft",
+    "versionCode": 10007,
+    "versionName": "0.1.7"
+  }
+}
