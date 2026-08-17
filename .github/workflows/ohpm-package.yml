@@ -125,13 +125,12 @@ jobs:
           OHOS_SDK_NATIVE: ${{ steps.ohos_sdk.outputs.ohos_sdk_native }}
         run: |
           set -euo pipefail
-          har="$(find packages/erika_ohos/build -type f -name '*.har' -print -quit)"
-          test -n "$har"
+          har="packages/erika_ohos/build/default/outputs/default/erika.har"
+          test -s "$har"
           cp "$har" "$RUNNER_TEMP/erika-0.1.7.har"
-          unzip -q "$har" -d "$RUNNER_TEMP/erika-har"
 
-          bridge="$(find "$RUNNER_TEMP/erika-har" -type f -name liberika_ohos.so -print -quit)"
-          runtime="$(find "$RUNNER_TEMP/erika-har" -type f -name liberika_capi.so -print -quit)"
+          bridge="$(find packages/erika_ohos/build -type f -name liberika_ohos.so -print -quit)"
+          runtime="$(find packages/erika_ohos/build -type f -name liberika_capi.so -print -quit)"
           test -n "$bridge"
           test -n "$runtime"
 
