@@ -50,6 +50,15 @@ int64_t GetInt64(napi_env env, napi_value value) {
   return result;
 }
 
+uint64_t GetUint64(napi_env env, napi_value value) {
+  uint64_t result = 0;
+  bool lossless = false;
+  if (napi_get_value_bigint_uint64(env, value, &result, &lossless) != napi_ok || !lossless) {
+    return 0;
+  }
+  return result;
+}
+
 int32_t GetInt32(napi_env env, napi_value value) {
   int32_t result = 0;
   napi_get_value_int32(env, value, &result);
@@ -201,7 +210,7 @@ napi_value NativeAttachSurface(napi_env env, napi_callback_info info) {
     return Int32(env, ErikaStatus_NullPointer);
   }
   ReleaseWindow(*player);
-  const auto surface_id = static_cast<uint64_t>(GetInt64(env, args[1]));
+  const uint64_t surface_id = GetUint64(env, args[1]);
   OHNativeWindow* window = nullptr;
   const int32_t create_status =
       OH_NativeWindow_CreateNativeWindowFromSurfaceId(surface_id, &window);

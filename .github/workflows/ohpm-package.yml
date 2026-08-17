@@ -128,18 +128,59 @@ jobs:
           har="packages/erika_ohos/build/default/outputs/default/erika.har"
           test -s "$har"
           cp "$har" "$RUNNER_TEMP/erika-0.1.7.har"
+          mkdir -p "$RUNNER_TEMP/erika-har"
+          tar -xzf "$har" -C "$RUNNER_TEMP/erika-har"
 
-          bridge="$(find packages/erika_ohos/build -type f -name liberika_ohos.so -print -quit)"
-          runtime="$(find packages/erika_ohos/build -type f -name liberika_capi.so -print -quit)"
-          test -n "$bridge"
-          test -n "$runtime"
+          bridge="$RUNNER_TEMP/erika-har/package/libs/arm64-v8a/liberika_ohos.so"
+          runtime="$RUNNER_TEMP/erika-har/package/libs/arm64-v8a/liberika_capi.so"
+          test -f "$RUNNER_TEMP/erika-har/package/Index.ets"
+          test -f "$bridge"
+          test -f "$runtime"
 
           readelf="$OHOS_SDK_NATIVE/llvm/bin/llvm-readelf"
           "$readelf" -h "$bridge" | grep -Eq 'Machine:.*AArch64'
           "$readelf" -h "$runtime" | grep -Eq 'Machine:.*AArch64'
 
+      - name: Install the HAR in the smoke-test application
+        shell: bash
+        run: |
+          set -euo pipefail
+          har="packages/erika_ohos/build/default/outputs/default/erika.har"
+          cp "$har" examples/ohos_arkts/erika-0.1.7.har
+          package_dir="examples/ohos_arkts/entry/oh_modules/@aimesoft/erika"
+          mkdir -p "$package_dir"
+          tar -xzf "$har" --strip-components=1 -C "$package_dir"
+
+      - name: Build an application that consumes the HAR
+        working-directory: examples/ohos_arkts
+        shell: bash
+        env:
+          DEVECO_SDK_HOME: ${{ steps.ohos_sdk.outputs.ohos-base-sdk-home }}
+          OHOS_SDK_HOME: ${{ steps.ohos_sdk.outputs.ohos-base-sdk-home }}
+        run: |
+          set -euo pipefail
+          node node_modules/@ohos/hvigor/bin/hvigor.js \
+            --mode module \
+            -p product=default \
+            -p module=entry@default \
+            -p buildMode=release \
+            assembleHap \
+            --no-daemon \
+            --accept-license
+
+      - name: Validate the HAP
+        shell: bash
+        run: |
+          set -euo pipefail
+          hap="$(find examples/ohos_arkts/entry/build -type f -name '*.hap' -print -quit)"
+          test -n "$hap"
+          test -s "$hap"
+          cp "$hap" "$RUNNER_TEMP/erika-ohos-smoke.hap"
+
       - uses: actions/upload-artifact@v4
         with:
           name: erika-ohos-0.1.7
-          path: ${{ runner.temp }}/erika-0.1.7.har
+          path: |
+            ${{ runner.temp }}/erika-0.1.7.har
+            ${{ runner.temp }}/erika-ohos-smoke.hap
           if-no-files-found: error

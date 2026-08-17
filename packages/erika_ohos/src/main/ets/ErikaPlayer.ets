@@ -8,7 +8,7 @@ export interface ErikaNativeResponse {
 }
 
 export interface ErikaSurfaceOptions {
-  surfaceId: number;
+  surfaceId: BigInt;
   width: number;
   height: number;
   scale?: number;

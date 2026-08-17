@@ -12,6 +12,7 @@ provides an `XComponent` surface id through `attachSurface()` and drives
 import { ErikaPlayer } from '@aimesoft/erika';
 
 const player = new ErikaPlayer();
+const surfaceId = BigInt(xComponentController.getXComponentSurfaceId());
 player.attachSurface({ surfaceId, width, height, scale: 1.0 });
 player.open('https://example.com/video.mp4');
 player.play();
