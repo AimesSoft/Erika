@@ -278,7 +278,9 @@ jobs:
               if {$prompt_count > 1} {
                 exit 1
               }
-              send -- "$env(OHPM_KEY_PASSPHRASE)\r"
+              send -- "$env(OHPM_KEY_PASSPHRASE)"
+              after 100
+              send -- "\r"
               exp_continue
             }
             eof {
