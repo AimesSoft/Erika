@@ -42,11 +42,11 @@ Every archive also includes `include/erika.h`, `LICENSE` (Erika, MPL-2.0),
 under `licenses/`, and a `MANIFEST.txt` recording the tag/commit.
 Every GitHub Release also includes `SHA256SUMS` with the digest of each archive.
 
-The native dependencies (FFmpeg, libass, FreeType, HarfBuzz, FriBidi, zlib, and
-Android's dav1d AV1 software decoder) are **statically linked** via the `lgpl`
+The native dependencies (FFmpeg, libass, FreeType, HarfBuzz, FriBidi, zlib,
+dav1d, and SoundTouch) are **statically linked** via the `lgpl`
 profile, so each library is self-contained except for OS frameworks
 (VideoToolbox/Metal/CoreAudio on Apple; Direct3D 11 / WASAPI on Windows;
-MediaCodec/Camera2/AAudio/ANativeWindow on Android), which are always present on
+MediaCodec/AAudio/ANativeWindow on Android), which are always present on
 the target OS. The Android shared library additionally depends on the bundled
 NDK `libc++_shared.so` for the same ABI.
 
@@ -63,11 +63,12 @@ contains the plugin sources, package `LICENSE`, README files, examples, and the
 version-pinned native artifact manifest; platform builds fetch the matching
 GitHub Release archives and verify their SHA-256 values.
 
-From a clean worktree, validate the package from its directory:
+From a clean worktree, validate and publish the package from its directory:
 
 ```sh
 cd packages/erika_flutter
 dart pub publish --dry-run
+dart pub publish
 ```
 
 The isolated package and platform consumer checks run from
@@ -216,7 +217,7 @@ beside your binary).
 
 Erika is MPL-2.0. The bundled native libraries keep their own licenses
 (`THIRD_PARTY_NOTICES.md`). Because Erika is open source with a reproducible
-build, the LGPL components (FFmpeg, FriBidi) satisfy the LGPL relinking
+build, the LGPL components (FFmpeg, FriBidi, SoundTouch) satisfy the LGPL relinking
 requirement: the `MANIFEST.txt` records the exact source commit, and anyone can
 rebuild against a modified FFmpeg via `xtask deps build --all` + `cargo build`
 (see [building.md](building.md)). Keep `LICENSE` and `THIRD_PARTY_NOTICES.md` in

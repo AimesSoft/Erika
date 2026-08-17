@@ -41,11 +41,12 @@ HarmonyOS/OpenHarmony に対応します。package archive には plugin source�
 `LICENSE`、README、example、version 固定の native artifact manifest が含まれ、platform
 build は対応する GitHub Release archive を download して SHA-256 を検証します。
 
-公開前に clean worktree の package directory で検証します：
+公開前に clean worktree の package directory で検証・公開します：
 
 ```sh
 cd packages/erika_flutter
 dart pub publish --dry-run
+dart pub publish
 ```
 
 merge 前に [flutter-package.yml](../.github/workflows/flutter-package.yml) が isolated package

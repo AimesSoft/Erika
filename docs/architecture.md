@@ -57,9 +57,9 @@ cargo run -p xtask -- deps status
   `AVIOContext` from `MediaSource`. Supports stream selection, reference-counted
   packets, and timestamp-based seek.
 - **Decoder** — software plus VideoToolbox, D3D11VA, MediaCodec, and OpenHarmony
-  AVCodec hardware backends. Android software AV1 explicitly selects the source-built
-  `libdav1d` decoder. Hardware frames preserve color metadata for the renderer's
-  platform-specific import or upload path.
+  AVCodec hardware backends. Software AV1 on non-Windows targets selects the
+  source-built `libdav1d` decoder. Hardware frames preserve color metadata for
+  the renderer's platform-specific import or upload path.
 - **AudioResampler** — wraps `libswresample`, converts to interleaved f32 PCM
   (default 48 kHz stereo).
 - **SubtitleDecoder** — decodes embedded text and bitmap subtitle streams.
@@ -79,7 +79,8 @@ enter an audio-only false `Playing` state.
 
 `VideoPlaybackEngine` adds clocked playback:
 
-- Play, pause, stop, seek, playback rate control, EOF detection.
+- Play, pause, stop, seek, playback rate control (SoundTouch for audio),
+  EOF detection.
 - `PlaybackClock` — media-time anchor with audio-master clock discipline
   (deadband correction, bounded per-frame adjustment, large-drift snap).
 - `VideoFrameScheduler` — present/wait/drop decisions for decoded video frames.
@@ -185,7 +186,9 @@ The native renderer for Windows (`renderer/d3d11.rs`):
 
 Second renderer backend for portability:
 
-- Real `wgpu` dependency with device/surface/pipeline creation.
+- Real `wgpu` dependency with device/surface/pipeline creation. The workspace
+  vendors a small `wgpu-hal` patch (`[patch.crates-io]` in the root
+  `Cargo.toml`) that routes the OHOS NDK surface to `VK_OHOS_surface`.
 - NV12/P010 video frame upload and WGSL YCbCr conversion shader.
 - Android MediaCodec Surface import through AHardwareBuffer/Vulkan, with an
   explicit ByteBuffer/CPU-upload path when native interop is unavailable.
@@ -269,7 +272,7 @@ DanmakuEngine, and audio output. The host supplies a native surface and drives
 
 ## C ABI
 
-`erika_capi` exports 79 functions through two handle families:
+`erika_capi` exports 88 functions through two handle families:
 
 - **`ErikaHandle`** — player control and event polling. The host owns rendering.
 - **`ErikaPresenterHandle`** — Erika owns the full stack. The host provides a
@@ -321,10 +324,10 @@ See `docs/flutter_embedding.md` for the embedding model and HDR strategy.
 
 | Platform | Decode | Render | Audio | Status |
 |----------|--------|--------|-------|--------|
-| macOS 14+ | VideoToolbox | Metal | CoreAudio | Available |
-| iOS 16+ | VideoToolbox | Metal | AudioQueue | Available |
+| macOS 11+ | VideoToolbox | Metal | CoreAudio | Available |
+| iOS 13+ | VideoToolbox | Metal | AudioQueue | Available |
 | tvOS 13+ (Apple TV) | VideoToolbox | Metal | AudioQueue | Available |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
 | Linux | — | wgpu (planned) | — | Planned |
 | Android 8+ | MediaCodec / software | wgpu Vulkan with GLES fallback | AAudio | Available; SDR validated, extended-linear scRGB implementation awaits API 35 HDR-device acceptance |
-| HarmonyOS API 18+ | AVCodec (H.264/HEVC) / software | wgpu Vulkan, `OHNativeBuffer` zero-copy import | OHAudio | Available; validated on device, not yet covered by CI |
+| HarmonyOS API 18+ | AVCodec (H.264/HEVC) / software | wgpu Vulkan, `OHNativeBuffer` zero-copy import | OHAudio | Available; validated on device, CI builds the OpenHarmony C ABI but has no device-side run verification |

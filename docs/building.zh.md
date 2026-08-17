@@ -22,7 +22,8 @@ xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,z
 - 交叉目标需安装对应 Rust std target,如
   `rustup target add aarch64-apple-ios` 或
   `rustup target add x86_64-pc-windows-msvc`。
-- Rust 当前将 tvOS 目标列为 tier 3。请安装带 `rust-src` 的 nightly；tvOS
+- tvOS 目标自 Rust 1.84 起为 tier 2，但 Erika 仍用 nightly 与 Cargo 的 `-Z
+  build-std`（`panic_abort` std）构建。安装带 `rust-src` 的 nightly 即可，无需 `rustup target add`。
   通过 Cargo 的 `-Z build-std` 构建，不使用 `rustup target add`。
 
 ### 构建工具 —— macOS / Unix 宿主
@@ -70,7 +71,7 @@ Android 最低 API 为 **26**;只在需要更高版本时用 `ANDROID_API_LEVEL`
 cargo run -p xtask -- deps plan
 cargo run -p xtask -- deps status
 
-# 构建基础集(zlib + FFmpeg;Android 还会构建 dav1d)—— LGPL profile
+# 构建基础集(zlib + FFmpeg;dav1d 覆盖 Android 与 Apple 目标)—— LGPL profile
 cargo run -p xtask -- deps build --profile lgpl
 
 # 构建全部,含 libass 字幕栈
@@ -86,7 +87,7 @@ cargo run -p xtask -- deps build --all --profile lgpl
 |------|------|------|------|
 | `--profile` | `lgpl`、`gpl-full` | `lgpl` | FFmpeg 许可证 profile(见下)。 |
 | `--target` | 见目标表 | `host` | 交叉编译目标。 |
-| `--all` | — | 关 | 同时构建 libass + FreeType + HarfBuzz + FriBidi(字幕渲染)。基础集是 zlib + FFmpeg,Android 目标还包含 dav1d。 |
+| `--all` | — | 关 | 同时构建 libass + FreeType + HarfBuzz + FriBidi(字幕渲染)。基础集是 zlib + FFmpeg,Android 与 Apple 目标还包含 dav1d。 |
 | `--force` | — | 关 | 即使已是最新标记也重建。 |
 | `--jobs N` | 整数 | 自动 | 原生构建的并行度。 |
 
@@ -136,7 +137,7 @@ ERIKA_NATIVE_PROFILE=lgpl ERIKA_NATIVE_TARGET=aarch64-apple-darwin \
   cargo build -p erika_capi --release --target aarch64-apple-darwin
 ```
 
-Rust 的 tvOS 目标属于 tier 3，直接构建时需要 nightly 并从 `rust-src`
+tvOS 的 Rust 目标虽已是 tier 2，但 Erika 直接构建时仍用 nightly 并从 `rust-src`
 构建标准库：
 
 ```sh
@@ -198,7 +199,7 @@ cdylib 与匹配 ABI 的 NDK `libc++_shared.so`。
 
 - **`lgpl`**(默认)—— FFmpeg 配置为 `--disable-gpl --enable-version3`,静态,无网络,
   仅 file 协议,一组精选的 demuxer/decoder/parser,启用 zlib,外加 VideoToolbox(Apple)、
-  D3D11VA/DXVA2(Windows)或 JNI/MediaCodec + 源码构建的 dav1d AV1 软解回退(Android)。
+  D3D11VA/DXVA2(Windows)或 JNI/MediaCodec + 源码构建的 dav1d AV1 软解回退(Android 与 Apple 目标)。
 - **`gpl-full`** —— 同一集合加 `--enable-gpl`。仅当你接受产物的 GPL 条款时使用。
 
 Rust workspace 本身是 MPL-2.0(见 [`LICENSE`](../LICENSE))。`xtask` 与你的
@@ -256,7 +257,7 @@ Android FFmpeg 明确保留 H.264、HEVC、MPEG-2、MPEG-4、VP8、VP9、AV1 的
 MediaCodec decoder。主路径让 MediaCodec 输出软件可读 YUV,继续复用共享 wgpu 上传、
 字幕、弹幕和截图合成。这是“硬解 + CPU upload”,不是 Surface 零拷贝,统计与日志必须
 如实区分。AV1 MediaCodec 无法打开或解码失败时,软件路径会显式选择 FFmpeg 的
-`libdav1d` decoder。`xtask` 为四个 Android ABI 从源码构建 dav1d 1.5.1,同时支持
+`libdav1d` decoder。`xtask` 为全部 Android ABI 与 Apple 目标从源码构建 dav1d 1.5.1,同时支持
 8-bit 与高位深;32 位 x86 为保证 PIC 安全会禁用汇编。
 
 ### 验证 Android 输出协商
@@ -318,7 +319,7 @@ underflow)——快速确认硬解和零拷贝互操作已生效。
   Hybrid Composition（`2`）、使用 GLES（`3`）、没有 `Rgba16Float`（`4`）、dataspace
   API 不可用（`5`）或 `SCRGB_LINEAR` 验证失败（`6`）。`7` 与 `8` 分别表示 surface
   configure 失败和在不支持的 backend 上请求 Apple EDR。
-- **旧版 FFmpeg 被拒** —— 安装/构建 7.x 包;别依赖系统 FFmpeg。
+- **旧版 FFmpeg 被拒** —— 原生核心要求 8.x 依赖包(`libavutil >= 60`),否则构建期直接失败;仅当设置 `ERIKA_ALLOW_LEGACY_FFMPEG=1` 时才跳过该检查(仅限本地兼容性实验)。
 - **license 校验失败** —— 你的 profile 混了 GPL 与 LGPL 工件;用单一 `--profile` 重建 deps。
 
 开发工作流见 [CONTRIBUTING.zh.md](../CONTRIBUTING.zh.md),各部分如何拼接见

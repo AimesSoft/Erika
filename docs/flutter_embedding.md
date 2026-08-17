@@ -92,19 +92,22 @@ the same wgpu pass as every other platform.
 Devices missing the required Vulkan extensions fall back to FFmpeg software
 decode with CPU upload. The fallback is reported through `VideoDecoderChanged`
 events and presenter diagnostics instead of failing playback. The HarmonyOS
-path is validated on device but is not yet covered by CI.
+path is validated on device; CI builds the OpenHarmony C ABI but has no
+device-side run verification.
 
 ## iOS Build Path
 
 The iOS plugin links the Erika C ABI static library into the app through a
-CocoaPod script phase that builds the Rust `erika_capi` crate for the target iOS
-architecture.
+CocoaPod script phase. By default it downloads the matching prebuilt archive;
+set `ERIKA_FORCE_SOURCE_BUILD=1` (with `ERIKA_REPO_ROOT`) to build the Rust
+`erika_capi` crate for the target iOS architecture instead.
 
 ## tvOS Build Path
 
 The tvOS plugin links the Erika C ABI static library through its CocoaPod script
-phase and builds it for tvOS devices and simulators. It supports tvOS 13+,
-arm64 devices, and arm64/x86_64 simulators. See
+phase. Like iOS it downloads the prebuilt archive by default, with
+`ERIKA_FORCE_SOURCE_BUILD=1` falling back to building from source. It supports
+tvOS 13+, arm64 devices, and arm64/x86_64 simulators. See
 [`packages/erika_flutter/README.md`](../packages/erika_flutter/README.md) for
 nightly, prebuilt-bundle, and source-build options.
 
@@ -246,8 +249,9 @@ provides `codec`, `width`, `height`, `pixelFormat`, `profile`, `level`, `bitRate
 `sampleRate`, `channels`, and `sampleFormat`.
 
 - `bitRate` is in bit/s. Erika prefers the video track's own codec parameters; only when there is
-  one video track with no bitrate and the container total plus every other audio-track bitrate are
-  known does it estimate video bitrate as container bitrate minus audio bitrates. It is `null` when
+  exactly one video track with no declared bitrate and the container bitrate plus every other
+  media track's bitrate (audio, subtitle, other video) are known does it estimate video bitrate as
+  container bitrate minus those. It is `null` when
   unavailable, is not an instantaneous runtime bitrate, and an estimate can include container
   overhead or non-audio streams.
 - `frameRateNumerator` / `frameRateDenominator` retain the rational value, preventing values
@@ -294,7 +298,7 @@ so the host should poll `getUpscalerStatus` to drive its UI:
 |-----------------|---------|
 | `off` | No mode requested. |
 | `building` | Kernels compiling (first use of a mode); frames render unscaled until ready. |
-| `inactive` | Mode requested but not applied this frame — e.g. the video is not displayed above its source resolution, or the source is HDR (upscaler runs on SDR luma only). |
+| `inactive` | Mode requested but not applied — kernels not ready (and not compiling), or the backend recorded a fallback/failure. |
 | `scalar` | Running on the Metal scalar or wgpu compute backend. |
 | `simdgroupMatrix` | Running on the `simdgroup_matrix` backend (Apple Silicon default). |
 

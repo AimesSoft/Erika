@@ -38,11 +38,12 @@ Flutter Android 构建按实际请求的 ABI 下载对应
 和 HarmonyOS/OpenHarmony。package archive 包含插件源码、package `LICENSE`、README、
 example 和固定 native artifact manifest；平台构建会下载匹配的 GitHub Release 归档并校验 SHA-256。
 
-发布前先在干净工作树中从 package 目录验证：
+发布前先在干净工作树中从 package 目录验证，然后手动发布：
 
 ```sh
 cd packages/erika_flutter
 dart pub publish --dry-run
+dart pub publish
 ```
 
 合并前由 [flutter-package.yml](../.github/workflows/flutter-package.yml) 执行 isolated
