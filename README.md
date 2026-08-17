@@ -84,6 +84,19 @@ The package downloads the matching verified native runtime during the platform
 build. Android downloads only the selected ABI archive; Linux and Web are not
 published targets yet.
 
+### Swift package
+
+原生 macOS、iOS 和 tvOS 应用可通过 Swift Package Manager 使用
+[`ErikaSwift`](https://github.com/AimesSoft/ErikaSwift) 0.1.7。在 Xcode 的
+**Add Package Dependencies** 中输入：
+
+```text
+https://github.com/AimesSoft/ErikaSwift
+```
+
+SwiftPM 会自动下载对应的 Apple XCFramework，不需要安装 Rust、FFmpeg、
+CocoaPods 或 Flutter。
+
 ## C ABI 接口族
 
 Erika 提供两组 C ABI 入口，适配不同嵌入场景：
@@ -124,6 +137,7 @@ docs/                     架构与嵌入文档
 - [架构总览](docs/architecture.zh.md) — 引擎设计、渲染后端、平台支持
 - [C ABI 参考手册](docs/capi_reference.zh.md) — 全部导出函数、状态码、所有权与线程约定
 - [原生接入指南](docs/integration.zh.md) — C/C++/Win32/Swift 等非 Flutter 宿主的端到端嵌入
+- [Swift SDK](https://github.com/AimesSoft/ErikaSwift) — macOS、iOS、tvOS 的 SwiftPM 包和原生视图
 - [构建与依赖指南](docs/building.zh.md) — xtask、native 依赖、交叉编译
 - [Flutter 嵌入](docs/flutter_embedding.zh.md) ・ [弹幕架构](docs/danmaku_architecture.md)
 - [平台能力矩阵](docs/platform_matrix.zh.md) — 区分可编译、CI 覆盖、真机验收与预编译发布
