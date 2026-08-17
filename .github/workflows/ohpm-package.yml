@@ -44,7 +44,7 @@ jobs:
         id: ohos_sdk
         with:
           version: "5.1.0"
-          components: "native;ets;js;toolchains"
+          components: "native;ets;js;toolchains;previewer"
           fixup-path: true
           cache: true
 
