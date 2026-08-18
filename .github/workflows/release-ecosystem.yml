@@ -56,10 +56,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sed -i -E "s/^version: .*/version: \${VERSION}/" packages/erika_flutter/pubspec.yaml
-          sed -i -E "s/(\"version\": \")[^\"]+/\1\${VERSION}/" packages/erika_ohos/oh-package.json5
-          sed -i -E "s/(\"versionName\": \")[^\"]+/\1\${VERSION}/" examples/ohos_arkts/AppScope/app.json5
-          sed -i -E "s/(\"version\": \")[^\"]+/\1\${VERSION}/" examples/ohos_arkts/entry/oh-package.json5
+          sed -i -E "s/^version: .*/version: ${VERSION}/" packages/erika_flutter/pubspec.yaml
+          sed -i -E "s/(\"version\": \")[^\"]+/\1${VERSION}/" packages/erika_ohos/oh-package.json5
+          sed -i -E "s/(\"versionName\": \")[^\"]+/\1${VERSION}/" examples/ohos_arkts/AppScope/app.json5
+          sed -i -E "s/(\"version\": \")[^\"]+/\1${VERSION}/" examples/ohos_arkts/entry/oh-package.json5
 
           checksums="$RUNNER_TEMP/SHA256SUMS"
           gh release download "v$VERSION" \
@@ -68,7 +68,7 @@ jobs:
             --dir "$RUNNER_TEMP"
 
           properties=packages/erika_flutter/native_artifacts.properties
-          sed -i -E "s/^# Native artifacts consumed by erika_flutter .*/# Native artifacts consumed by erika_flutter ${VERSION}. /" "$properties"
+          sed -i -E "s/^# Native artifacts consumed by erika_flutter .*/# Native artifacts consumed by erika_flutter ${VERSION}./" "$properties"
           sed -i -E "s/^ERIKA_NATIVE_VERSION=.*/ERIKA_NATIVE_VERSION=${VERSION}/" "$properties"
 
           set_property() {
