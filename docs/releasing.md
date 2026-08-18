@@ -75,28 +75,29 @@ The isolated package and platform consumer checks run from
 [`.github/workflows/flutter-package.yml`](../.github/workflows/flutter-package.yml)
 before a package release is merged. Linux and Web are not package targets yet.
 
-Publishing to pub.dev is automated by
-[`.github/workflows/pub-publish.yml`](../.github/workflows/pub-publish.yml).
-Native archives include build metadata, so the package-pinned SHA-256 values can
-only be updated after the corresponding GitHub Release exists. Use this order:
+Publishing pub.dev, OHPM, and ErikaSwift is orchestrated by
+[`.github/workflows/release-ecosystem.yml`](../.github/workflows/release-ecosystem.yml).
+Because native archives include build metadata, the workflow updates the package
+versions and all pinned SHA-256 values after the GitHub Release and its
+`SHA256SUMS` asset exist. A normal release now starts with one core tag:
 
-1. Push `v0.1.8` as described below and wait for the native GitHub Release and
-   its `SHA256SUMS` asset.
-2. Update `packages/erika_flutter/pubspec.yaml`, `native_artifacts.properties`,
-   and the changelog to the same version. Copy all 12 platform archive digests
-   from the Release into the native artifact manifest.
-3. Merge after the Flutter package checks pass, then tag that package commit:
+```sh
+VERSION=0.1.8
+git tag "v${VERSION}"
+git push origin "v${VERSION}"
+```
 
-   ```sh
-   VERSION=0.1.8
-   git tag "erika_flutter-v${VERSION}"
-   git push origin "erika_flutter-v${VERSION}"
-   ```
+After the native Release succeeds, the workflow automatically:
 
-The action verifies the package version, native version, and every pinned
-SHA-256 against the GitHub Release before publishing through pub.dev OIDC. The
-one-time pub.dev Admin configuration is repository `AimesSoft/Erika` with tag
-pattern `erika_flutter-v{{version}}`; no long-lived upload secret is stored.
+1. Updates the Flutter and OHPM manifests and `native_artifacts.properties`.
+2. Publishes `erika_flutter` through pub.dev OIDC.
+3. Builds and publishes `erika` to OHPM.
+4. Builds and uploads the Swift XCFramework, then dispatches ErikaSwift to
+   update, test, tag, and release the matching SDK.
+
+The independent `erika_flutter-vX.Y.Z` tag remains available for legacy manual
+publishing. Cross-repository Swift publishing requires the one-time
+`ERIKA_SWIFT_RELEASE_TOKEN` secret in `AimesSoft/Erika`.
 
 ### Pub.dev publisher identity
 
