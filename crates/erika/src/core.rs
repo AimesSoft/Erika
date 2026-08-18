@@ -25,7 +25,10 @@ const EXTERNAL_SUBTITLE_TRACK_ID_BASE: i64 = 1_000_000;
 const AUDIO_PREFILL_AFTER_VIDEO_LIMIT: usize = 8;
 const AUDIO_PREFILL_PACKET_BUDGET: usize = 6;
 const AUDIO_PREFILL_TIME_BUDGET: Duration = Duration::from_millis(5);
-const AUDIO_PREFILL_LOW_WATER: Duration = Duration::from_millis(350);
+// Keep producer prefill aligned with the output queue high-water mark. This
+// lets callback-driven backends hold a short rate-change bridge without
+// accumulating stale-rate PCM in the presenter channel.
+const AUDIO_PREFILL_LOW_WATER: Duration = crate::audio::AUDIO_OUTPUT_QUEUE_HIGH_WATER;
 const AUDIO_CLOCK_SNAPSHOT_STALE_AFTER: Duration = Duration::from_millis(500);
 const PLAYBACK_STARVATION_GRACE: Duration = Duration::from_millis(500);
 const AUDIO_OUTPUT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(10);
