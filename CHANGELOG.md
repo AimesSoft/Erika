@@ -18,6 +18,12 @@
 - Added isolated GitHub Actions consumers for Android, iOS, macOS, tvOS,
   Windows, and OpenHarmony so package builds cannot depend on the monorepo.
 
+### OpenHarmony package distribution
+
+- Published the independent native ArkTS package `erika` to OHPM for
+  OpenHarmony arm64 (API 18+), with `XComponent` surface lifecycle,
+  `renderTick()` scheduling, playback controls, events, and screenshots.
+
 ## 0.1.6 - 2026-08-14
 
 ### Rendering and playback
