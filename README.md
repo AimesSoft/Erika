@@ -84,6 +84,20 @@ The package downloads the matching verified native runtime during the platform
 build. Android downloads only the selected ABI archive; Linux and Web are not
 published targets yet.
 
+### OpenHarmony package
+
+The native ArkTS package `erika` 0.1.7 is published on
+[OHPM](https://ohpm.openharmony.cn/#/cn/detail/erika) for OpenHarmony arm64
+applications (API 18+). Install it with:
+
+```sh
+ohpm install erika
+```
+
+This package is independent of Flutter. See the
+[OpenHarmony package guide](packages/erika_ohos/README.md) for the
+`ErikaPlayer` API and `XComponent` surface setup.
+
 ### Swift package
 
 原生 macOS、iOS 和 tvOS 应用可通过 Swift Package Manager 使用
@@ -127,6 +141,7 @@ crates/erika              核心播放库
 crates/erika_capi         C ABI 导出层
 crates/erika_ffmpeg_sys   FFmpeg 底层 bindings
 packages/erika_flutter    Flutter 插件 (macOS + iOS + tvOS + Windows + Android + HarmonyOS)
+packages/erika_ohos       OpenHarmony ArkTS / OHPM package
 examples/                 验证与演示程序
 xtask/                    原生依赖构建编排
 docs/                     架构与嵌入文档
