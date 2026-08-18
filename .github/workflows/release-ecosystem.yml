@@ -113,19 +113,41 @@ jobs:
             git commit -m "Update native artifact manifest for v${VERSION}"
             git push origin HEAD:main
           fi
-          echo "ref=main" >> "$GITHUB_OUTPUT"
+          echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-  publish-pub:
-    name: Publish Flutter package
+  trigger-pub-release:
+    name: Trigger Flutter package publish
     needs: [version, prepare-package-metadata]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
-    uses: ./.github/workflows/pub-publish.yml
-    with:
-      version: ${{ needs.version.outputs.version }}
-      ref: ${{ needs.prepare-package-metadata.outputs.ref }}
-    secrets: inherit
+    env:
+      GH_TOKEN: ${{ secrets.ERIKA_SWIFT_RELEASE_TOKEN }}
+      VERSION: ${{ needs.version.outputs.version }}
+      PACKAGE_REF: ${{ needs.prepare-package-metadata.outputs.ref }}
+    steps:
+      - name: Create the package release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          package_tag="erika_flutter-v${VERSION}"
+          package_ref="refs/tags/${package_tag}"
+
+          if existing="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${package_tag}" 2>/dev/null)"; then
+            existing_sha="$(jq -r '.object.sha' <<<"$existing")"
+            if [[ "$existing_sha" != "$PACKAGE_REF" ]]; then
+              echo "${package_tag} already points to ${existing_sha}, expected ${PACKAGE_REF}." >&2
+              exit 1
+            fi
+            echo "${package_tag} already points to the package metadata commit."
+            exit 0
+          fi
+
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f "ref=${package_ref}" \
+            -f "sha=${PACKAGE_REF}"
+          echo "Created ${package_tag}; the tag-triggered pub.dev workflow will publish it."
 
   publish-ohpm:
     name: Publish OpenHarmony package

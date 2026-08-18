@@ -63,12 +63,14 @@ git push origin "v${VERSION}"
 原生 Release 成功后，workflow 会自动完成以下工作：
 
 1. 更新 `pubspec.yaml`、OHPM manifest 和 `native_artifacts.properties`；
-2. 通过 OIDC 发布 `erika_flutter` 到 pub.dev；
+2. 自动创建对应的 `erika_flutter-vX.Y.Z` package tag；该 tag 会触发 pub.dev
+   OIDC 发布，并先校验版本和全部 SHA-256；
 3. 构建并发布 `erika` 到 OHPM；
 4. 组装 Swift XCFramework，上传到 Erika Release，并通知 ErikaSwift 更新、测试、打 tag 和建 Release。
 
-独立的 `erika_flutter-vX.Y.Z` tag 仍保留给兼容旧流程的手动发布。跨仓库 Swift 发布需要
-在 `AimesSoft/Erika` 配置一次 `ERIKA_SWIFT_RELEASE_TOKEN` secret。
+`erika_flutter-vX.Y.Z` 是工作流内部使用的 package tag，维护者不需要手动创建；正常发版只推送
+核心 `vX.Y.Z` tag。跨仓库 package tag 和 Swift 发布需要在 `AimesSoft/Erika` 配置一次
+`ERIKA_SWIFT_RELEASE_TOKEN` secret。
 
 ### pub.dev publisher 身份
 

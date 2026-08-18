@@ -90,13 +90,16 @@ git push origin "v${VERSION}"
 After the native Release succeeds, the workflow automatically:
 
 1. Updates the Flutter and OHPM manifests and `native_artifacts.properties`.
-2. Publishes `erika_flutter` through pub.dev OIDC.
+2. Creates the matching `erika_flutter-vX.Y.Z` tag on the metadata commit;
+   that tag triggers the pub.dev OIDC publish after its version and checksums
+   are verified.
 3. Builds and publishes `erika` to OHPM.
 4. Builds and uploads the Swift XCFramework, then dispatches ErikaSwift to
    update, test, tag, and release the matching SDK.
 
-The independent `erika_flutter-vX.Y.Z` tag remains available for legacy manual
-publishing. Cross-repository Swift publishing requires the one-time
+The `erika_flutter-vX.Y.Z` tag is an internal package-release tag created by
+the workflow; maintainers only create and push the core `vX.Y.Z` tag.
+Cross-repository package-tag and Swift publishing require the one-time
 `ERIKA_SWIFT_RELEASE_TOKEN` secret in `AimesSoft/Erika`.
 
 ### Pub.dev publisher identity
