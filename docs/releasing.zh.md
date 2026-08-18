@@ -49,23 +49,26 @@ dart pub publish
 合并前由 [flutter-package.yml](../.github/workflows/flutter-package.yml) 执行 isolated
 package 和各平台 consumer 检查。Linux 和 Web 目前还不是 package 发布目标。
 
-pub.dev 发布由 [pub-publish.yml](../.github/workflows/pub-publish.yml) 自动执行。原生归档包含
-构建时间，因此 package 固定的 SHA-256 只能在对应 GitHub Release 创建后更新。发布顺序为：
+pub.dev、OHPM 和 ErikaSwift 由
+[release-ecosystem.yml](../.github/workflows/release-ecosystem.yml) 串联发布。原生归档包含
+构建时间，因此 workflow 会在 GitHub Release 和 `SHA256SUMS` 创建后自动更新
+Flutter/OHPM package 的版本与 SHA-256，再分别执行发布。正常发版只需要推送一个核心 tag：
 
-1. 按下文步骤推送 `v0.1.8`，等待原生 GitHub Release 和 `SHA256SUMS` 完成；
-2. 将 `packages/erika_flutter/pubspec.yaml`、`native_artifacts.properties` 和 CHANGELOG
-   更新到同一版本，并把 Release 中 12 个平台归档的哈希写入 manifest；
-3. 合并并确认 Flutter package 检查通过后，在该提交上推送独立 package tag：
+```sh
+VERSION=0.1.8
+git tag "v${VERSION}"
+git push origin "v${VERSION}"
+```
 
-   ```sh
-   VERSION=0.1.8
-   git tag "erika_flutter-v${VERSION}"
-   git push origin "erika_flutter-v${VERSION}"
-   ```
+原生 Release 成功后，workflow 会自动完成以下工作：
 
-Action 会先校验 package 版本、native 版本和 GitHub Release 的全部 SHA-256，再通过
-pub.dev OIDC 发布，不保存长期上传密钥。pub.dev Admin 的一次性配置为 repository
-`AimesSoft/Erika`、tag pattern `erika_flutter-v{{version}}`。
+1. 更新 `pubspec.yaml`、OHPM manifest 和 `native_artifacts.properties`；
+2. 通过 OIDC 发布 `erika_flutter` 到 pub.dev；
+3. 构建并发布 `erika` 到 OHPM；
+4. 组装 Swift XCFramework，上传到 Erika Release，并通知 ErikaSwift 更新、测试、打 tag 和建 Release。
+
+独立的 `erika_flutter-vX.Y.Z` tag 仍保留给兼容旧流程的手动发布。跨仓库 Swift 发布需要
+在 `AimesSoft/Erika` 配置一次 `ERIKA_SWIFT_RELEASE_TOKEN` secret。
 
 ### pub.dev publisher 身份
 
