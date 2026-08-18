@@ -83,6 +83,20 @@ flutter pub add erika_flutter
 platform build 時に対応する検証済み native runtime を download します。Android
 では選択された ABI の archive だけを download します。Linux と Web はまだ公開対象ではありません。
 
+### OpenHarmony パッケージ
+
+ネイティブ ArkTS パッケージ `erika` 0.1.7 は
+[OHPM](https://ohpm.openharmony.cn/#/cn/detail/erika) で公開されています。
+OpenHarmony arm64（API 18 以上）のアプリには次のコマンドで追加できます：
+
+```sh
+ohpm install erika
+```
+
+このパッケージは Flutter に依存しません。`ErikaPlayer` API と
+`XComponent` サーフェスの設定は
+[OpenHarmony パッケージガイド](../packages/erika_ohos/README.md)を参照してください。
+
 ## C ABI インターフェースファミリー
 
 異なる組み込みシナリオに対応する二つの C ABI エントリーポイントファミリーを提供します：
@@ -113,6 +127,7 @@ crates/erika              コア再生ライブラリ
 crates/erika_capi         C ABI エクスポート層
 crates/erika_ffmpeg_sys   FFmpeg 低レベルバインディング
 packages/erika_flutter    Flutter プラグイン (macOS + iOS + tvOS + Windows + Android + HarmonyOS)
+packages/erika_ohos       OpenHarmony ArkTS / OHPM パッケージ
 examples/                 検証・デモプログラム
 xtask/                    ネイティブ依存関係ビルドオーケストレーション
 docs/                     アーキテクチャと組み込みドキュメント
