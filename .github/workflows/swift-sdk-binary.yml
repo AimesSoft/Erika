@@ -18,6 +18,25 @@ on:
         required: true
         default: false
         type: boolean
+  workflow_call:
+    inputs:
+      version:
+        description: Existing Erika native release version
+        required: true
+        type: string
+      ref:
+        description: Git ref containing the Swift packaging script
+        required: false
+        type: string
+      upload:
+        description: Attach the Swift XCFramework to the existing release
+        required: false
+        default: false
+        type: boolean
+    outputs:
+      checksum:
+        description: SwiftPM checksum of the assembled XCFramework archive
+        value: ${{ jobs.package.outputs.checksum }}
 
 permissions:
   contents: write
@@ -27,11 +46,15 @@ jobs:
     name: Assemble Apple XCFramework
     runs-on: macos-26
     timeout-minutes: 45
+    outputs:
+      checksum: ${{ steps.binary.outputs.checksum }}
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ inputs.version || '0.1.7' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Download existing Apple release archives
         shell: bash
@@ -85,7 +108,7 @@ jobs:
           retention-days: 7
 
       - name: Attach binary target to the native release
-        if: github.event_name == 'workflow_dispatch' && inputs.upload
+        if: inputs.upload && (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call')
         shell: bash
         run: |
           set -euo pipefail

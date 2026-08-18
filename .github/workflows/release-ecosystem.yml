@@ -1,0 +1,177 @@
+name: Release ecosystem packages
+
+# A native vX.Y.Z release is the single release trigger. The Release workflow
+# creates the archives and SHA256SUMS first; this workflow then publishes the
+# package targets that consume those archives.
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-ecosystem-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Resolve release version
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      release_ref: ${{ steps.meta.outputs.release_ref }}
+    steps:
+      - id: meta
+        shell: bash
+        env:
+          RELEASE_REF: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_REF#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release_ref=$RELEASE_REF" >> "$GITHUB_OUTPUT"
+
+  prepare-package-metadata:
+    name: Update Flutter artifact manifest
+    needs: version
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.commit.outputs.ref }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Update package version and native SHA-256 values
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i -E "s/^version: .*/version: \${VERSION}/" packages/erika_flutter/pubspec.yaml
+          sed -i -E "s/(\"version\": \")[^\"]+/\1\${VERSION}/" packages/erika_ohos/oh-package.json5
+          sed -i -E "s/(\"versionName\": \")[^\"]+/\1\${VERSION}/" examples/ohos_arkts/AppScope/app.json5
+          sed -i -E "s/(\"version\": \")[^\"]+/\1\${VERSION}/" examples/ohos_arkts/entry/oh-package.json5
+
+          checksums="$RUNNER_TEMP/SHA256SUMS"
+          gh release download "v$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern SHA256SUMS \
+            --dir "$RUNNER_TEMP"
+
+          properties=packages/erika_flutter/native_artifacts.properties
+          sed -i -E "s/^# Native artifacts consumed by erika_flutter .*/# Native artifacts consumed by erika_flutter ${VERSION}. /" "$properties"
+          sed -i -E "s/^ERIKA_NATIVE_VERSION=.*/ERIKA_NATIVE_VERSION=${VERSION}/" "$properties"
+
+          set_property() {
+            local key="$1"
+            local asset="$2"
+            local digest
+            digest="$(awk -v asset="$asset" '$2 == asset {print $1; exit}' "$checksums")"
+            test -n "$digest"
+            sed -i -E "s/^${key}=.*/${key}=${digest}/" "$properties"
+          }
+
+          set_property ERIKA_ANDROID_ARM64_V8A_SHA256 erika-flutter-android-arm64-v8a.zip
+          set_property ERIKA_ANDROID_ARMEABI_V7A_SHA256 erika-flutter-android-armeabi-v7a.zip
+          set_property ERIKA_ANDROID_X86_64_SHA256 erika-flutter-android-x86_64.zip
+          set_property ERIKA_ANDROID_X86_SHA256 erika-flutter-android-x86.zip
+          set_property ERIKA_IOS_SHA256 erika-capi-ios.zip
+          set_property ERIKA_TVOS_SHA256 erika-capi-tvos.zip
+          set_property ERIKA_MACOS_ARM64_SHA256 erika-capi-macos-arm64.zip
+          set_property ERIKA_MACOS_X64_SHA256 erika-capi-macos-x64.zip
+          set_property ERIKA_MACOS_UNIVERSAL_SHA256 erika-capi-macos-universal.zip
+          set_property ERIKA_WINDOWS_X64_SHA256 erika-capi-windows-x64.zip
+          set_property ERIKA_WINDOWS_ARM64_SHA256 erika-capi-windows-arm64.zip
+          set_property ERIKA_OPENHARMONY_ARM64_SHA256 erika-capi-openharmony-arm64.zip
+          git diff --check
+
+      - name: Commit release metadata
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No manifest changes are required."
+          else
+            git add \
+              packages/erika_flutter/pubspec.yaml \
+              packages/erika_flutter/native_artifacts.properties \
+              packages/erika_ohos/oh-package.json5 \
+              examples/ohos_arkts/AppScope/app.json5 \
+              examples/ohos_arkts/entry/oh-package.json5
+            git commit -m "Update native artifact manifest for v${VERSION}"
+            git push origin HEAD:main
+          fi
+          echo "ref=main" >> "$GITHUB_OUTPUT"
+
+  publish-pub:
+    name: Publish Flutter package
+    needs: [version, prepare-package-metadata]
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/pub-publish.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      ref: ${{ needs.prepare-package-metadata.outputs.ref }}
+    secrets: inherit
+
+  publish-ohpm:
+    name: Publish OpenHarmony package
+    needs: [version, prepare-package-metadata]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ohpm-package.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      ref: ${{ needs.prepare-package-metadata.outputs.ref }}
+      publish: true
+    secrets: inherit
+
+  build-swift:
+    name: Build and attach Swift binary
+    needs: version
+    permissions:
+      contents: write
+    uses: ./.github/workflows/swift-sdk-binary.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      ref: ${{ needs.version.outputs.release_ref }}
+      upload: true
+    secrets: inherit
+
+  update-swift-sdk:
+    name: Update ErikaSwift repository
+    needs: [version, build-swift]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.ERIKA_SWIFT_RELEASE_TOKEN }}
+      VERSION: ${{ needs.version.outputs.version }}
+      CHECKSUM: ${{ needs.build-swift.outputs.checksum }}
+      SOURCE_TAG: ${{ needs.version.outputs.release_ref }}
+    steps:
+      - name: Dispatch ErikaSwift release workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          test -n "$CHECKSUM"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg checksum "$CHECKSUM" \
+            --arg source_tag "$SOURCE_TAG" \
+            '{event_type:"erika-release", client_payload:{version:$version, checksum:$checksum, source_tag:$source_tag}}' \
+            | gh api --method POST repos/AimesSoft/ErikaSwift/dispatches --input -

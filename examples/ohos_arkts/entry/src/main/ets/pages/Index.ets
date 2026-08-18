@@ -1,8 +1,13 @@
-import { ErikaPlayer } from 'erika';
+import { ErikaNativeResponse, ErikaPlayer } from 'erika';
 
 class ErikaSurfaceController extends XComponentController {
   private readonly player: ErikaPlayer = new ErikaPlayer();
   private attached: boolean = false;
+  private pendingUri: string = '';
+
+  onSurfaceCreated(surfaceId: string): void {
+    console.info(`Erika XComponent surface created: ${surfaceId}`);
+  }
 
   onSurfaceChanged(surfaceId: string, rect: SurfaceRect): void {
     if (!this.attached) {
@@ -13,9 +18,10 @@ class ErikaSurfaceController extends XComponentController {
         scale: 1.0,
       });
       this.attached = true;
-      return;
+    } else {
+      this.player.resizeSurface(rect.surfaceWidth, rect.surfaceHeight);
     }
-    this.player.resizeSurface(rect.surfaceWidth, rect.surfaceHeight);
+    this.startPendingUri();
   }
 
   onSurfaceDestroyed(_surfaceId: string): void {
@@ -25,24 +31,43 @@ class ErikaSurfaceController extends XComponentController {
     }
     this.player.dispose();
   }
+
+  open(uri: string): void {
+    this.pendingUri = uri;
+    this.startPendingUri();
+  }
+
+  renderFrame(timeSeconds: number): ErikaNativeResponse {
+    return this.player.renderTick(timeSeconds);
+  }
+
+  private startPendingUri(): void {
+    if (!this.attached || this.pendingUri.length === 0) {
+      return;
+    }
+    const uri: string = this.pendingUri;
+    this.pendingUri = '';
+    this.player.open(uri);
+    this.player.play();
+  }
 }
 
 @Entry
 @Component
 struct Index {
-  surfaceController: XComponentController = new ErikaSurfaceController();
+  surfaceController: ErikaSurfaceController = new ErikaSurfaceController();
 
   build() {
     Column() {
       XComponent({
+        id: 'erika-surface',
         type: XComponentType.SURFACE,
         controller: this.surfaceController,
       })
         .width('100%')
         .height('100%')
         .onLoad(() => {
-          const surfaceId: string = this.surfaceController.getXComponentSurfaceId();
-          console.info(`Erika XComponent surface ready: ${surfaceId}`);
+          this.surfaceController.open('https://example.com/video.mp4');
         })
     }
       .width('100%')

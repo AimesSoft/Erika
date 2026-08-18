@@ -21,9 +21,29 @@ on:
       - "packages/erika_ohos/**"
   workflow_dispatch:
     inputs:
+      version:
+        description: Erika version to package
+        required: true
+        default: "0.1.7"
+        type: string
       publish:
         description: Publish the validated HAR to OHPM
         required: true
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      version:
+        description: Erika version to package
+        required: true
+        type: string
+      ref:
+        description: Git ref containing the package source
+        required: false
+        type: string
+      publish:
+        description: Publish the validated HAR to OHPM
+        required: false
         default: false
         type: boolean
 
@@ -35,8 +55,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ERIKA_NATIVE_VERSION: "0.1.7"
-  ERIKA_NATIVE_SHA256: "492afbab9ae9f20f55ce6ae2212094ece6f6c0cca1bee96ddffc175068afa396"
+  ERIKA_NATIVE_VERSION: "${{ inputs.version || '0.1.7' }}"
   OHPM_CLI_URL: "https://repo.huaweicloud.com/harmonyos/ohpm/5.1.0/commandline-tools-linux-x64-5.1.0.840.zip"
   OHPM_CLI_SHA256: "1dcefa4741dc289277560b2802040e0c45b433898d8db453d711d5376e0478f1"
 
@@ -47,6 +66,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - uses: openharmony-rs/setup-ohos-sdk@b312caf8a43bb836aa24c08f65f97e1f09a89cad
         id: ohos_sdk
@@ -73,11 +94,13 @@ jobs:
           set -euo pipefail
           runtime_dir="$RUNNER_TEMP/erika-runtime"
           mkdir -p "$runtime_dir" packages/erika_ohos/src/main/cpp
+          native_sha256="$(awk -F= '$1 == "ERIKA_OPENHARMONY_ARM64_SHA256" {print $2; exit}' packages/erika_flutter/native_artifacts.properties)"
+          test -n "$native_sha256"
           runtime_zip="$runtime_dir/erika-capi-openharmony-arm64.zip"
           curl --fail --location --retry 5 --retry-all-errors \
             "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${ERIKA_NATIVE_VERSION}/erika-capi-openharmony-arm64.zip" \
             --output "$runtime_zip"
-          printf '%s  %s\n' "$ERIKA_NATIVE_SHA256" "$runtime_zip" | sha256sum --check
+          printf '%s  %s\n' "$native_sha256" "$runtime_zip" | sha256sum --check
           unzip -q "$runtime_zip" -d "$runtime_dir/unpacked"
           runtime="$(find "$runtime_dir/unpacked" -type f -name liberika_capi.so -print -quit)"
           test -n "$runtime"
@@ -89,6 +112,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          package_version="$(awk -F'"' '/"version"/ {print $4; exit}' oh-package.json5)"
+          test "$package_version" = "$ERIKA_NATIVE_VERSION"
           npm config set @ohos:registry https://repo.harmonyos.com/npm/
           npm install --no-save --package-lock=false \
             @ohos/hvigor@5.19.8 \
@@ -135,7 +160,7 @@ jobs:
           set -euo pipefail
           har="packages/erika_ohos/build/default/outputs/default/erika.har"
           test -s "$har"
-          cp "$har" "$RUNNER_TEMP/erika-0.1.7.har"
+          cp "$har" "$RUNNER_TEMP/erika.har"
           mkdir -p "$RUNNER_TEMP/erika-har"
           tar -xzf "$har" -C "$RUNNER_TEMP/erika-har"
 
@@ -154,7 +179,7 @@ jobs:
         run: |
           set -euo pipefail
           har="packages/erika_ohos/build/default/outputs/default/erika.har"
-          cp "$har" examples/ohos_arkts/erika-0.1.7.har
+          cp "$har" examples/ohos_arkts/erika.har
           package_dir="examples/ohos_arkts/entry/oh_modules/erika"
           mkdir -p "$package_dir"
           tar -xzf "$har" --strip-components=1 -C "$package_dir"
@@ -203,15 +228,18 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: erika-ohos-0.1.7
+          name: erika-ohos-${{ inputs.version || '0.1.7' }}
           path: |
-            ${{ runner.temp }}/erika-0.1.7.har
+            ${{ runner.temp }}/erika.har
             ${{ runner.temp }}/erika-ohos-smoke.hap
           if-no-files-found: error
 
   publish:
     name: Publish ArkTS package to OHPM
-    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'workflow_call' && inputs.publish) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish &&
+       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
     needs: package
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -219,7 +247,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: erika-ohos-0.1.7
+          name: erika-ohos-${{ inputs.version || '0.1.7' }}
           path: ${{ runner.temp }}/erika-ohos-release
 
       - uses: actions/setup-node@v4
