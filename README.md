@@ -94,8 +94,7 @@ applications (API 18+). Install it with:
 ohpm install erika
 ```
 
-This package is independent of Flutter. See the
-[OpenHarmony package guide](packages/erika_ohos/README.md) for the
+See the [OpenHarmony package guide](packages/erika_ohos/README.md) for the
 `ErikaPlayer` API and `XComponent` surface setup.
 
 ### Swift package

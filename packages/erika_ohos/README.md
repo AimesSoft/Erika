@@ -106,8 +106,7 @@ struct VideoPage {
 
 `renderTick()` returns an `ErikaNativeResponse` for diagnostics and frame
 status. For audio-only playback, use `audioOnlyTick()` instead of rendering a
-surface. The package is not a Flutter plugin; Flutter applications should use
-`erika_flutter`.
+surface.
 
 The package is licensed under MPL-2.0. See `THIRD_PARTY_NOTICES.md` for the
 licenses of the bundled native dependencies.
