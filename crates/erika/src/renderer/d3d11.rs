@@ -34,10 +34,10 @@ use ::windows::Win32::Graphics::Dxgi::{
     DXGI_ERROR_WAS_STILL_DRAWING, DXGI_HDR_METADATA_HDR10, DXGI_HDR_METADATA_TYPE_HDR10,
     DXGI_HDR_METADATA_TYPE_NONE, DXGI_PRESENT_DO_NOT_WAIT, DXGI_PRESENT_PARAMETERS,
     DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT, DXGI_SWAP_CHAIN_DESC1,
-    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter, IDXGIDevice,
-    IDXGIFactory2, IDXGISwapChain1, IDXGISwapChain3, IDXGISwapChain4,
+    DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+    IDXGIAdapter, IDXGIDevice, IDXGIFactory2, IDXGISwapChain1, IDXGISwapChain3, IDXGISwapChain4,
 };
-use ::windows::core::{Interface, PCSTR};
+use ::windows::core::{IUnknown, Interface, PCSTR};
 
 use crate::core::{
     ColorPrimaries, LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame,
@@ -577,6 +577,7 @@ struct D3d11DeviceState {
 
 struct AttachedSurface {
     hwnd: HWND,
+    composition: bool,
     metrics: SurfaceMetrics,
     output_mode: D3d11OutputMode,
     swapchain: Option<IDXGISwapChain1>,
@@ -795,6 +796,15 @@ impl D3d11Renderer {
         {
             report_upscaler_failure("pipeline_build", self.upscaler_mode, &error);
         }
+        // The existing swap chain belongs to the previous device; ResizeBuffers
+        // cannot migrate it. Drop it so recreate_surface_targets creates a new
+        // one — COM identity changes, which the host must rebind.
+        if let Some(old) = self.state.as_ref() {
+            if let Some(surface) = self.surface.as_mut() {
+                release_backbuffer_views(&old.context, surface);
+                surface.swapchain = None;
+            }
+        }
         self.state = Some(state);
         self.recreate_surface_targets()?;
         Ok(())
@@ -807,39 +817,55 @@ impl D3d11Renderer {
         let Some(state) = self.state.as_ref() else {
             return Ok(());
         };
-        trace("recreate_surface_targets: reset");
-        surface.render_target = None;
-        surface.linear_render_target = None;
-        surface.linear_shader_resource = None;
-        surface.swapchain = None;
+        trace("recreate_surface_targets: reset views");
+        release_backbuffer_views(&state.context, surface);
         let output_mode = surface.output_mode;
-        trace("recreate_surface_targets: create_swapchain");
-        surface.swapchain = Some(create_swapchain(
-            &state.device,
-            surface.hwnd,
-            surface.metrics.physical_extent.width,
-            surface.metrics.physical_extent.height,
-            output_mode.swapchain_format(),
-        )?);
-        configure_swapchain_color_space(
-            surface.swapchain.as_ref().expect("swapchain just created"),
-            output_mode,
-        )?;
+        let width = surface.metrics.physical_extent.width.max(1);
+        let height = surface.metrics.physical_extent.height.max(1);
+        let format = output_mode.swapchain_format();
+        let hwnd = surface.hwnd;
+        let composition = surface.composition;
+
+        // Size and SDR↔HDR format changes keep the same IDXGISwapChain1 so a
+        // DirectComposition visual's SetContent stays valid. Device changes
+        // drop the chain in set_device before reaching here.
+        let reused = if let Some(swapchain) = surface.swapchain.as_ref() {
+            trace("recreate_surface_targets: ResizeBuffers");
+            unsafe {
+                swapchain
+                    .ResizeBuffers(0, width, height, format, DXGI_SWAP_CHAIN_FLAG(0))
+                    .is_ok()
+            }
+        } else {
+            false
+        };
+        if !reused {
+            if surface.swapchain.is_some() {
+                trace("recreate_surface_targets: ResizeBuffers failed, creating new swapchain");
+            } else {
+                trace("recreate_surface_targets: create_swapchain");
+            }
+            surface.swapchain = None;
+            surface.swapchain = Some(create_swapchain(
+                &state.device,
+                hwnd,
+                width,
+                height,
+                format,
+                composition,
+            )?);
+        }
+        let swapchain = surface.swapchain.as_ref().expect("swapchain ensured");
+        configure_swapchain_color_space(swapchain, output_mode)?;
         if matches!(output_mode, D3d11OutputMode::Sdr) {
-            let _ = clear_hdr_metadata(surface.swapchain.as_ref().expect("swapchain just created"));
+            let _ = clear_hdr_metadata(swapchain);
         }
         trace("recreate_surface_targets: create_render_target");
-        surface.render_target = Some(create_render_target(
-            &state.device,
-            surface.swapchain.as_ref().expect("swapchain just created"),
-        )?);
+        surface.render_target = Some(create_render_target(&state.device, swapchain)?);
         if matches!(output_mode, D3d11OutputMode::Hdr10) {
             trace("recreate_surface_targets: create_linear_render_target");
-            let (render_target, shader_resource) = create_linear_render_target(
-                &state.device,
-                surface.metrics.physical_extent.width,
-                surface.metrics.physical_extent.height,
-            )?;
+            let (render_target, shader_resource) =
+                create_linear_render_target(&state.device, width, height)?;
             surface.linear_render_target = Some(render_target);
             surface.linear_shader_resource = Some(shader_resource);
         }
@@ -847,6 +873,14 @@ impl D3d11Renderer {
         self.stats.surface_height = surface.metrics.physical_extent.height;
         self.stats.hdr10_output_active = matches!(output_mode, D3d11OutputMode::Hdr10);
         Ok(())
+    }
+
+    fn composition_swapchain(&self) -> Option<&IDXGISwapChain1> {
+        let surface = self.surface.as_ref()?;
+        if !surface.composition {
+            return None;
+        }
+        surface.swapchain.as_ref()
     }
 
     fn set_output_mode(&mut self, output_mode: D3d11OutputMode) -> Result<()> {
@@ -1524,13 +1558,15 @@ impl RendererBackend for D3d11Renderer {
                 handle.kind
             )));
         }
-        if handle.raw_window == 0 {
+        let composition = handle.output_capabilities.direct_composition;
+        if !composition && handle.raw_window == 0 {
             return Err(PlayerError::Renderer(
                 "d3d11: Windows HWND surface handle is null".to_string(),
             ));
         }
         self.surface = Some(AttachedSurface {
             hwnd: HWND(handle.raw_window as *mut c_void),
+            composition,
             metrics: handle.metrics,
             output_mode: D3d11OutputMode::Sdr,
             swapchain: None,
@@ -1680,6 +1716,15 @@ impl RendererBackend for D3d11Renderer {
                 report_upscaler_failure("mode_switch", mode, &error);
             }
         }
+    }
+
+    fn composition_swapchain_ptr(&self) -> Option<*mut std::ffi::c_void> {
+        Some(Interface::as_raw(self.composition_swapchain()?))
+    }
+
+    fn composition_swapchain_iunknown(&self) -> Option<*mut std::ffi::c_void> {
+        let unknown: IUnknown = self.composition_swapchain()?.cast().ok()?;
+        Some(unknown.into_raw())
     }
 }
 
@@ -2099,6 +2144,7 @@ fn create_swapchain(
     width: u32,
     height: u32,
     format: DXGI_FORMAT,
+    composition: bool,
 ) -> Result<IDXGISwapChain1> {
     trace("create_swapchain: cast IDXGIDevice");
     let dxgi_device: IDXGIDevice = device
@@ -2126,9 +2172,16 @@ fn create_swapchain(
         AlphaMode: DXGI_ALPHA_MODE_IGNORE,
         Flags: 0,
     };
-    trace("create_swapchain: CreateSwapChainForHwnd");
-    let swapchain = unsafe { factory.CreateSwapChainForHwnd(device, hwnd, &desc, None, None) }
-        .map_err(|error| d3d_error("IDXGIFactory2::CreateSwapChainForHwnd", error))?;
+    let swapchain = if composition {
+        trace("create_swapchain: CreateSwapChainForComposition");
+        unsafe { factory.CreateSwapChainForComposition(device, &desc, None) }.map_err(|error| {
+            d3d_error("IDXGIFactory2::CreateSwapChainForComposition", error)
+        })?
+    } else {
+        trace("create_swapchain: CreateSwapChainForHwnd");
+        unsafe { factory.CreateSwapChainForHwnd(device, hwnd, &desc, None, None) }
+            .map_err(|error| d3d_error("IDXGIFactory2::CreateSwapChainForHwnd", error))?
+    };
     trace("create_swapchain: done");
     Ok(swapchain)
 }
@@ -2177,6 +2230,19 @@ fn clear_hdr_metadata(swapchain: &IDXGISwapChain1) -> Result<()> {
         .map_err(|error| d3d_error("IDXGISwapChain1::cast<IDXGISwapChain4>", error))?;
     unsafe { swapchain4.SetHDRMetaData(DXGI_HDR_METADATA_TYPE_NONE, None) }
         .map_err(|error| d3d_error("IDXGISwapChain4::SetHDRMetaData(None)", error))
+}
+
+fn release_backbuffer_views(context: &ID3D11DeviceContext, surface: &mut AttachedSurface) {
+    // ResizeBuffers / creating a new chain requires every RTV and SRV of the
+    // current back buffer to be gone, including those bound on the immediate
+    // context.
+    unsafe {
+        context.OMSetRenderTargets(None, None);
+        context.PSSetShaderResources(0, Some(&[None, None]));
+    }
+    surface.render_target = None;
+    surface.linear_render_target = None;
+    surface.linear_shader_resource = None;
 }
 
 fn create_render_target(

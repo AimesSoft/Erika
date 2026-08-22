@@ -671,8 +671,12 @@ impl WgpuSurfaceHandle {
 pub struct SurfaceOutputCapabilities {
     /// The display/window host is eligible for an extended-linear signal.
     pub extended_linear: bool,
-    /// The native surface bypasses Flutter texture-layer composition (for
-    /// Android this means a SurfaceView hosted with Hybrid Composition).
+    /// The native surface bypasses Flutter texture-layer composition.
+    ///
+    /// Android: a SurfaceView hosted with Hybrid Composition (extended-linear HDR).
+    /// Windows D3D11: create an `IDXGISwapChain1` with
+    /// `CreateSwapChainForComposition` instead of `CreateSwapChainForHwnd`.
+    /// Default `false` leaves the HWND swap-chain path unchanged.
     pub direct_composition: bool,
     /// Requested display headroom ratio relative to SDR reference white.
     pub desired_headroom: f32,
@@ -808,6 +812,25 @@ pub trait RendererBackend {
     /// this for queryable runtime status; renderers that do not expose dynamic
     /// display headroom may ignore the update.
     fn set_output_headroom(&mut self, _headroom: f32, _known: bool) {}
+
+    /// Borrowed COM identity of a DirectComposition swap chain. No `AddRef`.
+    ///
+    /// Compare this pointer across frames. Only call
+    /// [`Self::composition_swapchain_iunknown`] when transferring a reference
+    /// into `IDCompositionVisual::SetContent`. `None` unless this renderer
+    /// currently owns a composition swap chain.
+    fn composition_swapchain_ptr(&self) -> Option<*mut std::ffi::c_void> {
+        None
+    }
+
+    /// AddRef'd `IUnknown` for a DirectComposition `SetContent` swap chain.
+    ///
+    /// Null-free raw pointer; the caller owns the reference and must `Release`
+    /// it (for example by wrapping it in a host `DcompContent`). `None` unless
+    /// this renderer currently owns a composition swap chain.
+    fn composition_swapchain_iunknown(&self) -> Option<*mut std::ffi::c_void> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

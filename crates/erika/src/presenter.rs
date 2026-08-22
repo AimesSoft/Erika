@@ -748,6 +748,23 @@ impl PresenterRuntime {
         self.renderer.detach_surface()
     }
 
+    /// Borrowed COM identity of a DirectComposition swap chain. No `AddRef`.
+    ///
+    /// Compare this pointer across frames. Only call
+    /// [`Self::composition_swapchain_iunknown`] when transferring a reference
+    /// into `IDCompositionVisual::SetContent`.
+    pub fn composition_swapchain_ptr(&self) -> Option<*mut std::ffi::c_void> {
+        self.renderer.composition_swapchain_ptr()
+    }
+
+    /// AddRef'd `IUnknown` for a DirectComposition `SetContent` swap chain.
+    ///
+    /// The caller owns the reference and must `Release` it (for example by
+    /// wrapping it in a host `DcompContent`).
+    pub fn composition_swapchain_iunknown(&self) -> Option<*mut std::ffi::c_void> {
+        self.renderer.composition_swapchain_iunknown()
+    }
+
     pub fn resize_surface(&mut self, width: u32, height: u32, scale: f64) -> Result<()> {
         let metrics = SurfaceMetrics::new(width, height, scale);
         let previous_metrics = self.current_surface_metrics;
