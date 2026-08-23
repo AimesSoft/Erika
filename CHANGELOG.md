@@ -10,6 +10,12 @@
 - Decoupled host-provided danmaku IDs from internal layout identity and parse
   optional JSON IDs as exact `u64` values without floating-point rounding.
 
+### Playback
+
+- When the first audio stream cannot be decoded, try the remaining audio
+  streams in container order and report all decoder failures if none can be
+  opened.
+
 ## 0.1.7 - 2026-08-16
 
 ### Flutter package distribution

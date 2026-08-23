@@ -49,6 +49,8 @@ pub enum PlaybackError {
     DecoderInputStall { reason: String },
     #[error("audio output stalled at EOF: {reason}")]
     AudioOutputStall { reason: String },
+    #[error("no decodable audio track found: {reason}")]
+    AudioDecoderUnavailable { reason: String },
 }
 
 pub type Result<T> = std::result::Result<T, PlaybackError>;
@@ -858,12 +860,13 @@ impl PlaybackSession {
             .iter()
             .find(|track| track.kind == TrackKind::Video)
             .map(|track| track.id as i32);
-        let selected_audio_track = demuxer
+        let audio_track_candidates = demuxer
             .probe()
             .tracks
             .iter()
-            .find(|track| track.kind == TrackKind::Audio)
-            .map(|track| track.id as i32);
+            .filter(|track| track.kind == TrackKind::Audio)
+            .map(|track| track.id as i32)
+            .collect::<Vec<_>>();
         let selected_subtitle_track = demuxer
             .probe()
             .tracks
@@ -1082,11 +1085,60 @@ impl PlaybackSession {
                 },
             );
         }
-        let mut audio_decoder = None;
+        let (selected_audio_track, audio_decoder) = match first_decodable_audio_track(
+            audio_track_candidates.iter().copied(),
+            |stream_index| {
+                let parameters = codec_parameters_for(&codec_parameters, stream_index)?;
+                Decoder::open_owned(parameters).map_err(PlaybackError::from)
+            },
+        ) {
+            Ok(Some((stream_index, decoder, failures))) => {
+                for (failed_stream_index, error) in failures {
+                    let codec = codec_parameters_for(&codec_parameters, failed_stream_index)
+                        .ok()
+                        .and_then(OwnedCodecParameters::codec_name)
+                        .unwrap_or_else(|| "unknown".to_string());
+                    trace::diagnostic(
+                        serde_json::json!({
+                            "event": "audio_decoder_fallback",
+                            "stage": "open_failed",
+                            "trackId": failed_stream_index,
+                            "codec": codec,
+                            "error": error.to_string(),
+                            "selectedTrackId": stream_index,
+                        })
+                        .to_string(),
+                    );
+                }
+                (Some(stream_index), Some(decoder))
+            }
+            Ok(None) => (None, None),
+            Err(failures) => {
+                let reason = failures
+                    .iter()
+                    .map(|(stream_index, error)| {
+                        let codec = codec_parameters_for(&codec_parameters, *stream_index)
+                            .ok()
+                            .and_then(OwnedCodecParameters::codec_name)
+                            .unwrap_or_else(|| "unknown".to_string());
+                        format!("track {stream_index} ({codec}): {error}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                trace::diagnostic(
+                    serde_json::json!({
+                        "event": "audio_decoder_fallback",
+                        "stage": "all_tracks_failed",
+                        "trackCount": failures.len(),
+                        "reason": reason.as_str(),
+                    })
+                    .to_string(),
+                );
+                return Err(PlaybackError::AudioDecoderUnavailable { reason });
+            }
+        };
         if let Some(stream_index) = selected_audio_track {
             selected_streams.push(stream_index);
-            let parameters = codec_parameters_for(&codec_parameters, stream_index)?;
-            audio_decoder = Some(Decoder::open_owned(parameters)?);
         }
         let mut subtitle_decoder = None;
         let mut opened_subtitle_track = None;
@@ -3586,6 +3638,22 @@ fn codec_parameters_for(
         })
 }
 
+fn first_decodable_audio_track<T, E>(
+    track_ids: impl IntoIterator<Item = i32>,
+    mut open: impl FnMut(i32) -> std::result::Result<T, E>,
+) -> std::result::Result<Option<(i32, T, Vec<(i32, E)>)>, Vec<(i32, E)>> {
+    let mut failures = Vec::new();
+    let mut found_track = false;
+    for track_id in track_ids {
+        found_track = true;
+        match open(track_id) {
+            Ok(decoder) => return Ok(Some((track_id, decoder, failures))),
+            Err(error) => failures.push((track_id, error)),
+        }
+    }
+    if found_track { Err(failures) } else { Ok(None) }
+}
+
 fn mark_selected_tracks(
     tracks: &mut [TrackInfo],
     selected_video: Option<i64>,
@@ -5913,6 +5981,52 @@ mod tests {
         assert_eq!(engine.info().selected_video_track, Some(0));
         assert_eq!(engine.info().selected_audio_track, Some(1));
         engine
+    }
+
+    #[test]
+    fn audio_track_open_falls_back_to_the_first_decodable_track() {
+        let opened = first_decodable_audio_track([2, 5, 8], |track_id| match track_id {
+            2 | 5 => Err(format!("unsupported track {track_id}")),
+            _ => Ok(format!("decoder for {track_id}")),
+        })
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(opened.0, 8);
+        assert_eq!(opened.1, "decoder for 8");
+        assert_eq!(
+            opened.2,
+            vec![
+                (2, "unsupported track 2".to_string()),
+                (5, "unsupported track 5".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn audio_track_open_reports_every_failure() {
+        let failures = first_decodable_audio_track([1, 3], |track_id| {
+            Err::<(), _>(format!("unsupported track {track_id}"))
+        })
+        .unwrap_err();
+
+        assert_eq!(
+            failures,
+            vec![
+                (1, "unsupported track 1".to_string()),
+                (3, "unsupported track 3".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn audio_track_open_allows_media_without_audio() {
+        let opened = first_decodable_audio_track([], |_track_id| {
+            Err::<(), String>("unreachable".to_string())
+        })
+        .unwrap();
+
+        assert!(opened.is_none());
     }
 
     #[test]
