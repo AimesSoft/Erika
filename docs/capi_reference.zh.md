@@ -383,6 +383,21 @@ ErikaStatus erika_presenter_set_danmaku_block_words_json(ErikaPresenterHandle *,
 [danmaku_architecture.md](danmaku_architecture.md)。`set_danmaku_block_words_json`
 接受一个字符串 JSON 数组用于过滤。
 
+内联 JSON 的根可以是 item 数组，也可以是包含 `comments`、`danmaku` 或 `items`
+数组的对象。每个 item 使用以下字段；括号内是兼容别名：
+
+- `content`（`text`、`c`）：正文；缺失或空白的 item 会被跳过。
+- `time`（`t`）：出现时间，单位为秒，默认 `0`。
+- `type`（`mode`、`y`）：`scroll`/`1`、`bottom`/`4`、`top`/`5`、
+  `reverse`/`6` 或 `special`/`7`。也可使用数值 `type_code` / `mode_code`。
+- `color`（`r`）：十进制 RGB、`#RRGGBB` 或 `rgb(r,g,b)`。
+- `font_size`（`fontSize`、`size`、`s`）、`opacity`（`alpha`、`a`）、
+  `is_me`（`isMe`、`self`、`mine`）：可选样式和自发标记。
+- `id`：可选的无符号 64 位整数或十进制字符串。省略时按整份输入中的顺序分配；
+  session 会另外生成布局内部身份，因此调用方无需为了滑窗轨道稳定而合成业务 ID。
+
+未知字段会被忽略，因此包含 `cid`、`danmakuId` 等数据源字段的标准 map 可以直接传入。
+
 `set_debug_hud_enabled` 默认关闭。开启后 Presenter 在原生视频合成中绘制诊断 HUD，显示轨道
 技术信息、播放状态、实时解码/渲染 FPS、解码/零拷贝路径、渲染和音频状态、
 HDR 输出以及弹幕数量。HUD 只在已有视频帧时显示；其统计不要求调用方轮询，也不会写入

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Danmaku
+
+- Kept both accepted and rejected placement decisions stable across sliding
+  planner windows, preventing dropped comments from reappearing mid-flight or
+  forcing visible comments onto another lane.
+- Decoupled host-provided danmaku IDs from internal layout identity and parse
+  optional JSON IDs as exact `u64` values without floating-point rounding.
+
 ## 0.1.7 - 2026-08-16
 
 ### Flutter package distribution

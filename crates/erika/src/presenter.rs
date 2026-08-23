@@ -400,7 +400,7 @@ struct AsyncDanmakuPlannerState {
     config: DanmakuLayoutConfig,
     rasterizer: DanmakuTextRasterizer,
     latest_request: Option<AsyncDanmakuPlanRequest>,
-    invalidate_stable_tracks: bool,
+    invalidate_placement_history: bool,
     shutdown: bool,
 }
 
@@ -433,7 +433,7 @@ impl AsyncDanmakuPlanner {
             config,
             rasterizer,
             latest_request: None,
-            invalidate_stable_tracks: false,
+            invalidate_placement_history: false,
             shutdown: false,
         };
         let shared = Arc::new((Mutex::new(state), Condvar::new()));
@@ -526,7 +526,7 @@ impl AsyncDanmakuPlanner {
         if let Some(timeline) = timeline {
             if state.timeline != timeline {
                 state.timeline = timeline;
-                state.invalidate_stable_tracks = true;
+                state.invalidate_placement_history = true;
             }
         }
         if let Some(config) = config {
@@ -3060,14 +3060,14 @@ fn run_async_danmaku_planner(
             }
             seen_revision = state.revision;
             let config_update = (state.config_revision != applied_config_revision).then(|| {
-                let invalidate_stable_tracks = state.invalidate_stable_tracks;
-                state.invalidate_stable_tracks = false;
+                let invalidate_placement_history = state.invalidate_placement_history;
+                state.invalidate_placement_history = false;
                 (
                     state.config_revision,
                     state.timeline.clone(),
                     state.config.clone(),
                     state.rasterizer.clone(),
-                    invalidate_stable_tracks,
+                    invalidate_placement_history,
                 )
             });
             (state.latest_request, config_update)
@@ -3078,13 +3078,13 @@ fn run_async_danmaku_planner(
             next_timeline,
             next_config,
             next_rasterizer,
-            invalidate_stable_tracks,
+            invalidate_placement_history,
         )) = config_update
         {
             timeline = next_timeline;
             config = next_config;
-            if invalidate_stable_tracks {
-                engine.invalidate_stable_tracks();
+            if invalidate_placement_history {
+                engine.invalidate_placement_history();
             }
             engine.set_config_with_rasterizer(config.clone(), next_rasterizer);
             applied_config_revision = revision;
@@ -5090,30 +5090,41 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             presenter.add_danmaku_track(second, "second", DanmakuTrackSource::Json, -1_000_000);
 
         assert_eq!(presenter.danmaku_tracks().len(), 2);
-        let plan = presenter.danmaku.render_plan(
+        let layout = presenter.danmaku.frame_layout(
             Duration::from_millis(1500),
             DanmakuViewport::new(640, 360),
             1,
         );
-        assert!(plan.items.iter().any(|item| item.item_id >> 48 == first_id));
         assert!(
-            plan.items
+            layout
+                .items
                 .iter()
-                .any(|item| item.item_id >> 48 == second_id)
+                .any(|item| item.text.as_ref() == "first")
+        );
+        assert!(
+            layout
+                .items
+                .iter()
+                .any(|item| item.text.as_ref() == "second")
+        );
+        assert_eq!(
+            layout
+                .items
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<HashSet<_>>()
+                .len(),
+            2
         );
 
         assert!(presenter.set_danmaku_track_enabled(first_id, false));
-        let plan = presenter.danmaku.render_plan(
+        let layout = presenter.danmaku.frame_layout(
             Duration::from_millis(1500),
             DanmakuViewport::new(640, 360),
             2,
         );
-        assert!(!plan.items.iter().any(|item| item.item_id >> 48 == first_id));
-        assert!(
-            plan.items
-                .iter()
-                .any(|item| item.item_id >> 48 == second_id)
-        );
+        assert_eq!(layout.items.len(), 1);
+        assert_eq!(layout.items[0].text.as_ref(), "second");
 
         assert!(presenter.remove_danmaku_track(second_id));
         assert_eq!(presenter.danmaku_tracks().len(), 1);

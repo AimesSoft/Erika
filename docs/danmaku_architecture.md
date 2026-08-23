@@ -84,7 +84,7 @@ flowchart LR
 
 这一段的输入应保持 NipaPlay DFM+ 的抽象：规范化弹幕 item、viewport、字体测量结果、用户配置。Erika 可以用自己的 Rust 类型承载这些字段，但字段语义要对齐 NipaPlay：时间、文本、type_code、颜色、is_me、paint_width/paint_height、display_area、scroll_duration、allow_stacking、merge、max_quantity、max_lines、track_gap、outline、block_words 等都应进入 DFM+ prepare。
 
-在 DFM+ 之前，Erika 现在多了一层 `DanmakuSession`。它不参与布局算法，只负责把播放器/Flutter 传入的弹幕输入面整理成 DFM+ 能消费的一条 active timeline：多个弹幕轨可以同时启用，按轨 offset 和全局 offset 会在 active timeline 构建时应用，源 item id 会加上 track id 前缀以避免多轨合并后的 id 冲突。prepare 在独立 worker 上异步执行，plan 请求以 `{media_time, viewport, generation}` 为 key，其中任何一项变化都会触发重新 prepare；结果 plan 只覆盖一个时间窗口，播放时间离开窗口即作废，seek 后旧窗口的 plan 不会被继续使用。
+在 DFM+ 之前，Erika 现在多了一层 `DanmakuSession`。它不参与布局算法，只负责把播放器/Flutter 传入的弹幕输入面整理成 DFM+ 能消费的一条 active timeline：多个弹幕轨可以同时启用，按轨 offset 和全局 offset 会在 active timeline 构建时应用；合并完成后由 session 为当前内容版本分配唯一的布局 item id，不把宿主业务 id 打包进布局身份。prepare 在独立 worker 上异步执行，plan 请求以 `{media_time, viewport, generation}` 为 key，其中任何一项变化都会触发重新 prepare；结果 plan 只覆盖一个时间窗口。连续窗口会继承已经完成的轨道分配和拒绝决定，只有 timeline/session 内容、viewport 或布局配置变化才会重建这段规划历史。
 
 这一段的输出也应保持 NipaPlay DFM+ 的抽象：prepared layout 保存稳定布局结果；frame query 只根据 media time 输出当前 visible items 的 index 和位置。Erika 之后再把 item_index 对应的文本、颜色、字号、描边等样式转换成 `DanmakuFrameLayout` 和 `DanmakuRenderPlan`。
 

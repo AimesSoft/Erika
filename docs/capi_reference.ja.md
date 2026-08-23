@@ -403,6 +403,24 @@ XML（`*_file`、パス/URL）または JSON（`*_json`、インライン）。`
 [danmaku_architecture.md](danmaku_architecture.md) を参照。
 `set_danmaku_block_words_json` はフィルタ用の文字列 JSON 配列を取ります。
 
+inline JSON の root は item array、または `comments`、`danmaku`、`items` の
+いずれかの array を持つ object です。各 item は次の field を受け取ります
+（括弧内は alias）。
+
+- `content`（`text`、`c`）：本文。欠落または空白だけの item は skip されます。
+- `time`（`t`）：表示時刻（秒）。既定値は `0` です。
+- `type`（`mode`、`y`）：`scroll`/`1`、`bottom`/`4`、`top`/`5`、
+  `reverse`/`6`、`special`/`7`。数値の `type_code` / `mode_code` も使えます。
+- `color`（`r`）：decimal RGB、`#RRGGBB`、または `rgb(r,g,b)`。
+- `font_size`（`fontSize`、`size`、`s`）、`opacity`（`alpha`、`a`）、
+  `is_me`（`isMe`、`self`、`mine`）：任意の style / self-danmaku metadata。
+- `id`：任意の unsigned 64-bit integer または decimal string。省略時は入力全体での
+  item position が割り当てられます。session は別の内部 layout identity を生成するため、
+  planner window 間の track 安定性のために host が business ID を合成する必要はありません。
+
+未知の field は無視されるため、`cid` や `danmakuId` などの source field を含む
+standard map もそのまま渡せます。
+
 `set_debug_hud_enabled` は default で off です。on にすると Presenter は native video
 composition に diagnostic HUD を描画します。HUD は track technical metadata、
 playback state、decoded/rendered FPS、decode/zero-copy counters、render/audio state、HDR

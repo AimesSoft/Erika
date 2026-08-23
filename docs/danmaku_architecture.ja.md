@@ -84,7 +84,7 @@ flowchart LR
 
 入力は NipaPlay DFM+ の抽象とそろえるべきです。つまり、正規化済み item、viewport、font metrics、user config です。Erika は独自の Rust 型を使っても構いませんが、field semantics は NipaPlay と一致していなければなりません。time、text、type_code、color、is_me、paint_width/paint_height、display_area、scroll_duration、allow_stacking、merge、max_quantity、max_lines、track_gap、outline、block_words などが DFM+ prepare に流れ込む必要があります。
 
-DFM+ の前段にある `DanmakuSession` は layout algorithm には参加しません。複数 track を同時に有効化でき、track ごとの offset と global offset は active timeline 構築時に適用され、source item id は track id で prefix されて multi-track merge 後の衝突を避けます。seek は generation が変わったという理由で prepare をやり直すべきではありません。prepare の失効条件は timeline/session の内容、viewport、config の変化です。generation は renderer の current-frame gate にだけ使います。
+DFM+ の前段にある `DanmakuSession` は layout algorithm には参加しません。複数 track を同時に有効化でき、track ごとの offset と global offset は active timeline 構築時に適用されます。merge 後は host の business id を layout identity に pack せず、session がその content revision 専用の一意な layout item id を割り当てます。連続する planner window は確定済みの track assignment と reject decision の両方を引き継ぎ、timeline/session content、viewport、layout config が変わったときだけ planning history を作り直します。generation は renderer の current-frame gate にだけ使います。
 
 出力側も NipaPlay DFM+ の抽象に近いままであるべきです。prepared layout は安定した結果を保持し、frame query は current media time に対する visible items と位置だけを返します。その後で Erika が `item_index` に対応する text、color、font size、outline などを `DanmakuFrameLayout` と `DanmakuRenderPlan` に変換します。
 
@@ -170,4 +170,3 @@ API layer は NipaPlay の弾幕 input surface を player と Flutter wrapper �
 render layer は Erika の native 実装として保つべきです。DFM+ が出力するのは「current media time で各弾幕がどこにあり、どんな style か」であって、GPU texture や Flutter resource ではありません。Erika renderer はその出力を glyph atlas、quad instances、Metal/WGPU 合成に変え、動画と一緒に描画します。
 
 synchronization layer は現在の generation + media_time 契約を維持しなければなりません。seek、stop、close、track switch、config change はすべて古い plan を無効化し、各 frame query は video timeline だけを見ます。弾幕は別の wall-clock timer を持ちません。この契約こそが「動画は跳んだのに弾幕が跳ばない」を解決する本体です。
-
