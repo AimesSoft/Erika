@@ -41,8 +41,6 @@ const SCROLL_DURATION_REFERENCE_LOGICAL_WIDTH: f32 = 1280.0;
 const SCROLL_DURATION_MIN_WIDTH_SCALE: f32 = 0.9;
 const SCROLL_DURATION_MAX_WIDTH_SCALE: f32 = 1.3;
 const DEFAULT_DANMAKU_TRACK_ID: u64 = 1;
-const TRACK_ID_SHIFT: u64 = 48;
-const ITEM_ID_MASK: u64 = (1u64 << TRACK_ID_SHIFT) - 1;
 const MAX_CUSTOM_DANMAKU_FONT_BYTES: u64 = 64 * 1024 * 1024;
 pub const DANMAKU_DEBUG_BUCKETS: usize = 16;
 
@@ -725,6 +723,7 @@ impl DanmakuSession {
             return;
         }
         let mut items = Vec::new();
+        let mut layout_item_id = 1u64;
         for track in &self.tracks {
             if !track.enabled {
                 continue;
@@ -735,7 +734,12 @@ impl DanmakuSession {
                     continue;
                 };
                 let mut item = item.clone();
-                item.id = compose_track_item_id(track.id, item.id);
+                // Source IDs belong to the host's data model and may be large or
+                // duplicated across sources. Layout identity only has to be
+                // unique for this immutable session version, so allocate it here
+                // instead of packing two arbitrary u64 values into one.
+                item.id = layout_item_id;
+                layout_item_id += 1;
                 item.pts = pts;
                 items.push(item);
             }
@@ -1895,6 +1899,7 @@ pub struct DfmLayoutEngine {
     font_selection: DanmakuFontSelection,
     prepared: Option<DfmPreparedLayout>,
     stable_tracks: HashMap<u64, usize>,
+    rejected_items: BTreeSet<u64>,
     stable_viewport: Option<DanmakuViewport>,
 }
 
@@ -1909,6 +1914,7 @@ impl DfmLayoutEngine {
             font_selection: DanmakuFontSelection::default(),
             prepared: None,
             stable_tracks: HashMap::new(),
+            rejected_items: BTreeSet::new(),
             stable_viewport: None,
         }
     }
@@ -1916,7 +1922,7 @@ impl DfmLayoutEngine {
     pub fn set_timeline(&mut self, timeline: DanmakuTimeline) {
         self.timeline = timeline;
         self.prepared = None;
-        self.invalidate_stable_tracks();
+        self.invalidate_placement_history();
     }
 
     pub fn sync_timeline(&mut self, timeline: &DanmakuTimeline) {
@@ -1929,7 +1935,7 @@ impl DfmLayoutEngine {
     pub fn clear_timeline(&mut self) {
         self.timeline = DanmakuTimeline::default();
         self.prepared = None;
-        self.invalidate_stable_tracks();
+        self.invalidate_placement_history();
     }
 
     pub fn set_config(&mut self, config: DanmakuLayoutConfig) -> bool {
@@ -1956,6 +1962,7 @@ impl DfmLayoutEngine {
         }
         if layout_changed {
             self.prepared = None;
+            self.rejected_items.clear();
             // Track assignments are preferences, not hard constraints. Keeping
             // them across font-size and other layout changes lets overlapping
             // items stay in the same logical lane; the retainer will reject a
@@ -1976,7 +1983,7 @@ impl DfmLayoutEngine {
         self.rasterizer = DanmakuTextRasterizer::for_config_and_selection(&self.config, &selection);
         self.font_selection = selection;
         self.prepared = None;
-        self.invalidate_stable_tracks();
+        self.invalidate_placement_history();
         true
     }
 
@@ -2003,22 +2010,38 @@ impl DfmLayoutEngine {
 
     pub fn prepare(&mut self, viewport: DanmakuViewport, _generation: u64) -> DfmPreparedLayout {
         if self.stable_viewport != Some(viewport) {
-            self.invalidate_stable_tracks();
+            self.invalidate_placement_history();
             self.stable_viewport = Some(viewport);
         }
         let config = self.config.sanitized();
+        let planned_ids = self
+            .timeline
+            .items()
+            .iter()
+            .filter(|item| item.mode != DanmakuMode::Special)
+            .filter(|item| !self.rejected_items.contains(&item.id))
+            .map(|item| item.id)
+            .collect::<BTreeSet<_>>();
         let prepared = prepare_layout(
             &self.timeline,
             viewport,
             &config,
             &self.rasterizer,
             &self.stable_tracks,
+            &self.rejected_items,
         );
         let active_ids = prepared
             .items()
             .iter()
             .map(|item| item.id)
             .collect::<BTreeSet<_>>();
+        if config.enabled {
+            // A sliding window may forget older track occupancy, but it must not
+            // revise an item's original admission decision. Otherwise an item
+            // dropped at birth can reappear halfway across the screen.
+            self.rejected_items
+                .extend(planned_ids.difference(&active_ids).copied());
+        }
         self.stable_tracks
             .retain(|item_id, _| active_ids.contains(item_id));
         for item in prepared.items() {
@@ -2028,8 +2051,9 @@ impl DfmLayoutEngine {
         prepared
     }
 
-    pub fn invalidate_stable_tracks(&mut self) {
+    pub fn invalidate_placement_history(&mut self) {
         self.stable_tracks.clear();
+        self.rejected_items.clear();
         self.stable_viewport = None;
     }
 
@@ -2079,6 +2103,7 @@ fn prepare_layout(
     config: &DanmakuLayoutConfig,
     rasterizer: &DanmakuTextRasterizer,
     stable_tracks: &HashMap<u64, usize>,
+    rejected_items: &BTreeSet<u64>,
 ) -> DfmPreparedLayout {
     if timeline.is_empty() || !config.enabled {
         let dfm_layout = dfm::PreparedLayout {
@@ -2106,7 +2131,7 @@ fn prepare_layout(
     let source_count = timeline.items().len();
     let mut source_items = Vec::new();
     for source in timeline.items() {
-        if source.mode == DanmakuMode::Special {
+        if source.mode == DanmakuMode::Special || rejected_items.contains(&source.id) {
             continue;
         }
         let font_size =
@@ -2341,9 +2366,7 @@ fn item_from_json_value(value: &Value, fallback_id: u64) -> Result<DanmakuItem> 
         .and_then(parse_color_value)
         .unwrap_or(DanmakuColor::WHITE);
     Ok(DanmakuItem {
-        id: numeric_field(object, &["id"])
-            .map(|value| value as u64)
-            .unwrap_or(fallback_id),
+        id: u64_field(object, &["id"]).unwrap_or(fallback_id),
         pts: Duration::from_secs_f64(
             numeric_field(object, &["time", "t"])
                 .unwrap_or(0.0)
@@ -2374,6 +2397,16 @@ fn numeric_field(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Opti
         .find_map(|key| object.get(*key))
         .and_then(|value| match value {
             Value::Number(value) => value.as_f64(),
+            Value::String(value) => value.parse().ok(),
+            _ => None,
+        })
+}
+
+fn u64_field(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<u64> {
+    keys.iter()
+        .find_map(|key| object.get(*key))
+        .and_then(|value| match value {
+            Value::Number(value) => value.as_u64(),
             Value::String(value) => value.parse().ok(),
             _ => None,
         })
@@ -2468,11 +2501,6 @@ fn apply_track_offset(pts: Duration, offset_micros: i64) -> Option<Duration> {
         return Some(pts.saturating_add(Duration::from_micros(offset_micros as u64)));
     }
     pts.checked_sub(Duration::from_micros(offset_micros.unsigned_abs()))
-}
-
-fn compose_track_item_id(track_id: u64, item_id: u64) -> u64 {
-    let track_part = track_id.min((1u64 << (64 - TRACK_ID_SHIFT)) - 1) << TRACK_ID_SHIFT;
-    track_part | (item_id & ITEM_ID_MASK)
 }
 
 fn sanitize_f32(value: f32, fallback: f32) -> f32 {
@@ -2988,6 +3016,36 @@ mod tests {
     }
 
     #[test]
+    fn parses_json_ids_without_floating_point_rounding() {
+        let input = r#"[
+            {"id":9007199254740993,"time":1,"content":"first"},
+            {"id":"18446744073709551615","time":2,"content":"second"}
+        ]"#;
+        let timeline = DanmakuTimeline::from_json(input).unwrap();
+
+        assert_eq!(timeline.items()[0].id, 9_007_199_254_740_993);
+        assert_eq!(timeline.items()[1].id, u64::MAX);
+    }
+
+    #[test]
+    fn session_allocates_layout_ids_independently_of_source_ids() {
+        let mut first = item(1.0, "first", DanmakuMode::Scroll);
+        first.id = u64::MAX;
+        let mut second = item(2.0, "second", DanmakuMode::Scroll);
+        second.id = u64::MAX;
+        let timeline = DanmakuTimeline::new(vec![first, second]).unwrap();
+        let mut session = DanmakuSession::from_timeline(timeline);
+
+        let ids = session
+            .active_timeline()
+            .items()
+            .iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    #[test]
     fn parses_json_lines_and_xml() {
         let jsonl = r#"{"t":1,"c":"a","y":"bottom","r":16777215}
 {"t":2,"c":"b","y":"scroll"}"#;
@@ -3170,6 +3228,56 @@ mod tests {
                 .stable_tracks
                 .keys()
                 .all(|item_id| second.items().iter().any(|item| item.id == *item_id))
+        );
+    }
+
+    #[test]
+    fn sliding_timeline_window_does_not_revive_rejected_items() {
+        let mut entries = vec![
+            item(0.0, "occupy", DanmakuMode::Scroll),
+            item(0.0, "occupy", DanmakuMode::Scroll),
+            item(
+                1.0,
+                "this rejected danmaku is deliberately very wide",
+                DanmakuMode::Scroll,
+            ),
+            item(4.0, "already visible", DanmakuMode::Scroll),
+        ];
+        for (index, entry) in entries.iter_mut().enumerate() {
+            entry.id = index as u64 + 1;
+        }
+        let timeline = DanmakuTimeline::new(entries).unwrap();
+        let config = DanmakuLayoutConfig {
+            track_gap_ratio: 0.0,
+            merge_duplicates: false,
+            ..DanmakuLayoutConfig::default()
+        };
+        let viewport = DanmakuViewport::new(320, 58);
+        let first_window = timeline.window(Duration::ZERO, Duration::from_secs(8));
+        let second_window = timeline.window(Duration::from_secs(1), Duration::from_secs(9));
+        let mut engine = DfmLayoutEngine::new(first_window, config);
+
+        let first = engine.prepare(viewport, 1);
+        assert!(!first.items().iter().any(|item| item.id == 3));
+        let original_track = first
+            .items()
+            .iter()
+            .find(|item| item.id == 4)
+            .expect("later item is placed after the first pair expires")
+            .track_index;
+
+        engine.sync_timeline(&second_window);
+        let second = engine.prepare(viewport, 1);
+
+        assert!(!second.items().iter().any(|item| item.id == 3));
+        assert_eq!(
+            second
+                .items()
+                .iter()
+                .find(|item| item.id == 4)
+                .expect("visible item remains prepared")
+                .track_index,
+            original_track
         );
     }
 

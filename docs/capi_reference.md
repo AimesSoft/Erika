@@ -444,6 +444,25 @@ tracks. `set_danmaku_config` / `_ptr` apply the full `ErikaDanmakuConfig` (the
 it back. See [danmaku_architecture.md](danmaku_architecture.md) for the layout
 engine. `set_danmaku_block_words_json` takes a JSON array of strings to filter.
 
+Inline JSON may be an item array or an object containing a `comments`,
+`danmaku`, or `items` array. Each item accepts these fields (aliases in
+parentheses):
+
+- `content` (`text`, `c`): text; an item with missing or blank text is skipped.
+- `time` (`t`): presentation time in seconds, defaulting to `0`.
+- `type` (`mode`, `y`): `scroll`/`1`, `bottom`/`4`, `top`/`5`, `reverse`/`6`,
+  or `special`/`7`. Numeric `type_code` / `mode_code` are also accepted.
+- `color` (`r`): decimal RGB, `#RRGGBB`, or `rgb(r,g,b)`.
+- `font_size` (`fontSize`, `size`, `s`), `opacity` (`alpha`, `a`), and `is_me`
+  (`isMe`, `self`, `mine`): optional style and self-danmaku metadata.
+- `id`: an optional unsigned 64-bit integer or decimal string. When omitted,
+  Erika assigns the item's position in the complete input. The session creates
+  a separate internal layout identity, so hosts do not need to synthesize a
+  business ID to keep tracks stable across planner windows.
+
+Unknown fields are ignored, so standard maps carrying source fields such as
+`cid` or `danmakuId` may be passed through unchanged.
+
 `set_debug_hud_enabled` is off by default. When enabled, the Presenter draws a
 native diagnostic HUD in the video composition. It shows track
 technical metadata, playback state, decoded/rendered FPS, decode and zero-copy

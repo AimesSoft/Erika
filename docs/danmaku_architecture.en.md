@@ -84,7 +84,7 @@ The part that should be replaced “as close as possible to the original DFM+ co
 
 Its input should stay aligned with NipaPlay DFM+: normalized items, viewport, font metrics, and user config. Erika may use its own Rust types, but field semantics should match NipaPlay: time, text, type_code, color, is_me, paint_width/paint_height, display_area, scroll_duration, allow_stacking, merge, max_quantity, max_lines, track_gap, outline, block_words, and so on.
 
-Before DFM+, Erika adds `DanmakuSession`. It does not participate in layout; it only prepares an active timeline that DFM+ can consume. Multiple tracks may be enabled at once; per-track and global offsets are applied when building the active timeline; source item IDs are prefixed with the track ID to avoid collisions after multi-track merging. Seek should not force a re-prepare because generation changes; prepare should only be invalidated by timeline/session content, viewport, or config changes. Generation only gates current-frame output for the renderer.
+Before DFM+, Erika adds `DanmakuSession`. It does not participate in layout; it only prepares an active timeline that DFM+ can consume. Multiple tracks may be enabled at once, and per-track and global offsets are applied when building the active timeline. After merging, the session allocates unique layout item IDs for that content revision instead of packing host business IDs into layout identity. Consecutive planner windows carry both completed track assignments and rejection decisions forward; timeline/session content, viewport, or layout-config changes rebuild that planning history. Generation only gates current-frame output for the renderer.
 
 The output should also stay close to NipaPlay DFM+: prepared layout stores stable results, and frame query returns only the visible items and their positions for the current media time. Erika can then map `item_index` to text, colors, font size, outline, and so on to build `DanmakuFrameLayout` and `DanmakuRenderPlan`.
 
@@ -170,4 +170,3 @@ The API layer should expose the NipaPlay danmaku input surface to the player and
 The render layer should stay native to Erika. DFM+ outputs “where each danmaku item is at the current media time, and what style it has,” not GPU textures or Flutter resources. Erika's renderer turns that output into glyph atlases, quad instances, and Metal/WGPU composition together with video.
 
 The synchronization layer must keep the current generation + media_time contract. Seek, stop, close, track switch, and config change all invalidate the old plan; each frame query only looks at the video timeline; danmaku do not own a separate wall-clock timer. That contract is the real fix for “the video jumped but the danmaku didn't.”
-

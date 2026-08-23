@@ -583,7 +583,8 @@ ErikaStatus erika_presenter_select_subtitle_track(
 /* Danmaku (bullet comments). load_* replaces danmaku with one anonymous track;
  * add_*_track builds a named multi-track list. Input is Bilibili XML (*_file,
  * by path/URL) or JSON (*_json, inline). offset_micros shifts one track's
- * timeline; the global offset shifts all. See docs/danmaku_architecture.md. */
+ * timeline; the global offset shifts all. The inline JSON schema is documented
+ * in docs/capi_reference.md; layout behavior is in docs/danmaku_architecture.md. */
 ErikaStatus erika_presenter_load_danmaku_file(
     ErikaPresenterHandle *handle,
     const char *uri);
