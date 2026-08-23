@@ -2174,9 +2174,8 @@ fn create_swapchain(
     };
     let swapchain = if composition {
         trace("create_swapchain: CreateSwapChainForComposition");
-        unsafe { factory.CreateSwapChainForComposition(device, &desc, None) }.map_err(|error| {
-            d3d_error("IDXGIFactory2::CreateSwapChainForComposition", error)
-        })?
+        unsafe { factory.CreateSwapChainForComposition(device, &desc, None) }
+            .map_err(|error| d3d_error("IDXGIFactory2::CreateSwapChainForComposition", error))?
     } else {
         trace("create_swapchain: CreateSwapChainForHwnd");
         unsafe { factory.CreateSwapChainForHwnd(device, hwnd, &desc, None, None) }
