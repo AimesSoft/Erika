@@ -432,7 +432,10 @@ impl MetalRendererImpl {
             let Some(drawable): Option<Retained<ProtocolObject<dyn CAMetalDrawable>>> =
                 layer.nextDrawable()
             else {
-                return Err(PlayerError::Renderer(
+                // A drained drawable pool is temporary backpressure, not a
+                // renderer fault: every acquisition path reports it the same
+                // way so callers can skip the frame instead of failing.
+                return Err(PlayerError::RendererBackpressure(
                     "CAMetalLayer nextDrawable returned nil".to_string(),
                 ));
             };
@@ -517,7 +520,10 @@ impl MetalRendererImpl {
             let Some(drawable): Option<Retained<ProtocolObject<dyn CAMetalDrawable>>> =
                 layer.nextDrawable()
             else {
-                return Err(PlayerError::Renderer(
+                // A drained drawable pool is temporary backpressure, not a
+                // renderer fault: every acquisition path reports it the same
+                // way so callers can skip the frame instead of failing.
+                return Err(PlayerError::RendererBackpressure(
                     "CAMetalLayer nextDrawable returned nil".to_string(),
                 ));
             };
