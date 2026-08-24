@@ -77,6 +77,10 @@ const AUDIO_FAST_RATE_PUMP_TIME_BUDGET: Duration = Duration::from_millis(4);
 const PLAYBACK_RATE_EPSILON: f64 = 0.001;
 const VIDEO_PUMP_FRAME_LIMIT: usize = 8;
 const VIDEO_PUMP_TIME_BUDGET: Duration = Duration::from_millis(4);
+// A foreground resume that keeps failing must not retry once per display
+// frame: every attempt crosses the playback worker channel and can block the
+// render queue on the frame-output barrier timeout.
+const MAX_VIDEO_DECODE_RESUME_ATTEMPTS: u32 = 5;
 const DANMAKU_PLAN_REQUEST_QUANTUM: Duration = Duration::from_millis(250);
 const DANMAKU_PREPARE_REFRESH_MARGIN: Duration = Duration::from_secs(4);
 const DANMAKU_PLAN_LOOKAHEAD: Duration = Duration::from_secs(8);
@@ -294,6 +298,7 @@ pub struct PresenterRuntime {
     pending_playback_rate: Option<PendingPlaybackRate>,
     audio_only_tick_active: bool,
     resume_pending: bool,
+    video_decode_resume_attempts: u32,
     latest_video_decoder: Option<VideoDecoderEvent>,
     current_overlay: Option<OverlayFrame>,
     debug_hud: DebugHud,
@@ -691,6 +696,7 @@ impl PresenterRuntime {
             pending_playback_rate: None,
             audio_only_tick_active: false,
             resume_pending: false,
+            video_decode_resume_attempts: 0,
             latest_video_decoder: None,
             current_overlay: None,
             debug_hud: DebugHud::new(),
@@ -1350,7 +1356,7 @@ impl PresenterRuntime {
         if self.audio_only_tick_active {
             if self.resume_pending {
                 self.try_resume_video_decode();
-            } else {
+            } else if self.video_decode_resume_attempts < MAX_VIDEO_DECODE_RESUME_ATTEMPTS {
                 // Returning to the foreground can race the layer's first
                 // drawable. Arm the resume on this tick and let a later tick
                 // perform the decoder seek/flush after the surface is ready.
@@ -1365,8 +1371,12 @@ impl PresenterRuntime {
                     .to_string(),
                 );
             }
+            // Once the attempt budget is spent the resume stays disarmed until
+            // the next background tick opens a new foreground window, so a
+            // wedged worker cannot be re-probed on every display frame.
         } else {
             self.resume_pending = false;
+            self.video_decode_resume_attempts = 0;
         }
         let tick_started = Instant::now();
         self.commit_pending_playback_rate()?;
@@ -1551,9 +1561,10 @@ impl PresenterRuntime {
         let tick_started = Instant::now();
         self.commit_pending_playback_rate()?;
         // A background tick starts a new foreground-resume window. If a
-        // previous foreground attempt failed, do not carry its pending flag
-        // into the next foreground frame.
+        // previous foreground attempt failed, do not carry its pending flag or
+        // its spent attempt budget into the next foreground frame.
         self.resume_pending = false;
+        self.video_decode_resume_attempts = 0;
         if !self.audio_only_tick_active {
             self.player.set_video_decode_suspended(true)?;
             self.discard_pending_video_frames();
@@ -1586,6 +1597,7 @@ impl PresenterRuntime {
     fn reset_video_decode_resume_state(&mut self) {
         self.audio_only_tick_active = false;
         self.resume_pending = false;
+        self.video_decode_resume_attempts = 0;
     }
 
     fn surface_is_ready(&self) -> bool {
@@ -1610,6 +1622,7 @@ impl PresenterRuntime {
             Ok(_) => {
                 self.audio_only_tick_active = false;
                 self.resume_pending = false;
+                self.video_decode_resume_attempts = 0;
                 trace::diagnostic(
                     serde_json::json!({
                         "event": "player_video_decode",
@@ -1618,20 +1631,43 @@ impl PresenterRuntime {
                     .to_string(),
                 );
             }
-            Err(error) => {
-                // A worker timeout or transient lifecycle race must not turn
-                // the render loop into a terminal C ABI error. Keep both
-                // flags set so the next display tick retries the transition.
-                trace::diagnostic(
-                    serde_json::json!({
-                        "event": "player_video_decode",
-                        "stage": "resume_retry_pending",
-                        "reason": error.to_string(),
-                    })
-                    .to_string(),
-                );
-            }
+            Err(error) => self.note_video_decode_resume_failure(&error.to_string()),
         }
+    }
+
+    /// Accounts for one failed foreground resume and decides whether the next
+    /// display tick may try again.
+    ///
+    /// A worker timeout or transient lifecycle race must not turn the render
+    /// loop into a terminal C ABI error, so the attempt is retried instead of
+    /// propagated. The budget bounds that retry: a disconnected or hung
+    /// playback worker never recovers, and probing it on every display frame
+    /// would send one IPC command and one seek/flush per frame while each
+    /// attempt can stall the render queue for the frame-output barrier
+    /// timeout.
+    fn note_video_decode_resume_failure(&mut self, reason: &str) {
+        self.video_decode_resume_attempts = self.video_decode_resume_attempts.saturating_add(1);
+        let exhausted = self.video_decode_resume_attempts >= MAX_VIDEO_DECODE_RESUME_ATTEMPTS;
+        if exhausted {
+            // Leave the decoder suspended and keep rendering the last frame
+            // with audio; a later background/foreground cycle reopens the
+            // window with a fresh budget.
+            self.resume_pending = false;
+        }
+        trace::diagnostic(
+            serde_json::json!({
+                "event": "player_video_decode",
+                "stage": if exhausted {
+                    "resume_abandoned"
+                } else {
+                    "resume_retry_pending"
+                },
+                "reason": reason,
+                "attempt": self.video_decode_resume_attempts,
+                "maxAttempts": MAX_VIDEO_DECODE_RESUME_ATTEMPTS,
+            })
+            .to_string(),
+        );
     }
 
     fn debug_hud_snapshot(&self) -> DebugHudSnapshot {
@@ -4759,6 +4795,43 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         presenter.audio_only_tick().unwrap();
         assert!(presenter.audio_only_tick_active);
         assert!(!presenter.resume_pending);
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu")]
+    fn foreground_video_resume_stops_retrying_after_the_attempt_budget() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        presenter.audio_only_tick_active = true;
+        presenter.resume_pending = true;
+
+        for attempt in 1..MAX_VIDEO_DECODE_RESUME_ATTEMPTS {
+            presenter.note_video_decode_resume_failure("playback worker is not running");
+            assert_eq!(presenter.video_decode_resume_attempts, attempt);
+            assert!(presenter.resume_pending);
+        }
+
+        presenter.note_video_decode_resume_failure("playback worker is not running");
+        assert_eq!(
+            presenter.video_decode_resume_attempts,
+            MAX_VIDEO_DECODE_RESUME_ATTEMPTS
+        );
+        assert!(!presenter.resume_pending);
+
+        // A spent budget must not be re-armed by the next display frame, or the
+        // wedged worker would be probed once per tick again.
+        presenter.render_tick(0.016).unwrap();
+        assert!(presenter.audio_only_tick_active);
+        assert!(!presenter.resume_pending);
+        assert_eq!(
+            presenter.video_decode_resume_attempts,
+            MAX_VIDEO_DECODE_RESUME_ATTEMPTS
+        );
+
+        // A new background/foreground cycle opens a fresh window.
+        presenter.audio_only_tick().unwrap();
+        assert_eq!(presenter.video_decode_resume_attempts, 0);
+        presenter.render_tick(0.032).unwrap();
+        assert!(presenter.resume_pending);
     }
 
     #[test]
