@@ -2793,7 +2793,13 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
   }
 
   private func resumeInterruptedPlayback(_ host: ErikaPlayerHost, attempt: Int) {
-    guard interruptedPlayerId == host.id, activePlayerId == host.id else { return }
+    // A retry can fire after the active player changed. Drop the recovery
+    // instead of returning with `interruptedPlayerId` still set, which would
+    // leave a resume owed to a player that will never be resumed.
+    guard interruptedPlayerId == host.id, activePlayerId == host.id else {
+      cancelPendingInterruptionResume(ifPlayer: host.id)
+      return
+    }
     do {
       // ErikaPlayerHost.play() configures the playback category and calls
       // setActive(true) before sending the native play command.
