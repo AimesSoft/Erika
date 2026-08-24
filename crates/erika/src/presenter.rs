@@ -844,7 +844,7 @@ impl PresenterRuntime {
 
     pub fn play(&mut self) -> Result<()> {
         if self.player.is_stopped_at_end() {
-            self.reset_video_decode_resume_state();
+            self.cancel_pending_video_decode_resume();
             self.reset_audio_output_with_committed_rate();
             self.drain_pending_player_frames();
             self.bump_danmaku_generation();
@@ -889,7 +889,7 @@ impl PresenterRuntime {
     pub fn stop(&mut self) -> Result<()> {
         let quiesced = self.quiesce_frame_output("stop")?;
         let result = self.player.stop();
-        self.reset_video_decode_resume_state();
+        self.cancel_pending_video_decode_resume();
         self.reset_audio_output_with_committed_rate();
         self.bump_danmaku_generation();
         self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
@@ -1594,8 +1594,29 @@ impl PresenterRuntime {
         while self.video_frames.try_recv().is_ok() {}
     }
 
+    /// Clears the resume bookkeeping across a boundary that replaces or
+    /// retires the playback engine.
+    ///
+    /// `open` builds a fresh engine and `close` retires the worker, and a new
+    /// engine starts with video decode running, so the presenter owes it no
+    /// resume.
     fn reset_video_decode_resume_state(&mut self) {
         self.audio_only_tick_active = false;
+        self.resume_pending = false;
+        self.video_decode_resume_attempts = 0;
+    }
+
+    /// Drops an in-flight resume attempt without forgetting that the worker
+    /// still has video decode suspended.
+    ///
+    /// `stop` and a stopped-at-end replay reuse the current engine, and
+    /// neither clears its `video_decode_suspended` flag. Clearing
+    /// `audio_only_tick_active` here would desynchronize the presenter from
+    /// the worker: no later foreground tick would owe a resume, so playback
+    /// would stay audio-only with a frozen frame until the app is backgrounded
+    /// again. Resetting the budget lets the next foreground window retry from
+    /// scratch.
+    fn cancel_pending_video_decode_resume(&mut self) {
         self.resume_pending = false;
         self.video_decode_resume_attempts = 0;
     }
@@ -4832,6 +4853,54 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         assert_eq!(presenter.video_decode_resume_attempts, 0);
         presenter.render_tick(0.032).unwrap();
         assert!(presenter.resume_pending);
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu")]
+    fn stop_keeps_the_video_decode_resume_owed_to_the_reused_worker() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        presenter.audio_only_tick_active = true;
+        presenter.resume_pending = true;
+        presenter.video_decode_resume_attempts = MAX_VIDEO_DECODE_RESUME_ATTEMPTS;
+
+        // `stop` reuses the current engine and never clears its
+        // `video_decode_suspended` flag, so the presenter must keep owing it a
+        // resume; only the in-flight attempt and its budget are dropped.
+        let _ = presenter.stop();
+        assert!(presenter.audio_only_tick_active);
+        assert!(!presenter.resume_pending);
+        assert_eq!(presenter.video_decode_resume_attempts, 0);
+
+        // Returning to the foreground still arms the resume, so playback does
+        // not stay audio-only with a frozen frame.
+        presenter.render_tick(0.0).unwrap();
+        assert!(presenter.resume_pending);
+    }
+
+    #[test]
+    #[cfg(feature = "wgpu")]
+    fn only_engine_replacing_boundaries_forget_the_video_decode_resume() {
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+
+        // `open` builds a fresh engine and `close` retires the worker, and a
+        // new engine decodes video, so the presenter owes it no resume.
+        presenter.audio_only_tick_active = true;
+        presenter.resume_pending = true;
+        presenter.video_decode_resume_attempts = 2;
+        presenter.reset_video_decode_resume_state();
+        assert!(!presenter.audio_only_tick_active);
+        assert!(!presenter.resume_pending);
+        assert_eq!(presenter.video_decode_resume_attempts, 0);
+
+        // `stop` and a stopped-at-end replay reuse the engine, which keeps its
+        // `video_decode_suspended` flag set, so the obligation must survive.
+        presenter.audio_only_tick_active = true;
+        presenter.resume_pending = true;
+        presenter.video_decode_resume_attempts = 2;
+        presenter.cancel_pending_video_decode_resume();
+        assert!(presenter.audio_only_tick_active);
+        assert!(!presenter.resume_pending);
+        assert_eq!(presenter.video_decode_resume_attempts, 0);
     }
 
     #[test]
