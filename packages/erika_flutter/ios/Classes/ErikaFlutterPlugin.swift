@@ -1986,11 +1986,13 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
   private var pollTimer: Timer?
   private var activePlayerId: Int64?
   private var interruptedPlayerId: Int64?
+  private var interruptionResumeWorkItem: DispatchWorkItem?
   private var notificationObservers: [NSObjectProtocol] = []
   private var remoteCommandTargets: [(MPRemoteCommand, Any)] = []
   private var systemMediaNavigation: [Int64: (previousEnabled: Bool, nextEnabled: Bool)] = [:]
 
   deinit {
+    interruptionResumeWorkItem?.cancel()
     notificationObservers.forEach(NotificationCenter.default.removeObserver)
     remoteCommandTargets.forEach { command, target in
       command.removeTarget(target)
@@ -2017,6 +2019,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         let playerId = try requiredInt64(args["playerId"], name: "playerId")
         players.removeValue(forKey: playerId)
         systemMediaNavigation.removeValue(forKey: playerId)
+        cancelPendingInterruptionResume(ifPlayer: playerId)
         if activePlayerId == playerId {
           activePlayerId = nil
           clearNowPlayingInfo()
@@ -2045,13 +2048,21 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         updateNowPlayingInfo(for: host)
         result(nil)
       case "pause":
-        try playerHost(from: try dictionaryArgs(call.arguments)).pause()
+        let host = try playerHost(from: try dictionaryArgs(call.arguments))
+        // Drop a pending interruption resume first: it is scheduled on the main
+        // queue and would otherwise fire after this pause and play again.
+        cancelPendingInterruptionResume(ifPlayer: host.id)
+        try host.pause()
         result(nil)
       case "stop":
-        try playerHost(from: try dictionaryArgs(call.arguments)).stop()
+        let host = try playerHost(from: try dictionaryArgs(call.arguments))
+        cancelPendingInterruptionResume(ifPlayer: host.id)
+        try host.stop()
         result(nil)
       case "close":
-        try playerHost(from: try dictionaryArgs(call.arguments)).close()
+        let host = try playerHost(from: try dictionaryArgs(call.arguments))
+        cancelPendingInterruptionResume(ifPlayer: host.id)
+        try host.close()
         result(nil)
       case "seek":
         let args = try dictionaryArgs(call.arguments)
@@ -2678,6 +2689,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
 
   private func performRemotePause() -> MPRemoteCommandHandlerStatus {
     guard let host = activePlayerId.flatMap({ players[$0] }) else { return .noSuchContent }
+    cancelPendingInterruptionResume(ifPlayer: host.id)
     do {
       try host.pause()
       return .success
@@ -2744,20 +2756,74 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
           let type = AVAudioSession.InterruptionType(rawValue: rawType),
           let host = activePlayerId.flatMap({ players[$0] }) else { return }
     if type == .began {
-      interruptedPlayerId = host.isPlaying ? host.id : nil
-      if host.isPlaying {
-        try? host.pause()
+      let wasPlaying = host.isPlaying
+      cancelPendingInterruptionResume()
+      interruptedPlayerId = wasPlaying ? host.id : nil
+      if wasPlaying {
+        do {
+          try host.pause()
+        } catch {
+          NSLog("ErikaFlutterPlugin: audio interruption pause failed: \(error)")
+        }
       }
       return
     }
     guard let rawOptions = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt,
           AVAudioSession.InterruptionOptions(rawValue: rawOptions).contains(.shouldResume),
           interruptedPlayerId == host.id else {
-      interruptedPlayerId = nil
+      cancelPendingInterruptionResume()
       return
     }
+    resumeInterruptedPlayback(host, attempt: 0)
+  }
+
+  /// Drops a scheduled interruption resume, whichever player it targets.
+  private func cancelPendingInterruptionResume() {
+    interruptionResumeWorkItem?.cancel()
+    interruptionResumeWorkItem = nil
     interruptedPlayerId = nil
-    try? host.play()
+  }
+
+  /// Drops a scheduled interruption resume only when it targets `playerId`, so
+  /// an explicit pause/stop/close on one player leaves another player's
+  /// pending resume alone.
+  private func cancelPendingInterruptionResume(ifPlayer playerId: Int64) {
+    guard interruptedPlayerId == playerId else { return }
+    cancelPendingInterruptionResume()
+  }
+
+  private func resumeInterruptedPlayback(_ host: ErikaPlayerHost, attempt: Int) {
+    // A retry can fire after the active player changed. Drop the recovery
+    // instead of returning with `interruptedPlayerId` still set, which would
+    // leave a resume owed to a player that will never be resumed.
+    guard interruptedPlayerId == host.id, activePlayerId == host.id else {
+      cancelPendingInterruptionResume(ifPlayer: host.id)
+      return
+    }
+    do {
+      // ErikaPlayerHost.play() configures the playback category and calls
+      // setActive(true) before sending the native play command.
+      try host.play()
+      cancelPendingInterruptionResume()
+    } catch {
+      let maxAttempts = 3
+      guard attempt < maxAttempts else {
+        cancelPendingInterruptionResume()
+        NSLog("ErikaFlutterPlugin: audio interruption resume failed after \(maxAttempts + 1) attempts: \(error)")
+        return
+      }
+      NSLog("ErikaFlutterPlugin: audio interruption resume attempt \(attempt + 1) failed: \(error)")
+      let workItem = DispatchWorkItem { [weak self, weak host] in
+        guard let self, let host else { return }
+        self.interruptionResumeWorkItem = nil
+        self.resumeInterruptedPlayback(host, attempt: attempt + 1)
+      }
+      interruptionResumeWorkItem = workItem
+      DispatchQueue.main.asyncAfter(
+        deadline: .now() + .milliseconds(100),
+        execute: workItem
+      )
+    }
   }
 
   private func presenterConfigForNewPlayer(arguments: Any?, hdrDebug: Bool) -> ErikaPresenterConfigC {

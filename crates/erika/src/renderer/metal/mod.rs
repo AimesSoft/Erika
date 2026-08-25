@@ -647,6 +647,27 @@ fn inspect_overlay_frame(frame: &OverlayFrame) -> Result<PreparedOverlayFrameInf
     })
 }
 
+/// Turns a drained-drawable-pool failure into a skipped frame.
+///
+/// Every `CAMetalLayer.nextDrawable()` path reports a nil drawable as
+/// [`PlayerError::RendererBackpressure`]. Clear and test-pattern frames carry
+/// no decoded content, so dropping one is always cheaper than pushing a
+/// transient lifecycle race across the C ABI as a terminal renderer error.
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+fn skip_on_backpressure(stage: &str, result: Result<()>) -> Result<()> {
+    match result {
+        Err(PlayerError::RendererBackpressure(reason)) => {
+            if trace::enabled() {
+                trace::log(format!(
+                    "[erika-render-trace] stage={stage} skipped reason={reason}"
+                ));
+            }
+            Ok(())
+        }
+        other => other,
+    }
+}
+
 pub fn fourcc_string(value: u32) -> String {
     let bytes = value.to_be_bytes();
     if bytes
@@ -702,7 +723,10 @@ impl RendererBackend for MetalRenderer {
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             if self.inner.has_surface() {
-                self.inner.render_clear(ClearColor::black())?;
+                skip_on_backpressure(
+                    "clear_current_frame",
+                    self.inner.render_clear(ClearColor::black()),
+                )?;
             }
         }
         Ok(())
@@ -716,17 +740,20 @@ impl RendererBackend for MetalRenderer {
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
             let started = std::time::Instant::now();
-            self.inner.render_clear(ClearColor::animated(time_seconds))
-                .map(|result| {
-                    if trace::enabled() {
-                        trace::log(format!(
-                            "[erika-render-trace] stage=test_frame time_seconds={:.3} elapsed_ms={:.3}",
-                            time_seconds,
-                            started.elapsed().as_secs_f64() * 1000.0,
-                        ));
-                    }
-                    result
-                })
+            skip_on_backpressure(
+                "test_frame",
+                self.inner.render_clear(ClearColor::animated(time_seconds)),
+            )
+            .map(|result| {
+                if trace::enabled() {
+                    trace::log(format!(
+                        "[erika-render-trace] stage=test_frame time_seconds={:.3} elapsed_ms={:.3}",
+                        time_seconds,
+                        started.elapsed().as_secs_f64() * 1000.0,
+                    ));
+                }
+                result
+            })
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         {
@@ -803,6 +830,18 @@ impl RendererBackend for MetalRenderer {
             danmaku.map(DanmakuRenderFrame::new),
         );
         self.current_frame = Some(frame);
+        let rendered = match result {
+            Ok(()) => Ok(true),
+            Err(PlayerError::RendererBackpressure(reason)) => {
+                if trace::enabled() {
+                    trace::log(format!(
+                        "[erika-render-trace] stage=render_current_frame skipped reason={reason}"
+                    ));
+                }
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        };
         if trace::enabled() {
             trace::log(format!(
                 "[erika-render-trace] stage=render_current_frame gen={} media={} output={}x{} danmaku={} elapsed_ms={:.3} result={}",
@@ -812,10 +851,10 @@ impl RendererBackend for MetalRenderer {
                 context.output_height,
                 danmaku.as_ref().map_or(0, |plan| plan.items.len()),
                 started.elapsed().as_secs_f64() * 1000.0,
-                result.is_ok(),
+                rendered.as_ref().is_ok_and(|rendered| *rendered),
             ));
         }
-        result.map(|()| true)
+        rendered
     }
 
     fn capture_current_frame(

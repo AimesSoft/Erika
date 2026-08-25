@@ -70,6 +70,59 @@ void main() {
     });
   }
 
+  test('iOS retries audio-session activation after an allowed interruption', () {
+    final plugin = File(
+      'ios/Classes/ErikaFlutterPlugin.swift',
+    ).readAsStringSync();
+
+    expect(plugin, contains('AVAudioSession.interruptionNotification'));
+    expect(plugin, contains('try session.setActive(true)'));
+    expect(plugin, contains('private func resumeInterruptedPlayback'));
+    expect(plugin, contains('interruptionResumeWorkItem'));
+    expect(plugin, contains('guard attempt < maxAttempts else'));
+  });
+
+  test('iOS drops a pending interruption resume on an explicit command', () {
+    final plugin = File(
+      'ios/Classes/ErikaFlutterPlugin.swift',
+    ).readAsStringSync();
+
+    expect(
+      plugin,
+      contains(
+          'private func cancelPendingInterruptionResume(ifPlayer playerId: Int64)'),
+    );
+
+    // Every explicit pause/stop/close path must disarm the retry before it
+    // fires, or the deferred resume would play against the user's intent.
+    for (final entry in <(String, String)>[
+      ('      case "pause":', 'try host.pause()'),
+      ('      case "stop":', 'try host.stop()'),
+      ('      case "close":', 'try host.close()'),
+    ]) {
+      final caseStart = plugin.indexOf(entry.$1);
+      expect(caseStart, greaterThanOrEqualTo(0), reason: entry.$1);
+      final body = plugin.substring(
+        caseStart,
+        plugin.indexOf(entry.$2, caseStart) + entry.$2.length,
+      );
+      expect(
+          body, contains('cancelPendingInterruptionResume(ifPlayer: host.id)'));
+    }
+
+    final remoteStart = plugin.indexOf(
+      'private func performRemotePause()',
+    );
+    final remoteEnd =
+        plugin.indexOf('private func performRemoteToggle()', remoteStart);
+    expect(remoteStart, greaterThanOrEqualTo(0));
+    expect(remoteEnd, greaterThan(remoteStart));
+    expect(
+      plugin.substring(remoteStart, remoteEnd),
+      contains('cancelPendingInterruptionResume(ifPlayer: host.id)'),
+    );
+  });
+
   test('Android polls events on the presenter thread with adaptive scheduling', () {
     final plugin = File(
       'android/src/main/kotlin/dev/aimesoft/erika_flutter/'
