@@ -90,13 +90,14 @@ unsafe fn invoke(
             let uri = required_string(args, "uri")?;
             let uri = required_c_string(uri, "uri")?;
             let headers = HttpHeaders::from_json(args)?;
+            let options = ErikaOpenOptions {
+                headers: headers.headers.as_ptr(),
+                header_count: headers.headers.len(),
+                http_read_ahead_bytes: optional_read_ahead_bytes(args)?,
+                reserved: [0; 3],
+            };
             call_status(unsafe {
-                erika_presenter_open_with_headers(
-                    handle,
-                    uri.as_ptr(),
-                    headers.headers.as_ptr(),
-                    headers.headers.len(),
-                )
+                erika_presenter_open_with_options(handle, uri.as_ptr(), &options)
             })?;
             Ok(Value::Null)
         }
@@ -580,6 +581,22 @@ fn required_u64(args: &Map<String, Value>, name: &str) -> Result<u64, String> {
     args.get(name)
         .and_then(Value::as_u64)
         .ok_or_else(|| format!("{name} must be non-negative"))
+}
+
+/// Parses the optional `httpReadAheadBytes` open argument. 0 / missing keeps
+/// the kernel default; negative or fractional values are rejected because they
+/// cannot be a byte count.
+fn optional_read_ahead_bytes(args: &Map<String, Value>) -> Result<u64, String> {
+    let Some(value) = args.get("httpReadAheadBytes") else {
+        return Ok(0);
+    };
+    match value {
+        Value::Number(number) => number
+            .as_u64()
+            .ok_or_else(|| "httpReadAheadBytes must be a non-negative integer".to_string()),
+        Value::Null => Ok(0),
+        _ => Err("httpReadAheadBytes must be a non-negative integer".to_string()),
+    }
 }
 
 fn required_u64_array(args: &Map<String, Value>, name: &str) -> Result<Vec<u64>, String> {
