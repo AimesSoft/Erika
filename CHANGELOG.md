@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### C API
+
+- Added `ErikaOpenOptions` and `erika_open_with_options` /
+  `erika_presenter_open_with_options`, superseding the `_with_headers` pair.
+  The options struct bundles the header array with per-request tuning, starting
+  with `http_read_ahead_bytes` to override the HTTP(S) read-ahead window
+  (0 keeps the 2 MiB kernel default; an explicit value supersedes the
+  `ERIKA_HTTP_READAHEAD_BYTES` environment variable). Reserved fields must be
+  zero and are validated so future fields cannot silently change behavior.
+
 ### Danmaku
 
 - Kept both accepted and rejected placement decisions stable across sliding

@@ -104,6 +104,17 @@ pub struct ErikaHttpHeader {
     pub value: *const c_char,
 }
 
+/// Extended open parameters mirroring the C header's `ErikaOpenOptions`.
+/// `http_read_ahead_bytes` of 0 keeps the kernel default.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ErikaOpenOptions {
+    pub headers: *const ErikaHttpHeader,
+    pub header_count: usize,
+    pub http_read_ahead_bytes: u64,
+    pub reserved: [u64; 3],
+}
+
 thread_local! {
     static LAST_ERROR: RefCell<Option<String>> = RefCell::new(None);
 }
@@ -807,6 +818,15 @@ pub unsafe extern "C" fn erika_open_with_headers(
     headers: *const ErikaHttpHeader,
     header_count: usize,
 ) -> ErikaStatus {
+    unsafe { erika_open_with_options(handle, uri, open_options_raw(headers, header_count)) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_open_with_options(
+    handle: *mut ErikaHandle,
+    uri: *const c_char,
+    options: *const ErikaOpenOptions,
+) -> ErikaStatus {
     with_handle_mut(handle, |handle| {
         let uri = match c_string(uri) {
             Ok(uri) => uri,
@@ -816,15 +836,14 @@ pub unsafe extern "C" fn erika_open_with_headers(
             "fn=erika_open handle={handle:p} uri={}",
             redacted_uri(&uri)
         ));
-        let headers = match c_http_headers(headers, header_count) {
-            Ok(headers) => headers,
+        let (headers, http_read_ahead_bytes) = match c_open_options(options) {
+            Ok(parsed) => parsed,
             Err(status) => return status,
         };
-        let status = status_from_player_result(
-            handle
-                .player
-                .open(MediaRequest::new(uri).with_http_headers(headers)),
-        );
+        let request = MediaRequest::new(uri)
+            .with_http_headers(headers)
+            .map_http_read_ahead_bytes(http_read_ahead_bytes);
+        let status = status_from_player_result(handle.player.open(request));
         capi_trace(format!(
             "fn=erika_open.done handle={handle:p} status={status:?}"
         ));
@@ -1239,6 +1258,22 @@ pub unsafe extern "C" fn erika_presenter_open_with_headers(
     _uri: *const c_char,
     _headers: *const ErikaHttpHeader,
     _header_count: usize,
+) -> ErikaStatus {
+    ErikaStatus::PlayerError
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+)))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_open_with_options(
+    _handle: *mut std::ffi::c_void,
+    _uri: *const c_char,
+    _options: *const ErikaOpenOptions,
 ) -> ErikaStatus {
     ErikaStatus::PlayerError
 }
@@ -1752,6 +1787,24 @@ pub unsafe extern "C" fn erika_presenter_open_with_headers(
     headers: *const ErikaHttpHeader,
     header_count: usize,
 ) -> ErikaStatus {
+    unsafe {
+        erika_presenter_open_with_options(handle, uri, open_options_raw(headers, header_count))
+    }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_open_with_options(
+    handle: *mut ErikaPresenterHandle,
+    uri: *const c_char,
+    options: *const ErikaOpenOptions,
+) -> ErikaStatus {
     with_presenter_mut(handle, |handle| {
         let uri = match c_string(uri) {
             Ok(uri) => uri,
@@ -1761,15 +1814,14 @@ pub unsafe extern "C" fn erika_presenter_open_with_headers(
             "fn=erika_presenter_open handle={handle:p} uri={}",
             redacted_uri(&uri)
         ));
-        let headers = match c_http_headers(headers, header_count) {
-            Ok(headers) => headers,
+        let (headers, http_read_ahead_bytes) = match c_open_options(options) {
+            Ok(parsed) => parsed,
             Err(status) => return status,
         };
-        let status = status_from_player_result(
-            handle
-                .presenter
-                .open(MediaRequest::new(uri).with_http_headers(headers)),
-        );
+        let request = MediaRequest::new(uri)
+            .with_http_headers(headers)
+            .map_http_read_ahead_bytes(http_read_ahead_bytes);
+        let status = status_from_player_result(handle.presenter.open(request));
         retain_presenter_events_from_latest_open(handle);
         capi_trace(format!(
             "fn=erika_presenter_open.done handle={handle:p} status={status:?}"
@@ -3802,6 +3854,47 @@ fn c_http_headers(
         .collect()
 }
 
+/// Packs the legacy (headers, header_count) pair into an `ErikaOpenOptions`
+/// so `erika_open_with_headers` can delegate to `erika_open_with_options`.
+unsafe fn open_options_raw(
+    headers: *const ErikaHttpHeader,
+    header_count: usize,
+) -> *const ErikaOpenOptions {
+    if header_count == 0 {
+        std::ptr::null()
+    } else {
+        &ErikaOpenOptions {
+            headers,
+            header_count,
+            http_read_ahead_bytes: 0,
+            reserved: [0; 3],
+        }
+    }
+}
+
+/// Validates an `ErikaOpenOptions` at the ABI boundary. A NULL options pointer
+/// means "defaults" (no headers, default read-ahead). `http_read_ahead_bytes`
+/// of 0 also means default; reserved fields must stay zero for forward
+/// compatibility.
+fn c_open_options(
+    options: *const ErikaOpenOptions,
+) -> Result<(Vec<(String, String)>, Option<u64>), ErikaStatus> {
+    if options.is_null() {
+        return Ok((Vec::new(), None));
+    }
+    let options = unsafe { &*options };
+    for field in options.reserved {
+        if field != 0 {
+            set_last_error("ErikaOpenOptions.reserved must be zero");
+            return Err(ErikaStatus::PlayerError);
+        }
+    }
+    let headers = c_http_headers(options.headers, options.header_count)?;
+    let read_ahead = (options.http_read_ahead_bytes > 0)
+        .then_some(options.http_read_ahead_bytes);
+    Ok((headers, read_ahead))
+}
+
 /// Headers Erika derives itself for every request. Accepting a caller override
 /// would append a second copy (ureq appends rather than replaces), which makes
 /// servers answer requests Erika cannot interpret — a duplicated `Range` in
@@ -4628,6 +4721,107 @@ mod tests {
                 "Bearer a+b/c== \tpadded".to_string()
             )])
         );
+    }
+
+    #[test]
+    fn c_open_options_accepts_null_and_defaults() {
+        assert_eq!(
+            c_open_options(std::ptr::null()),
+            Ok((Vec::new(), None))
+        );
+    }
+
+    #[test]
+    fn c_open_options_parses_headers_and_read_ahead() {
+        let name = CString::new("Accept").unwrap();
+        let value = CString::new("video/mp4").unwrap();
+        let headers = [ErikaHttpHeader {
+            name: name.as_ptr(),
+            value: value.as_ptr(),
+        }];
+        let options = ErikaOpenOptions {
+            headers: headers.as_ptr(),
+            header_count: headers.len(),
+            http_read_ahead_bytes: 16 * 1024 * 1024,
+            reserved: [0; 3],
+        };
+        assert_eq!(
+            c_open_options(&options),
+            Ok((
+                vec![("Accept".to_string(), "video/mp4".to_string())],
+                Some(16 * 1024 * 1024)
+            ))
+        );
+
+        let default_read_ahead = ErikaOpenOptions {
+            headers: std::ptr::null(),
+            header_count: 0,
+            http_read_ahead_bytes: 0,
+            reserved: [0; 3],
+        };
+        assert_eq!(
+            c_open_options(&default_read_ahead),
+            Ok((Vec::new(), None))
+        );
+    }
+
+    #[test]
+    fn c_open_options_rejects_nonzero_reserved() {
+        let options = ErikaOpenOptions {
+            headers: std::ptr::null(),
+            header_count: 0,
+            http_read_ahead_bytes: 0,
+            reserved: [1, 0, 0],
+        };
+        assert_eq!(c_open_options(&options), Err(ErikaStatus::PlayerError));
+        assert!(
+            LAST_ERROR
+                .with(|slot| slot.borrow().clone())
+                .unwrap_or_default()
+                .contains("reserved")
+        );
+    }
+
+    #[test]
+    fn open_options_raw_matches_legacy_pair() {
+        assert!(unsafe { open_options_raw(std::ptr::null(), 0) }.is_null());
+
+        let name = CString::new("Accept").unwrap();
+        let value = CString::new("video/mp4").unwrap();
+        let headers = [ErikaHttpHeader {
+            name: name.as_ptr(),
+            value: value.as_ptr(),
+        }];
+        let options = unsafe { &*open_options_raw(headers.as_ptr(), headers.len()) };
+        assert_eq!(options.headers, headers.as_ptr());
+        assert_eq!(options.header_count, headers.len());
+        assert_eq!(options.http_read_ahead_bytes, 0);
+        assert_eq!(options.reserved, [0; 3]);
+        assert_eq!(
+            c_open_options(options),
+            Ok((
+                vec![("Accept".to_string(), "video/mp4".to_string())],
+                None
+            ))
+        );
+    }
+
+    #[test]
+    fn erika_open_with_options_rejects_null_pointer_arguments() {
+        let handle = erika_create();
+        assert!(!handle.is_null());
+        let uri = CString::new("/tmp/erika-missing.mp4").unwrap();
+
+        assert_eq!(
+            unsafe { erika_open_with_options(std::ptr::null_mut(), uri.as_ptr(), std::ptr::null()) },
+            ErikaStatus::NullPointer
+        );
+        assert_eq!(
+            unsafe { erika_open_with_options(handle, std::ptr::null(), std::ptr::null()) },
+            ErikaStatus::NullPointer
+        );
+
+        erika_destroy(handle);
     }
 
     #[test]

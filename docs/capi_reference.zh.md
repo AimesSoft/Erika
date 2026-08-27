@@ -133,6 +133,8 @@ handle 会停止播放并释放全部资源。
 ErikaStatus erika_open(ErikaHandle *handle, const char *uri);   // 文件路径或 URL
 ErikaStatus erika_open_with_headers(ErikaHandle *handle, const char *uri,
                                     const ErikaHttpHeader *headers, uintptr_t header_count);
+ErikaStatus erika_open_with_options(ErikaHandle *handle, const char *uri,
+                                    const ErikaOpenOptions *options);
 ErikaStatus erika_play(ErikaHandle *handle);
 ErikaStatus erika_pause(ErikaHandle *handle);
 ErikaStatus erika_stop(ErikaHandle *handle);
@@ -143,7 +145,25 @@ ErikaStatus erika_seek(ErikaHandle *handle, uint64_t position_micros);
 `uri` 是本地文件路径或 HTTP(S) URL。`erika_open_with_headers` 用于为 HTTP(S) 播放
 设置请求头；`headers` 只在调用期间读取，调用返回后即可释放。`header_count` 大于零时
 `headers` 不能为 NULL。请求头会用于 HEAD、Range GET 和预取请求。
-认证信息和 Cookie 不会写入 Erika 日志。`seek` 单位为微秒。`open` 和 `play` 都会
+认证信息和 Cookie 不会写入 Erika 日志。`seek` 单位为微秒。
+
+`erika_open_with_options` 是 `erika_open_with_headers` 的超集：通过 `ErikaOpenOptions`
+结构体把请求头数组与逐请求调参打包在一起。`options` 传 NULL 表示全部使用默认值。
+`http_read_ahead_bytes` 覆盖本次请求的 HTTP(S) 预读窗口（字节）——`0` 表示保持内核
+默认值（2 MiB；显式值优先于 `ERIKA_HTTP_READAHEAD_BYTES` 环境变量这一进程级覆盖）。
+`reserved` 中的非零值会被拒绝，以便未来增加字段时不改变旧宿主的行为。预读窗口只
+影响 HTTP(S) 播放，本地文件不受影响。
+
+```c
+typedef struct ErikaOpenOptions {
+  const ErikaHttpHeader *headers;
+  uintptr_t header_count;
+  uint64_t http_read_ahead_bytes;   /* 0 = 内核默认 */
+  uint64_t reserved[3];             /* 必须为零 */
+} ErikaOpenOptions;
+```
+
+`open` 和 `play` 都会
 异步入队；应观察 `StateChanged`、`DurationChanged` 和 `Error` 事件获取最终结果，
 不要阻塞宿主 UI 线程。
 
@@ -231,6 +251,8 @@ ErikaStatus erika_presenter_open(ErikaPresenterHandle *, const char *uri);
 ErikaStatus erika_presenter_open_with_headers(ErikaPresenterHandle *, const char *uri,
                                               const ErikaHttpHeader *headers,
                                               uintptr_t header_count);
+ErikaStatus erika_presenter_open_with_options(ErikaPresenterHandle *, const char *uri,
+                                              const ErikaOpenOptions *options);
 ErikaStatus erika_presenter_play(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_pause(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_stop(ErikaPresenterHandle *);
@@ -245,7 +267,10 @@ ErikaStatus erika_presenter_set_subtitle_style(ErikaPresenterHandle *, ErikaSubt
 ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float headroom, bool known);
 ```
 
-`set_playback_rate(1.0)` 为正常速度。`set_upscaler` 在运行时切换神经亮度超分（见
+`set_playback_rate(1.0)` 为正常速度。`erika_presenter_open_with_options` 是
+`erika_open_with_options` 的推送模型对应版本，接受同样的
+`ErikaOpenOptions`（请求头加 `http_read_ahead_bytes`；见
+[`erika_open_with_options`](#erikahandle--拉取模型)）。`set_upscaler` 在运行时切换神经亮度超分（见
 [`erika_presenter_get_upscaler_status`](#诊断与截图)）。Metal 与具备 compute 能力的
 wgpu renderer，以及 feature level 11.0+ 的 D3D11 renderer 会执行 ArtCNN；其他后端保留原生 luma sampling，并明确报告
 `Inactive` 回退。

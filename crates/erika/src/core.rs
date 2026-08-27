@@ -164,6 +164,10 @@ pub struct MediaRequest {
     pub uri: String,
     pub source_hint: MediaSourceHint,
     pub http_headers: Vec<(String, String)>,
+    /// HTTP read-ahead window in bytes for HTTP(S) playback. `None` keeps the
+    /// kernel default (see `HttpRangeSource::DEFAULT_READ_AHEAD_BYTES`), with
+    /// the `ERIKA_HTTP_READAHEAD_BYTES` env override still honored.
+    pub http_read_ahead_bytes: Option<u64>,
 }
 
 /// Hand-written so that credentials carried by custom headers (`Authorization`,
@@ -182,6 +186,7 @@ impl std::fmt::Debug for MediaRequest {
                     .map(|(name, _)| (name.as_str(), "REDACTED"))
                     .collect::<Vec<_>>(),
             )
+            .field("http_read_ahead_bytes", &self.http_read_ahead_bytes)
             .finish()
     }
 }
@@ -192,11 +197,26 @@ impl MediaRequest {
             uri: uri.into(),
             source_hint: MediaSourceHint::Auto,
             http_headers: Vec::new(),
+            http_read_ahead_bytes: None,
         }
     }
 
     pub fn with_http_headers(mut self, http_headers: Vec<(String, String)>) -> Self {
         self.http_headers = http_headers;
+        self
+    }
+
+    /// Overrides the HTTP read-ahead window in bytes. Only meaningful for
+    /// HTTP(S) sources; other source kinds ignore it. `0` is treated as `None`.
+    pub fn with_http_read_ahead_bytes(mut self, read_ahead_bytes: u64) -> Self {
+        self.http_read_ahead_bytes = Some(read_ahead_bytes);
+        self
+    }
+
+    /// Same as [`Self::with_http_read_ahead_bytes`] but `None` keeps the
+    /// default resolution; `Some(0)` is normalized to `None`.
+    pub fn map_http_read_ahead_bytes(mut self, read_ahead_bytes: Option<u64>) -> Self {
+        self.http_read_ahead_bytes = read_ahead_bytes.filter(|bytes| *bytes > 0);
         self
     }
 }
@@ -4252,6 +4272,7 @@ mod tests {
             uri: path.to_string_lossy().into_owned(),
             source_hint: MediaSourceHint::LocalFile,
             http_headers: Vec::new(),
+            http_read_ahead_bytes: None,
         };
         let mut engine = VideoPlaybackEngine::open(
             &request,

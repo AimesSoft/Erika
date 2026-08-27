@@ -42,6 +42,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 /* Opaque handles. ErikaHandle = pull model, ErikaPresenterHandle = push model. */
 typedef struct ErikaHandle ErikaHandle;
 typedef struct ErikaPresenterHandle ErikaPresenterHandle;
@@ -50,6 +51,17 @@ typedef struct ErikaHttpHeader {
   const char *name;
   const char *value;
 } ErikaHttpHeader;
+
+/* Extended open parameters for erika_open_with_options /
+ * erika_presenter_open_with_options. Pass zero for fields you do not use;
+ * reserved must be zero. http_read_ahead_bytes overrides the HTTP(S)
+ * read-ahead window (in bytes) — 0 keeps the kernel default. */
+typedef struct ErikaOpenOptions {
+  const ErikaHttpHeader *headers;
+  uintptr_t header_count;
+  uint64_t http_read_ahead_bytes;
+  uint64_t reserved[3];
+} ErikaOpenOptions;
 
 typedef enum ErikaStatus {
   ErikaStatus_Ok = 0,
@@ -424,6 +436,12 @@ ErikaStatus erika_open_with_headers(
     const char *uri,
     const ErikaHttpHeader *headers,
     uintptr_t header_count);
+/* open_with_options supersedes open_with_headers: headers plus per-request
+ * tuning (currently the HTTP read-ahead window). */
+ErikaStatus erika_open_with_options(
+    ErikaHandle *handle,
+    const char *uri,
+    const ErikaOpenOptions *options);
 /* play enqueues work; observe StateChanged/Error for the authoritative result. */
 ErikaStatus erika_play(ErikaHandle *handle);
 ErikaStatus erika_pause(ErikaHandle *handle);
@@ -513,6 +531,12 @@ ErikaStatus erika_presenter_open_with_headers(
     const char *uri,
     const ErikaHttpHeader *headers,
     uintptr_t header_count);
+/* open_with_options supersedes open_with_headers: headers plus per-request
+ * tuning (currently the HTTP read-ahead window). */
+ErikaStatus erika_presenter_open_with_options(
+    ErikaPresenterHandle *handle,
+    const char *uri,
+    const ErikaOpenOptions *options);
 /* play enqueues work; observe StateChanged/Error for the authoritative result. */
 ErikaStatus erika_presenter_play(ErikaPresenterHandle *handle);
 ErikaStatus erika_presenter_pause(ErikaPresenterHandle *handle);
@@ -728,9 +752,10 @@ char *erika_presenter_render_tick_json(
     double time_seconds);
 char *erika_presenter_poll_event_json(ErikaPresenterHandle *handle);
 
-/* Screenshot: render the current composited frame (video + subtitle + danmaku)
- * off-screen into a caller-allocated RGBA8 buffer at the requested size.
- * out_capacity must be >= width*height*4. Fails if no frame is available yet. */
+/* Screenshot: render the current composited frame (video + subtitle, no
+ * danmaku) off-screen into a caller-allocated RGBA8 buffer at the requested
+ * size. out_capacity must be >= width*height*4. Fails if no frame is
+ * available yet. */
 ErikaStatus erika_presenter_capture_frame_rgba(
     ErikaPresenterHandle *handle,
     uint32_t width,
