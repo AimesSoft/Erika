@@ -3890,8 +3890,7 @@ fn c_open_options(
         }
     }
     let headers = c_http_headers(options.headers, options.header_count)?;
-    let read_ahead = (options.http_read_ahead_bytes > 0)
-        .then_some(options.http_read_ahead_bytes);
+    let read_ahead = (options.http_read_ahead_bytes > 0).then_some(options.http_read_ahead_bytes);
     Ok((headers, read_ahead))
 }
 
@@ -4725,10 +4724,7 @@ mod tests {
 
     #[test]
     fn c_open_options_accepts_null_and_defaults() {
-        assert_eq!(
-            c_open_options(std::ptr::null()),
-            Ok((Vec::new(), None))
-        );
+        assert_eq!(c_open_options(std::ptr::null()), Ok((Vec::new(), None)));
     }
 
     #[test]
@@ -4759,10 +4755,7 @@ mod tests {
             http_read_ahead_bytes: 0,
             reserved: [0; 3],
         };
-        assert_eq!(
-            c_open_options(&default_read_ahead),
-            Ok((Vec::new(), None))
-        );
+        assert_eq!(c_open_options(&default_read_ahead), Ok((Vec::new(), None)));
     }
 
     #[test]
@@ -4799,10 +4792,7 @@ mod tests {
         assert_eq!(options.reserved, [0; 3]);
         assert_eq!(
             c_open_options(options),
-            Ok((
-                vec![("Accept".to_string(), "video/mp4".to_string())],
-                None
-            ))
+            Ok((vec![("Accept".to_string(), "video/mp4".to_string())], None))
         );
     }
 
@@ -4813,7 +4803,9 @@ mod tests {
         let uri = CString::new("/tmp/erika-missing.mp4").unwrap();
 
         assert_eq!(
-            unsafe { erika_open_with_options(std::ptr::null_mut(), uri.as_ptr(), std::ptr::null()) },
+            unsafe {
+                erika_open_with_options(std::ptr::null_mut(), uri.as_ptr(), std::ptr::null())
+            },
             ErikaStatus::NullPointer
         );
         assert_eq!(
