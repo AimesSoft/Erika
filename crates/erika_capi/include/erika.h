@@ -167,10 +167,16 @@ typedef enum ErikaUpscalerBackendStatus {
   ErikaUpscalerBackendStatus_SimdgroupMatrix = 4,
 } ErikaUpscalerBackendStatus;
 
+typedef enum ErikaVideoAlphaMode {
+  ErikaVideoAlphaMode_Opaque = 0,
+  ErikaVideoAlphaMode_PackedAlphaRight = 1,
+} ErikaVideoAlphaMode;
+
 typedef struct ErikaPresenterConfig {
   int32_t output_mode;
   float edr_headroom;
   int32_t luma_upscaler;
+  int32_t video_alpha_mode;
 } ErikaPresenterConfig;
 
 #define ERIKA_SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS (1u << 2)
@@ -502,6 +508,10 @@ ErikaPresenterHandle *erika_presenter_create_with_config(ErikaPresenterConfig co
 ErikaPresenterHandle *erika_presenter_create_with_output_mode(
     int32_t output_mode,
     float edr_headroom);
+ErikaPresenterHandle *erika_presenter_create_with_output_mode_and_alpha(
+    int32_t output_mode,
+    float edr_headroom,
+    int32_t video_alpha_mode);
 void erika_presenter_destroy(ErikaPresenterHandle *handle);
 
 /* Playback and runtime parameters. volume is 0.0–1.0; rate 1.0 is normal speed;
@@ -665,6 +675,24 @@ ErikaStatus erika_presenter_attach_metal_layer(
     uint32_t width,
     uint32_t height,
     double scale);
+
+/* Flutter compositor texture surface. The registrar texture_id identifies the
+ * surface; before every render_tick, select the host-owned GPU target with
+ * set_flutter_texture_buffer. On Apple, raw_texture is an id<MTLTexture> using
+ * BGRA8Unorm. The texture remains owned by the host. */
+ErikaStatus erika_presenter_attach_flutter_texture(
+    ErikaPresenterHandle *handle,
+    ErikaFlutterTextureKind kind,
+    int64_t texture_id,
+    uint32_t width,
+    uint32_t height,
+    double scale);
+
+ErikaStatus erika_presenter_set_flutter_texture_buffer(
+    ErikaPresenterHandle *handle,
+    uint64_t raw_texture,
+    uint32_t width,
+    uint32_t height);
 
 ErikaStatus erika_presenter_attach_wgpu_surface(
     ErikaPresenterHandle *handle,

@@ -1,5 +1,8 @@
 use crate::core::{ColorPrimaries, TransferFunction};
 
+pub const VIDEO_INPUT_MODE_MASK: u32 = 0xff;
+pub const VIDEO_INPUT_PACKED_ALPHA_RIGHT: u32 = 1 << 8;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HdrMetadata {
     pub mastering_display: Option<MasteringDisplayMetadata>,
@@ -676,18 +679,31 @@ impl VideoUniforms {
     }
 
     pub fn rgb_texture_input(mut self) -> Self {
-        self.input_mode = 1;
+        self.input_mode = (self.input_mode & !VIDEO_INPUT_MODE_MASK) | 1;
         self
     }
 
     pub fn packed_d2s_luma_input(mut self) -> Self {
-        self.input_mode = 2;
+        self.input_mode = (self.input_mode & !VIDEO_INPUT_MODE_MASK) | 2;
         self
     }
 
     pub fn packed_d2s_rgb_detail_input(mut self) -> Self {
-        self.input_mode = 3;
+        self.input_mode = (self.input_mode & !VIDEO_INPUT_MODE_MASK) | 3;
         self
+    }
+
+    pub fn packed_alpha_right(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.input_mode |= VIDEO_INPUT_PACKED_ALPHA_RIGHT;
+        } else {
+            self.input_mode &= !VIDEO_INPUT_PACKED_ALPHA_RIGHT;
+        }
+        self
+    }
+
+    pub fn has_packed_alpha_right(self) -> bool {
+        self.input_mode & VIDEO_INPUT_PACKED_ALPHA_RIGHT != 0
     }
 
     pub fn scene_linear_output(mut self) -> Self {
@@ -1141,6 +1157,22 @@ mod tests {
 
         assert!(pipeline.requires_gamut_mapping());
         assert!(pipeline.graph.contains(RenderPassKind::GamutMap));
+    }
+
+    #[test]
+    fn packed_alpha_flag_survives_source_texture_mode_changes() {
+        let pipeline = VideoRenderPipeline::sdr_default();
+        let uniforms = VideoUniforms::from_pipeline(&pipeline, false, false)
+            .packed_alpha_right(true)
+            .rgb_texture_input();
+
+        assert!(uniforms.has_packed_alpha_right());
+        assert_eq!(uniforms.input_mode & VIDEO_INPUT_MODE_MASK, 1);
+        assert_eq!(
+            uniforms.input_mode & VIDEO_INPUT_PACKED_ALPHA_RIGHT,
+            VIDEO_INPUT_PACKED_ALPHA_RIGHT,
+        );
+        assert!(!uniforms.packed_alpha_right(false).has_packed_alpha_right());
     }
 
     fn assert_matrix_close(actual: [[f32; 3]; 3], expected: [[f32; 3]; 3], epsilon: f32) {

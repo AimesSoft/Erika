@@ -58,7 +58,7 @@ use erika::presenter::{
     target_os = "android",
     target_env = "ohos"
 ))]
-use erika::renderer::metal::{MetalOutputMode, MetalRendererConfig};
+use erika::renderer::metal::{MetalOutputMode, MetalRendererConfig, VideoAlphaMode};
 use erika::renderer::output::{
     ActiveOutputEncoding, OutputFallbackReason, OutputMode, OutputRuntimeStatus,
     OutputSurfaceFormat,
@@ -429,6 +429,7 @@ pub struct ErikaPresenterConfig {
     pub output_mode: i32,
     pub edr_headroom: f32,
     pub luma_upscaler: i32,
+    pub video_alpha_mode: i32,
 }
 
 #[repr(C)]
@@ -580,6 +581,7 @@ impl Default for ErikaPresenterConfig {
             output_mode: ErikaPresenterOutputMode::Sdr as i32,
             edr_headroom: 1.0,
             luma_upscaler: ErikaLumaUpscalerMode::Off as i32,
+            video_alpha_mode: VideoAlphaMode::Opaque as i32,
         }
     }
 }
@@ -1197,6 +1199,27 @@ pub extern "C" fn erika_presenter_create_with_output_mode(
     }))
 }
 
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+#[unsafe(no_mangle)]
+pub extern "C" fn erika_presenter_create_with_output_mode_and_alpha(
+    output_mode: i32,
+    edr_headroom: f32,
+    video_alpha_mode: i32,
+) -> *mut ErikaPresenterHandle {
+    create_presenter_handle(presenter_config_from_c(ErikaPresenterConfig {
+        output_mode,
+        edr_headroom,
+        video_alpha_mode,
+        ..ErikaPresenterConfig::default()
+    }))
+}
+
 #[cfg(not(any(
     target_os = "macos",
     any(target_os = "ios", target_os = "tvos"),
@@ -1370,6 +1393,7 @@ fn presenter_config_from_c(config: ErikaPresenterConfig) -> PresenterConfig {
         renderer: MetalRendererConfig {
             output_mode,
             luma_upscaler: luma_upscaler_mode_from_c(config.luma_upscaler),
+            video_alpha_mode: VideoAlphaMode::from_raw(config.video_alpha_mode),
             ..MetalRendererConfig::default()
         },
         ..PresenterConfig::default()
@@ -3356,6 +3380,66 @@ pub unsafe extern "C" fn erika_presenter_attach_metal_layer(
         status_from_player_result(handle.presenter.attach_surface(PlatformSurface::Metal(
             MetalSurfaceHandle::new(raw_layer, width, height, scale),
         )))
+    })
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_attach_flutter_texture(
+    handle: *mut ErikaPresenterHandle,
+    kind: ErikaFlutterTextureKind,
+    texture_id: i64,
+    width: u32,
+    height: u32,
+    scale: f64,
+) -> ErikaStatus {
+    if texture_id < 0 || width == 0 || height == 0 {
+        return ErikaStatus::NullPointer;
+    }
+    with_presenter_mut(handle, |handle| {
+        status_from_player_result(
+            handle
+                .presenter
+                .attach_surface(PlatformSurface::FlutterTexture(FlutterTextureHandle::new(
+                    flutter_texture_kind_from_c(kind),
+                    texture_id,
+                    width,
+                    height,
+                    scale,
+                ))),
+        )
+    })
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_set_flutter_texture_buffer(
+    handle: *mut ErikaPresenterHandle,
+    raw_texture: u64,
+    width: u32,
+    height: u32,
+) -> ErikaStatus {
+    if raw_texture == 0 || width == 0 || height == 0 {
+        return ErikaStatus::NullPointer;
+    }
+    with_presenter_mut(handle, |handle| {
+        status_from_player_result(handle.presenter.set_flutter_texture_buffer(
+            raw_texture,
+            width,
+            height,
+        ))
     })
 }
 

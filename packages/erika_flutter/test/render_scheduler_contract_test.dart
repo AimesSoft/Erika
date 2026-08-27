@@ -35,6 +35,34 @@ void main() {
     expect(plugin, contains('stopPollTimerIfIdle()'));
   });
 
+  test('macOS Flutter texture path stays on IOSurface and Metal', () {
+    final plugin = File(
+      'macos/Classes/ErikaFlutterPlugin.swift',
+    ).readAsStringSync();
+
+    expect(plugin, contains('private final class ErikaFlutterTextureSurface'));
+    expect(plugin, contains('kCVPixelBufferIOSurfacePropertiesKey'));
+    expect(plugin, contains('CVMetalTextureCacheCreateTextureFromImage'));
+    expect(plugin, contains('library.setFlutterTextureBuffer('));
+    expect(plugin, contains('registry.textureFrameAvailable(id)'));
+    expect(plugin, isNot(contains('CVPixelBufferLockBaseAddress')));
+  });
+
+  test('macOS transparent platform view applies native overlay compositing',
+      () {
+    final plugin = File(
+      'macos/Classes/ErikaFlutterPlugin.swift',
+    ).readAsStringSync();
+
+    expect(plugin, contains('metalLayer.isOpaque = !alphaVideo'));
+    expect(plugin, contains('NSColor.clear.cgColor'));
+    expect(
+      plugin,
+      contains('metalLayer.compositingFilter = "overlayBlendMode"'),
+    );
+    expect(plugin, contains('metalLayer.opacity = Float('));
+  });
+
   for (final entry in <(String, String)>[
     ('ios', 'scheduleTick()'),
     ('tvos', 'scheduleRenderTick()'),
@@ -70,7 +98,8 @@ void main() {
     });
   }
 
-  test('iOS retries audio-session activation after an allowed interruption', () {
+  test('iOS retries audio-session activation after an allowed interruption',
+      () {
     final plugin = File(
       'ios/Classes/ErikaFlutterPlugin.swift',
     ).readAsStringSync();
@@ -123,7 +152,8 @@ void main() {
     );
   });
 
-  test('Android polls events on the presenter thread with adaptive scheduling', () {
+  test('Android polls events on the presenter thread with adaptive scheduling',
+      () {
     final plugin = File(
       'android/src/main/kotlin/dev/aimesoft/erika_flutter/'
       'ErikaFlutterPlugin.kt',
