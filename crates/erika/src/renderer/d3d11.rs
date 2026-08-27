@@ -23,7 +23,7 @@ use ::windows::Win32::Graphics::Direct3D11::{
     ID3D11Texture2D, ID3D11VertexShader,
 };
 use ::windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
     DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, DXGI_COLOR_SPACE_TYPE, DXGI_FORMAT,
     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_P010, DXGI_FORMAT_R8_UNORM,
     DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
@@ -877,6 +877,7 @@ impl D3d11Renderer {
                 height,
                 format,
                 composition,
+                composition && self.video_alpha_mode.has_alpha(),
             )?);
         }
         let swapchain = surface.swapchain.as_ref().expect("swapchain ensured");
@@ -928,6 +929,17 @@ impl D3d11Renderer {
         let source_is_hdr = source.is_hdr();
         if source_is_hdr {
             self.stats.hdr_source_frames += 1;
+        }
+        // DirectComposition transparency is defined on the SDR premultiplied
+        // swap-chain path. Packed-alpha assets are effects/UI content rather
+        // than an HDR presentation plane, so keep their color and alpha in one
+        // stable BGRA8 composition space.
+        if self.video_alpha_mode.has_alpha() {
+            self.set_output_mode(D3d11OutputMode::Sdr)?;
+            if source_is_hdr {
+                self.stats.sdr_tonemap_frames += 1;
+            }
+            return Ok(D3d11OutputMode::Sdr);
         }
         if matches!(source.transfer, TransferFunction::Pq)
             && self.try_enable_hdr10_output(source)?
@@ -1570,7 +1582,16 @@ impl D3d11Renderer {
             .as_ref()
             .ok_or_else(|| PlayerError::Renderer("d3d11: no render target attached".to_string()))?;
         let _ = time_seconds;
-        let color = [0.0, 0.0, 0.0, 1.0];
+        let color = [
+            0.0,
+            0.0,
+            0.0,
+            if self.video_alpha_mode.has_alpha() {
+                0.0
+            } else {
+                1.0
+            },
+        ];
         unsafe {
             trace("render_clear: clear");
             state.context.ClearRenderTargetView(rtv, &color);
@@ -2186,6 +2207,7 @@ fn create_swapchain(
     height: u32,
     format: DXGI_FORMAT,
     composition: bool,
+    premultiplied_alpha: bool,
 ) -> Result<IDXGISwapChain1> {
     trace("create_swapchain: cast IDXGIDevice");
     let dxgi_device: IDXGIDevice = device
@@ -2210,7 +2232,11 @@ fn create_swapchain(
         BufferCount: 2,
         Scaling: DXGI_SCALING_STRETCH,
         SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-        AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+        AlphaMode: if premultiplied_alpha {
+            DXGI_ALPHA_MODE_PREMULTIPLIED
+        } else {
+            DXGI_ALPHA_MODE_IGNORE
+        },
         Flags: 0,
     };
     let swapchain = if composition {

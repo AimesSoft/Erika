@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui' show BlendMode;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -695,6 +694,8 @@ void main() {
     final viewId = await player.attachWindowOverlay(
       flutterViewId: 17,
       secondaryWindow: true,
+      blendMode: 'overlay',
+      opacity: 0.75,
     );
     await player.setWindowOverlayFrame(
       frame: const Rect.fromLTWH(10, 20, 320, 180),
@@ -703,6 +704,8 @@ void main() {
       flutterViewId: 17,
       secondaryWindow: true,
       debugLabel: 'episode.mkv',
+      blendMode: 'overlay',
+      opacity: 0.75,
     );
     await player.detachWindowOverlay(generation: 42);
 
@@ -715,6 +718,8 @@ void main() {
         'playerId': 7,
         'flutterViewId': 17,
         'secondaryWindow': true,
+        'blendMode': 'overlay',
+        'opacity': 0.75,
       },
     );
     expect(
@@ -733,6 +738,8 @@ void main() {
         'flutterViewId': 17,
         'secondaryWindow': true,
         'debugLabel': 'episode.mkv',
+        'blendMode': 'overlay',
+        'opacity': 0.75,
       },
     );
     expect(

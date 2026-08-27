@@ -10,6 +10,9 @@
   per-frame CPU pixel readback.
 - Added native macOS opacity and overlay compositing for transparent video
   platform views when backdrop-aware blending is required.
+- Added Windows DirectComposition presentation for transparent video, with a
+  premultiplied-alpha swap chain attached directly to the Flutter HWND and
+  native overlay blending/opacity instead of a covering popup window.
 - Raised the native playback-rate ceiling to 16× for short-form video effects.
 
 ## 0.1.7

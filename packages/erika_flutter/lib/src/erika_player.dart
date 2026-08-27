@@ -1576,6 +1576,8 @@ class ErikaPlayer {
   Future<int> attachWindowOverlay({
     int? flutterViewId,
     bool secondaryWindow = false,
+    String blendMode = 'srcOver',
+    double opacity = 1.0,
   }) async {
     final playerId = await ensureCreated();
     final viewId = await _channel.invokeMethod<int>(
@@ -1584,6 +1586,8 @@ class ErikaPlayer {
         'playerId': playerId,
         if (flutterViewId != null) 'flutterViewId': flutterViewId,
         'secondaryWindow': secondaryWindow,
+        if (blendMode != 'srcOver') 'blendMode': blendMode,
+        if (opacity != 1.0) 'opacity': opacity,
       },
     );
     return viewId ?? windowOverlayViewId;
@@ -1607,6 +1611,8 @@ class ErikaPlayer {
     int? flutterViewId,
     bool secondaryWindow = false,
     String? debugLabel,
+    String blendMode = 'srcOver',
+    double opacity = 1.0,
   }) async {
     final playerId = await ensureCreated();
     await _invoke('setOverlayFrame', <String, Object?>{
@@ -1621,6 +1627,8 @@ class ErikaPlayer {
       if (flutterViewId != null) 'flutterViewId': flutterViewId,
       'secondaryWindow': secondaryWindow,
       if (debugLabel != null) 'debugLabel': debugLabel,
+      if (blendMode != 'srcOver') 'blendMode': blendMode,
+      if (opacity != 1.0) 'opacity': opacity,
     });
   }
 

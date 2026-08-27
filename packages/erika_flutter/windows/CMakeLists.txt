@@ -41,6 +41,8 @@ set_target_properties(${PLUGIN_NAME} PROPERTIES
   CXX_VISIBILITY_PRESET hidden)
 target_compile_definitions(${PLUGIN_NAME} PRIVATE
   FLUTTER_PLUGIN_IMPL
+  _WIN32_WINNT=0x0A00
+  WINVER=0x0A00
   _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
 
 target_include_directories(${PLUGIN_NAME} INTERFACE
@@ -48,7 +50,7 @@ target_include_directories(${PLUGIN_NAME} INTERFACE
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${ERIKA_NATIVE_HEADER_DIR}")
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  flutter flutter_wrapper_plugin runtimeobject windowsapp shcore shlwapi)
+  flutter flutter_wrapper_plugin runtimeobject windowsapp dcomp shcore shlwapi)
 
 set(ERIKA_WINDOWS_ARCH "" CACHE STRING
   "Erika Windows architecture: x64, x86_64, arm64, or aarch64")

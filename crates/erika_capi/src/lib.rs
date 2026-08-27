@@ -3534,6 +3534,29 @@ pub unsafe extern "C" fn erika_presenter_attach_windows_hwnd(
     }
 }
 
+/// Returns an AddRef'd IUnknown for the presenter's DirectComposition swap
+/// chain. The caller owns the returned COM reference and must Release it.
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_windows_composition_swapchain_iunknown(
+    handle: *mut ErikaPresenterHandle,
+    out_swapchain: *mut *mut std::ffi::c_void,
+) -> ErikaStatus {
+    if out_swapchain.is_null() {
+        set_last_error("DirectComposition swap chain output pointer is null");
+        return ErikaStatus::NullPointer;
+    }
+    unsafe { *out_swapchain = std::ptr::null_mut() };
+    with_presenter_mut(handle, |handle| {
+        let Some(swapchain) = handle.presenter.composition_swapchain_iunknown() else {
+            set_last_error("presenter does not own a DirectComposition swap chain");
+            return ErikaStatus::PlayerError;
+        };
+        unsafe { *out_swapchain = swapchain };
+        ErikaStatus::Ok
+    })
+}
+
 #[cfg(any(
     target_os = "macos",
     any(target_os = "ios", target_os = "tvos"),

@@ -184,6 +184,8 @@ class _ErikaVideoViewState extends State<ErikaVideoView> {
           player: widget.player,
           debugLabel: widget.debugLabel,
           onPlatformViewIdChanged: widget.onPlatformViewIdChanged,
+          blendMode: widget.blendMode,
+          opacity: widget.opacity,
         );
       case TargetPlatform.android:
         return _ErikaAndroidVideoView(
@@ -643,12 +645,16 @@ class ErikaWindowOverlayVideoView extends StatefulWidget {
     this.debugLabel,
     this.onPlatformViewIdChanged,
     this.onFrameRectChanged,
-  });
+    this.blendMode = BlendMode.srcOver,
+    this.opacity = 1.0,
+  }) : assert(opacity >= 0.0 && opacity <= 1.0);
 
   final ErikaPlayer player;
   final String? debugLabel;
   final ValueChanged<int?>? onPlatformViewIdChanged;
   final ValueChanged<Rect?>? onFrameRectChanged;
+  final BlendMode blendMode;
+  final double opacity;
 
   @override
   State<ErikaWindowOverlayVideoView> createState() =>
@@ -693,6 +699,9 @@ class _ErikaWindowOverlayVideoViewState
       );
       widget.onPlatformViewIdChanged?.call(ErikaPlayer.windowOverlayViewId);
       _scheduleAttach();
+    } else if (oldWidget.blendMode != widget.blendMode ||
+        oldWidget.opacity != widget.opacity) {
+      _scheduleFrameUpdate(force: true);
     }
   }
 
@@ -748,6 +757,8 @@ class _ErikaWindowOverlayVideoViewState
     try {
       await widget.player.attachWindowOverlay(
         flutterViewId: View.of(context).viewId,
+        blendMode: widget.blendMode.name,
+        opacity: widget.opacity,
       );
       _isBound = true;
       _scheduleFrameUpdate(force: true);
@@ -816,6 +827,8 @@ class _ErikaWindowOverlayVideoViewState
       rect.top.toStringAsFixed(2),
       rect.width.toStringAsFixed(2),
       rect.height.toStringAsFixed(2),
+      widget.blendMode.name,
+      widget.opacity.toStringAsFixed(4),
     ].join('|');
     if (!force && signature == _lastFrameSignature) {
       return;
@@ -830,6 +843,8 @@ class _ErikaWindowOverlayVideoViewState
         generation: _surfaceGeneration,
         flutterViewId: View.of(context).viewId,
         debugLabel: widget.debugLabel,
+        blendMode: widget.blendMode.name,
+        opacity: widget.opacity,
       );
     } catch (error) {
       debugPrint('ErikaWindowOverlayVideoView: frame update failed: $error');
@@ -843,6 +858,8 @@ class _ErikaWindowOverlayVideoViewState
         visible: false,
         generation: _surfaceGeneration,
         debugLabel: widget.debugLabel,
+        blendMode: widget.blendMode.name,
+        opacity: widget.opacity,
       );
     } catch (error) {
       debugPrint('ErikaWindowOverlayVideoView: hide overlay failed: $error');
