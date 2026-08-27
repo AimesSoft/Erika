@@ -818,7 +818,8 @@ pub unsafe extern "C" fn erika_open_with_headers(
     headers: *const ErikaHttpHeader,
     header_count: usize,
 ) -> ErikaStatus {
-    unsafe { erika_open_with_options(handle, uri, open_options_raw(headers, header_count)) }
+    let options = open_options_raw(headers, header_count);
+    unsafe { erika_open_with_options(handle, uri, &options) }
 }
 
 #[unsafe(no_mangle)]
@@ -1787,9 +1788,8 @@ pub unsafe extern "C" fn erika_presenter_open_with_headers(
     headers: *const ErikaHttpHeader,
     header_count: usize,
 ) -> ErikaStatus {
-    unsafe {
-        erika_presenter_open_with_options(handle, uri, open_options_raw(headers, header_count))
-    }
+    let options = open_options_raw(headers, header_count);
+    unsafe { erika_presenter_open_with_options(handle, uri, &options) }
 }
 
 #[cfg(any(
@@ -3856,19 +3856,14 @@ fn c_http_headers(
 
 /// Packs the legacy (headers, header_count) pair into an `ErikaOpenOptions`
 /// so `erika_open_with_headers` can delegate to `erika_open_with_options`.
-unsafe fn open_options_raw(
-    headers: *const ErikaHttpHeader,
-    header_count: usize,
-) -> *const ErikaOpenOptions {
-    if header_count == 0 {
-        std::ptr::null()
-    } else {
-        &ErikaOpenOptions {
-            headers,
-            header_count,
-            http_read_ahead_bytes: 0,
-            reserved: [0; 3],
-        }
+/// Returned by value: the struct must live on the caller's stack for as long
+/// as the delegated call reads it.
+fn open_options_raw(headers: *const ErikaHttpHeader, header_count: usize) -> ErikaOpenOptions {
+    ErikaOpenOptions {
+        headers,
+        header_count,
+        http_read_ahead_bytes: 0,
+        reserved: [0; 3],
     }
 }
 
@@ -4777,7 +4772,8 @@ mod tests {
 
     #[test]
     fn open_options_raw_matches_legacy_pair() {
-        assert!(unsafe { open_options_raw(std::ptr::null(), 0) }.is_null());
+        let empty = open_options_raw(std::ptr::null(), 0);
+        assert_eq!(empty.header_count, 0);
 
         let name = CString::new("Accept").unwrap();
         let value = CString::new("video/mp4").unwrap();
@@ -4785,13 +4781,13 @@ mod tests {
             name: name.as_ptr(),
             value: value.as_ptr(),
         }];
-        let options = unsafe { &*open_options_raw(headers.as_ptr(), headers.len()) };
+        let options = open_options_raw(headers.as_ptr(), headers.len());
         assert_eq!(options.headers, headers.as_ptr());
         assert_eq!(options.header_count, headers.len());
         assert_eq!(options.http_read_ahead_bytes, 0);
         assert_eq!(options.reserved, [0; 3]);
         assert_eq!(
-            c_open_options(options),
+            c_open_options(&options),
             Ok((vec![("Accept".to_string(), "video/mp4".to_string())], None))
         );
     }

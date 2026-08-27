@@ -830,9 +830,8 @@ unsafe fn invoke_presenter(
                 http_read_ahead_bytes: optional_read_ahead_bytes(args)?,
                 reserved: [0; 3],
             };
-            let status = unsafe {
-                erika_presenter_open_with_options(handle, uri_c.as_ptr(), &options)
-            };
+            let status =
+                unsafe { erika_presenter_open_with_options(handle, uri_c.as_ptr(), &options) };
             call_status(status)?;
             Ok(Value::Null)
         }
