@@ -717,6 +717,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   using DestroyFn = void (*)(ErikaPresenterHandle*);
   using OpenFn = ErikaStatus (*)(ErikaPresenterHandle*, const char*);
   using OpenWithHeadersFn = ErikaStatus (*)(ErikaPresenterHandle*, const char*, const ErikaHttpHeader*, uintptr_t);
+  using OpenWithOptionsFn = ErikaStatus (*)(ErikaPresenterHandle*, const char*, const ErikaOpenOptions*);
   using CommandFn = ErikaStatus (*)(ErikaPresenterHandle*);
   using SeekFn = ErikaStatus (*)(ErikaPresenterHandle*, uint64_t);
   using SetPlaybackRateFn = ErikaStatus (*)(ErikaPresenterHandle*, double);
@@ -835,6 +836,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   DestroyFn destroy = nullptr;
   OpenFn open = nullptr;
   OpenWithHeadersFn open_with_headers = nullptr;
+  OpenWithOptionsFn open_with_options = nullptr;
   CommandFn play = nullptr;
   CommandFn pause = nullptr;
   CommandFn stop = nullptr;
@@ -900,6 +902,7 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
     destroy = LoadRequired<DestroyFn>("erika_presenter_destroy");
     open = LoadRequired<OpenFn>("erika_presenter_open");
     open_with_headers = LoadOptional<OpenWithHeadersFn>("erika_presenter_open_with_headers");
+    open_with_options = LoadOptional<OpenWithOptionsFn>("erika_presenter_open_with_options");
     play = LoadRequired<CommandFn>("erika_presenter_play");
     pause = LoadRequired<CommandFn>("erika_presenter_pause");
     stop = LoadRequired<CommandFn>("erika_presenter_stop");
@@ -1213,40 +1216,96 @@ struct ErikaFlutterPlugin::PlayerHost {
         throw PluginError("httpHeaders must be a map of string names to string values.");
       }
     }
-    if (headers != nullptr && !headers->empty()) {
-      // Never fall back to the headerless entry point here: silently dropping
-      // the headers turns an authenticated stream into an opaque 403.
-      if (library->open_with_headers == nullptr) {
-        throw PluginError(
-            "The loaded Erika native library does not export "
-            "erika_presenter_open_with_headers, so httpHeaders cannot be applied. "
-            "Update the bundled erika_capi.dll (a prebuilt from 0.1.3 or earlier "
-            "predates HTTP header support).");
+    uint64_t read_ahead_bytes = 0;
+    if (const auto* raw_read_ahead = FindArg(args, "httpReadAheadBytes");
+        raw_read_ahead != nullptr &&
+        !std::holds_alternative<std::monostate>(*raw_read_ahead)) {
+      if (const auto* value = std::get_if<int64_t>(raw_read_ahead)) {
+        if (*value < 0) {
+          throw PluginError("httpReadAheadBytes must be a non-negative integer.");
+        }
+        read_ahead_bytes = static_cast<uint64_t>(*value);
+      } else {
+        throw PluginError("httpReadAheadBytes must be a non-negative integer.");
       }
+    }
+    const bool wants_headers = headers != nullptr && !headers->empty();
+    if (!wants_headers && read_ahead_bytes == 0) {
+      Check(library->open(handle, uri.c_str()), "open", library->TakeLastError());
+      return;
+    }
+    // Never silently drop the headers or the read-ahead request: falling back
+    // to the headerless entry point turns an authenticated stream into an
+    // opaque 403, and swallowing readAhead hides a stale kernel.
+    if (library->open_with_options != nullptr) {
       std::vector<std::string> names;
       std::vector<std::string> values;
       std::vector<ErikaHttpHeader> native_headers;
-      names.reserve(headers->size());
-      values.reserve(headers->size());
-      native_headers.reserve(headers->size());
-      for (const auto& entry : *headers) {
-        const auto name = StringValue(&entry.first);
-        const auto value = StringValue(&entry.second);
-        if (!name || !value) {
-          throw PluginError("httpHeaders must contain string names and values.");
+      if (wants_headers) {
+        names.reserve(headers->size());
+        values.reserve(headers->size());
+        native_headers.reserve(headers->size());
+        for (const auto& entry : *headers) {
+          const auto name = StringValue(&entry.first);
+          const auto value = StringValue(&entry.second);
+          if (!name || !value) {
+            throw PluginError("httpHeaders must contain string names and values.");
+          }
+          names.push_back(*name);
+          values.push_back(*value);
         }
-        names.push_back(*name);
-        values.push_back(*value);
+        for (size_t index = 0; index < names.size(); ++index) {
+          native_headers.push_back({names[index].c_str(), values[index].c_str()});
+        }
       }
-      for (size_t index = 0; index < names.size(); ++index) {
-        native_headers.push_back({names[index].c_str(), values[index].c_str()});
-      }
-      Check(library->open_with_headers(handle, uri.c_str(), native_headers.data(),
-                                       native_headers.size()), "open",
+      ErikaOpenOptions options = {};
+      options.headers = native_headers.empty() ? nullptr : native_headers.data();
+      options.header_count = native_headers.size();
+      options.http_read_ahead_bytes = read_ahead_bytes;
+      options.reserved[0] = 0;
+      options.reserved[1] = 0;
+      options.reserved[2] = 0;
+      Check(library->open_with_options(handle, uri.c_str(), &options), "open",
             library->TakeLastError());
       return;
     }
-    Check(library->open(handle, uri.c_str()), "open", library->TakeLastError());
+    if (read_ahead_bytes > 0) {
+      throw PluginError(
+          "The loaded Erika native library does not export "
+          "erika_presenter_open_with_options, so httpReadAheadBytes cannot be "
+          "applied. Update the bundled erika_capi.dll (a prebuilt from 0.1.7 or "
+          "earlier predates open options support).");
+    }
+    // Never fall back to the headerless entry point here: silently dropping
+    // the headers turns an authenticated stream into an opaque 403.
+    if (library->open_with_headers == nullptr) {
+      throw PluginError(
+          "The loaded Erika native library does not export "
+          "erika_presenter_open_with_headers, so httpHeaders cannot be applied. "
+          "Update the bundled erika_capi.dll (a prebuilt from 0.1.3 or earlier "
+          "predates HTTP header support).");
+    }
+    std::vector<std::string> names;
+    std::vector<std::string> values;
+    std::vector<ErikaHttpHeader> native_headers;
+    names.reserve(headers->size());
+    values.reserve(headers->size());
+    native_headers.reserve(headers->size());
+    for (const auto& entry : *headers) {
+      const auto name = StringValue(&entry.first);
+      const auto value = StringValue(&entry.second);
+      if (!name || !value) {
+        throw PluginError("httpHeaders must contain string names and values.");
+      }
+      names.push_back(*name);
+      values.push_back(*value);
+    }
+    for (size_t index = 0; index < names.size(); ++index) {
+      native_headers.push_back({names[index].c_str(), values[index].c_str()});
+    }
+    Check(library->open_with_headers(handle, uri.c_str(), native_headers.data(),
+                                     native_headers.size()), "open",
+          library->TakeLastError());
   }
 
   void SetMediaMetadata(const EncodableMap& metadata) {

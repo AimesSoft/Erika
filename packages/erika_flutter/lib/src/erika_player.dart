@@ -868,6 +868,7 @@ class ErikaPlayer {
   Future<void> open(
     String uri, {
     Map<String, String>? httpHeaders,
+    int? httpReadAheadBytes,
     ErikaMediaMetadata? metadata,
   }) async {
     final playerId = await ensureCreated();
@@ -876,6 +877,8 @@ class ErikaPlayer {
       'uri': uri,
       if (httpHeaders != null && httpHeaders.isNotEmpty)
         'httpHeaders': httpHeaders,
+      if (httpReadAheadBytes != null && httpReadAheadBytes > 0)
+        'httpReadAheadBytes': httpReadAheadBytes,
       'metadata': metadata?.toMap(),
     });
   }

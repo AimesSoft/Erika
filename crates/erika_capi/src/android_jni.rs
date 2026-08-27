@@ -824,13 +824,14 @@ unsafe fn invoke_presenter(
             let uri_c = c_string(uri, "uri")?;
             arm_owned_fd_for_source(owned_fd, uri)?;
             let headers = c_http_headers(args)?;
+            let options = ErikaOpenOptions {
+                headers: headers.as_ptr(),
+                header_count: headers.len(),
+                http_read_ahead_bytes: optional_read_ahead_bytes(args)?,
+                reserved: [0; 3],
+            };
             let status = unsafe {
-                erika_presenter_open_with_headers(
-                    handle,
-                    uri_c.as_ptr(),
-                    headers.as_ptr(),
-                    headers.len(),
-                )
+                erika_presenter_open_with_options(handle, uri_c.as_ptr(), &options)
             };
             call_status(status)?;
             Ok(Value::Null)
@@ -1623,6 +1624,22 @@ fn optional_i64(args: &Map<String, Value>, name: &str) -> Option<i64> {
 
 fn optional_bool(args: &Map<String, Value>, name: &str) -> Option<bool> {
     args.get(name).and_then(Value::as_bool)
+}
+
+/// Parses the optional `httpReadAheadBytes` open argument. 0 / missing keeps
+/// the kernel default; negative or fractional values are rejected because they
+/// cannot be a byte count.
+fn optional_read_ahead_bytes(args: &Map<String, Value>) -> Result<u64, String> {
+    let Some(value) = args.get("httpReadAheadBytes") else {
+        return Ok(0);
+    };
+    match value {
+        Value::Number(number) => number
+            .as_u64()
+            .ok_or_else(|| "httpReadAheadBytes must be a non-negative integer".to_string()),
+        Value::Null => Ok(0),
+        _ => Err("httpReadAheadBytes must be a non-negative integer".to_string()),
+    }
 }
 
 fn c_string(value: &str, name: &str) -> Result<CString, String> {
