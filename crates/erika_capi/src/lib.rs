@@ -4813,7 +4813,7 @@ mod tests {
             ErikaStatus::NullPointer
         );
 
-        erika_destroy(handle);
+        unsafe { erika_destroy(handle) };
     }
 
     #[test]
