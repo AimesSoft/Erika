@@ -42,6 +42,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 /* Opaque handles. ErikaHandle = pull model, ErikaPresenterHandle = push model. */
 typedef struct ErikaHandle ErikaHandle;
 typedef struct ErikaPresenterHandle ErikaPresenterHandle;
@@ -675,6 +676,24 @@ ErikaStatus erika_presenter_attach_metal_layer(
     uint32_t height,
     double scale);
 
+/* Flutter compositor texture surface. The registrar texture_id identifies the
+ * surface; before every render_tick, select the host-owned GPU target with
+ * set_flutter_texture_buffer. On Apple, raw_texture is an id<MTLTexture> using
+ * BGRA8Unorm. The texture remains owned by the host. */
+ErikaStatus erika_presenter_attach_flutter_texture(
+    ErikaPresenterHandle *handle,
+    ErikaFlutterTextureKind kind,
+    int64_t texture_id,
+    uint32_t width,
+    uint32_t height,
+    double scale);
+
+ErikaStatus erika_presenter_set_flutter_texture_buffer(
+    ErikaPresenterHandle *handle,
+    uint64_t raw_texture,
+    uint32_t width,
+    uint32_t height);
+
 ErikaStatus erika_presenter_attach_wgpu_surface(
     ErikaPresenterHandle *handle,
     ErikaWgpuSurfaceKind kind,
@@ -701,6 +720,13 @@ ErikaStatus erika_presenter_attach_windows_hwnd(
     uint32_t width,
     uint32_t height,
     double scale);
+
+/* Windows only. Returns an AddRef'd IUnknown for a DirectComposition swap
+ * chain created by an attachment whose direct_composition capability is true.
+ * The caller owns the returned COM reference and must Release it. */
+ErikaStatus erika_presenter_windows_composition_swapchain_iunknown(
+    ErikaPresenterHandle *handle,
+    void **out_swapchain);
 
 ErikaStatus erika_presenter_resize_surface(
     ErikaPresenterHandle *handle,
@@ -738,9 +764,10 @@ char *erika_presenter_render_tick_json(
     double time_seconds);
 char *erika_presenter_poll_event_json(ErikaPresenterHandle *handle);
 
-/* Screenshot: render the current composited frame (video + subtitle + danmaku)
- * off-screen into a caller-allocated RGBA8 buffer at the requested size.
- * out_capacity must be >= width*height*4. Fails if no frame is available yet. */
+/* Screenshot: render the current composited frame (video + subtitle, no
+ * danmaku) off-screen into a caller-allocated RGBA8 buffer at the requested
+ * size. out_capacity must be >= width*height*4. Fails if no frame is
+ * available yet. */
 ErikaStatus erika_presenter_capture_frame_rgba(
     ErikaPresenterHandle *handle,
     uint32_t width,
