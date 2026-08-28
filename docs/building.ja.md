@@ -122,6 +122,8 @@ package します。
 
 Flutter の依存 project は、macOS では `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`、Windows では `ERIKA_WINDOWS_ARCH=x64|arm64`、Android では `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86` で architecture を選択します。`ERIKA_FORCE_SOURCE_BUILD=1` を設定すると prebuilt download を無効化できます。
 
+Apple plugin の既定は checksum 検証済み prebuilt アーカイブですが、Erika checkout 内の macOS だけは例外です。pod script が package の上位に `crates/erika_capi/Cargo.toml` を見つけた場合（または `ERIKA_REPO_ROOT` が指す場合）、新しい prebuilt release を待たずにローカルの変更を取り込めるよう、`erika_capi` をソースからビルドします。`ERIKA_FORCE_PREBUILT=1` を設定すると常にアーカイブのダウンロードになります——Rust toolchain の無いリポジトリ内 consumer はこちらを使ってください。pub cache に解決された git dependency はリポジトリ全体を保持するため、こちらもソースビルドに切り替わる点に注意してください。
+
 native library を直接 build する場合、3 つの target 指定を一致させます：
 
 ```sh

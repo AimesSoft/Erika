@@ -217,13 +217,17 @@ Erika がフルスタックを所有し、ホストは surface を提供して `
 ErikaPresenterHandle *erika_presenter_create(void);
 ErikaPresenterHandle *erika_presenter_create_with_config(ErikaPresenterConfig config);
 ErikaPresenterHandle *erika_presenter_create_with_output_mode(int32_t output_mode, float edr_headroom);
+ErikaPresenterHandle *erika_presenter_create_with_output_mode_and_alpha(int32_t output_mode, float edr_headroom,
+                                                                        int32_t video_alpha_mode);
 void                  erika_presenter_destroy(ErikaPresenterHandle *handle);
 ```
 
 `ErikaPresenterConfig` は出力モード（`Sdr`、Apple `AppleEdr`、Android
-`ExtendedLinear`）、requested EDR/scRGB content-headroom ceiling、初期輝度アップスケーラを選びます。
+`ExtendedLinear`）、requested EDR/scRGB content-headroom ceiling、初期輝度アップスケーラ、そして
+`video_alpha_mode`（`ErikaVideoAlphaMode`）を選びます。
 Android `ExtendedLinear` は FP16 extended-linear scRGB で HDR10/PQ ではありません。
-`create_with_output_mode` は短縮形、`create` は既定値（SDR、アップスケーラ無し）。
+`create_with_output_mode` と `create_with_output_mode_and_alpha` は短縮形、`create` は既定値
+（SDR、不透明 video、アップスケーラ無し）。
 `NULL` が返れば作成失敗——`erika_last_error_message` を確認。
 
 ### 再生とランタイムパラメータ
@@ -454,6 +458,38 @@ Android extended-linear では Flutter Hybrid Composition `SurfaceView` の
 Erika は Vulkan、`Rgba16Float`、`ADATASPACE_SCRGB_LINEAR` も検証します。どれかが失敗
 すると SDR に fallback し、その理由を取得できます。
 
+### Flutter texture surface
+
+```c
+ErikaStatus erika_presenter_attach_flutter_texture(ErikaPresenterHandle *, ErikaFlutterTextureKind kind,
+                                                   int64_t texture_id, uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_presenter_set_flutter_texture_buffer(ErikaPresenterHandle *, uint64_t raw_texture,
+                                                       uint32_t w, uint32_t h);
+```
+
+`attach_flutter_texture` は `texture_id` で識別される texture-registrar surface に
+presenter を紐づけます（現在は Apple の
+`MacOsTextureRegistrar` / `IosTextureRegistrar`）。pixel buffer は host が所有します。**毎**
+`render_tick` の前に `set_flutter_texture_buffer` で次フレームの GPU target を選択し、
+`uint64_t` にキャストした `id<MTLTexture>` ポインタを渡します。`BGRA8Unorm` で宣言された
+`w`×`h` と一致している必要があります。texture はそのフレームの間だけ借用され、所有権は
+host 側に残るため、`render_tick` が返れば再利用も解放も可能です。Flutter plugin が macOS で
+使う `ErikaTextureVideoView` はこの surface です。
+
+### Windows DirectComposition swap chain
+
+```c
+ErikaStatus erika_presenter_windows_composition_swapchain_iunknown(ErikaPresenterHandle *, void **out_swapchain);
+```
+
+Windows のみ。presenter が `attach_wgpu_surface_with_output_capabilities`
+（`direct_composition = true`）で attach され、透明 video alpha mode または overlay
+blend で再生する場合、Erika は対象 HWND 向けに premultiplied alpha の composition
+swap chain を作成します。この getter は **AddRef 済みの `IUnknown*`** として返します。
+返された COM reference の所有者は呼び出し側で、`Release` が必須です。decoder や device
+喪失の後は再取得してください——Erika は swap chain を再構築し、新しいオブジェクトを
+公開します。ポインタが同じなら再構築はありません。
+
 ### レンダーループとイベント
 
 ```c
@@ -588,6 +624,7 @@ free(rgba);
 | `ErikaTrackSource` | `Embedded` `External` |
 | `ErikaWgpuSurfaceKind` | `Unknown` `MacOsNsView` `MacOsCaMetalLayer` `IosUiView` `WindowsHwnd` `XlibWindow` `WaylandSurface` `AndroidNativeWindow` `OhosNativeWindow` |
 | `ErikaFlutterTextureKind` | `Unknown` `MacOsTextureRegistrar` `IosTextureRegistrar` `AndroidSurfaceTexture` `WindowsTextureRegistrar` `LinuxTextureRegistrar` |
+| `ErikaVideoAlphaMode` | `Opaque` `PackedAlphaRight` |
 | `ErikaPresenterOutputMode` | `Auto` `Sdr` `AppleEdr` `ExtendedLinear` |
 | `ErikaActiveOutputEncoding` | `SdrSrgb` `AppleEdr` `AndroidExtendedLinearScRgb` `Hdr10Pq` |
 | `ErikaOutputSurfaceFormat` | `EightBitUnorm` `TenBitUnorm` `SixteenBitFloat` |
@@ -597,8 +634,9 @@ free(rgba);
 
 ## 構造体
 
-- **`ErikaPresenterConfig`** `{ int32 output_mode; float edr_headroom; int32 luma_upscaler; }` —
-  `create_with_config` に値で渡す。
+- **`ErikaPresenterConfig`** `{ int32 output_mode; float edr_headroom; int32 luma_upscaler; int32 video_alpha_mode; }` —
+  `create_with_config` に値で渡す。`video_alpha_mode` は `ErikaVideoAlphaMode`
+  （既定 `Opaque`、左右分割の color/alpha asset には `PackedAlphaRight`）。
 - **`ErikaSurfaceOutputCapabilities`** `{ bool extended_linear; bool direct_composition; float desired_headroom; int32 fallback_reason; }` —— attach 時に渡す Android host の display/surface probe result。`desired_headroom == 0` は system auto。
 - **`ErikaUpscalerStatus`** —— 要求モード、現在の backend、フォールバック回数、
   アップスケール済みフレーム数、直近の encode/GPU マイクロ秒。

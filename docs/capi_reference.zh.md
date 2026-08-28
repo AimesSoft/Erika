@@ -215,13 +215,17 @@ Erika 拥有完整栈；宿主提供 surface 并调用 `render_tick`。
 ErikaPresenterHandle *erika_presenter_create(void);
 ErikaPresenterHandle *erika_presenter_create_with_config(ErikaPresenterConfig config);
 ErikaPresenterHandle *erika_presenter_create_with_output_mode(int32_t output_mode, float edr_headroom);
+ErikaPresenterHandle *erika_presenter_create_with_output_mode_and_alpha(int32_t output_mode, float edr_headroom,
+                                                                        int32_t video_alpha_mode);
 void                  erika_presenter_destroy(ErikaPresenterHandle *handle);
 ```
 
 `ErikaPresenterConfig` 选择输出模式（`Sdr`、Apple `AppleEdr`、Android
-`ExtendedLinear`）、请求的 EDR/scRGB 内容 headroom 上限和初始亮度超分。Android
+`ExtendedLinear`）、请求的 EDR/scRGB 内容 headroom 上限、初始亮度超分，以及
+`video_alpha_mode`（`ErikaVideoAlphaMode`）。Android
 `ExtendedLinear` 是 FP16 extended-linear scRGB，不是 HDR10/PQ。
-`create_with_output_mode` 是简写；`create` 用默认值（SDR、无超分）。返回 `NULL` 表示
+`create_with_output_mode` 与 `create_with_output_mode_and_alpha` 是简写；`create` 用默认值
+（SDR、不透明视频、无超分）。返回 `NULL` 表示
 创建失败——检查 `erika_last_error_message`。
 
 ### 播放与运行时参数
@@ -429,6 +433,37 @@ Android extended-linear 应把 Flutter Hybrid Composition `SurfaceView` 对应�
 验证 Vulkan、`Rgba16Float` 和 `ADATASPACE_SCRGB_LINEAR`；任何一项失败都会回退 SDR，
 且原因可查询。
 
+### Flutter texture surface
+
+```c
+ErikaStatus erika_presenter_attach_flutter_texture(ErikaPresenterHandle *, ErikaFlutterTextureKind kind,
+                                                   int64_t texture_id, uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_presenter_set_flutter_texture_buffer(ErikaPresenterHandle *, uint64_t raw_texture,
+                                                       uint32_t w, uint32_t h);
+```
+
+`attach_flutter_texture` 把 presenter 绑定到由 `texture_id` 标识的
+texture-registrar surface（目前为 Apple 的
+`MacOsTextureRegistrar`/`IosTextureRegistrar`）。pixel buffer 由宿主持有；在**每次**
+`render_tick` 之前，用 `set_flutter_texture_buffer` 选定下一帧的 GPU 目标，传入
+强制转换为 `uint64_t` 的 `id<MTLTexture>` 指针，且必须是 `BGRA8Unorm` 格式并与声明的
+`w`×`h` 一致。该纹理只在当帧内被借用——宿主保持所有权，可在 `render_tick`
+返回后复用或释放。Flutter 插件在 macOS 上的 `ErikaTextureVideoView`
+使用的就是这个 surface。
+
+### Windows DirectComposition swap chain
+
+```c
+ErikaStatus erika_presenter_windows_composition_swapchain_iunknown(ErikaPresenterHandle *, void **out_swapchain);
+```
+
+仅限 Windows。当 presenter 通过
+`attach_wgpu_surface_with_output_capabilities`（`direct_composition = true`）attach，
+且以透明视频 alpha 模式或 overlay 混合播放时，Erika 会为目标 HWND 创建预乘 alpha 的
+composition swap chain。此 getter 以 **AddRef 后的 `IUnknown*`** 返回它：调用者拥有返回的
+COM 引用，必须自行 `Release`。解码器/设备丢失后应重新获取——Erika 会重建 swap chain
+并暴露新对象；指针未变说明没有重建。
+
 ### 渲染循环与事件
 
 ```c
@@ -554,6 +589,7 @@ free(rgba);
 | `ErikaTrackSource` | `Embedded` `External` |
 | `ErikaWgpuSurfaceKind` | `Unknown` `MacOsNsView` `MacOsCaMetalLayer` `IosUiView` `WindowsHwnd` `XlibWindow` `WaylandSurface` `AndroidNativeWindow` `OhosNativeWindow` |
 | `ErikaFlutterTextureKind` | `Unknown` `MacOsTextureRegistrar` `IosTextureRegistrar` `AndroidSurfaceTexture` `WindowsTextureRegistrar` `LinuxTextureRegistrar` |
+| `ErikaVideoAlphaMode` | `Opaque` `PackedAlphaRight` |
 | `ErikaPresenterOutputMode` | `Auto` `Sdr` `AppleEdr` `ExtendedLinear` |
 | `ErikaActiveOutputEncoding` | `SdrSrgb` `AppleEdr` `AndroidExtendedLinearScRgb` `Hdr10Pq` |
 | `ErikaOutputSurfaceFormat` | `EightBitUnorm` `TenBitUnorm` `SixteenBitFloat` |
@@ -563,8 +599,9 @@ free(rgba);
 
 ## 结构体
 
-- **`ErikaPresenterConfig`** `{ int32 output_mode; float edr_headroom; int32 luma_upscaler; }` —
-  按值传给 `create_with_config`。
+- **`ErikaPresenterConfig`** `{ int32 output_mode; float edr_headroom; int32 luma_upscaler; int32 video_alpha_mode; }` —
+  按值传给 `create_with_config`；`video_alpha_mode` 是 `ErikaVideoAlphaMode`
+  （默认 `Opaque`，左右分区颜色/alpha 素材用 `PackedAlphaRight`）。
 - **`ErikaSurfaceOutputCapabilities`** `{ bool extended_linear; bool direct_composition; float desired_headroom; int32 fallback_reason; }` —— attach 时传入的 Android 宿主显示器/surface 探测结果；`desired_headroom == 0` 表示系统 auto。
 - **`ErikaUpscalerStatus`** —— 请求模式、当前后端、fallback 次数、超分帧数、最近
   encode/GPU 微秒。
