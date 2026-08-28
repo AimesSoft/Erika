@@ -37,6 +37,12 @@ Apple HDR 路径使用 native Metal-backed surface，而不是 Flutter Texture�
 
 触摸事件会穿透两种 native video strategy，因此 Flutter controls 可以保持在视频 surface 上方或周围。
 
+### ErikaTextureVideoView (Flutter Texture)
+
+`ErikaTextureVideoView` 通过 Flutter 的 texture registrar 渲染，而不是 platform view。macOS 上 plugin 会分配 IOSurface-backed 的 `CVPixelBuffer` 池，直接渲染进其 Metal texture（无逐帧 CPU 回读），再把帧发布给 Flutter，因此 `Opacity`、裁剪、变换和颜色滤镜等常规 Flutter 效果都作用在视频上。OpenHarmony 上复用已注册的外部纹理。其他平台回退到 `ErikaVideoView`。
+
+macOS 上当 `blendMode` 不是 `srcOver` 时，widget 会改走 native platform view，让 Core Animation 基于真实背景做混合（见下文"透明视频与混合模式"）。
+
 ## Android Surface Strategies
 
 Android 上两个视频 widget 都使用同一套 native-view selector。SDR 使用真实的
@@ -65,6 +71,39 @@ surface 取为 `OHNativeWindow` 并 attach 给 presenter；wgpu 随后通过 Vul
 `VideoDecoderChanged` 事件和 presenter 诊断上报，而不是让播放失败。HarmonyOS
 路径已在真机验证；CI 构建 OpenHarmony C ABI，但无设备侧运行验证。
 
+## 透明视频与混合模式
+
+Erika 可以呈现带透明度的视频素材，同时保留 Flutter 的布局与合成能力。透明度按 player 请求：
+
+```dart
+final player = ErikaPlayer(
+  videoAlphaMode: ErikaVideoAlphaMode.packedAlphaRight,
+);
+```
+
+`ErikaVideoAlphaMode.packedAlphaRight` 要求左右分区的编码帧：左半是颜色，右半是灰度 alpha 蒙版。GPU 呈现着色器（Metal、wgpu、D3D11）会重建预乘 alpha 的帧，视频以编码宽度的一半呈现。未请求该模式的 player 仍将画面视为完全不透明，因此既有内容不受影响。
+
+混合与不透明度在视频 widget 上请求：
+
+```dart
+ErikaTextureVideoView(
+  player: player,
+  blendMode: BlendMode.overlay,
+  opacity: 0.8,
+)
+```
+
+各平台支持范围不同：
+
+| 平台与路径 | `blendMode` | `opacity` |
+|------------|-------------|-----------|
+| macOS，`ErikaTextureVideoView`（Flutter texture） | 仅 `srcOver`；其他值改走 native 层 | Flutter `Opacity` |
+| macOS，native 层（`blendMode != srcOver`） | 支持 `overlay`；其他值忽略 | Native `CALayer` opacity |
+| Windows 窗口 overlay（DirectComposition） | `srcOver`、`overlay`；其他值抛插件错误 | `IDCompositionEffectGroup` opacity |
+| Android / iOS / OpenHarmony | 接受创建参数但不消费 | texture 路径上由 Flutter 侧应用 |
+
+overlay 混合是背景感知的：macOS 的 native 层基于窗口内视频背后的内容合成，Windows 的 blend effect 采样同一个 HWND，因此底层的 Flutter 或游戏画面保持可见。Windows 透明 overlay 视频使用绑定到 Flutter HWND 的 SDR BGRA8 预乘 composition swap chain；HDR 片源会在 Erika 内部 tone map 到该合成空间。不透明的 Windows overlay 视频仍沿用之前的专用子 HWND 路径；解码器或输出设备重建 swap chain 时会自动重新绑定 composition 内容。
+
 ## iOS Build Path
 
 iOS plugin 通过 CocoaPod script phase 把 Erika C ABI static library 链接进 app。默认下载匹配的预构建归档；设 `ERIKA_FORCE_SOURCE_BUILD=1`（配合 `ERIKA_REPO_ROOT`）才会为目标 iOS architecture 从源码构建 Rust `erika_capi` crate。
@@ -72,6 +111,10 @@ iOS plugin 通过 CocoaPod script phase 把 Erika C ABI static library 链接进
 ## tvOS Build Path
 
 tvOS plugin 通过 CocoaPod script phase 链接 Erika C ABI static library；与 iOS 一样默认下载预构建归档，`ERIKA_FORCE_SOURCE_BUILD=1` 时才从源码构建。支持 tvOS 13+、arm64 真机，以及 arm64/x86_64 模拟器。详细的 Rust nightly、预构建包和源码构建选项见 [`packages/erika_flutter/README.zh.md`](../packages/erika_flutter/README.zh.md)。
+
+## macOS Build Path
+
+macOS pod 使用同样的 script-phase 构建。在 Erika checkout 内（包上层存在 `crates/erika_capi/Cargo.toml`，或 `ERIKA_REPO_ROOT` 指向 checkout 时）默认从源码构建 Rust `erika_capi`，这样本地渲染器改动无需等待新的预构建发布即可生效。已发布的包与隔离消费者——包括解析到 pub cache 的 git 依赖（它们保留了整个仓库，因此同样走源码构建）——该路径需要 Rust 工具链；设 `ERIKA_FORCE_PREBUILT=1` 可改为始终下载带校验的预构建归档。
 
 ## Minimal Presenter Flow
 
@@ -105,9 +148,10 @@ Flutter Texture 是一个能力更低的兼容路径。
 适合：
 - SDR fallback。
 - native view composition 尚未准备好的平台。
+- 需要进入 Flutter compositor 的透明视频（macOS/OpenHarmony 上的 `ErikaTextureVideoView`）。
 - 测试 surface 或受限 embedding 环境。
 
-它不是首选 HDR/EDR 路径，因为视频会进入 Flutter compositor。C ABI 为此路径保留了 `erika_attach_flutter_texture`。
+它不是首选 HDR/EDR 路径，因为视频会进入 Flutter compositor。Apple 上 surface 是 IOSurface-backed 的 `CVPixelBuffer`：宿主注册 Flutter texture，在每个 render tick 前用 `erika_presenter_attach_flutter_texture` 和 `erika_presenter_set_flutter_texture_buffer` 选定该帧的 Metal texture，Flutter 随后合成同一个 buffer，无 CPU 回读。pixel buffer 的所有权始终在宿主侧。
 
 ## wgpu 与 Android
 
@@ -124,6 +168,8 @@ GLES 或能力协商失败会明确回退 SDR。Android SDR 已验证，API 35 H
 final player = ErikaPlayer(
   outputMode: ErikaOutputMode.appleEdr,  // optional: force EDR
   edrHeadroom: 4.0,                      // optional: EDR headroom
+  // optional: 左右分区颜色/alpha 素材以透明方式呈现
+  videoAlphaMode: ErikaVideoAlphaMode.packedAlphaRight,
 );
 
 await player.open(
@@ -137,6 +183,9 @@ await player.play();
 
 // Preferred for full-player UIs on macOS/iOS/tvOS:
 ErikaWindowOverlayVideoView(player: player)
+
+// Flutter 合成的视频，支持不透明度/裁剪/滤镜（macOS/OpenHarmony）：
+ErikaTextureVideoView(player: player, opacity: 0.8)
 
 // Compatibility / diagnostic platform-view path:
 ErikaVideoView(player: player)

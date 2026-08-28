@@ -143,6 +143,15 @@ Windows with `ERIKA_WINDOWS_ARCH=x64|arm64`, and Android with
 `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86`. Set
 `ERIKA_FORCE_SOURCE_BUILD=1` to bypass prebuilt downloads.
 
+The Apple plugins default to the checksummed prebuilt archive, except on macOS
+inside an Erika checkout: when the pod script finds
+`crates/erika_capi/Cargo.toml` above the package (or `ERIKA_REPO_ROOT` points
+at one), it builds `erika_capi` from source so local changes are picked up
+without a new prebuilt release. `ERIKA_FORCE_PREBUILT=1` always downloads the
+archive instead — use this for in-repo consumers without a Rust toolchain;
+note that git dependencies resolved into the pub cache keep the whole
+repository and therefore also switch to source builds.
+
 For direct native builds, keep all three target selectors identical:
 
 ```sh
