@@ -971,7 +971,7 @@ fn offset_pts_scaled(
 
 fn normalize_playback_rate(rate: f64) -> f64 {
     if rate.is_finite() && rate > 0.0 {
-        rate.clamp(0.25, 4.0)
+        rate.clamp(0.25, 16.0)
     } else {
         1.0
     }
@@ -981,6 +981,12 @@ fn normalize_playback_rate(rate: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::ffmpeg::PcmSampleFormat;
+
+    #[test]
+    fn playback_rate_supports_short_form_video_acceleration() {
+        assert_eq!(normalize_playback_rate(4.8), 4.8);
+        assert_eq!(normalize_playback_rate(32.0), 16.0);
+    }
 
     fn stereo_format() -> PcmFormat {
         PcmFormat {

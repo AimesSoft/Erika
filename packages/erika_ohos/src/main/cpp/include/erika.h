@@ -166,10 +166,16 @@ typedef enum ErikaUpscalerBackendStatus {
   ErikaUpscalerBackendStatus_SimdgroupMatrix = 4,
 } ErikaUpscalerBackendStatus;
 
+typedef enum ErikaVideoAlphaMode {
+  ErikaVideoAlphaMode_Opaque = 0,
+  ErikaVideoAlphaMode_PackedAlphaRight = 1,
+} ErikaVideoAlphaMode;
+
 typedef struct ErikaPresenterConfig {
   int32_t output_mode;
   float edr_headroom;
   int32_t luma_upscaler;
+  int32_t video_alpha_mode;
 } ErikaPresenterConfig;
 
 #define ERIKA_SUBTITLE_OVERRIDE_FONT_SIZE_FIELDS (1u << 2)
@@ -501,6 +507,10 @@ ErikaPresenterHandle *erika_presenter_create_with_config(ErikaPresenterConfig co
 ErikaPresenterHandle *erika_presenter_create_with_output_mode(
     int32_t output_mode,
     float edr_headroom);
+ErikaPresenterHandle *erika_presenter_create_with_output_mode_and_alpha(
+    int32_t output_mode,
+    float edr_headroom,
+    int32_t video_alpha_mode);
 void erika_presenter_destroy(ErikaPresenterHandle *handle);
 
 /* Playback and runtime parameters. volume is 0.0–1.0; rate 1.0 is normal speed;

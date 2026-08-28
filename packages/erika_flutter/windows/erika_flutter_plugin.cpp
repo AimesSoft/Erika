@@ -4,6 +4,10 @@
 #include <flutter/method_channel.h>
 #include <flutter/standard_method_codec.h>
 
+#include <d2d1effects.h>
+#include <dcomp.h>
+#include <wrl/client.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -45,6 +49,16 @@ class PluginError : public std::runtime_error {
  public:
   explicit PluginError(const std::string& message) : std::runtime_error(message) {}
 };
+
+void CheckHResult(HRESULT result, const char* operation) {
+  if (SUCCEEDED(result)) {
+    return;
+  }
+  std::ostringstream message;
+  message << operation << " failed (HRESULT=0x" << std::hex << std::uppercase
+          << static_cast<uint32_t>(result) << ")";
+  throw PluginError(message.str());
+}
 
 std::string LastErrorMessage() {
   const DWORD error = GetLastError();
@@ -776,6 +790,11 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   using AttachWindowsHwndFn =
       ErikaStatus (*)(ErikaPresenterHandle*, uint64_t, uint64_t, uint32_t,
                       uint32_t, double);
+  using AttachWgpuSurfaceWithOutputCapabilitiesFn = ErikaStatus (*)(
+      ErikaPresenterHandle*, ErikaWgpuSurfaceKind, uint64_t, uint64_t,
+      uint32_t, uint32_t, double, ErikaSurfaceOutputCapabilities);
+  using GetWindowsCompositionSwapchainFn =
+      ErikaStatus (*)(ErikaPresenterHandle*, void**);
   using ResizeSurfaceFn =
       ErikaStatus (*)(ErikaPresenterHandle*, uint32_t, uint32_t, double);
   using RenderTickFn =
@@ -806,6 +825,11 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   ErikaPresenterHandle* CreatePresenter(ErikaPresenterConfig config) const {
     if (create_with_config != nullptr) {
       return create_with_config(config);
+    }
+    if (config.video_alpha_mode != ErikaVideoAlphaMode_Opaque) {
+      throw PluginError(
+          "The loaded erika_capi.dll does not support transparent-video "
+          "presenter configuration. Update the bundled Erika runtime.");
     }
     if (create_with_output_mode != nullptr) {
       return create_with_output_mode(config.output_mode, config.edr_headroom);
@@ -879,6 +903,9 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   TrackInfoFreeFn free_track_info = nullptr;
   DanmakuTrackInfoFreeFn free_danmaku_track_info = nullptr;
   AttachWindowsHwndFn attach_windows_hwnd = nullptr;
+  AttachWgpuSurfaceWithOutputCapabilitiesFn
+      attach_wgpu_surface_with_output_capabilities = nullptr;
+  GetWindowsCompositionSwapchainFn windows_composition_swapchain = nullptr;
   ResizeSurfaceFn resize_surface = nullptr;
   CommandFn detach_surface = nullptr;
   RenderTickFn render_tick = nullptr;
@@ -980,6 +1007,12 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
         "erika_danmaku_track_info_free");
     attach_windows_hwnd =
         LoadRequired<AttachWindowsHwndFn>("erika_presenter_attach_windows_hwnd");
+    attach_wgpu_surface_with_output_capabilities =
+        LoadRequired<AttachWgpuSurfaceWithOutputCapabilitiesFn>(
+            "erika_presenter_attach_wgpu_surface_with_output_capabilities");
+    windows_composition_swapchain =
+        LoadOptional<GetWindowsCompositionSwapchainFn>(
+            "erika_presenter_windows_composition_swapchain_iunknown");
     resize_surface =
         LoadRequired<ResizeSurfaceFn>("erika_presenter_resize_surface");
     detach_surface =
@@ -1058,10 +1091,76 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
   }
 
   ~ErikaOverlayWindow() {
+    ShutdownComposition();
     if (hwnd != nullptr) {
       DestroyWindow(hwnd);
       hwnd = nullptr;
     }
+  }
+
+  void ConfigureComposition(std::string requested_blend_mode,
+                            double requested_opacity) {
+    if (requested_blend_mode.empty()) {
+      requested_blend_mode = "srcOver";
+    }
+    if (requested_blend_mode != "srcOver" &&
+        requested_blend_mode != "overlay") {
+      throw PluginError("Windows DirectComposition supports only srcOver and "
+                        "overlay blend modes.");
+    }
+    blend_mode = std::move(requested_blend_mode);
+    opacity = std::clamp(requested_opacity, 0.0, 1.0);
+    if (composition_mode && composition_device) {
+      ApplyCompositionState();
+    }
+  }
+
+  void SetCompositionMode(bool enabled) {
+    if (composition_mode == enabled) {
+      if (enabled) {
+        EnsureComposition();
+        ApplyCompositionState();
+      }
+      return;
+    }
+    composition_mode = enabled;
+    if (enabled) {
+      ShowWindow(hwnd, SW_HIDE);
+      EnsureComposition();
+      ApplyCompositionState();
+      return;
+    }
+    ClearCompositionContent();
+  }
+
+  void SetCompositionContent(void* raw_content) {
+    if (raw_content == nullptr) {
+      throw PluginError("Erika returned a null DirectComposition swap chain.");
+    }
+    Microsoft::WRL::ComPtr<IUnknown> next_content;
+    next_content.Attach(static_cast<IUnknown*>(raw_content));
+    EnsureComposition();
+    if (composition_content.Get() == next_content.Get()) {
+      return;
+    }
+    CheckHResult(content_visual->SetContent(next_content.Get()),
+                 "IDCompositionVisual::SetContent");
+    composition_content = std::move(next_content);
+    ApplyCompositionState();
+  }
+
+  void ClearCompositionContent() {
+    if (!composition_device || !content_visual) {
+      composition_content.Reset();
+      return;
+    }
+    CheckHResult(content_visual->SetContent(nullptr),
+                 "IDCompositionVisual::SetContent(null)");
+    composition_content.Reset();
+    CheckHResult(composition_target->SetRoot(nullptr),
+                 "IDCompositionTarget::SetRoot(null)");
+    CheckHResult(composition_device->Commit(),
+                 "IDCompositionDevice::Commit(clear)");
   }
 
   void SetFrame(double x,
@@ -1084,10 +1183,17 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
     logical_height = height;
     visible = is_visible && width > 0.0 && height > 0.0;
     host = RootHostWindow(flutter);
-    scale = ScaleForWindow(host);
+    scale = ScaleForWindow(composition_mode ? flutter : host);
 
     if (debug_label) {
       SetWindowTextW(hwnd, Utf8ToWide(*debug_label).c_str());
+    }
+
+    if (composition_mode) {
+      ShowWindow(hwnd, SW_HIDE);
+      EnsureComposition();
+      ApplyCompositionState();
+      return;
     }
 
     if (!visible) {
@@ -1110,12 +1216,16 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
 
   uint32_t PixelWidth() const {
     return static_cast<uint32_t>(
-        std::max<int64_t>(1, LogicalToPhysical(host, logical_width)));
+        std::max<int64_t>(
+            1, LogicalToPhysical(composition_mode ? flutter : host,
+                                 logical_width)));
   }
 
   uint32_t PixelHeight() const {
     return static_cast<uint32_t>(
-        std::max<int64_t>(1, LogicalToPhysical(host, logical_height)));
+        std::max<int64_t>(
+            1, LogicalToPhysical(composition_mode ? flutter : host,
+                                 logical_height)));
   }
 
   void RefreshScaleAndReposition() {
@@ -1163,6 +1273,92 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
     }
   }
 
+  void EnsureComposition() {
+    if (composition_device) {
+      return;
+    }
+    if (flutter == nullptr) {
+      throw PluginError("No Flutter HWND is available for DirectComposition.");
+    }
+
+    CheckHResult(
+        DCompositionCreateDevice2(
+            nullptr, __uuidof(IDCompositionDesktopDevice),
+            reinterpret_cast<void**>(desktop_device.ReleaseAndGetAddressOf())),
+        "DCompositionCreateDevice2");
+    CheckHResult(desktop_device.As(&composition_device),
+                 "QueryInterface(IDCompositionDevice3)");
+    CheckHResult(composition_device->CreateVisual(
+                     root_visual.ReleaseAndGetAddressOf()),
+                 "IDCompositionDevice::CreateVisual(root)");
+    CheckHResult(composition_device->CreateVisual(
+                     content_visual.ReleaseAndGetAddressOf()),
+                 "IDCompositionDevice::CreateVisual(content)");
+    CheckHResult(root_visual->AddVisual(content_visual.Get(), FALSE, nullptr),
+                 "IDCompositionVisual::AddVisual");
+    CheckHResult(composition_device->CreateEffectGroup(
+                     opacity_effect.ReleaseAndGetAddressOf()),
+                 "IDCompositionDevice::CreateEffectGroup");
+    CheckHResult(content_visual->SetEffect(opacity_effect.Get()),
+                 "IDCompositionVisual::SetEffect(opacity)");
+    CheckHResult(composition_device->CreateBlendEffect(
+                     overlay_blend_effect.ReleaseAndGetAddressOf()),
+                 "IDCompositionDevice3::CreateBlendEffect");
+    CheckHResult(overlay_blend_effect->SetMode(D2D1_BLEND_MODE_OVERLAY),
+                 "IDCompositionBlendEffect::SetMode");
+
+    HRESULT target_result = desktop_device->CreateTargetForHwnd(
+        flutter, TRUE, composition_target.ReleaseAndGetAddressOf());
+    if (FAILED(target_result)) {
+      target_result = desktop_device->CreateTargetForHwnd(
+          flutter, FALSE, composition_target.ReleaseAndGetAddressOf());
+    }
+    CheckHResult(target_result,
+                 "IDCompositionDesktopDevice::CreateTargetForHwnd");
+  }
+
+  void ApplyCompositionState() {
+    if (!composition_device) {
+      return;
+    }
+    IDCompositionEffect* effect = blend_mode == "overlay"
+                                     ? overlay_blend_effect.Get()
+                                     : nullptr;
+    CheckHResult(root_visual->SetEffect(effect),
+                 "IDCompositionVisual::SetEffect");
+    CheckHResult(opacity_effect->SetOpacity(static_cast<float>(opacity)),
+                 "IDCompositionEffectGroup::SetOpacity");
+    CheckHResult(content_visual->SetOffsetX(static_cast<float>(
+                     LogicalToPhysical(flutter, logical_x))),
+                 "IDCompositionVisual::SetOffsetX");
+    CheckHResult(content_visual->SetOffsetY(static_cast<float>(
+                     LogicalToPhysical(flutter, logical_y))),
+                 "IDCompositionVisual::SetOffsetY");
+    CheckHResult(
+        composition_target->SetRoot(
+            composition_mode && visible && composition_content
+                ? root_visual.Get()
+                : nullptr),
+        "IDCompositionTarget::SetRoot");
+    CheckHResult(composition_device->Commit(),
+                 "IDCompositionDevice::Commit");
+  }
+
+  void ShutdownComposition() {
+    if (composition_target && composition_device) {
+      composition_target->SetRoot(nullptr);
+      composition_device->Commit();
+    }
+    composition_content.Reset();
+    overlay_blend_effect.Reset();
+    opacity_effect.Reset();
+    content_visual.Reset();
+    root_visual.Reset();
+    composition_target.Reset();
+    composition_device.Reset();
+    desktop_device.Reset();
+  }
+
   HWND flutter = nullptr;
   HWND host = nullptr;
   HWND hwnd = nullptr;
@@ -1172,15 +1368,28 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
   double logical_width = 1.0;
   double logical_height = 1.0;
   bool visible = false;
+  bool composition_mode = false;
+  std::string blend_mode = "srcOver";
+  double opacity = 1.0;
   int64_t active_generation = 0;
   int64_t owner_player_id = 0;
+  Microsoft::WRL::ComPtr<IDCompositionDesktopDevice> desktop_device;
+  Microsoft::WRL::ComPtr<IDCompositionDevice3> composition_device;
+  Microsoft::WRL::ComPtr<IDCompositionTarget> composition_target;
+  Microsoft::WRL::ComPtr<IDCompositionVisual2> root_visual;
+  Microsoft::WRL::ComPtr<IDCompositionVisual2> content_visual;
+  Microsoft::WRL::ComPtr<IDCompositionEffectGroup> opacity_effect;
+  Microsoft::WRL::ComPtr<IDCompositionBlendEffect> overlay_blend_effect;
+  Microsoft::WRL::ComPtr<IUnknown> composition_content;
 };
 
 struct ErikaFlutterPlugin::PlayerHost {
   PlayerHost(int64_t player_id,
              std::shared_ptr<ErikaNativeLibrary> native_library,
              ErikaPresenterConfig config)
-      : id(player_id), library(std::move(native_library)) {
+      : id(player_id),
+        library(std::move(native_library)),
+        video_alpha_mode(config.video_alpha_mode) {
     smtc_state.player_id = player_id;
     handle = library->CreatePresenter(config);
     if (handle == nullptr) {
@@ -1724,12 +1933,31 @@ struct ErikaFlutterPlugin::PlayerHost {
     const uint32_t width = overlay.PixelWidth();
     const uint32_t height = overlay.PixelHeight();
     const double scale = overlay.scale;
-    const uint64_t hwnd = reinterpret_cast<uint64_t>(overlay.hwnd);
     const uint64_t hinstance = reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr));
-    Check(library->attach_windows_hwnd(
-              handle, hwnd, hinstance, width, height, scale),
-          "attach_windows_hwnd", library->TakeLastError());
-    attached_hwnd = overlay.hwnd;
+    composition_surface = RequiresComposition(overlay);
+    overlay.SetCompositionMode(composition_surface);
+    if (composition_surface) {
+      overlay.ClearCompositionContent();
+      ErikaSurfaceOutputCapabilities capabilities{};
+      capabilities.direct_composition = true;
+      capabilities.fallback_reason = ErikaOutputFallbackReason_None;
+      Check(library->attach_wgpu_surface_with_output_capabilities(
+                handle, ErikaWgpuSurfaceKind_WindowsHwnd,
+                reinterpret_cast<uint64_t>(overlay.flutter), hinstance, width,
+                height, scale, capabilities),
+            "attach_wgpu_surface_with_output_capabilities",
+            library->TakeLastError());
+      attached_hwnd = overlay.flutter;
+      attached_overlay = &overlay;
+      RefreshCompositionContent();
+    } else {
+      Check(library->attach_windows_hwnd(
+                handle, reinterpret_cast<uint64_t>(overlay.hwnd), hinstance,
+                width, height, scale),
+            "attach_windows_hwnd", library->TakeLastError());
+      attached_hwnd = overlay.hwnd;
+      attached_overlay = nullptr;
+    }
     attached_view_id = kWindowOverlayViewId;
     surface_attached = true;
     attached_surface_width = width;
@@ -1739,7 +1967,8 @@ struct ErikaFlutterPlugin::PlayerHost {
   }
 
   void ResizeOverlay(ErikaOverlayWindow& overlay) {
-    if (!surface_attached || attached_hwnd != overlay.hwnd) {
+    const HWND expected_hwnd = composition_surface ? overlay.flutter : overlay.hwnd;
+    if (!surface_attached || attached_hwnd != expected_hwnd) {
       return;
     }
     const uint32_t width = overlay.PixelWidth();
@@ -1755,13 +1984,48 @@ struct ErikaFlutterPlugin::PlayerHost {
     attached_surface_width = width;
     attached_surface_height = height;
     attached_surface_scale = scale;
+    if (composition_surface) {
+      RefreshCompositionContent();
+    }
+  }
+
+  bool RequiresComposition(const ErikaOverlayWindow& overlay) const {
+    return video_alpha_mode != ErikaVideoAlphaMode_Opaque ||
+           overlay.blend_mode == "overlay";
+  }
+
+  void RefreshCompositionContent() {
+    if (!composition_surface || attached_overlay == nullptr) {
+      return;
+    }
+    if (library->windows_composition_swapchain == nullptr) {
+      throw PluginError(
+          "The loaded erika_capi.dll does not expose the DirectComposition "
+          "swap chain. Update the bundled Erika runtime.");
+    }
+    void* swapchain = nullptr;
+    Check(library->windows_composition_swapchain(handle, &swapchain),
+          "windows_composition_swapchain_iunknown",
+          library->TakeLastError());
+    attached_overlay->SetCompositionContent(swapchain);
   }
 
   void Detach(std::optional<int64_t> view_id) {
     if (view_id && attached_view_id != *view_id) {
       return;
     }
+    if (composition_surface && attached_overlay != nullptr &&
+        attached_overlay->owner_player_id == id) {
+      try {
+        attached_overlay->ClearCompositionContent();
+      } catch (const std::exception& error) {
+        DebugLog(std::string("DirectComposition detach failed: ") +
+                 error.what());
+      }
+    }
     attached_hwnd = nullptr;
+    attached_overlay = nullptr;
+    composition_surface = false;
     attached_view_id = 0;
     surface_attached = false;
     attached_surface_width = 0;
@@ -1781,6 +2045,14 @@ struct ErikaFlutterPlugin::PlayerHost {
                  library->TakeLastError());
       } else {
         latest_presenter_stats = stats;
+        if (composition_surface) {
+          try {
+            RefreshCompositionContent();
+          } catch (const std::exception& error) {
+            DebugLog(std::string("DirectComposition swap chain rebind failed: ") +
+                     error.what());
+          }
+        }
       }
     }
     PollEvents(event_sink);
@@ -1951,8 +2223,11 @@ struct ErikaFlutterPlugin::PlayerHost {
   std::shared_ptr<ErikaNativeLibrary> library;
   ErikaPresenterHandle* handle = nullptr;
   HWND attached_hwnd = nullptr;
+  ErikaOverlayWindow* attached_overlay = nullptr;
   int64_t attached_view_id = 0;
   bool surface_attached = false;
+  bool composition_surface = false;
+  int32_t video_alpha_mode = ErikaVideoAlphaMode_Opaque;
   uint32_t attached_surface_width = 0;
   uint32_t attached_surface_height = 0;
   double attached_surface_scale = 0.0;
@@ -2396,7 +2671,11 @@ ErikaFlutterPlugin::ErikaOverlayWindow& ErikaFlutterPlugin::EnsureOverlayWindow(
                           : "No Flutter HWND is available for Erika overlay.");
   }
   if (!overlay_window_ || overlay_window_->flutter != parent) {
+    const std::string blend_mode =
+        overlay_window_ ? overlay_window_->blend_mode : "srcOver";
+    const double opacity = overlay_window_ ? overlay_window_->opacity : 1.0;
     overlay_window_ = std::make_unique<ErikaOverlayWindow>(parent);
+    overlay_window_->ConfigureComposition(blend_mode, opacity);
     StartFrameTimer();
     for (auto& entry : players_) {
       if (entry.second->attached_view_id == kWindowOverlayViewId) {
@@ -2446,6 +2725,9 @@ int64_t ErikaFlutterPlugin::CreatePlayer(const EncodableValue* arguments) {
     }
     if (auto value = DoubleValue(FindArg(args, "edrHeadroom"))) {
       config.edr_headroom = static_cast<float>(std::max(1.0, *value));
+    }
+    if (auto value = Int64Value(FindArg(args, "videoAlphaMode"))) {
+      config.video_alpha_mode = static_cast<int32_t>(*value);
     }
   }
 
@@ -2833,6 +3115,9 @@ void ErikaFlutterPlugin::HandleMethodCall(
                           " was not found.");
       }
       auto& overlay = EnsureOverlayWindow();
+      overlay.ConfigureComposition(
+          StringValue(FindArg(args, "blendMode")).value_or("srcOver"),
+          DoubleValue(FindArg(args, "opacity")).value_or(1.0));
       host.AttachOverlay(overlay);
       overlay.owner_player_id = host.id;
       OnFrameTimer();
@@ -2845,6 +3130,9 @@ void ErikaFlutterPlugin::HandleMethodCall(
       auto& host = PlayerFromArgs(args);
       UpdateOverlayTarget(args);
       auto& overlay = EnsureOverlayWindow();
+      overlay.ConfigureComposition(
+          StringValue(FindArg(args, "blendMode")).value_or("srcOver"),
+          DoubleValue(FindArg(args, "opacity")).value_or(1.0));
       host.AttachOverlay(overlay);
       overlay.owner_player_id = host.id;
       OnFrameTimer();
@@ -2879,7 +3167,7 @@ void ErikaFlutterPlugin::HandleMethodCall(
       UpdateOverlayTarget(args);
       auto& overlay = EnsureOverlayWindow();
       const int64_t player_id = RequiredInt64(args, "playerId");
-      PlayerFromArgs(args);
+      auto& host = PlayerFromArgs(args);
       if (!visible && overlay.owner_player_id != 0 &&
           overlay.owner_player_id != player_id) {
         result->Success();
@@ -2887,6 +3175,14 @@ void ErikaFlutterPlugin::HandleMethodCall(
       }
       if (visible) {
         overlay.owner_player_id = player_id;
+      }
+      overlay.ConfigureComposition(
+          StringValue(FindArg(args, "blendMode")).value_or("srcOver"),
+          DoubleValue(FindArg(args, "opacity")).value_or(1.0));
+      if (host.surface_attached &&
+          host.attached_view_id == kWindowOverlayViewId &&
+          host.composition_surface != host.RequiresComposition(overlay)) {
+        host.AttachOverlay(overlay);
       }
       overlay.SetFrame(DoubleValue(FindArg(args, "x")).value_or(0.0),
                        DoubleValue(FindArg(args, "y")).value_or(0.0),

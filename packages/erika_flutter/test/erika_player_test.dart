@@ -40,10 +40,95 @@ void main() {
   });
 
   tearDown(() {
+    debugDefaultTargetPlatformOverride = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(playerChannel, null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(eventsChannel, null);
+  });
+
+  testWidgets('macOS texture video view creates and attaches a Flutter texture',
+      (WidgetTester tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final player = ErikaPlayer();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(playerChannel, (MethodCall call) async {
+      playerCalls.add(call);
+      return switch (call.method) {
+        'create' => 7,
+        'createTexture' => 13,
+        _ => null,
+      };
+    });
+
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: SizedBox(
+          width: 320,
+          height: 180,
+          child: ErikaTextureVideoView(player: player),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(Texture), findsOneWidget);
+    expect(playerCalls.map((call) => call.method), contains('createTexture'));
+    expect(playerCalls.map((call) => call.method), contains('attachView'));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await player.dispose();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('macOS overlay video uses a native transparent compositing layer',
+      (WidgetTester tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform_views, (
+      MethodCall call,
+    ) async {
+      return null;
+    });
+    final player = ErikaPlayer(
+      videoAlphaMode: ErikaVideoAlphaMode.packedAlphaRight,
+    );
+    try {
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 320,
+            height: 180,
+            child: ErikaTextureVideoView(
+              player: player,
+              blendMode: BlendMode.overlay,
+              opacity: 0.2,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(AppKitView), findsOneWidget);
+      expect(find.byType(Texture), findsNothing);
+      final view = tester.widget<AppKitView>(find.byType(AppKitView));
+      expect(view.creationParams, <String, Object?>{
+        'videoAlphaMode': ErikaVideoAlphaMode.packedAlphaRight.nativeValue,
+        'blendMode': 'overlay',
+        'opacity': 0.2,
+      });
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      await player.dispose();
+      debugDefaultTargetPlatformOverride = null;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform_views, null);
+    }
   });
 
   test('default player lets native choose output mode', () async {
@@ -354,6 +439,25 @@ void main() {
     await player.dispose();
   });
 
+  test('packed alpha mode is passed to native create', () async {
+    final player = ErikaPlayer(
+      videoAlphaMode: ErikaVideoAlphaMode.packedAlphaRight,
+    );
+
+    expect(await player.ensureCreated(), 7);
+
+    final createCall = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'create',
+    );
+    final arguments = createCall.arguments as Map<Object?, Object?>;
+    expect(
+      arguments['videoAlphaMode'],
+      ErikaVideoAlphaMode.packedAlphaRight.nativeValue,
+    );
+
+    await player.dispose();
+  });
+
   test('HDR debug flag is passed to native create when enabled', () async {
     final player = ErikaPlayer(hdrDebug: true);
 
@@ -590,6 +694,8 @@ void main() {
     final viewId = await player.attachWindowOverlay(
       flutterViewId: 17,
       secondaryWindow: true,
+      blendMode: 'overlay',
+      opacity: 0.75,
     );
     await player.setWindowOverlayFrame(
       frame: const Rect.fromLTWH(10, 20, 320, 180),
@@ -598,6 +704,8 @@ void main() {
       flutterViewId: 17,
       secondaryWindow: true,
       debugLabel: 'episode.mkv',
+      blendMode: 'overlay',
+      opacity: 0.75,
     );
     await player.detachWindowOverlay(generation: 42);
 
@@ -610,6 +718,8 @@ void main() {
         'playerId': 7,
         'flutterViewId': 17,
         'secondaryWindow': true,
+        'blendMode': 'overlay',
+        'opacity': 0.75,
       },
     );
     expect(
@@ -628,6 +738,8 @@ void main() {
         'flutterViewId': 17,
         'secondaryWindow': true,
         'debugLabel': 'episode.mkv',
+        'blendMode': 'overlay',
+        'opacity': 0.75,
       },
     );
     expect(

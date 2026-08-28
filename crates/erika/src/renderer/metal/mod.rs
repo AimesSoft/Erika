@@ -2,9 +2,9 @@ use std::ffi::c_void;
 use std::time::Duration;
 
 use crate::core::{
-    ColorPrimaries, LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame,
-    RenderFrameContext, RendererBackend, RendererFrameCapture, RendererResourceStats,
-    RendererRuntimeStats, Result, SurfaceMetrics, TransferFunction,
+    ColorPrimaries, FlutterTextureKind, LumaUpscalerBackendStatus, PlatformSurface, PlayerError,
+    PlayerVideoFrame, RenderFrameContext, RendererBackend, RendererFrameCapture,
+    RendererResourceStats, RendererRuntimeStats, Result, SurfaceMetrics, TransferFunction,
 };
 use crate::danmaku::DanmakuRenderPlan;
 use crate::ffmpeg::{Frame, PlanarFrame};
@@ -74,6 +74,41 @@ pub struct MetalRenderer {
 pub struct MetalRendererConfig {
     pub output_mode: MetalOutputMode,
     pub luma_upscaler: LumaUpscalerMode,
+    pub video_alpha_mode: VideoAlphaMode,
+}
+
+/// Describes how a decoded video frame carries transparency.
+///
+/// `PackedAlphaRight` expects a side-by-side frame: the left half contains
+/// colour and the right half contains a grayscale alpha mask. Renderers expose
+/// the left half as the logical video size and reconstruct premultiplied alpha
+/// in the presentation shader.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum VideoAlphaMode {
+    #[default]
+    Opaque = 0,
+    PackedAlphaRight = 1,
+}
+
+impl VideoAlphaMode {
+    pub fn from_raw(value: i32) -> Self {
+        match value {
+            1 => Self::PackedAlphaRight,
+            _ => Self::Opaque,
+        }
+    }
+
+    pub fn has_alpha(self) -> bool {
+        matches!(self, Self::PackedAlphaRight)
+    }
+
+    pub fn logical_width(self, encoded_width: u32) -> u32 {
+        match self {
+            Self::Opaque => encoded_width,
+            Self::PackedAlphaRight => (encoded_width / 2).max(1),
+        }
+    }
 }
 
 impl Default for MetalRendererConfig {
@@ -81,6 +116,7 @@ impl Default for MetalRendererConfig {
         Self {
             output_mode: MetalOutputMode::default(),
             luma_upscaler: LumaUpscalerMode::default(),
+            video_alpha_mode: VideoAlphaMode::default(),
         }
     }
 }
@@ -689,9 +725,30 @@ impl RendererBackend for MetalRenderer {
             PlatformSurface::Wgpu(_) => Err(crate::core::PlayerError::Renderer(
                 "wgpu surface cannot be attached to MetalRenderer".to_string(),
             )),
-            PlatformSurface::FlutterTexture(_) => Err(crate::core::PlayerError::Renderer(
-                "Flutter texture cannot be attached to MetalRenderer".to_string(),
-            )),
+            PlatformSurface::FlutterTexture(handle)
+                if matches!(
+                    handle.kind,
+                    FlutterTextureKind::MacOsTextureRegistrar
+                        | FlutterTextureKind::IosTextureRegistrar
+                ) =>
+            {
+                #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+                {
+                    self.inner.attach_flutter_texture(handle.metrics);
+                    Ok(())
+                }
+                #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
+                {
+                    let _ = handle;
+                    Err(PlayerError::Renderer(
+                        "Apple Flutter textures require an Apple Metal renderer".to_string(),
+                    ))
+                }
+            }
+            PlatformSurface::FlutterTexture(handle) => Err(PlayerError::Renderer(format!(
+                "Flutter texture kind {:?} cannot be attached to MetalRenderer",
+                handle.kind
+            ))),
         }
     }
 
@@ -855,6 +912,28 @@ impl RendererBackend for MetalRenderer {
             ));
         }
         rendered
+    }
+
+    fn set_flutter_texture_buffer(
+        &mut self,
+        raw_texture: u64,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        {
+            unsafe {
+                self.inner
+                    .set_flutter_texture_buffer(raw_texture as *mut c_void, width, height)
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
+        {
+            let _ = (raw_texture, width, height);
+            Err(PlayerError::Renderer(
+                "Metal Flutter textures are only available on Apple platforms".to_string(),
+            ))
+        }
     }
 
     fn capture_current_frame(

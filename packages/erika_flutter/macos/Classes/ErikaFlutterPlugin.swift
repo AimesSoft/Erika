@@ -111,6 +111,184 @@ private final class ErikaDisplayLinkDriver {
   }
 }
 
+/// A Flutter texture whose backing CVPixelBuffer is also exposed as a Metal
+/// texture. Erika renders into the IOSurface-backed Metal texture directly;
+/// Flutter then composites the same buffer without a CPU readback.
+private final class ErikaFlutterTextureSurface: NSObject, FlutterTexture {
+  struct PreparedFrame {
+    let generation: UInt64
+    let pixelBuffer: CVPixelBuffer
+    let cvMetalTexture: CVMetalTexture
+    let metalTexture: MTLTexture
+    let width: UInt32
+    let height: UInt32
+  }
+
+  private let registry: FlutterTextureRegistry
+  private let lock = NSLock()
+  private let device: MTLDevice
+  private var textureCache: CVMetalTextureCache
+  private var pixelBufferPool: CVPixelBufferPool
+  private var readyPixelBuffer: CVPixelBuffer?
+  private var generation: UInt64 = 1
+  private(set) var textureId: Int64 = 0
+  private(set) var width: UInt32
+  private(set) var height: UInt32
+  private(set) var scale: Double
+  weak var attachedPlayer: ErikaPlayerHost?
+
+  init?(
+    registry: FlutterTextureRegistry,
+    width: UInt32,
+    height: UInt32,
+    scale: Double
+  ) {
+    guard let device = MTLCreateSystemDefaultDevice(),
+          let resources = Self.makeResources(device: device, width: width, height: height) else {
+      return nil
+    }
+    self.registry = registry
+    self.device = device
+    textureCache = resources.textureCache
+    pixelBufferPool = resources.pixelBufferPool
+    self.width = width
+    self.height = height
+    self.scale = scale
+    super.init()
+  }
+
+  func register() -> Int64 {
+    let id = registry.register(self)
+    textureId = id
+    return id
+  }
+
+  func resize(width: UInt32, height: UInt32, scale: Double) -> Bool {
+    guard let resources = Self.makeResources(device: device, width: width, height: height) else {
+      return false
+    }
+    lock.lock()
+    generation &+= 1
+    textureCache = resources.textureCache
+    pixelBufferPool = resources.pixelBufferPool
+    readyPixelBuffer = nil
+    self.width = width
+    self.height = height
+    self.scale = scale
+    lock.unlock()
+    return true
+  }
+
+  func metrics() -> (width: UInt32, height: UInt32, scale: Double) {
+    lock.lock()
+    defer { lock.unlock() }
+    return (width, height, scale)
+  }
+
+  func prepareFrame() -> PreparedFrame? {
+    lock.lock()
+    let cache = textureCache
+    let pool = pixelBufferPool
+    let frameWidth = width
+    let frameHeight = height
+    let frameGeneration = generation
+    lock.unlock()
+
+    var pixelBuffer: CVPixelBuffer?
+    guard CVPixelBufferPoolCreatePixelBuffer(
+      kCFAllocatorDefault,
+      pool,
+      &pixelBuffer
+    ) == kCVReturnSuccess, let pixelBuffer else {
+      return nil
+    }
+    var cvMetalTexture: CVMetalTexture?
+    guard CVMetalTextureCacheCreateTextureFromImage(
+      kCFAllocatorDefault,
+      cache,
+      pixelBuffer,
+      nil,
+      .bgra8Unorm,
+      Int(frameWidth),
+      Int(frameHeight),
+      0,
+      &cvMetalTexture
+    ) == kCVReturnSuccess,
+      let cvMetalTexture,
+      let metalTexture = CVMetalTextureGetTexture(cvMetalTexture) else {
+      return nil
+    }
+    return PreparedFrame(
+      generation: frameGeneration,
+      pixelBuffer: pixelBuffer,
+      cvMetalTexture: cvMetalTexture,
+      metalTexture: metalTexture,
+      width: frameWidth,
+      height: frameHeight
+    )
+  }
+
+  func publish(_ frame: PreparedFrame) {
+    lock.lock()
+    guard frame.generation == generation else {
+      lock.unlock()
+      return
+    }
+    readyPixelBuffer = frame.pixelBuffer
+    let id = textureId
+    lock.unlock()
+    if id != 0 {
+      registry.textureFrameAvailable(id)
+    }
+  }
+
+  func copyPixelBuffer() -> Unmanaged<CVPixelBuffer>? {
+    lock.lock()
+    defer { lock.unlock() }
+    guard let readyPixelBuffer else {
+      return nil
+    }
+    return Unmanaged.passRetained(readyPixelBuffer)
+  }
+
+  private static func makeResources(
+    device: MTLDevice,
+    width: UInt32,
+    height: UInt32
+  ) -> (textureCache: CVMetalTextureCache, pixelBufferPool: CVPixelBufferPool)? {
+    var textureCache: CVMetalTextureCache?
+    guard CVMetalTextureCacheCreate(
+      kCFAllocatorDefault,
+      nil,
+      device,
+      nil,
+      &textureCache
+    ) == kCVReturnSuccess, let textureCache else {
+      return nil
+    }
+    let poolAttributes: [CFString: Any] = [
+      kCVPixelBufferPoolMinimumBufferCountKey: 3,
+    ]
+    let pixelBufferAttributes: [CFString: Any] = [
+      kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+      kCVPixelBufferWidthKey: Int(width),
+      kCVPixelBufferHeightKey: Int(height),
+      kCVPixelBufferIOSurfacePropertiesKey: [:],
+      kCVPixelBufferMetalCompatibilityKey: true,
+    ]
+    var pixelBufferPool: CVPixelBufferPool?
+    guard CVPixelBufferPoolCreate(
+      kCFAllocatorDefault,
+      poolAttributes as CFDictionary,
+      pixelBufferAttributes as CFDictionary,
+      &pixelBufferPool
+    ) == kCVReturnSuccess, let pixelBufferPool else {
+      return nil
+    }
+    return (textureCache, pixelBufferPool)
+  }
+}
+
 private struct ErikaVideoParamsC {
   var width: UInt32 = 0
   var height: UInt32 = 0
@@ -155,6 +333,7 @@ private struct ErikaTrackInfoC {
 private struct ErikaPresenterConfigC {
   var outputMode: Int32 = 0
   var edrHeadroom: Float = 1.0
+  var videoAlphaMode: Int32 = 0
 
   static let sdr = ErikaPresenterConfigC()
 
@@ -378,6 +557,9 @@ private final class ErikaNativeLibrary {
 
   typealias CreateFn = @convention(c) () -> UnsafeMutableRawPointer?
   typealias CreateWithOutputModeFn = @convention(c) (Int32, Float) -> UnsafeMutableRawPointer?
+  typealias CreateWithOutputModeAndAlphaFn = @convention(c) (
+    Int32, Float, Int32
+  ) -> UnsafeMutableRawPointer?
   typealias DestroyFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
   typealias OpenFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Int32
   typealias OpenWithHeadersFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, UInt) -> Int32
@@ -443,6 +625,12 @@ private final class ErikaNativeLibrary {
   typealias TrackInfoFreeFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
   typealias DanmakuTrackInfoFreeFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
   typealias AttachMetalLayerFn = @convention(c) (UnsafeMutableRawPointer?, UInt64, UInt32, UInt32, Double) -> Int32
+  typealias AttachFlutterTextureFn = @convention(c) (
+    UnsafeMutableRawPointer?, Int32, Int64, UInt32, UInt32, Double
+  ) -> Int32
+  typealias SetFlutterTextureBufferFn = @convention(c) (
+    UnsafeMutableRawPointer?, UInt64, UInt32, UInt32
+  ) -> Int32
   typealias ResizeSurfaceFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, Double) -> Int32
   typealias RenderTickFn = @convention(c) (UnsafeMutableRawPointer?, Double, UnsafeMutableRawPointer?) -> Int32
   typealias CaptureFrameRgbaFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, UnsafeMutableRawPointer?, Int) -> Int32
@@ -454,6 +642,7 @@ private final class ErikaNativeLibrary {
 
   let create: CreateFn
   let createWithOutputMode: CreateWithOutputModeFn?
+  let createWithOutputModeAndAlpha: CreateWithOutputModeAndAlphaFn?
   let destroy: DestroyFn
   let open: OpenFn
   let openWithHeaders: OpenWithHeadersFn?
@@ -501,6 +690,8 @@ private final class ErikaNativeLibrary {
   let freeTrackInfo: TrackInfoFreeFn
   let freeDanmakuTrackInfo: DanmakuTrackInfoFreeFn?
   let attachMetalLayer: AttachMetalLayerFn
+  let attachFlutterTexture: AttachFlutterTextureFn
+  let setFlutterTextureBuffer: SetFlutterTextureBufferFn
   let resizeSurface: ResizeSurfaceFn
   let detachSurface: CommandFn
   let renderTick: RenderTickFn
@@ -517,6 +708,11 @@ private final class ErikaNativeLibrary {
 
     create = try Self.load("erika_presenter_create", from: libraryHandle, as: CreateFn.self)
     createWithOutputMode = Self.loadOptional("erika_presenter_create_with_output_mode", from: libraryHandle, as: CreateWithOutputModeFn.self)
+    createWithOutputModeAndAlpha = Self.loadOptional(
+      "erika_presenter_create_with_output_mode_and_alpha",
+      from: libraryHandle,
+      as: CreateWithOutputModeAndAlphaFn.self
+    )
     destroy = try Self.load("erika_presenter_destroy", from: libraryHandle, as: DestroyFn.self)
     open = try Self.load("erika_presenter_open", from: libraryHandle, as: OpenFn.self)
     openWithHeaders = Self.loadOptional("erika_presenter_open_with_headers", from: libraryHandle, as: OpenWithHeadersFn.self)
@@ -564,6 +760,8 @@ private final class ErikaNativeLibrary {
     freeTrackInfo = try Self.load("erika_track_info_free", from: libraryHandle, as: TrackInfoFreeFn.self)
     freeDanmakuTrackInfo = Self.loadOptional("erika_danmaku_track_info_free", from: libraryHandle, as: DanmakuTrackInfoFreeFn.self)
     attachMetalLayer = try Self.load("erika_presenter_attach_metal_layer", from: libraryHandle, as: AttachMetalLayerFn.self)
+    attachFlutterTexture = try Self.load("erika_presenter_attach_flutter_texture", from: libraryHandle, as: AttachFlutterTextureFn.self)
+    setFlutterTextureBuffer = try Self.load("erika_presenter_set_flutter_texture_buffer", from: libraryHandle, as: SetFlutterTextureBufferFn.self)
     resizeSurface = try Self.load("erika_presenter_resize_surface", from: libraryHandle, as: ResizeSurfaceFn.self)
     detachSurface = try Self.load("erika_presenter_detach_surface", from: libraryHandle, as: CommandFn.self)
     renderTick = try Self.load("erika_presenter_render_tick", from: libraryHandle, as: RenderTickFn.self)
@@ -679,6 +877,16 @@ private final class ErikaNativeLibrary {
   }
 
   func createPresenter(config: ErikaPresenterConfigC) -> UnsafeMutableRawPointer? {
+    if let createWithOutputModeAndAlpha {
+      return createWithOutputModeAndAlpha(
+        config.outputMode,
+        config.edrHeadroom,
+        config.videoAlphaMode
+      )
+    }
+    if config.videoAlphaMode != 0 {
+      return nil
+    }
     if let createWithOutputMode {
       return createWithOutputMode(config.outputMode, config.edrHeadroom)
     }
@@ -702,6 +910,7 @@ private final class ErikaPlayerHost {
   private let renderQueue: DispatchQueue
   private let nativeCallLock = NSRecursiveLock()
   private weak var attachedView: ErikaMetalSurfaceView?
+  private weak var attachedTexture: ErikaFlutterTextureSurface?
   private var attachedViewId: Int64?
   private var displayLinkDriver: ErikaDisplayLinkDriver?
   private var displayLinkDisplayID: CGDirectDisplayID?
@@ -1377,7 +1586,9 @@ private final class ErikaPlayerHost {
     // Moving the surface between windows re-attaches an already running
     // player. Only a genuinely new attachment restarts the host clock; a
     // migration must not rewind the timeline the engine is already on.
-    let isReattach = attachedView != nil
+    let isReattach = attachedView != nil || attachedTexture != nil
+    attachedTexture?.attachedPlayer = nil
+    attachedTexture = nil
     attachedView = view
     attachedViewId = view.platformViewId
     view.attachedPlayerId = id
@@ -1390,12 +1601,39 @@ private final class ErikaPlayerHost {
     startDisplayDriverIfNeeded(resetClock: !isReattach)
   }
 
+  func attach(texture: ErikaFlutterTextureSurface) throws {
+    let isReattach = attachedView != nil || attachedTexture != nil
+    attachedView?.attachedPlayerId = nil
+    attachedView = nil
+    attachedTexture?.attachedPlayer = nil
+    attachedTexture = texture
+    attachedViewId = texture.textureId
+    texture.attachedPlayer = self
+    let metrics = texture.metrics()
+    try withNativeCall {
+      try check(
+        library.attachFlutterTexture(
+          handle,
+          1, // ErikaFlutterTextureKind_MacOsTextureRegistrar
+          texture.textureId,
+          metrics.width,
+          metrics.height,
+          metrics.scale
+        ),
+        operation: "attach_flutter_texture"
+      )
+    }
+    startDisplayDriverIfNeeded(resetClock: !isReattach)
+  }
+
   func detach(viewId: Int64?) {
     guard viewId == nil || attachedViewId == viewId else {
       return
     }
     attachedView?.attachedPlayerId = nil
+    attachedTexture?.attachedPlayer = nil
     attachedView = nil
+    attachedTexture = nil
     attachedViewId = nil
     stopDisplayDriver()
     withNativeCall {
@@ -1415,6 +1653,24 @@ private final class ErikaPlayerHost {
     }
   }
 
+  func resizeFromAttachedTexture() {
+    guard let texture = attachedTexture else {
+      return
+    }
+    let metrics = texture.metrics()
+    do {
+      try withNativeCall {
+        try check(
+          library.resizeSurface(handle, metrics.width, metrics.height, metrics.scale),
+          operation: "resize_flutter_texture"
+        )
+      }
+      startDisplayDriverIfNeeded(resetClock: false)
+    } catch {
+      NSLog("ErikaFlutterPlugin: texture resize failed: \(error)")
+    }
+  }
+
   func renderTick() {
     if !loggedRenderThread {
       loggedRenderThread = true
@@ -1423,8 +1679,28 @@ private final class ErikaPlayerHost {
       )
     }
     let timeSeconds = CACurrentMediaTime() - startTimeSeconds
+    let textureSurface = attachedTexture
+    let preparedFrame = textureSurface?.prepareFrame()
+    if textureSurface != nil && preparedFrame == nil {
+      return
+    }
+    let previousStats = latestPresenterStats
     var stats = ErikaPresenterStatsC()
     let status = withNativeCall {
+      if let preparedFrame {
+        let rawTexture = UInt64(UInt(bitPattern: Unmanaged.passUnretained(
+          preparedFrame.metalTexture as AnyObject
+        ).toOpaque()))
+        let bufferStatus = library.setFlutterTextureBuffer(
+          handle,
+          rawTexture,
+          preparedFrame.width,
+          preparedFrame.height
+        )
+        if bufferStatus != 0 {
+          return bufferStatus
+        }
+      }
       let status = withUnsafeMutablePointer(to: &stats) { pointer in
         library.renderTick(handle, timeSeconds, UnsafeMutableRawPointer(pointer))
       }
@@ -1435,6 +1711,16 @@ private final class ErikaPlayerHost {
     }
     if status != 0 {
       NSLog("ErikaFlutterPlugin: render_tick failed with status \(status)")
+    } else if let textureSurface, let preparedFrame {
+      let renderedThisTick =
+        stats.renderedVideoFrames > previousStats.renderedVideoFrames ||
+        stats.renderedTestFrames > previousStats.renderedTestFrames ||
+        stats.overlayFrames > previousStats.overlayFrames ||
+        stats.danmakuFrames > previousStats.danmakuFrames
+      guard renderedThisTick else {
+        return
+      }
+      textureSurface.publish(preparedFrame)
     }
   }
 
@@ -1882,13 +2168,23 @@ final class ErikaVideoPlatformView: NSView, ErikaMetalSurfaceView {
     wantsLayer = true
     metalLayer.pixelFormat = .bgra8Unorm
     metalLayer.framebufferOnly = true
-    metalLayer.isOpaque = true
-    metalLayer.backgroundColor = NSColor.black.cgColor
+    let params = arguments as? [String: Any]
+    let alphaVideo = (params?["videoAlphaMode"] as? NSNumber)?.intValue != 0
+    metalLayer.isOpaque = !alphaVideo
+    metalLayer.backgroundColor = alphaVideo
+      ? NSColor.clear.cgColor
+      : NSColor.black.cgColor
+    if params?["blendMode"] as? String == "overlay" {
+      metalLayer.compositingFilter = "overlayBlendMode"
+    }
+    if let opacity = (params?["opacity"] as? NSNumber)?.doubleValue {
+      metalLayer.opacity = Float(min(max(opacity, 0.0), 1.0))
+    }
     layer = metalLayer
     layerContentsRedrawPolicy = .duringViewResize
     autoresizingMask = [.width, .height]
 
-    if let params = arguments as? [String: Any],
+    if let params,
        let debugLabel = params["debugLabel"] as? String,
        !debugLabel.isEmpty,
        ProcessInfo.processInfo.environment["ERIKA_DEBUG_LABELS"] == "1" {
@@ -2134,6 +2430,8 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
 
   private var players: [Int64: ErikaPlayerHost] = [:]
   private var views: [Int64: WeakErikaVideoPlatformViewBox] = [:]
+  private let textureRegistry: FlutterTextureRegistry
+  private var textures: [Int64: ErikaFlutterTextureSurface] = [:]
   private weak var flutterHostView: NSView?
   private weak var flutterHostViewController: NSViewController?
   private var requestedFlutterViewIdentifier: Int64?
@@ -2145,9 +2443,14 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
   private var remoteCommandTargets: [(MPRemoteCommand, Any)] = []
   private var systemMediaNavigation: [Int64: (previousEnabled: Bool, nextEnabled: Bool)] = [:]
 
-  init(flutterHostView: NSView?, flutterHostViewController: NSViewController?) {
+  init(
+    flutterHostView: NSView?,
+    flutterHostViewController: NSViewController?,
+    textureRegistry: FlutterTextureRegistry
+  ) {
     self.flutterHostView = flutterHostView
     self.flutterHostViewController = flutterHostViewController
+    self.textureRegistry = textureRegistry
     super.init()
   }
 
@@ -2158,12 +2461,16 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       command.isEnabled = false
       command.removeTarget(target)
     }
+    for textureId in textures.keys {
+      textureRegistry.unregisterTexture(textureId)
+    }
   }
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let instance = ErikaFlutterPlugin(
       flutterHostView: registrar.view,
-      flutterHostViewController: registrar.viewController
+      flutterHostViewController: registrar.viewController,
+      textureRegistry: registrar.textures
     )
     instance.configureSystemPlayback()
     let playerChannel = FlutterMethodChannel(
@@ -2226,6 +2533,49 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         result(nil)
       case "close":
         try playerHost(from: try dictionaryArgs(call.arguments)).close()
+        result(nil)
+      case "createTexture":
+        let args = try dictionaryArgs(call.arguments)
+        let width = UInt32(clamping: max(1, int64Value(args["width"]) ?? 1))
+        let height = UInt32(clamping: max(1, int64Value(args["height"]) ?? 1))
+        let scale = max(0.1, doubleValue(args["scale"]) ?? 1.0)
+        guard width <= 16384, height <= 16384,
+              let texture = ErikaFlutterTextureSurface(
+                registry: textureRegistry,
+                width: width,
+                height: height,
+                scale: scale
+              ) else {
+          throw ErikaPluginError.invalidArguments("Unable to create Flutter texture surface.")
+        }
+        let textureId = texture.register()
+        guard textureId != 0 else {
+          throw ErikaPluginError.invalidArguments("Flutter rejected the texture surface.")
+        }
+        textures[textureId] = texture
+        result(textureId)
+      case "resizeTexture":
+        let args = try dictionaryArgs(call.arguments)
+        let textureId = try requiredInt64(args["textureId"], name: "textureId")
+        guard let texture = textures[textureId] else {
+          throw ErikaPluginError.viewNotFound(textureId)
+        }
+        let width = UInt32(clamping: max(1, int64Value(args["width"]) ?? 1))
+        let height = UInt32(clamping: max(1, int64Value(args["height"]) ?? 1))
+        let scale = max(0.1, doubleValue(args["scale"]) ?? 1.0)
+        guard width <= 16384, height <= 16384,
+              texture.resize(width: width, height: height, scale: scale) else {
+          throw ErikaPluginError.invalidArguments("Unable to resize Flutter texture surface.")
+        }
+        texture.attachedPlayer?.resizeFromAttachedTexture()
+        result(nil)
+      case "releaseTexture":
+        let args = try dictionaryArgs(call.arguments)
+        let textureId = try requiredInt64(args["textureId"], name: "textureId")
+        if let texture = textures.removeValue(forKey: textureId) {
+          texture.attachedPlayer?.detach(viewId: textureId)
+          textureRegistry.unregisterTexture(textureId)
+        }
         result(nil)
       case "seek":
         let args = try dictionaryArgs(call.arguments)
@@ -2498,10 +2848,13 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         let args = try dictionaryArgs(call.arguments)
         let host = try playerHost(from: args)
         let viewId = try requiredInt64(args["viewId"], name: "viewId")
-        guard let view = views[viewId]?.view else {
+        if let texture = textures[viewId] {
+          try host.attach(texture: texture)
+        } else if let view = views[viewId]?.view {
+          try host.attach(view: view)
+        } else {
           throw ErikaPluginError.viewNotFound(viewId)
         }
-        try host.attach(view: view)
         result(nil)
       case "detachView":
         let args = try dictionaryArgs(call.arguments)
@@ -3001,24 +3354,32 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
   }
 
   private func presenterConfigForNewPlayer(arguments: Any?) throws -> ErikaPresenterConfigC {
+    let alphaMode = (arguments as? [String: Any])
+      .flatMap { int32Value($0["videoAlphaMode"]) } ?? 0
     if let args = arguments as? [String: Any],
        let explicitMode = int32Value(args["outputMode"]) {
       let headroom = floatValue(args["edrHeadroom"]) ?? 4.0
+      var config: ErikaPresenterConfigC
       switch explicitMode {
       case 1:
-        return .appleEdr(headroom: headroom)
+        config = .appleEdr(headroom: headroom)
       case 2:
-        return ErikaPresenterConfigC(outputMode: 2, edrHeadroom: max(1.0, headroom))
+        config = ErikaPresenterConfigC(outputMode: 2, edrHeadroom: max(1.0, headroom))
       case 3:
-        return .auto(headroom: headroom)
+        config = .auto(headroom: headroom)
       default:
-        return .sdr
+        config = .sdr
       }
+      config.videoAlphaMode = alphaMode
+      return config
     }
 
     let headroom = resolvedEdrHeadroom()
     NSLog("ErikaFlutterPlugin: using automatic Apple output, headroom \(headroom)x")
-    return .auto(headroom: headroom)
+    let config = ErikaPresenterConfigC.auto(headroom: headroom)
+    var alphaConfig = config
+    alphaConfig.videoAlphaMode = alphaMode
+    return alphaConfig
   }
 
   private func resolvedEdrHeadroom() -> Float {

@@ -77,6 +77,21 @@ enum ErikaOutputMode {
   }
 }
 
+/// How transparency is encoded in a video frame.
+enum ErikaVideoAlphaMode {
+  /// The decoded video is fully opaque.
+  opaque(0),
+
+  /// The left half is colour and the right half is a grayscale alpha mask.
+  /// Erika presents the video at half of its encoded width and reconstructs a
+  /// premultiplied-alpha frame in the GPU presentation shader.
+  packedAlphaRight(1);
+
+  const ErikaVideoAlphaMode(this.nativeValue);
+
+  final int nativeValue;
+}
+
 enum ErikaActiveOutputEncoding {
   sdrSrgb(0),
   appleEdr(1),
@@ -779,6 +794,7 @@ class ErikaPlayer {
     this.outputMode,
     this.edrHeadroom,
     this.upscaler,
+    this.videoAlphaMode = ErikaVideoAlphaMode.opaque,
     this.hdrDebug = false,
     this.allowBackgroundPlayback = false,
   }) {
@@ -844,6 +860,7 @@ class ErikaPlayer {
   final ErikaOutputMode? outputMode;
   final double? edrHeadroom;
   final ErikaUpscalerMode? upscaler;
+  final ErikaVideoAlphaMode videoAlphaMode;
   final bool hdrDebug;
   final bool allowBackgroundPlayback;
 
@@ -1559,6 +1576,8 @@ class ErikaPlayer {
   Future<int> attachWindowOverlay({
     int? flutterViewId,
     bool secondaryWindow = false,
+    String blendMode = 'srcOver',
+    double opacity = 1.0,
   }) async {
     final playerId = await ensureCreated();
     final viewId = await _channel.invokeMethod<int>(
@@ -1567,6 +1586,8 @@ class ErikaPlayer {
         'playerId': playerId,
         if (flutterViewId != null) 'flutterViewId': flutterViewId,
         'secondaryWindow': secondaryWindow,
+        if (blendMode != 'srcOver') 'blendMode': blendMode,
+        if (opacity != 1.0) 'opacity': opacity,
       },
     );
     return viewId ?? windowOverlayViewId;
@@ -1590,6 +1611,8 @@ class ErikaPlayer {
     int? flutterViewId,
     bool secondaryWindow = false,
     String? debugLabel,
+    String blendMode = 'srcOver',
+    double opacity = 1.0,
   }) async {
     final playerId = await ensureCreated();
     await _invoke('setOverlayFrame', <String, Object?>{
@@ -1604,6 +1627,8 @@ class ErikaPlayer {
       if (flutterViewId != null) 'flutterViewId': flutterViewId,
       'secondaryWindow': secondaryWindow,
       if (debugLabel != null) 'debugLabel': debugLabel,
+      if (blendMode != 'srcOver') 'blendMode': blendMode,
+      if (opacity != 1.0) 'opacity': opacity,
     });
   }
 
@@ -1658,6 +1683,8 @@ class ErikaPlayer {
       if (outputMode case final mode?) 'outputMode': mode.nativeValue,
       if (requestedHeadroom case final headroom?) 'edrHeadroom': headroom,
       if (upscaler case final mode?) 'upscaler': mode.nativeValue,
+      if (videoAlphaMode != ErikaVideoAlphaMode.opaque)
+        'videoAlphaMode': videoAlphaMode.nativeValue,
       if (hdrDebug) 'hdrDebug': true,
       if (allowBackgroundPlayback) 'allowBackgroundPlayback': true,
     };
