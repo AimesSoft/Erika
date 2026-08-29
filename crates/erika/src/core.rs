@@ -208,9 +208,8 @@ impl MediaRequest {
 
     /// Overrides the HTTP read-ahead window in bytes. Only meaningful for
     /// HTTP(S) sources; other source kinds ignore it. `0` is treated as `None`.
-    pub fn with_http_read_ahead_bytes(mut self, read_ahead_bytes: u64) -> Self {
-        self.http_read_ahead_bytes = Some(read_ahead_bytes);
-        self
+    pub fn with_http_read_ahead_bytes(self, read_ahead_bytes: u64) -> Self {
+        self.map_http_read_ahead_bytes(Some(read_ahead_bytes))
     }
 
     /// Same as [`Self::with_http_read_ahead_bytes`] but `None` keeps the
