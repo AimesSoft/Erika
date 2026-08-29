@@ -3610,6 +3610,30 @@ pub unsafe extern "C" fn erika_presenter_windows_composition_swapchain_iunknown(
     })
 }
 
+/// Returns an AddRef'd IUnknown for the presenter's renderer-owned, shareable
+/// Windows Flutter output texture. The caller owns the returned COM reference
+/// and must Release it.
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_windows_flutter_texture_iunknown(
+    handle: *mut ErikaPresenterHandle,
+    out_texture: *mut *mut std::ffi::c_void,
+) -> ErikaStatus {
+    if out_texture.is_null() {
+        set_last_error("Windows Flutter texture output pointer is null");
+        return ErikaStatus::NullPointer;
+    }
+    unsafe { *out_texture = std::ptr::null_mut() };
+    with_presenter_mut(handle, |handle| {
+        let Some(texture) = handle.presenter.windows_flutter_texture_iunknown() else {
+            set_last_error("presenter does not own a Windows Flutter texture");
+            return ErikaStatus::PlayerError;
+        };
+        unsafe { *out_texture = texture };
+        ErikaStatus::Ok
+    })
+}
+
 #[cfg(any(
     target_os = "macos",
     any(target_os = "ios", target_os = "tvos"),

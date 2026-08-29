@@ -821,6 +821,49 @@ void main() {
     await player.dispose();
   });
 
+  testWidgets('window overlay reports its transformed FittedBox bounds', (
+    WidgetTester tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    final player = ErikaPlayer();
+    try {
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: Center(
+            child: SizedBox(
+              width: 640,
+              height: 360,
+              child: FittedBox(
+                fit: BoxFit.fill,
+                child: SizedBox(
+                  width: 320,
+                  height: 180,
+                  child: ErikaWindowOverlayVideoView(player: player),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 20));
+
+      final frameCalls = playerCalls
+          .where((MethodCall call) => call.method == 'setOverlayFrame')
+          .toList();
+      expect(frameCalls, isNotEmpty);
+      final arguments = frameCalls.last.arguments as Map<Object?, Object?>;
+      expect(arguments['width'], closeTo(640.0, 0.01));
+      expect(arguments['height'], closeTo(360.0, 0.01));
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      await player.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets('window overlay uses the Android TextureView platform view', (
     WidgetTester tester,
   ) async {

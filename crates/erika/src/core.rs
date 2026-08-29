@@ -864,6 +864,15 @@ pub trait RendererBackend {
     fn composition_swapchain_iunknown(&self) -> Option<*mut std::ffi::c_void> {
         None
     }
+
+    /// AddRef'd `IUnknown` for the active Windows Flutter output texture.
+    ///
+    /// The caller owns the reference and must `Release` it. This lets the
+    /// Windows embedder expose the renderer-owned, shareable D3D11 texture to
+    /// Flutter without falling back to an HWND overlay.
+    fn windows_flutter_texture_iunknown(&self) -> Option<*mut std::ffi::c_void> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -1,12 +1,22 @@
 #include "erika_flutter_plugin.h"
+#include "erika_composition_blend_effect.h"
 
 #include <flutter/event_channel.h>
 #include <flutter/method_channel.h>
 #include <flutter/standard_method_codec.h>
+#include <flutter/texture_registrar.h>
 
 #include <d2d1effects.h>
-#include <dcomp.h>
+#include <d3d11.h>
+#include <DispatcherQueue.h>
+#include <dxgi.h>
+#include <windows.ui.composition.interop.h>
 #include <wrl/client.h>
+
+#include <winrt/Windows.Graphics.Effects.h>
+#include <winrt/Windows.System.h>
+#include <winrt/Windows.UI.Composition.Desktop.h>
+#include <winrt/Windows.UI.Composition.h>
 
 #include <algorithm>
 #include <chrono>
@@ -45,9 +55,17 @@ using flutter::EncodableList;
 using flutter::EncodableMap;
 using flutter::EncodableValue;
 
+void DebugLog(const std::string& message);
+
 class PluginError : public std::runtime_error {
  public:
-  explicit PluginError(const std::string& message) : std::runtime_error(message) {}
+  explicit PluginError(std::string message)
+      : std::runtime_error("Erika plugin error"), message_(std::move(message)) {}
+
+  const char* what() const noexcept override { return message_.c_str(); }
+
+ private:
+  std::string message_;
 };
 
 void CheckHResult(HRESULT result, const char* operation) {
@@ -57,7 +75,9 @@ void CheckHResult(HRESULT result, const char* operation) {
   std::ostringstream message;
   message << operation << " failed (HRESULT=0x" << std::hex << std::uppercase
           << static_cast<uint32_t>(result) << ")";
-  throw PluginError(message.str());
+  const auto detail = message.str();
+  DebugLog(detail);
+  throw PluginError(detail);
 }
 
 std::string LastErrorMessage() {
@@ -791,6 +811,11 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   using AttachWindowsHwndFn =
       ErikaStatus (*)(ErikaPresenterHandle*, uint64_t, uint64_t, uint32_t,
                       uint32_t, double);
+  using AttachFlutterTextureFn = ErikaStatus (*)(
+      ErikaPresenterHandle*, ErikaFlutterTextureKind, int64_t, uint32_t,
+      uint32_t, double);
+  using GetWindowsFlutterTextureFn =
+      ErikaStatus (*)(ErikaPresenterHandle*, void**);
   using AttachWgpuSurfaceWithOutputCapabilitiesFn = ErikaStatus (*)(
       ErikaPresenterHandle*, ErikaWgpuSurfaceKind, uint64_t, uint64_t,
       uint32_t, uint32_t, double, ErikaSurfaceOutputCapabilities);
@@ -905,6 +930,8 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
   TrackInfoFreeFn free_track_info = nullptr;
   DanmakuTrackInfoFreeFn free_danmaku_track_info = nullptr;
   AttachWindowsHwndFn attach_windows_hwnd = nullptr;
+  AttachFlutterTextureFn attach_flutter_texture = nullptr;
+  GetWindowsFlutterTextureFn windows_flutter_texture = nullptr;
   AttachWgpuSurfaceWithOutputCapabilitiesFn
       attach_wgpu_surface_with_output_capabilities = nullptr;
   GetWindowsCompositionSwapchainFn windows_composition_swapchain = nullptr;
@@ -1010,6 +1037,10 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
         "erika_danmaku_track_info_free");
     attach_windows_hwnd =
         LoadRequired<AttachWindowsHwndFn>("erika_presenter_attach_windows_hwnd");
+    attach_flutter_texture = LoadRequired<AttachFlutterTextureFn>(
+        "erika_presenter_attach_flutter_texture");
+    windows_flutter_texture = LoadRequired<GetWindowsFlutterTextureFn>(
+        "erika_presenter_windows_flutter_texture_iunknown");
     attach_wgpu_surface_with_output_capabilities =
         LoadRequired<AttachWgpuSurfaceWithOutputCapabilitiesFn>(
             "erika_presenter_attach_wgpu_surface_with_output_capabilities");
@@ -1113,15 +1144,14 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
     }
     blend_mode = std::move(requested_blend_mode);
     opacity = std::clamp(requested_opacity, 0.0, 1.0);
-    if (composition_mode && composition_device) {
+    if (composition_mode && compositor) {
       ApplyCompositionState();
     }
   }
 
   void SetCompositionMode(bool enabled) {
     if (composition_mode == enabled) {
-      if (enabled) {
-        EnsureComposition();
+      if (enabled && compositor) {
         ApplyCompositionState();
       }
       return;
@@ -1129,8 +1159,9 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
     composition_mode = enabled;
     if (enabled) {
       ShowWindow(hwnd, SW_HIDE);
-      EnsureComposition();
-      ApplyCompositionState();
+      if (compositor) {
+        ApplyCompositionState();
+      }
       return;
     }
     ClearCompositionContent();
@@ -1142,28 +1173,42 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
     }
     Microsoft::WRL::ComPtr<IUnknown> next_content;
     next_content.Attach(static_cast<IUnknown*>(raw_content));
+    Microsoft::WRL::ComPtr<IDXGISwapChain> swapchain;
+    CheckHResult(next_content.As(&swapchain),
+                  "QueryInterface(IDXGISwapChain)");
     EnsureComposition();
     if (composition_content.Get() == next_content.Get()) {
       return;
     }
-    CheckHResult(content_visual->SetContent(next_content.Get()),
-                 "IDCompositionVisual::SetContent");
+
+    winrt::Windows::UI::Composition::ICompositionSurface next_surface{
+        nullptr};
+    auto interop = compositor.as<
+        ABI::Windows::UI::Composition::ICompositorInterop>();
+    CheckHResult(
+        interop->CreateCompositionSurfaceForSwapChain(
+            swapchain.Get(),
+            reinterpret_cast<
+                ABI::Windows::UI::Composition::ICompositionSurface**>(
+                winrt::put_abi(next_surface))),
+        "ICompositorInterop::CreateCompositionSurfaceForSwapChain");
+
+    composition_surface = std::move(next_surface);
+    surface_brush.Surface(composition_surface);
     composition_content = std::move(next_content);
     ApplyCompositionState();
   }
 
   void ClearCompositionContent() {
-    if (!composition_device || !content_visual) {
+    if (!compositor) {
       composition_content.Reset();
       return;
     }
-    CheckHResult(content_visual->SetContent(nullptr),
-                 "IDCompositionVisual::SetContent(null)");
+    composition_surface = nullptr;
+    surface_brush.Surface(composition_surface);
     composition_content.Reset();
-    CheckHResult(composition_target->SetRoot(nullptr),
-                 "IDCompositionTarget::SetRoot(null)");
-    CheckHResult(composition_device->Commit(),
-                 "IDCompositionDevice::Commit(clear)");
+    composition_target.Root(
+        winrt::Windows::UI::Composition::Visual{nullptr});
   }
 
   void SetFrame(double x,
@@ -1194,8 +1239,9 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
 
     if (composition_mode) {
       ShowWindow(hwnd, SW_HIDE);
-      EnsureComposition();
-      ApplyCompositionState();
+      if (compositor) {
+        ApplyCompositionState();
+      }
       return;
     }
 
@@ -1276,90 +1322,150 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
     }
   }
 
-  void EnsureComposition() {
-    if (composition_device) {
+  void EnsureDispatcherQueue() {
+    using winrt::Windows::System::DispatcherQueue;
+    using winrt::Windows::System::DispatcherQueueController;
+
+    // A DispatcherQueue belongs to the UI thread, not to one overlay target.
+    // Keep the controller alive if the Flutter HWND changes and the overlay
+    // object is replaced; shutting down the queue underneath the new
+    // Compositor can otherwise invalidate its target asynchronously.
+    static thread_local DispatcherQueueController queue_controller{nullptr};
+    if (DispatcherQueue::GetForCurrentThread()) {
       return;
     }
-    if (flutter == nullptr) {
-      throw PluginError("No Flutter HWND is available for DirectComposition.");
-    }
 
+    DispatcherQueueOptions options{
+        sizeof(DispatcherQueueOptions),
+        DQTYPE_THREAD_CURRENT,
+        DQTAT_COM_STA,
+    };
+    DispatcherQueueController next_controller{nullptr};
     CheckHResult(
-        DCompositionCreateDevice2(
-            nullptr, __uuidof(IDCompositionDesktopDevice),
-            reinterpret_cast<void**>(desktop_device.ReleaseAndGetAddressOf())),
-        "DCompositionCreateDevice2");
-    CheckHResult(desktop_device.As(&composition_device),
-                 "QueryInterface(IDCompositionDevice3)");
-    CheckHResult(composition_device->CreateVisual(
-                     root_visual.ReleaseAndGetAddressOf()),
-                 "IDCompositionDevice::CreateVisual(root)");
-    CheckHResult(composition_device->CreateVisual(
-                     content_visual.ReleaseAndGetAddressOf()),
-                 "IDCompositionDevice::CreateVisual(content)");
-    CheckHResult(root_visual->AddVisual(content_visual.Get(), FALSE, nullptr),
-                 "IDCompositionVisual::AddVisual");
-    CheckHResult(composition_device->CreateEffectGroup(
-                     opacity_effect.ReleaseAndGetAddressOf()),
-                 "IDCompositionDevice::CreateEffectGroup");
-    CheckHResult(content_visual->SetEffect(opacity_effect.Get()),
-                 "IDCompositionVisual::SetEffect(opacity)");
-    CheckHResult(composition_device->CreateBlendEffect(
-                     overlay_blend_effect.ReleaseAndGetAddressOf()),
-                 "IDCompositionDevice3::CreateBlendEffect");
-    CheckHResult(overlay_blend_effect->SetMode(D2D1_BLEND_MODE_OVERLAY),
-                 "IDCompositionBlendEffect::SetMode");
+        CreateDispatcherQueueController(
+            options,
+            reinterpret_cast<ABI::Windows::System::
+                                 IDispatcherQueueController**>(
+                winrt::put_abi(next_controller))),
+        "CreateDispatcherQueueController");
+    queue_controller = std::move(next_controller);
+  }
 
-    HRESULT target_result = desktop_device->CreateTargetForHwnd(
-        flutter, TRUE, composition_target.ReleaseAndGetAddressOf());
-    if (FAILED(target_result)) {
-      target_result = desktop_device->CreateTargetForHwnd(
-          flutter, FALSE, composition_target.ReleaseAndGetAddressOf());
+  void EnsureComposition() {
+    if (flutter == nullptr) {
+      throw PluginError("No Flutter HWND is available for Windows Composition.");
     }
-    CheckHResult(target_result,
-                 "IDCompositionDesktopDevice::CreateTargetForHwnd");
+    if (compositor) {
+      return;
+    }
+
+    EnsureDispatcherQueue();
+
+    using winrt::Windows::Graphics::Effects::IGraphicsEffect;
+    using winrt::Windows::Graphics::Effects::IGraphicsEffectSource;
+    using winrt::Windows::UI::Composition::CompositionEffectBrush;
+    using winrt::Windows::UI::Composition::CompositionEffectSourceParameter;
+    using winrt::Windows::UI::Composition::CompositionStretch;
+    using winrt::Windows::UI::Composition::CompositionSurfaceBrush;
+    using winrt::Windows::UI::Composition::Compositor;
+    using winrt::Windows::UI::Composition::SpriteVisual;
+    using winrt::Windows::UI::Composition::Desktop::DesktopWindowTarget;
+
+    Compositor next_compositor;
+    DesktopWindowTarget next_target{nullptr};
+    auto desktop_interop = next_compositor.as<
+        ABI::Windows::UI::Composition::Desktop::ICompositorDesktopInterop>();
+    CheckHResult(
+        desktop_interop->CreateDesktopWindowTarget(
+            flutter, TRUE,
+            reinterpret_cast<ABI::Windows::UI::Composition::Desktop::
+                                 IDesktopWindowTarget**>(
+                winrt::put_abi(next_target))),
+        "ICompositorDesktopInterop::CreateDesktopWindowTarget");
+
+    CompositionSurfaceBrush next_surface_brush =
+        next_compositor.CreateSurfaceBrush();
+    next_surface_brush.Stretch(CompositionStretch::Fill);
+
+    CompositionEffectSourceParameter background_parameter(L"Backdrop");
+    CompositionEffectSourceParameter foreground_parameter(L"Video");
+    auto background_source =
+        background_parameter.as<IGraphicsEffectSource>();
+    auto foreground_source =
+        foreground_parameter.as<IGraphicsEffectSource>();
+
+    Microsoft::WRL::ComPtr<ErikaCompositionBlendEffect> blend_descriptor;
+    CheckHResult(
+        Microsoft::WRL::MakeAndInitialize<ErikaCompositionBlendEffect>(
+            blend_descriptor.GetAddressOf(),
+            reinterpret_cast<ABI::Windows::Graphics::Effects::
+                                 IGraphicsEffectSource*>(
+                winrt::get_abi(background_source)),
+            reinterpret_cast<ABI::Windows::Graphics::Effects::
+                                 IGraphicsEffectSource*>(
+                winrt::get_abi(foreground_source)),
+            D2D1_BLEND_MODE_OVERLAY),
+        "Create Windows Composition overlay effect description");
+
+    Microsoft::WRL::ComPtr<
+        ABI::Windows::Graphics::Effects::IGraphicsEffect>
+        abi_blend_effect;
+    CheckHResult(blend_descriptor.As(&abi_blend_effect),
+                 "QueryInterface(IGraphicsEffect)");
+    IGraphicsEffect blend_effect{nullptr};
+    winrt::copy_from_abi(blend_effect, abi_blend_effect.Get());
+
+    CompositionEffectBrush next_overlay_brush =
+        next_compositor.CreateEffectFactory(blend_effect).CreateBrush();
+    next_overlay_brush.SetSourceParameter(
+        L"Backdrop", next_compositor.CreateBackdropBrush());
+    next_overlay_brush.SetSourceParameter(L"Video", next_surface_brush);
+
+    SpriteVisual next_content_visual = next_compositor.CreateSpriteVisual();
+    next_content_visual.Brush(next_surface_brush);
+
+    compositor = std::move(next_compositor);
+    composition_target = std::move(next_target);
+    surface_brush = std::move(next_surface_brush);
+    overlay_brush = std::move(next_overlay_brush);
+    content_visual = std::move(next_content_visual);
   }
 
   void ApplyCompositionState() {
-    if (!composition_device) {
+    if (!compositor) {
       return;
     }
-    IDCompositionEffect* effect = blend_mode == "overlay"
-                                     ? overlay_blend_effect.Get()
-                                     : nullptr;
-    CheckHResult(root_visual->SetEffect(effect),
-                 "IDCompositionVisual::SetEffect");
-    CheckHResult(opacity_effect->SetOpacity(static_cast<float>(opacity)),
-                 "IDCompositionEffectGroup::SetOpacity");
-    CheckHResult(content_visual->SetOffsetX(static_cast<float>(
-                     LogicalToPhysical(flutter, logical_x))),
-                 "IDCompositionVisual::SetOffsetX");
-    CheckHResult(content_visual->SetOffsetY(static_cast<float>(
-                     LogicalToPhysical(flutter, logical_y))),
-                 "IDCompositionVisual::SetOffsetY");
-    CheckHResult(
-        composition_target->SetRoot(
-            composition_mode && visible && composition_content
-                ? root_visual.Get()
-                : nullptr),
-        "IDCompositionTarget::SetRoot");
-    CheckHResult(composition_device->Commit(),
-                 "IDCompositionDevice::Commit");
+    if (blend_mode == "overlay") {
+      content_visual.Brush(overlay_brush);
+    } else {
+      content_visual.Brush(surface_brush);
+    }
+    content_visual.Opacity(static_cast<float>(opacity));
+    content_visual.Offset(
+        {static_cast<float>(LogicalToPhysical(flutter, logical_x)),
+         static_cast<float>(LogicalToPhysical(flutter, logical_y)), 0.0f});
+    content_visual.Size({static_cast<float>(PixelWidth()),
+                         static_cast<float>(PixelHeight())});
+    if (composition_mode && visible && composition_content) {
+      composition_target.Root(content_visual);
+    } else {
+      composition_target.Root(
+          winrt::Windows::UI::Composition::Visual{nullptr});
+    }
   }
 
   void ShutdownComposition() {
-    if (composition_target && composition_device) {
-      composition_target->SetRoot(nullptr);
-      composition_device->Commit();
+    if (composition_target) {
+      composition_target.Root(
+          winrt::Windows::UI::Composition::Visual{nullptr});
     }
     composition_content.Reset();
-    overlay_blend_effect.Reset();
-    opacity_effect.Reset();
-    content_visual.Reset();
-    root_visual.Reset();
-    composition_target.Reset();
-    composition_device.Reset();
-    desktop_device.Reset();
+    composition_surface = nullptr;
+    content_visual = nullptr;
+    overlay_brush = nullptr;
+    surface_brush = nullptr;
+    composition_target = nullptr;
+    compositor = nullptr;
   }
 
   HWND flutter = nullptr;
@@ -1376,14 +1482,138 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
   double opacity = 1.0;
   int64_t active_generation = 0;
   int64_t owner_player_id = 0;
-  Microsoft::WRL::ComPtr<IDCompositionDesktopDevice> desktop_device;
-  Microsoft::WRL::ComPtr<IDCompositionDevice3> composition_device;
-  Microsoft::WRL::ComPtr<IDCompositionTarget> composition_target;
-  Microsoft::WRL::ComPtr<IDCompositionVisual2> root_visual;
-  Microsoft::WRL::ComPtr<IDCompositionVisual2> content_visual;
-  Microsoft::WRL::ComPtr<IDCompositionEffectGroup> opacity_effect;
-  Microsoft::WRL::ComPtr<IDCompositionBlendEffect> overlay_blend_effect;
+  winrt::Windows::UI::Composition::Compositor compositor{nullptr};
+  winrt::Windows::UI::Composition::Desktop::DesktopWindowTarget
+      composition_target{nullptr};
+  winrt::Windows::UI::Composition::SpriteVisual content_visual{nullptr};
+  winrt::Windows::UI::Composition::CompositionSurfaceBrush surface_brush{
+      nullptr};
+  winrt::Windows::UI::Composition::CompositionEffectBrush overlay_brush{
+      nullptr};
+  winrt::Windows::UI::Composition::ICompositionSurface composition_surface{
+      nullptr};
   Microsoft::WRL::ComPtr<IUnknown> composition_content;
+};
+
+struct ErikaFlutterPlugin::ErikaFlutterTexture {
+  struct Snapshot {
+    Snapshot(Microsoft::WRL::ComPtr<ID3D11Texture2D> source,
+             HANDLE shared_handle,
+             uint32_t pixel_width,
+             uint32_t pixel_height)
+        : texture(std::move(source)) {
+      descriptor.struct_size = sizeof(FlutterDesktopGpuSurfaceDescriptor);
+      descriptor.handle = shared_handle;
+      descriptor.width = pixel_width;
+      descriptor.height = pixel_height;
+      descriptor.visible_width = pixel_width;
+      descriptor.visible_height = pixel_height;
+      descriptor.format = kFlutterDesktopPixelFormatBGRA8888;
+      descriptor.release_callback = [](void* context) {
+        static_cast<Snapshot*>(context)->opened.store(
+            true, std::memory_order_release);
+      };
+      descriptor.release_context = this;
+    }
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    FlutterDesktopGpuSurfaceDescriptor descriptor{};
+    std::atomic<bool> opened{false};
+    uint64_t retire_after_frame = 0;
+  };
+
+  ErikaFlutterTexture(flutter::PluginRegistrarWindows* plugin_registrar,
+                      uint32_t pixel_width,
+                      uint32_t pixel_height,
+                      double backing_scale)
+      : registrar(plugin_registrar),
+        width(pixel_width),
+        height(pixel_height),
+        scale(backing_scale),
+        texture_variant(std::make_unique<flutter::TextureVariant>(
+            flutter::GpuSurfaceTexture(
+                kFlutterDesktopGpuSurfaceTypeDxgiSharedHandle,
+                [this](size_t requested_width, size_t requested_height) {
+                  const auto* snapshot =
+                      current.load(std::memory_order_acquire);
+                  return snapshot == nullptr ? nullptr : &snapshot->descriptor;
+                }))) {
+    texture_id =
+        registrar->texture_registrar()->RegisterTexture(texture_variant.get());
+    if (texture_id < 0) {
+      throw PluginError("Flutter failed to register the Erika GPU texture.");
+    }
+  }
+
+  bool UpdateNativeTexture(void* raw_texture) {
+    if (raw_texture == nullptr) {
+      return false;
+    }
+
+    Microsoft::WRL::ComPtr<IUnknown> unknown;
+    unknown.Attach(static_cast<IUnknown*>(raw_texture));
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    CheckHResult(unknown.As(&texture),
+                 "QueryInterface(ID3D11Texture2D)");
+
+    auto* previous = current.load(std::memory_order_acquire);
+    if (previous != nullptr && previous->texture.Get() == texture.Get()) {
+      return false;
+    }
+
+    Microsoft::WRL::ComPtr<IDXGIResource> resource;
+    CheckHResult(texture.As(&resource), "QueryInterface(IDXGIResource)");
+    HANDLE shared_handle = nullptr;
+    CheckHResult(resource->GetSharedHandle(&shared_handle),
+                 "IDXGIResource::GetSharedHandle");
+    if (shared_handle == nullptr) {
+      throw PluginError("Erika returned a D3D11 texture without a shared handle.");
+    }
+
+    if (previous != nullptr) {
+      previous->retire_after_frame = frame_sequence + 4;
+    }
+    auto snapshot =
+        std::make_unique<Snapshot>(std::move(texture), shared_handle, width, height);
+    auto* published = snapshot.get();
+    snapshots.push_back(std::move(snapshot));
+    current.store(published, std::memory_order_release);
+    return true;
+  }
+
+  void Resize(uint32_t pixel_width,
+              uint32_t pixel_height,
+              double backing_scale) {
+    width = pixel_width;
+    height = pixel_height;
+    scale = backing_scale;
+  }
+
+  void MarkFrameAvailable() {
+    registrar->texture_registrar()->MarkTextureFrameAvailable(texture_id);
+    ++frame_sequence;
+    const auto* active = current.load(std::memory_order_acquire);
+    snapshots.erase(
+        std::remove_if(
+            snapshots.begin(), snapshots.end(),
+            [active, this](const std::unique_ptr<Snapshot>& snapshot) {
+              return snapshot.get() != active &&
+                     snapshot->opened.load(std::memory_order_acquire) &&
+                     frame_sequence >= snapshot->retire_after_frame;
+            }),
+        snapshots.end());
+  }
+
+  flutter::PluginRegistrarWindows* registrar = nullptr;
+  uint32_t width = 1;
+  uint32_t height = 1;
+  double scale = 1.0;
+  int64_t texture_id = -1;
+  int64_t owner_player_id = 0;
+  std::unique_ptr<flutter::TextureVariant> texture_variant;
+  std::vector<std::unique_ptr<Snapshot>> snapshots;
+  std::atomic<Snapshot*> current{nullptr};
+  uint64_t frame_sequence = 0;
 };
 
 struct ErikaFlutterPlugin::PlayerHost {
@@ -1413,6 +1643,12 @@ struct ErikaFlutterPlugin::PlayerHost {
       library->destroy(handle);
       handle = nullptr;
     }
+  }
+
+  void CheckNative(ErikaStatus status, const char* operation) const {
+    Check(status, operation,
+          status == ErikaStatus_Ok ? std::string{}
+                                   : library->TakeLastError());
   }
 
   void Open(const std::string& uri, const EncodableMap& args) {
@@ -1559,23 +1795,23 @@ struct ErikaFlutterPlugin::PlayerHost {
   }
 
   void Play() {
-    Check(library->play(handle), "play", library->TakeLastError());
+    CheckNative(library->play(handle), "play");
     smtc_state.playing = true;
     smtc_state.stopped = false;
   }
   void Pause() {
-    Check(library->pause(handle), "pause", library->TakeLastError());
+    CheckNative(library->pause(handle), "pause");
     smtc_state.playing = false;
     smtc_state.stopped = false;
   }
   void Stop() {
-    Check(library->stop(handle), "stop", library->TakeLastError());
+    CheckNative(library->stop(handle), "stop");
     smtc_state.playing = false;
     smtc_state.stopped = true;
     smtc_state.position_micros = 0;
   }
   void Close() {
-    Check(library->close(handle), "close", library->TakeLastError());
+    CheckNative(library->close(handle), "close");
     smtc_state.playing = false;
     smtc_state.stopped = true;
     smtc_state.duration_micros = 0;
@@ -1583,8 +1819,7 @@ struct ErikaFlutterPlugin::PlayerHost {
   }
 
   void Seek(uint64_t position_micros) {
-    Check(library->seek(handle, position_micros), "seek",
-          library->TakeLastError());
+    CheckNative(library->seek(handle, position_micros), "seek");
     smtc_state.position_micros = position_micros;
   }
 
@@ -1592,8 +1827,7 @@ struct ErikaFlutterPlugin::PlayerHost {
     if (library->set_playback_rate == nullptr) {
       throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_playback_rate");
     }
-    Check(library->set_playback_rate(handle, rate), "set_playback_rate",
-          library->TakeLastError());
+    CheckNative(library->set_playback_rate(handle, rate), "set_playback_rate");
     smtc_state.playback_rate = rate;
   }
 
@@ -1602,16 +1836,14 @@ struct ErikaFlutterPlugin::PlayerHost {
       throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_volume");
     }
     const double clamped = std::isfinite(volume) ? std::clamp(volume, 0.0, 1.0) : 1.0;
-    Check(library->set_volume(handle, clamped), "set_volume",
-          library->TakeLastError());
+    CheckNative(library->set_volume(handle, clamped), "set_volume");
   }
 
   void SetUpscaler(int32_t mode) {
     if (library->set_upscaler == nullptr) {
       throw PluginError("Missing Erika C ABI symbol: erika_presenter_set_upscaler");
     }
-    Check(library->set_upscaler(handle, mode), "set_upscaler",
-          library->TakeLastError());
+    CheckNative(library->set_upscaler(handle, mode), "set_upscaler");
   }
 
   void SetSubtitleScale(double scale) {
@@ -1991,33 +2223,59 @@ struct ErikaFlutterPlugin::PlayerHost {
   }
 
   void AttachOverlay(ErikaOverlayWindow& overlay) {
+    if (surface_attached) {
+      Detach(std::nullopt);
+    }
     const uint32_t width = overlay.PixelWidth();
     const uint32_t height = overlay.PixelHeight();
     const double scale = overlay.scale;
     const uint64_t hinstance = reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr));
     composition_surface = RequiresComposition(overlay);
-    overlay.SetCompositionMode(composition_surface);
-    if (composition_surface) {
-      overlay.ClearCompositionContent();
-      ErikaSurfaceOutputCapabilities capabilities{};
-      capabilities.direct_composition = true;
-      capabilities.fallback_reason = ErikaOutputFallbackReason_None;
-      Check(library->attach_wgpu_surface_with_output_capabilities(
-                handle, ErikaWgpuSurfaceKind_WindowsHwnd,
-                reinterpret_cast<uint64_t>(overlay.flutter), hinstance, width,
-                height, scale, capabilities),
-            "attach_wgpu_surface_with_output_capabilities",
-            library->TakeLastError());
-      attached_hwnd = overlay.flutter;
-      attached_overlay = &overlay;
-      RefreshCompositionContent();
-    } else {
-      Check(library->attach_windows_hwnd(
-                handle, reinterpret_cast<uint64_t>(overlay.hwnd), hinstance,
-                width, height, scale),
-            "attach_windows_hwnd", library->TakeLastError());
-      attached_hwnd = overlay.hwnd;
+    try {
+      overlay.SetCompositionMode(composition_surface);
+      if (composition_surface) {
+        overlay.ClearCompositionContent();
+        ErikaSurfaceOutputCapabilities capabilities{};
+        capabilities.direct_composition = true;
+        capabilities.fallback_reason = ErikaOutputFallbackReason_None;
+        CheckNative(library->attach_wgpu_surface_with_output_capabilities(
+                        handle, ErikaWgpuSurfaceKind_WindowsHwnd,
+                        reinterpret_cast<uint64_t>(overlay.flutter), hinstance,
+                        width, height, scale, capabilities),
+                    "attach_wgpu_surface_with_output_capabilities");
+        attached_hwnd = overlay.flutter;
+        attached_overlay = &overlay;
+        RefreshCompositionContent();
+      } else {
+        CheckNative(library->attach_windows_hwnd(
+                        handle, reinterpret_cast<uint64_t>(overlay.hwnd),
+                        hinstance, width, height, scale),
+                    "attach_windows_hwnd");
+        attached_hwnd = overlay.hwnd;
+        attached_overlay = nullptr;
+      }
+    } catch (...) {
+      if (composition_surface) {
+        try {
+          overlay.ClearCompositionContent();
+        } catch (const std::exception& error) {
+          DebugLog(std::string("DirectComposition attach rollback failed: ") +
+                   error.what());
+        }
+      }
+      library->detach_surface(handle);
+      attached_hwnd = nullptr;
       attached_overlay = nullptr;
+      attached_view_id = 0;
+      surface_attached = false;
+      composition_surface = false;
+      attached_surface_width = 0;
+      attached_surface_height = 0;
+      attached_surface_scale = 0.0;
+      if (overlay.owner_player_id == id) {
+        overlay.owner_player_id = 0;
+      }
+      throw;
     }
     attached_view_id = kWindowOverlayViewId;
     surface_attached = true;
@@ -2025,6 +2283,64 @@ struct ErikaFlutterPlugin::PlayerHost {
     attached_surface_height = height;
     attached_surface_scale = scale;
     start_time_seconds = NowSeconds();
+  }
+
+  void AttachFlutterTexture(ErikaFlutterTexture& texture) {
+    if (texture.owner_player_id != 0 && texture.owner_player_id != id) {
+      throw PluginError("Erika Flutter texture " +
+                        std::to_string(texture.texture_id) +
+                        " is already attached to another player.");
+    }
+    if (surface_attached) {
+      Detach(std::nullopt);
+    }
+    const auto status = library->attach_flutter_texture(
+        handle, ErikaFlutterTextureKind_WindowsTextureRegistrar,
+        texture.texture_id, texture.width, texture.height, texture.scale);
+    Check(status, "attach_flutter_texture",
+          status == ErikaStatus_Ok ? std::string{} : library->TakeLastError());
+    texture.owner_player_id = id;
+    attached_texture = &texture;
+    attached_view_id = texture.texture_id;
+    surface_attached = true;
+    composition_surface = false;
+    attached_surface_width = texture.width;
+    attached_surface_height = texture.height;
+    attached_surface_scale = texture.scale;
+    start_time_seconds = NowSeconds();
+  }
+
+  void ResizeFlutterTexture(ErikaFlutterTexture& texture,
+                            uint32_t width,
+                            uint32_t height,
+                            double scale) {
+    texture.Resize(width, height, scale);
+    if (!surface_attached || attached_texture != &texture) {
+      return;
+    }
+    if (width == attached_surface_width && height == attached_surface_height &&
+        std::abs(scale - attached_surface_scale) < 0.0001) {
+      return;
+    }
+    const auto status = library->resize_surface(handle, width, height, scale);
+    Check(status, "resize_surface",
+          status == ErikaStatus_Ok ? std::string{} : library->TakeLastError());
+    attached_surface_width = width;
+    attached_surface_height = height;
+    attached_surface_scale = scale;
+  }
+
+  void RefreshFlutterTexture() {
+    if (attached_texture == nullptr) {
+      return;
+    }
+    void* raw_texture = nullptr;
+    const auto status =
+        library->windows_flutter_texture(handle, &raw_texture);
+    Check(status, "windows_flutter_texture_iunknown",
+          status == ErikaStatus_Ok ? std::string{} : library->TakeLastError());
+    attached_texture->UpdateNativeTexture(raw_texture);
+    attached_texture->MarkFrameAvailable();
   }
 
   void ResizeOverlay(ErikaOverlayWindow& overlay) {
@@ -2040,8 +2356,8 @@ struct ErikaFlutterPlugin::PlayerHost {
         std::abs(scale - attached_surface_scale) < 0.0001) {
       return;
     }
-    Check(library->resize_surface(handle, width, height, scale),
-          "resize_surface", library->TakeLastError());
+    CheckNative(library->resize_surface(handle, width, height, scale),
+                "resize_surface");
     attached_surface_width = width;
     attached_surface_height = height;
     attached_surface_scale = scale;
@@ -2065,9 +2381,8 @@ struct ErikaFlutterPlugin::PlayerHost {
           "swap chain. Update the bundled Erika runtime.");
     }
     void* swapchain = nullptr;
-    Check(library->windows_composition_swapchain(handle, &swapchain),
-          "windows_composition_swapchain_iunknown",
-          library->TakeLastError());
+    CheckNative(library->windows_composition_swapchain(handle, &swapchain),
+                "windows_composition_swapchain_iunknown");
     attached_overlay->SetCompositionContent(swapchain);
   }
 
@@ -2086,6 +2401,10 @@ struct ErikaFlutterPlugin::PlayerHost {
     }
     attached_hwnd = nullptr;
     attached_overlay = nullptr;
+    if (attached_texture != nullptr && attached_texture->owner_player_id == id) {
+      attached_texture->owner_player_id = 0;
+    }
+    attached_texture = nullptr;
     composition_surface = false;
     attached_view_id = 0;
     surface_attached = false;
@@ -2106,7 +2425,14 @@ struct ErikaFlutterPlugin::PlayerHost {
                  library->TakeLastError());
       } else {
         latest_presenter_stats = stats;
-        if (composition_surface) {
+        if (attached_texture != nullptr) {
+          try {
+            RefreshFlutterTexture();
+          } catch (const std::exception& error) {
+            DebugLog(std::string("Flutter texture publication failed: ") +
+                     error.what());
+          }
+        } else if (composition_surface) {
           try {
             RefreshCompositionContent();
           } catch (const std::exception& error) {
@@ -2285,6 +2611,7 @@ struct ErikaFlutterPlugin::PlayerHost {
   ErikaPresenterHandle* handle = nullptr;
   HWND attached_hwnd = nullptr;
   ErikaOverlayWindow* attached_overlay = nullptr;
+  ErikaFlutterTexture* attached_texture = nullptr;
   int64_t attached_view_id = 0;
   bool surface_attached = false;
   bool composition_surface = false;
@@ -2357,6 +2684,9 @@ ErikaFlutterPlugin::~ErikaFlutterPlugin() {
   }
   if (event_channel_) {
     event_channel_->SetStreamHandler(nullptr);
+  }
+  while (!textures_.empty()) {
+    ReleaseTexture(textures_.begin()->first);
   }
   players_.clear();
   overlay_window_.reset();
@@ -2758,6 +3088,57 @@ ErikaFlutterPlugin::PlayerHost& ErikaFlutterPlugin::PlayerFromArgs(
   return *it->second;
 }
 
+ErikaFlutterPlugin::ErikaFlutterTexture& ErikaFlutterPlugin::TextureFromArgs(
+    const EncodableMap& args) {
+  const int64_t texture_id = RequiredInt64(args, "textureId");
+  const auto it = textures_.find(texture_id);
+  if (it == textures_.end()) {
+    throw PluginError("Erika Flutter texture " + std::to_string(texture_id) +
+                      " was not found.");
+  }
+  return *it->second;
+}
+
+int64_t ErikaFlutterPlugin::CreateTexture(const EncodableMap& args) {
+  const int64_t requested_width = RequiredInt64(args, "width");
+  const int64_t requested_height = RequiredInt64(args, "height");
+  const double scale = DoubleValue(FindArg(args, "scale")).value_or(1.0);
+  if (requested_width <= 0 || requested_width > UINT32_MAX ||
+      requested_height <= 0 || requested_height > UINT32_MAX ||
+      !std::isfinite(scale) || scale <= 0.0) {
+    throw PluginError("Flutter texture metrics must be finite and positive.");
+  }
+  auto texture = std::make_shared<ErikaFlutterTexture>(
+      registrar_, static_cast<uint32_t>(requested_width),
+      static_cast<uint32_t>(requested_height), scale);
+  const int64_t texture_id = texture->texture_id;
+  textures_.emplace(texture_id, std::move(texture));
+  DebugLog("registered Flutter GPU texture id=" +
+           std::to_string(texture_id));
+  return texture_id;
+}
+
+void ErikaFlutterPlugin::ReleaseTexture(int64_t texture_id) {
+  const auto it = textures_.find(texture_id);
+  if (it == textures_.end()) {
+    return;
+  }
+  auto texture = it->second;
+  if (texture->owner_player_id != 0) {
+    const auto player = players_.find(texture->owner_player_id);
+    if (player != players_.end()) {
+      player->second->Detach(texture_id);
+    }
+  }
+  textures_.erase(it);
+  registrar_->texture_registrar()->UnregisterTexture(
+      texture_id, [texture = std::move(texture)]() mutable {
+        texture.reset();
+      });
+  DebugLog("unregistered Flutter GPU texture id=" +
+           std::to_string(texture_id));
+}
+
 void ErikaFlutterPlugin::ResizeAttachedOverlay() {
   if (!overlay_window_) {
     return;
@@ -2928,6 +3309,31 @@ void ErikaFlutterPlugin::HandleMethodCall(
     if (method == "dispose") {
       RemovePlayer(RequiredInt64(args, "playerId"));
       OnFrameTimer();
+      result->Success();
+    } else if (method == "createTexture") {
+      result->Success(EncodableValue(CreateTexture(args)));
+    } else if (method == "resizeTexture") {
+      auto& texture = TextureFromArgs(args);
+      const int64_t width = RequiredInt64(args, "width");
+      const int64_t height = RequiredInt64(args, "height");
+      const double scale = DoubleValue(FindArg(args, "scale")).value_or(1.0);
+      if (width <= 0 || width > UINT32_MAX || height <= 0 ||
+          height > UINT32_MAX || !std::isfinite(scale) || scale <= 0.0) {
+        throw PluginError("Flutter texture metrics must be finite and positive.");
+      }
+      const auto player = players_.find(texture.owner_player_id);
+      if (player != players_.end()) {
+        player->second->ResizeFlutterTexture(
+            texture, static_cast<uint32_t>(width),
+            static_cast<uint32_t>(height), scale);
+      } else {
+        texture.Resize(static_cast<uint32_t>(width),
+                       static_cast<uint32_t>(height), scale);
+      }
+      OnFrameTimer();
+      result->Success();
+    } else if (method == "releaseTexture") {
+      ReleaseTexture(RequiredInt64(args, "textureId"));
       result->Success();
     } else if (method == "open") {
       auto& player = PlayerFromArgs(args);
@@ -3172,8 +3578,15 @@ void ErikaFlutterPlugin::HandleMethodCall(
       auto& host = PlayerFromArgs(args);
       const int64_t view_id = RequiredInt64(args, "viewId");
       if (view_id != kWindowOverlayViewId) {
-        throw PluginError("Erika video view " + std::to_string(view_id) +
-                          " was not found.");
+        const auto texture = textures_.find(view_id);
+        if (texture == textures_.end()) {
+          throw PluginError("Erika video view " + std::to_string(view_id) +
+                            " was not found.");
+        }
+        host.AttachFlutterTexture(*texture->second);
+        OnFrameTimer();
+        result->Success();
+        return;
       }
       auto& overlay = EnsureOverlayWindow();
       overlay.ConfigureComposition(

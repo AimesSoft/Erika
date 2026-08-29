@@ -773,6 +773,12 @@ impl PresenterRuntime {
         self.renderer.composition_swapchain_iunknown()
     }
 
+    /// AddRef'd `IUnknown` for the renderer-owned Windows Flutter texture.
+    /// The caller owns the returned reference.
+    pub fn windows_flutter_texture_iunknown(&self) -> Option<*mut std::ffi::c_void> {
+        self.renderer.windows_flutter_texture_iunknown()
+    }
+
     pub fn resize_surface(&mut self, width: u32, height: u32, scale: f64) -> Result<()> {
         let metrics = SurfaceMetrics::new(width, height, scale);
         let previous_metrics = self.current_surface_metrics;

@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::mem;
 use std::ptr;
@@ -10,17 +11,18 @@ use ::windows::Win32::Graphics::Direct3D::{
     D3D_SRV_DIMENSION_TEXTURE2DARRAY, ID3DBlob,
 };
 use ::windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
-    D3D11_BLEND_DESC, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_ONE, D3D11_BLEND_OP_ADD,
-    D3D11_BLEND_SRC_ALPHA, D3D11_BOX, D3D11_BUFFER_DESC, D3D11_COLOR_WRITE_ENABLE_ALL,
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_VERTEX_DATA,
-    D3D11_RENDER_TARGET_BLEND_DESC, D3D11_SAMPLER_DESC, D3D11_SDK_VERSION,
-    D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA,
-    D3D11_TEX2D_ARRAY_SRV, D3D11_TEX2D_SRV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-    D3D11_VIEWPORT, D3D11CreateDevice, ID3D11BlendState, ID3D11Buffer, ID3D11Device,
-    ID3D11DeviceContext, ID3D11InputLayout, ID3D11Multithread, ID3D11PixelShader,
-    ID3D11RenderTargetView, ID3D11Resource, ID3D11SamplerState, ID3D11ShaderResourceView,
-    ID3D11Texture2D, ID3D11VertexShader,
+    D3D11_ASYNC_GETDATA_DONOTFLUSH, D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_RENDER_TARGET,
+    D3D11_BIND_SHADER_RESOURCE, D3D11_BLEND_DESC, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_ONE,
+    D3D11_BLEND_OP_ADD, D3D11_BLEND_SRC_ALPHA, D3D11_BOX, D3D11_BUFFER_DESC,
+    D3D11_COLOR_WRITE_ENABLE_ALL, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_INPUT_ELEMENT_DESC,
+    D3D11_INPUT_PER_VERTEX_DATA, D3D11_QUERY_DESC, D3D11_QUERY_EVENT,
+    D3D11_RENDER_TARGET_BLEND_DESC, D3D11_RESOURCE_MISC_SHARED, D3D11_SAMPLER_DESC,
+    D3D11_SDK_VERSION, D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0,
+    D3D11_SUBRESOURCE_DATA, D3D11_TEX2D_ARRAY_SRV, D3D11_TEX2D_SRV, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_DEFAULT, D3D11_VIEWPORT, D3D11CreateDevice, ID3D11BlendState, ID3D11Buffer,
+    ID3D11Device, ID3D11DeviceContext, ID3D11InputLayout, ID3D11Multithread, ID3D11PixelShader,
+    ID3D11Query, ID3D11RenderTargetView, ID3D11Resource, ID3D11SamplerState,
+    ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader,
 };
 use ::windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_IGNORE, DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
@@ -37,12 +39,12 @@ use ::windows::Win32::Graphics::Dxgi::{
     DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
     IDXGIAdapter, IDXGIDevice, IDXGIFactory2, IDXGISwapChain1, IDXGISwapChain3, IDXGISwapChain4,
 };
-use ::windows::core::{IUnknown, Interface, PCSTR};
+use ::windows::core::{BOOL, IUnknown, Interface, PCSTR};
 
 use crate::core::{
-    ColorPrimaries, LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame,
-    RenderFrameContext, RendererBackend, RendererRuntimeStats, Result, SurfaceMetrics,
-    TransferFunction, WgpuSurfaceKind,
+    ColorPrimaries, FlutterTextureKind, LumaUpscalerBackendStatus, PlatformSurface, PlayerError,
+    PlayerVideoFrame, RenderFrameContext, RendererBackend, RendererRuntimeStats, Result,
+    SurfaceMetrics, TransferFunction, WgpuSurfaceKind,
 };
 use crate::danmaku::{
     DanmakuAtlasUpdate, DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan,
@@ -600,9 +602,11 @@ struct D3d11DeviceState {
 struct AttachedSurface {
     hwnd: HWND,
     composition: bool,
+    flutter_texture: bool,
     metrics: SurfaceMetrics,
     output_mode: D3d11OutputMode,
     swapchain: Option<IDXGISwapChain1>,
+    output_texture: Option<ID3D11Texture2D>,
     render_target: Option<ID3D11RenderTargetView>,
     linear_render_target: Option<ID3D11RenderTargetView>,
     linear_shader_resource: Option<ID3D11ShaderResourceView>,
@@ -610,8 +614,11 @@ struct AttachedSurface {
 
 impl AttachedSurface {
     fn targets_ready(&self) -> bool {
-        self.swapchain.is_some()
-            && self.render_target.is_some()
+        (if self.flutter_texture {
+            self.output_texture.is_some()
+        } else {
+            self.swapchain.is_some()
+        }) && self.render_target.is_some()
             && (!matches!(self.output_mode, D3d11OutputMode::Hdr10)
                 || (self.linear_render_target.is_some() && self.linear_shader_resource.is_some()))
     }
@@ -628,6 +635,12 @@ struct ImportedVideoFrame {
     _array_index: u32,
     frame_token: u64,
     constants: VideoUniforms,
+}
+
+struct RetiredVideoFrame {
+    _video: ImportedVideoFrame,
+    context: ID3D11DeviceContext,
+    completion: Option<ID3D11Query>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -747,6 +760,7 @@ pub struct D3d11Renderer {
     state: Option<D3d11DeviceState>,
     surface: Option<AttachedSurface>,
     current_video: Option<ImportedVideoFrame>,
+    retired_video: VecDeque<RetiredVideoFrame>,
     danmaku_atlas_cache: Option<D3d11DanmakuAtlasCache>,
     requested_output_mode: crate::renderer::output::OutputMode,
     video_alpha_mode: VideoAlphaMode,
@@ -767,6 +781,7 @@ impl D3d11Renderer {
             state: None,
             surface: None,
             current_video: None,
+            retired_video: VecDeque::new(),
             danmaku_atlas_cache: None,
             requested_output_mode: config.output_mode,
             video_alpha_mode: config.video_alpha_mode,
@@ -780,6 +795,59 @@ impl D3d11Renderer {
 
     pub fn stats(&self) -> D3d11RendererStats {
         self.stats
+    }
+
+    fn collect_completed_video_frames(&mut self) {
+        let mut first_error = None;
+        self.retired_video.retain(|retired| {
+            let Some(completion) = retired.completion.as_ref() else {
+                return true;
+            };
+            match d3d11_event_query_complete(&retired.context, completion) {
+                Ok(true) => false,
+                Ok(false) => true,
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                    true
+                }
+            }
+        });
+        if let Some(error) = first_error {
+            trace(&format!("video frame retirement query failed: {error}"));
+        }
+    }
+
+    fn retire_current_video(&mut self) {
+        self.collect_completed_video_frames();
+        let Some(video) = self.current_video.take() else {
+            return;
+        };
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        let context = state.context.clone();
+        let completion = match create_d3d11_event_query(&state.device) {
+            Ok(query) => {
+                unsafe {
+                    context.End(&query);
+                    context.Flush();
+                }
+                Some(query)
+            }
+            Err(error) => {
+                // Retaining the AVFrame is safer than returning its texture
+                // array slice to the decoder without a GPU completion fence.
+                trace(&format!(
+                    "video frame retirement fence unavailable: {error}"
+                ));
+                None
+            }
+        };
+        self.retired_video.push_back(RetiredVideoFrame {
+            _video: video,
+            context,
+            completion,
+        });
     }
 
     fn ensure_default_device(&mut self) -> Result<()> {
@@ -802,7 +870,7 @@ impl D3d11Renderer {
         }
         let context = unsafe { frame_device.GetImmediateContext() }
             .map_err(|error| d3d_error("ID3D11Device::GetImmediateContext", error))?;
-        self.current_video = None;
+        self.retire_current_video();
         self.danmaku_atlas_cache = None;
         self.set_device(frame_device, context)
     }
@@ -827,6 +895,7 @@ impl D3d11Renderer {
             if let Some(surface) = self.surface.as_mut() {
                 release_backbuffer_views(&old.context, surface);
                 surface.swapchain = None;
+                surface.output_texture = None;
             }
         }
         self.state = Some(state);
@@ -849,6 +918,20 @@ impl D3d11Renderer {
         let format = output_mode.swapchain_format();
         let hwnd = surface.hwnd;
         let composition = surface.composition;
+
+        if surface.flutter_texture {
+            surface.swapchain = None;
+            let (texture, render_target) =
+                create_flutter_texture_target(&state.device, width, height)?;
+            surface.output_texture = Some(texture);
+            surface.render_target = Some(render_target);
+            surface.output_mode = D3d11OutputMode::Sdr;
+            self.stats.surface_width = surface.metrics.physical_extent.width;
+            self.stats.surface_height = surface.metrics.physical_extent.height;
+            self.stats.hdr10_output_active = false;
+            return Ok(());
+        }
+        surface.output_texture = None;
 
         // Size and SDR↔HDR format changes keep the same IDXGISwapChain1 so a
         // DirectComposition visual's SetContent stays valid. Device changes
@@ -913,12 +996,17 @@ impl D3d11Renderer {
             self.stats.hdr10_output_active = false;
             return Ok(());
         };
+        let output_mode = if surface.flutter_texture {
+            D3d11OutputMode::Sdr
+        } else {
+            output_mode
+        };
         if surface.output_mode == output_mode && surface.targets_ready() {
             self.stats.hdr10_output_active = matches!(output_mode, D3d11OutputMode::Hdr10);
             return Ok(());
         }
         surface.output_mode = output_mode;
-        self.current_video = None;
+        self.retire_current_video();
         self.recreate_surface_targets()
     }
 
@@ -1045,7 +1133,7 @@ impl D3d11Renderer {
         self.stats.hardware_video_frames += 1;
         self.stats.zero_copy_video_frames += 1;
         self.stats.direct_zero_copy_video_frames += 1;
-        self.current_video = Some(ImportedVideoFrame {
+        let imported = ImportedVideoFrame {
             _frame: retained_frame,
             _texture: texture,
             luma,
@@ -1062,7 +1150,9 @@ impl D3d11Renderer {
             frame_token,
             constants: constants_for_frame(source_color, texture_format, target_color)
                 .packed_alpha_right(self.video_alpha_mode.has_alpha()),
-        });
+        };
+        self.retire_current_video();
+        self.current_video = Some(imported);
         Ok(())
     }
 
@@ -1422,6 +1512,7 @@ impl D3d11Renderer {
     }
 
     fn render_video(&mut self, context: RenderFrameContext<'_>) -> Result<bool> {
+        self.collect_completed_video_frames();
         if self.current_video.is_none() {
             return Ok(false);
         }
@@ -1498,10 +1589,6 @@ impl D3d11Renderer {
             None
         };
         let scene_rtv = linear_target.map_or(rtv, |(linear_rtv, _)| linear_rtv);
-        let swapchain = surface
-            .swapchain
-            .as_ref()
-            .ok_or_else(|| PlayerError::Renderer("d3d11: no swapchain attached".to_string()))?;
         unsafe {
             state.context.ClearRenderTargetView(
                 scene_rtv,
@@ -1545,7 +1632,14 @@ impl D3d11Renderer {
                 video.constants,
             )?;
         }
-        present_swapchain(swapchain, "IDXGISwapChain1::Present1")?;
+        if let Some(swapchain) = surface.swapchain.as_ref() {
+            present_swapchain(swapchain, "IDXGISwapChain1::Present1")?;
+        } else if surface.flutter_texture {
+            // A legacy DXGI shared handle has no keyed mutex. Flush the
+            // producer context before Flutter opens/samples it on ANGLE's
+            // device so the completed frame is externally visible.
+            unsafe { state.context.Flush() };
+        }
         self.stats.rendered_frames += 1;
         if !danmaku_draws.is_empty() {
             self.stats.danmaku_passes += 1;
@@ -1557,7 +1651,7 @@ impl D3d11Renderer {
     fn ensure_surface_ready(&mut self) -> Result<()> {
         if self.surface.is_none() {
             return Err(PlayerError::Renderer(
-                "d3d11: no HWND surface attached".to_string(),
+                "d3d11: no output surface attached".to_string(),
             ));
         }
         if self
@@ -1596,10 +1690,11 @@ impl D3d11Renderer {
             trace("render_clear: clear");
             state.context.ClearRenderTargetView(rtv, &color);
             trace("render_clear: present");
-            present_swapchain(
-                surface.swapchain.as_ref().expect("swapchain ensured"),
-                "IDXGISwapChain1::Present1(clear)",
-            )?;
+            if let Some(swapchain) = surface.swapchain.as_ref() {
+                present_swapchain(swapchain, "IDXGISwapChain1::Present1(clear)")?;
+            } else if surface.flutter_texture {
+                state.context.Flush();
+            }
         }
         trace("render_clear: done");
         self.stats.rendered_frames += 1;
@@ -1609,29 +1704,52 @@ impl D3d11Renderer {
 
 impl RendererBackend for D3d11Renderer {
     fn attach_surface(&mut self, surface: PlatformSurface) -> Result<()> {
-        let PlatformSurface::Wgpu(handle) = surface else {
-            return Err(PlayerError::Renderer(
-                "d3d11: only Windows HWND surfaces are supported".to_string(),
-            ));
+        let (hwnd, composition, flutter_texture, metrics) = match surface {
+            PlatformSurface::Wgpu(handle) => {
+                if handle.kind != WgpuSurfaceKind::WindowsHwnd {
+                    return Err(PlayerError::Renderer(format!(
+                        "d3d11: surface kind {:?} is not supported",
+                        handle.kind
+                    )));
+                }
+                let composition = handle.output_capabilities.direct_composition;
+                if !composition && handle.raw_window == 0 {
+                    return Err(PlayerError::Renderer(
+                        "d3d11: Windows HWND surface handle is null".to_string(),
+                    ));
+                }
+                (
+                    HWND(handle.raw_window as *mut c_void),
+                    composition,
+                    false,
+                    handle.metrics,
+                )
+            }
+            PlatformSurface::FlutterTexture(handle)
+                if handle.kind == FlutterTextureKind::WindowsTextureRegistrar =>
+            {
+                (HWND::default(), false, true, handle.metrics)
+            }
+            PlatformSurface::FlutterTexture(handle) => {
+                return Err(PlayerError::Renderer(format!(
+                    "d3d11: Flutter texture kind {:?} is not supported",
+                    handle.kind
+                )));
+            }
+            PlatformSurface::Metal(_) => {
+                return Err(PlayerError::Renderer(
+                    "d3d11: Metal surfaces are not supported".to_string(),
+                ));
+            }
         };
-        if handle.kind != WgpuSurfaceKind::WindowsHwnd {
-            return Err(PlayerError::Renderer(format!(
-                "d3d11: surface kind {:?} is not supported",
-                handle.kind
-            )));
-        }
-        let composition = handle.output_capabilities.direct_composition;
-        if !composition && handle.raw_window == 0 {
-            return Err(PlayerError::Renderer(
-                "d3d11: Windows HWND surface handle is null".to_string(),
-            ));
-        }
         self.surface = Some(AttachedSurface {
-            hwnd: HWND(handle.raw_window as *mut c_void),
+            hwnd,
             composition,
-            metrics: handle.metrics,
+            flutter_texture,
+            metrics,
             output_mode: D3d11OutputMode::Sdr,
             swapchain: None,
+            output_texture: None,
             render_target: None,
             linear_render_target: None,
             linear_shader_resource: None,
@@ -1643,8 +1761,8 @@ impl RendererBackend for D3d11Renderer {
     }
 
     fn detach_surface(&mut self) -> Result<()> {
+        self.retire_current_video();
         self.surface = None;
-        self.current_video = None;
         self.danmaku_atlas_cache = None;
         self.stats.attached = false;
         self.stats.surface_width = 0;
@@ -1655,7 +1773,7 @@ impl RendererBackend for D3d11Renderer {
     fn resize_surface(&mut self, metrics: SurfaceMetrics) -> Result<()> {
         let Some(surface) = self.surface.as_mut() else {
             return Err(PlayerError::Renderer(
-                "d3d11: no HWND surface attached".to_string(),
+                "d3d11: no output surface attached".to_string(),
             ));
         };
         if surface.metrics.physical_extent == metrics.physical_extent {
@@ -1690,7 +1808,7 @@ impl RendererBackend for D3d11Renderer {
     }
 
     fn clear_current_frame(&mut self) -> Result<()> {
-        self.current_video = None;
+        self.retire_current_video();
         self.danmaku_atlas_cache = None;
         if self.surface.is_some() {
             self.render_clear(0.0)?;
@@ -1786,6 +1904,15 @@ impl RendererBackend for D3d11Renderer {
 
     fn composition_swapchain_iunknown(&self) -> Option<*mut std::ffi::c_void> {
         let unknown: IUnknown = self.composition_swapchain()?.cast().ok()?;
+        Some(unknown.into_raw())
+    }
+
+    fn windows_flutter_texture_iunknown(&self) -> Option<*mut std::ffi::c_void> {
+        let surface = self.surface.as_ref()?;
+        if !surface.flutter_texture {
+            return None;
+        }
+        let unknown: IUnknown = surface.output_texture.as_ref()?.cast().ok()?;
         Some(unknown.into_raw())
     }
 }
@@ -2307,8 +2434,84 @@ fn release_backbuffer_views(context: &ID3D11DeviceContext, surface: &mut Attache
         context.PSSetShaderResources(0, Some(&[None, None]));
     }
     surface.render_target = None;
+    surface.output_texture = None;
     surface.linear_render_target = None;
     surface.linear_shader_resource = None;
+}
+
+fn create_d3d11_event_query(device: &ID3D11Device) -> Result<ID3D11Query> {
+    let desc = D3D11_QUERY_DESC {
+        Query: D3D11_QUERY_EVENT,
+        MiscFlags: 0,
+    };
+    let mut query = None;
+    unsafe {
+        device
+            .CreateQuery(&desc, Some(&mut query))
+            .map_err(|error| d3d_error("ID3D11Device::CreateQuery(video retirement)", error))?;
+    }
+    query.ok_or_else(|| PlayerError::Renderer("d3d11: video retirement query was null".to_string()))
+}
+
+fn d3d11_event_query_complete(context: &ID3D11DeviceContext, query: &ID3D11Query) -> Result<bool> {
+    let mut complete = BOOL::default();
+    unsafe {
+        context
+            .GetData(
+                query,
+                Some((&mut complete as *mut BOOL).cast::<c_void>()),
+                mem::size_of::<BOOL>() as u32,
+                D3D11_ASYNC_GETDATA_DONOTFLUSH.0 as u32,
+            )
+            .map_err(|error| d3d_error("ID3D11DeviceContext::GetData(video retirement)", error))?;
+    }
+    Ok(complete.as_bool())
+}
+
+fn create_flutter_texture_target(
+    device: &ID3D11Device,
+    width: u32,
+    height: u32,
+) -> Result<(ID3D11Texture2D, ID3D11RenderTargetView)> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width.max(1),
+        Height: height.max(1),
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: SDR_SWAPCHAIN_FORMAT,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32 | D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: D3D11_RESOURCE_MISC_SHARED.0 as u32,
+    };
+    let mut texture = None;
+    unsafe {
+        device
+            .CreateTexture2D(&desc, None, Some(&mut texture))
+            .map_err(|error| d3d_error("ID3D11Device::CreateTexture2D(Flutter)", error))?;
+    }
+    let texture = texture.ok_or_else(|| {
+        PlayerError::Renderer("d3d11: Flutter output texture was null".to_string())
+    })?;
+    let resource: ID3D11Resource = texture
+        .cast()
+        .map_err(|error| d3d_error("ID3D11Texture2D::cast<ID3D11Resource>(Flutter)", error))?;
+    let mut render_target = None;
+    unsafe {
+        device
+            .CreateRenderTargetView(&resource, None, Some(&mut render_target))
+            .map_err(|error| d3d_error("ID3D11Device::CreateRenderTargetView(Flutter)", error))?;
+    }
+    Ok((
+        texture,
+        render_target.ok_or_else(|| {
+            PlayerError::Renderer("d3d11: Flutter render target view was null".to_string())
+        })?,
+    ))
 }
 
 fn create_render_target(
@@ -2981,6 +3184,7 @@ mod tests {
         let renderer = D3d11Renderer::with_config(MetalRendererConfig {
             output_mode: crate::renderer::metal::MetalOutputMode::Sdr,
             luma_upscaler: LumaUpscalerMode::ArtCnnC4F16,
+            video_alpha_mode: VideoAlphaMode::Opaque,
         })
         .unwrap();
 
