@@ -368,6 +368,17 @@ impl HttpRangeSource {
     }
 
     pub fn with_http_headers(uri: impl Into<String>, http_headers: Vec<(String, String)>) -> Self {
+        Self::with_http_headers_and_read_ahead(uri, http_headers, None)
+    }
+
+    /// `read_ahead`: explicit read-ahead window in bytes; `None` (or `Some(0)`)
+    /// falls back to the `ERIKA_HTTP_READAHEAD_BYTES` env override, then the
+    /// 2 MiB engine default.
+    pub fn with_http_headers_and_read_ahead(
+        uri: impl Into<String>,
+        http_headers: Vec<(String, String)>,
+        read_ahead: Option<u64>,
+    ) -> Self {
         let agent = http_agent();
         Self {
             uri: uri.into(),
@@ -376,7 +387,9 @@ impl HttpRangeSource {
             content_length: None,
             cache_start: 0,
             cache_bytes: Vec::new(),
-            read_ahead_bytes: http_read_ahead_bytes(),
+            read_ahead_bytes: read_ahead
+                .filter(|bytes| *bytes > 0)
+                .unwrap_or_else(http_read_ahead_bytes),
             prefetch: None,
         }
     }
@@ -1148,14 +1161,27 @@ pub fn source_from_uri_with_hint_and_headers(
     source_hint: MediaSourceHint,
     http_headers: Vec<(String, String)>,
 ) -> Result<Box<dyn MediaSource>> {
+    source_from_uri_with_options(uri, source_hint, http_headers, None)
+}
+
+/// `http_read_ahead_bytes` only applies to HTTP(S) sources and overrides the
+/// per-request read-ahead window; `None` keeps the default resolution
+/// (env override, then the 2 MiB engine default).
+pub fn source_from_uri_with_options(
+    uri: &str,
+    source_hint: MediaSourceHint,
+    http_headers: Vec<(String, String)>,
+    http_read_ahead_bytes: Option<u64>,
+) -> Result<Box<dyn MediaSource>> {
     match source_hint {
-        MediaSourceHint::Auto => source_from_auto_uri(uri, http_headers),
+        MediaSourceHint::Auto => source_from_auto_uri(uri, http_headers, http_read_ahead_bytes),
         MediaSourceHint::LocalFile => source_from_local_uri(uri),
         MediaSourceHint::Http => {
             if uri.starts_with("http://") || uri.starts_with("https://") {
-                Ok(Box::new(HttpRangeSource::with_http_headers(
+                Ok(Box::new(HttpRangeSource::with_http_headers_and_read_ahead(
                     uri,
                     http_headers,
+                    http_read_ahead_bytes,
                 )))
             } else {
                 Err(SourceError::Unsupported(uri.to_string()))
@@ -1167,6 +1193,7 @@ pub fn source_from_uri_with_hint_and_headers(
 fn source_from_auto_uri(
     uri: &str,
     http_headers: Vec<(String, String)>,
+    http_read_ahead_bytes: Option<u64>,
 ) -> Result<Box<dyn MediaSource>> {
     if uri.starts_with("fd://") {
         return source_from_local_uri(uri);
@@ -1175,9 +1202,10 @@ fn source_from_auto_uri(
         return Ok(Box::new(LocalFileSource::open(path)?));
     }
     if uri.starts_with("http://") || uri.starts_with("https://") {
-        return Ok(Box::new(HttpRangeSource::with_http_headers(
+        return Ok(Box::new(HttpRangeSource::with_http_headers_and_read_ahead(
             uri,
             http_headers,
+            http_read_ahead_bytes,
         )));
     }
     let path = Path::new(uri);
@@ -1503,6 +1531,17 @@ mod tests {
                 ("X-Playback-Session".to_string(), "session-123".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn http_source_constructor_preserves_explicit_read_ahead() {
+        let source = HttpRangeSource::with_http_headers_and_read_ahead(
+            "https://example.invalid/video.mp4",
+            Vec::new(),
+            Some(16 * 1024 * 1024),
+        );
+
+        assert_eq!(source.read_ahead_bytes, 16 * 1024 * 1024);
     }
 
     #[test]

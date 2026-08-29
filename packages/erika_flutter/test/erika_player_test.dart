@@ -295,6 +295,43 @@ void main() {
     await player.dispose();
   });
 
+  test('open forwards a positive HTTP read-ahead window', () async {
+    final player = ErikaPlayer();
+
+    await player.open(
+      'https://example.test/read-ahead.mkv',
+      httpReadAheadBytes: 2 * 1024 * 1024,
+    );
+
+    final call = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'open',
+    );
+    expect(call.arguments, <String, Object?>{
+      'playerId': 7,
+      'uri': 'https://example.test/read-ahead.mkv',
+      'httpReadAheadBytes': 2 * 1024 * 1024,
+      'metadata': null,
+    });
+
+    await player.dispose();
+  });
+
+  test('open rejects a negative HTTP read-ahead before channel calls',
+      () async {
+    final player = ErikaPlayer();
+
+    await expectLater(
+      player.open(
+        'https://example.test/read-ahead.mkv',
+        httpReadAheadBytes: -1,
+      ),
+      throwsArgumentError,
+    );
+
+    expect(playerCalls, isEmpty);
+    await player.dispose();
+  });
+
   test('media metadata is forwarded for system now playing info', () async {
     final player = ErikaPlayer();
     final artwork = Uint8List.fromList(<int>[1, 2, 3, 4]);

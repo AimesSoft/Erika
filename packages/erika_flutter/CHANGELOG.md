@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added per-open HTTP read-ahead tuning through `httpReadAheadBytes` on
+  Android, Apple platforms, Windows, and OpenHarmony.
 - Added a packed-alpha video mode that stores color and alpha side by side,
   reconstructs premultiplied transparency in the GPU renderer, and propagates
   the mode through the C ABI and Flutter platform integrations.

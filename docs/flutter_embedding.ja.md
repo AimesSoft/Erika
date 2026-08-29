@@ -185,6 +185,7 @@ await player.open(
     'Authorization': 'Bearer token',
     'Referer': 'https://example.com/',
   },
+  httpReadAheadBytes: 16 * 1024 * 1024,
 );
 await player.play();
 

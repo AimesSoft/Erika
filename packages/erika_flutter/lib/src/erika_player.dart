@@ -882,17 +882,32 @@ class ErikaPlayer {
     return _requireActiveAfter(player);
   }
 
+  /// Opens [uri] for playback.
+  ///
+  /// [httpReadAheadBytes] overrides the HTTP(S) read-ahead window for this
+  /// open. Null or zero uses `ERIKA_HTTP_READAHEAD_BYTES` when set, otherwise
+  /// the native 2 MiB default. Local files ignore the value.
   Future<void> open(
     String uri, {
     Map<String, String>? httpHeaders,
+    int? httpReadAheadBytes,
     ErikaMediaMetadata? metadata,
   }) async {
+    if (httpReadAheadBytes != null && httpReadAheadBytes < 0) {
+      throw ArgumentError.value(
+        httpReadAheadBytes,
+        'httpReadAheadBytes',
+        'must be non-negative',
+      );
+    }
     final playerId = await ensureCreated();
     await _invoke('open', <String, Object?>{
       'playerId': playerId,
       'uri': uri,
       if (httpHeaders != null && httpHeaders.isNotEmpty)
         'httpHeaders': httpHeaders,
+      if (httpReadAheadBytes != null && httpReadAheadBytes > 0)
+        'httpReadAheadBytes': httpReadAheadBytes,
       'metadata': metadata?.toMap(),
     });
   }

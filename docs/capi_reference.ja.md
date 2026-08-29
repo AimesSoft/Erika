@@ -138,6 +138,8 @@ handle の破棄は再生を止め全リソースを解放します。
 ErikaStatus erika_open(ErikaHandle *handle, const char *uri);   // ファイルパスまたは URL
 ErikaStatus erika_open_with_headers(ErikaHandle *handle, const char *uri,
                                     const ErikaHttpHeader *headers, uintptr_t header_count);
+ErikaStatus erika_open_with_options(ErikaHandle *handle, const char *uri,
+                                    const ErikaOpenOptions *options);
 ErikaStatus erika_play(ErikaHandle *handle);
 ErikaStatus erika_pause(ErikaHandle *handle);
 ErikaStatus erika_stop(ErikaHandle *handle);
@@ -149,8 +151,28 @@ ErikaStatus erika_seek(ErikaHandle *handle, uint64_t position_micros);
 header を設定します。`headers` は呼び出し中だけ読み取られ、戻り値の後に解放できます。
 `header_count` が 0 より大きい場合、`headers` は NULL にできません。header は HEAD、Range
 GET、prefetch request に使用されます。
-認証情報と Cookie は Erika の log に書き込まれません。`seek` は
-マイクロ秒。`open` と `play` は
+認証情報と Cookie は Erika の log に書き込まれません。`seek` はマイクロ秒。
+
+`erika_open_with_options` は `erika_open_with_headers` の上位互換で、header 配列と
+リクエスト単位のチューニングを `ErikaOpenOptions` 構造体にまとめて渡します。
+`options` に NULL を指定するとすべて既定値になります。`http_read_ahead_bytes` は
+このリクエストの HTTP(S) 先読みウィンドウ（バイト）を上書きします。`0` は
+プロセス全体の環境変数 `ERIKA_HTTP_READAHEAD_BYTES` があればその値を使い、
+なければ 2 MiB の既定値を使います。明示的な非ゼロ値は環境変数より優先されます。
+`reserved` の非ゼロ値は拒否され、
+将来のフィールド追加が古いホストの動作を黙って変えないようになっています。
+先読みウィンドウは HTTP(S) 再生にのみ影響し、ローカルファイルには無効です。
+
+```c
+typedef struct ErikaOpenOptions {
+  const ErikaHttpHeader *headers;
+  uintptr_t header_count;
+  uint64_t http_read_ahead_bytes;   /* 0 = 環境変数、なければ 2 MiB */
+  uint64_t reserved[3];             /* ゼロでなければなりません */
+} ErikaOpenOptions;
+```
+
+`open` と `play` は
 非同期にキューへ投入されます。ホスト UI スレッドをブロックせず、`StateChanged`、
 `DurationChanged`、`Error` イベントで最終結果を確認してください。
 
@@ -237,6 +259,8 @@ ErikaStatus erika_presenter_open(ErikaPresenterHandle *, const char *uri);
 ErikaStatus erika_presenter_open_with_headers(ErikaPresenterHandle *, const char *uri,
                                               const ErikaHttpHeader *headers,
                                               uintptr_t header_count);
+ErikaStatus erika_presenter_open_with_options(ErikaPresenterHandle *, const char *uri,
+                                              const ErikaOpenOptions *options);
 ErikaStatus erika_presenter_play(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_pause(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_stop(ErikaPresenterHandle *);
@@ -251,7 +275,10 @@ ErikaStatus erika_presenter_set_subtitle_style(ErikaPresenterHandle *, ErikaSubt
 ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float headroom, bool known);
 ```
 
-`set_playback_rate(1.0)` が通常速度。`set_upscaler` はランタイムで神経輝度アップ
+`set_playback_rate(1.0)` が通常速度。`erika_presenter_open_with_options` は
+`erika_open_with_options` の push モデル版で、同じ `ErikaOpenOptions`
+（header と `http_read_ahead_bytes`）を受け付けます
+（[`erika_open_with_options`](#erikahandle--pull-モデル) 参照）。`set_upscaler` はランタイムで神経輝度アップ
 スケーラを切り替えます（[`erika_presenter_get_upscaler_status`](#診断とスクリーンショット)
 参照）。Metal、feature level 11.0+ の D3D11、compute-capable な wgpu renderer は ArtCNN を実行し、
 それ以外の backend は native luma sampling を維持して `Inactive` fallback を明示します。
