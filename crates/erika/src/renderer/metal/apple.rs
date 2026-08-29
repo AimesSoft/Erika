@@ -53,8 +53,9 @@ use crate::renderer::metal::upscaler::LumaUpscaler;
 use crate::renderer::metal::{
     ClearColor, DanmakuRenderFrame, ImportedVideoFormat, ImportedVideoFrameInfo,
     ImportedVideoPlaneInfo, MetalDrawablePixelFormat, MetalOutputMode, MetalRendererConfig,
-    MetalRendererStats, OverlayRenderFrame, PreparedOverlayFrameInfo, VideoFrameTextureSource,
-    VideoRenderFrame, fourcc_string, metal_drawable_pixel_format, metal_target_color,
+    MetalRendererStats, OverlayRenderFrame, PreparedOverlayFrameInfo, VideoAlphaMode,
+    VideoFrameTextureSource, VideoRenderFrame, fourcc_string, metal_drawable_pixel_format,
+    metal_target_color,
 };
 use crate::renderer::pipeline::{ColorRange, LumaUpscalerMode, ToneMapOperator};
 use crate::renderer::pipeline::{SourceColorState, TargetColorState};
@@ -118,8 +119,11 @@ pub struct MetalRendererImpl {
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     requested_output_mode: MetalOutputMode,
     output_mode: MetalOutputMode,
+    video_alpha_mode: VideoAlphaMode,
     drawable_pixel_format: MetalDrawablePixelFormat,
     layer: Option<Retained<CAMetalLayer>>,
+    flutter_texture_attached: bool,
+    flutter_texture: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     texture_cache: Option<CFRetained<CVMetalTextureCache>>,
     video_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     overlay_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
@@ -164,8 +168,11 @@ impl MetalRendererImpl {
             queue,
             requested_output_mode: config.output_mode,
             output_mode: initial_output_mode,
+            video_alpha_mode: config.video_alpha_mode,
             drawable_pixel_format: metal_drawable_pixel_format(initial_output_mode),
             layer: None,
+            flutter_texture_attached: false,
+            flutter_texture: None,
             texture_cache: None,
             video_pipeline: None,
             overlay_pipeline: None,
@@ -204,25 +211,82 @@ impl MetalRendererImpl {
         layer.setDevice(Some(&*self.device));
         self.configure_layer_output(&layer);
         self.layer = Some(layer);
+        self.flutter_texture_attached = false;
+        self.flutter_texture = None;
         self.resize_surface(metrics);
+        Ok(())
+    }
+
+    pub fn attach_flutter_texture(&mut self, metrics: SurfaceMetrics) {
+        self.layer = None;
+        self.flutter_texture_attached = true;
+        self.flutter_texture = None;
+        self.output_mode = MetalOutputMode::Sdr;
+        self.drawable_pixel_format = MetalDrawablePixelFormat::Bgra8Unorm;
+        self.video_pipeline = None;
+        self.overlay_pipeline = None;
+        self.danmaku_batch_pipeline = None;
+        self.resize_surface(metrics);
+    }
+
+    pub unsafe fn set_flutter_texture_buffer(
+        &mut self,
+        raw_texture: *mut c_void,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        if !self.flutter_texture_attached {
+            return Err(PlayerError::Renderer(
+                "no Flutter texture surface attached".to_string(),
+            ));
+        }
+        if raw_texture.is_null() || width == 0 || height == 0 {
+            return Err(PlayerError::Renderer(
+                "Flutter Metal texture and dimensions must be non-zero".to_string(),
+            ));
+        }
+        let texture: Retained<ProtocolObject<dyn MTLTexture>> = unsafe {
+            Retained::retain(raw_texture.cast())
+        }
+        .ok_or_else(|| PlayerError::Renderer("failed to retain Flutter MTLTexture".to_string()))?;
+        if texture.pixelFormat() != MTLPixelFormat::BGRA8Unorm {
+            return Err(PlayerError::Renderer(format!(
+                "Flutter MTLTexture must use BGRA8Unorm, got {:?}",
+                texture.pixelFormat()
+            )));
+        }
+        if texture.width() != width as usize || texture.height() != height as usize {
+            return Err(PlayerError::Renderer(format!(
+                "Flutter MTLTexture size {}x{} does not match {width}x{height}",
+                texture.width(),
+                texture.height()
+            )));
+        }
+        self.stats.drawable_width = width;
+        self.stats.drawable_height = height;
+        self.flutter_texture = Some(texture);
         Ok(())
     }
 
     pub fn detach_surface(&mut self) {
         self.layer = None;
+        self.flutter_texture_attached = false;
+        self.flutter_texture = None;
     }
 
     pub fn resize_surface(&mut self, metrics: SurfaceMetrics) {
-        let Some(layer) = &self.layer else {
-            return;
-        };
         let (width, height) = metrics.physical_size();
         let drawable_width = width as f64;
         let drawable_height = height as f64;
-        let size = CGSize::new(drawable_width, drawable_height);
-        layer.setDrawableSize(size);
         self.stats.drawable_width = drawable_width.round() as u32;
         self.stats.drawable_height = drawable_height.round() as u32;
+        if let Some(layer) = &self.layer {
+            let size = CGSize::new(drawable_width, drawable_height);
+            layer.setDrawableSize(size);
+        }
+        if self.flutter_texture_attached {
+            self.flutter_texture = None;
+        }
     }
 
     pub fn stats(&self) -> MetalRendererStats {
@@ -303,7 +367,14 @@ impl MetalRendererImpl {
         if source_is_hdr {
             self.stats.hdr_source_frames = self.stats.hdr_source_frames.saturating_add(1);
         }
-        let selected = self.requested_output_mode.resolve_for_source(source_is_hdr);
+        // Flutter's macOS texture registrar currently consumes BGRA8
+        // CVPixelBuffers, so this compositor path is explicitly SDR. HDR input
+        // is tone-mapped rather than changing the external texture format.
+        let selected = if self.flutter_texture_attached {
+            MetalOutputMode::Sdr
+        } else {
+            self.requested_output_mode.resolve_for_source(source_is_hdr)
+        };
         if selected != self.output_mode {
             self.set_output_mode(selected);
         }
@@ -417,33 +488,44 @@ impl MetalRendererImpl {
     }
 
     pub fn has_surface(&self) -> bool {
-        self.layer.is_some()
+        self.layer.is_some() || self.flutter_texture_attached
     }
 
     pub fn render_clear(&mut self, color: ClearColor) -> Result<()> {
-        let Some(layer) = &self.layer else {
-            return Err(PlayerError::Renderer(
-                "no CAMetalLayer attached".to_string(),
-            ));
-        };
         let started = Instant::now();
+        let color = if self.video_alpha_mode.has_alpha() {
+            ClearColor {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+                alpha: 0.0,
+            }
+        } else {
+            color
+        };
 
         unsafe {
-            let Some(drawable): Option<Retained<ProtocolObject<dyn CAMetalDrawable>>> =
-                layer.nextDrawable()
-            else {
-                // A drained drawable pool is temporary backpressure, not a
-                // renderer fault: every acquisition path reports it the same
-                // way so callers can skip the frame instead of failing.
+            let (drawable, texture) = if let Some(layer) = &self.layer {
+                let Some(drawable): Option<Retained<ProtocolObject<dyn CAMetalDrawable>>> =
+                    layer.nextDrawable()
+                else {
+                    return Err(PlayerError::RendererBackpressure(
+                        "CAMetalLayer nextDrawable returned nil".to_string(),
+                    ));
+                };
+                let texture = drawable.texture();
+                (Some(drawable), texture)
+            } else if let Some(texture) = self.flutter_texture.as_ref().cloned() {
+                (None, texture)
+            } else {
                 return Err(PlayerError::RendererBackpressure(
-                    "CAMetalLayer nextDrawable returned nil".to_string(),
+                    "Flutter texture buffer is not ready".to_string(),
                 ));
             };
 
             let descriptor = MTLRenderPassDescriptor::new();
             let attachments = descriptor.colorAttachments();
             let attachment = attachments.objectAtIndexedSubscript(0);
-            let texture = drawable.texture();
             attachment.setTexture(Some(&*texture));
             attachment.setLoadAction(MTLLoadAction::Clear);
             attachment.setStoreAction(MTLStoreAction::Store);
@@ -466,10 +548,21 @@ impl MetalRendererImpl {
                 ));
             };
             encoder.endEncoding();
-            let drawable_ref: &ProtocolObject<dyn MTLDrawable> =
-                ProtocolObject::from_ref(&*drawable);
-            command_buffer.presentDrawable(drawable_ref);
+            if let Some(drawable) = &drawable {
+                let drawable_ref: &ProtocolObject<dyn MTLDrawable> =
+                    ProtocolObject::from_ref(&**drawable);
+                command_buffer.presentDrawable(drawable_ref);
+            }
             command_buffer.commit();
+            if drawable.is_none() {
+                command_buffer.waitUntilCompleted();
+                if command_buffer.status() != MTLCommandBufferStatus::Completed {
+                    return Err(PlayerError::Renderer(format!(
+                        "Flutter texture clear failed with status {:?}",
+                        command_buffer.status()
+                    )));
+                }
+            }
             self.last_submitted_command_buffer = Some(command_buffer);
         }
 
@@ -510,28 +603,28 @@ impl MetalRendererImpl {
     }
 
     pub fn render_overlay_frame(&mut self, overlay: OverlayRenderFrame<'_>) -> Result<()> {
-        let Some(layer) = &self.layer else {
-            return Err(PlayerError::Renderer(
-                "no CAMetalLayer attached".to_string(),
-            ));
-        };
-
         unsafe {
-            let Some(drawable): Option<Retained<ProtocolObject<dyn CAMetalDrawable>>> =
-                layer.nextDrawable()
-            else {
-                // A drained drawable pool is temporary backpressure, not a
-                // renderer fault: every acquisition path reports it the same
-                // way so callers can skip the frame instead of failing.
+            let (drawable, texture) = if let Some(layer) = &self.layer {
+                let Some(drawable): Option<Retained<ProtocolObject<dyn CAMetalDrawable>>> =
+                    layer.nextDrawable()
+                else {
+                    return Err(PlayerError::RendererBackpressure(
+                        "CAMetalLayer nextDrawable returned nil".to_string(),
+                    ));
+                };
+                let texture = drawable.texture();
+                (Some(drawable), texture)
+            } else if let Some(texture) = self.flutter_texture.as_ref().cloned() {
+                (None, texture)
+            } else {
                 return Err(PlayerError::RendererBackpressure(
-                    "CAMetalLayer nextDrawable returned nil".to_string(),
+                    "Flutter texture buffer is not ready".to_string(),
                 ));
             };
 
             let descriptor = MTLRenderPassDescriptor::new();
             let attachments = descriptor.colorAttachments();
             let attachment = attachments.objectAtIndexedSubscript(0);
-            let texture = drawable.texture();
             attachment.setTexture(Some(&*texture));
             attachment.setLoadAction(MTLLoadAction::Clear);
             attachment.setStoreAction(MTLStoreAction::Store);
@@ -569,10 +662,21 @@ impl MetalRendererImpl {
                 ),
             )?;
             encoder.endEncoding();
-            let drawable_ref: &ProtocolObject<dyn MTLDrawable> =
-                ProtocolObject::from_ref(&*drawable);
-            command_buffer.presentDrawable(drawable_ref);
+            if let Some(drawable) = &drawable {
+                let drawable_ref: &ProtocolObject<dyn MTLDrawable> =
+                    ProtocolObject::from_ref(&**drawable);
+                command_buffer.presentDrawable(drawable_ref);
+            }
             command_buffer.commit();
+            if drawable.is_none() {
+                command_buffer.waitUntilCompleted();
+                if command_buffer.status() != MTLCommandBufferStatus::Completed {
+                    return Err(PlayerError::Renderer(format!(
+                        "Flutter texture overlay failed with status {:?}",
+                        command_buffer.status()
+                    )));
+                }
+            }
             self.last_submitted_command_buffer = Some(command_buffer);
         }
 
@@ -598,12 +702,6 @@ impl MetalRendererImpl {
         self.stats.last_danmaku_encode_duration = Duration::ZERO;
         self.stats.last_danmaku_vertex_bytes = 0;
         self.stats.last_danmaku_vertex_count = 0;
-        let Some(layer) = self.layer.as_ref().cloned() else {
-            return Err(PlayerError::Renderer(
-                "no CAMetalLayer attached".to_string(),
-            ));
-        };
-
         let Some(textures) = frame.frame.inner.as_ref() else {
             return Err(PlayerError::Renderer(
                 "imported video frame has no Metal textures".to_string(),
@@ -622,7 +720,9 @@ impl MetalRendererImpl {
 
         let source_color = frame.pipeline.source;
         self.select_output_mode_for_source(source_color);
-        self.configure_layer_source_color(&layer, source_color);
+        if let Some(layer) = self.layer.as_ref().cloned() {
+            self.configure_layer_source_color(&layer, source_color);
+        }
         frame.pipeline = frame
             .pipeline
             .with_target(metal_target_color(self.output_mode, source_color));
@@ -655,8 +755,11 @@ impl MetalRendererImpl {
         self.collect_gpu_timing();
         self.stats.last_upscaler_encode_duration = Duration::ZERO;
 
+        let logical_width = self
+            .video_alpha_mode
+            .logical_width(frame.frame.info.width as u32);
         let layout = VideoPresentationLayout::aspect_fit(
-            frame.frame.info.width as u32,
+            logical_width,
             frame.frame.info.height as u32,
             self.stats.drawable_width,
             self.stats.drawable_height,
@@ -706,18 +809,27 @@ impl MetalRendererImpl {
             }
             let luma: &ProtocolObject<dyn MTLTexture> = upscaled_luma.as_deref().unwrap_or(luma);
 
-            let Some(drawable): Option<Retained<ProtocolObject<dyn CAMetalDrawable>>> =
-                layer.nextDrawable()
-            else {
+            let (drawable, texture) = if let Some(layer) = &self.layer {
+                let Some(drawable): Option<Retained<ProtocolObject<dyn CAMetalDrawable>>> =
+                    layer.nextDrawable()
+                else {
+                    return Err(PlayerError::RendererBackpressure(
+                        "CAMetalLayer nextDrawable returned nil".to_string(),
+                    ));
+                };
+                let texture = drawable.texture();
+                (Some(drawable), texture)
+            } else if let Some(texture) = self.flutter_texture.as_ref().cloned() {
+                (None, texture)
+            } else {
                 return Err(PlayerError::RendererBackpressure(
-                    "CAMetalLayer nextDrawable returned nil".to_string(),
+                    "Flutter texture buffer is not ready".to_string(),
                 ));
             };
 
             let descriptor = MTLRenderPassDescriptor::new();
             let attachments = descriptor.colorAttachments();
             let attachment = attachments.objectAtIndexedSubscript(0);
-            let texture = drawable.texture();
             attachment.setTexture(Some(&*texture));
             attachment.setLoadAction(MTLLoadAction::Clear);
             attachment.setStoreAction(MTLStoreAction::Store);
@@ -725,7 +837,11 @@ impl MetalRendererImpl {
                 red: 0.0,
                 green: 0.0,
                 blue: 0.0,
-                alpha: 1.0,
+                alpha: if self.video_alpha_mode.has_alpha() {
+                    0.0
+                } else {
+                    1.0
+                },
             });
 
             let Some(encoder) = command_buffer.renderCommandEncoderWithDescriptor(&descriptor)
@@ -741,7 +857,7 @@ impl MetalRendererImpl {
                 target_transfer: transfer_code(frame.pipeline.target.transfer),
                 tone_map: tone_map_code(frame.pipeline.tone_map.operator),
                 edr_output: self.output_mode.is_edr() as u32,
-                _reserved0: 0,
+                _reserved0: self.video_alpha_mode as u32,
                 _reserved1: 0,
                 rect: layout.target_rect,
                 viewport: layout.video_viewport(),
@@ -795,10 +911,21 @@ impl MetalRendererImpl {
             }
 
             encoder.endEncoding();
-            let drawable_ref: &ProtocolObject<dyn MTLDrawable> =
-                ProtocolObject::from_ref(&*drawable);
-            command_buffer.presentDrawable(drawable_ref);
+            if let Some(drawable) = &drawable {
+                let drawable_ref: &ProtocolObject<dyn MTLDrawable> =
+                    ProtocolObject::from_ref(&**drawable);
+                command_buffer.presentDrawable(drawable_ref);
+            }
             command_buffer.commit();
+            if drawable.is_none() {
+                command_buffer.waitUntilCompleted();
+                if command_buffer.status() != MTLCommandBufferStatus::Completed {
+                    return Err(PlayerError::Renderer(format!(
+                        "Flutter texture frame failed with status {:?}",
+                        command_buffer.status()
+                    )));
+                }
+            }
             self.last_submitted_command_buffer = Some(command_buffer.clone());
             self.pending_gpu_timing = Some(command_buffer);
         }
@@ -2653,7 +2780,7 @@ struct VideoUniforms {
     uint target_transfer;
     uint tone_map;
     uint edr_output;
-    uint reserved0;
+    uint video_alpha_mode;
     uint reserved1;
     float4 rect;
     float4 viewport;
@@ -2802,15 +2929,19 @@ float3 target_reference_linear_to_output(float3 rgb, constant VideoUniforms& uni
     return rgb;
 }
 
-float4 final_output(float3 rgb, constant VideoUniforms& uniforms) {
+float4 final_output(float3 rgb, float alpha, constant VideoUniforms& uniforms) {
+    float3 premultiplied;
     if (uniforms.target_transfer == 3) {
-        return float4(clamp(rgb, 0.0, 1.0), 1.0);
+        premultiplied = clamp(rgb, 0.0, 1.0) * alpha;
+        return float4(premultiplied, alpha);
     }
     if (uniforms.edr_output != 0) {
         float headroom = max(target_peak_nits(uniforms) / target_reference_white_nits(uniforms), 1.0);
-        return float4(clamp(rgb, 0.0, headroom), 1.0);
+        premultiplied = clamp(rgb, 0.0, headroom) * alpha;
+        return float4(premultiplied, alpha);
     }
-    return float4(clamp(rgb, 0.0, 1.0), 1.0);
+    premultiplied = clamp(rgb, 0.0, 1.0) * alpha;
+    return float4(premultiplied, alpha);
 }
 
 float3 sdr_ui_color_to_target_output(float3 rgb, uint target_transfer, float reference_white_nits) {
@@ -2880,8 +3011,13 @@ fragment float4 erika_video_fragment(
     texture2d<float, access::sample> chroma_texture [[texture(1)]],
     sampler video_sampler [[sampler(0)]],
     constant VideoUniforms& uniforms [[buffer(0)]]) {
-    float y = luma_texture.sample(video_sampler, in.tex_coord).r;
-    float2 cbcr = chroma_texture.sample(video_sampler, in.tex_coord).rg;
+    bool packed_alpha = uniforms.video_alpha_mode == 1;
+    float2 color_coord = packed_alpha
+        ? float2(in.tex_coord.x * 0.5, in.tex_coord.y)
+        : in.tex_coord;
+    float2 alpha_coord = float2(0.5 + in.tex_coord.x * 0.5, in.tex_coord.y);
+    float y = luma_texture.sample(video_sampler, color_coord).r;
+    float2 cbcr = chroma_texture.sample(video_sampler, color_coord).rg;
     RangeExpandedYCbCr expanded = expand_ycbcr_range(y, cbcr, uniforms);
     y = expanded.y;
     cbcr = expanded.cbcr;
@@ -2899,7 +3035,12 @@ fragment float4 erika_video_fragment(
     rgb = tone_map_nits(rgb, uniforms);
     rgb = target_nits_to_reference_linear(rgb, uniforms);
     rgb = target_reference_linear_to_output(rgb, uniforms);
-    return final_output(rgb, uniforms);
+    float alpha = 1.0;
+    if (packed_alpha) {
+        float alpha_sample = luma_texture.sample(video_sampler, alpha_coord).r;
+        alpha = clamp(expand_ycbcr_range(alpha_sample, float2(0.5), uniforms).y, 0.0, 1.0);
+    }
+    return final_output(rgb, alpha, uniforms);
 }
 
 struct OverlayUniforms {
@@ -3199,7 +3340,16 @@ mod tests {
             VIDEO_SHADER_SOURCE
                 .contains("target_peak_nits(uniforms) / target_reference_white_nits(uniforms)")
         );
-        assert!(VIDEO_SHADER_SOURCE.contains("return final_output(rgb, uniforms)"));
+        assert!(VIDEO_SHADER_SOURCE.contains("return final_output(rgb, alpha, uniforms)"));
+    }
+
+    #[test]
+    fn video_shader_reconstructs_packed_alpha_as_premultiplied_output() {
+        assert!(VIDEO_SHADER_SOURCE.contains("uniforms.video_alpha_mode == 1"));
+        assert!(VIDEO_SHADER_SOURCE.contains("in.tex_coord.x * 0.5"));
+        assert!(VIDEO_SHADER_SOURCE.contains("0.5 + in.tex_coord.x * 0.5"));
+        assert!(VIDEO_SHADER_SOURCE.contains("premultiplied = clamp(rgb"));
+        assert!(VIDEO_SHADER_SOURCE.contains("float4(premultiplied, alpha)"));
     }
 
     #[test]

@@ -53,6 +53,8 @@ internal class ErikaAndroidVideoView(
         (creationParams["requestedHdrHeadroom"] as? Number)?.toFloat()
     private val requestedHdrHeadroom = androidDesiredHdrHeadroom(rawRequestedHdrHeadroom)
     private val hybridComposition = creationParams["composition"] == "hybrid"
+    private val videoAlphaMode =
+        (creationParams["videoAlphaMode"] as? Number)?.toInt() ?: 0
     private val mainHandler = Handler(Looper.getMainLooper())
     private var outputSurface: Surface? = null
     private var ownsOutputSurface = false
@@ -123,7 +125,7 @@ internal class ErikaAndroidVideoView(
             )
         }
         textureView?.apply {
-            isOpaque = true
+            isOpaque = videoAlphaMode == 0
             surfaceTextureListener = this@ErikaAndroidVideoView
         }
         surfaceView?.apply {

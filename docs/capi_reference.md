@@ -258,16 +258,19 @@ Erika owns the full stack; the host supplies a surface and calls `render_tick`.
 ErikaPresenterHandle *erika_presenter_create(void);
 ErikaPresenterHandle *erika_presenter_create_with_config(ErikaPresenterConfig config);
 ErikaPresenterHandle *erika_presenter_create_with_output_mode(int32_t output_mode, float edr_headroom);
+ErikaPresenterHandle *erika_presenter_create_with_output_mode_and_alpha(int32_t output_mode, float edr_headroom,
+                                                                        int32_t video_alpha_mode);
 void                  erika_presenter_destroy(ErikaPresenterHandle *handle);
 ```
 
 `ErikaPresenterConfig` selects the output mode (`Sdr`, Apple `AppleEdr`, or
 Android `ExtendedLinear`), the requested EDR/scRGB content-headroom ceiling,
-and the initial
-luma upscaler. Android `ExtendedLinear` means FP16 extended-linear scRGB, not
-HDR10/PQ. `create_with_output_mode` is a shorthand; `create` uses defaults
-(SDR, no upscaler). A `NULL` return means creation failed — check
-`erika_last_error_message`.
+the initial luma upscaler, and the `video_alpha_mode`
+(`ErikaVideoAlphaMode`). Android `ExtendedLinear` means FP16 extended-linear
+scRGB, not HDR10/PQ. `create_with_output_mode` and
+`create_with_output_mode_and_alpha` are shorthands; `create` uses defaults
+(SDR, opaque video, no upscaler). A `NULL` return means creation failed —
+check `erika_last_error_message`.
 
 ### Playback and runtime parameters
 
@@ -526,6 +529,40 @@ per-`SurfaceView` `setDesiredHdrHeadroom`. Erika still verifies Vulkan,
 `Rgba16Float`, and `ADATASPACE_SCRGB_LINEAR` itself; failure of any condition
 falls back to SDR and remains queryable.
 
+### Flutter texture surfaces
+
+```c
+ErikaStatus erika_presenter_attach_flutter_texture(ErikaPresenterHandle *, ErikaFlutterTextureKind kind,
+                                                   int64_t texture_id, uint32_t w, uint32_t h, double scale);
+ErikaStatus erika_presenter_set_flutter_texture_buffer(ErikaPresenterHandle *, uint64_t raw_texture,
+                                                       uint32_t w, uint32_t h);
+```
+
+`attach_flutter_texture` binds the presenter to a texture-registrar surface
+identified by `texture_id` (Apple `MacOsTextureRegistrar`/`IosTextureRegistrar`
+today). The host owns the pixel buffers; before **every** `render_tick` it
+selects the GPU target for the next frame with
+`set_flutter_texture_buffer`, passing an `id<MTLTexture>` pointer cast to
+`uint64_t` that must use `BGRA8Unorm` and match the declared `w`×`h`. The
+texture is only borrowed for the duration of the frame — the host keeps
+ownership and may reuse or free it once `render_tick` returns. This is the
+surface the Flutter plugin's `ErikaTextureVideoView` uses on macOS.
+
+### Windows DirectComposition swap chain
+
+```c
+ErikaStatus erika_presenter_windows_composition_swapchain_iunknown(ErikaPresenterHandle *, void **out_swapchain);
+```
+
+Windows only. When the presenter was attached through
+`attach_wgpu_surface_with_output_capabilities` with `direct_composition = true`
+(and the presenter plays with a transparent video alpha mode or an overlay
+blend), Erika creates a premultiplied-alpha composition swap chain for the
+target HWND. This getter returns it as an **AddRef'd `IUnknown*`**: the caller
+owns the returned COM reference and must `Release` it. Re-fetch it after
+decoder/device loss — Erika recreates the swap chain and exposes the new
+object; the same pointer means nothing was rebuilt.
+
 ### Render loop and events
 
 ```c
@@ -680,6 +717,7 @@ snapshots from the same runtime state as `get_output_status`.
 | `ErikaTrackSource` | `Embedded` `External` |
 | `ErikaWgpuSurfaceKind` | `Unknown` `MacOsNsView` `MacOsCaMetalLayer` `IosUiView` `WindowsHwnd` `XlibWindow` `WaylandSurface` `AndroidNativeWindow` `OhosNativeWindow` |
 | `ErikaFlutterTextureKind` | `Unknown` `MacOsTextureRegistrar` `IosTextureRegistrar` `AndroidSurfaceTexture` `WindowsTextureRegistrar` `LinuxTextureRegistrar` |
+| `ErikaVideoAlphaMode` | `Opaque` `PackedAlphaRight` |
 | `ErikaPresenterOutputMode` | `Sdr` `AppleEdr` `ExtendedLinear` `Auto` |
 | `ErikaActiveOutputEncoding` | `SdrSrgb` `AppleEdr` `AndroidExtendedLinearScRgb` `Hdr10Pq` |
 | `ErikaOutputSurfaceFormat` | `EightBitUnorm` `TenBitUnorm` `SixteenBitFloat` |
@@ -689,8 +727,10 @@ snapshots from the same runtime state as `get_output_status`.
 
 ## Structs
 
-- **`ErikaPresenterConfig`** `{ int32 output_mode; float edr_headroom; int32 luma_upscaler; }` —
-  passed by value to `create_with_config`.
+- **`ErikaPresenterConfig`** `{ int32 output_mode; float edr_headroom; int32 luma_upscaler; int32 video_alpha_mode; }` —
+  passed by value to `create_with_config`; `video_alpha_mode` is an
+  `ErikaVideoAlphaMode` (`Opaque` default, `PackedAlphaRight` for side-by-side
+  colour/alpha assets).
 - **`ErikaSurfaceOutputCapabilities`** `{ bool extended_linear; bool direct_composition; float desired_headroom; int32 fallback_reason; }` — host-side Android display/surface probe supplied at attach time; `desired_headroom == 0` selects system auto.
 - **`ErikaUpscalerStatus`** — requested mode, active backend, fallback count,
   upscaled frames, last encode/GPU micros.

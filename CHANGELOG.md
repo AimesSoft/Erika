@@ -31,6 +31,8 @@
 - When the first audio stream cannot be decoded, try the remaining audio
   streams in container order and report all decoder failures if none can be
   opened.
+- Added packed-alpha video presentation with premultiplied GPU output on
+  Windows and macOS, including native backdrop-aware overlay composition.
 
 ## 0.1.7 - 2026-08-16
 

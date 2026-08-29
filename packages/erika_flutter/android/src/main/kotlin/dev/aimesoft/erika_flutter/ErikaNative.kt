@@ -8,7 +8,12 @@ internal object ErikaNative {
     }
 
     @JvmStatic
-    external fun nativeCreate(outputMode: Int, edrHeadroom: Float, upscaler: Int): Long
+    external fun nativeCreate(
+        outputMode: Int,
+        edrHeadroom: Float,
+        upscaler: Int,
+        videoAlphaMode: Int,
+    ): Long
 
     @JvmStatic
     external fun nativeLastError(): String

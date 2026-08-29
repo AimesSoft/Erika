@@ -43,6 +43,7 @@ use crate::renderer::android_vulkan::{
     AndroidAhbConversionError, AndroidAhbCrop, AndroidAhbFrameDescription,
     AndroidAhbIntermediateFormat, AndroidVulkanInterop, retire_ahb_conversion_after_submission,
 };
+use crate::renderer::metal::{MetalRendererConfig, VideoAlphaMode};
 #[cfg(target_env = "ohos")]
 use crate::renderer::ohos_vulkan::{
     OhosNativeBufferConversionError, OhosNativeBufferCrop, OhosNativeBufferFrameDescription,
@@ -427,7 +428,8 @@ impl UploadedVideoFrame {
             &pipeline,
             self.uniforms.is_p010 != 0,
             output.extended_linear,
-        );
+        )
+        .packed_alpha_right(self.uniforms.has_packed_alpha_right());
         match &self.textures {
             UploadedVideoTextures::Planar { .. } => uniforms,
             UploadedVideoTextures::Rgb { .. } => uniforms.rgb_texture_input(),
@@ -503,6 +505,7 @@ pub struct WgpuRenderer {
     danmaku_atlas_cache: Option<WgpuDanmakuAtlasCache>,
     supports_16bit_norm: bool,
     output_mode: OutputMode,
+    video_alpha_mode: VideoAlphaMode,
     output_status: OutputRuntimeStatus,
     output_headroom: OutputHeadroomState,
     upscaler_mode: LumaUpscalerMode,
@@ -1219,14 +1222,22 @@ fn request_wgpu_device(
 
 impl WgpuRenderer {
     pub fn new() -> Result<Self> {
-        Self::new_with_output_mode(OutputMode::Sdr)
+        Self::new_with_config(MetalRendererConfig::default())
     }
 
     pub fn new_with_output_mode(output_mode: OutputMode) -> Result<Self> {
+        Self::new_with_config(MetalRendererConfig {
+            output_mode,
+            ..MetalRendererConfig::default()
+        })
+    }
+
+    pub fn new_with_config(config: MetalRendererConfig) -> Result<Self> {
         let candidate_count = wgpu_backend_candidates().len();
         Self::new_with_candidate_order(
             backend_candidate_order(candidate_count, 0, &[]),
-            output_mode,
+            config.output_mode,
+            config.video_alpha_mode,
         )
     }
 
@@ -1235,6 +1246,7 @@ impl WgpuRenderer {
         current_candidate: usize,
         excluded: &[usize],
         output_mode: OutputMode,
+        video_alpha_mode: VideoAlphaMode,
     ) -> (Result<Self>, Vec<usize>) {
         let candidate_count = wgpu_backend_candidates().len();
         let candidate_order = backend_candidate_order(
@@ -1242,7 +1254,8 @@ impl WgpuRenderer {
             current_candidate.saturating_add(1),
             excluded,
         );
-        let result = Self::new_with_candidate_order(candidate_order.clone(), output_mode);
+        let result =
+            Self::new_with_candidate_order(candidate_order.clone(), output_mode, video_alpha_mode);
         let selected_candidate = result
             .as_ref()
             .ok()
@@ -1256,6 +1269,7 @@ impl WgpuRenderer {
     fn new_with_candidate_order(
         candidate_order: Vec<usize>,
         output_mode: OutputMode,
+        video_alpha_mode: VideoAlphaMode,
     ) -> Result<Self> {
         let candidates = wgpu_backend_candidates();
         if candidate_order.is_empty() {
@@ -1407,6 +1421,7 @@ impl WgpuRenderer {
             danmaku_atlas_cache: None,
             supports_16bit_norm: context.supports_16bit_norm,
             output_mode,
+            video_alpha_mode,
             output_status: OutputRuntimeStatus::requested(output_mode),
             output_headroom: OutputHeadroomState::default(),
             upscaler_mode: LumaUpscalerMode::Off,
@@ -1901,6 +1916,7 @@ impl WgpuRenderer {
             }
         }
         VideoUniforms::from_pipeline(&pipeline, is_p010, output.extended_linear)
+            .packed_alpha_right(self.video_alpha_mode.has_alpha())
     }
 
     #[cfg(target_os = "android")]
@@ -2386,8 +2402,15 @@ impl WgpuRenderer {
                 video.uniforms_for_output(output),
             )
         };
-        let viewport = aspect_fit_viewport(video_width, video_height, target_width, target_height);
-        let upscale_requested = self.upscaler_mode.is_enabled()
+        let logical_video_width = self.video_alpha_mode.logical_width(video_width);
+        let viewport = aspect_fit_viewport(
+            logical_video_width,
+            video_height,
+            target_width,
+            target_height,
+        );
+        let upscale_requested = !self.video_alpha_mode.has_alpha()
+            && self.upscaler_mode.is_enabled()
             && self.upscaler.status() == WgpuArtCnnStatus::Scalar
             && viewport.width > video_width as f32
             && self.upscaler_failed_frame_token != Some(frame_token);
@@ -2549,7 +2572,11 @@ impl WgpuRenderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Clear(if self.video_alpha_mode.has_alpha() {
+                            wgpu::Color::TRANSPARENT
+                        } else {
+                            wgpu::Color::BLACK
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -3482,11 +3509,16 @@ impl WgpuRenderer {
                 .ok_or_else(|| {
                     PlayerError::Renderer("wgpu surface exposes no present modes".to_string())
                 })?;
+            let preferred_alpha_mode = if self.video_alpha_mode.has_alpha() {
+                wgpu::CompositeAlphaMode::PreMultiplied
+            } else {
+                wgpu::CompositeAlphaMode::Opaque
+            };
             let alpha_mode = caps
                 .alpha_modes
                 .iter()
                 .copied()
-                .find(|mode| *mode == wgpu::CompositeAlphaMode::Opaque)
+                .find(|mode| *mode == preferred_alpha_mode)
                 .or_else(|| caps.alpha_modes.first().copied())
                 .ok_or_else(|| {
                     PlayerError::Renderer("wgpu surface exposes no alpha modes".to_string())
@@ -4251,6 +4283,7 @@ pub struct AndroidRecoveringWgpuRenderer {
     surface: Option<WgpuSurfaceHandle>,
     current_frame: Option<PlayerVideoFrame>,
     output_mode: OutputMode,
+    video_alpha_mode: VideoAlphaMode,
     output_headroom: OutputHeadroomState,
     upscaler_mode: LumaUpscalerMode,
     retired_stats: RendererRuntimeStats,
@@ -4262,20 +4295,28 @@ pub struct AndroidRecoveringWgpuRenderer {
 #[cfg(target_os = "android")]
 impl AndroidRecoveringWgpuRenderer {
     pub fn new() -> Result<Self> {
-        Self::new_with_output_mode(OutputMode::Sdr)
+        Self::new_with_config(MetalRendererConfig::default())
     }
 
     pub fn new_with_output_mode(output_mode: OutputMode) -> Result<Self> {
+        Self::new_with_config(MetalRendererConfig {
+            output_mode,
+            ..MetalRendererConfig::default()
+        })
+    }
+
+    pub fn new_with_config(config: MetalRendererConfig) -> Result<Self> {
         Ok(Self {
-            active: WgpuRenderer::new_with_output_mode(output_mode)?,
+            active: WgpuRenderer::new_with_config(config)?,
             recovery_window: None,
             surface: None,
             current_frame: None,
-            output_mode,
+            output_mode: config.output_mode,
+            video_alpha_mode: config.video_alpha_mode,
             output_headroom: OutputHeadroomState::default(),
             upscaler_mode: LumaUpscalerMode::Off,
             retired_stats: RendererRuntimeStats::default(),
-            retired_output_status: OutputRuntimeStatus::requested(output_mode),
+            retired_output_status: OutputRuntimeStatus::requested(config.output_mode),
             terminal_failure: None,
             recovery_sequence: 0,
         })
@@ -4444,6 +4485,7 @@ impl AndroidRecoveringWgpuRenderer {
                 previous_candidate,
                 attempted_candidates,
                 self.output_mode,
+                self.video_alpha_mode,
             )
         }))
         .map_err(|payload| AndroidWgpuRebuildFailure {

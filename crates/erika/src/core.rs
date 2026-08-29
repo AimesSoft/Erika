@@ -789,6 +789,20 @@ pub trait RendererBackend {
     /// caller fall back to a test frame.
     fn render_current_frame(&mut self, context: RenderFrameContext<'_>) -> Result<bool>;
 
+    /// Selects the native GPU texture that receives the next Flutter texture
+    /// frame. Apple embedders pass an `id<MTLTexture>` pointer as `raw_texture`.
+    /// Backends without an external Flutter texture path reject the request.
+    fn set_flutter_texture_buffer(
+        &mut self,
+        _raw_texture: u64,
+        _width: u32,
+        _height: u32,
+    ) -> Result<()> {
+        Err(PlayerError::Renderer(
+            "external Flutter texture buffers are not supported by this renderer".to_string(),
+        ))
+    }
+
     /// Render the retained current frame into an offscreen RGBA buffer.
     fn capture_current_frame(
         &mut self,

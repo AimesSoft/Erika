@@ -1190,7 +1190,7 @@ pub mod aaudio {
 
     fn normalize_playback_rate(rate: f64) -> f64 {
         if rate.is_finite() && rate > 0.0 {
-            rate.clamp(0.25, 4.0)
+            rate.clamp(0.25, 16.0)
         } else {
             1.0
         }

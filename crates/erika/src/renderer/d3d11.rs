@@ -23,7 +23,7 @@ use ::windows::Win32::Graphics::Direct3D11::{
     ID3D11Texture2D, ID3D11VertexShader,
 };
 use ::windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
     DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, DXGI_COLOR_SPACE_TYPE, DXGI_FORMAT,
     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_P010, DXGI_FORMAT_R8_UNORM,
     DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
@@ -50,7 +50,7 @@ use crate::danmaku::{
 use crate::ffmpeg::Frame;
 use crate::overlay::OverlayFrame;
 use crate::renderer::d3d11_artcnn::D3d11ArtCnn;
-use crate::renderer::metal::MetalRendererConfig;
+use crate::renderer::metal::{MetalRendererConfig, VideoAlphaMode};
 use crate::renderer::output::{
     ActiveOutputEncoding, OutputFallbackReason, OutputRuntimeStatus, OutputSurfaceFormat,
 };
@@ -239,18 +239,23 @@ float3 target_reference_linear_to_output(float3 rgb) {
     return rgb;
 }
 
-float4 final_output(float3 rgb) {
+float4 final_output(float3 rgb, float alpha) {
+    float3 output_rgb;
     if (scene_linear != 0u) {
-        return float4(max(rgb, float3(0.0, 0.0, 0.0)), 1.0);
+        output_rgb = max(rgb, float3(0.0, 0.0, 0.0)) * alpha;
+        return float4(output_rgb, alpha);
     }
     if (target_transfer == 3u) {
-        return float4(clamp(rgb, float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0)), 1.0);
+        output_rgb = clamp(rgb, float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0)) * alpha;
+        return float4(output_rgb, alpha);
     }
     if (edr_output != 0u) {
         float headroom = max(target_peak_nits() / target_reference_white_nits(), 1.0);
-        return float4(clamp(rgb, float3(0.0, 0.0, 0.0), float3(headroom, headroom, headroom)), 1.0);
+        output_rgb = clamp(rgb, float3(0.0, 0.0, 0.0), float3(headroom, headroom, headroom)) * alpha;
+        return float4(output_rgb, alpha);
     }
-    return float4(clamp(rgb, float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0)), 1.0);
+    output_rgb = clamp(rgb, float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0)) * alpha;
+    return float4(output_rgb, alpha);
 }
 
 void expand_ycbcr_range(float y_in, float2 cbcr_in, out float y, out float2 cbcr) {
@@ -316,9 +321,15 @@ float sample_packed_luma(float2 texcoord) {
 }
 
 float4 ps_main(VsOut input) : SV_Target {
-    float2 luma_coord = input.texcoord * texture_scales.xy;
-    float2 chroma_coord = input.texcoord * texture_scales.zw;
-    float y_sample = input_mode == 2u
+    uint base_input_mode = input_mode & 255u;
+    bool packed_alpha = (input_mode & 256u) != 0u;
+    float2 color_coord = packed_alpha
+        ? float2(input.texcoord.x * 0.5, input.texcoord.y)
+        : input.texcoord;
+    float2 alpha_coord = float2(0.5 + input.texcoord.x * 0.5, input.texcoord.y);
+    float2 luma_coord = color_coord * texture_scales.xy;
+    float2 chroma_coord = color_coord * texture_scales.zw;
+    float y_sample = base_input_mode == 2u
         ? sample_packed_luma(luma_coord)
         : lumaTex.Sample(videoSampler, luma_coord).r;
     float2 cbcr_sample = chromaTex.Sample(videoSampler, chroma_coord).rg;
@@ -339,13 +350,24 @@ float4 ps_main(VsOut input) : SV_Target {
     rgb = tone_map_nits(rgb);
     rgb = target_nits_to_reference_linear(rgb);
     rgb = target_reference_linear_to_output(rgb);
-    return final_output(rgb);
+    float alpha = 1.0;
+    if (packed_alpha) {
+        float alpha_sample = lumaTex.Sample(
+            videoSampler,
+            alpha_coord * texture_scales.xy
+        ).r;
+        float unused_y;
+        float2 unused_cbcr;
+        expand_ycbcr_range(alpha_sample, float2(0.5, 0.5), unused_y, unused_cbcr);
+        alpha = saturate(unused_y);
+    }
+    return final_output(rgb, alpha);
 }
 
 float4 encode_ps_main(VsOut input) : SV_Target {
     float3 rgb = lumaTex.Sample(videoSampler, input.texcoord).rgb;
     rgb = target_reference_linear_to_output(rgb);
-    return final_output(rgb);
+    return final_output(rgb, 1.0);
 }
 "#;
 
@@ -727,6 +749,7 @@ pub struct D3d11Renderer {
     current_video: Option<ImportedVideoFrame>,
     danmaku_atlas_cache: Option<D3d11DanmakuAtlasCache>,
     requested_output_mode: crate::renderer::output::OutputMode,
+    video_alpha_mode: VideoAlphaMode,
     upscaler_mode: LumaUpscalerMode,
     upscaler: D3d11ArtCnn,
     next_frame_token: u64,
@@ -746,6 +769,7 @@ impl D3d11Renderer {
             current_video: None,
             danmaku_atlas_cache: None,
             requested_output_mode: config.output_mode,
+            video_alpha_mode: config.video_alpha_mode,
             upscaler_mode: config.luma_upscaler,
             upscaler: D3d11ArtCnn::default(),
             next_frame_token: 0,
@@ -853,6 +877,7 @@ impl D3d11Renderer {
                 height,
                 format,
                 composition,
+                composition && self.video_alpha_mode.has_alpha(),
             )?);
         }
         let swapchain = surface.swapchain.as_ref().expect("swapchain ensured");
@@ -904,6 +929,17 @@ impl D3d11Renderer {
         let source_is_hdr = source.is_hdr();
         if source_is_hdr {
             self.stats.hdr_source_frames += 1;
+        }
+        // DirectComposition transparency is defined on the SDR premultiplied
+        // swap-chain path. Packed-alpha assets are effects/UI content rather
+        // than an HDR presentation plane, so keep their color and alpha in one
+        // stable BGRA8 composition space.
+        if self.video_alpha_mode.has_alpha() {
+            self.set_output_mode(D3d11OutputMode::Sdr)?;
+            if source_is_hdr {
+                self.stats.sdr_tonemap_frames += 1;
+            }
+            return Ok(D3d11OutputMode::Sdr);
         }
         if matches!(source.transfer, TransferFunction::Pq)
             && self.try_enable_hdr10_output(source)?
@@ -1024,7 +1060,8 @@ impl D3d11Renderer {
             ),
             _array_index: array_index,
             frame_token,
-            constants: constants_for_frame(source_color, texture_format, target_color),
+            constants: constants_for_frame(source_color, texture_format, target_color)
+                .packed_alpha_right(self.video_alpha_mode.has_alpha()),
         });
         Ok(())
     }
@@ -1407,9 +1444,15 @@ impl D3d11Renderer {
             .expect("surface ensured")
             .metrics
             .physical_extent;
-        let target_rect =
-            aspect_fit_rect(video_width, video_height, physical.width, physical.height);
-        let upscale_requested = self.upscaler_mode.is_enabled()
+        let logical_video_width = self.video_alpha_mode.logical_width(video_width);
+        let target_rect = aspect_fit_rect(
+            logical_video_width,
+            video_height,
+            physical.width,
+            physical.height,
+        );
+        let upscale_requested = !self.video_alpha_mode.has_alpha()
+            && self.upscaler_mode.is_enabled()
             && self.upscaler.status() == LumaUpscalerBackendStatus::Scalar
             && target_rect.width > video_width as f32;
         let upscaled_luma = if upscale_requested {
@@ -1460,9 +1503,19 @@ impl D3d11Renderer {
             .as_ref()
             .ok_or_else(|| PlayerError::Renderer("d3d11: no swapchain attached".to_string()))?;
         unsafe {
-            state
-                .context
-                .ClearRenderTargetView(scene_rtv, &[0.0, 0.0, 0.0, 1.0]);
+            state.context.ClearRenderTargetView(
+                scene_rtv,
+                &[
+                    0.0,
+                    0.0,
+                    0.0,
+                    if self.video_alpha_mode.has_alpha() {
+                        0.0
+                    } else {
+                        1.0
+                    },
+                ],
+            );
         }
         state.draw_video(video, upscaled_luma.as_ref(), scene_rtv, target_rect)?;
         if !overlay_draws.is_empty() {
@@ -1529,7 +1582,16 @@ impl D3d11Renderer {
             .as_ref()
             .ok_or_else(|| PlayerError::Renderer("d3d11: no render target attached".to_string()))?;
         let _ = time_seconds;
-        let color = [0.0, 0.0, 0.0, 1.0];
+        let color = [
+            0.0,
+            0.0,
+            0.0,
+            if self.video_alpha_mode.has_alpha() {
+                0.0
+            } else {
+                1.0
+            },
+        ];
         unsafe {
             trace("render_clear: clear");
             state.context.ClearRenderTargetView(rtv, &color);
@@ -2145,6 +2207,7 @@ fn create_swapchain(
     height: u32,
     format: DXGI_FORMAT,
     composition: bool,
+    premultiplied_alpha: bool,
 ) -> Result<IDXGISwapChain1> {
     trace("create_swapchain: cast IDXGIDevice");
     let dxgi_device: IDXGIDevice = device
@@ -2169,7 +2232,11 @@ fn create_swapchain(
         BufferCount: 2,
         Scaling: DXGI_SCALING_STRETCH,
         SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-        AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+        AlphaMode: if premultiplied_alpha {
+            DXGI_ALPHA_MODE_PREMULTIPLIED
+        } else {
+            DXGI_ALPHA_MODE_IGNORE
+        },
         Flags: 0,
     };
     let swapchain = if composition {

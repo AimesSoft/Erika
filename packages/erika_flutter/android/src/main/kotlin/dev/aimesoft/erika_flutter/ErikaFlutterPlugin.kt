@@ -355,11 +355,17 @@ class ErikaFlutterPlugin :
         val edrHeadroom =
             (arguments.number("edrHeadroom")?.toFloat() ?: defaultHeadroom).coerceAtLeast(1f)
         val upscaler = arguments.int("upscaler") ?: arguments.int("lumaUpscaler") ?: 0
+        val videoAlphaMode = arguments.int("videoAlphaMode") ?: 0
         val ownerThread = presenterThread
         val attachmentGeneration = engineAttachmentGeneration
         val posted = ownerThread.post {
             val createResult = runCatching {
-                ErikaNative.nativeCreate(outputMode, edrHeadroom, upscaler)
+                ErikaNative.nativeCreate(
+                    outputMode,
+                    edrHeadroom,
+                    upscaler,
+                    videoAlphaMode,
+                )
             }
             val createFailure = createResult.exceptionOrNull()
             if (createFailure != null) {

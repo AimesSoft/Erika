@@ -37,6 +37,12 @@ HDR/EDR の推奨 path は、Flutter の platform-view compositor の外側に�
 
 touch events は両方の native video strategy を通過するので、Flutter controls を video surface の上や周囲に置けます。
 
+### ErikaTextureVideoView (Flutter Texture)
+
+`ErikaTextureVideoView` は platform view ではなく Flutter の texture registrar 経由で描画します。macOS では plugin が IOSurface-backed の `CVPixelBuffer` pool を確保し、その Metal texture に直接描画（フレームごとの CPU readback なし）して Flutter へ frame を publish するため、`Opacity`、clipping、transform、color filter といった通常の Flutter effect が video に適用されます。OpenHarmony では登録済みの external texture を再利用します。それ以外の platform では `ErikaVideoView` に fallback します。
+
+macOS で `blendMode` が `srcOver` 以外の場合、widget は native platform view に切り替え、Core Animation に実際の背景に対する blending を任せます（下記「透明 video と blend mode」を参照）。
+
 ## Android Surface Strategies
 
 Android では 2 つの video widget が同じ native-view selector を使います。SDR は実体のある
@@ -71,6 +77,39 @@ fallback します。fallback は再生を失敗させず、`VideoDecoderChanged
 presenter diagnostics から報告されます。HarmonyOS path は実機で検証済みですが、
 CI は OpenHarmony C ABI をビルドしますが、デバイス側の実行検証はありません。
 
+## 透明 video と blend mode
+
+Erika は Flutter の layout / composition を保ったまま alpha を持つ video asset を表示できます。透明は player ごとに要求します。
+
+```dart
+final player = ErikaPlayer(
+  videoAlphaMode: ErikaVideoAlphaMode.packedAlphaRight,
+);
+```
+
+`ErikaVideoAlphaMode.packedAlphaRight` は左右分割の encoded frame を前提とします。左半分が color、右半分が grayscale alpha mask です。GPU の presentation shader（Metal / wgpu / D3D11）が premultiplied alpha の frame を再構築し、video は encoded width の半分のサイズで表示されます。この mode を要求しない player は frame を完全な不透明として扱うため、既存 content には影響しません。
+
+blending と opacity は video widget に指定します。
+
+```dart
+ErikaTextureVideoView(
+  player: player,
+  blendMode: BlendMode.overlay,
+  opacity: 0.8,
+)
+```
+
+対応状況は platform によって異なります。
+
+| Platform と path | `blendMode` | `opacity` |
+|------------------|-------------|-----------|
+| macOS、`ErikaTextureVideoView`（Flutter texture） | `srcOver` のみ。それ以外は native layer に切替 | Flutter `Opacity` |
+| macOS、native layer（`blendMode != srcOver`） | `overlay` 対応。他の値は無視 | native `CALayer` opacity |
+| Windows window overlay（DirectComposition） | `srcOver` / `overlay`。他の値は plugin error | `IDCompositionEffectGroup` opacity |
+| Android / iOS / OpenHarmony | creation parameter としては受け取るが未使用 | texture path では Flutter 側で適用 |
+
+overlay blending は backdrop-aware です。macOS の native layer は window 内で video の背後にある content に対して合成し、Windows の blend effect は同じ HWND を sampling するため、背後の Flutter や game の画面は見えたまま維持されます。Windows の透明 overlay video は Flutter HWND に bind した SDR BGRA8 premultiplied composition swap chain を使い、HDR source は Erika 内部でその合成空間へ tone map されます。不透明な Windows overlay video は従来どおり専用 child HWND path を使います。decoder や output device が swap chain を再構築した場合は composition content が自動で再 bind されます。
+
 ## iOS Build Path
 
 iOS plugin は CocoaPod script phase 経由で Erika C ABI static library を app にリンクします。既定では一致する prebuilt アーカイブをダウンロードし、`ERIKA_FORCE_SOURCE_BUILD=1`（`ERIKA_REPO_ROOT` と併用）で初めて対象 iOS architecture 向けに Rust の `erika_capi` crate をビルドします。
@@ -78,6 +117,10 @@ iOS plugin は CocoaPod script phase 経由で Erika C ABI static library を ap
 ## tvOS Build Path
 
 tvOS plugin は CocoaPod script phase 経由で Erika C ABI static library をリンクします。iOS と同様に既定では prebuilt アーカイブをダウンロードし、`ERIKA_FORCE_SOURCE_BUILD=1` のときのみソースビルドします。tvOS 13+、arm64 実機、arm64/x86_64 simulator に対応します。Rust nightly、prebuilt bundle、source build の詳細は [`packages/erika_flutter/README.ja.md`](../packages/erika_flutter/README.ja.md) を参照してください。
+
+## macOS Build Path
+
+macOS pod も同じ script-phase build を使います。Erika checkout の内部（package の上位に `crates/erika_capi/Cargo.toml` がある、または `ERIKA_REPO_ROOT` が checkout を指す場合）では、既定で Rust `erika_capi` をソースからビルドします。そのため local renderer の変更は新しい prebuilt release を待たずに取り込まれます。公開 package と isolated consumer——pub cache に解決された git dependency を含みます（リポジトリ全体が保持されるため、これもソースビルドになります）——でこの path を使うには Rust toolchain が必要です。`ERIKA_FORCE_PREBUILT=1` を設定すると、 checksum 検証済みの prebuilt アーカイブのダウンロードに固定できます。
 
 ## Minimal Presenter Flow
 
@@ -111,9 +154,10 @@ Flutter Texture は機能が限定された compatibility path です。
 用途:
 - SDR fallback。
 - native view composition がまだ使えない platform。
+- Flutter compositor に入るべき透明 video（macOS / OpenHarmony の `ErikaTextureVideoView`）。
 - test surface や制約の強い embedding 環境。
 
-HDR/EDR の推奨 path ではありません。video が Flutter compositor に入ってしまうためです。C ABI はこの path のために `erika_attach_flutter_texture` を確保しています。
+HDR/EDR の推奨 path ではありません。video が Flutter compositor に入ってしまうためです。Apple では surface は IOSurface-backed の `CVPixelBuffer` です。host が Flutter texture を登録し、毎 render tick の前に `erika_presenter_attach_flutter_texture` と `erika_presenter_set_flutter_texture_buffer` でその frame の Metal texture を選択すると、Flutter が同じ buffer を CPU readback なしで合成します。pixel buffer の所有権は host 側にあります。
 
 ## wgpu と Android
 
@@ -131,6 +175,8 @@ API 35 HDR device の active-path acceptance は未完了です。Linux support 
 final player = ErikaPlayer(
   outputMode: ErikaOutputMode.appleEdr,  // optional: force EDR
   edrHeadroom: 4.0,                      // optional: EDR headroom
+  // optional: 左右分割の color/alpha asset を透明で表示
+  videoAlphaMode: ErikaVideoAlphaMode.packedAlphaRight,
 );
 
 await player.open(
@@ -145,6 +191,9 @@ await player.play();
 
 // Preferred for full-player UIs on macOS/iOS/tvOS:
 ErikaWindowOverlayVideoView(player: player)
+
+// Flutter 合成の video。opacity / clipping / filter に対応（macOS/OpenHarmony）:
+ErikaTextureVideoView(player: player, opacity: 0.8)
 
 // Compatibility/diagnostic platform-view path:
 ErikaVideoView(player: player)

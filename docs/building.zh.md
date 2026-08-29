@@ -129,6 +129,8 @@ Hvigor/CMake 构建会自动执行这条链路，并把 `liberika_capi.so` 与
 
 Flutter 依赖项目通过 `ERIKA_MACOS_ARCHS=arm64|x86_64|universal` 选择 macOS 架构，通过 `ERIKA_WINDOWS_ARCH=x64|arm64` 选择 Windows 架构，通过 `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86` 选择 Android ABI。设置 `ERIKA_FORCE_SOURCE_BUILD=1` 可强制跳过预构建包。
 
+Apple 插件默认使用带校验的预构建归档，唯一例外是 Erika checkout 内的 macOS：pod 脚本在包上层发现 `crates/erika_capi/Cargo.toml`（或 `ERIKA_REPO_ROOT` 指向 checkout）时，会改为从源码构建 `erika_capi`，使本地改动无需等待新的预构建发布即可生效。设置 `ERIKA_FORCE_PREBUILT=1` 可强制始终下载归档——仓库内没有 Rust 工具链的消费者请使用该开关；注意解析到 pub cache 的 git 依赖保留了整个仓库，因此同样会切换为源码构建。
+
 直接构建原生库时，三个目标参数必须一致：
 
 ```sh

@@ -354,12 +354,14 @@ pub extern "system" fn Java_dev_aimesoft_erika_1flutter_ErikaNative_nativeCreate
     output_mode: jint,
     edr_headroom: jfloat,
     upscaler: jint,
+    video_alpha_mode: jint,
 ) -> jlong {
     catch_unwind(AssertUnwindSafe(|| {
         let handle = erika_presenter_create_with_config(ErikaPresenterConfig {
             output_mode,
             edr_headroom,
             luma_upscaler: upscaler,
+            video_alpha_mode,
         });
         if handle.is_null() {
             let reason = last_error_message(ErikaStatus::PlayerError);

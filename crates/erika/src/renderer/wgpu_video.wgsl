@@ -169,18 +169,23 @@ fn target_reference_linear_to_output(rgb: vec3<f32>) -> vec3<f32> {
     return rgb;
 }
 
-fn final_output(rgb: vec3<f32>) -> vec4<f32> {
+fn final_output(rgb: vec3<f32>, alpha: f32) -> vec4<f32> {
+    var output_rgb: vec3<f32>;
     if (uniforms.scene_linear != 0u) {
-        return vec4<f32>(max(rgb, vec3<f32>(0.0)), 1.0);
+        output_rgb = max(rgb, vec3<f32>(0.0)) * alpha;
+        return vec4<f32>(output_rgb, alpha);
     }
     if (uniforms.target_transfer == 3u) {
-        return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+        output_rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * alpha;
+        return vec4<f32>(output_rgb, alpha);
     }
     if (uniforms.edr_output != 0u) {
         let headroom = max(target_peak_nits() / target_reference_white_nits(), 1.0);
-        return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(headroom)), 1.0);
+        output_rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(headroom)) * alpha;
+        return vec4<f32>(output_rgb, alpha);
     }
-    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    output_rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * alpha;
+    return vec4<f32>(output_rgb, alpha);
 }
 
 struct RangeExpandedYCbCr {
@@ -263,22 +268,29 @@ fn erika_video_vertex(@builtin(vertex_index) vertex_id: u32) -> VertexOut {
 
 @fragment
 fn erika_video_fragment(in: VertexOut) -> @location(0) vec4<f32> {
+    let input_mode = uniforms.input_mode & 255u;
+    let packed_alpha = (uniforms.input_mode & 256u) != 0u;
+    var color_coord = in.tex_coord;
+    if (packed_alpha) {
+        color_coord.x *= 0.5;
+    }
+    let alpha_coord = vec2<f32>(0.5 + in.tex_coord.x * 0.5, in.tex_coord.y);
     var rgb: vec3<f32>;
-    if (uniforms.input_mode == 1u) {
-        rgb = textureSample(luma_texture, video_sampler, in.tex_coord).rgb;
-    } else if (uniforms.input_mode == 3u) {
-        let original_rgb = textureSample(chroma_texture, video_sampler, in.tex_coord).rgb;
+    if (input_mode == 1u) {
+        rgb = textureSample(luma_texture, video_sampler, color_coord).rgb;
+    } else if (input_mode == 3u) {
+        let original_rgb = textureSample(chroma_texture, video_sampler, color_coord).rgb;
         let original_luma = dot(uniforms.luma_coefficients.xyz, original_rgb);
-        let enhanced_luma = sample_packed_luma(in.tex_coord);
+        let enhanced_luma = sample_packed_luma(color_coord);
         rgb = original_rgb + vec3<f32>(enhanced_luma - original_luma);
     } else {
         var y_sample: f32;
-        if (uniforms.input_mode == 2u) {
-            y_sample = sample_packed_luma(in.tex_coord);
+        if (input_mode == 2u) {
+            y_sample = sample_packed_luma(color_coord);
         } else {
-            y_sample = textureSample(luma_texture, video_sampler, in.tex_coord).r;
+            y_sample = textureSample(luma_texture, video_sampler, color_coord).r;
         }
-        let cbcr_sample = textureSample(chroma_texture, video_sampler, in.tex_coord).rg;
+        let cbcr_sample = textureSample(chroma_texture, video_sampler, color_coord).rg;
         let expanded = expand_ycbcr_range(y_sample, cbcr_sample);
         let y = expanded.y;
         let cbcr = expanded.cbcr;
@@ -296,5 +308,14 @@ fn erika_video_fragment(in: VertexOut) -> @location(0) vec4<f32> {
     rgb = tone_map_nits(rgb);
     rgb = target_nits_to_reference_linear(rgb);
     rgb = target_reference_linear_to_output(rgb);
-    return final_output(rgb);
+    var alpha = 1.0;
+    if (packed_alpha) {
+        let alpha_sample = textureSample(luma_texture, video_sampler, alpha_coord).r;
+        if (input_mode == 1u || input_mode == 3u) {
+            alpha = clamp(alpha_sample, 0.0, 1.0);
+        } else {
+            alpha = clamp(expand_ycbcr_range(alpha_sample, vec2<f32>(0.5)).y, 0.0, 1.0);
+        }
+    }
+    return final_output(rgb, alpha);
 }

@@ -20,6 +20,10 @@ bool get _usesAndroidTextureView =>
 bool get _usesOhosTextureView =>
     !kIsWeb && defaultTargetPlatform.name == 'ohos';
 
+bool get _supportsFlutterTextureVideoView =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.macOS || _usesOhosTextureView);
+
 /// Flutter platform-view video surface backed by AppKit/UIKit.
 ///
 /// This is the compatibility surface. Full-player Apple hosts should usually
@@ -31,14 +35,71 @@ class ErikaVideoView extends StatefulWidget {
     required this.player,
     this.debugLabel,
     this.onPlatformViewIdChanged,
-  });
+    this.blendMode = BlendMode.srcOver,
+    this.opacity = 1.0,
+  }) : assert(opacity >= 0.0 && opacity <= 1.0);
 
   final ErikaPlayer player;
   final String? debugLabel;
   final ValueChanged<int?>? onPlatformViewIdChanged;
+  final BlendMode blendMode;
+  final double opacity;
 
   @override
   State<ErikaVideoView> createState() => _ErikaVideoViewState();
+}
+
+/// Video surface composited as a Flutter [Texture].
+///
+/// On macOS this uses an IOSurface-backed Metal texture, so regular Flutter
+/// effects such as opacity, clipping and color filters apply to the video. On
+/// platforms without a native texture path it falls back to [ErikaVideoView].
+class ErikaTextureVideoView extends StatelessWidget {
+  const ErikaTextureVideoView({
+    super.key,
+    required this.player,
+    this.debugLabel,
+    this.onTextureIdChanged,
+    this.blendMode = BlendMode.srcOver,
+    this.opacity = 1.0,
+  }) : assert(opacity >= 0.0 && opacity <= 1.0);
+
+  final ErikaPlayer player;
+  final String? debugLabel;
+  final ValueChanged<int?>? onTextureIdChanged;
+  final BlendMode blendMode;
+  final double opacity;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.macOS &&
+        blendMode != BlendMode.srcOver) {
+      return ErikaVideoView(
+        player: player,
+        debugLabel: debugLabel,
+        onPlatformViewIdChanged: onTextureIdChanged,
+        blendMode: blendMode,
+        opacity: opacity,
+      );
+    }
+    if (_supportsFlutterTextureVideoView) {
+      return Opacity(
+        opacity: opacity,
+        child: _ErikaOhosVideoView(
+          player: player,
+          onPlatformViewIdChanged: onTextureIdChanged,
+        ),
+      );
+    }
+    return ErikaVideoView(
+      player: player,
+      debugLabel: debugLabel,
+      onPlatformViewIdChanged: onTextureIdChanged,
+      blendMode: blendMode,
+      opacity: opacity,
+    );
+  }
 }
 
 class _ErikaVideoViewState extends State<ErikaVideoView> {
@@ -82,6 +143,11 @@ class _ErikaVideoViewState extends State<ErikaVideoView> {
     }
     final creationParams = <String, Object?>{
       if (widget.debugLabel case final label?) 'debugLabel': label,
+      if (widget.player.videoAlphaMode != ErikaVideoAlphaMode.opaque)
+        'videoAlphaMode': widget.player.videoAlphaMode.nativeValue,
+      if (widget.blendMode != BlendMode.srcOver)
+        'blendMode': widget.blendMode.name,
+      if (widget.opacity != 1.0) 'opacity': widget.opacity,
     };
     if (_usesOhosTextureView) {
       return _ErikaOhosVideoView(
@@ -92,6 +158,11 @@ class _ErikaVideoViewState extends State<ErikaVideoView> {
     switch (defaultTargetPlatform) {
       case TargetPlatform.macOS:
         return AppKitView(
+          key: ValueKey<Object>((
+            widget.player.videoAlphaMode,
+            widget.blendMode,
+            widget.opacity,
+          )),
           viewType: 'erika_flutter/video_view',
           layoutDirection: TextDirection.ltr,
           creationParamsCodec: const StandardMessageCodec(),
@@ -113,6 +184,8 @@ class _ErikaVideoViewState extends State<ErikaVideoView> {
           player: widget.player,
           debugLabel: widget.debugLabel,
           onPlatformViewIdChanged: widget.onPlatformViewIdChanged,
+          blendMode: widget.blendMode,
+          opacity: widget.opacity,
         );
       case TargetPlatform.android:
         return _ErikaAndroidVideoView(
@@ -510,6 +583,8 @@ class _ErikaAndroidVideoViewState extends State<_ErikaAndroidVideoView> {
       if (extendedLinear)
         'requestedHdrHeadroom': widget.player.edrHeadroom ?? 0.0,
       if (extendedLinear) 'composition': 'hybrid',
+      if (widget.player.videoAlphaMode != ErikaVideoAlphaMode.opaque)
+        'videoAlphaMode': widget.player.videoAlphaMode.nativeValue,
     };
     if (!extendedLinear) {
       return AndroidView(
@@ -570,12 +645,16 @@ class ErikaWindowOverlayVideoView extends StatefulWidget {
     this.debugLabel,
     this.onPlatformViewIdChanged,
     this.onFrameRectChanged,
-  });
+    this.blendMode = BlendMode.srcOver,
+    this.opacity = 1.0,
+  }) : assert(opacity >= 0.0 && opacity <= 1.0);
 
   final ErikaPlayer player;
   final String? debugLabel;
   final ValueChanged<int?>? onPlatformViewIdChanged;
   final ValueChanged<Rect?>? onFrameRectChanged;
+  final BlendMode blendMode;
+  final double opacity;
 
   @override
   State<ErikaWindowOverlayVideoView> createState() =>
@@ -620,6 +699,9 @@ class _ErikaWindowOverlayVideoViewState
       );
       widget.onPlatformViewIdChanged?.call(ErikaPlayer.windowOverlayViewId);
       _scheduleAttach();
+    } else if (oldWidget.blendMode != widget.blendMode ||
+        oldWidget.opacity != widget.opacity) {
+      _scheduleFrameUpdate(force: true);
     }
   }
 
@@ -675,6 +757,8 @@ class _ErikaWindowOverlayVideoViewState
     try {
       await widget.player.attachWindowOverlay(
         flutterViewId: View.of(context).viewId,
+        blendMode: widget.blendMode.name,
+        opacity: widget.opacity,
       );
       _isBound = true;
       _scheduleFrameUpdate(force: true);
@@ -743,6 +827,8 @@ class _ErikaWindowOverlayVideoViewState
       rect.top.toStringAsFixed(2),
       rect.width.toStringAsFixed(2),
       rect.height.toStringAsFixed(2),
+      widget.blendMode.name,
+      widget.opacity.toStringAsFixed(4),
     ].join('|');
     if (!force && signature == _lastFrameSignature) {
       return;
@@ -757,6 +843,8 @@ class _ErikaWindowOverlayVideoViewState
         generation: _surfaceGeneration,
         flutterViewId: View.of(context).viewId,
         debugLabel: widget.debugLabel,
+        blendMode: widget.blendMode.name,
+        opacity: widget.opacity,
       );
     } catch (error) {
       debugPrint('ErikaWindowOverlayVideoView: frame update failed: $error');
@@ -770,6 +858,8 @@ class _ErikaWindowOverlayVideoViewState
         visible: false,
         generation: _surfaceGeneration,
         debugLabel: widget.debugLabel,
+        blendMode: widget.blendMode.name,
+        opacity: widget.opacity,
       );
     } catch (error) {
       debugPrint('ErikaWindowOverlayVideoView: hide overlay failed: $error');

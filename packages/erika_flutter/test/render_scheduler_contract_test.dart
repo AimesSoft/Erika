@@ -35,6 +35,63 @@ void main() {
     expect(plugin, contains('stopPollTimerIfIdle()'));
   });
 
+  test('macOS Flutter texture path stays on IOSurface and Metal', () {
+    final plugin = File(
+      'macos/Classes/ErikaFlutterPlugin.swift',
+    ).readAsStringSync();
+
+    expect(plugin, contains('private final class ErikaFlutterTextureSurface'));
+    expect(plugin, contains('kCVPixelBufferIOSurfacePropertiesKey'));
+    expect(plugin, contains('CVMetalTextureCacheCreateTextureFromImage'));
+    expect(plugin, contains('library.setFlutterTextureBuffer('));
+    expect(plugin, contains('registry.textureFrameAvailable(id)'));
+    expect(plugin, isNot(contains('CVPixelBufferLockBaseAddress')));
+  });
+
+  test('macOS transparent platform view applies native overlay compositing',
+      () {
+    final plugin = File(
+      'macos/Classes/ErikaFlutterPlugin.swift',
+    ).readAsStringSync();
+
+    expect(plugin, contains('metalLayer.isOpaque = !alphaVideo'));
+    expect(plugin, contains('NSColor.clear.cgColor'));
+    expect(
+      plugin,
+      contains('metalLayer.compositingFilter = "overlayBlendMode"'),
+    );
+    expect(plugin, contains('metalLayer.opacity = Float('));
+  });
+
+  test('Windows transparent video is composed into the Flutter HWND', () {
+    final plugin = File(
+      'windows/erika_flutter_plugin.cpp',
+    ).readAsStringSync();
+    final rendererFile = File('../../crates/erika/src/renderer/d3d11.rs');
+    if (!rendererFile.existsSync()) {
+      return;
+    }
+    final renderer = rendererFile.readAsStringSync();
+
+    expect(plugin, contains('config.video_alpha_mode ='));
+    expect(plugin, contains('capabilities.direct_composition = true'));
+    expect(plugin, contains('DCompositionCreateDevice2'));
+    expect(plugin, contains('CreateTargetForHwnd'));
+    expect(plugin, contains('CreateBlendEffect'));
+    expect(plugin, contains('D2D1_BLEND_MODE_OVERLAY'));
+    expect(plugin, contains('IDCompositionEffectGroup::SetOpacity'));
+    expect(plugin, contains('root_visual->SetEffect(effect)'));
+    expect(
+      plugin,
+      contains('erika_presenter_windows_composition_swapchain_iunknown'),
+    );
+    expect(renderer, contains('DXGI_ALPHA_MODE_PREMULTIPLIED'));
+    expect(
+      renderer,
+      contains('composition && self.video_alpha_mode.has_alpha()'),
+    );
+  });
+
   for (final entry in <(String, String)>[
     ('ios', 'scheduleTick()'),
     ('tvos', 'scheduleRenderTick()'),
@@ -70,7 +127,8 @@ void main() {
     });
   }
 
-  test('iOS retries audio-session activation after an allowed interruption', () {
+  test('iOS retries audio-session activation after an allowed interruption',
+      () {
     final plugin = File(
       'ios/Classes/ErikaFlutterPlugin.swift',
     ).readAsStringSync();
@@ -123,7 +181,8 @@ void main() {
     );
   });
 
-  test('Android polls events on the presenter thread with adaptive scheduling', () {
+  test('Android polls events on the presenter thread with adaptive scheduling',
+      () {
     final plugin = File(
       'android/src/main/kotlin/dev/aimesoft/erika_flutter/'
       'ErikaFlutterPlugin.kt',

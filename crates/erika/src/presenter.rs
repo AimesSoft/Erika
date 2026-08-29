@@ -1808,6 +1808,26 @@ impl PresenterRuntime {
             .map(|capture| capture.map(|capture| capture.rgba))
     }
 
+    /// Selects the external Flutter texture written by the next render tick.
+    ///
+    /// The platform plugin owns the texture and keeps it alive for the entire
+    /// call. The renderer retains the native object until another buffer is
+    /// selected or the surface is detached.
+    pub fn set_flutter_texture_buffer(
+        &mut self,
+        raw_texture: u64,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        if raw_texture == 0 || width == 0 || height == 0 {
+            return Err(PlayerError::Renderer(
+                "Flutter texture buffer and dimensions must be non-zero".to_string(),
+            ));
+        }
+        self.renderer
+            .set_flutter_texture_buffer(raw_texture, width, height)
+    }
+
     fn capture_overlay(&mut self, width: u32, height: u32) -> OverlayFrame {
         let capture_overlay_viewport = OverlayViewport::new(width, height);
         let mut capture_overlay = self
@@ -3570,11 +3590,10 @@ fn build_audio_output(config: PresenterAudioConfig) -> Box<dyn AudioOutputBacken
 #[cfg(feature = "wgpu")]
 fn build_wgpu_renderer(config: MetalRendererConfig) -> Result<Box<dyn RendererBackend>> {
     #[cfg(target_os = "android")]
-    let mut renderer = crate::renderer::wgpu::AndroidRecoveringWgpuRenderer::new_with_output_mode(
-        config.output_mode,
-    )?;
+    let mut renderer =
+        crate::renderer::wgpu::AndroidRecoveringWgpuRenderer::new_with_config(config)?;
     #[cfg(not(target_os = "android"))]
-    let mut renderer = crate::renderer::wgpu::WgpuRenderer::new()?;
+    let mut renderer = crate::renderer::wgpu::WgpuRenderer::new_with_config(config)?;
     renderer.set_luma_upscaler(config.luma_upscaler);
     #[cfg(not(target_os = "android"))]
     if config.output_mode.is_edr() {

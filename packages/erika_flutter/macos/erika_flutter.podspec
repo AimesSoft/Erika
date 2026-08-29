@@ -25,6 +25,17 @@ PLUGIN_MACOS_DIR="$(cd "$PODS_TARGET_SRCROOT" && pwd -P)"
 PACKAGE_ROOT="$(cd "$PLUGIN_MACOS_DIR/.." && pwd -P)"
 ERIKA_NATIVE_PROFILE="${ERIKA_NATIVE_PROFILE:-lgpl}"
 HOST_JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+if [ -n "${ERIKA_REPO_ROOT:-}" ]; then
+  SOURCE_ROOT="$ERIKA_REPO_ROOT"
+elif [ -n "${ERIKA_ROOT:-}" ]; then
+  SOURCE_ROOT="$ERIKA_ROOT"
+else
+  SOURCE_ROOT="$(cd "$PACKAGE_ROOT/../.." && pwd -P)"
+fi
+USE_SOURCE_BUILD="${ERIKA_FORCE_SOURCE_BUILD:-0}"
+if [ "$USE_SOURCE_BUILD" != "1" ] && [ "${ERIKA_FORCE_PREBUILT:-0}" != "1" ] && [ -f "$SOURCE_ROOT/crates/erika_capi/Cargo.toml" ]; then
+  USE_SOURCE_BUILD=1
+fi
 
 if [ -n "${ERIKA_MACOS_CAPI_PROFILE:-}" ]; then
   CARGO_PROFILE="$ERIKA_MACOS_CAPI_PROFILE"
@@ -88,16 +99,9 @@ fi
 SOURCE_DYLIB=""
 if [ -n "${ERIKA_MACOS_CAPI_DYLIB:-}" ]; then
   SOURCE_DYLIB="$ERIKA_MACOS_CAPI_DYLIB"
-elif [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" != "1" ]; then
+elif [ "$USE_SOURCE_BUILD" != "1" ]; then
   sh "$PACKAGE_ROOT/native/prepare_apple_prebuilt.sh"     macos macos "$PREBUILT_ARCH" "$DEST_DYLIB"
 else
-  if [ -n "${ERIKA_REPO_ROOT:-}" ]; then
-    SOURCE_ROOT="$ERIKA_REPO_ROOT"
-  elif [ -n "${ERIKA_ROOT:-}" ]; then
-    SOURCE_ROOT="$ERIKA_ROOT"
-  else
-    SOURCE_ROOT="$(cd "$PACKAGE_ROOT/../.." && pwd -P)"
-  fi
   if [ ! -f "$SOURCE_ROOT/crates/erika_capi/Cargo.toml" ]; then
     echo "error: ERIKA_FORCE_SOURCE_BUILD=1 requires an Erika checkout; set ERIKA_REPO_ROOT" >&2
     exit 1
