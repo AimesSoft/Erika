@@ -1220,14 +1220,16 @@ struct ErikaFlutterPlugin::PlayerHost {
     if (const auto* raw_read_ahead = FindArg(args, "httpReadAheadBytes");
         raw_read_ahead != nullptr &&
         !std::holds_alternative<std::monostate>(*raw_read_ahead)) {
-      if (const auto* value = std::get_if<int64_t>(raw_read_ahead)) {
-        if (*value < 0) {
-          throw PluginError("httpReadAheadBytes must be a non-negative integer.");
-        }
-        read_ahead_bytes = static_cast<uint64_t>(*value);
-      } else {
+      std::optional<int64_t> value;
+      if (const auto* int32_value = std::get_if<int32_t>(raw_read_ahead)) {
+        value = static_cast<int64_t>(*int32_value);
+      } else if (const auto* int64_value = std::get_if<int64_t>(raw_read_ahead)) {
+        value = *int64_value;
+      }
+      if (!value || *value < 0) {
         throw PluginError("httpReadAheadBytes must be a non-negative integer.");
       }
+      read_ahead_bytes = static_cast<uint64_t>(*value);
     }
     const bool wants_headers = headers != nullptr && !headers->empty();
     if (!wants_headers && read_ahead_bytes == 0) {

@@ -239,6 +239,22 @@ header を捨てずに throw します。
 header が適用されるのは media source だけです。外部 subtitle track と danmaku sidecar は
 まだ header なしで取得されます。
 
+## HTTP 先読みウィンドウ
+
+`httpReadAheadBytes` で、1 回の HTTP(S) open に対する先読みウィンドウを調整できます：
+
+```dart
+await player.open(
+  'https://example.com/video.mp4',
+  httpReadAheadBytes: 16 * 1024 * 1024,
+);
+```
+
+正の値は `ERIKA_HTTP_READAHEAD_BYTES` を上書きします。null または 0 の場合は、環境変数が
+あればその値を、なければ native の 2 MiB 既定値を使います。local file では無視されます。
+0.1.7 以前の native library には options entry point がないため、この設定を指定すると
+黙って破棄せず、説明付きの error を throw します。
+
 ## Output Mode
 
 `ErikaPlayer()` は Apple plugin に現在の screen と environment から SDR か Apple EDR を

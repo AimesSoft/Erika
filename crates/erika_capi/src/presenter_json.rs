@@ -584,8 +584,8 @@ fn required_u64(args: &Map<String, Value>, name: &str) -> Result<u64, String> {
 }
 
 /// Parses the optional `httpReadAheadBytes` open argument. 0 / missing keeps
-/// the kernel default; negative or fractional values are rejected because they
-/// cannot be a byte count.
+/// the default resolution (environment override, then 2 MiB); negative or
+/// fractional values are rejected because they cannot be a byte count.
 fn optional_read_ahead_bytes(args: &Map<String, Value>) -> Result<u64, String> {
     let Some(value) = args.get("httpReadAheadBytes") else {
         return Ok(0);
@@ -675,6 +675,23 @@ fn update_u32(args: &Map<String, Value>, name: &str, target: &mut u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_bridge_parses_http_read_ahead_bytes() {
+        for (value, expected) in [
+            (Value::Null, 0),
+            (json!(0), 0),
+            (json!(2_097_152), 2_097_152),
+        ] {
+            let args = Map::from_iter([("httpReadAheadBytes".to_string(), value)]);
+            assert_eq!(optional_read_ahead_bytes(&args), Ok(expected));
+        }
+
+        for value in [json!(-1), json!(1.5), json!("2097152")] {
+            let args = Map::from_iter([("httpReadAheadBytes".to_string(), value)]);
+            assert!(optional_read_ahead_bytes(&args).is_err());
+        }
+    }
 
     #[test]
     fn json_bridge_is_exported_on_supported_hosts() {

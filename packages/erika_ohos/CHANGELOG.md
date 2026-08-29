@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added HTTP headers and per-open read-ahead tuning to `ErikaPlayer.open`.
+
 ## 0.1.7
 
 - Initial ArkTS/OHPM package scaffold.

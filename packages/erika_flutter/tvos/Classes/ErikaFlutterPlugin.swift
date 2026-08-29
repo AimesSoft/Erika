@@ -220,7 +220,7 @@ private struct ErikaHttpHeader {
 }
 
 /// Mirrors the C `ErikaOpenOptions`: headers plus per-request tuning.
-/// `httpReadAheadBytes` of 0 keeps the kernel default.
+/// `httpReadAheadBytes` of 0 uses the environment override, then 2 MiB.
 private struct ErikaOpenOptions {
   var headers: UnsafeRawPointer?
   var headerCount: UInt = 0
@@ -1971,7 +1971,7 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
           throw ErikaPluginError.invalidArguments("uri is required.")
         }
         let headers = (args["httpHeaders"] as? [String: String]) ?? [:]
-        let readAhead = (args["httpReadAheadBytes"] as? NSNumber)?.uint64Value ?? 0
+        let readAhead = try optionalReadAheadBytes(args["httpReadAheadBytes"])
         if let metadata = args["metadata"] as? [String: Any] {
           try applyMediaMetadata(metadata, to: host)
         } else {
@@ -2768,6 +2768,21 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
       throw ErikaPluginError.invalidArguments("trackId must be an integer or null.")
     }
     return trackId >= 0 ? trackId : nil
+  }
+
+  private func optionalReadAheadBytes(_ value: Any?) throws -> UInt64 {
+    if value == nil || value is NSNull { return 0 }
+    guard let number = value as? NSNumber else {
+      throw ErikaPluginError.invalidArguments("httpReadAheadBytes must be a non-negative integer.")
+    }
+    let numericValue = number.doubleValue
+    guard numericValue.isFinite,
+          numericValue >= 0,
+          numericValue.rounded(.towardZero) == numericValue,
+          numericValue <= Double(Int64.max) else {
+      throw ErikaPluginError.invalidArguments("httpReadAheadBytes must be a non-negative integer.")
+    }
+    return number.uint64Value
   }
 
   private func danmakuConfig(

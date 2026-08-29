@@ -164,9 +164,9 @@ takes microseconds.
 `erika_open_with_options` supersedes `erika_open_with_headers`: it takes an
 `ErikaOpenOptions` struct that bundles the header array with per-request
 tuning. A `NULL` `options` pointer means defaults. `http_read_ahead_bytes`
-overrides the HTTP(S) read-ahead window in bytes for this request — `0` keeps
-the kernel default (2 MiB; the `ERIKA_HTTP_READAHEAD_BYTES` environment
-variable remains a process-wide override that the explicit value supersedes).
+overrides the HTTP(S) read-ahead window in bytes for this request. `0` uses the
+process-wide `ERIKA_HTTP_READAHEAD_BYTES` override when it is set, otherwise
+the 2 MiB default; an explicit non-zero value supersedes the environment.
 Non-zero values in `reserved` are rejected so future fields can be added
 without silently changing behavior for older hosts. Read-ahead only affects
 HTTP(S) playback; local files ignore it.
@@ -175,7 +175,7 @@ HTTP(S) playback; local files ignore it.
 typedef struct ErikaOpenOptions {
   const ErikaHttpHeader *headers;
   uintptr_t header_count;
-  uint64_t http_read_ahead_bytes;   /* 0 = kernel default */
+  uint64_t http_read_ahead_bytes;   /* 0 = environment override, then 2 MiB */
   uint64_t reserved[3];             /* must be zero */
 } ErikaOpenOptions;
 ```

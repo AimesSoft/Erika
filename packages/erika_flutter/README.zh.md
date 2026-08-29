@@ -227,6 +227,21 @@ HTTP 请求头支持），带请求头的 `open` 会抛出异常，而不是静�
 
 请求头只作用于媒体 source——外挂字幕轨道和弹幕 sidecar 文件仍然不带这些请求头拉取。
 
+## HTTP 预读窗口
+
+可通过 `httpReadAheadBytes` 为单次 HTTP(S) 打开设置预读窗口：
+
+```dart
+await player.open(
+  'https://example.com/video.mp4',
+  httpReadAheadBytes: 16 * 1024 * 1024,
+);
+```
+
+正数会覆盖 `ERIKA_HTTP_READAHEAD_BYTES`；null 或 0 会优先采用该环境变量，未设置时使用
+native 的 2 MiB 默认值。本地文件忽略此参数。0.1.7 或更早的 native library 不包含新的
+options 入口，因此请求预读调参时会抛出明确错误，而不会静默丢弃设置。
+
 ## Output Mode
 
 `ErikaPlayer()` 会让 Apple 插件根据当前屏幕和环境选择 SDR 或 Apple EDR；Android 默认

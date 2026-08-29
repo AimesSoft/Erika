@@ -1626,8 +1626,8 @@ fn optional_bool(args: &Map<String, Value>, name: &str) -> Option<bool> {
 }
 
 /// Parses the optional `httpReadAheadBytes` open argument. 0 / missing keeps
-/// the kernel default; negative or fractional values are rejected because they
-/// cannot be a byte count.
+/// the default resolution (environment override, then 2 MiB); negative or
+/// fractional values are rejected because they cannot be a byte count.
 fn optional_read_ahead_bytes(args: &Map<String, Value>) -> Result<u64, String> {
     let Some(value) = args.get("httpReadAheadBytes") else {
         return Ok(0);
@@ -1835,6 +1835,23 @@ fn normalized_scale(scale: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_http_read_ahead_bytes() {
+        for (value, expected) in [
+            (Value::Null, 0),
+            (json!(0), 0),
+            (json!(2_097_152), 2_097_152),
+        ] {
+            let args = Map::from_iter([("httpReadAheadBytes".to_string(), value)]);
+            assert_eq!(optional_read_ahead_bytes(&args), Ok(expected));
+        }
+
+        for value in [json!(-1), json!(1.5), json!("2097152")] {
+            let args = Map::from_iter([("httpReadAheadBytes".to_string(), value)]);
+            assert!(optional_read_ahead_bytes(&args).is_err());
+        }
+    }
 
     #[test]
     fn allocates_monotonic_nonzero_presenter_ids_without_reuse() {

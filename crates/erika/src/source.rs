@@ -373,7 +373,7 @@ impl HttpRangeSource {
 
     /// `read_ahead`: explicit read-ahead window in bytes; `None` (or `Some(0)`)
     /// falls back to the `ERIKA_HTTP_READAHEAD_BYTES` env override, then the
-    /// kernel default.
+    /// 2 MiB engine default.
     pub fn with_http_headers_and_read_ahead(
         uri: impl Into<String>,
         http_headers: Vec<(String, String)>,
@@ -1166,7 +1166,7 @@ pub fn source_from_uri_with_hint_and_headers(
 
 /// `http_read_ahead_bytes` only applies to HTTP(S) sources and overrides the
 /// per-request read-ahead window; `None` keeps the default resolution
-/// (env override, then kernel default).
+/// (env override, then the 2 MiB engine default).
 pub fn source_from_uri_with_options(
     uri: &str,
     source_hint: MediaSourceHint,
@@ -1531,6 +1531,17 @@ mod tests {
                 ("X-Playback-Session".to_string(), "session-123".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn http_source_constructor_preserves_explicit_read_ahead() {
+        let source = HttpRangeSource::with_http_headers_and_read_ahead(
+            "https://example.invalid/video.mp4",
+            Vec::new(),
+            Some(16 * 1024 * 1024),
+        );
+
+        assert_eq!(source.read_ahead_bytes, 16 * 1024 * 1024);
     }
 
     #[test]

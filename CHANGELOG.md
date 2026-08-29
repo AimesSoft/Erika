@@ -8,9 +8,15 @@
   `erika_presenter_open_with_options`, superseding the `_with_headers` pair.
   The options struct bundles the header array with per-request tuning, starting
   with `http_read_ahead_bytes` to override the HTTP(S) read-ahead window
-  (0 keeps the 2 MiB kernel default; an explicit value supersedes the
-  `ERIKA_HTTP_READAHEAD_BYTES` environment variable). Reserved fields must be
-  zero and are validated so future fields cannot silently change behavior.
+  (0 uses `ERIKA_HTTP_READAHEAD_BYTES` when set, otherwise the 2 MiB default;
+  an explicit value supersedes the environment variable). Reserved fields must
+  be zero and are validated so future fields cannot silently change behavior.
+
+### Flutter and OpenHarmony
+
+- Added `httpReadAheadBytes` to Flutter `ErikaPlayer.open` on Android, Apple
+  platforms, Windows, and OpenHarmony, and exposed matching open options in the
+  standalone OpenHarmony SDK.
 
 ### Danmaku
 

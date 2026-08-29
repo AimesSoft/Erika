@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added per-open HTTP read-ahead tuning through `httpReadAheadBytes` on
+  Android, Apple platforms, Windows, and OpenHarmony.
+
 ## 0.1.7
 
 - Published `erika_flutter` as a standalone pub.dev package with package-local

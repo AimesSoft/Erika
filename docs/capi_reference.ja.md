@@ -157,8 +157,9 @@ GET、prefetch request に使用されます。
 リクエスト単位のチューニングを `ErikaOpenOptions` 構造体にまとめて渡します。
 `options` に NULL を指定するとすべて既定値になります。`http_read_ahead_bytes` は
 このリクエストの HTTP(S) 先読みウィンドウ（バイト）を上書きします。`0` は
-kernel の既定値（2 MiB）のままです。明示的な値はプロセス全体の環境変数
-`ERIKA_HTTP_READAHEAD_BYTES` より優先されます。`reserved` の非ゼロ値は拒否され、
+プロセス全体の環境変数 `ERIKA_HTTP_READAHEAD_BYTES` があればその値を使い、
+なければ 2 MiB の既定値を使います。明示的な非ゼロ値は環境変数より優先されます。
+`reserved` の非ゼロ値は拒否され、
 将来のフィールド追加が古いホストの動作を黙って変えないようになっています。
 先読みウィンドウは HTTP(S) 再生にのみ影響し、ローカルファイルには無効です。
 
@@ -166,7 +167,7 @@ kernel の既定値（2 MiB）のままです。明示的な値はプロセス�
 typedef struct ErikaOpenOptions {
   const ErikaHttpHeader *headers;
   uintptr_t header_count;
-  uint64_t http_read_ahead_bytes;   /* 0 = kernel 既定値 */
+  uint64_t http_read_ahead_bytes;   /* 0 = 環境変数、なければ 2 MiB */
   uint64_t reserved[3];             /* ゼロでなければなりません */
 } ErikaOpenOptions;
 ```

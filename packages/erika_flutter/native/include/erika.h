@@ -55,7 +55,8 @@ typedef struct ErikaHttpHeader {
 /* Extended open parameters for erika_open_with_options /
  * erika_presenter_open_with_options. Pass zero for fields you do not use;
  * reserved must be zero. http_read_ahead_bytes overrides the HTTP(S)
- * read-ahead window (in bytes) — 0 keeps the kernel default. */
+ * read-ahead window (in bytes); 0 uses ERIKA_HTTP_READAHEAD_BYTES when set,
+ * otherwise the 2 MiB default. */
 typedef struct ErikaOpenOptions {
   const ErikaHttpHeader *headers;
   uintptr_t header_count;

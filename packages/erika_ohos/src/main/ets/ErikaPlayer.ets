@@ -20,6 +20,11 @@ export interface ErikaPlayerConfig {
   upscaler?: number;
 }
 
+export interface ErikaOpenOptions {
+  httpHeaders?: ESObject;
+  httpReadAheadBytes?: number;
+}
+
 /**
  * Native ArkTS wrapper around ErikaPresenterHandle.
  *
@@ -44,8 +49,16 @@ export class ErikaPlayer {
     return this.nativeId;
   }
 
-  open(uri: string): ESObject | null {
-    return this.invokeOrThrow('open', { uri: uri });
+  open(uri: string, options: ErikaOpenOptions = {}): ESObject | null {
+    const readAhead: number = options.httpReadAheadBytes ?? 0;
+    if (!Number.isSafeInteger(readAhead) || readAhead < 0) {
+      throw new Error('httpReadAheadBytes must be a non-negative safe integer');
+    }
+    return this.invokeOrThrow('open', {
+      uri: uri,
+      httpHeaders: options.httpHeaders,
+      httpReadAheadBytes: readAhead > 0 ? readAhead : undefined,
+    });
   }
 
   play(): ESObject | null {

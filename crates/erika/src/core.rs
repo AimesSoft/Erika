@@ -164,9 +164,9 @@ pub struct MediaRequest {
     pub uri: String,
     pub source_hint: MediaSourceHint,
     pub http_headers: Vec<(String, String)>,
-    /// HTTP read-ahead window in bytes for HTTP(S) playback. `None` keeps the
-    /// kernel default (see `HttpRangeSource::DEFAULT_READ_AHEAD_BYTES`), with
-    /// the `ERIKA_HTTP_READAHEAD_BYTES` env override still honored.
+    /// HTTP read-ahead window in bytes for HTTP(S) playback. `None` honors the
+    /// `ERIKA_HTTP_READAHEAD_BYTES` env override, then uses the 2 MiB engine
+    /// default (see `HttpRangeSource::DEFAULT_READ_AHEAD_BYTES`).
     pub http_read_ahead_bytes: Option<u64>,
 }
 
@@ -3342,6 +3342,22 @@ fn emit_subtitle_frame_from_worker(inner: &Arc<Mutex<PlayerInner>>, frame: Playe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn media_request_normalizes_http_read_ahead_defaults() {
+        assert_eq!(
+            MediaRequest::new("https://example.invalid/video.mp4")
+                .with_http_read_ahead_bytes(8 * 1024 * 1024)
+                .http_read_ahead_bytes,
+            Some(8 * 1024 * 1024)
+        );
+        assert_eq!(
+            MediaRequest::new("https://example.invalid/video.mp4")
+                .with_http_read_ahead_bytes(0)
+                .http_read_ahead_bytes,
+            None
+        );
+    }
 
     #[test]
     fn surface_metrics_keep_exact_physical_extent() {
