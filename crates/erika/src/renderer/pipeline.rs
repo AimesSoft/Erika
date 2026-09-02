@@ -218,12 +218,10 @@ impl DoviUniforms {
             uniforms.flags[1 + component] = segments as f32;
             let mut interior = [DOVI_PIVOT_SENTINEL; DOVI_MAX_PIECES];
             interior[..segments - 1].copy_from_slice(&curve.pivots[1..segments]);
-            uniforms.pivots[2 * component] =
-                [interior[0], interior[1], interior[2], interior[3]];
+            uniforms.pivots[2 * component] = [interior[0], interior[1], interior[2], interior[3]];
             uniforms.pivots[2 * component + 1] =
                 [interior[4], interior[5], interior[6], interior[7]];
-            uniforms.bounds[component] =
-                [curve.pivots[0], curve.pivots[segments], 0.0, 0.0];
+            uniforms.bounds[component] = [curve.pivots[0], curve.pivots[segments], 0.0, 0.0];
 
             let mut mmr_row = 0usize;
             for (segment, &kind) in curve.mmr_orders[..segments].iter().enumerate() {
@@ -238,15 +236,12 @@ impl DoviUniforms {
                     continue;
                 }
                 let order = (kind as usize).min(DOVI_MAX_MMR_ORDER);
-                for (index, coefficients) in curve.mmr_coeffs[segment][..order]
-                    .iter()
-                    .enumerate()
-                {
+                let orders = &curve.mmr_coeffs[segment][..order];
+                for (index, coefficients) in orders.iter().enumerate() {
                     let row = DOVI_MAX_PIECES * 2 * DOVI_MAX_MMR_ORDER * component
                         + mmr_row
                         + 2 * index;
-                    uniforms.mmr[row] =
-                        [coefficients[0], coefficients[1], coefficients[2], 0.0];
+                    uniforms.mmr[row] = [coefficients[0], coefficients[1], coefficients[2], 0.0];
                     uniforms.mmr[row + 1] = [
                         coefficients[3],
                         coefficients[4],
@@ -1454,19 +1449,15 @@ mod tests {
     #[test]
     fn dovi_uniforms_are_disabled_without_metadata() {
         let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq);
-        let uniforms = DoviUniforms::of(&source);
+        assert_eq!(DoviUniforms::of(&source), DoviUniforms::disabled());
+        assert_eq!(DoviUniforms::disabled().flags[0], 0.0);
+
+        let target = TargetColorState::sdr(ColorPrimaries::Bt709);
+        let pipeline = VideoRenderPipeline::new(source, target);
+        let uniforms = VideoUniforms::from_pipeline(&pipeline, false, false).dovi;
 
         assert_eq!(uniforms, DoviUniforms::disabled());
         assert_eq!(uniforms.flags[0], 0.0);
-        assert_eq!(
-            VideoUniforms::from_pipeline(
-                &VideoRenderPipeline::new(source, TargetColorState::sdr(ColorPrimaries::Bt709)),
-                false,
-                false,
-            )
-            .dovi,
-            DoviUniforms::disabled(),
-        );
     }
 
     #[test]
@@ -1479,10 +1470,7 @@ mod tests {
         assert_eq!(uniforms.flags, [1.0, 3.0, 0.0, 0.0]);
         // Interior pivots skip the endpoints; padding gets the sentinel.
         assert_eq!(uniforms.pivots[0], [0.25, 0.5, DOVI_PIVOT_SENTINEL, DOVI_PIVOT_SENTINEL]);
-        assert_eq!(
-            uniforms.pivots[1],
-            [DOVI_PIVOT_SENTINEL; 4],
-        );
+        assert_eq!(uniforms.pivots[1], [DOVI_PIVOT_SENTINEL; 4]);
         assert_eq!(uniforms.bounds[0], [0.0, 1.0, 0.0, 0.0]);
         assert_eq!(uniforms.coefficients[0], [0.0, 0.5, 0.0, 0.0]);
         assert_eq!(uniforms.coefficients[1], [1.0, 1.0, 0.5, 0.0]);

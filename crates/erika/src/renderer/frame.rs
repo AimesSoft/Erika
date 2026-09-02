@@ -1,8 +1,6 @@
 use crate::core::{ColorPrimaries, TransferFunction};
 use crate::ffmpeg::{D3d11vaTexture, Frame, PlanarFrame, Result as FfmpegResult};
-use crate::renderer::pipeline::{
-    ColorRange, DoviSourceMetadata, HdrMetadata, MatrixCoefficients,
-};
+use crate::renderer::pipeline::{ColorRange, DoviSourceMetadata, HdrMetadata, MatrixCoefficients};
 
 #[cfg(any(target_os = "android", target_env = "ohos"))]
 use std::sync::Arc;

@@ -13,8 +13,9 @@ use std::time::Duration;
 use crate::core::{ColorPrimaries, FrameRate, TrackInfo, TrackKind, TransferFunction, VideoParams};
 use crate::renderer::pipeline::{
     Chromaticity, ColorRange, ContentLightMetadata, DoviComponentCurve, DoviSourceMetadata,
-    DOVI_MAX_MMR_ORDER, DOVI_MAX_PIECES, HdrMetadata, MasteringDisplayMetadata, MatrixCoefficients,
+    HdrMetadata, MasteringDisplayMetadata, MatrixCoefficients, RgbMatrix,
 };
+use crate::renderer::pipeline::{DOVI_MAX_MMR_ORDER, DOVI_MAX_PIECES};
 use crate::source::{ByteRange, MediaSource};
 use crate::subtitle::{
     AssTrackResources, DecodedSubtitleFrame, SubtitleBitmapPlane, SubtitleFontAttachment,
@@ -4332,10 +4333,7 @@ unsafe fn frame_dovi_metadata(frame: *const sys::AVFrame) -> Option<DoviSourceMe
         return None;
     }
     let side_data = unsafe {
-        sys::av_frame_get_side_data(
-            frame,
-            sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA,
-        )
+        sys::av_frame_get_side_data(frame, sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA)
     };
     if side_data.is_null() {
         return None;
@@ -4347,17 +4345,10 @@ unsafe fn frame_dovi_metadata(frame: *const sys::AVFrame) -> Option<DoviSourceMe
     // The sub-structures live behind byte offsets inside this side data buffer
     // (`av_dovi_get_header` and friends are C inline helpers bindgen does not
     // emit), so resolve them by the same pointer arithmetic here.
-    let metadata = data.cast::<sys::AVDOVIMetadata>();
-    let base = data;
-    let header = unsafe {
-        &*base.add((*metadata).header_offset).cast::<sys::AVDOVIRpuDataHeader>()
-    };
-    let mapping = unsafe {
-        &*base.add((*metadata).mapping_offset).cast::<sys::AVDOVIDataMapping>()
-    };
-    let color = unsafe {
-        &*base.add((*metadata).color_offset).cast::<sys::AVDOVIColorMetadata>()
-    };
+    let metadata = unsafe { *data.cast::<sys::AVDOVIMetadata>() };
+    let header = unsafe { &*data.add(metadata.header_offset).cast::<sys::AVDOVIRpuDataHeader>() };
+    let mapping = unsafe { &*data.add(metadata.mapping_offset).cast::<sys::AVDOVIDataMapping>() };
+    let color = unsafe { &*data.add(metadata.color_offset).cast::<sys::AVDOVIColorMetadata>() };
 
     let bl_bit_depth = usize::from(header.bl_bit_depth);
     let coef_denom = u32::from(header.coef_log2_denom);
@@ -4382,9 +4373,7 @@ unsafe fn frame_dovi_metadata(frame: *const sys::AVFrame) -> Option<DoviSourceMe
             *slot = pivot_scale * f32::from(pivot);
         }
         for segment in 0..num_pivots - 1 {
-            if source.mapping_idc[segment]
-                == sys::AVDOVIMappingMethod_AV_DOVI_MAPPING_MMR
-            {
+            if source.mapping_idc[segment] == sys::AVDOVIMappingMethod_AV_DOVI_MAPPING_MMR {
                 let order = usize::from(source.mmr_order[segment]);
                 if order == 0 || order > DOVI_MAX_MMR_ORDER {
                     continue;
@@ -4392,22 +4381,22 @@ unsafe fn frame_dovi_metadata(frame: *const sys::AVFrame) -> Option<DoviSourceMe
                 curve.mmr_orders[segment] = order as u8;
                 curve.mmr_constants[segment] =
                     coefficient_scale * source.mmr_constant[segment] as f32;
-                for (order_index, coefficients) in curve.mmr_coeffs[segment]
-                    [..order]
-                    .iter_mut()
-                    .enumerate()
-                {
-                    for (slot, coefficient) in coefficients.iter_mut().enumerate() {
-                        *slot = coefficient_scale
-                            * source.mmr_coef[segment][order_index][slot] as f32;
+                let destination = &mut curve.mmr_coeffs[segment][..order];
+                for (order_index, coefficients) in destination.iter_mut().enumerate() {
+                    for (index, coefficient) in coefficients.iter_mut().enumerate() {
+                        *coefficient = coefficient_scale
+                            * source.mmr_coef[segment][order_index][index] as f32;
                     }
                 }
             } else {
                 let poly_order = usize::from(source.poly_order[segment]);
+                let coefficients = &source.poly_coef[segment];
                 for (order_index, slot) in curve.poly_coeffs[segment].iter_mut().enumerate() {
-                    *slot = (order_index <= poly_order)
-                        .then(|| coefficient_scale * source.poly_coef[segment][order_index] as f32)
-                        .unwrap_or(0.0);
+                    *slot = if order_index <= poly_order {
+                        coefficient_scale * coefficients[order_index] as f32
+                    } else {
+                        0.0
+                    };
                 }
             }
         }
@@ -4424,16 +4413,12 @@ unsafe fn frame_dovi_metadata(frame: *const sys::AVFrame) -> Option<DoviSourceMe
 
     Some(DoviSourceMetadata {
         reshaping,
-        nonlinear_matrix: crate::renderer::pipeline::RgbMatrix::new(rational_matrix(
-            &color.ycc_to_rgb_matrix,
-        )),
+        nonlinear_matrix: RgbMatrix::new(rational_matrix(&color.ycc_to_rgb_matrix)),
         nonlinear_offset: std::array::from_fn(|index| {
             let value = &color.ycc_to_rgb_offset[index];
             value.num as f32 / value.den as f32
         }),
-        rgb_to_lms: crate::renderer::pipeline::RgbMatrix::new(rational_matrix(
-            &color.rgb_to_lms_matrix,
-        )),
+        rgb_to_lms: RgbMatrix::new(rational_matrix(&color.rgb_to_lms_matrix)),
         source_min_pq: color.source_min_pq,
         source_max_pq: color.source_max_pq,
     })
@@ -5481,8 +5466,7 @@ mod tests {
                 rational(17372, 8192),
                 rational(0, 8192),
             ];
-            (*color).ycc_to_rgb_offset =
-                [rational(1, 4), rational(2, 1), rational(2, 1)];
+            (*color).ycc_to_rgb_offset = [rational(1, 4), rational(2, 1), rational(2, 1)];
             (*color).rgb_to_lms_matrix = [
                 rational(5845, 16384),
                 rational(9702, 16384),
