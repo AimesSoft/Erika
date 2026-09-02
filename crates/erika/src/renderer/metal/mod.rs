@@ -11,7 +11,8 @@ use crate::ffmpeg::{Frame, PlanarFrame};
 use crate::overlay::OverlayFrame;
 pub use crate::renderer::pipeline::LumaUpscalerMode;
 use crate::renderer::pipeline::{
-    ColorRange, HdrMetadata, MatrixCoefficients, SourceColorState, VideoRenderPipeline,
+    ColorRange, DoviSourceMetadata, HdrMetadata, MatrixCoefficients, SourceColorState,
+    VideoRenderPipeline,
 };
 use crate::trace;
 
@@ -302,12 +303,14 @@ impl ImportedVideoFrame {
         range: ColorRange,
         matrix: MatrixCoefficients,
         hdr_metadata: Option<HdrMetadata>,
+        dovi_metadata: Option<DoviSourceMetadata>,
     ) {
         self.set_source_color(
             SourceColorState::new(primaries, transfer)
                 .range(range)
                 .matrix(matrix)
-                .hdr_metadata(hdr_metadata),
+                .hdr_metadata(hdr_metadata)
+                .dovi(dovi_metadata),
         );
     }
 }
@@ -600,6 +603,7 @@ impl MetalRenderer {
             frame.color_range(),
             frame.matrix_coefficients(),
             frame.hdr_metadata(),
+            frame.dovi_metadata(),
         );
         Ok(imported)
     }
@@ -1304,6 +1308,7 @@ mod tests {
             ColorRange::Limited,
             MatrixCoefficients::Bt709,
             None,
+            None,
         );
 
         assert_eq!(frame.source_color().range, ColorRange::Full);
@@ -1330,6 +1335,7 @@ mod tests {
             ColorRange::Limited,
             MatrixCoefficients::Bt2020NonConstantLuminance,
             Some(metadata),
+            None,
         );
 
         assert_eq!(frame.source_color().hdr_metadata, Some(metadata));

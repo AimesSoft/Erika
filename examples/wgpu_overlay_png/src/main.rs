@@ -3,6 +3,7 @@
 //! the wgpu overlay/subtitle compositing path (alpha-blended over the video).
 
 use erika::overlay::{OverlayFrame, OverlayViewport};
+use erika::renderer::pipeline::DoviUniforms;
 use erika::renderer::wgpu::{VideoUniforms, WgpuRenderer};
 use erika::subtitle::{SubtitleAlphaBitmap, SubtitleBitmapPlacement, SubtitleBitmapPlane};
 
@@ -169,5 +170,6 @@ fn bars_uniforms() -> VideoUniforms {
             [0.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, 0.0],
         ],
+        dovi: DoviUniforms::disabled(),
     }
 }

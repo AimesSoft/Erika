@@ -74,6 +74,17 @@ struct VsOut {
     float2 texcoord : TEXCOORD0;
 };
 
+struct DoviUniforms {
+    float4 dovi_flags;
+    float4 dovi_pivots[6];
+    float4 dovi_bounds[3];
+    float4 dovi_coefficients[24];
+    float4 dovi_mmr[144];
+    float4 dovi_nonlinear_matrix[3];
+    float4 dovi_nonlinear_offset;
+    float4 dovi_lms_matrix[3];
+};
+
 cbuffer VideoConstants : register(b0) {
     uint is_p010;
     uint full_range;
@@ -86,6 +97,7 @@ cbuffer VideoConstants : register(b0) {
     float4 nits;
     float4 luma_coefficients;
     float4 gamut_matrix_rows[3];
+    DoviUniforms dovi;
     // xy scales native/packed luma coordinates; zw scales native chroma.
     // D3D11VA textures can be allocation-aligned beyond the visible frame.
     float4 texture_scales;
@@ -273,6 +285,83 @@ void expand_ycbcr_range(float y_in, float2 cbcr_in, out float y, out float2 cbcr
     cbcr = (cbcr_in - float2(128.0 / 255.0, 128.0 / 255.0)) * (255.0 / 224.0);
 }
 
+// Dolby Vision RPU reshaping, ported from libplacebo's `pl_shader_dovi_reshape`
+// (the renderer behind mpv's Dolby Vision mapping). The base-layer signal is
+// reshaped per component through piecewise polynomial/MMR curves selected by
+// pivot comparison, where MMR coefficients mix all three raw components.
+float3 dovi_reshaped_signal(float3 sig_in) {
+    float3 sig = clamp(sig_in, 0.0, 1.0);
+    float result[3] = { sig.r, sig.g, sig.b };
+    float4 flags = dovi.dovi_flags;
+    for (uint c = 0; c < 3u; c++) {
+        uint segments = uint(flags[1u + c]);
+        if (segments == 0u) {
+            continue;
+        }
+        float s = result[c];
+        uint index = 0u;
+        for (uint i = 0u; i < 7u; i++) {
+            float4 pivot_row = dovi.dovi_pivots[2u * c + i / 4u];
+            float pivot = pivot_row[i % 4u];
+            if (s >= pivot) {
+                index = index + 1u;
+            }
+        }
+        float4 coeff = dovi.dovi_coefficients[8u * c + index];
+        if (coeff.w < 0.5) {
+            s = (coeff.z * s + coeff.y) * s + coeff.x;
+        } else {
+            uint base = 48u * c + uint(coeff.y);
+            uint order = uint(coeff.w);
+            float4 sig_x = float4(
+                sig.x * sig.y,
+                sig.x * sig.z,
+                sig.y * sig.z,
+                sig.x * sig.y * sig.z
+            );
+            s = coeff.x;
+            s = s + dot(dovi.dovi_mmr[base].xyz, sig);
+            s = s + dot(dovi.dovi_mmr[base + 1u], sig_x);
+            if (order >= 2u) {
+                float3 sig2 = sig * sig;
+                float4 sig_x2 = sig_x * sig_x;
+                s = s + dot(dovi.dovi_mmr[base + 2u].xyz, sig2);
+                s = s + dot(dovi.dovi_mmr[base + 3u], sig_x2);
+                if (order >= 3u) {
+                    s = s + dot(dovi.dovi_mmr[base + 4u].xyz, sig2 * sig);
+                    s = s + dot(dovi.dovi_mmr[base + 5u], sig_x2 * sig_x);
+                }
+            }
+        }
+        float4 bounds = dovi.dovi_bounds[c];
+        result[c] = clamp(s, bounds.x, bounds.y);
+    }
+    return float3(result[0], result[1], result[2]);
+}
+
+// Reshaped nonlinear signal to PQ-encoded IPT via the RPU's ycc_to_rgb matrix
+// and signal offsets. Applying the RPU offsets keeps integer offset codes
+// exactly on sample codes (1024/1023 folded in on the CPU).
+float3 dovi_signal_to_pq_rgb(float3 sig) {
+    float3 reshaped = dovi_reshaped_signal(sig) - dovi.dovi_nonlinear_offset.xyz;
+    return float3(
+        dot(dovi.dovi_nonlinear_matrix[0].xyz, reshaped),
+        dot(dovi.dovi_nonlinear_matrix[1].xyz, reshaped),
+        dot(dovi.dovi_nonlinear_matrix[2].xyz, reshaped)
+    );
+}
+
+// Linearized BT.2020-referred HPE LMS back to linear RGB, using the composite
+// of the fixed HPE inverse with the RPU's rgb_to_lms matrix (premultiplied on
+// the CPU, matching libplacebo's dovi_lms2rgb).
+float3 dovi_lms_to_rgb(float3 linear) {
+    return float3(
+        dot(dovi.dovi_lms_matrix[0].xyz, linear),
+        dot(dovi.dovi_lms_matrix[1].xyz, linear),
+        dot(dovi.dovi_lms_matrix[2].xyz, linear)
+    );
+}
+
 VsOut vs_main(VsIn input) {
     VsOut output;
     output.position = float4(input.position, 0.0, 1.0);
@@ -333,18 +422,29 @@ float4 ps_main(VsOut input) : SV_Target {
         ? sample_packed_luma(luma_coord)
         : lumaTex.Sample(videoSampler, luma_coord).r;
     float2 cbcr_sample = chromaTex.Sample(videoSampler, chroma_coord).rg;
-    float y;
-    float2 cbcr;
-    expand_ycbcr_range(y_sample, cbcr_sample, y, cbcr);
-
-    float kr = luma_coefficients.x;
-    float kg = max(luma_coefficients.y, 0.000001);
-    float kb = luma_coefficients.z;
+    bool dovi_enabled = dovi.dovi_flags.x != 0.0;
     float3 rgb;
-    rgb.r = y + 2.0 * (1.0 - kr) * cbcr.y;
-    rgb.b = y + 2.0 * (1.0 - kb) * cbcr.x;
-    rgb.g = (y - kr * rgb.r - kb * rgb.b) / kg;
+    if (dovi_enabled && (base_input_mode == 0u || base_input_mode == 2u)) {
+        // The base layer carries the raw 12-bit DV signal (10-bit container,
+        // full range); range expansion and the YCbCr matrix are replaced by
+        // the RPU reshaping + ycc_to_rgb path.
+        rgb = dovi_signal_to_pq_rgb(float3(y_sample, cbcr_sample.x, cbcr_sample.y));
+    } else {
+        float y;
+        float2 cbcr;
+        expand_ycbcr_range(y_sample, cbcr_sample, y, cbcr);
+
+        float kr = luma_coefficients.x;
+        float kg = max(luma_coefficients.y, 0.000001);
+        float kb = luma_coefficients.z;
+        rgb.r = y + 2.0 * (1.0 - kr) * cbcr.y;
+        rgb.b = y + 2.0 * (1.0 - kb) * cbcr.x;
+        rgb.g = (y - kr * rgb.r - kb * rgb.b) / kg;
+    }
     rgb = transfer_to_source_reference_linear(rgb);
+    if (dovi_enabled) {
+        rgb = dovi_lms_to_rgb(rgb);
+    }
     rgb = apply_gamut_map(rgb);
     rgb = source_reference_to_nits(rgb);
     rgb = tone_map_nits(rgb);
@@ -2770,6 +2870,7 @@ fn source_color_for_frame(frame: &PlayerVideoFrame) -> SourceColorState {
     .range(frame.frame.color_range())
     .matrix(frame.frame.matrix_coefficients())
     .hdr_metadata(frame.frame.hdr_metadata())
+    .dovi(frame.frame.dovi_metadata())
 }
 
 fn constants_for_frame(

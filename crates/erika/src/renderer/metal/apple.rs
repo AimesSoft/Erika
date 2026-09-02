@@ -57,7 +57,9 @@ use crate::renderer::metal::{
     VideoFrameTextureSource, VideoRenderFrame, fourcc_string, metal_drawable_pixel_format,
     metal_target_color,
 };
-use crate::renderer::pipeline::{ColorRange, LumaUpscalerMode, ToneMapOperator};
+use crate::renderer::pipeline::{
+    ColorRange, DoviUniforms, LumaUpscalerMode, ToneMapOperator,
+};
 use crate::renderer::pipeline::{SourceColorState, TargetColorState};
 use crate::renderer::presentation::PresentationLayout as VideoPresentationLayout;
 use crate::subtitle::{AssColor, SubtitleAlphaBitmap};
@@ -869,6 +871,7 @@ impl MetalRendererImpl {
                 ],
                 luma_coefficients: luma_coefficients(frame.pipeline.luma_coefficients()),
                 gamut_matrix_rows: frame.pipeline.gamut_matrix().row4s(),
+                dovi: DoviUniforms::of(&frame.pipeline.source),
             };
             encoder.setRenderPipelineState(&pipeline);
             encoder.setFragmentTexture_atIndex(Some(luma), 0);
@@ -1066,6 +1069,7 @@ impl MetalRendererImpl {
                 ],
                 luma_coefficients: luma_coefficients(frame.pipeline.luma_coefficients()),
                 gamut_matrix_rows: frame.pipeline.gamut_matrix().row4s(),
+                dovi: DoviUniforms::of(&frame.pipeline.source),
             };
             encoder.setRenderPipelineState(&pipeline);
             encoder.setFragmentTexture_atIndex(Some(luma), 0);
@@ -2155,6 +2159,7 @@ struct VideoUniforms {
     nits: [f32; 4],
     luma_coefficients: [f32; 4],
     gamut_matrix_rows: [[f32; 4]; 3],
+    dovi: DoviUniforms,
 }
 
 fn metal_pixel_format(format: MetalDrawablePixelFormat) -> MTLPixelFormat {
@@ -2787,6 +2792,14 @@ struct VideoUniforms {
     float4 nits;
     float4 luma_coefficients;
     float4 gamut_matrix_rows[3];
+    float4 dovi_flags;
+    float4 dovi_pivots[6];
+    float4 dovi_bounds[3];
+    float4 dovi_coefficients[24];
+    float4 dovi_mmr[144];
+    float4 dovi_nonlinear_matrix[3];
+    float4 dovi_nonlinear_offset;
+    float4 dovi_lms_matrix[3];
 };
 
 float source_peak_nits(constant VideoUniforms& uniforms) {
@@ -2979,6 +2992,83 @@ RangeExpandedYCbCr expand_ycbcr_range(float y, float2 cbcr, constant VideoUnifor
     return RangeExpandedYCbCr { y, cbcr };
 }
 
+// Dolby Vision RPU reshaping, ported from libplacebo's `pl_shader_dovi_reshape`
+// (the renderer behind mpv's Dolby Vision mapping). The base-layer signal is
+// reshaped per component through piecewise polynomial/MMR curves selected by
+// pivot comparison, where MMR coefficients mix all three raw components.
+float3 dovi_reshaped_signal(float3 sig_in, constant VideoUniforms& uniforms) {
+    float3 sig = clamp(sig_in, 0.0, 1.0);
+    float result[3] = { sig.r, sig.g, sig.b };
+    float4 flags = uniforms.dovi_flags;
+    for (uint c = 0u; c < 3u; c = c + 1u) {
+        uint segments = uint(flags[1u + c]);
+        if (segments == 0u) {
+            continue;
+        }
+        float s = result[c];
+        uint index = 0u;
+        for (uint i = 0u; i < 7u; i = i + 1u) {
+            float4 pivot_row = uniforms.dovi_pivots[2u * c + i / 4u];
+            float pivot = pivot_row[i % 4u];
+            if (s >= pivot) {
+                index = index + 1u;
+            }
+        }
+        float4 coeff = uniforms.dovi_coefficients[8u * c + index];
+        if (coeff.w < 0.5) {
+            s = (coeff.z * s + coeff.y) * s + coeff.x;
+        } else {
+            uint base = 48u * c + uint(coeff.y);
+            uint order = uint(coeff.w);
+            float4 sig_x = float4(
+                sig.x * sig.y,
+                sig.x * sig.z,
+                sig.y * sig.z,
+                sig.x * sig.y * sig.z
+            );
+            s = coeff.x;
+            s = s + dot(uniforms.dovi_mmr[base].xyz, sig);
+            s = s + dot(uniforms.dovi_mmr[base + 1u], sig_x);
+            if (order >= 2u) {
+                float3 sig2 = sig * sig;
+                float4 sig_x2 = sig_x * sig_x;
+                s = s + dot(uniforms.dovi_mmr[base + 2u].xyz, sig2);
+                s = s + dot(uniforms.dovi_mmr[base + 3u], sig_x2);
+                if (order >= 3u) {
+                    s = s + dot(uniforms.dovi_mmr[base + 4u].xyz, sig2 * sig);
+                    s = s + dot(uniforms.dovi_mmr[base + 5u], sig_x2 * sig_x);
+                }
+            }
+        }
+        float4 bounds = uniforms.dovi_bounds[c];
+        result[c] = clamp(s, bounds.x, bounds.y);
+    }
+    return float3(result[0], result[1], result[2]);
+}
+
+// Reshaped nonlinear signal to PQ-encoded IPT via the RPU's ycc_to_rgb matrix
+// and signal offsets. Applying the RPU offsets keeps integer offset codes
+// exactly on sample codes (1024/1023 folded in on the CPU).
+float3 dovi_signal_to_pq_rgb(float3 sig, constant VideoUniforms& uniforms) {
+    float3 reshaped = dovi_reshaped_signal(sig, uniforms) - uniforms.dovi_nonlinear_offset.xyz;
+    return float3(
+        dot(uniforms.dovi_nonlinear_matrix[0].xyz, reshaped),
+        dot(uniforms.dovi_nonlinear_matrix[1].xyz, reshaped),
+        dot(uniforms.dovi_nonlinear_matrix[2].xyz, reshaped)
+    );
+}
+
+// Linearized BT.2020-referred HPE LMS back to linear RGB, using the composite
+// of the fixed HPE inverse with the RPU's rgb_to_lms matrix (premultiplied on
+// the CPU, matching libplacebo's dovi_lms2rgb).
+float3 dovi_lms_to_rgb(float3 linear, constant VideoUniforms& uniforms) {
+    return float3(
+        dot(uniforms.dovi_lms_matrix[0].xyz, linear),
+        dot(uniforms.dovi_lms_matrix[1].xyz, linear),
+        dot(uniforms.dovi_lms_matrix[2].xyz, linear)
+    );
+}
+
 vertex VertexOut erika_video_vertex(
     uint vertex_id [[vertex_id]],
     constant VideoUniforms& uniforms [[buffer(0)]]) {
@@ -3016,20 +3106,34 @@ fragment float4 erika_video_fragment(
         ? float2(in.tex_coord.x * 0.5, in.tex_coord.y)
         : in.tex_coord;
     float2 alpha_coord = float2(0.5 + in.tex_coord.x * 0.5, in.tex_coord.y);
-    float y = luma_texture.sample(video_sampler, color_coord).r;
-    float2 cbcr = chroma_texture.sample(video_sampler, color_coord).rg;
-    RangeExpandedYCbCr expanded = expand_ycbcr_range(y, cbcr, uniforms);
-    y = expanded.y;
-    cbcr = expanded.cbcr;
-
-    float kr = uniforms.luma_coefficients.x;
-    float kg = max(uniforms.luma_coefficients.y, 0.000001);
-    float kb = uniforms.luma_coefficients.z;
+    float y_sample = luma_texture.sample(video_sampler, color_coord).r;
+    float2 cbcr_sample = chroma_texture.sample(video_sampler, color_coord).rg;
+    bool dovi_enabled = uniforms.dovi_flags.x != 0.0;
     float3 rgb;
-    rgb.r = y + 2.0 * (1.0 - kr) * cbcr.y;
-    rgb.b = y + 2.0 * (1.0 - kb) * cbcr.x;
-    rgb.g = (y - kr * rgb.r - kb * rgb.b) / kg;
+    if (dovi_enabled) {
+        // The base layer carries the raw 12-bit DV signal (10-bit container,
+        // full range); range expansion and the YCbCr matrix are replaced by
+        // the RPU reshaping + ycc_to_rgb path.
+        rgb = dovi_signal_to_pq_rgb(
+            float3(y_sample, cbcr_sample.x, cbcr_sample.y),
+            uniforms
+        );
+    } else {
+        RangeExpandedYCbCr expanded = expand_ycbcr_range(y_sample, cbcr_sample, uniforms);
+        float y = expanded.y;
+        float2 cbcr = expanded.cbcr;
+
+        float kr = uniforms.luma_coefficients.x;
+        float kg = max(uniforms.luma_coefficients.y, 0.000001);
+        float kb = uniforms.luma_coefficients.z;
+        rgb.r = y + 2.0 * (1.0 - kr) * cbcr.y;
+        rgb.b = y + 2.0 * (1.0 - kb) * cbcr.x;
+        rgb.g = (y - kr * rgb.r - kb * rgb.b) / kg;
+    }
     rgb = transfer_to_source_reference_linear(rgb, uniforms);
+    if (dovi_enabled) {
+        rgb = dovi_lms_to_rgb(rgb, uniforms);
+    }
     rgb = apply_gamut_map(rgb, uniforms);
     rgb = source_reference_to_nits(rgb, uniforms);
     rgb = tone_map_nits(rgb, uniforms);

@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use crate::core::{ColorPrimaries, FrameRate, TrackInfo, TrackKind, TransferFunction, VideoParams};
 use crate::renderer::pipeline::{
-    Chromaticity, ColorRange, ContentLightMetadata, HdrMetadata, MasteringDisplayMetadata,
-    MatrixCoefficients,
+    Chromaticity, ColorRange, ContentLightMetadata, DoviComponentCurve, DoviSourceMetadata,
+    DOVI_MAX_MMR_ORDER, DOVI_MAX_PIECES, HdrMetadata, MasteringDisplayMetadata, MatrixCoefficients,
 };
 use crate::source::{ByteRange, MediaSource};
 use crate::subtitle::{
@@ -2386,6 +2386,13 @@ impl Frame {
         unsafe { frame_hdr_metadata(self.ptr) }
     }
 
+    /// Per-frame Dolby Vision RPU metadata parsed by the HEVC decoder
+    /// (`AV_FRAME_DATA_DOVI_METADATA`). Present for RPU-carrying software
+    /// decoded profiles such as 5 and 8.
+    pub fn dovi_metadata(&self) -> Option<DoviSourceMetadata> {
+        unsafe { frame_dovi_metadata(self.ptr) }
+    }
+
     pub fn transfer_to_system_memory(&self) -> Result<Frame> {
         let frame = Frame::alloc(self.time_base)?;
         check(
@@ -4316,6 +4323,122 @@ unsafe fn frame_hdr_metadata(frame: *const sys::AVFrame) -> Option<HdrMetadata> 
     Some(HdrMetadata::new(mastering_display, content_light))
 }
 
+/// Reads the decoder's parsed Dolby Vision RPU side data and converts it into
+/// shader-ready floats, mirroring libplacebo's `pl_map_dovi_metadata`: pivots
+/// are normalized by the base-layer bit depth and curve coefficients by
+/// `2^-coef_log2_denom`.
+unsafe fn frame_dovi_metadata(frame: *const sys::AVFrame) -> Option<DoviSourceMetadata> {
+    if frame.is_null() {
+        return None;
+    }
+    let side_data = unsafe {
+        sys::av_frame_get_side_data(
+            frame,
+            sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA,
+        )
+    };
+    if side_data.is_null() {
+        return None;
+    }
+    let data = unsafe { (*side_data).data };
+    if data.is_null() {
+        return None;
+    }
+    // The sub-structures live behind byte offsets inside this side data buffer
+    // (`av_dovi_get_header` and friends are C inline helpers bindgen does not
+    // emit), so resolve them by the same pointer arithmetic here.
+    let metadata = data.cast::<sys::AVDOVIMetadata>();
+    let base = data;
+    let header = unsafe {
+        &*base.add((*metadata).header_offset).cast::<sys::AVDOVIRpuDataHeader>()
+    };
+    let mapping = unsafe {
+        &*base.add((*metadata).mapping_offset).cast::<sys::AVDOVIDataMapping>()
+    };
+    let color = unsafe {
+        &*base.add((*metadata).color_offset).cast::<sys::AVDOVIColorMetadata>()
+    };
+
+    let bl_bit_depth = usize::from(header.bl_bit_depth);
+    let coef_denom = u32::from(header.coef_log2_denom);
+    if !(8..=16).contains(&bl_bit_depth) || coef_denom >= 31 {
+        return None;
+    }
+    let pivot_scale = 1.0_f32 / (((1_usize << bl_bit_depth) - 1) as f32);
+    let coefficient_scale = 2.0_f32.powi(-(coef_denom as i32));
+
+    let mut reshaping = [DoviComponentCurve::default(); 3];
+    for (component, curve) in reshaping.iter_mut().enumerate() {
+        let source = &mapping.curves[component];
+        let num_pivots = usize::from(source.num_pivots);
+        if !(2..=DOVI_MAX_PIECES + 1).contains(&num_pivots) {
+            continue;
+        }
+        curve.num_pivots = num_pivots as u8;
+        for (slot, &pivot) in curve.pivots[..num_pivots]
+            .iter_mut()
+            .zip(source.pivots[..num_pivots].iter())
+        {
+            *slot = pivot_scale * f32::from(pivot);
+        }
+        for segment in 0..num_pivots - 1 {
+            if source.mapping_idc[segment]
+                == sys::AVDOVIMappingMethod_AV_DOVI_MAPPING_MMR
+            {
+                let order = usize::from(source.mmr_order[segment]);
+                if order == 0 || order > DOVI_MAX_MMR_ORDER {
+                    continue;
+                }
+                curve.mmr_orders[segment] = order as u8;
+                curve.mmr_constants[segment] =
+                    coefficient_scale * source.mmr_constant[segment] as f32;
+                for (order_index, coefficients) in curve.mmr_coeffs[segment]
+                    [..order]
+                    .iter_mut()
+                    .enumerate()
+                {
+                    for (slot, coefficient) in coefficients.iter_mut().enumerate() {
+                        *slot = coefficient_scale
+                            * source.mmr_coef[segment][order_index][slot] as f32;
+                    }
+                }
+            } else {
+                let poly_order = usize::from(source.poly_order[segment]);
+                for (order_index, slot) in curve.poly_coeffs[segment].iter_mut().enumerate() {
+                    *slot = (order_index <= poly_order)
+                        .then(|| coefficient_scale * source.poly_coef[segment][order_index] as f32)
+                        .unwrap_or(0.0);
+                }
+            }
+        }
+    }
+
+    let rational_matrix = |values: &[sys::AVRational; 9]| -> [[f32; 3]; 3] {
+        std::array::from_fn(|row| {
+            std::array::from_fn(|column| {
+                let value = &values[row * 3 + column];
+                value.num as f32 / value.den as f32
+            })
+        })
+    };
+
+    Some(DoviSourceMetadata {
+        reshaping,
+        nonlinear_matrix: crate::renderer::pipeline::RgbMatrix::new(rational_matrix(
+            &color.ycc_to_rgb_matrix,
+        )),
+        nonlinear_offset: std::array::from_fn(|index| {
+            let value = &color.ycc_to_rgb_offset[index];
+            value.num as f32 / value.den as f32
+        }),
+        rgb_to_lms: crate::renderer::pipeline::RgbMatrix::new(rational_matrix(
+            &color.rgb_to_lms_matrix,
+        )),
+        source_min_pq: color.source_min_pq,
+        source_max_pq: color.source_max_pq,
+    })
+}
+
 unsafe fn mastering_display_metadata(
     frame: *const sys::AVFrame,
 ) -> Option<MasteringDisplayMetadata> {
@@ -5307,6 +5430,106 @@ mod tests {
     fn rational(num: i32, den: i32) -> sys::AVRational {
         sys::AVRational { num, den }
     }
+
+    #[test]
+    fn frame_reads_dovi_side_data() {
+        let frame = Frame::alloc(TimeBase { num: 1, den: 1 }).unwrap();
+        unsafe {
+            let mut size = 0_usize;
+            let metadata = sys::av_dovi_metadata_alloc(&mut size);
+            assert!(!metadata.is_null());
+            assert!(size >= mem::size_of::<sys::AVDOVIMetadata>());
+            let header = (metadata as *mut u8)
+                .add((*metadata).header_offset)
+                .cast::<sys::AVDOVIRpuDataHeader>();
+            let mapping = (metadata as *mut u8)
+                .add((*metadata).mapping_offset)
+                .cast::<sys::AVDOVIDataMapping>();
+            let color = (metadata as *mut u8)
+                .add((*metadata).color_offset)
+                .cast::<sys::AVDOVIColorMetadata>();
+
+            (*header).bl_bit_depth = 10;
+            (*header).el_bit_depth = 10;
+            (*header).coef_log2_denom = 13;
+            (*header).disable_residual_flag = 1;
+
+            let curve = &mut (*mapping).curves[0];
+            curve.num_pivots = 3;
+            curve.pivots[0] = 0;
+            curve.pivots[1] = 256;
+            curve.pivots[2] = 1023;
+            curve.mapping_idc[0] = sys::AVDOVIMappingMethod_AV_DOVI_MAPPING_POLYNOMIAL;
+            curve.poly_order[0] = 1;
+            curve.poly_coef[0][0] = 0;
+            curve.poly_coef[0][1] = 1 << 13;
+            curve.poly_coef[0][2] = 0;
+            curve.mapping_idc[1] = sys::AVDOVIMappingMethod_AV_DOVI_MAPPING_MMR;
+            curve.mmr_order[1] = 1;
+            curve.mmr_constant[1] = 1024;
+            curve.mmr_coef[1][0][0] = 4096;
+            curve.mmr_coef[1][0][6] = -8192;
+
+            (*color).ycc_to_rgb_matrix = [
+                rational(9575, 8192),
+                rational(0, 8192),
+                rational(14742, 8192),
+                rational(9575, 8192),
+                rational(1754, 8192),
+                rational(4383, 8192),
+                rational(9575, 8192),
+                rational(17372, 8192),
+                rational(0, 8192),
+            ];
+            (*color).ycc_to_rgb_offset =
+                [rational(1, 4), rational(2, 1), rational(2, 1)];
+            (*color).rgb_to_lms_matrix = [
+                rational(5845, 16384),
+                rational(9702, 16384),
+                rational(837, 16384),
+                rational(2568, 16384),
+                rational(12256, 16384),
+                rational(1561, 16384),
+                rational(0, 16384),
+                rational(679, 16384),
+                rational(15705, 16384),
+            ];
+            (*color).source_min_pq = 62;
+            (*color).source_max_pq = 3079;
+
+            let side_data = sys::av_frame_new_side_data(
+                frame.ptr,
+                sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA,
+                size,
+            );
+            assert!(!side_data.is_null());
+            ptr::copy_nonoverlapping(
+                metadata.cast::<u8>(),
+                (*side_data).data,
+                size,
+            );
+            sys::av_free(metadata.cast());
+        }
+
+        let dovi = frame.dovi_metadata().unwrap();
+        let luma = &dovi.reshaping[0];
+        assert_eq!(luma.num_pivots, 3);
+        assert_close(luma.pivots[1], 256.0 / 1023.0);
+        assert_close(luma.pivots[2], 1.0);
+        assert_close(luma.poly_coeffs[0][1], 1.0);
+        assert_eq!(luma.mmr_orders[1], 1);
+        assert_close(luma.mmr_constants[1], 0.125);
+        assert_close(luma.mmr_coeffs[1][0][0], 0.5);
+        assert_close(luma.mmr_coeffs[1][0][6], -1.0);
+        // Chroma and luma curves without pivots stay empty.
+        assert_eq!(dovi.reshaping[1].num_pivots, 0);
+        assert_close(dovi.nonlinear_matrix.rows()[0][0], 9575.0 / 8192.0);
+        assert_close(dovi.nonlinear_offset[0], 0.25);
+        assert_close(dovi.rgb_to_lms.rows()[2][2], 15705.0 / 16384.0);
+        assert_eq!(dovi.source_min_pq, 62);
+        assert_eq!(dovi.source_max_pq, 3079);
+    }
+
 
     #[test]
     fn frame_rate_normalizes_positive_rationals() {

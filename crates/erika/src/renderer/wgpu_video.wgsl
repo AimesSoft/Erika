@@ -14,6 +14,14 @@ struct VideoUniforms {
     nits: vec4<f32>,
     luma_coefficients: vec4<f32>,
     gamut_matrix_rows: array<vec4<f32>, 3>,
+    dovi_flags: vec4<f32>,
+    dovi_pivots: array<vec4<f32>, 6>,
+    dovi_bounds: array<vec4<f32>, 3>,
+    dovi_coefficients: array<vec4<f32>, 24>,
+    dovi_mmr: array<vec4<f32>, 144>,
+    dovi_nonlinear_matrix: array<vec4<f32>, 3>,
+    dovi_nonlinear_offset: vec4<f32>,
+    dovi_lms_matrix: array<vec4<f32>, 3>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: VideoUniforms;
@@ -210,6 +218,86 @@ fn expand_ycbcr_range(y_in: f32, cbcr_in: vec2<f32>) -> RangeExpandedYCbCr {
     return out;
 }
 
+// Dolby Vision RPU reshaping, ported from libplacebo's `pl_shader_dovi_reshape`
+// (the renderer behind mpv's Dolby Vision mapping). The base-layer signal is
+// reshaped per component through piecewise polynomial/MMR curves selected by
+// pivot comparison, where MMR coefficients mix all three raw components.
+fn dovi_reshaped_signal(sig_in: vec3<f32>) -> vec3<f32> {
+    let sig = clamp(sig_in, vec3<f32>(0.0), vec3<f32>(1.0));
+    var result: array<f32, 3>;
+    result[0] = sig.r;
+    result[1] = sig.g;
+    result[2] = sig.b;
+    let flags = uniforms.dovi_flags;
+    for (var c = 0u; c < 3u; c = c + 1u) {
+        let segments = u32(flags[1u + c]);
+        if (segments == 0u) {
+            continue;
+        }
+        var s = result[c];
+        var index = 0u;
+        for (var i = 0u; i < 7u; i = i + 1u) {
+            let pivot_row = uniforms.dovi_pivots[2u * c + i / 4u];
+            let pivot = pivot_row[i % 4u];
+            if (s >= pivot) {
+                index = index + 1u;
+            }
+        }
+        let coeff = uniforms.dovi_coefficients[8u * c + index];
+        if (coeff.w < 0.5) {
+            s = (coeff.z * s + coeff.y) * s + coeff.x;
+        } else {
+            let base = 48u * c + u32(coeff.y);
+            let order = u32(coeff.w);
+            let sig_x = vec4<f32>(
+                sig.x * sig.y,
+                sig.x * sig.z,
+                sig.y * sig.z,
+                sig.x * sig.y * sig.z
+            );
+            s = coeff.x;
+            s = s + dot(uniforms.dovi_mmr[base].xyz, sig);
+            s = s + dot(uniforms.dovi_mmr[base + 1u], sig_x);
+            if (order >= 2u) {
+                let sig2 = sig * sig;
+                let sig_x2 = sig_x * sig_x;
+                s = s + dot(uniforms.dovi_mmr[base + 2u].xyz, sig2);
+                s = s + dot(uniforms.dovi_mmr[base + 3u], sig_x2);
+                if (order >= 3u) {
+                    s = s + dot(uniforms.dovi_mmr[base + 4u].xyz, sig2 * sig);
+                    s = s + dot(uniforms.dovi_mmr[base + 5u], sig_x2 * sig_x);
+                }
+            }
+        }
+        let bounds = uniforms.dovi_bounds[c];
+        result[c] = clamp(s, bounds.x, bounds.y);
+    }
+    return vec3<f32>(result[0], result[1], result[2]);
+}
+
+// Reshaped nonlinear signal to PQ-encoded IPT via the RPU's ycc_to_rgb matrix
+// and signal offsets. Applying the RPU offsets keeps integer offset codes
+// exactly on sample codes (1024/1023 folded in on the CPU).
+fn dovi_signal_to_pq_rgb(sig: vec3<f32>) -> vec3<f32> {
+    let reshaped = dovi_reshaped_signal(sig) - uniforms.dovi_nonlinear_offset.xyz;
+    return vec3<f32>(
+        dot(uniforms.dovi_nonlinear_matrix[0].xyz, reshaped),
+        dot(uniforms.dovi_nonlinear_matrix[1].xyz, reshaped),
+        dot(uniforms.dovi_nonlinear_matrix[2].xyz, reshaped)
+    );
+}
+
+// Linearized BT.2020-referred HPE LMS back to linear RGB, using the composite
+// of the fixed HPE inverse with the RPU's rgb_to_lms matrix (premultiplied on
+// the CPU, matching libplacebo's dovi_lms2rgb).
+fn dovi_lms_to_rgb(linear: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        dot(uniforms.dovi_lms_matrix[0].xyz, linear),
+        dot(uniforms.dovi_lms_matrix[1].xyz, linear),
+        dot(uniforms.dovi_lms_matrix[2].xyz, linear)
+    );
+}
+
 fn packed_luma_texel(virtual_coord_in: vec2<i32>, virtual_size: vec2<i32>) -> f32 {
     let virtual_coord = clamp(virtual_coord_in, vec2<i32>(0), virtual_size - vec2<i32>(1));
     let packed_coord = virtual_coord / vec2<i32>(2);
@@ -275,8 +363,21 @@ fn erika_video_fragment(in: VertexOut) -> @location(0) vec4<f32> {
         color_coord.x *= 0.5;
     }
     let alpha_coord = vec2<f32>(0.5 + in.tex_coord.x * 0.5, in.tex_coord.y);
+    let y_sample = if (input_mode == 2u) {
+        sample_packed_luma(color_coord)
+    } else {
+        textureSample(luma_texture, video_sampler, color_coord).r
+    };
+    let cbcr_sample = textureSample(chroma_texture, video_sampler, color_coord).rg;
     var rgb: vec3<f32>;
-    if (input_mode == 1u) {
+    let dovi_enabled = uniforms.dovi_flags.x != 0.0;
+    if (dovi_enabled && (input_mode == 0u || input_mode == 2u)) {
+        // The base layer carries the raw 12-bit DV signal (10-bit container,
+        // full range); range expansion and the YCbCr matrix are replaced by
+        // the RPU reshaping + ycc_to_rgb path.
+        let sig = vec3<f32>(y_sample, cbcr_sample.x, cbcr_sample.y);
+        rgb = dovi_signal_to_pq_rgb(sig);
+    } else if (input_mode == 1u) {
         rgb = textureSample(luma_texture, video_sampler, color_coord).rgb;
     } else if (input_mode == 3u) {
         let original_rgb = textureSample(chroma_texture, video_sampler, color_coord).rgb;
@@ -284,13 +385,6 @@ fn erika_video_fragment(in: VertexOut) -> @location(0) vec4<f32> {
         let enhanced_luma = sample_packed_luma(color_coord);
         rgb = original_rgb + vec3<f32>(enhanced_luma - original_luma);
     } else {
-        var y_sample: f32;
-        if (input_mode == 2u) {
-            y_sample = sample_packed_luma(color_coord);
-        } else {
-            y_sample = textureSample(luma_texture, video_sampler, color_coord).r;
-        }
-        let cbcr_sample = textureSample(chroma_texture, video_sampler, color_coord).rg;
         let expanded = expand_ycbcr_range(y_sample, cbcr_sample);
         let y = expanded.y;
         let cbcr = expanded.cbcr;
@@ -303,6 +397,9 @@ fn erika_video_fragment(in: VertexOut) -> @location(0) vec4<f32> {
         rgb.g = (y - kr * rgb.r - kb * rgb.b) / kg;
     }
     rgb = transfer_to_source_reference_linear(rgb);
+    if (dovi_enabled) {
+        rgb = dovi_lms_to_rgb(rgb);
+    }
     rgb = apply_gamut_map(rgb);
     rgb = source_reference_to_nits(rgb);
     rgb = tone_map_nits(rgb);

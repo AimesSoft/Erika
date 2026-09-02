@@ -60,6 +60,221 @@ impl ContentLightMetadata {
     }
 }
 
+/// Maximum number of reshaping pieces per component in a Dolby Vision RPU
+/// (`AV_DOVI_MAX_PIECES` in FFmpeg, `num_pivots - 1` segments).
+pub const DOVI_MAX_PIECES: usize = 8;
+/// Maximum number of MMR orders per piece (FFmpeg allows 1..=3).
+pub const DOVI_MAX_MMR_ORDER: usize = 3;
+/// Number of coefficients per MMR order: 3 linear terms plus the 4 cross
+/// products (x·y, x·z, y·z, x·y·z).
+pub const DOVI_MMR_COEFFS: usize = 7;
+
+/// One component's reshaping curve, converted from the RPU's fixed-point
+/// representation into shader-ready floats. Pivots are normalized to the
+/// base-layer signal range [0, 1] and coefficients by `2^-coef_log2_denom`,
+/// exactly like libplacebo's `pl_map_dovi_metadata`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DoviComponentCurve {
+    /// 0 when this component carries no reshaping, otherwise 2..=9.
+    pub num_pivots: u8,
+    /// Sorted ascending, normalized to [0, 1]. Only the first `num_pivots`
+    /// entries are meaningful.
+    pub pivots: [f32; DOVI_MAX_PIECES + 1],
+    /// Polynomial coefficients per segment (x^0, x^1, x^2). Segments above
+    /// `poly_order` are zero-filled.
+    pub poly_coeffs: [[f32; 3]; DOVI_MAX_PIECES],
+    /// Per segment: 0 selects the polynomial, 1..=3 selects MMR of that order.
+    pub mmr_orders: [u8; DOVI_MAX_PIECES],
+    pub mmr_constants: [f32; DOVI_MAX_PIECES],
+    pub mmr_coeffs: [[[f32; DOVI_MMR_COEFFS]; DOVI_MAX_MMR_ORDER]; DOVI_MAX_PIECES],
+}
+
+impl Default for DoviComponentCurve {
+    fn default() -> Self {
+        Self {
+            num_pivots: 0,
+            pivots: [0.0; DOVI_MAX_PIECES + 1],
+            poly_coeffs: [[0.0; 3]; DOVI_MAX_PIECES],
+            mmr_orders: [0; DOVI_MAX_PIECES],
+            mmr_constants: [0.0; DOVI_MAX_PIECES],
+            mmr_coeffs: [[[0.0; DOVI_MMR_COEFFS]; DOVI_MAX_MMR_ORDER]; DOVI_MAX_PIECES],
+        }
+    }
+}
+
+/// Per-frame Dolby Vision RPU payload copied out of the decoder's
+/// `AV_FRAME_DATA_DOVI_METADATA` side data before the frame is retired.
+///
+/// The `nonlinear` matrix is the RPU's "ycc_to_rgb" transform applied to the
+/// reshaped (still PQ-encoded) signal; `rgb_to_lms` is the RPU's mastering
+/// transform whose inverse converts PQ-linearized LMS back to BT.2020 RGB.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DoviSourceMetadata {
+    pub reshaping: [DoviComponentCurve; 3],
+    pub nonlinear_matrix: RgbMatrix,
+    pub nonlinear_offset: [f32; 3],
+    pub rgb_to_lms: RgbMatrix,
+    /// 12-bit PQ code of the mastering display's black and peak level.
+    pub source_min_pq: u16,
+    pub source_max_pq: u16,
+}
+
+/// Decodes a 12-bit PQ code value into absolute nits, matching the PQ EOTF
+/// used by the video shaders.
+pub fn pq_code_to_nits(code: u16) -> f32 {
+    if code == 0 {
+        return 0.0;
+    }
+    let encoded = f32::from(code) / 4095.0;
+    let m1 = 0.1593017578125_f32;
+    let m2 = 78.84375_f32;
+    let c1 = 0.8359375_f32;
+    let c2 = 18.8515625_f32;
+    let c3 = 18.6875_f32;
+    let p = encoded.max(0.0).powf(1.0 / m2);
+    let num = (p - c1).max(0.0);
+    let den = (c2 - c3 * p).max(0.000001);
+    10000.0 * (num / den).powf(1.0 / m1)
+}
+
+/// Inverse of the no-crosstalk BT.2020-referred HPE RGB->LMS transform that
+/// the RPU's `rgb_to_lms` output is fed into (hard-coded by libplacebo as
+/// `dovi_lms2rgb`).
+const DOVI_HPE_LMS_TO_RGB: RgbMatrix = RgbMatrix::new([
+    [3.06441879, -2.16597676, 0.10155818],
+    [-0.65612108, 1.78554118, -0.12943749],
+    [0.01736321, -0.04725154, 1.03004253],
+]);
+
+/// The composite LMS->RGB matrix applied after PQ linearization of a reshaped
+/// Dolby Vision signal: the fixed HPE inverse multiplied by the RPU's
+/// `rgb_to_lms` matrix, matching libplacebo's `dovi_lms2rgb` composition.
+pub fn dovi_lms_to_rgb_matrix(rgb_to_lms: RgbMatrix) -> RgbMatrix {
+    DOVI_HPE_LMS_TO_RGB.mul(rgb_to_lms)
+}
+
+/// Shader uniform block for Dolby Vision reshaping. All values are
+/// vec4-aligned so the block can be appended to the shared video uniform
+/// buffer across the WGSL, Metal and HLSL backends without packing tricks.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "wgpu", derive(bytemuck::Pod, bytemuck::Zeroable))]
+pub struct DoviUniforms {
+    /// x = 1.0 when the source is RPU-mapped; y/z/w = per-component segment
+    /// counts (`num_pivots - 1`, 0 when the component carries no curve).
+    pub flags: [f32; 4],
+    /// Interior pivots per component (two rows each, segments - 1 values,
+    /// padded with a quasi-infinite sentinel like libplacebo).
+    pub pivots: [[f32; 4]; 6],
+    /// Per-component `[first_pivot, last_pivot]` output clamp.
+    pub bounds: [[f32; 4]; 3],
+    /// Per-segment payload `[c0, c1, c2, kind]`: kind == 0 is the polynomial
+    /// `(c2·s + c1)·s + c0`, kind 1..=3 is MMR of that order with constant
+    /// `c0` and packed rows starting at offset `c1`.
+    pub coefficients: [[f32; 4]; 3 * DOVI_MAX_PIECES],
+    /// Packed MMR rows per component (two vec4 rows per order), addressed by
+    /// the segment's `c1` offset.
+    pub mmr: [[f32; 4]; 3 * 2 * DOVI_MAX_MMR_ORDER * DOVI_MAX_PIECES],
+    /// RPU "ycc_to_rgb" rows applied to the reshaped nonlinear signal.
+    pub nonlinear_matrix: [[f32; 4]; 3],
+    /// RPU signal offsets, pre-scaled so the shader's n/1023-normalized
+    /// samples subtract exactly (libplacebo folds a 1024/1023 correction).
+    pub nonlinear_offset: [f32; 4],
+    /// Composite LMS->RGB rows applied after PQ linearization.
+    pub lms_matrix: [[f32; 4]; 3],
+}
+
+const DOVI_PIVOT_SENTINEL: f32 = 1e9;
+/// RPU offsets are rational /1024-style values while shader samples are
+/// normalized by n/(2^bits - 1); libplacebo multiplies the offset by
+/// `2^bits / (2^bits - 1)` so integer offsets map exactly onto sample codes.
+const DOVI_SIGNAL_OFFSET_SCALE: f32 = 1024.0 / 1023.0;
+
+impl DoviUniforms {
+    pub const fn disabled() -> Self {
+        Self {
+            flags: [0.0; 4],
+            pivots: [[0.0; 4]; 6],
+            bounds: [[0.0; 4]; 3],
+            coefficients: [[0.0; 4]; 3 * DOVI_MAX_PIECES],
+            mmr: [[0.0; 4]; 3 * 2 * DOVI_MAX_MMR_ORDER * DOVI_MAX_PIECES],
+            nonlinear_matrix: [[0.0; 4]; 3],
+            nonlinear_offset: [0.0; 4],
+            lms_matrix: [[0.0; 4]; 3],
+        }
+    }
+
+    pub fn of(source: &SourceColorState) -> Self {
+        let Some(dovi) = &source.dovi else {
+            return Self::disabled();
+        };
+        let mut uniforms = Self::disabled();
+        uniforms.flags[0] = 1.0;
+        for (component, curve) in dovi.reshaping.iter().enumerate() {
+            if curve.num_pivots < 2 {
+                continue;
+            }
+            let segments = (curve.num_pivots - 1) as usize;
+            uniforms.flags[1 + component] = segments as f32;
+            let mut interior = [DOVI_PIVOT_SENTINEL; DOVI_MAX_PIECES];
+            interior[..segments - 1].copy_from_slice(&curve.pivots[1..segments]);
+            uniforms.pivots[2 * component] =
+                [interior[0], interior[1], interior[2], interior[3]];
+            uniforms.pivots[2 * component + 1] =
+                [interior[4], interior[5], interior[6], interior[7]];
+            uniforms.bounds[component] =
+                [curve.pivots[0], curve.pivots[segments], 0.0, 0.0];
+
+            let mut mmr_row = 0usize;
+            for (segment, &kind) in curve.mmr_orders[..segments].iter().enumerate() {
+                let slot = DOVI_MAX_PIECES * component + segment;
+                if kind == 0 {
+                    uniforms.coefficients[slot] = [
+                        curve.poly_coeffs[segment][0],
+                        curve.poly_coeffs[segment][1],
+                        curve.poly_coeffs[segment][2],
+                        0.0,
+                    ];
+                    continue;
+                }
+                let order = (kind as usize).min(DOVI_MAX_MMR_ORDER);
+                for (index, coefficients) in curve.mmr_coeffs[segment][..order]
+                    .iter()
+                    .enumerate()
+                {
+                    let row = DOVI_MAX_PIECES * 2 * DOVI_MAX_MMR_ORDER * component
+                        + mmr_row
+                        + 2 * index;
+                    uniforms.mmr[row] =
+                        [coefficients[0], coefficients[1], coefficients[2], 0.0];
+                    uniforms.mmr[row + 1] = [
+                        coefficients[3],
+                        coefficients[4],
+                        coefficients[5],
+                        coefficients[6],
+                    ];
+                }
+                uniforms.coefficients[slot] = [
+                    curve.mmr_constants[segment],
+                    mmr_row as f32,
+                    0.0,
+                    kind as f32,
+                ];
+                mmr_row += 2 * order;
+            }
+        }
+        uniforms.nonlinear_matrix = dovi.nonlinear_matrix.row4s();
+        uniforms.nonlinear_offset = [
+            dovi.nonlinear_offset[0] * DOVI_SIGNAL_OFFSET_SCALE,
+            dovi.nonlinear_offset[1] * DOVI_SIGNAL_OFFSET_SCALE,
+            dovi.nonlinear_offset[2] * DOVI_SIGNAL_OFFSET_SCALE,
+            0.0,
+        ];
+        uniforms.lms_matrix = dovi_lms_to_rgb_matrix(dovi.rgb_to_lms).row4s();
+        uniforms
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorRange {
     Unspecified,
@@ -364,6 +579,7 @@ pub struct SourceColorState {
     pub matrix: MatrixCoefficients,
     pub range: ColorRange,
     pub hdr_metadata: Option<HdrMetadata>,
+    pub dovi: Option<DoviSourceMetadata>,
     pub nominal_peak_nits: f32,
     pub reference_white_nits: f32,
 }
@@ -376,6 +592,7 @@ impl SourceColorState {
             matrix: MatrixCoefficients::default(),
             range: ColorRange::default(),
             hdr_metadata: None,
+            dovi: None,
             nominal_peak_nits: nominal_peak_for_transfer(transfer),
             reference_white_nits: reference_white_for_transfer(transfer),
         }
@@ -401,6 +618,25 @@ impl SourceColorState {
             self.nominal_peak_nits = peak.max(1.0);
         }
         self.hdr_metadata = metadata;
+        self
+    }
+
+    /// Attaches per-frame Dolby Vision RPU metadata. The RPU describes an
+    /// IPT/LMS signal referred to BT.2020 with a PQ transfer, so the primaries
+    /// are forced to BT.2020 (matching libplacebo's `pl_map_avdovi_metadata`)
+    /// and the nominal peak follows the RPU's `source_max_pq` instead of the
+    /// static HDR10 mastering metadata.
+    pub fn dovi(mut self, metadata: Option<DoviSourceMetadata>) -> Self {
+        if let Some(dovi) = metadata {
+            self.primaries = ColorPrimaries::Bt2020;
+            let peak = pq_code_to_nits(dovi.source_max_pq);
+            if peak > 0.0 {
+                self.nominal_peak_nits = peak.max(1.0);
+            }
+            self.dovi = Some(dovi);
+        } else {
+            self.dovi = None;
+        }
         self
     }
 
@@ -516,6 +752,7 @@ pub enum RenderPassKind {
     NeuralUpscale,
     PlaneSampling,
     ChromaReconstruction,
+    DoviReshape,
     TransferDecode,
     GamutMap,
     ToneMap,
@@ -653,6 +890,8 @@ pub struct VideoUniforms {
     pub nits: [f32; 4],
     pub luma_coefficients: [f32; 4],
     pub gamut_matrix_rows: [[f32; 4]; 3],
+    /// Dolby Vision reshaping payload; inert unless `flags[0]` is set.
+    pub dovi: DoviUniforms,
 }
 
 impl VideoUniforms {
@@ -675,6 +914,7 @@ impl VideoUniforms {
             ],
             luma_coefficients: [luma.kr, luma.kg, luma.kb, 0.0],
             gamut_matrix_rows: pipeline.gamut_matrix().row4s(),
+            dovi: DoviUniforms::of(&pipeline.source),
         }
     }
 
@@ -752,6 +992,12 @@ fn build_graph(
         RenderPassKind::ChromaReconstruction,
         "reconstruct chroma",
     ));
+    if source.dovi.is_some() {
+        graph.push(RenderPass::new(
+            RenderPassKind::DoviReshape,
+            "reshape dolby vision signal",
+        ));
+    }
     graph.push(RenderPass::new(
         RenderPassKind::TransferDecode,
         "decode transfer function",
@@ -1173,6 +1419,178 @@ mod tests {
             VIDEO_INPUT_PACKED_ALPHA_RIGHT,
         );
         assert!(!uniforms.packed_alpha_right(false).has_packed_alpha_right());
+    }
+
+    /// A curve shaped like the RPU's default luma mapping: two polynomial
+    /// segments split at pivot 0.25, then one MMR segment of order 2.
+    fn sample_dovi_metadata() -> DoviSourceMetadata {
+        let mut reshaping = [DoviComponentCurve::default(); 3];
+        reshaping[0].num_pivots = 4;
+        reshaping[0].pivots = [0.0, 0.25, 0.5, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        reshaping[0].poly_coeffs[0] = [0.0, 0.5, 0.0];
+        reshaping[0].poly_coeffs[1] = [1.0, 1.0, 0.5];
+        reshaping[0].mmr_orders[2] = 2;
+        reshaping[0].mmr_constants[2] = 0.25;
+        reshaping[0].mmr_coeffs[2][0] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7];
+        reshaping[0].mmr_coeffs[2][1] = [0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4];
+        DoviSourceMetadata {
+            reshaping,
+            nonlinear_matrix: RgbMatrix::new([
+                [1.0, 0.5, 0.25],
+                [0.75, 1.0, 0.125],
+                [0.0625, 0.03125, 1.0],
+            ]),
+            nonlinear_offset: [0.25, 0.5, 0.5],
+            rgb_to_lms: RgbMatrix::new([
+                [0.356742, 0.592257, 0.051081],
+                [0.156705, 0.747860, 0.095435],
+                [0.0, 0.041455, 0.958545],
+            ]),
+            source_min_pq: 62,
+            source_max_pq: 3079,
+        }
+    }
+
+    #[test]
+    fn dovi_uniforms_are_disabled_without_metadata() {
+        let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq);
+        let uniforms = DoviUniforms::of(&source);
+
+        assert_eq!(uniforms, DoviUniforms::disabled());
+        assert_eq!(uniforms.flags[0], 0.0);
+        assert_eq!(
+            VideoUniforms::from_pipeline(
+                &VideoRenderPipeline::new(source, TargetColorState::sdr(ColorPrimaries::Bt709)),
+                false,
+                false,
+            )
+            .dovi,
+            DoviUniforms::disabled(),
+        );
+    }
+
+    #[test]
+    fn dovi_uniforms_pack_pivots_poly_and_mmr() {
+        let metadata = sample_dovi_metadata();
+        let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq)
+            .dovi(Some(metadata));
+        let uniforms = DoviUniforms::of(&source);
+
+        assert_eq!(uniforms.flags, [1.0, 3.0, 0.0, 0.0]);
+        // Interior pivots skip the endpoints; padding gets the sentinel.
+        assert_eq!(uniforms.pivots[0], [0.25, 0.5, DOVI_PIVOT_SENTINEL, DOVI_PIVOT_SENTINEL]);
+        assert_eq!(
+            uniforms.pivots[1],
+            [DOVI_PIVOT_SENTINEL; 4],
+        );
+        assert_eq!(uniforms.bounds[0], [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(uniforms.coefficients[0], [0.0, 0.5, 0.0, 0.0]);
+        assert_eq!(uniforms.coefficients[1], [1.0, 1.0, 0.5, 0.0]);
+        // MMR rows start after two polynomial segments; the order rides in w.
+        assert_eq!(uniforms.coefficients[2], [0.25, 0.0, 0.0, 2.0]);
+        assert_eq!(uniforms.mmr[0], [0.1, 0.2, 0.3, 0.0]);
+        assert_eq!(uniforms.mmr[1], [0.4, 0.5, 0.6, 0.7]);
+        assert_eq!(uniforms.mmr[2], [0.8, 0.9, 1.0, 0.0]);
+        assert_eq!(uniforms.mmr[3], [1.1, 1.2, 1.3, 1.4]);
+        assert_eq!(uniforms.mmr[4], [0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn dovi_uniforms_apply_signal_offset_correction() {
+        let metadata = sample_dovi_metadata();
+        let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq)
+            .dovi(Some(metadata));
+        let uniforms = DoviUniforms::of(&source);
+        let correction = 1024.0_f32 / 1023.0;
+
+        assert!((uniforms.nonlinear_offset[0] - 0.25 * correction).abs() < 1e-6);
+        assert!((uniforms.nonlinear_offset[1] - 0.5 * correction).abs() < 1e-6);
+        assert_eq!(uniforms.nonlinear_matrix[0], [1.0, 0.5, 0.25, 0.0]);
+    }
+
+    #[test]
+    fn dovi_lms_matrix_composite_matches_libplacebo_default() {
+        // libplacebo composites its hard-coded HPE LMS->RGB matrix with the
+        // RPU's rgb_to_lms rows; for the RPU default matrix the product is
+        // this near-diagonal, white-preserving transform.
+        let matrix = dovi_lms_to_rgb_matrix(RgbMatrix::new([
+            [0.356742, 0.592257, 0.051081],
+            [0.156705, 0.747860, 0.095435],
+            [0.0, 0.041455, 0.958545],
+        ]));
+
+        let expected = [
+            [0.753741, 0.198592, 0.047534],
+            [0.045791, 0.941774, 0.012527],
+            [-0.001212, 0.017623, 0.983740],
+        ];
+        for (row, expected_row) in matrix.rows().iter().zip(expected) {
+            for (value, expected_value) in row.iter().zip(expected_row) {
+                assert!((value - expected_value).abs() < 1e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn dovi_source_uses_rpu_peak_and_bt2020_primaries() {
+        let metadata = sample_dovi_metadata();
+        let source = SourceColorState::new(ColorPrimaries::DisplayP3, TransferFunction::Pq)
+            .hdr_metadata(Some(HdrMetadata::new(
+                Some(MasteringDisplayMetadata {
+                    display_primaries: None,
+                    white_point: None,
+                    min_luminance_nits: Some(0.005),
+                    max_luminance_nits: Some(4000.0),
+                }),
+                None,
+            )))
+            .dovi(Some(metadata));
+
+        // PQ code 3079 is the 12-bit encoding of ~1000 nits.
+        assert!((source.nominal_peak_nits - 1000.0).abs() < 5.0);
+        assert_eq!(source.primaries, ColorPrimaries::Bt2020);
+        assert!(source.is_hdr());
+        assert_eq!(pq_code_to_nits(0), 0.0);
+    }
+
+    #[test]
+    fn dovi_source_adds_reshape_pass_and_tone_maps_to_sdr() {
+        let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq)
+            .dovi(Some(sample_dovi_metadata()));
+        let pipeline =
+            VideoRenderPipeline::new(source, TargetColorState::sdr(ColorPrimaries::Bt709));
+
+        assert!(pipeline.graph.contains(RenderPassKind::DoviReshape));
+        assert!(pipeline.requires_tone_mapping());
+        assert!(pipeline.requires_gamut_mapping());
+
+        let pipeline = VideoRenderPipeline::new(
+            source,
+            TargetColorState::hdr10(ColorPrimaries::Bt2020),
+        );
+        assert!(!pipeline.requires_tone_mapping());
+    }
+
+    #[test]
+    fn dovi_formulas_are_present_across_video_shaders() {
+        let shaders = [
+            include_str!("wgpu_video.wgsl"),
+            include_str!("metal/apple.rs"),
+            include_str!("d3d11.rs"),
+        ];
+        for shader in shaders {
+            assert!(shader.contains("dovi_flags"));
+            assert!(shader.contains("dovi_pivots"));
+            assert!(shader.contains("dovi_bounds"));
+            assert!(shader.contains("dovi_coefficients"));
+            assert!(shader.contains("dovi_mmr"));
+            assert!(shader.contains("dovi_nonlinear_matrix"));
+            assert!(shader.contains("dovi_nonlinear_offset"));
+            assert!(shader.contains("dovi_lms_matrix"));
+            assert!(shader.contains("dovi_reshaped_signal"));
+            assert!(shader.contains("dovi_signal_to_pq_rgb"));
+            assert!(shader.contains("dovi_lms_to_rgb"));
+        }
     }
 
     fn assert_matrix_close(actual: [[f32; 3]; 3], expected: [[f32; 3]; 3], epsilon: f32) {

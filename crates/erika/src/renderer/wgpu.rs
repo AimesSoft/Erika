@@ -381,6 +381,7 @@ fn source_color_for_player_frame(frame: &PlayerVideoFrame) -> SourceColorState {
     .range(frame.frame.color_range())
     .matrix(frame.frame.matrix_coefficients())
     .hdr_metadata(frame.frame.hdr_metadata())
+    .dovi(frame.frame.dovi_metadata())
 }
 
 #[cfg(target_os = "android")]
