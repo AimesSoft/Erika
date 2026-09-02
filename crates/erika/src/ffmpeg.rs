@@ -4346,9 +4346,21 @@ unsafe fn frame_dovi_metadata(frame: *const sys::AVFrame) -> Option<DoviSourceMe
     // (`av_dovi_get_header` and friends are C inline helpers bindgen does not
     // emit), so resolve them by the same pointer arithmetic here.
     let metadata = unsafe { *data.cast::<sys::AVDOVIMetadata>() };
-    let header = unsafe { &*data.add(metadata.header_offset).cast::<sys::AVDOVIRpuDataHeader>() };
-    let mapping = unsafe { &*data.add(metadata.mapping_offset).cast::<sys::AVDOVIDataMapping>() };
-    let color = unsafe { &*data.add(metadata.color_offset).cast::<sys::AVDOVIColorMetadata>() };
+    let header = unsafe {
+        &*data
+            .add(metadata.header_offset)
+            .cast::<sys::AVDOVIRpuDataHeader>()
+    };
+    let mapping = unsafe {
+        &*data
+            .add(metadata.mapping_offset)
+            .cast::<sys::AVDOVIDataMapping>()
+    };
+    let color = unsafe {
+        &*data
+            .add(metadata.color_offset)
+            .cast::<sys::AVDOVIColorMetadata>()
+    };
 
     let bl_bit_depth = usize::from(header.bl_bit_depth);
     let coef_denom = u32::from(header.coef_log2_denom);
@@ -4384,8 +4396,8 @@ unsafe fn frame_dovi_metadata(frame: *const sys::AVFrame) -> Option<DoviSourceMe
                 let destination = &mut curve.mmr_coeffs[segment][..order];
                 for (order_index, coefficients) in destination.iter_mut().enumerate() {
                     for (index, coefficient) in coefficients.iter_mut().enumerate() {
-                        *coefficient = coefficient_scale
-                            * source.mmr_coef[segment][order_index][index] as f32;
+                        *coefficient =
+                            coefficient_scale * source.mmr_coef[segment][order_index][index] as f32;
                     }
                 }
             } else {
@@ -5487,11 +5499,7 @@ mod tests {
                 size,
             );
             assert!(!side_data.is_null());
-            ptr::copy_nonoverlapping(
-                metadata.cast::<u8>(),
-                (*side_data).data,
-                size,
-            );
+            ptr::copy_nonoverlapping(metadata.cast::<u8>(), (*side_data).data, size);
             sys::av_free(metadata.cast());
         }
 
@@ -5513,7 +5521,6 @@ mod tests {
         assert_eq!(dovi.source_min_pq, 62);
         assert_eq!(dovi.source_max_pq, 3079);
     }
-
 
     #[test]
     fn frame_rate_normalizes_positive_rationals() {

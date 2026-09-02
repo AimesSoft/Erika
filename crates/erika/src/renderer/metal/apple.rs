@@ -3723,7 +3723,7 @@ mod tests {
 
     #[test]
     fn video_uniforms_keep_float4_fields_aligned() {
-        assert_eq!(std::mem::size_of::<super::VideoUniforms>(), 144);
+        assert_eq!(std::mem::size_of::<super::VideoUniforms>(), 3104);
         assert_eq!(std::mem::offset_of!(super::VideoUniforms, edr_output), 20);
         assert_eq!(std::mem::offset_of!(super::VideoUniforms, rect), 32);
         assert_eq!(std::mem::offset_of!(super::VideoUniforms, viewport), 48);
@@ -3736,6 +3736,7 @@ mod tests {
             std::mem::offset_of!(super::VideoUniforms, gamut_matrix_rows),
             96
         );
+        assert_eq!(std::mem::offset_of!(super::VideoUniforms, dovi), 144);
     }
 
     #[test]

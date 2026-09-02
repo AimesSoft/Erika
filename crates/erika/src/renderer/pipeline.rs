@@ -238,9 +238,8 @@ impl DoviUniforms {
                 let order = (kind as usize).min(DOVI_MAX_MMR_ORDER);
                 let orders = &curve.mmr_coeffs[segment][..order];
                 for (index, coefficients) in orders.iter().enumerate() {
-                    let row = DOVI_MAX_PIECES * 2 * DOVI_MAX_MMR_ORDER * component
-                        + mmr_row
-                        + 2 * index;
+                    let row =
+                        DOVI_MAX_PIECES * 2 * DOVI_MAX_MMR_ORDER * component + mmr_row + 2 * index;
                     uniforms.mmr[row] = [coefficients[0], coefficients[1], coefficients[2], 0.0];
                     uniforms.mmr[row + 1] = [
                         coefficients[3],
@@ -1469,7 +1468,10 @@ mod tests {
 
         assert_eq!(uniforms.flags, [1.0, 3.0, 0.0, 0.0]);
         // Interior pivots skip the endpoints; padding gets the sentinel.
-        assert_eq!(uniforms.pivots[0], [0.25, 0.5, DOVI_PIVOT_SENTINEL, DOVI_PIVOT_SENTINEL]);
+        assert_eq!(
+            uniforms.pivots[0],
+            [0.25, 0.5, DOVI_PIVOT_SENTINEL, DOVI_PIVOT_SENTINEL]
+        );
         assert_eq!(uniforms.pivots[1], [DOVI_PIVOT_SENTINEL; 4]);
         assert_eq!(uniforms.bounds[0], [0.0, 1.0, 0.0, 0.0]);
         assert_eq!(uniforms.coefficients[0], [0.0, 0.5, 0.0, 0.0]);
@@ -1502,15 +1504,15 @@ mod tests {
         // RPU's rgb_to_lms rows; for the RPU default matrix the product is
         // this near-diagonal, white-preserving transform.
         let matrix = dovi_lms_to_rgb_matrix(RgbMatrix::new([
-            [0.356742, 0.592257, 0.051081],
-            [0.156705, 0.747860, 0.095435],
-            [0.0, 0.041455, 0.958545],
+            [5845.0 / 16384.0, 9702.0 / 16384.0, 837.0 / 16384.0],
+            [2568.0 / 16384.0, 12256.0 / 16384.0, 1561.0 / 16384.0],
+            [0.0, 679.0 / 16384.0, 15705.0 / 16384.0],
         ]));
 
         let expected = [
-            [0.753741, 0.198592, 0.047534],
-            [0.045791, 0.941774, 0.012527],
-            [-0.001212, 0.017623, 0.983740],
+            [0.753741425, 0.198592403, 0.047534181],
+            [0.045791140, 0.941773555, 0.012526896],
+            [-0.001211792, 0.017623405, 0.983739703],
         ];
         for (row, expected_row) in matrix.rows().iter().zip(expected) {
             for (value, expected_value) in row.iter().zip(expected_row) {
@@ -1552,10 +1554,8 @@ mod tests {
         assert!(pipeline.requires_tone_mapping());
         assert!(pipeline.requires_gamut_mapping());
 
-        let pipeline = VideoRenderPipeline::new(
-            source,
-            TargetColorState::hdr10(ColorPrimaries::Bt2020),
-        );
+        let pipeline =
+            VideoRenderPipeline::new(source, TargetColorState::hdr10(ColorPrimaries::Bt2020));
         assert!(!pipeline.requires_tone_mapping());
     }
 
