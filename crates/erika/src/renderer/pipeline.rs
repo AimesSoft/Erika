@@ -617,12 +617,15 @@ impl SourceColorState {
 
     /// Attaches per-frame Dolby Vision RPU metadata. The RPU describes an
     /// IPT/LMS signal referred to BT.2020 with a PQ transfer, so the primaries
-    /// are forced to BT.2020 (matching libplacebo's `pl_map_avdovi_metadata`)
-    /// and the nominal peak follows the RPU's `source_max_pq` instead of the
-    /// static HDR10 mastering metadata.
+    /// and transfer are forced to BT.2020/PQ (matching libplacebo's
+    /// `pl_map_avdovi_metadata`) and the nominal peak follows the RPU's
+    /// `source_max_pq` instead of the static HDR10 mastering metadata. Forcing
+    /// the transfer also repairs streams whose VUI tags are missing entirely.
     pub fn dovi(mut self, metadata: Option<DoviSourceMetadata>) -> Self {
         if let Some(dovi) = metadata {
             self.primaries = ColorPrimaries::Bt2020;
+            self.transfer = TransferFunction::Pq;
+            self.reference_white_nits = reference_white_for_transfer(self.transfer).max(1.0);
             let peak = pq_code_to_nits(dovi.source_max_pq);
             if peak > 0.0 {
                 self.nominal_peak_nits = peak.max(1.0);
@@ -1541,6 +1544,21 @@ mod tests {
         assert_eq!(source.primaries, ColorPrimaries::Bt2020);
         assert!(source.is_hdr());
         assert_eq!(pq_code_to_nits(0), 0.0);
+    }
+
+    #[test]
+    fn dovi_source_forces_pq_when_stream_tags_are_missing() {
+        // libplacebo forces BT.2020/PQ from the RPU because P5/P8 VUI tags are
+        // unreliable; without this an unspecified trc would decode the
+        // reshaped PQ signal with an sRGB gamma.
+        let source = SourceColorState::new(ColorPrimaries::Unknown, TransferFunction::Unknown)
+            .dovi(Some(sample_dovi_metadata()));
+
+        assert_eq!(source.transfer, TransferFunction::Pq);
+        assert_eq!(source.primaries, ColorPrimaries::Bt2020);
+        assert_eq!(source.reference_white_nits, 203.0);
+        assert_eq!(transfer_code(source.transfer), 3);
+        assert!(source.is_hdr());
     }
 
     #[test]
