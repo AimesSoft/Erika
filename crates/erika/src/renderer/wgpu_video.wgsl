@@ -363,11 +363,10 @@ fn erika_video_fragment(in: VertexOut) -> @location(0) vec4<f32> {
         color_coord.x *= 0.5;
     }
     let alpha_coord = vec2<f32>(0.5 + in.tex_coord.x * 0.5, in.tex_coord.y);
-    let y_sample = if (input_mode == 2u) {
-        sample_packed_luma(color_coord)
-    } else {
-        textureSample(luma_texture, video_sampler, color_coord).r
-    };
+    var y_sample = textureSample(luma_texture, video_sampler, color_coord).r;
+    if (input_mode == 2u) {
+        y_sample = sample_packed_luma(color_coord);
+    }
     let cbcr_sample = textureSample(chroma_texture, video_sampler, color_coord).rg;
     var rgb: vec3<f32>;
     let dovi_enabled = uniforms.dovi_flags.x != 0.0;
