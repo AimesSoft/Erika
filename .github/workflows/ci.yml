@@ -129,13 +129,13 @@ jobs:
           --no-deps
       - name: Build wgpu_decode_png example
         if: matrix.arch == 'arm64'
-        run: >-
-          ERIKA_NATIVE_PROFILE="$PROFILE"
-          ERIKA_NATIVE_TARGET="${{ matrix.target }}"
-          MACOSX_DEPLOYMENT_TARGET=13.0
-          RUSTFLAGS="-C link-arg=-Wl,-U,___isPlatformVersionAtLeast"
-          cargo build --locked -p wgpu_decode_png --release
-          --target "${{ matrix.target }}"
+        run: |
+          RT_DIR="$(dirname "$(find "$(dirname "$(xcrun -f clang)")/../lib/clang" -name libclang_rt.osx.a | head -1)")"
+          echo "clang_rt dir: $RT_DIR"
+          ERIKA_NATIVE_PROFILE="$PROFILE" \
+          ERIKA_NATIVE_TARGET="${{ matrix.target }}" \
+          RUSTFLAGS="-C link-arg=-L$RT_DIR -C link-arg=-lclang_rt.osx" \
+            cargo build --locked -p wgpu_decode_png --release --target "${{ matrix.target }}"
       - name: Package erika-capi bundle
         if: matrix.arch == 'arm64'
         run: >-
