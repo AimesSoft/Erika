@@ -382,12 +382,6 @@ impl Demuxer {
         Decoder::open(self.codec_parameters(stream_index)?)
     }
 
-    /// Container-signalled Dolby Vision configuration profile for a stream
-    /// (`dvcC`/`dvvC` in MP4/MKV), used to steer decode backend selection.
-    pub fn dolby_vision_profile(&self, stream_index: i32) -> Option<u8> {
-        unsafe { stream_dolby_vision_profile(self.context.as_ptr(), stream_index) }
-    }
-
     pub fn open_subtitle_decoder(&self, stream_index: i32) -> Result<SubtitleDecoder> {
         let parameters = self.codec_parameters(stream_index)?;
         SubtitleDecoder::open_raw_with_fonts(
@@ -551,6 +545,13 @@ impl CodecParameters<'_> {
     pub fn kind(self) -> Option<TrackKind> {
         unsafe { track_kind((*self.ptr).codec_type) }
     }
+
+    /// Container-signalled Dolby Vision configuration profile (`dvcC`/`dvvC`
+    /// carried as `AV_PKT_DATA_DOVI_CONF` codec parameters side data), used to
+    /// steer decode backend selection.
+    pub fn dolby_vision_profile(self) -> Option<u8> {
+        unsafe { codec_parameters_dolby_vision_profile(self.ptr) }
+    }
 }
 
 pub struct OwnedCodecParameters {
@@ -562,6 +563,13 @@ pub struct OwnedCodecParameters {
 unsafe impl Send for OwnedCodecParameters {}
 
 impl OwnedCodecParameters {
+    /// Container-signalled Dolby Vision configuration profile (`dvcC`/`dvvC`
+    /// carried as `AV_PKT_DATA_DOVI_CONF` codec parameters side data), used to
+    /// steer decode backend selection.
+    pub fn dolby_vision_profile(&self) -> Option<u8> {
+        unsafe { codec_parameters_dolby_vision_profile(self.ptr) }
+    }
+
     fn copy_from(parameters: CodecParameters<'_>) -> Result<Self> {
         let ptr = unsafe { sys::avcodec_parameters_alloc() };
         if ptr.is_null() {
@@ -4330,28 +4338,19 @@ unsafe fn frame_hdr_metadata(frame: *const sys::AVFrame) -> Option<HdrMetadata> 
     Some(HdrMetadata::new(mastering_display, content_light))
 }
 
-/// Reads the container's Dolby Vision configuration record for a stream, if
-/// the demuxer attached one (`AV_PKT_DATA_DOVI_CONF`).
-unsafe fn stream_dolby_vision_profile(
-    context: *const sys::AVFormatContext,
-    stream_index: i32,
+/// Reads the container's Dolby Vision configuration record from codec
+/// parameters side data (`AV_PKT_DATA_DOVI_CONF` in ffmpeg 8), returning the
+/// Dolby Vision profile number.
+unsafe fn codec_parameters_dolby_vision_profile(
+    parameters: *const sys::AVCodecParameters,
 ) -> Option<u8> {
-    if context.is_null() || stream_index < 0 {
-        return None;
-    }
-    let index = usize::try_from(stream_index).ok()?;
-    let stream_count = usize::try_from(unsafe { (*context).nb_streams }).ok()?;
-    if index >= stream_count {
-        return None;
-    }
-    let stream = unsafe { *(*context).streams.add(index) };
-    if stream.is_null() {
+    if parameters.is_null() {
         return None;
     }
     let side_data = unsafe {
         sys::av_packet_side_data_get(
-            (*stream).coded_side_data,
-            (*stream).nb_coded_side_data,
+            (*parameters).coded_side_data,
+            (*parameters).nb_coded_side_data,
             sys::AVPacketSideDataType_AV_PKT_DATA_DOVI_CONF,
         )
     };
@@ -5248,7 +5247,8 @@ mod tests {
             .find(|track| track.kind == TrackKind::Video)
             .unwrap();
 
-        assert_eq!(demuxer.dolby_vision_profile(video.id as i32), None);
+        let parameters = demuxer.owned_codec_parameters(video.id as i32).unwrap();
+        assert_eq!(parameters.dolby_vision_profile(), None);
     }
 
     #[test]
@@ -5264,8 +5264,8 @@ mod tests {
             .find(|track| track.kind == TrackKind::Video)
             .expect("DV sample must contain a video stream");
 
-        let profile = demuxer.dolby_vision_profile(video.id as i32);
-        assert_eq!(profile, Some(5));
+        let parameters = demuxer.owned_codec_parameters(video.id as i32).unwrap();
+        assert_eq!(parameters.dolby_vision_profile(), Some(5));
     }
 
     #[test]

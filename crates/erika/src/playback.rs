@@ -885,7 +885,7 @@ impl PlaybackSession {
             let codec = parameters.codec_name();
             let requested_config = config.video_decode.decoder_config();
             let (decoder_config, decode_fallback_reason) =
-                dolby_vision_decode_fallback(&demuxer, stream_index, requested_config);
+                dolby_vision_decode_fallback(parameters.dolby_vision_profile(), requested_config);
             video_decoder = Some(
                 match open_video_decoder(parameters, decoder_config, &decoder_resources) {
                     Ok(decoder) => {
@@ -5871,15 +5871,14 @@ fn should_fallback_video_decoder_open_error(backend: DecoderBackend, codec: Opti
 /// profile 5 streams fall back to software decoding to keep the color mapping
 /// engaged. Profile 8 stays on hardware; its base layer is HDR10-compatible.
 fn dolby_vision_decode_fallback(
-    demuxer: &Demuxer,
-    stream_index: i32,
+    profile: Option<u8>,
     requested: DecoderConfig,
 ) -> (DecoderConfig, Option<String>) {
     let hardware = matches!(
         requested.backend,
         DecoderBackend::VideoToolbox | DecoderBackend::D3d11va | DecoderBackend::MediaCodec
     );
-    if !hardware || demuxer.dolby_vision_profile(stream_index) != Some(5) {
+    if !hardware || profile != Some(5) {
         return (requested, None);
     }
     (
