@@ -883,20 +883,22 @@ impl PlaybackSession {
             selected_streams.push(stream_index);
             let parameters = codec_parameters_for(&codec_parameters, stream_index)?;
             let codec = parameters.codec_name();
-            let decoder_config = config.video_decode.decoder_config();
+            let requested_config = config.video_decode.decoder_config();
+            let (decoder_config, decode_fallback_reason) =
+                dolby_vision_decode_fallback(&demuxer, stream_index, requested_config);
             video_decoder = Some(
                 match open_video_decoder(parameters, decoder_config, &decoder_resources) {
                     Ok(decoder) => {
                         let event = VideoDecoderEvent {
                             stage: video_decoder_open_stage(decoder_config).to_string(),
-                            requested_backend: decoder_config.backend,
+                            requested_backend: requested_config.backend,
                             previous_backend: None,
                             active_backend: decoder.backend(),
                             fallback_count: 0,
                             codec: codec.clone(),
                             pixel_format: None,
                             line_sizes: None,
-                            reason: None,
+                            reason: decode_fallback_reason,
                         };
                         trace::diagnostic(event.structured_message());
                         video_decoder_events.push_back(event);
@@ -5863,6 +5865,27 @@ fn should_fallback_video_decoder_open_error(backend: DecoderBackend, codec: Opti
         DecoderBackend::D3d11va | DecoderBackend::MediaCodec | DecoderBackend::AvCodec
     ) || (backend == DecoderBackend::VideoToolbox
         && codec.is_some_and(|codec| codec.eq_ignore_ascii_case("av1")))
+}
+
+/// mpv parity: hardware decoders cannot convey the Dolby Vision RPU, so
+/// profile 5 streams fall back to software decoding to keep the color mapping
+/// engaged. Profile 8 stays on hardware; its base layer is HDR10-compatible.
+fn dolby_vision_decode_fallback(
+    demuxer: &Demuxer,
+    stream_index: i32,
+    requested: DecoderConfig,
+) -> (DecoderConfig, Option<String>) {
+    let hardware = matches!(
+        requested.backend,
+        DecoderBackend::VideoToolbox | DecoderBackend::D3d11va | DecoderBackend::MediaCodec
+    );
+    if !hardware || demuxer.dolby_vision_profile(stream_index) != Some(5) {
+        return (requested, None);
+    }
+    (
+        DecoderConfig::software(),
+        Some("dolby vision profile 5 requires software decode for RPU mapping".to_string()),
+    )
 }
 
 fn video_decoder_open_stage(config: DecoderConfig) -> &'static str {

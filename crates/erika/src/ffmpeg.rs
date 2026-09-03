@@ -382,6 +382,12 @@ impl Demuxer {
         Decoder::open(self.codec_parameters(stream_index)?)
     }
 
+    /// Container-signalled Dolby Vision configuration profile for a stream
+    /// (`dvcC`/`dvvC` in MP4/MKV), used to steer decode backend selection.
+    pub fn dolby_vision_profile(&self, stream_index: i32) -> Option<u8> {
+        unsafe { stream_dolby_vision_profile(self.context.as_ptr(), stream_index) }
+    }
+
     pub fn open_subtitle_decoder(&self, stream_index: i32) -> Result<SubtitleDecoder> {
         let parameters = self.codec_parameters(stream_index)?;
         SubtitleDecoder::open_raw_with_fonts(
@@ -4324,6 +4330,40 @@ unsafe fn frame_hdr_metadata(frame: *const sys::AVFrame) -> Option<HdrMetadata> 
     Some(HdrMetadata::new(mastering_display, content_light))
 }
 
+/// Reads the container's Dolby Vision configuration record for a stream, if
+/// the demuxer attached one (`AV_PKT_DATA_DOVI_CONF`).
+unsafe fn stream_dolby_vision_profile(
+    context: *const sys::AVFormatContext,
+    stream_index: i32,
+) -> Option<u8> {
+    if context.is_null() || stream_index < 0 {
+        return None;
+    }
+    let index = usize::try_from(stream_index).ok()?;
+    let stream_count = usize::try_from(unsafe { (*context).nb_streams }).ok()?;
+    if index >= stream_count {
+        return None;
+    }
+    let stream = unsafe { *(*context).streams.add(index) };
+    if stream.is_null() {
+        return None;
+    }
+    let mut size = 0_usize;
+    let record = unsafe {
+        sys::av_stream_get_side_data(
+            stream,
+            sys::AVPacketSideDataType_AV_PKT_DATA_DOVI_CONF,
+            &mut size,
+        )
+    };
+    if record.is_null()
+        || usize::try_from(size).ok()? < mem::size_of::<sys::AVDOVIDecoderConfigurationRecord>()
+    {
+        return None;
+    }
+    Some(unsafe { (*(record as *const sys::AVDOVIDecoderConfigurationRecord)).dv_profile })
+}
+
 /// Reads the decoder's parsed Dolby Vision RPU side data and converts it into
 /// shader-ready floats, mirroring libplacebo's `pl_map_dovi_metadata`: pivots
 /// are normalized by the base-layer bit depth and curve coefficients by
@@ -5189,6 +5229,41 @@ mod tests {
             }
             .is_none()
         );
+    }
+
+    #[test]
+    fn playback_fixture_has_no_dolby_vision_profile() {
+        let path = std::env::var_os("ERIKA_PLAYBACK_FIXTURE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/playback/playback-fixture.mkv")
+            });
+        let demuxer = Demuxer::open_path(&path).unwrap();
+        let video = demuxer
+            .probe()
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Video)
+            .unwrap();
+
+        assert_eq!(demuxer.dolby_vision_profile(video.id as i32), None);
+    }
+
+    #[test]
+    fn dv_sample_reports_dolby_vision_profile() {
+        let Some(path) = std::env::var_os("ERIKA_DV_SAMPLE") else {
+            return;
+        };
+        let demuxer = Demuxer::open_path(&path).unwrap();
+        let video = demuxer
+            .probe()
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Video)
+            .expect("DV sample must contain a video stream");
+
+        let profile = demuxer.dolby_vision_profile(video.id as i32);
+        assert_eq!(profile, Some(5));
     }
 
     #[test]
