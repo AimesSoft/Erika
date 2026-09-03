@@ -4519,8 +4519,8 @@ unsafe fn frame_dovi_metadata(frame: *const sys::AVFrame) -> Option<DoviSourceMe
                     let destination = &mut curve.mmr_coeffs[segment][..order];
                     for (order_index, coefficients) in destination.iter_mut().enumerate() {
                         for (index, coefficient) in coefficients.iter_mut().enumerate() {
-                            *coefficient =
-                                coefficient_scale * source.mmr_coef[segment][order_index][index] as f32;
+                            *coefficient = coefficient_scale
+                                * source.mmr_coef[segment][order_index][index] as f32;
                         }
                     }
                 }

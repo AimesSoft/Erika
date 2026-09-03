@@ -1820,9 +1820,9 @@ impl RendererBackend for D3d11Renderer {
         let height = planar.height.max(1);
         let chroma_width = width.div_ceil(2);
         let chroma_height = height.div_ceil(2);
-        let luma_pitch = width.checked_mul(bytes_per_sample).ok_or_else(|| {
-            PlayerError::Renderer("d3d11: luma row pitch overflowed".to_string())
-        })?;
+        let luma_pitch = width
+            .checked_mul(bytes_per_sample)
+            .ok_or_else(|| PlayerError::Renderer("d3d11: luma row pitch overflowed".to_string()))?;
         let chroma_pitch = chroma_width
             .checked_mul(2)
             .and_then(|pitch| pitch.checked_mul(bytes_per_sample))

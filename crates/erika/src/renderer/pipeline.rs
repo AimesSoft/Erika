@@ -671,13 +671,12 @@ impl SourceColorState {
                 let mut hdr = self
                     .hdr_metadata
                     .unwrap_or_else(|| HdrMetadata::new(None, None));
-                let mut mastering =
-                    hdr.mastering_display.unwrap_or(MasteringDisplayMetadata {
-                        display_primaries: None,
-                        white_point: None,
-                        min_luminance_nits: None,
-                        max_luminance_nits: None,
-                    });
+                let mut mastering = hdr.mastering_display.unwrap_or(MasteringDisplayMetadata {
+                    display_primaries: None,
+                    white_point: None,
+                    min_luminance_nits: None,
+                    max_luminance_nits: None,
+                });
                 if let Some(min_luminance) = min_luminance {
                     mastering.min_luminance_nits = Some(min_luminance);
                 }
@@ -1639,16 +1638,18 @@ mod tests {
 
         // PQ code 3079 is the 12-bit encoding of ~1000 nits.
         assert!((source.nominal_peak_nits - 1000.0).abs() < 5.0);
-        assert!((source
-            .hdr_metadata
-            .unwrap()
-            .mastering_display
-            .unwrap()
-            .min_luminance_nits
-            .unwrap()
-            - 0.005)
-            .abs()
-            < 0.0001);
+        assert!(
+            (source
+                .hdr_metadata
+                .unwrap()
+                .mastering_display
+                .unwrap()
+                .min_luminance_nits
+                .unwrap()
+                - 0.005)
+                .abs()
+                < 0.0001
+        );
         assert_eq!(source.primaries, ColorPrimaries::Bt2020);
         assert!(source.is_hdr());
         assert_eq!(pq_code_to_nits(0), 0.0);
