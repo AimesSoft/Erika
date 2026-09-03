@@ -4405,6 +4405,7 @@ unsafe fn frame_dovi_metadata(frame: *const sys::AVFrame) -> Option<DoviSourceMe
 
     let bl_bit_depth = usize::from(header.bl_bit_depth);
     let coef_denom = u32::from(header.coef_log2_denom);
+    // Validate bit depth and coefficient denominator ranges per Dolby Vision spec
     if !(8..=16).contains(&bl_bit_depth) || coef_denom >= 31 {
         return None;
     }
@@ -5266,6 +5267,23 @@ mod tests {
 
         let parameters = demuxer.owned_codec_parameters(video.id as i32).unwrap();
         assert_eq!(parameters.dolby_vision_profile(), Some(5));
+    }
+
+    #[test]
+    fn dv_profile_8_sample_reports_profile() {
+        let Some(path) = std::env::var_os("ERIKA_DV_PROFILE_8_SAMPLE") else {
+            return;
+        };
+        let demuxer = Demuxer::open_path(&path).unwrap();
+        let video = demuxer
+            .probe()
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Video)
+            .expect("DV Profile 8 sample must contain a video stream");
+
+        let parameters = demuxer.owned_codec_parameters(video.id as i32).unwrap();
+        assert_eq!(parameters.dolby_vision_profile(), Some(8));
     }
 
     #[test]

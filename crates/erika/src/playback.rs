@@ -8008,4 +8008,38 @@ mod tests {
         assert_ne!(first.vsyncs, second.vsyncs);
         assert!(first.residual_error_nanos.signum() != second.residual_error_nanos.signum());
     }
+
+    #[test]
+    fn dolby_vision_profile_5_falls_back_to_software_decode() {
+        let hardware_config = DecoderConfig {
+            backend: DecoderBackend::VideoToolbox,
+            mediacodec_surface: false,
+        };
+        let (config, reason) = dolby_vision_decode_fallback(Some(5), hardware_config);
+
+        assert_eq!(config.backend, DecoderBackend::AvCodec);
+        assert!(reason.is_some());
+        assert!(reason.unwrap().contains("profile 5"));
+    }
+
+    #[test]
+    fn dolby_vision_profile_8_stays_on_hardware_decode() {
+        let hardware_config = DecoderConfig {
+            backend: DecoderBackend::VideoToolbox,
+            mediacodec_surface: false,
+        };
+        let (config, reason) = dolby_vision_decode_fallback(Some(8), hardware_config);
+
+        assert_eq!(config.backend, DecoderBackend::VideoToolbox);
+        assert_eq!(reason, None);
+    }
+
+    #[test]
+    fn dolby_vision_software_decode_stays_software() {
+        let software_config = DecoderConfig::software();
+        let (config, reason) = dolby_vision_decode_fallback(Some(5), software_config);
+
+        assert_eq!(config.backend, DecoderBackend::AvCodec);
+        assert_eq!(reason, None);
+    }
 }

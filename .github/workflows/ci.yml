@@ -130,6 +130,9 @@ jobs:
       - name: Build wgpu_decode_png example
         if: matrix.arch == 'arm64'
         run: |
+          # Link against libclang_rt.osx to resolve __isPlatformVersionAtLeast,
+          # a symbol the sanitizer runtime needs but that may be weakly referenced.
+          # See commits acae10f and 3498b8e for context.
           RT_DIR="$(dirname "$(find "$(dirname "$(xcrun -f clang)")/../lib/clang" -name libclang_rt.osx.a | head -1)")"
           echo "clang_rt dir: $RT_DIR"
           ERIKA_NATIVE_PROFILE="$PROFILE" \

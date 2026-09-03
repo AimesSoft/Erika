@@ -105,17 +105,22 @@ impl Default for DoviComponentCurve {
 /// Per-frame Dolby Vision RPU payload copied out of the decoder's
 /// `AV_FRAME_DATA_DOVI_METADATA` side data before the frame is retired.
 ///
-/// The `nonlinear` matrix is the RPU's "ycc_to_rgb" transform applied to the
+/// The `nonlinear_matrix` is the RPU's "ycc_to_rgb" transform applied to the
 /// reshaped (still PQ-encoded) signal; `rgb_to_lms` is the RPU's mastering
 /// transform whose inverse converts PQ-linearized LMS back to BT.2020 RGB.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DoviSourceMetadata {
+    /// Per-component reshaping curves (luma, Cb, Cr).
     pub reshaping: [DoviComponentCurve; 3],
+    /// RPU's ycc_to_rgb matrix applied to reshaped nonlinear signal.
     pub nonlinear_matrix: RgbMatrix,
+    /// RPU signal offsets applied before the nonlinear matrix.
     pub nonlinear_offset: [f32; 3],
+    /// RPU's rgb_to_lms mastering transform (inverted after PQ linearization).
     pub rgb_to_lms: RgbMatrix,
-    /// 12-bit PQ code of the mastering display's black and peak level.
+    /// 12-bit PQ code of the mastering display's black level (typically 0-100).
     pub source_min_pq: u16,
+    /// 12-bit PQ code of the mastering display's peak level (typically 2000-4000 nits).
     pub source_max_pq: u16,
 }
 
@@ -156,6 +161,10 @@ pub fn dovi_lms_to_rgb_matrix(rgb_to_lms: RgbMatrix) -> RgbMatrix {
 /// Shader uniform block for Dolby Vision reshaping. All values are
 /// vec4-aligned so the block can be appended to the shared video uniform
 /// buffer across the WGSL, Metal and HLSL backends without packing tricks.
+///
+/// **Size**: ~3KB total (144 vec4s for MMR + overhead). Modern GPUs support
+/// this easily, but older mobile devices may have uniform buffer limits around
+/// 16KB - this uses ~20% of that budget.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "wgpu", derive(bytemuck::Pod, bytemuck::Zeroable))]
@@ -186,8 +195,10 @@ pub struct DoviUniforms {
 
 const DOVI_PIVOT_SENTINEL: f32 = 1e9;
 /// RPU offsets are rational /1024-style values while shader samples are
-/// normalized by n/(2^bits - 1); libplacebo multiplies the offset by
-/// `2^bits / (2^bits - 1)` so integer offsets map exactly onto sample codes.
+/// normalized by n/(2^bits - 1). Multiply the offset by 2^bits / (2^bits - 1)
+/// so integer codes 0..1023 map exactly onto normalized samples.
+/// For 10-bit: 1024 / 1023 ≈ 1.0009775, ensuring integer offset codes land
+/// precisely on sample values without rounding error.
 const DOVI_SIGNAL_OFFSET_SCALE: f32 = 1024.0 / 1023.0;
 
 impl DoviUniforms {
