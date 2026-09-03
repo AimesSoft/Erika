@@ -5876,7 +5876,10 @@ fn dolby_vision_decode_fallback(
 ) -> (DecoderConfig, Option<String>) {
     let hardware = matches!(
         requested.backend,
-        DecoderBackend::VideoToolbox | DecoderBackend::D3d11va | DecoderBackend::MediaCodec
+        DecoderBackend::VideoToolbox
+            | DecoderBackend::D3d11va
+            | DecoderBackend::MediaCodec
+            | DecoderBackend::AvCodec
     );
     if !hardware || profile != Some(5) {
         return (requested, None);
@@ -8020,6 +8023,14 @@ mod tests {
         assert_eq!(config.backend, DecoderBackend::Software);
         assert!(reason.is_some());
         assert!(reason.unwrap().contains("profile 5"));
+
+        let avcodec_config = DecoderConfig {
+            backend: DecoderBackend::AvCodec,
+            mediacodec_surface: false,
+        };
+        let (config, reason) = dolby_vision_decode_fallback(Some(5), avcodec_config);
+        assert_eq!(config.backend, DecoderBackend::Software);
+        assert!(reason.is_some());
     }
 
     #[test]

@@ -202,19 +202,27 @@ struct RangeExpandedYCbCr {
 };
 
 fn expand_ycbcr_range(y_in: f32, cbcr_in: vec2<f32>) -> RangeExpandedYCbCr {
+    var y = y_in;
+    var cbcr = cbcr_in;
+    if (uniforms.is_p010 != 0u) {
+        // P010 stores 10-bit codes as code << 6 in a 16-bit UNORM texture.
+        let p010_scale = 65535.0 / 65472.0;
+        y *= p010_scale;
+        cbcr *= p010_scale;
+    }
     var out: RangeExpandedYCbCr;
     if (uniforms.full_range != 0u) {
-        out.y = y_in;
-        out.cbcr = cbcr_in - vec2<f32>(0.5);
+        out.y = y;
+        out.cbcr = cbcr - vec2<f32>(0.5);
         return out;
     }
     if (uniforms.is_p010 != 0u) {
-        out.y = (y_in - (64.0 / 1023.0)) * (1023.0 / 876.0);
-        out.cbcr = (cbcr_in - vec2<f32>(512.0 / 1023.0)) * (1023.0 / 896.0);
+        out.y = (y - (64.0 / 1023.0)) * (1023.0 / 876.0);
+        out.cbcr = (cbcr - vec2<f32>(512.0 / 1023.0)) * (1023.0 / 896.0);
         return out;
     }
-    out.y = (y_in - (16.0 / 255.0)) * (255.0 / 219.0);
-    out.cbcr = (cbcr_in - vec2<f32>(128.0 / 255.0)) * (255.0 / 224.0);
+    out.y = (y - (16.0 / 255.0)) * (255.0 / 219.0);
+    out.cbcr = (cbcr - vec2<f32>(128.0 / 255.0)) * (255.0 / 224.0);
     return out;
 }
 
@@ -277,7 +285,7 @@ fn dovi_reshaped_signal(sig_in: vec3<f32>) -> vec3<f32> {
 
 // Reshaped nonlinear signal to PQ-encoded IPT via the RPU's ycc_to_rgb matrix
 // and signal offsets. Applying the RPU offsets keeps integer offset codes
-// exactly on sample codes (1024/1023 folded in on the CPU).
+// exactly on sample codes (2^bits/(2^bits-1) folded in on the CPU).
 fn dovi_signal_to_pq_rgb(sig: vec3<f32>) -> vec3<f32> {
     let reshaped = dovi_reshaped_signal(sig) - uniforms.dovi_nonlinear_offset.xyz;
     return vec3<f32>(
@@ -370,11 +378,15 @@ fn erika_video_fragment(in: VertexOut) -> @location(0) vec4<f32> {
     let cbcr_sample = textureSample(chroma_texture, video_sampler, color_coord).rg;
     var rgb: vec3<f32>;
     let dovi_enabled = uniforms.dovi_flags.x != 0.0;
-    if (dovi_enabled && (input_mode == 0u || input_mode == 2u)) {
+    let dovi_ycbcr_input = dovi_enabled && (input_mode == 0u || input_mode == 2u);
+    if (dovi_ycbcr_input) {
         // The base layer carries the raw 12-bit DV signal (10-bit container,
         // full range); range expansion and the YCbCr matrix are replaced by
         // the RPU reshaping + ycc_to_rgb path.
-        let sig = vec3<f32>(y_sample, cbcr_sample.x, cbcr_sample.y);
+        var sig = vec3<f32>(y_sample, cbcr_sample.x, cbcr_sample.y);
+        if (uniforms.is_p010 != 0u) {
+            sig *= 65535.0 / 65472.0;
+        }
         rgb = dovi_signal_to_pq_rgb(sig);
     } else if (input_mode == 1u) {
         rgb = textureSample(luma_texture, video_sampler, color_coord).rgb;
@@ -396,7 +408,7 @@ fn erika_video_fragment(in: VertexOut) -> @location(0) vec4<f32> {
         rgb.g = (y - kr * rgb.r - kb * rgb.b) / kg;
     }
     rgb = transfer_to_source_reference_linear(rgb);
-    if (dovi_enabled) {
+    if (dovi_ycbcr_input) {
         rgb = dovi_lms_to_rgb(rgb);
     }
     rgb = apply_gamut_map(rgb);

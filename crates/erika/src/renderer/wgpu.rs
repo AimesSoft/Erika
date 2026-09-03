@@ -365,7 +365,7 @@ fn prepare_planar_upload(
     } else {
         (frame, PlanarUploadPath::Native)
     };
-    uniforms.is_p010 = u32::from(frame.format == PlanarPixelFormat::P010);
+    uniforms = uniforms.with_p010_representation(frame.format == PlanarPixelFormat::P010);
     Ok(PreparedPlanarUpload {
         frame,
         uniforms,

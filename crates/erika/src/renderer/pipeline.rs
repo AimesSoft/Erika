@@ -130,7 +130,7 @@ pub fn pq_code_to_nits(code: u16) -> f32 {
     if code == 0 {
         return 0.0;
     }
-    let encoded = f32::from(code) / 4095.0;
+    let encoded = f32::from(code.min(4095)) / 4095.0;
     let m1 = 0.1593017578125_f32;
     let m2 = 78.84375_f32;
     let c1 = 0.8359375_f32;
@@ -186,8 +186,8 @@ pub struct DoviUniforms {
     pub mmr: [[f32; 4]; 3 * 2 * DOVI_MAX_MMR_ORDER * DOVI_MAX_PIECES],
     /// RPU "ycc_to_rgb" rows applied to the reshaped nonlinear signal.
     pub nonlinear_matrix: [[f32; 4]; 3],
-    /// RPU signal offsets, pre-scaled so the shader's n/1023-normalized
-    /// samples subtract exactly (libplacebo folds a 1024/1023 correction).
+    /// RPU signal offsets, pre-scaled so the shader's normalized 8-bit or
+    /// P010 samples subtract exactly (libplacebo folds 2^bits/(2^bits-1)).
     pub nonlinear_offset: [f32; 4],
     /// Composite LMS->RGB rows applied after PQ linearization.
     pub lms_matrix: [[f32; 4]; 3],
@@ -195,12 +195,9 @@ pub struct DoviUniforms {
 
 const DOVI_PIVOT_SENTINEL: f32 = 1e9;
 /// RPU offsets are rational /1024-style values while shader samples are
-/// normalized by n/(2^bits - 1). Multiply the offset by 2^bits / (2^bits - 1)
-/// so integer codes 0..1023 map exactly onto normalized samples.
-/// For 10-bit: 1024 / 1023 ≈ 1.0009775, ensuring integer offset codes land
-/// precisely on sample values without rounding error.
-const DOVI_SIGNAL_OFFSET_SCALE: f32 = 1024.0 / 1023.0;
-
+/// normalized by n/(2^bits - 1). `DoviUniforms::of_for_representation`
+/// applies the matching
+/// 2^bits/(2^bits-1) correction for the actual uploaded representation.
 impl DoviUniforms {
     pub const fn disabled() -> Self {
         Self {
@@ -215,7 +212,16 @@ impl DoviUniforms {
         }
     }
 
+    /// Builds uniforms using the historical 10-bit DV signal representation.
+    /// New callers with an explicit uploaded format should use
+    /// [`Self::of_for_representation`].
     pub fn of(source: &SourceColorState) -> Self {
+        Self::of_for_representation(source, true)
+    }
+
+    /// Builds uniforms for the concrete plane representation used by the
+    /// renderer (`P010` when `is_p010` is true, otherwise 8-bit `NV12`).
+    pub fn of_for_representation(source: &SourceColorState, is_p010: bool) -> Self {
         let Some(dovi) = &source.dovi else {
             return Self::disabled();
         };
@@ -232,7 +238,12 @@ impl DoviUniforms {
             uniforms.pivots[2 * component] = [interior[0], interior[1], interior[2], interior[3]];
             uniforms.pivots[2 * component + 1] =
                 [interior[4], interior[5], interior[6], interior[7]];
-            uniforms.bounds[component] = [curve.pivots[0], curve.pivots[segments], 0.0, 0.0];
+            uniforms.bounds[component] = [
+                curve.pivots[0].min(curve.pivots[segments]),
+                curve.pivots[0].max(curve.pivots[segments]),
+                0.0,
+                0.0,
+            ];
 
             let mut mmr_row = 0usize;
             for (segment, &kind) in curve.mmr_orders[..segments].iter().enumerate() {
@@ -269,10 +280,13 @@ impl DoviUniforms {
             }
         }
         uniforms.nonlinear_matrix = dovi.nonlinear_matrix.row4s();
+        let signal_bits = if is_p010 { 10 } else { 8 };
+        let signal_max = ((1_u32 << signal_bits) - 1) as f32;
+        let signal_offset_scale = (1_u32 << signal_bits) as f32 / signal_max;
         uniforms.nonlinear_offset = [
-            dovi.nonlinear_offset[0] * DOVI_SIGNAL_OFFSET_SCALE,
-            dovi.nonlinear_offset[1] * DOVI_SIGNAL_OFFSET_SCALE,
-            dovi.nonlinear_offset[2] * DOVI_SIGNAL_OFFSET_SCALE,
+            dovi.nonlinear_offset[0] * signal_offset_scale,
+            dovi.nonlinear_offset[1] * signal_offset_scale,
+            dovi.nonlinear_offset[2] * signal_offset_scale,
             0.0,
         ];
         uniforms.lms_matrix = dovi_lms_to_rgb_matrix(dovi.rgb_to_lms).row4s();
@@ -629,17 +643,49 @@ impl SourceColorState {
     /// Attaches per-frame Dolby Vision RPU metadata. The RPU describes an
     /// IPT/LMS signal referred to BT.2020 with a PQ transfer, so the primaries
     /// and transfer are forced to BT.2020/PQ (matching libplacebo's
-    /// `pl_map_avdovi_metadata`) and the nominal peak follows the RPU's
-    /// `source_max_pq` instead of the static HDR10 mastering metadata. Forcing
-    /// the transfer also repairs streams whose VUI tags are missing entirely.
+    /// `pl_map_avdovi_metadata`). The RPU's `source_min_pq`/`source_max_pq`
+    /// replace static mastering luminance when present, while ordinary display
+    /// primaries and content-light metadata are retained. Forcing the transfer
+    /// also repairs streams whose VUI tags are missing entirely.
     pub fn dovi(mut self, metadata: Option<DoviSourceMetadata>) -> Self {
         if let Some(dovi) = metadata {
             self.primaries = ColorPrimaries::Bt2020;
             self.transfer = TransferFunction::Pq;
             self.reference_white_nits = reference_white_for_transfer(self.transfer).max(1.0);
+            let min_luminance = (dovi.source_min_pq != 0)
+                .then(|| pq_code_to_nits(dovi.source_min_pq))
+                .filter(|value| value.is_finite() && *value >= 0.0);
             let peak = pq_code_to_nits(dovi.source_max_pq);
             if peak > 0.0 {
                 self.nominal_peak_nits = peak.max(1.0);
+            } else if self.nominal_peak_nits <= self.reference_white_nits {
+                self.nominal_peak_nits = nominal_peak_for_transfer(self.transfer);
+            }
+            // Keep ordinary mastering primaries/content-light metadata, but
+            // prefer the RPU's source luminance bounds when present. This lets
+            // native HDR10 outputs carry Dolby Vision black-level metadata too.
+            if min_luminance.is_some()
+                || (peak.is_finite() && peak > 0.0)
+                || self.hdr_metadata.is_some()
+            {
+                let mut hdr = self
+                    .hdr_metadata
+                    .unwrap_or_else(|| HdrMetadata::new(None, None));
+                let mut mastering =
+                    hdr.mastering_display.unwrap_or(MasteringDisplayMetadata {
+                        display_primaries: None,
+                        white_point: None,
+                        min_luminance_nits: None,
+                        max_luminance_nits: None,
+                    });
+                if let Some(min_luminance) = min_luminance {
+                    mastering.min_luminance_nits = Some(min_luminance);
+                }
+                if peak.is_finite() && peak > 0.0 {
+                    mastering.max_luminance_nits = Some(peak);
+                }
+                hdr.mastering_display = Some(mastering);
+                self.hdr_metadata = Some(hdr);
             }
             self.dovi = Some(dovi);
         } else {
@@ -922,12 +968,30 @@ impl VideoUniforms {
             ],
             luma_coefficients: [luma.kr, luma.kg, luma.kb, 0.0],
             gamut_matrix_rows: pipeline.gamut_matrix().row4s(),
-            dovi: DoviUniforms::of(&pipeline.source),
+            dovi: DoviUniforms::of_for_representation(&pipeline.source, is_p010),
         }
     }
 
     pub fn rgb_texture_input(mut self) -> Self {
         self.input_mode = (self.input_mode & !VIDEO_INPUT_MODE_MASK) | 1;
+        self
+    }
+
+    /// Updates the decoded sample representation while keeping Dolby Vision
+    /// signal offsets in the same normalized domain as the texture samples.
+    /// This matters when a 10-bit P010 frame is down-converted to 8-bit NV12.
+    pub fn with_p010_representation(mut self, is_p010: bool) -> Self {
+        let old_bits = if self.is_p010 != 0 { 10 } else { 8 };
+        let new_bits = if is_p010 { 10 } else { 8 };
+        if old_bits != new_bits {
+            let old_scale = (1_u32 << old_bits) as f32 / ((1_u32 << old_bits) - 1) as f32;
+            let new_scale = (1_u32 << new_bits) as f32 / ((1_u32 << new_bits) - 1) as f32;
+            let ratio = new_scale / old_scale;
+            for offset in &mut self.dovi.nonlinear_offset[..3] {
+                *offset *= ratio;
+            }
+        }
+        self.is_p010 = u32::from(is_p010);
         self
     }
 
@@ -1462,7 +1526,10 @@ mod tests {
     #[test]
     fn dovi_uniforms_are_disabled_without_metadata() {
         let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq);
-        assert_eq!(DoviUniforms::of(&source), DoviUniforms::disabled());
+        assert_eq!(
+            DoviUniforms::of_for_representation(&source, false),
+            DoviUniforms::disabled()
+        );
         assert_eq!(DoviUniforms::disabled().flags[0], 0.0);
 
         let target = TargetColorState::sdr(ColorPrimaries::Bt709);
@@ -1478,7 +1545,7 @@ mod tests {
         let metadata = sample_dovi_metadata();
         let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq)
             .dovi(Some(metadata));
-        let uniforms = DoviUniforms::of(&source);
+        let uniforms = DoviUniforms::of_for_representation(&source, true);
 
         assert_eq!(uniforms.flags, [1.0, 3.0, 0.0, 0.0]);
         // Interior pivots skip the endpoints; padding gets the sentinel.
@@ -1504,12 +1571,32 @@ mod tests {
         let metadata = sample_dovi_metadata();
         let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq)
             .dovi(Some(metadata));
-        let uniforms = DoviUniforms::of(&source);
+        let uniforms = DoviUniforms::of_for_representation(&source, true);
         let correction = 1024.0_f32 / 1023.0;
 
         assert!((uniforms.nonlinear_offset[0] - 0.25 * correction).abs() < 1e-6);
         assert!((uniforms.nonlinear_offset[1] - 0.5 * correction).abs() < 1e-6);
         assert_eq!(uniforms.nonlinear_matrix[0], [1.0, 0.5, 0.25, 0.0]);
+    }
+
+    #[test]
+    fn dovi_uniforms_use_the_uploaded_sample_depth_for_offsets() {
+        let metadata = sample_dovi_metadata();
+        let source = SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq)
+            .dovi(Some(metadata));
+        let p010 = DoviUniforms::of_for_representation(&source, true);
+        let nv12 = DoviUniforms::of_for_representation(&source, false);
+        assert!((p010.nonlinear_offset[0] - 0.25 * 1024.0 / 1023.0).abs() < 1e-6);
+        assert!((nv12.nonlinear_offset[0] - 0.25 * 256.0 / 255.0).abs() < 1e-6);
+
+        let uniforms = VideoUniforms::from_pipeline(
+            &VideoRenderPipeline::new(source, TargetColorState::sdr(ColorPrimaries::Bt709)),
+            true,
+            false,
+        );
+        let converted = uniforms.with_p010_representation(false);
+        assert_eq!(converted.is_p010, 0);
+        assert!((converted.dovi.nonlinear_offset[0] - nv12.nonlinear_offset[0]).abs() < 1e-6);
     }
 
     #[test]
@@ -1552,9 +1639,32 @@ mod tests {
 
         // PQ code 3079 is the 12-bit encoding of ~1000 nits.
         assert!((source.nominal_peak_nits - 1000.0).abs() < 5.0);
+        assert!((source
+            .hdr_metadata
+            .unwrap()
+            .mastering_display
+            .unwrap()
+            .min_luminance_nits
+            .unwrap()
+            - 0.005)
+            .abs()
+            < 0.0001);
         assert_eq!(source.primaries, ColorPrimaries::Bt2020);
         assert!(source.is_hdr());
         assert_eq!(pq_code_to_nits(0), 0.0);
+    }
+
+    #[test]
+    fn dovi_source_peak_falls_back_to_pq_default_when_rpu_max_pq_is_zero() {
+        let mut metadata = sample_dovi_metadata();
+        metadata.source_max_pq = 0;
+        let source = SourceColorState::new(ColorPrimaries::Unknown, TransferFunction::Unknown)
+            .dovi(Some(metadata));
+
+        assert_eq!(source.transfer, TransferFunction::Pq);
+        assert_eq!(source.reference_white_nits, 203.0);
+        assert_eq!(source.nominal_peak_nits, 1000.0);
+        assert!(source.nominal_peak_nits > source.reference_white_nits);
     }
 
     #[test]

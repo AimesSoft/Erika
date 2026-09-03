@@ -10,16 +10,18 @@ Dolby Vision is an HDR format that enhances video quality through per-frame meta
 
 | Profile | Description | Decode Strategy | RPU Available |
 |---------|-------------|-----------------|---------------|
-| **5** | Single layer, non-backward compatible | **Software decode required** | ✅ Yes |
+| **5** | Single layer, non-backward compatible | **Software decode required; CPU plane upload on D3D11** | ✅ Yes |
 | **8** | Dual layer, HDR10 base layer | Hardware decode allowed | ✅ Yes (software only) |
 
 ### Why Profile 5 Requires Software Decode
 
-Hardware video decoders (VideoToolbox, D3D11VA, MediaCodec) decode the compressed video stream but **do not expose the RPU metadata** to the application. For Profile 5:
+Hardware video decoders (VideoToolbox, D3D11VA, MediaCodec, AvCodec) decode the compressed video stream but **do not expose the RPU metadata** to the application. For Profile 5:
 
 - The base layer is **not** HDR10-compatible
 - Without RPU mapping, the image appears incorrect
 - **Solution**: Force software decode via FFmpeg's `avcodec` to access `AV_FRAME_DATA_DOVI_METADATA`
+
+The Windows D3D11 renderer accepts the resulting software NV12/P010 planes through a CPU upload path, so the default renderer remains usable after the Profile 5 fallback.
 
 For Profile 8:
 
@@ -57,7 +59,7 @@ See `dolby_vision_decode_fallback()` in `playback.rs:5873`.
 │ 4. Uniform Packing (pipeline.rs:207)                            │
 │    - Converts to vec4-aligned DoviUniforms (~3KB)               │
 │    - Packs polynomial and MMR coefficients                      │
-│    - Applies signal offset correction (1024/1023)               │
+│    - Applies signal offset correction for the uploaded bit depth │
 └────────────────────┬────────────────────────────────────────────┘
                      ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -138,9 +140,10 @@ Set environment variables to enable:
 
 ## Known Limitations
 
-1. **Profile 8 RPU not used**: Hardware decode doesn't expose RPU, so Profile 8 falls back to HDR10 base layer only
-2. **Uniform buffer size**: ~3KB may exceed limits on very old mobile GPUs (pre-2015)
-3. **CPU parsing overhead**: Minimal (<0.1ms per frame on modern hardware)
+1. **FEL/residual RPU is not composed**: RPU mapping is disabled for frames with enhancement-layer residuals or non-trivial NLQ; playback falls back to the decoded base-layer signal instead of silently applying an incomplete reshape.
+2. **Profile 8 RPU not used with hardware decode**: Hardware decode doesn't expose RPU, so Profile 8 falls back to HDR10 base layer only
+3. **Uniform buffer size**: ~3KB may exceed limits on very old mobile GPUs (pre-2015)
+4. **CPU parsing/upload overhead**: Minimal for parsing; software Profile 5 frames pay the expected plane-upload cost on D3D11
 
 ## References
 

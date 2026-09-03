@@ -47,7 +47,7 @@ use crate::core::{
 use crate::danmaku::{
     DanmakuAtlasUpdate, DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan,
 };
-use crate::ffmpeg::Frame;
+use crate::ffmpeg::{Frame, PlanarPixelFormat};
 use crate::overlay::OverlayFrame;
 use crate::renderer::d3d11_artcnn::D3d11ArtCnn;
 use crate::renderer::metal::{MetalRendererConfig, VideoAlphaMode};
@@ -271,6 +271,12 @@ float4 final_output(float3 rgb, float alpha) {
 }
 
 void expand_ycbcr_range(float y_in, float2 cbcr_in, out float y, out float2 cbcr) {
+    if (is_p010 != 0u) {
+        // P010 stores 10-bit codes as code << 6 in a 16-bit UNORM texture.
+        const float p010_scale = 65535.0 / 65472.0;
+        y_in *= p010_scale;
+        cbcr_in *= p010_scale;
+    }
     if (full_range != 0u) {
         y = y_in;
         cbcr = cbcr_in - float2(0.5, 0.5);
@@ -341,7 +347,7 @@ float3 dovi_reshaped_signal(float3 sig_in) {
 
 // Reshaped nonlinear signal to PQ-encoded IPT via the RPU's ycc_to_rgb matrix
 // and signal offsets. Applying the RPU offsets keeps integer offset codes
-// exactly on sample codes (1024/1023 folded in on the CPU).
+// exactly on sample codes (2^bits/(2^bits-1) folded in on the CPU).
 float3 dovi_signal_to_pq_rgb(float3 sig) {
     float3 reshaped = dovi_reshaped_signal(sig) - dovi.dovi_nonlinear_offset.xyz;
     return float3(
@@ -423,12 +429,17 @@ float4 ps_main(VsOut input) : SV_Target {
         : lumaTex.Sample(videoSampler, luma_coord).r;
     float2 cbcr_sample = chromaTex.Sample(videoSampler, chroma_coord).rg;
     bool dovi_enabled = dovi.dovi_flags.x != 0.0;
+    bool dovi_ycbcr_input = dovi_enabled && (base_input_mode == 0u || base_input_mode == 2u);
     float3 rgb;
-    if (dovi_enabled && (base_input_mode == 0u || base_input_mode == 2u)) {
+    if (dovi_ycbcr_input) {
         // The base layer carries the raw 12-bit DV signal (10-bit container,
         // full range); range expansion and the YCbCr matrix are replaced by
         // the RPU reshaping + ycc_to_rgb path.
-        rgb = dovi_signal_to_pq_rgb(float3(y_sample, cbcr_sample.x, cbcr_sample.y));
+        float3 sig = float3(y_sample, cbcr_sample.x, cbcr_sample.y);
+        if (is_p010 != 0u) {
+            sig *= 65535.0 / 65472.0;
+        }
+        rgb = dovi_signal_to_pq_rgb(sig);
     } else {
         float y;
         float2 cbcr;
@@ -442,7 +453,7 @@ float4 ps_main(VsOut input) : SV_Target {
         rgb.g = (y - kr * rgb.r - kb * rgb.b) / kg;
     }
     rgb = transfer_to_source_reference_linear(rgb);
-    if (dovi_enabled) {
+    if (dovi_ycbcr_input) {
         rgb = dovi_lms_to_rgb(rgb);
     }
     rgb = apply_gamut_map(rgb);
@@ -658,6 +669,7 @@ pub struct D3d11RendererStats {
     pub surface_width: u32,
     pub surface_height: u32,
     pub rendered_frames: u64,
+    pub software_video_frames: u64,
     pub hardware_video_frames: u64,
     pub zero_copy_video_frames: u64,
     pub direct_zero_copy_video_frames: u64,
@@ -720,6 +732,7 @@ impl AttachedSurface {
 struct ImportedVideoFrame {
     _frame: Frame,
     _texture: ID3D11Texture2D,
+    _chroma_texture: Option<ID3D11Texture2D>,
     luma: ID3D11ShaderResourceView,
     chroma: ID3D11ShaderResourceView,
     width: u32,
@@ -1148,6 +1161,7 @@ impl D3d11Renderer {
         self.current_video = Some(ImportedVideoFrame {
             _frame: retained_frame,
             _texture: texture,
+            _chroma_texture: None,
             luma,
             chroma,
             width: visible_width,
@@ -1783,10 +1797,104 @@ impl RendererBackend for D3d11Renderer {
                 "d3d11: hardware frame is not importable as D3D11VA".to_string(),
             ));
         }
-        self.stats.cpu_video_frame_fallbacks += 1;
-        Err(PlayerError::Renderer(
-            "d3d11: software frames require WgpuFallback or a CPU upload path".to_string(),
-        ))
+        let decoded = frame.frame.decoded_frame().ok_or_else(|| {
+            PlayerError::Renderer("d3d11: video payload has no CPU-readable frame".to_string())
+        })?;
+        let planar = decoded.to_planar_frame().ok_or_else(|| {
+            PlayerError::Renderer(format!(
+                "d3d11: unsupported software video frame format {}",
+                decoded
+                    .pixel_format()
+                    .unwrap_or_else(|| "unknown".to_string())
+            ))
+        })?;
+        self.ensure_default_device()?;
+        let source = source_color_for_frame(frame);
+        let output_mode = self.select_output_mode_for_source(source)?;
+        let target = output_mode.target_color_for_source(source);
+        let (texture_format, bytes_per_sample) = match planar.format {
+            PlanarPixelFormat::Nv12 => (D3d11VideoTextureFormat::Nv12, 1_u32),
+            PlanarPixelFormat::P010 => (D3d11VideoTextureFormat::P010, 2_u32),
+        };
+        let width = planar.width.max(1);
+        let height = planar.height.max(1);
+        let chroma_width = width.div_ceil(2);
+        let chroma_height = height.div_ceil(2);
+        let luma_pitch = width.checked_mul(bytes_per_sample).ok_or_else(|| {
+            PlayerError::Renderer("d3d11: luma row pitch overflowed".to_string())
+        })?;
+        let chroma_pitch = chroma_width
+            .checked_mul(2)
+            .and_then(|pitch| pitch.checked_mul(bytes_per_sample))
+            .ok_or_else(|| {
+                PlayerError::Renderer("d3d11: chroma row pitch overflowed".to_string())
+            })?;
+        let sample_bytes = bytes_per_sample as usize;
+        let expected_luma = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|samples| samples.checked_mul(sample_bytes))
+            .ok_or_else(|| {
+                PlayerError::Renderer("d3d11: luma plane size overflowed".to_string())
+            })?;
+        let expected_chroma = (chroma_width as usize)
+            .checked_mul(chroma_height as usize)
+            .and_then(|samples| samples.checked_mul(2))
+            .and_then(|bytes| bytes.checked_mul(sample_bytes))
+            .ok_or_else(|| {
+                PlayerError::Renderer("d3d11: chroma plane size overflowed".to_string())
+            })?;
+        if planar.luma.len() != expected_luma || planar.chroma.len() != expected_chroma {
+            return Err(PlayerError::Renderer(format!(
+                "d3d11: invalid {:?} plane sizes (luma {}, expected {}; chroma {}, expected {})",
+                planar.format,
+                planar.luma.len(),
+                expected_luma,
+                planar.chroma.len(),
+                expected_chroma,
+            )));
+        }
+        let (luma, chroma) = {
+            let state = self.state.as_ref().expect("device ensured");
+            (
+                create_overlay_texture(
+                    state,
+                    width,
+                    height,
+                    texture_format.luma_srv(),
+                    &planar.luma,
+                    luma_pitch,
+                )?,
+                create_overlay_texture(
+                    state,
+                    chroma_width,
+                    chroma_height,
+                    texture_format.chroma_srv(),
+                    &planar.chroma,
+                    chroma_pitch,
+                )?,
+            )
+        };
+        let retained_frame = decoded.try_clone_ref().map_err(|error| {
+            PlayerError::Renderer(format!("d3d11: av_frame_ref failed: {error}"))
+        })?;
+        self.stats.software_video_frames += 1;
+        let frame_token = self.next_frame_token;
+        self.next_frame_token = self.next_frame_token.wrapping_add(1);
+        self.current_video = Some(ImportedVideoFrame {
+            _frame: retained_frame,
+            _texture: luma._texture,
+            _chroma_texture: Some(chroma._texture),
+            luma: luma.view,
+            chroma: chroma.view,
+            width,
+            height,
+            tex_rect: D3d11TexRect::FULL,
+            _array_index: 0,
+            frame_token,
+            constants: constants_for_frame(source, texture_format, target)
+                .packed_alpha_right(self.video_alpha_mode.has_alpha()),
+        });
+        Ok(())
     }
 
     fn clear_current_frame(&mut self) -> Result<()> {
@@ -1818,7 +1926,7 @@ impl RendererBackend for D3d11Renderer {
             danmaku_draw_items: self.stats.danmaku_items,
             overlay_alpha_atlas_uploads: self.stats.overlay_alpha_atlas_uploads,
             overlay_alpha_atlas_reuses: self.stats.overlay_alpha_atlas_reuses,
-            software_video_frames: 0,
+            software_video_frames: self.stats.software_video_frames,
             hardware_video_frames: self.stats.hardware_video_frames,
             zero_copy_video_frames: self.stats.zero_copy_video_frames,
             direct_zero_copy_video_frames: self.stats.direct_zero_copy_video_frames,

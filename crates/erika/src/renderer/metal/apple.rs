@@ -869,7 +869,10 @@ impl MetalRendererImpl {
                 ],
                 luma_coefficients: luma_coefficients(frame.pipeline.luma_coefficients()),
                 gamut_matrix_rows: frame.pipeline.gamut_matrix().row4s(),
-                dovi: DoviUniforms::of(&frame.pipeline.source),
+                dovi: DoviUniforms::of_for_representation(
+                    &frame.pipeline.source,
+                    matches!(frame.frame.info.format, ImportedVideoFormat::P010),
+                ),
             };
             encoder.setRenderPipelineState(&pipeline);
             encoder.setFragmentTexture_atIndex(Some(luma), 0);
@@ -1067,7 +1070,10 @@ impl MetalRendererImpl {
                 ],
                 luma_coefficients: luma_coefficients(frame.pipeline.luma_coefficients()),
                 gamut_matrix_rows: frame.pipeline.gamut_matrix().row4s(),
-                dovi: DoviUniforms::of(&frame.pipeline.source),
+                dovi: DoviUniforms::of_for_representation(
+                    &frame.pipeline.source,
+                    matches!(frame.frame.info.format, ImportedVideoFormat::P010),
+                ),
             };
             encoder.setRenderPipelineState(&pipeline);
             encoder.setFragmentTexture_atIndex(Some(luma), 0);
@@ -2975,6 +2981,12 @@ struct RangeExpandedYCbCr {
 };
 
 RangeExpandedYCbCr expand_ycbcr_range(float y, float2 cbcr, constant VideoUniforms& uniforms) {
+    if (uniforms.is_p010 != 0) {
+        // P010 stores 10-bit codes as code << 6 in a 16-bit UNORM texture.
+        constexpr float p010_scale = 65535.0 / 65472.0;
+        y *= p010_scale;
+        cbcr *= p010_scale;
+    }
     if (uniforms.full_range != 0) {
         return RangeExpandedYCbCr { y, cbcr - float2(0.5) };
     }
@@ -3046,7 +3058,7 @@ float3 dovi_reshaped_signal(float3 sig_in, constant VideoUniforms& uniforms) {
 
 // Reshaped nonlinear signal to PQ-encoded IPT via the RPU's ycc_to_rgb matrix
 // and signal offsets. Applying the RPU offsets keeps integer offset codes
-// exactly on sample codes (1024/1023 folded in on the CPU).
+// exactly on sample codes (2^bits/(2^bits-1) folded in on the CPU).
 float3 dovi_signal_to_pq_rgb(float3 sig, constant VideoUniforms& uniforms) {
     float3 reshaped = dovi_reshaped_signal(sig, uniforms) - uniforms.dovi_nonlinear_offset.xyz;
     return float3(
@@ -3112,10 +3124,11 @@ fragment float4 erika_video_fragment(
         // The base layer carries the raw 12-bit DV signal (10-bit container,
         // full range); range expansion and the YCbCr matrix are replaced by
         // the RPU reshaping + ycc_to_rgb path.
-        rgb = dovi_signal_to_pq_rgb(
-            float3(y_sample, cbcr_sample.x, cbcr_sample.y),
-            uniforms
-        );
+        float3 sig = float3(y_sample, cbcr_sample.x, cbcr_sample.y);
+        if (uniforms.is_p010 != 0) {
+            sig *= 65535.0 / 65472.0;
+        }
+        rgb = dovi_signal_to_pq_rgb(sig, uniforms);
     } else {
         RangeExpandedYCbCr expanded = expand_ycbcr_range(y_sample, cbcr_sample, uniforms);
         float y = expanded.y;

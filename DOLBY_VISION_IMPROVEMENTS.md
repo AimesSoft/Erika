@@ -20,7 +20,7 @@ This document summarizes the improvements made to the Dolby Vision RPU mapping i
 #### Improved Inline Documentation
 - **File**: `crates/erika/src/renderer/pipeline.rs`
 - Enhanced `DoviSourceMetadata` struct documentation with field-level descriptions
-- Clarified signal offset scaling formula with detailed comments explaining the 1024/1023 ratio
+- Clarified signal offset scaling for the actual uploaded representation (`2^bits/(2^bits-1)`), including the P010-to-NV12 fallback
 - Added uniform buffer size note (~3KB, 20% of typical mobile device limits)
 
 ### 2. Better Error Handling
