@@ -134,12 +134,21 @@ jobs:
           ERIKA_NATIVE_TARGET="${{ matrix.target }}"
           cargo build --locked -p wgpu_decode_png --release
           --target "${{ matrix.target }}"
-      - name: Upload wgpu_decode_png example
+      - name: Package erika-capi bundle
+        if: matrix.arch == 'arm64'
+        run: >-
+          bash packaging/bundle.sh erika-capi-macos-arm64
+          dist/erika-capi-macos-arm64.zip
+          "target/${{ matrix.target }}/release/liberika_capi.a"
+      - name: Upload test artifacts
         if: matrix.arch == 'arm64'
         uses: actions/upload-artifact@v4
         with:
-          name: wgpu_decode_png-macos-arm64
-          path: target/aarch64-apple-darwin/release/wgpu_decode_png
+          name: dv-test-macos-arm64
+          path: |
+            target/aarch64-apple-darwin/release/wgpu_decode_png
+            dist/erika-capi-macos-arm64.zip
+          if-no-files-found: error
 
   ios:
     name: iOS device staticlib
