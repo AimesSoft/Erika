@@ -133,6 +133,7 @@ jobs:
           ERIKA_NATIVE_PROFILE="$PROFILE"
           ERIKA_NATIVE_TARGET="${{ matrix.target }}"
           MACOSX_DEPLOYMENT_TARGET=13.0
+          RUSTFLAGS="-C link-arg=-Wl,-U,___isPlatformVersionAtLeast"
           cargo build --locked -p wgpu_decode_png --release
           --target "${{ matrix.target }}"
       - name: Package erika-capi bundle
