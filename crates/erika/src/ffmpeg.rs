@@ -4348,20 +4348,22 @@ unsafe fn stream_dolby_vision_profile(
     if stream.is_null() {
         return None;
     }
-    let mut size = 0_usize;
-    let record = unsafe {
-        sys::av_stream_get_side_data(
-            stream,
+    let side_data = unsafe {
+        sys::av_packet_side_data_get(
+            (*stream).coded_side_data,
+            (*stream).nb_coded_side_data,
             sys::AVPacketSideDataType_AV_PKT_DATA_DOVI_CONF,
-            &mut size,
         )
     };
-    if record.is_null()
-        || usize::try_from(size).ok()? < mem::size_of::<sys::AVDOVIDecoderConfigurationRecord>()
-    {
+    if side_data.is_null() {
         return None;
     }
-    Some(unsafe { (*(record as *const sys::AVDOVIDecoderConfigurationRecord)).dv_profile })
+    let size = unsafe { (*side_data).size };
+    if usize::try_from(size).ok()? < mem::size_of::<sys::AVDOVIDecoderConfigurationRecord>() {
+        return None;
+    }
+    let record = unsafe { (*side_data).data as *const sys::AVDOVIDecoderConfigurationRecord };
+    Some(unsafe { (*record).dv_profile })
 }
 
 /// Reads the decoder's parsed Dolby Vision RPU side data and converts it into
