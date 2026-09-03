@@ -127,6 +127,19 @@ jobs:
           ERIKA_NATIVE_TARGET="${{ matrix.target }}"
           cargo clippy --locked -p erika --all-targets --all-features
           --no-deps
+      - name: Build wgpu_decode_png example
+        if: matrix.arch == 'arm64'
+        run: >-
+          ERIKA_NATIVE_PROFILE="$PROFILE"
+          ERIKA_NATIVE_TARGET="${{ matrix.target }}"
+          cargo build --locked -p wgpu_decode_png --release
+          --target "${{ matrix.target }}"
+      - name: Upload wgpu_decode_png example
+        if: matrix.arch == 'arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wgpu_decode_png-macos-arm64
+          path: target/aarch64-apple-darwin/release/wgpu_decode_png
 
   ios:
     name: iOS device staticlib
