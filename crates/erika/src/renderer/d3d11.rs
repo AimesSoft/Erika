@@ -360,11 +360,11 @@ float3 dovi_signal_to_pq_rgb(float3 sig) {
 // Linearized BT.2020-referred HPE LMS back to linear RGB, using the composite
 // of the fixed HPE inverse with the RPU's rgb_to_lms matrix (premultiplied on
 // the CPU, matching libplacebo's dovi_lms2rgb).
-float3 dovi_lms_to_rgb(float3 linear) {
+float3 dovi_lms_to_rgb(float3 lin) {
     return float3(
-        dot(dovi.dovi_lms_matrix[0].xyz, linear),
-        dot(dovi.dovi_lms_matrix[1].xyz, linear),
-        dot(dovi.dovi_lms_matrix[2].xyz, linear)
+        dot(dovi.dovi_lms_matrix[0].xyz, lin),
+        dot(dovi.dovi_lms_matrix[1].xyz, lin),
+        dot(dovi.dovi_lms_matrix[2].xyz, lin)
     );
 }
 
