@@ -33,6 +33,22 @@
   opened.
 - Added packed-alpha video presentation with premultiplied GPU output on
   Windows and macOS, including native backdrop-aware overlay composition.
+- Apple Metal surfaces now opt into `allowsNextDrawableTimeout`: a drained
+  drawable pool (fullscreen Space transitions hold every drawable for
+  hundreds of milliseconds) skips that frame's present instead of blocking
+  the host render tick — and the audio pump that shares it — for up to one
+  second. Skips are counted in `MetalRenderer` and reported through a
+  power-of-two throttled diagnostic.
+- The playback clock now judges audio-clock samples by device liveness
+  (ring read/underflow counters advancing) instead of by distance to the
+  clock. After a render-side stall refills the ring with backlog, the clock
+  re-anchors onto the ring front — snapping backward in one step — instead of
+  being permanently rejected as stale and left ahead of the audible position
+  until a seek or pause.
+- The CoreAudio output enforces a real high-water gate (~1.2 s queued) and
+  the playback worker keeps the ring filled to that depth, so a render-side
+  stall plays through the ring backlog instead of starving the audible
+  output.
 
 ## 0.1.7 - 2026-08-16
 
