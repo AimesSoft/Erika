@@ -28,7 +28,12 @@ const AUDIO_PREFILL_TIME_BUDGET: Duration = Duration::from_millis(5);
 // Keep producer prefill aligned with the output queue high-water mark. This
 // lets callback-driven backends hold a short rate-change bridge without
 // accumulating stale-rate PCM in the presenter channel.
-const AUDIO_PREFILL_LOW_WATER: Duration = crate::audio::AUDIO_OUTPUT_QUEUE_HIGH_WATER;
+// The macOS CoreAudio output now targets a deep ring (~1.2s, see
+// `CORE_AUDIO_QUEUE_TARGET`): the worker must keep producing far past the old
+// 250ms low water or the ring can never reach the depth that lets a render-
+// side stall (fullscreen Space transition holds drawables ~700ms) play out
+// the backlog instead of going silent.
+const AUDIO_PREFILL_LOW_WATER: Duration = Duration::from_millis(1200);
 const AUDIO_CLOCK_SNAPSHOT_STALE_AFTER: Duration = Duration::from_millis(500);
 const PLAYBACK_STARVATION_GRACE: Duration = Duration::from_millis(500);
 const AUDIO_OUTPUT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(10);

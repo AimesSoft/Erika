@@ -71,7 +71,10 @@ const D3D11VA_VIDEO_FRAME_QUEUE_LIMIT: usize = 8;
 const AVCODEC_SURFACE_VIDEO_FRAME_QUEUE_LIMIT: usize = 2;
 const SUBTITLE_FRAME_QUEUE_LIMIT: usize = 32;
 const EXTERNAL_SUBTITLE_LOOKAHEAD: Duration = Duration::from_secs(5);
-const DEFAULT_AUDIO_LEAD_TIME: Duration = Duration::from_millis(120);
+// Deep enough that the output ring can hold the full CoreAudio high-water
+// target (~1.2s): the worker must produce at least as far ahead of the clock
+// as the gate allows to accept, or the ring can never reach its target depth.
+const DEFAULT_AUDIO_LEAD_TIME: Duration = Duration::from_millis(1200);
 const STREAMING_AUDIO_LEAD_TIME: Duration = Duration::from_millis(1500);
 const DEFAULT_BUFFER_RECOVERY_AUDIO: Duration = Duration::from_millis(100);
 const STREAMING_BUFFER_RECOVERY_AUDIO: Duration = Duration::from_millis(250);
