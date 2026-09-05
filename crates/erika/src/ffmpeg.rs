@@ -2402,8 +2402,9 @@ impl Frame {
     }
 
     /// Per-frame Dolby Vision RPU metadata parsed by the HEVC decoder
-    /// (`AV_FRAME_DATA_DOVI_METADATA`). Present for RPU-carrying software
-    /// decoded profiles such as 5 and 8.
+    /// (`AV_FRAME_DATA_DOVI_METADATA`). Present on RPU-carrying streams such
+    /// as profiles 5 and 8, on both software and hardware decoded frames
+    /// (FFmpeg parses the RPU on the CPU and attaches it regardless).
     pub fn dovi_metadata(&self) -> Option<DoviSourceMetadata> {
         unsafe { frame_dovi_metadata(self.ptr) }
     }
@@ -4461,9 +4462,10 @@ unsafe fn frame_dovi_metadata(frame: *const sys::AVFrame) -> Option<DoviSourceMe
     if header.disable_residual_flag == 0 {
         return None;
     }
-    let nlq_method = mapping.nlq_method_idc as i32;
-    let nlq_nontrivial = match nlq_method {
-        -1 => false,
+    // nlq_method_idc is a u8 in FFmpeg, so the spec's NLQ "off" state (-1)
+    // can never appear here; an absent NLQ parses as method 0 with all-neutral
+    // parameters instead.
+    let nlq_nontrivial = match i32::from(mapping.nlq_method_idc) {
         0 => mapping.nlq.iter().any(|params| {
             params.nlq_offset != 0
                 || params.linear_deadzone_slope != 0

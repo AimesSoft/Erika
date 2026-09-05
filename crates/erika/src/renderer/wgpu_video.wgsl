@@ -122,6 +122,9 @@ fn source_reference_to_nits(rgb: vec3<f32>) -> vec3<f32> {
 }
 
 fn tone_map_nits(nits: vec3<f32>) -> vec3<f32> {
+    if (uniforms.target_transfer == 3u) {
+        return clamp(nits, vec3<f32>(0.0), vec3<f32>(10000.0));
+    }
     let source_peak = source_peak_nits();
     let target_peak = target_peak_nits();
     let x = max(nits, vec3<f32>(0.0)) / target_peak;

@@ -195,6 +195,9 @@ float3 source_reference_to_nits(float3 rgb) {
 }
 
 float3 tone_map_nits(float3 input_nits) {
+    if (target_transfer == 3u) {
+        return clamp(input_nits, 0.0, 10000.0);
+    }
     float source_peak = source_peak_nits();
     float target_peak = target_peak_nits();
     float3 x = max(input_nits, float3(0.0, 0.0, 0.0)) / target_peak;
