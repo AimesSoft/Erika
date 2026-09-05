@@ -1051,9 +1051,15 @@ impl RendererBackend for MetalRenderer {
         #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         let active_output_mode = self.output_mode.resolve_for_source(false);
         let extended = attached && active_output_mode.is_edr();
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        let is_hdr10_pq = attached && self.inner.is_hdr10_pq();
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
+        let is_hdr10_pq = false;
         OutputRuntimeStatus {
             requested_mode: self.output_mode,
-            active_encoding: if extended {
+            active_encoding: if is_hdr10_pq {
+                ActiveOutputEncoding::Hdr10Pq
+            } else if extended {
                 ActiveOutputEncoding::AppleEdr
             } else {
                 ActiveOutputEncoding::SdrSrgb
@@ -1065,13 +1071,15 @@ impl RendererBackend for MetalRenderer {
             },
             native_data_space: -1,
             requested_headroom: self.output_mode.headroom(),
-            active_headroom: if extended {
+            active_headroom: if is_hdr10_pq {
+                10_000.0 / 203.0
+            } else if extended {
                 active_output_mode.headroom()
             } else {
                 1.0
             },
             active_headroom_known: attached,
-            extended_linear_active: extended,
+            extended_linear_active: extended && !is_hdr10_pq,
             fallback_reason: OutputFallbackReason::None,
             fallback_count: 0,
             data_space_failures: 0,

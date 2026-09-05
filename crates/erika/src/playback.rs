@@ -5867,26 +5867,27 @@ fn should_fallback_video_decoder_open_error(backend: DecoderBackend, codec: Opti
         && codec.is_some_and(|codec| codec.eq_ignore_ascii_case("av1")))
 }
 
-/// mpv parity: hardware decoders cannot convey the Dolby Vision RPU, so
-/// profile 5 streams fall back to software decoding to keep the color mapping
-/// engaged. Profile 8 stays on hardware; its base layer is HDR10-compatible.
+/// VideoToolbox and D3D11VA hardware decoders retain the Dolby Vision RPU
+/// metadata side data on the hardware AVFrame, allowing GPU textures + RPU
+/// reshaping via shaders without software decode.
+///
+/// Backends without GPU shader RPU mapping (e.g. Android MediaCodec with
+/// direct surface output, or OpenHarmony AVCodec) fall back to software
+/// decoding for Profile 5 streams to preserve color mapping.
 fn dolby_vision_decode_fallback(
     profile: Option<u8>,
     requested: DecoderConfig,
 ) -> (DecoderConfig, Option<String>) {
-    let hardware = matches!(
+    let mobile_hardware_fallback = matches!(
         requested.backend,
-        DecoderBackend::VideoToolbox
-            | DecoderBackend::D3d11va
-            | DecoderBackend::MediaCodec
-            | DecoderBackend::AvCodec
+        DecoderBackend::MediaCodec | DecoderBackend::AvCodec
     );
-    if !hardware || profile != Some(5) {
+    if !mobile_hardware_fallback || profile != Some(5) {
         return (requested, None);
     }
     (
         DecoderConfig::software(),
-        Some("dolby vision profile 5 requires software decode for RPU mapping".to_string()),
+        Some("dolby vision profile 5 on mobile/embedded backend requires software decode for RPU mapping".to_string()),
     )
 }
 
@@ -8013,17 +8014,26 @@ mod tests {
     }
 
     #[test]
-    fn dolby_vision_profile_5_falls_back_to_software_decode() {
-        let hardware_config = DecoderConfig {
+    fn dolby_vision_profile_5_stays_on_hardware_for_videotoolbox_and_d3d11va() {
+        let vt_config = DecoderConfig {
             backend: DecoderBackend::VideoToolbox,
             mediacodec_surface: false,
         };
-        let (config, reason) = dolby_vision_decode_fallback(Some(5), hardware_config);
+        let (config, reason) = dolby_vision_decode_fallback(Some(5), vt_config);
+        assert_eq!(config.backend, DecoderBackend::VideoToolbox);
+        assert_eq!(reason, None);
 
-        assert_eq!(config.backend, DecoderBackend::Software);
-        assert!(reason.is_some());
-        assert!(reason.unwrap().contains("profile 5"));
+        let d3d11_config = DecoderConfig {
+            backend: DecoderBackend::D3d11va,
+            mediacodec_surface: false,
+        };
+        let (config, reason) = dolby_vision_decode_fallback(Some(5), d3d11_config);
+        assert_eq!(config.backend, DecoderBackend::D3d11va);
+        assert_eq!(reason, None);
+    }
 
+    #[test]
+    fn dolby_vision_profile_5_falls_back_to_software_decode_on_mobile_backends() {
         let avcodec_config = DecoderConfig {
             backend: DecoderBackend::AvCodec,
             mediacodec_surface: false,
@@ -8031,6 +8041,16 @@ mod tests {
         let (config, reason) = dolby_vision_decode_fallback(Some(5), avcodec_config);
         assert_eq!(config.backend, DecoderBackend::Software);
         assert!(reason.is_some());
+        assert!(reason.unwrap().contains("profile 5"));
+
+        let mediacodec_config = DecoderConfig {
+            backend: DecoderBackend::MediaCodec,
+            mediacodec_surface: true,
+        };
+        let (config, reason) = dolby_vision_decode_fallback(Some(5), mediacodec_config);
+        assert_eq!(config.backend, DecoderBackend::Software);
+        assert!(reason.is_some());
+        assert!(reason.unwrap().contains("profile 5"));
     }
 
     #[test]

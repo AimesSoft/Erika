@@ -28,7 +28,7 @@ This document summarizes the improvements made to the Dolby Vision RPU mapping i
 #### Validation Comments
 - **File**: `crates/erika/src/ffmpeg.rs:4406`
 - Added comment explaining validation ranges for Dolby Vision parameters
-- Clarified that bit depth must be 8-16 and coefficient denominator < 31 per spec
+- Clarified that bit depth must be 8-16 and coefficient denominator <= 32 (FFmpeg standardizes float coefficients using `coef_log2_denom = 32`)
 - Original approach with logging would have required adding a new dependency
 
 ### 3. CI Documentation
@@ -49,9 +49,10 @@ This document summarizes the improvements made to the Dolby Vision RPU mapping i
 
 #### Decode Fallback Logic Testing
 - **File**: `crates/erika/src/playback.rs:8013`
-- Added three unit tests for `dolby_vision_decode_fallback()`:
-  - `dolby_vision_profile_5_falls_back_to_software_decode`: Verifies Profile 5 forces software decode on hardware backends
-  - `dolby_vision_profile_8_stays_on_hardware_decode`: Confirms Profile 8 remains on hardware (no RPU access but HDR10 base layer works)
+- Added unit tests for `dolby_vision_decode_fallback()`:
+  - `dolby_vision_profile_5_stays_on_hardware_for_videotoolbox_and_d3d11va`: Confirms Profile 5 stays on hardware decode for desktop backends where FFmpeg provides RPU side data alongside GPU textures
+  - `dolby_vision_profile_5_falls_back_to_software_on_mobile_backends`: Verifies Profile 5 falls back to software decode on mobile backends (MediaCodec, AvCodec) where hardware decoders omit RPU metadata
+  - `dolby_vision_profile_8_stays_on_hardware_decode`: Confirms Profile 8 remains on hardware decode (backward-compatible base layer displays correctly)
   - `dolby_vision_software_decode_stays_software`: Validates no-op behavior when already on software decode
 
 ## What Was NOT Changed
@@ -83,7 +84,8 @@ export ERIKA_DV_PROFILE_8_SAMPLE=/path/to/dv-profile8-sample.mp4
 cargo test dv_profile_8_sample_reports_profile
 
 # Decode fallback unit tests (no samples needed)
-cargo test dolby_vision_profile_5_falls_back_to_software_decode
+cargo test dolby_vision_profile_5_stays_on_hardware_for_videotoolbox_and_d3d11va
+cargo test dolby_vision_profile_5_falls_back_to_software_on_mobile_backends
 cargo test dolby_vision_profile_8_stays_on_hardware_decode
 cargo test dolby_vision_software_decode_stays_software
 ```
@@ -115,7 +117,7 @@ The implementation continues to follow best practices:
 ### ✅ Correctness
 - Matches libplacebo's proven implementation
 - Proper normalization of pivots and coefficients
-- Correct Profile 5 software decode fallback
+- Correct Profile 5 decode fallback policy (keeps hardware decode on desktop where metadata is retained; falls back on mobile)
 - Forced BT.2020/PQ prevents VUI tag issues
 
 ### ✅ Cross-Platform Consistency
@@ -126,7 +128,7 @@ The implementation continues to follow best practices:
 ### ✅ Performance
 - Zero-copy FFmpeg metadata extraction via pointer arithmetic
 - GPU-friendly uniform layout (~3KB total)
-- Minimal CPU overhead (<0.1ms per frame)
+- Low CPU overhead: metadata parsing reads fixed-size structures via pointer offsets without full frame copies
 
 ### ✅ Maintainability
 - Clear separation: FFmpeg → Pipeline → Shader layers
@@ -136,17 +138,13 @@ The implementation continues to follow best practices:
 
 ## Known Limitations (Documented)
 
-1. **Profile 8 RPU Not Used**: Hardware decode doesn't expose RPU metadata
-   - Falls back to HDR10 base layer (acceptable quality)
-   - Would require software decode to access RPU (performance tradeoff)
+1. **Dual-Layer FEL / MEL Not Composed**: Ultra HD Blu-ray Profile 7 dual-layer enhancement layers are not composed; non-trivial NLQ or EL residual gracefully falls back to the base layer.
 
-2. **Uniform Buffer Size**: ~3KB may exceed very old mobile GPU limits
-   - Modern devices (2015+) have 16KB+ uniform limits
-   - No reports of issues in practice
+2. **Mobile Hardware Decode RPU Extraction**: On mobile platforms (e.g. Android MediaCodec), hardware decoders drop RPU metadata, requiring software decode for Profile 5.
 
-3. **No Per-Scene Optimization**: Static allocation for worst case (8 segments × 3 orders)
-   - Most content uses fewer segments/orders
-   - Dynamic allocation would add complexity without clear benefit
+3. **Uniform Buffer Size**: ~3KB may exceed very old mobile GPU limits (pre-2015 devices).
+
+4. **No Per-Scene Optimization**: Static allocation for worst case (8 segments × 3 orders) to avoid pipeline recompilation.
 
 ## References
 
@@ -154,8 +152,8 @@ All improvements maintain alignment with:
 - [libplacebo's dovi_reshape](https://github.com/haasn/libplacebo/blob/master/src/shaders/dovi.c)
 - [Dolby Vision Specification](https://professional.dolby.com/dolby-vision/)
 - [FFmpeg AVDOVIMetadata](https://ffmpeg.org/doxygen/trunk/structAVDOVIMetadata.html)
-- mpv's Dolby Vision behavior (Profile 5 software decode requirement)
+- mpv's Dolby Vision behavior
 
 ## Summary
 
-These improvements enhance **documentation**, **testing**, and **maintainability** without changing the core algorithm. The implementation remains production-ready with better explanations for future contributors and more comprehensive test coverage.
+These improvements enhance **documentation**, **testing**, and **decode correctness** across desktop and mobile platforms with verified test coverage and accurate profile characterization.

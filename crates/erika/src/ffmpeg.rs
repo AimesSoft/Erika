@@ -4451,7 +4451,8 @@ unsafe fn frame_dovi_metadata(frame: *const sys::AVFrame) -> Option<DoviSourceMe
     let coef_denom = u32::from(header.coef_log2_denom);
     // Validate bit depth and coefficient denominator before using them in
     // shifts below; malformed side data must be rejected, never panic.
-    if !(8..=16).contains(&bl_bit_depth) || coef_denom >= 31 {
+    // FFmpeg uses coef_log2_denom up to 32 for float RPU coefficients.
+    if !(8..=16).contains(&bl_bit_depth) || coef_denom > 32 {
         return None;
     }
     // This renderer currently has no enhancement-layer input. Do not apply a
@@ -5775,6 +5776,121 @@ mod tests {
                 4,
             );
             assert!(!side_data.is_null());
+        }
+        assert_eq!(frame.dovi_metadata(), None);
+    }
+
+    #[test]
+    fn frame_reads_dovi_side_data_with_32bit_coef_denom() {
+        let frame = Frame::alloc(TimeBase { num: 1, den: 1 }).unwrap();
+        unsafe {
+            let mut size = 0_usize;
+            let metadata = sys::av_dovi_metadata_alloc(&mut size);
+            assert!(!metadata.is_null());
+            let header = (metadata as *mut u8)
+                .add((*metadata).header_offset)
+                .cast::<sys::AVDOVIRpuDataHeader>();
+            let mapping = (metadata as *mut u8)
+                .add((*metadata).mapping_offset)
+                .cast::<sys::AVDOVIDataMapping>();
+            let color = (metadata as *mut u8)
+                .add((*metadata).color_offset)
+                .cast::<sys::AVDOVIColorMetadata>();
+
+            (*header).bl_bit_depth = 10;
+            (*header).el_bit_depth = 10;
+            (*header).coef_log2_denom = 32;
+            (*header).disable_residual_flag = 1;
+
+            let curve = &mut (*mapping).curves[0];
+            curve.num_pivots = 2;
+            curve.pivots[0] = 0;
+            curve.pivots[1] = 1023;
+            curve.mapping_idc[0] = sys::AVDOVIMappingMethod_AV_DOVI_MAPPING_POLYNOMIAL;
+            curve.poly_order[0] = 1;
+            curve.poly_coef[0][0] = 0;
+            curve.poly_coef[0][1] = 1_i64 << 32;
+            curve.poly_coef[0][2] = 0;
+
+            (*color).ycc_to_rgb_matrix = [
+                rational(1, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(1, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(1, 1),
+            ];
+            (*color).ycc_to_rgb_offset = [rational(0, 1), rational(0, 1), rational(0, 1)];
+            (*color).rgb_to_lms_matrix = [
+                rational(1, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(1, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(1, 1),
+            ];
+            (*color).source_min_pq = 0;
+            (*color).source_max_pq = 3079;
+
+            let side_data = sys::av_frame_new_side_data(
+                frame.ptr,
+                sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA,
+                size,
+            );
+            assert!(!side_data.is_null());
+            ptr::copy_nonoverlapping(metadata.cast::<u8>(), (*side_data).data, size);
+            sys::av_free(metadata.cast());
+        }
+
+        let dovi = frame
+            .dovi_metadata()
+            .expect("32-bit coef denominator should be accepted");
+        let luma = &dovi.reshaping[0];
+        assert_eq!(luma.num_pivots, 2);
+        assert_close(luma.poly_coeffs[0][1], 1.0);
+
+        // Test with 31-bit denominator
+        unsafe {
+            let side_data = sys::av_frame_get_side_data(
+                frame.ptr,
+                sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA,
+            );
+            let metadata = *(*side_data).data.cast::<sys::AVDOVIMetadata>();
+            let header = &mut *((*side_data)
+                .data
+                .add(metadata.header_offset)
+                .cast::<sys::AVDOVIRpuDataHeader>());
+            let mapping = &mut *((*side_data)
+                .data
+                .add(metadata.mapping_offset)
+                .cast::<sys::AVDOVIDataMapping>());
+
+            header.coef_log2_denom = 31;
+            mapping.curves[0].poly_coef[0][1] = 1_i64 << 31;
+        }
+        let dovi31 = frame
+            .dovi_metadata()
+            .expect("31-bit coef denominator should be accepted");
+        assert_close(dovi31.reshaping[0].poly_coeffs[0][1], 1.0);
+
+        // Test with invalid 33-bit denominator (should be rejected)
+        unsafe {
+            let side_data = sys::av_frame_get_side_data(
+                frame.ptr,
+                sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA,
+            );
+            let metadata = *(*side_data).data.cast::<sys::AVDOVIMetadata>();
+            let header = &mut *((*side_data)
+                .data
+                .add(metadata.header_offset)
+                .cast::<sys::AVDOVIRpuDataHeader>());
+            header.coef_log2_denom = 33;
         }
         assert_eq!(frame.dovi_metadata(), None);
     }

@@ -10,27 +10,22 @@ Dolby Vision is an HDR format that enhances video quality through per-frame meta
 
 | Profile | Description | Decode Strategy | RPU Available |
 |---------|-------------|-----------------|---------------|
-| **5** | Single layer, non-backward compatible | **Software decode required; CPU plane upload on D3D11** | ✅ Yes |
-| **8** | Dual layer, HDR10 base layer | Hardware decode allowed | ✅ Yes (software only) |
+| **5** | Single layer, non-backward compatible (IPTPQc2) | Hardware decode on VideoToolbox & D3D11VA; software fallback on mobile backends | ✅ Yes |
+| **8** | Single layer with backward-compatible base (e.g. 8.1 HDR10, 8.4 HLG) | Hardware decode allowed | ✅ Yes |
 
-### Why Profile 5 Requires Software Decode
+> **Note on Profile Architecture**: Profile 8 is a single-layer profile where the base layer carries standard signaling (such as HDR10 PQ for 8.1 or HLG for 8.4) with Dolby Vision RPU metadata interleaved as NAL units. Profile 7 is the dual-layer profile (Base Layer + Enhancement Layer / FEL / MEL) primarily used on Ultra HD Blu-ray discs.
 
-Hardware video decoders (VideoToolbox, D3D11VA, MediaCodec, AvCodec) decode the compressed video stream but **do not expose the RPU metadata** to the application. For Profile 5:
+### Decode Strategy and Metadata Extraction
 
-- The base layer is **not** HDR10-compatible
-- Without RPU mapping, the image appears incorrect
-- **Solution**: Force software decode via FFmpeg's `avcodec` to access `AV_FRAME_DATA_DOVI_METADATA`
+On desktop platforms:
+- **macOS (VideoToolbox)** and **Windows (D3D11VA)** decoders preserve frame side data (`AV_FRAME_DATA_DOVI_METADATA`) alongside hardware texture surfaces (CVPixelBuffer / D3D11 texture). This enables hardware-accelerated decoding while feeding RPU uniforms directly into GPU shaders for per-frame reshaping and color mapping.
 
-The Windows D3D11 renderer accepts the resulting software NV12/P010 planes through a CPU upload path, so the default renderer remains usable after the Profile 5 fallback.
+On mobile/embedded backends:
+- Hardware decoders like **MediaCodec** (Android) and generic **AvCodec** backends may not expose RPU side data attached to output frames.
+- For **Profile 5**, because the stream uses IPTPQc2 rather than standard YCbCr and lacks backward compatibility, playback falls back to software decode via FFmpeg's `avcodec` to reliably access `AV_FRAME_DATA_DOVI_METADATA`.
+- For **Profile 8**, hardware decode can safely be preserved: if RPU side data is unavailable, the video still displays with correct HDR10/HLG colors because the base layer is backward compatible.
 
-For Profile 8:
-
-- The base layer **is** HDR10-compatible (BT.2020 + PQ)
-- Hardware decode produces correct images without RPU
-- RPU mapping improves accuracy but isn't required
-- **Current behavior**: Allow hardware decode (no RPU mapping)
-
-See `dolby_vision_decode_fallback()` in `playback.rs:5873`.
+See `dolby_vision_decode_fallback()` in `crates/erika/src/playback.rs`.
 
 ## Pipeline Architecture
 
@@ -128,22 +123,23 @@ See `SourceColorState::dovi()` in `pipeline.rs:624`.
 - `frame_reads_dovi_side_data`: Verifies FFmpeg side data parsing
 - `dovi_uniforms_pack_pivots_poly_and_mmr`: Validates uniform packing
 - `dovi_source_forces_pq_when_stream_tags_are_missing`: Confirms PQ forcing
-- `dolby_vision_profile_5_falls_back_to_software_decode`: Decode strategy
-- `dolby_vision_profile_8_stays_on_hardware_decode`: Profile 8 passthrough
+- `dolby_vision_profile_5_stays_on_hardware_for_videotoolbox_and_d3d11va`: Verifies desktop hardware decoders stay on hardware for Profile 5
+- `dolby_vision_profile_5_falls_back_to_software_on_mobile_backends`: Verifies mobile backends fall back to software decode for Profile 5
+- `dolby_vision_profile_8_stays_on_hardware_decode`: Profile 8 hardware decode preservation
 
 ### Integration Tests (require samples)
 
 Set environment variables to enable:
 
-- `ERIKA_DV_SAMPLE`: Profile 5 sample (software decode + RPU mapping)
+- `ERIKA_DV_SAMPLE`: Profile 5 sample (RPU mapping verification)
 - `ERIKA_DV_PROFILE_8_SAMPLE`: Profile 8 sample (hardware decode test)
 
 ## Known Limitations
 
-1. **FEL/residual RPU is not composed**: RPU mapping is disabled for frames with enhancement-layer residuals or non-trivial NLQ; playback falls back to the decoded base-layer signal instead of silently applying an incomplete reshape.
-2. **Profile 8 RPU not used with hardware decode**: Hardware decode doesn't expose RPU, so Profile 8 falls back to HDR10 base layer only
+1. **Dual-layer FEL / MEL residual composition not supported**: Profile 7 dual-layer enhancement layers (FEL/MEL) are not composed. If non-trivial NLQ or EL residual is detected, playback gracefully falls back to the base layer.
+2. **Mobile hardware decode RPU extraction**: On mobile backends (MediaCodec), hardware decoders do not expose RPU side data, requiring software decode for Profile 5.
 3. **Uniform buffer size**: ~3KB may exceed limits on very old mobile GPUs (pre-2015)
-4. **CPU parsing/upload overhead**: Minimal for parsing; software Profile 5 frames pay the expected plane-upload cost on D3D11
+4. **CPU plane upload on software decode**: When software decode fallback is used, software planes incur CPU-to-GPU texture upload overhead.
 
 ## References
 

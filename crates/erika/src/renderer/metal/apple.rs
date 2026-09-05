@@ -362,6 +362,14 @@ impl MetalRendererImpl {
         self.output_mode
     }
 
+    pub fn is_hdr10_pq(&self) -> bool {
+        self.output_mode.is_edr()
+            && matches!(
+                self.layer_color_space_label,
+                "itur-2100-pq" | "display-p3-pq"
+            )
+    }
+
     fn select_output_mode_for_source(&mut self, source: SourceColorState) {
         let source_is_hdr = source.is_hdr();
         if source_is_hdr {
@@ -2894,6 +2902,9 @@ float3 source_reference_to_nits(float3 rgb, constant VideoUniforms& uniforms) {
 }
 
 float3 tone_map_nits(float3 nits, constant VideoUniforms& uniforms) {
+    if (uniforms.target_transfer == 3) {
+        return clamp(nits, 0.0, 10000.0);
+    }
     float source_peak = source_peak_nits(uniforms);
     float target_peak = target_peak_nits(uniforms);
     float3 x = max(nits, float3(0.0)) / target_peak;
