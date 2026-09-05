@@ -68,6 +68,11 @@ pub struct MetalRenderer {
     upload_counter: u64,
     software_upload_counter: u64,
     output_mode: MetalOutputMode,
+    /// Presents skipped because the drawable pool was drained (nil
+    /// `nextDrawable`). With `allowsNextDrawableTimeout` enabled these are
+    /// cheap single-frame holds; the counter plus its throttled diagnostic
+    /// keeps the new skip behavior observable without touching the C stats.
+    present_backpressure_skips: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -409,6 +414,13 @@ impl MetalRenderer {
         Self::with_config(MetalRendererConfig::default())
     }
 
+    /// Presents skipped because no drawable was available. Rust-internal
+    /// observability for the `allowsNextDrawableTimeout` skip path; never
+    /// surfaced through the C stats layout.
+    pub fn present_backpressure_skips(&self) -> u64 {
+        self.present_backpressure_skips
+    }
+
     pub fn with_config(_config: MetalRendererConfig) -> Result<Self> {
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         {
@@ -421,6 +433,7 @@ impl MetalRenderer {
                 upload_counter: 0,
                 software_upload_counter: 0,
                 output_mode: _config.output_mode,
+                present_backpressure_skips: 0,
             })
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
@@ -689,19 +702,30 @@ fn inspect_overlay_frame(frame: &OverlayFrame) -> Result<PreparedOverlayFrameInf
 /// [`PlayerError::RendererBackpressure`]. Clear and test-pattern frames carry
 /// no decoded content, so dropping one is always cheaper than pushing a
 /// transient lifecycle race across the C ABI as a terminal renderer error.
+/// `skips` accumulates across every skipped present (video, clear, test) so
+/// the behavior stays observable; see [`should_report_present_skip`].
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
-fn skip_on_backpressure(stage: &str, result: Result<()>) -> Result<()> {
+fn skip_on_backpressure(stage: &str, result: Result<()>, skips: &mut u64) -> Result<()> {
     match result {
         Err(PlayerError::RendererBackpressure(reason)) => {
-            if trace::enabled() {
-                trace::log(format!(
-                    "[erika-render-trace] stage={stage} skipped reason={reason}"
+            *skips = skips.saturating_add(1);
+            if should_report_present_skip(*skips) {
+                trace::diagnostic(format!(
+                    "[erika-render-trace] stage={stage} skipped reason={reason} count={skips}"
                 ));
             }
             Ok(())
         }
         other => other,
     }
+}
+
+/// Report cadence for drained-drawable-pool skips: the first occurrence plus
+/// every power-of-two count. A fullscreen Space transition can burn through
+/// dozens of ticks while the compositor holds the pool; this keeps the
+/// diagnostic visible without spamming a stall timeline.
+pub(crate) fn should_report_present_skip(count: u64) -> bool {
+    count == 1 || count.is_power_of_two()
 }
 
 pub fn fourcc_string(value: u32) -> String {
@@ -783,6 +807,7 @@ impl RendererBackend for MetalRenderer {
                 skip_on_backpressure(
                     "clear_current_frame",
                     self.inner.render_clear(ClearColor::black()),
+                    &mut self.present_backpressure_skips,
                 )?;
             }
         }
@@ -795,12 +820,13 @@ impl RendererBackend for MetalRenderer {
 
     fn render_test_frame(&mut self, time_seconds: f64) -> Result<()> {
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
-        {
-            let started = std::time::Instant::now();
-            skip_on_backpressure(
-                "test_frame",
-                self.inner.render_clear(ClearColor::animated(time_seconds)),
-            )
+            {
+                let started = std::time::Instant::now();
+                skip_on_backpressure(
+                    "test_frame",
+                    self.inner.render_clear(ClearColor::animated(time_seconds)),
+                    &mut self.present_backpressure_skips,
+                )
             .map(|result| {
                 if trace::enabled() {
                     trace::log(format!(
@@ -890,6 +916,14 @@ impl RendererBackend for MetalRenderer {
         let rendered = match result {
             Ok(()) => Ok(true),
             Err(PlayerError::RendererBackpressure(reason)) => {
+                self.present_backpressure_skips =
+                    self.present_backpressure_skips.saturating_add(1);
+                if should_report_present_skip(self.present_backpressure_skips) {
+                    trace::diagnostic(format!(
+                        "[erika-render-trace] stage=render_current_frame skipped reason={reason} count={}",
+                        self.present_backpressure_skips
+                    ));
+                }
                 if trace::enabled() {
                     trace::log(format!(
                         "[erika-render-trace] stage=render_current_frame skipped reason={reason}"
@@ -1096,6 +1130,16 @@ mod tests {
     use crate::overlay::OverlayViewport;
     use crate::renderer::pipeline::{MatrixCoefficients, SourceColorState};
     use crate::subtitle::SubtitleBitmapPlane;
+
+    #[test]
+    fn present_skip_report_fires_once_then_on_power_of_two() {
+        assert!(should_report_present_skip(1));
+        assert!(!should_report_present_skip(3));
+        assert!(should_report_present_skip(2));
+        assert!(!should_report_present_skip(255));
+        assert!(should_report_present_skip(256));
+        assert!(should_report_present_skip(4096));
+    }
 
     fn test_imported_frame(
         import_range: ColorRange,

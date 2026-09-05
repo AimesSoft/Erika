@@ -96,7 +96,6 @@ const AUDIO_DEMAND_PENDING_VIDEO_PACKET_LIMIT: usize = 64;
 const BUFFERING_AUDIO_VIDEO_SCAN_PACKET_LIMIT: usize = 4096;
 const BUFFERING_AUDIO_VIDEO_SCAN_BYTE_LIMIT: usize = 256 * 1024 * 1024;
 const BUFFERING_AUDIO_VIDEO_SCAN_TIMEOUT: Duration = Duration::from_secs(5);
-const OUTPUT_AUDIO_CLOCK_STALE_TOLERANCE: Duration = Duration::from_millis(250);
 const DEMUX_PACKET_QUEUE_LIMIT: usize = 512;
 const SEEK_PREROLL_DECODE_TIME_BUDGET: Duration = Duration::from_millis(5);
 const SEEK_PREROLL_LOG_INTERVAL: Duration = Duration::from_millis(500);
@@ -4134,6 +4133,11 @@ pub struct VideoPlaybackEngine {
     audio_eof_stall_started_at: Option<Instant>,
     audio_eof_stall_pending_frames: usize,
     audio_eof_stall_logged: bool,
+    /// Read/underflow counters of the last audio clock sample this engine
+    /// evaluated. Advancing counters prove the output device is consuming the
+    /// ring, which is what makes the ring front a trustworthy audio reference;
+    /// see [`Self::sync_to_audio_clock_with_now`].
+    last_audio_clock_liveness: Option<(u64, u64)>,
     last_presented_pts: Option<Duration>,
     eof: bool,
     waiting_for_first_frame: bool,
@@ -4245,6 +4249,7 @@ impl VideoPlaybackEngine {
             audio_eof_stall_started_at: None,
             audio_eof_stall_pending_frames: 0,
             audio_eof_stall_logged: false,
+            last_audio_clock_liveness: None,
             last_presented_pts: None,
             eof: false,
             waiting_for_first_frame: false,
@@ -4951,19 +4956,28 @@ impl VideoPlaybackEngine {
         // presenter, the audio clock is therefore valid at every playback
         // rate and must remain available to correct the video clock.
         let media_time = snapshot.media_time?;
-        let audio_reference_time = media_time.saturating_add(
-            snapshot
-                .queued_duration
-                .unwrap_or_else(|| Duration::from_millis(0)),
-        );
         let now = now();
         let before = self.clock.media_time_at(now);
-        if media_time + OUTPUT_AUDIO_CLOCK_STALE_TOLERANCE < before {
+        // The ring front is what the output device is about to play, so it is
+        // a trustworthy audio reference exactly while the device keeps
+        // consuming. Gate on that liveness, not on the distance to the
+        // playback clock: after a render-side stall the presenter refills the
+        // ring with the frames decoded during the stall, leaving the front
+        // legitimately far behind the clock for the whole backlog duration.
+        // A distance check rejects every such sample and permanently wedges
+        // the clock ahead of what is audible until a seek or pause resets it.
+        // Large real drifts are still handled in one step by the snap path in
+        // `PlaybackClock::discipline_to`.
+        let liveness = (snapshot.read_frames, snapshot.underflow_frames);
+        let device_advancing = self
+            .last_audio_clock_liveness
+            .is_none_or(|last| liveness > last);
+        self.last_audio_clock_liveness = Some(liveness);
+        if !device_advancing {
             trace::log(format!(
-                "[erika-clock-trace] stage=output_audio_clock_skip reason=stale before={} media={} reference={} queued={} queued_frames={} read={} written={} underflow={}",
+                "[erika-clock-trace] stage=output_audio_clock_skip reason=device_frozen before={} media={} queued={} queued_frames={} read={} written={} underflow={}",
                 trace::duration_label(Some(before)),
                 trace::duration_label(Some(media_time)),
-                trace::duration_label(Some(audio_reference_time)),
                 trace::duration_label(snapshot.queued_duration),
                 snapshot.queued_frames,
                 snapshot.read_frames,
@@ -6732,6 +6746,89 @@ mod tests {
         assert_eq!(after.media_time, Duration::from_secs(5));
         assert_eq!(after.source, PlaybackClockSource::Audio);
         assert_eq!(after.rate, 2.0);
+    }
+
+    #[test]
+    fn playback_fixture_audio_backfill_reanchors_clock_even_when_far_behind() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+
+        // A render-side stall wedged the clock ahead while the presenter
+        // refilled the ring with the frames decoded during the stall: the
+        // front sits 600ms behind the clock, but the device is consuming
+        // (read_frames advanced past the engine's liveness baseline). The
+        // clock must re-anchor — snapping backward — instead of wedging.
+        let sync_at = t0 + Duration::from_millis(700);
+        let before = engine.clock_snapshot_at(sync_at);
+        let front = before.media_time - Duration::from_millis(600);
+        let correction = engine.sync_to_audio_clock_at(
+            AudioClockSnapshot {
+                media_time: Some(front),
+                queued_duration: Some(Duration::from_millis(600)),
+                queued_frames: 28_800,
+                read_frames: 24_000,
+                written_frames: 36_000,
+                underflow_frames: 0,
+            },
+            sync_at,
+        );
+
+        let correction = correction.expect("a consuming ring must re-anchor the clock");
+        assert_eq!(correction.source, PlaybackClockSource::Audio);
+        assert_eq!(correction.direction, ClockCorrectionDirection::Backward);
+        assert!(correction.snapped, "600ms drift exceeds the snap threshold");
+        let after = engine.clock_snapshot_at(sync_at);
+        assert_eq!(after.media_time, front);
+        assert_eq!(after.source, PlaybackClockSource::Audio);
+    }
+
+    #[test]
+    fn playback_fixture_frozen_audio_ring_does_not_reanchor_clock() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+
+        // First sample from a consuming device: primes the liveness baseline
+        // and re-anchors the clock onto the ring front.
+        let sync_at = t0 + Duration::from_millis(600);
+        let before = engine.clock_snapshot_at(sync_at);
+        let first = engine.sync_to_audio_clock_at(
+            AudioClockSnapshot {
+                media_time: Some(before.media_time),
+                queued_duration: Some(Duration::from_millis(250)),
+                queued_frames: 12_000,
+                read_frames: 24_000,
+                written_frames: 36_000,
+                underflow_frames: 0,
+            },
+            sync_at,
+        );
+        assert!(first.is_some(), "the first sample of a consuming device is trusted");
+
+        // A stalled output keeps reporting the same front with no counter
+        // movement: the clock must keep free-running instead of being dragged
+        // to the frozen position.
+        let frozen_at = sync_at + Duration::from_millis(500);
+        let second = engine.sync_to_audio_clock_at(
+            AudioClockSnapshot {
+                media_time: Some(before.media_time),
+                queued_duration: Some(Duration::from_millis(250)),
+                queued_frames: 12_000,
+                read_frames: 24_000,
+                written_frames: 36_000,
+                underflow_frames: 0,
+            },
+            frozen_at,
+        );
+        assert!(second.is_none(), "a frozen ring must not drag the clock");
+        assert_eq!(
+            engine.clock_snapshot_at(frozen_at).media_time,
+            before.media_time + Duration::from_millis(500),
+            "clock free-runs while the device is frozen",
+        );
     }
 
     #[test]

@@ -208,6 +208,13 @@ impl MetalRendererImpl {
         }
         let layer: Retained<CAMetalLayer> = unsafe { Retained::retain(layer.cast()) }
             .ok_or_else(|| PlayerError::Renderer("failed to retain CAMetalLayer".to_string()))?;
+        // When the drawable pool is drained (fullscreen Space transitions hold
+        // every drawable for hundreds of ms), the default `false` makes
+        // `nextDrawable()` block for up to one second on the render thread —
+        // which also parks the audio pump that shares the tick. Returning nil
+        // instead lets the present be skipped for that frame and retried on
+        // the next tick; every nil path is already a RendererBackpressure.
+        layer.setAllowsNextDrawableTimeout(true);
         layer.setDevice(Some(&*self.device));
         self.configure_layer_output(&layer);
         self.layer = Some(layer);
