@@ -6809,7 +6809,10 @@ mod tests {
             },
             sync_at,
         );
-        assert!(first.is_some(), "the first sample of a consuming device is trusted");
+        assert!(
+            first.is_some(),
+            "the first sample of a consuming device is trusted"
+        );
 
         // A stalled output keeps reporting the same front with no counter
         // movement: the clock must keep free-running instead of being dragged

@@ -820,13 +820,13 @@ impl RendererBackend for MetalRenderer {
 
     fn render_test_frame(&mut self, time_seconds: f64) -> Result<()> {
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
-            {
-                let started = std::time::Instant::now();
-                skip_on_backpressure(
-                    "test_frame",
-                    self.inner.render_clear(ClearColor::animated(time_seconds)),
-                    &mut self.present_backpressure_skips,
-                )
+        {
+            let started = std::time::Instant::now();
+            skip_on_backpressure(
+                "test_frame",
+                self.inner.render_clear(ClearColor::animated(time_seconds)),
+                &mut self.present_backpressure_skips,
+            )
             .map(|result| {
                 if trace::enabled() {
                     trace::log(format!(
@@ -916,8 +916,7 @@ impl RendererBackend for MetalRenderer {
         let rendered = match result {
             Ok(()) => Ok(true),
             Err(PlayerError::RendererBackpressure(reason)) => {
-                self.present_backpressure_skips =
-                    self.present_backpressure_skips.saturating_add(1);
+                self.present_backpressure_skips = self.present_backpressure_skips.saturating_add(1);
                 if should_report_present_skip(self.present_backpressure_skips) {
                     trace::diagnostic(format!(
                         "[erika-render-trace] stage=render_current_frame skipped reason={reason} count={}",
