@@ -49,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ needs.version.outputs.release_ref }}
           fetch-depth: 0
 
       - name: Update package version and native SHA-256 values
