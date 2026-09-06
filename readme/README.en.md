@@ -72,7 +72,7 @@ ErikaVideoView(player: player)
 
 ### Flutter package
 
-`erika_flutter` 0.1.7 is available on [pub.dev](https://pub.dev/packages/erika_flutter)
+`erika_flutter` is available on [pub.dev](https://pub.dev/packages/erika_flutter)
 for macOS, iOS, tvOS, Windows, Android, and HarmonyOS/OpenHarmony. Add it to a
 Flutter app with:
 
@@ -86,7 +86,7 @@ published targets yet.
 
 ### OpenHarmony package
 
-The native ArkTS package `erika` 0.1.7 is published on
+The native ArkTS package `erika` is published on
 [OHPM](https://ohpm.openharmony.cn/#/cn/detail/erika) for OpenHarmony arm64
 applications (API 18+). Install it with:
 

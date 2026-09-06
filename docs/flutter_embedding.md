@@ -88,11 +88,10 @@ handle does not signal GPU sampling completion, so published textures are never
 overwritten. These extra copies and GPU handoff barriers do not apply to native
 opaque HWND playback, and the decoder pool retains main's existing size.
 
-The new texture API requires a matching source runtime
-(`ERIKA_FORCE_SOURCE_BUILD=1` from a checkout). The pinned v0.1.7 prebuilt lacks
-it; missing optional texture symbols do not prevent native player creation.
-Publish matching native artifacts and update their version/checksums before
-releasing this capability.
+The texture API requires a matching v0.1.8 or newer native runtime. The Flutter
+package pins its native version and checksums in `native_artifacts.properties`.
+Missing optional texture symbols in older runtimes do not prevent native player
+creation.
 
 ## Android Surface Strategies
 

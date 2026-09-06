@@ -47,7 +47,7 @@ Windows 上 `ErikaVideoView` 默认继续使用原生 HWND/swapchain，保留普
 
 Windows texture 每次画面内容变化后通过 GPU copy 发布完成且不可变的快照，无 CPU 像素回读；复制完成前不会交给 Flutter。暂停且字幕/弹幕/HUD 未变化时复用已发布快照，不重复通知 Flutter。尺寸变化、seek、字幕、弹幕和 HUD 更新均会使输出失效。Flutter 打开共享句柄不等于 GPU 采样结束，因此已发布快照永不被再次写入。插件仅保留最新和正在被 raster callback 读取的快照，未消费的中间 resize 快照可立即回收。
 
-此能力需要配套源码版本的 native runtime（在仓库中设置 `ERIKA_FORCE_SOURCE_BUILD=1`）；当前固定的 v0.1.7 预编译库缺少新 API。缺少 texture 符号仅使显式 texture 绑定报错，不影响原生播放器创建。发布新能力前必须更新匹配的 native artifact 版本和校验值。
+此能力需要匹配的 v0.1.8 或更新版本 native runtime。Flutter package 在 `native_artifacts.properties` 中固定原生版本和校验值。旧 runtime 缺少 texture 符号时，仅显式 texture 绑定报错，不影响原生播放器创建。
 
 ## Android Surface Strategies
 

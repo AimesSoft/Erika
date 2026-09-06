@@ -37,7 +37,7 @@ cargo build -p erika_capi
 
 ## 预构建包与源码构建
 
-插件默认下载与当前版本对应的 `v0.1.7` 原生库，并校验 SHA-256。下载失败或校验不一致会明确报错，不会静默回退源码构建。只有在 Erika checkout 中调试源码时才设置 `ERIKA_FORCE_SOURCE_BUILD=1`。自定义 `ERIKA_PREBUILT_TAG` 时，单 ABI 构建须提供对应的 `ERIKA_PREBUILT_SHA256`；Android 多 ABI 构建则须分别提供 `ERIKA_PREBUILT_SHA256_ARM64_V8A`、`ERIKA_PREBUILT_SHA256_ARMEABI_V7A`、`ERIKA_PREBUILT_SHA256_X86_64` 和 `ERIKA_PREBUILT_SHA256_X86`。完整发布方式见 [发布指南](https://github.com/AimesSoft/Erika/blob/main/docs/releasing.zh.md)。
+插件默认下载与当前版本对应的 原生库，并校验 SHA-256。下载失败或校验不一致会明确报错，不会静默回退源码构建。只有在 Erika checkout 中调试源码时才设置 `ERIKA_FORCE_SOURCE_BUILD=1`。自定义 `ERIKA_PREBUILT_TAG` 时，单 ABI 构建须提供对应的 `ERIKA_PREBUILT_SHA256`；Android 多 ABI 构建则须分别提供 `ERIKA_PREBUILT_SHA256_ARM64_V8A`、`ERIKA_PREBUILT_SHA256_ARMEABI_V7A`、`ERIKA_PREBUILT_SHA256_X86_64` 和 `ERIKA_PREBUILT_SHA256_X86`。完整发布方式见 [发布指南](https://github.com/AimesSoft/Erika/blob/main/docs/releasing.zh.md)。
 Android 会为每个实际请求的 ABI 只下载一个约 20–22MB 的 runtime 归档，不会获取四 ABI 合并 C API 包或其中的静态库。
 
 源码构建时，macOS 使用 `ERIKA_MACOS_ARCHS=arm64|x86_64|universal`，Windows 使用 `ERIKA_WINDOWS_ARCH=x64|arm64`，Android 使用 `ERIKA_ANDROID_ABIS=arm64-v8a,armeabi-v7a,x86_64,x86`。直接构建原生库时，`xtask --target`、`ERIKA_NATIVE_TARGET` 和 `cargo build --target` 必须使用同一个 target。详细示例见 [构建指南](https://github.com/AimesSoft/Erika/blob/main/docs/building.zh.md)。

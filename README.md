@@ -72,7 +72,7 @@ ErikaVideoView(player: player)
 
 ### Flutter package
 
-`erika_flutter` 0.1.7 is published on [pub.dev](https://pub.dev/packages/erika_flutter)
+`erika_flutter` is published on [pub.dev](https://pub.dev/packages/erika_flutter)
 for macOS, iOS, tvOS, Windows, Android, and HarmonyOS/OpenHarmony. Add it to a
 Flutter app with:
 
@@ -86,7 +86,7 @@ published targets yet.
 
 ### OpenHarmony package
 
-The native ArkTS package `erika` 0.1.7 is published on
+The native ArkTS package `erika` is published on
 [OHPM](https://ohpm.openharmony.cn/#/cn/detail/erika) for OpenHarmony arm64
 applications (API 18+). Install it with:
 
@@ -100,7 +100,7 @@ See the [OpenHarmony package guide](packages/erika_ohos/README.md) for the
 ### Swift package
 
 原生 macOS、iOS 和 tvOS 应用可通过 Swift Package Manager 使用
-[`ErikaSwift`](https://github.com/AimesSoft/ErikaSwift) 0.1.7。在 Xcode 的
+[`ErikaSwift`](https://github.com/AimesSoft/ErikaSwift)。在 Xcode 的
 **Add Package Dependencies** 中输入：
 
 ```text

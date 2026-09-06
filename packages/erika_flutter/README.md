@@ -39,11 +39,9 @@ for content that needs Flutter opacity, clipping or color filters. Its default
 `srcOver` uses BGRA8 GPU snapshots; `overlay` uses native Windows Composition.
 Other Windows blend modes are rejected explicitly.
 
-Windows texture output requires a runtime built from the matching source
-revision (`ERIKA_FORCE_SOURCE_BUILD=1`); the pinned v0.1.7 prebuilt does not
-provide this new API. Native video/player creation remains compatible with
-that prebuilt. Publish matching binaries and update the artifact manifest
-before distributing the new texture capability in a release.
+Windows texture output requires the matching v0.1.8 or newer native runtime.
+The package pins its native version and checksums in `native_artifacts.properties`.
+Older runtimes lack the optional texture API but can still create native players.
 
 Use `ErikaVideoView` when a standard Flutter platform view is required for a
 small embedder, compatibility path, or diagnostics.
@@ -74,7 +72,7 @@ points the build phase at an explicit dylib to bundle instead of building.
 
 ## Native binaries
 
-The plugin downloads the matching `v0.1.7` native runtime by default on macOS,
+The plugin downloads its version-pinned native runtime by default on macOS,
 Windows, iOS, tvOS, Android, and OpenHarmony. Every archive is pinned by SHA-256;
 a missing or invalid archive fails with an explicit error instead of silently
 requiring a Rust, FFmpeg, or NDK toolchain. See the

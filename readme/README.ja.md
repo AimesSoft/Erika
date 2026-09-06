@@ -72,7 +72,7 @@ ErikaVideoView(player: player)
 
 ### Flutter パッケージ
 
-`erika_flutter` 0.1.7 は [pub.dev](https://pub.dev/packages/erika_flutter) で公開されています。
+`erika_flutter` は [pub.dev](https://pub.dev/packages/erika_flutter) で公開されています。
 macOS、iOS、tvOS、Windows、Android、HarmonyOS/OpenHarmony に対応しています。
 Flutter アプリには次のコマンドで追加できます：
 
@@ -85,7 +85,7 @@ platform build 時に対応する検証済み native runtime を download しま
 
 ### OpenHarmony パッケージ
 
-ネイティブ ArkTS パッケージ `erika` 0.1.7 は
+ネイティブ ArkTS パッケージ `erika` は
 [OHPM](https://ohpm.openharmony.cn/#/cn/detail/erika) で公開されています。
 OpenHarmony arm64（API 18 以上）のアプリには次のコマンドで追加できます：
 

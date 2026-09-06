@@ -57,6 +57,11 @@ jobs:
         run: |
           set -euo pipefail
           sed -i -E "s/^version: .*/version: ${VERSION}/" packages/erika_flutter/pubspec.yaml
+          for platform in ios macos tvos; do
+            sed -i -E "s/(s\.version[[:space:]]*=[[:space:]]*')[^']+/\1${VERSION}/" \
+              "packages/erika_flutter/$platform/erika_flutter.podspec"
+          done
+          sed -i -E "s/(\"version\": \")[^\"]+/\1${VERSION}/" packages/erika_flutter/ohos/oh-package.json5
           sed -i -E "s/(\"version\": \")[^\"]+/\1${VERSION}/" packages/erika_ohos/oh-package.json5
           sed -i -E "s/(\"versionName\": \")[^\"]+/\1${VERSION}/" examples/ohos_arkts/AppScope/app.json5
           sed -i -E "s/(\"version\": \")[^\"]+/\1${VERSION}/" examples/ohos_arkts/entry/oh-package.json5
@@ -106,6 +111,10 @@ jobs:
           else
             git add \
               packages/erika_flutter/pubspec.yaml \
+              packages/erika_flutter/ios/erika_flutter.podspec \
+              packages/erika_flutter/macos/erika_flutter.podspec \
+              packages/erika_flutter/tvos/erika_flutter.podspec \
+              packages/erika_flutter/ohos/oh-package.json5 \
               packages/erika_flutter/native_artifacts.properties \
               packages/erika_ohos/oh-package.json5 \
               examples/ohos_arkts/AppScope/app.json5 \

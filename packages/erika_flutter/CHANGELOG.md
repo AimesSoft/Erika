@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.8
+
+- Fixed persistent audio/video drift after rendering stalls and overlapping
+  queued audio during foreground recovery.
+- Fixed Windows DWM crashes, frame reuse, video fill sizing, and DLL shutdown;
+  native opaque playback retains HDR, with an explicit SDR Flutter texture path.
+- Smoothed playback-rate transitions and improved iOS foreground/interruption
+  recovery, audio-track startup fallback, and danmaku continuity.
+- Updated native artifacts and the presenter ABI together; native integrations
+  must use the matching headers and runtime.
+
 - Added per-open HTTP read-ahead tuning through `httpReadAheadBytes` on
   Android, Apple platforms, Windows, and OpenHarmony.
 - Added a packed-alpha video mode that stores color and alpha side by side,
