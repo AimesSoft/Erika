@@ -71,7 +71,7 @@ cargo run -p xtask -- deps status
 `update_audio_clock_observation` 传递。观测保留 player 身份、播放 generation、
 命令序号、输出 epoch 和单调采样时间。worker 同时核对当前意图与已执行命令，
 并从采样时刻计算 500 ms 有效期；队列与缓冲决策使用相同的有效性检查。
-音频拥有者在输出重置、重新配置、设备状态切换和倍速切换时使旧 epoch 失效；
+presenter 在输出重置、重新配置、设备状态切换和倍速切换时使旧 epoch 失效；
 输出拥有者仍需串行执行采样与输出变更。
 
 引擎先建立观测基线，随后要求已消耗 PCM 帧数与媒体时间同时推进，才校正共享的
@@ -81,21 +81,12 @@ cargo run -p xtask -- deps status
 仍在运行的音频主时钟继续生效。
 
 原有 Rust API `update_audio_clock(snapshot)` 保留给当前时间线的即时同步反馈，
-无法还原缓存快照的原始采样身份；延迟反馈应使用新的观测 API。C ABI 不变。
-独立音频拥有者在自己的线程内创建、调用并销毁后端，无需强制后端实现 `Send`。
-它消费 worker 的有界 PCM 通道，处理 SoundTouch、发布时钟/设备反馈并提交倍速变更，
-不依赖渲染。队列准入沿用 250 ms 倍速桥接目标，过渡期间仍抑制混合倍速反馈。
+无法还原缓存快照的原始采样身份；延迟反馈应使用新的观测 API。C ABI 与队列目标
+不变，保留 250 ms 倍速桥接及过渡期间抑制混合倍速反馈的契约。
+音频喂送仍在 presenter tick 中执行，渲染阻塞仍可能造成欠载；时钟恢复不能替代
+音频喂送与渲染的独立调度。
 
-Presenter 通过带确认的命令通道控制音频。切换时先静止音频消费者，再静止播放生产者，
-两个边界确认后才重置输出、清理队列；恢复时先恢复生产者，再恢复消费者。
-等待确认或调用后端期间不持有共享快照锁。当前 generation 的视频成功呈现后才解除
-音频启动门控。自然 EOF 将剩余 PCM 交给设备后，音频线程等待命令，不把空环误当作
-硬件尾音已播放完毕；显式 reset/stop/close 仍释放输出，销毁时 join。
-宿主后台播放仍须显式启用：`audio_only_tick` 保留视频暂停及前台恢复
-的控制职责，而启动后的持续供音不再需要宿主 tick。停止声音应调用 pause/stop/close；
-仅停止显示定时器不会再让音频断供。
-
-- **macOS**：CoreAudio 输出，带 ring buffer 和 PTS 跟踪的 clock snapshot。音频拥有者会把输出快照回传给 player worker 做音频主时钟约束。
+- **macOS**：CoreAudio 输出，带 ring buffer 和 PTS 跟踪的 clock snapshot。presenter 会把输出快照回传给 player worker 做音频主时钟约束。
 - **iOS**：AudioQueue 输出，使用同样的 ring buffer 和 clock snapshot 模型。
 - Ring buffer：interleaved f32、容量可配、溢出丢最旧、支持音量控制。
 

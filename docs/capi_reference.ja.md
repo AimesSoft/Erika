@@ -532,12 +532,6 @@ Windows のフレームスケジューラなど）。`time_seconds` はそのフ
 ラインカウンタのスナップショットが書き込まれます。`poll_event` は非ブロッキングで、
 アイドル時は `NoEvent` を返します。
 
-PCM 供給と音声時刻の報告は専用スレッドで実行するため、描画の停止で音声供給は
-止まりません。`erika_presenter_audio_only_tick` は background の video 停止と
-foreground 復帰の状態を制御します。通常の video 再生中に別の timer から呼ばないで
-ください。host は引き続き background 再生の許可を管理し、音声を止めるときは
-pause/stop/close を呼びます。display timer の停止だけでは音声は止まりません。
-
 `get_stats` は同じ `ErikaPresenterStats` スナップショットを、フレームを描画せずに
 書き込みます。ホストが表示ループとは別の周期でカウンタをサンプリングする場合に
 使ってください。プレゼンテーションは進みません。
