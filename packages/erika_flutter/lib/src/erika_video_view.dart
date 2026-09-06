@@ -26,7 +26,11 @@ bool get _supportsFlutterTextureVideoView =>
         defaultTargetPlatform == TargetPlatform.windows ||
         _usesOhosTextureView);
 
-/// Flutter platform-view video surface backed by AppKit/UIKit.
+/// Native video surface backed by AppKit/UIKit or a Windows HWND.
+///
+/// Windows keeps video outside Flutter's texture compositor so opaque playback
+/// can negotiate HDR10. Use [ErikaTextureVideoView] explicitly for SDR content
+/// that needs Flutter clipping or color filters.
 ///
 /// This is the compatibility surface. Full-player Apple hosts should usually
 /// prefer [ErikaWindowOverlayVideoView] so Erika owns the native Metal video
@@ -56,6 +60,8 @@ class ErikaVideoView extends StatefulWidget {
 /// On macOS this uses an IOSurface-backed Metal texture, and on Windows it uses
 /// a shareable D3D11 texture. Regular Flutter effects such as opacity, clipping
 /// and color filters therefore apply to the video on both desktop platforms.
+/// Windows textures are SDR; use [ErikaVideoView] for native HDR playback.
+/// Windows supports [BlendMode.srcOver] and native [BlendMode.overlay] only.
 class ErikaTextureVideoView extends StatelessWidget {
   const ErikaTextureVideoView({
     super.key,
@@ -87,7 +93,12 @@ class ErikaTextureVideoView extends StatelessWidget {
     }
     if (!kIsWeb &&
         defaultTargetPlatform == TargetPlatform.windows &&
-        blendMode == BlendMode.overlay) {
+        blendMode != BlendMode.srcOver) {
+      if (blendMode != BlendMode.overlay) {
+        throw UnsupportedError(
+          'Windows ErikaTextureVideoView supports only srcOver and overlay.',
+        );
+      }
       return ErikaWindowOverlayVideoView(
         player: player,
         debugLabel: debugLabel,
@@ -97,14 +108,11 @@ class ErikaTextureVideoView extends StatelessWidget {
       );
     }
     if (_supportsFlutterTextureVideoView) {
-      return _ErikaTextureBlendLayer(
-        blendMode: blendMode,
-        child: Opacity(
-          opacity: opacity,
-          child: _ErikaOhosVideoView(
-            player: player,
-            onPlatformViewIdChanged: onTextureIdChanged,
-          ),
+      return Opacity(
+        opacity: opacity,
+        child: _ErikaOhosVideoView(
+          player: player,
+          onPlatformViewIdChanged: onTextureIdChanged,
         ),
       );
     }
@@ -115,55 +123,6 @@ class ErikaTextureVideoView extends StatelessWidget {
       blendMode: blendMode,
       opacity: opacity,
     );
-  }
-}
-
-class _ErikaTextureBlendLayer extends SingleChildRenderObjectWidget {
-  const _ErikaTextureBlendLayer({
-    required this.blendMode,
-    required super.child,
-  });
-
-  final BlendMode blendMode;
-
-  @override
-  RenderObject createRenderObject(BuildContext context) =>
-      _RenderErikaTextureBlendLayer(blendMode);
-
-  @override
-  void updateRenderObject(
-    BuildContext context,
-    covariant _RenderErikaTextureBlendLayer renderObject,
-  ) {
-    renderObject.blendMode = blendMode;
-  }
-}
-
-class _RenderErikaTextureBlendLayer extends RenderProxyBox {
-  _RenderErikaTextureBlendLayer(this._blendMode);
-
-  BlendMode _blendMode;
-
-  set blendMode(BlendMode value) {
-    if (_blendMode == value) {
-      return;
-    }
-    _blendMode = value;
-    markNeedsPaint();
-  }
-
-  @override
-  void paint(PaintingContext context, Offset offset) {
-    if (child == null || size.isEmpty) {
-      return;
-    }
-    if (_blendMode == BlendMode.srcOver) {
-      super.paint(context, offset);
-      return;
-    }
-    context.canvas.saveLayer(offset & size, Paint()..blendMode = _blendMode);
-    super.paint(context, offset);
-    context.canvas.restore();
   }
 }
 
@@ -245,9 +204,12 @@ class _ErikaVideoViewState extends State<ErikaVideoView> {
           gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
         );
       case TargetPlatform.windows:
-        return _ErikaOhosVideoView(
+        return ErikaWindowOverlayVideoView(
           player: widget.player,
+          debugLabel: widget.debugLabel,
           onPlatformViewIdChanged: widget.onPlatformViewIdChanged,
+          blendMode: widget.blendMode,
+          opacity: widget.opacity,
         );
       case TargetPlatform.android:
         return _ErikaAndroidVideoView(
@@ -518,7 +480,7 @@ class _ErikaAndroidVideoViewState extends State<_ErikaAndroidVideoView> {
     }
     final surfaceConfigurationChanged =
         _surfaceConfigurationKey(oldWidget.player) !=
-        _surfaceConfigurationKey(widget.player);
+            _surfaceConfigurationKey(widget.player);
     if (surfaceConfigurationChanged) {
       // Invalidate callbacks from a PlatformView whose asynchronous create
       // has not completed yet; in that state _viewId is still null.
@@ -593,7 +555,7 @@ class _ErikaAndroidVideoViewState extends State<_ErikaAndroidVideoView> {
     int generation,
   ) async {
     Object? lastError;
-    for (var attempt = 0; ; attempt += 1) {
+    for (var attempt = 0;; attempt += 1) {
       if (!_attachmentIsCurrent(player, viewId, generation)) {
         return;
       }
@@ -664,11 +626,10 @@ class _ErikaAndroidVideoViewState extends State<_ErikaAndroidVideoView> {
       surfaceFactory:
           (BuildContext context, PlatformViewController controller) =>
               AndroidViewSurface(
-                controller: controller as AndroidViewController,
-                hitTestBehavior: PlatformViewHitTestBehavior.transparent,
-                gestureRecognizers:
-                    const <Factory<OneSequenceGestureRecognizer>>{},
-              ),
+        controller: controller as AndroidViewController,
+        hitTestBehavior: PlatformViewHitTestBehavior.transparent,
+        gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
+      ),
       onCreatePlatformView: (PlatformViewCreationParams params) {
         final controller = PlatformViewsService.initExpensiveAndroidView(
           id: params.id,
@@ -719,8 +680,7 @@ class ErikaWindowOverlayVideoView extends StatefulWidget {
 }
 
 class _ErikaWindowOverlayVideoViewState
-    extends State<ErikaWindowOverlayVideoView>
-    with WidgetsBindingObserver {
+    extends State<ErikaWindowOverlayVideoView> with WidgetsBindingObserver {
   Timer? _retryTimer;
   Timer? _frameTimer;
   int _bindAttempts = 0;

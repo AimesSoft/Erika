@@ -3610,9 +3610,8 @@ pub unsafe extern "C" fn erika_presenter_windows_composition_swapchain_iunknown(
     })
 }
 
-/// Returns an AddRef'd IUnknown for the presenter's renderer-owned, shareable
-/// Windows Flutter output texture. The caller owns the returned COM reference
-/// and must Release it.
+/// Returns an AddRef'd IUnknown for the latest completed, immutable Windows
+/// Flutter SDR frame. The caller owns the COM reference and must Release it.
 #[cfg(target_os = "windows")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_windows_flutter_texture_iunknown(
@@ -5322,6 +5321,10 @@ mod tests {
         );
         let expected_backend = if cfg!(all(target_os = "android", feature = "wgpu")) {
             ErikaUpscalerBackendStatus::Scalar
+        } else if cfg!(target_os = "windows") {
+            // D3D11 initializes the requested GPU upscaler after attaching a
+            // device; before attachment the existing backend reports Building.
+            ErikaUpscalerBackendStatus::Building
         } else {
             ErikaUpscalerBackendStatus::Inactive
         };

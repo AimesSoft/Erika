@@ -1465,21 +1465,6 @@ impl Decoder {
     }
 
     fn configure_d3d11va(&mut self, codec: *const sys::AVCodec) -> Result<()> {
-        // The D3D11VA frame context is a fixed-size texture array. FFmpeg's
-        // codec minimum only covers decoder work/reference surfaces, while
-        // Erika can retain another 16 decoded outputs outside libavcodec:
-        // eight in PlaybackSession, three in the player-to-presenter handoff,
-        // one as the renderer's current frame, and four waiting for D3D11 GPU
-        // completion fences. Without this budget the fixed pool can run out
-        // while presentation still owns decoded texture-array slices.
-        #[cfg(target_os = "windows")]
-        {
-            unsafe {
-                (*self.context).extra_hw_frames = (*self.context)
-                    .extra_hw_frames
-                    .max(D3D11VA_ERIKA_RETAINED_OUTPUT_FRAMES);
-            }
-        }
         self.configure_hardware(
             codec,
             sys::AVHWDeviceType_AV_HWDEVICE_TYPE_D3D11VA,
@@ -1727,9 +1712,7 @@ unsafe fn ensure_d3d11va_frames_for_context(
         let alignment = d3d11va_surface_alignment(unsafe { (*context).codec_id });
         frames_ctx.width = align_i32(unsafe { (*context).coded_width }, alignment);
         frames_ctx.height = align_i32(unsafe { (*context).coded_height }, alignment);
-        frames_ctx.initial_pool_size = d3d11va_pool_size(unsafe { (*context).codec_id }, unsafe {
-            (*context).extra_hw_frames
-        });
+        frames_ctx.initial_pool_size = d3d11va_pool_size(unsafe { (*context).codec_id });
         d3d11_frames.BindFlags = D3D11_BIND_DECODER | D3D11_BIND_SHADER_RESOURCE;
         d3d11_frames.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
         let code = unsafe { sys::av_hwframe_ctx_init(frames_ref) };
@@ -1776,25 +1759,16 @@ fn d3d11va_surface_alignment(codec_id: sys::AVCodecID) -> i32 {
 }
 
 #[cfg(target_os = "windows")]
-const D3D11VA_ERIKA_RETAINED_OUTPUT_FRAMES: i32 = 16;
-
-#[cfg(target_os = "windows")]
-fn d3d11va_pool_size(codec_id: sys::AVCodecID, extra_hw_frames: i32) -> i32 {
-    let decoder_surfaces: i32 = if codec_id == sys::AVCodecID_AV_CODEC_ID_H264
-        || codec_id == sys::AVCodecID_AV_CODEC_ID_HEVC
-    {
-        // Four base work surfaces plus up to sixteen reference surfaces.
+fn d3d11va_pool_size(codec_id: sys::AVCodecID) -> i32 {
+    if codec_id == sys::AVCodecID_AV_CODEC_ID_H264 || codec_id == sys::AVCodecID_AV_CODEC_ID_HEVC {
         20
     } else if codec_id == sys::AVCodecID_AV_CODEC_ID_VP9
         || codec_id == sys::AVCodecID_AV_CODEC_ID_AV1
     {
-        // Four base work surfaces plus up to eight reference surfaces.
         12
     } else {
-        // Four base work surfaces plus two reference surfaces.
-        6
-    };
-    decoder_surfaces.saturating_add(extra_hw_frames.max(0))
+        5
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -4587,52 +4561,6 @@ mod tests {
     #[test]
     fn linked_ffmpeg_reports_version() {
         assert!(!version().is_empty());
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn d3d11va_pool_includes_erika_retained_outputs() {
-        assert_eq!(
-            d3d11va_pool_size(
-                sys::AVCodecID_AV_CODEC_ID_H264,
-                D3D11VA_ERIKA_RETAINED_OUTPUT_FRAMES,
-            ),
-            36
-        );
-        assert_eq!(
-            d3d11va_pool_size(
-                sys::AVCodecID_AV_CODEC_ID_HEVC,
-                D3D11VA_ERIKA_RETAINED_OUTPUT_FRAMES,
-            ),
-            36
-        );
-        assert_eq!(
-            d3d11va_pool_size(
-                sys::AVCodecID_AV_CODEC_ID_VP9,
-                D3D11VA_ERIKA_RETAINED_OUTPUT_FRAMES,
-            ),
-            28
-        );
-        assert_eq!(
-            d3d11va_pool_size(
-                sys::AVCodecID_AV_CODEC_ID_AV1,
-                D3D11VA_ERIKA_RETAINED_OUTPUT_FRAMES,
-            ),
-            28
-        );
-        assert_eq!(
-            d3d11va_pool_size(
-                sys::AVCodecID_AV_CODEC_ID_MPEG2VIDEO,
-                D3D11VA_ERIKA_RETAINED_OUTPUT_FRAMES,
-            ),
-            22
-        );
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn d3d11va_pool_never_shrinks_for_negative_extra_frames() {
-        assert_eq!(d3d11va_pool_size(sys::AVCodecID_AV_CODEC_ID_H264, -1), 20);
     }
 
     #[test]

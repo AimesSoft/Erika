@@ -21,6 +21,7 @@ endif()
 
 list(APPEND PLUGIN_SOURCES
   "erika_composition_blend_effect.h"
+  "erika_texture_publication.h"
   "erika_flutter_plugin.cpp"
   "erika_flutter_plugin.h"
   "erika_windows_smtc.cpp"

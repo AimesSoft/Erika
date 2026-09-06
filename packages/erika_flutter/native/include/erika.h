@@ -752,9 +752,9 @@ ErikaStatus erika_presenter_windows_composition_swapchain_iunknown(
     ErikaPresenterHandle *handle,
     void **out_swapchain);
 
-/* Windows only. Returns an AddRef'd IUnknown for the renderer-owned,
- * shareable D3D11 texture attached through WindowsTextureRegistrar. The
- * caller owns the returned COM reference and must Release it. */
+/* Windows only. Returns an AddRef'd IUnknown for the latest completed,
+ * immutable SDR Flutter GPU frame. The caller owns the COM reference and
+ * must Release it. The texture remains unchanged for its entire lifetime. */
 ErikaStatus erika_presenter_windows_flutter_texture_iunknown(
     ErikaPresenterHandle *handle,
     void **out_texture);

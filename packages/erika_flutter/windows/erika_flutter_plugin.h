@@ -71,6 +71,7 @@ class ErikaFlutterPlugin : public flutter::Plugin {
   struct PlayerHost;
 
   friend class ErikaEventStreamHandler;
+  friend class ErikaFlutterPluginTestPeer;
 
   HWND FlutterWindow() const;
   double BackingScale() const;

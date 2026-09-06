@@ -3,6 +3,23 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('Windows texture APIs are optional for native runtime compatibility', () {
+    final plugin = File('windows/erika_flutter_plugin.cpp').readAsStringSync();
+    expect(plugin, contains('LoadOptional<AttachFlutterTextureFn>'));
+    expect(plugin, contains('LoadOptional<GetWindowsFlutterTextureFn>'));
+    expect(plugin, isNot(contains('LoadRequired<AttachFlutterTextureFn>')));
+    expect(plugin, isNot(contains('LoadRequired<GetWindowsFlutterTextureFn>')));
+  });
+
+  test('new Windows texture export is declared in both SDK headers', () {
+    const symbol = 'erika_presenter_windows_flutter_texture_iunknown';
+    expect(File('native/include/erika.h').readAsStringSync(), contains(symbol));
+    final publicHeader = File('../../crates/erika_capi/include/erika.h');
+    if (publicHeader.existsSync()) {
+      expect(publicHeader.readAsStringSync(), contains(symbol));
+    }
+  });
+
   test('macOS renders on CVDisplayLink without a per-frame GCD hop', () {
     final plugin = File(
       'macos/Classes/ErikaFlutterPlugin.swift',

@@ -865,11 +865,11 @@ pub trait RendererBackend {
         None
     }
 
-    /// AddRef'd `IUnknown` for the active Windows Flutter output texture.
+    /// AddRef'd `IUnknown` for the latest completed Windows Flutter SDR frame.
     ///
     /// The caller owns the reference and must `Release` it. This lets the
-    /// Windows embedder expose the renderer-owned, shareable D3D11 texture to
-    /// Flutter without falling back to an HWND overlay.
+    /// Windows embedder expose a shareable D3D11 snapshot to Flutter. Published
+    /// resources are immutable, even after the renderer produces another frame.
     fn windows_flutter_texture_iunknown(&self) -> Option<*mut std::ffi::c_void> {
         None
     }

@@ -1,5 +1,6 @@
 #include "erika_flutter_plugin.h"
 #include "erika_composition_blend_effect.h"
+#include "erika_texture_publication.h"
 
 #include <flutter/event_channel.h>
 #include <flutter/method_channel.h>
@@ -1037,9 +1038,9 @@ struct ErikaFlutterPlugin::ErikaNativeLibrary {
         "erika_danmaku_track_info_free");
     attach_windows_hwnd =
         LoadRequired<AttachWindowsHwndFn>("erika_presenter_attach_windows_hwnd");
-    attach_flutter_texture = LoadRequired<AttachFlutterTextureFn>(
+    attach_flutter_texture = LoadOptional<AttachFlutterTextureFn>(
         "erika_presenter_attach_flutter_texture");
-    windows_flutter_texture = LoadRequired<GetWindowsFlutterTextureFn>(
+    windows_flutter_texture = LoadOptional<GetWindowsFlutterTextureFn>(
         "erika_presenter_windows_flutter_texture_iunknown");
     attach_wgpu_surface_with_output_capabilities =
         LoadRequired<AttachWgpuSurfaceWithOutputCapabilitiesFn>(
@@ -1496,89 +1497,31 @@ struct ErikaFlutterPlugin::ErikaOverlayWindow {
 };
 
 struct ErikaFlutterPlugin::ErikaFlutterTexture {
-  struct Snapshot {
-    Snapshot(Microsoft::WRL::ComPtr<ID3D11Texture2D> source,
-             HANDLE shared_handle,
-             uint32_t pixel_width,
-             uint32_t pixel_height)
-        : texture(std::move(source)) {
-      descriptor.struct_size = sizeof(FlutterDesktopGpuSurfaceDescriptor);
-      descriptor.handle = shared_handle;
-      descriptor.width = pixel_width;
-      descriptor.height = pixel_height;
-      descriptor.visible_width = pixel_width;
-      descriptor.visible_height = pixel_height;
-      descriptor.format = kFlutterDesktopPixelFormatBGRA8888;
-      descriptor.release_callback = [](void* context) {
-        static_cast<Snapshot*>(context)->opened.store(
-            true, std::memory_order_release);
-      };
-      descriptor.release_context = this;
-    }
-
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
-    FlutterDesktopGpuSurfaceDescriptor descriptor{};
-    std::atomic<bool> opened{false};
-    uint64_t retire_after_frame = 0;
-  };
-
-  ErikaFlutterTexture(flutter::PluginRegistrarWindows* plugin_registrar,
+  ErikaFlutterTexture(flutter::TextureRegistrar* texture_registrar,
                       uint32_t pixel_width,
                       uint32_t pixel_height,
                       double backing_scale)
-      : registrar(plugin_registrar),
+      : registrar(texture_registrar),
         width(pixel_width),
         height(pixel_height),
         scale(backing_scale),
         texture_variant(std::make_unique<flutter::TextureVariant>(
             flutter::GpuSurfaceTexture(
                 kFlutterDesktopGpuSurfaceTypeDxgiSharedHandle,
-                [this](size_t requested_width, size_t requested_height) {
-                  const auto* snapshot =
-                      current.load(std::memory_order_acquire);
-                  return snapshot == nullptr ? nullptr : &snapshot->descriptor;
+                [this](size_t, size_t) {
+                  return publication.AcquireDescriptor();
                 }))) {
-    texture_id =
-        registrar->texture_registrar()->RegisterTexture(texture_variant.get());
+    texture_id = registrar->RegisterTexture(texture_variant.get());
     if (texture_id < 0) {
       throw PluginError("Flutter failed to register the Erika GPU texture.");
     }
   }
 
   bool UpdateNativeTexture(void* raw_texture) {
-    if (raw_texture == nullptr) {
-      return false;
-    }
-
-    Microsoft::WRL::ComPtr<IUnknown> unknown;
-    unknown.Attach(static_cast<IUnknown*>(raw_texture));
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
-    CheckHResult(unknown.As(&texture),
-                 "QueryInterface(ID3D11Texture2D)");
-
-    auto* previous = current.load(std::memory_order_acquire);
-    if (previous != nullptr && previous->texture.Get() == texture.Get()) {
-      return false;
-    }
-
-    Microsoft::WRL::ComPtr<IDXGIResource> resource;
-    CheckHResult(texture.As(&resource), "QueryInterface(IDXGIResource)");
-    HANDLE shared_handle = nullptr;
-    CheckHResult(resource->GetSharedHandle(&shared_handle),
-                 "IDXGIResource::GetSharedHandle");
-    if (shared_handle == nullptr) {
-      throw PluginError("Erika returned a D3D11 texture without a shared handle.");
-    }
-
-    if (previous != nullptr) {
-      previous->retire_after_frame = frame_sequence + 4;
-    }
-    auto snapshot =
-        std::make_unique<Snapshot>(std::move(texture), shared_handle, width, height);
-    auto* published = snapshot.get();
-    snapshots.push_back(std::move(snapshot));
-    current.store(published, std::memory_order_release);
-    return true;
+    bool changed = false;
+    CheckHResult(publication.Update(raw_texture, changed),
+                 "Publish completed Flutter GPU texture");
+    return changed;
   }
 
   void Resize(uint32_t pixel_width,
@@ -1590,30 +1533,22 @@ struct ErikaFlutterPlugin::ErikaFlutterTexture {
   }
 
   void MarkFrameAvailable() {
-    registrar->texture_registrar()->MarkTextureFrameAvailable(texture_id);
-    ++frame_sequence;
-    const auto* active = current.load(std::memory_order_acquire);
-    snapshots.erase(
-        std::remove_if(
-            snapshots.begin(), snapshots.end(),
-            [active, this](const std::unique_ptr<Snapshot>& snapshot) {
-              return snapshot.get() != active &&
-                     snapshot->opened.load(std::memory_order_acquire) &&
-                     frame_sequence >= snapshot->retire_after_frame;
-            }),
-        snapshots.end());
+    registrar->MarkTextureFrameAvailable(texture_id);
   }
 
-  flutter::PluginRegistrarWindows* registrar = nullptr;
+  void Clear() {
+    publication.Clear();
+    MarkFrameAvailable();
+  }
+
+  flutter::TextureRegistrar* registrar = nullptr;
   uint32_t width = 1;
   uint32_t height = 1;
   double scale = 1.0;
   int64_t texture_id = -1;
   int64_t owner_player_id = 0;
+  ErikaTexturePublication publication;
   std::unique_ptr<flutter::TextureVariant> texture_variant;
-  std::vector<std::unique_ptr<Snapshot>> snapshots;
-  std::atomic<Snapshot*> current{nullptr};
-  uint64_t frame_sequence = 0;
 };
 
 struct ErikaFlutterPlugin::PlayerHost {
@@ -1639,7 +1574,7 @@ struct ErikaFlutterPlugin::PlayerHost {
 
   ~PlayerHost() {
     if (handle != nullptr) {
-      library->detach_surface(handle);
+      Detach(std::nullopt);
       library->destroy(handle);
       handle = nullptr;
     }
@@ -2286,6 +2221,16 @@ struct ErikaFlutterPlugin::PlayerHost {
   }
 
   void AttachFlutterTexture(ErikaFlutterTexture& texture) {
+    // Optional features must not prevent native HWND/HDR playback with an
+    // older bundled runtime. Check before disturbing an existing attachment.
+    if (library->attach_flutter_texture == nullptr ||
+        library->windows_flutter_texture == nullptr) {
+      throw PluginError(
+          "Windows Flutter textures require a matching Erika native runtime. "
+          "Build with ERIKA_FORCE_SOURCE_BUILD=1 from this checkout, or install "
+          "a runtime providing erika_presenter_windows_flutter_texture_iunknown. "
+          "ErikaVideoView remains available for native HDR playback.");
+    }
     if (texture.owner_player_id != 0 && texture.owner_player_id != id) {
       throw PluginError("Erika Flutter texture " +
                         std::to_string(texture.texture_id) +
@@ -2339,8 +2284,9 @@ struct ErikaFlutterPlugin::PlayerHost {
         library->windows_flutter_texture(handle, &raw_texture);
     Check(status, "windows_flutter_texture_iunknown",
           status == ErikaStatus_Ok ? std::string{} : library->TakeLastError());
-    attached_texture->UpdateNativeTexture(raw_texture);
-    attached_texture->MarkFrameAvailable();
+    if (attached_texture->UpdateNativeTexture(raw_texture)) {
+      attached_texture->MarkFrameAvailable();
+    }
   }
 
   void ResizeOverlay(ErikaOverlayWindow& overlay) {
@@ -2403,6 +2349,7 @@ struct ErikaFlutterPlugin::PlayerHost {
     attached_overlay = nullptr;
     if (attached_texture != nullptr && attached_texture->owner_player_id == id) {
       attached_texture->owner_player_id = 0;
+      attached_texture->Clear();
     }
     attached_texture = nullptr;
     composition_surface = false;
@@ -3065,13 +3012,20 @@ ErikaFlutterPlugin::ErikaOverlayWindow& ErikaFlutterPlugin::EnsureOverlayWindow(
     const std::string blend_mode =
         overlay_window_ ? overlay_window_->blend_mode : "srcOver";
     const double opacity = overlay_window_ ? overlay_window_->opacity : 1.0;
+    std::vector<PlayerHost*> reattach;
+    for (auto& entry : players_) {
+      if (entry.second->attached_view_id == kWindowOverlayViewId) {
+        reattach.push_back(entry.second.get());
+        // Clear composition references while the old overlay is still alive.
+        entry.second->Detach(std::nullopt);
+      }
+    }
     overlay_window_ = std::make_unique<ErikaOverlayWindow>(parent);
     overlay_window_->ConfigureComposition(blend_mode, opacity);
     StartFrameTimer();
-    for (auto& entry : players_) {
-      if (entry.second->attached_view_id == kWindowOverlayViewId) {
-        entry.second->AttachOverlay(*overlay_window_);
-      }
+    for (auto* player : reattach) {
+      player->AttachOverlay(*overlay_window_);
+      overlay_window_->owner_player_id = player->id;
     }
   }
   return *overlay_window_;
@@ -3109,7 +3063,7 @@ int64_t ErikaFlutterPlugin::CreateTexture(const EncodableMap& args) {
     throw PluginError("Flutter texture metrics must be finite and positive.");
   }
   auto texture = std::make_shared<ErikaFlutterTexture>(
-      registrar_, static_cast<uint32_t>(requested_width),
+      registrar_->texture_registrar(), static_cast<uint32_t>(requested_width),
       static_cast<uint32_t>(requested_height), scale);
   const int64_t texture_id = texture->texture_id;
   textures_.emplace(texture_id, std::move(texture));
