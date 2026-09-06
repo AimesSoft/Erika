@@ -3,6 +3,23 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('Windows texture APIs are optional for native runtime compatibility', () {
+    final plugin = File('windows/erika_flutter_plugin.cpp').readAsStringSync();
+    expect(plugin, contains('LoadOptional<AttachFlutterTextureFn>'));
+    expect(plugin, contains('LoadOptional<GetWindowsFlutterTextureFn>'));
+    expect(plugin, isNot(contains('LoadRequired<AttachFlutterTextureFn>')));
+    expect(plugin, isNot(contains('LoadRequired<GetWindowsFlutterTextureFn>')));
+  });
+
+  test('new Windows texture export is declared in both SDK headers', () {
+    const symbol = 'erika_presenter_windows_flutter_texture_iunknown';
+    expect(File('native/include/erika.h').readAsStringSync(), contains(symbol));
+    final publicHeader = File('../../crates/erika_capi/include/erika.h');
+    if (publicHeader.existsSync()) {
+      expect(publicHeader.readAsStringSync(), contains(symbol));
+    }
+  });
+
   test('macOS renders on CVDisplayLink without a per-frame GCD hop', () {
     final plugin = File(
       'macos/Classes/ErikaFlutterPlugin.swift',
@@ -48,24 +65,27 @@ void main() {
     expect(plugin, isNot(contains('CVPixelBufferLockBaseAddress')));
   });
 
-  test('macOS transparent platform view applies native overlay compositing',
-      () {
-    final plugin = File(
-      'macos/Classes/ErikaFlutterPlugin.swift',
-    ).readAsStringSync();
+  test(
+    'macOS transparent platform view applies native overlay compositing',
+    () {
+      final plugin = File(
+        'macos/Classes/ErikaFlutterPlugin.swift',
+      ).readAsStringSync();
 
-    expect(plugin, contains('metalLayer.isOpaque = !alphaVideo'));
-    expect(plugin, contains('NSColor.clear.cgColor'));
-    expect(
-      plugin,
-      contains('metalLayer.compositingFilter = "overlayBlendMode"'),
-    );
-    expect(plugin, contains('metalLayer.opacity = Float('));
-  });
+      expect(plugin, contains('metalLayer.isOpaque = !alphaVideo'));
+      expect(plugin, contains('NSColor.clear.cgColor'));
+      expect(
+        plugin,
+        contains('metalLayer.compositingFilter = "overlayBlendMode"'),
+      );
+      expect(plugin, contains('metalLayer.opacity = Float('));
+    },
+  );
 
   test('Windows transparent video is composed into the Flutter HWND', () {
-    final plugin = File(
-      'windows/erika_flutter_plugin.cpp',
+    final plugin = File('windows/erika_flutter_plugin.cpp').readAsStringSync();
+    final blendEffect = File(
+      'windows/erika_composition_blend_effect.h',
     ).readAsStringSync();
     final rendererFile = File('../../crates/erika/src/renderer/d3d11.rs');
     if (!rendererFile.existsSync()) {
@@ -75,12 +95,20 @@ void main() {
 
     expect(plugin, contains('config.video_alpha_mode ='));
     expect(plugin, contains('capabilities.direct_composition = true'));
-    expect(plugin, contains('DCompositionCreateDevice2'));
-    expect(plugin, contains('CreateTargetForHwnd'));
-    expect(plugin, contains('CreateBlendEffect'));
+    expect(plugin, contains('QueryInterface(IDXGISwapChain)'));
+    expect(plugin, contains('CreateDispatcherQueueController'));
+    expect(plugin, contains('CreateDesktopWindowTarget'));
+    expect(plugin, contains('CreateCompositionSurfaceForSwapChain'));
+    expect(plugin, contains('CreateEffectFactory'));
+    expect(plugin, contains('CreateBackdropBrush'));
+    expect(plugin, contains('SetSourceParameter(\n        L"Backdrop"'));
+    expect(plugin, contains('SetSourceParameter(L"Video"'));
     expect(plugin, contains('D2D1_BLEND_MODE_OVERLAY'));
-    expect(plugin, contains('IDCompositionEffectGroup::SetOpacity'));
-    expect(plugin, contains('root_visual->SetEffect(effect)'));
+    expect(blendEffect, contains('GetSourceCount(UINT* count)'));
+    expect(blendEffect, contains('*count = 2'));
+    expect(plugin, isNot(contains('DCompositionCreateDevice3')));
+    expect(plugin, isNot(contains('CreateBlendEffect')));
+    expect(plugin, isNot(contains('root_visual->SetEffect(effect)')));
     expect(
       plugin,
       contains('erika_presenter_windows_composition_swapchain_iunknown'),
@@ -106,7 +134,9 @@ void main() {
 
       expect(plugin, contains('private let renderQueue: DispatchQueue'));
       expect(
-          plugin, contains('private let nativeCallLock = NSRecursiveLock()'));
+        plugin,
+        contains('private let nativeCallLock = NSRecursiveLock()'),
+      );
       expect(plugin, contains('renderQueue.async'));
       expect(plugin, contains('self?.$schedulerCall'));
       expect(plugin, contains('mainThread=\\(Thread.isMainThread)'));
@@ -114,10 +144,7 @@ void main() {
       expect(plugin, isNot(contains('self?.renderTick(sendEvent:')));
 
       final renderStart = plugin.indexOf('  func renderTick() {');
-      final pollStart = plugin.indexOf(
-        '  func pollEvents(',
-        renderStart,
-      );
+      final pollStart = plugin.indexOf('  func pollEvents(', renderStart);
       expect(renderStart, greaterThanOrEqualTo(0));
       expect(pollStart, greaterThan(renderStart));
       expect(
@@ -127,18 +154,20 @@ void main() {
     });
   }
 
-  test('iOS retries audio-session activation after an allowed interruption',
-      () {
-    final plugin = File(
-      'ios/Classes/ErikaFlutterPlugin.swift',
-    ).readAsStringSync();
+  test(
+    'iOS retries audio-session activation after an allowed interruption',
+    () {
+      final plugin = File(
+        'ios/Classes/ErikaFlutterPlugin.swift',
+      ).readAsStringSync();
 
-    expect(plugin, contains('AVAudioSession.interruptionNotification'));
-    expect(plugin, contains('try session.setActive(true)'));
-    expect(plugin, contains('private func resumeInterruptedPlayback'));
-    expect(plugin, contains('interruptionResumeWorkItem'));
-    expect(plugin, contains('guard attempt < maxAttempts else'));
-  });
+      expect(plugin, contains('AVAudioSession.interruptionNotification'));
+      expect(plugin, contains('try session.setActive(true)'));
+      expect(plugin, contains('private func resumeInterruptedPlayback'));
+      expect(plugin, contains('interruptionResumeWorkItem'));
+      expect(plugin, contains('guard attempt < maxAttempts else'));
+    },
+  );
 
   test('iOS drops a pending interruption resume on an explicit command', () {
     final plugin = File(
@@ -148,7 +177,8 @@ void main() {
     expect(
       plugin,
       contains(
-          'private func cancelPendingInterruptionResume(ifPlayer playerId: Int64)'),
+        'private func cancelPendingInterruptionResume(ifPlayer playerId: Int64)',
+      ),
     );
 
     // Every explicit pause/stop/close path must disarm the retry before it
@@ -165,14 +195,16 @@ void main() {
         plugin.indexOf(entry.$2, caseStart) + entry.$2.length,
       );
       expect(
-          body, contains('cancelPendingInterruptionResume(ifPlayer: host.id)'));
+        body,
+        contains('cancelPendingInterruptionResume(ifPlayer: host.id)'),
+      );
     }
 
-    final remoteStart = plugin.indexOf(
-      'private func performRemotePause()',
+    final remoteStart = plugin.indexOf('private func performRemotePause()');
+    final remoteEnd = plugin.indexOf(
+      'private func performRemoteToggle()',
+      remoteStart,
     );
-    final remoteEnd =
-        plugin.indexOf('private func performRemoteToggle()', remoteStart);
     expect(remoteStart, greaterThanOrEqualTo(0));
     expect(remoteEnd, greaterThan(remoteStart));
     expect(
@@ -181,30 +213,32 @@ void main() {
     );
   });
 
-  test('Android polls events on the presenter thread with adaptive scheduling',
-      () {
-    final plugin = File(
-      'android/src/main/kotlin/dev/aimesoft/erika_flutter/'
-      'ErikaFlutterPlugin.kt',
-    ).readAsStringSync();
+  test(
+    'Android polls events on the presenter thread with adaptive scheduling',
+    () {
+      final plugin = File(
+        'android/src/main/kotlin/dev/aimesoft/erika_flutter/'
+        'ErikaFlutterPlugin.kt',
+      ).readAsStringSync();
 
-    expect(plugin, contains('private val eventPollRunnable'));
-    expect(plugin, contains('private fun scheduleEventPoll()'));
-    expect(plugin, contains('presenterThread.post {'));
-    expect(plugin, contains('androidEventPollDelayMillis('));
+      expect(plugin, contains('private val eventPollRunnable'));
+      expect(plugin, contains('private fun scheduleEventPoll()'));
+      expect(plugin, contains('presenterThread.post {'));
+      expect(plugin, contains('androidEventPollDelayMillis('));
 
-    final frameStart = plugin.indexOf(
-      'private val frameCallback = Choreographer.FrameCallback',
-    );
-    final attachStart = plugin.indexOf(
-      'override fun onAttachedToEngine',
-      frameStart,
-    );
-    expect(frameStart, greaterThanOrEqualTo(0));
-    expect(attachStart, greaterThan(frameStart));
-    expect(
-      plugin.substring(frameStart, attachStart),
-      isNot(contains('drainEvents')),
-    );
-  });
+      final frameStart = plugin.indexOf(
+        'private val frameCallback = Choreographer.FrameCallback',
+      );
+      final attachStart = plugin.indexOf(
+        'override fun onAttachedToEngine',
+        frameStart,
+      );
+      expect(frameStart, greaterThanOrEqualTo(0));
+      expect(attachStart, greaterThan(frameStart));
+      expect(
+        plugin.substring(frameStart, attachStart),
+        isNot(contains('drainEvents')),
+      );
+    },
+  );
 }

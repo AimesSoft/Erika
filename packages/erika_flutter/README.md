@@ -32,6 +32,19 @@ video stays outside Flutter's platform-view compositor.
 On Windows `ErikaWindowOverlayVideoView` hosts a window-level Direct3D 11
 swapchain as a sibling surface, following the same overlay model.
 
+Windows `ErikaVideoView` uses that native path too, including for default
+opaque `srcOver` playback. It preserves HDR10 negotiation outside Flutter's
+texture compositor. `ErikaTextureVideoView` is an explicit **SDR-only** option
+for content that needs Flutter opacity, clipping or color filters. Its default
+`srcOver` uses BGRA8 GPU snapshots; `overlay` uses native Windows Composition.
+Other Windows blend modes are rejected explicitly.
+
+Windows texture output requires a runtime built from the matching source
+revision (`ERIKA_FORCE_SOURCE_BUILD=1`); the pinned v0.1.7 prebuilt does not
+provide this new API. Native video/player creation remains compatible with
+that prebuilt. Publish matching binaries and update the artifact manifest
+before distributing the new texture capability in a release.
+
 Use `ErikaVideoView` when a standard Flutter platform view is required for a
 small embedder, compatibility path, or diagnostics.
 
