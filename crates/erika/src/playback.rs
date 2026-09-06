@@ -4129,6 +4129,7 @@ pub struct VideoPlaybackEngine {
     pending_frame: Option<DecodedVideoFrame>,
     pending_audio: Option<PcmAudioFrame>,
     pending_subtitle: Option<DecodedSubtitleFrame>,
+    last_audio_output_end: Option<Duration>,
     audio_output_active: bool,
     audio_eof_stall_started_at: Option<Instant>,
     audio_eof_stall_pending_frames: usize,
@@ -4170,7 +4171,10 @@ impl VideoPlaybackEngine {
             self.last_presented_pts = None;
             self.waiting_for_first_frame = true;
             self.video_seek_floor = resume_position;
-            self.audio_seek_floor = resume_position;
+            // Audio already handed to the output remains queued while video
+            // seeks back to a keyframe. Do not enqueue that PCM a second time.
+            self.audio_seek_floor = resume_position
+                .map(|position| position.max(self.last_audio_output_end.unwrap_or(position)));
             self.reset_video_seek_preroll_budget(Instant::now());
         }
         Ok(())
@@ -4243,6 +4247,7 @@ impl VideoPlaybackEngine {
             pending_frame: None,
             pending_audio: None,
             pending_subtitle: None,
+            last_audio_output_end: None,
             audio_output_active: true,
             audio_eof_stall_started_at: None,
             audio_eof_stall_pending_frames: 0,
@@ -4614,6 +4619,7 @@ impl VideoPlaybackEngine {
         };
         let queued_audio = self.session.set_audio_output_active(active);
         self.audio_output_active = active;
+        self.last_audio_output_end = None;
         self.last_audio_clock_sample = None;
         self.reset_audio_eof_stall_state();
         trace::diagnostic(
@@ -4876,6 +4882,7 @@ impl VideoPlaybackEngine {
         self.pending_frame = None;
         self.pending_audio = None;
         self.pending_subtitle = None;
+        self.last_audio_output_end = None;
         self.reset_audio_eof_stall_state();
     }
 
@@ -5140,6 +5147,11 @@ impl VideoPlaybackEngine {
     pub(crate) fn restore_pending_audio_frame(&mut self, frame: PcmAudioFrame) {
         debug_assert!(self.pending_audio.is_none());
         self.pending_audio = Some(frame);
+    }
+
+    /// Records PCM only after a successful handoff to the audio consumer.
+    pub(crate) fn record_audio_output_end(&mut self, end: Option<Duration>) {
+        self.last_audio_output_end = end;
     }
 
     pub fn tick_subtitle(&mut self) -> Result<Option<TimedSubtitleFrame>> {
@@ -6826,6 +6838,40 @@ mod tests {
     fn clock_test_consume(ring: &mut crate::audio::AudioRingBuffer, ms: u64) {
         ring.read_interleaved(&mut vec![0.0; ms as usize * 48])
             .unwrap();
+    }
+
+    #[test]
+    fn playback_fixture_foreground_resume_does_not_repeat_published_audio() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+        let mut output_end = Duration::ZERO;
+        for _ in 0..2 {
+            let frame = next_fixture_audio_at(&mut engine, t0);
+            output_end = frame.pts.unwrap()
+                + Duration::from_secs_f64(
+                    frame.frame.frames as f64 / f64::from(frame.frame.format.sample_rate),
+                );
+            engine.record_audio_output_end(Some(output_end));
+        }
+        assert!(output_end > Duration::from_millis(100));
+        engine.set_video_decode_suspended(true).unwrap();
+        engine.set_video_decode_suspended(false).unwrap();
+        // The old output tail is still queued. Video may preroll behind that
+        // tail, but audio handed off after recovery must start at its end.
+        let now = t0 + output_end;
+        let resumed = next_fixture_audio_at(&mut engine, now);
+        let resumed_pts = resumed.pts.unwrap();
+        assert!(resumed_pts >= output_end);
+        assert!(resumed_pts - output_end < Duration::from_millis(1));
+
+        // A real seek discards queued output, so its old tail must not suppress
+        // audio on the replacement timeline.
+        engine.seek_at(Duration::ZERO, now).unwrap();
+        let _ = next_fixture_video_at(&mut engine, now);
+        let replay = next_fixture_audio_at(&mut engine, now);
+        assert_eq!(replay.pts, Some(Duration::ZERO));
     }
 
     #[test]

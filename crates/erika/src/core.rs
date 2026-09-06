@@ -2448,6 +2448,11 @@ fn pump_audio_from_worker(
             AUDIO_PREFILL_TIME_BUDGET.saturating_sub(elapsed),
         ) {
             Ok(Some(frame)) => {
+                let output_end = frame.pts.map(|pts| {
+                    pts.saturating_add(Duration::from_secs_f64(
+                        frame.frame.frames as f64 / f64::from(frame.frame.format.sample_rate),
+                    ))
+                });
                 match try_emit_audio_frame_from_worker(
                     inner,
                     PlayerAudioFrame {
@@ -2456,6 +2461,7 @@ fn pump_audio_from_worker(
                     },
                 ) {
                     AudioFrameEmitResult::Sent => {
+                        engine.record_audio_output_end(output_end);
                         backpressure.reset();
                         emitted += 1;
                     }
