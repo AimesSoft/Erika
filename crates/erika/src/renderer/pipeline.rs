@@ -781,7 +781,10 @@ pub struct ToneMapConfig {
 impl Default for ToneMapConfig {
     fn default() -> Self {
         Self {
-            operator: ToneMapOperator::Mobius,
+            // Follow the operator enum's default so a default-operator change
+            // actually reaches the pipeline (a hardcoded value here silently
+            // overrides it).
+            operator: ToneMapOperator::default(),
             knee_start: 0.75,
             desaturate: 0.0,
         }
