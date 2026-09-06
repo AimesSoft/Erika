@@ -282,6 +282,9 @@ static NSString *ErikaFormatTime(double seconds) {
   [self.window center];
   [self.window makeKeyAndOrderFront:nil];
   double smokeSeconds = erika_demo_smoke_seconds();
+  // Always activate: an inactive app gets App-Napped by macOS, which
+  // throttles the render timer and stalls the presentation-driven decode.
+  [NSApp activateIgnoringOtherApps:YES];
   if (smokeSeconds > 0.0) {
     self.smokeTimer = [NSTimer scheduledTimerWithTimeInterval:smokeSeconds
                                                        target:self
@@ -289,8 +292,6 @@ static NSString *ErikaFormatTime(double seconds) {
                                                      userInfo:nil
                                                       repeats:NO];
     [[NSRunLoop mainRunLoop] addTimer:self.smokeTimer forMode:NSRunLoopCommonModes];
-  } else {
-    [NSApp activateIgnoringOtherApps:YES];
   }
 }
 
