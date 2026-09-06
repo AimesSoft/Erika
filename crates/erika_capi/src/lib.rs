@@ -1400,30 +1400,26 @@ fn report_capi_panic(
 fn presenter_config_from_c(config: ErikaPresenterConfig) -> PresenterConfig {
     let output_mode = match ErikaPresenterOutputMode::from_raw(config.output_mode) {
         ErikaPresenterOutputMode::AppleEdr => {
-            let headroom = if config.edr_headroom.is_finite() && config.edr_headroom > 0.0 {
+            let headroom = if config.edr_headroom.is_finite() {
                 config.edr_headroom
-            } else if config.edr_headroom == 0.0 {
-                4.0
             } else {
                 1.0
             };
             MetalOutputMode::apple_edr(headroom)
         }
         ErikaPresenterOutputMode::ExtendedLinear => {
-            let headroom = if config.edr_headroom.is_finite() && config.edr_headroom > 0.0 {
+            let headroom = if config.edr_headroom.is_finite() {
                 config.edr_headroom
-            } else if config.edr_headroom == 0.0 {
-                4.0
             } else {
                 1.0
             };
             MetalOutputMode::extended_linear(headroom)
         }
         ErikaPresenterOutputMode::Auto => {
-            let headroom = if config.edr_headroom.is_finite() && config.edr_headroom > 0.0 {
+            let headroom = if config.edr_headroom.is_finite() {
                 config.edr_headroom
             } else {
-                4.0
+                1.0
             };
             MetalOutputMode::auto(headroom)
         }

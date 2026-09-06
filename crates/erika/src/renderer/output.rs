@@ -47,10 +47,7 @@ impl OutputMode {
 
     pub fn resolve_for_source(self, source_is_hdr: bool) -> Self {
         match self {
-            Self::Auto { headroom } if source_is_hdr => {
-                let headroom = if headroom > 1.0 { headroom } else { 4.0 };
-                Self::apple_edr(headroom)
-            }
+            Self::Auto { headroom } if source_is_hdr && headroom > 1.0 => Self::apple_edr(headroom),
             Self::Auto { .. } => Self::Sdr,
             explicit => explicit,
         }
@@ -346,10 +343,10 @@ mod tests {
             automatic.resolve_for_source(true),
             OutputMode::apple_edr(4.0)
         );
-        assert_eq!(
-            OutputMode::auto(1.0).resolve_for_source(true),
-            OutputMode::apple_edr(4.0)
-        );
+        // An unconfigured (1.0) headroom keeps HDR sources on the SDR tone
+        // mapping path; EDR promotion requires the embedder to actually
+        // request headroom above SDR white.
+        assert_eq!(OutputMode::auto(1.0).resolve_for_source(true), OutputMode::Sdr);
         assert_eq!(
             OutputMode::auto(1.0).resolve_for_source(false),
             OutputMode::Sdr
