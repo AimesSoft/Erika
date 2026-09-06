@@ -11,7 +11,8 @@ use crate::ffmpeg::{Frame, PlanarFrame};
 use crate::overlay::OverlayFrame;
 pub use crate::renderer::pipeline::LumaUpscalerMode;
 use crate::renderer::pipeline::{
-    ColorRange, HdrMetadata, MatrixCoefficients, SourceColorState, VideoRenderPipeline,
+    ColorRange, DoviSourceMetadata, HdrMetadata, MatrixCoefficients, SourceColorState,
+    VideoRenderPipeline,
 };
 use crate::trace;
 
@@ -138,7 +139,13 @@ pub(crate) fn metal_target_color(
 ) -> crate::renderer::pipeline::TargetColorState {
     match mode {
         MetalOutputMode::Sdr | MetalOutputMode::Auto { .. } => {
-            crate::renderer::pipeline::TargetColorState::sdr(ColorPrimaries::Bt709)
+            if source.is_hdr() {
+                crate::renderer::pipeline::TargetColorState::sdr_tone_map_target(
+                    ColorPrimaries::Bt709,
+                )
+            } else {
+                crate::renderer::pipeline::TargetColorState::sdr(ColorPrimaries::Bt709)
+            }
         }
         MetalOutputMode::AppleEdr { headroom } | MetalOutputMode::ExtendedLinear { headroom } => {
             #[cfg(any(target_os = "ios", target_os = "tvos"))]
@@ -302,12 +309,14 @@ impl ImportedVideoFrame {
         range: ColorRange,
         matrix: MatrixCoefficients,
         hdr_metadata: Option<HdrMetadata>,
+        dovi_metadata: Option<DoviSourceMetadata>,
     ) {
         self.set_source_color(
             SourceColorState::new(primaries, transfer)
                 .range(range)
                 .matrix(matrix)
-                .hdr_metadata(hdr_metadata),
+                .hdr_metadata(hdr_metadata)
+                .dovi(dovi_metadata),
         );
     }
 }
@@ -600,6 +609,7 @@ impl MetalRenderer {
             frame.color_range(),
             frame.matrix_coefficients(),
             frame.hdr_metadata(),
+            frame.dovi_metadata(),
         );
         Ok(imported)
     }
@@ -1047,9 +1057,15 @@ impl RendererBackend for MetalRenderer {
         #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
         let active_output_mode = self.output_mode.resolve_for_source(false);
         let extended = attached && active_output_mode.is_edr();
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        let is_hdr10_pq = attached && self.inner.is_hdr10_pq();
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
+        let is_hdr10_pq = false;
         OutputRuntimeStatus {
             requested_mode: self.output_mode,
-            active_encoding: if extended {
+            active_encoding: if is_hdr10_pq {
+                ActiveOutputEncoding::Hdr10Pq
+            } else if extended {
                 ActiveOutputEncoding::AppleEdr
             } else {
                 ActiveOutputEncoding::SdrSrgb
@@ -1061,13 +1077,15 @@ impl RendererBackend for MetalRenderer {
             },
             native_data_space: -1,
             requested_headroom: self.output_mode.headroom(),
-            active_headroom: if extended {
+            active_headroom: if is_hdr10_pq {
+                10_000.0 / 203.0
+            } else if extended {
                 active_output_mode.headroom()
             } else {
                 1.0
             },
             active_headroom_known: attached,
-            extended_linear_active: extended,
+            extended_linear_active: extended && !is_hdr10_pq,
             fallback_reason: OutputFallbackReason::None,
             fallback_count: 0,
             data_space_failures: 0,
@@ -1304,6 +1322,7 @@ mod tests {
             ColorRange::Limited,
             MatrixCoefficients::Bt709,
             None,
+            None,
         );
 
         assert_eq!(frame.source_color().range, ColorRange::Full);
@@ -1330,6 +1349,7 @@ mod tests {
             ColorRange::Limited,
             MatrixCoefficients::Bt2020NonConstantLuminance,
             Some(metadata),
+            None,
         );
 
         assert_eq!(frame.source_color().hdr_metadata, Some(metadata));

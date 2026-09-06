@@ -8,6 +8,7 @@ use std::ffi::c_void;
 use std::process;
 use std::time::Duration;
 
+use erika::renderer::pipeline::DoviUniforms;
 use erika::renderer::wgpu::{VideoUniforms, WgpuRenderer};
 use erika::{
     PlatformSurface, RenderFrameContext, RendererBackend, WgpuSurfaceHandle, WgpuSurfaceKind,
@@ -155,5 +156,6 @@ fn bars_uniforms() -> VideoUniforms {
             [0.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, 0.0],
         ],
+        dovi: DoviUniforms::disabled(),
     }
 }

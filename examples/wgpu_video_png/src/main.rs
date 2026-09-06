@@ -2,6 +2,7 @@
 //! pipeline and writes the result to a PNG. A visual smoke test for the wgpu
 //! YCbCr->RGB path: the output PNG should show clean SMPTE-style color bars.
 
+use erika::renderer::pipeline::DoviUniforms;
 use erika::renderer::wgpu::{VideoUniforms, WgpuRenderer};
 
 const WIDTH: u32 = 256;
@@ -79,6 +80,7 @@ fn bt709_limited_uniforms() -> VideoUniforms {
             [0.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, 0.0],
         ],
+        dovi: DoviUniforms::disabled(),
     }
 }
 

@@ -127,6 +127,33 @@ jobs:
           ERIKA_NATIVE_TARGET="${{ matrix.target }}"
           cargo clippy --locked -p erika --all-targets --all-features
           --no-deps
+      - name: Build wgpu_decode_png example
+        if: matrix.arch == 'arm64'
+        run: |
+          # Link against libclang_rt.osx to resolve __isPlatformVersionAtLeast,
+          # a symbol the sanitizer runtime needs but that may be weakly referenced.
+          # See commits acae10f and 3498b8e for context.
+          RT_DIR="$(dirname "$(find "$(dirname "$(xcrun -f clang)")/../lib/clang" -name libclang_rt.osx.a | head -1)")"
+          echo "clang_rt dir: $RT_DIR"
+          ERIKA_NATIVE_PROFILE="$PROFILE" \
+          ERIKA_NATIVE_TARGET="${{ matrix.target }}" \
+          RUSTFLAGS="-C link-arg=-L$RT_DIR -C link-arg=-lclang_rt.osx" \
+            cargo build --locked -p wgpu_decode_png --release --target "${{ matrix.target }}"
+      - name: Package erika-capi bundle
+        if: matrix.arch == 'arm64'
+        run: >-
+          bash packaging/bundle.sh erika-capi-macos-arm64
+          dist/erika-capi-macos-arm64.zip
+          "target/${{ matrix.target }}/release/liberika_capi.a"
+      - name: Upload test artifacts
+        if: matrix.arch == 'arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dv-test-macos-arm64
+          path: |
+            target/aarch64-apple-darwin/release/wgpu_decode_png
+            dist/erika-capi-macos-arm64.zip
+          if-no-files-found: error
 
   ios:
     name: iOS device staticlib

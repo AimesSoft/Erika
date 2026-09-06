@@ -77,6 +77,57 @@ impl Default for OutputMode {
     }
 }
 
+/// Clamp a resolved output mode to what the attached display can actually
+/// present.
+///
+/// A compositor cannot give an EDR/PQ layer meaningful headroom on a display
+/// without EDR support: the HDR signal gets forced into the SDR range and the
+/// picture looks blown out. HDR sources therefore tone map to SDR there, and
+/// EDR requests are capped at the display's real headroom.
+pub fn clamp_output_mode_to_display(mode: OutputMode, display_headroom: f32) -> OutputMode {
+    match mode {
+        OutputMode::AppleEdr { headroom } => {
+            if display_headroom <= 1.05 {
+                OutputMode::Sdr
+            } else {
+                OutputMode::apple_edr(headroom.min(display_headroom))
+            }
+        }
+        OutputMode::ExtendedLinear { headroom } => {
+            OutputMode::extended_linear(headroom.min(display_headroom.max(1.0)))
+        }
+        other => other,
+    }
+}
+
+/// Negotiate the output mode for a source against the display the playback
+/// window is presented on.
+///
+/// `Auto` is the per-screen negotiation path: an HDR source promotes to EDR
+/// using the presenting display's *real* headroom when the screen can present
+/// EDR at all, and stays on the SDR tone mapping path when it cannot — so the
+/// same embedder configuration yields HDR on an HDR display and correctly
+/// tone-mapped SDR on a non-HDR one. The embedder's configured headroom (when
+/// set above SDR white) caps the negotiated value. Explicit EDR/ExtendedLinear
+/// requests are clamped to the display's capability instead.
+pub fn negotiate_output_mode(
+    requested: OutputMode,
+    source_is_hdr: bool,
+    display_headroom: f32,
+) -> OutputMode {
+    match requested {
+        OutputMode::Auto { headroom } => {
+            if !source_is_hdr || display_headroom <= 1.05 {
+                OutputMode::Sdr
+            } else {
+                let cap = if headroom > 1.0 { headroom } else { f32::MAX };
+                OutputMode::apple_edr(display_headroom.min(cap))
+            }
+        }
+        other => clamp_output_mode_to_display(other, display_headroom),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputColorSpace {
     Srgb,
@@ -343,8 +394,15 @@ mod tests {
             automatic.resolve_for_source(true),
             OutputMode::apple_edr(4.0)
         );
+        // An unconfigured (1.0) headroom keeps HDR sources on the SDR tone
+        // mapping path; EDR promotion requires the embedder to actually
+        // request headroom above SDR white.
         assert_eq!(
             OutputMode::auto(1.0).resolve_for_source(true),
+            OutputMode::Sdr
+        );
+        assert_eq!(
+            OutputMode::auto(1.0).resolve_for_source(false),
             OutputMode::Sdr
         );
         assert_eq!(
@@ -362,6 +420,71 @@ mod tests {
         assert_eq!(android.target.reference_white_nits, 80.0);
         assert_eq!(apple.target.edr_headroom, 4.0);
         assert_eq!(android.target.edr_headroom, 4.0);
+    }
+
+    #[test]
+    fn auto_negotiates_hdr_per_presenting_display() {
+        // EDR display: an HDR source promotes to EDR using the display's real
+        // headroom; an unconfigured host headroom (1.0) defers to the display.
+        assert_eq!(
+            negotiate_output_mode(OutputMode::auto(1.0), true, 2.0),
+            OutputMode::apple_edr(2.0)
+        );
+        // A configured headroom above SDR white caps the negotiated value.
+        assert_eq!(
+            negotiate_output_mode(OutputMode::auto(1.5), true, 2.0),
+            OutputMode::apple_edr(1.5)
+        );
+        // SDR display: HDR sources stay on the tone mapping path, however
+        // large the embedder's headroom request was.
+        assert_eq!(
+            negotiate_output_mode(OutputMode::auto(4.0), true, 1.0),
+            OutputMode::Sdr
+        );
+        // Non-HDR sources never promote, even on EDR displays.
+        assert_eq!(
+            negotiate_output_mode(OutputMode::auto(4.0), false, 2.0),
+            OutputMode::Sdr
+        );
+    }
+
+    #[test]
+    fn edr_requests_fall_back_to_sdr_on_displays_without_edr() {
+        let resolved = OutputMode::auto(4.0).resolve_for_source(true);
+
+        assert_eq!(resolved, OutputMode::apple_edr(4.0));
+        assert_eq!(clamp_output_mode_to_display(resolved, 1.0), OutputMode::Sdr);
+        assert_eq!(
+            clamp_output_mode_to_display(resolved, 1.04),
+            OutputMode::Sdr
+        );
+    }
+
+    #[test]
+    fn edr_requests_are_capped_at_real_display_headroom() {
+        let resolved = OutputMode::auto(4.0).resolve_for_source(true);
+
+        assert_eq!(
+            clamp_output_mode_to_display(resolved, 2.0),
+            OutputMode::apple_edr(2.0)
+        );
+        // A request below the display's capability stays untouched.
+        assert_eq!(
+            clamp_output_mode_to_display(OutputMode::apple_edr(1.5), 3.0),
+            OutputMode::apple_edr(1.5)
+        );
+    }
+
+    #[test]
+    fn extended_linear_requests_are_capped_but_survive_without_edr() {
+        assert_eq!(
+            clamp_output_mode_to_display(OutputMode::extended_linear(2.0), 1.0),
+            OutputMode::extended_linear(1.0)
+        );
+        assert_eq!(
+            clamp_output_mode_to_display(OutputMode::Sdr, 1.0),
+            OutputMode::Sdr
+        );
     }
 
     #[test]

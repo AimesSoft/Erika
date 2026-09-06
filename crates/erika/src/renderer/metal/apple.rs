@@ -57,7 +57,8 @@ use crate::renderer::metal::{
     VideoFrameTextureSource, VideoRenderFrame, fourcc_string, metal_drawable_pixel_format,
     metal_target_color,
 };
-use crate::renderer::pipeline::{ColorRange, LumaUpscalerMode, ToneMapOperator};
+use crate::renderer::output::negotiate_output_mode;
+use crate::renderer::pipeline::{ColorRange, DoviUniforms, LumaUpscalerMode, ToneMapOperator};
 use crate::renderer::pipeline::{SourceColorState, TargetColorState};
 use crate::renderer::presentation::PresentationLayout as VideoPresentationLayout;
 use crate::subtitle::{AssColor, SubtitleAlphaBitmap};
@@ -362,6 +363,54 @@ impl MetalRendererImpl {
         self.output_mode
     }
 
+    pub fn is_hdr10_pq(&self) -> bool {
+        self.output_mode.is_edr()
+            && matches!(
+                self.layer_color_space_label,
+                "itur-2100-pq" | "display-p3-pq"
+            )
+    }
+
+    /// EDR headroom of the display the player window is presented on.
+    ///
+    /// The *potential* value is used deliberately: it reports what the display
+    /// can do regardless of the current brightness setting, so playback does
+    /// not flip between SDR and EDR while the brightness slider moves. Falls
+    /// back to 1.0 (no EDR) when AppKit cannot answer. Resolved through
+    /// mainScreen rather than the layer's window because CALayer exposes no
+    /// safe screen accessor; multi-display hosts that move a window between
+    /// screens of differing capability re-query per source anyway.
+    #[cfg(target_os = "macos")]
+    fn display_edr_headroom(&self) -> f32 {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, AnyObject};
+        use objc2::sel;
+
+        unsafe {
+            let Some(class) = AnyClass::get(c"NSScreen") else {
+                return 1.0;
+            };
+            let main: Option<Retained<AnyObject>> = msg_send![class, mainScreen];
+            let Some(screen) = main else {
+                return 1.0;
+            };
+            let selector = sel!(maximumPotentialExtendedDynamicRangeColorComponentValue);
+            let responds: bool = msg_send![&*screen, respondsToSelector: selector];
+            if !responds {
+                return 1.0;
+            }
+            let potential: f64 = msg_send![
+                &*screen,
+                maximumPotentialExtendedDynamicRangeColorComponentValue
+            ];
+            if potential.is_finite() && potential > 0.0 {
+                potential as f32
+            } else {
+                1.0
+            }
+        }
+    }
+
     fn select_output_mode_for_source(&mut self, source: SourceColorState) {
         let source_is_hdr = source.is_hdr();
         if source_is_hdr {
@@ -373,7 +422,18 @@ impl MetalRendererImpl {
         let selected = if self.flutter_texture_attached {
             MetalOutputMode::Sdr
         } else {
-            self.requested_output_mode.resolve_for_source(source_is_hdr)
+            #[cfg(target_os = "macos")]
+            {
+                negotiate_output_mode(
+                    self.requested_output_mode,
+                    source_is_hdr,
+                    self.display_edr_headroom(),
+                )
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                self.requested_output_mode.resolve_for_source(source_is_hdr)
+            }
         };
         if selected != self.output_mode {
             self.set_output_mode(selected);
@@ -869,6 +929,10 @@ impl MetalRendererImpl {
                 ],
                 luma_coefficients: luma_coefficients(frame.pipeline.luma_coefficients()),
                 gamut_matrix_rows: frame.pipeline.gamut_matrix().row4s(),
+                dovi: DoviUniforms::of_for_representation(
+                    &frame.pipeline.source,
+                    matches!(frame.frame.info.format, ImportedVideoFormat::P010),
+                ),
             };
             encoder.setRenderPipelineState(&pipeline);
             encoder.setFragmentTexture_atIndex(Some(luma), 0);
@@ -1066,6 +1130,10 @@ impl MetalRendererImpl {
                 ],
                 luma_coefficients: luma_coefficients(frame.pipeline.luma_coefficients()),
                 gamut_matrix_rows: frame.pipeline.gamut_matrix().row4s(),
+                dovi: DoviUniforms::of_for_representation(
+                    &frame.pipeline.source,
+                    matches!(frame.frame.info.format, ImportedVideoFormat::P010),
+                ),
             };
             encoder.setRenderPipelineState(&pipeline);
             encoder.setFragmentTexture_atIndex(Some(luma), 0);
@@ -2155,6 +2223,7 @@ struct VideoUniforms {
     nits: [f32; 4],
     luma_coefficients: [f32; 4],
     gamut_matrix_rows: [[f32; 4]; 3],
+    dovi: DoviUniforms,
 }
 
 fn metal_pixel_format(format: MetalDrawablePixelFormat) -> MTLPixelFormat {
@@ -2264,6 +2333,7 @@ fn tone_map_code(operator: ToneMapOperator) -> u32 {
         ToneMapOperator::Clip => 0,
         ToneMapOperator::Reinhard => 1,
         ToneMapOperator::Mobius => 2,
+        ToneMapOperator::Bt2390 => 3,
     }
 }
 
@@ -2787,6 +2857,14 @@ struct VideoUniforms {
     float4 nits;
     float4 luma_coefficients;
     float4 gamut_matrix_rows[3];
+    float4 dovi_flags;
+    float4 dovi_pivots[6];
+    float4 dovi_bounds[3];
+    float4 dovi_coefficients[24];
+    float4 dovi_mmr[144];
+    float4 dovi_nonlinear_matrix[3];
+    float4 dovi_nonlinear_offset;
+    float4 dovi_lms_matrix[3];
 };
 
 float source_peak_nits(constant VideoUniforms& uniforms) {
@@ -2876,7 +2954,34 @@ float3 source_reference_to_nits(float3 rgb, constant VideoUniforms& uniforms) {
     return max(rgb, float3(0.0)) * source_reference_white_nits(uniforms);
 }
 
+// ITU-R BT.2390 EETF evaluated in the PQ domain, ported from libplacebo's
+// pl_tone_map_bt2390 with the default knee offset (1.0) and a 0 target black
+// level (which makes the black-point adaptation stage a no-op). Mirrors the
+// Rust reference implementation in `renderer/pipeline.rs` tests
+// (`bt2390_eetf`) and the WGSL/HLSL copies.
+float bt2390_eetf(float nits, constant VideoUniforms& uniforms) {
+    float src_peak_pq = max(pq_inverse_eotf(source_peak_nits(uniforms) / 10000.0), 0.000001);
+    float dst_peak_pq = max(pq_inverse_eotf(target_peak_nits(uniforms) / 10000.0), 0.000001);
+    float max_lum = clamp(dst_peak_pq / src_peak_pq, 0.0, 1.0);
+    float x = clamp(pq_inverse_eotf(clamp(nits, 0.0, 10000.0) / 10000.0) / src_peak_pq, 0.0, 1.0);
+    float ks = 2.0 * max_lum - 1.0;
+    float u = x;
+    if (ks < 1.0 && x > ks) {
+        float tb = (x - ks) / (1.0 - ks);
+        float tb2 = tb * tb;
+        float tb3 = tb2 * tb;
+        float pb = (2.0 * tb3 - 3.0 * tb2 + 1.0) * ks
+                 + (tb3 - 2.0 * tb2 + tb) * (1.0 - ks)
+                 + (-2.0 * tb3 + 3.0 * tb2) * max_lum;
+        u = pb;
+    }
+    return 10000.0 * pq_eotf(u * src_peak_pq);
+}
+
 float3 tone_map_nits(float3 nits, constant VideoUniforms& uniforms) {
+    if (uniforms.target_transfer == 3) {
+        return clamp(nits, 0.0, 10000.0);
+    }
     float source_peak = source_peak_nits(uniforms);
     float target_peak = target_peak_nits(uniforms);
     float3 x = max(nits, float3(0.0)) / target_peak;
@@ -2892,6 +2997,22 @@ float3 tone_map_nits(float3 nits, constant VideoUniforms& uniforms) {
         float3 shoulder = knee + (1.0 - knee) * (float3(1.0) - pow(float3(1.0) - t, float3(2.0)));
         return target_peak * mix(x, shoulder, step(float3(knee), x));
     }
+    if (uniforms.tone_map == 3) {
+        // Luma-preserving BT.2390: map the pixel's BT.709 luma through the
+        // EETF and scale RGB uniformly, so hue and saturation survive the
+        // 10:1 compression (per-channel mapping washes saturated colors).
+        float luma_nits = dot(nits, float3(0.2126, 0.7152, 0.0722));
+        float mapped = bt2390_eetf(luma_nits, uniforms);
+        float scale = mapped / max(luma_nits, 0.0001);
+        float3 out_nits = max(nits, float3(0.0)) * scale;
+        float maxc = max(out_nits.r, max(out_nits.g, out_nits.b));
+        if (maxc > target_peak) {
+            float l2 = dot(out_nits, float3(0.2126, 0.7152, 0.0722));
+            float t = clamp((maxc - target_peak) / (maxc - l2), 0.0, 1.0);
+            out_nits = mix(out_nits, float3(l2), t);
+        }
+        return out_nits;
+    }
     return target_peak * clamp(x, 0.0, 1.0);
 }
 
@@ -2901,6 +3022,20 @@ float3 apply_gamut_map(float3 rgb, constant VideoUniforms& uniforms) {
         dot(uniforms.gamut_matrix_rows[1].xyz, rgb),
         dot(uniforms.gamut_matrix_rows[2].xyz, rgb)
     );
+}
+
+// Gamut mapping: blend out-of-gamut (negative) components towards their
+// BT.709 luma — just enough to fit the gamut while preserving hue —
+// matching libplacebo's desaturate gamut mode. Mirrors the WGSL/HLSL
+// `gamut_desaturate` and the Rust reference in `renderer/pipeline.rs` tests.
+float3 gamut_desaturate(float3 rgb) {
+    float minc = min(rgb.r, min(rgb.g, rgb.b));
+    if (minc >= 0.0) {
+        return rgb;
+    }
+    float luma = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+    float t = clamp(minc / (minc - luma), 0.0, 1.0);
+    return mix(rgb, float3(luma), t);
 }
 
 float3 target_nits_to_reference_linear(float3 nits, constant VideoUniforms& uniforms) {
@@ -2964,6 +3099,12 @@ struct RangeExpandedYCbCr {
 };
 
 RangeExpandedYCbCr expand_ycbcr_range(float y, float2 cbcr, constant VideoUniforms& uniforms) {
+    if (uniforms.is_p010 != 0) {
+        // P010 stores 10-bit codes as code << 6 in a 16-bit UNORM texture.
+        constexpr float p010_scale = 65535.0 / 65472.0;
+        y *= p010_scale;
+        cbcr *= p010_scale;
+    }
     if (uniforms.full_range != 0) {
         return RangeExpandedYCbCr { y, cbcr - float2(0.5) };
     }
@@ -2977,6 +3118,83 @@ RangeExpandedYCbCr expand_ycbcr_range(float y, float2 cbcr, constant VideoUnifor
     y = (y - (16.0 / 255.0)) * (255.0 / 219.0);
     cbcr = (cbcr - float2(128.0 / 255.0)) * (255.0 / 224.0);
     return RangeExpandedYCbCr { y, cbcr };
+}
+
+// Dolby Vision RPU reshaping, ported from libplacebo's `pl_shader_dovi_reshape`
+// (the renderer behind mpv's Dolby Vision mapping). The base-layer signal is
+// reshaped per component through piecewise polynomial/MMR curves selected by
+// pivot comparison, where MMR coefficients mix all three raw components.
+float3 dovi_reshaped_signal(float3 sig_in, constant VideoUniforms& uniforms) {
+    float3 sig = clamp(sig_in, 0.0, 1.0);
+    float result[3] = { sig.r, sig.g, sig.b };
+    float4 flags = uniforms.dovi_flags;
+    for (uint c = 0u; c < 3u; c = c + 1u) {
+        uint segments = uint(flags[1u + c]);
+        if (segments == 0u) {
+            continue;
+        }
+        float s = result[c];
+        uint index = 0u;
+        for (uint i = 0u; i < 7u; i = i + 1u) {
+            float4 pivot_row = uniforms.dovi_pivots[2u * c + i / 4u];
+            float pivot = pivot_row[i % 4u];
+            if (s >= pivot) {
+                index = index + 1u;
+            }
+        }
+        float4 coeff = uniforms.dovi_coefficients[8u * c + index];
+        if (coeff.w < 0.5) {
+            s = (coeff.z * s + coeff.y) * s + coeff.x;
+        } else {
+            uint base = 48u * c + uint(coeff.y);
+            uint order = uint(coeff.w);
+            float4 sig_x = float4(
+                sig.x * sig.y,
+                sig.x * sig.z,
+                sig.y * sig.z,
+                sig.x * sig.y * sig.z
+            );
+            s = coeff.x;
+            s = s + dot(uniforms.dovi_mmr[base].xyz, sig);
+            s = s + dot(uniforms.dovi_mmr[base + 1u], sig_x);
+            if (order >= 2u) {
+                float3 sig2 = sig * sig;
+                float4 sig_x2 = sig_x * sig_x;
+                s = s + dot(uniforms.dovi_mmr[base + 2u].xyz, sig2);
+                s = s + dot(uniforms.dovi_mmr[base + 3u], sig_x2);
+                if (order >= 3u) {
+                    s = s + dot(uniforms.dovi_mmr[base + 4u].xyz, sig2 * sig);
+                    s = s + dot(uniforms.dovi_mmr[base + 5u], sig_x2 * sig_x);
+                }
+            }
+        }
+        float4 bounds = uniforms.dovi_bounds[c];
+        result[c] = clamp(s, bounds.x, bounds.y);
+    }
+    return float3(result[0], result[1], result[2]);
+}
+
+// Reshaped nonlinear signal to PQ-encoded IPT via the RPU's ycc_to_rgb matrix
+// and signal offsets. Applying the RPU offsets keeps integer offset codes
+// exactly on sample codes (2^bits/(2^bits-1) folded in on the CPU).
+float3 dovi_signal_to_pq_rgb(float3 sig, constant VideoUniforms& uniforms) {
+    float3 reshaped = dovi_reshaped_signal(sig, uniforms) - uniforms.dovi_nonlinear_offset.xyz;
+    return float3(
+        dot(uniforms.dovi_nonlinear_matrix[0].xyz, reshaped),
+        dot(uniforms.dovi_nonlinear_matrix[1].xyz, reshaped),
+        dot(uniforms.dovi_nonlinear_matrix[2].xyz, reshaped)
+    );
+}
+
+// Linearized BT.2020-referred HPE LMS back to linear RGB, using the composite
+// of the fixed HPE inverse with the RPU's rgb_to_lms matrix (premultiplied on
+// the CPU, matching libplacebo's dovi_lms2rgb).
+float3 dovi_lms_to_rgb(float3 linear, constant VideoUniforms& uniforms) {
+    return float3(
+        dot(uniforms.dovi_lms_matrix[0].xyz, linear),
+        dot(uniforms.dovi_lms_matrix[1].xyz, linear),
+        dot(uniforms.dovi_lms_matrix[2].xyz, linear)
+    );
 }
 
 vertex VertexOut erika_video_vertex(
@@ -3016,21 +3234,37 @@ fragment float4 erika_video_fragment(
         ? float2(in.tex_coord.x * 0.5, in.tex_coord.y)
         : in.tex_coord;
     float2 alpha_coord = float2(0.5 + in.tex_coord.x * 0.5, in.tex_coord.y);
-    float y = luma_texture.sample(video_sampler, color_coord).r;
-    float2 cbcr = chroma_texture.sample(video_sampler, color_coord).rg;
-    RangeExpandedYCbCr expanded = expand_ycbcr_range(y, cbcr, uniforms);
-    y = expanded.y;
-    cbcr = expanded.cbcr;
-
-    float kr = uniforms.luma_coefficients.x;
-    float kg = max(uniforms.luma_coefficients.y, 0.000001);
-    float kb = uniforms.luma_coefficients.z;
+    float y_sample = luma_texture.sample(video_sampler, color_coord).r;
+    float2 cbcr_sample = chroma_texture.sample(video_sampler, color_coord).rg;
+    bool dovi_enabled = uniforms.dovi_flags.x != 0.0;
     float3 rgb;
-    rgb.r = y + 2.0 * (1.0 - kr) * cbcr.y;
-    rgb.b = y + 2.0 * (1.0 - kb) * cbcr.x;
-    rgb.g = (y - kr * rgb.r - kb * rgb.b) / kg;
+    if (dovi_enabled) {
+        // The base layer carries the raw 12-bit DV signal (10-bit container,
+        // full range); range expansion and the YCbCr matrix are replaced by
+        // the RPU reshaping + ycc_to_rgb path.
+        float3 sig = float3(y_sample, cbcr_sample.x, cbcr_sample.y);
+        if (uniforms.is_p010 != 0) {
+            sig *= 65535.0 / 65472.0;
+        }
+        rgb = dovi_signal_to_pq_rgb(sig, uniforms);
+    } else {
+        RangeExpandedYCbCr expanded = expand_ycbcr_range(y_sample, cbcr_sample, uniforms);
+        float y = expanded.y;
+        float2 cbcr = expanded.cbcr;
+
+        float kr = uniforms.luma_coefficients.x;
+        float kg = max(uniforms.luma_coefficients.y, 0.000001);
+        float kb = uniforms.luma_coefficients.z;
+        rgb.r = y + 2.0 * (1.0 - kr) * cbcr.y;
+        rgb.b = y + 2.0 * (1.0 - kb) * cbcr.x;
+        rgb.g = (y - kr * rgb.r - kb * rgb.b) / kg;
+    }
     rgb = transfer_to_source_reference_linear(rgb, uniforms);
+    if (dovi_enabled) {
+        rgb = dovi_lms_to_rgb(rgb, uniforms);
+    }
     rgb = apply_gamut_map(rgb, uniforms);
+    rgb = gamut_desaturate(rgb);
     rgb = source_reference_to_nits(rgb, uniforms);
     rgb = tone_map_nits(rgb, uniforms);
     rgb = target_nits_to_reference_linear(rgb, uniforms);
@@ -3621,7 +3855,7 @@ mod tests {
 
     #[test]
     fn video_uniforms_keep_float4_fields_aligned() {
-        assert_eq!(std::mem::size_of::<super::VideoUniforms>(), 144);
+        assert_eq!(std::mem::size_of::<super::VideoUniforms>(), 3104);
         assert_eq!(std::mem::offset_of!(super::VideoUniforms, edr_output), 20);
         assert_eq!(std::mem::offset_of!(super::VideoUniforms, rect), 32);
         assert_eq!(std::mem::offset_of!(super::VideoUniforms, viewport), 48);
@@ -3634,6 +3868,7 @@ mod tests {
             std::mem::offset_of!(super::VideoUniforms, gamut_matrix_rows),
             96
         );
+        assert_eq!(std::mem::offset_of!(super::VideoUniforms, dovi), 144);
     }
 
     #[test]
