@@ -261,6 +261,12 @@ float4 final_output(float3 rgb, float alpha) {
 }
 
 void expand_ycbcr_range(float y_in, float2 cbcr_in, out float y, out float2 cbcr) {
+    if (is_p010 != 0u) {
+        // P010 stores 10-bit codes as code << 6 in a 16-bit UNORM texture.
+        const float p010_scale = 65535.0 / 65472.0;
+        y_in *= p010_scale;
+        cbcr_in *= p010_scale;
+    }
     if (full_range != 0u) {
         y = y_in;
         cbcr = cbcr_in - float2(0.5, 0.5);

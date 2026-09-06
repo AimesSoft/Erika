@@ -929,6 +929,23 @@ mod tests {
     }
 
     #[test]
+    fn p010_unorm_prescale_is_present_across_video_shaders() {
+        // P010 packs 10-bit codes as code << 6, so the UNORM sampler reads
+        // 64/65472 for full black instead of the nominal 64/1023. Every
+        // backend must undo this before range expansion, or limited-range
+        // P010 renders slightly lifted and slightly dull.
+        let shaders = [
+            include_str!("wgpu_video.wgsl"),
+            include_str!("metal/apple.rs"),
+            include_str!("d3d11.rs"),
+        ];
+        for shader in shaders {
+            assert!(shader.contains("65535.0 / 65472.0"));
+            assert!(shader.contains("P010 stores 10-bit codes as code << 6"));
+        }
+    }
+
+    #[test]
     fn overlay_shaders_handle_sdr_ui_for_hdr_targets() {
         let metal = include_str!("metal/apple.rs");
         let d3d11 = include_str!("d3d11.rs");

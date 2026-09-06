@@ -2964,6 +2964,12 @@ struct RangeExpandedYCbCr {
 };
 
 RangeExpandedYCbCr expand_ycbcr_range(float y, float2 cbcr, constant VideoUniforms& uniforms) {
+    if (uniforms.is_p010 != 0) {
+        // P010 stores 10-bit codes as code << 6 in a 16-bit UNORM texture.
+        constexpr float p010_scale = 65535.0 / 65472.0;
+        y *= p010_scale;
+        cbcr *= p010_scale;
+    }
     if (uniforms.full_range != 0) {
         return RangeExpandedYCbCr { y, cbcr - float2(0.5) };
     }
