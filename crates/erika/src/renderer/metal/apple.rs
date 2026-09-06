@@ -399,8 +399,10 @@ impl MetalRendererImpl {
                     }
                 }
             };
-            let potential: f64 =
-                msg_send![&*screen, maximumPotentialExtendedDynamicRangeColorComponentValue];
+            let potential: f64 = msg_send![
+                &*screen,
+                maximumPotentialExtendedDynamicRangeColorComponentValue
+            ];
             if potential.is_finite() && potential > 0.0 {
                 potential as f32
             } else {

@@ -399,10 +399,7 @@ mod tests {
         let resolved = OutputMode::auto(4.0).resolve_for_source(true);
 
         assert_eq!(resolved, OutputMode::apple_edr(4.0));
-        assert_eq!(
-            clamp_output_mode_to_display(resolved, 1.0),
-            OutputMode::Sdr
-        );
+        assert_eq!(clamp_output_mode_to_display(resolved, 1.0), OutputMode::Sdr);
         assert_eq!(
             clamp_output_mode_to_display(resolved, 1.04),
             OutputMode::Sdr
