@@ -3610,6 +3610,29 @@ pub unsafe extern "C" fn erika_presenter_windows_composition_swapchain_iunknown(
     })
 }
 
+/// Returns an AddRef'd IUnknown for the latest completed, immutable Windows
+/// Flutter SDR frame. The caller owns the COM reference and must Release it.
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_windows_flutter_texture_iunknown(
+    handle: *mut ErikaPresenterHandle,
+    out_texture: *mut *mut std::ffi::c_void,
+) -> ErikaStatus {
+    if out_texture.is_null() {
+        set_last_error("Windows Flutter texture output pointer is null");
+        return ErikaStatus::NullPointer;
+    }
+    unsafe { *out_texture = std::ptr::null_mut() };
+    with_presenter_mut(handle, |handle| {
+        let Some(texture) = handle.presenter.windows_flutter_texture_iunknown() else {
+            set_last_error("presenter does not own a Windows Flutter texture");
+            return ErikaStatus::PlayerError;
+        };
+        unsafe { *out_texture = texture };
+        ErikaStatus::Ok
+    })
+}
+
 #[cfg(any(
     target_os = "macos",
     any(target_os = "ios", target_os = "tvos"),
@@ -5298,6 +5321,10 @@ mod tests {
         );
         let expected_backend = if cfg!(all(target_os = "android", feature = "wgpu")) {
             ErikaUpscalerBackendStatus::Scalar
+        } else if cfg!(target_os = "windows") {
+            // D3D11 initializes the requested GPU upscaler after attaching a
+            // device; before attachment the existing backend reports Building.
+            ErikaUpscalerBackendStatus::Building
         } else {
             ErikaUpscalerBackendStatus::Inactive
         };

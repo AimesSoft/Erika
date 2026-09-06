@@ -22,9 +22,15 @@ bool get _usesOhosTextureView =>
 
 bool get _supportsFlutterTextureVideoView =>
     !kIsWeb &&
-    (defaultTargetPlatform == TargetPlatform.macOS || _usesOhosTextureView);
+    (defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.windows ||
+        _usesOhosTextureView);
 
-/// Flutter platform-view video surface backed by AppKit/UIKit.
+/// Native video surface backed by AppKit/UIKit or a Windows HWND.
+///
+/// Windows keeps video outside Flutter's texture compositor so opaque playback
+/// can negotiate HDR10. Use [ErikaTextureVideoView] explicitly for SDR content
+/// that needs Flutter clipping or color filters.
 ///
 /// This is the compatibility surface. Full-player Apple hosts should usually
 /// prefer [ErikaWindowOverlayVideoView] so Erika owns the native Metal video
@@ -51,9 +57,11 @@ class ErikaVideoView extends StatefulWidget {
 
 /// Video surface composited as a Flutter [Texture].
 ///
-/// On macOS this uses an IOSurface-backed Metal texture, so regular Flutter
-/// effects such as opacity, clipping and color filters apply to the video. On
-/// platforms without a native texture path it falls back to [ErikaVideoView].
+/// On macOS this uses an IOSurface-backed Metal texture, and on Windows it uses
+/// a shareable D3D11 texture. Regular Flutter effects such as opacity, clipping
+/// and color filters therefore apply to the video on both desktop platforms.
+/// Windows textures are SDR; use [ErikaVideoView] for native HDR playback.
+/// Windows supports [BlendMode.srcOver] and native [BlendMode.overlay] only.
 class ErikaTextureVideoView extends StatelessWidget {
   const ErikaTextureVideoView({
     super.key,
@@ -76,6 +84,22 @@ class ErikaTextureVideoView extends StatelessWidget {
         defaultTargetPlatform == TargetPlatform.macOS &&
         blendMode != BlendMode.srcOver) {
       return ErikaVideoView(
+        player: player,
+        debugLabel: debugLabel,
+        onPlatformViewIdChanged: onTextureIdChanged,
+        blendMode: blendMode,
+        opacity: opacity,
+      );
+    }
+    if (!kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.windows &&
+        blendMode != BlendMode.srcOver) {
+      if (blendMode != BlendMode.overlay) {
+        throw UnsupportedError(
+          'Windows ErikaTextureVideoView supports only srcOver and overlay.',
+        );
+      }
+      return ErikaWindowOverlayVideoView(
         player: player,
         debugLabel: debugLabel,
         onPlatformViewIdChanged: onTextureIdChanged,
@@ -506,11 +530,7 @@ class _ErikaAndroidVideoViewState extends State<_ErikaAndroidVideoView> {
     unawaited(_attachWithRetry(widget.player, viewId, generation));
   }
 
-  bool _attachmentIsCurrent(
-    ErikaPlayer player,
-    int viewId,
-    int generation,
-  ) =>
+  bool _attachmentIsCurrent(ErikaPlayer player, int viewId, int generation) =>
       mounted &&
       generation == _attachmentGeneration &&
       identical(widget.player, player) &&
@@ -603,11 +623,9 @@ class _ErikaAndroidVideoViewState extends State<_ErikaAndroidVideoView> {
     return PlatformViewLink(
       key: ValueKey<Object>(_surfaceConfigurationKey(widget.player)),
       viewType: 'erika_flutter/hdr_video_view',
-      surfaceFactory: (
-        BuildContext context,
-        PlatformViewController controller,
-      ) =>
-          AndroidViewSurface(
+      surfaceFactory:
+          (BuildContext context, PlatformViewController controller) =>
+              AndroidViewSurface(
         controller: controller as AndroidViewController,
         hitTestBehavior: PlatformViewHitTestBehavior.transparent,
         gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
@@ -815,8 +833,10 @@ class _ErikaWindowOverlayVideoViewState
       if (!box.hasSize || box.size.isEmpty) {
         return;
       }
-      final origin = box.localToGlobal(Offset.zero);
-      rect = origin & box.size;
+      rect = MatrixUtils.transformRect(
+        box.getTransformTo(null),
+        Offset.zero & box.size,
+      );
     } else {
       rect = Rect.zero;
     }

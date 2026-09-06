@@ -864,6 +864,15 @@ pub trait RendererBackend {
     fn composition_swapchain_iunknown(&self) -> Option<*mut std::ffi::c_void> {
         None
     }
+
+    /// AddRef'd `IUnknown` for the latest completed Windows Flutter SDR frame.
+    ///
+    /// The caller owns the reference and must `Release` it. This lets the
+    /// Windows embedder expose a shareable D3D11 snapshot to Flutter. Published
+    /// resources are immutable, even after the renderer produces another frame.
+    fn windows_flutter_texture_iunknown(&self) -> Option<*mut std::ffi::c_void> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

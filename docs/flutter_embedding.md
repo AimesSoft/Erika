@@ -66,12 +66,33 @@ platform view. On macOS the plugin allocates an IOSurface-backed
 `CVPixelBuffer` pool, renders into its Metal texture directly (no per-frame CPU
 readback), and publishes frames to Flutter, so regular Flutter effects —
 `Opacity`, clipping, transforms, and color filters — apply to the video. On
-OpenHarmony it reuses the registered external texture. On other platforms it
+OpenHarmony it reuses the registered external texture. On Windows it offers
+explicit SDR BGRA8 output (see below). On other platforms it
 falls back to `ErikaVideoView`.
 
 When `blendMode` is not `srcOver` on macOS, the widget routes back to the native
 platform view so Core Animation can blend the video against the real backdrop
 (see Transparent Video and Blend Modes below).
+
+Windows `ErikaVideoView` keeps the native HWND/swapchain path and HDR10
+negotiation for ordinary opaque playback. Only explicitly selecting
+`ErikaTextureVideoView` opts into SDR texture composition. `srcOver` supports
+Flutter opacity/clipping/filters; `overlay` uses native Windows Composition;
+other Windows blend modes are rejected.
+
+Each changed texture frame is copied on the GPU into a completed, immutable
+shared snapshot, without CPU pixel readback. Paused output is reused until the
+video, subtitles, danmaku, HUD, seek generation or surface size changes. The
+plugin holds only the latest and raster-acquired snapshots. Opening a shared
+handle does not signal GPU sampling completion, so published textures are never
+overwritten. These extra copies and GPU handoff barriers do not apply to native
+opaque HWND playback, and the decoder pool retains main's existing size.
+
+The new texture API requires a matching source runtime
+(`ERIKA_FORCE_SOURCE_BUILD=1` from a checkout). The pinned v0.1.7 prebuilt lacks
+it; missing optional texture symbols do not prevent native player creation.
+Publish matching native artifacts and update their version/checksums before
+releasing this capability.
 
 ## Android Surface Strategies
 

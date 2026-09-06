@@ -168,6 +168,21 @@ jobs:
           Set-Location (Join-Path $root "app")
           flutter pub add erika_flutter --path ../erika_flutter
           flutter build windows --debug
+      - name: Test Windows GPU publication and plugin compilation
+        shell: pwsh
+        run: |
+          $flutterSdk = Split-Path (Split-Path (Get-Command flutter).Source)
+          $engine = Join-Path $flutterSdk "bin/cache/artifacts/engine/windows-x64"
+          $nativeTests = Join-Path $env:RUNNER_TEMP "erika-windows-native-tests"
+          $consumer = Join-Path $env:RUNNER_TEMP "erika-windows/app/build/windows"
+          $compatDll = Get-ChildItem $consumer -Recurse -Filter erika_capi.dll | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $compatDll) { throw "Missing bundled compatibility runtime" }
+          cmake -S packages/erika_flutter/windows/tests -B $nativeTests -A x64 "-DFLUTTER_ENGINE_DIR=$engine" "-DERIKA_COMPAT_DLL=$compatDll"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build $nativeTests --config Debug
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir $nativeTests -C Debug --output-on-failure
+          exit $LASTEXITCODE
 
   openharmony:
     name: OpenHarmony bridge from isolated package
