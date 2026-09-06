@@ -28,6 +28,10 @@
 
 ### Playback
 
+- Audio output now has a dedicated owner for PCM delivery, clock observations,
+  device recovery and playback-rate commits. Rendering stalls no longer stop
+  audio feeding. Acknowledged control boundaries preserve pause, seek, track
+  changes, EOF/replay and shutdown ordering with the existing 250 ms rate bridge.
 - Host-provided Metal layers explicitly retain the finite drawable timeout
   (up to one second before returning nil); skipped presents are counted with
   throttled diagnostics.
