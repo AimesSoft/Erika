@@ -15,7 +15,8 @@ use crate::core::{
 };
 use crate::ffmpeg::{
     self, AudioResampler, Decoder, DecoderBackend, DecoderConfig, DecoderOutputFrame, Demuxer,
-    Frame, OwnedCodecParameters, PcmAudioFrame, PcmFormat, StreamSelection, SubtitleDecoder,
+    DoviRejectReason, Frame, OwnedCodecParameters, PcmAudioFrame, PcmFormat, StreamSelection,
+    SubtitleDecoder,
 };
 use crate::source::{self, source_from_uri_with_hint, source_from_uri_with_options};
 use crate::subtitle::{
@@ -732,6 +733,8 @@ pub struct PlaybackSession {
     audio_seek_dropped_packets: usize,
     mediacodec_surface_disabled: bool,
     video_decoder_fallbacks: u64,
+    dolby_vision_profile: Option<u8>,
+    dovi_rpu_diagnostics: DoviRpuDiagnostics,
     video_decoder_events: VecDeque<VideoDecoderEvent>,
     queue_limits: PlaybackQueueLimits,
     buffer_recovery_audio: Duration,
@@ -878,14 +881,16 @@ impl PlaybackSession {
         let mut video_decoder = None;
         let mut video_decoder_fallbacks = 0u64;
         let mut video_decoder_events = VecDeque::new();
+        let mut dolby_vision_profile = None;
         let mut selected_streams = Vec::new();
         if let Some(stream_index) = selected_video_track {
             selected_streams.push(stream_index);
             let parameters = codec_parameters_for(&codec_parameters, stream_index)?;
             let codec = parameters.codec_name();
             let requested_config = config.video_decode.decoder_config();
+            dolby_vision_profile = parameters.dolby_vision_profile();
             let (decoder_config, decode_fallback_reason) =
-                dolby_vision_decode_fallback(parameters.dolby_vision_profile(), requested_config);
+                dolby_vision_decode_fallback(dolby_vision_profile, requested_config);
             video_decoder = Some(
                 match open_video_decoder(parameters, decoder_config, &decoder_resources) {
                     Ok(decoder) => {
@@ -1235,6 +1240,8 @@ impl PlaybackSession {
             audio_seek_dropped_packets: 0,
             mediacodec_surface_disabled,
             video_decoder_fallbacks,
+            dolby_vision_profile,
+            dovi_rpu_diagnostics: DoviRpuDiagnostics::default(),
             video_decoder_events,
             queue_limits,
             buffer_recovery_audio: buffer_recovery_audio_for_request(request),
@@ -2759,6 +2766,8 @@ impl PlaybackSession {
         let status = drain_video_frames(
             self.video_decoder.as_mut().expect("video decoder exists"),
             &mut self.video_frames,
+            self.dolby_vision_profile,
+            &mut self.dovi_rpu_diagnostics,
         )?;
         let video_frame_limit = self.active_video_frame_queue_limit();
         if demand != PlaybackPumpDemand::BufferingAudio {
@@ -5698,12 +5707,20 @@ fn trace_clock_correction(
 fn drain_video_frames(
     decoder: &mut Decoder,
     frames: &mut VecDeque<DecodedVideoFrame>,
+    dolby_vision_profile: Option<u8>,
+    dovi_rpu_diagnostics: &mut DoviRpuDiagnostics,
 ) -> Result<DecoderDrainStatus> {
     let decode_backend = decoder.backend();
     let mut status = DecoderDrainStatus::default();
     loop {
         match decoder.receive_frame()? {
             DecoderOutputFrame::Frame(frame) => {
+                diagnose_dovi_frame(
+                    dolby_vision_profile,
+                    dovi_rpu_diagnostics,
+                    &frame,
+                    decode_backend,
+                );
                 frames.push_back(DecodedVideoFrame {
                     frame,
                     decode_backend,
@@ -5717,6 +5734,66 @@ fn drain_video_frames(
             }
         }
     }
+}
+
+/// Per-stream accounting for decoded frames whose Dolby Vision RPU cannot
+/// feed the mapping path.
+#[derive(Debug, Default)]
+struct DoviRpuDiagnostics {
+    unavailable_frames: u64,
+}
+
+/// Re-report interval after the first diagnostic, so a broken stream stays
+/// visible over long playback without logging at frame rate.
+const DOVI_RPU_DIAGNOSTIC_INTERVAL: u64 = 1024;
+
+impl DoviRpuDiagnostics {
+    fn record_unavailable_frame(&mut self) -> u64 {
+        self.unavailable_frames = self.unavailable_frames.saturating_add(1);
+        self.unavailable_frames
+    }
+
+    fn should_report(count: u64) -> bool {
+        count == 1 || count % DOVI_RPU_DIAGNOSTIC_INTERVAL == 0
+    }
+}
+
+/// Decides whether a frame lacking usable RPU metadata warrants a diagnostic.
+/// A missing RPU is only fatal on Profile 5, whose base layer is not
+/// HDR10-compatible; other profiles either repeat RPUs across frames or fall
+/// back to a base layer that displays correctly. A *present but rejected*
+/// RPU always warrants one: the stream intended to carry Dolby Vision mapping
+/// and the frame will silently display unmapped.
+fn dovi_rpu_diagnostic_warranted(profile: Option<u8>, reason: DoviRejectReason) -> bool {
+    reason != DoviRejectReason::MissingSideData || profile == Some(5)
+}
+
+fn diagnose_dovi_frame(
+    profile: Option<u8>,
+    diagnostics: &mut DoviRpuDiagnostics,
+    frame: &Frame,
+    decode_backend: DecoderBackend,
+) {
+    let Some(reason) = frame.dovi_unavailable_reason() else {
+        return;
+    };
+    if !dovi_rpu_diagnostic_warranted(profile, reason) {
+        return;
+    }
+    let count = diagnostics.record_unavailable_frame();
+    if !DoviRpuDiagnostics::should_report(count) {
+        return;
+    }
+    trace::diagnostic(
+        serde_json::json!({
+            "event": "dovi_rpu_unavailable",
+            "profile": profile,
+            "decodeBackend": decode_backend.as_str(),
+            "reason": reason.label(),
+            "framesAffected": count,
+        })
+        .to_string(),
+    );
 }
 
 fn pop_matching_audio_frame(
@@ -8072,5 +8149,48 @@ mod tests {
 
         assert_eq!(config.backend, DecoderBackend::Software);
         assert_eq!(reason, None);
+    }
+
+    #[test]
+    fn dovi_rpu_missing_is_diagnostic_only_on_profile_5() {
+        assert!(dovi_rpu_diagnostic_warranted(
+            Some(5),
+            DoviRejectReason::MissingSideData
+        ));
+        assert!(!dovi_rpu_diagnostic_warranted(
+            Some(8),
+            DoviRejectReason::MissingSideData
+        ));
+        assert!(!dovi_rpu_diagnostic_warranted(
+            None,
+            DoviRejectReason::MissingSideData
+        ));
+        assert!(dovi_rpu_diagnostic_warranted(
+            None,
+            DoviRejectReason::ResidualNotSupported
+        ));
+        assert!(dovi_rpu_diagnostic_warranted(
+            Some(8),
+            DoviRejectReason::InvalidCurves
+        ));
+    }
+
+    #[test]
+    fn dovi_rpu_diagnostics_report_first_then_spaced() {
+        assert!(DoviRpuDiagnostics::should_report(1));
+        assert!(!DoviRpuDiagnostics::should_report(2));
+        assert!(!DoviRpuDiagnostics::should_report(
+            DOVI_RPU_DIAGNOSTIC_INTERVAL - 1
+        ));
+        assert!(DoviRpuDiagnostics::should_report(
+            DOVI_RPU_DIAGNOSTIC_INTERVAL
+        ));
+        assert!(!DoviRpuDiagnostics::should_report(
+            DOVI_RPU_DIAGNOSTIC_INTERVAL + 1
+        ));
+
+        let mut diagnostics = DoviRpuDiagnostics::default();
+        assert_eq!(diagnostics.record_unavailable_frame(), 1);
+        assert_eq!(diagnostics.record_unavailable_frame(), 2);
     }
 }
