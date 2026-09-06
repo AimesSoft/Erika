@@ -139,7 +139,13 @@ pub(crate) fn metal_target_color(
 ) -> crate::renderer::pipeline::TargetColorState {
     match mode {
         MetalOutputMode::Sdr | MetalOutputMode::Auto { .. } => {
-            crate::renderer::pipeline::TargetColorState::sdr(ColorPrimaries::Bt709)
+            if source.is_hdr() {
+                crate::renderer::pipeline::TargetColorState::sdr_tone_map_target(
+                    ColorPrimaries::Bt709,
+                )
+            } else {
+                crate::renderer::pipeline::TargetColorState::sdr(ColorPrimaries::Bt709)
+            }
         }
         MetalOutputMode::AppleEdr { headroom } | MetalOutputMode::ExtendedLinear { headroom } => {
             #[cfg(any(target_os = "ios", target_os = "tvos"))]

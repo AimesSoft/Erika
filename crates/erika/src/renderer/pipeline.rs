@@ -734,6 +734,22 @@ impl TargetColorState {
         }
     }
 
+    /// SDR target for sources that require tone mapping (HDR → SDR). The tone
+    /// map peak and the encode reference white follow the HDR reference white
+    /// convention (BT.2408: 203 nits), matching libplacebo/mpv — NOT the
+    /// 100-nit SDR mastering value, which pushes the whole picture into the
+    /// top of the display range (measured: same frame, our render p50=89 vs
+    /// mpv 67 with identical source content).
+    pub fn sdr_tone_map_target(primaries: ColorPrimaries) -> Self {
+        Self {
+            primaries,
+            transfer: TransferFunction::Srgb,
+            peak_nits: 203.0,
+            reference_white_nits: 203.0,
+            edr_headroom: 1.0,
+        }
+    }
+
     pub fn apple_edr(primaries: ColorPrimaries, headroom: f32) -> Self {
         Self::extended_linear(primaries, 203.0, headroom)
     }

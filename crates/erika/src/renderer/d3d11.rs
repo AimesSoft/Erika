@@ -880,8 +880,12 @@ impl D3d11OutputMode {
     }
 
     fn target_color_for_source(self, source: SourceColorState) -> TargetColorState {
-        let _ = source;
-        self.target_color()
+        match self {
+            Self::Sdr if source.is_hdr() => {
+                TargetColorState::sdr_tone_map_target(ColorPrimaries::Bt709)
+            }
+            _ => self.target_color(),
+        }
     }
 }
 

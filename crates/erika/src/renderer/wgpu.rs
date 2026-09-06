@@ -31,7 +31,8 @@ use crate::core::ColorPrimaries;
 use crate::core::WgpuSurfaceKind;
 use crate::core::{
     LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame, RenderFrameContext,
-    RendererBackend, RendererRuntimeStats, Result, SurfaceOutputCapabilities, WgpuSurfaceHandle,
+    RendererBackend, RendererRuntimeStats, Result, SurfaceOutputCapabilities, TransferFunction,
+    WgpuSurfaceHandle,
 };
 use crate::danmaku::{
     DanmakuAtlasUpdate, DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan,
@@ -53,7 +54,9 @@ use crate::renderer::output::{
     ActiveOutputEncoding, OutputDescription, OutputFallbackReason, OutputMode, OutputRuntimeStatus,
     OutputSurfaceFormat,
 };
-use crate::renderer::pipeline::{LumaUpscalerMode, SourceColorState, VideoRenderPipeline};
+use crate::renderer::pipeline::{
+    LumaUpscalerMode, SourceColorState, TargetColorState, VideoRenderPipeline,
+};
 use crate::renderer::presentation::{PresentationLayout, PresentationRect};
 use crate::renderer::wgpu_artcnn::{
     WgpuArtCnn, WgpuArtCnnInput, WgpuArtCnnInputKind, WgpuArtCnnStatus,
@@ -424,7 +427,12 @@ impl UploadedVideoFrame {
         let Some(source) = self.source_color else {
             return self.uniforms;
         };
-        let pipeline = VideoRenderPipeline::new(source, output.target);
+        let target = if source.is_hdr() && output.target.transfer == TransferFunction::Srgb {
+            TargetColorState::sdr_tone_map_target(output.target.primaries)
+        } else {
+            output.target
+        };
+        let pipeline = VideoRenderPipeline::new(source, target);
         let uniforms = VideoUniforms::from_pipeline(
             &pipeline,
             self.uniforms.is_p010 != 0,
@@ -1892,7 +1900,12 @@ impl WgpuRenderer {
             .surface
             .as_ref()
             .map_or_else(OutputDescription::sdr, |surface| surface.output);
-        let pipeline = VideoRenderPipeline::new(source, output.target);
+        let target = if source.is_hdr() && output.target.transfer == TransferFunction::Srgb {
+            TargetColorState::sdr_tone_map_target(output.target.primaries)
+        } else {
+            output.target
+        };
+        let pipeline = VideoRenderPipeline::new(source, target);
         if source.is_hdr() {
             self.stats.hdr_source_frames += 1;
             if !output.extended_linear && pipeline.requires_tone_mapping() {
