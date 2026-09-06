@@ -165,7 +165,20 @@ fn tone_map_nits(nits: vec3<f32>) -> vec3<f32> {
         return target_peak * mix(x, shoulder, step(vec3<f32>(knee), x));
     }
     if (uniforms.tone_map == 3u) {
-        return vec3<f32>(bt2390_eetf(nits.r), bt2390_eetf(nits.g), bt2390_eetf(nits.b));
+        // Luma-preserving BT.2390: map the pixel's BT.709 luma through the
+        // EETF and scale RGB uniformly, so hue and saturation survive the
+        // 10:1 compression (per-channel mapping washes saturated colors).
+        let luma_nits = dot(nits, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let mapped = bt2390_eetf(luma_nits);
+        let scale = mapped / max(luma_nits, 0.0001);
+        var out_nits = max(nits, vec3<f32>(0.0)) * scale;
+        let maxc = max(out_nits.r, max(out_nits.g, out_nits.b));
+        if (maxc > target_peak) {
+            let l2 = dot(out_nits, vec3<f32>(0.2126, 0.7152, 0.0722));
+            let t = clamp((maxc - target_peak) / (maxc - l2), 0.0, 1.0);
+            out_nits = mix(out_nits, vec3<f32>(l2), t);
+        }
+        return out_nits;
     }
     return target_peak * clamp(x, vec3<f32>(0.0), vec3<f32>(1.0));
 }

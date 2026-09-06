@@ -3002,7 +3002,20 @@ float3 tone_map_nits(float3 nits, constant VideoUniforms& uniforms) {
         return target_peak * mix(x, shoulder, step(float3(knee), x));
     }
     if (uniforms.tone_map == 3) {
-        return float3(bt2390_eetf(nits.r, uniforms), bt2390_eetf(nits.g, uniforms), bt2390_eetf(nits.b, uniforms));
+        // Luma-preserving BT.2390: map the pixel's BT.709 luma through the
+        // EETF and scale RGB uniformly, so hue and saturation survive the
+        // 10:1 compression (per-channel mapping washes saturated colors).
+        float luma_nits = dot(nits, float3(0.2126, 0.7152, 0.0722));
+        float mapped = bt2390_eetf(luma_nits, uniforms);
+        float scale = mapped / max(luma_nits, 0.0001);
+        float3 out_nits = max(nits, float3(0.0)) * scale;
+        float maxc = max(out_nits.r, max(out_nits.g, out_nits.b));
+        if (maxc > target_peak) {
+            float l2 = dot(out_nits, float3(0.2126, 0.7152, 0.0722));
+            float t = clamp((maxc - target_peak) / (maxc - l2), 0.0, 1.0);
+            out_nits = mix(out_nits, float3(l2), t);
+        }
+        return out_nits;
     }
     return target_peak * clamp(x, 0.0, 1.0);
 }

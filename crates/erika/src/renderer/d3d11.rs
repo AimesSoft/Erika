@@ -239,7 +239,20 @@ float3 tone_map_nits(float3 input_nits) {
         return target_peak * lerp(x, shoulder, step(knee3, x));
     }
     if (tone_map == 3u) {
-        return float3(bt2390_eetf(input_nits.r), bt2390_eetf(input_nits.g), bt2390_eetf(input_nits.b));
+        // Luma-preserving BT.2390: map the pixel's BT.709 luma through the
+        // EETF and scale RGB uniformly, so hue and saturation survive the
+        // 10:1 compression (per-channel mapping washes saturated colors).
+        float luma_nits = dot(input_nits, float3(0.2126, 0.7152, 0.0722));
+        float mapped = bt2390_eetf(luma_nits);
+        float scale = mapped / max(luma_nits, 0.0001);
+        float3 out_nits = max(input_nits, float3(0.0, 0.0, 0.0)) * scale;
+        float maxc = max(out_nits.r, max(out_nits.g, out_nits.b));
+        if (maxc > target_peak) {
+            float l2 = dot(out_nits, float3(0.2126, 0.7152, 0.0722));
+            float t = clamp((maxc - target_peak) / (maxc - l2), 0.0, 1.0);
+            out_nits = lerp(out_nits, float3(l2, l2, l2), t);
+        }
+        return out_nits;
     }
     return target_peak * clamp(x, float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0));
 }
