@@ -578,8 +578,13 @@ animation, so pass the presentation timestamp, not wall-clock deltas. If
 `out_stats` is non-`NULL` it is filled with a snapshot of pipeline counters.
 `poll_event` is non-blocking and returns `NoEvent` when idle.
 
-`audio_only_tick` advances audio output without rendering, for hosts that have
-no surface attached:
+`audio_only_tick` selects background video suspension and refreshes playback
+state without rendering. PCM delivery and audio-clock feedback run on the
+independent audio owner, so a render stall does not stop sound. Hosts still
+apply their background-playback policy and call pause/stop/close when audio must
+stop; merely stopping the display timer does not stop audio. Do not call this
+entry point from a second timer during normal video playback, because it changes
+video suspension and foreground-resume state:
 
 ```c
 ErikaStatus erika_presenter_audio_only_tick(ErikaPresenterHandle *, ErikaPresenterStats *out_stats);
