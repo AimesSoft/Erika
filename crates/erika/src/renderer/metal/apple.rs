@@ -57,6 +57,7 @@ use crate::renderer::metal::{
     VideoFrameTextureSource, VideoRenderFrame, fourcc_string, metal_drawable_pixel_format,
     metal_target_color,
 };
+use crate::renderer::output::clamp_output_mode_to_display;
 use crate::renderer::pipeline::{ColorRange, DoviUniforms, LumaUpscalerMode, ToneMapOperator};
 use crate::renderer::pipeline::{SourceColorState, TargetColorState};
 use crate::renderer::presentation::PresentationLayout as VideoPresentationLayout;
@@ -370,6 +371,44 @@ impl MetalRendererImpl {
             )
     }
 
+    /// EDR headroom of the display the video layer is currently presented on.
+    ///
+    /// The *potential* value is used deliberately: it reports what the display
+    /// can do regardless of the current brightness setting, so playback does
+    /// not flip between SDR and EDR while the brightness slider moves. Falls
+    /// back to 1.0 (no EDR) when AppKit cannot answer.
+    #[cfg(target_os = "macos")]
+    fn display_edr_headroom(&self) -> f32 {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, AnyObject};
+
+        let Some(layer) = self.layer.as_ref() else {
+            return 1.0;
+        };
+        unsafe {
+            let attached: Option<Retained<AnyObject>> = msg_send![&**layer, screen];
+            let screen: Retained<AnyObject> = match attached {
+                Some(screen) => screen,
+                None => {
+                    let Some(class) = AnyClass::get(c"NSScreen") else {
+                        return 1.0;
+                    };
+                    match msg_send![class, mainScreen] {
+                        Some(main) => main,
+                        None => return 1.0,
+                    }
+                }
+            };
+            let potential: f64 =
+                msg_send![&*screen, maximumPotentialExtendedDynamicRangeColorComponentValue];
+            if potential.is_finite() && potential > 0.0 {
+                potential as f32
+            } else {
+                1.0
+            }
+        }
+    }
+
     fn select_output_mode_for_source(&mut self, source: SourceColorState) {
         let source_is_hdr = source.is_hdr();
         if source_is_hdr {
@@ -381,7 +420,22 @@ impl MetalRendererImpl {
         let selected = if self.flutter_texture_attached {
             MetalOutputMode::Sdr
         } else {
-            self.requested_output_mode.resolve_for_source(source_is_hdr)
+            let resolved = self.requested_output_mode.resolve_for_source(source_is_hdr);
+            #[cfg(target_os = "macos")]
+            let selected = {
+                let headroom = self.display_edr_headroom();
+                let clamped = clamp_output_mode_to_display(resolved, headroom);
+                if clamped != resolved && clamped != self.output_mode && hdr_debug_enabled() {
+                    eprintln!(
+                        "ErikaHDR: clamping {:?} to the display's {:.2}x EDR headroom -> {:?}",
+                        resolved, headroom, clamped
+                    );
+                }
+                clamped
+            };
+            #[cfg(not(target_os = "macos"))]
+            let selected = resolved;
+            selected
         };
         if selected != self.output_mode {
             self.set_output_mode(selected);
