@@ -3015,6 +3015,20 @@ float3 apply_gamut_map(float3 rgb, constant VideoUniforms& uniforms) {
     );
 }
 
+// Gamut mapping: blend out-of-gamut (negative) components towards their
+// BT.709 luma — just enough to fit the gamut while preserving hue —
+// matching libplacebo's desaturate gamut mode. Mirrors the WGSL/HLSL
+// `gamut_desaturate` and the Rust reference in `renderer/pipeline.rs` tests.
+float3 gamut_desaturate(float3 rgb) {
+    float minc = min(rgb.r, min(rgb.g, rgb.b));
+    if (minc >= 0.0) {
+        return rgb;
+    }
+    float luma = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+    float t = clamp(minc / (minc - luma), 0.0, 1.0);
+    return mix(rgb, float3(luma), t);
+}
+
 float3 target_nits_to_reference_linear(float3 nits, constant VideoUniforms& uniforms) {
     return max(nits, float3(0.0)) / target_reference_white_nits(uniforms);
 }
@@ -3241,6 +3255,7 @@ fragment float4 erika_video_fragment(
         rgb = dovi_lms_to_rgb(rgb, uniforms);
     }
     rgb = apply_gamut_map(rgb, uniforms);
+    rgb = gamut_desaturate(rgb);
     rgb = source_reference_to_nits(rgb, uniforms);
     rgb = tone_map_nits(rgb, uniforms);
     rgb = target_nits_to_reference_linear(rgb, uniforms);

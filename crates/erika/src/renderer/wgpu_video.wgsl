@@ -178,6 +178,21 @@ fn apply_gamut_map(rgb: vec3<f32>) -> vec3<f32> {
     );
 }
 
+// Gamut mapping: the linear gamut matrix can push highly saturated
+// wide-gamut colors outside the target gamut (negative components).
+// Hard-clipping those shifts hue (teal greens turn neon). Blend them
+// towards their BT.709 luma — just enough to fit the gamut while
+// preserving hue — matching libplacebo's desaturate gamut mode.
+fn gamut_desaturate(rgb: vec3<f32>) -> vec3<f32> {
+    let minc = min(rgb.r, min(rgb.g, rgb.b));
+    if (minc >= 0.0) {
+        return rgb;
+    }
+    let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let t = clamp(minc / (minc - luma), 0.0, 1.0);
+    return mix(rgb, vec3<f32>(luma), t);
+}
+
 fn target_nits_to_reference_linear(nits: vec3<f32>) -> vec3<f32> {
     return max(nits, vec3<f32>(0.0)) / target_reference_white_nits();
 }
@@ -442,6 +457,7 @@ fn erika_video_fragment(in: VertexOut) -> @location(0) vec4<f32> {
         rgb = dovi_lms_to_rgb(rgb);
     }
     rgb = apply_gamut_map(rgb);
+    rgb = gamut_desaturate(rgb);
     rgb = source_reference_to_nits(rgb);
     rgb = tone_map_nits(rgb);
     rgb = target_nits_to_reference_linear(rgb);

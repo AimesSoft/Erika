@@ -1336,6 +1336,56 @@ mod tests {
         }
     }
 
+    /// Reference implementation of the shaders' `gamut_desaturate`: out-of-gamut
+    /// (negative) components after the linear gamut matrix are blended towards
+    /// their BT.709 luma just enough to fit the gamut, preserving hue where
+    /// hard-clipping would shift it.
+    fn gamut_desaturate(rgb: [f32; 3]) -> [f32; 3] {
+        let minc = rgb[0].min(rgb[1]).min(rgb[2]);
+        if minc >= 0.0 {
+            return rgb;
+        }
+        let luma = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+        let t = (minc / (minc - luma)).clamp(0.0, 1.0);
+        [
+            rgb[0] + (luma - rgb[0]) * t,
+            rgb[1] + (luma - rgb[1]) * t,
+            rgb[2] + (luma - rgb[2]) * t,
+        ]
+    }
+
+    #[test]
+    fn gamut_desaturate_keeps_hue_where_clipping_shifts_it() {
+        // In-gamut colors pass through untouched.
+        assert_eq!(gamut_desaturate([0.2, 0.7, 0.3]), [0.2, 0.7, 0.3]);
+        // A saturated BT.2020 teal-green that the gamut matrix pushes out of
+        // gamut (negative red/blue): after desaturation no component is
+        // negative and the channel ordering (hue) is preserved — hard
+        // clipping would have zeroed red/blue and turned it neon.
+        let out_of_gamut = [-0.08_f32, 0.9, -0.04];
+        let mapped = gamut_desaturate(out_of_gamut);
+        assert!(mapped[0] >= 0.0 && mapped[2] >= 0.0);
+        assert!(mapped[1] > mapped[2] && mapped[2] > mapped[0]);
+        // The blend only ever reduces saturation, never brightness below the
+        // original luma.
+        let luma = |c: [f32; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+        assert!((luma(mapped) - luma(out_of_gamut)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn gamut_desaturate_formula_is_present_across_video_shaders() {
+        let shaders = [
+            include_str!("wgpu_video.wgsl"),
+            include_str!("metal/apple.rs"),
+            include_str!("d3d11.rs"),
+        ];
+        for shader in shaders {
+            assert!(shader.contains("gamut_desaturate"));
+            assert!(shader.contains("0.2126, 0.7152, 0.0722"));
+            assert!(shader.contains("rgb = gamut_desaturate(rgb)"));
+        }
+    }
+
     #[test]
     fn overlay_shaders_handle_sdr_ui_for_hdr_targets() {
         let metal = include_str!("metal/apple.rs");
