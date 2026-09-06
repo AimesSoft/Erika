@@ -211,7 +211,7 @@ impl MetalRendererImpl {
         // CAMetalLayer defaults to true. Restore a finite wait if a host-owned
         // layer disabled it: nextDrawable can wait up to one second, then return
         // nil, instead of waiting indefinitely. This is not a nonblocking call;
-        // audio delivery runs independently and nil maps to RendererBackpressure.
+        // nil maps to RendererBackpressure.
         layer.setAllowsNextDrawableTimeout(true);
         layer.setDevice(Some(&*self.device));
         self.configure_layer_output(&layer);
