@@ -548,11 +548,15 @@ pub enum ToneMapOperator {
     Clip,
     Reinhard,
     Mobius,
+    /// ITU-R BT.2390 EETF evaluated in the PQ domain. The default: it keeps
+    /// midtones closer to the reference look of libplacebo/mpv than the
+    /// legacy operators, whose linear-region passthrough reads as washed out.
+    Bt2390,
 }
 
 impl Default for ToneMapOperator {
     fn default() -> Self {
-        Self::Mobius
+        Self::Bt2390
     }
 }
 
@@ -1038,6 +1042,7 @@ fn tone_map_code(operator: ToneMapOperator) -> u32 {
         ToneMapOperator::Clip => 0,
         ToneMapOperator::Reinhard => 1,
         ToneMapOperator::Mobius => 2,
+        ToneMapOperator::Bt2390 => 3,
     }
 }
 
@@ -1242,6 +1247,89 @@ mod tests {
             assert!(shader.contains("hlg_nominal_peak_nits = 1000.0"));
             assert!(shader.contains("hlg_system_gamma = 1.2"));
             assert!(shader.contains("pow(scene_luma, hlg_system_gamma - 1.0)"));
+        }
+    }
+
+    /// Reference implementation of the shaders' `bt2390_eetf` (tone_map code
+    /// 3): the ITU-R BT.2390 EETF evaluated in the PQ domain, ported from
+    /// libplacebo's `pl_tone_map_bt2390` with the default knee offset (1.0)
+    /// and a 0 target black level.
+    fn bt2390_eetf(nits: f32, source_peak_nits: f32, target_peak_nits: f32) -> f32 {
+        let pq_inverse_eotf = |normalized_nits: f32| -> f32 {
+            let m1 = 0.1593017578125_f32;
+            let m2 = 78.84375_f32;
+            let c1 = 0.8359375_f32;
+            let c2 = 18.8515625_f32;
+            let c3 = 18.6875_f32;
+            let p = normalized_nits.clamp(0.0, 1.0).powf(m1);
+            ((c1 + c2 * p) / (1.0 + c3 * p).max(0.000_001)).powf(m2)
+        };
+        let pq_eotf = |encoded: f32| -> f32 {
+            let m1 = 0.1593017578125_f32;
+            let m2 = 78.84375_f32;
+            let c1 = 0.8359375_f32;
+            let c2 = 18.8515625_f32;
+            let c3 = 18.6875_f32;
+            let p = encoded.max(0.0).powf(1.0 / m2);
+            let num = (p - c1).max(0.0);
+            let den = (c2 - c3 * p).max(0.000_001);
+            (num / den).powf(1.0 / m1)
+        };
+        let src_peak_pq = pq_inverse_eotf(source_peak_nits / 10000.0).max(0.000_001);
+        let dst_peak_pq = pq_inverse_eotf(target_peak_nits / 10000.0).max(0.000_001);
+        let max_lum = (dst_peak_pq / src_peak_pq).clamp(0.0, 1.0);
+        let x = (pq_inverse_eotf(nits.clamp(0.0, 10000.0) / 10000.0) / src_peak_pq).clamp(0.0, 1.0);
+        let ks = 2.0 * max_lum - 1.0;
+        let mut u = x;
+        if ks < 1.0 && x > ks {
+            let tb = (x - ks) / (1.0 - ks);
+            let tb2 = tb * tb;
+            let tb3 = tb2 * tb;
+            u = (2.0 * tb3 - 3.0 * tb2 + 1.0) * ks
+                + (tb3 - 2.0 * tb2 + tb) * (1.0 - ks)
+                + (-2.0 * tb3 + 3.0 * tb2) * max_lum;
+        }
+        10000.0 * pq_eotf(u * src_peak_pq)
+    }
+
+    #[test]
+    fn bt2390_eetf_anchors_and_monotonicity() {
+        let (source_peak, target_peak) = (1000.0_f32, 100.0_f32);
+
+        // Black stays black; the source peak maps exactly onto the target
+        // peak (the spline's endpoint is maxLum by construction).
+        assert!(bt2390_eetf(0.0, source_peak, target_peak).abs() < 1e-3);
+        let peak = bt2390_eetf(source_peak, source_peak, target_peak);
+        assert!((peak - target_peak).abs() < 0.05, "peak = {peak}");
+
+        // Monotonically increasing and bounded by the target peak.
+        let mut previous = -1.0_f32;
+        for step in 0..=100 {
+            let nits = source_peak * step as f32 / 100.0;
+            let mapped = bt2390_eetf(nits, source_peak, target_peak);
+            assert!(mapped >= previous);
+            assert!(mapped <= target_peak + 1e-3);
+            previous = mapped;
+        }
+
+        // 10:1 compression: the PQ-domain spline lands 100-nit diffuse white
+        // at roughly half its mastered level while compressing the source
+        // peak onto the target — the reference BT.2390 E+ response.
+        let diffuse = bt2390_eetf(100.0, source_peak, target_peak);
+        assert!(diffuse > 45.0 && diffuse < 65.0, "diffuse = {diffuse}");
+    }
+
+    #[test]
+    fn bt2390_formula_is_present_across_video_shaders() {
+        let shaders = [
+            include_str!("wgpu_video.wgsl"),
+            include_str!("metal/apple.rs"),
+            include_str!("d3d11.rs"),
+        ];
+        for shader in shaders {
+            assert!(shader.contains("bt2390_eetf"));
+            assert!(shader.contains("2.0 * max_lum - 1.0"));
+            assert!(shader.contains("tone_map == 3"));
         }
     }
 

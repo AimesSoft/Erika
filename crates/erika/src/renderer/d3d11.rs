@@ -194,6 +194,30 @@ float3 source_reference_to_nits(float3 rgb) {
     return max(rgb, float3(0.0, 0.0, 0.0)) * source_reference_white_nits();
 }
 
+// ITU-R BT.2390 EETF evaluated in the PQ domain, ported from libplacebo's
+// pl_tone_map_bt2390 with the default knee offset (1.0) and a 0 target black
+// level (which makes the black-point adaptation stage a no-op). Mirrors the
+// Rust reference implementation in `renderer/pipeline.rs` tests
+// (`bt2390_eetf`) and the WGSL/MSL copies.
+float bt2390_eetf(float nits) {
+    float src_peak_pq = max(pq_inverse_eotf(source_peak_nits() / 10000.0), 0.000001);
+    float dst_peak_pq = max(pq_inverse_eotf(target_peak_nits() / 10000.0), 0.000001);
+    float max_lum = clamp(dst_peak_pq / src_peak_pq, 0.0, 1.0);
+    float x = clamp(pq_inverse_eotf(clamp(nits, 0.0, 10000.0) / 10000.0) / src_peak_pq, 0.0, 1.0);
+    float ks = 2.0 * max_lum - 1.0;
+    float u = x;
+    if (ks < 1.0 && x > ks) {
+        float tb = (x - ks) / (1.0 - ks);
+        float tb2 = tb * tb;
+        float tb3 = tb2 * tb;
+        float pb = (2.0 * tb3 - 3.0 * tb2 + 1.0) * ks
+                 + (tb3 - 2.0 * tb2 + tb) * (1.0 - ks)
+                 + (-2.0 * tb3 + 3.0 * tb2) * max_lum;
+        u = pb;
+    }
+    return 10000.0 * pq_eotf(u * src_peak_pq);
+}
+
 float3 tone_map_nits(float3 input_nits) {
     if (target_transfer == 3u) {
         return clamp(input_nits, 0.0, 10000.0);
@@ -213,6 +237,9 @@ float3 tone_map_nits(float3 input_nits) {
         float3 t = clamp((x - knee3) / denom, float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0));
         float3 shoulder = knee3 + (1.0 - knee) * (float3(1.0, 1.0, 1.0) - pow(float3(1.0, 1.0, 1.0) - t, float3(2.0, 2.0, 2.0)));
         return target_peak * lerp(x, shoulder, step(knee3, x));
+    }
+    if (tone_map == 3u) {
+        return float3(bt2390_eetf(input_nits.r), bt2390_eetf(input_nits.g), bt2390_eetf(input_nits.b));
     }
     return target_peak * clamp(x, float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0));
 }

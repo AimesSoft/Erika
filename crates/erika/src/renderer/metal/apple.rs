@@ -2337,6 +2337,7 @@ fn tone_map_code(operator: ToneMapOperator) -> u32 {
         ToneMapOperator::Clip => 0,
         ToneMapOperator::Reinhard => 1,
         ToneMapOperator::Mobius => 2,
+        ToneMapOperator::Bt2390 => 3,
     }
 }
 
@@ -2957,6 +2958,30 @@ float3 source_reference_to_nits(float3 rgb, constant VideoUniforms& uniforms) {
     return max(rgb, float3(0.0)) * source_reference_white_nits(uniforms);
 }
 
+// ITU-R BT.2390 EETF evaluated in the PQ domain, ported from libplacebo's
+// pl_tone_map_bt2390 with the default knee offset (1.0) and a 0 target black
+// level (which makes the black-point adaptation stage a no-op). Mirrors the
+// Rust reference implementation in `renderer/pipeline.rs` tests
+// (`bt2390_eetf`) and the WGSL/HLSL copies.
+float bt2390_eetf(float nits, constant VideoUniforms& uniforms) {
+    float src_peak_pq = max(pq_inverse_eotf(source_peak_nits(uniforms) / 10000.0), 0.000001);
+    float dst_peak_pq = max(pq_inverse_eotf(target_peak_nits(uniforms) / 10000.0), 0.000001);
+    float max_lum = clamp(dst_peak_pq / src_peak_pq, 0.0, 1.0);
+    float x = clamp(pq_inverse_eotf(clamp(nits, 0.0, 10000.0) / 10000.0) / src_peak_pq, 0.0, 1.0);
+    float ks = 2.0 * max_lum - 1.0;
+    float u = x;
+    if (ks < 1.0 && x > ks) {
+        float tb = (x - ks) / (1.0 - ks);
+        float tb2 = tb * tb;
+        float tb3 = tb2 * tb;
+        float pb = (2.0 * tb3 - 3.0 * tb2 + 1.0) * ks
+                 + (tb3 - 2.0 * tb2 + tb) * (1.0 - ks)
+                 + (-2.0 * tb3 + 3.0 * tb2) * max_lum;
+        u = pb;
+    }
+    return 10000.0 * pq_eotf(u * src_peak_pq);
+}
+
 float3 tone_map_nits(float3 nits, constant VideoUniforms& uniforms) {
     if (uniforms.target_transfer == 3) {
         return clamp(nits, 0.0, 10000.0);
@@ -2975,6 +3000,9 @@ float3 tone_map_nits(float3 nits, constant VideoUniforms& uniforms) {
         float3 t = clamp((x - float3(knee)) / denom, 0.0, 1.0);
         float3 shoulder = knee + (1.0 - knee) * (float3(1.0) - pow(float3(1.0) - t, float3(2.0)));
         return target_peak * mix(x, shoulder, step(float3(knee), x));
+    }
+    if (uniforms.tone_map == 3) {
+        return float3(bt2390_eetf(nits.r, uniforms), bt2390_eetf(nits.g, uniforms), bt2390_eetf(nits.b, uniforms));
     }
     return target_peak * clamp(x, 0.0, 1.0);
 }

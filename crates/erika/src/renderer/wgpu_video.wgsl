@@ -121,6 +121,30 @@ fn source_reference_to_nits(rgb: vec3<f32>) -> vec3<f32> {
     return max(rgb, vec3<f32>(0.0)) * source_reference_white_nits();
 }
 
+// ITU-R BT.2390 EETF evaluated in the PQ domain, ported from libplacebo's
+// pl_tone_map_bt2390 with the default knee offset (1.0) and a 0 target black
+// level (which makes the black-point adaptation stage a no-op). `nits` is
+// per-channel absolute luminance; source/target peaks come from uniforms.
+fn bt2390_eetf(nits: f32) -> f32 {
+    let src_peak_pq = max(pq_inverse_eotf(source_peak_nits() / 10000.0), 0.000001);
+    let dst_peak_pq = max(pq_inverse_eotf(target_peak_nits() / 10000.0), 0.000001);
+    let max_lum = clamp(dst_peak_pq / src_peak_pq, 0.0, 1.0);
+    let x = clamp(pq_inverse_eotf(clamp(nits, 0.0, 10000.0) / 10000.0) / src_peak_pq, 0.0, 1.0);
+    // knee offset 1.0 -> ks = 2 * maxLum - 1
+    let ks = 2.0 * max_lum - 1.0;
+    var u = x;
+    if (ks < 1.0 && x > ks) {
+        let tb = (x - ks) / (1.0 - ks);
+        let tb2 = tb * tb;
+        let tb3 = tb2 * tb;
+        let pb = (2.0 * tb3 - 3.0 * tb2 + 1.0) * ks
+            + (tb3 - 2.0 * tb2 + tb) * (1.0 - ks)
+            + (-2.0 * tb3 + 3.0 * tb2) * max_lum;
+        u = pb;
+    }
+    return 10000.0 * pq_eotf(u * src_peak_pq);
+}
+
 fn tone_map_nits(nits: vec3<f32>) -> vec3<f32> {
     if (uniforms.target_transfer == 3u) {
         return clamp(nits, vec3<f32>(0.0), vec3<f32>(10000.0));
@@ -139,6 +163,9 @@ fn tone_map_nits(nits: vec3<f32>) -> vec3<f32> {
         let t = clamp((x - vec3<f32>(knee)) / denom, vec3<f32>(0.0), vec3<f32>(1.0));
         let shoulder = knee + (1.0 - knee) * (vec3<f32>(1.0) - pow(vec3<f32>(1.0) - t, vec3<f32>(2.0)));
         return target_peak * mix(x, shoulder, step(vec3<f32>(knee), x));
+    }
+    if (uniforms.tone_map == 3u) {
+        return vec3<f32>(bt2390_eetf(nits.r), bt2390_eetf(nits.g), bt2390_eetf(nits.b));
     }
     return target_peak * clamp(x, vec3<f32>(0.0), vec3<f32>(1.0));
 }
