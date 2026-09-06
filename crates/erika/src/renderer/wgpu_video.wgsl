@@ -194,19 +194,27 @@ struct RangeExpandedYCbCr {
 };
 
 fn expand_ycbcr_range(y_in: f32, cbcr_in: vec2<f32>) -> RangeExpandedYCbCr {
+    var y = y_in;
+    var cbcr = cbcr_in;
+    if (uniforms.is_p010 != 0u) {
+        // P010 stores 10-bit codes as code << 6 in a 16-bit UNORM texture.
+        let p010_scale = 65535.0 / 65472.0;
+        y *= p010_scale;
+        cbcr *= p010_scale;
+    }
     var out: RangeExpandedYCbCr;
     if (uniforms.full_range != 0u) {
-        out.y = y_in;
-        out.cbcr = cbcr_in - vec2<f32>(0.5);
+        out.y = y;
+        out.cbcr = cbcr - vec2<f32>(0.5);
         return out;
     }
     if (uniforms.is_p010 != 0u) {
-        out.y = (y_in - (64.0 / 1023.0)) * (1023.0 / 876.0);
-        out.cbcr = (cbcr_in - vec2<f32>(512.0 / 1023.0)) * (1023.0 / 896.0);
+        out.y = (y - (64.0 / 1023.0)) * (1023.0 / 876.0);
+        out.cbcr = (cbcr - vec2<f32>(512.0 / 1023.0)) * (1023.0 / 896.0);
         return out;
     }
-    out.y = (y_in - (16.0 / 255.0)) * (255.0 / 219.0);
-    out.cbcr = (cbcr_in - vec2<f32>(128.0 / 255.0)) * (255.0 / 224.0);
+    out.y = (y - (16.0 / 255.0)) * (255.0 / 219.0);
+    out.cbcr = (cbcr - vec2<f32>(128.0 / 255.0)) * (255.0 / 224.0);
     return out;
 }
 
