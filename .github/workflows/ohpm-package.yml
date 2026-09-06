@@ -24,7 +24,7 @@ on:
       version:
         description: Erika version to package
         required: true
-        default: "0.1.7"
+        default: "0.1.8"
         type: string
       publish:
         description: Publish the validated HAR to OHPM
@@ -55,7 +55,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ERIKA_NATIVE_VERSION: "${{ inputs.version || '0.1.7' }}"
+  ERIKA_NATIVE_VERSION: "${{ inputs.version }}"
   OHPM_CLI_URL: "https://repo.huaweicloud.com/harmonyos/ohpm/5.1.0/commandline-tools-linux-x64-5.1.0.840.zip"
   OHPM_CLI_SHA256: "1dcefa4741dc289277560b2802040e0c45b433898d8db453d711d5376e0478f1"
 
@@ -68,6 +68,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+
+      - name: Resolve native release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${ERIKA_NATIVE_VERSION:-$(awk -F'"' '/"version"/ {print $4; exit}' packages/erika_ohos/oh-package.json5)}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "ERIKA_NATIVE_VERSION=$version" >> "$GITHUB_ENV"
 
       - uses: openharmony-rs/setup-ohos-sdk@b312caf8a43bb836aa24c08f65f97e1f09a89cad
         id: ohos_sdk
@@ -228,7 +236,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: erika-ohos-${{ inputs.version || '0.1.7' }}
+          name: erika-ohos-${{ env.ERIKA_NATIVE_VERSION }}
           path: |
             ${{ runner.temp }}/erika.har
             ${{ runner.temp }}/erika-ohos-smoke.hap
@@ -237,9 +245,8 @@ jobs:
   publish:
     name: Publish ArkTS package to OHPM
     if: >-
-      (github.event_name == 'workflow_call' && inputs.publish) ||
-      (github.event_name == 'workflow_dispatch' && inputs.publish &&
-       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
+      inputs.publish &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: package
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -247,7 +254,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: erika-ohos-${{ inputs.version || '0.1.7' }}
+          name: erika-ohos-${{ env.ERIKA_NATIVE_VERSION }}
           path: ${{ runner.temp }}/erika-ohos-release
 
       - uses: actions/setup-node@v4
