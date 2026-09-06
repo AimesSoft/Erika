@@ -5012,13 +5012,16 @@ impl VideoPlaybackEngine {
             ));
             return None;
         }
-        let previous = self
-            .last_audio_clock_sample
-            .replace((snapshot, captured_at));
         // Prime each output epoch before trusting it. Read counters can survive
         // a clear, so a nonzero first counter alone does not prove playback.
         // Silence callbacks advance underflow, but not the media timeline.
-        let (previous, _) = previous?;
+        let Some((previous, last_captured_at)) = self.last_audio_clock_sample.as_mut() else {
+            self.last_audio_clock_sample = Some((snapshot, captured_at));
+            return None;
+        };
+        // Preserve capture ordering even when this observation cannot establish
+        // progress. Only the timestamp watermark advances on rejection.
+        *last_captured_at = captured_at;
         if snapshot.read_frames <= previous.read_frames
             || previous
                 .media_time
@@ -5026,6 +5029,9 @@ impl VideoPlaybackEngine {
         {
             return None;
         }
+        // Rejected observations must not lower the progress baseline. A counter
+        // or timeline reset establishes a new baseline through the output epoch.
+        *previous = snapshot;
         // Account for delivery latency only within PCM known to be queued at
         // capture. Never extrapolate silence past the last media sample.
         let queued_elapsed = elapsed.min(snapshot.queued_duration.unwrap_or_default());
@@ -6962,6 +6968,75 @@ mod tests {
     }
 
     #[test]
+    fn playback_fixture_rejected_audio_regressions_do_not_lower_progress_baseline() {
+        let sample = |media_ms: u64, read_ms: u64| AudioClockSnapshot {
+            media_time: Some(Duration::from_millis(media_ms)),
+            queued_duration: Some(Duration::from_millis(200)),
+            queued_frames: 9_600,
+            read_frames: read_ms * 48,
+            written_frames: read_ms * 48 + 9_600,
+            underflow_frames: 0,
+        };
+        for (case, regressed, partial_recovery) in [
+            ("both", sample(200, 200), sample(300, 300)),
+            ("read counter", sample(1010, 200), sample(1020, 300)),
+            ("media time", sample(200, 1010), sample(300, 1020)),
+        ] {
+            let mut engine = playback_fixture_engine();
+            let t0 = Instant::now();
+            engine.play_at(t0);
+            let _ = next_fixture_video_at(&mut engine, t0);
+            assert!(
+                engine
+                    .sync_to_audio_clock_at(sample(900, 900), t0 + Duration::from_millis(900))
+                    .is_none()
+            );
+            assert!(
+                engine
+                    .sync_to_audio_clock_at(sample(1000, 1000), t0 + Duration::from_millis(1000))
+                    .is_some()
+            );
+
+            // The second invalid sample advances relative to the rejected one,
+            // but still regresses relative to the last trusted observation.
+            for (offset, snapshot) in [(1010, regressed), (1020, partial_recovery)] {
+                let now = t0 + Duration::from_millis(offset);
+                let before = engine.media_time_at(now);
+                assert!(
+                    engine.sync_to_audio_clock_at(snapshot, now).is_none(),
+                    "{case} regression at {offset} ms must not drive the clock"
+                );
+                assert_eq!(engine.media_time_at(now), before);
+            }
+
+            // Rejection must retain capture ordering too: a delayed observation
+            // cannot become current just because its counters appear valid.
+            let now = t0 + Duration::from_millis(1020);
+            let before = engine.media_time_at(now);
+            assert!(
+                engine
+                    .discipline_audio_observation(
+                        sample(1015, 1015),
+                        t0 + Duration::from_millis(1015),
+                        now,
+                    )
+                    .is_none(),
+                "{case}: rejected samples must still preserve capture ordering"
+            );
+            assert_eq!(engine.media_time_at(now), before);
+
+            // A bad observation must neither lower the progress baseline nor
+            // prevent later progress on the original timeline from syncing.
+            assert!(
+                engine
+                    .sync_to_audio_clock_at(sample(1030, 1030), t0 + Duration::from_millis(1030))
+                    .is_some(),
+                "{case}: genuine progress must recover without an output reset"
+            );
+        }
+    }
+
+    #[test]
     fn playback_fixture_audio_clock_preserves_seek_floor_and_capture_order() {
         let mut engine = playback_fixture_engine();
         let t0 = Instant::now();
@@ -7108,7 +7183,7 @@ mod tests {
     }
 
     #[test]
-    fn playback_fixture_new_output_epoch_does_not_trust_retained_counters() {
+    fn playback_fixture_new_output_epoch_requires_progress_with_retained_or_reset_counters() {
         let mut engine = playback_fixture_engine();
         engine.play().unwrap();
         let _ = next_fixture_video_at(&mut engine, Instant::now());
@@ -7140,6 +7215,22 @@ mod tests {
                 .sync_to_audio_clock_observed(ring.clock_snapshot(), Instant::now(), 2)
                 .unwrap()
                 .snapped
+        );
+
+        // A replacement device may reset both counters and media time. Its new
+        // epoch must deliberately establish a new baseline, then accept progress.
+        let mut replacement = clock_test_ring();
+        clock_test_push(&mut replacement, 0, 500);
+        assert!(
+            engine
+                .sync_to_audio_clock_observed(replacement.clock_snapshot(), Instant::now(), 3)
+                .is_none()
+        );
+        clock_test_consume(&mut replacement, 10);
+        assert!(
+            engine
+                .sync_to_audio_clock_observed(replacement.clock_snapshot(), Instant::now(), 3)
+                .is_some()
         );
     }
 
