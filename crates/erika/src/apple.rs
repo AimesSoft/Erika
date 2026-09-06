@@ -574,15 +574,6 @@ pub mod coreaudio {
         pub ring_buffer: AudioRingBufferConfig,
     }
 
-    /// High-water target for the macOS output ring. See
-    /// `AudioOutputBackend::can_accept_audio_frame` on `CoreAudioOutput`.
-    /// Sized above the observed worst-case present block: a fullscreen Space
-    /// transition can hold the drawable pool for ~700ms even with
-    /// `allowsNextDrawableTimeout` enabled (which only caps the block at ~1s),
-    /// and the audio pump shares its render tick — the ring must outlast the
-    /// block or the audible output runs dry.
-    const CORE_AUDIO_QUEUE_TARGET: std::time::Duration = std::time::Duration::from_millis(1200);
-
     impl Default for CoreAudioOutputConfig {
         fn default() -> Self {
             Self {
@@ -740,21 +731,6 @@ pub mod coreaudio {
         fn set_playback_rate(&mut self, rate: f64) {
             if let Ok(mut buffer) = self.buffer.lock() {
                 buffer.set_playback_rate(rate);
-            }
-        }
-
-        /// Real high-water gate for the CoreAudio path. The trait default
-        /// accepts unconditionally, which leaves the ring depth bounded only
-        /// by how far ahead the playback worker produces; with the deepened
-        /// audio lead time that is far past what a render-side stall can
-        /// starve. Keeping ~600ms queued means a paused or blocked render
-        /// tick thread drains the buffer instead of the audible output.
-        fn can_accept_audio_frame(&self) -> bool {
-            match self.clock_snapshot() {
-                Ok(snapshot) => snapshot
-                    .queued_duration
-                    .map_or(true, |queued| queued < CORE_AUDIO_QUEUE_TARGET),
-                Err(_) => true,
             }
         }
 

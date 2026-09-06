@@ -503,6 +503,11 @@ ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *, ErikaEvent *out_e
 所以传**呈现时间戳**，不是 wall-clock 增量。若 `out_stats` 非 `NULL`，会填入流水线
 计数器快照。`poll_event` 非阻塞，空闲时返回 `NoEvent`。
 
+PCM 供给和音频时钟反馈由独立音频线程执行，渲染阻塞不会停止供音。
+`erika_presenter_audio_only_tick` 保留后台视频暂停及前台恢复的状态控制职责；
+不要在正常视频播放时另开定时器调用它。宿主仍负责后台播放许可，并在需要停止声音时
+调用 pause/stop/close；仅停止显示定时器不会停止供音。
+
 `get_stats` 填入同样的 `ErikaPresenterStats` 快照，但不渲染帧。当宿主采样计数器的
 节奏与显示循环不同时用它；它不推进呈现。
 

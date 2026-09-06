@@ -71,10 +71,7 @@ const D3D11VA_VIDEO_FRAME_QUEUE_LIMIT: usize = 8;
 const AVCODEC_SURFACE_VIDEO_FRAME_QUEUE_LIMIT: usize = 2;
 const SUBTITLE_FRAME_QUEUE_LIMIT: usize = 32;
 const EXTERNAL_SUBTITLE_LOOKAHEAD: Duration = Duration::from_secs(5);
-// Deep enough that the output ring can hold the full CoreAudio high-water
-// target (~1.2s): the worker must produce at least as far ahead of the clock
-// as the gate allows to accept, or the ring can never reach its target depth.
-const DEFAULT_AUDIO_LEAD_TIME: Duration = Duration::from_millis(1200);
+const DEFAULT_AUDIO_LEAD_TIME: Duration = Duration::from_millis(120);
 const STREAMING_AUDIO_LEAD_TIME: Duration = Duration::from_millis(1500);
 const DEFAULT_BUFFER_RECOVERY_AUDIO: Duration = Duration::from_millis(100);
 const STREAMING_BUFFER_RECOVERY_AUDIO: Duration = Duration::from_millis(250);
@@ -4136,11 +4133,9 @@ pub struct VideoPlaybackEngine {
     audio_eof_stall_started_at: Option<Instant>,
     audio_eof_stall_pending_frames: usize,
     audio_eof_stall_logged: bool,
-    /// Read/underflow counters of the last audio clock sample this engine
-    /// evaluated. Advancing counters prove the output device is consuming the
-    /// ring, which is what makes the ring front a trustworthy audio reference;
-    /// see [`Self::sync_to_audio_clock_with_now`].
-    last_audio_clock_liveness: Option<(u64, u64)>,
+    last_audio_clock_sample: Option<(AudioClockSnapshot, Instant)>,
+    audio_clock_output_epoch: Option<u64>,
+    audio_clock_floor: Duration,
     last_presented_pts: Option<Duration>,
     eof: bool,
     waiting_for_first_frame: bool,
@@ -4252,7 +4247,9 @@ impl VideoPlaybackEngine {
             audio_eof_stall_started_at: None,
             audio_eof_stall_pending_frames: 0,
             audio_eof_stall_logged: false,
-            last_audio_clock_liveness: None,
+            last_audio_clock_sample: None,
+            audio_clock_output_epoch: None,
+            audio_clock_floor: Duration::ZERO,
             last_presented_pts: None,
             eof: false,
             waiting_for_first_frame: false,
@@ -4502,6 +4499,7 @@ impl VideoPlaybackEngine {
         // first-frame `sync_to` then has to pull back — a visible backward step
         // for every clock consumer. `tick_with_now` starts it on that frame.
         self.clock.reset(media_time, false, now);
+        self.reset_audio_clock_tracking(media_time);
         trace_clock_reset("reset_streams_at", before, media_time, self.state);
         self.last_presented_pts = None;
         self.eof = false;
@@ -4558,6 +4556,7 @@ impl VideoPlaybackEngine {
         let media_time = self.clock.media_time_at(now);
         self.clock.pause(now);
         self.session.begin_buffering_audio_video_scan(media_time);
+        self.last_audio_clock_sample = None;
         self.buffering = true;
         self.buffering_video_pts = None;
         self.last_buffering_video_drain_at = None;
@@ -4615,6 +4614,7 @@ impl VideoPlaybackEngine {
         };
         let queued_audio = self.session.set_audio_output_active(active);
         self.audio_output_active = active;
+        self.last_audio_clock_sample = None;
         self.reset_audio_eof_stall_state();
         trace::diagnostic(
             serde_json::json!({
@@ -4740,6 +4740,7 @@ impl VideoPlaybackEngine {
         // frame is pending (see `reset_streams_at`), so pausing never has to
         // rewind it back to the floor here.
         self.clock.pause(now);
+        self.last_audio_clock_sample = None;
         trace::log(format!(
             "[erika-clock-trace] stage=engine_pause before={} after={}",
             trace::duration_label(Some(before)),
@@ -4781,6 +4782,7 @@ impl VideoPlaybackEngine {
     fn commit_stopped_at(&mut self, now: Instant, stage: &'static str) {
         let before = self.clock.media_time_at(now);
         self.clock.reset(Duration::ZERO, false, now);
+        self.reset_audio_clock_tracking(Duration::ZERO);
         trace_clock_reset(stage, before, Duration::ZERO, self.state);
         self.pending_frame = None;
         self.pending_audio = None;
@@ -4844,6 +4846,7 @@ impl VideoPlaybackEngine {
         // (see `reset_streams_at`). Running it through preroll would report a
         // position no frame has reached yet and then step backward.
         self.clock.reset(position, false, now);
+        self.reset_audio_clock_tracking(position);
         trace_clock_reset("seek", before, position, state_after);
         self.last_presented_pts = None;
         self.eof = false;
@@ -4924,6 +4927,7 @@ impl VideoPlaybackEngine {
         let before = self.clock.media_time_at(now);
         let before_rate = self.clock.rate();
         self.clock.set_rate(rate, now);
+        self.last_audio_clock_sample = None;
         trace::log(format!(
             "[erika-clock-trace] stage=engine_set_rate before={} after={} rate_before={:.3} rate_after={:.3}",
             trace::duration_label(Some(before)),
@@ -4951,46 +4955,78 @@ impl VideoPlaybackEngine {
         snapshot: AudioClockSnapshot,
         now: impl FnOnce() -> Instant,
     ) -> Option<ClockCorrection> {
-        if self.state != PlaybackRunState::Playing || self.buffering {
+        let now = now();
+        self.discipline_audio_observation(snapshot, now, now)
+    }
+
+    pub(crate) fn sync_to_audio_clock_observed(
+        &mut self,
+        snapshot: AudioClockSnapshot,
+        captured_at: Instant,
+        output_epoch: u64,
+    ) -> Option<ClockCorrection> {
+        if self.audio_clock_output_epoch != Some(output_epoch) {
+            self.last_audio_clock_sample = None;
+            self.audio_clock_output_epoch = Some(output_epoch);
+        }
+        self.discipline_audio_observation(snapshot, captured_at, Instant::now())
+    }
+
+    fn reset_audio_clock_tracking(&mut self, floor: Duration) {
+        self.last_audio_clock_sample = None;
+        self.audio_clock_output_epoch = None;
+        self.audio_clock_floor = floor;
+    }
+
+    fn discipline_audio_observation(
+        &mut self,
+        snapshot: AudioClockSnapshot,
+        captured_at: Instant,
+        now: Instant,
+    ) -> Option<ClockCorrection> {
+        if self.state != PlaybackRunState::Playing || self.buffering || !self.clock.is_running() {
             return None;
         }
+        let elapsed = now.checked_duration_since(captured_at)?;
         // AudioRingBuffer keeps media-time segments rate-aware, including the
         // SoundTouch output ratio. Once a rate transition is committed by the
         // presenter, the audio clock is therefore valid at every playback
         // rate and must remain available to correct the video clock.
         let media_time = snapshot.media_time?;
-        let now = now();
-        let before = self.clock.media_time_at(now);
-        // The ring front is what the output device is about to play, so it is
-        // a trustworthy audio reference exactly while the device keeps
-        // consuming. Gate on that liveness, not on the distance to the
-        // playback clock: after a render-side stall the presenter refills the
-        // ring with the frames decoded during the stall, leaving the front
-        // legitimately far behind the clock for the whole backlog duration.
-        // A distance check rejects every such sample and permanently wedges
-        // the clock ahead of what is audible until a seek or pause resets it.
-        // Large real drifts are still handled in one step by the snap path in
-        // `PlaybackClock::discipline_to`.
-        let liveness = (snapshot.read_frames, snapshot.underflow_frames);
-        let device_advancing = self
-            .last_audio_clock_liveness
-            .is_none_or(|last| liveness > last);
-        self.last_audio_clock_liveness = Some(liveness);
-        if !device_advancing {
+        if media_time < self.audio_clock_floor
+            || self
+                .last_audio_clock_sample
+                .is_some_and(|(_, last_at)| captured_at <= last_at)
+        {
             trace::log(format!(
-                "[erika-clock-trace] stage=output_audio_clock_skip reason=device_frozen before={} media={} queued={} queued_frames={} read={} written={} underflow={}",
-                trace::duration_label(Some(before)),
+                "[erika-clock-trace] stage=output_audio_clock_skip reason=before_floor_or_out_of_order media={} floor={}",
                 trace::duration_label(Some(media_time)),
-                trace::duration_label(snapshot.queued_duration),
-                snapshot.queued_frames,
-                snapshot.read_frames,
-                snapshot.written_frames,
-                snapshot.underflow_frames,
+                trace::duration_label(Some(self.audio_clock_floor)),
             ));
             return None;
         }
+        let previous = self
+            .last_audio_clock_sample
+            .replace((snapshot, captured_at));
+        // Prime each output epoch before trusting it. Read counters can survive
+        // a clear, so a nonzero first counter alone does not prove playback.
+        // Silence callbacks advance underflow, but not the media timeline.
+        let (previous, _) = previous?;
+        if snapshot.read_frames <= previous.read_frames
+            || previous
+                .media_time
+                .is_none_or(|previous| media_time <= previous)
+        {
+            return None;
+        }
+        // Account for delivery latency only within PCM known to be queued at
+        // capture. Never extrapolate silence past the last media sample.
+        let queued_elapsed = elapsed.min(snapshot.queued_duration.unwrap_or_default());
+        let reference =
+            media_time.saturating_add(scale_duration(queued_elapsed, self.clock.rate()));
+        let before = self.clock.media_time_at(now);
         let correction = self.clock.discipline_to(
-            media_time,
+            reference,
             now,
             PlaybackClockSource::Audio,
             self.timing.audio_sync,
@@ -4999,7 +5035,7 @@ impl VideoPlaybackEngine {
         trace_clock_correction(
             "output_audio_clock",
             before,
-            media_time,
+            reference,
             after,
             correction,
             Some(snapshot),
@@ -6725,6 +6761,23 @@ mod tests {
         let rate_changed_at = t0 + Duration::from_millis(100);
         engine.set_playback_rate_at(2.0, rate_changed_at);
         let sync_at = rate_changed_at + Duration::from_millis(100);
+        // Establish actual output progress; an unread first measurement does
+        // not by itself establish an audio master, at any playback rate.
+        assert!(
+            engine
+                .sync_to_audio_clock_at(
+                    AudioClockSnapshot {
+                        media_time: Some(Duration::from_millis(4998)),
+                        queued_duration: Some(Duration::from_millis(250)),
+                        queued_frames: 12_000,
+                        read_frames: 23_952,
+                        written_frames: 35_952,
+                        underflow_frames: 0,
+                    },
+                    sync_at - Duration::from_millis(1),
+                )
+                .is_none()
+        );
         let before = engine.clock_snapshot_at(sync_at);
         let correction = engine.sync_to_audio_clock_at(
             AudioClockSnapshot {
@@ -6751,90 +6804,320 @@ mod tests {
         assert_eq!(after.rate, 2.0);
     }
 
-    #[test]
-    fn playback_fixture_audio_backfill_reanchors_clock_even_when_far_behind() {
-        let mut engine = playback_fixture_engine();
-        let t0 = Instant::now();
-        engine.play_at(t0);
-        let _ = next_fixture_video_at(&mut engine, t0);
+    fn clock_test_ring() -> crate::audio::AudioRingBuffer {
+        crate::audio::AudioRingBuffer::with_format(
+            crate::audio::AudioRingBufferConfig::default(),
+            PcmFormat::f32_interleaved(48_000, 1),
+        )
+        .unwrap()
+    }
 
-        // A render-side stall wedged the clock ahead while the presenter
-        // refilled the ring with the frames decoded during the stall: the
-        // front sits 600ms behind the clock, but the device is consuming
-        // (read_frames advanced past the engine's liveness baseline). The
-        // clock must re-anchor — snapping backward — instead of wedging.
-        let sync_at = t0 + Duration::from_millis(700);
-        let before = engine.clock_snapshot_at(sync_at);
-        let front = before.media_time - Duration::from_millis(600);
-        let correction = engine.sync_to_audio_clock_at(
-            AudioClockSnapshot {
-                media_time: Some(front),
-                queued_duration: Some(Duration::from_millis(600)),
-                queued_frames: 28_800,
-                read_frames: 24_000,
-                written_frames: 36_000,
-                underflow_frames: 0,
-            },
-            sync_at,
-        );
+    fn clock_test_push(ring: &mut crate::audio::AudioRingBuffer, pts_ms: u64, ms: u64) {
+        let frames = ms as usize * 48;
+        ring.push_frame(PcmAudioFrame {
+            format: PcmFormat::f32_interleaved(48_000, 1),
+            pts: Some(Duration::from_millis(pts_ms)),
+            frames,
+            samples: vec![0.25; frames],
+        })
+        .unwrap();
+    }
 
-        let correction = correction.expect("a consuming ring must re-anchor the clock");
-        assert_eq!(correction.source, PlaybackClockSource::Audio);
-        assert_eq!(correction.direction, ClockCorrectionDirection::Backward);
-        assert!(correction.snapped, "600ms drift exceeds the snap threshold");
-        let after = engine.clock_snapshot_at(sync_at);
-        assert_eq!(after.media_time, front);
-        assert_eq!(after.source, PlaybackClockSource::Audio);
+    fn clock_test_consume(ring: &mut crate::audio::AudioRingBuffer, ms: u64) {
+        ring.read_interleaved(&mut vec![0.0; ms as usize * 48])
+            .unwrap();
     }
 
     #[test]
-    fn playback_fixture_frozen_audio_ring_does_not_reanchor_clock() {
+    fn playback_fixture_audio_clock_recovers_after_render_stall() {
         let mut engine = playback_fixture_engine();
         let t0 = Instant::now();
         engine.play_at(t0);
         let _ = next_fixture_video_at(&mut engine, t0);
+        let mut ring = clock_test_ring();
+        clock_test_push(&mut ring, 0, 300);
+        engine.sync_to_audio_clock_at(ring.clock_snapshot(), t0);
+        clock_test_consume(&mut ring, 100);
+        assert!(
+            engine
+                .sync_to_audio_clock_at(ring.clock_snapshot(), t0 + Duration::from_millis(100))
+                .is_some()
+        );
+        // Audio continues consuming while rendering prevents PCM handoff.
+        clock_test_consume(&mut ring, 733);
+        assert_eq!(ring.stats().underflow_frames, 25_584);
+        clock_test_push(&mut ring, 300, 800);
+        let mut corrections = 0;
+        for step in 0..=600 {
+            if step > 0 {
+                clock_test_consume(&mut ring, 10);
+                clock_test_push(&mut ring, 1100 + (step - 1) * 10, 10);
+            }
+            let now = t0 + Duration::from_millis(833 + step * 10);
+            let correction = engine
+                .sync_to_audio_clock_at(ring.clock_snapshot(), now)
+                .unwrap();
+            if step == 0 {
+                assert!(correction.snapped);
+            }
+            corrections += 1;
+            assert!(
+                engine
+                    .clock_snapshot_at(now)
+                    .media_time
+                    .abs_diff(ring.clock_snapshot().media_time.unwrap())
+                    <= Duration::from_millis(5)
+            );
+        }
+        assert_eq!(corrections, 601);
+    }
 
-        // First sample from a consuming device: primes the liveness baseline
-        // and re-anchors the clock onto the ring front.
-        let sync_at = t0 + Duration::from_millis(600);
-        let before = engine.clock_snapshot_at(sync_at);
-        let first = engine.sync_to_audio_clock_at(
-            AudioClockSnapshot {
-                media_time: Some(before.media_time),
-                queued_duration: Some(Duration::from_millis(250)),
-                queued_frames: 12_000,
-                read_frames: 24_000,
-                written_frames: 36_000,
-                underflow_frames: 0,
-            },
-            sync_at,
+    #[test]
+    fn playback_fixture_frozen_or_silent_audio_does_not_drive_clock() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+        let mut ring = clock_test_ring();
+        clock_test_push(&mut ring, 0, 300);
+        assert!(
+            engine
+                .sync_to_audio_clock_at(ring.clock_snapshot(), t0)
+                .is_none()
         );
         assert!(
-            first.is_some(),
-            "the first sample of a consuming device is trusted"
+            engine
+                .sync_to_audio_clock_at(ring.clock_snapshot(), t0 + Duration::from_millis(10))
+                .is_none()
+        );
+        clock_test_consume(&mut ring, 300);
+        assert!(
+            engine
+                .sync_to_audio_clock_at(ring.clock_snapshot(), t0 + Duration::from_millis(300))
+                .is_some()
+        );
+        for step in 1..=600 {
+            clock_test_consume(&mut ring, 10);
+            assert!(
+                engine
+                    .sync_to_audio_clock_at(
+                        ring.clock_snapshot(),
+                        t0 + Duration::from_millis(300 + step * 10)
+                    )
+                    .is_none()
+            );
+        }
+        assert_eq!(
+            engine
+                .clock_snapshot_at(t0 + Duration::from_millis(6300))
+                .media_time,
+            Duration::from_millis(6300)
+        );
+    }
+
+    #[test]
+    fn playback_fixture_audio_clock_preserves_seek_floor_and_capture_order() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+        let mut ring = clock_test_ring();
+        clock_test_push(&mut ring, 0, 500);
+        engine.sync_to_audio_clock_at(ring.clock_snapshot(), t0);
+        clock_test_consume(&mut ring, 200);
+        let old = ring.clock_snapshot();
+        engine.sync_to_audio_clock_at(old, t0 + Duration::from_millis(200));
+        engine
+            .seek_at(Duration::from_secs(3), t0 + Duration::from_secs(1))
+            .unwrap();
+        let _ = next_fixture_video_at(&mut engine, t0 + Duration::from_secs(1));
+        assert!(
+            engine
+                .sync_to_audio_clock_at(old, t0 + Duration::from_secs(1))
+                .is_none()
+        );
+        assert_eq!(
+            engine
+                .clock_snapshot_at(t0 + Duration::from_secs(1))
+                .media_time,
+            Duration::from_secs(3)
         );
 
-        // A stalled output keeps reporting the same front with no counter
-        // movement: the clock must keep free-running instead of being dragged
-        // to the frozen position.
-        let frozen_at = sync_at + Duration::from_millis(500);
-        let second = engine.sync_to_audio_clock_at(
-            AudioClockSnapshot {
-                media_time: Some(before.media_time),
-                queued_duration: Some(Duration::from_millis(250)),
-                queued_frames: 12_000,
-                read_frames: 24_000,
-                written_frames: 36_000,
-                underflow_frames: 0,
-            },
-            frozen_at,
+        ring.clear();
+        clock_test_push(&mut ring, 3000, 500);
+        engine.sync_to_audio_clock_at(ring.clock_snapshot(), t0 + Duration::from_secs(1));
+        clock_test_consume(&mut ring, 10);
+        let captured_at = t0 + Duration::from_millis(1010);
+        let current = ring.clock_snapshot();
+        assert!(
+            engine
+                .sync_to_audio_clock_at(current, captured_at)
+                .is_some()
         );
-        assert!(second.is_none(), "a frozen ring must not drag the clock");
-        assert_eq!(
-            engine.clock_snapshot_at(frozen_at).media_time,
-            before.media_time + Duration::from_millis(500),
-            "clock free-runs while the device is frozen",
+        clock_test_consume(&mut ring, 10);
+        assert!(
+            engine
+                .discipline_audio_observation(
+                    ring.clock_snapshot(),
+                    captured_at - Duration::from_millis(1),
+                    captured_at
+                )
+                .is_none()
         );
+    }
+
+    #[test]
+    fn playback_fixture_audio_clock_cannot_move_parked_first_frame_clock() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let mut ring = clock_test_ring();
+        clock_test_push(&mut ring, 0, 300);
+        for step in 0..3 {
+            clock_test_consume(&mut ring, 50);
+            let now = t0 + Duration::from_millis(step * 50);
+            assert!(
+                engine
+                    .sync_to_audio_clock_at(ring.clock_snapshot(), now)
+                    .is_none()
+            );
+            assert_eq!(engine.clock_snapshot_at(now).media_time, Duration::ZERO);
+        }
+        engine.seek_at(Duration::from_secs(3), t0).unwrap();
+        ring.clear();
+        clock_test_push(&mut ring, 3000, 300);
+        for step in 0..3 {
+            clock_test_consume(&mut ring, 50);
+            let now = t0 + Duration::from_millis(150 + step * 50);
+            assert!(
+                engine
+                    .sync_to_audio_clock_at(ring.clock_snapshot(), now)
+                    .is_none()
+            );
+            assert_eq!(
+                engine.clock_snapshot_at(now).media_time,
+                Duration::from_secs(3)
+            );
+        }
+    }
+
+    #[test]
+    fn playback_fixture_audio_clock_requires_new_progress_after_pause() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+        let mut ring = clock_test_ring();
+        clock_test_push(&mut ring, 0, 500);
+        engine.sync_to_audio_clock_at(ring.clock_snapshot(), t0);
+        clock_test_consume(&mut ring, 100);
+        engine.sync_to_audio_clock_at(ring.clock_snapshot(), t0 + Duration::from_millis(100));
+        engine.pause_at(t0 + Duration::from_millis(100));
+        // A final callback may consume PCM as the host pauses the device.
+        clock_test_consume(&mut ring, 20);
+        engine.play_at(t0 + Duration::from_secs(1));
+        assert!(
+            engine
+                .sync_to_audio_clock_at(ring.clock_snapshot(), t0 + Duration::from_secs(1))
+                .is_none()
+        );
+        assert!(
+            engine
+                .sync_to_audio_clock_at(ring.clock_snapshot(), t0 + Duration::from_millis(1010))
+                .is_none()
+        );
+        clock_test_consume(&mut ring, 10);
+        assert!(
+            engine
+                .sync_to_audio_clock_at(ring.clock_snapshot(), t0 + Duration::from_millis(1020))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn playback_fixture_audio_clock_stays_master_while_video_resumes() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+        let mut ring = clock_test_ring();
+        clock_test_push(&mut ring, 0, 500);
+        engine.sync_to_audio_clock_at(ring.clock_snapshot(), t0);
+        engine.set_video_decode_suspended(true).unwrap();
+        clock_test_consume(&mut ring, 100);
+        assert!(
+            engine
+                .sync_to_audio_clock_at(ring.clock_snapshot(), t0 + Duration::from_millis(100))
+                .is_some()
+        );
+        engine.set_video_decode_suspended(false).unwrap();
+        assert!(engine.is_waiting_for_first_frame());
+        assert!(engine.clock().is_running());
+        clock_test_consume(&mut ring, 100);
+        assert!(
+            engine
+                .sync_to_audio_clock_at(ring.clock_snapshot(), t0 + Duration::from_millis(200))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn playback_fixture_new_output_epoch_does_not_trust_retained_counters() {
+        let mut engine = playback_fixture_engine();
+        engine.play().unwrap();
+        let _ = next_fixture_video_at(&mut engine, Instant::now());
+        let mut ring = clock_test_ring();
+        clock_test_push(&mut ring, 0, 500);
+        engine.sync_to_audio_clock_observed(ring.clock_snapshot(), Instant::now(), 1);
+        clock_test_consume(&mut ring, 100);
+        assert!(
+            engine
+                .sync_to_audio_clock_observed(ring.clock_snapshot(), Instant::now(), 1)
+                .is_some()
+        );
+        ring.clear();
+        clock_test_push(&mut ring, 2000, 500);
+        assert!(ring.clock_snapshot().read_frames > 0);
+        assert!(
+            engine
+                .sync_to_audio_clock_observed(ring.clock_snapshot(), Instant::now(), 2)
+                .is_none()
+        );
+        assert!(
+            engine
+                .sync_to_audio_clock_observed(ring.clock_snapshot(), Instant::now(), 2)
+                .is_none()
+        );
+        clock_test_consume(&mut ring, 10);
+        assert!(
+            engine
+                .sync_to_audio_clock_observed(ring.clock_snapshot(), Instant::now(), 2)
+                .unwrap()
+                .snapped
+        );
+    }
+
+    #[test]
+    fn playback_fixture_audio_clock_accounts_for_bounded_delivery_latency() {
+        let mut engine = playback_fixture_engine();
+        let t0 = Instant::now();
+        engine.play_at(t0);
+        let _ = next_fixture_video_at(&mut engine, t0);
+        let mut ring = clock_test_ring();
+        clock_test_push(&mut ring, 0, 300);
+        engine.discipline_audio_observation(ring.clock_snapshot(), t0, t0);
+        clock_test_consume(&mut ring, 100);
+        let received_at = t0 + Duration::from_millis(400);
+        let correction = engine
+            .discipline_audio_observation(
+                ring.clock_snapshot(),
+                t0 + Duration::from_millis(100),
+                received_at,
+            )
+            .unwrap();
+        // Only 200 ms was queued at capture, so delivery prediction cannot
+        // extend the media timestamp past the end of the 300 ms segment.
+        assert_eq!(correction.drift, Duration::from_millis(100));
     }
 
     #[test]

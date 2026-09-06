@@ -2981,6 +2981,7 @@ mod tests {
         let renderer = D3d11Renderer::with_config(MetalRendererConfig {
             output_mode: crate::renderer::metal::MetalOutputMode::Sdr,
             luma_upscaler: LumaUpscalerMode::ArtCnnC4F16,
+            ..MetalRendererConfig::default()
         })
         .unwrap();
 

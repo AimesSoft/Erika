@@ -69,9 +69,8 @@ pub struct MetalRenderer {
     software_upload_counter: u64,
     output_mode: MetalOutputMode,
     /// Presents skipped because the drawable pool was drained (nil
-    /// `nextDrawable`). With `allowsNextDrawableTimeout` enabled these are
-    /// cheap single-frame holds; the counter plus its throttled diagnostic
-    /// keeps the new skip behavior observable without touching the C stats.
+    /// `nextDrawable`). Obtaining nil can still take up to one second with
+    /// `allowsNextDrawableTimeout` enabled. Count skips without changing C stats.
     present_backpressure_skips: u64,
 }
 
