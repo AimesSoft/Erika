@@ -346,7 +346,10 @@ mod tests {
         // An unconfigured (1.0) headroom keeps HDR sources on the SDR tone
         // mapping path; EDR promotion requires the embedder to actually
         // request headroom above SDR white.
-        assert_eq!(OutputMode::auto(1.0).resolve_for_source(true), OutputMode::Sdr);
+        assert_eq!(
+            OutputMode::auto(1.0).resolve_for_source(true),
+            OutputMode::Sdr
+        );
         assert_eq!(
             OutputMode::auto(1.0).resolve_for_source(false),
             OutputMode::Sdr
