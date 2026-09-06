@@ -414,6 +414,8 @@ struct AsyncDanmakuPlanner {
     shared: Arc<(Mutex<AsyncDanmakuPlannerState>, Condvar)>,
     results: Receiver<AsyncDanmakuPlanResult>,
     last_requested: Option<DanmakuPlanKey>,
+    #[cfg(target_os = "windows")]
+    worker: Option<thread::JoinHandle<()>>,
 }
 
 #[derive(Debug, Clone)]
@@ -445,7 +447,7 @@ impl AsyncDanmakuPlanner {
         let shared = Arc::new((Mutex::new(state), Condvar::new()));
         let (result_tx, results) = crossbeam_channel::unbounded();
         let worker_shared = Arc::clone(&shared);
-        thread::Builder::new()
+        let _worker = thread::Builder::new()
             .name("erika-danmaku".to_string())
             .spawn(move || run_async_danmaku_planner(worker_shared, result_tx, engine))
             .expect("spawn erika danmaku planner");
@@ -453,6 +455,8 @@ impl AsyncDanmakuPlanner {
             shared,
             results,
             last_requested: None,
+            #[cfg(target_os = "windows")]
+            worker: Some(_worker),
         }
     }
 
@@ -547,11 +551,20 @@ impl AsyncDanmakuPlanner {
 
 impl Drop for AsyncDanmakuPlanner {
     fn drop(&mut self) {
-        let (lock, cvar) = &*self.shared;
-        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.shutdown = true;
-        state.revision = state.revision.saturating_add(1);
-        cvar.notify_one();
+        {
+            let (lock, cvar) = &*self.shared;
+            let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.shutdown = true;
+            state.revision = state.revision.saturating_add(1);
+            cvar.notify_one();
+        }
+        // The Windows plugin unloads the native DLL after the last presenter.
+        // A shutdown notification alone leaves the worker executing (or even
+        // starting) in unmapped code. Release the state lock before joining.
+        #[cfg(target_os = "windows")]
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -4619,6 +4632,23 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             6.0
         );
         assert_eq!(danmaku_motion_backstep(DanmakuMode::Top, 100.0, 140.0), 0.0);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_danmaku_worker_exits_before_presenter_can_unload() {
+        for _ in 0..32 {
+            let planner = AsyncDanmakuPlanner::new(
+                danmaku_engine("shutdown"),
+                DanmakuTimeline::default(),
+                DanmakuLayoutConfig::default(),
+            );
+            let shared = Arc::clone(&planner.shared);
+            drop(planner);
+            // No worker, including one not yet scheduled, may retain state
+            // and execute Rust code after the containing DLL is unloaded.
+            assert_eq!(Arc::strong_count(&shared), 1);
+        }
     }
 
     #[test]
