@@ -208,6 +208,11 @@ impl MetalRendererImpl {
         }
         let layer: Retained<CAMetalLayer> = unsafe { Retained::retain(layer.cast()) }
             .ok_or_else(|| PlayerError::Renderer("failed to retain CAMetalLayer".to_string()))?;
+        // CAMetalLayer defaults to true. Restore a finite wait if a host-owned
+        // layer disabled it: nextDrawable can wait up to one second, then return
+        // nil, instead of waiting indefinitely. This is not a nonblocking call;
+        // nil maps to RendererBackpressure.
+        layer.setAllowsNextDrawableTimeout(true);
         layer.setDevice(Some(&*self.device));
         self.configure_layer_output(&layer);
         self.layer = Some(layer);

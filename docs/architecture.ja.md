@@ -67,6 +67,28 @@ Decoder availability は session invariant です。video track が選択され�
 
 ## 音声出力
 
+時刻フィードバックには `Player::capture_audio_clock` と
+`update_audio_clock_observation` を使います。観測値は player の識別子、再生
+generation、command sequence、output epoch、単調な取得時刻を保持します。
+worker は現在の再生意図と実行済みコマンドの両方を照合し、取得から 500 ms で
+観測値を失効させます。キューと buffering の判断にも同じ検証を適用します。
+presenter は出力リセット、再設定、デバイス状態の遷移、速度変更で epoch を
+更新します。取得と出力変更は引き続き出力の所有者が直列化します。
+
+engine は最初に基準値を記録し、消費した PCM frame 数と media time の両方が
+進んだ場合だけ共有 `PlaybackClock` を補正します。無音の underflow callback や
+停止した snapshot は時計を繰り返し巻き戻しません。有効な大きいずれは両方向に
+再同期できます。配送遅延の補間は取得時のキュー内 PCM 時間を上限とし、確定済み
+の速度を使います。pause や最初の frame 待ちで止めた時計は動かしません。
+background 再生と foreground の video 復帰中も、動作中の audio master は有効です。
+
+従来の Rust API `update_audio_clock(snapshot)` は現在の時間軸で即座に取得する
+同期フィードバック向けに残ります。保存済み snapshot の取得時の識別情報は
+復元できないため、遅延する呼び出しには観測 API を使います。C ABI とキューの
+目標量は変更せず、250 ms の速度変更 bridge と遷移中の混在した速度の観測を
+抑制する契約を維持します。音声供給はまだ presenter tick 内で行うため、描画が
+止まると underflow は発生し得ます。時刻の復旧と音声供給の独立化は別の処理です。
+
 - **macOS**: ring buffer と PTS-tracking clock snapshot を持つ CoreAudio 出力。presenter は snapshot を player worker に返し、audio-master clock discipline を維持します。
 - **iOS**: 同じ ring buffer / clock snapshot model を持つ AudioQueue 出力。
 - Ring buffer: interleaved f32、容量可変、overflow は oldest drop、volume control 対応。

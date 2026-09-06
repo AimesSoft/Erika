@@ -28,6 +28,13 @@
 
 ### Playback
 
+- Host-provided Metal layers explicitly retain the finite drawable timeout
+  (up to one second before returning nil); skipped presents are counted with
+  throttled diagnostics.
+- Recover audio-master clock drift after a blocked render tick without increasing
+  audio queue depth. Presenter feedback retains its capture time, playback intent,
+  generation, and output epoch; stale feedback and silence-only callbacks cannot
+  drive clock correction. Each new output first establishes a progress baseline.
 - When the first audio stream cannot be decoded, try the remaining audio
   streams in container order and report all decoder failures if none can be
   opened.

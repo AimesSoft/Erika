@@ -950,6 +950,7 @@ impl PresenterRuntime {
         ) {
             return Ok(());
         }
+        self.player.invalidate_audio_clock();
         self.audio_output.set_playback_rate(next_rate);
         self.last_audio_clock_report = None;
 
@@ -3018,9 +3019,16 @@ impl PresenterRuntime {
         if self.pending_playback_rate.is_some() {
             return;
         }
-        let Some(snapshot) = self.audio_output.clock_snapshot() else {
+        // configure/start/push can recover the device during this pump. Publish
+        // its new epoch before sampling, not only after feedback is enqueued.
+        self.report_audio_output_runtime_stats();
+        let Some(observation) = self
+            .player
+            .capture_audio_clock(|| self.audio_output.clock_snapshot())
+        else {
             return;
         };
+        let snapshot = observation.snapshot();
         // Report queue/underflow movement even when the engine later rejects the clock for sync.
         if !self.should_report_audio_clock(snapshot) {
             return;
@@ -3034,7 +3042,7 @@ impl PresenterRuntime {
             snapshot.written_frames,
             snapshot.underflow_frames,
         ));
-        let _ = self.player.update_audio_clock(snapshot);
+        let _ = self.player.update_audio_clock_observation(observation);
     }
 
     fn should_report_audio_clock(&mut self, snapshot: AudioClockSnapshot) -> bool {
@@ -3061,6 +3069,7 @@ impl PresenterRuntime {
 
     fn push_audio(&mut self, frame: PlayerAudioFrame) {
         if !self.audio_configured {
+            self.player.invalidate_audio_clock();
             if let Err(error) = self.audio_output.configure(frame.frame.format) {
                 self.stats.audio_failures += 1;
                 eprintln!("Erika presenter audio configure failed: {error}");
@@ -3110,6 +3119,7 @@ impl PresenterRuntime {
     }
 
     fn reset_audio_output(&mut self) {
+        self.player.invalidate_audio_clock();
         if let Err(error) = self.audio_output.stop() {
             self.stats.audio_failures += 1;
             eprintln!("Erika presenter audio reset failed: {error}");
@@ -3145,6 +3155,7 @@ impl PresenterRuntime {
         }
         self.playback_rate = rate;
         self.pending_playback_rate = None;
+        self.player.invalidate_audio_clock();
         self.last_audio_clock_report = None;
         Ok(())
     }
@@ -3154,6 +3165,8 @@ impl PresenterRuntime {
         if stats.transition_sequence == self.last_audio_runtime_stats.transition_sequence {
             return;
         }
+        self.player.invalidate_audio_clock();
+        self.last_audio_clock_report = None;
         self.last_audio_runtime_stats = stats;
         let event = AudioOutputEvent { stats };
         trace::diagnostic(event.structured_message());

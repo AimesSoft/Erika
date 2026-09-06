@@ -89,6 +89,31 @@ enter an audio-only false `Playing` state.
 
 ## Audio Output
 
+Clock feedback uses `Player::capture_audio_clock` and
+`update_audio_clock_observation`. An observation retains the player identity,
+playback generation, command sequence, output epoch, and monotonic capture time.
+The worker checks this identity against both the current intent and executed
+commands, and expires feedback after 500 ms measured from capture. The same
+validation protects queue and buffering decisions. The presenter invalidates
+the output epoch on reset, reconfiguration, device transitions, and rate changes;
+reads and output changes remain serialized by the output owner.
+
+The engine first establishes a baseline, then requires both consumed PCM frames
+and media time to advance before disciplining the shared `PlaybackClock`.
+Underflow-only callbacks and frozen snapshots cannot keep pulling the clock
+back. Valid large drift can snap in either direction. Delivery-time extrapolation
+is limited to the PCM duration queued at capture and uses the committed rate.
+Paused or first-frame-parked clocks stay parked. A running audio master remains
+active during background playback and foreground video recovery.
+
+The older `update_audio_clock(snapshot)` Rust API remains available for fresh,
+synchronous feedback on the current timeline; it cannot recover the capture
+identity of a previously cached snapshot. Delayed callers should use the
+observation API. This does not change the C ABI or queue targets: the 250 ms rate
+bridge and suppression of mixed-rate observations remain in place. Audio pumping
+still runs in the presenter tick, so a blocked renderer can still cause underflow;
+clock recovery does not replace independent audio delivery.
+
 - **macOS**: CoreAudio output with ring buffer and PTS-tracking clock snapshots.
   The presenter feeds CoreAudio output snapshots back to the player worker for
   audio-master clock discipline.

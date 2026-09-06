@@ -67,6 +67,25 @@ cargo run -p xtask -- deps status
 
 ## 音频输出
 
+时钟反馈通过 `Player::capture_audio_clock` 和
+`update_audio_clock_observation` 传递。观测保留 player 身份、播放 generation、
+命令序号、输出 epoch 和单调采样时间。worker 同时核对当前意图与已执行命令，
+并从采样时刻计算 500 ms 有效期；队列与缓冲决策使用相同的有效性检查。
+presenter 在输出重置、重新配置、设备状态切换和倍速切换时使旧 epoch 失效；
+输出拥有者仍需串行执行采样与输出变更。
+
+引擎先建立观测基线，随后要求已消耗 PCM 帧数与媒体时间同时推进，才校正共享的
+`PlaybackClock`。纯静音欠载回调与冻结快照不能持续拉回时钟；有效的大幅漂移
+允许向前或向后重锚。投递延迟补偿以采样时已排队的 PCM 时长为上限，并使用已提交
+的倍速。暂停或等待首帧而停驻的时钟保持停驻；后台播放和前台视频恢复期间，
+仍在运行的音频主时钟继续生效。
+
+原有 Rust API `update_audio_clock(snapshot)` 保留给当前时间线的即时同步反馈，
+无法还原缓存快照的原始采样身份；延迟反馈应使用新的观测 API。C ABI 与队列目标
+不变，保留 250 ms 倍速桥接及过渡期间抑制混合倍速反馈的契约。
+音频喂送仍在 presenter tick 中执行，渲染阻塞仍可能造成欠载；时钟恢复不能替代
+音频喂送与渲染的独立调度。
+
 - **macOS**：CoreAudio 输出，带 ring buffer 和 PTS 跟踪的 clock snapshot。presenter 会把输出快照回传给 player worker 做音频主时钟约束。
 - **iOS**：AudioQueue 输出，使用同样的 ring buffer 和 clock snapshot 模型。
 - Ring buffer：interleaved f32、容量可配、溢出丢最旧、支持音量控制。
