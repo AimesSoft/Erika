@@ -371,34 +371,34 @@ impl MetalRendererImpl {
             )
     }
 
-    /// EDR headroom of the display the video layer is currently presented on.
+    /// EDR headroom of the display the player window is presented on.
     ///
     /// The *potential* value is used deliberately: it reports what the display
     /// can do regardless of the current brightness setting, so playback does
     /// not flip between SDR and EDR while the brightness slider moves. Falls
-    /// back to 1.0 (no EDR) when AppKit cannot answer.
+    /// back to 1.0 (no EDR) when AppKit cannot answer. Resolved through
+    /// mainScreen rather than the layer's window because CALayer exposes no
+    /// safe screen accessor; multi-display hosts that move a window between
+    /// screens of differing capability re-query per source anyway.
     #[cfg(target_os = "macos")]
     fn display_edr_headroom(&self) -> f32 {
         use objc2::msg_send;
         use objc2::runtime::{AnyClass, AnyObject};
+        use objc2::sel;
 
-        let Some(layer) = self.layer.as_ref() else {
-            return 1.0;
-        };
         unsafe {
-            let attached: Option<Retained<AnyObject>> = msg_send![&**layer, screen];
-            let screen: Retained<AnyObject> = match attached {
-                Some(screen) => screen,
-                None => {
-                    let Some(class) = AnyClass::get(c"NSScreen") else {
-                        return 1.0;
-                    };
-                    match msg_send![class, mainScreen] {
-                        Some(main) => main,
-                        None => return 1.0,
-                    }
-                }
+            let Some(class) = AnyClass::get(c"NSScreen") else {
+                return 1.0;
             };
+            let main: Option<Retained<AnyObject>> = msg_send![class, mainScreen];
+            let Some(screen) = main else {
+                return 1.0;
+            };
+            let selector = sel!(maximumPotentialExtendedDynamicRangeColorComponentValue);
+            let responds: bool = msg_send![&*screen, respondsToSelector: selector];
+            if !responds {
+                return 1.0;
+            }
             let potential: f64 = msg_send![
                 &*screen,
                 maximumPotentialExtendedDynamicRangeColorComponentValue
