@@ -54,7 +54,7 @@ Pod::Spec.new do |s|
     .join(' ')
 
   s.name             = 'erika_flutter'
-  s.version          = '0.1.7'
+  s.version          = '0.1.8'
   s.summary          = 'Flutter embedder glue for the Erika Rust media engine.'
   s.description      = <<-DESC
 Flutter tvOS plugin that hosts a CAMetalLayer and drives Erika through its C ABI.

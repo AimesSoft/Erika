@@ -1,6 +1,6 @@
 {
   "name": "erika-ohos-smoke-entry",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Build-only application that consumes the packaged Erika HAR",
   "main": "",
   "author": "AimesSoft",
