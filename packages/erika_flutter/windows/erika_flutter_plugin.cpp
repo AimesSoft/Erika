@@ -3009,26 +3009,71 @@ ErikaFlutterPlugin::ErikaOverlayWindow& ErikaFlutterPlugin::EnsureOverlayWindow(
                           : "No Flutter HWND is available for Erika overlay.");
   }
   if (!overlay_window_ || overlay_window_->flutter != parent) {
-    const std::string blend_mode =
-        overlay_window_ ? overlay_window_->blend_mode : "srcOver";
-    const double opacity = overlay_window_ ? overlay_window_->opacity : 1.0;
-    std::vector<PlayerHost*> reattach;
-    for (auto& entry : players_) {
-      if (entry.second->attached_view_id == kWindowOverlayViewId) {
-        reattach.push_back(entry.second.get());
-        // Clear composition references while the old overlay is still alive.
-        entry.second->Detach(std::nullopt);
-      }
-    }
-    overlay_window_ = std::make_unique<ErikaOverlayWindow>(parent);
-    overlay_window_->ConfigureComposition(blend_mode, opacity);
+    RecreateOverlayWindow(players_, overlay_window_, parent);
     StartFrameTimer();
-    for (auto* player : reattach) {
-      player->AttachOverlay(*overlay_window_);
-      overlay_window_->owner_player_id = player->id;
-    }
   }
   return *overlay_window_;
+}
+
+void ErikaFlutterPlugin::RecreateOverlayWindow(
+    const PlayerMap& players,
+    std::unique_ptr<ErikaOverlayWindow>& overlay,
+    HWND parent) {
+  const int64_t owner_id = overlay ? overlay->owner_player_id : 0;
+  auto next = std::make_unique<ErikaOverlayWindow>(parent);
+  next->ConfigureComposition(overlay ? overlay->blend_mode : "srcOver",
+                             overlay ? overlay->opacity : 1.0);
+  PlayerHost* owner = nullptr;
+  for (const auto& entry : players) {
+    auto& player = *entry.second;
+    if (player.attached_view_id == kWindowOverlayViewId) {
+      if (player.id == owner_id && player.surface_attached) {
+        owner = &player;
+      }
+      // Clear references while the old HWND/composition target is still alive.
+      player.Detach(std::nullopt);
+    }
+  }
+  overlay = std::move(next);
+  // Rebind only the owner chosen by Flutter, never the last map entry.
+  if (owner != nullptr) {
+    AttachOverlayPlayer(players, *owner, *overlay);
+  }
+}
+
+void ErikaFlutterPlugin::AttachOverlayPlayer(const PlayerMap& players,
+                                            PlayerHost& host,
+                                            ErikaOverlayWindow& overlay) {
+  // A shared overlay has one producer. Old widgets can still send late frame
+  // or detach messages, but must not keep rendering into the new owner's HWND.
+  for (const auto& entry : players) {
+    if (entry.second.get() != &host &&
+        entry.second->attached_view_id == kWindowOverlayViewId) {
+      entry.second->Detach(std::nullopt);
+    }
+  }
+  try {
+    host.AttachOverlay(overlay);
+    overlay.owner_player_id = host.id;
+  } catch (...) {
+    overlay.owner_player_id = 0;
+    throw;
+  }
+}
+
+bool ErikaFlutterPlugin::DetachOverlayPlayer(
+    PlayerHost& host,
+    ErikaOverlayWindow* overlay,
+    std::optional<int64_t> generation) {
+  if (generation && overlay && *generation != overlay->active_generation) {
+    return false;
+  }
+  host.Detach(kWindowOverlayViewId);
+  if (overlay && overlay->owner_player_id == host.id) {
+    overlay->SetFrame(0.0, 0.0, 0.0, 0.0, false, generation, std::nullopt);
+    overlay->owner_player_id = 0;
+  }
+  return true;
 }
 
 ErikaFlutterPlugin::PlayerHost& ErikaFlutterPlugin::PlayerFromArgs(
@@ -3546,8 +3591,7 @@ void ErikaFlutterPlugin::HandleMethodCall(
       overlay.ConfigureComposition(
           StringValue(FindArg(args, "blendMode")).value_or("srcOver"),
           DoubleValue(FindArg(args, "opacity")).value_or(1.0));
-      host.AttachOverlay(overlay);
-      overlay.owner_player_id = host.id;
+      AttachOverlayPlayer(players_, host, overlay);
       OnFrameTimer();
       result->Success();
     } else if (method == "detachView") {
@@ -3561,27 +3605,17 @@ void ErikaFlutterPlugin::HandleMethodCall(
       overlay.ConfigureComposition(
           StringValue(FindArg(args, "blendMode")).value_or("srcOver"),
           DoubleValue(FindArg(args, "opacity")).value_or(1.0));
-      host.AttachOverlay(overlay);
-      overlay.owner_player_id = host.id;
+      AttachOverlayPlayer(players_, host, overlay);
       OnFrameTimer();
       result->Success(EncodableValue(kWindowOverlayViewId));
     } else if (method == "detachOverlay") {
       auto& host = PlayerFromArgs(args);
       const auto generation = Int64Value(FindArg(args, "generation"));
-      if (generation && overlay_window_ &&
-          *generation != overlay_window_->active_generation) {
+      if (!DetachOverlayPlayer(host, overlay_window_.get(), generation)) {
         result->Success();
         return;
       }
-      host.Detach(kWindowOverlayViewId);
       OnFrameTimer();
-      if (overlay_window_) {
-        overlay_window_->SetFrame(0.0, 0.0, 0.0, 0.0, false, generation,
-                                  std::nullopt);
-        if (overlay_window_->owner_player_id == host.id) {
-          overlay_window_->owner_player_id = 0;
-        }
-      }
       result->Success();
     } else if (method == "setOverlayFrame") {
       const bool visible =
@@ -3592,25 +3626,30 @@ void ErikaFlutterPlugin::HandleMethodCall(
         result->Success();
         return;
       }
-      UpdateOverlayTarget(args);
-      auto& overlay = EnsureOverlayWindow();
       const int64_t player_id = RequiredInt64(args, "playerId");
       auto& host = PlayerFromArgs(args);
-      if (!visible && overlay.owner_player_id != 0 &&
-          overlay.owner_player_id != player_id) {
+      // Reject stale hides before they can switch the shared HWND target.
+      if (!visible && overlay_window_ &&
+          overlay_window_->owner_player_id != 0 &&
+          overlay_window_->owner_player_id != player_id) {
         result->Success();
         return;
       }
-      if (visible) {
-        overlay.owner_player_id = player_id;
-      }
+      UpdateOverlayTarget(args);
+      auto& overlay = EnsureOverlayWindow();
       overlay.ConfigureComposition(
           StringValue(FindArg(args, "blendMode")).value_or("srcOver"),
           DoubleValue(FindArg(args, "opacity")).value_or(1.0));
-      if (host.surface_attached &&
-          host.attached_view_id == kWindowOverlayViewId &&
-          host.composition_surface != host.RequiresComposition(overlay)) {
-        host.AttachOverlay(overlay);
+      const bool attached_to_overlay = host.surface_attached &&
+          host.attached_view_id == kWindowOverlayViewId;
+      if ((visible && !attached_to_overlay) ||
+          (attached_to_overlay &&
+           host.composition_surface != host.RequiresComposition(overlay))) {
+        AttachOverlayPlayer(players_, host, overlay);
+      }
+      if (visible) {
+        // Showing the same bound player again must not recreate its swapchain.
+        overlay.owner_player_id = player_id;
       }
       overlay.SetFrame(DoubleValue(FindArg(args, "x")).value_or(0.0),
                        DoubleValue(FindArg(args, "y")).value_or(0.0),

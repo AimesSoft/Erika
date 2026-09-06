@@ -69,6 +69,7 @@ class ErikaFlutterPlugin : public flutter::Plugin {
   struct ErikaOverlayWindow;
   struct ErikaFlutterTexture;
   struct PlayerHost;
+  using PlayerMap = std::unordered_map<int64_t, std::unique_ptr<PlayerHost>>;
 
   friend class ErikaEventStreamHandler;
   friend class ErikaFlutterPluginTestPeer;
@@ -96,6 +97,16 @@ class ErikaFlutterPlugin : public flutter::Plugin {
                                               LPARAM lparam);
 
   ErikaOverlayWindow& EnsureOverlayWindow();
+  static void RecreateOverlayWindow(
+      const PlayerMap& players,
+      std::unique_ptr<ErikaOverlayWindow>& overlay,
+      HWND parent);
+  static void AttachOverlayPlayer(const PlayerMap& players,
+                                  PlayerHost& host,
+                                  ErikaOverlayWindow& overlay);
+  static bool DetachOverlayPlayer(PlayerHost& host,
+                                  ErikaOverlayWindow* overlay,
+                                  std::optional<int64_t> generation);
   HWND RequestedOverlayFlutterWindow() const;
   void UpdateOverlayTarget(const flutter::EncodableMap& args);
   PlayerHost& PlayerFromArgs(const flutter::EncodableMap& args);
@@ -115,7 +126,7 @@ class ErikaFlutterPlugin : public flutter::Plugin {
   std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>>
       event_channel_;
   std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> event_sink_;
-  std::unordered_map<int64_t, std::unique_ptr<PlayerHost>> players_;
+  PlayerMap players_;
   std::unordered_map<int64_t, std::shared_ptr<ErikaFlutterTexture>> textures_;
   std::unique_ptr<ErikaOverlayWindow> overlay_window_;
   std::unique_ptr<ErikaWindowsSmtc> smtc_;

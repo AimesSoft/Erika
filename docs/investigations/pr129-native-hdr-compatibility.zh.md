@@ -56,3 +56,12 @@ ctest --test-dir target/windows-plugin-tests -C Debug --output-on-failure
 - 尚未执行 HDR 显示器上的实际视频播放、NipaPlay 集成和真实 DWM Composition 压力测试。无窗口 GPU/API 测试不等于这些场景已验收。
 - 合并前建议验证：普通 SDR/HDR10 的默认主组件播放与输出状态、暂停/seek/字幕/弹幕/超分、窗口缩放和跨显示器移动；透明扫描线 overlay；显式 texture 的暂停通知、裁剪/透明度、快速缩放及播放器切换/关闭。
 - 修改保存在独立 worktree，不改用户 main 工作区的已有修改；推送到原 PR 分支须经用户明确要求，不合并到 main。
+
+## 2026-09-07：Copilot 意见的实质性修复
+
+- 只处理已确认的 overlay 所有权错误及重复 CPU 缓冲复制。没有增加未经复现的 `isTopmost=FALSE` 回退，也没有调整诊断文案。
+- HWND 重建只恢复原 owner 的绑定；不再依赖无序容器的最后一个元素。显式切换 owner 时先解绑旧 producer；旧播放器迟到的 detach/hide 不得隐藏当前画面或切换共享 HWND。无 owner 或 owner 已解绑时，不擅自选择其他播放器。
+- 同一已绑定播放器隐藏后再次显示，不因 owner 标记暂时清空而重新创建 swapchain。默认原生 HWND/HDR 路径、解码池和输出格式协商不变。
+- texture 场景缓存按字幕/HUD、弹幕各自的实际内容更新；新视频帧不再导致未变化的 CPU 像素缓冲和实例列表被重新深拷贝。保留精确内容比较，没有引入可能漏更新的哈希或仅视频帧号判定；弹幕 atlas 继续使用已有 Arc 共享。
+- 新增测试验证连续 120 个视频帧沿用同一份缓存分配，同时字幕像素、alpha、弹幕位置及清除操作仍正确失效。Windows native 测试用隐藏 HWND 和真实插件状态逻辑覆盖 owner 保持、独占交接、迟到解绑、无 owner、绑定失败；仅 surface attach/detach 的 C 入口被替换，不测试真实 DWM 图像效果。
+- 本轮完整回归：Flutter 104/104，analyze 无问题；联合 Rust 核心 529/529、C API 41/41；插件编译及 native CTest 3/3。

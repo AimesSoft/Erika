@@ -668,22 +668,50 @@ impl FlutterTextureScene {
         self.frame_token == frame_token
             && self.generation == context.generation
             && self.upscaler == upscaler
-            && match (self.overlay.as_ref(), context.overlay) {
-                (Some(a), Some(b)) => {
-                    a.viewport == b.viewport
-                        && a.subtitle_planes == b.subtitle_planes
-                        && a.subtitle_alpha_planes == b.subtitle_alpha_planes
-                }
-                (None, None) => true,
-                _ => false,
+            && self.overlay_matches(context.overlay)
+            && self.danmaku_matches(context.danmaku)
+    }
+
+    fn overlay_matches(&self, overlay: Option<&OverlayFrame>) -> bool {
+        match (self.overlay.as_ref(), overlay) {
+            (Some(a), Some(b)) => {
+                a.viewport == b.viewport
+                    && a.subtitle_planes == b.subtitle_planes
+                    && a.subtitle_alpha_planes == b.subtitle_alpha_planes
             }
-            && match (self.danmaku.as_ref(), context.danmaku) {
-                (Some(a), Some(b)) => {
-                    a.viewport == b.viewport && a.atlas == b.atlas && a.items == b.items
-                }
-                (None, None) => true,
-                _ => false,
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    fn danmaku_matches(&self, danmaku: Option<&DanmakuRenderPlan>) -> bool {
+        match (self.danmaku.as_ref(), danmaku) {
+            (Some(a), Some(b)) => {
+                a.viewport == b.viewport && a.atlas == b.atlas && a.items == b.items
             }
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    fn update(
+        &mut self,
+        frame_token: u64,
+        upscaler: LumaUpscalerMode,
+        context: RenderFrameContext<'_>,
+    ) {
+        // A new video frame need not copy unchanged subtitle/HUD pixels or
+        // danmaku instances. Retain each cached buffer until its own content
+        // changes; keep exact comparisons rather than lossy fingerprints.
+        if !self.overlay_matches(context.overlay) {
+            self.overlay = context.overlay.cloned();
+        }
+        if !self.danmaku_matches(context.danmaku) {
+            self.danmaku = context.danmaku.cloned();
+        }
+        self.frame_token = frame_token;
+        self.generation = context.generation;
+        self.upscaler = upscaler;
     }
 }
 
@@ -1689,11 +1717,15 @@ impl D3d11Renderer {
         }
         if flutter_texture {
             self.publish_flutter_texture()?;
-            self.flutter_scene = Some(FlutterTextureScene::new(
-                frame_token,
-                self.upscaler_mode,
-                context,
-            ));
+            if let Some(scene) = self.flutter_scene.as_mut() {
+                scene.update(frame_token, self.upscaler_mode, context);
+            } else {
+                self.flutter_scene = Some(FlutterTextureScene::new(
+                    frame_token,
+                    self.upscaler_mode,
+                    context,
+                ));
+            }
         }
         self.stats.rendered_frames += 1;
         if !danmaku_draws.is_empty() {
@@ -3263,6 +3295,129 @@ mod tests {
             7,
             LumaUpscalerMode::Off,
             RenderFrameContext::new(Duration::ZERO, 1)
+        ));
+    }
+
+    #[test]
+    fn flutter_scene_reuses_unchanged_cpu_buffers_across_video_frames() {
+        use crate::danmaku::DanmakuViewport;
+        use crate::overlay::OverlayViewport;
+        use crate::subtitle::{SubtitleAlphaBitmap, SubtitleBitmapPlacement, SubtitleBitmapPlane};
+        let mut overlay = OverlayFrame {
+            pts: Duration::ZERO,
+            viewport: OverlayViewport::new(128, 64),
+            subtitle_planes: vec![SubtitleBitmapPlane::new(
+                0,
+                0,
+                128,
+                64,
+                vec![255; 128 * 64 * 4],
+            )],
+            subtitle_alpha_planes: vec![SubtitleAlphaBitmap::new(
+                SubtitleBitmapPlacement::new(0, 0, 128, 64),
+                128,
+                0xffffffff,
+                vec![255; 128 * 64],
+            )],
+            subtitle_changed: true,
+        };
+        let mut plan = DanmakuRenderPlan::empty(Duration::ZERO, 1, DanmakuViewport::new(128, 64));
+        plan.items.push(DanmakuGlyphInstance {
+            item_id: 1,
+            rect: [0.0, 0.0, 1.0, 1.0],
+            tex_rect: [0.0, 0.0, 1.0, 1.0],
+            color_rgba: [1.0; 4],
+            outline_rgba: [0.0; 4],
+            shadow_rgba: [0.0; 4],
+            shadow_offset: [0.0; 2],
+        });
+        let mut scene = FlutterTextureScene::new(
+            1,
+            LumaUpscalerMode::Off,
+            RenderFrameContext::new(Duration::ZERO, 1)
+                .overlay(Some(&overlay))
+                .danmaku(Some(&plan)),
+        );
+        let rgba = scene.overlay.as_ref().unwrap().subtitle_planes[0]
+            .rgba
+            .as_ptr();
+        let alpha = scene.overlay.as_ref().unwrap().subtitle_alpha_planes[0]
+            .alpha
+            .as_ptr();
+        let items = scene.danmaku.as_ref().unwrap().items.as_ptr();
+        for token in 2..=121 {
+            overlay.pts = Duration::from_millis(token * 10);
+            overlay.subtitle_changed = false;
+            plan.media_time = overlay.pts;
+            let context = RenderFrameContext::new(overlay.pts, 1)
+                .overlay(Some(&overlay))
+                .danmaku(Some(&plan));
+            assert!(!scene.matches(token, LumaUpscalerMode::Off, context));
+            scene.update(token, LumaUpscalerMode::Off, context);
+            assert!(scene.matches(token, LumaUpscalerMode::Off, context));
+            assert_eq!(
+                scene.overlay.as_ref().unwrap().subtitle_planes[0]
+                    .rgba
+                    .as_ptr(),
+                rgba
+            );
+            assert_eq!(
+                scene.overlay.as_ref().unwrap().subtitle_alpha_planes[0]
+                    .alpha
+                    .as_ptr(),
+                alpha
+            );
+            assert_eq!(scene.danmaku.as_ref().unwrap().items.as_ptr(), items);
+        }
+
+        // A real subtitle/HUD change still replaces the cached pixels even
+        // when the video frame is paused and subtitle_changed is false.
+        overlay.subtitle_planes[0].rgba[0] = 17;
+        overlay.subtitle_alpha_planes[0].alpha[0] = 23;
+        let context = RenderFrameContext::new(overlay.pts, 1)
+            .overlay(Some(&overlay))
+            .danmaku(Some(&plan));
+        assert!(!scene.matches(121, LumaUpscalerMode::Off, context));
+        scene.update(121, LumaUpscalerMode::Off, context);
+        assert!(scene.matches(121, LumaUpscalerMode::Off, context));
+        assert_eq!(
+            scene.overlay.as_ref().unwrap().subtitle_planes[0].rgba[0],
+            17
+        );
+        assert_eq!(
+            scene.overlay.as_ref().unwrap().subtitle_alpha_planes[0].alpha[0],
+            23
+        );
+        assert_eq!(scene.danmaku.as_ref().unwrap().items.as_ptr(), items);
+
+        let rgba = scene.overlay.as_ref().unwrap().subtitle_planes[0]
+            .rgba
+            .as_ptr();
+        plan.items[0].rect[0] = 2.0;
+        let context = RenderFrameContext::new(overlay.pts, 1)
+            .overlay(Some(&overlay))
+            .danmaku(Some(&plan));
+        assert!(!scene.matches(121, LumaUpscalerMode::Off, context));
+        scene.update(121, LumaUpscalerMode::Off, context);
+        assert!(scene.matches(121, LumaUpscalerMode::Off, context));
+        assert_eq!(
+            scene.overlay.as_ref().unwrap().subtitle_planes[0]
+                .rgba
+                .as_ptr(),
+            rgba
+        );
+        assert_eq!(scene.danmaku.as_ref().unwrap().items[0].rect[0], 2.0);
+
+        scene.update(
+            121,
+            LumaUpscalerMode::Off,
+            RenderFrameContext::new(Duration::ZERO, 2),
+        );
+        assert!(scene.overlay.is_none() && scene.danmaku.is_none());
+        assert!(scene.matches(
+            121,
+            LumaUpscalerMode::Off,
+            RenderFrameContext::new(Duration::ZERO, 2)
         ));
     }
 
