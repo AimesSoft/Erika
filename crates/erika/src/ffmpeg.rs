@@ -4462,10 +4462,10 @@ unsafe fn frame_dovi_metadata(frame: *const sys::AVFrame) -> Option<DoviSourceMe
     if header.disable_residual_flag == 0 {
         return None;
     }
-    // nlq_method_idc is a u8 in FFmpeg, so the spec's NLQ "off" state (-1)
-    // can never appear here; an absent NLQ parses as method 0 with all-neutral
-    // parameters instead.
-    let nlq_nontrivial = match i32::from(mapping.nlq_method_idc) {
+    // FFmpeg marks an absent NLQ with the AV_DOVI_NLQ_NONE sentinel (-1);
+    // method 0 with all-neutral parameters is likewise an identity mapping.
+    let nlq_nontrivial = match mapping.nlq_method_idc as i32 {
+        -1 => false,
         0 => mapping.nlq.iter().any(|params| {
             params.nlq_offset != 0
                 || params.linear_deadzone_slope != 0
