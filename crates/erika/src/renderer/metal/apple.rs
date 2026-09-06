@@ -57,7 +57,7 @@ use crate::renderer::metal::{
     VideoFrameTextureSource, VideoRenderFrame, fourcc_string, metal_drawable_pixel_format,
     metal_target_color,
 };
-use crate::renderer::output::clamp_output_mode_to_display;
+use crate::renderer::output::negotiate_output_mode;
 use crate::renderer::pipeline::{ColorRange, DoviUniforms, LumaUpscalerMode, ToneMapOperator};
 use crate::renderer::pipeline::{SourceColorState, TargetColorState};
 use crate::renderer::presentation::PresentationLayout as VideoPresentationLayout;
@@ -422,22 +422,18 @@ impl MetalRendererImpl {
         let selected = if self.flutter_texture_attached {
             MetalOutputMode::Sdr
         } else {
-            let resolved = self.requested_output_mode.resolve_for_source(source_is_hdr);
             #[cfg(target_os = "macos")]
-            let selected = {
-                let headroom = self.display_edr_headroom();
-                let clamped = clamp_output_mode_to_display(resolved, headroom);
-                if clamped != resolved && clamped != self.output_mode && hdr_debug_enabled() {
-                    eprintln!(
-                        "ErikaHDR: clamping {:?} to the display's {:.2}x EDR headroom -> {:?}",
-                        resolved, headroom, clamped
-                    );
-                }
-                clamped
-            };
+            {
+                negotiate_output_mode(
+                    self.requested_output_mode,
+                    source_is_hdr,
+                    self.display_edr_headroom(),
+                )
+            }
             #[cfg(not(target_os = "macos"))]
-            let selected = resolved;
-            selected
+            {
+                self.requested_output_mode.resolve_for_source(source_is_hdr)
+            }
         };
         if selected != self.output_mode {
             self.set_output_mode(selected);
