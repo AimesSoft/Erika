@@ -38,6 +38,10 @@ jobs:
         run: sha256sum --check SHA256SUMS
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
+      - name: Check C API and package binding alignment
+        env:
+          CXX: g++
+        run: python3 packaging/tests/test_api_alignment.py -v
       - name: Check license policy
         run: cargo run --locked -p xtask -- check license
       - name: Verify vendored Cargo patches

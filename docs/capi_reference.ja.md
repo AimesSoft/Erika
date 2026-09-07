@@ -172,9 +172,10 @@ typedef struct ErikaOpenOptions {
 } ErikaOpenOptions;
 ```
 
-`open` と `play` は
-非同期にキューへ投入されます。ホスト UI スレッドをブロックせず、`StateChanged`、
-`DurationChanged`、`Error` イベントで最終結果を確認してください。
+`open` は同期的にストリームを調査して `Ready` に遷移し、`play` は非同期に
+キューへ投入されます。ブロックする open はホスト UI スレッド以外で実行し、
+同じ handle への呼び出しはすべて直列化してください。以後の再生状態は
+`StateChanged`、`DurationChanged`、`Error` イベントで確認します。
 
 ### トラックと字幕
 
@@ -243,6 +244,11 @@ ErikaPresenterHandle *erika_presenter_create_with_output_mode_and_alpha(int32_t 
                                                                         int32_t video_alpha_mode);
 void                  erika_presenter_destroy(ErikaPresenterHandle *handle);
 ```
+
+v0.1.8 の `ErikaPresenterConfig` は 4 フィールド、16 bytes です。v0.1.7 は
+3 フィールド、12 bytes でした。値渡しする構造体のため、この間にバイナリ互換性は
+ありません。C/C++ の呼び出し側と手書き Swift/FFI mirror は対応するヘッダーと
+native library で再ビルドし、不透明 video では `video_alpha_mode` を `0` にします。
 
 `ErikaPresenterConfig` は出力モード（`Sdr`、Apple `AppleEdr`、Android
 `ExtendedLinear`）、requested EDR/scRGB content-headroom ceiling、初期輝度アップスケーラ、そして
@@ -517,6 +523,14 @@ swap chain を作成します。この getter は **AddRef 済みの `IUnknown*`
 喪失の後は再取得してください——Erika は swap chain を再構築し、新しいオブジェクトを
 公開します。ポインタが同じなら再構築はありません。
 
+### Windows Flutter texture
+
+```c
+ErikaStatus erika_presenter_windows_flutter_texture_iunknown(ErikaPresenterHandle *, void **out_texture);
+```
+
+Windows 専用で、他の platform ではこの symbol は export されません。最新の完了済みで不変な SDR Flutter GPU frame を **AddRef 済みの `IUnknown*`** として返します。呼び出し側が参照を所有し、`Release` が必要です。frame の使用中は参照を保持してください。texture の内容はその寿命中に変更されません。出力ポインターが null なら `NullPointer`、有効な presenter に完了済み Flutter texture がなければ `PlayerError` を返して出力を null にします。frame を要求する前に描画を駆動してください。
+
 ### レンダーループとイベント
 
 ```c
@@ -624,8 +638,8 @@ Fallback value は ABI-stable です。新しい reason は末尾へ追加し、
 | 7 | `SurfaceConfigureFailed` | `surface_configure_failed` | requested output surface configure failure。 |
 | 8 | `LegacyAppleEdrUnsupported` | `legacy_apple_edr_unsupported` | Apple EDR 未実装 backend でこの mode を要求。 |
 
-`capture_frame_rgba` は**スクリーンショット**です。現在の合成フレーム（映像 + 字幕（弾幕は含みません） +
-弾幕）を、要求した `width`×`height`（表示 surface サイズとは独立）で呼び出し側確保の
+`capture_frame_rgba` は**スクリーンショット**です。現在の合成フレーム（映像 + 字幕、
+弾幕は含みません）を、要求した `width`×`height`（表示 surface サイズとは独立）で呼び出し側確保の
 RGBA8 バッファにオフスクリーン描画します。`out_capacity` は少なくとも `width*height*4`。
 フレームがまだ無いときは `PlayerError` を返します。Metal と wgpu（Android を含む）は
 capture を実装済みで、現在の D3D11 backend は未実装です。capture は常に SDR RGBA8

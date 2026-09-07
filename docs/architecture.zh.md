@@ -172,7 +172,9 @@ Windows 平台的原生渲染器（`renderer/d3d11.rs`）：
 
 ## C ABI
 
-`erika_capi` 通过两组 handle family 导出 88 个函数：
+主头文件为 `crates/erika_capi/include/erika.h`，各包的副本须与其一致。两个 `erika_presenter_windows_*_iunknown` getter 仅在 Windows 导出；共用头文件在所有平台都保留其声明。
+
+`erika_capi` 提供两组 handle family：
 
 - **`ErikaHandle`**：播放器控制与事件轮询，渲染由宿主管理。
 - **`ErikaPresenterHandle`**：Erika 持有完整栈，宿主只需提供 surface 并调用 `render_tick`。

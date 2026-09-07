@@ -18,6 +18,8 @@ export interface ErikaPlayerConfig {
   outputMode?: number;
   edrHeadroom?: number;
   upscaler?: number;
+  /** 0 = opaque (default), 1 = packed alpha in the right half of the frame. */
+  videoAlphaMode?: number;
 }
 
 export interface ErikaOpenOptions {
@@ -39,7 +41,8 @@ export class ErikaPlayer {
     const outputMode: number = config.outputMode ?? 0;
     const edrHeadroom: number = config.edrHeadroom ?? 1.0;
     const upscaler: number = config.upscaler ?? 0;
-    this.nativeId = erikaNative.nativeCreate(outputMode, edrHeadroom, upscaler) as number;
+    const videoAlphaMode: number = config.videoAlphaMode ?? 0;
+    this.nativeId = erikaNative.nativeCreate(outputMode, edrHeadroom, upscaler, videoAlphaMode) as number;
     if (this.nativeId <= 0) {
       throw new Error('Erika player creation failed: ' + (erikaNative.nativeLastError() as string));
     }

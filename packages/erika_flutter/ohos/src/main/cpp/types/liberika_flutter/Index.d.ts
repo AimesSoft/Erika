@@ -1,4 +1,4 @@
-export const nativeCreate: (outputMode: number, headroom: number, upscaler: number) => number;
+export const nativeCreate: (outputMode: number, headroom: number, upscaler: number, videoAlphaMode?: number) => number;
 export const nativeLastError: () => string | null;
 export const nativeDestroy: (playerId: number) => void;
 export const nativeInvoke: (playerId: number, method: string, argumentsJson: string) => string;

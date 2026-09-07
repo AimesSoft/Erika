@@ -91,8 +91,8 @@ void ReleaseWindow(OhosPlayer& player) {
 }
 
 napi_value NativeCreate(napi_env env, napi_callback_info info) {
-  size_t argc = 3;
-  napi_value args[3] = {};
+  size_t argc = 4;
+  napi_value args[4] = {};
   napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
   if (argc < 3) {
     return Int64(env, 0);
@@ -101,6 +101,7 @@ napi_value NativeCreate(napi_env env, napi_callback_info info) {
   config.output_mode = GetInt32(env, args[0]);
   config.edr_headroom = static_cast<float>(GetDouble(env, args[1]));
   config.luma_upscaler = GetInt32(env, args[2]);
+  config.video_alpha_mode = argc > 3 ? GetInt32(env, args[3]) : 0;
   auto* presenter = erika_presenter_create_with_config(config);
   if (presenter == nullptr) {
     return Int64(env, 0);

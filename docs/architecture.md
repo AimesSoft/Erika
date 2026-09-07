@@ -297,7 +297,9 @@ DanmakuEngine, and audio output. The host supplies a native surface and drives
 
 ## C ABI
 
-`erika_capi` exports 88 functions through two handle families:
+The canonical header is `crates/erika_capi/include/erika.h`; package copies must match it. The two `erika_presenter_windows_*_iunknown` getters are exported only on Windows, even though the shared header declares them on all platforms.
+
+`erika_capi` exposes two handle families:
 
 - **`ErikaHandle`** — player control and event polling. The host owns rendering.
 - **`ErikaPresenterHandle`** — Erika owns the full stack. The host provides a

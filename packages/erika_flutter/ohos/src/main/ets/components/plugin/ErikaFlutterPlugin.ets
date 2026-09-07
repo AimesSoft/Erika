@@ -212,7 +212,8 @@ export default class ErikaFlutterPlugin implements FlutterPlugin, MethodCallHand
       outputMode === 2 ? 4.0 : 1.0,
     );
     const upscaler = this.numberArg(args, 'upscaler', 0);
-    const playerId = erikaNative.nativeCreate(outputMode, headroom, upscaler) as number;
+    const videoAlphaMode = this.numberArg(args, 'videoAlphaMode', 0);
+    const playerId = erikaNative.nativeCreate(outputMode, headroom, upscaler, videoAlphaMode) as number;
     if (playerId <= 0) {
       result.error(
         'ERIKA_ERROR',

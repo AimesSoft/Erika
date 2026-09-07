@@ -235,7 +235,7 @@ Useful for:
 - SDR fallback.
 - Platforms where native view composition is not ready.
 - Transparent video that should participate in Flutter's compositor
-  (`ErikaTextureVideoView` on macOS and OpenHarmony).
+  (`ErikaTextureVideoView` on macOS, Windows, and OpenHarmony).
 - Test surfaces or constrained embedding environments.
 
 It is not the preferred HDR/EDR route because video enters Flutter's
@@ -280,7 +280,7 @@ await player.play();
 // Preferred for full-player UIs on macOS/iOS/tvOS:
 ErikaWindowOverlayVideoView(player: player)
 
-// Flutter-composited video with opacity/clipping/filters (macOS/OpenHarmony):
+// Flutter-composited video with opacity/clipping/filters (macOS/Windows/OpenHarmony):
 ErikaTextureVideoView(player: player, opacity: 0.8)
 
 // Compatibility/diagnostic platform-view path:

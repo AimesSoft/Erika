@@ -39,7 +39,7 @@ touch events は両方の native video strategy を通過するので、Flutter 
 
 ### ErikaTextureVideoView (Flutter Texture)
 
-`ErikaTextureVideoView` は platform view ではなく Flutter の texture registrar 経由で描画します。macOS では plugin が IOSurface-backed の `CVPixelBuffer` pool を確保し、その Metal texture に直接描画（フレームごとの CPU readback なし）して Flutter へ frame を publish するため、`Opacity`、clipping、transform、color filter といった通常の Flutter effect が video に適用されます。OpenHarmony では登録済みの external texture を再利用します。それ以外の platform では `ErikaVideoView` に fallback します。
+`ErikaTextureVideoView` は platform view ではなく Flutter の texture registrar 経由で描画します。macOS では plugin が IOSurface-backed の `CVPixelBuffer` pool を確保し、その Metal texture に直接描画（フレームごとの CPU readback なし）して Flutter へ frame を publish するため、`Opacity`、clipping、transform、color filter といった通常の Flutter effect が video に適用されます。OpenHarmony では登録済みの external texture を再利用します。Windows は SDR BGRA8 GPU texture 出力を提供します。それ以外の platform では `ErikaVideoView` に fallback します。
 
 macOS で `blendMode` が `srcOver` 以外の場合、widget は native platform view に切り替え、Core Animation に実際の背景に対する blending を任せます（下記「透明 video と blend mode」を参照）。
 
@@ -154,7 +154,7 @@ Flutter Texture は機能が限定された compatibility path です。
 用途:
 - SDR fallback。
 - native view composition がまだ使えない platform。
-- Flutter compositor に入るべき透明 video（macOS / OpenHarmony の `ErikaTextureVideoView`）。
+- Flutter compositor に入るべき透明 video（macOS / Windows / OpenHarmony の `ErikaTextureVideoView`）。
 - test surface や制約の強い embedding 環境。
 
 HDR/EDR の推奨 path ではありません。video が Flutter compositor に入ってしまうためです。Apple では surface は IOSurface-backed の `CVPixelBuffer` です。host が Flutter texture を登録し、毎 render tick の前に `erika_presenter_attach_flutter_texture` と `erika_presenter_set_flutter_texture_buffer` でその frame の Metal texture を選択すると、Flutter が同じ buffer を CPU readback なしで合成します。pixel buffer の所有権は host 側にあります。
@@ -192,7 +192,7 @@ await player.play();
 // Preferred for full-player UIs on macOS/iOS/tvOS:
 ErikaWindowOverlayVideoView(player: player)
 
-// Flutter 合成の video。opacity / clipping / filter に対応（macOS/OpenHarmony）:
+// Flutter 合成の video。opacity / clipping / filter に対応（macOS/Windows/OpenHarmony）:
 ErikaTextureVideoView(player: player, opacity: 0.8)
 
 // Compatibility/diagnostic platform-view path:

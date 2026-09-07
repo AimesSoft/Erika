@@ -175,7 +175,9 @@ Windows のネイティブ renderer（`renderer/d3d11.rs`）：
 
 ## C ABI
 
-`erika_capi` は 2 つの handle family で 88 関数を export します。
+正本のヘッダーは `crates/erika_capi/include/erika.h` で、各 package のコピーは一致させます。2 つの `erika_presenter_windows_*_iunknown` getter は Windows のみで export されますが、共通ヘッダーには全 platform で宣言されます。
+
+`erika_capi` は 2 つの handle family を提供します。
 
 - **`ErikaHandle`**: player control と event polling。rendering は host 管理です。
 - **`ErikaPresenterHandle`**: Erika が full stack を所有します。host は surface を渡して `render_tick` を呼びます。

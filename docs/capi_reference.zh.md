@@ -164,9 +164,9 @@ typedef struct ErikaOpenOptions {
 } ErikaOpenOptions;
 ```
 
-`open` 和 `play` 都会
-异步入队；应观察 `StateChanged`、`DurationChanged` 和 `Error` 事件获取最终结果，
-不要阻塞宿主 UI 线程。
+`open` 会同步探测媒体流并转入 `Ready`；`play` 才是异步入队。
+应在宿主 UI 线程之外执行可能阻塞的 open，并串行调用同一 handle 的所有接口。
+通过 `StateChanged`、`DurationChanged` 和 `Error` 事件观察后续播放变化。
 
 ### 轨道与字幕
 
@@ -240,6 +240,11 @@ ErikaPresenterHandle *erika_presenter_create_with_output_mode_and_alpha(int32_t 
                                                                         int32_t video_alpha_mode);
 void                  erika_presenter_destroy(ErikaPresenterHandle *handle);
 ```
+
+从 v0.1.8 起，`ErikaPresenterConfig` 为四字段、16 字节；v0.1.7 为三字段、
+12 字节。此结构体按值传递，两个版本不具备二进制兼容性。C/C++ 调用方及手写
+Swift/FFI 镜像必须使用配套头文件和原生库重新编译，不透明视频应将
+`video_alpha_mode` 初始化为 `0`。
 
 `ErikaPresenterConfig` 选择输出模式（`Sdr`、Apple `AppleEdr`、Android
 `ExtendedLinear`）、请求的 EDR/scRGB 内容 headroom 上限、初始亮度超分，以及
@@ -489,6 +494,14 @@ ErikaStatus erika_presenter_windows_composition_swapchain_iunknown(ErikaPresente
 composition swap chain。此 getter 以 **AddRef 后的 `IUnknown*`** 返回它：调用者拥有返回的
 COM 引用，必须自行 `Release`。解码器/设备丢失后应重新获取——Erika 会重建 swap chain
 并暴露新对象；指针未变说明没有重建。
+
+### Windows Flutter 纹理
+
+```c
+ErikaStatus erika_presenter_windows_flutter_texture_iunknown(ErikaPresenterHandle *, void **out_texture);
+```
+
+仅限 Windows，其他平台不导出此符号。返回最新已完成且不可变的 SDR Flutter GPU 帧，类型为 **已 AddRef 的 `IUnknown*`**。调用方拥有该引用，必须 `Release`；使用帧期间应保留引用，纹理内容在其整个生命周期内不会改变。输出指针为空时返回 `NullPointer`；presenter 有效但尚无已完成 Flutter 纹理时返回 `PlayerError`，并将输出置空。应先驱动渲染再请求帧。
 
 ### 渲染循环与事件
 

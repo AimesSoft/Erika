@@ -180,9 +180,10 @@ typedef struct ErikaOpenOptions {
 } ErikaOpenOptions;
 ```
 
-`open` and `play` enqueue work asynchronously. Watch for `StateChanged`,
-`DurationChanged`, and `Error` events for the authoritative result instead of
-blocking the host UI thread.
+`open` synchronously probes streams and transitions to `Ready`; `play` enqueues
+work asynchronously. Run blocking opens off the host UI thread and serialize
+all calls on the same handle. Observe `StateChanged`, `DurationChanged`, and
+`Error` events for subsequent playback changes.
 
 ### Tracks and subtitles
 
@@ -262,6 +263,12 @@ ErikaPresenterHandle *erika_presenter_create_with_output_mode_and_alpha(int32_t 
                                                                         int32_t video_alpha_mode);
 void                  erika_presenter_destroy(ErikaPresenterHandle *handle);
 ```
+
+Since v0.1.8, `ErikaPresenterConfig` has four fields (16 bytes); v0.1.7 used
+three fields (12 bytes). This by-value structure is not binary-compatible
+across those versions. Rebuild C/C++ callers and manual Swift/FFI mirrors
+with the matching header and native library, and initialize `video_alpha_mode`
+to `0` for opaque video.
 
 `ErikaPresenterConfig` selects the output mode (`Sdr`, Apple `AppleEdr`, or
 Android `ExtendedLinear`), the requested EDR/scRGB content-headroom ceiling,
@@ -562,6 +569,14 @@ target HWND. This getter returns it as an **AddRef'd `IUnknown*`**: the caller
 owns the returned COM reference and must `Release` it. Re-fetch it after
 decoder/device loss — Erika recreates the swap chain and exposes the new
 object; the same pointer means nothing was rebuilt.
+
+### Windows Flutter texture
+
+```c
+ErikaStatus erika_presenter_windows_flutter_texture_iunknown(ErikaPresenterHandle *, void **out_texture);
+```
+
+Windows only; this symbol is not exported on other platforms. Returns the latest completed, immutable SDR Flutter GPU frame as an **AddRef'd `IUnknown*`**. The caller owns the reference and must `Release` it. Keep the reference while consuming the frame; its texture contents remain unchanged throughout its lifetime. A null output pointer returns `NullPointer`. With a valid presenter but no completed Flutter texture, it returns `PlayerError` and clears the output pointer. Drive rendering before requesting a frame.
 
 ### Render loop and events
 

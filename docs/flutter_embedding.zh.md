@@ -39,7 +39,7 @@ Apple HDR 路径使用 native Metal-backed surface，而不是 Flutter Texture�
 
 ### ErikaTextureVideoView (Flutter Texture)
 
-`ErikaTextureVideoView` 通过 Flutter 的 texture registrar 渲染，而不是 platform view。macOS 上 plugin 会分配 IOSurface-backed 的 `CVPixelBuffer` 池，直接渲染进其 Metal texture（无逐帧 CPU 回读），再把帧发布给 Flutter，因此 `Opacity`、裁剪、变换和颜色滤镜等常规 Flutter 效果都作用在视频上。OpenHarmony 上复用已注册的外部纹理。其他平台回退到 `ErikaVideoView`。
+`ErikaTextureVideoView` 通过 Flutter 的 texture registrar 渲染，而不是 platform view。macOS 上 plugin 会分配 IOSurface-backed 的 `CVPixelBuffer` 池，直接渲染进其 Metal texture（无逐帧 CPU 回读），再把帧发布给 Flutter，因此 `Opacity`、裁剪、变换和颜色滤镜等常规 Flutter 效果都作用在视频上。OpenHarmony 上复用已注册的外部纹理。Windows 提供 SDR BGRA8 GPU 纹理输出（详见下文）。其他平台回退到 `ErikaVideoView`。
 
 macOS 上当 `blendMode` 不是 `srcOver` 时，widget 会改走 native platform view，让 Core Animation 基于真实背景做混合（见下文"透明视频与混合模式"）。
 
@@ -154,7 +154,7 @@ Flutter Texture 是一个能力更低的兼容路径。
 适合：
 - SDR fallback。
 - native view composition 尚未准备好的平台。
-- 需要进入 Flutter compositor 的透明视频（macOS/OpenHarmony 上的 `ErikaTextureVideoView`）。
+- 需要进入 Flutter compositor 的透明视频（macOS/Windows/OpenHarmony 上的 `ErikaTextureVideoView`）。
 - 测试 surface 或受限 embedding 环境。
 
 它不是首选 HDR/EDR 路径，因为视频会进入 Flutter compositor。Apple 上 surface 是 IOSurface-backed 的 `CVPixelBuffer`：宿主注册 Flutter texture，在每个 render tick 前用 `erika_presenter_attach_flutter_texture` 和 `erika_presenter_set_flutter_texture_buffer` 选定该帧的 Metal texture，Flutter 随后合成同一个 buffer，无 CPU 回读。pixel buffer 的所有权始终在宿主侧。
@@ -191,7 +191,7 @@ await player.play();
 // Preferred for full-player UIs on macOS/iOS/tvOS:
 ErikaWindowOverlayVideoView(player: player)
 
-// Flutter 合成的视频，支持不透明度/裁剪/滤镜（macOS/OpenHarmony）：
+// Flutter 合成的视频，支持不透明度/裁剪/滤镜（macOS/Windows/OpenHarmony）：
 ErikaTextureVideoView(player: player, opacity: 0.8)
 
 // Compatibility / diagnostic platform-view path:
