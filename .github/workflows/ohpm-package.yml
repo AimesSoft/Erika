@@ -31,6 +31,11 @@ on:
         required: true
         default: false
         type: boolean
+      build_flutter_bridge:
+        description: Also rebuild the Flutter OHOS bridge against the released core
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       version:
@@ -114,6 +119,46 @@ jobs:
           test -n "$runtime"
           cp "$runtime" packages/erika_ohos/src/main/cpp/liberika_capi.so
           test -f packages/erika_ohos/src/main/cpp/liberika_capi.so
+
+      - name: Rebuild Flutter OHOS bridge with the released core
+        if: github.event_name == 'workflow_dispatch' && inputs.build_flutter_bridge
+        shell: bash
+        env:
+          OHOS_SDK_NATIVE: ${{ steps.ohos_sdk.outputs.ohos_sdk_native }}
+        run: |
+          set -euo pipefail
+          cmake -S packages/erika_flutter/ohos/src/main/cpp \
+            -B "$RUNNER_TEMP/erika-flutter-bridge" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$OHOS_SDK_NATIVE/build/cmake/ohos.toolchain.cmake" \
+            -DOHOS_ARCH=arm64-v8a \
+            -DOHOS_SDK_NATIVE="$OHOS_SDK_NATIVE"
+          cmake --build "$RUNNER_TEMP/erika-flutter-bridge" --target erika_flutter_plugin
+          bridge="$RUNNER_TEMP/erika-flutter-bridge/liberika_flutter.so"
+          test -s "$bridge"
+          "$OHOS_SDK_NATIVE/llvm/bin/llvm-readelf" -h "$bridge" | grep -Eq 'Machine:.*AArch64'
+          cmp packages/erika_ohos/src/main/cpp/liberika_capi.so \
+            "$RUNNER_TEMP/erika-flutter-bridge/liberika_capi.so"
+          output="$RUNNER_TEMP/erika-flutter-ohos-rebuild"
+          mkdir -p "$output"
+          cp "$bridge" "$output/"
+          git archive --format=tar.gz HEAD:packages/erika_flutter \
+            > "$output/erika_flutter-${ERIKA_NATIVE_VERSION}-source.tar.gz"
+          {
+            echo "version: $ERIKA_NATIVE_VERSION"
+            echo "bridge/source commit: $(git rev-parse HEAD)"
+            echo "core: reused unchanged from v${ERIKA_NATIVE_VERSION}"
+            echo "Use the matching ArkTS source; replacing only the native bridge does not fix argument forwarding."
+          } > "$output/MANIFEST.txt"
+          (cd "$output" && sha256sum liberika_flutter.so *.tar.gz MANIFEST.txt > SHA256SUMS)
+
+      - name: Upload rebuilt Flutter bridge and matching source
+        if: github.event_name == 'workflow_dispatch' && inputs.build_flutter_bridge
+        uses: actions/upload-artifact@v4
+        with:
+          name: erika-flutter-ohos-rebuild-${{ env.ERIKA_NATIVE_VERSION }}
+          path: ${{ runner.temp }}/erika-flutter-ohos-rebuild/*
+          if-no-files-found: error
 
       - name: Install Hvigor
         working-directory: packages/erika_ohos
