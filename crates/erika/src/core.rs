@@ -463,6 +463,10 @@ pub struct PlayerVideoFrame {
     pub media_time: Duration,
     pub late_by: Option<Duration>,
     pub generation: u64,
+    /// Measured scene-average luminance (nits) attached by the presenter for
+    /// HDR10 software frames without Dolby Vision L1 metadata. `None` for
+    /// every other source; renderers fold it into the tone-map pivot.
+    pub scene_avg_nits: Option<f32>,
 }
 
 impl PlayerVideoFrame {
@@ -481,6 +485,7 @@ impl PlayerVideoFrame {
             media_time,
             late_by,
             generation,
+            scene_avg_nits: None,
         })
     }
 }

@@ -19,7 +19,6 @@ use wgpu::util::DeviceExt;
 
 #[cfg(target_os = "android")]
 use crate::android::{AndroidDataSpaceErrorKind, AndroidNativeWindow};
-#[cfg(target_os = "android")]
 use crate::core::ColorPrimaries;
 #[cfg(any(
     target_os = "android",
@@ -31,7 +30,8 @@ use crate::core::ColorPrimaries;
 use crate::core::WgpuSurfaceKind;
 use crate::core::{
     LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame, RenderFrameContext,
-    RendererBackend, RendererRuntimeStats, Result, SurfaceOutputCapabilities, WgpuSurfaceHandle,
+    RendererBackend, RendererRuntimeStats, Result, SurfaceOutputCapabilities, TransferFunction,
+    WgpuSurfaceHandle,
 };
 use crate::danmaku::{
     DanmakuAtlasUpdate, DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan,
@@ -42,6 +42,9 @@ use crate::overlay::OverlayFrame;
 use crate::renderer::android_vulkan::{
     AndroidAhbConversionError, AndroidAhbCrop, AndroidAhbFrameDescription,
     AndroidAhbIntermediateFormat, AndroidVulkanInterop, retire_ahb_conversion_after_submission,
+};
+use crate::renderer::gamut::{
+    GamutLut, GamutLutJob, GamutLutParams, LUT_SIZE_C, LUT_SIZE_H, LUT_SIZE_I, pack_rgba16f,
 };
 use crate::renderer::metal::{MetalRendererConfig, VideoAlphaMode};
 #[cfg(target_env = "ohos")]
@@ -279,6 +282,38 @@ impl OverlayUniforms {
     }
 }
 
+/// Decode the packed (source << 8 | target) primaries codes from
+/// `VideoUniforms::_gamut_reserved`, used to key the perceptual LUT cache.
+fn gamut_lut_key_of(uniforms: VideoUniforms) -> Option<(ColorPrimaries, ColorPrimaries, u32, u32)> {
+    if uniforms.gamut_lut_enabled == 0 {
+        return None;
+    }
+    let packed = uniforms._gamut_primaries;
+    let source = match packed >> 8 {
+        1 => ColorPrimaries::Bt2020,
+        2 => ColorPrimaries::DisplayP3,
+        _ => ColorPrimaries::Bt709,
+    };
+    let target = match packed & 0xff {
+        1 => ColorPrimaries::Bt2020,
+        2 => ColorPrimaries::DisplayP3,
+        _ => ColorPrimaries::Bt709,
+    };
+    // The LUT's I axis spans [target black, target peak] in PQ codes; any
+    // change to either endpoint changes the sampled range, so include both
+    // (`tone_map_extra.z` is the target black in nits).
+    let target_black_pq = quantize_luma_pq(uniforms.tone_map_extra[2]);
+    let target_peak_pq = quantize_luma_pq(uniforms.nits[1]);
+    Some((source, target, target_black_pq, target_peak_pq))
+}
+
+/// Quantize a luminance (nits) to its PQ code for the LUT cache key. The key
+/// only has to change when the LUT's I axis changes, so 16-bit PQ resolution
+/// is ample (and keeps the sub-1-nit target blacks of SDR targets distinct).
+fn quantize_luma_pq(nits: f32) -> u32 {
+    (pq_code_for_lut(nits) * 65535.0) as u32
+}
+
 /// Lazily-built GPU objects for the NV12/P010 video pipeline, tied to the color
 /// target format the pipeline was compiled for.
 struct VideoPipeline {
@@ -365,12 +400,22 @@ fn prepare_planar_upload(
     } else {
         (frame, PlanarUploadPath::Native)
     };
-    uniforms.is_p010 = u32::from(frame.format == PlanarPixelFormat::P010);
+    uniforms = uniforms.with_p010_representation(frame.format == PlanarPixelFormat::P010);
     Ok(PreparedPlanarUpload {
         frame,
         uniforms,
         path,
     })
+}
+
+fn pq_code_for_lut(nits: f32) -> f32 {
+    let m1 = 0.1593017578125_f32;
+    let m2 = 78.84375_f32;
+    let c1 = 0.8359375_f32;
+    let c2 = 18.8515625_f32;
+    let c3 = 18.6875_f32;
+    let p = (nits / 10000.0).clamp(0.0, 1.0).powf(m1);
+    ((c1 + c2 * p) / (1.0 + c3 * p).max(0.000_001)).powf(m2)
 }
 
 fn source_color_for_player_frame(frame: &PlayerVideoFrame) -> SourceColorState {
@@ -381,6 +426,8 @@ fn source_color_for_player_frame(frame: &PlayerVideoFrame) -> SourceColorState {
     .range(frame.frame.color_range())
     .matrix(frame.frame.matrix_coefficients())
     .hdr_metadata(frame.frame.hdr_metadata())
+    .dovi(frame.frame.dovi_metadata())
+    .measured_scene_avg_nits(frame.scene_avg_nits)
 }
 
 #[cfg(target_os = "android")]
@@ -423,7 +470,7 @@ impl UploadedVideoFrame {
         let Some(source) = self.source_color else {
             return self.uniforms;
         };
-        let pipeline = VideoRenderPipeline::new(source, output.target);
+        let pipeline = VideoRenderPipeline::new(source, output.tone_map_target_for(&source));
         let uniforms = VideoUniforms::from_pipeline(
             &pipeline,
             self.uniforms.is_p010 != 0,
@@ -499,6 +546,19 @@ pub struct WgpuRenderer {
     surface: Option<AttachedSurface>,
     video_pipeline: Option<VideoPipeline>,
     overlay_pipeline: Option<OverlayPipeline>,
+    /// Perceptual gamut-mapping 3D LUT cache, keyed by the source/target
+    /// primaries plus the target black/peak (PQ codes) that parametrize the
+    /// LUT's I axis.
+    gamut_lut: Option<(
+        (ColorPrimaries, ColorPrimaries, u32, u32),
+        wgpu::Texture,
+        wgpu::TextureView,
+    )>,
+    /// Background generation for a cache miss; the fast `gamut_compress`
+    /// path renders until the LUT lands.
+    gamut_lut_job: Option<GamutLutJob>,
+    /// 1x1x1 fallback view so binding 4 always has a valid resource.
+    dummy_lut: Option<wgpu::TextureView>,
     current_video: Option<UploadedVideoFrame>,
     current_video_visible: bool,
     upload_serial: u64,
@@ -1425,6 +1485,9 @@ impl WgpuRenderer {
             output_status: OutputRuntimeStatus::requested(output_mode),
             output_headroom: OutputHeadroomState::default(),
             upscaler_mode: LumaUpscalerMode::Off,
+            gamut_lut: None,
+            gamut_lut_job: None,
+            dummy_lut: None,
             upscaler,
             upscaler_failed_frame_token: None,
             upscaler_active_frame_reported: false,
@@ -1891,7 +1954,7 @@ impl WgpuRenderer {
             .surface
             .as_ref()
             .map_or_else(OutputDescription::sdr, |surface| surface.output);
-        let pipeline = VideoRenderPipeline::new(source, output.target);
+        let pipeline = VideoRenderPipeline::new(source, output.tone_map_target_for(&source));
         if source.is_hdr() {
             self.stats.hdr_source_frames += 1;
             if !output.extended_linear && pipeline.requires_tone_mapping() {
@@ -2345,6 +2408,127 @@ impl WgpuRenderer {
         }))
     }
 
+    /// Lazily create (and cache) the perceptual gamut LUT texture described
+    /// by the current uniforms. Returns `None` while the fast path is active
+    /// or the background generation has not finished yet; callers must then
+    /// mask `gamut_lut_enabled` off so the shader keeps the fast path.
+    fn gamut_lut_view(&mut self, uniforms: VideoUniforms) -> Option<wgpu::TextureView> {
+        let (source, target, target_black_pq, target_peak_pq) = gamut_lut_key_of(uniforms)?;
+        let cached = self.gamut_lut.as_ref().is_some_and(|(key, _, _)| {
+            key.0 == source
+                && key.1 == target
+                && key.2 == target_black_pq
+                && key.3 == target_peak_pq
+        });
+        if !cached {
+            let peak_nits = uniforms.nits[1].max(1.0);
+            let params = GamutLutParams {
+                source,
+                target,
+                // Same target black the shader derives from tone_map_extra.z.
+                min_luma: pq_code_for_lut(uniforms.tone_map_extra[2]),
+                max_luma: pq_code_for_lut(peak_nits),
+            };
+            let job_params = self
+                .gamut_lut_job
+                .as_ref()
+                .map(GamutLutJob::params)
+                .filter(|job_params| *job_params == params);
+            match job_params {
+                // A matching job is running: take its result once it lands.
+                Some(_) => {
+                    let lut = self.gamut_lut_job.as_ref().and_then(GamutLutJob::poll)?;
+                    self.gamut_lut_job = None;
+                    self.upload_gamut_lut(lut, source, target, target_black_pq, target_peak_pq);
+                }
+                None => {
+                    // First request (or the key changed): spawn generation
+                    // and keep the fast path for this frame.
+                    self.gamut_lut_job = Some(GamutLutJob::spawn(params));
+                    return None;
+                }
+            }
+        }
+        Some(
+            self.gamut_lut
+                .as_ref()
+                .expect("gamut lut after upload")
+                .2
+                .clone(),
+        )
+    }
+
+    fn upload_gamut_lut(
+        &mut self,
+        lut: GamutLut,
+        source: ColorPrimaries,
+        target: ColorPrimaries,
+        target_black_pq: u32,
+        target_peak_pq: u32,
+    ) {
+        let size = wgpu::Extent3d {
+            width: LUT_SIZE_I as u32,
+            height: LUT_SIZE_C as u32,
+            depth_or_array_layers: LUT_SIZE_H as u32,
+        };
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("erika-wgpu-gamut-lut"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        // The texels are packed RGB (I, P+0.5, T+0.5); pad to RGBA16F.
+        let rgba16 = pack_rgba16f(&lut.texels, 1.0);
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba16,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some((LUT_SIZE_I * 8) as u32),
+                // One "row" is a texel; one image (slice) is the C axis.
+                rows_per_image: Some(LUT_SIZE_C as u32),
+            },
+            size,
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.gamut_lut = Some((
+            (source, target, target_black_pq, target_peak_pq),
+            texture,
+            view,
+        ));
+    }
+
+    /// A tiny 1x1x1 view for binding 4 when no LUT is in use.
+    fn dummy_lut_view(&mut self) -> Option<wgpu::TextureView> {
+        if self.dummy_lut.is_none() {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("erika-wgpu-gamut-lut-dummy"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D3,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            self.dummy_lut = Some(texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        }
+        self.dummy_lut.clone()
+    }
+
     /// Encode and submit a render pass drawing the current video frame into
     /// `target_view`. The caller must have uploaded a frame and the video pipeline
     /// must be initialized.
@@ -2525,6 +2709,19 @@ impl WgpuRenderer {
             .as_ref()
             .map_or(&native_luma_view, |output| &output.view);
         let chroma_view = &native_chroma_view;
+        // Create/cache the gamut LUT first: it needs `&mut self`, while the
+        // pipeline borrow below is immutable and would otherwise conflict.
+        // While the background generation is pending the uniform keeps the
+        // fast gamut_compress path and the dummy LUT holds binding 4.
+        let gamut_lut_view = self.gamut_lut_view(video_uniforms);
+        if gamut_lut_view.is_none() {
+            video_uniforms.gamut_lut_enabled = 0;
+        }
+        let dummy_lut_view = self.dummy_lut_view();
+        let gamut_binding = match &gamut_lut_view {
+            Some(view) => wgpu::BindingResource::TextureView(view),
+            None => wgpu::BindingResource::TextureView(&dummy_lut_view.expect("dummy LUT view")),
+        };
         let pipeline = self
             .video_pipeline
             .as_ref()
@@ -2555,6 +2752,10 @@ impl WgpuRenderer {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&pipeline.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: gamut_binding,
                 },
             ],
         });
@@ -3168,6 +3369,16 @@ impl WgpuRenderer {
                             binding: 3,
                             visibility: wgpu::ShaderStages::FRAGMENT,
                             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 4,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D3,
+                                multisampled: false,
+                            },
                             count: None,
                         },
                     ],
@@ -4837,6 +5048,7 @@ fn retain_player_video_frame(frame: &PlayerVideoFrame) -> Result<PlayerVideoFram
         media_time: frame.media_time,
         late_by: frame.late_by,
         generation: frame.generation,
+        scene_avg_nits: frame.scene_avg_nits,
     })
 }
 
@@ -5605,6 +5817,20 @@ mod tests {
             .expect("updated danmaku atlas cache");
         assert!(updated_cache.can_reuse_for(&updated_atlas));
         assert_eq!(updated_cache.fill_texture, cached_fill_texture);
+    }
+
+    #[test]
+    fn wgsl_gamut_lut_samples_the_target_black_to_peak_axis() {
+        // libplacebo's LUT I axis is [target black, target peak]; sampling
+        // `ipt.x / peak` again would diverge from the generated LUT. The
+        // lattice position must also be remapped to the texel-center
+        // coordinate (libplacebo's `texel_scale`), or the zero-chroma texel at
+        // the low end of the C axis crushes saturation.
+        let source = include_str!("wgpu_video.wgsl");
+        assert!(source.contains("let lut_min = pq_code(uniforms.tone_map_extra.z);"));
+        assert!(source.contains("clamp((ipt.x - lut_min) / lut_range, 0.0, 1.0)"));
+        assert!(source.contains("pos.y * (31.0 / 32.0) + 0.5 / 32.0"));
+        assert!(source.contains("pos.x * (47.0 / 48.0) + 0.5 / 48.0"));
     }
 
     #[test]

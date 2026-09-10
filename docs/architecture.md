@@ -167,7 +167,9 @@ The primary renderer for Apple platforms:
 
 - Zero-copy CVPixelBuffer → MTLTexture import via `CVMetalTextureCache`.
 - YCbCr sampling, transfer decode, gamut mapping (BT.2020→BT.709, Display P3→BT.709).
-- Tone mapping: Mobius, Reinhard, clip operators with absolute nits.
+- Tone mapping: libplacebo-style IPT-domain color map with BT.2390 EETF
+  default (plus spline, BT.2446 method A, ST 2094-10, Mobius, Reinhard, clip)
+  over absolute nits.
 - SDR output (`BGRA8Unorm`) and Apple EDR output (`RGBA16Float` with EDR
   headroom).
 - Neural luma upscaler (`LumaUpscalerMode`): ArtCNN C4F16/C4F16 DS/C4F32 2x doublers

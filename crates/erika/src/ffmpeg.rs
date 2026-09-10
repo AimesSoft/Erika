@@ -12,9 +12,10 @@ use std::time::Duration;
 
 use crate::core::{ColorPrimaries, FrameRate, TrackInfo, TrackKind, TransferFunction, VideoParams};
 use crate::renderer::pipeline::{
-    Chromaticity, ColorRange, ContentLightMetadata, HdrMetadata, MasteringDisplayMetadata,
-    MatrixCoefficients,
+    Chromaticity, ColorRange, ContentLightMetadata, DoviComponentCurve, DoviFramePq,
+    DoviSourceMetadata, HdrMetadata, MasteringDisplayMetadata, MatrixCoefficients, RgbMatrix,
 };
+use crate::renderer::pipeline::{DOVI_MAX_MMR_ORDER, DOVI_MAX_PIECES};
 use crate::source::{ByteRange, MediaSource};
 use crate::subtitle::{
     AssTrackResources, DecodedSubtitleFrame, SubtitleBitmapPlane, SubtitleFontAttachment,
@@ -544,6 +545,13 @@ impl CodecParameters<'_> {
     pub fn kind(self) -> Option<TrackKind> {
         unsafe { track_kind((*self.ptr).codec_type) }
     }
+
+    /// Container-signalled Dolby Vision configuration profile (`dvcC`/`dvvC`
+    /// carried as `AV_PKT_DATA_DOVI_CONF` codec parameters side data), used to
+    /// steer decode backend selection.
+    pub fn dolby_vision_profile(self) -> Option<u8> {
+        unsafe { codec_parameters_dolby_vision_profile(self.ptr) }
+    }
 }
 
 pub struct OwnedCodecParameters {
@@ -555,6 +563,13 @@ pub struct OwnedCodecParameters {
 unsafe impl Send for OwnedCodecParameters {}
 
 impl OwnedCodecParameters {
+    /// Container-signalled Dolby Vision configuration profile (`dvcC`/`dvvC`
+    /// carried as `AV_PKT_DATA_DOVI_CONF` codec parameters side data), used to
+    /// steer decode backend selection.
+    pub fn dolby_vision_profile(&self) -> Option<u8> {
+        unsafe { codec_parameters_dolby_vision_profile(self.ptr) }
+    }
+
     fn copy_from(parameters: CodecParameters<'_>) -> Result<Self> {
         let ptr = unsafe { sys::avcodec_parameters_alloc() };
         if ptr.is_null() {
@@ -2149,6 +2164,53 @@ impl Frame {
         }
     }
 
+    /// Zero-copy view of a software frame's luma plane.
+    ///
+    /// `yuv420p10le` and `p010le` both store two bytes per sample but pack
+    /// the 10-bit code differently: software Main10 (`yuv420p10le`) keeps the
+    /// code in bits `[9:0]`, while P010 left-aligns it in bits `[15:6]`.
+    /// Callers must respect [`LumaPlaneView::sample_layout`] — treating both
+    /// as P010 silently mis-measures software HDR10.
+    pub fn luma_plane_view(&self) -> Option<LumaPlaneView<'_>> {
+        let width = self.width() as usize;
+        let height = self.height() as usize;
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let format = self.raw_pixel_format();
+        let (bytes_per_sample, layout) = if format == sys::AVPixelFormat_AV_PIX_FMT_YUV420P
+            || format == sys::AVPixelFormat_AV_PIX_FMT_NV12
+        {
+            (1, LumaSampleLayout::U8)
+        } else if format == sys::AVPixelFormat_AV_PIX_FMT_YUV420P10LE {
+            (2, LumaSampleLayout::Packed10)
+        } else if format == sys::AVPixelFormat_AV_PIX_FMT_P010LE {
+            (2, LumaSampleLayout::P010)
+        } else {
+            return None;
+        };
+        unsafe {
+            let frame = &*self.ptr;
+            let data = frame.data[0] as *const u8;
+            if data.is_null() {
+                return None;
+            }
+            let stride = usize::try_from(frame.linesize[0]).ok()?;
+            if stride < width.checked_mul(bytes_per_sample)? {
+                return None;
+            }
+            Some(LumaPlaneView {
+                data,
+                stride,
+                width,
+                height,
+                bytes_per_sample,
+                layout,
+                _frame: std::marker::PhantomData,
+            })
+        }
+    }
+
     pub fn is_videotoolbox(&self) -> bool {
         self.raw_pixel_format() == sys::AVPixelFormat_AV_PIX_FMT_VIDEOTOOLBOX
     }
@@ -2384,6 +2446,61 @@ impl Frame {
 
     pub fn hdr_metadata(&self) -> Option<HdrMetadata> {
         unsafe { frame_hdr_metadata(self.ptr) }
+    }
+
+    /// Per-frame Dolby Vision RPU metadata parsed by the HEVC decoder
+    /// (`AV_FRAME_DATA_DOVI_METADATA`). Present on RPU-carrying streams such
+    /// as profiles 5, 7, and 8, on both software and hardware decoded frames
+    /// (FFmpeg parses the RPU on the CPU and attaches it regardless).
+    pub fn dovi_metadata(&self) -> Option<DoviSourceMetadata> {
+        unsafe {
+            frame_dovi_metadata_result(self.ptr)
+                .ok()
+                .map(|(metadata, _)| metadata)
+        }
+    }
+
+    /// Reports the enhancement-layer residual an RPU asks for but this renderer
+    /// cannot compose (Profile 7 FEL/MEL). The base-layer mapping still applies
+    /// to such frames, so this is diagnostic signal rather than a rejection.
+    /// Returns `None` when the frame carries no usable RPU at all.
+    pub fn dovi_el_status(&self) -> Option<DoviElStatus> {
+        unsafe { frame_dovi_metadata_result(self.ptr).ok().map(|(_, el)| el) }
+    }
+
+    /// Returns `None` when this frame's Dolby Vision metadata can feed the
+    /// mapping path. Otherwise reports why it cannot. Frames without any RPU
+    /// side data report [`DoviRejectReason::MissingSideData`], which callers
+    /// must interpret against the stream's Dolby Vision profile: absent RPUs
+    /// are normal on Profile 8, but Profile 5 has no HDR10-compatible base
+    /// layer, so a missing RPU leaves the frame unmappable.
+    pub fn dovi_unavailable_reason(&self) -> Option<DoviRejectReason> {
+        match self.dovi_mapping_probe() {
+            Ok(_) => None,
+            Err(reason) => Some(reason),
+        }
+    }
+
+    /// One-pass probe of this frame's RPU: `Ok` carries the enhancement-layer
+    /// status when the mapping path can consume the RPU, `Err` reports why it
+    /// cannot. Prefer this over calling [`Frame::dovi_unavailable_reason`]
+    /// and [`Frame::dovi_el_status`] back-to-back, which re-parses the side
+    /// data.
+    pub fn dovi_mapping_probe(&self) -> std::result::Result<DoviElStatus, DoviRejectReason> {
+        if self.ptr.is_null() {
+            return Err(DoviRejectReason::MissingSideData);
+        }
+        let has_side_data = unsafe {
+            !sys::av_frame_get_side_data(
+                self.ptr,
+                sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA,
+            )
+            .is_null()
+        };
+        if !has_side_data {
+            return Err(DoviRejectReason::MissingSideData);
+        }
+        unsafe { frame_dovi_metadata_result(self.ptr).map(|(_, el)| el) }
     }
 
     pub fn transfer_to_system_memory(&self) -> Result<Frame> {
@@ -2635,6 +2752,169 @@ pub struct Nv12Frame {
     pub luma: Vec<u8>,
     pub chroma: Vec<u8>,
 }
+
+/// How a luma plane stores each sample. 10-bit frames share two bytes per
+/// sample but not the same bit packing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LumaSampleLayout {
+    /// 8-bit `yuv420p` / `nv12`.
+    U8,
+    /// 10-bit packed LE (`yuv420p10le`): code lives in bits `[9:0]`.
+    Packed10,
+    /// 10-bit P010 LE: code left-aligned in bits `[15:6]`.
+    P010,
+}
+
+impl LumaSampleLayout {
+    /// Decode one little-endian sample into a 10-bit code in `[0, 1023]`.
+    /// Returns `None` for the 8-bit layout.
+    pub fn decode_10bit(self, sample: u16) -> Option<u16> {
+        match self {
+            Self::U8 => None,
+            Self::Packed10 => Some(sample & 0x03FF),
+            Self::P010 => Some(sample >> 6),
+        }
+    }
+}
+
+/// Strided, zero-copy view of a software frame's luma plane (see
+/// [`Frame::luma_plane_view`]).
+#[derive(Clone, Copy)]
+pub struct LumaPlaneView<'a> {
+    data: *const u8,
+    stride: usize,
+    width: usize,
+    height: usize,
+    bytes_per_sample: usize,
+    layout: LumaSampleLayout,
+    _frame: std::marker::PhantomData<&'a Frame>,
+}
+
+impl<'a> LumaPlaneView<'a> {
+    pub fn width(&self) -> u32 {
+        self.width as u32
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height as u32
+    }
+
+    /// 10-bit samples (two bytes per sample)?
+    pub fn is_10bit(&self) -> bool {
+        self.bytes_per_sample == 2
+    }
+
+    pub fn sample_layout(&self) -> LumaSampleLayout {
+        self.layout
+    }
+
+    /// Test-only view over a packed luma buffer: `stride == width *
+    /// bytes_per_sample`. Tests that care about stride padding lay the rows
+    /// out manually and point `data` at row 0.
+    #[cfg(test)]
+    pub(crate) fn from_packed(
+        data: &'a [u8],
+        width: u32,
+        height: u32,
+        is_10bit: bool,
+    ) -> Option<Self> {
+        let layout = if is_10bit {
+            LumaSampleLayout::P010
+        } else {
+            LumaSampleLayout::U8
+        };
+        Self::from_packed_with_layout(data, width, height, layout)
+    }
+
+    /// Test-only view with an explicit sample layout.
+    #[cfg(test)]
+    pub(crate) fn from_packed_with_layout(
+        data: &'a [u8],
+        width: u32,
+        height: u32,
+        layout: LumaSampleLayout,
+    ) -> Option<Self> {
+        let width = width as usize;
+        let height = height as usize;
+        let bytes_per_sample = match layout {
+            LumaSampleLayout::U8 => 1,
+            LumaSampleLayout::Packed10 | LumaSampleLayout::P010 => 2,
+        };
+        if width == 0 || height == 0 || data.len() < width * height * bytes_per_sample {
+            return None;
+        }
+        let stride = width * bytes_per_sample;
+        Some(Self::from_strided_with_layout(
+            data,
+            stride,
+            width as u32,
+            height as u32,
+            layout,
+        ))
+    }
+
+    /// Test-only view over rows of `width` samples separated by `stride`
+    /// bytes (the decoder-alignment layout `Frame::luma_plane_view` exposes).
+    #[cfg(test)]
+    pub(crate) fn from_strided(
+        data: &'a [u8],
+        stride: usize,
+        width: u32,
+        height: u32,
+        is_10bit: bool,
+    ) -> Self {
+        let layout = if is_10bit {
+            LumaSampleLayout::P010
+        } else {
+            LumaSampleLayout::U8
+        };
+        Self::from_strided_with_layout(data, stride, width, height, layout)
+    }
+
+    /// Test-only view with an explicit sample layout.
+    #[cfg(test)]
+    pub(crate) fn from_strided_with_layout(
+        data: &'a [u8],
+        stride: usize,
+        width: u32,
+        height: u32,
+        layout: LumaSampleLayout,
+    ) -> Self {
+        assert!(data.len() >= stride * height as usize);
+        Self {
+            data: data.as_ptr(),
+            stride,
+            width: width as usize,
+            height: height as usize,
+            bytes_per_sample: match layout {
+                LumaSampleLayout::U8 => 1,
+                LumaSampleLayout::Packed10 | LumaSampleLayout::P010 => 2,
+            },
+            layout,
+            _frame: std::marker::PhantomData,
+        }
+    }
+
+    /// Row `index` of the luma plane: `width` samples of 1 or 2 bytes each.
+    /// `None` when the index is out of bounds.
+    pub fn row(&self, index: usize) -> Option<&'a [u8]> {
+        if index >= self.height {
+            return None;
+        }
+        let row_bytes = self.width.checked_mul(self.bytes_per_sample)?;
+        let offset = index.checked_mul(self.stride)?.checked_add(row_bytes)?;
+        let total = self.stride.checked_mul(self.height)?;
+        if offset > total {
+            return None;
+        }
+        // SAFETY: `data` points at a valid luma plane whose rows hold at
+        // least `row_bytes` bytes every `stride` bytes (validated when the
+        // view was built), and the frame outlives `'a`.
+        Some(unsafe { std::slice::from_raw_parts(self.data.add(index * self.stride), row_bytes) })
+    }
+}
+
+unsafe impl Send for LumaPlaneView<'_> {}
 
 /// GPU upload format for a repacked planar frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4316,6 +4596,401 @@ unsafe fn frame_hdr_metadata(frame: *const sys::AVFrame) -> Option<HdrMetadata> 
     Some(HdrMetadata::new(mastering_display, content_light))
 }
 
+/// Reads the container's Dolby Vision configuration record from codec
+/// parameters side data (`AV_PKT_DATA_DOVI_CONF` in ffmpeg 8), returning the
+/// Dolby Vision profile number.
+unsafe fn codec_parameters_dolby_vision_profile(
+    parameters: *const sys::AVCodecParameters,
+) -> Option<u8> {
+    if parameters.is_null() {
+        return None;
+    }
+    let side_data = unsafe {
+        sys::av_packet_side_data_get(
+            (*parameters).coded_side_data,
+            (*parameters).nb_coded_side_data,
+            sys::AVPacketSideDataType_AV_PKT_DATA_DOVI_CONF,
+        )
+    };
+    if side_data.is_null() {
+        return None;
+    }
+    let data = unsafe { (*side_data).data };
+    if data.is_null() {
+        return None;
+    }
+    let size = unsafe { (*side_data).size };
+    if usize::try_from(size).ok()? < mem::size_of::<sys::AVDOVIDecoderConfigurationRecord>() {
+        return None;
+    }
+    let record = data as *const sys::AVDOVIDecoderConfigurationRecord;
+    Some(unsafe { (*record).dv_profile })
+}
+
+/// Why a decoded frame cannot feed the Dolby Vision mapping path.
+///
+/// Reportable through [`Frame::dovi_unavailable_reason`] so a stream whose
+/// RPUs are missing or rejected stays diagnosable instead of silently falling
+/// back to the base layer — Profile 5 in particular has no HDR10-compatible
+/// base layer, and an unmapped Profile 8 frame with a rejected RPU displays
+/// with wrong colors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoviRejectReason {
+    /// The frame carries no RPU side data at all. Normal for profiles whose
+    /// base layer is HDR10-compatible (e.g. Profile 8); always wrong for
+    /// Profile 5.
+    MissingSideData,
+    /// Side data exists but failed structural validation (size, alignment,
+    /// sub-structure offsets).
+    MalformedSideData,
+    /// Base-layer bit depth outside FFmpeg's 8..=16 range.
+    UnsupportedBitDepth,
+    /// `coef_log2_denom` beyond FFmpeg's fixed-point range (above 32).
+    UnsupportedCoefDenom,
+    /// Reshaping curves invalid or absent (pivots, orders, unknown methods).
+    InvalidCurves,
+    /// Color matrices/offsets invalid or the RGB→LMS matrix is singular.
+    InvalidColorMetadata,
+}
+
+impl DoviRejectReason {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::MissingSideData => "rpu side data missing",
+            Self::MalformedSideData => "rpu side data malformed",
+            Self::UnsupportedBitDepth => "base layer bit depth outside 8..=16",
+            Self::UnsupportedCoefDenom => "coef_log2_denom above 32",
+            Self::InvalidCurves => "invalid reshaping curves",
+            Self::InvalidColorMetadata => "invalid color metadata",
+        }
+    }
+}
+
+/// Enhancement-layer information an RPU carries that this renderer does not
+/// compose. Profile 7 keeps its enhancement layer in a second HEVC layer that
+/// this renderer never decodes, so the NLQ residual these fields describe has
+/// nothing to be added to. libplacebo draws the same line: it exposes
+/// `nlq_active` and documents that "consumers that have not bound an
+/// enhancement layer must not look at these fields", while still applying the
+/// base-layer reshaping, color matrices, and trims.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DoviElStatus {
+    /// `disable_residual_flag == 0`: the RPU expects its residual to be
+    /// composed with an enhancement layer (Profile 7 FEL/MEL).
+    pub residual_requested: bool,
+    /// The RPU carries a non-trivial NLQ definition for that residual.
+    pub nlq_nontrivial: bool,
+}
+
+impl DoviElStatus {
+    /// Whether the RPU asked for anything this renderer cannot compose.
+    pub fn is_active(self) -> bool {
+        self.residual_requested || self.nlq_nontrivial
+    }
+}
+
+/// Reads the decoder's parsed Dolby Vision RPU side data and converts it into
+/// shader-ready floats, mirroring libplacebo's `pl_map_dovi_metadata`: pivots
+/// are normalized by the base-layer bit depth and curve coefficients by
+/// `2^-coef_log2_denom`. The second value reports any enhancement-layer
+/// residual the RPU asked for but this renderer cannot compose; it never
+/// rejects an otherwise valid RPU.
+unsafe fn frame_dovi_metadata_result(
+    frame: *const sys::AVFrame,
+) -> std::result::Result<(DoviSourceMetadata, DoviElStatus), DoviRejectReason> {
+    if frame.is_null() {
+        return Err(DoviRejectReason::MissingSideData);
+    }
+    let side_data = unsafe {
+        sys::av_frame_get_side_data(frame, sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA)
+    };
+    if side_data.is_null() {
+        return Err(DoviRejectReason::MissingSideData);
+    }
+    let data = unsafe { (*side_data).data };
+    if data.is_null() {
+        return Err(DoviRejectReason::MalformedSideData);
+    }
+    let size = usize::try_from(unsafe { (*side_data).size })
+        .ok()
+        .ok_or(DoviRejectReason::MalformedSideData)?;
+    if size < mem::size_of::<sys::AVDOVIMetadata>() {
+        return Err(DoviRejectReason::MalformedSideData);
+    }
+    if (data as usize) % mem::align_of::<sys::AVDOVIMetadata>() != 0 {
+        return Err(DoviRejectReason::MalformedSideData);
+    }
+    // The sub-structures live behind byte offsets inside this side data buffer
+    // (`av_dovi_get_header` and friends are C inline helpers bindgen does not
+    // emit), so resolve them by the same pointer arithmetic here with bounds checks.
+    let metadata = unsafe { *data.cast::<sys::AVDOVIMetadata>() };
+    let data_address = data as usize;
+    let aligned = |offset: usize, alignment: usize| {
+        data_address
+            .checked_add(offset)
+            .is_some_and(|address| address % alignment == 0)
+    };
+    let in_bounds = |offset: usize, structure: usize| {
+        offset.checked_add(structure).is_some_and(|end| end <= size)
+    };
+    if !in_bounds(
+        metadata.header_offset,
+        mem::size_of::<sys::AVDOVIRpuDataHeader>(),
+    ) || !in_bounds(
+        metadata.mapping_offset,
+        mem::size_of::<sys::AVDOVIDataMapping>(),
+    ) || !in_bounds(
+        metadata.color_offset,
+        mem::size_of::<sys::AVDOVIColorMetadata>(),
+    ) || !aligned(
+        metadata.header_offset,
+        mem::align_of::<sys::AVDOVIRpuDataHeader>(),
+    ) || !aligned(
+        metadata.mapping_offset,
+        mem::align_of::<sys::AVDOVIDataMapping>(),
+    ) || !aligned(
+        metadata.color_offset,
+        mem::align_of::<sys::AVDOVIColorMetadata>(),
+    ) {
+        return Err(DoviRejectReason::MalformedSideData);
+    }
+    let header = unsafe {
+        &*data
+            .add(metadata.header_offset)
+            .cast::<sys::AVDOVIRpuDataHeader>()
+    };
+    let mapping = unsafe {
+        &*data
+            .add(metadata.mapping_offset)
+            .cast::<sys::AVDOVIDataMapping>()
+    };
+    let color = unsafe {
+        &*data
+            .add(metadata.color_offset)
+            .cast::<sys::AVDOVIColorMetadata>()
+    };
+
+    let bl_bit_depth = usize::from(header.bl_bit_depth);
+    let coef_denom = u32::from(header.coef_log2_denom);
+    // Validate bit depth and coefficient denominator before using them in
+    // shifts below; malformed side data must be rejected, never panic.
+    // FFmpeg uses coef_log2_denom up to 32 for float RPU coefficients.
+    if !(8..=16).contains(&bl_bit_depth) {
+        return Err(DoviRejectReason::UnsupportedBitDepth);
+    }
+    if coef_denom > 32 {
+        return Err(DoviRejectReason::UnsupportedCoefDenom);
+    }
+    // This renderer has no enhancement-layer input, so the NLQ residual below
+    // is never composed. That does not make the RPU unusable: the base-layer
+    // reshaping curves, color matrices, and L1 trims still apply, and dropping
+    // the whole RPU would throw them away for every Profile 7 FEL frame.
+    // libplacebo keeps the same separation (it exposes `nlq_active` but only
+    // composes it when an enhancement layer is bound).
+    //
+    // FFmpeg marks an absent NLQ with the AV_DOVI_NLQ_NONE sentinel (-1);
+    // method 0 with all-neutral parameters is likewise an identity mapping.
+    let nlq_nontrivial = match mapping.nlq_method_idc as i32 {
+        -1 => false,
+        0 => mapping.nlq.iter().any(|params| {
+            params.nlq_offset != 0
+                || params.linear_deadzone_slope != 0
+                || params.linear_deadzone_threshold != 0
+                || (params.vdr_in_max != 0
+                    && params.vdr_in_max != (1_u64 << u32::from(header.coef_log2_denom)))
+        }),
+        _ => true,
+    };
+    let el = DoviElStatus {
+        residual_requested: header.disable_residual_flag == 0,
+        nlq_nontrivial,
+    };
+
+    let pivot_scale = 1.0_f32 / (((1_usize << bl_bit_depth) - 1) as f32);
+    let coefficient_scale = 2.0_f32.powi(-(coef_denom as i32));
+
+    let mut reshaping = [DoviComponentCurve::default(); 3];
+    let mut has_curve = false;
+    for (component, curve) in reshaping.iter_mut().enumerate() {
+        let source = &mapping.curves[component];
+        let num_pivots = usize::from(source.num_pivots);
+        if num_pivots == 0 {
+            continue;
+        }
+        has_curve = true;
+        if !(2..=DOVI_MAX_PIECES + 1).contains(&num_pivots) {
+            return Err(DoviRejectReason::InvalidCurves);
+        }
+        let max_pivot = ((1_usize << bl_bit_depth) - 1) as u16;
+        let mut previous = None;
+        for &pivot in source.pivots[..num_pivots].iter() {
+            if pivot > max_pivot || previous.is_some_and(|previous| pivot <= previous) {
+                return Err(DoviRejectReason::InvalidCurves);
+            }
+            previous = Some(pivot);
+        }
+        curve.num_pivots = num_pivots as u8;
+        for (slot, &pivot) in curve.pivots[..num_pivots]
+            .iter_mut()
+            .zip(source.pivots[..num_pivots].iter())
+        {
+            *slot = pivot_scale * f32::from(pivot);
+        }
+        for segment in 0..num_pivots - 1 {
+            match source.mapping_idc[segment] {
+                sys::AVDOVIMappingMethod_AV_DOVI_MAPPING_MMR => {
+                    let order = usize::from(source.mmr_order[segment]);
+                    if order == 0 || order > DOVI_MAX_MMR_ORDER {
+                        return Err(DoviRejectReason::InvalidCurves);
+                    }
+                    curve.mmr_orders[segment] = order as u8;
+                    curve.mmr_constants[segment] =
+                        coefficient_scale * source.mmr_constant[segment] as f32;
+                    let destination = &mut curve.mmr_coeffs[segment][..order];
+                    for (order_index, coefficients) in destination.iter_mut().enumerate() {
+                        for (index, coefficient) in coefficients.iter_mut().enumerate() {
+                            *coefficient = coefficient_scale
+                                * source.mmr_coef[segment][order_index][index] as f32;
+                        }
+                    }
+                }
+                sys::AVDOVIMappingMethod_AV_DOVI_MAPPING_POLYNOMIAL => {
+                    let poly_order = usize::from(source.poly_order[segment]);
+                    if !(1..=2).contains(&poly_order) {
+                        return Err(DoviRejectReason::InvalidCurves);
+                    }
+                    let coefficients = &source.poly_coef[segment];
+                    for (order_index, slot) in curve.poly_coeffs[segment].iter_mut().enumerate() {
+                        *slot = if order_index <= poly_order {
+                            coefficient_scale * coefficients[order_index] as f32
+                        } else {
+                            0.0
+                        };
+                    }
+                }
+                _ => return Err(DoviRejectReason::InvalidCurves),
+            }
+        }
+    }
+    if !has_curve {
+        return Err(DoviRejectReason::InvalidCurves);
+    }
+
+    let rational_matrix = |values: &[sys::AVRational; 9]| -> Option<[[f32; 3]; 3]> {
+        let mut matrix = [[0.0_f32; 3]; 3];
+        for row in 0..3 {
+            for col in 0..3 {
+                let value = &values[row * 3 + col];
+                if value.den == 0 {
+                    return None;
+                }
+                let value = value.num as f32 / value.den as f32;
+                if !value.is_finite() {
+                    return None;
+                }
+                matrix[row][col] = value;
+            }
+        }
+        Some(matrix)
+    };
+
+    let mut nonlinear_offset = [0.0_f32; 3];
+    for (index, slot) in nonlinear_offset.iter_mut().enumerate() {
+        let value = &color.ycc_to_rgb_offset[index];
+        if value.den == 0 {
+            return Err(DoviRejectReason::InvalidColorMetadata);
+        }
+        *slot = value.num as f32 / value.den as f32;
+        if !slot.is_finite() {
+            return Err(DoviRejectReason::InvalidColorMetadata);
+        }
+    }
+
+    if color.source_min_pq > 4095
+        || color.source_max_pq > 4095
+        || (color.source_max_pq != 0 && color.source_min_pq > color.source_max_pq)
+    {
+        return Err(DoviRejectReason::InvalidColorMetadata);
+    }
+
+    let nonlinear_matrix =
+        rational_matrix(&color.ycc_to_rgb_matrix).ok_or(DoviRejectReason::InvalidColorMetadata)?;
+    let rgb_to_lms =
+        rational_matrix(&color.rgb_to_lms_matrix).ok_or(DoviRejectReason::InvalidColorMetadata)?;
+    let determinant = rgb_to_lms[0][0]
+        * (rgb_to_lms[1][1] * rgb_to_lms[2][2] - rgb_to_lms[1][2] * rgb_to_lms[2][1])
+        - rgb_to_lms[0][1]
+            * (rgb_to_lms[1][0] * rgb_to_lms[2][2] - rgb_to_lms[1][2] * rgb_to_lms[2][0])
+        + rgb_to_lms[0][2]
+            * (rgb_to_lms[1][0] * rgb_to_lms[2][1] - rgb_to_lms[1][1] * rgb_to_lms[2][0]);
+    if !determinant.is_finite() || determinant == 0.0 {
+        return Err(DoviRejectReason::InvalidColorMetadata);
+    }
+
+    // Level 1 per-frame brightness metadata lives in the DM extension blocks
+    // that the RPU decoder appends right after the color structure. `av_dovi_find_level`
+    // is exported by FFmpeg but performs an unchecked pointer walk, so validate
+    // the block region here like the sub-structures above. L1 is optional
+    // signal quality metadata: an invalid or absent block never rejects the RPU.
+    let l1 = unsafe { frame_dovi_level1(data, &metadata, size) };
+
+    Ok((
+        DoviSourceMetadata {
+            reshaping,
+            nonlinear_matrix: RgbMatrix::new(nonlinear_matrix),
+            nonlinear_offset,
+            rgb_to_lms: RgbMatrix::new(rgb_to_lms),
+            source_min_pq: color.source_min_pq,
+            source_max_pq: color.source_max_pq,
+            l1,
+        },
+        el,
+    ))
+}
+
+/// Reads the dynamic DM level 1 block (per-frame min/max/avg luminance in
+/// 12-bit PQ codes) from the validated ext-block region, matching
+/// `av_dovi_get_ext`'s pointer arithmetic.
+unsafe fn frame_dovi_level1(
+    data: *const u8,
+    metadata: &sys::AVDOVIMetadata,
+    size: usize,
+) -> Option<DoviFramePq> {
+    let count = usize::try_from(metadata.num_ext_blocks).ok()?;
+    if count == 0 {
+        return None;
+    }
+    let block_size = metadata.ext_block_size;
+    if block_size < mem::size_of::<sys::AVDOVIDmData>() {
+        return None;
+    }
+    let total = block_size.checked_mul(count)?;
+    let end = metadata.ext_block_offset.checked_add(total)?;
+    if end > size {
+        return None;
+    }
+    if (metadata.ext_block_offset as usize) % mem::align_of::<sys::AVDOVIDmData>() != 0 {
+        return None;
+    }
+    let ext = unsafe { data.add(metadata.ext_block_offset) };
+    for index in 0..count {
+        let block = unsafe { &*ext.add(block_size * index).cast::<sys::AVDOVIDmData>() };
+        if block.level != 1 {
+            continue;
+        }
+        let l1 = unsafe { block.__bindgen_anon_1.l1 };
+        if l1.max_pq == 0 || (l1.min_pq != 0 && l1.min_pq > l1.max_pq) {
+            return None;
+        }
+        return Some(DoviFramePq {
+            min_pq: l1.min_pq,
+            max_pq: l1.max_pq,
+            avg_pq: l1.avg_pq,
+        });
+    }
+    None
+}
+
 unsafe fn mastering_display_metadata(
     frame: *const sys::AVFrame,
 ) -> Option<MasteringDisplayMetadata> {
@@ -5072,6 +5747,59 @@ mod tests {
     }
 
     #[test]
+    fn playback_fixture_has_no_dolby_vision_profile() {
+        let path = std::env::var_os("ERIKA_PLAYBACK_FIXTURE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/playback/playback-fixture.mkv")
+            });
+        let demuxer = Demuxer::open_path(&path).unwrap();
+        let video = demuxer
+            .probe()
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Video)
+            .unwrap();
+
+        let parameters = demuxer.owned_codec_parameters(video.id as i32).unwrap();
+        assert_eq!(parameters.dolby_vision_profile(), None);
+    }
+
+    #[test]
+    fn dv_sample_reports_dolby_vision_profile() {
+        let Some(path) = std::env::var_os("ERIKA_DV_SAMPLE") else {
+            return;
+        };
+        let demuxer = Demuxer::open_path(&path).unwrap();
+        let video = demuxer
+            .probe()
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Video)
+            .expect("DV sample must contain a video stream");
+
+        let parameters = demuxer.owned_codec_parameters(video.id as i32).unwrap();
+        assert_eq!(parameters.dolby_vision_profile(), Some(5));
+    }
+
+    #[test]
+    fn dv_profile_8_sample_reports_profile() {
+        let Some(path) = std::env::var_os("ERIKA_DV_PROFILE_8_SAMPLE") else {
+            return;
+        };
+        let demuxer = Demuxer::open_path(&path).unwrap();
+        let video = demuxer
+            .probe()
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Video)
+            .expect("DV Profile 8 sample must contain a video stream");
+
+        let parameters = demuxer.owned_codec_parameters(video.id as i32).unwrap();
+        assert_eq!(parameters.dolby_vision_profile(), Some(8));
+    }
+
+    #[test]
     fn real_ass_container_preserves_header_fonts_and_matroska_chunk_when_env_is_set() {
         let Ok(path) = std::env::var("ERIKA_ASS_SAMPLE") else {
             return;
@@ -5306,6 +6034,469 @@ mod tests {
 
     fn rational(num: i32, den: i32) -> sys::AVRational {
         sys::AVRational { num, den }
+    }
+
+    #[test]
+    fn frame_reads_dovi_side_data() {
+        let frame = Frame::alloc(TimeBase { num: 1, den: 1 }).unwrap();
+        unsafe {
+            let mut size = 0_usize;
+            let metadata = sys::av_dovi_metadata_alloc(&mut size);
+            assert!(!metadata.is_null());
+            assert!(size >= mem::size_of::<sys::AVDOVIMetadata>());
+            let header = (metadata as *mut u8)
+                .add((*metadata).header_offset)
+                .cast::<sys::AVDOVIRpuDataHeader>();
+            let mapping = (metadata as *mut u8)
+                .add((*metadata).mapping_offset)
+                .cast::<sys::AVDOVIDataMapping>();
+            let color = (metadata as *mut u8)
+                .add((*metadata).color_offset)
+                .cast::<sys::AVDOVIColorMetadata>();
+
+            (*header).bl_bit_depth = 10;
+            (*header).el_bit_depth = 10;
+            (*header).coef_log2_denom = 13;
+            (*header).disable_residual_flag = 1;
+
+            let curve = &mut (*mapping).curves[0];
+            curve.num_pivots = 3;
+            curve.pivots[0] = 0;
+            curve.pivots[1] = 256;
+            curve.pivots[2] = 1023;
+            curve.mapping_idc[0] = sys::AVDOVIMappingMethod_AV_DOVI_MAPPING_POLYNOMIAL;
+            curve.poly_order[0] = 1;
+            curve.poly_coef[0][0] = 0;
+            curve.poly_coef[0][1] = 1 << 13;
+            curve.poly_coef[0][2] = 0;
+            curve.mapping_idc[1] = sys::AVDOVIMappingMethod_AV_DOVI_MAPPING_MMR;
+            curve.mmr_order[1] = 1;
+            curve.mmr_constant[1] = 1024;
+            curve.mmr_coef[1][0][0] = 4096;
+            curve.mmr_coef[1][0][6] = -8192;
+
+            (*color).ycc_to_rgb_matrix = [
+                rational(9575, 8192),
+                rational(0, 8192),
+                rational(14742, 8192),
+                rational(9575, 8192),
+                rational(1754, 8192),
+                rational(4383, 8192),
+                rational(9575, 8192),
+                rational(17372, 8192),
+                rational(0, 8192),
+            ];
+            (*color).ycc_to_rgb_offset = [rational(1, 4), rational(2, 1), rational(2, 1)];
+            (*color).rgb_to_lms_matrix = [
+                rational(5845, 16384),
+                rational(9702, 16384),
+                rational(837, 16384),
+                rational(2568, 16384),
+                rational(12256, 16384),
+                rational(1561, 16384),
+                rational(0, 16384),
+                rational(679, 16384),
+                rational(15705, 16384),
+            ];
+            (*color).source_min_pq = 62;
+            (*color).source_max_pq = 3079;
+
+            let side_data = sys::av_frame_new_side_data(
+                frame.ptr,
+                sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA,
+                size,
+            );
+            assert!(!side_data.is_null());
+            ptr::copy_nonoverlapping(metadata.cast::<u8>(), (*side_data).data, size);
+            sys::av_free(metadata.cast());
+        }
+
+        let dovi = frame.dovi_metadata().unwrap();
+        let luma = &dovi.reshaping[0];
+        assert_eq!(luma.num_pivots, 3);
+        assert_close(luma.pivots[1], 256.0 / 1023.0);
+        assert_close(luma.pivots[2], 1.0);
+        assert_close(luma.poly_coeffs[0][1], 1.0);
+        assert_eq!(luma.mmr_orders[1], 1);
+        assert_close(luma.mmr_constants[1], 0.125);
+        assert_close(luma.mmr_coeffs[1][0][0], 0.5);
+        assert_close(luma.mmr_coeffs[1][0][6], -1.0);
+        // Chroma and luma curves without pivots stay empty.
+        assert_eq!(dovi.reshaping[1].num_pivots, 0);
+        assert_close(dovi.nonlinear_matrix.rows()[0][0], 9575.0 / 8192.0);
+        assert_close(dovi.nonlinear_offset[0], 0.25);
+        assert_close(dovi.rgb_to_lms.rows()[2][2], 15705.0 / 16384.0);
+        assert_eq!(dovi.source_min_pq, 62);
+        assert_eq!(dovi.source_max_pq, 3079);
+
+        unsafe {
+            let side_data = sys::av_frame_get_side_data(
+                frame.ptr,
+                sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA,
+            );
+            assert!(!side_data.is_null());
+            let metadata = *(*side_data).data.cast::<sys::AVDOVIMetadata>();
+            let header = &mut *((*side_data)
+                .data
+                .add(metadata.header_offset)
+                .cast::<sys::AVDOVIRpuDataHeader>());
+            let mapping = &mut *((*side_data)
+                .data
+                .add(metadata.mapping_offset)
+                .cast::<sys::AVDOVIDataMapping>());
+            mapping.curves[0].mmr_order[1] = 0;
+            assert_eq!(frame.dovi_metadata(), None);
+            header.disable_residual_flag = 0;
+            assert_eq!(frame.dovi_metadata(), None);
+        }
+    }
+
+    #[test]
+    fn frame_rejects_truncated_or_invalid_dovi_side_data() {
+        let frame = Frame::alloc(TimeBase { num: 1, den: 1 }).unwrap();
+        unsafe {
+            let side_data = sys::av_frame_new_side_data(
+                frame.ptr,
+                sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA,
+                4,
+            );
+            assert!(!side_data.is_null());
+        }
+        assert_eq!(frame.dovi_metadata(), None);
+    }
+
+    /// Attaches a known-good RPU: 10-bit base layer, `coef_log2_denom = 32`
+    /// with the identity polynomial scaled to match, no residual, identity
+    /// matrices, valid PQ range.
+    unsafe fn attach_valid_dovi_rpu(frame: &Frame) {
+        unsafe {
+            let mut size = 0_usize;
+            let metadata = sys::av_dovi_metadata_alloc(&mut size);
+            assert!(!metadata.is_null());
+            let header = (metadata as *mut u8)
+                .add((*metadata).header_offset)
+                .cast::<sys::AVDOVIRpuDataHeader>();
+            let mapping = (metadata as *mut u8)
+                .add((*metadata).mapping_offset)
+                .cast::<sys::AVDOVIDataMapping>();
+            let color = (metadata as *mut u8)
+                .add((*metadata).color_offset)
+                .cast::<sys::AVDOVIColorMetadata>();
+
+            (*header).bl_bit_depth = 10;
+            (*header).el_bit_depth = 10;
+            (*header).coef_log2_denom = 32;
+            (*header).disable_residual_flag = 1;
+
+            let curve = &mut (*mapping).curves[0];
+            curve.num_pivots = 2;
+            curve.pivots[0] = 0;
+            curve.pivots[1] = 1023;
+            curve.mapping_idc[0] = sys::AVDOVIMappingMethod_AV_DOVI_MAPPING_POLYNOMIAL;
+            curve.poly_order[0] = 1;
+            curve.poly_coef[0][0] = 0;
+            curve.poly_coef[0][1] = 1_i64 << 32;
+            curve.poly_coef[0][2] = 0;
+
+            (*color).ycc_to_rgb_matrix = [
+                rational(1, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(1, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(1, 1),
+            ];
+            (*color).ycc_to_rgb_offset = [rational(0, 1), rational(0, 1), rational(0, 1)];
+            (*color).rgb_to_lms_matrix = [
+                rational(1, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(1, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(0, 1),
+                rational(1, 1),
+            ];
+            (*color).source_min_pq = 0;
+            (*color).source_max_pq = 3079;
+
+            let side_data = sys::av_frame_new_side_data(
+                frame.ptr,
+                sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA,
+                size,
+            );
+            assert!(!side_data.is_null());
+            ptr::copy_nonoverlapping(metadata.cast::<u8>(), (*side_data).data, size);
+            sys::av_free(metadata.cast());
+        }
+    }
+
+    unsafe fn mutate_dovi_rpu(
+        frame: &Frame,
+        mutate: impl FnOnce(
+            &mut sys::AVDOVIRpuDataHeader,
+            &mut sys::AVDOVIDataMapping,
+            &mut sys::AVDOVIColorMetadata,
+        ),
+    ) {
+        unsafe {
+            let side_data = sys::av_frame_get_side_data(
+                frame.ptr,
+                sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA,
+            );
+            assert!(!side_data.is_null());
+            let metadata = *(*side_data).data.cast::<sys::AVDOVIMetadata>();
+            let header = &mut *((*side_data)
+                .data
+                .add(metadata.header_offset)
+                .cast::<sys::AVDOVIRpuDataHeader>());
+            let mapping = &mut *((*side_data)
+                .data
+                .add(metadata.mapping_offset)
+                .cast::<sys::AVDOVIDataMapping>());
+            let color = &mut *((*side_data)
+                .data
+                .add(metadata.color_offset)
+                .cast::<sys::AVDOVIColorMetadata>());
+            mutate(header, mapping, color);
+        }
+    }
+
+    /// Writes a single dynamic DM level 1 ext block into the side data.
+    /// `av_dovi_metadata_alloc` reserves the full ext block array inside the
+    /// same allocation, so the first block lands at `ext_block_offset`.
+    unsafe fn with_dovi_l1(frame: &Frame, min_pq: u16, max_pq: u16, avg_pq: u16) {
+        unsafe {
+            let side_data = sys::av_frame_get_side_data(
+                frame.ptr,
+                sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA,
+            );
+            assert!(!side_data.is_null());
+            let metadata = &mut *(*side_data).data.cast::<sys::AVDOVIMetadata>();
+            let block = &mut *((*side_data)
+                .data
+                .add(metadata.ext_block_offset)
+                .cast::<sys::AVDOVIDmData>());
+            block.level = 1;
+            block.__bindgen_anon_1.l1 = sys::AVDOVIDmLevel1 {
+                min_pq,
+                max_pq,
+                avg_pq,
+            };
+            metadata.num_ext_blocks = 1;
+        }
+    }
+
+    #[test]
+    fn dovi_l1_brightness_metadata_is_parsed() {
+        let frame = Frame::alloc(TimeBase { num: 1, den: 1 }).unwrap();
+        unsafe { attach_valid_dovi_rpu(&frame) };
+        assert_eq!(frame.dovi_metadata().unwrap().l1, None);
+
+        unsafe { with_dovi_l1(&frame, 62, 2200, 1500) };
+        let l1 = frame
+            .dovi_metadata()
+            .unwrap()
+            .l1
+            .expect("level 1 block should be parsed");
+        assert_eq!(
+            l1,
+            DoviFramePq {
+                min_pq: 62,
+                max_pq: 2200,
+                avg_pq: 1500
+            }
+        );
+
+        // Inverted min/max and an all-zero block are treated as absent.
+        unsafe { with_dovi_l1(&frame, 2200, 100, 1500) };
+        assert_eq!(frame.dovi_metadata().unwrap().l1, None);
+        unsafe { with_dovi_l1(&frame, 0, 0, 0) };
+        assert_eq!(frame.dovi_metadata().unwrap().l1, None);
+    }
+
+    #[test]
+    fn dovi_malformed_ext_region_skips_l1_but_keeps_rpu() {
+        let frame = Frame::alloc(TimeBase { num: 1, den: 1 }).unwrap();
+        unsafe {
+            attach_valid_dovi_rpu(&frame);
+            let side_data = sys::av_frame_get_side_data(
+                frame.ptr,
+                sys::AVFrameSideDataType_AV_FRAME_DATA_DOVI_METADATA,
+            );
+            assert!(!side_data.is_null());
+            let metadata = &mut *(*side_data).data.cast::<sys::AVDOVIMetadata>();
+            metadata.ext_block_offset = usize::MAX;
+            metadata.ext_block_size = mem::size_of::<sys::AVDOVIDmData>();
+            metadata.num_ext_blocks = 5;
+        }
+        let dovi = frame
+            .dovi_metadata()
+            .expect("RPU must remain usable when the ext region is malformed");
+        assert_eq!(dovi.l1, None);
+    }
+
+    #[test]
+    fn frame_reads_dovi_side_data_with_32bit_coef_denom() {
+        let frame = Frame::alloc(TimeBase { num: 1, den: 1 }).unwrap();
+        unsafe { attach_valid_dovi_rpu(&frame) };
+
+        let dovi = frame
+            .dovi_metadata()
+            .expect("32-bit coef denominator should be accepted");
+        let luma = &dovi.reshaping[0];
+        assert_eq!(luma.num_pivots, 2);
+        assert_close(luma.poly_coeffs[0][1], 1.0);
+
+        // Test with 31-bit denominator
+        unsafe {
+            mutate_dovi_rpu(&frame, |header, mapping, _| {
+                header.coef_log2_denom = 31;
+                mapping.curves[0].poly_coef[0][1] = 1_i64 << 31;
+            });
+        }
+        let dovi31 = frame
+            .dovi_metadata()
+            .expect("31-bit coef denominator should be accepted");
+        assert_close(dovi31.reshaping[0].poly_coeffs[0][1], 1.0);
+
+        // Test with invalid 33-bit denominator (should be rejected)
+        unsafe {
+            mutate_dovi_rpu(&frame, |header, _, _| header.coef_log2_denom = 33);
+        }
+        assert_eq!(frame.dovi_metadata(), None);
+    }
+
+    #[test]
+    fn dovi_unavailable_reason_classifies_rejections() {
+        let frame = Frame::alloc(TimeBase { num: 1, den: 1 }).unwrap();
+        assert_eq!(
+            frame.dovi_unavailable_reason(),
+            Some(DoviRejectReason::MissingSideData)
+        );
+
+        unsafe { attach_valid_dovi_rpu(&frame) };
+        assert_eq!(frame.dovi_unavailable_reason(), None);
+
+        unsafe {
+            mutate_dovi_rpu(&frame, |header, _, _| header.coef_log2_denom = 33);
+        }
+        assert_eq!(
+            frame.dovi_unavailable_reason(),
+            Some(DoviRejectReason::UnsupportedCoefDenom)
+        );
+        unsafe {
+            mutate_dovi_rpu(&frame, |header, _, _| header.coef_log2_denom = 32);
+        }
+
+        unsafe {
+            mutate_dovi_rpu(&frame, |header, _, _| header.disable_residual_flag = 0);
+        }
+        // A residual request is reported through `dovi_el_status`, not rejected:
+        // the base-layer mapping still applies (see
+        // `fel_residual_keeps_the_base_layer_mapping`).
+        assert_eq!(frame.dovi_unavailable_reason(), None);
+        unsafe {
+            mutate_dovi_rpu(&frame, |header, _, _| header.disable_residual_flag = 1);
+        }
+
+        unsafe {
+            mutate_dovi_rpu(&frame, |_, mapping, _| mapping.curves[0].pivots[1] = 0);
+        }
+        assert_eq!(
+            frame.dovi_unavailable_reason(),
+            Some(DoviRejectReason::InvalidCurves)
+        );
+        unsafe {
+            mutate_dovi_rpu(&frame, |_, mapping, _| mapping.curves[0].pivots[1] = 1023);
+        }
+
+        unsafe {
+            mutate_dovi_rpu(&frame, |_, _, color| {
+                color.rgb_to_lms_matrix = [
+                    rational(1, 1),
+                    rational(0, 1),
+                    rational(0, 1),
+                    rational(0, 1),
+                    rational(0, 1),
+                    rational(0, 1),
+                    rational(0, 1),
+                    rational(0, 1),
+                    rational(0, 1),
+                ];
+            });
+        }
+        assert_eq!(
+            frame.dovi_unavailable_reason(),
+            Some(DoviRejectReason::InvalidColorMetadata)
+        );
+
+        // Restoring the matrix makes the RPU usable again, and the reason
+        // tracks the metadata rather than sticky stream state.
+        unsafe {
+            mutate_dovi_rpu(&frame, |_, _, color| {
+                color.rgb_to_lms_matrix = [
+                    rational(1, 1),
+                    rational(0, 1),
+                    rational(0, 1),
+                    rational(0, 1),
+                    rational(1, 1),
+                    rational(0, 1),
+                    rational(0, 1),
+                    rational(0, 1),
+                    rational(1, 1),
+                ];
+            });
+        }
+        assert_eq!(frame.dovi_unavailable_reason(), None);
+        assert!(frame.dovi_metadata().is_some());
+    }
+
+    #[test]
+    fn fel_residual_keeps_the_base_layer_mapping() {
+        let frame = Frame::alloc(TimeBase { num: 1, den: 1 }).unwrap();
+        unsafe { attach_valid_dovi_rpu(&frame) };
+
+        // Profile 7 FEL: the RPU asks for residual composition, which this
+        // renderer cannot do (no enhancement-layer input). The RPU itself is
+        // still valid, so the base-layer reshaping must survive; only the
+        // un-composable part is reported.
+        unsafe {
+            mutate_dovi_rpu(&frame, |header, _, _| header.disable_residual_flag = 0);
+        }
+        assert_eq!(frame.dovi_unavailable_reason(), None);
+        let metadata = frame.dovi_metadata().expect("FEL RPU stays usable");
+        assert_eq!(metadata.reshaping[0].num_pivots, 2);
+        assert_close(metadata.reshaping[0].pivots[1], 1.0);
+        let status = frame.dovi_el_status().expect("FEL status is reported");
+        assert!(status.residual_requested);
+        assert!(!status.nlq_nontrivial);
+        assert!(status.is_active());
+
+        // A non-trivial NLQ definition is likewise reported, never rejected.
+        unsafe {
+            mutate_dovi_rpu(&frame, |_, mapping, _| mapping.nlq_method_idc = 1);
+        }
+        assert_eq!(frame.dovi_unavailable_reason(), None);
+        assert!(frame.dovi_metadata().is_some());
+        let status = frame.dovi_el_status().expect("NLQ status is reported");
+        assert!(status.nlq_nontrivial);
+        assert!(status.is_active());
+
+        // Profile 8 style RPUs (no residual, no NLQ) report an inactive status
+        // so callers do not diagnose them.
+        unsafe {
+            mutate_dovi_rpu(&frame, |header, mapping, _| {
+                header.disable_residual_flag = 1;
+                mapping.nlq_method_idc = -1;
+            });
+        }
+        assert_eq!(frame.dovi_el_status(), Some(DoviElStatus::default()));
+        assert!(!frame.dovi_el_status().unwrap().is_active());
     }
 
     #[test]

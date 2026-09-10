@@ -7,6 +7,8 @@ pub mod d3d11;
 #[cfg(target_os = "windows")]
 mod d3d11_artcnn;
 mod frame;
+/// CPU-side perceptual gamut LUT generation (libplacebo-compatible).
+pub mod gamut;
 pub mod metal;
 #[cfg(all(feature = "wgpu", target_env = "ohos"))]
 pub(crate) mod ohos_vulkan;

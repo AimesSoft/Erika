@@ -6,6 +6,7 @@ pub mod core;
 pub mod danmaku;
 pub mod debug_hud;
 pub mod ffmpeg;
+pub(crate) mod luma_stats;
 #[cfg(target_env = "ohos")]
 pub mod ohos;
 pub mod overlay;

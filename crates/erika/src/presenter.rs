@@ -42,6 +42,7 @@ use crate::danmaku::{
 };
 use crate::debug_hud::{DebugHud, DebugHudSnapshot};
 use crate::ffmpeg::DecoderBackend;
+use crate::luma_stats::LumaSmoother;
 #[cfg(target_env = "ohos")]
 use crate::ohos::ohaudio::{OHAudioOutput, OHAudioOutputConfig};
 use crate::overlay::{OverlayFrame, OverlayTimeline, OverlayViewport};
@@ -306,6 +307,11 @@ pub struct PresenterRuntime {
     current_danmaku_prepared: Option<CurrentDanmakuPrepared>,
     danmaku_plan_replacement_pending: bool,
     rejected_video_import_route: Option<RejectedVideoImportRoute>,
+    /// Rolling scene-average luminance (HDR10 without DoVi L1), injected
+    /// into each software frame's `scene_avg_nits` to drive the tone-map
+    /// pivot like Dolby Vision L1 would.
+    scene_luma_smoother: LumaSmoother,
+    last_scene_luma_generation: u64,
     current_media_time: Duration,
     current_generation: u64,
     current_surface_metrics: Option<SurfaceMetrics>,
@@ -356,6 +362,33 @@ fn should_reject_video_import(
     candidate: RejectedVideoImportRoute,
 ) -> bool {
     rejected == Some(candidate)
+}
+
+/// Measure the scene-average luminance of an HDR10 (PQ, no Dolby Vision L1)
+/// software-decoded frame and fold it into `smoother`, returning the smoothed
+/// average in nits. Hardware frames (no CPU plane) and non-HDR10 sources keep
+/// the previous estimate (`None` when nothing is known yet). The luma plane is
+/// sampled in place with its native stride — no frame repack happens here.
+fn measure_frame_scene_avg(frame: &PlayerVideoFrame, smoother: &mut LumaSmoother) -> Option<f32> {
+    use crate::core::TransferFunction;
+    use crate::luma_stats::{measure_luma_plane_view, pq_code_to_nits};
+    use crate::renderer::pipeline::ColorRange;
+    // Hardware payloads have no CPU plane to sample.
+    let decoded = frame.frame.decoded_frame()?;
+    // Only PQ (HDR10) sources. When the RPU already carries L1 brightness,
+    // prefer that over measuring the base layer.
+    if decoded.transfer_function() != TransferFunction::Pq {
+        return None;
+    }
+    if decoded.dovi_metadata().and_then(|dovi| dovi.l1).is_some() {
+        return None;
+    }
+    let full_range = matches!(decoded.color_range(), ColorRange::Full);
+    let plane = decoded.luma_plane_view()?;
+    let measured = measure_luma_plane_view(&plane, full_range)?;
+    let (avg_pq, _max_pq) = smoother.push(measured);
+    let nits = pq_code_to_nits(avg_pq);
+    (nits.is_finite() && nits > 0.0).then_some(nits)
 }
 
 fn should_report_video_frame_backpressure(drop_count: u64) -> bool {
@@ -717,6 +750,8 @@ impl PresenterRuntime {
             current_danmaku_prepared: None,
             danmaku_plan_replacement_pending: false,
             rejected_video_import_route: None,
+            scene_luma_smoother: LumaSmoother::new(),
+            last_scene_luma_generation: 0,
             current_media_time: Duration::ZERO,
             current_generation: 1,
             current_surface_metrics: None,
@@ -1943,9 +1978,20 @@ impl PresenterRuntime {
                 break;
             }
             match self.video_frames.try_recv() {
-                Ok(frame) => {
+                Ok(mut frame) => {
                     if frame.generation != self.player.playback_generation() {
                         continue;
+                    }
+                    if frame.generation != self.last_scene_luma_generation {
+                        // New playback: start the smoothing state fresh so a
+                        // seek cannot carry the old scene's brightness over.
+                        self.scene_luma_smoother.reset();
+                        self.last_scene_luma_generation = frame.generation;
+                    }
+                    if let Some(scene_avg) =
+                        measure_frame_scene_avg(&frame, &mut self.scene_luma_smoother)
+                    {
+                        frame.scene_avg_nits = Some(scene_avg);
                     }
                     #[cfg(target_os = "android")]
                     let mediacodec_surface = frame.frame.is_mediacodec();
