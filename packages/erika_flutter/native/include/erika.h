@@ -64,6 +64,38 @@ typedef struct ErikaOpenOptions {
   uint64_t reserved[3];
 } ErikaOpenOptions;
 
+/* Headless GIF export. Times are milliseconds. The function is synchronous;
+ * UI integrations must call it from a worker thread. It owns an independent
+ * demux/decode/encode pipeline and requires no player or presenter handle. */
+typedef enum ErikaGifExportQuality {
+  ErikaGifExportQuality_Normal = 0,
+  ErikaGifExportQuality_High = 1,
+} ErikaGifExportQuality;
+
+typedef struct ErikaGifExportOptions {
+  const char *input_uri;
+  const char *output_path;
+  uint64_t start_millis;
+  uint64_t end_millis;
+  uint32_t frames_per_second;
+  uint32_t output_width;
+  uint32_t output_height;
+  int32_t quality;
+  int32_t loop_count;
+  bool overwrite;
+  const ErikaHttpHeader *headers;
+  uintptr_t header_count;
+  uint64_t http_read_ahead_bytes;
+  uint64_t reserved[3];
+} ErikaGifExportOptions;
+
+typedef struct ErikaGifExportResult {
+  uint32_t width;
+  uint32_t height;
+  uint64_t frame_count;
+  uint64_t file_size;
+} ErikaGifExportResult;
+
 typedef enum ErikaStatus {
   ErikaStatus_Ok = 0,
   ErikaStatus_NullPointer = 1,
@@ -434,6 +466,10 @@ ErikaHandle *erika_create(void);
 void erika_destroy(ErikaHandle *handle);
 char *erika_last_error_message(void);
 void erika_string_free(char *value);
+
+ErikaStatus erika_export_gif(
+    const ErikaGifExportOptions *options,
+    ErikaGifExportResult *out_result);
 
 /* Playback control. uri is a local path or HTTP(S) URL; times are microseconds.
  * open() synchronously probes streams and transitions to Ready. */
