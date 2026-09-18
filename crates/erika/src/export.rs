@@ -652,7 +652,10 @@ fn check(code: i32, operation: &'static str) -> Result<()> {
 }
 
 fn ffmpeg_error_message(code: i32) -> String {
-    let mut buffer = [0_i8; 256];
+    // `c_char` is signed on most supported targets but unsigned on OpenHarmony.
+    // Keep the buffer's element type aligned with the target ABI rather than
+    // assuming `i8` so both FFmpeg and `CStr` receive compatible pointers.
+    let mut buffer = [0 as std::ffi::c_char; 256];
     unsafe {
         if sys::av_strerror(code, buffer.as_mut_ptr(), buffer.len()) >= 0 {
             CStr::from_ptr(buffer.as_ptr())
