@@ -6,6 +6,88 @@ import 'package:flutter/services.dart';
 
 import 'erika_event.dart';
 
+enum ErikaGifExportQuality {
+  normal(0),
+  high(1);
+
+  const ErikaGifExportQuality(this.nativeValue);
+
+  final int nativeValue;
+}
+
+@immutable
+class ErikaGifExportOptions {
+  const ErikaGifExportOptions({
+    required this.inputUri,
+    required this.outputPath,
+    required this.start,
+    required this.end,
+    required this.framesPerSecond,
+    required this.outputWidth,
+    required this.outputHeight,
+    this.quality = ErikaGifExportQuality.normal,
+    this.loopCount = 0,
+    this.overwrite = true,
+    this.httpHeaders = const <String, String>{},
+    this.httpReadAheadBytes = 0,
+  });
+
+  final String inputUri;
+  final String outputPath;
+  final Duration start;
+  final Duration end;
+  final int framesPerSecond;
+  final int outputWidth;
+  final int outputHeight;
+  final ErikaGifExportQuality quality;
+  final int loopCount;
+  final bool overwrite;
+  final Map<String, String> httpHeaders;
+  final int httpReadAheadBytes;
+
+  Map<String, Object?> toMap() => <String, Object?>{
+    'inputUri': inputUri,
+    'outputPath': outputPath,
+    'startMillis': start.inMilliseconds,
+    'endMillis': end.inMilliseconds,
+    'framesPerSecond': framesPerSecond,
+    'outputWidth': outputWidth,
+    'outputHeight': outputHeight,
+    'quality': quality.nativeValue,
+    'loopCount': loopCount,
+    'overwrite': overwrite,
+    if (httpHeaders.isNotEmpty) 'httpHeaders': httpHeaders,
+    if (httpReadAheadBytes > 0) 'httpReadAheadBytes': httpReadAheadBytes,
+  };
+}
+
+@immutable
+class ErikaGifExportResult {
+  const ErikaGifExportResult({
+    required this.outputPath,
+    required this.width,
+    required this.height,
+    required this.frameCount,
+    required this.fileSize,
+  });
+
+  final String outputPath;
+  final int width;
+  final int height;
+  final int frameCount;
+  final int fileSize;
+
+  factory ErikaGifExportResult.fromMap(Map<dynamic, dynamic> map) {
+    return ErikaGifExportResult(
+      outputPath: map['outputPath'] as String? ?? '',
+      width: (map['width'] as num?)?.toInt() ?? 0,
+      height: (map['height'] as num?)?.toInt() ?? 0,
+      frameCount: (map['frameCount'] as num?)?.toInt() ?? 0,
+      fileSize: (map['fileSize'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
 @immutable
 class ErikaMediaMetadata {
   const ErikaMediaMetadata({
@@ -1228,6 +1310,34 @@ class ErikaPlayer {
       if (width != null) 'width': width,
       if (height != null) 'height': height,
     });
+  }
+
+  /// Exports an animated GIF through Erika's independent headless pipeline.
+  /// Playback can continue while this operation runs.
+  static Future<ErikaGifExportResult> exportGif(
+    ErikaGifExportOptions options,
+  ) async {
+    if (options.inputUri.trim().isEmpty || options.outputPath.trim().isEmpty) {
+      throw ArgumentError('inputUri and outputPath must not be empty.');
+    }
+    if (options.start.isNegative || options.end <= options.start) {
+      throw ArgumentError('end must be later than a non-negative start.');
+    }
+    if (options.framesPerSecond <= 0 ||
+        options.outputWidth <= 0 ||
+        options.outputHeight <= 0) {
+      throw ArgumentError(
+        'framesPerSecond and output dimensions must be positive.',
+      );
+    }
+    final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+      'exportGif',
+      options.toMap(),
+    );
+    if (result == null) {
+      throw StateError('Erika GIF export returned no result.');
+    }
+    return ErikaGifExportResult.fromMap(result);
   }
 
   Future<int> addExternalSubtitle(String uri) async {

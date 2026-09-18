@@ -40,6 +40,7 @@ use erika::audio::AudioRecoveryState;
 use erika::danmaku::{
     DanmakuLayoutConfig, DanmakuShadowStyle, DanmakuTimeline, DanmakuTrackInfo, DanmakuTrackSource,
 };
+use erika::export::{GifExportOptions, GifExportQuality};
 #[cfg(any(
     target_os = "macos",
     any(target_os = "ios", target_os = "tvos"),
@@ -114,6 +115,37 @@ pub struct ErikaOpenOptions {
     pub header_count: usize,
     pub http_read_ahead_bytes: u64,
     pub reserved: [u64; 3],
+}
+
+/// Headless GIF export request. All time values are milliseconds. The call is
+/// synchronous and must be dispatched to a worker thread by UI integrations.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ErikaGifExportOptions {
+    pub input_uri: *const c_char,
+    pub output_path: *const c_char,
+    pub start_millis: u64,
+    pub end_millis: u64,
+    pub frames_per_second: u32,
+    pub output_width: u32,
+    pub output_height: u32,
+    /// 0 = normal (bilinear), 1 = high (Lanczos).
+    pub quality: i32,
+    pub loop_count: i32,
+    pub overwrite: bool,
+    pub headers: *const ErikaHttpHeader,
+    pub header_count: usize,
+    pub http_read_ahead_bytes: u64,
+    pub reserved: [u64; 3],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ErikaGifExportResult {
+    pub width: u32,
+    pub height: u32,
+    pub frame_count: u64,
+    pub file_size: u64,
 }
 
 thread_local! {
@@ -807,6 +839,82 @@ pub unsafe extern "C" fn erika_string_free(value: *mut c_char) {
         return;
     }
     unsafe { drop(CString::from_raw(value)) };
+}
+
+/// Runs a complete headless GIF export on the calling thread.
+///
+/// This function owns a separate demux/decode/encode pipeline and does not
+/// require either ErikaHandle or ErikaPresenterHandle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_export_gif(
+    options: *const ErikaGifExportOptions,
+    out_result: *mut ErikaGifExportResult,
+) -> ErikaStatus {
+    if options.is_null() || out_result.is_null() {
+        set_last_error("GIF export options and result pointers must not be null");
+        return ErikaStatus::NullPointer;
+    }
+    match catch_unwind(AssertUnwindSafe(|| {
+        let options = unsafe { &*options };
+        if options.reserved.iter().any(|field| *field != 0) {
+            return player_error("ErikaGifExportOptions.reserved must be zero");
+        }
+        let input_uri = match c_string(options.input_uri) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        let output_path = match c_string(options.output_path) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        let headers = match c_http_headers(options.headers, options.header_count) {
+            Ok(value) => value,
+            Err(status) => return status,
+        };
+        let quality = match options.quality {
+            0 => GifExportQuality::Normal,
+            1 => GifExportQuality::High,
+            value => return player_error(format!("unsupported GIF export quality: {value}")),
+        };
+        let mut request = MediaRequest::new(input_uri).with_http_headers(headers);
+        request = request.map_http_read_ahead_bytes(Some(options.http_read_ahead_bytes));
+        let export_options = GifExportOptions {
+            input: request,
+            output_path: PathBuf::from(output_path),
+            start: Duration::from_millis(options.start_millis),
+            end: Duration::from_millis(options.end_millis),
+            frames_per_second: options.frames_per_second,
+            output_width: options.output_width,
+            output_height: options.output_height,
+            quality,
+            loop_count: options.loop_count,
+            overwrite: options.overwrite,
+        };
+        match erika::export::export_gif(&export_options) {
+            Ok(result) => {
+                unsafe {
+                    *out_result = ErikaGifExportResult {
+                        width: result.width,
+                        height: result.height,
+                        frame_count: result.frame_count,
+                        file_size: result.file_size,
+                    };
+                }
+                ErikaStatus::Ok
+            }
+            Err(error) => player_error(error.to_string()),
+        }
+    })) {
+        Ok(status) => finalize_status(status),
+        Err(payload) => {
+            set_last_error(report_capi_panic(
+                "Erika GIF export C ABI call",
+                Location::caller(),
+                payload,
+            ));
+            ErikaStatus::Panic
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -4893,6 +5001,76 @@ mod tests {
             reserved: [1, 0, 0],
         };
         assert_eq!(c_open_options(&options), Err(ErikaStatus::PlayerError));
+        assert!(
+            LAST_ERROR
+                .with(|slot| slot.borrow().clone())
+                .unwrap_or_default()
+                .contains("reserved")
+        );
+    }
+
+    #[test]
+    fn gif_export_c_api_validates_boundary_before_opening_input() {
+        let mut result = ErikaGifExportResult::default();
+        assert_eq!(
+            unsafe { erika_export_gif(std::ptr::null(), &mut result) },
+            ErikaStatus::NullPointer
+        );
+
+        let input = CString::new("/tmp/erika-gif-missing-input.mp4").unwrap();
+        let output = CString::new("/tmp/erika-gif-output.gif").unwrap();
+        let options = ErikaGifExportOptions {
+            input_uri: input.as_ptr(),
+            output_path: output.as_ptr(),
+            start_millis: 0,
+            end_millis: 0,
+            frames_per_second: 10,
+            output_width: 640,
+            output_height: 360,
+            quality: 0,
+            loop_count: 0,
+            overwrite: false,
+            headers: std::ptr::null(),
+            header_count: 0,
+            http_read_ahead_bytes: 0,
+            reserved: [0; 3],
+        };
+        assert_eq!(
+            unsafe { erika_export_gif(&options, &mut result) },
+            ErikaStatus::PlayerError
+        );
+        assert!(
+            LAST_ERROR
+                .with(|slot| slot.borrow().clone())
+                .unwrap_or_default()
+                .contains("end must be greater than start")
+        );
+
+        let unsupported_quality = ErikaGifExportOptions {
+            end_millis: 1_000,
+            quality: 2,
+            ..options
+        };
+        assert_eq!(
+            unsafe { erika_export_gif(&unsupported_quality, &mut result) },
+            ErikaStatus::PlayerError
+        );
+        assert!(
+            LAST_ERROR
+                .with(|slot| slot.borrow().clone())
+                .unwrap_or_default()
+                .contains("unsupported GIF export quality")
+        );
+
+        let reserved = ErikaGifExportOptions {
+            end_millis: 1_000,
+            reserved: [1, 0, 0],
+            ..options
+        };
+        assert_eq!(
+            unsafe { erika_export_gif(&reserved, &mut result) },
+            ErikaStatus::PlayerError
+        );
         assert!(
             LAST_ERROR
                 .with(|slot| slot.borrow().clone())

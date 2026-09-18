@@ -233,6 +233,8 @@ impl NativeDependencyProfile {
                 "--enable-demuxer=mov,matroska,mpegts,mpegps,mpegvideo,avi,flv,h264,hevc,av1,ivf,mp3,aac,flac,wav,ogg,ac3,eac3,dts,truehd,mlp,mjpeg,vc1,ass,srt,webvtt",
                 "--enable-parser=hevc,h264,av1,vp9,aac,ac3,dca,mlp,opus,vorbis,flac,mpegaudio,mpegvideo,mpeg4video,mjpeg,vc1,dvdsub,dvbsub",
                 "--enable-decoder=hevc,h264,av1,vp8,vp9,mpeg1video,mpeg2video,mpeg4,vc1,mjpeg,flv,theora,aac,ac3,eac3,dca,truehd,mlp,opus,vorbis,flac,mp3,pcm_s16le,pcm_s24le,pcm_s32le,ass,srt,webvtt,pgssub,dvdsub,dvbsub",
+                "--enable-encoder=gif",
+                "--enable-muxer=gif",
             ],
             Self::GplFull => &[
                 "--enable-gpl",
@@ -248,6 +250,8 @@ impl NativeDependencyProfile {
                 "--enable-demuxer=mov,matroska,mpegts,mpegps,mpegvideo,avi,flv,h264,hevc,av1,ivf,mp3,aac,flac,wav,ogg,ac3,eac3,dts,truehd,mlp,mjpeg,vc1,ass,srt,webvtt",
                 "--enable-parser=hevc,h264,av1,vp9,aac,ac3,dca,mlp,opus,vorbis,flac,mpegaudio,mpegvideo,mpeg4video,mjpeg,vc1,dvdsub,dvbsub",
                 "--enable-decoder=hevc,h264,av1,vp8,vp9,mpeg1video,mpeg2video,mpeg4,vc1,mjpeg,flv,theora,aac,ac3,eac3,dca,truehd,mlp,opus,vorbis,flac,mp3,pcm_s16le,pcm_s24le,pcm_s32le,ass,srt,webvtt,pgssub,dvdsub,dvbsub",
+                "--enable-encoder=gif",
+                "--enable-muxer=gif",
             ],
         }
     }
@@ -4867,6 +4871,18 @@ mod tests {
                     .is_some_and(|decoders| decoders.split(',').any(|decoder| decoder == "vp8"))
             }));
             assert!(!flags.contains(&"--enable-videotoolbox"));
+        }
+    }
+
+    #[test]
+    fn every_ffmpeg_profile_enables_headless_gif_export() {
+        for profile in [
+            NativeDependencyProfile::Lgpl,
+            NativeDependencyProfile::GplFull,
+        ] {
+            let flags = profile.ffmpeg_configure_flags();
+            assert!(flags.contains(&"--enable-encoder=gif"));
+            assert!(flags.contains(&"--enable-muxer=gif"));
         }
     }
 

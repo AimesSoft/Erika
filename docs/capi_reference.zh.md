@@ -28,6 +28,34 @@ HarmonyOS Flutter bridge 因 ArkTS 平台通道本身传递序列化结构化值
 
 两个族不共享状态；一个进程可同时使用两者，但单个媒体会话只活在一个 handle 里。
 
+## Headless GIF 导出
+
+`erika_export_gif` 独立于上述两个 handle 族。它创建私有的 demuxer、软件解码器、
+缩放器、GIF encoder 和 muxer，不需要窗口或 surface，也不会干扰正在播放的实例。
+
+```c
+ErikaGifExportOptions options = {
+    .input_uri = "/path/input.mp4",
+    .output_path = "/path/output.gif",
+    .start_millis = 5000,
+    .end_millis = 10000,
+    .frames_per_second = 10,
+    .output_width = 640,
+    .output_height = 360,
+    .quality = ErikaGifExportQuality_High,
+    .loop_count = 0,
+};
+ErikaGifExportResult result = {0};
+ErikaStatus status = erika_export_gif(&options, &result);
+```
+
+该调用是同步的；Flutter 等 UI 宿主必须把它放到 worker thread 或 isolate 中执行。
+`start_millis` 与 `end_millis` 选择导出区间；`output_width` 与 `output_height`
+是精确输出尺寸。普通质量使用双线性缩放，高质量使用 Lanczos 缩放。只有完整编码成功后，临时同目录文件才会重命名为目标文件。
+除非 `overwrite` 为 true，否则已有目标会被拒绝。`loop_count` 沿用 FFmpeg GIF 语义：
+`-1` 不循环、`0` 无限循环、正数表示循环次数。HTTP 输入可使用与
+`ErikaOpenOptions` 相同的请求头和 read-ahead 覆盖参数。
+
 ## 约定
 
 ### 状态码

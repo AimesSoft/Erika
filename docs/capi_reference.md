@@ -33,6 +33,38 @@ usage by platform and by a successful create call.
 The two families do not share state; a process may use both, but a given media
 session lives in exactly one handle.
 
+## Headless GIF export
+
+`erika_export_gif` is independent of both handle families. It constructs a
+private demuxer, software decoder, scaler, GIF encoder, and muxer, so it does
+not require a window or surface and does not disturb an active player.
+
+```c
+ErikaGifExportOptions options = {
+    .input_uri = "/path/input.mp4",
+    .output_path = "/path/output.gif",
+    .start_millis = 5000,
+    .end_millis = 10000,
+    .frames_per_second = 10,
+    .output_width = 640,
+    .output_height = 360,
+    .quality = ErikaGifExportQuality_High,
+    .loop_count = 0,
+};
+ErikaGifExportResult result = {0};
+ErikaStatus status = erika_export_gif(&options, &result);
+```
+
+The call is synchronous; Flutter and other UI hosts must run it on a worker
+thread or isolate. `start_millis` and `end_millis` select the interval;
+`output_width` and `output_height` are the exact output dimensions. Normal
+quality uses bilinear scaling, while high quality uses Lanczos scaling. A
+temporary sibling file is renamed into place only after successful completion.
+Unless `overwrite` is true, an existing destination is rejected. `loop_count`
+uses FFmpeg GIF semantics: `-1` disables looping, `0` loops forever, and a
+positive value is the loop count. HTTP inputs accept the same headers and
+read-ahead override as `ErikaOpenOptions`.
+
 ## Conventions
 
 ### Status codes

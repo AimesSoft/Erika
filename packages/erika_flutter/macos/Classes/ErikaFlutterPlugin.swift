@@ -385,6 +385,30 @@ private struct ErikaOpenOptions {
   var reserved: (UInt64, UInt64, UInt64) = (0, 0, 0)
 }
 
+private struct ErikaGifExportOptionsC {
+  var inputUri: UnsafePointer<CChar>?
+  var outputPath: UnsafePointer<CChar>?
+  var startMillis: UInt64
+  var endMillis: UInt64
+  var framesPerSecond: UInt32
+  var outputWidth: UInt32
+  var outputHeight: UInt32
+  var quality: Int32
+  var loopCount: Int32
+  var overwrite: Bool
+  var headers: UnsafeRawPointer?
+  var headerCount: UInt
+  var httpReadAheadBytes: UInt64
+  var reserved: (UInt64, UInt64, UInt64) = (0, 0, 0)
+}
+
+private struct ErikaGifExportResultC {
+  var width: UInt32 = 0
+  var height: UInt32 = 0
+  var frameCount: UInt64 = 0
+  var fileSize: UInt64 = 0
+}
+
 private struct ErikaEventC {
   var kind: Int32 = 0
   var status: Int32 = 0
@@ -648,6 +672,7 @@ private final class ErikaNativeLibrary {
   typealias ResizeSurfaceFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, Double) -> Int32
   typealias RenderTickFn = @convention(c) (UnsafeMutableRawPointer?, Double, UnsafeMutableRawPointer?) -> Int32
   typealias CaptureFrameRgbaFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, UnsafeMutableRawPointer?, Int) -> Int32
+  typealias ExportGifFn = @convention(c) (UnsafeRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias PollEventFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias LastErrorMessageFn = @convention(c) () -> UnsafeMutablePointer<CChar>?
   typealias StringFreeFn = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
@@ -711,6 +736,7 @@ private final class ErikaNativeLibrary {
   let detachSurface: CommandFn
   let renderTick: RenderTickFn
   let captureFrameRgba: CaptureFrameRgbaFn?
+  let exportGif: ExportGifFn?
   let pollEvent: PollEventFn
   let lastErrorMessage: LastErrorMessageFn
   let stringFree: StringFreeFn
@@ -782,6 +808,7 @@ private final class ErikaNativeLibrary {
     detachSurface = try Self.load("erika_presenter_detach_surface", from: libraryHandle, as: CommandFn.self)
     renderTick = try Self.load("erika_presenter_render_tick", from: libraryHandle, as: RenderTickFn.self)
     captureFrameRgba = Self.loadOptional("erika_presenter_capture_frame_rgba", from: libraryHandle, as: CaptureFrameRgbaFn.self)
+    exportGif = Self.loadOptional("erika_export_gif", from: libraryHandle, as: ExportGifFn.self)
     pollEvent = try Self.load("erika_presenter_poll_event", from: libraryHandle, as: PollEventFn.self)
     lastErrorMessage = try Self.load("erika_last_error_message", from: libraryHandle, as: LastErrorMessageFn.self)
     stringFree = try Self.load("erika_string_free", from: libraryHandle, as: StringFreeFn.self)
@@ -915,6 +942,64 @@ private final class ErikaNativeLibrary {
     }
     defer { stringFree(pointer) }
     return String(validatingUTF8: pointer)
+  }
+
+  func exportGif(
+    inputUri: String,
+    outputPath: String,
+    startMillis: UInt64,
+    endMillis: UInt64,
+    framesPerSecond: UInt32,
+    outputWidth: UInt32,
+    outputHeight: UInt32,
+    quality: Int32,
+    loopCount: Int32,
+    overwrite: Bool,
+    httpHeaders: [String: String],
+    httpReadAheadBytes: UInt64
+  ) throws -> ErikaGifExportResultC {
+    guard let exportGif else {
+      throw ErikaPluginError.symbolMissing("erika_export_gif")
+    }
+    let names = httpHeaders.keys.map { strdup($0) }
+    let values = httpHeaders.values.map { strdup($0) }
+    defer {
+      names.forEach { free($0) }
+      values.forEach { free($0) }
+    }
+    let headers = zip(names, values).map { ErikaHttpHeader(name: $0.0, value: $0.1) }
+    return try inputUri.withCString { inputPtr in
+      try outputPath.withCString { outputPtr in
+        try headers.withUnsafeBufferPointer { buffer in
+          var options = ErikaGifExportOptionsC(
+            inputUri: inputPtr,
+            outputPath: outputPtr,
+            startMillis: startMillis,
+            endMillis: endMillis,
+            framesPerSecond: framesPerSecond,
+            outputWidth: outputWidth,
+            outputHeight: outputHeight,
+            quality: quality,
+            loopCount: loopCount,
+            overwrite: overwrite,
+            headers: buffer.baseAddress.map(UnsafeRawPointer.init),
+            headerCount: UInt(headers.count),
+            httpReadAheadBytes: httpReadAheadBytes
+          )
+          var exportResult = ErikaGifExportResultC()
+          let status = withUnsafePointer(to: &options) { optionsPtr in
+            withUnsafeMutablePointer(to: &exportResult) { resultPtr in
+              exportGif(UnsafeRawPointer(optionsPtr), UnsafeMutableRawPointer(resultPtr))
+            }
+          }
+          if status != 0 {
+            let detail = currentEventMessage() ?? "ErikaStatus \(status)"
+            throw ErikaPluginError.invalidArguments("GIF export failed: \(detail)")
+          }
+          return exportResult
+        }
+      }
+    }
   }
 }
 
@@ -2886,6 +2971,56 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
           result(FlutterStandardTypedData(bytes: data))
         } else {
           result(nil)
+        }
+      case "exportGif":
+        let args = try dictionaryArgs(call.arguments)
+        guard let inputUri = args["inputUri"] as? String, !inputUri.isEmpty else {
+          throw ErikaPluginError.invalidArguments("inputUri is required.")
+        }
+        guard let outputPath = args["outputPath"] as? String, !outputPath.isEmpty else {
+          throw ErikaPluginError.invalidArguments("outputPath is required.")
+        }
+        let startMillis = try requiredUInt64(args["startMillis"], name: "startMillis")
+        let endMillis = try requiredUInt64(args["endMillis"], name: "endMillis")
+        let framesPerSecond = UInt32(try requiredUInt64(args["framesPerSecond"], name: "framesPerSecond"))
+        let outputWidth = UInt32(try requiredUInt64(args["outputWidth"], name: "outputWidth"))
+        let outputHeight = UInt32(try requiredUInt64(args["outputHeight"], name: "outputHeight"))
+        let quality = Int32(int64Value(args["quality"]) ?? 0)
+        let loopCount = Int32(int64Value(args["loopCount"]) ?? 0)
+        let overwrite = (args["overwrite"] as? Bool) ?? true
+        let httpHeaders = (args["httpHeaders"] as? [String: String]) ?? [:]
+        let httpReadAheadBytes = try optionalReadAheadBytes(args["httpReadAheadBytes"])
+        DispatchQueue.global(qos: .userInitiated).async {
+          do {
+            guard let library = ErikaNativeLibrary.shared else {
+              throw ErikaPluginError.libraryNotFound([])
+            }
+            let exported = try library.exportGif(
+              inputUri: inputUri,
+              outputPath: outputPath,
+              startMillis: startMillis,
+              endMillis: endMillis,
+              framesPerSecond: framesPerSecond,
+              outputWidth: outputWidth,
+              outputHeight: outputHeight,
+              quality: quality,
+              loopCount: loopCount,
+              overwrite: overwrite,
+              httpHeaders: httpHeaders,
+              httpReadAheadBytes: httpReadAheadBytes
+            )
+            DispatchQueue.main.async {
+              result([
+                "outputPath": outputPath,
+                "width": Int(exported.width),
+                "height": Int(exported.height),
+                "frameCount": Int64(exported.frameCount),
+                "fileSize": Int64(exported.fileSize),
+              ])
+            }
+          } catch {
+            DispatchQueue.main.async { result(self.flutterError(error)) }
+          }
         }
       case "attachView":
         let args = try dictionaryArgs(call.arguments)

@@ -5,6 +5,7 @@ pub mod audio;
 pub mod core;
 pub mod danmaku;
 pub mod debug_hud;
+pub mod export;
 pub mod ffmpeg;
 #[cfg(target_env = "ohos")]
 pub mod ohos;
