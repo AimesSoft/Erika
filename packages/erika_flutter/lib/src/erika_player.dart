@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'erika_event.dart';
+import 'gif_export_native.dart';
 
 enum ErikaGifExportQuality {
   normal(0),
@@ -1314,6 +1315,10 @@ class ErikaPlayer {
 
   /// Exports an animated GIF through Erika's independent headless pipeline.
   /// Playback can continue while this operation runs.
+  ///
+  /// Supported on every native platform published by Erika: Android, iOS,
+  /// tvOS, macOS, Windows, and OpenHarmony. Web is not supported because it
+  /// cannot load Erika's native C API or write an arbitrary output path.
   static Future<ErikaGifExportResult> exportGif(
     ErikaGifExportOptions options,
   ) async {
@@ -1324,16 +1329,27 @@ class ErikaPlayer {
       throw ArgumentError('end must be later than a non-negative start.');
     }
     if (options.framesPerSecond <= 0 ||
+        options.framesPerSecond > 60 ||
         options.outputWidth <= 0 ||
-        options.outputHeight <= 0) {
+        options.outputHeight <= 0 ||
+        options.outputWidth > 8192 ||
+        options.outputHeight > 8192) {
       throw ArgumentError(
-        'framesPerSecond and output dimensions must be positive.',
+        'framesPerSecond must be in 1..=60 and output dimensions must be in 1..=8192.',
       );
     }
-    final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(
-      'exportGif',
-      options.toMap(),
-    );
+    if (options.loopCount < -1 || options.loopCount > 0xffff) {
+      throw ArgumentError('loopCount must be -1, 0, or a 16-bit value.');
+    }
+    if (options.httpReadAheadBytes < 0) {
+      throw ArgumentError('httpReadAheadBytes must not be negative.');
+    }
+    final result = !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS
+        ? await _channel.invokeMethod<Map<dynamic, dynamic>>(
+            'exportGif',
+            options.toMap(),
+          )
+        : await exportGifNative(options.toMap());
     if (result == null) {
       throw StateError('Erika GIF export returned no result.');
     }

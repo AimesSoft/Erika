@@ -7,6 +7,7 @@
 
 use std::ffi::{CStr, CString};
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -115,9 +116,7 @@ pub fn export_gif(options: &GifExportOptions) -> Result<GifExportResult> {
     if options.output_path.exists() && !options.overwrite {
         return Err(ExportError::OutputExists(options.output_path.clone()));
     }
-    let parent = options.output_path.parent().ok_or_else(|| {
-        ExportError::InvalidOptions("output path must have a parent directory".to_string())
-    })?;
+    let parent = output_parent(&options.output_path);
     if !parent.is_dir() {
         return Err(ExportError::Io {
             path: parent.to_path_buf(),
@@ -180,6 +179,7 @@ pub fn export_gif(options: &GifExportOptions) -> Result<GifExportResult> {
         (duration.as_secs_f64() * options.frames_per_second as f64).ceil() as u64;
     let mut next_sample = start_seconds;
     let mut reached_end = false;
+    let mut last_frame = None;
 
     let export_result = (|| {
         while !reached_end {
@@ -192,6 +192,7 @@ pub fn export_gif(options: &GifExportOptions) -> Result<GifExportResult> {
                 target_frame_count,
                 &mut next_sample,
                 &mut reached_end,
+                &mut last_frame,
             )?;
             if reached_end {
                 break;
@@ -207,6 +208,14 @@ pub fn export_gif(options: &GifExportOptions) -> Result<GifExportResult> {
                     target_frame_count,
                     &mut next_sample,
                     &mut reached_end,
+                    &mut last_frame,
+                )?;
+                pad_to_target_frame_count(
+                    &mut writer,
+                    last_frame.as_ref(),
+                    target_frame_count,
+                    &mut next_sample,
+                    frame_interval,
                 )?;
                 break;
             };
@@ -230,16 +239,7 @@ pub fn export_gif(options: &GifExportOptions) -> Result<GifExportResult> {
         }
     };
     drop(writer);
-    if options.overwrite && options.output_path.exists() {
-        fs::remove_file(&options.output_path).map_err(|error| ExportError::Io {
-            path: options.output_path.clone(),
-            message: error.to_string(),
-        })?;
-    }
-    fs::rename(&temporary_path, &options.output_path).map_err(|error| ExportError::Io {
-        path: options.output_path.clone(),
-        message: error.to_string(),
-    })?;
+    commit_temporary_output(&temporary_path, &options.output_path, options.overwrite)?;
     let file_size = fs::metadata(&options.output_path)
         .map_err(|error| ExportError::Io {
             path: options.output_path.clone(),
@@ -306,6 +306,72 @@ fn temporary_output_path(output: &Path) -> PathBuf {
     output.with_file_name(format!(".{name}.erika-{}-{stamp}.part", std::process::id()))
 }
 
+fn output_parent(output: &Path) -> &Path {
+    match output.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
+}
+
+fn commit_temporary_output(temporary: &Path, output: &Path, overwrite: bool) -> Result<()> {
+    if overwrite {
+        return replace_file(temporary, output);
+    }
+    fs::hard_link(temporary, output).map_err(|error| {
+        if error.kind() == ErrorKind::AlreadyExists {
+            ExportError::OutputExists(output.to_path_buf())
+        } else {
+            ExportError::Io {
+                path: output.to_path_buf(),
+                message: error.to_string(),
+            }
+        }
+    })?;
+    // The output link is already committed atomically. Failure to remove the
+    // private sibling name must not turn a successful export into a failure.
+    let _ = fs::remove_file(temporary);
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn replace_file(temporary: &Path, output: &Path) -> Result<()> {
+    fs::rename(temporary, output).map_err(|error| ExportError::Io {
+        path: output.to_path_buf(),
+        message: error.to_string(),
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn replace_file(temporary: &Path, output: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+    use windows::core::PCWSTR;
+
+    let source = temporary
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = output
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    unsafe {
+        MoveFileExW(
+            PCWSTR(source.as_ptr()),
+            PCWSTR(destination.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|error| ExportError::Io {
+        path: output.to_path_buf(),
+        message: error.to_string(),
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn drain_decoder(
     decoder: &mut crate::ffmpeg::Decoder,
@@ -316,6 +382,7 @@ fn drain_decoder(
     target_frame_count: u64,
     next_sample: &mut f64,
     reached_end: &mut bool,
+    last_frame: &mut Option<Frame>,
 ) -> Result<()> {
     loop {
         match decoder.receive_frame().map_err(ffmpeg_error)? {
@@ -327,24 +394,48 @@ fn drain_decoder(
                     continue;
                 }
                 if timestamp >= end_seconds {
+                    pad_to_target_frame_count(
+                        writer,
+                        last_frame.as_ref(),
+                        target_frame_count,
+                        next_sample,
+                        frame_interval,
+                    )?;
                     *reached_end = true;
                     return Ok(());
                 }
-                if timestamp + frame_interval * 0.5 >= *next_sample {
-                    writer.write_frame(&frame)?;
-                    if writer.frame_count >= target_frame_count {
-                        *reached_end = true;
-                        return Ok(());
-                    }
+                *last_frame = Some(frame);
+                while writer.frame_count < target_frame_count
+                    && timestamp + frame_interval * 0.5 >= *next_sample
+                {
+                    writer.write_frame(last_frame.as_ref().expect("frame was just stored"))?;
                     *next_sample += frame_interval;
-                    while *next_sample <= timestamp {
-                        *next_sample += frame_interval;
-                    }
+                }
+                if writer.frame_count >= target_frame_count {
+                    *reached_end = true;
+                    return Ok(());
                 }
             }
             DecoderOutputFrame::NeedMoreInput | DecoderOutputFrame::EndOfStream => return Ok(()),
         }
     }
+}
+
+fn pad_to_target_frame_count(
+    writer: &mut GifWriter,
+    last_frame: Option<&Frame>,
+    target_frame_count: u64,
+    next_sample: &mut f64,
+    frame_interval: f64,
+) -> Result<()> {
+    let Some(frame) = last_frame else {
+        return Ok(());
+    };
+    while writer.frame_count < target_frame_count {
+        writer.write_frame(frame)?;
+        *next_sample += frame_interval;
+    }
+    Ok(())
 }
 
 struct GifWriter {
@@ -675,6 +766,19 @@ fn ffmpeg_error(error: crate::ffmpeg::FfmpegError) -> ExportError {
 mod tests {
     use super::*;
 
+    fn test_directory(name: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should follow the Unix epoch")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "erika-export-{name}-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).expect("test directory should be created");
+        directory
+    }
+
     #[test]
     fn defaults_map_to_ui_export_controls() {
         let options = GifExportOptions::new(
@@ -714,5 +818,45 @@ mod tests {
         options.end = Duration::from_secs(1);
         options.frames_per_second = 61;
         assert!(validate_options(&options).is_err());
+    }
+
+    #[test]
+    fn relative_output_uses_the_current_directory() {
+        assert_eq!(output_parent(Path::new("output.gif")), Path::new("."));
+        assert_eq!(
+            output_parent(Path::new("exports/output.gif")),
+            Path::new("exports")
+        );
+    }
+
+    #[test]
+    fn no_clobber_commit_preserves_a_racing_destination() {
+        let directory = test_directory("no-clobber");
+        let temporary = directory.join("temporary.gif");
+        let output = directory.join("output.gif");
+        fs::write(&temporary, b"new").expect("temporary output should be written");
+        fs::write(&output, b"existing").expect("racing output should be written");
+
+        let error = commit_temporary_output(&temporary, &output, false)
+            .expect_err("no-clobber commit must reject an existing output");
+        assert!(matches!(error, ExportError::OutputExists(path) if path == output));
+        assert_eq!(fs::read(&output).unwrap(), b"existing");
+        assert_eq!(fs::read(&temporary).unwrap(), b"new");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn overwrite_commit_replaces_the_destination() {
+        let directory = test_directory("overwrite");
+        let temporary = directory.join("temporary.gif");
+        let output = directory.join("output.gif");
+        fs::write(&temporary, b"new").expect("temporary output should be written");
+        fs::write(&output, b"existing").expect("existing output should be written");
+
+        commit_temporary_output(&temporary, &output, true)
+            .expect("overwrite commit should replace the destination");
+        assert_eq!(fs::read(&output).unwrap(), b"new");
+        assert!(!temporary.exists());
+        fs::remove_dir_all(directory).unwrap();
     }
 }

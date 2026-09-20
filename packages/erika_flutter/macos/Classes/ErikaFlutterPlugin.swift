@@ -2982,11 +2982,16 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         }
         let startMillis = try requiredUInt64(args["startMillis"], name: "startMillis")
         let endMillis = try requiredUInt64(args["endMillis"], name: "endMillis")
-        let framesPerSecond = UInt32(try requiredUInt64(args["framesPerSecond"], name: "framesPerSecond"))
-        let outputWidth = UInt32(try requiredUInt64(args["outputWidth"], name: "outputWidth"))
-        let outputHeight = UInt32(try requiredUInt64(args["outputHeight"], name: "outputHeight"))
-        let quality = Int32(int64Value(args["quality"]) ?? 0)
-        let loopCount = Int32(int64Value(args["loopCount"]) ?? 0)
+        let framesPerSecondValue = try requiredUInt64(args["framesPerSecond"], name: "framesPerSecond")
+        let outputWidthValue = try requiredUInt64(args["outputWidth"], name: "outputWidth")
+        let outputHeightValue = try requiredUInt64(args["outputHeight"], name: "outputHeight")
+        guard let framesPerSecond = UInt32(exactly: framesPerSecondValue),
+              let outputWidth = UInt32(exactly: outputWidthValue),
+              let outputHeight = UInt32(exactly: outputHeightValue),
+              let quality = Int32(exactly: int64Value(args["quality"]) ?? 0),
+              let loopCount = Int32(exactly: int64Value(args["loopCount"]) ?? 0) else {
+          throw ErikaPluginError.invalidArguments("GIF export numeric arguments are out of range.")
+        }
         let overwrite = (args["overwrite"] as? Bool) ?? true
         let httpHeaders = (args["httpHeaders"] as? [String: String]) ?? [:]
         let httpReadAheadBytes = try optionalReadAheadBytes(args["httpReadAheadBytes"])

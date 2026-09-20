@@ -59,10 +59,11 @@ typedef _StringFreeNative = Void Function(Pointer<Int8>);
 typedef _StringFreeDart = void Function(Pointer<Int8>);
 
 void main(List<String> arguments) async {
-  if (arguments.length < 3 || arguments.length > 4) {
+  if (arguments.length < 3 || arguments.length > 5) {
     stderr.writeln(
       'usage: dart run scripts/gif_export_smoke.dart '
-      '<liberika_capi.dylib> <input.mp4> <output.gif> [start-seconds]',
+      '<liberika_capi.dylib> <input.mp4> <output.gif> '
+      '[start-seconds] [frames-per-second]',
     );
     exitCode = 64;
     return;
@@ -76,11 +77,19 @@ void main(List<String> arguments) async {
       : File(inputArgument).absolute.path;
   final outputPath = File(arguments[2]).absolute.path;
   final startMillis =
-      ((double.tryParse(arguments.length == 4 ? arguments[3] : '0') ?? 0) *
+      ((double.tryParse(arguments.length >= 4 ? arguments[3] : '0') ?? 0) *
               1000)
           .round();
+  final framesPerSecond =
+      int.tryParse(arguments.length >= 5 ? arguments[4] : '10') ?? 10;
   final result = await Isolate.run(
-    () => _runExport(libraryPath, inputUri, outputPath, startMillis),
+    () => _runExport(
+      libraryPath,
+      inputUri,
+      outputPath,
+      startMillis,
+      framesPerSecond,
+    ),
   );
   stdout.writeln(jsonEncode(result));
 }
@@ -90,6 +99,7 @@ Map<String, Object> _runExport(
   String inputUri,
   String outputPath,
   int startMillis,
+  int framesPerSecond,
 ) {
   final process = DynamicLibrary.process();
   final malloc = process.lookupFunction<_MallocNative, _MallocDart>('malloc');
@@ -119,7 +129,7 @@ Map<String, Object> _runExport(
       ..outputPath = output
       ..startMillis = startMillis
       ..endMillis = startMillis + 5000
-      ..framesPerSecond = 10
+      ..framesPerSecond = framesPerSecond
       ..outputWidth = 640
       ..outputHeight = 360
       ..quality = 1
@@ -150,7 +160,7 @@ Map<String, Object> _runExport(
       'fileSize': result.ref.fileSize,
       'startMillis': startMillis,
       'endMillis': startMillis + 5000,
-      'framesPerSecond': 10,
+      'framesPerSecond': framesPerSecond,
       'quality': 'high',
     };
   } finally {

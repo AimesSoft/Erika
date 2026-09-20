@@ -658,6 +658,86 @@ void main() {
     await player.dispose();
   });
 
+  test('macOS GIF export keeps using the plugin-owned runtime', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(playerChannel, (MethodCall call) async {
+      playerCalls.add(call);
+      if (call.method == 'exportGif') {
+        return <String, Object?>{
+          'outputPath': '/tmp/output.gif',
+          'width': 320,
+          'height': 180,
+          'frameCount': 50,
+          'fileSize': 4096,
+        };
+      }
+      return null;
+    });
+
+    final result = await ErikaPlayer.exportGif(
+      const ErikaGifExportOptions(
+        inputUri: '/tmp/input.mp4',
+        outputPath: '/tmp/output.gif',
+        start: Duration(seconds: 1),
+        end: Duration(seconds: 6),
+        framesPerSecond: 10,
+        outputWidth: 320,
+        outputHeight: 180,
+      ),
+    );
+
+    expect(result.frameCount, 50);
+    final call = playerCalls.singleWhere(
+      (MethodCall call) => call.method == 'exportGif',
+    );
+    expect((call.arguments as Map<Object?, Object?>)['framesPerSecond'], 10);
+  });
+
+  test('GIF export rejects values outside the native ABI limits', () async {
+    Future<void> expectRejected(ErikaGifExportOptions options) async {
+      await expectLater(
+        ErikaPlayer.exportGif(options),
+        throwsA(isA<ArgumentError>()),
+      );
+    }
+
+    await expectRejected(
+      const ErikaGifExportOptions(
+        inputUri: '/tmp/input.mp4',
+        outputPath: '/tmp/output.gif',
+        start: Duration.zero,
+        end: Duration(seconds: 1),
+        framesPerSecond: 61,
+        outputWidth: 320,
+        outputHeight: 180,
+      ),
+    );
+    await expectRejected(
+      const ErikaGifExportOptions(
+        inputUri: '/tmp/input.mp4',
+        outputPath: '/tmp/output.gif',
+        start: Duration.zero,
+        end: Duration(seconds: 1),
+        framesPerSecond: 10,
+        outputWidth: 8193,
+        outputHeight: 180,
+      ),
+    );
+    await expectRejected(
+      const ErikaGifExportOptions(
+        inputUri: '/tmp/input.mp4',
+        outputPath: '/tmp/output.gif',
+        start: Duration.zero,
+        end: Duration(seconds: 1),
+        framesPerSecond: 10,
+        outputWidth: 320,
+        outputHeight: 180,
+        loopCount: 0x10000,
+      ),
+    );
+  });
+
   test('track selection methods forward nullable track ids', () async {
     final player = ErikaPlayer();
 
