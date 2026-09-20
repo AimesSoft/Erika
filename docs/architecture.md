@@ -94,7 +94,7 @@ Clock feedback uses `Player::capture_audio_clock` and
 playback generation, command sequence, output epoch, and monotonic capture time.
 The worker checks this identity against both the current intent and executed
 commands, and expires feedback after 500 ms measured from capture. The same
-validation protects queue and buffering decisions. The presenter invalidates
+validation protects queue and buffering decisions. The audio owner invalidates
 the output epoch on reset, reconfiguration, device transitions, and rate changes;
 reads and output changes remain serialized by the output owner.
 
@@ -109,13 +109,28 @@ active during background playback and foreground video recovery.
 The older `update_audio_clock(snapshot)` Rust API remains available for fresh,
 synchronous feedback on the current timeline; it cannot recover the capture
 identity of a previously cached snapshot. Delayed callers should use the
-observation API. This does not change the C ABI or queue targets: the 250 ms rate
-bridge and suppression of mixed-rate observations remain in place. Audio pumping
-still runs in the presenter tick, so a blocked renderer can still cause underflow;
-clock recovery does not replace independent audio delivery.
+observation API. The C ABI is unchanged. A dedicated audio owner creates, calls,
+and destroys each backend on its own thread, without requiring the backend to
+be `Send`. It consumes the bounded worker channel, performs SoundTouch processing,
+publishes clock/device feedback, and commits rate changes independently of
+rendering. Queue admission uses the existing 250 ms rate-bridge target;
+mixed-rate observations remain suppressed during the bridge.
+
+Presenter controls use an acknowledged command channel. A transition first
+quiesces the audio consumer, then the playback producer; only after both
+boundaries may it reset the output and drain queues. The producer resumes before
+the consumer. No snapshot mutex is held during a backend call or while waiting
+for an acknowledgement. A generation-specific successful video present releases
+the audio-start gate. At natural EOF the owner sleeps once remaining PCM reaches
+the device; it does not equate an empty ring with a fully played hardware tail.
+Explicit reset/stop/close still release the output; destruction joins the thread.
+Host background-playback opt-in remains unchanged: `audio_only_tick` controls
+video suspension and foreground recovery, while audio delivery needs no host
+tick once started. Hosts must use pause/stop/close to stop audio; stopping their
+display timer alone no longer starves it.
 
 - **macOS**: CoreAudio output with ring buffer and PTS-tracking clock snapshots.
-  The presenter feeds CoreAudio output snapshots back to the player worker for
+  The audio owner feeds CoreAudio output snapshots back to the player worker for
   audio-master clock discipline.
 - **iOS**: AudioQueue output with the same ring buffer and clock snapshot model.
 - Ring buffer: interleaved f32, configurable capacity, drop-oldest overflow
