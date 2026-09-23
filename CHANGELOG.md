@@ -26,6 +26,13 @@
 - Surface the media source's own error (HTTP status, timeout) in demux errors
   rather than a bare `Input/output error (-5)`.
 
+### Flutter and OpenHarmony
+
+- Added `httpBackBufferBytes` to Flutter `ErikaPlayer.open` on Android, Apple
+  platforms, Windows, and OpenHarmony, and exposed the matching open option in
+  the standalone OpenHarmony SDK, forwarding the C `http_back_buffer_bytes`
+  rewind budget instead of hard-coding it to 0.
+
 ### Renderer
 
 #### Dolby Vision and HDR tone mapping

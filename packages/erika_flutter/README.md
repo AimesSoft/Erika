@@ -320,7 +320,7 @@ than silently dropping them.
 Headers apply to the media source only — external subtitle tracks and danmaku
 sidecar files are still fetched without them.
 
-## HTTP read-ahead
+## HTTP read-ahead and rewind budget
 
 Use `httpReadAheadBytes` to tune the HTTP(S) read-ahead window for one open:
 
@@ -336,6 +336,22 @@ environment variable when set, otherwise the native 2 MiB default. Local files
 ignore this option. A native library from 0.1.7 or earlier does not export the
 options entry point, so requesting read-ahead with one throws a descriptive
 error instead of silently dropping the setting.
+
+Use `httpBackBufferBytes` to size the HTTP(S) rewind budget: how much
+already-played data stays cached so a rewind inside it is served without a
+network request.
+
+```dart
+await player.open(
+  'https://example.com/video.mp4',
+  httpBackBufferBytes: 89 * 1024 * 1024,
+);
+```
+
+A positive value overrides the native 16 MiB default; null or zero keeps it.
+Size it from the bitrate for high-bitrate media: a -10 s skip at 71 Mbps covers
+~89 MB, which the fixed default cannot hold, so every rewind past it re-anchors
+the stream instead of being served locally. Local files ignore this option.
 
 ## Output Mode
 

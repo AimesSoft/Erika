@@ -239,7 +239,7 @@ header を捨てずに throw します。
 header が適用されるのは media source だけです。外部 subtitle track と danmaku sidecar は
 まだ header なしで取得されます。
 
-## HTTP 先読みウィンドウ
+## HTTP 先読みウィンドウと rewind budget
 
 `httpReadAheadBytes` で、1 回の HTTP(S) open に対する先読みウィンドウを調整できます：
 
@@ -254,6 +254,21 @@ await player.open(
 あればその値を、なければ native の 2 MiB 既定値を使います。local file では無視されます。
 0.1.7 以前の native library には options entry point がないため、この設定を指定すると
 黙って破棄せず、説明付きの error を throw します。
+
+`httpBackBufferBytes` は HTTP(S) の rewind budget（再生済みデータをどれだけ保持し、その
+範囲内の巻き戻しを network request なしで返すか）を指定します：
+
+```dart
+await player.open(
+  'https://example.com/video.mp4',
+  httpBackBufferBytes: 89 * 1024 * 1024,
+);
+```
+
+正の値は native の 16 MiB 既定値を上書きし、null または 0 は既定値を維持します。高
+bitrate の media では bitrate から見積もってください：71 Mbps で 10 秒巻き戻すには約
+89 MB 必要で、固定既定値には収まらないため、超えた巻き戻しは毎回 stream を re-anchor
+します。local file では無視されます。
 
 ## Output Mode
 

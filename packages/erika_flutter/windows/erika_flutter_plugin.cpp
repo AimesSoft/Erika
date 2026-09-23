@@ -436,6 +436,28 @@ const EncodableValue* FindArg(const EncodableMap& args, const char* name) {
   return &it->second;
 }
 
+/// Parses an optional byte-count open argument (`httpReadAheadBytes`,
+/// `httpBackBufferBytes`). StandardMessageCodec delivers a Dart int as either
+/// width depending on magnitude, so both are accepted; anything else (a
+/// fractional double, a numeric string) is rejected because it cannot be a
+/// byte count.
+uint64_t OpenByteCountArg(const EncodableMap& args, const char* name) {
+  const auto* raw = FindArg(args, name);
+  if (raw == nullptr || std::holds_alternative<std::monostate>(*raw)) {
+    return 0;
+  }
+  std::optional<int64_t> value;
+  if (const auto* int32_value = std::get_if<int32_t>(raw)) {
+    value = static_cast<int64_t>(*int32_value);
+  } else if (const auto* int64_value = std::get_if<int64_t>(raw)) {
+    value = *int64_value;
+  }
+  if (!value || *value < 0) {
+    throw PluginError(std::string(name) + " must be a non-negative integer.");
+  }
+  return static_cast<uint64_t>(*value);
+}
+
 std::optional<int64_t> Int64Value(const EncodableValue* value) {
   if (value == nullptr || std::holds_alternative<std::monostate>(*value)) {
     return std::nullopt;
@@ -1596,29 +1618,16 @@ struct ErikaFlutterPlugin::PlayerHost {
         throw PluginError("httpHeaders must be a map of string names to string values.");
       }
     }
-    uint64_t read_ahead_bytes = 0;
-    if (const auto* raw_read_ahead = FindArg(args, "httpReadAheadBytes");
-        raw_read_ahead != nullptr &&
-        !std::holds_alternative<std::monostate>(*raw_read_ahead)) {
-      std::optional<int64_t> value;
-      if (const auto* int32_value = std::get_if<int32_t>(raw_read_ahead)) {
-        value = static_cast<int64_t>(*int32_value);
-      } else if (const auto* int64_value = std::get_if<int64_t>(raw_read_ahead)) {
-        value = *int64_value;
-      }
-      if (!value || *value < 0) {
-        throw PluginError("httpReadAheadBytes must be a non-negative integer.");
-      }
-      read_ahead_bytes = static_cast<uint64_t>(*value);
-    }
+    const uint64_t read_ahead_bytes = OpenByteCountArg(args, "httpReadAheadBytes");
+    const uint64_t back_buffer_bytes = OpenByteCountArg(args, "httpBackBufferBytes");
     const bool wants_headers = headers != nullptr && !headers->empty();
-    if (!wants_headers && read_ahead_bytes == 0) {
+    if (!wants_headers && read_ahead_bytes == 0 && back_buffer_bytes == 0) {
       Check(library->open(handle, uri.c_str()), "open", library->TakeLastError());
       return;
     }
-    // Never silently drop the headers or the read-ahead request: falling back
+    // Never silently drop the headers or the HTTP tuning request: falling back
     // to the headerless entry point turns an authenticated stream into an
-    // opaque 403, and swallowing readAhead hides a stale kernel.
+    // opaque 403, and swallowing them hides a stale kernel.
     if (library->open_with_options != nullptr) {
       std::vector<std::string> names;
       std::vector<std::string> values;
@@ -1644,19 +1653,20 @@ struct ErikaFlutterPlugin::PlayerHost {
       options.headers = native_headers.empty() ? nullptr : native_headers.data();
       options.header_count = native_headers.size();
       options.http_read_ahead_bytes = read_ahead_bytes;
+      options.http_back_buffer_bytes = back_buffer_bytes;
       options.reserved[0] = 0;
       options.reserved[1] = 0;
-      options.reserved[2] = 0;
       Check(library->open_with_options(handle, uri.c_str(), &options), "open",
             library->TakeLastError());
       return;
     }
-    if (read_ahead_bytes > 0) {
+    if (read_ahead_bytes > 0 || back_buffer_bytes > 0) {
       throw PluginError(
           "The loaded Erika native library does not export "
-          "erika_presenter_open_with_options, so httpReadAheadBytes cannot be "
-          "applied. Update the bundled erika_capi.dll (a prebuilt from 0.1.7 or "
-          "earlier predates open options support).");
+          "erika_presenter_open_with_options, so httpReadAheadBytes / "
+          "httpBackBufferBytes cannot be applied. Update the bundled "
+          "erika_capi.dll (a prebuilt from 0.1.7 or earlier predates open "
+          "options support).");
     }
     // Never fall back to the headerless entry point here: silently dropping
     // the headers turns an authenticated stream into an opaque 403.

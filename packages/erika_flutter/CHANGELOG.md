@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added `httpBackBufferBytes` to `open`, forwarding the HTTP(S) rewind budget
+  through Android, Apple platforms, Windows, and OpenHarmony so high-bitrate
+  media can keep more than the 16 MiB default cached behind the reader.
+
 ## 0.2.0
 
 - Added headless GIF export through the native Erika runtime.

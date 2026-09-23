@@ -977,16 +977,30 @@ class ErikaPlayer {
   /// [httpReadAheadBytes] overrides the HTTP(S) read-ahead window for this
   /// open. Null or zero uses `ERIKA_HTTP_READAHEAD_BYTES` when set, otherwise
   /// the native 2 MiB default. Local files ignore the value.
+  ///
+  /// [httpBackBufferBytes] overrides the HTTP(S) rewind budget for this open:
+  /// how much already-played data stays cached so a rewind inside it is served
+  /// without a network request. Null or zero uses the native 16 MiB default.
+  /// Size it from the bitrate for high-bitrate media (a -10 s skip at 71 Mbps
+  /// covers ~89 MB). Local files ignore the value.
   Future<void> open(
     String uri, {
     Map<String, String>? httpHeaders,
     int? httpReadAheadBytes,
+    int? httpBackBufferBytes,
     ErikaMediaMetadata? metadata,
   }) async {
     if (httpReadAheadBytes != null && httpReadAheadBytes < 0) {
       throw ArgumentError.value(
         httpReadAheadBytes,
         'httpReadAheadBytes',
+        'must be non-negative',
+      );
+    }
+    if (httpBackBufferBytes != null && httpBackBufferBytes < 0) {
+      throw ArgumentError.value(
+        httpBackBufferBytes,
+        'httpBackBufferBytes',
         'must be non-negative',
       );
     }
@@ -998,6 +1012,8 @@ class ErikaPlayer {
         'httpHeaders': httpHeaders,
       if (httpReadAheadBytes != null && httpReadAheadBytes > 0)
         'httpReadAheadBytes': httpReadAheadBytes,
+      if (httpBackBufferBytes != null && httpBackBufferBytes > 0)
+        'httpBackBufferBytes': httpBackBufferBytes,
       'metadata': metadata?.toMap(),
     });
   }
