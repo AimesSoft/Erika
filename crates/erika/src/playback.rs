@@ -163,6 +163,11 @@ enum DemuxCommand {
     Seek {
         generation: u64,
         position: Duration,
+        io_generation: Option<u64>,
+    },
+    ReleaseBuffers {
+        stale_packets: Receiver<DemuxMessage>,
+        reply: Sender<()>,
     },
     Stop,
 }
@@ -191,13 +196,16 @@ struct AsyncDemuxer {
     commands: Sender<DemuxCommand>,
     generation: u64,
     active: bool,
+    worker: Option<thread::JoinHandle<()>>,
+    cancellation: Option<source::SourceCancellation>,
 }
 
 impl AsyncDemuxer {
     fn spawn(demuxer: Demuxer) -> Self {
+        let cancellation = demuxer.source_cancellation();
         let (packet_sender, packets) = bounded(DEMUX_PACKET_QUEUE_LIMIT);
         let (commands, command_receiver) = unbounded();
-        thread::Builder::new()
+        let worker = thread::Builder::new()
             .name("erika-demux".to_string())
             .spawn(move || run_demux_worker(demuxer, packet_sender, command_receiver))
             .expect("spawn erika demux worker");
@@ -206,6 +214,8 @@ impl AsyncDemuxer {
             commands,
             generation: 1,
             active: false,
+            worker: Some(worker),
+            cancellation,
         }
     }
 
@@ -235,6 +245,10 @@ impl AsyncDemuxer {
     }
 
     fn seek(&mut self, position: Duration) -> Result<()> {
+        let io_generation = self
+            .cancellation
+            .as_ref()
+            .map(source::SourceCancellation::interrupt);
         self.generation = self.generation.saturating_add(1).max(1);
         self.active = false;
         self.drain_stale_packets();
@@ -242,6 +256,7 @@ impl AsyncDemuxer {
             .send(DemuxCommand::Seek {
                 generation: self.generation,
                 position,
+                io_generation,
             })
             .map_err(|_| PlaybackError::DemuxWorker("demux command channel closed".to_string()))
     }
@@ -278,11 +293,38 @@ impl AsyncDemuxer {
     fn drain_stale_packets(&mut self) {
         while self.packets.try_recv().is_ok() {}
     }
+
+    fn release_buffers(&self) -> Result<()> {
+        let (reply, released) = bounded(1);
+        self.commands
+            .send(DemuxCommand::ReleaseBuffers {
+                stale_packets: self.packets.clone(),
+                reply,
+            })
+            .map_err(|_| PlaybackError::DemuxWorker("demux command channel closed".to_string()))?;
+        released
+            .recv()
+            .map_err(|_| PlaybackError::DemuxWorker("demux worker stopped".to_string()))
+    }
 }
 
 impl Drop for AsyncDemuxer {
     fn drop(&mut self) {
+        if let Some(cancellation) = &self.cancellation {
+            cancellation.cancel();
+        }
         let _ = self.commands.send(DemuxCommand::Stop);
+        if let Some(worker) = self.worker.take() {
+            while !worker.is_finished() {
+                if matches!(
+                    self.packets.recv_timeout(Duration::from_millis(10)),
+                    Err(RecvTimeoutError::Disconnected)
+                ) {
+                    break;
+                }
+            }
+            let _ = worker.join();
+        }
     }
 }
 
@@ -535,11 +577,26 @@ fn handle_demux_command(
         DemuxCommand::Seek {
             generation: next_generation,
             position,
+            io_generation,
         } => {
+            if let (Some(cancellation), Some(io_generation)) =
+                (demuxer.source_cancellation(), io_generation)
+            {
+                cancellation.resume(io_generation);
+            }
             *generation = next_generation;
             *eof = false;
             *active = false;
             *pending_seek = Some((*generation, position));
+            true
+        }
+        DemuxCommand::ReleaseBuffers {
+            stale_packets,
+            reply,
+        } => {
+            while stale_packets.try_recv().is_ok() {}
+            demuxer.release_source_buffer();
+            let _ = reply.send(());
             true
         }
         DemuxCommand::Stop => false,
@@ -1739,7 +1796,16 @@ impl PlaybackSession {
     }
 
     fn seek_for_stop(&mut self, position: Duration) -> Result<()> {
-        self.seek_with_decoder_flush_inner(position, true, true, false)
+        self.seek_with_decoder_flush_inner(position, true, true, false)?;
+        self.video_frames.shrink_to_fit();
+        self.audio_frames.shrink_to_fit();
+        self.subtitle_frames.shrink_to_fit();
+        self.pending_video_packets.shrink_to_fit();
+        for external in &mut self.external_subtitles {
+            external.frames.shrink_to_fit();
+            external.demuxer.release_source_buffer();
+        }
+        self.demuxer.release_buffers()
     }
 
     fn seek_with_decoder_flush(
@@ -6162,6 +6228,66 @@ mod tests {
     use std::{fs, path::PathBuf, thread};
 
     const FIXTURE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+    #[test]
+    fn dropping_async_demuxer_waits_for_source_resources() {
+        struct TrackedSource {
+            source: source::LocalFileSource,
+            dropped: std::sync::mpsc::Sender<()>,
+        }
+        impl source::MediaSource for TrackedSource {
+            fn uri(&self) -> &str {
+                self.source.uri()
+            }
+            fn len(&mut self) -> source::Result<Option<u64>> {
+                self.source.len()
+            }
+            fn read_range(&mut self, range: source::ByteRange) -> source::Result<Vec<u8>> {
+                self.source.read_range(range)
+            }
+        }
+        impl Drop for TrackedSource {
+            fn drop(&mut self) {
+                thread::sleep(Duration::from_millis(50));
+                let _ = self.dropped.send(());
+            }
+        }
+
+        let (dropped, receiver) = std::sync::mpsc::channel();
+        let demuxer = Demuxer::open_source(Box::new(TrackedSource {
+            source: source::LocalFileSource::open(playback_fixture_path()).unwrap(),
+            dropped,
+        }))
+        .unwrap();
+        drop(AsyncDemuxer::spawn(demuxer));
+        assert!(
+            receiver.try_recv().is_ok(),
+            "demux drop returned with a live media source"
+        );
+    }
+
+    #[test]
+    fn dropping_async_demuxer_with_full_packet_queue_does_not_deadlock() {
+        let demuxer = AsyncDemuxer::spawn(Demuxer::open_path(playback_fixture_path()).unwrap());
+        for _ in 0..=DEMUX_PACKET_QUEUE_LIMIT {
+            demuxer
+                .commands
+                .send(DemuxCommand::SetSelection {
+                    generation: 1,
+                    selection: StreamSelection::only([i32::MAX]),
+                })
+                .unwrap();
+        }
+        let (done, receiver) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            drop(demuxer);
+            let _ = done.send(());
+        });
+        receiver
+            .recv_timeout(FIXTURE_WAIT_TIMEOUT)
+            .expect("demux teardown blocked on a full packet queue");
+        worker.join().unwrap();
+    }
 
     fn playback_fixture_path() -> PathBuf {
         std::env::var_os("ERIKA_PLAYBACK_FIXTURE")

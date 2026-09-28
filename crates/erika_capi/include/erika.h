@@ -495,6 +495,8 @@ ErikaStatus erika_play(ErikaHandle *handle);
 ErikaStatus erika_pause(ErikaHandle *handle);
 ErikaStatus erika_stop(ErikaHandle *handle);
 ErikaStatus erika_close(ErikaHandle *handle);
+/* Unload media and return to Idle; preserve the handle for another open. */
+ErikaStatus erika_release_media(ErikaHandle *handle);
 ErikaStatus erika_seek(ErikaHandle *handle, uint64_t position_micros);
 /* Tracks and subtitles. Subtitle track id -1 disables subtitles.
  * erika_tracks uses the counted-array idiom; free each filled record with
@@ -594,6 +596,8 @@ ErikaStatus erika_presenter_play(ErikaPresenterHandle *handle);
 ErikaStatus erika_presenter_pause(ErikaPresenterHandle *handle);
 ErikaStatus erika_presenter_stop(ErikaPresenterHandle *handle);
 ErikaStatus erika_presenter_close(ErikaPresenterHandle *handle);
+/* Unload media; preserve the presenter, surface and render pipeline. */
+ErikaStatus erika_presenter_release_media(ErikaPresenterHandle *handle);
 ErikaStatus erika_presenter_seek(ErikaPresenterHandle *handle, uint64_t position_micros);
 ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *handle, double rate);
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *handle, double volume);

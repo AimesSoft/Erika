@@ -1868,14 +1868,27 @@ impl Player {
     }
 
     pub fn close(&self) -> Result<()> {
+        self.unload_media(true)
+    }
+
+    /// Release the media session and return to Idle while preserving this
+    /// player, its surface, and its subscriptions for a subsequent open.
+    pub fn release_media(&self) -> Result<()> {
+        self.unload_media(false)
+    }
+
+    fn unload_media(&self, terminal: bool) -> Result<()> {
         let mut lifecycle = self
             .lifecycle
             .lock()
             .expect("player lifecycle mutex poisoned");
+        if !terminal {
+            self.ensure_not_closed()?;
+        }
         lifecycle.epoch = lifecycle.epoch.saturating_add(1).max(1);
         let previous = lifecycle.playback.take();
-        // Stop and join before publishing Closed so no worker event can appear
-        // after the terminal lifecycle event.
+        // Stop and join before publishing the new state so no old worker event
+        // can cross this media boundary.
         drop(previous);
         {
             let mut inner = self.inner.lock().expect("player mutex poisoned");
@@ -1888,7 +1901,11 @@ impl Player {
             inner.ended = false;
             inner.pending_play_sequence = None;
         }
-        self.transition(PlayerState::Closed)?;
+        self.transition(if terminal {
+            PlayerState::Closed
+        } else {
+            PlayerState::Idle
+        })?;
         self.emit(PlayerEvent::BufferingChanged(false));
         Ok(())
     }

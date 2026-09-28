@@ -952,14 +952,28 @@ impl PresenterRuntime {
     }
 
     pub fn close(&mut self) -> Result<()> {
-        self.quiesce_frame_output("close")?;
+        self.unload_media(true)
+    }
+
+    /// Unload media while keeping the presenter, surface, and render pipeline
+    /// available for the next open.
+    pub fn release_media(&mut self) -> Result<()> {
+        self.unload_media(false)
+    }
+
+    fn unload_media(&mut self, terminal: bool) -> Result<()> {
+        self.quiesce_frame_output(if terminal { "close" } else { "release_media" })?;
         self.reset_video_decode_resume_state();
         self.reset_audio_output_with_committed_rate();
         self.bump_danmaku_generation();
         self.clear_playback_visual_state(Duration::ZERO, TransitionFramePolicy::Clear);
         self.drain_pending_player_frames();
         self.latest_video_decoder = None;
-        let result = self.player.close();
+        let result = if terminal {
+            self.player.close()
+        } else {
+            self.player.release_media()
+        };
         // Shutdown is joined at this point; no producer can refill a receiver.
         self.drain_pending_player_frames();
         result

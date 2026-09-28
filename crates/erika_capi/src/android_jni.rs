@@ -842,6 +842,7 @@ unsafe fn invoke_presenter(
         "pause" => status_value(unsafe { erika_presenter_pause(handle) }),
         "stop" => status_value(unsafe { erika_presenter_stop(handle) }),
         "close" => status_value(unsafe { erika_presenter_close(handle) }),
+        "releaseMedia" => status_value(unsafe { erika_presenter_release_media(handle) }),
         "seek" => {
             let position = required_u64(args, "positionMicros")?;
             status_value(unsafe { erika_presenter_seek(handle, position) })
