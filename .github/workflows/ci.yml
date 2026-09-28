@@ -36,6 +36,9 @@ jobs:
       - name: Verify playback fixture checksums
         working-directory: crates/erika/testdata/playback
         run: sha256sum --check SHA256SUMS
+      - name: Verify software playback fixture checksums
+        working-directory: crates/erika/testdata/software
+        run: sha256sum --check SHA256SUMS
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
       - name: Check C API and package binding alignment
@@ -44,6 +47,8 @@ jobs:
         run: python3 packaging/tests/test_api_alignment.py -v
       - name: Check license policy
         run: cargo run --locked -p xtask -- check license
+      - name: Test native dependency plans
+        run: cargo test --locked -p xtask
       - name: Verify vendored Cargo patches
         run: cargo run --locked -p xtask -- check cargo-patches
       - name: Get Flutter dependencies
@@ -310,3 +315,8 @@ jobs:
           ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="${{ matrix.target }}" \
             cargo build --locked -p erika_capi --release \
               --target "${{ matrix.target }}"
+      - name: Test software decode and native D3D11 upload
+        shell: bash
+        run: |
+          ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="${{ matrix.target }}" \
+            cargo test --locked -p erika --lib --target "${{ matrix.target }}" software_

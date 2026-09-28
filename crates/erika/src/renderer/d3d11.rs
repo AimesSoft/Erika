@@ -49,7 +49,7 @@ use crate::core::{
 use crate::danmaku::{
     DanmakuAtlasUpdate, DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan,
 };
-use crate::ffmpeg::{Frame, PlanarPixelFormat};
+use crate::ffmpeg::{Frame, PlanarFrame, PlanarPixelFormat};
 use crate::overlay::OverlayFrame;
 use crate::renderer::d3d11_artcnn::D3d11ArtCnn;
 use crate::renderer::gamut::{
@@ -1011,7 +1011,7 @@ impl AttachedSurface {
 }
 
 struct ImportedVideoFrame {
-    _frame: Frame,
+    _frame: Option<Frame>,
     _texture: ID3D11Texture2D,
     _chroma_texture: Option<ID3D11Texture2D>,
     luma: ID3D11ShaderResourceView,
@@ -1597,7 +1597,7 @@ impl D3d11Renderer {
         self.stats.zero_copy_video_frames += 1;
         self.stats.direct_zero_copy_video_frames += 1;
         let imported = ImportedVideoFrame {
-            _frame: retained_frame,
+            _frame: Some(retained_frame),
             _texture: texture,
             _chroma_texture: None,
             luma,
@@ -1617,6 +1617,83 @@ impl D3d11Renderer {
         };
         self.retire_current_video()?;
         self.current_video = Some(imported);
+        Ok(())
+    }
+
+    fn upload_software_frame(&mut self, frame: &PlayerVideoFrame) -> Result<()> {
+        let planar = frame
+            .frame
+            .decoded_frame()
+            .and_then(Frame::to_planar_frame)
+            .ok_or_else(|| {
+                PlayerError::Renderer(format!(
+                    "d3d11: unsupported software video frame format {:?}",
+                    frame.frame.pixel_format()
+                ))
+            })?;
+        self.upload_planar_frame(planar, source_color_for_frame(frame))
+    }
+
+    fn upload_planar_frame(
+        &mut self,
+        planar: PlanarFrame,
+        source_color: SourceColorState,
+    ) -> Result<()> {
+        self.ensure_default_device()?;
+        let output_mode = self.select_output_mode_for_source(source_color)?;
+        let target_color = output_mode.target_color_for_source(source_color);
+        let (texture_format, bytes_per_sample) = match planar.format {
+            PlanarPixelFormat::Nv12 => (D3d11VideoTextureFormat::Nv12, 1),
+            PlanarPixelFormat::P010 => (D3d11VideoTextureFormat::P010, 2),
+        };
+        let state = self.state.as_ref().expect("device ensured");
+        // Separate planes support odd visible dimensions and retain 10-bit HDR
+        // samples without requiring hardware video-format texture support.
+        let luma_pitch = planar
+            .width
+            .checked_mul(bytes_per_sample)
+            .ok_or_else(|| PlayerError::Renderer("d3d11: luma row pitch overflow".into()))?;
+        let chroma_pitch = planar
+            .width
+            .div_ceil(2)
+            .checked_mul(2 * bytes_per_sample)
+            .ok_or_else(|| PlayerError::Renderer("d3d11: chroma row pitch overflow".into()))?;
+        let luma = create_cpu_texture(
+            state,
+            planar.width,
+            planar.height,
+            texture_format.luma_srv(),
+            &planar.luma,
+            luma_pitch,
+        )?;
+        let chroma = create_cpu_texture(
+            state,
+            planar.width.div_ceil(2),
+            planar.height.div_ceil(2),
+            texture_format.chroma_srv(),
+            &planar.chroma,
+            chroma_pitch,
+        )?;
+        let frame_token = self.next_frame_token;
+        self.retire_current_video()?;
+        self.current_video = Some(ImportedVideoFrame {
+            _frame: None,
+            _texture: luma._texture,
+            _chroma_texture: Some(chroma._texture),
+            luma: luma.view,
+            // Each SRV retains its underlying texture after this upload returns.
+            chroma: chroma.view,
+            width: planar.width,
+            height: planar.height,
+            tex_rect: D3d11TexRect::FULL,
+            _array_index: 0,
+            frame_token,
+            constants: constants_for_frame(source_color, texture_format, target_color)
+                .packed_alpha_right(self.video_alpha_mode.has_alpha()),
+        });
+        self.next_frame_token = self.next_frame_token.wrapping_add(1);
+        self.stats.software_video_frames += 1;
+        self.stats.cpu_video_frame_fallbacks += 1;
         Ok(())
     }
 
@@ -1687,7 +1764,7 @@ impl D3d11Renderer {
             }
             let texture = {
                 let state = self.state.as_ref().expect("device ensured");
-                create_overlay_texture(
+                create_cpu_texture(
                     state,
                     plane.width,
                     plane.height,
@@ -1776,7 +1853,7 @@ impl D3d11Renderer {
         let (fill, outline) = {
             let state = self.state.as_ref().expect("device ensured");
             (
-                create_overlay_texture(
+                create_cpu_texture(
                     state,
                     atlas.width,
                     atlas.height,
@@ -1784,7 +1861,7 @@ impl D3d11Renderer {
                     &atlas.fill_alpha,
                     atlas.stride as u32,
                 )?,
-                create_overlay_texture(
+                create_cpu_texture(
                     state,
                     atlas.width,
                     atlas.height,
@@ -1943,7 +2020,7 @@ impl D3d11Renderer {
 
         let texture = {
             let state = self.state.as_ref().expect("device ensured");
-            create_overlay_texture(
+            create_cpu_texture(
                 state,
                 atlas_width as u32,
                 atlas_height as u32,
@@ -2410,104 +2487,7 @@ impl RendererBackend for D3d11Renderer {
                 "d3d11: hardware frame is not importable as D3D11VA".to_string(),
             ));
         }
-        let decoded = frame.frame.decoded_frame().ok_or_else(|| {
-            PlayerError::Renderer("d3d11: video payload has no CPU-readable frame".to_string())
-        })?;
-        let planar = decoded.to_planar_frame().ok_or_else(|| {
-            PlayerError::Renderer(format!(
-                "d3d11: unsupported software video frame format {}",
-                decoded
-                    .pixel_format()
-                    .unwrap_or_else(|| "unknown".to_string())
-            ))
-        })?;
-        self.ensure_default_device()?;
-        let source = source_color_for_frame(frame);
-        let output_mode = self.select_output_mode_for_source(source)?;
-        let target = output_mode.target_color_for_source(source);
-        let (texture_format, bytes_per_sample) = match planar.format {
-            PlanarPixelFormat::Nv12 => (D3d11VideoTextureFormat::Nv12, 1_u32),
-            PlanarPixelFormat::P010 => (D3d11VideoTextureFormat::P010, 2_u32),
-        };
-        let width = planar.width.max(1);
-        let height = planar.height.max(1);
-        let chroma_width = width.div_ceil(2);
-        let chroma_height = height.div_ceil(2);
-        let luma_pitch = width
-            .checked_mul(bytes_per_sample)
-            .ok_or_else(|| PlayerError::Renderer("d3d11: luma row pitch overflowed".to_string()))?;
-        let chroma_pitch = chroma_width
-            .checked_mul(2)
-            .and_then(|pitch| pitch.checked_mul(bytes_per_sample))
-            .ok_or_else(|| {
-                PlayerError::Renderer("d3d11: chroma row pitch overflowed".to_string())
-            })?;
-        let sample_bytes = bytes_per_sample as usize;
-        let expected_luma = (width as usize)
-            .checked_mul(height as usize)
-            .and_then(|samples| samples.checked_mul(sample_bytes))
-            .ok_or_else(|| {
-                PlayerError::Renderer("d3d11: luma plane size overflowed".to_string())
-            })?;
-        let expected_chroma = (chroma_width as usize)
-            .checked_mul(chroma_height as usize)
-            .and_then(|samples| samples.checked_mul(2))
-            .and_then(|bytes| bytes.checked_mul(sample_bytes))
-            .ok_or_else(|| {
-                PlayerError::Renderer("d3d11: chroma plane size overflowed".to_string())
-            })?;
-        if planar.luma.len() != expected_luma || planar.chroma.len() != expected_chroma {
-            return Err(PlayerError::Renderer(format!(
-                "d3d11: invalid {:?} plane sizes (luma {}, expected {}; chroma {}, expected {})",
-                planar.format,
-                planar.luma.len(),
-                expected_luma,
-                planar.chroma.len(),
-                expected_chroma,
-            )));
-        }
-        let (luma, chroma) = {
-            let state = self.state.as_ref().expect("device ensured");
-            (
-                create_overlay_texture(
-                    state,
-                    width,
-                    height,
-                    texture_format.luma_srv(),
-                    &planar.luma,
-                    luma_pitch,
-                )?,
-                create_overlay_texture(
-                    state,
-                    chroma_width,
-                    chroma_height,
-                    texture_format.chroma_srv(),
-                    &planar.chroma,
-                    chroma_pitch,
-                )?,
-            )
-        };
-        let retained_frame = decoded.try_clone_ref().map_err(|error| {
-            PlayerError::Renderer(format!("d3d11: av_frame_ref failed: {error}"))
-        })?;
-        self.stats.software_video_frames += 1;
-        let frame_token = self.next_frame_token;
-        self.next_frame_token = self.next_frame_token.wrapping_add(1);
-        self.current_video = Some(ImportedVideoFrame {
-            _frame: retained_frame,
-            _texture: luma._texture,
-            _chroma_texture: Some(chroma._texture),
-            luma: luma.view,
-            chroma: chroma.view,
-            width,
-            height,
-            tex_rect: D3d11TexRect::FULL,
-            _array_index: 0,
-            frame_token,
-            constants: constants_for_frame(source, texture_format, target)
-                .packed_alpha_right(self.video_alpha_mode.has_alpha()),
-        });
-        Ok(())
+        self.upload_software_frame(frame)
     }
 
     fn clear_current_frame(&mut self) -> Result<()> {
@@ -3408,7 +3388,7 @@ fn create_plane_srv(
     view.ok_or_else(|| PlayerError::Renderer("d3d11: shader resource view was null".to_string()))
 }
 
-fn create_overlay_texture(
+fn create_cpu_texture(
     state: &D3d11DeviceState,
     width: u32,
     height: u32,
@@ -3418,8 +3398,17 @@ fn create_overlay_texture(
 ) -> Result<D3d11OverlayTexture> {
     if width == 0 || height == 0 || bytes_per_row == 0 {
         return Err(PlayerError::Renderer(
-            "d3d11: overlay texture dimensions must be non-zero".to_string(),
+            "d3d11: CPU texture dimensions must be non-zero".to_string(),
         ));
+    }
+    let required_len = (bytes_per_row as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| PlayerError::Renderer("d3d11: CPU texture size overflow".into()))?;
+    if data.len() < required_len {
+        return Err(PlayerError::Renderer(format!(
+            "d3d11: CPU texture has {} bytes, expected at least {required_len}",
+            data.len()
+        )));
     }
     let desc = D3D11_TEXTURE2D_DESC {
         Width: width,
@@ -3446,10 +3435,10 @@ fn create_overlay_texture(
         state
             .device
             .CreateTexture2D(&desc, Some(&subresource), Some(&mut texture))
-            .map_err(|error| d3d_error("ID3D11Device::CreateTexture2D(overlay)", error))?;
+            .map_err(|error| d3d_error("ID3D11Device::CreateTexture2D(cpu)", error))?;
     }
-    let texture = texture
-        .ok_or_else(|| PlayerError::Renderer("d3d11: overlay texture was null".to_string()))?;
+    let texture =
+        texture.ok_or_else(|| PlayerError::Renderer("d3d11: CPU texture was null".to_string()))?;
     let view = create_texture2d_srv(state, &texture, format)?;
     Ok(D3d11OverlayTexture {
         _texture: texture,
@@ -3893,6 +3882,158 @@ fn d3d_error(operation: &'static str, error: ::windows::core::Error) -> PlayerEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn software_test_renderer() -> D3d11Renderer {
+        use ::windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_WARP;
+
+        let mut device = None;
+        let mut context = None;
+        unsafe {
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_WARP,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                Some(&[D3D_FEATURE_LEVEL_11_0]),
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                Some(&mut context),
+            )
+            .expect("create WARP device");
+        }
+        let mut renderer = D3d11Renderer::new().unwrap();
+        renderer
+            .set_device(device.unwrap(), context.unwrap())
+            .unwrap();
+        renderer
+    }
+
+    #[test]
+    fn software_p010_upload_preserves_odd_dimensions_and_sample_precision() {
+        use ::windows::Win32::Graphics::Direct3D11::{
+            D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_USAGE_STAGING,
+        };
+        let mut renderer = software_test_renderer();
+        let luma: Vec<u8> = [64u16, 128, 256, 512, 1000, 1023, 940, 128, 64]
+            .into_iter()
+            .flat_map(|value| (value << 6).to_le_bytes())
+            .collect();
+        let chroma: Vec<u8> = [64u16, 960, 128, 896, 512, 512, 960, 64]
+            .into_iter()
+            .flat_map(|value| (value << 6).to_le_bytes())
+            .collect();
+        renderer
+            .upload_planar_frame(
+                PlanarFrame {
+                    format: PlanarPixelFormat::P010,
+                    width: 3,
+                    height: 3,
+                    luma: luma.clone(),
+                    chroma: chroma.clone(),
+                },
+                SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq),
+            )
+            .unwrap();
+        let video = renderer.current_video.as_ref().unwrap();
+        assert_eq!(video.constants.is_p010, 1);
+        assert_eq!(video.tex_rect, D3d11TexRect::FULL);
+        let state = renderer.state.as_ref().unwrap();
+        for (view, width, height, format, expected, pitch) in [
+            (&video.luma, 3, 3, DXGI_FORMAT_R16_UNORM, luma, 6usize),
+            (
+                &video.chroma,
+                2,
+                2,
+                DXGI_FORMAT_R16G16_UNORM,
+                chroma,
+                8usize,
+            ),
+        ] {
+            unsafe {
+                let texture: ID3D11Texture2D = view.GetResource().unwrap().cast().unwrap();
+                let mut desc = D3D11_TEXTURE2D_DESC::default();
+                texture.GetDesc(&mut desc);
+                assert_eq!(
+                    (desc.Width, desc.Height, desc.Format),
+                    (width, height, format)
+                );
+                desc.Usage = D3D11_USAGE_STAGING;
+                desc.BindFlags = 0;
+                desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+                let mut staging = None;
+                state
+                    .device
+                    .CreateTexture2D(&desc, None, Some(&mut staging))
+                    .unwrap();
+                let staging = staging.unwrap();
+                state.context.CopyResource(&staging, &texture);
+                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                state
+                    .context
+                    .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                    .unwrap();
+                let mut actual = Vec::new();
+                for row in 0..height as usize {
+                    actual.extend_from_slice(std::slice::from_raw_parts(
+                        mapped
+                            .pData
+                            .cast::<u8>()
+                            .add(row * mapped.RowPitch as usize),
+                        pitch,
+                    ));
+                }
+                state.context.Unmap(&staging, 0);
+                assert_eq!(actual, expected);
+            }
+        }
+        assert_eq!(renderer.runtime_stats().software_video_frames, 1);
+        assert_eq!(renderer.runtime_stats().hdr_source_frames, 1);
+    }
+
+    #[test]
+    fn software_wmv_uploads_to_native_d3d11() {
+        use crate::ffmpeg::{DecoderBackend, DecoderOutputFrame, Demuxer, StreamSelection};
+        use crate::renderer::VideoFramePayload;
+        let mut renderer = software_test_renderer();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata/software/wmv2-wmav2.asf");
+        let mut demuxer = Demuxer::open_path(path).unwrap();
+        demuxer
+            .set_stream_selection(StreamSelection::only([0]))
+            .unwrap();
+        let mut decoder = demuxer.open_decoder(0).unwrap();
+        let mut uploads = 0;
+        while let Some(packet) = demuxer.read_packet().unwrap() {
+            decoder.send_packet(&packet).unwrap();
+            while let DecoderOutputFrame::Frame(frame) = decoder.receive_frame().unwrap() {
+                let player_frame = PlayerVideoFrame {
+                    frame: VideoFramePayload::from_decoded(frame).unwrap(),
+                    decode_backend: DecoderBackend::Software,
+                    pts: None,
+                    media_time: Duration::ZERO,
+                    late_by: None,
+                    generation: 0,
+                    scene_avg_nits: None,
+                };
+                renderer.upload_player_frame(&player_frame).unwrap();
+                let video = renderer.current_video.as_ref().unwrap();
+                assert_eq!((video.width, video.height), (160, 90));
+                assert_eq!(video.constants.is_p010, 0);
+                let mut desc = D3D11_TEXTURE2D_DESC::default();
+                unsafe { video._texture.GetDesc(&mut desc) };
+                assert_eq!(desc.Format, DXGI_FORMAT_R8_UNORM);
+                assert_eq!((desc.Width, desc.Height), (160, 90));
+                uploads += 1;
+            }
+        }
+        assert_eq!(uploads, 20);
+        assert_eq!(renderer.runtime_stats().software_video_frames, uploads);
+        assert_eq!(renderer.runtime_stats().hardware_video_frames, 0);
+        assert_eq!(renderer.runtime_stats().zero_copy_video_frames, 0);
+        renderer.clear_current_frame().unwrap();
+        assert!(renderer.current_video.is_none());
+    }
 
     #[test]
     fn flutter_scene_ignores_clock_ticks_but_detects_output_changes() {

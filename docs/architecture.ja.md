@@ -30,7 +30,7 @@ Rust Player Core
 | 依存関係 | バージョン | 目的 |
 |----------|-----------|------|
 | FFmpeg | 8.1.2 | Demux、decode、audio resample、プラットフォーム HW decode |
-| dav1d | 1.5.1 | 非 Windows ターゲットの AV1 software fallback（8-bit / high bit depth） |
+| dav1d | 1.5.1 | 全ターゲットの AV1 software decode（8-bit / high bit depth） |
 | libass | 0.17.5 | ASS subtitle 描画 |
 | FreeType | 2.14.3 | フォントラスタライズ（libass 依存） |
 | HarfBuzz | 14.2.1 | テキストシェーピング（libass 依存） |

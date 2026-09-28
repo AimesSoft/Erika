@@ -1027,11 +1027,9 @@ impl Decoder {
                 mediacodec_decoder(codec_id),
                 "avcodec_find_decoder_by_name(MediaCodec)",
             ),
-            DecoderBackend::VideoToolbox => videotoolbox_decoder(codec_id),
-            DecoderBackend::D3d11va => (
-                unsafe { sys::avcodec_find_decoder(codec_id) },
-                "avcodec_find_decoder",
-            ),
+            DecoderBackend::VideoToolbox | DecoderBackend::D3d11va => {
+                ffmpeg_hardware_decoder(codec_id)
+            }
             DecoderBackend::AvCodec => (
                 ptr::null(),
                 "HarmonyOS AVCodec is unavailable on this target",
@@ -1234,11 +1232,7 @@ impl Decoder {
                     "event": "video_decoder",
                     "stage": "software_decoder_selected",
                     "codec": "av1",
-                    "decoder": if cfg!(target_os = "windows") {
-                        "avcodec_find_decoder"
-                    } else {
-                        "libdav1d"
-                    },
+                    "decoder": "libdav1d",
                 })
                 .to_string(),
             );
@@ -1669,7 +1663,6 @@ impl Decoder {
 }
 
 fn software_decoder(codec_id: sys::AVCodecID) -> (*const sys::AVCodec, &'static str) {
-    #[cfg(not(target_os = "windows"))]
     if codec_id == sys::AVCodecID_AV_CODEC_ID_AV1 {
         return (
             unsafe { sys::avcodec_find_decoder_by_name(c"libdav1d".as_ptr()) },
@@ -1682,7 +1675,9 @@ fn software_decoder(codec_id: sys::AVCodecID) -> (*const sys::AVCodec, &'static 
     )
 }
 
-fn videotoolbox_decoder(codec_id: sys::AVCodecID) -> (*const sys::AVCodec, &'static str) {
+fn ffmpeg_hardware_decoder(codec_id: sys::AVCodecID) -> (*const sys::AVCodec, &'static str) {
+    // FFmpeg prefers libdav1d when both AV1 decoders are installed. Select
+    // its hardware wrapper explicitly for VideoToolbox and D3D11VA.
     if codec_id == sys::AVCodecID_AV_CODEC_ID_AV1 {
         return (
             unsafe { sys::avcodec_find_decoder_by_name(c"av1".as_ptr()) },
@@ -5278,20 +5273,58 @@ mod tests {
     }
 
     #[test]
-    fn videotoolbox_uses_ffmpeg_av1_decoder() {
-        let (codec, operation) = videotoolbox_decoder(sys::AVCodecID_AV_CODEC_ID_AV1);
+    fn software_av1_preserves_hardware_decoder_selection() {
+        let (codec, operation) = ffmpeg_hardware_decoder(sys::AVCodecID_AV_CODEC_ID_AV1);
         assert_eq!(operation, "avcodec_find_decoder_by_name(av1)");
         assert!(!codec.is_null());
+        let (software, _) = software_decoder(sys::AVCodecID_AV_CODEC_ID_AV1);
+        assert!(!software.is_null());
+        assert_ne!(codec, software);
     }
 
     #[test]
     fn software_uses_available_ffmpeg_av1_decoder() {
         let (codec, operation) = software_decoder(sys::AVCodecID_AV_CODEC_ID_AV1);
-        #[cfg(target_os = "windows")]
-        assert_eq!(operation, "avcodec_find_decoder");
-        #[cfg(not(target_os = "windows"))]
         assert_eq!(operation, "avcodec_find_decoder_by_name(libdav1d)");
         assert!(!codec.is_null());
+    }
+
+    #[test]
+    fn software_av1_decodes_eight_and_ten_bit_frames() {
+        for (fixture, format, bytes_per_sample) in [
+            ("av1-8bit.ivf", PlanarPixelFormat::Nv12, 1),
+            ("av1-10bit.ivf", PlanarPixelFormat::P010, 2),
+        ] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("testdata/software")
+                .join(fixture);
+            let mut demuxer = Demuxer::open_path(path).unwrap();
+            let mut decoder = demuxer.open_decoder(0).unwrap();
+            assert_eq!(decoder.backend(), DecoderBackend::Software);
+            let mut count = 0;
+            let mut check_frame = |frame: Frame| {
+                assert!(!frame.has_hw_frames_context());
+                let planar = frame.to_planar_frame().expect("CPU AV1 frame upload");
+                assert_eq!(planar.format, format);
+                assert_eq!((planar.width, planar.height), (64, 48));
+                assert_eq!(planar.luma.len(), 64 * 48 * bytes_per_sample);
+                assert_eq!(planar.chroma.len(), 32 * 24 * 2 * bytes_per_sample);
+                assert!(planar.luma.iter().any(|value| *value != planar.luma[0]));
+                count += 1;
+            };
+            while let Some(packet) = demuxer.read_packet().unwrap() {
+                decoder.send_packet(&packet).unwrap();
+                while let DecoderOutputFrame::Frame(frame) = decoder.receive_frame().unwrap() {
+                    check_frame(frame);
+                }
+            }
+            decoder.send_eof().unwrap();
+            while let DecoderOutputFrame::Frame(frame) = decoder.receive_frame().unwrap() {
+                check_frame(frame);
+            }
+            assert!(decoder.is_end_of_stream());
+            assert_eq!(count, 2, "{fixture}");
+        }
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 > 翻訳：[English](building.md) · [中文](building.zh.md)
 
-Erika は一連の**静的ビルドされたネイティブ依存**（FFmpeg、非 Windows ターゲットの dav1d AV1
+Erika は一連の**静的ビルドされたネイティブ依存**（FFmpeg、全ターゲット向け dav1d AV1
 ソフトウェアフォールバック、オプションの libass 字幕スタック）をリンクする Rust workspace です。これらのネイティブライブラリは vendoring
 されていません——`xtask` オーケストレータで一度ビルドすると `third_party/dist/` 配下に
 配置され、Rust crate がそのステージングディレクトリをリンクします。
@@ -67,7 +67,7 @@ Android の最小 API は 26 です。
 cargo run -p xtask -- deps plan
 cargo run -p xtask -- deps status
 
-# 基本セット（zlib + FFmpeg、Android は dav1d も）—— LGPL profile
+# 基本セット（全ターゲットで zlib + FFmpeg + dav1d）—— LGPL profile
 cargo run -p xtask -- deps build --profile lgpl
 
 # libass 字幕スタックを含めすべて
@@ -83,7 +83,7 @@ cargo run -p xtask -- deps build --all --profile lgpl
 |--------|----|------|------|
 | `--profile` | `lgpl`、`gpl-full` | `lgpl` | FFmpeg ライセンス profile（下記）。 |
 | `--target` | ターゲット表参照 | `host` | クロスコンパイル先。 |
-| `--all` | — | off | libass + FreeType + HarfBuzz + FriBidi（字幕描画）も。基本セットは zlib + FFmpeg、Android ターゲットでは dav1d も含む。 |
+| `--all` | — | off | libass + FreeType + HarfBuzz + FriBidi（字幕描画）も。全ターゲットの基本セットは zlib + FFmpeg + dav1d。 |
 | `--force` | — | off | 最新マーカーがあっても再ビルド。 |
 | `--jobs N` | 整数 | 自動 | ネイティブビルドの並列度。 |
 
@@ -162,7 +162,7 @@ cargo build -p erika_capi --release --target aarch64-pc-windows-msvc
 
 - **`lgpl`**（既定）—— FFmpeg を `--disable-gpl --enable-version3`、静的、ネットワーク
   なし、file プロトコルのみ、厳選した demuxer/decoder/parser セット、zlib 有効、加えて
-  VideoToolbox（Apple）、D3D11VA/DXVA2（Windows）、または JNI/MediaCodec + ソースビルドの dav1d AV1 フォールバック（Android）で構成。
+  VideoToolbox（Apple）、D3D11VA/DXVA2（Windows）、または JNI/MediaCodec（Android）で構成。全ターゲットにソースビルドの dav1d AV1 ソフトウェアデコーダーを含む。
 - **`gpl-full`** —— 同じセットに `--enable-gpl`。成果物の GPL 条項を受け入れる場合のみ。
 
 Rust workspace 自体は MPL-2.0（[`LICENSE`](../LICENSE)）。`xtask` と `cargo build` で
@@ -222,7 +222,7 @@ Android の MediaCodec パスは H.264、HEVC、MPEG-2、MPEG-4、VP8、VP9、AV
 読み取り可能な YUV を共有 wgpu 合成パイプラインへ渡します。ハードウェアデコードですが
 CPU upload を伴い、Surface ゼロコピーではありません。AV1 MediaCodec が開けない、または
 デコードに失敗した場合、ソフトウェアパスは FFmpeg の `libdav1d` decoder を明示的に選択します。
-`xtask` は全 4 Android ABI 向けに dav1d 1.5.1 をソースからビルドし、8-bit と高ビット深度を
+`xtask` はWindows と OpenHarmony を含む全ターゲット向けに dav1d 1.5.1 をソースからビルドし、8-bit と高ビット深度を
 有効にします。32-bit x86 では PIC 安全性のためアセンブリを無効にします。
 
 ### Android output negotiation の検証

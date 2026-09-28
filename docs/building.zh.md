@@ -1,6 +1,6 @@
 # 构建 Erika
 
-Erika 是一个 Rust workspace,它链接一组**静态构建的原生依赖**(FFmpeg、Android 的
+Erika 是一个 Rust workspace,它链接一组**静态构建的原生依赖**(FFmpeg、所有目标的
 dav1d AV1 软解回退,以及可选的 libass 字幕栈)。这些原生库不随仓库 vendoring——你用 `xtask` 编排器构建一次,它会把
 产物安置到 `third_party/dist/` 下,Rust crate 再链接那个目录。
 
@@ -71,7 +71,7 @@ Android 最低 API 为 **26**;只在需要更高版本时用 `ANDROID_API_LEVEL`
 cargo run -p xtask -- deps plan
 cargo run -p xtask -- deps status
 
-# 构建基础集(zlib + FFmpeg;dav1d 覆盖 Android 与 Apple 目标)—— LGPL profile
+# 构建基础集(zlib + FFmpeg + dav1d,覆盖所有目标)—— LGPL profile
 cargo run -p xtask -- deps build --profile lgpl
 
 # 构建全部,含 libass 字幕栈
@@ -87,7 +87,7 @@ cargo run -p xtask -- deps build --all --profile lgpl
 |------|------|------|------|
 | `--profile` | `lgpl`、`gpl-full` | `lgpl` | FFmpeg 许可证 profile(见下)。 |
 | `--target` | 见目标表 | `host` | 交叉编译目标。 |
-| `--all` | — | 关 | 同时构建 libass + FreeType + HarfBuzz + FriBidi(字幕渲染)。基础集是 zlib + FFmpeg,Android 与 Apple 目标还包含 dav1d。 |
+| `--all` | — | 关 | 同时构建 libass + FreeType + HarfBuzz + FriBidi(字幕渲染)。所有目标的基础集都是 zlib + FFmpeg + dav1d。 |
 | `--force` | — | 关 | 即使已是最新标记也重建。 |
 | `--jobs N` | 整数 | 自动 | 原生构建的并行度。 |
 
@@ -201,7 +201,7 @@ cdylib 与匹配 ABI 的 NDK `libc++_shared.so`。
 
 - **`lgpl`**(默认)—— FFmpeg 配置为 `--disable-gpl --enable-version3`,静态,无网络,
   仅 file 协议,一组精选的 demuxer/decoder/parser,启用 zlib,外加 VideoToolbox(Apple)、
-  D3D11VA/DXVA2(Windows)或 JNI/MediaCodec + 源码构建的 dav1d AV1 软解回退(Android 与 Apple 目标)。
+  D3D11VA/DXVA2(Windows)或 JNI/MediaCodec(Android)。所有目标均包含源码构建的 dav1d AV1 软解器。
 - **`gpl-full`** —— 同一集合加 `--enable-gpl`。仅当你接受产物的 GPL 条款时使用。
 
 Rust workspace 本身是 MPL-2.0(见 [`LICENSE`](../LICENSE))。`xtask` 与你的
@@ -259,7 +259,7 @@ Android FFmpeg 明确保留 H.264、HEVC、MPEG-2、MPEG-4、VP8、VP9、AV1 的
 MediaCodec decoder。主路径让 MediaCodec 输出软件可读 YUV,继续复用共享 wgpu 上传、
 字幕、弹幕和截图合成。这是“硬解 + CPU upload”,不是 Surface 零拷贝,统计与日志必须
 如实区分。AV1 MediaCodec 无法打开或解码失败时,软件路径会显式选择 FFmpeg 的
-`libdav1d` decoder。`xtask` 为全部 Android ABI 与 Apple 目标从源码构建 dav1d 1.5.1,同时支持
+`libdav1d` decoder。`xtask` 为所有目标(包括 Windows 与 OpenHarmony)从源码构建 dav1d 1.5.1,同时支持
 8-bit 与高位深;32 位 x86 为保证 PIC 安全会禁用汇编。
 
 ### 验证 Android 输出协商

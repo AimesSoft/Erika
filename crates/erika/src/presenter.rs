@@ -2086,66 +2086,56 @@ impl PresenterRuntime {
                                 reason: error.to_string(),
                             };
                             trace::diagnostic(failure.structured_message());
-                            if matches!(
-                                frame.decode_backend,
-                                DecoderBackend::MediaCodec
-                                    | DecoderBackend::Software
-                                    | DecoderBackend::VideoToolbox
-                                    | DecoderBackend::AvCodec
-                            ) {
-                                self.rejected_video_import_route = Some(import_route);
-                                // The decoder transition must not race a local
-                                // frame, queued frames, or the Android recovery
-                                // renderer's retained current payload.
-                                drop(frame);
-                                let quiesced =
-                                    match self.quiesce_frame_output("video_import_failure") {
-                                        Ok(quiesced) => quiesced,
-                                        Err(error) => {
-                                            trace::diagnostic(
-                                                serde_json::json!({
-                                                    "event": "video_frame_import_feedback_failed",
-                                                    "backend": import_route.backend.as_str(),
-                                                    "stage": "quiesce",
-                                                    "reason": error.to_string(),
-                                                })
-                                                .to_string(),
-                                            );
-                                            break;
-                                        }
-                                    };
-                                self.release_current_video_frame();
-                                self.drain_pending_video_frames();
-                                if let Err(report_error) =
-                                    self.player.report_video_frame_import_failure(failure)
-                                {
+                            self.rejected_video_import_route = Some(import_route);
+                            // The decoder transition must not race a local
+                            // frame, queued frames, or the Android recovery
+                            // renderer's retained current payload.
+                            drop(frame);
+                            let quiesced = match self.quiesce_frame_output("video_import_failure") {
+                                Ok(quiesced) => quiesced,
+                                Err(error) => {
                                     trace::diagnostic(
                                         serde_json::json!({
                                             "event": "video_frame_import_feedback_failed",
                                             "backend": import_route.backend.as_str(),
-                                            "reason": report_error.to_string(),
-                                        })
-                                        .to_string(),
-                                    );
-                                }
-                                if let Err(error) = self.finish_frame_output_transition(
-                                    "video_import_failure",
-                                    quiesced,
-                                    false,
-                                ) {
-                                    trace::diagnostic(
-                                        serde_json::json!({
-                                            "event": "video_frame_import_feedback_failed",
-                                            "backend": import_route.backend.as_str(),
-                                            "stage": "transition_finish",
+                                            "stage": "quiesce",
                                             "reason": error.to_string(),
                                         })
                                         .to_string(),
                                     );
+                                    break;
                                 }
-                                break;
+                            };
+                            self.release_current_video_frame();
+                            self.drain_pending_video_frames();
+                            if let Err(report_error) =
+                                self.player.report_video_frame_import_failure(failure)
+                            {
+                                trace::diagnostic(
+                                    serde_json::json!({
+                                        "event": "video_frame_import_feedback_failed",
+                                        "backend": import_route.backend.as_str(),
+                                        "reason": report_error.to_string(),
+                                    })
+                                    .to_string(),
+                                );
                             }
-                            eprintln!("Erika presenter video import failed: {error}");
+                            if let Err(error) = self.finish_frame_output_transition(
+                                "video_import_failure",
+                                quiesced,
+                                false,
+                            ) {
+                                trace::diagnostic(
+                                    serde_json::json!({
+                                        "event": "video_frame_import_feedback_failed",
+                                        "backend": import_route.backend.as_str(),
+                                        "stage": "transition_finish",
+                                        "reason": error.to_string(),
+                                    })
+                                    .to_string(),
+                                );
+                            }
+                            break;
                         }
                     }
                 }

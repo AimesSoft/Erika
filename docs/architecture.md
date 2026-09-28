@@ -34,7 +34,7 @@ sources into `third_party/`. The default profile is `lgpl`.
 | Dependency | Version | Purpose |
 |------------|---------|---------|
 | FFmpeg | 8.1.2 | Demux, decode, audio resample, platform hardware decode |
-| dav1d | 1.5.1 | Android AV1 software fallback (8-bit and high bit depth) |
+| dav1d | 1.5.1 | AV1 software decode on every platform (8-bit and high bit depth) |
 | libass | 0.17.5 | ASS subtitle rendering |
 | FreeType | 2.14.3 | Font rasterization (libass dependency) |
 | HarfBuzz | 14.2.1 | Text shaping (libass dependency) |
@@ -57,12 +57,34 @@ cargo run -p xtask -- deps status
   `AVIOContext` from `MediaSource`. Supports stream selection, reference-counted
   packets, and timestamp-based seek.
 - **Decoder** — software plus VideoToolbox, D3D11VA, MediaCodec, and OpenHarmony
-  AVCodec hardware backends. Software AV1 on non-Windows targets selects the
+  AVCodec hardware backends. Software AV1 on every target selects the
   source-built `libdav1d` decoder. Hardware frames preserve color metadata for
   the renderer's platform-specific import or upload path.
 - **AudioResampler** — wraps `libswresample`, converts to interleaved f32 PCM
   (default 48 kHz stereo).
 - **SubtitleDecoder** — decodes embedded text and bitmap subtitle streams.
+
+Hardware decode preferences fall back to software when decoder opening,
+packet decoding, or renderer import fails. This applies to VideoToolbox,
+D3D11VA, MediaCodec, and OpenHarmony AVCodec for every codec; it is not
+restricted to AV1. MediaCodec keeps its Surface → byte-buffer → software
+sequence. Import recovery rejects stale feedback and releases queued hardware
+frames before replacing the decoder. A software decode/import failure remains
+an error rather than starting another fallback loop.
+
+Metal, native D3D11, and wgpu can upload software-decoded frames. Shared frame
+conversion produces NV12 for 8-bit 4:2:0 and P010 for 10-bit 4:2:0; other CPU
+pixel formats use swscale. D3D11 uploads luma and chroma as separate textures,
+including odd-sized planes, and uses the existing color/HDR pipeline. The
+native dependency plans explicitly include ASF, WMV, and WMA support. The
+synthetic `testdata/software/wmv2-wmav2.asf` regression exercises all decoder
+preferences, audio, seek, and replay. Windows CI additionally checks NV12 and
+P010 uploads using WARP, including a byte-for-byte P010 texture readback.
+
+Build coverage is distinct from runtime coverage: macOS and Windows CI run
+the software decoding tests natively; Android, OpenHarmony, iOS and tvOS
+build jobs verify compilation and linking. Playback on those devices still
+requires device validation.
 
 ## Playback Engine
 
