@@ -4917,20 +4917,16 @@ mod tests {
             compatible_sdk_version: "18".to_string(),
         };
         let content = ohos_meson_cross_contents(&config, Path::new("/usr/bin/pkg-config"));
-        assert!(
-            content.contains(
-                "c = '/sdk with spaces/native/llvm/bin/aarch64-unknown-linux-ohos-clang'"
-            )
-        );
-        assert!(content.contains(
-            "cpp = '/sdk with spaces/native/llvm/bin/aarch64-unknown-linux-ohos-clang++'"
-        ));
-        assert_eq!(
-            content
-                .matches("'--sysroot=/sdk with spaces/native/sysroot'")
-                .count(),
-            4
-        );
+        assert!(content.contains(&format!(
+            "c = {}",
+            meson_string(&config.clang.display().to_string())
+        )));
+        assert!(content.contains(&format!(
+            "cpp = {}",
+            meson_string(&config.clangxx.display().to_string())
+        )));
+        let sysroot_flag = meson_string(&format!("--sysroot={}", config.sysroot.display()));
+        assert_eq!(content.matches(&sysroot_flag).count(), 4);
         assert_eq!(
             content
                 .matches("'--target=aarch64-unknown-linux-ohos'")
