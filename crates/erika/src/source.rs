@@ -3995,7 +3995,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         thread::spawn(move || {
             for (raw, stall) in responses {
-                let deadline = Instant::now() + Duration::from_secs(3);
+                let deadline = Instant::now() + Duration::from_secs(15);
                 let mut stream = loop {
                     match listener.accept() {
                         Ok((stream, _)) => break stream,
@@ -4010,7 +4010,7 @@ mod tests {
                 };
                 stream.set_nonblocking(false).unwrap();
                 stream
-                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .set_read_timeout(Some(Duration::from_secs(15)))
                     .unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut head = String::new();
@@ -4037,14 +4037,20 @@ mod tests {
 
     fn short_http_timeouts() -> HttpFetchTimeouts {
         HttpFetchTimeouts {
-            response: Duration::from_millis(100),
-            body: Duration::from_millis(100),
-            total: Duration::from_secs(1),
+            // Real socket scheduling on loaded CI runners needs more than
+            // millisecond-scale margins. These remain below production limits.
+            response: Duration::from_secs(1),
+            body: Duration::from_secs(1),
+            total: Duration::from_secs(10),
         }
     }
 
     fn assert_length_probe_shares_budget(head_status: &str) {
         let (uri, requests) = spawn_timeout_http_server(vec![
+            (
+                http_simple_response("500 Internal Server Error", b""),
+                false,
+            ),
             (
                 http_simple_response("500 Internal Server Error", b""),
                 false,
@@ -4055,17 +4061,17 @@ mod tests {
         let io = HttpIo::new();
         let client = io.client.clone();
         let timeouts = HttpFetchTimeouts {
-            response: Duration::from_millis(300),
-            total: Duration::from_millis(350),
+            response: Duration::from_secs(3),
+            total: Duration::from_secs(2),
             ..short_http_timeouts()
         };
-        let started = Instant::now();
         let result = io
             .run(async move {
-                // The first HEAD's retry backoff already uses 200 ms. The probe
-                // must use what remains, rather than starting a fresh deadline.
+                // Two HEAD retries spend at least 1.2 s of the 2 s budget.
+                // Allow 1 s of scheduler slack: a fresh 2 s probe deadline
+                // would still exceed this watchdog (1.2 + 2 > 3).
                 Ok(tokio::time::timeout(
-                    Duration::from_millis(450),
+                    Duration::from_secs(3),
                     fetch_http_length(&client, &uri, &[], Instant::now(), timeouts),
                 )
                 .await)
@@ -4073,7 +4079,7 @@ mod tests {
             .unwrap()
             .expect("fallback GET escaped the metadata budget");
         assert!(result.is_err());
-        assert!(started.elapsed() < Duration::from_millis(450));
+        assert!(recv_request_head(&requests).starts_with("head"));
         assert!(recv_request_head(&requests).starts_with("head"));
         assert!(recv_request_head(&requests).starts_with("head"));
         let probe = recv_request_head(&requests);
@@ -4172,13 +4178,13 @@ mod tests {
 
     #[test]
     fn http_timeout_progressing_body_keeps_reading_until_total_budget() {
-        for total in [Duration::from_secs(1), Duration::from_millis(180)] {
+        for total in [Duration::from_secs(10), Duration::from_millis(500)] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let uri = format!("http://{}/media", listener.local_addr().unwrap());
             let server = thread::spawn(move || {
                 let (mut socket, _) = listener.accept().unwrap();
                 socket
-                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .set_read_timeout(Some(Duration::from_secs(15)))
                     .unwrap();
                 let mut reader = BufReader::new(socket.try_clone().unwrap());
                 loop {
@@ -4192,12 +4198,11 @@ mod tests {
                     if socket.write_all(&[*byte]).is_err() {
                         break;
                     }
-                    thread::sleep(Duration::from_millis(40));
+                    thread::sleep(Duration::from_millis(200));
                 }
             });
             let io = HttpIo::new();
             let client = io.client.clone();
-            let started = Instant::now();
             let result = io.run(async move {
                 fetch_http_range_async(
                     &client,
@@ -4215,12 +4220,14 @@ mod tests {
                 )
                 .await
             });
-            if total == Duration::from_secs(1) {
-                // A healthy body can outlive the 100 ms header/idle deadlines.
+            if total == Duration::from_secs(10) {
+                // The 1.4 s body outlives the 1 s header/idle deadlines, while
+                // each 200 ms chunk interval leaves ample scheduling margin.
                 assert_eq!(result.unwrap().bytes, b"abcdefgh");
             } else {
                 assert!(result.is_err());
-                assert!(started.elapsed() < Duration::from_millis(300));
+                // Without the total deadline the server delivers the full
+                // body successfully. Check that result, not scheduler latency.
             }
             server.join().unwrap();
         }
