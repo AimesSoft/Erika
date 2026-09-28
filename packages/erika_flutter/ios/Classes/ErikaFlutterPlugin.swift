@@ -497,6 +497,7 @@ private final class ErikaNativeLibrary {
   typealias AttachMetalLayerFn = @convention(c) (UnsafeMutableRawPointer?, UInt64, UInt32, UInt32, Double) -> Int32
   typealias ResizeSurfaceFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, Double) -> Int32
   typealias RenderTickFn = @convention(c) (UnsafeMutableRawPointer?, Double, UnsafeMutableRawPointer?) -> Int32
+  typealias RenderTickWithTimingFn = @convention(c) (UnsafeMutableRawPointer?, Double, UnsafePointer<Double>?, UnsafeMutableRawPointer?) -> Int32
   typealias AudioOnlyTickFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
   typealias CaptureFrameRgbaFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, UnsafeMutableRawPointer?, Int) -> Int32
   typealias PollEventFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Int32
@@ -558,6 +559,7 @@ private final class ErikaNativeLibrary {
   let resizeSurface: ResizeSurfaceFn
   let detachSurface: CommandFn
   let renderTick: RenderTickFn
+  let renderTickWithTiming: RenderTickWithTimingFn?
   let audioOnlyTick: AudioOnlyTickFn
   let captureFrameRgba: CaptureFrameRgbaFn?
   let pollEvent: PollEventFn
@@ -629,6 +631,7 @@ private final class ErikaNativeLibrary {
     resizeSurface = try Self.load("erika_presenter_resize_surface", from: libraryHandle, as: ResizeSurfaceFn.self)
     detachSurface = try Self.load("erika_presenter_detach_surface", from: libraryHandle, as: CommandFn.self)
     renderTick = try Self.load("erika_presenter_render_tick", from: libraryHandle, as: RenderTickFn.self)
+    renderTickWithTiming = Self.loadOptional("erika_presenter_render_tick_with_timing", from: libraryHandle, as: RenderTickWithTimingFn.self)
     audioOnlyTick = try Self.load("erika_presenter_audio_only_tick", from: libraryHandle, as: AudioOnlyTickFn.self)
     captureFrameRgba = Self.loadOptional("erika_presenter_capture_frame_rgba", from: libraryHandle, as: CaptureFrameRgbaFn.self)
     pollEvent = try Self.load("erika_presenter_poll_event", from: libraryHandle, as: PollEventFn.self)
@@ -714,7 +717,7 @@ private final class ErikaPlayerHost {
   private let handle: UnsafeMutableRawPointer
   private let renderQueue: DispatchQueue
   private let nativeCallLock = NSRecursiveLock()
-  private let renderSubmissionLock = NSLock()
+  private let tickMailbox = ErikaTickMailbox()
   private weak var attachedView: ErikaMetalSurfaceView?
   private var displayLink: CADisplayLink?
   private var displayLinkProxy: DisplayLinkProxy?
@@ -727,7 +730,6 @@ private final class ErikaPlayerHost {
   private var loggedFirstRenderedVideoFrame = false
   private var latestPresenterStats = ErikaPresenterStatsC()
   private var fallbackTimer: DispatchSourceTimer?
-  private var renderTickQueued = false
   private var isAppInBackground = false
   private(set) var nowPlayingTitle = ""
   private(set) var nowPlayingArtist: String?
@@ -1462,6 +1464,7 @@ private final class ErikaPlayerHost {
     displayLink?.invalidate()
     displayLink = nil
     displayLinkProxy = nil
+    tickMailbox.cancelPending()
     withNativeCall {
       _ = library.detachSurface(handle)
     }
@@ -1477,25 +1480,40 @@ private final class ErikaPlayerHost {
     }
   }
 
-  func renderTick() {
+  func renderTick(presentationTime: Double? = nil) {
     if !loggedRenderThread {
       loggedRenderThread = true
       erikaHdrLog(
         hdrDebug,
-        "render driver player=\(id) mainThread=\(Thread.isMainThread)"
+        "render driver player=\(id) mainThread=\(Thread.isMainThread) displayTarget=\(library.renderTickWithTiming != nil)"
       )
     }
     var stats = ErikaPresenterStatsC()
+    var skippedTick = false
     let status = withNativeCall {
-      let timeSeconds = CACurrentMediaTime() - startTimeSeconds
+      let now = CACurrentMediaTime()
+      let timeSeconds = (presentationTime ?? now) - startTimeSeconds
       let status = withUnsafeMutablePointer(to: &stats) { pointer in
-        library.renderTick(handle, timeSeconds, UnsafeMutableRawPointer(pointer))
+        if let target = presentationTime, let renderAt = library.renderTickWithTiming {
+          var delay = target - CACurrentMediaTime()
+          // A suspended main loop or native lock can leave an obsolete tick.
+          // The mailbox will deliver the newest callback when rendering resumes.
+          guard abs(delay) <= 0.25 else {
+            skippedTick = true
+            return Int32(0)
+          }
+          return withUnsafePointer(to: &delay) { delayPointer in
+            renderAt(handle, timeSeconds, delayPointer, UnsafeMutableRawPointer(pointer))
+          }
+        }
+        return library.renderTick(handle, timeSeconds, UnsafeMutableRawPointer(pointer))
       }
-      if status == 0 {
+      if status == 0 && !skippedTick {
         latestPresenterStats = stats
       }
       return status
     }
+    if skippedTick { return }
     if status != 0 {
       NSLog("ErikaFlutterPlugin: render_tick failed with status \(status)")
     }
@@ -1564,25 +1582,20 @@ private final class ErikaPlayerHost {
     }
   }
 
-  private func scheduleTick(audioOnly: Bool = false) {
-    renderSubmissionLock.lock()
-    guard !renderTickQueued else {
-      renderSubmissionLock.unlock()
-      return
-    }
-    renderTickQueued = true
-    renderSubmissionLock.unlock()
-
+  private func scheduleTick(audioOnly: Bool = false, presentationTime: Double? = nil) {
+    let request: ErikaTickRequest = audioOnly ? .audioOnly : .render(presentationTime: presentationTime)
+    guard tickMailbox.submit(request) else { return }
     renderQueue.async { [weak self] in
-      guard let self else { return }
-      if audioOnly {
-        self.audioOnlyTick()
-      } else {
-        self.renderTick()
+      // Retain the host for one native call only. Under sustained load this
+      // loop may never empty; it must not keep a disposed player alive.
+      while let request = self?.tickMailbox.take() {
+        switch request {
+        case .audioOnly:
+          self?.audioOnlyTick()
+        case let .render(target):
+          self?.renderTick(presentationTime: target)
+        }
       }
-      self.renderSubmissionLock.lock()
-      self.renderTickQueued = false
-      self.renderSubmissionLock.unlock()
     }
   }
 
@@ -1628,11 +1641,18 @@ private final class ErikaPlayerHost {
     withNativeCall {
       startTimeSeconds = CACurrentMediaTime()
     }
-    let proxy = DisplayLinkProxy { [weak self] in
-      self?.scheduleTick()
+    let proxy = DisplayLinkProxy { [weak self] targetTimestamp in
+      self?.scheduleTick(presentationTime: targetTimestamp)
     }
-    let link = CADisplayLink(target: proxy, selector: #selector(DisplayLinkProxy.tick))
-    link.preferredFramesPerSecond = resolvedDisplayLinkFps()
+    let link = CADisplayLink(target: proxy, selector: #selector(DisplayLinkProxy.tick(_:)))
+    let fps = resolvedDisplayLinkFps()
+    if #available(iOS 15.0, *) {
+      let maximum = Float(attachedView?.window?.screen.maximumFramesPerSecond ?? UIScreen.main.maximumFramesPerSecond)
+      let preferred = min(Float(fps), maximum)
+      link.preferredFrameRateRange = CAFrameRateRange(minimum: min(60, preferred), maximum: preferred, preferred: preferred)
+    } else {
+      link.preferredFramesPerSecond = fps
+    }
     link.add(to: .main, forMode: .common)
     displayLinkProxy = proxy
     displayLink = link
@@ -1643,8 +1663,10 @@ private final class ErikaPlayerHost {
       displayLink?.invalidate()
       displayLink = nil
       displayLinkProxy = nil
+      tickMailbox.cancelPending()
       startFallbackTimerIfNeeded()
     } else {
+      if fallbackTimer != nil { tickMailbox.cancelPending() }
       fallbackTimer?.cancel()
       fallbackTimer = nil
       startDisplayLinkIfNeeded()
@@ -1694,14 +1716,14 @@ private final class ErikaPlayerHost {
 }
 
 private final class DisplayLinkProxy: NSObject {
-  private let body: () -> Void
+  private let body: (Double) -> Void
 
-  init(_ body: @escaping () -> Void) {
+  init(_ body: @escaping (Double) -> Void) {
     self.body = body
   }
 
-  @objc func tick() {
-    body()
+  @objc func tick(_ link: CADisplayLink) {
+    body(link.targetTimestamp)
   }
 }
 
