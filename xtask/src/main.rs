@@ -263,7 +263,10 @@ impl NativeDependencyProfile {
     fn ffmpeg_configure_flags_for_target(self, target: NativeTarget) -> Vec<&'static str> {
         let mut flags = self.ffmpeg_configure_flags().to_vec();
         if target.is_windows() {
-            flags.extend(["--enable-d3d11va", "--enable-dxva2"]);
+            // Match Meson/CMake dependencies and Rust's default dynamic MSVC
+            // CRT, including configure's link probes against static dav1d.
+            // Keep this in the recorded flags so old builds are invalidated.
+            flags.extend(["--enable-d3d11va", "--enable-dxva2", "--extra-cflags=-MD"]);
         } else if target.is_android() {
             flags.extend([
                 "--enable-jni",
@@ -5223,6 +5226,30 @@ mod tests {
         ));
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn windows_ffmpeg_markers_require_dynamic_crt() {
+        for target in [
+            NativeTarget::X86_64WindowsMsvc,
+            NativeTarget::Aarch64WindowsMsvc,
+        ] {
+            for profile in [
+                NativeDependencyProfile::Lgpl,
+                NativeDependencyProfile::GplFull,
+            ] {
+                let flags = profile.ffmpeg_configure_flags_for_target(target);
+                assert!(flags.contains(&"--extra-cflags=-MD"));
+                let current = format!("flags={}\n", flags.join(" "));
+                assert!(ffmpeg_build_marker_has_current_flags(
+                    &current, profile, target
+                ));
+                let stale = current.replace(" --extra-cflags=-MD", "");
+                assert!(!ffmpeg_build_marker_has_current_flags(
+                    &stale, profile, target
+                ));
+            }
+        }
     }
 
     #[test]
