@@ -190,6 +190,14 @@ rotation), call `erika_presenter_resize_surface(p, w, h, scale)` **before** the
 next tick. The Windows demo polls `GetClientRect` + `GetDpiForWindow` each frame
 and resizes when they change.
 
+For aspect-fit playback, size the native surface to the **full player area**,
+including letterbox and pillarbox bars. Erika fits the video inside that surface
+and draws danmaku over its full extent. In Flutter, let `ErikaVideoView` fill the
+player's constraints; do not first shrink the view with a video-sized
+`AspectRatio` or `SizedBox`. Black bars painted outside the native view belong to
+the host and cannot receive Erika's native overlays. This distinction caused
+the Android integration issue reported in [#107](https://github.com/AimesSoft/Erika/issues/107).
+
 `render_tick` returns quickly; it does not block on vsync itself — your display
 timer provides the cadence. If you are not on a display callback (e.g. a smoke
 test), a `~16 ms` sleep per iteration approximates 60 Hz.

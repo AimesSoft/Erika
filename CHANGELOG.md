@@ -124,6 +124,9 @@
 
 ### Danmaku
 
+- Added a GPU pixel regression for danmaku in letterbox/pillarbox bars while
+  preserving video aspect fit, and documented the full-size host surface
+  requirement for Android integrations (#107).
 - Kept both accepted and rejected placement decisions stable across sliding
   planner windows, preventing dropped comments from reappearing mid-flight or
   forcing visible comments onto another lane.

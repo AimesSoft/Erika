@@ -5735,6 +5735,83 @@ mod tests {
     }
 
     #[test]
+    fn wgpu_danmaku_covers_letterbox_and_pillarbox_without_stretching_video() {
+        let mut renderer = WgpuRenderer::new().unwrap();
+        let plan = DanmakuRenderPlan {
+            media_time: Duration::ZERO,
+            generation: 1,
+            viewport: DanmakuViewport::new(32, 32),
+            atlas: Some(std::sync::Arc::new(DanmakuGlyphAtlas {
+                width: 2,
+                height: 2,
+                stride: 2,
+                fill_alpha: vec![255; 4],
+                outline_alpha: vec![0; 4],
+                version: 1,
+                update: None,
+            })),
+            // Put a glyph in each black bar and across each video/bar boundary.
+            items: [(2.0, 2.0), (26.0, 26.0), (6.0, 6.0), (22.0, 22.0)]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (x, y))| DanmakuGlyphInstance {
+                    item_id: index as u64,
+                    rect: [x, y, 4.0, 4.0],
+                    tex_rect: [0.0, 0.0, 1.0, 1.0],
+                    color_rgba: [1.0, 0.0, 0.0, 1.0],
+                    outline_rgba: [0.0; 4],
+                    shadow_rgba: [0.0; 4],
+                    shadow_offset: [0.0; 2],
+                })
+                .collect(),
+            frame_stats: DanmakuFrameStats::default(),
+        };
+        for (width, height) in [(32, 16), (16, 32)] {
+            let uniforms =
+                VideoUniforms::from_pipeline(&VideoRenderPipeline::sdr_default(), false, false);
+            renderer
+                .upload_nv12(
+                    width,
+                    height,
+                    &vec![235; (width * height) as usize],
+                    &vec![128; (width * height / 2) as usize],
+                    uniforms,
+                )
+                .unwrap();
+            let capture = renderer
+                .render_current_offscreen_sized(32, 32, None, Some(&plan))
+                .unwrap()
+                .unwrap();
+            for y in 0..32 {
+                for x in 0..32 {
+                    let glyph = plan.items.iter().any(|item| {
+                        x as f32 >= item.rect[0]
+                            && (x as f32) < item.rect[0] + item.rect[2]
+                            && y as f32 >= item.rect[1]
+                            && (y as f32) < item.rect[1] + item.rect[3]
+                    });
+                    let video = if width > height {
+                        (8..24).contains(&y)
+                    } else {
+                        (8..24).contains(&x)
+                    };
+                    let pixel = capture.pixel(x, y);
+                    if glyph {
+                        assert_eq!(pixel, [255, 0, 0, 255], "{width}x{height} glyph ({x},{y})");
+                    } else if video {
+                        assert!(
+                            pixel[..3].iter().all(|c| *c > 240),
+                            "{width}x{height} video ({x},{y}): {pixel:?}"
+                        );
+                    } else {
+                        assert_eq!(pixel, [0, 0, 0, 255], "{width}x{height} bar ({x},{y})");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn wgpu_renderer_prepares_danmaku_glyph_atlas_draws_and_reuses_cache() {
         let mut renderer = WgpuRenderer::new().unwrap();
         renderer.ensure_overlay_pipeline(OFFSCREEN_FORMAT);
