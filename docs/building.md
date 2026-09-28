@@ -3,7 +3,7 @@
 > Translations: [中文](building.zh.md) · [日本語](building.ja.md)
 
 Erika is a Rust workspace that links a set of **statically built native
-dependencies** (FFmpeg, dav1d as the non-Windows AV1 fallback, and optionally
+dependencies** (FFmpeg, dav1d for AV1 software decode on every target, and optionally
 the libass subtitle stack). Those native libraries are not vendored — you build them once with the `xtask` orchestrator,
 which stages them under `third_party/dist/`, and the Rust crates link against
 that staging directory.
@@ -82,7 +82,7 @@ Erika's Android minimum is API **26**. Override it with
 cargo run -p xtask -- deps plan
 cargo run -p xtask -- deps status
 
-# Build the baseline set (zlib + FFmpeg; dav1d on Android and Apple targets) — LGPL profile
+# Build the baseline set (zlib + FFmpeg + dav1d on every target) — LGPL profile
 cargo run -p xtask -- deps build --profile lgpl
 
 # Build everything, including the libass subtitle stack
@@ -98,7 +98,7 @@ Subcommands: `plan` (print the plan), `fetch` (download sources only),
 |------|--------|---------|---------|
 | `--profile` | `lgpl`, `gpl-full` | `lgpl` | FFmpeg license profile (see below). |
 | `--target` | see targets table | `host` | Cross-compile target. |
-| `--all` | — | off | Also build libass + FreeType + HarfBuzz + FriBidi (subtitle rendering). The baseline is zlib + FFmpeg, plus dav1d for Android and Apple targets. |
+| `--all` | — | off | Also build libass + FreeType + HarfBuzz + FriBidi (subtitle rendering). The baseline is zlib + FFmpeg + dav1d on every target. |
 | `--force` | — | off | Rebuild even if up-to-date markers exist. |
 | `--jobs N` | integer | auto | Parallelism for the native builds. |
 
@@ -225,8 +225,8 @@ The native build is split into profiles so the license boundary is explicit:
 - **`lgpl`** (default) — FFmpeg configured `--disable-gpl --enable-version3`,
   static, no network, file protocol only, a curated demuxer/decoder/parser set,
   zlib enabled, plus VideoToolbox (Apple), D3D11VA/DXVA2 (Windows), or
-  JNI/MediaCodec plus source-built dav1d AV1 software fallback (Android and
-  Apple targets).
+  JNI/MediaCodec (Android). Every target also includes source-built dav1d
+  for AV1 software decode.
 - **`gpl-full`** — the same set with `--enable-gpl`. Use only if you accept GPL
   terms for the resulting binary.
 
@@ -292,7 +292,7 @@ pipeline, preserving subtitles, danmaku, and screenshots. This is hardware
 decode with a CPU upload, not a zero-copy Surface path; metrics must report it
 accordingly. If AV1 MediaCodec cannot open or fails while decoding, the software
 path explicitly selects FFmpeg's `libdav1d` decoder. `xtask` builds dav1d 1.5.1
-from source for every Android ABI and the Apple targets, with both 8-bit and
+from source for every target, including Windows and OpenHarmony, with both 8-bit and
 high-bit-depth support; the 32-bit Android x86 slice disables assembly to
 preserve PIC safety.
 

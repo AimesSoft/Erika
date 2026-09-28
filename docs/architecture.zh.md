@@ -30,7 +30,7 @@ Rust Player Core
 | 依赖 | 版本 | 作用 |
 |------|------|------|
 | FFmpeg | 8.1.2 | Demux、decode、audio resample、平台硬解 |
-| dav1d | 1.5.1 | 非 Windows 目标的 AV1 软解回退（8-bit 与高位深） |
+| dav1d | 1.5.1 | 所有目标的 AV1 软解（8-bit 与高位深） |
 | libass | 0.17.5 | ASS 字幕渲染 |
 | FreeType | 2.14.3 | 字体栅格化（libass 依赖） |
 | HarfBuzz | 14.2.1 | 文本 shaping（libass 依赖） |
