@@ -1153,7 +1153,7 @@ fn build_dav1d(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     apply_windows_target_env(&mut setup, options.target)?;
     if matches!(options.target, NativeTarget::Aarch64WindowsMsvc) {
         let gaspp = ensure_gas_preprocessor(layout)?;
-        prepend_path(
+        prepend_path_to_command(
             &mut setup,
             gaspp.parent().context("gas-preprocessor directory")?,
         );
@@ -2606,7 +2606,7 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
         "--prefix={}",
         path_to_forward_slashes(&layout.ffmpeg_prefix)
     ));
-    let pkg_config = ensure_pkg_config_shim(layout)?;
+    let pkg_config = ensure_ffmpeg_pkg_config_shim(layout)?;
     let dav1d_pkg_config_dir = layout.dav1d_prefix.join("lib/pkgconfig");
     configure
         .arg(format!(
@@ -2820,7 +2820,17 @@ fn build_ffmpeg(layout: &WorkspaceLayout, options: DepsOptions) -> Result<()> {
     }
 
     println!("configure FFmpeg");
-    run(&mut configure)?;
+    if let Err(error) = run(&mut configure) {
+        let log = layout.ffmpeg_build_dir.join("ffbuild/config.log");
+        if let Ok(contents) = fs::read_to_string(&log) {
+            let lines = contents.lines().collect::<Vec<_>>();
+            eprintln!("FFmpeg configure diagnostics ({}):", log.display());
+            for line in &lines[lines.len().saturating_sub(100)..] {
+                eprintln!("{line}");
+            }
+        }
+        return Err(error);
+    }
     if cfg!(windows) && options.target.is_windows() {
         fix_ffmpeg_msvc_archive_response_file_creation(&layout.ffmpeg_build_dir)?;
     }
@@ -3720,6 +3730,32 @@ fn ensure_pkg_config_shim(layout: &WorkspaceLayout) -> Result<PathBuf> {
     Ok(shim)
 }
 
+fn ensure_ffmpeg_pkg_config_shim(layout: &WorkspaceLayout) -> Result<PathBuf> {
+    if !cfg!(windows) {
+        return ensure_pkg_config_shim(layout);
+    }
+    // FFmpeg invokes pkg-config from a POSIX shell. Passing its version
+    // operators through a .cmd wrapper makes cmd.exe interpret `>=` as
+    // redirection. Keep the arguments in the shell until the native executable.
+    let dir = layout.build_dir.join("pkg-config-shim");
+    fs::create_dir_all(&dir)?;
+    let shim = dir.join("pkg-config.sh");
+    let exe = env::current_exe()?;
+    fs::write(
+        &shim,
+        ffmpeg_pkg_config_shell_contents(&exe, &layout.dav1d_prefix.join("lib/pkgconfig")),
+    )?;
+    Ok(shim)
+}
+
+fn ffmpeg_pkg_config_shell_contents(exe: &Path, pkg_config_dir: &Path) -> String {
+    format!(
+        "#!/bin/sh\nexport PKG_CONFIG_PATH={}\nexec {} pkg-config-shim \"$@\"\n",
+        shell_escape(&path_to_forward_slashes(pkg_config_dir)),
+        shell_escape(&path_to_forward_slashes(exe)),
+    )
+}
+
 fn windows_cmd_parent_traversal(root: &Path, dir: &Path) -> Result<String> {
     let rel = dir
         .strip_prefix(root)
@@ -3834,7 +3870,13 @@ impl PkgConfigQuery {
                 _ if arg.starts_with("--") => {}
                 ">" | ">=" | "=" | "<=" | "<" => {}
                 value if looks_like_version(value) => {}
-                value => query.packages.push(value.to_string()),
+                value => query.packages.extend(
+                    value
+                        .split_whitespace()
+                        .filter(|token| !matches!(*token, ">" | ">=" | "=" | "<=" | "<"))
+                        .filter(|token| !looks_like_version(token))
+                        .map(str::to_string),
+                ),
             }
         }
         if !query.exists
@@ -5066,6 +5108,57 @@ mod tests {
         let merged = command_env_path(&command).unwrap();
         let paths = env::split_paths(&merged).collect::<Vec<_>>();
         assert_eq!(paths, [tools_dir, existing_dir]);
+    }
+
+    #[test]
+    fn dav1d_assembler_path_preserves_msvc_linker_precedence() {
+        let root = env::temp_dir();
+        let msvc = root.join("Visual Studio/MSVC/bin");
+        let git = root.join("Git/usr/bin");
+        let gaspp = root.join("gas-preprocessor");
+        let mut command = Command::new("meson");
+        command.env("PATH", env::join_paths([&msvc, &git]).unwrap());
+        prepend_path_to_command(&mut command, &gaspp);
+        assert_eq!(
+            env::split_paths(&command_env_path(&command).unwrap()).collect::<Vec<_>>(),
+            [gaspp, msvc, git]
+        );
+    }
+
+    #[test]
+    fn ffmpeg_pkg_config_accepts_split_and_quoted_version_requirements() {
+        for args in [
+            vec!["--exists", "--print-errors", "dav1d", ">=", "1.0.0"],
+            vec!["--exists", "--print-errors", "dav1d >= 1.0.0"],
+        ] {
+            let query = PkgConfigQuery::parse(args.into_iter().map(str::to_string).collect());
+            assert!(query.exists);
+            assert_eq!(query.packages, ["dav1d"]);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ffmpeg_shell_shim_preserves_version_operator_arguments() {
+        let root = env::temp_dir().join(format!("erika pkg-config {}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let exe = root.join("capture args");
+        fs::write(&exe, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(ffmpeg_pkg_config_shell_contents(&exe, &root))
+            .args(["pkg-config", "--exists", "dav1d", ">=", "1.0.0"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "pkg-config-shim\n--exists\ndav1d\n>=\n1.0.0\n"
+        );
+        assert!(!root.join("=1.0.0").exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
