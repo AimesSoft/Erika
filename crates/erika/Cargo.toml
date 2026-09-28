@@ -22,13 +22,15 @@ fontdb.workspace = true
 libc.workspace = true
 erika_ffmpeg_sys = { path = "../erika_ffmpeg_sys" }
 regex.workspace = true
+reqwest.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 smallvec.workspace = true
 soundtouch.workspace = true
 thiserror.workspace = true
-ureq.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
 wgpu = { version = "=29.0.3", optional = true }
 pollster = { version = "0.4.0", optional = true }
 bytemuck = { version = "1.25.0", features = ["derive"], optional = true }

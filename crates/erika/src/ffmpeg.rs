@@ -319,6 +319,19 @@ impl Demuxer {
         &self.probe
     }
 
+    pub(crate) fn release_source_buffer(&mut self) {
+        if let Some(avio) = &mut self.context.avio {
+            avio.source.release_buffer();
+        }
+    }
+
+    pub(crate) fn source_cancellation(&self) -> Option<crate::source::SourceCancellation> {
+        self.context
+            .avio
+            .as_ref()
+            .and_then(|avio| avio.source.cancellation())
+    }
+
     pub fn selection(&self) -> &StreamSelection {
         &self.selection
     }
