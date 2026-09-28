@@ -407,11 +407,11 @@ struct StreamSession {
     worker: Option<thread::JoinHandle<()>>,
 }
 
-impl StreamSession {
-    fn stop_and_join(mut self, stopped: bool) {
+impl Drop for StreamSession {
+    fn drop(&mut self) {
         {
             let mut inner = lock_stream(&self.shared);
-            inner.stopped |= stopped;
+            inner.stopped = true;
             inner.epoch = inner.epoch.wrapping_add(1);
         }
         self.io.cancel();
@@ -491,7 +491,7 @@ impl HttpRangeSource {
         read_ahead: Option<u64>,
         back_buffer: Option<u64>,
     ) -> Self {
-        let agent = http_agent();
+        let agent = HttpIo::new();
         Self {
             uri: uri.into(),
             agent,
@@ -675,14 +675,11 @@ impl HttpRangeSource {
     }
 
     /// Close every worker (a seek re-anchored the window, the resource ended,
-    /// or the source is going away). Workers notice the epoch bump within one
-    /// chunk and exit; their sockets close and the origin sees a disconnect.
+    /// or the source is going away). Dropping the session cancels I/O and
+    /// wakes the worker, then joins it before releasing the handoff storage.
     fn kill_streams(&mut self) {
         self.stream_frontier = 0;
-        let Some(session) = self.streams.take() else {
-            return;
-        };
-        session.stop_and_join(false);
+        self.streams.take();
     }
 
     /// Spawn the persistent stream at `cache_end`, or re-anchor it after a
@@ -756,7 +753,7 @@ impl HttpRangeSource {
             .name("erika-http-stream".to_string())
             .spawn(move || {
                 stream_worker_main(
-                    worker_shared,
+                    Arc::clone(&worker_shared),
                     worker_io,
                     uri,
                     http_headers,
@@ -764,6 +761,10 @@ impl HttpRangeSource {
                     anchor,
                     total,
                 );
+                // Every exit, including cancellation, must wake a foreground
+                // reader waiting for bytes that will no longer arrive.
+                lock_stream(&worker_shared).worker_done = true;
+                worker_shared.signal.notify_all();
             })
             .expect("spawn HTTP stream worker");
         self.streams = Some(StreamSession {
@@ -802,21 +803,15 @@ impl HttpRangeSource {
             if self.cache_end() >= end {
                 return true;
             }
-            let (all_done, stalled, stopped) = {
-                let inner = lock_stream(&shared);
-                (
-                    inner.worker_done,
-                    inner.last_progress.elapsed() >= HTTP_STREAM_STALL,
-                    inner.stopped,
-                )
-            };
-            if stopped || all_done || stalled {
-                return false;
-            }
-            if started.elapsed() >= HTTP_STREAM_WAIT_BUDGET {
-                return false;
-            }
             let inner = lock_stream(&shared);
+            if self.agent.is_cancelled()
+                || inner.stopped
+                || inner.worker_done
+                || inner.last_progress.elapsed() >= HTTP_STREAM_STALL
+                || started.elapsed() >= HTTP_STREAM_WAIT_BUDGET
+            {
+                return false;
+            }
             let _ = shared
                 .signal
                 .wait_timeout(inner, Duration::from_millis(500));
@@ -1112,7 +1107,7 @@ fn stream_worker_main(
         }
         loop {
             let inner = lock_stream(&shared);
-            if inner.stopped || inner.epoch != epoch {
+            if inner.stopped || inner.epoch != epoch || io.is_cancelled() {
                 return;
             }
             // Finish a started stripe even when it crosses the window boundary.
@@ -1247,10 +1242,6 @@ fn stream_worker_main(
             }
         }
     }
-}
-
-fn http_agent() -> HttpIo {
-    HttpIo::new()
 }
 
 const HTTP_FETCH_MAX_ATTEMPTS: u32 = 3;
@@ -1847,12 +1838,7 @@ impl std::fmt::Debug for HttpRangeSource {
 impl Drop for HttpRangeSource {
     fn drop(&mut self) {
         self.agent.cancel();
-        // Cancel socket I/O and join before the source's cache and control
-        // state disappear.
-        let Some(session) = self.streams.take() else {
-            return;
-        };
-        session.stop_and_join(true);
+        self.kill_streams();
     }
 }
 
@@ -2719,7 +2705,7 @@ mod tests {
         let (uri, _requests) = spawn_mock_http_server(vec![MockResponse::immediate(
             b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
         )]);
-        let error = probe_http_total_length(&http_agent(), &uri, &[]).unwrap_err();
+        let error = probe_http_total_length(&HttpIo::new(), &uri, &[]).unwrap_err();
         assert!(error.to_string().contains("404"));
     }
 
@@ -3339,6 +3325,55 @@ mod tests {
         );
         worker.join().unwrap();
         assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn cancellation_wakes_a_reader_waiting_for_prefetch() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let uri = format!("http://{}/media", listener.local_addr().unwrap());
+        let (started_tx, started_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(socket.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            socket.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 1-999/1000\r\nContent-Length: 999\r\nConnection: close\r\n\r\n").unwrap();
+            started_tx.send(()).unwrap();
+            assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+        });
+        let mut source = HttpRangeSource::new(uri);
+        source.content_length = Some(1000);
+        source.cache_bytes = vec![0];
+        source.ensure_streams();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let cancellation = source.cancellation().unwrap();
+        let (done_tx, done_rx) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            let result = source.read_range(ByteRange {
+                start: 1,
+                length: Some(10),
+            });
+            let _ = done_tx.send(result);
+        });
+        // Let the foreground reader enter the prefetch condition-variable wait.
+        thread::sleep(Duration::from_millis(50));
+        cancellation.cancel();
+        assert!(
+            matches!(
+                done_rx.recv_timeout(Duration::from_millis(500)),
+                Ok(Err(SourceError::Cancelled))
+            ),
+            "cancel must wake the prefetch consumer as well as its socket"
+        );
+        reader.join().unwrap();
+        server.join().unwrap();
     }
 
     #[test]

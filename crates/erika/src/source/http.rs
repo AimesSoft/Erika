@@ -1,8 +1,9 @@
 //! Cancellation boundary for persistent HTTP read-ahead streams.
 //!
 //! Foreground and persistent background reads use reqwest on one shared Tokio
-//! runtime, so dropping their future interrupts DNS, connect, TLS, response
-//! headers, and response body waits.
+//! runtime. Cancellation drops the request future and interrupts connect, TLS,
+//! response headers, and response body waits. System DNS resolution already
+//! running in a blocking resolver may finish separately.
 
 use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -134,16 +135,11 @@ impl HttpIo {
     }
 
     pub(super) fn wait_cancelled(&self, duration: Duration) -> bool {
-        let cancellation = self.cancellation.token();
-        let (sender, receiver) = crossbeam_channel::bounded(1);
-        runtime().spawn(async move {
-            tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => { let _ = sender.send(true); },
-                _ = tokio::time::sleep(duration) => { let _ = sender.send(false); },
-            }
-        });
-        receiver.recv().unwrap_or(true)
+        self.run(async move {
+            tokio::time::sleep(duration).await;
+            Ok(())
+        })
+        .is_err()
     }
 }
 

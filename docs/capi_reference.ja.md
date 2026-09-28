@@ -144,7 +144,6 @@ ErikaStatus erika_play(ErikaHandle *handle);
 ErikaStatus erika_pause(ErikaHandle *handle);
 ErikaStatus erika_stop(ErikaHandle *handle);
 ErikaStatus erika_close(ErikaHandle *handle);
-ErikaStatus erika_release_media(ErikaHandle *handle);
 ErikaStatus erika_seek(ErikaHandle *handle, uint64_t position_micros);
 ```
 
@@ -278,7 +277,6 @@ ErikaStatus erika_presenter_play(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_pause(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_stop(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_close(ErikaPresenterHandle *);
-ErikaStatus erika_presenter_release_media(ErikaPresenterHandle *);
 ErikaStatus erika_presenter_seek(ErikaPresenterHandle *, uint64_t position_micros);
 ErikaStatus erika_presenter_set_playback_rate(ErikaPresenterHandle *, double rate);
 ErikaStatus erika_presenter_set_volume(ErikaPresenterHandle *, double volume);   // 0.0–1.0

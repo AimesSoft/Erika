@@ -106,7 +106,6 @@ unsafe fn invoke(
         "pause" => status_value(unsafe { erika_presenter_pause(handle) }),
         "stop" => status_value(unsafe { erika_presenter_stop(handle) }),
         "close" => status_value(unsafe { erika_presenter_close(handle) }),
-        "releaseMedia" => status_value(unsafe { erika_presenter_release_media(handle) }),
         "seek" => status_value(unsafe {
             erika_presenter_seek(handle, required_u64(args, "positionMicros")?)
         }),

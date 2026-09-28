@@ -19,16 +19,20 @@
 ## 修复
 
 - 前台 Range 请求和持久预读统一通过共享 reqwest/Tokio I/O runtime 执行。每个媒体源有
-  带代次的取消令牌；取消会直接丢弃进行中的 DNS、connect、TLS、响应头或响应体 future。
+  带代次的取消令牌；取消会丢弃请求 future，打断 connect、TLS、响应头和响应体等待。
+  已进入系统阻塞解析器的 DNS 工作可能独立完成，不应宣称它也已同步退出。
 - 持久流仍保留现有的单连接、条带交接和窗口背压设计。每个流 session 保存 worker
-  `JoinHandle`；seek、释放缓存和析构先取消 I/O，再等待 worker 退出。
+  `JoinHandle`；session 的 `Drop` 统一取消 I/O、唤醒并等待 worker 退出。
+  worker 的每个退出路径都通知等待预读的前台线程，避免 socket 已关闭但消费者仍在等待。
 - `AsyncDemuxer` 保存 `JoinHandle` 和媒体源取消句柄。seek 中断旧代次的读取，worker
   处理 seek 后才恢复新代次；析构执行终态取消并等待线程退出。等待期间排空 packet
   channel，避免 worker 被满队列卡住。
-- `stop()` 仍然可重播，但在返回前释放 HTTP 缓存、持久预读、空播放队列容量；新增
-  `Player::release_media()` / `PresenterRuntime::release_media()`、C API
-  `erika_release_media()` / `erika_presenter_release_media()` 和 JSON/JNI `releaseMedia`。
-  卸载后回到 `Idle`，同一 handle 可再次 `open()`；`close()` 仍然是终态。
+- `stop()` 仍然可重播，但在返回前释放 HTTP 缓存、持久预读和空播放队列容量。
+  现有 `open()` 替换旧会话，`close()` / destroy 释放媒体资源；不新增半关闭 API。
+
+改动限定在 source、demux 生命周期和必要依赖。reqwest/Tokio 增加依赖体积，但让同步
+FFmpeg 读取在网络阻塞期间也能取消；仅保存线程句柄并 join 会把网络等待带进析构。
+C API、JNI、JSON 桥接、Player 和 Presenter 的公共生命周期接口均保持原样。
 
 没有调用 malloc pressure relief，也没有依靠强制分配器回收来掩盖存活资源。
 
@@ -42,35 +46,37 @@
 
 修复后，同一测试稳定通过；源析构会等待 socket 关闭和 worker 退出。
 
-### 取消、重播和卸载
+### 取消、重播和关闭
 
 `crates/erika/tests/media_lifecycle.rs` 使用真实 TCP/HTTP 连接和仓库 MKV 样本验证：
 
 - HEAD、响应头、响应体和 TLS 握手阻塞时均可取消，服务器观察到 EOF/reset；
 - 预读在源析构或 `release_buffer()` 时被取消，释放后仍能重新读取并保留认证头；
-- 实际 Player 在 HTTP 读取阻塞时执行连续 seek、stop 后重播、release 后重新 open、close；
+- 实际 Player 在 HTTP 读取阻塞时执行连续 seek、stop 后重播、open 替换旧会话、close；
 - demux 析构等待媒体源释放，packet 队列已满时也不会退出死锁。
 
-一次完整运行记录的取消耗时为：TLS 0.17 ms；HEAD 0.06 ms；响应头 0.04 ms；响应体
-0.08 ms；Player seek 0.11 ms；stop 0.01 ms；release 0.22 ms；close 0.19 ms。
+本轮 TLS、HEAD、响应头和响应体取消耗时分别为 0.17、0.04、0.06、0.08 ms；
+Player stop、open 替换旧会话、close 分别为 0.01、3.38、0.23 ms。
 测试上限为 500 ms，这些本机数据不是跨设备延迟承诺。
-完整生命周期测试随后连续运行 20 轮，全部通过。
+
+额外回归 `cancellation_wakes_a_reader_waiting_for_prefetch` 在上一版 `9c8300c` 上
+500 ms 内无法收到取消结果，实际失败；补齐退出通知并让条件检查与等待共用锁后通过。
 
 ### 内存
 
 macOS 单进程实验使用仓库 MKV、软件解码和 64 KiB HTTP 窗口，执行 12 轮
-open → play → stop → release。每轮采样前释放测试宿主持有的帧。
+创建 player → open → play → stop → close。每轮采样前释放测试宿主持有的帧。
 
 | 阶段 | live malloc 字节 | footprint 字节 |
 |---|---:|---:|
-| 初始基线 | 638,368 | 3,277,184 |
-| 第 1 轮播放 | 2,341,184 | 7,406,000 |
-| 第 1 轮停止 | 1,675,472 | 8,094,128 |
-| 第 1 轮卸载 | 717,712 | 8,012,208 |
-| 第 12 轮停止 | 1,675,472 | 9,060,784 |
-| 第 12 轮卸载 | 717,712 | 8,962,480 |
+| 初始基线 | 621,648 | 3,260,800 |
+| 第 1 轮播放 | 2,341,024 | 7,356,848 |
+| 第 1 轮停止 | 1,675,312 | 7,979,440 |
+| 第 1 轮关闭 | 717,552 | 7,881,112 |
+| 第 12 轮停止 | 1,675,312 | 8,815,024 |
+| 第 12 轮关闭 | 717,552 | 8,700,312 |
 
-12 次卸载后的 live malloc 都是 **717,712 字节**，没有逐轮累积。footprint 没有回到
+12 次关闭后的 live malloc 都是 **717,552 字节**，没有逐轮累积。footprint 没有回到
 启动基线，符合分配器、共享 HTTP runtime 和系统框架保留虚拟/物理页的行为；它不能单独
 用作泄漏判据。
 
@@ -82,7 +88,7 @@ cargo test -p erika --test media_lifecycle -- --nocapture --test-threads=1
 cargo test -p erika --test media_lifecycle memory_probe -- --ignored --nocapture --test-threads=1
 ```
 
-当前结果：Erika 674 项库测试、C API 43 项测试全部通过；生命周期集成测试 4 项通过、
+当前结果：Erika 675 项库测试、C API 41 项测试全部通过；生命周期集成测试 4 项通过、
 1 项手动内存实验通过。
 
 ## 边界

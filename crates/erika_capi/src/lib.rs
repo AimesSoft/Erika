@@ -1006,13 +1006,6 @@ pub unsafe extern "C" fn erika_close(handle: *mut ErikaHandle) -> ErikaStatus {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn erika_release_media(handle: *mut ErikaHandle) -> ErikaStatus {
-    with_handle_mut(handle, |handle| {
-        status_from_player_result(handle.player.release_media())
-    })
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_seek(handle: *mut ErikaHandle, position_micros: u64) -> ErikaStatus {
     with_handle_mut(handle, |handle| {
         capi_trace(format!(
@@ -2040,31 +2033,6 @@ pub unsafe extern "C" fn erika_presenter_close(handle: *mut ErikaPresenterHandle
     with_presenter_mut(handle, |handle| {
         let status = status_from_player_result(handle.presenter.close());
         retain_presenter_events_from_latest_state(handle, PlayerState::Closed, "close", false);
-        status
-    })
-}
-
-#[cfg(any(
-    target_os = "macos",
-    any(target_os = "ios", target_os = "tvos"),
-    target_os = "windows",
-    target_os = "android",
-    target_env = "ohos"
-))]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn erika_presenter_release_media(
-    handle: *mut ErikaPresenterHandle,
-) -> ErikaStatus {
-    with_presenter_mut(handle, |handle| {
-        let status = status_from_player_result(handle.presenter.release_media());
-        if status == ErikaStatus::Ok {
-            retain_presenter_events_from_latest_state(
-                handle,
-                PlayerState::Idle,
-                "release_media",
-                false,
-            );
-        }
         status
     })
 }
@@ -4689,65 +4657,6 @@ fn audio_recovery_state_to_c(state: AudioRecoveryState) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn c_player_release_media_preserves_closed_terminal_state() {
-        assert_eq!(
-            unsafe { erika_release_media(std::ptr::null_mut()) },
-            ErikaStatus::NullPointer
-        );
-        let handle = erika_create();
-        assert_eq!(unsafe { erika_release_media(handle) }, ErikaStatus::Ok);
-        assert_eq!(unsafe { erika_close(handle) }, ErikaStatus::Ok);
-        assert_eq!(
-            unsafe { erika_release_media(handle) },
-            ErikaStatus::PlayerError
-        );
-        unsafe { erika_destroy(handle) };
-    }
-
-    #[cfg(any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "windows",
-        target_os = "android",
-        target_env = "ohos"
-    ))]
-    #[test]
-    fn presenter_release_media_returns_to_idle_and_can_reopen() {
-        assert_eq!(
-            unsafe { erika_presenter_release_media(std::ptr::null_mut()) },
-            ErikaStatus::NullPointer
-        );
-        let fixture = CString::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../erika/testdata/playback/playback-fixture.mkv"
-        ))
-        .unwrap();
-        let handle = erika_presenter_create();
-        assert!(!handle.is_null());
-        for _ in 0..3 {
-            assert_eq!(
-                unsafe { erika_presenter_open(handle, fixture.as_ptr()) },
-                ErikaStatus::Ok
-            );
-            assert_eq!(
-                unsafe { erika_presenter_release_media(handle) },
-                ErikaStatus::Ok
-            );
-            let presenter = unsafe { &(*handle).presenter };
-            assert_eq!(presenter.player().state(), PlayerState::Idle);
-            assert!(presenter.tracks().is_empty());
-            assert_eq!(presenter.duration(), None);
-        }
-        assert_eq!(unsafe { erika_presenter_close(handle) }, ErikaStatus::Ok);
-        assert_eq!(
-            unsafe { erika_presenter_release_media(handle) },
-            ErikaStatus::PlayerError
-        );
-        unsafe { erika_presenter_destroy(handle) };
-    }
 
     #[test]
     fn c_event_counts_tracks() {

@@ -351,7 +351,7 @@ impl Drop for MediaServer {
 }
 
 #[test]
-fn http_player_stop_replays_and_release_media_cancels_reads_and_reopens() {
+fn http_player_cancels_reads_on_seek_stop_reopen_and_close() {
     let server = MediaServer::start();
     let mut config = PlayerConfig::default();
     config.playback.video_decode = VideoDecodePreference::Software;
@@ -359,10 +359,7 @@ fn http_player_stop_replays_and_release_media_cancels_reads_and_reopens() {
     let video = player.subscribe_video_frames();
     let audio = player.subscribe_audio_frames();
 
-    for operation in ["seek", "stop", "release_media", "close"] {
-        if player.state() != PlayerState::Idle {
-            player.release_media().unwrap();
-        }
+    for operation in ["seek", "stop", "reopen", "close"] {
         player.open(server.request()).unwrap();
         server.stall_next.store(true, Ordering::Release);
         player.seek(Duration::from_secs(4)).unwrap();
@@ -382,7 +379,7 @@ fn http_player_stop_replays_and_release_media_cancels_reads_and_reopens() {
                 player.seek(Duration::ZERO).unwrap();
             }
             "stop" => player.stop().unwrap(),
-            "release_media" => player.release_media().unwrap(),
+            "reopen" => player.open(server.request()).unwrap(),
             _ => player.close().unwrap(),
         }
         server
@@ -404,20 +401,14 @@ fn http_player_stop_replays_and_release_media_cancels_reads_and_reopens() {
                 .recv_timeout(WAIT)
                 .expect("stop failed to replay after cancelled I/O");
             assert!(frame.pts.unwrap_or_default() < Duration::from_secs(1));
-        } else if operation == "release_media" {
-            assert_eq!(player.state(), PlayerState::Idle);
-            assert!(player.tracks().is_empty());
-            assert_eq!(player.duration(), None);
-            player.release_media().unwrap();
-            player.open(server.request()).unwrap();
+        } else if operation == "reopen" {
             player.play().unwrap();
             video
                 .recv_timeout(WAIT)
-                .expect("unloaded player failed to reopen");
+                .expect("player failed to play after replacing blocked media");
         }
     }
     assert_eq!(player.state(), PlayerState::Closed);
-    assert!(player.release_media().is_err());
     assert!(player.open(server.request()).is_err());
 }
 
@@ -426,7 +417,7 @@ fn http_player_stop_replays_and_release_media_cancels_reads_and_reopens() {
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "manual process-wide memory experiment"]
-fn memory_probe_repeated_http_open_stop_release() {
+fn memory_probe_repeated_http_open_stop_close() {
     fn sample(cycle: usize, stage: &str) {
         let mut malloc = std::mem::MaybeUninit::<libc::malloc_statistics_t>::zeroed();
         let mut usage = std::mem::MaybeUninit::<libc::rusage_info_v0>::zeroed();
@@ -451,11 +442,11 @@ fn memory_probe_repeated_http_open_stop_release() {
     let server = MediaServer::start();
     let mut config = PlayerConfig::default();
     config.playback.video_decode = VideoDecodePreference::Software;
-    let player = Player::new(config);
-    let video = player.subscribe_video_frames();
-    let audio = player.subscribe_audio_frames();
     sample(0, "baseline");
     for cycle in 1..=12 {
+        let player = Player::new(config.clone());
+        let video = player.subscribe_video_frames();
+        let audio = player.subscribe_audio_frames();
         player.open(server.request()).unwrap();
         player.play().unwrap();
         drop(video.recv_timeout(WAIT).unwrap());
@@ -465,12 +456,10 @@ fn memory_probe_repeated_http_open_stop_release() {
         while video.try_recv().is_ok() {}
         while audio.try_recv().is_ok() {}
         sample(cycle, "stopped");
-        player.release_media().unwrap();
+        player.close().unwrap();
         while video.try_recv().is_ok() {}
         while audio.try_recv().is_ok() {}
-        sample(cycle, "released");
-        assert_eq!(player.state(), PlayerState::Idle);
+        sample(cycle, "closed");
+        assert_eq!(player.state(), PlayerState::Closed);
     }
-    player.close().unwrap();
-    sample(12, "closed");
 }
