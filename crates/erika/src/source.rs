@@ -1253,15 +1253,31 @@ const HTTP_FETCH_RETRY_BACKOFF: [Duration; 2] =
 /// Wall-clock ceiling on one logical fetch, retries and backoff included.
 ///
 /// `read_range` runs on the demuxer thread, so every retry freezes playback;
-/// this bounds the stall. It is deliberately generous: with the 4 MiB request
-/// cap a fetch can legitimately need several 15 s attempts on a slow origin,
-/// and giving up ends playback (EIO is terminal) rather than merely stalling
-/// it. Attempts without any progress still stop after
+/// this bounds the stall. It leaves room for multiple response/body attempts
+/// on a slow origin: giving up ends playback (EIO is terminal) rather than
+/// merely stalling it. Attempts without any progress still stop after
 /// `HTTP_FETCH_MAX_ATTEMPTS`, so a broken origin fails fast.
 ///
 /// Every request receives only the remaining budget, so connect, headers,
 /// response bodies, retry delays, and retries all share this one ceiling.
 const HTTP_FETCH_TOTAL_BUDGET: Duration = Duration::from_secs(120);
+
+#[derive(Clone, Copy)]
+struct HttpFetchTimeouts {
+    response: Duration,
+    body: Duration,
+    total: Duration,
+}
+
+impl Default for HttpFetchTimeouts {
+    fn default() -> Self {
+        Self {
+            response: Duration::from_secs(15),
+            body: Duration::from_secs(60),
+            total: HTTP_FETCH_TOTAL_BUDGET,
+        }
+    }
+}
 
 /// Hard ceiling on the body of one HTTP request.
 ///
@@ -1330,20 +1346,22 @@ const HTTP_STREAM_BODY_TIMEOUT: Duration = Duration::from_secs(60);
 /// Two-tier: without progress the old behaviour stands (three attempts, so a
 /// broken origin fails fast instead of freezing the demuxer thread); with
 /// progress the fetch may keep resuming, because on a slow link a capped 4 MiB
-/// request legitimately spans several 15 s attempts. Resuming is bounded by the
+/// request may need several attempts. Resuming is bounded by the
 /// attempt count and `HTTP_FETCH_TOTAL_BUDGET` so a foreground stall stays
 /// finite.
 struct HttpRetryGate {
     started: Instant,
+    budget: Duration,
     attempts: u32,
     attempts_without_progress: u32,
     last_bytes: u64,
 }
 
 impl HttpRetryGate {
-    fn new() -> Self {
+    fn new(budget: Duration) -> Self {
         Self {
             started: Instant::now(),
+            budget,
             attempts: 0,
             attempts_without_progress: 0,
             last_bytes: 0,
@@ -1356,12 +1374,10 @@ impl HttpRetryGate {
         self.attempts
     }
 
-    /// Whether the wall-clock ceiling is already spent. Checked before an
-    /// attempt starts, because the per-request timeouts (connect + headers +
-    /// the body deadline) can add tens of seconds to whatever the budget left
-    /// over when the attempt began.
+    /// Whether the wall-clock ceiling is already spent. Requests additionally
+    /// receive the remaining budget so their header/body waits cannot exceed it.
     fn expired(&self) -> bool {
-        self.started.elapsed() >= HTTP_FETCH_TOTAL_BUDGET
+        self.started.elapsed() >= self.budget
     }
 
     fn elapsed(&self) -> Duration {
@@ -1383,7 +1399,7 @@ impl HttpRetryGate {
             return None;
         }
         let backoff = http_retry_backoff(self.attempts);
-        if self.started.elapsed().saturating_add(backoff) >= HTTP_FETCH_TOTAL_BUDGET {
+        if self.started.elapsed().saturating_add(backoff) >= self.budget {
             return None;
         }
         Some(backoff)
@@ -1398,10 +1414,38 @@ fn http_retry_backoff(attempt: u32) -> Duration {
         .unwrap_or(Duration::from_secs(1))
 }
 
-/// Whether a failed HTTP exchange is worth retrying: transport errors and 5xx
-/// responses are transient; 4xx responses are deterministic client errors.
-fn http_error_is_retryable(error: &reqwest::Error) -> bool {
-    error.status().is_none_or(|status| status.is_server_error())
+#[derive(Debug, Error)]
+enum HttpRequestError {
+    #[error("{0}")]
+    Request(#[from] reqwest::Error),
+    #[error("HTTP phase timed out")]
+    Timeout(#[from] tokio::time::error::Elapsed),
+}
+
+/// Phase timeouts, transport errors and 5xx are transient; 4xx are not.
+fn http_error_is_retryable(error: &HttpRequestError) -> bool {
+    match error {
+        HttpRequestError::Timeout(_) => true,
+        HttpRequestError::Request(error) => {
+            error.status().is_none_or(|status| status.is_server_error())
+        }
+    }
+}
+
+// The request's own timeout remains active through the body and caps the
+// entire exchange at the remaining fetch budget. This shorter response timer
+// leaves time to retry when an origin accepts a connection but sends no head.
+async fn send_http_request(
+    request: reqwest::RequestBuilder,
+    remaining: Duration,
+    response_timeout: Duration,
+) -> std::result::Result<reqwest::Response, HttpRequestError> {
+    Ok(
+        tokio::time::timeout(response_timeout, request.timeout(remaining).send())
+            .await?
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(reqwest::Error::without_url)?,
+    )
 }
 
 /// Parses the `total` out of a `Content-Range: bytes start-end/total` header.
@@ -1453,13 +1497,22 @@ fn probe_http_total_length(
     let client = agent.client.clone();
     let uri = uri.to_owned();
     let http_headers = http_headers.to_vec();
-    agent.run(async move { probe_http_total_length_async(&client, &uri, &http_headers).await })
+    agent.run(async move {
+        probe_http_total_length_async(
+            &client,
+            &uri,
+            &http_headers,
+            HttpFetchTimeouts::default().response,
+        )
+        .await
+    })
 }
 
 async fn probe_http_total_length_async(
     client: &reqwest::Client,
     uri: &str,
     http_headers: &[(String, String)],
+    timeout: Duration,
 ) -> Result<Option<u64>> {
     let probe = ByteRange {
         start: 0,
@@ -1469,7 +1522,13 @@ async fn probe_http_total_length_async(
     for (name, value) in http_headers {
         request = request.header(name, value);
     }
+    if timeout.is_zero() {
+        return Err(SourceError::Http(
+            "http metadata deadline exceeded".to_string(),
+        ));
+    }
     let response = request
+        .timeout(timeout)
         .send()
         .await
         .map_err(reqwest::Error::without_url)
@@ -1533,9 +1592,17 @@ fn fetch_http_range(
     let uri = uri.to_owned();
     let http_headers = http_headers.to_vec();
     let event = event.to_owned();
-    agent.run(
-        async move { fetch_http_range_async(&client, &uri, &http_headers, range, &event).await },
-    )
+    agent.run(async move {
+        fetch_http_range_async(
+            &client,
+            &uri,
+            &http_headers,
+            range,
+            &event,
+            HttpFetchTimeouts::default(),
+        )
+        .await
+    })
 }
 
 async fn fetch_http_range_async(
@@ -1544,11 +1611,12 @@ async fn fetch_http_range_async(
     http_headers: &[(String, String)],
     range: ByteRange,
     event: &str,
+    timeouts: HttpFetchTimeouts,
 ) -> Result<HttpRangeResponse> {
     let mut bytes = Vec::new();
     let mut total_length = None;
     let mut validator: Option<String> = None;
-    let mut gate = HttpRetryGate::new();
+    let mut gate = HttpRetryGate::new(timeouts.total);
     loop {
         let attempt = gate.begin_attempt();
         if gate.expired() {
@@ -1561,7 +1629,7 @@ async fn fetch_http_range_async(
             ));
             return Err(SourceError::Http(format!(
                 "fetch budget of {:?} exhausted for bytes {}..",
-                HTTP_FETCH_TOTAL_BUDGET, range.start,
+                timeouts.total, range.start,
             )));
         }
         let received = bytes.len() as u64;
@@ -1586,14 +1654,8 @@ async fn fetch_http_range_async(
         {
             request = request.header("If-Range", validator);
         }
-        let remaining = HTTP_FETCH_TOTAL_BUDGET.saturating_sub(gate.elapsed());
-        let mut response = match request
-            .timeout(remaining)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(reqwest::Error::without_url)
-        {
+        let remaining = timeouts.total.saturating_sub(gate.elapsed());
+        let mut response = match send_http_request(request, remaining, timeouts.response).await {
             Ok(response) => response,
             Err(error) => {
                 http_trace_log(format!(
@@ -1682,14 +1744,19 @@ async fn fetch_http_range_async(
                 )));
             }
         }
-        let body_result: std::result::Result<(), reqwest::Error> = async {
-            while let Some(chunk) = response.chunk().await? {
+        let body_result: std::result::Result<(), HttpRequestError> = async {
+            while let Some(chunk) = tokio::time::timeout(timeouts.body, response.chunk())
+                .await?
+                .map_err(reqwest::Error::without_url)?
+            {
                 bytes.extend_from_slice(&chunk);
             }
             Ok(())
         }
         .await;
-        if let Err(error) = body_result.map_err(reqwest::Error::without_url) {
+        if let Err(error) = body_result {
+            // Release the stalled socket before sleeping or opening its resume.
+            drop(response);
             http_trace_log(format!(
                 "{{\"event\":\"{}_error\",\"phase\":\"body\",\"attempt\":{},\"start\":{},\"length\":{},\"status\":{},\"bytes\":{},\"elapsed_ms\":{:.3},\"error\":\"{}\"}}",
                 event,
@@ -1741,8 +1808,9 @@ async fn fetch_http_length(
     uri: &str,
     http_headers: &[(String, String)],
     started: Instant,
+    timeouts: HttpFetchTimeouts,
 ) -> Result<Option<u64>> {
-    let mut gate = HttpRetryGate::new();
+    let mut gate = HttpRetryGate::new(timeouts.total);
     let head_error = loop {
         let attempt = gate.begin_attempt();
         if gate.expired() {
@@ -1754,14 +1822,8 @@ async fn fetch_http_length(
         for (name, value) in http_headers {
             request = request.header(name, value);
         }
-        let remaining = HTTP_FETCH_TOTAL_BUDGET.saturating_sub(gate.elapsed());
-        match request
-            .timeout(remaining)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(reqwest::Error::without_url)
-        {
+        let remaining = timeouts.total.saturating_sub(gate.elapsed());
+        match send_http_request(request, remaining, timeouts.response).await {
             Ok(response) => {
                 let status = response.status().as_u16();
                 let length = response
@@ -1775,7 +1837,16 @@ async fn fetch_http_length(
                         status,
                         started.elapsed().as_secs_f64() * 1000.0,
                     ));
-                    return match probe_http_total_length_async(client, uri, http_headers).await {
+                    return match probe_http_total_length_async(
+                        client,
+                        uri,
+                        http_headers,
+                        timeouts
+                            .response
+                            .min(timeouts.total.saturating_sub(gate.elapsed())),
+                    )
+                    .await
+                    {
                         Ok(total_length) => Ok(total_length),
                         Err(error) => Err(SourceError::Http(format!(
                             "HEAD reported Content-Length: 0 and range probe failed: {error}"
@@ -1816,7 +1887,16 @@ async fn fetch_http_length(
         "[erika-http-trace] stage=head_fallback_range error={}",
         json_escape(&head_error.to_string()),
     ));
-    match probe_http_total_length_async(client, uri, http_headers).await {
+    match probe_http_total_length_async(
+        client,
+        uri,
+        http_headers,
+        timeouts
+            .response
+            .min(timeouts.total.saturating_sub(gate.elapsed())),
+    )
+    .await
+    {
         Ok(total_length) => Ok(total_length),
         Err(_) => Err(SourceError::Http(head_error.to_string())),
     }
@@ -1874,9 +1954,16 @@ impl MediaSource for HttpRangeSource {
         let client = self.agent.client.clone();
         let uri = self.uri.clone();
         let http_headers = self.http_headers.clone();
-        self.content_length = self
-            .agent
-            .run(async move { fetch_http_length(&client, &uri, &http_headers, started).await })?;
+        self.content_length = self.agent.run(async move {
+            fetch_http_length(
+                &client,
+                &uri,
+                &http_headers,
+                started,
+                HttpFetchTimeouts::default(),
+            )
+            .await
+        })?;
         Ok(self.content_length)
     }
 
@@ -2145,7 +2232,7 @@ mod tests {
 
     #[test]
     fn http_retry_gate_fails_fast_when_no_bytes_arrive() {
-        let mut gate = HttpRetryGate::new();
+        let mut gate = HttpRetryGate::new(HTTP_FETCH_TOTAL_BUDGET);
         let _ = gate.begin_attempt();
         assert!(gate.fail(0).is_some());
         let _ = gate.begin_attempt();
@@ -2158,7 +2245,7 @@ mod tests {
 
     #[test]
     fn http_retry_gate_keeps_resuming_while_bytes_arrive() {
-        let mut gate = HttpRetryGate::new();
+        let mut gate = HttpRetryGate::new(HTTP_FETCH_TOTAL_BUDGET);
         let mut allowed = 0;
         for received in 1..=u64::from(HTTP_FETCH_MAX_RESUME_ATTEMPTS) {
             let _ = gate.begin_attempt();
@@ -2176,7 +2263,7 @@ mod tests {
 
     #[test]
     fn http_retry_gate_forgets_stalls_once_bytes_arrive() {
-        let mut gate = HttpRetryGate::new();
+        let mut gate = HttpRetryGate::new(HTTP_FETCH_TOTAL_BUDGET);
         let _ = gate.begin_attempt();
         assert!(gate.fail(0).is_some());
         let _ = gate.begin_attempt();
@@ -2196,7 +2283,7 @@ mod tests {
 
     #[test]
     fn http_retry_gate_respects_the_wall_clock_ceiling() {
-        let mut gate = HttpRetryGate::new();
+        let mut gate = HttpRetryGate::new(HTTP_FETCH_TOTAL_BUDGET);
         gate.started = Instant::now() - HTTP_FETCH_TOTAL_BUDGET;
         let _ = gate.begin_attempt();
         assert!(
@@ -3895,6 +3982,248 @@ mod tests {
             "request head: {head}"
         );
         assert_eq!(source.cache_start, target);
+    }
+
+    // Real sockets, with short private deadlines so timeout regressions do not
+    // add minutes to the test suite. A stalled response lasts until disconnect.
+    fn spawn_timeout_http_server(
+        responses: Vec<(Vec<u8>, bool)>,
+    ) -> (String, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let uri = format!("http://{}/media", listener.local_addr().unwrap());
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            for (raw, stall) in responses {
+                let deadline = Instant::now() + Duration::from_secs(3);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if Instant::now() >= deadline {
+                                return;
+                            }
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => panic!("accept timeout test connection: {error}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut head = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                        break;
+                    }
+                    head.push_str(&line);
+                }
+                let _ = sender.send(head);
+                if stream.write_all(&raw).is_err() {
+                    return;
+                }
+                if stall {
+                    // EOF/reset/abort all mean the client stopped the exchange.
+                    // The socket timeout also bounds cleanup on test failure.
+                    let _ = reader.read(&mut [0]);
+                }
+            }
+        });
+        (uri, receiver)
+    }
+
+    fn short_http_timeouts() -> HttpFetchTimeouts {
+        HttpFetchTimeouts {
+            response: Duration::from_millis(100),
+            body: Duration::from_millis(100),
+            total: Duration::from_secs(1),
+        }
+    }
+
+    fn assert_length_probe_shares_budget(head_status: &str) {
+        let (uri, requests) = spawn_timeout_http_server(vec![
+            (
+                http_simple_response("500 Internal Server Error", b""),
+                false,
+            ),
+            (http_simple_response(head_status, b""), false),
+            (Vec::new(), true),
+        ]);
+        let io = HttpIo::new();
+        let client = io.client.clone();
+        let timeouts = HttpFetchTimeouts {
+            response: Duration::from_millis(300),
+            total: Duration::from_millis(350),
+            ..short_http_timeouts()
+        };
+        let started = Instant::now();
+        let result = io
+            .run(async move {
+                // The first HEAD's retry backoff already uses 200 ms. The probe
+                // must use what remains, rather than starting a fresh deadline.
+                Ok(tokio::time::timeout(
+                    Duration::from_millis(450),
+                    fetch_http_length(&client, &uri, &[], Instant::now(), timeouts),
+                )
+                .await)
+            })
+            .unwrap()
+            .expect("fallback GET escaped the metadata budget");
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_millis(450));
+        assert!(recv_request_head(&requests).starts_with("head"));
+        assert!(recv_request_head(&requests).starts_with("head"));
+        let probe = recv_request_head(&requests);
+        assert!(probe.starts_with("get"));
+        assert!(probe.contains("range: bytes=0-0"));
+    }
+
+    #[test]
+    fn http_timeout_rejected_head_probe_shares_budget() {
+        assert_length_probe_shares_budget("405 Method Not Allowed");
+    }
+
+    #[test]
+    fn http_timeout_zero_length_head_probe_shares_budget() {
+        assert_length_probe_shares_budget("200 OK");
+    }
+
+    #[test]
+    fn http_timeout_head_retries_stalled_headers() {
+        let (uri, requests) = spawn_timeout_http_server(vec![
+            (Vec::new(), true),
+            (http_simple_response("200 OK", b"abcd"), false),
+        ]);
+        let io = HttpIo::new();
+        let client = io.client.clone();
+        let length = io
+            .run(async move {
+                fetch_http_length(&client, &uri, &[], Instant::now(), short_http_timeouts()).await
+            })
+            .unwrap();
+        assert_eq!(length, Some(4));
+        assert!(recv_request_head(&requests).starts_with("head"));
+        assert!(recv_request_head(&requests).starts_with("head"));
+    }
+
+    #[test]
+    fn http_timeout_range_retries_stalled_headers() {
+        let (uri, requests) = spawn_timeout_http_server(vec![
+            (Vec::new(), true),
+            (http_206_response(0, 4, b"abcd"), false),
+        ]);
+        let io = HttpIo::new();
+        let client = io.client.clone();
+        let response = io
+            .run(async move {
+                fetch_http_range_async(
+                    &client,
+                    &uri,
+                    &[],
+                    ByteRange {
+                        start: 0,
+                        length: Some(4),
+                    },
+                    "test_range",
+                    short_http_timeouts(),
+                )
+                .await
+            })
+            .unwrap();
+        assert_eq!(response.bytes, b"abcd");
+        assert!(recv_request_head(&requests).contains("range: bytes=0-3"));
+        assert!(recv_request_head(&requests).contains("range: bytes=0-3"));
+    }
+
+    #[test]
+    fn http_timeout_range_resumes_stalled_body() {
+        let partial = b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-3/4\r\nContent-Length: 4\r\nETag: \"v1\"\r\nConnection: close\r\n\r\nab";
+        let (uri, requests) = spawn_timeout_http_server(vec![
+            (partial.to_vec(), true),
+            (http_206_response(2, 4, b"cd"), false),
+        ]);
+        let io = HttpIo::new();
+        let client = io.client.clone();
+        let response = io
+            .run(async move {
+                fetch_http_range_async(
+                    &client,
+                    &uri,
+                    &[],
+                    ByteRange {
+                        start: 0,
+                        length: Some(4),
+                    },
+                    "test_range",
+                    short_http_timeouts(),
+                )
+                .await
+            })
+            .unwrap();
+        assert_eq!(response.bytes, b"abcd");
+        assert!(recv_request_head(&requests).contains("range: bytes=0-3"));
+        let resumed = recv_request_head(&requests);
+        assert!(resumed.contains("range: bytes=2-3"));
+        assert!(resumed.contains("if-range: \"v1\""));
+    }
+
+    #[test]
+    fn http_timeout_progressing_body_keeps_reading_until_total_budget() {
+        for total in [Duration::from_secs(1), Duration::from_millis(180)] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let uri = format!("http://{}/media", listener.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut reader = BufReader::new(socket.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                socket.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-7/8\r\nContent-Length: 8\r\nConnection: close\r\n\r\n").unwrap();
+                for byte in b"abcdefgh" {
+                    if socket.write_all(&[*byte]).is_err() {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(40));
+                }
+            });
+            let io = HttpIo::new();
+            let client = io.client.clone();
+            let started = Instant::now();
+            let result = io.run(async move {
+                fetch_http_range_async(
+                    &client,
+                    &uri,
+                    &[],
+                    ByteRange {
+                        start: 0,
+                        length: Some(8),
+                    },
+                    "test_range",
+                    HttpFetchTimeouts {
+                        total,
+                        ..short_http_timeouts()
+                    },
+                )
+                .await
+            });
+            if total == Duration::from_secs(1) {
+                // A healthy body can outlive the 100 ms header/idle deadlines.
+                assert_eq!(result.unwrap().bytes, b"abcdefgh");
+            } else {
+                assert!(result.is_err());
+                assert!(started.elapsed() < Duration::from_millis(300));
+            }
+            server.join().unwrap();
+        }
     }
 
     #[test]

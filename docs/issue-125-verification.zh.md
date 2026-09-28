@@ -21,6 +21,9 @@
 - 前台 Range 请求和持久预读统一通过共享 reqwest/Tokio I/O runtime 执行。每个媒体源有
   带代次的取消令牌；取消会丢弃请求 future，打断 connect、TLS、响应头和响应体等待。
   已进入系统阻塞解析器的 DNS 工作可能独立完成，不应宣称它也已同步退出。
+- 前台请求的响应头等待上限为 15 秒，body 连续无数据等待上限为 60 秒。
+  每次请求还受整个 fetch 剩余预算约束；重试、退避及 HEAD 回退 GET 合计不超过
+  120 秒。回退 GET 使用剩余预算与响应头上限中的较小值。
 - 持久流仍保留现有的单连接、条带交接和窗口背压设计。每个流 session 保存 worker
   `JoinHandle`；session 的 `Drop` 统一取消 I/O、唤醒并等待 worker 退出。
   worker 的每个退出路径都通知等待预读的前台线程，避免 socket 已关闭但消费者仍在等待。
@@ -62,6 +65,19 @@ Player stop、open 替换旧会话、close 分别为 0.01、3.38、0.23 ms。
 额外回归 `cancellation_wakes_a_reader_waiting_for_prefetch` 在上一版 `9c8300c` 上
 500 ms 内无法收到取消结果，实际失败；补齐退出通知并让条件检查与等待共用锁后通过。
 
+### 超时与重试
+
+6 项真实 TCP 测试使用私有短超时参数验证与生产相同的执行路径：
+
+- HEAD 返回 405 或零长度后，回退 GET 继承 HEAD 重试已消耗的总预算；
+- 首次 HEAD 或 GET 卡住时触发单次响应超时，并实际发出第二次请求取得结果；
+- body 部分到达后卡住时，释放旧连接，从已收到的偏移续传，并携带 `If-Range`；
+- 持续到达的 body 可以超过响应头等待期限；即使持续有数据也不能超出总预算。
+
+前五项在保留原超时逻辑、仅注入短测试预算时全部失败，修复后六项全部通过。
+生命周期测试将 EOF、`ConnectionReset` 和 `ConnectionAborted` 都视为有效断连，
+覆盖 Windows 可能返回的中止类型；本轮执行环境为 macOS，Windows 尚待复验。
+
 ### 内存
 
 macOS 单进程实验使用仓库 MKV、软件解码和 64 KiB HTTP 窗口，执行 12 轮
@@ -88,7 +104,7 @@ cargo test -p erika --test media_lifecycle -- --nocapture --test-threads=1
 cargo test -p erika --test media_lifecycle memory_probe -- --ignored --nocapture --test-threads=1
 ```
 
-当前结果：Erika 675 项库测试、C API 41 项测试全部通过；生命周期集成测试 4 项通过、
+当前结果：Erika 681 项库测试、C API 41 项测试全部通过；生命周期集成测试 4 项通过、
 1 项手动内存实验通过。
 
 ## 边界

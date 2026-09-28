@@ -24,7 +24,14 @@ fn read_head(stream: &TcpStream) -> String {
             Ok(0) => break,
             Ok(_) if line == "\r\n" => break,
             Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => break,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                ) =>
+            {
+                break;
+            }
             Err(error) => panic!("read HTTP request: {error}"),
         }
         head.push_str(&line);
@@ -43,7 +50,11 @@ fn assert_peer_closed(stream: &mut TcpStream) {
     let mut byte = [0];
     match stream.read(&mut byte) {
         Ok(0) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+            ) => {}
         result => panic!("cancelled HTTP connection stayed open: {result:?}"),
     }
 }
