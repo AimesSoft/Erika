@@ -1408,6 +1408,25 @@ impl PresenterRuntime {
     }
 
     pub fn render_tick(&mut self, time_seconds: f64) -> Result<PresenterStats> {
+        self.render_tick_with_presentation_time(time_seconds, None)
+    }
+
+    /// Render using the display's target instant, independent of queue/pump
+    /// latency. This only samples the shared playback clock; it never advances
+    /// or re-anchors that clock, including while paused or after a seek.
+    pub fn render_tick_at(
+        &mut self,
+        time_seconds: f64,
+        presentation_time: Instant,
+    ) -> Result<PresenterStats> {
+        self.render_tick_with_presentation_time(time_seconds, Some(presentation_time))
+    }
+
+    fn render_tick_with_presentation_time(
+        &mut self,
+        time_seconds: f64,
+        presentation_time: Option<Instant>,
+    ) -> Result<PresenterStats> {
         if self.audio_only_tick_active {
             if self.resume_pending {
                 self.try_resume_video_decode();
@@ -1455,7 +1474,7 @@ impl PresenterRuntime {
         self.last_audio_pump_duration = audio_started.elapsed();
 
         let sync_started = Instant::now();
-        let _snapshot = self.sync_media_time_from_player();
+        let _snapshot = self.sync_media_time_from_player_at(presentation_time);
         self.last_clock_sync_duration = sync_started.elapsed();
 
         let plan_started = Instant::now();
@@ -2325,11 +2344,27 @@ impl PresenterRuntime {
     }
 
     fn sync_media_time_from_player(&mut self) -> PlaybackSnapshot {
+        self.sync_media_time_from_player_at(None)
+    }
+
+    fn sync_media_time_from_player_at(
+        &mut self,
+        presentation_time: Option<Instant>,
+    ) -> PlaybackSnapshot {
         // One lock for time + generation + state. Danmaku, subtitles and the
         // render context all derive from this single sample, so a frame can
         // never mix a stale media time with a newer play state.
         let snapshot = self.player.playback_snapshot();
-        let player_time = snapshot.media_time();
+        self.apply_playback_snapshot(&snapshot, presentation_time);
+        snapshot
+    }
+
+    fn apply_playback_snapshot(
+        &mut self,
+        snapshot: &PlaybackSnapshot,
+        presentation_time: Option<Instant>,
+    ) {
+        let player_time = snapshot.media_time_at(presentation_time.unwrap_or_else(Instant::now));
         self.current_generation = self
             .current_generation
             .max(snapshot.generation)
@@ -2372,7 +2407,6 @@ impl PresenterRuntime {
             None,
             0,
         );
-        snapshot
     }
 
     fn refresh_current_overlay(&mut self) {
@@ -4088,6 +4122,71 @@ fn append_text_subtitles_debug(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "ios")]
+    #[test]
+    fn ios_display_target_samples_one_clock_for_visuals_and_preserves_commands() {
+        use crate::core::PlayerState;
+        use crate::playback::PlaybackClock;
+
+        let mut presenter = PresenterRuntime::new(PresenterConfig::default()).unwrap();
+        let origin = Instant::now();
+        let mut snapshot = PlaybackSnapshot {
+            clock: PlaybackClock::running_at(Duration::from_secs(10), origin),
+            generation: 2,
+            state: PlayerState::Playing,
+        };
+        presenter.current_overlay = Some(OverlayFrame {
+            pts: Duration::ZERO,
+            viewport: OverlayViewport::new(640, 360),
+            subtitle_planes: vec![],
+            subtitle_alpha_planes: vec![],
+            subtitle_changed: false,
+        });
+        // Replaying the same display target after other work must not move it.
+        for hz in [60.0, 120.0] {
+            for frame in 1..=6 {
+                let elapsed = Duration::from_secs_f64(frame as f64 / hz);
+                let target = origin + elapsed;
+                presenter.apply_playback_snapshot(&snapshot, Some(target));
+                assert_eq!(
+                    presenter.current_media_time,
+                    Duration::from_secs(10) + elapsed
+                );
+                let before = presenter.current_media_time;
+                presenter.apply_playback_snapshot(&snapshot, Some(target));
+                assert_eq!(presenter.current_media_time, before);
+                assert_eq!(presenter.current_overlay.as_ref().unwrap().pts, before);
+                assert_eq!(presenter.current_generation, 2);
+            }
+        }
+        // Pause and both long and short seeks retain the authoritative epoch.
+        snapshot.clock.pause(origin + Duration::from_millis(100));
+        snapshot.state = PlayerState::Paused;
+        for (generation, position_ms) in [(3, 20000), (4, 8000), (5, 8100), (6, 8000)] {
+            snapshot
+                .clock
+                .seek(Duration::from_millis(position_ms), origin);
+            snapshot.generation = generation;
+            presenter.apply_playback_snapshot(&snapshot, Some(origin + Duration::from_secs(2)));
+            assert_eq!(
+                presenter.current_media_time,
+                Duration::from_millis(position_ms)
+            );
+            assert_eq!(presenter.current_generation, generation);
+        }
+        for rate in [0.5, 1.0, 2.0] {
+            snapshot.clock = PlaybackClock::running_at(Duration::from_secs(8), origin);
+            snapshot.clock.set_rate(rate, origin);
+            snapshot.state = PlayerState::Playing;
+            presenter.apply_playback_snapshot(&snapshot, Some(origin + Duration::from_secs(1)));
+            assert_eq!(
+                presenter.current_media_time,
+                Duration::from_secs_f64(8.0 + rate)
+            );
+            assert_eq!(snapshot.clock.media_time_at(origin), Duration::from_secs(8));
+        }
+    }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct CapturedComposition {

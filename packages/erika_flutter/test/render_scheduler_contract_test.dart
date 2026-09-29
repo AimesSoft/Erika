@@ -121,7 +121,7 @@ void main() {
   });
 
   for (final entry in <(String, String)>[
-    ('ios', 'scheduleTick()'),
+    ('ios', 'scheduleTick(presentationTime: targetTimestamp)'),
     ('tvos', 'scheduleRenderTick()'),
   ]) {
     final platform = entry.$1;
@@ -143,7 +143,9 @@ void main() {
       expect(plugin, contains('Timer(timeInterval: 0.05'));
       expect(plugin, isNot(contains('self?.renderTick(sendEvent:')));
 
-      final renderStart = plugin.indexOf('  func renderTick() {');
+      final renderStart = plugin.indexOf(platform == 'ios'
+          ? '  func renderTick(presentationTime:'
+          : '  func renderTick() {');
       final pollStart = plugin.indexOf('  func pollEvents(', renderStart);
       expect(renderStart, greaterThanOrEqualTo(0));
       expect(pollStart, greaterThan(renderStart));

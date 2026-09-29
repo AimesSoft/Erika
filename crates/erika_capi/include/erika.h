@@ -816,6 +816,19 @@ ErikaStatus erika_presenter_render_tick(
     ErikaPresenterHandle *handle,
     double time_seconds,
     ErikaPresenterStats *out_stats);
+/* Optional display-target sampling. A non-NULL presentation_delay_seconds
+ * points to the signed seconds from call entry to the display target (e.g.
+ * CADisplayLink.targetTimestamp - CACurrentMediaTime()). It must be finite and
+ * within +/-0.25 seconds. The value is copied before native work; no pointer is
+ * retained. Danmaku, subtitles and render context sample the same playback
+ * snapshot at that target without changing the playback clock. NULL preserves
+ * render_tick's legacy sampling. Older native binaries may lack this symbol;
+ * embedders should resolve it optionally and fall back to render_tick. */
+ErikaStatus erika_presenter_render_tick_with_timing(
+    ErikaPresenterHandle *handle,
+    double time_seconds,
+    const double *presentation_delay_seconds,
+    ErikaPresenterStats *out_stats);
 ErikaStatus erika_presenter_audio_only_tick(
     ErikaPresenterHandle *handle,
     ErikaPresenterStats *out_stats);

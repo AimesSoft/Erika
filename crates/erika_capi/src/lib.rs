@@ -3795,8 +3795,51 @@ pub unsafe extern "C" fn erika_presenter_render_tick(
     time_seconds: f64,
     out_stats: *mut ErikaPresenterStats,
 ) -> ErikaStatus {
+    unsafe {
+        erika_presenter_render_tick_with_timing(handle, time_seconds, std::ptr::null(), out_stats)
+    }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    any(target_os = "ios", target_os = "tvos"),
+    target_os = "windows",
+    target_os = "android",
+    target_env = "ohos"
+))]
+#[unsafe(no_mangle)]
+// The legacy entry point calls this symbol even without a target. Keep that
+// reference through LTO so Apple static linking retains the optional dlsym API.
+#[inline(never)]
+pub unsafe extern "C" fn erika_presenter_render_tick_with_timing(
+    handle: *mut ErikaPresenterHandle,
+    time_seconds: f64,
+    presentation_delay_seconds: *const f64,
+    out_stats: *mut ErikaPresenterStats,
+) -> ErikaStatus {
+    // Translate the caller's relative monotonic target before taking any
+    // presenter lock or pumping audio/video, so work duration cannot move it.
+    let presentation_time = if presentation_delay_seconds.is_null() {
+        None
+    } else {
+        let delay = unsafe { *presentation_delay_seconds };
+        if !delay.is_finite() || delay.abs() > 0.25 {
+            return player_error("presentation delay must be finite and within +/-0.25 seconds");
+        }
+        let now = std::time::Instant::now();
+        let delta = std::time::Duration::from_secs_f64(delay.abs());
+        if delay >= 0.0 {
+            now.checked_add(delta)
+        } else {
+            now.checked_sub(delta)
+        }
+    };
     with_presenter_mut(handle, |handle| {
-        match handle.presenter.render_tick(time_seconds) {
+        let result = match presentation_time {
+            Some(target) => handle.presenter.render_tick_at(time_seconds, target),
+            None => handle.presenter.render_tick(time_seconds),
+        };
+        match result {
             Ok(_stats) => {
                 if !out_stats.is_null() {
                     let snapshot = handle.presenter.runtime_snapshot();
