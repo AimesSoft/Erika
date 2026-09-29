@@ -22,7 +22,7 @@ Erika は独立した 2 つのエントリーポイントを公開します。�
 | `ErikaPresenterHandle` | **プッシュ** | Erika | native surface を Erika に渡し、表示フレームごとに `render_tick` を 1 回呼ぶ。Erika が decode・timing・audio・overlay・presentation を所有する。 |
 
 `ErikaPresenterHandle` が推奨パスで、Flutter plugin と native demo もこれを使います。
-コンパイルされるのは **macOS / iOS / tvOS / Windows / Android / HarmonyOS**。surface attach は
+コンパイルされるのは **macOS / iOS / tvOS / Windows / Android / Linux / HarmonyOS**。surface attach は
 platform ごとに異なり、Apple は Metal、Windows は HWND/D3D11、Android/HarmonyOS は
 wgpu/Vulkan surface を使います。HarmonyOS Flutter bridge は ArkTS platform channel が
 構造化値を serialize して渡すため、presenter の JSON helper を使います。未対応 target では
@@ -31,6 +31,16 @@ create 成功の両方を確認してください。
 
 2 つのファミリーは状態を共有しません。1 プロセスで両方使えますが、1 つのメディア
 セッションは正確に 1 つの handle に属します。
+
+### Linux Flutter のフレーム読み戻し
+
+Linux は wgpu で X11/Wayland に対応します。`erika_presenter_render_tick` の後に
+`erika_presenter_copy_flutter_frame_rgba` を呼ぶと、字幕・弾幕・HUD を含む最新の合成
+フレームを取得して消費します。呼び出し側が幅 × 高さ × 4 バイト以上のメモリを確保し、
+成功時に密に並んだ RGBA8 と物理サイズを受け取ります。free 関数は不要です。
+未生成なら `ErikaStatus_NoEvent`、容量不足ならエラーを返します。容量不足でもフレーム
+は消費されるため、次の tick を待って再試行します。同じ presenter の操作は直列化して
+ください。この経路は CPU メモリをコピーし、ゼロコピーではありません。
 
 ## 規約
 

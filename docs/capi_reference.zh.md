@@ -20,13 +20,23 @@ Erika 暴露两个相互独立的入口，每个集成选其一。
 | `ErikaPresenterHandle` | **推送（Push）** | Erika | 你把一个原生 surface 交给 Erika，每个显示帧调一次 `render_tick`。Erika 负责解码、时序、音频、overlay 和呈现。 |
 
 `ErikaPresenterHandle` 是推荐路径，也是 Flutter 插件和原生 demo 所用的。它在
-**macOS、iOS、tvOS、Windows、Android、HarmonyOS** 上编译。surface attach 按平台不同：
+**macOS、iOS、tvOS、Windows、Android、Linux、HarmonyOS** 上编译。surface attach 按平台不同：
 Apple 使用 Metal，Windows 使用 HWND/D3D11，Android/HarmonyOS 使用 wgpu/Vulkan surface。
+Linux 通过 wgpu 支持 X11/Wayland。
 HarmonyOS Flutter bridge 因 ArkTS 平台通道本身传递序列化结构化值，使用 presenter 的 JSON
 辅助入口。其它不支持的平台上 `erika_presenter_create` 可能仍导出但返回 `NULL`；请同时按平台
 守卫 presenter 用法，并检查 create 是否成功。
 
 两个族不共享状态；一个进程可同时使用两者，但单个媒体会话只活在一个 handle 里。
+
+### Linux Flutter 纹理读回
+
+每次 `erika_presenter_render_tick` 后调用 `erika_presenter_copy_flutter_frame_rgba`
+可取走最近的合成帧，包含视频、字幕、弹幕和 HUD。调用方持有输出内存，容量至少为
+纹理宽 × 高 × 4 字节；成功时写入紧密 RGBA8 像素与物理尺寸。不返回引擎内存，
+无需调用 free。没有待取帧时返回 `ErikaStatus_NoEvent`；容量不足时返回错误，
+该帧仍会被消费，应等待下一次 tick 后重试。与同一 presenter 的其它操作串行调用。
+此接口经 CPU 内存复制，不提供零拷贝。
 
 ## Headless GIF 导出
 

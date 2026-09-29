@@ -3923,6 +3923,7 @@ pub unsafe extern "C" fn erika_presenter_render_tick(
     any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
+    target_os = "linux",
     target_env = "ohos"
 ))]
 #[unsafe(no_mangle)]

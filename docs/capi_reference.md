@@ -23,8 +23,9 @@ Erika exposes two independent entry points. Pick one per integration.
 
 `ErikaPresenterHandle` is the recommended path and what the Flutter plugin and
 the native demos use. It is compiled on **macOS, iOS, tvOS, Windows, Android,
-and HarmonyOS**. Surface attachment is platform-specific: Apple uses Metal,
-Windows uses HWND/D3D11, and Android/HarmonyOS use wgpu/Vulkan surfaces. The
+Linux, and HarmonyOS**. Surface attachment is platform-specific: Apple uses Metal,
+Windows uses HWND/D3D11, Android/HarmonyOS use wgpu/Vulkan surfaces, and Linux
+supports X11/Wayland with wgpu. The
 HarmonyOS Flutter bridge uses the JSON presenter helpers because ArkTS platform
 channels already exchange structured serialized values. On unsupported targets
 `erika_presenter_create` may be exported but returns `NULL`; guard presenter
@@ -32,6 +33,20 @@ usage by platform and by a successful create call.
 
 The two families do not share state; a process may use both, but a given media
 session lives in exactly one handle.
+
+### Linux Flutter frame readback
+
+After `erika_presenter_render_tick`, the Linux texture bridge calls
+`erika_presenter_copy_flutter_frame_rgba(handle, pixels, capacity, &width, &height)`
+to consume the latest composited frame, including subtitles, danmaku and the
+debug HUD. `pixels` is caller-owned memory, `capacity` is its size in bytes,
+and success writes tightly packed RGBA8 pixels and physical dimensions.
+Allocate at least the configured texture width × height × 4 bytes. The call
+returns `ErikaStatus_NoEvent` when no frame is pending. An undersized buffer
+returns an error and consumes that pending frame; wait for the next render tick
+before retrying. No engine-owned pointer escapes, and no free helper is needed.
+Serialize calls with other operations on the presenter. This path copies pixels
+through CPU memory; it does not provide DMA-BUF or other zero-copy import.
 
 ## Headless GIF export
 
