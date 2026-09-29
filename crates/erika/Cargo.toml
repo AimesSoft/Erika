@@ -37,6 +37,7 @@ bytemuck = { version = "1.25.0", features = ["derive"], optional = true }
 
 [build-dependencies]
 cc.workspace = true
+pkg-config.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 coreaudio-rs.workspace = true

@@ -7,6 +7,8 @@ pub mod danmaku;
 pub mod debug_hud;
 pub mod export;
 pub mod ffmpeg;
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+pub mod linux;
 pub(crate) mod luma_stats;
 #[cfg(target_env = "ohos")]
 pub mod ohos;

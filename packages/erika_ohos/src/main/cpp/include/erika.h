@@ -12,7 +12,7 @@
  *   - ErikaPresenterHandle: push model. Erika owns decode/timing/audio/render;
  *                           the host gives it a surface and calls render_tick.
  *                           Compiled on macOS / iOS / Windows / Android /
- *                           OpenHarmony; on other targets
+ *                           OpenHarmony / Linux; on other targets
  *                           erika_presenter_create returns NULL.
  *
  * Conventions:
@@ -759,6 +759,13 @@ ErikaStatus erika_presenter_set_flutter_texture_buffer(
     uint32_t width,
     uint32_t height);
 
+/* Linux: XlibWindow takes the X11 Window ID in raw_window and Display* in
+ * raw_display (screen 0). WaylandSurface takes wl_surface* and wl_display*.
+ * Cast pointers through uintptr_t to uint64_t. Both handles must be non-null
+ * and remain valid until detach_surface or presenter destruction completes.
+ * Attach, resize, render and detach on the host window's event-loop thread.
+ * Linux output is SDR. For Flutter use LinuxTextureRegistrar and copy the
+ * composited frame with erika_presenter_copy_flutter_frame_rgba after ticking. */
 ErikaStatus erika_presenter_attach_wgpu_surface(
     ErikaPresenterHandle *handle,
     ErikaWgpuSurfaceKind kind,
@@ -859,6 +866,13 @@ ErikaStatus erika_presenter_capture_frame_rgba(
     uint32_t height,
     uint8_t *out_rgba,
     uintptr_t out_capacity);
+
+/* Consume the latest Linux Flutter texture frame after render_tick. Includes
+ * video, subtitles, danmaku and HUD. Returns NoEvent when no frame is ready.
+ * The caller allocates at least surface_width*surface_height*4 bytes. */
+ErikaStatus erika_presenter_copy_flutter_frame_rgba(
+    ErikaPresenterHandle *handle, uint8_t *out_rgba, uintptr_t capacity,
+    uint32_t *out_width, uint32_t *out_height);
 
 #ifdef __cplusplus
 }

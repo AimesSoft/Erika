@@ -1,0 +1,46 @@
+name: Linux native
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    container: ubuntu:26.04
+    timeout-minutes: 45
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      LIBGL_ALWAYS_SOFTWARE: "1"
+    steps:
+      - name: Install FFmpeg 8 and native build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git curl build-essential pkg-config clang libclang-dev \
+            rustc cargo rustfmt python3 meson ninja-build patch xz-utils \
+            libavdevice-dev libavfilter-dev libavformat-dev libavcodec-dev \
+            libswresample-dev libswscale-dev libavutil-dev \
+            libfreetype-dev libharfbuzz-dev libfribidi-dev libfontconfig-dev \
+            libpulse-dev libx11-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libvulkan-dev mesa-vulkan-drivers libegl1 libgl1-mesa-dri \
+            fonts-dejavu-core pulseaudio pulseaudio-utils xvfb xauth
+      - uses: actions/checkout@v4
+      - name: Test as an unprivileged desktop user
+        shell: bash
+        run: |
+          useradd --create-home erika-ci
+          chown -R erika-ci:erika-ci "$GITHUB_WORKSPACE"
+          runuser -u erika-ci -- bash -c '
+            export XDG_RUNTIME_DIR="$(mktemp -d)"
+            pulseaudio --start --exit-idle-time=-1
+            pactl load-module module-null-sink sink_name=erika_ci
+            trap "pulseaudio --kill" EXIT
+            xvfb-run -a bash scripts/check_linux.sh
+          '

@@ -606,6 +606,9 @@ fn handle_demux_command(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoDecodePreference {
     Software,
+    LinuxAuto,
+    Cuda,
+    Vaapi,
     VideoToolbox,
     D3d11va,
     MediaCodec,
@@ -617,6 +620,8 @@ impl VideoDecodePreference {
     fn decoder_config(self) -> DecoderConfig {
         match self {
             Self::Software => DecoderConfig::software(),
+            Self::LinuxAuto | Self::Cuda => DecoderConfig::cuda(),
+            Self::Vaapi => DecoderConfig::vaapi(),
             Self::VideoToolbox => DecoderConfig::videotoolbox(),
             Self::D3d11va => DecoderConfig::d3d11va(),
             Self::MediaCodec => DecoderConfig::mediacodec(),
@@ -659,12 +664,34 @@ impl Default for VideoDecodePreference {
     any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
     target_os = "android",
+    target_os = "linux",
     target_env = "ohos"
 )))]
 impl Default for VideoDecodePreference {
     fn default() -> Self {
         Self::Software
     }
+}
+
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+impl Default for VideoDecodePreference {
+    fn default() -> Self {
+        match std::env::var("ERIKA_HWDEC")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "cuda" | "nvdec" => Self::Cuda,
+            "vaapi" => Self::Vaapi,
+            "software" | "none" => Self::Software,
+            _ => Self::LinuxAuto,
+        }
+    }
+}
+
+fn require_hardware_decode() -> bool {
+    cfg!(all(target_os = "linux", not(target_env = "ohos")))
+        && std::env::var("ERIKA_REQUIRE_HARDWARE_DECODE").is_ok_and(|value| value == "1")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -815,6 +842,40 @@ struct BufferingAudioVideoScan {
     baseline_media_time: Option<Duration>,
 }
 
+fn open_preferred_video_decoder(
+    parameters: &OwnedCodecParameters,
+    preference: VideoDecodePreference,
+    config: DecoderConfig,
+    resources: &PlaybackDecoderResources,
+) -> ffmpeg::Result<Decoder> {
+    if config.backend == DecoderBackend::Software && require_hardware_decode() {
+        return Err(ffmpeg::FfmpegError::Source(
+            "hardware decoding is required; software decoder disabled".into(),
+        ));
+    }
+    if preference == VideoDecodePreference::LinuxAuto && config.backend != DecoderBackend::Software
+    {
+        let mut last_error = None;
+        for candidate in [DecoderConfig::cuda(), DecoderConfig::vaapi()] {
+            match open_video_decoder(parameters, candidate, resources) {
+                Ok(decoder) => return Ok(decoder),
+                Err(error) => {
+                    trace::diagnostic(
+                        serde_json::json!({
+                            "event": "linux_hardware_decoder", "stage": "device_unavailable",
+                            "backend": candidate.backend.as_str(), "reason": error.to_string(),
+                        })
+                        .to_string(),
+                    );
+                    last_error = Some(error);
+                }
+            }
+        }
+        return Err(last_error.expect("hardware candidate list is nonempty"));
+    }
+    open_video_decoder(parameters, config, resources)
+}
+
 fn open_video_decoder(
     parameters: &OwnedCodecParameters,
     config: DecoderConfig,
@@ -949,7 +1010,12 @@ impl PlaybackSession {
             let (decoder_config, decode_fallback_reason) =
                 dolby_vision_decode_fallback(dolby_vision_profile, requested_config);
             video_decoder = Some(
-                match open_video_decoder(parameters, decoder_config, &decoder_resources) {
+                match open_preferred_video_decoder(
+                    parameters,
+                    config.video_decode,
+                    decoder_config,
+                    &decoder_resources,
+                ) {
                     Ok(decoder) => {
                         let event = VideoDecoderEvent {
                             stage: video_decoder_open_stage(decoder_config).to_string(),
@@ -1458,6 +1524,8 @@ impl PlaybackSession {
                 Some(
                     DecoderBackend::VideoToolbox
                         | DecoderBackend::D3d11va
+                        | DecoderBackend::Cuda
+                        | DecoderBackend::Vaapi
                         | DecoderBackend::AvCodec
                 )
             )
@@ -2989,6 +3057,11 @@ impl PlaybackSession {
         reason: String,
         import_failure: Option<&VideoFrameImportFailure>,
     ) -> Result<()> {
+        if require_hardware_decode() {
+            return Err(PlaybackError::VideoDecoderUnavailable {
+                reason: format!("hardware decoding is required; {stage}: {reason}"),
+            });
+        }
         let stream_index = self.active_or_selected_video_stream_index()?;
         let codec = codec_parameters_for(&self.codec_parameters, stream_index)?.codec_name();
         let previous_backend = self
@@ -6068,7 +6141,7 @@ fn sanitize_playback_rate(rate: f64) -> f64 {
 // A hardware preference must not make software-only codecs unplayable. This
 // policy also covers delayed hardware initialization and renderer import errors.
 fn should_fallback_video_decoder_error(backend: DecoderBackend) -> bool {
-    backend != DecoderBackend::Software
+    backend != DecoderBackend::Software && !require_hardware_decode()
 }
 
 /// VideoToolbox and D3D11VA hardware decoders retain the Dolby Vision RPU
@@ -6370,6 +6443,27 @@ mod tests {
                 "timed out waiting for a fixture video frame"
             );
             thread::yield_now();
+        }
+    }
+
+    fn wait_for_buffering_video_to_park(engine: &mut VideoPlaybackEngine, mut now: Instant) {
+        // Advancing a synthetic clock does not advance the asynchronous demux
+        // worker. Wait for actual decode progress before checking the bound.
+        let deadline = Instant::now() + FIXTURE_WAIT_TIMEOUT;
+        loop {
+            now += BUFFERING_VIDEO_DRAIN_INTERVAL;
+            assert!(engine.tick_at(now).unwrap().is_none());
+            assert!(engine.buffering_video_drained_frames <= BUFFERING_VIDEO_MAX_DRAINED_FRAMES);
+            if engine.pending_frame.is_some() {
+                // A buffering tick parks a frame only when the recovery bound
+                // prevents it from being discarded.
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for bounded video recovery"
+            );
+            thread::sleep(Duration::from_millis(1));
         }
     }
 
@@ -8028,11 +8122,7 @@ mod tests {
         assert_eq!(engine.buffering_video_pts(), visible_buffering_pts);
         assert_eq!(engine.last_buffering_video_drain_at, Some(next_drain));
 
-        for index in 2..=200 {
-            let _ = engine
-                .tick_at(stalled_at + BUFFERING_VIDEO_DRAIN_INTERVAL * index)
-                .unwrap();
-        }
+        wait_for_buffering_video_to_park(&mut engine, next_drain);
         let parked = engine
             .pending_frame
             .as_ref()
@@ -8083,11 +8173,7 @@ mod tests {
         );
         assert!(!engine.session.demux_eof);
 
-        for index in 1..=200 {
-            let _ = engine
-                .tick_at(stalled_at + BUFFERING_VIDEO_DRAIN_INTERVAL * index)
-                .unwrap();
-        }
+        wait_for_buffering_video_to_park(&mut engine, stalled_at);
 
         assert!(engine.pending_frame.is_some());
         assert!(engine.buffering_video_drained_frames <= BUFFERING_VIDEO_MAX_DRAINED_FRAMES);

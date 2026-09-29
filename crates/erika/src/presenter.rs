@@ -22,6 +22,7 @@ use crate::apple::iosaudio::{IosAudioQueueOutput, IosAudioQueueOutputConfig};
     target_os = "macos",
     any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
+    target_os = "linux",
     target_env = "ohos"
 )))]
 use crate::audio::BufferedAudioOutput;
@@ -42,6 +43,8 @@ use crate::danmaku::{
 };
 use crate::debug_hud::{DebugHud, DebugHudSnapshot};
 use crate::ffmpeg::DecoderBackend;
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+use crate::linux::PulseAudioOutput;
 use crate::luma_stats::LumaSmoother;
 #[cfg(target_env = "ohos")]
 use crate::ohos::ohaudio::{OHAudioOutput, OHAudioOutputConfig};
@@ -1385,6 +1388,9 @@ impl PresenterRuntime {
     }
 
     pub fn select_subtitle_track(&mut self, track_id: Option<i64>) -> Result<()> {
+        if !self.player.tracks().is_empty() && self.player.track_selection().subtitle == track_id {
+            return Ok(());
+        }
         let quiesced = self.quiesce_frame_output("select_subtitle_track")?;
         let result = self.player.select_subtitle_track(track_id);
         let rate_result = self.commit_pending_playback_rate_now();
@@ -1395,7 +1401,10 @@ impl PresenterRuntime {
             TransitionFramePolicy::PreserveTrackSwitchFrame,
         );
         let transition =
-            self.finish_frame_output_transition("select_subtitle_track", quiesced, true);
+            // Selecting a track can emit its current cue while output is
+            // quiesced. Keep that cue; stale audio/subtitle generations are
+            // filtered by their normal pumps after the barrier.
+            self.finish_frame_output_transition("select_subtitle_track", quiesced, false);
         result.and(rate_result).and(transition)
     }
 
@@ -1880,6 +1889,10 @@ impl PresenterRuntime {
         self.renderer
             .capture_current_frame(context, width, height)
             .map(|capture| capture.map(|capture| capture.rgba))
+    }
+
+    pub fn take_flutter_frame(&mut self) -> Option<crate::core::RendererFrameCapture> {
+        self.renderer.take_flutter_frame()
     }
 
     /// Selects the external Flutter texture written by the next render tick.
@@ -3646,6 +3659,10 @@ fn resolve_presenter_player_config(
 }
 
 fn build_audio_output(config: PresenterAudioConfig) -> Box<dyn AudioOutputBackend> {
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    {
+        Box::new(PulseAudioOutput::new(config.ring_buffer))
+    }
     #[cfg(target_os = "macos")]
     {
         Box::new(CoreAudioOutput::new(CoreAudioOutputConfig {
@@ -3682,6 +3699,7 @@ fn build_audio_output(config: PresenterAudioConfig) -> Box<dyn AudioOutputBacken
         target_os = "macos",
         any(target_os = "ios", target_os = "tvos"),
         target_os = "windows",
+        target_os = "linux",
         target_env = "ohos"
     )))]
     {

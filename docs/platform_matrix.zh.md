@@ -10,7 +10,7 @@
 | Windows x64/ARM64 | D3D11VA + D3D11 | 是 | CI 与预编译包 | 持续维护；HDR10 受显示器、驱动和系统设置影响 |
 | Android | MediaCodec/软解 + wgpu | 是 | CI 与预编译包 | SDR 已验证；API 35 HDR active path 仍需真机验收 |
 | HarmonyOS | AVCodec/软解 + wgpu Vulkan | 是 | 预编译包；CI 覆盖需以 workflow 为准 | 已有真机验证，尚未纳入完整 CI 验收 |
-| Linux | 规划中的 wgpu 路径 | 不作为发布承诺 | 无正式预编译发布 | 未验收 |
+| Linux | NVDEC/VA-API/软解 + wgpu X11/Wayland/Flutter SDR | 是（实验性） | 已添加 Linux native workflow；无预编译发布 | x86_64 WSLg：llvmpipe 与 RTX 5070/Mesa D3D12 验证；独立桌面与 ARM64 待验收 |
 
 ## surface 与嵌入选择
 
@@ -18,6 +18,7 @@
 - Windows：使用 HWND/D3D11 attach，调用方负责窗口生命周期与 display tick。
 - Android：SDR 使用 TextureView；extended-linear 输出使用 SurfaceView/Hybrid Composition，能力协商失败明确回退 SDR。
 - HarmonyOS：ArkTS 外部纹理提供 `OHNativeWindow`，通过 `erika_presenter_attach_wgpu_surface` attach；平台桥接优先使用 JSON presenter helper。
+- Linux：提供 X11 Window/Display 或 Wayland surface/display，通过 wgpu attach；音频使用 PulseAudio（兼容 PipeWire-Pulse）。参见 [Linux 接入](linux.zh.md)。Flutter Linux 使用 GPU 合成后的 RGBA 纹理（有读回开销），不支持 HDR/零拷贝。
 
 ## 发布前记录
 

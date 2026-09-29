@@ -205,6 +205,6 @@ Embedding 模型和 HDR 策略见 `docs/flutter_embedding.md`。
 | iOS 13+ | VideoToolbox | Metal | AudioQueue | Available |
 | tvOS 13+ (Apple TV) | VideoToolbox | Metal | AudioQueue | Available |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
-| Linux | — | wgpu (planned) | — | Planned |
+| Linux | FFmpeg 软解 | wgpu X11/Wayland (SDR) | PulseAudio / PipeWire-Pulse | 实验性，见 [Linux 接入](linux.zh.md) |
 | Android 8+ | MediaCodec / software | wgpu Vulkan + GLES fallback | AAudio | Available；SDR 已验证，extended-linear scRGB 等待 API 35 HDR 真机验收 |
 | HarmonyOS API 18+ | AVCodec（H.264/HEVC）/ software | wgpu Vulkan，`OHNativeBuffer` 零拷贝导入 | OHAudio | Available；已在真机验证，CI 构建 OpenHarmony C ABI 但无设备侧运行验证 |

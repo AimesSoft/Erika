@@ -27,7 +27,7 @@
 - **播放引擎** — play / pause / stop / seek / 倍速，音频主时钟同步，vsync 量化调度
 - **C ABI** — opaque handle 设计，可从 C / C++ / Swift / Dart FFI / 任何 FFI 语言调用；以 `erika.h` 中的导出声明为准
 - **Flutter 插件** — macOS + iOS + tvOS + Windows + Android + HarmonyOS 原生视图/Texture 嵌入
-- **wgpu 后端** — Android 播放、overlay、截图与 Vulkan/GLES 恢复路径可用；HarmonyOS 走 Vulkan，用 OHNativeWindow 呈现、OHNativeBuffer 零拷贝导入；Linux 仍在规划中
+- **wgpu 后端** — Android 播放、overlay、截图与 Vulkan/GLES 恢复路径可用；HarmonyOS 走 Vulkan，用 OHNativeWindow 呈现、OHNativeBuffer 零拷贝导入；Linux 提供实验性 X11/Wayland 原生播放
 
 ## 快速开始
 
@@ -129,7 +129,7 @@ Erika 提供两组 C ABI 入口，适配不同嵌入场景：
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | **可用** |
 | tvOS 13+ (Apple TV) | VideoToolbox | Metal | AudioQueue | **可用** |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | **可用** |
-| Linux | — | wgpu (planned) | — | 规划中 |
+| Linux | NVDEC / VA-API / 软解 | wgpu (X11 / Wayland, SDR) | PulseAudio / PipeWire-Pulse | **实验性原生支持** |
 | Android 8+ | MediaCodec / software | wgpu (Vulkan + GLES fallback) | AAudio | **可用** |
 | HarmonyOS API 18+ | AVCodec（H.264/HEVC）/ 软解 | wgpu (Vulkan) + `OHNativeBuffer` 零拷贝导入 | OHAudio | **可用** |
 
@@ -148,6 +148,7 @@ docs/                     架构与嵌入文档
 
 ## 文档
 
+- [Linux 构建与接入](docs/linux.zh.md) — Ubuntu / WSLg、Rust / C ABI、验证与限制（含 Flutter Linux 纹理插件）
 - [架构总览](docs/architecture.zh.md) — 引擎设计、渲染后端、平台支持
 - [C ABI 参考手册](docs/capi_reference.zh.md) — 全部导出函数、状态码、所有权与线程约定
 - [原生接入指南](docs/integration.zh.md) — C/C++/Win32/Swift 等非 Flutter 宿主的端到端嵌入

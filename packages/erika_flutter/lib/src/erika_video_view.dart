@@ -18,7 +18,8 @@ bool get _usesAndroidTextureView =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
 bool get _usesOhosTextureView =>
-    !kIsWeb && defaultTargetPlatform.name == 'ohos';
+    !kIsWeb && (defaultTargetPlatform.name == 'ohos' ||
+        defaultTargetPlatform == TargetPlatform.linux);
 
 bool get _supportsFlutterTextureVideoView =>
     !kIsWeb &&

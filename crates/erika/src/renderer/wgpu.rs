@@ -2,12 +2,13 @@
     target_os = "macos",
     any(target_os = "ios", target_os = "tvos"),
     target_os = "android",
+    target_os = "linux",
     target_env = "ohos"
 ))]
 use std::ffi::c_void;
 #[cfg(target_os = "windows")]
 use std::num::NonZeroIsize;
-#[cfg(any(target_os = "android", target_env = "ohos"))]
+#[cfg(any(target_os = "android", target_os = "linux", target_env = "ohos"))]
 use std::ptr::NonNull;
 #[cfg(target_os = "android")]
 use std::{
@@ -25,13 +26,13 @@ use crate::core::ColorPrimaries;
     target_os = "macos",
     any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
+    target_os = "linux",
     target_env = "ohos"
 ))]
 use crate::core::WgpuSurfaceKind;
 use crate::core::{
     LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame, RenderFrameContext,
-    RendererBackend, RendererRuntimeStats, Result, SurfaceOutputCapabilities, TransferFunction,
-    WgpuSurfaceHandle,
+    RendererBackend, RendererRuntimeStats, Result, SurfaceOutputCapabilities, WgpuSurfaceHandle,
 };
 use crate::danmaku::{
     DanmakuAtlasUpdate, DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan,
@@ -527,7 +528,15 @@ enum SurfaceFrame {
 }
 
 pub struct WgpuRenderer {
+    flutter_metrics: Option<crate::core::SurfaceMetrics>,
+    flutter_frame: Option<crate::core::RendererFrameCapture>,
     _instance: wgpu::Instance,
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    linux_display: Option<(WgpuSurfaceKind, u64)>,
+    // Keep one renderer-owned CPU frame so an EGL display can be released at
+    // detach and recreated at attach, including while playback is paused.
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    linux_frame: Option<(PlanarFrame, VideoUniforms, Option<SourceColorState>)>,
     adapter: wgpu::Adapter,
     #[cfg(target_os = "android")]
     android_vulkan: Option<AndroidVulkanInterop>,
@@ -741,6 +750,47 @@ fn wgpu_instance_flags() -> wgpu::InstanceFlags {
     }
 }
 
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+fn linux_adapter_is_hardware(device_type: wgpu::DeviceType, name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    device_type != wgpu::DeviceType::Cpu
+        && ![
+            "llvmpipe",
+            "softpipe",
+            "lavapipe",
+            "swiftshader",
+            "microsoft basic render",
+        ]
+        .iter()
+        .any(|software| name.contains(software))
+}
+
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+fn retain_wsl_d3d_runtime() {
+    // WSL's D3D libraries register thread-local destructors used after EGL
+    // teardown. Unloading them before a renderer thread exits can jump into
+    // unmapped code. Keep the runtime loaded for the process lifetime, just as
+    // the Windows driver does; no environment or system files are changed.
+    static RETAIN: std::sync::Once = std::sync::Once::new();
+    if std::path::Path::new("/dev/dxg").exists() {
+        RETAIN.call_once(|| {
+            for library in [
+                c"/usr/lib/wsl/lib/libd3d12core.so",
+                c"/usr/lib/wsl/lib/libdxcore.so",
+            ] {
+                // SAFETY: these are the WSL system runtime libraries. The
+                // retained loader references intentionally live until exit.
+                unsafe {
+                    libc::dlopen(
+                        library.as_ptr(),
+                        libc::RTLD_LAZY | libc::RTLD_LOCAL | libc::RTLD_NODELETE,
+                    );
+                }
+            }
+        });
+    }
+}
+
 #[derive(Clone, Copy)]
 struct WgpuBackendCandidate {
     label: &'static str,
@@ -881,7 +931,15 @@ fn wgpu_backend_candidates() -> Vec<WgpuBackendCandidate> {
         ]);
         candidates
     }
-    #[cfg(not(any(target_os = "android", target_env = "ohos")))]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    {
+        vec![WgpuBackendCandidate {
+            label: "linux",
+            backends: wgpu::Backends::all().with_env(),
+            force_fallback_adapter: false,
+        }]
+    }
+    #[cfg(not(any(target_os = "android", target_os = "linux", target_env = "ohos")))]
     {
         vec![WgpuBackendCandidate {
             label: "platform-default",
@@ -986,7 +1044,10 @@ fn request_wgpu_device(
     backend_candidate_index: usize,
     attempt_index: usize,
     attempt_count: usize,
+    linux_surface: Option<WgpuSurfaceHandle>,
 ) -> std::result::Result<WgpuDeviceContext, String> {
+    #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
+    let _ = linux_surface;
     #[cfg(not(target_os = "android"))]
     let _ = (backend_candidate_index, attempt_index, attempt_count);
 
@@ -1111,14 +1172,31 @@ fn request_wgpu_device(
         });
     }
 
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    if candidate.backends.contains(wgpu::Backends::GL) {
+        retain_wsl_d3d_runtime();
+    }
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: candidate.backends,
         flags: wgpu_instance_flags(),
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        display: linux_surface.map(|handle| Box::new(LinuxDisplayHandle(handle)) as _),
         ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    let compatible_surface = linux_surface
+        .map(|handle| {
+            let target = linux_surface_target(handle).map_err(|error| error.to_string())?;
+            // SAFETY: the host retains the native handles until detach/destroy.
+            unsafe { instance.create_surface_unsafe(target) }.map_err(|error| error.to_string())
+        })
+        .transpose()?;
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: candidate.force_fallback_adapter,
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        compatible_surface: compatible_surface.as_ref(),
+        #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
         compatible_surface: None,
     }))
     .map_err(|error| {
@@ -1139,6 +1217,30 @@ fn request_wgpu_device(
         message
     })?;
     let adapter_info = adapter.get_info();
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    {
+        let hardware = linux_adapter_is_hardware(adapter_info.device_type, &adapter_info.name);
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "wgpu_renderer",
+                "stage": "adapter_selected",
+                "backend": format!("{:?}", adapter_info.backend),
+                "deviceType": format!("{:?}", adapter_info.device_type),
+                "name": adapter_info.name,
+                "driver": adapter_info.driver,
+                "driverInfo": adapter_info.driver_info,
+                "hardware": hardware,
+                "displayBound": linux_surface.is_some(),
+            })
+            .to_string(),
+        );
+        if !hardware && std::env::var("ERIKA_REQUIRE_HARDWARE_GPU").as_deref() == Ok("1") {
+            return Err(format!(
+                "hardware GPU required, but selected CPU adapter {}",
+                adapter_info.name
+            ));
+        }
+    }
     #[cfg(target_os = "android")]
     if candidate.backends == wgpu::Backends::VULKAN
         && adapter_info.device_type == wgpu::DeviceType::Cpu
@@ -1298,6 +1400,7 @@ impl WgpuRenderer {
             backend_candidate_order(candidate_count, 0, &[]),
             config.output_mode,
             config.video_alpha_mode,
+            None,
         )
     }
 
@@ -1314,8 +1417,12 @@ impl WgpuRenderer {
             current_candidate.saturating_add(1),
             excluded,
         );
-        let result =
-            Self::new_with_candidate_order(candidate_order.clone(), output_mode, video_alpha_mode);
+        let result = Self::new_with_candidate_order(
+            candidate_order.clone(),
+            output_mode,
+            video_alpha_mode,
+            None,
+        );
         let selected_candidate = result
             .as_ref()
             .ok()
@@ -1330,6 +1437,7 @@ impl WgpuRenderer {
         candidate_order: Vec<usize>,
         output_mode: OutputMode,
         video_alpha_mode: VideoAlphaMode,
+        linux_surface: Option<WgpuSurfaceHandle>,
     ) -> Result<Self> {
         let candidates = wgpu_backend_candidates();
         if candidate_order.is_empty() {
@@ -1346,6 +1454,7 @@ impl WgpuRenderer {
                 candidate_index,
                 attempt_index,
                 candidate_order.len(),
+                linux_surface,
             ) {
                 Ok(context) => {
                     selected = Some(context);
@@ -1457,6 +1566,12 @@ impl WgpuRenderer {
         };
         Ok(Self {
             _instance: context.instance,
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            linux_display: linux_surface.map(|handle| (handle.kind, handle.raw_display)),
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            linux_frame: None,
+            flutter_metrics: None,
+            flutter_frame: None,
             adapter: context.adapter,
             device: context.device,
             queue: context.queue,
@@ -1506,6 +1621,24 @@ impl WgpuRenderer {
 
     pub fn surface(&self) -> Option<WgpuSurfaceHandle> {
         self.surface.as_ref().map(|attached| attached.handle)
+    }
+
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    fn for_linux_display(&self, surface: Option<WgpuSurfaceHandle>) -> Result<Self> {
+        let mut replacement = Self::new_with_candidate_order(
+            backend_candidate_order(wgpu_backend_candidates().len(), 0, &[]),
+            self.output_mode,
+            self.video_alpha_mode,
+            surface,
+        )?;
+        replacement.set_luma_upscaler(self.upscaler_mode);
+        replacement.upload_serial = self.upload_serial;
+        if let Some((frame, uniforms, color)) = self.linux_frame.as_ref() {
+            replacement.upload_planar_with_context(frame.clone(), *uniforms, *color)?;
+            replacement.current_video_visible = self.current_video_visible;
+        }
+        replacement.stats = self.stats;
+        Ok(replacement)
     }
 
     /// Whether the adapter supports 16-bit normalized textures (needed for P010).
@@ -1941,6 +2074,10 @@ impl WgpuRenderer {
             frame_token,
         });
         self.current_video_visible = true;
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        {
+            self.linux_frame = Some((frame, uniforms, source_color));
+        }
         Ok(())
     }
 
@@ -3607,6 +3744,7 @@ impl WgpuRenderer {
             target_os = "macos",
             any(target_os = "ios", target_os = "tvos"),
             target_os = "windows",
+            target_os = "linux",
             target_env = "ohos"
         )))]
         {
@@ -3621,6 +3759,7 @@ impl WgpuRenderer {
             target_os = "macos",
             any(target_os = "ios", target_os = "tvos"),
             target_os = "windows",
+            target_os = "linux",
             target_env = "ohos"
         ))]
         {
@@ -3631,6 +3770,10 @@ impl WgpuRenderer {
             // Android we additionally acquire an ANativeWindow reference retained by
             // `AttachedSurface`, so the raw handle outlives the wgpu surface.
             let target = match handle.kind {
+                #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+                WgpuSurfaceKind::XlibWindow | WgpuSurfaceKind::WaylandSurface => {
+                    linux_surface_target(handle)?
+                }
                 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
                 WgpuSurfaceKind::MacOsCaMetalLayer => {
                     wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(handle.raw_window as *mut c_void)
@@ -3983,6 +4126,65 @@ impl WgpuRenderer {
     }
 }
 
+// The host retains the connection until successful detach or destruction.
+// WgpuRenderer drops every display-bound EGL object before detach returns.
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+#[derive(Debug)]
+struct LinuxDisplayHandle(WgpuSurfaceHandle);
+
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+impl wgpu::rwh::HasDisplayHandle for LinuxDisplayHandle {
+    fn display_handle(
+        &self,
+    ) -> std::result::Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
+        match linux_surface_target(self.0).map_err(|_| wgpu::rwh::HandleError::Unavailable)? {
+            wgpu::SurfaceTargetUnsafe::RawHandle {
+                raw_display_handle: Some(raw),
+                ..
+            } => {
+                // SAFETY: attach's native handle contract covers this instance.
+                Ok(unsafe { wgpu::rwh::DisplayHandle::borrow_raw(raw) })
+            }
+            _ => Err(wgpu::rwh::HandleError::Unavailable),
+        }
+    }
+}
+
+/// The host retains both native handles until the surface is detached.
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+fn linux_surface_target(handle: WgpuSurfaceHandle) -> Result<wgpu::SurfaceTargetUnsafe> {
+    let display = NonNull::new(handle.raw_display as *mut c_void)
+        .ok_or_else(|| PlayerError::Renderer("Linux display handle is null".to_string()))?;
+    if handle.raw_window == 0 {
+        return Err(PlayerError::Renderer(
+            "Linux window handle is null".to_string(),
+        ));
+    }
+    let (raw_display_handle, raw_window_handle) = match handle.kind {
+        WgpuSurfaceKind::XlibWindow => (
+            wgpu::rwh::RawDisplayHandle::Xlib(wgpu::rwh::XlibDisplayHandle::new(Some(display), 0)),
+            wgpu::rwh::RawWindowHandle::Xlib(wgpu::rwh::XlibWindowHandle::new(
+                handle.raw_window as _,
+            )),
+        ),
+        WgpuSurfaceKind::WaylandSurface => (
+            wgpu::rwh::RawDisplayHandle::Wayland(wgpu::rwh::WaylandDisplayHandle::new(display)),
+            wgpu::rwh::RawWindowHandle::Wayland(wgpu::rwh::WaylandWindowHandle::new(
+                NonNull::new(handle.raw_window as *mut c_void).expect("validated non-null window"),
+            )),
+        ),
+        _ => {
+            return Err(PlayerError::Renderer(
+                "expected an Xlib or Wayland surface".to_string(),
+            ));
+        }
+    };
+    Ok(wgpu::SurfaceTargetUnsafe::RawHandle {
+        raw_display_handle: Some(raw_display_handle),
+        raw_window_handle,
+    })
+}
+
 fn configure_attached_surface(
     device: &wgpu::Device,
     attached: &mut AttachedSurface,
@@ -4079,12 +4281,39 @@ impl Drop for WgpuRenderer {
 
 impl RendererBackend for WgpuRenderer {
     fn attach_surface(&mut self, surface: PlatformSurface) -> Result<()> {
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        if let PlatformSurface::FlutterTexture(handle) = surface {
+            if handle.kind != crate::core::FlutterTextureKind::LinuxTextureRegistrar {
+                return Err(PlayerError::Renderer(
+                    "expected Linux Flutter texture".into(),
+                ));
+            }
+            self.detach_surface()?;
+            self.flutter_metrics = Some(handle.metrics);
+            (self.stats.surface_width, self.stats.surface_height) = handle.metrics.physical_size();
+            self.stats.attached = true;
+            return Ok(());
+        }
+        self.flutter_metrics = None;
+        self.flutter_frame = None;
         let PlatformSurface::Wgpu(handle) = surface else {
             return Err(PlayerError::Renderer(
                 "non-wgpu surface cannot be attached to WgpuRenderer".to_string(),
             ));
         };
 
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        {
+            linux_surface_target(handle)?;
+            if self.linux_display != Some((handle.kind, handle.raw_display)) {
+                // EGL must be created against the actual X11/Wayland display,
+                // and adapter selection must consider presentation support.
+                let mut replacement = self.for_linux_display(Some(handle))?;
+                replacement.attach_surface(surface)?;
+                *self = replacement;
+                return Ok(());
+            }
+        }
         let attached = self.create_attached_surface(handle)?;
         self.stats.surface_width = attached.config.width;
         self.stats.surface_height = attached.config.height;
@@ -4095,6 +4324,14 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn detach_surface(&mut self) -> Result<()> {
+        self.flutter_metrics = None;
+        self.flutter_frame = None;
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        if self.linux_display.is_some() {
+            // A headless replacement retains the paused image but releases
+            // the borrowed display, so the host may immediately close it.
+            *self = self.for_linux_display(None)?;
+        }
         self.surface = None;
         self.stats.attached = false;
         self.observe_detached_output();
@@ -4102,6 +4339,12 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn resize_surface(&mut self, metrics: crate::core::SurfaceMetrics) -> Result<()> {
+        if self.flutter_metrics.is_some() {
+            self.flutter_metrics = Some(metrics);
+            self.flutter_frame = None;
+            (self.stats.surface_width, self.stats.surface_height) = metrics.physical_size();
+            return Ok(());
+        }
         let current_size = self
             .surface
             .as_ref()
@@ -4142,11 +4385,36 @@ impl RendererBackend for WgpuRenderer {
             return self.upload_ohos_avcodec_frame(frame);
         }
         let hardware_frame = frame.frame.has_hw_frames_context();
-        let planar = if let Some(planar) = frame.frame.to_planar_frame() {
+        // NVDEC/VA-API still perform decode on the GPU. Transfer the decoded
+        // planes for portable wgpu upload until native interop is available.
+        // Keep this distinct from software decode and zero-copy in the stats.
+        let downloaded = if hardware_frame
+            && matches!(
+                frame.decode_backend,
+                DecoderBackend::Cuda | DecoderBackend::Vaapi
+            ) {
+            Some(
+                frame
+                    .frame
+                    .decoded_frame()
+                    .ok_or_else(|| PlayerError::Renderer("expected FFmpeg hardware frame".into()))?
+                    .transfer_to_system_memory()
+                    .map_err(|error| PlayerError::Renderer(error.to_string()))?,
+            )
+        } else {
+            None
+        };
+        let planes = downloaded
+            .as_ref()
+            .and_then(|value| value.to_planar_frame())
+            .or_else(|| frame.frame.to_planar_frame());
+        let planar = if let Some(planar) = planes {
             match frame.decode_backend {
                 DecoderBackend::Software => self.stats.software_video_frames += 1,
                 DecoderBackend::VideoToolbox
                 | DecoderBackend::D3d11va
+                | DecoderBackend::Cuda
+                | DecoderBackend::Vaapi
                 | DecoderBackend::MediaCodec
                 | DecoderBackend::AvCodec => {
                     self.stats.hardware_video_frames += 1;
@@ -4186,8 +4454,13 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn clear_current_frame(&mut self) -> Result<()> {
+        self.flutter_frame = None;
         self.current_video_visible = false;
         self.current_video = None;
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        {
+            self.linux_frame = None;
+        }
         if self.surface.is_some() {
             self.render_surface_clear(WgpuClearColor::new(0.0, 0.0, 0.0, 1.0))?;
         }
@@ -4209,6 +4482,25 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn render_current_frame(&mut self, context: RenderFrameContext<'_>) -> Result<bool> {
+        if let Some(metrics) = self.flutter_metrics {
+            let (width, height) = metrics.physical_size();
+            let danmaku = context.danmaku.filter(|plan| {
+                plan.generation == context.generation
+                    && plan.viewport.width == width
+                    && plan.viewport.height == height
+            });
+            if let Some(readback) =
+                self.render_current_offscreen_sized(width, height, context.overlay, danmaku)?
+            {
+                self.flutter_frame = Some(crate::core::RendererFrameCapture {
+                    width,
+                    height,
+                    rgba: readback.rgba,
+                });
+                return Ok(true);
+            }
+            return Ok(false);
+        }
         #[cfg(target_env = "ohos")]
         if let Some(interop) = &self.ohos_gles {
             interop.drain_discarded_frames().map_err(|error| {
@@ -4279,6 +4571,10 @@ impl RendererBackend for WgpuRenderer {
             self.stats.danmaku_items += danmaku_draws as u64;
         }
         Ok(true)
+    }
+
+    fn take_flutter_frame(&mut self) -> Option<crate::core::RendererFrameCapture> {
+        self.flutter_frame.take()
     }
 
     fn capture_current_frame(
@@ -5175,6 +5471,61 @@ fn add_retired_renderer_stats(target: &mut RendererRuntimeStats, retired: Render
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    #[test]
+    fn linux_hardware_requirement_rejects_cpu_and_warp_adapters() {
+        assert!(linux_adapter_is_hardware(
+            wgpu::DeviceType::Other,
+            "D3D12 (NVIDIA GeForce RTX 5070)"
+        ));
+        assert!(!linux_adapter_is_hardware(
+            wgpu::DeviceType::Cpu,
+            "Software Device"
+        ));
+        assert!(!linux_adapter_is_hardware(
+            wgpu::DeviceType::Other,
+            "D3D12 (Microsoft Basic Render Driver)"
+        ));
+        assert!(!linux_adapter_is_hardware(
+            wgpu::DeviceType::Other,
+            "llvmpipe (LLVM 21)"
+        ));
+    }
+
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    #[test]
+    fn linux_surfaces_require_both_handles_and_keep_their_native_types() {
+        for kind in [WgpuSurfaceKind::XlibWindow, WgpuSurfaceKind::WaylandSurface] {
+            for (window, display) in [(0, 1), (1, 0), (0, 0)] {
+                assert!(
+                    linux_surface_target(WgpuSurfaceHandle::new(
+                        kind, window, display, 100, 50, 1.0
+                    ))
+                    .is_err()
+                );
+            }
+            // These are opaque handles; conversion must not dereference them.
+            let target =
+                linux_surface_target(WgpuSurfaceHandle::new(kind, 1, 2, 100, 50, 1.0)).unwrap();
+            assert!(matches!(
+                (kind, target),
+                (
+                    WgpuSurfaceKind::XlibWindow,
+                    wgpu::SurfaceTargetUnsafe::RawHandle {
+                        raw_window_handle: wgpu::rwh::RawWindowHandle::Xlib(_),
+                        raw_display_handle: Some(wgpu::rwh::RawDisplayHandle::Xlib(_)),
+                    }
+                ) | (
+                    WgpuSurfaceKind::WaylandSurface,
+                    wgpu::SurfaceTargetUnsafe::RawHandle {
+                        raw_window_handle: wgpu::rwh::RawWindowHandle::Wayland(_),
+                        raw_display_handle: Some(wgpu::rwh::RawDisplayHandle::Wayland(_)),
+                    }
+                )
+            ));
+        }
+    }
 
     #[test]
     fn conversion_extent_caps_4k_to_the_display_without_upscaling_smaller_video() {

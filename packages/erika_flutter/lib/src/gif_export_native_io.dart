@@ -167,7 +167,7 @@ DynamicLibrary _openErikaLibrary() {
   if (Platform.isWindows) {
     return DynamicLibrary.open('erika_capi.dll');
   }
-  if (Platform.isAndroid || Platform.operatingSystem == 'ohos') {
+  if (Platform.isAndroid || Platform.isLinux || Platform.operatingSystem == 'ohos') {
     return DynamicLibrary.open('liberika_capi.so');
   }
   throw UnsupportedError(

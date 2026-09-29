@@ -841,6 +841,12 @@ pub trait RendererBackend {
         RendererRuntimeStats::default()
     }
 
+    /// Consume the latest composited Linux Flutter pixel buffer, rendered on
+    /// the GPU by render_current_frame. The caller owns the returned bytes.
+    fn take_flutter_frame(&mut self) -> Option<RendererFrameCapture> {
+        None
+    }
+
     fn resource_stats(&self) -> RendererResourceStats {
         RendererResourceStats::default()
     }
@@ -2845,6 +2851,8 @@ fn handle_playback_command(
                 DecoderBackend::MediaCodec
                 | DecoderBackend::VideoToolbox
                 | DecoderBackend::D3d11va
+                | DecoderBackend::Cuda
+                | DecoderBackend::Vaapi
                 | DecoderBackend::AvCodec => {
                     if let Err(error) = engine.handle_video_frame_import_failure(&failure) {
                         fail_video_import_from_worker(

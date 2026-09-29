@@ -37,7 +37,7 @@ pub type Result<T> = std::result::Result<T, AudioError>;
 
 /// Whether another decoded frame may enter an output queue without exceeding
 /// the bounded latency budget used for playback-rate transitions.
-#[cfg(any(test, target_os = "android", target_env = "ohos"))]
+#[cfg(any(test, target_os = "android", target_os = "linux", target_env = "ohos"))]
 pub(crate) fn audio_output_queue_has_capacity(queued_frames: usize, sample_rate: u32) -> bool {
     if sample_rate == 0 {
         return true;

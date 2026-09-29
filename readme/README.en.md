@@ -27,7 +27,7 @@ The host application provides a rendering surface and sends playback commands �
 - **Playback engine** -- play / pause / stop / seek / rate control, audio-master clock discipline, vsync-quantized frame scheduling
 - **C ABI** -- opaque handle design with a versioned public header; callable from C / C++ / Swift / Dart FFI / any FFI-capable language. See `erika.h` for the authoritative export set.
 - **Flutter plugin** -- macOS + iOS + tvOS + Windows + Android + HarmonyOS native view/Texture embedding with platform-native high-dynamic-range surface paths
-- **wgpu backend** -- Android playback, overlays, capture, and bounded Vulkan/GLES recovery are available; HarmonyOS runs on Vulkan, presenting through OHNativeWindow with OHNativeBuffer zero-copy import; Linux remains planned
+- **wgpu backend** -- Android playback, overlays, capture, and bounded Vulkan/GLES recovery are available; HarmonyOS runs on Vulkan, presenting through OHNativeWindow with OHNativeBuffer zero-copy import; Linux provides experimental native X11/Wayland playback
 
 ## Quick Start
 
@@ -116,7 +116,7 @@ Header: [`crates/erika_capi/include/erika.h`](../crates/erika_capi/include/erika
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | **Available** |
 | tvOS 13+ (Apple TV) | VideoToolbox | Metal | AudioQueue | **Available** |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | **Available** |
-| Linux | -- | wgpu (planned) | -- | Planned |
+| Linux | NVDEC / VA-API / software | wgpu (X11 / Wayland, SDR) | PulseAudio / PipeWire-Pulse | **Experimental native support** |
 | Android 8+ | MediaCodec / software | wgpu (Vulkan + GLES fallback) | AAudio | **Available**; SDR verified, extended-linear scRGB implemented, API 35 HDR-device active-path acceptance pending |
 | HarmonyOS API 18+ | AVCodec (H.264/HEVC) / software | wgpu (Vulkan) + `OHNativeBuffer` zero-copy import | OHAudio | **Available**; validated on device, not yet covered by CI |
 
@@ -135,6 +135,7 @@ docs/                     Architecture and embedding documentation
 
 ## Documentation
 
+- [Linux build and integration](../docs/linux.md) — Ubuntu / WSLg, Rust / C ABI, validation and limitations (including Flutter Linux textures)
 - [Architecture](../docs/architecture.md) — engine design, render backends, platform support
 - [C ABI Reference](../docs/capi_reference.md) — every export, status codes, ownership & threading
 - [Integration Guide](../docs/integration.md) — embedding in C/C++/Win32/Swift and other non-Flutter hosts

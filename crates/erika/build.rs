@@ -17,6 +17,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ANDROID_NDK_HOME");
     println!("cargo:rerun-if-env-changed=ANDROID_NDK_ROOT");
     println!("cargo:rerun-if-env-changed=TVOS_DEPLOYMENT_TARGET");
+    println!("cargo:rerun-if-env-changed=ERIKA_USE_SYSTEM_LIBS");
     println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.vert");
     println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.frag");
     println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.vert.spv");
@@ -26,6 +27,19 @@ fn main() {
     enforce_bundled_ffmpeg_version(ffmpeg_version_major);
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").ok();
+    if target_os.as_deref() == Some("linux")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("ohos")
+    {
+        let pulse = pkg_config::Config::new()
+            .probe("libpulse")
+            .expect("Linux audio requires libpulse development files (Ubuntu: libpulse-dev)");
+        println!("cargo:rerun-if-changed=src/linux_pulse.c");
+        cc::Build::new()
+            .file("src/linux_pulse.c")
+            .includes(pulse.include_paths)
+            .warnings(true)
+            .compile("erika_linux_pulse");
+    }
     if matches!(target_os.as_deref(), Some("ios" | "tvos")) {
         println!("cargo:rustc-link-lib=framework=AudioToolbox");
     } else if target_os.as_deref() == Some("android") {
@@ -59,6 +73,43 @@ fn main() {
         .file("src/libass_log_bridge.c")
         .warnings(true)
         .compile("erika_libass_log_bridge");
+
+    if target_os.as_deref() == Some("linux")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("ohos")
+        && env::var("ERIKA_USE_SYSTEM_LIBS").as_deref() != Ok("0")
+    {
+        // Erika's ordered memory-font fallback is an in-tree libass patch.
+        // Keep it even when the distro supplies FFmpeg and the font libraries.
+        let libass = env::var_os("ERIKA_LIBASS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                workspace_root()
+                    .join("third_party/dist")
+                    .join(env::var("TARGET").expect("Cargo target"))
+                    .join("system/libass")
+            });
+        let archive = libass.join("lib/libass.a");
+        println!("cargo:rerun-if-changed={}", archive.display());
+        assert!(
+            archive.is_file(),
+            "Patched Linux libass is missing at {}. Run `bash scripts/build_linux_libass.sh` first.",
+            archive.display()
+        );
+        // pkg-config may place /usr/lib first, where an unpatched libass.a
+        // can exist. Use a unique name to guarantee selection of our archive.
+        let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo OUT_DIR"));
+        fs::copy(&archive, out_dir.join("liberika_patched_ass.a"))
+            .expect("copy patched libass archive");
+        println!("cargo:rustc-link-search=native={}", out_dir.display());
+        println!("cargo:rustc-link-lib=static=erika_patched_ass");
+        for library in ["freetype2", "harfbuzz", "fribidi", "fontconfig"] {
+            pkg_config::Config::new()
+                .statik(false)
+                .probe(library)
+                .unwrap_or_else(|error| panic!("Linux subtitle dependency {library}: {error}"));
+        }
+        return;
+    }
 
     let libass = native_dep_dir("ERIKA_LIBASS_DIR", "libass");
     let freetype = native_dep_dir("ERIKA_FREETYPE_DIR", "freetype");
@@ -196,7 +247,20 @@ fn android_glslc() -> PathBuf {
 
 fn emit_ffmpeg_version_cfg() -> Option<u32> {
     println!("cargo:rustc-check-cfg=cfg(erika_ffmpeg_legacy_channel_layout)");
-    let version_header = ffmpeg_dist_dir().join("include/libavutil/version.h");
+    let version_header = if use_system_libraries("ERIKA_FFMPEG_DIR") {
+        pkg_config::Config::new()
+            .cargo_metadata(false)
+            .atleast_version("60")
+            .probe("libavutil")
+            .expect("Linux requires FFmpeg 8 development files (Ubuntu: libavutil-dev)")
+            .include_paths
+            .into_iter()
+            .map(|path| path.join("libavutil/version.h"))
+            .find(|path| path.is_file())
+            .expect("pkg-config did not provide libavutil/version.h")
+    } else {
+        ffmpeg_dist_dir().join("include/libavutil/version.h")
+    };
     println!("cargo:rerun-if-changed={}", version_header.display());
     let Ok(contents) = fs::read_to_string(&version_header) else {
         return None;
@@ -214,6 +278,13 @@ fn emit_ffmpeg_version_cfg() -> Option<u32> {
         println!("cargo:rustc-cfg=erika_ffmpeg_legacy_channel_layout");
     }
     major
+}
+
+fn use_system_libraries(override_name: &str) -> bool {
+    env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("ohos")
+        && env::var("ERIKA_USE_SYSTEM_LIBS").as_deref() != Ok("0")
+        && env::var_os(override_name).is_none()
 }
 
 fn enforce_bundled_ffmpeg_version(version_major: Option<u32>) {

@@ -22,6 +22,7 @@ members = [
   "examples/render_pipeline_plan",
   "examples/macos_native_demo",
   "examples/windows_native_demo",
+  "examples/linux_native_demo",
   "examples/wgpu_video_png",
   "examples/wgpu_decode_png",
   "examples/wgpu_window_check",
@@ -45,6 +46,7 @@ sha2 = "0.10.9"
 bitflags = "2.10.0"
 bindgen = "0.72.1"
 cc = "1.2.47"
+pkg-config = "0.3.32"
 chardetng = "0.1"
 crossbeam-channel = "0.5.15"
 encoding_rs = "0.8"
