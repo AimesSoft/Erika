@@ -181,6 +181,7 @@ typedef enum ErikaActiveOutputEncoding {
   ErikaActiveOutputEncoding_AppleEdr = 1,
   ErikaActiveOutputEncoding_AndroidExtendedLinearScRgb = 2,
   ErikaActiveOutputEncoding_Hdr10Pq = 3,
+  ErikaActiveOutputEncoding_LinuxExtendedLinearScRgb = 4,
 } ErikaActiveOutputEncoding;
 
 typedef enum ErikaOutputFallbackReason {

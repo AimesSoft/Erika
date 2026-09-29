@@ -1688,6 +1688,7 @@ fn output_status_to_c(status: OutputRuntimeStatus) -> ErikaOutputStatus {
         ActiveOutputEncoding::AppleEdr => 1,
         ActiveOutputEncoding::AndroidExtendedLinearScRgb => 2,
         ActiveOutputEncoding::Hdr10Pq => 3,
+        ActiveOutputEncoding::LinuxExtendedLinearScRgb => 4,
     };
     let surface_format = match status.surface_format {
         OutputSurfaceFormat::EightBitUnorm => 0,

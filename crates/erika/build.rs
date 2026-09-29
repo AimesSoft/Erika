@@ -39,6 +39,31 @@ fn main() {
             .includes(pulse.include_paths)
             .warnings(true)
             .compile("erika_linux_pulse");
+        if env::var_os("CARGO_FEATURE_WGPU").is_some() {
+            let avutil_includes = if use_system_libraries("ERIKA_FFMPEG_DIR") {
+                pkg_config::Config::new()
+                    .cargo_metadata(false)
+                    .probe("libavutil")
+                    .expect("Linux GPU interop requires FFmpeg 8 development headers")
+                    .include_paths
+            } else {
+                vec![ffmpeg_dist_dir().join("include")]
+            };
+            let vulkan = pkg_config::Config::new()
+                .cargo_metadata(false)
+                .probe("vulkan")
+                .expect("Linux GPU interop requires Vulkan development headers");
+            println!("cargo:rerun-if-changed=src/renderer/linux_vulkan.c");
+            cc::Build::new()
+                .file("src/renderer/linux_vulkan.c")
+                .includes(avutil_includes)
+                .includes(vulkan.include_paths)
+                .warnings(true)
+                .compile("erika_linux_vulkan");
+            // Static bridge users need the loader after the archive on the
+            // linker command line, especially with --as-needed executables.
+            pkg_config::Config::new().probe("vulkan").unwrap();
+        }
     }
     if matches!(target_os.as_deref(), Some("ios" | "tvos")) {
         println!("cargo:rustc-link-lib=framework=AudioToolbox");

@@ -494,6 +494,8 @@ struct AttachedSurface {
     data_space_failure: bool,
     native_data_space: i32,
     handle: WgpuSurfaceHandle,
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    formats: Vec<wgpu::TextureFormat>,
     // Declared after `surface` so the wgpu surface is dropped before its native
     // window reference during normal field destruction.
     #[cfg(target_os = "android")]
@@ -537,6 +539,13 @@ pub struct WgpuRenderer {
     // detach and recreated at attach, including while playback is paused.
     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     linux_frame: Option<(PlanarFrame, VideoUniforms, Option<SourceColorState>)>,
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    linux_hardware_frame: Option<PlayerVideoFrame>,
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    linux_vulkan:
+        Option<std::result::Result<crate::renderer::linux_vulkan::LinuxVulkanInterop, String>>,
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    linux_import_failure: Option<(u64, String)>,
     adapter: wgpu::Adapter,
     #[cfg(target_os = "android")]
     android_vulkan: Option<AndroidVulkanInterop>,
@@ -714,6 +723,38 @@ fn select_wgpu_surface_output(
         output: OutputDescription::sdr(),
         fallback_reason,
     })
+}
+
+// wgpu's Vulkan backend only exposes Rgba16Float when the WSI advertises
+// R16G16B16A16_SFLOAT + EXTENDED_SRGB_LINEAR_EXT together. A 10-bit SDR
+// format alone is deliberately insufficient evidence for HDR output.
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+fn select_linux_surface_output(
+    requested: OutputMode,
+    source_hdr: bool,
+    backend: wgpu::Backend,
+    formats: &[wgpu::TextureFormat],
+) -> Option<WgpuSurfaceOutputSelection> {
+    let resolved = match requested {
+        OutputMode::Auto { headroom } if source_hdr => {
+            OutputMode::extended_linear(if headroom > 1.0 { headroom } else { 12.5 })
+        }
+        OutputMode::Auto { .. } => OutputMode::Sdr,
+        OutputMode::AppleEdr { headroom } => OutputMode::extended_linear(headroom),
+        other => other,
+    };
+    select_wgpu_surface_output(
+        resolved,
+        SurfaceOutputCapabilities {
+            extended_linear: backend == wgpu::Backend::Vulkan
+                && formats.contains(&wgpu::TextureFormat::Rgba16Float),
+            direct_composition: true,
+            desired_headroom: resolved.headroom(),
+            ..SurfaceOutputCapabilities::default()
+        },
+        backend,
+        formats,
+    )
 }
 
 fn requested_device_limits(adapter_limits: wgpu::Limits, backend: wgpu::Backend) -> wgpu::Limits {
@@ -1280,6 +1321,13 @@ fn request_wgpu_device(
     } else {
         wgpu::Features::empty()
     };
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    let required_features = required_features
+        | if adapter_info.backend == wgpu::Backend::Vulkan {
+            adapter.features() & wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+        } else {
+            wgpu::Features::empty()
+        };
     let required_limits = requested_device_limits(adapter_limits.clone(), adapter_info.backend);
 
     #[cfg(target_os = "android")]
@@ -1312,15 +1360,34 @@ fn request_wgpu_device(
         .to_string(),
     );
 
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+    let descriptor = wgpu::DeviceDescriptor {
         label: Some("erika-wgpu-device"),
         required_features,
         required_limits,
         memory_hints: wgpu::MemoryHints::default(),
         experimental_features: wgpu::ExperimentalFeatures::default(),
         trace: wgpu::Trace::Off,
-    }))
-    .map_err(|error| {
+    };
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    let interop_device = crate::renderer::linux_vulkan::request_device(&adapter, &descriptor);
+    #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
+    let interop_device: Option<std::result::Result<(wgpu::Device, wgpu::Queue), String>> = None;
+    let device_result = match interop_device {
+        Some(Ok(device)) => Ok(device),
+        unavailable => {
+            if let Some(Err(reason)) = unavailable {
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "wgpu_renderer", "stage": "interop_device_unavailable",
+                        "reason": reason,
+                    })
+                    .to_string(),
+                );
+            }
+            pollster::block_on(adapter.request_device(&descriptor)).map_err(|e| e.to_string())
+        }
+    };
+    let (device, queue) = device_result.map_err(|error| {
         let message = format!("device request failed: {error}");
         #[cfg(target_os = "android")]
         crate::trace::diagnostic(
@@ -1395,6 +1462,17 @@ impl WgpuRenderer {
     }
 
     pub fn new_with_config(config: MetalRendererConfig) -> Result<Self> {
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        let config = {
+            let mut config = config;
+            match std::env::var("ERIKA_LINUX_HDR").as_deref() {
+                Ok("auto") => config.output_mode = OutputMode::auto(12.5),
+                Ok("1" | "on") => config.output_mode = OutputMode::extended_linear(12.5),
+                Ok("0" | "off") => config.output_mode = OutputMode::Sdr,
+                _ => {}
+            }
+            config
+        };
         let candidate_count = wgpu_backend_candidates().len();
         Self::new_with_candidate_order(
             backend_candidate_order(candidate_count, 0, &[]),
@@ -1570,6 +1648,12 @@ impl WgpuRenderer {
             linux_display: linux_surface.map(|handle| (handle.kind, handle.raw_display)),
             #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
             linux_frame: None,
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            linux_hardware_frame: None,
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            linux_vulkan: None,
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            linux_import_failure: None,
             flutter_metrics: None,
             flutter_frame: None,
             adapter: context.adapter,
@@ -1636,6 +1720,9 @@ impl WgpuRenderer {
         if let Some((frame, uniforms, color)) = self.linux_frame.as_ref() {
             replacement.upload_planar_with_context(frame.clone(), *uniforms, *color)?;
             replacement.current_video_visible = self.current_video_visible;
+        } else if let Some(frame) = self.linux_hardware_frame.as_ref() {
+            replacement.upload_linux_hardware_frame(frame)?;
+            replacement.current_video_visible = self.current_video_visible;
         }
         replacement.stats = self.stats;
         Ok(replacement)
@@ -1650,9 +1737,61 @@ impl WgpuRenderer {
         self.stats
     }
 
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    fn update_linux_output_for_source(&mut self, source_hdr: bool) -> Result<()> {
+        let strict = std::env::var("ERIKA_REQUIRE_HDR").as_deref() == Ok("1");
+        let Some(surface) = self.surface.as_mut() else {
+            if source_hdr && strict && self.flutter_metrics.is_some() {
+                return Err(PlayerError::Renderer("HDR requires a native Linux video surface; Flutter's RGBA8 texture compositor is SDR".into()));
+            }
+            return Ok(());
+        };
+        let selection = select_linux_surface_output(
+            self.output_mode,
+            source_hdr,
+            self.adapter.get_info().backend,
+            &surface.formats,
+        )
+        .ok_or_else(|| PlayerError::Renderer("Linux surface has no usable output format".into()))?;
+        if source_hdr && strict && !selection.output.extended_linear {
+            return Err(PlayerError::Renderer(format!(
+                "HDR output unavailable: {}; the compositor must advertise an FP16 scRGB Vulkan surface",
+                selection.fallback_reason.label()
+            )));
+        }
+        let changed = surface.output != selection.output
+            || surface.fallback_reason != selection.fallback_reason;
+        if !changed {
+            return Ok(());
+        }
+        if surface.config.format != selection.format {
+            surface.config.format = selection.format;
+            surface.surface.configure(&self.device, &surface.config);
+        }
+        surface.output = selection.output;
+        surface.fallback_reason = selection.fallback_reason;
+        let state = surface.output_state();
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "video_output_mode", "stage": "linux_surface_negotiated",
+                "sourceHdr": source_hdr, "colorSpace": selection.output.color_space.label(),
+                "surfaceFormat": format!("{:?}", selection.format),
+                "hdrActive": selection.output.extended_linear,
+                "cpuReadback": false, "reason": selection.fallback_reason.label(),
+            })
+            .to_string(),
+        );
+        self.observe_attached_output(state, true);
+        Ok(())
+    }
+
     fn observe_attached_output(&mut self, attached: AttachedOutputState, count_fallback: bool) {
         self.output_status.active_encoding = if attached.output.extended_linear {
-            ActiveOutputEncoding::AndroidExtendedLinearScRgb
+            if cfg!(all(target_os = "linux", not(target_env = "ohos"))) {
+                ActiveOutputEncoding::LinuxExtendedLinearScRgb
+            } else {
+                ActiveOutputEncoding::AndroidExtendedLinearScRgb
+            }
         } else {
             ActiveOutputEncoding::SdrSrgb
         };
@@ -2077,8 +2216,96 @@ impl WgpuRenderer {
         #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
         {
             self.linux_frame = Some((frame, uniforms, source_color));
+            self.linux_hardware_frame = None;
         }
         Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    fn upload_linux_hardware_frame(&mut self, frame: &PlayerVideoFrame) -> Result<bool> {
+        let strict = std::env::var("ERIKA_REQUIRE_GPU_FRAMES").as_deref() == Ok("1");
+        if std::env::var("ERIKA_REQUIRE_ZERO_COPY").as_deref() == Ok("1") {
+            return Err(PlayerError::Renderer("Linux Vulkan import currently uses GPU plane copies; direct zero-copy was required".into()));
+        }
+        if let Some((generation, reason)) = &self.linux_import_failure {
+            if *generation == frame.generation {
+                return if strict {
+                    Err(PlayerError::Renderer(reason.clone()))
+                } else {
+                    Ok(false)
+                };
+            }
+        }
+        let interop = self.linux_vulkan.get_or_insert_with(|| {
+            crate::renderer::linux_vulkan::LinuxVulkanInterop::new(&self.adapter, &self.device)
+        });
+        let result = match interop {
+            Ok(interop) => frame
+                .frame
+                .decoded_frame()
+                .ok_or_else(|| "Expected an FFmpeg hardware frame".to_owned())
+                .and_then(|decoded| interop.copy_planes(&self.queue, decoded)),
+            Err(reason) => Err(reason.clone()),
+        };
+        let (luma, chroma, is_p010) = match result {
+            Ok(textures) => textures,
+            Err(reason) => {
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "video_frame_import", "stage": "linux_gpu_import_unavailable",
+                        "decodeBackend": frame.decode_backend.as_str(), "reason": reason,
+                        "fallback": if strict { "rejected" } else { "cpu_planes" },
+                    })
+                    .to_string(),
+                );
+                self.linux_import_failure = Some((frame.generation, reason.clone()));
+                return if strict {
+                    Err(PlayerError::Renderer(reason))
+                } else {
+                    Ok(false)
+                };
+            }
+        };
+        let retained = PlayerVideoFrame {
+            frame: frame
+                .frame
+                .try_clone_ref()
+                .map_err(|e| PlayerError::Renderer(e.to_string()))?,
+            decode_backend: frame.decode_backend,
+            pts: frame.pts,
+            media_time: frame.media_time,
+            late_by: frame.late_by,
+            generation: frame.generation,
+            scene_avg_nits: frame.scene_avg_nits,
+        };
+        let uniforms = self.video_uniforms_for_frame(frame, is_p010);
+        let frame_token = self.next_upload_serial();
+        self.current_video = Some(UploadedVideoFrame {
+            textures: UploadedVideoTextures::Planar { luma, chroma },
+            width: frame.frame.width(),
+            height: frame.frame.height(),
+            uniforms,
+            source_color: Some(source_color_for_player_frame(frame)),
+            frame_token,
+        });
+        self.current_video_visible = true;
+        self.linux_frame = None;
+        self.linux_hardware_frame = Some(retained);
+        self.stats.hardware_video_frames += 1;
+        // No CPU fallback and no direct zero-copy count: the Vulkan bridge
+        // performs device-local plane copies before Erika samples the textures.
+        self.stats.shared_handle_video_frames += 1;
+        if self.stats.shared_handle_video_frames == 1 {
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "video_frame_import", "stage": "linux_vulkan_gpu_planes",
+                    "decodeBackend": frame.decode_backend.as_str(), "hostPixelCopies": 0,
+                    "directZeroCopy": false, "p010": is_p010,
+                })
+                .to_string(),
+            );
+        }
+        Ok(true)
     }
 
     fn video_uniforms_for_frame(
@@ -3843,22 +4070,48 @@ impl WgpuRenderer {
                 })?;
             let caps = surface.get_capabilities(&self.adapter);
             let adapter_backend = self.adapter.get_info().backend;
+            #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
             let selection = select_wgpu_surface_output(
                 self.output_mode,
                 handle.output_capabilities,
                 adapter_backend,
                 &caps.formats,
-            )
-            .ok_or_else(|| {
+            );
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            let selection = select_linux_surface_output(
+                self.output_mode,
+                self.current_video
+                    .as_ref()
+                    .and_then(|v| v.source_color)
+                    .is_some_and(|s| s.is_hdr()),
+                adapter_backend,
+                &caps.formats,
+            );
+            let selection = selection.ok_or_else(|| {
                 PlayerError::Renderer(
                     "wgpu surface exposes no usable SDR presentation format".to_string(),
                 )
             })?;
+            // The GTK platform thread also dispatches Wayland parent commits.
+            // EGL FIFO can wait forever for an occluded subsurface callback on
+            // that same thread. GTK's tick timer already paces this GL path.
+            let preferred_present_mode = if cfg!(all(target_os = "linux", not(target_env = "ohos")))
+            {
+                if adapter_backend == wgpu::Backend::Vulkan
+                    && caps.present_modes.contains(&wgpu::PresentMode::Mailbox)
+                {
+                    wgpu::PresentMode::Mailbox
+                } else {
+                    wgpu::PresentMode::Immediate
+                }
+            } else {
+                wgpu::PresentMode::Fifo
+            };
             let present_mode = caps
                 .present_modes
                 .iter()
                 .copied()
-                .find(|mode| *mode == wgpu::PresentMode::Fifo)
+                .find(|mode| *mode == preferred_present_mode)
                 .or_else(|| caps.present_modes.first().copied())
                 .ok_or_else(|| {
                     PlayerError::Renderer("wgpu surface exposes no present modes".to_string())
@@ -3890,7 +4143,7 @@ impl WgpuRenderer {
             };
             surface.configure(&self.device, &config);
             let mut output = selection.output;
-            if output.extended_linear {
+            if output.extended_linear && !cfg!(all(target_os = "linux", not(target_env = "ohos"))) {
                 output = OutputDescription::extended_linear(effective_extended_linear_headroom(
                     self.output_mode,
                     handle.output_capabilities,
@@ -3984,6 +4237,8 @@ impl WgpuRenderer {
                 #[cfg(not(target_os = "android"))]
                 native_data_space: -1,
                 handle,
+                #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+                formats: caps.formats,
                 #[cfg(target_os = "android")]
                 _android_window: android_window,
             })
@@ -4326,6 +4581,9 @@ impl RendererBackend for WgpuRenderer {
     fn detach_surface(&mut self) -> Result<()> {
         self.flutter_metrics = None;
         self.flutter_frame = None;
+        // Release native window references even when headless device recovery
+        // fails; hosts are allowed to destroy their surface after detaching.
+        self.surface = None;
         #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
         if self.linux_display.is_some() {
             // A headless replacement retains the paused image but releases
@@ -4375,6 +4633,8 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn upload_player_frame(&mut self, frame: &PlayerVideoFrame) -> Result<()> {
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        self.update_linux_output_for_source(source_color_for_player_frame(frame).is_hdr())?;
         #[cfg(target_os = "android")]
         if frame.decode_backend == DecoderBackend::MediaCodec && frame.frame.is_mediacodec() {
             return self.upload_android_mediacodec_frame(frame);
@@ -4385,6 +4645,28 @@ impl RendererBackend for WgpuRenderer {
             return self.upload_ohos_avcodec_frame(frame);
         }
         let hardware_frame = frame.frame.has_hw_frames_context();
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        if std::env::var("ERIKA_REQUIRE_ZERO_COPY").as_deref() == Ok("1") {
+            return Err(PlayerError::Renderer(
+                "Linux direct zero-copy import is not implemented; CPU upload and GPU plane copies are rejected".into(),
+            ));
+        }
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        if hardware_frame
+            && matches!(
+                frame.decode_backend,
+                DecoderBackend::Cuda | DecoderBackend::Vaapi
+            )
+            && self.upload_linux_hardware_frame(frame)?
+        {
+            return Ok(());
+        }
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        if std::env::var("ERIKA_REQUIRE_GPU_FRAMES").as_deref() == Ok("1") {
+            return Err(PlayerError::Renderer(
+                "GPU-only decoded frames were required, but this frame needs a CPU upload".into(),
+            ));
+        }
         // NVDEC/VA-API still perform decode on the GPU. Transfer the decoded
         // planes for portable wgpu upload until native interop is available.
         // Keep this distinct from software decode and zero-copy in the stats.
@@ -4460,6 +4742,8 @@ impl RendererBackend for WgpuRenderer {
         #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
         {
             self.linux_frame = None;
+            self.linux_hardware_frame = None;
+            self.linux_import_failure = None;
         }
         if self.surface.is_some() {
             self.render_surface_clear(WgpuClearColor::new(0.0, 0.0, 0.0, 1.0))?;
@@ -5471,6 +5755,58 @@ fn add_retired_renderer_stats(target: &mut RendererRuntimeStats, retired: Render
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    #[test]
+    fn linux_hdr_requires_negotiated_scrgb_not_just_ten_bit_storage() {
+        let formats = [
+            wgpu::TextureFormat::Bgra8Unorm,
+            wgpu::TextureFormat::Rgb10a2Unorm,
+        ];
+        let output = select_linux_surface_output(
+            OutputMode::auto(12.5),
+            true,
+            wgpu::Backend::Vulkan,
+            &formats,
+        )
+        .unwrap();
+        assert!(!output.output.extended_linear);
+        assert_eq!(
+            output.fallback_reason,
+            OutputFallbackReason::DisplayHdrUnsupported
+        );
+    }
+
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    #[test]
+    fn linux_hdr_auto_switches_back_to_sdr_for_sdr_media() {
+        let formats = [
+            wgpu::TextureFormat::Bgra8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
+        ];
+        let hdr = select_linux_surface_output(
+            OutputMode::auto(1.0),
+            true,
+            wgpu::Backend::Vulkan,
+            &formats,
+        )
+        .unwrap();
+        assert!(hdr.output.extended_linear);
+        assert_eq!(hdr.output.target.reference_white_nits, 80.0);
+        assert_eq!(hdr.output.target.edr_headroom, 12.5);
+        let sdr = select_linux_surface_output(
+            OutputMode::auto(1.0),
+            false,
+            wgpu::Backend::Vulkan,
+            &formats,
+        )
+        .unwrap();
+        assert!(!sdr.output.extended_linear);
+        let gl =
+            select_linux_surface_output(OutputMode::auto(12.5), true, wgpu::Backend::Gl, &formats)
+                .unwrap();
+        assert!(!gl.output.extended_linear);
+    }
 
     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     #[test]

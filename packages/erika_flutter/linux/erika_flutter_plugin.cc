@@ -1,5 +1,6 @@
 #include "include/erika_flutter/erika_flutter_plugin.h"
 #include "erika.h"
+#include "native_video_surface.h"
 #include <epoxy/egl.h>
 #include <epoxy/glx.h>
 #include <algorithm>
@@ -76,7 +77,10 @@ static void erika_texture_init(ErikaTexture* self) { self->pixels = new PixelSta
 struct Player {
   ErikaPresenterHandle* handle = nullptr;
   int64_t texture = 0;
-  ~Player() { if (handle) erika_presenter_destroy(handle); }
+  std::unique_ptr<NativeVideoSurface> native;
+  int64_t native_generation = 0;
+  int64_t native_view_id = -1;
+  ~Player() { native.reset(); if (handle) erika_presenter_destroy(handle); }
 };
 struct Texture { ErikaTexture* object; uint32_t width, height; double scale; };
 struct Plugin {
@@ -123,6 +127,26 @@ static void check(ErikaStatus status) {
   std::string message = raw ? raw : "Erika operation failed";
   erika_string_free(raw);
   throw std::runtime_error(message);
+}
+static FlView* find_view(GtkWidget* widget, int64_t id) {
+  if (FL_IS_VIEW(widget) && (id < 0 || fl_view_get_id(FL_VIEW(widget)) == id))
+    return FL_VIEW(widget);
+  if (!GTK_IS_CONTAINER(widget)) return nullptr;
+  GList* children = gtk_container_get_children(GTK_CONTAINER(widget));
+  FlView* result = nullptr;
+  for (auto* child = children; child && !result; child = child->next)
+    result = find_view(GTK_WIDGET(child->data), id);
+  g_list_free(children);
+  return result;
+}
+static FlView* find_view(int64_t id) {
+  GList* windows = gtk_window_list_toplevels();
+  FlView* result = nullptr;
+  for (auto* window = windows; window && !result; window = window->next)
+    result = find_view(GTK_WIDGET(window->data), id);
+  g_list_free(windows);
+  if (!result) throw std::runtime_error("The requested Flutter view is not available");
+  return result;
 }
 static FlValue* decode_response(char* raw) {
   if (!raw) return nullptr;
@@ -252,7 +276,41 @@ static void method_call(FlMethodChannel*, FlMethodCall* call, gpointer data) {
     }
     auto& player = *found->second;
     if (method == "dispose") { plugin->players.erase(found); success(call); return; }
+    if (method == "attachOverlay") {
+      const auto view_id = static_cast<int64_t>(number(args, "flutterViewId", -1));
+      if (boolean(args, "secondaryWindow") && view_id < 0)
+        throw std::runtime_error("A secondary Linux window requires flutterViewId");
+      if (player.native && player.native_view_id != view_id) player.native.reset();
+      if (!player.native) {
+        check(erika_presenter_detach_surface(player.handle));
+        player.texture = 0;
+        player.native = std::make_unique<NativeVideoSurface>(find_view(view_id), player.handle);
+        player.native_view_id = view_id;
+        player.native_generation = 0;
+      }
+      g_autoptr(FlValue) value = fl_value_new_int(-1); success(call, value); return;
+    }
+    if (method == "setOverlayFrame") {
+      const auto generation = static_cast<int64_t>(number(args, "generation"));
+      const bool visible = boolean(args, "visible");
+      if (!player.native) { success(call); return; }
+      if (generation < player.native_generation || (!visible && generation != player.native_generation)) {
+        success(call); return;
+      }
+      const char* blend = string_arg(args, "blendMode");
+      if ((blend && strcmp(blend, "srcOver") != 0) || number(args, "opacity", 1) != 1)
+        throw std::runtime_error("Native Linux video requires opaque srcOver composition");
+      player.native->update(number(args, "x"), number(args, "y"), number(args, "width"), number(args, "height"), visible);
+      if (visible) player.native_generation = generation;
+      success(call); return;
+    }
+    if (method == "detachOverlay") {
+      const auto generation = static_cast<int64_t>(number(args, "generation", player.native_generation));
+      if (generation == player.native_generation) player.native.reset();
+      success(call); return;
+    }
     if (method == "attachView") {
+      player.native.reset();
       auto texture_id = static_cast<int64_t>(number(args, "viewId"));
       const auto& texture = plugin->textures.at(texture_id);
       detach_texture(plugin, texture_id);

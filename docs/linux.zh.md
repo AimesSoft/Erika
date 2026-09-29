@@ -4,9 +4,10 @@ Linux 现在可以从源码构建 Rust 播放器与 `liberika_capi.so`，通过 
 显示视频，通过 PulseAudio 输出音频。PipeWire 桌面需启用 `pipewire-pulse`；WSL2
 使用 WSLg 提供的显示与音频服务。
 
-当前范围：NVDEC/VA-API 硬件解码、FFmpeg 软件解码、wgpu SDR 呈现、Linux Flutter
-纹理插件、字幕/弹幕、音频播放、暂停/恢复、seek、窗口缩放。
-尚未提供 Linux 预编译发布包、GPU 零拷贝或 HDR 输出。
+当前范围：NVDEC/VA-API 硬件解码、FFmpeg 软件解码、wgpu 呈现、Linux Flutter
+纹理插件及 Wayland 原生视频层、字幕/弹幕、音频播放、暂停/恢复、seek、窗口缩放。
+已实现 HDR 表面协商，但真实显示器 HDR 输出与直接零拷贝尚未验收通过。
+尚未提供 Linux 预编译发布包。
 X11 当前使用 screen 0。原生 ARM64 构建路径已准备，但验收仅覆盖 x86_64。
 WSLg 的 RTX 5070 已实测 NVDEC（H.264、HEVC 10-bit、AV1）与 Mesa D3D12 / OpenGL 渲染。
 Intel/AMD 的 VA-API 路径已实现，尚无对应显卡的实机验收。
@@ -83,7 +84,7 @@ Linux 原生 Vulkan 仍使用默认路径，亦可通过 `WGPU_BACKEND=vulkan` �
 
 EGL 初始化绑定宿主的实际 display，并在 adapter 选择时检查窗口兼容性。
 detach 成功时释放所有借用该 display 的 EGL 对象；保留一帧 CPU 像素以便暂停时重建窗口。
-NVDEC/VA-API 解码后的帧经 `av_hwframe_transfer_data` 下载，再上传到 wgpu。
+WSL OpenGL 路径中 NVDEC/VA-API 解码后的帧经 `av_hwframe_transfer_data` 下载，再上传到 wgpu。
 该路径是硬件解码，但不是零拷贝；统计中的 `hardwareVideoFrames` 与
 `cpuVideoFrameFallbacks` 会同时增加，`softwareVideoFrames` 不会因此增加。
 
@@ -144,11 +145,40 @@ flutter build linux --release
 
 插件通过 GTK `FlPixelBufferTexture` 将 GPU 合成的视频、字幕、弹幕与 HUD 交给 Flutter。
 `ErikaVideoView` 和 `ErikaTextureVideoView` 均可用于 Linux；纹理支持 Flutter 遮罩与 UI 叠层。
-当前会从 GPU 读回 RGBA，适合兼容接入；4K/高帧率有额外带宽开销，尚未实现 DMA-BUF
-零拷贝或 MPRIS 系统媒体控制。截图返回紧密排列的 RGBA 像素。播放、暂停、seek、音轨/字幕切换和弹幕
+这条兼容路径会从 GPU 读回 RGBA，4K/高帧率有额外带宽开销。Wayland 可显式使用
+`ErikaWindowOverlayVideoView`：视频通过 `wl_subsurface` 放在透明 Flutter UI 下，
+由 Linux 合成器合成，不经过 Flutter 的逐帧 RGBA8 回读。宿主须将视频区域留透明；
+原生层仅支持不透明 `srcOver`，不支持 Flutter 对视频的裁剪或颜色滤镜。X11 继续使用纹理。
+MPRIS 系统媒体控制尚未实现。显式截图仍返回紧密排列的 RGBA 像素。播放、暂停、seek、音轨/字幕切换和弹幕
 走同一 C ABI，插件必须与同次构建的头文件和 `.so` 一起使用。
 插件在原生调用前后保存、解绑和恢复 GTK 的 EGL/GLX 上下文，避免 `EGL_BAD_ACCESS`。
 `ERIKA_DEBUG_HUD=1` 可开启诊断 HUD；安装库使用 `$ORIGIN` 查找同目录依赖。
+
+### GPU 帧导入与 HDR 的实际范围
+
+实验性 Vulkan 桥通过 FFmpeg 映射 VA-API 帧，再在 GPU 上复制 NV12/P010 平面到
+wgpu 纹理；驱动支持时不经过主机像素缓冲，但仍有 GPU copy，不计为直接零拷贝。
+需要外部显存/信号量、timeline semaphore、synchronization2 及兼容的设备/格式。
+Intel/AMD 实卡导入尚未验收。FFmpeg 8 的 CUDA→Vulkan 失败清理会崩溃，因此该组合
+在调用前被拒绝；普通 NVDEC 硬解仍可通过 CPU 平面传递播放。
+[FFmpeg 上游修复](https://github.com/FFmpeg/FFmpeg/commit/c29d710cd5d0f80bbb56f7ec1f35d5fb7ed44d05)
+已进入 FFmpeg 9，但本集成使用该版本重建仍需验证。
+
+- `ERIKA_REQUIRE_GPU_FRAMES=1`：任何需要 CPU 上传的解码帧都报错。
+- `ERIKA_REQUIRE_ZERO_COPY=1`：当前 Linux 路径明确报错，包括 GPU copy 和软解帧，不冒充零拷贝。
+- `ERIKA_LINUX_HDR=auto`：跟随 HDR/SDR 片源；`on` 请求扩展线性输出，`off` 选择 SDR。
+- `ERIKA_REQUIRE_HDR=1`：HDR 片源遇到 SDR 表面或 Flutter RGBA8 路径时报错。
+
+HDR 使用原生视频层的 FP16 scRGB；仅接受 Vulkan WSI 实际提供的
+`R16G16B16A16_SFLOAT + EXTENDED_SRGB_LINEAR_EXT`，仅有 10-bit SDR 格式不算 HDR。
+合成器负责将 HDR 视频与 SDR Flutter UI 合成并转换到显示器输出。
+默认 12.5 headroom 是 1000/80 nit 内容目标，不是屏幕亮度测量；没有真实测量时
+`activeHeadroomKnown` 仍为 false。本实现不含 HDR10+ 或 Dolby Vision 透传。
+
+本机隔离构建的 Mesa Dozen 26.0.8 已将 RTX 5070 识别为 Vulkan 硬件设备。
+本地格式查询实验进一步到达 CUDA 外部显存导入，但驱动返回 `CUDA_ERROR_NOT_SUPPORTED`。
+当前 WSLg 也未提供 HDR 颜色管理/WSI 能力。这不影响已实测的 OpenGL/Vulkan 硬件渲染；
+限制发生在互操作与显示链路。实验性 Mesa 构建不是发布依赖，启动脚本不会自动安装它。
 
 ## 3. Rust 与 C/C++ 接入
 
@@ -227,3 +257,12 @@ Mesa llvmpipe 以及 Mesa D3D12 / NVIDIA GeForce RTX 5070。独立 Linux 桌面�
 | NipaPlay 1.10.12 Linux release 实际 UI | 播放、数分钟暂停后恢复、seek、全屏进入/退出、中文字幕和进度弹幕通过 |
 | NipaPlay 原始 RGBA 截图及缩略图保存 | 427×240、409920 字节，保存成功 |
 | 安装包动态链接与版本 | 从安装目录解析 Erika，SHA256 与 release 构建一致 |
+
+原生 Wayland 视频层更新后另行验证：NipaPlay 1.11.9 / Flutter 3.47.0-0.3.pre
+的 Rust 与 Flutter release 构建成功，Weston 截图确认透明控件、视频、中文字幕及
+进度弹幕正确合成；暂停、全屏进入/退出和缩略图捕获通过。独立原生层 probe 在
+OpenGL 与实验性 Dozen Vulkan 均完成暂停、缩放、detach/reattach、seek，暂停画面保留。
+最终定向检查：29 项 wgpu 测试（含 2 项 HDR 协商）、5 项 API/头文件测试、C/C++
+严格警告检查、2 项禁止 CPU 帧绕过严格模式的测试均通过；C ABI 生命周期播放
+得到 316 帧、0 渲染/音频错误。完整 NipaPlay 会话的远端音频 underflow 计数非零，
+尚不能据此保证原生 Linux 桌面的音频流畅度。上述结果不构成物理 HDR 或解码零拷贝验收。

@@ -22,3 +22,9 @@ cc -std=c11 -Wall -Wextra -Werror examples/linux_native_demo/capi_smoke.c \
   -Wl,-rpath,"$CARGO_TARGET_DIR/debug" -lerika_capi -lX11 \
   -o "$CARGO_TARGET_DIR/debug/linux_capi_smoke"
 "$CARGO_TARGET_DIR/debug/linux_capi_smoke" "$FIXTURE"
+cc -std=c11 -Wall -Wextra -Werror examples/linux_native_demo/strict_frames.c \
+  -I crates/erika_capi/include -L "$CARGO_TARGET_DIR/debug" \
+  -Wl,-rpath,"$CARGO_TARGET_DIR/debug" -lerika_capi \
+  -o "$CARGO_TARGET_DIR/debug/linux_strict_frames"
+"$CARGO_TARGET_DIR/debug/linux_strict_frames" gpu "$FIXTURE"
+"$CARGO_TARGET_DIR/debug/linux_strict_frames" zero "$FIXTURE"

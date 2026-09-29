@@ -3,8 +3,10 @@
 Linux supports source builds of the Rust engine and `liberika_capi.so`, with
 NVDEC/VA-API hardware decoding, FFmpeg software decoding, wgpu SDR presentation
 on X11/Wayland, a Linux Flutter texture plugin, subtitles/danmaku and PulseAudio
-output (including PipeWire-Pulse and WSLg). Prebuilt Linux releases, zero-copy
-video import and HDR output are not available yet.
+output (including PipeWire-Pulse and WSLg). Wayland also has a native video
+subsurface beneath transparent Flutter UI. HDR surface negotiation is implemented;
+physical HDR output and direct zero-copy have not passed hardware validation.
+Prebuilt Linux releases are not available yet.
 X11 currently uses screen 0. Only x86_64 has been exercised locally.
 WSLg hardware rendering on the RTX 5070 is validated via Mesa D3D12 / OpenGL;
 NVDEC H.264, HEVC 10-bit and AV1 decoding have also passed real-device playback.
@@ -62,8 +64,8 @@ falling back. Native Linux Vulkan remains available (`WGPU_BACKEND=vulkan`).
 EGL is initialized on the actual host display and adapter selection checks
 surface compatibility. Successful detach releases that display's EGL objects;
 one CPU frame is retained so a paused image survives detach/reattach. NVDEC/VA-API
-frames are downloaded using FFmpeg and uploaded to wgpu. This is hardware decode
-with a CPU transfer, not zero-copy; statistics report these separately.
+frames on the WSL OpenGL path are downloaded using FFmpeg and uploaded to wgpu.
+This is hardware decode with a CPU transfer; statistics report these separately.
 
 Erika retains WSL's D3D runtime until process exit to keep its thread-local
 cleanup callbacks valid after EGL teardown. Audio uses the callback consumption
@@ -98,14 +100,49 @@ videos fail explicitly in strict mode; otherwise transitions are logged.
 
 For Flutter, build `erika_capi --release`, point `ERIKA_LIBRARY_DIR` at the folder
 containing `liberika_capi.so`, and use a Linux Flutter SDK with a path dependency
-on `packages/erika_flutter`. Both `ErikaVideoView` and `ErikaTextureVideoView` work
-through GTK's pixel buffer texture. GPU compositing includes subtitles, danmaku
-and HUD; RGBA readback incurs additional bandwidth at high resolutions. DMA-BUF
-zero-copy, Linux HDR and MPRIS are not implemented. Bundle the matching library
-and headers. Screenshot returns tightly packed RGBA bytes.
+on `packages/erika_flutter`. `ErikaVideoView` and `ErikaTextureVideoView` use GTK's
+SDR pixel buffer texture. On Wayland, use `ErikaWindowOverlayVideoView` with a
+transparent Flutter video rectangle to present video, subtitles, danmaku and HUD
+directly beneath Flutter. The native path avoids per-frame RGBA readback, supports
+opaque `srcOver` only, and does not provide Flutter clipping/color filters.
+X11 retains the texture path. MPRIS is not implemented. Bundle matching headers
+and library. Explicit screenshots still return tightly packed RGBA bytes.
 The plugin saves, unbinds and restores GTK's EGL/GLX context around native calls
 to avoid `EGL_BAD_ACCESS`. Set `ERIKA_DEBUG_HUD=1` to show the diagnostic HUD.
 Installed plugins resolve sibling shared libraries through `$ORIGIN`.
+
+### GPU frame import and HDR
+
+The experimental Vulkan bridge maps VA-API frames through FFmpeg and copies the
+NV12/P010 planes on the GPU into wgpu textures. This avoids host pixel staging
+when supported, but is not direct zero-copy. It requires matching device/format
+support, external-memory/semaphore extensions, timeline semaphores and
+synchronization2. Physical Intel/AMD import remains unverified. CUDA/Vulkan
+transfer is rejected with FFmpeg 8: its import-failure cleanup can crash
+([upstream fix](https://github.com/FFmpeg/FFmpeg/commit/c29d710cd5d0f80bbb56f7ec1f35d5fb7ed44d05)).
+FFmpeg 9 contains the fix; rebuilding this integration with it still needs
+validation. Ordinary NVDEC decode remains available with CPU plane transfer.
+
+`ERIKA_REQUIRE_GPU_FRAMES=1` rejects any CPU decoded-plane upload.
+`ERIKA_REQUIRE_ZERO_COPY=1` rejects the current Linux import paths, including
+software frames and GPU copies. No successful frame is mislabeled direct zero-copy.
+
+Set `ERIKA_LINUX_HDR=auto` to follow HDR/SDR source changes (`on` requests extended
+linear output; `off` selects SDR). Only a Vulkan WSI that advertises
+`R16G16B16A16_SFLOAT + EXTENDED_SRGB_LINEAR_EXT` is accepted for HDR. A 10-bit SDR
+format alone is insufficient. The compositor combines the HDR video subsurface
+with SDR Flutter UI and controls final display conversion. `ERIKA_REQUIRE_HDR=1`
+rejects HDR sources on SDR-only surfaces or the RGBA8 Flutter texture path.
+The default 12.5 scRGB headroom is a content target (1000/80 nits), not a measured
+display capability; `activeHeadroomKnown` remains false without a real measurement.
+HDR10+ and Dolby Vision passthrough are not implemented by this work.
+
+On the tested WSL system, isolated Mesa Dozen 26.0.8 recognizes the RTX 5070 as a
+Vulkan device. A local format-properties experiment reached CUDA external memory
+import, which returned `CUDA_ERROR_NOT_SUPPORTED`. WSLg also did not expose HDR
+color-management/WSI capabilities. This is a specific interop/display limitation;
+hardware OpenGL and Vulkan rendering both work. The experimental Mesa build is
+not a required dependency and is not installed by Erika's launcher.
 
 Rust consumers must enable the `wgpu` feature. See the
 [native demo](../examples/linux_native_demo/src/main.rs). C consumers use
@@ -159,3 +196,15 @@ after a pause of several minutes. The native texture C API test passed a
 render errors. The final focused presenter suite passed 24 tests. NVDEC H.264,
 HEVC Main10 and AV1 fixtures passed; invalid VA-API devices fail in strict mode.
 These results do not establish physical Intel/AMD or native desktop coverage.
+
+The native Wayland update was also built with NipaPlay 1.11.9 / Flutter
+3.47.0-0.3.pre. Weston screenshots verify transparent Flutter controls over
+video, Chinese SRT and progress danmaku. Pause, fullscreen enter/exit and
+thumbnail capture worked in NipaPlay. A separate native-view probe completed
+pause, resize, detach/reattach and seek on both OpenGL and experimental Dozen
+Vulkan, preserving the paused picture. The updated checks passed 29 wgpu tests
+(including two HDR negotiation tests), five API/header tests, C/C++ warnings as
+errors, two strict CPU-frame rejection cases, and C ABI lifecycle playback
+(316 video frames; zero render/audio errors). Remote audio underflow counters
+in the full NipaPlay session were nonzero; these checks do not establish smooth
+native-desktop audio, physical HDR output, or decoder zero-copy.
