@@ -55,7 +55,7 @@ vsync ticks.
 
 ## Linux Setup
 
-Build the Linux C ABI library as described in [Linux setup](../../docs/linux.md),
+Build the Linux C ABI library as described in [Linux setup](https://github.com/AimesSoft/Erika/blob/main/docs/linux.md),
 then set `ERIKA_LIBRARY_DIR` to the directory containing `liberika_capi.so` before
 running `flutter build linux`. The plugin bundles that library and uses a GTK
 Flutter texture. Use `ErikaTextureVideoView` (also selected by `ErikaVideoView`
