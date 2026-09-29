@@ -29,6 +29,7 @@ jobs:
             libswresample-dev libswscale-dev libavutil-dev \
             libfreetype-dev libharfbuzz-dev libfribidi-dev libfontconfig-dev \
             libpulse-dev libx11-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libxcursor1 libxi6 libxrandr2 \
             libvulkan-dev mesa-vulkan-drivers libegl1 libgl1-mesa-dri \
             fonts-dejavu-core pulseaudio pulseaudio-utils xvfb xauth
       - uses: actions/checkout@v4
