@@ -156,8 +156,10 @@ MPRIS 系统媒体控制尚未实现。显式截图仍返回紧密排列的 RGBA
 
 ### GPU 帧导入与 HDR 的实际范围
 
-实验性 Vulkan 桥通过 FFmpeg 映射 VA-API 帧，再在 GPU 上复制 NV12/P010 平面到
-wgpu 纹理；驱动支持时不经过主机像素缓冲，但仍有 GPU copy，不计为直接零拷贝。
+实验性 Vulkan 桥通过 FFmpeg 的 `AV_HWFRAME_MAP_DIRECT` 映射 VA-API 帧，
+直接采样导入的 NV12/P010 VkImage；解码帧到着色器之间不分配目标平面，
+也不执行 CPU/GPU 像素复制。映射持有解码帧引用直到 wgpu 完成使用，
+通过 timeline semaphore 和布局/所有权转换完成获取和释放；首次使用保留外部图像内容。
 需要外部显存/信号量、timeline semaphore、synchronization2 及兼容的设备/格式。
 Intel/AMD 实卡导入尚未验收。FFmpeg 8 的 CUDA→Vulkan 失败清理会崩溃，因此该组合
 在调用前被拒绝；普通 NVDEC 硬解仍可通过 CPU 平面传递播放。
@@ -165,9 +167,17 @@ Intel/AMD 实卡导入尚未验收。FFmpeg 8 的 CUDA→Vulkan 失败清理会�
 已进入 FFmpeg 9，但本集成使用该版本重建仍需验证。
 
 - `ERIKA_REQUIRE_GPU_FRAMES=1`：任何需要 CPU 上传的解码帧都报错。
-- `ERIKA_REQUIRE_ZERO_COPY=1`：当前 Linux 路径明确报错，包括 GPU copy 和软解帧，不冒充零拷贝。
+- `ERIKA_REQUIRE_ZERO_COPY=1`：只接受成功的 VA-API 直接导入；软解、导入失败和 CUDA GPU copy 都报错。
 - `ERIKA_LINUX_HDR=auto`：跟随 HDR/SDR 片源；`on` 请求扩展线性输出，`off` 选择 SDR。
 - `ERIKA_REQUIRE_HDR=1`：HDR 片源遇到 SDR 表面或 Flutter RGBA8 路径时报错。
+
+`bash scripts/check_linux_zero_copy.sh` 使用测试专用的 FFmpeg Vulkan 图像，
+检查图像句柄相同、NV12/P010 与参考图逐像素一致、重复重绘/截图、信号量推进、
+释放后源像素不变，以及有 GPU 提交时退出。该测试已在 RTX 5070 的隔离 Dozen
+驱动上通过，但它不使用 VA-API 解码器，不能替代 Intel/AMD 实卡的端到端验收。
+当前换帧会等待上一帧 GPU 使用完成，吞吐/延迟尚未验收。
+NVIDIA NVDEC 直接零拷贝仍未实现；CUDA 传递继续按独立的复制路径处理。
+原生 Wayland 展示可避免 Flutter 的逐帧 RGBA 回读，主动截图仍会读取像素。
 
 HDR 使用原生视频层的 FP16 scRGB；仅接受 Vulkan WSI 实际提供的
 `R16G16B16A16_SFLOAT + EXTENDED_SRGB_LINEAR_EXT`，仅有 10-bit SDR 格式不算 HDR。

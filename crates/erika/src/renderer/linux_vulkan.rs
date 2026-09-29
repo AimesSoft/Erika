@@ -1,10 +1,11 @@
-//! FFmpeg/Vulkan plane transfer without host pixel staging. CUDA requires a
-//! device-local copy; this path deliberately does not claim direct zero-copy.
+//! Direct VA-API/DRM image sampling and an explicitly separate CUDA GPU-copy
+//! fallback. The direct path never allocates or copies a destination plane.
 use crate::ffmpeg::Frame;
 use ash::{ext, khr, vk, vk::Handle};
 use std::{
     ffi::{CStr, c_char, c_int, c_void},
     ptr::NonNull,
+    sync::{Arc, Mutex},
 };
 
 type Api = wgpu::hal::api::Vulkan;
@@ -25,6 +26,12 @@ unsafe extern "C" {
     fn erika_linux_vk_destroy(state: *mut c_void);
     fn erika_linux_vk_error(state: *mut c_void) -> *const c_char;
     fn erika_linux_vk_format(frame: *const erika_ffmpeg_sys::AVFrame) -> c_int;
+    fn erika_linux_vk_import_direct(
+        state: *mut c_void,
+        frame: *const erika_ffmpeg_sys::AVFrame,
+        images: *mut u64,
+    ) -> *mut c_void;
+    fn erika_linux_vk_release_direct(state: *mut c_void, lease: *mut c_void) -> c_int;
     fn erika_linux_vk_copy(
         state: *mut c_void,
         frame: *const erika_ffmpeg_sys::AVFrame,
@@ -107,22 +114,184 @@ pub(crate) fn request_device(
 }
 
 pub(crate) struct LinuxVulkanInterop {
-    state: NonNull<c_void>,
+    state: Arc<Mutex<VulkanState>>,
     // Drop the FFmpeg wrapper before the VkDevice it borrows.
     device: wgpu::Device,
     renderable_planes: [bool; 2],
 }
 
-// Every access requires &mut self; the renderer serializes queue submissions.
-unsafe impl Send for LinuxVulkanInterop {}
+struct VulkanState(NonNull<c_void>);
 
-impl Drop for LinuxVulkanInterop {
+// Protected by the mutex; queue operations run on the serialized renderer.
+unsafe impl Send for VulkanState {}
+
+impl Drop for VulkanState {
     fn drop(&mut self) {
-        unsafe { erika_linux_vk_destroy(self.state.as_ptr()) };
+        unsafe { erika_linux_vk_destroy(self.0.as_ptr()) };
     }
 }
 
+/// Owns the FFmpeg mapping and its decoder reference for the whole lifetime of
+/// the displayed picture (including paused redraws and screenshots).
+pub(crate) struct LinuxDirectFrame {
+    pub(crate) planes: [wgpu::Texture; 2],
+    lease: NonNull<c_void>,
+    state: Arc<Mutex<VulkanState>>,
+    device: wgpu::Device,
+}
+
+// Can move with the renderer; never accessed concurrently with queue submission.
+unsafe impl Send for LinuxDirectFrame {}
+
+impl Drop for LinuxDirectFrame {
+    fn drop(&mut self) {
+        // Invalidate every alias before waiting. wgpu keeps queued views alive
+        // through their final submission; the C mapping must outlive that work.
+        for plane in &self.planes {
+            plane.destroy();
+        }
+        if let Err(error) = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        }) {
+            crate::trace::diagnostic(format!("Linux direct frame GPU wait: {error}"));
+        }
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if unsafe { erika_linux_vk_release_direct(state.0.as_ptr(), self.lease.as_ptr()) } < 0 {
+            crate::trace::diagnostic(bridge_error(&state));
+        }
+    }
+}
+
+fn bridge_error(state: &VulkanState) -> String {
+    unsafe { CStr::from_ptr(erika_linux_vk_error(state.0.as_ptr())) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[cfg(all(test, erika_test_linux_vulkan))]
+pub(crate) struct DirectFixture {
+    producer: *mut erika_ffmpeg_sys::AVFrame,
+    state: Arc<Mutex<VulkanState>>,
+}
+
+#[cfg(all(test, erika_test_linux_vulkan))]
+impl DirectFixture {
+    pub(crate) fn check_released(self) {
+        unsafe extern "C" {
+            fn erika_linux_vk_test_released(
+                state: *mut c_void,
+                producer: *mut erika_ffmpeg_sys::AVFrame,
+            ) -> c_int;
+        }
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(
+            unsafe { erika_linux_vk_test_released(state.0.as_ptr(), self.producer) },
+            0,
+            "{}",
+            bridge_error(&state)
+        );
+    }
+}
+
+#[cfg(all(test, erika_test_linux_vulkan))]
+impl Drop for DirectFixture {
+    fn drop(&mut self) {
+        unsafe { erika_ffmpeg_sys::av_frame_free(&mut self.producer) };
+    }
+}
+
+/// Wrap an already initialized image; ownership stays with the frame lease.
+/// The HAL override prevents wgpu's first UNDEFINED barrier from discarding it.
+unsafe fn wrap_plane(
+    device: &wgpu::Device,
+    image: u64,
+    size: wgpu::Extent3d,
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
+    let desc = wgpu::TextureDescriptor {
+        label: Some("erika-linux-direct-plane"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    };
+    let hal_desc = wgpu::hal::TextureDescriptor {
+        label: desc.label,
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: desc.dimension,
+        format,
+        usage: wgpu::TextureUses::RESOURCE,
+        memory_flags: wgpu::hal::MemoryFlags::empty(),
+        view_formats: vec![],
+    };
+    let hal = unsafe { device.as_hal::<Api>() }.expect("validated Vulkan device");
+    let mut texture = unsafe {
+        hal.texture_from_raw(
+            vk::Image::from_raw(image),
+            &hal_desc,
+            Some(Box::new(|| {})),
+            wgpu::hal::vulkan::TextureMemory::External,
+        )
+    };
+    unsafe { texture.set_external_initial_usage(wgpu::TextureUses::RESOURCE) };
+    drop(hal);
+    unsafe { device.create_texture_from_hal::<Api>(texture, &desc) }
+}
+
 impl LinuxVulkanInterop {
+    #[cfg(all(test, erika_test_linux_vulkan))]
+    pub(crate) fn direct_fixture(&self, p010: bool) -> (LinuxDirectFrame, DirectFixture) {
+        unsafe extern "C" {
+            fn erika_linux_vk_test_direct(
+                state: *mut c_void,
+                p010: c_int,
+                images: *mut u64,
+                producer: *mut *mut erika_ffmpeg_sys::AVFrame,
+            ) -> *mut c_void;
+        }
+        let mut images = [0; 2];
+        let mut producer = std::ptr::null_mut();
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let lease = NonNull::new(unsafe {
+            erika_linux_vk_test_direct(
+                state.0.as_ptr(),
+                p010.into(),
+                images.as_mut_ptr(),
+                &mut producer,
+            )
+        })
+        .unwrap_or_else(|| panic!("{}", bridge_error(&state)));
+        drop(state);
+        let formats = if p010 {
+            [
+                wgpu::TextureFormat::R16Unorm,
+                wgpu::TextureFormat::Rg16Unorm,
+            ]
+        } else {
+            [wgpu::TextureFormat::R8Unorm, wgpu::TextureFormat::Rg8Unorm]
+        };
+        let direct = unsafe { self.wrap_direct(lease, images, formats, 16, 8) };
+        for (plane, image) in direct.planes.iter().zip(images) {
+            assert_eq!(
+                unsafe { plane.as_hal::<Api>().unwrap().raw_handle().as_raw() },
+                image
+            );
+        }
+        (
+            direct,
+            DirectFixture {
+                producer,
+                state: self.state.clone(),
+            },
+        )
+    }
+
     pub(crate) fn new(adapter: &wgpu::Adapter, device: &wgpu::Device) -> Result<Self, String> {
         let hal = unsafe { device.as_hal::<Api>() }
             .ok_or("GPU frame sharing requires a Vulkan renderer")?;
@@ -161,8 +330,9 @@ impl LinuxVulkanInterop {
             )
         };
         Ok(Self {
-            state: NonNull::new(state)
-                .ok_or_else(|| format!("FFmpeg Vulkan device initialization failed ({error})"))?,
+            state: Arc::new(Mutex::new(VulkanState(NonNull::new(state).ok_or_else(
+                || format!("FFmpeg Vulkan device initialization failed ({error})"),
+            )?))),
             device: device.clone(),
             renderable_planes: [
                 [wgpu::TextureFormat::R8Unorm, wgpu::TextureFormat::Rg8Unorm],
@@ -189,6 +359,70 @@ impl LinuxVulkanInterop {
                 })
             }),
         })
+    }
+
+    pub(crate) fn import_direct(&mut self, frame: &Frame) -> Result<LinuxDirectFrame, String> {
+        let depth = unsafe { erika_linux_vk_format(frame.as_ptr()) };
+        let formats = match depth {
+            8 => [wgpu::TextureFormat::R8Unorm, wgpu::TextureFormat::Rg8Unorm],
+            10 if self
+                .device
+                .features()
+                .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM) =>
+            {
+                [
+                    wgpu::TextureFormat::R16Unorm,
+                    wgpu::TextureFormat::Rg16Unorm,
+                ]
+            }
+            _ => return Err("Direct import requires NV12 or supported P010 textures".into()),
+        };
+        let (width, height) = (frame.width(), frame.height());
+        if width == 0
+            || height == 0
+            || width > self.device.limits().max_texture_dimension_2d
+            || height > self.device.limits().max_texture_dimension_2d
+        {
+            return Err("Invalid direct frame dimensions".into());
+        }
+        let mut images = [0; 2];
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let lease = NonNull::new(unsafe {
+            erika_linux_vk_import_direct(state.0.as_ptr(), frame.as_ptr(), images.as_mut_ptr())
+        })
+        .ok_or_else(|| bridge_error(&state))?;
+        drop(state);
+        Ok(unsafe { self.wrap_direct(lease, images, formats, width, height) })
+    }
+
+    unsafe fn wrap_direct(
+        &self,
+        lease: NonNull<c_void>,
+        images: [u64; 2],
+        formats: [wgpu::TextureFormat; 2],
+        width: u32,
+        height: u32,
+    ) -> LinuxDirectFrame {
+        // The C bridge has acquired ownership, waited for decode, and moved
+        // these exact imported VkImages to SHADER_READ_ONLY_OPTIMAL.
+        let planes = std::array::from_fn(|i| unsafe {
+            wrap_plane(
+                &self.device,
+                images[i],
+                wgpu::Extent3d {
+                    width: if i == 0 { width } else { width.div_ceil(2) },
+                    height: if i == 0 { height } else { height.div_ceil(2) },
+                    depth_or_array_layers: 1,
+                },
+                formats[i],
+            )
+        });
+        LinuxDirectFrame {
+            planes,
+            lease,
+            state: self.state.clone(),
+            device: self.device.clone(),
+        }
     }
 
     pub(crate) fn copy_planes(
@@ -271,20 +505,17 @@ impl LinuxVulkanInterop {
             .map_err(|e| e.to_string())?;
         let luma = unsafe { textures[0].as_hal::<Api>() }.ok_or("Vulkan luma unavailable")?;
         let chroma = unsafe { textures[1].as_hal::<Api>() }.ok_or("Vulkan chroma unavailable")?;
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let result = unsafe {
             erika_linux_vk_copy(
-                self.state.as_ptr(),
+                state.0.as_ptr(),
                 frame.as_ptr(),
                 luma.raw_handle().as_raw(),
                 chroma.raw_handle().as_raw(),
             )
         };
         if result < 0 {
-            return Err(
-                unsafe { CStr::from_ptr(erika_linux_vk_error(self.state.as_ptr())) }
-                    .to_string_lossy()
-                    .into_owned(),
-            );
+            return Err(bridge_error(&state));
         }
         drop((luma, chroma));
         let mut textures = textures.into_iter();

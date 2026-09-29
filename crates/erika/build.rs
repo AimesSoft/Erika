@@ -18,6 +18,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ANDROID_NDK_ROOT");
     println!("cargo:rerun-if-env-changed=TVOS_DEPLOYMENT_TARGET");
     println!("cargo:rerun-if-env-changed=ERIKA_USE_SYSTEM_LIBS");
+    println!("cargo:rerun-if-env-changed=ERIKA_TEST_LINUX_VULKAN");
+    println!("cargo:rustc-check-cfg=cfg(erika_test_linux_vulkan)");
     println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.vert");
     println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.frag");
     println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.vert.spv");
@@ -54,7 +56,13 @@ fn main() {
                 .probe("vulkan")
                 .expect("Linux GPU interop requires Vulkan development headers");
             println!("cargo:rerun-if-changed=src/renderer/linux_vulkan.c");
-            cc::Build::new()
+            let mut bridge = cc::Build::new();
+            if env::var("ERIKA_TEST_LINUX_VULKAN").as_deref() == Ok("1") {
+                println!("cargo:rustc-cfg=erika_test_linux_vulkan");
+                bridge.define("ERIKA_TEST_LINUX_VULKAN", None);
+            }
+            println!("cargo:rerun-if-changed=src/renderer/linux_vulkan_test.c");
+            bridge
                 .file("src/renderer/linux_vulkan.c")
                 .includes(avutil_includes)
                 .includes(vulkan.include_paths)

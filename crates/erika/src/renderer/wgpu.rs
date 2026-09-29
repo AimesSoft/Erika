@@ -75,6 +75,7 @@ pub struct WgpuRendererStats {
     pub software_video_frames: u64,
     pub hardware_video_frames: u64,
     pub zero_copy_video_frames: u64,
+    pub direct_zero_copy_video_frames: u64,
     pub shared_handle_video_frames: u64,
     pub cpu_video_frame_fallbacks: u64,
     pub hdr_source_frames: u64,
@@ -464,6 +465,8 @@ struct UploadedVideoFrame {
     /// Presentation ticks reuse this token so an expensive GPU preprocessing
     /// pass is only encoded once per upload, independent of repeated PTS values.
     frame_token: u64,
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    _linux_direct: Option<crate::renderer::linux_vulkan::LinuxDirectFrame>,
 }
 
 impl UploadedVideoFrame {
@@ -808,8 +811,8 @@ fn linux_adapter_is_hardware(device_type: wgpu::DeviceType, name: &str) -> bool 
 
 #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 fn retain_wsl_d3d_runtime() {
-    // WSL's D3D libraries register thread-local destructors used after EGL
-    // teardown. Unloading them before a renderer thread exits can jump into
+    // WSL's D3D libraries register thread-local destructors used after EGL or
+    // Dozen/Vulkan teardown. Unloading them before a renderer thread exits can jump into
     // unmapped code. Keep the runtime loaded for the process lifetime, just as
     // the Windows driver does; no environment or system files are changed.
     static RETAIN: std::sync::Once = std::sync::Once::new();
@@ -1214,9 +1217,7 @@ fn request_wgpu_device(
     }
 
     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
-    if candidate.backends.contains(wgpu::Backends::GL) {
-        retain_wsl_d3d_runtime();
-    }
+    retain_wsl_d3d_runtime();
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: candidate.backends,
         flags: wgpu_instance_flags(),
@@ -1708,7 +1709,7 @@ impl WgpuRenderer {
     }
 
     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
-    fn for_linux_display(&self, surface: Option<WgpuSurfaceHandle>) -> Result<Self> {
+    fn for_linux_display(&mut self, surface: Option<WgpuSurfaceHandle>) -> Result<Self> {
         let mut replacement = Self::new_with_candidate_order(
             backend_candidate_order(wgpu_backend_candidates().len(), 0, &[]),
             self.output_mode,
@@ -1721,7 +1722,16 @@ impl WgpuRenderer {
             replacement.upload_planar_with_context(frame.clone(), *uniforms, *color)?;
             replacement.current_video_visible = self.current_video_visible;
         } else if let Some(frame) = self.linux_hardware_frame.as_ref() {
-            replacement.upload_linux_hardware_frame(frame)?;
+            // Return shared decoder memory before a second VkDevice imports
+            // it. Retaining the AVFrame keeps the paused picture available.
+            if self
+                .current_video
+                .as_ref()
+                .is_some_and(|video| video._linux_direct.is_some())
+            {
+                self.current_video = None;
+            }
+            replacement.upload_player_frame(frame)?;
             replacement.current_video_visible = self.current_video_visible;
         }
         replacement.stats = self.stats;
@@ -2211,6 +2221,8 @@ impl WgpuRenderer {
             uniforms,
             source_color,
             frame_token,
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            _linux_direct: None,
         });
         self.current_video_visible = true;
         #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
@@ -2223,10 +2235,9 @@ impl WgpuRenderer {
 
     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     fn upload_linux_hardware_frame(&mut self, frame: &PlayerVideoFrame) -> Result<bool> {
-        let strict = std::env::var("ERIKA_REQUIRE_GPU_FRAMES").as_deref() == Ok("1");
-        if std::env::var("ERIKA_REQUIRE_ZERO_COPY").as_deref() == Ok("1") {
-            return Err(PlayerError::Renderer("Linux Vulkan import currently uses GPU plane copies; direct zero-copy was required".into()));
-        }
+        let require_direct = std::env::var("ERIKA_REQUIRE_ZERO_COPY").as_deref() == Ok("1");
+        let strict =
+            require_direct || std::env::var("ERIKA_REQUIRE_GPU_FRAMES").as_deref() == Ok("1");
         if let Some((generation, reason)) = &self.linux_import_failure {
             if *generation == frame.generation {
                 return if strict {
@@ -2244,10 +2255,24 @@ impl WgpuRenderer {
                 .frame
                 .decoded_frame()
                 .ok_or_else(|| "Expected an FFmpeg hardware frame".to_owned())
-                .and_then(|decoded| interop.copy_planes(&self.queue, decoded)),
+                .and_then(|decoded| {
+                    if frame.decode_backend == DecoderBackend::Vaapi {
+                        interop.import_direct(decoded).map(|direct| {
+                            let [luma, chroma] = direct.planes.clone();
+                            let is_p010 = luma.format() == wgpu::TextureFormat::R16Unorm;
+                            (luma, chroma, is_p010, Some(direct))
+                        })
+                    } else if require_direct {
+                        Err("Direct zero-copy was required, but CUDA/Vulkan uses a GPU copy".into())
+                    } else {
+                        interop
+                            .copy_planes(&self.queue, decoded)
+                            .map(|(luma, chroma, p010)| (luma, chroma, p010, None))
+                    }
+                }),
             Err(reason) => Err(reason.clone()),
         };
-        let (luma, chroma, is_p010) = match result {
+        let (luma, chroma, is_p010, direct) = match result {
             Ok(textures) => textures,
             Err(reason) => {
                 crate::trace::diagnostic(
@@ -2280,6 +2305,7 @@ impl WgpuRenderer {
         };
         let uniforms = self.video_uniforms_for_frame(frame, is_p010);
         let frame_token = self.next_upload_serial();
+        let direct_zero_copy = direct.is_some();
         self.current_video = Some(UploadedVideoFrame {
             textures: UploadedVideoTextures::Planar { luma, chroma },
             width: frame.frame.width(),
@@ -2287,20 +2313,24 @@ impl WgpuRenderer {
             uniforms,
             source_color: Some(source_color_for_player_frame(frame)),
             frame_token,
+            _linux_direct: direct,
         });
         self.current_video_visible = true;
         self.linux_frame = None;
         self.linux_hardware_frame = Some(retained);
         self.stats.hardware_video_frames += 1;
-        // No CPU fallback and no direct zero-copy count: the Vulkan bridge
-        // performs device-local plane copies before Erika samples the textures.
         self.stats.shared_handle_video_frames += 1;
+        if direct_zero_copy {
+            self.stats.zero_copy_video_frames += 1;
+            self.stats.direct_zero_copy_video_frames += 1;
+        }
         if self.stats.shared_handle_video_frames == 1 {
             crate::trace::diagnostic(
                 serde_json::json!({
                     "event": "video_frame_import", "stage": "linux_vulkan_gpu_planes",
                     "decodeBackend": frame.decode_backend.as_str(), "hostPixelCopies": 0,
-                    "directZeroCopy": false, "p010": is_p010,
+                    "directZeroCopy": direct_zero_copy, "p010": is_p010,
+                    "gpuPlaneCopies": if direct_zero_copy { 0 } else { 1 },
                 })
                 .to_string(),
             );
@@ -4646,12 +4676,6 @@ impl RendererBackend for WgpuRenderer {
         }
         let hardware_frame = frame.frame.has_hw_frames_context();
         #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
-        if std::env::var("ERIKA_REQUIRE_ZERO_COPY").as_deref() == Ok("1") {
-            return Err(PlayerError::Renderer(
-                "Linux direct zero-copy import is not implemented; CPU upload and GPU plane copies are rejected".into(),
-            ));
-        }
-        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
         if hardware_frame
             && matches!(
                 frame.decode_backend,
@@ -4662,9 +4686,11 @@ impl RendererBackend for WgpuRenderer {
             return Ok(());
         }
         #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
-        if std::env::var("ERIKA_REQUIRE_GPU_FRAMES").as_deref() == Ok("1") {
+        if std::env::var("ERIKA_REQUIRE_GPU_FRAMES").as_deref() == Ok("1")
+            || std::env::var("ERIKA_REQUIRE_ZERO_COPY").as_deref() == Ok("1")
+        {
             return Err(PlayerError::Renderer(
-                "GPU-only decoded frames were required, but this frame needs a CPU upload".into(),
+                "GPU-only decoded frames / direct zero-copy were required, but this frame needs a CPU upload".into(),
             ));
         }
         // NVDEC/VA-API still perform decode on the GPU. Transfer the decoded
@@ -4952,7 +4978,7 @@ impl RendererBackend for WgpuRenderer {
             software_video_frames: stats.software_video_frames,
             hardware_video_frames: stats.hardware_video_frames,
             zero_copy_video_frames: stats.zero_copy_video_frames,
-            direct_zero_copy_video_frames: 0,
+            direct_zero_copy_video_frames: stats.direct_zero_copy_video_frames,
             shared_handle_video_frames: stats.shared_handle_video_frames,
             cpu_video_frame_fallbacks: stats.cpu_video_frame_fallbacks,
             hdr_source_frames: stats.hdr_source_frames,
@@ -6675,6 +6701,117 @@ mod tests {
             chroma.push(cr);
         }
         (luma, chroma)
+    }
+
+    #[cfg(all(target_os = "linux", not(target_env = "ohos"), erika_test_linux_vulkan))]
+    #[test]
+    fn linux_direct_vulkan_sampling_preserves_pixels_and_releases_frames() {
+        // Explicitly enabled by check_linux_zero_copy.sh: never silently skip
+        // missing Vulkan/interop support and count that as hardware coverage.
+        let mut renderer = WgpuRenderer::new().unwrap();
+        assert_eq!(renderer.adapter_info().backend, wgpu::Backend::Vulkan);
+        let interop = crate::renderer::linux_vulkan::LinuxVulkanInterop::new(
+            &renderer.adapter,
+            &renderer.device,
+        )
+        .unwrap();
+        for p010 in [false, true, false, true] {
+            let bytes = |v: u8| if p010 { vec![0, v] } else { vec![v] };
+            let luma: Vec<u8> = (0..8)
+                .flat_map(|_| (0..16).flat_map(|x| bytes(32 + x * 12)))
+                .collect();
+            let chroma: Vec<u8> = (0..4)
+                .flat_map(|_| (0..16).flat_map(|x| bytes(if x % 2 == 0 { 90 } else { 170 })))
+                .collect();
+            let uniforms =
+                VideoUniforms::from_pipeline(&VideoRenderPipeline::sdr_default(), p010, false);
+            renderer
+                .upload_planar(
+                    PlanarFrame {
+                        format: if p010 {
+                            PlanarPixelFormat::P010
+                        } else {
+                            PlanarPixelFormat::Nv12
+                        },
+                        width: 16,
+                        height: 8,
+                        luma,
+                        chroma,
+                    },
+                    uniforms,
+                )
+                .unwrap();
+            let expected = renderer.render_current_offscreen(None).unwrap().unwrap();
+            let (direct, producer) = interop.direct_fixture(p010);
+            let [luma, chroma] = direct.planes.clone();
+            renderer.current_video = Some(UploadedVideoFrame {
+                textures: UploadedVideoTextures::Planar { luma, chroma },
+                width: 16,
+                height: 8,
+                uniforms,
+                source_color: None,
+                frame_token: renderer.next_upload_serial(),
+                _linux_direct: Some(direct),
+            });
+            // Redraw the same held decoder images; also exercises screenshot
+            // readback while the original producer reference is retained.
+            for _ in 0..3 {
+                let actual = renderer.render_current_offscreen(None).unwrap().unwrap();
+                for y in 0..8 {
+                    for x in 0..16 {
+                        assert_eq!(
+                            actual.pixel(x, y),
+                            expected.pixel(x, y),
+                            "p010={p010}, ({x},{y})"
+                        );
+                    }
+                }
+            }
+            renderer.current_video = None;
+            producer.check_released();
+        }
+        // Teardown with a live imported picture, without an explicit clear.
+        let (direct, producer) = interop.direct_fixture(false);
+        let [luma, chroma] = direct.planes.clone();
+        renderer.current_video = Some(UploadedVideoFrame {
+            textures: UploadedVideoTextures::Planar { luma, chroma },
+            width: 16,
+            height: 8,
+            uniforms: VideoUniforms::from_pipeline(
+                &VideoRenderPipeline::sdr_default(),
+                false,
+                false,
+            ),
+            source_color: None,
+            frame_token: renderer.next_upload_serial(),
+            _linux_direct: Some(direct),
+        });
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("direct-frame-in-flight-teardown"),
+            size: wgpu::Extent3d {
+                width: 16,
+                height: 8,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        renderer
+            .draw_current_video(
+                &target.create_view(&Default::default()),
+                16,
+                8,
+                None,
+                None,
+                OutputDescription::sdr(),
+            )
+            .unwrap();
+        drop(renderer);
+        producer.check_released();
     }
 
     /// Renders a solid grey NV12 sample and returns the readback's red

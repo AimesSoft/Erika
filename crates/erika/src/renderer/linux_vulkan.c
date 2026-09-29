@@ -1,5 +1,6 @@
 // FFmpeg owns decoder-specific CUDA/VA-API interop. This bridge never maps
-// decoded pixels into host memory. Vulkan copies preserve NV12/P010 planes;
+// decoded pixels into host memory. VA-API images can be sampled directly;
+// the separate CUDA fallback uses device-local copies of NV12/P010 planes.
 // Erika continues to perform color conversion, tone mapping and composition.
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_vulkan.h>
@@ -153,6 +154,143 @@ static int frames(ErikaLinuxVk *s, const AVFrame *src) {
     if (ret < 0) { av_buffer_unref(&ref); return fail(s, "initialize Vulkan frames", ret); }
     s->frames_ref = ref; return 0;
 }
+
+typedef struct ErikaLinuxVkLease {
+    AVFrame *mapped;
+    // DRM memory returns to the external owner before the VA surface can be
+    // recycled. Test/owned Vulkan frames instead keep their original family.
+    uint32_t return_family[2];
+} ErikaLinuxVkLease;
+
+// Only transitions and semaphore operations: no pixel copy or allocation.
+// The Rust owner keeps this mapping exclusively until all wgpu uses complete.
+static int direct_barrier(ErikaLinuxVk *s, ErikaLinuxVkLease *lease, int release) {
+    AVHWFramesContext *fc = (AVHWFramesContext*)lease->mapped->hw_frames_ctx->data;
+    AVVulkanFramesContext *vfc = fc->hwctx;
+    AVVkFrame *frame = (AVVkFrame*)lease->mapped->data[0];
+    VkImageMemoryBarrier2 barriers[2] = {0};
+    uint64_t waits[2], signals[2];
+    VkPipelineStageFlags stages[2] = {VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT};
+    vfc->lock_frame(fc, frame);
+    for (int i = 0; i < 2; i++) {
+        waits[i] = frame->sem_value[i]; signals[i] = waits[i] + 1;
+        uint32_t from = release ? s->family : frame->queue_family[i];
+        uint32_t to = release ? lease->return_family[i] : s->family;
+        // No ownership transfer for concurrent images or the current family.
+        if (from == VK_QUEUE_FAMILY_IGNORED || to == VK_QUEUE_FAMILY_IGNORED || from == to)
+            from = to = VK_QUEUE_FAMILY_IGNORED;
+        barriers[i] = (VkImageMemoryBarrier2) {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+            .dstStageMask = release ? VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT :
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            .srcAccessMask = release ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : frame->access[i],
+            .dstAccessMask = release ? 0 : VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+            .oldLayout = release ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : frame->layout[i],
+            .newLayout = release ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = from, .dstQueueFamilyIndex = to,
+            .image = frame->img[i], .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+        };
+    }
+    VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+    if (vkResetCommandBuffer(s->command, 0) != VK_SUCCESS || vkBeginCommandBuffer(s->command, &begin) != VK_SUCCESS) goto failed;
+    VkDependencyInfo dependency = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .imageMemoryBarrierCount = 2, .pImageMemoryBarriers = barriers};
+    s->pipeline_barrier(s->command, &dependency);
+    if (vkEndCommandBuffer(s->command) != VK_SUCCESS || vkResetFences(s->device, 1, &s->fence) != VK_SUCCESS) goto failed;
+    VkTimelineSemaphoreSubmitInfo timeline = {.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+        .waitSemaphoreValueCount = 2, .pWaitSemaphoreValues = waits,
+        .signalSemaphoreValueCount = 2, .pSignalSemaphoreValues = signals};
+    VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .pNext = &timeline,
+        .waitSemaphoreCount = 2, .pWaitSemaphores = frame->sem, .pWaitDstStageMask = stages,
+        .commandBufferCount = 1, .pCommandBuffers = &s->command,
+        .signalSemaphoreCount = 2, .pSignalSemaphores = frame->sem};
+    if (vkQueueSubmit(s->queue, 1, &submit, s->fence) != VK_SUCCESS) goto failed;
+    for (int i = 0; i < 2; i++) {
+        frame->sem_value[i] = signals[i];
+        frame->layout[i] = barriers[i].newLayout;
+        frame->access[i] = release ? 0 : VK_ACCESS_SHADER_READ_BIT;
+        if (frame->queue_family[i] != VK_QUEUE_FAMILY_IGNORED)
+            frame->queue_family[i] = release ? lease->return_family[i] : s->family;
+    }
+    vfc->unlock_frame(fc, frame);
+    if (vkWaitForFences(s->device, 1, &s->fence, VK_TRUE, UINT64_MAX) == VK_SUCCESS) return 0;
+    vkDeviceWaitIdle(s->device);
+    return fail(s, "direct image completion", AVERROR_EXTERNAL);
+failed:
+    vkDeviceWaitIdle(s->device);
+    vfc->unlock_frame(fc, frame);
+    return fail(s, "direct image transition", AVERROR_EXTERNAL);
+}
+
+// Takes ownership of mapped, including on failure. Used by the VA-API import
+// and the Vulkan image fixture in the direct-sampling regression test.
+static ErikaLinuxVkLease *direct_acquire(ErikaLinuxVk *s, AVFrame *mapped,
+                                         int external, uint64_t images[2]) {
+    AVHWFramesContext *fc = (AVHWFramesContext*)mapped->hw_frames_ctx->data;
+    AVVulkanFramesContext *vfc = fc->hwctx;
+    AVVkFrame *frame = (AVVkFrame*)mapped->data[0];
+    int p010 = fc->sw_format == AV_PIX_FMT_P010;
+    if (!frame || !frame->img[0] || !frame->img[1] || frame->img[2]
+        || frame->img[0] == frame->img[1] || !frame->sem[0] || !frame->sem[1]
+        || frame->sem[0] == frame->sem[1] || vfc->nb_layers != 1
+        || vfc->format[0] != (p010 ? VK_FORMAT_R16_UNORM : VK_FORMAT_R8_UNORM)
+        || vfc->format[1] != (p010 ? VK_FORMAT_R16G16_UNORM : VK_FORMAT_R8G8_UNORM)) {
+        fail(s, "direct sampling requires separate NV12/P010 images", AVERROR(ENOSYS));
+        av_frame_free(&mapped); return NULL;
+    }
+    for (int i = 0; i < 2; i++) {
+        if (frame->queue_family[i] != s->family && frame->queue_family[i] < VK_QUEUE_FAMILY_FOREIGN_EXT) {
+            fail(s, "direct image belongs to another Vulkan queue", AVERROR(ENOSYS));
+            av_frame_free(&mapped); return NULL;
+        }
+    }
+    ErikaLinuxVkLease *lease = av_mallocz(sizeof(*lease));
+    if (!lease) { fail(s, "allocate direct frame lease", AVERROR(ENOMEM)); av_frame_free(&mapped); return NULL; }
+    lease->mapped = mapped;
+    for (int i = 0; i < 2; i++)
+        lease->return_family[i] = external ? VK_QUEUE_FAMILY_EXTERNAL : frame->queue_family[i];
+    if (direct_barrier(s, lease, 0) < 0) {
+        av_frame_free(&lease->mapped); av_free(lease); return NULL;
+    }
+    for (int i = 0; i < 2; i++) images[i] = (uint64_t)frame->img[i];
+    return lease;
+}
+
+ErikaLinuxVkLease *erika_linux_vk_import_direct(ErikaLinuxVk *s, const AVFrame *src,
+                                               uint64_t images[2]) {
+    if (!erika_linux_vk_format(src) || src->format != AV_PIX_FMT_VAAPI) {
+        fail(s, "direct import requires VA-API NV12/P010; CUDA transfer is not zero-copy", AVERROR(ENOSYS));
+        return NULL;
+    }
+    if (frames(s, src) < 0) return NULL;
+    AVFrame *mapped = av_frame_alloc();
+    if (!mapped) { fail(s, "allocate direct frame", AVERROR(ENOMEM)); return NULL; }
+    mapped->format = AV_PIX_FMT_VULKAN;
+    mapped->hw_frames_ctx = av_buffer_ref(s->frames_ref);
+    int ret = mapped->hw_frames_ctx ?
+        av_hwframe_map(mapped, src, AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_DIRECT) : AVERROR(ENOMEM);
+    if (ret < 0) {
+        fail(s, "direct VA-API/DRM import", ret); av_frame_free(&mapped);
+        av_buffer_unref(&s->frames_ref); return NULL;
+    }
+    return direct_acquire(s, mapped, 1, images);
+}
+
+// Caller has destroyed both wgpu texture aliases and waited for their last
+// GPU use. No texture or command buffer may access the images after this call.
+int erika_linux_vk_release_direct(ErikaLinuxVk *s, ErikaLinuxVkLease *lease) {
+    if (!lease) return 0;
+    int ret = direct_barrier(s, lease, 1);
+    av_frame_free(&lease->mapped);
+    av_free(lease);
+    return ret;
+}
+
+#ifdef ERIKA_TEST_LINUX_VULKAN
+#include "linux_vulkan_test.c"
+#endif
 
 // Caller has drained wgpu work and established COLOR_ATTACHMENT_OPTIMAL for
 // both destination images. Every submitted source semaphore is waited AND

@@ -113,9 +113,10 @@ Installed plugins resolve sibling shared libraries through `$ORIGIN`.
 
 ### GPU frame import and HDR
 
-The experimental Vulkan bridge maps VA-API frames through FFmpeg and copies the
-NV12/P010 planes on the GPU into wgpu textures. This avoids host pixel staging
-when supported, but is not direct zero-copy. It requires matching device/format
+The experimental Vulkan bridge maps VA-API frames through FFmpeg with
+`AV_HWFRAME_MAP_DIRECT`, then samples the imported NV12/P010 VkImages directly.
+This path allocates no destination plane and performs no CPU or GPU pixel copy
+between decoder and shader. It requires matching device/format
 support, external-memory/semaphore extensions, timeline semaphores and
 synchronization2. Physical Intel/AMD import remains unverified. CUDA/Vulkan
 transfer is rejected with FFmpeg 8: its import-failure cleanup can crash
@@ -124,8 +125,25 @@ FFmpeg 9 contains the fix; rebuilding this integration with it still needs
 validation. Ordinary NVDEC decode remains available with CPU plane transfer.
 
 `ERIKA_REQUIRE_GPU_FRAMES=1` rejects any CPU decoded-plane upload.
-`ERIKA_REQUIRE_ZERO_COPY=1` rejects the current Linux import paths, including
-software frames and GPU copies. No successful frame is mislabeled direct zero-copy.
+`ERIKA_REQUIRE_ZERO_COPY=1` accepts only the direct VA-API path and rejects
+software frames, failed imports and CUDA GPU copies. The zero-copy counters
+increase only after a successful direct import. Use native Wayland presentation
+to also avoid Flutter's RGBA readback; explicit screenshots still read pixels.
+
+Each imported picture retains its decoder reference until wgpu finishes using
+both image aliases. Timeline waits and ownership/layout transitions precede
+sampling; release returns the images to the external owner before recycling.
+The vendored Vulkan HAL preserves the external image's initialized layout on
+first use. Current frame replacement waits for outstanding GPU work; this is a
+correctness-first implementation, not a throughput/latency acceptance result.
+
+`bash scripts/check_linux_zero_copy.sh` enables test-only FFmpeg Vulkan fixtures.
+It checks exact image-handle identity, NV12/P010 pixels against CPU-uploaded
+reference images, repeated redraw/screenshot, semaphore advancement, unchanged
+producer pixels after release, and teardown with submitted GPU work. This passed
+on the RTX 5070 through isolated Mesa Dozen. The fixture is not a VA-API decoder;
+physical Intel/AMD decode-to-display zero-copy remains unverified. NVIDIA NVDEC
+direct zero-copy is not implemented; its CUDA transfer remains a separate copy path.
 
 Set `ERIKA_LINUX_HDR=auto` to follow HDR/SDR source changes (`on` requests extended
 linear output; `off` selects SDR). Only a Vulkan WSI that advertises
