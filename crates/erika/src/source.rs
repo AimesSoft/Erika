@@ -1071,13 +1071,32 @@ fn open_stream_response(
     }
 }
 
-/// One persistent stream: an open-ended GET from `start` onward, delivering
-/// fixed-size stripes into the shared handoff map. Between chunks the worker
-/// re-checks the control flags, so a seek (epoch bump), shutdown, or
-/// backpressure pause takes effect within one chunk. A body error reconnects
-/// at the reached offset with the entity validator replayed, bounded by
-/// consecutive fruitless reconnects; past that the worker reports failure and
-/// the reader falls back to the synchronous path.
+/// Gate each stripe, including multiple stripes received in one body chunk.
+fn wait_for_stream_window(
+    shared: &StreamShared,
+    io: &HttpIo,
+    epoch: u64,
+    offset: u64,
+    stripe_started: bool,
+) -> bool {
+    loop {
+        let inner = lock_stream(shared);
+        if inner.stopped || inner.epoch != epoch || io.is_cancelled() {
+            return false;
+        }
+        // Finish partial stripes so a small window cannot strand reader data.
+        if stripe_started || offset < inner.window_end {
+            return true;
+        }
+        let _ = shared
+            .signal
+            .wait_timeout(inner, Duration::from_millis(200));
+    }
+}
+
+/// One persistent open-ended GET, delivering fixed-size stripes. Seeks,
+/// cancellation and backpressure are checked before starting each stripe.
+/// Body errors reconnect at the reached offset with the entity validator.
 fn stream_worker_main(
     shared: Arc<StreamShared>,
     io: HttpIo,
@@ -1105,20 +1124,8 @@ fn stream_worker_main(
             mark_worker_done(&shared, false);
             return;
         }
-        loop {
-            let inner = lock_stream(&shared);
-            if inner.stopped || inner.epoch != epoch || io.is_cancelled() {
-                return;
-            }
-            // Finish a started stripe even when it crosses the window boundary.
-            // Otherwise a window smaller than a stripe would strand the bytes
-            // the reader needs in the worker's private buffer.
-            if !stripe.is_empty() || offset < inner.window_end {
-                break;
-            }
-            let _ = shared
-                .signal
-                .wait_timeout(inner, Duration::from_millis(200));
+        if !wait_for_stream_window(&shared, &io, epoch, offset, !stripe.is_empty()) {
+            return;
         }
         if live.is_none() {
             match open_stream_response(&io, &uri, &http_headers, offset, validator.clone()) {
@@ -1194,6 +1201,12 @@ fn stream_worker_main(
                 }
                 let mut consumed = 0usize;
                 while consumed < received {
+                    // A single HTTP body chunk can contain several stripes.
+                    // Apply backpressure at every stripe boundary, including
+                    // boundaries inside that chunk, before publishing more.
+                    if !wait_for_stream_window(&shared, &io, epoch, offset, !stripe.is_empty()) {
+                        return;
+                    }
                     let available = HTTP_STREAM_STRIPE_BYTES as usize - stripe.len();
                     let take = available.min(received - consumed);
                     stripe.extend_from_slice(&bytes[consumed..consumed + take]);
