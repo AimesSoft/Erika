@@ -11,6 +11,9 @@ X11 currently uses screen 0. Only x86_64 has been exercised locally.
 WSLg hardware rendering on the RTX 5070 is validated via Mesa D3D12 / OpenGL;
 NVDEC H.264, HEVC 10-bit and AV1 decoding have also passed real-device playback.
 Intel/AMD VA-API is implemented but has not been tested on those physical cards.
+An opt-in [WSL D3D12 GPU-copy bridge](wsl-gpu-copy.md) now removes decoded-frame
+CPU transfers on this RTX 5070, with measured 4K60 Main10 playback. It is not
+direct zero-copy, and Dozen's Linux presentation still uses software WSI.
 
 ## Build on Ubuntu 26.04
 
@@ -126,7 +129,7 @@ validation. Ordinary NVDEC decode remains available with CPU plane transfer.
 
 `ERIKA_REQUIRE_GPU_FRAMES=1` rejects any CPU decoded-plane upload.
 `ERIKA_REQUIRE_ZERO_COPY=1` accepts only the direct VA-API path and rejects
-software frames, failed imports and CUDA GPU copies. The zero-copy counters
+software frames, failed imports, WSL D3D12 copies and CUDA GPU copies. The zero-copy counters
 increase only after a successful direct import. Use native Wayland presentation
 to also avoid Flutter's RGBA readback; explicit screenshots still read pixels.
 
@@ -160,7 +163,9 @@ Vulkan device. A local format-properties experiment reached CUDA external memory
 import, which returned `CUDA_ERROR_NOT_SUPPORTED`. WSLg also did not expose HDR
 color-management/WSI capabilities. This is a specific interop/display limitation;
 hardware OpenGL and Vulkan rendering both work. The experimental Mesa build is
-not a required dependency and is not installed by Erika's launcher.
+not a required dependency and is not installed by Erika's launcher. The optional
+WSL GPU-copy bridge uses Mesa D3D12 VA-API instead of CUDA external-memory import;
+see its [build steps, performance results and presentation limits](wsl-gpu-copy.md).
 
 Rust consumers must enable the `wgpu` feature. See the
 [native demo](../examples/linux_native_demo/src/main.rs). C consumers use

@@ -11,6 +11,9 @@ Linux 现在可以从源码构建 Rust 播放器与 `liberika_capi.so`，通过 
 X11 当前使用 screen 0。原生 ARM64 构建路径已准备，但验收仅覆盖 x86_64。
 WSLg 的 RTX 5070 已实测 NVDEC（H.264、HEVC 10-bit、AV1）与 Mesa D3D12 / OpenGL 渲染。
 Intel/AMD 的 VA-API 路径已实现，尚无对应显卡的实机验收。
+新增可选 [WSL D3D12 GPU 复制路径](wsl-gpu-copy.md)：本机 RTX 5070 已实测
+4K60 Main10，解码帧 CPU 往返为零。GPU 内仍有复制，Dozen 的 Linux 窗口输出
+仍用 software WSI，不能称为端到端零拷贝。链接包含构建步骤及完整验收边界。
 
 ## 1. 安装依赖
 
@@ -167,7 +170,7 @@ Intel/AMD 实卡导入尚未验收。FFmpeg 8 的 CUDA→Vulkan 失败清理会�
 已进入 FFmpeg 9，但本集成使用该版本重建仍需验证。
 
 - `ERIKA_REQUIRE_GPU_FRAMES=1`：任何需要 CPU 上传的解码帧都报错。
-- `ERIKA_REQUIRE_ZERO_COPY=1`：只接受成功的 VA-API 直接导入；软解、导入失败和 CUDA GPU copy 都报错。
+- `ERIKA_REQUIRE_ZERO_COPY=1`：只接受成功的 VA-API 直接导入；软解、导入失败、WSL D3D12 与 CUDA GPU copy 都报错。
 - `ERIKA_LINUX_HDR=auto`：跟随 HDR/SDR 片源；`on` 请求扩展线性输出，`off` 选择 SDR。
 - `ERIKA_REQUIRE_HDR=1`：HDR 片源遇到 SDR 表面或 Flutter RGBA8 路径时报错。
 

@@ -54,6 +54,7 @@ pub enum WgpuArtCnnStatus {
 pub enum WgpuArtCnnInput<'a> {
     PlanarLuma {
         view: &'a wgpu::TextureView,
+        p010_le_bytes: bool,
     },
     NonlinearRgb {
         view: &'a wgpu::TextureView,
@@ -71,7 +72,14 @@ impl WgpuArtCnnInput<'_> {
 
     fn luma_coefficients(self) -> [f32; 3] {
         match self {
-            Self::PlanarLuma { .. } => [0.0; 3],
+            Self::PlanarLuma {
+                p010_le_bytes: true,
+                ..
+            } => [1.0 / 257.0, 256.0 / 257.0, 0.0],
+            Self::PlanarLuma {
+                p010_le_bytes: false,
+                ..
+            } => [1.0, 0.0, 0.0],
             Self::NonlinearRgb {
                 luma_coefficients, ..
             } => luma_coefficients,
@@ -1086,7 +1094,7 @@ impl WgpuArtCnn {
             ],
         });
         let conv0_bind_group = match input {
-            WgpuArtCnnInput::PlanarLuma { view } => {
+            WgpuArtCnnInput::PlanarLuma { view, .. } => {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("erika-wgpu-artcnn-conv0-luma-bind-group"),
                     layout: &resources.conv0_luma_layout,

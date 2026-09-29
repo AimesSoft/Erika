@@ -19,6 +19,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TVOS_DEPLOYMENT_TARGET");
     println!("cargo:rerun-if-env-changed=ERIKA_USE_SYSTEM_LIBS");
     println!("cargo:rerun-if-env-changed=ERIKA_TEST_LINUX_VULKAN");
+    println!("cargo:rerun-if-env-changed=ERIKA_LINUX_D3D12_INTEROP");
     println!("cargo:rustc-check-cfg=cfg(erika_test_linux_vulkan)");
     println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.vert");
     println!("cargo:rerun-if-changed=src/renderer/ohos_native_buffer.frag");
@@ -57,6 +58,9 @@ fn main() {
                 .expect("Linux GPU interop requires Vulkan development headers");
             println!("cargo:rerun-if-changed=src/renderer/linux_vulkan.c");
             let mut bridge = cc::Build::new();
+            if env::var("ERIKA_LINUX_D3D12_INTEROP").as_deref() == Ok("1") {
+                bridge.define("ERIKA_LINUX_D3D12_INTEROP", None);
+            }
             if env::var("ERIKA_TEST_LINUX_VULKAN").as_deref() == Ok("1") {
                 println!("cargo:rustc-cfg=erika_test_linux_vulkan");
                 bridge.define("ERIKA_TEST_LINUX_VULKAN", None);
@@ -64,10 +68,34 @@ fn main() {
             println!("cargo:rerun-if-changed=src/renderer/linux_vulkan_test.c");
             bridge
                 .file("src/renderer/linux_vulkan.c")
-                .includes(avutil_includes)
-                .includes(vulkan.include_paths)
+                .includes(&avutil_includes)
+                .includes(&vulkan.include_paths)
                 .warnings(true)
                 .compile("erika_linux_vulkan");
+            if env::var("ERIKA_LINUX_D3D12_INTEROP").as_deref() == Ok("1") {
+                let directx = pkg_config::Config::new()
+                    .probe("DirectX-Headers")
+                    .expect("WSL interop requires DirectX-Headers development files");
+                let va = pkg_config::Config::new()
+                    .probe("libva")
+                    .expect("WSL interop requires libva-dev");
+                println!("cargo:rerun-if-changed=src/renderer/linux_wsl_d3d12.cpp");
+                cc::Build::new()
+                    .cpp(true)
+                    .std("c++17")
+                    .file("src/renderer/linux_wsl_d3d12.cpp")
+                    .includes(&avutil_includes)
+                    .includes(directx.include_paths)
+                    .includes(va.include_paths)
+                    .includes(&vulkan.include_paths)
+                    .warnings(true)
+                    .compile("erika_linux_wsl");
+
+                // Static objects refer to GUIDs/libva after the archive.
+                pkg_config::Config::new().probe("DirectX-Headers").unwrap();
+                pkg_config::Config::new().probe("libva").unwrap();
+            }
+
             // Static bridge users need the loader after the archive on the
             // linker command line, especially with --as-needed executables.
             pkg_config::Config::new().probe("vulkan").unwrap();

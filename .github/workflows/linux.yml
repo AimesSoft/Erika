@@ -18,6 +18,9 @@ jobs:
     env:
       DEBIAN_FRONTEND: noninteractive
       LIBGL_ALWAYS_SOFTWARE: "1"
+      # Compile/link the optional WSL bridge on CI; runtime GPU acceptance
+      # remains a separate real-device check.
+      ERIKA_LINUX_D3D12_INTEROP: "1"
     steps:
       - name: Install FFmpeg 8 and native build dependencies
         run: |
@@ -31,6 +34,7 @@ jobs:
             libpulse-dev libx11-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
             libxcursor1 libxi6 libxrandr2 \
             libvulkan-dev mesa-vulkan-drivers libegl1 libgl1-mesa-dri \
+            directx-headers-dev libva-dev \
             fonts-dejavu-core pulseaudio pulseaudio-utils xvfb xauth
       - uses: actions/checkout@v4
       - name: Test as an unprivileged desktop user

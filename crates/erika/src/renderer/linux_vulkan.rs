@@ -31,6 +31,11 @@ unsafe extern "C" {
         frame: *const erika_ffmpeg_sys::AVFrame,
         images: *mut u64,
     ) -> *mut c_void;
+    fn erika_linux_vk_import_wsl(
+        state: *mut c_void,
+        frame: *const erika_ffmpeg_sys::AVFrame,
+        images: *mut u64,
+    ) -> *mut c_void;
     fn erika_linux_vk_release_direct(state: *mut c_void, lease: *mut c_void) -> c_int;
     fn erika_linux_vk_copy(
         state: *mut c_void,
@@ -362,6 +367,15 @@ impl LinuxVulkanInterop {
     }
 
     pub(crate) fn import_direct(&mut self, frame: &Frame) -> Result<LinuxDirectFrame, String> {
+        self.import_frame(frame, false)
+    }
+
+    /// Separate WSL GPU-copy path; never counted as direct zero-copy.
+    pub(crate) fn import_wsl_copy(&mut self, frame: &Frame) -> Result<LinuxDirectFrame, String> {
+        self.import_frame(frame, true)
+    }
+
+    fn import_frame(&mut self, frame: &Frame, wsl_copy: bool) -> Result<LinuxDirectFrame, String> {
         let depth = unsafe { erika_linux_vk_format(frame.as_ptr()) };
         let formats = match depth {
             8 => [wgpu::TextureFormat::R8Unorm, wgpu::TextureFormat::Rg8Unorm],
@@ -388,7 +402,11 @@ impl LinuxVulkanInterop {
         let mut images = [0; 2];
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let lease = NonNull::new(unsafe {
-            erika_linux_vk_import_direct(state.0.as_ptr(), frame.as_ptr(), images.as_mut_ptr())
+            if wsl_copy {
+                erika_linux_vk_import_wsl(state.0.as_ptr(), frame.as_ptr(), images.as_mut_ptr())
+            } else {
+                erika_linux_vk_import_direct(state.0.as_ptr(), frame.as_ptr(), images.as_mut_ptr())
+            }
         })
         .ok_or_else(|| bridge_error(&state))?;
         drop(state);

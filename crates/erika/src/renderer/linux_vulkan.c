@@ -12,11 +12,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#ifdef ERIKA_LINUX_D3D12_INTEROP
+void *erika_wsl_create(uint64_t physical, uint64_t device, uint64_t queue,
+    uint32_t family, char *error, size_t error_size);
+void erika_wsl_destroy(void *state);
+void *erika_wsl_copy(void *state, const AVFrame *frame, uint64_t images[2], char *error, size_t error_size);
+int erika_wsl_release(void *frame, char *error, size_t error_size);
+#endif
 
 typedef struct ErikaLinuxVk {
     AVBufferRef *device_ref, *frames_ref;
     VkDevice device;
     VkQueue queue;
+    VkPhysicalDevice physical;
+    void *wsl;
     uint32_t family;
     VkCommandPool pool;
     VkCommandBuffer command;
@@ -38,6 +47,9 @@ static int fail(ErikaLinuxVk *s, const char *stage, int error) {
 
 void erika_linux_vk_destroy(ErikaLinuxVk *s) {
     if (!s) return;
+#ifdef ERIKA_LINUX_D3D12_INTEROP
+    erika_wsl_destroy(s->wsl);
+#endif
     av_buffer_unref(&s->frames_ref);
     av_buffer_unref(&s->device_ref); // user-supplied VkDevice is not destroyed
     if (s->fence) vkDestroyFence(s->device, s->fence, NULL);
@@ -67,6 +79,7 @@ ErikaLinuxVk *erika_linux_vk_create(uint64_t instance, uint64_t physical,
     ErikaLinuxVk *s = av_mallocz(sizeof(*s));
     if (!s) { *error = AVERROR(ENOMEM); return NULL; }
     s->device = (VkDevice)(uintptr_t)device; s->family = family;
+    s->physical = (VkPhysicalDevice)(uintptr_t)physical;
     s->pipeline_barrier = (PFN_vkCmdPipelineBarrier2KHR)vkGetDeviceProcAddr(s->device, "vkCmdPipelineBarrier2KHR");
     if (!s->pipeline_barrier) { *error = AVERROR(ENOSYS); goto failed; }
     s->dev_extensions = copy_extensions(dev_exts, dev_count);
@@ -157,10 +170,28 @@ static int frames(ErikaLinuxVk *s, const AVFrame *src) {
 
 typedef struct ErikaLinuxVkLease {
     AVFrame *mapped;
+    void *wsl_frame;
     // DRM memory returns to the external owner before the VA surface can be
     // recycled. Test/owned Vulkan frames instead keep their original family.
     uint32_t return_family[2];
 } ErikaLinuxVkLease;
+
+ErikaLinuxVkLease *erika_linux_vk_import_wsl(ErikaLinuxVk *s, const AVFrame *src, uint64_t images[2]) {
+#ifdef ERIKA_LINUX_D3D12_INTEROP
+    if (!s->wsl) s->wsl = erika_wsl_create((uint64_t)s->physical, (uint64_t)s->device,
+        (uint64_t)s->queue, s->family, s->error, sizeof(s->error));
+    if (!s->wsl) return NULL;
+    ErikaLinuxVkLease *lease = av_mallocz(sizeof(*lease));
+    if (!lease) { fail(s,"allocate WSL frame lease",AVERROR(ENOMEM)); return NULL; }
+    lease->wsl_frame = erika_wsl_copy(s->wsl,src,images,s->error,sizeof(s->error));
+    if (!lease->wsl_frame) { av_free(lease); return NULL; }
+    return lease;
+#else
+    (void)src; (void)images;
+    fail(s,"WSL GPU copy requires ERIKA_LINUX_D3D12_INTEROP=1 at build time",AVERROR(ENOSYS));
+    return NULL;
+#endif
+}
 
 // Only transitions and semaphore operations: no pixel copy or allocation.
 // The Rust owner keeps this mapping exclusively until all wgpu uses complete.
@@ -282,6 +313,12 @@ ErikaLinuxVkLease *erika_linux_vk_import_direct(ErikaLinuxVk *s, const AVFrame *
 // GPU use. No texture or command buffer may access the images after this call.
 int erika_linux_vk_release_direct(ErikaLinuxVk *s, ErikaLinuxVkLease *lease) {
     if (!lease) return 0;
+#ifdef ERIKA_LINUX_D3D12_INTEROP
+    if (lease->wsl_frame) {
+        int ret = erika_wsl_release(lease->wsl_frame,s->error,sizeof(s->error));
+        av_free(lease); return ret;
+    }
+#endif
     int ret = direct_barrier(s, lease, 1);
     av_frame_free(&lease->mapped);
     av_free(lease);

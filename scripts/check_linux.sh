@@ -10,6 +10,7 @@ bash scripts/build_linux_libass.sh
 cargo fmt --all -- --check
 python3 packaging/tests/test_api_alignment.py -v
 cargo test --locked -j "${ERIKA_BUILD_JOBS:-4}" -p erika -p erika_capi --features wgpu --lib -- --test-threads=2
+cargo test --locked -p erika --features wgpu --test wgpu_artcnn -- --test-threads=1
 cargo test --locked -p erika --features wgpu --lib pulse_audio_pause_resume_flush_and_reconfigure -- --ignored
 cargo build --locked -j "${ERIKA_BUILD_JOBS:-4}" -p linux_native_demo -p erika_capi
 FIXTURE=crates/erika/testdata/playback/playback-fixture.mkv

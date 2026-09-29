@@ -37,7 +37,7 @@ use crate::core::{
 use crate::danmaku::{
     DanmakuAtlasUpdate, DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan,
 };
-use crate::ffmpeg::{DecoderBackend, PlanarFrame, PlanarFrameConversionError, PlanarPixelFormat};
+use crate::ffmpeg::{DecoderBackend, PlanarFrame, PlanarPixelFormat};
 use crate::overlay::OverlayFrame;
 #[cfg(target_os = "android")]
 use crate::renderer::android_vulkan::{
@@ -380,7 +380,7 @@ enum UploadedVideoTextures {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlanarUploadPath {
     Native,
-    CpuP010ToNv12,
+    GpuP010Bytes,
 }
 
 struct PreparedPlanarUpload {
@@ -393,21 +393,20 @@ fn prepare_planar_upload(
     frame: PlanarFrame,
     mut uniforms: VideoUniforms,
     supports_16bit_norm: bool,
-) -> std::result::Result<PreparedPlanarUpload, PlanarFrameConversionError> {
-    let (frame, path) = if frame.format == PlanarPixelFormat::P010 && !supports_16bit_norm {
-        (
-            frame.downconvert_p010_to_nv12()?,
-            PlanarUploadPath::CpuP010ToNv12,
-        )
+) -> PreparedPlanarUpload {
+    let path = if frame.format == PlanarPixelFormat::P010 && !supports_16bit_norm {
+        PlanarUploadPath::GpuP010Bytes
     } else {
-        (frame, PlanarUploadPath::Native)
+        PlanarUploadPath::Native
     };
-    uniforms = uniforms.with_p010_representation(frame.format == PlanarPixelFormat::P010);
-    Ok(PreparedPlanarUpload {
+    uniforms = uniforms
+        .with_p010_representation(frame.format == PlanarPixelFormat::P010)
+        .p010_byte_planes(path == PlanarUploadPath::GpuP010Bytes);
+    PreparedPlanarUpload {
         frame,
         uniforms,
         path,
-    })
+    }
 }
 
 fn pq_code_for_lut(nits: f32) -> f32 {
@@ -480,7 +479,8 @@ impl UploadedVideoFrame {
             self.uniforms.is_p010 != 0,
             output.extended_linear,
         )
-        .packed_alpha_right(self.uniforms.has_packed_alpha_right());
+        .packed_alpha_right(self.uniforms.has_packed_alpha_right())
+        .p010_byte_planes(self.uniforms.has_p010_byte_planes());
         match &self.textures {
             UploadedVideoTextures::Planar { .. } => uniforms,
             UploadedVideoTextures::Rgb { .. } => uniforms.rgb_texture_input(),
@@ -594,7 +594,10 @@ pub struct WgpuRenderer {
     upscaler_failed_frame_token: Option<u64>,
     upscaler_active_frame_reported: bool,
     cpu_video_frame_fallback_reported: bool,
-    p010_quality_fallback_reported: bool,
+    p010_byte_planes_reported: bool,
+    /// Rotate upload storage so writing the next frame does not overwrite a
+    /// texture still being sampled by the previous GPU submission.
+    planar_upload_pool: std::collections::VecDeque<(wgpu::Texture, wgpu::Texture)>,
     sdr_hdr_output_reported: bool,
     #[cfg(target_os = "android")]
     android_shared_frame_reported: bool,
@@ -1692,7 +1695,8 @@ impl WgpuRenderer {
             upscaler_failed_frame_token: None,
             upscaler_active_frame_reported: false,
             cpu_video_frame_fallback_reported: false,
-            p010_quality_fallback_reported: false,
+            p010_byte_planes_reported: false,
+            planar_upload_pool: std::collections::VecDeque::new(),
             sdr_hdr_output_reported: false,
             #[cfg(target_os = "android")]
             android_shared_frame_reported: false,
@@ -2112,8 +2116,8 @@ impl WgpuRenderer {
 
     /// Upload a repacked planar frame (8-bit NV12 or 10-bit P010) as the current
     /// video frame. When the adapter lacks `TEXTURE_FORMAT_16BIT_NORM`, P010 is
-    /// explicitly down-converted to NV12 on the CPU while retaining the color/HDR
-    /// pipeline carried by `uniforms`.
+    /// uploaded unchanged as byte pairs and reconstructed by the GPU. This
+    /// preserves all 10 bits without a per-pixel CPU conversion.
     pub fn upload_planar(&mut self, frame: PlanarFrame, uniforms: VideoUniforms) -> Result<()> {
         self.upload_planar_with_context(frame, uniforms, None)
     }
@@ -2124,24 +2128,20 @@ impl WgpuRenderer {
         uniforms: VideoUniforms,
         source_color: Option<SourceColorState>,
     ) -> Result<()> {
-        let prepared =
-            prepare_planar_upload(frame, uniforms, self.supports_16bit_norm).map_err(|error| {
-                PlayerError::Renderer(format!("stage=cpu_p010_to_nv12_fallback reason={error}"))
-            })?;
-        if prepared.path == PlanarUploadPath::CpuP010ToNv12 && !self.p010_quality_fallback_reported
-        {
-            self.p010_quality_fallback_reported = true;
+        let prepared = prepare_planar_upload(frame, uniforms, self.supports_16bit_norm);
+        if prepared.path == PlanarUploadPath::GpuP010Bytes && !self.p010_byte_planes_reported {
+            self.p010_byte_planes_reported = true;
             crate::trace::diagnostic(
                 serde_json::json!({
                     "event": "video_frame_import",
-                    "stage": "cpu_p010_to_nv12_quality_fallback",
+                    "stage": "gpu_p010_byte_planes",
                     "renderer": "wgpu",
                     "width": prepared.frame.width,
                     "height": prepared.frame.height,
                     "sourcePixelFormat": "P010",
-                    "uploadPixelFormat": "NV12",
+                    "uploadPixelFormat": "P010_LE_BYTES",
                     "sourceBitDepth": 10,
-                    "uploadBitDepth": 8,
+                    "uploadBitDepth": 10,
                     "adapterSupports16BitNorm": self.supports_16bit_norm,
                     "colorPipelinePreserved": true,
                     "hdrDescriptionPreserved": true,
@@ -2149,7 +2149,7 @@ impl WgpuRenderer {
                     "sourceTransferCode": prepared.uniforms.source_transfer,
                     "sourcePeakNits": prepared.uniforms.nits[0],
                     "toneMapCode": prepared.uniforms.tone_map,
-                    "reason": "adapter lacks TEXTURE_FORMAT_16BIT_NORM; CPU P010-to-NV12 down-conversion keeps playback available with an explicit 10-bit-to-8-bit quality reduction",
+                    "reason": "adapter lacks TEXTURE_FORMAT_16BIT_NORM; sample unchanged P010 bytes through RG8/RGBA8 textures and reconstruct 16-bit UNORM on the GPU",
                 })
                 .to_string(),
             );
@@ -2168,6 +2168,11 @@ impl WgpuRenderer {
                 wgpu::TextureFormat::R8Unorm,
                 wgpu::TextureFormat::Rg8Unorm,
                 1u32,
+            ),
+            PlanarPixelFormat::P010 if uniforms.has_p010_byte_planes() => (
+                wgpu::TextureFormat::Rg8Unorm,
+                wgpu::TextureFormat::Rgba8Unorm,
+                2u32,
             ),
             PlanarPixelFormat::P010 => (
                 wgpu::TextureFormat::R16Unorm,
@@ -2194,22 +2199,53 @@ impl WgpuRenderer {
             )));
         }
 
-        let luma_texture = self.create_plane_texture(
-            "erika-wgpu-luma",
-            width,
-            height,
-            luma_format,
-            &frame.luma,
-            width * bytes_per_sample,
-        );
-        let chroma_texture = self.create_plane_texture(
-            "erika-wgpu-chroma",
-            chroma_width,
-            chroma_height,
-            chroma_format,
-            &frame.chroma,
-            chroma_width * 2 * bytes_per_sample,
-        );
+        // The pool contains CPU upload storage only, never decoder aliases.
+        // Rotate three slots to avoid serializing upload with the last draw.
+        if self
+            .planar_upload_pool
+            .front()
+            .is_some_and(|(luma, chroma)| {
+                luma.width() != width
+                    || luma.height() != height
+                    || luma.format() != luma_format
+                    || chroma.width() != chroma_width
+                    || chroma.height() != chroma_height
+                    || chroma.format() != chroma_format
+            })
+        {
+            self.planar_upload_pool.clear();
+        }
+        let reusable = if self.planar_upload_pool.len() == 3 {
+            self.planar_upload_pool.pop_front()
+        } else {
+            None
+        };
+        let (luma_texture, chroma_texture) = if let Some((luma, chroma)) = reusable {
+            // Queue ordering still protects reuse if the GPU falls behind.
+            self.write_plane_texture(&luma, &frame.luma, width * bytes_per_sample);
+            self.write_plane_texture(&chroma, &frame.chroma, chroma_width * 2 * bytes_per_sample);
+            (luma, chroma)
+        } else {
+            let luma_texture = self.create_plane_texture(
+                "erika-wgpu-luma",
+                width,
+                height,
+                luma_format,
+                &frame.luma,
+                width * bytes_per_sample,
+            );
+            let chroma_texture = self.create_plane_texture(
+                "erika-wgpu-chroma",
+                chroma_width,
+                chroma_height,
+                chroma_format,
+                &frame.chroma,
+                chroma_width * 2 * bytes_per_sample,
+            );
+            (luma_texture, chroma_texture)
+        };
+        self.planar_upload_pool
+            .push_back((luma_texture.clone(), chroma_texture.clone()));
         let frame_token = self.next_upload_serial();
         self.current_video = Some(UploadedVideoFrame {
             textures: UploadedVideoTextures::Planar {
@@ -2236,6 +2272,7 @@ impl WgpuRenderer {
     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     fn upload_linux_hardware_frame(&mut self, frame: &PlayerVideoFrame) -> Result<bool> {
         let require_direct = std::env::var("ERIKA_REQUIRE_ZERO_COPY").as_deref() == Ok("1");
+        let wsl_copy = std::env::var("ERIKA_WSL_D3D12").as_deref() == Ok("1");
         let strict =
             require_direct || std::env::var("ERIKA_REQUIRE_GPU_FRAMES").as_deref() == Ok("1");
         if let Some((generation, reason)) = &self.linux_import_failure {
@@ -2257,7 +2294,15 @@ impl WgpuRenderer {
                 .ok_or_else(|| "Expected an FFmpeg hardware frame".to_owned())
                 .and_then(|decoded| {
                     if frame.decode_backend == DecoderBackend::Vaapi {
-                        interop.import_direct(decoded).map(|direct| {
+                        let imported = if wsl_copy {
+                            if require_direct {
+                                return Err("WSL D3D12 uses a GPU plane copy; direct zero-copy was required".into());
+                            }
+                            interop.import_wsl_copy(decoded)
+                        } else {
+                            interop.import_direct(decoded)
+                        };
+                        imported.map(|direct| {
                             let [luma, chroma] = direct.planes.clone();
                             let is_p010 = luma.format() == wgpu::TextureFormat::R16Unorm;
                             (luma, chroma, is_p010, Some(direct))
@@ -2305,7 +2350,7 @@ impl WgpuRenderer {
         };
         let uniforms = self.video_uniforms_for_frame(frame, is_p010);
         let frame_token = self.next_upload_serial();
-        let direct_zero_copy = direct.is_some();
+        let direct_zero_copy = direct.is_some() && !wsl_copy;
         self.current_video = Some(UploadedVideoFrame {
             textures: UploadedVideoTextures::Planar { luma, chroma },
             width: frame.frame.width(),
@@ -3006,6 +3051,7 @@ impl WgpuRenderer {
             } else {
                 WgpuArtCnnInput::PlanarLuma {
                     view: &native_luma_view,
+                    p010_le_bytes: video_uniforms.has_p010_byte_planes(),
                 }
             };
             let input_kind = input.kind();
@@ -3693,9 +3739,14 @@ impl WgpuRenderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        self.write_plane_texture(&texture, data, bytes_per_row);
+        texture
+    }
+
+    fn write_plane_texture(&self, texture: &wgpu::Texture, data: &[u8], bytes_per_row: u32) {
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &texture,
+                texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -3704,15 +3755,14 @@ impl WgpuRenderer {
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(bytes_per_row),
-                rows_per_image: Some(height),
+                rows_per_image: Some(texture.height()),
             },
             wgpu::Extent3d {
-                width,
-                height,
+                width: texture.width(),
+                height: texture.height(),
                 depth_or_array_layers: 1,
             },
         );
-        texture
     }
 
     fn ensure_video_pipeline(&mut self, format: wgpu::TextureFormat) {
@@ -4765,6 +4815,7 @@ impl RendererBackend for WgpuRenderer {
         self.flutter_frame = None;
         self.current_video_visible = false;
         self.current_video = None;
+        self.planar_upload_pool.clear();
         #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
         {
             self.linux_frame = None;
@@ -6231,7 +6282,7 @@ mod tests {
     }
 
     #[test]
-    fn planar_upload_downconverts_p010_only_when_16bit_norm_is_missing() {
+    fn planar_upload_preserves_p010_bytes_when_16bit_norm_is_missing() {
         let pack = |codes: &[u16]| {
             codes
                 .iter()
@@ -6250,27 +6301,28 @@ mod tests {
         uniforms.source_transfer = 77;
         uniforms.nits = [1_000.0, 100.0, 203.0, 100.0];
 
-        let native = prepare_planar_upload(p010.clone(), uniforms, true).unwrap();
+        let native = prepare_planar_upload(p010.clone(), uniforms, true);
         let mut expected_native_uniforms = uniforms;
         expected_native_uniforms.is_p010 = 1;
         assert_eq!(native.path, PlanarUploadPath::Native);
         assert_eq!(native.frame, p010);
         assert_eq!(native.uniforms, expected_native_uniforms);
 
-        let fallback = prepare_planar_upload(p010, uniforms, false).unwrap();
-        let mut expected_fallback_uniforms = uniforms;
-        expected_fallback_uniforms.is_p010 = 0;
-        assert_eq!(fallback.path, PlanarUploadPath::CpuP010ToNv12);
-        assert_eq!(fallback.frame.format, PlanarPixelFormat::Nv12);
-        assert_eq!(fallback.frame.luma, vec![16, 235, 128, 255]);
-        assert_eq!(fallback.frame.chroma, vec![128, 240]);
+        let original_luma = p010.luma.as_ptr();
+        let fallback = prepare_planar_upload(p010.clone(), uniforms, false);
+        let expected_fallback_uniforms = expected_native_uniforms.p010_byte_planes(true);
+        assert_eq!(fallback.path, PlanarUploadPath::GpuP010Bytes);
+        assert_eq!(fallback.frame, p010);
         assert_eq!(fallback.uniforms, expected_fallback_uniforms);
+        let moved = prepare_planar_upload(p010, uniforms, false);
+        assert_eq!(moved.frame.luma.as_ptr(), original_luma);
 
-        let nv12 = fallback.frame;
-        let native_nv12 = prepare_planar_upload(nv12.clone(), uniforms, false).unwrap();
+        let nv12 = fallback.frame.downconvert_p010_to_nv12().unwrap();
+        let native_nv12 = prepare_planar_upload(nv12.clone(), fallback.uniforms, false);
         assert_eq!(native_nv12.path, PlanarUploadPath::Native);
         assert_eq!(native_nv12.frame, nv12);
         assert_eq!(native_nv12.uniforms.is_p010, 0);
+        assert!(!native_nv12.uniforms.has_p010_byte_planes());
     }
 
     #[test]
@@ -6703,6 +6755,83 @@ mod tests {
         (luma, chroma)
     }
 
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    #[test]
+    #[ignore = "requires the optional WSL D3D12 bridge, patched Mesa and a hardware video fixture"]
+    fn linux_wsl_gpu_copy_matches_decoded_pixels() {
+        use crate::ffmpeg::{Decoder, DecoderConfig, DecoderOutputFrame, Demuxer};
+        let fixture = std::env::var("ERIKA_WSL_TEST_VIDEO")
+            .expect("set ERIKA_WSL_TEST_VIDEO (video stream 0)");
+        let mut demuxer = Demuxer::open_path(fixture).unwrap();
+        let mut decoder =
+            Decoder::open_with_config(demuxer.codec_parameters(0).unwrap(), DecoderConfig::vaapi())
+                .unwrap();
+        let mut renderer = WgpuRenderer::new().unwrap();
+        assert_eq!(renderer.adapter_info().backend, wgpu::Backend::Vulkan);
+        let mut interop = crate::renderer::linux_vulkan::LinuxVulkanInterop::new(
+            &renderer.adapter,
+            &renderer.device,
+        )
+        .unwrap();
+        let mut checked = 0;
+        'packets: while let Some(packet) = demuxer.read_packet().unwrap() {
+            if packet.stream_index() != 0 {
+                continue;
+            }
+            decoder.send_packet(&packet).unwrap();
+            while let DecoderOutputFrame::Frame(frame) = decoder.receive_frame().unwrap() {
+                // Explicit validation readback only; production import never
+                // calls transfer_to_system_memory.
+                let cpu = frame
+                    .transfer_to_system_memory()
+                    .unwrap()
+                    .to_planar_frame()
+                    .unwrap();
+                let uniforms = VideoUniforms::from_pipeline(
+                    &VideoRenderPipeline::sdr_default(),
+                    cpu.format == PlanarPixelFormat::P010,
+                    false,
+                );
+                renderer.upload_planar(cpu, uniforms).unwrap();
+                let expected = renderer
+                    .render_current_offscreen_sized(256, 144, None, None)
+                    .unwrap()
+                    .unwrap();
+                let imported = interop.import_wsl_copy(&frame).unwrap();
+                let [luma, chroma] = imported.planes.clone();
+                renderer.current_video = Some(UploadedVideoFrame {
+                    textures: UploadedVideoTextures::Planar { luma, chroma },
+                    width: frame.width(),
+                    height: frame.height(),
+                    uniforms,
+                    source_color: None,
+                    frame_token: renderer.next_upload_serial(),
+                    _linux_direct: Some(imported),
+                });
+                for _ in 0..2 {
+                    let actual = renderer
+                        .render_current_offscreen_sized(256, 144, None, None)
+                        .unwrap()
+                        .unwrap();
+                    for (i, (a, b)) in actual.rgba.iter().zip(&expected.rgba).enumerate() {
+                        assert!(
+                            a.abs_diff(*b) <= 2,
+                            "frame={checked} byte={i}: GPU={a}, reference={b}"
+                        );
+                    }
+                }
+                checked += 1;
+                if checked == 48 {
+                    break 'packets;
+                }
+            }
+        }
+        assert_eq!(checked, 48, "fixture must contain at least 48 frames");
+        // Drop with the last imported frame still displayed.
+        drop(renderer);
+        drop(interop);
+    }
+
     #[cfg(all(target_os = "linux", not(target_env = "ohos"), erika_test_linux_vulkan))]
     #[test]
     fn linux_direct_vulkan_sampling_preserves_pixels_and_releases_frames() {
@@ -7011,7 +7140,7 @@ mod tests {
     }
 
     #[test]
-    fn wgpu_uploads_and_renders_p010_frame_or_8bit_capability_fallback() {
+    fn wgpu_uploads_and_renders_p010_frame() {
         let mut renderer = WgpuRenderer::new().unwrap();
 
         // 4x4 P010 frame: bright luma, neutral chroma. Samples are 10-bit values
@@ -7050,6 +7179,132 @@ mod tests {
         assert_eq!(readback.height, 4);
         // A bright luma frame must not render fully black.
         assert!(readback.rgba.iter().any(|&byte| byte > 0));
+    }
+
+    #[test]
+    fn p010_byte_planes_preserve_low_bits_and_reuse_upload_storage() {
+        let mut renderer = WgpuRenderer::new().unwrap();
+        // Exercise the portable representation even on adapters with R16 UNORM.
+        renderer.supports_16bit_norm = false;
+        let pack = |codes: &[u16]| {
+            codes
+                .iter()
+                .flat_map(|code| (code << 6).to_le_bytes())
+                .collect::<Vec<_>>()
+        };
+        let mut uniforms =
+            VideoUniforms::from_pipeline(&VideoRenderPipeline::sdr_default(), true, false);
+        uniforms.source_transfer = 0;
+        uniforms.target_transfer = 0;
+        uniforms.tone_map = 0;
+        let codes = [
+            64, 67, 68, 71, 253, 254, 255, 256, 509, 510, 511, 512, 937, 938, 939, 940,
+        ];
+        let frame = PlanarFrame {
+            format: PlanarPixelFormat::P010,
+            width: 4,
+            height: 4,
+            luma: pack(&codes),
+            chroma: pack(&[512; 8]),
+        };
+        renderer.upload_planar(frame.clone(), uniforms).unwrap();
+        let video = renderer.current_video.as_ref().unwrap();
+        let UploadedVideoTextures::Planar { luma, chroma } = &video.textures else {
+            panic!()
+        };
+        let original_textures = (luma.clone(), chroma.clone());
+        assert_eq!(luma.format(), wgpu::TextureFormat::Rg8Unorm);
+        assert_eq!(chroma.format(), wgpu::TextureFormat::Rgba8Unorm);
+        let readback = renderer.render_current_offscreen(None).unwrap().unwrap();
+        for (i, code) in codes.iter().enumerate() {
+            let expected = ((*code as f32 - 64.0) / 876.0 * 255.0).round() as u8;
+            let pixel = readback.pixel(i as u32 % 4, i as u32 / 4);
+            for value in &pixel[..3] {
+                assert!(
+                    value.abs_diff(expected) <= 1,
+                    "code={code}, pixel={pixel:?}, expected={expected}"
+                );
+            }
+        }
+        // These codes share the high byte; dropping the two low signal bits
+        // would make the pixels identical.
+        assert!(readback.pixel(1, 0)[0] > readback.pixel(0, 0)[0]);
+        let mut next = frame;
+        next.luma = pack(&[940; 16]);
+        for _ in 0..3 {
+            renderer.upload_planar(next.clone(), uniforms).unwrap();
+            let readback = renderer.render_current_offscreen(None).unwrap().unwrap();
+            assert!(readback.pixel(0, 0)[0] >= 254);
+        }
+        let video = renderer.current_video.as_ref().unwrap();
+        let UploadedVideoTextures::Planar { luma, chroma } = &video.textures else {
+            panic!()
+        };
+        assert_eq!(luma, &original_textures.0);
+        assert_eq!(chroma, &original_textures.1);
+        let next_readback = renderer.render_current_offscreen(None).unwrap().unwrap();
+        assert!(next_readback.pixel(0, 0)[0] >= 254);
+        assert_eq!(readback.pixel(0, 0)[0], 0);
+    }
+
+    #[test]
+    fn p010_byte_planes_match_native_sampling_when_scaled() {
+        use crate::TransferFunction;
+        let mut renderer = WgpuRenderer::new().unwrap();
+        if !renderer.supports_16bit_norm {
+            return;
+        }
+        let pack = |codes: &[u16]| {
+            codes
+                .iter()
+                .flat_map(|code| (code << 6).to_le_bytes())
+                .collect::<Vec<_>>()
+        };
+        let frame = PlanarFrame {
+            format: PlanarPixelFormat::P010,
+            width: 4,
+            height: 4,
+            luma: pack(&[
+                65, 511, 256, 937, 102, 723, 413, 799, 133, 467, 331, 871, 83, 512, 523, 930,
+            ]),
+            chroma: pack(&[400, 602, 703, 511, 501, 689, 543, 376]),
+        };
+        // Includes tone mapping, output-uniform reconstruction and packed alpha.
+        for source in [
+            SourceColorState::new(ColorPrimaries::Bt709, TransferFunction::Bt1886),
+            SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq),
+        ] {
+            for alpha in [false, true] {
+                let pipeline = VideoRenderPipeline::new(
+                    source,
+                    OutputDescription::sdr().tone_map_target_for(&source),
+                );
+                let uniforms =
+                    VideoUniforms::from_pipeline(&pipeline, true, false).packed_alpha_right(alpha);
+                renderer.supports_16bit_norm = true;
+                renderer
+                    .upload_planar_with_context(frame.clone(), uniforms, Some(source))
+                    .unwrap();
+                let expected = renderer
+                    .render_current_offscreen_sized(12, 12, None, None)
+                    .unwrap()
+                    .unwrap();
+                renderer.supports_16bit_norm = false;
+                renderer
+                    .upload_planar_with_context(frame.clone(), uniforms, Some(source))
+                    .unwrap();
+                let actual = renderer
+                    .render_current_offscreen_sized(12, 12, None, None)
+                    .unwrap()
+                    .unwrap();
+                for (i, (a, b)) in actual.rgba.iter().zip(&expected.rgba).enumerate() {
+                    assert!(
+                        a.abs_diff(*b) <= 2,
+                        "source={source:?}, alpha={alpha}, byte={i}, actual={a}, expected={b}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -2,6 +2,8 @@ use crate::core::{ColorPrimaries, TransferFunction};
 
 pub const VIDEO_INPUT_MODE_MASK: u32 = 0xff;
 pub const VIDEO_INPUT_PACKED_ALPHA_RIGHT: u32 = 1 << 8;
+/// P010 little-endian bytes in RG8 (Y) and RGBA8 (UV), reconstructed on the GPU.
+pub const VIDEO_INPUT_P010_BYTES: u32 = 1 << 9;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HdrMetadata {
@@ -1538,6 +1540,19 @@ impl VideoUniforms {
 
     pub fn has_packed_alpha_right(self) -> bool {
         self.input_mode & VIDEO_INPUT_PACKED_ALPHA_RIGHT != 0
+    }
+
+    pub fn p010_byte_planes(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.input_mode |= VIDEO_INPUT_P010_BYTES;
+        } else {
+            self.input_mode &= !VIDEO_INPUT_P010_BYTES;
+        }
+        self
+    }
+
+    pub fn has_p010_byte_planes(self) -> bool {
+        self.input_mode & VIDEO_INPUT_P010_BYTES != 0
     }
 
     pub fn scene_linear_output(mut self) -> Self {

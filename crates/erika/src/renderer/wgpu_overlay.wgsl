@@ -37,10 +37,10 @@ fn erika_overlay_vertex(@builtin(vertex_index) vertex_id: u32) -> VertexOut {
         1.0 - pixel.y / max(uniforms.viewport.y, 1.0) * 2.0,
     );
 
-    var out: VertexOut;
-    out.position = vec4<f32>(ndc, 0.0, 1.0);
-    out.tex_coord = uniforms.tex_rect.xy + unit * uniforms.tex_rect.zw;
-    return out;
+    return VertexOut(
+        vec4<f32>(ndc, 0.0, 1.0),
+        uniforms.tex_rect.xy + unit * uniforms.tex_rect.zw,
+    );
 }
 
 @fragment

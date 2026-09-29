@@ -475,20 +475,19 @@ fn expand_ycbcr_range(y_in: f32, cbcr_in: vec2<f32>) -> RangeExpandedYCbCr {
         y *= p010_scale;
         cbcr *= p010_scale;
     }
-    var out: RangeExpandedYCbCr;
     if (uniforms.full_range != 0u) {
-        out.y = y;
-        out.cbcr = cbcr - vec2<f32>(0.5);
-        return out;
+        return RangeExpandedYCbCr(y, cbcr - vec2<f32>(0.5));
     }
     if (uniforms.is_p010 != 0u) {
-        out.y = (y - (64.0 / 1023.0)) * (1023.0 / 876.0);
-        out.cbcr = (cbcr - vec2<f32>(512.0 / 1023.0)) * (1023.0 / 896.0);
-        return out;
+        return RangeExpandedYCbCr(
+            (y - (64.0 / 1023.0)) * (1023.0 / 876.0),
+            (cbcr - vec2<f32>(512.0 / 1023.0)) * (1023.0 / 896.0),
+        );
     }
-    out.y = (y - (16.0 / 255.0)) * (255.0 / 219.0);
-    out.cbcr = (cbcr - vec2<f32>(128.0 / 255.0)) * (255.0 / 224.0);
-    return out;
+    return RangeExpandedYCbCr(
+        (y - (16.0 / 255.0)) * (255.0 / 219.0),
+        (cbcr - vec2<f32>(128.0 / 255.0)) * (255.0 / 224.0),
+    );
 }
 
 // Dolby Vision RPU reshaping, ported from libplacebo's `pl_shader_dovi_reshape`
@@ -497,10 +496,7 @@ fn expand_ycbcr_range(y_in: f32, cbcr_in: vec2<f32>) -> RangeExpandedYCbCr {
 // pivot comparison, where MMR coefficients mix all three raw components.
 fn dovi_reshaped_signal(sig_in: vec3<f32>) -> vec3<f32> {
     let sig = clamp(sig_in, vec3<f32>(0.0), vec3<f32>(1.0));
-    var result: array<f32, 3>;
-    result[0] = sig.r;
-    result[1] = sig.g;
-    result[2] = sig.b;
+    var result = sig;
     let flags = uniforms.dovi_flags;
     for (var c = 0u; c < 3u; c = c + 1u) {
         let segments = u32(flags[1u + c]);
@@ -545,7 +541,7 @@ fn dovi_reshaped_signal(sig_in: vec3<f32>) -> vec3<f32> {
         let bounds = uniforms.dovi_bounds[c];
         result[c] = clamp(s, bounds.x, bounds.y);
     }
-    return vec3<f32>(result[0], result[1], result[2]);
+    return result;
 }
 
 // Reshaped nonlinear signal to PQ-encoded IPT via the RPU's ycc_to_rgb matrix
@@ -621,10 +617,12 @@ fn erika_video_vertex(@builtin(vertex_index) vertex_id: u32) -> VertexOut {
         f32(vertex_id & 1u),
         f32((vertex_id >> 1u) & 1u),
     );
-    var out: VertexOut;
-    out.position = vec4<f32>(unit * 4.0 - vec2<f32>(1.0), 0.0, 1.0);
-    out.tex_coord = vec2<f32>(unit.x * 2.0, 1.0 - unit.y * 2.0);
-    return out;
+    // Keep interface structs in SSA form. Naga 29 decorates these types with
+    // offsets; recent SPIR-V validation rejects them in Function storage.
+    return VertexOut(
+        vec4<f32>(unit * 4.0 - vec2<f32>(1.0), 0.0, 1.0),
+        vec2<f32>(unit.x * 2.0, 1.0 - unit.y * 2.0),
+    );
 }
 
 @fragment
@@ -636,11 +634,22 @@ fn erika_video_fragment(in: VertexOut) -> @location(0) vec4<f32> {
         color_coord.x *= 0.5;
     }
     let alpha_coord = vec2<f32>(0.5 + in.tex_coord.x * 0.5, in.tex_coord.y);
-    var y_sample = textureSample(luma_texture, video_sampler, color_coord).r;
+    let p010_bytes = (uniforms.input_mode & 512u) != 0u;
+    let y_texel = textureSample(luma_texture, video_sampler, color_coord);
+    var y_sample = y_texel.r;
+    if (p010_bytes) {
+        // Linear reconstruction commutes with bilinear filtering. The input
+        // channels are bytes / 255, and 65535 = 255 * 257.
+        y_sample = dot(y_texel.rg, vec2<f32>(1.0, 256.0)) / 257.0;
+    }
     if (input_mode == 2u) {
         y_sample = sample_packed_luma(color_coord);
     }
-    let cbcr_sample = textureSample(chroma_texture, video_sampler, color_coord).rg;
+    let uv_texel = textureSample(chroma_texture, video_sampler, color_coord);
+    var cbcr_sample = uv_texel.rg;
+    if (p010_bytes) {
+        cbcr_sample = (uv_texel.rb + 256.0 * uv_texel.ga) / 257.0;
+    }
     var rgb: vec3<f32>;
     let dovi_enabled = uniforms.dovi_flags.x != 0.0;
     let dovi_ycbcr_input = dovi_enabled && (input_mode == 0u || input_mode == 2u);
@@ -683,7 +692,11 @@ fn erika_video_fragment(in: VertexOut) -> @location(0) vec4<f32> {
     rgb = target_reference_linear_to_output(rgb);
     var alpha = 1.0;
     if (packed_alpha) {
-        let alpha_sample = textureSample(luma_texture, video_sampler, alpha_coord).r;
+        let alpha_texel = textureSample(luma_texture, video_sampler, alpha_coord);
+        var alpha_sample = alpha_texel.r;
+        if (p010_bytes) {
+            alpha_sample = dot(alpha_texel.rg, vec2<f32>(1.0, 256.0)) / 257.0;
+        }
         if (input_mode == 1u || input_mode == 3u) {
             alpha = clamp(alpha_sample, 0.0, 1.0);
         } else {
