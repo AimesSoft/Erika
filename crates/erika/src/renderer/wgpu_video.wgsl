@@ -607,6 +607,33 @@ fn sample_packed_luma(tex_coord: vec2<f32>) -> f32 {
     return mix(y0, y1, fraction.y);
 }
 
+fn p010_texel(plane: texture_2d<f32>, coord: vec2<i32>, size: vec2<i32>, byte_planes: bool) -> vec2<f32> {
+    let texel = textureLoad(plane, clamp(coord, vec2<i32>(0), size - vec2<i32>(1)), 0);
+    if (!byte_planes) {
+        return texel.rg;
+    }
+    // RG8 carries Y's low/high bytes; RGBA8 carries U low/high, V low/high.
+    // The second component is unused when sampling a luma plane.
+    return (texel.rb + 256.0 * texel.ga) / 257.0;
+}
+
+fn sample_p010(plane: texture_2d<f32>, tex_coord: vec2<f32>, byte_planes: bool) -> vec2<f32> {
+    let size = vec2<i32>(textureDimensions(plane, 0));
+    let position = clamp(tex_coord, vec2<f32>(0.0), vec2<f32>(1.0))
+        * vec2<f32>(size) - vec2<f32>(0.5);
+    let lo = vec2<i32>(floor(position));
+    let fraction = fract(position);
+    // Reconstruct before interpolation. RG8 hardware filtering can round each
+    // high byte to 8-bit precision. Native R16 filtering can also quantize the
+    // interpolation weights. Use the same float interpolation for both P010
+    // representations so HDR transfer functions do not amplify those errors.
+    let top = mix(p010_texel(plane, lo, size, byte_planes),
+        p010_texel(plane, lo + vec2<i32>(1, 0), size, byte_planes), fraction.x);
+    let bottom = mix(p010_texel(plane, lo + vec2<i32>(0, 1), size, byte_planes),
+        p010_texel(plane, lo + vec2<i32>(1, 1), size, byte_planes), fraction.x);
+    return mix(top, bottom, fraction.y);
+}
+
 @vertex
 fn erika_video_vertex(@builtin(vertex_index) vertex_id: u32) -> VertexOut {
     // Avoid dynamically indexing a function-local position array here. The
@@ -637,18 +664,16 @@ fn erika_video_fragment(in: VertexOut) -> @location(0) vec4<f32> {
     let p010_bytes = (uniforms.input_mode & 512u) != 0u;
     let y_texel = textureSample(luma_texture, video_sampler, color_coord);
     var y_sample = y_texel.r;
-    if (p010_bytes) {
-        // Linear reconstruction commutes with bilinear filtering. The input
-        // channels are bytes / 255, and 65535 = 255 * 257.
-        y_sample = dot(y_texel.rg, vec2<f32>(1.0, 256.0)) / 257.0;
+    if (uniforms.is_p010 != 0u) {
+        y_sample = sample_p010(luma_texture, color_coord, p010_bytes).x;
     }
     if (input_mode == 2u) {
         y_sample = sample_packed_luma(color_coord);
     }
     let uv_texel = textureSample(chroma_texture, video_sampler, color_coord);
     var cbcr_sample = uv_texel.rg;
-    if (p010_bytes) {
-        cbcr_sample = (uv_texel.rb + 256.0 * uv_texel.ga) / 257.0;
+    if (uniforms.is_p010 != 0u) {
+        cbcr_sample = sample_p010(chroma_texture, color_coord, p010_bytes);
     }
     var rgb: vec3<f32>;
     let dovi_enabled = uniforms.dovi_flags.x != 0.0;
@@ -694,8 +719,8 @@ fn erika_video_fragment(in: VertexOut) -> @location(0) vec4<f32> {
     if (packed_alpha) {
         let alpha_texel = textureSample(luma_texture, video_sampler, alpha_coord);
         var alpha_sample = alpha_texel.r;
-        if (p010_bytes) {
-            alpha_sample = dot(alpha_texel.rg, vec2<f32>(1.0, 256.0)) / 257.0;
+        if (uniforms.is_p010 != 0u) {
+            alpha_sample = sample_p010(luma_texture, alpha_coord, p010_bytes).x;
         }
         if (input_mode == 1u || input_mode == 3u) {
             alpha = clamp(alpha_sample, 0.0, 1.0);

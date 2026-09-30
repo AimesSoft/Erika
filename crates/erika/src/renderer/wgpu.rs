@@ -7245,6 +7245,49 @@ mod tests {
         let next_readback = renderer.render_current_offscreen(None).unwrap().unwrap();
         assert!(next_readback.pixel(0, 0)[0] >= 254);
         assert_eq!(readback.pixel(0, 0)[0], 0);
+
+        // Check scaled samples against code values, independently of the native
+        // R16 path: both representations must not share an interpolation bug.
+        renderer
+            .upload_planar(
+                PlanarFrame {
+                    format: PlanarPixelFormat::P010,
+                    width: 4,
+                    height: 4,
+                    luma: pack(&codes),
+                    chroma: pack(&[512; 8]),
+                },
+                uniforms,
+            )
+            .unwrap();
+        let scaled = renderer
+            .render_current_offscreen_sized(12, 12, None, None)
+            .unwrap()
+            .unwrap();
+        for py in 0..12 {
+            for px in 0..12 {
+                let x = (f64::from(px) + 0.5) / 3.0 - 0.5;
+                let y = (f64::from(py) + 0.5) / 3.0 - 0.5;
+                let code = |dx: i32, dy: i32| {
+                    let ix = (x.floor() as i32 + dx).clamp(0, 3) as usize;
+                    let iy = (y.floor() as i32 + dy).clamp(0, 3) as usize;
+                    f64::from(codes[iy * 4 + ix])
+                };
+                let fx = x - x.floor();
+                let fy = y - y.floor();
+                let top = code(0, 0) * (1.0 - fx) + code(1, 0) * fx;
+                let bottom = code(0, 1) * (1.0 - fx) + code(1, 1) * fx;
+                let signal = top * (1.0 - fy) + bottom * fy;
+                let expected = ((signal - 64.0) / 876.0 * 255.0).clamp(0.0, 255.0).round() as u8;
+                let pixel = scaled.pixel(px, py);
+                for value in &pixel[..3] {
+                    assert!(
+                        value.abs_diff(expected) <= 1,
+                        "scaled ({px},{py}), signal={signal}, pixel={pixel:?}, expected={expected}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
