@@ -345,15 +345,18 @@ struct Inner {
 // Different calls to `eglGetPlatformDisplay` may return the same `Display`, making it a global
 // state of all our `EglContext`s. This forces us to track the number of such context to prevent
 // terminating the display if it's currently used by another `EglContext`.
-static DISPLAYS_REFERENCE_COUNT: LazyLock<Mutex<HashMap<usize, usize>>> =
+static DISPLAYS_REFERENCE_COUNT: LazyLock<Mutex<HashMap<usize, (usize, bool)>>> =
     LazyLock::new(Default::default);
 
 fn initialize_display(
     egl: &EglInstance,
     display: khronos_egl::Display,
+    externally_owned: bool,
 ) -> Result<(i32, i32), khronos_egl::Error> {
     let mut guard = DISPLAYS_REFERENCE_COUNT.lock();
-    *guard.entry(display.as_ptr() as usize).or_default() += 1;
+    let entry = guard.entry(display.as_ptr() as usize).or_default();
+    entry.0 += 1;
+    entry.1 |= externally_owned;
 
     // We don't need to check the reference count here since according to the `eglInitialize`
     // documentation, initializing an already initialized EGL display connection has no effect
@@ -371,14 +374,16 @@ fn terminate_display(
         .get_mut(key)
         .expect("Attempted to decref a display before incref was called");
 
-    if *count_ref > 1 {
-        *count_ref -= 1;
+    if count_ref.0 > 1 {
+        count_ref.0 -= 1;
 
         Ok(())
     } else {
-        guard.remove(key);
-
-        egl.terminate(display)
+        let (_, externally_owned) = guard.remove(key).unwrap();
+        // EGL initialization is not reference-counted by the driver. GTK may
+        // use this same display outside wgpu, so terminating a borrowed display
+        // would invalidate Flutter's contexts during native-surface detach.
+        if externally_owned { Ok(()) } else { egl.terminate(display) }
     }
 }
 
@@ -394,8 +399,9 @@ impl Inner {
         egl: Arc<EglInstance>,
         display: khronos_egl::Display,
         force_gles_minor_version: wgt::Gles3MinorVersion,
+        externally_owned: bool,
     ) -> Result<Self, crate::InstanceError> {
-        let version = initialize_display(&egl, display)
+        let version = initialize_display(&egl, display, externally_owned)
             .map_err(instance_err("failed to initialize EGL display connection"))?;
         let vendor = egl
             .query_string(Some(display), khronos_egl::VENDOR)
@@ -876,6 +882,7 @@ impl crate::Instance for Instance {
             egl,
             display,
             desc.backend_options.gl.gles_minor_version,
+            desc.display.is_some(),
         )?;
 
         Ok(Instance {
@@ -1051,6 +1058,7 @@ impl super::Device {
 #[derive(Debug)]
 pub struct Swapchain {
     surface: khronos_egl::Surface,
+    present_mode: wgt::PresentMode,
     wl_window: Option<*mut wayland_sys::egl::wl_egl_window>,
     framebuffer: glow::Framebuffer,
     renderbuffer: glow::Renderbuffer,
@@ -1102,6 +1110,13 @@ impl Surface {
             })?;
 
         unsafe { gl.disable(glow::SCISSOR_TEST) };
+        #[cfg(target_os = "linux")]
+        self.egl.instance.swap_interval(self.egl.display,
+            if sc.present_mode == wgt::PresentMode::Immediate { 0 } else { 1 })
+            .map_err(|e| {
+                log::error!("swap_interval failed: {e}");
+                crate::SurfaceError::Lost
+            })?;
         unsafe { gl.color_mask(true, true, true, true) };
 
         unsafe { gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None) };
@@ -1376,6 +1391,7 @@ impl crate::Surface for Surface {
 
         let mut swapchain = self.swapchain.write();
         *swapchain = Some(Swapchain {
+            present_mode: config.present_mode,
             surface,
             wl_window,
             renderbuffer,

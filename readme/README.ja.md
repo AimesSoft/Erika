@@ -27,7 +27,7 @@
 - **再生エンジン** -- play / pause / stop / seek / 再生速度制御、音声マスタークロック同期、vsync 量子化フレームスケジューリング
 - **C ABI** -- 不透明ハンドル設計で、C / C++ / Swift / Dart FFI / 任意の FFI 対応言語から呼び出し可能。正確なエクスポート集合は `erika.h` を参照
 - **Flutter プラグイン** -- macOS + iOS + tvOS + Windows + Android + HarmonyOS の native view / Texture embedding と platform-native high-dynamic-range surface path
-- **wgpu バックエンド** -- Android の playback、overlay、capture、bounded Vulkan/GLES recovery は利用可能。HarmonyOS は Vulkan で動作し、OHNativeWindow で present して OHNativeBuffer を zero-copy import します。Linux は引き続き計画中
+- **wgpu バックエンド** -- Android の playback、overlay、capture、bounded Vulkan/GLES recovery は利用可能。HarmonyOS は Vulkan で動作し、OHNativeWindow で present して OHNativeBuffer を zero-copy import します。Linux は実験的な X11/Wayland ネイティブ再生に対応
 
 ## クイックスタート
 
@@ -116,7 +116,7 @@ ohpm install erika
 | iOS 16+ | VideoToolbox | Metal | AudioQueue | **利用可能** |
 | tvOS 13+ (Apple TV) | VideoToolbox | Metal | AudioQueue | **利用可能** |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | **利用可能** |
-| Linux | -- | wgpu (計画中) | -- | 計画中 |
+| Linux | NVDEC / VA-API / ソフトウェア | wgpu (X11 / Wayland, SDR) | PulseAudio / PipeWire-Pulse | **実験的なネイティブ対応** |
 | Android 8+ | MediaCodec / software | wgpu (Vulkan + GLES fallback) | AAudio | **利用可能**。SDR は検証済み、extended-linear scRGB は実装済み、API 35 HDR 実機の active path acceptance 待ち |
 | HarmonyOS API 18+ | AVCodec (H.264/HEVC) / software | wgpu (Vulkan) + `OHNativeBuffer` zero-copy import | OHAudio | **利用可能**。実機で検証済み、CI は未カバー |
 
@@ -135,6 +135,7 @@ docs/                     アーキテクチャと組み込みドキュメント
 
 ## ドキュメント
 
+- [Linux ビルドと統合](../docs/linux.md) — Ubuntu / WSLg、Rust / C ABI、検証と制限（Flutter Linux texture 対応）
 - [アーキテクチャ](../docs/architecture.ja.md) — エンジン設計、レンダーバックエンド、プラットフォーム対応
 - [C ABI リファレンス](../docs/capi_reference.ja.md) — 全エクスポート関数、ステータスコード、所有権とスレッド規約
 - [組み込みガイド](../docs/integration.ja.md) — C/C++/Win32/Swift など非 Flutter ホストへの組み込み

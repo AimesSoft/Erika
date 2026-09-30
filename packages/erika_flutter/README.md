@@ -53,6 +53,20 @@ texture-layer composition. The plugin forwards the borrowed `Surface` to Erika
 and handles creation, resize, destruction, audio focus, HDR eligibility, and
 vsync ticks.
 
+## Linux Setup
+
+Build the Linux C ABI library as described in [Linux setup](https://github.com/AimesSoft/Erika/blob/main/docs/linux.md),
+then set `ERIKA_LIBRARY_DIR` to the directory containing `liberika_capi.so` before
+running `flutter build linux`. The plugin bundles that library and uses a GTK
+Flutter texture. Use `ErikaTextureVideoView` (also selected by `ErikaVideoView`
+on Linux). GPU composition includes subtitles and danmaku; pixels are read back
+as RGBA for Flutter. Linux screenshots return tightly packed RGBA bytes.
+
+NVIDIA uses CUDA/NVDEC; Intel and AMD use VA-API. Set
+`ERIKA_REQUIRE_HARDWARE_DECODE=1` to fail explicitly if hardware decoding is
+unavailable. WSLg also needs `GALLIUM_DRIVER=d3d12 WGPU_BACKEND=gl` for hardware
+rendering. This path currently provides SDR output without zero-copy or MPRIS.
+
 ## macOS Setup
 
 The macOS plugin's podspec build phase downloads and bundles a verified,

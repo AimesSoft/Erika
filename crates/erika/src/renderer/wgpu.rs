@@ -2,12 +2,13 @@
     target_os = "macos",
     any(target_os = "ios", target_os = "tvos"),
     target_os = "android",
+    target_os = "linux",
     target_env = "ohos"
 ))]
 use std::ffi::c_void;
 #[cfg(target_os = "windows")]
 use std::num::NonZeroIsize;
-#[cfg(any(target_os = "android", target_env = "ohos"))]
+#[cfg(any(target_os = "android", target_os = "linux", target_env = "ohos"))]
 use std::ptr::NonNull;
 #[cfg(target_os = "android")]
 use std::{
@@ -25,18 +26,18 @@ use crate::core::ColorPrimaries;
     target_os = "macos",
     any(target_os = "ios", target_os = "tvos"),
     target_os = "windows",
+    target_os = "linux",
     target_env = "ohos"
 ))]
 use crate::core::WgpuSurfaceKind;
 use crate::core::{
     LumaUpscalerBackendStatus, PlatformSurface, PlayerError, PlayerVideoFrame, RenderFrameContext,
-    RendererBackend, RendererRuntimeStats, Result, SurfaceOutputCapabilities, TransferFunction,
-    WgpuSurfaceHandle,
+    RendererBackend, RendererRuntimeStats, Result, SurfaceOutputCapabilities, WgpuSurfaceHandle,
 };
 use crate::danmaku::{
     DanmakuAtlasUpdate, DanmakuGlyphAtlas, DanmakuGlyphInstance, DanmakuRenderPlan,
 };
-use crate::ffmpeg::{DecoderBackend, PlanarFrame, PlanarFrameConversionError, PlanarPixelFormat};
+use crate::ffmpeg::{DecoderBackend, PlanarFrame, PlanarPixelFormat};
 use crate::overlay::OverlayFrame;
 #[cfg(target_os = "android")]
 use crate::renderer::android_vulkan::{
@@ -74,6 +75,7 @@ pub struct WgpuRendererStats {
     pub software_video_frames: u64,
     pub hardware_video_frames: u64,
     pub zero_copy_video_frames: u64,
+    pub direct_zero_copy_video_frames: u64,
     pub shared_handle_video_frames: u64,
     pub cpu_video_frame_fallbacks: u64,
     pub hdr_source_frames: u64,
@@ -378,7 +380,7 @@ enum UploadedVideoTextures {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlanarUploadPath {
     Native,
-    CpuP010ToNv12,
+    GpuP010Bytes,
 }
 
 struct PreparedPlanarUpload {
@@ -391,21 +393,20 @@ fn prepare_planar_upload(
     frame: PlanarFrame,
     mut uniforms: VideoUniforms,
     supports_16bit_norm: bool,
-) -> std::result::Result<PreparedPlanarUpload, PlanarFrameConversionError> {
-    let (frame, path) = if frame.format == PlanarPixelFormat::P010 && !supports_16bit_norm {
-        (
-            frame.downconvert_p010_to_nv12()?,
-            PlanarUploadPath::CpuP010ToNv12,
-        )
+) -> PreparedPlanarUpload {
+    let path = if frame.format == PlanarPixelFormat::P010 && !supports_16bit_norm {
+        PlanarUploadPath::GpuP010Bytes
     } else {
-        (frame, PlanarUploadPath::Native)
+        PlanarUploadPath::Native
     };
-    uniforms = uniforms.with_p010_representation(frame.format == PlanarPixelFormat::P010);
-    Ok(PreparedPlanarUpload {
+    uniforms = uniforms
+        .with_p010_representation(frame.format == PlanarPixelFormat::P010)
+        .p010_byte_planes(path == PlanarUploadPath::GpuP010Bytes);
+    PreparedPlanarUpload {
         frame,
         uniforms,
         path,
-    })
+    }
 }
 
 fn pq_code_for_lut(nits: f32) -> f32 {
@@ -463,6 +464,8 @@ struct UploadedVideoFrame {
     /// Presentation ticks reuse this token so an expensive GPU preprocessing
     /// pass is only encoded once per upload, independent of repeated PTS values.
     frame_token: u64,
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    _linux_direct: Option<crate::renderer::linux_vulkan::LinuxDirectFrame>,
 }
 
 impl UploadedVideoFrame {
@@ -476,7 +479,8 @@ impl UploadedVideoFrame {
             self.uniforms.is_p010 != 0,
             output.extended_linear,
         )
-        .packed_alpha_right(self.uniforms.has_packed_alpha_right());
+        .packed_alpha_right(self.uniforms.has_packed_alpha_right())
+        .p010_byte_planes(self.uniforms.has_p010_byte_planes());
         match &self.textures {
             UploadedVideoTextures::Planar { .. } => uniforms,
             UploadedVideoTextures::Rgb { .. } => uniforms.rgb_texture_input(),
@@ -493,6 +497,8 @@ struct AttachedSurface {
     data_space_failure: bool,
     native_data_space: i32,
     handle: WgpuSurfaceHandle,
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    formats: Vec<wgpu::TextureFormat>,
     // Declared after `surface` so the wgpu surface is dropped before its native
     // window reference during normal field destruction.
     #[cfg(target_os = "android")]
@@ -527,7 +533,22 @@ enum SurfaceFrame {
 }
 
 pub struct WgpuRenderer {
+    flutter_metrics: Option<crate::core::SurfaceMetrics>,
+    flutter_frame: Option<crate::core::RendererFrameCapture>,
     _instance: wgpu::Instance,
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    linux_display: Option<(WgpuSurfaceKind, u64)>,
+    // Keep one renderer-owned CPU frame so an EGL display can be released at
+    // detach and recreated at attach, including while playback is paused.
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    linux_frame: Option<(PlanarFrame, VideoUniforms, Option<SourceColorState>)>,
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    linux_hardware_frame: Option<PlayerVideoFrame>,
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    linux_vulkan:
+        Option<std::result::Result<crate::renderer::linux_vulkan::LinuxVulkanInterop, String>>,
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    linux_import_failure: Option<(u64, String)>,
     adapter: wgpu::Adapter,
     #[cfg(target_os = "android")]
     android_vulkan: Option<AndroidVulkanInterop>,
@@ -573,7 +594,10 @@ pub struct WgpuRenderer {
     upscaler_failed_frame_token: Option<u64>,
     upscaler_active_frame_reported: bool,
     cpu_video_frame_fallback_reported: bool,
-    p010_quality_fallback_reported: bool,
+    p010_byte_planes_reported: bool,
+    /// Rotate upload storage so writing the next frame does not overwrite a
+    /// texture still being sampled by the previous GPU submission.
+    planar_upload_pool: std::collections::VecDeque<(wgpu::Texture, wgpu::Texture)>,
     sdr_hdr_output_reported: bool,
     #[cfg(target_os = "android")]
     android_shared_frame_reported: bool,
@@ -707,6 +731,38 @@ fn select_wgpu_surface_output(
     })
 }
 
+// wgpu's Vulkan backend only exposes Rgba16Float when the WSI advertises
+// R16G16B16A16_SFLOAT + EXTENDED_SRGB_LINEAR_EXT together. A 10-bit SDR
+// format alone is deliberately insufficient evidence for HDR output.
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+fn select_linux_surface_output(
+    requested: OutputMode,
+    source_hdr: bool,
+    backend: wgpu::Backend,
+    formats: &[wgpu::TextureFormat],
+) -> Option<WgpuSurfaceOutputSelection> {
+    let resolved = match requested {
+        OutputMode::Auto { headroom } if source_hdr => {
+            OutputMode::extended_linear(if headroom > 1.0 { headroom } else { 12.5 })
+        }
+        OutputMode::Auto { .. } => OutputMode::Sdr,
+        OutputMode::AppleEdr { headroom } => OutputMode::extended_linear(headroom),
+        other => other,
+    };
+    select_wgpu_surface_output(
+        resolved,
+        SurfaceOutputCapabilities {
+            extended_linear: backend == wgpu::Backend::Vulkan
+                && formats.contains(&wgpu::TextureFormat::Rgba16Float),
+            direct_composition: true,
+            desired_headroom: resolved.headroom(),
+            ..SurfaceOutputCapabilities::default()
+        },
+        backend,
+        formats,
+    )
+}
+
 fn requested_device_limits(adapter_limits: wgpu::Limits, backend: wgpu::Backend) -> wgpu::Limits {
     // Erika only needs the portable binding-count and buffer-size baseline, but
     // video and swapchain textures must retain the adapter's real resolution.
@@ -738,6 +794,47 @@ fn wgpu_instance_flags() -> wgpu::InstanceFlags {
     #[cfg(not(target_os = "android"))]
     {
         flags
+    }
+}
+
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+fn linux_adapter_is_hardware(device_type: wgpu::DeviceType, name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    device_type != wgpu::DeviceType::Cpu
+        && ![
+            "llvmpipe",
+            "softpipe",
+            "lavapipe",
+            "swiftshader",
+            "microsoft basic render",
+        ]
+        .iter()
+        .any(|software| name.contains(software))
+}
+
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+fn retain_wsl_d3d_runtime() {
+    // WSL's D3D libraries register thread-local destructors used after EGL or
+    // Dozen/Vulkan teardown. Unloading them before a renderer thread exits can jump into
+    // unmapped code. Keep the runtime loaded for the process lifetime, just as
+    // the Windows driver does; no environment or system files are changed.
+    static RETAIN: std::sync::Once = std::sync::Once::new();
+    if std::path::Path::new("/dev/dxg").exists() {
+        RETAIN.call_once(|| {
+            for library in [
+                c"/usr/lib/wsl/lib/libd3d12core.so",
+                c"/usr/lib/wsl/lib/libdxcore.so",
+            ] {
+                // SAFETY: these are the WSL system runtime libraries. The
+                // retained loader references intentionally live until exit.
+                unsafe {
+                    libc::dlopen(
+                        library.as_ptr(),
+                        libc::RTLD_LAZY | libc::RTLD_LOCAL | libc::RTLD_NODELETE,
+                    );
+                }
+            }
+        });
     }
 }
 
@@ -881,7 +978,15 @@ fn wgpu_backend_candidates() -> Vec<WgpuBackendCandidate> {
         ]);
         candidates
     }
-    #[cfg(not(any(target_os = "android", target_env = "ohos")))]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    {
+        vec![WgpuBackendCandidate {
+            label: "linux",
+            backends: wgpu::Backends::all().with_env(),
+            force_fallback_adapter: false,
+        }]
+    }
+    #[cfg(not(any(target_os = "android", target_os = "linux", target_env = "ohos")))]
     {
         vec![WgpuBackendCandidate {
             label: "platform-default",
@@ -986,7 +1091,10 @@ fn request_wgpu_device(
     backend_candidate_index: usize,
     attempt_index: usize,
     attempt_count: usize,
+    linux_surface: Option<WgpuSurfaceHandle>,
 ) -> std::result::Result<WgpuDeviceContext, String> {
+    #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
+    let _ = linux_surface;
     #[cfg(not(target_os = "android"))]
     let _ = (backend_candidate_index, attempt_index, attempt_count);
 
@@ -1111,14 +1219,29 @@ fn request_wgpu_device(
         });
     }
 
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    retain_wsl_d3d_runtime();
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: candidate.backends,
         flags: wgpu_instance_flags(),
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        display: linux_surface.map(|handle| Box::new(LinuxDisplayHandle(handle)) as _),
         ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    let compatible_surface = linux_surface
+        .map(|handle| {
+            let target = linux_surface_target(handle).map_err(|error| error.to_string())?;
+            // SAFETY: the host retains the native handles until detach/destroy.
+            unsafe { instance.create_surface_unsafe(target) }.map_err(|error| error.to_string())
+        })
+        .transpose()?;
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: candidate.force_fallback_adapter,
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        compatible_surface: compatible_surface.as_ref(),
+        #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
         compatible_surface: None,
     }))
     .map_err(|error| {
@@ -1139,6 +1262,30 @@ fn request_wgpu_device(
         message
     })?;
     let adapter_info = adapter.get_info();
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    {
+        let hardware = linux_adapter_is_hardware(adapter_info.device_type, &adapter_info.name);
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "wgpu_renderer",
+                "stage": "adapter_selected",
+                "backend": format!("{:?}", adapter_info.backend),
+                "deviceType": format!("{:?}", adapter_info.device_type),
+                "name": adapter_info.name,
+                "driver": adapter_info.driver,
+                "driverInfo": adapter_info.driver_info,
+                "hardware": hardware,
+                "displayBound": linux_surface.is_some(),
+            })
+            .to_string(),
+        );
+        if !hardware && std::env::var("ERIKA_REQUIRE_HARDWARE_GPU").as_deref() == Ok("1") {
+            return Err(format!(
+                "hardware GPU required, but selected CPU adapter {}",
+                adapter_info.name
+            ));
+        }
+    }
     #[cfg(target_os = "android")]
     if candidate.backends == wgpu::Backends::VULKAN
         && adapter_info.device_type == wgpu::DeviceType::Cpu
@@ -1178,6 +1325,13 @@ fn request_wgpu_device(
     } else {
         wgpu::Features::empty()
     };
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    let required_features = required_features
+        | if adapter_info.backend == wgpu::Backend::Vulkan {
+            adapter.features() & wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+        } else {
+            wgpu::Features::empty()
+        };
     let required_limits = requested_device_limits(adapter_limits.clone(), adapter_info.backend);
 
     #[cfg(target_os = "android")]
@@ -1210,15 +1364,34 @@ fn request_wgpu_device(
         .to_string(),
     );
 
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+    let descriptor = wgpu::DeviceDescriptor {
         label: Some("erika-wgpu-device"),
         required_features,
         required_limits,
         memory_hints: wgpu::MemoryHints::default(),
         experimental_features: wgpu::ExperimentalFeatures::default(),
         trace: wgpu::Trace::Off,
-    }))
-    .map_err(|error| {
+    };
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    let interop_device = crate::renderer::linux_vulkan::request_device(&adapter, &descriptor);
+    #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
+    let interop_device: Option<std::result::Result<(wgpu::Device, wgpu::Queue), String>> = None;
+    let device_result = match interop_device {
+        Some(Ok(device)) => Ok(device),
+        unavailable => {
+            if let Some(Err(reason)) = unavailable {
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "wgpu_renderer", "stage": "interop_device_unavailable",
+                        "reason": reason,
+                    })
+                    .to_string(),
+                );
+            }
+            pollster::block_on(adapter.request_device(&descriptor)).map_err(|e| e.to_string())
+        }
+    };
+    let (device, queue) = device_result.map_err(|error| {
         let message = format!("device request failed: {error}");
         #[cfg(target_os = "android")]
         crate::trace::diagnostic(
@@ -1293,11 +1466,23 @@ impl WgpuRenderer {
     }
 
     pub fn new_with_config(config: MetalRendererConfig) -> Result<Self> {
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        let config = {
+            let mut config = config;
+            match std::env::var("ERIKA_LINUX_HDR").as_deref() {
+                Ok("auto") => config.output_mode = OutputMode::auto(12.5),
+                Ok("1" | "on") => config.output_mode = OutputMode::extended_linear(12.5),
+                Ok("0" | "off") => config.output_mode = OutputMode::Sdr,
+                _ => {}
+            }
+            config
+        };
         let candidate_count = wgpu_backend_candidates().len();
         Self::new_with_candidate_order(
             backend_candidate_order(candidate_count, 0, &[]),
             config.output_mode,
             config.video_alpha_mode,
+            None,
         )
     }
 
@@ -1314,8 +1499,12 @@ impl WgpuRenderer {
             current_candidate.saturating_add(1),
             excluded,
         );
-        let result =
-            Self::new_with_candidate_order(candidate_order.clone(), output_mode, video_alpha_mode);
+        let result = Self::new_with_candidate_order(
+            candidate_order.clone(),
+            output_mode,
+            video_alpha_mode,
+            None,
+        );
         let selected_candidate = result
             .as_ref()
             .ok()
@@ -1330,6 +1519,7 @@ impl WgpuRenderer {
         candidate_order: Vec<usize>,
         output_mode: OutputMode,
         video_alpha_mode: VideoAlphaMode,
+        linux_surface: Option<WgpuSurfaceHandle>,
     ) -> Result<Self> {
         let candidates = wgpu_backend_candidates();
         if candidate_order.is_empty() {
@@ -1346,6 +1536,7 @@ impl WgpuRenderer {
                 candidate_index,
                 attempt_index,
                 candidate_order.len(),
+                linux_surface,
             ) {
                 Ok(context) => {
                     selected = Some(context);
@@ -1457,6 +1648,18 @@ impl WgpuRenderer {
         };
         Ok(Self {
             _instance: context.instance,
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            linux_display: linux_surface.map(|handle| (handle.kind, handle.raw_display)),
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            linux_frame: None,
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            linux_hardware_frame: None,
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            linux_vulkan: None,
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            linux_import_failure: None,
+            flutter_metrics: None,
+            flutter_frame: None,
             adapter: context.adapter,
             device: context.device,
             queue: context.queue,
@@ -1492,7 +1695,8 @@ impl WgpuRenderer {
             upscaler_failed_frame_token: None,
             upscaler_active_frame_reported: false,
             cpu_video_frame_fallback_reported: false,
-            p010_quality_fallback_reported: false,
+            p010_byte_planes_reported: false,
+            planar_upload_pool: std::collections::VecDeque::new(),
             sdr_hdr_output_reported: false,
             #[cfg(target_os = "android")]
             android_shared_frame_reported: false,
@@ -1508,6 +1712,36 @@ impl WgpuRenderer {
         self.surface.as_ref().map(|attached| attached.handle)
     }
 
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    fn for_linux_display(&mut self, surface: Option<WgpuSurfaceHandle>) -> Result<Self> {
+        let mut replacement = Self::new_with_candidate_order(
+            backend_candidate_order(wgpu_backend_candidates().len(), 0, &[]),
+            self.output_mode,
+            self.video_alpha_mode,
+            surface,
+        )?;
+        replacement.set_luma_upscaler(self.upscaler_mode);
+        replacement.upload_serial = self.upload_serial;
+        if let Some((frame, uniforms, color)) = self.linux_frame.as_ref() {
+            replacement.upload_planar_with_context(frame.clone(), *uniforms, *color)?;
+            replacement.current_video_visible = self.current_video_visible;
+        } else if let Some(frame) = self.linux_hardware_frame.as_ref() {
+            // Return shared decoder memory before a second VkDevice imports
+            // it. Retaining the AVFrame keeps the paused picture available.
+            if self
+                .current_video
+                .as_ref()
+                .is_some_and(|video| video._linux_direct.is_some())
+            {
+                self.current_video = None;
+            }
+            replacement.upload_player_frame(frame)?;
+            replacement.current_video_visible = self.current_video_visible;
+        }
+        replacement.stats = self.stats;
+        Ok(replacement)
+    }
+
     /// Whether the adapter supports 16-bit normalized textures (needed for P010).
     pub fn supports_16bit_norm(&self) -> bool {
         self.supports_16bit_norm
@@ -1517,9 +1751,61 @@ impl WgpuRenderer {
         self.stats
     }
 
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    fn update_linux_output_for_source(&mut self, source_hdr: bool) -> Result<()> {
+        let strict = std::env::var("ERIKA_REQUIRE_HDR").as_deref() == Ok("1");
+        let Some(surface) = self.surface.as_mut() else {
+            if source_hdr && strict && self.flutter_metrics.is_some() {
+                return Err(PlayerError::Renderer("HDR requires a native Linux video surface; Flutter's RGBA8 texture compositor is SDR".into()));
+            }
+            return Ok(());
+        };
+        let selection = select_linux_surface_output(
+            self.output_mode,
+            source_hdr,
+            self.adapter.get_info().backend,
+            &surface.formats,
+        )
+        .ok_or_else(|| PlayerError::Renderer("Linux surface has no usable output format".into()))?;
+        if source_hdr && strict && !selection.output.extended_linear {
+            return Err(PlayerError::Renderer(format!(
+                "HDR output unavailable: {}; the compositor must advertise an FP16 scRGB Vulkan surface",
+                selection.fallback_reason.label()
+            )));
+        }
+        let changed = surface.output != selection.output
+            || surface.fallback_reason != selection.fallback_reason;
+        if !changed {
+            return Ok(());
+        }
+        if surface.config.format != selection.format {
+            surface.config.format = selection.format;
+            surface.surface.configure(&self.device, &surface.config);
+        }
+        surface.output = selection.output;
+        surface.fallback_reason = selection.fallback_reason;
+        let state = surface.output_state();
+        crate::trace::diagnostic(
+            serde_json::json!({
+                "event": "video_output_mode", "stage": "linux_surface_negotiated",
+                "sourceHdr": source_hdr, "colorSpace": selection.output.color_space.label(),
+                "surfaceFormat": format!("{:?}", selection.format),
+                "hdrActive": selection.output.extended_linear,
+                "cpuReadback": false, "reason": selection.fallback_reason.label(),
+            })
+            .to_string(),
+        );
+        self.observe_attached_output(state, true);
+        Ok(())
+    }
+
     fn observe_attached_output(&mut self, attached: AttachedOutputState, count_fallback: bool) {
         self.output_status.active_encoding = if attached.output.extended_linear {
-            ActiveOutputEncoding::AndroidExtendedLinearScRgb
+            if cfg!(all(target_os = "linux", not(target_env = "ohos"))) {
+                ActiveOutputEncoding::LinuxExtendedLinearScRgb
+            } else {
+                ActiveOutputEncoding::AndroidExtendedLinearScRgb
+            }
         } else {
             ActiveOutputEncoding::SdrSrgb
         };
@@ -1830,8 +2116,8 @@ impl WgpuRenderer {
 
     /// Upload a repacked planar frame (8-bit NV12 or 10-bit P010) as the current
     /// video frame. When the adapter lacks `TEXTURE_FORMAT_16BIT_NORM`, P010 is
-    /// explicitly down-converted to NV12 on the CPU while retaining the color/HDR
-    /// pipeline carried by `uniforms`.
+    /// uploaded unchanged as byte pairs and reconstructed by the GPU. This
+    /// preserves all 10 bits without a per-pixel CPU conversion.
     pub fn upload_planar(&mut self, frame: PlanarFrame, uniforms: VideoUniforms) -> Result<()> {
         self.upload_planar_with_context(frame, uniforms, None)
     }
@@ -1842,24 +2128,20 @@ impl WgpuRenderer {
         uniforms: VideoUniforms,
         source_color: Option<SourceColorState>,
     ) -> Result<()> {
-        let prepared =
-            prepare_planar_upload(frame, uniforms, self.supports_16bit_norm).map_err(|error| {
-                PlayerError::Renderer(format!("stage=cpu_p010_to_nv12_fallback reason={error}"))
-            })?;
-        if prepared.path == PlanarUploadPath::CpuP010ToNv12 && !self.p010_quality_fallback_reported
-        {
-            self.p010_quality_fallback_reported = true;
+        let prepared = prepare_planar_upload(frame, uniforms, self.supports_16bit_norm);
+        if prepared.path == PlanarUploadPath::GpuP010Bytes && !self.p010_byte_planes_reported {
+            self.p010_byte_planes_reported = true;
             crate::trace::diagnostic(
                 serde_json::json!({
                     "event": "video_frame_import",
-                    "stage": "cpu_p010_to_nv12_quality_fallback",
+                    "stage": "gpu_p010_byte_planes",
                     "renderer": "wgpu",
                     "width": prepared.frame.width,
                     "height": prepared.frame.height,
                     "sourcePixelFormat": "P010",
-                    "uploadPixelFormat": "NV12",
+                    "uploadPixelFormat": "P010_LE_BYTES",
                     "sourceBitDepth": 10,
-                    "uploadBitDepth": 8,
+                    "uploadBitDepth": 10,
                     "adapterSupports16BitNorm": self.supports_16bit_norm,
                     "colorPipelinePreserved": true,
                     "hdrDescriptionPreserved": true,
@@ -1867,7 +2149,7 @@ impl WgpuRenderer {
                     "sourceTransferCode": prepared.uniforms.source_transfer,
                     "sourcePeakNits": prepared.uniforms.nits[0],
                     "toneMapCode": prepared.uniforms.tone_map,
-                    "reason": "adapter lacks TEXTURE_FORMAT_16BIT_NORM; CPU P010-to-NV12 down-conversion keeps playback available with an explicit 10-bit-to-8-bit quality reduction",
+                    "reason": "adapter lacks TEXTURE_FORMAT_16BIT_NORM; sample unchanged P010 bytes through RG8/RGBA8 textures and reconstruct 16-bit UNORM on the GPU",
                 })
                 .to_string(),
             );
@@ -1886,6 +2168,11 @@ impl WgpuRenderer {
                 wgpu::TextureFormat::R8Unorm,
                 wgpu::TextureFormat::Rg8Unorm,
                 1u32,
+            ),
+            PlanarPixelFormat::P010 if uniforms.has_p010_byte_planes() => (
+                wgpu::TextureFormat::Rg8Unorm,
+                wgpu::TextureFormat::Rgba8Unorm,
+                2u32,
             ),
             PlanarPixelFormat::P010 => (
                 wgpu::TextureFormat::R16Unorm,
@@ -1912,22 +2199,53 @@ impl WgpuRenderer {
             )));
         }
 
-        let luma_texture = self.create_plane_texture(
-            "erika-wgpu-luma",
-            width,
-            height,
-            luma_format,
-            &frame.luma,
-            width * bytes_per_sample,
-        );
-        let chroma_texture = self.create_plane_texture(
-            "erika-wgpu-chroma",
-            chroma_width,
-            chroma_height,
-            chroma_format,
-            &frame.chroma,
-            chroma_width * 2 * bytes_per_sample,
-        );
+        // The pool contains CPU upload storage only, never decoder aliases.
+        // Rotate three slots to avoid serializing upload with the last draw.
+        if self
+            .planar_upload_pool
+            .front()
+            .is_some_and(|(luma, chroma)| {
+                luma.width() != width
+                    || luma.height() != height
+                    || luma.format() != luma_format
+                    || chroma.width() != chroma_width
+                    || chroma.height() != chroma_height
+                    || chroma.format() != chroma_format
+            })
+        {
+            self.planar_upload_pool.clear();
+        }
+        let reusable = if self.planar_upload_pool.len() == 3 {
+            self.planar_upload_pool.pop_front()
+        } else {
+            None
+        };
+        let (luma_texture, chroma_texture) = if let Some((luma, chroma)) = reusable {
+            // Queue ordering still protects reuse if the GPU falls behind.
+            self.write_plane_texture(&luma, &frame.luma, width * bytes_per_sample);
+            self.write_plane_texture(&chroma, &frame.chroma, chroma_width * 2 * bytes_per_sample);
+            (luma, chroma)
+        } else {
+            let luma_texture = self.create_plane_texture(
+                "erika-wgpu-luma",
+                width,
+                height,
+                luma_format,
+                &frame.luma,
+                width * bytes_per_sample,
+            );
+            let chroma_texture = self.create_plane_texture(
+                "erika-wgpu-chroma",
+                chroma_width,
+                chroma_height,
+                chroma_format,
+                &frame.chroma,
+                chroma_width * 2 * bytes_per_sample,
+            );
+            (luma_texture, chroma_texture)
+        };
+        self.planar_upload_pool
+            .push_back((luma_texture.clone(), chroma_texture.clone()));
         let frame_token = self.next_upload_serial();
         self.current_video = Some(UploadedVideoFrame {
             textures: UploadedVideoTextures::Planar {
@@ -1939,9 +2257,130 @@ impl WgpuRenderer {
             uniforms,
             source_color,
             frame_token,
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            _linux_direct: None,
         });
         self.current_video_visible = true;
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        {
+            self.linux_frame = Some((frame, uniforms, source_color));
+            self.linux_hardware_frame = None;
+        }
         Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    fn upload_linux_hardware_frame(&mut self, frame: &PlayerVideoFrame) -> Result<bool> {
+        let require_direct = std::env::var("ERIKA_REQUIRE_ZERO_COPY").as_deref() == Ok("1");
+        let wsl_copy = std::env::var("ERIKA_WSL_D3D12").as_deref() == Ok("1");
+        let strict =
+            require_direct || std::env::var("ERIKA_REQUIRE_GPU_FRAMES").as_deref() == Ok("1");
+        if let Some((generation, reason)) = &self.linux_import_failure {
+            if *generation == frame.generation {
+                return if strict {
+                    Err(PlayerError::Renderer(reason.clone()))
+                } else {
+                    Ok(false)
+                };
+            }
+        }
+        let interop = self.linux_vulkan.get_or_insert_with(|| {
+            crate::renderer::linux_vulkan::LinuxVulkanInterop::new(&self.adapter, &self.device)
+        });
+        let result = match interop {
+            Ok(interop) => frame
+                .frame
+                .decoded_frame()
+                .ok_or_else(|| "Expected an FFmpeg hardware frame".to_owned())
+                .and_then(|decoded| {
+                    if frame.decode_backend == DecoderBackend::Vaapi {
+                        let imported = if wsl_copy {
+                            if require_direct {
+                                return Err("WSL D3D12 uses a GPU plane copy; direct zero-copy was required".into());
+                            }
+                            interop.import_wsl_copy(decoded)
+                        } else {
+                            interop.import_direct(decoded)
+                        };
+                        imported.map(|direct| {
+                            let [luma, chroma] = direct.planes.clone();
+                            let is_p010 = luma.format() == wgpu::TextureFormat::R16Unorm;
+                            (luma, chroma, is_p010, Some(direct))
+                        })
+                    } else if require_direct {
+                        Err("Direct zero-copy was required, but CUDA/Vulkan uses a GPU copy".into())
+                    } else {
+                        interop
+                            .copy_planes(&self.queue, decoded)
+                            .map(|(luma, chroma, p010)| (luma, chroma, p010, None))
+                    }
+                }),
+            Err(reason) => Err(reason.clone()),
+        };
+        let (luma, chroma, is_p010, direct) = match result {
+            Ok(textures) => textures,
+            Err(reason) => {
+                crate::trace::diagnostic(
+                    serde_json::json!({
+                        "event": "video_frame_import", "stage": "linux_gpu_import_unavailable",
+                        "decodeBackend": frame.decode_backend.as_str(), "reason": reason,
+                        "fallback": if strict { "rejected" } else { "cpu_planes" },
+                    })
+                    .to_string(),
+                );
+                self.linux_import_failure = Some((frame.generation, reason.clone()));
+                return if strict {
+                    Err(PlayerError::Renderer(reason))
+                } else {
+                    Ok(false)
+                };
+            }
+        };
+        let retained = PlayerVideoFrame {
+            frame: frame
+                .frame
+                .try_clone_ref()
+                .map_err(|e| PlayerError::Renderer(e.to_string()))?,
+            decode_backend: frame.decode_backend,
+            pts: frame.pts,
+            media_time: frame.media_time,
+            late_by: frame.late_by,
+            generation: frame.generation,
+            scene_avg_nits: frame.scene_avg_nits,
+        };
+        let uniforms = self.video_uniforms_for_frame(frame, is_p010);
+        let frame_token = self.next_upload_serial();
+        let direct_zero_copy = direct.is_some() && !wsl_copy;
+        self.current_video = Some(UploadedVideoFrame {
+            textures: UploadedVideoTextures::Planar { luma, chroma },
+            width: frame.frame.width(),
+            height: frame.frame.height(),
+            uniforms,
+            source_color: Some(source_color_for_player_frame(frame)),
+            frame_token,
+            _linux_direct: direct,
+        });
+        self.current_video_visible = true;
+        self.linux_frame = None;
+        self.linux_hardware_frame = Some(retained);
+        self.stats.hardware_video_frames += 1;
+        self.stats.shared_handle_video_frames += 1;
+        if direct_zero_copy {
+            self.stats.zero_copy_video_frames += 1;
+            self.stats.direct_zero_copy_video_frames += 1;
+        }
+        if self.stats.shared_handle_video_frames == 1 {
+            crate::trace::diagnostic(
+                serde_json::json!({
+                    "event": "video_frame_import", "stage": "linux_vulkan_gpu_planes",
+                    "decodeBackend": frame.decode_backend.as_str(), "hostPixelCopies": 0,
+                    "directZeroCopy": direct_zero_copy, "p010": is_p010,
+                    "gpuPlaneCopies": if direct_zero_copy { 0 } else { 1 },
+                })
+                .to_string(),
+            );
+        }
+        Ok(true)
     }
 
     fn video_uniforms_for_frame(
@@ -2612,6 +3051,7 @@ impl WgpuRenderer {
             } else {
                 WgpuArtCnnInput::PlanarLuma {
                     view: &native_luma_view,
+                    p010_le_bytes: video_uniforms.has_p010_byte_planes(),
                 }
             };
             let input_kind = input.kind();
@@ -3299,9 +3739,14 @@ impl WgpuRenderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        self.write_plane_texture(&texture, data, bytes_per_row);
+        texture
+    }
+
+    fn write_plane_texture(&self, texture: &wgpu::Texture, data: &[u8], bytes_per_row: u32) {
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &texture,
+                texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -3310,15 +3755,14 @@ impl WgpuRenderer {
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(bytes_per_row),
-                rows_per_image: Some(height),
+                rows_per_image: Some(texture.height()),
             },
             wgpu::Extent3d {
-                width,
-                height,
+                width: texture.width(),
+                height: texture.height(),
                 depth_or_array_layers: 1,
             },
         );
-        texture
     }
 
     fn ensure_video_pipeline(&mut self, format: wgpu::TextureFormat) {
@@ -3607,6 +4051,7 @@ impl WgpuRenderer {
             target_os = "macos",
             any(target_os = "ios", target_os = "tvos"),
             target_os = "windows",
+            target_os = "linux",
             target_env = "ohos"
         )))]
         {
@@ -3621,6 +4066,7 @@ impl WgpuRenderer {
             target_os = "macos",
             any(target_os = "ios", target_os = "tvos"),
             target_os = "windows",
+            target_os = "linux",
             target_env = "ohos"
         ))]
         {
@@ -3631,6 +4077,10 @@ impl WgpuRenderer {
             // Android we additionally acquire an ANativeWindow reference retained by
             // `AttachedSurface`, so the raw handle outlives the wgpu surface.
             let target = match handle.kind {
+                #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+                WgpuSurfaceKind::XlibWindow | WgpuSurfaceKind::WaylandSurface => {
+                    linux_surface_target(handle)?
+                }
                 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
                 WgpuSurfaceKind::MacOsCaMetalLayer => {
                     wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(handle.raw_window as *mut c_void)
@@ -3700,22 +4150,48 @@ impl WgpuRenderer {
                 })?;
             let caps = surface.get_capabilities(&self.adapter);
             let adapter_backend = self.adapter.get_info().backend;
+            #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
             let selection = select_wgpu_surface_output(
                 self.output_mode,
                 handle.output_capabilities,
                 adapter_backend,
                 &caps.formats,
-            )
-            .ok_or_else(|| {
+            );
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            let selection = select_linux_surface_output(
+                self.output_mode,
+                self.current_video
+                    .as_ref()
+                    .and_then(|v| v.source_color)
+                    .is_some_and(|s| s.is_hdr()),
+                adapter_backend,
+                &caps.formats,
+            );
+            let selection = selection.ok_or_else(|| {
                 PlayerError::Renderer(
                     "wgpu surface exposes no usable SDR presentation format".to_string(),
                 )
             })?;
+            // The GTK platform thread also dispatches Wayland parent commits.
+            // EGL FIFO can wait forever for an occluded subsurface callback on
+            // that same thread. GTK's tick timer already paces this GL path.
+            let preferred_present_mode = if cfg!(all(target_os = "linux", not(target_env = "ohos")))
+            {
+                if adapter_backend == wgpu::Backend::Vulkan
+                    && caps.present_modes.contains(&wgpu::PresentMode::Mailbox)
+                {
+                    wgpu::PresentMode::Mailbox
+                } else {
+                    wgpu::PresentMode::Immediate
+                }
+            } else {
+                wgpu::PresentMode::Fifo
+            };
             let present_mode = caps
                 .present_modes
                 .iter()
                 .copied()
-                .find(|mode| *mode == wgpu::PresentMode::Fifo)
+                .find(|mode| *mode == preferred_present_mode)
                 .or_else(|| caps.present_modes.first().copied())
                 .ok_or_else(|| {
                     PlayerError::Renderer("wgpu surface exposes no present modes".to_string())
@@ -3747,7 +4223,7 @@ impl WgpuRenderer {
             };
             surface.configure(&self.device, &config);
             let mut output = selection.output;
-            if output.extended_linear {
+            if output.extended_linear && !cfg!(all(target_os = "linux", not(target_env = "ohos"))) {
                 output = OutputDescription::extended_linear(effective_extended_linear_headroom(
                     self.output_mode,
                     handle.output_capabilities,
@@ -3841,6 +4317,8 @@ impl WgpuRenderer {
                 #[cfg(not(target_os = "android"))]
                 native_data_space: -1,
                 handle,
+                #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+                formats: caps.formats,
                 #[cfg(target_os = "android")]
                 _android_window: android_window,
             })
@@ -3983,6 +4461,65 @@ impl WgpuRenderer {
     }
 }
 
+// The host retains the connection until successful detach or destruction.
+// WgpuRenderer drops every display-bound EGL object before detach returns.
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+#[derive(Debug)]
+struct LinuxDisplayHandle(WgpuSurfaceHandle);
+
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+impl wgpu::rwh::HasDisplayHandle for LinuxDisplayHandle {
+    fn display_handle(
+        &self,
+    ) -> std::result::Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
+        match linux_surface_target(self.0).map_err(|_| wgpu::rwh::HandleError::Unavailable)? {
+            wgpu::SurfaceTargetUnsafe::RawHandle {
+                raw_display_handle: Some(raw),
+                ..
+            } => {
+                // SAFETY: attach's native handle contract covers this instance.
+                Ok(unsafe { wgpu::rwh::DisplayHandle::borrow_raw(raw) })
+            }
+            _ => Err(wgpu::rwh::HandleError::Unavailable),
+        }
+    }
+}
+
+/// The host retains both native handles until the surface is detached.
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+fn linux_surface_target(handle: WgpuSurfaceHandle) -> Result<wgpu::SurfaceTargetUnsafe> {
+    let display = NonNull::new(handle.raw_display as *mut c_void)
+        .ok_or_else(|| PlayerError::Renderer("Linux display handle is null".to_string()))?;
+    if handle.raw_window == 0 {
+        return Err(PlayerError::Renderer(
+            "Linux window handle is null".to_string(),
+        ));
+    }
+    let (raw_display_handle, raw_window_handle) = match handle.kind {
+        WgpuSurfaceKind::XlibWindow => (
+            wgpu::rwh::RawDisplayHandle::Xlib(wgpu::rwh::XlibDisplayHandle::new(Some(display), 0)),
+            wgpu::rwh::RawWindowHandle::Xlib(wgpu::rwh::XlibWindowHandle::new(
+                handle.raw_window as _,
+            )),
+        ),
+        WgpuSurfaceKind::WaylandSurface => (
+            wgpu::rwh::RawDisplayHandle::Wayland(wgpu::rwh::WaylandDisplayHandle::new(display)),
+            wgpu::rwh::RawWindowHandle::Wayland(wgpu::rwh::WaylandWindowHandle::new(
+                NonNull::new(handle.raw_window as *mut c_void).expect("validated non-null window"),
+            )),
+        ),
+        _ => {
+            return Err(PlayerError::Renderer(
+                "expected an Xlib or Wayland surface".to_string(),
+            ));
+        }
+    };
+    Ok(wgpu::SurfaceTargetUnsafe::RawHandle {
+        raw_display_handle: Some(raw_display_handle),
+        raw_window_handle,
+    })
+}
+
 fn configure_attached_surface(
     device: &wgpu::Device,
     attached: &mut AttachedSurface,
@@ -4079,12 +4616,39 @@ impl Drop for WgpuRenderer {
 
 impl RendererBackend for WgpuRenderer {
     fn attach_surface(&mut self, surface: PlatformSurface) -> Result<()> {
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        if let PlatformSurface::FlutterTexture(handle) = surface {
+            if handle.kind != crate::core::FlutterTextureKind::LinuxTextureRegistrar {
+                return Err(PlayerError::Renderer(
+                    "expected Linux Flutter texture".into(),
+                ));
+            }
+            self.detach_surface()?;
+            self.flutter_metrics = Some(handle.metrics);
+            (self.stats.surface_width, self.stats.surface_height) = handle.metrics.physical_size();
+            self.stats.attached = true;
+            return Ok(());
+        }
+        self.flutter_metrics = None;
+        self.flutter_frame = None;
         let PlatformSurface::Wgpu(handle) = surface else {
             return Err(PlayerError::Renderer(
                 "non-wgpu surface cannot be attached to WgpuRenderer".to_string(),
             ));
         };
 
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        {
+            linux_surface_target(handle)?;
+            if self.linux_display != Some((handle.kind, handle.raw_display)) {
+                // EGL must be created against the actual X11/Wayland display,
+                // and adapter selection must consider presentation support.
+                let mut replacement = self.for_linux_display(Some(handle))?;
+                replacement.attach_surface(surface)?;
+                *self = replacement;
+                return Ok(());
+            }
+        }
         let attached = self.create_attached_surface(handle)?;
         self.stats.surface_width = attached.config.width;
         self.stats.surface_height = attached.config.height;
@@ -4095,6 +4659,17 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn detach_surface(&mut self) -> Result<()> {
+        self.flutter_metrics = None;
+        self.flutter_frame = None;
+        // Release native window references even when headless device recovery
+        // fails; hosts are allowed to destroy their surface after detaching.
+        self.surface = None;
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        if self.linux_display.is_some() {
+            // A headless replacement retains the paused image but releases
+            // the borrowed display, so the host may immediately close it.
+            *self = self.for_linux_display(None)?;
+        }
         self.surface = None;
         self.stats.attached = false;
         self.observe_detached_output();
@@ -4102,6 +4677,12 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn resize_surface(&mut self, metrics: crate::core::SurfaceMetrics) -> Result<()> {
+        if self.flutter_metrics.is_some() {
+            self.flutter_metrics = Some(metrics);
+            self.flutter_frame = None;
+            (self.stats.surface_width, self.stats.surface_height) = metrics.physical_size();
+            return Ok(());
+        }
         let current_size = self
             .surface
             .as_ref()
@@ -4132,6 +4713,8 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn upload_player_frame(&mut self, frame: &PlayerVideoFrame) -> Result<()> {
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        self.update_linux_output_for_source(source_color_for_player_frame(frame).is_hdr())?;
         #[cfg(target_os = "android")]
         if frame.decode_backend == DecoderBackend::MediaCodec && frame.frame.is_mediacodec() {
             return self.upload_android_mediacodec_frame(frame);
@@ -4142,11 +4725,54 @@ impl RendererBackend for WgpuRenderer {
             return self.upload_ohos_avcodec_frame(frame);
         }
         let hardware_frame = frame.frame.has_hw_frames_context();
-        let planar = if let Some(planar) = frame.frame.to_planar_frame() {
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        if hardware_frame
+            && matches!(
+                frame.decode_backend,
+                DecoderBackend::Cuda | DecoderBackend::Vaapi
+            )
+            && self.upload_linux_hardware_frame(frame)?
+        {
+            return Ok(());
+        }
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        if std::env::var("ERIKA_REQUIRE_GPU_FRAMES").as_deref() == Ok("1")
+            || std::env::var("ERIKA_REQUIRE_ZERO_COPY").as_deref() == Ok("1")
+        {
+            return Err(PlayerError::Renderer(
+                "GPU-only decoded frames / direct zero-copy were required, but this frame needs a CPU upload".into(),
+            ));
+        }
+        // NVDEC/VA-API still perform decode on the GPU. Transfer the decoded
+        // planes for portable wgpu upload until native interop is available.
+        // Keep this distinct from software decode and zero-copy in the stats.
+        let downloaded = if hardware_frame
+            && matches!(
+                frame.decode_backend,
+                DecoderBackend::Cuda | DecoderBackend::Vaapi
+            ) {
+            Some(
+                frame
+                    .frame
+                    .decoded_frame()
+                    .ok_or_else(|| PlayerError::Renderer("expected FFmpeg hardware frame".into()))?
+                    .transfer_to_system_memory()
+                    .map_err(|error| PlayerError::Renderer(error.to_string()))?,
+            )
+        } else {
+            None
+        };
+        let planes = downloaded
+            .as_ref()
+            .and_then(|value| value.to_planar_frame())
+            .or_else(|| frame.frame.to_planar_frame());
+        let planar = if let Some(planar) = planes {
             match frame.decode_backend {
                 DecoderBackend::Software => self.stats.software_video_frames += 1,
                 DecoderBackend::VideoToolbox
                 | DecoderBackend::D3d11va
+                | DecoderBackend::Cuda
+                | DecoderBackend::Vaapi
                 | DecoderBackend::MediaCodec
                 | DecoderBackend::AvCodec => {
                     self.stats.hardware_video_frames += 1;
@@ -4186,8 +4812,16 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn clear_current_frame(&mut self) -> Result<()> {
+        self.flutter_frame = None;
         self.current_video_visible = false;
         self.current_video = None;
+        self.planar_upload_pool.clear();
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        {
+            self.linux_frame = None;
+            self.linux_hardware_frame = None;
+            self.linux_import_failure = None;
+        }
         if self.surface.is_some() {
             self.render_surface_clear(WgpuClearColor::new(0.0, 0.0, 0.0, 1.0))?;
         }
@@ -4209,6 +4843,25 @@ impl RendererBackend for WgpuRenderer {
     }
 
     fn render_current_frame(&mut self, context: RenderFrameContext<'_>) -> Result<bool> {
+        if let Some(metrics) = self.flutter_metrics {
+            let (width, height) = metrics.physical_size();
+            let danmaku = context.danmaku.filter(|plan| {
+                plan.generation == context.generation
+                    && plan.viewport.width == width
+                    && plan.viewport.height == height
+            });
+            if let Some(readback) =
+                self.render_current_offscreen_sized(width, height, context.overlay, danmaku)?
+            {
+                self.flutter_frame = Some(crate::core::RendererFrameCapture {
+                    width,
+                    height,
+                    rgba: readback.rgba,
+                });
+                return Ok(true);
+            }
+            return Ok(false);
+        }
         #[cfg(target_env = "ohos")]
         if let Some(interop) = &self.ohos_gles {
             interop.drain_discarded_frames().map_err(|error| {
@@ -4279,6 +4932,10 @@ impl RendererBackend for WgpuRenderer {
             self.stats.danmaku_items += danmaku_draws as u64;
         }
         Ok(true)
+    }
+
+    fn take_flutter_frame(&mut self) -> Option<crate::core::RendererFrameCapture> {
+        self.flutter_frame.take()
     }
 
     fn capture_current_frame(
@@ -4372,7 +5029,7 @@ impl RendererBackend for WgpuRenderer {
             software_video_frames: stats.software_video_frames,
             hardware_video_frames: stats.hardware_video_frames,
             zero_copy_video_frames: stats.zero_copy_video_frames,
-            direct_zero_copy_video_frames: 0,
+            direct_zero_copy_video_frames: stats.direct_zero_copy_video_frames,
             shared_handle_video_frames: stats.shared_handle_video_frames,
             cpu_video_frame_fallbacks: stats.cpu_video_frame_fallbacks,
             hdr_source_frames: stats.hdr_source_frames,
@@ -5176,6 +5833,113 @@ fn add_retired_renderer_stats(target: &mut RendererRuntimeStats, retired: Render
 mod tests {
     use super::*;
 
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    #[test]
+    fn linux_hdr_requires_negotiated_scrgb_not_just_ten_bit_storage() {
+        let formats = [
+            wgpu::TextureFormat::Bgra8Unorm,
+            wgpu::TextureFormat::Rgb10a2Unorm,
+        ];
+        let output = select_linux_surface_output(
+            OutputMode::auto(12.5),
+            true,
+            wgpu::Backend::Vulkan,
+            &formats,
+        )
+        .unwrap();
+        assert!(!output.output.extended_linear);
+        assert_eq!(
+            output.fallback_reason,
+            OutputFallbackReason::DisplayHdrUnsupported
+        );
+    }
+
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    #[test]
+    fn linux_hdr_auto_switches_back_to_sdr_for_sdr_media() {
+        let formats = [
+            wgpu::TextureFormat::Bgra8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
+        ];
+        let hdr = select_linux_surface_output(
+            OutputMode::auto(1.0),
+            true,
+            wgpu::Backend::Vulkan,
+            &formats,
+        )
+        .unwrap();
+        assert!(hdr.output.extended_linear);
+        assert_eq!(hdr.output.target.reference_white_nits, 80.0);
+        assert_eq!(hdr.output.target.edr_headroom, 12.5);
+        let sdr = select_linux_surface_output(
+            OutputMode::auto(1.0),
+            false,
+            wgpu::Backend::Vulkan,
+            &formats,
+        )
+        .unwrap();
+        assert!(!sdr.output.extended_linear);
+        let gl =
+            select_linux_surface_output(OutputMode::auto(12.5), true, wgpu::Backend::Gl, &formats)
+                .unwrap();
+        assert!(!gl.output.extended_linear);
+    }
+
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    #[test]
+    fn linux_hardware_requirement_rejects_cpu_and_warp_adapters() {
+        assert!(linux_adapter_is_hardware(
+            wgpu::DeviceType::Other,
+            "D3D12 (NVIDIA GeForce RTX 5070)"
+        ));
+        assert!(!linux_adapter_is_hardware(
+            wgpu::DeviceType::Cpu,
+            "Software Device"
+        ));
+        assert!(!linux_adapter_is_hardware(
+            wgpu::DeviceType::Other,
+            "D3D12 (Microsoft Basic Render Driver)"
+        ));
+        assert!(!linux_adapter_is_hardware(
+            wgpu::DeviceType::Other,
+            "llvmpipe (LLVM 21)"
+        ));
+    }
+
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    #[test]
+    fn linux_surfaces_require_both_handles_and_keep_their_native_types() {
+        for kind in [WgpuSurfaceKind::XlibWindow, WgpuSurfaceKind::WaylandSurface] {
+            for (window, display) in [(0, 1), (1, 0), (0, 0)] {
+                assert!(
+                    linux_surface_target(WgpuSurfaceHandle::new(
+                        kind, window, display, 100, 50, 1.0
+                    ))
+                    .is_err()
+                );
+            }
+            // These are opaque handles; conversion must not dereference them.
+            let target =
+                linux_surface_target(WgpuSurfaceHandle::new(kind, 1, 2, 100, 50, 1.0)).unwrap();
+            assert!(matches!(
+                (kind, target),
+                (
+                    WgpuSurfaceKind::XlibWindow,
+                    wgpu::SurfaceTargetUnsafe::RawHandle {
+                        raw_window_handle: wgpu::rwh::RawWindowHandle::Xlib(_),
+                        raw_display_handle: Some(wgpu::rwh::RawDisplayHandle::Xlib(_)),
+                    }
+                ) | (
+                    WgpuSurfaceKind::WaylandSurface,
+                    wgpu::SurfaceTargetUnsafe::RawHandle {
+                        raw_window_handle: wgpu::rwh::RawWindowHandle::Wayland(_),
+                        raw_display_handle: Some(wgpu::rwh::RawDisplayHandle::Wayland(_)),
+                    }
+                )
+            ));
+        }
+    }
+
     #[test]
     fn conversion_extent_caps_4k_to_the_display_without_upscaling_smaller_video() {
         assert_eq!(
@@ -5518,7 +6282,7 @@ mod tests {
     }
 
     #[test]
-    fn planar_upload_downconverts_p010_only_when_16bit_norm_is_missing() {
+    fn planar_upload_preserves_p010_bytes_when_16bit_norm_is_missing() {
         let pack = |codes: &[u16]| {
             codes
                 .iter()
@@ -5537,27 +6301,28 @@ mod tests {
         uniforms.source_transfer = 77;
         uniforms.nits = [1_000.0, 100.0, 203.0, 100.0];
 
-        let native = prepare_planar_upload(p010.clone(), uniforms, true).unwrap();
+        let native = prepare_planar_upload(p010.clone(), uniforms, true);
         let mut expected_native_uniforms = uniforms;
         expected_native_uniforms.is_p010 = 1;
         assert_eq!(native.path, PlanarUploadPath::Native);
         assert_eq!(native.frame, p010);
         assert_eq!(native.uniforms, expected_native_uniforms);
 
-        let fallback = prepare_planar_upload(p010, uniforms, false).unwrap();
-        let mut expected_fallback_uniforms = uniforms;
-        expected_fallback_uniforms.is_p010 = 0;
-        assert_eq!(fallback.path, PlanarUploadPath::CpuP010ToNv12);
-        assert_eq!(fallback.frame.format, PlanarPixelFormat::Nv12);
-        assert_eq!(fallback.frame.luma, vec![16, 235, 128, 255]);
-        assert_eq!(fallback.frame.chroma, vec![128, 240]);
+        let original_luma = p010.luma.as_ptr();
+        let fallback = prepare_planar_upload(p010.clone(), uniforms, false);
+        let expected_fallback_uniforms = expected_native_uniforms.p010_byte_planes(true);
+        assert_eq!(fallback.path, PlanarUploadPath::GpuP010Bytes);
+        assert_eq!(fallback.frame, p010);
         assert_eq!(fallback.uniforms, expected_fallback_uniforms);
+        let moved = prepare_planar_upload(p010, uniforms, false);
+        assert_eq!(moved.frame.luma.as_ptr(), original_luma);
 
-        let nv12 = fallback.frame;
-        let native_nv12 = prepare_planar_upload(nv12.clone(), uniforms, false).unwrap();
+        let nv12 = fallback.frame.downconvert_p010_to_nv12().unwrap();
+        let native_nv12 = prepare_planar_upload(nv12.clone(), fallback.uniforms, false);
         assert_eq!(native_nv12.path, PlanarUploadPath::Native);
         assert_eq!(native_nv12.frame, nv12);
         assert_eq!(native_nv12.uniforms.is_p010, 0);
+        assert!(!native_nv12.uniforms.has_p010_byte_planes());
     }
 
     #[test]
@@ -5990,6 +6755,194 @@ mod tests {
         (luma, chroma)
     }
 
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    #[test]
+    #[ignore = "requires the optional WSL D3D12 bridge, patched Mesa and a hardware video fixture"]
+    fn linux_wsl_gpu_copy_matches_decoded_pixels() {
+        use crate::ffmpeg::{Decoder, DecoderConfig, DecoderOutputFrame, Demuxer};
+        let fixture = std::env::var("ERIKA_WSL_TEST_VIDEO")
+            .expect("set ERIKA_WSL_TEST_VIDEO (video stream 0)");
+        let mut demuxer = Demuxer::open_path(fixture).unwrap();
+        let mut decoder =
+            Decoder::open_with_config(demuxer.codec_parameters(0).unwrap(), DecoderConfig::vaapi())
+                .unwrap();
+        let mut renderer = WgpuRenderer::new().unwrap();
+        assert_eq!(renderer.adapter_info().backend, wgpu::Backend::Vulkan);
+        let mut interop = crate::renderer::linux_vulkan::LinuxVulkanInterop::new(
+            &renderer.adapter,
+            &renderer.device,
+        )
+        .unwrap();
+        let mut checked = 0;
+        'packets: while let Some(packet) = demuxer.read_packet().unwrap() {
+            if packet.stream_index() != 0 {
+                continue;
+            }
+            decoder.send_packet(&packet).unwrap();
+            while let DecoderOutputFrame::Frame(frame) = decoder.receive_frame().unwrap() {
+                // Explicit validation readback only; production import never
+                // calls transfer_to_system_memory.
+                let cpu = frame
+                    .transfer_to_system_memory()
+                    .unwrap()
+                    .to_planar_frame()
+                    .unwrap();
+                let uniforms = VideoUniforms::from_pipeline(
+                    &VideoRenderPipeline::sdr_default(),
+                    cpu.format == PlanarPixelFormat::P010,
+                    false,
+                );
+                renderer.upload_planar(cpu, uniforms).unwrap();
+                let expected = renderer
+                    .render_current_offscreen_sized(256, 144, None, None)
+                    .unwrap()
+                    .unwrap();
+                let imported = interop.import_wsl_copy(&frame).unwrap();
+                let [luma, chroma] = imported.planes.clone();
+                renderer.current_video = Some(UploadedVideoFrame {
+                    textures: UploadedVideoTextures::Planar { luma, chroma },
+                    width: frame.width(),
+                    height: frame.height(),
+                    uniforms,
+                    source_color: None,
+                    frame_token: renderer.next_upload_serial(),
+                    _linux_direct: Some(imported),
+                });
+                for _ in 0..2 {
+                    let actual = renderer
+                        .render_current_offscreen_sized(256, 144, None, None)
+                        .unwrap()
+                        .unwrap();
+                    for (i, (a, b)) in actual.rgba.iter().zip(&expected.rgba).enumerate() {
+                        assert!(
+                            a.abs_diff(*b) <= 2,
+                            "frame={checked} byte={i}: GPU={a}, reference={b}"
+                        );
+                    }
+                }
+                checked += 1;
+                if checked == 48 {
+                    break 'packets;
+                }
+            }
+        }
+        assert_eq!(checked, 48, "fixture must contain at least 48 frames");
+        // Drop with the last imported frame still displayed.
+        drop(renderer);
+        drop(interop);
+    }
+
+    #[cfg(all(target_os = "linux", not(target_env = "ohos"), erika_test_linux_vulkan))]
+    #[test]
+    fn linux_direct_vulkan_sampling_preserves_pixels_and_releases_frames() {
+        // Explicitly enabled by check_linux_zero_copy.sh: never silently skip
+        // missing Vulkan/interop support and count that as hardware coverage.
+        let mut renderer = WgpuRenderer::new().unwrap();
+        assert_eq!(renderer.adapter_info().backend, wgpu::Backend::Vulkan);
+        let interop = crate::renderer::linux_vulkan::LinuxVulkanInterop::new(
+            &renderer.adapter,
+            &renderer.device,
+        )
+        .unwrap();
+        for p010 in [false, true, false, true] {
+            let bytes = |v: u8| if p010 { vec![0, v] } else { vec![v] };
+            let luma: Vec<u8> = (0..8)
+                .flat_map(|_| (0..16).flat_map(|x| bytes(32 + x * 12)))
+                .collect();
+            let chroma: Vec<u8> = (0..4)
+                .flat_map(|_| (0..16).flat_map(|x| bytes(if x % 2 == 0 { 90 } else { 170 })))
+                .collect();
+            let uniforms =
+                VideoUniforms::from_pipeline(&VideoRenderPipeline::sdr_default(), p010, false);
+            renderer
+                .upload_planar(
+                    PlanarFrame {
+                        format: if p010 {
+                            PlanarPixelFormat::P010
+                        } else {
+                            PlanarPixelFormat::Nv12
+                        },
+                        width: 16,
+                        height: 8,
+                        luma,
+                        chroma,
+                    },
+                    uniforms,
+                )
+                .unwrap();
+            let expected = renderer.render_current_offscreen(None).unwrap().unwrap();
+            let (direct, producer) = interop.direct_fixture(p010);
+            let [luma, chroma] = direct.planes.clone();
+            renderer.current_video = Some(UploadedVideoFrame {
+                textures: UploadedVideoTextures::Planar { luma, chroma },
+                width: 16,
+                height: 8,
+                uniforms,
+                source_color: None,
+                frame_token: renderer.next_upload_serial(),
+                _linux_direct: Some(direct),
+            });
+            // Redraw the same held decoder images; also exercises screenshot
+            // readback while the original producer reference is retained.
+            for _ in 0..3 {
+                let actual = renderer.render_current_offscreen(None).unwrap().unwrap();
+                for y in 0..8 {
+                    for x in 0..16 {
+                        assert_eq!(
+                            actual.pixel(x, y),
+                            expected.pixel(x, y),
+                            "p010={p010}, ({x},{y})"
+                        );
+                    }
+                }
+            }
+            renderer.current_video = None;
+            producer.check_released();
+        }
+        // Teardown with a live imported picture, without an explicit clear.
+        let (direct, producer) = interop.direct_fixture(false);
+        let [luma, chroma] = direct.planes.clone();
+        renderer.current_video = Some(UploadedVideoFrame {
+            textures: UploadedVideoTextures::Planar { luma, chroma },
+            width: 16,
+            height: 8,
+            uniforms: VideoUniforms::from_pipeline(
+                &VideoRenderPipeline::sdr_default(),
+                false,
+                false,
+            ),
+            source_color: None,
+            frame_token: renderer.next_upload_serial(),
+            _linux_direct: Some(direct),
+        });
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("direct-frame-in-flight-teardown"),
+            size: wgpu::Extent3d {
+                width: 16,
+                height: 8,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        renderer
+            .draw_current_video(
+                &target.create_view(&Default::default()),
+                16,
+                8,
+                None,
+                None,
+                OutputDescription::sdr(),
+            )
+            .unwrap();
+        drop(renderer);
+        producer.check_released();
+    }
+
     /// Renders a solid grey NV12 sample and returns the readback's red
     /// channel. The uniforms below keep the shader output in
     /// target-reference-linear space, so the channel value is
@@ -6187,7 +7140,7 @@ mod tests {
     }
 
     #[test]
-    fn wgpu_uploads_and_renders_p010_frame_or_8bit_capability_fallback() {
+    fn wgpu_uploads_and_renders_p010_frame() {
         let mut renderer = WgpuRenderer::new().unwrap();
 
         // 4x4 P010 frame: bright luma, neutral chroma. Samples are 10-bit values
@@ -6226,6 +7179,175 @@ mod tests {
         assert_eq!(readback.height, 4);
         // A bright luma frame must not render fully black.
         assert!(readback.rgba.iter().any(|&byte| byte > 0));
+    }
+
+    #[test]
+    fn p010_byte_planes_preserve_low_bits_and_reuse_upload_storage() {
+        let mut renderer = WgpuRenderer::new().unwrap();
+        // Exercise the portable representation even on adapters with R16 UNORM.
+        renderer.supports_16bit_norm = false;
+        let pack = |codes: &[u16]| {
+            codes
+                .iter()
+                .flat_map(|code| (code << 6).to_le_bytes())
+                .collect::<Vec<_>>()
+        };
+        let mut uniforms =
+            VideoUniforms::from_pipeline(&VideoRenderPipeline::sdr_default(), true, false);
+        uniforms.source_transfer = 0;
+        uniforms.target_transfer = 0;
+        uniforms.tone_map = 0;
+        let codes = [
+            64, 67, 68, 71, 253, 254, 255, 256, 509, 510, 511, 512, 937, 938, 939, 940,
+        ];
+        let frame = PlanarFrame {
+            format: PlanarPixelFormat::P010,
+            width: 4,
+            height: 4,
+            luma: pack(&codes),
+            chroma: pack(&[512; 8]),
+        };
+        renderer.upload_planar(frame.clone(), uniforms).unwrap();
+        let video = renderer.current_video.as_ref().unwrap();
+        let UploadedVideoTextures::Planar { luma, chroma } = &video.textures else {
+            panic!()
+        };
+        let original_textures = (luma.clone(), chroma.clone());
+        assert_eq!(luma.format(), wgpu::TextureFormat::Rg8Unorm);
+        assert_eq!(chroma.format(), wgpu::TextureFormat::Rgba8Unorm);
+        let readback = renderer.render_current_offscreen(None).unwrap().unwrap();
+        for (i, code) in codes.iter().enumerate() {
+            let expected = ((*code as f32 - 64.0) / 876.0 * 255.0).round() as u8;
+            let pixel = readback.pixel(i as u32 % 4, i as u32 / 4);
+            for value in &pixel[..3] {
+                assert!(
+                    value.abs_diff(expected) <= 1,
+                    "code={code}, pixel={pixel:?}, expected={expected}"
+                );
+            }
+        }
+        // These codes share the high byte; dropping the two low signal bits
+        // would make the pixels identical.
+        assert!(readback.pixel(1, 0)[0] > readback.pixel(0, 0)[0]);
+        let mut next = frame;
+        next.luma = pack(&[940; 16]);
+        for _ in 0..3 {
+            renderer.upload_planar(next.clone(), uniforms).unwrap();
+            let readback = renderer.render_current_offscreen(None).unwrap().unwrap();
+            assert!(readback.pixel(0, 0)[0] >= 254);
+        }
+        let video = renderer.current_video.as_ref().unwrap();
+        let UploadedVideoTextures::Planar { luma, chroma } = &video.textures else {
+            panic!()
+        };
+        assert_eq!(luma, &original_textures.0);
+        assert_eq!(chroma, &original_textures.1);
+        let next_readback = renderer.render_current_offscreen(None).unwrap().unwrap();
+        assert!(next_readback.pixel(0, 0)[0] >= 254);
+        assert_eq!(readback.pixel(0, 0)[0], 0);
+
+        // Check scaled samples against code values, independently of the native
+        // R16 path: both representations must not share an interpolation bug.
+        renderer
+            .upload_planar(
+                PlanarFrame {
+                    format: PlanarPixelFormat::P010,
+                    width: 4,
+                    height: 4,
+                    luma: pack(&codes),
+                    chroma: pack(&[512; 8]),
+                },
+                uniforms,
+            )
+            .unwrap();
+        let scaled = renderer
+            .render_current_offscreen_sized(12, 12, None, None)
+            .unwrap()
+            .unwrap();
+        for py in 0..12 {
+            for px in 0..12 {
+                let x = (f64::from(px) + 0.5) / 3.0 - 0.5;
+                let y = (f64::from(py) + 0.5) / 3.0 - 0.5;
+                let code = |dx: i32, dy: i32| {
+                    let ix = (x.floor() as i32 + dx).clamp(0, 3) as usize;
+                    let iy = (y.floor() as i32 + dy).clamp(0, 3) as usize;
+                    f64::from(codes[iy * 4 + ix])
+                };
+                let fx = x - x.floor();
+                let fy = y - y.floor();
+                let top = code(0, 0) * (1.0 - fx) + code(1, 0) * fx;
+                let bottom = code(0, 1) * (1.0 - fx) + code(1, 1) * fx;
+                let signal = top * (1.0 - fy) + bottom * fy;
+                let expected = ((signal - 64.0) / 876.0 * 255.0).clamp(0.0, 255.0).round() as u8;
+                let pixel = scaled.pixel(px, py);
+                for value in &pixel[..3] {
+                    assert!(
+                        value.abs_diff(expected) <= 1,
+                        "scaled ({px},{py}), signal={signal}, pixel={pixel:?}, expected={expected}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn p010_byte_planes_match_native_sampling_when_scaled() {
+        use crate::TransferFunction;
+        let mut renderer = WgpuRenderer::new().unwrap();
+        if !renderer.supports_16bit_norm {
+            return;
+        }
+        let pack = |codes: &[u16]| {
+            codes
+                .iter()
+                .flat_map(|code| (code << 6).to_le_bytes())
+                .collect::<Vec<_>>()
+        };
+        let frame = PlanarFrame {
+            format: PlanarPixelFormat::P010,
+            width: 4,
+            height: 4,
+            luma: pack(&[
+                65, 511, 256, 937, 102, 723, 413, 799, 133, 467, 331, 871, 83, 512, 523, 930,
+            ]),
+            chroma: pack(&[400, 602, 703, 511, 501, 689, 543, 376]),
+        };
+        // Includes tone mapping, output-uniform reconstruction and packed alpha.
+        for source in [
+            SourceColorState::new(ColorPrimaries::Bt709, TransferFunction::Bt1886),
+            SourceColorState::new(ColorPrimaries::Bt2020, TransferFunction::Pq),
+        ] {
+            for alpha in [false, true] {
+                let pipeline = VideoRenderPipeline::new(
+                    source,
+                    OutputDescription::sdr().tone_map_target_for(&source),
+                );
+                let uniforms =
+                    VideoUniforms::from_pipeline(&pipeline, true, false).packed_alpha_right(alpha);
+                renderer.supports_16bit_norm = true;
+                renderer
+                    .upload_planar_with_context(frame.clone(), uniforms, Some(source))
+                    .unwrap();
+                let expected = renderer
+                    .render_current_offscreen_sized(12, 12, None, None)
+                    .unwrap()
+                    .unwrap();
+                renderer.supports_16bit_norm = false;
+                renderer
+                    .upload_planar_with_context(frame.clone(), uniforms, Some(source))
+                    .unwrap();
+                let actual = renderer
+                    .render_current_offscreen_sized(12, 12, None, None)
+                    .unwrap()
+                    .unwrap();
+                for (i, (a, b)) in actual.rgba.iter().zip(&expected.rgba).enumerate() {
+                    assert!(
+                        a.abs_diff(*b) <= 2,
+                        "source={source:?}, alpha={alpha}, byte={i}, actual={a}, expected={b}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -5,6 +5,35 @@ use serde_json::{Map, Value, json};
 
 use super::*;
 
+/// Copies and consumes the latest Linux Flutter frame produced by render_tick.
+/// Unlike a screenshot, it includes the normal subtitles, danmaku and debug HUD.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn erika_presenter_copy_flutter_frame_rgba(
+    handle: *mut ErikaPresenterHandle,
+    out_rgba: *mut u8,
+    capacity: usize,
+    out_width: *mut u32,
+    out_height: *mut u32,
+) -> ErikaStatus {
+    if out_rgba.is_null() || out_width.is_null() || out_height.is_null() {
+        return ErikaStatus::NullPointer;
+    }
+    with_presenter_mut(handle, |handle| {
+        let Some(frame) = handle.presenter.take_flutter_frame() else {
+            return ErikaStatus::NoEvent;
+        };
+        if frame.rgba.len() > capacity {
+            return player_error("Flutter RGBA buffer too small");
+        }
+        unsafe {
+            ptr::copy_nonoverlapping(frame.rgba.as_ptr(), out_rgba, frame.rgba.len());
+            *out_width = frame.width;
+            *out_height = frame.height;
+        }
+        ErikaStatus::Ok
+    })
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn erika_presenter_invoke_json(
     handle: *mut ErikaPresenterHandle,

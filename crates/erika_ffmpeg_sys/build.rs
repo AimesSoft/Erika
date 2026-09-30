@@ -20,7 +20,56 @@ fn main() {
     println!("cargo:rerun-if-env-changed=OHOS_NDK_HOME");
     println!("cargo:rerun-if-env-changed=OHOS_SDK_NATIVE");
     println!("cargo:rerun-if-env-changed=TVOS_DEPLOYMENT_TARGET");
+    println!("cargo:rerun-if-env-changed=ERIKA_USE_SYSTEM_LIBS");
 
+    let include_dirs = if use_system_libraries() {
+        configure_system_ffmpeg()
+    } else {
+        configure_bundled_ffmpeg()
+    };
+    generate_bindings(&include_dirs);
+}
+
+fn use_system_libraries() -> bool {
+    env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("ohos")
+        && env::var("ERIKA_USE_SYSTEM_LIBS").as_deref() != Ok("0")
+        && env::var_os("ERIKA_FFMPEG_DIR").is_none()
+}
+
+fn configure_system_ffmpeg() -> Vec<PathBuf> {
+    let mut include_dirs = Vec::new();
+    for (library, version) in [
+        ("libavdevice", "62"),
+        ("libavfilter", "11"),
+        ("libavformat", "62"),
+        ("libavcodec", "62"),
+        ("libswresample", "6"),
+        ("libswscale", "9"),
+        ("libavutil", "60"),
+    ] {
+        let dependency = pkg_config::Config::new()
+            .atleast_version(version)
+            .statik(false)
+            .probe(library)
+            .unwrap_or_else(|error| {
+                panic!("Linux requires FFmpeg 8 development libraries ({library} >= {version}). Install the libav*-dev/libsw*-dev packages or set ERIKA_USE_SYSTEM_LIBS=0 for a bundled build: {error}")
+            });
+        for path in dependency.include_paths {
+            if !include_dirs.contains(&path) {
+                include_dirs.push(path);
+            }
+        }
+    }
+    let include_dir = include_dirs
+        .iter()
+        .find(|path| path.join("libavutil/version.h").is_file())
+        .expect("pkg-config did not provide the FFmpeg header directory");
+    emit_ffmpeg_version_cfg(include_dir);
+    include_dirs
+}
+
+fn configure_bundled_ffmpeg() -> Vec<PathBuf> {
     let dist_dir = ffmpeg_dist_dir();
     let zlib_dir = native_dep_dir("ERIKA_ZLIB_DIR", "zlib");
     let dav1d_dir = native_dep_dir("ERIKA_DAV1D_DIR", "dav1d");
@@ -160,11 +209,14 @@ fn main() {
         }
     }
 
+    vec![include_dir]
+}
+
+fn generate_bindings(include_dirs: &[PathBuf]) {
     ensure_libclang_path();
 
     let mut builder = bindgen::Builder::default()
         .header("wrapper.h")
-        .clang_arg(format!("-I{}", include_dir.display()))
         .allowlist_function("av_.*")
         .allowlist_function("avio_.*")
         .allowlist_function("avcodec_.*")
@@ -183,6 +235,9 @@ fn main() {
         .generate_comments(false)
         .derive_debug(true)
         .derive_default(true);
+    for include_dir in include_dirs {
+        builder = builder.clang_arg(format!("-I{}", include_dir.display()));
+    }
     for argument in target_bindgen_clang_args() {
         builder = builder.clang_arg(argument);
     }

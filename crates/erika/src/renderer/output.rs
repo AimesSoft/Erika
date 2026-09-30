@@ -165,6 +165,7 @@ pub enum ActiveOutputEncoding {
     AppleEdr,
     AndroidExtendedLinearScRgb,
     Hdr10Pq,
+    LinuxExtendedLinearScRgb,
 }
 
 impl ActiveOutputEncoding {
@@ -174,6 +175,7 @@ impl ActiveOutputEncoding {
             Self::AppleEdr => "apple-edr",
             Self::AndroidExtendedLinearScRgb => "android-extended-linear-scrgb",
             Self::Hdr10Pq => "hdr10-pq",
+            Self::LinuxExtendedLinearScRgb => "linux-extended-linear-scrgb",
         }
     }
 }

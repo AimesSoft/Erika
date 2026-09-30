@@ -838,6 +838,8 @@ pub enum DecoderOutput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderBackend {
     Software,
+    Cuda,
+    Vaapi,
     VideoToolbox,
     D3d11va,
     MediaCodec,
@@ -848,6 +850,8 @@ impl DecoderBackend {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Software => "software",
+            Self::Cuda => "cuda",
+            Self::Vaapi => "vaapi",
             Self::VideoToolbox => "videotoolbox",
             Self::D3d11va => "d3d11va",
             Self::MediaCodec => "mediacodec",
@@ -863,6 +867,20 @@ pub struct DecoderConfig {
 }
 
 impl DecoderConfig {
+    pub fn cuda() -> Self {
+        Self {
+            backend: DecoderBackend::Cuda,
+            mediacodec_surface: false,
+        }
+    }
+
+    pub fn vaapi() -> Self {
+        Self {
+            backend: DecoderBackend::Vaapi,
+            mediacodec_surface: false,
+        }
+    }
+
     pub fn software() -> Self {
         Self {
             backend: DecoderBackend::Software,
@@ -1040,9 +1058,10 @@ impl Decoder {
                 mediacodec_decoder(codec_id),
                 "avcodec_find_decoder_by_name(MediaCodec)",
             ),
-            DecoderBackend::VideoToolbox | DecoderBackend::D3d11va => {
-                ffmpeg_hardware_decoder(codec_id)
-            }
+            DecoderBackend::VideoToolbox
+            | DecoderBackend::D3d11va
+            | DecoderBackend::Cuda
+            | DecoderBackend::Vaapi => ffmpeg_hardware_decoder(codec_id),
             DecoderBackend::AvCodec => (
                 ptr::null(),
                 "HarmonyOS AVCodec is unavailable on this target",
@@ -1093,6 +1112,18 @@ impl Decoder {
             }
             DecoderBackend::VideoToolbox => decoder.configure_videotoolbox(codec)?,
             DecoderBackend::D3d11va => decoder.configure_d3d11va(codec)?,
+            DecoderBackend::Cuda => decoder.configure_hardware(
+                codec,
+                sys::AVHWDeviceType_AV_HWDEVICE_TYPE_CUDA,
+                "CUDA/NVDEC codec hardware configuration",
+                "create CUDA/NVDEC device",
+            )?,
+            DecoderBackend::Vaapi => decoder.configure_hardware(
+                codec,
+                sys::AVHWDeviceType_AV_HWDEVICE_TYPE_VAAPI,
+                "VA-API codec hardware configuration",
+                "create VA-API device",
+            )?,
             DecoderBackend::AvCodec => {}
         }
         let mut codec_options = ptr::null_mut();
@@ -1636,13 +1667,24 @@ impl Decoder {
     ) -> Result<()> {
         let pixel_format = hardware_pixel_format(codec, device_type)
             .ok_or_else(|| FfmpegError::NullPointer(hw_config_operation))?;
+        // FFmpeg selects a default device when unset. A render-node path lets
+        // Intel/AMD multi-GPU systems choose the desired VA-API device; CUDA
+        // accepts an ordinal such as 0. No vendor driver is bundled here.
+        let device = match self.backend {
+            DecoderBackend::Cuda => std::env::var("ERIKA_CUDA_DEVICE").ok(),
+            DecoderBackend::Vaapi => std::env::var("ERIKA_VAAPI_DEVICE").ok(),
+            _ => None,
+        }
+        .map(std::ffi::CString::new)
+        .transpose()
+        .map_err(|_| FfmpegError::InteriorNul)?;
         let mut device_ref = ptr::null_mut();
         check(
             unsafe {
                 sys::av_hwdevice_ctx_create(
                     &mut device_ref,
                     device_type,
-                    ptr::null(),
+                    device.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
                     ptr::null_mut(),
                     0,
                 )
@@ -5259,6 +5301,14 @@ unsafe extern "C" fn select_hw_format(
                 return format;
             }
             index += 1;
+        }
+        // Never report a software frame as NVDEC/VA-API. Return an error to
+        // the playback layer, which owns the explicit, observable fallback.
+        if matches!(
+            target,
+            sys::AVPixelFormat_AV_PIX_FMT_CUDA | sys::AVPixelFormat_AV_PIX_FMT_VAAPI
+        ) {
+            return sys::AVPixelFormat_AV_PIX_FMT_NONE;
         }
     }
     unsafe { sys::avcodec_default_get_format(context, formats) }

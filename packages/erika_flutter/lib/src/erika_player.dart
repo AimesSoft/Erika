@@ -180,7 +180,8 @@ enum ErikaActiveOutputEncoding {
   sdrSrgb(0),
   appleEdr(1),
   androidExtendedLinearScRgb(2),
-  hdr10Pq(3);
+  hdr10Pq(3),
+  linuxExtendedLinearScRgb(4);
 
   const ErikaActiveOutputEncoding(this.nativeValue);
 
@@ -191,6 +192,7 @@ enum ErikaActiveOutputEncoding {
       1 => ErikaActiveOutputEncoding.appleEdr,
       2 => ErikaActiveOutputEncoding.androidExtendedLinearScRgb,
       3 => ErikaActiveOutputEncoding.hdr10Pq,
+      4 => ErikaActiveOutputEncoding.linuxExtendedLinearScRgb,
       _ => ErikaActiveOutputEncoding.sdrSrgb,
     };
   }
