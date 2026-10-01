@@ -2,9 +2,17 @@
 
 ## Unreleased
 
+## 0.2.1
+
 - Added `httpBackBufferBytes` to `open`, forwarding the HTTP(S) rewind budget
   through Android, Apple platforms, Windows, and OpenHarmony so high-bitrate
   media can keep more than the 16 MiB default cached behind the reader.
+- Added experimental Linux playback on X11/Wayland, including a native Wayland
+  video layer. Linux requires a separately built `liberika_capi.so`.
+- Improved iOS danmaku/subtitle timing by sampling at the display presentation
+  target and coalescing pending render ticks.
+- Restored native software decoding fallback and fixed HTTP worker cancellation
+  and resource teardown. Updated packages use matching v0.2.1 native artifacts.
 
 ## 0.2.0
 

@@ -2,8 +2,12 @@
 
 ## Unreleased
 
+## 0.2.1
+
 - Added `httpBackBufferBytes` to `ErikaOpenOptions`, forwarding the HTTP(S)
   rewind budget through the presenter JSON bridge.
+- Updated to the matching v0.2.1 native runtime with software decoding fallback
+  and cancellable HTTP source and demux teardown.
 
 ## 0.1.9
 

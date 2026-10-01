@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+## 0.2.1 - 2026-10-02
+
+### Playback and HTTP(S)
+
+- Restored software decoding fallback when a native hardware decoder cannot
+  handle the source, including WMV/WMA and 8/10-bit AV1 through bundled dav1d.
+  Windows D3D11 now handles software-decoded frame uploads consistently.
+- HTTP I/O is cancellable during connection, TLS, response headers, and body
+  reads. Source and demux teardown cancel I/O and join owned workers; stop
+  releases HTTP buffers while preserving replay, and close destroys the session.
+- Enforced the read-ahead window at every persistent-stream stripe boundary.
+
+### Flutter and OpenHarmony
+
+- Added `httpBackBufferBytes` to Flutter and standalone OpenHarmony open
+  options. All existing SDK bridges forward the rewind budget to the native
+  engine; zero or omission keeps the 16 MiB default.
+- iOS samples danmaku and subtitles at the display presentation target, using
+  a coalescing timestamp mailbox and optional `erika_presenter_render_tick_with_timing`.
+  Older libraries retain the legacy render-tick behavior.
+
+### Experimental Linux support
+
+- Added native and Flutter Linux playback on X11/Wayland, PulseAudio output,
+  NVDEC/VA-API hardware decoding, and software fallback.
+- Added native Wayland video subsurfaces, experimental direct VA-API Vulkan
+  frame import, and opt-in WSL D3D12 GPU plane copies. Physical Linux HDR and
+  Intel/AMD direct frame import remain unverified; Linux requires a source
+  build and is not included in the prebuilt release archives.
+- Fixed P010 interpolation to retain full signal precision.
+
+## 0.2.0 - 2026-09-23
+
 ### Playback
 
 - HTTP(S) prefetch now uses one persistent stream with an open-ended GET
@@ -25,13 +58,6 @@
   rule.
 - Surface the media source's own error (HTTP status, timeout) in demux errors
   rather than a bare `Input/output error (-5)`.
-
-### Flutter and OpenHarmony
-
-- Added `httpBackBufferBytes` to Flutter `ErikaPlayer.open` on Android, Apple
-  platforms, Windows, and OpenHarmony, and exposed the matching open option in
-  the standalone OpenHarmony SDK, forwarding the C `http_back_buffer_bytes`
-  rewind budget instead of hard-coding it to 0.
 
 ### Renderer
 
