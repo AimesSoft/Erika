@@ -348,7 +348,10 @@ jobs:
           expect <<'EXPECT'
           set timeout 3600
           set prompt_count 0
+          # HAR uploads can exceed OHPM's default 60-second request timeout.
+          # The outer Expect/job budgets remain one hour.
           spawn -noecho node $env(OHPM_CLI) publish $env(OHPM_HAR) \
+            --fetch_timeout 600000 \
             --publish_registry https://ohpm.openharmony.cn/ohpm \
             --publish_id $env(OHPM_PUBLISH_ID) \
             --key_path $env(OHPM_KEY_PATH)
