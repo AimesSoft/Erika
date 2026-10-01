@@ -5,12 +5,9 @@ Flutter plugin for the Erika media playback engine.
 The plugin keeps Dart out of the hot path:
 
 - Dart exposes low-frequency player commands and event streams.
-- The native plugins expose two surface strategies: `ErikaWindowOverlayVideoView`
-  for the recommended window-hosted overlay path (Metal on macOS/iOS/tvOS, a D3D11
-  swapchain on Windows), and `ErikaVideoView` for platform-view embedding. On
-  Android both widgets route through the same native-view selector: SDR uses a
-  real `TextureView`, while requested extended-linear output uses a
-  `SurfaceView` with Hybrid Composition.
+- The native plugins offer window overlays, platform views, and Flutter textures
+  through `ErikaWindowOverlayVideoView`, `ErikaVideoView`, and
+  `ErikaTextureVideoView`. Platform behavior is described below.
 - The macOS plugin loads the Erika dynamic library.
 - The iOS plugin links the Erika static library.
 - The tvOS plugin links the Erika static library and hosts its Metal layer in an
@@ -65,7 +62,9 @@ as RGBA for Flutter. Linux screenshots return tightly packed RGBA bytes.
 NVIDIA uses CUDA/NVDEC; Intel and AMD use VA-API. Set
 `ERIKA_REQUIRE_HARDWARE_DECODE=1` to fail explicitly if hardware decoding is
 unavailable. WSLg also needs `GALLIUM_DRIVER=d3d12 WGPU_BACKEND=gl` for hardware
-rendering. This path currently provides SDR output without zero-copy or MPRIS.
+rendering. The texture path provides SDR output. On Wayland, `ErikaWindowOverlayVideoView`
+places a native video layer below transparent Flutter UI and avoids per-frame
+readback. This overlay path requires a Wayland session and does not run on X11.
 
 ## macOS Setup
 
@@ -220,8 +219,7 @@ system-media integration.
 ## tvOS Setup
 
 The tvOS CocoaPod script phase downloads the verified C ABI static library for
-Apple TV devices and simulators. An explicit source build uses Rust's tier-3
-tvOS targets and requires nightly with its source component:
+Apple TV devices and simulators. An explicit source build requires nightly with its source component:
 
 - `rustup toolchain install nightly --component rust-src`
 

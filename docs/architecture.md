@@ -14,8 +14,8 @@ Rust Player Core
   source abstraction ─── file + HTTP range
   FFmpeg wrappers ────── custom AVIO, probe, demux, decode, seek, audio resample
   playback engine ────── video/audio tick, clock, frame scheduler
-  video decode ───────── VideoToolbox, D3D11VA, MediaCodec, AVCodec, software fallback
-  audio output ───────── CoreAudio, AudioQueue, WASAPI, AAudio, OHAudio, ring buffer
+  video decode ───────── VideoToolbox, D3D11VA, MediaCodec, AVCodec, NVDEC, VA-API, software fallback
+  audio output ───────── CoreAudio, AudioQueue, WASAPI, AAudio, OHAudio, PulseAudio, ring buffer
   overlay timeline ───── subtitle + danmaku composition
   renderer core ──────── color state, render graph, tone map, scaler policy
   Metal renderer ─────── zero-copy NV12/P010, HDR/EDR, subtitle/danmaku pass
@@ -23,8 +23,14 @@ Rust Player Core
   wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB, OHOS Vulkan
   presenter runtime ──── ties player + renderer + audio + overlays
   C ABI ──────────────── versioned public header, two handle families
-  Flutter plugin ─────── macOS + iOS + tvOS + Windows + Android + OpenHarmony embedding
+  Flutter plugin ─────── macOS + iOS + tvOS + Windows + Android + OpenHarmony + Linux embedding
 ```
+
+## HTTP sources and display timing
+
+The HTTP Range source manages read-ahead and rewind caches with byte budgets. `http_read_ahead_bytes` defaults to 2 MiB (overridable with `ERIKA_HTTP_READAHEAD_BYTES`); `http_back_buffer_bytes` defaults to 16 MiB. C `ErikaOpenOptions` and Dart `open()` can override these per request. Stop, reopen, and close cancel the previous session's network tasks and release its resources.
+
+The iOS Flutter bridge uses `CADisplayLink.targetTimestamp` and a mailbox that retains only the latest tick, avoiding a rendering queue backlog. `render_tick_with_timing` samples video, subtitles, and danmaku for one display target while preserving audio-master clock progression. See the [C ABI reference](capi_reference.md).
 
 ## Native Dependencies
 
@@ -40,7 +46,7 @@ sources into `third_party/`. The default profile is `lgpl`.
 | HarfBuzz | 14.2.1 | Text shaping (libass dependency) |
 | FriBidi | 1.0.16 | Bidirectional text (libass dependency) |
 
-All dependencies are statically linked. libass and its dependencies are enabled
+Release targets statically link dependencies; Linux uses system FFmpeg and PulseAudio with patched libass. libass and its dependencies are enabled
 by default (`features = ["libass"]`).
 
 ```sh
@@ -339,7 +345,7 @@ Header: `crates/erika_capi/include/erika.h`
 
 ## Flutter Plugin
 
-`packages/erika_flutter` provides macOS, iOS, tvOS, Windows, Android, and HarmonyOS
+`packages/erika_flutter` provides macOS, iOS, tvOS, Windows, Android, HarmonyOS, and Linux
 Flutter embedding:
 
 - **Dart**: `ErikaPlayer` (commands + events), `ErikaWindowOverlayVideoView`
@@ -379,6 +385,6 @@ See `docs/flutter_embedding.md` for the embedding model and HDR strategy.
 | iOS 13+ | VideoToolbox | Metal | AudioQueue | Available |
 | tvOS 13+ (Apple TV) | VideoToolbox | Metal | AudioQueue | Available |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
-| Linux | — | wgpu (planned) | — | Planned |
+| Linux | NVDEC / VA-API / FFmpeg | wgpu X11/Wayland | PulseAudio / PipeWire-Pulse | Experimental |
 | Android 8+ | MediaCodec / software | wgpu Vulkan with GLES fallback | AAudio | Available; SDR validated, extended-linear scRGB implementation awaits API 35 HDR-device acceptance |
 | HarmonyOS API 18+ | AVCodec (H.264/HEVC) / software | wgpu Vulkan, `OHNativeBuffer` zero-copy import | OHAudio | Available; validated on device, CI builds the OpenHarmony C ABI but has no device-side run verification |

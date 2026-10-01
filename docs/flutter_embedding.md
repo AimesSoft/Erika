@@ -193,14 +193,7 @@ nightly, prebuilt-bundle, and source-build options.
 
 ## macOS Build Path
 
-The macOS pod uses the same script-phase build. Inside an Erika checkout (when
-`crates/erika_capi/Cargo.toml` exists above the package, or `ERIKA_REPO_ROOT`
-points at one) it builds the Rust `erika_capi` from source by default, so local
-renderer changes are picked up without a new prebuilt release. Published
-packages and isolated consumers — including git dependencies resolved into the
-pub cache, which keep the whole repository and therefore also build from
-source — need a Rust toolchain for that path; set `ERIKA_FORCE_PREBUILT=1` to
-always download the checksummed prebuilt archive instead.
+The macOS pod downloads the package-pinned, checksum-verified dylib and bundles it into the app. This is also the default inside a repository checkout. Set `ERIKA_FORCE_SOURCE_BUILD=1` and, if needed, `ERIKA_REPO_ROOT` to build local changes. Architecture and library overrides are documented in the [Flutter README](../packages/erika_flutter/README.md).
 
 ## Minimal Presenter Flow
 
@@ -255,96 +248,12 @@ software frames have an explicit CPU-upload fallback. Video, subtitles,
 danmaku, capture, and ArtCNN compute share this path. Vulkan can negotiate FP16
 extended-linear scRGB; GLES and failed capability negotiation explicitly fall
 back to SDR. Android SDR is verified, while the API 35 HDR-device active-path
-acceptance remains pending. Linux support remains planned.
+acceptance remains pending. Linux provides experimental X11/Wayland and Flutter integration.
 
 ## Dart API
 
-```dart
-final player = ErikaPlayer(
-  outputMode: ErikaOutputMode.appleEdr,  // optional: force EDR
-  edrHeadroom: 4.0,                      // optional: EDR headroom
-  // optional: side-by-side colour/alpha assets presented with transparency
-  videoAlphaMode: ErikaVideoAlphaMode.packedAlphaRight,
-);
-
-await player.open(
-  'https://example.com/video.mp4',
-  httpHeaders: <String, String>{
-    'Authorization': 'Bearer token',
-    'Referer': 'https://example.com/',
-  },
-  httpReadAheadBytes: 16 * 1024 * 1024,
-  httpBackBufferBytes: 89 * 1024 * 1024,
-);
-await player.play();
-
-// Preferred for full-player UIs on macOS/iOS/tvOS:
-ErikaWindowOverlayVideoView(player: player)
-
-// Flutter-composited video with opacity/clipping/filters (macOS/Windows/OpenHarmony):
-ErikaTextureVideoView(player: player, opacity: 0.8)
-
-// Compatibility/diagnostic platform-view path:
-ErikaVideoView(player: player)
-
-// Playback control
-await player.pause();
-await player.seek(Duration(seconds: 30));
-await player.setVolume(0.8);
-await player.setPlaybackRate(1.5);
-
-// Neural upscaler (anime luma 2x; Apple Metal / Android Vulkan)
-await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16Ds); // recommended for visibly degraded sources
-final status = await player.getUpscalerStatus();
-// status.requestedMode  -- what was requested
-// status.activeBackend  -- off / inactive / building / scalar / simdgroupMatrix
-// status.upscaledFrames -- frames produced by the network so far
-
-// Track management
-final tracks = await player.tracks();
-for (final track in tracks) {
-  if (track.kind == ErikaTrackKind.video && track.selected) {
-    print('${track.codec} ${track.width}x${track.height}');
-    print('${track.bitRate} bps / ${track.framesPerSecond} fps');
-    break;
-  }
-}
-await player.selectAudioTrack(trackId);
-await player.selectSubtitleTrack(trackId);
-await player.addExternalSubtitle('/path/to/subtitle.srt');
-await player.setSubtitleScale(1.2);
-// Fallback subtitle look (colors are 0xRRGGBBAA). Omitted arguments keep
-// whatever this player last applied; overrideMask bits also replace the
-// styling an ASS script carries.
-await player.setSubtitleStyle(
-  fontFamily: 'Source Han Sans SC',
-  primaryColorRgba: 0xFFFFFFFF,
-  outlineColorRgba: 0x0000007F,
-  fontSize: 48,
-  outlineWidth: 2,
-  overrideMask:
-      kErikaSubtitleOverrideFontName |
-      kErikaSubtitleOverrideColors |
-      kErikaSubtitleOverrideFontSizeFields |
-      kErikaSubtitleOverrideBorder,
-);
-
-// Danmaku
-await player.loadDanmakuFile('/path/to/danmaku.xml');
-await player.addDanmakuTrackJson(jsonString, name: 'source', offset: Duration.zero);
-await player.setDanmakuConfig(fontSize: 30, displayArea: 0.5);
-
-// Native diagnostics HUD (disabled by default)
-await player.setDebugHudEnabled(true);
-final presenterStats = await player.getPresenterStats();
-
-// Events
-player.events.listen((event) {
-  // event.kind, event.state, event.position, event.duration, ...
-});
-
-await player.dispose();
-```
+Installation, player controls, HTTP cache options, events and view examples are
+maintained in the [Flutter SDK guide](../packages/erika_flutter/README.md).
 
 ## Media Track Information
 
@@ -420,3 +329,11 @@ compute and GLES reports an explicit `inactive` fallback. See
 Flutter owns layout and controls. Erika owns the video plane, subtitle plane,
 danmaku plane, audio, and timing. The plugin bridges commands and events through
 a `MethodChannel`; rendering never passes through Dart.
+
+## Linux Surface Strategies
+
+`ErikaVideoView` and `ErikaTextureVideoView` publish SDR RGBA pixel buffers to
+Flutter after GPU readback. Wayland can use `ErikaWindowOverlayVideoView` as a
+native plane below transparent Flutter UI; this avoids per-frame texture
+readback but does not support Flutter clipping or color filters on the video.
+Build the runtime locally and set `ERIKA_LIBRARY_DIR`; see [Linux integration](linux.md).

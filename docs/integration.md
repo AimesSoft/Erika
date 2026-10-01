@@ -25,7 +25,7 @@ pull-model `ErikaHandle` is for hosts that own their compositor and only want
 Erika's decode/timing/state. The rest of this guide is presenter-based.
 
 The presenter family is compiled on **macOS, iOS, tvOS, Windows, Android, and
-HarmonyOS**. The native host API is platform-specific; HarmonyOS Flutter hosts
+HarmonyOS and experimental Linux**. The native host API is platform-specific; HarmonyOS Flutter hosts
 normally use the plugin's ArkTS JSON bridge rather than reproducing the desktop
 sample code.
 
@@ -39,11 +39,12 @@ create ──▶ attach surface ──▶ open ──▶ play ──▶ (render_
                         detach surface ──▶ destroy
 ```
 
-`open` and `play` are asynchronous. The handle moves through
-`Opening → Ready → Playing`; observe transitions and failures via events rather
-than blocking. You can attach the surface
-before or after `open`; attaching first means the first decoded frame appears
-on the next tick instead of waiting for a late attach.
+`open` synchronously probes the source and returns in `Ready` on success.
+`play` queues playback work; observe `StateChanged` and `Error` events for its
+result. HTTP probing can block, so keep all calls to one handle on a serial
+worker when the UI must remain responsive. Attach the surface before playback.
+`close` ends the player permanently; use `stop` to replay, or create a new handle
+after closing.
 
 ## 3. Create the presenter
 
@@ -51,6 +52,7 @@ on the next tick instead of waiting for a late attach.
 ErikaPresenterConfig cfg = {
     .output_mode  = ErikaPresenterOutputMode_Sdr,   // AppleEdr or Android ExtendedLinear
     .edr_headroom = 1.0f,                            // requested content-headroom ceiling
+    .video_alpha_mode = ErikaVideoAlphaMode_Opaque,
     .luma_upscaler = ErikaLumaUpscalerMode_Off,      // or ArtCnnC4F16 / C4F16Ds / C4F32
 };
 ErikaPresenterHandle *p = erika_presenter_create_with_config(cfg);
@@ -108,6 +110,12 @@ For X11/Wayland/Android or to be explicit about the surface kind, use
 `erika_presenter_attach_wgpu_surface(p, kind, raw_window, raw_display, w, h, scale)`
 with the matching `ErikaWgpuSurfaceKind` and platform handles.
 
+### Linux X11 / Wayland
+
+`XlibWindow` takes an X11 Window ID and Display pointer; `WaylandSurface` takes
+`wl_surface*` and `wl_display*`. Both are borrowed until detach completes.
+Build dependencies and examples are in [Linux integration](linux.md).
+
 ### Android extended-linear scRGB
 
 Android `ExtendedLinear` is FP16 extended-linear scRGB, not HDR10/PQ. A native
@@ -163,7 +171,18 @@ if (erika_presenter_open(p, "/path/to/video.mkv") != ErikaStatus_Ok) { /* log */
 erika_presenter_play(p);
 ```
 
-`uri` is a local path or HTTP(S) URL.
+`uri` is a local path or HTTP(S) URL. Set cache budgets with open options:
+
+```c
+ErikaOpenOptions options = {0};
+options.http_read_ahead_bytes = 8 * 1024 * 1024;
+options.http_back_buffer_bytes = 128 * 1024 * 1024;
+erika_presenter_open_with_options(p, "https://example.com/video.mp4", &options);
+```
+
+Read-ahead defaults to 2 MiB, rewind to 16 MiB. Zero selects defaults;
+`ERIKA_HTTP_READAHEAD_BYTES` can set the default read-ahead window. Budgets are
+bytes; size the rewind cache for the media bitrate and desired rewind time.
 
 ## 6. The render loop
 
@@ -193,6 +212,19 @@ and resizes when they change.
 `render_tick` returns quickly; it does not block on vsync itself — your display
 timer provides the cadence. If you are not on a display callback (e.g. a smoke
 test), a `~16 ms` sleep per iteration approximates 60 Hz.
+
+### Display-target sampling
+
+Since 0.2.1, `erika_presenter_render_tick_with_timing` can sample video,
+subtitles and danmaku at the display target. The signed delay is seconds from
+call entry to the target, within ±0.25 seconds; NULL keeps legacy sampling.
+
+```c
+double delay = display_target_seconds - monotonic_now_seconds;
+erika_presenter_render_tick_with_timing(p, display_target_seconds, &delay, &stats);
+```
+
+The iOS Flutter plugin passes `CADisplayLink.targetTimestamp` through its tick mailbox.
 
 ## 7. Handle events
 
@@ -291,10 +323,8 @@ already does this — prefer it unless you are building a custom embedder.
 - [ ] On API 34+, publish display HDR/SDR ratio changes through
   `erika_presenter_set_output_headroom`; on API 35 keep desired headroom scoped
   to the individual `SurfaceView`.
-- [ ] Open, then play; don't block — watch events for readiness.
+- [ ] Open successfully, then play; run HTTP probes on a serial worker.
 - [ ] `render_tick(absolute_time_seconds)` every display frame; drain events.
 - [ ] `resize_surface` on every size/scale change.
 - [ ] One thread per handle, or serialize calls.
 - [ ] Free every returned string / `ErikaTrackInfo`; `detach` then `destroy`.
-- [ ] Do not claim Android extended-linear device validation until the API 35
-  HDR-device rotation/recovery, multi-player, and SDR-screenshot checks pass.

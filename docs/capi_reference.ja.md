@@ -34,6 +34,12 @@ create 成功の両方を確認してください。
 
 ### Linux Flutter のフレーム読み戻し
 
+```c
+ErikaStatus erika_presenter_copy_flutter_frame_rgba(
+    ErikaPresenterHandle *handle, uint8_t *out_rgba, uintptr_t capacity,
+    uint32_t *out_width, uint32_t *out_height);
+```
+
 Linux は wgpu で X11/Wayland に対応します。`erika_presenter_render_tick` の後に
 `erika_presenter_copy_flutter_frame_rgba` を呼ぶと、字幕・弾幕・HUD を含む最新の合成
 フレームを取得して消費します。呼び出し側が幅 × 高さ × 4 バイト以上のメモリを確保し、
@@ -41,6 +47,46 @@ Linux は wgpu で X11/Wayland に対応します。`erika_presenter_render_tick
 未生成なら `ErikaStatus_NoEvent`、容量不足ならエラーを返します。容量不足でもフレーム
 は消費されるため、次の tick を待って再試行します。同じ presenter の操作は直列化して
 ください。この経路は CPU メモリをコピーし、ゼロコピーではありません。
+
+## GIF エクスポート
+
+```c
+typedef enum ErikaGifExportQuality {
+  ErikaGifExportQuality_Normal = 0,
+  ErikaGifExportQuality_High = 1,
+} ErikaGifExportQuality;
+
+typedef struct ErikaGifExportOptions {
+  const char *input_uri;
+  const char *output_path;
+  uint64_t start_millis;
+  uint64_t end_millis;
+  uint32_t frames_per_second;
+  uint32_t output_width;
+  uint32_t output_height;
+  int32_t quality;
+  int32_t loop_count;
+  bool overwrite;
+  const ErikaHttpHeader *headers;
+  uintptr_t header_count;
+  uint64_t http_read_ahead_bytes;
+  uint64_t reserved[3];
+} ErikaGifExportOptions;
+
+typedef struct ErikaGifExportResult {
+  uint32_t width;
+  uint32_t height;
+  uint64_t frame_count;
+  uint64_t file_size;
+} ErikaGifExportResult;
+```
+
+```c
+ErikaStatus erika_export_gif( const ErikaGifExportOptions *options, ErikaGifExportResult *out_result);
+```
+
+handle を必要としない同期処理です。UI では worker から呼びます。時刻はミリ秒、サイズは出力ピクセルです。
+品質 Normal は bilinear、High は Lanczos。loop_count は -1 がループなし、0 が無限です。
 
 ## 規約
 
@@ -248,7 +294,7 @@ capabilities を渡すため Android extended-linear output は active になり
 ## `ErikaPresenterHandle` —— プッシュモデル
 
 Erika がフルスタックを所有し、ホストは surface を提供して `render_tick` を呼びます。
-**macOS / iOS / tvOS / Windows / Android / HarmonyOS。**
+**macOS / iOS / tvOS / Windows / Android / HarmonyOS / Linux。**
 
 ### ライフサイクルと設定
 
@@ -300,7 +346,7 @@ ErikaStatus erika_presenter_set_output_headroom(ErikaPresenterHandle *, float he
 `set_playback_rate(1.0)` が通常速度。`erika_presenter_open_with_options` は
 `erika_open_with_options` の push モデル版で、同じ `ErikaOpenOptions`
 （header と `http_read_ahead_bytes` / `http_back_buffer_bytes`）を受け付けます
-（[`erika_open_with_options`](#erikahandle--pull-モデル) 参照）。`set_upscaler` はランタイムで神経輝度アップ
+（[`erika_open_with_options`](#erikahandle--プルモデル) 参照）。`set_upscaler` はランタイムで神経輝度アップ
 スケーラを切り替えます（[`erika_presenter_get_upscaler_status`](#診断とスクリーンショット)
 参照）。Metal、feature level 11.0+ の D3D11、compute-capable な wgpu renderer は ArtCNN を実行し、
 それ以外の backend は native luma sampling を維持して `Inactive` fallback を明示します。
@@ -424,6 +470,25 @@ bitrate は track 自身の parameter を優先し、単一 video track の bitr
 他の全 audio track bitrate が既知の場合のみ、container bitrate から audio bitrate を引いて推定します。
 どちらも瞬間 bitrate や real-time render FPS ではなく、推定 bitrate には container overhead や
 non-audio stream が含まれる場合があります。
+
+### 音声・リソース・メモリフォントの補足
+
+```c
+ErikaStatus erika_presenter_audio_only_tick( ErikaPresenterHandle *handle, ErikaPresenterStats *out_stats);
+ErikaStatus erika_presenter_clear_subtitle_memory_fonts(ErikaPresenterHandle *handle);
+ErikaStatus erika_presenter_get_resource_status( ErikaPresenterHandle *handle, ErikaPresenterResourceStatus *out_status);
+ErikaStatus erika_presenter_get_subtitle_memory_font_info( ErikaPresenterHandle *handle, uint64_t font_id, ErikaSubtitleMemoryFontInfo *out_info);
+ErikaStatus erika_presenter_get_subtitle_memory_font_status( ErikaPresenterHandle *handle, ErikaSubtitleMemoryFontStatus *out_status);
+ErikaStatus erika_presenter_register_subtitle_memory_font( ErikaPresenterHandle *handle, const uint8_t *data, uintptr_t data_len, uint64_t *out_font_id);
+ErikaStatus erika_presenter_select_subtitle_memory_fonts( ErikaPresenterHandle *handle, const uint64_t *font_ids, uintptr_t font_count);
+void erika_subtitle_memory_font_info_free(ErikaSubtitleMemoryFontInfo *info);
+void erika_subtitle_memory_font_status_free( ErikaSubtitleMemoryFontStatus *status);
+```
+
+`audio_only_tick` は映像なしの音声処理、`get_resource_status` はリソース情報を返します。
+メモリフォントは登録した ID を順序付きで選択します。状態・情報の割り当ては対応する `_free` で解放します。
+
+`ErikaSubtitleMemoryFontFace` は face index、family JSON、PostScript name、weight、italic、monospaced を持ちます。`ErikaSubtitleMemoryFontInfo.faces` と内部の string は `erika_subtitle_memory_font_info_free` でまとめて解放します。
 
 ### 弾幕（ダンマク）
 
@@ -566,6 +631,14 @@ Windows のフレームスケジューラなど）。`time_seconds` はそのフ
 書き込みます。ホストが表示ループとは別の周期でカウンタをサンプリングする場合に
 使ってください。プレゼンテーションは進みません。
 
+### 表示目標時刻のレンダリング
+
+```c
+ErikaStatus erika_presenter_render_tick_with_timing( ErikaPresenterHandle *handle, double time_seconds, const double *presentation_delay_seconds, ErikaPresenterStats *out_stats);
+```
+
+delay は呼び出し入口から表示目標までの秒数（±0.25 秒）。NULL は従来のサンプリングです。映像・字幕・弾幕は同じ目標を使い、再生クロックは変更しません。
+
 ### JSON ブリッジ
 
 プラットフォームチャネルが既に構造化引数をシリアライズしている埋め込み側
@@ -683,7 +756,7 @@ free(rgba);
 | `ErikaFlutterTextureKind` | `Unknown` `MacOsTextureRegistrar` `IosTextureRegistrar` `AndroidSurfaceTexture` `WindowsTextureRegistrar` `LinuxTextureRegistrar` |
 | `ErikaVideoAlphaMode` | `Opaque` `PackedAlphaRight` |
 | `ErikaPresenterOutputMode` | `Auto` `Sdr` `AppleEdr` `ExtendedLinear` |
-| `ErikaActiveOutputEncoding` | `SdrSrgb` `AppleEdr` `AndroidExtendedLinearScRgb` `Hdr10Pq` |
+| `ErikaActiveOutputEncoding` | `SdrSrgb` `AppleEdr` `AndroidExtendedLinearScRgb` `Hdr10Pq` `LinuxExtendedLinearScRgb` |
 | `ErikaOutputSurfaceFormat` | `EightBitUnorm` `TenBitUnorm` `SixteenBitFloat` |
 | `ErikaOutputFallbackReason` | `None` `DisplayHdrUnsupported` `HybridCompositionRequired` `WgpuBackendNotVulkan` `Rgba16FloatSurfaceFormatUnavailable` `NativeWindowDataSpaceApiUnavailable` `ScrgbDataSpaceVerificationFailed` `SurfaceConfigureFailed` `LegacyAppleEdrUnsupported` |
 | `ErikaLumaUpscalerMode` | `Off` `ArtCnnC4F16` `ArtCnnC4F32` `ArtCnnC4F16Ds` |

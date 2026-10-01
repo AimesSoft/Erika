@@ -2,7 +2,7 @@
 
 [中文](architecture.zh.md) | [English](architecture.md) | [日本語](architecture.ja.md)
 
-Erika は埋め込み可能な Rust メディア再生ライブラリです。ホストアプリは Rust API、C ABI (`erika_capi`)、または Flutter バインディング (`erika_flutter`) から呼び出せます。動画フレーム、字幕、弾幕はすべてエンジン内部に留まり、レンダラー内で合成され、ホストの描画パイプラインは経由しません。
+Erika は埋め込み可能な Rust メディア再生ライブラリです。ホストアプリは Rust API、C ABI (`erika_capi`)、または Flutter バインディング (`erika_flutter`) から呼び出せます。動画フレーム、字幕、弾幕はすべてエンジン内部に留まり、レンダラー内で合成され、native surface は直接表示し、Flutter texture は host で合成します。
 
 ## システム概要
 
@@ -11,8 +11,8 @@ Rust Player Core
   source abstraction ─── file + HTTP range
   FFmpeg wrappers ────── custom AVIO, probe, demux, decode, seek, audio resample
   playback engine ────── video/audio tick, clock, frame scheduler
-  video decode ───────── VideoToolbox, D3D11VA, MediaCodec, AVCodec, software fallback
-  audio output ───────── CoreAudio, AudioQueue, WASAPI, AAudio, OHAudio, ring buffer
+  video decode ───────── VideoToolbox, D3D11VA, MediaCodec, AVCodec, NVDEC, VA-API, software fallback
+  audio output ───────── CoreAudio, AudioQueue, WASAPI, AAudio, OHAudio, PulseAudio, ring buffer
   overlay timeline ───── subtitle + danmaku composition
   renderer core ──────── color state, render graph, tone map, scaler policy
   Metal renderer ─────── zero-copy NV12/P010, HDR/EDR, subtitle/danmaku pass
@@ -20,8 +20,14 @@ Rust Player Core
   wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB, OHOS Vulkan
   presenter runtime ──── ties player + renderer + audio + overlays
   C ABI ──────────────── versioned public header、2 つの handle ファミリー
-  Flutter plugin ─────── macOS + iOS + tvOS + Windows + Android + OpenHarmony embedding
+  Flutter plugin ─────── macOS + iOS + tvOS + Windows + Android + OpenHarmony + Linux embedding
 ```
+
+## HTTP source と表示時刻
+
+HTTP Range source は byte budget で先読みと巻き戻し cache を管理します。`http_read_ahead_bytes` の既定は 2 MiB（`ERIKA_HTTP_READAHEAD_BYTES` で指定可能）、`http_back_buffer_bytes` は 16 MiB です。C の `ErikaOpenOptions` と Dart `open()` で request ごとに指定できます。stop、再 open、close は旧 session の network task を cancel して resource を解放します。
+
+iOS Flutter bridge は `CADisplayLink.targetTimestamp` と最新 tick だけを保持する mailbox を使い、render queue の蓄積を避けます。`render_tick_with_timing` は映像・字幕・弾幕を同じ表示目標で sample し、audio master clock の進行を維持します。[C ABI reference](capi_reference.ja.md)。
 
 ## ネイティブ依存関係
 
@@ -36,7 +42,7 @@ Rust Player Core
 | HarfBuzz | 14.2.1 | テキストシェーピング（libass 依存） |
 | FriBidi | 1.0.16 | 双方向テキスト処理（libass 依存） |
 
-すべて静的リンクです。libass とその依存関係は既定で有効です（`features = ["libass"]`）。
+リリース対象は依存を static link します。Linux は system FFmpeg、PulseAudio と patch 済み libass を使います。libass とその依存関係は既定で有効です（`features = ["libass"]`）。
 
 ```sh
 cargo run -p xtask -- deps build --all --profile lgpl
@@ -188,7 +194,7 @@ Header: `crates/erika_capi/include/erika.h`
 
 ## Flutter Plugin
 
-`packages/erika_flutter` は macOS / iOS / tvOS / Windows / Android / HarmonyOS の Flutter embedding を提供します。
+`packages/erika_flutter` は macOS / iOS / tvOS / Windows / Android / HarmonyOS / Linux の Flutter embedding を提供します。
 
 - **Dart**: `ErikaPlayer`（commands + events）、`ErikaWindowOverlayVideoView`（推奨の window-hosted native surface——Apple では Metal、Windows では D3D11 swapchain）、`ErikaVideoView`（compatibility platform view）。
 - **macOS Swift plugin**: `liberika_capi.dylib` を読み込み、`NSWindow` overlay または `NSView`/`CAMetalLayer` platform view surface を作成し、display link から `render_tick` を駆動します。
@@ -208,6 +214,6 @@ embedding model と HDR strategy は `docs/flutter_embedding.md` を参照して
 | iOS 13+ | VideoToolbox | Metal | AudioQueue | Available |
 | tvOS 13+ (Apple TV) | VideoToolbox | Metal | AudioQueue | Available |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
-| Linux | — | wgpu (planned) | — | Planned |
+| Linux | NVDEC / VA-API / FFmpeg | wgpu X11/Wayland | PulseAudio / PipeWire-Pulse | Experimental |
 | Android 8+ | MediaCodec / software | wgpu Vulkan + GLES fallback | AAudio | Available。SDR は検証済み、extended-linear scRGB は API 35 HDR 実機 acceptance 待ち |
 | HarmonyOS API 18+ | AVCodec（H.264/HEVC）/ software | wgpu Vulkan、`OHNativeBuffer` zero-copy import | OHAudio | Available。実機で検証済み、CI は OpenHarmony C ABI をビルドするがデバイス側の実行検証はなし |

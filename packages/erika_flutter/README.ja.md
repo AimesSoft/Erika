@@ -7,7 +7,7 @@ Erika メディア再生エンジン向けの Flutter plugin です。
 この plugin は Dart を hot path から外します。
 
 - Dart は低頻度の player command と event stream だけを公開します。
-- native plugin は 2 種類の surface を提供します。推奨は `ErikaWindowOverlayVideoView`（macOS/iOS/tvOS は Metal、Windows は D3D11 swapchain）、platform view 用は `ErikaVideoView` です。Android では両方が同じ native-view selector を使い、SDR は実体のある `TextureView`、extended-linear request は Hybrid Composition `SurfaceView` になります。
+- native plugin は window overlay、platform view、Flutter texture の 3 種類を提供します。対応する widget は `ErikaWindowOverlayVideoView`、`ErikaVideoView`、`ErikaTextureVideoView` です。platform ごとの実装は以下で説明します。
 - macOS plugin は Erika の dynamic library を読み込みます。
 - iOS plugin は Erika の static library を link します。
 - tvOS plugin は Erika の static library を link し、Apple TV platform view で Metal layer を host します。
@@ -24,16 +24,21 @@ Windows では `ErikaWindowOverlayVideoView` が window-level の Direct3D 11 sw
 
 標準的な Flutter platform view が必要な場合は `ErikaVideoView` を使います。Android の SDR video surface は native `TextureView` です。`ErikaOutputMode.extendedLinear` player は `PlatformViewLink`/Hybrid Composition の `SurfaceView` を作ります。scRGB を Flutter texture-layer composition に通さないためです。plugin は borrowed `Surface`、lifecycle、resize、audio focus、HDR eligibility、vsync tick を Erika に接続します。
 
+Windows の `ErikaVideoView` も native swapchain を使い、HDR10 を維持します。Flutter の clipping、opacity、color filter には SDR の `ErikaTextureVideoView` を使います。既定の `srcOver` は BGRA8 GPU snapshot、`overlay` は Windows Composition です。
+
+## Linux Setup
+
+[Linux ガイド](https://github.com/AimesSoft/Erika/blob/main/docs/linux.md)に従い `liberika_capi.so` を build し、所在 directory を `ERIKA_LIBRARY_DIR` に設定して `flutter build linux` を実行します。
+
+`ErikaTextureVideoView` は GTK Flutter texture を使います。Linux の `ErikaVideoView` もこの path を選択します。映像・字幕・弾幕を GPU で合成して RGBA を読み戻し、SDR で表示します。Wayland では `ErikaWindowOverlayVideoView` が透明な Flutter UI の下に native video layer を置き、毎フレームの読み戻しを省きます。Wayland session が必要で、X11 には対応しません。
+
+NVIDIA は CUDA/NVDEC、Intel/AMD は VA-API を使い、FFmpeg software decode に fallback できます。WSLg は `GALLIUM_DRIVER=d3d12 WGPU_BACKEND=gl` で Mesa D3D12 renderer を選択できます。
+
 ## macOS Setup
 
-macOS CocoaPods build は既定で arm64+x86_64 universal dynamic library を生成します。依存 project は `ERIKA_MACOS_ARCHS=arm64`、`ERIKA_MACOS_ARCHS=x86_64`、または `ERIKA_MACOS_ARCHS=arm64,x86_64` で artifact architecture を選択できます。既定値は `universal` です。prebuilt mode は対応する `macos-arm64`、`macos-x64`、`macos-universal` archive を取得します。ローカル開発では plugin が `dlopen` で Erika を読み込み、`ERIKA_CAPI_DYLIB` で path を上書きできます。
+macOS CocoaPods の build phase は検証・署名済み `liberika_capi.dylib` を download して bundle します。既定は arm64+x86_64 universal。`ERIKA_MACOS_ARCHS=arm64`、`x86_64`、`arm64,x86_64` で architecture を選択できます。実行時は `dlopen` で load します。`ERIKA_CAPI_DYLIB` は load path、`ERIKA_MACOS_CAPI_DYLIB` は bundle するローカル library を指定します。
 
-dynamic library を build するには：
-
-```sh
-cargo run -p xtask -- deps build --all --profile lgpl
-cargo build -p erika_capi
-```
+macOS は Now Playing と Remote Command Center で media 情報、再生、一時停止、停止、seek を提供します。
 
 ## Prebuilt package と source build
 
@@ -46,9 +51,7 @@ macOS plugin は Now Playing を通じてタイトル、アーティスト、ア
 
 ## iOS Setup
 
-iOS の CocoaPod script phase が、Xcode build 中に Erika の native dependency と C ABI static library を自動 build します。対応する iOS target の Rust toolchain が必要です。
-
-- `rustup target add aarch64-apple-ios`
+iOS CocoaPod script phase は検証済み C ABI static library を download します。Rust と iOS target は明示的な source build の場合に必要です。
 
 host app では、Xcode の Signing & Capabilities で **Background Modes > Audio, AirPlay, and Picture in Picture** を有効にするか、`Info.plist` の `UIBackgroundModes` に `audio` を追加してください。player は Now Playing 情報と再生 control を Control Center に登録します。タイトル、アーティスト、アルバム、エンコード済み artwork bytes を表示するには `ErikaMediaMetadata` を指定してください。
 
@@ -155,9 +158,7 @@ native system-media integration が直接処理します。
 
 ## tvOS Setup
 
-tvOS の CocoaPod script phase が、Apple TV 実機または simulator 向けの native
-dependency と C ABI static library を Xcode build 中に自動 build します。Rust の
-tvOS target は tier 3 のため、source component 付き nightly が必要です：
+tvOS CocoaPod script phase は Apple TV device と simulator の検証済み C ABI static library を download します。明示的な source build には source component 付き nightly を使います。
 
 - `rustup toolchain install nightly --component rust-src`
 
@@ -167,19 +168,15 @@ script は現在の Xcode SDK と architecture から `aarch64-apple-tvos`、
 
 ## Windows Setup
 
-Windows plugin（`ErikaFlutterPluginCApi`）は CMake build 中に `build_erika_runtime.cmake` で Erika C ABI runtime（`erika_capi.dll`）を build し、CMake generator の x64 または ARM64 architecture に自動追従して DLL を app の隣に配置します。依存 project は CMake cache の `ERIKA_WINDOWS_ARCH=x64|arm64` または環境変数 `ERIKA_WINDOWS_ARCH` で明示的に選択できます。高度な用途では `ERIKA_NATIVE_TARGET=x86_64-pc-windows-msvc|aarch64-pc-windows-msvc` も指定できます。必要なもの：
+Windows plugin は CMake build で検証済み `erika_capi.dll` を download し、generator の x64/ARM64 architecture に合わせて app の隣に配置します。CMake cache または環境変数 `ERIKA_WINDOWS_ARCH=x64|arm64` で architecture を指定できます。通常の接続には Visual Studio Build Tools と C++/WinRT を含む Windows SDK を使います。
 
-- 対応する MSVC target の Rust toolchain（`rustup target add x86_64-pc-windows-msvc` または `rustup target add aarch64-pc-windows-msvc`）
-- Visual Studio Build Tools の x64/ARM64 C++ tools + Windows SDK
-- `third_party/dist/<target>/` に build 済みの native dependency（リポジトリの `xtask deps build` フロー）
-
-plugin が Erika checkout を自動検出できない場合は `ERIKA_REPO_ROOT` を設定してください。
+`ERIKA_FORCE_SOURCE_BUILD=1` の場合は対応する MSVC target の Rust toolchain と `xtask` で build した native dependency が必要です。ローカル checkout の開発では `ERIKA_REPO_ROOT` も設定できます。
 
 Windows plugin は System Media Transport Controls（SMTC）を通じてタイトル、アーティスト、アルバム、artwork、再生状態、timeline を公開し、system の再生、一時停止、seek を処理します。C++/WinRT を含む Windows SDK が必要で、必要な WinRT system library は plugin が自動的に link します。
 
 ## Android Setup
 
-Android Gradle build は Erika の `xtask` で native dependency を構築し、選択した ABI 向けに Cargo で `erika_capi` を build します。Android API 26 以降、Android NDK、対応する Rust target が必要です。生成される `jniLibs` には `liberika_capi.so` と ABI に対応する NDK の `libc++_shared.so` が含まれます。既定は arm64 と x86_64 で、`-PerikaAndroidAbis=arm64-v8a,x86_64` または `ERIKA_ANDROID_ABIS` で変更できます。
+Android Gradle は選択された ABI の検証済み runtime を download します。Android API 26 以降が必要です。生成された `jniLibs` は `liberika_capi.so` と同じ ABI の NDK `libc++_shared.so` を含みます。既定は arm64 と x86_64。`-PerikaAndroidAbis=arm64-v8a,x86_64` または `ERIKA_ANDROID_ABIS` で指定できます。
 
 Android の `content://` media/subtitle URI は `ContentResolver` で開いて detach し、provider の offset/length を含む所有権付き `fd://` source として Erika に渡します。
 

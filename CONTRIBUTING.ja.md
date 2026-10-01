@@ -89,7 +89,7 @@ third_party/              ビルドされたネイティブ依存（gitignore �
 - **`erika.h` を合わせて再生成 / 手編集**し、新関数に注釈を付ける。
 - **⚠️ Swift のミラー構造体を同期。** macOS/iOS/tvOS プラグインは C 構造体（例：
   `ErikaPresenterStats`）を Swift 側で手でミラーしています。`erika.h` の構造体を変更したら、
-  `packages/erika_flutter` 内の**両方**の Swift ミラーファイルを更新してください。不一致は
+  `packages/erika_flutter` 内のmacOS、iOS、tvOS の 3 つの Swift ミラーファイルを更新してください。不一致は
   スタックを破壊し、明白なレイアウトエラーではなく誤解を招く autorelease-pool クラッシュ
   として現れることがあります。
 
@@ -131,3 +131,7 @@ cargo fmt --all
 変更は焦点を絞る。ビルド/テストしたプラットフォームと、CI に残すプラットフォームを明記。
 関連ドキュメントは同じ PR で更新。大きな機能（新 backend、ABI 変更）は PR 説明に短い設計
 ノートを添えると、レビュアーがスレッドと所有権の含意を追いやすくなります。
+
+## ドキュメントの管理場所
+
+ドキュメントの入口は [docs/README.md](docs/README.md) です。 SDK の使用法は package README、接続・設計は `docs/`、日付付きの調査結果は `docs/investigations/` に保存します。新しい topic を目次に追加し、API 変更と翻訳を同時に更新します。

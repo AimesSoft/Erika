@@ -31,6 +31,12 @@ HarmonyOS Flutter bridge 因 ArkTS 平台通道本身传递序列化结构化值
 
 ### Linux Flutter 纹理读回
 
+```c
+ErikaStatus erika_presenter_copy_flutter_frame_rgba(
+    ErikaPresenterHandle *handle, uint8_t *out_rgba, uintptr_t capacity,
+    uint32_t *out_width, uint32_t *out_height);
+```
+
 每次 `erika_presenter_render_tick` 后调用 `erika_presenter_copy_flutter_frame_rgba`
 可取走最近的合成帧，包含视频、字幕、弹幕和 HUD。调用方持有输出内存，容量至少为
 纹理宽 × 高 × 4 字节；成功时写入紧密 RGBA8 像素与物理尺寸。不返回引擎内存，
@@ -270,7 +276,7 @@ Android extended-linear 输出。
 ## `ErikaPresenterHandle` —— 推送模型
 
 Erika 拥有完整栈；宿主提供 surface 并调用 `render_tick`。
-**macOS / iOS / tvOS / Windows / Android / HarmonyOS。**
+**macOS / iOS / tvOS / Windows / Android / HarmonyOS / Linux。**
 
 ### 生命周期与配置
 
@@ -430,6 +436,25 @@ ErikaStatus erika_presenter_tracks(ErikaPresenterHandle *, ErikaTrackInfo *out_t
 
 语义同 `ErikaHandle` 的轨道函数。
 
+### 音频、资源与内存字体接口
+
+```c
+ErikaStatus erika_presenter_audio_only_tick( ErikaPresenterHandle *handle, ErikaPresenterStats *out_stats);
+ErikaStatus erika_presenter_clear_subtitle_memory_fonts(ErikaPresenterHandle *handle);
+ErikaStatus erika_presenter_get_resource_status( ErikaPresenterHandle *handle, ErikaPresenterResourceStatus *out_status);
+ErikaStatus erika_presenter_get_subtitle_memory_font_info( ErikaPresenterHandle *handle, uint64_t font_id, ErikaSubtitleMemoryFontInfo *out_info);
+ErikaStatus erika_presenter_get_subtitle_memory_font_status( ErikaPresenterHandle *handle, ErikaSubtitleMemoryFontStatus *out_status);
+ErikaStatus erika_presenter_register_subtitle_memory_font( ErikaPresenterHandle *handle, const uint8_t *data, uintptr_t data_len, uint64_t *out_font_id);
+ErikaStatus erika_presenter_select_subtitle_memory_fonts( ErikaPresenterHandle *handle, const uint64_t *font_ids, uintptr_t font_count);
+void erika_subtitle_memory_font_info_free(ErikaSubtitleMemoryFontInfo *info);
+void erika_subtitle_memory_font_status_free( ErikaSubtitleMemoryFontStatus *status);
+```
+
+`audio_only_tick` 用于无视频表面的音频调度；`get_resource_status` 返回渲染器资源快照。
+内存字体先注册取得 ID，再按顺序选择回退字体；状态与信息内的分配用对应 `_free` 释放。
+
+`ErikaSubtitleMemoryFontFace` 包含 face index、字体族 JSON、PostScript 名称、weight、italic 与 monospaced。`ErikaSubtitleMemoryFontInfo.faces` 和内嵌字符串随 `erika_subtitle_memory_font_info_free` 一并释放。
+
 ### 弹幕
 
 ```c
@@ -561,6 +586,14 @@ ErikaStatus erika_presenter_poll_event(ErikaPresenterHandle *, ErikaEvent *out_e
 `get_stats` 填入同样的 `ErikaPresenterStats` 快照，但不渲染帧。当宿主采样计数器的
 节奏与显示循环不同时用它；它不推进呈现。
 
+### 按显示目标时间渲染
+
+```c
+ErikaStatus erika_presenter_render_tick_with_timing( ErikaPresenterHandle *handle, double time_seconds, const double *presentation_delay_seconds, ErikaPresenterStats *out_stats);
+```
+
+可选 delay 是从调用入口到显示目标的秒数，范围 ±0.25 秒，传 NULL 保留旧采样行为。视频、字幕和弹幕使用同一目标快照，不改变播放时钟。
+
 ### JSON 桥
 
 对于平台通道本身就在序列化结构化参数的嵌入方（例如 HarmonyOS ArkTS 插件），
@@ -617,7 +650,7 @@ scalar / simdgroup-matrix）、fallback 次数、超分帧数，以及最近的 
 | 字段 | 含义 |
 |------|------|
 | `requested_mode` | 创建时请求的 `ErikaPresenterOutputMode`。 |
-| `active_encoding` | 实际的 `SdrSrgb`、`AppleEdr`、`AndroidExtendedLinearScRgb` 或 `Hdr10Pq` encoding。 |
+| `active_encoding` | 实际的 `SdrSrgb`、`AppleEdr`、`AndroidExtendedLinearScRgb`、`Hdr10Pq` 或 `LinuxExtendedLinearScRgb` encoding。 |
 | `surface_format` | 实际 8-bit UNORM、10-bit UNORM 或 16-bit float surface class。 |
 | `native_data_space` | Android `ANativeWindow` dataspace；`406913024` 为 `SCRGB_LINEAR`，`-1` 表示不可用/不适用。 |
 | `requested_headroom` | 清洗后的请求内容 headroom 上限，最小 `1.0`。 |
@@ -672,7 +705,7 @@ free(rgba);
 | `ErikaFlutterTextureKind` | `Unknown` `MacOsTextureRegistrar` `IosTextureRegistrar` `AndroidSurfaceTexture` `WindowsTextureRegistrar` `LinuxTextureRegistrar` |
 | `ErikaVideoAlphaMode` | `Opaque` `PackedAlphaRight` |
 | `ErikaPresenterOutputMode` | `Auto` `Sdr` `AppleEdr` `ExtendedLinear` |
-| `ErikaActiveOutputEncoding` | `SdrSrgb` `AppleEdr` `AndroidExtendedLinearScRgb` `Hdr10Pq` |
+| `ErikaActiveOutputEncoding` | `SdrSrgb` `AppleEdr` `AndroidExtendedLinearScRgb` `Hdr10Pq` `LinuxExtendedLinearScRgb` |
 | `ErikaOutputSurfaceFormat` | `EightBitUnorm` `TenBitUnorm` `SixteenBitFloat` |
 | `ErikaOutputFallbackReason` | `None` `DisplayHdrUnsupported` `HybridCompositionRequired` `WgpuBackendNotVulkan` `Rgba16FloatSurfaceFormatUnavailable` `NativeWindowDataSpaceApiUnavailable` `ScrgbDataSpaceVerificationFailed` `SurfaceConfigureFailed` `LegacyAppleEdrUnsupported` |
 | `ErikaLumaUpscalerMode` | `Off` `ArtCnnC4F16` `ArtCnnC4F32` `ArtCnnC4F16Ds` |

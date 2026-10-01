@@ -7,7 +7,7 @@ Erika 媒体播放引擎的 Flutter plugin。
 插件让 Dart 不进入热路径：
 
 - Dart 只暴露低频播放器命令和事件流。
-- 原生插件提供两种 surface：推荐的 `ErikaWindowOverlayVideoView`（macOS/iOS/tvOS 为 Metal，Windows 为 D3D11 swapchain），以及 platform view 用的 `ErikaVideoView`。Android 上两者都通过同一套原生 view 选择器：SDR 使用真实 `TextureView`，请求 extended-linear 时使用 Hybrid Composition `SurfaceView`。
+- 原生插件提供窗口叠加、platform view 与 Flutter 纹理三种接入方式，对应 `ErikaWindowOverlayVideoView`、`ErikaVideoView` 和 `ErikaTextureVideoView`。具体平台实现见下方。
 - macOS 插件加载 Erika 动态库。
 - iOS 插件链接 Erika 静态库。
 - tvOS 插件链接 Erika 静态库，并在 Apple TV platform view 中承载 Metal layer。
@@ -24,16 +24,21 @@ Windows 上 `ErikaWindowOverlayVideoView` 以 sibling surface 的形式托管一
 
 需要标准 Flutter platform view 时则使用 `ErikaVideoView`。Android 的 SDR 视频 surface 是原生 `TextureView`；`ErikaOutputMode.extendedLinear` player 则通过 `PlatformViewLink`/Hybrid Composition 创建 `SurfaceView`，因为 scRGB 不能经过 Flutter texture-layer composition。插件把借用的 `Surface` 交给 Erika，并完整处理创建、resize、销毁、音频焦点、HDR eligibility 和 vsync tick。
 
+Windows 的 `ErikaVideoView` 同样使用原生 swapchain，支持 HDR10。需要 Flutter 裁剪、透明度或颜色滤镜时使用 SDR 的 `ErikaTextureVideoView`：默认 `srcOver` 使用 BGRA8 GPU snapshot，`overlay` 使用 Windows Composition。
+
+## Linux Setup
+
+按 [Linux 接入指南](https://github.com/AimesSoft/Erika/blob/main/docs/linux.zh.md) 构建 `liberika_capi.so`，将 `ERIKA_LIBRARY_DIR` 指向其所在目录，再运行 `flutter build linux`。
+
+`ErikaTextureVideoView` 使用 GTK Flutter 纹理；Linux 上的 `ErikaVideoView` 也选择此路径。视频、字幕和弹幕在 GPU 合成后读回 RGBA，输出为 SDR。Wayland 下可用 `ErikaWindowOverlayVideoView` 把原生视频层放在透明 Flutter UI 下方，避免每帧读回；它要求 Wayland 会话，不适用于 X11。
+
+NVIDIA 使用 CUDA/NVDEC，Intel/AMD 使用 VA-API，可回退 FFmpeg 软件解码。WSLg 可通过 `GALLIUM_DRIVER=d3d12 WGPU_BACKEND=gl` 选择 Mesa D3D12 渲染。
+
 ## macOS Setup
 
-macOS CocoaPods 构建默认生成 arm64+x86_64 universal 动态库。依赖项目可设置 `ERIKA_MACOS_ARCHS=arm64`、`ERIKA_MACOS_ARCHS=x86_64` 或 `ERIKA_MACOS_ARCHS=arm64,x86_64` 控制产物架构；`universal` 是默认值。预构建模式会对应下载 `macos-arm64`、`macos-x64` 或 `macos-universal` 包。本地开发时插件通过 `dlopen` 加载 Erika，也可设置 `ERIKA_CAPI_DYLIB` 覆盖运行时动态库路径。
+macOS CocoaPods 构建阶段默认下载并打包经校验、签名的 `liberika_capi.dylib`，默认 arm64+x86_64 universal。通过 `ERIKA_MACOS_ARCHS=arm64`、`x86_64` 或 `arm64,x86_64` 选择架构。运行时通过 `dlopen` 加载；`ERIKA_CAPI_DYLIB` 可覆盖加载路径，`ERIKA_MACOS_CAPI_DYLIB` 可指定要打包的本地动态库。
 
-构建动态库：
-
-```sh
-cargo run -p xtask -- deps build --all --profile lgpl
-cargo build -p erika_capi
-```
+macOS 通过 Now Playing 和 Remote Command Center 提供媒体信息、播放、暂停、停止及进度控制。
 
 ## 预构建包与源码构建
 
@@ -44,9 +49,7 @@ Android 会为每个实际请求的 ABI 只下载一个约 20–22MB 的 runtime
 
 ## iOS Setup
 
-iOS CocoaPod script phase 会在 Xcode 构建期间自动构建 Erika 原生依赖和 C ABI static library。需要安装对应 iOS target 的 Rust toolchain：
-
-- `rustup target add aarch64-apple-ios`
+iOS CocoaPod script phase 默认下载经校验的 C ABI 静态库。只有显式源码构建时才需要 Rust 和对应 iOS target。
 
 宿主应用必须在 Xcode 的 Signing & Capabilities 中启用 Background Modes > Audio, AirPlay, and Picture in Picture，或在 `Info.plist` 的 `UIBackgroundModes` 中加入 `audio`。iOS、tvOS 和 macOS 会注册 Now Playing 信息及系统播放控制；建议通过 `ErikaMediaMetadata` 提供标题、作者、专辑和封面图片字节。
 
@@ -150,9 +153,7 @@ class PlaylistController {
 
 ## tvOS Setup
 
-tvOS CocoaPod script phase 会在 Xcode 构建期间自动为 Apple TV 真机或模拟器构建
-原生依赖和 C ABI 静态库。Rust 的 tvOS 目标属于 tier 3，因此需要安装带源码组件的
-nightly：
+tvOS CocoaPod script phase 默认下载 Apple TV 真机与模拟器的 C ABI 静态库。显式源码构建需要带源码组件的 nightly：
 
 - `rustup toolchain install nightly --component rust-src`
 
@@ -162,19 +163,15 @@ nightly：
 
 ## Windows Setup
 
-Windows 插件（`ErikaFlutterPluginCApi`）在 CMake 构建期间通过 `build_erika_runtime.cmake` 构建 Erika C ABI runtime（`erika_capi.dll`），自动跟随 CMake 的 x64 或 ARM64 生成器架构，并把 DLL 部署到 app 旁边。依赖项目也可通过 CMake cache `ERIKA_WINDOWS_ARCH=x64|arm64` 或环境变量 `ERIKA_WINDOWS_ARCH` 显式选择；高级场景可直接设置 `ERIKA_NATIVE_TARGET=x86_64-pc-windows-msvc|aarch64-pc-windows-msvc`。需要：
+Windows 插件在 CMake 构建中下载经校验的 `erika_capi.dll`，按生成器的 x64/ARM64 架构选择，并部署到应用旁边。可用 CMake cache 或环境变量 `ERIKA_WINDOWS_ARCH=x64|arm64` 显式选择架构。普通接入需要 Visual Studio Build Tools 和含 C++/WinRT 的 Windows SDK。
 
-- 安装对应 MSVC target 的 Rust toolchain（`rustup target add x86_64-pc-windows-msvc` 或 `rustup target add aarch64-pc-windows-msvc`）
-- Visual Studio Build Tools 的 x64/ARM64 C++ 工具 + Windows SDK
-- 原生依赖已构建到 `third_party/dist/<target>/`（见仓库的 `xtask deps build` 流程）
-
-若插件无法自动定位 Erika checkout，可设置 `ERIKA_REPO_ROOT`。
+设置 `ERIKA_FORCE_SOURCE_BUILD=1` 时才需要对应 MSVC target 的 Rust 工具链，以及通过 `xtask` 构建的原生依赖。调试本地 checkout 可同时设置 `ERIKA_REPO_ROOT`。
 
 Windows 通过 System Media Transport Controls 发布标题、作者、专辑、封面、播放状态和时间线，并支持系统播放、暂停和进度调整。需要包含 C++/WinRT 的 Windows SDK；插件会自动链接所需的 WinRT 系统库。
 
 ## Android Setup
 
-Android Gradle 构建会先调用 Erika 的 `xtask` 构建原生依赖，再用 Cargo 为选定 ABI 构建 `erika_capi`。需要 Android API 26 或更高版本，并安装 Android NDK 和对应 Rust target。生成的 `jniLibs` 会同时包含 `liberika_capi.so` 与匹配 ABI 的 NDK `libc++_shared.so`。默认构建 arm64 与 x86_64；可通过 `-PerikaAndroidAbis=arm64-v8a,x86_64` 或 `ERIKA_ANDROID_ABIS` 指定。
+Android Gradle 构建默认为选定 ABI 下载经校验的运行时。最低 Android API 26；生成的 `jniLibs` 包含 `liberika_capi.so` 和匹配 ABI 的 NDK `libc++_shared.so`。默认选择 arm64 与 x86_64；可通过 `-PerikaAndroidAbis=arm64-v8a,x86_64` 或 `ERIKA_ANDROID_ABIS` 指定。
 
 Android `content://` 媒体和字幕 URI 会通过 `ContentResolver` 打开并 detach，连同 provider 的 offset/length 作为由 Rust 接管所有权的 `fd://` source 传入 Erika。
 

@@ -83,7 +83,7 @@ third_party/              构建出的原生依赖(gitignore 输出)
 - **同步重生成 / 手改 `erika.h`** 以匹配,并给新函数加注释。
 - **⚠️ 同步 Swift 镜像结构体。** macOS/iOS/tvOS 插件在 Swift 侧手写镜像了 C 结构体(如
   `ErikaPresenterStats`)。若你改了 `erika.h` 里的结构体,必须**同时**更新
-  `packages/erika_flutter` 里的**两个** Swift 镜像文件;不匹配会破坏栈,可能表现为
+  `packages/erika_flutter` 中 macOS、iOS、tvOS 三个平台的 Swift 镜像文件;不匹配会破坏栈,可能表现为
   误导性的 autorelease-pool 崩溃,而非明显的布局错误。
 
 ## 测试
@@ -95,7 +95,7 @@ cargo fmt --all
 ```
 
 - 平台相关代码以 `#[cfg]` 门控;改某个 `cfg` 分支时,保持 `macos` / `ios` / `windows` /
-  `android` / fallback 各分支都能编译。本地测不了的目标交给 CI。
+  `android` / `tvos` / `ohos` / `linux` / fallback 各分支都能编译。本地测不了的目标交给 CI。
 - 神经超分权重会在 `tests/artcnn_upscaler.rs`（Metal）和
   `tests/wgpu_artcnn.rs`（分块 wgpu）中对照 onnxruntime 参考验证；修改 kernel 前必须
   重新核对对应路径。
@@ -120,3 +120,7 @@ cargo fmt --all
 保持改动聚焦;注明你构建/测试过的平台,以及留给 CI 的平台。在同一个 PR 里更新相关文档。
 较大的特性(新后端、ABI 改动)在 PR 描述里附一段简短设计说明,有助于评审跟进线程与所有权
 的影响。
+
+## 文档维护位置
+
+文档入口为 [docs/README.md](docs/README.md)。 SDK 用法放在各 package README，接入与内核设计放在 `docs/`，带日期的调查结果放在 `docs/investigations/`。新增主题加入文档目录，API 变更同步对应三语指南。

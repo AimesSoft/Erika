@@ -120,7 +120,7 @@ tvOS plugin 通过 CocoaPod script phase 链接 Erika C ABI static library；与
 
 ## macOS Build Path
 
-macOS pod 使用同样的 script-phase 构建。在 Erika checkout 内（包上层存在 `crates/erika_capi/Cargo.toml`，或 `ERIKA_REPO_ROOT` 指向 checkout 时）默认从源码构建 Rust `erika_capi`，这样本地渲染器改动无需等待新的预构建发布即可生效。已发布的包与隔离消费者——包括解析到 pub cache 的 git 依赖（它们保留了整个仓库，因此同样走源码构建）——该路径需要 Rust 工具链；设 `ERIKA_FORCE_PREBUILT=1` 可改为始终下载带校验的预构建归档。
+macOS pod 默认下载 package 固定、经 SHA-256 校验的动态库，并打包到应用中；仓库 checkout 中也使用此默认值。调试本地改动时设置 `ERIKA_FORCE_SOURCE_BUILD=1`，必要时指定 `ERIKA_REPO_ROOT`。架构和动态库覆盖选项在 [Flutter README](../packages/erika_flutter/README.zh.md) 维护。
 
 ## Minimal Presenter Flow
 
@@ -166,92 +166,12 @@ Apple HDR 路径仍使用 native Metal，Windows 使用 native Direct3D 11 渲�
 导入 MediaCodec Surface 帧，software frame 则有明确的 CPU upload fallback；视频、字幕、
 弹幕、截图和 ArtCNN compute 共用这条路径。Vulkan 可协商 FP16 extended-linear scRGB，
 GLES 或能力协商失败会明确回退 SDR。Android SDR 已验证，API 35 HDR 真机 active path
-仍待验收；Linux 支持仍在规划中。
+仍待验收；Linux 提供实验性 X11 / Wayland 与 Flutter 接入。
 
 ## Dart API
 
-```dart
-final player = ErikaPlayer(
-  outputMode: ErikaOutputMode.appleEdr,  // optional: force EDR
-  edrHeadroom: 4.0,                      // optional: EDR headroom
-  // optional: 左右分区颜色/alpha 素材以透明方式呈现
-  videoAlphaMode: ErikaVideoAlphaMode.packedAlphaRight,
-);
-
-await player.open(
-  'https://example.com/video.mp4',
-  httpHeaders: <String, String>{
-    'Authorization': 'Bearer token',
-    'Referer': 'https://example.com/',
-  },
-  httpReadAheadBytes: 16 * 1024 * 1024,
-  httpBackBufferBytes: 89 * 1024 * 1024,
-);
-await player.play();
-
-// Preferred for full-player UIs on macOS/iOS/tvOS:
-ErikaWindowOverlayVideoView(player: player)
-
-// Flutter 合成的视频，支持不透明度/裁剪/滤镜（macOS/Windows/OpenHarmony）：
-ErikaTextureVideoView(player: player, opacity: 0.8)
-
-// Compatibility / diagnostic platform-view path:
-ErikaVideoView(player: player)
-
-// Playback control
-await player.pause();
-await player.seek(Duration(seconds: 30));
-await player.setVolume(0.8);
-await player.setPlaybackRate(1.5);
-
-// Neural upscaler (anime luma 2x; Apple Metal / Android Vulkan)
-await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16Ds); // 推荐用于有明显劣化的片源
-final status = await player.getUpscalerStatus();
-
-// Track management
-final tracks = await player.tracks();
-for (final track in tracks) {
-  if (track.kind == ErikaTrackKind.video && track.selected) {
-    print('${track.codec} ${track.width}x${track.height}');
-    print('${track.bitRate} bps / ${track.framesPerSecond} fps');
-    break;
-  }
-}
-await player.selectAudioTrack(trackId);
-await player.selectSubtitleTrack(trackId);
-await player.addExternalSubtitle('/path/to/subtitle.srt');
-await player.setSubtitleScale(1.2);
-// 字幕的回退外观（颜色为 0xRRGGBBAA）。省略的参数沿用该 player 上次应用的值；
-// 置起 overrideMask 的对应位还会覆盖 ASS 脚本自带的样式。
-await player.setSubtitleStyle(
-  fontFamily: 'Source Han Sans SC',
-  primaryColorRgba: 0xFFFFFFFF,
-  outlineColorRgba: 0x0000007F,
-  fontSize: 48,
-  outlineWidth: 2,
-  overrideMask:
-      kErikaSubtitleOverrideFontName |
-      kErikaSubtitleOverrideColors |
-      kErikaSubtitleOverrideFontSizeFields |
-      kErikaSubtitleOverrideBorder,
-);
-
-// Danmaku
-await player.loadDanmakuFile('/path/to/danmaku.xml');
-await player.addDanmakuTrackJson(jsonString, name: 'source', offset: Duration.zero);
-await player.setDanmakuConfig(fontSize: 30, displayArea: 0.5);
-
-// Native diagnostics HUD (disabled by default)
-await player.setDebugHudEnabled(true);
-final presenterStats = await player.getPresenterStats();
-
-// Events
-player.events.listen((event) {
-  // event.kind, event.state, event.position, event.duration, ...
-});
-
-await player.dispose();
-```
+安装、播放控制、HTTP 缓存参数、事件与视图示例统一维护在
+[Flutter SDK 使用指南](../packages/erika_flutter/README.zh.md)。
 
 ## 媒体轨道信息
 
@@ -315,3 +235,10 @@ HUD 的驱动机制，数据新鲜度取决于已挂载 surface 的显示循环�
 ## Ownership Rule
 
 Flutter 负责布局和 controls。Erika 负责 video plane、subtitle plane、danmaku plane、audio 和 timing。plugin 通过 `MethodChannel` 传递命令和事件；渲染不会经过 Dart。
+
+## Linux 视频表面
+
+`ErikaVideoView` 与 `ErikaTextureVideoView` 将 GPU 合成结果读回为 SDR RGBA 纹理。
+Wayland 的 `ErikaWindowOverlayVideoView` 使用透明 Flutter UI 下的原生视频层，
+减少逐帧纹理读回；视频本身不接受 Flutter 裁剪或颜色滤镜。先构建本地内核并设置
+`ERIKA_LIBRARY_DIR`，步骤在 [Linux 接入](linux.zh.md)。

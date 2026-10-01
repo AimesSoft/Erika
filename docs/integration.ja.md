@@ -23,7 +23,7 @@ Rust の `PresenterRuntime` を直接駆動します。以下の C ABI 呼び出
 `ErikaHandle` は、独自コンポジタを持ち Erika の decode/timing/state だけが欲しいホスト
 向けです。本ガイドの残りは presenter ベースです。
 
-presenter ファミリーは **macOS / iOS / tvOS / Windows / Android / HarmonyOS** でコンパイルされます。
+presenter ファミリーは **macOS / iOS / tvOS / Windows / Android / OpenHarmony / Linux（実験的）** でコンパイルされます。
 native host API は platform ごとに異なります。HarmonyOS Flutter host は desktop sample を
 そのまま再現するのではなく、通常 plugin の ArkTS JSON bridge を使います。
 
@@ -37,9 +37,11 @@ create ──▶ attach surface ──▶ open ──▶ play ──▶ (render_
                          detach surface ──▶ destroy
 ```
 
-`open` は非同期です。handle は `Opening → Ready → Playing` と遷移します。ブロックせず
-イベントで遷移を観測してください。surface は `open` の前後どちらでも attach できますが、
-先に attach するとアイドルのテストパターン / 最初のフレームがすぐ表示されます。
+`open` は同期的にメディアを調査し、成功時に `Ready` で戻ります。`play` は再生処理を
+キューに送り、結果は `StateChanged` と `Error` で確認します。HTTP の調査は待ち時間を
+伴うため、UI を止めない場合は同じ handle の呼び出しをすべて直列 worker に置きます。
+再生前に surface を attach してください。`close` 後は新しい handle を作成します。
+先頭からの再生には `stop` を使えます。
 
 ## 3. presenter を作る
 
@@ -47,6 +49,7 @@ create ──▶ attach surface ──▶ open ──▶ play ──▶ (render_
 ErikaPresenterConfig cfg = {
     .output_mode  = ErikaPresenterOutputMode_Sdr,   // AppleEdr / Android ExtendedLinear
     .edr_headroom = 1.0f,                            // requested content-headroom ceiling
+    .video_alpha_mode = ErikaVideoAlphaMode_Opaque,
     .luma_upscaler = ErikaLumaUpscalerMode_Off,      // または ArtCnnC4F16 / C4F16Ds / C4F32
 };
 ErikaPresenterHandle *p = erika_presenter_create_with_config(cfg);
@@ -102,6 +105,12 @@ X11/Wayland/Android、または surface 種別を明示したい場合は、対�
 `erika_presenter_attach_wgpu_surface(p, kind, raw_window, raw_display, w, h, scale)`
 を使います。
 
+### Linux X11 / Wayland
+
+`XlibWindow` は X11 Window ID と Display ポインター、`WaylandSurface` は
+`wl_surface*` と `wl_display*` を受け取ります。detach 完了までホストが保持します。
+ビルドとサンプルは [Linux ガイド](linux.md) にあります。
+
 ### Android extended-linear scRGB
 
 Android `ExtendedLinear` は FP16 extended-linear scRGB で、HDR10/PQ ではありません。
@@ -150,7 +159,17 @@ if (erika_presenter_open(p, "/path/to/video.mkv") != ErikaStatus_Ok) { /* ログ
 erika_presenter_play(p);
 ```
 
-`uri` はローカルパスまたは HTTP(S) URL。
+`uri` はローカルパスまたは HTTP(S) URL です。キャッシュ容量は open options で設定します。
+
+```c
+ErikaOpenOptions options = {0};
+options.http_read_ahead_bytes = 8 * 1024 * 1024;
+options.http_back_buffer_bytes = 128 * 1024 * 1024;
+erika_presenter_open_with_options(p, "https://example.com/video.mp4", &options);
+```
+
+先読みは既定 2 MiB、リワインドは 16 MiB。0 は既定値を選びます。
+`ERIKA_HTTP_READAHEAD_BYTES` は既定の先読み容量を指定します。容量はバイト単位です。
 
 ## 6. レンダーループ
 
@@ -178,6 +197,19 @@ demo は毎フレーム `GetClientRect` + `GetDpiForWindow` をポーリング�
 `render_tick` はすぐ返ります。それ自体は vsync でブロックしません——リズムは表示タイマーが
 与えます。表示コールバック上にいない場合（スモークテスト等）、反復ごとに `~16 ms` の
 sleep で 60 Hz を近似できます。
+
+### 表示目標時刻
+
+0.2.1 の `erika_presenter_render_tick_with_timing` は表示目標時刻の映像・字幕・弾幕を
+同じスナップショットでサンプルします。delay は呼び出し入口から目標までの秒数で、
+範囲は ±0.25 秒。NULL は従来の動作です。
+
+```c
+double delay = display_target_seconds - monotonic_now_seconds;
+erika_presenter_render_tick_with_timing(p, display_target_seconds, &delay, &stats);
+```
+
+iOS Flutter プラグインは `CADisplayLink.targetTimestamp` を tick mailbox で渡します。
 
 ## 7. イベント処理
 
@@ -271,10 +303,8 @@ macOS/iOS/tvOS の Flutter Swift プラグインも同じ C ABI 上でこれを�
   `Rgba16Float + SCRGB_LINEAR` を検証。失敗時は SDR reason を記録。
 - [ ] API 34+ は `erika_presenter_set_output_headroom` で display HDR/SDR ratio change を
   publish。API 35 desired headroom は個別 `SurfaceView` に限定。
-- [ ] open してから play。ブロックせずイベントで準備完了を観測。
+- [ ] open の成功後に play。HTTP probe は直列 worker で実行。
 - [ ] 表示フレームごとに `render_tick(absolute_time_seconds)`。イベントをドレイン。
 - [ ] サイズ/scale 変化のたびに `resize_surface`。
 - [ ] handle ごとに 1 スレッド、または呼び出しを直列化。
 - [ ] 返された文字列 / `ErikaTrackInfo` をすべて解放。`detach` してから `destroy`。
-- [ ] API 35 HDR 実機の rotation/recovery、multi-player、SDR screenshot check が通るまで
-  Android extended-linear を実機検証済みとしない。

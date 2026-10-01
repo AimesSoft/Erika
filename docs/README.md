@@ -1,0 +1,48 @@
+# Erika 文档 / Documentation
+
+当前接入说明以 **0.2.1** 为基线。选择 SDK 后，先读其安装和使用指南；需要自建
+渲染宿主或开发内核时，再进入下列参考文档。
+
+## 接入 / Integration
+
+| 主题 / Topic | 中文 | English | 日本語 |
+|---|---|---|---|
+| Flutter SDK：安装、视图与 Dart API | [插件指南](../packages/erika_flutter/README.zh.md) | [Plugin guide](../packages/erika_flutter/README.md) | [プラグイン](../packages/erika_flutter/README.ja.md) |
+| Swift SDK：SwiftPM 与原生视图 | [ErikaSwift](https://github.com/AimesSoft/ErikaSwift/blob/main/README.zh.md) | [ErikaSwift](https://github.com/AimesSoft/ErikaSwift) | — |
+| OpenHarmony ArkTS SDK | — | [Package guide](../packages/erika_ohos/README.md) | — |
+| C/C++ 等原生宿主 / Native hosts | [接入指南](integration.zh.md) | [Integration](integration.md) | [組み込み](integration.ja.md) |
+| C ABI：签名、类型、所有权 / Reference | [参考手册](capi_reference.zh.md) | [C ABI reference](capi_reference.md) | [C ABI](capi_reference.ja.md) |
+| Linux / WSLg（实验性） | [Linux 接入](linux.zh.md) | [Linux integration](linux.md) | — |
+| Flutter 原生表面与平台桥接 / Native surfaces | [嵌入设计](flutter_embedding.zh.md) | [Flutter embedding](flutter_embedding.md) | [Flutter 組み込み](flutter_embedding.ja.md) |
+
+[平台能力与分发矩阵](platform_matrix.zh.md) 汇总系统版本、渲染表面与预编译范围。
+
+## 内核设计 / Kernel design
+
+| 主题 / Topic | 中文 | English | 日本語 |
+|---|---|---|---|
+| 架构 / Architecture | [架构总览](architecture.zh.md) | [Architecture](architecture.md) | [アーキテクチャ](architecture.ja.md) |
+| 弹幕 / Danmaku | [弹幕架构](danmaku_architecture.md) | [Danmaku](danmaku_architecture.en.md) | [弾幕](danmaku_architecture.ja.md) |
+| Dolby Vision / HDR 色彩处理 | — | [HDR mapping](dolby-vision.md) | — |
+| WSL D3D12 GPU 帧复制（实验性） | [中文摘要](wsl-gpu-copy.md#中文摘要) | [GPU-copy bridge](wsl-gpu-copy.md) | — |
+
+## 开发与发布 / Development and releases
+
+| 主题 / Topic | 中文 | English | 日本語 |
+|---|---|---|---|
+| 构建依赖与交叉编译 / Building | [构建](building.zh.md) | [Building](building.md) | [ビルド](building.ja.md) |
+| 发布归档与生态 SDK / Releasing | [发布](releasing.zh.md) | [Releasing](releasing.md) | [リリース](releasing.ja.md) |
+| 贡献约定 / Contributing | [贡献](../CONTRIBUTING.zh.md) | [Contributing](../CONTRIBUTING.md) | [開発者ガイド](../CONTRIBUTING.ja.md) |
+| 版本变化 / Changelog | — | [CHANGELOG](../CHANGELOG.md) | — |
+
+## 调查与验证记录 / Investigation archive
+
+[investigations/](investigations/README.md) 保存问题排查、性能实验与特定环境的验证记录，
+并标明其时间和代码基线。它们用于追踪实现依据；当前安装、接口和发布步骤由上面的指南维护。
+
+## 文档维护
+
+- 根 README 介绍项目、安装入口和平台；SDK README 维护该 SDK 的公开用法。
+- `docs/` 维护接入、内核设计与开发流程；实验结果放在 `docs/investigations/`。
+- API 变更按 `crates/erika_capi/include/erika.h` 和 SDK 实现核对，并同步对应三语指南。
+- 新主题加入本目录；保留旧文件名的兼容入口时，入口只指向现行文档。
