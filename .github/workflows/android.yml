@@ -9,15 +9,29 @@ on:
       - "Cargo.toml"
       - "crates/**"
       - "packaging/**"
-      - "packages/erika_flutter/**"
       - "third_party/patches/**"
+      - "third_party/wgpu-hal/**"
       - "xtask/**"
   push:
     branches: [main]
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/android.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
+      - "packaging/**"
+      - "third_party/patches/**"
+      - "third_party/wgpu-hal/**"
+      - "xtask/**"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   ANDROID_API_LEVEL: "26"

@@ -3,12 +3,38 @@ name: Linux native
 on:
   pull_request:
     branches: [main]
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/linux.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
+      - "examples/linux_native_demo/**"
+      - "packaging/tests/**"
+      - "scripts/*linux*.sh"
+      - "third_party/patches/**"
+      - "third_party/wgpu-hal/**"
   push:
     branches: [main]
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/linux.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
+      - "examples/linux_native_demo/**"
+      - "packaging/tests/**"
+      - "scripts/*linux*.sh"
+      - "third_party/patches/**"
+      - "third_party/wgpu-hal/**"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: linux-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   native:
