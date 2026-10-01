@@ -17,6 +17,11 @@ xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,z
 
 > 英語版：[building.md](building.md)。
 
+## Linux のシステムライブラリビルド
+
+Linux は FFmpeg 8、PulseAudio と Erika パッチ済み libass を使います。
+以下の xtask リリースターゲットとは別経路です。[Linux ガイド](linux.md) から始めます。
+
 ## 前提
 
 ### Rust
@@ -25,9 +30,8 @@ xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,z
 - クロスターゲットでは対応する Rust std target を追加：
   `rustup target add aarch64-apple-ios` や
   `rustup target add x86_64-pc-windows-msvc`。
-- Rust では tvOS target は現在 tier 3 です。`rust-src` component 付きの
-  nightly を導入し、`rustup target add` ではなく Cargo の `-Z build-std`
-  を使用します。
+- tvOS source build は `rust-src` 付き nightly と Cargo `-Z build-std`
+  （`panic_abort` std）を使い、release workflow と一致させます。
 
 ### ビルドツール —— macOS / Unix ホスト
 

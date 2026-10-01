@@ -16,6 +16,11 @@ xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,z
                                   cargo build -p erika
 ```
 
+## Linux system-library builds
+
+Linux uses system FFmpeg 8 and PulseAudio, with Erika-patched libass. It does
+not use the xtask release-target path below. Start with [Linux integration](linux.md).
+
 ## Prerequisites
 
 ### Rust
@@ -24,9 +29,8 @@ xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,z
 - For cross-targets, add the Rust std target, e.g.
   `rustup target add aarch64-apple-ios` or
   `rustup target add x86_64-pc-windows-msvc`.
-- tvOS targets are tier 2 as of Rust 1.84, but Erika still builds them with
-  nightly and Cargo's `-Z build-std` (a `panic_abort` std). Install nightly
-  with `rust-src` instead of `rustup target add`.
+- tvOS source builds use nightly with `rust-src` and Cargo's `-Z build-std`
+  (`panic_abort` std), matching the release workflow.
 
 ### Build tools — macOS / Unix host
 

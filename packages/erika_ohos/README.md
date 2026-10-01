@@ -14,14 +14,16 @@ provides an `XComponent` surface id through `attachSurface()` and drives
 ohpm install erika
 ```
 
+As of 2026-10-02, the public OHPM version is 0.1.9. The 0.2.1 package has been
+submitted for review; this checkout documents the 0.2.1 SDK.
+
 ## Player configuration
 
 `ErikaPlayerConfig` accepts `outputMode`, `edrHeadroom`, `upscaler`, and
 `videoAlphaMode`. The alpha mode defaults to `0` (opaque); `1` decodes a frame
 with color in the left half and alpha in the right half. The host surface must
 support transparent composition for the background to remain visible.
-The alpha option requires the updated ArkTS wrapper and N-API bridge together;
-the published 0.1.8 OHPM wrapper does not forward it.
+Use the ArkTS wrapper, N-API bridge, and native runtime from the same package version.
 
 ## Usage
 

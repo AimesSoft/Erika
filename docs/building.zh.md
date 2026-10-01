@@ -14,6 +14,11 @@ xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,z
 
 > 英文版：[building.md](building.md)。
 
+## Linux 系统库构建
+
+Linux 使用系统 FFmpeg 8、PulseAudio 和 Erika 补丁 libass，入口不同于下文
+xtask 发布目标。安装依赖和构建步骤在 [Linux 接入](linux.zh.md)。
+
 ## 前置依赖
 
 ### Rust
@@ -22,9 +27,8 @@ xtask deps build  ──▶  third_party/dist/<target>/<profile>/{ffmpeg,dav1d,z
 - 交叉目标需安装对应 Rust std target,如
   `rustup target add aarch64-apple-ios` 或
   `rustup target add x86_64-pc-windows-msvc`。
-- tvOS 目标自 Rust 1.84 起为 tier 2，但 Erika 仍用 nightly 与 Cargo 的 `-Z
-  build-std`（`panic_abort` std）构建。安装带 `rust-src` 的 nightly 即可，无需 `rustup target add`。
-  通过 Cargo 的 `-Z build-std` 构建，不使用 `rustup target add`。
+- tvOS 源码构建使用带 `rust-src` 的 nightly 与 Cargo `-Z build-std`
+  （`panic_abort` std），与发布工作流一致。
 
 ### 构建工具 —— macOS / Unix 宿主
 

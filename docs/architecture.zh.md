@@ -2,7 +2,7 @@
 
 [中文](architecture.zh.md) | [English](architecture.md) | [日本語](architecture.ja.md)
 
-Erika 是一个可嵌入的 Rust 媒体播放库。宿主应用可以通过 Rust API、C ABI (`erika_capi`) 或 Flutter 绑定 (`erika_flutter`) 调用它。视频帧、字幕和弹幕都留在引擎内部，并在渲染器里合成，不会流经宿主渲染管线。
+Erika 是一个可嵌入的 Rust 媒体播放库。宿主应用可以通过 Rust API、C ABI (`erika_capi`) 或 Flutter 绑定 (`erika_flutter`) 调用它。视频帧、字幕和弹幕都留在引擎内部，并在渲染器里合成，原生 surface 直接呈现，Flutter texture 交给宿主合成。
 
 ## 系统概览
 
@@ -11,8 +11,8 @@ Rust Player Core
   source abstraction ─── file + HTTP range
   FFmpeg wrappers ────── custom AVIO, probe, demux, decode, seek, audio resample
   playback engine ────── video/audio tick, clock, frame scheduler
-  video decode ───────── VideoToolbox, D3D11VA, MediaCodec, AVCodec, software fallback
-  audio output ───────── CoreAudio, AudioQueue, WASAPI, AAudio, OHAudio, ring buffer
+  video decode ───────── VideoToolbox, D3D11VA, MediaCodec, AVCodec, NVDEC, VA-API, software fallback
+  audio output ───────── CoreAudio, AudioQueue, WASAPI, AAudio, OHAudio, PulseAudio, ring buffer
   overlay timeline ───── subtitle + danmaku composition
   renderer core ──────── color state, render graph, tone map, scaler policy
   Metal renderer ─────── zero-copy NV12/P010, HDR/EDR, subtitle/danmaku pass
@@ -20,8 +20,14 @@ Rust Player Core
   wgpu renderer ──────── cross-platform video, overlays, capture, Android scRGB, OHOS Vulkan
   presenter runtime ──── ties player + renderer + audio + overlays
   C ABI ──────────────── 版本化公开头文件，两组 handle 接口族
-  Flutter plugin ─────── macOS + iOS + tvOS + Windows + Android + OpenHarmony embedding
+  Flutter plugin ─────── macOS + iOS + tvOS + Windows + Android + OpenHarmony + Linux embedding
 ```
+
+## HTTP 数据源与显示时间
+
+HTTP Range 数据源使用字节预算管理预读和回看缓存。`http_read_ahead_bytes` 默认 2 MiB（可由 `ERIKA_HTTP_READAHEAD_BYTES` 设置），`http_back_buffer_bytes` 默认 16 MiB；C 的 `ErikaOpenOptions` 和 Dart `open()` 可逐次覆盖。stop、重新 open、close 会取消旧会话的网络任务并释放其资源。
+
+iOS Flutter 桥接使用 `CADisplayLink.targetTimestamp` 作为显示目标，并通过只保留最新 tick 的 mailbox 避免渲染队列积压。`render_tick_with_timing` 让视频、字幕和弹幕按同一目标取样；音频主时钟保持原来的推进规则。接口与参数见 [C ABI 参考](capi_reference.zh.md)。
 
 ## 原生依赖
 
@@ -36,7 +42,7 @@ Rust Player Core
 | HarfBuzz | 14.2.1 | 文本 shaping（libass 依赖） |
 | FriBidi | 1.0.16 | 双向文本处理（libass 依赖） |
 
-所有依赖都静态链接。libass 及其依赖默认启用（`features = ["libass"]`）。
+发布目标的依赖静态链接；Linux 使用系统 FFmpeg、PulseAudio 和补丁版 libass。libass 及其依赖默认启用（`features = ["libass"]`）。
 
 ```sh
 cargo run -p xtask -- deps build --all --profile lgpl
@@ -205,6 +211,6 @@ Embedding 模型和 HDR 策略见 `docs/flutter_embedding.md`。
 | iOS 13+ | VideoToolbox | Metal | AudioQueue | Available |
 | tvOS 13+ (Apple TV) | VideoToolbox | Metal | AudioQueue | Available |
 | Windows 10+ | D3D11VA | Direct3D 11 | WASAPI | Available |
-| Linux | FFmpeg 软解 | wgpu X11/Wayland (SDR) | PulseAudio / PipeWire-Pulse | 实验性，见 [Linux 接入](linux.zh.md) |
+| Linux | NVDEC / VA-API / FFmpeg | wgpu X11/Wayland (SDR) | PulseAudio / PipeWire-Pulse | 实验性，见 [Linux 接入](linux.zh.md) |
 | Android 8+ | MediaCodec / software | wgpu Vulkan + GLES fallback | AAudio | Available；SDR 已验证，extended-linear scRGB 等待 API 35 HDR 真机验收 |
 | HarmonyOS API 18+ | AVCodec（H.264/HEVC）/ software | wgpu Vulkan，`OHNativeBuffer` 零拷贝导入 | OHAudio | Available；已在真机验证，CI 构建 OpenHarmony C ABI 但无设备侧运行验证 |

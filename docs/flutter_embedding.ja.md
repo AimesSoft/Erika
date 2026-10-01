@@ -120,7 +120,7 @@ tvOS plugin は CocoaPod script phase 経由で Erika C ABI static library を�
 
 ## macOS Build Path
 
-macOS pod も同じ script-phase build を使います。Erika checkout の内部（package の上位に `crates/erika_capi/Cargo.toml` がある、または `ERIKA_REPO_ROOT` が checkout を指す場合）では、既定で Rust `erika_capi` をソースからビルドします。そのため local renderer の変更は新しい prebuilt release を待たずに取り込まれます。公開 package と isolated consumer——pub cache に解決された git dependency を含みます（リポジトリ全体が保持されるため、これもソースビルドになります）——でこの path を使うには Rust toolchain が必要です。`ERIKA_FORCE_PREBUILT=1` を設定すると、 checksum 検証済みの prebuilt アーカイブのダウンロードに固定できます。
+macOS pod は package に固定された checksum 検証済み dylib を download して app に bundle します。repository checkout 内も同じ既定値です。ローカル変更の開発では `ERIKA_FORCE_SOURCE_BUILD=1` と、必要に応じて `ERIKA_REPO_ROOT` を設定します。architecture と library の指定は [Flutter README](../packages/erika_flutter/README.ja.md) に記載します。
 
 ## Minimal Presenter Flow
 
@@ -167,93 +167,12 @@ MediaCodec Surface frame を AHardwareBuffer 経由で import し、software fra
 CPU upload fallback があります。video、subtitle、danmaku、capture、ArtCNN compute はこの
 path を共有します。Vulkan は FP16 extended-linear scRGB を negotiate でき、GLES または
 capability negotiation failure は明示的に SDR へ fallback します。Android SDR は検証済み、
-API 35 HDR device の active-path acceptance は未完了です。Linux support は引き続き計画中です。
+API 35 HDR device の active-path acceptance は未完了です。Linux は実験的な X11/Wayland と Flutter 接続を提供します。
 
 ## Dart API
 
-```dart
-final player = ErikaPlayer(
-  outputMode: ErikaOutputMode.appleEdr,  // optional: force EDR
-  edrHeadroom: 4.0,                      // optional: EDR headroom
-  // optional: 左右分割の color/alpha asset を透明で表示
-  videoAlphaMode: ErikaVideoAlphaMode.packedAlphaRight,
-);
-
-await player.open(
-  'https://example.com/video.mp4',
-  httpHeaders: <String, String>{
-    'Authorization': 'Bearer token',
-    'Referer': 'https://example.com/',
-  },
-  httpReadAheadBytes: 16 * 1024 * 1024,
-  httpBackBufferBytes: 89 * 1024 * 1024,
-);
-await player.play();
-
-// Preferred for full-player UIs on macOS/iOS/tvOS:
-ErikaWindowOverlayVideoView(player: player)
-
-// Flutter 合成の video。opacity / clipping / filter に対応（macOS/Windows/OpenHarmony）:
-ErikaTextureVideoView(player: player, opacity: 0.8)
-
-// Compatibility/diagnostic platform-view path:
-ErikaVideoView(player: player)
-
-// Playback control
-await player.pause();
-await player.seek(Duration(seconds: 30));
-await player.setVolume(0.8);
-await player.setPlaybackRate(1.5);
-
-// Neural upscaler (anime luma 2x; Apple Metal / Android Vulkan)
-await player.setUpscaler(ErikaUpscalerMode.artCnnC4F16Ds); // 目立つ劣化があるソース向けの推奨値
-final status = await player.getUpscalerStatus();
-
-// Track management
-final tracks = await player.tracks();
-for (final track in tracks) {
-  if (track.kind == ErikaTrackKind.video && track.selected) {
-    print('${track.codec} ${track.width}x${track.height}');
-    print('${track.bitRate} bps / ${track.framesPerSecond} fps');
-    break;
-  }
-}
-await player.selectAudioTrack(trackId);
-await player.selectSubtitleTrack(trackId);
-await player.addExternalSubtitle('/path/to/subtitle.srt');
-await player.setSubtitleScale(1.2);
-// 字幕の fallback な見た目（色は 0xRRGGBBAA）。省略した引数は直前に適用した値を
-// 保ちます。overrideMask の bit を立てると ASS script 自身の styling も
-// 置き換えます。
-await player.setSubtitleStyle(
-  fontFamily: 'Source Han Sans SC',
-  primaryColorRgba: 0xFFFFFFFF,
-  outlineColorRgba: 0x0000007F,
-  fontSize: 48,
-  outlineWidth: 2,
-  overrideMask:
-      kErikaSubtitleOverrideFontName |
-      kErikaSubtitleOverrideColors |
-      kErikaSubtitleOverrideFontSizeFields |
-      kErikaSubtitleOverrideBorder,
-);
-
-// Danmaku
-await player.loadDanmakuFile('/path/to/danmaku.xml');
-await player.addDanmakuTrackJson(jsonString, name: 'source', offset: Duration.zero);
-await player.setDanmakuConfig(fontSize: 30, displayArea: 0.5);
-
-// Native diagnostics HUD (disabled by default)
-await player.setDebugHudEnabled(true);
-final presenterStats = await player.getPresenterStats();
-
-// Events
-player.events.listen((event) {
-  // event.kind, event.state, event.position, event.duration, ...
-});
-
-await player.dispose();
-```
+インストール、再生制御、HTTP キャッシュ、イベント、ビューの例は
+[Flutter SDK ガイド](../packages/erika_flutter/README.ja.md) にまとめています。
 
 ## メディアトラック情報
 
@@ -307,3 +226,10 @@ GLES は明示的な `inactive` fallback を報告します。renderer 側の設
 ## Ownership Rule
 
 Flutter は layout と controls を担当し、Erika は video plane、subtitle plane、danmaku plane、audio、timing を担当します。plugin は `MethodChannel` を通じて command と event を橋渡しし、rendering は Dart を経由しません。
+
+## Linux の映像サーフェス
+
+`ErikaVideoView` と `ErikaTextureVideoView` は GPU の結果を SDR RGBA として読み戻します。
+Wayland の `ErikaWindowOverlayVideoView` は透明 Flutter UI の下にネイティブ映像を置き、
+フレームごとの読み戻しを減らします。映像への Flutter クリップやフィルターは使えません。
+ローカルのランタイムをビルドし `ERIKA_LIBRARY_DIR` を設定します。[Linux ガイド](linux.md)。

@@ -658,6 +658,14 @@ ErikaStatus erika_presenter_audio_only_tick(ErikaPresenterHandle *, ErikaPresent
 frame. Use it when the host samples counters on a different cadence from the
 display loop; it does not advance presentation.
 
+### Display-target rendering
+
+```c
+ErikaStatus erika_presenter_render_tick_with_timing( ErikaPresenterHandle *handle, double time_seconds, const double *presentation_delay_seconds, ErikaPresenterStats *out_stats);
+```
+
+The optional delay is signed seconds from call entry to the display target (±0.25 s). NULL keeps legacy sampling. Video, subtitles and danmaku sample the same target without changing the playback clock.
+
 ### JSON bridge
 
 For embedders whose platform channel already serializes structured arguments
@@ -788,7 +796,7 @@ snapshots from the same runtime state as `get_output_status`.
 | `ErikaFlutterTextureKind` | `Unknown` `MacOsTextureRegistrar` `IosTextureRegistrar` `AndroidSurfaceTexture` `WindowsTextureRegistrar` `LinuxTextureRegistrar` |
 | `ErikaVideoAlphaMode` | `Opaque` `PackedAlphaRight` |
 | `ErikaPresenterOutputMode` | `Sdr` `AppleEdr` `ExtendedLinear` `Auto` |
-| `ErikaActiveOutputEncoding` | `SdrSrgb` `AppleEdr` `AndroidExtendedLinearScRgb` `Hdr10Pq` |
+| `ErikaActiveOutputEncoding` | `SdrSrgb` `AppleEdr` `AndroidExtendedLinearScRgb` `Hdr10Pq` `LinuxExtendedLinearScRgb` |
 | `ErikaOutputSurfaceFormat` | `EightBitUnorm` `TenBitUnorm` `SixteenBitFloat` |
 | `ErikaOutputFallbackReason` | `None` `DisplayHdrUnsupported` `HybridCompositionRequired` `WgpuBackendNotVulkan` `Rgba16FloatSurfaceFormatUnavailable` `NativeWindowDataSpaceApiUnavailable` `ScrgbDataSpaceVerificationFailed` `SurfaceConfigureFailed` `LegacyAppleEdrUnsupported` |
 | `ErikaLumaUpscalerMode` | `Off` `ArtCnnC4F16` `ArtCnnC4F32` `ArtCnnC4F16Ds` |

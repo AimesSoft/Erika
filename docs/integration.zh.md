@@ -22,7 +22,7 @@ overlay 和呈现,宿主提供一个 surface 并每帧调一次 `render_tick`。
 除非你有理由自己渲染,否则用 `ErikaPresenterHandle`。拉取模型的 `ErikaHandle` 适合
 拥有自己合成器、只想要 Erika 解码/时序/状态的宿主。本指南其余部分都基于 presenter。
 
-presenter 族在 **macOS、iOS、tvOS、Windows 和 Android** 上编译。
+presenter 族在 **macOS、iOS、tvOS、Windows、Android、OpenHarmony 与实验性 Linux** 上编译。
 
 ## 2. 生命周期
 
@@ -34,9 +34,10 @@ create ──▶ attach surface ──▶ open ──▶ play ──▶ (render_
                          detach surface ──▶ destroy
 ```
 
-`open` 是异步的。handle 经历 `Opening → Ready → Playing`;通过事件观察跃迁,而非阻塞
-等待。你可以在 `open` 前或后 attach surface,但先 attach 能让空闲测试图样 / 首帧立即
-出现。
+`open` 同步完成媒体探测，成功返回时进入 `Ready`。`play` 向工作线程投递播放命令，
+结果通过 `StateChanged` 和 `Error` 事件观察。HTTP 探测可能阻塞；需要保持 UI 响应时，
+将同一句柄的所有调用放到串行工作线程，并在播放前 attach surface。
+`close` 结束播放器；从头重播使用 `stop`，关闭后再次播放则创建新句柄。
 
 ## 3. 创建 presenter
 
@@ -44,6 +45,7 @@ create ──▶ attach surface ──▶ open ──▶ play ──▶ (render_
 ErikaPresenterConfig cfg = {
     .output_mode  = ErikaPresenterOutputMode_Sdr,   // AppleEdr 或 Android ExtendedLinear
     .edr_headroom = 1.0f,                            // 请求的内容 headroom 上限
+    .video_alpha_mode = ErikaVideoAlphaMode_Opaque,
     .luma_upscaler = ErikaLumaUpscalerMode_Off,      // 或 ArtCnnC4F16 / C4F16Ds / C4F32
 };
 ErikaPresenterHandle *p = erika_presenter_create_with_config(cfg);
@@ -98,6 +100,12 @@ presenter 配置下,该 surface 驱动**原生 Direct3D 11** 渲染器（D3D11VA
 `erika_presenter_attach_wgpu_surface(p, kind, raw_window, raw_display, w, h, scale)`,
 配对应的 `ErikaWgpuSurfaceKind` 和平台句柄。
 
+### Linux X11 / Wayland
+
+`XlibWindow` 对应 X11 Window ID 与 Display 指针，`WaylandSurface` 对应
+`wl_surface*` 与 `wl_display*`。这些句柄由宿主持有，detach 完成后再释放。
+构建依赖与示例在 [Linux 接入](linux.zh.md)。
+
 ### Android extended-linear scRGB
 
 Android `ExtendedLinear` 是 FP16 extended-linear scRGB，不是 HDR10/PQ。原生宿主必须从
@@ -144,7 +152,17 @@ if (erika_presenter_open(p, "/path/to/video.mkv") != ErikaStatus_Ok) { /* 记录
 erika_presenter_play(p);
 ```
 
-`uri` 是本地路径或 HTTP(S) URL。
+`uri` 是本地路径或 HTTP(S) URL。使用打开选项设置缓存预算：
+
+```c
+ErikaOpenOptions options = {0};
+options.http_read_ahead_bytes = 8 * 1024 * 1024;
+options.http_back_buffer_bytes = 128 * 1024 * 1024;
+erika_presenter_open_with_options(p, "https://example.com/video.mp4", &options);
+```
+
+预读默认为 2 MiB，回退缓存为 16 MiB；传 0 采用默认值。进程级
+`ERIKA_HTTP_READAHEAD_BYTES` 可设置默认预读窗口。预算按字节计算，回退时间取决于码率。
 
 ## 6. 渲染循环
 
@@ -171,6 +189,19 @@ while (erika_presenter_poll_event(p, &ev) == ErikaStatus_Ok) {
 
 `render_tick` 很快返回;它自身不在 vsync 上阻塞——节奏由你的显示定时器提供。若你不在
 显示回调里(如冒烟测试),每次迭代 `~16 ms` 的 sleep 可近似 60 Hz。
+
+### 显示目标时间采样
+
+0.2.1 起可用 `erika_presenter_render_tick_with_timing` 在显示目标时刻同步采样视频、
+字幕和弹幕。delay 是从调用入口到显示目标的秒数，可为负数，范围 ±0.25 秒；
+传 NULL 保留原有采样行为。
+
+```c
+double delay = display_target_seconds - monotonic_now_seconds;
+erika_presenter_render_tick_with_timing(p, display_target_seconds, &delay, &stats);
+```
+
+iOS Flutter 插件将 `CADisplayLink.targetTimestamp` 经 tick mailbox 传入此接口。
 
 ## 7. 处理事件
 
@@ -258,7 +289,7 @@ include `erika.h`,链接库(见 [building.zh.md](building.zh.md)),就这么简�
   `Rgba16Float + SCRGB_LINEAR`；否则接受并记录 SDR reason。
 - [ ] API 34+ 通过 `erika_presenter_set_output_headroom` 发布显示器 HDR/SDR ratio 变化；
   API 35 的 desired headroom 只作用于单个 `SurfaceView`。
-- [ ] 先 open 再 play;别阻塞——通过事件观察就绪。
+- [ ] 同步 open 后调用 play；通过事件观察播放状态和错误。
 - [ ] 每个显示帧 `render_tick(absolute_time_seconds)`;抽干事件。
 - [ ] 每次尺寸/scale 变化都 `resize_surface`。
 - [ ] 每个 handle 一个线程,或串行化调用。
