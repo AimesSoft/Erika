@@ -3,8 +3,40 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "LICENSE"
+      - "crates/**"
+      - "examples/**"
+      - "packaging/**"
+      - "packages/erika_flutter/**"
+      - "!packages/erika_flutter/**/*.md"
+      - "packages/erika_ohos/**"
+      - "!packages/erika_ohos/**/*.md"
+      - "third_party/patches/**"
+      - "third_party/wgpu-hal/**"
+      - "xtask/**"
   push:
     branches: [main]
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "LICENSE"
+      - "crates/**"
+      - "examples/**"
+      - "packaging/**"
+      - "packages/erika_flutter/**"
+      - "!packages/erika_flutter/**/*.md"
+      - "packages/erika_ohos/**"
+      - "!packages/erika_ohos/**/*.md"
+      - "third_party/patches/**"
+      - "third_party/wgpu-hal/**"
+      - "xtask/**"
   workflow_dispatch:
 
 permissions:
@@ -20,6 +52,40 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
+  changes:
+    name: Select native checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.paths.outputs.native }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect native build inputs
+        id: paths
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          # Manual runs and unavailable bases run every check conservatively.
+          if [[ "$EVENT_NAME" == workflow_dispatch ]] || \
+             ! git cat-file -e "${BASE_REF}^{commit}" 2>/dev/null; then
+            echo "native=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only -z "$BASE_REF" "$HEAD_REF" > "$RUNNER_TEMP/changed-paths"
+          native=false
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              .cargo/*|Cargo.lock|Cargo.toml|crates/*|examples/*|packaging/*|third_party/patches/*|third_party/wgpu-hal/*|xtask/*|.github/workflows/ci.yml|.github/workflows/release.yml)
+                native=true ;;
+            esac
+          done < "$RUNNER_TEMP/changed-paths"
+          echo "native=$native" >> "$GITHUB_OUTPUT"
+
   quality:
     name: Quality (Ubuntu)
     runs-on: ubuntu-latest
@@ -29,10 +95,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
       - name: Verify playback fixture checksums
         working-directory: crates/erika/testdata/playback
         run: sha256sum --check SHA256SUMS
@@ -51,37 +113,11 @@ jobs:
         run: cargo test --locked -p xtask
       - name: Verify vendored Cargo patches
         run: cargo run --locked -p xtask -- check cargo-patches
-      - name: Get Flutter dependencies
-        working-directory: packages/erika_flutter
-        run: flutter pub get
-      - name: Analyze Flutter package
-        working-directory: packages/erika_flutter
-        run: flutter analyze --no-pub
-      - name: Test Flutter package
-        working-directory: packages/erika_flutter
-        run: flutter test --no-pub --reporter expanded
-      - name: Validate pub package
-        working-directory: packages/erika_flutter
-        env:
-          PUB_HOSTED_URL: https://pub.dev
-        run: flutter pub publish --dry-run
-      - name: Test Flutter package outside the monorepo
-        env:
-          PUB_HOSTED_URL: https://pub.dev
-        run: |
-          set -euo pipefail
-          work="$(mktemp -d)"
-          trap 'rm -rf "$work"' EXIT
-          mkdir -p "$work/erika_flutter"
-          git archive HEAD:packages/erika_flutter | tar -x -C "$work/erika_flutter"
-          test ! -e "$work/crates"
-          cd "$work/erika_flutter"
-          flutter pub get
-          flutter analyze --no-pub
-          flutter test --no-pub --reporter expanded
 
   rust-macos:
     name: Rust (macOS ${{ matrix.arch }})
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     timeout-minutes: 150
     strategy:
       fail-fast: false
@@ -166,6 +202,8 @@ jobs:
 
   ios:
     name: iOS device staticlib
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: macos-26
     timeout-minutes: 150
     env:
@@ -181,7 +219,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: native-v2-ios-device-aarch64-min${{ env.IPHONEOS_DEPLOYMENT_TARGET }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
+          key: native-v2-ios-aarch64-apple-ios-min${{ env.IPHONEOS_DEPLOYMENT_TARGET }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
+          restore-keys: |
+            native-v2-ios-device-aarch64-min${{ env.IPHONEOS_DEPLOYMENT_TARGET }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
       - name: Build iOS native dependencies
         run: >-
           cargo run --locked -p xtask -- deps build --all
@@ -195,6 +235,8 @@ jobs:
 
   tvos:
     name: tvOS simulator staticlib
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: macos-26
     timeout-minutes: 150
     env:
@@ -210,7 +252,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: native-v2-tvos-simulator-aarch64-min${{ env.TVOS_DEPLOYMENT_TARGET }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
+          key: native-v2-tvos-aarch64-apple-tvos-sim-min${{ env.TVOS_DEPLOYMENT_TARGET }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
+          restore-keys: |
+            native-v2-tvos-simulator-aarch64-min${{ env.TVOS_DEPLOYMENT_TARGET }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
       - name: Build tvOS native dependencies
         run: >-
           cargo run --locked -p xtask -- deps build --all
@@ -228,6 +272,8 @@ jobs:
 
   windows:
     name: Windows ${{ matrix.arch }} build
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     strategy:

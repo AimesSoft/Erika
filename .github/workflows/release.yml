@@ -25,6 +25,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   PROFILE: lgpl
   ANDROID_API_LEVEL: "26"
@@ -115,10 +119,23 @@ jobs:
           name: erika-capi-macos-universal
           path: dist/*.zip
 
-  ios:
-    name: iOS (XCFramework)
+  ios-slices:
+    name: iOS ${{ matrix.target }}
     runs-on: macos-26
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios${IPHONEOS_DEPLOYMENT_TARGET}
+          - target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios${IPHONEOS_DEPLOYMENT_TARGET}-simulator
+          - target: x86_64-apple-ios
+            sdk: iphonesimulator
+            clang_target: x86_64-apple-ios${IPHONEOS_DEPLOYMENT_TARGET}-simulator
     env:
       IPHONEOS_DEPLOYMENT_TARGET: "13.0"
       LANG: C
@@ -127,46 +144,58 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+          targets: ${{ matrix.target }}
       - name: Install native build tools
         run: brew install nasm meson ninja pkg-config
       - name: Cache native dependencies
         uses: actions/cache@v4
         with:
           path: third_party
-          key: native-v2-ios-release-all-min${{ env.IPHONEOS_DEPLOYMENT_TARGET }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
-      - name: Build native deps + erika_capi (device + simulators)
-        # iOS links against the static lib only (XCFramework). Build just the
-        # staticlib via `cargo rustc --crate-type staticlib` so the cdylib link
-        # (which iOS does not use and which fails to resolve here) is skipped.
+          key: native-v2-ios-${{ matrix.target }}-min${{ env.IPHONEOS_DEPLOYMENT_TARGET }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
+          restore-keys: |
+            ${{ matrix.target == 'aarch64-apple-ios' && format('native-v2-ios-device-aarch64-min{0}-{1}', env.IPHONEOS_DEPLOYMENT_TARGET, hashFiles('xtask/src/main.rs', 'third_party/patches/**')) || '' }}
+      - name: Build native dependencies and static C API
+        # Apple mobile bundles use the static library; skip the cdylib link.
         run: |
           set -euo pipefail
-          for ENTRY in \
-            "aarch64-apple-ios|iphoneos|arm64-apple-ios${IPHONEOS_DEPLOYMENT_TARGET}" \
-            "aarch64-apple-ios-sim|iphonesimulator|arm64-apple-ios${IPHONEOS_DEPLOYMENT_TARGET}-simulator" \
-            "x86_64-apple-ios|iphonesimulator|x86_64-apple-ios${IPHONEOS_DEPLOYMENT_TARGET}-simulator"
-          do
-            IFS='|' read -r T SDK CLANG_TARGET <<< "$ENTRY"
-            SDKROOT="$(xcrun --sdk "$SDK" --show-sdk-path)"
-            BINDGEN_KEY="${T//-/_}"
-            export SDKROOT
-            export "BINDGEN_EXTRA_CLANG_ARGS_${BINDGEN_KEY}=--target=${CLANG_TARGET} -isysroot ${SDKROOT}"
-            cargo run -p xtask -- deps build --all --profile "$PROFILE" --target "$T"
-            ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
-            cargo rustc -p erika_capi --lib --release --target "$T" \
-                --no-default-features --features libass --crate-type staticlib
-          done
+          T="${{ matrix.target }}"
+          SDKROOT="$(xcrun --sdk "${{ matrix.sdk }}" --show-sdk-path)"
+          BINDGEN_KEY="${T//-/_}"
+          export SDKROOT
+          export "BINDGEN_EXTRA_CLANG_ARGS_${BINDGEN_KEY}=--target=${{ matrix.clang_target }} -isysroot ${SDKROOT}"
+          cargo run --locked -p xtask -- deps build --all --profile "$PROFILE" --target "$T"
+          ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
+            cargo rustc --locked \
+              -p erika_capi --lib --release --target "$T" \
+              --no-default-features --features libass --crate-type staticlib
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-ios-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/liberika_capi.a
+          if-no-files-found: error
+
+  ios:
+    name: iOS (XCFramework)
+    needs: ios-slices
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-ios-*
+          path: slices
       - name: Assemble XCFramework
         run: |
           mkdir -p out hdr
           cp crates/erika_capi/include/erika.h hdr/erika.h
           # Fat static lib for the simulator slice (arm64 + x86_64).
           lipo -create \
-            target/aarch64-apple-ios-sim/release/liberika_capi.a \
-            target/x86_64-apple-ios/release/liberika_capi.a \
+            slices/native-ios-aarch64-apple-ios-sim/liberika_capi.a \
+            slices/native-ios-x86_64-apple-ios/liberika_capi.a \
             -output out/liberika_capi-sim.a
           xcodebuild -create-xcframework \
-            -library target/aarch64-apple-ios/release/liberika_capi.a -headers hdr \
+            -library slices/native-ios-aarch64-apple-ios/liberika_capi.a -headers hdr \
             -library out/liberika_capi-sim.a -headers hdr \
             -output out/erika_capi.xcframework
       - name: Package
@@ -178,10 +207,23 @@ jobs:
           name: erika-capi-ios
           path: dist/*.zip
 
-  tvos:
-    name: tvOS (XCFramework)
+  tvos-slices:
+    name: tvOS ${{ matrix.target }}
     runs-on: macos-26
     timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-tvos
+            sdk: appletvos
+            clang_target: arm64-apple-tvos${TVOS_DEPLOYMENT_TARGET}
+          - target: aarch64-apple-tvos-sim
+            sdk: appletvsimulator
+            clang_target: arm64-apple-tvos${TVOS_DEPLOYMENT_TARGET}-simulator
+          - target: x86_64-apple-tvos
+            sdk: appletvsimulator
+            clang_target: x86_64-apple-tvos${TVOS_DEPLOYMENT_TARGET}-simulator
     env:
       TVOS_DEPLOYMENT_TARGET: "13.0"
       LANG: C
@@ -197,37 +239,50 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: native-v2-tvos-release-all-min${{ env.TVOS_DEPLOYMENT_TARGET }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
-      - name: Build native deps + erika_capi (device + simulators)
+          key: native-v2-tvos-${{ matrix.target }}-min${{ env.TVOS_DEPLOYMENT_TARGET }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
+          restore-keys: |
+            ${{ matrix.target == 'aarch64-apple-tvos-sim' && format('native-v2-tvos-simulator-aarch64-min{0}-{1}', env.TVOS_DEPLOYMENT_TARGET, hashFiles('xtask/src/main.rs', 'third_party/patches/**')) || '' }}
+      - name: Build native dependencies and static C API
+        # Apple mobile bundles use the static library; skip the cdylib link.
         run: |
           set -euo pipefail
-          for ENTRY in \
-            "aarch64-apple-tvos|appletvos|arm64-apple-tvos${TVOS_DEPLOYMENT_TARGET}" \
-            "aarch64-apple-tvos-sim|appletvsimulator|arm64-apple-tvos${TVOS_DEPLOYMENT_TARGET}-simulator" \
-            "x86_64-apple-tvos|appletvsimulator|x86_64-apple-tvos${TVOS_DEPLOYMENT_TARGET}-simulator"
-          do
-            IFS='|' read -r T SDK CLANG_TARGET <<< "$ENTRY"
-            SDKROOT="$(xcrun --sdk "$SDK" --show-sdk-path)"
-            BINDGEN_KEY="${T//-/_}"
-            export SDKROOT
-            export "BINDGEN_EXTRA_CLANG_ARGS_${BINDGEN_KEY}=--target=${CLANG_TARGET} -isysroot ${SDKROOT}"
-            cargo run --locked -p xtask -- deps build --all \
-              --profile "$PROFILE" --target "$T"
-            ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
-              cargo +nightly rustc -Z build-std=std,panic_abort --locked \
-                -p erika_capi --lib --release --target "$T" \
-                --no-default-features --features libass --crate-type staticlib
-          done
+          T="${{ matrix.target }}"
+          SDKROOT="$(xcrun --sdk "${{ matrix.sdk }}" --show-sdk-path)"
+          BINDGEN_KEY="${T//-/_}"
+          export SDKROOT
+          export "BINDGEN_EXTRA_CLANG_ARGS_${BINDGEN_KEY}=--target=${{ matrix.clang_target }} -isysroot ${SDKROOT}"
+          cargo run --locked -p xtask -- deps build --all --profile "$PROFILE" --target "$T"
+          ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
+            cargo +nightly rustc -Z build-std=std,panic_abort --locked \
+              -p erika_capi --lib --release --target "$T" \
+              --no-default-features --features libass --crate-type staticlib
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-tvos-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/liberika_capi.a
+          if-no-files-found: error
+
+  tvos:
+    name: tvOS (XCFramework)
+    needs: tvos-slices
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-tvos-*
+          path: slices
       - name: Assemble XCFramework
         run: |
           mkdir -p out hdr
           cp crates/erika_capi/include/erika.h hdr/erika.h
           lipo -create \
-            target/aarch64-apple-tvos-sim/release/liberika_capi.a \
-            target/x86_64-apple-tvos/release/liberika_capi.a \
+            slices/native-tvos-aarch64-apple-tvos-sim/liberika_capi.a \
+            slices/native-tvos-x86_64-apple-tvos/liberika_capi.a \
             -output out/liberika_capi-sim.a
           xcodebuild -create-xcframework \
-            -library target/aarch64-apple-tvos/release/liberika_capi.a -headers hdr \
+            -library slices/native-tvos-aarch64-apple-tvos/liberika_capi.a -headers hdr \
             -library out/liberika_capi-sim.a -headers hdr \
             -output out/erika_capi.xcframework
       - name: Package
@@ -336,15 +391,35 @@ jobs:
           name: erika-capi-windows-${{ matrix.arch }}
           path: dist/*.zip
 
-  android:
-    name: Android (4 ABIs)
+  android-slices:
+    name: Android ${{ matrix.abi }}
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rust_target: aarch64-linux-android
+            abi: arm64-v8a
+            clang_target: aarch64-linux-android
+            cxx_runtime_target: aarch64-linux-android
+          - rust_target: armv7-linux-androideabi
+            abi: armeabi-v7a
+            clang_target: armv7a-linux-androideabi
+            cxx_runtime_target: arm-linux-androideabi
+          - rust_target: x86_64-linux-android
+            abi: x86_64
+            clang_target: x86_64-linux-android
+            cxx_runtime_target: x86_64-linux-android
+          - rust_target: i686-linux-android
+            abi: x86
+            clang_target: i686-linux-android
+            cxx_runtime_target: i686-linux-android
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+          targets: ${{ matrix.rust_target }}
       - uses: android-actions/setup-android@v4
       - name: Install Android NDK and native build tools
         run: |
@@ -353,15 +428,16 @@ jobs:
           sudo apt-get install -y build-essential cmake make meson nasm ninja-build pkg-config libclang-dev python3-venv
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
-      - name: Cache Android native dependencies
+      - name: Cache native dependencies
         uses: actions/cache@v4
         with:
           path: third_party
-          key: native-v2-android-release-all-ndk${{ env.ANDROID_NDK_VERSION }}-api${{ env.ANDROID_API_LEVEL }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
-      - name: Build native deps + erika_capi (all ABIs)
+          key: native-v2-android-${{ matrix.rust_target }}-ndk${{ env.ANDROID_NDK_VERSION }}-api${{ env.ANDROID_API_LEVEL }}-${{ hashFiles('xtask/src/main.rs', 'third_party/patches/**') }}
+      - name: Build native dependencies and C API
         shell: bash
         run: |
           set -euo pipefail
+          T="${{ matrix.rust_target }}"
           PREBUILT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
           TOOLCHAIN="$PREBUILT/bin"
           LIBCLANG_FILE="$(find "$PREBUILT" -type f -name 'libclang.so*' -print -quit)"
@@ -369,31 +445,50 @@ jobs:
           LIBCLANG_PATH="$(dirname "$LIBCLANG_FILE")"
           test -d "$LIBCLANG_PATH"
           export LIBCLANG_PATH
+          CC="$TOOLCHAIN/${{ matrix.clang_target }}${ANDROID_API_LEVEL}-clang"
+          CXX="$TOOLCHAIN/${{ matrix.clang_target }}${ANDROID_API_LEVEL}-clang++"
+          AR="$TOOLCHAIN/llvm-ar"
+          CARGO_KEY="$(echo "$T" | tr '[:lower:]-' '[:upper:]_')"
+          CC_KEY="${T//-/_}"
+          export "CARGO_TARGET_${CARGO_KEY}_LINKER=$CC"
+          export "CC_${CC_KEY}=$CC" "CXX_${CC_KEY}=$CXX" "AR_${CC_KEY}=$AR"
+          export "BINDGEN_EXTRA_CLANG_ARGS_${CC_KEY}=--target=${{ matrix.clang_target }}${ANDROID_API_LEVEL} --sysroot=$PREBUILT/sysroot"
+          export "CFLAGS_${CC_KEY}=-fPIC" "CXXFLAGS_${CC_KEY}=-fPIC"
+          cargo run --locked -p xtask -- deps build --all --profile "$PROFILE" --target "$T"
+          ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
+            cargo build --locked -p erika_capi --release --target "$T" \
+              --no-default-features --features libass,wgpu
+          mkdir -p "out/android/${{ matrix.abi }}"
+          cp "target/$T/release/liberika_capi.a" "out/android/${{ matrix.abi }}/liberika_capi.a"
+          cp "target/$T/release/liberika_capi.so" "out/android/${{ matrix.abi }}/liberika_capi.so"
+          cp "$PREBUILT/sysroot/usr/lib/${{ matrix.cxx_runtime_target }}/libc++_shared.so" \
+            "out/android/${{ matrix.abi }}/libc++_shared.so"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-android-${{ matrix.abi }}
+          path: out/android/${{ matrix.abi }}
+          if-no-files-found: error
+
+  android:
+    name: Android (4 ABIs)
+    needs: android-slices
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-android-*
+          path: slices
+      - name: Stage ABI libraries
+        run: |
+          set -euo pipefail
           mkdir -p out/android
-          for ENTRY in \
-            "aarch64-linux-android|arm64-v8a|aarch64-linux-android|aarch64-linux-android" \
-            "armv7-linux-androideabi|armeabi-v7a|armv7a-linux-androideabi|arm-linux-androideabi" \
-            "x86_64-linux-android|x86_64|x86_64-linux-android|x86_64-linux-android" \
-            "i686-linux-android|x86|i686-linux-android|i686-linux-android"; do
-            IFS='|' read -r T ABI CLANG_T CXX_RUNTIME_T <<< "$ENTRY"
-            CC="$TOOLCHAIN/${CLANG_T}${ANDROID_API_LEVEL}-clang"
-            CXX="$TOOLCHAIN/${CLANG_T}${ANDROID_API_LEVEL}-clang++"
-            AR="$TOOLCHAIN/llvm-ar"
-            CARGO_KEY="$(echo "$T" | tr '[:lower:]-' '[:upper:]_')"
-            CC_KEY="${T//-/_}"
-            export "CARGO_TARGET_${CARGO_KEY}_LINKER=$CC"
-            export "CC_${CC_KEY}=$CC" "CXX_${CC_KEY}=$CXX" "AR_${CC_KEY}=$AR"
-            export "BINDGEN_EXTRA_CLANG_ARGS_${CC_KEY}=--target=${CLANG_T}${ANDROID_API_LEVEL} --sysroot=$PREBUILT/sysroot"
-            export "CFLAGS_${CC_KEY}=-fPIC" "CXXFLAGS_${CC_KEY}=-fPIC"
-            cargo run -p xtask -- deps build --all --profile "$PROFILE" --target "$T"
-            ERIKA_NATIVE_PROFILE="$PROFILE" ERIKA_NATIVE_TARGET="$T" \
-              cargo build -p erika_capi --release --target "$T" \
-                --no-default-features --features libass,wgpu
-            mkdir -p "out/android/$ABI"
-            cp "target/$T/release/liberika_capi.a" "out/android/$ABI/liberika_capi.a"
-            cp "target/$T/release/liberika_capi.so" "out/android/$ABI/liberika_capi.so"
-            cp "$PREBUILT/sysroot/usr/lib/$CXX_RUNTIME_T/libc++_shared.so" \
-              "out/android/$ABI/libc++_shared.so"
+          for ABI in arm64-v8a armeabi-v7a x86_64 x86; do
+            for LIB in liberika_capi.a liberika_capi.so libc++_shared.so; do
+              test -s "slices/native-android-$ABI/$LIB"
+            done
+            cp -R "slices/native-android-$ABI" "out/android/$ABI"
           done
       - name: Package
         shell: bash
@@ -539,6 +634,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: erika-capi-*
           path: artifacts
       - name: Create release checksums
         shell: bash
