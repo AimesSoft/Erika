@@ -25,6 +25,19 @@ export interface ErikaPlayerConfig {
 export interface ErikaOpenOptions {
   httpHeaders?: ESObject;
   httpReadAheadBytes?: number;
+  httpBackBufferBytes?: number;
+}
+
+/**
+ * Validates an optional byte-count open option. Omitted or zero keeps the
+ * native default; negative and fractional values cannot be a byte count.
+ */
+function byteCountOption(value: number | undefined, name: string): number {
+  const count: number = value ?? 0;
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new Error(name + ' must be a non-negative safe integer');
+  }
+  return count;
 }
 
 /**
@@ -53,14 +66,13 @@ export class ErikaPlayer {
   }
 
   open(uri: string, options: ErikaOpenOptions = {}): ESObject | null {
-    const readAhead: number = options.httpReadAheadBytes ?? 0;
-    if (!Number.isSafeInteger(readAhead) || readAhead < 0) {
-      throw new Error('httpReadAheadBytes must be a non-negative safe integer');
-    }
+    const readAhead: number = byteCountOption(options.httpReadAheadBytes, 'httpReadAheadBytes');
+    const backBuffer: number = byteCountOption(options.httpBackBufferBytes, 'httpBackBufferBytes');
     return this.invokeOrThrow('open', {
       uri: uri,
       httpHeaders: options.httpHeaders,
       httpReadAheadBytes: readAhead > 0 ? readAhead : undefined,
+      httpBackBufferBytes: backBuffer > 0 ? backBuffer : undefined,
     });
   }
 

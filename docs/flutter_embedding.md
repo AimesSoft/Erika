@@ -274,6 +274,7 @@ await player.open(
     'Referer': 'https://example.com/',
   },
   httpReadAheadBytes: 16 * 1024 * 1024,
+  httpBackBufferBytes: 89 * 1024 * 1024,
 );
 await player.play();
 

@@ -222,12 +222,14 @@ private struct ErikaHttpHeader {
 }
 
 /// Mirrors the C `ErikaOpenOptions`: headers plus per-request tuning.
-/// `httpReadAheadBytes` of 0 uses the environment override, then 2 MiB.
+/// `httpReadAheadBytes` of 0 uses the environment override, then 2 MiB;
+/// `httpBackBufferBytes` of 0 uses the 16 MiB rewind-budget default.
 private struct ErikaOpenOptions {
   var headers: UnsafeRawPointer?
   var headerCount: UInt = 0
   var httpReadAheadBytes: UInt64 = 0
-  var reserved: (UInt64, UInt64, UInt64) = (0, 0, 0)
+  var httpBackBufferBytes: UInt64 = 0
+  var reserved: (UInt64, UInt64) = (0, 0)
 }
 
 private struct ErikaEventC {
@@ -386,7 +388,7 @@ private enum ErikaPluginError: Error, CustomStringConvertible {
     case .httpHeadersUnsupported:
       return "The loaded Erika native library does not export erika_presenter_open_with_headers, so httpHeaders cannot be applied. Update the bundled native library (a prebuilt from 0.1.3 or earlier predates HTTP header support)."
     case .openOptionsUnsupported:
-      return "The loaded Erika native library does not export erika_presenter_open_with_options, so httpReadAheadBytes cannot be applied. Update the bundled native library (a prebuilt from 0.1.7 or earlier predates open options support)."
+      return "The loaded Erika native library does not export erika_presenter_open_with_options, so httpReadAheadBytes / httpBackBufferBytes cannot be applied. Update the bundled native library (a prebuilt from 0.1.7 or earlier predates open options support)."
     case .invalidArguments(let message):
       return message
     case .playerNotFound(let playerId):
@@ -751,7 +753,12 @@ private final class ErikaPlayerHost {
     return try operation()
   }
 
-  func open(uri: String, httpHeaders: [String: String], httpReadAheadBytes: UInt64 = 0) throws {
+  func open(
+    uri: String,
+    httpHeaders: [String: String],
+    httpReadAheadBytes: UInt64 = 0,
+    httpBackBufferBytes: UInt64 = 0
+  ) throws {
     nativeCallLock.lock()
     defer { nativeCallLock.unlock() }
     isPlaying = false
@@ -763,13 +770,13 @@ private final class ErikaPlayerHost {
       nowPlayingTitle = fallbackTitle.isEmpty ? "Erika" : fallbackTitle
     }
     try uri.withCString { cString in
-      guard !httpHeaders.isEmpty || httpReadAheadBytes > 0 else {
+      guard !httpHeaders.isEmpty || httpReadAheadBytes > 0 || httpBackBufferBytes > 0 else {
         try check(library.open(handle, cString), operation: "open")
         return
       }
-      // Never silently drop the headers or the read-ahead request: falling
+      // Never silently drop the headers or the HTTP tuning request: falling
       // back to the headerless entry point turns an authenticated stream
-      // into an opaque 403, and swallowing readAhead hides a stale kernel.
+      // into an opaque 403, and swallowing them hides a stale kernel.
       if let openWithOptions = library.openWithOptions {
         let names = httpHeaders.keys.map { strdup($0) }
         let values = httpHeaders.values.map { strdup($0) }
@@ -782,7 +789,8 @@ private final class ErikaPlayerHost {
           var options = ErikaOpenOptions(
             headers: buffer.baseAddress.map(UnsafeRawPointer.init),
             headerCount: UInt(headers.count),
-            httpReadAheadBytes: httpReadAheadBytes
+            httpReadAheadBytes: httpReadAheadBytes,
+            httpBackBufferBytes: httpBackBufferBytes
           )
           try withUnsafePointer(to: &options) { optionsPtr in
             try check(openWithOptions(handle, cString, UnsafeRawPointer(optionsPtr)), operation: "open")
@@ -791,7 +799,7 @@ private final class ErikaPlayerHost {
         notifyNowPlayingChanged()
         return
       }
-      if httpReadAheadBytes > 0 {
+      if httpReadAheadBytes > 0 || httpBackBufferBytes > 0 {
         throw ErikaPluginError.openOptionsUnsupported
       }
       // Never fall back to the headerless entry point here: silently dropping
@@ -1974,12 +1982,18 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
         }
         let headers = (args["httpHeaders"] as? [String: String]) ?? [:]
         let readAhead = try optionalReadAheadBytes(args["httpReadAheadBytes"])
+        let backBuffer = try optionalBackBufferBytes(args["httpBackBufferBytes"])
         if let metadata = args["metadata"] as? [String: Any] {
           try applyMediaMetadata(metadata, to: host)
         } else {
           host.clearMediaMetadata()
         }
-        try host.open(uri: uri, httpHeaders: headers, httpReadAheadBytes: readAhead)
+        try host.open(
+          uri: uri,
+          httpHeaders: headers,
+          httpReadAheadBytes: readAhead,
+          httpBackBufferBytes: backBuffer
+        )
         result(nil)
       case "play":
         let host = try playerHost(from: try dictionaryArgs(call.arguments))
@@ -2786,16 +2800,24 @@ public final class ErikaFlutterPlugin: NSObject, FlutterPlugin, FlutterStreamHan
   }
 
   private func optionalReadAheadBytes(_ value: Any?) throws -> UInt64 {
+    try optionalByteCount(value, name: "httpReadAheadBytes")
+  }
+
+  private func optionalBackBufferBytes(_ value: Any?) throws -> UInt64 {
+    try optionalByteCount(value, name: "httpBackBufferBytes")
+  }
+
+  private func optionalByteCount(_ value: Any?, name: String) throws -> UInt64 {
     if value == nil || value is NSNull { return 0 }
     guard let number = value as? NSNumber else {
-      throw ErikaPluginError.invalidArguments("httpReadAheadBytes must be a non-negative integer.")
+      throw ErikaPluginError.invalidArguments("\(name) must be a non-negative integer.")
     }
     let numericValue = number.doubleValue
     guard numericValue.isFinite,
           numericValue >= 0,
           numericValue.rounded(.towardZero) == numericValue,
           numericValue <= Double(Int64.max) else {
-      throw ErikaPluginError.invalidArguments("httpReadAheadBytes must be a non-negative integer.")
+      throw ErikaPluginError.invalidArguments("\(name) must be a non-negative integer.")
     }
     return number.uint64Value
   }

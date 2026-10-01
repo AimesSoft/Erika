@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added `httpBackBufferBytes` to `ErikaOpenOptions`, forwarding the HTTP(S)
+  rewind budget through the presenter JSON bridge.
+
 ## 0.1.9
 
 - Published the ArkTS/OHPM package with the matching v0.1.9 native runtime.

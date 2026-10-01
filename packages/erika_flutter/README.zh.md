@@ -227,7 +227,7 @@ HTTP 请求头支持），带请求头的 `open` 会抛出异常，而不是静�
 
 请求头只作用于媒体 source——外挂字幕轨道和弹幕 sidecar 文件仍然不带这些请求头拉取。
 
-## HTTP 预读窗口
+## HTTP 预读窗口与回看预算
 
 可通过 `httpReadAheadBytes` 为单次 HTTP(S) 打开设置预读窗口：
 
@@ -241,6 +241,20 @@ await player.open(
 正数会覆盖 `ERIKA_HTTP_READAHEAD_BYTES`；null 或 0 会优先采用该环境变量，未设置时使用
 native 的 2 MiB 默认值。本地文件忽略此参数。0.1.7 或更早的 native library 不包含新的
 options 入口，因此请求预读调参时会抛出明确错误，而不会静默丢弃设置。
+
+`httpBackBufferBytes` 用于设置 HTTP(S) 回看预算，即保留多少已播放数据，使范围内的回退
+无需网络请求即可本地命中：
+
+```dart
+await player.open(
+  'https://example.com/video.mp4',
+  httpBackBufferBytes: 89 * 1024 * 1024,
+);
+```
+
+正数会覆盖 native 的 16 MiB 默认值；null 或 0 保持默认。高码率媒体应按码率设置：71 Mbps
+下回退 10 秒约需 89 MB，固定默认值装不下，超出范围的每次回退都会重新锚定数据流而不是
+本地命中。本地文件忽略此参数。
 
 ## Output Mode
 
