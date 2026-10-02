@@ -2104,11 +2104,20 @@ impl SubtitleTimeline {
 
 pub fn parse_srt(input: &str) -> Result<SubtitleTimeline> {
     let mut cues = Vec::new();
-    for block in input.replace("\r\n", "\n").split("\n\n") {
-        let lines = block
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .collect::<Vec<_>>();
+    // Real-world SRT and WebVTT files often carry cue separators with
+    // trailing spaces or tabs. Splitting on the literal blank line merged
+    // adjacent cues and rendered the next cue's index/timestamp lines as
+    // body text, so separate on any whitespace-only line instead.
+    let normalized = input.replace("\r\n", "\n");
+    let mut blocks = vec![Vec::new()];
+    for line in normalized.lines() {
+        if line.trim().is_empty() {
+            blocks.push(Vec::new());
+        } else if let Some(last) = blocks.last_mut() {
+            last.push(line);
+        }
+    }
+    for lines in blocks {
         if lines.is_empty() {
             continue;
         }
@@ -2782,6 +2791,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             "Hello"
         );
         assert!(timeline.active_cues(Duration::from_millis(3500)).is_empty());
+    }
+
+    #[test]
+    fn parse_srt_treats_whitespace_only_lines_as_cue_separators() {
+        let srt = "1\n00:00:01,000 --> 00:00:02,000\nFirst \n \n2\n00:00:03,000 --> 00:00:04,000\nSecond\n";
+        let timeline = parse_srt(srt).unwrap();
+
+        assert_eq!(
+            timeline.cues().len(),
+            2,
+            "a separator with trailing spaces must split cues"
+        );
+        assert_eq!(timeline.cues()[0].text, "First");
+        assert_eq!(timeline.cues()[1].text, "Second");
     }
 
     #[test]
