@@ -1743,6 +1743,13 @@ impl Player {
         ) {
             Ok(()) => {}
             Err(crossbeam_channel::SendTimeoutError::Timeout(_)) => {
+                // A resume whose command never entered the FIFO must be
+                // retried, or a worker that recovers later stays suspended
+                // and keeps video decoding parked forever. An ACK timeout
+                // needs no compensation: the command is already queued.
+                if !suspended {
+                    enqueue_video_decode_resume_after_timeout(&commands);
+                }
                 return Err(PlayerError::Playback(format!(
                     "timed out after {} ms while sending video decode mode to the playback worker",
                     timeout.as_millis(),
@@ -1802,6 +1809,14 @@ impl Player {
         ) {
             Ok(()) => {}
             Err(crossbeam_channel::SendTimeoutError::Timeout(_)) => {
+                // Same compensation rule as the suspend path: a resume whose
+                // command never entered the FIFO must be retried, or a worker
+                // that recovers later keeps frame output quiesced forever and
+                // both the video tick and the audio prefill stay parked. An
+                // ACK timeout needs no compensation: the command is queued.
+                if !quiesced {
+                    enqueue_frame_output_resume_after_timeout(&commands);
+                }
                 let message = format!(
                     "timed out after {} ms while sending frame output {action} to the playback worker",
                     timeout.as_millis(),
