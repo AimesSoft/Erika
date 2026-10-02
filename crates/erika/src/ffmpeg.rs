@@ -4489,8 +4489,25 @@ unsafe fn import_av_subtitle(
                 }
             }
             sys::AVSubtitleType_SUBTITLE_BITMAP => {
-                if let Some(plane) = unsafe { subtitle_bitmap_rect_to_rgba_plane(rect) }? {
-                    frame.push_bitmap_plane(plane.with_canvas(canvas.0, canvas.1), forced);
+                // One malformed bitmap rect must not abort the whole track: a
+                // single damaged PGS/DVB packet would otherwise end subtitle
+                // decoding for the stream. Text and ASS rects above already
+                // degrade per rect, so skip the unusable one and keep going.
+                match unsafe { subtitle_bitmap_rect_to_rgba_plane(rect) } {
+                    Ok(Some(plane)) => {
+                        frame.push_bitmap_plane(plane.with_canvas(canvas.0, canvas.1), forced);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        crate::trace::diagnostic(
+                            serde_json::json!({
+                                "event": "subtitle_bitmap_rect_skipped",
+                                "trackId": track_id,
+                                "error": error.to_string(),
+                            })
+                            .to_string(),
+                        );
+                    }
                 }
             }
             _ => {}
@@ -6047,6 +6064,44 @@ mod tests {
         let error = unsafe { subtitle_bitmap_rect_to_rgba_plane(&rect) }.unwrap_err();
 
         assert!(matches!(error, FfmpegError::InvalidSubtitleBitmap { .. }));
+    }
+
+    #[test]
+    fn import_av_subtitle_skips_a_malformed_bitmap_rect_instead_of_failing() {
+        let mut malformed = sys::AVSubtitleRect {
+            w: 4,
+            h: 2,
+            linesize: [3, 0, 0, 0],
+            nb_colors: 1,
+            type_: sys::AVSubtitleType_SUBTITLE_BITMAP,
+            ..sys::AVSubtitleRect::default()
+        };
+        let pixels = [0u8; 8];
+        let palette = [0xffffffffu32];
+        malformed.data[0] = pixels.as_ptr().cast_mut();
+        malformed.data[1] = palette.as_ptr().cast::<u8>().cast_mut();
+
+        let caption = CString::new("caption").unwrap();
+        let mut text_rect = sys::AVSubtitleRect {
+            type_: sys::AVSubtitleType_SUBTITLE_TEXT,
+            text: caption.as_ptr().cast_mut(),
+            ..sys::AVSubtitleRect::default()
+        };
+        let mut rects: [*mut sys::AVSubtitleRect; 2] = [&mut malformed, &mut text_rect];
+        let subtitle = sys::AVSubtitle {
+            num_rects: 2,
+            rects: rects.as_mut_ptr(),
+            ..sys::AVSubtitle::default()
+        };
+
+        let packet = Packet::alloc().unwrap();
+        let frame = unsafe {
+            import_av_subtitle(7, &packet, &subtitle, (64, 48), None)
+                .expect("one malformed bitmap rect must not abort the whole subtitle frame")
+        };
+        assert!(frame.bitmap.planes.is_empty());
+        assert_eq!(frame.text.len(), 1);
+        assert_eq!(frame.text[0].text, "caption");
     }
 
     #[test]
