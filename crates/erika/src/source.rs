@@ -1762,6 +1762,20 @@ async fn fetch_http_range_async(
                 .await?
                 .map_err(reqwest::Error::without_url)?
             {
+                // A lenient origin can answer a bounded Range request with more
+                // bytes than asked for, or ignore Range entirely. Cap the
+                // buffered body at the requested length so an unbounded answer
+                // cannot balloon the cache; the excess is discarded here.
+                if let Some(length) = range.length {
+                    let remaining = length.saturating_sub(bytes.len() as u64);
+                    if remaining == 0 {
+                        break;
+                    }
+                    if chunk.len() as u64 > remaining {
+                        bytes.extend_from_slice(&chunk[..remaining as usize]);
+                        break;
+                    }
+                }
                 bytes.extend_from_slice(&chunk);
             }
             Ok(())
@@ -2855,6 +2869,28 @@ mod tests {
         assert_eq!(source.read_range(ByteRange::suffix_from(0)).unwrap(), body);
         // The 206 Content-Range total satisfies len() without a HEAD request.
         assert_eq!(source.len().unwrap(), Some(4096));
+    }
+
+    #[test]
+    fn http_range_caps_bodies_that_overrun_the_requested_length() {
+        // Answers bytes 0-63/4096 to a bytes=0-7 request: the excess must be
+        // discarded instead of buffered, or a Range-ignoring origin (which
+        // sends the whole file for offset 0) would balloon the cache.
+        let mut raw =
+            b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-63/4096\r\nContent-Length: 64\r\nConnection: close\r\n\r\n"
+                .to_vec();
+        raw.extend_from_slice(&[b'x'; 64]);
+        let (uri, requests) = spawn_mock_http_server(vec![MockResponse::immediate(raw)]);
+        let mut source = HttpRangeSource::new(uri);
+        source.content_length = Some(4096);
+        let fetched = source
+            .read_range(ByteRange {
+                start: 0,
+                length: Some(8),
+            })
+            .unwrap();
+        assert_eq!(fetched, vec![b'x'; 8]);
+        assert!(recv_request_head(&requests).contains("range: bytes=0-7"));
     }
 
     #[test]
