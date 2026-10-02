@@ -2269,7 +2269,10 @@ pub fn parse_bilibili_xml(input: &str) -> Result<Vec<DanmakuItem>> {
         if mode == DanmakuMode::Special {
             continue;
         }
-        let Ok(pts) = parse_float_field(fields.first(), "pts") else {
+        let Some(pts) = parse_float_field(fields.first(), "pts")
+            .ok()
+            .and_then(item_duration)
+        else {
             continue;
         };
         items.push(DanmakuItem {
@@ -2277,7 +2280,7 @@ pub fn parse_bilibili_xml(input: &str) -> Result<Vec<DanmakuItem>> {
                 .get(7)
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(index as u64 + 1),
-            pts: Duration::from_secs_f64(pts.max(0.0)),
+            pts,
             mode,
             font_size: fields
                 .get(2)
@@ -2365,13 +2368,11 @@ fn item_from_json_value(value: &Value, fallback_id: u64) -> Result<DanmakuItem> 
         .or_else(|| object.get("r"))
         .and_then(parse_color_value)
         .unwrap_or(DanmakuColor::WHITE);
+    let pts = item_duration(numeric_field(object, &["time", "t"]).unwrap_or(0.0))
+        .ok_or_else(|| DanmakuError::InvalidField("time".to_string()))?;
     Ok(DanmakuItem {
         id: u64_field(object, &["id"]).unwrap_or(fallback_id),
-        pts: Duration::from_secs_f64(
-            numeric_field(object, &["time", "t"])
-                .unwrap_or(0.0)
-                .max(0.0),
-        ),
+        pts,
         text,
         mode,
         font_size: numeric_field(object, &["font_size", "fontSize", "size", "s"])
@@ -2457,6 +2458,15 @@ fn parse_float_field(field: Option<&&str>, name: &'static str) -> Result<f64> {
         .ok_or_else(|| DanmakuError::InvalidField(name.to_string()))?
         .parse::<f64>()
         .map_err(|_| DanmakuError::InvalidField(name.to_string()))
+}
+
+/// Turns a parsed seconds field into a `Duration`, rejecting the non-finite
+/// values that `Duration::from_secs_f64` panics on (`1e400` and other
+/// overflow literals parse successfully as f64 infinity).
+fn item_duration(seconds: f64) -> Option<Duration> {
+    seconds
+        .is_finite()
+        .then(|| Duration::from_secs_f64(seconds.max(0.0)))
 }
 
 fn decode_xml_entities(text: &str) -> String {
@@ -3025,6 +3035,24 @@ mod tests {
 
         assert_eq!(timeline.items()[0].id, 9_007_199_254_740_993);
         assert_eq!(timeline.items()[1].id, u64::MAX);
+    }
+
+    #[test]
+    fn skips_items_with_non_finite_timestamps_instead_of_panicking() {
+        // "1e400" parses as f64 infinity, which Duration::from_secs_f64
+        // panics on; such an item must be skipped, not take the load down.
+        let xml = r#"<i><d p="1e400,1,25,16777215,0,0,0,0">broken</d><d p="2.0,1,25,16777215,0,0,0,1">good</d></i>"#;
+        let timeline = DanmakuTimeline::from_bilibili_xml(xml).unwrap();
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline.items()[0].text, "good");
+
+        let json = r#"{"comments":[
+            {"time":"1e400","content":"broken"},
+            {"time":2.0,"content":"good"}
+        ]}"#;
+        let timeline = DanmakuTimeline::from_json(json).unwrap();
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline.items()[0].text, "good");
     }
 
     #[test]
