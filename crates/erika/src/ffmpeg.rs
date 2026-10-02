@@ -1100,6 +1100,15 @@ impl Decoder {
             unsafe { sys::avcodec_parameters_to_context(decoder.context, parameters_ptr) },
             "avcodec_parameters_to_context",
         )?;
+        // Packets are normalized to the stream time base before being sent
+        // (Packet::normalize_timeline), so declare that base the way the
+        // subtitle decoder does. Decoders that pass timestamps through are
+        // unaffected; a decoder that rescales packet timestamps gets frame pts
+        // back in the stream time base the rest of the engine expects instead
+        // of an undefined base.
+        unsafe {
+            (*decoder.context).pkt_timebase = time_base.to_av_rational();
+        }
         let mut decoder = decoder;
         match config.backend {
             DecoderBackend::Software => {}
