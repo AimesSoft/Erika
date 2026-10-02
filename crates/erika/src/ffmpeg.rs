@@ -4027,6 +4027,17 @@ fn inspect_format_context(
             continue;
         };
 
+        // Embedded cover art (ID3 APIC, METADATA_BLOCK_PICTURE, ...) is exposed
+        // as a video stream with the attached-picture disposition. It is not
+        // playable content: decoding it as the main video track dead-ends the
+        // video path on a single still frame, and selecting it as the seek
+        // stream breaks seeking on demuxers without a real video index.
+        if kind == TrackKind::Video
+            && unsafe { (*stream).disposition } & sys::AV_DISPOSITION_ATTACHED_PIC as i32 != 0
+        {
+            continue;
+        }
+
         let codec = unsafe { codec_name((*codecpar).codec_id) };
         let mut track = TrackInfo::embedded(unsafe { (*stream).index as i64 }, kind);
         track.title = metadata_value(unsafe { (*stream).metadata }, "title");
@@ -5388,6 +5399,34 @@ mod tests {
             assert!(decoder.is_end_of_stream());
             assert_eq!(count, 2, "{fixture}");
         }
+    }
+
+    #[test]
+    fn mp3_attached_picture_is_not_a_video_track() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/software/mp3-attached-pic.mp3");
+        let probe = probe_path(path).unwrap();
+        assert!(
+            probe
+                .tracks
+                .iter()
+                .all(|track| track.kind != TrackKind::Video),
+            "embedded cover art must not appear as a video track: {:?}",
+            probe.tracks,
+        );
+        assert!(
+            probe.video.is_empty(),
+            "no video probe entries for cover art"
+        );
+        assert_eq!(
+            probe
+                .tracks
+                .iter()
+                .filter(|track| track.kind == TrackKind::Audio)
+                .count(),
+            1,
+            "the audio track stays discoverable"
+        );
     }
 
     #[test]
