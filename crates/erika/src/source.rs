@@ -1046,12 +1046,19 @@ fn open_stream_response(
                 .get("content-range")
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_string);
-            if let Some(start) = content_range.as_deref().and_then(parse_content_range_start)
-                && start != offset
-            {
-                return Err(SourceError::Http(format!(
-                    "stream served from {start}, expected {offset}"
-                )));
+            if let Some(start) = content_range.as_deref().and_then(parse_content_range_start) {
+                if start != offset {
+                    return Err(SourceError::Http(format!(
+                        "stream served from {start}, expected {offset}"
+                    )));
+                }
+            } else if offset > 0 {
+                // Without Content-Range a resumed stream cannot prove it is
+                // answering from the requested offset.
+                return Err(SourceError::Http(
+                    "stream served 206 without Content-Range; cannot verify the resumed offset"
+                        .to_string(),
+                ));
             }
             Ok(StreamOpened::Body(response))
         }
@@ -1707,17 +1714,30 @@ async fn fetch_http_range_async(
                     .get("content-range")
                     .and_then(|value| value.to_str().ok())
                     .map(str::to_string);
-                if let Some(start) = content_range.as_deref().and_then(parse_content_range_start)
-                    && start != resume_range.start
-                {
+                if let Some(start) = content_range.as_deref().and_then(parse_content_range_start) {
+                    if start != resume_range.start {
+                        http_trace_log(format!(
+                            "{{\"event\":\"{}_error\",\"phase\":\"content_range\",\"attempt\":{},\"start\":{},\"served_start\":{}}}",
+                            event, attempt, resume_range.start, start,
+                        ));
+                        return Err(SourceError::Http(format!(
+                            "server served range from {start}, expected {}",
+                            resume_range.start
+                        )));
+                    }
+                } else if resume_range.start > 0 {
+                    // A 206 without Content-Range cannot be position-verified,
+                    // and a spliced answer would be silent cache corruption;
+                    // only offset 0 is unambiguous, so lenient servers keep
+                    // working for whole-file requests.
                     http_trace_log(format!(
-                        "{{\"event\":\"{}_error\",\"phase\":\"content_range\",\"attempt\":{},\"start\":{},\"served_start\":{}}}",
-                        event, attempt, resume_range.start, start,
+                        "{{\"event\":\"{}_error\",\"phase\":\"content_range\",\"attempt\":{},\"start\":{},\"served_start\":null}}",
+                        event, attempt, resume_range.start,
                     ));
-                    return Err(SourceError::Http(format!(
-                        "server served range from {start}, expected {}",
-                        resume_range.start
-                    )));
+                    return Err(SourceError::Http(
+                        "server served 206 without Content-Range; cannot verify the resumed offset"
+                            .to_string(),
+                    ));
                 }
                 if total_length.is_none() {
                     total_length = content_range.as_deref().and_then(parse_content_range_total);
@@ -2875,13 +2895,16 @@ mod tests {
     fn http_range_caps_bodies_that_overrun_the_requested_length() {
         // Answers bytes 0-63/4096 to a bytes=0-7 request: the excess must be
         // discarded instead of buffered, or a Range-ignoring origin (which
-        // sends the whole file for offset 0) would balloon the cache.
+        // sends the whole file for offset 0) would balloon the cache. The
+        // 8-byte read-ahead window keeps the wire request exactly the 8 bytes
+        // the read asked for (fetch_length would otherwise widen it).
         let mut raw =
             b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-63/4096\r\nContent-Length: 64\r\nConnection: close\r\n\r\n"
                 .to_vec();
         raw.extend_from_slice(&[b'x'; 64]);
         let (uri, requests) = spawn_mock_http_server(vec![MockResponse::immediate(raw)]);
-        let mut source = HttpRangeSource::new(uri);
+        let mut source =
+            HttpRangeSource::with_http_headers_and_window(uri, Vec::new(), Some(8), None);
         source.content_length = Some(4096);
         let fetched = source
             .read_range(ByteRange {
@@ -2891,6 +2914,26 @@ mod tests {
             .unwrap();
         assert_eq!(fetched, vec![b'x'; 8]);
         assert!(recv_request_head(&requests).contains("range: bytes=0-7"));
+    }
+
+    #[test]
+    fn http_range_rejects_206_without_content_range_on_a_resumed_offset() {
+        let (uri, _requests) = spawn_mock_http_server(vec![MockResponse::immediate(
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 8\r\nConnection: close\r\n\r\n01234567"
+                .to_vec(),
+        )]);
+        let mut source = HttpRangeSource::new(uri);
+        source.content_length = Some(4096);
+        let error = source
+            .read_range(ByteRange {
+                start: 32,
+                length: Some(8),
+            })
+            .expect_err("a 206 without Content-Range cannot prove the served offset");
+        assert!(
+            matches!(&error, SourceError::Http(message) if message.contains("Content-Range")),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
