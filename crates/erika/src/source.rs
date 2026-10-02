@@ -357,6 +357,10 @@ pub struct HttpRangeSource {
     agent: HttpIo,
     http_headers: Vec<(String, String)>,
     content_length: Option<u64>,
+    /// Set once a completed probe answered `None` (chunked / connection-close
+    /// origin). Without it every piece fetch re-issues the HEAD + range probe
+    /// because `content_length` stays `None`.
+    length_probed: bool,
     cache_start: u64,
     cache_bytes: Vec<u8>,
     /// Cache depth target: how much *unread* data to keep buffered ahead of the
@@ -497,6 +501,7 @@ impl HttpRangeSource {
             agent,
             http_headers,
             content_length: None,
+            length_probed: false,
             cache_start: 0,
             cache_bytes: Vec::new(),
             read_ahead_bytes: read_ahead
@@ -1990,6 +1995,12 @@ impl MediaSource for HttpRangeSource {
         if self.content_length.is_some() {
             return Ok(self.content_length);
         }
+        if self.length_probed {
+            // A finished probe already established that the origin reports no
+            // length (chunked / connection-close). Only transient probe errors
+            // stay retryable.
+            return Ok(None);
+        }
         let started = Instant::now();
         http_trace_log(format!(
             "[erika-http-trace] stage=head_request uri={} cache_start={} cache_end={} read_ahead={}",
@@ -2011,6 +2022,7 @@ impl MediaSource for HttpRangeSource {
             )
             .await
         })?;
+        self.length_probed = true;
         Ok(self.content_length)
     }
 
@@ -2933,6 +2945,24 @@ mod tests {
         assert!(
             matches!(&error, SourceError::Http(message) if message.contains("Content-Range")),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn length_probe_caches_an_absent_content_length() {
+        let (uri, requests) = spawn_mock_http_server(vec![MockResponse::immediate(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec(),
+        )]);
+        let mut source = HttpRangeSource::new(uri);
+        assert_eq!(source.len().unwrap(), None);
+        assert_eq!(source.len().unwrap(), None);
+        assert!(
+            requests.try_recv().is_ok(),
+            "the first len() probes the origin"
+        );
+        assert!(
+            requests.try_recv().is_err(),
+            "a finished probe must not re-issue HEAD for every piece"
         );
     }
 
