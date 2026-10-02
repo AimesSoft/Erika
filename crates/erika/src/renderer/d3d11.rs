@@ -2500,7 +2500,11 @@ impl RendererBackend for D3d11Renderer {
     fn upload_player_frame(&mut self, frame: &PlayerVideoFrame) -> Result<()> {
         self.drop_device_if_removed();
         if frame.frame.d3d11va_texture().is_some() {
-            return self.import_d3d11va_frame(frame);
+            let result = self.import_d3d11va_frame(frame);
+            if result.is_err() {
+                self.stats.import_failures += 1;
+            }
+            return result;
         }
         if frame.frame.has_hw_frames_context() {
             self.stats.hardware_video_frames += 1;
