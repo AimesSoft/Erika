@@ -184,6 +184,16 @@ Read-ahead defaults to 2 MiB, rewind to 16 MiB. Zero selects defaults;
 `ERIKA_HTTP_READAHEAD_BYTES` can set the default read-ahead window. Budgets are
 bytes; size the rewind cache for the media bitrate and desired rewind time.
 
+HTTP(S) origins may ignore Range and return `200` with the full resource,
+including responses without Content-Length. Erika discards the prefix before
+the requested offset and buffers only the requested bytes; a complete response
+can establish the resource length at EOF. Seeking or reconnecting to such an
+origin downloads the prefix again, so servers supporting `206` remain faster
+for large files. A changed validator during a retry is rejected to avoid
+combining bytes from different file versions. This failure also blocks
+synchronous fallback and later reads on the same source. Weak ETags permit
+initial reads but cannot authorize resuming a partial response.
+
 ## 6. The render loop
 
 Drive `render_tick` from the surface's display timer — `CADisplayLink`
