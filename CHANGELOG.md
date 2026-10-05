@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed HTTP(S) reads and persistent prefetch for origins that ignore Range
+  and return `200` with the whole file, including HLS playlists and segments
+  without Content-Length. Replayed prefixes are discarded before caching,
+  bounded reads stop at the requested length, and EOF can supply the total size.
+  Retries reject changed entity validators instead of mixing file versions.
+
 ## 0.2.1 - 2026-10-02
 
 ### Playback and HTTP(S)

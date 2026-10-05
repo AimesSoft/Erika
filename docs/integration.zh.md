@@ -164,6 +164,11 @@ erika_presenter_open_with_options(p, "https://example.com/video.mp4", &options);
 预读默认为 2 MiB，回退缓存为 16 MiB；传 0 采用默认值。进程级
 `ERIKA_HTTP_READAHEAD_BYTES` 可设置默认预读窗口。预算按字节计算，回退时间取决于码率。
 
+HTTP(S) 源可以忽略 Range、返回包含完整文件的 `200`，也可以不提供 Content-Length。
+Erika 会丢弃请求偏移之前的字节，只缓存所需数据；完整响应到达 EOF 后可以得到文件长度。
+这类源在跳转或重连时需要重新下载前缀，因此支持 `206` 的服务器读取大文件更快。
+重试期间若资源校验标识发生变化，会拒绝该响应，避免拼接不同版本的文件。
+
 ## 6. 渲染循环
 
 从 surface 的显示定时器驱动 `render_tick`——`CADisplayLink`（iOS/tvOS）/ `CVDisplayLink`
