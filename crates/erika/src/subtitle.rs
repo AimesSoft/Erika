@@ -2288,7 +2288,15 @@ fn parse_timestamp(value: &str) -> Result<Duration> {
         ),
         _ => return Err(SubtitleError::InvalidTimestamp(value)),
     };
-    Ok(Duration::from_secs(hours * 3600 + minutes * 60) + seconds)
+    // Checked so an absurd-but-parseable timestamp ("99999999999:00:00.000")
+    // reports an error instead of overflowing or panicking.
+    let base = hours
+        .checked_mul(3600)
+        .and_then(|product| product.checked_add(minutes.checked_mul(60)?))
+        .ok_or_else(|| SubtitleError::InvalidTimestamp(value.clone()))?;
+    Duration::from_secs(base)
+        .checked_add(seconds)
+        .ok_or_else(|| SubtitleError::InvalidTimestamp(value))
 }
 
 fn parse_int(value: &str) -> Result<u64> {
@@ -2301,6 +2309,11 @@ fn parse_seconds(value: &str) -> Result<Duration> {
     let seconds = value
         .parse::<f64>()
         .map_err(|_| SubtitleError::InvalidTimestamp(value.to_string()))?;
+    // from_secs_f64 panics on negative or non-finite values; timestamps like
+    // "inf" or "-1.5" parse as f64 without ever reaching u64 parsing.
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err(SubtitleError::InvalidTimestamp(value.to_string()));
+    }
     Ok(Duration::from_secs_f64(seconds))
 }
 
@@ -2782,6 +2795,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             "Hello"
         );
         assert!(timeline.active_cues(Duration::from_millis(3500)).is_empty());
+    }
+
+    #[test]
+    fn parse_srt_rejects_unrepresentable_timestamps_instead_of_panicking() {
+        // "inf" parses as f64 infinity and "-1.5" as a negative value, both of
+        // which Duration::from_secs_f64 panics on; absurd hour counts overflow
+        // the seconds arithmetic. All of them are invalid timestamps.
+        let infinite = parse_srt("1\n00:00:01,000 --> 0:00:inf\nboom\n");
+        assert!(infinite.is_err());
+
+        let negative = parse_srt("1\n00:00:01,000 --> 0:00:-1.500\nboom\n");
+        assert!(negative.is_err());
+
+        let overflow =
+            parse_srt("1\n99999999999999999:00:00,000 --> 99999999999999999:00:01,000\nboom\n");
+        assert!(overflow.is_err());
     }
 
     #[test]
