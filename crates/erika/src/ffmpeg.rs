@@ -1100,6 +1100,15 @@ impl Decoder {
             unsafe { sys::avcodec_parameters_to_context(decoder.context, parameters_ptr) },
             "avcodec_parameters_to_context",
         )?;
+        // Packets are normalized to the stream time base before being sent
+        // (Packet::normalize_timeline), so declare that base the way the
+        // subtitle decoder does. Decoders that pass timestamps through are
+        // unaffected; a decoder that rescales packet timestamps gets frame pts
+        // back in the stream time base the rest of the engine expects instead
+        // of an undefined base.
+        unsafe {
+            (*decoder.context).pkt_timebase = time_base.to_av_rational();
+        }
         let mut decoder = decoder;
         match config.backend {
             DecoderBackend::Software => {}
@@ -4027,6 +4036,17 @@ fn inspect_format_context(
             continue;
         };
 
+        // Embedded cover art (ID3 APIC, METADATA_BLOCK_PICTURE, ...) is exposed
+        // as a video stream with the attached-picture disposition. It is not
+        // playable content: decoding it as the main video track dead-ends the
+        // video path on a single still frame, and selecting it as the seek
+        // stream breaks seeking on demuxers without a real video index.
+        if kind == TrackKind::Video
+            && unsafe { (*stream).disposition } & sys::AV_DISPOSITION_ATTACHED_PIC as i32 != 0
+        {
+            continue;
+        }
+
         let codec = unsafe { codec_name((*codecpar).codec_id) };
         let mut track = TrackInfo::embedded(unsafe { (*stream).index as i64 }, kind);
         track.title = metadata_value(unsafe { (*stream).metadata }, "title");
@@ -4469,8 +4489,25 @@ unsafe fn import_av_subtitle(
                 }
             }
             sys::AVSubtitleType_SUBTITLE_BITMAP => {
-                if let Some(plane) = unsafe { subtitle_bitmap_rect_to_rgba_plane(rect) }? {
-                    frame.push_bitmap_plane(plane.with_canvas(canvas.0, canvas.1), forced);
+                // One malformed bitmap rect must not abort the whole track: a
+                // single damaged PGS/DVB packet would otherwise end subtitle
+                // decoding for the stream. Text and ASS rects above already
+                // degrade per rect, so skip the unusable one and keep going.
+                match unsafe { subtitle_bitmap_rect_to_rgba_plane(rect) } {
+                    Ok(Some(plane)) => {
+                        frame.push_bitmap_plane(plane.with_canvas(canvas.0, canvas.1), forced);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        crate::trace::diagnostic(
+                            serde_json::json!({
+                                "event": "subtitle_bitmap_rect_skipped",
+                                "trackId": track_id,
+                                "error": error.to_string(),
+                            })
+                            .to_string(),
+                        );
+                    }
                 }
             }
             _ => {}
@@ -5391,6 +5428,34 @@ mod tests {
     }
 
     #[test]
+    fn mp3_attached_picture_is_not_a_video_track() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/software/mp3-attached-pic.mp3");
+        let probe = probe_path(path).unwrap();
+        assert!(
+            probe
+                .tracks
+                .iter()
+                .all(|track| track.kind != TrackKind::Video),
+            "embedded cover art must not appear as a video track: {:?}",
+            probe.tracks,
+        );
+        assert!(
+            probe.video.is_empty(),
+            "no video probe entries for cover art"
+        );
+        assert_eq!(
+            probe
+                .tracks
+                .iter()
+                .filter(|track| track.kind == TrackKind::Audio)
+                .count(),
+            1,
+            "the audio track stays discoverable"
+        );
+    }
+
+    #[test]
     fn playback_fixture_exposes_video_technical_metadata() {
         let path = std::env::var_os("ERIKA_PLAYBACK_FIXTURE")
             .map(std::path::PathBuf::from)
@@ -5999,6 +6064,44 @@ mod tests {
         let error = unsafe { subtitle_bitmap_rect_to_rgba_plane(&rect) }.unwrap_err();
 
         assert!(matches!(error, FfmpegError::InvalidSubtitleBitmap { .. }));
+    }
+
+    #[test]
+    fn import_av_subtitle_skips_a_malformed_bitmap_rect_instead_of_failing() {
+        let mut malformed = sys::AVSubtitleRect {
+            w: 4,
+            h: 2,
+            linesize: [3, 0, 0, 0],
+            nb_colors: 1,
+            type_: sys::AVSubtitleType_SUBTITLE_BITMAP,
+            ..sys::AVSubtitleRect::default()
+        };
+        let pixels = [0u8; 8];
+        let palette = [0xffffffffu32];
+        malformed.data[0] = pixels.as_ptr().cast_mut();
+        malformed.data[1] = palette.as_ptr().cast::<u8>().cast_mut();
+
+        let caption = CString::new("caption").unwrap();
+        let mut text_rect = sys::AVSubtitleRect {
+            type_: sys::AVSubtitleType_SUBTITLE_TEXT,
+            text: caption.as_ptr().cast_mut(),
+            ..sys::AVSubtitleRect::default()
+        };
+        let mut rects: [*mut sys::AVSubtitleRect; 2] = [&mut malformed, &mut text_rect];
+        let subtitle = sys::AVSubtitle {
+            num_rects: 2,
+            rects: rects.as_mut_ptr(),
+            ..sys::AVSubtitle::default()
+        };
+
+        let packet = Packet::alloc().unwrap();
+        let frame = unsafe {
+            import_av_subtitle(7, &packet, &subtitle, (64, 48), None)
+                .expect("one malformed bitmap rect must not abort the whole subtitle frame")
+        };
+        assert!(frame.bitmap.planes.is_empty());
+        assert_eq!(frame.text.len(), 1);
+        assert_eq!(frame.text[0].text, "caption");
     }
 
     #[test]
