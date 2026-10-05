@@ -190,7 +190,9 @@ the requested offset and buffers only the requested bytes; a complete response
 can establish the resource length at EOF. Seeking or reconnecting to such an
 origin downloads the prefix again, so servers supporting `206` remain faster
 for large files. A changed validator during a retry is rejected to avoid
-combining bytes from different file versions.
+combining bytes from different file versions. This failure also blocks
+synchronous fallback and later reads on the same source. Weak ETags permit
+initial reads but cannot authorize resuming a partial response.
 
 ## 6. The render loop
 

@@ -7,6 +7,8 @@
   without Content-Length. Replayed prefixes are discarded before caching,
   bounded reads stop at the requested length, and EOF can supply the total size.
   Retries reject changed entity validators instead of mixing file versions.
+  Entity validation failures also block synchronous fallback and later reads;
+  weak ETags cannot authorize resuming a partial response.
 
 ## 0.2.1 - 2026-10-02
 

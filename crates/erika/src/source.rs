@@ -9,6 +9,7 @@ use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "android")]
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -31,6 +32,8 @@ pub enum SourceError {
     Io(String),
     #[error("http error: {0}")]
     Http(String),
+    #[error("http error: resource changed or cannot be safely validated during Range retry")]
+    HttpEntityChanged,
     #[error("unsupported source URI: {0}")]
     Unsupported(String),
     #[error("invalid owned file descriptor URI: {0}")]
@@ -388,6 +391,9 @@ pub struct HttpRangeSource {
     /// every read would hammer a sick origin, so spawning parks after a few
     /// and resumes once a synchronous fetch proves the origin is alive.
     prefetch_failures: u32,
+    /// Sticky across worker replacement and buffer release: a failed entity
+    /// check must never become an unvalidated synchronous fallback.
+    entity_changed: Arc<AtomicBool>,
 }
 
 /// Handoff channel between the stream workers and the reader thread.
@@ -399,6 +405,7 @@ pub struct HttpRangeSource {
 struct StreamShared {
     inner: Mutex<StreamInner>,
     signal: Condvar,
+    entity_changed: Arc<AtomicBool>,
 }
 
 struct StreamSession {
@@ -515,6 +522,7 @@ impl HttpRangeSource {
             stream_frontier: 0,
             stream_reader_end: 0,
             prefetch_failures: 0,
+            entity_changed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -567,13 +575,20 @@ impl HttpRangeSource {
     }
 
     fn fetch_range(&mut self, range: ByteRange) -> Result<Vec<u8>> {
+        self.check_entity()?;
         let response = fetch_http_range(
             &self.agent,
             &self.uri,
             &self.http_headers,
             range,
             "http_range",
-        )?;
+        )
+        .inspect_err(|error| {
+            if matches!(error, SourceError::HttpEntityChanged) {
+                self.entity_changed.store(true, Ordering::Release);
+            }
+        })?;
+        self.check_entity()?;
         if self.content_length.is_none() {
             self.content_length = response.total_length;
         }
@@ -581,6 +596,13 @@ impl HttpRangeSource {
         // background prefetch chain resume.
         self.prefetch_failures = 0;
         Ok(response.bytes)
+    }
+
+    fn check_entity(&self) -> Result<()> {
+        if self.entity_changed.load(Ordering::Acquire) {
+            return Err(SourceError::HttpEntityChanged);
+        }
+        Ok(())
     }
 
     fn fetch_length(&mut self, range: ByteRange) -> Result<Option<u64>> {
@@ -689,6 +711,10 @@ impl HttpRangeSource {
     /// stream covers the window without downloading any byte twice, handing
     /// stripes to the reader and pausing between stripes when the window fills.
     fn ensure_streams(&mut self) {
+        if self.entity_changed.load(Ordering::Acquire) {
+            self.kill_streams();
+            return;
+        }
         if self.cache_bytes.is_empty() {
             return;
         }
@@ -725,7 +751,9 @@ impl HttpRangeSource {
                 return;
             }
         }
-        if self.prefetch_failures >= HTTP_PREFETCH_MAX_FAILURES {
+        if self.entity_changed.load(Ordering::Acquire)
+            || self.prefetch_failures >= HTTP_PREFETCH_MAX_FAILURES
+        {
             return;
         }
         let anchor = self.cache_end();
@@ -742,6 +770,7 @@ impl HttpRangeSource {
                 stopped: false,
             }),
             signal: Condvar::new(),
+            entity_changed: Arc::clone(&self.entity_changed),
         });
         let epoch = lock_stream(&shared).epoch;
         let worker_shared = Arc::clone(&shared);
@@ -1017,6 +1046,7 @@ fn open_stream_response(
     offset: u64,
     validator: Option<String>,
 ) -> Result<StreamOpened> {
+    validate_resume_validator(validator.as_deref())?;
     let range = ByteRange {
         start: offset,
         length: None,
@@ -1147,6 +1177,11 @@ fn stream_worker_main(
                 Ok(StreamOpened::Eof) => {
                     // We still owe bytes below the known total. A premature
                     // 416 is a failed prefetch, not the end of the media.
+                    mark_worker_done(&shared, true);
+                    return;
+                }
+                Err(SourceError::HttpEntityChanged) => {
+                    shared.entity_changed.store(true, Ordering::Release);
                     mark_worker_done(&shared, true);
                     return;
                 }
@@ -1510,6 +1545,15 @@ fn response_entity_validator(response: &reqwest::Response) -> Option<String> {
     })
 }
 
+/// Weak ETags describe semantic equivalence, not byte identity. They cannot
+/// authorize a range splice or be sent in If-Range (RFC 9110 section 13.1.5).
+fn validate_resume_validator(validator: Option<&str>) -> Result<()> {
+    if validator.is_some_and(|value| value.starts_with("W/")) {
+        return Err(SourceError::HttpEntityChanged);
+    }
+    Ok(())
+}
+
 /// A 200 may mean that If-Range detected a changed resource. Only splice its
 /// tail onto previously received bytes when the original validator still
 /// matches; missing validators cannot prove that the replay is the same file.
@@ -1517,12 +1561,11 @@ fn validate_full_response_entity(
     response: &reqwest::Response,
     validator: Option<&str>,
 ) -> Result<()> {
+    validate_resume_validator(validator)?;
     if let Some(expected) = validator
         && response_entity_validator(response).as_deref() != Some(expected)
     {
-        return Err(SourceError::Http(
-            "resource changed during Range retry (status 200)".to_string(),
-        ));
+        return Err(SourceError::HttpEntityChanged);
     }
     Ok(())
 }
@@ -1684,6 +1727,9 @@ async fn fetch_http_range_async(
                 bytes,
                 total_length,
             });
+        }
+        if received > 0 {
+            validate_resume_validator(validator.as_deref())?;
         }
         let resume_range = ByteRange {
             start: range.start.saturating_add(received),
@@ -2037,6 +2083,7 @@ impl MediaSource for HttpRangeSource {
         if self.agent.cancellation.is_cancelled() {
             return Err(SourceError::Cancelled);
         }
+        self.check_entity()?;
         if self
             .streams
             .as_ref()
@@ -2053,6 +2100,7 @@ impl MediaSource for HttpRangeSource {
 
         if let Some(bytes) = self.cached_slice(range) {
             self.ensure_streams();
+            self.check_entity()?;
             http_trace_log(format!(
                 "{{\"event\":\"http_cache_hit\",\"start\":{},\"length\":{},\"bytes\":{}}}",
                 range.start,
@@ -2091,12 +2139,15 @@ impl MediaSource for HttpRangeSource {
             && let Some(bytes) = self.cached_slice(range)
         {
             self.ensure_streams();
+            self.check_entity()?;
             return Ok(bytes);
         }
 
+        self.check_entity()?;
         self.fetch_missing(range)?;
         self.drain_stripes();
         self.ensure_streams();
+        self.check_entity()?;
 
         // Serve whatever the cache now holds from the read position. A short
         // read is legitimate (EOF, or an origin that answered short); an empty
@@ -2981,6 +3032,112 @@ mod tests {
     }
 
     #[test]
+    fn http_range_weak_etag_allows_reads_but_rejects_resuming_partial_bytes() {
+        for start in [0, 10] {
+            let (uri, requests) = spawn_mock_http_server(vec![MockResponse::immediate(
+                http_200_with_validator(&[b'a'; 100], "W/\"v1\"", 100),
+            )]);
+            let response = fetch_http_range(
+                &HttpIo::new(),
+                &uri,
+                &[],
+                ByteRange {
+                    start,
+                    length: Some(40),
+                },
+                "test_range",
+            )
+            .unwrap();
+            assert_eq!(response.bytes, vec![b'a'; 40]);
+            assert!(!recv_request_head(&requests).contains("if-range:"));
+
+            let (uri, requests) = spawn_mock_http_server(vec![
+                MockResponse::immediate(http_200_with_validator(&[b'a'; 20], "W/\"v1\"", 100)),
+                MockResponse::immediate(http_200_with_validator(&[b'b'; 100], "W/\"v1\"", 100)),
+            ]);
+            let result = fetch_http_range(
+                &HttpIo::new(),
+                &uri,
+                &[],
+                ByteRange {
+                    start,
+                    length: Some(40),
+                },
+                "test_range",
+            );
+            assert!(matches!(result, Err(SourceError::HttpEntityChanged)));
+            let _ = recv_request_head(&requests);
+            assert!(
+                requests.try_recv().is_err(),
+                "weak ETags must not be sent in If-Range"
+            );
+        }
+    }
+
+    #[test]
+    fn http_stream_entity_failure_blocks_fallback_and_survives_buffer_release() {
+        for (validator, resumed) in [
+            (
+                "\"v1\"",
+                http_200_with_validator(&[b'b'; 1024], "\"v2\"", 1024),
+            ),
+            ("\"v1\"", http_simple_response("200 OK", &[b'b'; 1024])),
+            (
+                "W/\"v1\"",
+                http_200_with_validator(&[b'b'; 1024], "W/\"v1\"", 1024),
+            ),
+        ] {
+            let mut responses = vec![MockResponse::immediate(http_200_with_validator(
+                &[b'a'; 512],
+                validator,
+                1024,
+            ))];
+            responses.extend((0..8).map(|_| MockResponse::immediate(resumed.clone())));
+            let (uri, requests) = spawn_mock_http_server(responses);
+            let mut source = HttpRangeSource::new(uri);
+            source.content_length = Some(1024);
+            source.cache_bytes = vec![b'a'; 64];
+            source.ensure_streams();
+
+            let result = source.read_range(ByteRange {
+                start: 0,
+                length: Some(1024),
+            });
+            assert!(
+                matches!(result, Err(SourceError::HttpEntityChanged)),
+                "{result:?}"
+            );
+            assert!(recv_request_head(&requests).contains("range: bytes=64-"));
+            if !validator.starts_with("W/") {
+                let resumed = recv_request_head(&requests);
+                assert!(resumed.contains("range: bytes=512-"));
+                assert!(resumed.contains("if-range: \"v1\""));
+            }
+            // A cached read and a seek after releasing/replacing the worker
+            // must retain the failure, without fetching the changed entity.
+            assert!(matches!(
+                source.read_range(ByteRange {
+                    start: 0,
+                    length: Some(1)
+                }),
+                Err(SourceError::HttpEntityChanged)
+            ));
+            source.release_buffer();
+            assert!(matches!(
+                source.read_range(ByteRange {
+                    start: 700,
+                    length: Some(1)
+                }),
+                Err(SourceError::HttpEntityChanged)
+            ));
+            assert!(
+                requests.try_recv().is_err(),
+                "entity failures must not retry or fall back"
+            );
+        }
+    }
+
+    #[test]
     fn http_range_200_retry_skips_prefix_and_preserves_received_bytes() {
         let body: Vec<u8> = (0..100).collect();
         let (uri, requests) = spawn_mock_http_server(vec![
@@ -3113,9 +3270,7 @@ mod tests {
             http_200_with_validator(b"new body", "\"v2\"", 8),
         )]);
         let result = open_stream_response(&HttpIo::new(), &uri, &[], 4, Some("\"v1\"".to_string()));
-        assert!(
-            matches!(result, Err(SourceError::Http(message)) if message.contains("resource changed"))
-        );
+        assert!(matches!(result, Err(SourceError::HttpEntityChanged)));
     }
 
     #[test]
@@ -4026,6 +4181,7 @@ mod tests {
                     stopped: false,
                 }),
                 signal: Condvar::new(),
+                entity_changed: Arc::clone(&source.entity_changed),
             }),
             io: HttpIo::new(),
             worker: None,
