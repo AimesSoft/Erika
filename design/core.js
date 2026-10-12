@@ -4,7 +4,7 @@
    - 弹簧引擎（T / ζ 参数，与文档 8.2 节一致）、果冻按压、出现 / 消失
    - 主题色 / 明暗（跨页面同步）
    - 线框稿缩放
-   - 模块定义与状态、迷你主窗口、首次配置、设置侧栏、可选功能、插件市场
+   - 模块定义与状态、迷你主窗口、插件列表
    ===================================================================== */
 window.NP = (() => {
   'use strict';
@@ -256,7 +256,7 @@ window.NP = (() => {
       leave(el, axis, () => { if (el._hiding) { el._hiding = false; clearInline(el); el.style.display = 'none'; } });
     }
   }
-  /* 有序列表的增删（导航项、控制条按钮、设置侧栏） */
+  /* 有序列表的增删（迷你主窗口的导航项） */
   function reconcile(c, items, make, upd, animate = true, axis = 'h') {
     const existing = new Map();
     [...c.children].forEach(el => { if (el.dataset.key && !el._leaving) existing.set(el.dataset.key, el); });
@@ -370,7 +370,6 @@ window.NP = (() => {
   ];
   const MOD = Object.fromEntries(MODS.map(m => [m.id, m]));
   const ALL = MODS.map(m => m.id);
-  const GROUPS = ['观看', '内容', '连接'];
   const PRESETS = {
     pure: { name: '纯粹播放', desc: '和 VLC 一样，打开就能播，没有多余的东西。', mods: [] },
     anime: { name: '看番', desc: '弹幕、媒体库和追番。推荐大多数人选这个。', mods: ['danmaku', 'library', 'anime'] },
@@ -407,18 +406,6 @@ window.NP = (() => {
       },
     };
   }
-  const presetOf = mods => {
-    for (const k of ['pure', 'anime', 'all']) {
-      const p = PRESETS[k].mods;
-      if (p.length === mods.size && p.every(x => mods.has(x))) return k;
-    }
-    return 'custom';
-  };
-  const depToast = (container, r) => {
-    const list = r.added.length ? r.added : r.removed;
-    if (!list.length) return;
-    toast(container, (r.added.length ? '已同时开启：' : '已同时关闭：') + list.map(x => MOD[x].name).join('、'));
-  };
   function pagesFor(m) {
     const p = [];
     if (m.has('anime')) { p.push({ key: 'home', name: '首页', icon: 'home' }); p.push({ key: 'new', name: '新番', icon: 'calendar' }); }
@@ -428,7 +415,7 @@ window.NP = (() => {
   }
 
   /* ------------------------------------------------------------------
-     迷你主窗口（引导预览 / 导航生长示意）
+     迷你主窗口（导航生长示意）
      ------------------------------------------------------------------ */
   const I6 = '<i></i><i></i><i></i><i></i><i></i><i></i>';
   const BODIES = {
@@ -480,83 +467,8 @@ window.NP = (() => {
     }
   }
 
-  class HudStrip {
-    constructor(host) { this.host = host; }
-    update(m, animate = true) {
-      const items = [
-        { key: 'play', html: svg('pause') }, { key: 'next', html: svg('next') }, { key: 'vol', html: svg('vol') },
-        { key: 'g1', grow: true },
-        m.has('danmaku') && { key: 'dm', html: svg('danmaku'), on: true },
-        m.has('danmaku') && m.has('sync') && { key: 'dmi', input: true },
-        { key: 'g2', grow: true },
-        { key: 'cc', html: svg('cc') }, { key: 'au', html: svg('audio') },
-        { key: 'sp', html: '<span class="lbl" style="font-size:11px">1×</span>' },
-        m.has('enhance') && { key: 'en', html: svg('sparkle') },
-        { key: 'set', html: svg('sliders') }, { key: 'fs', html: svg('full') },
-      ].filter(Boolean);
-      reconcile(this.host, items, it => {
-        let d;
-        if (it.grow) { d = document.createElement('span'); d.className = 'grow'; }
-        else if (it.input) { d = document.createElement('div'); d.className = 'dm-input'; d.innerHTML = '发弹幕…<span class="send">发送</span>'; }
-        else { d = document.createElement('span'); d.className = 'pib' + (it.on ? ' on' : ''); d.innerHTML = it.html; }
-        return d;
-      }, null, animate, 'w');
-    }
-  }
-
   /* ------------------------------------------------------------------
-     设置侧栏 + 可选功能页
-     ------------------------------------------------------------------ */
-  const SET_TOP = [['general', '通用', 'gear'], ['appearance', '外观', 'palette'], ['player', '播放', 'film']];
-  const SET_MOD = [['danmaku', '弹幕', 'danmaku'], ['library', '媒体库', 'library'], ['anime', '追番', 'calendar'], ['sync', '账号', 'user'], ['sources', '网络媒体源', 'server'], ['remote', '局域网与远程', 'wifi'], ['downloads', '下载', 'download'], ['enhance', '画质增强', 'sparkle']];
-  const SET_BOT = [['sep'], ['optional', '可选功能', 'grid'], ['plugins', '插件', 'puzzle'], ['keys', '快捷键', 'keyboard'], ['advanced', '高级', 'code'], ['about', '关于', 'info']];
-  function settingsSections(store) {
-    return [...SET_TOP, ...SET_MOD.filter(x => store.has(x[0])), ...SET_BOT].map(([key, n, ic]) => ({ key, n, ic }));
-  }
-  function renderSetSide(host, sel, store, animate = true, onPick = null) {
-    if (!host) return;
-    reconcile(host, settingsSections(store), it => {
-      const d = document.createElement('div');
-      if (it.key === 'sep') { d.className = 'nav-sep'; return d; }
-      d.className = 'nav-item';
-      d.style.height = '30px';
-      d.innerHTML = svg(it.ic) + `<span>${it.n}</span>`;
-      if (onPick) { d.style.cursor = 'pointer'; d.addEventListener('click', () => onPick(it.key)); }
-      return d;
-    }, (el, it) => {
-      if (it.key === 'sep') return;
-      const on = it.key === sel;
-      el.classList.toggle('on', on);
-      if (on) el.dataset.spec = '设置侧栏 · 模块分节随开关出现'; else delete el.dataset.spec;
-    }, animate);
-  }
-  function mountOptional(rows, store, toastHost, presetBtn) {
-    rows.innerHTML = GROUPS.map(g => `<div class="group-label" style="margin:16px 4px 6px">${g}</div><div class="row-list">${MODS.filter(m => m.group === g).map(m => `<div class="row" data-m="${m.id}" style="min-height:54px;cursor:pointer"${m.id === 'danmaku' ? ' data-spec="分组列表行 · 最小高 54 · 开关"' : ''}><div class="mi">${svg(m.icon)}</div><div class="tx"><div class="tt">${m.name}</div><div class="ds" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${m.desc}${m.deps.length ? ` · 需要${m.deps.map(d => MOD[d].name).join('、')}` : ''}</div></div><span class="tg"><i></i></span></div>`).join('')}</div>`).join('');
-    $$('.row', rows).forEach(r => r.addEventListener('click', () => {
-      const res = store.toggle(r.dataset.m);
-      depToast(toastHost, res);
-      [...res.added, ...res.removed].forEach(x => { const rr = $(`.row[data-m="${x}"]`, rows); rr && wobble(rr); });
-    }));
-    const order = ['pure', 'anime', 'all'];
-    if (presetBtn) presetBtn.addEventListener('click', () => {
-      const cur = presetOf(store.mods);
-      const next = order[(order.indexOf(cur) + 1) % order.length];
-      store.set(PRESETS[next].mods, { src: 'preset' });
-      toast(toastHost, '已套用预设：' + PRESETS[next].name);
-    });
-    const sync = () => {
-      $$('.row', rows).forEach(r => $('.tg', r).classList.toggle('on', store.has(r.dataset.m)));
-      if (presetBtn) {
-        const p = presetOf(store.mods);
-        presetBtn.innerHTML = `预设：${p === 'custom' ? '自定义' : PRESETS[p].name}${svg('chev-d', 'i', 'width:14px')}`;
-      }
-    };
-    store.on(sync); sync();
-    autoJelly(rows);
-  }
-
-  /* ------------------------------------------------------------------
-     插件市场
+     插件列表（next-screens.js 的插件市场用）
      ------------------------------------------------------------------ */
   const PLUGINS = [
     { id: 'spoiler', n: '防剧透', a: 'Erika 官方', ic: 'eyeoff', d: '用你配置的 AI 接口识别并遮挡剧透弹幕', p: ['网络', '修改弹幕'], req: '需要弹幕模块', cat: '弹幕' },
@@ -570,262 +482,6 @@ window.NP = (() => {
     { id: 'titan', n: 'Titan 弹幕', a: '社区 · titan', ic: 'danmaku', d: '用 WebView 渲染的高级弹幕特效', p: ['WebView 叠加'], cat: '弹幕' },
   ];
   const installed = new Set(PLUGINS.filter(p => p.inst).map(p => p.id));
-  const marketHooks = [];
-  function marketCard(x, i) {
-    const done = installed.has(x.id);
-    return `<div class="row-list mk-card" data-cat="${x.cat}" style="padding:14px 16px;display:flex;flex-direction:column;gap:8px;min-height:140px">
-      <div style="display:flex;gap:12px;align-items:center"><div class="mi" style="width:44px;height:44px;border-radius:12px">${svg(x.ic, 'i', 'width:22px;height:22px')}</div><div style="flex:1;min-width:0"><div class="tt" style="font-weight:700;font-size:14.5px">${x.n}</div><div class="cap2">${x.a}</div></div>
-      <span class="b get"${i === 0 ? ' data-spec="获取 · 胶囊按钮 M · 灰底 + 下划标注"' : ''} data-pid="${x.id}" data-state="${done ? 'done' : 'get'}"><span>${done ? '打开' : '获取'}</span></span></div>
-      <div class="body" style="font-size:13px">${x.d}</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:auto">${x.p.map(t => `<span class="chip" style="height:22px;font-size:11.5px;padding:0 9px">${t}</span>`).join('')}${x.req ? `<span class="chip" style="height:22px;font-size:11.5px;padding:0 9px;background:transparent;border:1px dashed var(--line-2)">${x.req}</span>` : ''}</div></div>`;
-  }
-  function renderMarket(host, filter = null) {
-    if (!host) return;
-    host.innerHTML = PLUGINS.filter(x => !filter || x.cat === filter).map(marketCard).join('');
-    $$('.b.get', host).forEach(b => b.addEventListener('click', () => {
-      if (b.dataset.state !== 'get') return;
-      b.dataset.state = 'loading';
-      b.innerHTML = '<svg viewBox="0 0 20 20" style="width:18px;height:18px;transform:rotate(-90deg)"><circle cx="10" cy="10" r="8" fill="none" stroke="var(--wf-block-2)" stroke-width="2.5"/><circle class="ring" cx="10" cy="10" r="8" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="50.27" stroke-dashoffset="50.27"/></svg>';
-      const ring = $('.ring', b), t0 = performance.now();
-      const step = now => {
-        const p = Math.min(1, (now - t0) / 1100);
-        ring.setAttribute('stroke-dashoffset', String(50.27 * (1 - p)));
-        if (p < 1) requestAnimationFrame(step);
-        else {
-          b.dataset.state = 'done'; b.innerHTML = '<span>打开</span>';
-          installed.add(b.dataset.pid);
-          scaleTo(b, 0.8, 0.8, TOKENS.press); setTimeout(() => scaleTo(b, 1, 1, TOKENS.jelly), 60);
-          marketHooks.forEach(f => f(b.dataset.pid));
-        }
-      };
-      requestAnimationFrame(step);
-    }));
-    autoJelly(host);
-  }
-
-  /* ------------------------------------------------------------------
-     首次启动配置（引导）
-     ------------------------------------------------------------------ */
-  const OB_HTML = `<div class="ob">
-<div class="ob-stage">
-<!-- step 0 欢迎 -->
-<div class="ob-step on" data-step="0" style="padding:0">
-<div class="plaid-academy" style="height:250px;position:relative">
-<img src="brand/erika-logo-dark.svg" alt="ERIKA エリカ" style="position:absolute;left:36px;top:58px;height:132px;filter:drop-shadow(0 4px 14px rgba(0,0,0,.45))">
-</div>
-<img src="assets/girl.png" alt="" style="position:absolute;right:52px;top:70px;width:270px">
-<div style="padding:30px 48px 0;max-width:560px">
-<h5>欢迎使用 Erika</h5>
-<p class="sub">接下来一分钟，选出你需要的功能。没选的功能不会显示，也不会占用资源。之后随时可以在 设置 › 可选功能 里修改。</p>
-<div class="meta"><span class="chip">约 1 分钟</span><span class="chip">随时可改</span><span class="chip">没开的功能不占资源</span></div>
-</div>
-</div>
-<!-- step 1 预设 -->
-<div class="ob-step" data-step="1">
-<h5>你打算怎么用 Erika？</h5>
-<p class="sub">选一个起点，下一步还可以逐项调整。</p>
-<div class="presets ob-presets"></div>
-</div>
-<!-- step 2 微调 -->
-<div class="ob-step" data-step="2" style="padding-top:22px">
-<div class="mod-split">
-<div>
-<h5 style="font-size:22px;margin-bottom:2px">挑选功能</h5>
-<div class="mod-list ob-mods"></div>
-</div>
-<div class="prev-col" style="padding-top:8px">
-<div class="prev-box"><div class="frame-wrap" style="margin:0"><div class="frame ob-prev" data-w="456" data-h="284"></div></div></div>
-<div class="hud-strip ob-hud"></div>
-<div class="prev-cap"><span>实时预览　上：主窗口　下：播放器控制条</span><span class="ob-count"></span></div>
-</div>
-</div>
-</div>
-<!-- step 3 外观 -->
-<div class="ob-step" data-step="3">
-<h5>选一个主题色</h5>
-<p class="sub">取自 Erika 图标的三种纯色，只会出现在按钮和文字上。</p>
-<div class="accent-pick ob-accent">
-<div class="sw" data-set-accent="rose"><i style="background:#FF2E55"></i>绯红</div>
-<div class="sw" data-set-accent="blue"><i style="background:#2A51D4"></i>群青</div>
-<div class="sw" data-set-accent="mint"><i style="background:#07FF94"></i>荧绿</div>
-</div>
-<div class="t2" style="font-size:15px;margin-bottom:10px">外观</div>
-<span class="seg ob-theme"><span data-set-theme="system">跟随系统</span><span data-set-theme="light">浅色</span><span data-set-theme="dark">深色</span></span>
-<div style="position:absolute;right:48px;top:40px;width:330px;height:206px"><div class="frame-wrap" style="margin:0"><div class="frame ob-prev2" data-w="440" data-h="275"></div></div></div>
-</div>
-<!-- step 4 按需设置 -->
-<div class="ob-step" data-step="4">
-<h5>还差几件小事</h5>
-<p class="sub">只列出你开启的模块需要的设置，都可以以后再做。</p>
-<div class="setup-cards ob-setup"></div>
-</div>
-<!-- step 5 完成 -->
-<div class="ob-step" data-step="5" style="padding:0">
-<div class="plaid-skirt" style="height:120px"></div>
-<div style="padding:30px 48px 0">
-<h5>准备好了 ☆</h5>
-<p class="sub">已开启的功能如下。想改的话：设置 › 可选功能。</p>
-<div class="meta ob-done" style="margin-bottom:22px"></div>
-<div class="body" style="max-width:520px">点「开始使用」后，这个窗口会直接变成主窗口（转场 T7）。</div>
-</div>
-</div>
-</div>
-<div class="ob-foot">
-<span class="b plain ob-skip" data-spec="无边框按钮 · M"><span>跳过</span></span>
-<span class="b ob-back" data-spec="次要按钮 · M 32" style="display:none">上一步</span>
-<span class="grow"></span>
-<div class="pdots ob-dots" data-spec="页码点 · 自绘"></div>
-<span class="grow"></span>
-<span class="b L p ob-next" data-spec="主要按钮 · L 42 · 每屏唯一">开始</span>
-</div>
-</div>`;
-  function mountOnboarding(rootEl, store, opts = {}) {
-    rootEl.innerHTML = OB_HTML;
-    const q = s => rootEl.querySelector(s), qa = s => [...rootEl.querySelectorAll(s)];
-    const steps = qa('.ob-step'), N = steps.length;
-    const dots = q('.ob-dots');
-    dots.innerHTML = steps.map(() => '<i></i>').join('');
-    let cur = 0, preset = presetOf(store.mods), stepTw = null;
-
-    // 预设卡片
-    const pc = q('.ob-presets');
-    pc.innerHTML = Object.entries(PRESETS).map(([k, p]) => `<div class="preset" data-p="${k}"><div class="pv"><div class="frame-wrap" style="margin:0"><div class="frame" data-w="440" data-h="275"></div></div></div><div class="nm">${p.name}</div><div class="ds">${p.desc}</div><div class="cnt">${p.mods ? (p.mods.length ? p.mods.length + ' 个模块' : '不开启任何模块') : '跟随当前选择'}</div><span class="ck">${svg('check')}</span></div>`).join('');
-    const presetWins = {};
-    $$('.preset', pc).forEach(el => {
-      const k = el.dataset.p, mw = new MiniWin($('.frame', el));
-      presetWins[k] = mw;
-      mw.update(PRESETS[k].mods ? new Set(PRESETS[k].mods) : store.mods, false);
-      el.addEventListener('click', () => {
-        preset = k;
-        if (PRESETS[k].mods) store.set(PRESETS[k].mods, { src: 'preset' });
-        markPresets();
-      });
-    });
-    function markPresets() { $$('.preset', pc).forEach(el => el.classList.toggle('on', el.dataset.p === preset)); }
-
-    // 模块列表
-    const ml = q('.ob-mods');
-    ml.innerHTML = GROUPS.map(g => `<div class="group-label" style="margin:8px 4px 4px;font-size:11px">${g}</div><div class="row-list">${MODS.filter(m => m.group === g).map(m => `<div class="row" data-m="${m.id}" style="min-height:44px;padding:4px 12px"><div class="mi" style="width:28px;height:28px;border-radius:8px">${svg(m.icon, 'i', 'width:16px;height:16px')}</div><div class="tx"><div class="tt" style="font-size:13.5px">${m.name}</div><div class="ds" style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${m.short}</div></div><span class="tg"><i></i></span></div>`).join('')}</div>`).join('');
-    $$('.row', ml).forEach(r => r.addEventListener('click', () => {
-      const res = store.toggle(r.dataset.m);
-      depToast(rootEl, res);
-      [...res.added, ...res.removed].forEach(x => { const rr = $(`.row[data-m="${x}"]`, ml); rr && wobble(rr); });
-    }));
-
-    const mw = new MiniWin(q('.ob-prev'));
-    const mw2 = new MiniWin(q('.ob-prev2'));
-    const hud = new HudStrip(q('.ob-hud'));
-
-    function sync(mods, info, animate = true) {
-      $$('.row', ml).forEach(r => $('.tg', r).classList.toggle('on', mods.has(r.dataset.m)));
-      if (!(info.src === 'preset' && PRESETS[preset].mods)) preset = presetOf(mods);
-      markPresets();
-      mw.update(mods, animate);
-      hud.update(mods, animate);
-      presetWins.custom && presetWins.custom.update(mods, animate);
-      const n = mods.size;
-      q('.ob-count').textContent = n ? `${n} 个模块 · ${pagesFor(mods).length} 个页面` : '纯粹播放 · 0 个页面';
-    }
-    store.on((m, info) => sync(m, info, true));
-    sync(store.mods, {}, false);
-
-    function renderSetup() {
-      const m = store.mods, cards = [];
-      const ico = (src, w = 16) => `<img src="${src}" alt="" class="${/dandanplay|bangumi/.test(src) ? 'mono-logo' : ''}" style="width:${w}px;height:${w}px;border-radius:4px">`;
-      if (m.has('library')) cards.push({ icon: 'folder', t: '添加媒体文件夹', d: 'Erika 会扫描文件夹，自动识别番剧和封面。', a: '<span class="b S">选择文件夹…</span><span class="b plain S"><span>稍后</span></span>' });
-      if (m.has('sync')) cards.push({ icon: 'user', t: '登录账号', d: '同步观看进度和评分，登录后还能发弹幕。', a: `<span class="b S">${ico('assets/dandanplay.png')}弹弹play</span><span class="b S">${ico('assets/bangumi.png')}Bangumi</span>` });
-      if (m.has('sources')) cards.push({ icon: 'server', t: '连接媒体服务器', d: 'Jellyfin、Emby、WebDAV 或 SMB。', a: `<span class="b S">${ico('assets/jellyfin.svg', 14)}Jellyfin</span><span class="b S">${ico('assets/emby.svg', 14)}Emby</span><span class="b S">更多…</span>` });
-      if (m.has('remote')) cards.push({ icon: 'wifi', t: '局域网共享', d: '允许同一网络里的设备浏览你的媒体库，默认关闭。', a: '<span class="tg"><i></i></span>' });
-      if (m.has('danmaku') && !m.has('sync')) cards.push({ icon: 'danmaku', t: '弹幕已就绪', d: '播放时自动匹配弹弹play 的弹幕，不需要登录。', a: '' });
-      if (m.has('downloads')) cards.push({ icon: 'download', t: '下载位置', d: '默认保存到系统的「下载」文件夹。', a: '<span class="b S">更改…</span>' });
-      const host = q('.ob-setup');
-      host.innerHTML = cards.length
-        ? cards.map(c => `<div class="setup-card"><div class="mi">${svg(c.icon)}</div><div class="t2">${c.t}</div><div class="cap2">${c.d}</div><div class="acts">${c.a}</div></div>`).join('')
-        : `<div style="grid-column:1/-1;display:flex;gap:28px;align-items:center;padding:10px 0"><img src="assets/girl.png" alt="" style="width:160px"><div><div class="t2" style="font-size:19px;margin-bottom:6px">纯粹模式不需要额外设置</div><div class="body">打开视频就能看。以后想要更多功能，去 设置 › 可选功能。</div></div></div>`;
-      autoJelly(host);
-      $$('.tg', host).forEach(t => t.addEventListener('click', () => t.classList.toggle('on')));
-      if (!RM()) $$('.setup-card', host).forEach((c, i) => {
-        c.style.opacity = '0';
-        setTimeout(() => tween(TOKENS.smooth, p => { c.style.opacity = String(Math.min(1, p)); c.style.transform = `translateY(${(1 - p) * 14}px)`; }, () => { c.style.transform = ''; }), i * 40);
-      });
-    }
-    function renderDone() {
-      const m = store.mods;
-      const chips = [`<span class="chip">${svg('film', 'i', 'width:14px;height:14px')}核心播放</span>`]
-        .concat(m.size ? MODS.filter(x => m.has(x.id)).map(x => `<span class="chip acc-chip">${svg(x.icon, 'i', 'width:14px;height:14px')}${x.name}</span>`) : ['<span class="chip">纯粹播放 · 不开启模块</span>']);
-      q('.ob-done').innerHTML = chips.join('');
-      if (!RM()) $$('.chip', q('.ob-done')).forEach((c, i) => { c.style.transform = 'scale(.4)'; c.style.opacity = '0'; setTimeout(() => enter(c, null), 120 + i * 45); });
-    }
-
-    function go(n, animate = true) {
-      if (n < 0 || n >= N || n === cur) return;
-      const from = steps[cur], to = steps[n], dir = n > cur ? 1 : -1;
-      cancel(stepTw);
-      steps.forEach(s => { if (s !== from && s !== to) { s.classList.remove('on'); s.style.transform = s.style.opacity = ''; } });
-      if (n === 3) mw2.update(store.mods, false);
-      if (n === 4) renderSetup();
-      if (n === 5) renderDone();
-      to.classList.add('on'); queueFit();
-      cur = n; updFoot();
-      if (RM() || !animate) { from.classList.remove('on'); return; }
-      stepTw = tween(TOKENS.smooth, p => {
-        const qn = Math.min(1, p);
-        from.style.transform = `translateX(${-dir * 60 * qn}px)`; from.style.opacity = String(1 - qn);
-        to.style.transform = `translateX(${dir * 60 * (1 - p)}px)`; to.style.opacity = String(Math.min(1, qn * 1.2));
-      }, () => {
-        if (from !== steps[cur]) from.classList.remove('on');
-        from.style.transform = from.style.opacity = ''; to.style.transform = to.style.opacity = '';
-      });
-    }
-    const next = q('.ob-next'), back = q('.ob-back'), skip = q('.ob-skip');
-    function updFoot() {
-      back.style.display = cur > 0 && cur < 5 ? '' : 'none';
-      skip.style.display = cur === 0 ? '' : 'none';
-      next.textContent = ['开始', '继续', '继续', '继续', '继续', '开始使用'][cur];
-      $$('i', dots).forEach((d, i) => d.classList.toggle('on', i === cur));
-    }
-    next.addEventListener('click', () => { if (cur < N - 1) go(cur + 1); else finish(); });
-    back.addEventListener('click', () => go(cur - 1));
-    skip.addEventListener('click', () => { preset = 'pure'; store.set([], { src: 'preset' }); go(5); });
-
-    function reset() {
-      cancel(stepTw);
-      steps.forEach(s => { s.classList.remove('on'); s.style.transform = s.style.opacity = ''; });
-      steps[0].classList.add('on'); cur = 0; updFoot();
-      preset = presetOf(store.mods); markPresets();
-    }
-
-    // T7：完成 → 主窗口（文档里演示变形；原型里交给调用方）
-    let morph = null, morphWin = null, again = null;
-    function finish() {
-      if (opts.onFinish) { opts.onFinish(store.mods); return; }
-      if (!morph) {
-        morph = document.createElement('div');
-        morph.style.cssText = 'position:absolute;inset:0;z-index:25;display:none';
-        morph.innerHTML = '<div class="frame" data-w="440" data-h="275" style="position:absolute;left:0;top:0;width:440px;height:275px;transform-origin:0 0"></div><span class="b" style="position:absolute;left:50%;bottom:24px;transform:translateX(-50%);display:none">重新体验引导</span>';
-        rootEl.appendChild(morph);
-        morphWin = new MiniWin($('.frame', morph));
-        again = $('.b', morph);
-        again.addEventListener('click', () => { morph.style.display = 'none'; morph.style.background = ''; reset(); });
-        bindJelly(again, 'M');
-      }
-      morphWin.update(store.mods, false);
-      morph.style.display = ''; again.style.display = 'none';
-      const W = rootEl.clientWidth || 960, H = rootEl.clientHeight || 600, s1 = W / 440, s0 = 0.42;
-      const f = $('.frame', morph);
-      tween(TOKENS.hero, p => {
-        const s = s0 + (s1 - s0) * p;
-        f.style.transform = `translate(${(W - 440 * s) / 2}px, ${(H - 275 * s) / 2}px) scale(${s})`;
-        f.style.opacity = String(Math.min(1, p * 2.2));
-      }, () => { morph.style.background = 'var(--wf-bg)'; again.style.display = ''; enter(again, null); });
-    }
-    updFoot();
-    markPresets();
-    syncThemeUI();
-    autoJelly(rootEl);
-    watchFrames(rootEl);
-    return { reset, go };
-  }
 
   return {
     $, $$, svg, kv, root,
@@ -834,10 +490,8 @@ window.NP = (() => {
     enter, leave, setShown, reconcile, toast,
     setTheme, setAccent, applyTheme, syncThemeUI, onTheme: f => themeHooks.push(f), themePref: () => themePref,
     fit, queueFit, watchFrames, scaleOf,
-    MODS, MOD, ALL, GROUPS, PRESETS, createStore, presetOf, depToast, pagesFor,
-    MiniWin, HudStrip,
-    SET_TOP, SET_MOD, SET_BOT, settingsSections, renderSetSide, mountOptional,
-    PLUGINS, installed, renderMarket, onInstall: f => marketHooks.push(f),
-    mountOnboarding,
+    MODS, MOD, ALL, PRESETS, createStore, pagesFor,
+    MiniWin,
+    PLUGINS, installed,
   };
 })();

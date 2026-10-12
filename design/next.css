@@ -47,7 +47,12 @@ body.dev-tv .nxp-tvhint { display: block; }
 .nxp table.par td:nth-child(2) { min-width: 220px; }
 .nxp .pa { display: inline-block; font: 700 11px/1 var(--font); padding: 3px 6px; border-radius: 6px; background: rgba(var(--accent-rgb), .16); color: var(--accent-solo); margin-right: 4px; vertical-align: 1px; }
 @media (max-width: 980px) { .nxp-rev { grid-template-columns: 1fr 1fr; } .nxp-rev .fix ul { columns: 1; } }
-@media (max-width: 640px) { main.nxp { padding: 28px 16px 120px; } .nxp-rev { grid-template-columns: 1fr; } }
+@media (max-width: 640px) {
+  main.nxp { padding: 28px 16px 120px; } .nxp-rev { grid-template-columns: 1fr; }
+  /* 和 doc.css 的 .nx-bar 一样：手机宽度下分段可以换行，顶栏不吸顶（换行后太高）；标签独占一行，不和上一组挤在一起 */
+  .nxp-bar { position: static; row-gap: 6px; } .nxp-bar .lb { flex-basis: 100%; margin: 4px 0 0; }
+  .nxp-bar .seg { flex-wrap: wrap; flex: 0 1 auto; } .nxp-bar .seg span { padding: 0 10px; }
+}
 
 /* =====================================================================
    外观令牌：每套外观一组字体 / 圆角 / 字号，浅色和深色各一组颜色
