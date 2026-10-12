@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-200 -196 412 412" width="412" height="412" role="img" aria-label="NipaPlay 播放图标 · 星星">
+  <defs>
+    <path id="tri" d="M-18 -118 L-18 118 A18 18 0 0 0 8.66 133.78 L223.66 15.78 A18 18 0 0 0 223.66 -15.78 L8.66 -133.78 A18 18 0 0 0 -18 -118 Z"/>
+    <clipPath id="triClip"><use href="#tri"/></clipPath>
+  </defs>
+  <g transform="translate(12 15) rotate(-12) translate(-72 0)"><use href="#tri" fill="#7DB4F2" stroke="#7DB4F2" stroke-width="44" stroke-linejoin="round"/></g>
+  <g transform="rotate(-12) translate(-72 0)">
+    <use href="#tri" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="44" stroke-linejoin="round"/>
+    <use href="#tri" fill="#8E7FFF"/>
+    <rect x="-40" y="-170" width="300" height="170" fill="#ACA0FF" clip-path="url(#triClip)"/>
+    <path d="M94.6 -50.7 L98.6 -20.2 L127.9 -11.1 L100.1 2.1 L100.5 32.8 L79.4 10.4 L50.3 20.3 L65 -6.7 L46.7 -31.3 L76.9 -25.6 Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="7" stroke-linejoin="round"/>
+  </g>
+</svg>

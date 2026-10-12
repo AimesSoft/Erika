@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="226 118 1016 404" width="1016" height="404" color="#FFFFFF" role="img" aria-label="NipaPlay ニパ～☆ プレ">
+  <title>NipaPlay · 纯色剪影 · 白</title>
+  <!--
+    纯色剪影：贴纸的外形是实心，彩色版里有颜色的部分（字母、日文、☆、播放三角形）全部镂空，
+    彩色版里白色的部分（贴纸边、三角形里的星星）保留为实心。不带投影和高光。
+    颜色取 currentColor：内联到 HTML 时用 CSS 的 color 改色；作为图片使用时为 #FFFFFF。
+  -->
+  <defs>
+    <!-- 字母 -->
+    <path id="N" d="M298 331 L287 208 L401 322 L392 205"/>
+    <path id="i1" d="M451 339 L459 297"/>
+    <path id="i2" d="M454 263 L467 260"/>
+    <path id="p1" d="M497 224 L508 333"/>
+    <ellipse id="p2" cx="538" cy="256" rx="35" ry="39"/>
+    <ellipse id="a1" cx="657" cy="257" rx="36" ry="40" transform="rotate(4 657 257)"/>
+    <path id="a2" d="M702 231 L694 297"/>
+    <path id="P1" d="M722 324 L737 450"/>
+    <path id="P2" d="M724 322 L788 317 C826 314 830 389 791 391 L733 394"/>
+    <path id="l" d="M829 470 L851 362"/>
+    <ellipse id="a3" cx="921" cy="386" rx="34" ry="40" transform="rotate(-3 921 386)"/>
+    <path id="a4" d="M961 352 L960 424"/>
+    <path id="y1" d="M968 320 L1012 430"/>
+    <path id="y2" d="M1047 307 L999 472"/>
+    <!-- 日文：ニパ～☆ / プレ -->
+    <path id="ni1" d="M380 406 L414 401"/>
+    <path id="ni2" d="M377 444 L425 437"/>
+    <path id="pa1" d="M471 396 Q467 425 450 440"/>
+    <path id="pa2" d="M493 398 Q496 428 503 444"/>
+    <circle id="pa3" cx="510" cy="400" r="5.5"/>
+    <path id="wave" d="M544 424 C552 410 566 410 573 418 S590 428 598 415"/>
+    <path id="star" d="M655.1 379.5 L659.8 403.6 L683.7 409.1 L662.2 421 L664.3 445.5 L646.4 428.8 L623.8 438.3 L634.1 416.1 L618.1 397.6 L642.4 400.5 Z"/>
+    <path id="pu1" d="M778 222 L822 219 C826 238 815 258 786 270"/>
+    <circle id="pu2" cx="835" cy="213" r="5.5"/>
+    <path id="re" d="M867 247 L874 294 L914 266"/>
+    <!-- 播放图标：三角形 A(0,-118) B(0,118) C(215,0) 外扩 18 的圆角轮廓 -->
+    <path id="tri" d="M-18 -118 L-18 118 A18 18 0 0 0 8.66 133.78 L223.66 15.78 A18 18 0 0 0 223.66 -15.78 L8.66 -133.78 A18 18 0 0 0 -18 -118 Z"/>
+    <clipPath id="triClip"><use href="#tri"/></clipPath>
+
+    <!-- 贴纸底：同一组形状，颜色由 color 决定（投影 / 白边各用一次） -->
+    <g id="sticker" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+      <use href="#tri" transform="translate(1046 270) rotate(-12) translate(-72 0)" fill="currentColor" stroke-width="44"/>
+      <use href="#N" stroke-width="80"/>
+      <use href="#i1" stroke-width="74"/><use href="#i2" stroke-width="64"/>
+      <use href="#p1" stroke-width="74"/><use href="#p2" fill="currentColor" stroke-width="70"/>
+      <use href="#a1" fill="currentColor" stroke-width="70"/><use href="#a2" stroke-width="74"/>
+      <use href="#P1" stroke-width="78"/><use href="#P2" stroke-width="74"/>
+      <use href="#l" stroke-width="74"/>
+      <use href="#a3" fill="currentColor" stroke-width="70"/><use href="#a4" stroke-width="74"/>
+      <use href="#y1" stroke-width="74"/><use href="#y2" stroke-width="74"/>
+      <g stroke-width="58">
+        <use href="#ni1"/><use href="#ni2"/><use href="#pa1"/><use href="#pa2"/><use href="#pa3"/>
+        <use href="#wave"/><use href="#pu1"/><use href="#pu2"/><use href="#re"/>
+      </g>
+      <use href="#star" fill="currentColor" stroke-width="50"/>
+    </g>
+
+    <mask id="cut" maskUnits="userSpaceOnUse" x="200" y="90" width="1060" height="460">
+      <!-- 实心：贴纸外形 -->
+      <use href="#sticker" color="#FFFFFF"/>
+      <!-- 镂空：播放三角形，里面的星星保留 -->
+      <g transform="translate(1046 270) rotate(-12) translate(-72 0)">
+        <use href="#tri" fill="#000000"/>
+        <path d="M128.7 -52.9 L131.9 -28 L155.9 -20.5 L133.1 -9.8 L133.5 15.4 L116.3 -3 L92.4 5.1 L104.5 -16.9 L89.5 -37.1 L114.2 -32.4 Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="6" stroke-linejoin="round"/>
+      </g>
+      <!-- 压在三角形上的字母先补回边框 -->
+      <g fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="74">
+        <use href="#y1"/><use href="#y2"/><use href="#a4"/><use href="#re" stroke-width="58"/>
+      </g>
+      <!-- 镂空：字母与日文（笔画宽度与彩色版一致） -->
+      <g fill="none" stroke="#000000" stroke-linecap="round" stroke-linejoin="round">
+        <use href="#N" stroke-width="36"/>
+        <use href="#i1" stroke-width="30"/><use href="#i2" stroke-width="20"/>
+        <use href="#p2" stroke-width="26"/><use href="#p1" stroke-width="30"/>
+        <use href="#a1" stroke-width="26"/><use href="#a2" stroke-width="30"/>
+        <use href="#P2" stroke-width="30"/><use href="#P1" stroke-width="34"/>
+        <use href="#l" stroke-width="30"/>
+        <use href="#a3" stroke-width="26"/><use href="#a4" stroke-width="30"/>
+        <use href="#y1" stroke-width="30"/><use href="#y2" stroke-width="30"/>
+        <g stroke-width="14">
+          <use href="#ni1"/><use href="#ni2"/><use href="#pa1"/><use href="#pa2"/>
+          <use href="#pa3" stroke-width="4.5"/>
+          <use href="#wave"/>
+          <use href="#pu1"/><use href="#pu2" stroke-width="4.5"/>
+          <use href="#re"/>
+        </g>
+        <use href="#star" fill="#000000" stroke-width="6"/>
+      </g>
+    </mask>
+  </defs>
+  <rect x="200" y="90" width="1060" height="460" fill="currentColor" mask="url(#cut)"/>
+</svg>

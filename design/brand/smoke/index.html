@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN" data-accent="rose">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>图标烟雾工作台</title>
+<meta name="description" content="用 WebGL 流体模拟在 NipaPlay 图标的三个形状里生成彩色烟雾，定格某一帧并导出位图。">
+<link rel="icon" href="../../assets/icon.png">
+<link rel="stylesheet" href="../../doc.css">
+<style>
+  body { margin: 0; }
+  .wrap { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 20px; padding: 20px; max-width: 1360px; margin: 0 auto; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 18px; align-self: start; position: sticky; top: 20px; }
+  .panel h1 { font-size: 18px; margin: 0 0 4px; }
+  .panel p { font-size: 12.5px; color: var(--text-2); margin: 0 0 12px; }
+  .panel label { display: block; font-size: 12.5px; color: var(--text-2); margin: 12px 0 4px; }
+  .panel label b { float: right; font-family: var(--mono); color: var(--text); font-weight: 600; }
+  .panel input[type=range] { width: 100%; accent-color: var(--accent); }
+  .row2 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .btn { all: unset; cursor: pointer; height: 32px; padding: 0 14px; border-radius: 999px; background: var(--surface-2); font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+  .btn.p { background: var(--accent); color: var(--on-accent); }
+  .btn[disabled] { opacity: .5; pointer-events: none; }
+  .seed { width: 80px; height: 30px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--surface); color: var(--text); padding: 0 8px; font: 13px var(--mono); }
+  .chk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); margin-right: 14px; cursor: pointer; }
+  .stage { display: grid; gap: 16px; }
+  .big { background: #D6DAE2; border-radius: 18px; padding: 20px; display: grid; place-items: center; }
+  .big canvas { width: min(100%, 720px); height: auto; aspect-ratio: 1; }
+  .smalls { display: flex; gap: 16px; align-items: flex-end; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 16px; flex-wrap: wrap; }
+  .smalls figure { margin: 0; text-align: center; font-size: 12px; color: var(--text-3); }
+  .smalls .dk { background: #141418; border-radius: 12px; padding: 10px; }
+  .status { font: 12px var(--mono); color: var(--text-3); margin-top: 10px; }
+  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } .panel { position: static; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <aside class="panel">
+    <h1>图标烟雾工作台</h1>
+    <p>每个形状里跑一套独立的流体模拟，烟被形状挡住只在里面飘；颜色用滤色叠在纯色上。点「播放」看烟飘散，觉得好看就「定格」，用种子 + 帧数可以随时复现这一帧。</p>
+    <div class="row2">
+      <span style="font-size:12.5px;color:var(--text-2)">种子</span>
+      <input class="seed" id="seed" type="number" value="7">
+      <button class="btn" id="dice">换一个</button>
+    </div>
+    <label>帧 <b id="frameV"></b></label>
+    <input type="range" id="frame" min="0" max="400" step="1">
+    <div class="row2" style="margin-top:8px">
+      <button class="btn p" id="play">播放</button>
+      <button class="btn" id="render">渲染这一帧</button>
+    </div>
+    <label>喷烟时长（帧） <b id="emitV"></b></label><input type="range" id="emit" min="10" max="200" step="1">
+    <label>每帧烟团数 <b id="splatsV"></b></label><input type="range" id="splats" min="1" max="4" step="1">
+    <label>喷射力度 <b id="forceV"></b></label><input type="range" id="force" min="100" max="1200" step="10">
+    <label>烟团大小 <b id="radiusV"></b></label><input type="range" id="radius" min="0.0006" max="0.006" step="0.0001">
+    <label>卷曲 <b id="curlV"></b></label><input type="range" id="curl" min="0" max="60" step="1">
+    <label>烟的浓度 <b id="dyeAmountV"></b></label><input type="range" id="dyeAmount" min="0.05" max="1" step="0.01">
+    <label>亮度 <b id="exposureV"></b></label><input type="range" id="exposure" min="0.3" max="4" step="0.05">
+    <label>不透明度 <b id="opacityV"></b></label><input type="range" id="opacity" min="0" max="1" step="0.01">
+    <label>消散 <b id="dissipationV"></b></label><input type="range" id="dissipation" min="0.97" max="1" step="0.001">
+    <label>烟的范围 <b id="spreadV"></b></label><input type="range" id="spread" min="0.4" max="2.2" step="0.05">
+    <label>柔化 <b id="softenV"></b></label><input type="range" id="soften" min="0" max="6" step="0.1">
+    <div style="margin-top:14px">
+      <label class="chk" style="display:inline-flex;margin:0 14px 0 0"><input type="checkbox" id="plate">macOS 底板</label>
+      <label class="chk" style="display:inline-flex;margin:0"><input type="checkbox" id="bar">⏭ 竖条</label>
+    </div>
+    <div class="row2" style="margin-top:16px">
+      <button class="btn" id="exp1">导出 1024 PNG</button>
+      <button class="btn" id="exp2">导出 2048 PNG</button>
+    </div>
+    <div class="status" id="status"></div>
+  </aside>
+  <main class="stage">
+    <div class="big"><canvas id="out" width="1024" height="1024"></canvas></div>
+    <div class="smalls">
+      <figure><canvas id="s128" width="256" height="256" style="width:128px;height:128px"></canvas><br>128</figure>
+      <figure><canvas id="s64" width="128" height="128" style="width:64px;height:64px"></canvas><br>64</figure>
+      <figure><canvas id="s32" width="64" height="64" style="width:32px;height:32px"></canvas><br>32</figure>
+      <figure class="dk"><canvas id="sdk" width="256" height="256" style="width:128px;height:128px"></canvas><br><span style="color:#888">深色背景</span></figure>
+    </div>
+  </main>
+</div>
+<script src="smoke.js"></script>
+<script>
+(() => {
+  const S = window.NPSmoke; if (!S) return;
+  const P = S.P, $ = s => document.querySelector(s);
+  const out = $('#out'), status = $('#status');
+  const fmt = { spread: v => (+v).toFixed(2), soften: v => (+v).toFixed(1), radius: v => (+v).toFixed(4), dissipation: v => (+v).toFixed(3), dyeAmount: v => (+v).toFixed(2), exposure: v => (+v).toFixed(2), opacity: v => (+v).toFixed(2) };
+  const keys = ['frame', 'emit', 'splats', 'force', 'radius', 'curl', 'dyeAmount', 'exposure', 'opacity', 'dissipation', 'spread', 'soften'];
+  // 网址参数可以直接指定一帧，例如 ?seed=7&frame=150
+  const q = new URLSearchParams(location.search);
+  keys.concat(['seed']).forEach(k => { if (q.has(k)) P[k] = +q.get(k); });
+  if (q.has('plate')) P.plate = q.get('plate') === '1';
+  if (q.has('bar')) P.bar = q.get('bar') === '1';
+  const label = k => { $('#' + k + 'V').textContent = fmt[k] ? fmt[k](P[k]) : P[k]; };
+  keys.forEach(k => { const el = $('#' + k); el.value = P[k]; label(k); });
+  $('#seed').value = P.seed; $('#plate').checked = P.plate; $('#bar').checked = P.bar;
+
+  function draw() {
+    S.composite(out, 1024);
+    [['#s128', 256], ['#s64', 128], ['#s32', 64], ['#sdk', 256]].forEach(([sel, n]) => {
+      const c = $(sel), x = c.getContext('2d'); x.clearRect(0, 0, n, n); x.imageSmoothingQuality = 'high'; x.drawImage(out, 0, 0, n, n);
+    });
+    status.textContent = `种子 ${P.seed} · 帧 ${S.sims[0].t}${S.ok ? '' : ' · 注意：不支持浮点渲染'}`;
+  }
+  let busy = false;
+  function render() {
+    if (busy) return; busy = true; status.textContent = '计算中…';
+    setTimeout(() => { const t0 = performance.now(); S.renderFrame(P.frame); draw(); status.textContent += ` · ${Math.round(performance.now() - t0)} ms`; busy = false; window.__ready = true; }, 20);
+  }
+  let playing = false;
+  function loop() {
+    if (!playing) return;
+    S.step(); P.frame = S.sims[0].t; $('#frame').value = P.frame; label('frame'); draw();
+    if (P.frame >= 400) { setPlaying(false); return; }
+    requestAnimationFrame(loop);
+  }
+  function setPlaying(v) {
+    playing = v; $('#play').textContent = v ? '定格' : '播放';
+    if (v) { S.reset(); P.frame = 0; requestAnimationFrame(loop); }
+  }
+  $('#play').addEventListener('click', () => setPlaying(!playing));
+  $('#render').addEventListener('click', render);
+  let t = 0;
+  keys.forEach(k => $('#' + k).addEventListener('input', e => { P[k] = +e.target.value; label(k); if (playing) return; clearTimeout(t); t = setTimeout(render, 250); }));
+  $('#seed').addEventListener('change', e => { P.seed = +e.target.value || 1; render(); });
+  $('#dice').addEventListener('click', () => { P.seed = Math.floor(Math.random() * 9999) + 1; $('#seed').value = P.seed; render(); });
+  $('#plate').addEventListener('change', e => { P.plate = e.target.checked; draw(); });
+  $('#bar').addEventListener('change', e => { P.bar = e.target.checked; draw(); });
+  function exportPNG(size) {
+    if (busy) return; busy = true; status.textContent = `导出 ${size} 中…`;
+    setTimeout(() => {
+      const keep = P.dyeRes; P.dyeRes = size; S.renderFrame(P.frame);
+      const c = document.createElement('canvas'); S.composite(c, size);
+      c.toBlob(b => {
+        const a = document.createElement('a'); a.href = URL.createObjectURL(b);
+        a.download = `nipaplay-icon-smoke-s${P.seed}-f${P.frame}${P.plate ? '-macos' : ''}${P.bar ? '-bar' : ''}-${size}.png`; a.click();
+        P.dyeRes = keep; S.renderFrame(P.frame); draw(); busy = false;
+      });
+    }, 20);
+  }
+  $('#exp1').addEventListener('click', () => exportPNG(1024));
+  $('#exp2').addEventListener('click', () => exportPNG(2048));
+  window.__exportLayers = size => { const keep = P.dyeRes; P.dyeRes = size; S.renderFrame(P.frame); const r = {}; ['green', 'blue', 'red'].forEach(k => { const c = document.createElement('canvas'); S.composite(c, size, k); r[k] = c.toDataURL('image/png'); }); const c = document.createElement('canvas'); S.composite(c, size); r.full = c.toDataURL('image/png'); P.dyeRes = keep; return r; };
+  window.__exportData = size => { const keep = P.dyeRes; P.dyeRes = size; S.renderFrame(P.frame); const c = document.createElement('canvas'); S.composite(c, size); const url = c.toDataURL('image/png'); P.dyeRes = keep; return url; };
+  render();
+})();
+</script>
+</body>
+</html>

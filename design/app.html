@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN" data-accent="rose">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NipaPlay Next 原型</title>
+<meta name="description" content="NipaPlay Next 交互原型：首次配置、首页、详情、播放器、媒体库、设置、插件市场，桌面与手机两种形态。">
+<link rel="icon" href="assets/icon.png">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body class="proto">
+  <header class="proto-bar">
+    <div class="pb-brand"><img src="assets/icon.png" alt=""><b>NipaPlay Next</b><span class="chip">交互原型 v0.1</span></div>
+    <span class="seg pb-device" id="pbDevice"><span data-dev="desk" class="on">桌面</span><span data-dev="phone">手机</span></span>
+    <div class="pb-right">
+      <button class="pb-sw" data-set-accent="rose" title="绯红" data-j="S"><i style="background:#FF2E55"></i></button>
+      <button class="pb-sw" data-set-accent="blue" title="群青" data-j="S"><i style="background:#2A51D4"></i></button>
+      <button class="pb-sw" data-set-accent="mint" title="荧绿" data-j="S"><i style="background:#07FF94"></i></button>
+      <button class="pb-btn" id="pbTheme" title="切换明暗" data-j="S"></button>
+      <span class="pb-sep"></span>
+      <button class="pb-txt" id="pbRerun" data-j="M">重新首次配置</button>
+      <a class="pb-txt" id="pbDoc" href="index.html" target="_top" data-j="M">设计文档</a>
+      <a class="pb-txt" id="pbFull" href="app.html" target="_blank" rel="noopener" data-j="M" style="display:none">全屏打开</a>
+    </div>
+  </header>
+  <main class="stage" id="stage">
+    <div class="frame app-frame" id="deskFrame"><div class="win app" id="app"></div></div>
+    <div class="frame app-frame" id="phoneFrame" style="display:none"><div class="win col phone app-phone" id="phone"></div></div>
+  </main>
+<script src="core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

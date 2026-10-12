@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="zh-CN" data-accent="rose">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>播放器重设计</title>
+<meta name="description" content="NipaPlay Next 播放器控制层的三个设计方向：标注、胶囊岛、水手服。每个都可以直接点着试。">
+<link rel="icon" href="assets/icon.png">
+<link rel="stylesheet" href="doc.css">
+<style>
+  main.po { max-width: 1180px; margin: 0 auto; padding: 56px 32px 140px; }
+  .po-hd .lead2 { max-width: 820px; }
+  .po-why { display: grid; grid-template-columns: 360px 1fr; gap: 26px; align-items: center; margin: 8px 0 0; }
+  .po-why .old { border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: #000; position: relative; aspect-ratio: 708 / 440; }
+  .po-why .old img { width: 100%; height: 100%; object-fit: cover; }
+  .po-why .old .lb { position: absolute; left: 50%; top: 9px; transform: translateX(-50%); padding: 0 8px; border-radius: 6px; background: rgba(0, 0, 0, .55); font-size: 11px; font-weight: 650; color: rgba(255, 255, 255, .8); }
+  .po-why ul { margin: 0; padding-left: 1.1em; color: var(--text-2); font-size: 15px; }
+  .po-why li { margin: 4px 0; }
+
+  .dir { margin-top: 84px; padding-top: 44px; border-top: 1px solid var(--line); }
+  .dir-hd { display: flex; align-items: flex-start; gap: 18px; margin-bottom: 18px; }
+  .dir-k { font: 800 40px/1 var(--font); color: var(--text-3); width: 44px; flex: none; padding-top: 2px; }
+  .dir-hd h3 { margin: 0 0 4px; font-size: 28px; display: flex; align-items: center; gap: 12px; }
+  .dir-hd p { margin: 0; color: var(--text-2); font-size: 16px; max-width: 760px; }
+  .rec { font-size: 12px; font-weight: 700; height: 24px; padding: 0 10px; border-radius: 999px; display: inline-grid; place-items: center; background: var(--text); color: var(--bg); letter-spacing: .02em; }
+  .dir-tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 0 0 14px; }
+  .dir-tools .seg span { cursor: pointer; }
+  .stage-wrap { position: relative; border-radius: 16px; overflow: hidden; background: #000; box-shadow: var(--shadow-lg); }
+  .stage { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; transform-origin: 0 0; }
+  .notes { margin-top: 16px; }
+  .notes .card { padding: 18px 20px; }
+  .notes h4 { font-size: 15.5px; margin-bottom: 6px; }
+  .notes p, .notes li { font-size: 13.5px; line-height: 1.65; }
+  .notes ul { margin: 0; padding-left: 1.1em; color: var(--text-2); }
+  .notes li { margin: 3px 0; }
+  .g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .cmp td:first-child { white-space: nowrap; font-weight: 600; }
+  .dots { letter-spacing: 2px; font-size: 13px; }
+  @media (max-width: 900px) { .g3 { grid-template-columns: 1fr; } .po-why { grid-template-columns: 1fr; } main.po { padding: 32px 16px 120px; } }
+
+  /* =============== 播放器公共 =============== */
+  .pv { position: absolute; inset: 0; overflow: hidden; background: #000; color: #fff; font: 14px/1.4 var(--font); letter-spacing: .01em; user-select: none; -webkit-user-select: none; }
+  .pv input { user-select: text; -webkit-user-select: text; }
+  .pv-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 25%; }
+  .pv .dm-layer { z-index: 1; }
+  .pv.paused .dm-layer span { animation-play-state: paused; }
+  .pv .fx { transition: opacity .32s ease, transform .5s cubic-bezier(.3, 1.4, .5, 1); }
+  .pv.st-off .fx { opacity: 0; pointer-events: none; }
+  .pv.st-off { cursor: none; }
+  .pv-fb { position: absolute; left: 50%; top: 46%; width: 76px; height: 76px; margin: -38px 0 0 -38px; border-radius: 50%; background: rgba(0, 0, 0, .5);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); display: grid; place-items: center; opacity: 0; pointer-events: none; z-index: 9; }
+  .pv-fb .i { width: 32px; height: 32px; }
+  .pbtn { width: 36px; height: 36px; border-radius: 999px; display: grid; place-items: center; color: rgba(255, 255, 255, .92); cursor: pointer; flex: none; transition: background-color .2s; }
+  .pbtn:hover { background: rgba(255, 255, 255, .12); }
+  .pbtn .i { width: 20px; height: 20px; }
+  .pbtn.sm { width: 30px; height: 30px; }
+  .pbtn.sm .i { width: 17px; height: 17px; }
+  .grow { flex: 1; }
+  .pv .toast { bottom: auto; top: 22px; z-index: 30; }
+  .pv .sl-v { width: 0; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .25); position: relative; overflow: hidden; transition: width .3s cubic-bezier(.3, 1.3, .5, 1), margin .3s; }
+  .pv .sl-v b { position: absolute; inset: 0 30% 0 0; background: #fff; border-radius: 2px; }
+  .pv .vol { display: flex; align-items: center; }
+  .pv .vol:hover .sl-v { width: 72px; margin: 0 10px 0 2px; }
+  /* 主题色在深色画面上的「纯色文字」 */
+  .pv { --on-dark: #FF2E55; }
+  :root[data-accent="blue"] .pv { --on-dark: #6A8BFF; }
+  :root[data-accent="mint"] .pv { --on-dark: #07FF94; }
+  .prev-fr { border-radius: 12px; overflow: hidden; background: #111; box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .7), 0 0 0 1px rgba(255, 255, 255, .14); }
+  .prev-fr img { width: 100%; height: 100%; object-fit: cover; transform: scale(1.5); }
+
+  /* =============== A · 标注 =============== */
+  .ma-scrim { position: absolute; left: 0; right: 0; bottom: 0; height: 330px; pointer-events: none;
+    background: linear-gradient(to top, rgba(0, 0, 0, .8) 0%, rgba(0, 0, 0, .66) 20%, rgba(0, 0, 0, .42) 45%, rgba(0, 0, 0, .17) 72%, rgba(0, 0, 0, 0) 100%); }
+  .ma-corner { position: absolute; left: 0; top: 0; width: 520px; height: 220px; pointer-events: none; background: radial-gradient(420px 170px at 0 0, rgba(0, 0, 0, .42), transparent 75%); }
+  .ma-corner.r { left: auto; right: 0; background: radial-gradient(420px 170px at 100% 0, rgba(0, 0, 0, .42), transparent 75%); }
+  .ma-top { position: absolute; left: 22px; right: 22px; top: 18px; display: flex; align-items: center; gap: 2px; z-index: 4; }
+  .pv.st-off .ma-top { transform: translateY(-6px); }
+  .pv .ma-dml { inset: 64px 0 220px; }
+  .ma-title { position: absolute; left: 40px; bottom: 146px; z-index: 3; text-shadow: 0 1px 14px rgba(0, 0, 0, .35); }
+  .pv.st-off .ma-title { transform: translateY(10px); }
+  .ma-show { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 650; color: rgba(255, 255, 255, .74); letter-spacing: .03em; margin-bottom: 4px; }
+  .ma-show .sailor { width: 22px; height: 7.5px; background: linear-gradient(rgba(255, 255, 255, .6) 0 1.25px, transparent 1.25px 3.125px, rgba(255, 255, 255, .6) 3.125px 4.375px, transparent 4.375px 6.25px, rgba(255, 255, 255, .6) 6.25px 7.5px); }
+  .ma-ep { font-size: 30px; line-height: 1.2; font-weight: 800; letter-spacing: -.01em; }
+  .ma-ep span { font-weight: 500; color: rgba(255, 255, 255, .8); margin-left: 12px; }
+  .ma-tl { position: absolute; left: 40px; bottom: 80px; width: 1200px; height: 66px; z-index: 4; cursor: pointer; }
+  .pv.st-off .ma-tl { transform: translateY(8px); }
+  .ma-rib { position: absolute; left: 0; top: 26px; overflow: visible; }
+  .ma-rib .r0 { fill: rgba(255, 255, 255, .24); }
+  .ma-rib .r1 { fill: rgba(255, 255, 255, .5); }
+  .ma-rib .band { fill: rgb(var(--accent-rgb)); }
+  .ma-rib .ghost { fill: rgba(255, 255, 255, .3); }
+  .ma-rib .hl { fill: #fff; opacity: 0; transition: opacity .15s; }
+  .tl-on .ma-rib .hl { opacity: .9; }
+  .ma-now { position: absolute; left: 0; top: 17.5px; height: 24px; font: 750 20px/24px ui-rounded, "SF Pro Rounded", var(--font); font-variant-numeric: tabular-nums; letter-spacing: .01em; white-space: nowrap; pointer-events: none; will-change: transform; }
+  .ma-dur { position: absolute; right: 0; top: 17.5px; font: 600 13px/24px ui-rounded, "SF Pro Rounded", var(--font); font-variant-numeric: tabular-nums; color: rgba(255, 255, 255, .55); transition: opacity .2s; pointer-events: none; }
+  .ma-star { position: absolute; top: 0; width: 22px; height: 22px; margin-left: -11px; display: grid; place-items: center; color: rgba(255, 255, 255, .9); transition: opacity .2s, transform .35s cubic-bezier(.3, 1.6, .5, 1); }
+  .ma-star svg { width: 13px; height: 13px; }
+  .ma-star:hover { transform: scale(1.35); }
+  .ma-star.hide { opacity: 0; pointer-events: none; }
+  .ma-chs span { position: absolute; top: 52px; font-size: 11px; font-weight: 650; color: rgba(255, 255, 255, .55); letter-spacing: .04em; white-space: nowrap; opacity: 0; transform: translateY(-3px); transition: opacity .2s, transform .35s cubic-bezier(.3, 1.5, .5, 1); }
+  .tl-on .ma-chs span { opacity: 1; transform: none; }
+  .ma-prev { position: absolute; bottom: 52px; left: 0; width: 192px; pointer-events: none; transform-origin: 50% 100%; z-index: 2; }
+  .ma-prev .prev-fr { width: 192px; height: 108px; }
+  .ma-prev .tx { display: flex; align-items: baseline; justify-content: center; gap: 8px; margin-top: 7px; text-shadow: 0 1px 8px rgba(0, 0, 0, .6); }
+  .ma-prev .tx b { font: 750 14px ui-rounded, "SF Pro Rounded", var(--font); font-variant-numeric: tabular-nums; }
+  .ma-prev .tx span { font-size: 12px; color: rgba(255, 255, 255, .7); }
+  .ma-ctl { position: absolute; left: 28px; right: 28px; bottom: 20px; height: 44px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; z-index: 4; }
+  .pv.st-off .ma-ctl { transform: translateY(8px); }
+  .ma-ctl .l, .ma-ctl .c, .ma-ctl .r { display: flex; align-items: center; gap: 4px; }
+  .ma-ctl .c { gap: 10px; }
+  .ma-ctl .r { justify-content: flex-end; gap: 2px; }
+  .ma-ctl .play { width: 44px; height: 44px; background: rgba(255, 255, 255, .14); margin-right: 4px; }
+  .ma-ctl .play .i { width: 22px; height: 22px; }
+  .ma-txt { height: 32px; padding: 0 10px; border-radius: 16px; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 650; color: rgba(255, 255, 255, .9); cursor: pointer; white-space: nowrap; transition: background-color .2s, color .2s; }
+  .ma-txt:hover { background: rgba(255, 255, 255, .12); }
+  .ma-txt .i { width: 17px; height: 17px; opacity: .72; }
+  .ma-dm .lb { display: inline-block; line-height: 1.25; position: relative; z-index: 0; padding-right: .4em; margin-right: -.4em; }
+  .ma-dm .lb::before { content: ""; position: absolute; z-index: -1; left: 0; right: 0; top: 74%; bottom: 2%; border-radius: 999px; background: rgb(var(--accent-rgb)); transform-origin: 0 50%; transition: transform .45s cubic-bezier(.3, 1.6, .5, 1); }
+  .ma-dm:not(.on) { color: rgba(255, 255, 255, .5); }
+  .ma-dm:not(.on) .lb::before { transform: scaleX(0); transition: transform .2s ease; }
+  .ma-in { display: flex; align-items: center; gap: 8px; height: 34px; width: 280px; border-radius: 999px; background: rgba(255, 255, 255, .12); padding: 0 5px 0 15px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); cursor: text; }
+  .ma-in input, .il-say input, .sc-in input { all: unset; flex: 1; min-width: 0; color: #fff; font-size: 13px; }
+  .ma-in input::placeholder, .il-say input::placeholder, .sc-in input::placeholder { color: rgba(255, 255, 255, .5); }
+  .send { height: 24px; padding: 0 11px; border-radius: 999px; background: rgb(var(--accent-rgb)); color: var(--on-accent); font-size: 12px; font-weight: 700; display: grid; place-items: center; cursor: pointer; flex: none; }
+
+  /* =============== B · 胶囊岛 =============== */
+  .glass { background: rgba(26, 26, 30, .52); backdrop-filter: blur(28px) saturate(1.7); -webkit-backdrop-filter: blur(28px) saturate(1.7);
+    box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .16), 0 16px 40px -14px rgba(0, 0, 0, .6); }
+  .il-cap { position: absolute; top: 18px; height: 40px; border-radius: 20px; display: flex; align-items: center; gap: 2px; padding: 0 5px; z-index: 4; }
+  .il-cap.l { left: 18px; padding-right: 16px; gap: 8px; }
+  .il-cap.l b { font-size: 13.5px; font-weight: 650; }
+  .il-cap.l span.m { font-size: 12.5px; color: rgba(255, 255, 255, .6); }
+  .il-cap.r { right: 18px; }
+  .pv.st-off .il-cap { transform: scale(.92); }
+  .pv .il-dml { inset: 70px 0 110px; }
+  .il { position: absolute; left: 50%; bottom: 26px; width: 880px; height: 60px; border-radius: 30px; overflow: hidden; z-index: 5; transform: translateX(-50%);
+    transition: opacity .3s ease, transform .5s cubic-bezier(.3, 1.45, .5, 1); }
+  .pv.st-off .il { opacity: 0; transform: translateX(-50%) translateY(12px) scale(.9); pointer-events: none; transition: opacity .3s ease, transform .4s ease; }
+  .il-row { position: absolute; bottom: 0; height: 60px; display: flex; align-items: center; gap: 2px; transition: opacity .22s ease, transform .45s cubic-bezier(.3, 1.4, .5, 1); }
+  .il-row.main { width: 880px; left: 50%; margin-left: -440px; padding: 0 10px; box-sizing: border-box; }
+  .il-row.say { width: 600px; left: 50%; margin-left: -300px; padding: 0 10px 0 12px; box-sizing: border-box; gap: 8px; opacity: 0; transform: scale(.94); pointer-events: none; }
+  .il.saying .il-row.main { opacity: 0; transform: scale(.96); pointer-events: none; }
+  .il.saying .il-row.say { opacity: 1; transform: none; pointer-events: auto; }
+  .il-play { width: 40px !important; height: 40px !important; background: #fff; color: #111 !important; margin-right: 2px; }
+  .il-play:hover { background: #fff !important; }
+  .il-play .i { width: 20px; height: 20px; }
+  .il-t { font: 600 12.5px/1 ui-rounded, "SF Pro Rounded", var(--font); font-variant-numeric: tabular-nums; color: rgba(255, 255, 255, .82); width: 50px; text-align: center; flex: none; }
+  .il-pg { position: relative; width: 404px; height: 34px; flex: none; cursor: pointer; }
+  .il-pg .msk { position: absolute; inset: 0; }
+  .il-pg .tr { position: absolute; left: 0; right: 0; top: 15.5px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, .26); }
+  .il-pg .bd, .il-pg .gh { position: absolute; left: 0; top: 14.5px; height: 5px; border-radius: 3px; transition: top .2s, height .2s; }
+  .il-pg .bd { background: rgb(var(--accent-rgb)); }
+  .il-pg .gh { background: rgba(255, 255, 255, .3); width: 0; }
+  .il-pg:hover .bd, .il-pg:hover .gh, .il.hov .il-pg .bd, .il.hov .il-pg .gh { top: 13.5px; height: 7px; border-radius: 4px; }
+  .il-pg .pk { position: absolute; top: 6px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: rgba(255, 255, 255, .8); }
+  .il-sep { width: 1px; height: 22px; background: rgba(255, 255, 255, .16); margin: 0 6px; flex: none; }
+  .il-dm { position: relative; }
+  .il-dm .led { position: absolute; right: 6px; top: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--on-dark); box-shadow: 0 0 0 2px rgba(26, 26, 30, .8); transition: transform .4s cubic-bezier(.3, 1.8, .5, 1); }
+  .il-dm:not(.on) .led { transform: scale(0); }
+  .il-dm:not(.on) { color: rgba(255, 255, 255, .5); }
+  .il-txt { height: 30px; min-width: 44px; padding: 0 8px; border-radius: 15px; display: grid; place-items: center; font: 700 13px ui-rounded, "SF Pro Rounded", var(--font); cursor: pointer; color: rgba(255, 255, 255, .92); box-sizing: border-box; }
+  .il-txt:hover { background: rgba(255, 255, 255, .12); }
+  .il-up { position: absolute; left: 0; right: 0; top: 0; bottom: 60px; }
+  .il-pane { position: absolute; inset: 0; opacity: 0; pointer-events: none; transition: opacity .2s ease; }
+  .il-pane.on { opacity: 1; pointer-events: auto; transition: opacity .3s ease .06s; }
+  .il-fr { position: absolute; bottom: 24px; width: 168px; height: 94px; }
+  .il-fr .tm { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 10px 6px; background: linear-gradient(transparent, rgba(0, 0, 0, .65)); font-size: 11.5px; display: flex; gap: 6px; }
+  .il-fr .tm b { font: 700 12px ui-rounded, "SF Pro Rounded", var(--font); font-variant-numeric: tabular-nums; }
+  .il-fr .tm span { color: rgba(255, 255, 255, .75); }
+  .il-chs span { position: absolute; bottom: 4px; font-size: 10.5px; font-weight: 650; color: rgba(255, 255, 255, .55); white-space: nowrap; letter-spacing: .04em; }
+  .il-opts { position: absolute; left: 18px; right: 18px; bottom: 4px; height: 52px; display: flex; align-items: center; gap: 8px; }
+  .il-opts .k { font-size: 12px; color: rgba(255, 255, 255, .55); margin-right: 6px; font-weight: 600; }
+  .il-chip { height: 34px; padding: 0 14px; border-radius: 17px; background: rgba(255, 255, 255, .1); font-size: 13px; font-weight: 600; display: inline-grid; place-items: center; cursor: pointer; white-space: nowrap; }
+  .il-chip:hover { background: rgba(255, 255, 255, .18); }
+  .il-chip.on { background: #fff; color: #111; }
+  .il-say { flex: 1; height: 38px; border-radius: 19px; background: rgba(255, 255, 255, .1); display: flex; align-items: center; padding: 0 5px 0 15px; gap: 8px; }
+  .il-say .send { height: 28px; padding: 0 14px; font-size: 12.5px; }
+
+  /* =============== C · 水手服 =============== */
+  .sc-shade { position: absolute; left: 0; right: 0; top: 0; height: 150px; pointer-events: none; background: linear-gradient(rgba(0, 0, 0, .55), rgba(0, 0, 0, 0)); }
+  .sc-top { position: absolute; left: 20px; right: 20px; top: 16px; height: 48px; display: flex; align-items: center; gap: 10px; z-index: 4; }
+  .pv.st-off .sc-top { transform: translateY(-8px); }
+  .sc-top .ttl { line-height: 1.3; }
+  .sc-top .ttl b { display: block; font-size: 15px; }
+  .sc-top .ttl span { font-size: 12px; color: rgba(255, 255, 255, .65); }
+  .pv .sc-dml { inset: 70px 0 150px; }
+  .sc-col { position: absolute; left: 0; right: 0; bottom: 0; height: 126px; z-index: 5;
+    background-color: rgba(26, 33, 76, .95);
+    background-image: repeating-linear-gradient(45deg, rgba(255, 255, 255, .035) 0 1px, transparent 1px 4px);
+    box-shadow: 0 -24px 60px -18px rgba(0, 0, 0, .6);
+    transition: transform .6s cubic-bezier(.3, 1.3, .5, 1); }
+  .pv.st-off .sc-col { transform: translateY(104%); transition: transform .42s cubic-bezier(.5, 0, .7, .4); }
+  .sc-tl { position: absolute; left: 40px; top: 12px; width: 1200px; height: 36px; cursor: pointer; }
+  .sc-tl svg.ln { position: absolute; left: 0; top: 0; overflow: visible; }
+  .sc-tl .s { fill: rgba(255, 255, 255, .78); }
+  .sc-tl .band { fill: rgb(var(--accent-rgb)); }
+  .sc-tl .ghost { fill: rgba(255, 255, 255, .32); }
+  .sc-rib { position: absolute; left: 0; top: 12.5px; width: 14px; height: 25px; transform-origin: 7px 1px; pointer-events: none; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .4)); will-change: transform; }
+  .sc-rib path { fill: rgb(var(--accent-rgb)); }
+  .sc-rib .knot { fill: rgba(0, 0, 0, .18); }
+  .sc-chs span { position: absolute; top: -30px; font-size: 11px; font-weight: 650; color: rgba(255, 255, 255, .7); letter-spacing: .04em; white-space: nowrap; opacity: 0; text-shadow: 0 1px 6px rgba(0, 0, 0, .7); transition: opacity .2s; }
+  .tl-on .sc-chs span { opacity: 1; }
+  .sc-prev { position: absolute; bottom: 168px; left: 0; width: 184px; pointer-events: none; z-index: 6; transform-origin: 50% 100%; }
+  .sc-prev .prev-fr { width: 184px; height: 104px; border-radius: 10px; }
+  .sc-prev .tx { margin: 8px auto 0; width: max-content; height: 24px; padding: 0 10px; border-radius: 12px; background: rgba(26, 33, 76, .95); font-size: 12px; display: flex; align-items: center; gap: 7px; box-shadow: 0 6px 16px -6px rgba(0, 0, 0, .6); }
+  .sc-prev .tx b { font: 700 12.5px ui-rounded, "SF Pro Rounded", var(--font); font-variant-numeric: tabular-nums; }
+  .sc-prev .tx span { color: rgba(255, 255, 255, .7); }
+  .sc-row { position: absolute; left: 28px; right: 28px; bottom: 14px; height: 48px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; }
+  .sc-row .l, .sc-row .c, .sc-row .r { display: flex; align-items: center; gap: 4px; }
+  .sc-row .c { gap: 8px; }
+  .sc-row .r { justify-content: flex-end; gap: 2px; }
+  .sc-play { width: 42px !important; height: 42px !important; background: #fff; color: rgb(26, 33, 76) !important; margin-right: 4px; }
+  .sc-play:hover { background: #fff !important; }
+  .sc-time { font: 600 13px ui-rounded, "SF Pro Rounded", var(--font); font-variant-numeric: tabular-nums; color: rgba(255, 255, 255, .82); padding: 0 8px; white-space: nowrap; }
+  .sc-time i { font-style: normal; color: rgba(255, 255, 255, .45); }
+  .sc-dm.on { color: var(--on-dark); }
+  .sc-dm:not(.on) { color: rgba(255, 255, 255, .5); }
+  .sc-in { display: flex; align-items: center; gap: 8px; height: 34px; width: 280px; border-radius: 999px; background: rgba(255, 255, 255, .1); padding: 0 5px 0 15px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
+  .sc-txt { height: 32px; padding: 0 8px; border-radius: 16px; display: grid; place-items: center; font: 700 13px ui-rounded, "SF Pro Rounded", var(--font); cursor: pointer; }
+  .sc-txt:hover { background: rgba(255, 255, 255, .12); }
+</style>
+</head>
+<body>
+<main class="po">
+  <header class="po-hd">
+    <div class="eyebrow"><span class="sailor"></span><b>9.4</b> 播放器 · 重新设计</div>
+    <h2>给播放器一个自己的样子</h2>
+    <p class="lead2">现在的播放器是「上下两条黑色渐变 + 一根细进度条 + 一排图标」，和 YouTube、B 站、PotPlayer 几乎一模一样，盖住 logo 就认不出是谁家的。下面三个方向都只改我们自己画的那一层（进度条、控制条、中央反馈），功能和「一次点击 / 两次点击 / 侧面板」的分层不变。</p>
+    <div class="po-why">
+      <div class="old"><img src="assets/player-old.jpg" alt="现在的播放器截图"><span class="lb">现在</span></div>
+      <ul>
+        <li>形状、排布、渐变都是行业默认值，没有用到 NipaPlay 已经定下来的任何东西：下划标注、胶囊、水手领三线、格子。</li>
+        <li>弹幕密度曲线是唯一的特色，但它是一条孤零零的灰色山脊，和进度条是两样东西。</li>
+        <li>番剧特有的结构（OP、A/B 部分、ED、预告）在进度条上看不出来。</li>
+      </ul>
+    </div>
+  </header>
+
+  <section class="dir" id="dA" data-dir="A">
+    <div class="dir-hd"><span class="dir-k">A</span><div>
+      <h3>标注 <span class="rec">推荐</span></h3>
+      <p>进度条本身就是一道「下划标注」：当前时间压在主题色胶囊上，和全 App 的文字强调是同一个形状。弹幕热度直接画成进度条的粗细。</p>
+    </div></div>
+    <div class="dir-tools"><span class="seg"><span data-mode="play" class="on">控制层</span><span data-mode="hover">悬停进度条</span><span data-mode="pause">暂停</span><span data-mode="hidden">看片时</span></span><span class="small muted">都可以直接点：播放、拖进度条、点 ☆、开关弹幕、发弹幕</span></div>
+    <div class="stage-wrap"><div class="stage"></div></div>
+    <div class="grid g3 notes">
+      <div class="card"><span class="k">签名</span><h4>时间被「标注」出来</h4><ul>
+        <li>已播放的部分是一根主题色胶囊，当前时间骑在胶囊头上，胶囊压住字的底边、比字多出 0.4 个字宽，参数和文字强调完全一样。</li>
+        <li>弹幕越密，进度条越粗；最密的两处标 ☆，点一下跳过去。</li>
+        <li>进度条按 MKV 章节断开（序幕 / OP / A / B / ED / 预告），没有章节就是一整条。</li>
+      </ul></div>
+      <div class="card"><span class="k">排版</span><h4>杂志式，去掉顶部黑条</h4><ul>
+        <li>片名和集数挪到左下角，水手领三线做引子，像一页杂志的标题。顶部只留两个角上的按钮，不再有整条渐变。</li>
+        <li>右侧的字幕、音轨、倍速直接写出当前值（简中、日语、1.0×），不用点开就知道状态。</li>
+        <li>「弹幕」开关用文字加下划标注表示开启，关掉时胶囊收回去。</li>
+      </ul></div>
+      <div class="card"><span class="k">动效 · 主题色 · 实现</span><h4>胶囊头会弹</h4><ul>
+        <li>点击或拖动进度条，胶囊头连同时间用 bouncy 弹到新位置；悬停时章节名淡入，预览帧从 0.9 弹出。</li>
+        <li>主题色 3 处：进度胶囊、「弹幕」标注、发送按钮。</li>
+        <li>全部是形状和文字，任何平台都能画；需要 bern 提供文字宽度（和下划标注是同一个需求）。</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="dir" id="dB" data-dir="B">
+    <div class="dir-hd"><span class="dir-k">B</span><div>
+      <h3>胶囊岛</h3>
+      <p>控制层是一颗浮在画面上的毛玻璃胶囊，其他东西都从它身上长出来：悬停进度条时向上长出预览，点字幕或倍速时长成选项卡，发弹幕时收窄变成输入框。</p>
+    </div></div>
+    <div class="dir-tools"><span class="seg"><span data-mode="play" class="on">控制层</span><span data-mode="hover">悬停进度条</span><span data-mode="sub">字幕选项</span><span data-mode="say">发弹幕</span><span data-mode="hidden">看片时</span></span><span class="small muted">点字幕、1.0×、纸飞机试试形变</span></div>
+    <div class="stage-wrap"><div class="stage"></div></div>
+    <div class="grid g3 notes">
+      <div class="card"><span class="k">签名</span><h4>一颗会变形的胶囊</h4><ul>
+        <li>没有任何黑色渐变，画面是三个方向里最干净的。</li>
+        <li>浮层不再从按钮旁边弹出，而是胶囊自己长高、变宽，同一个物体换形状。</li>
+        <li>左上角片名、右上角工具也是小胶囊，和 logo 的软糖高光同一种形状。</li>
+      </ul></div>
+      <div class="card"><span class="k">动效</span><h4>果冻感最强</h4><ul>
+        <li>宽和高各用一个 jelly 弹簧，周期差 10%，变形时会轻轻抖一下。</li>
+        <li>隐藏时缩小下沉，出现时弹回。</li>
+        <li>主题色 3 处：进度、弹幕开启的小圆点、发送。</li>
+      </ul></div>
+      <div class="card"><span class="k">代价</span><h4>浮层要自绘</h4><ul>
+        <li>选项卡是胶囊的一部分，不能用系统的 NSPopover / Flyout，需要 bern 支持自绘层上的毛玻璃和裁切。</li>
+        <li>所有按钮挤在一颗胶囊里，进度条只有约 400px，精确拖动比 A 差。</li>
+        <li>这种「浮岛」近两年苹果用得多，辨识度靠动效撑。</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="dir" id="dC" data-dir="C">
+    <div class="dir-hd"><span class="dir-k">C</span><div>
+      <h3>水手服</h3>
+      <p>底部控制区是一块藏青色的「领子」，上缘三条白线就是水手领的三线，中间那条兼做进度条；播放头是一截主题色的领巾尾巴。</p>
+    </div></div>
+    <div class="dir-tools"><span class="seg"><span data-mode="play" class="on">控制层</span><span data-mode="hover">悬停进度条</span><span data-mode="drag">拖动</span><span data-mode="hidden">看片时</span></span><span class="small muted">拖动进度条，领巾会跟着甩</span></div>
+    <div class="stage-wrap"><div class="stage"></div></div>
+    <div class="grid g3 notes">
+      <div class="card"><span class="k">签名</span><h4>一眼就是 JK</h4><ul>
+        <li>藏青领子 + 三条白线 + 红领巾，是三个方向里二次元味最重、最好认的。</li>
+        <li>领子表面带一层很淡的斜纹，和格子纹规格里的 45° 斜纹是同一层。</li>
+        <li>章节在三条线上一起断开，像领子的接缝。</li>
+      </ul></div>
+      <div class="card"><span class="k">动效</span><h4>领巾会甩</h4><ul>
+        <li>控制区像抽屉一样从底部弹出。</li>
+        <li>拖动或跳转时，领巾尾巴按速度往后甩，再用 jelly 摆回来。</li>
+        <li>主题色 3 处：进度和领巾（算一处）、弹幕开关、发送。</li>
+      </ul></div>
+      <div class="card"><span class="k">代价</span><h4>会挡住画面</h4><ul>
+        <li>领子是不透明的，控制层出现时会盖住画面最下面的 126px（字幕会被顶上去）。</li>
+        <li>藏青色和群青、荧绿主题色放在一起不如绯红好看。</li>
+        <li>离「二次元是布料，不是贴纸」那条线最近，看久了可能腻。</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="dir">
+    <h3 style="margin:0 0 6px">怎么选</h3>
+    <div class="tbl-wrap cmp"><table>
+      <thead><tr><th></th><th>A 标注</th><th>B 胶囊岛</th><th>C 水手服</th></tr></thead>
+      <tbody>
+        <tr><td>辨识度</td><td class="dots">●●●●○</td><td class="dots">●●●○○</td><td class="dots">●●●●●</td></tr>
+        <tr><td>画面干净</td><td class="dots">●●●●○</td><td class="dots">●●●●●</td><td class="dots">●●○○○</td></tr>
+        <tr><td>动效存在感</td><td class="dots">●●●○○</td><td class="dots">●●●●●</td><td class="dots">●●●●○</td></tr>
+        <tr><td>和现有规范一致</td><td>直接复用下划标注、水手领三线</td><td>胶囊形状一致；浮层要破例自绘</td><td>用到水手领三线和斜纹；领子算新增的大面积表面</td></tr>
+        <tr><td>实现成本</td><td>低：形状 + 文字</td><td>中：自绘浮层、毛玻璃裁切</td><td>低：形状 + 一个摆动弹簧</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout"><p><b>推荐 A。</b>它把你已经挑好的下划标注用在了播放器里最常被看到的地方，不新增任何视觉元素，整个 App 读起来是一套语言。三个方向的零件也可以混用，比如 A 的进度条配 B 的「看片时缩成小胶囊」，或者 A 的布局配 C 的领巾播放头。选好之后我再改交互原型和文档 9.4 节。</p></div>
+  </section>
+</main>
+
+<div class="dock" role="toolbar" aria-label="显示设置">
+  <button data-set-accent="rose" title="绯红"><span class="sw" style="background:#FF2E55"></span></button>
+  <button data-set-accent="blue" title="群青"><span class="sw" style="background:#2A51D4"></span></button>
+  <button data-set-accent="mint" title="荧绿"><span class="sw" style="background:#07FF94"></span></button>
+  <span class="sep"></span>
+  <button id="themeBtn" title="切换明暗"></button>
+</div>
+
+<script src="core.js"></script>
+<script>
+(() => {
+  'use strict';
+  const { $, $$, svg, TOKENS, Spring, run, tween, cancel, bindJelly, toast, RM, root } = NP;
+
+  /* ------------------------------------------------------------------
+     数据：一集 24:15 的番剧，带章节和弹幕热度
+     ------------------------------------------------------------------ */
+  const DUR = 1455, T0 = 552, W = 1200;
+  const CH = [
+    { t: 0, n: '序幕', s: '序幕' }, { t: 92, n: '片头', s: 'OP' }, { t: 182, n: 'A 部分', s: 'A' },
+    { t: 700, n: 'B 部分', s: 'B' }, { t: 1295, n: '片尾', s: 'ED' }, { t: 1385, n: '下集预告', s: '预告' },
+  ];
+  const PEAKS = [{ t: 342, n: '名场面', c: '1.2k' }, { t: 1098, n: '高能', c: '2.4k' }];
+  const g = (x, m, s) => Math.exp(-(((x - m) / s) ** 2));
+  const dens = t => Math.max(0.05, Math.min(1, 0.13 + 0.05 * Math.sin(t / 47) + 0.04 * Math.sin(t / 13 + 1.7)
+    + 0.3 * g(t, 137, 38) + 0.85 * g(t, 342, 20) + 0.22 * g(t, 365, 60) + 0.3 * g(t, 640, 46)
+    + 0.18 * g(t, 905, 80) + 0.95 * g(t, 1098, 24) + 0.28 * g(t, 1130, 70) + 0.26 * g(t, 1340, 40)));
+  const chapterAt = t => CH.filter(c => t >= c.t).pop();
+  const fmt = s => { s = Math.max(0, Math.floor(s)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const LINES = [['前方高能！！', ''], ['名场面来了', ''], ['这段作画太顶了', '#FFD24A'], ['OP 好听', ''], ['再上映——', ''], ['来了来了', '#8EE3FF'], ['泪目', ''], ['这里有伏笔', ''], ['下周见', ''], ['快跑！', '#FFB3C7']];
+  const STAR = '<svg viewBox="0 0 24 24"><path d="M12 2.8l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 16.8l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z" fill="currentColor"/></svg>';
+  const gapsSvg = h => CH.slice(1).map(c => `<rect x="${(c.t / DUR) * W - 1.5}" y="-20" width="3" height="${h + 40}" fill="#000"/>`).join('');
+  const prevPos = t => `${30 + (t / DUR) * 40}% ${20 + ((t * 7) % 60)}%`;
+
+  const base = cls => `<img class="pv-video" src="assets/still1.jpg" alt="">
+    <div class="dm-layer ${cls}">${LINES.map(([t, c], i) => { const d = 11 + ((i * 7) % 6); return `<span style="top:${(i % 9) * 40}px;animation-duration:${d}s;animation-delay:${-((i * 3.7) % d)}s${c ? ';color:' + c : ''}">${t}</span>`; }).join('')}</div>
+    <div class="pv-fb"></div>`;
+
+  /* ------------------------------------------------------------------
+     三个方向
+     ------------------------------------------------------------------ */
+  const DIRS = {};
+
+  /* ---------- A · 标注 ---------- */
+  DIRS.A = {
+    html() {
+      let top = '', bot = '';
+      for (let x = 0; x <= W; x += 3) { const h = 1.1 + dens((x / W) * DUR) * 5; top += `L${x} ${(12 - h).toFixed(2)} `; bot = `L${x} ${(12 + h).toFixed(2)} ` + bot; }
+      const rib = `M0 12 ${top}${bot}Z`;
+      return base('ma-dml') + `
+        <div class="ma-scrim fx"></div><div class="ma-corner fx"></div><div class="ma-corner r fx"></div>
+        <div class="ma-top fx"><span class="pbtn" data-a="toast" data-msg="返回：视频缩回迷你播放器" title="返回">${svg('chev-l')}</span><span class="grow"></span><span class="pbtn" data-a="toast" data-msg="弹幕匹配：系统模态面板" title="弹幕匹配">${svg('link')}</span><span class="pbtn" data-a="toast" data-msg="更多：截图、跳过片头、播放信息" title="更多">${svg('more')}</span></div>
+        <div class="ma-title fx"><div class="ma-show"><span class="sailor"></span>只有我不存在的城市</div><div class="ma-ep">第 1 集<span>走马灯</span></div></div>
+        <div class="ma-tl fx" data-tl>
+          ${PEAKS.map(p => `<span class="ma-star" data-seek="${p.t}" data-x="${(p.t / DUR) * W}" style="left:${(p.t / DUR) * W}px;top:${26 + 12 - (1.1 + dens(p.t) * 5) - 20}px" title="${p.n} · ${p.c} 条弹幕">${STAR}</span>`).join('')}
+          <svg class="ma-rib" width="${W}" height="24" viewBox="0 0 ${W} 24">
+            <defs><mask id="maGap" maskUnits="userSpaceOnUse" x="-10" y="-20" width="${W + 20}" height="64"><rect x="-10" y="-20" width="${W + 20}" height="64" fill="#fff"/>${gapsSvg(24)}</mask>
+            <clipPath id="maPlayed"><rect class="clip" x="0" y="-10" width="0" height="44"/></clipPath></defs>
+            <g mask="url(#maGap)"><path class="r0" d="${rib}"/><path class="r1" d="${rib}" clip-path="url(#maPlayed)"/><rect class="ghost" x="0" y="9" width="0" height="6" rx="3"/><rect class="band" x="0" y="9" width="0" height="6" rx="3"/></g>
+            <rect class="hl" x="0" y="-2" width="1.5" height="28" rx=".75"/>
+          </svg>
+          <div class="ma-now"></div><div class="ma-dur">${fmt(DUR)}</div>
+          <div class="ma-chs">${CH.map(c => `<span style="left:${(c.t / DUR) * W + (c.t ? 4 : 0)}px">${c.s}</span>`).join('')}</div>
+          <div class="ma-prev" style="display:none"><div class="prev-fr"><img src="assets/still1.jpg" alt=""></div><div class="tx"><b></b><span></span></div></div>
+        </div>
+        <div class="ma-ctl fx">
+          <div class="l"><span class="pbtn play" data-a="play" title="播放 / 暂停">${svg('pause')}</span><span class="pbtn" data-a="toast" data-msg="下一集：第 2 集「逃走」" title="下一集">${svg('next')}</span><span class="vol"><span class="pbtn" title="音量">${svg('vol')}</span><span class="sl-v"><b></b></span></span></div>
+          <div class="c"><span class="ma-txt ma-dm on" data-a="dm" data-j="M" title="开关弹幕（D）">${svg('danmaku')}<span class="lb">弹幕</span></span><label class="ma-in"><input placeholder="发个友善的弹幕…" maxlength="40"><span class="send" data-a="send">发送</span></label></div>
+          <div class="r"><span class="ma-txt" data-j="M" data-a="toast" data-msg="字幕：系统浮层列出字幕轨">${svg('cc')}简中</span><span class="ma-txt" data-j="M" data-a="toast" data-msg="音轨：日本語 FLAC 2.0">${svg('audio')}日语</span><span class="ma-txt" data-j="M" data-a="rate">1.0×</span><span class="pbtn" data-a="toast" data-msg="画质增强：Anime4K" title="画质增强">${svg('sparkle')}</span><span class="pbtn" data-a="toast" data-msg="播放设置：右侧面板" title="播放设置">${svg('sliders')}</span><span class="pbtn" title="画中画" data-a="toast" data-msg="画中画">${svg('pip')}</span><span class="pbtn" title="全屏" data-a="toast" data-msg="全屏">${svg('full')}</span></div>
+        </div>`;
+    },
+    init(st) {
+      const el = st.el;
+      st.A = { clip: $('.clip', el), band: $('.band', el), ghost: $('.ghost', el), hl: $('.hl', el), now: $('.ma-now', el), dur: $('.ma-dur', el), stars: $$('.ma-star', el), prev: $('.ma-prev', el) };
+      st.A.now.textContent = fmt(T0);
+    },
+    render(st, v) {
+      const A = st.A, x = (v / DUR) * W;
+      A.clip.setAttribute('width', x); A.band.setAttribute('width', Math.max(0, x));
+      const s = fmt(v); if (A.now.textContent !== s) A.now.textContent = s;
+      const lw = A.lw || (A.lw = A.now.offsetWidth);
+      const left = Math.max(0, x - 8 - lw);           /* 0.4em @ 20px：胶囊比字多出 8px */
+      A.now.style.transform = `translateX(${left}px)`;
+      A.dur.style.opacity = left + lw > W - 70 ? '0' : '';
+      A.stars.forEach(e => e.classList.toggle('hide', Math.abs(+e.dataset.x - (left + lw / 2)) < lw / 2 + 16));
+      if (st.hover != null) this.hover(st, st.hover);
+    },
+    hover(st, f) {
+      const A = st.A, on = f != null;
+      st.el.classList.toggle('tl-on', on);
+      if (!on) { A.ghost.setAttribute('width', 0); if (A.prev.style.display !== 'none') { A.prev.style.display = 'none'; } A.pv = false; return; }
+      const x = f * W, hx = (st.hs.v / DUR) * W, t = f * DUR;
+      A.hl.setAttribute('x', x - 0.75);
+      A.ghost.setAttribute('x', hx); A.ghost.setAttribute('width', Math.max(0, x - hx));
+      A.prev.style.left = clamp(x, 96, W - 96) - 96 + 'px';
+      $('b', A.prev).textContent = fmt(t); $('span', A.prev).textContent = chapterAt(t).n;
+      $('img', A.prev).style.objectPosition = prevPos(t);
+      if (!A.pv) { A.pv = true; pop(A.prev); }
+    },
+    dm(st) { const b = $('.ma-dm', st.el); b.classList.toggle('on', st.dmOn); b.firstElementChild.outerHTML = svg(st.dmOn ? 'danmaku' : 'danmaku-off'); },
+  };
+
+  /* ---------- B · 胶囊岛 ---------- */
+  const PGW = 404;
+  DIRS.B = {
+    html() {
+      const gaps = CH.slice(1).map(c => (c.t / DUR) * PGW);
+      let m = 'linear-gradient(90deg', p = 0;
+      gaps.forEach(x => { m += `, #000 ${p}px ${x - 1}px, transparent ${x - 1}px ${x + 1}px`; p = x + 1; });
+      m += `, #000 ${p}px 100%)`;
+      return base('il-dml') + `
+        <div class="il-cap l glass fx"><span class="pbtn sm" data-a="toast" data-msg="返回：视频缩回迷你播放器">${svg('chev-l')}</span><b>只有我不存在的城市</b><span class="m">第 1 集 · 走马灯</span></div>
+        <div class="il-cap r glass fx"><span class="pbtn sm" data-a="toast" data-msg="弹幕匹配" title="弹幕匹配">${svg('link')}</span><span class="pbtn sm" data-a="toast" data-msg="播放设置：右侧面板" title="播放设置">${svg('sliders')}</span><span class="pbtn sm" data-a="toast" data-msg="画中画" title="画中画">${svg('pip')}</span><span class="pbtn sm" data-a="toast" data-msg="更多：截图、跳过片头、播放信息" title="更多">${svg('more')}</span></div>
+        <div class="il glass">
+          <div class="il-up">
+            <div class="il-pane" data-pane="prev"><div class="il-fr prev-fr"><img src="assets/still1.jpg" alt=""><div class="tm"><b></b><span></span></div></div><div class="il-chs"></div></div>
+            <div class="il-pane" data-pane="sub"><div class="il-opts"><span class="k">字幕</span>${['简体中文', '日本語', '关闭', '添加外挂…'].map((x, i) => `<span class="il-chip${i === 0 ? ' on' : ''}" data-chip="sub" data-j="M">${x}</span>`).join('')}</div></div>
+            <div class="il-pane" data-pane="rate"><div class="il-opts"><span class="k">倍速</span>${[0.5, 0.75, 1, 1.25, 1.5, 2].map(r => `<span class="il-chip${r === 1 ? ' on' : ''}" data-chip="rate" data-r="${r}" data-j="M">${r}×</span>`).join('')}</div></div>
+          </div>
+          <div class="il-row main">
+            <span class="pbtn il-play" data-a="play" title="播放 / 暂停">${svg('pause')}</span><span class="pbtn" data-a="toast" data-msg="下一集：第 2 集「逃走」" title="下一集">${svg('next')}</span><span class="vol"><span class="pbtn" title="音量">${svg('vol')}</span><span class="sl-v"><b></b></span></span>
+            <span class="il-t now"></span>
+            <div class="il-pg" data-tl><div class="msk" style="-webkit-mask-image:${m};mask-image:${m}"><div class="tr"></div><div class="gh"></div><div class="bd"></div></div>${PEAKS.map(pk => `<i class="pk" style="left:${(pk.t / DUR) * PGW}px" title="${pk.n}"></i>`).join('')}</div>
+            <span class="il-t">${fmt(DUR)}</span><i class="il-sep"></i>
+            <span class="pbtn il-dm on" data-a="dm" title="开关弹幕">${svg('danmaku')}<i class="led"></i></span>
+            <span class="pbtn" data-a="say" title="发弹幕">${svg('send')}</span>
+            <span class="pbtn" data-a="pane" data-p="sub" title="字幕">${svg('cc')}</span>
+            <span class="il-txt" data-a="pane" data-p="rate" data-j="M">1.0×</span>
+            <span class="pbtn" data-a="toast" data-msg="全屏" title="全屏">${svg('full')}</span>
+          </div>
+          <div class="il-row say">
+            <span class="pbtn il-dm on" data-a="dm">${svg('danmaku')}<i class="led"></i></span>
+            <label class="il-say"><input placeholder="发个友善的弹幕…" maxlength="40"><span class="send" data-a="send">发送</span></label>
+            <span class="pbtn sm" data-a="unsay" title="收起">${svg('x')}</span>
+          </div>
+        </div>`;
+    },
+    init(st) {
+      const el = st.el, il = $('.il', el);
+      const chs = $('.il-chs', el), pg = $('.il-pg', el);
+      st.B = { il, pg, bd: $('.bd', el), gh: $('.gh', el), now: $('.il-t.now', el), fr: $('.il-fr', el), pane: null,
+        w: new Spring(880), h: new Spring(60), anim: null };
+      requestAnimationFrame(() => {
+        const ox = pg.offsetLeft + $('.il-row.main', el).offsetLeft;
+        chs.innerHTML = CH.map(c => `<span style="left:${ox + (c.t / DUR) * PGW + (c.t ? 3 : 0)}px">${c.s}</span>`).join('');
+        st.B.ox = ox;
+      });
+    },
+    size(st, w, h) {
+      const B = st.B;
+      B.w.cfg(TOKENS.jelly).target = w; B.h.cfg({ T: TOKENS.jelly.T * 0.9, z: TOKENS.jelly.z }).target = h;
+      const apply = () => { B.il.style.width = B.w.v + 'px'; B.il.style.height = B.h.v + 'px'; };
+      if (RM()) { B.w.snap(); B.h.snap(); apply(); return; }
+      if (!B.anim) B.anim = run({ sp: [B.w, B.h], eps: 0.05, apply, done: () => { B.anim = null; } });
+    },
+    layout(st) {
+      const B = st.B, saying = B.il.classList.contains('saying');
+      const pane = saying ? null : B.pane || (st.hover != null ? 'prev' : null);
+      $$('.il-pane', st.el).forEach(p => p.classList.toggle('on', p.dataset.pane === pane));
+      B.il.classList.toggle('hov', pane === 'prev');
+      this.size(st, saying ? 600 : 880, pane === 'prev' ? 184 : pane ? 122 : 60);
+    },
+    render(st, v) {
+      const B = st.B; B.bd.style.width = (v / DUR) * PGW + 'px';
+      const s = fmt(v); if (B.now.textContent !== s) B.now.textContent = s;
+      if (st.hover != null) this.hover(st, st.hover, true);
+    },
+    hover(st, f, quiet) {
+      const B = st.B;
+      if (f == null) { B.gh.style.width = '0'; if (!quiet) this.layout(st); return; }
+      const x = f * PGW, hx = (st.hs.v / DUR) * PGW, t = f * DUR;
+      B.gh.style.left = hx + 'px'; B.gh.style.width = Math.max(0, x - hx) + 'px';
+      B.fr.style.left = clamp((B.ox || 216) + x - 84, 14, 880 - 182) + 'px';
+      $('.tm b', B.fr).textContent = fmt(t); $('.tm span', B.fr).textContent = chapterAt(t).n;
+      $('img', B.fr).style.objectPosition = prevPos(t);
+      if (!quiet) { B.pane = null; this.layout(st); }
+    },
+    pane(st, p) { const B = st.B; B.pane = B.pane === p ? null : p; B.il.classList.remove('saying'); this.layout(st); },
+    say(st, on) { const B = st.B; B.pane = null; B.il.classList.toggle('saying', on); this.layout(st); if (on) setTimeout(() => $('.il-say input', st.el).focus({ preventScroll: true }), 120); },
+    reset(st) { st.B.pane = null; st.B.il.classList.remove('saying'); this.layout(st); },
+    dm(st) { $$('.il-dm', st.el).forEach(b => { b.classList.toggle('on', st.dmOn); b.firstElementChild.outerHTML = svg(st.dmOn ? 'danmaku' : 'danmaku-off'); }); },
+  };
+
+  /* ---------- C · 水手服 ---------- */
+  DIRS.C = {
+    html() {
+      const ys = [7, 15, 23];
+      return base('sc-dml') + `
+        <div class="sc-shade fx"></div>
+        <div class="sc-top fx"><span class="pbtn" data-a="toast" data-msg="返回：视频缩回迷你播放器">${svg('chev-l')}</span><div class="ttl"><b>只有我不存在的城市</b><span>第 1 集 · 走马灯</span></div><span class="grow"></span><span class="pbtn" data-a="toast" data-msg="弹幕匹配" title="弹幕匹配">${svg('link')}</span><span class="pbtn" data-a="toast" data-msg="更多：截图、跳过片头、播放信息" title="更多">${svg('more')}</span></div>
+        <div class="sc-prev" style="display:none"><div class="prev-fr"><img src="assets/still1.jpg" alt=""></div><div class="tx"><b></b><span></span></div></div>
+        <div class="sc-col">
+          <div class="sc-tl" data-tl>
+            <svg class="ln" width="${W}" height="30" viewBox="0 0 ${W} 30">
+              <defs><mask id="scGap" maskUnits="userSpaceOnUse" x="-10" y="-20" width="${W + 20}" height="70"><rect x="-10" y="-20" width="${W + 20}" height="70" fill="#fff"/>${gapsSvg(30)}</mask></defs>
+              <g mask="url(#scGap)">${ys.map(y => `<rect class="s" x="0" y="${y - 0.75}" width="${W}" height="1.5"/>`).join('')}<rect class="ghost" x="0" y="12.5" width="0" height="5" rx="2.5"/><rect class="band" x="0" y="12.5" width="0" height="5" rx="2.5"/></g>
+            </svg>
+            <svg class="sc-rib" viewBox="0 0 14 25"><path d="M1 0H13V23L7 17.5L1 23Z"/><rect class="knot" x="1" y="0" width="12" height="4"/></svg>
+            <div class="sc-chs">${CH.map(c => `<span style="left:${(c.t / DUR) * W + (c.t ? 4 : 0)}px">${c.s}</span>`).join('')}</div>
+          </div>
+          <div class="sc-row">
+            <div class="l"><span class="pbtn sc-play" data-a="play" title="播放 / 暂停">${svg('pause')}</span><span class="pbtn" data-a="toast" data-msg="下一集：第 2 集「逃走」" title="下一集">${svg('next')}</span><span class="vol"><span class="pbtn" title="音量">${svg('vol')}</span><span class="sl-v"><b></b></span></span><span class="sc-time"><span class="now"></span> <i>/ ${fmt(DUR)}</i></span></div>
+            <div class="c"><span class="pbtn sc-dm on" data-a="dm" title="开关弹幕">${svg('danmaku')}</span><label class="sc-in"><input placeholder="发个友善的弹幕…" maxlength="40"><span class="send" data-a="send">发送</span></label></div>
+            <div class="r"><span class="pbtn" data-a="toast" data-msg="字幕：系统浮层列出字幕轨" title="字幕">${svg('cc')}</span><span class="pbtn" data-a="toast" data-msg="音轨" title="音轨">${svg('audio')}</span><span class="sc-txt" data-a="rate" data-j="M">1.0×</span><span class="pbtn" data-a="toast" data-msg="画质增强" title="画质增强">${svg('sparkle')}</span><span class="pbtn" data-a="toast" data-msg="播放设置：右侧面板" title="播放设置">${svg('sliders')}</span><span class="pbtn" data-a="toast" data-msg="画中画" title="画中画">${svg('pip')}</span><span class="pbtn" data-a="toast" data-msg="全屏" title="全屏">${svg('full')}</span></div>
+          </div>
+        </div>`;
+    },
+    init(st) {
+      const el = st.el;
+      st.C = { band: $('.sc-tl .band', el), ghost: $('.sc-tl .ghost', el), rib: $('.sc-rib', el), now: $('.sc-time .now', el), prev: $('.sc-prev', el),
+        ang: new Spring(0).cfg(TOKENS.jelly), ar: null, x: 0 };
+    },
+    rib(st) { const C = st.C; C.rib.style.transform = `translateX(${C.x - 7}px) rotate(${C.ang.v.toFixed(2)}deg)`; },
+    render(st, v, vel) {
+      const C = st.C; C.x = (v / DUR) * W;
+      C.band.setAttribute('width', Math.max(0, C.x));
+      const s = fmt(v); if (C.now.textContent !== s) C.now.textContent = s;
+      /* 领巾：按播放头速度往后甩（往右走就向左甩），再由 jelly 弹簧摆回 */
+      C.ang.target = clamp((vel || 0) * 0.014, -32, 32);
+      if (!RM() && Math.abs(C.ang.target - C.ang.v) > 0.05 && !C.ar) C.ar = run({ sp: [C.ang], eps: 0.02, apply: () => this.rib(st), done: () => { C.ar = null; } });
+      this.rib(st);
+      if (st.hover != null) this.hover(st, st.hover);
+    },
+    hover(st, f) {
+      const C = st.C, on = f != null;
+      st.el.classList.toggle('tl-on', on);
+      if (!on) { C.ghost.setAttribute('width', 0); C.prev.style.display = 'none'; C.pv = false; return; }
+      const x = f * W, hx = (st.hs.v / DUR) * W, t = f * DUR;
+      C.ghost.setAttribute('x', hx); C.ghost.setAttribute('width', Math.max(0, x - hx));
+      C.prev.style.left = 40 + clamp(x, 92, W - 92) - 92 + 'px';
+      $('b', C.prev).textContent = fmt(t); $('span', C.prev).textContent = chapterAt(t).n;
+      $('img', C.prev).style.objectPosition = prevPos(t);
+      if (!C.pv) { C.pv = true; pop(C.prev); }
+    },
+    dm(st) { const b = $('.sc-dm', st.el); b.classList.toggle('on', st.dmOn); b.innerHTML = svg(st.dmOn ? 'danmaku' : 'danmaku-off'); },
+  };
+
+  /* ------------------------------------------------------------------
+     舞台
+     ------------------------------------------------------------------ */
+  function pop(el) {
+    el.style.display = '';
+    if (RM()) return;
+    cancel(el._tw);
+    el._tw = tween(TOKENS.bouncy, p => { el.style.transform = `scale(${0.9 + 0.1 * p})`; el.style.opacity = String(Math.min(1, p * 2)); });
+  }
+  function fb(st, icon) {
+    const c = $('.pv-fb', st.el); c.innerHTML = svg(icon); cancel(c._tw); clearTimeout(c._h);
+    c._tw = tween(TOKENS.jelly, p => { c.style.transform = `scale(${0.6 + 0.4 * p})`; c.style.opacity = String(Math.min(1, p * 2)); });
+    c._h = setTimeout(() => { c._tw = tween(TOKENS.smooth, p => { c.style.opacity = String(Math.max(0, 1 - p)); c.style.transform = `scale(${1 + 0.15 * Math.min(1, p)})`; }); }, 420);
+  }
+
+  const stages = [];
+  function makeStage(sec) {
+    const dir = sec.dataset.dir, D = DIRS[dir], wrap = $('.stage-wrap', sec), host = $('.stage', sec);
+    host.innerHTML = `<div class="pv"></div>`;
+    const el = host.firstElementChild;
+    const st = { dir, D, sec, el, t: T0, playing: true, dmOn: true, mode: 'play', rate: 1, hover: null, anim: null, drag: false };
+    st.hs = new Spring(T0);
+    el.innerHTML = D.html(st);
+    D.init(st);
+    $$('.pbtn', el).forEach(b => bindJelly(b, 'S'));
+    $$('[data-j]', el).forEach(b => bindJelly(b, b.dataset.j));
+    const fit = () => { const s = wrap.clientWidth / 1280; host.style.transform = `scale(${s})`; wrap.style.height = 720 * s + 'px'; };
+    new ResizeObserver(fit).observe(wrap); fit();
+    st.render = () => D.render(st, st.hs.v, st.hs.vel);
+    requestAnimationFrame(() => st.render());
+
+    /* 进度条：悬停 / 点击 / 拖动 */
+    const tl = $('[data-tl]', el);
+    const frac = e => { const r = tl.getBoundingClientRect(); return clamp((e.clientX - r.left) / r.width, 0, 1); };
+    tl.addEventListener('pointermove', e => { if (e.target.closest('.ma-star')) return; setHover(st, frac(e)); if (st.drag) seek(st, frac(e) * DUR); });
+    tl.addEventListener('pointerleave', () => { if (!st.drag && st.mode !== 'hover' && st.mode !== 'drag') setHover(st, null); });
+    tl.addEventListener('pointerdown', e => { if (e.button > 0 || e.target.closest('[data-seek]')) return; st.drag = true; tl.setPointerCapture(e.pointerId); seek(st, frac(e) * DUR); });
+    const end = () => { st.drag = false; };
+    tl.addEventListener('pointerup', end); tl.addEventListener('pointercancel', end);
+
+    /* 点击分发 */
+    el.addEventListener('click', e => {
+      const a = e.target.closest('[data-a]'), sk = e.target.closest('[data-seek]'), chip = e.target.closest('[data-chip]');
+      if (sk) { seek(st, +sk.dataset.seek); toast(el, `跳到弹幕高峰 · ${fmt(+sk.dataset.seek)}`); return; }
+      if (chip) {
+        $$(`[data-chip="${chip.dataset.chip}"]`, el).forEach(x => x.classList.toggle('on', x === chip));
+        if (chip.dataset.r) setRate(st, +chip.dataset.r);
+        setTimeout(() => D.pane(st, st.B.pane), 260);
+        return;
+      }
+      if (a) {
+        const k = a.dataset.a;
+        if (k === 'play') return setPlaying(st, !st.playing, true);
+        if (k === 'dm') { st.dmOn = !st.dmOn; D.dm(st); $('.dm-layer', el).style.display = st.dmOn ? '' : 'none'; return; }
+        if (k === 'send') return sendDm(st, a);
+        if (k === 'toast') return toast(el, a.dataset.msg);
+        if (k === 'rate') { const R = [1, 1.25, 1.5, 2, 0.75]; setRate(st, R[(R.indexOf(st.rate) + 1) % R.length]); return; }
+        if (k === 'pane') return D.pane(st, a.dataset.p);
+        if (k === 'say') return D.say(st, true);
+        if (k === 'unsay') return D.say(st, false);
+        return;
+      }
+      if (!e.target.closest('.fx, .il, .sc-col, [data-tl], label')) setPlaying(st, !st.playing, true);
+    });
+    $$('input', el).forEach(inp => inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); sendDm(st, inp); } if (e.key === 'Escape' && st.dir === 'B') D.say(st, false); }));
+
+    /* 「看片时」：鼠标一动就出现，2.2 秒后隐藏 */
+    let hideT = 0;
+    el.addEventListener('pointermove', () => {
+      if (st.mode !== 'hidden') return;
+      el.classList.remove('st-off'); clearTimeout(hideT);
+      hideT = setTimeout(() => { if (st.mode === 'hidden' && st.playing && !st.drag) el.classList.add('st-off'); }, 2200);
+    });
+
+    /* 状态切换 */
+    $$('[data-mode]', sec).forEach(b => b.addEventListener('click', () => setMode(st, b.dataset.mode)));
+    stages.push(st);
+    return st;
+  }
+
+  function setMode(st, m) {
+    st.mode = m;
+    $$('[data-mode]', st.sec).forEach(x => x.classList.toggle('on', x.dataset.mode === m));
+    st.D.reset && st.D.reset(st);
+    setPlaying(st, m !== 'pause', false);
+    st.el.classList.toggle('st-off', m === 'hidden');
+    setHover(st, m === 'hover' ? 760 / DUR : null);
+    if (m === 'sub') st.D.pane(st, 'sub');
+    if (m === 'say') st.D.say(st, true);
+    if (m === 'drag') {
+      const from = st.t < 900 ? st.t : 300, to = from + 430;
+      seek(st, from, false); setHover(st, to / DUR);
+      setTimeout(() => seek(st, to), 120);
+    }
+  }
+  function setHover(st, f) { st.hover = f; st.D.hover(st, f); }
+  function seek(st, t, anim = true) {
+    t = clamp(t, 0, DUR); st.t = t; st.hs.target = t;
+    if (!anim || RM()) { st.hs.snap(); st.render(); return; }
+    st.hs.cfg(TOKENS.bouncy);
+    if (!st.anim) st.anim = run({ sp: [st.hs], eps: 0.05, apply: () => st.render(), done: () => { st.anim = null; st.render(); } });
+  }
+  function setPlaying(st, on, feedback) {
+    st.playing = on;
+    st.el.classList.toggle('paused', !on);
+    $$('[data-a="play"]', st.el).forEach(b => (b.innerHTML = svg(on ? 'pause' : 'play')));
+    if (feedback) fb(st, on ? 'play' : 'pause');
+  }
+  function setRate(st, r) {
+    st.rate = r;
+    $$('[data-a="rate"], .il-txt[data-p="rate"]', st.el).forEach(b => (b.textContent = r + '×'));
+    $$('[data-chip="rate"]', st.el).forEach(x => x.classList.toggle('on', +x.dataset.r === r));
+  }
+  function sendDm(st, from) {
+    const inp = from.tagName === 'INPUT' ? from : $('input', from.closest('label'));
+    if (!inp || !inp.value.trim()) { inp && inp.focus({ preventScroll: true }); return; }
+    const layer = $('.dm-layer', st.el), s = document.createElement('span');
+    s.className = 'mine'; s.textContent = inp.value.trim();
+    s.style.cssText = `top:${Math.floor(Math.random() * 5) * 40}px;animation-duration:9s;animation-iteration-count:1;animation-delay:0s;outline:1.5px solid rgba(255,255,255,.85);outline-offset:3px;border-radius:4px`;
+    layer.appendChild(s); setTimeout(() => s.remove(), 9200);
+    inp.value = '';
+    if (!st.dmOn) { st.dmOn = true; st.D.dm(st); layer.style.display = ''; }
+  }
+
+  setInterval(() => {
+    stages.forEach(st => {
+      if (!st.playing || st.drag) return;
+      st.t = Math.min(DUR, st.t + 0.25 * st.rate);
+      st.hs.target = st.t;
+      if (!st.anim) { st.hs.snap(); st.render(); }
+    });
+  }, 250);
+
+  $$('.dir[data-dir]').forEach(makeStage);
+
+  /* 明暗切换 */
+  const tb = $('#themeBtn');
+  NP.onTheme(t => { tb.innerHTML = svg(t === 'dark' ? 'sun' : 'moon'); });
+  NP.syncThemeUI();
+  tb.addEventListener('click', () => NP.setTheme(root.dataset.theme === 'dark' ? 'light' : 'dark'));
+  $$('.dock button').forEach(b => bindJelly(b, 'S'));
+})();
+</script>
+</body>
+</html>

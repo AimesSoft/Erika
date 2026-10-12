@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-170 -166 352 352" width="352" height="352" color="#16161C" role="img" aria-label="NipaPlay 播放图标 · 纯色剪影">
+  <title>NipaPlay 播放图标 · 纯色剪影</title>
+  <defs>
+    <path id="tri" d="M-18 -118 L-18 118 A18 18 0 0 0 8.66 133.78 L223.66 15.78 A18 18 0 0 0 223.66 -15.78 L8.66 -133.78 A18 18 0 0 0 -18 -118 Z"/>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="-200" y="-200" width="420" height="420">
+      <g transform="rotate(-12) translate(-72 0)">
+        <use href="#tri" fill="#FFFFFF"/>
+        <path d="M94.6 -50.7 L98.6 -20.2 L127.9 -11.1 L100.1 2.1 L100.5 32.8 L79.4 10.4 L50.3 20.3 L65 -6.7 L46.7 -31.3 L76.9 -25.6 Z" fill="#000000" stroke="#000000" stroke-width="7" stroke-linejoin="round"/>
+      </g>
+    </mask>
+  </defs>
+  <rect x="-200" y="-200" width="420" height="420" fill="currentColor" mask="url(#cut)"/>
+</svg>

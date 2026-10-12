@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-200 -196 412 412" width="412" height="412" role="img" aria-label="NipaPlay 播放图标 · 糖条">
+  <defs>
+    <path id="tri" d="M-18 -118 L-18 118 A18 18 0 0 0 8.66 133.78 L223.66 15.78 A18 18 0 0 0 223.66 -15.78 L8.66 -133.78 A18 18 0 0 0 -18 -118 Z"/>
+    <clipPath id="triClip"><use href="#tri"/></clipPath>
+  </defs>
+  <g transform="translate(12 15) rotate(-12) translate(-72 0)"><use href="#tri" fill="#7DB4F2" stroke="#7DB4F2" stroke-width="44" stroke-linejoin="round"/></g>
+  <g transform="rotate(-12) translate(-72 0)">
+    <use href="#tri" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="44" stroke-linejoin="round"/>
+    <g clip-path="url(#triClip)">
+      <g transform="translate(0 -118) rotate(28.76)">
+        <rect x="-120" y="-40" width="420" height="82" fill="#FF7FA8"/>
+        <rect x="-120" y="42" width="420" height="44" fill="#FFB938"/>
+        <rect x="-120" y="86" width="420" height="44" fill="#2FCB9E"/>
+        <rect x="-120" y="130" width="420" height="140" fill="#3CB8F4"/>
+      </g>
+    </g>
+    <circle cx="42" cy="-76" r="7.5" fill="#FFFFFF" fill-opacity=".9"/>
+  </g>
+</svg>

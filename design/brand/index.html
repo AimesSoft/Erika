@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-CN" data-accent="rose">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NipaPlay 标题字</title>
+<meta name="description" content="NipaPlay 标题字重绘：保留字母与日文的大小、位置和倾斜，重新设计播放图标，移除 Flutter 图形，全部矢量。">
+<link rel="icon" href="../assets/icon.png">
+<link rel="stylesheet" href="../doc.css">
+<style>
+  .sizes[style*="#8A90A0"] figure { color: rgba(255,255,255,.9); }
+  main.brand { max-width: 1120px; margin: 0 auto; padding: 48px 32px 120px; }
+  .hero { border-radius: 24px; background: var(--surface); border: 1px solid var(--line); padding: 56px 40px; display: grid; place-items: center; }
+  .hero img { width: min(100%, 860px); height: auto; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  .tile { border-radius: 20px; padding: 36px 28px; display: grid; place-items: center; min-height: 260px; position: relative; overflow: hidden; border: 1px solid var(--line); }
+  .tile img { width: 100%; height: auto; position: relative; }
+  .tile .lb { position: absolute; left: 16px; top: 12px; font-size: 12px; font-weight: 600; color: var(--text-3); z-index: 1; }
+  .tile.dark { background: #0E0E11; }
+  .tile.dark .lb { color: #8a8a93; }
+  .tile.light { background: #FFFFFF; }
+  .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
+  .cmp .tile { background: #D6DAE2; }
+  .cmp .tile .lb { color: #555a66; }
+  .cmp .tile.light { background: #FFFFFF; }
+  .cmp .tile.light .lb { color: var(--text-3); }
+  .var { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 20px; }
+  .var .card { padding: 18px; }
+  .var .card img { width: 100%; height: auto; margin: 8px 0 14px; }
+  .var .card .k { margin: 0; }
+  .var .card .icons { display: flex; align-items: flex-end; gap: 10px; margin: 0 0 12px; }
+  .var .card .icons img { width: auto; margin: 0; }
+  .var .card.rec { border-color: rgba(var(--accent-rgb), .55); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .12); }
+  .mono { width: 100%; aspect-ratio: 1016 / 404; -webkit-mask: url(nipaplay-logo-silhouette.svg) center / contain no-repeat; mask: url(nipaplay-logo-silhouette.svg) center / contain no-repeat; position: relative; }
+  .sizes { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-end; margin-top: 18px; padding: 28px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); }
+  .sizes figure { margin: 0; text-align: center; font-size: 12px; color: var(--text-3); }
+  .sizes img { display: block; height: auto; margin-bottom: 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+  .sw { display: flex; align-items: center; gap: 8px; font: 12px var(--mono); color: var(--text-2); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px 4px 5px; }
+  .sw i { width: 18px; height: 18px; border-radius: 50%; display: block; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+  @media (max-width: 1000px) { .var { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } }
+  @media (max-width: 760px) { main.brand { padding: 28px 16px 100px; } .pair, .cmp, .var { grid-template-columns: 1fr !important; } .hero { padding: 32px 16px; } }
+</style>
+</head>
+<body>
+<main class="brand">
+  <div class="eyebrow"><span class="sailor"></span><b>品牌</b> 标题字 v2 · 清新配色</div>
+  <h2>NipaPlay 标题字重绘</h2>
+  <p class="lead2">字母和日文沿用原 logo 的大小、位置和倾斜，重画成圆头等粗的矢量笔画；播放图标重新设计；左侧的 Flutter 图形去掉了。这一版换成了更清新的配色：樱粉、柠檬黄、薄荷绿、天空蓝四色轮换，投影换成浅天蓝，高光改成软糖一样的短胶囊加小点。播放图标去掉了细线，改成更尖一点、倾斜更少的三角形，读起来更像「播放」。</p>
+
+  <div class="hero"><img src="nipaplay-next-tag.svg" alt="NipaPlay Next 标题字"></div>
+  <div class="pair">
+    <div class="tile dark"><span class="lb">深色背景</span><img src="nipaplay-next-tag.svg" alt=""></div>
+    <div class="tile plaid-academy"><span class="lb" style="color:rgba(255,255,255,.7)">学院格背景</span><img src="nipaplay-next-tag.svg" alt=""></div>
+  </div>
+
+  <h3>NEXT 字样</h3>
+  <p>右下角加了「NEXT」，放在播放三角形下方那块空着的角落。字形是手绘的几何无衬线：方头、直角、竖直不倾斜，字高 30、笔画 6.5、字距 9，和圆头软糖一样的标题字形成对比。颜色用深靛蓝 <code>#253C7A</code>。</p>
+  <div class="pair">
+    <div class="tile light"><span class="lb">推荐 · 标签</span><img src="nipaplay-next-tag.svg" alt=""></div>
+    <div class="tile light"><span class="lb">纯字样</span><img src="nipaplay-next-plain.svg" alt=""></div>
+  </div>
+  <div class="grid g2" style="margin-top:16px">
+    <div class="card"><h4>标签（推荐）</h4><p class="small muted">深靛蓝圆角标签里放白色 NEXT，外面同样有白边和浅天蓝投影。像动画标题下面的副标，端正、清楚，放在深色背景和画面上也不会丢。</p></div>
+    <div class="card"><h4>纯字样</h4><p class="small muted">只有深靛蓝的字母，外面描一圈白边。更轻一些，但缩小以后字母间的白边会粘在一起，没有标签版干净。</p></div>
+  </div>
+
+  <h3>纯色剪影</h3>
+  <p>只用一种颜色，适合水印、单色印刷、刺绣、视频角标和系统托盘。贴纸的外形是实心，彩色版里有颜色的部分（字母、日文、☆、播放三角形）全部镂空，三角形里的星星保留为实心；不带投影和高光。镂空的地方会透出背景，所以放在图片上也成立。</p>
+  <div class="pair">
+    <div class="tile light"><span class="lb">深色 #16161C</span><img src="nipaplay-logo-silhouette.svg" alt="NipaPlay 纯色剪影"></div>
+    <div class="tile dark"><span class="lb">白色</span><img src="nipaplay-logo-silhouette-white.svg" alt=""></div>
+    <div class="tile light"><span class="lb">任意颜色（CSS mask 改色）</span><span class="mono" style="background:var(--accent)"></span></div>
+    <div class="tile" style="background:url(../assets/still1.jpg) center / cover"><span class="lb" style="color:rgba(255,255,255,.75)">叠在画面上</span><img src="nipaplay-logo-silhouette-white.svg" alt=""></div>
+  </div>
+  <div class="sizes">
+    <figure><img src="play-star-silhouette.svg" width="120" alt="">图标 120</figure>
+    <figure><img src="play-star-silhouette.svg" width="48" alt="">48</figure>
+    <figure><img src="play-star-silhouette.svg" width="24" alt="">24</figure>
+    <figure><img src="nipaplay-logo-silhouette.svg" width="220" alt="">220 px</figure>
+    <figure><img src="nipaplay-logo-silhouette.svg" width="120" alt="">120 px</figure>
+  </div>
+
+  <h3>软件图标 · 旧版矢量化</h3>
+  <p>原来的软件图标（<code>icons/new-icon.png</code>）重绘成矢量：蓝色是左下缺一个约 89° 扇形的圆，绿色和红色是同一个圆角正三角形（边长约 575、圆角 50），红色转了约 72°。颜色取原图的 <code>#2A51D4</code> / <code>#FF2E55</code> / <code>#07FF94</code>。和原图逐像素比对，只在边缘有 1px 的抗锯齿差别。</p>
+  <div class="pair" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+    <div class="tile" style="background:#D6DAE2"><span class="lb" style="color:#555a66">原图（位图）</span><img src="icon/original-new-icon.png" alt="原图标" style="width:72%"></div>
+    <div class="tile" style="background:#D6DAE2"><span class="lb" style="color:#555a66">矢量 SVG</span><img src="icon/nipaplay-icon.svg" alt="矢量图标" style="width:72%"></div>
+    <div class="tile" style="background:#D6DAE2"><span class="lb" style="color:#555a66">macOS 白色底板</span><img src="icon/nipaplay-icon-macos.svg" alt="" style="width:72%"></div>
+  </div>
+  <div class="sizes" style="background:#D6DAE2">
+    <figure><img src="icon/nipaplay-icon-macos.svg" width="128" alt="">128</figure>
+    <figure><img src="icon/nipaplay-icon-macos.svg" width="64" alt="">64</figure>
+    <figure><img src="icon/nipaplay-icon-macos.svg" width="32" alt="">32</figure>
+    <figure><img src="icon/nipaplay-icon-macos.svg" width="16" alt="">16</figure>
+    <figure style="margin-left:24px"><img src="icon/layer-green.svg" width="72" alt="" style="background:#FFFFFF;border-radius:10px">绿层</figure>
+    <figure><img src="icon/layer-blue.svg" width="72" alt="" style="background:#FFFFFF;border-radius:10px">蓝层</figure>
+    <figure><img src="icon/layer-red.svg" width="72" alt="" style="background:#FFFFFF;border-radius:10px">红层</figure>
+  </div>
+  <h4>圆角版</h4>
+  <p class="small muted">蓝色缺角圆外侧的两个尖角改成半径 50 的圆角，和两个三角形的圆角一样大；圆角与直边、外圆都相切。缺口里面的内角保持不变。</p>
+  <div class="pair" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">原版</span><img src="icon/nipaplay-icon.svg" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">圆角版</span><img src="icon/nipaplay-icon-rounded.svg" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">原版 · macOS</span><img src="icon/nipaplay-icon-macos.svg" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">圆角版 · macOS</span><img src="icon/nipaplay-icon-macos-rounded.svg" alt="" style="width:78%"></div>
+  </div>
+  <p class="small muted" style="margin-top:12px">三个图层的位置和 <code>new-icon.icon/Assets</code> 里的位图图层一致，可以直接在 Icon Composer 里替换，重新生成液态玻璃版本（apple / apple-dark）。Windows 和 Android 的图标是同一个图形换了缩放，可以从这份 SVG 直接导出。</p>
+
+  <h3>Next 图标</h3>
+  <p>在圆角版上只改一处：红色播放三角的尖端前加一根同色竖条，▶ 变成媒体控件里的「下一个」⏭，一眼能和旧版区分开，意思也正好是 Next。蓝圆、花苞、配色都不变。竖条宽 60、圆头，和三角形底边平行，离尖端 32，离蓝圆边缘至少 19。</p>
+  <div class="pair" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">旧版</span><img src="icon/nipaplay-icon-rounded.svg" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">Next</span><img src="icon/nipaplay-icon-next.svg" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">旧版 · macOS</span><img src="icon/nipaplay-icon-macos-rounded.svg" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">Next · macOS</span><img src="icon/nipaplay-icon-next-macos.svg" alt="" style="width:78%"></div>
+  </div>
+  <h4>炫彩烟雾（流体模拟）</h4>
+  <p class="small muted">参考 Apple TV 图标：彩色的烟关在形状里飘散，定格在某一帧。烟是真实的流体模拟（Stable Fluids + 涡量增强），每个形状各跑一套，烟被形状的边挡住；颜色只用和底色相邻的色相，用滤色叠在纯色上，只会变亮不会发灰；再用一个位置遮罩让烟集中在冒烟的那条边。用 <a href="smoke/">烟雾工作台</a> 可以换种子、拖帧数、调浓度和卷曲，定格后导出 1024 / 2048 位图；当前这帧是「种子 48 · 第 80 帧」。</p>
+  <div class="pair" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">烟雾</span><img src="icon/nipaplay-icon-next-smoke.png" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">烟雾 + ⏭</span><img src="icon/nipaplay-icon-next-smoke-bar.png" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">烟雾 · macOS</span><img src="icon/nipaplay-icon-next-smoke-macos.png" alt="" style="width:78%"></div>
+    <div class="tile dark" style="min-height:200px"><span class="lb">烟雾 · 深色背景</span><img src="icon/nipaplay-icon-next-smoke-macos.png" alt="" style="width:78%"></div>
+  </div>
+  <div class="sizes" style="background:#D6DAE2">
+    <figure><img src="icon/nipaplay-icon-next-smoke-macos.png" width="128" alt="">128</figure>
+    <figure><img src="icon/nipaplay-icon-next-smoke-macos.png" width="64" alt="">64</figure>
+    <figure><img src="icon/nipaplay-icon-next-smoke-macos.png" width="32" alt="">32</figure>
+    <figure><img src="icon/nipaplay-icon-next-smoke-macos.png" width="16" alt="">16</figure>
+    <figure style="margin-left:auto;align-self:center"><a class="b" href="smoke/" style="display:inline-flex;height:36px;padding:0 16px;border-radius:999px;background:#fff;align-items:center;font-weight:600">打开烟雾工作台</a></figure>
+  </div>
+  <div class="sizes" style="background:#D6DAE2">
+    <figure><img src="icon/nipaplay-icon-next-macos.svg" width="128" alt="">128</figure>
+    <figure><img src="icon/nipaplay-icon-next-macos.svg" width="64" alt="">64</figure>
+    <figure><img src="icon/nipaplay-icon-next-macos.svg" width="32" alt="">32</figure>
+    <figure><img src="icon/nipaplay-icon-next-macos.svg" width="16" alt="">16</figure>
+    <figure style="margin-left:24px"><img src="icon/layer-red-next.svg" width="72" alt="" style="background:#FFFFFF;border-radius:10px">红层 · Next</figure>
+  </div>
+
+  <section id="glass">
+  <h3>液态玻璃图标（定稿：烟雾 · 种子 48 · 第 80 帧）</h3>
+  <p>三个零件拆成三张独立的图层（1024 透明 PNG，位置和旧 <code>new-icon.icon</code> 的图层一致），蓝色那层是完整的形状，包括被红色挡住的部分。用它们组装成 Icon Composer 工程 <code>icon/NipaPlay-Next.icon</code>，沿用旧工程的设置：红色播放键开玻璃，阴影 neutral 50%、半透明 50%，绿色花苞偏移 (43, −29)、蓝色缩放 0.96。下面的效果图都是用 Xcode 自带的 <code>ictool</code> 从这份工程直接渲染的。</p>
+  <div class="pair" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">花苞 · bud-green.png</span><img src="icon/layers-smoke/bud-green.png" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">脸 · face-blue.png</span><img src="icon/layers-smoke/face-blue.png" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">播放 · play-red.png</span><img src="icon/layers-smoke/play-red.png" alt="" style="width:78%"></div>
+  </div>
+  <div class="sizes" style="background:#8A90A0;color:#fff"><span style="font-size:12px;color:#fff;font-weight:600;align-self:center;margin-right:6px">iOS</span><figure><img src="icon/glass/ios-Default.png" width="128" alt="">默认</figure><figure><img src="icon/glass/ios-Dark.png" width="128" alt="">深色</figure><figure><img src="icon/glass/ios-ClearLight.png" width="128" alt="">透明 · 浅</figure><figure><img src="icon/glass/ios-ClearDark.png" width="128" alt="">透明 · 深</figure><figure><img src="icon/glass/ios-TintedLight.png" width="128" alt="">着色 · 浅</figure><figure><img src="icon/glass/ios-TintedDark.png" width="128" alt="">着色 · 深</figure></div>
+  <div class="sizes" style="background:#8A90A0;color:#fff"><span style="font-size:12px;color:#fff;font-weight:600;align-self:center;margin-right:6px">macOS</span><figure><img src="icon/glass/macos-Default.png" width="96" alt="">默认</figure><figure><img src="icon/glass/macos-Dark.png" width="96" alt="">深色</figure><figure><img src="icon/glass/macos-ClearLight.png" width="96" alt="">透明 · 浅</figure><figure><img src="icon/glass/macos-ClearDark.png" width="96" alt="">透明 · 深</figure><figure><img src="icon/glass/macos-TintedLight.png" width="96" alt="">着色 · 浅</figure><figure><img src="icon/glass/macos-TintedDark.png" width="96" alt="">着色 · 深</figure></div>
+  <p class="small muted" style="margin-top:12px">用法：把 <code>NipaPlay-Next.icon</code> 拖进 Xcode 工程即可（Xcode 26 起直接支持 .icon）；想微调玻璃参数就用 Icon Composer 打开它。各外观的 1024 效果图在 <code>icon/glass/</code>，单独的零件图层在 <code>icon/layers-smoke/</code>，Android 自适应图标、Windows 等也可以从这三层出图。</p>
+  </section>
+
+  <h3>配色对比</h3>
+  <div class="cmp">
+    <div class="tile"><span class="lb">原版（位图）</span><img src="../assets/logo.png" alt="原版 logo"></div>
+    <div class="tile"><span class="lb">v1 · 沿用原配色</span><img src="nipaplay-logo.svg" alt=""></div>
+  </div>
+  <div class="cmp" style="margin-top:16px">
+    <div class="tile light"><span class="lb">v1 · 白底</span><img src="nipaplay-logo.svg" alt=""></div>
+    <div class="tile light"><span class="lb">v2 · 清新配色 · 白底</span><img src="nipaplay-logo-fresh.svg" alt=""></div>
+  </div>
+  <div class="grid g3" style="margin-top:16px">
+    <div class="card"><h4>四色轮换</h4><p class="small muted">「Nipa」和「Play」都按 粉 → 黄 → 绿 → 蓝 排，节奏整齐，颜色从八种减到四种，看起来更安静。</p></div>
+    <div class="card"><h4>浅天蓝投影</h4><p class="small muted">原来的深蓝投影换成 #7DB4F2，白底上轮廓依旧清楚，但整体轻了很多。日文统一成一个蓝色。</p></div>
+    <div class="card"><h4>软糖高光</h4><p class="small muted">高光从圆泡泡改成每个字左上方一道短胶囊加一颗小点，缩小以后仍然看得见。</p></div>
+  </div>
+
+  <h3>播放图标：四个方案</h3>
+  <p>细线都去掉了，每个方案都只用粗形状，缩到 32px 也不会糊。三角形改得更尖一点，倾斜从 24° 减到 12°：原来三边几乎一样长，倾斜后上沿接近水平，看起来像朝下的 ▽；现在尖角明确朝右上，一眼就是「播放」。</p>
+  <div class="var" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+    <div class="card rec"><span class="k">B · 推荐</span><img src="nipaplay-logo-star.svg" alt=""><div class="icons"><img src="play-star.svg" alt="" style="height:96px"><img src="play-star.svg" alt="" style="height:48px"><img src="play-star.svg" alt="" style="height:28px"></div><h4>星星</h4><p class="small muted">两色切面中间放一颗粗白星，呼应「ニパ～☆」。小尺寸下最好认，单独拿出来做应用图标也成立。</p></div>
+    <div class="card"><span class="k">A</span><img src="nipaplay-logo-gummy.svg" alt=""><div class="icons"><img src="play-gummy.svg" alt="" style="height:96px"><img src="play-gummy.svg" alt="" style="height:48px"><img src="play-gummy.svg" alt="" style="height:28px"></div><h4>软糖</h4><p class="small muted">两色切面加一道粗胶囊高光和一颗圆点，和字母上的高光同一种语言，最安静。</p></div>
+    <div class="card"><span class="k">C</span><img src="nipaplay-logo-candy.svg" alt=""><div class="icons"><img src="play-candy.svg" alt="" style="height:96px"><img src="play-candy.svg" alt="" style="height:48px"><img src="play-candy.svg" alt="" style="height:28px"></div><h4>糖条</h4><p class="small muted">沿上沿排四条粗色带，正好是字母用的四种颜色，品牌感最强，也最热闹。</p></div>
+    <div class="card"><span class="k">D</span><img src="nipaplay-logo-gingham.svg" alt=""><div class="icons"><img src="play-gingham.svg" alt="" style="height:96px"><img src="play-gingham.svg" alt="" style="height:48px"><img src="play-gingham.svg" alt="" style="height:28px"></div><h4>大格子</h4><p class="small muted">每格 44 的粗格纹，缩小以后还能看出是格子，JK 裙的感觉最直接。</p></div>
+  </div>
+
+  <h3>小尺寸</h3>
+  <div class="sizes">
+    <figure><img src="nipaplay-logo-fresh.svg" width="360" alt="">360 px</figure>
+    <figure><img src="nipaplay-logo-fresh.svg" width="220" alt="">220 px</figure>
+    <figure><img src="nipaplay-logo-fresh.svg" width="140" alt="">140 px</figure>
+    <figure><img src="nipaplay-logo-fresh.svg" width="96" alt="">96 px</figure>
+  </div>
+
+  <h3>结构与颜色</h3>
+  <div class="grid g2">
+    <div class="card"><h4>三层叠出来</h4><p class="small muted">每个字只有一条中心线。同一组形状画三遍：先画偏移 (12, 15) 的深蓝投影，再画宽 22 的白色贴纸边，最上面画彩色笔画。改字形时只需要改中心线，三层会一起变。</p></div>
+    <div class="card"><h4>笔画</h4><p class="small muted">字母竖笔 30、碗形 26、N 36、P 竖笔 34；日文 14。一律圆头圆角。高光是半透明白色小圆点，每个字母最多两个。</p></div>
+  </div>
+  <div class="chips">
+    <span class="sw"><i style="background:#FF7FA8"></i>樱粉 #FF7FA8 · N P</span>
+    <span class="sw"><i style="background:#FFB938"></i>柠檬黄 #FFB938 · i l ☆</span>
+    <span class="sw"><i style="background:#2FCB9E"></i>薄荷绿 #2FCB9E · p a</span>
+    <span class="sw"><i style="background:#3CB8F4"></i>天空蓝 #3CB8F4 · a y</span>
+    <span class="sw"><i style="background:#8E7FFF"></i>薰衣草 #8E7FFF / #ACA0FF · 播放</span>
+    <span class="sw"><i style="background:#4A90E2"></i>日文 #4A90E2</span>
+    <span class="sw"><i style="background:#7DB4F2"></i>投影 #7DB4F2</span>
+  </div>
+  <p class="small muted" style="margin-top:18px">文件：<code>brand/nipaplay-next-tag.svg</code>（带 NEXT 标签，推荐）、<code>nipaplay-next-plain.svg</code>（NEXT 纯字样）、<code>nipaplay-logo-fresh.svg</code>（不带 NEXT，当前推荐 = 星星）；纯色剪影 <code>nipaplay-logo-silhouette.svg</code> / <code>nipaplay-logo-silhouette-white.svg</code>，单独图标剪影 <code>play-star-silhouette.svg</code>；四个方案的完整 logo <code>nipaplay-logo-{star,gummy,candy,gingham}.svg</code>，单独图标 <code>play-{star,gummy,candy,gingham}.svg</code>；<code>nipaplay-logo.svg</code> 是 v1 原配色；软件图标 <code>icon/nipaplay-icon.svg</code>、<code>icon/nipaplay-icon-macos.svg</code>，圆角版 <code>icon/nipaplay-icon-rounded.svg</code>、<code>icon/nipaplay-icon-macos-rounded.svg</code>，图层 <code>icon/layer-{green,blue,red}.svg</code>（圆角版蓝层 <code>icon/layer-blue-rounded.svg</code>）；Next 图标 <code>icon/nipaplay-icon-next.svg</code>、<code>icon/nipaplay-icon-next-macos.svg</code>，红层 <code>icon/layer-red-next.svg</code>；烟雾版 <code>icon/nipaplay-icon-next-smoke.png</code>、<code>-smoke-macos.png</code>、<code>-smoke-bar.png</code>（2048px，由 <code>smoke/</code> 工作台导出）；液态玻璃工程 <code>icon/NipaPlay-Next.icon</code>，零件图层 <code>icon/layers-smoke/</code>，效果图 <code>icon/glass/</code>。</p>
+</main>
+</body>
+</html>

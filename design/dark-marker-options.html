@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>深色模式底纹对比</title>
+<style>
+  body { margin: 0; background: #0E0E11; color: #F4F4F5; font: 15px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", "Microsoft YaHei UI", sans-serif; padding: 36px 40px; width: 1000px; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  .sub { color: #A6A6AF; margin: 0 0 26px; font-size: 14px; }
+  .opt { background: #17171B; border: 1px solid rgba(255,255,255,.08); border-radius: 16px; padding: 18px 22px; margin-bottom: 14px; display: grid; grid-template-columns: 250px 1fr; gap: 20px; align-items: center; }
+  .opt.light { background: #FFFFFF; color: #111114; }
+  .opt.light .d { color: #5F5F68; }
+  .opt b { font-size: 16px; display: block; }
+  .opt .d { color: #A6A6AF; font-size: 13px; }
+  .row { display: flex; gap: 34px; font-size: 22px; font-weight: 700; align-items: baseline; flex-wrap: wrap; }
+  .row small { font-size: 12px; font-weight: 500; color: #6B6B74; display: block; margin-top: 4px; }
+  .hl { padding: 0 1px; }
+</style>
+</head>
+<body>
+  <h1>深色模式：主题色文字 + 白色 / 灰色底纹</h1>
+  <p class="sub">底纹位置和浅色模式一样（58%–92%），只是把颜色反过来：字用主题色，底纹用中性色。数字是字的下半截压在底纹上时的对比度。</p>
+
+  <div class="opt light">
+    <div><b>参照 · 浅色模式（现状）</b><span class="d">黑字 + 主题色底纹</span></div>
+    <div class="row">
+      <span><span class="hl" style="background-image:linear-gradient(transparent 58%, rgba(255,46,85,.95) 58%, rgba(255,46,85,.95) 92%, transparent 92%)">继续 第 4 集</span></span>
+      <span><span class="hl" style="background-image:linear-gradient(transparent 58%, rgba(42,81,212,.95) 58%, rgba(42,81,212,.95) 92%, transparent 92%)">新番表</span></span>
+      <span><span class="hl" style="background-image:linear-gradient(transparent 58%, rgba(7,255,148,.95) 58%, rgba(7,255,148,.95) 92%, transparent 92%)">媒体库</span></span>
+    </div>
+  </div>
+
+  <div class="opt">
+    <div><b>D · 白色底纹</b><span class="d">底纹 #EAEAEB</span></div>
+    <div class="row">
+      <span><span class="hl" style="color:#FF2E55;background-image:linear-gradient(transparent 58%, #EAEAEB 58%, #EAEAEB 92%, transparent 92%)">继续 第 4 集</span><small>3.0:1</small></span>
+      <span><span class="hl" style="color:#6A8BFF;background-image:linear-gradient(transparent 58%, #EAEAEB 58%, #EAEAEB 92%, transparent 92%)">新番表</span><small>2.6:1</small></span>
+      <span><span class="hl" style="color:#07FF94;background-image:linear-gradient(transparent 58%, #EAEAEB 58%, #EAEAEB 92%, transparent 92%)">媒体库</span><small>1.1:1</small></span>
+    </div>
+  </div>
+
+  <div class="opt">
+    <div><b>E · 灰色底纹</b><span class="d">底纹 #3A3A42</span></div>
+    <div class="row">
+      <span><span class="hl" style="color:#FF2E55;background-image:linear-gradient(transparent 58%, #3A3A42 58%, #3A3A42 92%, transparent 92%)">继续 第 4 集</span><small>3.1:1</small></span>
+      <span><span class="hl" style="color:#6A8BFF;background-image:linear-gradient(transparent 58%, #3A3A42 58%, #3A3A42 92%, transparent 92%)">新番表</span><small>3.6:1</small></span>
+      <span><span class="hl" style="color:#07FF94;background-image:linear-gradient(transparent 58%, #3A3A42 58%, #3A3A42 92%, transparent 92%)">媒体库</span><small>8.5:1</small></span>
+    </div>
+  </div>
+
+  <div class="opt">
+    <div><b>F · 深灰底纹</b><span class="d">底纹 #2E2E35，更含蓄</span></div>
+    <div class="row">
+      <span><span class="hl" style="color:#FF2E55;background-image:linear-gradient(transparent 58%, #2E2E35 58%, #2E2E35 92%, transparent 92%)">继续 第 4 集</span><small>3.7:1</small></span>
+      <span><span class="hl" style="color:#6A8BFF;background-image:linear-gradient(transparent 58%, #2E2E35 58%, #2E2E35 92%, transparent 92%)">新番表</span><small>4.3:1</small></span>
+      <span><span class="hl" style="color:#07FF94;background-image:linear-gradient(transparent 58%, #2E2E35 58%, #2E2E35 92%, transparent 92%)">媒体库</span><small>10.1:1</small></span>
+    </div>
+  </div>
+</body>
+</html>
