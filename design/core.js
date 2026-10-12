@@ -1,5 +1,5 @@
 /* =====================================================================
-   NipaPlay Next · 共享核心（设计文档 index.html 与交互原型 app.html 共用）
+   Erika · 共享核心（设计文档 index.html 与交互原型 app.html 共用）
    - 图标 sprite
    - 弹簧引擎（T / ζ 参数，与文档 8.2 节一致）、果冻按压、出现 / 消失
    - 主题色 / 明暗（跨页面同步）
@@ -14,9 +14,9 @@ window.NP = (() => {
   const root = document.documentElement;
   const svg = (id, cls = 'i', style = '') => `<svg class="${cls}"${style ? ` style="${style}"` : ''}><use href="#i-${id}"/></svg>`;
   const kv = {
-    get(k) { try { return localStorage.getItem('npn.' + k); } catch (e) { return null; } },
-    set(k, v) { try { localStorage.setItem('npn.' + k, v); } catch (e) { /* 无痕模式等 */ } },
-    del(k) { try { localStorage.removeItem('npn.' + k); } catch (e) { /* ignore */ } },
+    get(k) { try { return localStorage.getItem('erika.' + k); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem('erika.' + k, v); } catch (e) { /* 无痕模式等 */ } },
+    del(k) { try { localStorage.removeItem('erika.' + k); } catch (e) { /* ignore */ } },
   };
 
   /* 图标 sprite（演示用；实现时映射到各平台系统符号） */
@@ -318,8 +318,8 @@ window.NP = (() => {
   function syncThemeUI() { setAccent(root.dataset.accent || 'rose'); applyTheme(); }
   if (mqDark.addEventListener) mqDark.addEventListener('change', applyTheme);
   addEventListener('storage', e => {
-    if (e.key === 'npn.accent' && e.newValue) setAccent(e.newValue);
-    if (e.key === 'npn.theme') { themePref = e.newValue || 'system'; applyTheme(); }
+    if (e.key === 'erika.accent' && e.newValue) setAccent(e.newValue);
+    if (e.key === 'erika.theme') { themePref = e.newValue || 'system'; applyTheme(); }
   });
   document.addEventListener('click', e => {
     const a = e.target.closest('[data-set-accent]'); if (a) setAccent(a.dataset.setAccent);
@@ -559,13 +559,13 @@ window.NP = (() => {
      插件市场
      ------------------------------------------------------------------ */
   const PLUGINS = [
-    { id: 'spoiler', n: '防剧透', a: 'NipaPlay 官方', ic: 'eyeoff', d: '用你配置的 AI 接口识别并遮挡剧透弹幕', p: ['网络', '修改弹幕'], req: '需要弹幕模块', cat: '弹幕' },
-    { id: 'regex', n: '正则弹幕过滤', a: 'NipaPlay 官方', ic: 'filter', d: '用正则表达式屏蔽弹幕', p: ['修改弹幕'], inst: true, cat: '弹幕' },
-    { id: 'words', n: '敏感词屏蔽', a: 'NipaPlay 官方', ic: 'shield', d: '内置中文敏感词词库，一键屏蔽', p: ['修改弹幕'], inst: true, cat: '弹幕' },
+    { id: 'spoiler', n: '防剧透', a: 'Erika 官方', ic: 'eyeoff', d: '用你配置的 AI 接口识别并遮挡剧透弹幕', p: ['网络', '修改弹幕'], req: '需要弹幕模块', cat: '弹幕' },
+    { id: 'regex', n: '正则弹幕过滤', a: 'Erika 官方', ic: 'filter', d: '用正则表达式屏蔽弹幕', p: ['修改弹幕'], inst: true, cat: '弹幕' },
+    { id: 'words', n: '敏感词屏蔽', a: 'Erika 官方', ic: 'shield', d: '内置中文敏感词词库，一键屏蔽', p: ['修改弹幕'], inst: true, cat: '弹幕' },
     { id: 'crt', n: '复古 CRT', a: '社区 · shaderlab', ic: 'tv', d: '扫描线与荧光屏质感的着色器', p: ['着色器'], cat: '画面' },
-    { id: 'clip', n: '片段导出', a: 'NipaPlay 官方', ic: 'scissors', d: '把精彩片段导出为 GIF 或 MP4', p: ['媒体导出', '写入文件'], cat: '工具' },
+    { id: 'clip', n: '片段导出', a: 'Erika 官方', ic: 'scissors', d: '把精彩片段导出为 GIF 或 MP4', p: ['媒体导出', '写入文件'], cat: '工具' },
     { id: 'ext', n: '外部播放器', a: '社区 · ext-player', ic: 'external', d: '用 mpv、PotPlayer 或 IINA 打开当前视频', p: ['启动程序'], cat: '工具' },
-    { id: 'sfx', n: '界面音效包', a: 'NipaPlay 官方', ic: 'music', d: '给按钮和转场配上轻快的音效', p: [], inst: true, cat: '外观' },
+    { id: 'sfx', n: '界面音效包', a: 'Erika 官方', ic: 'music', d: '给按钮和转场配上轻快的音效', p: [], inst: true, cat: '外观' },
     { id: 'theme', n: '主题与壁纸', a: '社区 · mochi', ic: 'palette', d: '自定义背景图与配色方案', p: ['外观'], cat: '外观' },
     { id: 'titan', n: 'Titan 弹幕', a: '社区 · titan', ic: 'danmaku', d: '用 WebView 渲染的高级弹幕特效', p: ['WebView 叠加'], cat: '弹幕' },
   ];
@@ -611,18 +611,18 @@ window.NP = (() => {
 <!-- step 0 欢迎 -->
 <div class="ob-step on" data-step="0" style="padding:0">
 <div class="plaid-academy" style="height:250px;position:relative">
-<img src="assets/logo.png" alt="" style="position:absolute;left:44px;top:58px;height:120px;filter:drop-shadow(0 8px 18px rgba(0,0,0,.35))">
+<img src="brand/erika-logo-dark.svg" alt="ERIKA エリカ" style="position:absolute;left:36px;top:58px;height:132px;filter:drop-shadow(0 4px 14px rgba(0,0,0,.45))">
 </div>
 <img src="assets/girl.png" alt="" style="position:absolute;right:52px;top:70px;width:270px">
 <div style="padding:30px 48px 0;max-width:560px">
-<h5>欢迎使用 NipaPlay</h5>
+<h5>欢迎使用 Erika</h5>
 <p class="sub">接下来一分钟，选出你需要的功能。没选的功能不会显示，也不会占用资源。之后随时可以在 设置 › 可选功能 里修改。</p>
 <div class="meta"><span class="chip">约 1 分钟</span><span class="chip">随时可改</span><span class="chip">没开的功能不占资源</span></div>
 </div>
 </div>
 <!-- step 1 预设 -->
 <div class="ob-step" data-step="1">
-<h5>你打算怎么用 NipaPlay？</h5>
+<h5>你打算怎么用 Erika？</h5>
 <p class="sub">选一个起点，下一步还可以逐项调整。</p>
 <div class="presets ob-presets"></div>
 </div>
@@ -643,7 +643,7 @@ window.NP = (() => {
 <!-- step 3 外观 -->
 <div class="ob-step" data-step="3">
 <h5>选一个主题色</h5>
-<p class="sub">取自 NipaPlay 图标的三种纯色，只会出现在按钮和文字上。</p>
+<p class="sub">取自 Erika 图标的三种纯色，只会出现在按钮和文字上。</p>
 <div class="accent-pick ob-accent">
 <div class="sw" data-set-accent="rose"><i style="background:#FF2E55"></i>绯红</div>
 <div class="sw" data-set-accent="blue"><i style="background:#2A51D4"></i>群青</div>
@@ -732,7 +732,7 @@ window.NP = (() => {
     function renderSetup() {
       const m = store.mods, cards = [];
       const ico = (src, w = 16) => `<img src="${src}" alt="" class="${/dandanplay|bangumi/.test(src) ? 'mono-logo' : ''}" style="width:${w}px;height:${w}px;border-radius:4px">`;
-      if (m.has('library')) cards.push({ icon: 'folder', t: '添加媒体文件夹', d: 'NipaPlay 会扫描文件夹，自动识别番剧和封面。', a: '<span class="b S">选择文件夹…</span><span class="b plain S"><span>稍后</span></span>' });
+      if (m.has('library')) cards.push({ icon: 'folder', t: '添加媒体文件夹', d: 'Erika 会扫描文件夹，自动识别番剧和封面。', a: '<span class="b S">选择文件夹…</span><span class="b plain S"><span>稍后</span></span>' });
       if (m.has('sync')) cards.push({ icon: 'user', t: '登录账号', d: '同步观看进度和评分，登录后还能发弹幕。', a: `<span class="b S">${ico('assets/dandanplay.png')}弹弹play</span><span class="b S">${ico('assets/bangumi.png')}Bangumi</span>` });
       if (m.has('sources')) cards.push({ icon: 'server', t: '连接媒体服务器', d: 'Jellyfin、Emby、WebDAV 或 SMB。', a: `<span class="b S">${ico('assets/jellyfin.svg', 14)}Jellyfin</span><span class="b S">${ico('assets/emby.svg', 14)}Emby</span><span class="b S">更多…</span>` });
       if (m.has('remote')) cards.push({ icon: 'wifi', t: '局域网共享', d: '允许同一网络里的设备浏览你的媒体库，默认关闭。', a: '<span class="tg"><i></i></span>' });

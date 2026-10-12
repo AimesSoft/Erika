@@ -1,5 +1,5 @@
 /* =====================================================================
-   NipaPlay Next · 设计文档样式
+   Erika · 设计文档样式
    文档本身也遵循文中的设计语言：中性底色、克制的高饱和主题色、格子纹只在仪式时刻。
    ===================================================================== */
 
@@ -110,6 +110,14 @@ a.b::before { content: none; }
 .proto-embed { margin: 22px 0 0; border-radius: 18px; overflow: hidden; border: 1px solid var(--line); box-shadow: var(--shadow-lg); background: var(--surface-2); }
 .proto-embed iframe { display: block; width: 100%; aspect-ratio: 1360 / 900; border: 0; }
 @media (max-width: 760px) { .proto-embed iframe { aspect-ratio: auto; height: 700px; } }
+/* 画框版的活窗口（第 03、08、09 章）：.nx-live 里挂一个 NX.App，窗口本身的样式在 next.css */
+.nx-bar { margin: 18px 0 0; }
+.nx-bar .nx-g { display: inline-flex; align-items: center; gap: 16px; white-space: nowrap; }
+@media (max-width: 640px) { .nx-bar { position: static; } .nx-bar .nx-g { flex-wrap: wrap; gap: 6px 16px; max-width: 100%; } .nx-bar .seg { flex-wrap: wrap; flex: 0 1 auto; } .nx-bar .seg span { padding: 0 10px; } }
+.nx-live { margin: 22px 0 0; }
+.nx-live .nxp-stage-wrap { margin: 0 auto; }
+.nx-live .cap { margin-top: 12px; }
+.nx-live .cap .b { cursor: pointer; margin-left: 6px; vertical-align: middle; }
 .toc a.on::before { content: ""; position: absolute; z-index: -1; left: 0; right: 0; top: var(--hl-top); bottom: var(--hl-bottom); border-radius: 999px; background: rgb(var(--accent-rgb)); }
 .muted { color: var(--text-2); }
 .faint { color: var(--text-3); }
@@ -152,7 +160,11 @@ main { min-width: 0; padding: 0 56px 120px; }
   position: relative; margin: 180px auto 0; max-width: 1080px; width: calc(100% - 112px);
   background: var(--surface); border-radius: 28px; padding: 44px 48px 40px; box-shadow: var(--shadow-lg);
 }
-.cover .logo { height: 72px; width: auto; margin: -4px 0 18px -6px; }
+.cover .logo { height: 96px; width: auto; margin: -8px 0 14px -9px; }
+/* Erika 标题字：浅底、深底两张图，跟随主题切换 */
+.erika-lg.dk { display: none; }
+:root[data-theme="dark"] .erika-lg.lt { display: none; }
+:root[data-theme="dark"] .erika-lg.dk { display: block; }
 .cover h1 { font-size: 52px; line-height: 1.1; margin: 0 0 14px; letter-spacing: -.01em; font-weight: 800; max-width: 760px; }
 .cover .lead { font-size: 20px; color: var(--text-2); max-width: 600px; margin: 0 0 26px; line-height: 1.6; }
 .meta { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -474,95 +486,6 @@ pre.code .s { color: var(--accent-ink); }
 .tg.dark { background: rgba(255, 255, 255, .2); }
 .tg.dark.on { background: var(--accent); }
 
-/* ---------- 播放器 · 胶囊岛（2026-10-12 选定方向 B，参数照搬 player-options.html） ---------- */
-.player .glass, .glass { background: rgba(26, 26, 30, .52); backdrop-filter: blur(28px) saturate(1.7); -webkit-backdrop-filter: blur(28px) saturate(1.7);
-  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .16), 0 16px 40px -14px rgba(0, 0, 0, .6); }
-.player { --on-dark: #FF2E55; }
-:root[data-accent="blue"] .player { --on-dark: #6A8BFF; }
-:root[data-accent="mint"] .player { --on-dark: #07FF94; }
-.pbtn { width: 36px; height: 36px; border-radius: 999px; display: grid; place-items: center; color: rgba(255, 255, 255, .92); cursor: pointer; flex: none; transition: background-color .2s; }
-.pbtn:hover { background: rgba(255, 255, 255, .12); }
-.pbtn .i { width: 20px; height: 20px; }
-.pbtn.sm { width: 30px; height: 30px; }
-.pbtn.sm .i { width: 17px; height: 17px; }
-.il-cap { position: absolute; top: 18px; height: 40px; border-radius: 20px; display: flex; align-items: center; gap: 2px; padding: 0 5px; z-index: 4; color: #fff; }
-.il-cap.l { left: 18px; padding-right: 16px; gap: 8px; max-width: 520px; }
-.il-cap.l b { font-size: 13.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.il-cap.l span.m { font-size: 12.5px; color: rgba(255, 255, 255, .6); white-space: nowrap; }
-.il-cap.r { right: 18px; overflow: hidden; padding: 0; display: block; }
-.il-cap.r .cap-row { height: 40px; display: flex; align-items: center; justify-content: flex-end; gap: 2px; padding: 0 5px; }
-.il-cap.r .cap-menu { position: absolute; top: 44px; left: 6px; right: 6px; opacity: 0; pointer-events: none; transition: opacity .18s; }
-.il-cap.r.open .cap-menu { opacity: 1; pointer-events: auto; transition: opacity .3s ease .08s; }
-.cap-menu .mi3 { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border-radius: 10px; font-size: 13px; cursor: pointer; white-space: nowrap; }
-.cap-menu .mi3:hover { background: rgba(255, 255, 255, .12); }
-.cap-menu .mi3 .i { width: 16px; height: 16px; color: rgba(255, 255, 255, .7); }
-.il { position: absolute; left: 50%; bottom: 26px; width: 880px; height: 60px; border-radius: 30px; overflow: hidden; z-index: 5; transform: translateX(-50%); color: #fff;
-  transition: opacity .3s ease, transform .5s cubic-bezier(.3, 1.45, .5, 1); }
-.il-row { position: absolute; bottom: 0; height: 60px; display: flex; align-items: center; gap: 2px; transition: opacity .22s ease, transform .45s cubic-bezier(.3, 1.4, .5, 1); }
-.il-row.main { width: 880px; left: 50%; margin-left: -440px; padding: 0 10px; box-sizing: border-box; }
-.il-row.say { width: 600px; left: 50%; margin-left: -300px; padding: 0 10px 0 12px; box-sizing: border-box; gap: 8px; opacity: 0; transform: scale(.94); pointer-events: none; }
-.il.saying .il-row.main { opacity: 0; transform: scale(.96); pointer-events: none; }
-.il.saying .il-row.say { opacity: 1; transform: none; pointer-events: auto; }
-.il-play { width: 40px !important; height: 40px !important; background: #fff; color: #111 !important; margin-right: 2px; }
-.il-play:hover { background: #fff !important; }
-.il-play .i { width: 20px; height: 20px; }
-.il-t { font: 600 12.5px/1 ui-rounded, "SF Pro Rounded", var(--font); font-variant-numeric: tabular-nums; color: rgba(255, 255, 255, .82); width: 50px; text-align: center; flex: none; }
-.il-pg { position: relative; flex: 1; min-width: 0; height: 34px; cursor: pointer; }
-.il-pg .msk { position: absolute; inset: 0; }
-.il-pg .tr { position: absolute; left: 0; right: 0; top: 15.5px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, .26); }
-.il-pg .bd, .il-pg .gh { position: absolute; left: 0; top: 14.5px; height: 5px; border-radius: 3px; transition: top .2s, height .2s; }
-.il-pg .bd { background: rgb(var(--accent-rgb)); }
-.il-pg .gh { background: rgba(255, 255, 255, .3); width: 0; }
-.il-pg:hover .bd, .il-pg:hover .gh, .il.hov .il-pg .bd, .il.hov .il-pg .gh { top: 13.5px; height: 7px; border-radius: 4px; }
-.il-pg .pk { position: absolute; top: 6px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: rgba(255, 255, 255, .8); }
-.il-sep { width: 1px; height: 22px; background: rgba(255, 255, 255, .16); margin: 0 6px; flex: none; }
-.il-dm { position: relative; }
-.il-dm .led { position: absolute; right: 6px; top: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--on-dark); box-shadow: 0 0 0 2px rgba(26, 26, 30, .8); transition: transform .4s cubic-bezier(.3, 1.8, .5, 1); }
-.il-dm:not(.on) .led { transform: scale(0); }
-.il-dm:not(.on) { color: rgba(255, 255, 255, .5); }
-.il-txt { height: 30px; min-width: 44px; padding: 0 8px; border-radius: 15px; display: grid; place-items: center; font: 700 13px ui-rounded, "SF Pro Rounded", var(--font); cursor: pointer; color: rgba(255, 255, 255, .92); box-sizing: border-box; flex: none; }
-.il-txt:hover { background: rgba(255, 255, 255, .12); }
-.il .vol { display: flex; align-items: center; }
-.il .sl-v { width: 0; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .25); position: relative; overflow: hidden; flex: none; transition: width .3s cubic-bezier(.3, 1.3, .5, 1), margin .3s; }
-.il .sl-v b { position: absolute; inset: 0 30% 0 0; background: #fff; border-radius: 2px; }
-.il .vol:hover .sl-v { width: 72px; margin: 0 10px 0 2px; }
-.il-up { position: absolute; left: 0; right: 0; top: 0; bottom: 60px; }
-.il-pane { position: absolute; inset: 0; opacity: 0; pointer-events: none; transition: opacity .2s ease; }
-.il-pane.on { opacity: 1; pointer-events: auto; transition: opacity .3s ease .06s; }
-.il-fr { position: absolute; bottom: 24px; width: 168px; height: 94px; border-radius: 12px; overflow: hidden; background: #111; box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .7), 0 0 0 1px rgba(255, 255, 255, .14); }
-.il-fr img { width: 100%; height: 100%; object-fit: cover; transform: scale(1.5); }
-.il-fr .tm { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 10px 6px; background: linear-gradient(transparent, rgba(0, 0, 0, .65)); font-size: 11.5px; display: flex; gap: 6px; }
-.il-fr .tm b { font: 700 12px ui-rounded, "SF Pro Rounded", var(--font); font-variant-numeric: tabular-nums; }
-.il-fr .tm span { color: rgba(255, 255, 255, .75); }
-.il-chs span { position: absolute; bottom: 4px; font-size: 10.5px; font-weight: 650; color: rgba(255, 255, 255, .55); white-space: nowrap; letter-spacing: .04em; }
-.il-opts { position: absolute; left: 18px; right: 18px; bottom: 4px; height: 52px; display: flex; align-items: center; gap: 8px; }
-.il-opts.r2 { bottom: 56px; }
-.il-opts .k { font-size: 12px; color: rgba(255, 255, 255, .55); margin-right: 6px; font-weight: 600; width: 30px; flex: none; }
-.il-chip { height: 34px; padding: 0 14px; border-radius: 17px; background: rgba(255, 255, 255, .1); font-size: 13px; font-weight: 600; display: inline-grid; place-items: center; cursor: pointer; white-space: nowrap; }
-.il-chip:hover { background: rgba(255, 255, 255, .18); }
-.il-chip.on { background: #fff; color: #111; }
-.il-chip.off { text-decoration: line-through; color: rgba(255, 255, 255, .45); }
-.il-dmq { position: absolute; left: 22px; right: 22px; bottom: 6px; height: 92px; display: grid; grid-template-columns: 1fr 1fr auto; grid-template-rows: 1fr 1fr; column-gap: 28px; align-items: center; }
-.il-dmq .q { display: flex; align-items: center; gap: 12px; font-size: 13px; min-width: 0; }
-.il-dmq .q .k { width: 52px; flex: none; color: rgba(255, 255, 255, .6); font-size: 12px; font-weight: 600; }
-.il-dmq .q .sl { flex: 1; }
-.il-dmq .q .il-chip { height: 28px; padding: 0 11px; font-size: 12px; }
-.il-dmq .q .chips { display: flex; gap: 6px; }
-.il-dmq .seg.dark span { height: 26px; padding: 0 11px; font-size: 12px; cursor: pointer; }
-.il-dmq .lnk { grid-row: 1 / 3; grid-column: 3; font-size: 12.5px; color: rgba(255, 255, 255, .7); cursor: pointer; padding: 8px 10px; border-radius: 10px; white-space: nowrap; }
-.il-dmq .lnk:hover { background: rgba(255, 255, 255, .1); color: #fff; }
-.il-say { flex: 1; height: 38px; border-radius: 19px; background: rgba(255, 255, 255, .1); display: flex; align-items: center; padding: 0 5px 0 15px; gap: 8px; cursor: text; }
-.il-say input { all: unset; flex: 1; min-width: 0; color: #fff; font-size: 13px; }
-.il-say input::placeholder { color: rgba(255, 255, 255, .5); }
-.il-say .send { height: 28px; padding: 0 14px; border-radius: 999px; background: rgb(var(--accent-rgb)); color: var(--on-accent); font-size: 12.5px; font-weight: 700; display: grid; place-items: center; cursor: pointer; flex: none; }
-/* 字幕让位：控制层出现时，底部对白跟着胶囊的高度往上让 */
-.np-sub { position: absolute; left: 0; right: 0; bottom: 48px; text-align: center; pointer-events: none; z-index: 2; will-change: transform; }
-.np-sub span { font-size: 30px; font-weight: 600; letter-spacing: .02em; color: #fff; text-shadow: 0 0 3px #000, 0 0 3px #000, 0 0 3px #000, 0 2px 6px rgba(0, 0, 0, .6); }
-.player.isl .panel-side { top: 70px; right: 18px; bottom: 100px; border-radius: 24px; border-left: 0; background: rgba(26, 26, 30, .62); backdrop-filter: blur(28px) saturate(1.7); -webkit-backdrop-filter: blur(28px) saturate(1.7);
-  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .16), 0 24px 60px -16px rgba(0, 0, 0, .7); overflow-y: auto; scrollbar-width: none; }
-.player.isl .panel-side .grp { background: rgba(255, 255, 255, .08); border-radius: 16px; }
-.annot-on .frame .il-cap[data-spec]::after { top: auto; bottom: 0; transform: translateY(calc(100% + 4px)); }
-
 /* ---------- Onboarding 原型 ---------- */
 .ob { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .ob-stage { flex: 1; position: relative; overflow: hidden; }
@@ -593,7 +516,7 @@ pre.code .s { color: var(--accent-ink); }
 .mod-list .group-label:first-child { margin-top: 0; }
 .prev-col { display: flex; flex-direction: column; gap: 12px; }
 .prev-box { position: relative; height: 284px; }
-.hud-strip { height: 44px; border-radius: 12px; background: #141417; display: flex; align-items: center; gap: 2px; padding: 0 10px; color: #fff; overflow: hidden; }
+.hud-strip { height: 44px; border-radius: 22px; background: #1C1C21; box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .14); display: flex; align-items: center; gap: 2px; padding: 0 10px; color: #fff; overflow: hidden; }
 .hud-strip .pib { width: 30px; height: 30px; }
 .hud-strip .pib .i { width: 17px; height: 17px; }
 .hud-strip .grow { flex: 1; }
@@ -744,7 +667,7 @@ pre.code .s { color: var(--accent-ink); }
   .cover .card { width: calc(100% - 32px); margin-top: 190px; padding: 26px 22px; border-radius: 22px; }
   .cover h1 { font-size: 34px; }
   .cover .lead { font-size: 17px; }
-  .cover .logo { height: 52px; }
+  .cover .logo { height: 72px; }
   h2 { font-size: 29px; }
   h3 { font-size: 20px; margin-top: 40px; }
   .sec { padding-top: 64px; }

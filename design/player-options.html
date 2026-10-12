@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>播放器重设计</title>
-<meta name="description" content="NipaPlay Next 播放器控制层的三个设计方向：标注、胶囊岛、水手服。每个都可以直接点着试。">
+<meta name="description" content="Erika 播放器控制层的三个设计方向：标注、胶囊岛、水手服。每个都可以直接点着试。">
 <link rel="icon" href="assets/icon.png">
 <link rel="stylesheet" href="doc.css">
 <style>
@@ -225,11 +225,11 @@
   <header class="po-hd">
     <div class="eyebrow"><span class="sailor"></span><b>9.4</b> 播放器 · 重新设计</div>
     <h2>给播放器一个自己的样子</h2>
-    <p class="lead2">现在的播放器是「上下两条黑色渐变 + 一根细进度条 + 一排图标」，和 YouTube、B 站、PotPlayer 几乎一模一样，盖住 logo 就认不出是谁家的。下面三个方向都只改我们自己画的那一层（进度条、控制条、中央反馈），功能和「一次点击 / 两次点击 / 侧面板」的分层不变。</p>
+    <p class="lead2">（已选定 B，见文末。）改版前的播放器是「上下两条黑色渐变 + 一根细进度条 + 一排图标」，和 YouTube、B 站、PotPlayer 几乎一模一样，盖住 logo 就认不出是谁家的。下面三个方向都只改我们自己画的那一层（进度条、控制条、中央反馈），功能和「一次点击 / 两次点击 / 侧面板」的分层不变。</p>
     <div class="po-why">
       <div class="old"><img src="assets/player-old.jpg" alt="现在的播放器截图"><span class="lb">现在</span></div>
       <ul>
-        <li>形状、排布、渐变都是行业默认值，没有用到 NipaPlay 已经定下来的任何东西：下划标注、胶囊、水手领三线、格子。</li>
+        <li>形状、排布、渐变都是行业默认值，没有用到 Erika 已经定下来的任何东西：下划标注、胶囊、水手领三线、格子。</li>
         <li>弹幕密度曲线是唯一的特色，但它是一条孤零零的灰色山脊，和进度条是两样东西。</li>
         <li>番剧特有的结构（OP、A/B 部分、ED、预告）在进度条上看不出来。</li>
       </ul>
@@ -238,7 +238,7 @@
 
   <section class="dir" id="dA" data-dir="A">
     <div class="dir-hd"><span class="dir-k">A</span><div>
-      <h3>标注 <span class="rec">推荐</span></h3>
+      <h3>标注</h3>
       <p>进度条本身就是一道「下划标注」：当前时间压在主题色胶囊上，和全 App 的文字强调是同一个形状。弹幕热度直接画成进度条的粗细。</p>
     </div></div>
     <div class="dir-tools"><span class="seg"><span data-mode="play" class="on">控制层</span><span data-mode="hover">悬停进度条</span><span data-mode="pause">暂停</span><span data-mode="hidden">看片时</span></span><span class="small muted">都可以直接点：播放、拖进度条、点 ☆、开关弹幕、发弹幕</span></div>
@@ -264,7 +264,7 @@
 
   <section class="dir" id="dB" data-dir="B">
     <div class="dir-hd"><span class="dir-k">B</span><div>
-      <h3>胶囊岛</h3>
+      <h3>胶囊岛 <span class="rec">已选定</span></h3>
       <p>控制层是一颗浮在画面上的毛玻璃胶囊，其他东西都从它身上长出来：悬停进度条时向上长出预览，点字幕或倍速时长成选项卡，发弹幕时收窄变成输入框。</p>
     </div></div>
     <div class="dir-tools"><span class="seg"><span data-mode="play" class="on">控制层</span><span data-mode="hover">悬停进度条</span><span data-mode="sub">字幕选项</span><span data-mode="say">发弹幕</span><span data-mode="hidden">看片时</span></span><span class="small muted">点字幕、1.0×、纸飞机试试形变</span></div>
@@ -326,7 +326,7 @@
         <tr><td>实现成本</td><td>低：形状 + 文字</td><td>中：自绘浮层、毛玻璃裁切</td><td>低：形状 + 一个摆动弹簧</td></tr>
       </tbody>
     </table></div>
-    <div class="callout"><p><b>推荐 A。</b>它把你已经挑好的下划标注用在了播放器里最常被看到的地方，不新增任何视觉元素，整个 App 读起来是一套语言。三个方向的零件也可以混用，比如 A 的进度条配 B 的「看片时缩成小胶囊」，或者 A 的布局配 C 的领巾播放头。选好之后我再改交互原型和文档 9.4 节。</p></div>
+    <div class="callout"><p><b>2026-10-12 选定 B · 胶囊岛。</b>它的硬伤（胶囊挡在字幕的位置上）由「字幕让位」解决：控制层出现时，底部对白抬到胶囊上方。毛玻璃不依赖系统，由视频渲染器自己画，五个平台都能做。交互原型和文档 9.4 节已经换成这一版，手机横屏用同一颗胶囊，功能和桌面一致。这一页留作记录。</p></div>
   </section>
 </main>
 

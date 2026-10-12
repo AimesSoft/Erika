@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="70 66 810 370" width="810" height="370" role="img" aria-label="ERIKA エリカ">
+  <title>ERIKA エリカ</title>
+  <!--
+    Erika 标题字 · 定稿：绀青 · 深底色 #AFC0EA，日文同色，两侧细线（深底用；浅底用 erika-logo.svg）
+    字形与 erika-wordmark.svg 相同（手写闭合轮廓）。
+    入场动效（纯 CSS，放进 <img> 和 GitHub README 都会播放；系统开了「减少动态效果」就直接显示）：
+      字母  从左到右依次上浮淡入：位移 26 → 0，0.9s，间隔 0.09s，从 0.08s 开始
+      日文  上浮淡入：位移 10 → 0，0.8s，从 0.62s 开始
+      细线  从日文两侧向外伸出：横向 20% → 100%，0.9s，从 0.76s 开始
+      缓动一律 cubic-bezier(.2, .8, .2, 1)，全程约 1.7s，停在最后一帧
+  -->
+  <style>
+    .lt, .kana, .rule { animation-duration: .9s; animation-timing-function: cubic-bezier(.2, .8, .2, 1); animation-fill-mode: both; }
+    .lt { animation-name: rise; }
+    .E { animation-delay: .08s; } .R { animation-delay: .17s; } .I { animation-delay: .26s; } .K { animation-delay: .35s; } .A { animation-delay: .44s; }
+    .kana { animation-name: kana; animation-duration: .8s; animation-delay: .62s; }
+    .rule { animation-name: rule; animation-delay: .76s; transform-box: fill-box; }
+    .rule.l { transform-origin: 100% 50%; } .rule.r { transform-origin: 0 50%; }
+    @keyframes rise { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: none; } }
+    @keyframes kana { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+    @keyframes rule { from { opacity: 0; transform: scaleX(.2); } to { opacity: 1; transform: none; } }
+    @media (prefers-reduced-motion: reduce) { .lt, .kana, .rule { animation: none; } }
+  </style>
+  <g fill="#AFC0EA">
+    <path class="lt E" d="M100 100 L194 100 L194 120 Q158 117 123 119 L123 189 Q156 190.5 186 188.5 L186 207.5 Q156 206 123 207 L123 281 Q162 282.5 198 280 L198 300 L100 300 Q103 200 100 100 Z"/>
+    <path class="lt R" fill-rule="evenodd" d="M250 100 L300 100 C330 100 350 122 350 154 C350 178 339 195 324 203 L373 300 L343 300 L300 210 L273 210 L273 300 L250 300 Q253 200 250 100 Z M273 119 L273 191 L300 191 C316 191 327 176 327 155 C327 134 316 119 299 119 Z"/>
+    <path class="lt I" d="M428 100 L451 100 Q448 200 451 300 L428 300 Q431 200 428 100 Z"/>
+    <path class="lt K" d="M525 100 L548 100 L548 203 L626 100 L646 100 L581 182.8 L656 300 L626 300 L566.6 201 L548 224.7 L548 300 L525 300 Q528 200 525 100 Z"/>
+    <path class="lt A" fill-rule="evenodd" d="M770 95 L850 300 L822 300 L798.5 240 L730.5 240 L707 300 L690 300 Z M764.5 153.4 L793 226 L736 226 Z"/>
+  </g>
+  <g class="kana" fill="none" stroke="#AFC0EA" stroke-width="7" stroke-linejoin="miter">
+    <g transform="translate(356 350)"><path d="M7 6 L47 6 M27 6 L27 48 M0 48 L54 48"/></g>
+    <g transform="translate(448 350)"><path d="M13 4 L13 34 M41 1 L41 26 Q41 47 19 54"/></g>
+    <g transform="translate(540 350)"><path d="M3 17 L48 17 L48 44 Q48 54 37 52 M24 0 L24 20 Q22 42 4 55"/></g>
+  </g>
+  <g stroke="#AFC0EA" stroke-width="2.5">
+    <path class="rule l" d="M150 377 L326 377"/>
+    <path class="rule r" d="M624 377 L800 377"/>
+  </g>
+</svg>

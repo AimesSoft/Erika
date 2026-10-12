@@ -3,17 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NipaPlay Next 设计</title>
-<meta name="description" content="NipaPlay Next 界面设计文档 v0.1：可选功能、布局优先与原生控件、动效与视觉语言。">
+<title>Erika 设计</title>
+<meta name="description" content="Erika 界面设计文档 v0.1：可选功能、布局优先与原生控件、动效与视觉语言。">
 <link rel="icon" href="assets/icon.png">
 <link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,400,0..1,0&display=block">
+<link rel="stylesheet" href="next.css">
 </head>
 <body>
 
 <div class="shell">
   <!-- ============ 目录 ============ -->
   <nav class="toc" aria-label="目录">
-    <div class="brand"><img src="assets/icon.png" alt=""><span>NipaPlay Next</span></div>
+    <div class="brand"><img src="assets/icon.png" alt=""><span>Erika</span></div>
     <ol>
       <li><a href="#proto"><span class="n">▶</span><span class="l">交互原型</span></a></li>
       <li><a href="#s0"><span class="n">00</span><span class="l">一页摘要</span></a></li>
@@ -29,11 +32,15 @@
       <li class="sub"><a href="#s9-1"><span class="l">纯粹模式</span></a></li>
       <li class="sub"><a href="#s9-2"><span class="l">首页</span></a></li>
       <li class="sub"><a href="#s9-3"><span class="l">番剧详情</span></a></li>
-      <li class="sub"><a href="#s9-4"><span class="l">播放器</span></a></li>
-      <li class="sub"><a href="#s9-5"><span class="l">媒体库</span></a></li>
-      <li class="sub"><a href="#s9-6"><span class="l">设置 · 可选功能</span></a></li>
-      <li class="sub"><a href="#s9-7"><span class="l">插件市场</span></a></li>
-      <li class="sub"><a href="#s9-8"><span class="l">移动端</span></a></li>
+      <li class="sub"><a href="#s9-4"><span class="l">播放器 · 画框</span></a></li>
+      <li class="sub"><a href="#s9-5"><span class="l">新番</span></a></li>
+      <li class="sub"><a href="#s9-6"><span class="l">媒体库</span></a></li>
+      <li class="sub"><a href="#s9-7"><span class="l">搜索</span></a></li>
+      <li class="sub"><a href="#s9-8"><span class="l">设置 · 可选功能</span></a></li>
+      <li class="sub"><a href="#s9-9"><span class="l">插件市场</span></a></li>
+      <li class="sub"><a href="#s9-10"><span class="l">下载</span></a></li>
+      <li class="sub"><a href="#s9-11"><span class="l">迷你播放器</span></a></li>
+      <li class="sub"><a href="#s9-12"><span class="l">四种设备 · 功能对等</span></a></li>
       <li><a href="#s10"><span class="n">10</span><span class="l">插件与扩展点</span></a></li>
       <li><a href="#s11"><span class="n">11</span><span class="l">旧界面迁移</span></a></li>
       <li><a href="#s12"><span class="n">12</span><span class="l">待讨论</span></a></li>
@@ -44,10 +51,10 @@
   <!-- ============ 封面 ============ -->
   <header class="cover">
     <div class="band plaid-academy"></div>
-    <img class="girl" src="assets/girl.png" alt="NipaPlay 看板娘">
+    <img class="girl" src="assets/girl.png" alt="Erika 看板娘">
     <div class="card">
-      <img class="logo" src="assets/logo.png" alt="NipaPlay">
-      <h1>NipaPlay Next 界面设计文档</h1>
+      <img class="logo erika-lg lt" src="brand/erika-logo.svg" alt="ERIKA エリカ"><img class="logo erika-lg dk" src="brand/erika-logo-dark.svg" alt="">
+      <h1>Erika 界面设计文档</h1>
       <p class="lead">它可以纯粹得像 VLC，也可以丰富得像今天的 NipaPlay：用哪些功能由用户决定，布局由我们设计，控件交给系统。</p>
       <div class="meta">
         <span class="chip acc-chip"><span class="dot"></span>v0.1 草案</span>
@@ -66,9 +73,9 @@
   <section class="sec" id="proto">
     <div class="eyebrow"><span class="sailor"></span><b>原型</b> 交互原型</div>
     <h2>不用翻页，直接点着用</h2>
-    <p class="lead2">一个完整的 NipaPlay 窗口。首次配置、首页、番剧详情、播放器、迷你播放器和画中画、媒体库、新番、下载、设置（含可选功能和插件市场）、搜索都可以操作；顶部可以切换桌面和手机。打开或拖进一个本地视频，会真的播放。你的模块选择会被记住，第一次打开时会先走首次配置。</p>
-    <div class="proto-embed"><iframe src="app.html?embed=1" title="NipaPlay Next 交互原型" allow="fullscreen" loading="lazy"></iframe></div>
-    <div class="frame-tools"><a class="b L p" href="app.html" target="_blank" rel="noopener">全屏打开原型</a><span class="small muted">快捷键：⌘K 搜索 · ⌘, 设置 · ⌘O 打开文件 · 播放时 空格 暂停、D 弹幕、← → 快进退、Esc 返回</span></div>
+    <p class="lead2">一个完整的 Erika 窗口，用的是画框版的界面（第 09 章）。首次启动、首页、番剧详情、播放器、迷你播放器和画中画、新番、媒体库、搜索、设置（含可选功能和插件市场）、下载都可以操作。顶部切换 <b>桌面 / 平板 / 手机 / 电视</b>，四种设备上功能一样多，只有界面不同；设计语言只列那种设备上真的会出现的。打开或拖进一个本地视频，会真的播放。你的模块选择会被记住，第一次打开时会先走首次启动。</p>
+    <div class="proto-embed"><iframe src="app.html?embed=1" title="Erika 交互原型（画框版）" allow="fullscreen" loading="lazy"></iframe></div>
+    <div class="frame-tools"><a class="b L p" href="app.html" target="_blank" rel="noopener">全屏打开原型</a><span class="small muted">桌面：⌘K 搜索 · ⌘, 设置 · ⌘O 打开文件 · 播放时 空格 暂停、Esc 返回 · 电视：方向键移动焦点、回车确认、Esc 返回 · 每一屏的逐屏审查见 <a href="next.html">画框版预览</a></span></div>
   </section>
 
   <!-- ============ 00 摘要 ============ -->
@@ -110,7 +117,7 @@
     <div class="tiers">
       <div class="tier">
         <div class="hd"><svg class="i"><use href="#i-film"/></svg><b>核心</b></div>
-        <div class="sd">始终存在。只用核心，NipaPlay 就是 VLC / PotPlayer / IINA 那种播放器。</div>
+        <div class="sd">始终存在。只用核心，Erika 就是 VLC / PotPlayer / IINA 那种播放器。</div>
         <ul>
           <li><svg class="i"><use href="#i-folder"/></svg>打开文件 / 文件夹 / 链接、拖放</li>
           <li><svg class="i"><use href="#i-play"/></svg>播放控制、倍速、全屏、画中画</li>
@@ -151,7 +158,7 @@
         <tr><td>同目录连播、续播、最近播放、跳过片头（固定秒数）</td><td><span class="tag core">核心</span></td><td>最近播放只存在本地，云同步放在「账号同步」</td></tr>
         <tr><td>快捷键、外观（明暗、主题色）、语言、本地备份与恢复</td><td><span class="tag core">核心</span></td><td></td></tr>
         <tr><td>HDR / EDR</td><td><span class="tag core">核心</span></td><td>自动启用，不提供开关</td></tr>
-        <tr><td>播放内核 Erika / libmpv / MDK / Video Player</td><td><span class="tag core">核心</span> <span class="tag drop">收敛</span></td><td>默认 Erika，libmpv 作为后备放在 设置 › 高级；MDK 和 Video Player 建议退役（见待讨论）</td></tr>
+        <tr><td>播放内核 liberika / libmpv / MDK / Video Player</td><td><span class="tag core">核心</span> <span class="tag drop">收敛</span></td><td>默认 liberika，libmpv 作为后备放在 设置 › 高级；MDK 和 Video Player 建议退役（见待讨论）</td></tr>
         <tr><td>独立播放窗口、开发者选项、日志导出</td><td><span class="tag core">核心</span></td><td>放在 设置 › 高级</td></tr>
         <tr><td>大屏模式（实验室）</td><td><span class="tag core">核心</span></td><td>改成按窗口尺寸自动适配（TV 尺寸档），不再是开关</td></tr>
         <tr><td>弹弹play 自动 / 手动匹配、弹幕渲染与设置、弹幕轨道 / 列表 / 偏移、本地挂载 xml/json</td><td><span class="tag mod">弹幕</span></td><td>播放器的弹幕按钮、浮层、面板分页都属于这个模块</td></tr>
@@ -192,7 +199,7 @@ module "danmaku" {
   contributes: {
     playerHud:      [<span class="s">"danmaku.toggle"</span>, <span class="s">"danmaku.input"</span>],  <span class="c">// 播放器控制条</span>
     playerPanel:    [<span class="s">"danmaku"</span>],                         <span class="c">// 设置侧面板的分页</span>
-    seekbarOverlay: [<span class="s">"danmaku.density"</span>],                 <span class="c">// 进度条上方的弹幕密度曲线</span>
+    seekbarOverlay: [<span class="s">"danmaku.peaks"</span>],                   <span class="c">// 进度条上方的弹幕高峰点</span>
     settings:       [<span class="s">"danmaku"</span>],                         <span class="c">// 设置侧栏里的一节</span>
     shortcuts:      [<span class="s">"D: 开关弹幕"</span>, <span class="s">"[ / ]: 弹幕偏移"</span>],
     services:       [<span class="s">"dandanplay.match"</span>, <span class="s">"danmaku.render"</span>] <span class="c">// 关闭时不初始化</span>
@@ -203,22 +210,25 @@ module "danmaku" {
   <!-- ============ 03 首次启动 ============ -->
   <section class="sec" id="s3">
     <div class="eyebrow"><span class="sailor"></span><b>03</b> 首次启动配置</div>
-    <h2>一分钟，选出你的 NipaPlay</h2>
-    <p class="lead2">引导一共六步，大部分人在第二步选个预设就可以一路「继续」到底。下面是可以点的原型：选预设、开关模块，右边的主窗口预览会实时变化（主题色也能在这里改）。</p>
+    <h2>一分钟，选出你的 Erika</h2>
+    <p class="lead2">引导一共四步，大部分人在第二步选个预设就可以一路「继续」到底：开始 → 选「看番」→ 继续 → 开始使用，四次点击。下面是可以点的画框版：选起点、开关模块，右边的小窗口实时组装（主题色和明暗也能在这里改）；点「开始使用」，这扇小窗口长成你的 Erika。</p>
 
     <div class="flow">
       <div><b>欢迎</b>Logo、看板娘、学院格</div>
-      <div><b>选预设</b>纯粹 / 看番 / 全都要 / 自己挑</div>
-      <div><b>微调</b>逐个开关模块，带实时预览</div>
+      <div><b>选起点 · 微调</b>纯粹 / 看番 / 全都要 / 自己挑，下面是全部模块的开关</div>
       <div><b>外观</b>主题色、明暗</div>
-      <div><b>按需设置</b>只问已开模块要的东西</div>
-      <div><b>完成</b>变形成主窗口</div>
+      <div><b>完成</b>小窗口长成主窗口</div>
     </div>
 
-    <div class="frame-wrap"><div class="frame" data-w="960" data-h="600">
-      <div class="win col" id="ob"></div>
-    </div></div>
-    <p class="cap"><span><b>窗口 960×600</b> · 引导窗口固定尺寸，不随主窗口缩放；手机上全屏显示，底部按钮条贴着安全区。</span><span>每一步的切换使用 smooth 弹簧，预设卡片和导航项的增删使用 jelly 弹簧。</span></p>
+    <div class="nxp-bar nx-bar">
+      <span class="nx-g"><span class="lb">设计语言</span><span class="seg" data-g="ds"><span data-v="apple">苹果 · 液态玻璃</span><span data-v="material">Material 3</span><span data-v="fluent">Fluent 2</span><span data-v="adwaita">libadwaita</span><span data-v="web">网页</span></span></span>
+      <span class="nx-g"><span class="lb">设备</span><span class="seg" data-g="dev"><span data-v="desk">桌面</span><span data-v="tablet">平板</span><span data-v="phone">手机</span><span data-v="tv">电视</span></span></span>
+      <span class="nxp-tvhint">电视：先点一下画面，再用 <kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> 移动焦点，<kbd>回车</kbd> 确认，<kbd>Esc</kbd> 返回。默认焦点在「开始」，一路回车就能走完四步。</span>
+    </div>
+    <div class="nx-live" data-start="onboard">
+      <div class="nxp-stage-wrap"><div class="nxp-stage"></div></div>
+      <p class="cap"><span><b>桌面</b>是 960×600 的弹窗，不随主窗口缩放；<b>平板</b>是居中的表单弹窗；<b>手机和电视</b>全屏，手机的预览移到卡片上方，底部按钮条贴着安全区。</span><span>弹窗 hero 弹出，导航项 jelly 进场；完成时一个矩形的位置、尺寸、圆角走 hero 弹簧 <span class="b S" data-nx-reset>重新开始</span></span></p>
+    </div>
 
     <h3>3.1 四个预设</h3>
     <div class="tbl-wrap"><table>
@@ -234,8 +244,8 @@ module "danmaku" {
     <ul>
       <li><b>「跳过」</b>按纯粹播放处理（待讨论 #1）。从旧版 NipaPlay 迁移过来的用户，根据旧配置自动预选「全都要」或者和使用情况最接近的组合。</li>
       <li><b>依赖处理</b>：开启「网络媒体源」会顺带开启「媒体库」，底部弹出提示，被顺带开启的那一行做一次 jelly 回弹，让用户看到变化发生在哪里。</li>
-      <li><b>按需设置</b>只问已开启模块需要的东西：媒体库要文件夹，账号同步要登录，网络媒体源要服务器。每一项都能「稍后」。</li>
-      <li><b>完成时</b>，右侧预览缩略图放大成真实的主窗口（共享元素转场），让用户直接看到刚才的选择变成了什么样子。</li>
+      <li><b>六步并成四步：</b>「微调」并进第二步（预设卡片下面是全部模块的开关芯片，点了自动切到「自己挑」，带依赖处理）；原来的「按需设置」不在引导里问了，见待讨论。</li>
+      <li><b>完成时</b>，右侧预览的小窗口长成真实的主窗口（共享元素转场），主窗口按刚才的选择重新组装，侧栏只出现选中的页面。</li>
     </ul>
   </section>
 
@@ -379,10 +389,10 @@ module "danmaku" {
     </table></div>
 
     <h3>6.1 自绘组件</h3>
-    <p>只有下面这些组件由 NipaPlay 自己绘制，自定义的视觉语言也只在它们身上出现。它们只用图片、文字、形状和变换这些基本元素，任何平台都能画。</p>
+    <p>只有下面这些组件由 Erika 自己绘制，自定义的视觉语言也只在它们身上出现。它们只用图片、文字、形状和变换这些基本元素，任何平台都能画。</p>
     <div class="grid g4">
       <div class="card"><h4>海报卡片</h4><p class="small muted">海报、继续观看、剧集缩略图，包括进度条和角标。</p></div>
-      <div class="card"><h4>播放器控制层</h4><p class="small muted">进度条（带弹幕密度曲线）、控制条、中央反馈图标。</p></div>
+      <div class="card"><h4>播放器画框</h4><p class="small muted">画面的圆角裁切和缩放（铺满 / 退后 / 推开三档）、章节名文字、中央的播放反馈图标。画框四周的按钮、滑块、菜单都是原生控件，不画毛玻璃。</p></div>
       <div class="card"><h4>弹幕层</h4><p class="small muted">由渲染引擎绘制，不属于界面控件。</p></div>
       <div class="card"><h4>纹理表面</h4><p class="small muted">格子纹背景、拖放区、引导页的预设卡片、空状态。</p></div>
     </div>
@@ -481,7 +491,7 @@ module "danmaku" {
       <div class="spec-sw"><div class="sw plaid-uniform"></div><div class="tx"><b>制服格 Uniform Check</b><p>中性灰加一根主题色细线，不透明度约 5%。用于空状态、引导背景、纯粹模式的空闲窗口。是默认使用的纹理。</p></div></div>
       <div class="spec-sw"><div class="sw plaid-academy"></div><div class="tx"><b>学院格 Academy Tartan</b><p>海军蓝底，主题色和白色交织。只在「仪式时刻」使用：欢迎页、关于页、插件市场头图。</p></div></div>
       <div class="spec-sw"><div class="sw plaid-skirt"></div><div class="tx"><b>裙摆格 Skirt Tartan</b><p>主题色做底的满色格纹，最热闹的一款。只在完成、成就这类一闪而过的时刻用，面积不超过一条横幅。</p></div></div>
-      <div class="spec-sw"><div class="sw" style="display:grid;place-items:center;background:var(--surface-2)"><div style="display:flex;gap:28px;align-items:center"><div class="plaid-gingham" style="width:120px;height:48px;border-radius:10px"></div><span class="sailor" style="width:56px;height:9px"></span><span class="acc" style="font-size:36px">☆</span></div></div><div class="tx"><b>细格 · 水手领三线 · 星</b><p>细格只用在很小的面积上（标签底纹、选中指示条）。三线放在区块标题和提示的左侧做装饰。星号来自 logo 里的「ニパ～☆」，用于完成和收藏的粒子动效。</p></div></div>
+      <div class="spec-sw"><div class="sw" style="display:grid;place-items:center;background:var(--surface-2)"><div style="display:flex;gap:28px;align-items:center"><div class="plaid-gingham" style="width:120px;height:48px;border-radius:10px"></div><span class="sailor" style="width:56px;height:9px"></span><span class="acc" style="font-size:36px">☆</span></div></div><div class="tx"><b>细格 · 水手领三线 · 星</b><p>细格只用在很小的面积上（标签底纹、选中指示条）。三线放在区块标题和提示的左侧做装饰。星号只用在完成和收藏的粒子动效里。</p></div></div>
     </div>
     <h4>使用规则</h4>
     <ul>
@@ -499,7 +509,7 @@ skirt-tartan:   accent 18 · band(black 22%) 28 · 6 · line(navy 80%) 3 · 6 ·
     <div class="grid g2">
       <div class="card plaid-uniform" style="display:flex;gap:20px;align-items:center;min-height:220px">
         <img src="assets/girl.png" alt="" style="width:150px;flex:none">
-        <div><div class="t2" style="font-size:19px;margin-bottom:4px">这里还空空的</div><p class="small muted">添加一个文件夹，NipaPlay 会自动识别番剧并找到封面。</p><span class="b p">添加文件夹</span></div>
+        <div><div class="t2" style="font-size:19px;margin-bottom:4px">这里还空空的</div><p class="small muted">添加一个文件夹，Erika 会自动识别番剧并找到封面。</p><span class="b p">添加文件夹</span></div>
       </div>
       <div class="card"><h4>只在这些地方出现</h4><ul class="small muted" style="padding-left:1.1em;margin:0">
         <li>空状态：没有媒体、没有搜索结果、离线</li>
@@ -589,457 +599,198 @@ skirt-tartan:   accent 18 · band(black 22%) 28 · 6 · line(navy 80%) 3 · 6 ·
         <tr><td>T1</td><td>海报 → 详情</td><td>共享元素：封面从海报的位置放大到详情页头部，其他内容依次淡入（间隔 30ms）</td><td>hero / smooth</td></tr>
         <tr><td>T2</td><td>详情 / 继续观看 → 播放器</td><td>缩略图展开成全窗口，背景压暗；返回时视频缩到迷你播放器的位置</td><td>hero</td></tr>
         <tr><td>T3</td><td>侧栏切换页面</td><td>新页面淡入并上移 12px，选中指示器滑动过去</td><td>smooth / snappy</td></tr>
-        <tr><td>T4</td><td>播放器侧面板</td><td>从右侧滑入，面板内容依次出现；视频不缩放，避免画面跳动</td><td>bouncy</td></tr>
+        <tr><td>T4</td><td>播放设置面板</td><td>面板从右侧滑入占右栏，画框同时缩小、移到左边（推开），面板内容依次出现</td><td>hero / bouncy</td></tr>
         <tr><td>T5</td><td>浮层</td><td>以触发按钮为原点，从 0.9 放大到 1</td><td>bouncy</td></tr>
         <tr><td>T6</td><td>模块增删</td><td>新导航项从 0.4 弹出，其他项平滑让位</td><td>jelly / smooth</td></tr>
         <tr><td>T7</td><td>引导完成 → 主窗口</td><td>预览缩略图变形成真实的主窗口</td><td>hero</td></tr>
         <tr><td>T8</td><td>轻提示</td><td>从底部弹入，3 秒后下沉淡出</td><td>bouncy</td></tr>
         <tr><td>T9</td><td>中央播放反馈</td><td>图标从 0.6 弹到 1，停留 400ms 后淡出</td><td>jelly</td></tr>
+        <tr><td>T10</td><td>画框退后 / 铺满</td><td>一动鼠标（点画面、按遥控器），画面从铺满缩进圆角画框，控件在四周淡入；3 秒没操作再铺满，控件淡出。字幕和弹幕在画框里，跟着一起缩放</td><td>hero</td></tr>
+        <tr><td>T11</td><td>画框 ↔ 迷你播放器</td><td>返回时画框缩进侧栏底部（手机是标签栏上方的迷你条，电视是右下角画中画）；点它从原处长回去</td><td>hero</td></tr>
       </tbody>
     </table></div>
 
     <h3>8.6 共享元素演示（T1 / T2）</h3>
-    <p>点一张海报打开详情，再点「播放」进入播放器。在播放器里点左上角返回，视频会缩小成侧栏底部的迷你播放器，点迷你播放器可以回到全屏。</p>
-    <div class="frame-wrap"><div class="frame" data-w="960" data-h="600">
-      <div class="win" id="se"></div>
-    </div></div>
-    <p class="cap"><span id="seCap">状态：媒体库</span><span>海报 → 详情：hero 弹簧 · 详情 → 播放器：hero 弹簧 · 返回：收进迷你播放器</span></p>
+    <p>点一张海报打开详情，再点胶片里的一集进入播放器。在播放器里点左上角返回，画框会缩成侧栏底部的迷你播放器，点迷你播放器可以回到全屏。设计语言和设备跟随第 09 章顶部的开关。</p>
+    <div class="nx-live" data-start="lib">
+      <div class="nxp-stage-wrap"><div class="nxp-stage"></div></div>
+      <p class="cap"><span>海报 → 详情：hero 弹簧 · 剧集 → 播放器：那一格长成画框（hero） · 返回：画框收进迷你播放器（T11）</span><span><span class="b S" data-nx-reset>恢复</span></span></p>
+    </div>
   </section>
 
   <!-- ============ 09 关键界面 ============ -->
   <section class="sec" id="s9">
     <div class="eyebrow"><span class="sailor"></span><b>09</b> 关键界面</div>
-    <h2>关键界面的布局稿</h2>
-    <p class="lead2">下面是线框稿，不是视觉稿：重点看位置、控件类型和尺寸。打开右下角的「标注」可以看到每个控件的规格。</p>
-    <div class="legend">
-      <span><i style="background:var(--wf-text)"></i>占位文字</span>
-      <span><i style="background:var(--wf-block)"></i>系统控件</span>
-      <span><i style="background:var(--accent)"></i>允许使用主题色的位置</span>
-      <span><i style="outline:1.5px dashed rgba(var(--accent-rgb),.85);outline-offset:-2px"></i>标注（右下角开关）</span>
+    <h2>关键界面 · 画框版</h2>
+    <p class="lead2">播放器的「画框」思路推广到每一个界面：<b>布局和动效是 Erika 自己的，控件全部交给各平台原生绘制</b>。每一屏都有自己的布局想法，但共用同一根线索——画面是一个画框：首页的舞台是画框，点进详情是画框在长大，开始播放是画框铺满窗口，返回时画框缩进侧栏。动效只用位置、尺寸、缩放、透明度和圆角裁切，全部是可打断的弹簧。</p>
+    <p>下面每一屏都是可以直接点的窗口（和顶部的交互原型是同一套代码）。用这一章顶部的开关切换设计语言、设备和功能预设；明暗跟随文档。每一屏的逐屏审查记录在 <a href="next.html">画框版预览</a> 里。</p>
+    <div class="nxp-bar nx-bar">
+      <span class="nx-g"><span class="lb">设计语言</span><span class="seg" data-g="ds"><span data-v="apple">苹果 · 液态玻璃</span><span data-v="material">Material 3</span><span data-v="fluent">Fluent 2</span><span data-v="adwaita">libadwaita</span><span data-v="web">网页</span></span></span>
+      <span class="nx-g"><span class="lb">设备</span><span class="seg" data-g="dev"><span data-v="desk">桌面</span><span data-v="tablet">平板</span><span data-v="phone">手机</span><span data-v="tv">电视</span></span></span>
+      <span class="nx-g"><span class="lb">功能</span><span class="seg" data-g="preset"><span data-v="pure">纯粹</span><span data-v="anime">看番</span><span data-v="all">全都要</span></span></span>
+      <span class="nxp-tvhint">电视：先点一下画面，再用 <kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> 移动焦点，<kbd>回车</kbd> 确认，<kbd>Esc</kbd> 返回（相当于遥控器的方向键、确认键和返回键）。</span>
     </div>
 
     <!-- 9.1 纯粹模式 -->
-    <h3 id="s9-1">9.1 纯粹模式 · 空闲窗口</h3>
-    <p>所有模块都关闭时，窗口就是播放器本身。空闲时只显示一个「打开」区域和最近播放，体验接近 IINA、VLC、PotPlayer。</p>
-    <div class="frame-wrap"><div class="frame" data-w="960" data-h="600">
-      <div class="win col plaid-uniform">
-        <div class="chrome" style="display:flex;align-items:center;height:52px;padding-right:14px">
-          <div class="dots3"><i></i><i></i><i></i></div><span style="flex:1"></span>
-          <span class="ib" data-spec="图标按钮 S · 设置"><svg class="i"><use href="#i-gear"/></svg></span>
-        </div>
-        <div style="flex:1;display:flex;flex-direction:column;align-items:center;padding-top:34px">
-          <div data-spec="拖放区 · 自绘表面 540×250" style="width:540px;height:250px;border-radius:22px;border:1.5px dashed var(--line-2);background:var(--wf-bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px">
-            <svg class="i" style="width:44px;height:44px;color:var(--text-3);stroke-width:1.6"><use href="#i-film"/></svg>
-            <div class="t2" style="font-size:19px;margin-top:6px">把视频拖到这里</div>
-            <div class="cap2">支持文件、文件夹和字幕文件，也可以按 ⌘O</div>
-            <div style="display:flex;gap:10px;margin-top:18px;align-items:center">
-              <span class="b L p" data-spec="主要按钮 · L 42"><svg class="i"><use href="#i-folder"/></svg>打开文件</span>
-              <span class="b" data-spec="次要按钮 · M 32">打开文件夹</span>
-              <span class="b plain" data-spec="无边框按钮 · M"><span>打开链接…</span></span>
-            </div>
-          </div>
-          <div data-spec="分组列表 · 行高 44 · 最多 5 行" style="width:540px;margin-top:30px">
-            <div style="display:flex;justify-content:space-between;align-items:baseline;margin:0 4px 8px"><span class="t2" style="font-size:14px">最近播放</span><span class="cap2">清除</span></div>
-            <div class="row-list">
-              <div class="row" style="min-height:44px"><svg class="i" style="color:var(--text-3)"><use href="#i-film"/></svg><div class="tx"><div class="tt" style="font-weight:500;font-size:13px">[Nekomoe] Sousou no Frieren S2 - 03 [1080p].mkv</div><div class="sl" style="height:3px;margin-top:6px;flex:none;width:100%"><b style="width:62%"></b></div></div><span class="cap2 nowrap">剩 9:12</span></div>
-              <div class="row" style="min-height:44px"><svg class="i" style="color:var(--text-3)"><use href="#i-film"/></svg><div class="tx"><div class="tt" style="font-weight:500;font-size:13px">Boku dake ga Inai Machi - 01.mkv</div><div class="sl" style="height:3px;margin-top:6px;flex:none;width:100%"><b style="width:38%"></b></div></div><span class="cap2 nowrap">剩 15:03</span></div>
-              <div class="row" style="min-height:44px"><svg class="i" style="color:var(--text-3)"><use href="#i-film"/></svg><div class="tx"><div class="tt" style="font-weight:500;font-size:13px">Vacation_2026_Kyoto.mp4</div><div class="sl" style="height:3px;margin-top:6px;flex:none;width:100%"><b style="width:90%"></b></div></div><span class="cap2 nowrap">剩 0:41</span></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div></div>
-    <p class="cap"><span><b>手边：</b>打开文件（主要按钮）、空格键续播上一个视频、直接拖入</span><span>背景：制服格 5%</span></p>
+    <h3 id="s9-1">9.1 纯粹模式 · 空画框</h3>
+    <p>所有模块都关掉时，窗口就是一个还没放画面的画框，体验接近 IINA、VLC、PotPlayer。空画框和播放器退后时的画框一样大、在同一个位置，所以打开视频时画面直接填进来，控件出现在四周，没有任何跳动。画框正中是「打开文件」，旁边是打开文件夹和打开链接；最近播放排在画框下面，正好是播放器控制行的位置。</p>
+    <div class="nx-live" data-start="idle" data-mods="pure">
+      <div class="nxp-stage-wrap"><div class="nxp-stage"></div></div>
+      <p class="cap"><span><b>空画框 = 播放器「退后」那一档的画框：</b>桌面 103, 64 · 1074 × 604；平板 60, 76 · 1060 × 596；电视 200, 52 · 880 × 495。拖进来时描边变主题色并 jelly 晃一下</span><span>手边：打开文件、最近播放、「继续上次」（桌面另有空格键）、直接拖进窗口 <span class="b S" data-nx-reset>恢复</span></span></p>
+    </div>
 
     <!-- 9.2 首页 -->
-    <h3 id="s9-2">9.2 首页（追番模块）</h3>
-    <p>第一行永远是继续观看。去掉了现在的大图轮播，用安静的分区排版代替；横幅推荐挪到「新番」页面。</p>
-    <div class="frame-wrap"><div class="frame" data-w="1280" data-h="800">
-      <div class="win">
-        <div class="wf-side" data-side="home" data-mini="1"></div>
-        <div class="wf-main">
-          <div class="wf-toolbar"><span class="grow"></span>
-            <div class="search" style="width:280px" data-spec="搜索框 · M 32 · 宽 280"><svg class="i"><use href="#i-search"/></svg>搜索番剧、文件、设置<kbd>⌘K</kbd></div>
-            <span class="b" data-spec="次要按钮 · M · 常驻"><svg class="i"><use href="#i-plus"/></svg>打开</span>
-          </div>
-          <div class="wf-content">
-            <div class="lt" data-spec="Large Title 30">首页</div>
-            <div class="sec-title"><span class="t2">继续观看</span><span class="more">全部 ›</span></div>
-            <div class="in" style="display:grid;grid-template-columns:repeat(4, minmax(0, 1fr));gap:20px" data-spec="横向滚动 · 16:9 卡片 234×132">
-              <div><div class="thumb"><img src="assets/still1.jpg" alt=""><div class="prog"><b style="width:38%"></b></div></div><div class="tt" style="font-weight:650;margin-top:10px;font-size:14px">只有我不存在的城市</div><div class="cap2">第 1 集 · 剩 15 分钟</div></div>
-              <div><div class="thumb"><img src="assets/posters/p7.jpg" alt="" style="object-position:50% 30%"><div class="prog"><b style="width:62%"></b></div></div><div class="tt" style="font-weight:650;margin-top:10px;font-size:14px">葬送的芙莉莲 第二季</div><div class="cap2">第 3 集 · 剩 9 分钟</div></div>
-              <div><div class="thumb"><img src="assets/posters/p3.jpg" alt="" style="object-position:50% 25%"><div class="prog"><b style="width:20%"></b></div></div><div class="tt" style="font-weight:650;margin-top:10px;font-size:14px">【我推的孩子】 第三季</div><div class="cap2">第 2 集 · 剩 19 分钟</div></div>
-              <div><div class="thumb"><img src="assets/posters/p5.jpg" alt="" style="object-position:50% 30%"><div class="prog"><b style="width:80%"></b></div></div><div class="tt" style="font-weight:650;margin-top:10px;font-size:14px">咒术回战 死灭回游</div><div class="cap2">第 4 集 · 剩 4 分钟</div></div>
-            </div>
-            <div class="sec-title" style="margin-top:34px"><span class="t2">今日更新</span><span class="cap2">周日 · 7 部</span><span class="more">新番表 ›</span></div>
-            <div style="display:grid;grid-template-columns:repeat(7, minmax(0, 1fr));gap:20px">
-              <div><div class="poster"><img src="assets/posters/p13.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">魔都精兵的奴隶 2</div></div>
-              <div><div class="poster"><img src="assets/posters/p14.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">现在多闻君是哪一面</div></div>
-              <div><div class="poster"><img src="assets/posters/p15.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">优雅贵族的休假指南</div></div>
-              <div><div class="poster" data-spec="海报 2:3 · 125×188" ><img src="assets/posters/p16.jpg" alt=""><span class="badge">新</span></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">厄里斯的圣杯</div></div>
-              <div><div class="poster"><img src="assets/posters/p4.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">超时空辉夜姬！</div></div>
-              <div><div class="poster"><img src="assets/posters/p11.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">鬼灭之刃 无限城篇</div></div>
-              <div><div class="poster"><img src="assets/posters/p2.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">只有神知道的世界</div></div>
-            </div>
-            <div class="sec-title" style="margin-top:34px"><span class="t2">媒体库 · 最近添加</span><span class="more">全部 ›</span></div>
-            <div style="display:grid;grid-template-columns:repeat(7, minmax(0, 1fr));gap:20px">
-              <div class="poster"><img src="assets/posters/p1.jpg" alt=""></div><div class="poster"><img src="assets/posters/p2.jpg" alt=""></div><div class="poster"><img src="assets/posters/p4.jpg" alt=""></div><div class="poster"><img src="assets/posters/p5.jpg" alt=""></div><div class="poster"><img src="assets/posters/p7.jpg" alt=""></div><div class="poster"><img src="assets/posters/p10.jpg" alt=""></div><div class="poster"><img src="assets/posters/p12.jpg" alt=""></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div></div>
-    <p class="cap"><span><b>Expanded 1280×800</b> · 侧栏 220 · 页边距 32 · 网格间距 20</span><span>主题色出现的位置：侧栏选中项文字、进度条，一共两处</span></p>
+    <h3 id="s9-2">9.2 首页 · 舞台 + 今日时间轴</h3>
+    <p>「继续观看」是一个舞台画框，其他在看的排在旁边，点一下互换上台；▶ 直接播放另一部（桌面悬停出现，平板和手机常驻在缩略图上，电视在那一行按 ←）。今天的新番挂在一条时间轴上，「现在」是一根主题色竖线：左边已更新，右边今晚稍后。不用轮播，也不用一排同样大的卡片。</p>
+    <div class="nx-live" data-start="home">
+      <div class="nxp-stage-wrap"><div class="nxp-stage"></div></div>
+      <p class="cap"><span><b>换位：</b>两张图交叉飞行（hero）；时间轴进场：轴线展开、海报依次落下（jelly）、「现在」竖线弹出。点舞台，画框直接长成播放器</span><span>主题色：「继续播放」、进度、「现在」竖线 <span class="b S" data-nx-reset>恢复</span></span></p>
+    </div>
 
     <!-- 9.3 详情 -->
-    <h3 id="s9-3">9.3 番剧详情</h3>
-    <p>现在的详情是弹窗，改成页面内推入，配合共享元素转场。主要按钮只有一个，而且总是指向「下一集该看什么」。</p>
-    <div class="frame-wrap"><div class="frame" data-w="1280" data-h="800">
-      <div class="win">
-        <div class="wf-side" data-side="home" data-mini="1"></div>
-        <div class="wf-main">
-          <div style="position:absolute;inset:0 0 auto 0;height:360px;background:url(assets/posters/p7.jpg) center 30%/cover;filter:blur(40px) saturate(1.2);opacity:.35;-webkit-mask-image:linear-gradient(#000 30%,transparent);mask-image:linear-gradient(#000 30%,transparent)"></div>
-          <div class="wf-toolbar" style="position:relative"><span class="ib" data-spec="返回 · 图标按钮 S"><svg class="i"><use href="#i-chev-l"/></svg></span><span class="cap2" style="font-size:13px">首页</span><span class="grow"></span>
-            <div class="search" style="width:240px"><svg class="i"><use href="#i-search"/></svg>搜索<kbd>⌘K</kbd></div>
-          </div>
-          <div class="wf-content" style="position:relative;display:flex;gap:36px;flex:none;padding-top:12px">
-            <div class="poster" style="width:200px;flex:none;box-shadow:0 20px 40px -16px rgba(0,0,0,.45)" data-spec="封面 2:3 · 200×300 · 共享元素"><img src="assets/posters/p7.jpg" alt=""></div>
-            <div style="flex:1;padding-top:14px">
-              <div class="cap2" style="font-size:13px">TV 动画 · 2026 年 1 月 · 共 10 话 · Madhouse</div>
-              <div class="t1" style="font-size:34px;margin:8px 0 12px" data-spec="Title 1 · 34">葬送的芙莉莲 第二季</div>
-              <div style="display:flex;gap:10px;align-items:center;font-size:13px;color:var(--text-2)"><b style="color:var(--text);font-size:15px">★ 8.4</b> Bangumi <span class="faint">·</span> 弹弹play 9.2 <span class="faint">·</span> <span class="chip" style="height:24px">奇幻</span><span class="chip" style="height:24px">冒险</span></div>
-              <div style="margin:18px 0 22px;max-width:560px"><div class="bar" style="width:100%;margin-bottom:8px"></div><div class="bar" style="width:94%;margin-bottom:8px"></div><div class="bar" style="width:60%"></div></div>
-              <div style="display:flex;gap:10px;align-items:center">
-                <span class="b L p" data-spec="主要按钮 · L · 每屏唯一"><svg class="i"><use href="#i-play"/></svg>继续 第 4 集</span>
-                <span class="b" data-spec="下拉选择 · M · 追番状态"><svg class="i"><use href="#i-heart"/></svg>在看<svg class="i" style="width:14px"><use href="#i-chev-d"/></svg></span>
-                <span class="ib M" data-spec="图标按钮 M 36 · 评分"><svg class="i"><use href="#i-star"/></svg></span>
-                <span class="ib M" data-spec="图标按钮 M · 更多菜单"><svg class="i"><use href="#i-more"/></svg></span>
-              </div>
-            </div>
-          </div>
-          <div class="wf-content" style="position:relative;padding-top:22px">
-            <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-              <span class="seg" data-spec="分段控件 · M"><span class="on">剧集</span><span>简介</span><span>评论</span><span>制作</span></span>
-              <span class="grow" style="flex:1"></span><span class="b S">正序<svg class="i" style="width:12px"><use href="#i-chev-d"/></svg></span>
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(5, minmax(0, 1fr));gap:18px" data-spec="剧集网格 · 16:9 · 5 列">
-              <div><div class="thumb"><img src="assets/posters/p7.jpg" alt="" style="object-position:50% 20%;filter:saturate(.6)"><span class="badge" style="left:8px;right:auto"><svg class="i" style="width:12px;height:12px;stroke-width:3"><use href="#i-check"/></svg></span></div><div class="tt" style="font-size:13px;font-weight:600;margin-top:8px">01 · 旅程的继续</div></div>
-              <div><div class="thumb"><img src="assets/posters/p7.jpg" alt="" style="object-position:50% 50%;filter:saturate(.6)"><span class="badge" style="left:8px;right:auto"><svg class="i" style="width:12px;height:12px;stroke-width:3"><use href="#i-check"/></svg></span></div><div class="tt" style="font-size:13px;font-weight:600;margin-top:8px">02 · 北部高原</div></div>
-              <div><div class="thumb"><img src="assets/posters/p7.jpg" alt="" style="object-position:50% 80%;filter:saturate(.6)"><span class="badge" style="left:8px;right:auto"><svg class="i" style="width:12px;height:12px;stroke-width:3"><use href="#i-check"/></svg></span></div><div class="tt" style="font-size:13px;font-weight:600;margin-top:8px">03 · 一级魔法使</div></div>
-              <div><div class="thumb"><img src="assets/posters/p7.jpg" alt="" style="object-position:30% 40%"><div class="prog"><b style="width:35%"></b></div></div><div class="tt" style="font-size:13px;font-weight:650;margin-top:8px"><span class="acc">04 · 继续观看</span></div></div>
-              <div><div class="thumb" style="display:grid;place-items:center"><span style="font-size:34px;font-weight:800;color:var(--text-3)">05</span></div><div class="tt" style="font-size:13px;font-weight:600;margin-top:8px;color:var(--text-2)">05 · 未看</div></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div></div>
-    <p class="cap"><span><b>头部：</b>封面模糊背景只铺 360px，向下渐隐</span><span>主题色：主要按钮、「04」文字、进度条</span></p>
+    <h3 id="s9-3">9.3 番剧详情 · 胶片条</h3>
+    <p>详情是页面内推入，不是弹窗。海报从被点的卡片里长出来；头部铺一层从海报取出的颜色（取色，不用模糊）。剧集是一条胶片，下一集停在正中并放大，越靠近中间的格子越大。主要按钮只有一个，总是指向「下一集该看什么」（没看过的番写「开始」）。追番状态、评分是原生下拉，「更多」里是匹配弹幕、在文件夹中显示、刷新、移除。</p>
+    <div class="nx-live" data-start="detail">
+      <div class="nxp-stage-wrap"><div class="nxp-stage"></div></div>
+      <p class="cap"><span><b>胶片放大 = 按滚动位置算的缩放。</b>桌面两侧有翻页按钮，平板和手机用手指滑，电视左右键走、焦点那一格停在正中。点某一集，那一格长成播放器</span><span>简介 / 评论 / 制作 / 文件 是原生分段控件 <span class="b S" data-nx-reset>恢复</span></span></p>
+    </div>
 
     <!-- 9.4 播放器 -->
-    <h3 id="s9-4">9.4 播放器</h3>
-    <p>控制条分三组：左边是播放，中间是弹幕（模块提供），右边是轨道和画面。弹幕按钮点一下开关，悬停时弹出常用参数浮层，完整设置在侧面板里，一共三层，越常用越近。下面的开关和设置页、引导原型是联动的。</p>
-    <div class="callout"><p><b>重新设计中：</b>下面这版的外观和 YouTube、B 站太像。三个新方向（标注、胶囊岛、水手服）可以在 <a href="player-options.html">播放器重设计</a> 里直接点着比较，选定后替换本节和交互原型。</p></div>
-    <div class="frame-tools">
-      <label class="switch-line"><span class="tg" data-store="danmaku"><i></i></span>弹幕模块</label>
-      <label class="switch-line"><span class="tg" data-store="sync"><i></i></span>账号同步（弹幕输入框）</label>
-      <label class="switch-line"><span class="tg" data-store="enhance"><i></i></span>画质增强</label>
-      <label class="switch-line"><span class="tg" id="tPop"><i></i></span>展开弹幕浮层</label>
-      <label class="switch-line"><span class="tg" id="tPanel"><i></i></span>展开设置侧面板</label>
-    </div>
-    <div class="frame-wrap"><div class="frame" data-w="1280" data-h="720">
-      <div class="win" style="background:#000">
-        <div class="player" id="plA">
-          <img class="video" src="assets/still1.jpg" alt="">
-          <div class="dm-layer" data-mod="danmaku" id="dmLayer"></div>
-          <div class="shade-t"></div><div class="shade-b"></div>
-          <div class="top">
-            <span class="pib" data-spec="返回 · S 34"><svg class="i"><use href="#i-chev-l"/></svg></span>
-            <div class="ttl"><b>只有我不存在的城市</b><span>第 1 集 · 走马灯</span></div>
-            <span style="flex:1"></span>
-            <span class="pib" data-mod="danmaku" data-spec="弹幕匹配 · S"><svg class="i"><use href="#i-link"/></svg></span>
-            <span class="pib" data-spec="更多菜单 · S"><svg class="i"><use href="#i-more"/></svg></span>
-          </div>
-          <div class="hud">
-            <div class="seek" data-spec="进度条 · 自绘 · 4 → 悬停 8">
-              <svg class="density" data-mod="danmaku" viewBox="0 0 1240 22" preserveAspectRatio="none"><path id="densPath"/></svg>
-              <div class="track"><u style="width:52%"></u><b style="width:38%"></b></div><div class="knob" style="left:38%"></div>
-            </div>
-            <div class="ctl" style="display:grid;grid-template-columns:1fr auto 1fr">
-              <div style="display:flex;align-items:center;gap:4px">
-                <span class="pib play" data-spec="播放 · L 44"><svg class="i"><use href="#i-pause"/></svg></span>
-                <span class="pib"><svg class="i"><use href="#i-next"/></svg></span>
-                <div class="vol"><span class="pib"><svg class="i"><use href="#i-vol"/></svg></span><div class="sl dark" data-spec="滑块 · 悬停展开 72"><b style="width:70%"></b></div></div>
-                <span class="time">09:12 / 24:15</span>
-              </div>
-              <div class="dm-cluster" id="dmCluster">
-                <span class="pib on" data-mod="danmaku" id="dmBtn" data-spec="弹幕开关 · S · 点击开关 / 悬停浮层"><svg class="i"><use href="#i-danmaku"/></svg></span>
-                <div class="dm-input" data-mod="danmaku+sync" data-spec="弹幕输入 · M 34 · 宽 260">发个友善的弹幕…<span class="send">发送</span></div>
-              </div>
-              <div style="display:flex;align-items:center;gap:2px;justify-content:flex-end">
-                <span class="pib" data-spec="字幕 · 浮层列表"><svg class="i"><use href="#i-cc"/></svg></span>
-                <span class="pib"><svg class="i"><use href="#i-audio"/></svg></span>
-                <span class="pib" data-spec="倍速 · 浮层分段"><span class="lbl">1.0×</span></span>
-                <span class="pib" data-mod="enhance" data-spec="画质增强 · 浮层"><svg class="i"><use href="#i-sparkle"/></svg></span>
-                <span class="pib" data-spec="设置侧面板"><svg class="i"><use href="#i-sliders"/></svg></span>
-                <span class="pib"><svg class="i"><use href="#i-pip"/></svg></span>
-                <span class="pib"><svg class="i"><use href="#i-full"/></svg></span>
-              </div>
-            </div>
-          </div>
-          <div class="pop" id="dmPop" style="width:300px;bottom:84px;display:none" data-spec="浮层 · 宽 300 · 原点在按钮">
-            <div class="pr" style="justify-content:space-between"><b style="font-size:14px">弹幕</b><span class="tg dark on"><i></i></span></div>
-            <div class="pr"><span>不透明度</span><div class="sl dark"><b style="width:80%"></b><i style="left:80%"></i></div></div>
-            <div class="pr"><span>字号</span><div class="sl dark"><b style="width:45%"></b><i style="left:45%"></i></div></div>
-            <div class="pr"><span>显示区域</span><span class="seg dark"><span>1/4</span><span class="on">半屏</span><span>全屏</span></span></div>
-            <div class="pr"><span>屏蔽</span><div class="chips"><span>顶部</span><span class="off">底部</span><span>滚动</span><span>彩色</span></div></div>
-            <div class="lnk"><span>更多弹幕设置</span><span>›</span></div>
-          </div>
-          <div class="panel-side" id="plPanel" style="display:none" data-spec="侧面板 · 宽 360 · 毛玻璃">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><b style="font-size:16px">播放设置</b><span class="pib" style="width:28px;height:28px"><svg class="i" style="width:16px"><use href="#i-x"/></svg></span></div>
-            <span class="seg dark" id="plTabs"><span data-mod="danmaku" class="on">弹幕</span><span>字幕</span><span>画面</span><span>音频</span><span>播放</span></span>
-            <div data-mod="danmaku" id="plDm">
-              <div class="gl">显示</div>
-              <div class="grp">
-                <div class="r"><span class="grow">显示弹幕</span><span class="tg dark on"><i></i></span></div>
-                <div class="r"><span style="width:70px">速度</span><div class="sl dark"><b style="width:50%"></b><i style="left:50%"></i></div></div>
-                <div class="r"><span class="grow">合并重复弹幕</span><span class="tg dark on"><i></i></span></div>
-              </div>
-              <div class="gl">来源</div>
-              <div class="grp">
-                <div class="r"><span class="grow">弹弹play · 自动匹配</span><span class="v">第 1 集 ✓</span></div>
-                <div class="r"><span class="grow">手动匹配…</span><span class="v">›</span></div>
-                <div class="r"><span class="grow">弹幕偏移</span><span class="v">− 0.0 s +</span></div>
-                <div class="r"><span class="grow">挂载本地弹幕文件</span><span class="v">xml / json ›</span></div>
-              </div>
-              <div class="gl">过滤</div>
-              <div class="grp"><div class="r"><span class="grow">屏蔽词</span><span class="v">3 个 ›</span></div><div class="r"><span class="grow">插件：防剧透</span><span class="v">已启用 ›</span></div></div>
-            </div>
-            <div id="plSub" style="display:none">
-              <div class="gl">字幕轨道</div>
-              <div class="grp">
-                <div class="r"><span class="grow">简体中文（内嵌 ASS）</span><span class="v" style="color:#fff">✓</span></div>
-                <div class="r"><span class="grow">日本語</span></div>
-                <div class="r"><span class="grow">关闭字幕</span></div>
-                <div class="r"><span class="grow">添加外挂字幕…</span><span class="v">›</span></div>
-              </div>
-              <div class="gl">样式</div>
-              <div class="grp">
-                <div class="r"><span style="width:70px">字号</span><div class="sl dark"><b style="width:50%"></b><i style="left:50%"></i></div></div>
-                <div class="r"><span class="grow">字幕延迟</span><span class="v">− 0.0 s +</span></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div></div>
-    <p class="cap"><span><b>控制条：</b>3 秒没操作就淡出；鼠标移动、触摸或按键时显示</span><span>主题色：进度条、弹幕按钮的开启状态、发送按钮</span></p>
-    <div class="grid g3">
-      <div class="card"><h4>一次点击就能做到</h4><p class="small muted">播放 / 暂停、开关弹幕、发弹幕、切字幕、调倍速、全屏、画中画。</p></div>
-      <div class="card"><h4>两次点击以内</h4><p class="small muted">弹幕透明度、字号、显示区域、屏蔽类型（在浮层里）；音轨；超分档位。</p></div>
-      <div class="card"><h4>放进侧面板</h4><p class="small muted">弹幕来源、手动匹配、偏移、本地挂载；字幕样式、延迟；播放内核信息、跳过片头秒数。</p></div>
+    <h3 id="s9-4">9.4 播放器 · 画框</h3>
+    <p>看片时画面铺满窗口；一动鼠标（触屏上点一下画面，电视上按任意键），画面退后一步缩进一个圆角画框，原生控件围在画框四周。字幕和弹幕都在画框里面，永远不会被控件挡住，也不需要在视频上叠毛玻璃。打开播放设置时，画框被推到左边，面板占右栏。3 秒没操作，画框重新铺满。</p>
+    <div class="callout"><p><b>为什么是画框：</b>bern 在每个平台用原生控件，盖在视频上的毛玻璃只有苹果能原生做到，其他平台要么自己画、要么退化成一块灰。画框不靠材质靠布局：控件在画面外面，换到哪种设计语言都成立。2026-10-12 定稿，替换了 <a href="player-options.html">之前的三个方向</a>；<a href="player-frame.html">播放器 · 画框</a> 单独页面里有五种设计语言的控件对照。</p></div>
+    <div class="nx-live" data-start="player">
+      <div class="nxp-stage-wrap"><div class="nxp-stage"></div></div>
+      <p class="cap"><span><b>画框：</b>圆角跟随外观的卡片圆角。浅色窗口里播放器仍是深色，弹出菜单也跟着变深色；红绿灯、Fluent 标题栏按钮、GNOME 关闭按钮在播放器里都保留</span><span>主题色：主要按钮、进度、弹幕开着的状态 <span class="b S" data-nx-reset>恢复</span></span></p>
     </div>
 
-    <!-- 9.5 媒体库 -->
-    <h3 id="s9-5">9.5 媒体库</h3>
-    <p>现在的「本地媒体库 / 本地库管理 / 共享媒体库 / 共享库管理 / 添加媒体服务器」五个标签合并成一个分段控件加一个「管理」按钮。分段的选项随模块变化：没开网络媒体源，就没有「服务器」。</p>
-    <div class="frame-wrap"><div class="frame" data-w="1280" data-h="800">
-      <div class="win">
-        <div class="wf-side" data-side="lib" data-mini="1"></div>
-        <div class="wf-main">
-          <div class="wf-toolbar"><span class="grow"></span>
-            <div class="search" style="width:280px"><svg class="i"><use href="#i-search"/></svg>在媒体库中搜索<kbd>⌘K</kbd></div>
-            <span class="b"><svg class="i"><use href="#i-plus"/></svg>打开</span>
-          </div>
-          <div class="wf-content">
-            <div style="display:flex;align-items:center;gap:16px;margin:6px 0 20px">
-              <div class="lt" style="margin:0">媒体库</div>
-              <span class="seg" data-spec="分段控件 · M · 选项随模块变化"><span class="on">本地</span><span>服务器</span><span>共享</span></span>
-              <span style="flex:1"></span>
-              <span class="b" data-spec="下拉选择 · M"><svg class="i"><use href="#i-sort"/></svg>最近观看<svg class="i" style="width:14px"><use href="#i-chev-d"/></svg></span>
-              <span class="seg" data-spec="分段 · S · 视图"><span class="on" style="padding:0 9px"><svg class="i" style="width:15px;height:15px"><use href="#i-grid"/></svg></span><span style="padding:0 9px"><svg class="i" style="width:15px;height:15px"><use href="#i-list"/></svg></span></span>
-              <span class="b" data-spec="次要按钮 · M · 打开管理面板"><svg class="i"><use href="#i-folder"/></svg>管理</span>
-            </div>
-            <div style="display:flex;gap:8px;margin-bottom:20px"><span class="b S" style="background:var(--text);color:var(--wf-bg)">全部 48</span><span class="b S">在看 9</span><span class="b S">未看 23</span><span class="b S">看完 16</span></div>
-            <div style="display:grid;grid-template-columns:repeat(7, minmax(0, 1fr));gap:24px 22px" data-spec="海报网格 · 7 列 · 间距 24/22">
-              <div><div class="poster"><img src="assets/posters/p1.jpg" alt=""><span class="badge">1/53</span></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">寒蝉鸣泣之时 解</div><div class="cap2">已看 1 / 53</div></div>
-              <div><div class="poster"><img src="assets/posters/p2.jpg" alt=""><span class="badge">11/25</span></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">只有神知道的世界</div><div class="cap2">已看 11 / 25</div></div>
-              <div><div class="poster"><img src="assets/posters/p3.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">【我推的孩子】 3</div><div class="cap2">已看 2 / 5</div></div>
-              <div><div class="poster"><img src="assets/posters/p4.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">超时空辉夜姬！</div><div class="cap2">未看</div></div>
-              <div><div class="poster"><img src="assets/posters/p5.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">咒术回战 死灭回游</div><div class="cap2">已看 3 / 8</div></div>
-              <div><div class="poster"><img src="assets/posters/p6.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">为美好的世界献上祝福！3</div><div class="cap2">看完</div></div>
-              <div><div class="poster"><img src="assets/posters/p7.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">葬送的芙莉莲 第二季</div><div class="cap2">已看 3 / 10</div></div>
-              <div><div class="poster"><img src="assets/posters/p8.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">剧场版 魔法少女小圆</div><div class="cap2">已看 1 / 25</div></div>
-              <div><div class="poster"><img src="assets/posters/p9.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">Fate/strange Fake</div><div class="cap2">已看 3 / 6</div></div>
-              <div><div class="poster"><img src="assets/posters/p10.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">地狱乐 第二季</div><div class="cap2">已看 2 / 7</div></div>
-              <div><div class="poster"><img src="assets/posters/p11.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">鬼灭之刃 无限城篇</div><div class="cap2">已看 1</div></div>
-              <div><div class="poster"><img src="assets/posters/p12.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">寒蝉鸣泣之时 礼</div><div class="cap2">未看</div></div>
-              <div><div class="poster"><img src="assets/posters/p13.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">魔都精兵的奴隶 2</div><div class="cap2">未看</div></div>
-              <div><div class="poster"><img src="assets/posters/p14.jpg" alt=""></div><div class="tt" style="font-weight:600;margin-top:8px;font-size:13px">现在多闻君是哪一面</div><div class="cap2">未看</div></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div></div>
-    <p class="cap"><span><b>管理：</b>以面板形式打开，里面是文件夹、扫描、服务器连接、共享设置</span><span>服务器分段：每个服务器一个筛选标签（Jellyfin · 家里 NAS / Emby / WebDAV）</span></p>
+    <h4>画框的三种状态</h4>
+    <p>同一个矩形在三种状态之间走 hero 弹簧（位置、宽度、圆角），控制层跟着淡入淡出。纯粹模式的空画框就是「退后」这一档，所以从空闲到播放没有跳动；从缩略图打开时，画框从被点的位置长出来，返回时缩进迷你播放器。</p>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>状态</th><th>什么时候</th><th>桌面 1280×800</th><th>平板 1180×820</th><th>手机横屏 844×390</th><th>电视 1280×720</th></tr></thead>
+      <tbody>
+        <tr><td><b>铺满</b></td><td>播放中 3 秒没操作</td><td>0, 40 · 1280 × 720</td><td>0, 78 · 1180 × 664</td><td>75.5, 0 · 693 × 390</td><td>0, 0 · 1280 × 720</td></tr>
+        <tr><td><b>退后</b></td><td>鼠标移动、点一下画面、遥控器按键</td><td>103, 64 · 1074 × 604</td><td>60, 76 · 1060 × 596</td><td>162.5, 48 · 519 × 292</td><td>200, 52 · 880 × 495</td></tr>
+        <tr><td><b>推开</b></td><td>打开播放设置</td><td>24, 114 · 896 × 504</td><td>24, 120 · 788 × 443</td><td>16, 56 · 512 × 288</td><td>40, 100 · 784 × 441</td></tr>
+      </tbody>
+    </table></div>
+    <p class="small muted">坐标是画框左上角 x, y · 宽 × 高。控制行在画框下面：桌面和平板与画框同宽，打开面板时铺满左右（桌面 24 · 1232，平板 24 · 1132）；电视的控制行横跨整屏（64 · 1152）；手机没有控制行，控件在画框两侧的拇指区。</p>
 
-    <!-- 9.6 可选功能 -->
-    <h3 id="s9-6">9.6 设置 · 可选功能</h3>
-    <p>这一页可以点：开关模块时，设置侧栏里对应的分节会出现或消失（P1：没开的模块不占位置）。它和上面的引导原型、播放器共享同一份状态。</p>
-    <div class="frame-wrap"><div class="frame" data-w="1100" data-h="800">
-      <div class="win" id="optWin">
-        <div class="wf-side" style="width:230px">
-          <div class="dots3"><i></i><i></i><i></i></div>
-          <div class="search" style="margin:0 2px 10px;height:28px"><svg class="i"><use href="#i-search"/></svg>搜索设置</div>
-          <div id="setSide" style="display:flex;flex-direction:column;gap:1px"></div>
-        </div>
-        <div class="wf-main">
-          <div class="wf-toolbar"></div>
-          <div class="wf-content" style="padding-top:0;max-width:760px">
-            <div style="display:flex;align-items:flex-end;gap:16px">
-              <div style="flex:1"><div class="lt" style="margin-bottom:6px">可选功能</div><div class="body" style="margin-bottom:6px">决定 NipaPlay 要做多少事。关闭的功能不会显示，也不占用资源。</div></div>
-              <span class="b" data-spec="下拉选择 · M · 一键套用预设" id="optPreset">预设：全都要<svg class="i" style="width:14px"><use href="#i-chev-d"/></svg></span>
-            </div>
-            <div id="optRows"></div>
-            <div class="row-list" style="margin-top:22px;display:flex;align-items:center;gap:14px;padding:14px 16px;position:relative;overflow:hidden">
-              <div class="plaid-gingham" style="position:absolute;left:0;top:0;bottom:0;width:6px"></div>
-              <div class="mi"><svg class="i"><use href="#i-puzzle"/></svg></div>
-              <div style="flex:1"><div class="tt" style="font-weight:650">想要更多？</div><div class="cap2" style="font-size:12.5px">防剧透、CRT 着色器、片段导出等小功能都在插件市场里。</div></div>
-              <span class="b">浏览插件市场</span>
-            </div>
-          </div>
-          <div class="toast" id="optToast" style="display:none;bottom:28px"></div>
-        </div>
-      </div>
-    </div></div>
-    <p class="cap"><span><b>分组列表行 · 最小高度 54</b> · 图标 32 · 标题 + 一行说明 · 开关</span><span>依赖说明用 Caption 写在说明末尾</span></p>
+    <h4>控件：抽象控件，各平台原生绘制</h4>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>抽象控件</th><th>用在</th><th>位置</th></tr></thead>
+      <tbody>
+        <tr><td>主要按钮</td><td>播放 / 暂停</td><td>控制行正中；手机在右栏</td></tr>
+        <tr><td>图标按钮</td><td>上一集、快退 10 秒、快进 10 秒、下一集；顶栏的返回、弹幕匹配、画中画、播放设置、更多（桌面另有音量、全屏）</td><td>主要按钮两侧；顶栏</td></tr>
+        <tr><td>分体开关按钮</td><td>弹幕：左边开关，右边展开常用参数</td><td>控制行左侧；手机在左栏</td></tr>
+        <tr><td>文本框</td><td>发弹幕</td><td>桌面、平板在控制行里；手机、电视是「发弹幕」按钮，点了在进度条的位置换出输入条</td></tr>
+        <tr><td>下拉按钮</td><td>字幕与音轨、倍速、画质增强</td><td>控制行右侧；手机在右栏（画质增强在顶栏）</td></tr>
+        <tr><td>滑块</td><td>进度（章节做成刻度，下面写章节名，标出弹幕高峰）、音量、弹幕参数</td><td>和画框同宽</td></tr>
+        <tr><td>菜单</td><td>字幕、倍速、更多（截图、跳过片头、选集、播放信息、手动匹配弹幕；触屏设备还有锁定方向）</td><td>从按钮弹出</td></tr>
+        <tr><td>侧面板</td><td>播放设置：弹幕、字幕、画面、音频、播放</td><td>右栏，把画框推开</td></tr>
+      </tbody>
+    </table></div>
+    <p class="small muted">我们自己画的只有三样：画面的圆角裁切和缩放（视频渲染器本来就会做）、章节名文字、中央的播放反馈图标。主题色作为各平台的强调色传给原生控件。</p>
 
-    <!-- 9.7 插件市场 -->
-    <h3 id="s9-7">9.7 插件市场</h3>
-    <p>放在 设置 › 插件 里，不占主导航。头图是少数可以用学院格的「仪式时刻」。「获取」按钮按 App Store 的做法用灰色底，文字加下划标注，这样不会和每屏唯一的主要按钮抢视线。点「获取」可以看安装动画。</p>
-    <div class="frame-wrap"><div class="frame" data-w="1100" data-h="760">
-      <div class="win">
-        <div class="wf-side" style="width:230px">
-          <div class="dots3"><i></i><i></i><i></i></div>
-          <div class="search" style="margin:0 2px 10px;height:28px"><svg class="i"><use href="#i-search"/></svg>搜索设置</div>
-          <div id="setSide2" style="display:flex;flex-direction:column;gap:1px"></div>
-        </div>
-        <div class="wf-main">
-          <div class="wf-toolbar"></div>
-          <div class="wf-content" style="padding-top:0">
-            <div class="plaid-academy" style="height:150px;border-radius:18px;padding:28px 30px;color:#fff;position:relative;overflow:hidden" data-spec="头图 · 学院格 · 高 150">
-              <div style="font-size:28px;font-weight:800">插件市场</div>
-              <div style="opacity:.85;font-size:14px;margin-top:4px">小功能按需安装。插件用脚本编写，只能使用它声明过的权限。</div>
-              <div class="search" style="position:absolute;right:30px;top:30px;width:260px;background:rgba(255,255,255,.92);color:#666"><svg class="i"><use href="#i-search"/></svg>搜索插件</div>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;margin:20px 0 18px">
-              <span class="seg"><span class="on">市场</span><span>已安装 3</span></span>
-              <span style="width:10px"></span>
-              <span class="b S" style="background:var(--text);color:var(--wf-bg)">全部</span><span class="b S">弹幕</span><span class="b S">画面</span><span class="b S">媒体源</span><span class="b S">工具</span><span class="b S">外观</span>
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:14px" id="mkt"></div>
-          </div>
-        </div>
-      </div>
-    </div></div>
-    <p class="cap"><span><b>插件卡片</b> · 图标 44 · 名称 + 作者 + 一行说明 + 权限标签 + 获取</span><span>点卡片打开详情面板：截图、完整权限说明、版本、源码仓库</span></p>
+    <h4>四种设备：功能一样，界面不一样</h4>
+    <p>bern 的规矩：不同设备功能必须一样，只允许界面不一样。下表是播放器的功能对照，任何一种设备新增功能，其他三种必须同时有入口。</p>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>功能</th><th>桌面</th><th>平板</th><th>手机（横屏）</th><th>电视</th></tr></thead>
+      <tbody>
+        <tr><td>播放 / 暂停</td><td>主要按钮、空格、单击画面</td><td>主要按钮</td><td>右栏的主要按钮、双击画面</td><td>确认键</td></tr>
+        <tr><td>快退快进 · 上下集</td><td>主要按钮两侧</td><td>同桌面</td><td>快退和上一集在左栏，快进和下一集在右栏</td><td>控制行里的按钮；控制层藏着时左右键直接快退快进 10 秒</td></tr>
+        <tr><td>进度、章节、弹幕高峰</td><td>滑块和画框同宽，章节是刻度和下方的文字，拖动显示时间</td><td>同桌面，控制行在章节名下面</td><td>底部滑块，章节是刻度；弹幕高峰是轨道上的主题色小点，章节名在拖动提示里</td><td>焦点停在进度条上时左右键 ±10 秒</td></tr>
+        <tr><td>弹幕开关 · 常用参数</td><td>分体按钮</td><td>同桌面</td><td>左栏同一个分体按钮</td><td>同一个分体按钮</td></tr>
+        <tr><td>发弹幕</td><td>控制行里的文本框</td><td>同桌面，弹出键盘</td><td>「发弹幕」→ 底部换成文本框</td><td>「发弹幕」→ 遥控器语音或手机输入</td></tr>
+        <tr><td>字幕与音轨 · 倍速 · 画质</td><td>控制行右侧的下拉按钮</td><td>同桌面</td><td>右栏的下拉按钮；画质在顶栏</td><td>控制行右侧的下拉按钮</td></tr>
+        <tr><td>音量</td><td>顶栏音量键（菜单里有滑块）· 设置 › 音频</td><td>系统音量键 · 设置 › 音频</td><td>实体按键、右半边上下滑 · 设置 › 音频</td><td>遥控器音量键 · 设置 › 音频</td></tr>
+        <tr><td>选集 · 截图 · 跳过片头 · 播放信息 · 手动匹配弹幕</td><td colspan="4">四种设备都在顶栏「更多」里</td></tr>
+        <tr><td>完整设置</td><td colspan="4">顶栏「播放设置」→ 右栏面板，画框往左让</td></tr>
+        <tr><td>画中画 · 全屏</td><td>顶栏画中画、全屏</td><td>画中画；横放即全屏，「更多 › 锁定方向」</td><td>画中画；横屏即全屏，「更多 › 锁定横屏」</td><td>画中画；始终全屏</td></tr>
+        <tr><td>返回 · 迷你播放器</td><td>顶栏返回、Esc → 侧栏底部</td><td>顶栏返回 → 侧栏底部（Material 导航轨放不下，浮在右下角）</td><td>顶栏返回 → 标签栏上方的迷你条</td><td>返回键 → 右下角画中画</td></tr>
+        <tr><td>显示控制层</td><td>鼠标移动，3 秒后隐藏</td><td>点一下画面</td><td>点一下画面</td><td>任意键</td></tr>
+      </tbody>
+    </table></div>
+    <p class="small muted">需要 bern 提供的能力：视频层能做圆角裁切、缩放和位移，并且和原生控件排在同一个窗口里；画框的弹簧只改这几个参数，不需要采样画面，所以 DRM 保护的视频也一样。</p>
 
-    <!-- 9.8 移动端 -->
-    <h3 id="s9-8">9.8 移动端</h3>
-    <p>手机上的规则和桌面一样，只是导航换成底部标签栏，设置放进头像菜单。纯粹模式下没有标签栏。</p>
-    <div class="grid g3" style="align-items:start">
-      <div><div class="frame-wrap"><div class="frame" data-w="390" data-h="844">
-        <div class="win col phone plaid-uniform">
-          <div style="height:50px;display:flex;align-items:center;justify-content:space-between;padding:6px 26px 0;font-size:14px;font-weight:650"><span>9:41</span><span style="display:flex;gap:5px"><i style="width:17px;height:10px;border-radius:2px;background:var(--text)"></i><i style="width:22px;height:10px;border-radius:3px;border:1.5px solid var(--text)"></i></span></div>
-          <div style="display:flex;justify-content:flex-end;padding:4px 16px"><span class="ib M" style="background:var(--wf-block)" data-spec="图标按钮 · 44 触屏"><svg class="i"><use href="#i-gear"/></svg></span></div>
-          <div style="flex:1;display:flex;flex-direction:column;align-items:center;padding:60px 20px 0;text-align:center">
-            <svg class="i" style="width:52px;height:52px;color:var(--text-3);stroke-width:1.5"><use href="#i-film"/></svg>
-            <div class="t1" style="margin:16px 0 6px">打开一个视频</div>
-            <div class="body" style="margin-bottom:26px">从「文件」App、相册或链接打开</div>
-            <span class="b L p" style="width:240px;height:50px" data-spec="主要按钮 · L 50 触屏">打开文件</span>
-            <span class="b" style="width:240px;height:44px;margin-top:10px">打开链接</span>
-            <div style="width:100%;margin-top:40px;text-align:left">
-              <div class="t2" style="font-size:15px;margin:0 4px 8px">最近播放</div>
-              <div class="row-list">
-                <div class="row" style="min-height:56px"><div class="thumb" style="width:72px;flex:none;border-radius:6px"><img src="assets/still1.jpg" alt=""></div><div class="tx"><div class="tt" style="font-size:13px">只有我不存在的城市 01</div><div class="ds">剩 15:03</div></div></div>
-                <div class="row" style="min-height:56px"><div class="thumb" style="width:72px;flex:none;border-radius:6px"><img src="assets/posters/p7.jpg" alt="" style="object-position:50% 30%"></div><div class="tx"><div class="tt" style="font-size:13px">Frieren S2 - 03.mkv</div><div class="ds">剩 9:12</div></div></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div></div><p class="cap"><span><b>纯粹模式</b> · 没有标签栏</span></p></div>
-
-      <div><div class="frame-wrap"><div class="frame" data-w="390" data-h="844">
-        <div class="win col phone">
-          <div style="height:50px;display:flex;align-items:center;justify-content:space-between;padding:6px 26px 0;font-size:14px;font-weight:650"><span>9:41</span><span style="display:flex;gap:5px"><i style="width:17px;height:10px;border-radius:2px;background:var(--text)"></i><i style="width:22px;height:10px;border-radius:3px;border:1.5px solid var(--text)"></i></span></div>
-          <div style="padding:6px 16px 0;flex:1;overflow:hidden;position:relative">
-            <div style="display:flex;align-items:center;justify-content:space-between"><div class="lt" style="font-size:34px;margin:0">首页</div><span class="avatar" data-spec="头像 32 · 菜单：账号 / 历史 / 设置" style="width:34px;height:34px;background-image:url(assets/girl.png);background-size:170%;background-position:50% 12%"></span></div>
-            <div class="search" style="height:38px;margin:12px 0 22px;border-radius:11px"><svg class="i"><use href="#i-search"/></svg>搜索</div>
-            <div class="sec-title"><span class="t2">继续观看</span></div>
-            <div style="display:flex;gap:12px;margin-right:-16px">
-              <div style="width:250px;flex:none"><div class="thumb"><img src="assets/still1.jpg" alt=""><div class="prog"><b style="width:38%"></b></div></div><div class="tt" style="font-weight:650;margin-top:8px;font-size:14px">只有我不存在的城市</div><div class="cap2">第 1 集 · 剩 15 分钟</div></div>
-              <div style="width:250px;flex:none"><div class="thumb"><img src="assets/posters/p7.jpg" alt="" style="object-position:50% 30%"><div class="prog"><b style="width:62%"></b></div></div></div>
-            </div>
-            <div class="sec-title" style="margin-top:26px"><span class="t2">今日更新</span><span class="more">新番表 ›</span></div>
-            <div style="display:flex;gap:12px;margin-right:-16px">
-              <div class="poster" style="width:110px;flex:none"><img src="assets/posters/p13.jpg" alt=""></div><div class="poster" style="width:110px;flex:none"><img src="assets/posters/p6.jpg" alt=""></div><div class="poster" style="width:110px;flex:none"><img src="assets/posters/p15.jpg" alt=""></div><div class="poster" style="width:110px;flex:none"><img src="assets/posters/p16.jpg" alt=""></div>
-            </div>
-            <div class="mini-player abs" style="left:8px;right:8px;bottom:10px;border-radius:14px;padding:8px 10px" data-spec="迷你播放器 · 高 56 · 标签栏上方">
-              <div class="thumb" style="width:64px"><img src="assets/still1.jpg" alt=""></div>
-              <div class="tx"><b>只有我不存在的城市</b><span class="cap2">第 1 集</span></div>
-              <span class="ib"><svg class="i"><use href="#i-pause"/></svg></span><span class="ib"><svg class="i"><use href="#i-next"/></svg></span>
-            </div>
-          </div>
-          <div style="height:84px;border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(4, minmax(0, 1fr));padding-top:8px;background:var(--wf-bg)" data-spec="底部标签栏 · 项随模块变化">
-            <div style="text-align:center;font-size:10.5px;color:var(--accent-text);font-weight:650"><svg class="i" style="width:24px;height:24px;margin:0 auto 2px;display:block"><use href="#i-home"/></svg><span class="acc">首页</span></div>
-            <div style="text-align:center;font-size:10.5px;color:var(--text-3)"><svg class="i" style="width:24px;height:24px;margin:0 auto 2px;display:block"><use href="#i-calendar"/></svg>新番</div>
-            <div style="text-align:center;font-size:10.5px;color:var(--text-3)"><svg class="i" style="width:24px;height:24px;margin:0 auto 2px;display:block"><use href="#i-library"/></svg>媒体库</div>
-            <div style="text-align:center;font-size:10.5px;color:var(--text-3)"><svg class="i" style="width:24px;height:24px;margin:0 auto 2px;display:block"><use href="#i-search"/></svg>搜索</div>
-          </div>
-        </div>
-      </div></div><p class="cap"><span><b>看番预设</b> · 标签栏最多 5 项</span></p></div>
-
-      <div class="card">
-        <h4>移动端要点</h4>
-        <ul class="small muted" style="padding-left:1.1em;margin:0">
-          <li>标签栏的项和桌面侧栏一致，由模块决定，最多 5 项。只有 1 个页面时不显示标签栏。</li>
-          <li>迷你播放器浮在标签栏上方，高 56；上滑展开成全屏播放器（T2 反向）。</li>
-          <li>设置、账号、观看历史都放在右上角头像菜单里。纯粹模式下右上角是齿轮。</li>
-          <li>浮层在 iPhone 上一律换成可拖拽的半屏面板（sheet detent）。</li>
-          <li>播放器手势：横向拖动调进度，左右两侧上下拖动调亮度和音量，双击暂停。</li>
-          <li>TV：顶部焦点标签 + 大海报网格，获得焦点放大到 1.08；播放器控制条只保留遥控器能操作的部分。</li>
-        </ul>
-      </div>
+    <!-- 9.5 新番 -->
+    <h3 id="s9-5">9.5 新番 · 手风琴周历</h3>
+    <p>一周七天是七根柱子：选中的那天展开成列表，其余六天收成一列小海报，每张下面写播出时间，放不下的显示「+n」，一眼看出每天有几部。今天默认展开，并标出「明天」「后天」。点行进详情，详情里一键追番。</p>
+    <div class="nx-live" data-start="new">
+      <div class="nxp-stage-wrap"><div class="nxp-stage"></div></div>
+      <p class="cap"><span><b>柱宽 bouncy 弹簧，</b>展开后列表依次进场。手机上同一套手风琴改成竖向，行高走弹簧；电视上焦点移到哪天，回车展开</span><span>柱子是原生卡片 / 填充面，行是原生列表行 <span class="b S" data-nx-reset>恢复</span></span></p>
     </div>
 
-    <div class="frame-wrap" style="max-width:860px"><div class="frame" data-w="844" data-h="390">
-      <div class="win phone land" style="background:#000">
-        <div class="player">
-          <img class="video" src="assets/still1.jpg" alt="">
-          <div class="dm-layer" data-mod="danmaku" style="inset:50px 0 90px" id="dmLayer2"></div>
-          <div class="shade-t"></div><div class="shade-b"></div>
-          <div class="top" style="padding:0 34px">
-            <span class="pib"><svg class="i"><use href="#i-chev-l"/></svg></span>
-            <div class="ttl"><b>只有我不存在的城市</b><span>第 1 集</span></div><span style="flex:1"></span>
-            <span class="pib on" data-mod="danmaku" data-spec="弹幕开关 · 44 触屏"><svg class="i"><use href="#i-danmaku"/></svg></span>
-            <span class="pib"><svg class="i"><use href="#i-more"/></svg></span>
-          </div>
-          <div class="abs" style="left:0;right:0;top:50%;transform:translateY(-50%);display:flex;justify-content:center;align-items:center;gap:56px">
-            <span class="pib" style="width:48px;height:48px"><svg class="i" style="width:28px;height:28px"><use href="#i-rw10"/></svg></span>
-            <span class="pib xl" data-spec="播放 · XL 68"><svg class="i"><use href="#i-pause"/></svg></span>
-            <span class="pib" style="width:48px;height:48px"><svg class="i" style="width:28px;height:28px"><use href="#i-ff10"/></svg></span>
-          </div>
-          <div class="hud" style="left:34px;right:34px;bottom:10px">
-            <div style="display:flex;align-items:center;gap:10px"><span class="time" style="padding:0">09:12</span><div class="seek" style="flex:1"><div class="track"><u style="width:52%"></u><b style="width:38%"></b></div><div class="knob" style="left:38%"></div></div><span class="time" style="padding:0">24:15</span></div>
-            <div class="ctl" style="height:40px;margin-top:0">
-              <div class="dm-input" data-mod="danmaku+sync" style="width:170px;height:32px">发弹幕…</div>
-              <span class="grow"></span>
-              <span class="pib"><span class="lbl">1.0×</span></span><span class="pib"><svg class="i"><use href="#i-cc"/></svg></span><span class="pib"><svg class="i"><use href="#i-episodes"/></svg></span><span class="pib"><svg class="i"><use href="#i-sliders"/></svg></span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div></div>
-    <p class="cap"><span><b>手机横屏播放器</b> · 中央 XL 播放键，左右各一个快退 / 快进 10 秒</span><span>弹幕输入框点击后弹出键盘面板</span></p>
+    <!-- 9.6 媒体库 -->
+    <h3 id="s9-6">9.6 媒体库 · 缩放墙 + 拼音索引</h3>
+    <p>现在的「本地媒体库 / 本地库管理 / 共享媒体库 / 共享库管理 / 添加媒体服务器」五个标签，合并成「本地 / 服务器 / 共享」分段加一个「管理」按钮；分段随模块变化，没开网络媒体源就没有「服务器」。一个滑块管海报大小（⌘± 或双指），小库看画廊，大库看目录，每张海报沿弹簧滑到新位置。右边一条拼音索引，点字母直接滚过去，那张海报晃一下。筛选和排序也是海报自己挪位。</p>
+    <div class="nx-live" data-start="lib">
+      <div class="nxp-stage-wrap"><div class="nxp-stage"></div></div>
+      <p class="cap"><span><b>每张海报的 x / y / 宽是弹簧（FLIP 重排），</b>被筛掉的缩小淡出，留下的滑过去补位；缩到目录模式时标题自动隐藏。电视上焦点停在滑块时，左右键调大小</span><span>滑块、分段、芯片、下拉都是原生控件 <span class="b S" data-nx-reset>恢复</span></span></p>
+    </div>
+
+    <!-- 9.7 搜索 -->
+    <h3 id="s9-7">9.7 搜索 · 搜索框就地展开</h3>
+    <p>桌面和平板上，⌘K 或点搜索框，搜索框自己长成结果面板（同一个物体），关掉时缩回去。结果按番剧、继续播放、设置、操作分组，番剧结果直接给海报；↑↓ 时选中框滑过去，回车打开番剧、开始播放或跳到设置那一节。手机上是「搜索」标签页，电视上是顶栏第一个标签（左边屏幕键盘，右边结果，也接遥控器语音），结果都一样。</p>
+    <div class="nx-live" data-start="search">
+      <div class="nxp-stage-wrap"><div class="nxp-stage"></div></div>
+      <p class="cap"><span><b>面板的位置、尺寸、圆角走 hero 弹簧，</b>高度跟着结果走，打字时用 bouncy 弹簧伸缩；选中框 snappy 弹簧滑动</span><span>面板用各平台的浮层材质，输入框原生 <span class="b S" data-nx-reset>恢复</span></span></p>
+    </div>
+
+    <!-- 9.8 可选功能 -->
+    <h3 id="s9-8">9.8 设置 · 可选功能 · 设置即预览</h3>
+    <p>可选功能旁边是一扇实时变化的小窗口：开关一个模块，导航项弹进弹出，播放器条多出弹幕按钮；被连带开启或关闭的那一行闪一下，并弹出提示。没开的模块在侧栏和设置目录里都不占位置（P1）。三个预设一键切换；设置首页有账号和「搜索设置」，设置项也能从 ⌘K 搜到。</p>
+    <div class="nx-live" data-start="settings:optional">
+      <div class="nxp-stage-wrap"><div class="nxp-stage"></div></div>
+      <p class="cap"><span><b>桌面和平板</b>是从齿轮弹出的设置窗口（bouncy），<b>手机</b>是逐级推入的列表，<b>电视</b>全屏。libadwaita 是 boxed list，Fluent 是 SettingsCard，苹果是分组列表，Material 是填充面列表</span><span>列表图标用中性灰底，不用主题色 <span class="b S" data-nx-reset>恢复</span></span></p>
+    </div>
+
+    <!-- 9.9 插件市场 -->
+    <h3 id="s9-9">9.9 插件市场 · 按钮就是进度条</h3>
+    <p>放在 设置 › 插件 里，不占主导航。点「获取」，按钮里面直接填满进度，装好变成「打开」并晃一下，不另外弹进度条，视线不用离开。头图用学院格，这是少数可以用学院格的「仪式时刻」。</p>
+    <div class="nx-live" data-start="settings:plugins">
+      <div class="nxp-stage-wrap"><div class="nxp-stage"></div></div>
+      <p class="cap"><span><b>按钮里一层宽度动画，</b>完成时 wobble；安装中的按钮不能再点，「已安装」计数同步。换分类时卡片依次进场</span><span>卡片、按钮、芯片原生；手机单列，其他设备两列 <span class="b S" data-nx-reset>恢复</span></span></p>
+    </div>
+
+    <!-- 9.10 下载 -->
+    <h3 id="s9-10">9.10 下载 · 行的底色就是进度</h3>
+    <p>不再一行一根进度条：每一行的底色从左往右涨，底边一条主题色细线。下载完成后这一行收起来，移到「已完成」，侧栏的下载数同步减少。底色是中性填充，不是主题色大色块。</p>
+    <div class="nx-live" data-start="dl">
+      <div class="nxp-stage-wrap"><div class="nxp-stage"></div></div>
+      <p class="cap"><span><b>底色宽度动画；</b>完成时行高走 smooth 弹簧收起。暂停 / 继续 1 次，添加任务 1 次，完成后直接播放</span><span>tvOS 只能把文件放在缓存里，空间紧张时系统会清理，界面上要说明 <span class="b S" data-nx-reset>恢复</span></span></p>
+    </div>
+
+    <!-- 9.11 迷你播放器 -->
+    <h3 id="s9-11">9.11 迷你播放器 · 画框收进侧栏</h3>
+    <p>在播放器里点返回，画框缩进侧栏底部变成迷你播放器，进度就是缩略图的底边；点它，画框再从这里长回去。手机上是标签栏上方的迷你条（苹果外观下避开悬浮的玻璃标签栏）；Material 平板的导航轨放不下，改成右下角的浮动卡片；电视是右下角的画中画，焦点能移上去，回车回到全屏。纯粹模式没有侧栏，返回时画面退回空画框，这个视频排到「最近播放」第一个。</p>
+    <div class="nx-live" data-start="mini">
+      <div class="nxp-stage-wrap"><div class="nxp-stage"></div></div>
+      <p class="cap"><span><b>画框 ↔ 迷你播放器：</b>同一个物体，共享元素 hero 弹簧</span><span>暂停 / 关闭 1 次；回到全屏 1 次 <span class="b S" data-nx-reset>恢复</span></span></p>
+    </div>
+
+    <!-- 9.12 功能对等 -->
+    <h3 id="s9-12">9.12 四种设备 · 功能对等</h3>
+    <p>bern 的规矩：不同设备功能必须一样，只允许界面不一样。下面逐屏列出功能，每一格写这台设备上怎么用到它。上面每一屏都可以切到四种设备里点一遍。</p>
+    <div class="tbl-wrap nxp"><table class="par">
+      <thead><tr><th>屏</th><th>功能（四种设备都有）</th><th>桌面</th><th>平板</th><th>手机</th><th>电视</th></tr></thead>
+      <tbody>
+        <tr><td><b>首次启动</b></td><td>欢迎 · 选起点和微调模块 · 外观 · 完成，四步</td><td>弹窗，完成时小窗口长成主窗口</td><td>居中的表单弹窗</td><td>全屏，预览在卡片上方</td><td>全屏，默认焦点在「开始」</td></tr>
+        <tr><td><b>纯粹模式</b></td><td>打开文件 · 打开文件夹 · 打开链接 · 最近播放 · 继续上次 · 设置</td><td>画框里的按钮，拖进窗口，⌘O，空格继续</td><td>画框里的按钮，从「文件」或分屏拖进来</td><td>按钮列；「打开方式 › Erika」对应拖放</td><td>画框里的按钮（本机、U 盘、局域网），手机投送</td></tr>
+        <tr><td><b>首页</b></td><td>继续播放 · 详情 · 换上舞台 · 直接播放另一部 · 今日更新 · 最近添加 · 打开 · 搜索 · 设置</td><td>悬停出现 ▶；工具栏搜索框 ⌘K、打开</td><td>▶ 常驻；Material 的「打开」是导航轨顶部的 FAB</td><td>点卡片换上舞台，▶ 在卡片角上；舞台下有「详情」；导航栏「＋」打开；搜索是标签</td><td>焦点 + 回车；← 到 ▶；搜索、打开、设置在顶栏</td></tr>
+        <tr><td><b>番剧详情</b></td><td>继续 / 开始 · 追番状态 · 评分 · 更多（匹配弹幕、在文件夹中显示、刷新、移除）· 剧集胶片 · 简介 / 评论 / 制作 / 文件</td><td>胶片两侧翻页按钮</td><td>手指滑胶片</td><td>手指滑胶片，按钮排在海报下面</td><td>左右键走胶片，焦点那一格停在正中</td></tr>
+        <tr><td><b>播放器</b></td><td>播放 · 快退快进 · 上下集 · 进度（章节、弹幕高峰）· 弹幕开关和参数 · 发弹幕 · 字幕和音轨 · 倍速 · 画质增强 · 弹幕匹配 · 画中画 · 播放设置 · 截图 / 跳过片头 / 选集 / 播放信息 · 音量 · 全屏</td><td>控制行里的输入框；音量、全屏按钮</td><td>输入框同桌面；系统音量键；横放即全屏，「锁定方向」</td><td>两侧拇指区；发弹幕按钮；高峰小点；系统音量键 + 设置面板里的音量；横屏即全屏，「锁定横屏」</td><td>发弹幕按钮（语音、手机输入）；遥控器音量；始终全屏；左右键快退快进</td></tr>
+        <tr><td><b>新番</b></td><td>一周七天 · 换一天 · 进详情</td><td>手风琴周历</td><td>同桌面</td><td>竖向手风琴</td><td>手风琴，焦点移到哪天回车展开</td></tr>
+        <tr><td><b>媒体库</b></td><td>本地 / 服务器 / 共享 · 海报大小 · 排序 · 筛选 · 拼音索引 · 管理</td><td>滑块、⌘±</td><td>滑块、双指缩放</td><td>滑块、双指缩放；导航栏的文件夹按钮是「管理」</td><td>滑块用左右键</td></tr>
+        <tr><td><b>搜索</b></td><td>番剧 · 继续播放 · 设置项 · 操作</td><td>⌘K 面板，就地展开</td><td>同桌面，弹出键盘</td><td>「搜索」标签页</td><td>「搜索」标签：屏幕键盘 + 语音</td></tr>
+        <tr><td><b>设置 · 可选功能</b></td><td>账号 · 搜索设置 · 各节设置 · 模块开关 + 实时预览 + 三个预设</td><td>从齿轮弹出的设置窗口</td><td>同桌面</td><td>逐级推入的列表</td><td>全屏设置</td></tr>
+        <tr><td><b>插件市场</b></td><td>市场 / 已安装 · 分类 · 获取（按钮就是进度）</td><td>两列卡片</td><td>两列卡片</td><td>单列卡片</td><td>两列卡片，焦点 + 回车获取</td></tr>
+        <tr><td><b>下载</b></td><td>进行中 / 已完成 · 暂停继续 · 添加任务 · 完成后播放</td><td>列表</td><td>列表</td><td>列表，导航栏「＋」</td><td>列表；tvOS 只能把文件放在缓存里，空间紧张时系统会清理，界面上要说明</td></tr>
+        <tr><td><b>迷你播放器</b></td><td>回到全屏 · 暂停 · 关闭</td><td>侧栏底部</td><td>侧栏底部；Material 导航轨时浮在右下角</td><td>标签栏上方的迷你条</td><td>右下角画中画，可以拿到焦点</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout"><p><b>每种设备上的设计语言：</b>桌面五种都有（macOS、Windows、Linux、网页各自的样子）；平板和手机只有苹果、Material、网页（iPadOS / iOS、Android、网页），没有 Fluent 和 libadwaita；电视只有苹果和 Material（tvOS、Google TV）。切换设备时，当前的设计语言如果不适用，会自动回到苹果。</p></div>
+    <div class="callout"><p><b>电视的操作方式：</b>没有指针，焦点按空间位置移动，回车 = 点击，返回键逐层退回（菜单 → 播放器 → 弹窗 → 详情 → 首页）。焦点样式跟随外观：tvOS 是抬起放大、按钮变白；Google TV 是放大加描边、按钮反色。都只用缩放、阴影和颜色，不需要模糊。</p></div>
   </section>
 
   <!-- ============ 10 插件 ============ -->
@@ -1132,18 +883,20 @@ skirt-tartan:   accent 18 · band(black 22%) 28 · 6 · line(navy 80%) 3 · 6 ·
     <ol class="oq">
       <li><b>引导页点「跳过」时用哪个预设？</b><span>本文暂定「纯粹播放」。也可以用「看番」，更贴近 NipaPlay 的主要用户。老用户升级时按旧配置推断。</span></li>
       <li><b>下载器保留为内置模块，还是改成插件？</b><span>改成插件（对接 qBittorrent / aria2 的接口）可以从安装包里去掉 BT 引擎，但功能会变成依赖外部下载器。</span></li>
-      <li><b>弹幕引擎和播放内核收敛到几个？</b><span>建议弹幕保留「默认 + 兼容」两个，播放内核保留 Erika + libmpv。</span></li>
+      <li><b>弹幕引擎和播放内核收敛到几个？</b><span>建议弹幕保留「默认 + 兼容」两个，播放内核保留 liberika + libmpv。</span></li>
       <li><b>首页还要大图轮播吗？</b><span>本文把它挪到了「新番」页，首页第一行给继续观看。</span></li>
       <li><b>插件脚本语言：JavaScript（QuickJS）还是 Lua？</b></li>
       <li><b>允许自定义主题色吗？</b><span>如果允许，建议限制只能选饱和度 ≥ 85% 的颜色，保持「纯色」的调性。</span></li>
       <li><b>手机上的搜索放在标签栏，还是首页顶部？</b></li>
-      <li><b>bern 对视图变换弹簧动画、共享元素转场的支持程度如何？</b><span>这决定第 08 章的动效能不能完整实现。至少需要：给任意视图设置缩放和位移变换、可打断的弹簧驱动、跨视图层级的快照（用于共享元素）。另外还需要能拿到文字排版的行框，用来画下划标注。</span></li>
-      <li><b>Android 用原生 View 还是 Compose？TV 端是否单独做布局？</b></li>
+      <li><b>bern 对视图变换弹簧动画、共享元素转场的支持程度如何？</b><span>这决定第 08 章的动效能不能完整实现。至少需要：给任意视图设置缩放和位移变换、可打断的弹簧驱动、跨视图层级的快照（用于共享元素）。另外还需要能拿到文字排版的行框，用来画下划标注；视频层要能做圆角裁切、缩放和位移，并且和原生控件排在同一个窗口里（播放器画框要用）。</span></li>
+      <li><b>原来引导里的「按需设置」放到哪里？</b><span>画框版的引导只有四步，媒体库要的文件夹、账号同步要的登录、网络媒体源要的服务器都不在引导里问了。可以在第一次打开对应页面时问（每一项都能「稍后」），也可以在完成页列出来。</span></li>
+      <li><b>Android 用原生 View 还是 Compose？</b><span>Google TV 的焦点和遥控器按键也要跟着这个选择走。</span></li>
+      <li><b>bern 的电视焦点引擎怎么做？</b><span>画框版的电视界面按空间位置移动焦点（第 09 章 · 功能对等）。需要 bern 在 tvOS 上接系统的焦点引擎，在 Google TV 上接 Android 的焦点搜索，还是自己按位置算。</span></li>
     </ol>
     <h3>下一步</h3>
     <div class="flow">
       <div><b>确认分层</b>敲定模块划分和插件清单</div>
-      <div><b>逐屏细化</b>补齐新番、下载、设置各页和 TV 布局</div>
+      <div><b>真机核对</b>四种设备 × 各自的设计语言，在真机上点一遍画框版</div>
       <div><b>动效调参</b>在实验台和真机上调手感</div>
       <div><b>交给 bern</b>整理控件和动效的能力需求清单</div>
     </div>
@@ -1162,6 +915,9 @@ skirt-tartan:   accent 18 · band(black 22%) 28 · 6 · line(navy 80%) 3 · 6 ·
 </div>
 
 <script src="core.js"></script>
+<script src="next-core.js"></script>
+<script src="next-screens.js"></script>
+<script src="next-player.js"></script>
 <script src="doc.js"></script>
 </body>
 </html>
