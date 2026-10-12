@@ -10,7 +10,7 @@
   const qs = new URLSearchParams(location.search);
   const EMBED = qs.has('embed'), START = qs.get('start');
   const MODS_KEY = 'proto.mods';
-  const G = { dev: kv.get('proto.dev') || 'desk', ds: kv.get('proto.ds') || 'apple' };
+  const G = { dev: kv.get('proto.dev') || 'desk', ds: kv.get('proto.ds') || 'apple', fold: kv.get('proto.fold') || 'open' };
   if (!ALLOWED[G.dev]) G.dev = 'desk';
   const fixDs = () => { if (!ALLOWED[G.dev].includes(G.ds)) G.ds = 'apple'; };
   fixDs();
@@ -23,9 +23,9 @@
   function mount(start) {
     if (app) app.destroy();
     app = new App(host, {
-      start, dev: G.dev, ds: G.ds, th: root.dataset.theme === 'dark' ? 'dark' : 'light',
+      start, dev: G.dev, ds: G.ds, th: root.dataset.theme === 'dark' ? 'dark' : 'light', fold: G.fold,
       mods: PRESETS.anime.mods, persist: MODS_KEY,
-      onLand: () => fit(true),
+      onLand: r => fit(r === 'fold' ? 'fold' : true),
       onTheme: t => setTheme(t),
     });
     fit();
@@ -60,6 +60,7 @@
     desk: '快捷键：<kbd>⌘K</kbd> 搜索 · <kbd>⌘,</kbd> 设置 · <kbd>⌘O</kbd> 打开文件 · 播放时 <kbd>空格</kbd> 暂停、<kbd>Esc</kbd> 返回 · 本地视频可以直接拖进窗口',
     tablet: '平板：没有悬停，▶ 常驻在缩略图上；横放，播放即全屏。',
     phone: '手机：开始播放时转成横屏，返回时转回竖屏；搜索是一个标签页。',
+    fold: '折叠屏：苹果是 iPhone Duo（栏竖排在右侧），其他是书本式大折叠（Mate X7 一类）。合上 = 外屏，播放时转横屏；展开 = 左右两栏，点开的东西在右栏；悬停 = 上半屏画框、下半屏操作。换姿态时停在同一页，视频接着放。',
     tv: '电视：先点一下原型，再用 <kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> 移动焦点，<kbd>回车</kbd> 确认，<kbd>Esc</kbd> 返回（遥控器的方向键、确认键和返回键）。',
   };
   function hint() { $('#pbHint').innerHTML = HINT[G.dev]; }
@@ -67,6 +68,8 @@
     $$('#pbDev span[data-v]').forEach(s => s.classList.toggle('on', s.dataset.v === G.dev));
     /* 设计语言只列这种设备上真的会出现的 */
     $$('#pbDs span[data-v]').forEach(s => { s.style.display = ALLOWED[G.dev].includes(s.dataset.v) ? '' : 'none'; s.classList.toggle('on', s.dataset.v === G.ds); });
+    $('#pbFold').style.display = G.dev === 'fold' ? '' : 'none';
+    $$('#pbFold span[data-v]').forEach(s => s.classList.toggle('on', s.dataset.v === G.fold));
   }
   $$('#pbDev span[data-v]').forEach(s => s.addEventListener('click', () => {
     if (G.dev === s.dataset.v) return;
@@ -78,6 +81,12 @@
     if (G.ds === s.dataset.v) return;
     G.ds = s.dataset.v; kv.set('proto.ds', G.ds);
     syncBar(); app.setLook(G.ds, app.cfg.th);
+  }));
+  /* 折叠屏的姿态：合上 / 展开 / 悬停 */
+  $$('#pbFold span[data-v]').forEach(s => s.addEventListener('click', () => {
+    if (G.fold === s.dataset.v) return;
+    G.fold = s.dataset.v; kv.set('proto.fold', G.fold);
+    syncBar(); app.setFold(G.fold);
   }));
   const tb = $('#pbTheme');
   NP.onTheme(t => { tb.innerHTML = svg(t === 'dark' ? 'sun' : 'moon'); if (app && app.cfg.th !== t) app.setLook(G.ds, t); });

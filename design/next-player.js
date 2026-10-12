@@ -9,14 +9,31 @@
   const A = App.prototype;
   const EPS = 12;
   /* 每种设备一套画框位置：full = 看片时铺满，shown = 控制层出现时退后，panel = 设置面板把画面推到一边 */
-  const BASE = { desk: { W: 1280, H: 800, w: 1280, h: 720 }, tablet: { W: 1180, H: 820, w: 1180, h: 663.75 }, tv: { W: 1280, H: 720, w: 1280, h: 720 }, phone: { W: 844, H: 390, w: 693, h: 390 } };
+  /* 折叠屏：duoc = iPhone Duo 合上转横屏（662×470），duoo / xo = 展开（iPhone Duo 930×662 / Mate X 740×808），
+     duot / xt = 悬停：画面在上半屏一直铺满，控件全在下半屏（seek 是进度行的固定位置），所以控件出现时画面不用退后 */
+  const BASE = {
+    desk: { W: 1280, H: 800, w: 1280, h: 720 }, tablet: { W: 1180, H: 820, w: 1180, h: 663.75 }, tv: { W: 1280, H: 720, w: 1280, h: 720 }, phone: { W: 844, H: 390, w: 693, h: 390 },
+    duoc: { W: 662, H: 470, w: 662, h: 372.375 }, duoo: { W: 930, H: 662, w: 930, h: 523.125 }, xo: { W: 740, H: 808, w: 740, h: 416.25 },
+    duot: { W: 662, H: 930, w: 662, h: 372.375, seek: { x: 24, y: 565, w: 614 } }, xt: { W: 808, H: 740, w: 808, h: 454.5, seek: { x: 24, y: 470, w: 760 } },
+  };
   const RECT = {
     desk: { full: { x: 0, y: 40, w: 1280 }, shown: { x: 103, y: 64, w: 1074 }, panel: { x: 24, y: 114, w: 896 } },
     tablet: { full: { x: 0, y: 78, w: 1180 }, shown: { x: 60, y: 76, w: 1060 }, panel: { x: 24, y: 120, w: 788 } },
     tv: { full: { x: 0, y: 0, w: 1280 }, shown: { x: 200, y: 52, w: 880 }, panel: { x: 40, y: 100, w: 784 } },
     phone: { full: { x: 75.5, y: 0, w: 693 }, shown: { x: 162.5, y: 48, w: 519 }, panel: { x: 16, y: 56, w: 512 } },
+    duoc: { full: { x: 0, y: 48.8, w: 662 }, shown: { x: 116, y: 80, w: 430 }, panel: { x: 16, y: 64, w: 340 } },
+    duoo: { full: { x: 0, y: 69.4, w: 930 }, shown: { x: 125, y: 56, w: 680 }, panel: { x: 24, y: 76, w: 560 } },
+    xo: { full: { x: 0, y: 195.9, w: 740 }, shown: { x: 24, y: 120, w: 692 }, panel: { x: 24, y: 80, w: 380 } },
+    duot: { full: { x: 0, y: 46.3, w: 662 }, shown: { x: 0, y: 46.3, w: 662 }, panel: { x: 0, y: 46.3, w: 662 } },
+    xt: { full: { x: 75.1, y: 0, w: 657.8 }, shown: { x: 75.1, y: 0, w: 657.8 }, panel: { x: 75.1, y: 0, w: 657.8 } },
   };
-  const CTL = { desk: { shown: { x: 103, w: 1074 }, panel: { x: 24, w: 1232 } }, tablet: { shown: { x: 60, w: 1060 }, panel: { x: 24, w: 1132 } }, tv: { shown: { x: 64, w: 1152 }, panel: { x: 40, w: 1200 } }, phone: { shown: { x: 0, w: 0 }, panel: { x: 0, w: 0 } } };
+  const CTL = {
+    desk: { shown: { x: 103, w: 1074 }, panel: { x: 24, w: 1232 } }, tablet: { shown: { x: 60, w: 1060 }, panel: { x: 24, w: 1132 } }, tv: { shown: { x: 64, w: 1152 }, panel: { x: 40, w: 1200 } }, phone: { shown: { x: 0, w: 0 }, panel: { x: 0, w: 0 } },
+    duoc: { shown: { x: 0, w: 0 }, panel: { x: 0, w: 0 } }, duoo: { shown: { x: 125, w: 680 }, panel: { x: 24, w: 882 } }, xo: { shown: { x: 24, w: 692 }, panel: { x: 24, w: 692 } },
+    duot: { shown: { x: 24, w: 614 }, panel: { x: 24, w: 614 } }, xt: { shown: { x: 24, w: 760 }, panel: { x: 24, w: 760 } },
+  };
+  /* RAILS：两侧竖排控件（手机横屏那一套）；TENT：悬停 */
+  const RAILS = new Set(['phone', 'duoc']), TENT = new Set(['duot', 'xt']);
   const chAt = t => CH.filter(c => t >= c.t).pop();
 
   A.plNew = function (o) {
@@ -33,12 +50,16 @@
     }
     return p;
   };
-  A.plFF = function () { return this.dev; };
+  A.plFF = function () {
+    if (this.dev !== 'fold') return this.dev;
+    if (this.fold === 'closed') return this.hw === 'duo' ? 'duoc' : 'phone';
+    return (this.hw === 'duo' ? 'duo' : 'x') + (this.fold === 'open' ? 'o' : 't');
+  };
   /* 画框某个状态的矩形（纯粹模式的空画框也用 shown，和播放器退后时完全重合） */
   A.plRect = function (kind) { const ff = this.plFF(), R = RECT[ff][kind], b = BASE[ff]; return { x: R.x, y: R.y, w: R.w, h: R.w * b.h / b.w }; };
 
   A.plHTML = function () {
-    const p = this.P, ff = this.plFF(), ph = ff === 'phone', tv = ff === 'tv', b = BASE[ff], s = this.store;
+    const p = this.P, ff = this.plFF(), ph = RAILS.has(ff), tv = ff === 'tv', b = BASE[ff], s = this.store;
     /* 发弹幕：桌面和平板是控制行里的输入框；手机和电视是一个按钮，点了在进度条的位置换出输入条（电视上用遥控器语音或手机输入） */
     const inline = ff === 'desk' || ff === 'tablet';
     const dm = s.has('danmaku'), dmi = dm && s.has('sync'), enh = s.has('enhance'), eps = p.aid != null && !byId(p.aid).movie;
@@ -61,7 +82,8 @@
         <div class="ttl"><b>${p.title}</b><span class="ep-lab">${p.sub2}</span></div><span class="grow"></span>
         ${ph && enh ? ib('sparkle', 'enh', '画质增强', 1) : ''}${ff === 'desk' ? ib('vol', 'vol', '音量', 1) : ''}${dm ? ib('link', 'match', '弹幕匹配') : ''}${ib('pip', 'pip', '画中画')}${ff === 'desk' ? ib('full', 'fs', '全屏') : ''}${ib('sliders', 'panel', '播放设置')}${ib('more', 'more', '更多', 1)}
         ${this.cfg.ds === 'fluent' && ff === 'desk' ? '<span style="display:flex;align-self:flex-start;margin:0 -20px 0 6px"><i style="width:46px;height:32px;display:grid;place-items:center;font-style:normal;font-size:13px;opacity:.85">—</i><i style="width:46px;height:32px;display:grid;place-items:center;font-style:normal;font-size:13px;opacity:.85">☐</i><i style="width:46px;height:32px;display:grid;place-items:center;font-style:normal;font-size:13px;opacity:.85">✕</i></span>' : ''}
-        ${this.cfg.ds === 'adwaita' && ff === 'desk' ? '<span class="x-gclose" style="display:grid">✕</span>' : ''}</div>`;
+        ${this.cfg.ds === 'adwaita' && ff === 'desk' ? '<span class="x-gclose" style="display:grid">✕</span>' : ''}
+        ${this.cfg.ds === 'harmony' && ff === 'desk' ? '<span class="p-hcaps"><i>—</i><i>☐</i><i>✕</i></span>' : ''}</div>`;
     const seek = `<div class="p-seek fx"><span class="t now">${fmt(p.t)}</span>${slider}<span class="t dur">${fmt(p.dur)}</span>
         ${p.aid != null ? `<div class="chs">${CH.map(c => `<span style="left:${(c.t / DUR) * 100}%">${c.n}</span>`).join('')}${dm ? PEAKS.map(t => `<span class="pk" style="left:calc(${(t / DUR) * 100}% - 5px)" title="弹幕高峰">★</span>`).join('') : ''}</div>` : ''}</div>`;
     const body = ph
@@ -74,7 +96,7 @@
 
   A.plBuild = function () {
     const p = this.P, ff = this.plFF(), q = this.q.player;
-    q.className = 'x-player dk ff-' + ff + (ff === 'phone' ? ' ph' : '');
+    q.className = 'x-player dk ff-' + ff + (RAILS.has(ff) ? ' ph' : '') + (TENT.has(ff) ? ' tent' : '');
     q.innerHTML = this.plHTML();
     q.style.display = 'block';
     p.cv = $('.cv', q); p.seek = $('.p-seek', q); p.ctl = $('.p-ctl', q); p.say = $('.p-say', q); p.sheet = $('.p-sheet', q);
@@ -93,16 +115,20 @@
     p.cv.style.transform = `translate(${s.x.v.toFixed(2)}px, ${s.y.v.toFixed(2)}px) scale(${k.toFixed(5)})`;
     p.cv.style.borderRadius = (s.r.v / k).toFixed(2) + 'px';
     p.cv.style.setProperty('--s', k.toFixed(4));
-    const gap = ff === 'phone' ? 3 : 0;
-    p.seek.style.left = s.x.v + 'px'; p.seek.style.width = s.w.v + 'px'; p.seek.style.top = s.y.v + h + gap + 'px';
-    if (p.say) { p.say.style.left = s.x.v + 'px'; p.say.style.width = s.w.v + 'px'; p.say.style.top = s.y.v + h + gap + 'px'; }
+    /* 进度行贴着画框下沿；悬停时进度行在下半屏的固定位置 */
+    const gap = RAILS.has(ff) ? 3 : 0, S = b.seek || { x: s.x.v, y: s.y.v + h + gap, w: s.w.v };
+    p.seek.style.left = S.x + 'px'; p.seek.style.width = S.w + 'px'; p.seek.style.top = S.y + 'px';
+    if (p.say) { p.say.style.left = S.x + 'px'; p.say.style.width = S.w + 'px'; p.say.style.top = S.y + 'px'; }
     if (p.ctl) { p.ctl.style.left = s.cx.v + 'px'; p.ctl.style.width = s.cw.v + 'px'; }
   };
   A.plLayout = function (kind, snap) {
     const p = this.P; if (!p || !p.sp) return;
+    const ff = this.plFF();
+    /* 悬停：控件在另一半屏，一直留着，画面也不用铺满 */
+    if (TENT.has(ff) && kind === 'full') kind = 'shown';
     p.lay = kind;
-    const ff = this.plFF(), R = RECT[ff][kind], C = CTL[ff][kind === 'panel' ? 'panel' : 'shown'];
-    const r = kind === 'full' ? 0 : this.rad(ff === 'phone' ? '--r-l' : '--r-card');
+    const R = RECT[ff][kind], C = CTL[ff][kind === 'panel' ? 'panel' : 'shown'];
+    const r = kind === 'full' || TENT.has(ff) ? 0 : this.rad(RAILS.has(ff) ? '--r-l' : '--r-card');
     const q = this.q.player; q.classList.toggle('shown', kind !== 'full'); q.classList.toggle('panel', kind === 'panel');
     const s = p.sp, cfg = TOKENS.hero;
     s.x.cfg(cfg).target = R.x; s.y.cfg(cfg).target = R.y; s.w.cfg(cfg).target = R.w; s.r.cfg(cfg).target = r; s.cx.cfg(cfg).target = C.x; s.cw.cfg(cfg).target = C.w;
@@ -119,7 +145,7 @@
       this.P = this.plNew(o); const p = this.P; p.mode = 'full'; p.open = true;
       this.plBuild();
       const ff = this.plFF();
-      if (from && ff !== 'phone' && !RM()) {
+      if (from && !RAILS.has(ff) && !RM()) {
         /* 从缩略图（或空画框）的位置开始，长到画框位置 */
         const b = BASE[ff], k = from.w / b.w, hh = from.w * b.h / b.w;
         p.sp.x.v = from.x; p.sp.y.v = from.y + (from.h - hh) / 2; p.sp.w.v = from.w; p.sp.r.v = srcEl ? parseFloat(getComputedStyle(srcEl).borderTopLeftRadius) || 0 : this.rad('--r-card');
@@ -133,7 +159,7 @@
       this.plWake();
       this.renderMini();
     };
-    if (this.ph && !this.land) { this.setLand(true, startOpen); return; }
+    if (this.rot && !this.land) { this.setLand(true, startOpen); return; }
     if (fromIdle && !RM()) {
       /* 空画框先被画面填满，再把控件放到四周——画框位置完全一样，所以没有跳动 */
       const fill = $('.i-frame img.fill', this.el); if (fill) { fill.src = o.img || STILL; tween(TOKENS.smooth, q => { fill.style.opacity = String(Math.min(1, q)); }, () => { startOpen(); fill.style.opacity = ''; }); return; }
@@ -151,7 +177,8 @@
     const p = this.P; if (!p) return;
     this.menuClose(); this.plSay(false);
     clearTimeout(p.hideT); p.open = false; p.mode = 'mini';
-    if (this.ph) { this.setLand(false); this.renderMini(); return; }
+    if (this.rot) { this.setLand(false); this.renderMini(); return; }
+    if (this.ph) { this.q.player.style.display = 'none'; this.renderMini(); return; }
     if (this.pure()) {
       /* 纯粹模式没有侧栏：画面退回空画框，这个视频排到「最近播放」第一个 */
       if (p.video) p.video.pause();
@@ -170,8 +197,8 @@
   };
   A.plExpand = function () {
     const p = this.P; if (!p) return;
-    if (this.ph) { this.setLand(true, () => { p.open = true; p.mode = 'full'; this.plBuild(); this.plLayout('shown', true); this.plWake(); this.renderMini(); }); return; }
-    const th = $('.x-mini .x-thumb', this.el), from = th ? this.rel(th) : null;
+    if (this.rot) { this.setLand(true, () => { p.open = true; p.mode = 'full'; this.plBuild(); this.plLayout('shown', true); this.plWake(); this.renderMini(); }); return; }
+    const th = $('.x-mini .x-thumb, .x-pmini .x-thumb', this.el), from = th ? this.rel(th) : null;
     p.open = true; p.mode = 'full'; this.plBuild();
     if (from && !RM()) {
       const ff = this.plFF(); p.sp.x.v = from.x; p.sp.y.v = from.y; p.sp.w.v = from.w; p.sp.r.v = 0;
@@ -237,7 +264,7 @@
     if (!inp.value.trim()) { inp.focus({ preventScroll: true }); return; }
     const L = $('.dm-layer', this.q.player), s = document.createElement('span');
     s.textContent = inp.value.trim();
-    s.style.cssText = `top:${Math.floor(Math.random() * 4) * (this.ph ? 30 : 40)}px;animation-duration:9s;animation-iteration-count:1;animation-delay:0s;outline:1.5px solid rgba(255,255,255,.85);outline-offset:3px;border-radius:4px`;
+    s.style.cssText = `top:${Math.floor(Math.random() * 4) * (RAILS.has(this.plFF()) ? 30 : 40)}px;animation-duration:9s;animation-iteration-count:1;animation-delay:0s;outline:1.5px solid rgba(255,255,255,.85);outline-offset:3px;border-radius:4px`;
     L.appendChild(s); setTimeout(() => s.remove(), 9200); inp.value = '';
     if (!p.dmOn) this.plDm();
     if (!(this.dev === 'desk' || this.dev === 'tablet')) this.plSay(false);
@@ -251,7 +278,7 @@
   /* ---------------- 菜单 ---------------- */
   const mi = (t, on, d, k = '') => `<div class="c-mi${on ? ' on' : ''}" data-mi="${d}"><span class="ck">${I('check')}</span>${t}${k ? `<span class="k">${k}</span>` : ''}</div>`;
   A.plMenu = function (kind, anchor) {
-    const p = this.P, ph = this.ph;
+    const p = this.P, ph = this.rot;
     const sl = (v, key) => `<div class="c-slider sm" data-k="${key}" style="--v:${v}"><i class="in"></i><i class="ac"></i><i class="th"></i></div>`;
     const H = {
       sub: () => `<div class="c-mlabel">字幕</div>${['简体中文（内嵌 ASS）', '日本語', '关闭'].map((x, i) => mi(x, i === p.sub, 'sub-' + i)).join('')}${mi('添加外挂字幕…', false, 'sub-add')}<div class="c-sep"></div><div class="c-mlabel">音轨</div>${['日本語 · FLAC 2.0', '中文配音 · AAC 2.0'].map((x, i) => mi(x, i === p.audio, 'au-' + i)).join('')}`,
@@ -283,7 +310,7 @@
     if (d === 'm-skip') { this.plSeek(p.t + 85); this.toast('已跳过片头'); return done(); }
     if (d === 'm-shot') { this.toast(this.touch ? '截图已存到相册' : this.tv ? '截图已保存，可以在手机上的 Erika 里取回' : '截图已保存到「图片」'); return done(); }
     if (d === 'm-match') { this.toast('原型：打开弹幕匹配窗口，搜索弹弹play 的番剧和集数'); return done(); }
-    if (d === 'm-lock') { p.lock = !p.lock; this.toast(p.lock ? (this.ph ? '已锁定横屏' : '已锁定方向') : '已解除方向锁定'); return done(); }
+    if (d === 'm-lock') { p.lock = !p.lock; this.toast(p.lock ? (this.rot ? '已锁定横屏' : '已锁定方向') : '已解除方向锁定'); return done(); }
   };
 
   /* ---------------- 设置面板：推开画面，不盖住画面 ---------------- */

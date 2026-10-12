@@ -30,9 +30,16 @@ main.nxp { max-width: 1240px; margin: 0 auto; padding: 48px 32px 160px; }
 .nxp-stage-wrap.ph.land { border-radius: 40px; }
 .nxp-stage-wrap.tab { border-radius: 40px; border: 12px solid #101012; box-sizing: content-box; }
 .nxp-stage-wrap.tv { border-radius: 14px; border: 10px solid #0B0B0D; box-sizing: content-box; box-shadow: 0 0 0 1px #2C2C30, var(--shadow-lg); }
+/* 折叠屏展开 / 悬停（合上时用手机的外框）：iPhone Duo 圆角大一点，书本式大折叠的内屏圆角小一点 */
+.nxp-stage-wrap.fold { border-radius: 30px; border: 10px solid #101012; box-sizing: content-box; }
+.nxp-stage-wrap.fold.duo { border-radius: 44px; }
+.nxp-stage-wrap.ph.duo { border-radius: 46px; }
 .nxp-tvhint { display: none; width: 100%; font-size: 12.5px; color: var(--text-2); }
 .nxp-tvhint kbd { font: 600 11px/1 var(--mono); padding: 2px 6px; border-radius: 5px; background: var(--surface-2); border: 1px solid var(--line); }
 body.dev-tv .nxp-tvhint { display: block; }
+.nxp-foldhint { display: none; width: 100%; font-size: 12.5px; color: var(--text-2); }
+body.dev-fold .nxp-foldhint { display: block; }
+body:not(.dev-fold) .nxp-bar .nxp-fold { display: none; }
 .nxp-stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 .nxp-rev { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
 .nxp-rev .card { padding: 16px 18px; }
@@ -153,6 +160,31 @@ body.dev-tv .nxp-tvhint { display: block; }
   --tonal: color-mix(in srgb, var(--accent) 22%, #18181B); --on-tonal: color-mix(in srgb, var(--accent) 30%, #FFFFFF);
   --card-sh: 0 0 0 1px #27272A; --poster-sh: 0 0 0 1px rgba(255, 255, 255, .06);
 }
+/* ---- 鸿蒙（HarmonyOS 6：手机 / 电脑 / 平板 / 折叠屏）----
+   HarmonyOS Sans；浅灰底 + 白色大圆角卡片；按钮都是胶囊，普通按钮是灰底 + 强调色字；标题栏按钮是灰色圆钮；
+   底部是悬浮页签，「沉浸光感」= 磨砂底 + 一层跟着主题色走的柔光 */
+.nx[data-ds="harmony"] {
+  --ff: "HarmonyOS Sans SC", "HarmonyOS Sans", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  --r-s: 8px; --r-m: 12px; --r-l: 16px; --r-card: 20px; --r-poster: 12px; --is: 20px; --isw: 1.8;
+  --t-lt: 700 30px/40px var(--ff); --t-h1: 700 26px/34px var(--ff); --t-h2: 700 18px/24px var(--ff); --t-title: 500 15px/20px var(--ff); --t-body: 400 14px/20px var(--ff); --t-cap: 400 12px/16px var(--ff); --t-time: 500 12px/16px var(--ff);
+  --bg: #F1F3F5; --sf: #F1F3F5; --card: #FFFFFF; --f1: rgba(0, 0, 0, .05); --f2: rgba(0, 0, 0, .09); --f3: rgba(0, 0, 0, .16);
+  --on: rgba(0, 0, 0, .9); --on2: rgba(0, 0, 0, .6); --on3: rgba(0, 0, 0, .38); --ol: rgba(0, 0, 0, .08); --ol2: rgba(0, 0, 0, .2);
+  --hglass: rgba(255, 255, 255, .76); --hrim: inset 0 0 0 .5px rgba(255, 255, 255, .95), inset 0 1px 1px rgba(255, 255, 255, .9), 0 10px 28px rgba(0, 0, 0, .1);
+  --hlight: radial-gradient(70% 140% at 50% 0%, rgba(var(--acc-rgb), .16), transparent 70%);
+  --pop: #FFFFFF; --pop-sh: 0 12px 40px rgba(0, 0, 0, .14); --sb: #FFFFFF; --track: rgba(0, 0, 0, .1);
+  --tonal: color-mix(in srgb, var(--accent) 12%, #FFFFFF); --on-tonal: color-mix(in srgb, var(--accent) 75%, #000000);
+  --card-sh: none; --poster-sh: none; --acc-ink: var(--acc);
+}
+.nx[data-ds="harmony"][data-th="dark"], .nx[data-ds="harmony"] .dk {
+  --bg: #000000; --sf: #0F0F10; --card: #1F2022; --f1: rgba(255, 255, 255, .08); --f2: rgba(255, 255, 255, .13); --f3: rgba(255, 255, 255, .24);
+  --on: rgba(255, 255, 255, .9); --on2: rgba(255, 255, 255, .6); --on3: rgba(255, 255, 255, .38); --ol: rgba(255, 255, 255, .1); --ol2: rgba(255, 255, 255, .2);
+  --hglass: rgba(42, 43, 46, .78); --hrim: inset 0 0 0 .5px rgba(255, 255, 255, .16), inset 0 1px 1px rgba(255, 255, 255, .12), 0 10px 28px rgba(0, 0, 0, .45);
+  --pop: #2A2B2E; --pop-sh: 0 12px 40px rgba(0, 0, 0, .5); --sb: #1F2022; --track: rgba(255, 255, 255, .16);
+  --tonal: color-mix(in srgb, var(--accent) 24%, #1F2022); --on-tonal: color-mix(in srgb, var(--accent) 30%, #FFFFFF); --acc-ink: var(--acc);
+}
+/* 荧绿在浅色底上做文字看不清：浅色下强调色文字改成正文色（和下划标注的规则一样） */
+:root[data-accent="mint"] .nx[data-ds="harmony"]:not([data-th="dark"]) { --acc-ink: var(--on); }
+:root[data-accent="mint"] .nx[data-ds="harmony"] .dk { --acc-ink: var(--acc); }
 
 /* =====================================================================
    窗口外壳
@@ -236,7 +268,7 @@ body.dev-tv .nxp-tvhint { display: block; }
 .nx[data-ds="web"][data-dev="desk"] .x-side { background: var(--sf); box-shadow: inset -1px 0 0 var(--ol); }
 
 /* ---- 手机 ---- */
-.nx[data-dev="phone"] { flex-direction: column; }
+.nx[data-dev="phone"], .nx[data-dev="fold"] { flex-direction: column; }
 .nx .x-status { height: 50px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 8px 30px 0; font: 600 15px/1 -apple-system, system-ui, sans-serif; color: var(--on); position: relative; z-index: 6; }
 .nx .x-status i { display: inline-block; }
 .nx .x-pbody { flex: 1; position: relative; overflow: hidden; }
@@ -610,6 +642,62 @@ body.dev-tv .nxp-tvhint { display: block; }
 .nx[data-ds="web"] .c-li .lic { border-radius: 8px; background: var(--f1); }
 .nx[data-ds="web"] .c-glabel { font: 600 13px/1 var(--ff); color: var(--on); margin: 22px 2px 10px; }
 
+/* ---------- 鸿蒙 ---------- */
+.nx[data-ds="harmony"] .c-ib { width: 40px; height: 40px; border-radius: 50%; color: var(--on); background: var(--f1); }
+.nx[data-ds="harmony"] .c-ib.flat { background: none; color: var(--on2); }
+.nx[data-ds="harmony"] .c-ib:hover, .nx[data-ds="harmony"] .c-tr:hover, .nx[data-ds="harmony"] .c-btn:not(.p):hover, .nx[data-ds="harmony"] .c-chip:not(.on):hover { background: var(--f2); }
+.nx[data-ds="harmony"] .c-btn { height: 40px; padding: 0 18px; border-radius: 20px; background: var(--f1); color: var(--acc-ink); font: 500 15px/1 var(--ff); }
+.nx[data-ds="harmony"] .c-btn:has(.chev) { padding: 0 12px 0 16px; }
+.nx[data-ds="harmony"] .c-btn .chev { color: var(--on3); }
+.nx[data-ds="harmony"] .c-btn.p { background: var(--acc); color: var(--on-acc); }
+.nx[data-ds="harmony"] .c-btn.p:hover { background: color-mix(in srgb, var(--accent) 88%, #000000); }
+.nx[data-ds="harmony"] .c-btn.t { background: var(--tonal); color: var(--on-tonal); }
+.nx[data-ds="harmony"] .c-btn.L { height: 44px; padding: 0 26px; border-radius: 22px; font-size: 16px; }
+.nx[data-ds="harmony"] .c-play { width: 56px; height: 56px; border-radius: 50%; }
+.nx[data-ds="harmony"] .c-play .i { width: 24px; height: 24px; }
+.nx[data-ds="harmony"] .c-tr { width: 44px; height: 44px; border-radius: 50%; background: var(--f1); }
+.nx[data-ds="harmony"] .c-split { border-radius: 20px; background: var(--f1); }
+.nx[data-ds="harmony"] .c-split > span { height: 40px; font: 500 14px/1 var(--ff); color: var(--on); }
+.nx[data-ds="harmony"] .c-split .sa { padding: 0 10px 0 16px; }
+.nx[data-ds="harmony"] .c-split .sb { width: 34px; justify-content: center; box-shadow: inset 1px 0 0 var(--ol); }
+.nx[data-ds="harmony"] .c-split.on { background: var(--tonal); }
+.nx[data-ds="harmony"] .c-split.on > span { color: var(--on-tonal); }
+.nx[data-ds="harmony"] .c-field { height: 40px; padding: 0 4px 0 14px; border-radius: 20px; background: var(--f1); }
+.nx[data-ds="harmony"] .c-field.x-search { padding: 0 14px; }
+.nx[data-ds="harmony"] .c-field input { font-size: 15px; }
+.nx[data-ds="harmony"] .c-send { height: 32px; padding: 0 14px; border-radius: 16px; font: 500 13px/1 var(--ff); }
+.nx[data-ds="harmony"] .c-slider { height: 28px; }
+.nx[data-ds="harmony"] .c-slider .in { left: 0; right: 0; height: 4px; margin-top: -2px; border-radius: 2px; background: var(--track); }
+.nx[data-ds="harmony"] .c-slider .ac { left: 0; width: calc(var(--v) * 100%); height: 4px; margin-top: -2px; border-radius: 2px; background: var(--acc); }
+.nx[data-ds="harmony"] .c-slider .th { left: calc(var(--v) * 100% - 10px); top: 50%; width: 20px; height: 20px; margin-top: -10px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 5px rgba(0, 0, 0, .24), 0 0 0 .5px rgba(0, 0, 0, .06); transition: transform .3s cubic-bezier(.3, 1.6, .5, 1); }
+.nx[data-ds="harmony"] .c-slider.drag .th { transform: scale(1.25); }
+.nx[data-ds="harmony"] .c-slider .tk { top: 50%; width: 2px; height: 4px; margin: -2px 0 0 -1px; background: rgba(255, 255, 255, .75); }
+.nx[data-ds="harmony"] .tip { padding: 7px 12px; border-radius: 12px; background: var(--pop); box-shadow: var(--pop-sh); color: var(--on); font: 500 13px/1 var(--ff); }
+.nx[data-ds="harmony"] .c-seg { background: var(--f1); border-radius: 999px; padding: 2px; }
+.nx[data-ds="harmony"] .c-seg > span { height: 32px; padding: 0 14px; border-radius: 999px; font: 500 14px/1 var(--ff); color: var(--on2); }
+.nx[data-ds="harmony"] .c-seg > span.on { background: var(--card); color: var(--on); box-shadow: 0 2px 6px rgba(0, 0, 0, .1); }
+.nx[data-ds="harmony"][data-th="dark"] .c-seg > span.on, .nx[data-ds="harmony"] .dk .c-seg > span.on { background: rgba(255, 255, 255, .2); }
+.nx[data-ds="harmony"] .c-chip { height: 32px; padding: 0 14px; border-radius: 16px; background: var(--f1); font: 400 14px/1 var(--ff); }
+.nx[data-ds="harmony"] .c-chip.on { background: var(--acc); color: var(--on-acc); }
+.nx[data-ds="harmony"] .c-switch { width: 40px; height: 24px; border-radius: 12px; background: var(--f3); }
+.nx[data-ds="harmony"] .c-switch::after { left: 2px; width: 20px; height: 20px; margin-top: -10px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(0, 0, 0, .2); }
+.nx[data-ds="harmony"] .c-switch.on { background: var(--acc); }
+.nx[data-ds="harmony"] .c-switch.on::after { left: 18px; }
+.nx[data-ds="harmony"] .c-menu { background: var(--pop); border-radius: 20px; padding: 4px; box-shadow: var(--pop-sh); }
+.nx[data-ds="harmony"] .c-mi { height: 44px; padding: 0 16px 0 10px; border-radius: 16px; font: 400 15px/1 var(--ff); }
+.nx[data-ds="harmony"] .c-mi:hover { background: var(--f1); }
+.nx[data-ds="harmony"] .c-mi.on { color: var(--acc-ink); }
+.nx[data-ds="harmony"] .c-mlabel { font: 500 13px/1 var(--ff); padding: 12px 14px 6px; }
+.nx[data-ds="harmony"] .c-sep { margin: 4px 14px; }
+.nx[data-ds="harmony"] .c-navi { height: 48px; padding: 0 14px; border-radius: 16px; font: 500 15px/1 var(--ff); }
+.nx[data-ds="harmony"] .c-navi:hover { background: var(--f1); }
+.nx[data-ds="harmony"] .c-navi.on { background: var(--tonal); color: var(--on-tonal); }
+.nx[data-ds="harmony"] .c-list { background: var(--card); border-radius: 20px; padding: 4px 0; }
+.nx[data-ds="harmony"] .c-li { min-height: 56px; padding: 8px 16px; }
+.nx[data-ds="harmony"] .c-li + .c-li::before { content: ""; position: absolute; left: 16px; right: 16px; top: 0; height: .5px; background: var(--ol2); }
+.nx[data-ds="harmony"] .c-li .lic { width: 32px; height: 32px; border-radius: 10px; background: var(--f1); color: var(--on); }
+.nx[data-ds="harmony"] .c-glabel { font: 500 14px/1 var(--ff); color: var(--on2); margin: 24px 16px 10px; }
+
 /* =====================================================================
    弹出层 / 遮罩 / 面板
    ===================================================================== */
@@ -620,7 +708,7 @@ body.dev-tv .nxp-tvhint { display: block; }
 .nx .x-fly { position: absolute; left: 0; top: 0; z-index: 85; overflow: hidden; pointer-events: none; will-change: transform; background: #000; }
 .nx .x-fly img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .nx .toast { bottom: 30px; z-index: 99; }
-.nx[data-dev="phone"] .toast { bottom: 108px; }
+.nx[data-dev="phone"] .toast, .nx[data-dev="fold"] .toast { bottom: 108px; }
 
 /* =====================================================================
    屏幕
@@ -1153,3 +1241,124 @@ body.dev-tv .nxp-tvhint { display: block; }
 .nx[data-dev="tv"] .tvf.o-card { box-shadow: inset 0 0 0 3px var(--on), var(--card-sh); transform: scale(1.03); }
 .nx[data-dev="tv"] .tvf.l-idx span, .nx[data-dev="tv"] .l-idx span.tvf { background: var(--on); color: var(--bg); }
 .nx[data-dev="tv"] .x-player .tvf:is(.c-btn, .c-ib, .c-tr) { background: #FFFFFF !important; color: #111 !important; }
+
+/* =====================================================================
+   鸿蒙的窗口外壳：电脑（HarmonyOS PC）右上角是三颗圆形窗口按钮；平板、手机顶部是系统状态栏；
+   手机底部是悬浮页签；返回是灰色圆钮（只有箭头，没有文字）
+   ===================================================================== */
+.nx[data-ds="harmony"] .x-status { font: 500 14px/1 var(--ff); padding: 8px 28px 0; }
+.nx[data-ds="harmony"][data-dev="tablet"] .x-tstat { font: 500 13px/1 var(--ff); }
+.nx[data-ds="harmony"] .x-pback { width: 40px; height: 40px; margin-left: 0; justify-content: center; border-radius: 50%; background: var(--f1); color: var(--on); font-size: 0; gap: 0; }
+.nx[data-ds="harmony"] .x-pback .i { width: 22px; height: 22px; }
+/* 悬浮页签：离开底边的磨砂胶囊；选中项是一颗更亮的胶囊，底下有一团跟着主题色走的光 */
+.nx[data-ds="harmony"] .c-tabbar { position: absolute; left: 20px; right: 20px; bottom: 20px; height: 62px; padding: 4px; border-radius: 31px; background: var(--hlight), var(--hglass); backdrop-filter: blur(24px) saturate(1.6); -webkit-backdrop-filter: blur(24px) saturate(1.6); box-shadow: var(--hrim); }
+.nx[data-ds="harmony"] .c-tabi { border-radius: 27px; gap: 3px; font: 500 10px/1 var(--ff); color: var(--on2); }
+.nx[data-ds="harmony"] .c-tabi.on { color: var(--acc-ink); background: radial-gradient(60% 70% at 50% 100%, rgba(var(--acc-rgb), .3), transparent 80%), rgba(255, 255, 255, .72); box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .95), 0 2px 8px rgba(0, 0, 0, .06); }
+.nx[data-ds="harmony"][data-th="dark"] .c-tabi.on { background: radial-gradient(60% 70% at 50% 100%, rgba(var(--acc-rgb), .36), transparent 80%), rgba(255, 255, 255, .12); box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .18); }
+.nx[data-ds="harmony"] .x-pmini { bottom: 94px; }
+/* 电脑和平板：侧栏不另上底色，选中项是主题色浅底；电脑窗口右上角三颗圆钮 = 最小化 / 最大化 / 关闭 */
+.nx[data-ds="harmony"][data-dev="desk"] .x-side, .nx[data-ds="harmony"][data-dev="tablet"] .x-side { background: transparent; }
+.nx[data-ds="harmony"][data-dev="desk"] .x-caps { display: flex; gap: 8px; top: 14px; right: 16px; }
+.nx[data-ds="harmony"] .x-caps i { width: 28px; height: 28px; border-radius: 50%; background: var(--f1); font-size: 12px; opacity: 1; color: var(--on2); }
+.nx[data-ds="harmony"][data-dev="desk"] .x-tb { padding-right: 132px; }
+.nx .x-player .p-hcaps { display: flex; gap: 8px; margin: 0 -4px 0 10px; }
+.nx .x-player .p-hcaps i { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--f1); font-style: normal; font-size: 12px; color: var(--on2); }
+.nx[data-ds="harmony"] .x-pal { border-radius: 24px; }
+.nx[data-ds="harmony"] .x-pal .sel { background: var(--f1); border-radius: 14px; }
+.nx[data-ds="harmony"] .x-set, .nx[data-ds="harmony"] .o-win { border-radius: 32px; }
+.nx[data-ds="harmony"] .m-card { border-radius: 20px; }
+.nx[data-ds="harmony"] .x-pmini .x-mp { border-radius: 28px; }
+.nx[data-ds="harmony"] .x-player .p-sheet { background: var(--card); border-radius: 24px; padding: 18px 16px; }
+.nx[data-ds="harmony"] .x-player .p-sheet .c-row { min-height: 52px; padding: 0 4px; border-bottom: .5px solid var(--ol); }
+
+/* =====================================================================
+   折叠屏
+   iPhone Duo（苹果）：合上 470×662、展开 930×662；横着拿时系统栏、标签和工具栏都竖排在右侧（x-rbar），
+     顺序是：返回在最上面，然后是标签，常用操作放在下面，中间隔开
+   书本式大折叠（鸿蒙 Mate X / Android / 网页）：合上和手机一样，展开 740×808
+   展开 = 左右两栏（x-twin），折痕正好在两栏中间，两栏在折痕两边各多留一点空；
+   悬停 = 上下两栏，上半屏是画框，下半屏是手指能碰的那一半
+   ===================================================================== */
+.nx .x-crease { display: none; }
+.nx[data-dev="fold"]:not([data-fold="closed"]) .x-crease { display: block; position: absolute; z-index: 200; pointer-events: none; }
+.nx[data-fold="open"] .x-crease { left: 50%; top: 0; bottom: 0; width: 28px; margin-left: -14px; background: linear-gradient(90deg, transparent, rgba(0, 0, 0, .03) 38%, rgba(0, 0, 0, .065) 50%, rgba(255, 255, 255, .04) 54%, rgba(0, 0, 0, .03) 62%, transparent); }
+.nx[data-fold="tent"] .x-crease { top: 50%; left: 0; right: 0; height: 44px; margin-top: -22px; background: linear-gradient(180deg, transparent, rgba(0, 0, 0, .07) 34%, rgba(0, 0, 0, .18) 50%, rgba(255, 255, 255, .07) 55%, rgba(0, 0, 0, .05) 66%, transparent); }
+.nx[data-fold="tent"][data-th="dark"] .x-crease { background: linear-gradient(180deg, transparent, rgba(255, 255, 255, .03) 34%, rgba(0, 0, 0, .6) 50%, rgba(255, 255, 255, .08) 55%, transparent); }
+
+/* 两栏 */
+.nx .x-pscr.x-twin { display: grid; grid-template-columns: 50% 50%; padding: 0; overflow: hidden; }
+.nx.rbar .x-pscr.x-twin { grid-template-columns: calc(50% + 32px) calc(50% - 32px); }
+.nx .x-tc { position: relative; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 26px 150px 18px; scrollbar-width: none; }
+.nx .x-tc::-webkit-scrollbar { display: none; }
+.nx .x-tc.r { padding: 4px 18px 40px 26px; }
+.nx .x-tc .x-hrow { margin-right: -26px; padding-right: 26px; }
+.nx .x-tc.r .x-hrow { margin-right: -18px; padding-right: 18px; }
+.nx[data-fold="tent"] .x-pscr.x-twin { grid-template-columns: 100%; grid-template-rows: calc(50% - 25px) calc(50% + 25px); }
+.nx[data-fold="tent"] .x-tc.r { grid-row: 1; padding: 0 20px 24px; }
+.nx[data-fold="tent"] .x-tc.l { grid-row: 2; padding: 26px 20px 150px; }
+.nx .x-tc .c-li.on { background: var(--f2); }
+.nx[data-ds="harmony"] .x-tc .c-li.on { background: var(--tonal); }
+.nx .x-pclose { margin-left: auto; }
+/* 右栏的画框：首页舞台从左栏挪过来；悬停时画框占满上半屏 */
+.nx .x-tc.r > .ph-stage { margin-top: 2px; }
+.nx[data-fold="tent"] .x-tc.r > .x-pnav { display: none; }
+.nx[data-fold="tent"] .x-tc.r > .ph-stage { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); column-gap: 20px; align-items: end; margin-top: 18px; }
+.nx[data-fold="tent"] .x-tc.r > .ph-stage .h-frame { grid-row: 1 / span 4; }
+.nx[data-fold="tent"][data-hw="duo"] .x-tc.r > .ph-stage { grid-template-columns: 1fr; margin-top: 14px; }
+.nx[data-fold="tent"][data-hw="duo"] .x-tc.r > .ph-stage .h-frame { grid-row: auto; }
+/* 标签栏只在左栏下面（悬停时在下半屏底部）；迷你播放器同样只占左栏 */
+.nx.twin .c-tabbar { position: absolute; left: 0; right: 50%; bottom: 0; }
+.nx[data-fold="tent"] .c-tabbar { right: 0; }
+.nx.twin[data-ds="harmony"] .c-tabbar { left: 20px; right: calc(50% + 20px); bottom: 20px; }
+.nx[data-fold="tent"][data-ds="harmony"] .c-tabbar { right: 20px; }
+.nx[data-fold="tent"][data-ds="apple"] .c-tabbar { left: 16px; right: 16px; bottom: 22px; }
+.nx.twin .x-pmini { right: calc(50% + 12px); }
+.nx[data-fold="tent"] .x-pmini { right: 12px; }
+
+/* iPhone Duo：右侧竖排的系统栏 + 工具栏 */
+.nx.rbar .x-status, .nx.rbar .c-tabbar { display: none !important; }
+.nx.rbar .x-pbody { margin-right: 64px; }
+.nx.rbar .x-pnav .c-ib, .nx.rbar .x-pnav .x-av, .nx.rbar .x-pback, .nx.rbar .x-pclose { display: none; }
+.nx.rbar .x-pmini { right: 76px; bottom: 16px; }
+.nx.rbar.twin .x-pmini { right: calc(50% + 12px); }
+.nx .x-rbar { position: absolute; top: 0; right: 0; bottom: 0; width: 64px; z-index: 8; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px 0 14px; color: var(--on); }
+.nx .x-rbar .rb-sys { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 4px; }
+.nx .x-rbar .rb-sys b { font: 600 13px/1 var(--ff); letter-spacing: -.01em; }
+.nx .x-rbar .rb-island { width: 14px; height: 40px; border-radius: 7px; background: #000; display: block; }
+.nx .x-rbar .rb-tabs { display: flex; flex-direction: column; gap: 2px; padding: 4px; border-radius: 27px; background: var(--glass); box-shadow: var(--rim); margin-top: 6px; }
+.nx .x-rbar .rb-tabs .c-tabi { width: 46px; height: 46px; border-radius: 23px; }
+.nx .x-rbar .rb-tabs .c-tabi .i { width: 22px; height: 22px; }
+.nx .x-rbar .rb-tabs .c-tabi.on { background: var(--f2); }
+.nx .x-rbar .c-ib { width: 44px; height: 44px; }
+.nx .x-rbar .rb-page { display: flex; flex-direction: column; gap: 10px; padding-bottom: 6px; }
+.nx .x-rbar .rb-page:empty { display: none; }
+.nx .x-rbar .rb-bat { margin-top: 6px; }
+.nx .x-rbar .rb-bat i { display: block; width: 11px; height: 22px; border-radius: 3px; border: 1.5px solid currentColor; opacity: .75; }
+
+/* 折叠屏播放器
+   iPhone Duo 合上转横屏：和手机横屏同一套（两侧竖排控件），屏幕更方，控件栏窄一点
+   展开：画框在窗口里，控制行在画框下面（和平板一样）
+   悬停：画面在上半屏一直铺满；标题行、进度行、控制行都在下半屏，像一个遥控器 */
+.nx .x-player.ff-duoc .p-rail { width: 116px; top: 48px; bottom: 24px; }
+.nx .x-player.ff-duoc .p-sheet { left: 372px; top: 56px; width: 274px; height: 398px; }
+/* 折叠屏上一行放不下三组：上面一行是播放和快进快退，下面一行左边是弹幕，右边是字幕、倍速、画质 */
+.nx .x-player:is(.ff-duoo, .ff-xo, .tent) .p-ctl { height: auto; grid-template-columns: 1fr 1fr; grid-template-areas: "c c" "l r"; row-gap: 16px; }
+.nx .x-player:is(.ff-duoo, .ff-xo, .tent) .p-ctl .c { grid-area: c; justify-content: center; }
+.nx .x-player:is(.ff-duoo, .ff-xo, .tent) .p-ctl .l { grid-area: l; } .nx .x-player:is(.ff-duoo, .ff-xo, .tent) .p-ctl .r { grid-area: r; }
+.nx .x-player.ff-duoo .p-ctl { top: 512px; }
+.nx .x-player.ff-duoo .p-sheet { left: 608px; top: 64px; width: 298px; height: 424px; }
+.nx .x-player.ff-xo .p-ctl { top: 590px; }
+.nx .x-player.ff-xo .p-sheet { left: 420px; top: 64px; width: 296px; height: 500px; }
+.nx .x-player.ff-duot .p-top { top: 487px; }
+.nx .x-player.ff-duot .p-ctl { top: 650px; }
+.nx .x-player.ff-duot .p-sheet { left: 16px; top: 481px; width: 630px; height: 433px; }
+.nx .x-player.ff-xt .p-top { top: 392px; }
+.nx .x-player.ff-xt .p-ctl { top: 550px; }
+.nx .x-player.ff-xt .p-sheet { left: 16px; top: 382px; width: 776px; height: 342px; }
+.nx .x-player.tent.panel :is(.p-top, .p-seek, .p-ctl) { opacity: 0 !important; pointer-events: none !important; }
+/* 画框贴着屏幕两边时（悬停、Mate X 展开），时间放进进度行两端 */
+.nx .x-player:is(.tent, .ff-xo) .p-seek .c-slider, .nx .x-player:is(.tent, .ff-xo) .p-seek .chs { left: 54px; right: 54px; }
+.nx .x-player:is(.tent, .ff-xo) .p-seek .t.now { right: auto; left: 0; }
+.nx .x-player:is(.tent, .ff-xo) .p-seek .t.dur { left: auto; right: 0; }
+/* 右栏的设置子页没有返回行，标题和左栏的标题对齐 */
+.nx .x-tc.r > .x-lt:first-child { margin-top: 52px !important; }

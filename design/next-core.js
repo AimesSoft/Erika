@@ -2,7 +2,9 @@
    Erika · 画框版 —— 数据、工具、窗口外壳
    一个 App 实例 = 一个可操作的窗口
    桌面 1280×800 · 平板 1180×820（横放）· 手机 390×844（播放时转横屏 844×390）· 电视 1280×720（= 1920×1080 的 1.5 倍）
-   桌面、平板、电视共用「宽屏」外壳（侧栏 / 导航轨 / 顶栏），手机用自己的外壳；功能在四种设备上一样多
+   折叠屏有两种硬件：苹果 = iPhone Duo（护照形，内外屏都是 1.41:1，系统栏和工具栏在右侧竖排），
+   其他 = 书本式大折叠（Mate X7 / Galaxy Z Fold：外屏就是一台手机，内屏接近正方形）；姿态有 合上 / 展开 / 悬停 三种
+   桌面、平板、电视共用「宽屏」外壳（侧栏 / 导航轨 / 顶栏），手机和折叠屏用手机外壳（折叠屏展开后分成左右两栏）；功能在五种设备上一样多
    ===================================================================== */
 window.NX = (() => {
   'use strict';
@@ -101,6 +103,17 @@ window.NX = (() => {
   }
   const pcard = (a, sub = '', extra = '') => `<div class="x-pcard"><div class="x-poster" data-act="detail" data-aid="${a.id}"${extra}><img src="${imgOf(a)}" alt="">${a.w > 0 && a.w < a.eps ? `<div class="x-prog"><b style="width:${(a.w / a.eps) * 100}%"></b></div>` : ''}</div><div class="x-pt">${a.t}</div>${sub ? `<div class="x-ps">${sub}</div>` : ''}</div>`;
 
+  /* ---------------- 折叠屏硬件（逻辑像素）----------------
+     duo：iPhone Duo，外屏 5.4"、内屏 7.6"，都是 1.41:1；合上竖拿 470×662，展开横拿 930×662（正好两块外屏宽），
+          悬停 = 内屏转竖、上下对折 662×930
+     matex：Mate X7 / Galaxy Z Fold 一类，外屏 20.4:9 和手机一样，内屏 8:7.3 接近正方形 740×808，悬停 = 转横、上下对折 808×740 */
+  const FOLD_POSE = ['closed', 'open', 'tent'];
+  const FOLD = {
+    duo: { closed: { W: 470, H: 662 }, land: { W: 662, H: 470 }, open: { W: 930, H: 662 }, tent: { W: 662, H: 930 } },
+    matex: { closed: { W: 390, H: 844 }, land: { W: 844, H: 390 }, open: { W: 740, H: 808 }, tent: { W: 808, H: 740 } },
+  };
+  const hwOf = ds => (ds === 'apple' ? 'duo' : 'matex');
+
   /* ======================================================================
      App：一个可操作的窗口
      ====================================================================== */
@@ -110,33 +123,72 @@ window.NX = (() => {
       /* cfg.persist：把模块选择存进这个键（交互原型用，刷新后还在） */
       this.store = createStore(cfg.mods || ALL, cfg.persist || null);
       this.dev = cfg.dev; this.land = false;
-      this.S = { page: 'home', detail: null, scroll: {}, lib: { seg: 'local', filter: 'all', sort: 'recent', zoom: 0.36 }, newDay: TODAY_IDX, set: 'optional', dlTab: 'on', phStack: [] };
+      /* 折叠屏：姿态（closed 合上 / open 展开 / tent 悬停）和硬件（duo = iPhone Duo，matex = 书本式大折叠） */
+      this.fold = cfg.dev === 'fold' ? (FOLD_POSE.includes(cfg.fold) ? cfg.fold : 'open') : null;
+      this.hw = hwOf(cfg.ds);
+      this.S ={ page: 'home', detail: null, scroll: {}, lib: { seg: 'local', filter: 'all', sort: 'recent', zoom: 0.36 }, newDay: TODAY_IDX, set: 'optional', dlTab: 'on', phStack: [] };
       this.cw = CW.slice();
       this.dl = DL.map(d => ({ ...d }));
       this.P = null; this.overlays = [];
       this.timers = [];
       this.mount();
     }
-    get ph() { return this.dev === 'phone'; }
-    get wide() { return this.dev !== 'phone'; }
+    /* ph：手机外壳（底部标签 + 一层层推进的页面），手机和折叠屏都用；rot：播放时转横屏（手机、合上的折叠屏） */
+    get ph() { return this.dev === 'phone' || this.dev === 'fold'; }
+    get wide() { return !this.ph; }
     get tv() { return this.dev === 'tv'; }
-    get touch() { return this.dev === 'phone' || this.dev === 'tablet'; }
-    get W() { return { desk: 1280, tablet: 1180, tv: 1280 }[this.dev] || (this.land ? 844 : 390); }
-    get H() { return { desk: 800, tablet: 820, tv: 720 }[this.dev] || (this.land ? 390 : 844); }
+    get touch() { return this.dev === 'phone' || this.dev === 'tablet' || this.dev === 'fold'; }
+    get rot() { return this.dev === 'phone' || this.fold === 'closed'; }
+    /* twin：折叠屏展开，分成两栏，折痕正好落在两栏中间（悬停时上下两栏：上半屏是画框，下半屏是手指能碰的那一半）；
+       rbar：iPhone Duo 横着拿时，系统栏和工具栏竖排在右侧（悬停时内屏是竖的，栏回到顶部和底部） */
+    get twin() { return this.dev === 'fold' && this.fold !== 'closed'; }
+    get rbar() { return this.dev === 'fold' && this.hw === 'duo' && this.fold !== 'tent'; }
+    get geo() { const g = FOLD[this.hw]; return this.fold === 'closed' ? (this.land ? g.land : g.closed) : g[this.fold]; }
+    get W() { return this.dev === 'fold' ? this.geo.W : { desk: 1280, tablet: 1180, tv: 1280 }[this.dev] || (this.land ? 844 : 390); }
+    get H() { return this.dev === 'fold' ? this.geo.H : { desk: 800, tablet: 820, tv: 720 }[this.dev] || (this.land ? 390 : 844); }
     get k() { const r = this.el.getBoundingClientRect(); return r.width / this.W || 1; }
     rel(node) {
       const S = this.el.getBoundingClientRect(), r = node.getBoundingClientRect(), k = S.width / this.W || 1;
       return { x: (r.left - S.left) / k, y: (r.top - S.top) / k, w: r.width / k, h: r.height / k };
     }
     destroy() { this.dead = true; this.timers.forEach(clearInterval); this.timers = []; if (this.P) clearTimeout(this.P.hideT); }
-    look() { this.el.dataset.ds = this.cfg.ds; this.el.dataset.th = this.cfg.th; this.el.dataset.dev = this.dev; }
+    look() {
+      const d = this.el.dataset; d.ds = this.cfg.ds; d.th = this.cfg.th; d.dev = this.dev;
+      if (this.dev === 'fold') { d.fold = this.fold; d.hw = this.hw; }
+      this.el.classList.toggle('twin', this.twin); this.el.classList.toggle('rbar', this.rbar);
+    }
     /* 窗口里自己改明暗（引导的「外观」、搜索里的操作）；cfg.onTheme 让外面的页面跟着变 */
     setTh(th) { this.cfg.th = th; this.look(); if (this.cfg.onTheme) this.cfg.onTheme(th); }
     setLook(ds, th) {
+      /* 折叠屏换到 / 换出苹果 = 换了一台硬件（iPhone Duo ↔ 书本式大折叠），整个重排 */
+      if (this.dev === 'fold' && hwOf(ds) !== this.hw) { this.cfg.ds = ds; this.cfg.th = th; this.hw = hwOf(ds); this.relayout(); return; }
       this.cfg.ds = ds; this.cfg.th = th; this.look();
       if (this.P && this.P.open) this.plLayout(this.P.lay, true);
       if (this.S.page === 'lib' && !this.S.detail && this.libLayout) setTimeout(() => this.libLayout(true), 30);
       if (this.S.page === 'new' && !this.S.detail && this.newLayout) setTimeout(() => (this.wide ? this.newLayout(true) : !this.S.phStack.length && this.phNewLayout(true)), 30);
+    }
+    /* 折叠屏换姿态：合上 / 展开 / 悬停 */
+    setFold(f) {
+      if (this.dev !== 'fold' || !FOLD_POSE.includes(f) || f === this.fold) return;
+      this.fold = f; this.relayout();
+    }
+    /* 当场重排：停在同一页、同一层，正在放的视频接着放（折叠是一个实时事件，不是重新打开 App） */
+    relayout() {
+      const p = this.P, playing = !!(p && p.open), ob = this.overlays.some(o => o.kind === 'ob') ? this.ob : null;
+      if (p) clearTimeout(p.hideT);
+      this.menuKind = null; this.overlays = []; this.land = false; this.scr = null; this._pn = null;
+      this.el.classList.remove('land');
+      this.look(); this.build();
+      if (playing && this.rot) {
+        /* 合上时在放：外屏转横屏接着放 */
+        this.renderPhone(false);
+        this.setLand(true, () => { p.open = true; p.mode = 'full'; this.plBuild(); this.plLayout('shown', true); this.plWake(); this.renderMini(); });
+        return;
+      }
+      this.render(false);
+      if (playing) { p.open = true; p.mode = 'full'; this.plBuild(); this.plLayout('shown', true); this.plWake(); this.renderMini(); }
+      if (ob) { this.obOpen(); this.ob = ob; this.obRender(); }
+      this.cfg.onLand && this.cfg.onLand('fold');
     }
     pages() { return pagesFor(this.store.mods); }
     pure() { return !this.pages().length; }
@@ -197,11 +249,13 @@ window.NX = (() => {
           <div class="x-pbody"></div>
           <div class="x-pmini"></div>
           <nav class="c-tabbar"></nav>
+          ${this.rbar ? '<aside class="x-rbar"></aside>' : ''}
+          ${this.dev === 'fold' ? '<i class="x-crease"></i>' : ''}
           ${common}`;
       }
       this.q = {
         side: $('.x-side', this.el), nav: $('.c-nav', this.el), mini: $('.x-mini', this.el), tb: $('.x-tb', this.el), scroll: $('.x-scroll', this.el), page: $('.x-page', this.el), idle: $('.x-idle', this.el),
-        body: $('.x-pbody', this.el), pmini: $('.x-pmini', this.el), tabs: $('.c-tabbar', this.el),
+        body: $('.x-pbody', this.el), pmini: $('.x-pmini', this.el), tabs: $('.c-tabbar', this.el), rbar: $('.x-rbar', this.el),
         player: $('.x-player', this.el), dim: $('.x-dim', this.el), pal: $('.x-pal', this.el), set: $('.x-set', this.el), ob: $('.o-win', this.el), pop: $('.x-pop', this.el), file: $('.x-file', this.el),
       };
       this.q.file.addEventListener('change', () => { const f = this.q.file.files && this.q.file.files[0]; if (f) this.playFile(f); this.q.file.value = ''; });
@@ -530,18 +584,42 @@ window.NX = (() => {
   /* ======================================================================
      页面共用：每种设备的设计语言，以及把窗口缩放进带设备边框的外框
      ====================================================================== */
-  /* 每种设备上实际会出现的设计语言：手机和平板没有 Fluent / libadwaita，电视只有 tvOS 和 Google TV */
-  const ALLOWED = { desk: ['apple', 'material', 'fluent', 'adwaita', 'web'], tablet: ['apple', 'material', 'web'], phone: ['apple', 'material', 'web'], tv: ['apple', 'material'] };
-  const BEZEL = { phone: 20, tablet: 24, tv: 20 };
-  /* wrap 画设备边框，host 是 App 的挂载点；availW / availH 是外框连边框一共能占的宽高；rotate：手机转屏时转一下 */
+  /* 每种设备上实际会出现的设计语言：鸿蒙有手机、电脑、平板、折叠屏；手机和平板没有 Fluent / libadwaita；
+     折叠屏是 iPhone Duo、鸿蒙（Mate X）、Android（Galaxy / Pixel Fold）和网页；电视只有 tvOS 和 Google TV */
+  const ALLOWED = {
+    desk: ['apple', 'harmony', 'material', 'fluent', 'adwaita', 'web'], tablet: ['apple', 'harmony', 'material', 'web'], phone: ['apple', 'harmony', 'material', 'web'],
+    fold: ['apple', 'harmony', 'material', 'web'], tv: ['apple', 'material'],
+  };
+  const BEZEL = { phone: 20, tablet: 24, tv: 20, fold: 20 };
+  /* wrap 画设备边框，host 是 App 的挂载点；availW / availH 是外框连边框一共能占的宽高；
+     rotate：true = 手机转屏时转一下；'fold' = 折叠屏换了姿态（展开 / 合上像书页翻开，进出悬停转 90°） */
   function fitStage(wrap, host, app, availW, availH = Infinity, rotate = false) {
-    const W = app.W, H = app.H, ph = app.dev === 'phone', bz = BEZEL[app.dev] || 0;
+    const W = app.W, H = app.H, fold = app.dev === 'fold', ph = app.dev === 'phone' || (fold && app.fold === 'closed'), bz = BEZEL[app.dev] || 0;
     wrap.classList.toggle('ph', ph); wrap.classList.toggle('land', ph && app.land);
     wrap.classList.toggle('tab', app.dev === 'tablet'); wrap.classList.toggle('tv', app.dev === 'tv');
+    wrap.classList.toggle('fold', fold && !ph); wrap.classList.toggle('duo', fold && app.hw === 'duo');
+    wrap.dataset.pose = fold ? app.fold : '';
     host.style.width = W + 'px'; host.style.height = H + 'px';
     const s = Math.max(0.1, Math.min(1, (availW - bz) / W, (availH - bz) / H));
+    const prevW = parseFloat(wrap.style.width) || 0;
     wrap.style.width = W * s + 'px'; wrap.style.height = H * s + 'px';
     host.style.transform = `scale(${s})`;
+    if (rotate === 'fold') {
+      const was = wrap._pose; wrap._pose = app.fold;
+      if (!was || was === app.fold || RM()) return s;
+      if (was === 'tent' || app.fold === 'tent') {
+        const d = app.fold === 'tent' ? 90 : -90;
+        wrap.style.transform = `rotate(${d}deg) scale(.7)`;
+        tween(TOKENS.hero, p => { wrap.style.transform = `rotate(${d * (1 - p)}deg) scale(${0.7 + 0.3 * p})`; }, () => { wrap.style.transform = ''; });
+      } else if (prevW) {
+        /* 像书页一样翻开 / 合上：外框的宽度从上一个姿态弹到这一个，新的布局从折痕那边露出来（不拉伸内容） */
+        const w1 = W * s, tk = (wrap._ft = (wrap._ft || 0) + 1);
+        wrap.style.width = prevW + 'px';
+        tween(TOKENS.hero, p => { if (wrap._ft === tk) wrap.style.width = prevW + (w1 - prevW) * p + 'px'; }, () => { if (wrap._ft === tk) wrap.style.width = w1 + 'px'; });
+      }
+      return s;
+    }
+    if (fold) wrap._pose = app.fold;
     if (rotate && !RM()) {
       const on = app.land;
       wrap.style.transform = `rotate(${on ? 90 : -90}deg) scale(.7)`;
@@ -550,5 +628,5 @@ window.NX = (() => {
     return s;
   }
 
-  return { App, ALLOWED, fitStage, I, P, STILL, ANIME, ERASED, byId, imgOf, CW, TODAY, NOW, hOf, DAYS, TODAY_IDX, WEEK, RECENTS, DL, COMMENTS, LINES, SUBS, DUR, CH, PEAKS, clamp, fmt, rateLabel, statusOf, esc, colorOf, pcard };
+  return { App, ALLOWED, FOLD, hwOf, fitStage, I, P, STILL, ANIME, ERASED, byId, imgOf, CW, TODAY, NOW, hOf, DAYS, TODAY_IDX, WEEK, RECENTS, DL, COMMENTS, LINES, SUBS, DUR, CH, PEAKS, clamp, fmt, rateLabel, statusOf, esc, colorOf, pcard };
 })();

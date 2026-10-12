@@ -125,7 +125,11 @@
     if (this.wide) {
       this.S.scroll[this.S.page] = this.q.scroll.scrollTop;
       this.renderTb(); this.q.page.innerHTML = this.detailHTML(a); this.bindPage(this.q.page); this.after_detail(); this.q.scroll.scrollTop = 0;
-    } else { this.S.phStack.push({ type: 'detail', aid: +aid }); this.renderPhone(false, from ? 0 : 1); }
+    } else {
+      const st = this.S.phStack, top = st[st.length - 1];
+      if (this.twin && top && top.type === 'detail') st.pop();
+      st.push({ type: 'detail', aid: +aid }); this.renderPhone(false, from ? 0 : 1);
+    }
     const scope = this.wide ? this.q.page : this.scr, cover = $('.d-poster', scope);
     if (animate) this.stagger($$('.d-info > *, .d-acts, .d-strip-hd, .d-strip, .d-tabs, .d-tab', scope).filter(x => !x.closest('.d-info') || x.parentElement.classList.contains('d-info')), 60, 12, 28);
     if (from && !RM()) {
@@ -602,11 +606,12 @@
      ===================================================================== */
   A.obOpen = function () {
     const o = this.q.ob, desk = this.wide;
-    const R = { desk: { x: 160, y: 100, w: 960, h: 600 }, tablet: { x: 110, y: 120, w: 960, h: 620 }, tv: { x: 0, y: 0, w: 1280, h: 720 } }[this.dev] || { x: 0, y: 0, w: 390, h: 844 };
+    /* 手机和折叠屏：铺满整个屏幕（iPhone Duo 留出右侧的系统栏） */
+    const R = { desk: { x: 160, y: 100, w: 960, h: 600 }, tablet: { x: 110, y: 120, w: 960, h: 620 }, tv: { x: 0, y: 0, w: 1280, h: 720 } }[this.dev] || { x: 0, y: 0, w: this.W - (this.rbar ? 64 : 0), h: this.H };
     Object.assign(o.style, { left: R.x + 'px', top: R.y + 'px', width: R.w + 'px', height: R.h + 'px', borderRadius: '' });
     this.ob = { step: 0, mods: new Set(PRESETS.anime.mods), preset: 'anime' };
     o.innerHTML = `<div class="o-steps"></div><div class="o-foot"><span class="c-btn" data-act="obskip">跳过</span><span class="grow"></span><span class="o-dots">${'<i></i>'.repeat(4)}</span><span class="grow"></span><span class="c-btn" data-act="obprev">上一步</span><span class="c-btn p" data-act="obnext">继续</span></div>`;
-    if (!desk) o.style.paddingTop = '50px';
+    if (!desk) o.style.paddingTop = this.rbar ? '16px' : '50px';
     this.obRender();
     this.popIn(o, '50% 50%', TOKENS.hero);
     this.overlays.push({ kind: 'ob', close: () => this.popOut(o) });
@@ -614,7 +619,8 @@
     if (this.tv) this.tvEnsure();
   };
   A.obRender = function () {
-    const o = this.q.ob, st = this.ob.step, desk = this.wide, box = $('.o-steps', o);
+    /* 折叠屏展开：选项在左半、预览在右半，正好分在折痕两边；悬停用手机的上下排法（预览在上半屏） */
+    const o = this.q.ob, st = this.ob.step, desk = this.wide || this.fold === 'open', box = $('.o-steps', o);
     const prev = `<div class="o-pv">${this.optPreview(this.ob.mods)}</div>`;
     const S = [
       () => `<div class="o-welcome"${desk ? '' : ' style="grid-template-columns:1fr;grid-template-rows:300px 1fr"'}><div class="art plaid-academy"><img class="girl" src="assets/girl.png" alt=""${desk ? '' : ' style="height:280px"'}></div><div class="tx"${desk ? '' : ' style="padding:26px 24px 0"'}><img class="lg-lt" src="brand/erika-logo.svg" alt="ERIKA エリカ"><img class="lg-dk" src="brand/erika-logo-dark.svg" alt=""><h4>欢迎使用 Erika</h4><p>接下来一分钟，选出你需要的功能。没选的功能不会出现，也不占资源，之后随时可以在「设置 › 可选功能」里改。</p></div></div>`,
@@ -654,7 +660,7 @@
     const c = document.createElement('div'); c.className = 'x-fly'; c.style.background = 'var(--bg)'; c.style.boxShadow = '0 30px 80px -20px rgba(0,0,0,.5)';
     this.el.appendChild(c);
     const b = { x: 0, y: 0, w: this.W, h: this.H }, L = (u, v, p) => u + (v - u) * p, r0 = this.rad('--r-l');
-    const shell = $$('.x-side, .x-main, .x-pbody, .c-tabbar', this.el); shell.forEach(e => (e.style.opacity = '0'));
+    const shell = $$('.x-side, .x-main, .x-pbody, .c-tabbar, .x-rbar', this.el); shell.forEach(e => (e.style.opacity = '0'));
     tween(TOKENS.hero, p => { c.style.width = L(a.w, b.w, p) + 'px'; c.style.height = L(a.h, b.h, p) + 'px'; c.style.transform = `translate(${L(a.x, b.x, p)}px, ${L(a.y, b.y, p)}px)`; c.style.borderRadius = L(r0, 0, p) + 'px'; },
       () => { shell.forEach(e => (e.style.opacity = '')); this.stagger(shell, 0, 8, 60); c.remove(); });
   };
@@ -686,35 +692,88 @@
     if (!pure && !tabs.find(t => t.key === this.S.page)) this.S.page = tabs[0].key;
     this.q.tabs.style.display = pure ? 'none' : '';
     const top = this.S.phStack[this.S.phStack.length - 1];
-    this.q.tabs.innerHTML = tabs.map(t => `<div class="c-tabi${t.key === this.S.page && !top ? ' on' : ''}" data-act="tab" data-tab="${t.key}">${I(t.icon)}<span>${t.name}</span></div>`).join('');
+    /* 两栏时左栏一直是当前标签页，标签保持选中（设置除外，设置占了左栏） */
+    const tabOn = t => t.key === this.S.page && (!top || (this.twin && top.type !== 'settings'));
+    this.q.tabs.innerHTML = tabs.map(t => `<div class="c-tabi${tabOn(t) ? ' on' : ''}" data-act="tab" data-tab="${t.key}">${I(t.icon)}<span>${t.name}</span></div>`).join('');
     $$('.c-tabi', this.q.tabs).forEach(t => bindJelly(t, 'S'));
+    if (this.rbar) this.renderRbar(tabs, tabOn);
     const scr = document.createElement('div'); scr.className = 'x-pscr';
-    const type = top ? top.type : pure ? 'idle' : this.S.page;
     this.S.detail = top && top.type === 'detail' ? top.aid : null;
-    scr.innerHTML = this.phHTML(type, top);
-    const old = this.scr; this.scr = scr;
+    let types, lk = null;
+    if (this.twin) {
+      /* 折叠屏展开：左栏 = 下面一层，右栏 = 最上面一层；什么都没点开时右栏是画框（继续观看 / 纯粹模式的空画框） */
+      let L, R;
+      if (top && top.type === 'settings') { const sub = top.sub || 'optional'; L = ['settings', { type: 'settings', sub: null }]; R = ['settings', { type: 'settings', sub }]; }
+      else { L = [pure ? 'idle' : this.S.page, null]; R = top ? [top.type, top] : ['side', null]; }
+      lk = L[0];
+      scr.className = 'x-pscr x-twin';
+      scr.innerHTML = `<div class="x-tc l">${this.phHTML(L[0], L[1], 'l')}</div><div class="x-tc r">${R[0] === 'side' ? this.sideHTML(pure) : this.phHTML(R[0], R[1], 'r')}</div>`;
+      if (R[0] === 'settings') $$('.x-tc.l [data-act="phsetsub"]', scr).forEach(r => r.classList.toggle('on', r.dataset.k === R[1].sub));
+      types = [L[0], R[0] === 'side' && pure ? 'idle' : R[0]];
+    } else { const type = top ? top.type : pure ? 'idle' : this.S.page; scr.innerHTML = this.phHTML(type, top); types = [type]; }
+    const old = this.scr; this.scr = scr; scr._lk = lk;
+    const keepL = old && lk && old._lk === lk ? $('.x-tc.l', old).scrollTop : null;
     this.q.body.appendChild(scr);
+    if (keepL != null) $('.x-tc.l', scr).scrollTop = keepL;
+    /* iPhone Duo：页面自己的工具按钮（媒体库的管理、排序，下载的添加任务）也搬进右侧竖栏，排在全局操作上面 */
+    if (this.rbar) {
+      const box = $('.rb-page', this.q.rbar), acts = $$('.x-pnav .c-ib', scr).filter(b => !['open', 'phset', 'phback'].includes(b.dataset.act));
+      if (box) { box.innerHTML = acts.map(b => b.outerHTML).join(''); $$('.c-ib', box).forEach(b => bindJelly(b, 'S')); }
+      /* 页面自己已经有「＋」（下载的添加任务）时，全局的「打开文件」换成文件夹图标，免得两个一样的按钮 */
+      const op = $('.rb-open', this.q.rbar); if (op) op.innerHTML = I(acts.some(b => b.dataset.act === 'dladd') ? 'folder' : 'plus');
+    }
     this.bindPage(scr);
-    const after = { home: this.after_phhome, new: this.after_phnew, lib: this.after_lib, detail: this.after_detail, idle: this.after_phidle }[type];
-    after && after.call(this, animate);
+    const AF = { home: this.after_phhome, new: this.after_phnew, lib: this.after_lib, detail: this.after_detail, idle: this.after_phidle };
+    [...new Set(types)].forEach(t => { const f = AF[t]; f && f.call(this, animate); });
     if (old) {
-      if (dir && !RM()) {
+      if (dir && !RM() && keepL != null) {
+        /* 两栏：左栏不动，只有右栏的新内容滑进来 */
+        old.remove();
+        const r = $('.x-tc.r', scr), dx = this.fold === 'tent' ? 0 : dir * 40, dy = this.fold === 'tent' ? dir * 24 : 0;
+        r.style.opacity = '0'; r.style.transform = `translate(${dx}px, ${dy}px)`;
+        tween(TOKENS.smooth, p => { r.style.opacity = String(Math.min(1, p * 1.5)); r.style.transform = `translate(${dx * (1 - p)}px, ${dy * (1 - p)}px)`; }, () => { r.style.transform = ''; r.style.opacity = ''; });
+      } else if (dir && !RM()) {
         scr.style.transform = `translateX(${dir * 100}%)`;
         tween(TOKENS.smooth, p => { const q = Math.min(1, p); scr.style.transform = `translateX(${dir * 100 * (1 - p)}%)`; old.style.transform = `translateX(${-dir * 30 * q}%)`; old.style.opacity = String(1 - q * 0.6); }, () => { old.remove(); scr.style.transform = ''; });
       } else { old.remove(); if (animate) this.animIn(scr, 8); }
     }
     this.renderMini();
   };
-  A.phHTML = function (type, top) {
-    const avatar = `<span class="x-av" data-act="phset" style="cursor:pointer;width:34px;height:34px"></span>`;
-    const back = l => `<div class="x-pnav"><span class="x-pback" data-act="phback">${I('chev-l')}${l}</span></div>`;
-    if (type === 'home') {
-      const c0 = this.cw[0], a0 = byId(c0.id);
-      return `<div class="x-pnav"><div class="x-lt">首页</div><span style="display:flex;gap:10px;align-items:center"><span class="c-ib" data-act="open" title="打开文件">${I('plus')}</span>${avatar}</span></div>
-        <div class="ph-stage"><div class="h-frame" data-act="cwplay" data-i="0"><img src="${c0.img}" alt="" style="object-position:${c0.pos}"><div class="x-prog"><b style="width:${c0.prog * 100}%"></b></div><span class="h-hint" style="opacity:1;transform:none">${I('play')}</span></div>
+  /* 两栏右栏的默认内容：画框。有模块时是「继续观看」的舞台，纯粹模式是空画框 */
+  A.sideHTML = function (pure) {
+    if (pure) return `<div class="x-pnav"><span></span></div>
+      <div class="i-frame" style="position:relative;height:auto;aspect-ratio:16/9;margin:40px 0 0;padding:12px"><span class="big" style="width:40px;height:40px">${I('film', 'width:40px;height:40px;stroke-width:1.4')}</span><h4 style="font:var(--t-h2)">打开一个视频</h4><p style="font:var(--t-cap)">从「文件」App、相册或链接打开</p><img class="fill" src="${STILL}" alt=""></div>
+      <span class="c-btn p L" data-act="open" style="width:100%;margin-top:18px;box-sizing:border-box">${I('folder')}打开文件</span>`;
+    return `<div class="x-pnav"><span></span></div>${this.phStage()}`;
+  };
+  /* iPhone Duo：右侧竖排的系统栏 + 工具栏——返回在最上面，然后是标签，常用操作在下面，中间隔开 */
+  A.renderRbar = function (tabs, tabOn) {
+    const r = this.q.rbar; if (!r) return;
+    r.innerHTML = `<div class="rb-sys"><b>9:41</b><i class="rb-island"></i></div>
+      ${this.S.phStack.length ? `<span class="c-ib rb-back" data-act="phback" title="返回">${I('chev-l')}</span>` : ''}
+      ${tabs.length ? `<nav class="rb-tabs">${tabs.map(t => `<div class="c-tabi${tabOn(t) ? ' on' : ''}" data-act="tab" data-tab="${t.key}" title="${t.name}">${I(t.icon)}</div>`).join('')}</nav>` : ''}
+      <span class="grow"></span>
+      <span class="rb-page"></span>
+      <span class="c-ib rb-open" data-act="open" title="打开文件">${I('plus')}</span><span class="c-ib" data-act="phset" title="设置">${I('gear')}</span>
+      <div class="rb-bat"><i></i></div>`;
+    $$('.c-ib, .c-tabi', r).forEach(b => bindJelly(b, 'S'));
+  };
+  A.phStage = function () {
+    const c0 = this.cw[0], a0 = byId(c0.id);
+    return `<div class="ph-stage"><div class="h-frame" data-act="cwplay" data-i="0"><img src="${c0.img}" alt="" style="object-position:${c0.pos}"><div class="x-prog"><b style="width:${c0.prog * 100}%"></b></div><span class="h-hint" style="opacity:1;transform:none">${I('play')}</span></div>
           <div class="x-kick" style="margin-top:14px">继续观看</div><div class="h-title">${a0.t}</div><div class="h-meta"><span class="hl">第 ${c0.ep} 集</span> · 剩 ${c0.left} 分钟</div>
-          <div class="ph-two" style="margin-top:14px"><span class="c-btn p L" data-act="cwplay" data-i="0">${I('play')}继续播放</span>${a0.id ? `<span class="c-btn L" data-act="detail" data-aid="${a0.id}">详情</span>` : ''}</div></div>
-        <div class="x-sechd"><span class="x-h2">也在看</span><span class="x-mut" style="font:var(--t-cap)">点一下换上舞台</span></div>
+          <div class="ph-two" style="margin-top:14px"><span class="c-btn p L" data-act="cwplay" data-i="0">${I('play')}继续播放</span>${a0.id ? `<span class="c-btn L" data-act="detail" data-aid="${a0.id}">详情</span>` : ''}</div></div>`;
+  };
+  /* col：两栏时这一页在哪一栏（'l' / 'r'），单栏是 undefined */
+  A.phHTML = function (type, top, col) {
+    const avatar = `<span class="x-av" data-act="phset" style="cursor:pointer;width:34px;height:34px"></span>`;
+    /* 右栏的详情用「关闭」代替「返回」（左栏还在）；右栏的设置子页不需要返回（左栏就是目录） */
+    const back = l => (col === 'r' ? (type === 'settings' ? '' : `<div class="x-pnav"><span></span><span class="c-ib x-pclose" data-act="phback" title="关闭">${I('x')}</span></div>`) : `<div class="x-pnav"><span class="x-pback" data-act="phback">${I('chev-l')}${l}</span></div>`);
+    if (type === 'home') {
+      /* 两栏时舞台在右栏（画框那一半），左栏从「也在看」开始 */
+      return `<div class="x-pnav"><div class="x-lt">首页</div><span style="display:flex;gap:10px;align-items:center"><span class="c-ib" data-act="open" title="打开文件">${I('plus')}</span>${avatar}</span></div>
+        ${col === 'l' ? '' : this.phStage()}
+        <div class="x-sechd"${col === 'l' ? ' style="margin-top:6px"' : ''}><span class="x-h2">也在看</span><span class="x-mut" style="font:var(--t-cap)">${col === 'l' ? '点一下换到右边的画框' : '点一下换上舞台'}</span></div>
         <div class="x-hrow ph-cards">${this.cw.slice(1).map((c, i) => { const a = byId(c.id); return `<div data-act="phswap" data-i="${i + 1}"><div class="x-thumb nojelly"><img src="${c.img}" alt="" style="object-position:${c.pos}"><div class="x-prog"><b style="width:${c.prog * 100}%"></b></div><span class="ph-pl" data-act="cwplay" data-i="${i + 1}" title="直接播放">${I('play')}</span></div><b>${a.t}</b><span>第 ${c.ep} 集 · 剩 ${c.left} 分钟</span></div>`; }).join('')}</div>
         ${this.store.has('anime') ? `<div class="x-sechd"><span class="x-h2">今日更新</span><span class="x-more" data-act="tab" data-tab="new">新番表 ›</span></div><div class="x-hrow ph-tlw">${this.timelineHTML(true)}</div>` : ''}
         ${this.store.has('library') ? `<div class="x-sechd"><span class="x-h2">最近添加</span><span class="x-more" data-act="tab" data-tab="lib">全部 ›</span></div><div class="x-hrow">${[1, 2, 9, 10, 12, 6].map(id => `<div style="width:108px;flex:none">${pcard(byId(id))}</div>`).join('')}</div>` : ''}`;
@@ -732,8 +791,8 @@
       return back('设置') + `<div class="x-lt" style="margin-top:-4px">${t}</div>` + this.setBody(top.sub);
     }
     if (type === 'idle') return `<div class="x-pnav"><span></span><span class="c-ib" data-act="phset" title="设置">${I('gear')}</span></div>
-      <div class="i-frame" style="position:relative;height:auto;aspect-ratio:16/9;margin:70px 0 0;padding:12px"><span class="big" style="width:40px;height:40px">${I('film', 'width:40px;height:40px;stroke-width:1.4')}</span><h4 style="font:var(--t-h2)">打开一个视频</h4><p style="font:var(--t-cap)">从「文件」App、相册或链接打开</p><img class="fill" src="${STILL}" alt=""></div>
-      <span class="c-btn p L" data-act="open" style="width:100%;margin-top:18px;box-sizing:border-box">${I('folder')}打开文件</span>
+      ${col === 'l' ? '<div class="x-lt" style="margin-top:28px">打开</div>' : `<div class="i-frame" style="position:relative;height:auto;aspect-ratio:16/9;margin:70px 0 0;padding:12px"><span class="big" style="width:40px;height:40px">${I('film', 'width:40px;height:40px;stroke-width:1.4')}</span><h4 style="font:var(--t-h2)">打开一个视频</h4><p style="font:var(--t-cap)">从「文件」App、相册或链接打开</p><img class="fill" src="${STILL}" alt=""></div>
+      <span class="c-btn p L" data-act="open" style="width:100%;margin-top:18px;box-sizing:border-box">${I('folder')}打开文件</span>`}
       <div class="ph-two"><span class="c-btn" data-act="open">打开文件夹</span><span class="c-btn" data-act="openlink">打开链接</span></div>
       <span class="c-btn" data-act="recent" data-i="0" style="width:100%;margin-top:10px;box-sizing:border-box">${I('play')}继续上次</span>
       <p class="x-mut" style="font:var(--t-cap);margin:10px 2px 0">在别的 App 里选「打开方式 › Erika」也能直接播放（对应电脑上把文件拖进窗口）。</p>
@@ -758,9 +817,19 @@
   };
   Object.assign(A.ACT, {
     tab(el) { const t = el.dataset.tab; if (this.wide) { this.go(t); return; } this.S.phStack = []; this.S.page = t; this.renderPhone(true); },
-    phback() { const top = this.S.phStack.pop(); if (top && top.type === 'detail') this.S.detail = null; this.renderPhone(false, -1); },
+    phback() {
+      const st = this.S.phStack, top = st.pop();
+      /* 两栏时设置的目录和子页同时在屏上，返回 = 整个退出设置 */
+      if (this.twin && top && top.type === 'settings') while (st.length && st[st.length - 1].type === 'settings') st.pop();
+      if (top && top.type === 'detail') this.S.detail = null;
+      this.renderPhone(false, -1);
+    },
     phset() { this.setOpen(); },
-    phsetsub(el) { this.S.phStack.push({ type: 'settings', sub: el.dataset.k }); this.renderPhone(false, 1); },
+    phsetsub(el) {
+      const st = this.S.phStack, top = st[st.length - 1];
+      if (this.twin && top && top.type === 'settings' && top.sub) st.pop();
+      st.push({ type: 'settings', sub: el.dataset.k }); this.renderPhone(false, 1);
+    },
     /* 手机「也在看」：点卡片换上舞台（和桌面一样），卡片上的 ▶ 直接播放 */
     phswap(el) {
       const i = +el.dataset.i, th = $('.x-thumb', el), fr = $('.ph-stage .h-frame', this.scr);

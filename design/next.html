@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Erika 画框版</title>
-<meta name="description" content="Erika 全部界面按「画框」思路重新设计：布局和动效是自己的，控件是各平台原生的；桌面、平板、手机、电视四种设备功能完全一样，可切换苹果、Material 3、Fluent 2、libadwaita、网页设计语言。">
+<meta name="description" content="Erika 全部界面按「画框」思路重新设计：布局和动效是自己的，控件是各平台原生的；桌面、平板、手机、折叠屏、电视五种设备功能完全一样，可切换苹果、鸿蒙、Material 3、Fluent 2、libadwaita、网页设计语言。">
 <link rel="icon" href="assets/icon.png">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap">
@@ -17,14 +17,16 @@
   <h2>一个画框，贯穿始终</h2>
   <p class="lead2">播放器的「画框」思路推广到每一个界面：<b>布局和动效是 Erika 自己的，控件全部交给各平台原生绘制</b>。所以换到哪种设计语言都成立。每一屏都有一个自己的布局想法，但它们共用同一根线索——画面是一个画框：首页的舞台是画框，点进详情是画框在长大，开始播放是画框铺满窗口，返回时画框缩进侧栏。</p>
   <p class="lead2" style="font-size:16px">动效只用位置、尺寸、缩放、透明度和圆角裁切这几种所有平台都能做的变换，全部是可打断的弹簧。每个窗口都可以直接点着用，右上角的按钮把这一节恢复原样。下面每一节都附了逐屏审查。</p>
-  <p class="lead2" style="font-size:16px">按 bern 的规矩，<b>桌面、平板、手机、电视四种设备上每一屏的功能一样多，只有界面不同</b>。设备开关会只列出那种设备上真的会出现的设计语言：手机和平板是苹果、Material、网页，电视是 tvOS 和 Google TV。逐项对照见文末的 <a href="#s-parity">功能对等</a>。</p>
+  <p class="lead2" style="font-size:16px">按 bern 的规矩，<b>桌面、平板、手机、折叠屏、电视五种设备上每一屏的功能一样多，只有界面不同</b>。设备开关会只列出那种设备上真的会出现的设计语言：鸿蒙有电脑、平板、手机和折叠屏；手机和平板是苹果、鸿蒙、Material、网页；折叠屏是 iPhone Duo、鸿蒙（Mate X）、Android 大折叠和网页；电视是 tvOS 和 Google TV。逐项对照见文末的 <a href="#s-parity">功能对等</a>。</p>
 
   <div class="nxp-bar">
-    <span class="lb">设计语言</span><span class="seg" id="gDs"><span data-v="apple">苹果 · 液态玻璃</span><span data-v="material">Material 3</span><span data-v="fluent">Fluent 2</span><span data-v="adwaita">libadwaita</span><span data-v="web">网页</span></span>
+    <span class="lb">设计语言</span><span class="seg" id="gDs"><span data-v="apple">苹果 · 液态玻璃</span><span data-v="harmony">鸿蒙</span><span data-v="material">Material 3</span><span data-v="fluent">Fluent 2</span><span data-v="adwaita">libadwaita</span><span data-v="web">网页</span></span>
     <span class="lb">明暗</span><span class="seg" id="gTh"><span data-v="light">浅色</span><span data-v="dark">深色</span></span>
-    <span class="lb">设备</span><span class="seg" id="gDev"><span data-v="desk">桌面</span><span data-v="tablet">平板</span><span data-v="phone">手机</span><span data-v="tv">电视</span></span>
+    <span class="lb">设备</span><span class="seg" id="gDev"><span data-v="desk">桌面</span><span data-v="tablet">平板</span><span data-v="phone">手机</span><span data-v="fold">折叠屏</span><span data-v="tv">电视</span></span>
+    <span class="lb nxp-fold">姿态</span><span class="seg nxp-fold" id="gFold"><span data-v="closed">合上</span><span data-v="open">展开</span><span data-v="tent">悬停</span></span>
     <span class="lb">功能</span><span class="seg" id="gPre"><span data-v="pure">纯粹</span><span data-v="anime">看番</span><span data-v="all">全都要</span></span>
     <span class="lb">主题色</span><span style="display:flex;gap:6px"><button class="sw-b" data-set-accent="rose" title="绯红" style="background:#FF2E55"></button><button class="sw-b" data-set-accent="blue" title="群青" style="background:#2A51D4"></button><button class="sw-b" data-set-accent="mint" title="荧绿" style="background:#07FF94"></button></span>
+    <span class="nxp-foldhint">折叠屏：苹果是 iPhone Duo（护照形，合上和展开都是 1.41:1，横拿时系统栏和工具栏竖排在右侧）；鸿蒙、Android、网页是书本式大折叠（Mate X7 一类，外屏就是一台手机，内屏接近正方形）。合上 = 外屏；展开 = 左右两栏，折痕正好在两栏中间；悬停 = 半开放在桌上，上半屏是画框，下半屏是操作。换姿态时停在同一页，正在放的视频接着放。</span>
     <span class="nxp-tvhint">电视：先点一下画面，再用 <kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> 移动焦点，<kbd>回车</kbd> 确认，<kbd>Esc</kbd> 返回（相当于遥控器的方向键、确认键和返回键）。</span>
   </div>
   <nav class="nxp-toc"><a href="#s-onboard">首次启动</a><a href="#s-idle">纯粹模式</a><a href="#s-home">首页</a><a href="#s-detail">番剧详情</a><a href="#s-player">播放器</a><a href="#s-new">新番</a><a href="#s-lib">媒体库</a><a href="#s-search">搜索</a><a href="#s-optional">可选功能</a><a href="#s-plugins">插件市场</a><a href="#s-dl">下载</a><a href="#s-mini">迷你播放器</a><a href="#s-parity">功能对等</a><a href="#s-review">总审查</a></nav>
@@ -187,34 +189,35 @@
 
 
   <section class="nxp-sec" id="s-parity">
-    <div class="hd"><span class="no">≡</span><div><h3>功能对等 · 四种设备一样多</h3><p>bern 的规矩：不同设备功能必须一样，只允许界面不一样。下面逐屏列出功能，每一格写这台设备上怎么用到它。这一轮发现手机少了不少功能，已经补齐（标「补」的地方）。</p></div></div>
+    <div class="hd"><span class="no">≡</span><div><h3>功能对等 · 五种设备一样多</h3><p>bern 的规矩：不同设备功能必须一样，只允许界面不一样。下面逐屏列出功能，每一格写这台设备上怎么用到它。这一轮发现手机少了不少功能，已经补齐（标「补」的地方）。</p></div></div>
     <div class="tbl-wrap"><table class="par">
-      <thead><tr><th>屏</th><th>功能（四种设备都有）</th><th>桌面</th><th>平板</th><th>手机</th><th>电视</th></tr></thead>
+      <thead><tr><th>屏</th><th>功能（五种设备都有）</th><th>桌面</th><th>平板</th><th>手机</th><th>折叠屏</th><th>电视</th></tr></thead>
       <tbody>
-        <tr><td><b>首次启动</b></td><td>欢迎 · 选起点和微调模块 · 外观 · 完成，四步</td><td>弹窗，完成时小窗口长成主窗口</td><td>居中的表单弹窗</td><td>全屏，预览在卡片上方</td><td>全屏，默认焦点在「开始」</td></tr>
-        <tr><td><b>纯粹模式</b></td><td>打开文件 · 打开文件夹 · 打开链接 · 最近播放 · 继续上次 · 设置</td><td>画框里的按钮，拖进窗口，⌘O，空格继续</td><td>画框里的按钮，从「文件」或分屏拖进来</td><td>按钮列；<span class="pa">补</span>打开文件夹、继续上次，「打开方式」对应拖放</td><td>画框里的按钮（本机、U 盘、局域网），手机投送</td></tr>
-        <tr><td><b>首页</b></td><td>继续播放 · 详情 · 换上舞台 · 直接播放另一部 · 今日更新 · 最近添加 · 打开 · 搜索 · 设置</td><td>悬停出现 ▶；工具栏搜索框 ⌘K、打开</td><td>▶ 常驻；Material 的「打开」是导航轨顶部的 FAB</td><td><span class="pa">补</span>详情、换上舞台（点卡片）、打开（＋）；▶ 在卡片角上；搜索是标签</td><td>焦点 + 回车；← 到 ▶；搜索、打开、设置在顶栏</td></tr>
-        <tr><td><b>番剧详情</b></td><td>继续 / 开始 · 追番状态 · 评分 · 更多（匹配弹幕、在文件夹中显示、刷新、移除）· 剧集胶片 · 简介 / 评论 / 制作 / 文件</td><td>胶片两侧翻页按钮</td><td>手指滑胶片</td><td>手指滑胶片，按钮排在海报下面</td><td>左右键走胶片，焦点那一格停在正中</td></tr>
-        <tr><td><b>播放器</b></td><td>播放 · 快退快进 · 上下集 · 进度（章节、弹幕高峰）· 弹幕开关和参数 · 发弹幕 · 字幕和音轨 · 倍速 · 画质增强 · 弹幕匹配 · 画中画 · 播放设置 · 截图 / 跳过片头 / 选集 / 播放信息 · 音量 · 全屏</td><td>控制行里的输入框；音量、全屏按钮</td><td>输入框同桌面；系统音量键；横放即全屏，「锁定方向」</td><td>两侧拇指区；发弹幕按钮；<span class="pa">补</span>高峰小点；系统音量键 + 设置面板里的音量；横屏即全屏，「锁定横屏」</td><td>发弹幕按钮（语音、手机输入）；遥控器音量；始终全屏；左右键快退快进</td></tr>
-        <tr><td><b>新番</b></td><td>一周七天 · 换一天 · 进详情</td><td>手风琴周历</td><td>同桌面</td><td>竖向手风琴</td><td>手风琴，焦点移到哪天回车展开</td></tr>
-        <tr><td><b>媒体库</b></td><td>本地 / 服务器 / 共享 · 海报大小 · 排序 · 筛选 · 拼音索引 · 管理</td><td>滑块、⌘±</td><td>滑块、双指缩放</td><td>滑块、双指缩放；<span class="pa">补</span>管理</td><td>滑块用左右键</td></tr>
-        <tr><td><b>搜索</b></td><td>番剧 · 继续播放 · 设置项 · 操作</td><td>⌘K 面板，就地展开</td><td>同桌面，弹出键盘</td><td>「搜索」标签页</td><td>「搜索」标签：屏幕键盘 + 语音</td></tr>
-        <tr><td><b>设置 · 可选功能</b></td><td>账号 · 搜索设置 · 各节设置 · 模块开关 + 实时预览 + 三个预设</td><td>从齿轮弹出的设置窗口</td><td>同桌面</td><td>逐级推入的列表；<span class="pa">补</span>账号、搜索设置、三个预设</td><td>全屏设置</td></tr>
-        <tr><td><b>插件市场</b></td><td>市场 / 已安装 · 分类 · 获取（按钮就是进度）</td><td>两列卡片</td><td>两列卡片</td><td>单列卡片</td><td>两列卡片，焦点 + 回车获取</td></tr>
-        <tr><td><b>下载</b></td><td>进行中 / 已完成 · 暂停继续 · 添加任务 · 完成后播放</td><td>列表</td><td>列表</td><td>列表，导航栏「＋」</td><td>列表；tvOS 只能把文件放在缓存里，空间紧张时系统会清理，界面上要说明</td></tr>
-        <tr><td><b>迷你播放器</b></td><td>回到全屏 · 暂停 · 关闭</td><td>侧栏底部</td><td>侧栏底部；Material 导航轨时浮在右下角</td><td>标签栏上方的迷你条</td><td>右下角画中画，可以拿到焦点</td></tr>
+        <tr><td><b>首次启动</b></td><td>欢迎 · 选起点和微调模块 · 外观 · 完成，四步</td><td>弹窗，完成时小窗口长成主窗口</td><td>居中的表单弹窗</td><td>全屏，预览在卡片上方</td><td>合上同手机；展开：选项在左半、预览在右半，正好分在折痕两边；悬停：预览在上半屏</td><td>全屏，默认焦点在「开始」</td></tr>
+        <tr><td><b>纯粹模式</b></td><td>打开文件 · 打开文件夹 · 打开链接 · 最近播放 · 继续上次 · 设置</td><td>画框里的按钮，拖进窗口，⌘O，空格继续</td><td>画框里的按钮，从「文件」或分屏拖进来</td><td>按钮列；<span class="pa">补</span>打开文件夹、继续上次，「打开方式」对应拖放</td><td>展开：左栏是按钮和最近播放，右栏是空画框</td><td>画框里的按钮（本机、U 盘、局域网），手机投送</td></tr>
+        <tr><td><b>首页</b></td><td>继续播放 · 详情 · 换上舞台 · 直接播放另一部 · 今日更新 · 最近添加 · 打开 · 搜索 · 设置</td><td>悬停出现 ▶；工具栏搜索框 ⌘K、打开</td><td>▶ 常驻；Material 的「打开」是导航轨顶部的 FAB</td><td><span class="pa">补</span>详情、换上舞台（点卡片）、打开（＋）；▶ 在卡片角上；搜索是标签</td><td>展开：舞台挪到右栏，左栏是也在看、今日更新、最近添加；点卡片，画面飞过折痕换上舞台；悬停：舞台在上半屏</td><td>焦点 + 回车；← 到 ▶；搜索、打开、设置在顶栏</td></tr>
+        <tr><td><b>番剧详情</b></td><td>继续 / 开始 · 追番状态 · 评分 · 更多（匹配弹幕、在文件夹中显示、刷新、移除）· 剧集胶片 · 简介 / 评论 / 制作 / 文件</td><td>胶片两侧翻页按钮</td><td>手指滑胶片</td><td>手指滑胶片，按钮排在海报下面</td><td>展开：在右栏打开，左栏的列表不动；点另一部直接替换；悬停：详情在上半屏</td><td>左右键走胶片，焦点那一格停在正中</td></tr>
+        <tr><td><b>播放器</b></td><td>播放 · 快退快进 · 上下集 · 进度（章节、弹幕高峰）· 弹幕开关和参数 · 发弹幕 · 字幕和音轨 · 倍速 · 画质增强 · 弹幕匹配 · 画中画 · 播放设置 · 截图 / 跳过片头 / 选集 / 播放信息 · 音量 · 全屏</td><td>控制行里的输入框；音量、全屏按钮</td><td>输入框同桌面；系统音量键；横放即全屏，「锁定方向」</td><td>两侧拇指区；发弹幕按钮；<span class="pa">补</span>高峰小点；系统音量键 + 设置面板里的音量；横屏即全屏，「锁定横屏」</td><td>合上：转横屏，同手机（iPhone Duo 外屏更方，两侧控件栏窄一点）；展开：画框在屏里，控制行分两行；悬停：画面铺满上半屏，标题、进度、按钮都在下半屏；换姿态时接着放</td><td>发弹幕按钮（语音、手机输入）；遥控器音量；始终全屏；左右键快退快进</td></tr>
+        <tr><td><b>新番</b></td><td>一周七天 · 换一天 · 进详情</td><td>手风琴周历</td><td>同桌面</td><td>竖向手风琴</td><td>左栏手风琴，点开的番在右栏</td><td>手风琴，焦点移到哪天回车展开</td></tr>
+        <tr><td><b>媒体库</b></td><td>本地 / 服务器 / 共享 · 海报大小 · 排序 · 筛选 · 拼音索引 · 管理</td><td>滑块、⌘±</td><td>滑块、双指缩放</td><td>滑块、双指缩放；<span class="pa">补</span>管理</td><td>左栏缩放墙，详情在右栏；滑块、双指缩放</td><td>滑块用左右键</td></tr>
+        <tr><td><b>搜索</b></td><td>番剧 · 继续播放 · 设置项 · 操作</td><td>⌘K 面板，就地展开</td><td>同桌面，弹出键盘</td><td>「搜索」标签页</td><td>左栏是「搜索」标签页，结果的详情在右栏</td><td>「搜索」标签：屏幕键盘 + 语音</td></tr>
+        <tr><td><b>设置 · 可选功能</b></td><td>账号 · 搜索设置 · 各节设置 · 模块开关 + 实时预览 + 三个预设</td><td>从齿轮弹出的设置窗口</td><td>同桌面</td><td>逐级推入的列表；<span class="pa">补</span>账号、搜索设置、三个预设</td><td>左栏设置目录，右栏是那一节，两栏同时在屏上；返回 = 退出设置</td><td>全屏设置</td></tr>
+        <tr><td><b>插件市场</b></td><td>市场 / 已安装 · 分类 · 获取（按钮就是进度）</td><td>两列卡片</td><td>两列卡片</td><td>单列卡片</td><td>右栏单列卡片</td><td>两列卡片，焦点 + 回车获取</td></tr>
+        <tr><td><b>下载</b></td><td>进行中 / 已完成 · 暂停继续 · 添加任务 · 完成后播放</td><td>列表</td><td>列表</td><td>列表，导航栏「＋」</td><td>左栏列表，导航栏「＋」</td><td>列表；tvOS 只能把文件放在缓存里，空间紧张时系统会清理，界面上要说明</td></tr>
+        <tr><td><b>迷你播放器</b></td><td>回到全屏 · 暂停 · 关闭</td><td>侧栏底部</td><td>侧栏底部；Material 导航轨时浮在右下角</td><td>标签栏上方的迷你条</td><td>左栏底部的迷你条（悬停时在下半屏）</td><td>右下角画中画，可以拿到焦点</td></tr>
       </tbody>
     </table></div>
-    <div class="callout"><p><b>每种设备上的设计语言：</b>桌面五种都有（macOS、Windows、Linux、网页各自的样子）；平板和手机只有苹果、Material、网页（iPadOS / iOS、Android、网页），没有 Fluent 和 libadwaita；电视只有苹果和 Material（tvOS、Google TV）。切换设备时，当前的设计语言如果不适用，会自动回到苹果。</p></div>
+    <div class="callout"><p><b>每种设备上的设计语言：</b>桌面六种都有（macOS、鸿蒙电脑、Windows、Linux、网页各自的样子）；平板和手机是苹果、鸿蒙、Material、网页（iPadOS / iOS、HarmonyOS、Android、网页），没有 Fluent 和 libadwaita；折叠屏是苹果（iPhone Duo）、鸿蒙（Mate X 一类）、Material（Galaxy / Pixel Fold）和网页；电视只有苹果和 Material（tvOS、Google TV）。切换设备时，当前的设计语言如果不适用，会自动回到苹果。</p></div>
+    <div class="callout"><p><b>折叠屏的三种姿态：</b>合上 = 外屏，就是一台手机（iPhone Duo 的外屏是 1.41:1 的护照形，系统栏和标签栏竖排在右侧，返回在最上面，常用操作在下面）。展开 = 左右两栏：左栏是当前页，右栏是点开的那一层，没点开时是「继续观看」的画框；折痕正好落在两栏中间，没有控件跨在折痕上（苹果的指南叫它分隔区域，要求偶数栏）。悬停 = 半开放在桌上：上半屏永远是画框，下半屏是手指能碰的那一半，播放时画面一直铺满上半屏，控件全在下半屏，所以画面不用退后。换姿态时停在同一页、同一层，正在放的视频接着放。苹果在 iPhone Duo 上把这叫做实时事件，鸿蒙对应的是折叠态和悬停态。</p></div>
     <div class="callout"><p><b>电视的操作方式：</b>没有指针，焦点按空间位置移动，回车 = 点击，返回键逐层退回（菜单 → 播放器 → 弹窗 → 详情 → 首页）。焦点样式跟随外观：tvOS 是抬起放大、按钮变白；Google TV 是放大加描边、按钮反色。都只用缩放、阴影和颜色，不需要模糊。</p></div>
   </section>
   <section class="nxp-sec" id="s-review">
-    <div class="hd"><span class="no">✓</span><div><h3>总审查</h3><p>逐屏检查之后，整体上再看一遍。每一屏都在 桌面 / 平板 / 手机 / 电视 × 各自的设计语言 × 浅色 / 深色下点过。</p></div></div>
+    <div class="hd"><span class="no">✓</span><div><h3>总审查</h3><p>逐屏检查之后，整体上再看一遍。每一屏都在 桌面 / 平板 / 手机 / 折叠屏（合上 / 展开 / 悬停）/ 电视 × 各自的设计语言 × 浅色 / 深色下点过。</p></div></div>
     <div class="tbl-wrap"><table>
-      <thead><tr><th>屏</th><th>常用功能几次点击</th><th>五种设计语言</th><th>动效是否都能原生做到</th><th>原创点</th></tr></thead>
+      <thead><tr><th>屏</th><th>常用功能几次点击</th><th>六种设计语言</th><th>动效是否都能原生做到</th><th>原创点</th></tr></thead>
       <tbody id="rvTable"><tr><td><b>首次启动</b></td><td>选「看番」后一路继续：4 次</td><td>卡片 / 分段 / 色块都是原生控件</td><td>是：hero 弹出、jelly 进场、矩形变形</td><td>小窗口长成真窗口</td></tr><tr><td><b>纯粹模式</b></td><td>打开文件 1 次；最近播放 1 次</td><td>只有圆角矩形 + 虚线</td><td>是：淡入 + 弹簧</td><td>空画框 = 播放器的无画面状态</td></tr><tr><td><b>首页</b></td><td>继续看 1 次；换一部继续 1 次</td><td>舞台圆角跟随外观；时间轴只有线和字</td><td>是：共享元素、错峰进场</td><td>舞台 + 换位；今日时间轴</td></tr><tr><td><b>番剧详情</b></td><td>下一集 1 次；追番状态 1 次</td><td>分段、下拉原生；取色铺底不用模糊</td><td>是：共享元素、按滚动缩放</td><td>胶片条，下一集永远在正中</td></tr><tr><td><b>播放器</b></td><td>播放 / 弹幕 / 字幕 / 倍速 1 次</td><td>见播放器单独页面的对照表</td><td>是：画框弹簧、淡入</td><td>画面退后一步；手机拇指区</td></tr><tr><td><b>新番</b></td><td>换一天 1 次</td><td>柱子是卡片 / 填充面，行是列表行</td><td>是：宽度 / 高度弹簧</td><td>手风琴周历</td></tr><tr><td><b>媒体库</b></td><td>打开 1 次；筛选 1 次；跳字母 1 次</td><td>滑块、芯片、分段、下拉原生</td><td>是：每张海报 x / y / 宽弹簧</td><td>缩放墙 + 拼音索引</td></tr><tr><td><b>搜索</b></td><td>⌘K → 回车</td><td>浮层材质 + 原生输入框</td><td>是：面板矩形弹簧、选中框滑动</td><td>搜索框就地展开</td></tr><tr><td><b>可选功能</b></td><td>开关 1 次；预设 1 次</td><td>原生分组列表 + 开关</td><td>是：jelly 进场、行闪烁</td><td>设置即预览</td></tr><tr><td><b>插件市场</b></td><td>获取 1 次</td><td>卡片、按钮、芯片原生</td><td>是：按钮内宽度动画</td><td>按钮就是进度条</td></tr><tr><td><b>下载</b></td><td>暂停 / 继续 1 次</td><td>列表行 + 中性填充</td><td>是：宽度动画、行高收起</td><td>行的底色就是进度</td></tr><tr><td><b>迷你播放器</b></td><td>回到全屏 1 次</td><td>原生卡片 + 按钮</td><td>是：共享元素</td><td>画框收进侧栏</td></tr></tbody>
     </table></div>
-    <div class="callout"><p><b>整体结论：</b>十二屏共用三条规则——画面是画框、控件交给系统、动效只用变换。每屏的原创点都来自布局（舞台、时间轴、胶片、手风琴、缩放墙、就地展开），不依赖任何平台独有的材质，所以换到苹果、Material、Fluent、libadwaita 或网页都成立。审查中改掉的问题都写在各屏的「审查记录」里；主题色在每一屏都只出现在主要按钮、选中态、进度和「下划标注」上。</p></div>
+    <div class="callout"><p><b>整体结论：</b>十二屏共用三条规则——画面是画框、控件交给系统、动效只用变换。每屏的原创点都来自布局（舞台、时间轴、胶片、手风琴、缩放墙、就地展开），不依赖任何平台独有的材质，所以换到苹果、鸿蒙、Material、Fluent、libadwaita 或网页都成立。审查中改掉的问题都写在各屏的「审查记录」里；主题色在每一屏都只出现在主要按钮、选中态、进度和「下划标注」上。</p></div>
   </section>
 </main>
 

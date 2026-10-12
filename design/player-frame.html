@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>播放器 · 画框</title>
-<meta name="description" content="Erika 播放器方向 D「画框」：不用毛玻璃，画面退后一步，原生控件围在四周；可切换苹果液态玻璃、Material 3、Fluent 2、libadwaita、网页五种设计语言预览。">
+<meta name="description" content="Erika 播放器方向 D「画框」：不用毛玻璃，画面退后一步，原生控件围在四周；可切换苹果液态玻璃、鸿蒙、Material 3、Fluent 2、libadwaita、网页六种设计语言预览。">
 <link rel="icon" href="assets/icon.png">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;600&display=swap">
@@ -453,6 +453,58 @@
   .fp[data-ds="adwaita"] .fp-sheet .gl { font: 700 13px/1 var(--ff); color: var(--on); margin: 18px 2px 8px; }
   .fp[data-ds="adwaita"] .epg span { border-radius: 6px; background: rgba(255, 255, 255, .1); font: 700 14px/1 var(--ff); }
   .fp[data-ds="adwaita"] .epg span.on { background: var(--acc); color: var(--on-acc); }
+  /* ================= 鸿蒙（HarmonyOS 6 · 深色） =================
+     HarmonyOS Sans；按钮都是胶囊或圆钮，普通按钮是灰底 + 强调色字；滑块细轨道 + 白色圆形手柄；面板是大圆角卡片 */
+  .fp[data-ds="harmony"] {
+    --ff: "HarmonyOS Sans SC", "HarmonyOS Sans", "PingFang SC", "Noto Sans SC", system-ui, sans-serif; --bg: #000000; --c1: #1F2022; --c2: #2A2B2E; --c3: rgba(255, 255, 255, .08); --c4: rgba(255, 255, 255, .13);
+    --on: rgba(255, 255, 255, .9); --on2: rgba(255, 255, 255, .6); --ol: rgba(255, 255, 255, .1); --ol2: rgba(255, 255, 255, .2);
+    --isw: 1.8; --is: 20px; --r-card: 20px; --r-card-ph: 16px; --r-fb: 50%; --card-ring: none;
+    --t-title: 700 18px/24px var(--ff); --t-sub: 400 12px/16px var(--ff); --t-time: 500 12px/16px var(--ff); --t-cap: 400 11px/14px var(--ff);
+  }
+  .fp[data-ds="harmony"][data-ff="desk"] .fp-caps { display: flex; gap: 8px; margin: 0 0 0 10px; align-self: center; }
+  .fp[data-ds="harmony"] .fp-caps i { width: 28px; height: 28px; border-radius: 50%; background: rgba(255, 255, 255, .08); font-size: 12px; color: var(--on2); opacity: 1; }
+  .fp[data-ds="harmony"] .c-ib { width: 40px; height: 40px; border-radius: 50%; background: rgba(255, 255, 255, .08); color: var(--on); }
+  .fp[data-ds="harmony"] .c-ib:hover, .fp[data-ds="harmony"] .c-tr:hover, .fp[data-ds="harmony"] .c-btn:hover { background: rgba(255, 255, 255, .13); }
+  .fp[data-ds="harmony"] .c-tr { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; cursor: pointer; color: var(--on); background: rgba(255, 255, 255, .08); }
+  .fp[data-ds="harmony"] .c-play { width: 56px; height: 56px; border-radius: 50%; }
+  .fp[data-ds="harmony"] .c-play .i { width: 24px; height: 24px; }
+  .fp[data-ds="harmony"] .c-btn { height: 40px; padding: 0 12px 0 16px; border-radius: 20px; background: rgba(255, 255, 255, .08); color: var(--acc); font: 500 14px/1 var(--ff); }
+  .fp[data-ds="harmony"] .c-btn .chev { color: var(--on2); }
+  .fp[data-ds="harmony"] .c-split { border-radius: 20px; background: rgba(255, 255, 255, .08); }
+  .fp[data-ds="harmony"] .c-split > span { height: 40px; font: 500 14px/1 var(--ff); color: var(--on); }
+  .fp[data-ds="harmony"] .c-split .sa { padding: 0 10px 0 16px; }
+  .fp[data-ds="harmony"] .c-split .sb { width: 34px; justify-content: center; box-shadow: inset 1px 0 0 rgba(255, 255, 255, .1); }
+  .fp[data-ds="harmony"] .c-split.on { background: color-mix(in srgb, var(--accent) 24%, #1F2022); }
+  .fp[data-ds="harmony"] .c-split.on > span { color: color-mix(in srgb, var(--accent) 30%, #FFFFFF); }
+  .fp[data-ds="harmony"] .c-field { height: 40px; padding: 0 4px 0 14px; border-radius: 20px; background: rgba(255, 255, 255, .08); }
+  .fp[data-ds="harmony"] .c-send { height: 32px; padding: 0 14px; border-radius: 16px; font: 500 13px/1 var(--ff); }
+  .fp[data-ds="harmony"] .c-slider { height: 28px; }
+  .fp[data-ds="harmony"] .c-slider .in { left: 0; right: 0; height: 4px; margin-top: -2px; border-radius: 2px; background: rgba(255, 255, 255, .16); }
+  .fp[data-ds="harmony"] .c-slider .ac { left: 0; width: calc(var(--v) * 100%); height: 4px; margin-top: -2px; border-radius: 2px; background: var(--acc); }
+  .fp[data-ds="harmony"] .c-slider .th { left: calc(var(--v) * 100% - 10px); top: 50%; width: 20px; height: 20px; margin-top: -10px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 5px rgba(0, 0, 0, .4); transition: transform .3s cubic-bezier(.3, 1.6, .5, 1); }
+  .fp[data-ds="harmony"] .c-slider.drag .th { transform: scale(1.25); }
+  .fp[data-ds="harmony"] .c-slider .tk { top: 50%; width: 2px; height: 4px; margin: -2px 0 0 -1px; background: rgba(255, 255, 255, .7); }
+  .fp[data-ds="harmony"] .tip { padding: 7px 12px; border-radius: 12px; background: #2A2B2E; color: var(--on); font: 500 13px/1 var(--ff); box-shadow: 0 12px 40px rgba(0, 0, 0, .5); }
+  .fp[data-ds="harmony"] .c-seg { background: rgba(255, 255, 255, .08); border-radius: 999px; padding: 2px; }
+  .fp[data-ds="harmony"] .c-seg > span { height: 30px; padding: 0 13px; border-radius: 999px; font: 500 13px/1 var(--ff); color: var(--on2); }
+  .fp[data-ds="harmony"] .c-seg > span.on { background: rgba(255, 255, 255, .2); color: var(--on); }
+  .fp[data-ds="harmony"] .c-chip { height: 30px; padding: 0 13px; border-radius: 15px; background: rgba(255, 255, 255, .08); font: 400 13px/1 var(--ff); color: var(--on); }
+  .fp[data-ds="harmony"] .c-chip.on { background: var(--acc); color: var(--on-acc); }
+  .fp[data-ds="harmony"] .c-switch { width: 40px; height: 24px; border-radius: 12px; background: rgba(255, 255, 255, .24); }
+  .fp[data-ds="harmony"] .c-switch::after { left: 2px; width: 20px; height: 20px; margin-top: -10px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(0, 0, 0, .3); }
+  .fp[data-ds="harmony"] .c-switch.on { background: var(--acc); }
+  .fp[data-ds="harmony"] .c-switch.on::after { left: 18px; }
+  .fp[data-ds="harmony"] .c-menu { background: #2A2B2E; border-radius: 20px; padding: 4px; box-shadow: 0 12px 40px rgba(0, 0, 0, .5); }
+  .fp[data-ds="harmony"] .c-mi { height: 44px; padding: 0 16px 0 10px; border-radius: 16px; font: 400 15px/1 var(--ff); }
+  .fp[data-ds="harmony"] .c-mi:hover { background: rgba(255, 255, 255, .08); }
+  .fp[data-ds="harmony"] .c-mi.on { color: var(--acc); }
+  .fp[data-ds="harmony"] .c-mlabel { font: 500 13px/1 var(--ff); padding: 12px 14px 6px; }
+  .fp[data-ds="harmony"] .c-sep { background: rgba(255, 255, 255, .1); margin: 4px 14px; }
+  .fp[data-ds="harmony"] .c-pad { padding: 14px 16px; }
+  .fp[data-ds="harmony"] .fp-sheet { background: #1F2022; border-radius: 24px; padding: 18px 16px; }
+  .fp[data-ds="harmony"] .fp-sheet .c-row { min-height: 52px; padding: 0 4px; border-bottom: .5px solid rgba(255, 255, 255, .1); }
+  .fp[data-ds="harmony"] .epg span { border-radius: 14px; background: rgba(255, 255, 255, .08); font: 500 14px/1 var(--ff); }
+  .fp[data-ds="harmony"] .epg span.on { background: var(--acc); color: var(--on-acc); }
 </style>
 </head>
 <body>
@@ -460,11 +512,11 @@
   <div class="eyebrow"><span class="sailor"></span><b>9.4</b> 播放器 · 方向 D 画框</div>
   <h2>不靠毛玻璃，靠布局</h2>
   <p class="lead2">bern 在每个平台用原生控件，毛玻璃这种需要特定渲染的样式只有苹果能原生做到，其他平台要么自己画、要么退化成一块灰。这一版换个思路：<b>画面永远不被盖住</b>。看片时画面占满窗口；一动鼠标，画面退后一步缩进一个圆角画框，原生控件围在画框四周。字幕在画框里面，永远不会被挡；打开设置时画面被推到一边，而不是被面板盖住。</p>
-  <p class="lead2" style="font-size:16px">控件全部是抽象控件（图标按钮、主要按钮、分体按钮、下拉按钮、滑块、文本框、菜单、侧面板），由各平台原生绘制。用下面的开关切换五种设计语言（苹果、Material 3、Fluent 2、libadwaita、网页），看同一个布局在不同控件下是否都好看。</p>
+  <p class="lead2" style="font-size:16px">控件全部是抽象控件（图标按钮、主要按钮、分体按钮、下拉按钮、滑块、文本框、菜单、侧面板），由各平台原生绘制。用下面的开关切换六种设计语言（苹果、鸿蒙、Material 3、Fluent 2、libadwaita、网页），看同一个布局在不同控件下是否都好看。</p>
 
   <div class="pf-bar">
     <span class="lb">设计语言</span>
-    <span class="seg" id="dsSeg"><span data-ds="apple">苹果 · 液态玻璃</span><span data-ds="material" class="on">Material 3</span><span data-ds="fluent">Fluent 2</span><span data-ds="adwaita">libadwaita</span><span data-ds="web">网页</span></span>
+    <span class="seg" id="dsSeg"><span data-ds="apple">苹果 · 液态玻璃</span><span data-ds="harmony">鸿蒙</span><span data-ds="material" class="on">Material 3</span><span data-ds="fluent">Fluent 2</span><span data-ds="adwaita">libadwaita</span><span data-ds="web">网页</span></span>
     <span class="lb">主题色</span>
     <span style="display:flex;gap:6px" id="accSw">
       <button class="sw-b" data-set-accent="rose" title="绯红" style="all:unset;cursor:pointer;width:22px;height:22px;border-radius:50%;background:#FF2E55"></button>
@@ -499,8 +551,8 @@
         <li>顶部是返回和片名，底部是进度条。所有功能和桌面一致，只是位置不同。</li>
       </ul></div>
       <div class="card"><span class="k">为什么不用毛玻璃</span><h4>好看不能只在一个平台好看</h4><ul>
-        <li>画框方案只用到窗口底色、圆角裁切和原生控件，五个平台都能原生做到，不需要我们自己写模糊。</li>
-        <li>换成苹果、Material、Fluent、libadwaita 或网页风格，画框的比例和留白都不变，只有控件的样子在变。</li>
+        <li>画框方案只用到窗口底色、圆角裁切和原生控件，六个平台都能原生做到，不需要我们自己写模糊。</li>
+        <li>换成苹果、鸿蒙、Material、Fluent、libadwaita 或网页风格，画框的比例和留白都不变，只有控件的样子在变。</li>
         <li>苹果的液态玻璃是控件自己的材质，由系统画。画框布局里玻璃控件都放在窗口底色上，不压在画面上，所以好不好认不取决于模糊效果。</li>
         <li>B 的问题（挡字幕、浮层要自绘）在这一版里都不存在了。</li>
       </ul></div>
@@ -508,19 +560,19 @@
   </section>
 
   <section class="pf-sec">
-    <h3>抽象控件和五种设计语言的对应</h3>
+    <h3>抽象控件和六种设计语言的对应</h3>
     <div class="tbl-wrap map"><table>
-      <thead><tr><th>抽象控件</th><th>播放器里用在</th><th>苹果（SwiftUI / AppKit / UIKit）</th><th>Material 3</th><th>Fluent 2（WinUI 3）</th><th>libadwaita（GTK4）</th><th>网页</th></tr></thead>
+      <thead><tr><th>抽象控件</th><th>播放器里用在</th><th>苹果（SwiftUI / AppKit / UIKit）</th><th>鸿蒙（ArkUI）</th><th>Material 3</th><th>Fluent 2（WinUI 3）</th><th>libadwaita（GTK4）</th><th>网页</th></tr></thead>
       <tbody>
-        <tr><td>主要按钮</td><td>播放 / 暂停</td><td>.glassProminent · 圆形</td><td>Filled button · 大号，按下变形</td><td>AccentButtonStyle · 圆形</td><td>GtkButton .suggested-action .circular</td><td>Primary button</td></tr>
-        <tr><td>图标按钮</td><td>上一集、快退、快进、下一集、顶栏工具</td><td>.glass · 圆形</td><td>IconButton / Tonal icon button</td><td>AppBarButton / Subtle button</td><td>GtkButton .flat / .circular</td><td>Ghost icon button</td></tr>
-        <tr><td>分体开关按钮</td><td>弹幕：左边开关，右边参数</td><td>NSComboButton（macOS）· Toggle + Menu（iOS）</td><td>Split button（Expressive）</td><td>ToggleSplitButton</td><td>GtkToggleButton + GtkMenuButton（.linked）</td><td>Button group + toggle</td></tr>
-        <tr><td>下拉按钮</td><td>字幕与音轨、倍速、画质</td><td>Menu · NSPopUpButton（玻璃胶囊）</td><td>Outlined button + Menu</td><td>DropDownButton + MenuFlyout</td><td>GtkMenuButton · GtkDropDown</td><td>Outline button + Dropdown menu</td></tr>
-        <tr><td>滑块</td><td>进度（章节做成刻度）、音量、弹幕参数</td><td>Slider（ticks 做章节，拖动时手柄变成玻璃透镜）</td><td>Slider（16 粗轨道 + 竖条手柄，stop indicator 做章节）</td><td>Slider（TickPlacement 做章节，拖动显示 ThumbToolTip）</td><td>GtkScale（add_mark 做章节）</td><td>&lt;input type="range"&gt;</td></tr>
-        <tr><td>文本框</td><td>发弹幕</td><td>TextField（胶囊）</td><td>Filled text field / Search bar</td><td>TextBox</td><td>GtkEntry</td><td>&lt;input&gt;</td></tr>
-        <tr><td>菜单</td><td>字幕、倍速、更多</td><td>Menu / NSMenu（玻璃）</td><td>Menu</td><td>MenuFlyout（RadioMenuFlyoutItem）</td><td>GtkPopoverMenu（带箭头）</td><td>Dropdown menu</td></tr>
-        <tr><td>侧面板</td><td>播放设置（推开画面）</td><td>Inspector（macOS）· Sheet（iOS）</td><td>Standard side sheet</td><td>SplitView Pane + SettingsCard</td><td>AdwOverlaySplitView + AdwPreferencesGroup</td><td>Sheet / 侧栏</td></tr>
-        <tr><td>分段、开关、筛选</td><td>设置面板、弹幕参数</td><td>Picker(.segmented) · Toggle · 胶囊按钮</td><td>Segmented button · Switch · Filter chip</td><td>Segmented（Toolkit）· ToggleSwitch · ToggleButton</td><td>AdwToggleGroup · GtkSwitch · GtkToggleButton</td><td>Tabs · Switch · Toggle</td></tr>
+        <tr><td>主要按钮</td><td>播放 / 暂停</td><td>.glassProminent · 圆形</td><td>Button · ButtonType.Circle，强调样式</td><td>Filled button · 大号，按下变形</td><td>AccentButtonStyle · 圆形</td><td>GtkButton .suggested-action .circular</td><td>Primary button</td></tr>
+        <tr><td>图标按钮</td><td>上一集、快退、快进、下一集、顶栏工具</td><td>.glass · 圆形</td><td>Button · Circle，普通样式（灰底圆钮）+ SymbolGlyph</td><td>IconButton / Tonal icon button</td><td>AppBarButton / Subtle button</td><td>GtkButton .flat / .circular</td><td>Ghost icon button</td></tr>
+        <tr><td>分体开关按钮</td><td>弹幕：左边开关，右边参数</td><td>NSComboButton（macOS）· Toggle + Menu（iOS）</td><td>Toggle（ToggleType.Button）+ bindMenu 的按钮，拼成一组</td><td>Split button（Expressive）</td><td>ToggleSplitButton</td><td>GtkToggleButton + GtkMenuButton（.linked）</td><td>Button group + toggle</td></tr>
+        <tr><td>下拉按钮</td><td>字幕与音轨、倍速、画质</td><td>Menu · NSPopUpButton（玻璃胶囊）</td><td>Button（胶囊）+ bindMenu / Select</td><td>Outlined button + Menu</td><td>DropDownButton + MenuFlyout</td><td>GtkMenuButton · GtkDropDown</td><td>Outline button + Dropdown menu</td></tr>
+        <tr><td>滑块</td><td>进度（章节做成刻度）、音量、弹幕参数</td><td>Slider（ticks 做章节，拖动时手柄变成玻璃透镜）</td><td>Slider（OutSet，showSteps 做章节，showTips 拖动显示时间）</td><td>Slider（16 粗轨道 + 竖条手柄，stop indicator 做章节）</td><td>Slider（TickPlacement 做章节，拖动显示 ThumbToolTip）</td><td>GtkScale（add_mark 做章节）</td><td>&lt;input type="range"&gt;</td></tr>
+        <tr><td>文本框</td><td>发弹幕</td><td>TextField（胶囊）</td><td>TextInput / Search（胶囊）</td><td>Filled text field / Search bar</td><td>TextBox</td><td>GtkEntry</td><td>&lt;input&gt;</td></tr>
+        <tr><td>菜单</td><td>字幕、倍速、更多</td><td>Menu / NSMenu（玻璃）</td><td>Menu / bindMenu</td><td>Menu</td><td>MenuFlyout（RadioMenuFlyoutItem）</td><td>GtkPopoverMenu（带箭头）</td><td>Dropdown menu</td></tr>
+        <tr><td>侧面板</td><td>播放设置（推开画面）</td><td>Inspector（macOS）· Sheet（iOS）</td><td>SideBarContainer · 半模态 bindSheet</td><td>Standard side sheet</td><td>SplitView Pane + SettingsCard</td><td>AdwOverlaySplitView + AdwPreferencesGroup</td><td>Sheet / 侧栏</td></tr>
+        <tr><td>分段、开关、筛选</td><td>设置面板、弹幕参数</td><td>Picker(.segmented) · Toggle · 胶囊按钮</td><td>SegmentButton · Toggle（Switch）· Chip</td><td>Segmented button · Switch · Filter chip</td><td>Segmented（Toolkit）· ToggleSwitch · ToggleButton</td><td>AdwToggleGroup · GtkSwitch · GtkToggleButton</td><td>Tabs · Switch · Toggle</td></tr>
       </tbody>
     </table></div>
     <p class="small muted">我们自己画的只有三样：画面的圆角裁切和缩放（视频渲染器本来就会做）、章节名文字、中央的播放反馈图标。主题色作为各平台的强调色传给原生控件。</p>

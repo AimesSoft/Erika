@@ -34,12 +34,12 @@
 
   /* ------------------------------------------------------------------
      画框版的活窗口（第 03、08、09 章）：每个 .nx-live 挂一个 NX.App，.nx-bar 统一切换
-     设计语言 / 设备 / 功能和画框版预览 next.html 共用同一份记录；明暗跟随文档
+     设计语言 / 设备 / 折叠屏姿态 / 功能和画框版预览 next.html 共用同一份记录；明暗跟随文档
      ------------------------------------------------------------------ */
   function initNX() {
     const lives = $$('.nx-live'); if (!lives.length || !window.NX) return;
     const { App, ALLOWED, fitStage } = NX, { PRESETS } = NP;
-    const G = { ds: kv.get('nx.ds') || 'apple', dev: kv.get('nx.dev') || 'desk', preset: kv.get('nx.preset') || 'all' };
+    const G = { ds: kv.get('nx.ds') || 'apple', dev: kv.get('nx.dev') || 'desk', preset: kv.get('nx.preset') || 'all', fold: kv.get('nx.fold') || 'open' };
     if (!ALLOWED[G.dev]) G.dev = 'desk';
     if (!PRESETS[G.preset]) G.preset = 'all';
     const fixDs = () => { if (!ALLOWED[G.dev].includes(G.ds)) { G.ds = 'apple'; kv.set('nx.ds', G.ds); } };
@@ -49,9 +49,9 @@
     function mount(box) {
       if (box._app) box._app.destroy();
       box._app = new App($('.nxp-stage', box), {
-        start: box.dataset.start, dev: G.dev, ds: G.ds, th: th(),
+        start: box.dataset.start, dev: G.dev, ds: G.ds, th: th(), fold: G.fold,
         mods: PRESETS[box.dataset.mods || G.preset].mods,
-        onLand: () => fit(box, true), onTheme: t => setTheme(t),
+        onLand: r => fit(box, r === 'fold' ? 'fold' : true), onTheme: t => setTheme(t),
       });
       fit(box);
     }
@@ -75,11 +75,13 @@
         if (k === 'ds') s.style.display = ALLOWED[G.dev].includes(s.dataset.v) ? '' : 'none';
       });
       document.body.classList.toggle('dev-tv', G.dev === 'tv');
+      document.body.classList.toggle('dev-fold', G.dev === 'fold');
     };
     const ON = {
       ds: () => live().forEach(b => b._app.setLook(G.ds, b._app.cfg.th)),
       dev: () => { fixDs(); live().forEach(mount); },
       preset: () => live().forEach(b => { if (!b.dataset.mods) b._app.store.set(PRESETS[G.preset].mods); }),
+      fold: () => live().forEach(b => b._app.setFold(G.fold)),
     };
     $$('.nx-bar [data-g] > span[data-v]').forEach(s => s.addEventListener('click', () => {
       const k = s.parentElement.dataset.g; if (G[k] === s.dataset.v) return;
