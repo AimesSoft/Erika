@@ -1,5 +1,5 @@
 /* =====================================================================
-   NipaPlay Next · 交互原型
+   Erika · 交互原型
    桌面窗口 1280×800 / 手机 390×844，所有界面都可以点；模块开关、主题色、首次配置会被记住。
    ===================================================================== */
 (() => {
@@ -460,8 +460,8 @@
   const kbd = k => `<span>${k.split('+').map(x => `<kbd>${x}</kbd>`).join(' ')}</span>`;
   const SEC = {
     general: () => sGroup('启动', [sRow('启动时打开', sPull('首页', '首页|上次的页面|媒体库')), sRow('播放结束后', sPull('播放下一集', '播放下一集|回到详情页|什么也不做'))]) + sGroup('语言', [sRow('界面语言', sPull('跟随系统', '跟随系统|简体中文|繁體中文|English'))]) + sGroup('更新', [sRow('自动检查更新', sTg(true)), sRow('更新通道', sPull('稳定版', '稳定版|测试版'))]),
-    appearance: () => sGroup('主题色', [`<div class="row" style="min-height:76px"><div class="tx"><div class="tt">主题色</div><div class="ds">取自 NipaPlay 图标，只用在按钮和文字的下划标注上</div></div><div class="sw-row">${[['rose', '#FF2E55', '绯红'], ['blue', '#2A51D4', '群青'], ['mint', '#07FF94', '荧绿']].map(([k, c, n]) => `<button class="sw" data-set-accent="${k}"><i style="background:${c}"></i>${n}</button>`).join('')}</div></div>`, sRow('外观', `<span class="seg"><span data-set-theme="system">跟随系统</span><span data-set-theme="light">浅色</span><span data-set-theme="dark">深色</span></span>`)]) + sGroup('界面', [sRow('减少动态效果', `<span class="tg${NP.getForceRM() ? ' on' : ''}" data-rm><i></i></span>`, '弹簧动画换成 150ms 淡入淡出'), sRow('界面音效', '<span class="b S" data-act="set-sec" data-sec="plugins">去插件市场</span>', '音效包由插件提供')]),
-    player: () => sGroup('播放', [sRow('默认倍速', sPull('1.0×', '0.75×|1.0×|1.25×|1.5×|2.0×')), sRow('跳过片头', sStep(85, ' 秒'), '播放器「更多」菜单里一键跳过'), sRow('记住播放位置', sTg(true)), sRow('自动连播下一集', sTg(true))]) + sGroup('解码', [sRow('播放内核', sPull('Erika（推荐）', 'Erika（推荐）|libmpv'), 'libmpv 作为后备内核'), sRow('硬件解码', sTg(true)), sRow('HDR', '<span class="cap2">自动</span>')]),
+    appearance: () => sGroup('主题色', [`<div class="row" style="min-height:76px"><div class="tx"><div class="tt">主题色</div><div class="ds">取自 Erika 图标，只用在按钮和文字的下划标注上</div></div><div class="sw-row">${[['rose', '#FF2E55', '绯红'], ['blue', '#2A51D4', '群青'], ['mint', '#07FF94', '荧绿']].map(([k, c, n]) => `<button class="sw" data-set-accent="${k}"><i style="background:${c}"></i>${n}</button>`).join('')}</div></div>`, sRow('外观', `<span class="seg"><span data-set-theme="system">跟随系统</span><span data-set-theme="light">浅色</span><span data-set-theme="dark">深色</span></span>`)]) + sGroup('界面', [sRow('减少动态效果', `<span class="tg${NP.getForceRM() ? ' on' : ''}" data-rm><i></i></span>`, '弹簧动画换成 150ms 淡入淡出'), sRow('界面音效', '<span class="b S" data-act="set-sec" data-sec="plugins">去插件市场</span>', '音效包由插件提供')]),
+    player: () => sGroup('播放', [sRow('默认倍速', sPull('1.0×', '0.75×|1.0×|1.25×|1.5×|2.0×')), sRow('跳过片头', sStep(85, ' 秒'), '播放器「更多」菜单里一键跳过'), sRow('记住播放位置', sTg(true)), sRow('自动连播下一集', sTg(true))]) + sGroup('解码', [sRow('播放内核', sPull('liberika（推荐）', 'liberika（推荐）|libmpv'), 'libmpv 作为后备内核'), sRow('硬件解码', sTg(true)), sRow('HDR', '<span class="cap2">自动</span>')]),
     danmaku: () => sGroup('显示', [sRow('显示弹幕', sTg(true)), sRow('不透明度', sSl(80)), sRow('字号', sSl(45)), sRow('速度', sSl(50)), sRow('显示区域', sSeg(['1/4', '半屏', '全屏'], 1))]) + sGroup('来源', [sRow('弹弹play 自动匹配', sTg(true)), sRow('本地弹幕文件', '<span class="b S">挂载…</span>', 'xml / json')]) + sGroup('过滤', [sRow('屏蔽词', '<span class="cap2">3 个 ›</span>'), sRow('合并重复弹幕', sTg(true)), sRow('防剧透', NP.installed.has('spoiler') ? sTg(true) : '<span class="b S" data-act="set-sec" data-sec="plugins">安装插件</span>', '由「防剧透」插件提供')]),
     library: () => sGroup('文件夹', [sRow('~/Movies/Anime', '<span class="cap2">312 个文件</span>'), sRow('/Volumes/NAS/番剧', '<span class="cap2">1,024 个文件</span>'), sRow('<span class="b plain" style="padding:0"><span>添加文件夹…</span></span>', '')]) + sGroup('识别', [sRow('自动扫描新文件', sTg(true)), sRow('识别方式', sPull(Store.has('anime') ? '弹弹play + Bangumi' : '仅文件名', '弹弹play + Bangumi|仅文件名'))]),
     anime: () => sGroup('首页', [sRow('显示今日更新', sTg(true)), sRow('显示媒体库最近添加', sTg(true))]) + sGroup('提醒', [sRow('新番更新提醒', sTg(false)), sRow('提醒时间', sPull('更新后立即', '更新后立即|每天 20:00'))]),
@@ -470,14 +470,14 @@
     remote: () => sGroup('局域网', [sRow('允许局域网设备访问媒体库', sTg(false)), sRow('设备名称', '<span class="cap2">Nipa 的 MacBook</span>')]) + sGroup('远程访问', [sRow('Web 远程访问', sTg(false)), sRow('访问地址', '<span class="cap2">http://192.168.1.8:1180</span>')]),
     downloads: () => sGroup('下载', [sRow('保存位置', '<span class="cap2">~/Downloads</span>'), sRow('同时下载', sStep(3)), sRow('下载完成后加入媒体库', sTg(true))]),
     enhance: () => sGroup('超分辨率', [sRow('默认算法', sSeg(['关', 'Anime4K', 'ArtCNN'], 1)), sRow('仅在低于 1080p 时启用', sTg(true))]) + sGroup('设备', [sRow('GPU', '<span class="cap2">Apple M3 · Metal</span>')]),
-    optional: () => `<div class="body" style="margin-bottom:6px">决定 NipaPlay 要做多少事。关闭的功能不会显示，也不占用资源。</div><div style="display:flex;justify-content:flex-end;margin-top:-34px"><span class="b opt-preset"></span></div><div class="opt-rows"></div>
+    optional: () => `<div class="body" style="margin-bottom:6px">决定 Erika 要做多少事。关闭的功能不会显示，也不占用资源。</div><div style="display:flex;justify-content:flex-end;margin-top:-34px"><span class="b opt-preset"></span></div><div class="opt-rows"></div>
       <div class="row-list" style="margin-top:22px;display:flex;align-items:center;gap:14px;padding:14px 16px;position:relative;overflow:hidden"><div class="plaid-gingham" style="position:absolute;left:0;top:0;bottom:0;width:6px"></div><div class="mi">${svg('puzzle')}</div><div style="flex:1"><div class="tt" style="font-weight:650">想要更多？</div><div class="cap2" style="font-size:12.5px">防剧透、CRT 着色器、片段导出等小功能都在插件市场里。</div></div><span class="b" data-act="set-sec" data-sec="plugins">浏览插件市场</span></div>`,
     plugins: () => `<div class="plaid-academy" style="height:120px;border-radius:16px;padding:24px 26px;color:#fff;position:relative;overflow:hidden;margin-bottom:18px"><div style="font-size:24px;font-weight:800">插件市场</div><div style="opacity:.85;font-size:13.5px;margin-top:4px">小功能按需安装。插件用脚本编写，只能使用它声明过的权限。</div></div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px"><span class="seg plug-seg"><span data-ps="market" class="on">市场</span><span data-ps="installed"><span>已安装 <b class="plug-n">${NP.installed.size}</b></span></span></span><span style="width:8px"></span><span class="chiprow plug-cats">${['全部', '弹幕', '画面', '工具', '外观'].map((c, i) => `<span class="b S${i ? '' : ' on'}" data-cat="${c}">${c}</span>`).join('')}</span></div>
       <div class="plug-body"></div>`,
     keys: () => sGroup('播放', [sRow('播放 / 暂停', kbd('空格')), sRow('快退 / 快进 5 秒', kbd('← / →')), Store.has('danmaku') && sRow('开关弹幕', kbd('D')), sRow('全屏', kbd('F')), sRow('返回 / 关闭', kbd('Esc'))]) + sGroup('全局', [sRow('打开文件', kbd('⌘+O')), sRow('搜索', kbd('⌘+K')), sRow('设置', kbd('⌘+,'))]),
-    advanced: () => sGroup('播放内核', [sRow('内核', sPull('Erika', 'Erika|libmpv')), sRow('独立播放窗口', sTg(false), '桌面平台可以把播放器拆成单独的窗口')]) + (Store.has('danmaku') ? sGroup('实验功能', [sRow('Next2 弹幕引擎', sTg(false), '实验中，可能不稳定')]) : '') + sGroup('开发者', [sRow('开发者选项', sTg(false)), sRow('导出日志', '<span class="b S">导出…</span>')]) + sGroup('重置', [sRow('重新运行首次配置', '<span class="b S" data-act="rerun">重新运行</span>', '模块选择会从头开始'), sRow('恢复默认设置', '<span class="b S" data-act="reset-all">恢复</span>')]),
-    about: () => `<div class="about"><img class="logo" src="assets/logo.png" alt="NipaPlay"><div class="t2" style="font-size:16px">NipaPlay Next</div><div class="cap2" style="margin:4px 0 18px">交互原型 v0.1 · 2026-10-12</div><img src="assets/girl.png" alt="" style="width:150px;margin:0 auto"><div class="cap2" style="margin-top:10px">看板娘插画 · MCDFsteve</div><div class="chiprow" style="justify-content:center;margin-top:18px"><span class="chip">GitHub</span><span class="chip">使用文档</span><span class="chip">反馈问题</span></div></div>`,
+    advanced: () => sGroup('播放内核', [sRow('内核', sPull('liberika', 'liberika|libmpv')), sRow('独立播放窗口', sTg(false), '桌面平台可以把播放器拆成单独的窗口')]) + (Store.has('danmaku') ? sGroup('实验功能', [sRow('Next2 弹幕引擎', sTg(false), '实验中，可能不稳定')]) : '') + sGroup('开发者', [sRow('开发者选项', sTg(false)), sRow('导出日志', '<span class="b S">导出…</span>')]) + sGroup('重置', [sRow('重新运行首次配置', '<span class="b S" data-act="rerun">重新运行</span>', '模块选择会从头开始'), sRow('恢复默认设置', '<span class="b S" data-act="reset-all">恢复</span>')]),
+    about: () => `<div class="about"><img class="logo erika-lg lt" src="brand/erika-logo.svg?${Date.now()}" alt="ERIKA エリカ"><img class="logo erika-lg dk" src="brand/erika-logo-dark.svg?${Date.now()}" alt=""><div class="cap2" style="margin:4px 0 18px">交互原型 v0.1 · 2026-10-12</div><img src="assets/girl.png" alt="" style="width:150px;margin:0 auto"><div class="cap2" style="margin-top:10px">看板娘插画 · MCDFsteve</div><div class="chiprow" style="justify-content:center;margin-top:18px"><span class="chip">GitHub</span><span class="chip">使用文档</span><span class="chip">反馈问题</span></div></div>`,
   };
   const SEC_TITLE = Object.fromEntries([...NP.SET_TOP, ...NP.SET_MOD, ...NP.SET_BOT.filter(x => x[1])].map(x => [x[0], x[1]]));
   function renderSetSideNow(animate) { NP.renderSetSide(setSideHost, S.setSec, Store, animate, k => { S.setSec = k; renderSetSideNow(false); renderSetContent(); }); }
@@ -574,17 +574,25 @@
 
   /* ------------------------------------------------------------------
      播放器 · 胶囊岛（方向 B）
-     控制层是一颗毛玻璃胶囊，浮层都从胶囊里长出来：悬停进度条长出预览，弹幕 / 字幕 / 倍速 / 画质
+     控制层是一颗毛玻璃胶囊，浮层都从胶囊里长出来：悬停进度条长出预览，弹幕 / 字幕 / 倍速 / 画质 / 选集
      长成选项卡，发弹幕时收窄成输入框；右上角的小胶囊长成「更多」菜单。底部对白跟着胶囊往上让。
+     桌面和手机横屏是同一套实现（bern：功能必须一样，只允许界面不一样），差别只在尺寸和触发方式：
+     手机上弹幕选项靠长按、预览靠拖动、单击显示 / 隐藏控制层、双击暂停、屏幕两侧上下滑调画面亮度和音量。
      ------------------------------------------------------------------ */
   const { Spring, run } = NP;
   const DUR = 1455;
   const CHAPTERS = [{ t: 0, n: '序幕', s: '序幕' }, { t: 92, n: '片头', s: 'OP' }, { t: 182, n: 'A 部分', s: 'A' }, { t: 700, n: 'B 部分', s: 'B' }, { t: 1295, n: '片尾', s: 'ED' }, { t: 1385, n: '下集预告', s: '预告' }];
   const PEAKS = [{ t: 342, n: '名场面' }, { t: 1098, n: '高能' }];
   const SUB_LINES = ['这一次，我一定要救下她。', '……又回到那一天了吗？', '别怕，我就在这里。', '雪停之前，一起回家吧。'];
-  const PANE_H = { prev: 184, dm: 164, sub: 172, rate: 122, enh: 122 };
+  const PANE_X = { prev: 124, dm: 104, sub: 112, rate: 62, enh: 62, eps: 62 };   /* 胶囊长出来的高度（在一行控制条之上） */
+  const DM_INSET = { desk: ['70px 0 520px', '70px 0 360px', '70px 0 130px'], phone: ['64px 0 290px', '64px 0 200px', '64px 0 84px'] };
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const rateLabel = r => (Number.isInteger(r) ? r.toFixed(1) : String(r)) + '×';
+  /* 当前播放器表面：桌面窗口里的 .app-player，或者手机横屏里的 .player.ph */
+  let PV = player;
+  const isPhone = () => PV !== player;
+  const G = () => (isPhone() ? { w: 756, say: 520, row: 52, bottom: 14, subB: 36, gap: 10 } : { w: 880, say: 600, row: 60, bottom: 26, subB: 48, gap: 14 });
+  const tHost = () => (isPhone() ? phone : app);
   /* 章节读 MKV 章节；剧场版和本地文件这里按没有章节处理 */
   const chaptersOf = p => (p.aid && p.dur === DUR ? CHAPTERS : []);
   const chapterAt = (p, t) => chaptersOf(p).filter(c => t >= c.t).pop();
@@ -595,8 +603,8 @@
     m += `, #000 ${a} 100%)`;
     return `-webkit-mask-image:${m};mask-image:${m}`;
   };
-  let tick = 0, hideT = 0, hoverT = 0;
-  const isl = { pane: null, pin: false, saying: false, hover: null, drag: false, more: false,
+  let tick = 0, hideT = 0, hoverT = 0, tapT = 0;
+  const isl = { pane: null, pin: false, saying: false, hover: null, drag: false, more: false, lp: false, gest: null, eatClick: false, bright: 0.5, vol: 0.7,
     W: new Spring(880), H: new Spring(60), anim: null, L: new Spring(0), lAnim: null, mW: new Spring(0), mH: new Spring(40), mAnim: null };
   const HS = new Spring(0); let hsAnim = null;
 
@@ -612,24 +620,28 @@
     if (file || url) {
       const v = document.createElement('video');
       v.className = 'video'; v.playsInline = true; v.src = file ? URL.createObjectURL(file) : url;
-      v.addEventListener('loadedmetadata', () => { if (isFinite(v.duration)) { p.dur = v.duration; const d = $('.il-t.dur', player); if (d) d.textContent = fmt2(p.dur); } v.play().catch(() => {}); updTime(); });
-      v.addEventListener('error', () => { p.video = null; v.remove(); const img = $('img.video', player); if (img) img.style.display = ''; toast(app, '浏览器无法解码这个格式，原型改用示意画面'); });
+      v.addEventListener('loadedmetadata', () => { if (isFinite(v.duration)) { p.dur = v.duration; const d = $('.il-t.dur', PV); if (d) d.textContent = fmt2(p.dur); } v.play().catch(() => {}); updTime(); });
+      v.addEventListener('error', () => { p.video = null; v.remove(); const img = $('img.video', PV); if (img) img.style.display = ''; toast(tHost(), '浏览器无法解码这个格式，原型改用示意画面'); });
       p.video = v; p.t = 0;
     }
     return p;
   }
   function playerHTML() {
-    const p = S.player, dm = Store.has('danmaku'), dmi = dm && Store.has('sync'), enh = Store.has('enhance');
+    const p = S.player, ph = isPhone(), dm = Store.has('danmaku'), dmi = dm && Store.has('sync'), enh = Store.has('enhance');
+    const a = p.aid != null ? byId(p.aid) : null, eps = a && !a.movie ? a.eps : 0;
     const chip = (t, on, d, extra = '') => `<span class="il-chip${on ? ' on' : ''}${extra}" data-po="${d}">${t}</span>`;
-    const menu = [['camera', '截图', 'shot'], ['ff10', '跳过片头（85 秒）', 'skip'], ['info', '播放信息', 'info'], dm && ['danmaku', '手动匹配弹幕…', 'match']].filter(Boolean);
+    const ic = (n, sz) => svg(n, 'i', sz ? `width:${sz}px;height:${sz}px` : '');
+    const big = (n, d, size, sz) => `<span class="pbtn glass" style="width:${size}px;height:${size}px" data-pa="${d}" data-isz="${sz}">${ic(n, sz)}</span>`;
+    const menu = [['camera', '截图', 'shot'], ['ff10', '跳过片头（85 秒）', 'skip'], eps && ['episodes', '选集…', 'eps'], ['info', '播放信息', 'info'], dm && ['danmaku', '手动匹配弹幕…', 'match'], ph && ['tv', '锁定横屏', 'lock']].filter(Boolean);
     return `<img class="video" src="${p.img}" alt="" style="object-position:center 25%${p.video ? ';display:none' : ''}">
-      <div class="dm-layer" style="inset:${['70px 0 520px', '70px 0 360px', '70px 0 130px'][p.area]};${dm && p.dmOn ? '' : 'display:none'}">${LINES.map(([t, c], i) => { const dur = 11 + ((i * 7) % 6), delay = -((i * 3.7) % dur); return `<span style="top:${(i % 9) * 40}px;animation-duration:${dur}s;animation-delay:${delay}s${c ? ';color:' + c : ''}">${t}</span>`; }).join('')}</div>
+      <div class="dm-layer" style="inset:${DM_INSET[ph ? 'phone' : 'desk'][p.area]};${dm && p.dmOn ? '' : 'display:none'}">${LINES.map(([t, c], i) => { const dur = 11 + ((i * 7) % 6), delay = -((i * 3.7) % dur); return `<span style="top:${(i % (ph ? 5 : 9)) * (ph ? 32 : 40)}px;${ph ? 'font-size:17px;' : ''}animation-duration:${dur}s;animation-delay:${delay}s${c ? ';color:' + c : ''}">${t}</span>`; }).join('')}</div>
       <div class="np-sub"${p.sub === 2 ? ' style="display:none"' : ''}><span></span></div>
       <div class="center-fb"></div>
       <div class="ui">
         <div class="il-cap l glass" data-spec="片名胶囊 · 高 40"><span class="pbtn sm" data-pa="back" title="返回（Esc）">${svg('chev-l')}</span><b>${p.title}</b><span class="m">${p.sub2}</span></div>
         <div class="il-cap r glass" data-spec="工具胶囊 · 点「更多」长成菜单"><div class="cap-row">${dm ? `<span class="pbtn sm" data-pa="match" title="弹幕匹配">${svg('link')}</span>` : ''}<span class="pbtn sm" data-pa="panel" title="播放设置">${svg('sliders')}</span><span class="pbtn sm" data-pa="pip" title="画中画">${svg('pip')}</span><span class="pbtn sm" data-pa="more" title="更多">${svg('more')}</span></div>
-          <div class="cap-menu">${menu.map(([ic, t, d]) => `<div class="mi3" data-po="${d}">${svg(ic)}${t}</div>`).join('')}</div></div>
+          <div class="cap-menu">${menu.map(([i, t, d]) => `<div class="mi3" data-po="${d}">${svg(i)}${t}</div>`).join('')}</div></div>
+        ${ph ? `<div class="ph-cc">${big('rw10', 'rw', 56, 26)}${big(p.playing ? 'pause' : 'play', 'play', 72, 32)}${big('ff10', 'ff', 56, 26)}</div>` : ''}
         <div class="il glass">
           <div class="il-up">
             <div class="il-pane" data-pane="prev"><div class="il-fr"><img src="${p.img}" alt=""><div class="tm"><b></b><span></span></div></div><div class="il-chs"></div></div>
@@ -642,88 +654,96 @@
             <div class="il-pane" data-pane="sub"><div class="il-opts r2"><span class="k">字幕</span>${['简体中文', '日本語', '关闭'].map((x, i) => chip(x, i === p.sub, 'sub-' + i)).join('')}${chip('添加外挂…', false, 'sub-add')}</div><div class="il-opts"><span class="k">音轨</span>${['日本語 · FLAC 2.0', '中文配音 · AAC 2.0'].map((x, i) => chip(x, i === p.audio, 'au-' + i)).join('')}</div></div>
             <div class="il-pane" data-pane="rate"><div class="il-opts"><span class="k">倍速</span>${[0.5, 0.75, 1, 1.25, 1.5, 2].map(r => chip(r + '×', r === p.rate, 'rate-' + r)).join('')}</div></div>
             ${enh ? `<div class="il-pane" data-pane="enh"><div class="il-opts"><span class="k">画质</span>${['关闭', 'Anime4K', 'ArtCNN 2×'].map((x, i) => chip(x, i === p.enh, 'enh-' + i)).join('')}</div></div>` : ''}
+            ${eps ? `<div class="il-pane" data-pane="eps"><div class="il-opts"><span class="k">选集</span>${Array.from({ length: Math.min(eps, 13) }, (_, i) => chip(i + 1, i + 1 === p.ep, 'ep-' + (i + 1), ' n')).join('')}</div></div>` : ''}
           </div>
           <div class="il-row main">
-            <span class="pbtn il-play" data-pa="play" title="播放 / 暂停（空格）">${svg(p.playing ? 'pause' : 'play')}</span><span class="pbtn" data-pa="next" title="下一集">${svg('next')}</span><span class="vol"><span class="pbtn" data-pa="mute" title="音量">${svg('vol')}</span><span class="sl-v"><b></b></span></span>
+            ${ph ? '' : `<span class="pbtn il-play" data-pa="play" title="播放 / 暂停（空格）">${svg(p.playing ? 'pause' : 'play')}</span>`}<span class="pbtn" data-pa="next" title="下一集">${svg('next')}</span>${ph ? '' : `<span class="vol"><span class="pbtn" data-pa="mute" title="音量">${svg('vol')}</span><span class="sl-v"><b></b></span></span>`}
             <span class="il-t now"></span>
             <div class="il-pg"><div class="msk" style="${gapMask(p)}"><div class="tr"></div><div class="gh"></div><div class="bd"></div></div>${dm && chaptersOf(p).length ? PEAKS.map(k => `<i class="pk" style="left:${(k.t / p.dur) * 100}%" title="弹幕高峰 · ${k.n}"></i>`).join('') : ''}</div>
             <span class="il-t dur">${fmt2(p.dur)}</span><i class="il-sep"></i>
-            ${dm ? `<span class="pbtn il-dm${p.dmOn ? ' on' : ''}" data-pa="dm" title="开关弹幕（D）">${svg(p.dmOn ? 'danmaku' : 'danmaku-off')}<i class="led"></i></span>` : ''}
+            ${dm ? `<span class="pbtn il-dm${p.dmOn ? ' on' : ''}" data-pa="dm" title="开关弹幕（D）${ph ? '，长按调参数' : ''}">${svg(p.dmOn ? 'danmaku' : 'danmaku-off')}<i class="led"></i></span>` : ''}
             ${dmi ? `<span class="pbtn" data-pa="say" title="发弹幕">${svg('send')}</span>` : ''}
             <span class="pbtn" data-pa="sub" title="字幕与音轨">${svg('cc')}</span>
             <span class="il-txt" data-pa="rate" data-j="M" title="倍速">${rateLabel(p.rate)}</span>
             ${enh ? `<span class="pbtn" data-pa="enh" title="画质增强">${svg('sparkle')}</span>` : ''}
-            <span class="pbtn" data-pa="fs" title="全屏（F）">${svg('full')}</span>
+            ${ph ? (eps ? `<span class="pbtn" data-pa="eps" title="选集">${svg('episodes')}</span>` : '') : `<span class="pbtn" data-pa="fs" title="全屏（F）">${svg('full')}</span>`}
           </div>
           ${dmi ? `<div class="il-row say"><span class="pbtn il-dm${p.dmOn ? ' on' : ''}" data-pa="dm" title="开关弹幕">${svg(p.dmOn ? 'danmaku' : 'danmaku-off')}<i class="led"></i></span><label class="il-say"><input placeholder="发个友善的弹幕…" maxlength="40"><span class="send" data-pa="send">发送</span></label><span class="pbtn sm" data-pa="unsay" title="收起（Esc）">${svg('x')}</span></div>` : ''}
         </div>
       </div>
+      ${ph ? '<div class="ph-gest glass"><i></i><b></b></div>' : ''}
       <div class="panel-side app-ppanel" style="display:none"></div>`;
   }
   function buildPlayer() {
-    const p = S.player;
-    Object.assign(isl, { pane: null, pin: false, saying: false, hover: null, drag: false, more: false });
-    [isl.anim, isl.mAnim, hsAnim].forEach(a => a && NP.stop(a)); isl.anim = isl.mAnim = hsAnim = null;
-    isl.W.target = 880; isl.W.snap(); isl.H.target = 60; isl.H.snap();
+    const p = S.player, g = G();
+    Object.assign(isl, { pane: null, pin: false, saying: false, hover: null, drag: false, more: false, lp: false, gest: null });
+    [isl.anim, isl.mAnim, isl.lAnim, hsAnim].forEach(a => a && NP.stop(a)); isl.anim = isl.mAnim = isl.lAnim = hsAnim = null;
+    isl.W.target = g.w; isl.W.snap(); isl.H.target = g.row; isl.H.snap();
     HS.target = p.t; HS.snap();
-    player.innerHTML = playerHTML();
-    if (p.video) player.insertBefore(p.video, player.firstChild);
-    $$('.pbtn', player).forEach(b => bindJelly(b, 'S'));
-    autoJelly(player);
+    PV.innerHTML = playerHTML();
+    if (p.video) PV.insertBefore(p.video, PV.firstChild);
+    const ilEl = $('.il', PV); ilEl.style.width = g.w + 'px'; ilEl.style.height = g.row + 'px';
+    $$('.pbtn', PV).forEach(b => bindJelly(b, 'S'));
+    autoJelly(PV);
     updTime();
-    const inp = $('.il-say input', player);
+    const inp = $('.il-say input', PV);
     if (inp) inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); sendDm(); } if (e.key === 'Escape') islClose(); });
-    /* 进度条：悬停长出预览、点击和拖动跳转 */
-    const pg = $('.il-pg', player);
+    /* 进度条：桌面悬停长出预览；手机拖动时长出预览。点击和拖动都会跳转 */
+    const pg = $('.il-pg', PV);
     const frac = e => { const r = pg.getBoundingClientRect(); return r.width ? clamp((e.clientX - r.left) / r.width, 0, 1) : null; };
-    pg.addEventListener('pointermove', e => { const f = frac(e); islHover(f); if (isl.drag && f != null) seekTo(f * S.player.dur); });
+    pg.addEventListener('pointermove', e => { const f = frac(e); if (!isPhone() || isl.drag) islHover(f); if (isl.drag && f != null) seekTo(f * S.player.dur); });
     pg.addEventListener('pointerleave', () => { if (!isl.drag) islHover(null); });
-    pg.addEventListener('pointerdown', e => { const f = frac(e); if (e.button > 0 || f == null) return; isl.drag = true; pg.setPointerCapture(e.pointerId); seekTo(f * S.player.dur); });
-    const up = e => { isl.drag = false; const r = pg.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top - 4 || e.clientY > r.bottom + 4) islHover(null); };
+    pg.addEventListener('pointerdown', e => { const f = frac(e); if (e.button > 0 || f == null) return; isl.drag = true; pg.setPointerCapture(e.pointerId); if (isPhone()) islHover(f); seekTo(f * S.player.dur); });
+    const up = e => { isl.drag = false; const r = pg.getBoundingClientRect(); if (isPhone() || e.clientX < r.left || e.clientX > r.right || e.clientY < r.top - 4 || e.clientY > r.bottom + 4) islHover(null); };
     pg.addEventListener('pointerup', up); pg.addEventListener('pointercancel', up);
-    /* 弹幕按钮：点一下开关，鼠标停留时胶囊长出常用参数（第二层），完整设置在侧面板（第三层） */
-    const dmb = $('.il-row.main [data-pa="dm"]', player), upEl = $('.il-up', player);
+    /* 弹幕按钮：点一下开关；桌面鼠标停留、手机长按，胶囊长出常用参数（第二层）；完整设置在侧面板（第三层） */
+    const dmb = $('.il-row.main [data-pa="dm"]', PV), upEl = $('.il-up', PV);
     const maybeClose = () => { clearTimeout(hoverT); hoverT = setTimeout(() => { if (isl.pane === 'dm' && !isl.pin && !upEl.matches(':hover') && !(dmb && dmb.matches(':hover'))) { isl.pane = null; islLayout(); } }, 280); };
-    if (dmb) {
+    if (dmb && !isPhone()) {
       dmb.addEventListener('pointerenter', e => { if (e.pointerType !== 'mouse' || isl.saying || isl.hover != null) return; clearTimeout(hoverT); if (isl.pane !== 'dm' && !isl.pin) { isl.pane = 'dm'; islLayout(); } });
       dmb.addEventListener('pointerleave', maybeClose);
       upEl.addEventListener('pointerleave', maybeClose);
       upEl.addEventListener('pointerdown', () => { if (isl.pane === 'dm') isl.pin = true; });
     }
+    if (dmb && isPhone()) {
+      let lpT = 0;
+      dmb.addEventListener('pointerdown', () => { clearTimeout(lpT); lpT = setTimeout(() => { isl.lp = true; islPane('dm'); }, 450); });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => dmb.addEventListener(t, () => clearTimeout(lpT)));
+    }
     subLift(true);
     if (p.panelTab) openPanel(p.panelTab, false);
   }
   function islLayout() {
-    const il = $('.il', player); if (!il) return;
-    const pane = isl.saying ? null : isl.pane || (isl.hover != null ? 'prev' : null);
+    const il = $('.il', PV); if (!il) return;
+    const g = G(), pane = isl.saying ? null : isl.pane || (isl.hover != null ? 'prev' : null);
     $$('.il-pane', il).forEach(x => x.classList.toggle('on', x.dataset.pane === pane));
     il.classList.toggle('hov', pane === 'prev'); il.classList.toggle('saying', isl.saying);
-    islSize(isl.saying ? 600 : 880, PANE_H[pane] || 60);
+    islSize(isl.saying ? g.say : g.w, g.row + (PANE_X[pane] || 0));
     subLift();
   }
   function islSize(w, h) {
     isl.W.cfg(TOKENS.jelly).target = w; isl.H.cfg({ T: TOKENS.jelly.T * 0.9, z: TOKENS.jelly.z }).target = h;
-    const apply = () => { const e = $('.il', player); if (e) { e.style.width = isl.W.v + 'px'; e.style.height = isl.H.v + 'px'; } };
+    const apply = () => { const e = $('.il', PV); if (e) { e.style.width = isl.W.v + 'px'; e.style.height = isl.H.v + 'px'; } };
     if (RM()) { isl.W.snap(); isl.H.snap(); apply(); return; }
     if (!isl.anim) isl.anim = run({ sp: [isl.W, isl.H], eps: 0.05, apply, done: () => { isl.anim = null; } });
   }
-  /* 字幕让位：控制层可见时，底部对白抬到胶囊上方 14px；胶囊长高时跟着再抬 */
+  /* 字幕让位：控制层可见时，底部对白抬到胶囊上方；胶囊长高时跟着再抬 */
   function subLift(snap) {
-    const shown = S.mode === 'full' && !player.classList.contains('hide-ui');
-    isl.L.cfg(TOKENS.smooth).target = shown ? 26 + isl.H.target + 14 - 48 : 0;
-    const apply = () => { const e = $('.np-sub', player); if (e) e.style.transform = `translateY(${(-isl.L.v).toFixed(1)}px)`; };
+    const g = G(), shown = S.mode === 'full' && !PV.classList.contains('hide-ui');
+    isl.L.cfg(TOKENS.smooth).target = shown ? g.bottom + isl.H.target + g.gap - g.subB : 0;
+    const apply = () => { const e = $('.np-sub', PV); if (e) e.style.transform = `translateY(${(-isl.L.v).toFixed(1)}px)`; };
     if (snap || RM()) { isl.L.snap(); apply(); return; }
     if (!isl.lAnim) isl.lAnim = run({ sp: [isl.L], eps: 0.1, apply, done: () => { isl.lAnim = null; } });
   }
   function islHover(f) {
-    const p = S.player, il = $('.il', player); if (!p || !il) return;
+    const p = S.player, il = $('.il', PV); if (!p || !il) return;
     const was = isl.hover; isl.hover = f;
     const gh = $('.il-pg .gh', il);
     if (f == null) { gh.style.width = '0'; if (was != null) islLayout(); return; }
     const pg = $('.il-pg', il), row = $('.il-row.main', il), W = pg.offsetWidth, ox = row.offsetLeft + pg.offsetLeft;
     const x = f * W, hx = (HS.v / p.dur) * W, t = f * p.dur, fr = $('.il-fr', il), ch = chapterAt(p, t);
-    gh.style.left = hx + 'px'; gh.style.width = Math.max(0, x - hx) + 'px';
-    fr.style.left = clamp(ox + x - 84, 14, 880 - 182) + 'px';
+    gh.style.left = Math.min(hx, x) + 'px'; gh.style.width = Math.abs(x - hx) + 'px';
+    fr.style.left = clamp(ox + x - 84, 14, G().w - 182) + 'px';
     $('.tm b', fr).textContent = fmt2(t); $('.tm span', fr).textContent = ch ? ch.n : '';
     $('img', fr).style.objectPosition = `${30 + (t / p.dur) * 40}% ${20 + ((Math.floor(t) * 7) % 60)}%`;
     if (was == null || isl.chW !== W) {
@@ -738,26 +758,26 @@
   function islPane(k) { isl.pane = isl.pane === k && isl.pin ? null : k; isl.pin = !!isl.pane; isl.saying = false; if (isl.more) capMore(false); islLayout(); wakeUi(); }
   function islSay(on) {
     isl.saying = on; isl.pane = null; isl.pin = false; islLayout(); wakeUi();
-    const inp = $('.il-say input', player);
+    const inp = $('.il-say input', PV);
     if (on && inp) setTimeout(() => inp.focus({ preventScroll: true }), 120); else if (inp) inp.blur();
   }
   function islClose() { if (isl.more) capMore(false); isl.pane = null; isl.pin = false; if (isl.saying) islSay(false); else islLayout(); }
   /* 右上角工具胶囊长成「更多」菜单（向左下展开） */
   function capMore(open) {
-    const cap = $('.il-cap.r', player); if (!cap) return;
-    const row = $('.cap-row', cap);
-    if (!cap.style.width) { isl.mW.v = isl.mW.target = cap.offsetWidth; isl.mH.v = isl.mH.target = 40; isl.mW.vel = isl.mH.vel = 0; }
+    const cap = $('.il-cap.r', PV); if (!cap) return;
+    const row = $('.cap-row', cap), rh = row.offsetHeight || 40;
+    if (!cap.style.width) { isl.mW.v = isl.mW.target = cap.offsetWidth; isl.mH.v = isl.mH.target = rh; isl.mW.vel = isl.mH.vel = 0; }
     isl.more = open; cap.classList.toggle('open', open);
     const items = $$('.mi3', cap).length, w0 = Math.max(row.scrollWidth, 40);
     isl.mW.cfg(TOKENS.jelly).target = open ? Math.max(236, w0) : w0;
-    isl.mH.cfg({ T: TOKENS.jelly.T * 0.9, z: TOKENS.jelly.z }).target = open ? 40 + 6 + items * 34 + 8 : 40;
+    isl.mH.cfg({ T: TOKENS.jelly.T * 0.9, z: TOKENS.jelly.z }).target = open ? rh + 6 + items * 34 + 8 : rh;
     const apply = () => { cap.style.width = isl.mW.v + 'px'; cap.style.height = isl.mH.v + 'px'; };
     const done = () => { isl.mAnim = null; if (!isl.more) { cap.style.width = ''; cap.style.height = ''; } };
     if (RM()) { isl.mW.snap(); isl.mH.snap(); apply(); done(); return; }
     if (!isl.mAnim) isl.mAnim = run({ sp: [isl.mW, isl.mH], eps: 0.05, apply, done });
     wakeUi();
   }
-  /* 兼容旧调用：收起所有从胶囊长出来的东西 */
+  /* 收起所有从胶囊长出来的东西（返回、画中画、切换设备时调用） */
   function closePop() { if (!S.player) return; Object.assign(isl, { pane: null, pin: false, hover: null, drag: false }); if (isl.more) capMore(false); if (isl.saying) islSay(false); else islLayout(); }
   function seekTo(t) {
     const p = S.player; if (!p) return;
@@ -770,7 +790,7 @@
   function updBand() {
     const p = S.player; if (!p) return;
     const v = hsAnim ? HS.v : p.t, r = clamp(v / p.dur, 0, 1);
-    const b = $('.il-pg .bd', player), now = $('.il-t.now', player);
+    const b = $('.il-pg .bd', PV), now = $('.il-t.now', PV);
     if (b) b.style.width = r * 100 + '%';
     if (now) { const s = fmt2(v); if (now.textContent !== s) now.textContent = s; }
   }
@@ -780,7 +800,7 @@
     if (!hsAnim) { HS.target = p.t; HS.snap(); }
     updBand();
     const r = Math.min(1, p.t / p.dur);
-    const sub = $('.np-sub span', player); if (sub) { const s = SUB_LINES[Math.floor(p.t / 4) % SUB_LINES.length]; if (sub.textContent !== s) sub.textContent = s; }
+    const sub = $('.np-sub span', PV); if (sub) { const s = SUB_LINES[Math.floor(p.t / 4) % SUB_LINES.length]; if (sub.textContent !== s) sub.textContent = s; }
     const ml = $$('.mp-line b'), mt = $$('.mp-time');
     ml.forEach(x => (x.style.width = r * 100 + '%')); mt.forEach(x => (x.textContent = fmt(p.t)));
     $$('.mp-pb').forEach(x => (x.style.width = r * 100 + '%'));
@@ -796,9 +816,8 @@
   }
   function syncPlayIcons() {
     const p = S.player; if (!p) return;
-    const pl = $('[data-pa="play"]', player); if (pl) pl.innerHTML = svg(p.playing ? 'pause' : 'play');
-    $$('[data-act="mini-toggle"]').forEach(x => (x.innerHTML = svg(p.playing ? 'pause' : 'play', 'i', 'width:16px;height:16px')));
-    if (M && M.land) renderLand();
+    $$('[data-pa="play"]', PV).forEach(b => { const z = b.dataset.isz; b.innerHTML = svg(p.playing ? 'pause' : 'play', 'i', z ? `width:${z}px;height:${z}px` : ''); });
+    $$('[data-act="mini-toggle"], [data-pact="mini-toggle"]').forEach(x => (x.innerHTML = svg(p.playing ? 'pause' : 'play', 'i', 'width:16px;height:16px')));
   }
   function setPlaying(on, feedback = true) {
     const p = S.player; if (!p) return;
@@ -806,39 +825,40 @@
     if (p.video) { if (on) p.video.play().catch(() => {}); else p.video.pause(); }
     syncPlayIcons();
     if (feedback) centerFb(on ? 'play' : 'pause');
-    $$('.dm-layer span', player).forEach(s => (s.style.animationPlayState = on ? '' : 'paused'));
+    $$('.dm-layer span', PV).forEach(s => (s.style.animationPlayState = on ? '' : 'paused'));
     wakeUi();
   }
   function setRate(r) {
     const p = S.player; p.rate = r; if (p.video) p.video.playbackRate = r;
-    $$('[data-pa="rate"]', player).forEach(x => (x.textContent = rateLabel(r)));
-    $$('[data-po^="rate-"]', player).forEach(x => x.classList.toggle('on', +x.dataset.po.slice(5) === r));
+    $$('[data-pa="rate"]', PV).forEach(x => (x.textContent = rateLabel(r)));
+    $$('[data-po^="rate-"]', PV).forEach(x => x.classList.toggle('on', +x.dataset.po.slice(5) === r));
   }
-  function centerFb(icon, host = player) {
+  function nudge(d) { const p = S.player; seekTo(p.t + d); centerFb(d > 0 ? 'ff10' : 'rw10'); wakeUi(); }
+  function centerFb(icon, host = PV) {
     const c = $('.center-fb', host); if (!c) return;
     c.innerHTML = svg(icon); cancel(c._tw); clearTimeout(c._h);
     c._tw = tween(TOKENS.jelly, p => { c.style.transform = `scale(${0.6 + 0.4 * p})`; c.style.opacity = String(Math.min(1, p * 2)); });
     c._h = setTimeout(() => { c._tw = tween(TOKENS.smooth, p => { c.style.opacity = String(Math.max(0, 1 - p)); c.style.transform = `scale(${1 + 0.15 * Math.min(1, p)})`; }); }, 420);
   }
+  function hideUi() { PV.classList.add('hide-ui'); islHover(null); subLift(); }
   function wakeUi() {
-    player.classList.remove('hide-ui');
+    PV.classList.remove('hide-ui');
     subLift();
     clearTimeout(hideT);
     hideT = setTimeout(() => {
       const p = S.player, ae = document.activeElement;
-      const typing = ae && ae.tagName === 'INPUT' && player.contains(ae);
-      const over = $$('.il, .il-cap, .app-ppanel', player).some(x => x.matches(':hover'));
-      if (p && p.playing && !isl.pane && !isl.saying && !isl.more && !isl.drag && !p.panelTab && S.mode === 'full' && !typing && !over) { player.classList.add('hide-ui'); islHover(null); subLift(); }
+      const typing = ae && ae.tagName === 'INPUT' && PV.contains(ae);
+      const over = !isPhone() && $$('.il, .il-cap, .app-ppanel', PV).some(x => x.matches(':hover'));
+      if (p && p.playing && !isl.pane && !isl.saying && !isl.more && !isl.drag && !p.panelTab && S.mode === 'full' && !typing && !over) hideUi();
     }, 3000);
   }
-  player.addEventListener('pointermove', wakeUi);
   function sendDm() {
-    const inp = $('.il-say input', player); if (!inp) return;
+    const inp = $('.il-say input', PV); if (!inp) return;
     if (!inp.value.trim()) { inp.focus({ preventScroll: true }); return; }
-    const layer = $('.dm-layer', player);
+    const layer = $('.dm-layer', PV);
     const s = document.createElement('span');
     s.className = 'mine'; s.textContent = inp.value.trim();
-    s.style.cssText = `top:${Math.floor(Math.random() * 6) * 40}px;animation-duration:9s;animation-iteration-count:1;animation-delay:0s`;
+    s.style.cssText = `top:${Math.floor(Math.random() * 5) * (isPhone() ? 32 : 40)}px;${isPhone() ? 'font-size:17px;' : ''}animation-duration:9s;animation-iteration-count:1;animation-delay:0s`;
     layer.appendChild(s); setTimeout(() => s.remove(), 9200);
     inp.value = '';
     if (!S.player.dmOn) toggleDm();
@@ -846,11 +866,11 @@
   function toggleDm() {
     const p = S.player; if (!p || !Store.has('danmaku')) return;
     p.dmOn = !p.dmOn;
-    $$('.il-dm', player).forEach(b => { b.classList.toggle('on', p.dmOn); b.firstElementChild.outerHTML = svg(p.dmOn ? 'danmaku' : 'danmaku-off'); });
-    setShown($('.dm-layer', player), p.dmOn, null);
+    $$('.il-dm', PV).forEach(b => { b.classList.toggle('on', p.dmOn); b.firstElementChild.outerHTML = svg(p.dmOn ? 'danmaku' : 'danmaku-off'); });
+    setShown($('.dm-layer', PV), p.dmOn, null);
   }
   function openPanel(tab, animate = true) {
-    const p = S.player, pnl = $('.app-ppanel', player);
+    const p = S.player, pnl = $('.app-ppanel', PV);
     if (isl.pane || isl.saying) { isl.pane = null; isl.pin = false; isl.saying = false; islLayout(); }
     if (isl.more) capMore(false);
     const tabs = [Store.has('danmaku') && ['dm', '弹幕'], ['sub', '字幕'], ['video', '画面'], ['audio', '音频'], ['play', '播放']].filter(Boolean);
@@ -858,15 +878,15 @@
     p.panelTab = tab;
     const r = (t, right) => `<div class="r"><span class="grow">${t}</span>${right}</div>`;
     const tg = on => `<span class="tg dark${on ? ' on' : ''}"><i></i></span>`;
-    const sl = v => `<div class="sl dark" style="width:150px;flex:none"><b style="width:${v}%"></b><i style="left:${v}%"></i></div>`;
+    const sl = (v, k = '') => `<div class="sl dark"${k ? ` data-k="${k}"` : ''} style="width:${isPhone() ? 120 : 150}px;flex:none"><b style="width:${v}%"></b><i style="left:${v}%"></i></div>`;
     const seg = (o, on) => `<span class="seg dark">${o.map((x, i) => `<span class="${i === on ? 'on' : ''}">${x}</span>`).join('')}</span>`;
     const grp = (l, rows) => `<div class="gl">${l}</div><div class="grp">${rows.join('')}</div>`;
     const C = {
       dm: () => grp('显示', [r('显示弹幕', `<span class="tg dark${p.dmOn ? ' on' : ''}" data-pp="dm"><i></i></span>`), r('速度', sl(50)), r('合并重复弹幕', tg(true))]) + grp('来源', [r('弹弹play · 自动匹配', '<span class="v">已匹配 ✓</span>'), r('手动匹配…', '<span class="v">›</span>'), r('弹幕偏移', '<span class="v">− 0.0 s +</span>'), r('挂载本地弹幕文件', '<span class="v">xml / json ›</span>')]) + grp('过滤', [r('屏蔽词', '<span class="v">3 个 ›</span>'), r('插件：防剧透', `<span class="v">${NP.installed.has('spoiler') ? '已启用' : '未安装'} ›</span>`)]),
       sub: () => grp('字幕轨道', ['简体中文（内嵌 ASS）', '日本語', '关闭字幕'].map((x, i) => `<div class="r" data-pp="sub-${i}" style="cursor:pointer"><span class="grow">${x}</span>${i === p.sub ? '<span class="v" style="color:#fff">✓</span>' : ''}</div>`).concat([r('添加外挂字幕…', '<span class="v">›</span>')])) + grp('样式', [r('字号', sl(50)), r('字幕延迟', '<span class="v">− 0.0 s +</span>'), r('控制层出现时让位', tg(true))]),
-      video: () => grp('画面', [r('画面比例', seg(['原始', '16:9', '4:3', '填充'], 0)), r('HDR', '<span class="v">自动</span>')]) + (Store.has('enhance') ? grp('画质增强', [r('超分辨率', seg(['关', 'Anime4K', 'ArtCNN'], p.enh))]) : ''),
-      audio: () => grp('音轨', ['日本語 · FLAC 2.0', '中文配音 · AAC 2.0'].map((x, i) => `<div class="r"><span class="grow">${x}</span>${i === p.audio ? '<span class="v" style="color:#fff">✓</span>' : ''}</div>`)) + grp('调整', [r('音频延迟', '<span class="v">− 0 ms +</span>'), r('音量', sl(70))]),
-      play: () => grp('播放', [r('跳过片头', tg(true)), r('跳过秒数', '<span class="v">85 秒</span>'), r('自动连播下一集', tg(true))]) + grp('信息', [r('播放内核', '<span class="v">Erika</span>'), r('视频', `<span class="v">${p.video ? '本地文件' : 'HEVC · 1080p'}</span>`), r('硬件解码', '<span class="v">VideoToolbox</span>')]),
+      video: () => grp('画面', [r('画面比例', seg(['原始', '16:9', '4:3', '填充'], 0)), r('亮度', sl(Math.round(isl.bright * 100), 'bright')), r('HDR', '<span class="v">自动</span>')]) + (Store.has('enhance') ? grp('画质增强', [r('超分辨率', seg(['关', 'Anime4K', 'ArtCNN'], p.enh))]) : ''),
+      audio: () => grp('音轨', ['日本語 · FLAC 2.0', '中文配音 · AAC 2.0'].map((x, i) => `<div class="r"><span class="grow">${x}</span>${i === p.audio ? '<span class="v" style="color:#fff">✓</span>' : ''}</div>`)) + grp('调整', [r('音频延迟', '<span class="v">− 0 ms +</span>'), r('音量', sl(Math.round(isl.vol * 100), 'vol'))]),
+      play: () => grp('播放', [r('跳过片头', tg(true)), r('跳过秒数', '<span class="v">85 秒</span>'), r('自动连播下一集', tg(true))]) + grp('信息', [r('播放内核', '<span class="v">liberika</span>'), r('视频', `<span class="v">${p.video ? '本地文件' : 'HEVC · 1080p'}</span>`), r('硬件解码', `<span class="v">${isPhone() ? 'VideoToolbox / MediaCodec' : 'VideoToolbox'}</span>`)]),
     };
     pnl.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><b style="font-size:16px">播放设置</b><span class="pbtn sm" data-pa="panel-close">${svg('x')}</span></div><span class="seg dark">${tabs.map(([k, n]) => `<span data-pp="tab-${k}" class="${k === tab ? 'on' : ''}">${n}</span>`).join('')}</span><div class="pb">${C[tab]()}</div>`;
     autoJelly(pnl); $$('.pbtn', pnl).forEach(b => bindJelly(b, 'S'));
@@ -876,64 +896,117 @@
     }
   }
   function closePanel() {
-    const pnl = $('.app-ppanel', player); if (!pnl || pnl.style.display === 'none') return;
+    const pnl = $('.app-ppanel', PV); if (!pnl || pnl.style.display === 'none') return;
     S.player.panelTab = null; cancel(pnl._tw);
     pnl._tw = tween(TOKENS.smooth, q => { pnl.style.transform = `translateX(calc(${Math.min(1, q) * 100}% + ${Math.min(1, q) * 24}px))`; }, () => { pnl.style.display = 'none'; pnl.style.opacity = ''; });
   }
-  player.addEventListener('click', e => {
-    const p = S.player; if (!p) return;
+  function playerBack() { if (isPhone()) setLand(false); else playerToMini(); }
+  function onPlayerClick(e) {
+    const p = S.player; if (!p || !PV.contains(e.target)) return;
+    if (isl.eatClick) { isl.eatClick = false; return; }
     const po = e.target.closest('[data-po]'), pp = e.target.closest('[data-pp]'), pa = e.target.closest('[data-pa]');
     if (isl.more && !e.target.closest('.il-cap.r')) capMore(false);
     if (po) {
       const d = po.dataset.po, later = f => setTimeout(f, 260);
-      if (d.startsWith('area-')) { p.area = +d.slice(5); $$('[data-po^="area-"]', player).forEach(x => x.classList.toggle('on', x === po)); $('.dm-layer', player).style.inset = ['70px 0 520px', '70px 0 360px', '70px 0 130px'][p.area]; return; }
+      if (d.startsWith('area-')) { p.area = +d.slice(5); $$('[data-po^="area-"]', PV).forEach(x => x.classList.toggle('on', x === po)); $('.dm-layer', PV).style.inset = DM_INSET[isPhone() ? 'phone' : 'desk'][p.area]; return; }
       if (d === 'blk') { po.classList.toggle('off'); return; }
       if (d === 'more-dm') { openPanel('dm'); return; }
-      if (d === 'sub-add') { islClose(); toast(app, '原型：会打开文件选择器挂载 ASS / SRT'); return; }
-      if (d.startsWith('sub-')) { p.sub = +d.slice(4); $$('[data-po^="sub-"]', player).forEach(x => x.classList.toggle('on', x === po)); $('.np-sub', player).style.display = p.sub === 2 ? 'none' : ''; later(islClose); return; }
-      if (d.startsWith('au-')) { p.audio = +d.slice(3); $$('[data-po^="au-"]', player).forEach(x => x.classList.toggle('on', x === po)); later(islClose); return; }
+      if (d === 'sub-add') { islClose(); toast(tHost(), '原型：会打开文件选择器挂载 ASS / SRT'); return; }
+      if (d.startsWith('sub-')) { p.sub = +d.slice(4); $$('[data-po^="sub-"]', PV).forEach(x => x.classList.toggle('on', x === po)); $('.np-sub', PV).style.display = p.sub === 2 ? 'none' : ''; later(islClose); return; }
+      if (d.startsWith('au-')) { p.audio = +d.slice(3); $$('[data-po^="au-"]', PV).forEach(x => x.classList.toggle('on', x === po)); later(islClose); return; }
       if (d.startsWith('rate-')) { setRate(+d.slice(5)); later(islClose); return; }
-      if (d.startsWith('enh-')) { p.enh = +d.slice(4); $$('[data-po^="enh-"]', player).forEach(x => x.classList.toggle('on', x === po)); later(() => { islClose(); toast(app, '画质增强：' + po.textContent); }); return; }
-      if (d === 'shot') { capMore(false); toast(app, '截图已保存到「图片」'); return; }
-      if (d === 'skip') { capMore(false); seekTo(Math.min(p.dur, p.t + 85)); toast(app, '已跳过片头'); return; }
+      if (d.startsWith('enh-')) { p.enh = +d.slice(4); $$('[data-po^="enh-"]', PV).forEach(x => x.classList.toggle('on', x === po)); later(() => { islClose(); toast(tHost(), '画质增强：' + po.textContent); }); return; }
+      if (d.startsWith('ep-')) { const n = +d.slice(3); $$('[data-po^="ep-"]', PV).forEach(x => x.classList.toggle('on', x === po)); later(() => { islClose(); goEp(n); }); return; }
+      if (d === 'eps') { capMore(false); setTimeout(() => islPane('eps'), 120); return; }
+      if (d === 'shot') { capMore(false); toast(tHost(), isPhone() ? '截图已保存到相册' : '截图已保存到「图片」'); return; }
+      if (d === 'skip') { capMore(false); seekTo(Math.min(p.dur, p.t + 85)); toast(tHost(), '已跳过片头'); return; }
       if (d === 'info') { openPanel('play'); return; }
-      if (d === 'match') { capMore(false); toast(app, '原型：会打开弹幕匹配窗口，搜索弹弹play 的番剧和集数'); return; }
+      if (d === 'match') { capMore(false); toast(tHost(), '原型：会打开弹幕匹配窗口，搜索弹弹play 的番剧和集数'); return; }
+      if (d === 'lock') { capMore(false); po.classList.toggle('on'); toast(tHost(), po.classList.contains('on') ? '已锁定横屏' : '已解除方向锁定'); return; }
     }
     if (pp) {
       const d = pp.dataset.pp;
       if (d.startsWith('tab-')) { openPanel(d.slice(4)); return; }
       if (d === 'dm') { toggleDm(); pp.classList.toggle('on', p.dmOn); return; }
-      if (d.startsWith('sub-')) { p.sub = +d.slice(4); $('.np-sub', player).style.display = p.sub === 2 ? 'none' : ''; openPanel('sub'); return; }
+      if (d.startsWith('sub-')) { p.sub = +d.slice(4); $('.np-sub', PV).style.display = p.sub === 2 ? 'none' : ''; openPanel('sub'); return; }
     }
     if (pa) {
       const d = pa.dataset.pa;
-      if (d === 'back') return playerToMini();
+      if (d === 'back') return playerBack();
       if (d === 'play') return setPlaying(!p.playing);
-      if (d === 'next') { if (p.aid) { const a = byId(p.aid); if (p.ep < a.eps) { p.ep++; p.t = 0; p.sub2 = `第 ${p.ep} 集`; $('.il-cap.l .m', player).textContent = p.sub2; updTime(); toast(app, `第 ${p.ep} 集`); } else toast(app, '已经是最后一集'); } return; }
+      if (d === 'rw' || d === 'ff') return nudge(d === 'ff' ? 10 : -10);
+      if (d === 'next') { const a = p.aid != null && byId(p.aid); if (a && !a.movie && p.ep < a.eps) goEp(p.ep + 1); else toast(tHost(), a ? '已经是最后一集' : '同目录里没有下一个文件'); return; }
       if (d === 'mute') { pa.innerHTML = pa.classList.toggle('muted') ? svg('vol', 'i', 'opacity:.45') : svg('vol'); return; }
-      if (d === 'dm') { toggleDm(); return; }
+      if (d === 'dm') { if (isl.lp) { isl.lp = false; return; } toggleDm(); return; }
       if (d === 'say') return islSay(true);
       if (d === 'unsay') return islSay(false);
       if (d === 'send') { sendDm(); return; }
       if (d === 'panel') { if (p.panelTab) closePanel(); else openPanel(Store.has('danmaku') ? 'dm' : 'sub'); return; }
       if (d === 'panel-close') return closePanel();
-      if (d === 'pip') return playerToPip();
+      if (d === 'pip') { if (isPhone()) { setLand(false); toast(phone, '原型：进入系统画中画（iOS / Android 原生）'); return; } return playerToPip(); }
       if (d === 'fs') { toggleFullscreen(); return; }
-      if (d === 'match') { toast(app, '原型：会打开弹幕匹配窗口'); return; }
+      if (d === 'match') { toast(tHost(), '原型：会打开弹幕匹配窗口'); return; }
       if (d === 'more') { capMore(!isl.more); return; }
-      if (['sub', 'rate', 'enh'].includes(d)) { islPane(d); return; }
+      if (['sub', 'rate', 'enh', 'eps'].includes(d)) { islPane(d); return; }
       return;
     }
-    if (!e.target.closest('.il, .il-cap, .app-ppanel')) {
-      if (isl.pane || isl.saying) islClose(); else if (p.panelTab) closePanel(); else setPlaying(!p.playing);
+    if (e.target.closest('.il, .il-cap, .app-ppanel, .ph-cc')) return;
+    if (isPhone()) {
+      /* 手机：单击显示 / 隐藏控制层（有展开的内容时先收起），双击暂停 */
+      clearTimeout(tapT);
+      tapT = setTimeout(() => { if (isl.pane || isl.saying || isl.more) islClose(); else if (p.panelTab) closePanel(); else if (PV.classList.contains('hide-ui')) wakeUi(); else hideUi(); }, 240);
+      return;
     }
+    if (isl.pane || isl.saying) islClose(); else if (p.panelTab) closePanel(); else setPlaying(!p.playing);
+  }
+  function onPlayerDbl(e) {
+    if (!S.player || !PV.contains(e.target) || e.target.closest('.il, .il-cap, .app-ppanel, .ph-cc')) return;
+    if (isPhone()) { clearTimeout(tapT); setPlaying(!S.player.playing); return; }
+    toggleFullscreen();
+  }
+  function goEp(n) {
+    const p = S.player; p.ep = n; p.t = 0; p.sub2 = `第 ${n} 集`;
+    const m = $('.il-cap.l .m', PV); if (m) m.textContent = p.sub2;
+    $$('[data-po^="ep-"]', PV).forEach(x => x.classList.toggle('on', +x.dataset.po.slice(3) === n));
+    updTime(); toast(tHost(), `第 ${n} 集`);
+  }
+  /* 手机：屏幕左半边上下滑调画面亮度，右半边调音量（和桌面侧面板里的「亮度」「音量」是同一个设置） */
+  function onPlayerDown(e) {
+    if (!isPhone() || !S.player || e.target.closest('.il, .il-cap, .app-ppanel, .ph-cc')) return;
+    const r = PV.getBoundingClientRect();
+    isl.gest = { x: e.clientX, y: e.clientY, side: e.clientX - r.left < r.width / 2 ? 'bright' : 'vol', h: r.height, on: false, v0: 0 };
+    isl.gest.v0 = isl[isl.gest.side];
+  }
+  function onPlayerMove(e) {
+    if (!isPhone()) { if (S.player && PV.contains(e.target)) wakeUi(); return; }
+    const g = isl.gest; if (!g) return;
+    const dx = e.clientX - g.x, dy = e.clientY - g.y;
+    if (!g.on && Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) g.on = true;
+    if (!g.on) return;
+    const v = clamp(g.v0 - dy / (g.h * 0.6), 0, 1); isl[g.side] = v;
+    const el = $('.ph-gest', PV);
+    el.className = 'ph-gest glass on ' + g.side; el.innerHTML = `${svg(g.side === 'vol' ? 'vol' : 'sun')}<b><i style="height:${Math.round(v * 100)}%"></i></b>`;
+    $('img.video', PV).style.filter = `brightness(${0.4 + isl.bright * 1.2})`;
+  }
+  function onPlayerUp() {
+    const g = isl.gest; isl.gest = null; if (!g || !g.on) return;
+    isl.eatClick = true; setTimeout(() => { isl.eatClick = false; }, 50);
+    const el = $('.ph-gest', PV); clearTimeout(el._h); el._h = setTimeout(() => el.classList.remove('on'), 700);
+  }
+  [player, phone].forEach(h => {
+    h.addEventListener('click', onPlayerClick);
+    h.addEventListener('dblclick', onPlayerDbl);
+    h.addEventListener('pointerdown', onPlayerDown);
+    h.addEventListener('pointermove', onPlayerMove);
+    h.addEventListener('pointerup', onPlayerUp);
+    h.addEventListener('pointercancel', onPlayerUp);
   });
-  player.addEventListener('dblclick', e => { if (!e.target.closest('.il, .il-cap, .app-ppanel')) toggleFullscreen(); });
   function toggleFullscreen() {
     const el = document.documentElement;
     if (document.fullscreenElement) document.exitFullscreen && document.exitFullscreen();
     else if (el.requestFullscreen) el.requestFullscreen().catch(() => toast(app, '当前环境不允许全屏'));
   }
+
 
   const FULL = { x: 0, y: 0, w: 1280, h: 800 };
   function play(opts, srcEl) {
@@ -974,7 +1047,7 @@
     const p = S.player; if (!p) return;
     const th = $('.mp-thumb', sideShown ? slot : floatMini) || (pip.style.display === '' ? pip : null);
     const from = th ? rel(th) : null;
-    hideMinis(); S.mode = 'full';
+    hideMinis(); S.mode = 'full'; buildPlayer();
     if (!from || RM()) { player.style.display = ''; wakeUi(); return; }
     fly(p.img, from, FULL, 6, 0, () => { player.style.display = ''; animInFade($('.ui', player)); wakeUi(); });
   }
@@ -1210,6 +1283,7 @@
     phSheet._tw = tween(TOKENS.bouncy, p => { phSheet.style.transform = `translateY(${(1 - p) * 110}%)`; });
   }
   function phSheetClose() { cancel(phSheet._tw); phSheet._tw = tween(TOKENS.smooth, p => { phSheet.style.transform = `translateY(${Math.min(1, p) * 110}%)`; }, () => { phSheet.style.display = 'none'; phDim.style.display = 'none'; }); }
+  bindGenericControls(phLand);
   phDim.addEventListener('click', phSheetClose);
   phSheet.addEventListener('click', e => { const it = e.target.closest('.it'); if (!it) return; const i = +it.dataset.i; phSheetClose(); if (i >= 0) phSheet._items[i].run(); });
   function phonePlay(opts) {
@@ -1217,34 +1291,19 @@
     S.player = newPlayer(opts); startTick();
     setLand(true);
   }
-  function renderLand() {
-    const p = S.player; if (!p) return;
-    const dm = Store.has('danmaku'), dmi = dm && Store.has('sync'), r = (p.t / p.dur) * 100;
-    const sb = (ic, act, size, isz) => `<span class="pbtn glass" style="width:${size}px;height:${size}px" data-pact="${act}">${svg(ic, 'i', `width:${isz}px;height:${isz}px`)}</span>`;
-    phLand.innerHTML = `<div class="player isl" style="border-radius:30px">${p.video ? '' : `<img class="video" src="${p.img}" alt="" style="object-position:center 25%">`}
-      <div class="dm-layer" style="inset:58px 0 110px;${dm && p.dmOn ? '' : 'display:none'}">${LINES.slice(0, 7).map(([t, c], i) => `<span style="top:${(i % 5) * 34}px;font-size:17px;animation-duration:${11 + ((i * 7) % 6)}s;animation-delay:${-((i * 3.7) % 11)}s${c ? ';color:' + c : ''}">${t}</span>`).join('')}</div>
-      <div class="np-sub" style="bottom:80px"${p.sub === 2 ? ' hidden' : ''}><span style="font-size:19px">${SUB_LINES[Math.floor(p.t / 4) % SUB_LINES.length]}</span></div>
-      <div class="center-fb"></div>
-      <div class="il-cap l glass" style="left:44px;top:14px;height:36px;max-width:440px"><span class="pbtn sm" data-pact="land-back">${svg('chev-l')}</span><b>${p.title}</b><span class="m">${p.sub2}</span></div>
-      <div class="il-cap glass" style="right:44px;top:14px;height:36px">${dm ? `<span class="pbtn sm il-dm${p.dmOn ? ' on' : ''}" data-pact="land-dm">${svg(p.dmOn ? 'danmaku' : 'danmaku-off')}<i class="led" style="right:3px;top:3px"></i></span>` : ''}<span class="pbtn sm">${svg('more')}</span></div>
-      <div style="position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);display:flex;justify-content:center;align-items:center;gap:56px">${sb('rw10', 'land-rw', 52, 26)}${sb(p.playing ? 'pause' : 'play', 'land-play', 68, 30)}${sb('ff10', 'land-ff', 52, 26)}</div>
-      <div class="il glass" style="left:44px;right:44px;width:auto;height:52px;bottom:14px;transform:none;border-radius:26px">
-        <div class="il-row" style="left:0;right:0;height:52px;padding:0 10px 0 14px">
-          <span class="il-t mp-time" style="width:42px">${fmt(p.t)}</span>
-          <div class="il-pg" style="height:30px"><div class="msk" style="${gapMask(p)}"><div class="tr" style="top:13.5px"></div><div class="bd land-b" style="width:${r}%;top:12.5px"></div></div></div>
-          <span class="il-t" style="width:46px">${fmt(p.dur)}</span><i class="il-sep"></i>
-          ${dmi ? '<span class="il-chip" style="height:30px;padding:0 12px;font-size:12px;font-weight:500;color:rgba(255,255,255,.6)">发弹幕…</span>' : ''}
-          <span class="il-txt">${rateLabel(p.rate)}</span><span class="pbtn sm">${svg('cc')}</span><span class="pbtn sm">${svg('episodes')}</span><span class="pbtn sm">${svg('sliders')}</span>
-        </div>
-      </div></div>`;
-    if (p.video) $('.player', phLand).insertBefore(p.video, $('.player', phLand).firstChild);
-    $$('.pbtn', phLand).forEach(b => bindJelly(b, 'S'));
-  }
   function setLand(on) {
     M.land = on;
     const portrait = [phStatus, phBody, phTabs, phMini];
-    if (on) { renderLand(); portrait.forEach(x => (x.style.visibility = 'hidden')); phLand.style.display = ''; phone.classList.add('land'); }
-    else { phLand.style.display = 'none'; phLand.innerHTML = ''; portrait.forEach(x => (x.style.visibility = '')); phone.classList.remove('land'); S.mode = S.player ? 'mini' : 'closed'; renderPhone(false); }
+    if (on) {
+      phLand.innerHTML = '<div class="player isl ph"></div>';
+      PV = phLand.firstElementChild; S.mode = 'full';
+      portrait.forEach(x => (x.style.visibility = 'hidden')); phLand.style.display = ''; phone.classList.add('land');
+      buildPlayer(); wakeUi();
+    } else {
+      if (S.player && S.player.panelTab) S.player.panelTab = null;
+      PV = player;
+      phLand.style.display = 'none'; phLand.innerHTML = ''; portrait.forEach(x => (x.style.visibility = '')); phone.classList.remove('land'); S.mode = S.player ? 'mini' : 'closed'; renderPhone(false);
+    }
     fitStage();
     if (!RM()) { phone.style.transform = `rotate(${on ? 90 : -90}deg) scale(.7)`; tween(TOKENS.hero, p => { phone.style.transform = `rotate(${(on ? 90 : -90) * (1 - p)}deg) scale(${0.7 + 0.3 * p})`; }, () => { phone.style.transform = ''; }); }
   }
@@ -1260,25 +1319,19 @@
     day: el => { M.day = +el.dataset.d; renderPhone(false); },
     libseg: el => { M.libSeg = el.dataset.seg; renderPhone(false); },
     me: () => phSheetOpen([Store.has('sync') && { t: '账号 · 弹弹play / Bangumi', icon: 'user', run: () => toast(phone, '已登录 · Nipa') }, { t: '观看历史', icon: 'list', run: () => toast(phone, '原型：观看历史') }, { t: '设置', icon: 'gear', run: () => phPush({ type: 'settings' }) }].filter(Boolean)),
-    'land-back': () => setLand(false),
-    'land-play': () => { setPlaying(!S.player.playing, false); renderLand(); centerFb(S.player.playing ? 'play' : 'pause', phLand); },
-    'land-rw': () => { const p = S.player; p.t = Math.max(0, p.t - 10); if (p.video) p.video.currentTime = p.t; centerFb('rw10', phLand); },
-    'land-ff': () => { const p = S.player; p.t = Math.min(p.dur, p.t + 10); if (p.video) p.video.currentTime = p.t; centerFb('ff10', phLand); },
-    'land-dm': () => { S.player.dmOn = !S.player.dmOn; renderLand(); },
     'mini-expand': () => setLand(true),
     'mini-toggle': () => { setPlaying(!S.player.playing, false); renderPhone(false); },
     'mini-close': () => { stopPlayback(); renderPhone(false); },
   };
   phone.addEventListener('click', e => { const el = e.target.closest('[data-pact]'); if (el && PACT[el.dataset.pact]) PACT[el.dataset.pact](el, e); });
-  setInterval(() => { if (M.land && S.player) { const r = S.player.t / S.player.dur; const b = $('.land-b', phLand), k = $('.land-k', phLand); if (b) b.style.width = r * 100 + '%'; if (k) k.style.left = r * 100 + '%'; } }, 250);
 
   /* ------------------------------------------------------------------
      原型工具栏 / 启动
      ------------------------------------------------------------------ */
   function setDevice(d) {
     if (S.device === d) return;
-    if (S.player && S.mode === 'full') playerToMini();
     if (M.land) setLand(false);
+    if (S.player && S.mode === 'full') playerToMini();
     S.device = d; kv.set('app.device', d);
     $$('#pbDevice span').forEach(s => s.classList.toggle('on', s.dataset.dev === d));
     fitStage();

@@ -1,5 +1,5 @@
 /* =====================================================================
-   NipaPlay Next · 交互原型（在 doc.css 的线框稿系统之上）
+   Erika · 交互原型（在 doc.css 的线框稿系统之上）
    ===================================================================== */
 body.proto { margin: 0; height: 100vh; overflow: hidden; display: flex; flex-direction: column; background: var(--surface-2); }
 .proto-bar {
@@ -108,12 +108,13 @@ body.proto { margin: 0; height: 100vh; overflow: hidden; display: flex; flex-dir
 /* 播放器 · 胶囊岛（样式在 doc.css「播放器 · 胶囊岛」） */
 .app-player { z-index: 30; cursor: default; }
 .player > video.video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
-.app-player .ui { transition: opacity .3s; }
-.app-player.hide-ui .ui { opacity: 0; pointer-events: none; }
+.player.isl .ui { transition: opacity .3s; }
+.player.isl.hide-ui .ui { opacity: 0; pointer-events: none; }
 .app-player.hide-ui { cursor: none; }
-.app-player .il-cap { transition: transform .5s cubic-bezier(.3, 1.45, .5, 1); }
-.app-player.hide-ui .il-cap { transform: scale(.92); transition: transform .4s ease; }
-.app-player.hide-ui .il { transform: translateX(-50%) translateY(12px) scale(.9); transition: opacity .3s ease, transform .4s ease; }
+.player.ph { border-radius: 30px; }
+.player.isl .il-cap { transition: transform .5s cubic-bezier(.3, 1.45, .5, 1); }
+.player.isl.hide-ui .il-cap { transform: scale(.92); transition: transform .4s ease; }
+.player.isl.hide-ui .il { transform: translateX(-50%) translateY(12px) scale(.9); transition: opacity .3s ease, transform .4s ease; }
 .center-fb { position: absolute; left: 50%; top: 50%; width: 76px; height: 76px; margin: -38px 0 0 -38px; border-radius: 50%; background: rgba(0, 0, 0, .55); color: #fff; display: grid; place-items: center; opacity: 0; pointer-events: none; backdrop-filter: blur(10px); z-index: 8; }
 .center-fb .i { width: 32px; height: 32px; }
 .dm-layer span.mine { outline: 1.5px solid rgba(255, 255, 255, .85); outline-offset: 3px; border-radius: 4px; }
@@ -143,7 +144,7 @@ body.proto { margin: 0; height: 100vh; overflow: hidden; display: flex; flex-dir
 .sw-row .sw.on i { box-shadow: 0 0 0 2px var(--wf-bg), 0 0 0 4px var(--text); }
 .sw-row .sw.on { color: var(--text); font-weight: 650; }
 .about { text-align: center; padding-top: 30px; }
-.about img.logo { height: 90px; margin: 0 auto 10px; }
+.about img.logo { height: 100px; margin: 0 auto 6px; }
 .menu { position: absolute; z-index: 90; min-width: 180px; padding: 5px; border-radius: 11px; background: var(--wf-bg); border: 1px solid var(--line-2);
   box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .35); transform-origin: 50% 0; }
 .menu .mi2 { display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; border-radius: 7px; font-size: 13px; cursor: pointer; white-space: nowrap; }
