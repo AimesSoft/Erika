@@ -154,8 +154,6 @@ main { min-width: 0; padding: 0 56px 120px; }
 /* ---------- Cover ---------- */
 .cover { position: relative; margin: 0 -56px; min-height: 560px; overflow: hidden; isolation: isolate; }
 .cover .band { position: absolute; inset: 0 0 auto 0; height: 360px; z-index: -2; }
-.cover .girl { position: absolute; right: calc((100% - min(1080px, 100% - 112px)) / 2 + 36px); top: 28px; width: 300px; z-index: -1;
-  filter: drop-shadow(0 20px 30px rgba(0, 0, 0, .18)); }
 .cover .card {
   position: relative; margin: 180px auto 0; max-width: 1080px; width: calc(100% - 112px);
   background: var(--surface); border-radius: 28px; padding: 44px 48px 40px; box-shadow: var(--shadow-lg);
@@ -566,7 +564,6 @@ pre.code .s { color: var(--accent-ink); }
   main { padding: 0 16px 100px; }
   .cover { margin: 0 -16px; min-height: 0; }
   .cover .band { height: 260px; }
-  .cover .girl { width: 200px; top: 56px; right: 12px; }
   .cover .card { width: calc(100% - 32px); margin-top: 190px; padding: 26px 22px; border-radius: 22px; }
   .cover h1 { font-size: 34px; }
   .cover .lead { font-size: 17px; }

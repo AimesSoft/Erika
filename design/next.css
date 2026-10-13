@@ -233,7 +233,8 @@ body:not(.dev-fold) .nxp-bar .nxp-fold { display: none; }
 .nx .x-side .x-sep { font: var(--t-cap); color: var(--on3); padding: 16px 12px 6px; }
 .nx .x-mini { margin-top: auto; }
 .nx .x-acct { display: flex; align-items: center; gap: 10px; padding: 10px 6px 0; }
-.nx .x-av { width: 30px; height: 30px; border-radius: 50%; background: url(assets/girl.png) 50% 12% / 170% no-repeat, var(--f2); flex: none; }
+/* 头像：没有登录头像时是通用的人形占位 */
+.nx .x-av { width: 30px; height: 30px; border-radius: 50%; background: radial-gradient(circle at 50% 40%, var(--on3) 0 19%, transparent 20%), radial-gradient(60% 46% at 50% 100%, var(--on3) 0 99%, transparent 100%), var(--f2); flex: none; }
 .nx .x-acct .tx { flex: 1; min-width: 0; line-height: 1.25; }
 .nx .x-acct .tx b { display: block; font: var(--t-title); }
 .nx .x-acct .tx span { font: var(--t-cap); color: var(--on2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
@@ -971,7 +972,6 @@ body:not(.dev-fold) .nxp-bar .nxp-fold { display: none; }
 .nx .o-dots i.on { width: 20px; background: var(--on); }
 .nx .o-welcome { position: absolute; inset: 0 0 72px; display: grid; grid-template-columns: 1fr 1fr; }
 .nx .o-welcome .art { position: relative; overflow: hidden; }
-.nx .o-welcome .art img.girl { position: absolute; left: 50%; bottom: -10px; height: 330px; transform: translateX(-50%); }
 .nx .o-welcome .tx { padding: 64px 44px 0; }
 .nx .o-welcome .tx img { height: 84px; margin: 0 0 18px -8px; }
 /* Erika 标题字：跟随这个窗口自己的浅色 / 深色切换 */

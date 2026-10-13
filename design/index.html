@@ -51,7 +51,6 @@
   <!-- ============ 封面 ============ -->
   <header class="cover">
     <div class="band plaid-academy"></div>
-    <img class="girl" src="assets/girl.png" alt="Erika 看板娘">
     <div class="card">
       <img class="logo erika-lg lt" src="brand/erika-logo.svg" alt="ERIKA エリカ"><img class="logo erika-lg dk" src="brand/erika-logo-dark.svg" alt="">
       <h1>Erika 界面设计文档</h1>
@@ -104,7 +103,7 @@
       <div class="card"><span class="k">P3</span><h4>常用的放在手边</h4><p class="small muted">最常用的操作一次点击就能完成：打开文件、继续观看、开关弹幕、切字幕/音轨、调倍速。次常用的最多两次。其余的放进设置。</p></div>
       <div class="card"><span class="k">P4</span><h4>静与动的反差</h4><p class="small muted">静止时像一页排好版的杂志。一旦操作，元素要有重量和弹性：按下会收缩，松手会回弹，从哪里来就回到哪里去。</p></div>
       <div class="card"><span class="k">P5</span><h4>颜色像墨水，不像油漆</h4><p class="small muted">主题色是滴在纸上的墨，不是刷墙的漆。只给按钮和文字用，每屏最多一个主要按钮，其他地方都是中性色。</p></div>
-      <div class="card"><span class="k">P6</span><h4>二次元是布料，不是贴纸</h4><p class="small muted">格子纹和水手领线条织在背景表面里，不贴在控件上。看板娘只在空状态、引导和「关于」里出现，浏览和播放时不出现。</p></div>
+      <div class="card"><span class="k">P6</span><h4>二次元是布料，不是贴纸</h4><p class="small muted">格子纹和水手领线条织在背景表面里，不贴在控件上，浏览和播放时不出现。</p></div>
     </div>
   </section>
 
@@ -214,7 +213,7 @@ module "danmaku" {
     <p class="lead2">引导一共四步，大部分人在第二步选个预设就可以一路「继续」到底：开始 → 选「看番」→ 继续 → 开始使用，四次点击。下面是可以点的画框版：选起点、开关模块，右边的小窗口实时组装（主题色和明暗也能在这里改）；点「开始使用」，这扇小窗口长成你的 Erika。</p>
 
     <div class="flow">
-      <div><b>欢迎</b>Logo、看板娘、学院格</div>
+      <div><b>欢迎</b>Logo、学院格</div>
       <div><b>选起点 · 微调</b>纯粹 / 看番 / 全都要 / 自己挑，下面是全部模块的开关</div>
       <div><b>外观</b>主题色、明暗</div>
       <div><b>完成</b>小窗口长成主窗口</div>
@@ -506,20 +505,6 @@ module "danmaku" {
 uniform-check:  base 30 · band(ink 4.5%) 14 · base 6 · line(accent 28%) 1 · base 6 · band 14 · base 33
 academy-tartan: navy 22 · band(black 30%) 34 · 6 · line(accent 92%) 3 · 6 · band 34 · 15 · line(white 50%) 1.5 · 16.5
 skirt-tartan:   accent 18 · band(black 22%) 28 · 6 · line(navy 80%) 3 · 6 · band 28 · 11 · line(white 70%) 1.5 · 14.5</pre>
-
-    <h4>看板娘</h4>
-    <div class="grid g2">
-      <div class="card plaid-uniform" style="display:flex;gap:20px;align-items:center;min-height:220px">
-        <img src="assets/girl.png" alt="" style="width:150px;flex:none">
-        <div><div class="t2" style="font-size:19px;margin-bottom:4px">这里还空空的</div><p class="small muted">添加一个文件夹，Erika 会自动识别番剧并找到封面。</p><span class="b p">添加文件夹</span></div>
-      </div>
-      <div class="card"><h4>只在这些地方出现</h4><ul class="small muted" style="padding-left:1.1em;margin:0">
-        <li>空状态：没有媒体、没有搜索结果、离线</li>
-        <li>引导的第一页和最后一页</li>
-        <li>关于页、出错页</li>
-        <li>尺寸不超过 160px，不出现在浏览和播放的主流程里</li>
-      </ul></div>
-    </div>
   </section>
 
   <!-- ============ 08 动效 ============ -->
