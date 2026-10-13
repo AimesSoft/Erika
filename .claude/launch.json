@@ -4,7 +4,7 @@
     {
       "name": "design-doc",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "4179", "--bind", "127.0.0.1", "--directory", "/Library/Afolder/RustProject/NipaPlay-Next/design"],
+      "runtimeArgs": ["/Library/Afolder/RustProject/NipaPlay-Next/design/.claude/serve.py", "4179"],
       "port": 4179
     }
   ]
