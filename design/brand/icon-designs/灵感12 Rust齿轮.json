@@ -1,0 +1,63 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "d37",
+      "type": "star",
+      "x": 512,
+      "y": 512,
+      "w": 700,
+      "h": 700,
+      "rot": 0,
+      "fill": "#CE422B",
+      "lock": true,
+      "r": 10,
+      "n": 12,
+      "inner": 0.86,
+      "under": true
+    },
+    {
+      "id": "smv68t6iza",
+      "type": "play",
+      "x": 565.93,
+      "y": 520.07,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "smv68t6r9b",
+      "type": "play",
+      "x": 488.79,
+      "y": 563.98,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 52
+    },
+    {
+      "id": "smv68t6xdc",
+      "type": "play",
+      "x": 488.79,
+      "y": 475.43,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 30
+    }
+  ],
+  "blend": {
+    "on": true,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "灵感12 Rust齿轮",
+  "updatedAt": 1791873727108
+}

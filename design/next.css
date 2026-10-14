@@ -1,30 +1,15 @@
 /* =====================================================================
-   Erika · 画框版全量设计预览
+   Erika · 界面：文档（index.html）和交互原型（app.html）里每一扇窗口的样式
    - 布局和动效是 Erika 自己的；控件是各平台原生控件
-   - 五套外观（苹果 · Material 3 · Fluent 2 · libadwaita · 网页）× 浅色 / 深色，只在网页里模拟原生控件的样子
+   - 六种设计语言（苹果 · 鸿蒙 · Material 3 · Fluent 2 · libadwaita · 网页）× 浅色 / 深色，只在网页里模拟原生控件的样子
    - 所有类名带 x- / c- 前缀，避开 doc.css 的全局类
    ===================================================================== */
 
-/* ---------------- 预览页 ---------------- */
-main.nxp { max-width: 1240px; margin: 0 auto; padding: 48px 32px 160px; }
-.nxp .lead2 { max-width: 860px; }
+/* ---------------- 文档里的切换栏、设备外框、每屏的说明卡 ---------------- */
 .nxp-bar { position: sticky; top: 0; z-index: 30; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 12px 0; margin: 10px 0 8px;
   background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
 .nxp-bar .lb { font-size: 12px; font-weight: 650; color: var(--text-3); margin-right: -8px; }
 .nxp-bar .seg span { cursor: pointer; }
-.nxp-bar .sw-b { all: unset; cursor: pointer; width: 22px; height: 22px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .12); }
-.nxp-bar .sw-b.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--text); }
-.nxp-toc { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 0; }
-.nxp-toc a { font-size: 13px; padding: 4px 10px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); margin: 0; }
-.nxp-toc a::before { content: none !important; }
-.nxp-toc a:hover { text-decoration: none; color: var(--text); }
-.nxp-sec { padding-top: 64px; scroll-margin-top: 70px; }
-.nxp-sec > .hd { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
-.nxp-sec > .hd .no { font: 800 40px/1 var(--font); color: var(--text-3); width: 56px; flex: none; }
-.nxp-sec > .hd h3 { margin: 0; font-size: 26px; }
-.nxp-sec > .hd p { margin: 4px 0 0; color: var(--text-2); font-size: 15.5px; max-width: 780px; }
-.nxp-sec > .hd .acts { margin-left: auto; display: flex; gap: 8px; }
-.nxp-sec > .hd .acts .b { cursor: pointer; }
 .nxp-stage-wrap { position: relative; border-radius: 16px; overflow: hidden; background: #000; box-shadow: var(--shadow-lg); margin: 0 auto; }
 .nxp-stage-wrap.ph { border-radius: 52px; border: 10px solid #101012; box-sizing: content-box; }
 .nxp-stage-wrap.ph.land { border-radius: 40px; }
@@ -52,10 +37,9 @@ body:not(.dev-fold) .nxp-bar .nxp-fold { display: none; }
 .nxp table.par td { vertical-align: top; font-size: 13.5px; line-height: 1.6; }
 .nxp table.par td:first-child { white-space: nowrap; }
 .nxp table.par td:nth-child(2) { min-width: 220px; }
-.nxp .pa { display: inline-block; font: 700 11px/1 var(--font); padding: 3px 6px; border-radius: 6px; background: rgba(var(--accent-rgb), .16); color: var(--accent-solo); margin-right: 4px; vertical-align: 1px; }
 @media (max-width: 980px) { .nxp-rev { grid-template-columns: 1fr 1fr; } .nxp-rev .fix ul { columns: 1; } }
 @media (max-width: 640px) {
-  main.nxp { padding: 28px 16px 120px; } .nxp-rev { grid-template-columns: 1fr; }
+  .nxp-rev { grid-template-columns: 1fr; }
   /* 和 doc.css 的 .nx-bar 一样：手机宽度下分段可以换行，顶栏不吸顶（换行后太高）；标签独占一行，不和上一组挤在一起 */
   .nxp-bar { position: static; row-gap: 6px; } .nxp-bar .lb { flex-basis: 100%; margin: 4px 0 0; }
   .nxp-bar .seg { flex-wrap: wrap; flex: 0 1 auto; } .nxp-bar .seg span { padding: 0 10px; }
@@ -817,7 +801,7 @@ body:not(.dev-fold) .nxp-bar .nxp-fold { display: none; }
 
 /* ---- 媒体库：缩放墙 ---- */
 .nx .l-hd { display: flex; align-items: center; gap: 12px; margin: 2px 0 14px; }
-.nx .l-hd .x-lt { margin: 0; }
+.nx .l-hd .x-lt { margin: 0; flex: none; white-space: nowrap; }
 .nx .l-zoom { display: flex; align-items: center; gap: 8px; color: var(--on2); }
 .nx .l-zoom .c-slider { width: 120px; margin: 0 8px; }
 .nx .l-zoom .i { width: 14px; height: 14px; } .nx .l-zoom .big .i { width: 20px; height: 20px; }

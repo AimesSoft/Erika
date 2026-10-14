@@ -1,0 +1,10 @@
+[package]
+name = "erika-library-core"
+description = "The library module: its engine"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true
+erika-library-protocol = { path = "../protocol" }

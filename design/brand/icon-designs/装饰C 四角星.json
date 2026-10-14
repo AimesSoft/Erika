@@ -1,0 +1,76 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "smv68t6iza",
+      "type": "play",
+      "x": 499.93,
+      "y": 549.07,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "smv68t6r9b",
+      "type": "play",
+      "x": 422.79,
+      "y": 592.98,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 52
+    },
+    {
+      "id": "smv68t6xdc",
+      "type": "play",
+      "x": 422.79,
+      "y": 504.43,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "deco1",
+      "type": "star",
+      "x": 646,
+      "y": 359,
+      "w": 168,
+      "h": 168,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": true,
+      "r": 8,
+      "n": 4,
+      "inner": 0.3
+    },
+    {
+      "id": "deco2",
+      "type": "star",
+      "x": 724,
+      "y": 459,
+      "w": 76,
+      "h": 76,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": true,
+      "r": 4,
+      "n": 4,
+      "inner": 0.3
+    }
+  ],
+  "blend": {
+    "on": true,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "装饰C 四角星",
+  "updatedAt": 1791872991308
+}

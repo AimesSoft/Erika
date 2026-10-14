@@ -1,0 +1,74 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "d34",
+      "type": "rect",
+      "x": 512,
+      "y": 544.5,
+      "w": 600,
+      "h": 440,
+      "rot": 0,
+      "fill": "#213A6B",
+      "lock": false,
+      "r": 72,
+      "under": true
+    },
+    {
+      "id": "d35",
+      "type": "rect",
+      "x": 330,
+      "y": 324.5,
+      "w": 230,
+      "h": 130,
+      "rot": 0,
+      "fill": "#213A6B",
+      "lock": false,
+      "r": 46,
+      "under": true
+    },
+    {
+      "id": "smv68t6iza",
+      "type": "play",
+      "x": 565.93,
+      "y": 544.57,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "smv68t6r9b",
+      "type": "play",
+      "x": 488.79,
+      "y": 588.48,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 52
+    },
+    {
+      "id": "smv68t6xdc",
+      "type": "play",
+      "x": 488.79,
+      "y": 499.93,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 30
+    }
+  ],
+  "blend": {
+    "on": true,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "灵感10 本地文件夹",
+  "updatedAt": 1791873725278
+}

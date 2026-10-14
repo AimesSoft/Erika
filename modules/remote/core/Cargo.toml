@@ -1,0 +1,10 @@
+[package]
+name = "erika-remote-core"
+description = "The remote module: its engine"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true
+erika-remote-protocol = { path = "../protocol" }

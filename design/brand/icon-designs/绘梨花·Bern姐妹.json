@@ -1,0 +1,91 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "f18",
+      "type": "ellipse",
+      "x": 512,
+      "y": 512,
+      "w": 1024,
+      "h": 1024,
+      "rot": 0,
+      "fill": "#4A8CEB",
+      "lock": true
+    },
+    {
+      "id": "f19",
+      "type": "rect",
+      "x": 421.76,
+      "y": 741.6,
+      "w": 470,
+      "h": 340,
+      "rot": -10,
+      "fill": "#22314F",
+      "lock": false,
+      "r": 18
+    },
+    {
+      "id": "f20",
+      "type": "semi",
+      "x": 465.87,
+      "y": 991.74,
+      "w": 470,
+      "h": 250,
+      "rot": 170,
+      "fill": "#22314F",
+      "lock": false,
+      "r": 0
+    },
+    {
+      "id": "f21",
+      "type": "ellipse",
+      "x": 355.12,
+      "y": 769.59,
+      "w": 44.65,
+      "h": 70.5,
+      "rot": -10,
+      "fill": "#DCE6FF",
+      "lock": true
+    },
+    {
+      "id": "f22",
+      "type": "ellipse",
+      "x": 493.97,
+      "y": 745.11,
+      "w": 44.65,
+      "h": 70.5,
+      "rot": -10,
+      "fill": "#DCE6FF",
+      "lock": true
+    },
+    {
+      "id": "f23",
+      "type": "ellipse",
+      "x": 322,
+      "y": 420,
+      "w": 150,
+      "h": 150,
+      "rot": 0,
+      "fill": "#D02A3E",
+      "lock": true
+    },
+    {
+      "id": "f24",
+      "type": "ellipse",
+      "x": 313,
+      "y": 411,
+      "w": 75,
+      "h": 75,
+      "rot": 0,
+      "fill": "#8C1428",
+      "lock": true
+    }
+  ],
+  "blend": {
+    "on": false,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "绘梨花·Bern姐妹",
+  "updatedAt": 1791874488418
+}

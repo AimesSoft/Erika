@@ -46,9 +46,10 @@
 <main class="brand">
   <div class="eyebrow"><span class="sailor"></span><b>品牌</b> 标题字 v2 · 清新配色</div>
   <h2>NipaPlay 标题字重绘</h2>
+  <div class="callout"><p>项目已改名 Erika，新的标题字在 <a href="erika.html">Erika 标题字</a>（绀青、带入场动效）。这一页保留为 NipaPlay 时期的记录。</p></div>
   <p class="lead2">字母和日文沿用原 logo 的大小、位置和倾斜，重画成圆头等粗的矢量笔画；播放图标重新设计；左侧的 Flutter 图形去掉了。这一版换成了更清新的配色：樱粉、柠檬黄、薄荷绿、天空蓝四色轮换，投影换成浅天蓝，高光改成软糖一样的短胶囊加小点。播放图标去掉了细线，改成更尖一点、倾斜更少的三角形，读起来更像「播放」。</p>
 
-  <div class="hero"><img src="nipaplay-next-tag.svg" alt="NipaPlay Next 标题字"></div>
+  <div class="hero"><img src="nipaplay-next-tag.svg" alt="Erika 标题字"></div>
   <div class="pair">
     <div class="tile dark"><span class="lb">深色背景</span><img src="nipaplay-next-tag.svg" alt=""></div>
     <div class="tile plaid-academy"><span class="lb" style="color:rgba(255,255,255,.7)">学院格背景</span><img src="nipaplay-next-tag.svg" alt=""></div>
@@ -107,40 +108,41 @@
   </div>
   <p class="small muted" style="margin-top:12px">三个图层的位置和 <code>new-icon.icon/Assets</code> 里的位图图层一致，可以直接在 Icon Composer 里替换，重新生成液态玻璃版本（apple / apple-dark）。Windows 和 Android 的图标是同一个图形换了缩放，可以从这份 SVG 直接导出。</p>
 
-  <h3>Next 图标</h3>
-  <p>在圆角版上只改一处：红色播放三角的尖端前加一根同色竖条，▶ 变成媒体控件里的「下一个」⏭，一眼能和旧版区分开，意思也正好是 Next。蓝圆、花苞、配色都不变。竖条宽 60、圆头，和三角形底边平行，离尖端 32，离蓝圆边缘至少 19。</p>
+  <h3>Erika 图标 · 早期方案（未采用）</h3>
+  <div class="callout"><p>图标已经定稿：蓝发齐刘海的猫耳女孩，见 <a href="erika-icon.html">Erika 图标</a>，各平台文件在 <code>brand/erika-icon-export/</code>。下面的竖条版、烟雾版和液态玻璃版都是改名之初的尝试，保留作记录。</p></div>
+  <p>在圆角版上只改一处：红色播放三角的尖端前加一根同色竖条，▶ 变成媒体控件里的「下一个」⏭，一眼能和旧版区分开，意思是「下一个」。蓝圆、花苞、配色都不变。竖条宽 60、圆头，和三角形底边平行，离尖端 32，离蓝圆边缘至少 19。</p>
   <div class="pair" style="grid-template-columns:repeat(4,minmax(0,1fr))">
     <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">旧版</span><img src="icon/nipaplay-icon-rounded.svg" alt="" style="width:78%"></div>
-    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">Next</span><img src="icon/nipaplay-icon-next.svg" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">⏭ 竖条</span><img src="icon/erika-icon-bar.svg" alt="" style="width:78%"></div>
     <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">旧版 · macOS</span><img src="icon/nipaplay-icon-macos-rounded.svg" alt="" style="width:78%"></div>
-    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">Next · macOS</span><img src="icon/nipaplay-icon-next-macos.svg" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">⏭ 竖条 · macOS</span><img src="icon/erika-icon-bar-macos.svg" alt="" style="width:78%"></div>
   </div>
   <h4>炫彩烟雾（流体模拟）</h4>
   <p class="small muted">参考 Apple TV 图标：彩色的烟关在形状里飘散，定格在某一帧。烟是真实的流体模拟（Stable Fluids + 涡量增强），每个形状各跑一套，烟被形状的边挡住；颜色只用和底色相邻的色相，用滤色叠在纯色上，只会变亮不会发灰；再用一个位置遮罩让烟集中在冒烟的那条边。用 <a href="smoke/">烟雾工作台</a> 可以换种子、拖帧数、调浓度和卷曲，定格后导出 1024 / 2048 位图；当前这帧是「种子 48 · 第 80 帧」。</p>
   <div class="pair" style="grid-template-columns:repeat(4,minmax(0,1fr))">
-    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">烟雾</span><img src="icon/nipaplay-icon-next-smoke.png" alt="" style="width:78%"></div>
-    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">烟雾 + ⏭</span><img src="icon/nipaplay-icon-next-smoke-bar.png" alt="" style="width:78%"></div>
-    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">烟雾 · macOS</span><img src="icon/nipaplay-icon-next-smoke-macos.png" alt="" style="width:78%"></div>
-    <div class="tile dark" style="min-height:200px"><span class="lb">烟雾 · 深色背景</span><img src="icon/nipaplay-icon-next-smoke-macos.png" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">烟雾</span><img src="icon/erika-icon-smoke.png" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">烟雾 + ⏭</span><img src="icon/erika-icon-smoke-bar.png" alt="" style="width:78%"></div>
+    <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">烟雾 · macOS</span><img src="icon/erika-icon-smoke-macos.png" alt="" style="width:78%"></div>
+    <div class="tile dark" style="min-height:200px"><span class="lb">烟雾 · 深色背景</span><img src="icon/erika-icon-smoke-macos.png" alt="" style="width:78%"></div>
   </div>
   <div class="sizes" style="background:#D6DAE2">
-    <figure><img src="icon/nipaplay-icon-next-smoke-macos.png" width="128" alt="">128</figure>
-    <figure><img src="icon/nipaplay-icon-next-smoke-macos.png" width="64" alt="">64</figure>
-    <figure><img src="icon/nipaplay-icon-next-smoke-macos.png" width="32" alt="">32</figure>
-    <figure><img src="icon/nipaplay-icon-next-smoke-macos.png" width="16" alt="">16</figure>
+    <figure><img src="icon/erika-icon-smoke-macos.png" width="128" alt="">128</figure>
+    <figure><img src="icon/erika-icon-smoke-macos.png" width="64" alt="">64</figure>
+    <figure><img src="icon/erika-icon-smoke-macos.png" width="32" alt="">32</figure>
+    <figure><img src="icon/erika-icon-smoke-macos.png" width="16" alt="">16</figure>
     <figure style="margin-left:auto;align-self:center"><a class="b" href="smoke/" style="display:inline-flex;height:36px;padding:0 16px;border-radius:999px;background:#fff;align-items:center;font-weight:600">打开烟雾工作台</a></figure>
   </div>
   <div class="sizes" style="background:#D6DAE2">
-    <figure><img src="icon/nipaplay-icon-next-macos.svg" width="128" alt="">128</figure>
-    <figure><img src="icon/nipaplay-icon-next-macos.svg" width="64" alt="">64</figure>
-    <figure><img src="icon/nipaplay-icon-next-macos.svg" width="32" alt="">32</figure>
-    <figure><img src="icon/nipaplay-icon-next-macos.svg" width="16" alt="">16</figure>
-    <figure style="margin-left:24px"><img src="icon/layer-red-next.svg" width="72" alt="" style="background:#FFFFFF;border-radius:10px">红层 · Next</figure>
+    <figure><img src="icon/erika-icon-bar-macos.svg" width="128" alt="">128</figure>
+    <figure><img src="icon/erika-icon-bar-macos.svg" width="64" alt="">64</figure>
+    <figure><img src="icon/erika-icon-bar-macos.svg" width="32" alt="">32</figure>
+    <figure><img src="icon/erika-icon-bar-macos.svg" width="16" alt="">16</figure>
+    <figure style="margin-left:24px"><img src="icon/layer-red-bar.svg" width="72" alt="" style="background:#FFFFFF;border-radius:10px">红层 · ⏭</figure>
   </div>
 
   <section id="glass">
-  <h3>液态玻璃图标（定稿：烟雾 · 种子 48 · 第 80 帧）</h3>
-  <p>三个零件拆成三张独立的图层（1024 透明 PNG，位置和旧 <code>new-icon.icon</code> 的图层一致），蓝色那层是完整的形状，包括被红色挡住的部分。用它们组装成 Icon Composer 工程 <code>icon/NipaPlay-Next.icon</code>，沿用旧工程的设置：红色播放键开玻璃，阴影 neutral 50%、半透明 50%，绿色花苞偏移 (43, −29)、蓝色缩放 0.96。下面的效果图都是用 Xcode 自带的 <code>ictool</code> 从这份工程直接渲染的。</p>
+  <h3>液态玻璃图标（早期方案，未采用：烟雾 · 种子 48 · 第 80 帧）</h3>
+  <p>三个零件拆成三张独立的图层（1024 透明 PNG，位置和旧 <code>new-icon.icon</code> 的图层一致），蓝色那层是完整的形状，包括被红色挡住的部分。用它们组装成 Icon Composer 工程 <code>icon/Erika.icon</code>，沿用旧工程的设置：红色播放键开玻璃，阴影 neutral 50%、半透明 50%，绿色花苞偏移 (43, −29)、蓝色缩放 0.96。下面的效果图都是用 Xcode 自带的 <code>ictool</code> 从这份工程直接渲染的。</p>
   <div class="pair" style="grid-template-columns:repeat(3,minmax(0,1fr))">
     <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">花苞 · bud-green.png</span><img src="icon/layers-smoke/bud-green.png" alt="" style="width:78%"></div>
     <div class="tile" style="background:#D6DAE2;min-height:200px"><span class="lb" style="color:#555a66">脸 · face-blue.png</span><img src="icon/layers-smoke/face-blue.png" alt="" style="width:78%"></div>
@@ -148,7 +150,7 @@
   </div>
   <div class="sizes" style="background:#8A90A0;color:#fff"><span style="font-size:12px;color:#fff;font-weight:600;align-self:center;margin-right:6px">iOS</span><figure><img src="icon/glass/ios-Default.png" width="128" alt="">默认</figure><figure><img src="icon/glass/ios-Dark.png" width="128" alt="">深色</figure><figure><img src="icon/glass/ios-ClearLight.png" width="128" alt="">透明 · 浅</figure><figure><img src="icon/glass/ios-ClearDark.png" width="128" alt="">透明 · 深</figure><figure><img src="icon/glass/ios-TintedLight.png" width="128" alt="">着色 · 浅</figure><figure><img src="icon/glass/ios-TintedDark.png" width="128" alt="">着色 · 深</figure></div>
   <div class="sizes" style="background:#8A90A0;color:#fff"><span style="font-size:12px;color:#fff;font-weight:600;align-self:center;margin-right:6px">macOS</span><figure><img src="icon/glass/macos-Default.png" width="96" alt="">默认</figure><figure><img src="icon/glass/macos-Dark.png" width="96" alt="">深色</figure><figure><img src="icon/glass/macos-ClearLight.png" width="96" alt="">透明 · 浅</figure><figure><img src="icon/glass/macos-ClearDark.png" width="96" alt="">透明 · 深</figure><figure><img src="icon/glass/macos-TintedLight.png" width="96" alt="">着色 · 浅</figure><figure><img src="icon/glass/macos-TintedDark.png" width="96" alt="">着色 · 深</figure></div>
-  <p class="small muted" style="margin-top:12px">用法：把 <code>NipaPlay-Next.icon</code> 拖进 Xcode 工程即可（Xcode 26 起直接支持 .icon）；想微调玻璃参数就用 Icon Composer 打开它。各外观的 1024 效果图在 <code>icon/glass/</code>，单独的零件图层在 <code>icon/layers-smoke/</code>，Android 自适应图标、Windows 等也可以从这三层出图。</p>
+  <p class="small muted" style="margin-top:12px">用法：把 <code>Erika.icon</code> 拖进 Xcode 工程即可（Xcode 26 起直接支持 .icon）；想微调玻璃参数就用 Icon Composer 打开它。各外观的 1024 效果图在 <code>icon/glass/</code>，单独的零件图层在 <code>icon/layers-smoke/</code>，Android 自适应图标、Windows 等也可以从这三层出图。</p>
   </section>
 
   <h3>配色对比</h3>
@@ -197,7 +199,7 @@
     <span class="sw"><i style="background:#4A90E2"></i>日文 #4A90E2</span>
     <span class="sw"><i style="background:#7DB4F2"></i>投影 #7DB4F2</span>
   </div>
-  <p class="small muted" style="margin-top:18px">文件：<code>brand/nipaplay-next-tag.svg</code>（带 NEXT 标签，推荐）、<code>nipaplay-next-plain.svg</code>（NEXT 纯字样）、<code>nipaplay-logo-fresh.svg</code>（不带 NEXT，当前推荐 = 星星）；纯色剪影 <code>nipaplay-logo-silhouette.svg</code> / <code>nipaplay-logo-silhouette-white.svg</code>，单独图标剪影 <code>play-star-silhouette.svg</code>；四个方案的完整 logo <code>nipaplay-logo-{star,gummy,candy,gingham}.svg</code>，单独图标 <code>play-{star,gummy,candy,gingham}.svg</code>；<code>nipaplay-logo.svg</code> 是 v1 原配色；软件图标 <code>icon/nipaplay-icon.svg</code>、<code>icon/nipaplay-icon-macos.svg</code>，圆角版 <code>icon/nipaplay-icon-rounded.svg</code>、<code>icon/nipaplay-icon-macos-rounded.svg</code>，图层 <code>icon/layer-{green,blue,red}.svg</code>（圆角版蓝层 <code>icon/layer-blue-rounded.svg</code>）；Next 图标 <code>icon/nipaplay-icon-next.svg</code>、<code>icon/nipaplay-icon-next-macos.svg</code>，红层 <code>icon/layer-red-next.svg</code>；烟雾版 <code>icon/nipaplay-icon-next-smoke.png</code>、<code>-smoke-macos.png</code>、<code>-smoke-bar.png</code>（2048px，由 <code>smoke/</code> 工作台导出）；液态玻璃工程 <code>icon/NipaPlay-Next.icon</code>，零件图层 <code>icon/layers-smoke/</code>，效果图 <code>icon/glass/</code>。</p>
+  <p class="small muted" style="margin-top:18px">文件：<code>brand/nipaplay-next-tag.svg</code>（带 NEXT 标签，推荐）、<code>nipaplay-next-plain.svg</code>（NEXT 纯字样）、<code>nipaplay-logo-fresh.svg</code>（不带 NEXT，当前推荐 = 星星）；纯色剪影 <code>nipaplay-logo-silhouette.svg</code> / <code>nipaplay-logo-silhouette-white.svg</code>，单独图标剪影 <code>play-star-silhouette.svg</code>；四个方案的完整 logo <code>nipaplay-logo-{star,gummy,candy,gingham}.svg</code>，单独图标 <code>play-{star,gummy,candy,gingham}.svg</code>；<code>nipaplay-logo.svg</code> 是 v1 原配色；软件图标 <code>icon/nipaplay-icon.svg</code>、<code>icon/nipaplay-icon-macos.svg</code>，圆角版 <code>icon/nipaplay-icon-rounded.svg</code>、<code>icon/nipaplay-icon-macos-rounded.svg</code>，图层 <code>icon/layer-{green,blue,red}.svg</code>（圆角版蓝层 <code>icon/layer-blue-rounded.svg</code>）；⏭ 竖条版图标 <code>icon/erika-icon-bar.svg</code>、<code>icon/erika-icon-bar-macos.svg</code>，红层 <code>icon/layer-red-bar.svg</code>；烟雾版 <code>icon/erika-icon-smoke.png</code>、<code>-smoke-macos.png</code>、<code>-smoke-bar.png</code>（2048px，由 <code>smoke/</code> 工作台导出）；液态玻璃工程 <code>icon/Erika.icon</code>，零件图层 <code>icon/layers-smoke/</code>，效果图 <code>icon/glass/</code>。</p>
 </main>
 </body>
 </html>

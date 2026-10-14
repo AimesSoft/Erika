@@ -1,0 +1,61 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "d17",
+      "type": "semi",
+      "x": 629.5,
+      "y": 384.5,
+      "w": 280,
+      "h": 170,
+      "rot": -32,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 70,
+      "under": true
+    },
+    {
+      "id": "smv68t6iza",
+      "type": "play",
+      "x": 483.43,
+      "y": 552.57,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "smv68t6r9b",
+      "type": "play",
+      "x": 406.29,
+      "y": 596.48,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 52
+    },
+    {
+      "id": "smv68t6xdc",
+      "type": "play",
+      "x": 406.29,
+      "y": 507.93,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 30
+    }
+  ],
+  "blend": {
+    "on": true,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "灵感05 梨花·一片花瓣",
+  "updatedAt": 1791873720684
+}

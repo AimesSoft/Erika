@@ -1,0 +1,9 @@
+[package]
+name = "erika-danmaku-protocol"
+description = "The danmaku module: its state and commands"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true

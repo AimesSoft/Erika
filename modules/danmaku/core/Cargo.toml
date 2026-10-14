@@ -1,0 +1,10 @@
+[package]
+name = "erika-danmaku-core"
+description = "The danmaku module: its engine"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true
+erika-danmaku-protocol = { path = "../protocol" }

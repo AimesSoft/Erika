@@ -1,0 +1,152 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "smv68t6iza",
+      "type": "play",
+      "x": 565.93,
+      "y": 520.07,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "smv68t6r9b",
+      "type": "play",
+      "x": 488.79,
+      "y": 563.98,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 52
+    },
+    {
+      "id": "smv68t6xdc",
+      "type": "play",
+      "x": 488.79,
+      "y": 475.43,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "d9",
+      "type": "rect",
+      "x": 305,
+      "y": 262,
+      "w": 130,
+      "h": 44,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999,
+      "noBlend": true
+    },
+    {
+      "id": "d10",
+      "type": "rect",
+      "x": 262,
+      "y": 305,
+      "w": 44,
+      "h": 130,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999,
+      "noBlend": true
+    },
+    {
+      "id": "d11",
+      "type": "rect",
+      "x": 719,
+      "y": 262,
+      "w": 130,
+      "h": 44,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999,
+      "noBlend": true
+    },
+    {
+      "id": "d12",
+      "type": "rect",
+      "x": 762,
+      "y": 305,
+      "w": 44,
+      "h": 130,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999,
+      "noBlend": true
+    },
+    {
+      "id": "d13",
+      "type": "rect",
+      "x": 305,
+      "y": 762,
+      "w": 130,
+      "h": 44,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999,
+      "noBlend": true
+    },
+    {
+      "id": "d14",
+      "type": "rect",
+      "x": 262,
+      "y": 719,
+      "w": 44,
+      "h": 130,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999,
+      "noBlend": true
+    },
+    {
+      "id": "d15",
+      "type": "rect",
+      "x": 719,
+      "y": 762,
+      "w": 130,
+      "h": 44,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999,
+      "noBlend": true
+    },
+    {
+      "id": "d16",
+      "type": "rect",
+      "x": 762,
+      "y": 719,
+      "w": 44,
+      "h": 130,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999,
+      "noBlend": true
+    }
+  ],
+  "blend": {
+    "on": true,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "灵感04 取景框",
+  "updatedAt": 1791873719769
+}

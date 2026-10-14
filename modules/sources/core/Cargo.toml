@@ -1,0 +1,10 @@
+[package]
+name = "erika-sources-core"
+description = "The sources module: its engine"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true
+erika-sources-protocol = { path = "../protocol" }

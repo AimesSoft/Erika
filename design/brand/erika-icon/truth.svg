@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Erika 图标 · 红与蓝的真实">
+  <title>Erika · C 红与蓝的真实</title>
+  <!--
+    C 红与蓝的真实：一个播放三角（左边 x = 352、尖端 x = 762、上 275、下 749）沿中线切成上下两块，
+    上红下蓝，中间留 20 的缝；每块圆角 12（同色描边 24）。
+  -->
+  <rect class="bg" width="1024" height="1024" fill="#F3ECDF"/>
+  <path class="a" d="M364 295.8 L700 490 L364 490 Z" fill="#DC2A5A" stroke="#DC2A5A" stroke-width="24" stroke-linejoin="round"/>
+  <path class="m" d="M364 728.2 L700 534 L364 534 Z" fill="#213A6B" stroke="#213A6B" stroke-width="24" stroke-linejoin="round"/>
+</svg>

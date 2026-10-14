@@ -1,0 +1,36 @@
+# The downloads module: its own protocol, engine and interface. The
+# application lists it under [[modules]] in its Bern.toml.
+
+[module]
+id = "downloads"
+name = { "zh-Hans" = "下载", "en" = "Downloads" }
+# Modules this one calls, reads or answers events of. The application lists
+# them before this one.
+depends = []
+# `optional = true` lets the application switch this module off at run
+# time; `enabled = false` then keeps it off until switched on.
+optional = true
+
+[module.protocol]
+package = "erika-downloads-protocol"
+source = "protocol/src/lib.rs"
+
+[module.engine]
+package = "erika-downloads-core"
+type = "erika_downloads_core::DownloadsEngine"
+path = "core"
+
+[module.ui]
+package = "erika-downloads-ui"
+sources = "ui/src"
+
+[languages]
+supported = ["zh-Hans", "en"]
+default = "zh-Hans"
+
+[[pages]]
+slot = "main"
+id = "downloads"
+label = { "zh-Hans" = "下载", "en" = "Downloads" }
+icon = "arrow.down.circle"
+component = "downloads_page"

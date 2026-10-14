@@ -1,0 +1,84 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "d4",
+      "type": "rect",
+      "x": 322,
+      "y": 512,
+      "w": 86,
+      "h": 560,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999
+    },
+    {
+      "id": "d5",
+      "type": "rect",
+      "x": 500,
+      "y": 252,
+      "w": 440,
+      "h": 86,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 9999
+    },
+    {
+      "id": "d6",
+      "type": "rect",
+      "x": 500,
+      "y": 772,
+      "w": 440,
+      "h": 86,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 9999
+    },
+    {
+      "id": "smv68t6iza",
+      "type": "play",
+      "x": 625.93,
+      "y": 520.07,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "smv68t6r9b",
+      "type": "play",
+      "x": 548.79,
+      "y": 563.98,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 52
+    },
+    {
+      "id": "smv68t6xdc",
+      "type": "play",
+      "x": 548.79,
+      "y": 475.43,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 30
+    }
+  ],
+  "blend": {
+    "on": true,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "灵感02 E字",
+  "updatedAt": 1791873717940
+}

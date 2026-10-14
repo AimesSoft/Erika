@@ -1,0 +1,87 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "smv68t6iza",
+      "type": "play",
+      "x": 472.43,
+      "y": 589.57,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "smv68t6r9b",
+      "type": "play",
+      "x": 395.29,
+      "y": 633.48,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 52
+    },
+    {
+      "id": "smv68t6xdc",
+      "type": "play",
+      "x": 395.29,
+      "y": 544.93,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "d18",
+      "type": "semi",
+      "x": 641.5,
+      "y": 369.5,
+      "w": 120,
+      "h": 74,
+      "rot": -30,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 30,
+      "noBlend": true
+    },
+    {
+      "id": "d19",
+      "type": "semi",
+      "x": 746.5,
+      "y": 461.5,
+      "w": 84,
+      "h": 52,
+      "rot": 28,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 22,
+      "noBlend": true
+    },
+    {
+      "id": "d20",
+      "type": "semi",
+      "x": 546.5,
+      "y": 283.5,
+      "w": 70,
+      "h": 44,
+      "rot": 58,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 18,
+      "noBlend": true
+    }
+  ],
+  "blend": {
+    "on": true,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "灵感06 梨花·落瓣如雪",
+  "updatedAt": 1791873721598
+}

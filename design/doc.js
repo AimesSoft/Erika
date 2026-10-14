@@ -6,7 +6,7 @@
 
   const {
     $, $$, svg, kv, root, TOKENS, DEFAULTS, RM, Spring, run, tween, cancel, bindJelly,
-    enter, leave, setTheme, MODS, MOD, ALL, MiniWin, watchFrames, autoJelly,
+    enter, leave, setTheme, MODS, MOD, watchFrames, autoJelly,
   } = NP;
 
   /* ------------------------------------------------------------------
@@ -18,23 +18,8 @@
   }
 
   /* ------------------------------------------------------------------
-     导航生长示意
-     ------------------------------------------------------------------ */
-  function initNavGrowth() {
-    const host = $('#navGrowth'); if (!host) return;
-    const cases = [
-      { mods: [], t: '0 个页面', d: '纯粹播放：没有导航，窗口就是播放器' },
-      { mods: ['library', 'danmaku'], t: '1 个页面', d: '只开媒体库：没有侧栏，工具栏里只有窗口按钮和搜索' },
-      { mods: ['danmaku', 'library', 'anime'], t: '3 个页面', d: '看番：出现侧栏' },
-      { mods: ALL, t: '4 个页面 +', d: '全都要：再加下载，以及插件提供的页面' },
-    ];
-    host.innerHTML = cases.map(c => `<div><div class="frame-wrap" style="margin:0"><div class="frame" data-w="440" data-h="275"></div></div><div style="margin-top:10px"><b class="small">${c.t}</b><div class="tiny muted">${c.d}</div></div></div>`).join('');
-    $$('.frame', host).forEach((f, i) => new MiniWin(f).update(new Set(cases[i].mods), false));
-  }
-
-  /* ------------------------------------------------------------------
-     画框版的活窗口（第 03、08、09 章）：每个 .nx-live 挂一个 NX.App，.nx-bar 统一切换
-     设计语言 / 设备 / 折叠屏姿态 / 功能和画框版预览 next.html 共用同一份记录；明暗跟随文档
+     文档里的活窗口（第 02、05、10 章）：每个 .nx-live 挂一个 NX.App，.nx-bar 统一切换
+     设计语言 / 设备 / 折叠屏姿态 / 功能，选择记在 nx.* 里；data-mods 固定了功能的窗口不跟着预设变；明暗跟随文档
      ------------------------------------------------------------------ */
   function initNX() {
     const lives = $$('.nx-live'); if (!lives.length || !window.NX) return;
@@ -205,18 +190,11 @@
   /* ------------------------------------------------------------------
      启动
      ------------------------------------------------------------------ */
-  function setAnnot(on) {
-    root.classList.toggle('annot-on', on); kv.set('annot', on ? '1' : '0');
-    const b = $('#annotBtn'); if (b) b.classList.toggle('on', on);
-  }
   NP.onTheme(t => { const b = $('#themeBtn'); if (b) b.innerHTML = svg(t === 'dark' ? 'sun' : 'moon'); });
   NP.syncThemeUI();
-  setAnnot(kv.get('annot') === '1');
   $('#themeBtn').addEventListener('click', () => setTheme(root.dataset.theme === 'dark' ? 'light' : 'dark'));
-  $('#annotBtn').addEventListener('click', () => setAnnot(!root.classList.contains('annot-on')));
 
   initTier();
-  initNavGrowth();
   initNX();
   initLab();
   initToc();

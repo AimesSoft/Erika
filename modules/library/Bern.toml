@@ -1,0 +1,36 @@
+# The library module: its own protocol, engine and interface. The
+# application lists it under [[modules]] in its Bern.toml.
+
+[module]
+id = "library"
+name = { "zh-Hans" = "媒体库", "en" = "Library" }
+# Modules this one calls, reads or answers events of. The application lists
+# them before this one.
+depends = []
+# `optional = true` lets the application switch this module off at run
+# time; `enabled = false` then keeps it off until switched on.
+optional = true
+
+[module.protocol]
+package = "erika-library-protocol"
+source = "protocol/src/lib.rs"
+
+[module.engine]
+package = "erika-library-core"
+type = "erika_library_core::LibraryEngine"
+path = "core"
+
+[module.ui]
+package = "erika-library-ui"
+sources = "ui/src"
+
+[languages]
+supported = ["zh-Hans", "en"]
+default = "zh-Hans"
+
+[[pages]]
+slot = "main"
+id = "library"
+label = { "zh-Hans" = "媒体库", "en" = "Library" }
+icon = "film.stack"
+component = "library_page"

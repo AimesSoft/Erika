@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="100 78 660 362" width="660" height="362" role="img" aria-label="Erika エリカ～☆">
+  <title>Erika · 软糖</title>
+  <!--
+    Erika 标题字 · 方案 A「软糖」· 手绘矢量
+    - 沿用 NipaPlay 清新版的做法：每个字形是一条中心线，同一套形状叠三层：浅天蓝投影 → 白色贴纸边 → 彩色笔画，最后加软糖高光
+    - 字母整体前倾约 5°，基线轻微起伏；i 的点换成播放三角形（更尖、倾斜 12°，和旧 logo 的播放图标同一个形状）
+    - 下面一行「エリカ～☆」接替旧 logo 的「ニパ～☆」
+  -->
+  <defs>
+    <!-- 字母：E r i k a -->
+    <path id="E1" d="M258 122 L168 126 L154 298 L250 294"/>
+    <path id="E2" d="M161 210 L238 207"/>
+    <path id="r1" d="M312 300 L321 196"/>
+    <path id="r2" d="M318 232 C327 205 347 192 374 197"/>
+    <path id="i1" d="M412 300 L420 200"/>
+    <path id="k1" d="M474 300 L490 126"/>
+    <path id="k2" d="M544 190 L484 246 L548 300"/>
+    <ellipse id="a1" cx="626" cy="248" rx="38" ry="42" transform="rotate(4 626 248)"/>
+    <path id="a2" d="M672 206 L667 300"/>
+    <!-- i 的点：圆角播放三角形（旧 logo 播放图标 × 0.19） -->
+    <path id="dot" d="M-17.1 -22.4 L-17.1 22.4 A3.4 3.4 0 0 0 -12.1 25.4 L28.8 3 A3.4 3.4 0 0 0 28.8 -3 L-12.1 -25.4 A3.4 3.4 0 0 0 -17.1 -22.4 Z"/>
+    <clipPath id="dotClip"><use href="#dot"/></clipPath>
+    <!-- 日文：エリカ～☆ -->
+    <path id="je1" d="M436 338 L466 335"/>
+    <path id="je2" d="M451 337 L451 372"/>
+    <path id="je3" d="M430 374 L473 370"/>
+    <path id="jr1" d="M492 337 L493 360"/>
+    <path id="jr2" d="M512 334 L512 357 Q512 374 496 382"/>
+    <path id="jk1" d="M532 345 L566 342 Q567 370 553 381"/>
+    <path id="jk2" d="M549 333 Q546 362 530 380"/>
+    <path id="wave" d="M584 360 C591 348 603 348 610 355 S626 364 633 352"/>
+    <path id="star" d="M656.9 334.2 L664.5 347.6 L679.8 346.4 L669.4 357.6 L675.3 371.8 L661.3 365.4 L649.7 375.4 L651.5 360.2 L638.3 352.2 L653.4 349.2 Z"/>
+
+    <!-- 贴纸底：同一组形状，颜色由 color 决定（投影 / 白边各用一次） -->
+    <g id="sticker" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+      <use href="#E1" stroke-width="80"/><use href="#E2" stroke-width="76"/>
+      <use href="#r1" stroke-width="74"/><use href="#r2" stroke-width="74"/>
+      <use href="#i1" stroke-width="74"/>
+      <use href="#dot" transform="translate(428 150) rotate(-12)" fill="currentColor" stroke-width="44"/>
+      <use href="#k1" stroke-width="76"/><use href="#k2" stroke-width="74"/>
+      <use href="#a1" fill="currentColor" stroke-width="70"/><use href="#a2" stroke-width="74"/>
+      <g stroke-width="58">
+        <use href="#je1"/><use href="#je2"/><use href="#je3"/><use href="#jr1"/><use href="#jr2"/><use href="#jk1"/><use href="#jk2"/><use href="#wave"/>
+      </g>
+      <use href="#star" fill="currentColor" stroke-width="50"/>
+    </g>
+  </defs>
+
+  <!-- ① 投影  ② 白色贴纸边 -->
+  <use href="#sticker" color="#7DB4F2" transform="translate(12 15)"/>
+  <use href="#sticker" color="#FFFFFF"/>
+
+  <!-- ③ 彩色笔画 · 樱粉 / 柠檬黄 / 薄荷绿 / 天空蓝 轮换 -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <use href="#E1" stroke="#FF7FA8" stroke-width="36"/><use href="#E2" stroke="#FF7FA8" stroke-width="32"/>
+    <use href="#r1" stroke="#FFB938" stroke-width="30"/><use href="#r2" stroke="#FFB938" stroke-width="30"/>
+    <use href="#i1" stroke="#2FCB9E" stroke-width="30"/>
+    <use href="#k1" stroke="#3CB8F4" stroke-width="32"/><use href="#k2" stroke="#3CB8F4" stroke-width="30"/>
+    <use href="#a1" stroke="#FF7FA8" stroke-width="26"/><use href="#a2" stroke="#FF7FA8" stroke-width="30"/>
+    <!-- 日文统一一个颜色，安静一些 -->
+    <g stroke="#4A90E2" stroke-width="14">
+      <use href="#je1"/><use href="#je2"/><use href="#je3"/><use href="#jr1"/><use href="#jr2"/><use href="#jk1"/><use href="#jk2"/><use href="#wave"/>
+    </g>
+    <use href="#star" fill="#FFB938" stroke="#FFB938" stroke-width="6"/>
+  </g>
+
+  <!-- ④ i 的点：播放三角形，上半边浅一层 -->
+  <g transform="translate(428 150) rotate(-12)">
+    <use href="#dot" fill="#8E7FFF"/>
+    <rect x="-22" y="-30" width="56" height="30" fill="#ACA0FF" clip-path="url(#dotClip)"/>
+    <path d="M-11 -14 L-11 -4" fill="none" stroke="#FFFFFF" stroke-opacity=".9" stroke-linecap="round" stroke-width="5"/>
+  </g>
+
+  <!-- ⑤ 高光：每个字左上方一道短胶囊加一颗小点，像软糖的反光 -->
+  <g fill="none" stroke="#FFFFFF" stroke-opacity=".9" stroke-linecap="round" stroke-width="6.5">
+    <path d="M158 146 L156.6 163"/>
+    <path d="M312 214 L310.8 229"/>
+    <path d="M411 218 L410 233"/>
+    <path d="M480.5 148 L479 165"/>
+    <path d="M587.5 230.6 A43 47 0 0 1 598.6 212.6"/>
+  </g>
+  <g fill="#FFFFFF" fill-opacity=".9">
+    <circle cx="155.6" cy="175" r="3.3"/>
+    <circle cx="310" cy="240" r="3"/>
+    <circle cx="409.3" cy="244" r="3"/>
+    <circle cx="477.8" cy="177" r="3.2"/>
+    <circle cx="608.7" cy="205.2" r="3.2"/>
+    <circle cx="653" cy="350" r="2.6"/>
+  </g>
+</svg>

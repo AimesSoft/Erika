@@ -1,0 +1,70 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "smv68t6iza",
+      "type": "play",
+      "x": 505.93,
+      "y": 558.07,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "smv68t6r9b",
+      "type": "play",
+      "x": 428.79,
+      "y": 601.98,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 52
+    },
+    {
+      "id": "smv68t6xdc",
+      "type": "play",
+      "x": 428.79,
+      "y": 513.43,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "deco1",
+      "type": "ellipse",
+      "x": 640,
+      "y": 388,
+      "w": 104,
+      "h": 104,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": true
+    },
+    {
+      "id": "deco2",
+      "type": "ellipse",
+      "x": 718,
+      "y": 316,
+      "w": 54,
+      "h": 54,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": true
+    }
+  ],
+  "blend": {
+    "on": true,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "装饰B 光点",
+  "updatedAt": 1791872988986
+}

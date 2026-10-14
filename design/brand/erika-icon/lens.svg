@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Erika 图标 · 放大镜播放键">
+  <title>Erika · A 放大镜播放键</title>
+  <!--
+    A 放大镜播放键：播放三角放进镜片里，镜圈右下伸出一截短而粗的柄，播放键本身就是放大镜。
+    画布 1024，满版方形（系统自己裁圆角）。镜圈圆心 (468, 468)，外径 250、内径 186；柄宽 96，沿 45° 伸出，圆头。
+    三角形：重心 (474, 468)，圆角 18（同色描边 36 + 圆角连接），可见高约 200。
+    类名：bg 底、m 主体、a 点色。展示页用 CSS 换成蓝底 / 单色。
+  -->
+  <rect class="bg" width="1024" height="1024" fill="#F3ECDF"/>
+  <circle class="m" cx="468" cy="468" r="218" fill="none" stroke="#213A6B" stroke-width="64"/>
+  <path class="m" d="M623.6 623.6 L722.6 722.6" fill="none" stroke="#213A6B" stroke-width="96" stroke-linecap="round"/>
+  <path class="a" d="M426.7 386 L426.7 550 L568.7 468 Z" fill="#DC2A5A" stroke="#DC2A5A" stroke-width="36" stroke-linejoin="round"/>
+</svg>

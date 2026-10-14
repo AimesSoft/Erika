@@ -1,0 +1,127 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "f1",
+      "type": "ellipse",
+      "x": 512,
+      "y": 512,
+      "w": 1024,
+      "h": 1024,
+      "rot": 0,
+      "fill": "#3B54C9",
+      "lock": true
+    },
+    {
+      "id": "f2",
+      "type": "rect",
+      "x": 512,
+      "y": 465,
+      "w": 440,
+      "h": 270,
+      "rot": 0,
+      "fill": "#FBF1E6",
+      "lock": false,
+      "r": 18
+    },
+    {
+      "id": "f3",
+      "type": "semi",
+      "x": 512,
+      "y": 674,
+      "w": 440,
+      "h": 230,
+      "rot": 180,
+      "fill": "#FBF1E6",
+      "lock": false,
+      "r": 0
+    },
+    {
+      "id": "f4",
+      "type": "ellipse",
+      "x": 446,
+      "y": 472.6,
+      "w": 41.8,
+      "h": 66,
+      "rot": 0,
+      "fill": "#2E47B8",
+      "lock": true
+    },
+    {
+      "id": "f5",
+      "type": "ellipse",
+      "x": 578,
+      "y": 472.6,
+      "w": 41.8,
+      "h": 66,
+      "rot": 0,
+      "fill": "#2E47B8",
+      "lock": true
+    },
+    {
+      "id": "f6",
+      "type": "play",
+      "x": 427,
+      "y": 880,
+      "w": 170,
+      "h": 180.20000000000002,
+      "rot": 0,
+      "fill": "#E3879F",
+      "lock": false,
+      "r": 25.5
+    },
+    {
+      "id": "f7",
+      "type": "play",
+      "x": 597,
+      "y": 880,
+      "w": 170,
+      "h": 180.20000000000002,
+      "rot": 180,
+      "fill": "#E3879F",
+      "lock": false,
+      "r": 25.5
+    },
+    {
+      "id": "f8",
+      "type": "rect",
+      "x": 512,
+      "y": 880,
+      "w": 61.199999999999996,
+      "h": 88.4,
+      "rot": 0,
+      "fill": "#A8384F",
+      "lock": false,
+      "r": 23.8
+    },
+    {
+      "id": "f9",
+      "type": "ellipse",
+      "x": 300,
+      "y": 260,
+      "w": 170,
+      "h": 170,
+      "rot": 0,
+      "fill": "#D02A3E",
+      "lock": true
+    },
+    {
+      "id": "f10",
+      "type": "ellipse",
+      "x": 289.8,
+      "y": 249.8,
+      "w": 85,
+      "h": 85,
+      "rot": 0,
+      "fill": "#8C1428",
+      "lock": true
+    }
+  ],
+  "blend": {
+    "on": false,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "绘梨花·公主切",
+  "updatedAt": 1791874486678
+}

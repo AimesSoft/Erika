@@ -1,0 +1,11 @@
+[package]
+name = "erika-core"
+description = "Erika: the engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true
+erika-protocol.workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "erika-downloads-ui"
+description = "The downloads module: its interface"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true
+erika-downloads-protocol = { path = "../protocol" }

@@ -1,0 +1,1093 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Erika 图标工坊</title>
+<link rel="icon" href="../assets/icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* 三栏工作台：左边是形状和图层，中间是画板和平台预览，右边是属性和导出。画板是 1024 的正方形，预览按各平台的形状裁切。 */
+  :root {
+    --bg: #ECEEF2; --panel: #FFFFFF; --panel-2: #F4F5F8; --line: rgba(22, 26, 40, .10); --line-2: rgba(22, 26, 40, .18);
+    --fg: #161821; --fg-2: #5B6070; --fg-3: #8E93A2;
+    --accent: #2456FF; --accent-ink: #FFFFFF; --accent-soft: rgba(36, 86, 255, .12);
+    --guide: #FF0046; --chk-a: #E3E6EC; --chk-b: #F6F7F9; --danger: #D92B4B;
+    --ui: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    --num: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+    --r: 12px;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg: #0F1116; --panel: #171A21; --panel-2: #1F232C; --line: rgba(255, 255, 255, .08); --line-2: rgba(255, 255, 255, .16);
+    --fg: #ECEEF3; --fg-2: #A6ABB9; --fg-3: #6E7384; --accent: #6C8CFF; --accent-ink: #0B0D12; --accent-soft: rgba(108, 140, 255, .16);
+    --guide: #FF4D7A; --chk-a: #1B1E25; --chk-b: #242832; --danger: #FF6B85; color-scheme: dark;
+  } }
+  :root[data-theme="dark"] {
+    --bg: #0F1116; --panel: #171A21; --panel-2: #1F232C; --line: rgba(255, 255, 255, .08); --line-2: rgba(255, 255, 255, .16);
+    --fg: #ECEEF3; --fg-2: #A6ABB9; --fg-3: #6E7384; --accent: #6C8CFF; --accent-ink: #0B0D12; --accent-soft: rgba(108, 140, 255, .16);
+    --guide: #FF4D7A; --chk-a: #1B1E25; --chk-b: #242832; --danger: #FF6B85; color-scheme: dark;
+  }
+  [hidden] { display: none !important; }
+  html, body { background: var(--bg); color: var(--fg); }
+  body { font: 14px/1.5 var(--ui); padding-inline: 16px; padding-block: 16px 40px; }
+  * { box-sizing: border-box; }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .top { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; max-width: 1440px; margin: 0 auto 14px; }
+  .top h1 { font-size: 20px; margin: 0; font-weight: 700; letter-spacing: .01em; text-wrap: balance; }
+  .top p { margin: 0; color: var(--fg-2); font-size: 13px; min-width: 0; }
+  .live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-3); white-space: nowrap; }
+  .live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .live.on { color: #1F9D5C; } .live.wait { color: #C48A00; }
+
+  .shell { display: grid; grid-template-columns: 236px minmax(0, 1fr) 300px; gap: 14px; max-width: 1440px; margin: 0 auto; align-items: start; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; display: grid; gap: 12px; min-width: 0; align-content: start; }
+  .panel h2 { margin: 0; font-size: 12px; font-weight: 700; color: var(--fg-3); letter-spacing: .06em; }
+  .stack { display: grid; gap: 14px; min-width: 0; }
+
+  /* 形状按钮 */
+  .shapes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .shapes button { border: 1px solid var(--line); background: var(--panel-2); border-radius: 10px; padding: 8px 4px 6px; display: grid; justify-items: center; gap: 4px; font-size: 12px; color: var(--fg-2); }
+  .shapes button:hover { border-color: var(--line-2); color: var(--fg); }
+  .shapes svg { width: 26px; height: 26px; fill: currentColor; }
+  .presets { display: grid; gap: 6px; }
+  .presets button { border: 1px solid var(--line); background: none; border-radius: 10px; padding: 7px 10px; text-align: left; display: flex; align-items: center; gap: 10px; font-size: 13px; }
+  .presets button:hover { background: var(--panel-2); }
+  .presets svg { width: 28px; height: 28px; flex: none; border-radius: 6px; }
+
+  /* 图层 */
+  .layers { display: grid; gap: 2px; max-height: 300px; overflow-y: auto; }
+  .layer { display: flex; align-items: center; gap: 6px; padding: 5px 4px 5px 4px; border-radius: 8px; cursor: pointer; font-size: 13px; position: relative; }
+  .layer .grip { width: 12px; flex: none; color: var(--fg-3); cursor: grab; font-size: 11px; letter-spacing: -1px; text-align: center; user-select: none; }
+  .layer.drop-before::before, .layer.drop-after::after { content: ""; position: absolute; left: 6px; right: 6px; height: 2px; border-radius: 1px; background: var(--accent); }
+  .layer.drop-before::before { top: -2px; } .layer.drop-after::after { bottom: -2px; }
+  .layer.dragging { opacity: .45; }
+  .layer button svg { width: 15px; height: 15px; display: block; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .layer button.danger:hover { color: var(--danger); }
+  .kinds { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+  .kinds button { border: 1px solid var(--line); background: var(--panel-2); border-radius: 8px; padding: 5px 2px 3px; display: grid; justify-items: center; gap: 1px; font-size: 11px; color: var(--fg-2); }
+  .kinds button svg { width: 20px; height: 20px; fill: currentColor; }
+  .kinds button:hover { border-color: var(--line-2); color: var(--fg); }
+  .kinds button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .layer:hover { background: var(--panel-2); }
+  .layer.on { background: var(--accent-soft); }
+  .layer i { width: 16px; height: 16px; border-radius: 4px; flex: none; box-shadow: inset 0 0 0 1px var(--line-2); }
+  .layer span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .layer button { border: 0; background: none; padding: 3px; color: var(--fg-3); font-size: 12px; border-radius: 6px; flex: none; }
+  .layer button:hover { color: var(--fg); background: var(--panel); }
+  .layer.hid .nm { color: var(--fg-3); text-decoration: line-through; }
+  .empty { color: var(--fg-3); font-size: 13px; padding: 4px 2px; }
+  /* 图标蒙版 */
+  .mkgrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; max-height: 286px; overflow-y: auto; padding: 1px 2px 1px 1px; }
+  .mkgrid button { aspect-ratio: 1; border: 1px solid var(--line); background: var(--panel-2); border-radius: 8px; padding: 7px; color: var(--fg-2); min-width: 0; }
+  .mkgrid button svg { width: 100%; height: 100%; display: block; fill: currentColor; }
+  .mkgrid button:hover { color: var(--fg); border-color: var(--line-2); }
+  .mkgrid button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .mkgrid .empty { grid-column: 1 / -1; }
+  .mkcur { display: flex; gap: 10px; align-items: center; }
+  .mkcur svg { width: 34px; height: 34px; flex: none; fill: var(--fg); }
+  .mkcur div { display: grid; gap: 1px; min-width: 0; }
+  .mkcur b { font-size: 13px; font-weight: 500; }
+  .mkcur small { font-size: 11.5px; color: var(--fg-3); }
+  #maskPacks { justify-content: flex-start; }
+  #maskQ { width: 100%; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel-2); font: inherit; font-size: 13px; color: var(--fg); }
+
+  /* 画板 */
+  .boardwrap { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 10px; display: grid; gap: 10px; min-width: 0; }
+  .tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .tools button, .seg button { border: 1px solid var(--line); background: var(--panel-2); border-radius: 8px; padding: 5px 10px; font-size: 13px; }
+  .tools button:hover:not(:disabled), .seg button:hover { border-color: var(--line-2); }
+  .tools button:disabled { opacity: .4; cursor: default; }
+  .tools .sp { flex: 1; }
+  .tools label { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--fg-2); cursor: pointer; }
+  .board { position: relative; width: 100%; max-width: 640px; margin: 0 auto; aspect-ratio: 1; }
+  .board svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; border-radius: 6px; }
+  .board .art path { cursor: move; }
+  .hint { font-size: 12px; color: var(--fg-3); text-align: center; margin: 0; }
+  .hint kbd { font: 11px var(--num); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line-2); background: var(--panel-2); }
+
+  /* 预览 */
+  .previews { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .pv { background: var(--panel-2); border-radius: 10px; padding: 12px 10px 10px; display: grid; gap: 8px; justify-items: center; align-content: start; min-width: 0; }
+  .pv svg { width: 100%; max-width: 150px; aspect-ratio: 1; height: auto; display: block; }
+  .pv .mac { filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .22)); }
+  .pv b { font-size: 13px; font-weight: 500; }
+  .pv small { color: var(--fg-3); font-size: 11.5px; text-align: center; line-height: 1.4; }
+  .seg { display: inline-flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+  .seg button { padding: 3px 8px; font-size: 12px; }
+  .seg button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  .seeds { display: flex; gap: 6px; justify-content: center; }
+  .seeds button { width: 20px; height: 20px; border-radius: 50%; border: 0; padding: 0; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .15); }
+  .seeds button.on { box-shadow: 0 0 0 2px var(--panel-2), 0 0 0 4px var(--fg); }
+  .sizes { display: flex; gap: 18px; align-items: flex-end; flex-wrap: wrap; justify-content: center; padding: 6px 0 2px; }
+  .sizes figure { margin: 0; display: grid; justify-items: center; gap: 4px; font: 11px var(--num); color: var(--fg-3); }
+
+  /* 属性 */
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+  .field { display: grid; gap: 3px; min-width: 0; }
+  .field.wide { grid-column: 1 / -1; }
+  .field label { font-size: 12px; color: var(--fg-2); display: flex; justify-content: space-between; gap: 6px; }
+  .field label b { font: 500 12px var(--num); color: var(--fg); }
+  .field input[type=number], .field input[type=text] { width: 100%; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel-2); font: 13px var(--num); font-variant-numeric: tabular-nums; }
+  .field input[type=range] { width: 100%; accent-color: var(--accent); }
+  .color { display: flex; gap: 8px; align-items: center; }
+  .color input[type=color] { width: 38px; height: 32px; border: 1px solid var(--line-2); border-radius: 8px; padding: 2px; background: var(--panel-2); flex: none; }
+  .color input[type=text] { flex: 1; }
+  .swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+  .swatches button { width: 22px; height: 22px; border-radius: 6px; border: 0; padding: 0; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .14); }
+  .swatches button.on { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--fg); }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btn { border: 1px solid var(--line-2); background: var(--panel-2); border-radius: 8px; padding: 6px 12px; font-size: 13px; }
+  .btn:hover { border-color: var(--fg-3); }
+  .btn.p { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 500; }
+  .btn.warn { color: var(--danger); }
+  .note { font-size: 12px; color: var(--fg-3); margin: 0; }
+  .chk { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--fg-2); cursor: pointer; }
+  .cloud { display: grid; gap: 4px; max-height: 220px; overflow-y: auto; }
+  .cloud .it { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; font-size: 13px; }
+  .cloud .it:hover { background: var(--panel-2); }
+  .cloud .it span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .cloud .it time { font: 11px var(--num); color: var(--fg-3); }
+  .cloud .it button { border: 0; background: none; color: var(--fg-3); font-size: 12px; padding: 2px 4px; border-radius: 6px; }
+  .cloud .it button:hover { color: var(--danger); }
+  .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 999px; font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 10; }
+  .toast.on { opacity: 1; }
+
+  @media (max-width: 1180px) { .shell { grid-template-columns: 220px minmax(0, 1fr); } .shell > .right { grid-column: 1 / -1; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); display: grid; } }
+  @media (max-width: 860px) { .previews { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 760px) { .shell { grid-template-columns: 1fr; } .shell > .left { order: 2; } .shell > .mid { order: 1; } .shell > .right { order: 3; } .shapes { grid-template-columns: repeat(4, 1fr); } .mkgrid { grid-template-columns: repeat(8, 1fr); } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <h1>Erika 图标工坊</h1>
+  <span class="live" id="liveState" hidden></span>
+  <p>用两三个纯色几何图形拼一个图标：拖动移动，拉四角缩放，拉上面的圆点旋转。也可以选一个现成图标当蒙版，在它里面拼颜色。下面实时预览它在圆形、正方形、macOS 和安卓主题图标里的样子。</p>
+</header>
+
+<div class="shell">
+  <aside class="stack left">
+    <section class="panel">
+      <h2>添加形状</h2>
+      <div class="shapes" id="addShapes"></div>
+    </section>
+    <section class="panel" id="maskPanel">
+      <h2>图标蒙版</h2>
+      <label class="chk"><input type="checkbox" id="maskOn">开启：形状只显示在图标里面</label>
+      <input type="search" id="maskQ" placeholder="搜索：花、猫、播放、star…" aria-label="搜索图标">
+      <div class="seg" id="maskPacks"></div>
+      <div class="mkgrid" id="maskGrid"></div>
+      <div id="maskProps" style="display:grid;gap:10px"></div>
+    </section>
+    <section class="panel">
+      <h2>起手</h2>
+      <div class="presets" id="presets"></div>
+    </section>
+    <section class="panel">
+      <h2>图层（上面的在最前）</h2>
+      <div class="layers" id="layers"></div>
+    </section>
+  </aside>
+
+  <main class="stack mid">
+    <section class="boardwrap">
+      <div class="tools">
+        <button id="undo" title="撤销（⌘Z）">撤销</button>
+        <button id="redo" title="重做（⇧⌘Z）">重做</button>
+        <button id="dup" title="复制（⌘D）">复制</button>
+        <button id="del" title="删除（Delete）">删除</button>
+        <button id="fwd" title="上移一层（]）">上移</button>
+        <button id="back" title="下移一层（[）">下移</button>
+        <button id="center" title="选中一个形状：放到正中（播放三角按重心对齐）。没选中：整个图标按外框放到正中，铺满的底板不动；开着图标蒙版时把蒙版图标连同里面的形状放回正中">居中</button>
+        <span class="sp"></span>
+        <label title="形状重叠的部分按混合模式显示，比如正片叠底"><input type="checkbox" id="blendOn">重叠样式</label>
+        <label><input type="checkbox" id="guides" checked>参考线</label>
+      </div>
+      <div class="board" id="board">
+        <svg id="boardSvg" viewBox="0 0 1024 1024" aria-label="图标画板">
+          <defs>
+            <pattern id="chk" width="64" height="64" patternUnits="userSpaceOnUse"><rect width="64" height="64" fill="var(--chk-b)"/><rect width="32" height="32" fill="var(--chk-a)"/><rect x="32" y="32" width="32" height="32" fill="var(--chk-a)"/></pattern>
+          </defs>
+          <rect width="1024" height="1024" fill="url(#chk)"/>
+          <g id="art" class="art"></g>
+          <g id="guideLayer" pointer-events="none"></g>
+          <g id="snapLayer" pointer-events="none"></g>
+          <g id="selLayer"></g>
+        </svg>
+      </div>
+      <p class="hint">方向键微调（按住 <kbd>⇧</kbd> 一次 10）· 拖四角时按住 <kbd>⇧</kbd> 切换锁定比例 · 旋转时按住 <kbd>⇧</kbd> 每 15° 一格 · 参考线：中线、圆形边界、macOS 底板、安卓安全区</p>
+    </section>
+
+    <section class="panel">
+      <h2>预览</h2>
+      <div class="previews">
+        <div class="pv"><svg viewBox="0 0 1024 1024" id="pvCircle"></svg><b>圆形</b><small>整张画板裁成圆</small></div>
+        <div class="pv"><svg viewBox="0 0 1024 1024" id="pvSquare"></svg><b>铺满正方形</b><small>不裁切，Windows / 网页常用</small></div>
+        <div class="pv"><svg viewBox="0 0 1024 1024" id="pvMac" class="mac"></svg><b>macOS</b><small>放进 824 的圆角底板，连续圆角</small></div>
+        <div class="pv"><svg viewBox="0 0 1024 1024" id="pvDroid"></svg><b>安卓 · 自动取色</b>
+          <div class="seg" id="droidMode"><button data-v="mono">主题图标</button><button data-v="tonal">保留明暗</button></div>
+          <div class="seeds" id="seeds"></div>
+          <div class="seg" id="droidTheme"><button data-v="light">浅色</button><button data-v="dark">深色</button></div>
+          <small id="droidNote"></small>
+        </div>
+      </div>
+      <div class="sizes" id="sizes"></div>
+    </section>
+  </main>
+
+  <aside class="stack right">
+    <section class="panel" id="inspector">
+      <h2>属性</h2>
+      <div id="props"></div>
+    </section>
+    <section class="panel">
+      <h2>重叠样式</h2>
+      <label class="chk"><input type="checkbox" id="blendOn2">开启：形状重叠的部分按混合模式显示</label>
+      <div class="seg" id="blendModes" style="justify-content:flex-start"></div>
+      <p class="note">只在形状之间混合，背景不参与。某个形状不想参与，选中它在属性里关掉。</p>
+    </section>
+    <section class="panel">
+      <h2>背景</h2>
+      <div class="row" id="bgMode"></div>
+      <div class="field wide" id="bgColorField"></div>
+    </section>
+    <section class="panel">
+      <h2>导出</h2>
+      <div class="row">
+        <button class="btn" id="expSvg">SVG</button>
+        <button class="btn" id="expPng">PNG 1024</button>
+        <button class="btn" id="expJson">JSON</button>
+        <button class="btn" id="copySvg">复制 SVG</button>
+      </div>
+      <label class="chk"><input type="file" id="importFile" accept=".json,application/json" hidden><span class="btn" id="importBtn" role="button" tabindex="0">导入 JSON</span></label>
+      <p class="note" id="expNote">导出的是整张 1024 画板；平台的裁切交给系统。</p>
+    </section>
+    <section class="panel" id="cloudPanel" hidden>
+      <h2 id="saveTitle">保存</h2>
+      <div class="field wide"><label for="cloudName">名字</label><input type="text" id="cloudName" value="我的图标" maxlength="40"></div>
+      <div class="row"><button class="btn p" id="cloudSave">保存</button><button class="btn" id="cloudSaveNew">另存为新的</button></div>
+      <p class="note" id="saveNote"></p>
+      <div class="cloud" id="cloudList"></div>
+    </section>
+  </aside>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><symbol id="artSym" viewBox="0 0 1024 1024"></symbol></defs></svg>
+
+<script src="icon-studio-icons.js"></script>
+<script>
+(() => {
+  'use strict';
+  const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+  const NS = 'http://www.w3.org/2000/svg';
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const r2 = v => Math.round(v * 100) / 100;
+
+  /* ---------- 颜色 ---------- */
+  const SWATCHES = ['#2456FF', '#FF0046', '#F3ECDF', '#872938', '#404292', '#213A6B', '#2A51D4', '#FF2E55', '#07FF94', '#FFFFFF', '#161821'];
+  const hexOk = h => /^#[0-9a-fA-F]{6}$/.test(h);
+  const normHex = h => { h = String(h || '').trim(); if (/^[0-9a-fA-F]{6}$/.test(h)) h = '#' + h; if (/^#[0-9a-fA-F]{3}$/.test(h)) h = '#' + h.slice(1).split('').map(c => c + c).join(''); return hexOk(h) ? h.toUpperCase() : null; };
+  const rgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
+  const lum = h => { const c = rgb(h).map(v => (v <= .03928 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4))); return .2126 * c[0] + .7152 * c[1] + .0722 * c[2]; };
+  function hslOf(h) {
+    const [r, g, b] = rgb(h), mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
+    if (mx === mn) return [0, 0, l];
+    const d = mx - mn, s = l > .5 ? d / (2 - mx - mn) : d / (mx + mn);
+    const hh = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [hh * 60, s, l];
+  }
+  const hsl = (h, s, l) => `hsl(${h.toFixed(1)} ${(s * 100).toFixed(1)}% ${(l * 100).toFixed(1)}%)`;
+
+  /* ---------- 形状 ---------- */
+  const TYPES = {
+    ellipse: { name: '圆', lock: true, w: 400, h: 400 },
+    semi: { name: '半圆', lock: false, w: 520, h: 260, r: 36 },
+    rect: { name: '圆角矩形', lock: false, w: 440, h: 300, r: 80 },
+    capsule: { name: '胶囊', lock: false, w: 480, h: 160, r: 9999, as: 'rect' },
+    play: { name: '播放', lock: false, w: 300, h: 340, r: 36 },
+    tri: { name: '三角形', lock: false, w: 360, h: 320, r: 30 },
+    poly: { name: '多边形', lock: true, w: 380, h: 380, r: 24, n: 6 },
+    star: { name: '星形', lock: true, w: 400, h: 400, r: 10, n: 5, inner: .45 },
+    ring: { name: '圆环', lock: true, w: 420, h: 420, t: 70 },
+    pie: { name: '缺角圆', lock: true, w: 520, h: 520, r: 40, gap: 90, dir: 135 },
+  };
+  const ICONS = {
+    ellipse: '<circle cx="12" cy="12" r="9"/>',
+    semi: '<path d="M3 15.5 A9 9 0 0 1 21 15.5 Q21 17 19.5 17 H4.5 Q3 17 3 15.5 Z"/>',
+    rect: '<rect x="3" y="6" width="18" height="12" rx="4"/>',
+    capsule: '<rect x="2" y="8" width="20" height="8" rx="4"/>',
+    play: '<path d="M7 4.5 Q6 4 6 5.2 V18.8 Q6 20 7 19.5 L19 12.8 Q20 12 19 11.2 Z"/>',
+    tri: '<path d="M12 3.5 Q12.8 3.5 13.2 4.2 L21 18.6 Q21.4 19.5 20.4 19.5 H3.6 Q2.6 19.5 3 18.6 L10.8 4.2 Q11.2 3.5 12 3.5 Z"/>',
+    poly: '<path d="M12 2.5 L20.5 7.4 V16.6 L12 21.5 L3.5 16.6 V7.4 Z"/>',
+    star: '<path d="M12 2.5 L14.6 8.9 L21.5 9.4 L16.2 13.9 L17.9 20.6 L12 17 L6.1 20.6 L7.8 13.9 L2.5 9.4 L9.4 8.9 Z"/>',
+    ring: '<path fill-rule="evenodd" d="M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18Zm0 4.5a4.5 4.5 0 1 1 0 9a4.5 4.5 0 1 1 0-9Z"/>',
+    pie: '<path d="M12 12 L5.6 18.4 A9 9 0 1 1 18.4 18.4 Z"/>',
+  };
+  let uid = 1;
+  const newId = () => 's' + Date.now().toString(36) + (uid++).toString(36);
+
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1]], add = (a, b) => [a[0] + b[0], a[1] + b[1]], mul = (a, k) => [a[0] * k, a[1] * k];
+  const len = a => Math.hypot(a[0], a[1]), unit = a => { const l = len(a) || 1; return [a[0] / l, a[1] / l]; };
+  const f = p => `${r2(p[0])} ${r2(p[1])}`;
+  /* 圆角多边形：每个角用和两条边相切的圆弧代替，半径太大时按边长自动收小 */
+  function roundPoly(pts, radii) {
+    const n = pts.length;
+    const cs = pts.map((p, i) => {
+      const p0 = pts[(i - 1 + n) % n], p2 = pts[(i + 1) % n];
+      let r = typeof radii === 'number' ? radii : (radii[i] || 0);
+      const v1 = unit(sub(p0, p)), v2 = unit(sub(p2, p));
+      const ang = Math.acos(clamp(v1[0] * v2[0] + v1[1] * v2[1], -1, 1));
+      if (r <= 0 || ang < 1e-3 || Math.PI - ang < 1e-3) return { a: p, b: p, r: 0 };
+      let t = r / Math.tan(ang / 2);
+      const tmax = Math.min(len(sub(p0, p)), len(sub(p2, p))) * .5;
+      if (t > tmax) { t = tmax; r = t * Math.tan(ang / 2); }
+      const cross = (p[0] - p0[0]) * (p2[1] - p[1]) - (p[1] - p0[1]) * (p2[0] - p[0]);
+      return { a: add(p, mul(v1, t)), b: add(p, mul(v2, t)), r, sw: cross > 0 ? 1 : 0 };
+    });
+    let d = `M${f(cs[0].b)}`;
+    for (let k = 1; k <= n; k++) { const c = cs[k % n]; d += `L${f(c.a)}`; if (c.r > 0) d += `A${r2(c.r)} ${r2(c.r)} 0 0 ${c.sw} ${f(c.b)}`; }
+    return d + 'Z';
+  }
+  const ell = (rx, ry) => `M${-rx} 0A${rx} ${ry} 0 1 0 ${rx} 0A${rx} ${ry} 0 1 0 ${-rx} 0Z`;
+  /* 镂空（s.hole = 边框粗细）：凸多边形每个顶点沿角平分线往里收，得到内圈；内圈圆角和外圈同心（半径减去边框粗细），
+     外圈 + 内圈用 evenodd 挖空。边框太粗时按内切圆收住，免得内圈翻过来 */
+  function insetPoly(pts, t) {
+    const n = pts.length;
+    return pts.map((p, i) => {
+      const u1 = unit(sub(pts[(i - 1 + n) % n], p)), u2 = unit(sub(pts[(i + 1) % n], p));
+      const ang = Math.acos(clamp(u1[0] * u2[0] + u1[1] * u2[1], -1, 1));
+      return add(p, mul(unit(add(u1, u2)), t / Math.sin(ang / 2)));
+    });
+  }
+  function solidOrHollow(pts, r, s) {
+    const outer = roundPoly(pts, r);
+    if (!(s.hole > 0)) return { d: outer };
+    let area = 0, per = 0;
+    pts.forEach((p, i) => { const q = pts[(i + 1) % pts.length]; area += p[0] * q[1] - q[0] * p[1]; per += len(sub(q, p)); });
+    const t = Math.min(s.hole, Math.abs(area) / per * .92);
+    return { d: outer + roundPoly(insetPoly(pts, t), Math.max(0, r - t)), rule: 'evenodd' };
+  }
+  /* 缺角圆：圆减去一个扇形；三个角（圆心处和圆边上两处）都能倒圆角 */
+  function piePath(s, oy = 0) {
+    const rx = s.w / 2, ry = s.h / 2, mn = Math.min(rx, ry);
+    const g = clamp(s.gap, 2, 300) * Math.PI / 180, phi = s.dir * Math.PI / 180;
+    const a1 = phi + g / 2, a2 = phi - g / 2 + Math.PI * 2;
+    let rf = clamp((s.r || 0) / mn, 0, .3);
+    const P = (x, y) => [x * rx, y * ry + oy];
+    const d0 = rf > 0 ? Math.asin(rf / (1 - rf)) : 0, L = rf > 0 ? Math.sqrt((1 - rf) * (1 - rf) - rf * rf) : 1;
+    /* 圆心那个角：两条半径之间的夹角取小的那个；正好 180° 时是一条直线，没有角可倒 */
+    const th = Math.min(g, Math.PI * 2 - g);
+    let rc = clamp((s.r || 0) / mn, 0, .45), tc = Math.abs(th - Math.PI) < 1e-3 ? 0 : rc / Math.tan(th / 2);
+    if (tc > L * .8) { tc = L * .8; rc = tc * Math.tan(th / 2); }
+    const dir = a => [Math.cos(a), Math.sin(a)];
+    const c1 = mul(dir(a1), tc), c2 = mul(dir(a2), tc), T1 = mul(dir(a1), L), T2 = mul(dir(a2), L);
+    const U1 = dir(a1 + d0), U2 = dir(a2 - d0);
+    const big = (a2 - d0) - (a1 + d0) > Math.PI ? 1 : 0;
+    let d = `M${f(P(...c1))}L${f(P(...T1))}`;
+    if (rf > 0) d += `A${r2(rf * rx)} ${r2(rf * ry)} 0 0 1 ${f(P(...U1))}`;
+    d += `A${r2(rx)} ${r2(ry)} 0 ${big} 1 ${f(P(...U2))}`;
+    if (rf > 0) d += `A${r2(rf * rx)} ${r2(rf * ry)} 0 0 1 ${f(P(...T2))}`;
+    d += `L${f(P(...c2))}`;
+    if (tc > 0 && rc > 0) d += `A${r2(rc * rx)} ${r2(rc * ry)} 0 0 ${g < Math.PI ? 0 : 1} ${f(P(...c1))}`;
+    return d + 'Z';
+  }
+  function shapePath(s) {
+    const w = s.w, h = s.h, hw = w / 2, hh = h / 2;
+    switch (s.type) {
+      case 'ellipse': return { d: ell(hw, hh) };
+      case 'rect': return solidOrHollow([[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]], Math.min(s.r || 0, Math.min(hw, hh)), s);
+      case 'tri': return solidOrHollow([[0, -hh], [hw, hh], [-hw, hh]], s.r || 0, s);
+      case 'play': return solidOrHollow([[-hw, -hh], [hw, 0], [-hw, hh]], s.r || 0, s);
+      case 'poly': { const n = clamp(Math.round(s.n || 6), 3, 12); return solidOrHollow(Array.from({ length: n }, (_, i) => { const a = -Math.PI / 2 + i * 2 * Math.PI / n; return [Math.cos(a) * hw, Math.sin(a) * hh]; }), s.r || 0, s); }
+      case 'star': { const n = clamp(Math.round(s.n || 5), 3, 16), k = clamp(s.inner || .45, .1, .95); return { d: roundPoly(Array.from({ length: n * 2 }, (_, i) => { const a = -Math.PI / 2 + i * Math.PI / n, q = i % 2 ? k : 1; return [Math.cos(a) * hw * q, Math.sin(a) * hh * q]; }), s.r || 0) }; }
+      case 'ring': { const t = clamp(s.t || 60, 2, Math.min(hw, hh) - 1); return { d: ell(hw, hh) + ell(hw - t, hh - t), rule: 'evenodd' }; }
+      case 'pie': return { d: piePath(s) };
+      /* 半圆 = 缺口 180°、朝下的缺角圆；外框就是半圆本身（平边在下，弧在上），平边两个角能倒圆角 */
+      case 'semi': return { d: piePath({ w: s.w, h: s.h * 2, r: s.r, gap: 180, dir: 90 }, s.h / 2) };
+      /* 自定义路径：d 是以外框中心为原点的局部坐标，原始外框 w0 × h0；拉伸时按 w/w0、h/h0 缩放。sw 有值就画成线条（描边） */
+      case 'path': return { d: s.d || '', scale: [s.w / (s.w0 || s.w), s.h / (s.h0 || s.h)] };
+    }
+    return { d: '' };
+  }
+  /* 视觉中心：播放三角按重心，其余按外框中心 */
+  /* 外框中心减去重心（局部坐标）：播放三角重心偏左、三角形和半圆的重心偏下 */
+  const visualOffset = s => (s.type === 'play' ? [s.w / 6, 0] : s.type === 'tri' ? [0, -s.h / 6] : s.type === 'semi' ? [0, -s.h * (.5 - 4 / (3 * Math.PI))] : [0, 0]);
+
+  /* ---------- 状态 ---------- */
+  const SAMPLE = () => ({ bg: null, shapes: [
+    { id: newId(), type: 'ellipse', x: 512, y: 512, w: 1024, h: 1024, rot: 0, fill: '#2456FF', lock: true },
+    { id: newId(), type: 'play', x: 512 + 330 / 6, y: 512, w: 330, h: 380, rot: 0, fill: '#FF0046', r: 44, lock: false },
+  ] });
+  const PRESETS = [
+    { name: '蓝圆 + 红色播放', make: SAMPLE },
+    { name: '米白圆 + 播放 + 小圆', make: () => ({ bg: null, shapes: [
+      { id: newId(), type: 'ellipse', x: 512, y: 512, w: 1024, h: 1024, rot: 0, fill: '#F3ECDF', lock: true },
+      { id: newId(), type: 'play', x: 512 + 300 / 6 - 40, y: 520, w: 300, h: 346, rot: 0, fill: '#FF0046', r: 40, lock: false },
+      { id: newId(), type: 'ellipse', x: 690, y: 330, w: 150, h: 150, rot: 0, fill: '#404292', lock: true },
+    ] }) },
+    { name: '缺角圆 + 三角', make: () => ({ bg: '#FFFFFF', shapes: [
+      { id: newId(), type: 'pie', x: 512, y: 512, w: 820, h: 820, rot: 0, fill: '#2A51D4', r: 46, gap: 88, dir: 135, lock: true },
+      { id: newId(), type: 'play', x: 560, y: 470, w: 330, h: 380, rot: -12, fill: '#FF2E55', r: 46, lock: false },
+    ] }) },
+    { name: '空白画板', make: () => ({ bg: null, shapes: [] }) },
+  ];
+  /* 一份设计 = 背景、形状、重叠样式、图标蒙版；存档、导入、实时同步都走这两个函数 */
+  const designOf = () => ({ bg: S.bg, shapes: S.shapes, blend: S.blend || null, mask: S.mask || null });
+  const fromDesign = v => ({ bg: v.bg || null, shapes: v.shapes.map(x => ({ ...x, id: x.id || newId() })), blend: v.blend || null, mask: v.mask || null });
+  let S = fromDesign(SAMPLE()), sel = null;
+  const hist = [], fut = [];
+  const LS = 'erika.iconStudio.v1';
+  /* 实时同步的状态（同步逻辑在文件后面「实时同步」那一节） */
+  const LIVE_DOC = (new URLSearchParams(location.search).get('doc') || '_live').replace(/[^_a-z0-9]/g, '') || '_live';
+  const CID = 'w' + Math.random().toString(36).slice(2, 9);
+  let live = false, liveRev = 0, liveDirty = false, liveBusy = false, livePending = null, liveTimer = 0, firstSync = true, reloadPending = false;
+  try { const raw = localStorage.getItem(LS); if (raw) { const d = JSON.parse(raw); if (d && Array.isArray(d.shapes)) S = fromDesign(d); } } catch (e) { /* 没有本地草稿也能用 */ }
+  const snap = () => JSON.stringify(S);
+  let last = snap();
+  function commit() {
+    const now = snap(); if (now === last) return;
+    hist.push(last); if (hist.length > 120) hist.shift(); fut.length = 0; last = now;
+    try { localStorage.setItem(LS, now); } catch (e) { /* 浏览器不让存就算了 */ }
+    pushLive(now); syncTools();
+  }
+  function restore(json) { S = JSON.parse(json); last = json; if (sel && !S.shapes.find(s => s.id === sel)) sel = null; try { localStorage.setItem(LS, json); } catch (e) {} pushLive(json); render(); }
+  const cur = () => S.shapes.find(s => s.id === sel) || null;
+
+  /* ---------- 渲染 ---------- */
+  /* 重叠样式：开启后形状之间按混合模式叠在一起（正片叠底等）。所有形状放进一个 isolation 组，
+     所以只和别的形状混合，不会和背景、画板的棋盘格混；某个形状可以单独退出（noBlend） */
+  const BLENDS = [['multiply', '正片叠底'], ['screen', '滤色'], ['overlay', '叠加'], ['soft-light', '柔光'], ['darken', '变暗'], ['lighten', '变亮'], ['difference', '差值'], ['exclusion', '排除']];
+  const blendMode = () => (S.blend && S.blend.on ? S.blend.mode || 'multiply' : null);
+  /* 图标蒙版：选一个现成图标当蒙版，形状只显示在图标里面（勾了「放在图标外面」的形状例外，画在图标下面、不裁切）。
+     图标按外框中心放在 (x, y)，较长的一边 = size × 1024；底色铺在图标里、形状下面，重叠样式也和它混合 */
+  const MI = window.MASK_ICONS || [], PACKS = window.ICON_PACKS || [];
+  const PACK = Object.fromEntries(PACKS.map(p => [p.id, p]));
+  const maskOn = () => (S.mask && S.mask.on && S.mask.d ? S.mask : null);
+  const icDs = ic => (Array.isArray(ic.d) ? ic.d : [ic.d]);
+  const icRule = (ic, i) => (Array.isArray(ic.ev) ? (ic.ev[i] ? 'evenodd' : 'nonzero') : ic.ev ? 'evenodd' : 'nonzero');
+  const icPaths = (ic, extra = '') => icDs(ic).map((d, i) => `<path d="${d}" fill-rule="${icRule(ic, i)}"${extra}/>`).join('');
+  function maskT(M) { const [bx, by, bw, bh] = M.bb, kk = M.size * 1024 / Math.max(bw, bh); return `translate(${r2(M.x)} ${r2(M.y)}) scale(${+kk.toFixed(5)}) translate(${r2(-(bx + bw / 2))} ${r2(-(by + bh / 2))})`; }
+  /* 最底下铺满的大形状当底板（安卓预览、整体居中都用这个判断）；开着蒙版时只有放在图标外面的形状才算 */
+  const plateOf = () => { const p = S.shapes.find(s => !s.hidden), M = maskOn(); return p && p.w * p.h >= 1024 * 1024 * .45 && (!M || p.outside) ? p : null; };
+  /* 垫底（s.under）：开着重叠样式时画在混色组的外面、最下面，上面的形状照常互相混色，但不和它混 */
+  function artMarkup(colorOf, opts = {}) {
+    let m = '', sh = '', out = '', under = '';
+    if (S.bg && !opts.noBg) m += `<rect width="1024" height="1024" fill="${colorOf(S.bg, null)}"/>`;
+    const B = opts.noBlend ? null : blendMode(), M = maskOn();
+    S.shapes.forEach(s => {
+      if (s.hidden) return;
+      const p = shapePath(s), isUnder = B && s.under && !(M && s.outside), col = colorOf(s.fill, s);
+      const paint = s.type === 'path' && s.sw ? `fill="none" stroke="${col}" stroke-width="${r2(s.sw)}" stroke-linecap="round" stroke-linejoin="round"` : `fill="${col}"`;
+      const sc = p.scale ? ` scale(${+p.scale[0].toFixed(5)} ${+p.scale[1].toFixed(5)})` : '';
+      const el = `<path${opts.ids ? ` data-id="${s.id}"` : ''} d="${p.d}"${p.rule ? ` fill-rule="${p.rule}"` : ''} ${paint} transform="translate(${r2(s.x)} ${r2(s.y)}) rotate(${r2(s.rot || 0)})${sc}"${B && !s.noBlend && !isUnder ? ` style="mix-blend-mode:${B}"` : ''}/>`;
+      if (M && s.outside) out += el; else if (isUnder) under += el; else sh += el;
+    });
+    const iso = x => (B && x ? `<g style="isolation:isolate">${x}</g>` : x);
+    if (!M) return m + under + iso(sh);
+    const id = (opts.idp || 'e') + 'mk', T = maskT(M);
+    const base = M.fill ? `<rect width="1024" height="1024" fill="${colorOf(M.fill, null)}"/>` : '';
+    return m + iso(out) + `<defs><clipPath id="${id}">${icDs(M).map((d, i) => `<path d="${d}" clip-rule="${icRule(M, i)}" transform="${T}"/>`).join('')}</clipPath></defs>`
+      + `<g clip-path="url(#${id})">${base ? iso(base + under + sh) : under + iso(sh)}</g>`;
+  }
+  /* 画板和预览用的 symbol 各用各的蒙版 id，免得重名 */
+  function paintArt() { art.innerHTML = artMarkup(same, { ids: true, idp: 'b' }); $('#artSym').innerHTML = artMarkup(same, { idp: 's' }); }
+  const same = c => c;
+  function svgExport() { return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">${artMarkup(same)}</svg>`; }
+
+  const boardSvg = $('#boardSvg'), art = $('#art'), selLayer = $('#selLayer'), guideLayer = $('#guideLayer'), snapLayer = $('#snapLayer');
+  const k = () => boardSvg.getBoundingClientRect().width / 1024 || 1;
+  function render() {
+    paintArt();
+    renderSel(); renderGuides(); renderLayers(); renderProps(); renderBg(); renderBlend(); renderMask(); renderPreviews(); syncTools();
+  }
+  function renderSel() {
+    const s = cur(); selLayer.innerHTML = '';
+    if (!s) return;
+    const kk = k(), hr = 7 / kk, pad = 6 / kk, sw = 1.5 / kk, w = s.w / 2 + pad, h = s.h / 2 + pad;
+    const g = document.createElementNS(NS, 'g');
+    g.setAttribute('transform', `translate(${s.x} ${s.y}) rotate(${s.rot || 0})`);
+    let m = `<rect x="${-w}" y="${-h}" width="${2 * w}" height="${2 * h}" fill="none" stroke="var(--accent)" stroke-width="${sw}" stroke-dasharray="${6 / kk} ${4 / kk}" pointer-events="none"/>`;
+    m += `<line x1="0" y1="${-h}" x2="0" y2="${-h - 36 / kk}" stroke="var(--accent)" stroke-width="${sw}" pointer-events="none"/>`;
+    m += `<circle data-h="rot" cx="0" cy="${-h - 36 / kk}" r="${hr}" fill="var(--panel)" stroke="var(--accent)" stroke-width="${2 / kk}" style="cursor:grab"/>`;
+    [[-1, -1], [1, -1], [1, 1], [-1, 1], [0, -1], [1, 0], [0, 1], [-1, 0]].forEach(([sx, sy]) => {
+      const cursor = sx && sy ? 'nwse-resize' : sx ? 'ew-resize' : 'ns-resize';
+      m += `<rect data-h="${sx},${sy}" x="${sx * w - hr}" y="${sy * h - hr}" width="${2 * hr}" height="${2 * hr}" rx="${hr * .35}" fill="var(--panel)" stroke="var(--accent)" stroke-width="${2 / kk}" style="cursor:${cursor}"/>`;
+    });
+    g.innerHTML = m; selLayer.appendChild(g);
+  }
+  /* 参考线：中线、圆形边界、macOS 底板（824）、安卓安全区（自适应图标 66/72） */
+  function sq(cx, cy, a, n = 5) { let d = ''; for (let i = 0; i <= 120; i++) { const t = i / 120 * Math.PI * 2, c = Math.cos(t), s = Math.sin(t); const x = cx + a * Math.sign(c) * Math.pow(Math.abs(c), 2 / n), y = cy + a * Math.sign(s) * Math.pow(Math.abs(s), 2 / n); d += (i ? 'L' : 'M') + r2(x) + ' ' + r2(y); } return d + 'Z'; }
+  const MAC_PLATE = sq(512, 512, 412);
+  function renderGuides() {
+    const M = maskOn();
+    const outline = M ? `<g transform="${maskT(M)}" fill="none" stroke="var(--accent)" stroke-opacity=".75">${icDs(M).map(d => `<path d="${d}" vector-effect="non-scaling-stroke" stroke-width="1.5"/>`).join('')}</g>` : '';
+    if (!$('#guides').checked) { guideLayer.innerHTML = outline; return; }
+    const sw = 1 / k();
+    guideLayer.innerHTML = outline + `<g fill="none" stroke="var(--fg-3)" stroke-width="${sw}" opacity=".7">
+      <line x1="512" y1="0" x2="512" y2="1024" stroke-dasharray="${8 * sw} ${6 * sw}"/><line x1="0" y1="512" x2="1024" y2="512" stroke-dasharray="${8 * sw} ${6 * sw}"/>
+      <circle cx="512" cy="512" r="511"/><path d="${MAC_PLATE}" stroke-dasharray="${3 * sw} ${4 * sw}"/>
+      <circle cx="512" cy="512" r="469" stroke-dasharray="${2 * sw} ${5 * sw}"/></g>`;
+  }
+  function renderLayers() {
+    const L = $('#layers');
+    if (!S.shapes.length) { L.innerHTML = '<div class="empty">还没有形状。从上面加一个，或者选一个起手。</div>'; return; }
+    const ic = d => `<svg viewBox="0 0 24 24">${d}</svg>`;
+    const EYE = ic('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>');
+    const EYE_OFF = ic('<path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7a9.6 9.6 0 0 0 4.4-1"/>');
+    const UP = ic('<path d="M12 19V5M6 11l6-6 6 6"/>'), DOWN = ic('<path d="M12 5v14M6 13l6 6 6-6"/>');
+    const BIN = ic('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>');
+    const n = S.shapes.length;
+    L.innerHTML = S.shapes.slice().reverse().map((s, i) => `<div class="layer${s.id === sel ? ' on' : ''}${s.hidden ? ' hid' : ''}" data-id="${s.id}" draggable="true"><span class="grip" title="拖动调整顺序">⋮⋮</span><i style="background:${s.fill}"></i><span class="nm">${s.name || (TYPES[s.type] || {}).name || (s.type === 'path' ? '自定义路径' : s.type)}${maskOn() && s.outside ? ' · 图标外' : ''}${blendMode() && s.under ? ' · 垫底' : ''}</span>`
+      + `<button data-a="up" title="上移一层"${i === 0 ? ' disabled style="opacity:.3"' : ''}>${UP}</button><button data-a="down" title="下移一层"${i === n - 1 ? ' disabled style="opacity:.3"' : ''}>${DOWN}</button>`
+      + `<button data-a="vis" title="${s.hidden ? '显示' : '隐藏'}">${s.hidden ? EYE_OFF : EYE}</button><button data-a="del" class="danger" title="删除">${BIN}</button></div>`).join('');
+  }
+
+  /* ---------- 属性面板 ---------- */
+  const num = (key, label, v, o = {}) => `<div class="field${o.wide ? ' wide' : ''}"><label for="p_${key}">${label}${o.unit ? `<b>${o.unit}</b>` : ''}</label><input type="number" id="p_${key}" data-k="${key}" value="${r2(v)}" step="${o.step || 1}"${o.min != null ? ` min="${o.min}"` : ''}${o.max != null ? ` max="${o.max}"` : ''}></div>`;
+  const rng = (key, label, v, min, max, step = 1, fmt = x => r2(x)) => `<div class="field wide"><label for="p_${key}">${label}<b id="pv_${key}">${fmt(v)}</b></label><input type="range" id="p_${key}" data-k="${key}" min="${min}" max="${max}" step="${step}" value="${v}"></div>`;
+  function colorField(id, v, swOn = true) {
+    return `<div class="field wide"><label for="${id}">颜色</label><div class="color"><input type="color" id="${id}C" value="${v.toLowerCase()}" aria-label="取色"><input type="text" id="${id}" value="${v}" maxlength="7" spellcheck="false"></div>${swOn ? `<div class="swatches">${SWATCHES.map(c => `<button data-sw="${c}" class="${c === v.toUpperCase() ? 'on' : ''}" style="background:${c}" title="${c}"></button>`).join('')}</div>` : ''}</div>`;
+  }
+  function renderProps() {
+    const s = cur(), P = $('#props');
+    if (!s) { P.innerHTML = '<p class="note">在画板上点一个形状来改它。拖动空白处取消选择。</p>'; return; }
+    const kind = s.type === 'rect' && (s.r || 0) >= Math.min(s.w, s.h) / 2 ? 'capsule' : s.type;
+    let m = `<div class="field wide"><label>换成</label><div class="kinds" id="pKinds">${Object.entries(TYPES).map(([k2, T]) => `<button data-kind="${k2}" class="${k2 === kind ? 'on' : ''}" title="换成${T.name}"><svg viewBox="0 0 24 24">${ICONS[k2]}</svg>${T.name}</button>`).join('')}</div></div>`;
+    m += colorField('pFill', s.fill);
+    m += '<div class="fields">' + num('x', 'X', s.x) + num('y', 'Y', s.y) + num('w', '宽', s.w, { min: 4 }) + num('h', '高', s.h, { min: 4 }) + num('rot', '旋转', s.rot || 0, { unit: '°' });
+    m += `<div class="field" style="align-content:end"><label class="chk"><input type="checkbox" id="pLock"${s.lock ? ' checked' : ''}>锁定比例</label></div></div>`;
+    if (blendMode()) m += `<label class="chk"><input type="checkbox" id="pBlend"${s.noBlend ? '' : ' checked'}>参与重叠样式</label>`
+      + `<label class="chk"><input type="checkbox" id="pUnder"${s.under ? ' checked' : ''}>垫在最下面（上面的形状不和它混色）</label>`;
+    if (maskOn()) m += `<label class="chk"><input type="checkbox" id="pOut"${s.outside ? ' checked' : ''}>放在图标外面（不被裁切，画在图标下面）</label>`;
+    if (['rect', 'semi', 'tri', 'play', 'poly', 'star', 'pie'].includes(s.type)) m += rng('r', '圆角', Math.min(s.r || 0, 400), 0, s.type === 'rect' ? Math.round(Math.min(s.w, s.h) / 2) : 200, 1);
+    if (s.type === 'path' && s.sw) m += rng('sw', '线条粗细', s.sw, 2, 80, 1);
+    if (['rect', 'tri', 'play', 'poly'].includes(s.type)) m += rng('hole', '镂空（边框粗细，0 是实心）', s.hole || 0, 0, Math.round(Math.min(s.w, s.h) / 2), 1);
+    if (s.type === 'poly') m += rng('n', '边数', s.n || 6, 3, 12, 1);
+    if (s.type === 'star') m += rng('n', '角数', s.n || 5, 3, 16, 1) + rng('inner', '内凹', s.inner || .45, .1, .95, .01, x => (+x).toFixed(2));
+    if (s.type === 'ring') m += rng('t', '环宽', s.t || 60, 2, Math.round(Math.min(s.w, s.h) / 2 - 1), 1);
+    if (s.type === 'pie') m += rng('gap', '缺口角度', s.gap || 90, 5, 300, 1, x => x + '°') + rng('dir', '缺口朝向', s.dir || 135, 0, 359, 1, x => x + '°');
+    P.innerHTML = m;
+  }
+  /* 改属性：数字框、滑块、颜色都走这里；一次连续拖动只记一步撤销 */
+  let propTimer = 0;
+  $('#props').addEventListener('input', e => {
+    const s = cur(); if (!s) return;
+    const t = e.target;
+    if (t.id === 'pFillC') { s.fill = t.value.toUpperCase(); $('#pFill').value = s.fill; }
+    else if (t.id === 'pFill') { const h = normHex(t.value); if (!h) return; s.fill = h; $('#pFillC').value = h.toLowerCase(); }
+    else if (t.dataset.k) {
+      const key = t.dataset.k, v = parseFloat(t.value); if (!isFinite(v)) return;
+      if ((key === 'w' || key === 'h') && s.lock) { const ratio = s.h / s.w; if (key === 'w') { s.h = Math.max(4, v * ratio); s.w = Math.max(4, v); } else { s.w = Math.max(4, v / ratio); s.h = Math.max(4, v); } }
+      else s[key] = (key === 'w' || key === 'h') ? Math.max(4, v) : v;
+      const out = $('#pv_' + key); if (out) out.textContent = key === 'inner' ? v.toFixed(2) : key === 'gap' || key === 'dir' ? v + '°' : r2(v);
+    }
+    paintArt(); renderSel(); renderPreviews(); renderLayers();
+    clearTimeout(propTimer); propTimer = setTimeout(commit, 350);
+  });
+  $('#props').addEventListener('change', e => {
+    const s = cur(); if (!s) return;
+    if (e.target.id === 'pLock') { s.lock = e.target.checked; commit(); return; }
+    if (e.target.id === 'pBlend') { if (e.target.checked) delete s.noBlend; else s.noBlend = true; commit(); render(); return; }
+    if (e.target.id === 'pUnder') { if (e.target.checked) s.under = true; else delete s.under; commit(); render(); return; }
+    if (e.target.id === 'pOut') { if (e.target.checked) s.outside = true; else delete s.outside; commit(); render(); return; }
+    if (e.target.type === 'number') renderProps();
+    commit();
+  });
+  $('#props').addEventListener('click', e => {
+    const kb = e.target.closest('[data-kind]');
+    if (kb && cur()) { morph(cur(), kb.dataset.kind); commit(); render(); return; }
+    const b = e.target.closest('[data-sw]'); const s = cur(); if (!b || !s) return;
+    s.fill = b.dataset.sw; commit(); render();
+  });
+
+  /* 换形状：保留位置、大小、角度、颜色和层级；新形状缺的参数（圆角、边数、缺口……）用默认值 */
+  function morph(s, kind) {
+    const T = TYPES[kind]; if (!T) return;
+    s.type = T.as || kind;
+    /* 圆角：没有、或者是从胶囊来的（大到等于半个短边）就换成新形状的默认圆角；其他参数只在缺的时候补 */
+    ['r', 'n', 'inner', 't', 'gap', 'dir'].forEach(k2 => { if (T[k2] == null) return; if (s[k2] == null || (k2 === 'r' && s.r >= Math.min(s.w, s.h) / 2)) s[k2] = T[k2]; });
+    if (kind === 'capsule') s.r = 9999;
+  }
+
+  /* ---------- 重叠样式 ---------- */
+  function renderBlend() {
+    const on = !!blendMode(), mode = (S.blend && S.blend.mode) || 'multiply';
+    $('#blendOn').checked = on; $('#blendOn2').checked = on;
+    $('#blendModes').innerHTML = BLENDS.map(([k2, n]) => `<button data-blend="${k2}" class="${on && k2 === mode ? 'on' : ''}">${n}</button>`).join('');
+  }
+  const setBlend = (on, mode) => { S.blend = { on, mode: mode || (S.blend && S.blend.mode) || 'multiply' }; commit(); render(); };
+  $('#blendOn').onchange = e => setBlend(e.target.checked);
+  $('#blendOn2').onchange = e => setBlend(e.target.checked);
+  $('#blendModes').addEventListener('click', e => { const b = e.target.closest('[data-blend]'); if (b) setBlend(true, b.dataset.blend); });
+
+  /* ---------- 图标蒙版 ---------- */
+  let mkPack = 'all', mkQ = '';
+  const bbSvg = document.createElementNS(NS, 'svg');
+  bbSvg.setAttribute('style', 'position:absolute;left:-9999px;top:0;width:10px;height:10px;visibility:hidden'); bbSvg.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(bbSvg);
+  function iconBBox(ic) { bbSvg.innerHTML = `<g>${icPaths(ic)}</g>`; const b = bbSvg.firstChild.getBBox(); return [r2(b.x), r2(b.y), r2(b.width), r2(b.height)]; }
+  const mkList = () => { const q = mkQ.trim().toLowerCase(); return MI.filter(ic => (mkPack === 'all' || ic.pack === mkPack) && (!q || ic.label.includes(q) || ic.id.toLowerCase().includes(q))); };
+  function renderMaskGrid() {
+    $('#maskPacks').innerHTML = [['all', `全部 ${MI.length}`]].concat(PACKS.map(p => [p.id, p.name])).map(([id, n]) => `<button data-pack="${id}" class="${id === mkPack ? 'on' : ''}">${n}</button>`).join('');
+    const list = mkList();
+    $('#maskGrid').innerHTML = list.length ? list.map(ic => `<button data-icon="${ic.id}" title="${ic.label} · ${(PACK[ic.pack] || {}).name || ''}"><svg viewBox="${ic.vb.join(' ')}">${icPaths(ic)}</svg></button>`).join('')
+      : `<div class="empty">${MI.length ? '没找到，换个词试试，比如「花」「猫」「play」。' : '没读到图标数据（icon-studio-icons.js）。'}</div>`;
+    syncMaskGrid();
+  }
+  function syncMaskGrid() { const id = maskOn() ? S.mask.id : null; $$('#maskGrid [data-icon]').forEach(b => b.classList.toggle('on', b.dataset.icon === id)); }
+  function renderMask() {
+    const M = maskOn(); $('#maskOn').checked = !!M; syncMaskGrid();
+    if (!M) { $('#maskProps').innerHTML = '<p class="note">开启后选一个图标，所有形状都会被裁进图标里，不会超出去。想让某个形状当底板，选中它在属性里勾「放在图标外面」。</p>'; return; }
+    const P = PACK[M.pack] || {}, pct = Math.round(M.size * 100);
+    $('#maskProps').innerHTML = `<div class="mkcur"><svg viewBox="${M.vb.join(' ')}">${icPaths(M)}</svg><div><b>${M.label}</b><small>${P.full || ''} · ${P.license || ''} 许可</small></div></div>`
+      + `<div class="field wide"><label for="mSize">图标大小<b id="mSizeV">${pct}%</b></label><input type="range" id="mSize" min="20" max="100" step="1" value="${pct}"></div>`
+      + `<div class="fields"><div class="field"><label for="mX">X</label><input type="number" id="mX" value="${r2(M.x)}"></div><div class="field"><label for="mY">Y</label><input type="number" id="mY" value="${r2(M.y)}"></div></div>`
+      + `<div class="field wide"><label>图标底色<span class="note">形状没盖到的地方</span></label><div class="color">${M.fill ? `<input type="color" id="mFillC" value="${M.fill.toLowerCase()}" aria-label="图标底色"><input type="text" id="mFill" value="${M.fill}" maxlength="7" spellcheck="false">` : '<span class="note" style="flex:1">透明</span>'}<button class="btn" id="mFillNone" style="flex:none">${M.fill ? '透明' : '加底色'}</button></div>`
+      + `<div class="swatches" style="margin-top:6px">${SWATCHES.map(c => `<button data-msw="${c}" class="${c === M.fill ? 'on' : ''}" style="background:${c}" title="${c}"></button>`).join('')}</div></div>`;
+  }
+  function pickIcon(id) {
+    const ic = MI.find(x => x.id === id); if (!ic) return;
+    const o = S.mask || {};
+    S.mask = { on: true, id: ic.id, pack: ic.pack, label: ic.label, vb: ic.vb, d: ic.d, ev: ic.ev || 0, bb: iconBBox(ic), x: o.x ?? 512, y: o.y ?? 512, size: o.size || .76, fill: o.fill === undefined ? '#2456FF' : o.fill };
+    commit(); render();
+  }
+  $('#maskOn').onchange = e => {
+    if (!e.target.checked) { if (S.mask) S.mask.on = false; commit(); render(); return; }
+    if (S.mask && S.mask.d) { S.mask.on = true; commit(); render(); } else { const first = mkList()[0] || MI[0]; if (first) pickIcon(first.id); else e.target.checked = false; }
+  };
+  $('#maskQ').addEventListener('input', e => { mkQ = e.target.value; renderMaskGrid(); });
+  $('#maskPacks').addEventListener('click', e => { const b = e.target.closest('[data-pack]'); if (!b) return; mkPack = b.dataset.pack; renderMaskGrid(); });
+  $('#maskGrid').addEventListener('click', e => { const b = e.target.closest('[data-icon]'); if (b) pickIcon(b.dataset.icon); });
+  $('#maskProps').addEventListener('input', e => {
+    const M = maskOn(), t = e.target; if (!M) return;
+    if (t.id === 'mSize') { M.size = clamp(+t.value, 20, 100) / 100; $('#mSizeV').textContent = t.value + '%'; }
+    else if (t.id === 'mX' || t.id === 'mY') {
+      /* 挪图标时，里面的形状跟着一起走（放在图标外面的不动） */
+      const v = parseFloat(t.value), key = t.id === 'mX' ? 'x' : 'y'; if (!isFinite(v)) return;
+      const dv = v - M[key]; M[key] = v; S.shapes.forEach(s => { if (!s.outside) s[key] = r2(s[key] + dv); });
+    }
+    else if (t.id === 'mFillC') { M.fill = t.value.toUpperCase(); $('#mFill').value = M.fill; }
+    else if (t.id === 'mFill') { const h = normHex(t.value); if (!h) return; M.fill = h; $('#mFillC').value = h.toLowerCase(); }
+    else return;
+    paintArt(); renderGuides(); renderPreviews();
+    clearTimeout(propTimer); propTimer = setTimeout(commit, 350);
+  });
+  $('#maskProps').addEventListener('change', e => { if (['mX', 'mY', 'mFill', 'mFillC'].includes(e.target.id)) { commit(); renderMask(); } else if (e.target.id === 'mSize') commit(); });
+  $('#maskProps').addEventListener('click', e => {
+    const M = maskOn(); if (!M) return;
+    if (e.target.id === 'mFillNone') { M.fill = M.fill ? null : '#2456FF'; commit(); render(); return; }
+    const b = e.target.closest('[data-msw]'); if (b) { M.fill = b.dataset.msw; commit(); render(); }
+  });
+  renderMaskGrid();
+
+  /* ---------- 背景 ---------- */
+  function renderBg() {
+    $('#bgMode').innerHTML = `<div class="seg"><button data-bg="none" class="${S.bg ? '' : 'on'}">透明</button><button data-bg="color" class="${S.bg ? 'on' : ''}">纯色铺满</button></div>`;
+    $('#bgColorField').innerHTML = S.bg ? `<div class="color"><input type="color" id="bgC" value="${S.bg.toLowerCase()}" aria-label="背景颜色"><input type="text" id="bgT" value="${S.bg}" maxlength="7" spellcheck="false"></div><div class="swatches" style="margin-top:6px">${SWATCHES.map(c => `<button data-bgsw="${c}" class="${c === S.bg ? 'on' : ''}" style="background:${c}" title="${c}"></button>`).join('')}</div>` : '<p class="note">透明：画板外的部分在预览里显示为空。图标一般用透明，再让一个大圆或大矩形当底。</p>';
+  }
+  $('#bgMode').addEventListener('click', e => { const b = e.target.closest('[data-bg]'); if (!b) return; S.bg = b.dataset.bg === 'none' ? null : (S.bg || '#F3ECDF'); commit(); render(); });
+  $('#bgColorField').addEventListener('input', e => {
+    if (e.target.id === 'bgC') S.bg = e.target.value.toUpperCase();
+    else if (e.target.id === 'bgT') { const h = normHex(e.target.value); if (!h) return; S.bg = h; }
+    paintArt(); renderPreviews();
+    clearTimeout(propTimer); propTimer = setTimeout(() => { commit(); renderBg(); }, 350);
+  });
+  $('#bgColorField').addEventListener('click', e => { const b = e.target.closest('[data-bgsw]'); if (!b) return; S.bg = b.dataset.bgsw; commit(); render(); });
+
+  /* ---------- 预览 ---------- */
+  const DROID = { mode: 'mono', theme: 'light', seed: '#3B6EA8' };
+  const SEEDS = ['#3B6EA8', '#A8466E', '#4E7D4A', '#B5732E', '#6A5AA8'];
+  try { Object.assign(DROID, JSON.parse(localStorage.getItem(LS + '.droid') || '{}')); } catch (e) {}
+  const use = '<use href="#artSym" width="1024" height="1024"/>';
+  function renderPreviews() {
+    $('#pvCircle').innerHTML = `<defs><clipPath id="cpC"><circle cx="512" cy="512" r="512"/></clipPath></defs><g clip-path="url(#cpC)">${use}</g>`;
+    $('#pvSquare').innerHTML = use;
+    $('#pvMac').innerHTML = `<defs><clipPath id="cpM"><path d="${MAC_PLATE}"/></clipPath></defs><g clip-path="url(#cpM)"><rect width="1024" height="1024" fill="#FFFFFF"/><g transform="translate(100 100) scale(.8047)">${use}</g></g>`;
+    renderDroid();
+    $('#sizes').innerHTML = [128, 64, 32, 16].map(n => `<figure><svg viewBox="0 0 1024 1024" width="${n}" height="${n}"><defs><clipPath id="cpS${n}"><circle cx="512" cy="512" r="512"/></clipPath></defs><g clip-path="url(#cpS${n})">${use}</g></svg>${n}</figure>`).join('')
+      + [64, 32].map(n => `<figure><svg viewBox="0 0 1024 1024" width="${n}" height="${n}" style="filter:drop-shadow(0 2px 3px rgba(0,0,0,.2))"><defs><clipPath id="cpMS${n}"><path d="${MAC_PLATE}"/></clipPath></defs><g clip-path="url(#cpMS${n})"><rect width="1024" height="1024" fill="#FFFFFF"/><g transform="translate(100 100) scale(.8047)">${use}</g></g></svg>mac ${n}</figure>`).join('');
+  }
+  /* 安卓主题图标：系统用壁纸取出的颜色重新上色。
+     主题图标 = 单色剪影（最底下那个铺满的大形状当底板，其余形状合成一个剪影）；保留明暗 = 每个颜色按原来的深浅换成壁纸色的深浅 */
+  function renderDroid() {
+    const [hh] = hslOf(DROID.seed), dark = DROID.theme === 'dark';
+    const bgCol = dark ? hsl(hh, .22, .2) : hsl(hh, .5, .88), fgCol = dark ? hsl(hh, .6, .84) : hsl(hh, .55, .24);
+    let inner = '', note = '';
+    const plate = plateOf(), M = maskOn();
+    if (DROID.mode === 'mono' && M) {
+      /* 开着蒙版：剪影就是蒙版图标本身，再加上放在图标外面的形状（底板除外） */
+      inner = artMarkup((c, s) => (s && s !== plate && s.outside ? fgCol : 'none'), { noBg: true, noBlend: true, idp: 'dm' }) + `<g transform="${maskT(M)}" fill="${fgCol}">${icPaths(M)}</g>`;
+      note = '剪影就是蒙版图标本身，里面的颜色都会变成一种主题色。想保留层次看「保留明暗」。';
+    } else if (DROID.mode === 'mono') {
+      /* 单色层只有「有墨」和「镂空」：亮色形状（眼睛、嘴这类，亮度 > 0.5）画成底色 = 镂空，其余涂主题色 */
+      inner = artMarkup((c, s) => (s && s !== plate ? (lum(c) > .5 ? bgCol : fgCol) : 'none'), { noBg: true, noBlend: true });
+      note = (plate ? '最底下的大形状当成底板，其余形状合成剪影；' : '没有铺满的底板，所有形状合成剪影；') + '亮色形状（眼睛、嘴）变成镂空。';
+    } else {
+      /* 系统只会给单色层涂一种主题色，但保留单色层的透明度。所以「保留明暗」= 把彩色图标的深浅
+         变成单色层的不透明度（越深越实，最浅也留 25%），系统再涂色。深色模式下深浅会反过来，真机也是这样 */
+      const F = .25, a = 1 - F;
+      inner = `<defs><filter id="fTone" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024" color-interpolation-filters="sRGB">`
+        + `<feColorMatrix in="SourceGraphic" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  ${-a * .2126} ${-a * .7152} ${-a * .0722} 0 1" result="L"/>`
+        + `<feComposite in="L" in2="SourceAlpha" operator="in" result="M"/><feFlood flood-color="${fgCol}"/><feComposite in2="M" operator="in"/></filter></defs>`
+        + `<g filter="url(#fTone)">${artMarkup((c, s) => (s && s === plate ? 'none' : c), { noBg: true, idp: 'dt' })}</g>`;
+      note = '彩色的深浅变成单色层的透明度（越深越实），系统再涂上一种主题色。App 自己画好这一层就能做到。' + (plate ? '底板换成系统的底色。' : '');
+    }
+    $('#pvDroid').innerHTML = `<defs><clipPath id="cpD"><circle cx="512" cy="512" r="512"/></clipPath></defs><g clip-path="url(#cpD)"><rect width="1024" height="1024" fill="${bgCol}"/>${inner}</g>`;
+    $('#droidNote').textContent = note;
+    $$('#droidMode button').forEach(b => b.classList.toggle('on', b.dataset.v === DROID.mode));
+    $$('#droidTheme button').forEach(b => b.classList.toggle('on', b.dataset.v === DROID.theme));
+    $$('#seeds button').forEach(b => b.classList.toggle('on', b.dataset.seed === DROID.seed));
+  }
+  $('#seeds').innerHTML = SEEDS.map(c => `<button data-seed="${c}" style="background:${c}" title="壁纸主色 ${c}"></button>`).join('');
+  const saveDroid = () => { try { localStorage.setItem(LS + '.droid', JSON.stringify(DROID)); } catch (e) {} };
+  $('#droidMode').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; DROID.mode = b.dataset.v; saveDroid(); renderDroid(); });
+  $('#droidTheme').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; DROID.theme = b.dataset.v; saveDroid(); renderDroid(); });
+  $('#seeds').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; DROID.seed = b.dataset.seed; saveDroid(); renderDroid(); });
+
+  /* ---------- 画板交互：选择、移动、缩放、旋转、吸附 ---------- */
+  const pt = e => { const r = boardSvg.getBoundingClientRect(), kk = r.width / 1024; return [(e.clientX - r.left) / kk, (e.clientY - r.top) / kk]; };
+  const rotV = (v, deg) => { const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a); return [v[0] * c - v[1] * s, v[0] * s + v[1] * c]; };
+  let drag = null;
+  function showSnap(lines) { const sw = 1.5 / k(); snapLayer.innerHTML = lines.map(([x1, y1, x2, y2]) => `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--guide)" stroke-width="${sw}"/>`).join(''); }
+  boardSvg.addEventListener('pointerdown', e => {
+    if (e.button > 0) return;
+    const p = pt(e), h = e.target.closest('[data-h]'), hit = e.target.closest('[data-id]');
+    if (h && cur()) {
+      const s = cur(); drag = { kind: h.dataset.h === 'rot' ? 'rot' : 'size', h: h.dataset.h, s0: { ...s }, p0: p };
+    } else if (hit) {
+      sel = hit.dataset.id; const s = cur(); drag = { kind: 'move', s0: { ...s }, p0: p };
+      renderSel(); renderLayers(); renderProps(); syncTools();
+    } else { sel = null; renderSel(); renderLayers(); renderProps(); syncTools(); drag = null; return; }
+    boardSvg.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  boardSvg.addEventListener('pointermove', e => {
+    if (!drag) return; const s = cur(); if (!s) return;
+    const p = pt(e), s0 = drag.s0, th = 8 / k();
+    if (drag.kind === 'move') {
+      let nx = s0.x + p[0] - drag.p0[0], ny = s0.y + p[1] - drag.p0[1];
+      const off = rotV(visualOffset(s), s.rot || 0), lines = [];
+      /* 吸附：视觉中心对齐画板中线，或者对齐别的形状的中心 */
+      const targets = [[512, 512]].concat(S.shapes.filter(o => o.id !== s.id && !o.hidden).map(o => { const oo = rotV(visualOffset(o), o.rot || 0); return [o.x - oo[0], o.y - oo[1]]; }));
+      let bx = null, by = null;
+      targets.forEach(([tx, ty]) => { if (bx === null && Math.abs(nx - off[0] - tx) < th) bx = tx; if (by === null && Math.abs(ny - off[1] - ty) < th) by = ty; });
+      if (bx !== null) { nx = bx + off[0]; lines.push([bx, 0, bx, 1024]); }
+      if (by !== null) { ny = by + off[1]; lines.push([0, by, 1024, by]); }
+      s.x = nx; s.y = ny; showSnap(lines);
+    } else if (drag.kind === 'rot') {
+      let a = Math.atan2(p[1] - s0.y, p[0] - s0.x) * 180 / Math.PI + 90;
+      if (e.shiftKey) a = Math.round(a / 15) * 15; else { const n = Math.round(a / 45) * 45; if (Math.abs(a - n) < 2) a = n; }
+      s.rot = ((a % 360) + 540) % 360 - 180;
+    } else {
+      const [sx, sy] = drag.h.split(',').map(Number);
+      const q = rotV(sub(p, [s0.x, s0.y]), -(s0.rot || 0));
+      const A = [-sx * s0.w / 2, -sy * s0.h / 2];
+      let w = sx ? Math.max(8, Math.abs(q[0] - A[0])) : s0.w, h = sy ? Math.max(8, Math.abs(q[1] - A[1])) : s0.h;
+      const lock = s0.lock !== e.shiftKey;
+      if (lock && sx && sy) { const sc = Math.max(w / s0.w, h / s0.h); w = s0.w * sc; h = s0.h * sc; }
+      else if (lock && (sx || sy)) { if (sx) h = s0.h * w / s0.w; else w = s0.w * h / s0.h; }
+      const c = [A[0] + (sx ? sx * w / 2 : 0), A[1] + (sy ? sy * h / 2 : 0)];
+      if (!sx) c[0] = 0; if (!sy) c[1] = 0;
+      const wc = add([s0.x, s0.y], rotV(c, s0.rot || 0));
+      s.w = w; s.h = h; s.x = wc[0]; s.y = wc[1];
+    }
+    paintArt(); renderSel(); renderPreviews();
+  });
+  const endDrag = () => { if (!drag) return; drag = null; snapLayer.innerHTML = ''; commit(); renderProps(); renderLayers(); if (reloadPending) maybeReload(); };
+  boardSvg.addEventListener('pointerup', endDrag); boardSvg.addEventListener('pointercancel', endDrag);
+  new ResizeObserver(() => { renderSel(); renderGuides(); }).observe(boardSvg);
+
+  /* ---------- 工具栏、图层、键盘 ---------- */
+  function addShape(type) {
+    const T = TYPES[type], real = T.as || type;
+    const s = { id: newId(), type: real, x: 512, y: 512, w: T.w, h: T.h, rot: 0, fill: SWATCHES[S.shapes.length % 3 === 0 ? 0 : S.shapes.length % 3 === 1 ? 1 : 2], lock: T.lock };
+    ['r', 'n', 'inner', 't', 'gap', 'dir'].forEach(k2 => { if (T[k2] != null) s[k2] = T[k2]; });
+    if (type === 'play') s.x = 512 + s.w / 6;
+    const M = maskOn(); if (M) { s.x += M.x - 512; s.y += M.y - 512; }
+    S.shapes.push(s); sel = s.id; commit(); render();
+  }
+  $('#addShapes').innerHTML = Object.entries(TYPES).map(([k2, T]) => `<button data-add="${k2}" title="添加${T.name}"><svg viewBox="0 0 24 24">${ICONS[k2]}</svg>${T.name}</button>`).join('');
+  $('#addShapes').addEventListener('click', e => { const b = e.target.closest('[data-add]'); if (b) addShape(b.dataset.add); });
+  $('#presets').innerHTML = PRESETS.map((p, i) => { const d = p.make(); const keep = S; S = d; const thumb = artMarkup(same); S = keep; return `<button data-pre="${i}"><svg viewBox="0 0 1024 1024" style="background:var(--panel-2)">${thumb}</svg>${p.name}</button>`; }).join('');
+  $('#presets').addEventListener('click', e => { const b = e.target.closest('[data-pre]'); if (!b) return; S = PRESETS[+b.dataset.pre].make(); sel = null; commit(); render(); toast('已换成「' + PRESETS[+b.dataset.pre].name + '」，可以撤销'); });
+  $('#layers').addEventListener('click', e => {
+    const row = e.target.closest('.layer'); if (!row) return;
+    const s = S.shapes.find(x => x.id === row.dataset.id); if (!s) return;
+    const a = e.target.closest('[data-a]'), act = a && a.dataset.a;
+    if (act === 'vis') { s.hidden = !s.hidden; commit(); render(); return; }
+    if (act === 'del') { S.shapes = S.shapes.filter(x => x !== s); if (sel === s.id) sel = null; commit(); render(); toast('已删除，可以撤销'); return; }
+    if (act === 'up' || act === 'down') { sel = s.id; move(act === 'up' ? 1 : -1); return; }
+    sel = s.id; render();
+  });
+  /* 拖动图层调整顺序：列表是从上（最前）到下（最后）显示的，放下时换算回 S.shapes 的顺序 */
+  let dragRow = null;
+  $('#layers').addEventListener('dragstart', e => { const row = e.target.closest('.layer'); if (!row) return; dragRow = row.dataset.id; row.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', dragRow); } catch (err) {} });
+  $('#layers').addEventListener('dragover', e => {
+    if (!dragRow) return; const row = e.target.closest('.layer'); if (!row) return; e.preventDefault();
+    const r = row.getBoundingClientRect(), before = e.clientY < r.top + r.height / 2;
+    $$('#layers .layer').forEach(x => x.classList.remove('drop-before', 'drop-after'));
+    if (row.dataset.id !== dragRow) row.classList.add(before ? 'drop-before' : 'drop-after');
+  });
+  $('#layers').addEventListener('dragleave', e => { if (!e.relatedTarget || !$('#layers').contains(e.relatedTarget)) $$('#layers .layer').forEach(x => x.classList.remove('drop-before', 'drop-after')); });
+  $('#layers').addEventListener('drop', e => {
+    if (!dragRow) return; e.preventDefault();
+    const row = e.target.closest('.layer'); const moving = S.shapes.find(x => x.id === dragRow);
+    if (row && moving && row.dataset.id !== dragRow) {
+      const before = row.classList.contains('drop-before');
+      const view = S.shapes.slice().reverse().filter(x => x !== moving);
+      const at = view.findIndex(x => x.id === row.dataset.id) + (before ? 0 : 1);
+      view.splice(at, 0, moving); S.shapes = view.reverse(); sel = moving.id; commit(); render();
+    }
+    dragRow = null;
+  });
+  $('#layers').addEventListener('dragend', () => { dragRow = null; $$('#layers .layer').forEach(x => x.classList.remove('drop-before', 'drop-after', 'dragging')); });
+  function move(dz) { const s = cur(); if (!s) return; const i = S.shapes.indexOf(s), j = clamp(i + dz, 0, S.shapes.length - 1); if (i === j) return; S.shapes.splice(i, 1); S.shapes.splice(j, 0, s); commit(); render(); }
+  function dup() { const s = cur(); if (!s) return; const c = { ...s, id: newId(), x: s.x + 30, y: s.y + 30 }; S.shapes.splice(S.shapes.indexOf(s) + 1, 0, c); sel = c.id; commit(); render(); }
+  function del() { const s = cur(); if (!s) return; S.shapes = S.shapes.filter(x => x !== s); sel = null; commit(); render(); }
+  function undo() { if (!hist.length) return; fut.push(last); restore(hist.pop()); syncTools(); }
+  function redo() { if (!fut.length) return; hist.push(last); restore(fut.pop()); syncTools(); }
+  function centerIt() { const s = cur(); if (!s) return centerAll(); const off = rotV(visualOffset(s), s.rot || 0); s.x = 512 + off[0]; s.y = 512 + off[1]; commit(); render(); }
+  /* 整体居中：把形状画成剪影，量出外框，整体平移让外框中心对准画板中心（和画板上的中线对得上）。
+     最底下铺满的大形状当底板，不参与也不移动。开着图标蒙版时：把蒙版图标连同里面的形状一起放回正中 */
+  async function centerAll() {
+    const M = maskOn();
+    if (M) {
+      const dx = 512 - M.x, dy = 512 - M.y;
+      if (Math.hypot(dx, dy) < .5) return toast('图标已经在正中了');
+      M.x = 512; M.y = 512; S.shapes.forEach(s => { if (!s.outside) { s.x = r2(s.x + dx); s.y = r2(s.y + dy); } });
+      commit(); render(); return toast(`图标连同里面的形状移动了 ${Math.round(dx)}, ${Math.round(dy)}`);
+    }
+    const plate = plateOf(), movers = S.shapes.filter(s => s !== plate);
+    if (!movers.some(s => !s.hidden)) return toast('没有可以居中的形状');
+    const N = 1024, img = new Image();
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="${N}" height="${N}">${artMarkup((c, s) => (s && s !== plate ? '#000' : 'none'), { noBg: true, noBlend: true, idp: 'r' })}</svg>`);
+    await img.decode();
+    const c = document.createElement('canvas'); c.width = c.height = N; const g = c.getContext('2d'); g.drawImage(img, 0, 0, N, N);
+    const d = g.getImageData(0, 0, N, N).data; let x0 = N, x1 = -1, y0 = N, y1 = -1;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (d[(y * N + x) * 4 + 3] > 127) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    if (x1 < 0) return;
+    const dx = 512 - (x0 + x1 + 1) / 2 * 1024 / N, dy = 512 - (y0 + y1 + 1) / 2 * 1024 / N;
+    if (Math.hypot(dx, dy) < .5) return toast('已经在正中了');
+    movers.forEach(s => { s.x = r2(s.x + dx); s.y = r2(s.y + dy); });
+    commit(); render(); toast(`整体移动了 ${Math.round(dx)}, ${Math.round(dy)}`);
+  }
+  function syncTools() {
+    $('#undo').disabled = !hist.length; $('#redo').disabled = !fut.length; ['dup', 'del', 'fwd', 'back'].forEach(id => ($('#' + id).disabled = !cur()));
+    $('#center').disabled = !S.shapes.length; $('#center').textContent = cur() ? '居中' : '整体居中';
+  }
+  $('#undo').onclick = undo; $('#redo').onclick = redo; $('#dup').onclick = dup; $('#del').onclick = del;
+  $('#fwd').onclick = () => move(1); $('#back').onclick = () => move(-1); $('#center').onclick = centerIt;
+  $('#guides').onchange = renderGuides;
+  document.addEventListener('keydown', e => {
+    if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+    if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); dup(); return; }
+    const s = cur(); if (!s) return;
+    if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); del(); return; }
+    if (e.key === 'Escape') { sel = null; render(); return; }
+    if (e.key === ']') { move(1); return; } if (e.key === '[') { move(-1); return; }
+    const st = e.shiftKey ? 10 : 1, M = { ArrowLeft: [-st, 0], ArrowRight: [st, 0], ArrowUp: [0, -st], ArrowDown: [0, st] }[e.key];
+    if (M) { e.preventDefault(); s.x += M[0]; s.y += M[1]; paintArt(); renderSel(); renderPreviews(); clearTimeout(propTimer); propTimer = setTimeout(() => { commit(); renderProps(); }, 300); }
+  });
+
+  /* ---------- 导出、导入 ---------- */
+  let toastT = 0;
+  function toast(t) { const el = $('#toast'); el.textContent = t; el.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('on'), 2200); }
+  function pngBlob(size = 1024) {
+    return new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => { const c = document.createElement('canvas'); c.width = c.height = size; c.getContext('2d').drawImage(img, 0, 0, size, size); c.toBlob(b => (b ? res(b) : rej(new Error('png'))), 'image/png'); };
+      img.onerror = rej;
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgExport());
+    });
+  }
+  /* 导出：本地打开时直接下载；放在 claude.ai 上时走 downloads 能力（页面自己不能触发下载） */
+  let DL = null, DLonly = false;
+  async function save(filename, data) {
+    if (DL) {
+      try { await DL.save({ filename, data }); toast('已保存 ' + filename); }
+      catch (err) { if (err && err.code === 'declined') return; toast(err && err.code === 'rate_limited' ? '上一个保存还没确认，稍等一下' : '保存没成功：' + ((err && err.message) || '未知原因')); }
+      return;
+    }
+    if (DLonly) { toast('这里不能直接下载，已经换成复制'); return copySvg(); }
+    const type = filename.endsWith('.svg') ? 'image/svg+xml' : filename.endsWith('.json') ? 'application/json' : 'application/octet-stream';
+    const blob = data instanceof Blob ? data : new Blob([data], { type });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast('已下载 ' + filename);
+  }
+  async function copySvg() {
+    const t = svgExport();
+    try { await navigator.clipboard.writeText(t); toast('SVG 已复制'); }
+    catch (e) { const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); toast('SVG 已复制'); } catch (e2) { toast('复制被浏览器拦下了'); } ta.remove(); }
+  }
+  $('#copySvg').onclick = copySvg;
+  $('#expSvg').onclick = () => save('erika-icon.svg', svgExport());
+  $('#expPng').onclick = async () => { try { save('erika-icon-1024.png', await pngBlob(1024)); } catch (e) { toast('PNG 生成失败'); } };
+  $('#expJson').onclick = () => save('erika-icon.json', JSON.stringify(S, null, 2));
+  $('#importBtn').onclick = () => $('#importFile').click();
+  $('#importBtn').onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#importFile').click(); } };
+  $('#importFile').onchange = async e => {
+    const file = e.target.files[0]; e.target.value = ''; if (!file) return;
+    try { const d = JSON.parse(await file.text()); if (!d || !Array.isArray(d.shapes)) throw 0; S = fromDesign(d); sel = null; commit(); render(); toast('已导入'); }
+    catch (err) { toast('这个文件不是图标工坊导出的 JSON'); }
+  };
+
+  /* ---------- 保存：用 icon-studio-server.py 打开时存进项目文件夹；放在 claude.ai 上时存云端；都没有就存在这个浏览器里 ---------- */
+  let store = null, savedId = null, armed = null, items = [];
+  const LSS = LS + '.saves';
+  const lsAll = () => { try { return JSON.parse(localStorage.getItem(LSS) || '{}'); } catch (e) { return {}; } };
+  const lsPut = o => { try { localStorage.setItem(LSS, JSON.stringify(o)); return true; } catch (e) { return false; } };
+  const api = async (path, opt) => { const r = await fetch(path, Object.assign({ cache: 'no-store' }, opt)); if (!r.ok) throw new Error(String(r.status)); return r.json(); };
+  const STORES = {
+    server: {
+      title: '存档', note: '现在改的每一步都实时写在 icon-designs/_live.json，不用点保存；Claude 改这个文件，你这边马上跟着变（可以撤销）。「保存」是另外存一份带名字的快照（JSON + SVG），以后能再载入。',
+      list: () => api('/api/designs'),
+      get: id => api('/api/designs/' + encodeURIComponent(id)),
+      save: (name, asNew) => api('/api/designs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, asNew, design: designOf(), svg: svgExport() }) }).then(r => r.id),
+      remove: id => api('/api/designs/' + encodeURIComponent(id), { method: 'DELETE' }),
+    },
+    local: {
+      title: '存到浏览器', note: '只存在这个浏览器里，换浏览器或清理网站数据就没了。想存进项目文件夹，用 icon-studio-server.py 起本地服务再打开这一页。',
+      list: async () => Object.entries(lsAll()).map(([id, v]) => ({ id, name: v.name, updatedAt: v.updatedAt })).sort((a, b) => b.updatedAt - a.updatedAt),
+      get: async id => lsAll()[id],
+      save: async (name, asNew) => { const all = lsAll(), id = !asNew && savedId && all[savedId] ? savedId : 'd' + Date.now().toString(36); all[id] = { name, ...designOf(), updatedAt: Date.now() }; if (!lsPut(all)) throw new Error('storage'); return id; },
+      remove: async id => { const all = lsAll(); delete all[id]; lsPut(all); },
+    },
+  };
+  function dbStore(db) {
+    let docs = [];
+    db.collection('designs').orderBy('updatedAt', 'desc').limit(30).onSnapshot(snap => { docs = snap.docs; refreshList(); }, () => {});
+    return {
+      title: '存到云端', note: '存在云端，Claude 能直接读到。保存后把名字告诉它就行。',
+      list: async () => docs.map(d => { const v = d.data() || {}; return { id: d.id, name: v.name, updatedAt: v.updatedAt }; }),
+      get: async id => { const d = docs.find(x => x.id === id); return d && d.data(); },
+      save: async (name, asNew) => { const ref = !asNew && savedId ? db.doc('designs/' + savedId) : db.collection('designs').doc(); await ref.set({ name, ...designOf(), updatedAt: Date.now() }); return ref.id; },
+      remove: id => db.doc('designs/' + id).delete(),
+    };
+  }
+  async function refreshList() {
+    const L = $('#cloudList');
+    try { items = await store.list(); } catch (e) { L.innerHTML = '<div class="empty">读不到已保存的设计。</div>'; return; }
+    if (!items.length) { L.innerHTML = '<div class="empty">还没有保存过。</div>'; return; }
+    L.innerHTML = items.map(v => { const t = v.updatedAt ? new Date(v.updatedAt) : null; return `<div class="it" data-id="${String(v.id).replace(/"/g, '&quot;')}"><span title="载入">${String(v.name || '未命名').replace(/[<&]/g, '')}</span><time>${t ? `${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}` : ''}</time><button data-del="${String(v.id).replace(/"/g, '&quot;')}">${armed === v.id ? '确认删除' : '删除'}</button></div>`; }).join('');
+  }
+  async function saveDesign(asNew) {
+    if (!store) return;
+    const name = ($('#cloudName').value || '').trim() || '未命名';
+    const btns = [$('#cloudSave'), $('#cloudSaveNew')]; btns.forEach(b => (b.disabled = true));
+    try { savedId = await store.save(name, asNew); toast('已保存「' + name + '」'); refreshList(); }
+    catch (err) { toast(err && err.code === 'invalid_argument' ? '你只有查看权限，不能保存' : err && err.code === 'quota_exceeded' ? '存满了，先删掉几个' : '保存没成功，稍后再试'); }
+    btns.forEach(b => (b.disabled = false));
+  }
+  $('#cloudSave').onclick = () => saveDesign(false);
+  $('#cloudSaveNew').onclick = () => saveDesign(true);
+  $('#cloudList').addEventListener('click', async e => {
+    const delB = e.target.closest('[data-del]');
+    if (delB) {
+      const id = delB.dataset.del;
+      if (armed !== id) { armed = id; refreshList(); return; }
+      armed = null;
+      try { await store.remove(id); if (savedId === id) savedId = null; toast('已删除'); } catch (err) { toast('删除没成功'); }
+      refreshList(); return;
+    }
+    const it = e.target.closest('.it'); if (!it) return;
+    let v; try { v = await store.get(it.dataset.id); } catch (err) { toast('读不到这个设计'); return; }
+    if (!v || !Array.isArray(v.shapes)) { toast('这个设计的文件坏了'); return; }
+    S = fromDesign(v); sel = null; savedId = it.dataset.id; $('#cloudName').value = v.name || ''; commit(); render(); toast('已载入「' + (v.name || '未命名') + '」');
+  });
+  async function pickStore() {
+    try { const r = await fetch('/api/designs', { cache: 'no-store' }); if (r.ok && (r.headers.get('content-type') || '').includes('json')) store = STORES.server; } catch (e) { /* 没有本地服务 */ }
+    const C = window.claude;
+    if (!store && C && C.use) { const db = await C.use('db'); if (db) store = dbStore(db); }
+    if (!store) store = STORES.local;
+    $('#saveTitle').textContent = store.title; $('#saveNote').textContent = store.note; $('#cloudPanel').hidden = false;
+    refreshList();
+  }
+  pickStore();
+
+  /* ---------- 实时同步：设计实时写进 icon-designs/_live.json；文件被改（比如 Claude 改的）或别的窗口改了，这边马上跟着变 ----------
+     服务端用 Server-Sent Events 推送；谁改的记在 by 里（页面是自己的随机 id，直接改文件是 'file'）。
+     网址加 ?doc=_test 可以用另一份实时文档（测试用，不影响正在做的设计）。 */
+  const liveUrl = p => p + '?doc=' + encodeURIComponent(LIVE_DOC);
+  function liveState(t, cls) { const el = $('#liveState'); el.hidden = false; el.textContent = t; el.className = 'live ' + cls; }
+  function pushLive(json) { if (!live) return; livePending = json; clearTimeout(liveTimer); liveTimer = setTimeout(flushLive, 60); }
+  async function flushLive(keepalive) {
+    if (!livePending || liveBusy) return;
+    const json = livePending; livePending = null; liveBusy = true;
+    try {
+      const r = await fetch(liveUrl('/api/live'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: `{"client":"${CID}","design":${json}}`, keepalive: keepalive === true });
+      if (!r.ok) throw new Error(String(r.status));
+      liveRev = Math.max(liveRev, (await r.json()).rev); liveDirty = false;
+    } catch (e) { liveDirty = true; liveState('没连上服务，改动先存在浏览器里', 'wait'); }
+    liveBusy = false; if (livePending) flushLive();
+  }
+  /* 收到别处的改动：当成一步编辑放进撤销记录，所以不想要可以直接撤销 */
+  function applyRemote(design, by) {
+    if (!design || !Array.isArray(design.shapes)) return;
+    const next = fromDesign(design), json = JSON.stringify(next);
+    if (json === last) return;
+    if (drag) { drag = null; snapLayer.innerHTML = ''; }
+    hist.push(last); if (hist.length > 120) hist.shift(); fut.length = 0;
+    S = next; last = json; if (sel && !S.shapes.find(x => x.id === sel)) sel = null;
+    try { localStorage.setItem(LS, json); } catch (e) {}
+    render();
+    if (by !== CID) toast(by === 'file' ? '设计文件被改了（多半是 Claude），已同步，不想要可以撤销' : '另一个窗口改了设计，已同步');
+  }
+  function onLive(m) {
+    if (m.by === 'init') {
+      /* 刚连上或重连上：服务那边还没有这份设计、或者断线时本地改过，就以本地为准推上去；否则以服务为准 */
+      liveRev = m.rev;
+      if (!m.design || liveDirty) { liveDirty = false; pushLive(last); }
+      else if (firstSync) {
+        /* 第一次连上：以实时文件为准。和这个浏览器里的草稿不一样时，把草稿放进撤销记录，撤销一步就能回去 */
+        const next = fromDesign(m.design), json = JSON.stringify(next);
+        if (json !== last) { hist.push(last); S = next; last = json; sel = null; try { localStorage.setItem(LS, json); } catch (e) {} render(); toast('已载入实时设计文件里的版本；想回到这个浏览器原来的草稿，撤销一步'); }
+      }
+      else applyRemote(m.design, 'file');
+      firstSync = false; return;
+    }
+    if (m.rev <= liveRev) return;
+    liveRev = m.rev;
+    if (livePending || liveBusy) return; /* 自己还有没推上去的改动：等会儿推上去就以自己的为准 */
+    applyRemote(m.design, m.by);
+  }
+  /* 页面代码改了：等手上没在拖、没在打字时再刷新，刷新前先把没推上去的改动推完 */
+  function maybeReload() {
+    reloadPending = true;
+    const a = document.activeElement, typing = a && /INPUT|TEXTAREA/.test(a.tagName) && !/checkbox|range|color|button/.test(a.type);
+    if (drag || typing) return setTimeout(maybeReload, 800);
+    if (livePending) flushLive(true);
+    try { sessionStorage.setItem('studio.codeReload', '1'); } catch (e) {}
+    setTimeout(() => location.reload(), 200);
+  }
+  async function initLive() {
+    try { const r = await fetch(liveUrl('/api/live'), { cache: 'no-store' }); if (!r.ok || !(r.headers.get('content-type') || '').includes('json')) return; } catch (e) { return; }
+    live = true;
+    const es = new EventSource(liveUrl('/api/live/events'));
+    es.addEventListener('open', () => liveState(LIVE_DOC === '_live' ? '实时同步中' : '实时同步中 · ' + LIVE_DOC, 'on'));
+    es.addEventListener('error', () => liveState('连接断了，正在重连…', 'wait'));
+    es.addEventListener('design', e => { try { onLive(JSON.parse(e.data)); } catch (err) {} });
+    es.addEventListener('bad', e => { try { toast('设计文件格式不对，没有同步：' + JSON.parse(e.data).error); } catch (err) {} });
+    es.addEventListener('code', () => maybeReload());
+  }
+  initLive();
+  try { if (sessionStorage.getItem('studio.codeReload')) { sessionStorage.removeItem('studio.codeReload'); setTimeout(() => toast('页面代码更新了，已自动刷新'), 400); } } catch (e) {}
+  if (window.claude && window.claude.use) {
+    /* 放在 claude.ai 上：页面自己不能触发下载，走 downloads 能力 */
+    DLonly = true;
+    window.claude.use('downloads').then(d => { DL = d; if (!d) { ['expSvg', 'expPng', 'expJson'].forEach(id => ($('#' + id).hidden = true)); $('#expNote').textContent = '这里不能下载文件，用「复制 SVG」把矢量图复制出来。'; } });
+  }
+
+  render();
+})();
+</script>
+</body>
+</html>

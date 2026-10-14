@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>图标烟雾工作台</title>
-<meta name="description" content="用 WebGL 流体模拟在 NipaPlay 图标的三个形状里生成彩色烟雾，定格某一帧并导出位图。">
+<meta name="description" content="用 WebGL 流体模拟在 Erika 图标的三个形状里生成彩色烟雾，定格某一帧并导出位图。">
 <link rel="icon" href="../../assets/icon.png">
 <link rel="stylesheet" href="../../doc.css">
 <style>
@@ -134,7 +134,7 @@
       const c = document.createElement('canvas'); S.composite(c, size);
       c.toBlob(b => {
         const a = document.createElement('a'); a.href = URL.createObjectURL(b);
-        a.download = `nipaplay-icon-smoke-s${P.seed}-f${P.frame}${P.plate ? '-macos' : ''}${P.bar ? '-bar' : ''}-${size}.png`; a.click();
+        a.download = `erika-icon-smoke-s${P.seed}-f${P.frame}${P.plate ? '-macos' : ''}${P.bar ? '-bar' : ''}-${size}.png`; a.click();
         P.dyeRes = keep; S.renderFrame(P.frame); draw(); busy = false;
       });
     }, 20);

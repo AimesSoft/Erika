@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="70 66 810 370" width="810" height="370" role="img" aria-label="ERIKA エリカ">
+  <title>ERIKA</title>
+  <!--
+    Erika 标题字 · 手绘矢量（闭合轮廓，逐点手写）
+    - 大写无衬线，比例取罗马碑刻大写：E 窄、R K 中等、A 宽
+    - 竖笔两端略粗、中段收腰（23 → 20）；横笔 19 → 17
+    - 斜笔有粗细：下行斜笔粗（R 腿、K 腿、A 右笔 ≈ 26），上行斜笔细（K 臂、A 左笔 ≈ 15），A 横笔细且偏低
+    - 字距放宽；日文 エリカ 用等粗黑体笔画，居中放在下方
+    颜色一律 currentColor，展示页里用 CSS 换色
+  -->
+  <g class="latin" fill="currentColor">
+    <path class="E" d="M100 100 L194 100 L194 120 Q158 117 123 119 L123 189 Q156 190.5 186 188.5 L186 207.5 Q156 206 123 207 L123 281 Q162 282.5 198 280 L198 300 L100 300 Q103 200 100 100 Z"/>
+    <path class="R" fill-rule="evenodd" d="M250 100 L300 100 C330 100 350 122 350 154 C350 178 339 195 324 203 L373 300 L343 300 L300 210 L273 210 L273 300 L250 300 Q253 200 250 100 Z M273 119 L273 191 L300 191 C316 191 327 176 327 155 C327 134 316 119 299 119 Z"/>
+    <path class="I" d="M428 100 L451 100 Q448 200 451 300 L428 300 Q431 200 428 100 Z"/>
+    <path class="K" d="M525 100 L548 100 L548 203 L626 100 L646 100 L581 182.8 L656 300 L626 300 L566.6 201 L548 224.7 L548 300 L525 300 Q528 200 525 100 Z"/>
+    <path class="A" fill-rule="evenodd" d="M770 95 L850 300 L822 300 L798.5 240 L730.5 240 L707 300 L690 300 Z M764.5 153.4 L793 226 L736 226 Z"/>
+  </g>
+  <g class="kana" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter">
+    <g transform="translate(356 350)"><path d="M7 6 L47 6 M27 6 L27 48 M0 48 L54 48"/></g>
+    <g transform="translate(448 350)"><path d="M13 4 L13 34 M41 1 L41 26 Q41 47 19 54"/></g>
+    <g transform="translate(540 350)"><path d="M3 17 L48 17 L48 44 Q48 54 37 52 M24 0 L24 20 Q22 42 4 55"/></g>
+  </g>
+  <g class="rules" display="none" stroke="currentColor" stroke-width="2.5">
+    <path d="M150 377 L326 377 M624 377 L800 377"/>
+  </g>
+</svg>

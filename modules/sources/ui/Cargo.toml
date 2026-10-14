@@ -1,0 +1,10 @@
+[package]
+name = "erika-sources-ui"
+description = "The sources module: its interface"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true
+erika-sources-protocol = { path = "../protocol" }

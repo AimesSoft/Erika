@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Erika 图标 · 取景框">
+  <title>Erika · D 取景框</title>
+  <!--
+    D 取景框：四个直角框（中心线围成 260–764 的正方形，边长 120、粗 40，方头直角），中间是玫瑰红播放三角。
+    三角形：重心 (522, 512)，圆角 18，可见高约 240。
+  -->
+  <rect class="bg" width="1024" height="1024" fill="#F3ECDF"/>
+  <path class="m" d="M260 380 L260 260 L380 260 M644 260 L764 260 L764 380 M764 644 L764 764 L644 764 M380 764 L260 764 L260 644" fill="none" stroke="#213A6B" stroke-width="40" stroke-linejoin="miter" stroke-linecap="butt"/>
+  <path class="a" d="M463.1 410 L463.1 614 L639.8 512 Z" fill="#DC2A5A" stroke="#DC2A5A" stroke-width="36" stroke-linejoin="round"/>
+</svg>

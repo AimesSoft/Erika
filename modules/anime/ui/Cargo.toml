@@ -1,0 +1,10 @@
+[package]
+name = "erika-anime-ui"
+description = "The anime module: its interface"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true
+erika-anime-protocol = { path = "../protocol" }

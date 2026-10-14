@@ -1,0 +1,10 @@
+[package]
+name = "erika-protocol"
+description = "Erika: the state and the commands that change it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true

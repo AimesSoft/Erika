@@ -1,5 +1,5 @@
 /* =====================================================================
-   Erika · 交互原型（画框版）：顶栏 + 一扇缩放到合适大小的窗口
+   Erika · 交互原型：顶栏 + 一扇缩放到合适大小的窗口
    窗口本身的样式全在 next.css（类名带 x- / c- 前缀，避开 doc.css 的全局类）
    ===================================================================== */
 body.proto { margin: 0; height: 100vh; height: 100dvh; overflow: hidden; display: flex; flex-direction: column; background: var(--surface-2); }

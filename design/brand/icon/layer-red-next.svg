@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <title>NipaPlay 图标图层 · 红色「下一个」⏭ · Next</title>
-  <!-- 与 new-icon.icon/Assets 里的位图图层位置一致，可直接在 Icon Composer 里替换 -->
-  <path d="M386.8 718.4 L267.6 335.1 A50 50 0 0 1 326.3 271.4 L718.4 360 A50 50 0 0 1 744.1 442.7 L471.3 737.5 A50 50 0 0 1 386.8 718.4 Z" fill="#FF2E55"/>
-  <path d="M777.1 255.2 L851.9 495.8" fill="none" stroke="#FF2E55" stroke-width="60" stroke-linecap="round"/>
-</svg>

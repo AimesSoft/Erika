@@ -1,0 +1,173 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "smv68t6iza",
+      "type": "play",
+      "x": 473.43,
+      "y": 520.07,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "smv68t6r9b",
+      "type": "play",
+      "x": 396.29,
+      "y": 563.98,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 52
+    },
+    {
+      "id": "smv68t6xdc",
+      "type": "play",
+      "x": 396.29,
+      "y": 475.43,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "d22",
+      "type": "rect",
+      "x": 650.62,
+      "y": 441.24,
+      "w": 110,
+      "h": 16,
+      "rot": -56,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999,
+      "noBlend": true
+    },
+    {
+      "id": "d23",
+      "type": "ellipse",
+      "x": 686.97,
+      "y": 387.35,
+      "w": 40,
+      "h": 40,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": true,
+      "noBlend": true
+    },
+    {
+      "id": "d24",
+      "type": "rect",
+      "x": 681.38,
+      "y": 475.4,
+      "w": 110,
+      "h": 16,
+      "rot": -28,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999,
+      "noBlend": true
+    },
+    {
+      "id": "d25",
+      "type": "ellipse",
+      "x": 738.77,
+      "y": 444.88,
+      "w": 40,
+      "h": 40,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": true,
+      "noBlend": true
+    },
+    {
+      "id": "d26",
+      "type": "rect",
+      "x": 692.5,
+      "y": 520,
+      "w": 110,
+      "h": 16,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999,
+      "noBlend": true
+    },
+    {
+      "id": "d27",
+      "type": "ellipse",
+      "x": 757.5,
+      "y": 520,
+      "w": 40,
+      "h": 40,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": true,
+      "noBlend": true
+    },
+    {
+      "id": "d28",
+      "type": "rect",
+      "x": 681.38,
+      "y": 564.6,
+      "w": 110,
+      "h": 16,
+      "rot": 28,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999,
+      "noBlend": true
+    },
+    {
+      "id": "d29",
+      "type": "ellipse",
+      "x": 738.77,
+      "y": 595.12,
+      "w": 40,
+      "h": 40,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": true,
+      "noBlend": true
+    },
+    {
+      "id": "d30",
+      "type": "rect",
+      "x": 650.62,
+      "y": 598.76,
+      "w": 110,
+      "h": 16,
+      "rot": 56,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999,
+      "noBlend": true
+    },
+    {
+      "id": "d31",
+      "type": "ellipse",
+      "x": 686.97,
+      "y": 652.65,
+      "w": 40,
+      "h": 40,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": true,
+      "noBlend": true
+    }
+  ],
+  "blend": {
+    "on": true,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "灵感08 梨花·花蕊",
+  "updatedAt": 1791873723439
+}

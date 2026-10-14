@@ -1,0 +1,10 @@
+[package]
+name = "erika-enhance-ui"
+description = "The enhance module: its interface"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true
+erika-enhance-protocol = { path = "../protocol" }

@@ -1,0 +1,84 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "d1",
+      "type": "rect",
+      "x": 366,
+      "y": 430,
+      "w": 250,
+      "h": 52,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 9999
+    },
+    {
+      "id": "d2",
+      "type": "rect",
+      "x": 344,
+      "y": 520,
+      "w": 190,
+      "h": 52,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 9999
+    },
+    {
+      "id": "d3",
+      "type": "rect",
+      "x": 388,
+      "y": 610,
+      "w": 290,
+      "h": 52,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 9999
+    },
+    {
+      "id": "smv68t6iza",
+      "type": "play",
+      "x": 663.93,
+      "y": 520.07,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "smv68t6r9b",
+      "type": "play",
+      "x": 586.79,
+      "y": 563.98,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 52
+    },
+    {
+      "id": "smv68t6xdc",
+      "type": "play",
+      "x": 586.79,
+      "y": 475.43,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 30
+    }
+  ],
+  "blend": {
+    "on": true,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "灵感01 弹幕",
+  "updatedAt": 1791873717022
+}

@@ -1,0 +1,43 @@
+# The anime module: its own protocol, engine and interface. The
+# application lists it under [[modules]] in its Bern.toml.
+
+[module]
+id = "anime"
+name = { "zh-Hans" = "追番", "en" = "Anime" }
+# Modules this one calls, reads or answers events of. The application lists
+# them before this one.
+depends = []
+# `optional = true` lets the application switch this module off at run
+# time; `enabled = false` then keeps it off until switched on.
+optional = true
+
+[module.protocol]
+package = "erika-anime-protocol"
+source = "protocol/src/lib.rs"
+
+[module.engine]
+package = "erika-anime-core"
+type = "erika_anime_core::AnimeEngine"
+path = "core"
+
+[module.ui]
+package = "erika-anime-ui"
+sources = "ui/src"
+
+[languages]
+supported = ["zh-Hans", "en"]
+default = "zh-Hans"
+
+[[pages]]
+slot = "main"
+id = "home"
+label = { "zh-Hans" = "首页", "en" = "Home" }
+icon = "house"
+component = "home_page"
+
+[[pages]]
+slot = "main"
+id = "new"
+label = { "zh-Hans" = "新番", "en" = "New Shows" }
+icon = "calendar"
+component = "new_page"

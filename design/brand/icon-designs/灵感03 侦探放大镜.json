@@ -1,0 +1,72 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "smv68t6iza",
+      "type": "play",
+      "x": 509.93,
+      "y": 464.07,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "smv68t6r9b",
+      "type": "play",
+      "x": 432.79,
+      "y": 507.98,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 52
+    },
+    {
+      "id": "smv68t6xdc",
+      "type": "play",
+      "x": 432.79,
+      "y": 419.43,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "d7",
+      "type": "ring",
+      "x": 456,
+      "y": 456,
+      "w": 660,
+      "h": 660,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": true,
+      "t": 56
+    },
+    {
+      "id": "d8",
+      "type": "rect",
+      "x": 774,
+      "y": 774,
+      "w": 120,
+      "h": 300,
+      "rot": -45,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 9999
+    }
+  ],
+  "blend": {
+    "on": true,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "灵感03 侦探放大镜",
+  "updatedAt": 1791873718855
+}

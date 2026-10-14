@@ -1,0 +1,12 @@
+[package]
+name = "erika-ui"
+description = "Erika: the interface"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true
+erika-protocol.workspace = true
+erika-anime-protocol = { path = "../modules/anime/protocol" }

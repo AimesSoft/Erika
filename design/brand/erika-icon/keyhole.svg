@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Erika 图标 · 钥匙孔">
+  <title>Erika · B 钥匙孔</title>
+  <!--
+    B 钥匙孔：圆头 (512, 410) 半径 150，下面是往下张开的槽（上宽 128、下宽 224，底角圆角 20），底边 y = 770。
+    圆头里挖出一个三角形的孔，孔里放玫瑰红播放三角，三角和孔边留 16 的缝；单色时孔仍然是空的。
+  -->
+  <defs>
+    <mask id="khm" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#FFFFFF"/>
+      <path d="M482.8 349 L482.8 471 L588.4 410 Z" fill="#000000" stroke="#000000" stroke-width="60" stroke-linejoin="round"/>
+    </mask>
+  </defs>
+  <rect class="bg" width="1024" height="1024" fill="#F3ECDF"/>
+  <path class="m" mask="url(#khm)" d="M440.5 541.9 A150 150 0 1 1 583.5 541.9 L619.8 746.5 A20 20 0 0 1 600.1 770 L423.9 770 A20 20 0 0 1 404.2 746.5 Z" fill="#213A6B"/>
+  <path class="a" d="M482.8 349 L482.8 471 L588.4 410 Z" fill="#DC2A5A" stroke="#DC2A5A" stroke-width="28" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,72 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "deco1",
+      "type": "play",
+      "x": 369.5,
+      "y": 512,
+      "w": 130,
+      "h": 148,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 20
+    },
+    {
+      "id": "deco2",
+      "type": "play",
+      "x": 279.5,
+      "y": 512,
+      "w": 84,
+      "h": 96,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 14
+    },
+    {
+      "id": "smv68t6iza",
+      "type": "play",
+      "x": 667.43,
+      "y": 520.07,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "smv68t6r9b",
+      "type": "play",
+      "x": 590.29,
+      "y": 563.98,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 52
+    },
+    {
+      "id": "smv68t6xdc",
+      "type": "play",
+      "x": 590.29,
+      "y": 475.43,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 30
+    }
+  ],
+  "blend": {
+    "on": true,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "装饰E 快进尾迹",
+  "updatedAt": 1791872995881
+}

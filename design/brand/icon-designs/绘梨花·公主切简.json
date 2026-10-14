@@ -1,0 +1,91 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "f11",
+      "type": "ellipse",
+      "x": 512,
+      "y": 512,
+      "w": 1024,
+      "h": 1024,
+      "rot": 0,
+      "fill": "#3B54C9",
+      "lock": true
+    },
+    {
+      "id": "f12",
+      "type": "rect",
+      "x": 512,
+      "y": 480,
+      "w": 450,
+      "h": 280,
+      "rot": 0,
+      "fill": "#FBF1E6",
+      "lock": false,
+      "r": 18
+    },
+    {
+      "id": "f13",
+      "type": "semi",
+      "x": 512,
+      "y": 699,
+      "w": 450,
+      "h": 240,
+      "rot": 180,
+      "fill": "#FBF1E6",
+      "lock": false,
+      "r": 0
+    },
+    {
+      "id": "f14",
+      "type": "ellipse",
+      "x": 444.5,
+      "y": 488.8,
+      "w": 42.75,
+      "h": 67.5,
+      "rot": 0,
+      "fill": "#2E47B8",
+      "lock": true
+    },
+    {
+      "id": "f15",
+      "type": "ellipse",
+      "x": 579.5,
+      "y": 488.8,
+      "w": 42.75,
+      "h": 67.5,
+      "rot": 0,
+      "fill": "#2E47B8",
+      "lock": true
+    },
+    {
+      "id": "f16",
+      "type": "ellipse",
+      "x": 296,
+      "y": 268,
+      "w": 176,
+      "h": 176,
+      "rot": 0,
+      "fill": "#D02A3E",
+      "lock": true
+    },
+    {
+      "id": "f17",
+      "type": "ellipse",
+      "x": 285.44,
+      "y": 257.44,
+      "w": 88,
+      "h": 88,
+      "rot": 0,
+      "fill": "#8C1428",
+      "lock": true
+    }
+  ],
+  "blend": {
+    "on": false,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "绘梨花·公主切简",
+  "updatedAt": 1791874487545
+}

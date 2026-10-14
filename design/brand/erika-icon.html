@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="zh-CN" data-accent="rose">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Erika 图标</title>
+<meta name="description" content="Erika 软件图标定稿：蓝发齐刘海的猫耳女孩，和 Bern 的图标是一对。主 logo、各平台版本、单色版和文件；页尾保留第一版草稿。">
+<link rel="icon" href="../assets/icon.png">
+<link rel="stylesheet" href="../doc.css">
+<style>
+  :root { --cream: #F3ECDF; --navy: #213A6B; --rose: #DC2A5A; --rose-d: #EC4470; }
+  main.brand { max-width: 1120px; margin: 0 auto; padding: 48px 32px 120px; }
+
+  /* 图标：内联 SVG，外面裁成系统的圆角方形（实际由系统裁切） */
+  .ic { display: block; aspect-ratio: 1; border-radius: 22.37%; overflow: hidden; flex: none;
+        box-shadow: 0 0 0 1px rgba(0,0,0,.05), 0 2px 4px rgba(0,0,0,.06), 0 10px 24px rgba(0,0,0,.08); }
+  .ic svg { display: block; width: 100%; height: 100%; }
+  .ic.dk svg .bg { fill: var(--navy); }
+  .ic.dk svg .m[fill]:not([fill="none"]) { fill: var(--cream); }
+  .ic.dk svg .m[stroke] { stroke: var(--cream); }
+  .ic.dk svg .a { fill: var(--rose-d); stroke: var(--rose-d); }
+  .ic.mono { border-radius: 0; overflow: visible; box-shadow: none; color: #FFFFFF; }
+  .ic.mono svg .bg { display: none; }
+  .ic.mono svg .m[fill]:not([fill="none"]), .ic.mono svg .a { fill: currentColor; }
+  .ic.mono svg .m[stroke], .ic.mono svg .a[stroke] { stroke: currentColor; }
+  .ic.flat { box-shadow: none; }
+
+  .ek-chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0 0; }
+  .ek-chips span { display: flex; align-items: center; gap: 8px; font: 12px var(--mono); color: var(--text-2); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px 4px 5px; }
+  .ek-chips i { width: 18px; height: 18px; border-radius: 50%; display: block; box-shadow: inset 0 0 0 1px rgba(0,0,0,.1); }
+
+  /* 推荐 */
+  .ek-rec { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .ek-rec .st { border-radius: 24px; border: 1px solid var(--line); background: #FBFAF8; display: grid; place-items: center; padding: 56px 24px; }
+  .ek-rec .st.dkbg { background: #16171B; border-color: transparent; }
+  .ek-rec .ic { width: min(300px, 70%); }
+  .ek-rec .lb { font-size: 12px; font-weight: 600; color: var(--text-3); margin-top: 22px; }
+  .ek-rec .st.dkbg .lb { color: #7c7c86; }
+
+  /* 四个方向 */
+  .ek-dirs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+  .ek-dir { border-radius: 22px; border: 1px solid var(--line); background: var(--surface); padding: 22px; }
+  .ek-dir.rec { border-color: rgba(220, 42, 90, .5); box-shadow: 0 0 0 3px rgba(220, 42, 90, .1); }
+  .ek-dir .k { font: 600 12px var(--mono); color: var(--text-3); }
+  .ek-dir.rec .k { color: #DC2A5A; }
+  .ek-dir h4 { margin: 4px 0 14px; }
+  .ek-dir .pair { display: flex; gap: 18px; align-items: center; }
+  .ek-dir .pair .ic { width: calc(50% - 9px); }
+  .ek-dir .sz { display: flex; align-items: flex-end; gap: 14px; margin: 18px 0 0; padding: 14px 16px; border-radius: 14px; background: var(--surface-2); }
+  .ek-dir .sz figure { margin: 0; font-size: 11px; color: var(--text-3); text-align: center; }
+  .ek-dir .sz figure .ic { margin: 0 auto 6px; }
+  .ek-dir .sz .mono-w { margin-left: auto; display: flex; gap: 10px; align-items: flex-end; }
+  .ek-dir .sz .mono-w > span { display: grid; place-items: center; width: 56px; height: 56px; border-radius: 12px; background: #8A90A0; }
+  .ek-dir .sz .mono-w > span.tint { background: #1C2B4A; }
+  .ek-dir .sz .mono-w .ic { width: 36px; }
+  .ek-dir p { margin: 14px 0 0; }
+  .ek-dir .risk { color: var(--text-3); }
+
+  /* 实际场景 */
+  .ek-pick { display: flex; flex-wrap: wrap; width: fit-content; max-width: 100%; gap: 2px; padding: 3px; border-radius: 18px; background: var(--surface-2); margin: 4px 0 14px; }
+  .ek-pick button { appearance: none; border: 0; background: none; font: inherit; font-size: 13px; color: var(--text-2); padding: 5px 14px; border-radius: 999px; cursor: pointer; }
+  .ek-pick button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .ek-ctx { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: stretch; }
+  .ek-phone { border-radius: 40px; padding: 54px 20px 28px; background: #D9DEE6; display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px 12px; align-content: start; }
+  .ek-phone.dkbg { background: #23262E; }
+  .ek-phone .app { text-align: center; font-size: 11px; color: #3b3f48; }
+  .ek-phone.dkbg .app { color: #c9ccd3; }
+  .ek-phone .app .ic, .ek-phone .app .ph { width: 54px; margin: 0 auto 6px; }
+  .ek-phone .app .ph { aspect-ratio: 1; border-radius: 22.37%; background: rgba(255,255,255,.55); }
+  .ek-phone.dkbg .app .ph { background: rgba(255,255,255,.1); }
+  .ek-right { display: grid; gap: 16px; grid-template-rows: auto 1fr; }
+  .ek-dock-w { border-radius: 22px; background: linear-gradient(#C9D2DF, #C9D2DF); padding: 40px 24px 22px; display: grid; place-items: center; }
+  .ek-dock { display: flex; gap: 12px; align-items: flex-end; padding: 10px 12px; border-radius: 22px; background: rgba(255,255,255,.55); box-shadow: 0 0 0 1px rgba(255,255,255,.5) inset, 0 8px 24px rgba(0,0,0,.12); }
+  .ek-dock .ph, .ek-dock .ic { width: 52px; }
+  .ek-dock .ph { aspect-ratio: 1; border-radius: 22.37%; background: rgba(255,255,255,.7); }
+  .ek-dock .on-ic { position: relative; }
+  .ek-dock .on-ic::after { content: ""; position: absolute; left: 50%; bottom: -7px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: rgba(0,0,0,.45); }
+  .ek-lock { border-radius: 22px; border: 1px solid var(--line); background: #FFFFFF; display: flex; align-items: center; justify-content: center; gap: 26px; padding: 30px 24px; flex-wrap: wrap; }
+  .ek-lock .ic { width: 96px; }
+  .ek-lock img { width: 240px; height: auto; }
+
+  .ek-notes { margin-top: 16px; }
+
+  /* 定稿 */
+  .fx-hero { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .fx-hero .st { border-radius: 24px; border: 1px solid var(--line); background: #FBFAF8; display: grid; place-items: center; padding: 48px 24px 22px; }
+  .fx-hero .st.dkbg { background: #16171B; border-color: transparent; }
+  .fx-hero img { width: min(320px, 72%); height: auto; }
+  .fx-hero .lb { font-size: 12px; font-weight: 600; color: var(--text-3); margin-top: 20px; }
+  .fx-hero .st.dkbg .lb { color: #7c7c86; }
+  .fx-sizes { display: flex; align-items: flex-end; gap: 22px; flex-wrap: wrap; margin-top: 16px; padding: 22px 26px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); }
+  .fx-sizes figure, .fx-plat figure { margin: 0; text-align: center; font-size: 12px; color: var(--text-3); }
+  .fx-sizes img { display: block; height: auto; margin: 0 auto 8px; }
+  .fx-plat { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px 14px; padding: 26px 22px; border-radius: 22px; background: #D9DEE6; }
+  .fx-plat figure { color: #4a4f5a; }
+  .fx-plat img { width: 112px; height: 112px; display: block; margin: 0 auto 8px; object-fit: contain; }
+  .fx-plat img.r { border-radius: 22.37%; }
+  .fx-mono { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  .fx-mono .t { position: relative; border-radius: 22px; border: 1px solid var(--line); display: grid; place-items: center; padding: 40px 20px; min-height: 230px; }
+  .fx-mono .t img { width: min(170px, 70%); height: auto; }
+  .fx-mono .t .lb { position: absolute; left: 16px; top: 12px; font-size: 12px; font-weight: 600; color: var(--text-3); }
+  .fx-mono .t.dkbg { background: #16171B; border-color: transparent; }
+  .fx-mono .t.dkbg .lb, .fx-mono .t.photo .lb { color: rgba(255,255,255,.75); }
+  .fx-anim { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .fx-anim .st { border-radius: 24px; border: 1px solid var(--line); background: #FBFAF8; display: grid; place-items: center; padding: 40px 24px; }
+  .fx-anim .st.dkbg { background: #16171B; border-color: transparent; }
+  .fx-anim object { display: block; width: min(300px, 70%); aspect-ratio: 1; height: auto; }
+  .fx-replay { margin-top: 14px; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font: inherit; font-size: 14px; font-weight: 600; color: var(--text); cursor: pointer; }
+  .fx-steps { margin: 14px 0 0; padding-left: 20px; color: var(--text-2); font-size: 14px; line-height: 1.8; }
+  @media (max-width: 760px) { .fx-hero, .fx-mono, .fx-anim { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { .ek-ctx { grid-template-columns: 1fr; } .ek-phone { max-width: 320px; } }
+  @media (max-width: 760px) {
+    main.brand { padding: 28px 16px 100px; }
+    .ek-rec, .ek-dirs { grid-template-columns: 1fr; }
+    .ek-rec .st { padding: 36px 16px; }
+    .ek-dir .sz { flex-wrap: wrap; }
+    .ek-dir .sz .mono-w { margin-left: 0; }
+    .ek-right { min-width: 0; }
+    .ek-dock { gap: 8px; padding: 8px 10px; }
+    .ek-dock .ph, .ek-dock .ic { width: 38px; }
+    .ek-lock img { width: 200px; }
+  }
+</style>
+</head>
+<body>
+<main class="brand">
+  <div class="eyebrow"><span class="sailor"></span><b>品牌</b> Erika 图标 · 定稿</div>
+  <h2>Erika 图标</h2>
+  <p class="lead2">蓝发齐刘海的猫耳女孩。蓝色的圆是头发，深色剪影是脸，同时也是一只猫：两只猫耳之间那道平直的边就是齐刘海。右耳歪戴一顶绯红小帽，帽下垂着两根发带，米黄的竖发绳和品红的蝴蝶结圈。开发框架 Bern 的图标是黑猫和蓝发女孩，Erika 是 Bernkastel 的棋子，所以两个图标是一对。作者亲自设计，在<a href="icon-studio.html">图标工坊</a>里完成。</p>
+  <div class="ek-chips">
+    <span><i style="background:#3E5BD8"></i>头发 #3E5BD8</span>
+    <span><i style="background:#222B4F"></i>脸 · 猫 #222B4F</span>
+    <span><i style="background:#DCE6FF"></i>眼睛、嘴 #DCE6FF</span>
+    <span><i style="background:#FF2E55"></i>帽子 #FF2E55</span>
+    <span><i style="background:#D340AD"></i>蝴蝶结圈 #D340AD</span>
+    <span><i style="background:#F3E1A9"></i>竖发绳 #F3E1A9</span>
+  </div>
+
+  <h3>主 logo</h3>
+  <p>对外展示用：README、官网、关于页、欢迎页。圆形，帽子不裁切、完整地伸出圆外，背景透明。</p>
+  <div class="fx-hero">
+    <div class="st"><img src="erika-icon.svg" alt="Erika 图标"><span class="lb">浅色背景</span></div>
+    <div class="st dkbg"><img src="erika-icon.svg" alt=""><span class="lb">深色背景</span></div>
+  </div>
+  <div class="fx-sizes">
+    <figure><img src="erika-icon.svg" width="128" alt="">128</figure>
+    <figure><img src="erika-icon.svg" width="64" alt="">64</figure>
+    <figure><img src="erika-icon.svg" width="32" alt="">32</figure>
+    <figure><img src="erika-icon.svg" width="16" alt="">16</figure>
+  </div>
+
+  <h3>出场动画</h3>
+  <p>和标题字一样，动画写在 SVG 文件里（纯 CSS），放进 <code>&lt;img&gt;</code> 和 GitHub README 都会播放，播一次就停在最后一帧，和静态 logo 完全一样；系统开了「减少动态效果」时直接显示静态图。用在 README、关于页和首次启动的欢迎页。<b>出场之后双击 logo</b>，会随机做一个小动作（连续两次不重复）。</p>
+  <div class="fx-anim">
+    <div class="st"><object class="fx-a" type="image/svg+xml" data="erika-icon-animated.svg" aria-label="Erika 图标，双击有小动作"></object></div>
+    <div class="st dkbg"><object class="fx-a" type="image/svg+xml" data="erika-icon-animated.svg" aria-label="Erika 图标，双击有小动作"></object></div>
+  </div>
+  <button class="fx-replay" type="button" onclick="document.querySelectorAll('.fx-a').forEach(o => { o.data = 'erika-icon-animated.svg?' + Date.now(); })">↻ 重播</button>
+  <ol class="fx-steps">
+    <li>0.00s 头发的圆「啵」地弹出来，带果冻回弹</li>
+    <li>0.30s 猫头从底下蹦上来，落地压扁再弹回</li>
+    <li>0.75s 两只眼睛先后弹开，0.95s「^」嘴冒出来</li>
+    <li>1.00s 米黄竖发绳从上往下展开；品红蝴蝶结圈绕着顶点像钟摆一样晃几下</li>
+    <li>1.15s 帽子转着从天上掉下来，落在耳朵上压扁、回弹、摆正</li>
+    <li>1.55s 帽子周围闪三颗圆角小星星，随后淡出</li>
+    <li>2.05s 眨一下眼，全程约 2.3s</li>
+  </ol>
+  <p><b>双击的小动作</b></p>
+  <ol class="fx-steps">
+    <li>wink：左眼眨成弧线，甩出一颗小星星，头往左歪（1.5s）</li>
+    <li>摸头：像猫一样被按住、左右蹭，眼睛眯成「︶」，嘴变成「ω」，脸红，头顶冒两颗小心心（2.6s）</li>
+    <li>坏笑：古户绘梨花的招牌表情，眼皮压成斜的半眯眼，眉头一皱，嘴角歪着笑，下巴一抬，帽子闪一下（2.8s）</li>
+  </ol>
+  <p class="small muted">文件：<code>brand/erika-icon-animated.svg</code>（同 <code>erika-icon-export/logo/erika-logo-icon-animated.svg</code>），由导出脚本生成。双击的小动作靠 SVG 里的一小段脚本，要用 <code>&lt;object&gt;</code> 嵌入或直接打开才有；放进 <code>&lt;img&gt;</code>（比如 README）时只播出场动画。App 里用原生控件实现时照这三个动作做。</p>
+
+  <h3>各平台</h3>
+  <p>应用图标由各系统按自己的形状裁切，帽子伸出圆外的那一角会被切掉。安卓主题图标和 iOS 着色图标用单色层，系统按壁纸重新上色。</p>
+  <div class="fx-plat">
+    <figure><img src="erika-icon-export/macos/erika-macos-1024.png" alt="">macOS</figure>
+    <figure><img class="r" src="erika-icon-export/ios/AppIcon.appiconset/AppIcon.png" alt="">iOS</figure>
+    <figure><img src="erika-icon-export/png/circle/erika-circle-512.png" alt="">Windows · Linux</figure>
+    <figure><img src="erika-icon-export/preview/android-circle.png" alt="">安卓 · 圆形</figure>
+    <figure><img src="erika-icon-export/preview/android-squircle.png" alt="">安卓 · 圆角方</figure>
+    <figure><img src="erika-icon-export/preview/android-teardrop.png" alt="">安卓 · 水滴</figure>
+    <figure><img src="erika-icon-export/preview/android-themed-light.png" alt="">安卓主题图标 · 浅色</figure>
+    <figure><img src="erika-icon-export/preview/android-themed-dark.png" alt="">安卓主题图标 · 深色</figure>
+    <figure><img class="r" src="erika-icon-export/ios/AppIcon.appiconset/AppIcon-tinted.png" alt="">iOS 着色</figure>
+  </div>
+
+  <h3>单色</h3>
+  <p>没有背景，纯黑或纯白。头发只留圆的轮廓环，帽子四周留一道缝，和圆环、耳朵分开；眼睛、嘴和竖发绳挖空，被帽子和蝴蝶结圈盖住的地方保持实心。用于水印、系统托盘和单色印刷。安卓主题图标和 iOS 着色图标由系统按自己的形状裁切，那里的单色层不画圆环。</p>
+  <div class="fx-mono">
+    <div class="t" style="background:#FFFFFF"><span class="lb">纯黑</span><img src="erika-icon-export/svg/erika-mono-black.svg" alt="纯黑单色图标"></div>
+    <div class="t dkbg"><span class="lb">纯白</span><img src="erika-icon-export/svg/erika-mono-white.svg" alt="纯白单色图标"></div>
+    <div class="t photo" style="background:url(../assets/still1.jpg) center / cover"><span class="lb">叠在画面上</span><img src="erika-icon-export/svg/erika-mono-white.svg" alt=""></div>
+  </div>
+
+  <h3>文件</h3>
+  <p class="small muted">全部由 <code>brand/erika-icon-export/build.py</code> 从图标工坊的两个快照生成，目录说明在 <code>brand/erika-icon-export/README.md</code>。主 logo：<code>brand/erika-icon.svg</code>（同 <code>erika-icon-export/logo/</code>）；macOS <code>macos/Erika.icns</code>；Windows <code>windows/erika.ico</code>；iOS <code>ios/AppIcon.appiconset</code>；安卓 <code>android/res/</code>；鸿蒙 <code>harmonyos/</code>；Linux <code>linux/hicolor/</code>；网页 <code>web/</code>；单色 <code>svg/erika-mono-*.svg</code>。设计改了以后，在工坊里重新保存快照，再运行一次 <code>build.py</code>。</p>
+
+  <div class="eyebrow" style="margin-top:88px"><span class="sailor"></span><b>历史</b> 第一版草稿 · 未采用</div>
+  <h2>早期草稿：第一版</h2>
+  <div class="callout"><p>下面是图标定稿前的四个方向（放大镜、钥匙孔、真相、画框），没有采用，保留作记录。</p></div>
+  <p class="lead2">关键词：极简、纯色、图形、侦探、播放器，颜色用蓝、米白和玫瑰红。每个方向只用两三个几何形，没有渐变和高光；蓝色就是标题字的绀青，图标和 ERIKA 同色。玫瑰红只占最小的一块，像推理里那条关键的线索，也对应「红色真实」和「蓝色真实」。</p>
+  <div class="ek-chips">
+    <span><i style="background:var(--cream)"></i>米白 #F3ECDF · 底</span>
+    <span><i style="background:var(--navy)"></i>绀青 #213A6B · 主体（和标题字同色）</span>
+    <span><i style="background:var(--rose)"></i>玫瑰红 #DC2A5A · 线索</span>
+    <span><i style="background:var(--rose-d)"></i>玫瑰红 · 蓝底用 #EC4470</span>
+  </div>
+
+  <h3>当时的推荐：A 放大镜播放键</h3>
+  <p>镜片里放一个播放三角，镜圈右下伸出一截短而粗的柄。播放键本身就是放大镜，一个形状同时读作「播放」和「侦探」。也可以理解为 Erika 会推理出你在看哪部番、第几集。柄做得短粗、三角做得大，第一眼先看到的是播放键，不像搜索工具。</p>
+  <div class="ek-rec">
+    <div class="st"><span class="ic" data-ic="lens"></span><span class="lb">米白底</span></div>
+    <div class="st dkbg"><span class="ic dk" data-ic="lens"></span><span class="lb">蓝底</span></div>
+  </div>
+
+  <h3>四个方向</h3>
+  <p>每个方向都有米白底、蓝底两个版本，以及小尺寸和单色剪影。单色剪影给 Android 主题图标、iOS 着色图标和系统托盘用，所以图形只用一种颜色也必须成立。</p>
+  <div class="ek-dirs" id="dirs"></div>
+
+  <h3>放在主屏和程序坞上</h3>
+  <div class="ek-pick" id="pick"></div>
+  <div class="ek-ctx">
+    <div class="ek-phone" id="phone"></div>
+    <div class="ek-right">
+      <div class="ek-dock-w"><div class="ek-dock" id="dock"></div></div>
+      <div class="ek-lock" id="lock"></div>
+    </div>
+  </div>
+  <p class="small muted" style="margin-top:10px">灰色方块是占位，代表别的应用。右下是图标加标题字的组合，用在 README 顶部和关于页。</p>
+
+  <h3>落地时</h3>
+  <div class="grid g3 ek-notes">
+    <div class="card"><h4>三层</h4><p class="small muted">每个图标都能拆成三层：底、主体、线索。苹果平台按这三层在 Icon Composer 里组装成液态玻璃图标；只给线索层开玻璃，最克制。</p></div>
+    <div class="card"><h4>Android</h4><p class="small muted">自适应图标的安全区是中间直径约 61% 的圆，主体图形要缩进去一点；单色主题图标直接用剪影。</p></div>
+    <div class="card"><h4>深色模式</h4><p class="small muted">深色外观就是蓝底版：米白和蓝互换，玫瑰红稍微提亮一档（#EC4470），在蓝底上才够醒目。</p></div>
+  </div>
+  <p class="small muted" style="margin-top:18px">文件：<code>brand/erika-icon/lens.svg</code>（A）、<code>keyhole.svg</code>（B）、<code>truth.svg</code>（C）、<code>frame.svg</code>（D），1024 满版方形，默认是米白底；蓝底和单色由这一页的 CSS 换色，定稿后再分别导出。这一页 <code>brand/erika-icon.html</code>。</p>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const DIRS = [
+    { id: 'lens', k: 'A · 推荐', name: '放大镜播放键', rec: true,
+      story: '播放键就是放大镜。侦探和播放器合成一个形状，单色也最清楚。',
+      risk: '放大镜常用来表示搜索；靠短粗的柄和大三角压住这个联想。' },
+    { id: 'keyhole', k: 'B', name: '钥匙孔',
+      story: '密室推理。圆头里挖出三角形的孔，玫瑰红的播放键嵌在里面，像「打开它」。',
+      risk: '密码管理器也常用钥匙孔；三角在圆头里偏小，16px 时看不清。' },
+    { id: 'truth', k: 'C', name: '红与蓝的真实',
+      story: '一个播放三角切成上红下蓝两块。最抽象，也最原创，颜色就是故事。',
+      risk: '不知道出处的人只看到双色播放键，读不出侦探。' },
+    { id: 'frame', k: 'D', name: '取景框',
+      story: '四个直角框住播放三角：审视画面，也呼应界面里的「画框」设计。',
+      risk: '像相机或截图工具，侦探感最弱。' },
+  ];
+  let SRC = {}, uid = 0;
+  const ic = (id, cls = '', style = '') => `<span class="ic ${cls}" data-ic="${id}"${style ? ` style="${style}"` : ''}></span>`;
+
+  $('#dirs').innerHTML = DIRS.map(d => `<div class="ek-dir${d.rec ? ' rec' : ''}"><div class="k">${d.k}</div><h4>${d.name}</h4>` +
+    `<div class="pair">${ic(d.id)}${ic(d.id, 'dk')}</div>` +
+    `<div class="sz">` + [64, 32, 16].map(w => `<figure>${ic(d.id, w < 32 ? 'flat' : '', `width:${w}px`)}${w}</figure>`).join('') +
+    `<div class="mono-w"><span title="单色 · 白">${ic(d.id, 'mono')}</span><span class="tint" title="单色 · 着色" style="color:#9FB7E8">${ic(d.id, 'mono')}</span></div></div>` +
+    `<p class="small">${d.story}</p><p class="small risk">风险：${d.risk}</p></div>`).join('');
+
+  // 场景：手机主屏、程序坞、和标题字的组合
+  let cur = 'lens';
+  $('#pick').innerHTML = DIRS.map(d => `<button data-v="${d.id}"${d.id === cur ? ' class="on"' : ''}>${d.k[0]} ${d.name}</button>`).join('');
+  function scene() {
+    const ph = n => Array.from({ length: n }, () => '<div class="app"><div class="ph"></div>&nbsp;</div>').join('');
+    $('#phone').innerHTML = ph(5) + `<div class="app">${ic(cur)}Erika</div>` + ph(10);
+    $('#dock').innerHTML = '<span class="ph"></span><span class="ph"></span><span class="ph"></span>' + `<span class="on-ic">${ic(cur)}</span>` + '<span class="ph"></span><span class="ph"></span>';
+    $('#lock').innerHTML = ic(cur) + '<img src="erika-logo.svg" alt="ERIKA エリカ">';
+    fill();
+  }
+  $$('#pick button').forEach(b => b.addEventListener('click', () => {
+    cur = b.dataset.v; $$('#pick button').forEach(x => x.classList.toggle('on', x === b)); scene();
+  }));
+
+  // 内联 SVG：每个实例的 id 加后缀，避免 mask 互相引用
+  function fill() {
+    $$('.ic[data-ic]').forEach(el => {
+      if (el.dataset.done === el.dataset.ic) return;
+      const src = SRC[el.dataset.ic]; if (!src) return;
+      const n = ++uid;
+      el.innerHTML = src.replace(/id="([\w-]+)"/g, `id="$1-${n}"`).replace(/url\(#([\w-]+)\)/g, `url(#$1-${n})`);
+      el.dataset.done = el.dataset.ic;
+    });
+  }
+  Promise.all(DIRS.map(d => fetch(`erika-icon/${d.id}.svg`).then(r => r.text()).then(t => {
+    SRC[d.id] = t.replace(/<\?xml[^>]*>/, '').replace(/<title>[\s\S]*?<\/title>/, '').replace(/<!--[\s\S]*?-->/g, '');
+  }))).then(scene);
+})();
+</script>
+</body>
+</html>

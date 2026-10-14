@@ -1,0 +1,31 @@
+# The enhance module: its own protocol, engine and interface. The
+# application lists it under [[modules]] in its Bern.toml.
+
+[module]
+id = "enhance"
+name = { "zh-Hans" = "画质增强", "en" = "Upscaling" }
+# Modules this one calls, reads or answers events of. The application lists
+# them before this one.
+depends = []
+# `optional = true` lets the application switch this module off at run
+# time; `enabled = false` then keeps it off until switched on.
+optional = true
+
+[module.protocol]
+package = "erika-enhance-protocol"
+source = "protocol/src/lib.rs"
+
+[module.engine]
+package = "erika-enhance-core"
+type = "erika_enhance_core::EnhanceEngine"
+path = "core"
+
+[module.ui]
+package = "erika-enhance-ui"
+sources = "ui/src"
+
+[languages]
+supported = ["zh-Hans", "en"]
+default = "zh-Hans"
+
+

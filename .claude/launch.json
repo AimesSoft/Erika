@@ -6,6 +6,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["/Library/Afolder/RustProject/NipaPlay-Next/design/.claude/serve.py", "4179"],
       "port": 4179
+    },
+    {
+      "name": "icon-studio",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["/Library/Afolder/RustProject/NipaPlay-Next/design/brand/icon-studio-server.py", "4180"],
+      "port": 4180
     }
   ]
 }

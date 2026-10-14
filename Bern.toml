@@ -1,0 +1,99 @@
+# Erika, a Bern application. `bern run` builds it and starts it on this
+# computer; `bern build --target <name>` builds one of the targets below.
+
+[app]
+id = "erika"
+# Change this to a reverse-DNS name you own before you ship.
+bundle_id = "com.aimessoft.erika"
+version = "0.1.0"
+name = { "zh-Hans" = "Erika", "en" = "Erika" }
+# A square PNG of 1024 pixels; without it the app uses the Bern logo.
+# icon = "icon.png"
+# Shown by installers and package managers.
+# publisher = "Your Name"
+
+[languages]
+supported = ["zh-Hans", "en"]
+default = "zh-Hans"
+
+[protocol]
+package = "erika-protocol"
+source = "erika-protocol/src/lib.rs"
+
+[engine]
+package = "erika-core"
+type = "erika_core::ErikaEngine"
+
+[ui]
+package = "erika-ui"
+sources = ["erika-ui/src/lib.rs"]
+root = "app"
+
+# Breakpoints of the window sizes of the design, section 6.2.
+[layouts]
+compact_below = 600
+medium_below = 1024
+expanded_below = 1440
+
+# The design's sample posters and still, until the library has real ones.
+[resources]
+paths = ["design/assets/icon.png", "design/assets/still1.jpg", "design/assets/posters/p1.jpg", "design/assets/posters/p2.jpg", "design/assets/posters/p3.jpg", "design/assets/posters/p4.jpg", "design/assets/posters/p5.jpg", "design/assets/posters/p6.jpg", "design/assets/posters/p7.jpg", "design/assets/posters/p8.jpg", "design/assets/posters/p9.jpg", "design/assets/posters/p10.jpg", "design/assets/posters/p11.jpg", "design/assets/posters/p12.jpg", "design/assets/posters/p13.jpg", "design/assets/posters/p14.jpg", "design/assets/posters/p15.jpg", "design/assets/posters/p16.jpg"]
+
+# `channels = ["ipc"]` lets the generated command line and MCP server drive
+# the running app. Remove it to ship an app that listens to nothing.
+
+[targets.macos]
+platform = "macos"
+channels = ["ipc"]
+
+# iOS, built for the simulator; `bern run --target ios` starts it in the
+# simulator that is running.
+[targets.ios]
+platform = "ios"
+channels = ["ipc"]
+
+[targets.windows]
+platform = "windows"
+channels = ["ipc"]
+# WinUI 3 where Windows has a Windows App Runtime 2, the system XAML
+# elsewhere. Name one front end to build only that one.
+# frontends = ["winui3", "xaml-islands"]
+
+[targets.linux]
+platform = "linux"
+channels = ["ipc"]
+
+# Android phones; `bern run --target android` installs the app on the
+# connected device and starts it.
+[targets.android]
+platform = "android"
+channels = ["ipc"]
+
+[targets.web_app]
+ui = "web"
+platform = "browser"
+web_mode = "app"
+
+[[modules]]
+path = "modules/danmaku"
+
+[[modules]]
+path = "modules/enhance"
+
+[[modules]]
+path = "modules/anime"
+
+[[modules]]
+path = "modules/library"
+
+[[modules]]
+path = "modules/sync"
+
+[[modules]]
+path = "modules/sources"
+
+[[modules]]
+path = "modules/remote"
+
+[[modules]]
+path = "modules/downloads"

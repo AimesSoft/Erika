@@ -110,7 +110,7 @@ a.b::before { content: none; }
 .proto-embed { margin: 22px 0 0; border-radius: 18px; overflow: hidden; border: 1px solid var(--line); box-shadow: var(--shadow-lg); background: var(--surface-2); }
 .proto-embed iframe { display: block; width: 100%; aspect-ratio: 1360 / 900; border: 0; }
 @media (max-width: 760px) { .proto-embed iframe { aspect-ratio: auto; height: 700px; } }
-/* 画框版的活窗口（第 03、08、09 章）：.nx-live 里挂一个 NX.App，窗口本身的样式在 next.css */
+/* 文档里的活窗口：.nx-live 里挂一个 NX.App，窗口本身的样式在 next.css */
 .nx-bar { margin: 18px 0 0; }
 .nx-bar .nx-g { display: inline-flex; align-items: center; gap: 16px; white-space: nowrap; }
 @media (max-width: 640px) { .nx-bar { position: static; } .nx-bar .nx-g { flex-wrap: wrap; gap: 6px 16px; max-width: 100%; } .nx-bar .seg { flex-wrap: wrap; flex: 0 1 auto; } .nx-bar .seg span { padding: 0 10px; } }
@@ -425,8 +425,8 @@ pre.code .s { color: var(--accent-ink); }
 .annot-on .frame .poster[data-spec]::after, .annot-on .frame .plaid-academy[data-spec]::after { transform: none; top: calc(6px / var(--s, 1)); left: calc(6px / var(--s, 1)); }
 
 /* ---------- 播放器 ---------- */
-/* 旧播放器线框已删。留下的：5.3 的 XL 播放按钮；画框版的 .c-slider.seek 也用到 .seek；
-   弹幕层和 .vol 是 player-options.html 与画框版共用的 */
+/* 旧播放器线框已删。留下的：6.3 的 XL 播放按钮；画框播放器的 .c-slider.seek 也用到 .seek；
+   弹幕层和 .vol 是 player-options.html 与现在的界面共用的 */
 .pib { width: 34px; height: 34px; border-radius: 999px; display: grid; place-items: center; color: #fff; flex: none; cursor: pointer; }
 .pib .i { width: 20px; height: 20px; }
 .pib.xl { width: 68px; height: 68px; background: rgba(255, 255, 255, .16); backdrop-filter: blur(10px); }

@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN" data-accent="rose">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Erika 大理石纹图标</title>
+<meta name="description" content="米白圆里放一个红色圆角播放按钮，圆面是被平滑流动拉长、卷成漩涡的细彩丝（酒红、靛蓝、米白），像肥皂泡的微距照片；可调搅动程度、漩涡、条纹，导出位图。">
+<link rel="icon" href="../../assets/icon.png">
+<link rel="stylesheet" href="../../doc.css">
+<style>
+  body { margin: 0; }
+  .wrap { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 20px; padding: 20px; max-width: 1360px; margin: 0 auto; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 18px; align-self: start; position: sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y: auto; box-sizing: border-box; }
+  .panel h1 { font-size: 18px; margin: 0 0 4px; }
+  .panel p { font-size: 12.5px; color: var(--text-2); margin: 0 0 12px; }
+  .panel h2 { font-size: 13px; margin: 18px 0 2px; color: var(--text); }
+  .panel label { display: block; font-size: 12.5px; color: var(--text-2); margin: 12px 0 4px; }
+  .panel label b { float: right; font-family: var(--mono); color: var(--text); font-weight: 600; }
+  .panel input[type=range] { width: 100%; accent-color: var(--accent); }
+  .row2 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .btn { all: unset; cursor: pointer; height: 32px; padding: 0 14px; border-radius: 999px; background: var(--surface-2); font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+  .btn.p { background: var(--accent); color: var(--on-accent); }
+  .btn.on { background: var(--text); color: var(--bg); }
+  .seed { width: 80px; height: 30px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--surface); color: var(--text); padding: 0 8px; font: 13px var(--mono); }
+  .chk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); cursor: pointer; }
+  .sw { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+  .sw span { display: flex; align-items: center; gap: 6px; font: 11.5px var(--mono); color: var(--text-2); background: var(--surface-2); border-radius: 999px; padding: 3px 9px 3px 4px; }
+  .sw i { width: 14px; height: 14px; border-radius: 50%; display: block; }
+  .stage { display: grid; gap: 16px; }
+  .big { background: #D6DAE2; border-radius: 18px; padding: 20px; display: grid; place-items: center; }
+  .big canvas { width: min(100%, 720px); height: auto; aspect-ratio: 1; }
+  .smalls { display: flex; gap: 16px; align-items: flex-end; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 16px; flex-wrap: wrap; }
+  .smalls figure { margin: 0; text-align: center; font-size: 12px; color: var(--text-3); }
+  .smalls .dk { background: #141418; border-radius: 12px; padding: 10px; }
+  .smalls .lt { background: #FFFFFF; border-radius: 12px; padding: 10px; box-shadow: inset 0 0 0 1px var(--line); }
+  .status { font: 12px var(--mono); color: var(--text-3); margin-top: 10px; }
+  .cmp { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .cmp figure { margin: 0; cursor: pointer; border-radius: 16px; padding: 10px 10px 8px; background: var(--surface); border: 1px solid var(--line); text-align: center; font-size: 12.5px; color: var(--text-2); transition: box-shadow .2s, transform .2s; }
+  .cmp figure:hover { transform: translateY(-2px); }
+  .cmp figure.on { box-shadow: 0 0 0 2px var(--accent); color: var(--text); }
+  .cmp canvas { width: 100%; height: auto; aspect-ratio: 1; display: block; border-radius: 10px; margin-bottom: 6px; background: #D6DAE2; }
+  .cmp b { display: block; color: var(--text); font-size: 13px; }
+  @media (max-width: 700px) { .cmp { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .note { font-size: 12.5px; color: var(--text-2); background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
+  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; padding: 16px; } .panel { position: static; max-height: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <aside class="panel">
+    <h1>Erika 大理石纹图标</h1>
+    <p>圆面是很多层很细的彩色丝线，被一股平滑的流动整体拉长、扭曲：右上一个大漩涡把丝线卷成螺旋，其余地方是斜向的长纹；散着几颗深色小圆点，边缘一圈泛白，像肥皂泡的微距照片。点「播放」看它从直条纹被慢慢搅开；种子 + 搅动程度可以随时复现。</p>
+    <div class="sw">
+      <span><i style="background:#FF0046"></i>按钮 #FF0046</span>
+      <span><i style="background:#872938"></i>酒红 #872938</span>
+      <span><i style="background:#404292"></i>靛蓝 #404292</span>
+      <span><i style="background:#F3ECDF;box-shadow:inset 0 0 0 1px rgba(0,0,0,.15)"></i>米白 #F3ECDF</span>
+    </div>
+    <div class="row2" style="margin-top:10px">
+      <span style="font-size:12.5px;color:var(--text-2)">圆</span>
+      <button class="btn" data-circle="cream"><i style="width:12px;height:12px;border-radius:50%;background:#F3ECDF;box-shadow:inset 0 0 0 1px rgba(0,0,0,.15)"></i>米白</button>
+      <button class="btn" data-circle="blue"><i style="width:12px;height:12px;border-radius:50%;background:#2456FF"></i>蓝</button>
+    </div>
+    <div class="row2" style="margin-top:8px">
+      <span style="font-size:12.5px;color:var(--text-2)">配色</span>
+      <button class="btn" data-pal="light">通透</button>
+      <button class="btn" data-pal="deep">浓郁</button>
+    </div>
+    <div class="row2" style="margin-top:8px">
+      <span style="font-size:12.5px;color:var(--text-2)">底</span>
+      <button class="btn" data-bg="none">透明</button>
+      <button class="btn" data-bg="dark">深色</button>
+    </div>
+    <div class="row2" style="margin-top:12px">
+      <span style="font-size:12.5px;color:var(--text-2)">种子</span>
+      <input class="seed" id="seed" type="number" value="7">
+      <button class="btn" id="dice">换一个</button>
+    </div>
+    <label>搅动程度 <b id="TV"></b></label>
+    <input type="range" id="T" min="0" max="12" step="0.05">
+    <div class="row2" style="margin-top:8px">
+      <button class="btn p" id="play">播放</button>
+    </div>
+
+    <h2>播放按钮</h2>
+    <label>大小（高） <b id="tsV"></b></label><input type="range" id="ts" min="240" max="560" step="2">
+    <label>圆角 <b id="trV"></b></label><input type="range" id="tr" min="0" max="110" step="1">
+    <label>米白描边 <b id="outlineV"></b></label><input type="range" id="outline" min="0" max="36" step="1">
+
+    <h2>流动</h2>
+    <label>主漩涡 <b id="mainV"></b></label><input type="range" id="main" min="0" max="3" step="0.05">
+    <label>斜向拉伸 <b id="shearV"></b></label><input type="range" id="shear" min="0" max="3" step="0.05">
+    <label>小漩涡个数 <b id="minorV"></b></label><input type="range" id="minor" min="0" max="7" step="1">
+
+    <h2>丝线</h2>
+    <label>密度 <b id="freqV"></b></label><input type="range" id="freq" min="0.3" max="6" step="0.05">
+    <label>原始扭曲 <b id="warpV"></b></label><input type="range" id="warp" min="0" max="4" step="0.05">
+    <label>小圆点 <b id="specksV"></b></label><input type="range" id="specks" min="0" max="120" step="1">
+    <label>边缘泛白宽度 <b id="rimWV"></b></label><input type="range" id="rimW" min="0.04" max="0.4" step="0.01">
+    <label>柔化 <b id="softenV"></b></label><input type="range" id="soften" min="0" max="4" step="0.1">
+    <div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:8px 16px">
+      <label class="chk" style="margin:0"><input type="checkbox" id="rim">边缘泛白</label>
+      <label class="chk" style="margin:0"><input type="checkbox" id="plate">macOS 白色底板</label>
+    </div>
+    <div class="row2" style="margin-top:16px">
+      <button class="btn" id="exp1">导出 1024 PNG</button>
+      <button class="btn" id="exp2">导出 2048 PNG</button>
+    </div>
+    <div class="status" id="status"></div>
+  </aside>
+  <main class="stage">
+    <div class="big"><canvas id="out" width="1024" height="1024"></canvas></div>
+    <div class="cmp" id="cmp"></div>
+    <div class="smalls">
+      <figure><canvas id="s128" width="256" height="256" style="width:128px;height:128px"></canvas><br>128</figure>
+      <figure><canvas id="s64" width="128" height="128" style="width:64px;height:64px"></canvas><br>64</figure>
+      <figure><canvas id="s32" width="64" height="64" style="width:32px;height:32px"></canvas><br>32</figure>
+      <figure><canvas id="s16" width="32" height="32" style="width:16px;height:16px"></canvas><br>16</figure>
+      <figure class="lt"><canvas id="slt" width="256" height="256" style="width:128px;height:128px"></canvas><br>浅色背景</figure>
+      <figure class="dk"><canvas id="sdk" width="256" height="256" style="width:128px;height:128px"></canvas><br><span style="color:#888">深色背景</span></figure>
+    </div>
+    <div class="note">流场是固定的（不随时间变），每个像素沿流动倒推回起点再取色，所以丝线再细也不会糊。「搅动程度」就是倒推的时间：0 是原始的直条纹，越大卷得越多。边缘泛白只在米白底上出现。导出的 PNG 圆外是透明的。</div>
+  </main>
+</div>
+<script src="smoke-erika.js"></script>
+<script>
+(() => {
+  const S = window.ErikaSmoke; if (!S) return;
+  const P = S.P, $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+  const out = $('#out'), status = $('#status');
+  const fmt = { T: v => (+v).toFixed(2), main: v => (+v).toFixed(2), shear: v => (+v).toFixed(2), freq: v => (+v).toFixed(2), warp: v => (+v).toFixed(2), rimW: v => (+v).toFixed(2), soften: v => (+v).toFixed(1) };
+  /* 改了这些要重新布局（漩涡位置、条纹、斑点由种子 + 这些参数决定）；其他的只需要重画 */
+  const relayout = ['main', 'minor', 'specks'];
+  const keys = ['T', 'ts', 'tr', 'outline', 'main', 'shear', 'minor', 'freq', 'warp', 'specks', 'rimW', 'soften'];
+  /* 网址参数可以直接指定，例如 ?seed=7&T=6 */
+  const q = new URLSearchParams(location.search);
+  keys.concat(['seed']).forEach(k => { if (q.has(k)) P[k] = +q.get(k); });
+  if (q.has('circle')) P.circle = q.get('circle');
+  const label = k => { $('#' + k + 'V').textContent = fmt[k] ? fmt[k](P[k]) : P[k]; };
+  keys.forEach(k => { const el = $('#' + k); el.value = P[k]; label(k); });
+  $('#seed').value = P.seed;
+  const syncCircle = () => $$('[data-circle]').forEach(b => b.classList.toggle('on', b.dataset.circle === P.circle));
+  syncCircle();
+  $$('[data-circle]').forEach(b => b.addEventListener('click', () => { P.circle = b.dataset.circle; syncCircle(); draw(); }));
+  /* 配色、底色：两个分段按钮；配色要重新布局（条纹换了），底色只要重画 */
+  const syncSeg = () => { $$('[data-pal]').forEach(b => b.classList.toggle('on', b.dataset.pal === P.palette)); $$('[data-bg]').forEach(b => b.classList.toggle('on', b.dataset.bg === P.bg)); };
+  if (q.has('palette')) P.palette = q.get('palette'); if (q.has('bg')) P.bg = q.get('bg');
+  syncSeg();
+  $$('[data-pal]').forEach(b => b.addEventListener('click', () => { P.palette = b.dataset.pal; syncSeg(); render(); }));
+  $$('[data-bg]').forEach(b => b.addEventListener('click', () => { P.bg = b.dataset.bg; syncSeg(); draw(); }));
+  [['rim', 0], ['plate', 0]].forEach(([k]) => {
+    if (q.has(k)) P[k] = q.get(k) === '1';
+    const el = $('#' + k); el.checked = P[k];
+    el.addEventListener('change', e => { P[k] = e.target.checked; draw(); });
+  });
+
+  function draw() {
+    const t0 = performance.now();
+    S.composite(out, 1024);
+    [['#s128', 256], ['#s64', 128], ['#s32', 64], ['#s16', 32], ['#slt', 256], ['#sdk', 256]].forEach(([sel, n]) => {
+      const c = $(sel), x = c.getContext('2d'); x.clearRect(0, 0, n, n); x.imageSmoothingQuality = 'high'; x.drawImage(out, 0, 0, n, n);
+    });
+    status.textContent = `种子 ${P.seed} · 搅动 ${(+P.T).toFixed(2)} · ${Math.round(performance.now() - t0)} ms`;
+    window.__ready = true;
+    clearTimeout(cmpT); cmpT = setTimeout(drawCmp, playing ? 400 : 60);
+  }
+  /* 对比：同一个种子、同样的流动，只换这三样；点一张就套用 */
+  const VARS = [
+    { k: 'old', name: '第一版', sub: '浓郁 · 无描边', set: { palette: 'deep', outline: 0, bg: 'none' } },
+    { k: 'light', name: '提亮', sub: '通透 · 无描边', set: { palette: 'light', outline: 0, bg: 'none' } },
+    { k: 'ring', name: '提亮 + 描边', sub: '通透 · 米白描边', set: { palette: 'light', outline: 12, bg: 'none' } },
+    { k: 'dark', name: '深色底', sub: '通透 · 描边 · 黑底泡泡', set: { palette: 'light', outline: 12, bg: 'dark' } },
+  ];
+  let cmpT = 0;
+  const cmp = $('#cmp');
+  cmp.innerHTML = VARS.map(v => `<figure data-v="${v.k}"><canvas width="480" height="480"></canvas><b>${v.name}</b>${v.sub}</figure>`).join('');
+  function drawCmp() {
+    const keep = { palette: P.palette, outline: P.outline, bg: P.bg };
+    VARS.forEach(v => {
+      Object.assign(P, v.set); S.reset();
+      S.composite($(`#cmp [data-v="${v.k}"] canvas`), 480);
+      $(`#cmp [data-v="${v.k}"]`).classList.toggle('on', Object.keys(v.set).every(k => v.set[k] === keep[k]));
+    });
+    Object.assign(P, keep); S.reset();
+  }
+  $$('#cmp figure').forEach(f => f.addEventListener('click', () => {
+    const v = VARS.find(x => x.k === f.dataset.v); Object.assign(P, v.set);
+    $('#outline').value = P.outline; label('outline'); syncSeg(); render();
+  }));
+  function render() { S.reset(); draw(); }
+  let playing = false;
+  function loop() {
+    if (!playing) return;
+    S.step(); $('#T').value = P.T; label('T'); draw();
+    if (P.T >= 8) { setPlaying(false); return; }
+    requestAnimationFrame(loop);
+  }
+  function setPlaying(v) {
+    playing = v; $('#play').textContent = v ? '定格' : '播放';
+    if (v) { P.T = 0; requestAnimationFrame(loop); }
+  }
+  $('#play').addEventListener('click', () => setPlaying(!playing));
+  let t = 0;
+  keys.forEach(k => $('#' + k).addEventListener('input', e => {
+    P[k] = +e.target.value; label(k); if (playing) return;
+    clearTimeout(t); t = setTimeout(relayout.includes(k) ? render : draw, 40);
+  }));
+  $('#seed').addEventListener('change', e => { P.seed = +e.target.value || 1; render(); });
+  $('#dice').addEventListener('click', () => { P.seed = Math.floor(Math.random() * 9999) + 1; $('#seed').value = P.seed; render(); });
+  function exportPNG(size) {
+    const c = document.createElement('canvas'); S.composite(c, size);
+    c.toBlob(b => {
+      const a = document.createElement('a'); a.href = URL.createObjectURL(b);
+      a.download = `erika-marble-${P.circle}-s${P.seed}-t${(+P.T).toFixed(2)}${P.plate ? '-macos' : ''}-${size}.png`; a.click();
+    });
+  }
+  $('#exp1').addEventListener('click', () => exportPNG(1024));
+  $('#exp2').addEventListener('click', () => exportPNG(2048));
+  /* 给液态玻璃分层用：底色圆 + 纹理、按钮各一层 */
+  window.__exportLayers = size => { const r = {}; ['all', 'circle', 'button'].forEach(k => { const c = document.createElement('canvas'); S.composite(c, size, k); r[k] = c.toDataURL('image/png'); }); return r; };
+  render();
+})();
+</script>
+</body>
+</html>

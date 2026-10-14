@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="zh-CN" data-accent="rose">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Erika 标题字</title>
+<meta name="description" content="Erika 标题字：大写无衬线 ERIKA 加日文 エリカ，手绘矢量；墨色与三种品牌色对比，README 与关于页的用法。">
+<link rel="icon" href="../assets/icon.png">
+<link rel="stylesheet" href="../doc.css">
+<style>
+  :root {
+    --ink: #1B1D24;      --ink-d: #F2EFE8;
+    --heather: #6E3F7C;  --heather-d: #D3B0DE;
+    --kon: #213A6B;      --kon-d: #AFC0EA;
+    --enji: #A3303F;     --enji-d: #F0A7AE;
+    --paper: #FFFFFF;    --night: #121317;
+  }
+  main.brand { max-width: 1120px; margin: 0 auto; padding: 48px 32px 120px; }
+
+  /* 标题字容器：内联 SVG，颜色由 --lat / --kana 决定 */
+  .ek-mk { display: block; width: 100%; color: var(--lat, var(--ink)); }
+  .ek-mk svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .ek-mk .latin { color: var(--lat, var(--ink)); transition: color .45s ease; }
+  .ek-mk .kana, .ek-mk .rules { color: var(--kana, var(--lat, var(--ink))); transition: color .45s ease; }
+  .ek-mk.rl .rules { display: inline; }
+
+  /* 主展示 */
+  .ek-hero { border-radius: 24px; border: 1px solid var(--line); background: var(--paper); transition: background .45s ease; overflow: hidden; }
+  .ek-hero.dk { background: var(--night); border-color: transparent; }
+  .ek-hero .stage { padding: 72px 48px 56px; display: grid; place-items: center; }
+  .ek-hero .ek-mk { width: min(100%, 760px); }
+  .ek-ctl { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; padding: 14px 18px; border-top: 1px solid var(--line); background: var(--surface); }
+  .ek-ctl .gl { font-size: 12px; font-weight: 600; color: var(--text-3); margin-right: -8px; }
+  .ek-seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--surface-2); }
+  .ek-seg button { appearance: none; border: 0; background: none; font: inherit; font-size: 13px; color: var(--text-2); padding: 5px 12px; border-radius: 999px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .ek-seg button i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+  .ek-seg button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .ek-final { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .ek-final .ek-tile { min-height: 300px; padding: 56px 40px 48px; }
+  .ek-final img { width: 100%; height: auto; display: block; }
+  .ek-fbar { display: flex; align-items: center; gap: 16px; margin: 14px 0 16px; }
+  .ek-fbar p { margin: 0; flex: 1; }
+  .ek-fbar .ek-replay { margin-left: 0; flex: none; }
+  .ek-replay { margin-left: auto; appearance: none; border: 1px solid var(--line-2); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 999px; cursor: pointer; }
+
+  /* 色板网格 */
+  .ek-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+  .ek-grid.g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ek-tile { border-radius: 20px; border: 1px solid var(--line); background: var(--paper); padding: 44px 36px 40px; position: relative; display: grid; place-items: center; min-height: 220px; }
+  .ek-tile.dk { background: var(--night); border-color: transparent; }
+  .ek-tile .lb { position: absolute; left: 16px; top: 12px; font-size: 12px; font-weight: 600; color: var(--text-3); }
+  .ek-tile.dk .lb { color: #7c7c86; }
+  .ek-tile .lb code { background: none; padding: 0; color: inherit; font-weight: 500; }
+  .ek-tile .ek-mk { width: 92%; }
+  .ek-grid.g3 .ek-tile { padding: 40px 24px 34px; min-height: 180px; }
+
+  /* README 示意 */
+  .ek-readme { border-radius: 14px; border: 1px solid #D8DEE4; background: #FFFFFF; color: #1F2328; overflow: hidden; }
+  .ek-readme.dk { border-color: #30363D; background: #0D1117; color: #E6EDF3; }
+  .ek-readme .hd { display: flex; align-items: center; gap: 8px; padding: 10px 16px; font: 600 13px var(--mono); border-bottom: 1px solid #D8DEE4; color: #59636E; }
+  .ek-readme.dk .hd { border-color: #30363D; color: #9198A1; }
+  .ek-readme .bd { padding: 36px 28px 30px; text-align: center; }
+  .ek-readme .ek-mk { width: 300px; max-width: 80%; margin: 0 auto; }
+  .ek-readme .tl { margin: 22px 0 14px; font-size: 15px; }
+  .ek-readme .pills { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; }
+  .ek-readme .pills span { font: 12px var(--mono); padding: 2px 9px; border-radius: 6px; background: #EFF2F5; color: #59636E; }
+  .ek-readme.dk .pills span { background: #1C2128; color: #9198A1; }
+  .ek-readme hr { border: 0; border-top: 1px solid #D8DEE4; margin: 26px 0 16px; }
+  .ek-readme.dk hr { border-color: #30363D; }
+  .ek-readme h5 { text-align: left; margin: 0 0 6px; font-size: 18px; }
+  .ek-readme .p { text-align: left; font-size: 14px; color: #59636E; margin: 0; }
+  .ek-readme.dk .p { color: #9198A1; }
+
+  /* 关于页示意（抽象控件：分组列表 + 按钮） */
+  .ek-about { border-radius: 20px; border: 1px solid var(--line); background: #F4F4F6; color: #111114; padding: 40px 28px 28px; }
+  .ek-about.dk { background: #0F0F12; color: #F4F4F5; border-color: transparent; }
+  .ek-about .top { text-align: center; padding: 8px 0 26px; }
+  .ek-about .ek-mk { width: 240px; margin: 0 auto; }
+  .ek-about .ver { margin-top: 16px; font-size: 13px; color: #6E6E78; font-variant-numeric: tabular-nums; }
+  .ek-about.dk .ver { color: #8E8E98; }
+  .ek-about .grp { background: #FFFFFF; border-radius: 12px; overflow: hidden; }
+  .ek-about.dk .grp { background: #1C1C21; }
+  .ek-about .it { display: flex; align-items: center; min-height: 46px; padding: 0 16px; font-size: 15px; gap: 12px; }
+  .ek-about .it + .it { box-shadow: inset 0 1px 0 rgba(0,0,0,.07); }
+  .ek-about.dk .it + .it { box-shadow: inset 0 1px 0 rgba(255,255,255,.07); }
+  .ek-about .it .v { margin-left: auto; color: #8E8E98; font-size: 14px; }
+  .ek-about .it .btn { margin-left: auto; font-size: 13px; padding: 4px 12px; border-radius: 999px; background: rgba(0,0,0,.06); }
+  .ek-about.dk .it .btn { background: rgba(255,255,255,.1); }
+  .ek-about .fine { text-align: center; font-size: 12px; color: #9C9CA5; margin-top: 18px; }
+  .ek-about.dk .fine { color: #6B6B74; }
+
+  /* 小尺寸 */
+  .ek-sizes { display: flex; flex-wrap: wrap; gap: 36px; align-items: flex-end; margin-top: 16px; padding: 32px; border-radius: 20px; background: var(--paper); border: 1px solid var(--line); }
+  .ek-sizes figure { margin: 0; text-align: center; font-size: 12px; color: var(--text-3); }
+  .ek-sizes .ek-mk { margin-bottom: 10px; }
+
+  /* 字形结构 */
+  .ek-anat { position: relative; border-radius: 20px; background: var(--paper); border: 1px solid var(--line); padding: 40px 48px 32px; }
+  .ek-anat .wrap { position: relative; }
+  .ek-anat .ek-mk { --lat: #1B1D24; --kana: #1B1D24; }
+  .ek-anat svg.guide { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+  .ek-sw { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+  .ek-sw span { display: flex; align-items: center; gap: 8px; font: 12px var(--mono); color: var(--text-2); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px 4px 5px; }
+  .ek-sw i { width: 18px; height: 18px; border-radius: 50%; display: block; box-shadow: inset 0 0 0 1px rgba(0,0,0,.1); }
+  pre.ek-code { background: var(--surface-2); border-radius: 14px; padding: 16px 18px; font: 13px/1.6 var(--mono); overflow: auto; margin: 14px 0 0; }
+
+  @media (max-width: 860px) { .ek-grid.g3 { grid-template-columns: 1fr; } }
+  @media (max-width: 760px) {
+    main.brand { padding: 28px 16px 100px; }
+    .ek-grid { grid-template-columns: 1fr; }
+    .ek-hero .stage { padding: 44px 20px 36px; }
+    .ek-ctl .ek-replay { margin-left: 0; }
+    .ek-final { grid-template-columns: 1fr; }
+    .ek-final .ek-tile { min-height: 0; padding: 44px 20px 36px; }
+    .ek-fbar { flex-direction: column; align-items: flex-start; }
+    .ek-anat { padding: 28px 16px 20px; }
+    .ek-sizes figure:nth-child(-n+2) { display: none; }
+  }
+</style>
+</head>
+<body>
+<main class="brand">
+  <div class="eyebrow"><span class="sailor"></span><b>品牌</b> Erika 标题字 · 定稿</div>
+  <h2>ERIKA</h2>
+  <p class="lead2">按讨论的结果重新画：大写、无衬线、保留日文，主要用在 README 和软件的关于页。NipaPlay 的贴纸白边、投影、四色轮换、高光、播放星和 ～☆ 全部不用。字靠比例、笔画粗细和字距撑住，单色就成立。最后选定绀青、日文同色、两侧细线。</p>
+
+  <section class="ek-final">
+    <div class="ek-tile"><span class="lb">浅底 · <code>erika-logo.svg</code></span><img src="erika-logo.svg" alt="ERIKA エリカ" data-anim></div>
+    <div class="ek-tile dk"><span class="lb">深底 · <code>erika-logo-dark.svg</code></span><img src="erika-logo-dark.svg" alt="ERIKA エリカ" data-anim></div>
+  </section>
+  <div class="ek-fbar"><p class="small muted">定稿：绀青 <code>#213A6B</code>（深底 <code>#AFC0EA</code>），日文同色，两侧细线。两张都是带入场动效的 SVG，动效写在文件里（纯 CSS），用 <code>&lt;img&gt;</code> 放进 README 或网页都会自己播放，播完停在最后一帧；系统开了「减少动态效果」就直接显示。</p><button class="ek-replay" id="replayFinal">重播</button></div>
+  <div class="grid g3" style="margin-top:4px">
+    <div class="card"><h4>字母</h4><p class="small muted">从左到右依次上浮淡入：位移 26 → 0，每个 0.9s，相隔 0.09s，从 0.08s 开始。</p></div>
+    <div class="card"><h4>日文</h4><p class="small muted">字母快到位时上浮淡入：位移 10 → 0，0.8s，从 0.62s 开始。</p></div>
+    <div class="card"><h4>细线</h4><p class="small muted">从 エリカ 两侧向外伸出：横向 20% → 100%，0.9s，从 0.76s 开始。缓动一律 <code>cubic-bezier(.2,.8,.2,1)</code>，全程约 1.7s。</p></div>
+  </div>
+
+  <h3>第一版对比（选型记录）</h3>
+  <p>下面是选型时的对比，保留作记录。</p>
+  <section class="ek-hero" id="hero">
+    <div class="stage"><span class="ek-mk" data-mk></span></div>
+    <div class="ek-ctl">
+      <span class="gl">配色</span>
+      <span class="ek-seg" id="cPal">
+        <button data-v="ink" class="on"><i style="background:var(--ink)"></i>墨</button>
+        <button data-v="heather"><i style="background:var(--heather)"></i>石南紫</button>
+        <button data-v="kon"><i style="background:var(--kon)"></i>绀青</button>
+        <button data-v="enji"><i style="background:var(--enji)"></i>臙脂</button>
+      </span>
+      <span class="gl">日文</span>
+      <span class="ek-seg" id="cKana"><button data-v="same" class="on">同色</button><button data-v="dot">点色</button></span>
+      <span class="gl">细线</span>
+      <span class="ek-seg" id="cRule"><button data-v="off" class="on">无</button><button data-v="on">两侧细线</button></span>
+      <span class="gl">底色</span>
+      <span class="ek-seg" id="cBg"><button data-v="lt" class="on">浅</button><button data-v="dk">深</button></span>
+      <button class="ek-replay" id="replay">重播入场</button>
+    </div>
+  </section>
+  <p class="small muted" style="margin-top:12px">「点色」：ERIKA 用墨色，只有 エリカ（和细线）用品牌色。选「墨」时点色不起作用。</p>
+
+  <h3>墨色与品牌色</h3>
+  <p>每种颜色有浅底、深底两个值。深底用的是同色相的浅色，不是简单反白，这样在深色模式下仍然是那个颜色。</p>
+  <div class="ek-grid" id="palGrid"></div>
+
+  <h3>墨 + 一点品牌色</h3>
+  <p>ERIKA 保持墨色，品牌色只落在 エリカ 上。整体最安静，颜色像落款的印章，只占很小的面积。</p>
+  <div class="ek-grid g3" id="dotGrid"></div>
+
+  <h3>README</h3>
+  <p>GitHub 的 README 可以用 <code>&lt;picture&gt;</code> 按访客的浅色、深色模式自动换图，所以每种配色各导出一张浅底用、一张深底用的 SVG。标题字宽 300–420px 比较合适。</p>
+  <div class="ek-grid" id="readmeGrid"></div>
+  <pre class="ek-code">&lt;p align="center"&gt;
+  &lt;picture&gt;
+    &lt;source media="(prefers-color-scheme: dark)" srcset="design/brand/erika-logo-dark.svg"&gt;
+    &lt;img src="design/brand/erika-logo.svg" alt="ERIKA エリカ" width="380"&gt;
+  &lt;/picture&gt;
+&lt;/p&gt;</pre>
+
+  <h3>关于页</h3>
+  <p>标题字居中放在顶部，宽 240 左右；下面是版本号和原生分组列表。打开关于页时，字母从左到右依次浮现，日文和细线随后出现（上面的「重播入场」就是这个动效）。所有平台都能做：只用透明度和位移，不需要模糊。</p>
+  <div class="ek-grid" id="aboutGrid"></div>
+  <p class="small muted" style="margin-top:12px">旧的关于页上面还有看板娘图片。看板娘是 NipaPlay 带过来的，留不留可以之后再定，这里先不放。</p>
+
+  <h3>小尺寸</h3>
+  <div class="ek-sizes" id="sizes"></div>
+
+  <h3>字形</h3>
+  <div class="ek-anat"><div class="wrap"><span class="ek-mk" data-mk></span><svg class="guide" id="guide"></svg></div></div>
+  <div class="grid g2" style="margin-top:16px">
+    <div class="card"><h4>罗马大写的比例</h4><p class="small muted">E 最窄（约半个方格），R、K 中等，A 最宽。E 的中横比上下横短，下横最长，中横略高于正中，A 的横笔偏低。这些是碑刻大写的老规矩，看起来稳。</p></div>
+    <div class="card"><h4>没有衬线，但有粗细</h4><p class="small muted">竖笔两端 23、中段收到 20，像轻微收腰；横笔 19 → 17。斜笔按笔顺分粗细：往右下走的笔画粗（R 腿、K 腿、A 右笔约 26），往右上走的笔画细（K 臂、A 左笔约 15）。这一点粗细变化让它典雅，而不是冷冰冰的几何字。</p></div>
+    <div class="card"><h4>字距</h4><p class="small muted">比正文字距宽很多，五个字母之间的留白看起来一样大：两根竖笔相对（I–K）间距最大，开口相对（E–R、K–A）间距最小。</p></div>
+    <div class="card"><h4>日文</h4><p class="small muted">エリカ 用等粗黑体笔画，字高约为 ERIKA 的 27%，笔画相对稍粗一点，缩小以后不会先消失。字距同样放宽，居中放在下方；需要更正式时两侧加细线。</p></div>
+  </div>
+  <div class="ek-sw">
+    <span><i style="background:var(--ink)"></i>墨 #1B1D24 · 深底 #F2EFE8</span>
+    <span><i style="background:var(--heather)"></i>石南紫 #6E3F7C · 深底 #D3B0DE</span>
+    <span><i style="background:var(--kon)"></i>绀青 #213A6B · 深底 #AFC0EA</span>
+    <span><i style="background:var(--enji)"></i>臙脂 #A3303F · 深底 #F0A7AE</span>
+  </div>
+  <div class="grid g3" style="margin-top:16px">
+    <div class="card"><h4>石南紫</h4><p class="small muted">エリカ 在日文里就是欧石南（heather）这种花，石南紫取的是它的花色。颜色有来历，也最少见。</p></div>
+    <div class="card"><h4>绀青</h4><p class="small muted">最端庄、最稳，接近墨色但带一点蓝；放在深色模式里也最不刺眼。</p></div>
+    <div class="card"><h4>臙脂</h4><p class="small muted">最温暖、最有存在感，像印章的朱色偏暗一档；面积大了会显得重，更适合「点色」。</p></div>
+  </div>
+  <p class="small muted" style="margin-top:18px">文件：定稿 <code>brand/erika-logo.svg</code>（浅底）、<code>brand/erika-logo-dark.svg</code>（深底），都带入场动效；<code>brand/erika-wordmark.svg</code> 是可编辑的母版（颜色 currentColor、静态，细线默认隐藏）。这一页 <code>brand/erika.html</code>。</p>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const RM = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const PAL = {
+    ink:     { name: '墨',   lt: '#1B1D24', dk: '#F2EFE8' },
+    heather: { name: '石南紫', lt: '#6E3F7C', dk: '#D3B0DE' },
+    kon:     { name: '绀青', lt: '#213A6B', dk: '#AFC0EA' },
+    enji:    { name: '臙脂', lt: '#A3303F', dk: '#F0A7AE' },
+  };
+  const INK = PAL.ink;
+  const mk = (lat, kana, rules) => `<span class="ek-mk${rules ? ' rl' : ''}" data-mk style="--lat:${lat};--kana:${kana || lat}"></span>`;
+
+  // 色板
+  $('#palGrid').innerHTML = Object.values(PAL).map(p =>
+    `<div class="ek-tile"><span class="lb">${p.name} · <code>${p.lt}</code></span>${mk(p.lt)}</div>` +
+    `<div class="ek-tile dk"><span class="lb">${p.name} · 深底 <code>${p.dk}</code></span>${mk(p.dk)}</div>`).join('');
+  const dots = ['heather', 'kon', 'enji'].map(k => PAL[k]);
+  $('#dotGrid').innerHTML = dots.map(p => `<div class="ek-tile"><span class="lb">墨 + ${p.name}</span>${mk(INK.lt, p.lt, true)}</div>`).join('') +
+    dots.map(p => `<div class="ek-tile dk"><span class="lb">深底 · 墨 + ${p.name}</span>${mk(INK.dk, p.dk, true)}</div>`).join('');
+
+  // README
+  const readme = (dk, p, kana) => `<div class="ek-readme${dk ? ' dk' : ''}"><div class="hd">README.md</div><div class="bd">${mk(dk ? p.dk : p.lt, kana ? (dk ? kana.dk : kana.lt) : null)}` +
+    `<p class="tl">跨平台视频播放器：功能由你挑选，控件交给系统。</p><div class="pills"><span>macOS</span><span>Windows</span><span>Linux</span><span>iOS</span><span>Android</span></div>` +
+    `<hr><h5>Erika</h5><p class="p">它可以纯粹得像 VLC，也可以丰富得像一个完整的追番工具。播放内核 liberika。</p></div></div>`;
+  $('#readmeGrid').innerHTML = readme(false, INK) + readme(true, INK) + readme(false, INK, PAL.heather) + readme(true, INK, PAL.heather);
+
+  // 关于页
+  const about = (dk, p, kana) => `<div class="ek-about${dk ? ' dk' : ''}"><div class="top">${mk(dk ? p.dk : p.lt, kana ? (dk ? kana.dk : kana.lt) : null)}` +
+    `<div class="ver">版本 0.1.0 · 播放内核 liberika</div></div><div class="grp">` +
+    `<div class="it">检查更新<span class="btn">检查</span></div><div class="it">开源许可<span class="v">›</span></div><div class="it">致谢<span class="v">›</span></div><div class="it">GitHub<span class="v">›</span></div>` +
+    `</div><div class="fine">© 2026 Erika</div></div>`;
+  $('#aboutGrid').innerHTML = about(false, PAL.kon) + about(true, PAL.kon) + about(false, INK, PAL.enji) + about(true, INK, PAL.enji);
+
+  // 小尺寸
+  $('#sizes').innerHTML = [480, 320, 220, 150, 100].map(w => `<figure style="width:${w}px">${mk(INK.lt)}${w} px</figure>`).join('');
+
+  // 载入标题字，内联到每个占位
+  fetch('erika-wordmark.svg').then(r => r.text()).then(src => {
+    const clean = src.replace(/<\?xml[^>]*>/, '').replace(/<title>[\s\S]*?<\/title>/, '').replace(/<!--[\s\S]*?-->/g, '');
+    $$('[data-mk]').forEach(el => { el.innerHTML = clean; });
+    drawGuide();
+    setHero(); intro();
+  });
+
+  // 主展示开关
+  const S = { pal: 'ink', kana: 'same', rule: 'off', bg: 'lt' };
+  const seg = (id, key) => $$('button', $(id)).forEach(b => b.addEventListener('click', () => {
+    S[key] = b.dataset.v; $$('button', $(id)).forEach(x => x.classList.toggle('on', x === b)); setHero();
+  }));
+  seg('#cPal', 'pal'); seg('#cKana', 'kana'); seg('#cRule', 'rule'); seg('#cBg', 'bg');
+  function setHero() {
+    const hero = $('#hero'), m = $('.ek-mk', hero), dk = S.bg === 'dk', p = PAL[S.pal];
+    hero.classList.toggle('dk', dk);
+    const c = dk ? p.dk : p.lt, ink = dk ? INK.dk : INK.lt;
+    const dot = S.kana === 'dot' && S.pal !== 'ink';
+    m.style.setProperty('--lat', dot ? ink : c);
+    m.style.setProperty('--kana', c);
+    m.classList.toggle('rl', S.rule === 'on');
+  }
+
+  // 入场：字母依次浮现，日文和细线随后
+  function intro() {
+    const m = $('#hero .ek-mk'); if (!m || RM()) return;
+    const letters = $$('.latin path', m), kana = $('.kana', m), rules = $('.rules', m);
+    letters.forEach((el, i) => el.animate(
+      [{ opacity: 0, transform: 'translateY(26px)' }, { opacity: 1, transform: 'none' }],
+      { duration: 900, delay: 80 + i * 90, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'backwards' }));
+    kana.animate([{ opacity: 0, transform: 'translateY(10px)', letterSpacing: '0' }, { opacity: 1, transform: 'none' }],
+      { duration: 800, delay: 620, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'backwards' });
+    rules.style.transformBox = 'fill-box'; rules.style.transformOrigin = 'center';
+    rules.animate([{ opacity: 0, transform: 'scaleX(.2)' }, { opacity: 1, transform: 'none' }],
+      { duration: 900, delay: 760, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'backwards' });
+  }
+  $('#replay').addEventListener('click', intro);
+  // 定稿：换一个地址重新载入图片，SVG 里的动效就会从头播放
+  $('#replayFinal').addEventListener('click', () => $$('img[data-anim]').forEach(img => { img.src = img.src.split('?')[0] + '?t=' + Date.now(); }));
+
+  // 字形辅助线：和标题字同一个 viewBox
+  function drawGuide() {
+    const g = $('#guide'); g.setAttribute('viewBox', '70 66 810 370'); g.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    const c = '#E0455A', t = (x, y, s, a = 'start') => `<text x="${x}" y="${y}" fill="${c}" font-size="10" font-family="ui-monospace,Menlo,monospace" text-anchor="${a}">${s}</text>`;
+    const h = (y, s) => `<path d="M80 ${y} L858 ${y}" stroke="${c}" stroke-width=".8" stroke-dasharray="3 3"/>` + t(862, y + 3, s);
+    g.innerHTML = h(100, '字高 200') + h(300, '基线') + `<path d="M730 95 L810 95" stroke="${c}" stroke-width=".8"/>` + t(726, 98, '上冲 5', 'end') + h(198, '中横 198') + h(233, 'A 横笔 233') +
+      `<path d="M428 312 L451 312 M428 308 L428 316 M451 308 L451 316" stroke="${c}" stroke-width="1"/>` + t(439.5, 328, '竖笔 23→20', 'middle') +
+      `<path d="M690 312 L707 312 M822 312 L850 312" stroke="${c}" stroke-width="1"/>` + t(698, 328, '细 15', 'middle') + t(836, 328, '粗 26', 'middle') +
+      t(147, 90, 'E 宽 98', 'middle') + t(311, 90, 'R 宽 123', 'middle') + t(590, 90, 'K 宽 131', 'middle') + t(770, 78, 'A 宽 160', 'middle');
+  }
+})();
+</script>
+</body>
+</html>

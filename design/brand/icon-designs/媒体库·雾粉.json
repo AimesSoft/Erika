@@ -1,0 +1,74 @@
+{
+  "bg": null,
+  "shapes": [
+    {
+      "id": "d32",
+      "type": "rect",
+      "x": 528,
+      "y": 493,
+      "w": 400,
+      "h": 400,
+      "rot": 10,
+      "fill": "#EBCFE0",
+      "lock": false,
+      "r": 80,
+      "under": true
+    },
+    {
+      "id": "d33",
+      "type": "rect",
+      "x": 483,
+      "y": 531,
+      "w": 400,
+      "h": 400,
+      "rot": 3,
+      "fill": "#FBEFF5",
+      "lock": false,
+      "r": 80,
+      "under": true
+    },
+    {
+      "id": "smv68t6iza",
+      "type": "play",
+      "x": 503.93,
+      "y": 573.07,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#D340AD",
+      "lock": false,
+      "r": 30
+    },
+    {
+      "id": "smv68t6r9b",
+      "type": "play",
+      "x": 426.79,
+      "y": 616.98,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#006FB5",
+      "lock": false,
+      "r": 52
+    },
+    {
+      "id": "smv68t6xdc",
+      "type": "play",
+      "x": 426.79,
+      "y": 528.43,
+      "w": 300,
+      "h": 340,
+      "rot": 0,
+      "fill": "#B4FF81",
+      "lock": false,
+      "r": 30
+    }
+  ],
+  "blend": {
+    "on": true,
+    "mode": "overlay"
+  },
+  "mask": null,
+  "name": "媒体库·雾粉",
+  "updatedAt": 1791873910651
+}
