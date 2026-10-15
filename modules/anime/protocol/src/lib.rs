@@ -68,6 +68,34 @@ pub mod anime {
         pub at: f64,
     }
 
+    /// A broadcast in the prototype's weekly calendar. Midnight belongs
+    /// to the preceding broadcast day, just as it does on the timeline.
+    #[value]
+    pub struct Broadcast {
+        pub id: i64,
+        pub title: String,
+        pub poster: MediaSource,
+        pub time: String,
+        pub episode: i64,
+        pub aired: bool,
+        pub tonight: bool,
+    }
+
+    #[value]
+    pub struct BroadcastDay {
+        /// Monday is 0, Sunday is 6.
+        pub id: i64,
+        pub name: String,
+        pub count: i64,
+        pub today: bool,
+        pub tomorrow: bool,
+        pub day_after: bool,
+        pub shows: Vec<Broadcast>,
+        /// The four non-overlapping covers shown in a collapsed column.
+        pub preview: Vec<Broadcast>,
+        pub remaining: i64,
+    }
+
     /// One episode on the film of the details page.
     #[value]
     pub struct Episode {
@@ -88,6 +116,26 @@ pub mod anime {
         pub progress: f64,
     }
 
+    #[value]
+    pub struct SearchEpisode {
+        pub id: i64,
+        pub title: String,
+        pub episode: String,
+    }
+
+    #[value]
+    pub struct SearchResults {
+        pub shows: Vec<Show>,
+        pub continuing: Vec<SearchEpisode>,
+        pub has_shows: bool,
+        pub has_continuing: bool,
+    }
+
+    #[queries]
+    pub trait Queries {
+        fn search(&self, text: String, answer: Answer<SearchResults>);
+    }
+
     #[state]
     pub struct State {
         /// "周一 · 10 月 12 日".
@@ -103,6 +151,9 @@ pub mod anime {
         pub now_label: String,
         /// "已更新 4 部 · 今晚还有 3 部".
         pub airing_summary: String,
+        pub week: Vec<BroadcastDay>,
+        pub selected_day: i64,
+        pub opened_from_schedule: bool,
         /// The show whose details are open; `opened` is 0 when none is.
         pub opened: i64,
         pub show: Show,
@@ -129,8 +180,26 @@ pub mod anime {
         #[errors("unknown_show")]
         fn open(&mut self, id: i64) -> Result<(), CommandError>;
 
+        /// Expand one day of the calendar, preserving the other columns.
+        #[errors("unknown_day")]
+        fn select_day(&mut self, day: i64) -> Result<(), CommandError>;
+
+        /// Open a calendar row and return to that same day afterwards.
+        #[errors("unknown_show")]
+        fn open_scheduled(&mut self, id: i64) -> Result<(), CommandError>;
+
+        /// Open a poster from the media library and keep its return label.
+        #[errors("unknown_show")]
+        fn open_from_library(&mut self, id: i64) -> Result<(), CommandError>;
+
         /// Close the details and return to the page.
         fn close(&mut self) -> Result<(), CommandError>;
+
+        /// A result opened above whichever page the user searched from.
+        fn open_from_search(&mut self, id: i64) -> Result<(), CommandError>;
+
+        /// Continue any matching show, including shows outside the home stage.
+        fn continue_from_search(&mut self, id: i64) -> Result<(), CommandError>;
 
         /// Put show `id` on the stage, in place of the one there.
         #[errors("unknown_show")]

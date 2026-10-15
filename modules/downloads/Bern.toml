@@ -34,3 +34,7 @@ id = "downloads"
 label = { "zh-Hans" = "下载", "en" = "Downloads" }
 icon = "arrow.down.circle"
 component = "downloads_page"
+badge = "active_count"
+
+[contributes]
+background = ["downloads_clock"]

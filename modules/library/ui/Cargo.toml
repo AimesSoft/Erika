@@ -8,3 +8,4 @@ publish = false
 [dependencies]
 bern.workspace = true
 erika-library-protocol = { path = "../protocol" }
+erika-protocol.workspace = true

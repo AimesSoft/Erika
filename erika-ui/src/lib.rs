@@ -4,9 +4,17 @@
 //! the window while playing, steps back when the pointer moves, and shrinks
 //! into the mini player on the way back.
 
+mod search;
+use search::search_results;
+
 use bern::prelude::*;
 use erika_anime_protocol::anime;
-use erika_protocol::erika::{self, Accent, Appearance};
+use erika_protocol::erika;
+mod onboarding;
+use onboarding::onboarding;
+mod feature_preview;
+mod settings;
+use settings::settings;
 
 style! {
     accents {
@@ -25,9 +33,30 @@ style! {
         headline: font(size: 14, weight: semibold),
         callout: font(size: 16, weight: semibold),
         caption: font(size: 11.5, weight: medium),
-        caption2: font(size: 12, weight: semibold),
+        caption2: font(size: 12.5, weight: semibold),
+        subheadline: font(size: 8.5, weight: semibold),
     }
 
+    Stack.onboarding_art { background: color(light: "#232A52", dark: "#232A52") }
+    Stack.onboarding_card { background: color(light: "#FFFFFF", dark: "#2C2C2E"), corner: 16 }
+    Stack.onboarding_check { foreground: on_accent }
+    Stack.onboarding_swatch_label { foreground: text.secondary }
+    Button.onboarding_crimson { foreground: color(light: "#FF2E55", dark: "#FF2E55"), hover: scale(1.08, snappy), pressed: scale(0.94, press) }
+    Button.onboarding_blue { foreground: color(light: "#2A51D4", dark: "#2A51D4"), hover: scale(1.08, snappy), pressed: scale(0.94, press) }
+    Button.onboarding_green { foreground: color(light: "#07FF94", dark: "#07FF94"), hover: scale(1.08, snappy), pressed: scale(0.94, press) }
+    Button.onboarding_card { corner: 16, hover: none, pressed: scale(0.98, press), settle: jelly }
+    Stack.settings_page { background: color(light: "#FFFFFF", dark: "#1C1C1E") }
+    Stack.settings_group { background: color(light: "#FFFFFF", dark: "#2C2C2E"), corner: 14 }
+    Stack.settings_card { background: color(light: "#FFFFFF", dark: "#2C2C2E"), corner: 16 }
+    Stack.settings_hud { background: color(light: "#18181B", dark: "#18181B"), corner: 17 }
+    Stack.settings_wordmark { foreground: color(light: "#213A6B", dark: "#FFFFFF") }
+    Stack.settings_tag { background: fill.subtle, corner: 999 }
+    Stack.settings_banner { background: color(light: "#232A52", dark: "#232A52"), corner: 16 }
+    pattern { academy: check(gap(22), band(color(light: "#000000", dark: "#000000"), 34, 0.3), gap(6), band(accent, 3, 0.92), gap(6), band(color(light: "#000000", dark: "#000000"), 34, 0.3), gap(15), band(color(light: "#FFFFFF", dark: "#FFFFFF"), 1.5, 0.5), gap(16.5), twill: true) }
+    Button.theme_swatch { hover: scale(1.08, snappy), pressed: scale(0.94, press) }
+    Stack.crimson_swatch { background: color(light: "#FF2E55", dark: "#FF2E55"), corner: 15 }
+    Stack.ultramarine_swatch { background: color(light: "#2A51D4", dark: "#2A51D4"), corner: 15 }
+    Stack.neon_swatch { background: color(light: "#07FF94", dark: "#07FF94"), corner: 15 }
     // The springs of the design, section 9.2.
     motion {
         press: spring(period: 0.12, damping: 1.0),
@@ -41,8 +70,29 @@ style! {
     transition {
         // A new page fades in and rises 12 points (T3).
         page_in: slide(bottom, 12, smooth),
+        settings_page_in: slide(bottom, 8, smooth),
         drop_in: slide(top, 24, jelly),
         pop_in: pop(from: 0.4, bouncy),
+        feature_preview_item_in: pop(from: 0.4, jelly),
+        feature_preview_in: pop(from: 0.95, snappy),
+        // Home timeline: draw the ruler, drop the cards, then raise "now".
+        timeline_rule_in: grow(edge: leading, smooth),
+        timeline_card_in: slide(edge: top, distance: 18, jelly),
+        timeline_now_in: grow(edge: bottom, bouncy),
+        library_card_in: slide(edge: bottom, distance: 22, smooth),
+        library_card_out: pop(from: 0.86, snappy),
+        calendar_column_in: slide(edge: bottom, distance: 18, jelly),
+        calendar_row_in: slide(edge: bottom, distance: 10, jelly),
+    }
+
+    // Desktop navigation uses the prototype's medium-control feedback:
+    // a subtle fill that darkens in light mode and brightens in dark mode.
+    SidebarItem {
+        corner: 9,
+        hover: background(fill.subtle) + scale(1.03, snappy),
+        pressed: scale(0.94, press),
+        selected: fill(fill.strong),
+        settle: jelly,
     }
 
     // Controls keep the system's look (P2); only the design's springs are
@@ -76,6 +126,15 @@ style! {
         settle: jelly,
     }
 
+    Button.library_chip {
+        size: large,
+    }
+
+    Button.library_index {
+        hover: scale(1.12, snappy),
+        pressed: scale(0.9, press),
+    }
+
     // A cell of the film.
     Button.film {
         corner: 16,
@@ -85,8 +144,44 @@ style! {
 
     // A row of a list that is a button as a whole.
     Button.row {
+        corner: 9,
+        padding: 6,
+        hover: background(fill.subtle),
         pressed: scale(0.98, press),
         settle: jelly,
+    }
+
+    // Playback shortcuts over stills: only the white symbol is visible.
+    Button.preview_play {
+        corner: 8,
+        hover: none,
+        pressed: scale(0.94, press),
+        settle: jelly,
+    }
+
+    // The weekly calendar is a group of content cards. Only the rows
+    // highlight on hover; the column itself keeps its exact geometry.
+    Button.calendar_day {
+        corner: 22,
+        background: fill.subtle,
+        hover: none,
+        pressed: none,
+        settle: bouncy,
+    }
+
+    Button.calendar_selected {
+        corner: 22,
+        border: control.border,
+        hover: none,
+        pressed: none,
+        settle: bouncy,
+    }
+
+    Button.calendar_row {
+        corner: 12,
+        hover: background(fill.subtle),
+        pressed: background(fill.strong),
+        settle: snappy,
     }
 
     IconButton {
@@ -122,7 +217,7 @@ pub fn app(app: erika::Client, anime: anime::Client, windows: AppWindows) -> imp
             Window(id: main, title: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, initial: open, width: 1280, height: 800, min_width: 720, min_height: 480, chrome: unified, idle_after: 3, immersive: app.playing && app.expanded) {
                 main_window(app: app, anime: anime, windows: windows)
             }
-            Window(id: settings, title: tr! { "zh-Hans" => "设置", "en" => "Settings" }, width: 640, height: 480) {
+            Window(id: settings, title: tr! { "zh-Hans" => "设置", "en" => "Settings" }, width: 1000, height: 660, min_width: 1000, min_height: 660, chrome: standard) {
                 settings(app: app)
             }
         }
@@ -138,12 +233,32 @@ pub fn main_window(
     #[session] draft: ErikaDraft,
 ) -> impl View {
     ui! {
+        Stack(reduce_motion: app.preferences.reduce_motion) {
+            Slot(id: background)
+            if app.onboarding.visible {
+                Stack(enabled: false) {
+                    main_shell(app: app, anime: anime, windows: windows)
+                }
+                onboarding(app: app)
+            } else {
+                Stack(hero: onboarding_window) {
+                    main_shell(app: app, anime: anime, windows: windows)
+                }
+            }
+        }
+    }
+}
+
+#[component]
+pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows, #[session] draft: ErikaDraft) -> impl View {
+    ui! {
         Stack {
             SplitView {
                 Sidebar(id: pages, selection: draft.page) {
                     SidebarHeader {
-                        Row(gap: 10, align: center) {
-                            Image(source: "design/assets/icon.png", width: 22, height: 22, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                        // Match the navigation icon centers and title column.
+                        Row(gap: 5, padding_x: 12, align: center) {
+                            Image(source: "design/brand/erika-icon-export/png/mono-black/erika-mono-black-128.png", width: 22, height: 22, rendering: template, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
                             Text(content: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, style: headline)
                         }
                     }
@@ -167,19 +282,25 @@ pub fn main_window(
                     Toolbar {
                         // The way back from a show's details, at the leading
                         // end with the page it leads to.
-                        if anime.opened > 0 {
+                        if anime.opened > 0 && (anime.back_label == "搜索" || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back_label == "首页") || (draft.page == MainPage::New && anime.opened_from_schedule) || (draft.page == MainPage::Library && anime.back_label == "媒体库")) {
                             IconButton(id: back, icon: "chevron.left", label: tr! { "zh-Hans" => "返回", "en" => "Back" }, prominence: plain, shortcut: "escape") => anime.close()
                             Text(content: anime.back_label, emphasis: secondary)
                         }
                         Spacer
-                        Search(id: search, value: draft.query, prompt: tr! { "zh-Hans" => "搜索番剧、文件、设置", "en" => "Search shows, files and settings" }, shortcut: "cmd+k") {
-                            Text(content: tr! { "zh-Hans" => "搜索在下一步做", "en" => "Search comes next" }, emphasis: secondary)
+                        Search(id: search, value: draft.query, style: palette, width: 640, height: 480, panel_prompt: tr! { "zh-Hans" => "搜索番剧、剧集、设置和操作", "en" => "Search shows, episodes, settings and actions" }, prompt: tr! { "zh-Hans" => "搜索番剧、文件、设置", "en" => "Search shows, files and settings" }, shortcut: "cmd+k") {
+                            search_results(app: app, anime: anime, windows: windows)
                         }
                         Button(id: open_file, label: tr! { "zh-Hans" => "打开", "en" => "Open" }, icon: "plus", pick: draft.file, files: "video", shortcut: "cmd+o") => app.open_file(draft.file)
                     }
+                    if !app.features.anime && !app.features.library && !app.features.downloads {
+                        empty_frame(app: app)
+                    } else if anime.opened > 0 && (anime.back_label == "搜索" || (draft.page == MainPage::Library && anime.back_label == "媒体库")) {
+                        details(anime: anime)
+                    } else {
                     match draft.page {
                         MainPage::Idle => { empty_frame(app: app) }
                         _ => { PageContent(slot: main, selected: draft.page) }
+                    }
                     }
                 }
             }
@@ -296,27 +417,6 @@ pub fn empty_frame(app: erika::Client, #[session] draft: ErikaDraft) -> impl Vie
                     Shape(kind: rounded, corner: 22, stroke: control.border, stroke_width: 2)
                 }
                 Button(id: open_here, label: tr! { "zh-Hans" => "打开文件", "en" => "Open File" }, icon: "folder", prominence: prominent, variant: primary, pick: draft.file, files: "video") => app.open_file(draft.file)
-            }
-        }
-    }
-}
-
-/// Settings. The sections come with their modules in a later step.
-#[component]
-pub fn settings(app: erika::Client) -> impl View {
-    ui! {
-        Form {
-            Section(title: tr! { "zh-Hans" => "外观", "en" => "Appearance" }) {
-                Menu(id: accent_menu, label: tr! { "zh-Hans" => "主题色", "en" => "Accent" }) {
-                    MenuItem(id: crimson, label: tr! { "zh-Hans" => "绯红", "en" => "Crimson" }) => app.set_accent(Accent::Crimson)
-                    MenuItem(id: ultramarine, label: tr! { "zh-Hans" => "群青", "en" => "Ultramarine" }) => app.set_accent(Accent::Ultramarine)
-                    MenuItem(id: neon, label: tr! { "zh-Hans" => "荧绿", "en" => "Neon" }) => app.set_accent(Accent::Neon)
-                }
-                Menu(id: appearance_menu, label: tr! { "zh-Hans" => "明暗", "en" => "Appearance" }) {
-                    MenuItem(id: follow_system, label: tr! { "zh-Hans" => "跟随系统", "en" => "System" }) => app.set_appearance(Appearance::System)
-                    MenuItem(id: light, label: tr! { "zh-Hans" => "浅色", "en" => "Light" }) => app.set_appearance(Appearance::Light)
-                    MenuItem(id: dark, label: tr! { "zh-Hans" => "深色", "en" => "Dark" }) => app.set_appearance(Appearance::Dark)
-                }
             }
         }
     }

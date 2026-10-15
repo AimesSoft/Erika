@@ -108,6 +108,7 @@ name = "erika-core"
 version = "0.1.0"
 dependencies = [
  "bern",
+ "erika-anime-protocol",
  "erika-protocol",
 ]
 
@@ -201,6 +202,7 @@ version = "0.1.0"
 dependencies = [
  "bern",
  "erika-library-protocol",
+ "erika-protocol",
 ]
 
 [[package]]
@@ -284,6 +286,7 @@ name = "erika-ui"
 version = "0.1.0"
 dependencies = [
  "bern",
+ "erika-anime-protocol",
  "erika-protocol",
 ]
 

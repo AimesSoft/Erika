@@ -26,7 +26,7 @@ type = "erika_core::ErikaEngine"
 
 [ui]
 package = "erika-ui"
-sources = ["erika-ui/src/lib.rs"]
+sources = "erika-ui/src"
 root = "app"
 
 # Breakpoints of the window sizes of the design, section 6.2.
@@ -35,9 +35,9 @@ compact_below = 600
 medium_below = 1024
 expanded_below = 1440
 
-# The design's sample posters and still, until the library has real ones.
+# The monochrome brand mark, plus sample posters and still until the library has real ones.
 [resources]
-paths = ["design/assets/icon.png", "design/assets/still1.jpg", "design/assets/posters/p1.jpg", "design/assets/posters/p2.jpg", "design/assets/posters/p3.jpg", "design/assets/posters/p4.jpg", "design/assets/posters/p5.jpg", "design/assets/posters/p6.jpg", "design/assets/posters/p7.jpg", "design/assets/posters/p8.jpg", "design/assets/posters/p9.jpg", "design/assets/posters/p10.jpg", "design/assets/posters/p11.jpg", "design/assets/posters/p12.jpg", "design/assets/posters/p13.jpg", "design/assets/posters/p14.jpg", "design/assets/posters/p15.jpg", "design/assets/posters/p16.jpg"]
+paths = ["design/assets/icon.png", "erika-ui/assets/erika-wordmark.png", "design/brand/erika-icon-export/png/foreground/erika-foreground-256.png", "design/brand/erika-icon-export/png/mono-black/erika-mono-black-128.png", "design/assets/still1.jpg", "design/assets/posters/p1.jpg", "design/assets/posters/p2.jpg", "design/assets/posters/p3.jpg", "design/assets/posters/p4.jpg", "design/assets/posters/p5.jpg", "design/assets/posters/p6.jpg", "design/assets/posters/p7.jpg", "design/assets/posters/p8.jpg", "design/assets/posters/p9.jpg", "design/assets/posters/p10.jpg", "design/assets/posters/p11.jpg", "design/assets/posters/p12.jpg", "design/assets/posters/p13.jpg", "design/assets/posters/p14.jpg", "design/assets/posters/p15.jpg", "design/assets/posters/p16.jpg"]
 
 # `channels = ["ipc"]` lets the generated command line and MCP server drive
 # the running app. Remove it to ship an app that listens to nothing.
