@@ -78,7 +78,9 @@ pub fn stage(anime: anime::Client) -> impl View {
                     Label(title: tr! { "zh-Hans" => "播放", "en" => "Play" }, icon: "play.fill", display: icon, style: title2, appearance: dark, reveal: hover)
                 }
             } => anime.resume(anime.stage.id)
-            Column(gap: 0, width: 420) {
+            // The prototype's `528px 1fr`: this column takes the rest, so the
+            // page never asks for more room than the window leaves it.
+            Column(gap: 0) {
                 Canvas(height: 4)
                 Text(content: tr! { "zh-Hans" => "继续观看", "en" => "Continue watching" }, style: caption, emphasis: secondary)
                 Canvas(height: 6)
