@@ -40,7 +40,7 @@ pub fn downloads_page(downloads: downloads::Client) -> impl View {
             Canvas(height: 14)
             ScrollView {
                 Column(gap: 14) {
-                    Stack(variant: settings_group) {
+                    Stack(variant: row_group) {
                         Column(gap: 0, animate: smooth) {
                             if downloads.tab == DownloadTab::Active {
                                 if downloads.active_count == 0 {

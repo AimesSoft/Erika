@@ -7,7 +7,7 @@ use erika_protocol::erika::{self, Accent, OnboardingPreset};
 pub fn onboarding(app: erika::Client) -> impl View {
     ui! {
         Modal(width: 960, height: 600, appear: pop_in, disappear: fade) {
-            Stack(variant: settings_page) {
+            Stack {
                 Column(gap: 0) {
                     if app.onboarding.step == 0 {
                         onboarding_welcome()

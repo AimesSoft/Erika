@@ -48,16 +48,17 @@ style! {
     #[target(browser)]
     IconButton.player_primary { size: regular }
     Stack.onboarding_art { background: color(light: "#232A52", dark: "#232A52") }
-    Stack.onboarding_card { background: color(light: "#FFFFFF", dark: "#2C2C2E"), corner: 16 }
+    // Cards and groups take the system's neutral fill (P2); only the
+    // picture, the player and the brand art keep their own colors.
+    Stack.onboarding_card { background: fill.subtle, corner: 16 }
     Stack.onboarding_check { foreground: on_accent }
     Stack.onboarding_swatch_label { foreground: text.secondary }
     Button.onboarding_crimson { foreground: color(light: "#FF2E55", dark: "#FF2E55"), hover: scale(1.08, snappy), pressed: scale(0.94, press) }
     Button.onboarding_blue { foreground: color(light: "#2A51D4", dark: "#2A51D4"), hover: scale(1.08, snappy), pressed: scale(0.94, press) }
     Button.onboarding_green { foreground: color(light: "#07FF94", dark: "#07FF94"), hover: scale(1.08, snappy), pressed: scale(0.94, press) }
     Button.onboarding_card { corner: 16, hover: none, pressed: scale(0.98, press), settle: jelly }
-    Stack.settings_page { background: color(light: "#FFFFFF", dark: "#1C1C1E") }
-    Stack.settings_group { background: color(light: "#FFFFFF", dark: "#2C2C2E"), corner: 14 }
-    Stack.settings_card { background: color(light: "#FFFFFF", dark: "#2C2C2E"), corner: 16 }
+    Stack.row_group { background: fill.subtle, corner: 14 }
+    Stack.settings_card { background: fill.subtle, corner: 16 }
     Stack.settings_hud { background: color(light: "#18181B", dark: "#18181B"), corner: 17 }
     Stack.settings_wordmark { foreground: color(light: "#213A6B", dark: "#FFFFFF") }
     Stack.settings_tag { background: fill.subtle, corner: 999 }

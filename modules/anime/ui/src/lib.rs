@@ -252,7 +252,9 @@ pub fn details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl View 
                         IconButton(id: film_on, icon: "chevron.right", label: tr! { "zh-Hans" => "下一页", "en" => "Next" }) => draft.episode.set(anime.show.episodes)
                     }
                     Canvas(height: 6)
-                    ScrollView(axis: horizontal, snap: center, position: draft.episode) {
+                    // The film pages with the arrows above it, as the design's
+                    // does; it shows no scroll bar.
+                    ScrollView(axis: horizontal, snap: center, position: draft.episode, indicators: hidden) {
                         Row(gap: 30, padding_x: 32, padding_y: 14) {
                             ForEach(items: anime.episodes, key: number) |episode| {
                                 film_cell(anime: anime, episode: episode)
@@ -260,7 +262,7 @@ pub fn details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl View 
                         }
                     }
                     Canvas(height: 18)
-                    Picker(id: detail_tab, label: tr! { "zh-Hans" => "分页", "en" => "Tab" }, value: draft.tab, style: segmented)
+                    Picker(id: detail_tab, label: tr! { "zh-Hans" => "分页", "en" => "Tab" }, value: draft.tab, style: segmented, label_hidden: true)
                     Canvas(height: 14)
                     Column(width: 640) {
                         Text(content: anime.show.summary, emphasis: secondary)
