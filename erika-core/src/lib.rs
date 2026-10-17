@@ -6,6 +6,7 @@ mod settings;
 mod onboarding;
 
 mod search;
+mod player;
 
 use bern::CommandError;
 use bern::media::MediaSource;
@@ -21,6 +22,8 @@ const STILL: &str = "design/assets/still1.jpg";
 
 pub struct ErikaEngine {
     pub(crate) state: State,
+    feedback_remaining: f64,
+    danmaku_remaining: f64,
     pub(crate) all_plugins: Vec<Plugin>,
     pub(crate) saved_modules: Option<Vec<String>>,
     pub(crate) onboarding_completed: bool,
@@ -29,6 +32,8 @@ pub struct ErikaEngine {
 impl Default for ErikaEngine {
     fn default() -> Self {
         let mut engine = Self {
+            feedback_remaining: 0.0,
+            danmaku_remaining: 0.0,
             saved_modules: None,
             onboarding_completed: false,
             all_plugins: settings::sample_plugins(),
@@ -53,6 +58,7 @@ impl Default for ErikaEngine {
 
                 accent: Accent::Crimson,
                 appearance: Appearance::System,
+                player: player::initial(),
                 playing: false,
                 expanded: false,
                 paused: false,
@@ -66,6 +72,11 @@ impl Default for ErikaEngine {
             },
         };
         engine.restore_welcome_preferences();
+        if let Some(enabled) = &engine.saved_modules {
+            engine.state.features = settings::feature_selection(enabled);
+            engine.state.module_count = enabled.len() as i64;
+            engine.state.preset_name = if enabled.is_empty() { "纯粹播放" } else if enabled.len() == 8 { "全都要" } else if enabled.len() == 3 && ["danmaku", "library", "anime"].iter().all(|id| enabled.iter().any(|v| v == id)) { "看番" } else { "自己挑" }.into();
+        }
         engine
     }
 }
@@ -82,7 +93,8 @@ fn clock(seconds: f64) -> String {
 
 impl ErikaEngine {
     fn start(&mut self, title: String, subtitle: String, still: MediaSource, progress: f64) {
-        let progress = progress.clamp(0.0, 1.0);
+        let progress = if progress.is_finite() { progress.clamp(0.0, 1.0) } else { 0.0 };
+        self.reset_player(&subtitle);
         self.state.playing = true;
         self.state.expanded = true;
         self.state.paused = false;
@@ -286,6 +298,10 @@ impl erika::Commands for ErikaEngine {
     fn minimize(&mut self) -> Result<(), CommandError> {
         self.require_playing()?;
         self.state.expanded = false;
+        self.state.player.panel = false;
+        if !self.state.features.anime && !self.state.features.library && !self.state.features.downloads {
+            self.state.paused = true;
+        }
         Ok(())
     }
 
@@ -303,8 +319,52 @@ impl erika::Commands for ErikaEngine {
 
     fn toggle_pause(&mut self) -> Result<(), CommandError> {
         self.require_playing()?;
+        if self.state.progress >= 1.0 { self.update_position(0.0); }
         self.state.paused = !self.state.paused;
+        self.state.player.feedback = true;
+        self.feedback_remaining = 0.5;
         Ok(())
+    }
+
+    fn player_tick(&mut self) -> Result<(), CommandError> { self.tick_player(); Ok(()) }
+    fn seek(&mut self, progress: f64) -> Result<(), CommandError> {
+        self.require_playing()?;
+        if !progress.is_finite() { return Err(CommandError::new("invalid_progress", "progress must be finite")); }
+        self.update_position(progress.clamp(0.0, 1.0) * LENGTH); Ok(())
+    }
+    fn skip(&mut self, seconds: f64) -> Result<(), CommandError> {
+        self.require_playing()?;
+        if !seconds.is_finite() { return Err(CommandError::new("invalid_time", "time must be finite")); }
+        self.update_position(self.state.progress * LENGTH + seconds); Ok(())
+    }
+    fn select_episode(&mut self, episode: i64) -> Result<(), CommandError> { self.player_episode(episode) }
+    fn change_episode(&mut self, delta: i64) -> Result<(), CommandError> {
+        self.player_episode(self.state.player.episode.saturating_add(delta))
+    }
+    fn player_panel(&mut self, visible: bool) -> Result<(), CommandError> {
+        self.require_playing()?; self.state.player.panel = visible;
+        if !self.state.features.danmaku && self.state.player.tab == PlayerTab::Danmaku { self.state.player.tab = PlayerTab::Subtitles; }
+        Ok(())
+    }
+    fn player_tab(&mut self, tab: PlayerTab) -> Result<(), CommandError> {
+        self.require_playing()?; self.state.player.tab = tab; self.state.player.panel = true; Ok(())
+    }
+    fn set_subtitle_track(&mut self, value: SubtitleTrack) -> Result<(), CommandError> { self.state.player.subtitle_track = value; self.update_subtitle(); Ok(()) }
+    fn set_audio_track(&mut self, value: AudioTrack) -> Result<(), CommandError> { self.state.player.audio_track = value; Ok(()) }
+    fn set_enhancement(&mut self, value: Enhancement) -> Result<(), CommandError> { self.state.player.enhancement = value; Ok(()) }
+    fn set_picture_ratio(&mut self, value: PictureRatio) -> Result<(), CommandError> { self.state.player.ratio = value; Ok(()) }
+    fn set_hdr(&mut self, value: HdrMode) -> Result<(), CommandError> { self.state.player.hdr = value; Ok(()) }
+    fn set_player_number(&mut self, key: String, value: f64) -> Result<(), CommandError> { self.player_number(&key, value) }
+    fn set_skip_intro(&mut self, value: bool) -> Result<(), CommandError> { self.state.player.skip_intro = value; Ok(()) }
+    fn send_danmaku(&mut self, text: String) -> Result<(), CommandError> {
+        self.require_playing()?;
+        if !self.state.features.danmaku || !self.state.features.sync { return Err(CommandError::new("feature_disabled", "danmaku and sync must be enabled")); }
+        self.state.player.sent_danmaku = text.trim().chars().take(40).collect();
+        self.danmaku_remaining = 6.0; Ok(())
+    }
+    fn attach_subtitle(&mut self, source: MediaSource) -> Result<(), CommandError> {
+        self.state.player.subtitle_file = source.file_name().unwrap_or_default();
+        self.notify(format!("已选择字幕：{}（界面预览）", self.state.player.subtitle_file)); Ok(())
     }
 
     fn set_accent(&mut self, accent: Accent) -> Result<(), CommandError> {

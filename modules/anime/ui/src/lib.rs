@@ -68,7 +68,7 @@ pub fn stage(anime: anime::Client) -> impl View {
             Button(id: stage, label: anime.stage.title, variant: stage) {
                 Stack(align: center) {
                     Stack(align: bottom_leading) {
-                        Image(source: anime.stage.still, width: 528, height: 297, fit: cover, label: anime.stage.title)
+                        Image(source: anime.stage.still, width: 528, height: 297, corner: 22, fit: cover, label: anime.stage.title, hero: frame, hero_key: anime.stage.title)
                         Rail {
                             Canvas(from: 0, to: anime.stage.progress, height: 5) {
                                 Shape(kind: rect, fill: accent)
@@ -99,7 +99,7 @@ pub fn stage(anime: anime::Client) -> impl View {
                             Button(id: swap, label: watching.title, variant: row) {
                                 Row(gap: 12, align: center) {
                                     Stack(align: bottom_leading) {
-                                        Image(source: watching.still, width: 96, height: 54, fit: cover, corner: 8, label: watching.title)
+                                        Image(source: watching.still, width: 96, height: 54, fit: cover, corner: 8, label: watching.title, hero: frame, hero_key: watching.title)
                                         Rail {
                                             Canvas(from: 0, to: watching.progress, height: 3) {
                                                 Shape(kind: rect, fill: accent)

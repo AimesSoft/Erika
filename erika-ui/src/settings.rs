@@ -872,7 +872,7 @@ pub fn settings_about(app: erika::Client) -> impl View {
             Column(gap: 6, padding_y: 24, align: center) {
                 Row {
                     Spacer
-                    Image(source: "design/brand/erika-icon-export/png/foreground/erika-foreground-256.png", width: 104, height: 104, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                    Svg(source: "design/brand/erika-icon-animated.svg", width: 104, height: 104, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
                     Spacer
                 }
                 Stack(variant: settings_wordmark) {

@@ -17,7 +17,7 @@ pub fn onboarding(app: erika::Client) -> impl View {
                         }
                     } else {
                         ScrollView {
-                            Column(gap: 0, padding_x: if window.medium { 28 } else { 44 }, padding_y: 36) {
+                            Column(gap: 0, padding_x: if window.medium || window.compact { 28 } else { 44 }, padding_y: 36) {
                                 if window.medium || window.compact {
                                     Column(gap: 22) {
                                         if app.onboarding.step == 1 { onboarding_features(app: app) }
@@ -53,7 +53,7 @@ pub fn onboarding_welcome() -> impl View {
                 Column(gap: 0) {
                     Stack(variant: onboarding_art, height: 170) {
                         Canvas { Pattern(name: academy) }
-                        Image(source: "design/assets/icon.png", width: 130, height: 130, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, appear: pop_in)
+                        Svg(source: "design/brand/erika-icon-animated.svg", width: 130, height: 130, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
                     }
                     Column(gap: 16, padding: 28) {
                         onboarding_greeting()
@@ -64,7 +64,7 @@ pub fn onboarding_welcome() -> impl View {
             Row(gap: 0, height: 528, align: top) {
                 Stack(variant: onboarding_art, width: 480, height: 528) {
                     Canvas { Pattern(name: academy) }
-                    Image(source: "design/assets/icon.png", width: 200, height: 200, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, appear: pop_in)
+                    Svg(source: "design/brand/erika-icon-animated.svg", width: 200, height: 200, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
                 }
                 Column(gap: 16, padding_x: 44, padding_y: 64) {
                     onboarding_greeting()
@@ -146,7 +146,7 @@ pub fn onboarding_card(app: erika::Client, preset: OnboardingPreset) -> impl Vie
                     }
                     Row(padding: 12) {
                         Spacer
-                        Stack(width: 22, height: 22, appear: pop_in) {
+                        Stack(variant: onboarding_check, width: 22, height: 22, appear: pop_in) {
                             Canvas { Shape(kind: ellipse, fill: accent) }
                             Label(title: tr! { "zh-Hans" => "已选择", "en" => "Selected" }, icon: "checkmark", style: caption2, display: icon)
                         }
@@ -229,7 +229,7 @@ pub fn onboarding_ready(app: erika::Client) -> impl View {
             Canvas(height: 18)
             Text(content: tr! { "zh-Hans" => "准备好了", "en" => "You're ready" }, style: title2)
             Canvas(height: 4)
-            Column(width: 420, align: center) {
+            Column(width: if window.compact { 300 } else { 420 }, align: center) {
                 Text(content: tr! { "zh-Hans" => "开启了 {n} 个模块。点「开始使用」，右边那扇小窗口会长成你的 Erika。", "en" => "{n} modules enabled. Click Get started to turn this little window into your Erika."; n: app.onboarding.count }, emphasis: secondary, lines: 3)
             }
             Canvas(height: 22)
@@ -240,25 +240,28 @@ pub fn onboarding_ready(app: erika::Client) -> impl View {
 #[component]
 pub fn onboarding_footer(app: erika::Client) -> impl View {
     ui! {
-        Stack(height: 72, align: top) {
+        Stack(height: if window.compact { 96 } else { 72 }, align: top) {
             Divider
-            Row(gap: 12, padding_x: 28, height: 72, align: center) {
-                if app.onboarding.step < 3 {
-                    Button(id: skip, label: tr! { "zh-Hans" => "跳过", "en" => "Skip" }, shape: capsule, height: 32) => app.onboarding_skip()
-                }
-                Spacer
-                if app.onboarding.step > 0 {
-                    Button(id: back, label: tr! { "zh-Hans" => "上一步", "en" => "Back" }, shape: capsule, height: 32) => app.onboarding_back()
-                }
-                if app.onboarding.step == 0 {
-                    Button(id: start, label: tr! { "zh-Hans" => "开始", "en" => "Start" }, shape: capsule, height: 32, prominence: prominent) => app.onboarding_next()
-                } else if app.onboarding.step == 3 {
-                    Button(id: finish, label: tr! { "zh-Hans" => "开始使用", "en" => "Get started" }, shape: capsule, height: 32, prominence: prominent) => app.onboarding_next()
-                } else {
-                    Button(id: next, label: tr! { "zh-Hans" => "继续", "en" => "Continue" }, shape: capsule, height: 32, prominence: prominent) => app.onboarding_next()
+            Column(gap: 0) {
+                if window.compact { Canvas(height: 24) }
+                Row(gap: 12, padding_x: 28, height: 72, align: center) {
+                    if app.onboarding.step < 3 {
+                        Button(id: skip, label: tr! { "zh-Hans" => "跳过", "en" => "Skip" }, shape: capsule, height: 32) => app.onboarding_skip()
+                    }
+                    Spacer
+                    if app.onboarding.step > 0 {
+                        Button(id: back, label: tr! { "zh-Hans" => "上一步", "en" => "Back" }, shape: capsule, height: 32) => app.onboarding_back()
+                    }
+                    if app.onboarding.step == 0 {
+                        Button(id: start, label: tr! { "zh-Hans" => "开始", "en" => "Start" }, shape: capsule, height: 32, prominence: prominent) => app.onboarding_next()
+                    } else if app.onboarding.step == 3 {
+                        Button(id: finish, label: tr! { "zh-Hans" => "开始使用", "en" => "Get started" }, shape: capsule, height: 32, prominence: prominent) => app.onboarding_next()
+                    } else {
+                        Button(id: next, label: tr! { "zh-Hans" => "继续", "en" => "Continue" }, shape: capsule, height: 32, prominence: prominent) => app.onboarding_next()
+                    }
                 }
             }
-            Row(gap: 6, height: 72, align: center) {
+            Row(gap: 6, height: if window.compact { 24 } else { 72 }, align: center) {
                 onboarding_dot(app: app, step: 0)
                 onboarding_dot(app: app, step: 1)
                 onboarding_dot(app: app, step: 2)

@@ -45,7 +45,7 @@ pub fn library_page(
                 else if app.modules.sources && draft.server_source == ServerSource::Server { LibrarySource::Server }
                 else if app.modules.remote && draft.shared_source == SharedSource::Shared { LibrarySource::Shared }
                 else { LibrarySource::Local }, draft.filter, draft.sort)) |listing| {
-                Column(gap: 0, padding_x: if window.medium { 24.0 } else { 32.0 }, padding_y: 6, appear: page_in) {
+                Column(gap: 0, padding_x: if window.compact { 16.0 } else if window.medium { 24.0 } else { 32.0 }, padding_y: 6, appear: page_in) {
                     Adaptive {
                         Layout(size: expanded) {
                             Row(gap: 12, align: center) {
@@ -58,27 +58,51 @@ pub fn library_page(
                             }
                         }
                         Layout(size: compact) {
-                            Column(gap: 12) {
-                                Row(gap: 12, align: center) {
-                                    Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
-                                    Spacer
-                                    library_sort()
-                                    Button(id: manage_small, label: tr! { "zh-Hans" => "管理", "en" => "Manage" }, icon: "folder", shape: capsule, height: 32) => library.manage()
-                                }
-                                Row(gap: 12, align: center) {
+                            if window.compact {
+                                Column(gap: 12) {
+                                    Row(gap: 12, align: center) {
+                                        Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
+                                        Spacer
+                                        Button(id: manage_compact, label: tr! { "zh-Hans" => "管理", "en" => "Manage" }, icon: "folder", shape: capsule, height: 32) => library.manage()
+                                    }
                                     library_sources(app: app)
-                                    Spacer
-                                    library_zoom()
+                                    Row(gap: 12, align: center) {
+                                        library_sort()
+                                        Spacer
+                                        library_zoom()
+                                    }
+                                }
+                            } else {
+                                Column(gap: 12) {
+                                    Row(gap: 12, align: center) {
+                                        Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
+                                        Spacer
+                                        library_sort()
+                                        Button(id: manage_small, label: tr! { "zh-Hans" => "管理", "en" => "Manage" }, icon: "folder", shape: capsule, height: 32) => library.manage()
+                                    }
+                                    Row(gap: 12, align: center) {
+                                        library_sources(app: app)
+                                        Spacer
+                                        library_zoom()
+                                    }
                                 }
                             }
                         }
                     }
                     Canvas(height: 14)
-                    Row(gap: 8, align: center) {
-                        ForEach(items: listing.filters, key: id) |chip| {
-                            library_filter(value: chip.value, count: chip.count)
+                    if window.compact {
+                        Flow(gap: 8) {
+                            ForEach(items: listing.filters, key: id) |chip| {
+                                library_filter(value: chip.value, count: chip.count)
+                            }
                         }
-                        Spacer
+                    } else {
+                        Row(gap: 8, align: center) {
+                            ForEach(items: listing.filters, key: id) |chip| {
+                                library_filter(value: chip.value, count: chip.count)
+                            }
+                            Spacer
+                        }
                     }
                     Canvas(height: 18)
                     library_wall(library: library, listing: listing)
@@ -146,9 +170,9 @@ pub fn library_sources(app: erika::Client, #[session] draft: LibraryDraft) -> im
 #[component]
 pub fn library_zoom(#[session] draft: LibraryDraft) -> impl View {
     ui! {
-        Row(gap: 8, width: 188, align: center) {
+        Row(gap: 8, width: if window.compact { 156 } else { 188 }, align: center) {
             IconButton(id: smaller, icon: "square.grid.3x3", label: tr! { "zh-Hans" => "缩小海报", "en" => "Smaller posters" }, prominence: plain, shortcut: "cmd+-") => draft.poster_size.set(if draft.poster_size > 188.0 { 188.0 } else if draft.poster_size > 176.0 { 176.0 } else if draft.poster_size > 164.0 { 164.0 } else if draft.poster_size > 152.0 { 152.0 } else if draft.poster_size > 140.0 { 140.0 } else if draft.poster_size > 128.0 { 128.0 } else if draft.poster_size > 116.0 { 116.0 } else if draft.poster_size > 104.0 { 104.0 } else if draft.poster_size > 92.0 { 92.0 } else { 84.0 })
-            Row(width: 120) {
+            Row(width: if window.compact { 88 } else { 120 }) {
                 Slider(id: poster_size, label: tr! { "zh-Hans" => "海报大小", "en" => "Poster size" }, value: draft.poster_size, min: 84, max: 200, label_hidden: true)
             }
             IconButton(id: larger, icon: "square.grid.2x2", label: tr! { "zh-Hans" => "放大海报", "en" => "Larger posters" }, prominence: plain, shortcut: "cmd+=") => draft.poster_size.set(if draft.poster_size < 96.0 { 96.0 } else if draft.poster_size < 108.0 { 108.0 } else if draft.poster_size < 120.0 { 120.0 } else if draft.poster_size < 132.0 { 132.0 } else if draft.poster_size < 144.0 { 144.0 } else if draft.poster_size < 156.0 { 156.0 } else if draft.poster_size < 168.0 { 168.0 } else if draft.poster_size < 180.0 { 180.0 } else if draft.poster_size < 192.0 { 192.0 } else { 200.0 })

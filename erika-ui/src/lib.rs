@@ -4,6 +4,8 @@
 //! the window while playing, steps back when the pointer moves, and shrinks
 //! into the mini player on the way back.
 
+mod player;
+use player::player;
 mod search;
 use search::search_results;
 
@@ -37,6 +39,14 @@ style! {
         subheadline: font(size: 8.5, weight: semibold),
     }
 
+    Stack.player_black { background: color(light: "#000000", dark: "#000000"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
+    Stack.player_background { background: color(light: "#1C1C1E", dark: "#1C1C1E"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
+    Stack.player_panel { background: color(light: "#2C2C2F", dark: "#2C2C2F"), corner: 26 }
+    Stack.player_gold { foreground: color(light: "#FFD24A", dark: "#FFD24A") }
+    Button.player_picture { hover: none, pressed: none }
+    IconButton.player_primary { size: extra_large, hover: scale(1.08, snappy), pressed: scale(0.84, press), settle: jelly }
+    #[target(browser)]
+    IconButton.player_primary { size: regular }
     Stack.onboarding_art { background: color(light: "#232A52", dark: "#232A52") }
     Stack.onboarding_card { background: color(light: "#FFFFFF", dark: "#2C2C2E"), corner: 16 }
     Stack.onboarding_check { foreground: on_accent }
@@ -69,6 +79,8 @@ style! {
 
     transition {
         // A new page fades in and rises 12 points (T3).
+        player_panel_in: slide(right, 24, hero),
+        player_feedback_in: pop(from: 0.6, jelly),
         page_in: slide(bottom, 12, smooth),
         settings_page_in: slide(bottom, 8, smooth),
         drop_in: slide(top, 24, jelly),
@@ -85,14 +97,20 @@ style! {
         calendar_row_in: slide(edge: bottom, distance: 10, jelly),
     }
 
-    // Desktop navigation uses the prototype's medium-control feedback:
-    // a subtle fill that darkens in light mode and brightens in dark mode.
+    // Share navigation motion; each target keeps its selection palette.
     SidebarItem {
         corner: 9,
-        hover: background(fill.subtle) + scale(1.03, snappy),
+        hover: scale(1.03, snappy),
         pressed: scale(0.94, press),
-        selected: fill(fill.strong),
+        selected: system,
         settle: jelly,
+    }
+
+    // The macOS prototype uses neutral selection with accent-colored icons.
+    #[target(macos)]
+    SidebarItem {
+        hover: background(fill.subtle) + scale(1.03, snappy),
+        selected: fill(fill.strong),
     }
 
     // Controls keep the system's look (P2); only the design's springs are
@@ -214,7 +232,7 @@ pub struct ErikaDraft {
 pub fn app(app: erika::Client, anime: anime::Client, windows: AppWindows) -> impl View {
     ui! {
         WindowSet(handle: AppWindows, primary: main, accent: app.accent, appearance: app.appearance) {
-            Window(id: main, title: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, initial: open, width: 1280, height: 800, min_width: 720, min_height: 480, chrome: unified, idle_after: 3, immersive: app.playing && app.expanded) {
+            Window(id: main, title: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, initial: open, width: 1280, height: 800, min_width: 720, min_height: 480, chrome: unified, idle_after: 3, idle_enabled: app.playing && app.expanded && !app.paused && !app.player.panel, immersive: app.playing && app.expanded) {
                 main_window(app: app, anime: anime, windows: windows)
             }
             Window(id: settings, title: tr! { "zh-Hans" => "设置", "en" => "Settings" }, width: 1000, height: 660, min_width: 1000, min_height: 660, chrome: standard) {
@@ -234,6 +252,7 @@ pub fn main_window(
 ) -> impl View {
     ui! {
         Stack(reduce_motion: app.preferences.reduce_motion) {
+            Timer(interval: 0.25, enabled: app.playing) => app.player_tick()
             Slot(id: background)
             if app.onboarding.visible {
                 Stack(enabled: false) {
@@ -253,6 +272,7 @@ pub fn main_window(
 pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows, #[session] draft: ErikaDraft) -> impl View {
     ui! {
         Stack {
+            Stack(enabled: !app.playing || !app.expanded) {
             SplitView {
                 Sidebar(id: pages, selection: draft.page) {
                     SidebarHeader {
@@ -280,11 +300,10 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
                 }
                 Detail(titled: false) {
                     Toolbar {
-                        // The way back from a show's details, at the leading
-                        // end with the page it leads to.
+                        // Keep the destination inside the native button so
+                        // its toolbar capsule measures and pads the whole label.
                         if anime.opened > 0 && (anime.back_label == "搜索" || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back_label == "首页") || (draft.page == MainPage::New && anime.opened_from_schedule) || (draft.page == MainPage::Library && anime.back_label == "媒体库")) {
-                            IconButton(id: back, icon: "chevron.left", label: tr! { "zh-Hans" => "返回", "en" => "Back" }, prominence: plain, shortcut: "escape") => anime.close()
-                            Text(content: anime.back_label, emphasis: secondary)
+                            Button(id: back, icon: "chevron.left", label: anime.back_label, shortcut: "escape") => anime.close()
                         }
                         Spacer
                         Search(id: search, value: draft.query, style: palette, width: 640, height: 480, panel_prompt: tr! { "zh-Hans" => "搜索番剧、剧集、设置和操作", "en" => "Search shows, episodes, settings and actions" }, prompt: tr! { "zh-Hans" => "搜索番剧、文件、设置", "en" => "Search shows, files and settings" }, shortcut: "cmd+k") {
@@ -303,6 +322,7 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
                     }
                     }
                 }
+            }
             }
             if app.playing && app.expanded {
                 player(app: app)
@@ -332,7 +352,7 @@ pub fn mini_player(app: erika::Client) -> impl View {
         Column(gap: 8, appear: fade, disappear: fade) {
             Button(id: mini, label: app.title, variant: stage) {
                 Stack(align: bottom_leading) {
-                    Image(source: app.still, width: 208, height: 117, fit: cover, label: app.title, hero: frame)
+                    Image(source: app.still, width: 208, height: 117, corner: 22, fit: cover, label: app.title, hero: frame, hero_key: app.title)
                     Rail {
                         Canvas(from: 0, to: app.progress, height: 3) {
                             Shape(kind: rect, fill: accent)
@@ -357,55 +377,6 @@ pub fn mini_player(app: erika::Client) -> impl View {
     }
 }
 
-/// The player: always dark. Playing with the pointer at rest, the frame
-/// fills the window; once the pointer moves it steps back and the controls
-/// come in around it.
-#[component]
-pub fn player(app: erika::Client) -> impl View {
-    ui! {
-        Stack(appearance: dark, align: top) {
-            Canvas(label: tr! { "zh-Hans" => "播放器", "en" => "Player" }) {
-                Shape(kind: rect, fill: surface.canvas)
-            }
-            Column(gap: 12, padding: if window.idle { 0 } else { 24 }, animate: hero, align: center) {
-                if !window.idle {
-                    Row(gap: 8, align: center, appear: fade, disappear: fade) {
-                        IconButton(id: back, icon: "chevron.left", label: tr! { "zh-Hans" => "返回", "en" => "Back" }, shortcut: "escape") => app.minimize()
-                        Column(gap: 2) {
-                            Text(content: app.title, style: headline)
-                            Text(content: app.subtitle, style: caption, emphasis: secondary)
-                        }
-                        Spacer
-                        IconButton(id: pip, icon: "pip.enter", label: tr! { "zh-Hans" => "画中画", "en" => "Picture in Picture" }) => app.minimize()
-                        IconButton(id: player_settings, icon: "slider.horizontal.3", label: tr! { "zh-Hans" => "播放设置", "en" => "Playback Settings" }) => app.minimize()
-                    }
-                }
-                Image(source: app.still, width: if window.idle { 1280 } else { 1074 }, height: if window.idle { 720 } else { 604 }, fit: cover, label: app.title, hero: frame, animate: hero)
-                if !window.idle {
-                    Column(gap: 12, appear: fade, disappear: fade) {
-                        Row(gap: 12, align: center) {
-                            Text(content: app.elapsed, style: caption)
-                            Progress(value: app.progress)
-                            Text(content: app.duration, style: caption)
-                        }
-                        Row(gap: 12, align: center) {
-                            Spacer
-                            IconButton(id: back10, icon: "gobackward.10", label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 Seconds" }) => app.toggle_pause()
-                            if app.paused {
-                                IconButton(id: play, icon: "play.fill", label: tr! { "zh-Hans" => "播放", "en" => "Play" }, shortcut: "space") => app.toggle_pause()
-                            } else {
-                                IconButton(id: pause, icon: "pause.fill", label: tr! { "zh-Hans" => "暂停", "en" => "Pause" }, shortcut: "space") => app.toggle_pause()
-                            }
-                            IconButton(id: forward10, icon: "goforward.10", label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 Seconds" }) => app.toggle_pause()
-                            Spacer
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// The window with no pages: the frame before a picture is in it, where
 /// the player's frame steps back to, with "open" at its middle.
 #[component]
@@ -416,7 +387,13 @@ pub fn empty_frame(app: erika::Client, #[session] draft: ErikaDraft) -> impl Vie
                 Canvas(height: 420, label: tr! { "zh-Hans" => "空画框", "en" => "Empty frame" }) {
                     Shape(kind: rounded, corner: 22, stroke: control.border, stroke_width: 2)
                 }
+                Column(gap: 16, align: center) {
+                    if app.playing {
+                        Text(content: app.title, style: title3)
+                        Button(id: resume, label: tr! { "zh-Hans" => "继续播放", "en" => "Continue watching" }, icon: "play.fill", prominence: prominent) => app.expand()
+                    }
                 Button(id: open_here, label: tr! { "zh-Hans" => "打开文件", "en" => "Open File" }, icon: "folder", prominence: prominent, variant: primary, pick: draft.file, files: "video") => app.open_file(draft.file)
+                }
             }
         }
     }

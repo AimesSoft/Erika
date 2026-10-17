@@ -102,6 +102,8 @@ pub mod erika {
     pub enum PlaybackSpeed {
         #[label(tr! { "zh-Hans" => "1.0×", "en" => "1.0×" })]
         Normal,
+        #[label(tr! { "zh-Hans" => "0.5×", "en" => "0.5×" })]
+        Half,
         #[label(tr! { "zh-Hans" => "0.75×", "en" => "0.75×" })]
         Slow,
         #[label(tr! { "zh-Hans" => "1.25×", "en" => "1.25×" })]
@@ -242,6 +244,90 @@ pub mod erika {
         pub summary: String,
     }
 
+    #[value]
+    pub enum PlayerTab {
+        #[label(tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" })]
+        Danmaku,
+        #[label(tr! { "zh-Hans" => "字幕", "en" => "Subtitles" })]
+        Subtitles,
+        #[label(tr! { "zh-Hans" => "画面", "en" => "Picture" })]
+        Picture,
+        #[label(tr! { "zh-Hans" => "音频", "en" => "Audio" })]
+        Audio,
+        #[label(tr! { "zh-Hans" => "播放", "en" => "Playback" })]
+        Playback,
+    }
+
+    #[value]
+    pub enum SubtitleTrack {
+        #[label(tr! { "zh-Hans" => "简中", "en" => "Chinese" })]
+        Chinese,
+        #[label(tr! { "zh-Hans" => "日本語", "en" => "Japanese" })]
+        Japanese,
+        #[label(tr! { "zh-Hans" => "关闭", "en" => "Off" })]
+        Off,
+    }
+
+    #[value]
+    pub enum AudioTrack {
+        #[label(tr! { "zh-Hans" => "日本語 · FLAC 2.0", "en" => "Japanese · FLAC 2.0" })]
+        Japanese,
+        #[label(tr! { "zh-Hans" => "中文配音 · AAC 2.0", "en" => "Chinese · AAC 2.0" })]
+        Chinese,
+    }
+
+    #[value]
+    pub enum Enhancement {
+        #[label(tr! { "zh-Hans" => "关闭", "en" => "Off" })]
+        Off,
+        #[label(tr! { "zh-Hans" => "Anime4K", "en" => "Anime4K" })]
+        Anime4K,
+        #[label(tr! { "zh-Hans" => "ArtCNN 2×", "en" => "ArtCNN 2×" })]
+        ArtCNN,
+    }
+
+    #[value]
+    pub enum PictureRatio {
+        #[label(tr! { "zh-Hans" => "原始", "en" => "Original" })]
+        Original,
+        #[label(tr! { "zh-Hans" => "16:9", "en" => "16:9" })]
+        Wide,
+        #[label(tr! { "zh-Hans" => "4:3", "en" => "4:3" })]
+        Classic,
+    }
+
+    #[value]
+    pub enum HdrMode {
+        #[label(tr! { "zh-Hans" => "自动", "en" => "Auto" })]
+        Auto,
+        #[label(tr! { "zh-Hans" => "关闭", "en" => "Off" })]
+        Off,
+    }
+
+    #[value]
+    pub struct PlayerState {
+        pub panel: bool,
+        pub tab: PlayerTab,
+        pub episode: i64,
+        pub episodes: bool,
+        pub subtitle_track: SubtitleTrack,
+        pub subtitle_label: String,
+        pub audio_track: AudioTrack,
+        pub enhancement: Enhancement,
+        pub ratio: PictureRatio,
+        pub hdr: HdrMode,
+        pub volume: f64,
+        pub brightness: f64,
+        pub subtitle_size: f64,
+        pub subtitle_delay: f64,
+        pub audio_delay: f64,
+        pub skip_intro: bool,
+        pub feedback: bool,
+        pub subtitle_line: String,
+        pub sent_danmaku: String,
+        pub subtitle_file: String,
+    }
+
     #[state]
     pub struct State {
         pub onboarding: Onboarding,
@@ -260,6 +346,7 @@ pub mod erika {
         pub appearance: Appearance,
         /// Whether something is playing. The player layer or the mini
         /// player shows it.
+        pub player: PlayerState,
         pub playing: bool,
         /// Whether the player fills the window; otherwise it has shrunk into
         /// the mini player at the foot of the sidebar.
@@ -332,6 +419,23 @@ pub mod erika {
 
         /// Pause, or play on.
         fn toggle_pause(&mut self) -> Result<(), CommandError>;
+        fn player_tick(&mut self) -> Result<(), CommandError>;
+        fn seek(&mut self, progress: f64) -> Result<(), CommandError>;
+        fn skip(&mut self, seconds: f64) -> Result<(), CommandError>;
+        fn select_episode(&mut self, episode: i64) -> Result<(), CommandError>;
+        fn change_episode(&mut self, delta: i64) -> Result<(), CommandError>;
+        fn player_panel(&mut self, visible: bool) -> Result<(), CommandError>;
+        fn player_tab(&mut self, tab: PlayerTab) -> Result<(), CommandError>;
+        fn set_subtitle_track(&mut self, value: SubtitleTrack) -> Result<(), CommandError>;
+        fn set_audio_track(&mut self, value: AudioTrack) -> Result<(), CommandError>;
+        fn set_enhancement(&mut self, value: Enhancement) -> Result<(), CommandError>;
+        fn set_picture_ratio(&mut self, value: PictureRatio) -> Result<(), CommandError>;
+        fn set_hdr(&mut self, value: HdrMode) -> Result<(), CommandError>;
+        fn set_player_number(&mut self, key: String, value: f64) -> Result<(), CommandError>;
+        fn set_skip_intro(&mut self, value: bool) -> Result<(), CommandError>;
+        fn send_danmaku(&mut self, text: String) -> Result<(), CommandError>;
+        fn attach_subtitle(&mut self, source: MediaSource) -> Result<(), CommandError>;
+
 
         fn set_accent(&mut self, accent: Accent) -> Result<(), CommandError>;
 
