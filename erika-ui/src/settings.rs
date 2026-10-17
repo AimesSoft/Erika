@@ -65,81 +65,21 @@ pub fn settings(app: erika::Client, #[session] draft: SettingsDraft) -> impl Vie
                 Detail {
                     Column(gap: 0) {
                         match draft.page {
-                            SettingsPage::General => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_general(app: app)
-                                }
-                            }
-                            SettingsPage::Appearance => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_appearance(app: app)
-                                }
-                            }
-                            SettingsPage::Player => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_player(app: app)
-                                }
-                            }
-                            SettingsPage::Danmaku => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_danmaku(app: app)
-                                }
-                            }
-                            SettingsPage::Library => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_module_placeholder(app: app)
-                                }
-                            }
-                            SettingsPage::Anime => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_module_placeholder(app: app)
-                                }
-                            }
-                            SettingsPage::Sync => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_module_placeholder(app: app)
-                                }
-                            }
-                            SettingsPage::Sources => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_module_placeholder(app: app)
-                                }
-                            }
-                            SettingsPage::Remote => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_module_placeholder(app: app)
-                                }
-                            }
-                            SettingsPage::Downloads => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_module_placeholder(app: app)
-                                }
-                            }
-                            SettingsPage::Enhance => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_module_placeholder(app: app)
-                                }
-                            }
-                            SettingsPage::Optional => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_optional(app: app)
-                                }
-                            }
-                            SettingsPage::Plugins => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_plugins(app: app)
-                                }
-                            }
-                            SettingsPage::Keys => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_keys(app: app)
-                                }
-                            }
-                            SettingsPage::About => {
-                                Column(gap: 0, appear: settings_page_in) {
-                                    settings_about(app: app)
-                                }
-                            }
+                            SettingsPage::General => { settings_general(app: app) }
+                            SettingsPage::Appearance => { settings_appearance(app: app) }
+                            SettingsPage::Player => { settings_player(app: app) }
+                            SettingsPage::Danmaku => { settings_danmaku(app: app) }
+                            SettingsPage::Library => { settings_module_placeholder(app: app) }
+                            SettingsPage::Anime => { settings_module_placeholder(app: app) }
+                            SettingsPage::Sync => { settings_module_placeholder(app: app) }
+                            SettingsPage::Sources => { settings_module_placeholder(app: app) }
+                            SettingsPage::Remote => { settings_module_placeholder(app: app) }
+                            SettingsPage::Downloads => { settings_module_placeholder(app: app) }
+                            SettingsPage::Enhance => { settings_module_placeholder(app: app) }
+                            SettingsPage::Optional => { settings_optional(app: app) }
+                            SettingsPage::Plugins => { settings_plugins(app: app) }
+                            SettingsPage::Keys => { settings_keys(app: app) }
+                            SettingsPage::About => { settings_about(app: app) }
                         }
                     }
                 }
@@ -440,18 +380,24 @@ pub fn settings_optional(app: erika::Client) -> impl View {
                     }
                 }
             }
-            Column(gap: 0, width: 300, padding_y: 20) {
-                Text(content: tr! { "zh-Hans" => "预览", "en" => "Preview" }, style: caption2, emphasis: secondary)
-                Canvas(height: 8)
-                settings_preview(app: app)
-                Canvas(height: 10)
-                Row(gap: 6) {
-                    Button(id: preset_pure, label: tr! { "zh-Hans" => "纯粹播放", "en" => "Pure playback" }) => app.apply_preset(FeaturePreset::Pure)
-                    Button(id: preset_anime, label: tr! { "zh-Hans" => "看番", "en" => "Anime" }) => app.apply_preset(FeaturePreset::Anime)
-                    Button(id: preset_all, label: tr! { "zh-Hans" => "全都要", "en" => "Everything" }) => app.apply_preset(FeaturePreset::All)
+            // A scroll view of its own, so the title bar's scroll edge spans
+            // this column as it does the form beside it.
+            ScrollView {
+                Row(gap: 0, align: top) {
+                Column(gap: 0, width: 300, padding_y: 20) {
+                    Text(content: tr! { "zh-Hans" => "预览", "en" => "Preview" }, style: caption2, emphasis: secondary)
+                    Canvas(height: 8)
+                    settings_preview(app: app)
+                    Canvas(height: 10)
+                    Row(gap: 6) {
+                        Button(id: preset_pure, label: tr! { "zh-Hans" => "纯粹播放", "en" => "Pure playback" }) => app.apply_preset(FeaturePreset::Pure)
+                        Button(id: preset_anime, label: tr! { "zh-Hans" => "看番", "en" => "Anime" }) => app.apply_preset(FeaturePreset::Anime)
+                        Button(id: preset_all, label: tr! { "zh-Hans" => "全都要", "en" => "Everything" }) => app.apply_preset(FeaturePreset::All)
+                    }
+                }
+                Canvas(width: 20)
                 }
             }
-            Canvas(width: 20)
         }
     }
 }
