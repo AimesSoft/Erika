@@ -93,7 +93,7 @@ pub fn settings(app: erika::Client, #[session] draft: SettingsDraft) -> impl Vie
 #[component]
 pub fn settings_general(app: erika::Client) -> impl View {
     ui! {
-        Form {
+        Form(appear: settings_page_in) {
             Section(title: tr! { "zh-Hans" => "启动", "en" => "Startup" }) {
                 Picker(id: startup, label: tr! { "zh-Hans" => "启动时打开", "en" => "Open at startup" }, selected: app.preferences.startup, style: menu) => app.set_startup(app.preferences.startup)
                 Picker(id: playback_end, label: tr! { "zh-Hans" => "播放结束后", "en" => "When playback ends" }, selected: app.preferences.playback_end, style: menu) => app.set_playback_end(app.preferences.playback_end)
@@ -111,7 +111,7 @@ pub fn settings_general(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_appearance(app: erika::Client) -> impl View {
     ui! {
-        Form {
+        Form(appear: settings_page_in) {
             Section(title: tr! { "zh-Hans" => "主题色", "en" => "Accent color" }) {
                 Row(gap: 12, align: center) {
                     Column(gap: 1) {
@@ -179,7 +179,7 @@ pub fn settings_appearance(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_player(app: erika::Client) -> impl View {
     ui! {
-        Form {
+        Form(appear: settings_page_in) {
             Section(title: tr! { "zh-Hans" => "播放", "en" => "Playback" }) {
                 Picker(id: speed, label: tr! { "zh-Hans" => "默认倍速", "en" => "Default speed" }, selected: app.preferences.speed, style: menu) => app.set_speed(app.preferences.speed)
                 Row(gap: 12, align: center) {
@@ -215,7 +215,7 @@ pub fn settings_player(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> impl View {
     ui! {
-        Form {
+        Form(appear: settings_page_in) {
             Section(title: tr! { "zh-Hans" => "显示", "en" => "Display" }) {
                 Switch(id: show_danmaku, label: tr! { "zh-Hans" => "显示弹幕", "en" => "Show danmaku" }, checked: app.preferences.show_danmaku, style: switch) => app.set_preference("show_danmaku", app.preferences.show_danmaku)
                 Slider(id: opacity, label: tr! { "zh-Hans" => "不透明度", "en" => "Opacity" }, value: draft.opacity, min: 0, max: 1)
@@ -239,7 +239,7 @@ pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> 
 #[component]
 pub fn settings_module_placeholder(app: erika::Client) -> impl View {
     ui! {
-        Form {
+        Form(appear: settings_page_in) {
             Section {
                 Row(gap: 12, align: center) {
                     Column(gap: 1) {
@@ -260,7 +260,7 @@ pub fn settings_module_placeholder(app: erika::Client) -> impl View {
 pub fn settings_optional(app: erika::Client) -> impl View {
     ui! {
         Row(gap: 0, align: top) {
-            Form {
+            Form(appear: settings_page_in) {
                 Section(title: tr! { "zh-Hans" => "观看", "en" => "Watching" }, footer: tr! { "zh-Hans" => "决定 Erika 要做多少事。关掉的功能不显示，也不占资源。右边的小窗口会跟着变。", "en" => "Choose what Erika does. Disabled features disappear and use no resources. The preview updates as you go." }) {
                     Row(gap: 12, align: center) {
                         Stack(width: 28, height: 28) {
@@ -382,7 +382,7 @@ pub fn settings_optional(app: erika::Client) -> impl View {
             }
             // A scroll view of its own, so the title bar's scroll edge spans
             // this column as it does the form beside it.
-            ScrollView {
+            ScrollView(appear: settings_page_in) {
                 Row(gap: 0, align: top) {
                 Column(gap: 0, width: 300, padding_y: 20) {
                     Text(content: tr! { "zh-Hans" => "预览", "en" => "Preview" }, style: caption2, emphasis: secondary)
@@ -404,7 +404,7 @@ pub fn settings_optional(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_preview(app: erika::Client) -> impl View {
     ui! {
-        Column(gap: 0, width: 300, appear: settings_page_in, appear_delay: 0) {
+        Column(gap: 0, width: 300) {
             feature_preview_window(features: app.features, revision: app.feature_preview_revision)
             Canvas(height: 10)
             feature_preview_hud(features: app.features)
@@ -416,7 +416,7 @@ pub fn settings_preview(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_keys(app: erika::Client) -> impl View {
     ui! {
-        Form {
+        Form(appear: settings_page_in) {
             Section(title: tr! { "zh-Hans" => "播放", "en" => "Playback" }) {
                 Row(gap: 12, align: center) {
                     Text(content: tr! { "zh-Hans" => "播放 / 暂停", "en" => "Play / pause" }, style: body)
@@ -464,7 +464,7 @@ pub fn settings_keys(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_about(app: erika::Client) -> impl View {
     ui! {
-        Form {
+        Form(appear: settings_page_in) {
             Section {
                 Column(gap: 6, padding_y: 12, align: center) {
                     Row {
@@ -501,7 +501,7 @@ pub fn settings_about(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_plugins(app: erika::Client) -> impl View {
     ui! {
-        ScrollView {
+        ScrollView(appear: settings_page_in) {
         Column(gap: 0, padding_x: 28, padding_y: 22) {
             Stack(variant: settings_banner, height: 128, align: leading, appearance: dark) {
                 Canvas {
