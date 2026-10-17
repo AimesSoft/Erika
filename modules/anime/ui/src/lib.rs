@@ -98,7 +98,7 @@ pub fn stage(anime: anime::Client) -> impl View {
                         Stack(align: leading) {
                             Button(id: swap, label: watching.title, variant: row) {
                                 Row(gap: 12, align: center) {
-                                    Stack(align: bottom_leading) {
+                                    Stack(align: bottom_leading, variant: thumbnail) {
                                         Image(source: watching.still, width: 96, height: 54, fit: cover, corner: 8, label: watching.title, hero: frame, hero_key: watching.title)
                                         Rail {
                                             Canvas(from: 0, to: watching.progress, height: 3) {

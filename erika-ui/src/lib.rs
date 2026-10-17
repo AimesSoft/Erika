@@ -138,6 +138,12 @@ style! {
         settle: jelly,
     }
 
+    // A thumbnail clips its progress bar to the picture's corners, as the
+    // stage's button does.
+    Stack.thumbnail {
+        corner: 8,
+    }
+
     Button.poster {
         corner: 10,
         hover: scale(1.03, snappy) + shadow(14, y: 6, opacity: 0.18),
