@@ -292,6 +292,13 @@ pub fn phone_pure_page(app: erika::Client, #[session] draft: ErikaDraft, #[sessi
                     } => app.play_recent(recent.name)
                 }
             }
+            // Room under the list for the mini player floating over the
+            // page's foot, so the last row can scroll above it.
+            if app.playing && !app.expanded {
+                Section(style: plain) {
+                    Canvas(height: 72)
+                }
+            }
         }
     }
 }
