@@ -1,6 +1,9 @@
 //! Four-step welcome flow, measured from design/next-screens.js.
 use bern::prelude::*;
-use crate::feature_preview::{feature_preview_hud, feature_preview_window};
+use crate::feature_preview::{
+    feature_preview_hud, feature_preview_hud_props, feature_preview_window,
+    feature_preview_window_props,
+};
 use erika_protocol::erika::{self, Accent, OnboardingPreset};
 
 #[component]

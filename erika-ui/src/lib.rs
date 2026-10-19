@@ -5,20 +5,23 @@
 //! into the mini player on the way back.
 
 mod player;
-use player::player;
+use player::{player, player_props};
 mod search;
-use search::search_results;
+use search::{search_results, search_results_props};
 mod phone;
-use phone::{phone_shell, PhoneSettings};
+use phone::{phone_shell, phone_shell_props, PhoneSettings};
 
 use bern::prelude::*;
 use erika_anime_protocol::anime::{self, BackTo};
+use erika_anime_ui::{details, details_props};
 use erika_protocol::erika;
 mod onboarding;
-use onboarding::onboarding;
+use onboarding::{onboarding, onboarding_props};
 mod feature_preview;
 mod settings;
-use settings::settings;
+use settings::{settings, settings_props};
+mod pure;
+use pure::{pure_window, pure_window_props};
 
 style! {
     accents {
@@ -88,6 +91,10 @@ style! {
         // A new page fades in and rises 12 points (T3).
         player_panel_in: slide(right, 24, hero),
         player_feedback_in: pop(from: 0.6, jelly),
+        // Pure playback (`renderIdle`): the empty frame grows from 0.96 on a
+        // jelly spring; the recent videos rise 10 points one after another.
+        pure_frame_in: pop(from: 0.96, jelly),
+        recent_in: slide(edge: bottom, distance: 10, jelly),
         page_in: slide(bottom, 12, smooth),
         settings_page_in: slide(bottom, 8, smooth),
         drop_in: slide(top, 24, jelly),
@@ -149,6 +156,23 @@ style! {
     Stack.thumbnail {
         corner: 8,
     }
+
+    // Pure playback (design 10.2): the film in the empty frame in the
+    // tertiary label color (`--on3`), a recent video's row (`.i-rc`), and
+    // the key on 「继续上次」 (`.i-key kbd`).
+    Stack.pure_symbol { foreground: text.placeholder }
+    Button.recent_row {
+        corner: 12,
+        padding: 6,
+        hover: background(fill.subtle),
+        pressed: scale(0.98, press),
+        settle: jelly,
+    }
+    Stack.key_chip { background: fill.strong, foreground: text.secondary, corner: 5 }
+    // What 「打开链接…」 says of a link it cannot play.
+    Stack.link_error { foreground: status.error }
+    // The phone's recent video (`.c-li .x-thumb`): 6-point corners.
+    Stack.phone_recent_thumb { corner: 6 }
 
     // The phone's pages: the design's background (`--bg`), the system's
     // grouped secondary background in both appearances.
@@ -362,6 +386,11 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
                 phone_shell(app: app, anime: anime, windows: windows)
             }
             Layout(size: expanded) {
+            // Pure playback (design 10.2): no module adds pages, so no
+            // sidebar; the window is the empty frame.
+            if !app.features.anime && !app.features.library && !app.features.downloads {
+                pure_window(app: app, windows: windows)
+            } else {
             SplitView {
                 Sidebar(id: pages, selection: draft.page) {
                     // The logo and name; Windows shows both in the title bar
@@ -402,23 +431,29 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
                         }
                         Button(id: open_file, label: tr! { "zh-Hans" => "打开", "en" => "Open" }, icon: "plus", pick: draft.file, files: "video", shortcut: "cmd+o") => app.open_file(draft.file)
                     }
-                    if !app.features.anime && !app.features.library && !app.features.downloads {
-                        empty_frame(app: app)
-                    } else if anime.opened > 0 && (anime.back == BackTo::Search || (draft.page == MainPage::Library && anime.back == BackTo::Library)) {
+                    if anime.opened > 0 && (anime.back == BackTo::Search || (draft.page == MainPage::Library && anime.back == BackTo::Library)) {
                         details(anime: anime)
                     } else {
-                    match draft.page {
-                        MainPage::Idle => { empty_frame(app: app) }
-                        _ => { PageContent(slot: main, selected: draft.page) }
-                    }
+                        PageContent(slot: main, selected: draft.page)
                     }
                 }
             }
             }
             }
             }
+            }
             if app.playing && app.expanded {
-                player(app: app)
+                // In pure playback the frame is where the player's frame
+                // steps back to: the picture fades in over it, then the
+                // controls (`plOpen` with `fromIdle`), and fades out on the
+                // way back.
+                if !app.features.anime && !app.features.library && !app.features.downloads {
+                    Stack(appear: fade, disappear: fade) {
+                        player(app: app)
+                    }
+                } else {
+                    player(app: app)
+                }
             }
         }
     }
@@ -465,28 +500,6 @@ pub fn mini_player(app: erika::Client) -> impl View {
                     IconButton(id: mini_pause, icon: "pause.fill", label: tr! { "zh-Hans" => "暂停", "en" => "Pause" }) => app.toggle_pause()
                 }
                 IconButton(id: mini_close, icon: "xmark", label: tr! { "zh-Hans" => "关闭", "en" => "Close" }) => app.close_player()
-            }
-        }
-    }
-}
-
-/// The window with no pages: the frame before a picture is in it, where
-/// the player's frame steps back to, with "open" at its middle.
-#[component]
-pub fn empty_frame(app: erika::Client, #[session] draft: ErikaDraft) -> impl View {
-    ui! {
-        Column(gap: 24, padding: 48, align: center, appear: page_in) {
-            Stack(align: center) {
-                Canvas(height: 420, label: tr! { "zh-Hans" => "空画框", "en" => "Empty frame" }) {
-                    Shape(kind: rounded, corner: 22, stroke: control.border, stroke_width: 2)
-                }
-                Column(gap: 16, align: center) {
-                    if app.playing {
-                        Text(content: app.title, style: title3)
-                        Button(id: resume, label: tr! { "zh-Hans" => "继续播放", "en" => "Continue watching" }, icon: "play.fill", prominence: prominent) => app.expand()
-                    }
-                Button(id: open_here, label: tr! { "zh-Hans" => "打开文件", "en" => "Open File" }, icon: "folder", prominence: prominent, variant: primary, pick: draft.file, files: "video") => app.open_file(draft.file)
-                }
             }
         }
     }

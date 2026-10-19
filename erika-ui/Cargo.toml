@@ -10,3 +10,4 @@ publish = false
 bern.workspace = true
 erika-protocol.workspace = true
 erika-anime-protocol = { path = "../modules/anime/protocol" }
+erika-anime-ui = { path = "../modules/anime/ui" }

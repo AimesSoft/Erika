@@ -4,14 +4,34 @@
     {
       "name": "design-doc",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["/Library/Afolder/RustProject/NipaPlay-Next/design/.claude/serve.py", "4179"],
+      "runtimeArgs": [
+        "/Library/Afolder/RustProject/NipaPlay-Next/design/.claude/serve.py",
+        "4179"
+      ],
       "port": 4179
     },
     {
       "name": "icon-studio",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["/Library/Afolder/RustProject/NipaPlay-Next/design/brand/icon-studio-server.py", "4180"],
+      "runtimeArgs": [
+        "/Library/Afolder/RustProject/NipaPlay-Next/design/brand/icon-studio-server.py",
+        "4180"
+      ],
       "port": 4180
+    },
+    {
+      "name": "erika-web",
+      "runtimeExecutable": "/Library/Afolder/RustProject/Bern/target/debug/bern",
+      "runtimeArgs": [
+        "run",
+        "--manifest",
+        "/Library/Afolder/RustProject/NipaPlay-Next/Bern.toml",
+        "--target",
+        "web_app",
+        "--port",
+        "4173"
+      ],
+      "port": 4173
     }
   ]
 }

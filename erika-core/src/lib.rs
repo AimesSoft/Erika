@@ -68,6 +68,10 @@ impl Default for ErikaEngine {
                 progress: 0.0,
                 elapsed: 0.0,
                 duration: LENGTH,
+                recents: sample_recents(),
+                link_prompt: false,
+                link_invalid: false,
+                open_key: if cfg!(any(target_os = "macos", target_os = "ios")) { "⌘O" } else { "Ctrl+O" }.into(),
                 user_name: "Nipa".into(),
             },
         };
@@ -82,7 +86,41 @@ impl Default for ErikaEngine {
 }
 
 fn still() -> MediaSource {
-    MediaSource::resource(&Resources::host(), STILL).unwrap_or_else(|_| MediaSource::new(""))
+    picture(STILL)
+}
+
+/// A picture of `[resources]`, as the frame shows it.
+fn picture(name: &str) -> MediaSource {
+    MediaSource::resource(&Resources::host(), name).unwrap_or_else(|_| MediaSource::new(""))
+}
+
+/// The most videos 「最近播放」 lists.
+const RECENT_COUNT: usize = 3;
+
+/// The prototype's recent videos (next-core.js `RECENTS`), until the
+/// kernel keeps the ones really played.
+fn sample_recents() -> Vec<RecentPlay> {
+    [
+        ("[Nekomoe] Sousou no Frieren S2 - 03 [1080p].mkv", 0.62, 9.0 * 60.0 + 12.0, "design/assets/posters/p7.jpg"),
+        ("Boku dake ga Inai Machi - 01.mkv", 0.38, 15.0 * 60.0 + 3.0, STILL),
+        ("Vacation_2026_Kyoto.mp4", 0.9, 41.0, "design/assets/posters/p15.jpg"),
+    ]
+    .into_iter()
+    .map(|(name, progress, remaining, still)| RecentPlay {
+        name: name.into(),
+        progress,
+        remaining,
+        still: picture(still),
+    })
+    .collect()
+}
+
+/// A file's name without its extension, as the player titles it.
+fn without_extension(name: &str) -> String {
+    match name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() && !extension.contains(' ') => stem.into(),
+        _ => name.into(),
+    }
 }
 
 impl ErikaEngine {
@@ -271,6 +309,79 @@ impl erika::Commands for ErikaEngine {
         Ok(())
     }
 
+    fn open_folder(&mut self, source: MediaSource) -> Result<(), CommandError> {
+        // Until the kernel reads folders, the folder plays under its name.
+        let name = source.file_name().unwrap_or_else(|| {
+            source.url.trim_end_matches('/').rsplit('/').next().unwrap_or_default().to_string()
+        });
+        self.start(name, PlayingNote::LocalFile, still(), 0.0);
+        Ok(())
+    }
+
+    fn show_link_prompt(&mut self, visible: bool) -> Result<(), CommandError> {
+        self.state.link_prompt = visible;
+        self.state.link_invalid = false;
+        Ok(())
+    }
+
+    fn open_link(&mut self, link: String) -> Result<(), CommandError> {
+        let link = link.trim();
+        let web = link.starts_with("http://") || link.starts_with("https://");
+        if !web && !link.starts_with("magnet:") {
+            // The prompt stays and says what a link looks like.
+            self.state.link_invalid = true;
+            return Ok(());
+        }
+        // The last part of the address names it, or the whole link.
+        let path = link.split(['?', '#']).next().unwrap_or(link);
+        let name = path.trim_end_matches('/').rsplit('/').next().filter(|name| web && !name.is_empty() && !name.contains(':'));
+        let title = name.map(without_extension).unwrap_or_else(|| link.to_string());
+        self.state.link_prompt = false;
+        self.state.link_invalid = false;
+        self.start(title, PlayingNote::Link, still(), 0.0);
+        Ok(())
+    }
+
+    fn play_recent(&mut self, name: String) -> Result<(), CommandError> {
+        let recent = self
+            .state
+            .recents
+            .iter()
+            .find(|recent| recent.name == name)
+            .cloned()
+            .ok_or_else(|| CommandError::new("no_such_recent", "no recent video has this name"))?;
+        self.start(without_extension(&recent.name), PlayingNote::LocalFile, recent.still, recent.progress);
+        Ok(())
+    }
+
+    fn continue_last(&mut self) -> Result<(), CommandError> {
+        let name = self
+            .state
+            .recents
+            .first()
+            .map(|recent| recent.name.clone())
+            .ok_or_else(|| CommandError::new("no_such_recent", "nothing played yet"))?;
+        self.play_recent(name)
+    }
+
+    fn return_to_frame(&mut self) -> Result<(), CommandError> {
+        self.require_playing()?;
+        let recent = RecentPlay {
+            name: self.state.title.clone(),
+            progress: self.state.progress,
+            remaining: (self.state.duration - self.state.elapsed).max(0.0),
+            still: self.state.still.clone(),
+        };
+        self.state.recents.retain(|other| without_extension(&other.name) != without_extension(&recent.name));
+        self.state.recents.insert(0, recent);
+        self.state.recents.truncate(RECENT_COUNT);
+        self.state.playing = false;
+        self.state.expanded = false;
+        self.state.paused = false;
+        self.state.player.panel = false;
+        Ok(())
+    }
+
     fn play(
         &mut self,
         title: String,
@@ -296,9 +407,6 @@ impl erika::Commands for ErikaEngine {
         self.require_playing()?;
         self.state.expanded = false;
         self.state.player.panel = false;
-        if !self.state.features.anime && !self.state.features.library && !self.state.features.downloads {
-            self.state.paused = true;
-        }
         Ok(())
     }
 
@@ -413,6 +521,48 @@ mod tests {
         assert!(engine.state.expanded);
         engine.close_player().unwrap();
         assert!(!engine.state.playing);
+    }
+
+    #[test]
+    fn the_way_back_puts_the_video_first_among_the_recent_ones() {
+        let mut engine = ErikaEngine::default();
+        assert_eq!(engine.state.recents.len(), 3);
+        assert_eq!(engine.return_to_frame().unwrap_err().code, "nothing_playing");
+        engine.play_recent("Boku dake ga Inai Machi - 01.mkv".into()).unwrap();
+        assert_eq!(engine.state.title, "Boku dake ga Inai Machi - 01");
+        assert_eq!(engine.state.progress, 0.38);
+        engine.seek(0.5).unwrap();
+        engine.return_to_frame().unwrap();
+        assert!(!engine.state.playing && !engine.state.expanded);
+        // The same video moves to the front instead of being listed twice.
+        let names: Vec<_> = engine.state.recents.iter().map(|recent| recent.name.as_str()).collect();
+        assert_eq!(names, ["Boku dake ga Inai Machi - 01", "[Nekomoe] Sousou no Frieren S2 - 03 [1080p].mkv", "Vacation_2026_Kyoto.mp4"]);
+        assert_eq!(engine.state.recents[0].progress, 0.5);
+        assert_eq!(engine.state.recents[0].remaining, LENGTH / 2.0);
+        // A new one pushes the last out.
+        engine.open_file(MediaSource::new("file:///Videos/new.mkv")).unwrap();
+        engine.return_to_frame().unwrap();
+        assert_eq!(engine.state.recents.len(), 3);
+        assert_eq!(engine.state.recents[0].name, "new.mkv");
+        assert_eq!(engine.play_recent("gone.mkv".into()).unwrap_err().code, "no_such_recent");
+        engine.continue_last().unwrap();
+        assert_eq!(engine.state.title, "new");
+    }
+
+    #[test]
+    fn links_and_folders_play_under_their_names() {
+        let mut engine = ErikaEngine::default();
+        engine.show_link_prompt(true).unwrap();
+        engine.open_link("ftp://example.com/a.mkv".into()).unwrap();
+        assert!(engine.state.link_prompt && engine.state.link_invalid && !engine.state.playing);
+        engine.open_link(" https://example.com/videos/Kyoto.mp4?t=3 ".into()).unwrap();
+        assert_eq!(engine.state.title, "Kyoto");
+        assert_eq!(engine.state.subtitle, PlayingNote::Link);
+        assert!(!engine.state.link_prompt && !engine.state.link_invalid);
+        engine.open_link("magnet:?xt=urn:btih:abc".into()).unwrap();
+        assert_eq!(engine.state.title, "magnet:?xt=urn:btih:abc");
+        engine.open_folder(MediaSource::new("file:///Videos/Trip/")).unwrap();
+        assert_eq!(engine.state.title, "Trip");
     }
 
     #[test]

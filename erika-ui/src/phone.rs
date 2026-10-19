@@ -3,12 +3,14 @@
 //! every page with search last, and above each page its header row, the
 //! large title with "open" and the account on the home page, or the way
 //! back while a show's details are open.
-use crate::search::search_results;
+use crate::search::{search_results, search_results_props};
 use crate::settings::*;
+use crate::pure::{phone_pure, phone_pure_props};
 use crate::{AppWindows, ErikaDraft, MainPage};
 use bern::prelude::*;
 use erika_anime_protocol::anime::{self, BackTo};
-use erika_protocol::erika;
+use erika_anime_ui::{details, details_props};
+use erika_protocol::erika::{self, SettingsPage};
 
 /// Where the phone's settings stand (`phStack`): closed, their list, or
 /// one of their sections, pushed over the home page.
@@ -58,6 +60,10 @@ pub fn phone_shell(
     #[session] draft: ErikaDraft,
 ) -> impl View {
     ui! {
+        // Pure playback (design 10.2): no pages, so no tab bar.
+        if !app.features.anime && !app.features.library && !app.features.downloads {
+            phone_pure(app: app)
+        } else {
         Tabs(id: tabs, selection: draft.page) {
             if app.features.anime {
                 Tab(value: MainPage::Home, label: tr! { "zh-Hans" => "首页", "en" => "Home" }, icon: "house") {
@@ -108,6 +114,7 @@ pub fn phone_shell(
             TabAccessory(shown: app.playing && !app.expanded) {
                 phone_mini_player(app: app)
             }
+        }
         }
     }
 }

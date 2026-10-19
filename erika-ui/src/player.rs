@@ -352,7 +352,13 @@ pub fn player_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl Vie
         Row(gap: 12, height: 64, align: center) {
             Canvas(width: 84, height: 1)
             ControlGroup(height: 40) {
-                IconButton(id: back, icon: "chevron.left", label: tr! { "zh-Hans" => "返回", "en" => "Back" }, shortcut: "escape") => app.minimize()
+                // With no sidebar to shrink into, the picture goes back into
+                // the empty frame (design 10.2).
+                if !app.features.anime && !app.features.library && !app.features.downloads {
+                    IconButton(id: back_to_frame, icon: "chevron.left", label: tr! { "zh-Hans" => "返回", "en" => "Back" }, shortcut: "escape") => app.return_to_frame()
+                } else {
+                    IconButton(id: back, icon: "chevron.left", label: tr! { "zh-Hans" => "返回", "en" => "Back" }, shortcut: "escape") => app.minimize()
+                }
             }
             Column(gap: 2, padding_x: 4) {
                 Text(content: app.title, style: title3, lines: 1)

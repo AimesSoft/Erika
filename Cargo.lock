@@ -287,6 +287,7 @@ version = "0.1.0"
 dependencies = [
  "bern",
  "erika-anime-protocol",
+ "erika-anime-ui",
  "erika-protocol",
 ]
 

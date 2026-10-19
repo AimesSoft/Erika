@@ -352,6 +352,19 @@ pub mod erika {
         LocalFile,
         #[label(tr! { "zh-Hans" => "已下载 · 本地文件", "en" => "Downloaded · Local file" })]
         Downloaded,
+        #[label(tr! { "zh-Hans" => "网络链接", "en" => "Link" })]
+        Link,
+    }
+
+    /// A video played before (design 10.2, 「最近播放」): its file name,
+    /// how far it got, what is left in seconds, and its picture.
+    #[value]
+    pub struct RecentPlay {
+        #[content]
+        pub name: String,
+        pub progress: f64,
+        pub remaining: f64,
+        pub still: MediaSource,
     }
 
     #[value]
@@ -477,6 +490,17 @@ pub mod erika {
         pub progress: f64,
         pub elapsed: f64,
         pub duration: f64,
+        /// What played before, the latest first, at most three: the empty
+        /// frame lists them under it (design 10.2).
+        pub recents: Vec<RecentPlay>,
+        /// Whether 「打开链接…」 asks for a link, and whether the link given
+        /// last was not one it can play.
+        pub link_prompt: bool,
+        pub link_invalid: bool,
+        /// The key that opens a file, as this computer writes it: ⌘O on a
+        /// Mac, Ctrl+O elsewhere.
+        #[content]
+        pub open_key: String,
         /// The account at the foot of the sidebar.
         #[content]
         pub user_name: String,
@@ -507,6 +531,28 @@ pub mod erika {
         fn show_notice(&mut self, notice: Notice) -> Result<(), CommandError>;
         /// Play a file the user opened, picked or dropped.
         fn open_file(&mut self, source: MediaSource) -> Result<(), CommandError>;
+
+        /// Play the videos of a folder the user picked, the first first.
+        fn open_folder(&mut self, source: MediaSource) -> Result<(), CommandError>;
+
+        /// Ask for a link to play, or stop asking.
+        fn show_link_prompt(&mut self, visible: bool) -> Result<(), CommandError>;
+
+        /// Play an http(s) or magnet link; any other keeps asking.
+        fn open_link(&mut self, link: String) -> Result<(), CommandError>;
+
+        /// Play one of the recent videos again, from where it stopped.
+        #[errors("no_such_recent")]
+        fn play_recent(&mut self, name: String) -> Result<(), CommandError>;
+
+        /// Play the latest recent video on (「继续上次」).
+        #[errors("no_such_recent")]
+        fn continue_last(&mut self) -> Result<(), CommandError>;
+
+        /// The way back with no sidebar to shrink into (design 10.2): the
+        /// picture goes back into the empty frame and the video heads the
+        /// recent ones.
+        fn return_to_frame(&mut self) -> Result<(), CommandError>;
 
         /// Play what a module asks for, such as the next episode.
         #[on(anime::play)]
