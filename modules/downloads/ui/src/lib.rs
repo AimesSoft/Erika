@@ -8,7 +8,7 @@ pub fn downloads_clock(downloads: downloads::Client) -> impl View {
         Stack {
         Timer(interval: 0.5, enabled: downloads.running) => downloads.tick()
         if downloads.notice_revision > 0 {
-            Toast(content: downloads.notice, key: downloads.notice_revision, icon: "checkmark.circle")
+            Toast(content: tr! { "zh-Hans" => "下载完成：{title}", "en" => "Download finished: {title}"; title: downloads.finished }, key: downloads.notice_revision, icon: "checkmark.circle")
         }
         }
     }
@@ -105,7 +105,11 @@ pub fn download_row(downloads: downloads::Client, task: downloads::DownloadTask)
                         }
                     }
                     Column(gap: 1) {
-                        Text(content: task.title, font_size: 13, lines: 1)
+                        if task.fetching {
+                            Text(content: tr! { "zh-Hans" => "新任务 · 正在获取元数据…", "en" => "New download · Fetching metadata…" }, font_size: 13, lines: 1)
+                        } else {
+                            Text(content: task.title, font_size: 13, lines: 1)
+                        }
                         if task.completed {
                             Text(content: tr! { "zh-Hans" => "{size} · 已完成", "en" => "{size} · Completed"; size: task.size }, style: caption, font_size: 11.5, emphasis: secondary)
                         } else if task.running {

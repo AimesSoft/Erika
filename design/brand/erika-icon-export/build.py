@@ -87,8 +87,26 @@ def face_to(y_end):
     return f'<path d="{d}" fill="#222B4F"/>'
 
 
+def continuous_rect(x, y, w, h, r):
+    """苹果的连续圆角矩形，和系统 RoundedRectangle(style: .continuous) 是同一条路径（系数按圆角半径归一）。
+    macOS 图标模板是 1024 画布里 (100, 100) 起的 824 方块、圆角 185.4。macOS 26 起，旧式 .icns 的底板
+    必须是这个形状才按原样显示；形状不符（比如超椭圆）时，系统把整个图标缩小放进灰色底板。"""
+    a, b, c, d, e, f, g = (k * r for k in (1.52866483, 1.08849296, 0.86840694, 0.07491100,
+                                           0.63149399, 0.16906001, 0.37282401))
+
+    def corner(cx, cy, back, out):
+        # 从来的边上距角 a 处，经三段曲线，到去的边上距角 a 处
+        pt = lambda p, q: '%.3f %.3f' % (cx + p * back[0] + q * out[0], cy + p * back[1] + q * out[1])
+        return (f'L{pt(a, 0)}C{pt(b, 0)} {pt(c, 0)} {pt(e, d)}C{pt(g, f)} {pt(f, g)} {pt(d, e)}'
+                f'C{pt(0, c)} {pt(0, b)} {pt(0, a)}')
+
+    right, bottom = x + w, y + h
+    return ('M%.3f %.3f' % (x + a, y) + corner(right, y, (-1, 0), (0, 1)) + corner(right, bottom, (0, -1), (-1, 0))
+            + corner(x, bottom, (1, 0), (0, -1)) + corner(x, y, (0, 1), (1, 0)) + 'Z')
+
+
 def squircle(cx, cy, a, n=5, steps=240):
-    """macOS 连续圆角底板（超椭圆，和工坊预览同一个公式）"""
+    """超椭圆（和工坊预览同一个公式）；安卓的圆角方形预览用它"""
     pts = []
     for i in range(steps + 1):
         t = i / steps * 2 * math.pi
@@ -297,6 +315,25 @@ def bbox(svg_text, view_size):
     return x, y, w, h
 
 
+def export_macos(S, J):
+    """macOS：正方形版放进苹果模板的连续圆角底板（824，圆角 185.4），带投影，打成 .icns"""
+    plate = continuous_rect(100, 100, 824, 824, 185.4)
+    mac = doc('0 0 1024 1024',
+              f'<defs><clipPath id="p"><path d="{plate}"/></clipPath>'
+              '<filter id="sh" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur in="SourceAlpha" stdDeviation="12"/>'
+              '<feOffset dy="10" result="b"/><feFlood flood-color="#000" flood-opacity=".28"/><feComposite in2="b" operator="in"/>'
+              '<feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>'
+              f'<g filter="url(#sh)"><path d="{plate}" fill="{HAIR}"/></g>'
+              '<g clip-path="url(#p)"><g transform="translate(100 100) scale(0.8046875)">' + ''.join(el for _, el in S) + '</g></g>')
+    write(J('macos', 'erika-macos.svg'), mac)
+    iconset = J('macos', 'Erika.iconset')
+    for n in (16, 32, 128, 256, 512):
+        png(J('macos', 'erika-macos.svg'), os.path.join(iconset, f'icon_{n}x{n}.png'), n)
+        png(J('macos', 'erika-macos.svg'), os.path.join(iconset, f'icon_{n}x{n}@2x.png'), n * 2)
+    subprocess.run(['iconutil', '-c', 'icns', iconset, '-o', J('macos', 'Erika.icns')], check=True)
+    png(J('macos', 'erika-macos.svg'), J('macos', 'erika-macos-1024.png'), 1024)
+
+
 def main():
     out = HERE
     for sub in ('logo', 'preview', 'svg', 'png', 'macos', 'windows', 'linux', 'ios', 'android', 'harmonyos', 'web'):
@@ -342,22 +379,7 @@ def main():
         for n in SIZES:
             png(J('svg', f'erika-{key}.svg'), J('png', key, f'erika-{key}-{n}.png'), n)
 
-    # ---------- macOS：正方形版放进 824 的连续圆角底板，带投影，打成 .icns ----------
-    plate = squircle(512, 512, 412)
-    mac = doc('0 0 1024 1024',
-              f'<defs><clipPath id="p"><path d="{plate}"/></clipPath>'
-              '<filter id="sh" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur in="SourceAlpha" stdDeviation="12"/>'
-              '<feOffset dy="10" result="b"/><feFlood flood-color="#000" flood-opacity=".28"/><feComposite in2="b" operator="in"/>'
-              '<feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>'
-              f'<g filter="url(#sh)"><path d="{plate}" fill="{HAIR}"/></g>'
-              '<g clip-path="url(#p)"><g transform="translate(100 100) scale(0.8046875)">' + ''.join(el for _, el in S) + '</g></g>')
-    write(J('macos', 'erika-macos.svg'), mac)
-    iconset = J('macos', 'Erika.iconset')
-    for n in (16, 32, 128, 256, 512):
-        png(J('macos', 'erika-macos.svg'), os.path.join(iconset, f'icon_{n}x{n}.png'), n)
-        png(J('macos', 'erika-macos.svg'), os.path.join(iconset, f'icon_{n}x{n}@2x.png'), n * 2)
-    subprocess.run(['iconutil', '-c', 'icns', iconset, '-o', J('macos', 'Erika.icns')], check=True)
-    png(J('macos', 'erika-macos.svg'), J('macos', 'erika-macos-1024.png'), 1024)
+    export_macos(S, J)
 
     # ---------- Windows：圆形版 .ico ----------
     win = [J('windows', f'_{n}.png') for n in (16, 24, 32, 48, 64, 128, 256)]

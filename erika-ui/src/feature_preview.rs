@@ -3,9 +3,11 @@ use bern::prelude::*;
 use erika_protocol::erika::FeatureSelection;
 
 #[component]
-pub fn feature_preview_window(features: FeatureSelection, revision: i64) -> impl View {
+pub fn feature_preview_window(features: FeatureSelection, revision: i64, wide: bool) -> impl View {
     ui! {
-        Stack(variant: settings_card, width: 300, height: 188, align: leading, nudge_key: revision, nudge_scale: 0.95, reflow: smooth) {
+        // `.o-mw`: 188 points tall, as wide as it stands: 300 beside the
+        // desktop's choices, `wide` the phone's width less 20 on each side.
+        Stack(variant: settings_card, width: if wide { 350.0 } else { 300.0 }, height: 188, align: leading, nudge_key: revision, nudge_scale: 0.95, reflow: smooth) {
             Canvas {
                 Shape(kind: rounded, corner: 16, stroke: control.border, stroke_width: 0.5)
             }
@@ -16,13 +18,30 @@ pub fn feature_preview_window(features: FeatureSelection, revision: i64) -> impl
                             Shape(kind: rounded, corner: 12, fill: fill.subtle)
                         }
                         Column(gap: 8, padding_x: 7, padding_y: 22, reflow: smooth) {
+                            // `.ms i.on`: the first page is the one shown.
                             if features.anime {
-                                Label(title: tr! { "zh-Hans" => "首页", "en" => "Home" }, icon: "house", style: subheadline, appear: feature_preview_item_in, disappear: fade)
+                                Stack(align: leading, appear: feature_preview_item_in, disappear: fade) {
+                                    // `--tonal`: the accent at 26 % over the card.
+                                    Canvas { Shape(kind: rounded, corner: 5, fill: accent, opacity: 0.26) }
+                                    Row(gap: 0, padding_x: 5, height: 16) {
+                                        Label(title: tr! { "zh-Hans" => "首页", "en" => "Home" }, icon: "house", style: subheadline)
+                                        Spacer
+                                    }
+                                }
                             }
                             if features.anime {
                                 Label(title: tr! { "zh-Hans" => "新番", "en" => "New" }, icon: "calendar", style: subheadline, appear: feature_preview_item_in, disappear: fade)
                             }
-                            if features.library {
+                            if features.library && !features.anime {
+                                Stack(align: leading, appear: feature_preview_item_in, disappear: fade) {
+                                    // `--tonal`: the accent at 26 % over the card.
+                                    Canvas { Shape(kind: rounded, corner: 5, fill: accent, opacity: 0.26) }
+                                    Row(gap: 0, padding_x: 5, height: 16) {
+                                        Label(title: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "film.stack", style: subheadline)
+                                        Spacer
+                                    }
+                                }
+                            } else if features.library {
                                 Label(title: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "film.stack", style: subheadline, appear: feature_preview_item_in, disappear: fade)
                             }
                             if features.downloads {
@@ -30,23 +49,40 @@ pub fn feature_preview_window(features: FeatureSelection, revision: i64) -> impl
                             }
                         }
                     }
-                    Canvas(width: 228, height: 188) {
-                        Shape(kind: rounded, x: 12, y: 12, width: 82, height: 7, corner: 3, fill: fill.strong)
-                        Shape(kind: rounded, x: 12, y: 27, width: 64, height: 36, corner: 4, fill: fill.strong)
-                        Shape(kind: rounded, x: 81, y: 27, width: 64, height: 36, corner: 4, fill: fill.strong)
-                        Shape(kind: rounded, x: 150, y: 27, width: 64, height: 36, corner: 4, fill: fill.strong)
-                        Shape(kind: rounded, x: 12, y: 72, width: 62, height: 7, corner: 3, fill: fill.strong)
-                        Shape(kind: rounded, x: 12, y: 87, width: 37, height: 56, corner: 4, fill: fill.strong)
-                        Shape(kind: rounded, x: 54, y: 87, width: 37, height: 56, corner: 4, fill: fill.strong)
-                        Shape(kind: rounded, x: 96, y: 87, width: 37, height: 56, corner: 4, fill: fill.strong)
-                        Shape(kind: rounded, x: 138, y: 87, width: 37, height: 56, corner: 4, fill: fill.strong)
-                        Shape(kind: rounded, x: 180, y: 87, width: 37, height: 56, corner: 4, fill: fill.strong)
+                    // The design's flex rows at the phone's 278 points: three
+                    // 16 : 9 cards and five 2 : 3 posters across, 5 apart.
+                    if wide {
+                        Canvas(width: 278, height: 188) {
+                            Shape(kind: rounded, x: 12, y: 12, width: 101.6, height: 7, corner: 3, fill: fill.strong)
+                            Shape(kind: rounded, x: 12, y: 27, width: 81.333, height: 45.75, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 98.333, y: 27, width: 81.333, height: 45.75, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 184.667, y: 27, width: 81.333, height: 45.75, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 12, y: 80.75, width: 76.2, height: 7, corner: 3, fill: fill.strong)
+                            Shape(kind: rounded, x: 12, y: 95.75, width: 46.8, height: 70.2, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 63.8, y: 95.75, width: 46.8, height: 70.2, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 115.6, y: 95.75, width: 46.8, height: 70.2, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 167.4, y: 95.75, width: 46.8, height: 70.2, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 219.2, y: 95.75, width: 46.8, height: 70.2, corner: 4, fill: fill.strong)
+                        }
+                    } else {
+                        Canvas(width: 228, height: 188) {
+                            Shape(kind: rounded, x: 12, y: 12, width: 82, height: 7, corner: 3, fill: fill.strong)
+                            Shape(kind: rounded, x: 12, y: 27, width: 64, height: 36, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 81, y: 27, width: 64, height: 36, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 150, y: 27, width: 64, height: 36, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 12, y: 72, width: 62, height: 7, corner: 3, fill: fill.strong)
+                            Shape(kind: rounded, x: 12, y: 87, width: 37, height: 56, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 54, y: 87, width: 37, height: 56, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 96, y: 87, width: 37, height: 56, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 138, y: 87, width: 37, height: 56, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 180, y: 87, width: 37, height: 56, corner: 4, fill: fill.strong)
+                        }
                     }
                 }
             }
             else {
-                Stack(width: 300, height: 188, appear: feature_preview_in, disappear: fade) {
-                    Canvas(width: 186, height: 109) {
+                Stack(width: if wide { 350.0 } else { 300.0 }, height: 188, appear: feature_preview_in, disappear: fade) {
+                    Canvas(width: if wide { 217.0 } else { 186.0 }, height: 109) {
                         Shape(kind: rounded, corner: 10, stroke: control.border, stroke_width: 1.5)
                     }
                     Text(content: tr! { "zh-Hans" => "打开文件", "en" => "Open file" }, style: caption, emphasis: secondary)

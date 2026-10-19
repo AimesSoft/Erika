@@ -34,3 +34,7 @@ id = "library"
 label = { "zh-Hans" = "媒体库", "en" = "Library" }
 icon = "film.stack"
 component = "library_page"
+
+[contributes]
+# The home page's section of recently added shows.
+home_sections = ["library_recent"]

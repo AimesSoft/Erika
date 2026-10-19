@@ -32,11 +32,19 @@ pub struct PlayerDraft {
 pub fn player(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
     ui! {
         Stack(appearance: dark, variant: player_black) {
-            ScaleBox(width: 1280, height: 800) {
-                player_scene(app: app, shown: !window.idle || app.paused || app.player.panel || draft.volume_open || draft.episodes_open)
+            // A phone on its side plays in the design's 844 × 390 scene, the
+            // controls in the two rails beside the picture (`RAILS`).
+            if window.short {
+                ScaleBox(width: 844, height: 390) {
+                    player_phone_scene(app: app, shown: !window.idle || app.paused || app.player.panel || draft.volume_open || draft.episodes_open)
+                }
+            } else {
+                ScaleBox(width: 1280, height: 800) {
+                    player_scene(app: app, shown: !window.idle || app.paused || app.player.panel || draft.volume_open || draft.episodes_open)
+                }
             }
-            if app.notice != "" {
-                Toast(content: app.notice, key: app.notice_revision, duration: 3)
+            if let Some(notice) = app.notice {
+                Toast(content: notice, key: app.notice_revision, duration: 3)
             }
         }
     }
@@ -77,6 +85,170 @@ pub fn player_scene(app: erika::Client, shown: bool, #[session] draft: PlayerDra
     }
 }
 
+/// The phone's player on its side (next-player.js `RECT.phone`, `RAILS`):
+/// the picture filling the height, or with the controls 519 points wide
+/// between two rails of 162; the bar above, the seek bar under it.
+#[component]
+pub fn player_phone_scene(app: erika::Client, shown: bool, #[session] draft: PlayerDraft) -> impl View {
+    ui! {
+        Stack(variant: player_black, width: 844, height: 390, align: top_leading) {
+            if shown { Positioned(x: 0, y: 0, width: 844, height: 390) { Stack(variant: player_background, width: 844, height: 390) {} } }
+            // `RECT.phone`: full, shown, or beside the settings panel.
+            Positioned(x: if app.player.panel { 16 } else if shown { 162.5 } else { 75.5 }, y: if app.player.panel { 56 } else if shown { 48 } else { 0 }, width: if app.player.panel { 512 } else if shown { 519 } else { 693 }, height: if app.player.panel { 288.14 } else if shown { 292.125 } else { 389.8125 }, animate: hero) {
+                Button(id: picture_phone, label: tr! { "zh-Hans" => "播放或暂停画面", "en" => "Play or pause picture" }, variant: player_picture) {
+                    Stack {
+                        Image(source: app.still, width: if app.player.panel { 512 } else if shown { 519 } else { 693 }, height: if app.player.panel { 288.14 } else if shown { 292.125 } else { 389.8125 }, corner: if shown || app.player.panel { 16 } else { 0 }, fit: cover, label: app.title, hero: frame, hero_key: app.title, animate: hero)
+                        ScaleBox(width: 693, height: 390) {
+                            player_phone_overlays(app: app)
+                        }
+                    }
+                } => app.toggle_pause()
+            }
+            if shown {
+                // `.ph .p-top`: 8 points before the way back, 12 after the last action.
+                Positioned(x: 0, y: 0, width: 840, height: 48, appear: fade, disappear: fade) {
+                    player_phone_top(app: app)
+                }
+            }
+            if shown && !app.player.panel {
+                // The left rail: danmaku, then the previous episode and back 10.
+                Positioned(x: 0, y: 148, width: 162, height: 34, appear: fade, disappear: fade) {
+                    Row(gap: 0, align: center) {
+                        Spacer
+                        if app.features.danmaku {
+                            SplitButton(id: danmaku_phone, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, more_label: tr! { "zh-Hans" => "弹幕参数", "en" => "Danmaku options" }, icon: "text.bubble", value: draft.danmaku, shape: capsule, height: 34) {
+                                player_danmaku_quick(app: app)
+                            }
+                        }
+                        Spacer
+                    }
+                }
+                Positioned(x: 0, y: 194, width: 162, height: 46, appear: fade, disappear: fade) {
+                    Row(gap: 8, align: center) {
+                        Spacer
+                        if app.player.episodes {
+                            IconButton(id: previous_phone, icon: "backward.end.fill", font_size: 11, height: 46, label: tr! { "zh-Hans" => "上一集", "en" => "Previous episode" }, enabled: app.player.episode > 1) => app.change_episode(-1)
+                        }
+                        IconButton(id: rewind_phone, icon: "gobackward.10", font_size: 12.5, height: 46, label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 seconds" }) => app.skip(-10.0)
+                        Spacer
+                    }
+                }
+                // The right rail: subtitles, speed, the 60-point play button,
+                // then forward 10 and the next episode.
+                Positioned(x: 682, y: 91, width: 162, height: 32, appear: fade, disappear: fade) {
+                    Row(gap: 0, align: center) {
+                        Spacer
+                        Menu(id: subtitles_phone, label: app.player.subtitle_track, icon: "captions.bubble", shape: capsule, height: 32) {
+                            MenuItem(id: chinese_subtitle_phone, label: tr! { "zh-Hans" => "简体中文（内嵌 ASS）", "en" => "Simplified Chinese (ASS)" }) => app.set_subtitle_track(SubtitleTrack::Chinese)
+                            MenuItem(id: japanese_subtitle_phone, label: tr! { "zh-Hans" => "日本語", "en" => "Japanese" }) => app.set_subtitle_track(SubtitleTrack::Japanese)
+                            MenuItem(id: no_subtitle_phone, label: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }) => app.set_subtitle_track(SubtitleTrack::Off)
+                            MenuItem(id: external_subtitle_phone, label: tr! { "zh-Hans" => "添加外挂字幕…", "en" => "Add external subtitles…" }, pick: draft.subtitle_file, files: ".ass .ssa .srt .vtt") => app.attach_subtitle(draft.subtitle_file)
+                        }
+                        Spacer
+                    }
+                }
+                Positioned(x: 682, y: 135, width: 162, height: 32, appear: fade, disappear: fade) {
+                    Row(gap: 0, align: center) {
+                        Spacer
+                        Picker(id: rate_phone, label: tr! { "zh-Hans" => "倍速", "en" => "Speed" }, selected: app.preferences.speed, label_hidden: true, style: menu, shape: capsule, height: 32) => app.set_speed(app.preferences.speed)
+                        Spacer
+                    }
+                }
+                Positioned(x: 682, y: 179, width: 162, height: 60, appear: fade, disappear: fade) {
+                    Row(gap: 0, align: center) {
+                        Spacer
+                        if app.paused {
+                            IconButton(id: play_phone, icon: "play.fill", font_size: 17, height: 60, prominence: prominent, label: tr! { "zh-Hans" => "播放", "en" => "Play" }) => app.toggle_pause()
+                        } else {
+                            IconButton(id: pause_phone, icon: "pause.fill", font_size: 17, height: 60, prominence: prominent, label: tr! { "zh-Hans" => "暂停", "en" => "Pause" }) => app.toggle_pause()
+                        }
+                        Spacer
+                    }
+                }
+                Positioned(x: 682, y: 251, width: 162, height: 46, appear: fade, disappear: fade) {
+                    Row(gap: 8, align: center) {
+                        Spacer
+                        IconButton(id: forward_phone, icon: "goforward.10", font_size: 12.5, height: 46, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }) => app.skip(10.0)
+                        if app.player.episodes {
+                            IconButton(id: next_phone, icon: "forward.end.fill", font_size: 11, height: 46, label: tr! { "zh-Hans" => "下一集", "en" => "Next episode" }, enabled: app.player.episode < 12) => app.change_episode(1)
+                        }
+                        Spacer
+                    }
+                }
+            }
+            if shown {
+                // `.p-seek`, 3 under the picture: the time, the seek bar 54
+                // in from both ends, the length.
+                Positioned(x: if app.player.panel { 16 } else { 162.5 }, y: if app.player.panel { 361.1 } else { 357.1 }, width: 35.5, height: 16, animate: hero, appear: fade, disappear: fade) {
+                    Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.elapsed }, style: caption2, font_size: 12)
+                }
+                Positioned(x: if app.player.panel { 70 } else { 216.5 }, y: if app.player.panel { 355.1 } else { 351.1 }, width: if app.player.panel { 404 } else { 411 }, height: 28, animate: hero, appear: fade, disappear: fade) {
+                    Slider(id: position_phone, label: tr! { "zh-Hans" => "播放进度", "en" => "Playback position" }, label_hidden: true, current: app.progress, min: 0, max: 1) => app.seek(app.progress)
+                }
+                // The chapters as dots on the track; no room for their names
+                // under it, so the danmaku peaks are accent dots above it.
+                if app.player.episodes {
+                    Positioned(x: if app.player.panel { 70 } else { 216.5 }, y: if app.player.panel { 367.6 } else { 363.6 }, width: if app.player.panel { 404 } else { 411 }, height: 3, animate: hero, appear: fade, disappear: fade) {
+                        Rail {
+                        Canvas(at: 0.06323, width: 3, height: 3) { Shape(kind: ellipse, fill: text.primary, opacity: 0.7) }
+                        Canvas(at: 0.12509, width: 3, height: 3) { Shape(kind: ellipse, fill: text.primary, opacity: 0.7) }
+                        Canvas(at: 0.4811, width: 3, height: 3) { Shape(kind: ellipse, fill: text.primary, opacity: 0.7) }
+                        Canvas(at: 0.89003, width: 3, height: 3) { Shape(kind: ellipse, fill: text.primary, opacity: 0.7) }
+                        Canvas(at: 0.95189, width: 3, height: 3) { Shape(kind: ellipse, fill: text.primary, opacity: 0.7) }
+                        }
+                    }
+                    if app.features.danmaku {
+                        Positioned(x: if app.player.panel { 70 } else { 216.5 }, y: if app.player.panel { 353.6 } else { 349.6 }, width: if app.player.panel { 404 } else { 411 }, height: 10, animate: hero, appear: fade, disappear: fade) {
+                            Rail {
+                            Canvas(at: 0.23505, width: 10, height: 10) { Shape(kind: ellipse, fill: surface.canvas, opacity: 0.4) Shape(kind: ellipse, x: 1.5, y: 1.5, width: 7, height: 7, fill: accent) }
+                            Canvas(at: 0.75464, width: 10, height: 10) { Shape(kind: ellipse, fill: surface.canvas, opacity: 0.4) Shape(kind: ellipse, x: 1.5, y: 1.5, width: 7, height: 7, fill: accent) }
+                            }
+                        }
+                    }
+                }
+                Positioned(x: if app.player.panel { 492.5 } else { 646 }, y: if app.player.panel { 361.1 } else { 357.1 }, width: 35.5, height: 16, animate: hero, appear: fade, disappear: fade) {
+                    Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.duration }, style: caption2, font_size: 12, emphasis: secondary)
+                }
+            }
+            // `.ph .p-sheet`: the settings beside the picture.
+            if app.player.panel {
+                Positioned(x: 544, y: 56, width: 284, height: 322, appear: player_panel_in, disappear: player_panel_in) {
+                    player_panel(app: app)
+                }
+            }
+        }
+    }
+}
+
+/// The phone player's bar (`.p-top`, 48 points): the way back on a glass
+/// circle, the title with its episode, and its actions on one glass
+/// capsule, Apple's 44 points tall.
+#[component]
+pub fn player_phone_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
+    ui! {
+        Row(gap: 10, padding_x: 8, height: 48, align: center) {
+            IconButton(id: back_phone, icon: "chevron.left", font_size: 18, height: 44, label: tr! { "zh-Hans" => "返回", "en" => "Back" }) => app.minimize()
+            Row(gap: 8, align: baseline) {
+                Text(content: app.title, style: title3, lines: 1)
+                Text(content: app.subtitle, style: caption, emphasis: secondary, lines: 1)
+            }
+            Spacer
+            ControlGroup(label: tr! { "zh-Hans" => "播放选项", "en" => "Playback options" }, height: 44) {
+                if app.features.danmaku {
+                    IconButton(id: match_danmaku_phone, icon: "link", label: tr! { "zh-Hans" => "弹幕匹配", "en" => "Match danmaku" }) => app.show_notice(Notice::DanmakuMatchPending)
+                }
+                IconButton(id: pip_phone, icon: "pip.enter", label: tr! { "zh-Hans" => "画中画", "en" => "Picture in picture" }) => app.show_notice(Notice::PictureInPicturePending)
+                IconButton(id: settings_phone, icon: "slider.horizontal.3", label: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }) => app.player_panel(!app.player.panel)
+                Menu(id: more_phone, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon) {
+                    MenuItem(id: skip_intro_phone, label: tr! { "zh-Hans" => "跳过片头（85 秒）", "en" => "Skip opening (85 seconds)" }) => app.skip(85.0)
+                    MenuItem(id: episodes_phone, label: tr! { "zh-Hans" => "选集…", "en" => "Episodes…" }, enabled: app.player.episodes) => draft.episodes_open.set(true)
+                    MenuItem(id: info_phone, label: tr! { "zh-Hans" => "播放信息", "en" => "Playback information" }) => app.player_tab(PlayerTab::Playback)
+                }
+            }
+        }
+    }
+}
+
 #[component]
 pub fn player_overlays(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
     ui! {
@@ -87,7 +259,6 @@ pub fn player_overlays(app: erika::Client, #[session] draft: PlayerDraft) -> imp
                     Positioned(x: 0, y: 100, width: 1280, height: 36) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 12 }, phase: 0.6, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "名场面来了", "en" => "An iconic scene" }, style: callout, font_size: if draft.font_size < 0.3 { 20 } else if draft.font_size > 0.7 { 34 } else { 26 }) } }
                     Positioned(x: 0, y: 180, width: 1280, height: 36) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 14 }, phase: 0.1, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "OP 好听", "en" => "Love the opening" }, style: callout, font_size: if draft.font_size < 0.3 { 20 } else if draft.font_size > 0.7 { 34 } else { 26 }) } }
                     if app.preferences.danmaku_area != DanmakuArea::Quarter { Positioned(x: 0, y: 220, width: 1280, height: 36) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 15 }, phase: 0.8, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "再上映——", "en" => "Play it again" }, style: callout, font_size: if draft.font_size < 0.3 { 20 } else if draft.font_size > 0.7 { 34 } else { 26 }) } } }
-                    if app.preferences.danmaku_area != DanmakuArea::Quarter { Positioned(x: 0, y: 260, width: 1280, height: 36) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 16 }, phase: 0.4, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "来了来了", "en" => "Here we go" }, style: callout, font_size: if draft.font_size < 0.3 { 20 } else if draft.font_size > 0.7 { 34 } else { 26 }) } } }
                     if app.preferences.danmaku_area != DanmakuArea::Quarter { Positioned(x: 0, y: 300, width: 1280, height: 36) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 11 }, phase: 0.35, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "泪目", "en" => "Tears" }, style: callout, font_size: if draft.font_size < 0.3 { 20 } else if draft.font_size > 0.7 { 34 } else { 26 }) } } }
                     if app.preferences.danmaku_area != DanmakuArea::Quarter { Positioned(x: 0, y: 340, width: 1280, height: 36) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 12 }, phase: 0.65, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "这里有伏笔", "en" => "Foreshadowing here" }, style: callout, font_size: if draft.font_size < 0.3 { 20 } else if draft.font_size > 0.7 { 34 } else { 26 }) } } }
                     if app.preferences.danmaku_area == DanmakuArea::Full { Positioned(x: 0, y: 380, width: 1280, height: 36) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 13 }, phase: 0.2, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "下周见", "en" => "See you next week" }, style: callout, font_size: if draft.font_size < 0.3 { 20 } else if draft.font_size > 0.7 { 34 } else { 26 }) } } }
@@ -98,6 +269,7 @@ pub fn player_overlays(app: erika::Client, #[session] draft: PlayerDraft) -> imp
                             Stack(variant: player_gold) { Text(content: tr! { "zh-Hans" => "这段作画太顶了", "en" => "Beautiful animation" }, style: callout, font_size: if draft.font_size < 0.3 { 20 } else if draft.font_size > 0.7 { 34 } else { 26 }) }
                         }
                     }
+                    if app.preferences.danmaku_area != DanmakuArea::Quarter { Positioned(x: 0, y: 260, width: 1280, height: 36) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 16 }, phase: 0.4, paused: app.paused, opacity: draft.opacity) { Stack(variant: player_cyan) { Text(content: tr! { "zh-Hans" => "来了来了", "en" => "Here we go" }, style: callout, font_size: if draft.font_size < 0.3 { 20 } else if draft.font_size > 0.7 { 34 } else { 26 }) } } } }
                 }
                 if app.player.sent_danmaku != "" {
                     Positioned(x: 0, y: 210, width: 1280, height: 48) { Marquee(duration: 9, phase: 0.3, paused: app.paused, opacity: 1) { Text(content: app.player.sent_danmaku, style: callout, font_size: if draft.font_size < 0.3 { 20 } else if draft.font_size > 0.7 { 34 } else { 26 }) } }
@@ -114,6 +286,55 @@ pub fn player_overlays(app: erika::Client, #[session] draft: PlayerDraft) -> imp
             }
             if app.player.feedback {
                 Positioned(x: 596, y: 316, width: 88, height: 88, appear: player_feedback_in, disappear: fade) {
+                    if app.paused {
+                        Label(title: tr! { "zh-Hans" => "暂停", "en" => "Pause" }, icon: "pause.fill", display: icon, font_size: 44)
+                    } else {
+                        Label(title: tr! { "zh-Hans" => "播放", "en" => "Play" }, icon: "play.fill", display: icon, font_size: 44)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The picture's overlays on the phone (`.ph .cv`): laid out on the
+/// 693 × 390 picture and scaled with it; danmaku 17 points in five rows
+/// 30 apart from 34 (`.ph .dm-layer`), the subtitle 19 points, 24 above
+/// the bottom.
+#[component]
+pub fn player_phone_overlays(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
+    ui! {
+        Stack(width: 693, height: 390, align: top_leading) {
+            if app.features.danmaku && draft.danmaku && app.preferences.show_danmaku {
+                if !draft.block_scroll {
+                    Positioned(x: 0, y: 34, width: 693, height: 22) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 11 }, phase: 0.0, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "前方高能！！", "en" => "Here it comes!!" }, style: callout, font_size: if draft.font_size < 0.3 { 13 } else if draft.font_size > 0.7 { 22 } else { 17 }) } }
+                    Positioned(x: 0, y: 64, width: 693, height: 22) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 12 }, phase: 0.308, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "名场面来了", "en" => "An iconic scene" }, style: callout, font_size: if draft.font_size < 0.3 { 13 } else if draft.font_size > 0.7 { 22 } else { 17 }) } }
+                    if app.preferences.danmaku_area != DanmakuArea::Quarter { Positioned(x: 0, y: 124, width: 693, height: 22) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 14 }, phase: 0.793, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "OP 好听", "en" => "Love the opening" }, style: callout, font_size: if draft.font_size < 0.3 { 13 } else if draft.font_size > 0.7 { 22 } else { 17 }) } } }
+                    if app.preferences.danmaku_area != DanmakuArea::Quarter { Positioned(x: 0, y: 154, width: 693, height: 22) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 15 }, phase: 0.987, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "再上映——", "en" => "Play it again" }, style: callout, font_size: if draft.font_size < 0.3 { 13 } else if draft.font_size > 0.7 { 22 } else { 17 }) } } }
+                    Positioned(x: 0, y: 64, width: 693, height: 22) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 11 }, phase: 0.018, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "泪目", "en" => "Tears" }, style: callout, font_size: if draft.font_size < 0.3 { 13 } else if draft.font_size > 0.7 { 22 } else { 17 }) } }
+                    Positioned(x: 0, y: 94, width: 693, height: 22) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 12 }, phase: 0.158, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "这里有伏笔", "en" => "Foreshadowing here" }, style: callout, font_size: if draft.font_size < 0.3 { 13 } else if draft.font_size > 0.7 { 22 } else { 17 }) } }
+                    if app.preferences.danmaku_area != DanmakuArea::Quarter { Positioned(x: 0, y: 124, width: 693, height: 22) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 13 }, phase: 0.277, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "下周见", "en" => "See you next week" }, style: callout, font_size: if draft.font_size < 0.3 { 13 } else if draft.font_size > 0.7 { 22 } else { 17 }) } } }
+                }
+                if !draft.block_color && !draft.block_scroll {
+                    Positioned(x: 0, y: 94, width: 693, height: 22) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 13 }, phase: 0.569, paused: app.paused, opacity: draft.opacity) { Stack(variant: player_gold) { Text(content: tr! { "zh-Hans" => "这段作画太顶了", "en" => "Beautiful animation" }, style: callout, font_size: if draft.font_size < 0.3 { 13 } else if draft.font_size > 0.7 { 22 } else { 17 }) } } }
+                    Positioned(x: 0, y: 34, width: 693, height: 22) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 16 }, phase: 0.156, paused: app.paused, opacity: draft.opacity) { Stack(variant: player_cyan) { Text(content: tr! { "zh-Hans" => "来了来了", "en" => "Here we go" }, style: callout, font_size: if draft.font_size < 0.3 { 13 } else if draft.font_size > 0.7 { 22 } else { 17 }) } } }
+                    if app.preferences.danmaku_area != DanmakuArea::Quarter { Positioned(x: 0, y: 154, width: 693, height: 22) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 14 }, phase: 0.379, paused: app.paused, opacity: draft.opacity) { Stack(variant: player_pink) { Text(content: tr! { "zh-Hans" => "快跑！", "en" => "Run!" }, style: callout, font_size: if draft.font_size < 0.3 { 13 } else if draft.font_size > 0.7 { 22 } else { 17 }) } } } }
+                }
+                if app.player.sent_danmaku != "" {
+                    Positioned(x: 0, y: 64, width: 693, height: 22) { Marquee(duration: 9, phase: 0.3, paused: app.paused, opacity: 1) { Text(content: app.player.sent_danmaku, style: callout, font_size: if draft.font_size < 0.3 { 13 } else if draft.font_size > 0.7 { 22 } else { 17 }) } }
+                }
+            }
+            if app.player.subtitle_track != SubtitleTrack::Off {
+                Positioned(x: 40, y: 341.3, width: 613, height: 24.7) {
+                    Row(align: center) {
+                        Spacer
+                        Text(content: app.player.subtitle_line, style: callout, font_size: if app.player.subtitle_size < 0.3 { 15 } else if app.player.subtitle_size > 0.7 { 24 } else { 19 }, line_height: 24.7)
+                        Spacer
+                    }
+                }
+            }
+            if app.player.feedback {
+                Positioned(x: 302.5, y: 151, width: 88, height: 88, appear: player_feedback_in, disappear: fade) {
                     if app.paused {
                         Label(title: tr! { "zh-Hans" => "暂停", "en" => "Pause" }, icon: "pause.fill", display: icon, font_size: 44)
                     } else {
@@ -145,21 +366,21 @@ pub fn player_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl Vie
                     }
                 }
                 if app.features.danmaku {
-                    IconButton(id: match_danmaku, icon: "link", label: tr! { "zh-Hans" => "弹幕匹配", "en" => "Match danmaku" }) => app.show_notice("界面预览：弹幕匹配尚未接入")
+                    IconButton(id: match_danmaku, icon: "link", label: tr! { "zh-Hans" => "弹幕匹配", "en" => "Match danmaku" }) => app.show_notice(Notice::DanmakuMatchPending)
                 }
             }
             ControlGroup(label: tr! { "zh-Hans" => "画面模式", "en" => "Viewing mode" }, height: 40) {
-                IconButton(id: pip, icon: "pip.enter", label: tr! { "zh-Hans" => "画中画", "en" => "Picture in picture" }) => app.show_notice("界面预览：系统画中画待播放内核接入")
-                IconButton(id: fullscreen, icon: "arrow.up.left.and.arrow.down.right", label: tr! { "zh-Hans" => "全屏", "en" => "Full screen" }, shortcut: "f") => app.show_notice("界面预览：可使用窗口绿色按钮进入全屏")
+                IconButton(id: pip, icon: "pip.enter", label: tr! { "zh-Hans" => "画中画", "en" => "Picture in picture" }) => app.show_notice(Notice::PictureInPicturePending)
+                IconButton(id: fullscreen, icon: "arrow.up.left.and.arrow.down.right", label: tr! { "zh-Hans" => "全屏", "en" => "Full screen" }, shortcut: "f") => app.show_notice(Notice::FullScreenHint)
             }
             ControlGroup(label: tr! { "zh-Hans" => "播放选项", "en" => "Playback options" }, height: 40) {
                 IconButton(id: settings, icon: "slider.horizontal.3", label: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }) => app.player_panel(!app.player.panel)
                 Menu(id: more, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon) {
-                    MenuItem(id: screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera", shortcut: "cmd+s") => app.show_notice("界面预览：截图保存待播放内核接入")
+                    MenuItem(id: screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera", shortcut: "cmd+s") => app.show_notice(Notice::ScreenshotPending)
                     MenuItem(id: skip_intro, label: tr! { "zh-Hans" => "跳过片头（85 秒）", "en" => "Skip opening (85 seconds)" }) => app.skip(85.0)
                     MenuItem(id: episodes, label: tr! { "zh-Hans" => "选集…", "en" => "Episodes…" }, enabled: app.player.episodes) => draft.episodes_open.set(true)
                     MenuItem(id: info, label: tr! { "zh-Hans" => "播放信息", "en" => "Playback information" }) => app.player_tab(PlayerTab::Playback)
-                    MenuItem(id: manual_match, label: tr! { "zh-Hans" => "手动匹配弹幕…", "en" => "Match danmaku…" }, enabled: app.features.danmaku) => app.show_notice("界面预览：弹幕匹配尚未接入")
+                    MenuItem(id: manual_match, label: tr! { "zh-Hans" => "手动匹配弹幕…", "en" => "Match danmaku…" }, enabled: app.features.danmaku) => app.show_notice(Notice::DanmakuMatchPending)
                 }
             }
             if draft.episodes_open {
@@ -204,12 +425,12 @@ pub fn player_timeline(app: erika::Client) -> impl View {
                 }
             }
             if app.player.panel {
-                Positioned(x: 0, y: 14, width: 40, height: 16) { Text(content: app.elapsed, style: caption2) }
-                Positioned(x: 856, y: 14, width: 40, height: 16) { Text(content: app.duration, style: caption2, emphasis: secondary) }
+                Positioned(x: 0, y: 14, width: 40, height: 16) { Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.elapsed }, style: caption2) }
+                Positioned(x: 856, y: 14, width: 40, height: 16) { Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.duration }, style: caption2, emphasis: secondary) }
             }
             if !app.player.panel {
-                Positioned(x: -68, y: 14, width: 54, height: 16) { Row { Spacer Text(content: app.elapsed, style: caption2) } }
-                Positioned(x: 1088, y: 14, width: 60, height: 16) { Text(content: app.duration, style: caption2, emphasis: secondary) }
+                Positioned(x: -68, y: 14, width: 54, height: 16) { Row { Spacer Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.elapsed }, style: caption2) } }
+                Positioned(x: 1088, y: 14, width: 60, height: 16) { Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.duration }, style: caption2, emphasis: secondary) }
             }
         }
     }
@@ -233,7 +454,7 @@ pub fn player_controls(app: erika::Client, #[session] draft: PlayerDraft) -> imp
                 }
                 Spacer
                 Row(width: 92) {
-                    Menu(id: subtitles, label: app.player.subtitle_label, icon: "captions.bubble", shape: capsule, height: 32) {
+                    Menu(id: subtitles, label: app.player.subtitle_track, icon: "captions.bubble", shape: capsule, height: 32) {
                         MenuItem(id: chinese_subtitle, label: tr! { "zh-Hans" => "简体中文（内嵌 ASS）", "en" => "Simplified Chinese (ASS)" }) => app.set_subtitle_track(SubtitleTrack::Chinese)
                         MenuItem(id: japanese_subtitle, label: tr! { "zh-Hans" => "日本語", "en" => "Japanese" }) => app.set_subtitle_track(SubtitleTrack::Japanese)
                         MenuItem(id: no_subtitle, label: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }) => app.set_subtitle_track(SubtitleTrack::Off)
@@ -292,12 +513,15 @@ pub fn player_panel(app: erika::Client, #[session] draft: PlayerDraft) -> impl V
         Stack(variant: player_panel) {
             ScrollView {
                 Column(gap: 0, padding_x: 16, padding_y: 18) {
-                    Row(height: 28, align: center) {
+                    // `.p-sheet .hd`: as tall as its 34-point close button.
+                    Row(height: 34, align: center) {
                         Text(content: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }, style: title3)
                         Spacer
                         IconButton(id: close, icon: "xmark", label: tr! { "zh-Hans" => "关闭播放设置", "en" => "Close playback settings" }) => app.player_panel(false)
                     }
                     Canvas(height: 12)
+                    // `.c-seg`: 34 points tall, whatever the platform's control.
+                    Row(height: 34, align: center) {
                     if app.features.danmaku {
                         Picker(id: tab, label: tr! { "zh-Hans" => "播放设置分页", "en" => "Playback settings tab" }, label_hidden: true, selected: app.player.tab, style: segmented) {
                             PickerOption(value: PlayerTab::Danmaku, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" })
@@ -314,6 +538,7 @@ pub fn player_panel(app: erika::Client, #[session] draft: PlayerDraft) -> impl V
                             PickerOption(value: PlayerTab::Playback, label: tr! { "zh-Hans" => "播放", "en" => "Playback" })
                         } => app.player_tab(app.player.tab)
                     }
+                    }
                     Canvas(height: 4)
                     match app.player.tab {
                         PlayerTab::Danmaku => { Column(gap: 0, appear: settings_page_in) {
@@ -329,7 +554,7 @@ pub fn player_panel(app: erika::Client, #[session] draft: PlayerDraft) -> impl V
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
                                 Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "弹幕偏移", "en" => "Danmaku delay" }) Spacer Row(width: 130) { Slider(id: danmaku_delay, label: tr! { "zh-Hans" => "弹幕偏移", "en" => "Danmaku delay" }, label_hidden: true, value: draft.delay, min: -10, max: 10) } }
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
-                                Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "挂载本地弹幕", "en" => "Local danmaku" }) Spacer Button(id: local_danmaku, label: tr! { "zh-Hans" => "xml / json", "en" => "xml / json" }, prominence: plain, pick: draft.danmaku_file, files: ".xml .json") => app.show_notice("已选择本地弹幕（界面预览）") }
+                                Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "挂载本地弹幕", "en" => "Local danmaku" }) Spacer Button(id: local_danmaku, label: tr! { "zh-Hans" => "xml / json", "en" => "xml / json" }, prominence: plain, pick: draft.danmaku_file, files: ".xml .json") => app.show_notice(Notice::LocalDanmakuChosen) }
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
                             } }
                         PlayerTab::Subtitles => { Column(gap: 0, appear: settings_page_in) {

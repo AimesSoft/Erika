@@ -40,8 +40,11 @@ pub mod library {
     #[value]
     pub struct LibraryPoster {
         pub id: i64,
+        #[content]
         pub title: String,
         pub poster: MediaSource,
+        /// The letter the title files under in the index.
+        #[content]
         pub initial: String,
         pub episodes: i64,
         pub watched: i64,
@@ -53,6 +56,7 @@ pub mod library {
 
     #[value]
     pub struct LibraryLetter {
+        #[content]
         pub letter: String,
         /// The first visible show with this initial, or zero if absent.
         pub target: i64,
@@ -80,6 +84,8 @@ pub mod library {
     #[state]
     pub struct State {
         pub posters: Vec<LibraryPoster>,
+        /// The shows added last, newest first, for the home page.
+        pub recent: Vec<LibraryPoster>,
         pub opened: i64,
         pub show: LibraryPoster,
         pub notice: i64,

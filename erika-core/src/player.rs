@@ -8,7 +8,6 @@ pub fn initial() -> PlayerState {
         episode: 1,
         episodes: false,
         subtitle_track: SubtitleTrack::Chinese,
-        subtitle_label: "简中".into(),
         audio_track: AudioTrack::Japanese,
         enhancement: Enhancement::Anime4K,
         ratio: PictureRatio::Original,
@@ -26,14 +25,10 @@ pub fn initial() -> PlayerState {
     }
 }
 impl ErikaEngine {
-    pub(super) fn reset_player(&mut self, subtitle: &str) {
-        let digits: String = subtitle
-            .chars()
-            .skip_while(|c| !c.is_ascii_digit())
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
-        self.state.player.episode = digits.parse::<i64>().unwrap_or(1).clamp(1, 12);
-        self.state.player.episodes = subtitle.contains('集');
+    /// Start the player afresh on `episode` of a series, or on a file.
+    pub(super) fn reset_player(&mut self, episode: Option<i64>) {
+        self.state.player.episode = episode.unwrap_or(1).clamp(1, 12);
+        self.state.player.episodes = episode.is_some();
         self.state.player.panel = false;
         self.state.player.feedback = false;
         self.state.player.sent_danmaku.clear();
@@ -42,16 +37,10 @@ impl ErikaEngine {
     }
     pub(super) fn update_position(&mut self, seconds: f64) {
         self.state.progress = seconds.clamp(0.0, LENGTH) / LENGTH;
-        self.state.elapsed = clock(self.state.progress * LENGTH);
+        self.state.elapsed = self.state.progress * LENGTH;
         self.update_subtitle();
     }
     pub(super) fn update_subtitle(&mut self) {
-        self.state.player.subtitle_label = match self.state.player.subtitle_track {
-            SubtitleTrack::Chinese => "简中",
-            SubtitleTrack::Japanese => "日本語",
-            SubtitleTrack::Off => "关闭",
-        }
-        .into();
         let seconds = (self.state.progress * LENGTH - self.state.player.subtitle_delay).max(0.0);
         let i = ((seconds / 4.0) as usize) % 4;
         self.state.player.subtitle_line = match self.state.player.subtitle_track {
@@ -120,7 +109,7 @@ impl ErikaEngine {
             ));
         }
         self.state.player.episode = episode;
-        self.state.subtitle = format!("第 {episode} 集");
+        self.state.subtitle = PlayingNote::Episode { episode };
         self.state.paused = false;
         self.update_position(0.0);
         Ok(())
@@ -153,8 +142,7 @@ mod tests {
     use erika::Commands;
     fn playing() -> ErikaEngine {
         let mut e = ErikaEngine::default();
-        e.play("葬送的芙莉莲".into(), "第 4 集".into(), still(), 0.35)
-            .unwrap();
+        e.play("葬送的芙莉莲".into(), 4, still(), 0.35).unwrap();
         e
     }
     #[test]
@@ -163,7 +151,7 @@ mod tests {
         e.toggle_pause().unwrap();
         e.skip(10.0).unwrap();
         assert!(e.state.paused);
-        assert_eq!(e.state.elapsed, "8:39");
+        assert_eq!(e.state.elapsed.floor(), 8.0 * 60.0 + 39.0);
         e.skip(-10000.0).unwrap();
         assert_eq!(e.state.progress, 0.0);
         e.seek(2.0).unwrap();

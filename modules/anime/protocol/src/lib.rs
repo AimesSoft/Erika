@@ -7,10 +7,22 @@ pub mod anime {
     use bern::media::MediaSource;
     use bern::prelude::*;
 
-    /// One tag of a show, such as "战斗".
+    /// One tag of a show, such as "战斗", as the show's source names it.
     #[value]
     pub struct Tag {
+        #[content]
         pub name: String,
+    }
+
+    /// Where the user is with a show.
+    #[value]
+    pub enum WatchStatus {
+        #[label(tr! { "zh-Hans" => "想看", "en" => "Want to watch" })]
+        Want,
+        #[label(tr! { "zh-Hans" => "在看", "en" => "Watching" })]
+        Watching,
+        #[label(tr! { "zh-Hans" => "看过", "en" => "Watched" })]
+        Watched,
     }
 
     /// One show.
@@ -18,32 +30,35 @@ pub mod anime {
     pub struct Show {
         /// Stable identity, used as the list key.
         pub id: i64,
+        #[content]
         pub title: String,
         pub poster: MediaSource,
         /// Episodes there are, and how many have been watched.
         pub episodes: i64,
         pub watched: i64,
-        /// "★ 6.1"; empty when the show has no rating.
-        pub rating: String,
-        /// "TV 动画 · 2026 年 1 月 · 共 12 话".
-        pub kind: String,
+        /// The score out of ten; 0 when the show has no rating.
+        pub rating: f64,
+        /// A film rather than a TV series, and when it first aired: the
+        /// month counts for a series, the year for a film.
+        pub movie: bool,
+        pub premiere: CalendarDate,
         pub tags: Vec<Tag>,
+        #[content]
         pub summary: String,
-        /// Where the user is with the show: "想看", "在看" or "看过".
-        pub status: String,
+        pub status: WatchStatus,
     }
 
     /// A show being watched: the home page's stage and the rows beside it.
     #[value]
     pub struct Watching {
         pub id: i64,
+        #[content]
         pub title: String,
         /// The picture on the stage or the thumbnail.
         pub still: MediaSource,
         pub episode: i64,
-        /// "第 1 集", and how much is left: "剩 15 分钟".
-        pub episode_label: String,
-        pub left: String,
+        /// Minutes left of the episode.
+        pub left: i64,
         /// How far the episode has played, from 0 to 1.
         pub progress: f64,
     }
@@ -52,10 +67,12 @@ pub mod anime {
     #[value]
     pub struct Airing {
         pub id: i64,
+        #[content]
         pub title: String,
         pub poster: MediaSource,
-        /// "18:30 · 已更新".
-        pub time: String,
+        /// When it airs, in seconds after midnight, and whether it has.
+        pub time: i64,
+        pub aired: bool,
         /// Where the time falls on the timeline, from 0 to 1.
         pub at: f64,
     }
@@ -63,8 +80,8 @@ pub mod anime {
     /// One hour marked under the timeline.
     #[value]
     pub struct Hour {
-        /// "18:00".
-        pub label: String,
+        /// The hour, in seconds after midnight.
+        pub time: i64,
         pub at: f64,
     }
 
@@ -73,9 +90,11 @@ pub mod anime {
     #[value]
     pub struct Broadcast {
         pub id: i64,
+        #[content]
         pub title: String,
         pub poster: MediaSource,
-        pub time: String,
+        /// When it airs, in seconds after midnight.
+        pub time: i64,
         pub episode: i64,
         pub aired: bool,
         pub tonight: bool,
@@ -85,7 +104,7 @@ pub mod anime {
     pub struct BroadcastDay {
         /// Monday is 0, Sunday is 6.
         pub id: i64,
-        pub name: String,
+        pub date: CalendarDate,
         pub count: i64,
         pub today: bool,
         pub tomorrow: bool,
@@ -96,19 +115,42 @@ pub mod anime {
         pub remaining: i64,
     }
 
+    /// The name of an episode on the film: its number, and whether it is
+    /// the one to start or to continue.
+    #[value]
+    pub enum EpisodeTitle {
+        #[label(tr! { "zh-Hans" => "第 {number} 话", "en" => "Episode {number}" })]
+        Plain { number: i64 },
+        #[label(tr! { "zh-Hans" => "第 {number} 话 · 开始", "en" => "Episode {number} · Start" })]
+        Start { number: i64 },
+        #[label(tr! { "zh-Hans" => "第 {number} 话 · 继续", "en" => "Episode {number} · Continue" })]
+        Continue { number: i64 },
+    }
+
+    /// What the film says under an episode.
+    #[value]
+    pub enum EpisodeNote {
+        #[label(tr! { "zh-Hans" => "已看", "en" => "Watched" })]
+        Watched,
+        #[label(tr! { "zh-Hans" => "剩 {minutes} 分钟", "en" => "{minutes} min left" })]
+        Left { minutes: i64 },
+        #[label(tr! { "zh-Hans" => "{minutes} 分钟", "en" => "{minutes} min" })]
+        Length { minutes: i64 },
+    }
+
     /// One episode on the film of the details page.
     #[value]
     pub struct Episode {
         /// The episode's number, used as the list key and scroll position.
         pub number: i64,
-        /// "第 1 话 · 开始", "第 2 话".
-        pub title: String,
-        /// "已看", "剩 16 分钟" or "24 分钟".
-        pub note: String,
+        pub title: EpisodeTitle,
+        pub note: EpisodeNote,
         /// The still for the episodes reached; the others show `numeral`.
         pub pictured: bool,
         pub still: MediaSource,
-        /// "02".
+        /// The number written with two digits, "02", alike in every
+        /// language.
+        #[content]
         pub numeral: String,
         pub watched: bool,
         /// Whether it is the one to watch next, and how far it has played.
@@ -119,8 +161,32 @@ pub mod anime {
     #[value]
     pub struct SearchEpisode {
         pub id: i64,
+        #[content]
         pub title: String,
-        pub episode: String,
+        pub episode: i64,
+    }
+
+    /// What the details' main button does.
+    #[value]
+    pub enum NextAction {
+        #[label(tr! { "zh-Hans" => "开始观看", "en" => "Start watching" })]
+        Start,
+        #[label(tr! { "zh-Hans" => "继续 第 {episode} 话", "en" => "Continue episode {episode}" })]
+        Continue { episode: i64 },
+    }
+
+    /// The page the details were opened from, which their back button
+    /// returns to.
+    #[value]
+    pub enum BackTo {
+        #[label(tr! { "zh-Hans" => "首页", "en" => "Home" })]
+        Home,
+        #[label(tr! { "zh-Hans" => "新番", "en" => "New" })]
+        Schedule,
+        #[label(tr! { "zh-Hans" => "媒体库", "en" => "Library" })]
+        Library,
+        #[label(tr! { "zh-Hans" => "搜索", "en" => "Search" })]
+        Search,
     }
 
     #[value]
@@ -138,8 +204,7 @@ pub mod anime {
 
     #[state]
     pub struct State {
-        /// "周一 · 10 月 12 日".
-        pub today: String,
+        pub today: CalendarDate,
         /// The show on the stage, and the others being watched.
         pub stage: Watching,
         pub also: Vec<Watching>,
@@ -148,9 +213,11 @@ pub mod anime {
         pub airing: Vec<Airing>,
         pub hours: Vec<Hour>,
         pub now_at: f64,
-        pub now_label: String,
-        /// "已更新 4 部 · 今晚还有 3 部".
-        pub airing_summary: String,
+        /// "Now", in seconds after midnight.
+        pub now: i64,
+        /// Shows aired today so far, and those still to come tonight.
+        pub aired_count: i64,
+        pub later_count: i64,
         pub week: Vec<BroadcastDay>,
         pub selected_day: i64,
         pub opened_from_schedule: bool,
@@ -158,20 +225,17 @@ pub mod anime {
         pub opened: i64,
         pub show: Show,
         pub episodes: Vec<Episode>,
-        /// "共 12 话 · 看到第 0 话".
-        pub progress_label: String,
-        /// The episode the main button plays, and its label: "开始观看" or
-        /// "继续 第 4 话".
+        /// The episode the main button plays, and what the button says.
         pub next_episode: i64,
-        pub next_label: String,
-        /// The page the details were opened from: "首页".
-        pub back_label: String,
+        pub next: NextAction,
+        pub back: BackTo,
     }
 
     #[events]
     pub trait Events {
-        /// The user asked to play an episode; the shell's player answers.
-        fn play(&self, title: String, subtitle: String, still: MediaSource, progress: f64);
+        /// The user asked to play episode `episode` of a show; the shell's
+        /// player answers.
+        fn play(&self, title: String, episode: i64, still: MediaSource, progress: f64);
     }
 
     #[commands]
@@ -213,8 +277,8 @@ pub mod anime {
         #[errors("unknown_episode")]
         fn play_episode(&mut self, number: i64) -> Result<(), CommandError>;
 
-        /// Mark the open show "想看", "在看" or "看过".
-        fn set_status(&mut self, status: String) -> Result<(), CommandError>;
+        /// Mark where the user is with the open show.
+        fn set_status(&mut self, status: WatchStatus) -> Result<(), CommandError>;
 
         /// Rate the open show from 1 to 10.
         fn rate(&mut self, score: i64) -> Result<(), CommandError>;

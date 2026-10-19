@@ -55,10 +55,16 @@ impl Default for LibraryEngine {
                 },
             )
             .collect();
+        // The prototype's "recently added": these shows, newest first.
+        let recent = [1, 2, 9, 10, 12, 6, 8, 16]
+            .iter()
+            .filter_map(|id| posters.iter().find(|poster| poster.id == *id).cloned())
+            .collect();
         Self {
             state: State {
                 show: posters[0].clone(),
                 posters,
+                recent,
                 opened: 0,
                 notice: 0,
             },

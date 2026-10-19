@@ -1,6 +1,6 @@
 //! Download UI simulation. It never fetches a URL or writes media files.
 use bern::{CommandError, media::MediaSource, resources::Resources};
-use erika_downloads_protocol::downloads::{self, DownloadTab, DownloadTask, State};
+use erika_downloads_protocol::downloads::{self, DataSize, DownloadTab, DownloadTask, State};
 
 pub struct DownloadsEngine {
     state: State,
@@ -12,28 +12,28 @@ impl Default for DownloadsEngine {
         let fixtures = [
             (
                 "[LoliHouse] Sousou no Frieren S2 - 04 [1080p].mkv",
-                "1.2 GB",
+                DataSize::Gigabytes { gigabytes: 1.2 },
                 0.64,
                 8.4,
                 true,
             ),
             (
                 "[Nekomoe] Kaguya-sama - 01 [1080p].mkv",
-                "860 MB",
+                DataSize::Megabytes { megabytes: 860.0 },
                 0.92,
                 6.1,
                 true,
             ),
             (
                 "[ANi] Jujutsu Kaisen - 05 [1080p].mp4",
-                "540 MB",
+                DataSize::Megabytes { megabytes: 540.0 },
                 0.22,
                 0.0,
                 false,
             ),
             (
                 "[Sakurato] Oshi no Ko S3 - 03 [1080p].mkv",
-                "980 MB",
+                DataSize::Megabytes { megabytes: 980.0 },
                 1.0,
                 0.0,
                 false,
@@ -47,7 +47,7 @@ impl Default for DownloadsEngine {
                 active_count: 0,
                 completed_count: 0,
                 running: false,
-                notice: String::new(),
+                finished: String::new(),
                 notice_revision: 0,
             },
             tasks: fixtures
@@ -57,7 +57,8 @@ impl Default for DownloadsEngine {
                     |(i, (title, size, progress, speed, running))| DownloadTask {
                         id: i as i64 + 1,
                         title: title.into(),
-                        size: size.into(),
+                        fetching: false,
+                        size,
                         progress,
                         speed,
                         running,
@@ -103,8 +104,9 @@ impl downloads::Commands for DownloadsEngine {
             0,
             DownloadTask {
                 id: self.next_id,
-                title: "新任务 · 正在获取元数据…".into(),
-                size: "—".into(),
+                title: String::new(),
+                fetching: true,
+                size: DataSize::Unknown,
                 progress: 0.02,
                 speed: 9.0,
                 running: true,
@@ -151,7 +153,7 @@ impl downloads::Commands for DownloadsEngine {
         }
         let still = MediaSource::resource(&Resources::host(), "design/assets/still1.jpg")
             .unwrap_or_else(|_| MediaSource::new(""));
-        downloads::emit::play(task.title.clone(), "已下载 · 本地文件".into(), still, 0.0);
+        downloads::emit::play(task.title.clone(), still, 0.0);
         Ok(())
     }
     fn tick(&mut self) -> Result<(), CommandError> {
@@ -165,7 +167,7 @@ impl downloads::Commands for DownloadsEngine {
                 task.completed = true;
                 task.running = false;
                 task.speed = 0.0;
-                self.state.notice = format!("下载完成：{}", task.title);
+                self.state.finished = task.title.clone();
                 self.state.notice_revision += 1;
             }
         }

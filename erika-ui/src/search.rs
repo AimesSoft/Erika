@@ -19,7 +19,7 @@ pub fn search_results(
                     if found.has_shows {
                         Column(gap: 0, padding_x: 12) {
                             Canvas(height: 10)
-                            Text(content: tr! { "zh-Hans" => "番剧", "en" => "Shows" }, style: caption, emphasis: secondary)
+                            Text(content: tr! { "zh-Hans" => "番剧", "en" => "Shows" }, style: caption, emphasis: secondary, line_height: 15)
                             Canvas(height: 6)
                         }
                         ScrollView(axis: horizontal) {
@@ -28,7 +28,7 @@ pub fn search_results(
                                     SearchItem(id: show, label: show.title, navigation: false) {
                                         Column(gap: 5, width: 70) {
                                             Image(source: show.poster, width: 70, height: 105, fit: cover, corner: 10, label: show.title)
-                                            Text(content: show.title, style: caption, lines: 1)
+                                            Text(content: show.title, style: caption, lines: 1, line_height: 15)
                                         }
                                     } => anime.open_from_search(show.id)
                                 }
@@ -39,11 +39,11 @@ pub fn search_results(
                     if found.has_continuing {
                         Column(gap: 0, padding_x: 12) {
                             Canvas(height: 10)
-                            Text(content: tr! { "zh-Hans" => "继续播放", "en" => "Continue Watching" }, style: caption, emphasis: secondary)
+                            Text(content: tr! { "zh-Hans" => "继续播放", "en" => "Continue Watching" }, style: caption, emphasis: secondary, line_height: 15)
                             Canvas(height: 6)
                         }
                         ForEach(items: found.continuing, key: id) |episode| {
-                            SearchItem(id: continue_show, label: episode.title, icon: "play", detail: episode.episode, hint: tr! { "zh-Hans" => "↵", "en" => "↵" }) => anime.continue_from_search(episode.id)
+                            SearchItem(id: continue_show, label: episode.title, icon: "play", detail: tr! { "zh-Hans" => "第 {episode} 话", "en" => "Episode {episode}"; episode: episode.episode }, hint: tr! { "zh-Hans" => "↵", "en" => "↵" }) => anime.continue_from_search(episode.id)
                         }
                     }
                     search_commands(app: app, windows: windows, actions: actions)
@@ -84,7 +84,7 @@ pub fn search_commands(
             if actions.has_settings {
                 Column(gap: 0, padding_x: 12) {
                     Canvas(height: 10)
-                    Text(content: tr! { "zh-Hans" => "设置", "en" => "Settings" }, style: caption, emphasis: secondary)
+                    Text(content: tr! { "zh-Hans" => "设置", "en" => "Settings" }, style: caption, emphasis: secondary, line_height: 15)
                     Canvas(height: 6)
                 }
                 if actions.theme {
@@ -109,7 +109,7 @@ pub fn search_commands(
             if actions.has_operations {
                 Column(gap: 0, padding_x: 12) {
                     Canvas(height: 10)
-                    Text(content: tr! { "zh-Hans" => "操作", "en" => "Actions" }, style: caption, emphasis: secondary)
+                    Text(content: tr! { "zh-Hans" => "操作", "en" => "Actions" }, style: caption, emphasis: secondary, line_height: 15)
                     Canvas(height: 6)
                 }
                 if actions.open_file {

@@ -48,8 +48,8 @@ impl Default for ErikaEngine {
                 ),
                 module_count: 8,
                 feature_preview_revision: 0,
-                preset_name: "全都要".into(),
-                notice: String::new(),
+                preset: OnboardingPreset::All,
+                notice: None,
                 notice_revision: 0,
                 plugins: settings::sample_plugins(),
                 plugin_category: PluginCategory::All,
@@ -63,11 +63,11 @@ impl Default for ErikaEngine {
                 expanded: false,
                 paused: false,
                 title: String::new(),
-                subtitle: String::new(),
+                subtitle: PlayingNote::LocalFile,
                 still: still(),
                 progress: 0.0,
-                elapsed: clock(0.0),
-                duration: clock(LENGTH),
+                elapsed: 0.0,
+                duration: LENGTH,
                 user_name: "Nipa".into(),
             },
         };
@@ -75,7 +75,7 @@ impl Default for ErikaEngine {
         if let Some(enabled) = &engine.saved_modules {
             engine.state.features = settings::feature_selection(enabled);
             engine.state.module_count = enabled.len() as i64;
-            engine.state.preset_name = if enabled.is_empty() { "纯粹播放" } else if enabled.len() == 8 { "全都要" } else if enabled.len() == 3 && ["danmaku", "library", "anime"].iter().all(|id| enabled.iter().any(|v| v == id)) { "看番" } else { "自己挑" }.into();
+            engine.state.preset = settings::preset_of(enabled);
         }
         engine
     }
@@ -85,16 +85,13 @@ fn still() -> MediaSource {
     MediaSource::resource(&Resources::host(), STILL).unwrap_or_else(|_| MediaSource::new(""))
 }
 
-/// `m:ss` of a number of seconds.
-fn clock(seconds: f64) -> String {
-    let seconds = seconds.max(0.0).round() as i64;
-    format!("{}:{:02}", seconds / 60, seconds % 60)
-}
-
 impl ErikaEngine {
-    fn start(&mut self, title: String, subtitle: String, still: MediaSource, progress: f64) {
+    fn start(&mut self, title: String, subtitle: PlayingNote, still: MediaSource, progress: f64) {
         let progress = if progress.is_finite() { progress.clamp(0.0, 1.0) } else { 0.0 };
-        self.reset_player(&subtitle);
+        self.reset_player(match subtitle {
+            PlayingNote::Episode { episode } => Some(episode),
+            _ => None,
+        });
         self.state.playing = true;
         self.state.expanded = true;
         self.state.paused = false;
@@ -102,8 +99,8 @@ impl ErikaEngine {
         self.state.subtitle = subtitle;
         self.state.still = still;
         self.state.progress = progress;
-        self.state.elapsed = clock(progress * LENGTH);
-        self.state.duration = clock(LENGTH);
+        self.state.elapsed = progress * LENGTH;
+        self.state.duration = LENGTH;
     }
 
     fn require_playing(&self) -> Result<(), CommandError> {
@@ -194,23 +191,23 @@ impl erika::Commands for ErikaEngine {
         match (id.as_str(), enabled) {
             ("library", false) => {
                 if f.sources {
-                    affected.push("网络媒体源");
+                    affected.push(FeatureModule::Sources);
                 }
                 if f.remote {
-                    affected.push("局域网与远程");
+                    affected.push(FeatureModule::Remote);
                 }
             }
-            ("anime", false) if f.sync => affected.push("账号同步"),
-            ("sync", true) if !f.anime => affected.push("追番"),
-            ("sources" | "remote", true) if !f.library => affected.push("媒体库"),
+            ("anime", false) if f.sync => affected.push(FeatureModule::Sync),
+            ("sync", true) if !f.anime => affected.push(FeatureModule::Anime),
+            ("sources" | "remote", true) if !f.library => affected.push(FeatureModule::Library),
             _ => {}
         }
-        if !affected.is_empty() {
-            self.notify(format!(
-                "已同时{}：{}",
-                if enabled { "开启" } else { "关闭" },
-                affected.join("、")
-            ));
+        let mut affected = affected.into_iter();
+        match (enabled, affected.next(), affected.next()) {
+            (_, None, _) => {}
+            (true, Some(module), _) => self.notify(Notice::AlsoOn { module }),
+            (false, Some(module), None) => self.notify(Notice::AlsoOff { module }),
+            (false, Some(first), Some(second)) => self.notify(Notice::AlsoOffBoth { first, second }),
         }
         bern::modules::set_enabled(&id, enabled);
         Ok(())
@@ -257,36 +254,36 @@ impl erika::Commands for ErikaEngine {
         plugin.installed = true;
         self.filter_plugins();
         self.notify(if installed {
-            format!("{} · 插件设置", name)
+            Notice::PluginSettings { name }
         } else {
-            format!("已添加 {}", name)
+            Notice::PluginAdded { name }
         });
         Ok(())
     }
-    fn show_notice(&mut self, message: String) -> Result<(), CommandError> {
-        self.notify(message);
+    fn show_notice(&mut self, notice: Notice) -> Result<(), CommandError> {
+        self.notify(notice);
         Ok(())
     }
 
     fn open_file(&mut self, source: MediaSource) -> Result<(), CommandError> {
         let title = source.file_name().unwrap_or_else(|| source.url.clone());
-        self.start(title, "本地文件".into(), still(), 0.0);
+        self.start(title, PlayingNote::LocalFile, still(), 0.0);
         Ok(())
     }
 
     fn play(
         &mut self,
         title: String,
-        subtitle: String,
+        episode: i64,
         still: MediaSource,
         progress: f64,
     ) -> Result<(), CommandError> {
-        self.start(title, subtitle, still, progress);
+        self.start(title, PlayingNote::Episode { episode }, still, progress);
         Ok(())
     }
 
-    fn play_download(&mut self, title: String, subtitle: String, still: MediaSource, progress: f64) -> Result<(), CommandError> {
-        self.start(title, subtitle, still, progress);
+    fn play_download(&mut self, title: String, still: MediaSource, progress: f64) -> Result<(), CommandError> {
+        self.start(title, PlayingNote::Downloaded, still, progress);
         Ok(())
     }
 
@@ -364,7 +361,7 @@ impl erika::Commands for ErikaEngine {
     }
     fn attach_subtitle(&mut self, source: MediaSource) -> Result<(), CommandError> {
         self.state.player.subtitle_file = source.file_name().unwrap_or_default();
-        self.notify(format!("已选择字幕：{}（界面预览）", self.state.player.subtitle_file)); Ok(())
+        self.notify(Notice::SubtitleChosen { file: self.state.player.subtitle_file.clone() }); Ok(())
     }
 
     fn set_accent(&mut self, accent: Accent) -> Result<(), CommandError> {
@@ -384,23 +381,10 @@ impl erika::Engine for ErikaEngine {
     fn initial_modules(&self) -> Option<Vec<String>> { self.saved_modules.clone() }
     fn modules_changed(&mut self, enabled: &[String]) {
         self.saved_modules = Some(enabled.to_vec());
-        if let Err(error) = self.save_welcome_preferences() { self.notify(format!("无法保存设置：{}", error.message)); }
+        if let Err(error) = self.save_welcome_preferences() { self.notify(Notice::SaveFailed { reason: error.message }); }
         self.state.features = settings::feature_selection(enabled);
         self.state.module_count = enabled.len() as i64;
-        self.state.preset_name = if enabled.is_empty() {
-            "纯粹播放"
-        } else if enabled.len() == 8 {
-            "全都要"
-        } else if enabled.len() == 3
-            && ["danmaku", "library", "anime"]
-                .iter()
-                .all(|id| enabled.iter().any(|s| s == id))
-        {
-            "看番"
-        } else {
-            "自己挑"
-        }
-        .into();
+        self.state.preset = settings::preset_of(enabled);
     }
 
     fn state(&self) -> &State {
@@ -418,10 +402,11 @@ mod tests {
         let mut engine = ErikaEngine::default();
         assert_eq!(engine.minimize().unwrap_err().code, "nothing_playing");
         engine
-            .play("葬送的芙莉莲".into(), "第 4 集".into(), still(), 0.35)
+            .play("葬送的芙莉莲".into(), 4, still(), 0.35)
             .unwrap();
         assert!(engine.state.playing && engine.state.expanded);
-        assert_eq!(engine.state.elapsed, "8:29");
+        assert_eq!(engine.state.elapsed.floor(), 8.0 * 60.0 + 29.0);
+        assert_eq!(engine.state.subtitle, PlayingNote::Episode { episode: 4 });
         engine.minimize().unwrap();
         assert!(engine.state.playing && !engine.state.expanded);
         engine.expand().unwrap();
@@ -437,6 +422,6 @@ mod tests {
             .open_file(MediaSource::new("file:///Videos/%E5%BD%B1.mkv"))
             .unwrap();
         assert_eq!(engine.state.title, "影.mkv");
-        assert_eq!(engine.state.subtitle, "本地文件");
+        assert_eq!(engine.state.subtitle, PlayingNote::LocalFile);
     }
 }

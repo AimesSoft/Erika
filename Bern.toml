@@ -7,10 +7,20 @@ id = "erika"
 bundle_id = "com.aimessoft.erika"
 version = "0.1.0"
 name = { "zh-Hans" = "Erika", "en" = "Erika" }
-# A square PNG of 1024 pixels; without it the app uses the Bern logo.
-# icon = "icon.png"
 # Shown by installers and package managers.
 # publisher = "Your Name"
+
+# The application icon of the design (design/brand/erika-icon.html), each
+# platform in its own form as `build.py` exports it; the round icon for
+# anything else.
+[app.icon]
+default = "design/brand/erika-icon-export/png/circle/erika-circle-1024.png"
+macos = "design/brand/erika-icon-export/macos/Erika.icns"
+ios = "design/brand/erika-icon-export/ios/AppIcon.appiconset"
+windows = "design/brand/erika-icon-export/windows/erika.ico"
+linux = "design/brand/erika-icon-export/linux/hicolor"
+android = "design/brand/erika-icon-export/android/res"
+browser = "design/brand/erika-icon-export/web"
 
 [languages]
 supported = ["zh-Hans", "en"]
@@ -97,3 +107,11 @@ path = "modules/remote"
 
 [[modules]]
 path = "modules/downloads"
+
+[contributes]
+# The phone's header row, at the top of each page's scroll, so that it
+# scrolls away with the page as in the design.
+page_header = ["phone_header"]
+# The phone's way back and title over a settings section.
+form_header = ["phone_form_header"]
+scroll_header = ["phone_scroll_header"]

@@ -191,25 +191,51 @@ pub mod erika {
         pub remote: bool,
         pub downloads: bool,
     }
+    /// A settings page that matches a search; its label is the page's.
     #[value]
     pub struct SettingResult {
         pub id: String,
-        pub title: String,
         pub page: SettingsPage,
+    }
+    /// What a plugin declares it may do.
+    #[value]
+    pub enum PluginPermission {
+        #[label(tr! { "zh-Hans" => "网络", "en" => "Network" })]
+        Network,
+        #[label(tr! { "zh-Hans" => "修改弹幕", "en" => "Modify danmaku" })]
+        ModifyDanmaku,
+        #[label(tr! { "zh-Hans" => "需要弹幕模块", "en" => "Needs danmaku" })]
+        NeedsDanmaku,
+        #[label(tr! { "zh-Hans" => "着色器", "en" => "Shaders" })]
+        Shaders,
+        #[label(tr! { "zh-Hans" => "媒体导出", "en" => "Media export" })]
+        MediaExport,
+        #[label(tr! { "zh-Hans" => "写入文件", "en" => "Write files" })]
+        WriteFiles,
+        #[label(tr! { "zh-Hans" => "启动程序", "en" => "Launch programs" })]
+        LaunchPrograms,
+        #[label(tr! { "zh-Hans" => "外观", "en" => "Appearance" })]
+        Appearance,
+        #[label(tr! { "zh-Hans" => "WebView 叠加", "en" => "WebView overlay" })]
+        WebViewOverlay,
     }
     #[value]
     pub struct PluginTag {
         pub id: String,
-        pub label: String,
+        pub permission: PluginPermission,
     }
 
+    /// A plugin as its market lists it, in the words of its author.
     #[value]
     pub struct Plugin {
         pub id: String,
+        #[content]
         pub name: String,
+        #[content]
         pub author: String,
+        #[content]
         pub description: String,
-        pub permissions: String,
+        /// The permissions it declares.
         pub tags: Vec<PluginTag>,
         pub category: PluginCategory,
         pub installed: bool,
@@ -226,10 +252,30 @@ pub mod erika {
         #[label(tr! { "zh-Hans" => "自己挑", "en" => "Custom" })]
         Custom,
     }
+    /// The optional modules, by their names.
+    #[value]
+    pub enum FeatureModule {
+        #[label(tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" })]
+        Danmaku,
+        #[label(tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" })]
+        Enhance,
+        #[label(tr! { "zh-Hans" => "媒体库", "en" => "Library" })]
+        Library,
+        #[label(tr! { "zh-Hans" => "追番", "en" => "Anime" })]
+        Anime,
+        #[label(tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" })]
+        Sync,
+        #[label(tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" })]
+        Sources,
+        #[label(tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" })]
+        Remote,
+        #[label(tr! { "zh-Hans" => "下载", "en" => "Downloads" })]
+        Downloads,
+    }
     #[value]
     pub struct OnboardingModule {
         pub id: String,
-        pub name: String,
+        pub module: FeatureModule,
         pub enabled: bool,
     }
     #[value]
@@ -237,11 +283,75 @@ pub mod erika {
         pub visible: bool,
         pub step: i64,
         pub preview_revision: i64,
+        /// The preset the selection is exactly, or `Custom`.
         pub preset: OnboardingPreset,
         pub features: FeatureSelection,
         pub modules: Vec<OnboardingModule>,
         pub count: i64,
-        pub summary: String,
+    }
+
+    /// What the toast says. The interface's own notices come from its
+    /// buttons; the others carry what they name.
+    #[value]
+    pub enum Notice {
+        #[label(tr! { "zh-Hans" => "界面预览：弹幕匹配尚未接入", "en" => "Preview: danmaku matching isn't connected yet" })]
+        DanmakuMatchPending,
+        #[label(tr! { "zh-Hans" => "界面预览：系统画中画待播放内核接入", "en" => "Preview: picture in picture waits for the playback kernel" })]
+        PictureInPicturePending,
+        #[label(tr! { "zh-Hans" => "界面预览：可使用窗口绿色按钮进入全屏", "en" => "Preview: use the window's green button for full screen" })]
+        FullScreenHint,
+        #[label(tr! { "zh-Hans" => "界面预览：截图保存待播放内核接入", "en" => "Preview: saving screenshots waits for the playback kernel" })]
+        ScreenshotPending,
+        #[label(tr! { "zh-Hans" => "已选择本地弹幕（界面预览）", "en" => "Local danmaku chosen (preview)" })]
+        LocalDanmakuChosen,
+        #[label(tr! { "zh-Hans" => "已挂载本地弹幕文件", "en" => "Local danmaku file mounted" })]
+        LocalDanmakuMounted,
+        #[label(tr! { "zh-Hans" => "当前为界面预览版本", "en" => "This is a preview version" })]
+        PreviewVersion,
+        #[label(tr! { "zh-Hans" => "Erika · Rust / Bern / SwiftUI", "en" => "Erika · Rust / Bern / SwiftUI" })]
+        Licenses,
+        #[label(tr! { "zh-Hans" => "感谢所有开源贡献者与社区支持者", "en" => "Thanks to every open-source contributor and supporter" })]
+        Credits,
+        #[label(tr! { "zh-Hans" => "已同时开启：{module}", "en" => "Also turned on: {module}" })]
+        AlsoOn { module: FeatureModule },
+        #[label(tr! { "zh-Hans" => "已同时关闭：{module}", "en" => "Also turned off: {module}" })]
+        AlsoOff { module: FeatureModule },
+        #[label(tr! { "zh-Hans" => "已同时关闭：{first}、{second}", "en" => "Also turned off: {first} and {second}" })]
+        AlsoOffBoth {
+            first: FeatureModule,
+            second: FeatureModule,
+        },
+        #[label(tr! { "zh-Hans" => "已添加 {name}", "en" => "Added {name}" })]
+        PluginAdded {
+            #[content]
+            name: String,
+        },
+        #[label(tr! { "zh-Hans" => "{name} · 插件设置", "en" => "{name} · Plugin settings" })]
+        PluginSettings {
+            #[content]
+            name: String,
+        },
+        #[label(tr! { "zh-Hans" => "已选择字幕：{file}（界面预览）", "en" => "Subtitles chosen: {file} (preview)" })]
+        SubtitleChosen {
+            #[content]
+            file: String,
+        },
+        #[label(tr! { "zh-Hans" => "无法保存设置：{reason}", "en" => "Couldn't save settings: {reason}" })]
+        SaveFailed {
+            #[content]
+            reason: String,
+        },
+    }
+
+    /// The line under the title of what plays.
+    #[value]
+    pub enum PlayingNote {
+        #[label(tr! { "zh-Hans" => "第 {episode} 集", "en" => "Episode {episode}" })]
+        Episode { episode: i64 },
+        #[label(tr! { "zh-Hans" => "本地文件", "en" => "Local file" })]
+        LocalFile,
+        #[label(tr! { "zh-Hans" => "已下载 · 本地文件", "en" => "Downloaded · Local file" })]
+        Downloaded,
     }
 
     #[value]
@@ -311,7 +421,6 @@ pub mod erika {
         pub episode: i64,
         pub episodes: bool,
         pub subtitle_track: SubtitleTrack,
-        pub subtitle_label: String,
         pub audio_track: AudioTrack,
         pub enhancement: Enhancement,
         pub ratio: PictureRatio,
@@ -323,8 +432,13 @@ pub mod erika {
         pub audio_delay: f64,
         pub skip_intro: bool,
         pub feedback: bool,
+        /// The subtitle shown now, the danmaku the user sent, and the
+        /// subtitle file they attached.
+        #[content]
         pub subtitle_line: String,
+        #[content]
         pub sent_danmaku: String,
+        #[content]
         pub subtitle_file: String,
     }
 
@@ -335,8 +449,9 @@ pub mod erika {
         pub features: FeatureSelection,
         pub module_count: i64,
         pub feature_preview_revision: i64,
-        pub preset_name: String,
-        pub notice: String,
+        /// The preset the enabled modules are exactly, or `Custom`.
+        pub preset: OnboardingPreset,
+        pub notice: Option<Notice>,
         pub notice_revision: i64,
         pub plugins: Vec<Plugin>,
         pub plugin_category: PluginCategory,
@@ -354,14 +469,16 @@ pub mod erika {
         pub paused: bool,
         /// What plays: its title, the episode or "local file", and the
         /// picture the frame shows until the kernel draws the video.
+        #[content]
         pub title: String,
-        pub subtitle: String,
+        pub subtitle: PlayingNote,
         pub still: MediaSource,
-        /// How far it has played, from 0 to 1, and as times.
+        /// How far it has played, from 0 to 1, and as seconds.
         pub progress: f64,
-        pub elapsed: String,
-        pub duration: String,
+        pub elapsed: f64,
+        pub duration: f64,
         /// The account at the foot of the sidebar.
+        #[content]
         pub user_name: String,
     }
 
@@ -387,7 +504,7 @@ pub mod erika {
         fn set_plugin_category(&mut self, category: PluginCategory) -> Result<(), CommandError>;
         fn set_plugin_tab(&mut self, tab: PluginTab) -> Result<(), CommandError>;
         fn use_plugin(&mut self, id: String) -> Result<(), CommandError>;
-        fn show_notice(&mut self, message: String) -> Result<(), CommandError>;
+        fn show_notice(&mut self, notice: Notice) -> Result<(), CommandError>;
         /// Play a file the user opened, picked or dropped.
         fn open_file(&mut self, source: MediaSource) -> Result<(), CommandError>;
 
@@ -396,13 +513,13 @@ pub mod erika {
         fn play(
             &mut self,
             title: String,
-            subtitle: String,
+            episode: i64,
             still: MediaSource,
             progress: f64,
         ) -> Result<(), CommandError>;
 
         #[on(downloads::play)]
-        fn play_download(&mut self, title: String, subtitle: String, still: MediaSource, progress: f64) -> Result<(), CommandError>;
+        fn play_download(&mut self, title: String, still: MediaSource, progress: f64) -> Result<(), CommandError>;
 
         /// Open a library poster using the optional anime details page.
         #[on(library::open_show)]

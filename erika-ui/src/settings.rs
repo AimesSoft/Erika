@@ -24,7 +24,7 @@ pub fn settings(app: erika::Client, #[session] draft: SettingsDraft) -> impl Vie
                     Search(id: settings_search, value: draft.query, prompt: tr! { "zh-Hans" => "搜索设置", "en" => "Search settings" }, shortcut: "cmd+k") {
                         Query(id: settings_results, query: app.find_settings(draft.query), empty: tr! { "zh-Hans" => "没有匹配的设置", "en" => "No matching settings" }) |results| {
                             ForEach(items: results, key: id) |result| {
-                                Button(id: settings_result, label: result.title, prominence: plain) => draft.page.set(result.page)
+                                Button(id: settings_result, label: result.page, prominence: plain) => draft.page.set(result.page)
                             }
                         }
                     }
@@ -84,8 +84,8 @@ pub fn settings(app: erika::Client, #[session] draft: SettingsDraft) -> impl Vie
                     }
                 }
             }
-            if app.notice != "" {
-                Toast(content: app.notice, key: app.notice_revision, duration: 3)
+            if let Some(notice) = app.notice {
+                Toast(content: notice, key: app.notice_revision, duration: 3)
             }
         }
     }
@@ -93,7 +93,8 @@ pub fn settings(app: erika::Client, #[session] draft: SettingsDraft) -> impl Vie
 #[component]
 pub fn settings_general(app: erika::Client) -> impl View {
     ui! {
-        Form(appear: settings_page_in) {
+        Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+            Slot(id: form_header)
             Section(title: tr! { "zh-Hans" => "启动", "en" => "Startup" }) {
                 Picker(id: startup, label: tr! { "zh-Hans" => "启动时打开", "en" => "Open at startup" }, selected: app.preferences.startup, style: menu) => app.set_startup(app.preferences.startup)
                 Picker(id: playback_end, label: tr! { "zh-Hans" => "播放结束后", "en" => "When playback ends" }, selected: app.preferences.playback_end, style: menu) => app.set_playback_end(app.preferences.playback_end)
@@ -111,7 +112,8 @@ pub fn settings_general(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_appearance(app: erika::Client) -> impl View {
     ui! {
-        Form(appear: settings_page_in) {
+        Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+            Slot(id: form_header)
             Section(title: tr! { "zh-Hans" => "主题色", "en" => "Accent color" }) {
                 Row(gap: 12, align: center) {
                     Column(gap: 1) {
@@ -179,7 +181,8 @@ pub fn settings_appearance(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_player(app: erika::Client) -> impl View {
     ui! {
-        Form(appear: settings_page_in) {
+        Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+            Slot(id: form_header)
             Section(title: tr! { "zh-Hans" => "播放", "en" => "Playback" }) {
                 Picker(id: speed, label: tr! { "zh-Hans" => "默认倍速", "en" => "Default speed" }, selected: app.preferences.speed, style: menu) => app.set_speed(app.preferences.speed)
                 Row(gap: 12, align: center) {
@@ -215,7 +218,8 @@ pub fn settings_player(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> impl View {
     ui! {
-        Form(appear: settings_page_in) {
+        Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+            Slot(id: form_header)
             Section(title: tr! { "zh-Hans" => "显示", "en" => "Display" }) {
                 Switch(id: show_danmaku, label: tr! { "zh-Hans" => "显示弹幕", "en" => "Show danmaku" }, checked: app.preferences.show_danmaku, style: switch) => app.set_preference("show_danmaku", app.preferences.show_danmaku)
                 Slider(id: opacity, label: tr! { "zh-Hans" => "不透明度", "en" => "Opacity" }, value: draft.opacity, min: 0, max: 1)
@@ -230,7 +234,7 @@ pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> 
                         Text(content: tr! { "zh-Hans" => "xml / json", "en" => "xml / json" }, style: caption, emphasis: secondary)
                     }
                     Spacer
-                    Button(id: mount_danmaku, label: tr! { "zh-Hans" => "挂载…", "en" => "Mount…" }, pick: draft.danmaku_file, files: ".xml .json") => app.show_notice("已挂载本地弹幕文件")
+                    Button(id: mount_danmaku, label: tr! { "zh-Hans" => "挂载…", "en" => "Mount…" }, pick: draft.danmaku_file, files: ".xml .json") => app.show_notice(Notice::LocalDanmakuMounted)
                 }
             }
         }
@@ -239,7 +243,8 @@ pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> 
 #[component]
 pub fn settings_module_placeholder(app: erika::Client) -> impl View {
     ui! {
-        Form(appear: settings_page_in) {
+        Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+            Slot(id: form_header)
             Section {
                 Row(gap: 12, align: center) {
                     Column(gap: 1) {
@@ -260,7 +265,9 @@ pub fn settings_module_placeholder(app: erika::Client) -> impl View {
 pub fn settings_optional(app: erika::Client) -> impl View {
     ui! {
         Row(gap: 0, align: top) {
-            Form(appear: settings_page_in) {
+            Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+                Slot(id: form_header)
+            Slot(id: form_header)
                 Section(title: tr! { "zh-Hans" => "观看", "en" => "Watching" }, footer: tr! { "zh-Hans" => "决定 Erika 要做多少事。关掉的功能不显示，也不占资源。右边的小窗口会跟着变。", "en" => "Choose what Erika does. Disabled features disappear and use no resources. The preview updates as you go." }) {
                     Row(gap: 12, align: center) {
                         Stack(width: 28, height: 28) {
@@ -405,18 +412,19 @@ pub fn settings_optional(app: erika::Client) -> impl View {
 pub fn settings_preview(app: erika::Client) -> impl View {
     ui! {
         Column(gap: 0, width: 300) {
-            feature_preview_window(features: app.features, revision: app.feature_preview_revision)
+            feature_preview_window(features: app.features, revision: app.feature_preview_revision, wide: false)
             Canvas(height: 10)
             feature_preview_hud(features: app.features)
             Canvas(height: 14)
-            Text(content: tr! { "zh-Hans" => "已开启 {count} 个模块 · {preset}", "en" => "{count} modules enabled · {preset}"; count: app.module_count, preset: app.preset_name }, emphasis: secondary)
+            Text(content: tr! { "zh-Hans" => "已开启 {count} 个模块 · {preset}", "en" => "{count, plural, one {# module} other {# modules}} enabled · {preset}"; count: app.module_count, preset: app.preset }, emphasis: secondary)
         }
     }
 }
 #[component]
 pub fn settings_keys(app: erika::Client) -> impl View {
     ui! {
-        Form(appear: settings_page_in) {
+        Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+            Slot(id: form_header)
             Section(title: tr! { "zh-Hans" => "播放", "en" => "Playback" }) {
                 Row(gap: 12, align: center) {
                     Text(content: tr! { "zh-Hans" => "播放 / 暂停", "en" => "Play / pause" }, style: body)
@@ -464,7 +472,8 @@ pub fn settings_keys(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_about(app: erika::Client) -> impl View {
     ui! {
-        Form(appear: settings_page_in) {
+        Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+            Slot(id: form_header)
             Section {
                 Column(gap: 6, padding_y: 12, align: center) {
                     Row {
@@ -482,17 +491,17 @@ pub fn settings_about(app: erika::Client) -> impl View {
                 Row(gap: 12, align: center) {
                     Text(content: tr! { "zh-Hans" => "检查更新", "en" => "Check for updates" }, style: body)
                     Spacer
-                    Button(id: check_updates, label: tr! { "zh-Hans" => "检查", "en" => "Check" }) => app.show_notice("当前为界面预览版本")
+                    Button(id: check_updates, label: tr! { "zh-Hans" => "检查", "en" => "Check" }) => app.show_notice(Notice::PreviewVersion)
                 }
                 Row(gap: 12, align: center) {
                     Text(content: tr! { "zh-Hans" => "开源许可", "en" => "Open-source licenses" }, style: body)
                     Spacer
-                    Button(id: licenses, label: tr! { "zh-Hans" => "›", "en" => "›" }, prominence: plain) => app.show_notice("Erika · Rust / Bern / SwiftUI")
+                    Button(id: licenses, label: tr! { "zh-Hans" => "›", "en" => "›" }, prominence: plain) => app.show_notice(Notice::Licenses)
                 }
                 Row(gap: 12, align: center) {
                     Text(content: tr! { "zh-Hans" => "致谢", "en" => "Acknowledgements" }, style: body)
                     Spacer
-                    Button(id: credits, label: tr! { "zh-Hans" => "›", "en" => "›" }, prominence: plain) => app.show_notice("感谢所有开源贡献者与社区支持者")
+                    Button(id: credits, label: tr! { "zh-Hans" => "›", "en" => "›" }, prominence: plain) => app.show_notice(Notice::Credits)
                 }
             }
         }
@@ -502,6 +511,8 @@ pub fn settings_about(app: erika::Client) -> impl View {
 pub fn settings_plugins(app: erika::Client) -> impl View {
     ui! {
         ScrollView(appear: settings_page_in) {
+        Column(gap: 0) {
+        Slot(id: scroll_header)
         Column(gap: 0, padding_x: 28, padding_y: 22) {
             Stack(variant: settings_banner, height: 128, align: leading, appearance: dark) {
                 Canvas {
@@ -579,7 +590,7 @@ pub fn settings_plugins(app: erika::Client) -> impl View {
                                 ForEach(items: plugin.tags, key: id) |tag| {
                                     Stack(variant: settings_tag) {
                                         Row(padding_x: 8, padding_y: 2) {
-                                            Text(content: tag.label, style: caption, emphasis: secondary)
+                                            Text(content: tag.permission, style: caption, emphasis: secondary)
                                         }
                                     }
                                 }
@@ -588,6 +599,7 @@ pub fn settings_plugins(app: erika::Client) -> impl View {
                     }
                 }
             }
+        }
         }
         }
     }

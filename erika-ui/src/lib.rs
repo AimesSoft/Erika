@@ -8,9 +8,11 @@ mod player;
 use player::player;
 mod search;
 use search::search_results;
+mod phone;
+use phone::{phone_shell, PhoneSettings};
 
 use bern::prelude::*;
-use erika_anime_protocol::anime;
+use erika_anime_protocol::anime::{self, BackTo};
 use erika_protocol::erika;
 mod onboarding;
 use onboarding::onboarding;
@@ -33,6 +35,8 @@ style! {
         title2: font(size: 28, weight: bold),
         title3: font(size: 19, weight: bold),
         headline: font(size: 14, weight: semibold),
+        // `--t-body`: the words of the pages, 13 points on every device.
+        body: font(size: 13, weight: regular),
         callout: font(size: 16, weight: semibold),
         caption: font(size: 11.5, weight: medium),
         caption2: font(size: 12.5, weight: semibold),
@@ -43,6 +47,8 @@ style! {
     Stack.player_background { background: color(light: "#1C1C1E", dark: "#1C1C1E"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
     Stack.player_panel { background: color(light: "#2C2C2F", dark: "#2C2C2F"), corner: 26 }
     Stack.player_gold { foreground: color(light: "#FFD24A", dark: "#FFD24A") }
+    Stack.player_cyan { foreground: color(light: "#8EE3FF", dark: "#8EE3FF") }
+    Stack.player_pink { foreground: color(light: "#FFB3C7", dark: "#FFB3C7") }
     Button.player_picture { hover: none, pressed: none }
     IconButton.player_primary { size: extra_large, hover: scale(1.08, snappy), pressed: scale(0.84, press), settle: jelly }
     #[target(browser)]
@@ -144,6 +150,60 @@ style! {
         corner: 8,
     }
 
+    // The phone's pages: the design's background (`--bg`), the system's
+    // grouped secondary background in both appearances.
+    Stack.phone_page {}
+    #[target(ios)]
+    Stack.phone_page { background: color(light: "#FFFFFF", dark: "#1C1C1E") }
+
+    // The phone's grouped lists (`.c-list`): the raised card on the page's
+    // own background, as grouped lists stand in iOS's elevated content.
+    #[target(ios)]
+    Form { background: surface.raised }
+
+    // The first run's page (`.o-win`): the design's background on the
+    // phone, which it covers.
+    Stack.onboarding_page {}
+    #[target(ios)]
+    Stack.onboarding_page { background: color(light: "#FFFFFF", dark: "#1C1C1E") }
+
+    // The symbol of a settings row (`.c-li .lic`): 28 points on the neutral
+    // fill, 7-point corners.
+    Stack.setting_icon { background: fill.strong, corner: 7 }
+
+    // A show's tags (`.d-tags span`): pills on the neutral fill.
+    Stack.tag_pill { background: fill.subtle, corner: 999 }
+
+    // The phone's way back (`.x-pback`): the accent, as iOS's.
+    Stack.phone_back { foreground: accent }
+
+    // The phone's header row (`.x-av`): the account, a round button of the
+    // bar's 44 points.
+    Button.phone_avatar {
+        corner: 22,
+        hover: none,
+        pressed: scale(0.92, press),
+        settle: jelly,
+    }
+
+    // The phone's cards (`.ph-cards`): the thumbnail clips its progress to
+    // its 12-point corners.
+    // The phone's main action (`.c-btn.p.L`), across the width.
+    Button.phone_main {
+        pressed: scale(x: 0.97, y: 0.9, press),
+        settle: jelly,
+    }
+
+    Button.phone_card {
+        hover: none,
+        pressed: scale(0.97, press),
+        settle: jelly,
+    }
+
+    Stack.phone_thumb {
+        corner: 12,
+    }
+
     Button.poster {
         corner: 10,
         hover: scale(1.03, snappy) + shadow(14, y: 6, opacity: 0.18),
@@ -201,6 +261,16 @@ style! {
         pressed: none,
         settle: bouncy,
     }
+    // The phone's open day (`.n-vrow.on`): the raised card with its hairline.
+    #[target(ios)]
+    Button.calendar_selected {
+        corner: 22,
+        background: surface.raised,
+        border: border(fill.subtle, width: 0.5),
+        hover: none,
+        pressed: none,
+        settle: bouncy,
+    }
 
     Button.calendar_row {
         corner: 12,
@@ -222,6 +292,9 @@ style! {
 pub enum MainPage {
     #[label(tr! { "zh-Hans" => "播放器", "en" => "Player" })]
     Idle,
+    /// The phone's search tab; the desktop searches from the toolbar.
+    #[label(tr! { "zh-Hans" => "搜索", "en" => "Search" })]
+    Search,
 }
 
 /// Drafts of the main window.
@@ -233,13 +306,16 @@ pub struct ErikaDraft {
     pub query: String,
     /// The video picked or dropped last.
     pub file: MediaSource,
+    /// The phone's settings, pushed over the home page.
+    #[initial(PhoneSettings::Closed)]
+    pub phone_settings: PhoneSettings,
 }
 
 #[component]
 pub fn app(app: erika::Client, anime: anime::Client, windows: AppWindows) -> impl View {
     ui! {
         WindowSet(handle: AppWindows, primary: main, accent: app.accent, appearance: app.appearance) {
-            Window(id: main, title: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, initial: open, width: 1280, height: 800, min_width: 720, min_height: 480, chrome: unified, idle_after: 3, idle_enabled: app.playing && app.expanded && !app.paused && !app.player.panel, immersive: app.playing && app.expanded) {
+            Window(id: main, title: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, initial: open, width: 1280, height: 800, min_width: 720, min_height: 480, chrome: unified, idle_after: 3, idle_enabled: app.playing && app.expanded && !app.paused && !app.player.panel, immersive: app.playing && app.expanded, landscape: app.playing && app.expanded) {
                 main_window(app: app, anime: anime, windows: windows)
             }
             Window(id: settings, title: tr! { "zh-Hans" => "设置", "en" => "Settings" }, width: 1000, height: 660, min_width: 1000, min_height: 660, chrome: standard) {
@@ -280,9 +356,17 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
     ui! {
         Stack {
             Stack(enabled: !app.playing || !app.expanded) {
+            Adaptive(id: shell) {
+            // A phone (design 3.1): the pages are tabs, search the last.
+            Layout(size: compact) {
+                phone_shell(app: app, anime: anime, windows: windows)
+            }
+            Layout(size: expanded) {
             SplitView {
                 Sidebar(id: pages, selection: draft.page) {
-                    SidebarHeader {
+                    // The logo and name; Windows shows both in the title bar
+                    // instead.
+                    SidebarHeader(role: title) {
                         // Match the navigation icon centers and title column.
                         Row(gap: 5, padding_x: 12, align: center) {
                             Image(source: "design/brand/erika-icon-export/png/mono-black/erika-mono-black-128.png", width: 22, height: 22, rendering: template, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
@@ -309,8 +393,8 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
                     Toolbar {
                         // Keep the destination inside the native button so
                         // its toolbar capsule measures and pads the whole label.
-                        if anime.opened > 0 && (anime.back_label == "搜索" || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back_label == "首页") || (draft.page == MainPage::New && anime.opened_from_schedule) || (draft.page == MainPage::Library && anime.back_label == "媒体库")) {
-                            Button(id: back, icon: "chevron.left", label: anime.back_label, shortcut: "escape") => anime.close()
+                        if anime.opened > 0 && (anime.back == BackTo::Search || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back == BackTo::Home) || (draft.page == MainPage::New && anime.opened_from_schedule) || (draft.page == MainPage::Library && anime.back == BackTo::Library)) {
+                            Button(id: back, icon: "chevron.left", label: anime.back, shortcut: "escape") => anime.close()
                         }
                         Spacer
                         Search(id: search, value: draft.query, style: palette, width: 640, height: 480, panel_prompt: tr! { "zh-Hans" => "搜索番剧、剧集、设置和操作", "en" => "Search shows, episodes, settings and actions" }, prompt: tr! { "zh-Hans" => "搜索番剧、文件、设置", "en" => "Search shows, files and settings" }, shortcut: "cmd+k") {
@@ -320,7 +404,7 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
                     }
                     if !app.features.anime && !app.features.library && !app.features.downloads {
                         empty_frame(app: app)
-                    } else if anime.opened > 0 && (anime.back_label == "搜索" || (draft.page == MainPage::Library && anime.back_label == "媒体库")) {
+                    } else if anime.opened > 0 && (anime.back == BackTo::Search || (draft.page == MainPage::Library && anime.back == BackTo::Library)) {
                         details(anime: anime)
                     } else {
                     match draft.page {
@@ -329,6 +413,8 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
                     }
                     }
                 }
+            }
+            }
             }
             }
             if app.playing && app.expanded {
@@ -370,7 +456,7 @@ pub fn mini_player(app: erika::Client) -> impl View {
             Row(gap: 4, align: center) {
                 Column(gap: 2) {
                     Text(content: app.title, style: footnote)
-                    Text(content: tr! { "zh-Hans" => "{subtitle} · {elapsed}", "en" => "{subtitle} · {elapsed}"; subtitle: app.subtitle, elapsed: app.elapsed }, style: caption, emphasis: secondary)
+                    Text(content: tr! { "zh-Hans" => "{subtitle} · {elapsed, duration, mm:ss}", "en" => "{subtitle} · {elapsed, duration, mm:ss}"; subtitle: app.subtitle, elapsed: app.elapsed }, style: caption, emphasis: secondary)
                 }
                 Spacer
                 if app.paused {

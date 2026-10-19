@@ -1,15 +1,5 @@
 //! Onboarding edits a draft; only finishing starts/stops optional modules.
 use super::*;
-const NAMES: [&str; 8] = [
-    "弹幕",
-    "画质增强",
-    "媒体库",
-    "追番",
-    "账号同步",
-    "网络媒体源",
-    "局域网与远程",
-    "下载",
-];
 const ANIME: [&str; 3] = ["danmaku", "library", "anime"];
 pub fn initial() -> Onboarding {
     let mut draft = Onboarding {
@@ -20,15 +10,13 @@ pub fn initial() -> Onboarding {
         features: settings::feature_selection(&ANIME.map(String::from)),
         modules: settings::ALL_MODULES
             .into_iter()
-            .zip(NAMES)
-            .map(|(id, name)| OnboardingModule {
+            .map(|id| OnboardingModule {
                 id: id.into(),
-                name: name.into(),
+                module: settings::feature_module(id),
                 enabled: ANIME.contains(&id),
             })
             .collect(),
         count: 3,
-        summary: String::new(),
     };
     refresh(&mut draft);
     draft
@@ -42,24 +30,7 @@ fn refresh(draft: &mut Onboarding) {
         .collect();
     draft.features = settings::feature_selection(&enabled);
     draft.count = enabled.len() as i64;
-    let name = if enabled.is_empty() {
-        draft.preset = OnboardingPreset::Pure;
-        "纯粹播放"
-    } else if enabled.len() == 8 {
-        draft.preset = OnboardingPreset::All;
-        "全都要"
-    } else if enabled.len() == 3 && ANIME.iter().all(|id| enabled.iter().any(|m| m == id)) {
-        draft.preset = OnboardingPreset::Anime;
-        "看番"
-    } else {
-        draft.preset = OnboardingPreset::Custom;
-        ""
-    };
-    draft.summary = if name.is_empty() {
-        format!("已开启 {} 个模块", draft.count)
-    } else {
-        format!("已开启 {} 个模块 · 正好是「{}」", draft.count, name)
-    };
+    draft.preset = settings::preset_of(&enabled);
 }
 impl ErikaEngine {
     pub(crate) fn select_onboarding_preset(&mut self, preset: OnboardingPreset) {

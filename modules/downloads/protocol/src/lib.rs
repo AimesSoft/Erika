@@ -11,11 +11,24 @@ pub mod downloads {
         #[label(tr! { "zh-Hans" => "已完成", "en" => "Completed" })]
         Completed,
     }
+    /// How large a download is, once known.
+    #[value]
+    pub enum DataSize {
+        #[label(tr! { "zh-Hans" => "—", "en" => "—" })]
+        Unknown,
+        #[label(tr! { "zh-Hans" => "{megabytes} MB", "en" => "{megabytes} MB" })]
+        Megabytes { megabytes: f64 },
+        #[label(tr! { "zh-Hans" => "{gigabytes} GB", "en" => "{gigabytes} GB" })]
+        Gigabytes { gigabytes: f64 },
+    }
     #[value]
     pub struct DownloadTask {
         pub id: i64,
+        /// The file's name; empty while its metadata is being fetched.
+        #[content]
         pub title: String,
-        pub size: String,
+        pub fetching: bool,
+        pub size: DataSize,
         pub progress: f64,
         pub speed: f64,
         pub running: bool,
@@ -31,12 +44,14 @@ pub mod downloads {
         pub active_count: i64,
         pub completed_count: i64,
         pub running: bool,
-        pub notice: String,
+        /// The download finished last, and a number that changes with each.
+        #[content]
+        pub finished: String,
         pub notice_revision: i64,
     }
     #[events]
     pub trait Events {
-        fn play(&self, title: String, subtitle: String, still: MediaSource, progress: f64);
+        fn play(&self, title: String, still: MediaSource, progress: f64);
     }
     #[commands]
     pub trait Commands {

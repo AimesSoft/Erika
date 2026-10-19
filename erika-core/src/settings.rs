@@ -13,6 +13,36 @@ pub const ALL_MODULES: [&str; 8] = [
     "downloads",
 ];
 
+/// The module `id` names, by its label.
+pub fn feature_module(id: &str) -> FeatureModule {
+    match id {
+        "danmaku" => FeatureModule::Danmaku,
+        "enhance" => FeatureModule::Enhance,
+        "library" => FeatureModule::Library,
+        "anime" => FeatureModule::Anime,
+        "sync" => FeatureModule::Sync,
+        "sources" => FeatureModule::Sources,
+        "remote" => FeatureModule::Remote,
+        _ => FeatureModule::Downloads,
+    }
+}
+
+/// The preset the enabled modules are exactly, or `Custom`.
+pub fn preset_of(enabled: &[String]) -> OnboardingPreset {
+    const ANIME: [&str; 3] = ["danmaku", "library", "anime"];
+    if enabled.is_empty() {
+        OnboardingPreset::Pure
+    } else if enabled.len() == ALL_MODULES.len() {
+        OnboardingPreset::All
+    } else if enabled.len() == ANIME.len()
+        && ANIME.iter().all(|id| enabled.iter().any(|m| m == id))
+    {
+        OnboardingPreset::Anime
+    } else {
+        OnboardingPreset::Custom
+    }
+}
+
 pub fn default_preferences() -> Preferences {
     Preferences {
         auto_updates: true,
@@ -45,13 +75,12 @@ pub fn feature_selection(enabled: &[String]) -> FeatureSelection {
         downloads: enabled.iter().any(|id| id == "downloads"),
     }
 }
-fn plugin_tags(permissions: &str) -> Vec<PluginTag> {
+fn plugin_tags(permissions: &[PluginPermission]) -> Vec<PluginTag> {
     permissions
-        .split(" · ")
-        .filter(|label| !label.is_empty())
-        .map(|label| PluginTag {
-            id: label.into(),
-            label: label.into(),
+        .iter()
+        .map(|permission| PluginTag {
+            id: format!("{permission:?}"),
+            permission: permission.clone(),
         })
         .collect()
 }
@@ -63,8 +92,7 @@ pub fn sample_plugins() -> Vec<Plugin> {
             name: "防剧透".into(),
             author: "Erika 官方".into(),
             description: "用你配置的 AI 接口识别并遮挡剧透弹幕".into(),
-            permissions: "网络 · 修改弹幕 · 需要弹幕模块".into(),
-            tags: plugin_tags("网络 · 修改弹幕 · 需要弹幕模块"),
+            tags: plugin_tags(&[PluginPermission::Network, PluginPermission::ModifyDanmaku, PluginPermission::NeedsDanmaku]),
             category: PluginCategory::Danmaku,
             installed: false,
         },
@@ -73,8 +101,7 @@ pub fn sample_plugins() -> Vec<Plugin> {
             name: "正则弹幕过滤".into(),
             author: "Erika 官方".into(),
             description: "用正则表达式屏蔽弹幕".into(),
-            permissions: "修改弹幕".into(),
-            tags: plugin_tags("修改弹幕"),
+            tags: plugin_tags(&[PluginPermission::ModifyDanmaku]),
             category: PluginCategory::Danmaku,
             installed: true,
         },
@@ -83,8 +110,7 @@ pub fn sample_plugins() -> Vec<Plugin> {
             name: "敏感词屏蔽".into(),
             author: "Erika 官方".into(),
             description: "内置中文敏感词词库，一键屏蔽".into(),
-            permissions: "修改弹幕".into(),
-            tags: plugin_tags("修改弹幕"),
+            tags: plugin_tags(&[PluginPermission::ModifyDanmaku]),
             category: PluginCategory::Danmaku,
             installed: true,
         },
@@ -93,8 +119,7 @@ pub fn sample_plugins() -> Vec<Plugin> {
             name: "复古 CRT".into(),
             author: "社区 · shaderlab".into(),
             description: "扫描线与荧光屏质感的着色器".into(),
-            permissions: "着色器".into(),
-            tags: plugin_tags("着色器"),
+            tags: plugin_tags(&[PluginPermission::Shaders]),
             category: PluginCategory::Picture,
             installed: false,
         },
@@ -103,8 +128,7 @@ pub fn sample_plugins() -> Vec<Plugin> {
             name: "片段导出".into(),
             author: "Erika 官方".into(),
             description: "把精彩片段导出为 GIF 或 MP4".into(),
-            permissions: "媒体导出 · 写入文件".into(),
-            tags: plugin_tags("媒体导出 · 写入文件"),
+            tags: plugin_tags(&[PluginPermission::MediaExport, PluginPermission::WriteFiles]),
             category: PluginCategory::Tools,
             installed: false,
         },
@@ -113,8 +137,7 @@ pub fn sample_plugins() -> Vec<Plugin> {
             name: "外部播放器".into(),
             author: "社区 · ext-player".into(),
             description: "用 mpv、PotPlayer 或 IINA 打开当前视频".into(),
-            permissions: "启动程序".into(),
-            tags: plugin_tags("启动程序"),
+            tags: plugin_tags(&[PluginPermission::LaunchPrograms]),
             category: PluginCategory::Tools,
             installed: false,
         },
@@ -123,8 +146,7 @@ pub fn sample_plugins() -> Vec<Plugin> {
             name: "界面音效包".into(),
             author: "Erika 官方".into(),
             description: "给按钮和转场配上轻快的音效".into(),
-            permissions: "".into(),
-            tags: plugin_tags(""),
+            tags: plugin_tags(&[]),
             category: PluginCategory::Appearance,
             installed: true,
         },
@@ -133,8 +155,7 @@ pub fn sample_plugins() -> Vec<Plugin> {
             name: "主题与壁纸".into(),
             author: "社区 · mochi".into(),
             description: "自定义背景图与配色方案".into(),
-            permissions: "外观".into(),
-            tags: plugin_tags("外观"),
+            tags: plugin_tags(&[PluginPermission::Appearance]),
             category: PluginCategory::Appearance,
             installed: false,
         },
@@ -143,16 +164,15 @@ pub fn sample_plugins() -> Vec<Plugin> {
             name: "Titan 弹幕".into(),
             author: "社区 · titan".into(),
             description: "用 WebView 渲染的高级弹幕特效".into(),
-            permissions: "WebView 叠加".into(),
-            tags: plugin_tags("WebView 叠加"),
+            tags: plugin_tags(&[PluginPermission::WebViewOverlay]),
             category: PluginCategory::Danmaku,
             installed: false,
         },
     ]
 }
 impl ErikaEngine {
-    pub(crate) fn notify(&mut self, text: String) {
-        self.state.notice = text;
+    pub(crate) fn notify(&mut self, notice: Notice) {
+        self.state.notice = Some(notice);
         self.state.notice_revision += 1;
     }
     pub(crate) fn filter_plugins(&mut self) {
@@ -247,9 +267,8 @@ impl erika::Queries for ErikaEngine {
             .filter(|(_, name, keywords, enabled)| {
                 *enabled && (name.contains(&text) || keywords.contains(&text))
             })
-            .map(|(page, name, _, _)| SettingResult {
+            .map(|(page, _, _, _)| SettingResult {
                 id: format!("{page:?}"),
-                title: name.into(),
                 page,
             })
             .collect());
@@ -266,10 +285,10 @@ mod tests {
         let mut engine = ErikaEngine::default();
         engine.modules_changed(&[]);
         assert_eq!(engine.state.module_count, 0);
-        assert_eq!(engine.state.preset_name, "纯粹播放");
+        assert_eq!(engine.state.preset, OnboardingPreset::Pure);
         assert!(!engine.state.features.library);
         engine.modules_changed(&["danmaku".into(), "library".into(), "anime".into()]);
-        assert_eq!(engine.state.preset_name, "看番");
+        assert_eq!(engine.state.preset, OnboardingPreset::Anime);
         assert!(engine.state.features.anime && engine.state.features.library);
         assert!(!engine.state.features.sources);
         assert!(engine.set_module("missing".into(), true).is_err());

@@ -14,7 +14,7 @@
 | `logo/` | **对外展示的主 logo**：`erika-logo-icon.svg` 和 64–2048 的 PNG。圆形，发饰六边形不裁切、完整超出圆，背景透明；画板四周各放宽 16，圆仍居中。同一个文件也复制到了 `design/brand/erika-icon.svg`。带出场动画的版本 `erika-logo-icon-animated.svg`（同 `design/brand/erika-icon-animated.svg`）：纯 CSS，放进 `<img>` 和 README 都会播，约 2.3 秒后停在最后一帧。出场之后双击会随机做一个小动作（wink、摸头、绘梨花的坏笑），这部分靠 SVG 里的脚本，要用 `<object>` 嵌入或直接打开才有 |
 | `svg/` | `erika-circle.svg`（按圆裁切）、`erika-square.svg`（铺满正方形）、`erika-mono-black.svg` / `erika-mono-white.svg`（无背景纯黑、纯白）、`erika-foreground.svg`（去掉头发的前景）、`erika-background.svg`（纯色背景） |
 | `png/` | 上面五种各出 16、24、32、48、64、128、256、512、1024 像素 |
-| `macos/` | `Erika.icns`（正方形版放进 824 连续圆角底板，带投影）、`Erika.iconset/`、`erika-macos.svg`、1024 预览图 |
+| `macos/` | `Erika.icns`（正方形版放进苹果模板的底板：824 方块、圆角 185.4 的连续圆角矩形，和系统 `RoundedRectangle(style: .continuous)` 同一条路径，带投影。macOS 26 起底板必须是这个形状才按原样显示，原先的超椭圆底板会被系统放进灰色底板）、`Erika.iconset/`、`erika-macos.svg`、1024 预览图 |
 | `windows/` | `erika.ico`（圆形版，16–256 共 7 个尺寸） |
 | `linux/hicolor/` | 按 hicolor 主题目录放好的 16–512 PNG、`scalable/apps/erika.svg`、单色 `symbolic/apps/erika-symbolic.svg` |
 | `ios/AppIcon.appiconset/` | `AppIcon.png`（1024 不透明正方形）、`AppIcon-tinted.png`（着色版）、`Contents.json`，直接拖进 Xcode 的 Assets |

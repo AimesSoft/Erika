@@ -2,10 +2,12 @@
 //! design's sample data; asking to play only tells the shell's player.
 
 use bern::CommandError;
+use bern::date::CalendarDate;
 use bern::media::MediaSource;
 use bern::resources::Resources;
 use erika_anime_protocol::anime::{
-    self, Airing, Broadcast, BroadcastDay, Episode, Hour, Show, State, Tag, Watching,
+    self, Airing, BackTo, Broadcast, BroadcastDay, Episode, EpisodeNote, EpisodeTitle, Hour,
+    NextAction, Show, State, Tag, WatchStatus, Watching,
 };
 
 /// The sample shows of the design: id, title, poster, episodes, watched,
@@ -88,44 +90,48 @@ const WATCHING: &[(i64, i64, f64, i64)] = &[
 
 /// Today's shows and when they air, in hours after midnight of today; the
 /// small hours count past 24.
-const AIRING: &[(i64, &str, f64)] = &[
-    (13, "18:30", 18.5),
-    (14, "19:45", 19.75),
-    (15, "21:00", 21.0),
-    (16, "22:15", 22.25),
-    (9, "23:30", 23.5),
-    (12, "00:30", 24.5),
-    (2, "01:30", 25.5),
+const AIRING: &[(i64, f64)] = &[
+    (13, 18.5),
+    (14, 19.75),
+    (15, 21.0),
+    (16, 22.25),
+    (9, 23.5),
+    (12, 24.5),
+    (2, 25.5),
 ];
 
 /// "Now" on the timeline: 22:40.
 const NOW: f64 = 22.0 + 40.0 / 60.0;
 
+/// Seconds after midnight of an hour of the timeline, the small hours
+/// back on the clock.
+fn clock_time(hour: f64) -> i64 {
+    (hour * 3600.0).round() as i64 % 86_400
+}
+
 /// Keep the visual fixture identical to `design/next-core.js`: Monday,
 /// October 12, at 22:40. It is deliberately not the computer's live date.
+const TODAY: (i64, i64, i64) = (2026, 10, 12);
+
 fn week() -> Vec<BroadcastDay> {
-    let days = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
     let counts = [7, 5, 6, 4, 6, 8, 7];
-    let times = [
-        "18:00", "19:30", "21:00", "22:00", "23:00", "23:30", "00:30", "01:05",
-    ];
-    days.iter()
-        .enumerate()
-        .map(|(day, name)| {
+    let hours = [18.0, 19.5, 21.0, 22.0, 23.0, 23.5, 24.5, 25.0 + 5.0 / 60.0];
+    (0..7)
+        .map(|day| {
             let shows: Vec<_> = (0..counts[day])
                 .map(|index| {
-                    let (id, time, aired) = if day == 0 {
-                        let (id, time, hour) = AIRING[index];
-                        (id, time, hour <= NOW)
+                    let (id, hour, aired) = if day == 0 {
+                        let (id, hour) = AIRING[index];
+                        (id, hour, hour <= NOW)
                     } else {
-                        (((day * 5 + index * 3) % 16 + 1) as i64, times[index], false)
+                        (((day * 5 + index * 3) % 16 + 1) as i64, hours[index], false)
                     };
                     let show = show(id).expect("calendar shows are sample shows");
                     Broadcast {
                         id,
                         title: show.title,
                         poster: show.poster,
-                        time: time.into(),
+                        time: clock_time(hour),
                         episode: (show.watched + 1).max(1),
                         aired,
                         tonight: day == 0,
@@ -134,7 +140,7 @@ fn week() -> Vec<BroadcastDay> {
                 .collect();
             BroadcastDay {
                 id: day as i64,
-                name: (*name).into(),
+                date: CalendarDate::new(TODAY.0, TODAY.1, TODAY.2 + day as i64),
                 count: shows.len() as i64,
                 today: day == 0,
                 tomorrow: day == 1,
@@ -170,16 +176,9 @@ fn show(id: i64) -> Option<Show> {
         poster: poster(number),
         episodes,
         watched,
-        rating: if rating > 0.0 {
-            format!("★ {rating}")
-        } else {
-            String::new()
-        },
-        kind: if matches!(id, 4 | 8 | 11) {
-            "剧场版 · 2026 年".into()
-        } else {
-            format!("TV 动画 · 2026 年 1 月 · 共 {episodes} 话")
-        },
+        rating,
+        movie: matches!(id, 4 | 8 | 11),
+        premiere: CalendarDate::new(2026, 1, 1),
         tags: tags
             .iter()
             .map(|tag| Tag {
@@ -187,15 +186,15 @@ fn show(id: i64) -> Option<Show> {
             })
             .collect(),
         summary: SUMMARY.into(),
-        status: status(watched, episodes).into(),
+        status: status(watched, episodes),
     })
 }
 
-fn status(watched: i64, episodes: i64) -> &'static str {
+fn status(watched: i64, episodes: i64) -> WatchStatus {
     match watched {
-        0 => "想看",
-        watched if watched >= episodes => "看过",
-        _ => "在看",
+        0 => WatchStatus::Want,
+        watched if watched >= episodes => WatchStatus::Watched,
+        _ => WatchStatus::Watching,
     }
 }
 
@@ -206,19 +205,19 @@ fn watching(&(id, episode, progress, left): &(i64, i64, f64, i64)) -> Watching {
         title: show.title,
         still: show.poster,
         episode,
-        episode_label: format!("第 {episode} 集"),
-        left: format!("剩 {left} 分钟"),
+        left,
         progress,
     }
 }
 
-/// The timeline spans 18:00 to 02:00 (hour 26), eight hours over 992
-/// points that start 8 points before the page's column of 976.
+/// The timeline spans 18:00 to 02:00 (hour 26): where an hour stands, as
+/// a fraction of those eight hours. How far the track runs past the page
+/// is the page's to lay out.
 const FIRST_HOUR: f64 = 18.0;
 const HOURS: f64 = 8.0;
 
 fn timeline(hour: f64) -> f64 {
-    (-8.0 + (hour - FIRST_HOUR) / HOURS * 992.0) / 976.0
+    (hour - FIRST_HOUR) / HOURS
 }
 
 fn hours() -> Vec<Hour> {
@@ -226,7 +225,7 @@ fn hours() -> Vec<Hour> {
         .map(|step| {
             let hour = FIRST_HOUR as i64 + step;
             Hour {
-                label: format!("{:02}:00", hour % 24),
+                time: clock_time(hour as f64),
                 at: timeline(hour as f64),
             }
         })
@@ -244,16 +243,16 @@ fn episodes(show: &Show) -> Vec<Episode> {
             Episode {
                 number,
                 title: match (current, show.watched) {
-                    (true, 0) => format!("第 {number} 话 · 开始"),
-                    (true, _) => format!("第 {number} 话 · 继续"),
-                    _ => format!("第 {number} 话"),
+                    (true, 0) => EpisodeTitle::Start { number },
+                    (true, _) => EpisodeTitle::Continue { number },
+                    _ => EpisodeTitle::Plain { number },
                 },
                 note: if watched {
-                    "已看".into()
+                    EpisodeNote::Watched
                 } else if current && show.watched > 0 {
-                    "剩 16 分钟".into()
+                    EpisodeNote::Left { minutes: 16 }
                 } else {
-                    "24 分钟".into()
+                    EpisodeNote::Length { minutes: 24 }
                 },
                 pictured: watched || current,
                 still: show.poster.clone(),
@@ -278,40 +277,40 @@ impl Default for AnimeEngine {
     fn default() -> Self {
         let mut watching = WATCHING.iter().map(watching);
         let stage = watching.next().expect("someone is watching");
-        let aired = AIRING.iter().filter(|(_, _, hour)| *hour <= NOW).count();
+        let aired = AIRING.iter().filter(|(_, hour)| *hour <= NOW).count();
         Self {
             state: State {
-                today: "周一 · 10 月 12 日".into(),
+                today: CalendarDate::new(TODAY.0, TODAY.1, TODAY.2),
                 stage,
                 also: watching.collect(),
                 airing: AIRING
                     .iter()
-                    .map(|&(id, time, hour)| {
+                    .map(|&(id, hour)| {
                         let show = show(id).expect("airing shows are sample shows");
-                        let when = if hour <= NOW { "已更新" } else { "稍后" };
                         Airing {
                             id,
                             title: show.title,
                             poster: show.poster,
-                            time: format!("{time} · {when}"),
+                            time: clock_time(hour),
+                            aired: hour <= NOW,
                             at: timeline(hour),
                         }
                     })
                     .collect(),
                 hours: hours(),
                 now_at: timeline(NOW),
-                now_label: "现在 22:40".into(),
-                airing_summary: format!("已更新 {aired} 部 · 今晚还有 {} 部", AIRING.len() - aired),
+                now: clock_time(NOW),
+                aired_count: aired as i64,
+                later_count: (AIRING.len() - aired) as i64,
                 week: week(),
                 selected_day: 0,
                 opened_from_schedule: false,
                 opened: 0,
                 show: show(100).expect("the stage's show is a sample show"),
                 episodes: Vec::new(),
-                progress_label: String::new(),
                 next_episode: 1,
-                next_label: String::new(),
-                back_label: "首页".into(),
+                next: NextAction::Start,
+                back: BackTo::Home,
             },
         }
     }
@@ -332,7 +331,7 @@ impl AnimeEngine {
 impl anime::Commands for AnimeEngine {
     fn open_from_search(&mut self, id: i64) -> Result<(), CommandError> {
         self.open(id)?;
-        self.state.back_label = "搜索".into();
+        self.state.back = BackTo::Search;
         Ok(())
     }
 
@@ -340,7 +339,7 @@ impl anime::Commands for AnimeEngine {
         let show = self.find(id)?;
         anime::emit::play(
             show.title,
-            format!("第 {} 话", (show.watched + 1).min(show.episodes)),
+            (show.watched + 1).min(show.episodes),
             show.poster,
             0.0,
         );
@@ -349,15 +348,14 @@ impl anime::Commands for AnimeEngine {
     fn open(&mut self, id: i64) -> Result<(), CommandError> {
         let show = self.find(id)?;
         self.state.opened_from_schedule = false;
-        self.state.back_label = "首页".into();
-        let next = (show.watched + 1).min(show.episodes);
+        self.state.back = BackTo::Home;
         self.state.episodes = episodes(&show);
-        self.state.progress_label = format!("共 {} 话 · 看到第 {} 话", show.episodes, show.watched);
+        let next = (show.watched + 1).min(show.episodes);
         self.state.next_episode = next;
-        self.state.next_label = if show.watched == 0 {
-            "开始观看".into()
+        self.state.next = if show.watched == 0 {
+            NextAction::Start
         } else {
-            format!("继续 第 {next} 话")
+            NextAction::Continue { episode: next }
         };
         self.state.opened = id;
         self.state.show = show;
@@ -378,13 +376,13 @@ impl anime::Commands for AnimeEngine {
     fn open_scheduled(&mut self, id: i64) -> Result<(), CommandError> {
         self.open(id)?;
         self.state.opened_from_schedule = true;
-        self.state.back_label = "新番".into();
+        self.state.back = BackTo::Schedule;
         Ok(())
     }
 
     fn open_from_library(&mut self, id: i64) -> Result<(), CommandError> {
         self.open(id)?;
-        self.state.back_label = "媒体库".into();
+        self.state.back = BackTo::Library;
         Ok(())
     }
 
@@ -412,20 +410,20 @@ impl anime::Commands for AnimeEngine {
         })?;
         anime::emit::play(
             watching.title.clone(),
-            watching.episode_label.clone(),
+            watching.episode,
             watching.still.clone(),
             watching.progress,
         );
         Ok(())
     }
 
-    fn set_status(&mut self, status: String) -> Result<(), CommandError> {
+    fn set_status(&mut self, status: WatchStatus) -> Result<(), CommandError> {
         self.state.show.status = status;
         Ok(())
     }
 
     fn rate(&mut self, score: i64) -> Result<(), CommandError> {
-        self.state.show.rating = format!("★ {}", score.clamp(1, 10));
+        self.state.show.rating = score.clamp(1, 10) as f64;
         Ok(())
     }
 
@@ -438,7 +436,7 @@ impl anime::Commands for AnimeEngine {
             .ok_or_else(|| CommandError::new("unknown_episode", format!("no episode {number}")))?;
         anime::emit::play(
             self.state.show.title.clone(),
-            format!("第 {number} 集"),
+            number,
             episode.still.clone(),
             0.0,
         );
@@ -497,7 +495,7 @@ mod tests {
         }
         let monday = &engine.state.week[0].shows;
         assert_eq!(monday.iter().filter(|show| show.aired).count(), 4);
-        assert_eq!(monday[5].time, "00:30");
+        assert_eq!(monday[5].time, 30 * 60);
         assert!(!monday[5].aired && monday[5].tonight);
         assert!(
             engine.state.week[1..]
@@ -519,8 +517,8 @@ mod tests {
         engine.select_day(5).unwrap();
         engine.open_scheduled(11).unwrap();
         assert!(engine.state.opened_from_schedule);
-        assert_eq!(engine.state.back_label, "新番");
-        assert_eq!(engine.state.show.kind, "剧场版 · 2026 年");
+        assert_eq!(engine.state.back, BackTo::Schedule);
+        assert!(engine.state.show.movie);
         engine.close().unwrap();
         assert_eq!(engine.state.opened, 0);
         assert_eq!(engine.state.selected_day, 5);
@@ -530,7 +528,7 @@ mod tests {
         }
         engine.open(7).unwrap();
         assert!(!engine.state.opened_from_schedule);
-        assert_eq!(engine.state.back_label, "首页");
+        assert_eq!(engine.state.back, BackTo::Home);
         assert_eq!(engine.open_scheduled(99).unwrap_err().code, "unknown_show");
         assert!(!engine.state.opened_from_schedule);
         assert_eq!(engine.state.opened, 7);
@@ -541,7 +539,8 @@ mod tests {
         let mut engine = AnimeEngine::default();
         engine.open(7).unwrap();
         assert_eq!(engine.state.opened, 7);
-        assert_eq!(engine.state.next_label, "继续 第 4 话");
+        assert_eq!(engine.state.next_episode, 4);
+        assert_eq!(engine.state.episodes[3].title, EpisodeTitle::Continue { number: 4 });
         assert_eq!(engine.state.episodes.len(), 10);
         assert!(engine.state.episodes[3].next);
         engine.close().unwrap();
@@ -559,7 +558,8 @@ mod tests {
             .filter(|show| show.at < engine.state.now_at)
             .collect();
         assert_eq!(aired.len(), 4);
-        assert_eq!(engine.state.airing_summary, "已更新 4 部 · 今晚还有 3 部");
+        assert_eq!((engine.state.aired_count, engine.state.later_count), (4, 3));
+        assert_eq!(engine.state.now, 22 * 3600 + 40 * 60);
     }
 
     #[test]
@@ -599,7 +599,7 @@ fn search_catalog(text: &str) -> anime::SearchResults {
         .map(|s| anime::SearchEpisode {
             id: s.id,
             title: s.title.clone(),
-            episode: format!("第 {} 话", s.watched + 1),
+            episode: s.watched + 1,
         })
         .collect();
     anime::SearchResults {
@@ -627,7 +627,7 @@ mod search_tests {
         );
         let frieren = search_catalog("  葬送  ");
         assert_eq!(frieren.shows[0].id, 7);
-        assert_eq!(frieren.continuing[0].episode, "第 4 话");
+        assert_eq!(frieren.continuing[0].episode, 4);
         assert_eq!(search_catalog("H").shows.len(), 2);
         assert_eq!(search_catalog("fate").shows[0].id, 9);
         assert!(!search_catalog("没有这个番剧").has_shows);
@@ -640,11 +640,11 @@ mod search_tests {
             engine.open_from_library(id).unwrap();
             assert_eq!(engine.state.show.id, id);
             assert_eq!(engine.state.show.episodes, 1);
-            assert_eq!(engine.state.back_label, "媒体库");
+            assert_eq!(engine.state.back, BackTo::Library);
             assert!(!engine.state.opened_from_schedule);
         }
         engine.open(1).unwrap();
-        assert_eq!(engine.state.back_label, "首页");
+        assert_eq!(engine.state.back, BackTo::Home);
     }
 
 }
