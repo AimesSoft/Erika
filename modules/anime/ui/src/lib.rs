@@ -193,7 +193,7 @@ pub fn timeline(anime: anime::Client) -> impl View {
                 Text(content: tr! { "zh-Hans" => "今日更新", "en" => "Airing today" }, style: title3)
                 Text(content: tr! { "zh-Hans" => "已更新 {aired} 部 · 今晚还有 {later} 部", "en" => "{aired} aired · {later} more tonight"; aired: anime.aired_count, later: anime.later_count }, emphasis: secondary)
                 Spacer
-                Button(id: schedule, label: tr! { "zh-Hans" => "新番表 ›", "en" => "Schedule ›" }, prominence: plain) => pages.new.show()
+                Button(id: schedule, label: tr! { "zh-Hans" => "新番表 ›", "en" => "Schedule ›" }, prominence: plain, variant: more_link) => pages.new.show()
             }
             Canvas(height: 12)
             timeline_track(anime: anime)

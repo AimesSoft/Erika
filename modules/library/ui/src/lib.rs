@@ -266,12 +266,12 @@ pub fn library_zoom(#[session] draft: LibraryDraft) -> impl View {
                 }
             }
         } else {
-            Row(gap: 16, width: 188, align: center) {
-                IconButton(id: smaller, icon: "square.grid.3x3", label: tr! { "zh-Hans" => "缩小海报", "en" => "Smaller posters" }, prominence: plain, shortcut: "cmd+-") => draft.poster_size.set(if draft.poster_size > 188.0 { 188.0 } else if draft.poster_size > 176.0 { 176.0 } else if draft.poster_size > 164.0 { 164.0 } else if draft.poster_size > 152.0 { 152.0 } else if draft.poster_size > 140.0 { 140.0 } else if draft.poster_size > 128.0 { 128.0 } else if draft.poster_size > 116.0 { 116.0 } else if draft.poster_size > 104.0 { 104.0 } else if draft.poster_size > 92.0 { 92.0 } else { 84.0 })
-                Row(width: 120) {
+            Row(variant: zoom_row, align: center) {
+                IconButton(id: smaller, icon: "square.grid.3x3", label: tr! { "zh-Hans" => "缩小海报", "en" => "Smaller posters" }, prominence: plain, variant: zoom_smaller, shortcut: "cmd+-") => draft.poster_size.set(if draft.poster_size > 188.0 { 188.0 } else if draft.poster_size > 176.0 { 176.0 } else if draft.poster_size > 164.0 { 164.0 } else if draft.poster_size > 152.0 { 152.0 } else if draft.poster_size > 140.0 { 140.0 } else if draft.poster_size > 128.0 { 128.0 } else if draft.poster_size > 116.0 { 116.0 } else if draft.poster_size > 104.0 { 104.0 } else if draft.poster_size > 92.0 { 92.0 } else { 84.0 })
+                Row(variant: zoom_slider) {
                     Slider(id: poster_size, label: tr! { "zh-Hans" => "海报大小", "en" => "Poster size" }, value: draft.poster_size, min: 84, max: 200, label_hidden: true)
                 }
-                IconButton(id: larger, icon: "square.grid.2x2", label: tr! { "zh-Hans" => "放大海报", "en" => "Larger posters" }, prominence: plain, shortcut: "cmd+=") => draft.poster_size.set(if draft.poster_size < 96.0 { 96.0 } else if draft.poster_size < 108.0 { 108.0 } else if draft.poster_size < 120.0 { 120.0 } else if draft.poster_size < 132.0 { 132.0 } else if draft.poster_size < 144.0 { 144.0 } else if draft.poster_size < 156.0 { 156.0 } else if draft.poster_size < 168.0 { 168.0 } else if draft.poster_size < 180.0 { 180.0 } else if draft.poster_size < 192.0 { 192.0 } else { 200.0 })
+                IconButton(id: larger, icon: "square.grid.2x2", label: tr! { "zh-Hans" => "放大海报", "en" => "Larger posters" }, prominence: plain, variant: zoom_larger, shortcut: "cmd+=") => draft.poster_size.set(if draft.poster_size < 96.0 { 96.0 } else if draft.poster_size < 108.0 { 108.0 } else if draft.poster_size < 120.0 { 120.0 } else if draft.poster_size < 132.0 { 132.0 } else if draft.poster_size < 144.0 { 144.0 } else if draft.poster_size < 156.0 { 156.0 } else if draft.poster_size < 168.0 { 168.0 } else if draft.poster_size < 180.0 { 180.0 } else if draft.poster_size < 192.0 { 192.0 } else { 200.0 })
             }
         }
     }
@@ -336,9 +336,9 @@ pub fn library_filter(
 ) -> impl View {
     ui! {
         if draft.filter == value {
-            Button(id: selected, label: tr! { "zh-Hans" => "{name} {count}", "en" => "{name} {count}"; name: value, count: count }, icon: "checkmark", prominence: prominent, shape: capsule, height: if window.tv { 40 } else { 30 }, variant: library_chip) => draft.filter.set(value)
+            Button(id: selected, label: tr! { "zh-Hans" => "{name} {count}", "en" => "{name} {count}"; name: value, count: count }, icon: "checkmark", prominence: prominent, shape: chip, height: if window.tv { 40 } else { 30 }, variant: library_chip) => draft.filter.set(value)
         } else {
-            Button(id: select, label: tr! { "zh-Hans" => "{name} {count}", "en" => "{name} {count}"; name: value, count: count }, shape: capsule, height: if window.tv { 40 } else { 30 }, variant: library_chip) => draft.filter.set(value)
+            Button(id: select, label: tr! { "zh-Hans" => "{name} {count}", "en" => "{name} {count}"; name: value, count: count }, shape: chip, height: if window.tv { 40 } else { 30 }, variant: library_chip) => draft.filter.set(value)
         }
     }
 }

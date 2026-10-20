@@ -374,7 +374,7 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
 #[component]
 pub fn settings_general(app: erika::Client) -> impl View {
     ui! {
-        Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+        Form(variant: settings_form, appear: settings_page_in) {
             Slot(id: form_header)
             Section(title: tr! { "zh-Hans" => "启动", "en" => "Startup" }) {
                 Picker(id: startup, label: tr! { "zh-Hans" => "启动时打开", "en" => "Open at startup" }, selected: app.preferences.startup, style: menu) => app.set_startup(app.preferences.startup)
@@ -393,7 +393,7 @@ pub fn settings_general(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_appearance(app: erika::Client) -> impl View {
     ui! {
-        Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+        Form(variant: settings_form, appear: settings_page_in) {
             Slot(id: form_header)
             Section(title: tr! { "zh-Hans" => "主题色", "en" => "Accent color" }) {
                 Row(gap: 12, align: center) {
@@ -462,7 +462,7 @@ pub fn settings_appearance(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_player(app: erika::Client) -> impl View {
     ui! {
-        Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+        Form(variant: settings_form, appear: settings_page_in) {
             Slot(id: form_header)
             Section(title: tr! { "zh-Hans" => "播放", "en" => "Playback" }) {
                 Picker(id: speed, label: tr! { "zh-Hans" => "默认倍速", "en" => "Default speed" }, selected: app.preferences.speed, style: menu) => app.set_speed(app.preferences.speed)
@@ -499,7 +499,7 @@ pub fn settings_player(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> impl View {
     ui! {
-        Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+        Form(variant: settings_form, appear: settings_page_in) {
             Slot(id: form_header)
             Section(title: tr! { "zh-Hans" => "显示", "en" => "Display" }) {
                 Switch(id: show_danmaku, label: tr! { "zh-Hans" => "显示弹幕", "en" => "Show danmaku" }, checked: app.preferences.show_danmaku, style: switch) => app.set_preference("show_danmaku", app.preferences.show_danmaku)
@@ -527,7 +527,7 @@ pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> 
 #[component]
 pub fn settings_module_placeholder(app: erika::Client) -> impl View {
     ui! {
-        Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+        Form(variant: settings_form, appear: settings_page_in) {
             Slot(id: form_header)
             Section {
                 Row(gap: 12, align: center) {
@@ -551,7 +551,7 @@ pub fn settings_module_placeholder(app: erika::Client) -> impl View {
 pub fn settings_optional(app: erika::Client) -> impl View {
     ui! {
         Row(gap: 0, align: top) {
-            Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+            Form(variant: settings_form, appear: settings_page_in) {
                 Slot(id: form_header)
                 if window.compact {
                     Section(style: plain) {
@@ -754,7 +754,7 @@ pub fn settings_preview(app: erika::Client, width: f64) -> impl View {
 #[component]
 pub fn settings_keys(app: erika::Client) -> impl View {
     ui! {
-        Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+        Form(variant: settings_form, appear: settings_page_in) {
             Slot(id: form_header)
             Section(title: tr! { "zh-Hans" => "播放", "en" => "Playback" }) {
                 Row(gap: 12, align: center) {
@@ -803,7 +803,7 @@ pub fn settings_keys(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_about(app: erika::Client) -> impl View {
     ui! {
-        Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
+        Form(variant: settings_form, appear: settings_page_in) {
             Slot(id: form_header)
             Section {
                 Column(gap: 6, padding_y: 12, align: center) {
