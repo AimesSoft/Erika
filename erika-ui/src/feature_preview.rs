@@ -3,11 +3,12 @@ use bern::prelude::*;
 use erika_protocol::erika::FeatureSelection;
 
 #[component]
-pub fn feature_preview_window(features: FeatureSelection, revision: i64, wide: bool) -> impl View {
+pub fn feature_preview_window(features: FeatureSelection, revision: i64, width: f64) -> impl View {
     ui! {
         // `.o-mw`: 188 points tall, as wide as it stands: 300 beside the
-        // desktop's choices, `wide` the phone's width less 20 on each side.
-        Stack(variant: settings_card, width: if wide { 350.0 } else { 300.0 }, height: 188, align: leading, nudge_key: revision, nudge_scale: 0.95, reflow: smooth) {
+        // desktop's choices; on the phone its width less 20 on each side
+        // in the onboarding (350), less 16 in the settings (358).
+        Stack(variant: settings_card, width: width, height: 188, align: leading, nudge_key: revision, nudge_scale: 0.95, reflow: smooth) {
             Canvas {
                 Shape(kind: rounded, corner: 16, stroke: control.border, stroke_width: 0.5)
             }
@@ -49,9 +50,24 @@ pub fn feature_preview_window(features: FeatureSelection, revision: i64, wide: b
                             }
                         }
                     }
-                    // The design's flex rows at the phone's 278 points: three
-                    // 16 : 9 cards and five 2 : 3 posters across, 5 apart.
-                    if wide {
+                    // The design's flex rows (`.mb`, 12 inside) at the
+                    // phone's 286 and 278 points: three 16 : 9 cards and five
+                    // 2 : 3 posters across, 5 apart, under titles 40 % and
+                    // 30 % of the row.
+                    if width == 358.0 {
+                        Canvas(width: 286, height: 188) {
+                            Shape(kind: rounded, x: 12, y: 12, width: 104.8, height: 7, corner: 3, fill: fill.strong)
+                            Shape(kind: rounded, x: 12, y: 27, width: 84, height: 47.25, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 101, y: 27, width: 84, height: 47.25, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 190, y: 27, width: 84, height: 47.25, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 12, y: 82.25, width: 78.6, height: 7, corner: 3, fill: fill.strong)
+                            Shape(kind: rounded, x: 12, y: 97.25, width: 48.4, height: 72.6, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 65.4, y: 97.25, width: 48.4, height: 72.6, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 118.8, y: 97.25, width: 48.4, height: 72.6, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 172.2, y: 97.25, width: 48.4, height: 72.6, corner: 4, fill: fill.strong)
+                            Shape(kind: rounded, x: 225.6, y: 97.25, width: 48.4, height: 72.6, corner: 4, fill: fill.strong)
+                        }
+                    } else if width == 350.0 {
                         Canvas(width: 278, height: 188) {
                             Shape(kind: rounded, x: 12, y: 12, width: 101.6, height: 7, corner: 3, fill: fill.strong)
                             Shape(kind: rounded, x: 12, y: 27, width: 81.333, height: 45.75, corner: 4, fill: fill.strong)
@@ -81,9 +97,11 @@ pub fn feature_preview_window(features: FeatureSelection, revision: i64, wide: b
                 }
             }
             else {
-                Stack(width: if wide { 350.0 } else { 300.0 }, height: 188, appear: feature_preview_in, disappear: fade) {
-                    Canvas(width: if wide { 217.0 } else { 186.0 }, height: 109) {
-                        Shape(kind: rounded, corner: 10, stroke: control.border, stroke_width: 1.5)
+                // `.pure > div`: 62 % by 58 % of the window, a 1.5-point
+                // dashed outline (Chrome's dashes: 4.5 drawn, 3 apart).
+                Stack(width: width, height: 188, appear: feature_preview_in, disappear: fade) {
+                    Canvas(width: if width == 358.0 { 221.96 } else if width == 350.0 { 217.0 } else { 186.0 }, height: 109) {
+                        Shape(kind: rounded, corner: 10, stroke: control.border, stroke_width: 1.5, dash: 4.5, dash_gap: 3)
                     }
                     Text(content: tr! { "zh-Hans" => "打开文件", "en" => "Open file" }, style: caption, emphasis: secondary)
                 }

@@ -544,41 +544,33 @@ pub fn settings_module_placeholder(app: erika::Client) -> impl View {
     }
 }
 /// Each module's symbol sits on a neutral grey tile: the design keeps the
-/// accent off list icons (10.9).
+/// accent off list icons (10.9). The desktop shows the preview and the
+/// presets beside the switches; the phone over them (`phHTML('settings')`),
+/// 18 under the title, without the note that points to the right.
 #[component]
 pub fn settings_optional(app: erika::Client) -> impl View {
     ui! {
         Row(gap: 0, align: top) {
             Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
                 Slot(id: form_header)
-                Section(title: tr! { "zh-Hans" => "观看", "en" => "Watching" }, footer: tr! { "zh-Hans" => "决定 Erika 要做多少事。关掉的功能不显示，也不占资源。右边的小窗口会跟着变。", "en" => "Choose what Erika does. Disabled features disappear and use no resources. The preview updates as you go." }) {
-                    Row(gap: 12, align: center) {
-                        Stack(width: 28, height: 28) {
-                            Canvas {
-                                Shape(kind: rounded, corner: 7, fill: fill.strong)
-                            }
-                            Label(title: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, icon: "text.bubble", style: body, display: icon)
+                if window.compact {
+                    Section(style: plain) {
+                        Column(gap: 0) {
+                            Canvas(height: 8)
+                            settings_preview(app: app, width: 358.0)
+                            // `.o-pv` 6 above `.o-presets`.
+                            Canvas(height: 6)
+                            settings_presets(app: app)
                         }
-                        Column(gap: 1) {
-                            Text(content: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, style: body)
-                            Text(content: tr! { "zh-Hans" => "弹弹play 匹配与渲染、发送弹幕", "en" => "Match, render and send danmaku" }, style: caption, emphasis: secondary)
-                        }
-                        Spacer
-                        Switch(id: feature_danmaku, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, checked: app.features.danmaku, style: switch, label_hidden: true) => app.set_module("danmaku", app.features.danmaku)
                     }
-                    Row(gap: 12, align: center) {
-                        Stack(width: 28, height: 28) {
-                            Canvas {
-                                Shape(kind: rounded, corner: 7, fill: fill.strong)
-                            }
-                            Label(title: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, icon: "sparkles", style: body, display: icon)
-                        }
-                        Column(gap: 1) {
-                            Text(content: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, style: body)
-                            Text(content: tr! { "zh-Hans" => "Anime4K / ArtCNN 超分辨率", "en" => "Anime4K / ArtCNN upscaling" }, style: caption, emphasis: secondary)
-                        }
-                        Spacer
-                        Switch(id: feature_enhance, label: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, checked: app.features.enhance, style: switch, label_hidden: true) => app.set_module("enhance", app.features.enhance)
+                    Section(title: tr! { "zh-Hans" => "观看", "en" => "Watching" }) {
+                        settings_danmaku_module(app: app)
+                        settings_enhance_module(app: app)
+                    }
+                } else {
+                    Section(title: tr! { "zh-Hans" => "观看", "en" => "Watching" }, footer: tr! { "zh-Hans" => "决定 Erika 要做多少事。关掉的功能不显示，也不占资源。右边的小窗口会跟着变。", "en" => "Choose what Erika does. Disabled features disappear and use no resources. The preview updates as you go." }) {
+                        settings_danmaku_module(app: app)
+                        settings_enhance_module(app: app)
                     }
                 }
                 Section(title: tr! { "zh-Hans" => "内容", "en" => "Content" }) {
@@ -672,34 +664,90 @@ pub fn settings_optional(app: erika::Client) -> impl View {
             }
             // A scroll view of its own, so the title bar's scroll edge spans
             // this column as it does the form beside it.
-            ScrollView(appear: settings_page_in) {
-                Row(gap: 0, align: top) {
-                Column(gap: 0, width: 300, padding_y: 20) {
-                    Text(content: tr! { "zh-Hans" => "预览", "en" => "Preview" }, style: caption2, emphasis: secondary)
-                    Canvas(height: 8)
-                    settings_preview(app: app)
-                    Canvas(height: 10)
-                    Row(gap: 6) {
-                        Button(id: preset_pure, label: tr! { "zh-Hans" => "纯粹播放", "en" => "Pure playback" }) => app.apply_preset(FeaturePreset::Pure)
-                        Button(id: preset_anime, label: tr! { "zh-Hans" => "看番", "en" => "Anime" }) => app.apply_preset(FeaturePreset::Anime)
-                        Button(id: preset_all, label: tr! { "zh-Hans" => "全都要", "en" => "Everything" }) => app.apply_preset(FeaturePreset::All)
+            if !window.compact {
+                ScrollView(appear: settings_page_in) {
+                    Row(gap: 0, align: top) {
+                    Column(gap: 0, width: 300, padding_y: 20) {
+                        Text(content: tr! { "zh-Hans" => "预览", "en" => "Preview" }, style: caption2, emphasis: secondary)
+                        Canvas(height: 8)
+                        settings_preview(app: app, width: 300.0)
+                        Canvas(height: 10)
+                        settings_presets(app: app)
                     }
-                }
-                Canvas(width: 20)
+                    Canvas(width: 20)
+                    }
                 }
             }
         }
     }
 }
+/// The danmaku module's row, in both layouts of the optional features.
 #[component]
-pub fn settings_preview(app: erika::Client) -> impl View {
+pub fn settings_danmaku_module(app: erika::Client) -> impl View {
     ui! {
-        Column(gap: 0, width: 300) {
-            feature_preview_window(features: app.features, revision: app.feature_preview_revision, wide: false)
+        Row(gap: 12, align: center) {
+            Stack(width: 28, height: 28) {
+                Canvas {
+                    Shape(kind: rounded, corner: 7, fill: fill.strong)
+                }
+                Label(title: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, icon: "text.bubble", style: body, display: icon)
+            }
+            Column(gap: 1) {
+                Text(content: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, style: body)
+                Text(content: tr! { "zh-Hans" => "弹弹play 匹配与渲染、发送弹幕", "en" => "Match, render and send danmaku" }, style: caption, emphasis: secondary)
+            }
+            Spacer
+            Switch(id: feature_danmaku, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, checked: app.features.danmaku, style: switch, label_hidden: true) => app.set_module("danmaku", app.features.danmaku)
+        }
+    }
+}
+/// The upscaling module's row, in both layouts of the optional features.
+#[component]
+pub fn settings_enhance_module(app: erika::Client) -> impl View {
+    ui! {
+        Row(gap: 12, align: center) {
+            Stack(width: 28, height: 28) {
+                Canvas {
+                    Shape(kind: rounded, corner: 7, fill: fill.strong)
+                }
+                Label(title: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, icon: "sparkles", style: body, display: icon)
+            }
+            Column(gap: 1) {
+                Text(content: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, style: body)
+                Text(content: tr! { "zh-Hans" => "Anime4K / ArtCNN 超分辨率", "en" => "Anime4K / ArtCNN upscaling" }, style: caption, emphasis: secondary)
+            }
+            Spacer
+            Switch(id: feature_enhance, label: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, checked: app.features.enhance, style: switch, label_hidden: true) => app.set_module("enhance", app.features.enhance)
+        }
+    }
+}
+/// `.o-presets`: the three presets, 6 apart.
+#[component]
+pub fn settings_presets(app: erika::Client) -> impl View {
+    ui! {
+        Row(gap: 6) {
+            Button(id: preset_pure, label: tr! { "zh-Hans" => "纯粹播放", "en" => "Pure playback" }) => app.apply_preset(FeaturePreset::Pure)
+            Button(id: preset_anime, label: tr! { "zh-Hans" => "看番", "en" => "Anime" }) => app.apply_preset(FeaturePreset::Anime)
+            Button(id: preset_all, label: tr! { "zh-Hans" => "全都要", "en" => "Everything" }) => app.apply_preset(FeaturePreset::All)
+        }
+    }
+}
+/// `.o-pv`: the window, 10 above its playback bar, and 14 under that how
+/// many modules are on (`.o-sum`, 13 / 18), naming the preset they are
+/// exactly.
+#[component]
+pub fn settings_preview(app: erika::Client, width: f64) -> impl View {
+    ui! {
+        Column(gap: 0, width: width) {
+            feature_preview_window(features: app.features, revision: app.feature_preview_revision, width: width)
             Canvas(height: 10)
             feature_preview_hud(features: app.features)
             Canvas(height: 14)
-            Text(content: tr! { "zh-Hans" => "已开启 {count} 个模块 · {preset}", "en" => "{count, plural, one {# module} other {# modules}} enabled · {preset}"; count: app.module_count, preset: app.preset }, emphasis: secondary)
+            if app.preset == OnboardingPreset::Custom {
+                Text(content: tr! { "zh-Hans" => "已开启 {count} 个模块", "en" => "{count, plural, one {# module} other {# modules}} on"; count: app.module_count }, font_size: 13, line_height: 18, emphasis: secondary, lines: 2)
+            } else {
+                Text(content: tr! { "zh-Hans" => "已开启 {count} 个模块 · 正好是「{preset}」", "en" => "{count, plural, one {# module} other {# modules}} on · just like “{preset}”"; count: app.module_count, preset: app.preset }, font_size: 13, line_height: 18, emphasis: secondary, lines: 2)
+            }
         }
     }
 }

@@ -373,7 +373,7 @@ pub fn onboarding_preview(app: erika::Client, wide: bool) -> impl View {
     ui! {
         Column(gap: 0, width: if wide { 350.0 } else { 300.0 }, appear: settings_page_in, appear_delay: 0) {
             Stack(width: if wide { 350.0 } else { 300.0 }, height: 188, hero: onboarding_window) {
-                feature_preview_window(features: app.onboarding.features, revision: app.onboarding.preview_revision, wide: wide)
+                feature_preview_window(features: app.onboarding.features, revision: app.onboarding.preview_revision, width: if wide { 350.0 } else { 300.0 })
             }
             Canvas(height: 10)
             feature_preview_hud(features: app.onboarding.features)
