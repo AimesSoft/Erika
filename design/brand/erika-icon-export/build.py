@@ -315,6 +315,61 @@ def bbox(svg_text, view_size):
     return x, y, w, h
 
 
+def export_tvos(S, J):
+    """tvOS：分层图标（.brandassets），和安卓自适应图标同样两层：背景是头发的蓝，前景是去掉头发的脸、帽子和发饰，
+    遥控器拨动焦点时前景在背景上方视差浮动。主屏幕图标 400×240（@1x、@2x），App Store 图标 1280×768，
+    Top Shelf 横幅 1920×720 与宽版 2320×720（@1x、@2x）。前景按画面高度放，脸往下多出的一段给视差留余量。"""
+    fg_pairs = [(sid, face_to(1300) if sid == 'erika_face' else el) for sid, el in S if sid != 'erika_hair']
+    fg_body = ''.join(el for _, el in fg_pairs)
+    root = J('tvos', 'Erika.brandassets')
+    info = {'author': 'xcode', 'version': 1}
+
+    def wide(w, h, share):
+        """把 1024 见方的画稿放进 w×h 的画面：高度占 share，水平、垂直都居中"""
+        side = 1024 / share
+        width = side * w / h
+        return '%.2f %.2f %.2f %.2f' % (512 - width / 2, 512 - side / 2, width, side)
+
+    def layer_png(name, body, view, w, h, out):
+        svg = os.path.join(root, f'_{name}.svg')
+        write(svg, f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{view}" width="{w}" height="{h}">{body}</svg>\n')
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        subprocess.run(['rsvg-convert', '-w', str(w), '-h', str(h), svg, '-o', out], check=True)
+        os.remove(svg)
+
+    def back(view):
+        x, y, w, h = map(float, view.split())
+        return f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{HAIR}"/>'
+
+    for stack, (w, h), scales in (('App Icon.imagestack', (400, 240), (1, 2)), ('App Icon - App Store.imagestack', (1280, 768), (1,))):
+        view = wide(w, h, 0.92)
+        for name, body in (('Front', fg_body), ('Back', back(view))):
+            images = []
+            for k in scales:
+                file = f'{name.lower()}.png' if k == 1 else f'{name.lower()}@{k}x.png'
+                layer_png(name, body, view, w * k, h * k, os.path.join(root, stack, f'{name}.imagestacklayer', 'Content.imageset', file))
+                images.append({'filename': file, 'idiom': 'tv', 'scale': f'{k}x'})
+            write(os.path.join(root, stack, f'{name}.imagestacklayer', 'Content.imageset', 'Contents.json'),
+                  json.dumps({'images': images, 'info': info}, indent=2) + '\n')
+            write(os.path.join(root, stack, f'{name}.imagestacklayer', 'Contents.json'), json.dumps({'info': info}, indent=2) + '\n')
+        write(os.path.join(root, stack, 'Contents.json'),
+              json.dumps({'info': info, 'layers': [{'filename': 'Front.imagestacklayer'}, {'filename': 'Back.imagestacklayer'}]}, indent=2) + '\n')
+    for name, (w, h) in (('Top Shelf Image', (1920, 720)), ('Top Shelf Image Wide', (2320, 720))):
+        view = wide(w, h, 0.62)
+        images = []
+        for k in (1, 2):
+            file = 'top-shelf.png' if k == 1 else f'top-shelf@{k}x.png'
+            layer_png(name.replace(' ', '-'), back(view) + fg_body, view, w * k, h * k, os.path.join(root, f'{name}.imageset', file))
+            images.append({'filename': file, 'idiom': 'tv', 'scale': f'{k}x'})
+        write(os.path.join(root, f'{name}.imageset', 'Contents.json'), json.dumps({'images': images, 'info': info}, indent=2) + '\n')
+    write(os.path.join(root, 'Contents.json'), json.dumps({'assets': [
+        {'filename': 'App Icon - App Store.imagestack', 'idiom': 'tv', 'role': 'primary-app-icon', 'size': '1280x768'},
+        {'filename': 'App Icon.imagestack', 'idiom': 'tv', 'role': 'primary-app-icon', 'size': '400x240'},
+        {'filename': 'Top Shelf Image Wide.imageset', 'idiom': 'tv', 'role': 'top-shelf-image-wide', 'size': '2320x720'},
+        {'filename': 'Top Shelf Image.imageset', 'idiom': 'tv', 'role': 'top-shelf-image', 'size': '1920x720'},
+    ], 'info': info}, indent=2) + '\n')
+
+
 def export_macos(S, J):
     """macOS：正方形版放进苹果模板的连续圆角底板（824，圆角 185.4），带投影，打成 .icns"""
     plate = continuous_rect(100, 100, 824, 824, 185.4)
@@ -336,7 +391,7 @@ def export_macos(S, J):
 
 def main():
     out = HERE
-    for sub in ('logo', 'preview', 'svg', 'png', 'macos', 'windows', 'linux', 'ios', 'android', 'harmonyos', 'web'):
+    for sub in ('logo', 'preview', 'svg', 'png', 'macos', 'windows', 'linux', 'ios', 'tvos', 'android', 'harmonyos', 'web'):
         shutil.rmtree(os.path.join(out, sub), ignore_errors=True)
     C, S = load(CIRCLE), load(SQUARE)
     J = lambda *a: os.path.join(out, *a)
@@ -407,6 +462,8 @@ def main():
         {'filename': 'AppIcon.png', 'idiom': 'universal', 'platform': 'ios', 'size': '1024x1024'},
         {'appearances': [{'appearance': 'luminosity', 'value': 'tinted'}], 'filename': 'AppIcon-tinted.png', 'idiom': 'universal', 'platform': 'ios', 'size': '1024x1024'},
     ], 'info': {'author': 'xcode', 'version': 1}}, indent=2) + '\n')
+
+    export_tvos(S, J)
 
     # ---------- 安卓：自适应图标（108dp 图层，设计占中间 72dp）+ 单色层 + 旧版图标 + 商店图标 ----------
     layer = '-256 -256 1536 1536'

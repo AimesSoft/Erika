@@ -24,6 +24,8 @@ pub struct PlayerDraft {
     pub text: String,
     pub volume_open: bool,
     pub episodes_open: bool,
+    /// The television's danmaku field, in place of the seek bar.
+    pub saying: bool,
     pub subtitle_file: MediaSource,
     pub danmaku_file: MediaSource,
 }
@@ -34,7 +36,15 @@ pub fn player(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
         Stack(appearance: dark, variant: player_black) {
             // A phone on its side plays in the design's 844 × 390 scene, the
             // controls in the two rails beside the picture (`RAILS`).
-            if window.short {
+            // The television's player (design 6.2 `TV`): the frame steps back
+            // less, the controls run across the screen.
+            if window.tv {
+                Stack(under_bars: true) {
+                    ScaleBox(width: 1280, height: 720) {
+                        player_tv_scene(app: app, shown: !window.idle || app.paused || app.player.panel || draft.episodes_open || draft.saying)
+                    }
+                }
+            } else if window.short {
                 ScaleBox(width: 844, height: 390) {
                     player_phone_scene(app: app, shown: !window.idle || app.paused || app.player.panel || draft.volume_open || draft.episodes_open)
                 }
@@ -79,6 +89,164 @@ pub fn player_scene(app: erika::Client, shown: bool, #[session] draft: PlayerDra
             if app.player.panel {
                 Positioned(x: 936, y: 64, width: 320, height: 604, appear: player_panel_in, disappear: player_panel_in) {
                     player_panel(app: app)
+                }
+            }
+        }
+    }
+}
+
+/// The television's player (next-player.js `RECT.tv`, `CTL.tv`, next.css
+/// `.ff-tv`), in the 1280 × 720 scene the screen shows 1.5 times as large:
+/// the picture fills the screen, steps back to (200, 52) 880 × 495 when the
+/// controls show, or to (40, 100) 784 × 441 beside the settings. The bar
+/// is 52 tall, the seek bar under the picture, and the controls run across
+/// the screen at 624 (64, 1152 wide). With the controls hidden the picture
+/// holds the remote, as on tvOS's own player: left and right skip 10
+/// seconds and select pauses; Back leaves the settings, then the player.
+#[component]
+pub fn player_tv_scene(app: erika::Client, shown: bool, #[session] draft: PlayerDraft) -> impl View {
+    ui! {
+        Stack(variant: player_black, width: 1280, height: 720, align: top_leading) {
+            if shown { Positioned(x: 0, y: 0, width: 1280, height: 720) { Stack(variant: player_background, width: 1280, height: 720) {} } }
+            Positioned(x: if app.player.panel { 40 } else if shown { 200 } else { 0 }, y: if app.player.panel { 100 } else if shown { 52 } else { 0 }, width: if app.player.panel { 784 } else if shown { 880 } else { 1280 }, height: if app.player.panel { 441 } else if shown { 495 } else { 720 }, animate: hero) {
+                Stack {
+                    Image(source: app.still, width: if app.player.panel { 784 } else if shown { 880 } else { 1280 }, height: if app.player.panel { 441 } else if shown { 495 } else { 720 }, corner: if app.player.panel || shown { 22 } else { 0 }, fit: cover, label: app.title, hero: frame, hero_key: app.title, animate: hero)
+                    ScaleBox(width: 1280, height: 720) {
+                        player_overlays(app: app)
+                    }
+                }
+            }
+            if shown {
+                Positioned(x: 56, y: 0, width: 1168, height: 52, appear: fade, disappear: fade) {
+                    player_tv_top(app: app)
+                }
+                Positioned(x: if app.player.panel { 40 } else { 200 }, y: if app.player.panel { 545 } else { 551 }, width: if app.player.panel { 784 } else { 880 }, height: 44, animate: hero, appear: fade, disappear: fade) {
+                    if draft.saying {
+                        // 「发弹幕」: the field in the seek bar's place; the
+                        // system's keyboard takes the remote's dictation.
+                        Row(gap: 8, align: center) {
+                            TextInput(id: danmaku_text_tv, label: tr! { "zh-Hans" => "发弹幕", "en" => "Send danmaku" }, label_hidden: true, prompt: tr! { "zh-Hans" => "发个友善的弹幕…", "en" => "Say something kind…" }, value: draft.text) => app.send_danmaku(draft.text)
+                            IconButton(id: unsay_tv, icon: "xmark", label: tr! { "zh-Hans" => "收起", "en" => "Close" }, height: 40) => draft.saying.set(false)
+                        }
+                    } else {
+                        Row(gap: 12, align: center) {
+                            Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.elapsed }, style: caption2)
+                            // Left and right on the focused bar: 10 seconds
+                            // of a 24-minute episode.
+                            Slider(id: position_tv, label: tr! { "zh-Hans" => "播放进度", "en" => "Playback position" }, label_hidden: true, current: app.progress, min: 0, max: 1, step: 0.00694) => app.seek(app.progress)
+                            Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.duration }, style: caption2, emphasis: secondary)
+                        }
+                    }
+                }
+                Positioned(x: if app.player.panel { 40 } else { 64 }, y: 624, width: if app.player.panel { 784 } else { 1152 }, height: 56, animate: hero, appear: fade, disappear: fade) {
+                    player_tv_controls(app: app)
+                }
+            } else {
+                // With the controls hidden the picture holds the remote's
+                // focus, as tvOS's own player: select pauses or plays and
+                // brings the controls, left and right skip 10 seconds.
+                Positioned(x: 0, y: 0, width: 1280, height: 720) {
+                    Button(id: picture_tv, label: tr! { "zh-Hans" => "播放或暂停画面", "en" => "Play or pause picture" }, variant: remote_surface, default_focus: true) {
+                        Stack(width: 1280, height: 720) {}
+                    } => app.toggle_pause()
+                }
+                Shortcut(key: "left") => app.skip(-10.0)
+                Shortcut(key: "right") => app.skip(10.0)
+            }
+            Shortcut(key: "space") => app.toggle_pause()
+            if app.player.panel {
+                Shortcut(key: "escape") => app.player_panel(false)
+                // `.ff-tv .p-sheet`: 848, 52, 392 × 548.
+                Positioned(x: 848, y: 52, width: 392, height: 548, appear: player_panel_in, disappear: player_panel_in) {
+                    player_panel(app: app)
+                }
+            } else if !app.features.anime && !app.features.library && !app.features.downloads {
+                Shortcut(key: "escape") => app.return_to_frame()
+            } else {
+                Shortcut(key: "escape") => app.minimize()
+            }
+        }
+    }
+}
+
+/// The television's bar (`.ff-tv .p-top`, 52 tall, 56 in): the title with
+/// its episode, then danmaku matching, picture in picture, the settings
+/// and more; no volume or full screen, which the remote and the television
+/// have.
+#[component]
+pub fn player_tv_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
+    ui! {
+        Row(gap: 12, height: 52, align: center) {
+            Column(gap: 2) {
+                Text(content: app.title, style: title3, lines: 1)
+                Text(content: app.subtitle, style: caption, emphasis: secondary)
+            }
+            Spacer
+            ControlGroup(label: tr! { "zh-Hans" => "播放选项", "en" => "Playback options" }, height: 46) {
+                if app.features.danmaku {
+                    IconButton(id: match_danmaku_tv, icon: "link", label: tr! { "zh-Hans" => "弹幕匹配", "en" => "Match danmaku" }) => app.show_notice(Notice::DanmakuMatchPending)
+                }
+                IconButton(id: pip_tv, icon: "pip.enter", label: tr! { "zh-Hans" => "画中画", "en" => "Picture in picture" }) => app.show_notice(Notice::PictureInPicturePending)
+                IconButton(id: settings_tv, icon: "slider.horizontal.3", label: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }) => app.player_panel(!app.player.panel)
+                Menu(id: more_tv, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon) {
+                    MenuItem(id: screenshot_tv, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera") => app.show_notice(Notice::ScreenshotPending)
+                    MenuItem(id: skip_intro_tv, label: tr! { "zh-Hans" => "跳过片头（85 秒）", "en" => "Skip opening (85 seconds)" }) => app.skip(85.0)
+                    MenuItem(id: episodes_tv, label: tr! { "zh-Hans" => "选集…", "en" => "Episodes…" }, enabled: app.player.episodes) => draft.episodes_open.set(true)
+                    MenuItem(id: info_tv, label: tr! { "zh-Hans" => "播放信息", "en" => "Playback information" }) => app.player_tab(PlayerTab::Playback)
+                }
+            }
+            if draft.episodes_open {
+                PopoverButton(id: episode_list_tv, label: tr! { "zh-Hans" => "选集", "en" => "Episodes" }, presented: draft.episodes_open) {
+                    player_episodes(app: app)
+                }
+            }
+        }
+    }
+}
+
+/// The television's controls (`.p-ctl`, a grid of 1fr auto 1fr): danmaku
+/// and 「发弹幕」 at the start, the transport in the middle, subtitles,
+/// speed and enhancement at the end.
+#[component]
+pub fn player_tv_controls(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
+    ui! {
+        Stack {
+            Row(gap: 8, align: center, height: 56) {
+                if app.features.danmaku {
+                    SplitButton(id: danmaku_tv, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, more_label: tr! { "zh-Hans" => "弹幕参数", "en" => "Danmaku options" }, icon: "text.bubble", value: draft.danmaku, shape: capsule, height: 46) {
+                        player_danmaku_quick(app: app)
+                    }
+                    if app.features.sync {
+                        Button(id: say_tv, label: tr! { "zh-Hans" => "发弹幕", "en" => "Send Danmaku" }, icon: "paperplane", shape: capsule, height: 46) => draft.saying.set(true)
+                    }
+                }
+                Spacer
+                Menu(id: subtitles_tv, label: app.player.subtitle_track, icon: "captions.bubble", shape: capsule, height: 46) {
+                    MenuItem(id: chinese_subtitle_tv, label: tr! { "zh-Hans" => "简体中文（内嵌 ASS）", "en" => "Simplified Chinese (ASS)" }) => app.set_subtitle_track(SubtitleTrack::Chinese)
+                    MenuItem(id: japanese_subtitle_tv, label: tr! { "zh-Hans" => "日本語", "en" => "Japanese" }) => app.set_subtitle_track(SubtitleTrack::Japanese)
+                    MenuItem(id: no_subtitle_tv, label: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }) => app.set_subtitle_track(SubtitleTrack::Off)
+                    Divider
+                    MenuItem(id: japanese_audio_tv, label: tr! { "zh-Hans" => "日本語 · FLAC 2.0", "en" => "Japanese · FLAC 2.0" }) => app.set_audio_track(AudioTrack::Japanese)
+                    MenuItem(id: chinese_audio_tv, label: tr! { "zh-Hans" => "中文配音 · AAC 2.0", "en" => "Chinese · AAC 2.0" }) => app.set_audio_track(AudioTrack::Chinese)
+                }
+                Picker(id: rate_tv, label: tr! { "zh-Hans" => "倍速", "en" => "Speed" }, selected: app.preferences.speed, label_hidden: true, style: menu, shape: capsule, height: 46) => app.set_speed(app.preferences.speed)
+                if app.features.enhance {
+                    Picker(id: enhancement_tv, label: tr! { "zh-Hans" => "画质增强", "en" => "Enhancement" }, selected: app.player.enhancement, label_hidden: true, style: menu, shape: capsule, height: 46) => app.set_enhancement(app.player.enhancement)
+                }
+            }
+            Row(gap: 14, align: center, height: 56) {
+                if app.player.episodes {
+                    IconButton(id: previous_tv, icon: "backward.end.fill", height: 46, label: tr! { "zh-Hans" => "上一集", "en" => "Previous episode" }, enabled: app.player.episode > 1) => app.change_episode(-1)
+                }
+                IconButton(id: rewind_tv, icon: "gobackward.10", font_size: 20, height: 46, label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 seconds" }) => app.skip(-10.0)
+                if app.paused {
+                    IconButton(id: play_tv, icon: "play.fill", font_size: 24, height: 56, prominence: prominent, default_focus: true, label: tr! { "zh-Hans" => "播放", "en" => "Play" }) => app.toggle_pause()
+                } else {
+                    IconButton(id: pause_tv, icon: "pause.fill", font_size: 24, height: 56, prominence: prominent, default_focus: true, label: tr! { "zh-Hans" => "暂停", "en" => "Pause" }) => app.toggle_pause()
+                }
+                IconButton(id: forward_tv, icon: "goforward.10", font_size: 20, height: 46, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }) => app.skip(10.0)
+                if app.player.episodes {
+                    IconButton(id: next_tv, icon: "forward.end.fill", height: 46, label: tr! { "zh-Hans" => "下一集", "en" => "Next episode" }, enabled: app.player.episode < 12) => app.change_episode(1)
                 }
             }
         }
@@ -560,7 +728,8 @@ pub fn player_panel(app: erika::Client, #[session] draft: PlayerDraft) -> impl V
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
                                 Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "弹幕偏移", "en" => "Danmaku delay" }) Spacer Row(width: 130) { Slider(id: danmaku_delay, label: tr! { "zh-Hans" => "弹幕偏移", "en" => "Danmaku delay" }, label_hidden: true, value: draft.delay, min: -10, max: 10) } }
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
-                                Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "挂载本地弹幕", "en" => "Local danmaku" }) Spacer Button(id: local_danmaku, label: tr! { "zh-Hans" => "xml / json", "en" => "xml / json" }, prominence: plain, pick: draft.danmaku_file, files: ".xml .json") => app.show_notice(Notice::LocalDanmakuChosen) }
+// A television has no files to mount.
+                                if !window.tv { Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "挂载本地弹幕", "en" => "Local danmaku" }) Spacer Button(id: local_danmaku, label: tr! { "zh-Hans" => "xml / json", "en" => "xml / json" }, prominence: plain, pick: draft.danmaku_file, files: ".xml .json") => app.show_notice(Notice::LocalDanmakuChosen) } }
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
                             } }
                         PlayerTab::Subtitles => { Column(gap: 0, appear: settings_page_in) {

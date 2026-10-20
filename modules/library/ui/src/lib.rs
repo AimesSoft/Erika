@@ -30,6 +30,10 @@ pub struct LibraryDraft {
     /// The phone's wall runs from 64 to 150: 64 + 0.36 × 86.
     #[initial(94.96)]
     pub phone_poster_size: f64,
+    /// The television's wall runs from 112 to 230: 112 + 0.36 × 118
+    /// (`libLayout` on the television).
+    #[initial(154.48)]
+    pub tv_poster_size: f64,
     pub position: i64,
 }
 
@@ -51,7 +55,7 @@ pub fn library_page(
                 if window.compact {
                     library_phone(library: library, app: app, listing: listing)
                 } else {
-                Column(gap: 0, padding_x: if window.medium { 24.0 } else { 32.0 }, padding_y: 6, appear: page_in) {
+                Column(gap: 0, padding_x: if window.tv { 56.0 } else if window.medium { 24.0 } else { 32.0 }, padding_y: 6, appear: page_in) {
                     Adaptive {
                         Layout(size: expanded) {
                             Row(gap: 12, align: center) {
@@ -60,7 +64,7 @@ pub fn library_page(
                                 Spacer
                                 library_zoom()
                                 library_sort()
-                                Button(id: manage, label: tr! { "zh-Hans" => "管理", "en" => "Manage" }, icon: "folder", shape: capsule, height: 32) => library.manage()
+                                Button(id: manage, label: tr! { "zh-Hans" => "管理", "en" => "Manage" }, icon: "folder", shape: capsule, height: if window.tv { 46 } else { 32 }) => library.manage()
                             }
                         }
                         Layout(size: compact) {
@@ -69,7 +73,7 @@ pub fn library_page(
                                     Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
                                     Spacer
                                     library_sort()
-                                    Button(id: manage_small, label: tr! { "zh-Hans" => "管理", "en" => "Manage" }, icon: "folder", shape: capsule, height: 32) => library.manage()
+                                    Button(id: manage_small, label: tr! { "zh-Hans" => "管理", "en" => "Manage" }, icon: "folder", shape: capsule, height: if window.tv { 46 } else { 32 }) => library.manage()
                                 }
                                 Row(gap: 12, align: center) {
                                     library_sources(app: app)
@@ -107,10 +111,17 @@ pub fn library_wall(
     #[session] draft: LibraryDraft,
 ) -> impl View {
     ui! {
-        Pinch(id: zoom_wall, label: tr! { "zh-Hans" => "缩放海报墙", "en" => "Zoom poster wall" }, value: draft.poster_size, min: 84, max: 200) {
+        if window.tv {
             ScrollView(position: draft.position, arrival: nudge) {
-                library_grid(library: library, listing: listing, size: draft.poster_size, gap: if draft.poster_size < 110.0 { 10.0 } else { 20.0 }, titles: draft.poster_size >= 110.0)
+                library_grid(library: library, listing: listing, size: draft.tv_poster_size, gap: 20.0, titles: true)
                 Canvas(height: 48)
+            }
+        } else {
+            Pinch(id: zoom_wall, label: tr! { "zh-Hans" => "缩放海报墙", "en" => "Zoom poster wall" }, value: draft.poster_size, min: 84, max: 200) {
+                ScrollView(position: draft.position, arrival: nudge) {
+                    library_grid(library: library, listing: listing, size: draft.poster_size, gap: if draft.poster_size < 110.0 { 10.0 } else { 20.0 }, titles: draft.poster_size >= 110.0)
+                    Canvas(height: 48)
+                }
             }
         }
     }
@@ -188,10 +199,11 @@ pub fn library_grid(
                     library_poster(library: library, poster: poster, show_details: titles)
                 }
             }
-            Column(gap: 1, width: 20) {
+            // A television's letters are 26 points wide (`.l-idx span`).
+            Column(gap: 1, width: if window.tv { 26 } else { 20 }) {
                 ForEach(items: listing.letters, key: letter) |letter| {
                     Button(id: index, label: letter.letter, enabled: letter.target > 0, variant: library_index) {
-                        Column(gap: 0, width: 20, height: 18, align: center) {
+                        Column(gap: 0, width: if window.tv { 26 } else { 20 }, height: 18, align: center) {
                             Text(content: letter.letter, style: caption2, font_size: 10.5, emphasis: secondary)
                         }
                     } => draft.position.set(letter.target)
@@ -225,7 +237,21 @@ pub fn library_zoom(#[session] draft: LibraryDraft) -> impl View {
     ui! {
         // `.l-zoom`: 8 between the parts and 8 more on each side of the
         // slider.
-        if window.compact {
+        if window.tv {
+            // The television's zoom: the slider between the two grids, which
+            // the remote moves by a step (`.l-zs`, 132 points).
+            Row(gap: 8, align: center) {
+                Stack(variant: zoom_symbol) {
+                    Label(title: tr! { "zh-Hans" => "缩小海报", "en" => "Smaller posters" }, icon: "square.grid.3x3", display: icon, style: caption)
+                }
+                Row(width: 132) {
+                    Slider(id: tv_poster_size, label: tr! { "zh-Hans" => "海报大小", "en" => "Poster size" }, value: draft.tv_poster_size, min: 112, max: 230, step: 11.8, label_hidden: true)
+                }
+                Stack(variant: zoom_symbol) {
+                    Label(title: tr! { "zh-Hans" => "放大海报", "en" => "Larger posters" }, icon: "square.grid.2x2", display: icon, style: caption)
+                }
+            }
+        } else if window.compact {
             // The small grid in 14 points, the large in 20, as the design draws
             // them; the slider is its 28 points tall.
             Row(gap: 16, height: 28, align: center) {
@@ -255,19 +281,19 @@ pub fn library_zoom(#[session] draft: LibraryDraft) -> impl View {
 pub fn library_sort(#[session] draft: LibraryDraft) -> impl View {
     ui! {
         if draft.sort == LibrarySort::Recent {
-            Menu(id: sort_recent, label: draft.sort, icon: "arrow.up.arrow.down", shape: capsule, height: 32) {
+            Menu(id: sort_recent, label: draft.sort, icon: "arrow.up.arrow.down", shape: capsule, height: if window.tv { 46 } else { 32 }) {
                 MenuItem(id: recent_recent, label: tr! { "zh-Hans" => "最近观看", "en" => "Recently watched" }, icon: "checkmark") => draft.sort.set(LibrarySort::Recent)
                 MenuItem(id: name_recent, label: tr! { "zh-Hans" => "名称（拼音）", "en" => "Name (pinyin)" }) => draft.sort.set(LibrarySort::Name)
                 MenuItem(id: rating_recent, label: tr! { "zh-Hans" => "评分", "en" => "Rating" }) => draft.sort.set(LibrarySort::Rating)
             }
         } else if draft.sort == LibrarySort::Name {
-            Menu(id: sort_name, label: draft.sort, icon: "arrow.up.arrow.down", shape: capsule, height: 32) {
+            Menu(id: sort_name, label: draft.sort, icon: "arrow.up.arrow.down", shape: capsule, height: if window.tv { 46 } else { 32 }) {
                 MenuItem(id: recent_name, label: tr! { "zh-Hans" => "最近观看", "en" => "Recently watched" }) => draft.sort.set(LibrarySort::Recent)
                 MenuItem(id: name_name, label: tr! { "zh-Hans" => "名称（拼音）", "en" => "Name (pinyin)" }, icon: "checkmark") => draft.sort.set(LibrarySort::Name)
                 MenuItem(id: rating_name, label: tr! { "zh-Hans" => "评分", "en" => "Rating" }) => draft.sort.set(LibrarySort::Rating)
             }
         } else if draft.sort == LibrarySort::Rating {
-            Menu(id: sort_rating, label: draft.sort, icon: "arrow.up.arrow.down", shape: capsule, height: 32) {
+            Menu(id: sort_rating, label: draft.sort, icon: "arrow.up.arrow.down", shape: capsule, height: if window.tv { 46 } else { 32 }) {
                 MenuItem(id: recent_rating, label: tr! { "zh-Hans" => "最近观看", "en" => "Recently watched" }) => draft.sort.set(LibrarySort::Recent)
                 MenuItem(id: name_rating, label: tr! { "zh-Hans" => "名称（拼音）", "en" => "Name (pinyin)" }) => draft.sort.set(LibrarySort::Name)
                 MenuItem(id: rating_rating, label: tr! { "zh-Hans" => "评分", "en" => "Rating" }, icon: "checkmark") => draft.sort.set(LibrarySort::Rating)
@@ -310,9 +336,9 @@ pub fn library_filter(
 ) -> impl View {
     ui! {
         if draft.filter == value {
-            Button(id: selected, label: tr! { "zh-Hans" => "{name} {count}", "en" => "{name} {count}"; name: value, count: count }, icon: "checkmark", prominence: prominent, shape: capsule, height: 30, variant: library_chip) => draft.filter.set(value)
+            Button(id: selected, label: tr! { "zh-Hans" => "{name} {count}", "en" => "{name} {count}"; name: value, count: count }, icon: "checkmark", prominence: prominent, shape: capsule, height: if window.tv { 40 } else { 30 }, variant: library_chip) => draft.filter.set(value)
         } else {
-            Button(id: select, label: tr! { "zh-Hans" => "{name} {count}", "en" => "{name} {count}"; name: value, count: count }, shape: capsule, height: 30, variant: library_chip) => draft.filter.set(value)
+            Button(id: select, label: tr! { "zh-Hans" => "{name} {count}", "en" => "{name} {count}"; name: value, count: count }, shape: capsule, height: if window.tv { 40 } else { 30 }, variant: library_chip) => draft.filter.set(value)
         }
     }
 }

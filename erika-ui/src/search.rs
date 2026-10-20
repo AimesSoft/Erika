@@ -26,8 +26,9 @@ pub fn search_results(
                             Row(gap: 12, padding_x: 12, padding_y: 4, align: top) {
                                 ForEach(items: found.shows, key: id) |show| {
                                     SearchItem(id: show, label: show.title, navigation: false) {
-                                        Column(gap: 5, width: 70) {
-                                            Image(source: show.poster, width: 70, height: 105, fit: cover, corner: 10, label: show.title)
+                                        // A television's posters are 96 wide (`.tv-sr .pp`).
+                                        Column(gap: 5, width: if window.tv { 96 } else { 70 }) {
+                                            Image(source: show.poster, width: if window.tv { 96 } else { 70 }, height: if window.tv { 144 } else { 105 }, fit: cover, corner: 10, label: show.title)
                                             Text(content: show.title, style: caption, lines: 1, line_height: 15)
                                         }
                                     } => anime.open_from_search(show.id)
@@ -112,7 +113,8 @@ pub fn search_commands(
                     Text(content: tr! { "zh-Hans" => "操作", "en" => "Actions" }, style: caption, emphasis: secondary, line_height: 15)
                     Canvas(height: 6)
                 }
-                if actions.open_file {
+                // A television has no files to open.
+                if actions.open_file && !window.tv {
                     SearchItem(id: open_file, label: tr! { "zh-Hans" => "打开文件…", "en" => "Open File…" }, icon: "folder", hint: tr! { "zh-Hans" => "⌘O", "en" => "⌘O" }, pick: draft.file, files: "video") => app.open_file(draft.file)
                 }
                 if actions.schedule {

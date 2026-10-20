@@ -50,6 +50,11 @@ pub fn home(anime: anime::Client) -> impl View {
             Layout(size: expanded) {
                 desktop_home(anime: anime)
             }
+            // The television shows the desktop's stage, larger (design
+            // 6.2 `TV`).
+            Layout(size: tv) {
+                desktop_home(anime: anime)
+            }
         }
     }
 }
@@ -58,7 +63,8 @@ pub fn home(anime: anime::Client) -> impl View {
 pub fn desktop_home(anime: anime::Client) -> impl View {
     ui! {
         ScrollView(appear: page_in) {
-            Column(gap: 0, padding_x: 32, padding_y: 6) {
+            // A television's page keeps the overscan's 56 points (`.x-page`).
+            Column(gap: 0, padding_x: if window.tv { 56 } else { 32 }, padding_y: 6) {
                 Row(gap: 14, align: baseline) {
                     Text(content: tr! { "zh-Hans" => "首页", "en" => "Home" }, style: large_title)
                     Text(content: tr! { "zh-Hans" => "{today, date, EEE · M 月 d 日}", "en" => "{today, date, EEE · MMM d}"; today: anime.today }, emphasis: secondary)
@@ -80,18 +86,31 @@ pub fn desktop_home(anime: anime::Client) -> impl View {
 #[component]
 pub fn stage(anime: anime::Client) -> impl View {
     ui! {
-        Row(gap: 28, align: top) {
+        // A television's stage is 560 × 315 with 36 points beside it
+        // (`.h-stage`, `.h-frame` on the television).
+        Row(gap: if window.tv { 36 } else { 28 }, align: top) {
             Button(id: stage, label: anime.stage.title, variant: stage) {
                 Stack(align: center) {
                     Stack(align: bottom_leading) {
-                        Image(source: anime.stage.still, width: 528, height: 297, corner: 22, fit: cover, label: anime.stage.title, hero: frame, hero_key: anime.stage.title)
+                        Image(source: anime.stage.still, width: if window.tv { 560 } else { 528 }, height: if window.tv { 315 } else { 297 }, corner: 22, fit: cover, label: anime.stage.title, hero: frame, hero_key: anime.stage.title)
                         Rail {
                             Canvas(from: 0, to: anime.stage.progress, height: 5) {
                                 Shape(kind: rect, fill: accent)
                             }
                         }
                     }
-                    Label(title: tr! { "zh-Hans" => "播放", "en" => "Play" }, icon: "play.fill", display: icon, style: title2, appearance: dark, reveal: hover)
+                    // The television always shows the way to play, on a dark
+                    // disc (`.h-hint`).
+                    if window.tv {
+                        Stack(width: 69, height: 69, align: center, appearance: dark) {
+                            Canvas(width: 69, height: 69) {
+                                Shape(kind: ellipse, fill: surface.canvas, opacity: 0.45)
+                            }
+                            Label(title: tr! { "zh-Hans" => "播放", "en" => "Play" }, icon: "play.fill", display: icon, style: title3)
+                        }
+                    } else {
+                        Label(title: tr! { "zh-Hans" => "播放", "en" => "Play" }, icon: "play.fill", display: icon, style: title2, appearance: dark, reveal: hover)
+                    }
                 }
             } => anime.resume(anime.stage.id)
             // The prototype's `528px 1fr`: this column takes the rest, so the
@@ -117,10 +136,24 @@ pub fn stage(anime: anime::Client) -> impl View {
                             Button(id: swap, label: watching.title, variant: row) {
                                 Row(gap: 12, align: center) {
                                     Stack(align: bottom_leading, variant: thumbnail) {
-                                        Image(source: watching.still, width: 96, height: 54, fit: cover, corner: 8, label: watching.title, hero: frame, hero_key: watching.title)
+                                        Image(source: watching.still, width: if window.tv { 120 } else { 96 }, height: if window.tv { 68 } else { 54 }, fit: cover, corner: 8, label: watching.title, hero: frame, hero_key: watching.title)
                                         Rail {
                                             Canvas(from: 0, to: watching.progress, height: 3) {
                                                 Shape(kind: rect, fill: accent)
+                                            }
+                                        }
+                                        // The television's way to play it, a small disc
+                                        // in the corner (`.h-pl`).
+                                        if window.tv {
+                                            Stack(width: 120, height: 68, align: bottom_trailing) {
+                                                Column(gap: 0, padding_x: 6, padding_y: 8) {
+                                                    Stack(width: 30, height: 30, align: center, appearance: dark) {
+                                                        Canvas(width: 30, height: 30) {
+                                                            Shape(kind: ellipse, fill: surface.canvas, opacity: 0.55)
+                                                        }
+                                                        Label(title: tr! { "zh-Hans" => "播放", "en" => "Play" }, icon: "play.fill", display: icon, style: caption)
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -131,12 +164,16 @@ pub fn stage(anime: anime::Client) -> impl View {
                                     Spacer
                                 }
                             } => anime.stage(watching.id)
+                            // A pointer's way to play it at once; the remote
+                            // puts it on the stage first.
+                            if !window.tv {
                             Row(gap: 0, padding: 6, reveal: hover) {
                                 Button(id: play_also, label: tr! { "zh-Hans" => "播放", "en" => "Play" }, variant: preview_play) {
                                     Stack(align: center, width: 96, height: 54, appearance: dark) {
                                         Label(title: tr! { "zh-Hans" => "播放", "en" => "Play" }, icon: "play.fill", display: icon, style: title3)
                                     }
                                 } => anime.resume(watching.id)
+                            }
                             }
                         }
                     }
@@ -229,6 +266,9 @@ pub fn details(anime: anime::Client) -> impl View {
             Layout(size: expanded) {
                 desktop_details(anime: anime)
             }
+            Layout(size: tv) {
+                desktop_details(anime: anime)
+            }
         }
     }
 }
@@ -241,7 +281,7 @@ pub fn desktop_details(anime: anime::Client, #[session] draft: AnimeDraft) -> im
                 Canvas(height: 440, appear: fade) {
                     Shape(kind: rect, fill_from: anime.show.poster, fade: down, opacity: 0.34)
                 }
-                Column(gap: 0, padding_x: 32, padding_y: 12) {
+                Column(gap: 0, padding_x: if window.tv { 56 } else { 32 }, padding_y: 12) {
                     Row(gap: 36, align: top) {
                         Image(source: anime.show.poster, width: 220, height: 330, fit: cover, corner: 10, label: anime.show.title)
                         Column(gap: 0, stagger: 0.03) {
@@ -393,7 +433,7 @@ pub fn new_page(anime: anime::Client) -> impl View {
                 }
                 // On the phone the title and the season are the header's
                 // (`.x-pnav` and the line under it), 14 points above the days.
-                Column(gap: 0, padding_x: if window.compact { 16 } else if window.medium { 24 } else { 32 }, padding_y: if window.compact { 0 } else { 6 }) {
+                Column(gap: 0, padding_x: if window.tv { 56 } else if window.compact { 16 } else if window.medium { 24 } else { 32 }, padding_y: if window.compact { 0 } else { 6 }) {
                     if window.compact {
                         Canvas(height: 14)
                     } else {
@@ -411,9 +451,10 @@ pub fn new_page(anime: anime::Client) -> impl View {
                             }
                         }
                     } else {
-                        Accordion(count: 7, selected: anime.selected_day, collapsed_width: 86, gap: 8, height: 560, corner: 22, animate: bouncy) {
+                        // A television's week is 500 points tall (`.n-acc`).
+                        Accordion(count: 7, selected: anime.selected_day, collapsed_width: 86, gap: 8, height: if window.tv { 500 } else { 560 }, corner: 22, animate: bouncy) {
                             ForEach(items: anime.week, key: id, stagger: 0.036) |day| {
-                                Stack(align: top_leading, height: 560, appear: calendar_column_in, appear_delay: 0.06) {
+                                Stack(align: top_leading, height: if window.tv { 500 } else { 560 }, appear: calendar_column_in, appear_delay: 0.06) {
                                     if anime.selected_day == day.id {
                                         Rail {
                                             Column(gap: 0, from: 0, to: 1) {
@@ -429,8 +470,8 @@ pub fn new_page(anime: anime::Client) -> impl View {
                                         }
                                     } else {
                                         Button(id: select_day, label: tr! { "zh-Hans" => "展开{day, date, EEE} · {count} 部", "en" => "Expand {day, date, EEE} · {count, plural, one {# show} other {# shows}}"; day: day.date, count: day.count }, variant: calendar_day) {
-                                            Column(gap: 0, height: 560, align: center) {
-                                                calendar_header(day: day)
+                                            Column(gap: 0, height: if window.tv { 500 } else { 560 }, align: center) {
+                                                calendar_header_collapsed(day: day)
                                                 Canvas(height: 19)
                                                 Column(gap: 10, width: 86, align: center) {
                                                     ForEach(items: day.preview, key: id) |show| {
@@ -472,6 +513,29 @@ pub fn calendar_background(anime: anime::Client, day: anime::BroadcastDay) -> im
     }
 }
 
+/// The heading of a folded day: the same words, stacked in the column's
+/// 86 points, 16 from its edge.
+#[component]
+pub fn calendar_header_collapsed(day: anime::BroadcastDay) -> impl View {
+    ui! {
+        Column(gap: 0, width: 86) {
+            Canvas(height: 16)
+            Column(gap: 0, padding_x: 16) {
+            Text(content: tr! { "zh-Hans" => "{day, date, EEE}", "en" => "{day, date, EEE}"; day: day.date }, style: title3, lines: 1)
+            if day.today {
+                Text(content: tr! { "zh-Hans" => "今天 · {count} 部", "en" => "Today · {count}"; count: day.count }, style: caption, emphasis: secondary, lines: 1)
+            } else if day.tomorrow {
+                Text(content: tr! { "zh-Hans" => "明天 · {count} 部", "en" => "Tomorrow · {count}"; count: day.count }, style: caption, emphasis: secondary, lines: 1)
+            } else if day.day_after {
+                Text(content: tr! { "zh-Hans" => "后天 · {count} 部", "en" => "In 2 days · {count}"; count: day.count }, style: caption, emphasis: secondary, lines: 1)
+            } else {
+                Text(content: tr! { "zh-Hans" => "{count} 部", "en" => "{count} shows"; count: day.count }, style: caption, emphasis: secondary, lines: 1)
+            }
+            }
+        }
+    }
+}
+
 #[component]
 pub fn calendar_header(day: anime::BroadcastDay) -> impl View {
     ui! {
@@ -480,11 +544,13 @@ pub fn calendar_header(day: anime::BroadcastDay) -> impl View {
             Row(gap: 0) {
                 Canvas(width: 16, height: 39)
                 Column(gap: 0) {
-                    Row(gap: 0, height: 24) {
+                    // A television's heading and line are larger (`--t-h2`,
+                    // `--t-cap`).
+                    Row(gap: 0, height: if window.tv { 28 } else { 24 }) {
                         Text(content: tr! { "zh-Hans" => "{day, date, EEE}", "en" => "{day, date, EEE}"; day: day.date }, style: title3, lines: 1)
                         Spacer
                     }
-                    Row(gap: 3, height: 15) {
+                    Row(gap: 3, height: if window.tv { 18 } else { 15 }) {
                         if day.today {
                             Text(content: tr! { "zh-Hans" => "今天", "en" => "Today" }, style: caption, mark: accent, lines: 1)
                             Text(content: tr! { "zh-Hans" => "· {count} 部", "en" => "· {count}"; count: day.count }, style: caption, emphasis: secondary, lines: 1)
@@ -526,22 +592,23 @@ pub fn calendar_rows(anime: anime::Client, day: anime::BroadcastDay) -> impl Vie
                     Row(gap: 14, padding_x: 6, padding_y: 10, align: center) {
                         // `.n-row`: the time and the title at 14 / 19, the
                         // note at 11.5 / 15.
-                        Column(width: 44) {
+                        // A television's times are 17 points (`--t-title`).
+                        Column(width: if window.tv { 52 } else { 44 }) {
                             if show.aired {
-                                Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: headline, emphasis: secondary, lines: 1, line_height: 19)
+                                Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: headline, emphasis: secondary, lines: 1, line_height: if window.tv { 22 } else { 19 })
                             } else {
-                                Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: headline, lines: 1, line_height: 19)
+                                Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: headline, lines: 1, line_height: if window.tv { 22 } else { 19 })
                             }
                         }
                         Image(source: show.poster, width: 58, height: 87, fit: cover, corner: 10)
                         Column(gap: 0) {
-                            Text(content: show.title, style: headline, lines: 1, line_height: 19)
+                            Text(content: show.title, style: headline, lines: 1, line_height: if window.tv { 22 } else { 19 })
                             if show.aired {
-                                Text(content: tr! { "zh-Hans" => "第 {episode} 集 · 已更新", "en" => "Episode {episode} · Updated"; episode: show.episode }, style: caption, emphasis: secondary, lines: 1, line_height: 15)
+                                Text(content: tr! { "zh-Hans" => "第 {episode} 集 · 已更新", "en" => "Episode {episode} · Updated"; episode: show.episode }, style: caption, emphasis: secondary, lines: 1, line_height: if window.tv { 18 } else { 15 })
                             } else if show.tonight {
-                                Text(content: tr! { "zh-Hans" => "今晚更新", "en" => "Airing tonight" }, style: caption, emphasis: secondary, lines: 1, line_height: 15)
+                                Text(content: tr! { "zh-Hans" => "今晚更新", "en" => "Airing tonight" }, style: caption, emphasis: secondary, lines: 1, line_height: if window.tv { 18 } else { 15 })
                             } else {
-                                Text(content: tr! { "zh-Hans" => "等待更新", "en" => "Upcoming" }, style: caption, emphasis: secondary, lines: 1, line_height: 15)
+                                Text(content: tr! { "zh-Hans" => "等待更新", "en" => "Upcoming" }, style: caption, emphasis: secondary, lines: 1, line_height: if window.tv { 18 } else { 15 })
                             }
                         }
                         Spacer

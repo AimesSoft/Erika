@@ -17,6 +17,7 @@ name = { "zh-Hans" = "Erika", "en" = "Erika" }
 default = "design/brand/erika-icon-export/png/circle/erika-circle-1024.png"
 macos = "design/brand/erika-icon-export/macos/Erika.icns"
 ios = "design/brand/erika-icon-export/ios/AppIcon.appiconset"
+tvos = "design/brand/erika-icon-export/tvos/Erika.brandassets"
 windows = "design/brand/erika-icon-export/windows/erika.ico"
 linux = "design/brand/erika-icon-export/linux/hicolor"
 android = "design/brand/erika-icon-export/android/res"
@@ -60,6 +61,13 @@ channels = ["ipc"]
 # simulator that is running.
 [targets.ios]
 platform = "ios"
+channels = ["ipc"]
+
+# Apple TV, built for the simulator; `bern run --target tvos` starts it in
+# the Apple TV simulator that is running. The television's layouts are
+# the `tv` ones of the design (6.2), driven by the remote's focus.
+[targets.tvos]
+platform = "tvos"
 channels = ["ipc"]
 
 [targets.windows]

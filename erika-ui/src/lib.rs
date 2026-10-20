@@ -22,6 +22,8 @@ mod settings;
 use settings::{settings, settings_props};
 mod pure;
 use pure::{pure_window, pure_window_props};
+mod tv;
+use tv::{tv_shell, tv_shell_props};
 
 style! {
     accents {
@@ -32,17 +34,21 @@ style! {
 
     // The type of the design (section 8.2 and the desktop prototype):
     // the system font at the prototype's sizes and weights.
+    // `tv`: the television's sizes (next.css `.nx[data-dev="tv"]`), read
+    // from across the room: `--t-lt` 34, `--t-h1` 32, `--t-h2` 22,
+    // `--t-title` 17, `--t-body` 16, `--t-cap` 13.5, `--t-time` 14.
     text {
-        large_title: font(size: 30, weight: bold),
+        large_title: font(size: 30, tv: 34, weight: bold),
         title: font(size: 34, weight: bold),
-        title2: font(size: 28, weight: bold),
-        title3: font(size: 19, weight: bold),
-        headline: font(size: 14, weight: semibold),
-        // `--t-body`: the words of the pages, 13 points on every device.
-        body: font(size: 13, weight: regular),
+        title2: font(size: 28, tv: 32, weight: bold),
+        title3: font(size: 19, tv: 22, weight: bold),
+        headline: font(size: 14, tv: 17, weight: semibold),
+        // `--t-body`: the words of the pages, 13 points on every device
+        // but a television.
+        body: font(size: 13, tv: 16, weight: regular),
         callout: font(size: 16, weight: semibold),
-        caption: font(size: 11.5, weight: medium),
-        caption2: font(size: 12.5, weight: semibold),
+        caption: font(size: 11.5, tv: 13.5, weight: medium),
+        caption2: font(size: 12.5, tv: 14, weight: semibold),
         subheadline: font(size: 8.5, weight: semibold),
     }
 
@@ -53,6 +59,9 @@ style! {
     Stack.player_cyan { foreground: color(light: "#8EE3FF", dark: "#8EE3FF") }
     Stack.player_pink { foreground: color(light: "#FFB3C7", dark: "#FFB3C7") }
     Button.player_picture { hover: none, pressed: none }
+    // The television's picture while the controls are hidden: it holds
+    // the remote's focus without showing it.
+    Button.remote_surface { hover: none, pressed: none, focus: none }
     IconButton.player_primary { size: extra_large, hover: scale(1.08, snappy), pressed: scale(0.84, press), settle: jelly }
     #[target(browser)]
     IconButton.player_primary { size: regular }
@@ -165,6 +174,17 @@ style! {
         corner: 8,
     }
 
+    // The television's settings: the panel of pages (`.s-side`, 16-point
+    // corners on the raised surface) and its rows, which the focus turns
+    // white.
+    Stack.settings_tv_side { background: surface.raised, corner: 16 }
+    Button.settings_tv_nav { corner: 23, hover: background(fill.subtle), pressed: scale(0.97, press), settle: jelly }
+    // A key of the television's search keyboard (`.tv-kb .c-btn`): the
+    // neutral fill, 12-point corners; the focus turns it white.
+    Button.tv_key { background: fill.subtle, corner: 12, hover: none, pressed: scale(0.94, press), settle: jelly }
+    // The grids beside the television's zoom slider.
+    Stack.zoom_symbol { foreground: text.secondary }
+
     // Pure playback (design 10.2): the film in the empty frame in the
     // tertiary label color (`--on3`), a recent video's row (`.i-rc`), and
     // the key on 「继续上次」 (`.i-key kbd`).
@@ -194,9 +214,12 @@ style! {
     Form { background: surface.raised }
 
     // The first run's page (`.o-win`): the design's background on the
-    // phone, which it covers.
+    // phone and the television, which it covers.
     Stack.onboarding_page {}
     #[target(ios)]
+    Stack.onboarding_page { background: color(light: "#FFFFFF", dark: "#1C1C1E") }
+    // On the television the first run fills the screen, over the pages.
+    #[target(tvos)]
     Stack.onboarding_page { background: color(light: "#FFFFFF", dark: "#1C1C1E") }
 
     // The symbol of a settings row (`.c-li .lic`): 28 points on the neutral
@@ -353,7 +376,7 @@ pub fn app(app: erika::Client, anime: anime::Client, windows: AppWindows) -> imp
                 main_window(app: app, anime: anime, windows: windows)
             }
             Window(id: settings, title: tr! { "zh-Hans" => "设置", "en" => "Settings" }, width: 1000, height: 660, min_width: 1000, min_height: 660, chrome: standard) {
-                settings(app: app)
+                settings(app: app, windows: windows)
             }
         }
     }
@@ -394,6 +417,11 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
             // A phone (design 3.1): the pages are tabs, search the last.
             Layout(size: compact) {
                 phone_shell(app: app, anime: anime, windows: windows)
+            }
+            // A television (design 3.1, 6.2): the tabs along the top,
+            // search the first, driven by the remote's focus.
+            Layout(size: tv) {
+                tv_shell(app: app, anime: anime, windows: windows)
             }
             Layout(size: expanded) {
             // Pure playback (design 10.2): no module adds pages, so no

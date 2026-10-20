@@ -9,64 +9,86 @@ use erika_protocol::erika::{self, Accent, OnboardingPreset};
 #[component]
 pub fn onboarding(app: erika::Client) -> impl View {
     ui! {
-        // On the phone the flow covers the screen (`obOpen`: the whole
-        // window), its foot 72 points at the bottom.
-        Modal(width: 960, height: 600, cover: compact, appear: pop_in, disappear: fade) {
-            Stack(variant: onboarding_page) {
-                Column(gap: 0) {
-                    if app.onboarding.step == 0 {
-                        onboarding_welcome()
-                    } else if app.onboarding.step == 3 {
-                        // `.o-step` of the last step: centred in the screen.
-                        if window.compact {
-                            Column(gap: 0, align: center) {
-                                Spacer
-                                onboarding_ready(app: app)
-                                Spacer
-                            }
-                        } else {
-                            ScrollView {
-                                onboarding_ready(app: app)
-                            }
+        // A television shows the flow over the whole screen, in the
+        // prototype's 1280 × 720 scene (design 10.1: 「电视全屏」).
+        if window.tv {
+            Stack(under_bars: true, appear: fade, disappear: fade) {
+                ScaleBox(width: 1280, height: 720) {
+                    // The whole screen is the window (`.o-win`, 1280 × 720):
+                    // the steps above, the foot's 72 points below.
+                    Stack(variant: onboarding_page, width: 1280, height: 720) {
+                        onboarding_content(app: app)
+                    }
+                }
+            }
+        } else {
+            // On the phone the flow covers the screen (`obOpen`: the whole
+            // window), its foot 72 points at the bottom.
+            Modal(width: 960, height: 600, cover: compact, appear: pop_in, disappear: fade) {
+                Stack(variant: onboarding_page) {
+                    onboarding_content(app: app)
+                }
+            }
+        }
+    }
+}
+
+/// The steps and their foot.
+#[component]
+pub fn onboarding_content(app: erika::Client) -> impl View {
+    ui! {
+        Column(gap: 0) {
+            if app.onboarding.step == 0 {
+                onboarding_welcome()
+            } else if app.onboarding.step == 3 {
+                // `.o-step` of the last step: centred in the screen.
+                if window.compact {
+                    Column(gap: 0, align: center) {
+                        Spacer
+                        onboarding_ready(app: app)
+                        Spacer
+                    }
+                } else {
+                    ScrollView {
+                        onboarding_ready(app: app)
+                    }
+                }
+            } else {
+                ScrollView {
+                    if window.compact {
+                        // `.o-step` on the phone: 20 from the edges, the
+                        // preview above the choices, 16 between.
+                        Column(gap: 16, padding_x: 20) {
+                            Canvas(height: 4)
+                            onboarding_preview(app: app, wide: true)
+                            if app.onboarding.step == 1 { onboarding_features(app: app) }
+                            else { onboarding_appearance(app: app) }
+                            Canvas(height: 4)
                         }
                     } else {
-                        ScrollView {
-                            if window.compact {
-                                // `.o-step` on the phone: 20 from the edges, the
-                                // preview above the choices, 16 between.
-                                Column(gap: 16, padding_x: 20) {
-                                    Canvas(height: 4)
-                                    onboarding_preview(app: app, wide: true)
-                                    if app.onboarding.step == 1 { onboarding_features(app: app) }
-                                    else { onboarding_appearance(app: app) }
-                                    Canvas(height: 4)
-                                }
-                            } else {
-                            Column(gap: 0, padding_x: if window.medium { 28 } else { 44 }, padding_y: 36) {
-                                if window.medium {
-                                    Column(gap: 22) {
-                                        if app.onboarding.step == 1 { onboarding_features(app: app) }
-                                        else { onboarding_appearance(app: app) }
-                                        Row {
-                                            Spacer
-                                            onboarding_preview(app: app, wide: false)
-                                            Spacer
-                                        }
-                                    }
-                                } else {
-                                    Row(gap: 28, align: top) {
-                                        if app.onboarding.step == 1 { onboarding_features(app: app) }
-                                        else { onboarding_appearance(app: app) }
-                                        onboarding_preview(app: app, wide: false)
-                                    }
+                    Column(gap: 0, padding_x: if window.medium { 28 } else { 44 }, padding_y: 36) {
+                        if window.medium {
+                            Column(gap: 22) {
+                                if app.onboarding.step == 1 { onboarding_features(app: app) }
+                                else { onboarding_appearance(app: app) }
+                                Row {
+                                    Spacer
+                                    onboarding_preview(app: app, wide: false)
+                                    Spacer
                                 }
                             }
+                        } else {
+                            Row(gap: 28, align: top) {
+                                if app.onboarding.step == 1 { onboarding_features(app: app) }
+                                else { onboarding_appearance(app: app) }
+                                onboarding_preview(app: app, wide: false)
                             }
                         }
                     }
-                    onboarding_footer(app: app)
+                    }
                 }
             }
+            onboarding_footer(app: app)
         }
     }
 }
@@ -94,10 +116,17 @@ pub fn onboarding_welcome() -> impl View {
                 }
             }
         } else {
-            Row(gap: 0, height: 528, align: top) {
-                Stack(variant: onboarding_art, width: 480, height: 528) {
+            // A television's art is the screen's left half (640 × 648).
+            Row(gap: 0, height: if window.tv { 648 } else { 528 }, align: top) {
+                Stack(variant: onboarding_art, width: if window.tv { 640 } else { 480 }, height: if window.tv { 648 } else { 528 }) {
                     Canvas { Pattern(name: academy) }
-                    Svg(source: "design/brand/erika-icon-animated.svg", width: 200, height: 200, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                    // A television has no web engine for the animated logo:
+                    // the logo stands still there.
+                    if window.tv {
+                        Image(source: "design/brand/erika-icon-export/logo/erika-logo-icon-512.png", width: 200, height: 200, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                    } else {
+                        Svg(source: "design/brand/erika-icon-animated.svg", width: 200, height: 200, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                    }
                 }
                 Column(gap: 0, padding_y: 64) {
                     Row(gap: 0, padding_x: 36) {
@@ -300,9 +329,9 @@ pub fn onboarding_footer(app: erika::Client) -> impl View {
                     // A button the step does not offer keeps its room, as
                     // the design hides it, so the dots stay put.
                     if app.onboarding.step < 3 {
-                        Button(id: skip, label: tr! { "zh-Hans" => "跳过", "en" => "Skip" }, shape: capsule, height: 32) => app.onboarding_skip()
+                        Button(id: skip, label: tr! { "zh-Hans" => "跳过", "en" => "Skip" }, shape: capsule, height: if window.tv { 46 } else { 32 }) => app.onboarding_skip()
                     } else {
-                        Canvas(width: 54, height: 32)
+                        Canvas(width: if window.tv { 76 } else { 54 }, height: 32)
                     }
                     Spacer
                     Row(gap: 6, align: center) {
@@ -313,16 +342,16 @@ pub fn onboarding_footer(app: erika::Client) -> impl View {
                     }
                     Spacer
                     if app.onboarding.step > 0 {
-                        Button(id: back, label: tr! { "zh-Hans" => "上一步", "en" => "Back" }, shape: capsule, height: 32) => app.onboarding_back()
+                        Button(id: back, label: tr! { "zh-Hans" => "上一步", "en" => "Back" }, shape: capsule, height: if window.tv { 46 } else { 32 }) => app.onboarding_back()
                     } else {
-                        Canvas(width: 67, height: 32)
+                        Canvas(width: if window.tv { 92 } else { 67 }, height: 32)
                     }
                     if app.onboarding.step == 0 {
-                        Button(id: start, label: tr! { "zh-Hans" => "开始", "en" => "Start" }, shape: capsule, height: 32, prominence: prominent) => app.onboarding_next()
+                        Button(id: start, label: tr! { "zh-Hans" => "开始", "en" => "Start" }, shape: capsule, height: if window.tv { 46 } else { 32 }, prominence: prominent, default_focus: true) => app.onboarding_next()
                     } else if app.onboarding.step == 3 {
-                        Button(id: finish, label: tr! { "zh-Hans" => "开始使用", "en" => "Get started" }, shape: capsule, height: 32, prominence: prominent) => app.onboarding_next()
+                        Button(id: finish, label: tr! { "zh-Hans" => "开始使用", "en" => "Get started" }, shape: capsule, height: if window.tv { 46 } else { 32 }, prominence: prominent, default_focus: true) => app.onboarding_next()
                     } else {
-                        Button(id: next, label: tr! { "zh-Hans" => "继续", "en" => "Continue" }, shape: capsule, height: 32, prominence: prominent) => app.onboarding_next()
+                        Button(id: next, label: tr! { "zh-Hans" => "继续", "en" => "Continue" }, shape: capsule, height: if window.tv { 46 } else { 32 }, prominence: prominent, default_focus: true) => app.onboarding_next()
                     }
                 }
             }

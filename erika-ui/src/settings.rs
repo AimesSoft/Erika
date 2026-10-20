@@ -7,6 +7,7 @@ use crate::feature_preview::{
     feature_preview_hud, feature_preview_hud_props, feature_preview_window,
     feature_preview_window_props,
 };
+use crate::AppWindows;
 use erika_protocol::erika::{self, *};
 #[bern::session]
 pub struct SettingsDraft {
@@ -19,8 +20,11 @@ pub struct SettingsDraft {
     pub danmaku_file: MediaSource,
 }
 #[component]
-pub fn settings(app: erika::Client, #[session] draft: SettingsDraft) -> impl View {
+pub fn settings(app: erika::Client, windows: AppWindows, #[session] draft: SettingsDraft) -> impl View {
     ui! {
+        if window.tv {
+            tv_settings(app: app, windows: windows)
+        } else {
         Stack(align: bottom, reduce_motion: app.preferences.reduce_motion) {
             SplitView {
                 Sidebar(id: settings_sections, width: 220, selection: draft.page) {
@@ -66,33 +70,307 @@ pub fn settings(app: erika::Client, #[session] draft: SettingsDraft) -> impl Vie
                     }
                 }
                 Detail {
-                    Column(gap: 0) {
-                        match draft.page {
-                            SettingsPage::General => { settings_general(app: app) }
-                            SettingsPage::Appearance => { settings_appearance(app: app) }
-                            SettingsPage::Player => { settings_player(app: app) }
-                            SettingsPage::Danmaku => { settings_danmaku(app: app) }
-                            SettingsPage::Library => { settings_module_placeholder(app: app) }
-                            SettingsPage::Anime => { settings_module_placeholder(app: app) }
-                            SettingsPage::Sync => { settings_module_placeholder(app: app) }
-                            SettingsPage::Sources => { settings_module_placeholder(app: app) }
-                            SettingsPage::Remote => { settings_module_placeholder(app: app) }
-                            SettingsPage::Downloads => { settings_module_placeholder(app: app) }
-                            SettingsPage::Enhance => { settings_module_placeholder(app: app) }
-                            SettingsPage::Optional => { settings_optional(app: app) }
-                            SettingsPage::Plugins => { settings_plugins(app: app) }
-                            SettingsPage::Keys => { settings_keys(app: app) }
-                            SettingsPage::About => { settings_about(app: app) }
-                        }
-                    }
+                    settings_page(app: app)
                 }
             }
             if let Some(notice) = app.notice {
                 Toast(content: notice, key: app.notice_revision, duration: 3)
             }
         }
+        }
     }
 }
+
+/// The page the settings show.
+#[component]
+pub fn settings_page(app: erika::Client, #[session] draft: SettingsDraft) -> impl View {
+    ui! {
+        Column(gap: 0) {
+            match draft.page {
+                SettingsPage::General => { settings_general(app: app) }
+                SettingsPage::Appearance => { settings_appearance(app: app) }
+                SettingsPage::Player => { settings_player(app: app) }
+                SettingsPage::Danmaku => { settings_danmaku(app: app) }
+                SettingsPage::Library => { settings_module_placeholder(app: app) }
+                SettingsPage::Anime => { settings_module_placeholder(app: app) }
+                SettingsPage::Sync => { settings_module_placeholder(app: app) }
+                SettingsPage::Sources => { settings_module_placeholder(app: app) }
+                SettingsPage::Remote => { settings_module_placeholder(app: app) }
+                SettingsPage::Downloads => { settings_module_placeholder(app: app) }
+                SettingsPage::Enhance => { settings_module_placeholder(app: app) }
+                SettingsPage::Optional => { settings_optional(app: app) }
+                SettingsPage::Plugins => { settings_plugins(app: app) }
+                SettingsPage::Keys => { settings_keys(app: app) }
+                SettingsPage::About => { settings_about(app: app) }
+            }
+        }
+    }
+}
+
+/// The settings on a television (`openSettings` on the television): the
+/// whole screen, the prototype's 1280 × 720 scene. The pages stand in a
+/// 300-point panel 8 in from the edges (`.s-side`) with the search above
+/// them, 46-point rows without symbols; the page's title (22 / 600) and
+/// its form to the right; the close button in the top right corner. The
+/// remote's Back closes them too.
+#[component]
+pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: SettingsDraft) -> impl View {
+    ui! {
+        Stack(under_bars: true, reduce_motion: app.preferences.reduce_motion) {
+            ScaleBox(width: 1280, height: 720) {
+                Stack(variant: onboarding_page, width: 1280, height: 720, align: top_leading) {
+                    Positioned(x: 8, y: 8, width: 300, height: 704) {
+                        Stack(variant: settings_tv_side, width: 300, height: 704, align: top_leading) {
+                            // The television searches its settings from the search
+                            // tab, whose results list them; the panel holds the
+                            // pages alone.
+                            Column(gap: 0, padding_x: 10, padding_y: 14) {
+                                ScrollView {
+                                    Column(gap: 2) {
+                                    // The remote starts on the first page (`.c-navi.on`).
+                                    Button(id: tv_settings_general, label: tr! { "zh-Hans" => "通用", "en" => "General" }, variant: settings_tv_nav, default_focus: true) {
+                                        Stack(width: 280, height: 46, align: leading) {
+                                            if draft.page == SettingsPage::General {
+                                                Canvas {
+                                                    Shape(kind: capsule, fill: fill.strong)
+                                                }
+                                            }
+                                            Row(gap: 0, padding_x: 16) {
+                                                Text(content: tr! { "zh-Hans" => "通用", "en" => "General" }, lines: 1)
+                                                Spacer
+                                            }
+                                        }
+                                    } => draft.page.set(SettingsPage::General)
+                                    Button(id: tv_settings_appearance, label: tr! { "zh-Hans" => "外观", "en" => "Appearance" }, variant: settings_tv_nav) {
+                                        Stack(width: 280, height: 46, align: leading) {
+                                            if draft.page == SettingsPage::Appearance {
+                                                Canvas {
+                                                    Shape(kind: capsule, fill: fill.strong)
+                                                }
+                                            }
+                                            Row(gap: 0, padding_x: 16) {
+                                                Text(content: tr! { "zh-Hans" => "外观", "en" => "Appearance" }, lines: 1)
+                                                Spacer
+                                            }
+                                        }
+                                    } => draft.page.set(SettingsPage::Appearance)
+                                    Button(id: tv_settings_player, label: tr! { "zh-Hans" => "播放", "en" => "Playback" }, variant: settings_tv_nav) {
+                                        Stack(width: 280, height: 46, align: leading) {
+                                            if draft.page == SettingsPage::Player {
+                                                Canvas {
+                                                    Shape(kind: capsule, fill: fill.strong)
+                                                }
+                                            }
+                                            Row(gap: 0, padding_x: 16) {
+                                                Text(content: tr! { "zh-Hans" => "播放", "en" => "Playback" }, lines: 1)
+                                                Spacer
+                                            }
+                                        }
+                                    } => draft.page.set(SettingsPage::Player)
+                                    if app.features.danmaku {
+                                        Button(id: tv_settings_danmaku, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, variant: settings_tv_nav) {
+                                            Stack(width: 280, height: 46, align: leading) {
+                                                if draft.page == SettingsPage::Danmaku {
+                                                    Canvas {
+                                                        Shape(kind: capsule, fill: fill.strong)
+                                                    }
+                                                }
+                                                Row(gap: 0, padding_x: 16) {
+                                                    Text(content: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, lines: 1)
+                                                    Spacer
+                                                }
+                                            }
+                                        } => draft.page.set(SettingsPage::Danmaku)
+                                    }
+                                    if app.features.library {
+                                        Button(id: tv_settings_library, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, variant: settings_tv_nav) {
+                                            Stack(width: 280, height: 46, align: leading) {
+                                                if draft.page == SettingsPage::Library {
+                                                    Canvas {
+                                                        Shape(kind: capsule, fill: fill.strong)
+                                                    }
+                                                }
+                                                Row(gap: 0, padding_x: 16) {
+                                                    Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, lines: 1)
+                                                    Spacer
+                                                }
+                                            }
+                                        } => draft.page.set(SettingsPage::Library)
+                                    }
+                                    if app.features.anime {
+                                        Button(id: tv_settings_anime, label: tr! { "zh-Hans" => "追番", "en" => "Anime" }, variant: settings_tv_nav) {
+                                            Stack(width: 280, height: 46, align: leading) {
+                                                if draft.page == SettingsPage::Anime {
+                                                    Canvas {
+                                                        Shape(kind: capsule, fill: fill.strong)
+                                                    }
+                                                }
+                                                Row(gap: 0, padding_x: 16) {
+                                                    Text(content: tr! { "zh-Hans" => "追番", "en" => "Anime" }, lines: 1)
+                                                    Spacer
+                                                }
+                                            }
+                                        } => draft.page.set(SettingsPage::Anime)
+                                    }
+                                    if app.features.sync {
+                                        Button(id: tv_settings_sync, label: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, variant: settings_tv_nav) {
+                                            Stack(width: 280, height: 46, align: leading) {
+                                                if draft.page == SettingsPage::Sync {
+                                                    Canvas {
+                                                        Shape(kind: capsule, fill: fill.strong)
+                                                    }
+                                                }
+                                                Row(gap: 0, padding_x: 16) {
+                                                    Text(content: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, lines: 1)
+                                                    Spacer
+                                                }
+                                            }
+                                        } => draft.page.set(SettingsPage::Sync)
+                                    }
+                                    if app.features.sources {
+                                        Button(id: tv_settings_sources, label: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, variant: settings_tv_nav) {
+                                            Stack(width: 280, height: 46, align: leading) {
+                                                if draft.page == SettingsPage::Sources {
+                                                    Canvas {
+                                                        Shape(kind: capsule, fill: fill.strong)
+                                                    }
+                                                }
+                                                Row(gap: 0, padding_x: 16) {
+                                                    Text(content: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, lines: 1)
+                                                    Spacer
+                                                }
+                                            }
+                                        } => draft.page.set(SettingsPage::Sources)
+                                    }
+                                    if app.features.remote {
+                                        Button(id: tv_settings_remote, label: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, variant: settings_tv_nav) {
+                                            Stack(width: 280, height: 46, align: leading) {
+                                                if draft.page == SettingsPage::Remote {
+                                                    Canvas {
+                                                        Shape(kind: capsule, fill: fill.strong)
+                                                    }
+                                                }
+                                                Row(gap: 0, padding_x: 16) {
+                                                    Text(content: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, lines: 1)
+                                                    Spacer
+                                                }
+                                            }
+                                        } => draft.page.set(SettingsPage::Remote)
+                                    }
+                                    if app.features.downloads {
+                                        Button(id: tv_settings_downloads, label: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, variant: settings_tv_nav) {
+                                            Stack(width: 280, height: 46, align: leading) {
+                                                if draft.page == SettingsPage::Downloads {
+                                                    Canvas {
+                                                        Shape(kind: capsule, fill: fill.strong)
+                                                    }
+                                                }
+                                                Row(gap: 0, padding_x: 16) {
+                                                    Text(content: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, lines: 1)
+                                                    Spacer
+                                                }
+                                            }
+                                        } => draft.page.set(SettingsPage::Downloads)
+                                    }
+                                    if app.features.enhance {
+                                        Button(id: tv_settings_enhance, label: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, variant: settings_tv_nav) {
+                                            Stack(width: 280, height: 46, align: leading) {
+                                                if draft.page == SettingsPage::Enhance {
+                                                    Canvas {
+                                                        Shape(kind: capsule, fill: fill.strong)
+                                                    }
+                                                }
+                                                Row(gap: 0, padding_x: 16) {
+                                                    Text(content: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, lines: 1)
+                                                    Spacer
+                                                }
+                                            }
+                                        } => draft.page.set(SettingsPage::Enhance)
+                                    }
+                                    Row(gap: 0, padding_x: 14, padding_y: 8) {
+                                        Text(content: tr! { "zh-Hans" => "扩展", "en" => "Extensions" }, style: caption, emphasis: secondary)
+                                        Spacer
+                                    }
+                                    Button(id: tv_settings_optional, label: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, variant: settings_tv_nav) {
+                                        Stack(width: 280, height: 46, align: leading) {
+                                            if draft.page == SettingsPage::Optional {
+                                                Canvas {
+                                                    Shape(kind: capsule, fill: fill.strong)
+                                                }
+                                            }
+                                            Row(gap: 0, padding_x: 16) {
+                                                Text(content: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, lines: 1)
+                                                Spacer
+                                            }
+                                        }
+                                    } => draft.page.set(SettingsPage::Optional)
+                                    Button(id: tv_settings_plugins, label: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, variant: settings_tv_nav) {
+                                        Stack(width: 280, height: 46, align: leading) {
+                                            if draft.page == SettingsPage::Plugins {
+                                                Canvas {
+                                                    Shape(kind: capsule, fill: fill.strong)
+                                                }
+                                            }
+                                            Row(gap: 0, padding_x: 16) {
+                                                Text(content: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, lines: 1)
+                                                Spacer
+                                            }
+                                        }
+                                    } => draft.page.set(SettingsPage::Plugins)
+                                    Button(id: tv_settings_keys, label: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, variant: settings_tv_nav) {
+                                        Stack(width: 280, height: 46, align: leading) {
+                                            if draft.page == SettingsPage::Keys {
+                                                Canvas {
+                                                    Shape(kind: capsule, fill: fill.strong)
+                                                }
+                                            }
+                                            Row(gap: 0, padding_x: 16) {
+                                                Text(content: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, lines: 1)
+                                                Spacer
+                                            }
+                                        }
+                                    } => draft.page.set(SettingsPage::Keys)
+                                    Button(id: tv_settings_about, label: tr! { "zh-Hans" => "关于", "en" => "About" }, variant: settings_tv_nav) {
+                                        Stack(width: 280, height: 46, align: leading) {
+                                            if draft.page == SettingsPage::About {
+                                                Canvas {
+                                                    Shape(kind: capsule, fill: fill.strong)
+                                                }
+                                            }
+                                            Row(gap: 0, padding_x: 16) {
+                                                Text(content: tr! { "zh-Hans" => "关于", "en" => "About" }, lines: 1)
+                                                Spacer
+                                            }
+                                        }
+                                    } => draft.page.set(SettingsPage::About)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Positioned(x: 336, y: 14, width: 860, height: 28) {
+                        Row(gap: 0) {
+                            Text(content: draft.page, style: title3, lines: 1)
+                            Spacer
+                        }
+                    }
+                    Positioned(x: 1220, y: 5, width: 46, height: 46) {
+                        IconButton(id: tv_settings_close, icon: "xmark", label: tr! { "zh-Hans" => "关闭", "en" => "Close" }, height: 46) => windows.settings.close()
+                    }
+                    Positioned(x: 322, y: 56, width: 944, height: 664) {
+                        settings_page(app: app)
+                    }
+                    if let Some(notice) = app.notice {
+                        Positioned(x: 322, y: 600, width: 944, height: 80) {
+                            Toast(content: notice, key: app.notice_revision, duration: 3)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[component]
 pub fn settings_general(app: erika::Client) -> impl View {
     ui! {
@@ -231,13 +509,16 @@ pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> 
             }
             Section(title: tr! { "zh-Hans" => "来源", "en" => "Sources" }) {
                 Switch(id: auto_match, label: tr! { "zh-Hans" => "弹弹play 自动匹配", "en" => "Automatically match with Dandanplay" }, checked: app.preferences.auto_match, style: switch) => app.set_preference("auto_match", app.preferences.auto_match)
-                Row(gap: 12, align: center) {
-                    Column(gap: 1) {
-                        Text(content: tr! { "zh-Hans" => "本地弹幕文件", "en" => "Local danmaku file" }, style: body)
-                        Text(content: tr! { "zh-Hans" => "xml / json", "en" => "xml / json" }, style: caption, emphasis: secondary)
+                // A television has no files to mount.
+                if !window.tv {
+                    Row(gap: 12, align: center) {
+                        Column(gap: 1) {
+                            Text(content: tr! { "zh-Hans" => "本地弹幕文件", "en" => "Local danmaku file" }, style: body)
+                            Text(content: tr! { "zh-Hans" => "xml / json", "en" => "xml / json" }, style: caption, emphasis: secondary)
+                        }
+                        Spacer
+                        Button(id: mount_danmaku, label: tr! { "zh-Hans" => "挂载…", "en" => "Mount…" }, pick: draft.danmaku_file, files: ".xml .json") => app.show_notice(Notice::LocalDanmakuMounted)
                     }
-                    Spacer
-                    Button(id: mount_danmaku, label: tr! { "zh-Hans" => "挂载…", "en" => "Mount…" }, pick: draft.danmaku_file, files: ".xml .json") => app.show_notice(Notice::LocalDanmakuMounted)
                 }
             }
         }
@@ -480,7 +761,13 @@ pub fn settings_about(app: erika::Client) -> impl View {
                 Column(gap: 6, padding_y: 12, align: center) {
                     Row {
                         Spacer
-                        Svg(source: "design/brand/erika-icon-animated.svg", width: 104, height: 104, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                        // A television has no web engine for the animated
+                        // logo: the logo stands still there.
+                        if window.tv {
+                            Image(source: "design/brand/erika-icon-export/logo/erika-logo-icon-512.png", width: 104, height: 104, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                        } else {
+                            Svg(source: "design/brand/erika-icon-animated.svg", width: 104, height: 104, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                        }
                         Spacer
                     }
                     Stack(variant: settings_wordmark) {

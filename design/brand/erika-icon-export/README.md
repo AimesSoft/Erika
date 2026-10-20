@@ -18,6 +18,7 @@
 | `windows/` | `erika.ico`（圆形版，16–256 共 7 个尺寸） |
 | `linux/hicolor/` | 按 hicolor 主题目录放好的 16–512 PNG、`scalable/apps/erika.svg`、单色 `symbolic/apps/erika-symbolic.svg` |
 | `ios/AppIcon.appiconset/` | `AppIcon.png`（1024 不透明正方形）、`AppIcon-tinted.png`（着色版）、`Contents.json`，直接拖进 Xcode 的 Assets |
+| `tvos/Erika.brandassets/` | Apple TV 的分层图标：两层，背景是头发的蓝，前景是去掉头发的脸、帽子和发饰，焦点移到图标上时前景在背景上方视差浮动。主屏幕图标 400×240（@1x、@2x）、App Store 图标 1280×768、Top Shelf 横幅 1920×720 与宽版 2320×720（@1x、@2x）。`Bern.toml` 的 `[app.icon].tvos` 指向它 |
 | `android/res/` | 自适应图标：`mipmap-anydpi-v26/ic_launcher*.xml` + 各密度的前景、单色层 PNG，背景色在 `values/ic_launcher_background.xml`；旧版图标 `ic_launcher.png` / `ic_launcher_round.png`。`android/layers/` 是三层的源 SVG，`playstore-icon-512.png` 用于 Google Play |
 | `harmonyos/resources/base/media/` | 分层图标：`foreground.png`、`background.png`（1024）、`layered_image.json` |
 | `web/` | `favicon.svg`、`favicon.ico`、`apple-touch-icon.png`（180）、`icon-192.png`、`icon-512.png`、`icon-maskable-512.png`、`site.webmanifest` |
