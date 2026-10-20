@@ -83,9 +83,25 @@ style! {
     // The television's picture while the controls are hidden: it holds
     // the remote's focus without showing it.
     Button.remote_surface { hover: none, pressed: none, focus: none }
-    IconButton.player_primary { size: extra_large, hover: scale(1.08, snappy), pressed: scale(0.84, press), settle: jelly }
+    IconButton.player_primary { size: extra_large, font_size: 24, hover: scale(1.08, snappy), pressed: scale(0.84, press), settle: jelly }
     #[target(browser)]
-    IconButton.player_primary { size: regular }
+    IconButton.player_primary { size: regular, font_size: 20 }
+    // The jumps and the episodes beside play (`.c-tr`): the web design
+    // system's 18-point symbols.
+    IconButton.transport { font_size: 20 }
+    #[target(browser)]
+    IconButton.transport { font_size: 18 }
+    // The boxes the player's menus stand in, as wide as the capsules on
+    // Apple's systems; on the web the menus take their content's width.
+    Row.subtitle_box { width: 92 }
+    Row.rate_box { width: 72 }
+    Row.enhancement_box { width: 112 }
+    #[target(browser)]
+    Row.subtitle_box { width: fit }
+    #[target(browser)]
+    Row.rate_box { width: fit }
+    #[target(browser)]
+    Row.enhancement_box { width: fit }
     Stack.onboarding_art { background: color(light: "#232A52", dark: "#232A52") }
     // Cards and groups take the system's neutral fill (P2); only the
     // picture, the player and the brand art keep their own colors.
@@ -275,9 +291,26 @@ style! {
     // pointing and selection both lay the lightest neutral fill.
     #[target(browser)]
     SidebarItem {
+        corner: 8,
         hover: background(fill.subtle) + scale(1.03, snappy),
         selected: fill(fill.subtle),
     }
+
+    // The sidebar's logo and name (`.x-brand`), lined up with the
+    // navigation's icons and titles: on the web, 10 between them and the
+    // header's own room at the sides.
+    Row.brand { gap: 5, padding_x: 12 }
+    #[target(browser)]
+    Row.brand { gap: 10, padding_x: 0 }
+
+    // A section's way to its page (`.x-more`): body text in the secondary
+    // color, the primary one under the pointer.
+    Button.more_link {
+        foreground: text.secondary,
+        hover: foreground(text.primary),
+    }
+    #[target(browser)]
+    Button.more_link { padding: 0 }
 
     // Controls keep the system's look (P2); only the design's springs are
     // added (section 9.4). The one main button of a screen also has
@@ -302,6 +335,9 @@ style! {
         pressed: scale(0.98, press),
         settle: jelly,
     }
+    // The web design system's cards (`--r-card`).
+    #[target(browser)]
+    Button.stage { corner: 12 }
 
     // A thumbnail clips its progress bar to the picture's corners, as the
     // stage's button does.
@@ -406,6 +442,27 @@ style! {
     Button.library_chip {
         size: large,
     }
+
+    // The settings' pages (`.s-body`): sections 10 apart and rows of 44
+    // with 14 and 6 of inset; on the web the design system's grouped list
+    // (`.c-list`, rows of 52, 22 between sections).
+    Form.settings_form { gap: 10, row_height: 44, padding_x: 14, padding_y: 6 }
+    #[target(browser)]
+    Form.settings_form { gap: 22, row_height: 52 }
+
+    // The library's poster size (`.l-zoom`): on the web, the grid symbols
+    // in the secondary color, 14 and 20, 8 from the slider's 8-point
+    // margins; elsewhere the row of the platform's icon buttons.
+    Row.zoom_row { gap: 16, width: 188 }
+    Row.zoom_slider { width: 120 }
+    #[target(browser)]
+    Row.zoom_row { gap: 8, width: fit }
+    #[target(browser)]
+    Row.zoom_slider { width: 136, padding_x: 8 }
+    #[target(browser)]
+    IconButton.zoom_smaller { height: 14, font_size: 14, foreground: text.secondary }
+    #[target(browser)]
+    IconButton.zoom_larger { height: 20, font_size: 20, foreground: text.secondary }
 
     Button.library_index {
         hover: scale(1.12, snappy),
@@ -570,7 +627,7 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
                     // instead.
                     SidebarHeader(role: title) {
                         // Match the navigation icon centers and title column.
-                        Row(gap: 5, padding_x: 12, align: center) {
+                        Row(variant: brand, align: center) {
                             // `.x-brand img`: the logo in its own colors.
                             Image(source: "design/assets/icon.png", width: 22, height: 22, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
                             Text(content: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, style: headline)

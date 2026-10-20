@@ -637,7 +637,7 @@ pub fn player_controls(app: erika::Client, #[session] draft: PlayerDraft) -> imp
                     }
                 }
                 Spacer
-                Row(width: 92) {
+                Row(variant: subtitle_box) {
                     Menu(id: subtitles, label: app.player.subtitle_track, icon: "captions.bubble", shape: capsule, height: 32) {
                         MenuItem(id: chinese_subtitle, label: tr! { "zh-Hans" => "简体中文（内嵌 ASS）", "en" => "Simplified Chinese (ASS)" }) => app.set_subtitle_track(SubtitleTrack::Chinese)
                         MenuItem(id: japanese_subtitle, label: tr! { "zh-Hans" => "日本語", "en" => "Japanese" }) => app.set_subtitle_track(SubtitleTrack::Japanese)
@@ -648,22 +648,22 @@ pub fn player_controls(app: erika::Client, #[session] draft: PlayerDraft) -> imp
                         MenuItem(id: chinese_audio, label: tr! { "zh-Hans" => "中文配音 · AAC 2.0", "en" => "Chinese · AAC 2.0" }) => app.set_audio_track(AudioTrack::Chinese)
                     }
                 }
-                Row(width: 72) { Picker(id: rate, label: tr! { "zh-Hans" => "倍速", "en" => "Speed" }, selected: app.preferences.speed, label_hidden: true, style: menu, shape: capsule, height: 32) => app.set_speed(app.preferences.speed) }
+                Row(variant: rate_box) { Picker(id: rate, label: tr! { "zh-Hans" => "倍速", "en" => "Speed" }, selected: app.preferences.speed, label_hidden: true, style: menu, shape: capsule, height: 32) => app.set_speed(app.preferences.speed) }
                 if app.features.enhance {
-                    Row(width: 112) { Picker(id: enhancement, label: tr! { "zh-Hans" => "画质增强", "en" => "Enhancement" }, selected: app.player.enhancement, label_hidden: true, style: menu, shape: capsule, height: 32) => app.set_enhancement(app.player.enhancement) }
+                    Row(variant: enhancement_box) { Picker(id: enhancement, label: tr! { "zh-Hans" => "画质增强", "en" => "Enhancement" }, selected: app.player.enhancement, label_hidden: true, style: menu, shape: capsule, height: 32) => app.set_enhancement(app.player.enhancement) }
                 }
             }
             Row(gap: 14, align: center, width: 248, height: 48) {
                 if app.player.episodes {
                     IconButton(id: previous, icon: "backward.end.fill", label: tr! { "zh-Hans" => "上一集", "en" => "Previous episode" }, prominence: plain, enabled: app.player.episode > 1) => app.change_episode(-1)
                 }
-                IconButton(id: rewind, icon: "gobackward.10", font_size: 20, label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 seconds" }, prominence: plain, shortcut: "left") => app.skip(-10.0)
+                IconButton(id: rewind, icon: "gobackward.10", variant: transport, label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 seconds" }, prominence: plain, shortcut: "left") => app.skip(-10.0)
                 if app.paused {
-                    IconButton(id: play, icon: "play.fill", label: tr! { "zh-Hans" => "播放", "en" => "Play" }, variant: player_primary, font_size: 24, prominence: prominent, shortcut: "space") => app.toggle_pause()
+                    IconButton(id: play, icon: "play.fill", label: tr! { "zh-Hans" => "播放", "en" => "Play" }, variant: player_primary, prominence: prominent, shortcut: "space") => app.toggle_pause()
                 } else {
-                    IconButton(id: pause, icon: "pause.fill", label: tr! { "zh-Hans" => "暂停", "en" => "Pause" }, variant: player_primary, font_size: 24, prominence: prominent, shortcut: "space") => app.toggle_pause()
+                    IconButton(id: pause, icon: "pause.fill", label: tr! { "zh-Hans" => "暂停", "en" => "Pause" }, variant: player_primary, prominence: prominent, shortcut: "space") => app.toggle_pause()
                 }
-                IconButton(id: forward, icon: "goforward.10", font_size: 20, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }, prominence: plain, shortcut: "right") => app.skip(10.0)
+                IconButton(id: forward, icon: "goforward.10", variant: transport, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }, prominence: plain, shortcut: "right") => app.skip(10.0)
                 if app.player.episodes {
                     IconButton(id: next, icon: "forward.end.fill", label: tr! { "zh-Hans" => "下一集", "en" => "Next episode" }, prominence: plain, enabled: app.player.episode < 12) => app.change_episode(1)
                 }
