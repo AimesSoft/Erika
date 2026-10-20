@@ -97,13 +97,14 @@ style! {
     }
 
     transition {
-        // A new page fades in and rises 12 points (T3).
-        player_panel_in: slide(right, 24, hero),
+        // The playback settings panel slides in from the right (T4).
+        player_panel_in: slide(trailing, 24, hero),
         player_feedback_in: pop(from: 0.6, jelly),
         // Pure playback (`renderIdle`): the empty frame grows from 0.96 on a
         // jelly spring; the recent videos rise 10 points one after another.
         pure_frame_in: pop(from: 0.96, jelly),
         recent_in: slide(edge: bottom, distance: 10, jelly),
+        // A new page fades in and rises 12 points (T3).
         page_in: slide(bottom, 12, smooth),
         settings_page_in: slide(bottom, 8, smooth),
         drop_in: slide(top, 24, jelly),
