@@ -7,7 +7,7 @@ pub mod erika {
     use bern::media::MediaSource;
     use bern::prelude::*;
 
-    /// The three accent colors of the design.
+    /// The four accent colors of the design.
     #[value]
     pub enum Accent {
         #[label(tr! { "zh-Hans" => "绯红", "en" => "Crimson" })]
@@ -16,6 +16,9 @@ pub mod erika {
         Ultramarine,
         #[label(tr! { "zh-Hans" => "荧绿", "en" => "Neon" })]
         Neon,
+        /// The icon's hat, from the satin ribbon of Erika's headdress.
+        #[label(tr! { "zh-Hans" => "缎带粉", "en" => "Ribbon Pink" })]
+        Ribbon,
     }
 
     #[value]

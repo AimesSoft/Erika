@@ -35,7 +35,7 @@
   --accent: #FF2E55;
   --accent-rgb: 255, 46, 85;
   --on-accent: #FFFFFF;
-  /* 文字强调 = 正文色文字 + 主题色下划标注（三种主题色、深浅模式通用） */
+  /* 文字强调 = 正文色文字 + 主题色下划标注（四种主题色、深浅模式通用） */
   /* 文字强调 = 下划标注：浅色黑字 / 深色白字，胶囊形主题色底纹压在字的底边（74%–98%），右端比文字多出一小段 */
   --accent-text: #111114;
   --hl-top: 74%;
@@ -51,6 +51,7 @@
 }
 :root[data-accent="blue"] { --accent: #2A51D4; --accent-rgb: 42, 81, 212; --on-accent: #FFFFFF; --accent-ink: #2A51D4; }
 :root[data-accent="mint"] { --accent: #07FF94; --accent-rgb: 7, 255, 148; --on-accent: #0B0B0D; --accent-ink: #111114; }
+:root[data-accent="pink"] { --accent: #F48BA6; --accent-rgb: 244, 139, 166; --on-accent: #0B0B0D; --accent-ink: #111114; }
 
 :root[data-theme="dark"] {
   --bg: #0E0E11;
@@ -77,6 +78,7 @@
 :root[data-theme="dark"][data-accent="rose"] { --accent-solo: #FF2E55; --accent-ink: #FF2E55; }
 :root[data-theme="dark"][data-accent="blue"] { --accent-solo: #6A8BFF; --accent-ink: #6A8BFF; }
 :root[data-theme="dark"][data-accent="mint"] { --accent-solo: #07FF94; --accent-ink: #07FF94; }
+:root[data-theme="dark"][data-accent="pink"] { --accent-solo: #F48BA6; --accent-ink: #F48BA6; }
 
 /* ---------- Base ---------- */
 * { box-sizing: border-box; }
@@ -345,7 +347,7 @@ pre.code .s { color: var(--accent-ink); }
   transition: transform .35s cubic-bezier(.34, 1.56, .64, 1); }
 .tg.on { background: var(--accent); }
 .tg.on > i { transform: translateX(16px); }
-:root[data-accent="mint"] .tg.on > i { background: #0B0B0D; }
+:root:is([data-accent="mint"], [data-accent="pink"]) .tg.on > i { background: #0B0B0D; }
 
 .sl { height: 4px; border-radius: 2px; background: var(--wf-block-2); position: relative; flex: 1; }
 .sl > b { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--accent); }

@@ -170,6 +170,7 @@ impl ErikaEngine {
         self.state.accent = match lines.next() {
             Some("Ultramarine") => Accent::Ultramarine,
             Some("Neon") => Accent::Neon,
+            Some("Ribbon") => Accent::Ribbon,
             _ => Accent::Crimson,
         };
         self.state.appearance = match lines.next() {

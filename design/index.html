@@ -490,20 +490,23 @@ module "danmaku" {
     <h2>中性色打底，纯色点缀</h2>
 
     <h3>8.1 主题色</h3>
-    <p>三种主题色都取自 App 图标，饱和度拉满，不做任何减淡或渐变。点右下角的色块可以看到整份文档切换主题色后的效果。文字强调一律使用<span class="acc">下划标注</span>：浅色模式黑字、深色模式白字，胶囊形的主题色底纹压在字的底边，右端比文字多出一小段。</p>
-    <div class="grid g3">
+    <p>四种主题色：绯红、群青、荧绿沿用 NipaPlay 图标的三种纯色，缎带粉是 Erika 图标帽子的颜色，取自原作古户绘梨花头饰上的缎带。不做任何减淡或渐变。点右下角的色块可以看到整份文档切换主题色后的效果。文字强调一律使用<span class="acc">下划标注</span>：浅色模式黑字、深色模式白字，胶囊形的主题色底纹压在字的底边，右端比文字多出一小段。</p>
+    <div class="grid g4">
       <div class="color-sw"><div class="sw" style="background:#FF2E55;color:#fff">绯红 · 默认</div><div class="tx"><code>#FF2E55</code> 填充上用白字<br>文字强调：黑字 + 绯红底纹<br>深色模式：白字 + 绯红底纹</div></div>
       <div class="color-sw"><div class="sw" style="background:#2A51D4;color:#fff">群青</div><div class="tx"><code>#2A51D4</code> 填充上用白字（6.5:1）<br>文字强调：黑字 + 群青底纹<br>深色模式：白字 + 群青底纹</div></div>
       <div class="color-sw"><div class="sw" style="background:#07FF94;color:#0B0B0D">荧绿</div><div class="tx"><code>#07FF94</code> 填充上用黑字（14:1）<br>文字强调：黑字 + 荧绿底纹<br>深色模式：白字 + 荧绿底纹</div></div>
+      <div class="color-sw"><div class="sw" style="background:#F48BA6;color:#0B0B0D">缎带粉</div><div class="tx"><code>#F48BA6</code> 填充上用黑字（8.5:1）<br>文字强调：黑字 + 缎带粉底纹<br>深色模式：白字 + 缎带粉底纹</div></div>
     </div>
     <h4>下划标注</h4>
     <div class="card hl-spec">
       <span class="acc" style="--accent-rgb: 255, 46, 85">继续 第 4 集</span>
       <span class="acc" style="--accent-rgb: 42, 81, 212">新番表</span>
       <span class="acc" style="--accent-rgb: 7, 255, 148">媒体库</span>
+      <span class="acc" style="--accent-rgb: 244, 139, 166">追番</span>
       <span class="small muted" style="font-weight:400">黑字（深色模式白字），胶囊形主题色底纹压在字的底边，右端多出一小段</span>
     </div>
-    <div class="callout"><p>荧绿放在白底上做文字几乎看不清（1.3:1）。我们不去把它调暗，而是在浅色模式下改用荧光笔划线的样式：颜色保持纯色，可读性也有保证，看起来还像学生的课本笔记。现在三种主题色都用这个样式：底纹压在字的底边，右端比文字多出一小段；深色模式换成白字，参数不变。</p></div>
+    <div class="callout"><p>荧绿放在白底上做文字几乎看不清（1.3:1）。我们不去把它调暗，而是在浅色模式下改用荧光笔划线的样式：颜色保持纯色，可读性也有保证，看起来还像学生的课本笔记。现在四种主题色都用这个样式：底纹压在字的底边，右端比文字多出一小段；深色模式换成白字，参数不变。</p></div>
+    <div class="callout"><p>软件里系统控件直接拿主题色着色（选中项、开关、进度条、按钮底色），实际用上的颜色会和选的不一样。荧绿和缎带粉在浅色界面上和白底分不开，自动加深到刚好可读：荧绿用 <code>#00A75F</code>、缎带粉用 <code>#D8728E</code>，上面配白字；深色界面保持原色，配黑字。绯红、群青在两种模式下本来就可读，原样使用。规则在 Bern 里（<code>bern_theme::native_accent</code>），主题色只写一个色值，编译时按浅色、深色各算一次，以后加新颜色也自动生效；色板上的圆点仍然是选的原色。</p></div>
     <div class="tbl-wrap"><table>
       <thead><tr><th>属性</th><th>规格</th></tr></thead>
       <tbody>
@@ -577,7 +580,7 @@ module "danmaku" {
       <div class="spec-sw"><div class="sw" style="display:grid;place-items:center;background:var(--surface)"><img class="erika-lg lt" src="brand/erika-logo.svg" alt="ERIKA エリカ" style="height:64px"><img class="erika-lg dk" src="brand/erika-logo-dark.svg" alt="" style="height:64px"></div><div class="tx"><b>字标</b><p>ERIKA エリカ，绀青。出现在欢迎页、关于页和这份文档的封面，入场时字母依次升起。</p></div></div>
     </div>
     <div class="grid g2" style="margin-top:16px">
-      <div class="spec-sw"><div class="sw" style="display:grid;place-items:center;background:var(--surface)"><object type="image/svg+xml" data="brand/erika-icon-animated.svg" aria-label="Erika 图标，双击有小动作" style="display:block;width:140px;height:140px"></object></div><div class="tx"><b>App 图标</b><p>蓝发齐刘海的猫耳女孩：蓝色圆是头发，深色剪影是脸，也是一只猫；右耳歪戴一顶绯红小帽，帽下垂着米黄和品红两根发带。和 Bern 的图标是一对（Bern 是黑猫和蓝发女孩，Erika 是她的棋子）。对外展示用这个圆形主 logo，帽子超出圆；作者亲自设计。入场时猫头从底下蹦出来，眼睛弹开，帽子转着落在耳朵上，最后眨一下眼。出场之后双击 logo，会随机做一个小动作：wink、像猫一样被摸头、绘梨花的招牌坏笑。关于页里的 logo 照这个做。详见 <a href="brand/erika-icon.html">Erika 图标</a>。</p></div></div>
+      <div class="spec-sw"><div class="sw" style="display:grid;place-items:center;background:var(--surface)"><object type="image/svg+xml" data="brand/erika-icon-animated.svg" aria-label="Erika 图标，双击有小动作" style="display:block;width:140px;height:140px"></object></div><div class="tx"><b>App 图标</b><p>蓝发齐刘海的猫耳女孩：蓝色圆是头发，深色剪影是脸，也是一只猫；右耳歪戴一顶缎带粉小帽（取自原作绘梨花头饰的缎带），帽下垂着米黄和品红两根发带。和 Bern 的图标是一对（Bern 是黑猫和蓝发女孩，Erika 是她的棋子）。对外展示用这个圆形主 logo，帽子超出圆；作者亲自设计。入场时猫头从底下蹦出来，眼睛弹开，帽子转着落在耳朵上，最后眨一下眼。出场之后双击 logo，会随机做一个小动作：wink、像猫一样被摸头、绘梨花的招牌坏笑。关于页里的 logo 照这个做。详见 <a href="brand/erika-icon.html">Erika 图标</a>。</p></div></div>
       <div class="spec-sw"><div class="sw" style="display:flex;align-items:center;justify-content:center;gap:16px;background:var(--surface)"><img src="brand/erika-icon-export/macos/erika-macos-1024.png" alt="macOS" style="height:76px"><img src="brand/erika-icon-export/preview/android-squircle.png" alt="安卓" style="height:64px"><img src="brand/erika-icon-export/preview/android-themed-light.png" alt="安卓主题图标" style="height:64px"><img src="brand/erika-icon-export/svg/erika-mono-black.svg" alt="单色" style="height:64px"></div><div class="tx"><b>各平台与单色</b><p>macOS 放进连续圆角底板；安卓按各家桌面的形状裁切，主题图标用单色层；单色版（纯黑、纯白、无背景）保留圆的轮廓环，把眼睛、嘴和竖发绳挖空，用于水印、托盘和印刷。所有格式由 <code>brand/erika-icon-export/build.py</code> 生成。</p></div></div>
     </div>
     <pre class="code"><span class="c">// 学院格的经纬排列（sett），单位 px，经纬两个方向相同，再叠加 45° 斜纹；运行时用程序生成，不打包位图</span>
@@ -1067,7 +1070,7 @@ academy-tartan: navy 22 · band(black 30%) 34 · 6 · line(accent 92%) 3 · 6 ·
       <li><b>下载器保留为内置模块，还是改成插件？</b><span>改成插件（对接 qBittorrent / aria2 的接口）可以从安装包里去掉 BT 引擎，但功能会变成依赖外部下载器。</span></li>
       <li><b>弹幕引擎和播放内核收敛到几个？</b><span>建议弹幕保留「默认 + 兼容」两个，播放内核保留 liberika + libmpv。</span></li>
       <li><b>插件脚本语言：JavaScript（QuickJS）还是 Lua？</b></li>
-      <li><b>主题色要不要跟着新图标走？</b><span>三种主题色（绯红、群青、荧绿）取自 NipaPlay 图标的三种纯色。Erika 的图标正在重新设计，定稿后再看主题色要不要跟着换。如果允许自定义主题色，建议只能选饱和度 ≥ 85% 的颜色，保持「纯色」的调性。</span></li>
+      <li><b>主题色要不要跟着新图标走？</b><span>已经加了第四种缎带粉，就是 Erika 图标帽子的颜色。绯红、群青、荧绿还是 NipaPlay 图标的三种纯色，要不要换掉还没定。如果允许自定义主题色，建议只能选饱和度 ≥ 85% 的颜色，保持「纯色」的调性。</span></li>
       <li><b>bern 能不能提供画框和动效需要的能力？</b><span>第 02 章列的视频层、变换与弹簧、联动、共享元素快照和文字行框，决定画框和第 09 章的动效能不能完整实现。</span></li>
       <li><b>bern 的电视焦点引擎怎么做？</b><span>电视界面按空间位置移动焦点。需要 bern 在 tvOS 上接系统的焦点引擎，在 Google TV 上接 Android 的焦点搜索，还是自己按位置算。</span></li>
       <li><b>折叠屏的姿态变化怎么交给界面？</b><span>合上 / 展开 / 悬停要作为实时事件交给界面：停在同一页，视频接着放，不能重建窗口。苹果、鸿蒙（折叠态、悬停态）和 Android（Jetpack WindowManager 的折叠状态）各有一套接口。书本式大折叠目前共用一套布局，Material 和网页在折叠屏上的细节还没在真机上核对。</span></li>
@@ -1109,6 +1112,7 @@ academy-tartan: navy 22 · band(black 30%) 34 · 6 · line(accent 92%) 3 · 6 ·
   <button data-set-accent="rose" title="绯红"><span class="sw" style="background:#FF2E55"></span></button>
   <button data-set-accent="blue" title="群青"><span class="sw" style="background:#2A51D4"></span></button>
   <button data-set-accent="mint" title="荧绿"><span class="sw" style="background:#07FF94"></span></button>
+  <button data-set-accent="pink" title="缎带粉"><span class="sw" style="background:#F48BA6"></span></button>
   <span class="sep"></span>
   <button id="themeBtn" title="切换明暗"><svg class="i"><use href="#i-moon"/></svg></button>
 </div>

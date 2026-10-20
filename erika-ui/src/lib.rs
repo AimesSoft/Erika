@@ -26,10 +26,15 @@ mod tv;
 use tv::{tv_shell, tv_shell_props};
 
 style! {
+    // One color each, as the design picks them: the compiler takes each
+    // mode only as far as it reads there (`bern_theme::native_accent`), so
+    // the pale 荧绿 and 缎带粉 darken on light surfaces by themselves and
+    // stay as they are, with dark text, on dark ones.
     accents {
         crimson: "#FF2E55",
         ultramarine: "#2A51D4",
-        neon: color(light: "#00B86B", dark: "#07FF94"),
+        neon: "#07FF94",
+        ribbon: "#F48BA6",
     }
 
     // The type of the design (section 8.2 and the desktop prototype):
@@ -90,6 +95,7 @@ style! {
     Button.onboarding_crimson { foreground: color(light: "#FF2E55", dark: "#FF2E55"), hover: scale(1.08, snappy), pressed: scale(0.94, press) }
     Button.onboarding_blue { foreground: color(light: "#2A51D4", dark: "#2A51D4"), hover: scale(1.08, snappy), pressed: scale(0.94, press) }
     Button.onboarding_green { foreground: color(light: "#07FF94", dark: "#07FF94"), hover: scale(1.08, snappy), pressed: scale(0.94, press) }
+    Button.onboarding_pink { foreground: color(light: "#F48BA6", dark: "#F48BA6"), hover: scale(1.08, snappy), pressed: scale(0.94, press) }
     Button.onboarding_card { corner: large, hover: none, pressed: scale(0.98, press), settle: jelly }
     Stack.row_group { background: fill.subtle, corner: list }
     Stack.settings_card { background: fill.subtle, corner: large }
@@ -102,6 +108,7 @@ style! {
     Stack.crimson_swatch { background: color(light: "#FF2E55", dark: "#FF2E55"), corner: 15 }
     Stack.ultramarine_swatch { background: color(light: "#2A51D4", dark: "#2A51D4"), corner: 15 }
     Stack.neon_swatch { background: color(light: "#07FF94", dark: "#07FF94"), corner: 15 }
+    Stack.ribbon_swatch { background: color(light: "#F48BA6", dark: "#F48BA6"), corner: 15 }
     // The shapes of the design (section 6.4, next.css `--r-*`), named so
     // that each design language takes its own; these are Apple's.
     corner {

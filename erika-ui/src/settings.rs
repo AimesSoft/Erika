@@ -442,6 +442,19 @@ pub fn settings_appearance(app: erika::Client) -> impl View {
                             }
                         }
                         => app.set_accent(Accent::Neon)
+                        Button(id: accent_ribbon, label: tr! { "zh-Hans" => "缎带粉", "en" => "Ribbon Pink" }, variant: theme_swatch) {
+                            Column(gap: 6, width: 38, align: center) {
+                                Stack(variant: ribbon_swatch, width: 30, height: 30) {
+                                    if app.accent == Accent::Ribbon {
+                                        Canvas(width: 30, height: 30) {
+                                            Shape(kind: ellipse, x: 1, y: 1, width: 28, height: 28, stroke: text.primary, stroke_width: 2)
+                                        }
+                                    }
+                                }
+                                Text(content: tr! { "zh-Hans" => "缎带粉", "en" => "Ribbon Pink" }, style: caption, emphasis: secondary)
+                            }
+                        }
+                        => app.set_accent(Accent::Ribbon)
                     }
                 }
             }

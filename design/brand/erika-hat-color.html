@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>帽子换色</title>
+<style>
+  :root { --ink: #1B1D24; --mute: #6B6F7B; --line: #E4E2DC; --paper: #FAF8F4; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 14px/1.6 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
+  header { padding: 28px 32px 8px; }
+  h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; letter-spacing: .02em; }
+  header p { margin: 0; color: var(--mute); }
+  .wrap { overflow-x: auto; padding: 16px 32px 40px; }
+  table { border-collapse: separate; border-spacing: 0; }
+  th, td { padding: 14px 12px; text-align: center; vertical-align: middle; border-bottom: 1px solid var(--line); }
+  th.row { text-align: left; color: var(--mute); font-weight: 500; font-size: 12px; white-space: nowrap; padding-left: 0; width: 92px; }
+  td.pick { background: #FFF6DA; }
+  .name { font-size: 15px; font-weight: 600; }
+  .hex { font: 12px ui-monospace, Menlo, monospace; color: var(--mute); }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 6px; }
+  .note { font-size: 12px; color: var(--mute); max-width: 168px; margin: 6px auto 0; line-height: 1.5; }
+  .ic { position: relative; display: inline-block; line-height: 0; }
+  .ic svg { width: 100%; height: 100%; }
+  .badge { position: absolute; background: #FF3B30; color: #fff; border-radius: 999px; font-weight: 600; display: grid; place-items: center; line-height: 1; font-family: -apple-system, "Helvetica Neue", sans-serif; }
+  .dock { display: inline-flex; gap: 10px; padding: 8px 12px; border-radius: 22px; }
+  .dock.lt { background: rgba(255,255,255,.62); box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.08); }
+  .dock.dk { background: rgba(40,40,46,.86); box-shadow: 0 0 0 1px rgba(255,255,255,.08); }
+  .home { display: inline-flex; gap: 18px; padding: 16px 18px 12px; border-radius: 18px; background: linear-gradient(160deg, #F2B9A0, #9C8BD8 55%, #4E5FA8); }
+  .home .cell { display: grid; gap: 4px; justify-items: center; color: #fff; font-size: 10px; line-height: 1.2; text-shadow: 0 1px 2px rgba(0,0,0,.3); }
+  .tiny { display: inline-flex; gap: 14px; align-items: center; }
+  .plate { padding: 10px 14px; border-radius: 12px; display: inline-block; }
+  .plate.w { background: #fff; box-shadow: 0 0 0 1px var(--line); }
+  .plate.d { background: #16171C; }
+  .ref { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--mute); margin: 6px 0 8px; }
+  .ref span { width: 22px; height: 22px; border-radius: 6px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); margin-left: 8px; }
+  .ref span:first-child { margin-left: 0; }
+  .q { font-size: 11px; color: var(--mute); margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>六边形帽子换色 · 取自原图头饰</h1>
+  <div class="ref"><span style="background:#F48BA6"></span>缎带粉 <span style="background:#A8172B"></span>玫瑰红 <span style="background:#6E9A3A"></span>叶绿 <span style="background:#F4EEEA"></span>蕾丝白 <span style="background:#3E5BD8"></span>发色</div>
+  <p>只换帽子的颜色，其余不动。每一栏都放了「原样」和「加一个真的未读角标」两份，比一比能不能一眼分出来。</p>
+</header>
+<div class="wrap"><table id="t"></table></div>
+<script>
+const SVG = {"mac": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1024 1024\"><defs><clipPath id=\"p\"><path d=\"M383.414 100.000L640.586 100.000C722.193 100.000 762.997 100.000 806.921 113.888C854.878 131.344 892.656 169.122 910.112 217.079C924.000 261.003 924.000 301.807 924.000 383.414L924.000 640.586C924.000 722.193 924.000 762.997 910.112 806.921C892.656 854.878 854.878 892.656 806.921 910.112C762.997 924.000 722.193 924.000 640.586 924.000L383.414 924.000C301.807 924.000 261.003 924.000 217.079 910.112C169.122 892.656 131.344 854.878 113.888 806.921C100.000 762.997 100.000 722.193 100.000 640.586L100.000 383.414C100.000 301.807 100.000 261.003 113.888 217.079C131.344 169.122 169.122 131.344 217.079 113.888C261.003 100.000 301.807 100.000 383.414 100.000Z\"/></clipPath><filter id=\"sh\" x=\"-20%\" y=\"-20%\" width=\"140%\" height=\"140%\"><feGaussianBlur in=\"SourceAlpha\" stdDeviation=\"12\"/><feOffset dy=\"10\" result=\"b\"/><feFlood flood-color=\"#000\" flood-opacity=\".28\"/><feComposite in2=\"b\" operator=\"in\"/><feMerge><feMergeNode/><feMergeNode in=\"SourceGraphic\"/></feMerge></filter></defs><g filter=\"url(#sh)\"><path d=\"M383.414 100.000L640.586 100.000C722.193 100.000 762.997 100.000 806.921 113.888C854.878 131.344 892.656 169.122 910.112 217.079C924.000 261.003 924.000 301.807 924.000 383.414L924.000 640.586C924.000 722.193 924.000 762.997 910.112 806.921C892.656 854.878 854.878 892.656 806.921 910.112C762.997 924.000 722.193 924.000 640.586 924.000L383.414 924.000C301.807 924.000 261.003 924.000 217.079 910.112C169.122 892.656 131.344 854.878 113.888 806.921C100.000 762.997 100.000 722.193 100.000 640.586L100.000 383.414C100.000 301.807 100.000 261.003 113.888 217.079C131.344 169.122 169.122 131.344 217.079 113.888C261.003 100.000 301.807 100.000 383.414 100.000Z\" fill=\"#3E5BD8\"/></g><g clip-path=\"url(#p)\"><g transform=\"translate(100 100) scale(0.8046875)\"><path d=\"M-512 -512L512 -512L512 512L-512 512L-512 -512Z\" fill=\"#3E5BD8\" transform=\"translate(512 512) rotate(0)\"/><path d=\"M-179.3 -232.74L179.3 -232.74C207.74 -232.74 227.28 -255.71 222.74 -283.77L202.19 -410.62C196.04 -448.63 219.23 -465.74 253.73 -448.62C332.39 -409.6 449.58 180.76 341.85 455.26L-341.85 455.26C-449.58 180.76 -332.39 -409.6 -253.73 -448.62C-219.23 -465.74 -196.04 -448.63 -202.19 -410.62L-222.74 -283.77C-227.28 -255.71 -207.74 -232.74 -179.3 -232.74Z\" fill=\"#222B4F\" transform=\"translate(512 576.74) rotate(0) scale(1 1)\"/><path d=\"M0 -258.5L0 -258.5A13 13 0 0 1 13 -245.5L13 245.5A13 13 0 0 1 0 258.5L0 258.5A13 13 0 0 1 -13 245.5L-13 -245.5A13 13 0 0 1 0 -258.5Z\" fill=\"#F3E1A9\" transform=\"translate(829 462.5) rotate(0)\"/><path d=\"M-64.28 -193.97L63.12 111.39C65.1 116.14 64.47 123.59 61.72 127.94L29.28 179.26C15.39 201.24 0.55 198.24 -3.69 172.58L-64.28 -193.97Z\" fill=\"none\" stroke=\"#D340AD\" stroke-width=\"26\" stroke-linecap=\"round\" stroke-linejoin=\"round\" transform=\"translate(893.28 410.97) rotate(0) scale(1 1)\"/><path d=\"M-49.5 -108H49.5V58.5A49.5 49.5 0 0 1 -49.5 58.5Z\" fill=\"#DCE6FF\" transform=\"translate(356 536) rotate(0) scale(1 1)\"/><path d=\"M-49.5 -108H49.5V58.5A49.5 49.5 0 0 1 -49.5 58.5Z\" fill=\"#DCE6FF\" transform=\"translate(668 536) rotate(0) scale(1 1)\"/><path d=\"M-48.5 24L0 -24L48.5 24\" fill=\"none\" stroke=\"#DCE6FF\" stroke-width=\"20\" stroke-linecap=\"round\" stroke-linejoin=\"round\" transform=\"translate(512 716) rotate(0) scale(1 1)\"/><path d=\"M12 -154.04L127.4 -87.41A24 24 0 0 1 139.4 -66.63L139.4 66.63A24 24 0 0 1 127.4 87.41L12 154.04A24 24 0 0 1 -12 154.04L-127.4 87.41A24 24 0 0 1 -139.4 66.63L-139.4 -66.63A24 24 0 0 1 -127.4 -87.41L-12 -154.04A24 24 0 0 1 12 -154.04Z\" class=\"hat\" transform=\"translate(855.06 149.74) rotate(0)\"/></g></g></svg>\n", "sq": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1024 1024\"><path d=\"M-512 -512L512 -512L512 512L-512 512L-512 -512Z\" fill=\"#3E5BD8\" transform=\"translate(512 512) rotate(0)\"/><path d=\"M-179.3 -232.74L179.3 -232.74C207.74 -232.74 227.28 -255.71 222.74 -283.77L202.19 -410.62C196.04 -448.63 219.23 -465.74 253.73 -448.62C332.39 -409.6 449.58 180.76 341.85 455.26L-341.85 455.26C-449.58 180.76 -332.39 -409.6 -253.73 -448.62C-219.23 -465.74 -196.04 -448.63 -202.19 -410.62L-222.74 -283.77C-227.28 -255.71 -207.74 -232.74 -179.3 -232.74Z\" fill=\"#222B4F\" transform=\"translate(512 576.74) rotate(0) scale(1 1)\"/><path d=\"M0 -258.5L0 -258.5A13 13 0 0 1 13 -245.5L13 245.5A13 13 0 0 1 0 258.5L0 258.5A13 13 0 0 1 -13 245.5L-13 -245.5A13 13 0 0 1 0 -258.5Z\" fill=\"#F3E1A9\" transform=\"translate(829 462.5) rotate(0)\"/><path d=\"M-64.28 -193.97L63.12 111.39C65.1 116.14 64.47 123.59 61.72 127.94L29.28 179.26C15.39 201.24 0.55 198.24 -3.69 172.58L-64.28 -193.97Z\" fill=\"none\" stroke=\"#D340AD\" stroke-width=\"26\" stroke-linecap=\"round\" stroke-linejoin=\"round\" transform=\"translate(893.28 410.97) rotate(0) scale(1 1)\"/><path d=\"M-49.5 -108H49.5V58.5A49.5 49.5 0 0 1 -49.5 58.5Z\" fill=\"#DCE6FF\" transform=\"translate(356 536) rotate(0) scale(1 1)\"/><path d=\"M-49.5 -108H49.5V58.5A49.5 49.5 0 0 1 -49.5 58.5Z\" fill=\"#DCE6FF\" transform=\"translate(668 536) rotate(0) scale(1 1)\"/><path d=\"M-48.5 24L0 -24L48.5 24\" fill=\"none\" stroke=\"#DCE6FF\" stroke-width=\"20\" stroke-linecap=\"round\" stroke-linejoin=\"round\" transform=\"translate(512 716) rotate(0) scale(1 1)\"/><path d=\"M12 -154.04L127.4 -87.41A24 24 0 0 1 139.4 -66.63L139.4 66.63A24 24 0 0 1 127.4 87.41L12 154.04A24 24 0 0 1 -12 154.04L-127.4 87.41A24 24 0 0 1 -139.4 66.63L-139.4 -66.63A24 24 0 0 1 -127.4 -87.41L-12 -154.04A24 24 0 0 1 12 -154.04Z\" class=\"hat\" transform=\"translate(855.06 149.74) rotate(0)\"/></svg>\n", "logo": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"-16 -16 1056 1056\"><path d=\"M-512 0A512 512 0 1 0 512 0A512 512 0 1 0 -512 0Z\" fill=\"#3E5BD8\" transform=\"translate(512 512) rotate(0)\"/><path d=\"M-179.3 -228.67L179.3 -228.67C207.74 -228.67 227.28 -251.64 222.74 -279.7L202.19 -406.55C196.04 -444.56 219.23 -461.67 253.73 -444.55C318 -412.67 408 -12.67 380 282.33A512 512 0 0 1 -380 282.33C-408 -12.67 -318 -412.67 -253.73 -444.55C-219.23 -461.67 -196.04 -444.56 -202.19 -406.55L-222.74 -279.7C-227.28 -251.64 -207.74 -228.67 -179.3 -228.67Z\" fill=\"#222B4F\" transform=\"translate(512 572.67) rotate(0) scale(1 1)\"/><path d=\"M0 -258.5L0 -258.5A13 13 0 0 1 13 -245.5L13 245.5A13 13 0 0 1 0 258.5L0 258.5A13 13 0 0 1 -13 245.5L-13 -245.5A13 13 0 0 1 0 -258.5Z\" fill=\"#F3E1A9\" transform=\"translate(829 462.5) rotate(0)\"/><path d=\"M-64.28 -193.97L63.12 111.39C65.1 116.14 64.47 123.59 61.72 127.94L29.28 179.26C15.39 201.24 0.55 198.24 -3.69 172.58L-64.28 -193.97Z\" fill=\"none\" stroke=\"#D340AD\" stroke-width=\"26\" stroke-linecap=\"round\" stroke-linejoin=\"round\" transform=\"translate(893.28 410.97) rotate(0) scale(1 1)\"/><path d=\"M-49.5 -108H49.5V58.5A49.5 49.5 0 0 1 -49.5 58.5Z\" fill=\"#DCE6FF\" transform=\"translate(356 536) rotate(0) scale(1 1)\"/><path d=\"M-49.5 -108H49.5V58.5A49.5 49.5 0 0 1 -49.5 58.5Z\" fill=\"#DCE6FF\" transform=\"translate(668 536) rotate(0) scale(1 1)\"/><path d=\"M-48.5 24L0 -24L48.5 24\" fill=\"none\" stroke=\"#DCE6FF\" stroke-width=\"20\" stroke-linecap=\"round\" stroke-linejoin=\"round\" transform=\"translate(512 716) rotate(0) scale(1 1)\"/><path d=\"M12 -154.04L127.4 -87.41A24 24 0 0 1 139.4 -66.63L139.4 66.63A24 24 0 0 1 127.4 87.41L12 154.04A24 24 0 0 1 -12 154.04L-127.4 87.41A24 24 0 0 1 -139.4 66.63L-139.4 -66.63A24 24 0 0 1 -127.4 -87.41L-12 -154.04A24 24 0 0 1 12 -154.04Z\" class=\"hat\" transform=\"translate(855.06 149.74) rotate(0)\"/></svg>\n"};
+const C = [
+  { name: '绯红', hex: '#FF2E55', note: '现在的颜色。红色、右上角、实心块，三条都和未读角标一样' },
+  { name: '缎带粉', hex: '#F48BA6', pick: true, note: '原图头饰缎带的粉。和品红发带、米黄发绳凑成原图那顶粉帽子加蕾丝；浅而软，不会被看成提示' },
+  { name: '玫瑰深红', hex: '#A8172B', note: '原图玫瑰的红。比现在暗，但小尺寸还是一个红点，而且和深蓝的脸、耳尖分不太开' },
+  { name: '叶绿', hex: '#6E9A3A', note: '原图叶子的绿。发灰发闷，和图标里其他纯色不搭；绿点也容易被看成「在线」' },
+  { name: '粉缎＋玫瑰', hex: '#F48BA6', inner: ['#A8172B', 64], note: '粉帽子中间加一朵深红「玫瑰」，最像原图，彻底不像角标；但会被看成六角螺母，而且多了一个图形' },
+];
+const mk = (key, px, hat, badge) => {
+  const d = document.createElement('span');
+  d.className = 'ic'; d.style.width = d.style.height = px + 'px';
+  d.innerHTML = SVG[key];
+  d.querySelectorAll('.hat').forEach(e => {
+    e.style.fill = hat.hex;
+    if (hat.inner) e.insertAdjacentHTML('afterend', `<circle r="${hat.inner[1]}" fill="${hat.inner[0]}" transform="${e.getAttribute('transform')}"/>`);
+  });
+  if (badge) {
+    const b = document.createElement('span'); b.className = 'badge';
+    const s = Math.round(px * (key === 'mac' ? .34 : .40));
+    Object.assign(b.style, { width: s + 'px', height: s + 'px', fontSize: Math.round(s * .62) + 'px' });
+    if (key === 'mac') { b.style.top = Math.round(px * .04) + 'px'; b.style.right = Math.round(px * .04) + 'px'; }
+    else { b.style.top = -Math.round(s * .3) + 'px'; b.style.right = -Math.round(s * .3) + 'px'; }
+    b.textContent = '3'; d.appendChild(b);
+  }
+  return d.outerHTML;
+};
+const home = (hat) => {
+  // iOS 主屏用正方形版，系统切圆角；角标挂在图标外面
+  const a = mk('sq', 60, hat, false), b = mk('sq', 60, hat, true);
+  const clip = s => s.replace('<svg', '<svg style="border-radius:22.4%"');
+  return `<div class="home"><span class="cell">${clip(a)}Erika</span><span class="cell">${clip(b)}Erika</span></div>`;
+};
+const rows = [
+  ['', h => `<div class="name"><span class="sw" style="background:${h.hex}"></span>${h.name}</div><div class="hex">${h.hex}</div><div class="note">${h.note}</div>`],
+  ['对外 logo', h => `<span class="plate w">${mk('logo', 132, h)}</span>`],
+  ['', h => `<span class="plate d">${mk('logo', 96, h)}</span>`],
+  ['macOS 程序坞<br>浅色', h => `<div class="dock lt">${mk('mac', 64, h)}${mk('mac', 64, h, true)}</div><div class="q">左：原样　右：有 3 条未读</div>`],
+  ['macOS 程序坞<br>深色', h => `<div class="dock dk">${mk('mac', 48, h)}${mk('mac', 48, h, true)}</div>`],
+  ['iPhone 主屏', h => home(h)],
+  ['小尺寸<br>32 / 16', h => `<div class="tiny">${mk('mac', 32, h)}${mk('mac', 16, h)}<span class="plate d" style="padding:6px 8px">${mk('mac', 32, h)} ${mk('mac', 16, h)}</span></div>`],
+];
+document.getElementById('t').innerHTML = rows.map(([lab, f]) =>
+  `<tr><th class="row">${lab}</th>${C.map(c => `<td${c.pick ? ' class="pick"' : ''}>${f(c)}</td>`).join('')}</tr>`).join('');
+</script>
+</body>
+</html>

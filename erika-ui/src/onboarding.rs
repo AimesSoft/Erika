@@ -248,6 +248,7 @@ pub fn onboarding_appearance(app: erika::Client) -> impl View {
                 onboarding_swatch(app: app, accent: Accent::Crimson)
                 onboarding_swatch(app: app, accent: Accent::Ultramarine)
                 onboarding_swatch(app: app, accent: Accent::Neon)
+                onboarding_swatch(app: app, accent: Accent::Ribbon)
                 Spacer
             }
             Canvas(height: 26)
@@ -271,8 +272,12 @@ pub fn onboarding_swatch(app: erika::Client, accent: Accent) -> impl View {
             Button(id: blue, label: accent, variant: onboarding_blue) {
                 onboarding_swatch_content(app: app, accent: accent)
             } => app.set_accent(accent)
-        } else {
+        } else if accent == Accent::Neon {
             Button(id: green, label: accent, variant: onboarding_green) {
+                onboarding_swatch_content(app: app, accent: accent)
+            } => app.set_accent(accent)
+        } else {
+            Button(id: pink, label: accent, variant: onboarding_pink) {
                 onboarding_swatch_content(app: app, accent: accent)
             } => app.set_accent(accent)
         }

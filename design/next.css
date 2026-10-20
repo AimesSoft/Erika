@@ -166,9 +166,9 @@ body:not(.dev-fold) .nxp-bar .nxp-fold { display: none; }
   --pop: #2A2B2E; --pop-sh: 0 12px 40px rgba(0, 0, 0, .5); --sb: #1F2022; --track: rgba(255, 255, 255, .16);
   --tonal: color-mix(in srgb, var(--accent) 24%, #1F2022); --on-tonal: color-mix(in srgb, var(--accent) 30%, #FFFFFF); --acc-ink: var(--acc);
 }
-/* 荧绿在浅色底上做文字看不清：浅色下强调色文字改成正文色（和下划标注的规则一样） */
-:root[data-accent="mint"] .nx[data-ds="harmony"]:not([data-th="dark"]) { --acc-ink: var(--on); }
-:root[data-accent="mint"] .nx[data-ds="harmony"] .dk { --acc-ink: var(--acc); }
+/* 荧绿、缎带粉在浅色底上做文字看不清：浅色下强调色文字改成正文色（和下划标注的规则一样） */
+:root:is([data-accent="mint"], [data-accent="pink"]) .nx[data-ds="harmony"]:not([data-th="dark"]) { --acc-ink: var(--on); }
+:root:is([data-accent="mint"], [data-accent="pink"]) .nx[data-ds="harmony"] .dk { --acc-ink: var(--acc); }
 
 /* =====================================================================
    窗口外壳

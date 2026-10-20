@@ -276,7 +276,7 @@ def animated_logo(pairs):
             + extra('h1', mark(HEART, 430, 286, 30, PINK, .2))
             + extra('h2', mark(HEART, 594, 276, 24, PINK, .2))
             + '</g>'
-            + star(686, 76, 54, '#F3E1A9', 's1') + star(984, 352, 42, '#FF2E55', 's2') + star(970, 36, 32, '#D340AD', 's3')
+            + star(686, 76, 54, '#F3E1A9', 's1') + star(984, 352, 42, '#F48BA6', 's2') + star(970, 36, 32, '#D340AD', 's3')
             + f'<script><![CDATA[{REACT_JS}]]></script>')
     note = ('<title>Erika</title><!--\n  Erika 图标 · 出场动画（纯 CSS，放进 <img> 和 GitHub README 都会播放；系统开了「减少动态效果」就直接显示）：\n'
             '    0.00s 头发的圆弹出来（果冻回弹）\n    0.30s 猫脸从底下蹦上来，落地压扁再弹回\n'
