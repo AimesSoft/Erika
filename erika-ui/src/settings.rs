@@ -802,7 +802,9 @@ pub fn settings_plugins(app: erika::Client) -> impl View {
         ScrollView(appear: settings_page_in) {
         Column(gap: 0) {
         Slot(id: scroll_header)
-        Column(gap: 0, padding_x: 28, padding_y: 22) {
+        // The phone's page keeps 16 from its sides (`phHTML`), as the
+        // market's tool strip needs to fit the prototype's chips per line.
+        Column(gap: 0, padding_x: if window.compact { 16.0 } else { 28.0 }, padding_y: 22) {
             Stack(variant: settings_banner, height: 128, align: leading, appearance: dark) {
                 Canvas {
                     Pattern(name: academy)
@@ -813,13 +815,16 @@ pub fn settings_plugins(app: erika::Client) -> impl View {
                 }
             }
             Canvas(height: 18)
-            Row(gap: 10) {
-                Row(width: 160) {
-                    Picker(id: plugin_tab, label: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, selected: app.plugin_tab, style: segmented, label_hidden: true) => app.set_plugin_tab(app.plugin_tab)
-                }
+            // `.m-tools`: the segmented control, then the category chips at
+            // the end of the line; where the line is too narrow, the chips
+            // that do not fit wrap onto the next one.
+            Flow(gap: 10) {
+                Picker(id: plugin_tab, label: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, selected: app.plugin_tab, style: segmented, label_hidden: true) {
+                    PickerOption(value: PluginTab::Market, label: tr! { "zh-Hans" => "市场", "en" => "Market" })
+                    PickerOption(value: PluginTab::Installed, label: tr! { "zh-Hans" => "已安装 {count}", "en" => "Installed {count}"; count: app.installed_count })
+                } => app.set_plugin_tab(app.plugin_tab)
                 Spacer
-                Text(content: tr! { "zh-Hans" => "已安装 {count}", "en" => "{count} installed"; count: app.installed_count }, style: caption, emphasis: secondary)
-                Picker(id: plugin_category, label: tr! { "zh-Hans" => "分类", "en" => "Category" }, selected: app.plugin_category, style: segmented, label_hidden: true) => app.set_plugin_category(app.plugin_category)
+                Picker(id: plugin_category, label: tr! { "zh-Hans" => "分类", "en" => "Category" }, selected: app.plugin_category, style: chips, label_hidden: true) => app.set_plugin_category(app.plugin_category)
             }
             Canvas(height: 14)
             Grid(min_width: 300, gap: 12) {
