@@ -270,7 +270,6 @@ pub fn settings_optional(app: erika::Client) -> impl View {
         Row(gap: 0, align: top) {
             Form(appear: settings_page_in, gap: 10, row_height: 44, padding_x: 14, padding_y: 6) {
                 Slot(id: form_header)
-            Slot(id: form_header)
                 Section(title: tr! { "zh-Hans" => "观看", "en" => "Watching" }, footer: tr! { "zh-Hans" => "决定 Erika 要做多少事。关掉的功能不显示，也不占资源。右边的小窗口会跟着变。", "en" => "Choose what Erika does. Disabled features disappear and use no resources. The preview updates as you go." }) {
                     Row(gap: 12, align: center) {
                         Stack(width: 28, height: 28) {

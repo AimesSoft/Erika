@@ -136,7 +136,9 @@ pub fn pure_recents(app: erika::Client) -> impl View {
             Button(id: continue_last, label: tr! { "zh-Hans" => "继续上次", "en" => "Continue" }, shape: capsule, height: 32, shortcut: "space", appear: recent_in, appear_delay: 0.16) {
                 Row(gap: 6, align: center) {
                     Label(title: tr! { "zh-Hans" => "继续上次", "en" => "Continue" }, icon: "play.fill", display: icon, font_size: 11)
-                    Text(content: tr! { "zh-Hans" => "继续上次", "en" => "Continue" }, font_size: 13, lines: 1)
+                    // In the platform's button font, as its other buttons
+                    // (`.c-btn`: 13 on Apple's, 14 on Fluent).
+                    Text(content: tr! { "zh-Hans" => "继续上次", "en" => "Continue" }, style: control, lines: 1)
                     Stack(variant: key_chip, height: 17, align: center) {
                         Row(gap: 0, padding_x: 6, align: center) {
                             Text(content: tr! { "zh-Hans" => "空格", "en" => "Space" }, style: caption2, font_size: 11, lines: 1)

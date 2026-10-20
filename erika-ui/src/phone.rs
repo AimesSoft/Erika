@@ -607,10 +607,12 @@ pub fn phone_section_title(#[session] draft: ErikaDraft) -> impl View {
 #[component]
 pub fn phone_account_picture() -> impl View {
     ui! {
-        Canvas(width: 40, height: 40, label: tr! { "zh-Hans" => "头像", "en" => "Avatar" }) {
-            Shape(kind: ellipse, fill: fill.strong)
-            Shape(kind: ellipse, x: 14.07, y: 10.07, width: 11.86, height: 11.86, fill: text.secondary, opacity: 0.5)
-            Shape(kind: ellipse, x: -4, y: 21.6, width: 48, height: 36.8, fill: text.secondary, opacity: 0.5)
+        Stack(variant: avatar, width: 40, height: 40) {
+            Canvas(width: 40, height: 40, label: tr! { "zh-Hans" => "头像", "en" => "Avatar" }) {
+                Shape(kind: ellipse, fill: fill.strong)
+                Shape(kind: ellipse, x: 14.07, y: 10.07, width: 11.86, height: 11.86, fill: text.secondary, opacity: 0.5)
+                Shape(kind: ellipse, x: -4, y: 21.6, width: 48, height: 36.8, fill: text.secondary, opacity: 0.5)
+            }
         }
     }
 }

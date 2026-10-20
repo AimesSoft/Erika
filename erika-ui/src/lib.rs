@@ -127,6 +127,14 @@ style! {
         selected: fill(fill.strong),
     }
 
+    // The web prototype's sidebar (`.c-navi` on the web design system):
+    // pointing and selection both lay the lightest neutral fill.
+    #[target(browser)]
+    SidebarItem {
+        hover: background(fill.subtle) + scale(1.03, snappy),
+        selected: fill(fill.subtle),
+    }
+
     // Controls keep the system's look (P2); only the design's springs are
     // added (section 9.4). The one main button of a screen also has
     // `prominence: prominent`.
@@ -197,6 +205,8 @@ style! {
 
     // A show's tags (`.d-tags span`): pills on the neutral fill.
     Stack.tag_pill { background: fill.subtle, corner: 999 }
+    // An account's picture is round: the disc cuts the shoulders.
+    Stack.avatar { corner: 999 }
 
     // The phone's way back (`.x-pback`): the accent, as iOS's.
     Stack.phone_back { foreground: accent }
@@ -398,7 +408,8 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
                     SidebarHeader(role: title) {
                         // Match the navigation icon centers and title column.
                         Row(gap: 5, padding_x: 12, align: center) {
-                            Image(source: "design/brand/erika-icon-export/png/mono-black/erika-mono-black-128.png", width: 22, height: 22, rendering: template, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                            // `.x-brand img`: the logo in its own colors.
+                            Image(source: "design/assets/icon.png", width: 22, height: 22, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
                             Text(content: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, style: headline)
                         }
                     }
@@ -460,14 +471,18 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
 }
 
 /// The account's picture; a person on a grey disc until the account has
-/// one of its own.
+/// one of its own (`.x-av`): the head 40 % down, the shoulders an ellipse
+/// centred on the bottom edge, both in the tertiary label color (`--on3`),
+/// and the disc cuts the shoulders.
 #[component]
 pub fn avatar() -> impl View {
     ui! {
-        Canvas(width: 30, height: 30, label: tr! { "zh-Hans" => "头像", "en" => "Avatar" }) {
-            Shape(kind: ellipse, fill: fill.strong)
-            Shape(kind: ellipse, x: 9.5, y: 6.5, width: 11, height: 11, fill: text.secondary, opacity: 0.6)
-            Shape(kind: ellipse, x: 6, y: 20, width: 18, height: 14, fill: text.secondary, opacity: 0.6)
+        Stack(variant: avatar, width: 30, height: 30) {
+            Canvas(width: 30, height: 30, label: tr! { "zh-Hans" => "头像", "en" => "Avatar" }) {
+                Shape(kind: ellipse, fill: fill.strong)
+                Shape(kind: ellipse, x: 10.55, y: 7.55, width: 8.9, height: 8.9, fill: text.placeholder)
+                Shape(kind: ellipse, x: -3, y: 16.2, width: 36, height: 27.6, fill: text.placeholder)
+            }
         }
     }
 }
