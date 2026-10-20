@@ -32,9 +32,10 @@ pub fn tv_shell(
                 // Behind 「打开链接」 the pages take no focus.
                 Stack(enabled: !app.link_prompt, align: top_leading) {
                     Tabs(id: tv_tabs, selection: draft.page) {
-                        // The search's symbol, the pages' names alone, as the
+                        // The search's symbol alone, named 「搜索」 for
+                        // VoiceOver, and the pages' names alone, as the
                         // television's tabs show them (`.c-navi .ic`).
-                        Tab(value: MainPage::Search, label: tr! { "zh-Hans" => "搜索", "en" => "Search" }, icon: "magnifyingglass") {
+                        Tab(value: MainPage::Search, label: tr! { "zh-Hans" => "搜索", "en" => "Search" }, icon: "magnifyingglass", display: icon) {
                             tv_scene(app: app, anime: anime, windows: windows, page: MainPage::Search)
                         }
                         if app.features.anime {
