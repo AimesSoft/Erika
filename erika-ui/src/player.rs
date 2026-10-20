@@ -64,25 +64,34 @@ pub fn player(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
 pub fn player_scene(app: erika::Client, shown: bool, #[session] draft: PlayerDraft) -> impl View {
     ui! {
         Stack(variant: player_black, width: 1280, height: 800, align: top_leading) {
-            if shown { Positioned(x: 0, y: 0, width: 1280, height: 800) { Stack(variant: player_background, width: 1280, height: 800) {} } }
-            Positioned(x: if app.player.panel { 24 } else if shown && app.preferences.step_back { 103 } else { 0 }, y: if app.player.panel { 114 } else if shown && app.preferences.step_back { 64 } else { 40 }, width: if app.player.panel { 896 } else if shown && app.preferences.step_back { 1074 } else { 1280 }, height: if app.player.panel { 504 } else if shown && app.preferences.step_back { 604.125 } else { 720 }, animate: hero) {
+            // The scene keeps the design's 1280 × 800 at any window shape:
+            // the background and the picture when it fills the window bleed
+            // past the scene's edges to the window's (`.x-player`, whose
+            // background is the window's).
+            if shown { Positioned(x: 0, y: 0, width: 1280, height: 800, bleed: true, appear: fade, disappear: fade) { Stack(variant: player_background) {} } }
+            // Filling the window, the picture is the whole scene, letterboxed
+            // (`.cv video { object-fit: contain }`): 1280 × 720 in the
+            // design's window, and as wide as a wider window.
+            Positioned(x: if app.player.panel { 24 } else if shown && app.preferences.step_back { 103 } else { 0 }, y: if app.player.panel { 114 } else if shown && app.preferences.step_back { 64 } else { 0 }, width: if app.player.panel { 896 } else if shown && app.preferences.step_back { 1074 } else { 1280 }, height: if app.player.panel { 504 } else if shown && app.preferences.step_back { 604.125 } else { 800 }, bleed: !app.player.panel && !(shown && app.preferences.step_back), animate: hero) {
                 Button(id: picture, label: tr! { "zh-Hans" => "播放或暂停画面", "en" => "Play or pause picture" }, variant: player_picture) {
-                    Stack {
-                        Image(source: app.still, width: if app.player.panel { 896 } else if shown && app.preferences.step_back { 1074 } else { 1280 }, height: if app.player.panel { 504 } else if shown && app.preferences.step_back { 604.125 } else { 720 }, corner: if app.player.panel || (shown && app.preferences.step_back) { 22 } else { 0 }, fit: cover, label: app.title, hero: frame, hero_key: app.title, animate: hero)
-                        ScaleBox(width: 1280, height: 720) {
+                    // The picture keeps the video's 16:9 inside its place;
+                    // the corner is 22 on screen once scaled to 1074 or 896.
+                    ScaleBox(width: 1280, height: 720) {
+                        Stack(width: 1280, height: 720) {
+                            Image(source: app.still, width: 1280, height: 720, corner: if app.player.panel { 31.43 } else if shown && app.preferences.step_back { 26.22 } else { 0 }, fit: cover, label: app.title, hero: frame, hero_key: app.title, animate: hero)
                             player_overlays(app: app)
                         }
                     }
                 } => app.toggle_pause()
             }
             if shown {
-                Positioned(x: 14, y: 0, width: 1246, height: 64, appear: fade, disappear: fade) {
+                Positioned(x: 14, y: 0, width: 1246, height: 64, appear: top_bar_in, disappear: top_bar_out) {
                     player_top(app: app)
                 }
-                Positioned(x: if app.player.panel { 24 } else { 103 }, y: if app.player.panel { 618 } else { 668.125 }, width: if app.player.panel { 896 } else { 1074 }, height: 60, animate: hero, appear: fade, disappear: fade) {
+                Positioned(x: if app.player.panel { 24 } else { 103 }, y: if app.player.panel { 618 } else { 668.125 }, width: if app.player.panel { 896 } else { 1074 }, height: 60, animate: hero, appear: controls_in, disappear: controls_out) {
                     player_timeline(app: app)
                 }
-                Positioned(x: if app.player.panel { 24 } else { 103 }, y: 734, width: if app.player.panel { 1232 } else { 1074 }, height: 48, animate: hero, appear: fade, disappear: fade) {
+                Positioned(x: if app.player.panel { 24 } else { 103 }, y: 734, width: if app.player.panel { 1232 } else { 1074 }, height: 48, animate: hero, appear: controls_in, disappear: controls_out) {
                     player_controls(app: app)
                 }
             }
@@ -117,10 +126,10 @@ pub fn player_tv_scene(app: erika::Client, shown: bool, #[session] draft: Player
                 }
             }
             if shown {
-                Positioned(x: 56, y: 0, width: 1168, height: 52, appear: fade, disappear: fade) {
+                Positioned(x: 56, y: 0, width: 1168, height: 52, appear: top_bar_in, disappear: top_bar_out) {
                     player_tv_top(app: app)
                 }
-                Positioned(x: if app.player.panel { 40 } else { 200 }, y: if app.player.panel { 545 } else { 551 }, width: if app.player.panel { 784 } else { 880 }, height: 44, animate: hero, appear: fade, disappear: fade) {
+                Positioned(x: if app.player.panel { 40 } else { 200 }, y: if app.player.panel { 545 } else { 551 }, width: if app.player.panel { 784 } else { 880 }, height: 44, animate: hero, appear: controls_in, disappear: controls_out) {
                     if draft.saying {
                         // 「发弹幕」: the field in the seek bar's place; the
                         // system's keyboard takes the remote's dictation.
@@ -138,7 +147,7 @@ pub fn player_tv_scene(app: erika::Client, shown: bool, #[session] draft: Player
                         }
                     }
                 }
-                Positioned(x: if app.player.panel { 40 } else { 64 }, y: 624, width: if app.player.panel { 784 } else { 1152 }, height: 56, animate: hero, appear: fade, disappear: fade) {
+                Positioned(x: if app.player.panel { 40 } else { 64 }, y: 624, width: if app.player.panel { 784 } else { 1152 }, height: 56, animate: hero, appear: controls_in, disappear: controls_out) {
                     player_tv_controls(app: app)
                 }
             } else {
@@ -274,13 +283,13 @@ pub fn player_phone_scene(app: erika::Client, shown: bool, #[session] draft: Pla
             }
             if shown {
                 // `.ph .p-top`: 8 points before the way back, 12 after the last action.
-                Positioned(x: 0, y: 0, width: 840, height: 48, appear: fade, disappear: fade) {
+                Positioned(x: 0, y: 0, width: 840, height: 48, appear: top_bar_in, disappear: top_bar_out) {
                     player_phone_top(app: app)
                 }
             }
             if shown && !app.player.panel {
                 // The left rail: danmaku, then the previous episode and back 10.
-                Positioned(x: 0, y: 148, width: 162, height: 34, appear: fade, disappear: fade) {
+                Positioned(x: 0, y: 148, width: 162, height: 34, appear: controls_in, disappear: controls_out) {
                     Row(gap: 0, align: center) {
                         Spacer
                         if app.features.danmaku {
@@ -291,7 +300,7 @@ pub fn player_phone_scene(app: erika::Client, shown: bool, #[session] draft: Pla
                         Spacer
                     }
                 }
-                Positioned(x: 0, y: 194, width: 162, height: 46, appear: fade, disappear: fade) {
+                Positioned(x: 0, y: 194, width: 162, height: 46, appear: controls_in, disappear: controls_out) {
                     Row(gap: 8, align: center) {
                         Spacer
                         if app.player.episodes {
@@ -303,7 +312,7 @@ pub fn player_phone_scene(app: erika::Client, shown: bool, #[session] draft: Pla
                 }
                 // The right rail: subtitles, speed, the 60-point play button,
                 // then forward 10 and the next episode.
-                Positioned(x: 682, y: 91, width: 162, height: 32, appear: fade, disappear: fade) {
+                Positioned(x: 682, y: 91, width: 162, height: 32, appear: controls_in, disappear: controls_out) {
                     Row(gap: 0, align: center) {
                         Spacer
                         Menu(id: subtitles_phone, label: app.player.subtitle_track, icon: "captions.bubble", shape: capsule, height: 32) {
@@ -315,14 +324,14 @@ pub fn player_phone_scene(app: erika::Client, shown: bool, #[session] draft: Pla
                         Spacer
                     }
                 }
-                Positioned(x: 682, y: 135, width: 162, height: 32, appear: fade, disappear: fade) {
+                Positioned(x: 682, y: 135, width: 162, height: 32, appear: controls_in, disappear: controls_out) {
                     Row(gap: 0, align: center) {
                         Spacer
                         Picker(id: rate_phone, label: tr! { "zh-Hans" => "倍速", "en" => "Speed" }, selected: app.preferences.speed, label_hidden: true, style: menu, shape: capsule, height: 32) => app.set_speed(app.preferences.speed)
                         Spacer
                     }
                 }
-                Positioned(x: 682, y: 179, width: 162, height: 60, appear: fade, disappear: fade) {
+                Positioned(x: 682, y: 179, width: 162, height: 60, appear: controls_in, disappear: controls_out) {
                     Row(gap: 0, align: center) {
                         Spacer
                         if app.paused {
@@ -333,7 +342,7 @@ pub fn player_phone_scene(app: erika::Client, shown: bool, #[session] draft: Pla
                         Spacer
                     }
                 }
-                Positioned(x: 682, y: 251, width: 162, height: 46, appear: fade, disappear: fade) {
+                Positioned(x: 682, y: 251, width: 162, height: 46, appear: controls_in, disappear: controls_out) {
                     Row(gap: 8, align: center) {
                         Spacer
                         IconButton(id: forward_phone, icon: "goforward.10", font_size: 12.5, height: 46, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }) => app.skip(10.0)
@@ -347,16 +356,16 @@ pub fn player_phone_scene(app: erika::Client, shown: bool, #[session] draft: Pla
             if shown {
                 // `.p-seek`, 3 under the picture: the time, the seek bar 54
                 // in from both ends, the length.
-                Positioned(x: if app.player.panel { 16 } else { 162.5 }, y: if app.player.panel { 361.1 } else { 357.1 }, width: 35.5, height: 16, animate: hero, appear: fade, disappear: fade) {
+                Positioned(x: if app.player.panel { 16 } else { 162.5 }, y: if app.player.panel { 361.1 } else { 357.1 }, width: 35.5, height: 16, animate: hero, appear: controls_in, disappear: controls_out) {
                     Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.elapsed }, style: caption2, font_size: 12)
                 }
-                Positioned(x: if app.player.panel { 70 } else { 216.5 }, y: if app.player.panel { 355.1 } else { 351.1 }, width: if app.player.panel { 404 } else { 411 }, height: 28, animate: hero, appear: fade, disappear: fade) {
+                Positioned(x: if app.player.panel { 70 } else { 216.5 }, y: if app.player.panel { 355.1 } else { 351.1 }, width: if app.player.panel { 404 } else { 411 }, height: 28, animate: hero, appear: controls_in, disappear: controls_out) {
                     Slider(id: position_phone, label: tr! { "zh-Hans" => "播放进度", "en" => "Playback position" }, label_hidden: true, current: app.progress, min: 0, max: 1) => app.seek(app.progress)
                 }
                 // The chapters as dots on the track; no room for their names
                 // under it, so the danmaku peaks are accent dots above it.
                 if app.player.episodes {
-                    Positioned(x: if app.player.panel { 70 } else { 216.5 }, y: if app.player.panel { 367.6 } else { 363.6 }, width: if app.player.panel { 404 } else { 411 }, height: 3, animate: hero, appear: fade, disappear: fade) {
+                    Positioned(x: if app.player.panel { 70 } else { 216.5 }, y: if app.player.panel { 367.6 } else { 363.6 }, width: if app.player.panel { 404 } else { 411 }, height: 3, animate: hero, appear: controls_in, disappear: controls_out) {
                         Rail {
                         Canvas(at: 0.06323, width: 3, height: 3) { Shape(kind: ellipse, fill: text.primary, opacity: 0.7) }
                         Canvas(at: 0.12509, width: 3, height: 3) { Shape(kind: ellipse, fill: text.primary, opacity: 0.7) }
@@ -366,7 +375,7 @@ pub fn player_phone_scene(app: erika::Client, shown: bool, #[session] draft: Pla
                         }
                     }
                     if app.features.danmaku {
-                        Positioned(x: if app.player.panel { 70 } else { 216.5 }, y: if app.player.panel { 353.6 } else { 349.6 }, width: if app.player.panel { 404 } else { 411 }, height: 10, animate: hero, appear: fade, disappear: fade) {
+                        Positioned(x: if app.player.panel { 70 } else { 216.5 }, y: if app.player.panel { 353.6 } else { 349.6 }, width: if app.player.panel { 404 } else { 411 }, height: 10, animate: hero, appear: controls_in, disappear: controls_out) {
                             Rail {
                             Canvas(at: 0.23505, width: 10, height: 10) { Shape(kind: ellipse, fill: surface.canvas, opacity: 0.4) Shape(kind: ellipse, x: 1.5, y: 1.5, width: 7, height: 7, fill: accent) }
                             Canvas(at: 0.75464, width: 10, height: 10) { Shape(kind: ellipse, fill: surface.canvas, opacity: 0.4) Shape(kind: ellipse, x: 1.5, y: 1.5, width: 7, height: 7, fill: accent) }
@@ -374,7 +383,7 @@ pub fn player_phone_scene(app: erika::Client, shown: bool, #[session] draft: Pla
                         }
                     }
                 }
-                Positioned(x: if app.player.panel { 492.5 } else { 646 }, y: if app.player.panel { 361.1 } else { 357.1 }, width: 35.5, height: 16, animate: hero, appear: fade, disappear: fade) {
+                Positioned(x: if app.player.panel { 492.5 } else { 646 }, y: if app.player.panel { 361.1 } else { 357.1 }, width: 35.5, height: 16, animate: hero, appear: controls_in, disappear: controls_out) {
                     Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.duration }, style: caption2, font_size: 12, emphasis: secondary)
                 }
             }
@@ -518,7 +527,7 @@ pub fn player_phone_overlays(app: erika::Client, #[session] draft: PlayerDraft) 
 pub fn player_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
     ui! {
         Row(gap: 12, height: 64, align: center) {
-            Canvas(width: 84, height: 1)
+            WindowButtons
             ControlGroup(height: 40) {
                 // With no sidebar to shrink into, the picture goes back into
                 // the empty frame (design 10.2).

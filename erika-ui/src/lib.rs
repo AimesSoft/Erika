@@ -54,7 +54,15 @@ style! {
 
     Stack.player_black { background: color(light: "#000000", dark: "#000000"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
     Stack.player_background { background: color(light: "#1C1C1E", dark: "#1C1C1E"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
+    // The web design system's player stands on its dark page
+    // (`.x-player.shown` takes `--bg`, #09090B).
+    #[target(browser)]
+    Stack.player_background { background: color(light: "#09090B", dark: "#09090B"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
     Stack.player_panel { background: color(light: "#2C2C2F", dark: "#2C2C2F"), corner: 26 }
+    // The web design system's panel (`.p-sheet`): the page's black, a
+    // 1-point outline, 12-point corners.
+    #[target(browser)]
+    Stack.player_panel { background: color(light: "#09090B", dark: "#09090B"), border: border(color(light: "#27272A", dark: "#27272A"), width: 1), corner: 12 }
     Stack.player_gold { foreground: color(light: "#FFD24A", dark: "#FFD24A") }
     Stack.player_cyan { foreground: color(light: "#8EE3FF", dark: "#8EE3FF") }
     Stack.player_pink { foreground: color(light: "#FFB3C7", dark: "#FFB3C7") }
@@ -100,6 +108,14 @@ style! {
         // The playback settings panel slides in from the right (T4).
         player_panel_in: slide(trailing, 24, hero),
         player_feedback_in: pop(from: 0.6, jelly),
+        // The controls around the frame (`.x-player .fx`, T10): in, they
+        // fade and come 8 points from their edge on a spring that overshoots
+        // a little; out, they leave the same way, quicker. The top bar comes
+        // from above, the rest from below.
+        controls_in: slide(bottom, 8, bouncy),
+        controls_out: slide(bottom, 8, snappy),
+        top_bar_in: slide(top, 8, bouncy),
+        top_bar_out: slide(top, 8, snappy),
         // Pure playback (`renderIdle`): the empty frame grows from 0.96 on a
         // jelly spring; the recent videos rise 10 points one after another.
         pure_frame_in: pop(from: 0.96, jelly),
