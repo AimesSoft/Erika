@@ -92,7 +92,7 @@ pub fn stage(anime: anime::Client) -> impl View {
             Button(id: stage, label: anime.stage.title, variant: stage) {
                 Stack(align: center) {
                     Stack(align: bottom_leading) {
-                        Image(source: anime.stage.still, width: if window.tv { 560 } else { 528 }, height: if window.tv { 315 } else { 297 }, corner: 22, fit: cover, label: anime.stage.title, hero: frame, hero_key: anime.stage.title)
+                        Image(source: anime.stage.still, width: if window.tv { 560 } else { 528 }, height: if window.tv { 315 } else { 297 }, corner: card, fit: cover, label: anime.stage.title, hero: frame, hero_key: anime.stage.title)
                         Rail {
                             Canvas(from: 0, to: anime.stage.progress, height: 5) {
                                 Shape(kind: rect, fill: accent)
@@ -136,7 +136,7 @@ pub fn stage(anime: anime::Client) -> impl View {
                             Button(id: swap, label: watching.title, variant: row) {
                                 Row(gap: 12, align: center) {
                                     Stack(align: bottom_leading, variant: thumbnail) {
-                                        Image(source: watching.still, width: if window.tv { 120 } else { 96 }, height: if window.tv { 68 } else { 54 }, fit: cover, corner: 8, label: watching.title, hero: frame, hero_key: watching.title)
+                                        Image(source: watching.still, width: if window.tv { 120 } else { 96 }, height: if window.tv { 68 } else { 54 }, fit: cover, corner: thumb, label: watching.title, hero: frame, hero_key: watching.title)
                                         Rail {
                                             Canvas(from: 0, to: watching.progress, height: 3) {
                                                 Shape(kind: rect, fill: accent)
@@ -283,7 +283,7 @@ pub fn desktop_details(anime: anime::Client, #[session] draft: AnimeDraft) -> im
                 }
                 Column(gap: 0, padding_x: if window.tv { 56 } else { 32 }, padding_y: 12) {
                     Row(gap: 36, align: top) {
-                        Image(source: anime.show.poster, width: 220, height: 330, fit: cover, corner: 10, label: anime.show.title)
+                        Image(source: anime.show.poster, width: 220, height: 330, fit: cover, corner: poster, label: anime.show.title)
                         Column(gap: 0, stagger: 0.03) {
                             Canvas(height: 10)
                             if anime.show.movie {
@@ -452,7 +452,7 @@ pub fn new_page(anime: anime::Client) -> impl View {
                         }
                     } else {
                         // A television's week is 500 points tall (`.n-acc`).
-                        Accordion(count: 7, selected: anime.selected_day, collapsed_width: 86, gap: 8, height: if window.tv { 500 } else { 560 }, corner: 22, animate: bouncy) {
+                        Accordion(count: 7, selected: anime.selected_day, collapsed_width: 86, gap: 8, height: if window.tv { 500 } else { 560 }, corner: card, animate: bouncy) {
                             ForEach(items: anime.week, key: id, stagger: 0.036) |day| {
                                 Stack(align: top_leading, height: if window.tv { 500 } else { 560 }, appear: calendar_column_in, appear_delay: 0.06) {
                                     if anime.selected_day == day.id {
@@ -476,7 +476,7 @@ pub fn new_page(anime: anime::Client) -> impl View {
                                                 Column(gap: 10, width: 86, align: center) {
                                                     ForEach(items: day.preview, key: id) |show| {
                                                         Column(gap: 4, align: center) {
-                                                            Image(source: show.poster, width: 52, height: 78, fit: cover, corner: 10)
+                                                            Image(source: show.poster, width: 52, height: 78, fit: cover, corner: poster)
                                                             Row(gap: 0, height: 15) {
                                                                 Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: caption, emphasis: secondary, lines: 1)
                                                             }
@@ -600,7 +600,7 @@ pub fn calendar_rows(anime: anime::Client, day: anime::BroadcastDay) -> impl Vie
                                 Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: headline, lines: 1, line_height: if window.tv { 22 } else { 19 })
                             }
                         }
-                        Image(source: show.poster, width: 58, height: 87, fit: cover, corner: 10)
+                        Image(source: show.poster, width: 58, height: 87, fit: cover, corner: poster)
                         Column(gap: 0) {
                             Text(content: show.title, style: headline, lines: 1, line_height: if window.tv { 22 } else { 19 })
                             if show.aired {
@@ -664,7 +664,7 @@ pub fn calendar_vertical_header(anime: anime::Client, day: anime::BroadcastDay) 
             if anime.selected_day != day.id {
                 Row(gap: 5) {
                     ForEach(items: day.preview, key: id) |show| {
-                        Image(source: show.poster, width: 28, height: 42, fit: cover, corner: 10)
+                        Image(source: show.poster, width: 28, height: 42, fit: cover, corner: poster)
                     }
                     if day.remaining > 0 {
                         calendar_more(count: day.remaining)
@@ -775,7 +775,7 @@ pub fn phone_stage(anime: anime::Client) -> impl View {
         Button(id: phone_stage, label: anime.stage.title, variant: stage) {
             Stack(align: center) {
                 Stack(align: bottom_leading) {
-                    Image(source: anime.stage.still, aspect: 1.7777777778, corner: 22, fit: cover, label: anime.stage.title, hero: frame, hero_key: anime.stage.title)
+                    Image(source: anime.stage.still, aspect: 1.7777777778, corner: card, fit: cover, label: anime.stage.title, hero: frame, hero_key: anime.stage.title)
                     Stack(appearance: dark) {
                         Canvas(height: 5) {
                             Shape(kind: rect, fill: surface.canvas, opacity: 0.35)
@@ -864,7 +864,7 @@ pub fn phone_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
                 Column(gap: 0, padding_x: 16) {
                     Canvas(height: 8)
                     Row(gap: 16, align: top) {
-                        Image(source: anime.show.poster, width: 118, height: 177, fit: cover, corner: 10, label: anime.show.title)
+                        Image(source: anime.show.poster, width: 118, height: 177, fit: cover, corner: poster, label: anime.show.title)
                         // `.d-info`: the 224 points beside the poster.
                         Column(gap: 0, width: 224) {
                             Canvas(height: 4)

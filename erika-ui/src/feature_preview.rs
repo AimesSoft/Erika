@@ -10,13 +10,13 @@ pub fn feature_preview_window(features: FeatureSelection, revision: i64, width: 
         // in the onboarding (350), less 16 in the settings (358).
         Stack(variant: settings_card, width: width, height: 188, align: leading, nudge_key: revision, nudge_scale: 0.95, reflow: smooth) {
             Canvas {
-                Shape(kind: rounded, corner: 16, stroke: control.border, stroke_width: 0.5)
+                Shape(kind: rounded, corner: large, stroke: control.border, stroke_width: 0.5)
             }
             if features.anime || features.library || features.downloads {
                 Row(gap: 0, height: 188, align: top, appear: feature_preview_in, disappear: fade) {
                     Stack(width: 72, height: 188, align: top_leading) {
                         Canvas {
-                            Shape(kind: rounded, corner: 12, fill: fill.subtle)
+                            Shape(kind: rounded, corner: medium, fill: fill.subtle)
                         }
                         Column(gap: 8, padding_x: 7, padding_y: 22, reflow: smooth) {
                             // `.ms i.on`: the first page is the one shown.

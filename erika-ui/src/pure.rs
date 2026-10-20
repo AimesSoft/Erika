@@ -66,15 +66,15 @@ pub fn pure_frame(app: erika::Client, #[session] draft: PureDraft) -> impl View 
             Stack(width: 1074, height: 604.125, nudge: draft.over, appear: pure_frame_in) {
                 if draft.over {
                     Canvas(width: 1074, height: 604.125) {
-                        Shape(kind: rounded, corner: 22, fill: accent, opacity: 0.08)
-                        Shape(kind: rounded, x: 1, y: 1, width: 1072, height: 602.125, corner: 21, stroke: accent, stroke_width: 2)
-                        Shape(kind: rounded, x: 10.75, y: 10.75, width: 1052.5, height: 582.625, corner: 15.25, stroke: accent, stroke_width: 1.5, dash: 4.5, dash_gap: 3)
+                        Shape(kind: rounded, corner: card, fill: accent, opacity: 0.08)
+                        Shape(kind: rounded, x: 1, y: 1, width: 1072, height: 602.125, corner: frame_edge, stroke: accent, stroke_width: 2)
+                        Shape(kind: rounded, x: 10.75, y: 10.75, width: 1052.5, height: 582.625, corner: frame_dash, stroke: accent, stroke_width: 1.5, dash: 4.5, dash_gap: 3)
                     }
                 } else {
                     Canvas(width: 1074, height: 604.125) {
-                        Shape(kind: rounded, corner: 22, fill: fill.subtle)
-                        Shape(kind: rounded, x: 1, y: 1, width: 1072, height: 602.125, corner: 21, stroke: text.placeholder, stroke_width: 2)
-                        Shape(kind: rounded, x: 10.75, y: 10.75, width: 1052.5, height: 582.625, corner: 15.25, stroke: text.placeholder, stroke_width: 1.5, dash: 4.5, dash_gap: 3)
+                        Shape(kind: rounded, corner: card, fill: fill.subtle)
+                        Shape(kind: rounded, x: 1, y: 1, width: 1072, height: 602.125, corner: frame_edge, stroke: text.placeholder, stroke_width: 2)
+                        Shape(kind: rounded, x: 10.75, y: 10.75, width: 1052.5, height: 582.625, corner: frame_dash, stroke: text.placeholder, stroke_width: 1.5, dash: 4.5, dash_gap: 3)
                     }
                 }
                 // 56 + 14 + 34 + 8 + 18 + 26 + 42 points, in the middle.
@@ -110,7 +110,7 @@ pub fn pure_recents(app: erika::Client) -> impl View {
                 Button(id: pure_recent, label: recent.name, variant: recent_row, width: fill, appear: recent_in, appear_delay: 0.16) {
                     Row(gap: 10, align: center) {
                         Stack(align: bottom_leading, variant: thumbnail) {
-                            Image(source: recent.still, width: 88, height: 49.5, fit: cover, corner: 8, label: recent.name)
+                            Image(source: recent.still, width: 88, height: 49.5, fit: cover, corner: thumb, label: recent.name)
                             // `.x-prog`: the bar 3 points high, black at 35 %
                             // (the light appearance's label) under the accent.
                             Rail {
@@ -227,15 +227,15 @@ pub fn phone_pure_page(app: erika::Client, #[session] draft: ErikaDraft, #[sessi
                         Stack(width: 358, height: 201.375, nudge: pure.over, appear: pure_frame_in) {
                             if pure.over {
                                 Canvas(width: 358, height: 201.375) {
-                                    Shape(kind: rounded, corner: 22, fill: accent, opacity: 0.08)
-                                    Shape(kind: rounded, x: 1, y: 1, width: 356, height: 199.375, corner: 21, stroke: accent, stroke_width: 2)
-                                    Shape(kind: rounded, x: 10.75, y: 10.75, width: 336.5, height: 179.875, corner: 15.25, stroke: accent, stroke_width: 1.5, dash: 4.5, dash_gap: 3)
+                                    Shape(kind: rounded, corner: card, fill: accent, opacity: 0.08)
+                                    Shape(kind: rounded, x: 1, y: 1, width: 356, height: 199.375, corner: frame_edge, stroke: accent, stroke_width: 2)
+                                    Shape(kind: rounded, x: 10.75, y: 10.75, width: 336.5, height: 179.875, corner: frame_dash, stroke: accent, stroke_width: 1.5, dash: 4.5, dash_gap: 3)
                                 }
                             } else {
                                 Canvas(width: 358, height: 201.375) {
-                                    Shape(kind: rounded, corner: 22, fill: fill.subtle)
-                                    Shape(kind: rounded, x: 1, y: 1, width: 356, height: 199.375, corner: 21, stroke: text.placeholder, stroke_width: 2)
-                                    Shape(kind: rounded, x: 10.75, y: 10.75, width: 336.5, height: 179.875, corner: 15.25, stroke: text.placeholder, stroke_width: 1.5, dash: 4.5, dash_gap: 3)
+                                    Shape(kind: rounded, corner: card, fill: fill.subtle)
+                                    Shape(kind: rounded, x: 1, y: 1, width: 356, height: 199.375, corner: frame_edge, stroke: text.placeholder, stroke_width: 2)
+                                    Shape(kind: rounded, x: 10.75, y: 10.75, width: 336.5, height: 179.875, corner: frame_dash, stroke: text.placeholder, stroke_width: 1.5, dash: 4.5, dash_gap: 3)
                                 }
                             }
                             // 40 + 14 + 24 + 8 + 15 points, in the middle.

@@ -75,10 +75,11 @@ pub fn player_scene(app: erika::Client, shown: bool, #[session] draft: PlayerDra
             Positioned(x: if app.player.panel { 24 } else if shown && app.preferences.step_back { 103 } else { 0 }, y: if app.player.panel { 114 } else if shown && app.preferences.step_back { 64 } else { 0 }, width: if app.player.panel { 896 } else if shown && app.preferences.step_back { 1074 } else { 1280 }, height: if app.player.panel { 504 } else if shown && app.preferences.step_back { 604.125 } else { 800 }, bleed: !app.player.panel && !(shown && app.preferences.step_back), animate: hero) {
                 Button(id: picture, label: tr! { "zh-Hans" => "播放或暂停画面", "en" => "Play or pause picture" }, variant: player_picture) {
                     // The picture keeps the video's 16:9 inside its place;
-                    // the corner is 22 on screen once scaled to 1074 or 896.
+                    // the corner is the frame's on screen once scaled to 1074
+                    // or 896.
                     ScaleBox(width: 1280, height: 720) {
                         Stack(width: 1280, height: 720) {
-                            Image(source: app.still, width: 1280, height: 720, corner: if app.player.panel { 31.43 } else if shown && app.preferences.step_back { 26.22 } else { 0 }, fit: cover, label: app.title, hero: frame, hero_key: app.title, animate: hero)
+                            Image(source: app.still, width: 1280, height: 720, corner: if app.player.panel { frame_beside } else if shown && app.preferences.step_back { frame_back } else { 0 }, fit: cover, label: app.title, hero: frame, hero_key: app.title, animate: hero)
                             player_overlays(app: app)
                         }
                     }
@@ -119,7 +120,7 @@ pub fn player_tv_scene(app: erika::Client, shown: bool, #[session] draft: Player
             if shown { Positioned(x: 0, y: 0, width: 1280, height: 720) { Stack(variant: player_background, width: 1280, height: 720) {} } }
             Positioned(x: if app.player.panel { 40 } else if shown { 200 } else { 0 }, y: if app.player.panel { 100 } else if shown { 52 } else { 0 }, width: if app.player.panel { 784 } else if shown { 880 } else { 1280 }, height: if app.player.panel { 441 } else if shown { 495 } else { 720 }, animate: hero) {
                 Stack {
-                    Image(source: app.still, width: if app.player.panel { 784 } else if shown { 880 } else { 1280 }, height: if app.player.panel { 441 } else if shown { 495 } else { 720 }, corner: if app.player.panel || shown { 22 } else { 0 }, fit: cover, label: app.title, hero: frame, hero_key: app.title, animate: hero)
+                    Image(source: app.still, width: if app.player.panel { 784 } else if shown { 880 } else { 1280 }, height: if app.player.panel { 441 } else if shown { 495 } else { 720 }, corner: if app.player.panel || shown { card } else { 0 }, fit: cover, label: app.title, hero: frame, hero_key: app.title, animate: hero)
                     ScaleBox(width: 1280, height: 720) {
                         player_overlays(app: app)
                     }

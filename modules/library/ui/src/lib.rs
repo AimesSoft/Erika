@@ -451,7 +451,7 @@ pub fn library_card(library: library::Client, poster: library::LibraryPoster, st
         Column(gap: 0) {
             Button(id: open_recent, label: poster.title, variant: poster) {
                 Stack(align: bottom_leading) {
-                    Image(source: poster.poster, aspect: 0.6666666667, fit: cover, corner: 10, label: poster.title)
+                    Image(source: poster.poster, aspect: 0.6666666667, fit: cover, corner: poster, label: poster.title)
                     if poster.watching {
                         Rail {
                             Canvas(from: 0, to: 1, height: 4) {
@@ -488,7 +488,7 @@ pub fn library_preview(library: library::Client) -> impl View {
             Column(gap: 24, padding: 32) {
                 Button(id: back, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "chevron.left", prominence: plain) => library.close()
                 Row(gap: 36, align: top) {
-                    Image(source: library.show.poster, width: 220, height: 330, fit: cover, corner: 10, label: library.show.title)
+                    Image(source: library.show.poster, width: 220, height: 330, fit: cover, corner: poster, label: library.show.title)
                     Column(gap: 14) {
                         Text(content: library.show.title, style: title)
                         Text(content: tr! { "zh-Hans" => "共 {episodes} 话 · 看到第 {watched} 话", "en" => "{episodes} episodes · {watched} watched"; episodes: library.show.episodes, watched: library.show.watched }, emphasis: secondary)

@@ -28,7 +28,7 @@ pub fn search_results(
                                     SearchItem(id: show, label: show.title, navigation: false) {
                                         // A television's posters are 96 wide (`.tv-sr .pp`).
                                         Column(gap: 5, width: if window.tv { 96 } else { 70 }) {
-                                            Image(source: show.poster, width: if window.tv { 96 } else { 70 }, height: if window.tv { 144 } else { 105 }, fit: cover, corner: 10, label: show.title)
+                                            Image(source: show.poster, width: if window.tv { 96 } else { 70 }, height: if window.tv { 144 } else { 105 }, fit: cover, corner: poster, label: show.title)
                                             Text(content: show.title, style: caption, lines: 1, line_height: 15)
                                         }
                                     } => anime.open_from_search(show.id)

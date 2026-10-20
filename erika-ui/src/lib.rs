@@ -63,6 +63,9 @@ style! {
     // 1-point outline, 12-point corners.
     #[target(browser)]
     Stack.player_panel { background: color(light: "#09090B", dark: "#09090B"), border: border(color(light: "#27272A", dark: "#27272A"), width: 1), corner: 12 }
+    // Fluent's panel (`.nx[data-ds="fluent"] .p-sheet`): 8-point corners.
+    #[target(windows)]
+    Stack.player_panel { corner: 8 }
     Stack.player_gold { foreground: color(light: "#FFD24A", dark: "#FFD24A") }
     Stack.player_cyan { foreground: color(light: "#8EE3FF", dark: "#8EE3FF") }
     Stack.player_pink { foreground: color(light: "#FFB3C7", dark: "#FFB3C7") }
@@ -76,24 +79,76 @@ style! {
     Stack.onboarding_art { background: color(light: "#232A52", dark: "#232A52") }
     // Cards and groups take the system's neutral fill (P2); only the
     // picture, the player and the brand art keep their own colors.
-    Stack.onboarding_card { background: fill.subtle, corner: 16 }
+    Stack.onboarding_card { background: fill.subtle, corner: large }
     Stack.onboarding_check { foreground: on_accent }
     Stack.onboarding_swatch_label { foreground: text.secondary }
     Button.onboarding_crimson { foreground: color(light: "#FF2E55", dark: "#FF2E55"), hover: scale(1.08, snappy), pressed: scale(0.94, press) }
     Button.onboarding_blue { foreground: color(light: "#2A51D4", dark: "#2A51D4"), hover: scale(1.08, snappy), pressed: scale(0.94, press) }
     Button.onboarding_green { foreground: color(light: "#07FF94", dark: "#07FF94"), hover: scale(1.08, snappy), pressed: scale(0.94, press) }
-    Button.onboarding_card { corner: 16, hover: none, pressed: scale(0.98, press), settle: jelly }
-    Stack.row_group { background: fill.subtle, corner: 14 }
-    Stack.settings_card { background: fill.subtle, corner: 16 }
+    Button.onboarding_card { corner: large, hover: none, pressed: scale(0.98, press), settle: jelly }
+    Stack.row_group { background: fill.subtle, corner: list }
+    Stack.settings_card { background: fill.subtle, corner: large }
     Stack.settings_hud { background: color(light: "#18181B", dark: "#18181B"), corner: 17 }
     Stack.settings_wordmark { foreground: color(light: "#213A6B", dark: "#FFFFFF") }
     Stack.settings_tag { background: fill.subtle, corner: 999 }
-    Stack.settings_banner { background: color(light: "#232A52", dark: "#232A52"), corner: 16 }
+    Stack.settings_banner { background: color(light: "#232A52", dark: "#232A52"), corner: large }
     pattern { academy: check(gap(22), band(color(light: "#000000", dark: "#000000"), 34, 0.3), gap(6), band(accent, 3, 0.92), gap(6), band(color(light: "#000000", dark: "#000000"), 34, 0.3), gap(15), band(color(light: "#FFFFFF", dark: "#FFFFFF"), 1.5, 0.5), gap(16.5), twill: true) }
     Button.theme_swatch { hover: scale(1.08, snappy), pressed: scale(0.94, press) }
     Stack.crimson_swatch { background: color(light: "#FF2E55", dark: "#FF2E55"), corner: 15 }
     Stack.ultramarine_swatch { background: color(light: "#2A51D4", dark: "#2A51D4"), corner: 15 }
     Stack.neon_swatch { background: color(light: "#07FF94", dark: "#07FF94"), corner: 15 }
+    // The shapes of the design (section 6.4, next.css `--r-*`), named so
+    // that each design language takes its own; these are Apple's.
+    corner {
+        // `--r-card`: the frame wherever it stands (the stage, the mini
+        // player, the player, the empty frame) and the calendar's columns.
+        card: 22,
+        // The empty frame's 2-point line and its dashed line inside
+        // (`.i-frame::before`, 10 in: `--r-card` less 6), each where the
+        // middle of its stroke runs.
+        frame_edge: 21,
+        frame_dash: 15.25,
+        // The player's picture, drawn at 1280 × 720 and scaled to 896
+        // beside the settings or to 1074 stepped back: `--r-card` before
+        // the scale (22 × 1280 / 896 and 22 × 1280 / 1074).
+        frame_beside: 31.43,
+        frame_back: 26.22,
+        // `--r-poster`.
+        poster: 10,
+        // A row's thumbnail (`.h-row .x-thumb`, `.i-rc .x-thumb`):
+        // `--r-poster` less 2.
+        thumb: 8,
+        // `--r-l`: the film's cells (`.d-ep .x-thumb`) and the raised
+        // surfaces (`.o-card`, `.o-mw`, `.m-card`, `.m-banner`).
+        large: 16,
+        // `--r-m`: rows of a list (`.n-row`, `.i-rc`).
+        medium: 12,
+        // The home page's rows (`.h-row`) and the sidebar's items
+        // (`.c-navi`).
+        row: 9,
+        nav: 9,
+        // A grouped list (`.c-list`); Fluent's rows are cards of their own
+        // (`.c-li`).
+        list: 14,
+    }
+    // Fluent 2 (`.nx[data-ds="fluent"]`): `--r-card` 8, `--r-poster` 6,
+    // `--r-l` 8, `--r-m` 4, `.c-navi` 4.
+    #[target(windows)]
+    corner {
+        card: 8,
+        frame_edge: 7,
+        frame_dash: 1.25,
+        frame_beside: 11.43,
+        frame_back: 9.53,
+        poster: 6,
+        thumb: 4,
+        large: 8,
+        medium: 4,
+        row: 4,
+        nav: 4,
+        list: 4,
+    }
+
     // The springs of the design, section 9.2.
     motion {
         press: spring(period: 0.12, damping: 1.0),
@@ -139,7 +194,7 @@ style! {
 
     // Share navigation motion; each target keeps its selection palette.
     SidebarItem {
-        corner: 9,
+        corner: nav,
         hover: scale(1.03, snappy),
         pressed: scale(0.94, press),
         selected: system,
@@ -180,7 +235,7 @@ style! {
     // What the design draws itself: the frame, posters and the film.
     // The stage of the home page and the mini player: the frame.
     Button.stage {
-        corner: 22,
+        corner: card,
         pressed: scale(0.98, press),
         settle: jelly,
     }
@@ -188,7 +243,7 @@ style! {
     // A thumbnail clips its progress bar to the picture's corners, as the
     // stage's button does.
     Stack.thumbnail {
-        corner: 8,
+        corner: thumb,
     }
 
     // The television's settings: the panel of pages (`.s-side`, 16-point
@@ -207,7 +262,7 @@ style! {
     // the key on 「继续上次」 (`.i-key kbd`).
     Stack.pure_symbol { foreground: text.placeholder }
     Button.recent_row {
-        corner: 12,
+        corner: medium,
         padding: 6,
         hover: background(fill.subtle),
         pressed: scale(0.98, press),
@@ -279,7 +334,7 @@ style! {
     }
 
     Button.poster {
-        corner: 10,
+        corner: poster,
         hover: scale(1.03, snappy) + shadow(14, y: 6, opacity: 0.18),
         pressed: scale(0.97, press),
         settle: jelly,
@@ -296,14 +351,14 @@ style! {
 
     // A cell of the film.
     Button.film {
-        corner: 16,
+        corner: large,
         pressed: scale(0.97, press),
         settle: jelly,
     }
 
     // A row of a list that is a button as a whole.
     Button.row {
-        corner: 9,
+        corner: row,
         padding: 6,
         hover: background(fill.subtle),
         pressed: scale(0.98, press),
@@ -312,7 +367,7 @@ style! {
 
     // Playback shortcuts over stills: only the white symbol is visible.
     Button.preview_play {
-        corner: 8,
+        corner: thumb,
         hover: none,
         pressed: scale(0.94, press),
         settle: jelly,
@@ -321,7 +376,7 @@ style! {
     // The weekly calendar is a group of content cards. Only the rows
     // highlight on hover; the column itself keeps its exact geometry.
     Button.calendar_day {
-        corner: 22,
+        corner: card,
         background: fill.subtle,
         hover: none,
         pressed: none,
@@ -329,7 +384,7 @@ style! {
     }
 
     Button.calendar_selected {
-        corner: 22,
+        corner: card,
         border: control.border,
         hover: none,
         pressed: none,
@@ -338,7 +393,7 @@ style! {
     // The phone's open day (`.n-vrow.on`): the raised card with its hairline.
     #[target(ios)]
     Button.calendar_selected {
-        corner: 22,
+        corner: card,
         background: surface.raised,
         border: border(fill.subtle, width: 0.5),
         hover: none,
@@ -347,7 +402,7 @@ style! {
     }
 
     Button.calendar_row {
-        corner: 12,
+        corner: medium,
         hover: background(fill.subtle),
         pressed: background(fill.strong),
         settle: snappy,
@@ -540,7 +595,7 @@ pub fn mini_player(app: erika::Client) -> impl View {
         Column(gap: 8, appear: fade, disappear: fade) {
             Button(id: mini, label: app.title, variant: stage) {
                 Stack(align: bottom_leading) {
-                    Image(source: app.still, width: 208, height: 117, corner: 22, fit: cover, label: app.title, hero: frame, hero_key: app.title)
+                    Image(source: app.still, width: 208, height: 117, corner: card, fit: cover, label: app.title, hero: frame, hero_key: app.title)
                     Rail {
                         Canvas(from: 0, to: app.progress, height: 3) {
                             Shape(kind: rect, fill: accent)

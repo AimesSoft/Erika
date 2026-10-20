@@ -220,7 +220,7 @@ pub fn onboarding_card(app: erika::Client, preset: OnboardingPreset) -> impl Vie
                 }
                 if app.onboarding.preset == preset {
                     Canvas {
-                        Shape(kind: rounded, corner: 16, stroke: accent, stroke_width: 2)
+                        Shape(kind: rounded, corner: large, stroke: accent, stroke_width: 2)
                     }
                     Row(padding: 12) {
                         Spacer
