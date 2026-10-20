@@ -66,6 +66,11 @@ style! {
     // Fluent's panel (`.nx[data-ds="fluent"] .p-sheet`): 8-point corners.
     #[target(windows)]
     Stack.player_panel { corner: 8 }
+    // libadwaita's and Material's panels: 12- and 28-point corners.
+    #[target(linux)]
+    Stack.player_panel { corner: 12 }
+    #[target(android)]
+    Stack.player_panel { corner: 28 }
     Stack.player_gold { foreground: color(light: "#FFD24A", dark: "#FFD24A") }
     Stack.player_cyan { foreground: color(light: "#8EE3FF", dark: "#8EE3FF") }
     Stack.player_pink { foreground: color(light: "#FFB3C7", dark: "#FFB3C7") }
@@ -147,6 +152,57 @@ style! {
         row: 4,
         nav: 4,
         list: 4,
+    }
+    // libadwaita (`.nx[data-ds="adwaita"]`): `--r-card` 12, `--r-poster` 8,
+    // `--r-l` 12, `--r-m` 9, `.c-navi` 6, `.c-list` 12.
+    #[target(linux)]
+    corner {
+        card: 12,
+        frame_edge: 11,
+        frame_dash: 5.25,
+        frame_beside: 17.14,
+        frame_back: 14.3,
+        poster: 8,
+        thumb: 6,
+        large: 12,
+        medium: 9,
+        row: 9,
+        nav: 6,
+        list: 12,
+    }
+    // Material 3 (`.nx[data-ds="material"]`): `--r-card` 28, `--r-poster`
+    // 12, `--r-l` 16, `--r-m` 12, `.c-navi` 26, `.c-list` 20.
+    #[target(android)]
+    corner {
+        card: 28,
+        frame_edge: 27,
+        frame_dash: 21.25,
+        frame_beside: 40,
+        frame_back: 33.37,
+        poster: 12,
+        thumb: 10,
+        large: 16,
+        medium: 12,
+        row: 12,
+        nav: 26,
+        list: 20,
+    }
+    // The web design system (`.nx[data-ds="web"]`): `--r-card` 12,
+    // `--r-poster` 10, `--r-l` 12, `--r-m` 8, `.c-navi` 8, `.c-list` 12.
+    #[target(browser)]
+    corner {
+        card: 12,
+        frame_edge: 11,
+        frame_dash: 5.25,
+        frame_beside: 17.14,
+        frame_back: 14.3,
+        poster: 10,
+        thumb: 8,
+        large: 12,
+        medium: 8,
+        row: 8,
+        nav: 8,
+        list: 12,
     }
 
     // The springs of the design, section 9.2.
