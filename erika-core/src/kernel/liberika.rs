@@ -5,7 +5,7 @@
 //! audio going while no view shows it, and reports what it sees to the hub
 //! and to the engine.
 
-use super::{Kernel, PLAYER, Playback, Track};
+use super::{DanmakuConfig, Kernel, PLAYER, Playback, Track};
 use bern::media::kernel::{
     self as bern_kernel, ExecOp, ExecRequest, FrameTiming, KernelHub, MediaCapabilities,
     MediaCommand, MediaExecutor, MediaKernel, Observation, Phase, SurfaceHandle, SurfaceKind,
@@ -13,6 +13,10 @@ use bern::media::kernel::{
 };
 use bern::{CommandError, Value};
 use erika_protocol::erika::Enhancement;
+use liberika::danmaku::{
+    DanmakuColor, DanmakuItem, DanmakuLayoutConfig, DanmakuMode, DanmakuTimeline,
+    DanmakuTrackSource,
+};
 use liberika::presenter::{PresenterConfig, PresenterRuntime};
 use liberika::renderer::pipeline::LumaUpscalerMode;
 use liberika::{
@@ -67,6 +71,9 @@ enum Setting {
     SubtitleScale(f64),
     Upscaler(LumaUpscalerMode),
     Capture(PathBuf, Option<u32>),
+    Danmaku(DanmakuConfig),
+    AddDanmaku(String, DanmakuTimeline),
+    SendDanmaku(String),
 }
 
 impl Liberika {
@@ -194,6 +201,21 @@ impl Kernel for Liberika {
         self.send(Message::Set(Setting::Upscaler(mode)));
     }
 
+    fn set_danmaku(&self, config: &DanmakuConfig) {
+        self.send(Message::Set(Setting::Danmaku(config.clone())));
+    }
+
+    fn add_danmaku(&self, name: &str, contents: &str) -> Result<usize, String> {
+        let timeline = DanmakuTimeline::parse_auto(contents).map_err(|error| error.to_string())?;
+        let count = timeline.len();
+        self.send(Message::Set(Setting::AddDanmaku(name.into(), timeline)));
+        Ok(count)
+    }
+
+    fn send_danmaku(&self, text: &str) {
+        self.send(Message::Set(Setting::SendDanmaku(text.into())));
+    }
+
     fn capture(&self, path: &Path, width: Option<u32>) {
         self.send(Message::Set(Setting::Capture(path.to_path_buf(), width)));
     }
@@ -270,6 +292,27 @@ struct Settings {
     rate: Option<f64>,
     subtitle_scale: Option<f64>,
     upscaler: LumaUpscalerMode,
+    danmaku: Option<DanmakuConfig>,
+}
+
+/// liberika's layout configuration for Erika's danmaku settings.
+fn danmaku_layout(config: &DanmakuConfig) -> DanmakuLayoutConfig {
+    DanmakuLayoutConfig {
+        enabled: config.enabled,
+        opacity: config.opacity.clamp(0.0, 1.0) as f32,
+        font_size: config.font_size as f32,
+        display_area: config.area.clamp(0.1, 1.0) as f32,
+        scroll_duration_seconds: config.scroll_seconds as f32,
+        merge_duplicates: config.merge,
+        block_top: config.block_top,
+        block_bottom: config.block_bottom,
+        block_scroll: config.block_scroll,
+        ..DanmakuLayoutConfig::default()
+    }
+}
+
+fn micros(seconds: f64) -> i64 {
+    (seconds * 1_000_000.0).round() as i64
 }
 
 struct View {
@@ -296,6 +339,10 @@ struct Session {
     rendered_at_open: u64,
     /// The picture captured last.
     still: Option<PathBuf>,
+    /// The comments the user sent while this media played, and the track
+    /// that shows them.
+    own_danmaku: Vec<DanmakuItem>,
+    own_track: Option<u64>,
     reported: Option<(Phase, Instant)>,
     audio_ticked: Instant,
 }
@@ -319,6 +366,8 @@ impl Session {
             selection: TrackSelection::default(),
             rendered_at_open: 0,
             still: None,
+            own_danmaku: Vec::new(),
+            own_track: None,
             reported: None,
             audio_ticked: Instant::now(),
         })
@@ -416,6 +465,31 @@ impl Session {
             still: self.still.clone(),
             error: observation.error.clone(),
         }
+    }
+
+    /// Show `text` as the user's comment now: a moment ahead of the
+    /// picture, before the danmaku delay moves it, on a track of the
+    /// user's own comments.
+    fn send_danmaku(&mut self, text: String, delay: f64) {
+        let at = self.presenter.media_time().as_secs_f64() + 0.2 - delay;
+        self.own_danmaku.push(DanmakuItem {
+            id: self.own_danmaku.len() as u64 + 1,
+            pts: Duration::from_secs_f64(at.max(0.0)),
+            text,
+            mode: DanmakuMode::Scroll,
+            font_size: 25.0,
+            color: DanmakuColor::WHITE,
+            opacity: 1.0,
+            is_self: true,
+        });
+        let Ok(timeline) = DanmakuTimeline::new(self.own_danmaku.clone()) else {
+            return;
+        };
+        if let Some(track) = self.own_track.take() {
+            self.presenter.remove_danmaku_track(track);
+        }
+        self.own_track =
+            Some(self.presenter.add_danmaku_track(timeline, "own", DanmakuTrackSource::Manual, 0));
     }
 
     /// Save the picture with its subtitles, `width` wide or as wide as the
@@ -628,6 +702,9 @@ impl Worker {
                 session.selection = TrackSelection::default();
                 session.reported = None;
                 session.still = None;
+                session.own_danmaku.clear();
+                session.own_track = None;
+                session.presenter.clear_danmaku();
                 session.rendered_at_open = session.presenter.stats().rendered_video_frames;
                 if let Err(error) = session.presenter.open(MediaRequest::new(url.clone())) {
                     session.error = Some(error.to_string());
@@ -708,6 +785,10 @@ impl Worker {
             session.presenter.set_subtitle_scale(scale);
         }
         session.presenter.set_luma_upscaler(self.settings.upscaler);
+        if let Some(danmaku) = &self.settings.danmaku {
+            session.presenter.set_danmaku_config(danmaku_layout(danmaku));
+            session.presenter.set_danmaku_global_offset(micros(danmaku.delay));
+        }
     }
 
     fn set(&mut self, setting: Setting) {
@@ -716,11 +797,15 @@ impl Worker {
             Setting::Rate(rate) => self.settings.rate = Some(rate),
             Setting::SubtitleScale(scale) => self.settings.subtitle_scale = Some(scale),
             Setting::Upscaler(mode) => self.settings.upscaler = mode,
+            Setting::Danmaku(ref config) => self.settings.danmaku = Some(config.clone()),
             Setting::AudioTrack(_)
             | Setting::SubtitleTrack(_)
             | Setting::AddSubtitle(_)
-            | Setting::Capture(..) => {}
+            | Setting::Capture(..)
+            | Setting::AddDanmaku(..)
+            | Setting::SendDanmaku(_) => {}
         }
+        let delay = self.settings.danmaku.as_ref().map_or(0.0, |danmaku| danmaku.delay);
         let Some(session) = self.players.get_mut(PLAYER).filter(|session| session.loaded) else {
             return;
         };
@@ -745,6 +830,20 @@ impl Worker {
                 if let Err(error) = session.capture(&path, width) {
                     eprintln!("liberika: capture failed: {error}");
                 }
+                Ok(())
+            }
+            Setting::Danmaku(config) => {
+                session.presenter.set_danmaku_config(danmaku_layout(&config));
+                session.presenter.set_danmaku_global_offset(micros(config.delay));
+                Ok(())
+            }
+            Setting::AddDanmaku(name, timeline) => {
+                let source = DanmakuTrackSource::File(PathBuf::from(&name));
+                session.presenter.add_danmaku_track(timeline, name, source, 0);
+                Ok(())
+            }
+            Setting::SendDanmaku(text) => {
+                session.send_danmaku(text, delay);
                 Ok(())
             }
         };

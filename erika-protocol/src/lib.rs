@@ -292,8 +292,6 @@ pub mod erika {
     pub enum Notice {
         #[label(tr! { "zh-Hans" => "界面预览：弹幕匹配尚未接入", "en" => "Preview: danmaku matching isn't connected yet" })]
         DanmakuMatchPending,
-        #[label(tr! { "zh-Hans" => "界面预览：系统画中画待播放内核接入", "en" => "Preview: picture in picture waits for the playback kernel" })]
-        PictureInPicturePending,
         #[label(tr! { "zh-Hans" => "界面预览：可使用窗口绿色按钮进入全屏", "en" => "Preview: use the window's green button for full screen" })]
         FullScreenHint,
         #[label(tr! { "zh-Hans" => "界面预览：示例剧集没有画面可截", "en" => "Preview: sample episodes have no picture to save" })]
@@ -303,10 +301,19 @@ pub mod erika {
             #[content]
             file: String,
         },
-        #[label(tr! { "zh-Hans" => "已选择本地弹幕（界面预览）", "en" => "Local danmaku chosen (preview)" })]
-        LocalDanmakuChosen,
-        #[label(tr! { "zh-Hans" => "已挂载本地弹幕文件", "en" => "Local danmaku file mounted" })]
-        LocalDanmakuMounted,
+        #[label(tr! { "zh-Hans" => "已挂载弹幕：{file}，{count} 条", "en" => "Danmaku mounted: {file}, {count}" })]
+        DanmakuMounted {
+            #[content]
+            file: String,
+            count: i64,
+        },
+        #[label(tr! { "zh-Hans" => "无法读取弹幕：{file}", "en" => "Can't read danmaku: {file}" })]
+        DanmakuUnreadable {
+            #[content]
+            file: String,
+        },
+        #[label(tr! { "zh-Hans" => "先打开一个视频，再挂载弹幕", "en" => "Open a video before mounting danmaku" })]
+        DanmakuNeedsVideo,
         #[label(tr! { "zh-Hans" => "当前为界面预览版本", "en" => "This is a preview version" })]
         PreviewVersion,
         #[label(tr! { "zh-Hans" => "Erika · Rust / Bern / SwiftUI", "en" => "Erika · Rust / Bern / SwiftUI" })]
@@ -405,22 +412,18 @@ pub mod erika {
         ArtCnnDenoise,
     }
 
+    /// How liberika draws danmaku: sliders from 0 to 1 (opacity, size,
+    /// speed), the delay in seconds, and what it hides.
     #[value]
-    pub enum PictureRatio {
-        #[label(tr! { "zh-Hans" => "原始", "en" => "Original" })]
-        Original,
-        #[label(tr! { "zh-Hans" => "16:9", "en" => "16:9" })]
-        Wide,
-        #[label(tr! { "zh-Hans" => "4:3", "en" => "4:3" })]
-        Classic,
-    }
-
-    #[value]
-    pub enum HdrMode {
-        #[label(tr! { "zh-Hans" => "自动", "en" => "Auto" })]
-        Auto,
-        #[label(tr! { "zh-Hans" => "关闭", "en" => "Off" })]
-        Off,
+    pub struct DanmakuSettings {
+        pub opacity: f64,
+        pub font_size: f64,
+        pub speed: f64,
+        pub delay: f64,
+        pub merge: bool,
+        pub block_top: bool,
+        pub block_bottom: bool,
+        pub block_scroll: bool,
     }
 
     #[value]
@@ -443,23 +446,17 @@ pub mod erika {
         #[content]
         pub video_info: String,
         pub enhancement: Enhancement,
-        pub ratio: PictureRatio,
-        pub hdr: HdrMode,
         pub volume: f64,
-        pub brightness: f64,
         pub subtitle_size: f64,
-        pub subtitle_delay: f64,
-        pub audio_delay: f64,
         pub skip_intro: bool,
         pub feedback: bool,
-        /// The subtitle shown now, the danmaku the user sent, and the
-        /// subtitle file they attached.
-        #[content]
-        pub subtitle_line: String,
-        #[content]
-        pub sent_danmaku: String,
+        /// The subtitle file the user attached last.
         #[content]
         pub subtitle_file: String,
+        /// The danmaku files liberika shows, and how many comments they hold.
+        #[content]
+        pub danmaku_source: String,
+        pub danmaku_count: i64,
     }
 
     #[state]
@@ -482,6 +479,7 @@ pub mod erika {
         /// Whether something is playing. The player layer or the mini
         /// player shows it.
         pub player: PlayerState,
+        pub danmaku_settings: DanmakuSettings,
         pub playing: bool,
         /// Whether the player fills the window; otherwise it has shrunk into
         /// the mini player at the foot of the sidebar.
@@ -605,14 +603,22 @@ pub mod erika {
         #[errors("no_such_track")]
         fn select_audio_track(&mut self, id: i64) -> Result<(), CommandError>;
         fn set_enhancement(&mut self, value: Enhancement) -> Result<(), CommandError>;
-        fn set_picture_ratio(&mut self, value: PictureRatio) -> Result<(), CommandError>;
-        fn set_hdr(&mut self, value: HdrMode) -> Result<(), CommandError>;
         fn set_player_number(&mut self, key: String, value: f64) -> Result<(), CommandError>;
         fn set_skip_intro(&mut self, value: bool) -> Result<(), CommandError>;
         /// Save the picture on screen, with its subtitles, at the video's
         /// size in Pictures › Erika.
         fn screenshot(&mut self) -> Result<(), CommandError>;
         fn send_danmaku(&mut self, text: String) -> Result<(), CommandError>;
+        /// Set a danmaku slider: `opacity`, `font_size`, `speed` (0 to 1)
+        /// or `delay` (seconds).
+        #[errors("unknown_danmaku_option")]
+        fn set_danmaku_number(&mut self, key: String, value: f64) -> Result<(), CommandError>;
+        /// Set `merge`, `block_top`, `block_bottom` or `block_scroll`.
+        #[errors("unknown_danmaku_option")]
+        fn set_danmaku_switch(&mut self, key: String, value: bool) -> Result<(), CommandError>;
+        /// Show the comments of a Bilibili xml or Dandanplay json file over
+        /// what plays.
+        fn mount_danmaku(&mut self, source: MediaSource) -> Result<(), CommandError>;
         fn attach_subtitle(&mut self, source: MediaSource) -> Result<(), CommandError>;
 
 

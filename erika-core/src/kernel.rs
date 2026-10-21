@@ -34,6 +34,13 @@ pub trait Kernel: Send + Sync {
     /// 1 is the subtitles' own size.
     fn set_subtitle_scale(&self, scale: f64);
     fn set_enhancement(&self, enhancement: Enhancement);
+    /// How the comments over the video look and which show.
+    fn set_danmaku(&self, config: &DanmakuConfig);
+    /// Show the comments of a Bilibili xml or Dandanplay json file over
+    /// what plays, as one more track; answers how many it holds.
+    fn add_danmaku(&self, name: &str, contents: &str) -> Result<usize, String>;
+    /// Show `text` now as the user's own comment.
+    fn send_danmaku(&self, text: &str);
     /// Save the picture on screen, with its subtitles, `width` pixels wide
     /// (the video's own width when `None`) as a PNG at `path`;
     /// [`Playback::still`] names it once it is written.
@@ -65,6 +72,26 @@ pub struct Playback {
     /// The picture captured last.
     pub still: Option<PathBuf>,
     pub error: Option<String>,
+}
+
+/// How liberika draws danmaku, in its own terms.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DanmakuConfig {
+    pub enabled: bool,
+    /// 0 to 1.
+    pub opacity: f64,
+    /// Points; liberika's own default is 30.
+    pub font_size: f64,
+    /// The share of the picture's height comments use, from the top.
+    pub area: f64,
+    /// How long a scrolling comment takes to cross.
+    pub scroll_seconds: f64,
+    /// Seconds later than their own time; negative is earlier.
+    pub delay: f64,
+    pub merge: bool,
+    pub block_top: bool,
+    pub block_bottom: bool,
+    pub block_scroll: bool,
 }
 
 /// A track of the media, named as the file names it.

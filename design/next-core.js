@@ -126,7 +126,7 @@ window.NX = (() => {
       /* 折叠屏：姿态（closed 合上 / open 展开 / tent 悬停）和硬件（duo = iPhone Duo，matex = 书本式大折叠） */
       this.fold = cfg.dev === 'fold' ? (FOLD_POSE.includes(cfg.fold) ? cfg.fold : 'open') : null;
       this.hw = hwOf(cfg.ds);
-      this.S ={ page: 'home', detail: null, scroll: {}, lib: { seg: 'local', filter: 'all', sort: 'recent', zoom: 0.36 }, newDay: TODAY_IDX, set: 'optional', dlTab: 'on', phStack: [] };
+      this.S ={ page: 'home', detail: null, scroll: {}, lib: { seg: 'anime', src: 'all', filter: 'all', sort: 'recent', zoom: 0.36 }, newDay: TODAY_IDX, set: 'optional', dlTab: 'on', phStack: [] };
       this.cw = CW.slice();
       this.dl = DL.map(d => ({ ...d }));
       this.P = null; this.overlays = [];

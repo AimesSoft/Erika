@@ -72,9 +72,13 @@ brew install cmake meson ninja nasm pkg-config
 cd ../liberika && cargo run -p xtask -- deps build --all --profile lgpl --target aarch64-apple-darwin
 ```
 
+**字幕与弹幕都由 liberika 画在画面里**（2026-10-21），Erika 不再自己绘制：字幕是文件内嵌或外挂的轨道，字号对应 liberika 的字幕缩放；弹幕来自与视频同名、同目录的 `.xml` / `.json`（打开视频时自动加载）、播放设置或设置窗口里「挂载」的 B 站 xml 与弹弹play json，以及自己发送的弹幕（作为一条单独的轨）。弹幕设置存在引擎状态 `danmaku_settings` 里，按 liberika 的参数换算：字号滑块 20–40 点（中间 30），速度滑块是滚过画面的 14–6 秒，显示区域四分之一、一半、全屏，另有不透明度、合并重复、屏蔽顶部 / 底部 / 滚动和整体偏移。
+
+**只接 liberika 支持的功能**：liberika 没有的就删掉入口，不在 Erika 里模拟，也不为此改 liberika。因此删去了字幕延迟、音频延迟、画面亮度、画面比例、HDR 开关（liberika 只在创建时选输出模式；设计稿本就写 HDR 自动启用、不提供开关）、屏蔽彩色弹幕和画中画；画面分页只在画质增强模块打开时出现，里面是超分辨率。弹弹play 匹配不是内核功能，属于弹幕模块，尚未实现，面板里原来写死的「已匹配」改为显示实际挂载的弹幕文件。模块里的示例剧集没有字幕和弹幕。
+
 之后照常 `bern build --target macos`。Bern 会把 liberika 需要的系统框架（Metal、VideoToolbox、CoreAudio 等）交给 swiftc 链接。
 
-目前只有 macOS 接了 liberika：iOS、tvOS 的视图已由 Bern 生成，需要先为模拟器编译 liberika 的依赖再实测；Windows、Linux、Android 等 Bern 给出 D3D、Wayland/X11、Android 的表面后接入；Web 上 liberika 没有播放后端。没接的平台仍按剧照模拟播放。liberika 还没有字幕延迟与音频延迟，这两个滑块暂时只改状态；弹幕要等弹幕模块提供数据后交给 liberika 渲染。
+目前只有 macOS 接了 liberika：iOS、tvOS 的视图已由 Bern 生成，需要先为模拟器编译 liberika 的依赖再实测；Windows、Linux、Android 等 Bern 给出 D3D、Wayland/X11、Android 的表面后接入；Web 上 liberika 没有播放后端。没接的平台仍按剧照模拟播放。没接的平台没有字幕和弹幕。
 
 ## 模块与设计稿的对照
 

@@ -75,14 +75,14 @@
     const anime = this.store.has('anime'), next = Math.min(a.eps, a.w + 1), n = Math.min(a.eps, 12);
     const eps = Array.from({ length: n }, (_, i) => {
       const e = i + 1, w = e <= a.w, cur = e === next && a.w < a.eps;
-      return `<div class="d-ep${w ? ' w' : ''}${cur ? ' cur' : ''}" data-act="epplay" data-ep="${e}"><div class="x-thumb nojelly">${w || cur ? `<img src="${imgOf(a)}" alt="" style="object-position:50% ${15 + ((i * 23) % 70)}%">` : `<span class="num">${String(e).padStart(2, '0')}</span>`}${w ? `<span class="ck">${I('check')}</span>` : ''}${cur && a.w ? '<div class="x-prog"><b style="width:35%"></b></div>' : ''}</div><div class="et">${cur ? `<span class="hl">第 ${e} 话 · ${a.w ? '继续' : '开始'}</span>` : `第 ${e} 话`}</div><div class="es">${w ? '已看' : cur && a.w ? '剩 16 分钟' : '24 分钟'}</div></div>`;
+      return `<div class="d-ep${w ? ' w' : ''}${cur ? ' cur' : ''}" data-act="epplay" data-ep="${e}"><div class="x-thumb nojelly">${w || cur ? `<img src="${imgOf(a)}" alt="" style="object-position:50% ${15 + ((i * 23) % 70)}%">` : `<span class="num">${String(e).padStart(2, '0')}</span>`}${w ? `<span class="ck">${I('check')}</span>` : ''}${cur && a.w ? '<div class="x-prog"><b style="width:35%"></b></div>' : ''}</div><div class="et">${cur ? `<span class="hl">第 ${e} 话 · ${a.w ? '继续' : '开始'}</span>` : `第 ${e} 话`}</div><div class="es">${w ? '已看' : cur && a.w ? '剩 16 分钟' : '24 分钟'}${this.versionsOf(a, e).length > 1 ? ' · 2 个版本' : ''}</div></div>`;
     }).join('');
     const tabs = (anime ? [['info', '简介'], ['cmt', '评论'], ['staff', '制作']] : []).concat([['file', '文件']]);
     const status = a.w ? (a.w >= a.eps ? '看过' : '在看') : '想看';
     const acts = `<span class="c-btn p L" data-act="epplay" data-ep="${next}"${phone ? ' style="width:100%"' : ''}>${I('play')}${a.w ? `继续 第 ${next} 话` : '开始观看'}</span>${anime ? `<span class="c-btn" data-act="status" data-menu-anchor>${I('heart')}<span class="st-l">${status}</span><span class="chev">${I('chev-d')}</span></span><span class="c-ib" data-act="rate" data-menu-anchor title="评分">${I('star')}</span>` : ''}<span class="c-ib" data-act="dmore" data-menu-anchor title="更多">${I('more')}</span>`;
     return `<div class="d-wash"></div>
       <div class="d-head"${phone ? ' style="gap:16px"' : ''}><div class="x-poster d-poster"${phone ? ' style="width:118px"' : ''}><img src="${imgOf(a)}" alt=""></div>
-        <div class="d-info"${phone ? ' style="padding-top:4px"' : ''}><div class="x-kick">${a.movie ? '剧场版' : 'TV 动画'} · 2026 年 1 月 · 共 ${a.eps} 话</div>
+        <div class="d-info"${phone ? ' style="padding-top:4px"' : ''}><div class="x-kick">${a.movie ? '剧场版' : 'TV 动画'} · 2026 年 1 月 · 共 ${a.eps} 话${this.offline(a) ? ` · ${this.srcOf(a).map(s => s.n).join('、')}离线` : ''}</div>
           <div class="d-title"${phone ? ' style="font-size:21px;margin:6px 0 8px"' : ''}>${a.t}</div>
           ${anime ? `<div class="d-rate">${a.r ? `<span class="sc">★ ${a.r}</span><span class="x-mut">Bangumi</span>` : ''}<span class="d-tags">${a.tags.map(t => `<span>${t}</span>`).join('')}</span></div>` : '<div class="x-mut">本地文件 · 没开「追番」模块，不显示评分和简介</div>'}
           ${phone ? '' : anime ? `<div class="d-syn">${SYN}</div>` : '<div style="height:20px"></div>'}
@@ -98,7 +98,11 @@
     if (t === 'info') return `<div class="d-bars" style="max-width:640px"><p class="x-mut" style="margin:0 0 14px">${SYN}</p><div style="display:flex;gap:8px;flex-wrap:wrap">${a.tags.concat([`共 ${a.eps} 话`, 'Madhouse', '2026 年 1 月']).map(x => `<span class="c-chip" style="pointer-events:none">${x}</span>`).join('')}</div></div>`;
     if (t === 'cmt') return COMMENTS.map(c => `<div class="d-cmt"><span class="x-av"></span><div><b>${c.n}</b><span class="st">${'★'.repeat(Math.round(c.s / 2))}${'☆'.repeat(5 - Math.round(c.s / 2))}</span><p>${c.t}</p></div></div>`).join('');
     if (t === 'staff') return `<div class="c-list" style="max-width:640px">${['原作', '导演', '系列构成', '角色设计', '音乐', '动画制作'].map((k, i) => `<div class="c-li"><div class="tx"><b>${k}</b></div><span class="v">${['山田钟人 / 阿部司', '北川朋哉', '铃木智寻', '长岛令子', 'Evan Call', 'Madhouse'][i]}</span></div>`).join('')}</div>`;
-    return `<div class="c-list" style="max-width:640px">${Array.from({ length: Math.min(a.eps, 3) }, (_, i) => `<div class="c-li"><span class="lic">${I('film')}</span><div class="tx"><b>${a.t} - ${String(i + 1).padStart(2, '0')} [1080p].mkv</b><span>HEVC · 1920×1080 · ASS 字幕 · 1.1 GB</span></div></div>`).join('')}</div>`;
+    const vs = Array.from({ length: Math.min(a.eps, 3) }, (_, i) => this.versionsOf(a, i + 1).map(v => [i + 1, v])).flat();
+    if (!vs.length) return `<p class="x-mut" style="margin:0">媒体库里还没有这部番的文件。</p>`;
+    const where = s => (s.off ? `${s.n}（离线）` : s.n);
+    return `<div class="c-list" style="max-width:720px">${vs.map(([e, v]) => `<div class="c-li"><span class="lic">${I('film')}</span><div class="tx"><b>${v.t}</b><span>第 ${e} 话 · ${v.m} · 在 ${v.at.map(where).join('、')}</span></div><span class="c-ib" data-act="epplay" data-ep="${e}" title="用这个版本播放">${I('play')}</span><span class="c-ib" data-act="dfile" data-ep="${e}" data-v="${v.v}" data-menu-anchor title="更多">${I('more')}</span></div>`).join('')}</div>
+      <p class="x-mut" style="margin:12px 0 0;font:var(--t-cap)">点剧集时自动挑版本：先用你设的首选版本，再按本地、局域网、远程的顺序，跳过离线的来源。</p>`;
   };
   A.after_detail = function () {
     const scope = this.wide ? this.q.page : this.scr, a = byId(this.S.detail);
@@ -151,6 +155,7 @@
   Object.assign(A.ACT, {
     epplay(el) {
       const a = byId(this.S.detail), ep = +el.dataset.ep, scope = this.wide ? this.q.page : this.scr;
+      if (this.offline(a)) { NP.wobble(el); this.toast(`${this.srcOf(a).map(s => s.n).join('、')}离线，连上以后才能播放`); return; }
       const th = el.classList.contains('d-ep') ? $('.x-thumb', el) : ($(`.d-ep[data-ep="${ep}"] .x-thumb`, scope) || $('.d-poster', scope));
       this.plOpen({ aid: a.id, ep, img: imgOf(a) }, this.rel(th), th);
     },
@@ -161,7 +166,19 @@
       this.menu(el, ['想看', '在看', '看过', '搁置', '抛弃'].map(t => `<div class="c-mi${t === cur ? ' on' : ''}" data-mi="${t}"><span class="ck">${I('check')}</span>${t}</div>`).join(''), 'status', t => { $('.st-l', el).textContent = t; this.menuClose(); this.toast(this.store.has('sync') ? `已标记为「${t}」，同步到 Bangumi` : `已标记为「${t}」`); });
     },
     rate(el) { this.menu(el, `<div class="c-mlabel">评分</div>` + [10, 9, 8, 7, 6, 5].map(n => `<div class="c-mi" data-mi="${n}"><span class="ck">${I('check')}</span>${'★'.repeat(Math.round(n / 2))}${'☆'.repeat(5 - Math.round(n / 2))}<span class="k">${n} 分</span></div>`).join(''), 'rate', n => { this.menuClose(); NP.wobble(el); this.toast(`评分：${n} 分`); }); },
-    dmore(el) { this.menu(el, [['danmaku', '手动匹配弹幕…'], ['folder', '在文件夹中显示'], ['sync', '刷新番剧信息'], ['x', '从媒体库移除']].map(([i, t]) => `<div class="c-mi" data-mi="${t}"><span class="mic">${I(i)}</span>${t}</div>`).join(''), 'dmore', t => { this.menuClose(); this.toast(`原型：${t}`); }); },
+    dmore(el) { this.menu(el, [['danmaku', '整部重新匹配…'], ['folder', '在文件夹中显示'], ['sync', '刷新番剧信息'], ['x', '从媒体库移除']].map(([i, t]) => `<div class="c-mi" data-mi="${t}"><span class="mic">${I(i)}</span>${t}</div>`).join(''), 'dmore', t => { this.menuClose(); if (t === '整部重新匹配…') this.matchAnime(byId(this.S.detail)); else this.toast(`原型：${t}`); }); },
+    /* 「文件」分页里某个版本：重新匹配就是在 媒体库 › 来源 里打开这个文件的匹配 */
+    dfile(el) {
+      const a = byId(this.S.detail), e = +el.dataset.ep, bd = el.dataset.v === 'bd';
+      this.menu(el, [['sync', '重新匹配…'], ['folder', '在文件夹中显示']].map(([i, t]) => `<div class="c-mi" data-mi="${t}"><span class="mic">${I(i)}</span>${t}</div>`).join(''), 'dfile', t => {
+        this.menuClose();
+        if (t !== '重新匹配…') { this.toast('原型：在文件夹中显示'); return; }
+        const s = this.srcs().find(x => x.ids.includes(a.id) && !x.off && (bd ? x.k === 'jf' : x.k !== 'jf'));
+        if (!s) { this.toast('这个文件现在连不上'); return; }
+        const f = this.dirOf(s, [a.t]).files.find(x => x.ep === e), m = this.matchOf(f);
+        this.libMatch({ k: s.k, path: [a.t] }, { files: [f], on: [f.id], set: { [f.id]: m ? m.ep : e }, off: 0, aid: m ? m.aid : a.id, where: [s.n, a.t, f.name].join(' › ') });
+      });
+    },
   });
 
   /* =====================================================================
@@ -202,10 +219,58 @@
   /* =====================================================================
      媒体库：缩放墙 + 拼音索引
      ===================================================================== */
-  const SERVER_IDS = [7, 9, 3, 5, 10, 6, 1, 12, 2], SHARE_IDS = [6, 7, 13, 14, 1, 2];
+  /* 来源：番剧墙不分来源，同一部番只有一张卡；来源只拿来筛选，管理放在「来源」分段（issue #867 里的资源库） */
+  /* 每个来源下面一部番一个文件夹，外加没整理的散文件（loose）；本地可以加好几个文件夹，每个都是一个来源 */
+  const SOURCES = [
+    { k: 'local', n: '番剧', kind: '本地文件夹', at: '~/Movies/番剧', ic: 'folder', ids: [1, 2, 3, 5, 6, 9, 10, 12, 15, 16], loose: { '未整理': ['u1', 'u2', 'u3', 'u4', 'u5', 'u6'], '电视录像': ['tv1', 'tv2', 'tv3', 'tv4'] } },
+    { k: 'disk', n: '动画', kind: '本地文件夹', at: '/Volumes/T7/动画', ic: 'folder', ids: [4, 8, 11] },
+    { k: 'nas', n: '家里的 NAS', kind: 'WebDAV', at: 'nas.local/dav/anime', ic: 'server', mod: 'sources', ids: [7, 9, 3, 5, 10, 6, 1, 12, 2], loose: { '地狱乐 S2': ['u7', 'u8'], 'One Piece 1001-1012': ['op1', 'op2', 'op3', 'op3b', 'op4', 'op5', 'op6', 'op7', 'op8', 'op9', 'op10', 'op11', 'op12', 'opsp'] } },
+    { k: 'jf', n: 'Jellyfin', kind: '媒体服务器', at: '192.168.1.20:8096', ic: 'server', mod: 'sources', ids: [7, 9, 3] },
+    { k: 'pc', n: '书房电脑', kind: '局域网共享', at: 'study-pc.local', ic: 'wifi', mod: 'remote', off: true, ids: [6, 7, 13, 14, 1, 2] },
+  ];
+  const LOOSE = {
+    u1: '[Sakura] Sousou no Frieren S2 - 01 [1080p].mkv', u2: '[Sakura] Sousou no Frieren S2 - 02 [1080p].mkv', u3: '[Sakura] Sousou no Frieren S2 - 03 [1080p].mkv', u4: '[Sakura] Sousou no Frieren S2 - 04 [1080p].mkv',
+    u5: '第五话 修正版.mkv', u6: 'OVA.mp4', u7: '[ANi] Jigokuraku - 13 [1080P][Baha].mp4', u8: '[ANi] Jigokuraku - 14 [1080P][Baha].mp4',
+    opsp: '[Skymoon-Raws] One Piece SP 鬼岛前夜 [1080p].mp4', op3b: '[Skymoon-Raws] One Piece - 1003 [720p].mp4',
+    tv1: '寒蝉鸣泣之时 解 录像 2024年07月04日.ts', tv2: '寒蝉鸣泣之时 解 录像 2024年07月11日.ts', tv3: '寒蝉鸣泣之时 解 录像 2024年07月18日.ts', tv4: '寒蝉鸣泣之时 解 录像 2024年07月25日.ts',
+  };
+  for (let i = 1; i <= 12; i++) LOOSE[`op${i}`] = `[Skymoon-Raws] One Piece - ${1000 + i} [1080p].mp4`;
+  /* 不在番剧墙上的长篇，只用来演示上千集怎么匹配 */
+  const LONG = [{ id: 101, t: '海贼王', eps: 1155, py: 'H' }];
+  const animeOf = id => byId(id) || LONG.find(a => a.id === +id);
+  /* 匹配挂在文件上：MATCH[文件] = { aid, ep, manual }，null 是解除了匹配；没写的文件用扫描时认出的结果 */
+  const MATCH = {};
+  const pad = e => String(e).padStart(2, '0');
+  const epNum = name => { const m = name.match(/[-\s第](\d{1,4})(?=[\s\]\.话v]|$)/); return m ? +m[1] : null; };
+  const guessOf = name => (/Frieren/i.test(name) ? 7 : /Jigokuraku/i.test(name) ? 10 : /One Piece/i.test(name) ? 101 : /寒蝉鸣泣之时 解/.test(name) ? 1 : null);
+  A.srcs = function () { return SOURCES.filter(s => !s.mod || this.store.has(s.mod)); };
+  /* 文件夹 path 里的子文件夹和文件；文件 id 跨来源相同 = 同一个文件 */
+  A.dirOf = function (s, path) {
+    if (!path.length) return { dirs: s.ids.map(id => byId(id).t).concat(Object.keys(s.loose || {})), files: [] };
+    const loose = (s.loose || {})[path[0]];
+    if (loose) return { dirs: [], files: loose.map(id => ({ id, name: LOOSE[id] })) };
+    const a = ANIME.find(x => x.t === path[0]), jf = s.k === 'jf';
+    return { dirs: [], files: Array.from({ length: jf ? Math.min(a.eps, 3) : Math.min(a.eps, 12) }, (_, i) => ({ id: `${a.id}-${i + 1}-${jf ? 'bd' : 'tv'}`, name: `${a.t} - ${pad(i + 1)} [${jf ? 'BDRip ' : ''}1080p].mkv`, aid: a.id, ep: i + 1 })) };
+  };
+  A.matchOf = function (f) { return f.id in MATCH ? MATCH[f.id] : f.aid ? { aid: f.aid, ep: f.ep } : null; };
+  /* 同一个文件在哪些来源里有副本 */
+  A.copiesOf = function (f) {
+    if (!f.aid) return this.srcs().filter(s => Object.values(s.loose || {}).some(l => l.includes(f.id)));
+    return this.srcs().filter(s => s.ids.includes(f.aid) && (f.id.endsWith('-bd') ? s.k === 'jf' : s.k !== 'jf'));
+  };
+  A.srcOf = function (a) { return this.srcs().filter(s => s.ids.includes(a.id)); };
+  A.offline = function (a) { const at = this.srcOf(a); return at.length > 0 && at.every(s => s.off); };
+  /* 同一集可以有几个版本，每个版本又可以同时在几个来源里；Jellyfin 上多一份前三集的 BD 版 */
+  A.versionsOf = function (a, e) {
+    const at = this.srcOf(a), ep = String(e).padStart(2, '0');
+    return [
+      { v: 'tv', t: `${a.t} - ${ep} [1080p].mkv`, m: 'HEVC · 1920×1080 · ASS 字幕 · 1.1 GB', at: at.filter(s => s.k !== 'jf') },
+      { v: 'bd', t: `${a.t} - ${ep} [BDRip 1080p].mkv`, m: 'HEVC 10bit · 1920×1080 · 4.8 GB', at: e <= 3 ? at.filter(s => s.k === 'jf') : [] },
+    ].filter(v => v.at.length);
+  };
   A.libSet = function () {
     const L = this.S.lib;
-    let items = L.seg === 'server' ? SERVER_IDS.map(byId) : L.seg === 'share' ? SHARE_IDS.map(byId) : ANIME.slice();
+    let items = ANIME.filter(a => this.srcOf(a).some(s => L.src === 'all' || s.k === L.src));
     if (L.filter === 'watching') items = items.filter(a => a.w > 0 && a.w < a.eps);
     if (L.filter === 'unwatched') items = items.filter(a => a.w === 0);
     if (L.filter === 'done') items = items.filter(a => a.w >= a.eps);
@@ -216,19 +281,134 @@
   };
   A.libHTML = function (phone) {
     const L = this.S.lib;
-    const segs = [['local', '本地'], this.store.has('sources') && ['server', '服务器'], this.store.has('remote') && ['share', '共享']].filter(Boolean);
-    if (!segs.find(s => s[0] === L.seg)) L.seg = 'local';
-    const all = ANIME, cnt = { all: all.length, watching: all.filter(a => a.w > 0 && a.w < a.eps).length, unwatched: all.filter(a => a.w === 0).length, done: all.filter(a => a.w >= a.eps).length };
+    const srcs = this.srcs();
+    if (!srcs.find(s => s.k === L.src)) L.src = 'all';
+    const seg = `<span class="c-seg${phone ? ' sm' : ''}">${[['anime', '番剧'], ['src', '来源']].map(([k, n]) => `<span class="${k === L.seg ? 'on' : ''}" data-act="libseg" data-seg="${k}">${n}</span>`).join('')}</span>`;
+    if (L.seg === 'src') return this.libSrcHTML(phone, seg);
+    const all = ANIME.filter(a => this.srcOf(a).length), cnt = { all: all.length, watching: all.filter(a => a.w > 0 && a.w < a.eps).length, unwatched: all.filter(a => a.w === 0).length, done: all.filter(a => a.w >= a.eps).length };
     const chip = (k, n) => `<span class="c-chip${L.filter === k ? ' on' : ''}" data-act="libf" data-f="${k}">${L.filter === k ? I('check') : ''}${n} ${cnt[k]}</span>`;
     const sortName = { recent: '最近观看', name: '名称', rating: '评分' }[L.sort];
     const letters = 'ABCDEFGHJKLMNOPQRSTWXYZ'.split('');
     const zoom = `<span class="l-zoom" title="海报大小（⌘+ / ⌘−，触屏可以双指缩放）">${I('grid')}<div class="c-slider sm l-zs" style="--v:${L.zoom}"><i class="in"></i><i class="ac"></i><i class="th"></i></div><span class="big">${I('grid')}</span></span>`;
-    const seg = segs.length > 1 ? `<span class="c-seg${phone ? ' sm' : ''}">${segs.map(([k, n]) => `<span class="${k === L.seg ? 'on' : ''}" data-act="libseg" data-seg="${k}">${n}</span>`).join('')}</span>` : '';
+    const srcName = L.src === 'all' ? '全部来源' : srcs.find(s => s.k === L.src).n;
+    const pick = srcs.length < 2 ? '' : phone ? `<span class="c-ib" data-act="libsrc" data-menu-anchor title="来源">${I('filter')}</span>` : `<span class="c-btn" data-act="libsrc" data-menu-anchor>${I('filter')}<span class="lab">${srcName}</span><span class="chev">${I('chev-d')}</span></span>`;
     const head = phone
-      ? `<div class="x-pnav"><div class="x-lt">媒体库</div><span style="display:flex;gap:8px"><span class="c-ib" data-act="toast" data-t="管理媒体库：文件夹、扫描、服务器" title="管理">${I('folder')}</span><span class="c-ib" data-act="libsort" data-menu-anchor title="排序">${I('sort')}</span></span></div><div style="display:flex;align-items:center;gap:10px;margin:2px 0 12px">${seg}<span class="grow"></span>${zoom}</div><div class="x-hrow l-chips" style="flex-wrap:nowrap">`
-      : `<div class="l-hd"><div class="x-lt">媒体库</div>${seg}<span class="grow"></span>${zoom}<span class="c-btn" data-act="libsort" data-menu-anchor>${I('sort')}<span class="lab">${sortName}</span><span class="chev">${I('chev-d')}</span></span><span class="c-btn" data-act="toast" data-t="管理媒体库：文件夹、扫描、服务器">${I('folder')}管理</span></div><div class="l-chips">`;
+      ? `<div class="x-pnav"><div class="x-lt">媒体库</div><span style="display:flex;gap:8px">${pick}<span class="c-ib" data-act="libsort" data-menu-anchor title="排序">${I('sort')}</span></span></div><div style="display:flex;align-items:center;gap:10px;margin:2px 0 12px">${seg}<span class="grow"></span>${zoom}</div><div class="x-hrow l-chips" style="flex-wrap:nowrap">`
+      : `<div class="l-hd"><div class="x-lt">媒体库</div>${seg}<span class="grow"></span>${zoom}${pick}<span class="c-btn" data-act="libsort" data-menu-anchor>${I('sort')}<span class="lab">${sortName}</span><span class="chev">${I('chev-d')}</span></span></div><div class="l-chips">`;
     return `${head}${chip('all', '全部')}${chip('watching', '在看')}${chip('unwatched', '未看')}${chip('done', '看完')}</div>
-      <div class="l-wrap"${phone ? ' style="padding-right:22px"' : ''}><div class="l-grid">${ANIME.map(a => `<div class="l-item" data-id="${a.id}">${pcard(a, statusOf(a))}</div>`).join('')}</div><div class="l-idx">${letters.map(l => `<span data-act="libidx" data-l="${l}">${l}</span>`).join('')}</div></div>`;
+      <div class="l-wrap"${phone ? ' style="padding-right:22px"' : ''}><div class="l-grid">${ANIME.map(a => `<div class="l-item" data-id="${a.id}">${this.offline(a) ? pcard(a, this.srcOf(a).map(s => s.n).join('、') + '离线', ' data-off') : pcard(a, statusOf(a))}</div>`).join('')}</div><div class="l-idx">${letters.map(l => `<span data-act="libidx" data-l="${l}">${l}</span>`).join('')}</div></div>`;
+  };
+  /* 「来源」分段：每个来源的状态和文件数，在这里添加、重新扫描、改账号，处理没认出的文件 */
+  A.libSrcHTML = function (phone, seg) {
+    const L = this.S.lib;
+    if (L.match) return this.matchHTML(phone);
+    if (L.at) return this.dirHTML(phone);
+    const srcs = this.srcs();
+    const add = phone ? `<span class="c-ib" data-act="srcadd" data-menu-anchor title="添加来源">${I('plus')}</span>` : `<span class="c-btn p" data-act="srcadd" data-menu-anchor>${I('plus')}添加来源</span>`;
+    const head = phone
+      ? `<div class="x-pnav"><div class="x-lt">媒体库</div>${add}</div><div style="margin:2px 0 14px">${seg}</div>`
+      : `<div class="l-hd"><div class="x-lt">媒体库</div>${seg}<span class="grow"></span>${add}</div>`;
+    const count = s => s.ids.reduce((n, id) => n + Math.min(byId(id).eps, s.k === 'jf' ? 3 : 12), 0) + Object.values(s.loose || {}).flat().length;
+    const row = s => `<div class="c-li" data-act="srcopen" data-k="${s.k}"><span class="lic">${I(s.ic)}</span><div class="tx"><b>${s.n}</b><span>${s.kind} · ${s.at}</span></div><span class="v">${s.off ? '离线' : `${count(s)} 个文件`}</span>${I('chev-r')}</div>`;
+    const lost = srcs.flatMap(s => Object.entries(s.loose || {}).flatMap(([d, ids]) => ids.map(id => ({ s, d, f: { id, name: LOOSE[id] } })))).filter(x => !this.matchOf(x.f));
+    return `${head}<div class="c-list" style="max-width:720px">${srcs.map(row).join('')}</div>
+      <div class="x-sechd" style="margin-top:26px"><span class="x-h2">没认出的文件 · ${lost.length}</span></div>
+      ${lost.length ? `<div class="c-list" style="max-width:720px">${lost.map(x => `<div class="c-li" data-act="srcopen" data-k="${x.s.k}" data-d="${x.d}"><span class="lic">${I('film')}</span><div class="tx"><b>${x.f.name}</b><span>${x.s.n} › ${x.d}</span></div><span class="c-btn" data-act="mone" data-k="${x.s.k}" data-d="${x.d}" data-id="${x.f.id}">指定剧集</span></div>`).join('')}</div>` : '<p class="x-mut" style="margin:0">都认出来了。</p>'}
+      <p class="x-mut" style="margin-top:14px;font:var(--t-cap)">同一个文件在几个来源里都有，只算一份。番剧墙不分来源，要只看某个来源，在「番剧」里筛选。</p>`;
+  };
+  /* 来源里逐层打开文件夹；每个文件写着认成了哪一集，文件夹可以批量匹配 */
+  A.dirHTML = function (phone) {
+    const L = this.S.lib, s = SOURCES.find(x => x.k === L.at.k), path = L.at.path, d = this.dirOf(s, path);
+    const title = path.length ? path[path.length - 1] : s.n, up = path.length ? (path.length > 1 ? path[path.length - 2] : s.n) : '来源';
+    const crumbs = ['来源', s.n].concat(path).map((c, i, all) => (i < all.length - 1 ? `<span class="m-crumb" data-act="dirgo" data-n="${i}">${c}</span> › ` : c)).join('');
+    const batch = !s.off && d.files.length >= 2 ? `<span class="c-btn" data-act="mbatch">${I('list')}批量匹配</span>` : '';
+    const more = `<span class="c-ib" data-act="srcmore" data-menu-anchor title="更多">${I('more')}</span>`;
+    const head = phone
+      ? `<div class="x-pnav"><span class="x-pback" data-act="dirup">${I('chev-l')}${up}</span>${more}</div><div class="x-lt" style="margin:4px 0 2px">${title}</div><div class="x-mut" style="font:var(--t-cap);margin-bottom:14px">${s.kind} · ${[s.at].concat(path).join('/')}</div>${batch ? `<div style="margin:0 0 14px">${batch}</div>` : ''}`
+      : `<div class="l-hd"><span class="c-ib" data-act="dirup" title="返回">${I('chev-l')}</span><div class="x-lt">${title}</div><span class="grow"></span>${batch}${more}</div><div class="x-mut" style="margin:-6px 0 18px;font:var(--t-cap)">${crumbs}</div>`;
+    if (s.off) return `${head}<p class="x-mut" style="margin:0">${s.n}离线，连上以后才能浏览里面的文件。</p>`;
+    const dir = n => { const sub = this.dirOf(s, path.concat(n)), lost = sub.files.filter(f => !this.matchOf(f)).length; return `<div class="c-li" data-act="diropen" data-n="${n}"><span class="lic">${I('folder')}</span><div class="tx"><b>${n}</b><span>${sub.files.length} 个文件${lost ? ` · ${lost} 个没认出` : ''}</span></div>${I('chev-r')}</div>`; };
+    const file = f => { const m = this.matchOf(f); return `<div class="c-li"><span class="lic">${I('film')}</span><div class="tx"><b>${f.name}</b><span>${m ? `${animeOf(m.aid).t} · 第 ${m.ep} 话${m.manual ? ' · 手动指定' : ''}` : '没认出'}</span></div>${m ? `<span class="c-ib" data-act="fmore" data-id="${f.id}" data-menu-anchor title="更多">${I('more')}</span>` : `<span class="c-btn" data-act="mone" data-id="${f.id}">指定剧集</span>`}</div>`; };
+    return `${head}<div class="c-list" style="max-width:760px">${d.dirs.map(dir).join('')}${d.files.map(file).join('')}</div>`;
+  };
+  /* 匹配有两种配法：按文件名里的集数，每个文件配到那一话，「对齐」整体平移（第二季接着第一季编号时用）；
+     按顺序（文件名里没有集数时），从 M.start 那一话开始依次往后配。个别不对的直接改数字。
+     M.set 是手改过的集数，M.off 是对齐的平移量；只有一个文件时就是重新匹配 */
+  const valsOf = M => {
+    const vs = new Map(); let k = 0;
+    M.files.forEach(f => {
+      if (!M.on.includes(f.id)) return;
+      vs.set(f.id, f.id in M.set ? M.set[f.id] : M.seq ? M.start + k++ : epNum(f.name) != null ? epNum(f.name) + M.off : null);
+    });
+    return vs;
+  };
+  const lowOf = M => Math.min(...M.files.filter(f => M.on.includes(f.id) && !(f.id in M.set) && epNum(f.name) != null).map(f => epNum(f.name)));
+  /* 文件名里的集数超出了这部番的总集数，多半是接着上一季编号：让最小的那个对到第 1 话 */
+  const offOf = (M, a) => { const ns = M.files.filter(f => M.on.includes(f.id)).map(f => epNum(f.name)).filter(n => n != null); return a && ns.length && Math.max(...ns) > a.eps ? 1 - Math.min(...ns) : 0; };
+  A.matchHTML = function (phone) {
+    const M = this.S.lib.match, a = M.aid ? animeOf(M.aid) : null, one = M.files.length === 1, seen = new Set(), vals = valsOf(M);
+    const rows = M.files.map(f => {
+      const yes = M.on.includes(f.id), v = yes ? vals.get(f.id) : null, twin = yes && v != null && seen.has(v);
+      if (yes && v != null) seen.add(v);
+      return { f, yes, v, twin, bad: !yes ? '' : v == null ? '文件名里没有集数，填一个' : a && v > a.eps ? `超出了，《${a.t}》共 ${a.eps} 话` : '' };
+    });
+    const on = rows.filter(r => r.yes), bad = on.filter(r => r.bad), odd = rows.filter(r => !r.yes || r.bad || r.twin);
+    const title = M.title || (one ? '重新匹配' : '批量匹配');
+    const head = phone
+      ? `<div class="x-pnav"><span class="x-pback" data-act="mback">${I('chev-l')}取消</span></div><div class="x-lt" style="margin:4px 0 2px">${title}</div><div class="x-mut" style="font:var(--t-cap);margin-bottom:14px">${M.where}</div>`
+      : `<div class="l-hd"><span class="c-ib" data-act="mback" title="取消">${I('chev-l')}</span><div class="x-lt">${title}</div></div><div class="x-mut" style="margin:-6px 0 18px;font:var(--t-cap)">${M.where}</div>`;
+    const num = (id, v) => `<input class="m-num" data-id="${id}" value="${v == null ? '' : v}" inputmode="numeric" aria-label="集数">`;
+    const low = one || M.seq ? Infinity : lowOf(M);
+    const mode = `<span class="c-seg sm"><span class="${M.seq ? '' : 'on'}" data-act="mmode" data-m="num">按文件名里的集数</span><span class="${M.seq ? 'on' : ''}" data-act="mmode" data-m="seq">按顺序</span></span>`;
+    const how = M.seq ? `<span class="m-g">从第<input class="m-num" data-k="start" value="${M.start}" inputmode="numeric" aria-label="从第几话开始">话开始</span>`
+      : isFinite(low) ? `<span class="m-g"><span class="x-mut">对齐</span>文件名里的 ${low} 是第<input class="m-num" data-k="align" value="${low + M.off}" inputmode="numeric" aria-label="对齐到第几话">话</span>` : '';
+    const ctl = `<div class="m-ctl"><span class="m-g"><span class="x-mut">番剧</span><span class="c-btn" data-act="manime" data-menu-anchor>${a ? a.t : '搜索番剧'}<span class="chev">${I('chev-d')}</span></span></span>${
+      one ? `<span class="m-g"><span class="x-mut">集数</span>第${num(M.files[0].id, rows[0].v)}话</span>` : `<span class="m-g"><span class="x-mut">配法</span>${mode}</span>${how}`}</div>`;
+    const chips = one ? '' : `<div class="l-chips m-chips"><span class="c-chip${M.only ? '' : ' on'}" data-act="mfilter" data-f="all">${M.only ? '' : I('check')}全部 ${rows.length}</span><span class="c-chip${M.only ? ' on' : ''}" data-act="mfilter" data-f="odd">${M.only ? I('check') : ''}要看一下 ${odd.length}</span><span class="x-mut m-sum">${on.length} 个会匹配${rows.length - on.length ? `，${rows.length - on.length} 个跳过` : ''}${bad.length ? `，${bad.length} 个要先处理` : ''}</span></div>`;
+    const row = r => {
+      const m = this.matchOf(r.f), now = `现在：${m ? `${animeOf(m.aid).t} · 第 ${m.ep} 话` : '没认出'}`;
+      const sub = r.bad ? `<em class="m-bad">${r.bad}</em>` : r.twin ? '和上面那个文件是同一话，算两个版本' : now;
+      const to = !r.yes ? '<span class="m-to">跳过</span>' : one ? '' : `<span class="m-to">→ 第${num(r.f.id, r.v)}话</span>`;
+      return `<div class="c-li${r.yes ? '' : ' m-skip'}"><span class="lic"${one ? '' : ` data-act="mtoggle" data-id="${r.f.id}" title="${r.yes ? '跳过这个文件' : '匹配这个文件'}"`}>${I(r.yes ? 'check' : 'film')}</span><div class="tx"><b>${r.f.name}</b><span>${sub}</span></div>${to}</div>`;
+    };
+    const copies = one ? this.copiesOf(M.files[0]) : [];
+    const note = one
+      ? `${copies.length > 1 ? `这个文件在${copies.map(s => s.n).join('、')}里的几份会一起改。` : ''}弹幕跟着换成新那一集的；观看进度和弹幕偏移记在文件上，原样留着。`
+      : `${M.seq ? '按文件名排好顺序，从起始那一话开始依次往后配，可以拖动调整顺序。' : '每个文件按文件名里的集数配到那一话；第二季接着第一季编号时改「对齐」。同一话的几个文件算几个版本。'}个别不对的直接改数字，左边的勾可以跳过一个文件。这些文件在别的来源里的副本也会一起改，确定后一次写入，出错就全部不改。`;
+    const ok = a && on.length && !bad.length, linked = one && this.matchOf(M.files[0]);
+    return `${head}${ctl}${chips}<div class="c-list" style="max-width:760px">${(M.only ? odd : rows).map(row).join('') || '<div class="c-li"><div class="tx"><b>没有要看的了</b></div></div>'}</div>
+      <p class="x-mut" style="margin:12px 0 16px;font:var(--t-cap);max-width:620px">${note}</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><span class="c-btn p" data-act="mok"${ok ? '' : ' style="opacity:.45;pointer-events:none"'}>${one ? '确定' : `匹配 ${on.length} 个文件`}</span>${linked ? '<span class="c-btn" data-act="munlink">解除匹配</span>' : ''}<span class="c-btn" data-act="mback">取消</span></div>`;
+  };
+  /* 集数框改完（回车或离开）才重画，打字时不丢焦点 */
+  A.matchNum = function (i) {
+    const M = this.S.lib.match, n = parseInt(i.value, 10);
+    if (i.dataset.k === 'align') { if (n > 0) M.off = n - lowOf(M); }
+    else if (i.dataset.k === 'start') { if (n > 0) M.start = n; }
+    else if (n > 0) { M.set[i.dataset.id] = n; if (!M.on.includes(i.dataset.id)) M.on = M.on.concat(i.dataset.id); }
+    else delete M.set[i.dataset.id];
+    this.rerender();
+  };
+  /* 来源分段里换一层：回到顶上并淡入 */
+  A.libRe = function () {
+    this.rerender();
+    if (this.wide) this.q.scroll.scrollTop = 0; else if (this.scr) this.scr.scrollTop = 0;
+    this.animIn(this.wide ? this.q.page : this.scr, 8);
+  };
+  /* 从详情页跳进 媒体库 › 来源 的匹配 */
+  A.libMatch = function (at, match) {
+    Object.assign(this.S.lib, { seg: 'src', at, match });
+    this.S.detail = null;
+    if (!this.wide) { this.S.phStack = []; this.S.page = 'lib'; this.renderPhone(true); }
+    else if (this.S.page === 'lib') { this.renderTb(); this.renderPage(true); this.q.scroll.scrollTop = 0; }
+    else this.go('lib');
+  };
+  /* 一部番的所有文件（取一个连得上的来源；别处的副本是同一批文件） */
+  A.matchAnime = function (a) {
+    const s = this.srcs().find(x => x.ids.includes(a.id) && !x.off && x.k !== 'jf');
+    if (!s) { this.toast('这部番的文件都连不上'); return; }
+    const files = this.dirOf(s, [a.t]).files;
+    this.libMatch({ k: s.k, path: [a.t] }, { files, on: files.map(f => f.id), set: {}, off: 0, start: 1, aid: a.id, title: '整部重新匹配', where: `《${a.t}》的 ${files.length} 个文件` });
   };
   A.libLayout = function (snap) {
     const scope = this.wide ? this.q.page : this.scr, grid = $('.l-grid', scope); if (!grid) return;
@@ -268,12 +448,80 @@
     $$('.l-item', scope).forEach(it => { it._sp = null; }); this._lgh = null;
     this.libLayout(true);
     const zs = $('.l-zs', scope);
-    zs.addEventListener('nxslide', e => { this.S.lib.zoom = e.detail; this.libLayout(false); });
+    if (zs) zs.addEventListener('nxslide', e => { this.S.lib.zoom = e.detail; this.libLayout(false); });
+    $$('.m-num', scope).forEach(i => i.addEventListener('change', () => this.matchNum(i)));
+    if (animate && this.S.lib.seg === 'src') this.stagger($$('.c-li', scope), 60, 12, 26);
     if (animate) this.stagger($$('.l-item', scope).filter(x => x.style.pointerEvents !== 'none').map(x => $('.x-pcard', x)), 80, 16, 22);
   };
   Object.assign(A.ACT, {
     libf(el) { this.S.lib.filter = el.dataset.f; $$('[data-act="libf"]', el.parentElement).forEach(x => { const on = x === el; x.classList.toggle('on', on); const ic = $('.ic', x); if (on && !ic) x.insertAdjacentHTML('afterbegin', I('check')); if (!on && ic) ic.remove(); }); this.libLayout(false); },
-    libseg(el) { this.S.lib.seg = el.dataset.seg; $$('[data-act="libseg"]', el.parentElement).forEach(x => x.classList.toggle('on', x === el)); this.libLayout(false); },
+    libseg(el) { if (this.S.lib.seg === el.dataset.seg) return; this.S.lib.seg = el.dataset.seg; this.S.lib.match = null; this.rerender(); this.animIn(this.wide ? this.q.page : this.scr, 8); },
+    srcopen(el) { this.S.lib.at = { k: el.dataset.k, path: el.dataset.d ? [el.dataset.d] : [] }; this.libRe(); },
+    diropen(el) { this.S.lib.at.path.push(el.dataset.n); this.libRe(); },
+    dirup() { const at = this.S.lib.at; if (at.path.length) at.path.pop(); else this.S.lib.at = null; this.libRe(); },
+    dirgo(el) { const n = +el.dataset.n, at = this.S.lib.at; if (n === 0) this.S.lib.at = null; else at.path = at.path.slice(0, n - 1); this.libRe(); },
+    fmore(el) {
+      const id = el.dataset.id;
+      this.menu(el, [['sync', '重新匹配…'], ['x', '解除匹配'], ['folder', '在文件夹中显示']].map(([i, t]) => `<div class="c-mi" data-mi="${t}"><span class="mic">${I(i)}</span>${t}</div>`).join(''), 'fmore', t => {
+        this.menuClose();
+        if (t === '重新匹配…') this.ACT.mone.call(this, el);
+        else if (t === '解除匹配') { MATCH[id] = null; this.rerender(); this.toast('已解除匹配，文件回到「没认出的文件」'); }
+        else this.toast('原型：在文件夹中显示');
+      });
+    },
+    mone(el) {
+      const L = this.S.lib, k = el.dataset.k || L.at.k, path = el.dataset.d ? [el.dataset.d] : L.at.path, s = SOURCES.find(x => x.k === k);
+      const f = this.dirOf(s, path).files.find(x => x.id === el.dataset.id), m = this.matchOf(f);
+      L.match = { files: [f], on: [f.id], set: m ? { [f.id]: m.ep } : {}, off: 0, aid: m ? m.aid : guessOf(f.name), where: [s.n].concat(path, f.name).join(' › ') };
+      this.libRe();
+    },
+    mbatch() {
+      const L = this.S.lib, s = SOURCES.find(x => x.k === L.at.k);
+      const files = this.dirOf(s, L.at.path).files.slice().sort((x, y) => (epNum(x.name) || 1e6) - (epNum(y.name) || 1e6) || x.name.localeCompare(y.name, 'zh'));
+      const aidOf = f => (this.matchOf(f) || {}).aid || guessOf(f.name), votes = files.map(aidOf).filter(Boolean);
+      const aid = votes.slice().sort((x, y) => votes.filter(v => v === y).length - votes.filter(v => v === x).length)[0] || null;
+      /* 文件名里有集数就按集数配，没有集数的先跳过（填了数字就自动算进来）；整个文件夹都没有集数时按顺序配 */
+      const seq = !files.some(f => epNum(f.name) != null);
+      const M = { files, on: files.filter(f => (!aid || aidOf(f) === aid) && (seq || epNum(f.name) != null)).map(f => f.id), set: {}, seq, start: 1, aid, where: `${[s.n].concat(L.at.path).join(' › ')} · ${files.length} 个文件` };
+      M.off = offOf(M, aid && animeOf(aid));
+      L.match = M;
+      this.libRe();
+    },
+    mtoggle(el) { const M = this.S.lib.match, id = el.dataset.id; M.on = M.on.includes(id) ? M.on.filter(x => x !== id) : M.on.concat(id); this.rerender(); },
+    mfilter(el) { this.S.lib.match.only = el.dataset.f === 'odd'; this.rerender(); },
+    mmode(el) { const M = this.S.lib.match, seq = el.dataset.m === 'seq'; if (M.seq === seq) return; M.seq = seq; this.rerender(); },
+    /* 番剧：输入名字搜弹弹play，结果在菜单里跟着变 */
+    manime(el) {
+      const M = this.S.lib.match, pool = ANIME.concat(LONG);
+      const items = q => (q ? pool.filter(a => a.t.includes(q)) : [animeOf(M.aid)].filter(Boolean).concat(pool.filter(a => a.id !== M.aid))).slice(0, 8).map(a => `<div class="c-mi${a.id === M.aid ? ' on' : ''}" data-mi="${a.id}"><span class="ck">${I('check')}</span>${a.t}<span class="k">${a.eps} 话</span></div>`).join('') || '<div class="c-mlabel">没找到，换个名字试试</div>';
+      this.menu(el, `<label class="c-field x-search m-q">${I('search')}<input placeholder="搜索弹弹play 的番剧"></label><div class="m-res">${items('')}</div>`, 'manime', id => {
+        M.aid = +id; if (M.files.length > 1) M.off = offOf(M, animeOf(M.aid)); this.menuClose(); this.rerender();
+      });
+      const inp = $('.m-q input', this.q.pop), res = $('.m-res', this.q.pop);
+      if (!inp) return;
+      inp.addEventListener('input', () => { res.innerHTML = items(inp.value.trim()); $$('.c-mi', res).forEach(b => bindJelly(b, 'M')); });
+      setTimeout(() => inp.focus(), 60);
+    },
+    mok() {
+      const M = this.S.lib.match, a = animeOf(M.aid), on = M.files.filter(f => M.on.includes(f.id)), vals = valsOf(M), eps = on.map(f => vals.get(f.id));
+      on.forEach((f, i) => { MATCH[f.id] = { aid: a.id, ep: eps[i], manual: true }; });
+      const lo = Math.min(...eps), hi = Math.max(...eps);
+      this.S.lib.match = null; this.libRe();
+      this.toast(on.length === 1 ? `已匹配到《${a.t}》第 ${lo} 话` : `已把 ${on.length} 个文件匹配到《${a.t}》第 ${lo}${hi > lo ? `–${hi}` : ''} 话`);
+    },
+    munlink() { const f = this.S.lib.match.files[0]; MATCH[f.id] = null; this.S.lib.match = null; this.libRe(); this.toast('已解除匹配，文件回到「没认出的文件」'); },
+    mback() { this.S.lib.match = null; this.libRe(); },
+    libsrc(el) {
+      const L = this.S.lib, srcs = this.srcs();
+      this.menu(el, `<div class="c-mlabel">来源</div>` + [['all', '全部来源']].concat(srcs.map(s => [s.k, s.off ? `${s.n}（离线）` : s.n])).map(([k, t]) => `<div class="c-mi${L.src === k ? ' on' : ''}" data-mi="${k}"><span class="ck">${I('check')}</span>${t}</div>`).join(''), 'libsrc', k => {
+        L.src = k; this.menuClose(); const lab = $('.lab', el); if (lab) lab.textContent = k === 'all' ? '全部来源' : srcs.find(s => s.k === k).n; this.libLayout(false);
+      });
+    },
+    srcadd(el) {
+      const kinds = [['folder', '本地文件夹'], this.store.has('sources') && ['server', 'WebDAV / SMB'], this.store.has('sources') && ['server', 'Jellyfin / Emby'], this.store.has('remote') && ['wifi', '局域网里的设备']].filter(Boolean);
+      this.menu(el, kinds.map(([i, t]) => `<div class="c-mi" data-mi="${t}"><span class="mic">${I(i)}</span>${t}</div>`).join(''), 'srcadd', t => { this.menuClose(); this.toast(`原型：添加${t}`); });
+    },
+    srcmore(el) { this.menu(el, [['sync', '重新扫描'], ['gear', '改地址和账号'], ['x', '移除这个来源']].map(([i, t]) => `<div class="c-mi" data-mi="${t}"><span class="mic">${I(i)}</span>${t}</div>`).join(''), 'srcmore', t => { this.menuClose(); this.toast(`原型：${t}`); }); },
     libsort(el) {
       const L = this.S.lib;
       this.menu(el, `<div class="c-mlabel">排序</div>` + [['recent', '最近观看'], ['name', '名称（拼音）'], ['rating', '评分']].map(([k, t]) => `<div class="c-mi${L.sort === k ? ' on' : ''}" data-mi="${k}"><span class="ck">${I('check')}</span>${t}</div>`).join(''), 'libsort', k => {

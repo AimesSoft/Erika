@@ -13,10 +13,6 @@ use erika_protocol::erika::{self, *};
 pub struct SettingsDraft {
     pub page: SettingsPage,
     pub query: String,
-    #[initial(0.8)]
-    pub opacity: f64,
-    #[initial(0.45)]
-    pub font_size: f64,
     pub danmaku_file: MediaSource,
 }
 #[component]
@@ -515,8 +511,8 @@ pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> 
             Slot(id: form_header)
             Section(title: tr! { "zh-Hans" => "显示", "en" => "Display" }) {
                 Switch(id: show_danmaku, label: tr! { "zh-Hans" => "显示弹幕", "en" => "Show danmaku" }, checked: app.preferences.show_danmaku, style: switch) => app.set_preference("show_danmaku", app.preferences.show_danmaku)
-                Slider(id: opacity, label: tr! { "zh-Hans" => "不透明度", "en" => "Opacity" }, value: draft.opacity, min: 0, max: 1)
-                Slider(id: font_size, label: tr! { "zh-Hans" => "字号", "en" => "Font size" }, value: draft.font_size, min: 0, max: 1)
+                Slider(id: opacity, label: tr! { "zh-Hans" => "不透明度", "en" => "Opacity" }, current: app.danmaku_settings.opacity, min: 0, max: 1) => app.set_danmaku_number("opacity", app.danmaku_settings.opacity)
+                Slider(id: font_size, label: tr! { "zh-Hans" => "字号", "en" => "Font size" }, current: app.danmaku_settings.font_size, min: 0, max: 1) => app.set_danmaku_number("font_size", app.danmaku_settings.font_size)
                 Picker(id: area, label: tr! { "zh-Hans" => "显示区域", "en" => "Display area" }, selected: app.preferences.danmaku_area, style: segmented) => app.set_danmaku_area(app.preferences.danmaku_area)
             }
             Section(title: tr! { "zh-Hans" => "来源", "en" => "Sources" }) {
@@ -529,7 +525,7 @@ pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> 
                             Text(content: tr! { "zh-Hans" => "xml / json", "en" => "xml / json" }, style: caption, emphasis: secondary)
                         }
                         Spacer
-                        Button(id: mount_danmaku, label: tr! { "zh-Hans" => "挂载…", "en" => "Mount…" }, pick: draft.danmaku_file, files: ".xml .json") => app.show_notice(Notice::LocalDanmakuMounted)
+                        Button(id: mount_danmaku, label: tr! { "zh-Hans" => "挂载…", "en" => "Mount…" }, pick: draft.danmaku_file, files: ".xml .json") => app.mount_danmaku(draft.danmaku_file)
                     }
                 }
             }

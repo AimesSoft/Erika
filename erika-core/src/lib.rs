@@ -5,6 +5,7 @@
 mod settings;
 mod onboarding;
 
+mod danmaku;
 mod kernel;
 mod search;
 mod player;
@@ -26,7 +27,6 @@ const STILL: &str = "design/assets/still1.jpg";
 pub struct ErikaEngine {
     pub(crate) state: State,
     feedback_remaining: f64,
-    danmaku_remaining: f64,
     pub(crate) all_plugins: Vec<Plugin>,
     pub(crate) saved_modules: Option<Vec<String>>,
     pub(crate) onboarding_completed: bool,
@@ -49,7 +49,6 @@ impl Default for ErikaEngine {
     fn default() -> Self {
         let mut engine = Self {
             feedback_remaining: 0.0,
-            danmaku_remaining: 0.0,
             saved_modules: None,
             onboarding_completed: false,
             kernel: if cfg!(test) { None } else { kernel::start() },
@@ -82,6 +81,7 @@ impl Default for ErikaEngine {
                 accent: Accent::Crimson,
                 appearance: Appearance::System,
                 player: player::initial(),
+                danmaku_settings: danmaku::initial(),
                 playing: false,
                 expanded: false,
                 paused: false,
@@ -220,6 +220,7 @@ impl erika::Commands for ErikaEngine {
     }
     fn set_danmaku_area(&mut self, value: DanmakuArea) -> Result<(), CommandError> {
         self.state.preferences.danmaku_area = value;
+        self.apply_danmaku();
         Ok(())
     }
     fn set_preference(&mut self, key: String, value: bool) -> Result<(), CommandError> {
@@ -230,7 +231,10 @@ impl erika::Commands for ErikaEngine {
             "autoplay" => self.state.preferences.autoplay = value,
             "step_back" => self.state.preferences.step_back = value,
             "hardware_decode" => self.state.preferences.hardware_decode = value,
-            "show_danmaku" => self.state.preferences.show_danmaku = value,
+            "show_danmaku" => {
+                self.state.preferences.show_danmaku = value;
+                self.apply_danmaku();
+            }
             "auto_match" => self.state.preferences.auto_match = value,
             "sync_storage" => self.state.preferences.sync_storage = value,
             _ => {
@@ -328,7 +332,10 @@ impl erika::Commands for ErikaEngine {
     fn open_file(&mut self, source: MediaSource) -> Result<(), CommandError> {
         let title = source.file_name().unwrap_or_else(|| source.url.clone());
         self.start(title, PlayingNote::LocalFile, still(), 0.0);
-        self.load(Some(source), 0.0);
+        self.load(Some(source.clone()), 0.0);
+        if self.state.video {
+            self.mount_danmaku_beside(&source);
+        }
         Ok(())
     }
 
@@ -487,6 +494,7 @@ impl erika::Commands for ErikaEngine {
     fn player_panel(&mut self, visible: bool) -> Result<(), CommandError> {
         self.require_playing()?; self.state.player.panel = visible;
         if !self.state.features.danmaku && self.state.player.tab == PlayerTab::Danmaku { self.state.player.tab = PlayerTab::Subtitles; }
+        if !self.state.features.enhance && self.state.player.tab == PlayerTab::Picture { self.state.player.tab = PlayerTab::Subtitles; }
         Ok(())
     }
     fn player_tab(&mut self, tab: PlayerTab) -> Result<(), CommandError> {
@@ -495,17 +503,17 @@ impl erika::Commands for ErikaEngine {
     fn select_subtitle_track(&mut self, id: i64) -> Result<(), CommandError> { self.select_subtitle(id) }
     fn select_audio_track(&mut self, id: i64) -> Result<(), CommandError> { self.select_audio(id) }
     fn set_enhancement(&mut self, value: Enhancement) -> Result<(), CommandError> { self.state.player.enhancement = value; self.apply_enhancement(); Ok(()) }
-    fn set_picture_ratio(&mut self, value: PictureRatio) -> Result<(), CommandError> { self.state.player.ratio = value; Ok(()) }
-    fn set_hdr(&mut self, value: HdrMode) -> Result<(), CommandError> { self.state.player.hdr = value; Ok(()) }
     fn set_player_number(&mut self, key: String, value: f64) -> Result<(), CommandError> { self.player_number(&key, value) }
     fn set_skip_intro(&mut self, value: bool) -> Result<(), CommandError> { self.state.player.skip_intro = value; Ok(()) }
     fn screenshot(&mut self) -> Result<(), CommandError> { self.require_playing()?; self.save_screenshot() }
     fn send_danmaku(&mut self, text: String) -> Result<(), CommandError> {
         self.require_playing()?;
         if !self.state.features.danmaku || !self.state.features.sync { return Err(CommandError::new("feature_disabled", "danmaku and sync must be enabled")); }
-        self.state.player.sent_danmaku = text.trim().chars().take(40).collect();
-        self.danmaku_remaining = 6.0; Ok(())
+        self.send_own_danmaku(&text); Ok(())
     }
+    fn set_danmaku_number(&mut self, key: String, value: f64) -> Result<(), CommandError> { self.danmaku_number(&key, value) }
+    fn set_danmaku_switch(&mut self, key: String, value: bool) -> Result<(), CommandError> { self.danmaku_switch(&key, value) }
+    fn mount_danmaku(&mut self, source: MediaSource) -> Result<(), CommandError> { self.mount_danmaku_file(&source); Ok(()) }
     fn attach_subtitle(&mut self, source: MediaSource) -> Result<(), CommandError> {
         self.add_subtitle(&source);
         self.state.player.subtitle_file = source.file_name().unwrap_or_default();
@@ -534,6 +542,7 @@ impl erika::Engine for ErikaEngine {
         self.state.module_count = enabled.len() as i64;
         self.state.preset = settings::preset_of(enabled);
         self.apply_enhancement();
+        self.apply_danmaku();
     }
 
     fn state(&self) -> &State {

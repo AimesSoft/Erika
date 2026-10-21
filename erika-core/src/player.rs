@@ -1,17 +1,11 @@
 //! Playback state. liberika plays the files and links the user opens (see
-//! `kernel`); the library's sample episodes, and any media where no kernel
-//! runs, play on a simulated clock over their stills.
+//! `kernel`), with their subtitles and danmaku; the library's sample
+//! episodes, and any media where no kernel runs, play on a simulated clock
+//! over their stills, without either.
 use super::*;
 use crate::kernel::{Playback, Track};
 
-/// The tracks simulated media offers.
-fn sample_subtitles() -> Vec<MediaTrack> {
-    vec![
-        MediaTrack { id: 1, name: "简体中文 · ASS".into() },
-        MediaTrack { id: 2, name: "日本語 · ASS".into() },
-    ]
-}
-
+/// The audio tracks simulated media offers.
 fn sample_audio() -> Vec<MediaTrack> {
     vec![
         MediaTrack { id: 1, name: "日本語 · FLAC 2.0".into() },
@@ -33,28 +27,23 @@ pub fn initial() -> PlayerState {
         audio_name: String::new(),
         video_info: String::new(),
         enhancement: Enhancement::ArtCnn,
-        ratio: PictureRatio::Original,
-        hdr: HdrMode::Auto,
         volume: 0.7,
-        brightness: 0.5,
         subtitle_size: 0.5,
-        subtitle_delay: 0.0,
-        audio_delay: 0.0,
         skip_intro: true,
         feedback: false,
-        subtitle_line: String::new(),
-        sent_danmaku: String::new(),
         subtitle_file: String::new(),
+        danmaku_source: String::new(),
+        danmaku_count: 0,
     };
     simulate_tracks(&mut player);
     player
 }
 
-/// The sample tracks, the first of each selected.
+/// The sample audio tracks, the first selected; no subtitles.
 fn simulate_tracks(player: &mut PlayerState) {
-    player.subtitle_tracks = sample_subtitles();
+    player.subtitle_tracks.clear();
     player.audio_tracks = sample_audio();
-    player.subtitle_track = 1;
+    player.subtitle_track = -1;
     player.audio_track = 1;
     player.video_info = "HEVC · 1080p".into();
     name_tracks(player);
@@ -90,13 +79,13 @@ impl ErikaEngine {
         self.state.player.episodes = episode.is_some();
         self.state.player.panel = false;
         self.state.player.feedback = false;
-        self.state.player.sent_danmaku.clear();
+        self.state.player.danmaku_source.clear();
+        self.state.player.danmaku_count = 0;
         self.feedback_remaining = 0.0;
-        self.danmaku_remaining = 0.0;
     }
 
     /// The kernel, while the frontend hosts it.
-    fn kernel(&self) -> Option<Arc<dyn Kernel>> {
+    pub(super) fn kernel(&self) -> Option<Arc<dyn Kernel>> {
         self.kernel.clone().filter(|kernel| kernel.ready())
     }
 
@@ -116,7 +105,6 @@ impl ErikaEngine {
                 self.state.elapsed = start;
                 self.state.duration = 0.0;
                 let player = &mut self.state.player;
-                player.subtitle_line.clear();
                 player.subtitle_tracks.clear();
                 player.audio_tracks.clear();
                 player.subtitle_track = -1;
@@ -126,6 +114,7 @@ impl ErikaEngine {
                 kernel.set_rate(self.rate());
                 kernel.set_subtitle_scale(subtitle_scale(self.state.player.subtitle_size));
                 kernel.set_enhancement(self.enhancement());
+                kernel.set_danmaku(&self.danmaku_config());
                 kernel.open(&source.url, start);
                 // The hub sets the volume of the player that has the media.
                 kernel.set_volume(self.state.player.volume);
@@ -137,7 +126,6 @@ impl ErikaEngine {
             _ => {
                 self.unload();
                 simulate_tracks(&mut self.state.player);
-                self.update_subtitle();
             }
         }
     }
@@ -246,7 +234,6 @@ impl ErikaEngine {
         }
         self.state.progress = seconds.clamp(0.0, LENGTH) / LENGTH;
         self.state.elapsed = self.state.progress * LENGTH;
-        self.update_subtitle();
     }
 
     /// Pause, or play on: from the start once it ended.
@@ -266,42 +253,12 @@ impl ErikaEngine {
         }
     }
 
-    /// The simulated subtitle line; the kernel draws real subtitles itself.
-    pub(super) fn update_subtitle(&mut self) {
-        if self.state.video {
-            self.state.player.subtitle_line.clear();
-            return;
-        }
-        let seconds = (self.state.progress * LENGTH - self.state.player.subtitle_delay).max(0.0);
-        let i = ((seconds / 4.0) as usize) % 4;
-        self.state.player.subtitle_line = match self.state.player.subtitle_track {
-            1 => [
-                "这一次，我一定要救下她。",
-                "……又回到那一天了吗？",
-                "别怕，我就在这里。",
-                "雪停之前，一起回家吧。",
-            ][i],
-            2 => [
-                "今度こそ、彼女を救う。",
-                "……また、あの日に戻ったのか。",
-                "怖がらないで、ここにいるよ。",
-                "雪が止む前に、一緒に帰ろう。",
-            ][i],
-            _ => "",
-        }
-        .into();
-    }
-
     pub(super) fn tick_player(&mut self) {
         if !self.state.playing {
             return;
         }
         self.feedback_remaining = (self.feedback_remaining - 0.25).max(0.0);
         self.state.player.feedback = self.feedback_remaining > 0.0;
-        self.danmaku_remaining = (self.danmaku_remaining - 0.25).max(0.0);
-        if self.danmaku_remaining == 0.0 {
-            self.state.player.sent_danmaku.clear();
-        }
         if self.state.video {
             if let Some(kernel) = self.kernel() {
                 self.follow(kernel.playback());
@@ -402,7 +359,6 @@ impl ErikaEngine {
         {
             kernel.select_subtitle((id >= 0).then_some(id));
         }
-        self.update_subtitle();
         Ok(())
     }
 
@@ -461,15 +417,12 @@ impl ErikaEngine {
                     kernel.set_volume(self.state.player.volume);
                 }
             }
-            "brightness" => self.state.player.brightness = value.clamp(0.0, 1.0),
             "subtitle_size" => {
                 self.state.player.subtitle_size = value.clamp(0.0, 1.0);
                 if let Some(kernel) = kernel {
                     kernel.set_subtitle_scale(subtitle_scale(self.state.player.subtitle_size));
                 }
             }
-            "subtitle_delay" => self.state.player.subtitle_delay = value.clamp(-10.0, 10.0),
-            "audio_delay" => self.state.player.audio_delay = value.clamp(-1000.0, 1000.0),
             _ => {
                 return Err(CommandError::new(
                     "unknown_player_option",
@@ -477,7 +430,6 @@ impl ErikaEngine {
                 ));
             }
         }
-        self.update_subtitle();
         Ok(())
     }
 }
@@ -543,17 +495,12 @@ mod tests {
         assert!(e.change_episode(1).is_err());
     }
     #[test]
-    fn simulated_tracks_switch_the_sample_subtitles() {
+    fn simulated_media_has_no_subtitles() {
         let mut e = playing();
-        e.seek(0.0).unwrap();
-        assert_eq!(e.state.player.subtitle_name, "简体中文 · ASS");
-        assert_eq!(e.state.player.subtitle_line, "这一次，我一定要救下她。");
-        e.select_subtitle_track(2).unwrap();
-        assert_eq!(e.state.player.subtitle_line, "今度こそ、彼女を救う。");
+        assert!(e.state.player.subtitle_tracks.is_empty());
+        assert_eq!((e.state.player.subtitle_track, e.state.player.subtitle_name.as_str()), (-1, ""));
+        assert_eq!(e.select_subtitle_track(1).unwrap_err().code, "no_such_track");
         e.select_subtitle_track(-1).unwrap();
-        assert_eq!(e.state.player.subtitle_line, "");
-        assert_eq!(e.state.player.subtitle_name, "");
-        assert_eq!(e.select_subtitle_track(7).unwrap_err().code, "no_such_track");
         e.select_audio_track(2).unwrap();
         assert_eq!(e.state.player.audio_name, "中文配音 · AAC 2.0");
         assert_eq!(e.select_audio_track(-1).unwrap_err().code, "no_such_track");
@@ -588,6 +535,17 @@ mod tests {
         fn add_subtitle(&self, url: &str) { self.call(format!("add {url}")) }
         fn set_subtitle_scale(&self, scale: f64) { self.call(format!("scale {scale}")) }
         fn set_enhancement(&self, enhancement: Enhancement) { self.call(format!("enhance {enhancement:?}")) }
+        fn set_danmaku(&self, config: &crate::kernel::DanmakuConfig) {
+            self.call(format!(
+                "danmaku {} {} {} {} {} {}",
+                config.enabled, config.opacity, config.font_size, config.area, config.scroll_seconds, config.delay
+            ))
+        }
+        fn add_danmaku(&self, name: &str, contents: &str) -> Result<usize, String> {
+            self.call(format!("add danmaku {name}"));
+            contents.parse::<usize>().map_err(|error| error.to_string())
+        }
+        fn send_danmaku(&self, text: &str) { self.call(format!("send {text}")) }
         fn capture(&self, path: &std::path::Path, width: Option<u32>) { self.call(format!("capture {} {width:?}", path.display())) }
         fn close(&self) { self.call("close".into()) }
         fn playback(&self) -> Playback { self.playback.lock().unwrap().clone() }
@@ -605,7 +563,6 @@ mod tests {
         let (mut e, kernel) = with_kernel();
         e.open_file(MediaSource::new("file:///Videos/%E5%BD%B1.mkv")).unwrap();
         assert!(e.state.video && e.state.playing);
-        assert_eq!(e.state.player.subtitle_line, "");
         let calls = kernel.calls();
         let open = calls.iter().position(|call| call == "open file:///Videos/%E5%BD%B1.mkv 0").unwrap();
         assert_eq!(calls[open + 1..], ["volume 0.7"]);
@@ -690,6 +647,67 @@ mod tests {
         e.play("葬送的芙莉莲".into(), 4, still(), 0.35).unwrap();
         e.screenshot().unwrap();
         assert_eq!(e.state.notice, Some(Notice::ScreenshotPending));
+    }
+
+    #[test]
+    fn danmaku_settings_reach_the_kernel_in_its_terms() {
+        let (mut e, kernel) = with_kernel();
+        e.open_file(MediaSource::new("file:///Videos/a.mkv")).unwrap();
+        let calls = kernel.calls();
+        let open = calls.iter().position(|call| call.starts_with("open ")).unwrap();
+        // Before the media opens: 80 % opaque, 29 points, half the height,
+        // 10 seconds across, no delay.
+        assert!(calls[..open].contains(&"danmaku true 0.8 29 0.5 10 0".to_string()), "{calls:?}");
+        e.set_danmaku_number("speed".into(), 1.0).unwrap();
+        e.set_danmaku_number("delay".into(), -2.5).unwrap();
+        e.set_danmaku_area(DanmakuArea::Full).unwrap();
+        e.set_preference("show_danmaku".into(), false).unwrap();
+        assert_eq!(
+            kernel.calls(),
+            [
+                "danmaku true 0.8 29 0.5 6 0",
+                "danmaku true 0.8 29 0.5 6 -2.5",
+                "danmaku true 0.8 29 1 6 -2.5",
+                "danmaku false 0.8 29 1 6 -2.5",
+            ]
+        );
+        assert_eq!(e.set_danmaku_switch("block_colored".into(), true).unwrap_err().code, "unknown_danmaku_option");
+        e.set_danmaku_switch("block_top".into(), true).unwrap();
+        assert!(e.state.danmaku_settings.block_top);
+    }
+
+    #[test]
+    fn danmaku_files_are_mounted_by_hand_and_from_beside_the_video() {
+        let dir = std::env::temp_dir().join(format!("erika-danmaku-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The fake kernel takes a file's text as its number of comments.
+        std::fs::write(dir.join("ep.xml"), "120").unwrap();
+        std::fs::write(dir.join("more.json"), "30").unwrap();
+        std::fs::write(dir.join("broken.xml"), "not danmaku").unwrap();
+        let (mut e, kernel) = with_kernel();
+        e.mount_danmaku(MediaSource::file(dir.join("more.json"))).unwrap();
+        assert_eq!(e.state.notice, Some(Notice::DanmakuNeedsVideo));
+        e.open_file(MediaSource::file(dir.join("ep.mkv"))).unwrap();
+        assert!(kernel.calls().contains(&"add danmaku ep.xml".to_string()));
+        assert_eq!((e.state.player.danmaku_source.as_str(), e.state.player.danmaku_count), ("ep.xml", 120));
+        e.mount_danmaku(MediaSource::file(dir.join("more.json"))).unwrap();
+        assert_eq!(e.state.notice, Some(Notice::DanmakuMounted { file: "more.json".into(), count: 30 }));
+        assert_eq!((e.state.player.danmaku_source.as_str(), e.state.player.danmaku_count), ("ep.xml、more.json", 150));
+        e.mount_danmaku(MediaSource::file(dir.join("broken.xml"))).unwrap();
+        assert_eq!(e.state.notice, Some(Notice::DanmakuUnreadable { file: "broken.xml".into() }));
+        // Another video starts without them.
+        e.open_file(MediaSource::new("file:///Videos/b.mkv")).unwrap();
+        assert_eq!((e.state.player.danmaku_source.as_str(), e.state.player.danmaku_count), ("", 0));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_users_danmaku_shows_through_the_kernel() {
+        let (mut e, kernel) = with_kernel();
+        e.open_file(MediaSource::new("file:///Videos/a.mkv")).unwrap();
+        kernel.calls();
+        e.send_danmaku("  前方高能  ".into()).unwrap();
+        assert_eq!(kernel.calls(), ["send 前方高能"]);
     }
 
     #[test]

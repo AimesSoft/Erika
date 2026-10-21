@@ -80,7 +80,7 @@
         <div class="sub"><span>${SUBS[0]}</span></div><div class="fb"></div></div>`;
     const top = `<div class="p-top fx"><span class="p-lights"><i></i><i></i><i></i></span>${ib('chev-l', 'back', '返回（Esc）')}
         <div class="ttl"><b>${p.title}</b><span class="ep-lab">${p.sub2}</span></div><span class="grow"></span>
-        ${ph && enh ? ib('sparkle', 'enh', '画质增强', 1) : ''}${ff === 'desk' ? ib('vol', 'vol', '音量', 1) : ''}${dm ? ib('link', 'match', '弹幕匹配') : ''}${ib('pip', 'pip', '画中画')}${ff === 'desk' ? ib('full', 'fs', '全屏') : ''}${ib('sliders', 'panel', '播放设置')}${ib('more', 'more', '更多', 1)}
+        ${ph && enh ? ib('sparkle', 'enh', '画质增强', 1) : ''}${ff === 'desk' ? ib('vol', 'vol', '音量', 1) : ''}${dm ? ib('link', 'match', '弹幕匹配') : ''}${ff === 'desk' ? ib('full', 'fs', '全屏') : ''}${ib('sliders', 'panel', '播放设置')}${ib('more', 'more', '更多', 1)}
         ${this.cfg.ds === 'fluent' && ff === 'desk' ? '<span style="display:flex;align-self:flex-start;margin:0 -20px 0 6px"><i style="width:46px;height:32px;display:grid;place-items:center;font-style:normal;font-size:13px;opacity:.85">—</i><i style="width:46px;height:32px;display:grid;place-items:center;font-style:normal;font-size:13px;opacity:.85">☐</i><i style="width:46px;height:32px;display:grid;place-items:center;font-style:normal;font-size:13px;opacity:.85">✕</i></span>' : ''}
         ${this.cfg.ds === 'adwaita' && ff === 'desk' ? '<span class="x-gclose" style="display:grid">✕</span>' : ''}
         ${this.cfg.ds === 'harmony' && ff === 'desk' ? '<span class="p-hcaps"><i>—</i><i>☐</i><i>✕</i></span>' : ''}</div>`;
@@ -290,7 +290,7 @@
       dmq: () => `<div class="c-pad dmq" style="width:340px">
         <div class="q"><span class="lbx">不透明度</span>${sl(0.8, 'op')}</div><div class="q"><span class="lbx">字号</span>${sl(0.45, 'fs')}</div>
         <div class="q"><span class="lbx">显示区域</span><span class="c-seg sm">${['1/4', '半屏', '全屏'].map((x, i) => `<span class="${i === 1 ? 'on' : ''}">${x}</span>`).join('')}</span></div>
-        <div class="q" style="align-items:flex-start"><span class="lbx" style="padding-top:6px">屏蔽</span><span class="chips">${['顶部', '底部', '滚动', '彩色'].map((x, i) => `<span class="c-chip${i === 1 ? ' on' : ''}">${x}</span>`).join('')}</span></div>
+        <div class="q" style="align-items:flex-start"><span class="lbx" style="padding-top:6px">屏蔽</span><span class="chips">${['顶部', '底部', '滚动'].map((x, i) => `<span class="c-chip${i === 1 ? ' on' : ''}">${x}</span>`).join('')}</span></div>
         <div class="c-mi" data-mi="dm-more" style="margin:2px -6px -6px"><span class="ck"></span>更多弹幕设置…</div></div>`,
     };
     this.menu(anchor, H[kind](), 'pl-' + kind, (d, m) => this.plPick(d, m));
@@ -309,7 +309,7 @@
     if (d === 'm-info') { this.menuClose(); this.plPanel('play'); return; }
     if (d === 'm-skip') { this.plSeek(p.t + 85); this.toast('已跳过片头'); return done(); }
     if (d === 'm-shot') { this.toast(this.touch ? '截图已存到相册' : this.tv ? '截图已保存，可以在手机上的 Erika 里取回' : '截图已保存到「图片」'); return done(); }
-    if (d === 'm-match') { this.toast('原型：打开弹幕匹配窗口，搜索弹弹play 的番剧和集数'); return done(); }
+    if (d === 'm-match') { this.toast('原型：重新匹配正在放的文件，和 媒体库 › 来源 里的是同一个窗口；改完弹幕跟着换'); return done(); }
     if (d === 'm-lock') { p.lock = !p.lock; this.toast(p.lock ? (this.rot ? '已锁定横屏' : '已锁定方向') : '已解除方向锁定'); return done(); }
   };
 
@@ -319,13 +319,13 @@
     const sl = v => `<div class="c-slider sm" style="--v:${v}"><i class="in"></i><i class="ac"></i><i class="th"></i></div>`;
     const sw = on => `<span class="c-switch${on ? ' on' : ''}"></span>`;
     const r = (t, right) => `<div class="c-row"><span class="grow">${t}</span>${right}</div>`;
-    const tabs = [this.store.has('danmaku') && ['dm', '弹幕'], ['sub', '字幕'], ['video', '画面'], ['audio', '音频'], ['play', '播放']].filter(Boolean);
+    const tabs = [this.store.has('danmaku') && ['dm', '弹幕'], ['sub', '字幕'], this.store.has('enhance') && ['video', '画面'], ['audio', '音频'], ['play', '播放']].filter(Boolean);
     if (!tabs.find(t => t[0] === tab)) tab = tabs[0][0];
     const C = {
-      dm: `<div class="gl">显示</div>${r('显示弹幕', sw(p.dmOn))}${r('速度', sl(0.5))}${r('合并重复弹幕', sw(true))}<div class="gl">来源</div>${r('弹弹play 自动匹配', '<span class="v">已匹配</span>')}${r('弹幕偏移', '<span class="v">0.0 秒</span>')}${r('挂载本地弹幕', '<span class="v">xml / json</span>')}`,
-      sub: `<div class="gl">样式</div>${r('字号', sl(0.5))}${r('字幕延迟', '<span class="v">0.0 秒</span>')}<div class="gl">轨道</div>${r('简体中文（内嵌 ASS）', p.sub === 0 ? `<span class="v">${I('check')}</span>` : '')}${r('日本語', p.sub === 1 ? `<span class="v">${I('check')}</span>` : '')}`,
-      video: `<div class="gl">画面</div>${r('亮度', sl(0.5))}${r('画面比例', '<span class="v">原始</span>')}${r('HDR', '<span class="v">自动</span>')}${this.store.has('enhance') ? `<div class="gl">画质增强</div>${r('超分辨率', '<span class="v">Anime4K</span>')}` : ''}`,
-      audio: `<div class="gl">音频</div>${r('音量', sl(0.7))}${r('音频延迟', '<span class="v">0 毫秒</span>')}`,
+      dm: `<div class="gl">显示</div>${r('显示弹幕', sw(p.dmOn))}${r('速度', sl(0.5))}${r('合并重复弹幕', sw(true))}${r('弹幕偏移', '<span class="v">0.0 秒</span>')}<div class="gl">来源</div>${r('没有弹幕', '')}${r('挂载本地弹幕', '<span class="v">xml / json</span>')}`,
+      sub: `<div class="gl">样式</div>${r('字号', sl(0.5))}<div class="gl">轨道</div>${r('简体中文（内嵌 ASS）', p.sub === 0 ? `<span class="v">${I('check')}</span>` : '')}${r('日本語', p.sub === 1 ? `<span class="v">${I('check')}</span>` : '')}`,
+      video: `<div class="gl">画质增强</div>${r('超分辨率', '<span class="v">ArtCNN 2×</span>')}`,
+      audio: `<div class="gl">音频</div>${r('音量', sl(0.7))}`,
       play: `<div class="gl">播放</div>${r('跳过片头', sw(true))}${r('自动连播下一集', sw(true))}${r('控制层出现时画面退后', sw(true))}<div class="gl">信息</div>${r('播放内核', '<span class="v">liberika</span>')}${r('视频', `<span class="v">${p.video ? '本地文件' : 'HEVC · 1080p'}</span>`)}`,
     };
     p.sheet.innerHTML = `<div class="hd"><b>播放设置</b><span class="c-ib" data-pa="unpanel" title="关闭">${I('x')}</span></div><span class="c-seg sm" style="margin-bottom:4px">${tabs.map(([k, n]) => `<span class="${k === tab ? 'on' : ''}" data-ptab="${k}">${n}</span>`).join('')}</span>${C[tab]}`;
@@ -371,7 +371,7 @@
       if (k === 'unpanel') { this.plLayout('shown'); this.plWake(); return; }
       if (k === 'pip') { this.toast(this.dev === 'desk' ? '原型：系统画中画 / 自绘浮窗' : '原型：进入系统画中画'); return; }
       if (k === 'fs') { this.toast('原型：全屏'); return; }
-      if (k === 'match') { this.toast('原型：打开弹幕匹配窗口'); return; }
+      if (k === 'match') { this.toast('原型：重新匹配正在放的文件，和 媒体库 › 来源 里的是同一个窗口；改完弹幕跟着换'); return; }
       if (['sub', 'rate', 'enh', 'more', 'dmq', 'vol'].includes(k)) { this.plMenu(k, a); return; }
       return;
     }
