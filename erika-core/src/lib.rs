@@ -1,10 +1,11 @@
-//! The engine of Erika's shell. In this first phase nothing plays: the
-//! player keeps what the interface needs to show, and the picture in the
-//! frame is a still until the kernel draws video.
+//! The engine of Erika's shell. liberika plays the files and links the
+//! user opens; the modules' sample media still play on a simulated clock
+//! over their stills.
 
 mod settings;
 mod onboarding;
 
+mod kernel;
 mod search;
 mod player;
 
@@ -13,11 +14,13 @@ use bern::media::MediaSource;
 use bern::query::Answer;
 use bern::resources::Resources;
 use erika_protocol::erika::{self, *};
+use kernel::Kernel;
+use std::sync::Arc;
 
-/// An episode's length in seconds, until the kernel reports real ones.
+/// A simulated episode's length in seconds.
 const LENGTH: f64 = 1455.0;
 
-/// The still the frame shows for a file, until the kernel draws video.
+/// The still the frame shows under the video, and for simulated media.
 const STILL: &str = "design/assets/still1.jpg";
 
 pub struct ErikaEngine {
@@ -27,6 +30,19 @@ pub struct ErikaEngine {
     pub(crate) all_plugins: Vec<Plugin>,
     pub(crate) saved_modules: Option<Vec<String>>,
     pub(crate) onboarding_completed: bool,
+    /// liberika, where it runs, and the media it plays.
+    kernel: Option<Arc<dyn Kernel>>,
+    source: Option<MediaSource>,
+    /// A pause or a seek the user asked for, with the ticks it has waited
+    /// for the kernel to show it.
+    pause_wanted: Option<(bool, u8)>,
+    seek_wanted: Option<(f64, u8)>,
+    /// Pictures of the media asked of the kernel: the one awaited, and how
+    /// many were asked in this run, which names each file anew.
+    still_wanted: Option<std::path::PathBuf>,
+    stills: u32,
+    /// Where the media's first still is taken, past a fade-in.
+    first_still_at: f64,
 }
 
 impl Default for ErikaEngine {
@@ -36,6 +52,13 @@ impl Default for ErikaEngine {
             danmaku_remaining: 0.0,
             saved_modules: None,
             onboarding_completed: false,
+            kernel: if cfg!(test) { None } else { kernel::start() },
+            source: None,
+            pause_wanted: None,
+            seek_wanted: None,
+            still_wanted: None,
+            stills: 0,
+            first_still_at: 0.0,
             all_plugins: settings::sample_plugins(),
             state: State {
                 onboarding: onboarding::initial(),
@@ -65,6 +88,7 @@ impl Default for ErikaEngine {
                 title: String::new(),
                 subtitle: PlayingNote::LocalFile,
                 still: still(),
+                video: false,
                 progress: 0.0,
                 elapsed: 0.0,
                 duration: LENGTH,
@@ -111,6 +135,7 @@ fn sample_recents() -> Vec<RecentPlay> {
         progress,
         remaining,
         still: picture(still),
+        source: None,
     })
     .collect()
 }
@@ -190,10 +215,7 @@ impl erika::Commands for ErikaEngine {
     }
     fn set_speed(&mut self, value: PlaybackSpeed) -> Result<(), CommandError> {
         self.state.preferences.speed = value;
-        Ok(())
-    }
-    fn set_kernel(&mut self, value: PlaybackKernel) -> Result<(), CommandError> {
-        self.state.preferences.kernel = value;
+        self.apply_speed();
         Ok(())
     }
     fn set_danmaku_area(&mut self, value: DanmakuArea) -> Result<(), CommandError> {
@@ -306,6 +328,7 @@ impl erika::Commands for ErikaEngine {
     fn open_file(&mut self, source: MediaSource) -> Result<(), CommandError> {
         let title = source.file_name().unwrap_or_else(|| source.url.clone());
         self.start(title, PlayingNote::LocalFile, still(), 0.0);
+        self.load(Some(source), 0.0);
         Ok(())
     }
 
@@ -315,6 +338,7 @@ impl erika::Commands for ErikaEngine {
             source.url.trim_end_matches('/').rsplit('/').next().unwrap_or_default().to_string()
         });
         self.start(name, PlayingNote::LocalFile, still(), 0.0);
+        self.load(None, 0.0);
         Ok(())
     }
 
@@ -339,6 +363,7 @@ impl erika::Commands for ErikaEngine {
         self.state.link_prompt = false;
         self.state.link_invalid = false;
         self.start(title, PlayingNote::Link, still(), 0.0);
+        self.load(web.then(|| MediaSource::new(link)), 0.0);
         Ok(())
     }
 
@@ -351,6 +376,13 @@ impl erika::Commands for ErikaEngine {
             .cloned()
             .ok_or_else(|| CommandError::new("no_such_recent", "no recent video has this name"))?;
         self.start(without_extension(&recent.name), PlayingNote::LocalFile, recent.still, recent.progress);
+        // Where it stopped, from how far it got and what was left.
+        let start = if recent.progress < 1.0 {
+            recent.remaining / (1.0 - recent.progress) * recent.progress
+        } else {
+            0.0
+        };
+        self.load(recent.source, start);
         Ok(())
     }
 
@@ -371,6 +403,7 @@ impl erika::Commands for ErikaEngine {
             progress: self.state.progress,
             remaining: (self.state.duration - self.state.elapsed).max(0.0),
             still: self.state.still.clone(),
+            source: self.source.clone(),
         };
         self.state.recents.retain(|other| without_extension(&other.name) != without_extension(&recent.name));
         self.state.recents.insert(0, recent);
@@ -379,6 +412,7 @@ impl erika::Commands for ErikaEngine {
         self.state.expanded = false;
         self.state.paused = false;
         self.state.player.panel = false;
+        self.unload();
         Ok(())
     }
 
@@ -390,11 +424,13 @@ impl erika::Commands for ErikaEngine {
         progress: f64,
     ) -> Result<(), CommandError> {
         self.start(title, PlayingNote::Episode { episode }, still, progress);
+        self.load(None, 0.0);
         Ok(())
     }
 
     fn play_download(&mut self, title: String, still: MediaSource, progress: f64) -> Result<(), CommandError> {
         self.start(title, PlayingNote::Downloaded, still, progress);
+        self.load(None, 0.0);
         Ok(())
     }
 
@@ -405,6 +441,7 @@ impl erika::Commands for ErikaEngine {
 
     fn minimize(&mut self) -> Result<(), CommandError> {
         self.require_playing()?;
+        self.capture_still();
         self.state.expanded = false;
         self.state.player.panel = false;
         Ok(())
@@ -419,13 +456,13 @@ impl erika::Commands for ErikaEngine {
     fn close_player(&mut self) -> Result<(), CommandError> {
         self.state.playing = false;
         self.state.expanded = false;
+        self.unload();
         Ok(())
     }
 
     fn toggle_pause(&mut self) -> Result<(), CommandError> {
         self.require_playing()?;
-        if self.state.progress >= 1.0 { self.update_position(0.0); }
-        self.state.paused = !self.state.paused;
+        self.toggle();
         self.state.player.feedback = true;
         self.feedback_remaining = 0.5;
         Ok(())
@@ -435,12 +472,13 @@ impl erika::Commands for ErikaEngine {
     fn seek(&mut self, progress: f64) -> Result<(), CommandError> {
         self.require_playing()?;
         if !progress.is_finite() { return Err(CommandError::new("invalid_progress", "progress must be finite")); }
-        self.update_position(progress.clamp(0.0, 1.0) * LENGTH); Ok(())
+        let length = if self.state.video { self.state.duration } else { LENGTH };
+        self.update_position(progress.clamp(0.0, 1.0) * length); Ok(())
     }
     fn skip(&mut self, seconds: f64) -> Result<(), CommandError> {
         self.require_playing()?;
         if !seconds.is_finite() { return Err(CommandError::new("invalid_time", "time must be finite")); }
-        self.update_position(self.state.progress * LENGTH + seconds); Ok(())
+        self.update_position(self.state.elapsed + seconds); Ok(())
     }
     fn select_episode(&mut self, episode: i64) -> Result<(), CommandError> { self.player_episode(episode) }
     fn change_episode(&mut self, delta: i64) -> Result<(), CommandError> {
@@ -454,13 +492,14 @@ impl erika::Commands for ErikaEngine {
     fn player_tab(&mut self, tab: PlayerTab) -> Result<(), CommandError> {
         self.require_playing()?; self.state.player.tab = tab; self.state.player.panel = true; Ok(())
     }
-    fn set_subtitle_track(&mut self, value: SubtitleTrack) -> Result<(), CommandError> { self.state.player.subtitle_track = value; self.update_subtitle(); Ok(()) }
-    fn set_audio_track(&mut self, value: AudioTrack) -> Result<(), CommandError> { self.state.player.audio_track = value; Ok(()) }
-    fn set_enhancement(&mut self, value: Enhancement) -> Result<(), CommandError> { self.state.player.enhancement = value; Ok(()) }
+    fn select_subtitle_track(&mut self, id: i64) -> Result<(), CommandError> { self.select_subtitle(id) }
+    fn select_audio_track(&mut self, id: i64) -> Result<(), CommandError> { self.select_audio(id) }
+    fn set_enhancement(&mut self, value: Enhancement) -> Result<(), CommandError> { self.state.player.enhancement = value; self.apply_enhancement(); Ok(()) }
     fn set_picture_ratio(&mut self, value: PictureRatio) -> Result<(), CommandError> { self.state.player.ratio = value; Ok(()) }
     fn set_hdr(&mut self, value: HdrMode) -> Result<(), CommandError> { self.state.player.hdr = value; Ok(()) }
     fn set_player_number(&mut self, key: String, value: f64) -> Result<(), CommandError> { self.player_number(&key, value) }
     fn set_skip_intro(&mut self, value: bool) -> Result<(), CommandError> { self.state.player.skip_intro = value; Ok(()) }
+    fn screenshot(&mut self) -> Result<(), CommandError> { self.require_playing()?; self.save_screenshot() }
     fn send_danmaku(&mut self, text: String) -> Result<(), CommandError> {
         self.require_playing()?;
         if !self.state.features.danmaku || !self.state.features.sync { return Err(CommandError::new("feature_disabled", "danmaku and sync must be enabled")); }
@@ -468,6 +507,7 @@ impl erika::Commands for ErikaEngine {
         self.danmaku_remaining = 6.0; Ok(())
     }
     fn attach_subtitle(&mut self, source: MediaSource) -> Result<(), CommandError> {
+        self.add_subtitle(&source);
         self.state.player.subtitle_file = source.file_name().unwrap_or_default();
         self.notify(Notice::SubtitleChosen { file: self.state.player.subtitle_file.clone() }); Ok(())
     }
@@ -493,6 +533,7 @@ impl erika::Engine for ErikaEngine {
         self.state.features = settings::feature_selection(enabled);
         self.state.module_count = enabled.len() as i64;
         self.state.preset = settings::preset_of(enabled);
+        self.apply_enhancement();
     }
 
     fn state(&self) -> &State {

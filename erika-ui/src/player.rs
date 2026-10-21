@@ -2,6 +2,7 @@
 //! Native controls surround the picture, with a separate settings column.
 use bern::prelude::*;
 use erika_protocol::erika::{self, *};
+use crate::Players;
 
 #[bern::session]
 pub struct PlayerDraft {
@@ -31,7 +32,7 @@ pub struct PlayerDraft {
 }
 
 #[component]
-pub fn player(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
+pub fn player(app: erika::Client, players: Players, #[session] draft: PlayerDraft) -> impl View {
     ui! {
         Stack(appearance: dark, variant: player_black) {
             // A phone on its side plays in the design's 844 × 390 scene, the
@@ -41,16 +42,16 @@ pub fn player(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
             if window.tv {
                 Stack(under_bars: true) {
                     ScaleBox(width: 1280, height: 720) {
-                        player_tv_scene(app: app, shown: !window.idle || app.paused || app.player.panel || draft.episodes_open || draft.saying)
+                        player_tv_scene(app: app, players: players, shown: !window.idle || app.paused || app.player.panel || draft.episodes_open || draft.saying)
                     }
                 }
             } else if window.short {
                 ScaleBox(width: 844, height: 390) {
-                    player_phone_scene(app: app, shown: !window.idle || app.paused || app.player.panel || draft.volume_open || draft.episodes_open)
+                    player_phone_scene(app: app, players: players, shown: !window.idle || app.paused || app.player.panel || draft.volume_open || draft.episodes_open)
                 }
             } else {
                 ScaleBox(width: 1280, height: 800) {
-                    player_scene(app: app, shown: !window.idle || app.paused || app.player.panel || draft.volume_open || draft.episodes_open)
+                    player_scene(app: app, players: players, shown: !window.idle || app.paused || app.player.panel || draft.volume_open || draft.episodes_open)
                 }
             }
             if let Some(notice) = app.notice {
@@ -61,7 +62,7 @@ pub fn player(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
 }
 
 #[component]
-pub fn player_scene(app: erika::Client, shown: bool, #[session] draft: PlayerDraft) -> impl View {
+pub fn player_scene(app: erika::Client, players: Players, shown: bool, #[session] draft: PlayerDraft) -> impl View {
     ui! {
         Stack(variant: player_black, width: 1280, height: 800, align: top_leading) {
             // The scene keeps the design's 1280 × 800 at any window shape:
@@ -80,6 +81,11 @@ pub fn player_scene(app: erika::Client, shown: bool, #[session] draft: PlayerDra
                     ScaleBox(width: 1280, height: 720) {
                         Stack(width: 1280, height: 720) {
                             Image(source: app.still, width: 1280, height: 720, corner: if app.player.panel { frame_beside } else if shown && app.preferences.step_back { frame_back } else { 0 }, fit: cover, label: app.title, hero: frame, hero_key: app.title, animate: hero)
+                            // liberika's picture over the still, letterboxed
+                            // in the frame with its subtitles and danmaku.
+                            if app.video {
+                                Video(id: video, player: players.video, label: app.title, controls: none, corner: if app.player.panel { frame_beside } else if shown && app.preferences.step_back { frame_back } else { 0 }, animate: hero)
+                            }
                             player_overlays(app: app)
                         }
                     }
@@ -114,13 +120,16 @@ pub fn player_scene(app: erika::Client, shown: bool, #[session] draft: PlayerDra
 /// holds the remote, as on tvOS's own player: left and right skip 10
 /// seconds and select pauses; Back leaves the settings, then the player.
 #[component]
-pub fn player_tv_scene(app: erika::Client, shown: bool, #[session] draft: PlayerDraft) -> impl View {
+pub fn player_tv_scene(app: erika::Client, players: Players, shown: bool, #[session] draft: PlayerDraft) -> impl View {
     ui! {
         Stack(variant: player_black, width: 1280, height: 720, align: top_leading) {
             if shown { Positioned(x: 0, y: 0, width: 1280, height: 720) { Stack(variant: player_background, width: 1280, height: 720) {} } }
             Positioned(x: if app.player.panel { 40 } else if shown { 200 } else { 0 }, y: if app.player.panel { 100 } else if shown { 52 } else { 0 }, width: if app.player.panel { 784 } else if shown { 880 } else { 1280 }, height: if app.player.panel { 441 } else if shown { 495 } else { 720 }, animate: hero) {
                 Stack {
                     Image(source: app.still, width: if app.player.panel { 784 } else if shown { 880 } else { 1280 }, height: if app.player.panel { 441 } else if shown { 495 } else { 720 }, corner: if app.player.panel || shown { card } else { 0 }, fit: cover, label: app.title, hero: frame, hero_key: app.title, animate: hero)
+                    if app.video {
+                        Video(id: video_tv, player: players.video, label: app.title, controls: none, corner: if app.player.panel || shown { card } else { 0 }, animate: hero)
+                    }
                     ScaleBox(width: 1280, height: 720) {
                         player_overlays(app: app)
                     }
@@ -199,7 +208,7 @@ pub fn player_tv_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl 
                 IconButton(id: pip_tv, icon: "pip.enter", label: tr! { "zh-Hans" => "画中画", "en" => "Picture in picture" }) => app.show_notice(Notice::PictureInPicturePending)
                 IconButton(id: settings_tv, icon: "slider.horizontal.3", label: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }) => app.player_panel(!app.player.panel)
                 Menu(id: more_tv, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon) {
-                    MenuItem(id: screenshot_tv, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera") => app.show_notice(Notice::ScreenshotPending)
+                    MenuItem(id: screenshot_tv, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera") => app.screenshot()
                     MenuItem(id: skip_intro_tv, label: tr! { "zh-Hans" => "跳过片头（85 秒）", "en" => "Skip opening (85 seconds)" }) => app.skip(85.0)
                     MenuItem(id: episodes_tv, label: tr! { "zh-Hans" => "选集…", "en" => "Episodes…" }, enabled: app.player.episodes) => draft.episodes_open.set(true)
                     MenuItem(id: info_tv, label: tr! { "zh-Hans" => "播放信息", "en" => "Playback information" }) => app.player_tab(PlayerTab::Playback)
@@ -231,14 +240,7 @@ pub fn player_tv_controls(app: erika::Client, #[session] draft: PlayerDraft) -> 
                     }
                 }
                 Spacer
-                Menu(id: subtitles_tv, label: app.player.subtitle_track, icon: "captions.bubble", shape: capsule, height: 46) {
-                    MenuItem(id: chinese_subtitle_tv, label: tr! { "zh-Hans" => "简体中文（内嵌 ASS）", "en" => "Simplified Chinese (ASS)" }) => app.set_subtitle_track(SubtitleTrack::Chinese)
-                    MenuItem(id: japanese_subtitle_tv, label: tr! { "zh-Hans" => "日本語", "en" => "Japanese" }) => app.set_subtitle_track(SubtitleTrack::Japanese)
-                    MenuItem(id: no_subtitle_tv, label: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }) => app.set_subtitle_track(SubtitleTrack::Off)
-                    Divider
-                    MenuItem(id: japanese_audio_tv, label: tr! { "zh-Hans" => "日本語 · FLAC 2.0", "en" => "Japanese · FLAC 2.0" }) => app.set_audio_track(AudioTrack::Japanese)
-                    MenuItem(id: chinese_audio_tv, label: tr! { "zh-Hans" => "中文配音 · AAC 2.0", "en" => "Chinese · AAC 2.0" }) => app.set_audio_track(AudioTrack::Chinese)
-                }
+                player_tv_subtitle_menu(app: app)
                 Picker(id: rate_tv, label: tr! { "zh-Hans" => "倍速", "en" => "Speed" }, selected: app.preferences.speed, label_hidden: true, style: menu, shape: capsule, height: 46) => app.set_speed(app.preferences.speed)
                 if app.features.enhance {
                     Picker(id: enhancement_tv, label: tr! { "zh-Hans" => "画质增强", "en" => "Enhancement" }, selected: app.player.enhancement, label_hidden: true, style: menu, shape: capsule, height: 46) => app.set_enhancement(app.player.enhancement)
@@ -267,7 +269,7 @@ pub fn player_tv_controls(app: erika::Client, #[session] draft: PlayerDraft) -> 
 /// the picture filling the height, or with the controls 519 points wide
 /// between two rails of 162; the bar above, the seek bar under it.
 #[component]
-pub fn player_phone_scene(app: erika::Client, shown: bool, #[session] draft: PlayerDraft) -> impl View {
+pub fn player_phone_scene(app: erika::Client, players: Players, shown: bool, #[session] draft: PlayerDraft) -> impl View {
     ui! {
         Stack(variant: player_black, width: 844, height: 390, align: top_leading) {
             if shown { Positioned(x: 0, y: 0, width: 844, height: 390) { Stack(variant: player_background, width: 844, height: 390) {} } }
@@ -276,6 +278,9 @@ pub fn player_phone_scene(app: erika::Client, shown: bool, #[session] draft: Pla
                 Button(id: picture_phone, label: tr! { "zh-Hans" => "播放或暂停画面", "en" => "Play or pause picture" }, variant: player_picture) {
                     Stack {
                         Image(source: app.still, width: if app.player.panel { 512 } else if shown { 519 } else { 693 }, height: if app.player.panel { 288.14 } else if shown { 292.125 } else { 389.8125 }, corner: if shown || app.player.panel { 16 } else { 0 }, fit: cover, label: app.title, hero: frame, hero_key: app.title, animate: hero)
+                        if app.video {
+                            Video(id: video_phone, player: players.video, label: app.title, controls: none, corner: if shown || app.player.panel { 16 } else { 0 }, animate: hero)
+                        }
                         ScaleBox(width: 693, height: 390) {
                             player_phone_overlays(app: app)
                         }
@@ -316,12 +321,7 @@ pub fn player_phone_scene(app: erika::Client, shown: bool, #[session] draft: Pla
                 Positioned(x: 682, y: 91, width: 162, height: 32, appear: controls_in, disappear: controls_out) {
                     Row(gap: 0, align: center) {
                         Spacer
-                        Menu(id: subtitles_phone, label: app.player.subtitle_track, icon: "captions.bubble", shape: capsule, height: 32) {
-                            MenuItem(id: chinese_subtitle_phone, label: tr! { "zh-Hans" => "简体中文（内嵌 ASS）", "en" => "Simplified Chinese (ASS)" }) => app.set_subtitle_track(SubtitleTrack::Chinese)
-                            MenuItem(id: japanese_subtitle_phone, label: tr! { "zh-Hans" => "日本語", "en" => "Japanese" }) => app.set_subtitle_track(SubtitleTrack::Japanese)
-                            MenuItem(id: no_subtitle_phone, label: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }) => app.set_subtitle_track(SubtitleTrack::Off)
-                            MenuItem(id: external_subtitle_phone, label: tr! { "zh-Hans" => "添加外挂字幕…", "en" => "Add external subtitles…" }, pick: draft.subtitle_file, files: ".ass .ssa .srt .vtt") => app.attach_subtitle(draft.subtitle_file)
-                        }
+                        player_subtitle_menu(app: app, height: 32)
                         Spacer
                     }
                 }
@@ -431,7 +431,7 @@ pub fn player_phone_top(app: erika::Client, #[session] draft: PlayerDraft) -> im
 pub fn player_overlays(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
     ui! {
         Stack(width: 1280, height: 720, align: top_leading) {
-            if app.features.danmaku && draft.danmaku && app.preferences.show_danmaku {
+            if app.features.danmaku && draft.danmaku && app.preferences.show_danmaku && !app.video {
                 if !draft.block_scroll {
                     Positioned(x: 0, y: 60, width: 1280, height: 36) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 11 }, phase: 0.2, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "前方高能！！", "en" => "Here it comes!!" }, style: callout, font_size: if draft.font_size < 0.3 { 20 } else if draft.font_size > 0.7 { 34 } else { 26 }) } }
                     Positioned(x: 0, y: 100, width: 1280, height: 36) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 12 }, phase: 0.6, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "名场面来了", "en" => "An iconic scene" }, style: callout, font_size: if draft.font_size < 0.3 { 20 } else if draft.font_size > 0.7 { 34 } else { 26 }) } }
@@ -453,7 +453,7 @@ pub fn player_overlays(app: erika::Client, #[session] draft: PlayerDraft) -> imp
                     Positioned(x: 0, y: 210, width: 1280, height: 48) { Marquee(duration: 9, phase: 0.3, paused: app.paused, opacity: 1) { Text(content: app.player.sent_danmaku, style: callout, font_size: if draft.font_size < 0.3 { 20 } else if draft.font_size > 0.7 { 34 } else { 26 }) } }
                 }
             }
-            if app.player.subtitle_track != SubtitleTrack::Off {
+            if app.player.subtitle_line != "" {
                 Positioned(x: 120, y: 630, width: 1040, height: 46) {
                     Row(align: center) {
                         Spacer
@@ -483,7 +483,7 @@ pub fn player_overlays(app: erika::Client, #[session] draft: PlayerDraft) -> imp
 pub fn player_phone_overlays(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
     ui! {
         Stack(width: 693, height: 390, align: top_leading) {
-            if app.features.danmaku && draft.danmaku && app.preferences.show_danmaku {
+            if app.features.danmaku && draft.danmaku && app.preferences.show_danmaku && !app.video {
                 if !draft.block_scroll {
                     Positioned(x: 0, y: 34, width: 693, height: 22) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 11 }, phase: 0.0, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "前方高能！！", "en" => "Here it comes!!" }, style: callout, font_size: if draft.font_size < 0.3 { 13 } else if draft.font_size > 0.7 { 22 } else { 17 }) } }
                     Positioned(x: 0, y: 64, width: 693, height: 22) { Marquee(duration: if draft.speed > 0.7 { 8 } else if draft.speed < 0.3 { 18 } else { 12 }, phase: 0.308, paused: app.paused, opacity: draft.opacity) { Text(content: tr! { "zh-Hans" => "名场面来了", "en" => "An iconic scene" }, style: callout, font_size: if draft.font_size < 0.3 { 13 } else if draft.font_size > 0.7 { 22 } else { 17 }) } }
@@ -502,7 +502,7 @@ pub fn player_phone_overlays(app: erika::Client, #[session] draft: PlayerDraft) 
                     Positioned(x: 0, y: 64, width: 693, height: 22) { Marquee(duration: 9, phase: 0.3, paused: app.paused, opacity: 1) { Text(content: app.player.sent_danmaku, style: callout, font_size: if draft.font_size < 0.3 { 13 } else if draft.font_size > 0.7 { 22 } else { 17 }) } }
                 }
             }
-            if app.player.subtitle_track != SubtitleTrack::Off {
+            if app.player.subtitle_line != "" {
                 Positioned(x: 40, y: 341.3, width: 613, height: 24.7) {
                     Row(align: center) {
                         Spacer
@@ -560,7 +560,7 @@ pub fn player_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl Vie
             ControlGroup(label: tr! { "zh-Hans" => "播放选项", "en" => "Playback options" }, height: 40) {
                 IconButton(id: settings, icon: "slider.horizontal.3", label: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }) => app.player_panel(!app.player.panel)
                 Menu(id: more, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon) {
-                    MenuItem(id: screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera", shortcut: "cmd+s") => app.show_notice(Notice::ScreenshotPending)
+                    MenuItem(id: screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera", shortcut: "cmd+s") => app.screenshot()
                     MenuItem(id: skip_intro, label: tr! { "zh-Hans" => "跳过片头（85 秒）", "en" => "Skip opening (85 seconds)" }) => app.skip(85.0)
                     MenuItem(id: episodes, label: tr! { "zh-Hans" => "选集…", "en" => "Episodes…" }, enabled: app.player.episodes) => draft.episodes_open.set(true)
                     MenuItem(id: info, label: tr! { "zh-Hans" => "播放信息", "en" => "Playback information" }) => app.player_tab(PlayerTab::Playback)
@@ -638,15 +638,7 @@ pub fn player_controls(app: erika::Client, #[session] draft: PlayerDraft) -> imp
                 }
                 Spacer
                 Row(variant: subtitle_box) {
-                    Menu(id: subtitles, label: app.player.subtitle_track, icon: "captions.bubble", shape: capsule, height: 32) {
-                        MenuItem(id: chinese_subtitle, label: tr! { "zh-Hans" => "简体中文（内嵌 ASS）", "en" => "Simplified Chinese (ASS)" }) => app.set_subtitle_track(SubtitleTrack::Chinese)
-                        MenuItem(id: japanese_subtitle, label: tr! { "zh-Hans" => "日本語", "en" => "Japanese" }) => app.set_subtitle_track(SubtitleTrack::Japanese)
-                        MenuItem(id: no_subtitle, label: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }) => app.set_subtitle_track(SubtitleTrack::Off)
-                        MenuItem(id: external_subtitle, label: tr! { "zh-Hans" => "添加外挂字幕…", "en" => "Add external subtitles…" }, pick: draft.subtitle_file, files: ".ass .ssa .srt .vtt") => app.attach_subtitle(draft.subtitle_file)
-                        Divider
-                        MenuItem(id: japanese_audio, label: tr! { "zh-Hans" => "日本語 · FLAC 2.0", "en" => "Japanese · FLAC 2.0" }) => app.set_audio_track(AudioTrack::Japanese)
-                        MenuItem(id: chinese_audio, label: tr! { "zh-Hans" => "中文配音 · AAC 2.0", "en" => "Chinese · AAC 2.0" }) => app.set_audio_track(AudioTrack::Chinese)
-                    }
+                    player_subtitle_menu(app: app, height: 32)
                 }
                 Row(variant: rate_box) { Picker(id: rate, label: tr! { "zh-Hans" => "倍速", "en" => "Speed" }, selected: app.preferences.speed, label_hidden: true, style: menu, shape: capsule, height: 32) => app.set_speed(app.preferences.speed) }
                 if app.features.enhance {
@@ -749,19 +741,22 @@ pub fn player_panel(app: erika::Client, #[session] draft: PlayerDraft) -> impl V
                                 Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "字幕延迟", "en" => "Subtitle delay" }) Spacer Row(width: 130) { Slider(id: subtitle_delay, label: tr! { "zh-Hans" => "字幕延迟", "en" => "Subtitle delay" }, label_hidden: true, current: app.player.subtitle_delay, min: -10, max: 10) => app.set_player_number("subtitle_delay", app.player.subtitle_delay) } }
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
                                 Row(height: 34, padding_x: 4) { Text(content: tr! { "zh-Hans" => "轨道", "en" => "Tracks" }, style: caption, emphasis: secondary) Spacer }
-                                Button(id: chinese, label: tr! { "zh-Hans" => "简体中文（内嵌 ASS）", "en" => "Simplified Chinese (ASS)" }, variant: player_picture) {
+                                // The media's own tracks, as the file names them.
+                                ForEach(items: app.player.subtitle_tracks, key: id) |track| {
+                                    Button(id: subtitle_track, label: track.name, variant: player_picture) {
+                                        Row(gap: 12, height: 46, padding_x: 4, align: center) {
+                                            Text(content: track.name, lines: 1) Spacer
+                                            if app.player.subtitle_track == track.id { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
+                                        }
+                                    } => app.select_subtitle_track(track.id)
+                                    Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
+                                }
+                                Button(id: subtitles_off, label: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }, variant: player_picture) {
                                     Row(gap: 12, height: 46, padding_x: 4, align: center) {
-                                        Text(content: tr! { "zh-Hans" => "简体中文（内嵌 ASS）", "en" => "Simplified Chinese (ASS)" }) Spacer
-                                        if app.player.subtitle_track == SubtitleTrack::Chinese { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
+                                        Text(content: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }) Spacer
+                                        if app.player.subtitle_track < 0 { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
                                     }
-                                } => app.set_subtitle_track(SubtitleTrack::Chinese)
-                                Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
-                                Button(id: japanese, label: tr! { "zh-Hans" => "日本語", "en" => "Japanese" }, variant: player_picture) {
-                                    Row(gap: 12, height: 46, padding_x: 4, align: center) {
-                                        Text(content: tr! { "zh-Hans" => "日本語", "en" => "Japanese" }) Spacer
-                                        if app.player.subtitle_track == SubtitleTrack::Japanese { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
-                                    }
-                                } => app.set_subtitle_track(SubtitleTrack::Japanese)
+                                } => app.select_subtitle_track(-1)
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
                             } }
                         PlayerTab::Picture => { Column(gap: 0, appear: settings_page_in) {
@@ -781,9 +776,16 @@ pub fn player_panel(app: erika::Client, #[session] draft: PlayerDraft) -> impl V
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
                                 Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "音频延迟", "en" => "Audio delay" }) Spacer Row(width: 130) { Slider(id: delay, label: tr! { "zh-Hans" => "音频延迟", "en" => "Audio delay" }, label_hidden: true, current: app.player.audio_delay, min: -1000, max: 1000) => app.set_player_number("audio_delay", app.player.audio_delay) } }
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
-                                Row(height: 34, padding_x: 4) { Text(content: tr! { "zh-Hans" => "轨道", "en" => "Tracks" }, style: caption, emphasis: secondary) Spacer }
-                                Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "音轨", "en" => "Audio track" }) Spacer Picker(id: audio, label: tr! { "zh-Hans" => "音轨", "en" => "Audio track" }, label_hidden: true, style: menu, selected: app.player.audio_track) => app.set_audio_track(app.player.audio_track) }
-                                Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
+                                Row(height: 34, padding_x: 4) { Text(content: tr! { "zh-Hans" => "音轨", "en" => "Audio tracks" }, style: caption, emphasis: secondary) Spacer }
+                                ForEach(items: app.player.audio_tracks, key: id) |track| {
+                                    Button(id: audio_track, label: track.name, variant: player_picture) {
+                                        Row(gap: 12, height: 46, padding_x: 4, align: center) {
+                                            Text(content: track.name, lines: 1) Spacer
+                                            if app.player.audio_track == track.id { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
+                                        }
+                                    } => app.select_audio_track(track.id)
+                                    Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
+                                }
                             } }
                         PlayerTab::Playback => { Column(gap: 0, appear: settings_page_in) {
                                 Row(height: 34, padding_x: 4) { Text(content: tr! { "zh-Hans" => "播放", "en" => "Playback" }, style: caption, emphasis: secondary) Spacer }
@@ -796,7 +798,7 @@ pub fn player_panel(app: erika::Client, #[session] draft: PlayerDraft) -> impl V
                                 Row(height: 34, padding_x: 4) { Text(content: tr! { "zh-Hans" => "信息", "en" => "Information" }, style: caption, emphasis: secondary) Spacer }
                                 Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "播放内核", "en" => "Playback engine" }) Spacer Text(content: tr! { "zh-Hans" => "liberika", "en" => "liberika" }, style: body, emphasis: secondary) }
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
-                                Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "视频", "en" => "Video" }) Spacer Text(content: tr! { "zh-Hans" => "HEVC · 1080p", "en" => "HEVC · 1080p" }, style: body, emphasis: secondary) }
+                                Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "视频", "en" => "Video" }) Spacer Text(content: app.player.video_info, style: body, emphasis: secondary) }
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
                             } }
                     }
@@ -823,6 +825,53 @@ pub fn player_episodes(app: erika::Client) -> impl View {
                 Switch(id: ep_10, label: tr! { "zh-Hans" => "10", "en" => "10" }, checked: app.player.episode == 10, style: button) => app.select_episode(10)
                 Switch(id: ep_11, label: tr! { "zh-Hans" => "11", "en" => "11" }, checked: app.player.episode == 11, style: button) => app.select_episode(11)
                 Switch(id: ep_12, label: tr! { "zh-Hans" => "12", "en" => "12" }, checked: app.player.episode == 12, style: button) => app.select_episode(12)
+            }
+        }
+    }
+}
+
+/// The subtitles' capsule (`.p-ctl` 字幕): the track shown, or 「关闭」.
+/// Its menu turns them off, adds a file, and opens the settings' track
+/// lists, which list what the media has.
+#[component]
+pub fn player_subtitle_menu(app: erika::Client, height: f64, #[session] draft: PlayerDraft) -> impl View {
+    ui! {
+        if app.player.subtitle_track >= 0 {
+            Menu(id: subtitles, label: app.player.subtitle_name, icon: "captions.bubble", shape: capsule, height: height) {
+                MenuItem(id: subtitle_tracks, label: tr! { "zh-Hans" => "字幕轨道…", "en" => "Subtitle tracks…" }) => app.player_tab(PlayerTab::Subtitles)
+                MenuItem(id: no_subtitle, label: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }) => app.select_subtitle_track(-1)
+                MenuItem(id: external_subtitle, label: tr! { "zh-Hans" => "添加外挂字幕…", "en" => "Add external subtitles…" }, pick: draft.subtitle_file, files: ".ass .ssa .srt .vtt") => app.attach_subtitle(draft.subtitle_file)
+                Divider
+                MenuItem(id: audio_tracks, label: tr! { "zh-Hans" => "音轨…", "en" => "Audio tracks…" }) => app.player_tab(PlayerTab::Audio)
+            }
+        } else {
+            Menu(id: subtitles_off, label: tr! { "zh-Hans" => "关闭", "en" => "Off" }, icon: "captions.bubble", shape: capsule, height: height) {
+                MenuItem(id: subtitle_tracks_off, label: tr! { "zh-Hans" => "字幕轨道…", "en" => "Subtitle tracks…" }) => app.player_tab(PlayerTab::Subtitles)
+                MenuItem(id: external_subtitle_off, label: tr! { "zh-Hans" => "添加外挂字幕…", "en" => "Add external subtitles…" }, pick: draft.subtitle_file, files: ".ass .ssa .srt .vtt") => app.attach_subtitle(draft.subtitle_file)
+                Divider
+                MenuItem(id: audio_tracks_off, label: tr! { "zh-Hans" => "音轨…", "en" => "Audio tracks…" }) => app.player_tab(PlayerTab::Audio)
+            }
+        }
+    }
+}
+
+/// The television's subtitles capsule: as the others, without files to
+/// pick.
+#[component]
+pub fn player_tv_subtitle_menu(app: erika::Client) -> impl View {
+    ui! {
+        if app.player.subtitle_track >= 0 {
+            Menu(id: subtitles_tv, label: app.player.subtitle_name, icon: "captions.bubble", shape: capsule, height: 46) {
+                MenuItem(id: subtitle_tracks_tv, label: tr! { "zh-Hans" => "字幕轨道…", "en" => "Subtitle tracks…" }) => app.player_tab(PlayerTab::Subtitles)
+                MenuItem(id: no_subtitle_tv, label: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }) => app.select_subtitle_track(-1)
+                Divider
+                MenuItem(id: audio_tracks_tv, label: tr! { "zh-Hans" => "音轨…", "en" => "Audio tracks…" }) => app.player_tab(PlayerTab::Audio)
+            }
+        } else {
+            Menu(id: subtitles_off_tv, label: tr! { "zh-Hans" => "关闭", "en" => "Off" }, icon: "captions.bubble", shape: capsule, height: 46) {
+                MenuItem(id: subtitle_tracks_off_tv, label: tr! { "zh-Hans" => "字幕轨道…", "en" => "Subtitle tracks…" }) => app.player_tab(PlayerTab::Subtitles)
+                Divider
+                MenuItem(id: audio_tracks_off_tv, label: tr! { "zh-Hans" => "音轨…", "en" => "Audio tracks…" }) => app.player_tab(PlayerTab::Audio)
             }
         }
     }

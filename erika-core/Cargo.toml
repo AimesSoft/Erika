@@ -10,3 +10,9 @@ publish = false
 bern.workspace = true
 erika-protocol.workspace = true
 erika-anime-protocol = { path = "../modules/anime/protocol" }
+
+# liberika plays where Bern hosts it as the media kernel.
+[target.'cfg(target_os = "macos")'.dependencies]
+liberika.workspace = true
+crossbeam-channel = "0.5"
+png = "0.17"

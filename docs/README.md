@@ -15,6 +15,7 @@
 | 应用图标 | 各平台用 `design/brand/erika-icon-export/` 导出的原生文件（`Bern.toml` 的 `[app.icon]`），macOS 用自带苹果模板底板的 `Erika.icns` | 2026-10-19 |
 | Windows 标题栏 | 标题栏显示应用图标与「Erika」，侧栏顶部的 logo 与标题只在 Windows 上不显示（`SidebarHeader(role: title)`）；GTK 与 iPad 照常显示 | 2026-10-19 |
 | Apple TV | `[targets.tvos]`：电视上按设计 6.2 的 TV 原型（1280 × 720 场景放大 1.5 倍），顶部是系统标签栏，遥控器移动焦点；没有选文件，「打开」只有链接 | 2026-10-20 |
+| 播放内核 | 只用 liberika，设置里没有内核选择。liberika 检出在本仓库旁的 `../liberika`（AimesSoft/liberika），作为 Bern 的媒体内核（`bern::media::kernel`）接入：Bern 的 `Video` 给它原生表面与帧时钟，播放、暂停、跳转与音量走 Bern 的媒体命令，字幕轨、音轨、倍速、超分辨率由引擎直接调用。打开的文件与 http(s) 链接真播放；模块里的示例剧集仍按剧照模拟。先接 macOS | 2026-10-21 |
 
 ## 工程结构
 
@@ -58,6 +59,22 @@ rustup target add wasm32-unknown-unknown
 随后使用真实 Safari 27.0.1 验证并修复普通滚动区误用居中停靠、查询内容高度链断开、深层图片撑宽祖先及侧栏选中前景色配对问题。2026-10-16 复查确认媒体库显示 16 张海报，筛选「未看」得到 8 张；首页工具栏和右栏回到视口内，周历周一切换周三、设置通用切换外观均正常。侧栏最初只修复了可读性，仍错误使用灰色选中背景；再次修正后，Safari 深色绯红的主侧栏与设置侧栏均使用强调色实底，Chromium 另验浅色荧绿、浅色群青及选中/悬停状态。macOS 的原型配色通过目标样式保留。
 
 Rail 放大图片画框的问题也已修复：Safari 在 1470 CSS px 宽度下确认舞台图右侧圆角和 28 px 间距恢复；Chromium 1470 × 754 下舞台按钮与图片均为 528 × 297。媒体库窄屏工具栏已修复，Chromium 390 × 844 和 360 × 780 下标题不换行、完整缩放控件两端可见、网格正常，页面没有横向溢出；这两项仅验证媒体库布局。Safari 手机布局及 Firefox 尚未实测。详细原因与验证范围见 [Web app 适配补充](bern-extensions.md#web-app-适配补充2026-10-15)。
+
+## 播放内核 liberika
+
+播放由 [liberika](https://github.com/AimesSoft/liberika) 完成，代码在 `erika-core/src/kernel/`：`kernel.rs` 是引擎看到的接口（打开、播放、跳转、轨道、截图等），`kernel/liberika.rs` 把 liberika 做成 Bern 的媒体内核。liberika 自己的线程为每个播放器持有一个 `PresenterRuntime`，在 `Video` 视图给出的 `CAMetalLayer` 上按显示刷新绘制画面、字幕和弹幕，没有视图时继续推进音频；它把播放状态报告给 Bern 的媒体中心（命令行 `erika media state --player-id video` 能看到同一个播放器），引擎在 250 ms 的播放节拍里读取位置、时长、轨道与结束状态。播放 3 秒后、暂停与缩小时截一张画面（480 宽 PNG，存在临时目录的 `erika-stills/`），作为迷你播放器、转场和最近播放的静帧。「更多 › 截图」（⌘S）按视频原尺寸把画面连同字幕存到「图片 › Erika」，文件名是标题加画面所在时间。
+
+本地构建先准备 liberika 的原生依赖（FFmpeg、dav1d、libass 等，静态编译，一次即可）：
+
+```sh
+git clone https://github.com/AimesSoft/liberika ../liberika
+brew install cmake meson ninja nasm pkg-config
+cd ../liberika && cargo run -p xtask -- deps build --all --profile lgpl --target aarch64-apple-darwin
+```
+
+之后照常 `bern build --target macos`。Bern 会把 liberika 需要的系统框架（Metal、VideoToolbox、CoreAudio 等）交给 swiftc 链接。
+
+目前只有 macOS 接了 liberika：iOS、tvOS 的视图已由 Bern 生成，需要先为模拟器编译 liberika 的依赖再实测；Windows、Linux、Android 等 Bern 给出 D3D、Wayland/X11、Android 的表面后接入；Web 上 liberika 没有播放后端。没接的平台仍按剧照模拟播放。liberika 还没有字幕延迟与音频延迟，这两个滑块暂时只改状态；弹幕要等弹幕模块提供数据后交给 liberika 渲染。
 
 ## 模块与设计稿的对照
 
@@ -116,7 +133,7 @@ Rail 放大图片画框的问题也已修复：Safari 在 1470 CSS px 宽度下�
 - 时间由 250 ms 的 UI 模拟时钟更新；拖动进度不切换暂停状态。支持集数边界、末集停止和自动连播策略。返回保留侧栏迷你播放器；纯粹模式返回后暂停并保留回到播放器的入口。
 - macOS 与 `web_app` 构建通过；核心 11 项测试通过。Bern 的编译器、SwiftUI、Web 和目标能力回归通过，Web 运行时 17 项测试包含拖动期间的引擎更新、负坐标和闲置计时不被播放时钟重置。实际检查了 macOS 1280 × 800 主画框和设置面板、Web 1280 × 800 两种画框坐标、分页、字幕字号、字幕切换、快进与倍速、迷你播放器返回；720 × 480 Web 页面没有横向或纵向溢出。
 
-仍遵守第一阶段的界面模拟范围：剧照代替视频，音频 / HDR / 画质增强等选项只更新状态，文件选择不解析媒体，截图、系统画中画和弹幕匹配给出预览提示。原生控件保留平台外观，纯图标按钮遵循无容器偏好。2026-10-17 已补齐首页舞台 → 播放器、播放器 ↔ 左下角迷你播放器的图片缩放移动动画，并验证快速反向切换、减少动态效果和小窗口恢复；实现与验证范围见扩展记录第 18 项及「播放器缩放转场」。真实视频纹理与其他播放入口的源图配对仍属于后续工作。
+（2026-10-21 起，打开的文件与链接由 liberika 真播放，字幕、音轨、倍速、超分辨率与时间轴都来自内核，见「播放内核 liberika」；以下是那之前的范围，模块的示例剧集仍是如此。）仍遵守第一阶段的界面模拟范围：剧照代替视频，音频 / HDR / 画质增强等选项只更新状态，文件选择不解析媒体，截图、系统画中画和弹幕匹配给出预览提示。原生控件保留平台外观，纯图标按钮遵循无容器偏好。2026-10-17 已补齐首页舞台 → 播放器、播放器 ↔ 左下角迷你播放器的图片缩放移动动画，并验证快速反向切换、减少动态效果和小窗口恢复；实现与验证范围见扩展记录第 18 项及「播放器缩放转场」。真实视频纹理与其他播放入口的源图配对仍属于后续工作。
 
 ## iPhone 适配（2026-10-18）
 

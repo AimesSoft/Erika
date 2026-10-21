@@ -560,12 +560,19 @@ pub struct ErikaDraft {
     pub phone_settings: PhoneSettings,
 }
 
+/// The application's player: liberika plays files and links in it, and
+/// each view of the video shows it (the player's frame, the mini player).
+#[bern::players]
+pub struct Players {
+    pub video: Player,
+}
+
 #[component]
-pub fn app(app: erika::Client, anime: anime::Client, windows: AppWindows) -> impl View {
+pub fn app(app: erika::Client, anime: anime::Client, windows: AppWindows, players: Players) -> impl View {
     ui! {
         WindowSet(handle: AppWindows, primary: main, accent: app.accent, appearance: app.appearance) {
             Window(id: main, title: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, initial: open, width: 1280, height: 800, min_width: 720, min_height: 480, chrome: unified, idle_after: 3, idle_enabled: app.playing && app.expanded && !app.paused && !app.player.panel, immersive: app.playing && app.expanded, landscape: app.playing && app.expanded) {
-                main_window(app: app, anime: anime, windows: windows)
+                main_window(app: app, anime: anime, windows: windows, players: players)
             }
             Window(id: settings, title: tr! { "zh-Hans" => "设置", "en" => "Settings" }, width: 1000, height: 660, min_width: 1000, min_height: 660, chrome: standard) {
                 settings(app: app, windows: windows)
@@ -580,6 +587,7 @@ pub fn main_window(
     app: erika::Client,
     anime: anime::Client,
     windows: AppWindows,
+    players: Players,
     #[session] draft: ErikaDraft,
 ) -> impl View {
     ui! {
@@ -588,12 +596,12 @@ pub fn main_window(
             Slot(id: background)
             if app.onboarding.visible {
                 Stack(enabled: false) {
-                    main_shell(app: app, anime: anime, windows: windows)
+                    main_shell(app: app, anime: anime, windows: windows, players: players)
                 }
                 onboarding(app: app)
             } else {
                 Stack(hero: onboarding_window) {
-                    main_shell(app: app, anime: anime, windows: windows)
+                    main_shell(app: app, anime: anime, windows: windows, players: players)
                 }
             }
         }
@@ -601,7 +609,7 @@ pub fn main_window(
 }
 
 #[component]
-pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows, #[session] draft: ErikaDraft) -> impl View {
+pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows, players: Players, #[session] draft: ErikaDraft) -> impl View {
     ui! {
         Stack {
             Stack(enabled: !app.playing || !app.expanded) {
@@ -636,7 +644,7 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
                     Pages(slot: main)
                     SidebarFooter {
                         if app.playing && !app.expanded {
-                            mini_player(app: app)
+                            mini_player(app: app, players: players)
                         }
                         Row(gap: 10, align: center) {
                             avatar()
@@ -680,10 +688,10 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
                 // way back.
                 if !app.features.anime && !app.features.library && !app.features.downloads {
                     Stack(appear: fade, disappear: fade) {
-                        player(app: app)
+                        player(app: app, players: players)
                     }
                 } else {
-                    player(app: app)
+                    player(app: app, players: players)
                 }
             }
         }
@@ -710,12 +718,19 @@ pub fn avatar() -> impl View {
 /// The frame shrunk into the foot of the sidebar: its bottom edge is the
 /// progress. Clicking it grows the frame back.
 #[component]
-pub fn mini_player(app: erika::Client) -> impl View {
+pub fn mini_player(app: erika::Client, players: Players) -> impl View {
     ui! {
         Column(gap: 8, appear: fade, disappear: fade) {
             Button(id: mini, label: app.title, variant: stage) {
                 Stack(align: bottom_leading) {
                     Image(source: app.still, width: 208, height: 117, corner: card, fit: cover, label: app.title, hero: frame, hero_key: app.title)
+                    // What liberika plays shows here while the frame is
+                    // shrunk.
+                    if app.video {
+                        Stack(width: 208, height: 117) {
+                            Video(id: mini_video, player: players.video, label: app.title, controls: none, corner: card)
+                        }
+                    }
                     Rail {
                         Canvas(from: 0, to: app.progress, height: 3) {
                             Shape(kind: rect, fill: accent)

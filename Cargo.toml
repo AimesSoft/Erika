@@ -10,3 +10,5 @@ rust-version = "1.99"
 [workspace.dependencies]
 bern = { path = "/Library/Afolder/RustProject/Bern/crates/bern" }
 erika-protocol = { path = "erika-protocol" }
+# The playback kernel, checked out next to this repository (AimesSoft/liberika).
+liberika = { package = "erika", path = "../liberika/crates/erika" }

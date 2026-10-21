@@ -118,12 +118,6 @@ pub mod erika {
     }
 
     #[value]
-    pub enum PlaybackKernel {
-        #[label(tr! { "zh-Hans" => "liberika（推荐）", "en" => "liberika (recommended)" })]
-        Liberika,
-    }
-
-    #[value]
     pub enum DanmakuArea {
         #[label(tr! { "zh-Hans" => "半屏", "en" => "Half" })]
         Half,
@@ -180,7 +174,6 @@ pub mod erika {
         pub language: InterfaceLanguage,
         pub update_channel: UpdateChannel,
         pub speed: PlaybackSpeed,
-        pub kernel: PlaybackKernel,
         pub danmaku_area: DanmakuArea,
     }
     #[value]
@@ -303,8 +296,13 @@ pub mod erika {
         PictureInPicturePending,
         #[label(tr! { "zh-Hans" => "界面预览：可使用窗口绿色按钮进入全屏", "en" => "Preview: use the window's green button for full screen" })]
         FullScreenHint,
-        #[label(tr! { "zh-Hans" => "界面预览：截图保存待播放内核接入", "en" => "Preview: saving screenshots waits for the playback kernel" })]
+        #[label(tr! { "zh-Hans" => "界面预览：示例剧集没有画面可截", "en" => "Preview: sample episodes have no picture to save" })]
         ScreenshotPending,
+        #[label(tr! { "zh-Hans" => "已保存截图：图片 › Erika › {file}", "en" => "Screenshot saved: Pictures › Erika › {file}" })]
+        ScreenshotSaved {
+            #[content]
+            file: String,
+        },
         #[label(tr! { "zh-Hans" => "已选择本地弹幕（界面预览）", "en" => "Local danmaku chosen (preview)" })]
         LocalDanmakuChosen,
         #[label(tr! { "zh-Hans" => "已挂载本地弹幕文件", "en" => "Local danmaku file mounted" })]
@@ -334,7 +332,7 @@ pub mod erika {
             #[content]
             name: String,
         },
-        #[label(tr! { "zh-Hans" => "已选择字幕：{file}（界面预览）", "en" => "Subtitles chosen: {file} (preview)" })]
+        #[label(tr! { "zh-Hans" => "已添加字幕：{file}", "en" => "Subtitles added: {file}" })]
         SubtitleChosen {
             #[content]
             file: String,
@@ -360,7 +358,8 @@ pub mod erika {
     }
 
     /// A video played before (design 10.2, 「最近播放」): its file name,
-    /// how far it got, what is left in seconds, and its picture.
+    /// how far it got, what is left in seconds, its picture, and the media
+    /// itself when it was a file or link the kernel played.
     #[value]
     pub struct RecentPlay {
         #[content]
@@ -368,6 +367,7 @@ pub mod erika {
         pub progress: f64,
         pub remaining: f64,
         pub still: MediaSource,
+        pub source: Option<MediaSource>,
     }
 
     #[value]
@@ -384,32 +384,25 @@ pub mod erika {
         Playback,
     }
 
+    /// A subtitle or audio track of the media, as the file names it.
     #[value]
-    pub enum SubtitleTrack {
-        #[label(tr! { "zh-Hans" => "简中", "en" => "Chinese" })]
-        Chinese,
-        #[label(tr! { "zh-Hans" => "日本語", "en" => "Japanese" })]
-        Japanese,
-        #[label(tr! { "zh-Hans" => "关闭", "en" => "Off" })]
-        Off,
+    pub struct MediaTrack {
+        pub id: i64,
+        #[content]
+        pub name: String,
     }
 
-    #[value]
-    pub enum AudioTrack {
-        #[label(tr! { "zh-Hans" => "日本語 · FLAC 2.0", "en" => "Japanese · FLAC 2.0" })]
-        Japanese,
-        #[label(tr! { "zh-Hans" => "中文配音 · AAC 2.0", "en" => "Chinese · AAC 2.0" })]
-        Chinese,
-    }
-
+    /// liberika's luma upscalers (ArtCNN).
     #[value]
     pub enum Enhancement {
         #[label(tr! { "zh-Hans" => "关闭", "en" => "Off" })]
         Off,
-        #[label(tr! { "zh-Hans" => "Anime4K", "en" => "Anime4K" })]
-        Anime4K,
         #[label(tr! { "zh-Hans" => "ArtCNN 2×", "en" => "ArtCNN 2×" })]
-        ArtCNN,
+        ArtCnn,
+        #[label(tr! { "zh-Hans" => "ArtCNN 2× 高质量", "en" => "ArtCNN 2× high quality" })]
+        ArtCnnQuality,
+        #[label(tr! { "zh-Hans" => "ArtCNN 2× 降噪", "en" => "ArtCNN 2× denoise" })]
+        ArtCnnDenoise,
     }
 
     #[value]
@@ -436,8 +429,19 @@ pub mod erika {
         pub tab: PlayerTab,
         pub episode: i64,
         pub episodes: bool,
-        pub subtitle_track: SubtitleTrack,
-        pub audio_track: AudioTrack,
+        /// The media's tracks and the selected one's id; no subtitle track
+        /// is selected when subtitles are off (`subtitle_track` < 0).
+        pub subtitle_tracks: Vec<MediaTrack>,
+        pub subtitle_track: i64,
+        pub audio_tracks: Vec<MediaTrack>,
+        pub audio_track: i64,
+        /// The selected tracks' names, and the video's codec and height.
+        #[content]
+        pub subtitle_name: String,
+        #[content]
+        pub audio_name: String,
+        #[content]
+        pub video_info: String,
         pub enhancement: Enhancement,
         pub ratio: PictureRatio,
         pub hdr: HdrMode,
@@ -489,6 +493,10 @@ pub mod erika {
         pub title: String,
         pub subtitle: PlayingNote,
         pub still: MediaSource,
+        /// liberika plays the media: the frame shows its video (the
+        /// `video` player) over the still. Otherwise the player simulates
+        /// time over the still, as for the library's sample episodes.
+        pub video: bool,
         /// How far it has played, from 0 to 1, and as seconds.
         pub progress: f64,
         pub elapsed: f64,
@@ -523,7 +531,6 @@ pub mod erika {
         fn set_language(&mut self, value: InterfaceLanguage) -> Result<(), CommandError>;
         fn set_update_channel(&mut self, value: UpdateChannel) -> Result<(), CommandError>;
         fn set_speed(&mut self, value: PlaybackSpeed) -> Result<(), CommandError>;
-        fn set_kernel(&mut self, value: PlaybackKernel) -> Result<(), CommandError>;
         fn set_danmaku_area(&mut self, value: DanmakuArea) -> Result<(), CommandError>;
         fn set_preference(&mut self, key: String, value: bool) -> Result<(), CommandError>;
         fn set_module(&mut self, id: String, enabled: bool) -> Result<(), CommandError>;
@@ -592,13 +599,19 @@ pub mod erika {
         fn change_episode(&mut self, delta: i64) -> Result<(), CommandError>;
         fn player_panel(&mut self, visible: bool) -> Result<(), CommandError>;
         fn player_tab(&mut self, tab: PlayerTab) -> Result<(), CommandError>;
-        fn set_subtitle_track(&mut self, value: SubtitleTrack) -> Result<(), CommandError>;
-        fn set_audio_track(&mut self, value: AudioTrack) -> Result<(), CommandError>;
+        /// Show subtitle track `id`, or none when it is negative.
+        #[errors("no_such_track")]
+        fn select_subtitle_track(&mut self, id: i64) -> Result<(), CommandError>;
+        #[errors("no_such_track")]
+        fn select_audio_track(&mut self, id: i64) -> Result<(), CommandError>;
         fn set_enhancement(&mut self, value: Enhancement) -> Result<(), CommandError>;
         fn set_picture_ratio(&mut self, value: PictureRatio) -> Result<(), CommandError>;
         fn set_hdr(&mut self, value: HdrMode) -> Result<(), CommandError>;
         fn set_player_number(&mut self, key: String, value: f64) -> Result<(), CommandError>;
         fn set_skip_intro(&mut self, value: bool) -> Result<(), CommandError>;
+        /// Save the picture on screen, with its subtitles, at the video's
+        /// size in Pictures › Erika.
+        fn screenshot(&mut self) -> Result<(), CommandError>;
         fn send_danmaku(&mut self, text: String) -> Result<(), CommandError>;
         fn attach_subtitle(&mut self, source: MediaSource) -> Result<(), CommandError>;
 

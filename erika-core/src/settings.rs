@@ -59,7 +59,6 @@ pub fn default_preferences() -> Preferences {
         language: InterfaceLanguage::System,
         update_channel: UpdateChannel::Stable,
         speed: PlaybackSpeed::Normal,
-        kernel: PlaybackKernel::Liberika,
         danmaku_area: DanmakuArea::Half,
     }
 }
@@ -221,7 +220,7 @@ impl erika::Queries for ErikaEngine {
             (
                 SettingsPage::Player,
                 "播放",
-                "playback 倍速 跳过片头 位置 自动连播 画框 内核 硬件解码 speed skip decode",
+                "playback 倍速 跳过片头 位置 自动连播 画框 硬件解码 speed skip decode",
                 true,
             ),
             (

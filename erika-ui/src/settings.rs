@@ -503,7 +503,6 @@ pub fn settings_player(app: erika::Client) -> impl View {
                 }
             }
             Section(title: tr! { "zh-Hans" => "解码", "en" => "Decoding" }) {
-                Picker(id: kernel, label: tr! { "zh-Hans" => "播放内核", "en" => "Playback engine" }, selected: app.preferences.kernel, style: menu) => app.set_kernel(app.preferences.kernel)
                 Switch(id: hardware_decode, label: tr! { "zh-Hans" => "硬件解码", "en" => "Hardware decoding" }, checked: app.preferences.hardware_decode, style: switch) => app.set_preference("hardware_decode", app.preferences.hardware_decode)
             }
         }
@@ -727,7 +726,7 @@ pub fn settings_enhance_module(app: erika::Client) -> impl View {
             }
             Column(gap: 1) {
                 Text(content: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, style: body)
-                Text(content: tr! { "zh-Hans" => "Anime4K / ArtCNN 超分辨率", "en" => "Anime4K / ArtCNN upscaling" }, style: caption, emphasis: secondary)
+                Text(content: tr! { "zh-Hans" => "ArtCNN 超分辨率", "en" => "ArtCNN upscaling" }, style: caption, emphasis: secondary)
             }
             Spacer
             Switch(id: feature_enhance, label: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, checked: app.features.enhance, style: switch, label_hidden: true) => app.set_module("enhance", app.features.enhance)

@@ -259,7 +259,7 @@
         <tr><td>同目录连播、续播、最近播放、跳过片头（固定秒数）</td><td><span class="tag core">核心</span></td><td>最近播放只存在本地，云同步放在「账号同步」</td></tr>
         <tr><td>快捷键、外观（明暗、主题色）、语言、本地备份与恢复</td><td><span class="tag core">核心</span></td><td></td></tr>
         <tr><td>HDR / EDR</td><td><span class="tag core">核心</span></td><td>自动启用，不提供开关</td></tr>
-        <tr><td>播放内核 liberika / libmpv / MDK / Video Player</td><td><span class="tag core">核心</span> <span class="tag drop">收敛</span></td><td>默认 liberika，libmpv 作为后备放在 设置 › 高级；MDK 和 Video Player 建议退役（见待讨论）</td></tr>
+        <tr><td>播放内核 liberika</td><td><span class="tag core">核心</span> <span class="tag drop">收敛</span></td><td>只用 liberika（2026-10-21 定），设置里没有内核选择；libmpv、MDK 和 Video Player 不再保留</td></tr>
         <tr><td>独立播放窗口、开发者选项、日志导出</td><td><span class="tag core">核心</span></td><td>放在 设置 › 高级</td></tr>
         <tr><td>大屏模式（实验室）</td><td><span class="tag core">核心</span></td><td>改成按窗口尺寸自动适配（TV 尺寸档），不再是开关</td></tr>
         <tr><td>弹弹play 自动 / 手动匹配、弹幕渲染与设置、弹幕轨道 / 列表 / 偏移、本地挂载 xml/json</td><td><span class="tag mod">弹幕</span></td><td>播放器的弹幕按钮、浮层、面板分页都属于这个模块</td></tr>
@@ -1068,7 +1068,7 @@ academy-tartan: navy 22 · band(black 30%) 34 · 6 · line(accent 92%) 3 · 6 ·
       <li><b>引导页点「跳过」时用哪个预设？</b><span>本文暂定「纯粹播放」。也可以用「看番」，更贴近 NipaPlay 的主要用户。老用户升级时按旧配置推断。</span></li>
       <li><b>原来引导里的「按需设置」放到哪里？</b><span>引导只有四步，媒体库要的文件夹、账号同步要的登录、网络媒体源要的服务器都不在引导里问。可以在第一次打开对应页面时问（每一项都能「稍后」），也可以在完成页列出来。</span></li>
       <li><b>下载器保留为内置模块，还是改成插件？</b><span>改成插件（对接 qBittorrent / aria2 的接口）可以从安装包里去掉 BT 引擎，但功能会变成依赖外部下载器。</span></li>
-      <li><b>弹幕引擎和播放内核收敛到几个？</b><span>建议弹幕保留「默认 + 兼容」两个，播放内核保留 liberika + libmpv。</span></li>
+      <li><b>弹幕引擎收敛到几个？</b><span>建议保留「默认 + 兼容」两个。播放内核已定（2026-10-21）：只用 liberika，弹幕也由它渲染。</span></li>
       <li><b>插件脚本语言：JavaScript（QuickJS）还是 Lua？</b></li>
       <li><b>主题色要不要跟着新图标走？</b><span>已经加了第四种缎带粉，就是 Erika 图标帽子的颜色。绯红、群青、荧绿还是 NipaPlay 图标的三种纯色，要不要换掉还没定。如果允许自定义主题色，建议只能选饱和度 ≥ 85% 的颜色，保持「纯色」的调性。</span></li>
       <li><b>bern 能不能提供画框和动效需要的能力？</b><span>第 02 章列的视频层、变换与弹簧、联动、共享元素快照和文字行框，决定画框和第 09 章的动效能不能完整实现。</span></li>
