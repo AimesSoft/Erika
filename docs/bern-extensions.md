@@ -72,6 +72,11 @@
 | 63 | 分体开关按钮显示并改变引擎状态 | 播放器的「弹幕」分体按钮：开关就是引擎里的「显示弹幕」，liberika 据此显示或隐藏弹幕 | 已完成（2026-10-21）：`SplitButton` 与 `Switch` 一样可写 `checked: app.x => app.set_x(app.x)`，六个目标的生成器改用受控写法，GTK 与 WinUI 3 运行时改收 `Model`。编译器与各后端生成测试通过，GTK 运行时在 macOS 上类型检查；macOS 上经 `ui set-bool` 操作分体按钮实测弹幕关开。GTK、WinUI 3 未在实机运行 |
 | 64 | 只在鼠标停在画面上时隐藏控件 | 播放时鼠标停在画面上 1 秒后控件隐藏（进入看片状态）；鼠标在控件、画面以外或移出窗口时控件不隐藏 | 已完成（2026-10-21，macOS 与 Web）：元素的 `idle_area: 秒数`（静置区），Erika 的画面写 `idle_area: 1`，窗口的 `idle_after: 3` 继续管触屏与遥控器。iOS、tvOS 没有鼠标，不受影响；Compose、GTK、WinUI 3 未实现，构建时警告，仍按原来的静置 |
 | 65 | 发送后清空输入框、交出焦点 | 发弹幕：回车或点「发送」后输入框清空，焦点回到窗口，控件能照常隐藏，空格等播放快捷键重新可用（此前焦点留在输入框，静置判定当作正在打字，控件一直显示） | 已完成（2026-10-21）：`TextInput(submit: clear)` 与 `Button(clears: draft.x)`，六个目标生成的动作后清空草稿，SwiftUI 与 Web 同时交出焦点。macOS 上经 `ui submit` 与 `ui activate` 实测清空；交出焦点待手动确认 |
+| 66 | 引擎在别处做的工作回到状态里 | 登录弹弹play、取新番与番剧详情、匹配视频与取弹幕都是网络请求，不能在命令里等；做完要更新页面 | 已完成（2026-10-21）：命令把工作交给别的线程，完成后用 `bern::wake::waker()` 取得的 `Waker` 唤醒引擎，宿主在引擎线程上调用引擎的 `wake` 再发布状态；由模块组成的应用依次唤醒外壳与开着的模块，启动时先唤醒一次。浏览器没有线程，工作就地执行后唤醒。单元测试覆盖唤醒与宿主停止后的 `Waker`；macOS 上经设置的登录表单实测：请求在后台完成后页面显示错误 |
+| 67 | 应用的数据与缓存文件夹 | 数据库放数据文件夹，弹弹play 与 bangumi-data 的副本和视频截图放缓存文件夹，清缓存不会丢观看记录 | 已完成（2026-10-21）：`bern::storage::data_dir()` 与 `cache_dir()`，各平台按规范：macOS / iOS 的 Application Support 与 Caches，Windows 的 LOCALAPPDATA，Linux 的 XDG_DATA_HOME / XDG_CACHE_HOME，tvOS 都在 Caches，Android 由宿主交出 files 文件夹，浏览器没有。按平台的路径有单元测试；macOS 上实测数据库建在 Application Support、截图在 Caches |
+| 68 | 系统钥匙串 | 弹弹play 的登录令牌不能写进应用的文件 | 已完成（2026-10-21）：`bern::secrets::read / write / delete`，macOS 与 iOS 用钥匙串，Windows 用凭据管理器，Linux 用 Secret Service（构建需要 dbus）。macOS 上实测写入、读取、删除；Windows 通过类型检查；Linux、tvOS、Android、浏览器未实现 |
+| 69 | 现在与本地时区 | 新番日历与今日时间轴要知道今天是哪天、现在几点、播出时刻在本地是几点 | 已完成（2026-10-21）：`bern::date::now()` 给出 UTC 秒数和本地时区偏移，原生取系统时钟与时区，浏览器取页面的 `Date.now()` 与时区偏移。浏览器版实测日期正确 |
+| 70 | 模块读本地文件路径 | 媒体库扫描文件夹要把选到的 `file:` 地址换成路径、把找到的视频路径换回地址 | 已完成（2026-10-21）：`bern` 重新导出 `bern_command::files`（`file_path`、`name`），配合已有的 `MediaSource::file`。扫描在 macOS 上实测 |
 
 ## 图标菜单尺寸（2026-10-14）
 

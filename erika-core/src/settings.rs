@@ -206,6 +206,12 @@ impl erika::Queries for ErikaEngine {
         let f = &self.state.features;
         let entries = [
             (
+                SettingsPage::Account,
+                "账号",
+                "account 弹弹play 登录 退出 用户名 密码 dandanplay sign in login",
+                true,
+            ),
+            (
                 SettingsPage::General,
                 "通用",
                 "general 启动 语言 更新 language startup update",

@@ -9,7 +9,10 @@ publish = false
 [dependencies]
 bern.workspace = true
 erika-protocol.workspace = true
+erika-store.workspace = true
+erika-dandanplay.workspace = true
 erika-anime-protocol = { path = "../modules/anime/protocol" }
+erika-library-protocol = { path = "../modules/library/protocol" }
 
 # liberika plays where Bern hosts it as the media kernel.
 [target.'cfg(target_os = "macos")'.dependencies]

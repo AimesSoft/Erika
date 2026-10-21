@@ -139,18 +139,12 @@ impl ErikaEngine {
         let Some(kernel) = self.kernel() else {
             return;
         };
-        let dir = std::env::temp_dir().join("erika-stills");
-        let run = std::process::id().to_string();
+        let dir = history::stills_dir();
         if self.stills == 0 {
-            // Earlier runs' pictures: nothing lists them any more.
-            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-                if !entry.file_name().to_string_lossy().starts_with(&format!("{run}-")) {
-                    let _ = std::fs::remove_file(entry.path());
-                }
-            }
+            history::forget_stills(&self.db, &self.run);
         }
         self.stills += 1;
-        let path = dir.join(format!("{run}-{}.png", self.stills));
+        let path = dir.join(format!("{}{}.png", self.run, self.stills));
         kernel.capture(&path, Some(480));
         self.still_wanted = Some(path);
     }
@@ -263,6 +257,7 @@ impl ErikaEngine {
             if let Some(kernel) = self.kernel() {
                 self.follow(kernel.playback());
             }
+            self.save_history_now_and_then();
             return;
         }
         if self.state.paused {
@@ -306,6 +301,7 @@ impl ErikaEngine {
             && self.still_wanted.as_ref() == Some(still)
         {
             self.state.still = MediaSource::file(still);
+            self.still_path = Some(still.clone());
             self.still_wanted = None;
         }
         let duration = playback.duration.unwrap_or(0.0).max(0.0);
@@ -443,7 +439,7 @@ mod tests {
 
     fn playing() -> ErikaEngine {
         let mut e = ErikaEngine::default();
-        e.play("葬送的芙莉莲".into(), 4, still(), 0.35).unwrap();
+        e.play("葬送的芙莉莲".into(), 4, still(), 0.35, MediaSource::new("file:///Videos/frieren-04.mkv")).unwrap();
         e
     }
     #[test]
@@ -628,8 +624,57 @@ mod tests {
         kernel.playback.lock().unwrap().still = Some(path.clone().into());
         e.player_tick().unwrap();
         assert_eq!(e.state.still, MediaSource::file(&path));
+        // The recent videos show it while it is there.
+        std::fs::create_dir_all(std::path::Path::new(&path).parent().unwrap()).unwrap();
+        std::fs::write(&path, b"png").unwrap();
         e.return_to_frame().unwrap();
         assert_eq!(e.state.recents[0].still, MediaSource::file(&path));
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn recent_videos_and_where_each_file_stopped_are_kept() {
+        let (mut e, kernel) = with_kernel();
+        assert!(e.state.recents.is_empty());
+        assert_eq!(e.return_to_frame().unwrap_err().code, "nothing_playing");
+        assert_eq!(e.continue_last().unwrap_err().code, "no_such_recent");
+        let dir = std::env::temp_dir().join(format!("erika-history-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["one", "two", "three", "four"] {
+            std::fs::write(dir.join(format!("{name}.mkv")), name).unwrap();
+        }
+        let play = |e: &mut ErikaEngine, name: &str, position: f64| {
+            e.open_file(MediaSource::file(dir.join(name))).unwrap();
+            *kernel.playback.lock().unwrap() =
+                Playback { loaded: true, playing: true, position, duration: Some(1440.0), ..Playback::default() };
+            e.player_tick().unwrap();
+            e.return_to_frame().unwrap();
+        };
+        for name in ["one.mkv", "two.mkv", "three.mkv", "four.mkv"] {
+            play(&mut e, name, 600.0);
+        }
+        // The newest first, and no more than three.
+        let names: Vec<_> = e.state.recents.iter().map(|recent| recent.name.as_str()).collect();
+        assert_eq!(names, ["four.mkv", "three.mkv", "two.mkv"]);
+        assert_eq!(e.state.recents[0].progress, 600.0 / 1440.0);
+        assert_eq!(e.state.recents[0].remaining, 840.0);
+        // Played again, it picks up where it stopped and moves to the front.
+        kernel.calls();
+        e.play_recent("two.mkv".into()).unwrap();
+        assert_eq!(e.state.elapsed, 600.0);
+        assert!(kernel.calls().iter().any(|call| call.starts_with("open ") && call.ends_with(" 600")));
+        e.return_to_frame().unwrap();
+        assert_eq!(e.state.recents[0].name, "two.mkv");
+        // A copy of a file is the same file: it picks up there too.
+        std::fs::write(dir.join("copy.mkv"), "two").unwrap();
+        kernel.calls();
+        e.open_file(MediaSource::file(dir.join("copy.mkv"))).unwrap();
+        assert_eq!(e.state.elapsed, 600.0);
+        e.close_player().unwrap();
+        assert_eq!(e.play_recent("gone.mkv".into()).unwrap_err().code, "no_such_recent");
+        e.continue_last().unwrap();
+        assert_eq!(e.state.title, "copy");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -643,8 +688,8 @@ mod tests {
         let call = kernel.calls().pop().unwrap();
         assert!(call.ends_with("/Pictures/Erika/a_b.mkv 01-02-05.png None"), "{call}");
         assert_eq!(e.state.notice, Some(Notice::ScreenshotSaved { file: "a_b.mkv 01-02-05.png".into() }));
-        // Sample episodes have no picture.
-        e.play("葬送的芙莉莲".into(), 4, still(), 0.35).unwrap();
+        // A folder plays nothing yet, so there is no picture to save.
+        e.open_folder(MediaSource::new("file:///Videos/")).unwrap();
         e.screenshot().unwrap();
         assert_eq!(e.state.notice, Some(Notice::ScreenshotPending));
     }
@@ -721,17 +766,19 @@ mod tests {
     }
 
     #[test]
-    fn sample_episodes_and_magnet_links_still_simulate() {
+    fn episodes_play_their_files_and_magnet_links_still_simulate() {
         let (mut e, kernel) = with_kernel();
         e.open_link("magnet:?xt=urn:btih:abc".into()).unwrap();
         assert!(!e.state.video);
-        e.play("葬送的芙莉莲".into(), 4, still(), 0.35).unwrap();
-        assert!(!e.state.video);
         assert!(kernel.calls().is_empty());
-        e.open_link("https://example.com/a.mp4".into()).unwrap();
+        // An episode the user has no file of plays nothing and says so.
+        e.close_player().unwrap();
+        e.play("葬送的芙莉莲".into(), 4, still(), 0.35, MediaSource::new("")).unwrap();
+        assert!(!e.state.playing);
+        assert_eq!(e.state.notice, Some(Notice::NoEpisodeFile));
+        e.play("葬送的芙莉莲".into(), 4, still(), 0.35, MediaSource::new("file:///Videos/frieren-04.mkv")).unwrap();
         assert!(e.state.video);
-        e.play("葬送的芙莉莲".into(), 4, still(), 0.35).unwrap();
-        assert!(!e.state.video);
-        assert_eq!(kernel.calls().last().unwrap(), "close");
+        assert_eq!(e.state.subtitle, PlayingNote::Episode { episode: 4 });
+        assert!(kernel.calls().contains(&"open file:///Videos/frieren-04.mkv 0".to_string()));
     }
 }

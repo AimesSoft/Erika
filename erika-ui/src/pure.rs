@@ -132,7 +132,9 @@ pub fn pure_recents(app: erika::Client) -> impl View {
                     }
                 } => app.play_recent(recent.name)
             }
-            // `.i-key`: the button with its key (`kbd`) after the words.
+            // `.i-key`: the button with its key (`kbd`) after the words,
+            // once something played.
+            if app.has_recents {
             Button(id: continue_last, label: tr! { "zh-Hans" => "继续上次", "en" => "Continue" }, shape: capsule, height: 32, shortcut: "space", appear: recent_in, appear_delay: 0.16) {
                 Row(gap: 6, align: center) {
                     Label(title: tr! { "zh-Hans" => "继续上次", "en" => "Continue" }, icon: "play.fill", display: icon, font_size: 11)
@@ -146,6 +148,7 @@ pub fn pure_recents(app: erika::Client) -> impl View {
                     }
                 }
             } => app.continue_last()
+            }
         }
     }
 }
@@ -257,8 +260,10 @@ pub fn phone_pure_page(app: erika::Client, #[session] draft: ErikaDraft, #[sessi
                         Button(id: phone_pure_open_folder, label: tr! { "zh-Hans" => "打开文件夹", "en" => "Open Folder" }, width: fill, shape: capsule, height: 32, pick: pure.folder, files: "folder") => app.open_folder(pure.folder)
                         Button(id: phone_pure_open_link, label: tr! { "zh-Hans" => "打开链接", "en" => "Open Link" }, width: fill, shape: capsule, height: 32) => app.show_link_prompt(true)
                     }
-                    Canvas(height: 10)
-                    Button(id: phone_continue_last, label: tr! { "zh-Hans" => "继续上次", "en" => "Continue" }, icon: "play.fill", width: fill, shape: capsule, height: 32) => app.continue_last()
+                    if app.has_recents {
+                        Canvas(height: 10)
+                        Button(id: phone_continue_last, label: tr! { "zh-Hans" => "继续上次", "en" => "Continue" }, icon: "play.fill", width: fill, shape: capsule, height: 32) => app.continue_last()
+                    }
                     Canvas(height: 10)
                     // `.x-mut`, 2 points in.
                     Row(gap: 0, padding_x: 2) {
@@ -268,6 +273,7 @@ pub fn phone_pure_page(app: erika::Client, #[session] draft: ErikaDraft, #[sessi
                 }
             }
             // `.c-list` under its label (`.c-glabel`): the picture 72 wide.
+            if app.has_recents {
             Section(title: tr! { "zh-Hans" => "最近播放", "en" => "Recently Played" }, padding_x: 14, padding_y: 6) {
                 ForEach(items: app.recents, key: name) |recent| {
                     Button(id: phone_recent, label: recent.name) {
@@ -293,6 +299,7 @@ pub fn phone_pure_page(app: erika::Client, #[session] draft: ErikaDraft, #[sessi
                         }
                     } => app.play_recent(recent.name)
                 }
+            }
             }
             // Room under the list for the mini player floating over the
             // page's foot, so the last row can scroll above it.

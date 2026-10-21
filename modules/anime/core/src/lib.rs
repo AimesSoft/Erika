@@ -1,373 +1,301 @@
-//! Engine of the anime module. In this first phase the shows are the
-//! design's sample data; asking to play only tells the shell's player.
+//! Engine of the anime module. The season's anime come from dandanplay,
+//! with the airing times of bangumi-data; the details of a show from
+//! dandanplay too; what is being watched from the app's database, where the
+//! shell links the videos it plays to their episodes. Requests run on other
+//! threads and come back through `wake`; what was fetched last is kept in
+//! the cache folder, so the pages show it at once on the next start.
+
+mod clock;
+mod schedule;
+mod season;
+mod shows;
+mod timeline;
 
 use bern::CommandError;
-use bern::date::CalendarDate;
 use bern::media::MediaSource;
-use bern::resources::Resources;
+use clock::Clock;
 use erika_anime_protocol::anime::{
-    self, Airing, BackTo, Broadcast, BroadcastDay, Episode, EpisodeNote, EpisodeTitle, Hour,
-    NextAction, Show, State, Tag, WatchStatus, Watching,
+    self, BackTo, NextAction, Show, State, WatchStatus,
 };
+use erika_dandanplay::{Details, Intro};
+use schedule::Schedule;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
-/// The sample shows of the design: id, title, poster, episodes, watched,
-/// rating, tags. Show 100 has no poster, only a still.
-const SHOWS: &[(i64, &str, i64, i64, i64, f64, &[&str])] = &[
-    (1, "寒蝉鸣泣之时 解", 1, 24, 1, 8.4, &["悬疑", "推理"]),
-    (
-        2,
-        "只有神知道的世界 女神篇",
-        2,
-        12,
-        11,
-        7.9,
-        &["恋爱", "喜剧"],
-    ),
-    (3, "【我推的孩子】 第三季", 3, 11, 2, 7.8, &["偶像", "剧情"]),
-    (4, "超时空辉夜姬！", 4, 1, 0, 7.7, &["科幻", "音乐"]),
-    (
-        8,
-        "剧场版 魔法少女小圆",
-        8,
-        1,
-        0,
-        8.4,
-        &["魔法少女", "剧情"],
-    ),
-    (11, "鬼灭之刃 无限城篇", 11, 1, 0, 0.0, &["战斗"]),
-    (5, "咒术回战 死灭回游", 5, 12, 3, 7.6, &["战斗", "奇幻"]),
-    (
-        6,
-        "为美好的世界献上祝福！3",
-        6,
-        11,
-        11,
-        7.9,
-        &["喜剧", "异世界"],
-    ),
-    (7, "葬送的芙莉莲 第二季", 7, 10, 3, 8.4, &["奇幻", "冒险"]),
-    (9, "Fate/strange Fake", 9, 13, 3, 8.0, &["战斗", "奇幻"]),
-    (10, "地狱乐 第二季", 10, 12, 2, 6.7, &["战斗", "历史"]),
-    (12, "寒蝉鸣泣之时 礼", 12, 5, 0, 7.3, &["悬疑"]),
-    (
-        13,
-        "魔都精兵的奴隶 第二季",
-        13,
-        12,
-        0,
-        6.1,
-        &["战斗", "奇幻"],
-    ),
-    (
-        14,
-        "现在多闻君是哪一面！？",
-        14,
-        12,
-        0,
-        5.8,
-        &["恋爱", "喜剧"],
-    ),
-    (
-        15,
-        "优雅贵族的休假指南。",
-        15,
-        12,
-        0,
-        4.9,
-        &["异世界", "日常"],
-    ),
-    (16, "厄里斯的圣杯", 16, 12, 0, 5.4, &["悬疑", "历史"]),
-    (100, "只有我不存在的城市", 0, 12, 0, 8.6, &["悬疑"]),
-];
+/// The most shows the stage and the rows beside it hold.
+const WATCHING: usize = 5;
+/// The season's list as dandanplay gave it last, in the cache folder.
+const SEASON_CACHE: &str = "dandanplay-season.json";
 
-/// Shows being watched: id, episode, progress, minutes left.
-const WATCHING: &[(i64, i64, f64, i64)] = &[
-    (100, 1, 0.38, 15),
-    (7, 4, 0.35, 16),
-    (3, 3, 0.2, 19),
-    (5, 4, 0.8, 4),
-];
-
-/// Today's shows and when they air, in hours after midnight of today; the
-/// small hours count past 24.
-const AIRING: &[(i64, f64)] = &[
-    (13, 18.5),
-    (14, 19.75),
-    (15, 21.0),
-    (16, 22.25),
-    (9, 23.5),
-    (12, 24.5),
-    (2, 25.5),
-];
-
-/// "Now" on the timeline: 22:40.
-const NOW: f64 = 22.0 + 40.0 / 60.0;
-
-/// Seconds after midnight of an hour of the timeline, the small hours
-/// back on the clock.
-fn clock_time(hour: f64) -> i64 {
-    (hour * 3600.0).round() as i64 % 86_400
-}
-
-/// Keep the visual fixture identical to `design/next-core.js`: Monday,
-/// October 12, at 22:40. It is deliberately not the computer's live date.
-const TODAY: (i64, i64, i64) = (2026, 10, 12);
-
-fn week() -> Vec<BroadcastDay> {
-    let counts = [7, 5, 6, 4, 6, 8, 7];
-    let hours = [18.0, 19.5, 21.0, 22.0, 23.0, 23.5, 24.5, 25.0 + 5.0 / 60.0];
-    (0..7)
-        .map(|day| {
-            let shows: Vec<_> = (0..counts[day])
-                .map(|index| {
-                    let (id, hour, aired) = if day == 0 {
-                        let (id, hour) = AIRING[index];
-                        (id, hour, hour <= NOW)
-                    } else {
-                        (((day * 5 + index * 3) % 16 + 1) as i64, hours[index], false)
-                    };
-                    let show = show(id).expect("calendar shows are sample shows");
-                    Broadcast {
-                        id,
-                        title: show.title,
-                        poster: show.poster,
-                        time: clock_time(hour),
-                        episode: (show.watched + 1).max(1),
-                        aired,
-                        tonight: day == 0,
-                    }
-                })
-                .collect();
-            BroadcastDay {
-                id: day as i64,
-                date: CalendarDate::new(TODAY.0, TODAY.1, TODAY.2 + day as i64),
-                count: shows.len() as i64,
-                today: day == 0,
-                tomorrow: day == 1,
-                day_after: day == 2,
-                preview: shows.iter().take(4).cloned().collect(),
-                remaining: shows.len().saturating_sub(4) as i64,
-                shows,
-            }
-        })
-        .collect()
-}
-
-const SUMMARY: &str = "这里是来自 Bangumi 的番剧简介。原型里所有番剧共用这一段示意文字：旅程继续向前，新的同伴和旧的回忆交织在一起，每一集都把故事往终点推近一点。";
-
-fn picture(name: &str) -> MediaSource {
-    MediaSource::resource(&Resources::host(), name).unwrap_or_else(|_| MediaSource::new(""))
-}
-
-fn poster(number: i64) -> MediaSource {
-    if number == 0 {
-        picture("design/assets/still1.jpg")
-    } else {
-        picture(&format!("design/assets/posters/p{number}.jpg"))
-    }
-}
-
-fn show(id: i64) -> Option<Show> {
-    let &(id, title, number, episodes, watched, rating, tags) =
-        SHOWS.iter().find(|(show, ..)| *show == id)?;
-    Some(Show {
-        id,
-        title: title.into(),
-        poster: poster(number),
-        episodes,
-        watched,
-        rating,
-        movie: matches!(id, 4 | 8 | 11),
-        premiere: CalendarDate::new(2026, 1, 1),
-        tags: tags
-            .iter()
-            .map(|tag| Tag {
-                name: (*tag).into(),
-            })
-            .collect(),
-        summary: SUMMARY.into(),
-        status: status(watched, episodes),
-    })
-}
-
-fn status(watched: i64, episodes: i64) -> WatchStatus {
-    match watched {
-        0 => WatchStatus::Want,
-        watched if watched >= episodes => WatchStatus::Watched,
-        _ => WatchStatus::Watching,
-    }
-}
-
-fn watching(&(id, episode, progress, left): &(i64, i64, f64, i64)) -> Watching {
-    let show = show(id).expect("watched shows are sample shows");
-    Watching {
-        id,
-        title: show.title,
-        still: show.poster,
-        episode,
-        left,
-        progress,
-    }
-}
-
-/// The timeline spans 18:00 to 02:00 (hour 26): where an hour stands, as
-/// a fraction of those eight hours. How far the track runs past the page
-/// is the page's to lay out.
-const FIRST_HOUR: f64 = 18.0;
-const HOURS: f64 = 8.0;
-
-fn timeline(hour: f64) -> f64 {
-    (hour - FIRST_HOUR) / HOURS
-}
-
-fn hours() -> Vec<Hour> {
-    (0..=HOURS as i64)
-        .map(|step| {
-            let hour = FIRST_HOUR as i64 + step;
-            Hour {
-                time: clock_time(hour as f64),
-                at: timeline(hour as f64),
-            }
-        })
-        .collect()
-}
-
-/// The film of a show: twelve cells at most; the episodes reached show a
-/// still, the others their number.
-fn episodes(show: &Show) -> Vec<Episode> {
-    let next = (show.watched + 1).min(show.episodes);
-    (1..=show.episodes.min(12))
-        .map(|number| {
-            let watched = number <= show.watched;
-            let current = number == next && show.watched < show.episodes;
-            Episode {
-                number,
-                title: match (current, show.watched) {
-                    (true, 0) => EpisodeTitle::Start { number },
-                    (true, _) => EpisodeTitle::Continue { number },
-                    _ => EpisodeTitle::Plain { number },
-                },
-                note: if watched {
-                    EpisodeNote::Watched
-                } else if current && show.watched > 0 {
-                    EpisodeNote::Left { minutes: 16 }
-                } else {
-                    EpisodeNote::Length { minutes: 24 }
-                },
-                pictured: watched || current,
-                still: show.poster.clone(),
-                numeral: format!("{number:02}"),
-                watched,
-                next: current,
-                progress: if current && show.watched > 0 {
-                    0.35
-                } else {
-                    0.0
-                },
-            }
-        })
-        .collect()
+/// What the requests came back with.
+enum Done {
+    Season(Result<Vec<Intro>, erika_dandanplay::Error>),
+    Schedule(i64, Vec<schedule::Slot>),
+    Details(i64, Result<Details, erika_dandanplay::Error>),
 }
 
 pub struct AnimeEngine {
     state: State,
+    db: erika_store::Db,
+    season: Vec<Intro>,
+    schedule: Schedule,
+    details: HashMap<i64, Details>,
+    watching: Vec<erika_store::Watching>,
+    /// What the user chose for a show here: where they are with it, and
+    /// its score.
+    statuses: HashMap<i64, WatchStatus>,
+    ratings: HashMap<i64, f64>,
+    inbox: Arc<Mutex<Vec<Done>>>,
+    /// Whether the first wake, as the app starts, has come.
+    started: bool,
 }
 
 impl Default for AnimeEngine {
     fn default() -> Self {
-        let mut watching = WATCHING.iter().map(watching);
-        let stage = watching.next().expect("someone is watching");
-        let aired = AIRING.iter().filter(|(_, hour)| *hour <= NOW).count();
-        Self {
+        let signed_in = erika_dandanplay::token().is_some();
+        let db = erika_store::Db::open();
+        let mut engine = Self {
+            season: if signed_in { cached_season() } else { Vec::new() },
+            schedule: Schedule::cached().unwrap_or_default(),
+            watching: db.watching(WATCHING),
+            db,
+            details: HashMap::new(),
+            statuses: HashMap::new(),
+            ratings: HashMap::new(),
+            inbox: Arc::default(),
+            started: false,
             state: State {
-                today: CalendarDate::new(TODAY.0, TODAY.1, TODAY.2),
-                stage,
-                also: watching.collect(),
-                airing: AIRING
-                    .iter()
-                    .map(|&(id, hour)| {
-                        let show = show(id).expect("airing shows are sample shows");
-                        Airing {
-                            id,
-                            title: show.title,
-                            poster: show.poster,
-                            time: clock_time(hour),
-                            aired: hour <= NOW,
-                            at: timeline(hour),
-                        }
-                    })
-                    .collect(),
-                hours: hours(),
-                now_at: timeline(NOW),
-                now: clock_time(NOW),
-                aired_count: aired as i64,
-                later_count: (AIRING.len() - aired) as i64,
-                week: week(),
+                signed_in,
+                loading: false,
+                error: String::new(),
+                season_label: String::new(),
+                has_stage: false,
+                has_airing: false,
+                today: bern::date::CalendarDate::new(1970, 1, 1),
+                stage: shows::nothing_watched(),
+                also: Vec::new(),
+                airing: Vec::new(),
+                breaks: Vec::new(),
+                now_at: 0.0,
+                track_width: timeline::FLOOR,
+                track_wide: timeline::FLOOR_WIDE,
+                now: 0,
+                aired_count: 0,
+                later_count: 0,
+                week: Vec::new(),
                 selected_day: 0,
                 opened_from_schedule: false,
                 opened: 0,
-                show: show(100).expect("the stage's show is a sample show"),
+                show: shows::untitled(),
                 episodes: Vec::new(),
                 next_episode: 1,
                 next: NextAction::Start,
                 back: BackTo::Home,
             },
+        };
+        engine.show_season();
+        engine.show_watching();
+        engine
+    }
+}
+
+fn cached_season() -> Vec<Intro> {
+    bern::storage::cache_dir()
+        .and_then(|dir| std::fs::read(dir.join(SEASON_CACHE)).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn keep_season(season: &[Intro]) {
+    if let (Some(dir), Ok(bytes)) = (bern::storage::cache_dir(), serde_json::to_vec(season)) {
+        let _ = std::fs::write(dir.join(SEASON_CACHE), bytes);
+    }
+}
+
+/// Run `work` on another thread; its result waits in `inbox`, and the
+/// engine is woken to take it in. The browser has no threads: there the
+/// work runs at once.
+fn in_background(inbox: &Arc<Mutex<Vec<Done>>>, work: impl FnOnce() -> Option<Done> + Send + 'static) {
+    let inbox = Arc::clone(inbox);
+    let waker = bern::wake::waker();
+    let run = move || {
+        if let Some(done) = work() {
+            inbox.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(done);
+            if let Some(waker) = waker {
+                waker.wake();
+            }
         }
+    };
+    if cfg!(target_arch = "wasm32") {
+        run();
+    } else {
+        std::thread::spawn(run);
     }
 }
 
 impl AnimeEngine {
-    fn find(&self, id: i64) -> Result<Show, CommandError> {
-        show(id).ok_or_else(|| CommandError::new("unknown_show", format!("no show {id}")))
+    /// The week and today's timeline, as of now.
+    fn show_season(&mut self) {
+        let season = season::build(&self.season, &self.schedule, &Clock::now());
+        let state = &mut self.state;
+        state.today = season.today;
+        state.season_label = season.label;
+        state.week = season.week;
+        state.has_airing = !season.timeline.groups.is_empty();
+        state.airing = season.timeline.groups;
+        state.breaks = season.timeline.breaks;
+        state.now_at = season.timeline.now_at;
+        state.track_width = season.timeline.width;
+        state.track_wide = season.timeline.wide;
+        state.now = season.now;
+        state.aired_count = season.aired;
+        state.later_count = season.later;
     }
 
-    fn watching(&self, id: i64) -> Option<&Watching> {
-        std::iter::once(&self.state.stage)
-            .chain(&self.state.also)
-            .find(|watching| watching.id == id)
+    /// The stage and the rows beside it, from what was played last.
+    fn show_watching(&mut self) {
+        let mut rows = self.watching.iter().map(shows::watching);
+        let stage = rows.next();
+        self.state.has_stage = stage.is_some();
+        self.state.stage = stage.unwrap_or_else(shows::nothing_watched);
+        self.state.also = rows.collect();
+    }
+
+    /// Ask dandanplay for the season's list, and bangumi-data for the
+    /// times when what is kept of them is old.
+    fn refresh(&mut self) {
+        if !self.state.signed_in {
+            return;
+        }
+        self.state.loading = true;
+        self.state.error.clear();
+        in_background(&self.inbox, || Some(Done::Season(erika_dandanplay::shin())));
+        if erika_store::now() - self.schedule.fetched > schedule::STALE_AFTER {
+            #[cfg(not(target_arch = "wasm32"))]
+            in_background(&self.inbox, || {
+                let now = erika_store::now();
+                match schedule::fetch() {
+                    Ok(json) => Some(Done::Schedule(now, schedule::parse(&json, now))),
+                    Err(error) => {
+                        eprintln!("erika: bangumi-data: {error}");
+                        None
+                    }
+                }
+            });
+        }
+    }
+
+    /// The show `id` as far as it is known: its details, the season's list,
+    /// or what is being watched.
+    fn find(&self, id: i64) -> Result<Show, CommandError> {
+        let files = self.db.episode_files(id);
+        let show = if let Some(details) = self.details.get(&id) {
+            shows::from_details(details, &files)
+        } else if let Some(intro) = self.season.iter().find(|intro| intro.anime_id == id) {
+            shows::from_intro(intro, self.state.today)
+        } else if let Some(watching) = self.watching.iter().find(|watching| watching.anime.dandanplay_id == id) {
+            shows::from_watching(watching, self.state.today)
+        } else if let Some(anime) = self.db.anime(id) {
+            shows::from_anime(&anime, self.state.today)
+        } else {
+            return Err(CommandError::new("unknown_show", format!("no show {id}")));
+        };
+        Ok(Show {
+            status: self.statuses.get(&id).cloned().unwrap_or(show.status),
+            rating: self.ratings.get(&id).copied().unwrap_or(show.rating),
+            ..show
+        })
+    }
+
+    /// Fill the open show with what is known of it now.
+    fn show_opened(&mut self) {
+        let id = self.state.opened;
+        if id == 0 {
+            return;
+        }
+        let Ok(show) = self.find(id) else {
+            return;
+        };
+        let files = self.db.episode_files(id);
+        let (episodes, next) = shows::film(self.details.get(&id), &show, &files);
+        self.state.next_episode = next;
+        self.state.next = if show.watched == 0 { NextAction::Start } else { NextAction::Continue { episode: next } };
+        self.state.episodes = episodes;
+        self.state.show = show;
+    }
+
+    fn take_done(&mut self) {
+        let done: Vec<Done> = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+        for done in done {
+            match done {
+                Done::Season(Ok(season)) => {
+                    self.state.loading = false;
+                    for intro in &season {
+                        self.db.remember_anime(&erika_store::Anime {
+                            dandanplay_id: intro.anime_id,
+                            title: intro.anime_title.clone(),
+                            image: intro.image_url.clone(),
+                        });
+                    }
+                    keep_season(&season);
+                    self.season = season;
+                    self.show_season();
+                }
+                Done::Season(Err(error)) => {
+                    self.state.loading = false;
+                    self.state.error = error.message;
+                }
+                Done::Schedule(fetched, slots) => {
+                    schedule::keep(fetched, &slots);
+                    self.schedule = Schedule::new(fetched, slots);
+                    self.show_season();
+                }
+                Done::Details(id, Ok(details)) => {
+                    self.db.remember_anime(&erika_store::Anime {
+                        dandanplay_id: id,
+                        title: details.anime_title.clone(),
+                        image: details.image_url.clone(),
+                    });
+                    self.details.insert(id, details);
+                    if self.state.opened == id {
+                        self.show_opened();
+                    }
+                }
+                Done::Details(id, Err(error)) => {
+                    eprintln!("erika: details of {id}: {}", error.message);
+                }
+            }
+        }
+    }
+
+    fn watching_of(&self, id: i64) -> Option<&erika_store::Watching> {
+        self.watching.iter().find(|watching| watching.anime.dandanplay_id == id)
+    }
+
+    /// Ask the shell to play what is being watched of show `id`.
+    fn play_watching(&self, watching: &erika_store::Watching) {
+        let row = shows::watching(watching);
+        anime::emit::play(row.title, row.episode, row.still, row.progress, MediaSource::new(watching.url.clone()));
     }
 }
 
 impl anime::Commands for AnimeEngine {
-    fn open_from_search(&mut self, id: i64) -> Result<(), CommandError> {
-        self.open(id)?;
-        self.state.back = BackTo::Search;
-        Ok(())
-    }
-
-    fn continue_from_search(&mut self, id: i64) -> Result<(), CommandError> {
-        let show = self.find(id)?;
-        anime::emit::play(
-            show.title,
-            (show.watched + 1).min(show.episodes),
-            show.poster,
-            0.0,
-        );
-        Ok(())
-    }
     fn open(&mut self, id: i64) -> Result<(), CommandError> {
-        let show = self.find(id)?;
+        self.find(id)?;
         self.state.opened_from_schedule = false;
         self.state.back = BackTo::Home;
-        self.state.episodes = episodes(&show);
-        let next = (show.watched + 1).min(show.episodes);
-        self.state.next_episode = next;
-        self.state.next = if show.watched == 0 {
-            NextAction::Start
-        } else {
-            NextAction::Continue { episode: next }
-        };
         self.state.opened = id;
-        self.state.show = show;
+        self.state.episodes = Vec::new();
+        self.show_opened();
+        if !self.details.contains_key(&id) && self.state.signed_in {
+            in_background(&self.inbox, move || Some(Done::Details(id, erika_dandanplay::details(id))));
+        }
         Ok(())
     }
 
     fn select_day(&mut self, day: i64) -> Result<(), CommandError> {
         if !(0..7).contains(&day) {
-            return Err(CommandError::new(
-                "unknown_day",
-                format!("no broadcast day {day}"),
-            ));
+            return Err(CommandError::new("unknown_day", format!("no broadcast day {day}")));
         }
         self.state.selected_day = day;
         Ok(())
@@ -391,39 +319,53 @@ impl anime::Commands for AnimeEngine {
         Ok(())
     }
 
+    fn open_from_search(&mut self, id: i64) -> Result<(), CommandError> {
+        self.open(id)?;
+        self.state.back = BackTo::Search;
+        Ok(())
+    }
+
+    fn continue_from_search(&mut self, id: i64) -> Result<(), CommandError> {
+        match self.watching_of(id).cloned() {
+            Some(watching) => {
+                self.play_watching(&watching);
+                Ok(())
+            }
+            None => self.open_from_search(id),
+        }
+    }
+
     fn stage(&mut self, id: i64) -> Result<(), CommandError> {
         let index = self
-            .state
-            .also
+            .watching
             .iter()
-            .position(|watching| watching.id == id)
-            .ok_or_else(|| {
-                CommandError::new("unknown_show", format!("show {id} is not beside the stage"))
-            })?;
-        std::mem::swap(&mut self.state.stage, &mut self.state.also[index]);
+            .skip(1)
+            .position(|watching| watching.anime.dandanplay_id == id)
+            .ok_or_else(|| CommandError::new("unknown_show", format!("show {id} is not beside the stage")))?;
+        self.watching.swap(0, index + 1);
+        self.show_watching();
         Ok(())
     }
 
     fn resume(&mut self, id: i64) -> Result<(), CommandError> {
-        let watching = self.watching(id).ok_or_else(|| {
-            CommandError::new("unknown_show", format!("show {id} is not being watched"))
-        })?;
-        anime::emit::play(
-            watching.title.clone(),
-            watching.episode,
-            watching.still.clone(),
-            watching.progress,
-        );
+        let watching = self
+            .watching_of(id)
+            .cloned()
+            .ok_or_else(|| CommandError::new("unknown_show", format!("show {id} is not being watched")))?;
+        self.play_watching(&watching);
         Ok(())
     }
 
     fn set_status(&mut self, status: WatchStatus) -> Result<(), CommandError> {
+        self.statuses.insert(self.state.show.id, status.clone());
         self.state.show.status = status;
         Ok(())
     }
 
     fn rate(&mut self, score: i64) -> Result<(), CommandError> {
-        self.state.show.rating = score.clamp(1, 10) as f64;
+        let score = score.clamp(1, 10) as f64;
+        self.ratings.insert(self.state.show.id, score);
+        self.state.show.rating = score;
         Ok(())
     }
 
@@ -434,12 +376,41 @@ impl anime::Commands for AnimeEngine {
             .iter()
             .find(|episode| episode.number == number)
             .ok_or_else(|| CommandError::new("unknown_episode", format!("no episode {number}")))?;
-        anime::emit::play(
-            self.state.show.title.clone(),
-            number,
-            episode.still.clone(),
-            0.0,
-        );
+        let file = self
+            .db
+            .episode_files(self.state.show.id)
+            .into_iter()
+            .find(|file| file.episode.number == number);
+        let (source, progress) = match file {
+            Some(file) => (
+                MediaSource::new(file.url),
+                if file.duration > 0.0 { file.position / file.duration } else { 0.0 },
+            ),
+            None => (MediaSource::new(""), 0.0),
+        };
+        anime::emit::play(self.state.show.title.clone(), number, episode.still.clone(), progress, source);
+        Ok(())
+    }
+
+    fn account_changed(&mut self, signed_in: bool) -> Result<(), CommandError> {
+        self.state.signed_in = signed_in;
+        if signed_in {
+            self.refresh();
+        } else {
+            self.season.clear();
+            self.details.clear();
+            self.state.error.clear();
+            self.state.loading = false;
+            keep_season(&[]);
+            self.show_season();
+        }
+        Ok(())
+    }
+
+    fn history_changed(&mut self) -> Result<(), CommandError> {
+        self.watching = self.db.watching(WATCHING);
+        self.show_watching();
+        self.show_opened();
         Ok(())
     }
 }
@@ -448,203 +419,53 @@ impl anime::Engine for AnimeEngine {
     fn state(&self) -> &State {
         &self.state
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use anime::Commands;
-
-    #[test]
-    fn calendar_matches_the_prototype_and_keeps_midnight_in_its_broadcast_day() {
-        let engine = AnimeEngine::default();
-        assert_eq!(engine.state.selected_day, 0);
-        assert_eq!(
-            engine
-                .state
-                .week
-                .iter()
-                .map(|day| day.count)
-                .collect::<Vec<_>>(),
-            [7, 5, 6, 4, 6, 8, 7]
-        );
-        assert_eq!(
-            engine.state.week[1]
-                .shows
-                .iter()
-                .map(|show| show.id)
-                .collect::<Vec<_>>(),
-            [6, 9, 12, 15, 2]
-        );
-        assert_eq!(engine.state.week[5].remaining, 4);
-        for day in &engine.state.week {
-            assert_eq!(day.preview.len(), 4);
-            assert_eq!(
-                day.preview.iter().map(|show| show.id).collect::<Vec<_>>(),
-                day.shows
-                    .iter()
-                    .take(4)
-                    .map(|show| show.id)
-                    .collect::<Vec<_>>()
-            );
-            assert!(
-                day.shows
-                    .iter()
-                    .all(|broadcast| show(broadcast.id).is_some())
-            );
+    /// Requests come back; as the app starts, the season is fetched anew.
+    fn wake(&mut self) {
+        self.take_done();
+        if !self.started {
+            self.started = true;
+            self.refresh();
         }
-        let monday = &engine.state.week[0].shows;
-        assert_eq!(monday.iter().filter(|show| show.aired).count(), 4);
-        assert_eq!(monday[5].time, 30 * 60);
-        assert!(!monday[5].aired && monday[5].tonight);
-        assert!(
-            engine.state.week[1..]
-                .iter()
-                .flat_map(|day| &day.shows)
-                .all(|show| !show.aired && !show.tonight)
-        );
-        let ids: std::collections::HashSet<_> = SHOWS.iter().map(|show| show.0).collect();
-        assert_eq!(
-            ids.len(),
-            SHOWS.len(),
-            "sample shows must have unique identities"
-        );
-    }
-
-    #[test]
-    fn calendar_details_return_to_the_selected_day_and_reject_invalid_commands() {
-        let mut engine = AnimeEngine::default();
-        engine.select_day(5).unwrap();
-        engine.open_scheduled(11).unwrap();
-        assert!(engine.state.opened_from_schedule);
-        assert_eq!(engine.state.back, BackTo::Schedule);
-        assert!(engine.state.show.movie);
-        engine.close().unwrap();
-        assert_eq!(engine.state.opened, 0);
-        assert_eq!(engine.state.selected_day, 5);
-        for day in [-1, 7] {
-            assert_eq!(engine.select_day(day).unwrap_err().code, "unknown_day");
-            assert_eq!(engine.state.selected_day, 5);
-        }
-        engine.open(7).unwrap();
-        assert!(!engine.state.opened_from_schedule);
-        assert_eq!(engine.state.back, BackTo::Home);
-        assert_eq!(engine.open_scheduled(99).unwrap_err().code, "unknown_show");
-        assert!(!engine.state.opened_from_schedule);
-        assert_eq!(engine.state.opened, 7);
-    }
-
-    #[test]
-    fn details_open_on_the_episode_to_watch_next() {
-        let mut engine = AnimeEngine::default();
-        engine.open(7).unwrap();
-        assert_eq!(engine.state.opened, 7);
-        assert_eq!(engine.state.next_episode, 4);
-        assert_eq!(engine.state.episodes[3].title, EpisodeTitle::Continue { number: 4 });
-        assert_eq!(engine.state.episodes.len(), 10);
-        assert!(engine.state.episodes[3].next);
-        engine.close().unwrap();
-        assert_eq!(engine.state.opened, 0);
-        assert_eq!(engine.open(99).unwrap_err().code, "unknown_show");
-    }
-
-    #[test]
-    fn the_timeline_puts_now_between_the_aired_and_the_coming() {
-        let engine = AnimeEngine::default();
-        let aired: Vec<_> = engine
-            .state
-            .airing
-            .iter()
-            .filter(|show| show.at < engine.state.now_at)
-            .collect();
-        assert_eq!(aired.len(), 4);
-        assert_eq!((engine.state.aired_count, engine.state.later_count), (4, 3));
-        assert_eq!(engine.state.now, 22 * 3600 + 40 * 60);
-    }
-
-    #[test]
-    fn a_show_beside_the_stage_takes_its_place() {
-        let mut engine = AnimeEngine::default();
-        engine.stage(7).unwrap();
-        assert_eq!(engine.state.stage.id, 7);
-        assert_eq!(engine.state.also[0].id, 100);
     }
 }
 
 impl anime::Queries for AnimeEngine {
+    /// Shows by name: dandanplay's search while signed in, the season's
+    /// list otherwise; and, among them, what can be continued.
     fn search(&self, text: String, answer: bern::prelude::Answer<anime::SearchResults>) {
-        answer.ok(search_catalog(&text));
-    }
-}
-
-fn search_catalog(text: &str) -> anime::SearchResults {
-    // The prototype's catalogue order and single-letter pinyin aliases.
-    let aliases = [
-        "h", "z", "w", "c", "z", "w", "z", "j", "f", "d", "g", "h", "m", "x", "y", "e",
-    ];
-    let needle = text.trim().to_lowercase();
-    let shows: Vec<Show> = (1..=16)
-        .filter_map(show)
-        .filter(|s| {
-            needle.is_empty()
-                || s.title.to_lowercase().contains(&needle)
-                || aliases[(s.id - 1) as usize] == needle
-        })
-        .take(6)
-        .collect();
-    let continuing: Vec<anime::SearchEpisode> = shows
-        .iter()
-        .filter(|s| s.watched > 0 && s.watched < s.episodes)
-        .take(2)
-        .map(|s| anime::SearchEpisode {
-            id: s.id,
-            title: s.title.clone(),
-            episode: s.watched + 1,
-        })
-        .collect();
-    anime::SearchResults {
-        has_shows: !shows.is_empty(),
-        has_continuing: !continuing.is_empty(),
-        shows,
-        continuing,
+        let text = text.trim().to_string();
+        let today = self.state.today;
+        let watching = self.watching.clone();
+        let local: Vec<Show> = self
+            .season
+            .iter()
+            .filter(|intro| text.is_empty() || intro.anime_title.to_lowercase().contains(&text.to_lowercase()))
+            .take(6)
+            .map(|intro| shows::from_intro(intro, today))
+            .collect();
+        if text.is_empty() || !self.state.signed_in {
+            answer.ok(shows::results(local, &watching));
+            return;
+        }
+        let cancelled = answer.cancellation();
+        let run = move || {
+            if cancelled.is_cancelled() {
+                return;
+            }
+            let shows = match erika_dandanplay::search(&text) {
+                Ok(found) => found.iter().take(6).map(|found| shows::from_found(found, today)).collect(),
+                Err(_) => local,
+            };
+            answer.ok(shows::results(shows, &watching));
+        };
+        if cfg!(target_arch = "wasm32") {
+            run();
+        } else {
+            std::thread::spawn(run);
+        }
     }
 }
 
 #[cfg(test)]
-mod search_tests {
-    use super::*;
-    use erika_anime_protocol::anime::Commands;
-    #[test]
-    fn search_matches_the_prototype_catalogue_and_continuations() {
-        let all = search_catalog("");
-        assert_eq!(
-            all.shows.iter().map(|s| s.id).collect::<Vec<_>>(),
-            vec![1, 2, 3, 4, 5, 6]
-        );
-        assert_eq!(
-            all.continuing.iter().map(|s| s.id).collect::<Vec<_>>(),
-            vec![1, 2]
-        );
-        let frieren = search_catalog("  葬送  ");
-        assert_eq!(frieren.shows[0].id, 7);
-        assert_eq!(frieren.continuing[0].episode, 4);
-        assert_eq!(search_catalog("H").shows.len(), 2);
-        assert_eq!(search_catalog("fate").shows[0].id, 9);
-        assert!(!search_catalog("没有这个番剧").has_shows);
-        assert!(!search_catalog("为美好").has_continuing);
-    }
-    #[test]
-    fn library_movies_open_in_details_and_return_to_the_library() {
-        let mut engine = AnimeEngine::default();
-        for id in [4, 8, 11] {
-            engine.open_from_library(id).unwrap();
-            assert_eq!(engine.state.show.id, id);
-            assert_eq!(engine.state.show.episodes, 1);
-            assert_eq!(engine.state.back, BackTo::Library);
-            assert!(!engine.state.opened_from_schedule);
-        }
-        engine.open(1).unwrap();
-        assert_eq!(engine.state.back, BackTo::Home);
-    }
-
-}
+mod tests;

@@ -1,27 +1,25 @@
-//! Media library, matching design/next-screens.js and next.css.
+//! Media library, matching design/next-screens.js and next.css: the wall
+//! of shows (番剧) and the sources (来源), where folders are added,
+//! browsed, and their videos matched.
 use bern::prelude::*;
-use erika_library_protocol::library::{self, LibraryFilter, LibrarySort, LibrarySource};
+use erika_library_protocol::library::{self, LibraryFilter, LibrarySort};
 use erika_protocol::erika;
+mod sources;
+use sources::{library_sources_page, library_sources_page_props};
 
 #[bern::value]
-pub enum ServerSource {
-    #[label(tr! { "zh-Hans" => "本地", "en" => "Local" })]
-    Local,
-    #[label(tr! { "zh-Hans" => "服务器", "en" => "Servers" })]
-    Server,
+pub enum LibraryTab {
+    #[label(tr! { "zh-Hans" => "番剧", "en" => "Shows" })]
+    Shows,
+    #[label(tr! { "zh-Hans" => "来源", "en" => "Sources" })]
+    Sources,
 }
-#[bern::value]
-pub enum SharedSource {
-    #[label(tr! { "zh-Hans" => "本地", "en" => "Local" })]
-    Local,
-    #[label(tr! { "zh-Hans" => "共享", "en" => "Shared" })]
-    Shared,
-}
+
 #[bern::session]
 pub struct LibraryDraft {
-    pub source: LibrarySource,
-    pub server_source: ServerSource,
-    pub shared_source: SharedSource,
+    pub tab: LibraryTab,
+    /// The source the wall shows; 0 is all of them.
+    pub source: i64,
     pub filter: LibraryFilter,
     pub sort: LibrarySort,
     /// 84 + 0.36 × (200 − 84), as in the desktop prototype.
@@ -35,6 +33,16 @@ pub struct LibraryDraft {
     #[initial(154.48)]
     pub tv_poster_size: f64,
     pub position: i64,
+    /// The folder picked to add.
+    pub folder: MediaSource,
+    /// What is typed while matching: a video's episode, the episode to
+    /// start from by order, the episode the lowest number goes to, and the
+    /// anime searched for.
+    pub number: String,
+    pub start: String,
+    pub align: String,
+    pub search: String,
+    pub anime_open: bool,
 }
 
 #[component]
@@ -47,24 +55,22 @@ pub fn library_page(
         if !app.modules.anime && library.opened > 0 {
             library_preview(library: library)
         } else {
-            Query(id: catalog, query: library.browse(
-                if app.modules.sources && app.modules.remote { draft.source }
-                else if app.modules.sources && draft.server_source == ServerSource::Server { LibrarySource::Server }
-                else if app.modules.remote && draft.shared_source == SharedSource::Shared { LibrarySource::Shared }
-                else { LibrarySource::Local }, draft.filter, draft.sort)) |listing| {
+            if draft.tab == LibraryTab::Sources {
+                library_sources_page(library: library)
+            } else {
+            Query(id: catalog, query: library.browse(if library.several_sources { draft.source } else { 0 }, draft.filter, draft.sort)) |listing| {
                 if window.compact {
-                    library_phone(library: library, app: app, listing: listing)
+                    library_phone(library: library, listing: listing)
                 } else {
                 Column(gap: 0, padding_x: if window.tv { 56.0 } else if window.medium { 24.0 } else { 32.0 }, padding_y: 6, appear: page_in) {
                     Adaptive {
                         Layout(size: expanded) {
                             Row(gap: 12, align: center) {
                                 Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
-                                library_sources(app: app)
+                                library_tabs()
                                 Spacer
                                 library_zoom()
                                 library_sort()
-                                Button(id: manage, label: tr! { "zh-Hans" => "管理", "en" => "Manage" }, icon: "folder", shape: capsule, height: if window.tv { 46 } else { 32 }) => library.manage()
                             }
                         }
                         Layout(size: compact) {
@@ -73,10 +79,9 @@ pub fn library_page(
                                     Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
                                     Spacer
                                     library_sort()
-                                    Button(id: manage_small, label: tr! { "zh-Hans" => "管理", "en" => "Manage" }, icon: "folder", shape: capsule, height: if window.tv { 46 } else { 32 }) => library.manage()
                                 }
                                 Row(gap: 12, align: center) {
-                                    library_sources(app: app)
+                                    library_tabs()
                                     Spacer
                                     library_zoom()
                                 }
@@ -89,14 +94,50 @@ pub fn library_page(
                             library_filter(value: chip.value, count: chip.count)
                         }
                         Spacer
+                        library_source_chips(library: library)
                     }
                     Canvas(height: 18)
                     library_wall(library: library, listing: listing)
                 }
                 }
             }
-            if library.notice > 0 {
-                Toast(content: tr! { "zh-Hans" => "管理媒体库：文件夹、扫描、服务器", "en" => "Manage library: folders, scanning and servers" }, key: library.notice, icon: "folder")
+            }
+            if let Some(notice) = library.notice {
+                Toast(content: notice, key: library.notice_revision, duration: 3)
+            }
+        }
+    }
+}
+
+/// Shows or sources (`.c-seg`).
+#[component]
+pub fn library_tabs(#[session] draft: LibraryDraft) -> impl View {
+    ui! {
+        Row(width: if window.tv { 180 } else { 124 }) {
+            Picker(id: tab, label: tr! { "zh-Hans" => "番剧或来源", "en" => "Shows or sources" }, value: draft.tab, style: segmented, label_hidden: true)
+        }
+    }
+}
+
+/// Which source the wall shows, when there are several (`libsrc`): all of
+/// them, or one, as chips after the filters.
+#[component]
+pub fn library_source_chips(library: library::Client, #[session] draft: LibraryDraft) -> impl View {
+    ui! {
+        if library.several_sources {
+            Row(gap: 8, align: center) {
+                if draft.source == 0 {
+                    Button(id: all_sources_on, label: tr! { "zh-Hans" => "全部来源", "en" => "All sources" }, icon: "checkmark", prominence: prominent, shape: chip, height: if window.tv { 40 } else { 30 }, variant: library_chip) => draft.source.set(0)
+                } else {
+                    Button(id: all_sources, label: tr! { "zh-Hans" => "全部来源", "en" => "All sources" }, shape: chip, height: if window.tv { 40 } else { 30 }, variant: library_chip) => draft.source.set(0)
+                }
+                ForEach(items: library.sources, key: id) |row| {
+                    if row.id == draft.source {
+                        Button(id: source_on, label: row.name, icon: "checkmark", prominence: prominent, shape: chip, height: if window.tv { 40 } else { 30 }, variant: library_chip) => draft.source.set(row.id)
+                    } else {
+                        Button(id: source_chip, label: row.name, shape: chip, height: if window.tv { 40 } else { 30 }, variant: library_chip) => draft.source.set(row.id)
+                    }
+                }
             }
         }
     }
@@ -128,13 +169,13 @@ pub fn library_wall(
 }
 
 /// The phone's library (`libHTML(true)`): one page scrolling as a whole,
-/// its header row (`.x-pnav`: the large title and, 8 apart, managing and
-/// sorting as 34-point round buttons), the sources and the zoom 2 points
-/// under it, the filters 12 under those and the wall 18 under them.
+/// its header row (`.x-pnav`: the large title, the source filter when there
+/// are several sources, and the sort as a 34-point round button), the tabs
+/// and the zoom 2 points under it, the filters 12 under those and the wall
+/// 18 under them.
 #[component]
 pub fn library_phone(
     library: library::Client,
-    app: erika::Client,
     listing: library::LibraryListing,
     #[session] draft: LibraryDraft,
 ) -> impl View {
@@ -143,19 +184,16 @@ pub fn library_phone(
             ScrollView(position: draft.position, arrival: nudge, appear: page_in) {
                 Column(gap: 0, padding_x: 16) {
                     Canvas(height: 7)
-                    // Managing and sorting share one glass capsule, as the
-                    // system bar groups neighbouring buttons, 44 points tall.
                     Row(gap: 8, height: 48, align: center) {
                         Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
                         Spacer
                         ControlGroup(label: tr! { "zh-Hans" => "媒体库操作", "en" => "Library actions" }, height: 44) {
-                            IconButton(id: manage_phone, icon: "folder", label: tr! { "zh-Hans" => "管理", "en" => "Manage" }) => library.manage()
                             library_sort_round()
                         }
                     }
                     Canvas(height: 2)
                     Row(gap: 10, align: center) {
-                        library_sources(app: app)
+                        library_tabs()
                         Spacer
                         library_zoom()
                     }
@@ -166,6 +204,7 @@ pub fn library_phone(
                             ForEach(items: listing.filters, key: id) |chip| {
                                 library_filter(value: chip.value, count: chip.count)
                             }
+                            library_source_chips(library: library)
                         }
                     }
                     Canvas(height: 18)
@@ -191,6 +230,12 @@ pub fn library_grid(
     #[session] draft: LibraryDraft,
 ) -> impl View {
     ui! {
+        if listing.empty {
+            Column(gap: 4, padding_y: 24) {
+                Text(content: tr! { "zh-Hans" => "这里还没有番。", "en" => "No shows here yet." }, style: title3)
+                Text(content: tr! { "zh-Hans" => "在「来源」里添加放视频的文件夹，或者直接打开视频，弹弹play 认出的番会按番剧列在这里；需要先在 设置 › 账号 里登录。", "en" => "Add folders of videos under Sources, or open videos; the shows dandanplay recognizes are listed here. Sign in under Settings › Account first." }, emphasis: secondary, lines: 3)
+            }
+        } else {
         Row(gap: if window.compact { 2.0 } else { 8.0 }, align: top) {
             // `libLayout`: every row is 2 : 3 posters and 54 points for
             // the titles, whatever the titles take.
@@ -210,24 +255,6 @@ pub fn library_grid(
                 }
             }
         }
-    }
-}
-
-#[component]
-pub fn library_sources(app: erika::Client, #[session] draft: LibraryDraft) -> impl View {
-    ui! {
-        if app.modules.sources && app.modules.remote {
-            Row(width: 204) {
-                Picker(id: source, label: tr! { "zh-Hans" => "媒体来源", "en" => "Media source" }, value: draft.source, style: segmented, label_hidden: true)
-            }
-        } else if app.modules.sources {
-            Row(width: 140) {
-                Picker(id: server_source, label: tr! { "zh-Hans" => "媒体来源", "en" => "Media source" }, value: draft.server_source, style: segmented, label_hidden: true)
-            }
-        } else if app.modules.remote {
-            Row(width: 140) {
-                Picker(id: shared_source, label: tr! { "zh-Hans" => "媒体来源", "en" => "Media source" }, value: draft.shared_source, style: segmented, label_hidden: true)
-            }
         }
     }
 }
@@ -390,6 +417,7 @@ pub fn library_poster(
 #[component]
 pub fn library_recent(library: library::Client) -> impl View {
     ui! {
+        if library.has_recent {
         if window.compact {
             Column(gap: 0) {
                 Column(gap: 0, padding_x: 16) {
@@ -438,6 +466,7 @@ pub fn library_recent(library: library::Client) -> impl View {
                     }
                 }
             }
+        }
         }
     }
 }

@@ -20,6 +20,8 @@ pub enum PhoneSettings {
     Closed,
     #[label(tr! { "zh-Hans" => "设置", "en" => "Settings" })]
     List,
+    #[label(tr! { "zh-Hans" => "账号", "en" => "Account" })]
+    Account,
     #[label(tr! { "zh-Hans" => "通用", "en" => "General" })]
     General,
     #[label(tr! { "zh-Hans" => "外观", "en" => "Appearance" })]
@@ -238,7 +240,7 @@ pub fn phone_header(
             // into the header's foot.
             if draft.page == MainPage::New {
                 Row(gap: 0, padding_x: 16, height: 14, align: bottom) {
-                    Text(content: tr! { "zh-Hans" => "2026 年 10 月 · 秋季新番", "en" => "October 2026 · Fall anime" }, font_size: 13, line_height: 18, emphasis: secondary, lines: 1)
+                    Text(content: anime.season_label, font_size: 13, line_height: 18, emphasis: secondary, lines: 1)
                 }
             }
         }
@@ -298,16 +300,24 @@ pub fn phone_settings(
                     Canvas(height: 2)
                 }
             }
-            // `.ph-acct`: the account, its picture 40 points across.
+            // `.ph-acct`: the account, its picture 40 points across; it
+            // opens the account's form.
             Section(padding_x: 14, padding_y: 6) {
-                Row(gap: 12, align: center) {
-                    phone_account_picture()
-                    Column(gap: 1) {
-                        Text(content: app.user_name, font_size: 13, line_height: 18)
-                        Text(content: tr! { "zh-Hans" => "本地用户", "en" => "Local user" }, style: caption, emphasis: secondary, line_height: 15)
+                Button(id: settings_account, label: tr! { "zh-Hans" => "账号", "en" => "Account" }) {
+                    Row(gap: 12, align: center) {
+                        phone_account_picture()
+                        Column(gap: 1) {
+                            Text(content: app.user_name, font_size: 13, line_height: 18, lines: 1)
+                            if app.account.signed_in {
+                                Text(content: tr! { "zh-Hans" => "弹弹play 已登录", "en" => "Signed in to dandanplay" }, style: caption, emphasis: secondary, line_height: 15)
+                            } else {
+                                Text(content: tr! { "zh-Hans" => "登录弹弹play 账号", "en" => "Sign in to dandanplay" }, style: caption, emphasis: secondary, line_height: 15)
+                            }
+                        }
+                        Spacer
+                        Text(content: tr! { "zh-Hans" => "›", "en" => "›" }, font_size: 13, emphasis: secondary)
                     }
-                    Spacer
-                }
+                } => draft.phone_settings.set(PhoneSettings::Account)
             }
             Section(padding_x: 14, padding_y: 6) {
                 Button(id: settings_general, label: tr! { "zh-Hans" => "通用", "en" => "General" }) {
@@ -486,6 +496,9 @@ pub fn phone_settings(
 pub fn phone_settings_result(result: erika::SettingResult, #[session] draft: ErikaDraft) -> impl View {
     ui! {
         match result.page {
+            SettingsPage::Account => {
+                Button(id: result_account, label: result.page, prominence: plain) => draft.phone_settings.set(PhoneSettings::Account)
+            }
             SettingsPage::General => {
                 Button(id: result_general, label: result.page, prominence: plain) => draft.phone_settings.set(PhoneSettings::General)
             }
@@ -541,6 +554,7 @@ pub fn phone_settings_result(result: erika::SettingResult, #[session] draft: Eri
 pub fn phone_settings_section(app: erika::Client, #[session] draft: ErikaDraft) -> impl View {
     ui! {
         match draft.phone_settings {
+            PhoneSettings::Account => { settings_account(app: app) }
             PhoneSettings::General => { settings_general(app: app) }
             PhoneSettings::Appearance => { settings_appearance(app: app) }
             PhoneSettings::Player => { settings_player(app: app) }

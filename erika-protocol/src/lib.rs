@@ -33,6 +33,8 @@ pub mod erika {
 
     #[value]
     pub enum SettingsPage {
+        #[label(tr! { "zh-Hans" => "账号", "en" => "Account" })]
+        Account,
         #[label(tr! { "zh-Hans" => "通用", "en" => "General" })]
         General,
         #[label(tr! { "zh-Hans" => "外观", "en" => "Appearance" })]
@@ -296,6 +298,20 @@ pub mod erika {
         FullScreenHint,
         #[label(tr! { "zh-Hans" => "界面预览：示例剧集没有画面可截", "en" => "Preview: sample episodes have no picture to save" })]
         ScreenshotPending,
+        #[label(tr! { "zh-Hans" => "已登录弹弹play：{name}", "en" => "Signed in to dandanplay as {name}" })]
+        SignedIn {
+            #[content]
+            name: String,
+        },
+        #[label(tr! { "zh-Hans" => "已退出弹弹play账号", "en" => "Signed out of dandanplay" })]
+        SignedOut,
+        #[label(tr! { "zh-Hans" => "这一集还没有本地文件，打开它的视频后就能从这里播放", "en" => "No file of this episode yet; open its video once and it plays from here" })]
+        NoEpisodeFile,
+        #[label(tr! { "zh-Hans" => "弹弹play 认出了：{title}", "en" => "dandanplay recognized it: {title}" })]
+        Matched {
+            #[content]
+            title: String,
+        },
         #[label(tr! { "zh-Hans" => "已保存截图：图片 › Erika › {file}", "en" => "Screenshot saved: Pictures › Erika › {file}" })]
         ScreenshotSaved {
             #[content]
@@ -360,6 +376,8 @@ pub mod erika {
         LocalFile,
         #[label(tr! { "zh-Hans" => "已下载 · 本地文件", "en" => "Downloaded · Local file" })]
         Downloaded,
+        #[label(tr! { "zh-Hans" => "下载中 · 边下边播", "en" => "Downloading · Streaming" })]
+        Downloading,
         #[label(tr! { "zh-Hans" => "网络链接", "en" => "Link" })]
         Link,
     }
@@ -502,6 +520,8 @@ pub mod erika {
         /// What played before, the latest first, at most three: the empty
         /// frame lists them under it (design 10.2).
         pub recents: Vec<RecentPlay>,
+        /// Whether anything played before, which 「继续上次」 needs.
+        pub has_recents: bool,
         /// Whether 「打开链接…」 asks for a link, and whether the link given
         /// last was not one it can play.
         pub link_prompt: bool,
@@ -510,9 +530,28 @@ pub mod erika {
         /// Mac, Ctrl+O elsewhere.
         #[content]
         pub open_key: String,
-        /// The account at the foot of the sidebar.
+        /// The account at the foot of the sidebar: its name, or 「本地用户」
+        /// until one is signed in.
         #[content]
         pub user_name: String,
+        pub account: Account,
+    }
+
+    /// The dandanplay account, which the season's anime, the details of a
+    /// show and matching danmaku need.
+    #[value]
+    pub struct Account {
+        pub signed_in: bool,
+        /// The name others see, and the one signed in with.
+        #[content]
+        pub name: String,
+        #[content]
+        pub user: String,
+        /// Signing in is under way.
+        pub busy: bool,
+        /// Why signing in failed last; empty when it did not.
+        #[content]
+        pub error: String,
     }
 
     #[commands]
@@ -570,14 +609,27 @@ pub mod erika {
             episode: i64,
             still: MediaSource,
             progress: f64,
+            source: MediaSource,
         ) -> Result<(), CommandError>;
 
+        /// Play a download: its file once done, a stream of it while it
+        /// downloads.
         #[on(downloads::play)]
-        fn play_download(&mut self, title: String, still: MediaSource, progress: f64) -> Result<(), CommandError>;
+        fn play_download(&mut self, title: String, source: MediaSource, downloading: bool) -> Result<(), CommandError>;
+
+        /// A download finished: its folder joins the library and is
+        /// scanned.
+        #[on(downloads::finished)]
+        fn download_finished(&mut self, folder: MediaSource) -> Result<(), CommandError>;
 
         /// Open a library poster using the optional anime details page.
         #[on(library::open_show)]
         fn open_library_show(&mut self, id: i64) -> Result<(), CommandError>;
+
+        /// The library matched or removed videos: the anime pages show the
+        /// files anew.
+        #[on(library::files_changed)]
+        fn library_files_changed(&mut self) -> Result<(), CommandError>;
 
         /// Shrink the player into the mini player and keep playing.
         fn minimize(&mut self) -> Result<(), CommandError>;
@@ -623,6 +675,11 @@ pub mod erika {
 
 
         fn set_accent(&mut self, accent: Accent) -> Result<(), CommandError>;
+
+        /// Sign in to dandanplay; the account shows when the service
+        /// answers.
+        fn sign_in(&mut self, user: String, password: String) -> Result<(), CommandError>;
+        fn sign_out(&mut self) -> Result<(), CommandError>;
 
         fn set_appearance(&mut self, appearance: Appearance) -> Result<(), CommandError>;
     }

@@ -8,3 +8,5 @@ publish = false
 [dependencies]
 bern.workspace = true
 erika-downloads-protocol = { path = "../protocol" }
+erika-store.workspace = true
+erika-torrent.workspace = true

@@ -5,8 +5,12 @@
 mod settings;
 mod onboarding;
 
+mod account;
+
 mod danmaku;
+mod history;
 mod kernel;
+mod matching;
 mod search;
 mod player;
 
@@ -43,11 +47,67 @@ pub struct ErikaEngine {
     stills: u32,
     /// Where the media's first still is taken, past a fade-in.
     first_still_at: f64,
+    /// What the app keeps: recent videos, and where each file stopped.
+    db: erika_store::Db,
+    /// The file playing, once its head was read, the picture taken of it,
+    /// and where it was when its progress was last saved.
+    file: Option<erika_store::FileId>,
+    still_path: Option<std::path::PathBuf>,
+    saved_at: f64,
+    /// Names this run's pictures apart from earlier runs'.
+    run: String,
+    /// What signing in and renewing came back with on other threads.
+    account_inbox: account::Inbox,
+    /// What matching the video playing came back with, and the dandanplay
+    /// episode it was matched to.
+    found: Arc<std::sync::Mutex<Vec<matching::Found>>>,
+    episode_playing: Option<i64>,
+}
+
+/// Run `work` on another thread; what it returns waits in `inbox`, and the
+/// engine is woken to take it in. The browser has no threads: there the
+/// work runs at once and the engine takes it in right after.
+pub(crate) fn in_background<T: Send + 'static>(
+    inbox: &Arc<std::sync::Mutex<Vec<T>>>,
+    work: impl FnOnce() -> Vec<T> + Send + 'static,
+) {
+    let inbox = Arc::clone(inbox);
+    let waker = bern::wake::waker();
+    let run = move || {
+        let results = work();
+        if results.is_empty() {
+            return;
+        }
+        inbox.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).extend(results);
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    };
+    if cfg!(target_arch = "wasm32") {
+        run();
+    } else {
+        std::thread::spawn(run);
+    }
 }
 
 impl Default for ErikaEngine {
     fn default() -> Self {
+        let db = erika_store::Db::open();
+        let recents = history::recents(&db);
+        let (account, token) = account::restore(&db);
+        erika_dandanplay::set_token(token);
+        // The browser has no process id.
+        let process = if cfg!(target_arch = "wasm32") { 0 } else { std::process::id() };
+        let run = format!("{}-{process}-", erika_store::now());
         let mut engine = Self {
+            db,
+            file: None,
+            still_path: None,
+            saved_at: 0.0,
+            run,
+            account_inbox: Arc::default(),
+            found: Arc::default(),
+            episode_playing: None,
             feedback_remaining: 0.0,
             saved_modules: None,
             onboarding_completed: false,
@@ -92,11 +152,13 @@ impl Default for ErikaEngine {
                 progress: 0.0,
                 elapsed: 0.0,
                 duration: LENGTH,
-                recents: sample_recents(),
+                has_recents: !recents.is_empty(),
+                recents,
                 link_prompt: false,
                 link_invalid: false,
                 open_key: if cfg!(any(target_os = "macos", target_os = "ios")) { "⌘O" } else { "Ctrl+O" }.into(),
-                user_name: "Nipa".into(),
+                user_name: account::display_name(&account),
+                account,
             },
         };
         engine.restore_welcome_preferences();
@@ -109,8 +171,14 @@ impl Default for ErikaEngine {
     }
 }
 
+/// The picture of the downloads' samples, which play on a simulated clock.
 fn still() -> MediaSource {
     picture(STILL)
+}
+
+/// No picture: what a video shows until the kernel took one of it.
+fn no_picture() -> MediaSource {
+    MediaSource::new("")
 }
 
 /// A picture of `[resources]`, as the frame shows it.
@@ -120,25 +188,6 @@ fn picture(name: &str) -> MediaSource {
 
 /// The most videos 「最近播放」 lists.
 const RECENT_COUNT: usize = 3;
-
-/// The prototype's recent videos (next-core.js `RECENTS`), until the
-/// kernel keeps the ones really played.
-fn sample_recents() -> Vec<RecentPlay> {
-    [
-        ("[Nekomoe] Sousou no Frieren S2 - 03 [1080p].mkv", 0.62, 9.0 * 60.0 + 12.0, "design/assets/posters/p7.jpg"),
-        ("Boku dake ga Inai Machi - 01.mkv", 0.38, 15.0 * 60.0 + 3.0, STILL),
-        ("Vacation_2026_Kyoto.mp4", 0.9, 41.0, "design/assets/posters/p15.jpg"),
-    ]
-    .into_iter()
-    .map(|(name, progress, remaining, still)| RecentPlay {
-        name: name.into(),
-        progress,
-        remaining,
-        still: picture(still),
-        source: None,
-    })
-    .collect()
-}
 
 /// A file's name without its extension, as the player titles it.
 fn without_extension(name: &str) -> String {
@@ -150,6 +199,14 @@ fn without_extension(name: &str) -> String {
 
 impl ErikaEngine {
     fn start(&mut self, title: String, subtitle: PlayingNote, still: MediaSource, progress: f64) {
+        // What played until now keeps where it was.
+        if self.state.playing {
+            self.save_history();
+        }
+        self.file = None;
+        self.still_path = None;
+        self.saved_at = 0.0;
+        self.episode_playing = None;
         let progress = if progress.is_finite() { progress.clamp(0.0, 1.0) } else { 0.0 };
         self.reset_player(match subtitle {
             PlayingNote::Episode { episode } => Some(episode),
@@ -331,8 +388,12 @@ impl erika::Commands for ErikaEngine {
 
     fn open_file(&mut self, source: MediaSource) -> Result<(), CommandError> {
         let title = source.file_name().unwrap_or_else(|| source.url.clone());
-        self.start(title, PlayingNote::LocalFile, still(), 0.0);
-        self.load(Some(source.clone()), 0.0);
+        let (file, fingerprint) = self.identify(&source);
+        let (start, progress) = self.saved_position(file);
+        self.start(title, PlayingNote::LocalFile, no_picture(), progress);
+        self.file = file;
+        self.load(Some(source.clone()), start);
+        self.recognize(&source, fingerprint);
         if self.state.video {
             self.mount_danmaku_beside(&source);
         }
@@ -344,7 +405,7 @@ impl erika::Commands for ErikaEngine {
         let name = source.file_name().unwrap_or_else(|| {
             source.url.trim_end_matches('/').rsplit('/').next().unwrap_or_default().to_string()
         });
-        self.start(name, PlayingNote::LocalFile, still(), 0.0);
+        self.start(name, PlayingNote::LocalFile, no_picture(), 0.0);
         self.load(None, 0.0);
         Ok(())
     }
@@ -369,7 +430,7 @@ impl erika::Commands for ErikaEngine {
         let title = name.map(without_extension).unwrap_or_else(|| link.to_string());
         self.state.link_prompt = false;
         self.state.link_invalid = false;
-        self.start(title, PlayingNote::Link, still(), 0.0);
+        self.start(title, PlayingNote::Link, no_picture(), 0.0);
         self.load(web.then(|| MediaSource::new(link)), 0.0);
         Ok(())
     }
@@ -382,14 +443,21 @@ impl erika::Commands for ErikaEngine {
             .find(|recent| recent.name == name)
             .cloned()
             .ok_or_else(|| CommandError::new("no_such_recent", "no recent video has this name"))?;
-        self.start(without_extension(&recent.name), PlayingNote::LocalFile, recent.still, recent.progress);
-        // Where it stopped, from how far it got and what was left.
-        let start = if recent.progress < 1.0 {
-            recent.remaining / (1.0 - recent.progress) * recent.progress
+        // Where its file stopped, or what the list says of a web address.
+        let (file, fingerprint) = recent.source.as_ref().map(|source| self.identify(source)).unwrap_or((None, None));
+        let (start, progress) = if file.is_some() {
+            self.saved_position(file)
+        } else if recent.progress < 1.0 {
+            (recent.remaining / (1.0 - recent.progress) * recent.progress, recent.progress)
         } else {
-            0.0
+            (0.0, 0.0)
         };
-        self.load(recent.source, start);
+        self.start(without_extension(&recent.name), PlayingNote::LocalFile, recent.still, progress);
+        self.file = file;
+        self.load(recent.source.clone(), start);
+        if let Some(source) = &recent.source {
+            self.recognize(source, fingerprint);
+        }
         Ok(())
     }
 
@@ -405,16 +473,8 @@ impl erika::Commands for ErikaEngine {
 
     fn return_to_frame(&mut self) -> Result<(), CommandError> {
         self.require_playing()?;
-        let recent = RecentPlay {
-            name: self.state.title.clone(),
-            progress: self.state.progress,
-            remaining: (self.state.duration - self.state.elapsed).max(0.0),
-            still: self.state.still.clone(),
-            source: self.source.clone(),
-        };
-        self.state.recents.retain(|other| without_extension(&other.name) != without_extension(&recent.name));
-        self.state.recents.insert(0, recent);
-        self.state.recents.truncate(RECENT_COUNT);
+        self.save_history();
+        self.show_recents();
         self.state.playing = false;
         self.state.expanded = false;
         self.state.paused = false;
@@ -429,20 +489,47 @@ impl erika::Commands for ErikaEngine {
         episode: i64,
         still: MediaSource,
         progress: f64,
+        source: MediaSource,
     ) -> Result<(), CommandError> {
-        self.start(title, PlayingNote::Episode { episode }, still, progress);
-        self.load(None, 0.0);
+        if source.url.is_empty() {
+            self.notify(Notice::NoEpisodeFile);
+            return Ok(());
+        }
+        let (file, fingerprint) = self.identify(&source);
+        let (start, saved) = self.saved_position(file);
+        self.start(title, PlayingNote::Episode { episode }, still, if file.is_some() { saved } else { progress });
+        self.file = file;
+        self.load(Some(source.clone()), start);
+        self.recognize(&source, fingerprint);
         Ok(())
     }
 
-    fn play_download(&mut self, title: String, still: MediaSource, progress: f64) -> Result<(), CommandError> {
-        self.start(title, PlayingNote::Downloaded, still, progress);
-        self.load(None, 0.0);
+    fn play_download(&mut self, title: String, source: MediaSource, downloading: bool) -> Result<(), CommandError> {
+        // A finished file is read like any other, so it is recognized and
+        // its danmaku come; a stream is played as it arrives.
+        let (file, fingerprint) = if downloading { (None, None) } else { self.identify(&source) };
+        let (start, progress) = self.saved_position(file);
+        self.start(title, if downloading { PlayingNote::Downloading } else { PlayingNote::Downloaded }, no_picture(), progress);
+        self.file = file;
+        self.load(Some(source.clone()), start);
+        if !downloading {
+            self.recognize(&source, fingerprint);
+        }
+        Ok(())
+    }
+
+    fn download_finished(&mut self, folder: MediaSource) -> Result<(), CommandError> {
+        erika_library_protocol::library::calls::add_folder(folder);
         Ok(())
     }
 
     fn open_library_show(&mut self, id: i64) -> Result<(), CommandError> {
         erika_anime_protocol::anime::calls::open_from_library(id);
+        Ok(())
+    }
+
+    fn library_files_changed(&mut self) -> Result<(), CommandError> {
+        erika_anime_protocol::anime::calls::history_changed();
         Ok(())
     }
 
@@ -461,6 +548,10 @@ impl erika::Commands for ErikaEngine {
     }
 
     fn close_player(&mut self) -> Result<(), CommandError> {
+        if self.state.playing {
+            self.save_history();
+            self.show_recents();
+        }
         self.state.playing = false;
         self.state.expanded = false;
         self.unload();
@@ -526,6 +617,16 @@ impl erika::Commands for ErikaEngine {
         Ok(())
     }
 
+    fn sign_in(&mut self, user: String, password: String) -> Result<(), CommandError> {
+        self.sign_in_started(user, password);
+        Ok(())
+    }
+
+    fn sign_out(&mut self) -> Result<(), CommandError> {
+        self.sign_out_now();
+        Ok(())
+    }
+
     fn set_appearance(&mut self, appearance: Appearance) -> Result<(), CommandError> {
         self.state.appearance = appearance;
         self.save_welcome_preferences()?;
@@ -534,6 +635,14 @@ impl erika::Commands for ErikaEngine {
 }
 
 impl erika::Engine for ErikaEngine {
+    /// Work done on other threads comes back; once as the app starts, the
+    /// account's token is renewed when it is old.
+    fn wake(&mut self) {
+        self.take_account_results();
+        self.take_found();
+        self.renew_when_old();
+    }
+
     fn initial_modules(&self) -> Option<Vec<String>> { self.saved_modules.clone() }
     fn modules_changed(&mut self, enabled: &[String]) {
         self.saved_modules = Some(enabled.to_vec());
@@ -560,7 +669,7 @@ mod tests {
         let mut engine = ErikaEngine::default();
         assert_eq!(engine.minimize().unwrap_err().code, "nothing_playing");
         engine
-            .play("葬送的芙莉莲".into(), 4, still(), 0.35)
+            .play("葬送的芙莉莲".into(), 4, still(), 0.35, MediaSource::new("file:///Videos/frieren-04.mkv"))
             .unwrap();
         assert!(engine.state.playing && engine.state.expanded);
         assert_eq!(engine.state.elapsed.floor(), 8.0 * 60.0 + 29.0);
@@ -571,32 +680,6 @@ mod tests {
         assert!(engine.state.expanded);
         engine.close_player().unwrap();
         assert!(!engine.state.playing);
-    }
-
-    #[test]
-    fn the_way_back_puts_the_video_first_among_the_recent_ones() {
-        let mut engine = ErikaEngine::default();
-        assert_eq!(engine.state.recents.len(), 3);
-        assert_eq!(engine.return_to_frame().unwrap_err().code, "nothing_playing");
-        engine.play_recent("Boku dake ga Inai Machi - 01.mkv".into()).unwrap();
-        assert_eq!(engine.state.title, "Boku dake ga Inai Machi - 01");
-        assert_eq!(engine.state.progress, 0.38);
-        engine.seek(0.5).unwrap();
-        engine.return_to_frame().unwrap();
-        assert!(!engine.state.playing && !engine.state.expanded);
-        // The same video moves to the front instead of being listed twice.
-        let names: Vec<_> = engine.state.recents.iter().map(|recent| recent.name.as_str()).collect();
-        assert_eq!(names, ["Boku dake ga Inai Machi - 01", "[Nekomoe] Sousou no Frieren S2 - 03 [1080p].mkv", "Vacation_2026_Kyoto.mp4"]);
-        assert_eq!(engine.state.recents[0].progress, 0.5);
-        assert_eq!(engine.state.recents[0].remaining, LENGTH / 2.0);
-        // A new one pushes the last out.
-        engine.open_file(MediaSource::new("file:///Videos/new.mkv")).unwrap();
-        engine.return_to_frame().unwrap();
-        assert_eq!(engine.state.recents.len(), 3);
-        assert_eq!(engine.state.recents[0].name, "new.mkv");
-        assert_eq!(engine.play_recent("gone.mkv".into()).unwrap_err().code, "no_such_recent");
-        engine.continue_last().unwrap();
-        assert_eq!(engine.state.title, "new");
     }
 
     #[test]

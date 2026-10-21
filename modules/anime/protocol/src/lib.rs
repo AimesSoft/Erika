@@ -63,38 +63,53 @@ pub mod anime {
         pub progress: f64,
     }
 
-    /// One show airing today, hung on the timeline at its time.
+    /// One show airing today, in its group on the timeline.
     #[value]
     pub struct Airing {
         pub id: i64,
         #[content]
         pub title: String,
         pub poster: MediaSource,
-        /// When it airs, in seconds after midnight, and whether it has.
+        pub aired: bool,
+    }
+
+    /// The shows airing today at the same time, side by side on the
+    /// timeline under that time.
+    #[value]
+    pub struct AiringGroup {
+        /// When they air, in seconds after midnight, and whether they have.
         pub time: i64,
         pub aired: bool,
-        /// Where the time falls on the timeline, from 0 to 1.
+        pub shows: Vec<Airing>,
+        /// The posters' width side by side, in points, and where their
+        /// leading edge falls on the timeline, from 0 to 1.
+        pub width: f64,
         pub at: f64,
+        /// How far it is from the middle of the first poster to the middle
+        /// of the last, where a bracket joins them; 0 for one poster.
+        pub span: f64,
     }
 
-    /// One hour marked under the timeline.
+    /// A long empty stretch the timeline shrank, marked with a break.
     #[value]
-    pub struct Hour {
-        /// The hour, in seconds after midnight.
-        pub time: i64,
+    pub struct TimelineBreak {
+        /// The time of the group before it, which keys it.
+        pub after: i64,
         pub at: f64,
     }
 
-    /// A broadcast in the prototype's weekly calendar. Midnight belongs
-    /// to the preceding broadcast day, just as it does on the timeline.
+    /// A broadcast in the weekly calendar. Midnight belongs to the
+    /// preceding broadcast day, just as it does on the timeline.
     #[value]
     pub struct Broadcast {
         pub id: i64,
         #[content]
         pub title: String,
         pub poster: MediaSource,
-        /// When it airs, in seconds after midnight.
+        /// When it airs, in seconds after midnight, when its time is known
+        /// (`timed`); otherwise only its day is.
         pub time: i64,
+        pub timed: bool,
         pub episode: i64,
         pub aired: bool,
         pub tonight: bool,
@@ -136,6 +151,12 @@ pub mod anime {
         Left { minutes: i64 },
         #[label(tr! { "zh-Hans" => "{minutes} 分钟", "en" => "{minutes} min" })]
         Length { minutes: i64 },
+        /// The user has a file of it, not played yet.
+        #[label(tr! { "zh-Hans" => "未看", "en" => "Not watched" })]
+        Unwatched,
+        /// The user has no file of it yet.
+        #[label(tr! { "zh-Hans" => "没有文件", "en" => "No file" })]
+        Missing,
     }
 
     /// One episode on the film of the details page.
@@ -204,15 +225,33 @@ pub mod anime {
 
     #[state]
     pub struct State {
+        /// Whether a dandanplay account is signed in, which the season's
+        /// list and the details need; whether they are loading, and why
+        /// they failed last (empty when they did not).
+        pub signed_in: bool,
+        pub loading: bool,
+        #[content]
+        pub error: String,
+        /// The season, as the schedule's heading names it.
+        #[content]
+        pub season_label: String,
+        /// Whether anything is being watched, for the stage, and whether
+        /// anything airs today at a known time, for the timeline.
+        pub has_stage: bool,
+        pub has_airing: bool,
         pub today: CalendarDate,
         /// The show on the stage, and the others being watched.
         pub stage: Watching,
         pub also: Vec<Watching>,
-        /// Shows airing today, the hours marked under them, and where "now"
-        /// falls on the timeline.
-        pub airing: Vec<Airing>,
-        pub hours: Vec<Hour>,
+        /// Shows airing today in groups by time, the breaks between groups
+        /// far apart, and where "now" falls on the timeline. The timeline is
+        /// `track_width` points long, `track_wide` on a large window, and
+        /// scrolls when that is more than there is room for.
+        pub airing: Vec<AiringGroup>,
+        pub breaks: Vec<TimelineBreak>,
         pub now_at: f64,
+        pub track_width: f64,
+        pub track_wide: f64,
         /// "Now", in seconds after midnight.
         pub now: i64,
         /// Shows aired today so far, and those still to come tonight.
@@ -233,9 +272,10 @@ pub mod anime {
 
     #[events]
     pub trait Events {
-        /// The user asked to play episode `episode` of a show; the shell's
-        /// player answers.
-        fn play(&self, title: String, episode: i64, still: MediaSource, progress: f64);
+        /// The user asked to play episode `episode` of a show, from the
+        /// file at `source` (empty when the user has none of it); the
+        /// shell's player answers.
+        fn play(&self, title: String, episode: i64, still: MediaSource, progress: f64, source: MediaSource);
     }
 
     #[commands]
@@ -282,5 +322,13 @@ pub mod anime {
 
         /// Rate the open show from 1 to 10.
         fn rate(&mut self, score: i64) -> Result<(), CommandError>;
+
+        /// The shell signed a dandanplay account in or out: load what the
+        /// account lets the module show, or forget it.
+        fn account_changed(&mut self, signed_in: bool) -> Result<(), CommandError>;
+
+        /// The shell played or matched a video: what is being watched may
+        /// have changed.
+        fn history_changed(&mut self) -> Result<(), CommandError>;
     }
 }

@@ -741,18 +741,23 @@ body:not(.dev-fold) .nxp-bar .nxp-fold { display: none; }
 .nx .h-pl { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, .35); color: #fff; opacity: 0; transition: opacity .15s; }
 .nx .h-pl .i { width: 20px; height: 20px; }
 .nx .h-row:hover .h-pl { opacity: 1; }
-.nx .h-tl { position: relative; height: 276px; margin: 0 -8px; }
+.nx .h-tlw { overflow-x: auto; scrollbar-width: none; margin: 0 -8px; padding: 0 8px; }
+.nx .h-tlw::-webkit-scrollbar { display: none; }
+.nx .h-tl { position: relative; height: 276px; }
 .nx .h-ruler { position: absolute; left: 0; right: 0; top: 230px; height: 1px; background: var(--ol2); transform-origin: 0 50%; }
-.nx .h-hour { position: absolute; top: 238px; font: var(--t-cap); color: var(--on3); transform: translateX(-50%); font-variant-numeric: tabular-nums; }
-.nx .h-hour::before { content: ""; position: absolute; left: 50%; top: -11px; width: 1px; height: 5px; background: var(--ol2); }
-.nx .h-show { position: absolute; top: 24px; width: 88px; cursor: pointer; }
+.nx .h-grp { position: absolute; top: 24px; }
+.nx .h-cards { display: flex; gap: 8px; }
+.nx .h-show { width: 88px; flex: none; cursor: pointer; }
 .nx .h-show .x-poster { width: 88px; }
 .nx .h-show .nm { font: var(--t-cap); color: var(--on); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.nx .h-show .tm { font: var(--t-cap); color: var(--on2); font-variant-numeric: tabular-nums; }
-.nx .h-show .stem { position: absolute; left: 44px; top: 176px; width: 1px; height: 30px; background: var(--ol2); }
-.nx .h-show .stem::after { content: ""; position: absolute; left: -3px; bottom: -3px; width: 7px; height: 7px; border-radius: 50%; background: var(--on2); }
-.nx .h-show.up .x-poster { opacity: .5; }
-.nx .h-show.up .stem::after { background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--on3); }
+.nx .h-show .tm { font: var(--t-cap); color: var(--on2); }
+.nx .h-grp .brk { position: absolute; left: 50%; top: 176px; height: 1px; transform: translateX(-50%); background: var(--ol2); }
+.nx .h-grp .stem { position: absolute; left: 50%; top: 176px; width: 1px; height: 30px; margin-left: -.5px; background: var(--ol2); }
+.nx .h-grp .stem::after { content: ""; position: absolute; left: -3px; bottom: -3px; width: 7px; height: 7px; border-radius: 50%; background: var(--on2); }
+.nx .h-grp.up .x-poster { opacity: .5; }
+.nx .h-grp.up .stem::after { background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--on3); }
+.nx .h-time { position: absolute; top: 214px; left: 50%; transform: translateX(-50%); font: var(--t-cap); color: var(--on3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.nx .h-break { position: absolute; top: 238px; transform: translateX(-50%); font: var(--t-cap); color: var(--on3); }
 .nx .h-now { position: absolute; top: 0; height: 232px; width: 2px; margin-left: -1px; background: var(--acc); border-radius: 1px; z-index: 2; pointer-events: none; transform-origin: 50% 100%; }
 .nx .h-now span { position: absolute; top: 0; left: 8px; font: var(--t-time); white-space: nowrap; }
 .nx .h-shelf { display: flex; gap: 18px; overflow-x: auto; scrollbar-width: none; padding-bottom: 4px; }

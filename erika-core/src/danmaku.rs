@@ -125,7 +125,7 @@ impl ErikaEngine {
         }
     }
 
-    fn add_danmaku_source(&mut self, file: String, count: usize) {
+    pub(super) fn add_danmaku_source(&mut self, file: String, count: usize) {
         let player = &mut self.state.player;
         if !player.danmaku_source.is_empty() {
             player.danmaku_source.push('、');

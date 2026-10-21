@@ -27,20 +27,50 @@
           <div class="h-also">${also}</div>
         </div>
       </section>
-      ${this.store.has('anime') ? `<div class="x-sechd"><span class="x-h2">今日更新</span><span class="x-mut">已更新 4 部 · 今晚还有 3 部</span><span class="x-more" data-act="nav" data-page="new">新番表 ›</span></div>${this.timelineHTML(false)}` : ''}
+      ${this.store.has('anime') ? `<div class="x-sechd"><span class="x-h2">今日更新</span><span class="x-mut">已更新 ${TODAY.filter(x => hOf(x.t) <= NOW).length} 部 · 今晚还有 ${TODAY.filter(x => hOf(x.t) > NOW).length} 部</span><span class="x-more" data-act="nav" data-page="new">新番表 ›</span></div><div class="h-tlw">${this.timelineHTML(false)}</div>` : ''}
       ${lib}`;
   };
-  A.timelineHTML = function (phone) {
-    const H0 = 18, H1 = 26, pct = h => ((h - H0) / (H1 - H0)) * 100;
-    const hours = Array.from({ length: H1 - H0 + 1 }, (_, i) => `<span class="h-hour" style="left:${pct(H0 + i)}%">${String((H0 + i) % 24).padStart(2, '0')}:00</span>`).join('');
-    const shows = TODAY.map(x => { const a = byId(x.id), h = hOf(x.t), up = h > NOW; return `<div class="h-show${up ? ' up' : ''}" style="left:calc(${pct(h)}% - 44px)" data-act="detail" data-aid="${a.id}"><div class="x-poster"><img src="${imgOf(a)}" alt=""></div><div class="nm">${a.t}</div><div class="tm">${x.t}${up ? ' · 稍后' : ' · 已更新'}</div><i class="stem"></i></div>`; }).join('');
-    return `<div class="h-tl"${phone ? ' style="width:900px;flex:none;margin:0"' : ''}><div class="h-ruler"></div>${hours}${shows}<div class="h-now" style="left:${pct(NOW)}%"><span class="hl">现在 22:40</span></div></div>`;
+  /* 弹性时间轴（与 Erika 的 modules/anime/core/src/timeline.rs 同一套）：不按比例画时间。
+     同一时刻的番并排成一组，组下一根茎落到尺上的点，点下写这一刻；组间距随时间差在 16–64 之间，
+     相隔超过 2 小时的空档画「⋯」；轨道至少 900，空出来的长度按时间分给各段（边上的最多算 1 小时、中间的最多 2 小时），
+     宽窗口整体按比例拉开；放不下就横向滚动，打开时停在一半。 */
+  A.timelineLayout = function () {
+    const CARD = 88, GAP = 8, MIN = 16, MAX = 64, BRK = 2, BEFORE = 24, AFTER = 88, CLR = 6, BAR = 2, FLOOR = 900, SH = 2, SH_EDGE = 1;
+    const groups = [];
+    TODAY.map(x => ({ ...x, h: hOf(x.t) })).sort((a, b) => a.h - b.h).forEach(x => { const g = groups[groups.length - 1]; if (g && g.t === x.t) g.shows.push(x); else groups.push({ t: x.t, h: x.h, shows: [x] }); });
+    groups.forEach(g => { g.w = g.shows.length * CARD + (g.shows.length - 1) * GAP; g.aired = g.h <= NOW; });
+    const first = groups[0].h, last = groups[groups.length - 1].h;
+    const sp = [NOW < first ? { l: BEFORE, s: Math.min(first - NOW, SH_EDGE) } : { l: 0, s: 0 }];
+    for (let i = 1; i < groups.length; i++) { const d = groups[i].h - groups[i - 1].h; sp.push({ l: clamp(d * 60, MIN, MAX), s: Math.min(d, SH) }); }
+    sp.push(NOW >= last ? { l: AFTER, s: Math.min(NOW - last, SH_EDGE) } : { l: 0, s: 0 });
+    const natural = groups.reduce((n, g) => n + g.w, 0) + sp.reduce((n, x) => n + x.l, 0), W = Math.max(natural, FLOOR), shares = sp.reduce((n, x) => n + x.s, 0);
+    if (shares > 0) sp.forEach(x => { x.l += (W - natural) * x.s / shares; }); else sp[sp.length - 1].l += W - natural;
+    let x = sp[0].l, now = NOW < first ? Math.max(0, sp[0].l - CLR - BAR) * (1 - Math.min(first - NOW, SH_EDGE) / SH_EDGE) : null;
+    const breaks = [];
+    groups.forEach((g, i) => {
+      g.x = x; x += g.w;
+      const after = sp[i + 1], next = groups[i + 1];
+      if (next) {
+        if (now === null && NOW >= g.h && NOW < next.h) now = x + CLR + Math.max(0, after.l - 2 * CLR - BAR) * (NOW - g.h) / (next.h - g.h);
+        if (next.h - g.h > BRK) breaks.push(x + after.l / 2);
+      } else if (now === null) now = x + CLR + Math.max(0, after.l - AFTER) * Math.min(NOW - g.h, SH_EDGE) / SH_EDGE;
+      x += after.l;
+    });
+    return { groups, breaks, now, W };
   };
-  A.after_home = function (animate) { if (animate) this.tlIn(this.wide ? this.q.page : this.scr); };
+  A.timelineHTML = function (phone) {
+    const L = this.timelineLayout(), pc = v => `${(v / L.W * 100).toFixed(3)}%`;
+    const card = x => { const a = byId(x.id); return `<div class="h-show" data-act="detail" data-aid="${a.id}"><div class="x-poster"><img src="${imgOf(a)}" alt=""></div><div class="nm">${a.t}</div><div class="tm">${x.h <= NOW ? '已更新' : '稍后'}</div></div>`; };
+    const groups = L.groups.map(g => `<div class="h-grp${g.aired ? '' : ' up'}" style="left:${pc(g.x)};width:${g.w}px"><div class="h-cards">${g.shows.map(card).join('')}</div><i class="brk" style="width:${g.w - 88}px"></i><i class="stem"></i><span class="h-time">${g.t}</span></div>`).join('');
+    const breaks = L.breaks.map(b => `<span class="h-break" style="left:${pc(b)}">⋯</span>`).join('');
+    return `<div class="h-tl" style="${phone ? `width:${L.W}px;flex:none;margin:0` : `min-width:${L.W}px`}"><div class="h-ruler"></div>${groups}${breaks}<div class="h-now" style="left:${pc(L.now + 1)}"><span class="hl">现在 22:40</span></div></div>`;
+  };
+  A.tlOpen = function (w) { if (w) requestAnimationFrame(() => { w.scrollLeft = (w.scrollWidth - w.clientWidth) / 2; }); };
+  A.after_home = function (animate) { const scope = this.wide ? this.q.page : this.scr; this.tlOpen($('.h-tlw', scope)); if (animate) this.tlIn(scope); };
   A.tlIn = function (scope) {
     if (RM()) return;
     const tl = $('.h-tl', scope); if (!tl) return;
-    const ru = $('.h-ruler', tl), now = $('.h-now', tl), shows = $$('.h-show', tl);
+    const ru = $('.h-ruler', tl), now = $('.h-now', tl), shows = $$('.h-grp', tl);
     ru.style.transform = 'scaleX(0)'; now.style.transform = 'scaleY(0)';
     setTimeout(() => tween(TOKENS.smooth, p => { ru.style.transform = `scaleX(${p})`; }, () => { ru.style.transform = ''; }), 120);
     shows.forEach((s, i) => { s.style.opacity = '0'; s.style.transform = 'translateY(-18px)'; setTimeout(() => tween(TOKENS.jelly, p => { s.style.opacity = String(Math.min(1, p * 1.6)); s.style.transform = `translateY(${(1 - p) * -18}px)`; }, () => { s.style.transform = ''; s.style.opacity = ''; }), 220 + i * 60); });
@@ -1048,7 +1078,7 @@
     return '';
   };
   A.after_phhome = function (animate) {
-    const w = $('.ph-tlw', this.scr); if (w) requestAnimationFrame(() => { w.scrollLeft = 900 * 0.5 - w.clientWidth / 2; });
+    this.tlOpen($('.ph-tlw', this.scr));
     if (animate) this.tlIn(this.scr);
   };
   A.after_phidle = function (animate) {

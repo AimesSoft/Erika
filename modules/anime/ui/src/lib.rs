@@ -71,8 +71,10 @@ pub fn desktop_home(anime: anime::Client) -> impl View {
                     Spacer
                 }
                 Canvas(height: 18)
-                stage(anime: anime)
-                Canvas(height: 30)
+                if anime.has_stage {
+                    stage(anime: anime)
+                    Canvas(height: 30)
+                }
                 timeline(anime: anime)
                 // The other modules' sections, as the library's recently added.
                 Slot(id: home_sections)
@@ -191,58 +193,121 @@ pub fn timeline(anime: anime::Client) -> impl View {
         Column(gap: 0) {
             Row(gap: 10, align: baseline) {
                 Text(content: tr! { "zh-Hans" => "今日更新", "en" => "Airing today" }, style: title3)
-                Text(content: tr! { "zh-Hans" => "已更新 {aired} 部 · 今晚还有 {later} 部", "en" => "{aired} aired · {later} more tonight"; aired: anime.aired_count, later: anime.later_count }, emphasis: secondary)
+                if anime.has_airing {
+                    Text(content: tr! { "zh-Hans" => "已更新 {aired} 部 · 今晚还有 {later} 部", "en" => "{aired} aired · {later} more tonight"; aired: anime.aired_count, later: anime.later_count }, emphasis: secondary)
+                }
                 Spacer
                 Button(id: schedule, label: tr! { "zh-Hans" => "新番表 ›", "en" => "Schedule ›" }, prominence: plain, variant: more_link) => pages.new.show()
             }
             Canvas(height: 12)
-            timeline_track(anime: anime)
+            if anime.has_airing {
+                // A track longer than the page scrolls; it opens halfway,
+                // where the evening's shows usually are.
+                ScrollView(axis: horizontal, indicators: hidden, open_at: 0.5) {
+                    Column(gap: 0, width: if window.large { anime.track_wide } else { anime.track_width }) {
+                        timeline_track(anime: anime)
+                    }
+                }
+            } else {
+                season_note(anime: anime)
+            }
         }
     }
 }
 
-/// The track of the timeline: the posters at their times, the ruler with
-/// the hours, and the "now" marker across.
+/// What the timeline or the schedule says when it has nothing to show:
+/// that an account is needed, that the season is loading, why it failed,
+/// or that nothing airs today at a known time.
+#[component]
+pub fn season_note(anime: anime::Client) -> impl View {
+    ui! {
+        Column(gap: 4, padding_y: 10) {
+            if !anime.signed_in {
+                Text(content: tr! { "zh-Hans" => "登录弹弹play 账号后，这里会排出今天更新的番。", "en" => "Sign in to dandanplay to see what airs today." }, emphasis: secondary)
+                Text(content: tr! { "zh-Hans" => "在 设置 › 账号 里登录", "en" => "Sign in under Settings › Account" }, style: caption, emphasis: tertiary)
+            } else if anime.loading {
+                Text(content: tr! { "zh-Hans" => "正在载入这一季的新番…", "en" => "Loading this season's shows…" }, emphasis: secondary)
+            } else {
+                Text(content: tr! { "zh-Hans" => "今天没有知道播出时刻的番；新番表按星期列着这一季的全部。", "en" => "Nothing airs today at a known time; the schedule lists the whole season by day." }, emphasis: secondary)
+                Text(content: anime.error, style: caption, emphasis: tertiary)
+            }
+        }
+    }
+}
+
+/// The track of the timeline: the shows of each time side by side above
+/// the ruler, a stem down to that time under them, breaks where an empty
+/// stretch was shrunk, and "now" between the aired and the coming. The engine places
+/// every group as a fraction of the track and gives its length; the caller
+/// sizes the track and scrolls it.
 #[component]
 pub fn timeline_track(anime: anime::Client) -> impl View {
     ui! {
             Stack(align: top_leading) {
                 Column(gap: 0) {
                     Canvas(height: 24)
-                    Rail(overhang: if window.compact { 0.0 } else { 8.0 }) {
-                        ForEach(items: anime.airing, key: id, stagger: 0.06) |show| {
-                            Column(gap: 0, width: 88, at: show.at, appear: timeline_card_in, appear_delay: 0.22) {
-                                Button(id: open_airing, label: show.title, variant: poster) {
-                                    Image(source: show.poster, width: 88, height: 132, fit: cover, label: show.title)
-                                } => anime.open(show.id)
-                                Canvas(height: 6)
-                                Text(content: show.title, style: caption, lines: 1)
-                                if show.aired {
-                                    Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm} · 已更新", "en" => "{time, duration, hh:mm} · Aired"; time: show.time }, style: caption, emphasis: secondary, lines: 1)
-                                } else {
-                                    Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm} · 稍后", "en" => "{time, duration, hh:mm} · Later"; time: show.time }, style: caption, emphasis: secondary, lines: 1)
+                    Rail(anchor: start) {
+                        ForEach(items: anime.airing, key: time, stagger: 0.06) |group| {
+                            Row(gap: 8, align: top, at: group.at, appear: timeline_card_in, appear_delay: 0.22) {
+                                ForEach(items: group.shows, key: id) |show| {
+                                    Column(gap: 0, width: 88) {
+                                        Button(id: open_airing, label: show.title, variant: poster) {
+                                            Image(source: show.poster, width: 88, height: 132, fit: cover, label: show.title)
+                                        } => anime.open(show.id)
+                                        Canvas(height: 6)
+                                        Text(content: show.title, style: caption, lines: 1)
+                                        if show.aired {
+                                            Text(content: tr! { "zh-Hans" => "已更新", "en" => "Aired" }, style: caption, emphasis: secondary, lines: 1)
+                                        } else {
+                                            Text(content: tr! { "zh-Hans" => "稍后", "en" => "Later" }, style: caption, emphasis: secondary, lines: 1)
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                    Canvas(height: 38)
+                    // A stem from each time's posters down to its dot on the
+                    // ruler, the dot hollow until they air; a bracket first
+                    // joins the posters of a time.
+                    Rail(anchor: start) {
+                        ForEach(items: anime.airing, key: time) |group| {
+                            Column(gap: 0, width: group.width, align: center, at: group.at) {
+                                Canvas(height: 8)
+                                Canvas(width: group.span, height: 1) {
+                                    Shape(kind: rect, fill: text.placeholder)
+                                }
+                                Canvas(width: 1, height: 22) {
+                                    Shape(kind: rect, fill: text.placeholder)
+                                }
+                                if group.aired {
+                                    Canvas(width: 7, height: 7) {
+                                        Shape(kind: ellipse, fill: text.secondary)
+                                    }
+                                } else {
+                                    Canvas(width: 7, height: 7) {
+                                        Shape(kind: ellipse, x: 0.75, y: 0.75, width: 5.5, height: 5.5, stroke: text.placeholder, stroke_width: 1.5)
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Canvas(height: 1, appear: timeline_rule_in, appear_delay: 0.12) {
                         Shape(kind: rect, fill: text.placeholder)
                     }
-                    Rail(overhang: if window.compact { 0.0 } else { 8.0 }) {
-                        ForEach(items: anime.hours, key: time) |hour| {
-                            Column(gap: 2, at: hour.at) {
-                                Canvas(width: 1, height: 5) {
-                                    Shape(kind: rect, fill: text.placeholder)
-                                }
-                                Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: hour.time }, style: caption, emphasis: tertiary)
+                    Rail(anchor: start) {
+                        ForEach(items: anime.airing, key: time) |group| {
+                            Column(gap: 0, width: group.width, align: center, at: group.at) {
+                                Canvas(height: 7)
+                                Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: group.time }, style: caption, emphasis: secondary)
                             }
+                        }
+                        ForEach(items: anime.breaks, key: after) |gap| {
+                            Text(content: tr! { "zh-Hans" => "⋯", "en" => "⋯" }, style: caption, emphasis: tertiary, at: gap.at)
                         }
                     }
                 }
-                Rail(anchor: start, overhang: if window.compact { 0.0 } else { 8.0 }) {
-                    // Prototype: 300 ms + seven sample posters × 60 ms;
-                    // the marker grows upward from the ruler after the cards.
+                Rail(anchor: start) {
+                    // The marker grows upward from the ruler after the cards.
                     Row(gap: 7, align: top, at: anime.now_at, appear: timeline_now_in, appear_delay: 0.72) {
                         Canvas(width: 2, height: 232) {
                             Shape(kind: capsule, fill: accent)
@@ -298,7 +363,7 @@ pub fn desktop_details(anime: anime::Client, #[session] draft: AnimeDraft) -> im
                                 if anime.show.rating > 0.0 {
                                     Text(content: tr! { "zh-Hans" => "★ {rating}", "en" => "★ {rating}"; rating: anime.show.rating }, style: callout)
                                 }
-                                Text(content: tr! { "zh-Hans" => "Bangumi", "en" => "Bangumi" }, emphasis: secondary)
+                                Text(content: tr! { "zh-Hans" => "弹弹play", "en" => "dandanplay" }, emphasis: secondary)
                                 Row(gap: 6) {
                                     ForEach(items: anime.show.tags, key: name) |tag| {
                                         tag_chip(name: tag.name)
@@ -324,13 +389,6 @@ pub fn desktop_details(anime: anime::Client, #[session] draft: AnimeDraft) -> im
                                     MenuItem(id: rate_4, label: tr! { "zh-Hans" => "4 分 · 较差", "en" => "4 · Poor" }) => anime.rate(4)
                                     MenuItem(id: rate_2, label: tr! { "zh-Hans" => "2 分 · 不行", "en" => "2 · Bad" }) => anime.rate(2)
                                 }
-                                Menu(id: more, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon) {
-                                    MenuItem(id: match_danmaku, label: tr! { "zh-Hans" => "匹配弹幕", "en" => "Match Danmaku" }) => anime.close()
-                                    MenuItem(id: reveal, label: tr! { "zh-Hans" => "在文件夹中显示", "en" => "Show in Folder" }) => anime.close()
-                                    MenuItem(id: refresh, label: tr! { "zh-Hans" => "刷新", "en" => "Refresh" }) => anime.close()
-                                    Divider
-                                    MenuItem(id: remove, label: tr! { "zh-Hans" => "移除", "en" => "Remove" }, role: destructive) => anime.close()
-                                }
                             }
                         }
                     }
@@ -354,8 +412,8 @@ pub fn desktop_details(anime: anime::Client, #[session] draft: AnimeDraft) -> im
                         }
                     }
                     Canvas(height: 18)
-                    Picker(id: detail_tab, label: tr! { "zh-Hans" => "分页", "en" => "Tab" }, value: draft.tab, style: segmented, label_hidden: true)
-                    Canvas(height: 14)
+                    Text(content: tr! { "zh-Hans" => "简介", "en" => "About" }, style: title3)
+                    Canvas(height: 10)
                     Column(width: 640) {
                         Text(content: anime.show.summary, emphasis: secondary)
                     }
@@ -439,10 +497,14 @@ pub fn new_page(anime: anime::Client) -> impl View {
                     } else {
                         Row(gap: 14, align: baseline) {
                             Text(content: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, style: large_title)
-                            Text(content: tr! { "zh-Hans" => "2026 年 10 月 · 秋季新番 · 第 2 周", "en" => "October 2026 · Fall anime · Week 2" }, emphasis: secondary, lines: 1)
+                            Text(content: anime.season_label, emphasis: secondary, lines: 1)
                             Spacer
                         }
                         Canvas(height: 18)
+                    }
+                    if !anime.signed_in || anime.loading {
+                        season_note(anime: anime)
+                        Canvas(height: 12)
                     }
                     if window.compact || window.medium {
                         Column(gap: 8) {
@@ -478,7 +540,9 @@ pub fn new_page(anime: anime::Client) -> impl View {
                                                         Column(gap: 4, align: center) {
                                                             Image(source: show.poster, width: 52, height: 78, fit: cover, corner: poster)
                                                             Row(gap: 0, height: 15) {
-                                                                Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: caption, emphasis: secondary, lines: 1)
+                                                                if show.timed {
+                                                                    Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: caption, emphasis: secondary, lines: 1)
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -514,13 +578,16 @@ pub fn calendar_background(anime: anime::Client, day: anime::BroadcastDay) -> im
 }
 
 /// The heading of a folded day: the same words, stacked in the column's
-/// 86 points, 16 from its edge.
+/// 86 points, 16 from its leading edge and running to the other, as the
+/// design pads it, so "今天 · 15 部" fits.
 #[component]
 pub fn calendar_header_collapsed(day: anime::BroadcastDay) -> impl View {
     ui! {
         Column(gap: 0, width: 86) {
             Canvas(height: 16)
-            Column(gap: 0, padding_x: 16) {
+            Row(gap: 0) {
+            Canvas(width: 16)
+            Column(gap: 0, width: 70) {
             Text(content: tr! { "zh-Hans" => "{day, date, EEE}", "en" => "{day, date, EEE}"; day: day.date }, style: title3, lines: 1)
             if day.today {
                 Text(content: tr! { "zh-Hans" => "今天 · {count} 部", "en" => "Today · {count}"; count: day.count }, style: caption, emphasis: secondary, lines: 1)
@@ -530,6 +597,7 @@ pub fn calendar_header_collapsed(day: anime::BroadcastDay) -> impl View {
                 Text(content: tr! { "zh-Hans" => "后天 · {count} 部", "en" => "In 2 days · {count}"; count: day.count }, style: caption, emphasis: secondary, lines: 1)
             } else {
                 Text(content: tr! { "zh-Hans" => "{count} 部", "en" => "{count} shows"; count: day.count }, style: caption, emphasis: secondary, lines: 1)
+            }
             }
             }
         }
@@ -594,7 +662,9 @@ pub fn calendar_rows(anime: anime::Client, day: anime::BroadcastDay) -> impl Vie
                         // note at 11.5 / 15.
                         // A television's times are 17 points (`--t-title`).
                         Column(width: if window.tv { 52 } else { 44 }) {
-                            if show.aired {
+                            if !show.timed {
+                                Text(content: tr! { "zh-Hans" => "—", "en" => "—" }, style: headline, emphasis: tertiary, lines: 1, line_height: if window.tv { 22 } else { 19 })
+                            } else if show.aired {
                                 Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: headline, emphasis: secondary, lines: 1, line_height: if window.tv { 22 } else { 19 })
                             } else {
                                 Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: headline, lines: 1, line_height: if window.tv { 22 } else { 19 })
@@ -605,8 +675,10 @@ pub fn calendar_rows(anime: anime::Client, day: anime::BroadcastDay) -> impl Vie
                             Text(content: show.title, style: headline, lines: 1, line_height: if window.tv { 22 } else { 19 })
                             if show.aired {
                                 Text(content: tr! { "zh-Hans" => "第 {episode} 集 · 已更新", "en" => "Episode {episode} · Updated"; episode: show.episode }, style: caption, emphasis: secondary, lines: 1, line_height: if window.tv { 18 } else { 15 })
-                            } else if show.tonight {
+                            } else if show.tonight && show.timed {
                                 Text(content: tr! { "zh-Hans" => "今晚更新", "en" => "Airing tonight" }, style: caption, emphasis: secondary, lines: 1, line_height: if window.tv { 18 } else { 15 })
+                            } else if !show.timed {
+                                Text(content: tr! { "zh-Hans" => "播出时刻未知", "en" => "Time unknown" }, style: caption, emphasis: secondary, lines: 1, line_height: if window.tv { 18 } else { 15 })
                             } else {
                                 Text(content: tr! { "zh-Hans" => "等待更新", "en" => "Upcoming" }, style: caption, emphasis: secondary, lines: 1, line_height: if window.tv { 18 } else { 15 })
                             }
@@ -686,6 +758,7 @@ pub fn phone_home(anime: anime::Client) -> impl View {
             Column(gap: 0) {
                 // The shell's header row scrolls with the page.
                 Slot(id: page_header)
+                if anime.has_stage {
                 Column(gap: 0, padding_x: 16) {
                     phone_stage(anime: anime)
                     Canvas(height: 14.5)
@@ -722,8 +795,9 @@ pub fn phone_home(anime: anime::Client) -> impl View {
                         }
                     }
                 }
+                }
                 Column(gap: 0, padding_x: 16) {
-                    Canvas(height: 32.7)
+                    Canvas(height: if anime.has_stage { 32.7 } else { 4 })
                     Row(gap: 10, align: baseline) {
                         Text(content: tr! { "zh-Hans" => "今日更新", "en" => "Airing today" }, style: title3)
                         Spacer
@@ -733,18 +807,23 @@ pub fn phone_home(anime: anime::Client) -> impl View {
                     }
                     Canvas(height: 12)
                 }
-                // The timeline opens with 22:00, the middle of its 900
-                // points, in the middle of the view: `scrollLeft = 450 −
-                // 374 / 2`, 263 of the 916 − 374 it scrolls.
+                // The timeline, at least the design's 900 points, opens
+                // halfway, where the evening's shows usually are.
+                if anime.has_airing {
                 Row(gap: 0, align: top) {
                     Canvas(width: 16)
-                    ScrollView(axis: horizontal, indicators: hidden, open_at: 0.4852398524) {
+                    ScrollView(axis: horizontal, indicators: hidden, open_at: 0.5) {
                         Row(gap: 0) {
-                            Column(gap: 0, width: 900) {
+                            Column(gap: 0, width: anime.track_width) {
                                 timeline_track(anime: anime)
                             }
                             Canvas(width: 16)
                         }
+                    }
+                }
+                } else {
+                    Column(gap: 0, padding_x: 16) {
+                        season_note(anime: anime)
                     }
                 }
                 // The other modules' sections, as the library's recently added.
@@ -880,7 +959,7 @@ pub fn phone_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
                                 if anime.show.rating > 0.0 {
                                     Text(content: tr! { "zh-Hans" => "★ {rating}", "en" => "★ {rating}"; rating: anime.show.rating }, style: headline, font_size: 16)
                                 }
-                                Text(content: tr! { "zh-Hans" => "Bangumi", "en" => "Bangumi" }, font_size: 13, emphasis: secondary)
+                                Text(content: tr! { "zh-Hans" => "弹弹play", "en" => "dandanplay" }, font_size: 13, emphasis: secondary)
                                 Row(gap: 6) {
                                     ForEach(items: anime.show.tags, key: name) |tag| {
                                         tag_chip(name: tag.name)
@@ -905,12 +984,6 @@ pub fn phone_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
                             MenuItem(id: rate_4, label: tr! { "zh-Hans" => "4 分 · 较差", "en" => "4 · Poor" }) => anime.rate(4)
                             MenuItem(id: rate_2, label: tr! { "zh-Hans" => "2 分 · 不行", "en" => "2 · Bad" }) => anime.rate(2)
                         }
-                        Menu(id: phone_more, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon, height: 34) {
-                            MenuItem(id: match_danmaku, label: tr! { "zh-Hans" => "匹配弹幕", "en" => "Match Danmaku" }) => anime.close()
-                            MenuItem(id: refresh, label: tr! { "zh-Hans" => "刷新", "en" => "Refresh" }) => anime.close()
-                            Divider
-                            MenuItem(id: remove, label: tr! { "zh-Hans" => "移除", "en" => "Remove" }, role: destructive) => anime.close()
-                        }
                         Spacer
                     }
                     Canvas(height: 14)
@@ -933,14 +1006,8 @@ pub fn phone_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
                 }
                 Column(gap: 0, padding_x: 16) {
                     Canvas(height: 18)
-                    Row(gap: 0) {
-                        // `.c-seg`: 212 points; iOS's segments would fill the row.
-                        Row(gap: 0, width: 212) {
-                            Picker(id: phone_detail_tab, label: tr! { "zh-Hans" => "分页", "en" => "Tab" }, value: draft.tab, style: segmented, label_hidden: true)
-                        }
-                        Spacer
-                    }
-                    Canvas(height: 14)
+                    Text(content: tr! { "zh-Hans" => "简介", "en" => "About" }, style: title3, font_size: 17)
+                    Canvas(height: 8)
                     Text(content: anime.show.summary, font_size: 13, line_height: 18, emphasis: secondary)
                     Canvas(height: 32)
                 }

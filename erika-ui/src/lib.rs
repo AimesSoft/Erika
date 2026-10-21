@@ -649,8 +649,12 @@ pub fn main_shell(app: erika::Client, anime: anime::Client, windows: AppWindows,
                         Row(gap: 10, align: center) {
                             avatar()
                             Column(gap: 1) {
-                                Text(content: app.user_name, style: headline)
-                                Text(content: tr! { "zh-Hans" => "本地用户", "en" => "Local user" }, style: caption, emphasis: secondary)
+                                Text(content: app.user_name, style: headline, lines: 1)
+                                if app.account.signed_in {
+                                    Text(content: tr! { "zh-Hans" => "弹弹play 已登录", "en" => "Signed in to dandanplay" }, style: caption, emphasis: secondary)
+                                } else {
+                                    Text(content: tr! { "zh-Hans" => "未登录", "en" => "Not signed in" }, style: caption, emphasis: secondary)
+                                }
                             }
                             Spacer
                             IconButton(id: settings, icon: "gearshape", label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, prominence: plain, shortcut: "cmd+,") => windows.settings.open()

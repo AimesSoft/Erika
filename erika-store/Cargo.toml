@@ -1,0 +1,15 @@
+[package]
+name = "erika-store"
+description = "Erika: what the app keeps on the device, in one SQLite database"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true
+md-5 = "0.10"
+
+# The browser has no SQLite file; there nothing is kept beyond the session.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }

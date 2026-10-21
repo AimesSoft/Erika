@@ -14,6 +14,9 @@ pub struct SettingsDraft {
     pub page: SettingsPage,
     pub query: String,
     pub danmaku_file: MediaSource,
+    /// What the account form holds until it signs in.
+    pub account_user: String,
+    pub account_password: String,
 }
 #[component]
 pub fn settings(app: erika::Client, windows: AppWindows, #[session] draft: SettingsDraft) -> impl View {
@@ -31,6 +34,7 @@ pub fn settings(app: erika::Client, windows: AppWindows, #[session] draft: Setti
                             }
                         }
                     }
+                    SidebarItem(value: SettingsPage::Account, label: tr! { "zh-Hans" => "账号", "en" => "Account" }, icon: "person.crop.circle")
                     SidebarItem(value: SettingsPage::General, label: tr! { "zh-Hans" => "通用", "en" => "General" }, icon: "gearshape")
                     SidebarItem(value: SettingsPage::Appearance, label: tr! { "zh-Hans" => "外观", "en" => "Appearance" }, icon: "paintpalette")
                     SidebarItem(value: SettingsPage::Player, label: tr! { "zh-Hans" => "播放", "en" => "Playback" }, icon: "play")
@@ -83,6 +87,7 @@ pub fn settings_page(app: erika::Client, #[session] draft: SettingsDraft) -> imp
     ui! {
         Column(gap: 0) {
             match draft.page {
+                SettingsPage::Account => { settings_account(app: app) }
                 SettingsPage::General => { settings_general(app: app) }
                 SettingsPage::Appearance => { settings_appearance(app: app) }
                 SettingsPage::Player => { settings_player(app: app) }
@@ -137,6 +142,19 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
                                             }
                                         }
                                     } => draft.page.set(SettingsPage::General)
+                                    Button(id: tv_settings_account, label: tr! { "zh-Hans" => "账号", "en" => "Account" }, variant: settings_tv_nav) {
+                                        Stack(width: 280, height: 46, align: leading) {
+                                            if draft.page == SettingsPage::Account {
+                                                Canvas {
+                                                    Shape(kind: capsule, fill: fill.strong)
+                                                }
+                                            }
+                                            Row(gap: 0, padding_x: 16) {
+                                                Text(content: tr! { "zh-Hans" => "账号", "en" => "Account" }, lines: 1)
+                                                Spacer
+                                            }
+                                        }
+                                    } => draft.page.set(SettingsPage::Account)
                                     Button(id: tv_settings_appearance, label: tr! { "zh-Hans" => "外观", "en" => "Appearance" }, variant: settings_tv_nav) {
                                         Stack(width: 280, height: 46, align: leading) {
                                             if draft.page == SettingsPage::Appearance {
@@ -361,6 +379,51 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
                             Toast(content: notice, key: app.notice_revision, duration: 3)
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/// 「账号」: the dandanplay account, which the season's anime, the details
+/// of a show and matching danmaku need. Signed out, the form asks for the
+/// name and the password; signed in, it shows the account.
+#[component]
+pub fn settings_account(app: erika::Client, #[session] draft: SettingsDraft) -> impl View {
+    ui! {
+        Form(variant: settings_form, appear: settings_page_in) {
+            Slot(id: form_header)
+            if app.account.signed_in {
+                Section(title: tr! { "zh-Hans" => "弹弹play 账号", "en" => "dandanplay account" }) {
+                    Row(gap: 12, align: center) {
+                        Label(title: tr! { "zh-Hans" => "账号", "en" => "Account" }, icon: "person.crop.circle", display: icon, font_size: 28)
+                        Column(gap: 1) {
+                            Text(content: app.account.name, style: body, lines: 1)
+                            Text(content: app.account.user, style: caption, emphasis: secondary)
+                        }
+                        Spacer
+                        Button(id: sign_out, label: tr! { "zh-Hans" => "退出登录", "en" => "Sign Out" }) => app.sign_out()
+                    }
+                }
+                Section {
+                    Text(content: tr! { "zh-Hans" => "新番、番剧详情和弹幕匹配经 NipaPlay 的网关连到弹弹play。", "en" => "The season's anime, show details and danmaku matching reach dandanplay through NipaPlay's gateways." }, style: caption, emphasis: secondary, lines: 2)
+                }
+            } else {
+                Section(title: tr! { "zh-Hans" => "弹弹play 账号", "en" => "dandanplay account" }) {
+                    TextInput(id: account_user, label: tr! { "zh-Hans" => "用户名", "en" => "User name" }, value: draft.account_user, prompt: tr! { "zh-Hans" => "用户名或邮箱", "en" => "User name or email" })
+                    TextInput(id: account_password, label: tr! { "zh-Hans" => "密码", "en" => "Password" }, value: draft.account_password, kind: secure, prompt: tr! { "zh-Hans" => "密码", "en" => "Password" }) => app.sign_in(draft.account_user, draft.account_password)
+                    Row(gap: 12, align: center) {
+                        if app.account.busy {
+                            Text(content: tr! { "zh-Hans" => "正在登录…", "en" => "Signing in…" }, style: caption, emphasis: secondary)
+                        } else {
+                            Text(content: app.account.error, style: caption, emphasis: secondary, lines: 2)
+                        }
+                        Spacer
+                        Button(id: sign_in, label: tr! { "zh-Hans" => "登录", "en" => "Sign In" }, prominence: prominent, clears: draft.account_password) => app.sign_in(draft.account_user, draft.account_password)
+                    }
+                }
+                Section {
+                    Text(content: tr! { "zh-Hans" => "登录后才能看新番和番剧详情，也才能给视频匹配弹幕。还没有账号的话，可以在弹弹play 官网注册。", "en" => "Sign in to see the season's anime and show details, and to match danmaku to your videos. No account yet? Sign up on the dandanplay website." }, style: caption, emphasis: secondary, lines: 3)
                 }
             }
         }
