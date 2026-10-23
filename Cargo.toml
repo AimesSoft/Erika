@@ -8,7 +8,7 @@ edition = "2024"
 rust-version = "1.99"
 
 [workspace.dependencies]
-bern = { git = "https://github.com/AimesSoft/Bern", rev = "e702d4e3991094aff56dc6446ad4bae01d8341a9" }
+bern = { git = "https://github.com/AimesSoft/Bern", rev = "9ce4a454b4c1efa11cc017995395815bab958417" }
 erika-protocol = { path = "erika-protocol", default-features = false }
 erika-store = { path = "erika-store" }
 erika-dandanplay = { path = "erika-dandanplay" }
