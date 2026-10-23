@@ -1,22 +1,29 @@
 //! Onboarding edits a draft; only finishing starts/stops optional modules.
 use super::*;
-const ANIME: [&str; 3] = ["danmaku", "library", "anime"];
+use settings::ANIME_MODULES;
 pub fn initial() -> Onboarding {
     let mut draft = Onboarding {
         visible: true,
         step: 0,
         preview_revision: 0,
         preset: OnboardingPreset::Anime,
-        features: settings::feature_selection(&ANIME.map(String::from)),
+        features: settings::feature_selection(
+            &ANIME_MODULES
+                .iter()
+                .copied()
+                .map(String::from)
+                .collect::<Vec<_>>(),
+        ),
         modules: settings::ALL_MODULES
-            .into_iter()
+            .iter()
+            .copied()
             .map(|id| OnboardingModule {
                 id: id.into(),
                 module: settings::feature_module(id),
-                enabled: ANIME.contains(&id),
+                enabled: ANIME_MODULES.contains(&id),
             })
             .collect(),
-        count: 3,
+        count: ANIME_MODULES.len() as i64,
     };
     refresh(&mut draft);
     draft
@@ -40,7 +47,8 @@ impl ErikaEngine {
         }
         for module in &mut self.state.onboarding.modules {
             module.enabled = preset == OnboardingPreset::All
-                || (preset == OnboardingPreset::Anime && ANIME.contains(&module.id.as_str()));
+                || (preset == OnboardingPreset::Anime
+                    && ANIME_MODULES.contains(&module.id.as_str()));
         }
         refresh(&mut self.state.onboarding);
     }
@@ -55,10 +63,10 @@ impl ErikaEngine {
         let enabled = module.enabled;
         for other in &mut draft.modules {
             match (id, enabled, other.id.as_str()) {
-                ("sources" | "remote", true, "library") | ("sync", true, "anime") => {
+                ("sources" | "remote", true, "library") | ("sync", true, "anime" | "account") => {
                     other.enabled = true
                 }
-                ("library", false, "sources" | "remote") | ("anime", false, "sync") => {
+                ("library", false, "sources" | "remote") | ("anime" | "account", false, "sync") => {
                     other.enabled = false
                 }
                 _ => {}
@@ -119,6 +127,10 @@ mod tests {
         assert!(!e.state.onboarding.features.remote && !e.state.onboarding.features.sources);
         e.onboarding_toggle("sync".into()).unwrap();
         assert!(e.state.onboarding.features.anime && e.state.onboarding.features.sync);
+        assert!(e.state.onboarding.features.account);
+        e.onboarding_toggle("account".into()).unwrap();
+        assert!(!e.state.onboarding.features.account && !e.state.onboarding.features.sync);
+        e.onboarding_toggle("sync".into()).unwrap();
         e.onboarding_toggle("anime".into()).unwrap();
         assert!(!e.state.onboarding.features.sync);
         assert_eq!(e.state.features, original);
@@ -143,7 +155,7 @@ mod tests {
         e.onboarding_back().unwrap();
         assert_eq!(e.state.onboarding.step, 1);
         assert_eq!(e.state.onboarding.preset, OnboardingPreset::Custom);
-        assert_eq!(e.state.onboarding.count, 8);
+        assert_eq!(e.state.onboarding.count, settings::ALL_MODULES.len() as i64);
     }
 }
 
@@ -155,30 +167,12 @@ impl ErikaEngine {
         let Ok(text) = String::from_utf8(bytes) else {
             return;
         };
-        let mut lines = text.lines();
-        if lines.next() != Some("erika-welcome-1") {
-            return;
-        }
-        let Some(modules) = lines.next() else {
+        let Some(preferences) = parse_welcome_preferences(&text) else {
             return;
         };
-        let enabled: Vec<String> = modules
-            .split(',')
-            .filter(|id| settings::ALL_MODULES.contains(id))
-            .map(String::from)
-            .collect();
-        self.state.accent = match lines.next() {
-            Some("Ultramarine") => Accent::Ultramarine,
-            Some("Neon") => Accent::Neon,
-            Some("Ribbon") => Accent::Ribbon,
-            _ => Accent::Crimson,
-        };
-        self.state.appearance = match lines.next() {
-            Some("Light") => Appearance::Light,
-            Some("Dark") => Appearance::Dark,
-            _ => Appearance::System,
-        };
-        self.saved_modules = Some(enabled);
+        self.state.accent = preferences.accent;
+        self.state.appearance = preferences.appearance;
+        self.saved_modules = Some(preferences.modules);
         self.onboarding_completed = true;
         self.state.onboarding.visible = false;
     }
@@ -189,11 +183,100 @@ impl ErikaEngine {
         self.write_welcome_preferences(self.saved_modules.as_deref().unwrap_or(&[]))
     }
     fn write_welcome_preferences(&self, enabled: &[String]) -> Result<(), CommandError> {
-        let modules = enabled.join(",");
-        let text = format!(
-            "erika-welcome-1\n{}\n{:?}\n{:?}\n",
-            modules, self.state.accent, self.state.appearance
-        );
+        let text = welcome_preferences_text(enabled, &self.state.accent, &self.state.appearance);
         bern::storage::Store::host().write("welcome-v1", text.as_bytes())
+    }
+}
+
+struct WelcomePreferences {
+    modules: Vec<String>,
+    accent: Accent,
+    appearance: Appearance,
+}
+
+fn parse_welcome_preferences(text: &str) -> Option<WelcomePreferences> {
+    let mut lines = text.lines();
+    let version = lines.next()?;
+    if version != "erika-welcome-1" && version != "erika-welcome-2" {
+        return None;
+    }
+    let saved = lines.next()?;
+    let mut modules: Vec<String> = saved
+        .split(',')
+        .filter(|id| settings::ALL_MODULES.contains(id))
+        .map(String::from)
+        .collect();
+    // Accounts were implicit in v1. Preserve them for existing non-pure
+    // setups, while v2 records an explicit account switch like every module.
+    if version == "erika-welcome-1"
+        && !saved.is_empty()
+        && cfg!(feature = "bern-module-account")
+        && !modules.iter().any(|id| id == "account")
+    {
+        modules.insert(0, "account".into());
+    }
+    let accent = match lines.next() {
+        Some("Ultramarine") => Accent::Ultramarine,
+        Some("Neon") => Accent::Neon,
+        Some("Ribbon") => Accent::Ribbon,
+        _ => Accent::Crimson,
+    };
+    let appearance = match lines.next() {
+        Some("Light") => Appearance::Light,
+        Some("Dark") => Appearance::Dark,
+        _ => Appearance::System,
+    };
+    Some(WelcomePreferences {
+        modules,
+        accent,
+        appearance,
+    })
+}
+
+fn welcome_preferences_text(
+    modules: &[String],
+    accent: &Accent,
+    appearance: &Appearance,
+) -> String {
+    format!(
+        "erika-welcome-2\n{}\n{accent:?}\n{appearance:?}\n",
+        modules.join(",")
+    )
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    #[test]
+    fn old_pure_mode_has_no_account_and_old_nonpure_retains_it() {
+        let pure = parse_welcome_preferences("erika-welcome-1\n\nCrimson\nSystem\n").unwrap();
+        assert!(pure.modules.is_empty());
+        let old = parse_welcome_preferences(
+            "erika-welcome-1\ndan m aku,danmaku,library,anime\nNeon\nDark\n",
+        )
+        .unwrap();
+        assert_eq!(
+            old.modules.iter().any(|id| id == "account"),
+            cfg!(feature = "bern-module-account")
+        );
+        assert!(!old.modules.iter().any(|id| id == "dan m aku"));
+        assert_eq!(old.accent, Accent::Neon);
+        assert_eq!(old.appearance, Appearance::Dark);
+    }
+
+    #[test]
+    fn explicit_account_off_survives_saving_and_restoring() {
+        let modules: Vec<String> = settings::ALL_MODULES
+            .iter()
+            .filter(|id| **id != "account" && **id != "sync")
+            .map(|id| (*id).into())
+            .collect();
+        let saved = welcome_preferences_text(&modules, &Accent::Ribbon, &Appearance::Light);
+        let restored = parse_welcome_preferences(&saved).unwrap();
+        assert_eq!(restored.modules, modules);
+        assert!(!settings::feature_selection(&restored.modules).account);
+        assert_eq!(restored.accent, Accent::Ribbon);
+        assert_eq!(restored.appearance, Appearance::Light);
     }
 }

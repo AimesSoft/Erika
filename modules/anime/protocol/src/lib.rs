@@ -275,7 +275,14 @@ pub mod anime {
         /// The user asked to play episode `episode` of a show, from the
         /// file at `source` (empty when the user has none of it); the
         /// shell's player answers.
-        fn play(&self, title: String, episode: i64, still: MediaSource, progress: f64, source: MediaSource);
+        fn play(
+            &self,
+            title: String,
+            episode: i64,
+            still: MediaSource,
+            progress: f64,
+            source: MediaSource,
+        );
     }
 
     #[commands]

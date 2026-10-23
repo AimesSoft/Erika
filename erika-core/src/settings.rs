@@ -2,20 +2,43 @@
 //! accounts and the plugin catalogue do not perform external operations.
 use super::*;
 
-pub const ALL_MODULES: [&str; 8] = [
+pub const ALL_MODULES: &[&str] = &[
+    #[cfg(feature = "bern-module-account")]
+    "account",
+    #[cfg(feature = "bern-module-danmaku")]
     "danmaku",
+    #[cfg(feature = "bern-module-enhance")]
     "enhance",
+    #[cfg(feature = "bern-module-library")]
     "library",
+    #[cfg(feature = "bern-module-anime")]
     "anime",
+    #[cfg(feature = "bern-module-sync")]
     "sync",
+    #[cfg(feature = "bern-module-sources")]
     "sources",
+    #[cfg(feature = "bern-module-remote")]
     "remote",
+    #[cfg(feature = "bern-module-downloads")]
     "downloads",
+];
+
+/// The Anime preset includes only modules present in this build.
+pub const ANIME_MODULES: &[&str] = &[
+    #[cfg(feature = "bern-module-account")]
+    "account",
+    #[cfg(feature = "bern-module-danmaku")]
+    "danmaku",
+    #[cfg(feature = "bern-module-library")]
+    "library",
+    #[cfg(feature = "bern-module-anime")]
+    "anime",
 ];
 
 /// The module `id` names, by its label.
 pub fn feature_module(id: &str) -> FeatureModule {
     match id {
+        "account" => FeatureModule::Account,
         "danmaku" => FeatureModule::Danmaku,
         "enhance" => FeatureModule::Enhance,
         "library" => FeatureModule::Library,
@@ -29,13 +52,14 @@ pub fn feature_module(id: &str) -> FeatureModule {
 
 /// The preset the enabled modules are exactly, or `Custom`.
 pub fn preset_of(enabled: &[String]) -> OnboardingPreset {
-    const ANIME: [&str; 3] = ["danmaku", "library", "anime"];
     if enabled.is_empty() {
         OnboardingPreset::Pure
     } else if enabled.len() == ALL_MODULES.len() {
         OnboardingPreset::All
-    } else if enabled.len() == ANIME.len()
-        && ANIME.iter().all(|id| enabled.iter().any(|m| m == id))
+    } else if enabled.len() == ANIME_MODULES.len()
+        && ANIME_MODULES
+            .iter()
+            .all(|id| enabled.iter().any(|m| m == id))
     {
         OnboardingPreset::Anime
     } else {
@@ -49,7 +73,6 @@ pub fn default_preferences() -> Preferences {
         reduce_motion: false,
         remember_position: true,
         autoplay: true,
-        step_back: true,
         hardware_decode: true,
         show_danmaku: true,
         auto_match: true,
@@ -64,14 +87,18 @@ pub fn default_preferences() -> Preferences {
 }
 pub fn feature_selection(enabled: &[String]) -> FeatureSelection {
     FeatureSelection {
-        danmaku: enabled.iter().any(|id| id == "danmaku"),
-        enhance: enabled.iter().any(|id| id == "enhance"),
-        library: enabled.iter().any(|id| id == "library"),
-        anime: enabled.iter().any(|id| id == "anime"),
-        sync: enabled.iter().any(|id| id == "sync"),
-        sources: enabled.iter().any(|id| id == "sources"),
-        remote: enabled.iter().any(|id| id == "remote"),
-        downloads: enabled.iter().any(|id| id == "downloads"),
+        account: cfg!(feature = "bern-module-account") && enabled.iter().any(|id| id == "account"),
+        danmaku: cfg!(feature = "bern-module-danmaku") && enabled.iter().any(|id| id == "danmaku"),
+        enhance: cfg!(feature = "bern-module-enhance")
+            && !cfg!(target_arch = "wasm32")
+            && enabled.iter().any(|id| id == "enhance"),
+        library: cfg!(feature = "bern-module-library") && enabled.iter().any(|id| id == "library"),
+        anime: cfg!(feature = "bern-module-anime") && enabled.iter().any(|id| id == "anime"),
+        sync: cfg!(feature = "bern-module-sync") && enabled.iter().any(|id| id == "sync"),
+        sources: cfg!(feature = "bern-module-sources") && enabled.iter().any(|id| id == "sources"),
+        remote: cfg!(feature = "bern-module-remote") && enabled.iter().any(|id| id == "remote"),
+        downloads: cfg!(feature = "bern-module-downloads")
+            && enabled.iter().any(|id| id == "downloads"),
     }
 }
 fn plugin_tags(permissions: &[PluginPermission]) -> Vec<PluginTag> {
@@ -91,7 +118,11 @@ pub fn sample_plugins() -> Vec<Plugin> {
             name: "防剧透".into(),
             author: "Erika 官方".into(),
             description: "用你配置的 AI 接口识别并遮挡剧透弹幕".into(),
-            tags: plugin_tags(&[PluginPermission::Network, PluginPermission::ModifyDanmaku, PluginPermission::NeedsDanmaku]),
+            tags: plugin_tags(&[
+                PluginPermission::Network,
+                PluginPermission::ModifyDanmaku,
+                PluginPermission::NeedsDanmaku,
+            ]),
             category: PluginCategory::Danmaku,
             installed: false,
         },
@@ -198,85 +229,7 @@ impl erika::Queries for ErikaEngine {
     }
 
     fn find_settings(&self, text: String, answer: Answer<Vec<SettingResult>>) {
-        let text = text.trim().to_lowercase();
-        if text.is_empty() {
-            answer.ok(Vec::new());
-            return;
-        }
-        let f = &self.state.features;
-        let entries = [
-            (
-                SettingsPage::Account,
-                "账号",
-                "account 弹弹play 登录 退出 用户名 密码 dandanplay sign in login",
-                true,
-            ),
-            (
-                SettingsPage::General,
-                "通用",
-                "general 启动 语言 更新 language startup update",
-                true,
-            ),
-            (
-                SettingsPage::Appearance,
-                "外观",
-                "appearance 主题色 明暗 减少动态效果 theme accent motion",
-                true,
-            ),
-            (
-                SettingsPage::Player,
-                "播放",
-                "playback 倍速 跳过片头 位置 自动连播 画框 硬件解码 speed skip decode",
-                true,
-            ),
-            (
-                SettingsPage::Danmaku,
-                "弹幕",
-                "danmaku 不透明度 字号 显示区域 弹弹play 本地弹幕 opacity font",
-                f.danmaku,
-            ),
-            (SettingsPage::Library, "媒体库", "library ", f.library),
-            (SettingsPage::Anime, "追番", "anime ", f.anime),
-            (SettingsPage::Sync, "账号同步", "account sync ", f.sync),
-            (
-                SettingsPage::Sources,
-                "网络媒体源",
-                "network sources ",
-                f.sources,
-            ),
-            (
-                SettingsPage::Remote,
-                "局域网与远程",
-                "lan and remote ",
-                f.remote,
-            ),
-            (SettingsPage::Downloads, "下载", "downloads ", f.downloads),
-            (SettingsPage::Enhance, "画质增强", "upscaling ", f.enhance),
-            (
-                SettingsPage::Optional,
-                "可选功能",
-                "optional features ",
-                true,
-            ),
-            (SettingsPage::Plugins, "插件", "plugins ", true),
-            (
-                SettingsPage::Keys,
-                "快捷键",
-                "keyboard shortcuts 键盘 快捷键 keyboard shortcuts",
-                true,
-            ),
-            (SettingsPage::About, "关于", "about ", true),
-        ];
-        answer.ok(entries
-            .into_iter()
-            .filter(|(_, name, keywords, enabled)| {
-                *enabled && (name.contains(&text) || keywords.contains(&text))
-            })
-            .map(|(page, _, _, _)| SettingResult {
-                id: format!("{page:?}"),
-                page,
-            })
-            .collect());
+        answer.ok(crate::search::settings(&text, &self.state.features));
     }
 }
 
@@ -291,9 +244,19 @@ mod tests {
         engine.modules_changed(&[]);
         assert_eq!(engine.state.module_count, 0);
         assert_eq!(engine.state.preset, OnboardingPreset::Pure);
+        assert!(!engine.state.features.account);
         assert!(!engine.state.features.library);
-        engine.modules_changed(&["danmaku".into(), "library".into(), "anime".into()]);
+        engine.modules_changed(
+            &ANIME_MODULES
+                .iter()
+                .map(|id| (*id).into())
+                .collect::<Vec<_>>(),
+        );
         assert_eq!(engine.state.preset, OnboardingPreset::Anime);
+        assert_eq!(
+            engine.state.features.account,
+            cfg!(feature = "bern-module-account")
+        );
         assert!(engine.state.features.anime && engine.state.features.library);
         assert!(!engine.state.features.sources);
         assert!(engine.set_module("missing".into(), true).is_err());

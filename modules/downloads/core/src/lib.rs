@@ -9,8 +9,8 @@
 
 use bern::{CommandError, media::MediaSource};
 use erika_downloads_protocol::downloads::{
-    self, AddProblem, AddSheet, DataSize, DownloadNotice, DownloadTab, DownloadTask, DownloadVideo, PreviewFile, SavePlace,
-    State,
+    self, AddProblem, AddSheet, DataSize, DownloadNotice, DownloadTab, DownloadTask, DownloadVideo,
+    PreviewFile, SavePlace, State,
 };
 use erika_torrent::{Preview, Task, TaskFile, TaskState};
 use std::collections::{HashMap, HashSet};
@@ -72,7 +72,10 @@ fn in_background(inbox: &Arc<Mutex<Vec<Done>>>, work: impl FnOnce() -> Done + Se
     let waker = bern::wake::waker();
     let run = move || {
         let done = work();
-        inbox.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(done);
+        inbox
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(done);
         if let Some(waker) = waker {
             waker.wake();
         }
@@ -86,11 +89,24 @@ fn in_background(inbox: &Arc<Mutex<Vec<Done>>>, work: impl FnOnce() -> Done + Se
 
 /// Where downloads go until the user picks: the user's Downloads folder on
 /// a computer, where people look for them; elsewhere the app's data.
+#[cfg(target_arch = "wasm32")]
 fn default_place() -> PathBuf {
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
-    match home.map(|home| home.join("Downloads")).filter(|downloads| downloads.is_dir()) {
+    PathBuf::from("downloads")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn default_place() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    match home
+        .map(|home| home.join("Downloads"))
+        .filter(|downloads| downloads.is_dir())
+    {
         Some(downloads) => downloads.join("Erika"),
-        None => bern::storage::data_dir().unwrap_or_else(std::env::temp_dir).join("downloads"),
+        None => bern::storage::data_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("downloads"),
     }
 }
 
@@ -101,9 +117,15 @@ fn data_size(bytes: u64) -> DataSize {
     let tenth = |value: f64| (value * 10.0).round() / 10.0;
     match bytes {
         0.0 => DataSize::Unknown,
-        _ if bytes < KB * KB => DataSize::Kilobytes { kilobytes: (bytes / KB).ceil() },
-        _ if bytes < KB * KB * KB => DataSize::Megabytes { megabytes: (bytes / KB / KB).round() },
-        _ => DataSize::Gigabytes { gigabytes: tenth(bytes / KB / KB / KB) },
+        _ if bytes < KB * KB => DataSize::Kilobytes {
+            kilobytes: (bytes / KB).ceil(),
+        },
+        _ if bytes < KB * KB * KB => DataSize::Megabytes {
+            megabytes: (bytes / KB / KB).round(),
+        },
+        _ => DataSize::Gigabytes {
+            gigabytes: tenth(bytes / KB / KB / KB),
+        },
     }
 }
 
@@ -121,7 +143,12 @@ fn magnet_name(link: &str) -> String {
             let mut decoded = Vec::with_capacity(bytes.len());
             let mut at = 0;
             while at < bytes.len() {
-                match (bytes[at], bytes.get(at + 1..at + 3).and_then(|hex| u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok())) {
+                match (
+                    bytes[at],
+                    bytes.get(at + 1..at + 3).and_then(|hex| {
+                        u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()
+                    }),
+                ) {
                     (b'%', Some(byte)) => {
                         decoded.push(byte);
                         at += 3;
@@ -140,8 +167,19 @@ fn magnet_name(link: &str) -> String {
 impl Default for DownloadsEngine {
     fn default() -> Self {
         let db = erika_store::Db::open();
-        let places: Vec<PathBuf> = db.setting(PLACES).map(|text| text.lines().filter(|line| !line.is_empty()).map(PathBuf::from).collect()).unwrap_or_default();
-        let place = db.setting(PLACE).map(PathBuf::from).unwrap_or_else(default_place);
+        let places: Vec<PathBuf> = db
+            .setting(PLACES)
+            .map(|text| {
+                text.lines()
+                    .filter(|line| !line.is_empty())
+                    .map(PathBuf::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let place = db
+            .setting(PLACE)
+            .map(PathBuf::from)
+            .unwrap_or_else(default_place);
         let own_folder = db.setting(OWN_FOLDER).is_none_or(|on| on == "1");
         let to_library = db.setting(TO_LIBRARY).is_none_or(|on| on == "1");
         let mut engine = Self {
@@ -203,9 +241,14 @@ impl DownloadsEngine {
     }
 
     fn save_places(&self) {
-        let text: Vec<String> = self.places.iter().map(|place| place.display().to_string()).collect();
+        let text: Vec<String> = self
+            .places
+            .iter()
+            .map(|place| place.display().to_string())
+            .collect();
         self.db.set_setting(PLACES, Some(&text.join("\n")));
-        self.db.set_setting(PLACE, Some(&self.place.display().to_string()));
+        self.db
+            .set_setting(PLACE, Some(&self.place.display().to_string()));
     }
 
     /// Download into `place` from now on, and keep it among the choices.
@@ -246,24 +289,47 @@ impl DownloadsEngine {
                 }
             }
         }
-        let done: Vec<Task> = self.tasks.iter().filter(|task| task.finished && !self.finished.contains(&task.info_hash)).cloned().collect();
+        let done: Vec<Task> = self
+            .tasks
+            .iter()
+            .filter(|task| task.finished && !self.finished.contains(&task.info_hash))
+            .cloned()
+            .collect();
         for task in done {
             self.finished.insert(task.info_hash.clone());
             if self.seen {
-                self.notify(DownloadNotice::Finished { title: task.name.clone() });
+                self.notify(DownloadNotice::Finished {
+                    title: task.name.clone(),
+                });
                 if self.state.to_library {
                     downloads::emit::finished(MediaSource::file(self.library_folder(&task)));
                 }
             }
         }
         self.seen = true;
-        self.files.retain(|id, _| self.tasks.iter().any(|task| task.id == *id));
+        self.files
+            .retain(|id, _| self.tasks.iter().any(|task| task.id == *id));
     }
 
     fn row(&self, task: &Task) -> DownloadTask {
-        let files = self.files.get(&task.id).map(Vec::as_slice).unwrap_or_default();
-        let videos: Vec<DownloadVideo> = files.iter().filter(|file| file.is_video()).map(|file| DownloadVideo { index: file.index as i64, name: file.name().to_string() }).collect();
-        let progress = if task.total > 0 { (task.progress as f64 / task.total as f64).clamp(0.0, 1.0) } else { 0.0 };
+        let files = self
+            .files
+            .get(&task.id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let videos: Vec<DownloadVideo> = files
+            .iter()
+            .filter(|file| file.is_video())
+            .map(|file| DownloadVideo {
+                index: file.index as i64,
+                name: file.name().to_string(),
+            })
+            .collect();
+        let progress = if task.total > 0 {
+            (task.progress as f64 / task.total as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         let tenth = |value: f64| (value * 10.0).round() / 10.0;
         DownloadTask {
             id: task.id as i64 + 1,
@@ -271,10 +337,15 @@ impl DownloadsEngine {
             fetching: task.total == 0 && task.state == TaskState::Initializing,
             size: data_size(task.total),
             progress: if task.finished { 1.0 } else { progress },
-            percent: if task.finished { 100 } else { (progress * 100.0).floor() as i64 },
+            percent: if task.finished {
+                100
+            } else {
+                (progress * 100.0).floor() as i64
+            },
             speed: tenth(task.down),
             upload: tenth(task.up),
-            running: !task.finished && matches!(task.state, TaskState::Live | TaskState::Initializing),
+            running: !task.finished
+                && matches!(task.state, TaskState::Live | TaskState::Initializing),
             completed: task.finished,
             failed: task.state == TaskState::Error,
             error: task.error.clone().unwrap_or_default(),
@@ -313,8 +384,18 @@ impl DownloadsEngine {
                 folder: String::new(),
             })
             .collect();
-        active.extend(self.tasks.iter().filter(|task| !task.finished).map(|task| self.row(task)));
-        let mut completed: Vec<DownloadTask> = self.tasks.iter().filter(|task| task.finished).map(|task| self.row(task)).collect();
+        active.extend(
+            self.tasks
+                .iter()
+                .filter(|task| !task.finished)
+                .map(|task| self.row(task)),
+        );
+        let mut completed: Vec<DownloadTask> = self
+            .tasks
+            .iter()
+            .filter(|task| task.finished)
+            .map(|task| self.row(task))
+            .collect();
         completed.reverse();
         for rows in [&mut active, &mut completed] {
             if let Some(first) = rows.first_mut() {
@@ -329,13 +410,25 @@ impl DownloadsEngine {
 
         let sheet = &mut self.state.adding;
         sheet.place = self.place.display().to_string();
-        sheet.places = self.places.iter().enumerate().map(|(id, place)| SavePlace {
+        sheet.places = self
+            .places
+            .iter()
+            .enumerate()
+            .map(|(id, place)| SavePlace {
                 id: id as i64,
-                name: place.file_name().map_or_else(|| place.display().to_string(), |name| name.to_string_lossy().into_owned()),
+                name: place.file_name().map_or_else(
+                    || place.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                ),
                 path: place.display().to_string(),
                 chosen: *place == self.place,
-            }).collect();
-        sheet.has_places = self.places.len() > 1 || self.places.first().is_some_and(|place| *place != self.place);
+            })
+            .collect();
+        sheet.has_places = self.places.len() > 1
+            || self
+                .places
+                .first()
+                .is_some_and(|place| *place != self.place);
         sheet.own_folder = self.own_folder;
         match &self.preview {
             Some((_, preview)) => {
@@ -343,7 +436,16 @@ impl DownloadsEngine {
                 sheet.name = preview.name.clone();
                 sheet.size = data_size(preview.total);
                 sheet.file_count = preview.files.len() as i64;
-                sheet.files = preview.files.iter().take(PREVIEW_FILES).map(|file| PreviewFile { index: file.index as i64, name: file.path.clone(), size: data_size(file.length) }).collect();
+                sheet.files = preview
+                    .files
+                    .iter()
+                    .take(PREVIEW_FILES)
+                    .map(|file| PreviewFile {
+                        index: file.index as i64,
+                        name: file.path.clone(),
+                        size: data_size(file.length),
+                    })
+                    .collect();
                 sheet.more_files = preview.files.len().saturating_sub(PREVIEW_FILES) as i64;
                 sheet.folder_name = preview.folder_name.clone();
             }
@@ -361,7 +463,12 @@ impl DownloadsEngine {
 
     /// Take in what the other threads came back with.
     fn take_done(&mut self) {
-        let done: Vec<Done> = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+        let done: Vec<Done> = std::mem::take(
+            &mut *self
+                .inbox
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
         for done in done {
             match done {
                 Done::Started(Ok(())) => {
@@ -376,7 +483,9 @@ impl DownloadsEngine {
                     self.state.adding.reading = false;
                     match result {
                         Ok(preview) => self.preview = Some((from, preview)),
-                        Err(detail) => self.state.adding.problem = Some(AddProblem::Unreadable { detail }),
+                        Err(detail) => {
+                            self.state.adding.problem = Some(AddProblem::Unreadable { detail })
+                        }
                     }
                 }
                 Done::Read(..) => {}
@@ -394,7 +503,11 @@ impl DownloadsEngine {
     }
 
     /// Start reading a torrent for the sheet; an older reading is dropped.
-    fn read(&mut self, from: String, work: impl FnOnce() -> erika_torrent::Result<Preview> + Send + 'static) {
+    fn read(
+        &mut self,
+        from: String,
+        work: impl FnOnce() -> erika_torrent::Result<Preview> + Send + 'static,
+    ) {
         self.reading += 1;
         let reading = self.reading;
         self.preview = None;
@@ -480,7 +593,8 @@ impl downloads::Commands for DownloadsEngine {
 
     fn set_own_folder(&mut self, on: bool) -> Result<(), CommandError> {
         self.own_folder = on;
-        self.db.set_setting(OWN_FOLDER, Some(if on { "1" } else { "0" }));
+        self.db
+            .set_setting(OWN_FOLDER, Some(if on { "1" } else { "0" }));
         self.refresh();
         Ok(())
     }
@@ -492,7 +606,11 @@ impl downloads::Commands for DownloadsEngine {
             self.refresh();
             return Ok(());
         }
-        let read = self.preview.take().filter(|(from, _)| link.is_empty() || *from == link).map(|(_, preview)| preview);
+        let read = self
+            .preview
+            .take()
+            .filter(|(from, _)| link.is_empty() || *from == link)
+            .map(|(_, preview)| preview);
         let name = match &read {
             Some(preview) => preview.name.clone(),
             None if link.is_empty() => {
@@ -520,7 +638,10 @@ impl downloads::Commands for DownloadsEngine {
                 Some(preview) => Ok(preview),
                 None => erika_torrent::preview_link(&link),
             };
-            Done::Added(key, preview.and_then(|preview| erika_torrent::add(&preview, &place, own_folder)))
+            Done::Added(
+                key,
+                preview.and_then(|preview| erika_torrent::add(&preview, &place, own_folder)),
+            )
         });
         self.refresh();
         Ok(())
@@ -529,7 +650,9 @@ impl downloads::Commands for DownloadsEngine {
     fn toggle(&mut self, id: i64) -> Result<(), CommandError> {
         let task = self.task(id).cloned().ok_or_else(unknown_task)?;
         let result = match task.state {
-            TaskState::Paused | TaskState::Error => erika_torrent::resume(task.id).map(|()| DownloadNotice::Resumed),
+            TaskState::Paused | TaskState::Error => {
+                erika_torrent::resume(task.id).map(|()| DownloadNotice::Resumed)
+            }
             _ => erika_torrent::pause(task.id).map(|()| DownloadNotice::Paused),
         };
         self.notify(result.unwrap_or_else(|detail| DownloadNotice::Failed { detail }));
@@ -540,7 +663,16 @@ impl downloads::Commands for DownloadsEngine {
 
     fn play(&mut self, id: i64, video: i64) -> Result<(), CommandError> {
         let task = self.task(id).cloned().ok_or_else(unknown_task)?;
-        let Some(file) = self.files.get(&task.id).and_then(|files| files.iter().find(|file| file.index as i64 == video && file.is_video())).cloned() else {
+        let Some(file) = self
+            .files
+            .get(&task.id)
+            .and_then(|files| {
+                files
+                    .iter()
+                    .find(|file| file.index as i64 == video && file.is_video())
+            })
+            .cloned()
+        else {
             self.notify(DownloadNotice::NothingToPlay);
             return Ok(());
         };
@@ -558,7 +690,11 @@ impl downloads::Commands for DownloadsEngine {
 
     fn remove(&mut self, id: i64) -> Result<(), CommandError> {
         let task = self.task(id).cloned().ok_or_else(unknown_task)?;
-        self.notify(erika_torrent::forget(task.id).map(|()| DownloadNotice::Removed).unwrap_or_else(|detail| DownloadNotice::Failed { detail }));
+        self.notify(
+            erika_torrent::forget(task.id)
+                .map(|()| DownloadNotice::Removed)
+                .unwrap_or_else(|detail| DownloadNotice::Failed { detail }),
+        );
         self.read_tasks();
         self.refresh();
         Ok(())
@@ -578,7 +714,11 @@ impl downloads::Commands for DownloadsEngine {
 
     fn delete(&mut self) -> Result<(), CommandError> {
         if let Some(task) = self.task(self.state.deleting).cloned() {
-            self.notify(erika_torrent::delete(task.id).map(|()| DownloadNotice::Deleted).unwrap_or_else(|detail| DownloadNotice::Failed { detail }));
+            self.notify(
+                erika_torrent::delete(task.id)
+                    .map(|()| DownloadNotice::Deleted)
+                    .unwrap_or_else(|detail| DownloadNotice::Failed { detail }),
+            );
         }
         self.state.deleting = 0;
         self.read_tasks();
@@ -588,7 +728,8 @@ impl downloads::Commands for DownloadsEngine {
 
     fn set_to_library(&mut self, on: bool) -> Result<(), CommandError> {
         self.state.to_library = on;
-        self.db.set_setting(TO_LIBRARY, Some(if on { "1" } else { "0" }));
+        self.db
+            .set_setting(TO_LIBRARY, Some(if on { "1" } else { "0" }));
         Ok(())
     }
 
@@ -615,7 +756,9 @@ impl downloads::Engine for DownloadsEngine {
             // a download does.
             let data = bern::storage::data_dir().unwrap_or_default();
             let (session, fallback) = (data.join("torrents"), data.join("downloads"));
-            in_background(&self.inbox, move || Done::Started(erika_torrent::start(&session, &fallback)));
+            in_background(&self.inbox, move || {
+                Done::Started(erika_torrent::start(&session, &fallback))
+            });
             self.take_done();
         }
     }
@@ -631,13 +774,22 @@ mod tests {
     fn sizes_read_as_people_write_them() {
         assert_eq!(data_size(0), DataSize::Unknown);
         assert_eq!(data_size(16_384), DataSize::Kilobytes { kilobytes: 16.0 });
-        assert_eq!(data_size(860 << 20), DataSize::Megabytes { megabytes: 860.0 });
-        assert_eq!(data_size((1.24 * (1u64 << 30) as f64) as u64), DataSize::Gigabytes { gigabytes: 1.2 });
+        assert_eq!(
+            data_size(860 << 20),
+            DataSize::Megabytes { megabytes: 860.0 }
+        );
+        assert_eq!(
+            data_size((1.24 * (1u64 << 30) as f64) as u64),
+            DataSize::Gigabytes { gigabytes: 1.2 }
+        );
     }
 
     #[test]
     fn magnet_links_name_their_torrent() {
-        assert_eq!(magnet_name("magnet:?xt=urn:btih:abc&dn=%5BSakura%5D+Frieren+-+01.mkv&tr=x"), "[Sakura] Frieren - 01.mkv");
+        assert_eq!(
+            magnet_name("magnet:?xt=urn:btih:abc&dn=%5BSakura%5D+Frieren+-+01.mkv&tr=x"),
+            "[Sakura] Frieren - 01.mkv"
+        );
         assert_eq!(magnet_name("magnet:?xt=urn:btih:abc"), "");
     }
 

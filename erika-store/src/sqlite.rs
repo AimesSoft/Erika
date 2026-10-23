@@ -1,6 +1,9 @@
 //! The database on devices with files.
 
-use crate::{Anime, Entry, Episode, EpisodeFile, FileId, Fingerprint, Recent, Seen, Shelf, Source, Watching, now};
+use crate::{
+    Anime, Entry, Episode, EpisodeFile, FileId, Fingerprint, Recent, Seen, Shelf, Source, Watching,
+    now,
+};
 use rusqlite::{Connection, OptionalExtension, Result, TransactionBehavior, params};
 use std::path::Path;
 
@@ -92,6 +95,9 @@ const MIGRATIONS: &[&str] = &[
         value TEXT NOT NULL
     ) STRICT;
     ",
+    // 2: what a source holds, which says where its videos are recognized:
+    // `anime` by dandanplay, `series` and `movie` by the user's own server.
+    "ALTER TABLE source ADD COLUMN content TEXT NOT NULL DEFAULT 'anime';",
 ];
 
 /// One connection to the app's database.
@@ -231,7 +237,14 @@ impl Db {
 
     /// Put the video at `url`, opened directly, at the top of the recent
     /// ones, with where it stopped and its picture.
-    pub fn remember(&self, url: &str, title: &str, still: Option<&str>, position: f64, duration: f64) {
+    pub fn remember(
+        &self,
+        url: &str,
+        title: &str,
+        still: Option<&str>,
+        position: f64,
+        duration: f64,
+    ) {
         logged(
             (|| {
                 self.conn.execute(
@@ -299,7 +312,9 @@ impl Db {
     pub fn setting(&self, key: &str) -> Option<String> {
         logged(
             self.conn
-                .query_row("SELECT value FROM setting WHERE key = ?1", [key], |row| row.get(0))
+                .query_row("SELECT value FROM setting WHERE key = ?1", [key], |row| {
+                    row.get(0)
+                })
                 .optional(),
             "read a setting",
         )
@@ -314,7 +329,9 @@ impl Db {
                  ON CONFLICT (key) DO UPDATE SET value = excluded.value",
                 params![key, value],
             ),
-            None => self.conn.execute("DELETE FROM setting WHERE key = ?1", [key]),
+            None => self
+                .conn
+                .execute("DELETE FROM setting WHERE key = ?1", [key]),
         };
         logged(result, "save a setting");
     }
@@ -337,7 +354,10 @@ impl Db {
     /// File `file` is `episode` of `anime`; `manual` when the user said so.
     /// Automatic matching leaves a file the user matched or unlinked alone.
     pub fn link_episode(&self, file: FileId, anime: &Anime, episode: &Episode, manual: bool) {
-        logged(self.link(file, anime, episode, manual), "link a file to its episode");
+        logged(
+            self.link(file, anime, episode, manual),
+            "link a file to its episode",
+        );
     }
 
     fn link(&self, file: FileId, anime: &Anime, episode: &Episode, manual: bool) -> Result<usize> {
@@ -356,14 +376,23 @@ impl Db {
                  anime_id = excluded.anime_id,
                  number = excluded.number,
                  title = excluded.title",
-            params![anime.dandanplay_id, episode.number, episode.dandanplay_id, episode.title],
+            params![
+                anime.dandanplay_id,
+                episode.number,
+                episode.dandanplay_id,
+                episode.title
+            ],
         )?;
         self.conn.execute(
             "UPDATE file SET
                  episode_id = (SELECT id FROM episode WHERE dandanplay_id = ?2),
                  matched_by = ?3
              WHERE id = ?1 AND (?3 = 'manual' OR matched_by IS NULL OR matched_by = 'auto')",
-            params![file, episode.dandanplay_id, if manual { "manual" } else { "auto" }],
+            params![
+                file,
+                episode.dandanplay_id,
+                if manual { "manual" } else { "auto" }
+            ],
         )
     }
 
@@ -407,7 +436,11 @@ impl Db {
                 )?;
                 let rows = statement.query_map([dandanplay_id], |row| {
                     Ok(EpisodeFile {
-                        episode: Episode { dandanplay_id: row.get(0)?, number: row.get(1)?, title: row.get(2)? },
+                        episode: Episode {
+                            dandanplay_id: row.get(0)?,
+                            number: row.get(1)?,
+                            title: row.get(2)?,
+                        },
                         url: row.get(3)?,
                         position: row.get(4)?,
                         duration: row.get(5)?,
@@ -420,7 +453,10 @@ impl Db {
         .unwrap_or_default();
         let mut files: Vec<EpisodeFile> = Vec::new();
         for file in rows {
-            if files.last().is_none_or(|last| last.episode.dandanplay_id != file.episode.dandanplay_id) {
+            if files
+                .last()
+                .is_none_or(|last| last.episode.dandanplay_id != file.episode.dandanplay_id)
+            {
                 files.push(file);
             }
         }
@@ -460,7 +496,11 @@ impl Db {
         .unwrap_or_default();
         let mut watching: Vec<Watching> = Vec::new();
         for row in rows {
-            if watching.len() < limit && !watching.iter().any(|seen| seen.anime.dandanplay_id == row.anime.dandanplay_id) {
+            if watching.len() < limit
+                && !watching
+                    .iter()
+                    .any(|seen| seen.anime.dandanplay_id == row.anime.dandanplay_id)
+            {
                 watching.push(row);
             }
         }
@@ -507,20 +547,25 @@ impl Db {
         logged(self.file(fingerprint), "find a file")
     }
 
-    /// Add a source of kind `kind` at `location`, or find the one there.
-    pub fn add_source(&self, kind: &str, name: &str, location: &str) -> Option<i64> {
+    /// Add a source of kind `kind` at `location` holding `content`, or find
+    /// the one there.
+    pub fn add_source(&self, kind: &str, name: &str, location: &str, content: &str) -> Option<i64> {
         logged(
             (|| {
                 let known = self
                     .conn
-                    .query_row("SELECT id FROM source WHERE kind = ?1 AND location = ?2", params![kind, location], |row| row.get(0))
+                    .query_row(
+                        "SELECT id FROM source WHERE kind = ?1 AND location = ?2",
+                        params![kind, location],
+                        |row| row.get(0),
+                    )
                     .optional()?;
                 if let Some(id) = known {
                     return Ok(id);
                 }
                 self.conn.execute(
-                    "INSERT INTO source (kind, name, location, added_at) VALUES (?1, ?2, ?3, ?4)",
-                    params![kind, name, location, now()],
+                    "INSERT INTO source (kind, name, location, added_at, content) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![kind, name, location, now(), content],
                 )?;
                 Ok(self.conn.last_insert_rowid())
             })(),
@@ -528,10 +573,47 @@ impl Db {
         )
     }
 
+    /// Source `id` holds `content` from now on.
+    pub fn set_source_content(&self, id: i64, content: &str) {
+        logged(
+            self.conn.execute(
+                "UPDATE source SET content = ?2 WHERE id = ?1",
+                params![id, content],
+            ),
+            "change what a source holds",
+        );
+    }
+
+    /// The fingerprint of file `file`.
+    pub fn fingerprint_of(&self, file: FileId) -> Option<Fingerprint> {
+        logged(
+            self.conn
+                .query_row(
+                    "SELECT md5, size FROM file WHERE id = ?1 AND md5 IS NOT NULL",
+                    [file],
+                    |row| {
+                        Ok(Fingerprint {
+                            md5: row.get(0)?,
+                            size: row.get::<_, i64>(1)? as u64,
+                        })
+                    },
+                )
+                .optional(),
+            "read a fingerprint",
+        )
+        .flatten()
+    }
+
     /// Forget source `id` and its addresses; the files and what they were
     /// matched to stay, for the same videos elsewhere.
     pub fn remove_source(&self, id: i64) {
-        logged(self.conn.execute("DELETE FROM source WHERE id = ?1 AND id != ?2", params![id, OPENED]), "remove a source");
+        logged(
+            self.conn.execute(
+                "DELETE FROM source WHERE id = ?1 AND id != ?2",
+                params![id, OPENED],
+            ),
+            "remove a source",
+        );
     }
 
     /// The sources the user added, the first added first.
@@ -539,7 +621,7 @@ impl Db {
         logged(
             (|| {
                 let mut statement = self.conn.prepare(
-                    "SELECT s.id, s.kind, s.name, s.location, count(ad.path),
+                    "SELECT s.id, s.kind, s.name, s.location, s.content, count(ad.path),
                             count(CASE WHEN ad.path IS NOT NULL AND f.episode_id IS NULL THEN 1 END)
                      FROM source s
                      LEFT JOIN address ad ON ad.source_id = s.id
@@ -554,8 +636,9 @@ impl Db {
                         kind: row.get(1)?,
                         name: row.get(2)?,
                         location: row.get(3)?,
-                        files: row.get(4)?,
-                        unmatched: row.get(5)?,
+                        content: row.get(4)?,
+                        files: row.get(5)?,
+                        unmatched: row.get(6)?,
                     })
                 })?;
                 rows.collect()
@@ -597,7 +680,14 @@ impl Db {
     /// The video at `url` in `source` is `size` bytes, changed at
     /// `modified`, and is the file with `fingerprint` when it could be
     /// read. Returns that file.
-    pub fn saw(&self, source: i64, url: &str, size: i64, modified: i64, fingerprint: Option<&Fingerprint>) -> Option<FileId> {
+    pub fn saw(
+        &self,
+        source: i64,
+        url: &str,
+        size: i64,
+        modified: i64,
+        fingerprint: Option<&Fingerprint>,
+    ) -> Option<FileId> {
         logged(
             (|| {
                 let file = fingerprint.map(|fingerprint| self.file(fingerprint)).transpose()?;
@@ -623,7 +713,10 @@ impl Db {
             (|| {
                 let transaction = self.conn.unchecked_transaction()?;
                 for url in urls {
-                    transaction.execute("DELETE FROM address WHERE source_id = ?1 AND path = ?2", params![source, url])?;
+                    transaction.execute(
+                        "DELETE FROM address WHERE source_id = ?1 AND path = ?2",
+                        params![source, url],
+                    )?;
                 }
                 transaction.commit()
             })(),
@@ -683,7 +776,10 @@ impl Db {
     /// The user says file `file` is no episode they know; scans leave it so.
     pub fn unlink(&self, file: FileId) {
         logged(
-            self.conn.execute("UPDATE file SET episode_id = NULL, matched_by = 'none' WHERE id = ?1", [file]),
+            self.conn.execute(
+                "UPDATE file SET episode_id = NULL, matched_by = 'none' WHERE id = ?1",
+                [file],
+            ),
             "unlink a file",
         );
     }

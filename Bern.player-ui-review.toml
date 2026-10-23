@@ -1,0 +1,149 @@
+# Erika, a Bern application. `bern run` builds it and starts it on this
+# computer; `bern build --target <name>` builds one of the targets below.
+
+[app]
+id = "erika_player_ui_review"
+# Change this to a reverse-DNS name you own before you ship.
+bundle_id = "com.aimessoft.erika.player-ui-review"
+version = "0.1.0"
+name = { "zh-Hans" = "Erika UI Review", "en" = "Erika UI Review" }
+# Shown by installers and package managers.
+# publisher = "Your Name"
+
+# The application icon of the design (design/brand/erika-icon.html), each
+# platform in its own form as `build.py` exports it; the round icon for
+# anything else.
+[app.icon]
+default = "design/brand/erika-icon-export/png/circle/erika-circle-1024.png"
+macos = "design/brand/erika-icon-export/macos/Erika.icns"
+ios = "design/brand/erika-icon-export/ios/AppIcon.appiconset"
+tvos = "design/brand/erika-icon-export/tvos/Erika.brandassets"
+windows = "design/brand/erika-icon-export/windows/erika.ico"
+linux = "design/brand/erika-icon-export/linux/hicolor"
+android = "design/brand/erika-icon-export/android/res"
+browser = "design/brand/erika-icon-export/web"
+
+[languages]
+supported = ["zh-Hans", "en"]
+default = "zh-Hans"
+
+[protocol]
+package = "erika-protocol"
+source = "erika-protocol/src/lib.rs"
+
+[engine]
+package = "erika-core"
+type = "erika_core::ErikaEngine"
+
+[ui]
+package = "erika-ui"
+sources = "erika-ui/src"
+root = "app"
+
+# Breakpoints of the window sizes of the design, section 6.2.
+[layouts]
+compact_below = 600
+medium_below = 1024
+expanded_below = 1440
+
+# The primary logo and monochrome brand mark, plus the still of the downloads'
+# sample media.
+[resources]
+paths = ["design/assets/icon.png", "erika-ui/assets/erika-wordmark.png", "design/brand/erika-icon-export/logo/erika-logo-icon-512.png", "design/brand/erika-icon-animated.svg", "design/brand/erika-icon-export/logo/erika-logo-icon.svg", "design/brand/erika-icon-export/png/mono-black/erika-mono-black-128.png", "design/assets/still1.jpg"]
+
+# `channels = ["ipc"]` lets the generated command line and MCP server drive
+# the running app. Remove it to ship an app that listens to nothing.
+
+[targets.player_ui_review]
+javascript = true
+platform = "macos"
+channels = ["ipc"]
+
+# iOS, built for the simulator; `bern run --target ios` starts it in the
+# simulator that is running.
+[targets.ios]
+javascript = true
+platform = "ios"
+channels = ["ipc"]
+
+# Apple TV, built for the simulator; `bern run --target tvos` starts it in
+# the Apple TV simulator that is running. The television's layouts are
+# the `tv` ones of the design (6.2), driven by the remote's focus.
+[targets.tvos]
+javascript = true
+platform = "tvos"
+channels = ["ipc"]
+
+[targets.windows]
+javascript = true
+platform = "windows"
+channels = ["ipc"]
+# WinUI 3 where Windows has a Windows App Runtime 2, the system XAML
+# elsewhere. Name one front end to build only that one.
+# frontends = ["winui3", "xaml-islands"]
+
+[targets.linux]
+javascript = true
+platform = "linux"
+channels = ["ipc"]
+
+# Android phones; `bern run --target android` installs the app on the
+# connected device and starts it.
+[targets.android]
+javascript = true
+platform = "android"
+channels = ["ipc"]
+
+[targets.web_app]
+javascript = true
+channels = ["ipc"]
+# Pure Web application: UI and Rust engine both run in the browser.
+# `ui` chooses the renderer; `web_mode = "app"` embeds the engine as WASM.
+ui = "web"
+platform = "browser"
+web_mode = "app"
+web_extension = { path = "web", build = ["python3", "build.py"] }
+
+# WebUI: the browser connects to a separate native Erika engine host.
+[targets.web_ui]
+ui = "web"
+platform = "browser"
+web_mode = "ui"
+application_transport = "websocket"
+application_codec = "json"
+channels = ["ipc"]
+
+[[modules]]
+path = "modules/account"
+
+[[modules]]
+path = "modules/danmaku"
+
+[[modules]]
+path = "modules/enhance"
+
+[[modules]]
+path = "modules/anime"
+
+[[modules]]
+path = "modules/library"
+
+[[modules]]
+path = "modules/sync"
+
+[[modules]]
+path = "modules/sources"
+
+[[modules]]
+path = "modules/remote"
+
+[[modules]]
+path = "modules/downloads"
+
+[contributes]
+# The phone's header row, at the top of each page's scroll, so that it
+# scrolls away with the page as in the design.
+page_header = ["phone_header"]
+# The phone's way back and title over a settings section.
+form_header = ["phone_form_header"]
+scroll_header = ["phone_scroll_header"]

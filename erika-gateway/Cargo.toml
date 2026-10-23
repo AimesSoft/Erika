@@ -1,0 +1,19 @@
+[package]
+name = "erika-gateway"
+description = "Erika: a dandanplay-style gateway before a danmaku server such as Misaka, knowing files by their fingerprints"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+# Erika's own client, to test the gateway as Erika uses it.
+erika-dandanplay.workspace = true

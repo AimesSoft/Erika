@@ -14,9 +14,7 @@ mod timeline;
 use bern::CommandError;
 use bern::media::MediaSource;
 use clock::Clock;
-use erika_anime_protocol::anime::{
-    self, BackTo, NextAction, Show, State, WatchStatus,
-};
+use erika_anime_protocol::anime::{self, BackTo, NextAction, Show, State, WatchStatus};
 use erika_dandanplay::{Details, Intro};
 use schedule::Schedule;
 use std::collections::HashMap;
@@ -55,7 +53,11 @@ impl Default for AnimeEngine {
         let signed_in = erika_dandanplay::token().is_some();
         let db = erika_store::Db::open();
         let mut engine = Self {
-            season: if signed_in { cached_season() } else { Vec::new() },
+            season: if signed_in {
+                cached_season()
+            } else {
+                Vec::new()
+            },
             schedule: Schedule::cached().unwrap_or_default(),
             watching: db.watching(WATCHING),
             db,
@@ -115,12 +117,18 @@ fn keep_season(season: &[Intro]) {
 /// Run `work` on another thread; its result waits in `inbox`, and the
 /// engine is woken to take it in. The browser has no threads: there the
 /// work runs at once.
-fn in_background(inbox: &Arc<Mutex<Vec<Done>>>, work: impl FnOnce() -> Option<Done> + Send + 'static) {
+fn in_background(
+    inbox: &Arc<Mutex<Vec<Done>>>,
+    work: impl FnOnce() -> Option<Done> + Send + 'static,
+) {
     let inbox = Arc::clone(inbox);
     let waker = bern::wake::waker();
     let run = move || {
         if let Some(done) = work() {
-            inbox.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(done);
+            inbox
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(done);
             if let Some(waker) = waker {
                 waker.wake();
             }
@@ -193,7 +201,11 @@ impl AnimeEngine {
             shows::from_details(details, &files)
         } else if let Some(intro) = self.season.iter().find(|intro| intro.anime_id == id) {
             shows::from_intro(intro, self.state.today)
-        } else if let Some(watching) = self.watching.iter().find(|watching| watching.anime.dandanplay_id == id) {
+        } else if let Some(watching) = self
+            .watching
+            .iter()
+            .find(|watching| watching.anime.dandanplay_id == id)
+        {
             shows::from_watching(watching, self.state.today)
         } else if let Some(anime) = self.db.anime(id) {
             shows::from_anime(&anime, self.state.today)
@@ -219,13 +231,22 @@ impl AnimeEngine {
         let files = self.db.episode_files(id);
         let (episodes, next) = shows::film(self.details.get(&id), &show, &files);
         self.state.next_episode = next;
-        self.state.next = if show.watched == 0 { NextAction::Start } else { NextAction::Continue { episode: next } };
+        self.state.next = if show.watched == 0 {
+            NextAction::Start
+        } else {
+            NextAction::Continue { episode: next }
+        };
         self.state.episodes = episodes;
         self.state.show = show;
     }
 
     fn take_done(&mut self) {
-        let done: Vec<Done> = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+        let done: Vec<Done> = std::mem::take(
+            &mut *self
+                .inbox
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
         for done in done {
             match done {
                 Done::Season(Ok(season)) => {
@@ -269,13 +290,21 @@ impl AnimeEngine {
     }
 
     fn watching_of(&self, id: i64) -> Option<&erika_store::Watching> {
-        self.watching.iter().find(|watching| watching.anime.dandanplay_id == id)
+        self.watching
+            .iter()
+            .find(|watching| watching.anime.dandanplay_id == id)
     }
 
     /// Ask the shell to play what is being watched of show `id`.
     fn play_watching(&self, watching: &erika_store::Watching) {
         let row = shows::watching(watching);
-        anime::emit::play(row.title, row.episode, row.still, row.progress, MediaSource::new(watching.url.clone()));
+        anime::emit::play(
+            row.title,
+            row.episode,
+            row.still,
+            row.progress,
+            MediaSource::new(watching.url.clone()),
+        );
     }
 }
 
@@ -288,14 +317,19 @@ impl anime::Commands for AnimeEngine {
         self.state.episodes = Vec::new();
         self.show_opened();
         if !self.details.contains_key(&id) && self.state.signed_in {
-            in_background(&self.inbox, move || Some(Done::Details(id, erika_dandanplay::details(id))));
+            in_background(&self.inbox, move || {
+                Some(Done::Details(id, erika_dandanplay::details(id)))
+            });
         }
         Ok(())
     }
 
     fn select_day(&mut self, day: i64) -> Result<(), CommandError> {
         if !(0..7).contains(&day) {
-            return Err(CommandError::new("unknown_day", format!("no broadcast day {day}")));
+            return Err(CommandError::new(
+                "unknown_day",
+                format!("no broadcast day {day}"),
+            ));
         }
         self.state.selected_day = day;
         Ok(())
@@ -341,17 +375,18 @@ impl anime::Commands for AnimeEngine {
             .iter()
             .skip(1)
             .position(|watching| watching.anime.dandanplay_id == id)
-            .ok_or_else(|| CommandError::new("unknown_show", format!("show {id} is not beside the stage")))?;
+            .ok_or_else(|| {
+                CommandError::new("unknown_show", format!("show {id} is not beside the stage"))
+            })?;
         self.watching.swap(0, index + 1);
         self.show_watching();
         Ok(())
     }
 
     fn resume(&mut self, id: i64) -> Result<(), CommandError> {
-        let watching = self
-            .watching_of(id)
-            .cloned()
-            .ok_or_else(|| CommandError::new("unknown_show", format!("show {id} is not being watched")))?;
+        let watching = self.watching_of(id).cloned().ok_or_else(|| {
+            CommandError::new("unknown_show", format!("show {id} is not being watched"))
+        })?;
         self.play_watching(&watching);
         Ok(())
     }
@@ -384,11 +419,21 @@ impl anime::Commands for AnimeEngine {
         let (source, progress) = match file {
             Some(file) => (
                 MediaSource::new(file.url),
-                if file.duration > 0.0 { file.position / file.duration } else { 0.0 },
+                if file.duration > 0.0 {
+                    file.position / file.duration
+                } else {
+                    0.0
+                },
             ),
             None => (MediaSource::new(""), 0.0),
         };
-        anime::emit::play(self.state.show.title.clone(), number, episode.still.clone(), progress, source);
+        anime::emit::play(
+            self.state.show.title.clone(),
+            number,
+            episode.still.clone(),
+            progress,
+            source,
+        );
         Ok(())
     }
 
@@ -440,7 +485,13 @@ impl anime::Queries for AnimeEngine {
         let local: Vec<Show> = self
             .season
             .iter()
-            .filter(|intro| text.is_empty() || intro.anime_title.to_lowercase().contains(&text.to_lowercase()))
+            .filter(|intro| {
+                text.is_empty()
+                    || intro
+                        .anime_title
+                        .to_lowercase()
+                        .contains(&text.to_lowercase())
+            })
             .take(6)
             .map(|intro| shows::from_intro(intro, today))
             .collect();
@@ -454,7 +505,11 @@ impl anime::Queries for AnimeEngine {
                 return;
             }
             let shows = match erika_dandanplay::search(&text) {
-                Ok(found) => found.iter().take(6).map(|found| shows::from_found(found, today)).collect(),
+                Ok(found) => found
+                    .iter()
+                    .take(6)
+                    .map(|found| shows::from_found(found, today))
+                    .collect(),
                 Err(_) => local,
             };
             answer.ok(shows::results(shows, &watching));

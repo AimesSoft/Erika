@@ -51,7 +51,10 @@ const SHORTEST_PREFIX: usize = 4;
 
 impl Schedule {
     pub fn new(fetched: i64, slots: Vec<Slot>) -> Self {
-        let mut schedule = Schedule { fetched, ..Schedule::default() };
+        let mut schedule = Schedule {
+            fetched,
+            ..Schedule::default()
+        };
         for (index, slot) in slots.iter().enumerate() {
             for title in &slot.titles {
                 let name = Name::of(title);
@@ -71,10 +74,16 @@ impl Schedule {
         if let Some(&index) = self.exact.get(&name.plain) {
             return Some(&self.slots[index]);
         }
-        let on_the_day = |index: usize| air_day.is_none_or(|day| weekday_in_japan(self.slots[index].first) == day);
+        let on_the_day = |index: usize| {
+            air_day.is_none_or(|day| weekday_in_japan(self.slots[index].first) == day)
+        };
         let only = |fits: &dyn Fn(&Name) -> bool| {
-            let found: BTreeSet<usize> =
-                self.names.iter().filter(|(other, index)| fits(other) && on_the_day(*index)).map(|(_, index)| *index).collect();
+            let found: BTreeSet<usize> = self
+                .names
+                .iter()
+                .filter(|(other, index)| fits(other) && on_the_day(*index))
+                .map(|(_, index)| *index)
+                .collect();
             match found.len() {
                 1 => found.first().map(|index| &self.slots[*index]),
                 _ => None,
@@ -88,7 +97,9 @@ impl Schedule {
             only(&|other| {
                 long(&other.base)
                     && (other.base.starts_with(&name.base) || name.base.starts_with(&other.base))
-                    && (name.season.is_none() || other.season.is_none() || other.season == name.season)
+                    && (name.season.is_none()
+                        || other.season.is_none()
+                        || other.season == name.season)
             })
         })
     }
@@ -109,7 +120,15 @@ fn weekday_in_japan(unix: i64) -> i64 {
 }
 
 /// Words that say a show is a sequel without saying which season.
-const SEQUEL_WORDS: &[&str] = &["续篇", "續篇", "新作动画", "新作", "最终季", "完结季", "完结篇"];
+const SEQUEL_WORDS: &[&str] = &[
+    "续篇",
+    "續篇",
+    "新作动画",
+    "新作",
+    "最终季",
+    "完结季",
+    "完结篇",
+];
 /// What follows 第 and a number to make it a season.
 const SEASON_WORDS: &[&str] = &["部分", "期", "季", "部", "クール", "シーズン"];
 
@@ -142,7 +161,11 @@ impl Name {
         for word in SEQUEL_WORDS {
             rest = rest.replace(word, "");
         }
-        Name { plain, base: rest.chars().filter(|c| c.is_alphanumeric()).collect(), season }
+        Name {
+            plain,
+            base: rest.chars().filter(|c| c.is_alphanumeric()).collect(),
+            season,
+        }
     }
 }
 
@@ -171,9 +194,15 @@ fn season_of(name: &str) -> (Option<u32>, String) {
         let after = &text[c.len_utf8()..];
         // 第 n 季, 第二期, 第2クール …
         if c == '第' {
-            let count: String = after.chars().take_while(|c| c.is_ascii_digit() || "一二三四五六七八九十".contains(*c)).collect();
+            let count: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || "一二三四五六七八九十".contains(*c))
+                .collect();
             let tail = &after[count.len()..];
-            if let (Some(found), Some(word)) = (number(&count), SEASON_WORDS.iter().find(|word| tail.starts_with(**word))) {
+            if let (Some(found), Some(word)) = (
+                number(&count),
+                SEASON_WORDS.iter().find(|word| tail.starts_with(**word)),
+            ) {
                 season = season.or(Some(found));
                 text = &tail[word.len()..];
                 continue 'scan;
@@ -192,7 +221,10 @@ fn season_of(name: &str) -> (Option<u32>, String) {
         if c.is_ascii_digit() && !rest.ends_with(|c: char| c.is_ascii_digit()) {
             let count: String = text.chars().take_while(char::is_ascii_digit).collect();
             let tail = &text[count.len()..];
-            if let Some(tail) = ["st", "nd", "rd", "th"].iter().find_map(|end| tail.strip_prefix(end)?.strip_prefix("season")) {
+            if let Some(tail) = ["st", "nd", "rd", "th"]
+                .iter()
+                .find_map(|end| tail.strip_prefix(end)?.strip_prefix("season"))
+            {
                 season = season.or(count.parse().ok());
                 text = tail;
                 continue 'scan;
@@ -233,7 +265,10 @@ pub fn keep(fetched: i64, slots: &[Slot]) {
     let Some(dir) = bern::storage::cache_dir() else {
         return;
     };
-    let kept = Kept { fetched, slots: slots.to_vec() };
+    let kept = Kept {
+        fetched,
+        slots: slots.to_vec(),
+    };
     if let Ok(bytes) = serde_json::to_vec(&kept) {
         let _ = std::fs::write(dir.join(CACHE), bytes);
     }
@@ -278,7 +313,11 @@ pub fn parse(json: &str, now: i64) -> Vec<Slot> {
             }
             let mut titles = vec![item.title];
             titles.extend(item.title_translate.remove("zh-Hans").unwrap_or_default());
-            Some(Slot { titles, first, period })
+            Some(Slot {
+                titles,
+                first,
+                period,
+            })
         })
         .collect()
 }
@@ -305,7 +344,12 @@ pub fn fetch() -> Result<String, String> {
     let mut last = String::from("no source");
     for url in SOURCES {
         match agent.get(*url).call() {
-            Ok(mut response) => match response.body_mut().with_config().limit(64 << 20).read_to_string() {
+            Ok(mut response) => match response
+                .body_mut()
+                .with_config()
+                .limit(64 << 20)
+                .read_to_string()
+            {
                 Ok(text) => return Ok(text),
                 Err(error) => last = error.to_string(),
             },
@@ -331,7 +375,10 @@ mod tests {
         let slots = parse(DATA, now);
         assert_eq!(slots.len(), 1);
         let schedule = Schedule::new(now, slots);
-        assert_eq!(schedule.find("葬送的芙莉莲第二季", None).unwrap().titles[0], "葬送のフリーレン 第2期");
+        assert_eq!(
+            schedule.find("葬送的芙莉莲第二季", None).unwrap().titles[0],
+            "葬送のフリーレン 第2期"
+        );
         assert!(schedule.find("葬送のフリーレン　第２期", None).is_some());
         assert!(schedule.find("别的番", None).is_none());
     }
@@ -339,23 +386,55 @@ mod tests {
     /// Names as dandanplay and bangumi-data write the same shows.
     #[test]
     fn looser_names_find_the_one_show_of_that_day() {
-        let slot = |titles: &[&str], first: &str| Slot { titles: titles.iter().map(|title| title.to_string()).collect(), first: parse_utc(first).unwrap(), period: 7 * 86_400 };
+        let slot = |titles: &[&str], first: &str| Slot {
+            titles: titles.iter().map(|title| title.to_string()).collect(),
+            first: parse_utc(first).unwrap(),
+            period: 7 * 86_400,
+        };
         // Late Friday, the small hours of Saturday, Sunday and Monday in Japan.
         let schedule = Schedule::new(
             0,
             vec![
-                slot(&["転生したら剣でしたⅡ", "转生成为魔剑 第二季"], "2026-10-02T15:00:00Z"),
-                slot(&["帰還者の魔法は特別です(第二期)", "归还者的魔法要特别 第二季"], "2026-10-02T14:00:00Z"),
-                slot(&["薬屋のひとりごと(第3期)", "药屋少女的呢喃 第三季"], "2026-10-02T16:00:00Z"),
-                slot(&["東京リベンジャーズ 三天戦争編", "东京复仇者 三天战争篇"], "2026-10-04T09:00:00Z"),
+                slot(
+                    &["転生したら剣でしたⅡ", "转生成为魔剑 第二季"],
+                    "2026-10-02T15:00:00Z",
+                ),
+                slot(
+                    &[
+                        "帰還者の魔法は特別です(第二期)",
+                        "归还者的魔法要特别 第二季",
+                    ],
+                    "2026-10-02T14:00:00Z",
+                ),
+                slot(
+                    &["薬屋のひとりごと(第3期)", "药屋少女的呢喃 第三季"],
+                    "2026-10-02T16:00:00Z",
+                ),
+                slot(
+                    &["東京リベンジャーズ 三天戦争編", "东京复仇者 三天战争篇"],
+                    "2026-10-04T09:00:00Z",
+                ),
                 slot(&["タヌキとキツネ"], "2026-10-04T23:00:00Z"),
             ],
         );
-        let title = |name: &str, day: i64| schedule.find(name, Some(day)).map(|slot| slot.titles[0].as_str());
+        let title = |name: &str, day: i64| {
+            schedule
+                .find(name, Some(day))
+                .map(|slot| slot.titles[0].as_str())
+        };
         assert_eq!(title("转生成为魔剑 第二期", 6), Some("転生したら剣でしたⅡ"));
-        assert_eq!(title("归还者的魔法要特别 第2季", 5), Some("帰還者の魔法は特別です(第二期)"));
-        assert_eq!(title("药屋少女的呢喃 续篇", 6), Some("薬屋のひとりごと(第3期)"));
-        assert_eq!(title("东京复仇者 续篇", 0), Some("東京リベンジャーズ 三天戦争編"));
+        assert_eq!(
+            title("归还者的魔法要特别 第2季", 5),
+            Some("帰還者の魔法は特別です(第二期)")
+        );
+        assert_eq!(
+            title("药屋少女的呢喃 续篇", 6),
+            Some("薬屋のひとりごと(第3期)")
+        );
+        assert_eq!(
+            title("东京复仇者 续篇", 0),
+            Some("東京リベンジャーズ 三天戦争編")
+        );
         assert_eq!(title("タヌキとキツネ (2026)", 1), Some("タヌキとキツネ"));
         // Another weekday, another season or too short a name is another show.
         assert_eq!(title("东京复仇者 续篇", 3), None);
@@ -371,7 +450,10 @@ mod tests {
         assert_eq!(season("某番 2nd Season"), Some(2));
         assert_eq!(season("某番(第2クール)"), Some(2));
         assert_eq!(season("某番 2026"), None);
-        assert_eq!(Name::of("夜桜さんちの大作戦(第2期)第2クール").base, "夜桜さんちの大作戦");
+        assert_eq!(
+            Name::of("夜桜さんちの大作戦(第2期)第2クール").base,
+            "夜桜さんちの大作戦"
+        );
     }
 }
 

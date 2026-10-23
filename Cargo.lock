@@ -280,6 +280,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "axum"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
+dependencies = [
+ "axum-core",
+ "bytes",
+ "form_urlencoded",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "itoa",
+ "matchit",
+ "memchr",
+ "mime",
+ "percent-encoding",
+ "pin-project-lite",
+ "serde_core",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_urlencoded",
+ "sync_wrapper",
+ "tokio",
+ "tower",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "axum-core"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08c78f31d7b1291f7ee735c1c6780ccde7785daae9a9206026862dab7d8792d1"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "http",
+ "http-body",
+ "http-body-util",
+ "mime",
+ "pin-project-lite",
+ "sync_wrapper",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
 name = "backoff"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -305,18 +357,21 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 [[package]]
 name = "bern"
 version = "0.1.0"
+source = "git+https://github.com/AimesSoft/Bern?rev=e702d4e3991094aff56dc6446ad4bae01d8341a9#e702d4e3991094aff56dc6446ad4bae01d8341a9"
 dependencies = [
  "bern-command",
  "bern-macros",
  "bern-media",
  "bern-protocol",
  "bern-runtime",
+ "bern-script",
  "chrono",
 ]
 
 [[package]]
 name = "bern-command"
 version = "0.1.0"
+source = "git+https://github.com/AimesSoft/Bern?rev=e702d4e3991094aff56dc6446ad4bae01d8341a9#e702d4e3991094aff56dc6446ad4bae01d8341a9"
 dependencies = [
  "bern-protocol",
  "keyring",
@@ -326,6 +381,7 @@ dependencies = [
 [[package]]
 name = "bern-ir"
 version = "0.1.0"
+source = "git+https://github.com/AimesSoft/Bern?rev=e702d4e3991094aff56dc6446ad4bae01d8341a9#e702d4e3991094aff56dc6446ad4bae01d8341a9"
 dependencies = [
  "bern-protocol",
  "serde",
@@ -335,6 +391,7 @@ dependencies = [
 [[package]]
 name = "bern-macros"
 version = "0.1.0"
+source = "git+https://github.com/AimesSoft/Bern?rev=e702d4e3991094aff56dc6446ad4bae01d8341a9#e702d4e3991094aff56dc6446ad4bae01d8341a9"
 dependencies = [
  "bern-ir",
  "bern-protocol",
@@ -348,6 +405,7 @@ dependencies = [
 [[package]]
 name = "bern-media"
 version = "0.1.0"
+source = "git+https://github.com/AimesSoft/Bern?rev=e702d4e3991094aff56dc6446ad4bae01d8341a9#e702d4e3991094aff56dc6446ad4bae01d8341a9"
 dependencies = [
  "bern-protocol",
 ]
@@ -355,6 +413,7 @@ dependencies = [
 [[package]]
 name = "bern-protocol"
 version = "0.1.0"
+source = "git+https://github.com/AimesSoft/Bern?rev=e702d4e3991094aff56dc6446ad4bae01d8341a9#e702d4e3991094aff56dc6446ad4bae01d8341a9"
 dependencies = [
  "serde",
  "serde_json",
@@ -363,13 +422,24 @@ dependencies = [
 [[package]]
 name = "bern-runtime"
 version = "0.1.0"
+source = "git+https://github.com/AimesSoft/Bern?rev=e702d4e3991094aff56dc6446ad4bae01d8341a9#e702d4e3991094aff56dc6446ad4bae01d8341a9"
 dependencies = [
  "bern-protocol",
 ]
 
 [[package]]
+name = "bern-script"
+version = "0.1.0"
+source = "git+https://github.com/AimesSoft/Bern?rev=e702d4e3991094aff56dc6446ad4bae01d8341a9#e702d4e3991094aff56dc6446ad4bae01d8341a9"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bern-syntax"
 version = "0.1.0"
+source = "git+https://github.com/AimesSoft/Bern?rev=e702d4e3991094aff56dc6446ad4bae01d8341a9#e702d4e3991094aff56dc6446ad4bae01d8341a9"
 dependencies = [
  "bern-media",
  "bern-protocol",
@@ -1072,6 +1142,7 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 [[package]]
 name = "erika"
 version = "0.1.8"
+source = "git+https://github.com/AimesSoft/liberika?rev=27bab58d9816a3b9dda67d22dcb16507d46835b0#27bab58d9816a3b9dda67d22dcb16507d46835b0"
 dependencies = [
  "ab_glyph",
  "aho-corasick",
@@ -1084,6 +1155,7 @@ dependencies = [
  "erika_ffmpeg_sys",
  "fontdb",
  "glow",
+ "js-sys",
  "libc",
  "objc2",
  "objc2-core-foundation",
@@ -1103,7 +1175,23 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+ "wasm-bindgen",
  "windows",
+]
+
+[[package]]
+name = "erika-account-core"
+version = "0.1.0"
+dependencies = [
+ "bern",
+ "erika-account-protocol",
+]
+
+[[package]]
+name = "erika-account-protocol"
+version = "0.1.0"
+dependencies = [
+ "bern",
 ]
 
 [[package]]
@@ -1132,6 +1220,7 @@ version = "0.1.0"
 dependencies = [
  "bern",
  "erika-anime-protocol",
+ "erika-protocol",
 ]
 
 [[package]]
@@ -1143,10 +1232,12 @@ dependencies = [
  "erika",
  "erika-anime-protocol",
  "erika-dandanplay",
+ "erika-downloads-protocol",
  "erika-library-protocol",
  "erika-protocol",
  "erika-store",
  "png",
+ "serde_json",
 ]
 
 [[package]]
@@ -1230,6 +1321,19 @@ version = "0.1.0"
 dependencies = [
  "bern",
  "erika-enhance-protocol",
+]
+
+[[package]]
+name = "erika-gateway"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "erika-dandanplay",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1366,6 +1470,7 @@ dependencies = [
 [[package]]
 name = "erika_ffmpeg_sys"
 version = "0.1.8"
+source = "git+https://github.com/AimesSoft/liberika?rev=27bab58d9816a3b9dda67d22dcb16507d46835b0#27bab58d9816a3b9dda67d22dcb16507d46835b0"
 dependencies = [
  "bindgen 0.72.1",
  "libc",
@@ -1815,6 +1920,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
+name = "httpdate"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
 name = "hyper"
 version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1826,6 +1937,7 @@ dependencies = [
  "http",
  "http-body",
  "httparse",
+ "httpdate",
  "itoa",
  "pin-project-lite",
  "smallvec",
@@ -2154,9 +2266,9 @@ dependencies = [
 
 [[package]]
 name = "js-sys"
-version = "0.3.106"
+version = "0.3.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7883d941dae510fb2d978fc3fe018c71c9e2892fd38854de3e8b92c2e5ad9cc5"
+checksum = "53b44bfcdb3f8d5837a46dae1ca9660a837176eee74a28b229bc626816589102"
 dependencies = [
  "cfg-if",
  "futures-util",
@@ -2493,6 +2605,12 @@ name = "lru-slab"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
+
+[[package]]
+name = "matchit"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "md-5"
@@ -3637,6 +3755,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_path_to_error"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a9ff822e371bb5403e391ecd83e182e0e77ba7f6fe0160b795797109d1b457"
+dependencies = [
+ "itoa",
+ "serde",
+ "serde_core",
+]
+
+[[package]]
 name = "serde_repr"
 version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4019,6 +4148,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
@@ -4166,6 +4296,7 @@ dependencies = [
  "tokio",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -4204,6 +4335,7 @@ version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63e71662fa4b2a2c3a26f570f037eb95bb1f85397f3cd8076caed2f026a6d100"
 dependencies = [
+ "log",
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
@@ -4425,9 +4557,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen"
-version = "0.2.129"
+version = "0.2.126"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bb54f33acc68fd454578d9820b0bde1a1a3d17aa17bb7b6595806d02886d409"
+checksum = "4b067c0c11094aef6b7a801c1e34a26affafdf3d051dba08456b868789aaf9a4"
 dependencies = [
  "cfg-if",
  "once_cell",
@@ -4438,20 +4570,19 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-futures"
-version = "0.4.79"
+version = "0.4.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cbab34de2d982e9b48e18d216d04c4a6f641066ff19ffb699980f591ee3610e"
+checksum = "c62df1340f32221cb9c54d6a27b030e3dba64361d4a95bed55f9aacb44da291d"
 dependencies = [
  "js-sys",
- "tokio",
  "wasm-bindgen",
 ]
 
 [[package]]
 name = "wasm-bindgen-macro"
-version = "0.2.129"
+version = "0.2.126"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e29d0c35b16e224a7eeb5cd2d25e3e1968fbd65604117b44d3b789d00ee8535"
+checksum = "167ce5e579f6bcf889c4f7175a8a5a585de84e8ff93976ce393efa5f2837aab1"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -4459,22 +4590,22 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro-support"
-version = "0.2.129"
+version = "0.2.126"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f501a8bc3719dba86ef8ae4728879c08001bea749eb1333ac5b91e040e2a6b7"
+checksum = "f3997c7839262f4ef12cf90b818d6340c18e80f263f1a94bf157d0ec4420380e"
 dependencies = [
  "bumpalo",
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 2.0.119",
  "wasm-bindgen-shared",
 ]
 
 [[package]]
 name = "wasm-bindgen-shared"
-version = "0.2.129"
+version = "0.2.126"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
+checksum = "dc1b4cb0cc549fcf58d7dfc081778139b3d283a081644e833e84682ad71cea24"
 dependencies = [
  "unicode-ident",
 ]
@@ -4494,9 +4625,9 @@ dependencies = [
 
 [[package]]
 name = "web-sys"
-version = "0.3.106"
+version = "0.3.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88261b9deccee56594c11a3460c462c41f58d148598fe70ad77070126a68aba4"
+checksum = "8622dcb61c0bcc9fffa6938bed81210af2da9a7e4a1a834b2e37a59b6dfb6141"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

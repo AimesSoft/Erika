@@ -49,18 +49,20 @@ expanded_below = 1440
 # The primary logo and monochrome brand mark, plus the still of the downloads'
 # sample media.
 [resources]
-paths = ["design/assets/icon.png", "erika-ui/assets/erika-wordmark.png", "design/brand/erika-icon-export/logo/erika-logo-icon-512.png", "design/brand/erika-icon-animated.svg", "design/brand/erika-icon-export/png/mono-black/erika-mono-black-128.png", "design/assets/still1.jpg"]
+paths = ["design/assets/icon.png", "erika-ui/assets/erika-wordmark.png", "design/brand/erika-icon-export/logo/erika-logo-icon-512.png", "design/brand/erika-icon-animated.svg", "design/brand/erika-icon-export/logo/erika-logo-icon.svg", "design/brand/erika-icon-export/png/mono-black/erika-mono-black-128.png", "design/assets/still1.jpg"]
 
 # `channels = ["ipc"]` lets the generated command line and MCP server drive
 # the running app. Remove it to ship an app that listens to nothing.
 
 [targets.macos]
+javascript = true
 platform = "macos"
 channels = ["ipc"]
 
 # iOS, built for the simulator; `bern run --target ios` starts it in the
 # simulator that is running.
 [targets.ios]
+javascript = true
 platform = "ios"
 channels = ["ipc"]
 
@@ -68,10 +70,12 @@ channels = ["ipc"]
 # the Apple TV simulator that is running. The television's layouts are
 # the `tv` ones of the design (6.2), driven by the remote's focus.
 [targets.tvos]
+javascript = true
 platform = "tvos"
 channels = ["ipc"]
 
 [targets.windows]
+javascript = true
 platform = "windows"
 channels = ["ipc"]
 # WinUI 3 where Windows has a Windows App Runtime 2, the system XAML
@@ -79,19 +83,39 @@ channels = ["ipc"]
 # frontends = ["winui3", "xaml-islands"]
 
 [targets.linux]
+javascript = true
 platform = "linux"
 channels = ["ipc"]
 
 # Android phones; `bern run --target android` installs the app on the
 # connected device and starts it.
 [targets.android]
+javascript = true
 platform = "android"
 channels = ["ipc"]
 
 [targets.web_app]
+javascript = true
+channels = ["ipc"]
+# Pure Web application: UI and Rust engine both run in the browser.
+# `ui` chooses the renderer; `web_mode = "app"` embeds the engine as WASM.
 ui = "web"
 platform = "browser"
 web_mode = "app"
+web_extension = { path = "web", build = ["python3", "build.py"] }
+
+# WebUI: the browser connects to a separate native Erika engine host.
+[targets.web_ui]
+web_extension = { path = "web", build = ["python3", "build.py"] }
+ui = "web"
+platform = "browser"
+web_mode = "ui"
+application_transport = "websocket"
+application_codec = "json"
+channels = ["ipc"]
+
+[[modules]]
+path = "modules/account"
 
 [[modules]]
 path = "modules/danmaku"

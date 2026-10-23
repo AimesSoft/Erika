@@ -12,7 +12,7 @@ pub fn feature_preview_window(features: FeatureSelection, revision: i64, width: 
             Canvas {
                 Shape(kind: rounded, corner: large, stroke: control.border, stroke_width: 0.5)
             }
-            if features.anime || features.library || features.downloads {
+            if (build.modules.anime && features.anime) || (build.modules.library && features.library) || (build.modules.downloads && features.downloads) {
                 Row(gap: 0, height: 188, align: top, appear: feature_preview_in, disappear: fade) {
                     Stack(width: 72, height: 188, align: top_leading) {
                         Canvas {
@@ -20,7 +20,7 @@ pub fn feature_preview_window(features: FeatureSelection, revision: i64, width: 
                         }
                         Column(gap: 8, padding_x: 7, padding_y: 22, reflow: smooth) {
                             // `.ms i.on`: the first page is the one shown.
-                            if features.anime {
+                            if (build.modules.anime && features.anime) {
                                 Stack(align: leading, appear: feature_preview_item_in, disappear: fade) {
                                     // `--tonal`: the accent at 26 % over the card.
                                     Canvas { Shape(kind: rounded, corner: 5, fill: accent, opacity: 0.26) }
@@ -30,10 +30,10 @@ pub fn feature_preview_window(features: FeatureSelection, revision: i64, width: 
                                     }
                                 }
                             }
-                            if features.anime {
+                            if (build.modules.anime && features.anime) {
                                 Label(title: tr! { "zh-Hans" => "新番", "en" => "New" }, icon: "calendar", style: subheadline, appear: feature_preview_item_in, disappear: fade)
                             }
-                            if features.library && !features.anime {
+                            if (build.modules.library && features.library) && !(build.modules.anime && features.anime) {
                                 Stack(align: leading, appear: feature_preview_item_in, disappear: fade) {
                                     // `--tonal`: the accent at 26 % over the card.
                                     Canvas { Shape(kind: rounded, corner: 5, fill: accent, opacity: 0.26) }
@@ -42,11 +42,20 @@ pub fn feature_preview_window(features: FeatureSelection, revision: i64, width: 
                                         Spacer
                                     }
                                 }
-                            } else if features.library {
+                            } else if (build.modules.library && features.library) {
                                 Label(title: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "film.stack", style: subheadline, appear: feature_preview_item_in, disappear: fade)
                             }
-                            if features.downloads {
+                            if (build.modules.downloads && features.downloads) {
                                 Label(title: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, icon: "arrow.down.circle", style: subheadline, appear: feature_preview_item_in, disappear: fade)
+                            }
+                        }
+                        Positioned(x: 7, y: 161, width: 58, height: 16) {
+                            Row(gap: 4, align: center, reflow: smooth) {
+                                if build.modules.account && features.account {
+                                    Label(title: tr! { "zh-Hans" => "账号", "en" => "Account" }, icon: "person.crop.circle", display: icon, style: caption, appear: feature_preview_item_in, disappear: fade)
+                                }
+                                Spacer
+                                Label(title: tr! { "zh-Hans" => "设置", "en" => "Settings" }, icon: "gearshape", display: icon, style: caption)
                             }
                         }
                     }
@@ -124,10 +133,10 @@ pub fn feature_preview_hud(features: FeatureSelection) -> impl View {
                         Shape(kind: capsule, fill: accent)
                     }
                 }
-                if features.danmaku {
+                if (build.modules.danmaku && features.danmaku) {
                     Label(title: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, icon: "text.bubble", style: caption, appear: feature_preview_item_in, disappear: fade)
                 }
-                if features.enhance {
+                if (build.modules.enhance && features.enhance) {
                     Label(title: tr! { "zh-Hans" => "", "en" => "" }, icon: "sparkles", style: caption, appear: feature_preview_item_in, disappear: fade)
                 }
                 Label(title: tr! { "zh-Hans" => "", "en" => "" }, icon: "captions.bubble", style: caption)

@@ -6,13 +6,27 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+default = ["bern-module-account", "bern-module-danmaku", "bern-module-enhance", "bern-module-library", "bern-module-anime", "bern-module-sync", "bern-module-sources", "bern-module-remote", "bern-module-downloads"]
+bern-module-account = ["erika-protocol/bern-module-account"]
+bern-module-danmaku = ["erika-protocol/bern-module-danmaku"]
+bern-module-enhance = ["erika-protocol/bern-module-enhance"]
+bern-module-library = ["erika-protocol/bern-module-library", "dep:erika-library-protocol"]
+bern-module-anime = ["erika-protocol/bern-module-anime", "dep:erika-anime-protocol"]
+bern-module-sync = ["erika-protocol/bern-module-sync"]
+bern-module-sources = ["erika-protocol/bern-module-sources"]
+bern-module-remote = ["erika-protocol/bern-module-remote"]
+bern-module-downloads = ["erika-protocol/bern-module-downloads", "dep:erika-downloads-protocol"]
+
 [dependencies]
+serde_json = "1"
 bern.workspace = true
 erika-protocol.workspace = true
 erika-store.workspace = true
 erika-dandanplay.workspace = true
-erika-anime-protocol = { path = "../modules/anime/protocol" }
-erika-library-protocol = { path = "../modules/library/protocol" }
+erika-downloads-protocol = { path = "../modules/downloads/protocol", optional = true }
+erika-anime-protocol = { path = "../modules/anime/protocol", optional = true }
+erika-library-protocol = { path = "../modules/library/protocol", optional = true }
 
 # liberika plays where Bern hosts it as the media kernel.
 [target.'cfg(target_os = "macos")'.dependencies]

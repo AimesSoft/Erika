@@ -2,17 +2,18 @@
 //! design/next-screens.js): the folders the library scans with the videos
 //! not recognized under them; a folder opened level by level, each video
 //! saying what it was matched to; and matching, one video or a folder's.
+use crate::{LibraryDraft, library_tabs, library_tabs_props};
 use bern::prelude::*;
-use crate::{library_tabs, library_tabs_props, LibraryDraft};
-use erika_library_protocol::library;
+use erika_library_protocol::library::{self, SourceContent};
+use erika_protocol::erika;
 
 #[component]
-pub fn library_sources_page(library: library::Client) -> impl View {
+pub fn library_sources_page(app: erika::Client, library: library::Client) -> impl View {
     ui! {
         ScrollView(appear: page_in) {
             Column(gap: 0, padding_x: if window.compact { 16.0 } else if window.tv { 56.0 } else if window.medium { 24.0 } else { 32.0 }, padding_y: 6) {
                 if library.matching.open {
-                    library_match(library: library)
+                    library_match(app: app, library: library)
                 } else if library.browsing {
                     library_folder(library: library)
                 } else {
@@ -45,7 +46,11 @@ pub fn library_source_list(library: library::Client, #[session] draft: LibraryDr
                 Row(gap: 8, height: 48, align: center) {
                     Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
                     Spacer
-                    IconButton(id: add_folder_phone, icon: "plus", label: tr! { "zh-Hans" => "添加文件夹", "en" => "Add folder" }, pick: draft.folder, files: "folder") => library.add_folder(draft.folder)
+                    Menu(id: add_folder_phone, label: tr! { "zh-Hans" => "添加文件夹", "en" => "Add folder" }, icon: "plus", style: icon) {
+                        MenuItem(id: add_anime_phone, label: tr! { "zh-Hans" => "番剧文件夹…", "en" => "Anime folder…" }, pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Anime)
+                        MenuItem(id: add_series_phone, label: tr! { "zh-Hans" => "电视剧文件夹…", "en" => "TV series folder…" }, pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Series)
+                        MenuItem(id: add_movie_phone, label: tr! { "zh-Hans" => "电影文件夹…", "en" => "Movies folder…" }, pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Movie)
+                    }
                 }
                 Canvas(height: 2)
                 Row(gap: 10, align: center) {
@@ -60,7 +65,11 @@ pub fn library_source_list(library: library::Client, #[session] draft: LibraryDr
                     // A television picks no files; its sources come from the
                     // other devices' library.
                     if !window.tv {
-                        Button(id: add_folder, label: tr! { "zh-Hans" => "添加文件夹", "en" => "Add folder" }, icon: "plus", shape: capsule, height: 32, prominence: prominent, pick: draft.folder, files: "folder") => library.add_folder(draft.folder)
+                        Menu(id: add_folder, label: tr! { "zh-Hans" => "添加文件夹", "en" => "Add folder" }, icon: "plus", shape: capsule, height: 32) {
+                            MenuItem(id: add_anime, label: tr! { "zh-Hans" => "番剧文件夹…", "en" => "Anime folder…" }, pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Anime)
+                            MenuItem(id: add_series, label: tr! { "zh-Hans" => "电视剧文件夹…", "en" => "TV series folder…" }, pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Series)
+                            MenuItem(id: add_movie, label: tr! { "zh-Hans" => "电影文件夹…", "en" => "Movies folder…" }, pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Movie)
+                        }
                     }
                 }
             }
@@ -76,7 +85,7 @@ pub fn library_source_list(library: library::Client, #[session] draft: LibraryDr
                                     }
                                     Column(gap: 2) {
                                         Text(content: row.name, style: headline, lines: 1)
-                                        Text(content: tr! { "zh-Hans" => "本地文件夹 · {at}", "en" => "Folder · {at}"; at: row.location }, style: caption, emphasis: secondary, lines: 1)
+                                        Text(content: tr! { "zh-Hans" => "{content} · {at}", "en" => "{content} · {at}"; content: row.content, at: row.location }, style: caption, emphasis: secondary, lines: 1)
                                     }
                                     Spacer
                                     Text(content: row.status, style: caption, emphasis: secondary, lines: 1)
@@ -116,7 +125,11 @@ pub fn library_source_list(library: library::Client, #[session] draft: LibraryDr
 
 /// A video: what it is, and matching it (`dirHTML`'s `file`).
 #[component]
-pub fn library_file_row(library: library::Client, file: library::LibraryFile, place: bool) -> impl View {
+pub fn library_file_row(
+    library: library::Client,
+    file: library::LibraryFile,
+    place: bool,
+) -> impl View {
     ui! {
         Row(gap: 12, align: center, padding: 6) {
             Stack(width: 30, height: 30, align: center) {
@@ -163,6 +176,11 @@ pub fn library_folder(library: library::Client) -> impl View {
                 }
                 Menu(id: folder_more, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon) {
                     MenuItem(id: rescan, label: tr! { "zh-Hans" => "重新扫描", "en" => "Scan again" }, icon: "arrow.triangle.2.circlepath") => library.rescan(library.folder.source)
+                    Divider
+                    MenuItem(id: as_anime, label: tr! { "zh-Hans" => "改为番剧", "en" => "Holds anime" }) => library.set_content(library.folder.source, SourceContent::Anime)
+                    MenuItem(id: as_series, label: tr! { "zh-Hans" => "改为电视剧", "en" => "Holds TV series" }) => library.set_content(library.folder.source, SourceContent::Series)
+                    MenuItem(id: as_movie, label: tr! { "zh-Hans" => "改为电影", "en" => "Holds movies" }) => library.set_content(library.folder.source, SourceContent::Movie)
+                    Divider
                     MenuItem(id: remove_source, label: tr! { "zh-Hans" => "移除这个来源", "en" => "Remove this source" }, icon: "trash") => library.remove_source(library.folder.source)
                 }
             }
@@ -176,7 +194,7 @@ pub fn library_folder(library: library::Client) -> impl View {
                     }
                 }
             }
-            Text(content: tr! { "zh-Hans" => "本地文件夹 · {at}", "en" => "Folder · {at}"; at: library.folder.location }, style: caption, emphasis: secondary, lines: 1)
+            Text(content: tr! { "zh-Hans" => "{content} · {at}", "en" => "{content} · {at}"; content: library.folder.content, at: library.folder.location }, style: caption, emphasis: secondary, lines: 1)
             Canvas(height: 16)
             if library.folder.can_batch && window.compact {
                 Row(gap: 0) {
@@ -224,7 +242,11 @@ pub fn library_folder(library: library::Client) -> impl View {
 /// Matching (`matchHTML`): the anime and how the videos go to its
 /// episodes, the videos with the episode each goes to, and confirming.
 #[component]
-pub fn library_match(library: library::Client, #[session] draft: LibraryDraft) -> impl View {
+pub fn library_match(
+    app: erika::Client,
+    library: library::Client,
+    #[session] draft: LibraryDraft,
+) -> impl View {
     ui! {
         Column(gap: 0) {
             Canvas(height: if window.compact { 7.0 } else { 0.0 })
@@ -249,11 +271,11 @@ pub fn library_match(library: library::Client, #[session] draft: LibraryDraft) -
                     Text(content: tr! { "zh-Hans" => "番剧", "en" => "Show" }, emphasis: secondary)
                     if library.matching.anime > 0 {
                         PopoverButton(id: match_anime_chosen, label: library.matching.anime_title, presented: draft.anime_open) {
-                            library_match_search(library: library)
+                            library_match_search(app: app, library: library)
                         }
                     } else {
                         PopoverButton(id: match_anime_search, label: tr! { "zh-Hans" => "搜索番剧", "en" => "Search shows" }, presented: draft.anime_open) {
-                            library_match_search(library: library)
+                            library_match_search(app: app, library: library)
                         }
                     }
                 }
@@ -348,14 +370,24 @@ pub fn library_match(library: library::Client, #[session] draft: LibraryDraft) -
 
 /// The anime to match to, searched for on dandanplay (`manime`).
 #[component]
-pub fn library_match_search(library: library::Client, #[session] draft: LibraryDraft) -> impl View {
+pub fn library_match_search(
+    app: erika::Client,
+    library: library::Client,
+    #[session] draft: LibraryDraft,
+) -> impl View {
     ui! {
         Column(gap: 8, width: 340, padding: 8) {
             TextInput(id: match_search, label: tr! { "zh-Hans" => "搜索番剧", "en" => "Search shows" }, label_hidden: true, value: draft.search, prompt: tr! { "zh-Hans" => "搜索弹弹play 的番剧，回车搜索", "en" => "Search dandanplay, then press Return" }) => library.match_search(draft.search)
             if library.matching.searching {
                 Text(content: tr! { "zh-Hans" => "正在搜索…", "en" => "Searching…" }, style: caption, emphasis: secondary)
             } else if library.matching.search_failed {
-                Text(content: tr! { "zh-Hans" => "搜索不了：先在 设置 › 账号 里登录弹弹play。", "en" => "Can't search: sign in to dandanplay under Settings › Account." }, style: caption, emphasis: secondary, lines: 2)
+                if build.modules.account && app.features.account {
+                    Text(content: tr! { "zh-Hans" => "搜索不了：先在 设置 › 账号 里登录弹弹play。", "en" => "Can't search: sign in to dandanplay under Settings › Account." }, style: caption, emphasis: secondary, lines: 2)
+                } else if build.modules.account {
+                    Text(content: tr! { "zh-Hans" => "请先在 设置 › 可选功能 中开启账号并登录。", "en" => "Enable Account under Settings › Optional Features, then sign in." }, style: caption, emphasis: secondary, lines: 2)
+                } else {
+                    Text(content: tr! { "zh-Hans" => "此版本不支持在线搜索番剧。", "en" => "Online show search is unavailable in this build." }, style: caption, emphasis: secondary, lines: 2)
+                }
             }
             Column(gap: 0) {
                 ForEach(items: library.matching.results, key: id) |anime| {
@@ -382,7 +414,12 @@ pub fn library_match_search(library: library::Client, #[session] draft: LibraryD
 /// A video being matched: matched or skipped, its name and what to know
 /// of it, and the episode it goes to, typed over in place.
 #[component]
-pub fn library_match_row(library: library::Client, row: library::MatchRow, single: bool, #[session] draft: LibraryDraft) -> impl View {
+pub fn library_match_row(
+    library: library::Client,
+    row: library::MatchRow,
+    single: bool,
+    #[session] draft: LibraryDraft,
+) -> impl View {
     ui! {
         Row(gap: 12, align: center, padding: 6) {
             if single {

@@ -1,7 +1,9 @@
 //! The browser: no database file, so nothing is kept beyond the session;
 //! the engines keep what they show in their own state.
 
-use crate::{Anime, Entry, Episode, EpisodeFile, FileId, Fingerprint, Recent, Seen, Shelf, Source, Watching};
+use crate::{
+    Anime, Entry, Episode, EpisodeFile, FileId, Fingerprint, Recent, Seen, Shelf, Source, Watching,
+};
 
 pub struct Db;
 
@@ -24,7 +26,15 @@ impl Db {
 
     pub fn save_progress(&self, _file: FileId, _position: f64, _duration: f64) {}
 
-    pub fn remember(&self, _url: &str, _title: &str, _still: Option<&str>, _position: f64, _duration: f64) {}
+    pub fn remember(
+        &self,
+        _url: &str,
+        _title: &str,
+        _still: Option<&str>,
+        _position: f64,
+        _duration: f64,
+    ) {
+    }
 
     pub fn recents(&self, _limit: usize) -> Vec<Recent> {
         Vec::new()
@@ -68,7 +78,19 @@ impl Db {
         None
     }
 
-    pub fn add_source(&self, _kind: &str, _name: &str, _location: &str) -> Option<i64> {
+    pub fn add_source(
+        &self,
+        _kind: &str,
+        _name: &str,
+        _location: &str,
+        _content: &str,
+    ) -> Option<i64> {
+        None
+    }
+
+    pub fn set_source_content(&self, _id: i64, _content: &str) {}
+
+    pub fn fingerprint_of(&self, _file: FileId) -> Option<Fingerprint> {
         None
     }
 
@@ -82,7 +104,14 @@ impl Db {
         Vec::new()
     }
 
-    pub fn saw(&self, _source: i64, _url: &str, _size: i64, _modified: i64, _fingerprint: Option<&Fingerprint>) -> Option<FileId> {
+    pub fn saw(
+        &self,
+        _source: i64,
+        _url: &str,
+        _size: i64,
+        _modified: i64,
+        _fingerprint: Option<&Fingerprint>,
+    ) -> Option<FileId> {
         None
     }
 

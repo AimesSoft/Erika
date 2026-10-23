@@ -22,7 +22,10 @@ impl Clock {
     /// Now, where the app runs.
     pub fn now() -> Clock {
         let now = bern::date::now();
-        Clock { unix: now.unix, offset: now.offset }
+        Clock {
+            unix: now.unix,
+            offset: now.offset,
+        }
     }
 
     /// The broadcast day of `unix` and its hour in that day (5 to 29).
@@ -64,7 +67,8 @@ pub fn date_of(days: i64) -> CalendarDate {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let day_of_era = z - era * 146_097;
-    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let mp = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * mp + 2) / 5 + 1;
@@ -95,19 +99,32 @@ mod tests {
 
     #[test]
     fn the_small_hours_belong_to_the_evening_before() {
-        let beijing = Clock { unix: 0, offset: 8 * 3600 };
+        let beijing = Clock {
+            unix: 0,
+            offset: 8 * 3600,
+        };
         // 2023-09-29T14:00Z is 22:00 in Beijing, on a Friday.
         let friday_night = parse_utc("2023-09-29T14:00:00.000Z").unwrap();
-        assert_eq!(beijing.broadcast(friday_night), (CalendarDate::new(2023, 9, 29), 22.0));
+        assert_eq!(
+            beijing.broadcast(friday_night),
+            (CalendarDate::new(2023, 9, 29), 22.0)
+        );
         // 17:30Z is 01:30 Saturday, still Friday's broadcast day.
         let late = parse_utc("2023-09-29T17:30:00.000Z").unwrap();
-        assert_eq!(beijing.broadcast(late), (CalendarDate::new(2023, 9, 29), 25.5));
+        assert_eq!(
+            beijing.broadcast(late),
+            (CalendarDate::new(2023, 9, 29), 25.5)
+        );
         assert_eq!(CalendarDate::new(2023, 9, 29).weekday(), 4);
     }
 
     #[test]
     fn dates_round_trip_through_days() {
-        for date in [CalendarDate::new(1970, 1, 1), CalendarDate::new(2024, 2, 29), CalendarDate::new(2026, 10, 21)] {
+        for date in [
+            CalendarDate::new(1970, 1, 1),
+            CalendarDate::new(2024, 2, 29),
+            CalendarDate::new(2026, 10, 21),
+        ] {
             assert_eq!(date_of(days_of(date)), date);
         }
         assert_eq!(days_of(CalendarDate::new(1970, 1, 2)), 1);

@@ -1,9 +1,10 @@
-//! The playback kernel. Where Bern hosts liberika (macOS so far), the
-//! engine plays real media through it; elsewhere, and in tests, the player
-//! keeps simulating time over the design's stills.
+//! The playback kernel: liberika on macOS and its WebCodecs/Canvas adapter
+//! in browsers. Other targets and tests keep the simulated preview clock.
 
 #[cfg(target_os = "macos")]
 mod liberika;
+
+mod web;
 
 use erika_protocol::erika::Enhancement;
 use std::path::{Path, PathBuf};
@@ -17,6 +18,21 @@ pub const PLAYER: &str = "video";
 /// works on its own thread and the engine reads the outcome from
 /// [`Kernel::playback`] on its next tick.
 pub trait Kernel: Send + Sync {
+    fn is_browser(&self) -> bool {
+        false
+    }
+    fn file_name(&self, _url: &str) -> Option<String> {
+        None
+    }
+    fn prepare_source(&self, _url: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn browser_file(&self, _client: &str, _url: &str, _name: &str) -> Result<(), String> {
+        Err("This engine does not host browser playback".into())
+    }
+    fn browser_exchange(&self, _client: &str, _packet: &str) -> Result<String, String> {
+        Err("This engine does not host browser playback".into())
+    }
     /// The frontend hosts the kernel: video views draw through it.
     fn ready(&self) -> bool;
     /// Load `url` (a `file:` or `http(s):` address), seek to `start`
@@ -27,12 +43,15 @@ pub trait Kernel: Send + Sync {
     fn seek(&self, seconds: f64);
     fn set_volume(&self, volume: f64);
     fn set_rate(&self, rate: f64);
+    /// Applied when opening the next media source.
+    fn set_hardware_decode(&self, _enabled: bool) {}
     fn select_audio(&self, id: i64);
     /// `None` turns subtitles off.
     fn select_subtitle(&self, id: Option<i64>);
     fn add_subtitle(&self, url: &str);
     /// 1 is the subtitles' own size.
     fn set_subtitle_scale(&self, scale: f64);
+    fn set_subtitle_supersampling(&self, enabled: bool);
     fn set_enhancement(&self, enhancement: Enhancement);
     /// How the comments over the video look and which show.
     fn set_danmaku(&self, config: &DanmakuConfig);
@@ -41,6 +60,17 @@ pub trait Kernel: Send + Sync {
     fn add_danmaku(&self, name: &str, contents: &str) -> Result<usize, String>;
     /// Show `text` now as the user's own comment.
     fn send_danmaku(&self, text: &str);
+    /// Browser file I/O completes asynchronously on the player worker.
+    fn mount_danmaku_file(&self, _url: &str, _name: &str) -> bool {
+        false
+    }
+    fn take_danmaku_result(&self) -> Option<(String, Result<usize, String>)> {
+        None
+    }
+    /// Browser captures are blob URLs, rather than filesystem paths.
+    fn captured_source(&self) -> Option<String> {
+        None
+    }
     /// Save the picture on screen, with its subtitles, `width` pixels wide
     /// (the video's own width when `None`) as a PNG at `path`;
     /// [`Playback::still`] names it once it is written.
@@ -48,11 +78,16 @@ pub trait Kernel: Send + Sync {
     /// Stop playing and let go of the media.
     fn close(&self);
     fn playback(&self) -> Playback;
+    fn take_results(&self) -> Vec<OperationResult> {
+        Vec::new()
+    }
 }
 
 /// What the kernel last saw of the player.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Playback {
+    /// Identifies the loaded media, so a queued report cannot restore old chapters.
+    pub source: Option<String>,
     /// A source is open and has not failed.
     pub loaded: bool,
     pub playing: bool,
@@ -63,6 +98,7 @@ pub struct Playback {
     /// Seconds.
     pub position: f64,
     pub duration: Option<f64>,
+    pub chapters: Vec<Chapter>,
     pub audio_tracks: Vec<Track>,
     pub subtitle_tracks: Vec<Track>,
     pub audio_track: Option<i64>,
@@ -78,6 +114,7 @@ pub struct Playback {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DanmakuConfig {
     pub enabled: bool,
+    pub supersampling: bool,
     /// 0 to 1.
     pub opacity: f64,
     /// Points; liberika's own default is 30.
@@ -101,15 +138,43 @@ pub struct Track {
     pub name: String,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Chapter {
+    pub title: String,
+    pub start: f64,
+    pub end: Option<f64>,
+}
+
 /// Start the platform's kernel and make it Bern's media kernel, so the
 /// frontend's video views draw through it. `None` where there is none.
 pub fn start() -> Option<Arc<dyn Kernel>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if bern::resources::Resources::host().is_served() {
+        return Some(web::Web::install());
+    }
     #[cfg(target_os = "macos")]
     {
         Some(liberika::Liberika::install())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_arch = "wasm32")]
+    {
+        Some(web::Web::install())
+    }
+    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
     {
         None
     }
+}
+
+#[derive(Debug)]
+pub enum Operation {
+    Screenshot(PathBuf),
+    Subtitle(String),
+    Setting,
+}
+#[derive(Debug)]
+pub struct OperationResult {
+    pub source: Option<String>,
+    pub operation: Operation,
+    pub result: Result<(), String>,
 }

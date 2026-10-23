@@ -19,6 +19,9 @@ pub struct DownloadsDraft {
 pub fn downloads_clock(downloads: downloads::Client) -> impl View {
     ui! {
         Stack {
+            if downloads.adding.open {
+                download_add(downloads: downloads)
+            }
             Timer(interval: 1.0, enabled: downloads.running) => downloads.tick()
             if let Some(notice) = downloads.notice {
                 Toast(content: notice, key: downloads.notice_revision, duration: 3)
@@ -93,9 +96,6 @@ pub fn downloads_page(downloads: downloads::Client) -> impl View {
                     }
                     Text(content: tr! { "zh-Hans" => "行的底色就是进度。下载完成后，下载到的文件夹会作为来源加入媒体库并扫描，认出的番出现在「番剧」里。", "en" => "Each row's background shows its progress. When a download finishes, its folder joins the library as a source and is scanned." }, style: caption, font_size: 11.5, emphasis: secondary, lines: 3)
                 }
-            }
-            if downloads.adding.open {
-                download_add(downloads: downloads)
             }
             if downloads.deleting != 0 {
                 Modal(width: 440, height: 200, cover: compact, appear: pop_in, disappear: fade) {

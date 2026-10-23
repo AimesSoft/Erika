@@ -1,0 +1,19 @@
+# Account availability is managed by Bern; the shell owns its shared UI
+# and coordinates credentials with the playback and library services.
+[module]
+id = "account"
+name = { "zh-Hans" = "账号", "en" = "Account" }
+optional = true
+
+[module.protocol]
+package = "erika-account-protocol"
+source = "protocol/src/lib.rs"
+
+[module.engine]
+package = "erika-account-core"
+type = "erika_account_core::AccountEngine"
+path = "core"
+
+[languages]
+supported = ["zh-Hans", "en"]
+default = "zh-Hans"

@@ -2,3 +2,6 @@
 **/target/
 .DS_Store
 .claude/settings.local.json
+/.cargo/config.toml
+__pycache__/
+*.py[cod]

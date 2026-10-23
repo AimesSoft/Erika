@@ -1,12 +1,11 @@
 //! Pure playback (design 10.2, next-screens.js `renderIdle`, next.css
 //! `.i-frame` and `.i-recent`): with no module adding pages the window has
 //! no sidebar and is the frame before a picture is in it. The frame stands
-//! exactly where the player's frame steps back to, (103, 64) 1074 × 604 in
-//! the 1280 × 800 window, so a video fills it in place; what played last
-//! lists under it, where the player's controls are.
+//! at (103, 64) 1074 × 604 in the 1280 × 800 window and grows into the
+//! full-window player when opened; what played last lists under it.
 use crate::phone::{
-    phone_mini_player, phone_mini_player_props, phone_settings, phone_settings_props,
-    phone_settings_section, phone_settings_section_props, PhoneSettings,
+    PhoneSettings, phone_mini_player, phone_mini_player_props, phone_settings,
+    phone_settings_props, phone_settings_section, phone_settings_section_props,
 };
 use crate::{AppWindows, ErikaDraft};
 use bern::prelude::*;
@@ -31,7 +30,7 @@ pub fn pure_window(app: erika::Client, windows: AppWindows) -> impl View {
     ui! {
         // The scene is the whole window, as the player's is, so the frame
         // meets the player's frame; the bar stands over it.
-        Stack(align: top_leading, under_bars: true) {
+        Stack(variant: app_background, align: top_leading, under_bars: true) {
             // `renderTb` with no pages: the settings alone (`.c-ib`).
             Toolbar {
                 Spacer
@@ -214,7 +213,11 @@ pub fn phone_pure(app: erika::Client, #[session] draft: ErikaDraft) -> impl View
 /// `phHTML('idle')`: the header row 54 points down, the frame 70 under it,
 /// the ways to open 18, 10 and 10 apart, the note, and 「最近播放」.
 #[component]
-pub fn phone_pure_page(app: erika::Client, #[session] draft: ErikaDraft, #[session] pure: PureDraft) -> impl View {
+pub fn phone_pure_page(
+    app: erika::Client,
+    #[session] draft: ErikaDraft,
+    #[session] pure: PureDraft,
+) -> impl View {
     ui! {
         Form(appear: page_in, gap: 2, row_height: 44) {
             Section(style: plain) {

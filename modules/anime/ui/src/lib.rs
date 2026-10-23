@@ -4,6 +4,7 @@
 
 use bern::prelude::*;
 use erika_anime_protocol::anime::{self, BackTo, WatchStatus};
+use erika_protocol::erika;
 
 /// Tabs below the film of the details page.
 #[bern::value]
@@ -30,37 +31,37 @@ pub struct AnimeDraft {
 /// The home page: the stage and today's timeline, or the details of the
 /// show opened from them.
 #[component]
-pub fn home_page(anime: anime::Client) -> impl View {
+pub fn home_page(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
         if anime.opened > 0 && !anime.opened_from_schedule && anime.back == BackTo::Home {
             details(anime: anime)
         } else {
-            home(anime: anime)
+            home(app: app, anime: anime)
         }
     }
 }
 
 #[component]
-pub fn home(anime: anime::Client) -> impl View {
+pub fn home(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
         Adaptive(id: home_layout) {
             Layout(size: compact) {
-                phone_home(anime: anime)
+                phone_home(app: app, anime: anime)
             }
             Layout(size: expanded) {
-                desktop_home(anime: anime)
+                desktop_home(app: app, anime: anime)
             }
             // The television shows the desktop's stage, larger (design
             // 6.2 `TV`).
             Layout(size: tv) {
-                desktop_home(anime: anime)
+                desktop_home(app: app, anime: anime)
             }
         }
     }
 }
 
 #[component]
-pub fn desktop_home(anime: anime::Client) -> impl View {
+pub fn desktop_home(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
         ScrollView(appear: page_in) {
             // A television's page keeps the overscan's 56 points (`.x-page`).
@@ -75,7 +76,7 @@ pub fn desktop_home(anime: anime::Client) -> impl View {
                     stage(anime: anime)
                     Canvas(height: 30)
                 }
-                timeline(anime: anime)
+                timeline(app: app, anime: anime)
                 // The other modules' sections, as the library's recently added.
                 Slot(id: home_sections)
                 Canvas(height: 32)
@@ -188,7 +189,7 @@ pub fn stage(anime: anime::Client) -> impl View {
 /// Today's shows hung on a line at the time they air, with "now" between
 /// the aired and the coming.
 #[component]
-pub fn timeline(anime: anime::Client) -> impl View {
+pub fn timeline(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
         Column(gap: 0) {
             Row(gap: 10, align: baseline) {
@@ -209,7 +210,7 @@ pub fn timeline(anime: anime::Client) -> impl View {
                     }
                 }
             } else {
-                season_note(anime: anime)
+                season_note(app: app, anime: anime)
             }
         }
     }
@@ -219,12 +220,18 @@ pub fn timeline(anime: anime::Client) -> impl View {
 /// that an account is needed, that the season is loading, why it failed,
 /// or that nothing airs today at a known time.
 #[component]
-pub fn season_note(anime: anime::Client) -> impl View {
+pub fn season_note(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
         Column(gap: 4, padding_y: 10) {
             if !anime.signed_in {
-                Text(content: tr! { "zh-Hans" => "登录弹弹play 账号后，这里会排出今天更新的番。", "en" => "Sign in to dandanplay to see what airs today." }, emphasis: secondary)
-                Text(content: tr! { "zh-Hans" => "在 设置 › 账号 里登录", "en" => "Sign in under Settings › Account" }, style: caption, emphasis: tertiary)
+                if build.modules.account && app.features.account {
+                    Text(content: tr! { "zh-Hans" => "登录弹弹play 账号后，这里会排出今天更新的番。", "en" => "Sign in to dandanplay to see what airs today." }, emphasis: secondary)
+                    Text(content: tr! { "zh-Hans" => "在 设置 › 账号 里登录", "en" => "Sign in under Settings › Account" }, style: caption, emphasis: tertiary)
+                } else if build.modules.account {
+                    Text(content: tr! { "zh-Hans" => "在 设置 › 可选功能 中开启账号，登录后即可查看新番。", "en" => "Enable Account under Settings › Optional Features, then sign in to see new shows." }, emphasis: secondary, lines: 2)
+                } else {
+                    Text(content: tr! { "zh-Hans" => "暂无新番数据。", "en" => "No season data available." }, emphasis: secondary)
+                }
             } else if anime.loading {
                 Text(content: tr! { "zh-Hans" => "正在载入这一季的新番…", "en" => "Loading this season's shows…" }, emphasis: secondary)
             } else {
@@ -479,88 +486,100 @@ pub fn tag_chip(#[content] name: String) -> impl View {
 /// The prototype's seven-day accordion. The expanded column uses the
 /// available width; the six collapsed columns stay 86 points wide.
 #[component]
-pub fn new_page(anime: anime::Client) -> impl View {
+pub fn new_page(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
         if anime.opened > 0 && anime.opened_from_schedule {
             details(anime: anime)
-        } else {
+        } else if window.compact || window.medium {
             ScrollView(appear: page_in) {
-                Column(gap: 0) {
+                calendar_page(app: app, anime: anime)
+            }
+        } else {
+            Stack(appear: page_in) {
+                calendar_page(app: app, anime: anime)
+            }
+        }
+    }
+}
+
+/// Wide windows give the week the space below the heading; narrow layouts
+/// keep their outer scroll view and expand each day vertically.
+#[component]
+pub fn calendar_page(app: erika::Client, anime: anime::Client) -> impl View {
+    ui! {
+        Column(gap: 0) {
+            if window.compact {
+                Slot(id: page_header)
+            }
+            // On the phone the title and the season are the header's
+            // (`.x-pnav` and the line under it), 14 points above the days.
+            Column(gap: 0, padding_x: if window.tv { 56 } else if window.compact { 16 } else if window.medium { 24 } else { 32 }, padding_y: if window.compact { 0 } else { 6 }) {
                 if window.compact {
-                    Slot(id: page_header)
+                    Canvas(height: 14)
+                } else {
+                    Row(gap: 14, align: baseline) {
+                        Text(content: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, style: large_title)
+                        Text(content: anime.season_label, emphasis: secondary, lines: 1)
+                        Spacer
+                    }
+                    Canvas(height: 18)
                 }
-                // On the phone the title and the season are the header's
-                // (`.x-pnav` and the line under it), 14 points above the days.
-                Column(gap: 0, padding_x: if window.tv { 56 } else if window.compact { 16 } else if window.medium { 24 } else { 32 }, padding_y: if window.compact { 0 } else { 6 }) {
-                    if window.compact {
-                        Canvas(height: 14)
-                    } else {
-                        Row(gap: 14, align: baseline) {
-                            Text(content: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, style: large_title)
-                            Text(content: anime.season_label, emphasis: secondary, lines: 1)
-                            Spacer
+                if !anime.signed_in || anime.loading {
+                    season_note(app: app, anime: anime)
+                    Canvas(height: 12)
+                }
+                if window.compact || window.medium {
+                    Column(gap: 8) {
+                        ForEach(items: anime.week, key: id) |day| {
+                            calendar_vertical(anime: anime, day: day)
                         }
-                        Canvas(height: 18)
                     }
-                    if !anime.signed_in || anime.loading {
-                        season_note(anime: anime)
-                        Canvas(height: 12)
-                    }
-                    if window.compact || window.medium {
-                        Column(gap: 8) {
-                            ForEach(items: anime.week, key: id) |day| {
-                                calendar_vertical(anime: anime, day: day)
-                            }
-                        }
-                    } else {
-                        // A television's week is 500 points tall (`.n-acc`).
-                        Accordion(count: 7, selected: anime.selected_day, collapsed_width: 86, gap: 8, height: if window.tv { 500 } else { 560 }, corner: card, animate: bouncy) {
-                            ForEach(items: anime.week, key: id, stagger: 0.036) |day| {
-                                Stack(align: top_leading, height: if window.tv { 500 } else { 560 }, appear: calendar_column_in, appear_delay: 0.06) {
-                                    if anime.selected_day == day.id {
-                                        Rail {
-                                            Column(gap: 0, from: 0, to: 1) {
-                                                calendar_background(anime: anime, day: day)
-                                            }
+                } else {
+                    Accordion(count: 7, selected: anime.selected_day, collapsed_width: 86, gap: 8, corner: card, animate: bouncy) {
+                        ForEach(items: anime.week, key: id, stagger: 0.036) |day| {
+                            Stack(align: top_leading, appear: calendar_column_in, appear_delay: 0.06) {
+                                if anime.selected_day == day.id {
+                                    Rail {
+                                        Column(gap: 0, from: 0, to: 1) {
+                                            calendar_background(anime: anime, day: day)
                                         }
-                                        Column(gap: 0) {
-                                            calendar_header(day: day)
-                                            Canvas(height: 15)
-                                            ScrollView {
-                                                calendar_rows(anime: anime, day: day)
-                                            }
+                                    }
+                                    Column(gap: 0) {
+                                        calendar_header(day: day)
+                                        Canvas(height: 15)
+                                        ScrollView {
+                                            calendar_rows(anime: anime, day: day)
                                         }
-                                    } else {
-                                        Button(id: select_day, label: tr! { "zh-Hans" => "展开{day, date, EEE} · {count} 部", "en" => "Expand {day, date, EEE} · {count, plural, one {# show} other {# shows}}"; day: day.date, count: day.count }, variant: calendar_day) {
-                                            Column(gap: 0, height: if window.tv { 500 } else { 560 }, align: center) {
-                                                calendar_header_collapsed(day: day)
-                                                Canvas(height: 19)
-                                                Column(gap: 10, width: 86, align: center) {
-                                                    ForEach(items: day.preview, key: id) |show| {
-                                                        Column(gap: 4, align: center) {
-                                                            Image(source: show.poster, width: 52, height: 78, fit: cover, corner: poster)
-                                                            Row(gap: 0, height: 15) {
-                                                                if show.timed {
-                                                                    Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: caption, emphasis: secondary, lines: 1)
-                                                                }
+                                    }
+                                } else {
+                                    Button(id: select_day, label: tr! { "zh-Hans" => "展开{day, date, EEE} · {count} 部", "en" => "Expand {day, date, EEE} · {count, plural, one {# show} other {# shows}}"; day: day.date, count: day.count }, variant: calendar_day) {
+                                        Column(gap: 0, align: center) {
+                                            calendar_header_collapsed(day: day)
+                                            Canvas(height: 19)
+                                            Column(gap: 10, width: 86, align: center) {
+                                                ForEach(items: day.preview, key: id) |show| {
+                                                    Column(gap: 4, align: center) {
+                                                        Image(source: show.poster, width: 52, height: 78, fit: cover, corner: poster)
+                                                        Row(gap: 0, height: 15) {
+                                                            if show.timed {
+                                                                Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: caption, emphasis: secondary, lines: 1)
                                                             }
                                                         }
                                                     }
-                                                    if day.remaining > 0 {
-                                                        calendar_more(count: day.remaining)
-                                                    }
                                                 }
-                                                Spacer
+                                                if day.remaining > 0 {
+                                                    calendar_more(count: day.remaining)
+                                                }
                                             }
-                                        } => anime.select_day(day.id)
-                                    }
+                                            Spacer
+                                        }
+                                    } => anime.select_day(day.id)
                                 }
                             }
                         }
                     }
-                    Canvas(height: 48)
                 }
-                }
+                Canvas(height: if window.compact || window.medium { 48 } else { 24 })
             }
         }
     }
@@ -585,7 +604,7 @@ pub fn calendar_header_collapsed(day: anime::BroadcastDay) -> impl View {
     ui! {
         Column(gap: 0, width: 86) {
             Canvas(height: 16)
-            Row(gap: 0) {
+            Row(gap: 0, height: if window.tv { 46 } else { 39 }) {
             Canvas(width: 16)
             Column(gap: 0, width: 70) {
             Text(content: tr! { "zh-Hans" => "{day, date, EEE}", "en" => "{day, date, EEE}"; day: day.date }, style: title3, lines: 1)
@@ -752,7 +771,7 @@ pub fn calendar_vertical_header(anime: anime::Client, day: anime::BroadcastDay) 
 /// stage across the width, what it is with the main button, the others
 /// being watched as cards, and today's timeline, each 16 from the edges.
 #[component]
-pub fn phone_home(anime: anime::Client) -> impl View {
+pub fn phone_home(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
         ScrollView(appear: page_in) {
             Column(gap: 0) {
@@ -823,7 +842,7 @@ pub fn phone_home(anime: anime::Client) -> impl View {
                 }
                 } else {
                     Column(gap: 0, padding_x: 16) {
-                        season_note(anime: anime)
+                        season_note(app: app, anime: anime)
                     }
                 }
                 // The other modules' sections, as the library's recently added.

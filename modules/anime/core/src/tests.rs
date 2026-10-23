@@ -31,14 +31,24 @@ fn a_show_of_the_season_opens_and_fills_in_when_its_details_come() {
     engine.season = vec![intro(17675, "葬送的芙莉莲")];
     engine.show_season();
     engine.open_scheduled(17675).unwrap();
-    assert_eq!((engine.state.opened, engine.state.back.clone()), (17675, BackTo::Schedule));
+    assert_eq!(
+        (engine.state.opened, engine.state.back.clone()),
+        (17675, BackTo::Schedule)
+    );
     assert_eq!(engine.state.show.rating, 8.5);
     assert!(engine.state.episodes.is_empty());
-    engine.inbox.lock().unwrap().push(Done::Details(17675, Ok(details(17675, 12))));
+    engine
+        .inbox
+        .lock()
+        .unwrap()
+        .push(Done::Details(17675, Ok(details(17675, 12))));
     anime::Engine::wake(&mut engine);
     assert_eq!(engine.state.show.episodes, 12);
     assert_eq!(engine.state.show.summary, "旅途");
-    assert_eq!(engine.state.show.premiere, bern::date::CalendarDate::new(2023, 9, 29));
+    assert_eq!(
+        engine.state.show.premiere,
+        bern::date::CalendarDate::new(2023, 9, 29)
+    );
     assert_eq!(engine.state.episodes.len(), 12);
     assert_eq!(engine.state.episodes[0].note, anime::EpisodeNote::Missing);
     assert_eq!(engine.state.next, NextAction::Start);
@@ -49,17 +59,46 @@ fn a_show_of_the_season_opens_and_fills_in_when_its_details_come() {
 #[test]
 fn what_was_played_and_matched_is_on_the_stage_and_the_film() {
     let mut engine = AnimeEngine::default();
-    let frieren = Anime { dandanplay_id: 17675, title: "葬送的芙莉莲".into(), image: "https://img/f.jpg".into() };
+    let frieren = Anime {
+        dandanplay_id: 17675,
+        title: "葬送的芙莉莲".into(),
+        image: "https://img/f.jpg".into(),
+    };
     for (number, position) in [(1, 1440.0), (2, 1440.0), (3, 600.0)] {
         let url = format!("file:///v/{number}.mkv");
-        let file = engine.db.opened(&url, Some(&Fingerprint { md5: format!("{number}"), size: 1 })).unwrap();
-        engine.db.link_episode(file, &frieren, &Episode { dandanplay_id: 176_750_000 + number, number, title: String::new() }, false);
+        let file = engine
+            .db
+            .opened(
+                &url,
+                Some(&Fingerprint {
+                    md5: format!("{number}"),
+                    size: 1,
+                }),
+            )
+            .unwrap();
+        engine.db.link_episode(
+            file,
+            &frieren,
+            &Episode {
+                dandanplay_id: 176_750_000 + number,
+                number,
+                title: String::new(),
+            },
+            false,
+        );
         engine.db.save_progress(file, position, 1440.0);
         engine.db.remember(&url, "x", None, position, 1440.0);
     }
     engine.history_changed().unwrap();
     assert!(engine.state.has_stage);
-    assert_eq!((engine.state.stage.id, engine.state.stage.episode, engine.state.stage.left), (17675, 3, 14));
+    assert_eq!(
+        (
+            engine.state.stage.id,
+            engine.state.stage.episode,
+            engine.state.stage.left
+        ),
+        (17675, 3, 14)
+    );
     assert!(engine.state.also.is_empty());
     engine.details.insert(17675, details(17675, 12));
     engine.open(17675).unwrap();

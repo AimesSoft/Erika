@@ -41,7 +41,9 @@ impl Chosen {
     /// How many episodes it has, when known.
     fn total(&self) -> Option<i64> {
         match &self.episodes {
-            Some(episodes) if !episodes.is_empty() => episodes.iter().map(|(number, _)| *number).max(),
+            Some(episodes) if !episodes.is_empty() => {
+                episodes.iter().map(|(number, _)| *number).max()
+            }
             _ => (self.count > 0).then_some(self.count),
         }
     }
@@ -53,12 +55,19 @@ impl Chosen {
             .as_ref()
             .and_then(|episodes| episodes.iter().find(|(known, _)| *known == number))
             .map(|(_, episode)| episode.clone())
-            .unwrap_or(Episode { dandanplay_id: self.anime.dandanplay_id * 10_000 + number, number, title: String::new() })
+            .unwrap_or(Episode {
+                dandanplay_id: self.anime.dandanplay_id * 10_000 + number,
+                number,
+                title: String::new(),
+            })
     }
 }
 
 pub struct Session {
     pub single: bool,
+    /// The videos are recognized by the user's own server, which is
+    /// searched and told what they are.
+    pub custom: bool,
     pub place: String,
     pub videos: Vec<Video>,
     pub on: HashSet<i64>,
@@ -81,12 +90,18 @@ pub struct Session {
 fn usual_anime(videos: &[Video]) -> Option<Anime> {
     let mut votes: Vec<(Anime, usize)> = Vec::new();
     for (anime, _) in videos.iter().filter_map(|video| video.now.as_ref()) {
-        match votes.iter_mut().find(|(known, _)| known.dandanplay_id == anime.dandanplay_id) {
+        match votes
+            .iter_mut()
+            .find(|(known, _)| known.dandanplay_id == anime.dandanplay_id)
+        {
             Some((_, count)) => *count += 1,
             None => votes.push((anime.clone(), 1)),
         }
     }
-    votes.into_iter().max_by_key(|(_, count)| *count).map(|(anime, _)| anime)
+    votes
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(anime, _)| anime)
 }
 
 impl Session {
@@ -94,7 +109,12 @@ impl Session {
     pub fn one(video: Video, place: String) -> Session {
         let mut session = Session::new(true, place, vec![video]);
         let video = &session.videos[0];
-        if let Some(number) = video.now.as_ref().map(|(_, number)| *number).or_else(|| video.number()) {
+        if let Some(number) = video
+            .now
+            .as_ref()
+            .map(|(_, number)| *number)
+            .or_else(|| video.number())
+        {
             session.set.insert(video.key, number);
         }
         session
@@ -104,16 +124,29 @@ impl Session {
     /// matched to another anime than most are skipped; so are those without
     /// a number while some have one, and then all go by order.
     pub fn folder(mut videos: Vec<Video>, place: String) -> Session {
-        videos.sort_by(|a, b| a.number().unwrap_or(i64::MAX).cmp(&b.number().unwrap_or(i64::MAX)).then_with(|| a.name.cmp(&b.name)));
+        videos.sort_by(|a, b| {
+            a.number()
+                .unwrap_or(i64::MAX)
+                .cmp(&b.number().unwrap_or(i64::MAX))
+                .then_with(|| a.name.cmp(&b.name))
+        });
         let mut session = Session::new(false, place, videos);
         session.by_order = !session.videos.iter().any(|video| video.number().is_some());
-        let usual = session.chosen.as_ref().map(|chosen| chosen.anime.dandanplay_id);
+        let usual = session
+            .chosen
+            .as_ref()
+            .map(|chosen| chosen.anime.dandanplay_id);
         let by_order = session.by_order;
         session.on = session
             .videos
             .iter()
             .filter(|video| video.file.is_some())
-            .filter(|video| video.now.as_ref().is_none_or(|(anime, _)| Some(anime.dandanplay_id) == usual))
+            .filter(|video| {
+                video
+                    .now
+                    .as_ref()
+                    .is_none_or(|(anime, _)| Some(anime.dandanplay_id) == usual)
+            })
             .filter(|video| by_order || video.number().is_some())
             .map(|video| video.key)
             .collect();
@@ -121,10 +154,19 @@ impl Session {
     }
 
     fn new(single: bool, place: String, videos: Vec<Video>) -> Session {
-        let chosen = usual_anime(&videos).map(|anime| Chosen { anime, count: 0, episodes: None });
-        let on = videos.iter().filter(|video| video.file.is_some()).map(|video| video.key).collect();
+        let chosen = usual_anime(&videos).map(|anime| Chosen {
+            anime,
+            count: 0,
+            episodes: None,
+        });
+        let on = videos
+            .iter()
+            .filter(|video| video.file.is_some())
+            .map(|video| video.key)
+            .collect();
         Session {
             single,
+            custom: false,
             place,
             videos,
             on,
@@ -175,7 +217,12 @@ impl Session {
     /// When the names number past the anime's last episode, they likely go
     /// on from an earlier season: the lowest goes to episode 1.
     pub fn fit_offset(&mut self) {
-        let numbers: Vec<i64> = self.videos.iter().filter(|video| self.on.contains(&video.key)).filter_map(Video::number).collect();
+        let numbers: Vec<i64> = self
+            .videos
+            .iter()
+            .filter(|video| self.on.contains(&video.key))
+            .filter_map(Video::number)
+            .collect();
         let total = self.chosen.as_ref().and_then(Chosen::total);
         self.offset = match (total, numbers.iter().max(), numbers.iter().min()) {
             (Some(total), Some(&highest), Some(&lowest)) if highest > total => 1 - lowest,
@@ -192,10 +239,18 @@ impl Session {
 
     /// Match to `anime`, which has `count` episodes as far as known.
     pub fn choose(&mut self, anime: Anime, count: i64) {
-        if self.chosen.as_ref().is_some_and(|chosen| chosen.anime.dandanplay_id == anime.dandanplay_id) {
+        if self
+            .chosen
+            .as_ref()
+            .is_some_and(|chosen| chosen.anime.dandanplay_id == anime.dandanplay_id)
+        {
             return;
         }
-        self.chosen = Some(Chosen { anime, count, episodes: None });
+        self.chosen = Some(Chosen {
+            anime,
+            count,
+            episodes: None,
+        });
         if !self.single {
             self.fit_offset();
         }
@@ -203,7 +258,11 @@ impl Session {
 
     /// The anime's episodes came.
     pub fn details(&mut self, details: &Details) {
-        let Some(chosen) = self.chosen.as_mut().filter(|chosen| chosen.anime.dandanplay_id == details.anime_id) else {
+        let Some(chosen) = self
+            .chosen
+            .as_mut()
+            .filter(|chosen| chosen.anime.dandanplay_id == details.anime_id)
+        else {
             return;
         };
         if chosen.anime.image.is_empty() {
@@ -215,7 +274,14 @@ impl Session {
                 .iter()
                 .filter_map(|episode| {
                     let number = episode.episode_number.trim().parse().ok()?;
-                    Some((number, Episode { dandanplay_id: episode.episode_id, number, title: episode.episode_title.clone() }))
+                    Some((
+                        number,
+                        Episode {
+                            dandanplay_id: episode.episode_id,
+                            number,
+                            title: episode.episode_title.clone(),
+                        },
+                    ))
                 })
                 .collect(),
         );
@@ -225,7 +291,12 @@ impl Session {
     }
 
     pub fn toggle(&mut self, key: i64) {
-        if !self.on.remove(&key) && self.videos.iter().any(|video| video.key == key && video.file.is_some()) {
+        if !self.on.remove(&key)
+            && self
+                .videos
+                .iter()
+                .any(|video| video.key == key && video.file.is_some())
+        {
             self.on.insert(key);
         }
     }
@@ -235,7 +306,11 @@ impl Session {
         match number {
             Some(number) => {
                 self.set.insert(key, number);
-                if self.videos.iter().any(|video| video.key == key && video.file.is_some()) {
+                if self
+                    .videos
+                    .iter()
+                    .any(|video| video.key == key && video.file.is_some())
+                {
                     self.on.insert(key);
                 }
             }
@@ -252,15 +327,17 @@ impl Session {
         let chosen = self.chosen.as_ref()?;
         let values = self.values();
         let total = chosen.total();
-        let links: Vec<(FileId, Episode)> = self
-            .videos
-            .iter()
-            .filter(|video| self.on.contains(&video.key))
-            .map(|video| {
-                let number = values.get(&video.key).copied().flatten().filter(|number| *number > 0 && total.is_none_or(|total| *number <= total))?;
-                Some((video.file?, chosen.episode(number)))
-            })
-            .collect::<Option<_>>()?;
+        let links: Vec<(FileId, Episode)> =
+            self.videos
+                .iter()
+                .filter(|video| self.on.contains(&video.key))
+                .map(|video| {
+                    let number = values.get(&video.key).copied().flatten().filter(|number| {
+                        *number > 0 && total.is_none_or(|total| *number <= total)
+                    })?;
+                    Some((video.file?, chosen.episode(number)))
+                })
+                .collect::<Option<_>>()?;
         (!links.is_empty()).then(|| (chosen.anime.clone(), links))
     }
 
@@ -268,7 +345,11 @@ impl Session {
     pub fn view(&self) -> Matching {
         let values = self.values();
         let total = self.chosen.as_ref().and_then(Chosen::total);
-        let title = self.chosen.as_ref().map(|chosen| chosen.anime.title.clone()).unwrap_or_default();
+        let title = self
+            .chosen
+            .as_ref()
+            .map(|chosen| chosen.anime.title.clone())
+            .unwrap_or_default();
         let mut taken = HashSet::new();
         let mut bad_count = 0;
         let rows: Vec<MatchRow> = self
@@ -284,23 +365,50 @@ impl Session {
                 } else if on && value.is_none() {
                     (MatchNote::NoNumber, true)
                 } else if beyond {
-                    (MatchNote::Beyond { anime: title.clone(), total: total.unwrap_or(0) }, true)
+                    (
+                        MatchNote::Beyond {
+                            anime: title.clone(),
+                            total: total.unwrap_or(0),
+                        },
+                        true,
+                    )
                 } else if twin {
                     (MatchNote::Twin, false)
                 } else {
                     match &video.now {
-                        Some((anime, episode)) => (MatchNote::Now { anime: anime.title.clone(), episode: *episode }, false),
+                        Some((anime, episode)) => (
+                            MatchNote::Now {
+                                anime: anime.title.clone(),
+                                episode: *episode,
+                            },
+                            false,
+                        ),
                         None => (MatchNote::Unmatched, false),
                     }
                 };
                 bad_count += bad as i64;
-                MatchRow { key: video.key, name: video.name.clone(), on, number: value.unwrap_or(0), editing: self.editing == Some(video.key), note, odd: !on || bad || twin }
+                MatchRow {
+                    key: video.key,
+                    name: video.name.clone(),
+                    on,
+                    number: value.unwrap_or(0),
+                    editing: self.editing == Some(video.key),
+                    note,
+                    odd: !on || bad || twin,
+                }
             })
             .collect();
         let on_count = rows.iter().filter(|row| row.on).count() as i64;
         let odd_count = rows.iter().filter(|row| row.odd).count() as i64;
-        let lowest = if self.single || self.by_order { None } else { self.lowest() };
-        let chosen_id = self.chosen.as_ref().map_or(0, |chosen| chosen.anime.dandanplay_id);
+        let lowest = if self.single || self.by_order {
+            None
+        } else {
+            self.lowest()
+        };
+        let chosen_id = self
+            .chosen
+            .as_ref()
+            .map_or(0, |chosen| chosen.anime.dandanplay_id);
         Matching {
             open: true,
             single: self.single,
@@ -312,18 +420,30 @@ impl Session {
             start: self.start,
             lowest: lowest.unwrap_or(0),
             align_to: lowest.map_or(0, |lowest| lowest + self.offset),
-            shown: if self.odd_only { rows.iter().filter(|row| row.odd).cloned().collect() } else { rows.clone() },
+            shown: if self.odd_only {
+                rows.iter().filter(|row| row.odd).cloned().collect()
+            } else {
+                rows.clone()
+            },
             all_count: rows.len() as i64,
             odd_count,
             on_count,
             skipped_count: rows.len() as i64 - on_count,
             bad_count,
-            ready: self.chosen.is_some() && on_count > 0 && bad_count == 0 && self.links().is_some(),
+            ready: self.chosen.is_some()
+                && on_count > 0
+                && bad_count == 0
+                && self.links().is_some(),
             linked: self.single && self.videos[0].now.is_some(),
             results: self
                 .results
                 .iter()
-                .map(|found| MatchAnime { id: found.anime_id, title: found.anime_title.clone(), episodes: found.episode_count, chosen: found.anime_id == chosen_id })
+                .map(|found| MatchAnime {
+                    id: found.anime_id,
+                    title: found.anime_title.clone(),
+                    episodes: found.episode_count,
+                    chosen: found.anime_id == chosen_id,
+                })
                 .collect(),
             searching: self.searching,
             search_failed: self.search_failed,

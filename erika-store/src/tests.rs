@@ -10,11 +10,17 @@ fn print(md5: &str, size: u64) -> Fingerprint {
 #[test]
 fn one_file_in_two_places_shares_its_progress() {
     let db = Db::in_memory();
-    let here = db.opened("file:///a/ep1.mkv", Some(&print("3f2a", 100))).unwrap();
-    let there = db.opened("file:///b/moved.mkv", Some(&print("3f2a", 100))).unwrap();
+    let here = db
+        .opened("file:///a/ep1.mkv", Some(&print("3f2a", 100)))
+        .unwrap();
+    let there = db
+        .opened("file:///b/moved.mkv", Some(&print("3f2a", 100)))
+        .unwrap();
     assert_eq!(here, there);
     // A download that stopped half-way shares the head but not the size.
-    let partial = db.opened("file:///c/ep1.part", Some(&print("3f2a", 40))).unwrap();
+    let partial = db
+        .opened("file:///c/ep1.part", Some(&print("3f2a", 40)))
+        .unwrap();
     assert_ne!(partial, here);
     assert_eq!(db.progress(here), None);
     db.save_progress(here, 600.0, 1440.0);
@@ -23,7 +29,10 @@ fn one_file_in_two_places_shares_its_progress() {
     assert_eq!(db.progress(partial), None);
     // Opening a known address again without its fingerprint keeps its file.
     assert_eq!(db.opened("file:///a/ep1.mkv", None), None);
-    assert_eq!(db.opened("file:///a/ep1.mkv", Some(&print("3f2a", 100))), Some(here));
+    assert_eq!(
+        db.opened("file:///a/ep1.mkv", Some(&print("3f2a", 100))),
+        Some(here)
+    );
 }
 
 #[test]
@@ -31,12 +40,21 @@ fn recent_videos_come_newest_first_and_keep_their_picture() {
     let db = Db::in_memory();
     db.remember("file:///one.mkv", "one", Some("/c/1.png"), 10.0, 100.0);
     db.remember("file:///two.mkv", "two", None, 20.0, 200.0);
-    db.remember("https://x/three.mp4", "three", Some("/c/3.png"), 30.0, 300.0);
+    db.remember(
+        "https://x/three.mp4",
+        "three",
+        Some("/c/3.png"),
+        30.0,
+        300.0,
+    );
     // Played again: back on top, with its picture though none came now.
     db.remember("file:///one.mkv", "one", None, 50.0, 100.0);
     let recents = db.recents(3);
     assert_eq!(
-        recents.iter().map(|recent| recent.title.as_str()).collect::<Vec<_>>(),
+        recents
+            .iter()
+            .map(|recent| recent.title.as_str())
+            .collect::<Vec<_>>(),
         ["one", "three", "two"]
     );
     assert_eq!(recents[0].still.as_deref(), Some("/c/1.png"));
@@ -104,10 +122,22 @@ fn a_fingerprint_reads_the_head_and_the_size() {
 #[test]
 fn files_matched_to_episodes_make_what_is_being_watched() {
     let db = Db::in_memory();
-    let frieren = Anime { dandanplay_id: 17675, title: "葬送的芙莉莲".into(), image: "https://img/f.jpg".into() };
-    let episode = |number: i64| Episode { dandanplay_id: 176_750_000 + number, number, title: format!("第{number}话") };
-    let one = db.opened("file:///a/01.mkv", Some(&print("01", 1))).unwrap();
-    let two = db.opened("file:///a/02.mkv", Some(&print("02", 2))).unwrap();
+    let frieren = Anime {
+        dandanplay_id: 17675,
+        title: "葬送的芙莉莲".into(),
+        image: "https://img/f.jpg".into(),
+    };
+    let episode = |number: i64| Episode {
+        dandanplay_id: 176_750_000 + number,
+        number,
+        title: format!("第{number}话"),
+    };
+    let one = db
+        .opened("file:///a/01.mkv", Some(&print("01", 1)))
+        .unwrap();
+    let two = db
+        .opened("file:///a/02.mkv", Some(&print("02", 2)))
+        .unwrap();
     let other = db.opened("file:///b/x.mkv", Some(&print("x", 3))).unwrap();
     assert_eq!(db.file_episode(one), None);
     db.link_episode(one, &frieren, &episode(1), false);
@@ -119,13 +149,25 @@ fn files_matched_to_episodes_make_what_is_being_watched() {
     db.save_progress(two, 300.0, 1440.0);
     db.remember("file:///a/01.mkv", "01.mkv", None, 1400.0, 1440.0);
     db.remember("file:///b/x.mkv", "x.mkv", None, 5.0, 10.0);
-    db.remember("file:///a/02.mkv", "02.mkv", Some("/c/2.png"), 300.0, 1440.0);
+    db.remember(
+        "file:///a/02.mkv",
+        "02.mkv",
+        Some("/c/2.png"),
+        300.0,
+        1440.0,
+    );
     let watching = db.watching(3);
     assert_eq!(watching.len(), 1, "one per anime, and only episodes");
     assert_eq!(watching[0].episode.number, 2);
     assert_eq!(watching[0].still.as_deref(), Some("/c/2.png"));
     let files = db.episode_files(17675);
-    assert_eq!(files.iter().map(|file| file.episode.number).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(
+        files
+            .iter()
+            .map(|file| file.episode.number)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
     assert_eq!(files[0].position, 1400.0);
     assert_eq!(db.file_episode(other), None);
     let shelf = db.shelf(None);
@@ -136,23 +178,75 @@ fn files_matched_to_episodes_make_what_is_being_watched() {
 #[test]
 fn a_folder_source_keeps_what_scans_saw_and_what_the_user_decided() {
     let db = Db::in_memory();
-    let folder = db.add_source("folder", "番剧", "file:///anime/").unwrap();
-    assert_eq!(db.add_source("folder", "番剧", "file:///anime/"), Some(folder), "one source per folder");
-    let one = db.saw(folder, "file:///anime/a/01.mkv", 10, 100, Some(&print("01", 10))).unwrap();
-    let two = db.saw(folder, "file:///anime/a/02.mkv", 20, 100, Some(&print("02", 20))).unwrap();
-    assert_eq!(db.saw(folder, "file:///anime/broken.mkv", 5, 100, None), None);
+    let folder = db
+        .add_source("folder", "番剧", "file:///anime/", "anime")
+        .unwrap();
+    assert_eq!(
+        db.add_source("folder", "番剧", "file:///anime/", "series"),
+        Some(folder),
+        "one source per folder"
+    );
+    let one = db
+        .saw(
+            folder,
+            "file:///anime/a/01.mkv",
+            10,
+            100,
+            Some(&print("01", 10)),
+        )
+        .unwrap();
+    let two = db
+        .saw(
+            folder,
+            "file:///anime/a/02.mkv",
+            20,
+            100,
+            Some(&print("02", 20)),
+        )
+        .unwrap();
+    assert_eq!(
+        db.saw(folder, "file:///anime/broken.mkv", 5, 100, None),
+        None
+    );
     let sources = db.sources();
-    assert_eq!(sources.len(), 1, "videos opened one by one are no source the user added");
-    assert_eq!((sources[0].files, sources[0].unmatched), (3, 3));
+    assert_eq!(
+        sources.len(),
+        1,
+        "videos opened one by one are no source the user added"
+    );
+    assert_eq!(
+        (
+            sources[0].files,
+            sources[0].unmatched,
+            sources[0].content.as_str()
+        ),
+        (3, 3, "anime")
+    );
+    db.set_source_content(folder, "series");
+    assert_eq!(db.sources()[0].content, "series");
+    assert_eq!(db.fingerprint_of(one), Some(print("01", 10)));
 
     // The user matches two files at once, then unlinks one.
-    let frieren = Anime { dandanplay_id: 17675, title: "葬送的芙莉莲".into(), image: String::new() };
-    let episode = |number: i64| Episode { dandanplay_id: 176_750_000 + number, number, title: String::new() };
+    let frieren = Anime {
+        dandanplay_id: 17675,
+        title: "葬送的芙莉莲".into(),
+        image: String::new(),
+    };
+    let episode = |number: i64| Episode {
+        dandanplay_id: 176_750_000 + number,
+        number,
+        title: String::new(),
+    };
     assert!(db.link_files(&frieren, &[(one, episode(1)), (two, episode(2))]));
     assert_eq!(db.sources()[0].unmatched, 1);
     let entries = db.entries(Some(folder));
     assert_eq!(entries.len(), 3);
-    assert!(entries.iter().filter(|entry| entry.matched.is_some()).all(|entry| entry.manual));
+    assert!(
+        entries
+            .iter()
+            .filter(|entry| entry.matched.is_some())
+            .all(|entry| entry.manual)
+    );
     db.unlink(two);
     // Automatic matching leaves both the matched and the unlinked file alone.
     db.link_episode(one, &frieren, &episode(7), false);

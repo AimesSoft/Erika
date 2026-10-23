@@ -6,25 +6,27 @@
 //! corner (`.x-mini`), and the remote's Back closes a show's details. The
 //! remote moves the focus; the system draws it. The scene fills the whole
 //! screen: the design's 64-point margins are the overscan's safe area.
-use crate::search::{search_results, search_results_props};
 use crate::pure::{pure_link, pure_link_props};
-use crate::{avatar, avatar_props, AppWindows, ErikaDraft, MainPage};
+use crate::search::{search_results, search_results_props};
+use crate::{AppWindows, ErikaDraft, MainPage, avatar, avatar_props};
 use bern::prelude::*;
+#[cfg(feature = "bern-module-anime")]
 use erika_anime_protocol::anime::{self, BackTo};
+#[cfg(feature = "bern-module-anime")]
 use erika_anime_ui::{details, details_props};
 use erika_protocol::erika;
 
 #[component]
 pub fn tv_shell(
     app: erika::Client,
-    anime: anime::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
     windows: AppWindows,
     #[session] draft: ErikaDraft,
 ) -> impl View {
     ui! {
-        Stack(align: top_leading) {
+        Stack(variant: app_background, align: top_leading) {
             // Pure playback (design 10.2): no pages, so no tabs.
-            if !app.features.anime && !app.features.library && !app.features.downloads {
+            if !(build.modules.anime && app.features.anime) && !(build.modules.library && app.features.library) && !(build.modules.downloads && app.features.downloads) {
                 Stack(enabled: !app.link_prompt) {
                     tv_pure(app: app, windows: windows)
                 }
@@ -36,24 +38,24 @@ pub fn tv_shell(
                         // VoiceOver, and the pages' names alone, as the
                         // television's tabs show them (`.c-navi .ic`).
                         Tab(value: MainPage::Search, label: tr! { "zh-Hans" => "搜索", "en" => "Search" }, icon: "magnifyingglass", display: icon) {
-                            tv_scene(app: app, anime: anime, windows: windows, page: MainPage::Search)
+                            tv_scene(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, page: MainPage::Search)
                         }
-                        if app.features.anime {
+                        if (build.modules.anime && app.features.anime) {
                             Tab(value: MainPage::Home, label: tr! { "zh-Hans" => "首页", "en" => "Home" }) {
-                                tv_scene(app: app, anime: anime, windows: windows, page: MainPage::Home)
+                                tv_scene(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, page: MainPage::Home)
                             }
                             Tab(value: MainPage::New, label: tr! { "zh-Hans" => "新番", "en" => "New" }) {
-                                tv_scene(app: app, anime: anime, windows: windows, page: MainPage::New)
+                                tv_scene(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, page: MainPage::New)
                             }
                         }
-                        if app.features.library {
+                        if (build.modules.library && app.features.library) {
                             Tab(value: MainPage::Library, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }) {
-                                tv_scene(app: app, anime: anime, windows: windows, page: MainPage::Library)
+                                tv_scene(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, page: MainPage::Library)
                             }
                         }
-                        if app.features.downloads {
+                        if (build.modules.downloads && app.features.downloads) {
                             Tab(value: MainPage::Downloads, label: tr! { "zh-Hans" => "下载", "en" => "Downloads" }) {
-                                tv_scene(app: app, anime: anime, windows: windows, page: MainPage::Downloads)
+                                tv_scene(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, page: MainPage::Downloads)
                             }
                         }
                     }
@@ -61,7 +63,7 @@ pub fn tv_shell(
             }
             // The remote's Back closes a show's details, as the design's
             // way back does (菜单 → 播放器 → 弹窗 → 详情 → 首页).
-            if anime.opened > 0 && !app.playing {
+            if build.modules.anime && anime.opened > 0 && !app.playing {
                 Shortcut(key: "escape") => anime.close()
             }
             // 「打开链接」 in the television's scene.
@@ -84,7 +86,7 @@ pub fn tv_shell(
 #[component]
 pub fn tv_scene(
     app: erika::Client,
-    anime: anime::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
     windows: AppWindows,
     page: MainPage,
     #[session] draft: ErikaDraft,
@@ -95,13 +97,13 @@ pub fn tv_scene(
                 Stack(width: 1280, height: 720, align: top_leading) {
                     Positioned(x: 0, y: 80, width: 1280, height: 640) {
                         if page == MainPage::Search {
-                            if anime.opened > 0 && anime.back == BackTo::Search {
-                                details(anime: anime)
+                            if build.modules.anime && anime.opened > 0 && anime.back == BackTo::Search {
+                                details(#[cfg(feature = "bern-module-anime")] anime: anime)
                             } else {
-                                tv_search(app: app, anime: anime, windows: windows)
+                                tv_search(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
                             }
-                        } else if page == MainPage::Library && anime.opened > 0 && anime.back == BackTo::Library {
-                            details(anime: anime)
+                        } else if build.modules.library && build.modules.anime && page == MainPage::Library && anime.opened > 0 && anime.back == BackTo::Library {
+                            details(#[cfg(feature = "bern-module-anime")] anime: anime)
                         } else {
                             PageContent(slot: main, selected: draft.page)
                         }
@@ -127,8 +129,10 @@ pub fn tv_scene(
 pub fn tv_actions(app: erika::Client, windows: AppWindows) -> impl View {
     ui! {
         Row(gap: 10, align: center) {
-            Stack(width: 40, height: 40, align: center) {
-                avatar()
+            if build.modules.account && app.features.account {
+                Stack(width: 40, height: 40, align: center) {
+                    avatar()
+                }
             }
             IconButton(id: tv_open, icon: "folder", label: tr! { "zh-Hans" => "打开", "en" => "Open" }, height: 46) => app.show_link_prompt(true)
             IconButton(id: tv_settings, icon: "gearshape", label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, height: 46) => windows.settings.open()
@@ -144,7 +148,7 @@ pub fn tv_actions(app: erika::Client, windows: AppWindows) -> impl View {
 #[component]
 pub fn tv_search(
     app: erika::Client,
-    anime: anime::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
     windows: AppWindows,
     #[session] draft: ErikaDraft,
 ) -> impl View {
@@ -163,7 +167,7 @@ pub fn tv_search(
                         Search(id: tv_search, value: draft.query, prompt: tr! { "zh-Hans" => "番剧、剧集、设置", "en" => "Shows, episodes, settings" }, height: 52, font_size: 18, suggest: true) {
                             Column(gap: 0) {
                                 Canvas(height: 6)
-                                search_results(app: app, anime: anime, windows: windows)
+                                search_results(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
                             }
                         }
                     }

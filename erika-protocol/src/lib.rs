@@ -33,10 +33,10 @@ pub mod erika {
 
     #[value]
     pub enum SettingsPage {
-        #[label(tr! { "zh-Hans" => "账号", "en" => "Account" })]
-        Account,
         #[label(tr! { "zh-Hans" => "通用", "en" => "General" })]
         General,
+        #[label(tr! { "zh-Hans" => "账号", "en" => "Account" })]
+        Account,
         #[label(tr! { "zh-Hans" => "外观", "en" => "Appearance" })]
         Appearance,
         #[label(tr! { "zh-Hans" => "播放", "en" => "Playback" })]
@@ -166,7 +166,6 @@ pub mod erika {
         pub reduce_motion: bool,
         pub remember_position: bool,
         pub autoplay: bool,
-        pub step_back: bool,
         pub hardware_decode: bool,
         pub show_danmaku: bool,
         pub auto_match: bool,
@@ -180,6 +179,7 @@ pub mod erika {
     }
     #[value]
     pub struct FeatureSelection {
+        pub account: bool,
         pub danmaku: bool,
         pub enhance: bool,
         pub library: bool,
@@ -189,11 +189,93 @@ pub mod erika {
         pub remote: bool,
         pub downloads: bool,
     }
-    /// A settings page that matches a search; its label is the page's.
+    /// The individual setting shown in search, localized by the interface.
+    #[value]
+    pub enum SettingItem {
+        #[label(tr! { "zh-Hans" => "弹弹play 账号登录", "en" => "Dandanplay Account" })]
+        Account,
+        #[label(tr! { "zh-Hans" => "识别服务器地址", "en" => "Recognition Server Address" })]
+        MatchServer,
+        #[label(tr! { "zh-Hans" => "启动时打开", "en" => "Open at Startup" })]
+        Startup,
+        #[label(tr! { "zh-Hans" => "播放结束后", "en" => "When Playback Ends" })]
+        PlaybackEnd,
+        #[label(tr! { "zh-Hans" => "界面语言", "en" => "Interface Language" })]
+        Language,
+        #[label(tr! { "zh-Hans" => "自动检查更新", "en" => "Automatically Check for Updates" })]
+        AutoUpdates,
+        #[label(tr! { "zh-Hans" => "更新通道", "en" => "Update Channel" })]
+        UpdateChannel,
+        #[label(tr! { "zh-Hans" => "主题色", "en" => "Accent Color" })]
+        Accent,
+        #[label(tr! { "zh-Hans" => "明暗", "en" => "Appearance" })]
+        Appearance,
+        #[label(tr! { "zh-Hans" => "减少动态效果", "en" => "Reduce Motion" })]
+        ReduceMotion,
+        #[label(tr! { "zh-Hans" => "默认倍速", "en" => "Default Speed" })]
+        Speed,
+        #[label(tr! { "zh-Hans" => "片头／片尾跳过提示", "en" => "Opening / Ending Skip Hint" })]
+        SkipIntro,
+        #[label(tr! { "zh-Hans" => "记住播放位置", "en" => "Remember Playback Position" })]
+        RememberPosition,
+        #[label(tr! { "zh-Hans" => "自动连播下一集", "en" => "Automatically Play Next Episode" })]
+        Autoplay,
+        #[label(tr! { "zh-Hans" => "画框圆角", "en" => "Frame Corners" })]
+        FrameCorners,
+        #[label(tr! { "zh-Hans" => "硬件解码", "en" => "Hardware Decoding" })]
+        HardwareDecode,
+        #[label(tr! { "zh-Hans" => "显示弹幕", "en" => "Show Danmaku" })]
+        ShowDanmaku,
+        #[label(tr! { "zh-Hans" => "弹幕不透明度", "en" => "Danmaku Opacity" })]
+        DanmakuOpacity,
+        #[label(tr! { "zh-Hans" => "弹幕字号", "en" => "Danmaku Font Size" })]
+        DanmakuFontSize,
+        #[label(tr! { "zh-Hans" => "弹幕显示区域", "en" => "Danmaku Display Area" })]
+        DanmakuArea,
+        #[label(tr! { "zh-Hans" => "弹弹play 自动匹配", "en" => "Automatically Match with Dandanplay" })]
+        AutoMatch,
+        #[label(tr! { "zh-Hans" => "挂载本地弹幕", "en" => "Mount Local Danmaku" })]
+        MountDanmaku,
+        #[label(tr! { "zh-Hans" => "同步与存储", "en" => "Sync and Storage" })]
+        SyncStorage,
+        #[label(tr! { "zh-Hans" => "可选功能预设", "en" => "Optional Feature Presets" })]
+        Presets,
+        #[label(tr! { "zh-Hans" => "启用账号", "en" => "Enable Account" })]
+        EnableAccount,
+        #[label(tr! { "zh-Hans" => "启用弹幕", "en" => "Enable Danmaku" })]
+        EnableDanmaku,
+        #[label(tr! { "zh-Hans" => "启用画质增强", "en" => "Enable Upscaling" })]
+        EnableEnhance,
+        #[label(tr! { "zh-Hans" => "启用媒体库", "en" => "Enable Library" })]
+        EnableLibrary,
+        #[label(tr! { "zh-Hans" => "启用追番", "en" => "Enable Anime" })]
+        EnableAnime,
+        #[label(tr! { "zh-Hans" => "启用账号同步", "en" => "Enable Account Sync" })]
+        EnableSync,
+        #[label(tr! { "zh-Hans" => "启用网络媒体源", "en" => "Enable Network Sources" })]
+        EnableSources,
+        #[label(tr! { "zh-Hans" => "启用局域网与远程", "en" => "Enable LAN and Remote" })]
+        EnableRemote,
+        #[label(tr! { "zh-Hans" => "启用下载", "en" => "Enable Downloads" })]
+        EnableDownloads,
+        #[label(tr! { "zh-Hans" => "插件市场与已安装插件", "en" => "Plugin Marketplace and Installed Plugins" })]
+        Plugins,
+        #[label(tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" })]
+        Keys,
+        #[label(tr! { "zh-Hans" => "检查版本更新", "en" => "Check for Updates" })]
+        CheckUpdates,
+        #[label(tr! { "zh-Hans" => "开源许可", "en" => "Open Source Licenses" })]
+        Licenses,
+        #[label(tr! { "zh-Hans" => "致谢", "en" => "Credits" })]
+        Credits,
+    }
+
+    /// A concrete setting and the section containing it.
     #[value]
     pub struct SettingResult {
         pub id: String,
         pub page: SettingsPage,
+        pub item: SettingItem,
     }
     /// What a plugin declares it may do.
     #[value]
@@ -253,6 +335,8 @@ pub mod erika {
     /// The optional modules, by their names.
     #[value]
     pub enum FeatureModule {
+        #[label(tr! { "zh-Hans" => "账号", "en" => "Account" })]
+        Account,
         #[label(tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" })]
         Danmaku,
         #[label(tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" })]
@@ -292,6 +376,13 @@ pub mod erika {
     /// buttons; the others carry what they name.
     #[value]
     pub enum Notice {
+        #[label(tr! { "zh-Hans" => "弹幕已发送", "en" => "Danmaku sent" })]
+        DanmakuSent,
+        #[label(tr! { "zh-Hans" => "操作失败：{reason}", "en" => "Failed: {reason}" })]
+        OperationFailed {
+            #[content]
+            reason: String,
+        },
         #[label(tr! { "zh-Hans" => "界面预览：弹幕匹配尚未接入", "en" => "Preview: danmaku matching isn't connected yet" })]
         DanmakuMatchPending,
         #[label(tr! { "zh-Hans" => "界面预览：可使用窗口绿色按钮进入全屏", "en" => "Preview: use the window's green button for full screen" })]
@@ -305,6 +396,12 @@ pub mod erika {
         },
         #[label(tr! { "zh-Hans" => "已退出弹弹play账号", "en" => "Signed out of dandanplay" })]
         SignedOut,
+        #[label(tr! { "zh-Hans" => "已设置识别服务器，开始识别电视剧和电影", "en" => "Recognition server set; recognizing TV series and movies" })]
+        MatchServerSet,
+        #[label(tr! { "zh-Hans" => "已移除识别服务器", "en" => "Recognition server removed" })]
+        MatchServerCleared,
+        #[label(tr! { "zh-Hans" => "识别服务器的地址要以 http:// 或 https:// 开头", "en" => "The server's address starts with http:// or https://" })]
+        MatchServerInvalid,
         #[label(tr! { "zh-Hans" => "这一集还没有本地文件，打开它的视频后就能从这里播放", "en" => "No file of this episode yet; open its video once and it plays from here" })]
         NoEpisodeFile,
         #[label(tr! { "zh-Hans" => "弹弹play 认出了：{title}", "en" => "dandanplay recognized it: {title}" })]
@@ -338,6 +435,11 @@ pub mod erika {
         Credits,
         #[label(tr! { "zh-Hans" => "已同时开启：{module}", "en" => "Also turned on: {module}" })]
         AlsoOn { module: FeatureModule },
+        #[label(tr! { "zh-Hans" => "已同时开启：{first}、{second}", "en" => "Also turned on: {first} and {second}" })]
+        AlsoOnBoth {
+            first: FeatureModule,
+            second: FeatureModule,
+        },
         #[label(tr! { "zh-Hans" => "已同时关闭：{module}", "en" => "Also turned off: {module}" })]
         AlsoOff { module: FeatureModule },
         #[label(tr! { "zh-Hans" => "已同时关闭：{first}、{second}", "en" => "Also turned off: {first} and {second}" })]
@@ -364,6 +466,11 @@ pub mod erika {
         SaveFailed {
             #[content]
             reason: String,
+        },
+        #[label(tr! { "zh-Hans" => "已开始下载截图：{file}", "en" => "Screenshot download started: {file}" })]
+        ScreenshotDownload {
+            #[content]
+            file: String,
         },
     }
 
@@ -435,9 +542,20 @@ pub mod erika {
     #[value]
     pub struct DanmakuSettings {
         pub opacity: f64,
+        pub opacity_percent: i64,
+        pub supersampling: bool,
         pub font_size: f64,
+        /// Display values in the same units as the playback kernel, rounded
+        /// to one decimal place rather than exposing normalized slider values.
+        #[content]
+        pub font_points: String,
         pub speed: f64,
+        #[content]
+        pub scroll_seconds: String,
         pub delay: f64,
+        /// Absolute seconds; the UI localizes the advance/delay direction.
+        #[content]
+        pub delay_seconds: String,
         pub merge: bool,
         pub block_top: bool,
         pub block_bottom: bool,
@@ -445,7 +563,62 @@ pub mod erika {
     }
 
     #[value]
+    pub enum SkipKind {
+        None,
+        Opening,
+        Ending,
+    }
+
+    #[value]
+    pub struct MediaChapter {
+        pub id: i64,
+        #[content]
+        pub title: String,
+        /// Seconds on the video's timeline; zero end means not yet known.
+        pub start: f64,
+        pub end: f64,
+        pub at: f64,
+        /// Space before the next chapter label on the desktop's 1074 pt rail.
+        pub label_width: f64,
+        pub kind: SkipKind,
+    }
+
+    /// A matching search result with enough context to identify the right show.
+    #[value]
+    pub struct MatchingShow {
+        pub id: i64,
+        #[content]
+        pub name: String,
+        pub poster: MediaSource,
+        #[content]
+        pub summary: String,
+        #[content]
+        pub kind: String,
+        pub episode_count: i64,
+        pub loading: bool,
+    }
+
+    #[value]
+    pub struct PlayerMatching {
+        pub open: bool,
+        pub loading: bool,
+        #[content]
+        pub error: String,
+        pub selected: Option<MatchingShow>,
+        pub shows: Vec<MatchingShow>,
+        pub episodes: Vec<MediaTrack>,
+    }
+
+    #[value]
     pub struct PlayerState {
+        #[content]
+        pub danmaku_text: String,
+        pub sending_danmaku: bool,
+        pub danmaku_sent_revision: i64,
+        pub queue_index: i64,
+        pub episode_list: Vec<MediaTrack>,
+        pub has_previous: bool,
+        pub has_next: bool,
         pub panel: bool,
         pub tab: PlayerTab,
         pub episode: i64,
@@ -465,8 +638,16 @@ pub mod erika {
         pub video_info: String,
         pub enhancement: Enhancement,
         pub volume: f64,
+        pub volume_percent: i64,
         pub subtitle_size: f64,
+        pub subtitle_scale_percent: i64,
+        /// Render text subtitles at twice the resolution when the budget allows.
+        pub subtitle_supersampling: bool,
         pub skip_intro: bool,
+        pub chapters: Vec<MediaChapter>,
+        pub has_chapters: bool,
+        pub current_chapter: i64,
+        pub skip_kind: SkipKind,
         pub feedback: bool,
         /// The subtitle file the user attached last.
         #[content]
@@ -497,6 +678,7 @@ pub mod erika {
         /// Whether something is playing. The player layer or the mini
         /// player shows it.
         pub player: PlayerState,
+        pub matching: PlayerMatching,
         pub danmaku_settings: DanmakuSettings,
         pub playing: bool,
         /// Whether the player fills the window; otherwise it has shrunk into
@@ -534,7 +716,7 @@ pub mod erika {
         /// until one is signed in.
         #[content]
         pub user_name: String,
-        pub account: Account,
+        pub account_status: Account,
     }
 
     /// The dandanplay account, which the season's anime, the details of a
@@ -552,10 +734,28 @@ pub mod erika {
         /// Why signing in failed last; empty when it did not.
         #[content]
         pub error: String,
+        /// The user's own server recognizing TV series and movies (the
+        /// gateway before Misaka): whether one is set, and its site, the
+        /// token in its address left out.
+        pub has_server: bool,
+        #[content]
+        pub server: String,
     }
 
     #[commands]
     pub trait Commands {
+        /// Browser executor metadata and observations; business state stays in the host.
+        fn browser_file(
+            &mut self,
+            client: String,
+            url: String,
+            name: String,
+        ) -> Result<(), CommandError>;
+        fn browser_exchange(
+            &mut self,
+            client: String,
+            packet: String,
+        ) -> Result<String, CommandError>;
         fn open_onboarding(&mut self) -> Result<(), CommandError>;
         fn onboarding_next(&mut self) -> Result<(), CommandError>;
         fn onboarding_back(&mut self) -> Result<(), CommandError>;
@@ -602,7 +802,7 @@ pub mod erika {
         fn return_to_frame(&mut self) -> Result<(), CommandError>;
 
         /// Play what a module asks for, such as the next episode.
-        #[on(anime::play)]
+        #[cfg_attr(feature = "bern-module-anime", on(anime::play))]
         fn play(
             &mut self,
             title: String,
@@ -614,20 +814,29 @@ pub mod erika {
 
         /// Play a download: its file once done, a stream of it while it
         /// downloads.
+        #[cfg(feature = "bern-module-downloads")]
         #[on(downloads::play)]
-        fn play_download(&mut self, title: String, source: MediaSource, downloading: bool) -> Result<(), CommandError>;
+        fn play_download(
+            &mut self,
+            title: String,
+            source: MediaSource,
+            downloading: bool,
+        ) -> Result<(), CommandError>;
 
         /// A download finished: its folder joins the library and is
         /// scanned.
+        #[cfg(feature = "bern-module-downloads")]
         #[on(downloads::finished)]
         fn download_finished(&mut self, folder: MediaSource) -> Result<(), CommandError>;
 
         /// Open a library poster using the optional anime details page.
+        #[cfg(feature = "bern-module-library")]
         #[on(library::open_show)]
         fn open_library_show(&mut self, id: i64) -> Result<(), CommandError>;
 
         /// The library matched or removed videos: the anime pages show the
         /// files anew.
+        #[cfg(feature = "bern-module-library")]
         #[on(library::files_changed)]
         fn library_files_changed(&mut self) -> Result<(), CommandError>;
 
@@ -645,6 +854,10 @@ pub mod erika {
         fn player_tick(&mut self) -> Result<(), CommandError>;
         fn seek(&mut self, progress: f64) -> Result<(), CommandError>;
         fn skip(&mut self, seconds: f64) -> Result<(), CommandError>;
+        #[errors("no_such_chapter")]
+        fn seek_chapter(&mut self, id: i64) -> Result<(), CommandError>;
+        /// Skip only the recognized OP/ED containing the current position.
+        fn skip_segment(&mut self) -> Result<(), CommandError>;
         fn select_episode(&mut self, episode: i64) -> Result<(), CommandError>;
         fn change_episode(&mut self, delta: i64) -> Result<(), CommandError>;
         fn player_panel(&mut self, visible: bool) -> Result<(), CommandError>;
@@ -655,17 +868,23 @@ pub mod erika {
         #[errors("no_such_track")]
         fn select_audio_track(&mut self, id: i64) -> Result<(), CommandError>;
         fn set_enhancement(&mut self, value: Enhancement) -> Result<(), CommandError>;
+        fn set_subtitle_supersampling(&mut self, enabled: bool) -> Result<(), CommandError>;
         fn set_player_number(&mut self, key: String, value: f64) -> Result<(), CommandError>;
         fn set_skip_intro(&mut self, value: bool) -> Result<(), CommandError>;
         /// Save the picture on screen, with its subtitles, at the video's
         /// size in Pictures › Erika.
         fn screenshot(&mut self) -> Result<(), CommandError>;
+        fn show_matching(&mut self, open: bool) -> Result<(), CommandError>;
+        fn search_matching(&mut self, query: String) -> Result<(), CommandError>;
+        fn choose_match_show(&mut self, id: i64) -> Result<(), CommandError>;
+        fn back_to_match_results(&mut self) -> Result<(), CommandError>;
+        fn confirm_match_episode(&mut self, id: i64) -> Result<(), CommandError>;
         fn send_danmaku(&mut self, text: String) -> Result<(), CommandError>;
         /// Set a danmaku slider: `opacity`, `font_size`, `speed` (0 to 1)
         /// or `delay` (seconds).
         #[errors("unknown_danmaku_option")]
         fn set_danmaku_number(&mut self, key: String, value: f64) -> Result<(), CommandError>;
-        /// Set `merge`, `block_top`, `block_bottom` or `block_scroll`.
+        /// Set `supersampling`, `merge`, `block_top`, `block_bottom` or `block_scroll`.
         #[errors("unknown_danmaku_option")]
         fn set_danmaku_switch(&mut self, key: String, value: bool) -> Result<(), CommandError>;
         /// Show the comments of a Bilibili xml or Dandanplay json file over
@@ -673,13 +892,20 @@ pub mod erika {
         fn mount_danmaku(&mut self, source: MediaSource) -> Result<(), CommandError>;
         fn attach_subtitle(&mut self, source: MediaSource) -> Result<(), CommandError>;
 
-
         fn set_accent(&mut self, accent: Accent) -> Result<(), CommandError>;
 
         /// Sign in to dandanplay; the account shows when the service
         /// answers.
+        #[cfg(feature = "bern-module-account")]
         fn sign_in(&mut self, user: String, password: String) -> Result<(), CommandError>;
+        #[cfg(feature = "bern-module-account")]
         fn sign_out(&mut self) -> Result<(), CommandError>;
+        /// Recognize TV series and movies with the server at `address`
+        /// (`https://host/…/<token>`), kept in the system's credential store.
+        #[cfg(feature = "bern-module-account")]
+        fn set_match_server(&mut self, address: String) -> Result<(), CommandError>;
+        #[cfg(feature = "bern-module-account")]
+        fn clear_match_server(&mut self) -> Result<(), CommandError>;
 
         fn set_appearance(&mut self, appearance: Appearance) -> Result<(), CommandError>;
     }
@@ -705,5 +931,19 @@ pub mod erika {
         fn search_actions(&self, text: String, answer: Answer<SearchActions>);
         #[reads(features)]
         fn find_settings(&self, text: String, answer: Answer<Vec<SettingResult>>);
+    }
+}
+
+impl Default for erika::Account {
+    fn default() -> Self {
+        Self {
+            signed_in: false,
+            name: String::new(),
+            user: String::new(),
+            busy: false,
+            error: String::new(),
+            has_server: false,
+            server: String::new(),
+        }
     }
 }

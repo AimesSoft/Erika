@@ -1,9 +1,9 @@
 //! Four-step welcome flow, measured from design/next-screens.js.
-use bern::prelude::*;
 use crate::feature_preview::{
     feature_preview_hud, feature_preview_hud_props, feature_preview_window,
     feature_preview_window_props,
 };
+use bern::prelude::*;
 use erika_protocol::erika::{self, Accent, OnboardingPreset};
 
 #[component]
@@ -102,7 +102,7 @@ pub fn onboarding_welcome() -> impl View {
                     // `grid-template-rows: 220px 1fr`; the icon min(46 %, 200).
                     Stack(variant: onboarding_art, height: if window.compact { 220.0 } else { 170.0 }) {
                         Canvas { Pattern(name: academy) }
-                        Svg(source: "design/brand/erika-icon-animated.svg", width: if window.compact { 179.0 } else { 130.0 }, height: if window.compact { 179.0 } else { 130.0 }, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
+                    Svg(source: "design/brand/erika-icon-animated.svg", static_source: "design/brand/erika-icon-export/logo/erika-logo-icon.svg", width: if window.compact { 179.0 } else { 130.0 }, height: if window.compact { 179.0 } else { 130.0 }, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
                     }
                     // `.o-welcome .tx`: 24 from the edges; the wordmark 8 nearer.
                     Column(gap: 0, padding_y: if window.compact { 26.0 } else { 28.0 }) {
@@ -120,13 +120,7 @@ pub fn onboarding_welcome() -> impl View {
             Row(gap: 0, height: if window.tv { 648 } else { 528 }, align: top) {
                 Stack(variant: onboarding_art, width: if window.tv { 640 } else { 480 }, height: if window.tv { 648 } else { 528 }) {
                     Canvas { Pattern(name: academy) }
-                    // A television has no web engine for the animated logo:
-                    // the logo stands still there.
-                    if window.tv {
-                        Image(source: "design/brand/erika-icon-export/logo/erika-logo-icon-512.png", width: 200, height: 200, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
-                    } else {
-                        Svg(source: "design/brand/erika-icon-animated.svg", width: 200, height: 200, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
-                    }
+                    Svg(source: "design/brand/erika-icon-animated.svg", static_source: "design/brand/erika-icon-export/logo/erika-logo-icon.svg", width: 200, height: 200, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
                 }
                 Column(gap: 0, padding_y: 64) {
                     Row(gap: 0, padding_x: 36) {
@@ -197,8 +191,11 @@ pub fn onboarding_features(app: erika::Client) -> impl View {
 pub fn onboarding_card(app: erika::Client, preset: OnboardingPreset) -> impl View {
     ui! {
         Button(id: preset, label: preset, variant: onboarding_card) {
-            Stack(variant: onboarding_card, height: if window.compact || preset == OnboardingPreset::Pure || preset == OnboardingPreset::Anime { 83 } else { 67 }, align: top_trailing) {
-                Column(gap: 4, padding_x: 16, padding_y: 14, height: if window.compact || preset == OnboardingPreset::Pure || preset == OnboardingPreset::Anime { 83 } else { 67 }) {
+            Stack(variant: onboarding_card, align: top_trailing) {
+                // Keep the intended minimum size while letting wrapped text
+                // grow the card instead of shrinking and clipping its lines.
+                Canvas(height: if window.compact || preset == OnboardingPreset::Pure || preset == OnboardingPreset::Anime { 83 } else { 67 })
+                Column(gap: 4, padding_x: 16, padding_y: 14) {
                     Row(gap: 6) {
                         Text(content: preset, font_size: 15, style: headline)
                         if preset == OnboardingPreset::Anime {
@@ -210,13 +207,12 @@ pub fn onboarding_card(app: erika::Client, preset: OnboardingPreset) -> impl Vie
                     if preset == OnboardingPreset::Pure {
                         Text(content: tr! { "zh-Hans" => "和 VLC 一样，打开就能播，没有多余的东西。", "en" => "Open and play, just like VLC. Nothing extra." }, style: caption, emphasis: secondary, lines: 3)
                     } else if preset == OnboardingPreset::Anime {
-                        Text(content: tr! { "zh-Hans" => "弹幕、媒体库和追番。推荐大多数人选这个。", "en" => "Danmaku, library and anime. A good choice for most people." }, style: caption, emphasis: secondary, lines: 3)
+                        Text(content: tr! { "zh-Hans" => "账号、弹幕、媒体库和追番。推荐大多数人选这个。", "en" => "Account, danmaku, library and anime. A good choice for most people." }, style: caption, emphasis: secondary, lines: 3)
                     } else if preset == OnboardingPreset::All {
                         Text(content: tr! { "zh-Hans" => "全部功能，和现在的 NipaPlay 一样。", "en" => "Every feature, just like NipaPlay today." }, style: caption, emphasis: secondary, lines: 3)
                     } else {
                         Text(content: tr! { "zh-Hans" => "在当前选择的基础上逐项调整。", "en" => "Adjust individual features from your current selection." }, style: caption, emphasis: secondary, lines: 3)
                     }
-                    Spacer
                 }
                 if app.onboarding.preset == preset {
                     Canvas {

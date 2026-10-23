@@ -5,7 +5,7 @@
 //! audio going while no view shows it, and reports what it sees to the hub
 //! and to the engine.
 
-use super::{DanmakuConfig, Kernel, PLAYER, Playback, Track};
+use super::{Chapter, DanmakuConfig, Kernel, Operation, OperationResult, PLAYER, Playback, Track};
 use bern::media::kernel::{
     self as bern_kernel, ExecOp, ExecRequest, FrameTiming, KernelHub, MediaCapabilities,
     MediaCommand, MediaExecutor, MediaKernel, Observation, Phase, SurfaceHandle, SurfaceKind,
@@ -41,6 +41,7 @@ pub struct Liberika {
     sender: Sender<Message>,
     hub: Hub,
     playback: Arc<Mutex<Playback>>,
+    results: Arc<Mutex<Vec<OperationResult>>>,
     frames: Arc<Frames>,
 }
 
@@ -53,9 +54,19 @@ struct Frames {
 
 enum Message {
     Request(ExecRequest),
-    Attach { view: String, player: String, surface: VideoSurface },
-    Resize { view: String, size: SurfaceSize },
-    Detach { view: String, done: Sender<()> },
+    Attach {
+        view: String,
+        player: String,
+        surface: VideoSurface,
+    },
+    Resize {
+        view: String,
+        size: SurfaceSize,
+    },
+    Detach {
+        view: String,
+        done: Sender<()>,
+    },
     Frame,
     Set(Setting),
     Close,
@@ -65,10 +76,12 @@ enum Message {
 enum Setting {
     StartAt(f64),
     Rate(f64),
+    HardwareDecode(bool),
     AudioTrack(i64),
     SubtitleTrack(Option<i64>),
     AddSubtitle(String),
     SubtitleScale(f64),
+    SubtitleSupersampling(bool),
     Upscaler(LumaUpscalerMode),
     Capture(PathBuf, Option<u32>),
     Danmaku(DanmakuConfig),
@@ -82,17 +95,24 @@ impl Liberika {
         let (sender, receiver) = channel();
         let hub: Hub = Arc::default();
         let playback = Arc::new(Mutex::new(Playback::default()));
+        let results = Arc::new(Mutex::new(Vec::new()));
         let frames = Arc::new(Frames::default());
-        let shared = (Arc::clone(&hub), Arc::clone(&playback), Arc::clone(&frames));
+        let shared = (
+            Arc::clone(&hub),
+            Arc::clone(&playback),
+            Arc::clone(&frames),
+            Arc::clone(&results),
+        );
         // Presenters stay on the thread that creates them.
         std::thread::Builder::new()
             .name("liberika".into())
             .spawn(move || {
-                let (hub, playback, frames) = shared;
+                let (hub, playback, frames, results) = shared;
                 Worker {
                     receiver,
                     hub,
                     playback,
+                    results,
                     frames,
                     players: HashMap::new(),
                     views: Vec::new(),
@@ -101,7 +121,13 @@ impl Liberika {
                 .run()
             })
             .expect("start the liberika thread");
-        let kernel = Arc::new(Liberika { sender, hub, playback, frames });
+        let kernel = Arc::new(Liberika {
+            sender,
+            hub,
+            playback,
+            frames,
+            results,
+        });
         bern_kernel::install(kernel.clone());
         kernel
     }
@@ -121,7 +147,12 @@ impl Liberika {
             params,
             Box::new(move |result| {
                 if let Err(error) = result {
-                    eprintln!("liberika: {} failed: {} {}", command.id(), error.code, error.message);
+                    eprintln!(
+                        "liberika: {} failed: {} {}",
+                        command.id(),
+                        error.code,
+                        error.message
+                    );
                 }
             }),
         );
@@ -175,6 +206,10 @@ impl Kernel for Liberika {
         self.send(Message::Set(Setting::Rate(rate)));
     }
 
+    fn set_hardware_decode(&self, enabled: bool) {
+        self.send(Message::Set(Setting::HardwareDecode(enabled)));
+    }
+
     fn select_audio(&self, id: i64) {
         self.send(Message::Set(Setting::AudioTrack(id)));
     }
@@ -189,6 +224,10 @@ impl Kernel for Liberika {
 
     fn set_subtitle_scale(&self, scale: f64) {
         self.send(Message::Set(Setting::SubtitleScale(scale)));
+    }
+
+    fn set_subtitle_supersampling(&self, enabled: bool) {
+        self.send(Message::Set(Setting::SubtitleSupersampling(enabled)));
     }
 
     fn set_enhancement(&self, enhancement: Enhancement) {
@@ -222,6 +261,10 @@ impl Kernel for Liberika {
 
     fn close(&self) {
         self.send(Message::Close);
+    }
+
+    fn take_results(&self) -> Vec<OperationResult> {
+        std::mem::take(&mut *self.results.lock().expect("result lock"))
     }
 
     fn playback(&self) -> Playback {
@@ -259,16 +302,26 @@ impl MediaKernel for Liberika {
     }
 
     fn attach_surface(&self, view: &str, player: &str, surface: VideoSurface) {
-        self.send(Message::Attach { view: view.into(), player: player.into(), surface });
+        self.send(Message::Attach {
+            view: view.into(),
+            player: player.into(),
+            surface,
+        });
     }
 
     fn resize_surface(&self, view: &str, size: SurfaceSize) {
-        self.send(Message::Resize { view: view.into(), size });
+        self.send(Message::Resize {
+            view: view.into(),
+            size,
+        });
     }
 
     fn detach_surface(&self, view: &str) {
         let (done, detached) = channel();
-        self.send(Message::Detach { view: view.into(), done });
+        self.send(Message::Detach {
+            view: view.into(),
+            done,
+        });
         // The view frees its layer next; a frame in flight finishes first.
         let _ = detached.recv_timeout(Duration::from_secs(2));
     }
@@ -290,7 +343,9 @@ impl MediaKernel for Liberika {
 struct Settings {
     start_at: f64,
     rate: Option<f64>,
+    hardware_decode: Option<bool>,
     subtitle_scale: Option<f64>,
+    subtitle_supersampling: bool,
     upscaler: LumaUpscalerMode,
     danmaku: Option<DanmakuConfig>,
 }
@@ -299,6 +354,7 @@ struct Settings {
 fn danmaku_layout(config: &DanmakuConfig) -> DanmakuLayoutConfig {
     DanmakuLayoutConfig {
         enabled: config.enabled,
+        supersampling: config.supersampling,
         opacity: config.opacity.clamp(0.0, 1.0) as f32,
         font_size: config.font_size as f32,
         display_area: config.area.clamp(0.1, 1.0) as f32,
@@ -323,10 +379,13 @@ struct View {
 
 struct Session {
     presenter: PresenterRuntime,
+    hardware_decode: bool,
     events: crossbeam_channel::Receiver<PlayerEvent>,
     /// The hub's source version of what is open.
     version: u64,
     loaded: bool,
+    source: Option<String>,
+    chapters: Vec<Chapter>,
     /// The view the presenter draws into.
     view: Option<String>,
     volume: f64,
@@ -348,15 +407,23 @@ struct Session {
 }
 
 impl Session {
-    fn new() -> Result<Self, CommandError> {
-        let presenter = PresenterRuntime::new(PresenterConfig::default())
+    fn new(hardware_decode: bool) -> Result<Self, CommandError> {
+        let mut config = PresenterConfig::default();
+        if !hardware_decode {
+            config.player.playback.video_decode =
+                liberika::playback::VideoDecodePreference::Software;
+        }
+        let presenter = PresenterRuntime::new(config)
             .map_err(|error| CommandError::new("kernel_failed", error.to_string()))?;
         let events = presenter.player().subscribe();
         Ok(Self {
             presenter,
+            hardware_decode,
             events,
             version: 0,
             loaded: false,
+            source: None,
+            chapters: Vec::new(),
             view: None,
             volume: 1.0,
             muted: false,
@@ -402,7 +469,11 @@ impl Session {
         let phase = if self.error.is_some() || state == PlayerState::Error {
             Phase::Failed
         } else if !self.loaded {
-            if state == PlayerState::Opening { Phase::Loading } else { Phase::Idle }
+            if state == PlayerState::Opening {
+                Phase::Loading
+            } else {
+                Phase::Idle
+            }
         } else {
             match state {
                 PlayerState::Opening => Phase::Loading,
@@ -433,14 +504,21 @@ impl Session {
                 .iter()
                 .filter(|track| track.kind == kind)
                 .enumerate()
-                .map(|(index, track)| Track { id: track.id, name: track_name(track, index) })
+                .map(|(index, track)| Track {
+                    id: track.id,
+                    name: track_name(track, index),
+                })
                 .collect()
         };
         let video = self
             .tracks
             .iter()
             .find(|track| track.kind == TrackKind::Video && Some(track.id) == self.selection.video)
-            .or_else(|| self.tracks.iter().find(|track| track.kind == TrackKind::Video))
+            .or_else(|| {
+                self.tracks
+                    .iter()
+                    .find(|track| track.kind == TrackKind::Video)
+            })
             .map(|track| {
                 let codec = track.codec.as_deref().unwrap_or_default().to_uppercase();
                 match (codec.is_empty(), track.height) {
@@ -451,12 +529,16 @@ impl Session {
             })
             .unwrap_or_default();
         Playback {
+            source: self.source.clone(),
             loaded: self.loaded && observation.phase != Phase::Failed,
             playing: matches!(observation.phase, Phase::Playing | Phase::Buffering),
             ended: observation.phase == Phase::Ended,
             picture: self.presenter.stats().rendered_video_frames > self.rendered_at_open,
             position: observation.position_ms as f64 / 1000.0,
-            duration: observation.duration_ms.map(|duration| duration as f64 / 1000.0),
+            duration: observation
+                .duration_ms
+                .map(|duration| duration as f64 / 1000.0),
+            chapters: self.chapters.clone(),
             audio_tracks: tracks(TrackKind::Audio),
             subtitle_tracks: tracks(TrackKind::Subtitle),
             audio_track: self.selection.audio,
@@ -489,7 +571,10 @@ impl Session {
             self.presenter.remove_danmaku_track(track);
         }
         self.own_track =
-            Some(self.presenter.add_danmaku_track(timeline, "own", DanmakuTrackSource::Manual, 0));
+            Some(
+                self.presenter
+                    .add_danmaku_track(timeline, "own", DanmakuTrackSource::Manual, 0),
+            );
     }
 
     /// Save the picture with its subtitles, `width` wide or as wide as the
@@ -502,7 +587,8 @@ impl Session {
             .map(|track| (track.width, track.height))
             .unwrap_or((1920, 1080));
         let width = width.unwrap_or(video_width).clamp(1, 7680);
-        let height = ((u64::from(width) * u64::from(video_height)) / u64::from(video_width)).clamp(1, 7680) as u32;
+        let height = ((u64::from(width) * u64::from(video_height)) / u64::from(video_width))
+            .clamp(1, 7680) as u32;
         let rgba = self
             .presenter
             .capture_frame_rgba(width, height)
@@ -565,6 +651,7 @@ struct Worker {
     receiver: Receiver<Message>,
     hub: Hub,
     playback: Arc<Mutex<Playback>>,
+    results: Arc<Mutex<Vec<OperationResult>>>,
     frames: Arc<Frames>,
     players: HashMap<String, Session>,
     /// Attached views, in the order they attached: a player shows in the
@@ -610,20 +697,35 @@ impl Worker {
                 }
                 self.report(true);
             }
-            Message::Attach { view, player, surface } => {
+            Message::Attach {
+                view,
+                player,
+                surface,
+            } => {
                 self.views.retain(|existing| existing.token != view);
-                self.views.push(View { token: view, player: player.clone(), surface });
+                self.views.push(View {
+                    token: view,
+                    player: player.clone(),
+                    surface,
+                });
                 if let Err(error) = self.show(&player) {
                     eprintln!("liberika: cannot show `{player}`: {}", error.message);
                 }
             }
             Message::Resize { view, size } => {
-                if let Some(existing) = self.views.iter_mut().find(|existing| existing.token == view) {
+                if let Some(existing) = self
+                    .views
+                    .iter_mut()
+                    .find(|existing| existing.token == view)
+                {
                     existing.surface.size = size;
                 }
                 for session in self.players.values_mut() {
                     if session.view.as_deref() == Some(&view) {
-                        let _ = session.presenter.resize_surface(size.width, size.height, size.scale);
+                        let _ =
+                            session
+                                .presenter
+                                .resize_surface(size.width, size.height, size.scale);
                     }
                 }
             }
@@ -663,7 +765,10 @@ impl Worker {
     /// last view attached for it.
     fn session(&mut self, player: &str) -> Result<&mut Session, CommandError> {
         if !self.players.contains_key(player) {
-            self.players.insert(player.to_string(), Session::new()?);
+            self.players.insert(
+                player.to_string(),
+                Session::new(self.settings.hardware_decode.unwrap_or(true))?,
+            );
             self.show(player)?;
         }
         Ok(self.players.get_mut(player).expect("session exists"))
@@ -684,7 +789,10 @@ impl Worker {
             let _ = session.presenter.detach_surface();
         }
         session.view = None;
-        session.presenter.attach_surface(platform_surface(&view.surface)).map_err(failed)?;
+        session
+            .presenter
+            .attach_surface(platform_surface(&view.surface))
+            .map_err(failed)?;
         session.view = Some(view.token.clone());
         Ok(())
     }
@@ -693,9 +801,24 @@ impl Worker {
         match &request.op {
             ExecOp::Load { url } => {
                 let start = std::mem::take(&mut self.settings.start_at);
+                let hardware = self.settings.hardware_decode.unwrap_or(true);
+                if self
+                    .players
+                    .get(&request.player)
+                    .is_some_and(|s| s.hardware_decode != hardware)
+                {
+                    let replacement = Session::new(hardware)?;
+                    if let Some(mut old) = self.players.remove(&request.player) {
+                        let _ = old.presenter.detach_surface();
+                    }
+                    self.players.insert(request.player.clone(), replacement);
+                    self.show(&request.player)?;
+                }
                 let session = self.session(&request.player)?;
                 session.version = request.source_version;
                 session.loaded = false;
+                session.source = Some(url.clone());
+                session.chapters.clear();
                 session.error = None;
                 session.buffering = false;
                 session.tracks.clear();
@@ -712,6 +835,17 @@ impl Worker {
                 }
                 session.loaded = true;
                 session.tracks = session.presenter.tracks();
+                session.chapters = session
+                    .presenter
+                    .player()
+                    .chapters()
+                    .into_iter()
+                    .map(|chapter| Chapter {
+                        title: chapter.title,
+                        start: chapter.start.as_secs_f64(),
+                        end: chapter.end.map(|end| end.as_secs_f64()),
+                    })
+                    .collect();
                 session.selection = session.presenter.track_selection();
                 session.apply_volume();
                 if request.player == PLAYER {
@@ -743,7 +877,10 @@ impl Worker {
                     .get_mut(&request.player)
                     .ok_or_else(|| CommandError::new("no_source", "nothing is open"))?;
                 if session.version != request.source_version {
-                    return Err(CommandError::new("stale_source", "a newer source is loaded"));
+                    return Err(CommandError::new(
+                        "stale_source",
+                        "a newer source is loaded",
+                    ));
                 }
                 match op {
                     ExecOp::Play => {
@@ -785,17 +922,29 @@ impl Worker {
             session.presenter.set_subtitle_scale(scale);
         }
         session.presenter.set_luma_upscaler(self.settings.upscaler);
+        session
+            .presenter
+            .set_subtitle_supersampling(self.settings.subtitle_supersampling);
         if let Some(danmaku) = &self.settings.danmaku {
-            session.presenter.set_danmaku_config(danmaku_layout(danmaku));
-            session.presenter.set_danmaku_global_offset(micros(danmaku.delay));
+            session
+                .presenter
+                .set_danmaku_config(danmaku_layout(danmaku));
+            session
+                .presenter
+                .set_danmaku_global_offset(micros(danmaku.delay));
         }
     }
 
     fn set(&mut self, setting: Setting) {
+        let visual_setting = matches!(&setting, Setting::Danmaku(_));
         match setting {
             Setting::StartAt(seconds) => self.settings.start_at = seconds.max(0.0),
             Setting::Rate(rate) => self.settings.rate = Some(rate),
+            Setting::HardwareDecode(enabled) => self.settings.hardware_decode = Some(enabled),
             Setting::SubtitleScale(scale) => self.settings.subtitle_scale = Some(scale),
+            Setting::SubtitleSupersampling(enabled) => {
+                self.settings.subtitle_supersampling = enabled
+            }
             Setting::Upscaler(mode) => self.settings.upscaler = mode,
             Setting::Danmaku(ref config) => self.settings.danmaku = Some(config.clone()),
             Setting::AudioTrack(_)
@@ -805,12 +954,32 @@ impl Worker {
             | Setting::AddDanmaku(..)
             | Setting::SendDanmaku(_) => {}
         }
-        let delay = self.settings.danmaku.as_ref().map_or(0.0, |danmaku| danmaku.delay);
-        let Some(session) = self.players.get_mut(PLAYER).filter(|session| session.loaded) else {
+        let delay = self
+            .settings
+            .danmaku
+            .as_ref()
+            .map_or(0.0, |danmaku| danmaku.delay);
+        let Some(session) = self
+            .players
+            .get_mut(PLAYER)
+            .filter(|session| session.loaded)
+        else {
+            let operation = match setting {
+                Setting::Capture(path, None) => Some(Operation::Screenshot(path)),
+                Setting::AddSubtitle(url) => Some(Operation::Subtitle(url)),
+                _ => None,
+            };
+            if let Some(operation) = operation {
+                self.results.lock().unwrap().push(OperationResult {
+                    source: None,
+                    operation,
+                    result: Err("视频尚未加载完成".into()),
+                });
+            }
             return;
         };
         let result = match setting {
-            Setting::StartAt(_) => Ok(()),
+            Setting::StartAt(_) | Setting::HardwareDecode(_) => Ok(()),
             Setting::Rate(rate) => session.presenter.set_playback_rate(rate),
             Setting::SubtitleScale(scale) => {
                 session.presenter.set_subtitle_scale(scale);
@@ -820,26 +989,58 @@ impl Worker {
                 session.presenter.set_luma_upscaler(mode);
                 Ok(())
             }
+            Setting::SubtitleSupersampling(enabled) => {
+                session.presenter.set_subtitle_supersampling(enabled);
+                Ok(())
+            }
             Setting::AudioTrack(id) => session.presenter.select_audio_track(Some(id)),
             Setting::SubtitleTrack(id) => session.presenter.select_subtitle_track(id),
-            Setting::AddSubtitle(url) => session
-                .presenter
-                .add_external_subtitle(url)
-                .and_then(|track| session.presenter.select_subtitle_track(Some(track.id))),
+            Setting::AddSubtitle(url) => {
+                let result = session
+                    .presenter
+                    .add_external_subtitle(url.clone())
+                    .and_then(|track| session.presenter.select_subtitle_track(Some(track.id)))
+                    .map_err(|e| e.to_string());
+                self.results.lock().unwrap().push(OperationResult {
+                    source: session.source.clone(),
+                    operation: Operation::Subtitle(url),
+                    result,
+                });
+                Ok(())
+            }
             Setting::Capture(path, width) => {
-                if let Err(error) = session.capture(&path, width) {
-                    eprintln!("liberika: capture failed: {error}");
+                let result = session.capture(&path, width);
+                if width.is_none() {
+                    self.results.lock().unwrap().push(OperationResult {
+                        source: session.source.clone(),
+                        operation: Operation::Screenshot(path),
+                        result,
+                    });
                 }
                 Ok(())
             }
             Setting::Danmaku(config) => {
-                session.presenter.set_danmaku_config(danmaku_layout(&config));
-                session.presenter.set_danmaku_global_offset(micros(config.delay));
+                session
+                    .presenter
+                    .set_danmaku_config(danmaku_layout(&config));
+                session
+                    .presenter
+                    .set_danmaku_global_offset(micros(config.delay));
                 Ok(())
             }
             Setting::AddDanmaku(name, timeline) => {
+                for track in session
+                    .presenter
+                    .danmaku_tracks()
+                    .into_iter()
+                    .filter(|track| track.name == name)
+                {
+                    session.presenter.remove_danmaku_track(track.id);
+                }
                 let source = DanmakuTrackSource::File(PathBuf::from(&name));
-                session.presenter.add_danmaku_track(timeline, name, source, 0);
+                session
+                    .presenter
+                    .add_danmaku_track(timeline, name, source, 0);
                 Ok(())
             }
             Setting::SendDanmaku(text) => {
@@ -848,11 +1049,20 @@ impl Worker {
             }
         };
         if let Err(error) = result {
-            eprintln!("liberika: setting failed: {error}");
+            self.results.lock().unwrap().push(OperationResult {
+                source: session.source.clone(),
+                operation: Operation::Setting,
+                result: Err(error.to_string()),
+            });
         }
-        session.tracks = session.presenter.tracks();
-        session.selection = session.presenter.track_selection();
-        self.report(true);
+        // Visual settings do not change the player's tracks or observation.
+        // A live slider must not query the media worker and publish a full
+        // player snapshot for each pointer update.
+        if !visual_setting {
+            session.tracks = session.presenter.tracks();
+            session.selection = session.presenter.track_selection();
+            self.report(true);
+        }
     }
 
     /// Draw the frame each view's display prepares, in the player it shows.
@@ -875,7 +1085,9 @@ impl Worker {
             let at = if delay >= 0.0 {
                 fired + Duration::from_secs_f64(delay)
             } else {
-                fired.checked_sub(Duration::from_secs_f64(-delay)).unwrap_or(fired)
+                fired
+                    .checked_sub(Duration::from_secs_f64(-delay))
+                    .unwrap_or(fired)
             };
             if let Err(error) = session.presenter.render_tick_at(timing.target, at) {
                 eprintln!("liberika: frame failed: {error}");

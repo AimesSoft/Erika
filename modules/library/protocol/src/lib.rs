@@ -77,6 +77,18 @@ pub mod library {
         pub source_name: String,
     }
 
+    /// What a source holds, which says where its videos are recognized:
+    /// anime by dandanplay, TV series and movies by the user's own server.
+    #[value]
+    pub enum SourceContent {
+        #[label(tr! { "zh-Hans" => "番剧", "en" => "Anime" })]
+        Anime,
+        #[label(tr! { "zh-Hans" => "电视剧", "en" => "TV series" })]
+        Series,
+        #[label(tr! { "zh-Hans" => "电影", "en" => "Movies" })]
+        Movie,
+    }
+
     /// What a source is doing, as its row says it.
     #[value]
     pub enum SourceStatus {
@@ -96,6 +108,7 @@ pub mod library {
         pub id: i64,
         #[content]
         pub name: String,
+        pub content: SourceContent,
         /// Where it is, as a path.
         #[content]
         pub location: String,
@@ -161,6 +174,7 @@ pub mod library {
     #[value]
     pub struct LibraryFolder {
         pub source: i64,
+        pub content: SourceContent,
         #[content]
         pub title: String,
         /// Where it is, as a path.
@@ -300,6 +314,14 @@ pub mod library {
         },
         #[label(tr! { "zh-Hans" => "登录弹弹play 后才能自动认出番剧", "en" => "Sign in to dandanplay to recognize shows" })]
         SignInToMatch,
+        #[label(tr! { "zh-Hans" => "电视剧和电影要先在 设置 › 账号 里设置识别服务器", "en" => "Set a recognition server under Settings › Account for TV series and movies" })]
+        NoServer,
+        #[label(tr! { "zh-Hans" => "{name} 改为{content}，重新识别没认出的文件", "en" => "{name} now holds {content}; recognizing its files again" })]
+        Retyped {
+            #[content]
+            name: String,
+            content: SourceContent,
+        },
         #[label(tr! { "zh-Hans" => "读不了这个文件夹", "en" => "Couldn't read this folder" })]
         FolderUnreadable,
         #[label(tr! { "zh-Hans" => "这里还不能扫描文件夹", "en" => "Folders can't be scanned here yet" })]
@@ -355,8 +377,16 @@ pub mod library {
         /// videos not matched yet.
         fn account_changed(&mut self, signed_in: bool) -> Result<(), CommandError>;
 
-        /// Add a folder and scan it.
-        fn add_folder(&mut self, folder: MediaSource) -> Result<(), CommandError>;
+        /// Add a folder holding `content` and scan it.
+        fn add_folder(
+            &mut self,
+            folder: MediaSource,
+            content: SourceContent,
+        ) -> Result<(), CommandError>;
+        /// Say what a source holds; its videos not matched are matched
+        /// again where that content is recognized.
+        #[errors("unknown_source")]
+        fn set_content(&mut self, source: i64, content: SourceContent) -> Result<(), CommandError>;
         #[errors("unknown_source")]
         fn rescan(&mut self, source: i64) -> Result<(), CommandError>;
         #[errors("unknown_source")]

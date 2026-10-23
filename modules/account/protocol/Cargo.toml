@@ -1,0 +1,9 @@
+[package]
+name = "erika-account-protocol"
+description = "The account module: lifecycle registration"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true

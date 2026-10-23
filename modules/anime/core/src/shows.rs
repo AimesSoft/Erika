@@ -5,7 +5,8 @@ use crate::clock::{date_of, parse_utc};
 use bern::date::CalendarDate;
 use bern::media::MediaSource;
 use erika_anime_protocol::anime::{
-    Episode, EpisodeNote, EpisodeTitle, SearchEpisode, SearchResults, Show, Tag, WatchStatus, Watching,
+    Episode, EpisodeNote, EpisodeTitle, SearchEpisode, SearchResults, Show, Tag, WatchStatus,
+    Watching,
 };
 use erika_dandanplay::{Details, Found, Intro};
 use erika_store::EpisodeFile;
@@ -25,12 +26,19 @@ fn status(watched: i64, episodes: i64) -> WatchStatus {
 }
 
 fn progress(file: &EpisodeFile) -> f64 {
-    if file.duration > 0.0 { (file.position / file.duration).clamp(0.0, 1.0) } else { 0.0 }
+    if file.duration > 0.0 {
+        (file.position / file.duration).clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
 }
 
 /// How many episodes the user watched to the end.
 fn watched(files: &[EpisodeFile]) -> i64 {
-    files.iter().filter(|file| progress(file) >= WATCHED).count() as i64
+    files
+        .iter()
+        .filter(|file| progress(file) >= WATCHED)
+        .count() as i64
 }
 
 fn show(id: i64, title: &str, image: &str, today: CalendarDate) -> Show {
@@ -56,11 +64,21 @@ pub fn untitled() -> Show {
 
 /// The stage while nothing is being watched; the page hides it.
 pub fn nothing_watched() -> Watching {
-    Watching { id: 0, title: String::new(), still: MediaSource::new(""), episode: 1, left: 0, progress: 0.0 }
+    Watching {
+        id: 0,
+        title: String::new(),
+        still: MediaSource::new(""),
+        episode: 1,
+        left: 0,
+        progress: 0.0,
+    }
 }
 
 pub fn from_intro(intro: &Intro, today: CalendarDate) -> Show {
-    Show { rating: intro.rating, ..show(intro.anime_id, &intro.anime_title, &intro.image_url, today) }
+    Show {
+        rating: intro.rating,
+        ..show(intro.anime_id, &intro.anime_title, &intro.image_url, today)
+    }
 }
 
 pub fn from_found(found: &Found, today: CalendarDate) -> Show {
@@ -102,7 +120,14 @@ pub fn from_details(details: &Details, files: &[EpisodeFile]) -> Show {
         rating: details.rating,
         movie: is_movie(&details.type_description),
         premiere,
-        tags: details.tags.iter().take(6).map(|tag| Tag { name: tag.name.clone() }).collect(),
+        tags: details
+            .tags
+            .iter()
+            .take(6)
+            .map(|tag| Tag {
+                name: tag.name.clone(),
+            })
+            .collect(),
         summary: details.summary.trim().to_string(),
         status: status(watched, episodes),
     }
@@ -122,7 +147,11 @@ pub fn watching(watching: &erika_store::Watching) -> Watching {
         still,
         episode: watching.episode.number,
         left: ((watching.duration - watching.position).max(0.0) / 60.0).ceil() as i64,
-        progress: if watching.duration > 0.0 { (watching.position / watching.duration).clamp(0.0, 1.0) } else { 0.0 },
+        progress: if watching.duration > 0.0 {
+            (watching.position / watching.duration).clamp(0.0, 1.0)
+        } else {
+            0.0
+        },
     }
 }
 
@@ -142,7 +171,10 @@ pub fn film(details: Option<&Details>, show: &Show, files: &[EpisodeFile]) -> (V
             .map(|(index, episode)| (number(&episode.episode_number, index), episode.episode_id))
             .collect(),
         // Until the details come, the episodes the user has files of.
-        None => files.iter().map(|file| (file.episode.number, file.episode.dandanplay_id)).collect(),
+        None => files
+            .iter()
+            .map(|file| (file.episode.number, file.episode.dandanplay_id))
+            .collect(),
     };
     let file_of = |id: i64| files.iter().find(|file| file.episode.dandanplay_id == id);
     let last_watched = numbers
@@ -157,8 +189,13 @@ pub fn film(details: Option<&Details>, show: &Show, files: &[EpisodeFile]) -> (V
         .find(|number| *number > last_watched)
         .or_else(|| numbers.last().map(|(number, _)| *number))
         .unwrap_or(1);
-    let middle = numbers.iter().position(|(number, _)| *number == next).unwrap_or(0);
-    let start = middle.saturating_sub(FILM / 2).min(numbers.len().saturating_sub(FILM));
+    let middle = numbers
+        .iter()
+        .position(|(number, _)| *number == next)
+        .unwrap_or(0);
+    let start = middle
+        .saturating_sub(FILM / 2)
+        .min(numbers.len().saturating_sub(FILM));
     let cells = numbers
         .iter()
         .skip(start)
@@ -177,8 +214,12 @@ pub fn film(details: Option<&Details>, show: &Show, files: &[EpisodeFile]) -> (V
                 },
                 note: match file {
                     _ if watched => EpisodeNote::Watched,
-                    Some(file) if progress > 0.0 => EpisodeNote::Left { minutes: ((file.duration - file.position).max(0.0) / 60.0).ceil() as i64 },
-                    Some(file) if file.duration > 0.0 => EpisodeNote::Length { minutes: (file.duration / 60.0).round() as i64 },
+                    Some(file) if progress > 0.0 => EpisodeNote::Left {
+                        minutes: ((file.duration - file.position).max(0.0) / 60.0).ceil() as i64,
+                    },
+                    Some(file) if file.duration > 0.0 => EpisodeNote::Length {
+                        minutes: (file.duration / 60.0).round() as i64,
+                    },
                     Some(_) => EpisodeNote::Unwatched,
                     None => EpisodeNote::Missing,
                 },
@@ -198,7 +239,11 @@ pub fn film(details: Option<&Details>, show: &Show, files: &[EpisodeFile]) -> (V
 pub fn results(shows: Vec<Show>, watching: &[erika_store::Watching]) -> SearchResults {
     let continuing: Vec<SearchEpisode> = shows
         .iter()
-        .filter_map(|show| watching.iter().find(|watching| watching.anime.dandanplay_id == show.id))
+        .filter_map(|show| {
+            watching
+                .iter()
+                .find(|watching| watching.anime.dandanplay_id == show.id)
+        })
         .take(2)
         .map(|watching| SearchEpisode {
             id: watching.anime.dandanplay_id,
@@ -206,5 +251,10 @@ pub fn results(shows: Vec<Show>, watching: &[erika_store::Watching]) -> SearchRe
             episode: watching.episode.number,
         })
         .collect();
-    SearchResults { has_shows: !shows.is_empty(), has_continuing: !continuing.is_empty(), shows, continuing }
+    SearchResults {
+        has_shows: !shows.is_empty(),
+        has_continuing: !continuing.is_empty(),
+        shows,
+        continuing,
+    }
 }

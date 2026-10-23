@@ -1,0 +1,37 @@
+# Copy to .cargo/config.toml to develop against sibling checkouts.
+# Cargo resolves these paths relative to the Erika project root.
+# This example is tracked; config.toml is intentionally ignored.
+
+[patch."https://github.com/AimesSoft/liberika"]
+erika = { path = "../liberika/crates/erika" }
+erika_ffmpeg_sys = { path = "../liberika/crates/erika_ffmpeg_sys" }
+
+# Patch the complete framework so generated hosts and the app share its types.
+[patch."https://github.com/AimesSoft/Bern"]
+bern = { path = "../Bern/crates/bern" }
+bern-adapter-cli = { path = "../Bern/crates/bern-adapter-cli" }
+bern-adapter-json = { path = "../Bern/crates/bern-adapter-json" }
+bern-adapter-mcp = { path = "../Bern/crates/bern-adapter-mcp" }
+bern-backend-compose = { path = "../Bern/crates/bern-backend-compose" }
+bern-backend-gtk = { path = "../Bern/crates/bern-backend-gtk" }
+bern-backend-swiftui = { path = "../Bern/crates/bern-backend-swiftui" }
+bern-backend-web = { path = "../Bern/crates/bern-backend-web" }
+bern-backend-winui3 = { path = "../Bern/crates/bern-backend-winui3" }
+bern-cli = { path = "../Bern/crates/bern-cli" }
+bern-command = { path = "../Bern/crates/bern-command" }
+bern-compiler = { path = "../Bern/crates/bern-compiler" }
+bern-ffi = { path = "../Bern/crates/bern-ffi" }
+bern-gtk = { path = "../Bern/crates/bern-gtk" }
+bern-image = { path = "../Bern/crates/bern-image" }
+bern-ir = { path = "../Bern/crates/bern-ir" }
+bern-macros = { path = "../Bern/crates/bern-macros" }
+bern-media = { path = "../Bern/crates/bern-media" }
+bern-protocol = { path = "../Bern/crates/bern-protocol" }
+bern-runtime = { path = "../Bern/crates/bern-runtime" }
+bern-script = { path = "../Bern/crates/bern-script" }
+bern-svg = { path = "../Bern/crates/bern-svg" }
+bern-syntax = { path = "../Bern/crates/bern-syntax" }
+bern-target-api = { path = "../Bern/crates/bern-target-api" }
+bern-theme = { path = "../Bern/crates/bern-theme" }
+bern-transport-ipc = { path = "../Bern/crates/bern-transport-ipc" }
+bern-transport-ws = { path = "../Bern/crates/bern-transport-ws" }

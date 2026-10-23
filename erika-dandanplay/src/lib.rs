@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::RwLock;
 
+pub mod custom;
 #[cfg(not(target_arch = "wasm32"))]
 mod http;
 
@@ -60,12 +61,17 @@ static TOKEN: RwLock<Option<String>> = RwLock::new(None);
 
 /// Use `token` for the requests from now on, or none after signing out.
 pub fn set_token(token: Option<String>) {
-    *TOKEN.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = token;
+    *TOKEN
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = token;
 }
 
 /// The token in use, if an account is signed in.
 pub fn token() -> Option<String> {
-    TOKEN.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+    TOKEN
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
 }
 
 /// `X-Signature`: the SHA-256 of the app id, the time, the path and the
@@ -143,11 +149,17 @@ impl LoginReply {
 
     /// The token, unless the reply says it failed.
     fn token(&self) -> Option<String> {
-        self.token.clone().filter(|token| !token.is_empty() && self.success != Some(false))
+        self.token
+            .clone()
+            .filter(|token| !token.is_empty() && self.success != Some(false))
     }
 
     fn error(self, otherwise: &str) -> Error {
-        Error::new(self.error_message.filter(|message| !message.is_empty()).unwrap_or_else(|| otherwise.into()))
+        Error::new(
+            self.error_message
+                .filter(|message| !message.is_empty())
+                .unwrap_or_else(|| otherwise.into()),
+        )
     }
 }
 
@@ -189,7 +201,10 @@ pub struct Renewed {
 pub fn renew(token: &str) -> Result<Renewed> {
     let reply: LoginReply = request("GET", "/api/v2/login/renew", "", None, Some(token))?;
     match reply.token() {
-        Some(token) => Ok(Renewed { screen_name: reply.screen_name(), token }),
+        Some(token) => Ok(Renewed {
+            screen_name: reply.screen_name(),
+            token,
+        }),
         None => Err(reply.error("续期失败")),
     }
 }
@@ -240,7 +255,11 @@ pub fn shin() -> Result<Vec<Intro>> {
     if reply.success {
         Ok(reply.bangumi_list)
     } else {
-        Err(Error::new(reply.error_message.unwrap_or_else(|| "新番列表取不到".into())))
+        Err(Error::new(
+            reply
+                .error_message
+                .unwrap_or_else(|| "新番列表取不到".into()),
+        ))
     }
 }
 
@@ -271,9 +290,9 @@ pub struct Details {
     pub anime_id: i64,
     #[serde(default)]
     pub anime_title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "text_or_null")]
     pub image_url: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "text_or_null")]
     pub summary: String,
     #[serde(default)]
     pub rating: f64,
@@ -303,8 +322,12 @@ struct DetailsReply {
     error_message: Option<String>,
 }
 
-/// The details of anime `anime_id`, its episodes among them.
+/// The details of anime `anime_id`, its episodes among them; a negative
+/// id is a show of the user's own server ([`custom`]).
 pub fn details(anime_id: i64) -> Result<Details> {
+    if custom::is_ours(anime_id) {
+        return custom::details(anime_id);
+    }
     let token = token().ok_or_else(Error::sign_in)?;
     let reply: DetailsReply = request(
         "GET",
@@ -315,7 +338,11 @@ pub fn details(anime_id: i64) -> Result<Details> {
     )?;
     match reply.bangumi {
         Some(details) if reply.success => Ok(details),
-        _ => Err(Error::new(reply.error_message.unwrap_or_else(|| "番剧详情取不到".into()))),
+        _ => Err(Error::new(
+            reply
+                .error_message
+                .unwrap_or_else(|| "番剧详情取不到".into()),
+        )),
     }
 }
 
@@ -329,13 +356,24 @@ pub struct Matched {
     pub anime_title: String,
     #[serde(default)]
     pub episode_title: String,
+    /// Its poster, when the service gives one (servers like Misaka do).
+    #[serde(default, deserialize_with = "text_or_null")]
+    pub image_url: String,
+}
+
+/// A text field that may be `null`.
+fn text_or_null<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 impl Matched {
     /// Its number within the anime: dandanplay numbers an anime's
-    /// episodes as the anime's id times 10000 plus the episode.
+    /// episodes as the anime's id times 10000 plus the episode, and so do
+    /// the servers that speak its API (their ids negative in Erika).
     pub fn number(&self) -> i64 {
-        self.episode_id % 10_000
+        self.episode_id.abs() % 10_000
     }
 }
 
@@ -369,9 +407,16 @@ pub fn match_video(file_name: &str, md5: &str, size: u64) -> Result<Option<Match
     });
     let reply: MatchReply = request("POST", "/api/v2/match", "", Some(body), Some(&token))?;
     if !reply.success {
-        return Err(Error::new(reply.error_message.unwrap_or_else(|| "弹弹play 没能匹配".into())));
+        return Err(Error::new(
+            reply
+                .error_message
+                .unwrap_or_else(|| "弹弹play 没能匹配".into()),
+        ));
     }
-    Ok(reply.is_matched.then(|| reply.matches.into_iter().next()).flatten())
+    Ok(reply
+        .is_matched
+        .then(|| reply.matches.into_iter().next())
+        .flatten())
 }
 
 #[derive(Deserialize)]
@@ -394,6 +439,9 @@ struct Comment {
 /// relates to it, as JSON the playback kernel reads (`time`, `content`,
 /// `mode_code`, `color`), and how many there are.
 pub fn comments(episode_id: i64) -> Result<(String, usize)> {
+    if custom::is_ours(episode_id) {
+        return custom::comments(episode_id);
+    }
     let token = token().ok_or_else(Error::sign_in)?;
     let reply: CommentsReply = request(
         "GET",
@@ -403,6 +451,37 @@ pub fn comments(episode_id: i64) -> Result<(String, usize)> {
         Some(&token),
     )?;
     Ok(kernel_comments(reply.comments))
+}
+
+/// Post exactly one comment; only the server's success is an acknowledgement.
+pub fn send_comment(episode: i64, time: f64, comment: &str) -> Result<()> {
+    if episode <= 0 {
+        return Err(Error::new("此弹幕来源暂不支持发送，请匹配弹弹play集数"));
+    }
+    if !time.is_finite() || time < 0.0 || comment.trim().is_empty() || comment.chars().count() > 40
+    {
+        return Err(Error::new("弹幕内容或时间无效"));
+    }
+    let token = token().ok_or_else(Error::sign_in)?;
+    let body =
+        serde_json::json!({ "time": time, "mode": 1, "color": 16777215, "comment": comment });
+    let reply: serde_json::Value = request(
+        "POST",
+        &format!("/api/v2/comment/{episode}"),
+        "",
+        Some(body),
+        Some(&token),
+    )?;
+    if reply.get("success").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(())
+    } else {
+        Err(Error::new(
+            reply
+                .get("errorMessage")
+                .and_then(|v| v.as_str())
+                .unwrap_or("弹幕发送失败"),
+        ))
+    }
 }
 
 fn kernel_comments(comments: Vec<Comment>) -> (String, usize) {
@@ -428,8 +507,10 @@ pub struct Found {
     pub anime_id: i64,
     #[serde(default)]
     pub anime_title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "text_or_null")]
     pub image_url: String,
+    #[serde(default, deserialize_with = "text_or_null")]
+    pub summary: String,
     #[serde(default)]
     pub type_description: String,
     #[serde(default)]
@@ -462,7 +543,9 @@ pub fn search(keyword: &str) -> Result<Vec<Found>> {
     if reply.success {
         Ok(reply.animes)
     } else {
-        Err(Error::new(reply.error_message.unwrap_or_else(|| "搜索失败".into())))
+        Err(Error::new(
+            reply.error_message.unwrap_or_else(|| "搜索失败".into()),
+        ))
     }
 }
 
@@ -471,7 +554,9 @@ pub fn search(keyword: &str) -> Result<Vec<Found>> {
 fn encode(text: &str) -> String {
     text.bytes()
         .map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (byte as char).to_string(),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
             _ => format!("%{byte:02X}"),
         })
         .collect()
@@ -488,7 +573,8 @@ fn request<T: serde::de::DeserializeOwned>(
     #[cfg(not(target_arch = "wasm32"))]
     {
         let text = http::send(method, path, query, body, token)?;
-        serde_json::from_str(&text).map_err(|error| Error::new(format!("弹弹play的回答看不懂：{error}")))
+        serde_json::from_str(&text)
+            .map_err(|error| Error::new(format!("弹弹play的回答看不懂：{error}")))
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -506,8 +592,9 @@ mod tests {
         // `generateSignature('nipaplayv1', 1700000000, '/api/v2/login', 'server-managed')`.
         assert_eq!(
             signature(1_700_000_000, "/api/v2/login"),
-            base64::engine::general_purpose::STANDARD
-                .encode(Sha256::digest("nipaplayv11700000000/api/v2/loginserver-managed"))
+            base64::engine::general_purpose::STANDARD.encode(Sha256::digest(
+                "nipaplayv11700000000/api/v2/loginserver-managed"
+            ))
         );
         assert_eq!(signature(1, "/a").len(), 44);
         assert_eq!(
@@ -538,6 +625,18 @@ mod tests {
     }
 
     #[test]
+    fn matching_search_preserves_artwork_and_accepts_missing_summaries() {
+        let reply: SearchReply = serde_json::from_str(
+            r#"{"animes":[{"animeId":42,"animeTitle":"测试","imageUrl":"https://img/poster.jpg","summary":"作品简介","episodeCount":12},{"animeId":43,"imageUrl":null,"summary":null}]}"#,
+        ).unwrap();
+        assert_eq!(reply.animes[0].image_url, "https://img/poster.jpg");
+        assert_eq!(reply.animes[0].summary, "作品简介");
+        assert_eq!(reply.animes[0].episode_count, 12);
+        assert!(reply.animes[1].summary.is_empty());
+        assert!(reply.animes[1].image_url.is_empty());
+    }
+
+    #[test]
     fn matches_comments_and_names_read_as_the_kernel_and_the_url_need() {
         let reply: MatchReply = serde_json::from_str(
             r#"{"isMatched":true,"matches":[{"episodeId":176750003,"animeId":17675,"animeTitle":"葬送的芙莉莲","episodeTitle":"第3话 杀人魔法"}],"success":true}"#,
@@ -545,9 +644,18 @@ mod tests {
         .unwrap();
         assert_eq!(reply.matches[0].number(), 3);
         let (json, count) = kernel_comments(vec![
-            Comment { p: "12.5,1,16777215,u1".into(), m: "前方高能".into() },
-            Comment { p: "3,5,255,u2".into(), m: "顶".into() },
-            Comment { p: "broken".into(), m: "x".into() },
+            Comment {
+                p: "12.5,1,16777215,u1".into(),
+                m: "前方高能".into(),
+            },
+            Comment {
+                p: "3,5,255,u2".into(),
+                m: "顶".into(),
+            },
+            Comment {
+                p: "broken".into(),
+                m: "x".into(),
+            },
         ]);
         assert_eq!(count, 2);
         assert!(json.contains(r#""content":"前方高能""#) && json.contains(r#""mode_code":5"#));
@@ -557,11 +665,25 @@ mod tests {
     #[test]
     fn the_names_are_read_beside_the_token_or_under_user() {
         let reply = |json: &str| serde_json::from_str::<LoginReply>(json).unwrap();
-        let top = reply(r#"{"success":true,"token":"t","userName":"u1","screenName":" 小明 ","profileImage":"p"}"#);
-        assert_eq!((top.token(), top.screen_name()), (Some("t".into()), Some("小明".into())));
-        assert_eq!(reply(r#"{"token":"t","user":{"screenName":"小红"}}"#).screen_name(), Some("小红".into()));
-        assert_eq!(reply(r#"{"token":"t","screenName":""}"#).screen_name(), None);
-        assert_eq!(reply(r#"{"success":false,"token":"t","errorMessage":"过期"}"#).token(), None);
+        let top = reply(
+            r#"{"success":true,"token":"t","userName":"u1","screenName":" 小明 ","profileImage":"p"}"#,
+        );
+        assert_eq!(
+            (top.token(), top.screen_name()),
+            (Some("t".into()), Some("小明".into()))
+        );
+        assert_eq!(
+            reply(r#"{"token":"t","user":{"screenName":"小红"}}"#).screen_name(),
+            Some("小红".into())
+        );
+        assert_eq!(
+            reply(r#"{"token":"t","screenName":""}"#).screen_name(),
+            None
+        );
+        assert_eq!(
+            reply(r#"{"success":false,"token":"t","errorMessage":"过期"}"#).token(),
+            None
+        );
     }
 
     #[test]

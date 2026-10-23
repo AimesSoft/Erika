@@ -7,4 +7,5 @@ publish = false
 
 [dependencies]
 bern.workspace = true
+erika-protocol.workspace = true
 erika-anime-protocol = { path = "../protocol" }

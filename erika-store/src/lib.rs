@@ -133,8 +133,10 @@ pub struct Source {
     /// What it is: `folder`.
     pub kind: String,
     pub name: String,
-    /// Where it is: a `file:` URL ending in `/`.
+    /// Where it is: a `file:` URL.
     pub location: String,
+    /// What it holds: `anime`, `series` or `movie`.
+    pub content: String,
     pub files: i64,
     pub unmatched: i64,
 }

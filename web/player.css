@@ -1,0 +1,74 @@
+/* Erika's controls over video. These are stable Bern control IDs, shared
+ * by desktop and compact layouts. Popover/menu contents keep their own
+ * opaque surfaces and standard controls; no filter wraps a popup ancestor. */
+@media (forced-colors: none) {
+  button:is(
+    [data-bern-target^="player_top."],
+    [data-bern-target^="player_phone_top."],
+    [data-bern-target^="player_tv_top."],
+    [data-bern-target^="player_controls."],
+    [data-bern-target^="player_tv_controls."],
+    [data-bern-target^="player_phone_scene."],
+    [data-bern-target^="player_subtitle_menu."],
+    [data-bern-target^="player_tv_subtitle_menu."],
+    [data-bern-target^="player_skip_button."]
+  ):not(.bern-content-button, [popover] *) {
+    color: #fff;
+    border-color: transparent;
+    box-shadow: none;
+    filter: drop-shadow(0 1px 3px rgb(0 0 0 / 0.9));
+
+    /* The play button retains its accent fill. Other controls are bare. */
+    &:not(.bern-icon-button-prominent) {
+      background: transparent;
+    }
+    .bern-icon { color: inherit; }
+    &:focus-visible {
+      outline: 2px solid #fff;
+      outline-offset: 3px;
+    }
+    &:focus-visible .bern-icon { filter: none; }
+  }
+
+  /* The split control's border and divider otherwise appear as a box
+   * around the text. Shadow each half so its popup remains unaffected. */
+  .bern-split-button:has(> [data-bern-target^="player_controls."], > [data-bern-target^="player_phone_scene."], > [data-bern-target^="player_tv_controls."]) {
+    box-shadow: none;
+    overflow: visible;
+    > .bern-icon-button {
+      border-radius: var(--bern-radius-control);
+      color: #fff;
+      box-shadow: none;
+      filter: drop-shadow(0 1px 3px rgb(0 0 0 / 0.9));
+      .bern-icon { color: inherit; }
+    }
+    &.bern-split-selected > .bern-split-main {
+      background: var(--bern-accent);
+      color: #fff;
+    }
+    > .bern-split-more:focus-visible {
+      outline: 2px solid #fff;
+      outline-offset: 3px;
+    }
+  }
+
+  /* The timeline already has a content shadow from the Rust UI style. */
+  input.bern-slider:is(
+    [data-bern-target="player_timeline.position"],
+    [data-bern-target="player_phone_scene.position_phone"],
+    [data-bern-target="player_tv_scene.position_tv"]
+  ) {
+    --bern-accent: #fff;
+    --bern-separator: #949499;
+    --bern-surface-canvas: #fff;
+  }
+
+  input[data-bern-target$=".danmaku_text"],
+  input[data-bern-target$=".danmaku_text_phone"],
+  input[data-bern-target$=".danmaku_text_tv"] {
+    color: #fff;
+    background: rgb(0 0 0 / 0.65);
+    border-color: transparent;
+    &::placeholder { color: #e6e6eb; opacity: 1; }
+  }
+}

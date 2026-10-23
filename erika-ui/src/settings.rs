@@ -2,12 +2,12 @@
 //! A native grouped form on every page (design 10.9: "苹果是分组列表"),
 //! a 220-point sidebar, and the title bar named after the page. All
 //! preference changes go through the shell protocol.
-use bern::prelude::*;
+use crate::AppWindows;
 use crate::feature_preview::{
     feature_preview_hud, feature_preview_hud_props, feature_preview_window,
     feature_preview_window_props,
 };
-use crate::AppWindows;
+use bern::prelude::*;
 use erika_protocol::erika::{self, *};
 #[bern::session]
 pub struct SettingsDraft {
@@ -17,49 +17,62 @@ pub struct SettingsDraft {
     /// What the account form holds until it signs in.
     pub account_user: String,
     pub account_password: String,
+    /// The recognition server's address being typed.
+    pub match_server: String,
 }
 #[component]
-pub fn settings(app: erika::Client, windows: AppWindows, #[session] draft: SettingsDraft) -> impl View {
+pub fn settings(
+    app: erika::Client,
+    windows: AppWindows,
+    #[session] draft: SettingsDraft,
+) -> impl View {
     ui! {
         if window.tv {
             tv_settings(app: app, windows: windows)
         } else {
-        Stack(align: bottom, reduce_motion: app.preferences.reduce_motion) {
+        Stack(variant: app_window, align: bottom, reduce_motion: app.preferences.reduce_motion) {
             SplitView {
                 Sidebar(id: settings_sections, width: 220, selection: draft.page) {
                     Search(id: settings_search, value: draft.query, prompt: tr! { "zh-Hans" => "搜索设置", "en" => "Search settings" }, shortcut: "cmd+k") {
                         Query(id: settings_results, query: app.find_settings(draft.query), empty: tr! { "zh-Hans" => "没有匹配的设置", "en" => "No matching settings" }) |results| {
                             ForEach(items: results, key: id) |result| {
-                                Button(id: settings_result, label: result.page, prominence: plain) => draft.page.set(result.page)
+                                Button(id: settings_result, label: result.item, variant: row, clears: draft.query) {
+                                    Column(gap: 2) {
+                                        Text(content: result.item)
+                                        Text(content: result.page, style: caption, emphasis: secondary)
+                                    }
+                                } => draft.page.set(result.page)
                             }
                         }
                     }
-                    SidebarItem(value: SettingsPage::Account, label: tr! { "zh-Hans" => "账号", "en" => "Account" }, icon: "person.crop.circle")
+                    if build.modules.account && app.features.account {
+                        SidebarItem(value: SettingsPage::Account, label: tr! { "zh-Hans" => "账号", "en" => "Account" }, icon: "person.crop.circle")
+                    }
                     SidebarItem(value: SettingsPage::General, label: tr! { "zh-Hans" => "通用", "en" => "General" }, icon: "gearshape")
                     SidebarItem(value: SettingsPage::Appearance, label: tr! { "zh-Hans" => "外观", "en" => "Appearance" }, icon: "paintpalette")
                     SidebarItem(value: SettingsPage::Player, label: tr! { "zh-Hans" => "播放", "en" => "Playback" }, icon: "play")
-                    if app.features.danmaku {
+                    if (build.modules.danmaku && app.features.danmaku) {
                         SidebarItem(value: SettingsPage::Danmaku, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, icon: "text.bubble")
                     }
-                    if app.features.library {
+                    if (build.modules.library && app.features.library) {
                         SidebarItem(value: SettingsPage::Library, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "film.stack")
                     }
-                    if app.features.anime {
+                    if (build.modules.anime && app.features.anime) {
                         SidebarItem(value: SettingsPage::Anime, label: tr! { "zh-Hans" => "追番", "en" => "Anime" }, icon: "calendar")
                     }
-                    if app.features.sync {
+                    if (build.modules.sync && app.features.sync) {
                         SidebarItem(value: SettingsPage::Sync, label: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, icon: "arrow.triangle.2.circlepath")
                     }
-                    if app.features.sources {
+                    if (build.modules.sources && app.features.sources) {
                         SidebarItem(value: SettingsPage::Sources, label: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, icon: "server.rack")
                     }
-                    if app.features.remote {
+                    if (build.modules.remote && app.features.remote) {
                         SidebarItem(value: SettingsPage::Remote, label: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, icon: "wifi")
                     }
-                    if app.features.downloads {
+                    if (build.modules.downloads && app.features.downloads) {
                         SidebarItem(value: SettingsPage::Downloads, label: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, icon: "arrow.down.circle")
                     }
-                    if app.features.enhance {
+                    if (build.modules.enhance && app.features.enhance) {
                         SidebarItem(value: SettingsPage::Enhance, label: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, icon: "sparkles")
                     }
                     Section(title: tr! { "zh-Hans" => "扩展", "en" => "Extensions" }) {
@@ -87,22 +100,38 @@ pub fn settings_page(app: erika::Client, #[session] draft: SettingsDraft) -> imp
     ui! {
         Column(gap: 0) {
             match draft.page {
-                SettingsPage::Account => { settings_account(app: app) }
+                SettingsPage::Account => {
+                    if build.modules.account && app.features.account {
+                        settings_account(app: app)
+                    } else {
+                        settings_general(app: app)
+                    }
+                }
                 SettingsPage::General => { settings_general(app: app) }
                 SettingsPage::Appearance => { settings_appearance(app: app) }
                 SettingsPage::Player => { settings_player(app: app) }
+                #[cfg(feature = "bern-module-danmaku")]
                 SettingsPage::Danmaku => { settings_danmaku(app: app) }
+                #[cfg(feature = "bern-module-library")]
                 SettingsPage::Library => { settings_module_placeholder(app: app) }
+                #[cfg(feature = "bern-module-anime")]
                 SettingsPage::Anime => { settings_module_placeholder(app: app) }
+                #[cfg(feature = "bern-module-sync")]
                 SettingsPage::Sync => { settings_module_placeholder(app: app) }
+                #[cfg(feature = "bern-module-sources")]
                 SettingsPage::Sources => { settings_module_placeholder(app: app) }
+                #[cfg(feature = "bern-module-remote")]
                 SettingsPage::Remote => { settings_module_placeholder(app: app) }
+                #[cfg(feature = "bern-module-downloads")]
                 SettingsPage::Downloads => { settings_module_placeholder(app: app) }
+                #[cfg(feature = "bern-module-enhance")]
                 SettingsPage::Enhance => { settings_module_placeholder(app: app) }
                 SettingsPage::Optional => { settings_optional(app: app) }
                 SettingsPage::Plugins => { settings_plugins(app: app) }
                 SettingsPage::Keys => { settings_keys(app: app) }
                 SettingsPage::About => { settings_about(app: app) }
+                #[cfg(any(not(feature = "bern-module-danmaku"), not(feature = "bern-module-enhance"), not(feature = "bern-module-anime"), not(feature = "bern-module-library"), not(feature = "bern-module-sync"), not(feature = "bern-module-sources"), not(feature = "bern-module-remote"), not(feature = "bern-module-downloads")))]
+                _ => {}
             }
         }
     }
@@ -115,7 +144,11 @@ pub fn settings_page(app: erika::Client, #[session] draft: SettingsDraft) -> imp
 /// its form to the right; the close button in the top right corner. The
 /// remote's Back closes them too.
 #[component]
-pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: SettingsDraft) -> impl View {
+pub fn tv_settings(
+    app: erika::Client,
+    windows: AppWindows,
+    #[session] draft: SettingsDraft,
+) -> impl View {
     ui! {
         Stack(under_bars: true, reduce_motion: app.preferences.reduce_motion) {
             ScaleBox(width: 1280, height: 720) {
@@ -131,7 +164,7 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
                                     // The remote starts on the first page (`.c-navi.on`).
                                     Button(id: tv_settings_general, label: tr! { "zh-Hans" => "通用", "en" => "General" }, variant: settings_tv_nav, default_focus: true) {
                                         Stack(width: 280, height: 46, align: leading) {
-                                            if draft.page == SettingsPage::General {
+                                            if draft.page == SettingsPage::General || (draft.page == SettingsPage::Account && !app.features.account) {
                                                 Canvas {
                                                     Shape(kind: capsule, fill: fill.strong)
                                                 }
@@ -142,6 +175,7 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
                                             }
                                         }
                                     } => draft.page.set(SettingsPage::General)
+                                    if build.modules.account && app.features.account {
                                     Button(id: tv_settings_account, label: tr! { "zh-Hans" => "账号", "en" => "Account" }, variant: settings_tv_nav) {
                                         Stack(width: 280, height: 46, align: leading) {
                                             if draft.page == SettingsPage::Account {
@@ -155,6 +189,7 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
                                             }
                                         }
                                     } => draft.page.set(SettingsPage::Account)
+                                    }
                                     Button(id: tv_settings_appearance, label: tr! { "zh-Hans" => "外观", "en" => "Appearance" }, variant: settings_tv_nav) {
                                         Stack(width: 280, height: 46, align: leading) {
                                             if draft.page == SettingsPage::Appearance {
@@ -181,7 +216,7 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
                                             }
                                         }
                                     } => draft.page.set(SettingsPage::Player)
-                                    if app.features.danmaku {
+                                    if (build.modules.danmaku && app.features.danmaku) {
                                         Button(id: tv_settings_danmaku, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, variant: settings_tv_nav) {
                                             Stack(width: 280, height: 46, align: leading) {
                                                 if draft.page == SettingsPage::Danmaku {
@@ -196,7 +231,7 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
                                             }
                                         } => draft.page.set(SettingsPage::Danmaku)
                                     }
-                                    if app.features.library {
+                                    if (build.modules.library && app.features.library) {
                                         Button(id: tv_settings_library, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, variant: settings_tv_nav) {
                                             Stack(width: 280, height: 46, align: leading) {
                                                 if draft.page == SettingsPage::Library {
@@ -211,7 +246,7 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
                                             }
                                         } => draft.page.set(SettingsPage::Library)
                                     }
-                                    if app.features.anime {
+                                    if (build.modules.anime && app.features.anime) {
                                         Button(id: tv_settings_anime, label: tr! { "zh-Hans" => "追番", "en" => "Anime" }, variant: settings_tv_nav) {
                                             Stack(width: 280, height: 46, align: leading) {
                                                 if draft.page == SettingsPage::Anime {
@@ -226,7 +261,7 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
                                             }
                                         } => draft.page.set(SettingsPage::Anime)
                                     }
-                                    if app.features.sync {
+                                    if (build.modules.sync && app.features.sync) {
                                         Button(id: tv_settings_sync, label: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, variant: settings_tv_nav) {
                                             Stack(width: 280, height: 46, align: leading) {
                                                 if draft.page == SettingsPage::Sync {
@@ -241,7 +276,7 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
                                             }
                                         } => draft.page.set(SettingsPage::Sync)
                                     }
-                                    if app.features.sources {
+                                    if (build.modules.sources && app.features.sources) {
                                         Button(id: tv_settings_sources, label: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, variant: settings_tv_nav) {
                                             Stack(width: 280, height: 46, align: leading) {
                                                 if draft.page == SettingsPage::Sources {
@@ -256,7 +291,7 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
                                             }
                                         } => draft.page.set(SettingsPage::Sources)
                                     }
-                                    if app.features.remote {
+                                    if (build.modules.remote && app.features.remote) {
                                         Button(id: tv_settings_remote, label: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, variant: settings_tv_nav) {
                                             Stack(width: 280, height: 46, align: leading) {
                                                 if draft.page == SettingsPage::Remote {
@@ -271,7 +306,7 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
                                             }
                                         } => draft.page.set(SettingsPage::Remote)
                                     }
-                                    if app.features.downloads {
+                                    if (build.modules.downloads && app.features.downloads) {
                                         Button(id: tv_settings_downloads, label: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, variant: settings_tv_nav) {
                                             Stack(width: 280, height: 46, align: leading) {
                                                 if draft.page == SettingsPage::Downloads {
@@ -286,7 +321,7 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
                                             }
                                         } => draft.page.set(SettingsPage::Downloads)
                                     }
-                                    if app.features.enhance {
+                                    if (build.modules.enhance && app.features.enhance) {
                                         Button(id: tv_settings_enhance, label: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, variant: settings_tv_nav) {
                                             Stack(width: 280, height: 46, align: leading) {
                                                 if draft.page == SettingsPage::Enhance {
@@ -364,7 +399,11 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
                     }
                     Positioned(x: 336, y: 14, width: 860, height: 28) {
                         Row(gap: 0) {
-                            Text(content: draft.page, style: title3, lines: 1)
+                            if draft.page == SettingsPage::Account && !app.features.account {
+                                Text(content: tr! { "zh-Hans" => "通用", "en" => "General" }, style: title3, lines: 1)
+                            } else {
+                                Text(content: draft.page, style: title3, lines: 1)
+                            }
                             Spacer
                         }
                     }
@@ -388,18 +427,19 @@ pub fn tv_settings(app: erika::Client, windows: AppWindows, #[session] draft: Se
 /// 「账号」: the dandanplay account, which the season's anime, the details
 /// of a show and matching danmaku need. Signed out, the form asks for the
 /// name and the password; signed in, it shows the account.
+#[cfg(feature = "bern-module-account")]
 #[component]
 pub fn settings_account(app: erika::Client, #[session] draft: SettingsDraft) -> impl View {
     ui! {
         Form(variant: settings_form, appear: settings_page_in) {
             Slot(id: form_header)
-            if app.account.signed_in {
+            if app.account_status.signed_in {
                 Section(title: tr! { "zh-Hans" => "弹弹play 账号", "en" => "dandanplay account" }) {
                     Row(gap: 12, align: center) {
                         Label(title: tr! { "zh-Hans" => "账号", "en" => "Account" }, icon: "person.crop.circle", display: icon, font_size: 28)
                         Column(gap: 1) {
-                            Text(content: app.account.name, style: body, lines: 1)
-                            Text(content: app.account.user, style: caption, emphasis: secondary)
+                            Text(content: app.account_status.name, style: body, lines: 1)
+                            Text(content: app.account_status.user, style: caption, emphasis: secondary)
                         }
                         Spacer
                         Button(id: sign_out, label: tr! { "zh-Hans" => "退出登录", "en" => "Sign Out" }) => app.sign_out()
@@ -413,10 +453,10 @@ pub fn settings_account(app: erika::Client, #[session] draft: SettingsDraft) -> 
                     TextInput(id: account_user, label: tr! { "zh-Hans" => "用户名", "en" => "User name" }, value: draft.account_user, prompt: tr! { "zh-Hans" => "用户名或邮箱", "en" => "User name or email" })
                     TextInput(id: account_password, label: tr! { "zh-Hans" => "密码", "en" => "Password" }, value: draft.account_password, kind: secure, prompt: tr! { "zh-Hans" => "密码", "en" => "Password" }) => app.sign_in(draft.account_user, draft.account_password)
                     Row(gap: 12, align: center) {
-                        if app.account.busy {
+                        if app.account_status.busy {
                             Text(content: tr! { "zh-Hans" => "正在登录…", "en" => "Signing in…" }, style: caption, emphasis: secondary)
                         } else {
-                            Text(content: app.account.error, style: caption, emphasis: secondary, lines: 2)
+                            Text(content: app.account_status.error, style: caption, emphasis: secondary, lines: 2)
                         }
                         Spacer
                         Button(id: sign_in, label: tr! { "zh-Hans" => "登录", "en" => "Sign In" }, prominence: prominent, clears: draft.account_password) => app.sign_in(draft.account_user, draft.account_password)
@@ -425,6 +465,27 @@ pub fn settings_account(app: erika::Client, #[session] draft: SettingsDraft) -> 
                 Section {
                     Text(content: tr! { "zh-Hans" => "登录后才能看新番和番剧详情，也才能给视频匹配弹幕。还没有账号的话，可以在弹弹play 官网注册。", "en" => "Sign in to see the season's anime and show details, and to match danmaku to your videos. No account yet? Sign up on the dandanplay website." }, style: caption, emphasis: secondary, lines: 3)
                 }
+            }
+            Section(title: tr! { "zh-Hans" => "电视剧与电影", "en" => "TV series and movies" }) {
+                if app.account_status.has_server {
+                    Row(gap: 12, align: center) {
+                        Column(gap: 1) {
+                            Text(content: tr! { "zh-Hans" => "识别服务器", "en" => "Recognition server" }, style: body)
+                            Text(content: app.account_status.server, style: caption, emphasis: secondary, lines: 1)
+                        }
+                        Spacer
+                        Button(id: clear_match_server, label: tr! { "zh-Hans" => "移除", "en" => "Remove" }) => app.clear_match_server()
+                    }
+                } else {
+                    TextInput(id: match_server, label: tr! { "zh-Hans" => "识别服务器地址", "en" => "Recognition server address" }, value: draft.match_server, prompt: tr! { "zh-Hans" => "https://服务器/erika/令牌", "en" => "https://server/erika/token" }) => app.set_match_server(draft.match_server)
+                    Row(gap: 12, align: center) {
+                        Spacer
+                        Button(id: save_match_server, label: tr! { "zh-Hans" => "保存", "en" => "Save" }, prominence: prominent, clears: draft.match_server) => app.set_match_server(draft.match_server)
+                    }
+                }
+            }
+            Section {
+                Text(content: tr! { "zh-Hans" => "电视剧和电影文件夹由你自己的识别服务器认：它在 Misaka 弹幕服务前面，按文件指纹记住你确认过的每个文件。地址里带着令牌，存在系统钥匙串里。", "en" => "TV series and movie folders are recognized by your own server, before a Misaka danmaku server, which remembers every file you confirm by its fingerprint. Its address holds a token and stays in the system keychain." }, style: caption, emphasis: secondary, lines: 3)
             }
         }
     }
@@ -538,23 +599,12 @@ pub fn settings_player(app: erika::Client) -> impl View {
             Slot(id: form_header)
             Section(title: tr! { "zh-Hans" => "播放", "en" => "Playback" }) {
                 Picker(id: speed, label: tr! { "zh-Hans" => "默认倍速", "en" => "Default speed" }, selected: app.preferences.speed, style: menu) => app.set_speed(app.preferences.speed)
-                Row(gap: 12, align: center) {
-                    Text(content: tr! { "zh-Hans" => "跳过片头", "en" => "Skip intro" }, style: body)
-                    Spacer
-                    Text(content: tr! { "zh-Hans" => "85 秒", "en" => "85 seconds" }, style: body, emphasis: secondary)
-                }
+                Switch(id: skip_segments, label: tr! { "zh-Hans" => "片头／片尾跳过提示", "en" => "Opening / ending skip hint" }, checked: app.player.skip_intro, style: switch) => app.set_skip_intro(app.player.skip_intro)
+                Text(content: tr! { "zh-Hans" => "在视频标记的片头或片尾区间内显示跳过按钮。", "en" => "Show a skip button inside the video's marked opening or ending." }, style: caption, emphasis: secondary)
                 Switch(id: remember_position, label: tr! { "zh-Hans" => "记住播放位置", "en" => "Remember playback position" }, checked: app.preferences.remember_position, style: switch) => app.set_preference("remember_position", app.preferences.remember_position)
                 Switch(id: autoplay, label: tr! { "zh-Hans" => "自动连播下一集", "en" => "Automatically play next episode" }, checked: app.preferences.autoplay, style: switch) => app.set_preference("autoplay", app.preferences.autoplay)
             }
             Section(title: tr! { "zh-Hans" => "画框", "en" => "Frame" }) {
-                Row(gap: 12, align: center) {
-                    Column(gap: 1) {
-                        Text(content: tr! { "zh-Hans" => "控制层出现时画面退后", "en" => "Step back when controls appear" }, style: body)
-                        Text(content: tr! { "zh-Hans" => "关掉后控制层叠在画面底部，用纯色底", "en" => "When off, controls overlay the bottom of the picture" }, style: caption, emphasis: secondary)
-                    }
-                    Spacer
-                    Switch(id: step_back, label: tr! { "zh-Hans" => "控制层出现时画面退后", "en" => "Step back when controls appear" }, checked: app.preferences.step_back, style: switch, label_hidden: true) => app.set_preference("step_back", app.preferences.step_back)
-                }
                 Row(gap: 12, align: center) {
                     Text(content: tr! { "zh-Hans" => "画框圆角", "en" => "Frame corners" }, style: body)
                     Spacer
@@ -563,10 +613,12 @@ pub fn settings_player(app: erika::Client) -> impl View {
             }
             Section(title: tr! { "zh-Hans" => "解码", "en" => "Decoding" }) {
                 Switch(id: hardware_decode, label: tr! { "zh-Hans" => "硬件解码", "en" => "Hardware decoding" }, checked: app.preferences.hardware_decode, style: switch) => app.set_preference("hardware_decode", app.preferences.hardware_decode)
+                Text(content: tr! { "zh-Hans" => "下次打开视频时生效。", "en" => "Applies when the next video opens." }, style: caption)
             }
         }
     }
 }
+#[cfg(feature = "bern-module-danmaku")]
 #[component]
 pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> impl View {
     ui! {
@@ -574,8 +626,20 @@ pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> 
             Slot(id: form_header)
             Section(title: tr! { "zh-Hans" => "显示", "en" => "Display" }) {
                 Switch(id: show_danmaku, label: tr! { "zh-Hans" => "显示弹幕", "en" => "Show danmaku" }, checked: app.preferences.show_danmaku, style: switch) => app.set_preference("show_danmaku", app.preferences.show_danmaku)
-                Slider(id: opacity, label: tr! { "zh-Hans" => "不透明度", "en" => "Opacity" }, current: app.danmaku_settings.opacity, min: 0, max: 1) => app.set_danmaku_number("opacity", app.danmaku_settings.opacity)
-                Slider(id: font_size, label: tr! { "zh-Hans" => "字号", "en" => "Font size" }, current: app.danmaku_settings.font_size, min: 0, max: 1) => app.set_danmaku_number("font_size", app.danmaku_settings.font_size)
+                Column(gap: 4) {
+                    Row(align: center) {
+                        Text(content: tr! { "zh-Hans" => "不透明度", "en" => "Opacity" }) Spacer
+                        Text(content: tr! { "zh-Hans" => "{value}%", "en" => "{value}%"; value: app.danmaku_settings.opacity_percent })
+                    }
+                    Slider(id: opacity, label: tr! { "zh-Hans" => "不透明度", "en" => "Opacity" }, label_hidden: true, current: app.danmaku_settings.opacity, continuous: true, min: 0, max: 1) => app.set_danmaku_number("opacity", app.danmaku_settings.opacity)
+                }
+                Column(gap: 4) {
+                    Row(align: center) {
+                        Text(content: tr! { "zh-Hans" => "字号", "en" => "Font size" }) Spacer
+                        Text(content: tr! { "zh-Hans" => "{value} pt", "en" => "{value} pt"; value: app.danmaku_settings.font_points })
+                    }
+                    Slider(id: font_size, label: tr! { "zh-Hans" => "字号", "en" => "Font size" }, label_hidden: true, current: app.danmaku_settings.font_size, continuous: true, min: 0, max: 1) => app.set_danmaku_number("font_size", app.danmaku_settings.font_size)
+                }
                 Picker(id: area, label: tr! { "zh-Hans" => "显示区域", "en" => "Display area" }, selected: app.preferences.danmaku_area, style: segmented) => app.set_danmaku_area(app.preferences.danmaku_area)
             }
             Section(title: tr! { "zh-Hans" => "来源", "en" => "Sources" }) {
@@ -635,16 +699,33 @@ pub fn settings_optional(app: erika::Client) -> impl View {
                         }
                     }
                     Section(title: tr! { "zh-Hans" => "观看", "en" => "Watching" }) {
-                        settings_danmaku_module(app: app)
-                        settings_enhance_module(app: app)
+                        if build.modules.danmaku { settings_danmaku_module(app: app) }
+                        if build.modules.enhance { settings_enhance_module(app: app) }
                     }
                 } else {
                     Section(title: tr! { "zh-Hans" => "观看", "en" => "Watching" }, footer: tr! { "zh-Hans" => "决定 Erika 要做多少事。关掉的功能不显示，也不占资源。右边的小窗口会跟着变。", "en" => "Choose what Erika does. Disabled features disappear and use no resources. The preview updates as you go." }) {
-                        settings_danmaku_module(app: app)
-                        settings_enhance_module(app: app)
+                        if build.modules.danmaku { settings_danmaku_module(app: app) }
+                        if build.modules.enhance { settings_enhance_module(app: app) }
                     }
                 }
                 Section(title: tr! { "zh-Hans" => "内容", "en" => "Content" }) {
+                    if build.modules.account {
+                    Row(gap: 12, align: center) {
+                        Stack(width: 28, height: 28) {
+                            Canvas {
+                                Shape(kind: rounded, corner: 7, fill: fill.strong)
+                            }
+                            Label(title: tr! { "zh-Hans" => "账号", "en" => "Account" }, icon: "person.crop.circle", style: body, display: icon)
+                        }
+                        Column(gap: 1) {
+                            Text(content: tr! { "zh-Hans" => "账号", "en" => "Account" }, style: body)
+                            Text(content: tr! { "zh-Hans" => "弹弹play 登录与识别服务器", "en" => "Dandanplay sign-in and recognition server" }, style: caption, emphasis: secondary)
+                        }
+                        Spacer
+                        Switch(id: feature_account, label: tr! { "zh-Hans" => "账号", "en" => "Account" }, checked: app.features.account, style: switch, label_hidden: true) => app.set_module("account", app.features.account)
+                    }
+                    }
+                    if build.modules.library {
                     Row(gap: 12, align: center) {
                         Stack(width: 28, height: 28) {
                             Canvas {
@@ -659,6 +740,8 @@ pub fn settings_optional(app: erika::Client) -> impl View {
                         Spacer
                         Switch(id: feature_library, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, checked: app.features.library, style: switch, label_hidden: true) => app.set_module("library", app.features.library)
                     }
+                    }
+                    if build.modules.anime {
                     Row(gap: 12, align: center) {
                         Stack(width: 28, height: 28) {
                             Canvas {
@@ -673,6 +756,8 @@ pub fn settings_optional(app: erika::Client) -> impl View {
                         Spacer
                         Switch(id: feature_anime, label: tr! { "zh-Hans" => "追番", "en" => "Anime" }, checked: app.features.anime, style: switch, label_hidden: true) => app.set_module("anime", app.features.anime)
                     }
+                    }
+                    if build.modules.sync {
                     Row(gap: 12, align: center) {
                         Stack(width: 28, height: 28) {
                             Canvas {
@@ -682,13 +767,15 @@ pub fn settings_optional(app: erika::Client) -> impl View {
                         }
                         Column(gap: 1) {
                             Text(content: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, style: body)
-                            Text(content: tr! { "zh-Hans" => "弹弹play / Bangumi 同步 · 需要追番", "en" => "Dandanplay / Bangumi · requires Anime" }, style: caption, emphasis: secondary)
+                            Text(content: tr! { "zh-Hans" => "弹弹play / Bangumi 同步 · 需要账号和追番", "en" => "Dandanplay / Bangumi · requires Account and Anime" }, style: caption, emphasis: secondary)
                         }
                         Spacer
                         Switch(id: feature_sync, label: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, checked: app.features.sync, style: switch, label_hidden: true) => app.set_module("sync", app.features.sync)
                     }
+                    }
                 }
                 Section(title: tr! { "zh-Hans" => "连接", "en" => "Connections" }) {
+                    if build.modules.sources {
                     Row(gap: 12, align: center) {
                         Stack(width: 28, height: 28) {
                             Canvas {
@@ -703,6 +790,8 @@ pub fn settings_optional(app: erika::Client) -> impl View {
                         Spacer
                         Switch(id: feature_sources, label: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, checked: app.features.sources, style: switch, label_hidden: true) => app.set_module("sources", app.features.sources)
                     }
+                    }
+                    if build.modules.remote {
                     Row(gap: 12, align: center) {
                         Stack(width: 28, height: 28) {
                             Canvas {
@@ -717,6 +806,8 @@ pub fn settings_optional(app: erika::Client) -> impl View {
                         Spacer
                         Switch(id: feature_remote, label: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, checked: app.features.remote, style: switch, label_hidden: true) => app.set_module("remote", app.features.remote)
                     }
+                    }
+                    if build.modules.downloads {
                     Row(gap: 12, align: center) {
                         Stack(width: 28, height: 28) {
                             Canvas {
@@ -730,6 +821,7 @@ pub fn settings_optional(app: erika::Client) -> impl View {
                         }
                         Spacer
                         Switch(id: feature_downloads, label: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, checked: app.features.downloads, style: switch, label_hidden: true) => app.set_module("downloads", app.features.downloads)
+                    }
                     }
                 }
             }
@@ -753,6 +845,7 @@ pub fn settings_optional(app: erika::Client) -> impl View {
     }
 }
 /// The danmaku module's row, in both layouts of the optional features.
+#[cfg(feature = "bern-module-danmaku")]
 #[component]
 pub fn settings_danmaku_module(app: erika::Client) -> impl View {
     ui! {
@@ -773,6 +866,7 @@ pub fn settings_danmaku_module(app: erika::Client) -> impl View {
     }
 }
 /// The upscaling module's row, in both layouts of the optional features.
+#[cfg(feature = "bern-module-enhance")]
 #[component]
 pub fn settings_enhance_module(app: erika::Client) -> impl View {
     ui! {
@@ -838,7 +932,7 @@ pub fn settings_keys(app: erika::Client) -> impl View {
                     Spacer
                     Text(content: tr! { "zh-Hans" => "← / →", "en" => "← / →" }, style: body, emphasis: secondary)
                 }
-                if app.features.danmaku {
+                if (build.modules.danmaku && app.features.danmaku) {
                     Row(gap: 12, align: center) {
                         Text(content: tr! { "zh-Hans" => "开关弹幕", "en" => "Toggle danmaku" }, style: body)
                         Spacer
@@ -880,13 +974,7 @@ pub fn settings_about(app: erika::Client) -> impl View {
                 Column(gap: 6, padding_y: 12, align: center) {
                     Row {
                         Spacer
-                        // A television has no web engine for the animated
-                        // logo: the logo stands still there.
-                        if window.tv {
-                            Image(source: "design/brand/erika-icon-export/logo/erika-logo-icon-512.png", width: 104, height: 104, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
-                        } else {
-                            Svg(source: "design/brand/erika-icon-animated.svg", width: 104, height: 104, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
-                        }
+                        Svg(source: "design/brand/erika-icon-animated.svg", static_source: "design/brand/erika-icon-export/logo/erika-logo-icon.svg", width: 104, height: 104, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
                         Spacer
                     }
                     Stack(variant: settings_wordmark) {

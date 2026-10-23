@@ -14,8 +14,9 @@ mod tests;
 use bern::{CommandError, media::MediaSource, query::Answer};
 use erika_dandanplay::{Details, Found};
 use erika_library_protocol::library::{
-    self, FileNote, LibraryCrumb, LibraryDir, LibraryFile, LibraryFilter, LibraryFilterChip, LibraryFolder, LibraryLetter,
-    LibraryListing, LibraryNotice, LibraryPoster, LibrarySort, LibrarySourceRow, SourceStatus, State,
+    self, FileNote, LibraryCrumb, LibraryDir, LibraryFile, LibraryFilter, LibraryFilterChip,
+    LibraryFolder, LibraryLetter, LibraryListing, LibraryNotice, LibraryPoster, LibrarySort,
+    LibrarySourceRow, SourceContent, SourceStatus, State,
 };
 use erika_store::{Anime, Entry, Source};
 use matching::{Session, Video};
@@ -64,12 +65,18 @@ pub struct LibraryEngine {
 /// Run `work` on another thread, handing what it sends to the engine,
 /// which is woken to take it in. The browser has no threads and tests want
 /// the work done before they look: there it runs at once.
-fn in_background(inbox: &Arc<Mutex<Vec<Done>>>, work: impl FnOnce(&(dyn Fn(Done) + Sync)) + Send + 'static) {
+fn in_background(
+    inbox: &Arc<Mutex<Vec<Done>>>,
+    work: impl FnOnce(&(dyn Fn(Done) + Sync)) + Send + 'static,
+) {
     let inbox = Arc::clone(inbox);
     let waker = bern::wake::waker();
     let run = move || {
         let send = |done: Done| {
-            inbox.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(done);
+            inbox
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(done);
             if let Some(waker) = &waker {
                 waker.wake();
             }
@@ -93,7 +100,8 @@ fn initial(title: &str) -> String {
             if c.is_ascii_alphabetic() {
                 Some(c.to_ascii_uppercase().to_string())
             } else {
-                c.to_pinyin().map(|pinyin| pinyin.first_letter().to_uppercase())
+                c.to_pinyin()
+                    .map(|pinyin| pinyin.first_letter().to_uppercase())
             }
         })
         .unwrap_or_else(|| "#".into())
@@ -130,9 +138,43 @@ fn nothing() -> LibraryPoster {
     }
 }
 
+/// What a source holds, as the database writes it and back.
+fn content_of(text: &str) -> SourceContent {
+    match text {
+        "series" => SourceContent::Series,
+        "movie" => SourceContent::Movie,
+        _ => SourceContent::Anime,
+    }
+}
+
+fn content_text(content: &SourceContent) -> &'static str {
+    match content {
+        SourceContent::Anime => "anime",
+        SourceContent::Series => "series",
+        SourceContent::Movie => "movie",
+    }
+}
+
+/// Whether the user's own server recognizes what a source holds; dandanplay
+/// recognizes anime.
+fn by_server(content: &str) -> bool {
+    content != "anime"
+}
+
+/// Whether the service that knows `id` can be asked: the user's server for
+/// its (negative) ids, dandanplay with an account for the rest.
+fn reachable(id: i64) -> bool {
+    if erika_dandanplay::custom::is_ours(id) {
+        erika_dandanplay::custom::server().is_some()
+    } else {
+        erika_dandanplay::token().is_some()
+    }
+}
+
 fn no_folder() -> LibraryFolder {
     LibraryFolder {
         source: 0,
+        content: SourceContent::Anime,
         title: String::new(),
         location: String::new(),
         crumbs: Vec::new(),
@@ -153,7 +195,11 @@ fn root_of(source: &Source) -> Option<PathBuf> {
 fn parts(root: &Path, url: &str) -> Option<Vec<String>> {
     let path = bern::files::file_path(url)?;
     let rest = path.strip_prefix(root).ok()?;
-    Some(rest.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect())
+    Some(
+        rest.components()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect(),
+    )
 }
 
 /// Names in the order people count: `2` before `10`.
@@ -192,8 +238,14 @@ fn natural(a: &str, b: &str) -> std::cmp::Ordering {
 
 fn note(entry: &Entry) -> FileNote {
     match (&entry.matched, entry.file) {
-        (Some((anime, episode)), _) if entry.manual => FileNote::Manual { anime: anime.title.clone(), episode: episode.number },
-        (Some((anime, episode)), _) => FileNote::Matched { anime: anime.title.clone(), episode: episode.number },
+        (Some((anime, episode)), _) if entry.manual => FileNote::Manual {
+            anime: anime.title.clone(),
+            episode: episode.number,
+        },
+        (Some((anime, episode)), _) => FileNote::Matched {
+            anime: anime.title.clone(),
+            episode: episode.number,
+        },
         (None, None) => FileNote::Unreadable,
         (None, Some(_)) => FileNote::Unmatched,
     }
@@ -267,12 +319,24 @@ impl LibraryEngine {
             .map(|source| LibrarySourceRow {
                 id: source.id,
                 name: source.name.clone(),
-                location: root_of(source).map_or_else(|| source.location.clone(), |root| root.display().to_string()),
+                content: content_of(&source.content),
+                location: root_of(source).map_or_else(
+                    || source.location.clone(),
+                    |root| root.display().to_string(),
+                ),
                 status: match self.busy.get(&source.id) {
-                    Some(Busy::Scanning { done, total }) => SourceStatus::Scanning { done: *done as i64, total: *total as i64 },
-                    Some(Busy::Matching { done, total }) => SourceStatus::Matching { done: *done as i64, total: *total as i64 },
+                    Some(Busy::Scanning { done, total }) => SourceStatus::Scanning {
+                        done: *done as i64,
+                        total: *total as i64,
+                    },
+                    Some(Busy::Matching { done, total }) => SourceStatus::Matching {
+                        done: *done as i64,
+                        total: *total as i64,
+                    },
                     None if self.missing.contains(&source.id) => SourceStatus::Missing,
-                    None => SourceStatus::Ready { files: source.files },
+                    None => SourceStatus::Ready {
+                        files: source.files,
+                    },
                 },
                 unmatched: source.unmatched,
             })
@@ -284,22 +348,47 @@ impl LibraryEngine {
         let mut unmatched: Vec<LibraryFile> = Vec::new();
         for source in &sources {
             let root = root_of(source);
-            for entry in entries.iter().filter(|entry| entry.source == source.id && entry.matched.is_none()) {
-                let parts = root.as_deref().and_then(|root| parts(root, &entry.url)).unwrap_or_default();
-                let name = parts.last().cloned().or_else(|| bern::files::name(&entry.url)).unwrap_or_default();
-                let place = std::iter::once(source.name.as_str()).chain(parts.iter().take(parts.len().saturating_sub(1)).map(String::as_str)).collect::<Vec<_>>().join(" › ");
+            for entry in entries
+                .iter()
+                .filter(|entry| entry.source == source.id && entry.matched.is_none())
+            {
+                let parts = root
+                    .as_deref()
+                    .and_then(|root| parts(root, &entry.url))
+                    .unwrap_or_default();
+                let name = parts
+                    .last()
+                    .cloned()
+                    .or_else(|| bern::files::name(&entry.url))
+                    .unwrap_or_default();
+                let place = std::iter::once(source.name.as_str())
+                    .chain(
+                        parts
+                            .iter()
+                            .take(parts.len().saturating_sub(1))
+                            .map(String::as_str),
+                    )
+                    .collect::<Vec<_>>()
+                    .join(" › ");
                 unmatched.push(file_row(entry, &name, place));
             }
         }
         self.state.unmatched_count = unmatched.len() as i64;
         self.state.unmatched = unmatched;
 
-        if self.at.as_ref().is_some_and(|(id, _)| !sources.iter().any(|source| source.id == *id)) {
+        if self
+            .at
+            .as_ref()
+            .is_some_and(|(id, _)| !sources.iter().any(|source| source.id == *id))
+        {
             self.at = None;
         }
         self.state.browsing = self.at.is_some();
         self.state.folder = self.folder(&sources, &entries);
-        self.state.matching = self.session.as_ref().map_or_else(matching::closed, Session::view);
+        self.state.matching = self
+            .session
+            .as_ref()
+            .map_or_else(matching::closed, Session::view);
         self.ask_posters(&shelf);
     }
 
@@ -333,15 +422,33 @@ impl LibraryEngine {
             }
         }
         files.sort_by(|a, b| natural(&a.name, &b.name));
-        let mut dirs: Vec<LibraryDir> = dirs.into_iter().map(|(name, (files, unmatched))| LibraryDir { name, files, unmatched }).collect();
+        let mut dirs: Vec<LibraryDir> = dirs
+            .into_iter()
+            .map(|(name, (files, unmatched))| LibraryDir {
+                name,
+                files,
+                unmatched,
+            })
+            .collect();
         dirs.sort_by(|a, b| natural(&a.name, &b.name));
-        let mut crumbs = vec![LibraryCrumb { depth: 0, name: source.name.clone() }];
-        crumbs.extend(path.iter().enumerate().map(|(index, name)| LibraryCrumb { depth: index as i64 + 1, name: name.clone() }));
+        let mut crumbs = vec![LibraryCrumb {
+            depth: 0,
+            name: source.name.clone(),
+        }];
+        crumbs.extend(path.iter().enumerate().map(|(index, name)| LibraryCrumb {
+            depth: index as i64 + 1,
+            name: name.clone(),
+        }));
         let missing = self.missing.contains(id);
         LibraryFolder {
             source: *id,
+            content: content_of(&source.content),
             title: path.last().cloned().unwrap_or_else(|| source.name.clone()),
-            location: path.iter().fold(root, |at, name| at.join(name)).display().to_string(),
+            location: path
+                .iter()
+                .fold(root, |at, name| at.join(name))
+                .display()
+                .to_string(),
             crumbs,
             can_batch: !missing && files.len() >= 2,
             empty: dirs.is_empty() && files.is_empty(),
@@ -360,17 +467,34 @@ impl LibraryEngine {
             self.notify(LibraryNotice::CannotScan);
             return;
         }
-        let Some(root) = self.db.sources().iter().find(|source| source.id == id).and_then(root_of) else {
+        let Some(root) = self
+            .db
+            .sources()
+            .iter()
+            .find(|source| source.id == id)
+            .and_then(root_of)
+        else {
             return;
         };
         let known: HashMap<String, scan::Known> = self
             .db
             .seen(id)
             .into_iter()
-            .map(|seen| (seen.url, scan::Known { size: seen.size, modified: seen.modified, fingerprinted: seen.fingerprint.is_some() }))
+            .map(|seen| {
+                (
+                    seen.url,
+                    scan::Known {
+                        size: seen.size,
+                        modified: seen.modified,
+                        fingerprinted: seen.fingerprint.is_some(),
+                    },
+                )
+            })
             .collect();
         self.busy.insert(id, Busy::Scanning { done: 0, total: 0 });
-        in_background(&self.inbox, move |send| scan::scan(&root, &known, &|done| send(Done::Scan(id, done))));
+        in_background(&self.inbox, move |send| {
+            scan::scan(&root, &known, &|done| send(Done::Scan(id, done)))
+        });
     }
 
     /// Ask dandanplay about the videos of source `id` not matched yet and
@@ -379,19 +503,43 @@ impl LibraryEngine {
         if self.busy.contains_key(&id) {
             return;
         }
+        let custom = self
+            .db
+            .sources()
+            .iter()
+            .find(|source| source.id == id)
+            .is_some_and(|source| by_server(&source.content));
         let videos: Vec<(String, erika_store::Fingerprint)> = self
             .db
             .seen(id)
             .into_iter()
             .filter(|seen| !seen.matched && !seen.decided)
-            .filter_map(|seen| Some((bern::files::name(&seen.url).unwrap_or_default(), seen.fingerprint?)))
+            .filter_map(|seen| {
+                Some((
+                    bern::files::name(&seen.url).unwrap_or_default(),
+                    seen.fingerprint?,
+                ))
+            })
             .collect();
-        if videos.is_empty() || erika_dandanplay::token().is_none() {
+        let can_ask = if custom {
+            erika_dandanplay::custom::server().is_some()
+        } else {
+            erika_dandanplay::token().is_some()
+        };
+        if videos.is_empty() || !can_ask {
             self.finish(id);
             return;
         }
-        self.busy.insert(id, Busy::Matching { done: 0, total: videos.len() });
-        in_background(&self.inbox, move |send| scan::match_videos(videos, &|done| send(Done::Match(id, done))));
+        self.busy.insert(
+            id,
+            Busy::Matching {
+                done: 0,
+                total: videos.len(),
+            },
+        );
+        in_background(&self.inbox, move |send| {
+            scan::match_videos(videos, custom, &|done| send(Done::Match(id, done)))
+        });
     }
 
     /// Source `id` is scanned and matched: say so when the user asked.
@@ -402,10 +550,22 @@ impl LibraryEngine {
         let Some(source) = self.db.sources().into_iter().find(|source| source.id == id) else {
             return;
         };
-        if source.unmatched > 0 && erika_dandanplay::token().is_none() {
+        if source.unmatched > 0
+            && by_server(&source.content)
+            && erika_dandanplay::custom::server().is_none()
+        {
+            self.notify(LibraryNotice::NoServer);
+        } else if source.unmatched > 0
+            && !by_server(&source.content)
+            && erika_dandanplay::token().is_none()
+        {
             self.notify(LibraryNotice::SignInToMatch);
         } else {
-            self.notify(LibraryNotice::Scanned { name: source.name, files: source.files, unmatched: source.unmatched });
+            self.notify(LibraryNotice::Scanned {
+                name: source.name,
+                files: source.files,
+                unmatched: source.unmatched,
+            });
         }
     }
 
@@ -415,16 +575,23 @@ impl LibraryEngine {
             self.took_details(&details);
             return;
         }
-        if !self.asked.insert(id) || erika_dandanplay::token().is_none() {
+        if !self.asked.insert(id) || !reachable(id) {
             return;
         }
-        in_background(&self.inbox, move |send| send(Done::Details(id, erika_dandanplay::details(id))));
+        in_background(&self.inbox, move |send| {
+            send(Done::Details(id, erika_dandanplay::details(id)))
+        });
     }
 
     /// Posters for the shows on the wall that have none: dandanplay's
     /// matching names an anime but gives no picture of it.
     fn ask_posters(&mut self, shelf: &[erika_store::Shelf]) {
-        for id in shelf.iter().filter(|shelf| shelf.anime.image.is_empty()).map(|shelf| shelf.anime.dandanplay_id).collect::<Vec<_>>() {
+        for id in shelf
+            .iter()
+            .filter(|shelf| shelf.anime.image.is_empty())
+            .map(|shelf| shelf.anime.dandanplay_id)
+            .collect::<Vec<_>>()
+        {
             if !self.details.contains_key(&id) {
                 self.ask_details(id);
             }
@@ -435,14 +602,26 @@ impl LibraryEngine {
         if let Some(session) = self.session.as_mut() {
             session.details(details);
         }
-        if let Some(known) = self.db.anime(details.anime_id).filter(|known| known.image.is_empty() && !details.image_url.is_empty()) {
-            self.db.remember_anime(&Anime { image: details.image_url.clone(), ..known });
+        if let Some(known) = self
+            .db
+            .anime(details.anime_id)
+            .filter(|known| known.image.is_empty() && !details.image_url.is_empty())
+        {
+            self.db.remember_anime(&Anime {
+                image: details.image_url.clone(),
+                ..known
+            });
         }
     }
 
     /// Take in what the other threads came back with.
     fn take_done(&mut self) {
-        let done: Vec<Done> = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+        let done: Vec<Done> = std::mem::take(
+            &mut *self
+                .inbox
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
         if done.is_empty() {
             return;
         }
@@ -451,7 +630,13 @@ impl LibraryEngine {
             match done {
                 Done::Scan(id, Scanned::Walked { urls }) => {
                     let present: HashSet<String> = urls.into_iter().collect();
-                    let gone: Vec<String> = self.db.seen(id).into_iter().map(|seen| seen.url).filter(|url| !present.contains(url)).collect();
+                    let gone: Vec<String> = self
+                        .db
+                        .seen(id)
+                        .into_iter()
+                        .map(|seen| seen.url)
+                        .filter(|url| !present.contains(url))
+                        .collect();
                     changed |= !gone.is_empty();
                     self.db.forget(id, &gone);
                     self.missing.remove(&id);
@@ -460,7 +645,13 @@ impl LibraryEngine {
                     self.busy.insert(id, Busy::Scanning { done, total });
                 }
                 Done::Scan(id, Scanned::Read { found, fingerprint }) => {
-                    self.db.saw(id, &found.url, found.size, found.modified, fingerprint.as_ref());
+                    self.db.saw(
+                        id,
+                        &found.url,
+                        found.size,
+                        found.modified,
+                        fingerprint.as_ref(),
+                    );
                     changed = true;
                 }
                 Done::Scan(id, Scanned::Finished { failed }) => {
@@ -477,7 +668,14 @@ impl LibraryEngine {
                 Done::Match(id, Matched::Progress { done, total }) => {
                     self.busy.insert(id, Busy::Matching { done, total });
                 }
-                Done::Match(_, Matched::Episode { fingerprint, anime, episode }) => {
+                Done::Match(
+                    _,
+                    Matched::Episode {
+                        fingerprint,
+                        anime,
+                        episode,
+                    },
+                ) => {
                     if let Some(file) = self.db.file_id(&fingerprint) {
                         self.db.link_episode(file, &anime, &episode, false);
                         changed = true;
@@ -492,9 +690,15 @@ impl LibraryEngine {
                     self.took_details(&details);
                     changed = true;
                 }
-                Done::Details(id, Err(error)) => eprintln!("erika: details of {id}: {}", error.message),
+                Done::Details(id, Err(error)) => {
+                    eprintln!("erika: details of {id}: {}", error.message)
+                }
                 Done::Search(search, result) => {
-                    if let Some(session) = self.session.as_mut().filter(|session| session.search == search) {
+                    if let Some(session) = self
+                        .session
+                        .as_mut()
+                        .filter(|session| session.search == search)
+                    {
                         session.searching = false;
                         session.search_failed = result.is_err();
                         session.results = result.unwrap_or_default().into_iter().take(8).collect();
@@ -508,21 +712,53 @@ impl LibraryEngine {
         }
     }
 
-    /// The video with address `key`, as the matching page takes it, and
-    /// where it is.
-    fn video(&self, key: i64) -> Option<(Video, String)> {
-        let entry = self.db.entries(None).into_iter().find(|entry| entry.key == key)?;
-        let source = self.db.sources().into_iter().find(|source| source.id == entry.source)?;
-        let parts = root_of(&source).and_then(|root| parts(&root, &entry.url)).unwrap_or_default();
-        let name = parts.last().cloned().or_else(|| bern::files::name(&entry.url)).unwrap_or_default();
-        let place = std::iter::once(source.name.clone()).chain(parts.iter().cloned()).collect::<Vec<_>>().join(" › ");
-        Some((Video { key, name, file: entry.file, now: entry.matched.map(|(anime, episode)| (anime, episode.number)) }, place))
+    /// The video with address `key` as the matching page takes it, where it
+    /// is, and whether its source is recognized by the user's own server.
+    fn video_of(&self, key: i64) -> Option<(Video, String, bool)> {
+        let entry = self
+            .db
+            .entries(None)
+            .into_iter()
+            .find(|entry| entry.key == key)?;
+        let source = self
+            .db
+            .sources()
+            .into_iter()
+            .find(|source| source.id == entry.source)?;
+        let custom = by_server(&source.content);
+        let parts = root_of(&source)
+            .and_then(|root| parts(&root, &entry.url))
+            .unwrap_or_default();
+        let name = parts
+            .last()
+            .cloned()
+            .or_else(|| bern::files::name(&entry.url))
+            .unwrap_or_default();
+        let place = std::iter::once(source.name.clone())
+            .chain(parts.iter().cloned())
+            .collect::<Vec<_>>()
+            .join(" › ");
+        Some((
+            Video {
+                key,
+                name,
+                file: entry.file,
+                now: entry
+                    .matched
+                    .map(|(anime, episode)| (anime, episode.number)),
+            },
+            place,
+            custom,
+        ))
     }
 
     /// Open matching: the episodes of its anime are asked for, or, when it
     /// has none yet, dandanplay is searched by `words`.
     fn begin(&mut self, session: Session, words: String) {
-        let chosen = session.chosen.as_ref().map(|chosen| chosen.anime.dandanplay_id);
+        let chosen = session
+            .chosen
+            .as_ref()
+            .map(|chosen| chosen.anime.dandanplay_id);
         self.session = Some(session);
         match chosen {
             Some(id) => self.ask_details(id),
@@ -541,8 +777,15 @@ impl LibraryEngine {
         session.search += 1;
         session.searching = true;
         session.search_failed = false;
-        let search = session.search;
-        in_background(&self.inbox, move |send| send(Done::Search(search, erika_dandanplay::search(&text))));
+        let (search, custom) = (session.search, session.custom);
+        in_background(&self.inbox, move |send| {
+            let found = if custom {
+                erika_dandanplay::custom::search(&text)
+            } else {
+                erika_dandanplay::search(&text)
+            };
+            send(Done::Search(search, found))
+        });
     }
 
     fn with_session(&mut self, change: impl FnOnce(&mut Session)) {
@@ -550,6 +793,62 @@ impl LibraryEngine {
             change(session);
         }
         self.load();
+    }
+
+    /// Tell the user's server which episodes these files are, so their
+    /// fingerprints are enough next time, anywhere.
+    fn confirm_on_server(
+        &self,
+        anime: &Anime,
+        links: &[(erika_store::FileId, erika_store::Episode)],
+    ) {
+        let names: HashMap<erika_store::FileId, String> = self
+            .session
+            .iter()
+            .flat_map(|session| session.videos.iter())
+            .filter_map(|video| Some((video.file?, video.name.clone())))
+            .collect();
+        let confirmed: Vec<(String, erika_store::Fingerprint, erika_store::Episode)> = links
+            .iter()
+            .filter_map(|(file, episode)| {
+                Some((
+                    names.get(file).cloned().unwrap_or_default(),
+                    self.db.fingerprint_of(*file)?,
+                    episode.clone(),
+                ))
+            })
+            .collect();
+        let anime = anime.clone();
+        in_background(&self.inbox, move |_| {
+            for (name, print, episode) in confirmed {
+                let done =
+                    erika_dandanplay::custom::confirm(&erika_dandanplay::custom::Confirmed {
+                        file_name: &name,
+                        md5: &print.md5,
+                        size: print.size,
+                        anime_id: anime.dandanplay_id,
+                        episode_id: episode.dandanplay_id,
+                        number: episode.number,
+                        anime_title: &anime.title,
+                        episode_title: &episode.title,
+                        image: &anime.image,
+                    });
+                if let Err(error) = done {
+                    eprintln!("erika: confirm {name} on the server: {}", error.message);
+                }
+            }
+        });
+    }
+
+    /// Tell the user's server to forget what file `file` was.
+    fn forget_on_server(&self, file: erika_store::FileId) {
+        if let Some(print) = self.db.fingerprint_of(file) {
+            in_background(&self.inbox, move |_| {
+                if let Err(error) = erika_dandanplay::custom::forget(&print.md5, print.size) {
+                    eprintln!("erika: forget a file on the server: {}", error.message);
+                }
+            });
+        }
     }
 
     fn listing(&self, source: i64, filter: LibraryFilter, sort: LibrarySort) -> LibraryListing {
@@ -570,14 +869,21 @@ impl LibraryEngine {
         });
         match sort {
             LibrarySort::Recent => posters.sort_by_key(|p| !p.watching),
-            LibrarySort::Name => posters.sort_by(|a, b| a.initial.cmp(&b.initial).then_with(|| a.title.cmp(&b.title))),
+            LibrarySort::Name => posters.sort_by(|a, b| {
+                a.initial
+                    .cmp(&b.initial)
+                    .then_with(|| a.title.cmp(&b.title))
+            }),
             LibrarySort::Rating => posters.sort_by(|a, b| b.rating.total_cmp(&a.rating)),
         }
         let letters = "ABCDEFGHJKLMNOPQRSTWXYZ"
             .chars()
             .map(|c| {
                 let letter = c.to_string();
-                let target = posters.iter().find(|p| p.initial == letter).map_or(0, |p| p.id);
+                let target = posters
+                    .iter()
+                    .find(|p| p.initial == letter)
+                    .map_or(0, |p| p.id);
                 LibraryLetter { letter, target }
             })
             .collect();
@@ -588,7 +894,11 @@ impl LibraryEngine {
             ("finished", LibraryFilter::Finished, finished),
         ]
         .into_iter()
-        .map(|(id, value, count)| LibraryFilterChip { id: id.into(), value, count })
+        .map(|(id, value, count)| LibraryFilterChip {
+            id: id.into(),
+            value,
+            count,
+        })
         .collect();
         LibraryListing {
             filters,
@@ -599,7 +909,13 @@ impl LibraryEngine {
             watching,
             unwatched,
             finished,
-            source_name: self.state.sources.iter().find(|row| row.id == source).map(|row| row.name.clone()).unwrap_or_default(),
+            source_name: self
+                .state
+                .sources
+                .iter()
+                .find(|row| row.id == source)
+                .map(|row| row.name.clone())
+                .unwrap_or_default(),
         }
     }
 }
@@ -653,7 +969,11 @@ impl library::Commands for LibraryEngine {
         Ok(())
     }
 
-    fn add_folder(&mut self, folder: MediaSource) -> Result<(), CommandError> {
+    fn add_folder(
+        &mut self,
+        folder: MediaSource,
+        content: SourceContent,
+    ) -> Result<(), CommandError> {
         if cfg!(target_arch = "wasm32") {
             self.notify(LibraryNotice::CannotScan);
             return Ok(());
@@ -663,11 +983,34 @@ impl library::Commands for LibraryEngine {
             return Ok(());
         };
         let location = MediaSource::file(&path).url;
-        let name = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
-        if let Some(id) = self.db.add_source("folder", &name, &location) {
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        if let Some(id) = self
+            .db
+            .add_source("folder", &name, &location, content_text(&content))
+        {
             self.announce.insert(id);
             self.start_scan(id);
         }
+        self.load();
+        Ok(())
+    }
+
+    fn set_content(&mut self, source: i64, content: SourceContent) -> Result<(), CommandError> {
+        let known = self
+            .db
+            .sources()
+            .into_iter()
+            .find(|known| known.id == source)
+            .ok_or_else(unknown_source)?;
+        self.db.set_source_content(source, content_text(&content));
+        self.notify(LibraryNotice::Retyped {
+            name: known.name,
+            content,
+        });
+        self.start_matching(source);
         self.load();
         Ok(())
     }
@@ -683,7 +1026,12 @@ impl library::Commands for LibraryEngine {
     }
 
     fn remove_source(&mut self, source: i64) -> Result<(), CommandError> {
-        let known = self.db.sources().into_iter().find(|known| known.id == source).ok_or_else(unknown_source)?;
+        let known = self
+            .db
+            .sources()
+            .into_iter()
+            .find(|known| known.id == source)
+            .ok_or_else(unknown_source)?;
         self.db.remove_source(source);
         self.busy.remove(&source);
         self.missing.remove(&source);
@@ -737,16 +1085,21 @@ impl library::Commands for LibraryEngine {
     }
 
     fn assign(&mut self, key: i64) -> Result<(), CommandError> {
-        let (video, place) = self.video(key).ok_or_else(unknown_file)?;
+        let (video, place, custom) = self.video_of(key).ok_or_else(unknown_file)?;
         let words = names::search_words(&video.name);
-        self.begin(Session::one(video, place), words);
+        let mut session = Session::one(video, place);
+        session.custom = custom;
+        self.begin(session, words);
         self.load();
         Ok(())
     }
 
     fn unlink(&mut self, key: i64) -> Result<(), CommandError> {
-        let (video, _) = self.video(key).ok_or_else(unknown_file)?;
+        let (video, _, custom) = self.video_of(key).ok_or_else(unknown_file)?;
         if let Some(file) = video.file {
+            if custom {
+                self.forget_on_server(file);
+            }
             self.db.unlink(file);
             self.notify(LibraryNotice::Unlinked);
             library::emit::files_changed();
@@ -756,14 +1109,32 @@ impl library::Commands for LibraryEngine {
     }
 
     fn match_folder(&mut self) -> Result<(), CommandError> {
-        let keys: Vec<i64> = self.state.folder.files.iter().map(|file| file.key).collect();
-        let videos: Vec<Video> = keys.iter().filter_map(|key| self.video(*key)).map(|(video, _)| video).collect();
+        let keys: Vec<i64> = self
+            .state
+            .folder
+            .files
+            .iter()
+            .map(|file| file.key)
+            .collect();
+        let found: Vec<(Video, String, bool)> =
+            keys.iter().filter_map(|key| self.video_of(*key)).collect();
+        let custom = found.iter().any(|(_, _, custom)| *custom);
+        let videos: Vec<Video> = found.into_iter().map(|(video, _, _)| video).collect();
         if videos.is_empty() {
             return Ok(());
         }
-        let place = self.state.folder.crumbs.iter().map(|crumb| crumb.name.as_str()).collect::<Vec<_>>().join(" › ");
+        let place = self
+            .state
+            .folder
+            .crumbs
+            .iter()
+            .map(|crumb| crumb.name.as_str())
+            .collect::<Vec<_>>()
+            .join(" › ");
         let words = names::search_words(&self.state.folder.title);
-        self.begin(Session::folder(videos, place), words);
+        let mut session = Session::folder(videos, place);
+        session.custom = custom;
+        self.begin(session, words);
         self.load();
         Ok(())
     }
@@ -775,10 +1146,20 @@ impl library::Commands for LibraryEngine {
     }
 
     fn match_anime(&mut self, id: i64) -> Result<(), CommandError> {
-        let Some(found) = self.session.as_ref().and_then(|session| session.results.iter().find(|found| found.anime_id == id).cloned()) else {
+        let Some(found) = self.session.as_ref().and_then(|session| {
+            session
+                .results
+                .iter()
+                .find(|found| found.anime_id == id)
+                .cloned()
+        }) else {
             return Ok(());
         };
-        let anime = Anime { dandanplay_id: found.anime_id, title: found.anime_title, image: found.image_url };
+        let anime = Anime {
+            dandanplay_id: found.anime_id,
+            title: found.anime_title,
+            image: found.image_url,
+        };
         self.with_session(|session| session.choose(anime, found.episode_count));
         self.ask_details(id);
         self.load();
@@ -805,7 +1186,13 @@ impl library::Commands for LibraryEngine {
     }
 
     fn match_edit(&mut self, key: i64) -> Result<(), CommandError> {
-        self.with_session(|session| session.editing = if session.editing == Some(key) { None } else { Some(key) });
+        self.with_session(|session| {
+            session.editing = if session.editing == Some(key) {
+                None
+            } else {
+                Some(key)
+            }
+        });
         Ok(())
     }
 
@@ -828,14 +1215,36 @@ impl library::Commands for LibraryEngine {
         let Some((anime, links)) = self.session.as_ref().and_then(Session::links) else {
             return Ok(());
         };
-        let anime = Anime { image: self.db.anime(anime.dandanplay_id).map(|known| known.image).filter(|image| !image.is_empty()).unwrap_or(anime.image.clone()), ..anime };
+        let anime = Anime {
+            image: self
+                .db
+                .anime(anime.dandanplay_id)
+                .map(|known| known.image)
+                .filter(|image| !image.is_empty())
+                .unwrap_or(anime.image.clone()),
+            ..anime
+        };
         if self.db.link_files(&anime, &links) {
+            if self.session.as_ref().is_some_and(|session| session.custom) {
+                self.confirm_on_server(&anime, &links);
+            }
             let numbers: Vec<i64> = links.iter().map(|(_, episode)| episode.number).collect();
-            let (first, last) = (numbers.iter().min().copied().unwrap_or(0), numbers.iter().max().copied().unwrap_or(0));
+            let (first, last) = (
+                numbers.iter().min().copied().unwrap_or(0),
+                numbers.iter().max().copied().unwrap_or(0),
+            );
             self.notify(if links.len() == 1 {
-                LibraryNotice::MatchedOne { anime: anime.title.clone(), episode: first }
+                LibraryNotice::MatchedOne {
+                    anime: anime.title.clone(),
+                    episode: first,
+                }
             } else {
-                LibraryNotice::MatchedMany { count: links.len() as i64, anime: anime.title.clone(), first, last }
+                LibraryNotice::MatchedMany {
+                    count: links.len() as i64,
+                    anime: anime.title.clone(),
+                    first,
+                    last,
+                }
             });
             self.session = None;
             library::emit::files_changed();
@@ -847,8 +1256,15 @@ impl library::Commands for LibraryEngine {
     }
 
     fn match_unlink(&mut self) -> Result<(), CommandError> {
-        let file = self.session.as_ref().filter(|session| session.single).and_then(|session| session.videos[0].file);
+        let file = self
+            .session
+            .as_ref()
+            .filter(|session| session.single)
+            .and_then(|session| session.videos[0].file);
         if let Some(file) = file {
+            if self.session.as_ref().is_some_and(|session| session.custom) {
+                self.forget_on_server(file);
+            }
             self.db.unlink(file);
             self.notify(LibraryNotice::Unlinked);
             self.session = None;
@@ -866,7 +1282,13 @@ impl library::Commands for LibraryEngine {
 }
 
 impl library::Queries for LibraryEngine {
-    fn browse(&self, source: i64, filter: LibraryFilter, sort: LibrarySort, answer: Answer<LibraryListing>) {
+    fn browse(
+        &self,
+        source: i64,
+        filter: LibraryFilter,
+        sort: LibrarySort,
+        answer: Answer<LibraryListing>,
+    ) {
         answer.ok(self.listing(source, filter, sort));
     }
 }

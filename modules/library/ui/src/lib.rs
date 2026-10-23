@@ -52,15 +52,15 @@ pub fn library_page(
     #[session] draft: LibraryDraft,
 ) -> impl View {
     ui! {
-        if !app.modules.anime && library.opened > 0 {
+        if (!build.modules.anime || !app.modules.anime) && library.opened > 0 {
             library_preview(library: library)
         } else {
             if draft.tab == LibraryTab::Sources {
-                library_sources_page(library: library)
+                library_sources_page(app: app, library: library)
             } else {
             Query(id: catalog, query: library.browse(if library.several_sources { draft.source } else { 0 }, draft.filter, draft.sort)) |listing| {
                 if window.compact {
-                    library_phone(library: library, listing: listing)
+                    library_phone(app: app, library: library, listing: listing)
                 } else {
                 Column(gap: 0, padding_x: if window.tv { 56.0 } else if window.medium { 24.0 } else { 32.0 }, padding_y: 6, appear: page_in) {
                     Adaptive {
@@ -97,7 +97,7 @@ pub fn library_page(
                         library_source_chips(library: library)
                     }
                     Canvas(height: 18)
-                    library_wall(library: library, listing: listing)
+                    library_wall(app: app, library: library, listing: listing)
                 }
                 }
             }
@@ -147,6 +147,7 @@ pub fn library_source_chips(library: library::Client, #[session] draft: LibraryD
 // toolbar and filters do not depend on either value.
 #[component]
 pub fn library_wall(
+    app: erika::Client,
     library: library::Client,
     listing: library::LibraryListing,
     #[session] draft: LibraryDraft,
@@ -154,13 +155,13 @@ pub fn library_wall(
     ui! {
         if window.tv {
             ScrollView(position: draft.position, arrival: nudge) {
-                library_grid(library: library, listing: listing, size: draft.tv_poster_size, gap: 20.0, titles: true)
+                library_grid(app: app, library: library, listing: listing, size: draft.tv_poster_size, gap: 20.0, titles: true)
                 Canvas(height: 48)
             }
         } else {
             Pinch(id: zoom_wall, label: tr! { "zh-Hans" => "缩放海报墙", "en" => "Zoom poster wall" }, value: draft.poster_size, min: 84, max: 200) {
                 ScrollView(position: draft.position, arrival: nudge) {
-                    library_grid(library: library, listing: listing, size: draft.poster_size, gap: if draft.poster_size < 110.0 { 10.0 } else { 20.0 }, titles: draft.poster_size >= 110.0)
+                    library_grid(app: app, library: library, listing: listing, size: draft.poster_size, gap: if draft.poster_size < 110.0 { 10.0 } else { 20.0 }, titles: draft.poster_size >= 110.0)
                     Canvas(height: 48)
                 }
             }
@@ -175,6 +176,7 @@ pub fn library_wall(
 /// 18 under them.
 #[component]
 pub fn library_phone(
+    app: erika::Client,
     library: library::Client,
     listing: library::LibraryListing,
     #[session] draft: LibraryDraft,
@@ -210,7 +212,7 @@ pub fn library_phone(
                     Canvas(height: 18)
                     // `libLayout` on the phone: 10 between posters below 110
                     // points, else 12; the titles while posters are 96 wide.
-                    library_grid(library: library, listing: listing, size: draft.phone_poster_size, gap: if draft.phone_poster_size < 110.0 { 10.0 } else { 12.0 }, titles: draft.phone_poster_size >= 88.0)
+                    library_grid(app: app, library: library, listing: listing, size: draft.phone_poster_size, gap: if draft.phone_poster_size < 110.0 { 10.0 } else { 12.0 }, titles: draft.phone_poster_size >= 88.0)
                     Canvas(height: 48)
                 }
             }
@@ -222,6 +224,7 @@ pub fn library_phone(
 /// letters, 22 on the phone).
 #[component]
 pub fn library_grid(
+    app: erika::Client,
     library: library::Client,
     listing: library::LibraryListing,
     size: f64,
@@ -233,7 +236,12 @@ pub fn library_grid(
         if listing.empty {
             Column(gap: 4, padding_y: 24) {
                 Text(content: tr! { "zh-Hans" => "这里还没有番。", "en" => "No shows here yet." }, style: title3)
-                Text(content: tr! { "zh-Hans" => "在「来源」里添加放视频的文件夹，或者直接打开视频，弹弹play 认出的番会按番剧列在这里；需要先在 设置 › 账号 里登录。", "en" => "Add folders of videos under Sources, or open videos; the shows dandanplay recognizes are listed here. Sign in under Settings › Account first." }, emphasis: secondary, lines: 3)
+                Text(content: tr! { "zh-Hans" => "在「来源」里添加放视频的文件夹，或者直接打开视频，识别出的番剧会列在这里。", "en" => "Add folders of videos under Sources, or open videos; recognized shows are listed here." }, emphasis: secondary, lines: 3)
+                if build.modules.account && app.features.account {
+                    Text(content: tr! { "zh-Hans" => "在线识别需要先在 设置 › 账号 里登录。", "en" => "Sign in under Settings › Account to recognize shows online." }, style: caption, emphasis: secondary, lines: 2)
+                } else if build.modules.account {
+                    Text(content: tr! { "zh-Hans" => "在线识别可在 设置 › 可选功能 中开启账号后使用。", "en" => "Enable Account under Settings › Optional Features to recognize shows online." }, style: caption, emphasis: secondary, lines: 2)
+                }
             }
         } else {
         Row(gap: if window.compact { 2.0 } else { 8.0 }, align: top) {
@@ -475,7 +483,11 @@ pub fn library_recent(library: library::Client) -> impl View {
 /// title in two lines at most (14 / 19) and, when asked, its state
 /// (11.5 / 15).
 #[component]
-pub fn library_card(library: library::Client, poster: library::LibraryPoster, status: bool) -> impl View {
+pub fn library_card(
+    library: library::Client,
+    poster: library::LibraryPoster,
+    status: bool,
+) -> impl View {
     ui! {
         Column(gap: 0) {
             Button(id: open_recent, label: poster.title, variant: poster) {

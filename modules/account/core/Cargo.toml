@@ -1,0 +1,10 @@
+[package]
+name = "erika-account-core"
+description = "The account module: lifecycle registration"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+bern.workspace = true
+erika-account-protocol = { path = "../protocol" }

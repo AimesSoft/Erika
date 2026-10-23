@@ -26,7 +26,11 @@ pub(super) fn recents(db: &Db) -> Vec<RecentPlay> {
         .into_iter()
         .map(|recent| RecentPlay {
             name: recent.title,
-            progress: if recent.duration > 0.0 { (recent.position / recent.duration).clamp(0.0, 1.0) } else { 0.0 },
+            progress: if recent.duration > 0.0 {
+                (recent.position / recent.duration).clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
             remaining: (recent.duration - recent.position).max(0.0),
             still: recent
                 .still
@@ -41,14 +45,27 @@ pub(super) fn recents(db: &Db) -> Vec<RecentPlay> {
 /// Where pictures of the videos are kept: the cache folder, or the
 /// temporary one where the app has none.
 pub(super) fn stills_dir() -> PathBuf {
-    bern::storage::cache_dir().unwrap_or_else(std::env::temp_dir).join("stills")
+    #[cfg(target_arch = "wasm32")]
+    {
+        PathBuf::from("stills")
+    } // Only an identifier; browser captures are blob URLs.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        bern::storage::cache_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("stills")
+    }
 }
 
 /// Pictures no recent video names any more, except those taken in this
 /// run.
 pub(super) fn forget_stills(db: &Db, run: &str) {
     let kept = db.stills();
-    for entry in std::fs::read_dir(stills_dir()).into_iter().flatten().flatten() {
+    for entry in std::fs::read_dir(stills_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
         let path = entry.path();
         let named = kept.iter().any(|still| Path::new(still) == path);
         if !named && !entry.file_name().to_string_lossy().starts_with(run) {
@@ -61,20 +78,39 @@ impl ErikaEngine {
     /// Which file `source` is, read from its head, noted in the database
     /// with the address it was opened from; and the fingerprint read.
     /// Neither for a web address.
-    pub(super) fn identify(&self, source: &MediaSource) -> (Option<FileId>, Option<erika_store::Fingerprint>) {
+    pub(super) fn identify(
+        &self,
+        source: &MediaSource,
+    ) -> (Option<FileId>, Option<erika_store::Fingerprint>) {
+        #[cfg(target_arch = "wasm32")]
+        let fingerprint = None; // Session storage has no fingerprint lookup; avoid reading 16 MiB on the UI thread.
+        #[cfg(not(target_arch = "wasm32"))]
         let fingerprint = source.open().ok().and_then(|file| {
             let size = file.len();
             erika_store::fingerprint(file, size).ok()
         });
-        (self.db.opened(&source.url, fingerprint.as_ref()), fingerprint)
+        (
+            self.db.opened(&source.url, fingerprint.as_ref()),
+            fingerprint,
+        )
     }
 
     /// Where `file` stopped last time, in seconds, and how far that is.
     pub(super) fn saved_position(&self, file: Option<FileId>) -> (f64, f64) {
+        if !self.state.preferences.remember_position {
+            return (0.0, 0.0);
+        }
         match file.and_then(|file| self.db.progress(file)) {
             Some((position, duration)) => {
                 let start = resume_point(position, duration);
-                (start, if duration > 0.0 { start / duration } else { 0.0 })
+                (
+                    start,
+                    if duration > 0.0 {
+                        start / duration
+                    } else {
+                        0.0
+                    },
+                )
             }
             None => (0.0, 0.0),
         }
@@ -89,15 +125,30 @@ impl ErikaEngine {
         let (position, duration) = (self.state.elapsed, self.state.duration);
         if let Some(file) = self.file
             && duration > 0.0
+            && self.state.preferences.remember_position
         {
             self.db.save_progress(file, position, duration);
         }
         let still = self.still_path.as_ref().and_then(|path| path.to_str());
         // Listed by the file's own name, as when it was first opened.
-        let name = source.file_name().unwrap_or_else(|| self.state.title.clone());
-        self.db.remember(&source.url, &name, still, position, duration);
+        let name = source
+            .file_name()
+            .unwrap_or_else(|| self.state.title.clone());
+        self.db.remember(
+            &source.url,
+            &name,
+            still,
+            if self.state.preferences.remember_position {
+                position
+            } else {
+                0.0
+            },
+            duration,
+        );
         self.saved_at = position;
+        #[cfg(feature = "bern-module-anime")]
         erika_anime_protocol::anime::calls::history_changed();
+        #[cfg(feature = "bern-module-library")]
         erika_library_protocol::library::calls::history_changed();
     }
 

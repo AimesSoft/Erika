@@ -12,7 +12,13 @@ fn ends_number(c: Option<&char>) -> bool {
 /// such as 1080p are no episodes.
 pub fn episode_number(name: &str) -> Option<i64> {
     let stem = match name.rsplit_once('.') {
-        Some((stem, extension)) if !extension.is_empty() && extension.len() <= 5 && extension.chars().all(|c| c.is_ascii_alphanumeric()) => stem,
+        Some((stem, extension))
+            if !extension.is_empty()
+                && extension.len() <= 5
+                && extension.chars().all(|c| c.is_ascii_alphanumeric()) =>
+        {
+            stem
+        }
         _ => name,
     };
     let chars: Vec<char> = stem.chars().collect();
@@ -21,7 +27,11 @@ pub fn episode_number(name: &str) -> Option<i64> {
         if !chars[start].is_ascii_digit() || (start > 0 && chars[start - 1].is_ascii_digit()) {
             continue;
         }
-        let end = start + chars[start..].iter().take_while(|c| c.is_ascii_digit()).count();
+        let end = start
+            + chars[start..]
+                .iter()
+                .take_while(|c| c.is_ascii_digit())
+                .count();
         if end - start > 4 || !ends_number(chars.get(end)) {
             continue;
         }
@@ -33,12 +43,26 @@ pub fn episode_number(name: &str) -> Option<i64> {
         }
         let before = &chars[..start];
         let last = before.last().copied();
-        let dash = last == Some('-') || (last.is_some_and(char::is_whitespace) && before.len() >= 2 && before[before.len() - 2] == '-');
+        let dash = last == Some('-')
+            || (last.is_some_and(char::is_whitespace)
+                && before.len() >= 2
+                && before[before.len() - 2] == '-');
         let marked = matches!(last, Some('[' | '【' | '第' | '#'));
         let episode_letter = {
-            let letters: String = before.iter().rev().take_while(|c| c.is_ascii_alphabetic()).collect::<Vec<_>>().into_iter().rev().collect();
-            let ahead = before.len().checked_sub(letters.len() + 1).map(|at| before[at]);
-            matches!(letters.to_ascii_lowercase().as_str(), "e" | "ep") && ahead.is_none_or(|c| !c.is_alphabetic())
+            let letters: String = before
+                .iter()
+                .rev()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            let ahead = before
+                .len()
+                .checked_sub(letters.len() + 1)
+                .map(|at| before[at]);
+            matches!(letters.to_ascii_lowercase().as_str(), "e" | "ep")
+                && ahead.is_none_or(|c| !c.is_alphabetic())
         };
         if dash || marked || episode_letter {
             return Some(number);
@@ -65,9 +89,18 @@ pub fn search_words(name: &str) -> String {
         }
     }
     let words: Vec<&str> = text.split_whitespace().collect();
-    let cut = words.iter().position(|word| *word == "-" || word.chars().all(|c| c.is_ascii_digit()) || word.starts_with('第')).unwrap_or(words.len());
+    let cut = words
+        .iter()
+        .position(|word| {
+            *word == "-" || word.chars().all(|c| c.is_ascii_digit()) || word.starts_with('第')
+        })
+        .unwrap_or(words.len());
     let kept = words[..cut].join(" ");
-    if kept.is_empty() { text.split_whitespace().collect::<Vec<_>>().join(" ") } else { kept }
+    if kept.is_empty() {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    } else {
+        kept
+    }
 }
 
 #[cfg(test)]
@@ -99,8 +132,14 @@ mod tests {
 
     #[test]
     fn search_words_drop_groups_numbers_and_tags() {
-        assert_eq!(search_words("[Sakura] Sousou no Frieren S2 - 01 [1080p].mkv"), "Sousou no Frieren S2");
-        assert_eq!(search_words("[ANi] Jigokuraku - 13 [1080P][Baha].mp4"), "Jigokuraku");
+        assert_eq!(
+            search_words("[Sakura] Sousou no Frieren S2 - 01 [1080p].mkv"),
+            "Sousou no Frieren S2"
+        );
+        assert_eq!(
+            search_words("[ANi] Jigokuraku - 13 [1080P][Baha].mp4"),
+            "Jigokuraku"
+        );
         assert_eq!(search_words("地狱乐 S2"), "地狱乐 S2");
     }
 }

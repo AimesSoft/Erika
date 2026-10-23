@@ -62,13 +62,28 @@ struct Space {
 pub fn lay_out(shows: &[(f64, &Broadcast)], now_hour: f64) -> Timeline {
     let mut groups: Vec<(f64, AiringGroup)> = Vec::new();
     for (hour, show) in shows {
-        let airing = Airing { id: show.id, title: show.title.clone(), poster: show.poster.clone(), aired: show.aired };
+        let airing = Airing {
+            id: show.id,
+            title: show.title.clone(),
+            poster: show.poster.clone(),
+            aired: show.aired,
+        };
         match groups.last_mut() {
             Some((_, group)) if group.time == show.time => {
                 group.aired &= show.aired;
                 group.shows.push(airing);
             }
-            _ => groups.push((*hour, AiringGroup { time: show.time, aired: show.aired, shows: vec![airing], width: 0.0, at: 0.0, span: 0.0 })),
+            _ => groups.push((
+                *hour,
+                AiringGroup {
+                    time: show.time,
+                    aired: show.aired,
+                    shows: vec![airing],
+                    width: 0.0,
+                    at: 0.0,
+                    span: 0.0,
+                },
+            )),
         }
     }
     for (_, group) in &mut groups {
@@ -77,27 +92,49 @@ pub fn lay_out(shows: &[(f64, &Broadcast)], now_hour: f64) -> Timeline {
         group.span = group.width - CARD;
     }
     let (Some(&(first, _)), Some(&(last, _))) = (groups.first(), groups.last()) else {
-        return Timeline { groups: Vec::new(), breaks: Vec::new(), now_at: 0.0, width: FLOOR, wide: FLOOR_WIDE };
+        return Timeline {
+            groups: Vec::new(),
+            breaks: Vec::new(),
+            now_at: 0.0,
+            width: FLOOR,
+            wide: FLOOR_WIDE,
+        };
     };
 
     // The space before each group, then after the last.
     let mut spaces: Vec<Space> = Vec::with_capacity(groups.len() + 1);
     spaces.push(if now_hour < first {
-        Space { length: NOW_BEFORE, share: (first - now_hour).min(SHARE_EDGE_HOURS) }
+        Space {
+            length: NOW_BEFORE,
+            share: (first - now_hour).min(SHARE_EDGE_HOURS),
+        }
     } else {
-        Space { length: 0.0, share: 0.0 }
+        Space {
+            length: 0.0,
+            share: 0.0,
+        }
     });
     for pair in groups.windows(2) {
         let hours = pair[1].0 - pair[0].0;
-        spaces.push(Space { length: (hours * 60.0 * GAP_PER_MINUTE).clamp(GAP_MIN, GAP_MAX), share: hours.min(SHARE_HOURS) });
+        spaces.push(Space {
+            length: (hours * 60.0 * GAP_PER_MINUTE).clamp(GAP_MIN, GAP_MAX),
+            share: hours.min(SHARE_HOURS),
+        });
     }
     spaces.push(if now_hour >= last {
-        Space { length: NOW_AFTER, share: (now_hour - last).min(SHARE_EDGE_HOURS) }
+        Space {
+            length: NOW_AFTER,
+            share: (now_hour - last).min(SHARE_EDGE_HOURS),
+        }
     } else {
-        Space { length: 0.0, share: 0.0 }
+        Space {
+            length: 0.0,
+            share: 0.0,
+        }
     });
 
-    let natural: f64 = groups.iter().map(|(_, group)| group.width).sum::<f64>() + spaces.iter().map(|space| space.length).sum::<f64>();
+    let natural: f64 = groups.iter().map(|(_, group)| group.width).sum::<f64>()
+        + spaces.iter().map(|space| space.length).sum::<f64>();
     let width = natural.max(FLOOR);
     let left_over = width - natural;
     let shares: f64 = spaces.iter().map(|space| space.share).sum();
@@ -129,12 +166,18 @@ pub fn lay_out(shows: &[(f64, &Broadcast)], now_hour: f64) -> Timeline {
                     now = Some(x + NOW_CLEARANCE + room * (now_hour - hour) / (next - hour));
                 }
                 if next - hour > BREAK_HOURS {
-                    breaks.push(TimelineBreak { after: time, at: (x + (after.length - BREAK_MARK) / 2.0) / width });
+                    breaks.push(TimelineBreak {
+                        after: time,
+                        at: (x + (after.length - BREAK_MARK) / 2.0) / width,
+                    });
                 }
             }
             None if now.is_none() => {
                 let room = (after.length - NOW_AFTER).max(0.0);
-                now = Some(x + NOW_CLEARANCE + room * (now_hour - hour).min(SHARE_EDGE_HOURS) / SHARE_EDGE_HOURS);
+                now = Some(
+                    x + NOW_CLEARANCE
+                        + room * (now_hour - hour).min(SHARE_EDGE_HOURS) / SHARE_EDGE_HOURS,
+                );
             }
             None => {}
         }
@@ -156,37 +199,76 @@ mod tests {
 
     fn show(id: i64, hour: f64, now: f64) -> (f64, Broadcast) {
         let time = ((hour * 3600.0).round() as i64) % 86_400;
-        (hour, Broadcast { id, title: format!("{id}"), poster: MediaSource::new(""), time, timed: true, episode: 1, aired: hour <= now, tonight: true })
+        (
+            hour,
+            Broadcast {
+                id,
+                title: format!("{id}"),
+                poster: MediaSource::new(""),
+                time,
+                timed: true,
+                episode: 1,
+                aired: hour <= now,
+                tonight: true,
+            },
+        )
     }
 
     fn lay(hours: &[f64], now: f64) -> Timeline {
-        let shows: Vec<(f64, Broadcast)> = hours.iter().enumerate().map(|(id, hour)| show(id as i64, *hour, now)).collect();
-        let shows: Vec<(f64, &Broadcast)> = shows.iter().map(|(hour, show)| (*hour, show)).collect();
+        let shows: Vec<(f64, Broadcast)> = hours
+            .iter()
+            .enumerate()
+            .map(|(id, hour)| show(id as i64, *hour, now))
+            .collect();
+        let shows: Vec<(f64, &Broadcast)> =
+            shows.iter().map(|(hour, show)| (*hour, show)).collect();
         lay_out(&shows, now)
     }
 
     /// The groups' edges in points, leading and trailing.
     fn edges(timeline: &Timeline) -> Vec<(f64, f64)> {
-        timeline.groups.iter().map(|group| (group.at * timeline.width, group.at * timeline.width + group.width)).collect()
+        timeline
+            .groups
+            .iter()
+            .map(|group| {
+                (
+                    group.at * timeline.width,
+                    group.at * timeline.width + group.width,
+                )
+            })
+            .collect()
     }
 
     #[test]
     fn a_crowded_saturday_scrolls_with_nothing_overlapping() {
         // Saturday's fifteen shows of the season, 22:40 now.
-        let hours = [8.5, 15.48, 17.42, 21.0, 21.5, 22.0, 22.42, 22.5, 22.5, 22.75, 23.0, 23.5, 23.92, 24.0, 24.5];
+        let hours = [
+            8.5, 15.48, 17.42, 21.0, 21.5, 22.0, 22.42, 22.5, 22.5, 22.75, 23.0, 23.5, 23.92, 24.0,
+            24.5,
+        ];
         let timeline = lay(&hours, 22.67);
         assert_eq!(timeline.groups.len(), 14);
         assert_eq!(timeline.groups[7].shows.len(), 2);
-        assert_eq!((timeline.groups[7].width, timeline.groups[7].span), (184.0, 96.0));
+        assert_eq!(
+            (timeline.groups[7].width, timeline.groups[7].span),
+            (184.0, 96.0)
+        );
         assert_eq!(timeline.groups[6].span, 0.0);
         assert!(timeline.width > FLOOR);
         let edges = edges(&timeline);
-        assert!(edges.windows(2).all(|pair| pair[1].0 - pair[0].1 >= GAP_MIN - 1e-9));
+        assert!(
+            edges
+                .windows(2)
+                .all(|pair| pair[1].0 - pair[0].1 >= GAP_MIN - 1e-9)
+        );
         // Two breaks: after the morning show, and after 17:25.
         assert_eq!(timeline.breaks.len(), 2);
         // "Now" between 22:30 and 22:45, clear of both.
         let now = timeline.now_at * timeline.width;
-        assert!(now >= edges[7].1 + NOW_CLEARANCE - 1e-9 && now + NOW_BAR <= edges[8].0 - NOW_CLEARANCE + 1e-9);
+        assert!(
+            now >= edges[7].1 + NOW_CLEARANCE - 1e-9
+                && now + NOW_BAR <= edges[8].0 - NOW_CLEARANCE + 1e-9
+        );
         assert!(timeline.groups[7].aired && !timeline.groups[8].aired);
     }
 
@@ -205,7 +287,10 @@ mod tests {
     #[test]
     fn now_before_the_first_or_after_the_last_has_room() {
         let early = lay(&[21.0, 22.0], 10.0);
-        assert!(early.now_at * early.width + NOW_BAR <= early.groups[0].at * early.width - NOW_CLEARANCE + 1e-9);
+        assert!(
+            early.now_at * early.width + NOW_BAR
+                <= early.groups[0].at * early.width - NOW_CLEARANCE + 1e-9
+        );
         let late = lay(&[21.0, 22.0], 28.0);
         let last = &late.groups[1];
         let now = late.now_at * late.width;

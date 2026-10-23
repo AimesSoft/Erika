@@ -48,8 +48,13 @@ impl TaskFile {
 
     /// Whether the player can play it, by its extension.
     pub fn is_video(&self) -> bool {
-        const VIDEO: &[&str] = &["mkv", "mp4", "m4v", "mov", "avi", "webm", "flv", "f4v", "ts", "m2ts", "mts", "wmv", "rmvb", "rm", "mpg", "mpeg", "3gp", "ogv", "vob"];
-        self.name().rsplit_once('.').is_some_and(|(_, extension)| VIDEO.contains(&extension.to_ascii_lowercase().as_str()))
+        const VIDEO: &[&str] = &[
+            "mkv", "mp4", "m4v", "mov", "avi", "webm", "flv", "f4v", "ts", "m2ts", "mts", "wmv",
+            "rmvb", "rm", "mpg", "mpeg", "3gp", "ogv", "vob",
+        ];
+        self.name()
+            .rsplit_once('.')
+            .is_some_and(|(_, extension)| VIDEO.contains(&extension.to_ascii_lowercase().as_str()))
     }
 }
 
@@ -93,7 +98,10 @@ pub struct Preview {
 /// systems refuse, the extension, dots and spaces at its ends. `None` when
 /// nothing is left.
 pub fn folder_name(name: &str) -> Option<String> {
-    let stem = Path::new(name).file_stem().and_then(|stem| stem.to_str()).unwrap_or(name);
+    let stem = Path::new(name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(name);
     let clean: String = stem
         .chars()
         .map(|c| match c {
@@ -112,7 +120,9 @@ pub fn is_magnet(link: &str) -> bool {
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "tvos")))]
-pub use engine::{add, delete, files, forget, pause, preview_file, preview_link, resume, start, stream_url, tasks};
+pub use engine::{
+    add, delete, files, forget, pause, preview_file, preview_link, resume, start, stream_url, tasks,
+};
 
 /// Whether downloads run here.
 pub fn available() -> bool {

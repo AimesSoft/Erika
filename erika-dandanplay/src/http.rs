@@ -29,7 +29,13 @@ pub(crate) fn send(
     let agent = agent();
     let first = PREFERRED.load(Ordering::Relaxed) % GATEWAYS.len();
     let mut last = Error::new("连不上弹弹play");
-    for step in 0..GATEWAYS.len() {
+    // Posting a comment is not idempotent. A timeout may already have posted it.
+    let attempts = if method == "POST" && path.starts_with("/api/v2/comment/") {
+        1
+    } else {
+        GATEWAYS.len()
+    };
+    for step in 0..attempts {
         let index = (first + step) % GATEWAYS.len();
         let url = format!("{}{path}{query}", GATEWAYS[index]);
         match attempt(&agent, method, &url, path, body.as_ref(), token) {
@@ -39,7 +45,9 @@ pub(crate) fn send(
             }
             // The gateway itself failed: try the next.
             Ok(None) => last = Error::new("弹弹play的网关暂时不可用"),
-            Err(Failure::Network(message)) => last = Error::new(format!("连不上弹弹play：{message}")),
+            Err(Failure::Network(message)) => {
+                last = Error::new(format!("连不上弹弹play：{message}"))
+            }
             Err(Failure::Answer(error)) => return Err(error),
         }
     }

@@ -1,19 +1,22 @@
 //! Desktop search palette, measured from design/next-screens.js and next.css.
-use crate::{AppWindows, ErikaDraft, MainPage};
+#[cfg(feature = "bern-module-anime")]
+use crate::MainPage;
+use crate::{AppWindows, ErikaDraft};
 use bern::prelude::*;
+#[cfg(feature = "bern-module-anime")]
 use erika_anime_protocol::anime;
 use erika_protocol::erika::{self, Appearance};
 
 #[component]
 pub fn search_results(
     app: erika::Client,
-    anime: anime::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
     windows: AppWindows,
     #[session] draft: ErikaDraft,
 ) -> impl View {
     ui! {
         Query(id: commands, query: app.search_actions(draft.query)) |actions| {
-            if app.features.anime {
+            if (build.modules.anime && app.features.anime) {
               Query(id: shows, query: anime.search(draft.query)) |found| {
                 Column(gap: 0) {
                     if found.has_shows {
@@ -95,7 +98,7 @@ pub fn search_commands(
                     SearchItem(id: danmaku, label: tr! { "zh-Hans" => "弹幕不透明度", "en" => "Danmaku Opacity" }, icon: "text.bubble", detail: tr! { "zh-Hans" => "设置 › 弹幕", "en" => "Settings › Danmaku" }) => windows.settings.open()
                 }
                 if actions.skip_intro {
-                    SearchItem(id: skip_intro, label: tr! { "zh-Hans" => "跳过片头秒数", "en" => "Skip Intro Seconds" }, icon: "play", detail: tr! { "zh-Hans" => "设置 › 播放", "en" => "Settings › Playback" }) => windows.settings.open()
+                    SearchItem(id: skip_intro, label: tr! { "zh-Hans" => "片头／片尾跳过提示", "en" => "Opening / Ending Skip Hint" }, icon: "play", detail: tr! { "zh-Hans" => "设置 › 播放", "en" => "Settings › Playback" }) => windows.settings.open()
                 }
                 if actions.optional {
                     SearchItem(id: optional, label: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, icon: "square.grid.2x2", detail: tr! { "zh-Hans" => "设置", "en" => "Settings" }) => windows.settings.open()
@@ -117,7 +120,7 @@ pub fn search_commands(
                 if actions.open_file && !window.tv {
                     SearchItem(id: open_file, label: tr! { "zh-Hans" => "打开文件…", "en" => "Open File…" }, icon: "folder", hint: tr! { "zh-Hans" => "⌘O", "en" => "⌘O" }, pick: draft.file, files: "video") => app.open_file(draft.file)
                 }
-                if actions.schedule {
+                if build.modules.anime && actions.schedule {
                     SearchItem(id: schedule, label: tr! { "zh-Hans" => "新番表", "en" => "Airing Schedule" }, icon: "calendar") => draft.page.set(MainPage::New)
                 }
                 if actions.dark {
