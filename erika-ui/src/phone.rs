@@ -12,7 +12,7 @@ use bern::prelude::*;
 use erika_anime_protocol::anime::{self, BackTo};
 #[cfg(feature = "bern-module-anime")]
 use erika_anime_ui::{details, details_props};
-use erika_protocol::erika::{self, SettingsPage};
+use erika_protocol::erika::{self, SettingResult, SettingsPage};
 
 /// The phone's settings (`phStack`): closed or open over the current tab,
 /// and the sections their navigation stack pushes over the list.
@@ -291,159 +291,159 @@ pub fn phone_settings(
             // Each page stands on the phone's page: the navigation stack
             // would show its own white behind the rows.
             Stack(variant: phone_page, align: top_leading) {
-                // `.c-list`s 2 points apart, their rows (`.c-li`) at least 44 tall,
-                // 6 and 14 inside.
-                Form(title: tr! { "zh-Hans" => "设置", "en" => "Settings" }, appear: page_in, gap: 2, row_height: 44) {
-                    // `.ph-acct`: the account, its picture 40 points across; it
-                    // opens the account's form.
+                // The system's own settings: groups the platform's distance
+                // apart, rows 52 tall with 30-point icons and 17-point words.
+                Form(title: tr! { "zh-Hans" => "设置", "en" => "Settings" }, appear: page_in, row_height: 52) {
+                    // The account, its picture 60 points across; it opens the
+                    // account's form.
                     if build.modules.account && app.features.account {
-                    Section(padding_x: 14, padding_y: 6) {
+                    Section(padding_x: 14, padding_y: 11) {
                         NavLink(id: settings_account, route: PhoneSettings::Account) {
-                            Row(gap: 12, align: center) {
+                            Row(gap: 14, align: center) {
                                 phone_account_picture(app: app)
-                                Column(gap: 1) {
-                                    Text(content: app.user_name, font_size: 13, line_height: 18, lines: 1)
-                                    Text(content: app.user_account, style: caption, emphasis: secondary, line_height: 15)
+                                Column(gap: 2) {
+                                    Text(content: app.user_name, style: title3, lines: 1)
+                                    Text(content: app.user_account, font_size: 15, line_height: 20, emphasis: secondary, lines: 1)
                                 }
                             }
                         }
                     }
                     }
-                    Section(padding_x: 14, padding_y: 6) {
+                    Section(padding_x: 14, padding_y: 11) {
                         NavLink(id: settings_general, route: PhoneSettings::General) {
-                            Row(gap: 12, align: center) {
-                                Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                    Label(title: tr! { "zh-Hans" => "通用", "en" => "General" }, icon: "gearshape", display: icon, font_size: 15)
+                            Row(gap: 14, align: center) {
+                                Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                    Label(title: tr! { "zh-Hans" => "通用", "en" => "General" }, icon: "gearshape", display: icon, font_size: 17)
                                 }
-                                Text(content: tr! { "zh-Hans" => "通用", "en" => "General" }, font_size: 13, line_height: 18)
+                                Text(content: tr! { "zh-Hans" => "通用", "en" => "General" }, font_size: 17, line_height: 22)
                             }
                         }
                         NavLink(id: settings_appearance, route: PhoneSettings::Appearance) {
-                            Row(gap: 12, align: center) {
-                                Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                    Label(title: tr! { "zh-Hans" => "外观", "en" => "Appearance" }, icon: "paintpalette", display: icon, font_size: 15)
+                            Row(gap: 14, align: center) {
+                                Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                    Label(title: tr! { "zh-Hans" => "外观", "en" => "Appearance" }, icon: "paintpalette", display: icon, font_size: 17)
                                 }
-                                Text(content: tr! { "zh-Hans" => "外观", "en" => "Appearance" }, font_size: 13, line_height: 18)
+                                Text(content: tr! { "zh-Hans" => "外观", "en" => "Appearance" }, font_size: 17, line_height: 22)
                             }
                         }
                         NavLink(id: settings_player, route: PhoneSettings::Player) {
-                            Row(gap: 12, align: center) {
-                                Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                    Label(title: tr! { "zh-Hans" => "播放", "en" => "Playback" }, icon: "play", display: icon, font_size: 15)
+                            Row(gap: 14, align: center) {
+                                Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                    Label(title: tr! { "zh-Hans" => "播放", "en" => "Playback" }, icon: "play", display: icon, font_size: 17)
                                 }
-                                Text(content: tr! { "zh-Hans" => "播放", "en" => "Playback" }, font_size: 13, line_height: 18)
+                                Text(content: tr! { "zh-Hans" => "播放", "en" => "Playback" }, font_size: 17, line_height: 22)
                             }
                         }
                         if (build.modules.danmaku && app.features.danmaku) {
                             NavLink(id: settings_danmaku, route: PhoneSettings::Danmaku) {
-                                Row(gap: 12, align: center) {
-                                    Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                        Label(title: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, icon: "text.bubble", display: icon, font_size: 15)
+                                Row(gap: 14, align: center) {
+                                    Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                        Label(title: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, icon: "text.bubble", display: icon, font_size: 17)
                                     }
-                                    Text(content: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, font_size: 13, line_height: 18)
+                                    Text(content: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, font_size: 17, line_height: 22)
                                 }
                             }
                         }
                         if (build.modules.library && app.features.library) {
                             NavLink(id: settings_library, route: PhoneSettings::Library) {
-                                Row(gap: 12, align: center) {
-                                    Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                        Label(title: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "film.stack", display: icon, font_size: 15)
+                                Row(gap: 14, align: center) {
+                                    Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                        Label(title: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "film.stack", display: icon, font_size: 17)
                                     }
-                                    Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, font_size: 13, line_height: 18)
+                                    Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, font_size: 17, line_height: 22)
                                 }
                             }
                         }
                         if (build.modules.anime && app.features.anime) {
                             NavLink(id: settings_anime, route: PhoneSettings::Anime) {
-                                Row(gap: 12, align: center) {
-                                    Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                        Label(title: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, icon: "calendar", display: icon, font_size: 15)
+                                Row(gap: 14, align: center) {
+                                    Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                        Label(title: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, icon: "calendar", display: icon, font_size: 17)
                                     }
-                                    Text(content: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, font_size: 13, line_height: 18)
+                                    Text(content: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, font_size: 17, line_height: 22)
                                 }
                             }
                         }
                         if (build.modules.sync && app.features.sync) {
                             NavLink(id: settings_sync, route: PhoneSettings::Sync) {
-                                Row(gap: 12, align: center) {
-                                    Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                        Label(title: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, icon: "arrow.triangle.2.circlepath", display: icon, font_size: 15)
+                                Row(gap: 14, align: center) {
+                                    Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                        Label(title: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, icon: "arrow.triangle.2.circlepath", display: icon, font_size: 17)
                                     }
-                                    Text(content: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, font_size: 13, line_height: 18)
+                                    Text(content: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, font_size: 17, line_height: 22)
                                 }
                             }
                         }
                         if (build.modules.sources && app.features.sources) {
                             NavLink(id: settings_sources, route: PhoneSettings::Sources) {
-                                Row(gap: 12, align: center) {
-                                    Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                        Label(title: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, icon: "server.rack", display: icon, font_size: 15)
+                                Row(gap: 14, align: center) {
+                                    Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                        Label(title: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, icon: "server.rack", display: icon, font_size: 17)
                                     }
-                                    Text(content: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, font_size: 13, line_height: 18)
+                                    Text(content: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, font_size: 17, line_height: 22)
                                 }
                             }
                         }
                         if (build.modules.remote && app.features.remote) {
                             NavLink(id: settings_remote, route: PhoneSettings::Remote) {
-                                Row(gap: 12, align: center) {
-                                    Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                        Label(title: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, icon: "wifi", display: icon, font_size: 15)
+                                Row(gap: 14, align: center) {
+                                    Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                        Label(title: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, icon: "wifi", display: icon, font_size: 17)
                                     }
-                                    Text(content: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, font_size: 13, line_height: 18)
+                                    Text(content: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, font_size: 17, line_height: 22)
                                 }
                             }
                         }
                         if (build.modules.downloads && app.features.downloads) {
                             NavLink(id: settings_downloads, route: PhoneSettings::Downloads) {
-                                Row(gap: 12, align: center) {
-                                    Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                        Label(title: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, icon: "arrow.down.circle", display: icon, font_size: 15)
+                                Row(gap: 14, align: center) {
+                                    Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                        Label(title: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, icon: "arrow.down.circle", display: icon, font_size: 17)
                                     }
-                                    Text(content: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, font_size: 13, line_height: 18)
+                                    Text(content: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, font_size: 17, line_height: 22)
                                 }
                             }
                         }
                         if (build.modules.enhance && app.features.enhance) {
                             NavLink(id: settings_enhance, route: PhoneSettings::Enhance) {
-                                Row(gap: 12, align: center) {
-                                    Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                        Label(title: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, icon: "sparkles", display: icon, font_size: 15)
+                                Row(gap: 14, align: center) {
+                                    Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                        Label(title: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, icon: "sparkles", display: icon, font_size: 17)
                                     }
-                                    Text(content: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, font_size: 13, line_height: 18)
+                                    Text(content: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, font_size: 17, line_height: 22)
                                 }
                             }
                         }
                         NavLink(id: settings_optional, route: PhoneSettings::Optional) {
-                            Row(gap: 12, align: center) {
-                                Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                    Label(title: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, icon: "square.grid.2x2", display: icon, font_size: 15)
+                            Row(gap: 14, align: center) {
+                                Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                    Label(title: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, icon: "square.grid.2x2", display: icon, font_size: 17)
                                 }
-                                Text(content: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, font_size: 13, line_height: 18)
+                                Text(content: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, font_size: 17, line_height: 22)
                             }
                         }
                         NavLink(id: settings_plugins, route: PhoneSettings::Plugins) {
-                            Row(gap: 12, align: center) {
-                                Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                    Label(title: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, icon: "puzzlepiece.extension", display: icon, font_size: 15)
+                            Row(gap: 14, align: center) {
+                                Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                    Label(title: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, icon: "puzzlepiece.extension", display: icon, font_size: 17)
                                 }
-                                Text(content: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, font_size: 13, line_height: 18)
+                                Text(content: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, font_size: 17, line_height: 22)
                             }
                         }
                         NavLink(id: settings_keys, route: PhoneSettings::Keys) {
-                            Row(gap: 12, align: center) {
-                                Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                    Label(title: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, icon: "keyboard", display: icon, font_size: 15)
+                            Row(gap: 14, align: center) {
+                                Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                    Label(title: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, icon: "keyboard", display: icon, font_size: 17)
                                 }
-                                Text(content: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, font_size: 13, line_height: 18)
+                                Text(content: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, font_size: 17, line_height: 22)
                             }
                         }
                         NavLink(id: settings_about, route: PhoneSettings::About) {
-                            Row(gap: 12, align: center) {
-                                Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                    Label(title: tr! { "zh-Hans" => "关于", "en" => "About" }, icon: "info.circle", display: icon, font_size: 15)
+                            Row(gap: 14, align: center) {
+                                Stack(variant: setting_icon, width: 30, height: 30, align: center) {
+                                    Label(title: tr! { "zh-Hans" => "关于", "en" => "About" }, icon: "info.circle", display: icon, font_size: 17)
                                 }
-                                Text(content: tr! { "zh-Hans" => "关于", "en" => "About" }, font_size: 13, line_height: 18)
+                                Text(content: tr! { "zh-Hans" => "关于", "en" => "About" }, font_size: 17, line_height: 22)
                             }
                         }
                     }
@@ -463,61 +463,61 @@ pub fn phone_settings(
                                 match result.page {
                                     SettingsPage::Account => {
                                         if build.modules.account && app.features.account {
-                                            NavLink(id: result_account, route: PhoneSettings::Account) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                            NavLink(id: result_account, route: PhoneSettings::Account) { phone_settings_hit(result: result) }
                                         }
                                     }
                                     SettingsPage::General => {
-                                        NavLink(id: result_general, route: PhoneSettings::General) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_general, route: PhoneSettings::General) { phone_settings_hit(result: result) }
                                     }
                                     SettingsPage::Appearance => {
-                                        NavLink(id: result_appearance, route: PhoneSettings::Appearance) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_appearance, route: PhoneSettings::Appearance) { phone_settings_hit(result: result) }
                                     }
                                     SettingsPage::Player => {
-                                        NavLink(id: result_player, route: PhoneSettings::Player) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_player, route: PhoneSettings::Player) { phone_settings_hit(result: result) }
                                     }
                                     #[cfg(feature = "bern-module-danmaku")]
                                     SettingsPage::Danmaku => {
-                                        NavLink(id: result_danmaku, route: PhoneSettings::Danmaku) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_danmaku, route: PhoneSettings::Danmaku) { phone_settings_hit(result: result) }
                                     }
                                     #[cfg(feature = "bern-module-library")]
                                     SettingsPage::Library => {
-                                        NavLink(id: result_library, route: PhoneSettings::Library) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_library, route: PhoneSettings::Library) { phone_settings_hit(result: result) }
                                     }
                                     #[cfg(feature = "bern-module-anime")]
                                     SettingsPage::Anime => {
-                                        NavLink(id: result_anime, route: PhoneSettings::Anime) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_anime, route: PhoneSettings::Anime) { phone_settings_hit(result: result) }
                                     }
                                     #[cfg(feature = "bern-module-sync")]
                                     SettingsPage::Sync => {
-                                        NavLink(id: result_sync, route: PhoneSettings::Sync) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_sync, route: PhoneSettings::Sync) { phone_settings_hit(result: result) }
                                     }
                                     #[cfg(feature = "bern-module-sources")]
                                     SettingsPage::Sources => {
-                                        NavLink(id: result_sources, route: PhoneSettings::Sources) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_sources, route: PhoneSettings::Sources) { phone_settings_hit(result: result) }
                                     }
                                     #[cfg(feature = "bern-module-remote")]
                                     SettingsPage::Remote => {
-                                        NavLink(id: result_remote, route: PhoneSettings::Remote) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_remote, route: PhoneSettings::Remote) { phone_settings_hit(result: result) }
                                     }
                                     #[cfg(feature = "bern-module-downloads")]
                                     SettingsPage::Downloads => {
-                                        NavLink(id: result_downloads, route: PhoneSettings::Downloads) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_downloads, route: PhoneSettings::Downloads) { phone_settings_hit(result: result) }
                                     }
                                     #[cfg(feature = "bern-module-enhance")]
                                     SettingsPage::Enhance => {
-                                        NavLink(id: result_enhance, route: PhoneSettings::Enhance) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_enhance, route: PhoneSettings::Enhance) { phone_settings_hit(result: result) }
                                     }
                                     SettingsPage::Optional => {
-                                        NavLink(id: result_optional, route: PhoneSettings::Optional) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_optional, route: PhoneSettings::Optional) { phone_settings_hit(result: result) }
                                     }
                                     SettingsPage::Plugins => {
-                                        NavLink(id: result_plugins, route: PhoneSettings::Plugins) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_plugins, route: PhoneSettings::Plugins) { phone_settings_hit(result: result) }
                                     }
                                     SettingsPage::Keys => {
-                                        NavLink(id: result_keys, route: PhoneSettings::Keys) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_keys, route: PhoneSettings::Keys) { phone_settings_hit(result: result) }
                                     }
                                     SettingsPage::About => {
-                                        NavLink(id: result_about, route: PhoneSettings::About) { Text(content: tr! { "zh-Hans" => "{item} · {page}", "en" => "{item} · {page}"; item: result.item, page: result.page }) }
+                                        NavLink(id: result_about, route: PhoneSettings::About) { phone_settings_hit(result: result) }
                                     }
                                     #[cfg(any(not(feature = "bern-module-danmaku"), not(feature = "bern-module-enhance"), not(feature = "bern-module-anime"), not(feature = "bern-module-library"), not(feature = "bern-module-sync"), not(feature = "bern-module-sources"), not(feature = "bern-module-remote"), not(feature = "bern-module-downloads")))]
                                     _ => {}
@@ -594,18 +594,30 @@ pub fn phone_scroll_header() -> impl View {
     }
 }
 
-/// `.ph-acct .x-av`: the account's picture at 40 points.
+/// A setting the search found: its name over the page it stands on, as
+/// the system's settings show what they find.
+#[component]
+pub fn phone_settings_hit(result: SettingResult) -> impl View {
+    ui! {
+        Column(gap: 2) {
+            Text(content: tr! { "zh-Hans" => "{item}", "en" => "{item}"; item: result.item }, font_size: 17, line_height: 22, lines: 1)
+            Text(content: tr! { "zh-Hans" => "{page}", "en" => "{page}"; page: result.page }, font_size: 13, line_height: 18, emphasis: secondary, lines: 1)
+        }
+    }
+}
+
+/// The account's picture at 60 points, as the system's settings show theirs.
 #[component]
 pub fn phone_account_picture(app: erika::Client) -> impl View {
     ui! {
-        Stack(variant: avatar, width: 40, height: 40) {
-            Canvas(width: 40, height: 40, label: tr! { "zh-Hans" => "头像", "en" => "Avatar" }) {
+        Stack(variant: avatar, width: 60, height: 60) {
+            Canvas(width: 60, height: 60, label: tr! { "zh-Hans" => "头像", "en" => "Avatar" }) {
                 Shape(kind: ellipse, fill: fill.strong)
-                Shape(kind: ellipse, x: 14.07, y: 10.07, width: 11.86, height: 11.86, fill: text.secondary, opacity: 0.5)
-                Shape(kind: ellipse, x: -4, y: 21.6, width: 48, height: 36.8, fill: text.secondary, opacity: 0.5)
+                Shape(kind: ellipse, x: 21.1, y: 15.1, width: 17.8, height: 17.8, fill: text.secondary, opacity: 0.5)
+                Shape(kind: ellipse, x: -6, y: 32.4, width: 72, height: 55.2, fill: text.secondary, opacity: 0.5)
             }
             if let Some(picture) = app.user_avatar {
-                Image(source: picture, width: 40, height: 40, corner: 20, fit: cover, label: app.user_name)
+                Image(source: picture, width: 60, height: 60, corner: 30, fit: cover, label: app.user_name)
             }
         }
     }
