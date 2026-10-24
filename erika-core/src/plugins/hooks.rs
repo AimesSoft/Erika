@@ -3,6 +3,8 @@
 
 use super::runtime::Purpose;
 use crate::ErikaEngine;
+use bern::media::MediaSource;
+use erika_protocol::erika::FolderSuggestion;
 use liberika_plugin::Comment;
 use serde_json::Value;
 
@@ -18,7 +20,58 @@ impl ErikaEngine {
         if let Some(error) = error {
             eprintln!("erika: plugin {id}: {error}");
         }
-        let _ = (purpose, value);
+        match purpose {
+            Purpose::Suggest(tag) if tag == self.plugins.suggesting => self.take_suggestions(value),
+            _ => {}
+        }
+    }
+
+    /// Ask the running plugins where the torrent `name` should go.
+    pub(crate) fn suggest_download_folders(&mut self, name: &str) {
+        self.plugins.next_tag += 1;
+        let tag = self.plugins.next_tag;
+        self.plugins.suggesting = tag;
+        self.state.download_suggestions.clear();
+        self.state.has_download_suggestions = false;
+        let torrent = serde_json::json!({ "name": name });
+        let ids: Vec<String> = self.plugins.running();
+        for id in ids {
+            let snapshot = self.plugin_snapshot(&id);
+            self.plugins.invoke(&id, "downloadSuggestions", Some(&torrent), &snapshot, tag, Purpose::Suggest(tag));
+        }
+    }
+
+    /// `[{ title, folder }]`: folders that exist, each once.
+    fn take_suggestions(&mut self, value: Option<Value>) {
+        let Some(list) = value.as_ref().and_then(Value::as_array) else {
+            return;
+        };
+        for item in list {
+            let title = item.get("title").and_then(Value::as_str).unwrap_or_default().trim();
+            let Some(folder) = item.get("folder").and_then(Value::as_str) else {
+                continue;
+            };
+            let path = std::path::Path::new(folder);
+            let known = self
+                .state
+                .download_suggestions
+                .iter()
+                .any(|suggestion| suggestion.id == folder);
+            if known || !path.is_dir() {
+                continue;
+            }
+            let title = if title.is_empty() {
+                path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
+            } else {
+                title.to_string()
+            };
+            self.state.download_suggestions.push(FolderSuggestion {
+                id: folder.to_string(),
+                title,
+                folder: MediaSource::file(path),
+            });
+        }
+        self.state.has_download_suggestions = !self.state.download_suggestions.is_empty();
     }
 
     /// Show the comments loaded again, through the plugins as they are now.

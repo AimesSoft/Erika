@@ -88,6 +88,7 @@ pub(crate) struct Extensions {
     pub colors: Vec<(String, String)>,
     pub hex_input: bool,
     pub watched_button: bool,
+    pub quick_select: bool,
 }
 
 /// An installed plugin.
@@ -130,6 +131,8 @@ pub(crate) struct Plugins {
     /// What each running plugin added to the controls.
     extensions: HashMap<String, Extensions>,
     next_tag: u64,
+    /// The download whose folders the plugins are asked for.
+    suggesting: u64,
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     processes: HashMap<String, std::process::Child>,
 }
@@ -152,6 +155,7 @@ impl Default for Plugins {
             later: HashMap::new(),
             extensions: HashMap::new(),
             next_tag: 1,
+            suggesting: 0,
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             processes: HashMap::new(),
         }
@@ -165,6 +169,20 @@ impl Plugins {
 
     fn find_mut(&mut self, id: &str) -> Option<&mut Installed> {
         self.installed.iter_mut().find(|plugin| plugin.pack.id == id)
+    }
+
+    /// The plugins whose contexts run.
+    fn running(&self) -> Vec<String> {
+        self.runtimes.keys().cloned().collect()
+    }
+
+    fn invoke(&mut self, id: &str, name: &str, arg: Option<&Value>, snapshot: &Value, tag: u64, purpose: Purpose) {
+        if let Some(runtime) = self.runtimes.get_mut(id) {
+            if tag != 0 {
+                self.later.insert(tag, purpose.clone());
+            }
+            runtime.invoke(name, arg, snapshot, tag, purpose);
+        }
     }
 
     fn enabled(&self, id: &str) -> bool {
@@ -194,6 +212,7 @@ impl Plugins {
             }
             all.hex_input |= extension.hex_input;
             all.watched_button |= extension.watched_button;
+            all.quick_select |= extension.quick_select;
         }
         all
     }
@@ -655,6 +674,10 @@ impl ErikaEngine {
                 self.plugins.extensions.entry(id.into()).or_default().hex_input = flag(0);
                 self.apply_extensions();
             }
+            "extendDownloadQuickSelect" if pack.has("library.read") => {
+                self.plugins.extensions.entry(id.into()).or_default().quick_select = flag(0);
+                self.apply_extensions();
+            }
             "extendWatchedButton" if pack.has("library.write") => {
                 self.plugins.extensions.entry(id.into()).or_default().watched_button = flag(0);
                 self.apply_extensions();
@@ -709,6 +732,7 @@ impl ErikaEngine {
     /// Show what the running plugins add to the controls.
     fn apply_extensions(&mut self) {
         self.show_speeds();
+        self.state.download_quick_select = self.plugins.extensions().quick_select;
         self.plugin_controls_changed();
     }
 
@@ -772,7 +796,7 @@ impl ErikaEngine {
             }
             return;
         }
-        if let Some(purpose) = self.plugins.later.remove(&tag) {
+        if let Some(purpose) = self.plugins.later.get(&tag).cloned() {
             self.plugin_hook_answered(id, purpose, value, error);
         }
     }

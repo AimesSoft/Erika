@@ -482,7 +482,10 @@ impl DownloadsEngine {
                 Done::Read(reading, from, result) if reading == self.reading => {
                     self.state.adding.reading = false;
                     match result {
-                        Ok(preview) => self.preview = Some((from, preview)),
+                        Ok(preview) => {
+                            downloads::emit::read(preview.name.clone());
+                            self.preview = Some((from, preview));
+                        }
                         Err(detail) => {
                             self.state.adding.problem = Some(AddProblem::Unreadable { detail })
                         }

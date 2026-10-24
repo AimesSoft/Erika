@@ -215,6 +215,9 @@ impl Default for ErikaEngine {
                 downloads_hidden: settings::downloader_hidden(),
                 plugins_starting: false,
                 speeds: Vec::new(),
+                download_quick_select: false,
+                download_suggestions: Vec::new(),
+                has_download_suggestions: false,
 
                 accent: Accent::Crimson,
                 appearance: Appearance::System,
@@ -518,6 +521,11 @@ impl erika::Commands for ErikaEngine {
     }
     fn plugins_tick(&mut self) -> Result<(), CommandError> {
         self.plugins_wake();
+        Ok(())
+    }
+    #[cfg(feature = "bern-module-downloads")]
+    fn download_read(&mut self, name: String) -> Result<(), CommandError> {
+        self.suggest_download_folders(&name);
         Ok(())
     }
     fn show_notice(&mut self, notice: Notice) -> Result<(), CommandError> {

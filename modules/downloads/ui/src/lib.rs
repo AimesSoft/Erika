@@ -3,6 +3,7 @@
 //! torrent first, as NipaPlay's downloader does, and asks where it goes.
 use bern::prelude::*;
 use erika_downloads_protocol::downloads::{self, DownloadTab};
+use erika_protocol::erika;
 
 #[bern::session]
 pub struct DownloadsDraft {
@@ -16,11 +17,11 @@ pub struct DownloadsDraft {
 /// Mounted everywhere: the clock that reads progress while something
 /// downloads, and what the downloads say.
 #[component]
-pub fn downloads_clock(downloads: downloads::Client) -> impl View {
+pub fn downloads_clock(app: erika::Client, downloads: downloads::Client) -> impl View {
     ui! {
         Stack {
             if downloads.adding.open {
-                download_add(downloads: downloads)
+                download_add(app: app, downloads: downloads)
             }
             Timer(interval: 1.0, enabled: downloads.running) => downloads.tick()
             if let Some(notice) = downloads.notice {
@@ -246,7 +247,7 @@ pub fn download_actions(downloads: downloads::Client, task: downloads::DownloadT
 /// Adding a task (`dladd`, NipaPlay's 添加磁力链接): a magnet link or a
 /// .torrent file, read to show what it holds, and the folder it goes to.
 #[component]
-pub fn download_add(downloads: downloads::Client, #[session] draft: DownloadsDraft) -> impl View {
+pub fn download_add(app: erika::Client, downloads: downloads::Client, #[session] draft: DownloadsDraft) -> impl View {
     ui! {
         Modal(width: 600, height: 600, cover: compact, appear: pop_in, disappear: fade) {
             ScrollView {
@@ -301,9 +302,15 @@ pub fn download_add(downloads: downloads::Client, #[session] draft: DownloadsDra
                             Button(id: choose_place, label: tr! { "zh-Hans" => "更改…", "en" => "Change…" }, shape: capsule, height: 28, pick: draft.place, files: "folder") => downloads.choose_place(draft.place)
                         }
                     }
-                    if downloads.adding.has_places {
+                    // Quick select, a plugin's: the folders used before, and those
+                    // of the library's shows the torrent's name matches.
+                    if app.download_quick_select && (downloads.adding.has_places || app.has_download_suggestions) {
+                        Text(content: tr! { "zh-Hans" => "快速选择", "en" => "Quick select" }, style: caption, emphasis: secondary)
                         ScrollView(axis: horizontal, indicators: hidden) {
                             Row(gap: 8, align: center) {
+                                ForEach(items: app.download_suggestions, key: id) |suggestion| {
+                                    Button(id: suggested_place, label: suggestion.title, icon: "film", shape: chip, height: 28, variant: library_chip) => downloads.choose_place(suggestion.folder)
+                                }
                                 ForEach(items: downloads.adding.places, key: id) |place| {
                                     if place.chosen {
                                         Button(id: place_chosen, label: place.name, icon: "checkmark", prominence: prominent, shape: chip, height: 28, variant: library_chip) => downloads.use_place(place.id)

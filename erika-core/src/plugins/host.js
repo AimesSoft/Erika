@@ -187,6 +187,14 @@ var extend = {
     __host.call('extendDanmakuHexInput', [enabled !== false]);
     return true;
   },
+  // Quick select where downloads are added: the folders used before,
+  // with those `pluginDownloadSuggestions({ name })` returns as
+  // [{ title, folder }].
+  downloadQuickSelect: function (enabled) {
+    if (!__host.has('library.read')) return false;
+    __host.call('extendDownloadQuickSelect', [enabled !== false]);
+    return true;
+  },
   // A button on each episode of a show's details that marks it watched.
   episodeWatchedButton: function (enabled) {
     if (!__host.has('library.write')) return false;

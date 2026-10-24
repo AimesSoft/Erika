@@ -130,6 +130,15 @@ pub mod erika {
         pub selected: bool,
     }
 
+    /// A folder a plugin suggests downloading into.
+    #[value]
+    pub struct FolderSuggestion {
+        pub id: String,
+        #[content]
+        pub title: String,
+        pub folder: MediaSource,
+    }
+
     #[value]
     pub enum DanmakuArea {
         #[label(tr! { "zh-Hans" => "半屏", "en" => "Half" })]
@@ -785,6 +794,11 @@ pub mod erika {
         pub plugins_starting: bool,
         /// The rates the speed menu offers.
         pub speeds: Vec<SpeedOption>,
+        /// A plugin shows quick select where downloads are added, with the
+        /// folders it suggests for the torrent read last.
+        pub download_quick_select: bool,
+        pub download_suggestions: Vec<FolderSuggestion>,
+        pub has_download_suggestions: bool,
         pub accent: Accent,
         pub appearance: Appearance,
         /// The version the app is, as Bern.toml names it.
@@ -995,6 +1009,11 @@ pub mod erika {
             source: MediaSource,
             downloading: bool,
         ) -> Result<(), CommandError>;
+
+        /// A torrent was read: plugins suggest folders for it.
+        #[cfg(feature = "bern-module-downloads")]
+        #[on(downloads::read)]
+        fn download_read(&mut self, name: String) -> Result<(), CommandError>;
 
         /// A download finished: its folder joins the library and is
         /// scanned.

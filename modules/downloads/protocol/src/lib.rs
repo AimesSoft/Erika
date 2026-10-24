@@ -189,6 +189,8 @@ pub mod downloads {
         fn play(&self, title: String, source: MediaSource, downloading: bool);
         /// A download finished in `folder`, which the library may scan.
         fn finished(&self, folder: MediaSource);
+        /// A torrent was read: its name, for suggesting where it goes.
+        fn read(&self, name: String);
     }
 
     #[commands]
