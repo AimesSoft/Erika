@@ -80,6 +80,16 @@ impl Saved {
     }
 }
 
+/// What a running plugin added to Erika's controls (`extend`).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(crate) struct Extensions {
+    pub speeds: Vec<f64>,
+    /// Names and `#RRGGBB` colors for sending danmaku.
+    pub colors: Vec<(String, String)>,
+    pub hex_input: bool,
+    pub watched_button: bool,
+}
+
 /// An installed plugin.
 struct Installed {
     pack: Pack,
@@ -117,6 +127,8 @@ pub(crate) struct Plugins {
     open: Option<String>,
     /// What handlers' promises answer, by their tags.
     later: HashMap<u64, Purpose>,
+    /// What each running plugin added to the controls.
+    extensions: HashMap<String, Extensions>,
     next_tag: u64,
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     processes: HashMap<String, std::process::Child>,
@@ -138,6 +150,7 @@ impl Default for Plugins {
             filters: Vec::new(),
             open: None,
             later: HashMap::new(),
+            extensions: HashMap::new(),
             next_tag: 1,
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             processes: HashMap::new(),
@@ -167,6 +180,22 @@ impl Plugins {
             .flat_map(|plugin| plugin.block_words.iter().cloned())
             .chain(self.filters.iter().cloned())
             .collect()
+    }
+
+    /// What the running plugins added to the controls, together.
+    pub(crate) fn extensions(&self) -> Extensions {
+        let mut all = Extensions::default();
+        for extension in self.extensions.values() {
+            all.speeds.extend(&extension.speeds);
+            for color in &extension.colors {
+                if !all.colors.contains(color) {
+                    all.colors.push(color.clone());
+                }
+            }
+            all.hex_input |= extension.hex_input;
+            all.watched_button |= extension.watched_button;
+        }
+        all
     }
 
     /// The section account sync keeps of the plugins: which are on, their
@@ -338,6 +367,9 @@ impl ErikaEngine {
             runtime.invoke("onDestroy", None, &Value::Null, 0, Purpose::Event);
         }
         self.stop_process(id);
+        if self.plugins.extensions.remove(id).is_some() {
+            self.apply_extensions();
+        }
         if let Some(plugin) = self.plugins.find_mut(id) {
             plugin.loaded = false;
             plugin.entries.clear();
@@ -586,6 +618,47 @@ impl ErikaEngine {
                     flag(2),
                 );
             }
+            "extendSpeeds" if pack.has("player.control") => {
+                let speeds = args
+                    .first()
+                    .and_then(Value::as_array)
+                    .map(|list| {
+                        list.iter()
+                            .filter_map(Value::as_f64)
+                            .filter(|rate| (0.0625..=16.0).contains(rate))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.plugins.extensions.entry(id.into()).or_default().speeds = speeds;
+                self.apply_extensions();
+            }
+            "extendDanmakuColors" if pack.has("danmaku.modify") => {
+                let colors = args
+                    .first()
+                    .and_then(Value::as_array)
+                    .map(|list| {
+                        list.iter()
+                            .filter_map(|color| {
+                                let hex = text_of(color, "color");
+                                let valid = hex.len() == 7
+                                    && hex.starts_with('#')
+                                    && hex[1..].chars().all(|c| c.is_ascii_hexdigit());
+                                valid.then(|| (text_of(color, "name"), hex.to_ascii_uppercase()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.plugins.extensions.entry(id.into()).or_default().colors = colors;
+                self.apply_extensions();
+            }
+            "extendDanmakuHexInput" if pack.has("danmaku.modify") => {
+                self.plugins.extensions.entry(id.into()).or_default().hex_input = flag(0);
+                self.apply_extensions();
+            }
+            "extendWatchedButton" if pack.has("library.write") => {
+                self.plugins.extensions.entry(id.into()).or_default().watched_button = flag(0);
+                self.apply_extensions();
+            }
             "__later" => self.plugin_later(id, args),
             _ => {}
         }
@@ -631,6 +704,12 @@ impl ErikaEngine {
             Call::ReplaceDanmaku(comments) => self.replace_plugin_danmaku(comments),
             _ => {}
         }
+    }
+
+    /// Show what the running plugins add to the controls.
+    fn apply_extensions(&mut self) {
+        self.show_speeds();
+        self.plugin_controls_changed();
     }
 
     /// Show the downloader where Erika hides it, or hide it again: the

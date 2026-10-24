@@ -676,54 +676,16 @@ pub fn player_speed_menu(app: erika::Client) -> impl View {
         Column(gap: 4, width: 180, padding: 8) {
             Text(content: tr! { "zh-Hans" => "播放速度", "en" => "Playback speed" }, style: title3)
             Canvas(height: 8)
-            Button(id: rate_half, label: tr! { "zh-Hans" => "0.5×", "en" => "0.5×" }, variant: player_picture) {
-                Row(height: 32, padding_x: 4) {
-                    Text(content: tr! { "zh-Hans" => "0.5×", "en" => "0.5×" }) Spacer
-                    if app.preferences.speed == PlaybackSpeed::Half {
-                        Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
+            ForEach(items: app.speeds, key: id) |speed| {
+                Button(id: rate_option, label: speed.label, variant: player_picture) {
+                    Row(height: 32, padding_x: 4) {
+                        Text(content: speed.label) Spacer
+                        if speed.selected {
+                            Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
+                        }
                     }
-                }
-            } => app.set_speed(PlaybackSpeed::Half)
-            Button(id: rate_slow, label: tr! { "zh-Hans" => "0.75×", "en" => "0.75×" }, variant: player_picture) {
-                Row(height: 32, padding_x: 4) {
-                    Text(content: tr! { "zh-Hans" => "0.75×", "en" => "0.75×" }) Spacer
-                    if app.preferences.speed == PlaybackSpeed::Slow {
-                        Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
-                    }
-                }
-            } => app.set_speed(PlaybackSpeed::Slow)
-            Button(id: rate_normal, label: tr! { "zh-Hans" => "1.0×", "en" => "1.0×" }, variant: player_picture) {
-                Row(height: 32, padding_x: 4) {
-                    Text(content: tr! { "zh-Hans" => "1.0×", "en" => "1.0×" }) Spacer
-                    if app.preferences.speed == PlaybackSpeed::Normal {
-                        Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
-                    }
-                }
-            } => app.set_speed(PlaybackSpeed::Normal)
-            Button(id: rate_fast, label: tr! { "zh-Hans" => "1.25×", "en" => "1.25×" }, variant: player_picture) {
-                Row(height: 32, padding_x: 4) {
-                    Text(content: tr! { "zh-Hans" => "1.25×", "en" => "1.25×" }) Spacer
-                    if app.preferences.speed == PlaybackSpeed::Fast {
-                        Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
-                    }
-                }
-            } => app.set_speed(PlaybackSpeed::Fast)
-            Button(id: rate_faster, label: tr! { "zh-Hans" => "1.5×", "en" => "1.5×" }, variant: player_picture) {
-                Row(height: 32, padding_x: 4) {
-                    Text(content: tr! { "zh-Hans" => "1.5×", "en" => "1.5×" }) Spacer
-                    if app.preferences.speed == PlaybackSpeed::Faster {
-                        Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
-                    }
-                }
-            } => app.set_speed(PlaybackSpeed::Faster)
-            Button(id: rate_double, label: tr! { "zh-Hans" => "2.0×", "en" => "2.0×" }, variant: player_picture) {
-                Row(height: 32, padding_x: 4) {
-                    Text(content: tr! { "zh-Hans" => "2.0×", "en" => "2.0×" }) Spacer
-                    if app.preferences.speed == PlaybackSpeed::Double {
-                        Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
-                    }
-                }
-            } => app.set_speed(PlaybackSpeed::Double)
+                } => app.set_rate(speed.rate)
+            }
         }
     }
 }

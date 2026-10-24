@@ -214,6 +214,7 @@ impl Default for ErikaEngine {
                 downloader_unlocked: false,
                 downloads_hidden: settings::downloader_hidden(),
                 plugins_starting: false,
+                speeds: Vec::new(),
 
                 accent: Accent::Crimson,
                 appearance: Appearance::System,
@@ -261,6 +262,7 @@ impl Default for ErikaEngine {
             engine.state.module_count = enabled.len() as i64;
             engine.state.preset = settings::preset_of(enabled);
         }
+        engine.show_speeds();
         #[cfg(feature = "bern-module-account")]
         if engine.state.features.account {
             engine.restore_account();
@@ -394,7 +396,11 @@ impl erika::Commands for ErikaEngine {
         self.state.preferences.speed = value;
         self.rate_override = None;
         self.apply_speed();
+        self.show_speeds();
         Ok(())
+    }
+    fn set_rate(&mut self, rate: f64) -> Result<(), CommandError> {
+        self.play_at(rate)
     }
     fn set_danmaku_area(&mut self, value: DanmakuArea) -> Result<(), CommandError> {
         self.db

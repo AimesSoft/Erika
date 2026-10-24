@@ -105,6 +105,26 @@ fn subtitle_scale(size: f64) -> f64 {
     0.5 + size.clamp(0.0, 1.0)
 }
 
+/// The rates of the speed preference.
+const PRESET_RATES: [(PlaybackSpeed, f64); 6] = [
+    (PlaybackSpeed::Half, 0.5),
+    (PlaybackSpeed::Slow, 0.75),
+    (PlaybackSpeed::Normal, 1.0),
+    (PlaybackSpeed::Fast, 1.25),
+    (PlaybackSpeed::Faster, 1.5),
+    (PlaybackSpeed::Double, 2.0),
+];
+
+/// `0.25×`, `1.0×`, `1.75×`: a rate as the speed menu writes it.
+pub(crate) fn speed_label(rate: f64) -> String {
+    if rate.fract() == 0.0 {
+        format!("{rate:.1}×")
+    } else {
+        let text = format!("{rate:.2}");
+        format!("{}×", text.trim_end_matches('0'))
+    }
+}
+
 impl ErikaEngine {
     pub(super) fn source_name(&self, source: &MediaSource) -> String {
         self.kernel
@@ -262,14 +282,10 @@ impl ErikaEngine {
         if let Some(rate) = self.rate_override {
             return rate;
         }
-        match self.state.preferences.speed {
-            PlaybackSpeed::Half => 0.5,
-            PlaybackSpeed::Slow => 0.75,
-            PlaybackSpeed::Normal => 1.0,
-            PlaybackSpeed::Fast => 1.25,
-            PlaybackSpeed::Faster => 1.5,
-            PlaybackSpeed::Double => 2.0,
-        }
+        PRESET_RATES
+            .iter()
+            .find(|(speed, _)| *speed == self.state.preferences.speed)
+            .map_or(1.0, |(_, rate)| *rate)
     }
 
     /// The upscaler in use: the chosen one while the enhance module is on.
@@ -281,11 +297,46 @@ impl ErikaEngine {
         }
     }
 
+    /// The rates the speed menu offers: the preference's six and those the
+    /// running plugins add, the one playing selected.
+    pub(crate) fn show_speeds(&mut self) {
+        let current = self.rate();
+        let mut rates: Vec<f64> = PRESET_RATES.iter().map(|(_, rate)| *rate).collect();
+        rates.extend(self.plugins.extensions().speeds);
+        rates.sort_by(f64::total_cmp);
+        rates.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        self.state.speeds = rates
+            .into_iter()
+            .map(|rate| SpeedOption {
+                id: format!("{rate}"),
+                rate,
+                label: speed_label(rate),
+                selected: (rate - current).abs() < 1e-6,
+            })
+            .collect();
+    }
+
+    /// Play at `rate`: a preset is the speed preference, kept; another rate
+    /// a plugin offers plays until the preference changes.
+    pub(crate) fn play_at(&mut self, rate: f64) -> Result<(), CommandError> {
+        if !self.state.speeds.iter().any(|option| (option.rate - rate).abs() < 1e-6) {
+            return Err(CommandError::new("invalid_rate", format!("{rate}× is not offered")));
+        }
+        match PRESET_RATES.iter().find(|(_, preset)| (preset - rate).abs() < 1e-6) {
+            Some((speed, _)) => erika::Commands::set_speed(self, speed.clone()),
+            None => {
+                self.set_rate_override(Some(rate));
+                Ok(())
+            }
+        }
+    }
+
     /// Play at `rate` in place of the speed preference, or at its own
     /// again.
     pub(crate) fn set_rate_override(&mut self, rate: Option<f64>) {
         self.rate_override = rate.map(|rate| rate.clamp(0.0625, 16.0));
         self.apply_speed();
+        self.show_speeds();
     }
 
     pub(super) fn apply_speed(&mut self) {

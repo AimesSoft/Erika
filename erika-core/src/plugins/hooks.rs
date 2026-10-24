@@ -29,6 +29,10 @@ impl ErikaEngine {
         let _ = comments;
     }
 
+    /// What the running plugins add to the danmaku composer and to the
+    /// episodes of a show changed.
+    pub(super) fn plugin_controls_changed(&mut self) {}
+
     /// `library.setEpisodeWatched`.
     pub(super) fn plugin_mark_watched(&mut self, anime: i64, episode: i64, watched: bool) {
         let _ = (anime, episode, watched);

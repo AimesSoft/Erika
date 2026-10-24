@@ -167,6 +167,34 @@ var library = {
   },
 };
 
+// Erika's own: more of what its controls offer, while the plugin runs.
+var extend = {
+  // Rates for the speed menu, such as [0.25, 0.5, …, 5].
+  speeds: function (rates) {
+    if (!__host.has('player.control')) return false;
+    __host.call('extendSpeeds', [(rates || []).map(Number)]);
+    return true;
+  },
+  // Colors for sending danmaku: [{ name: '粉', color: '#FF69B4' }, …].
+  danmakuColors: function (colors) {
+    if (!__host.has('danmaku.modify')) return false;
+    __host.call('extendDanmakuColors', [colors || []]);
+    return true;
+  },
+  // A field for a hexadecimal color where danmaku are sent.
+  danmakuHexInput: function (enabled) {
+    if (!__host.has('danmaku.modify')) return false;
+    __host.call('extendDanmakuHexInput', [enabled !== false]);
+    return true;
+  },
+  // A button on each episode of a show's details that marks it watched.
+  episodeWatchedButton: function (enabled) {
+    if (!__host.has('library.write')) return false;
+    __host.call('extendWatchedButton', [enabled !== false]);
+    return true;
+  },
+};
+
 function __erikaDrain() {
   var calls = __erika.outbox;
   __erika.outbox = [];

@@ -119,6 +119,17 @@ pub mod erika {
         Double,
     }
 
+    /// A rate the speed menu offers: the six of the preference, or those a
+    /// plugin adds.
+    #[value]
+    pub struct SpeedOption {
+        pub id: String,
+        pub rate: f64,
+        #[content]
+        pub label: String,
+        pub selected: bool,
+    }
+
     #[value]
     pub enum DanmakuArea {
         #[label(tr! { "zh-Hans" => "半屏", "en" => "Half" })]
@@ -772,6 +783,8 @@ pub mod erika {
         pub downloads_hidden: bool,
         /// Enabled plugins wait for the system's JavaScript host to start.
         pub plugins_starting: bool,
+        /// The rates the speed menu offers.
+        pub speeds: Vec<SpeedOption>,
         pub accent: Accent,
         pub appearance: Appearance,
         /// The version the app is, as Bern.toml names it.
@@ -904,6 +917,9 @@ pub mod erika {
         fn set_language(&mut self, value: InterfaceLanguage) -> Result<(), CommandError>;
         fn set_update_channel(&mut self, value: UpdateChannel) -> Result<(), CommandError>;
         fn set_speed(&mut self, value: PlaybackSpeed) -> Result<(), CommandError>;
+        /// Play at `rate`, one of `speeds`.
+        #[errors("invalid_rate")]
+        fn set_rate(&mut self, rate: f64) -> Result<(), CommandError>;
         fn set_danmaku_area(&mut self, value: DanmakuArea) -> Result<(), CommandError>;
         fn set_preference(&mut self, key: String, value: bool) -> Result<(), CommandError>;
         fn set_module(&mut self, id: String, enabled: bool) -> Result<(), CommandError>;
