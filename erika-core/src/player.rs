@@ -54,6 +54,9 @@ pub fn initial() -> PlayerState {
         subtitle_file: String::new(),
         danmaku_source: String::new(),
         danmaku_count: 0,
+        danmaku_colors: danmaku::send_colors(&[]),
+        danmaku_color: 0xFFFFFF,
+        danmaku_hex_input: false,
     };
     simulate_tracks(&mut player);
     player
@@ -822,8 +825,8 @@ mod tests {
             self.call(format!("add danmaku {name}"));
             contents.parse::<usize>().map_err(|error| error.to_string())
         }
-        fn send_danmaku(&self, text: &str) {
-            self.call(format!("send {text}"))
+        fn send_danmaku(&self, text: &str, rgb: u32) {
+            self.call(format!("send {text} {rgb:06x}"))
         }
         fn capture(&self, path: &std::path::Path, width: Option<u32>) {
             self.call(format!("capture {} {width:?}", path.display()))
@@ -1299,6 +1302,90 @@ mod tests {
     }
 
     #[test]
+    fn danmaku_offset_moves_in_steps_and_takes_exact_seconds() {
+        let (mut e, kernel) = with_kernel();
+        e.shift_danmaku_offset(-5.0).unwrap();
+        e.shift_danmaku_offset(-5.0).unwrap();
+        e.shift_danmaku_offset(-5.0).unwrap();
+        assert_eq!(e.state.danmaku_settings.delay, -15.0);
+        assert_eq!(e.state.danmaku_settings.delay_seconds, "15.0");
+        assert_eq!(e.danmaku_config().delay, -15.0);
+        e.set_danmaku_offset(0.0).unwrap();
+        assert_eq!(e.state.danmaku_settings.delay, 0.0);
+        // Plugins set exact offsets, up to ten minutes either way.
+        e.set_danmaku_offset(91.25).unwrap();
+        assert_eq!(e.danmaku_config().delay, 91.25);
+        e.set_danmaku_offset(1e6).unwrap();
+        assert_eq!(e.state.danmaku_settings.delay, 600.0);
+        assert!(e.set_danmaku_offset(f64::NAN).is_err());
+        assert!(e.shift_danmaku_offset(f64::INFINITY).is_err());
+        e.set_danmaku_offset(-90.0).unwrap();
+        e.state.danmaku_settings = danmaku::initial();
+        e.restore_playback_preferences();
+        assert_eq!(e.state.danmaku_settings.delay, -90.0);
+        assert!(kernel.calls().iter().all(|call| !call.starts_with("send")));
+    }
+
+    #[test]
+    fn random_danmaku_colors_are_saved_and_reach_the_kernel() {
+        let (mut e, _) = with_kernel();
+        assert!(!e.danmaku_config().random_colors);
+        e.set_danmaku_switch("random_colors".into(), true).unwrap();
+        assert!(e.state.danmaku_settings.random_colors);
+        assert!(e.danmaku_config().random_colors);
+        assert_eq!(
+            e.db.setting("danmaku.random_colors").as_deref(),
+            Some("true")
+        );
+        e.state.danmaku_settings = danmaku::initial();
+        e.restore_playback_preferences();
+        assert!(e.danmaku_config().random_colors);
+    }
+
+    #[test]
+    fn the_composer_color_comes_from_its_chips_hex_and_plugins() {
+        let (mut e, _) = with_kernel();
+        let rgb = |e: &ErikaEngine| -> Vec<i64> {
+            e.state
+                .player
+                .danmaku_colors
+                .iter()
+                .map(|color| color.rgb)
+                .collect()
+        };
+        assert_eq!(
+            rgb(&e),
+            [0xFFFFFF, 0x000000, 0xFFFF00, 0x04CD00, 0xFE0502, 0x4266BE]
+        );
+        assert_eq!(e.state.player.danmaku_color, 0xFFFFFF);
+        assert!(!e.state.player.danmaku_hex_input);
+        e.set_danmaku_color(0xFE0502).unwrap();
+        assert_eq!(e.state.player.danmaku_color, 0xFE0502);
+        assert_eq!(
+            e.set_danmaku_color(0x1000000).unwrap_err().code,
+            "invalid_color"
+        );
+        assert_eq!(e.set_danmaku_color(-1).unwrap_err().code, "invalid_color");
+        e.set_danmaku_color_hex("#89d5ff".into()).unwrap();
+        assert_eq!(e.state.player.danmaku_color, 0x89D5FF);
+        assert_eq!(
+            e.set_danmaku_color_hex("蓝色".into()).unwrap_err().code,
+            "invalid_color"
+        );
+
+        e.set_plugin_danmaku_colors(&[0x89D5FF, 0xFFFFFF], true);
+        assert_eq!(rgb(&e).len(), 7);
+        assert_eq!(e.state.player.danmaku_colors[6].label, "#89D5FF");
+        assert!(e.state.player.danmaku_hex_input);
+        assert_eq!(e.state.player.danmaku_color, 0x89D5FF);
+        // Without the plugin, a color the composer no longer offers is reset.
+        e.set_plugin_danmaku_colors(&[], false);
+        assert_eq!(rgb(&e).len(), 6);
+        assert!(!e.state.player.danmaku_hex_input);
+        assert_eq!(e.state.player.danmaku_color, 0xFFFFFF);
+    }
+
+    #[test]
     fn high_resolution_danmaku_is_saved_and_independent_from_layout() {
         let (mut e, _) = with_kernel();
         assert!(e.state.danmaku_settings.supersampling);
@@ -1389,8 +1476,8 @@ mod tests {
         assert!(e.send_danmaku("  前方高能  ".into()).is_err());
         assert!(kernel.calls().is_empty());
         assert_eq!(e.state.player.danmaku_text, "  前方高能  ");
-        e.send_own_danmaku("  前方高能  ");
-        assert_eq!(kernel.calls(), ["send 前方高能"]);
+        e.send_own_danmaku("  前方高能  ", 0xFFFF00);
+        assert_eq!(kernel.calls(), ["send 前方高能 ffff00"]);
     }
 
     #[test]
@@ -1464,6 +1551,7 @@ mod tests {
         e.found.lock().unwrap().push(Found::Sent {
             revision,
             text: "草稿".into(),
+            color: 0xFFFFFF,
             result: Err("离线".into()),
         });
         e.take_found();
@@ -1475,6 +1563,7 @@ mod tests {
         e.found.lock().unwrap().push(Found::Sent {
             revision,
             text: "草稿".into(),
+            color: 0xFFFFFF,
             result: Ok(()),
         });
         e.take_found();
@@ -1485,10 +1574,11 @@ mod tests {
         e.found.lock().unwrap().push(Found::Sent {
             revision: e.match_revision,
             text: "当前弹幕".into(),
+            color: 0xFE0502,
             result: Ok(()),
         });
         e.take_found();
-        assert_eq!(kernel.calls(), ["send 当前弹幕"]);
+        assert_eq!(kernel.calls(), ["send 当前弹幕 fe0502"]);
     }
 
     #[test]

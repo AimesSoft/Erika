@@ -984,6 +984,18 @@ impl erika::Commands for ErikaEngine {
         self.mount_danmaku_file(&source);
         Ok(())
     }
+    fn set_danmaku_offset(&mut self, seconds: f64) -> Result<(), CommandError> {
+        self.set_offset(seconds)
+    }
+    fn shift_danmaku_offset(&mut self, seconds: f64) -> Result<(), CommandError> {
+        self.shift_offset(seconds)
+    }
+    fn set_danmaku_color(&mut self, rgb: i64) -> Result<(), CommandError> {
+        self.set_send_color(rgb)
+    }
+    fn set_danmaku_color_hex(&mut self, hex: String) -> Result<(), CommandError> {
+        self.set_send_color_hex(&hex)
+    }
     fn attach_subtitle(&mut self, source: MediaSource) -> Result<(), CommandError> {
         self.require_playing()?;
         if !self.state.video {

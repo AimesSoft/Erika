@@ -19,6 +19,8 @@ pub struct PlayerDraft {
     pub saying: bool,
     pub subtitle_file: MediaSource,
     pub danmaku_file: MediaSource,
+    /// The composer's hexadecimal color, when a plugin shows the field.
+    pub color_hex: String,
 }
 
 #[component]
@@ -143,6 +145,12 @@ pub fn player_tv_scene(
                                 Row(gap: 8, align: center) {
                                     Stack(variant: player_overlay, enabled: !app.player.sending_danmaku) {
                                         TextInput(id: danmaku_text_tv, label: tr! { "zh-Hans" => "发弹幕", "en" => "Send danmaku" }, label_hidden: true, prompt: tr! { "zh-Hans" => "发个友善的弹幕…", "en" => "Say something kind…" }, value: draft.text, clear_key: app.player.danmaku_sent_revision) => app.send_danmaku(draft.text)
+                                    }
+                                    PopoverButton(panel_appearance: surface, id: danmaku_color_tv, icon: "paintpalette", label: tr! { "zh-Hans" => "弹幕颜色", "en" => "Danmaku color" }) {
+                                        Column(gap: 12, width: 320, padding: 10) {
+                                            Text(content: tr! { "zh-Hans" => "弹幕颜色", "en" => "Danmaku color" }, style: title3)
+                                            player_danmaku_colors(app: app)
+                                        }
                                     }
                                     IconButton(id: unsay_tv, icon: "xmark", label: tr! { "zh-Hans" => "收起", "en" => "Close" }, height: 40) => draft.saying.set(false)
                                 }
@@ -600,6 +608,7 @@ pub fn player_controls(
                                     Stack(enabled: !app.player.sending_danmaku) {
                                         TextInput(id: danmaku_text, label: tr! { "zh-Hans" => "弹幕内容", "en" => "Danmaku message" }, label_hidden: true, prompt: tr! { "zh-Hans" => "发个友善的弹幕…", "en" => "Say something kind…" }, value: draft.text, clear_key: app.player.danmaku_sent_revision) => app.send_danmaku(draft.text)
                                     }
+                                    player_danmaku_colors(app: app)
                                     Row {
                                         Spacer
                                         Button(id: send, icon: "paperplane", label: tr! { "zh-Hans" => "发送", "en" => "Send" }, shape: capsule, height: 32, prominence: prominent, enabled: !app.player.sending_danmaku) => app.send_danmaku(draft.text)
@@ -720,7 +729,52 @@ pub fn player_danmaku_quick(app: erika::Client) -> impl View {
                 Switch(id: bottom, label: tr! { "zh-Hans" => "底部", "en" => "Bottom" }, checked: app.danmaku_settings.block_bottom, style: button, shape: capsule, height: 30) => app.set_danmaku_switch("block_bottom", app.danmaku_settings.block_bottom)
                 Switch(id: scroll, label: tr! { "zh-Hans" => "滚动", "en" => "Scrolling" }, checked: app.danmaku_settings.block_scroll, style: button, shape: capsule, height: 30) => app.set_danmaku_switch("block_scroll", app.danmaku_settings.block_scroll)
             }
+            // Five-second steps here; exact offsets in the danmaku settings.
+            Column(gap: 6) {
+                Row(align: center) {
+                    Text(content: tr! { "zh-Hans" => "弹幕偏移", "en" => "Danmaku delay" }) Spacer
+                    player_danmaku_offset(app: app)
+                }
+                Row(gap: 8) {
+                    Button(id: danmaku_earlier, label: tr! { "zh-Hans" => "提前 5 秒", "en" => "5 s earlier" }, shape: capsule, height: 30) => app.shift_danmaku_offset(-5.0)
+                    Button(id: danmaku_offset_reset, label: tr! { "zh-Hans" => "恢复", "en" => "Reset" }, shape: capsule, height: 30, enabled: app.danmaku_settings.delay < -0.05 || app.danmaku_settings.delay > 0.05) => app.set_danmaku_offset(0.0)
+                    Button(id: danmaku_later, label: tr! { "zh-Hans" => "延后 5 秒", "en" => "5 s later" }, shape: capsule, height: 30) => app.shift_danmaku_offset(5.0)
+                }
+            }
             Button(id: more, label: tr! { "zh-Hans" => "更多弹幕设置…", "en" => "More danmaku settings…" }, prominence: plain) => app.player_tab(PlayerTab::Danmaku)
+        }
+    }
+}
+
+/// The danmaku offset as the viewer reads it: earlier, later or none.
+#[component]
+pub fn player_danmaku_offset(app: erika::Client) -> impl View {
+    ui! {
+        if app.danmaku_settings.delay < -0.05 {
+            Text(content: tr! { "zh-Hans" => "提前 {value} 秒", "en" => "Advance {value} s"; value: app.danmaku_settings.delay_seconds })
+        } else if app.danmaku_settings.delay > 0.05 {
+            Text(content: tr! { "zh-Hans" => "延后 {value} 秒", "en" => "Delay {value} s"; value: app.danmaku_settings.delay_seconds })
+        } else {
+            Text(content: tr! { "zh-Hans" => "0.0 秒", "en" => "0.0 s" })
+        }
+    }
+}
+
+/// The composer's colors, one chip each with the chosen one selected, and
+/// the hexadecimal field once a plugin turns it on. Only the color is chosen;
+/// the comment shows in it when sent.
+#[component]
+pub fn player_danmaku_colors(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
+    ui! {
+        Column(gap: 8) {
+            Flow(gap: 6) {
+                ForEach(items: app.player.danmaku_colors, key: rgb) |color| {
+                    Switch(id: danmaku_color, label: color.label, checked: app.player.danmaku_color == color.rgb, style: button, shape: capsule, height: 30) => app.set_danmaku_color(color.rgb)
+                }
+            }
+            if app.player.danmaku_hex_input {
+                TextInput(id: danmaku_color_hex, label: tr! { "zh-Hans" => "十六进制颜色", "en" => "Hex color" }, label_hidden: true, prompt: tr! { "zh-Hans" => "#RRGGBB，回车确定", "en" => "#RRGGBB, then Return" }, value: draft.color_hex) => app.set_danmaku_color_hex(draft.color_hex)
+            }
         }
     }
 }
@@ -786,16 +840,12 @@ pub fn player_panel(app: erika::Client, #[session] draft: PlayerDraft) -> impl V
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
                                 Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "合并重复弹幕", "en" => "Merge duplicates" }) Spacer Switch(id: merge, label: tr! { "zh-Hans" => "合并重复弹幕", "en" => "Merge duplicates" }, label_hidden: true, style: switch, checked: app.danmaku_settings.merge) => app.set_danmaku_switch("merge", app.danmaku_settings.merge) }
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
+                                Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "随机染色", "en" => "Random colors" }) Spacer Switch(id: random_colors, label: tr! { "zh-Hans" => "随机染色", "en" => "Random colors" }, label_hidden: true, style: switch, checked: app.danmaku_settings.random_colors) => app.set_danmaku_switch("random_colors", app.danmaku_settings.random_colors) }
+                                Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
                                 Column(gap: 4, padding_x: 4, padding_y: 8) {
                                     Row(align: center) {
                                         Text(content: tr! { "zh-Hans" => "弹幕偏移", "en" => "Danmaku delay" }) Spacer
-                                        if app.danmaku_settings.delay < -0.05 {
-                                            Text(content: tr! { "zh-Hans" => "提前 {value} 秒", "en" => "Advance {value} s"; value: app.danmaku_settings.delay_seconds })
-                                        } else if app.danmaku_settings.delay > 0.05 {
-                                            Text(content: tr! { "zh-Hans" => "延后 {value} 秒", "en" => "Delay {value} s"; value: app.danmaku_settings.delay_seconds })
-                                        } else {
-                                            Text(content: tr! { "zh-Hans" => "0.0 秒", "en" => "0.0 s" })
-                                        }
+                                        player_danmaku_offset(app: app)
                                     }
                                     Slider(id: danmaku_delay, label: tr! { "zh-Hans" => "弹幕偏移", "en" => "Danmaku delay" }, label_hidden: true, current: app.danmaku_settings.delay, continuous: true, min: -10, max: 10) => app.set_danmaku_number("delay", app.danmaku_settings.delay)
                                 }

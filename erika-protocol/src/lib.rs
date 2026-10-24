@@ -678,6 +678,20 @@ pub mod erika {
         pub block_top: bool,
         pub block_bottom: bool,
         pub block_scroll: bool,
+        /// Ignore the comments' own colors and give each a stable one from
+        /// the colorful sending palette, as NipaPlay's 随机染色 does.
+        pub random_colors: bool,
+    }
+
+    /// A color the danmaku composer offers.
+    #[value]
+    pub struct DanmakuColorOption {
+        /// `0xRRGGBB`, as dandanplay takes it.
+        pub rgb: i64,
+        /// What the composer's chip shows: a colored dot, or `#RRGGBB` for a
+        /// color without one.
+        #[content]
+        pub label: String,
     }
 
     #[value]
@@ -774,6 +788,13 @@ pub mod erika {
         #[content]
         pub danmaku_source: String,
         pub danmaku_count: i64,
+        /// The colors the composer offers: white, black, yellow, green, red
+        /// and blue, then any that plugins add.
+        pub danmaku_colors: Vec<DanmakuColorOption>,
+        /// The color the next comment is sent in, `0xRRGGBB`.
+        pub danmaku_color: i64,
+        /// A plugin turned on the composer's hexadecimal color field.
+        pub danmaku_hex_input: bool,
     }
 
     #[state]
@@ -1112,12 +1133,26 @@ pub mod erika {
         /// or `delay` (seconds).
         #[errors("unknown_danmaku_option")]
         fn set_danmaku_number(&mut self, key: String, value: f64) -> Result<(), CommandError>;
-        /// Set `supersampling`, `merge`, `block_top`, `block_bottom` or `block_scroll`.
+        /// Set `supersampling`, `merge`, `block_top`, `block_bottom`,
+        /// `block_scroll` or `random_colors`.
         #[errors("unknown_danmaku_option")]
         fn set_danmaku_switch(&mut self, key: String, value: bool) -> Result<(), CommandError>;
         /// Show the comments of a Bilibili xml or Dandanplay json file over
         /// what plays.
         fn mount_danmaku(&mut self, source: MediaSource) -> Result<(), CommandError>;
+        /// Show danmaku `seconds` later than their own time (earlier when
+        /// negative), within ten minutes either way; for the settings and
+        /// plugins such as automatic danmaku offset.
+        fn set_danmaku_offset(&mut self, seconds: f64) -> Result<(), CommandError>;
+        /// Move the danmaku offset by `seconds`: the danmaku button's
+        /// advance and delay by five seconds.
+        fn shift_danmaku_offset(&mut self, seconds: f64) -> Result<(), CommandError>;
+        /// Send the next comments in `rgb` (`0xRRGGBB`).
+        #[errors("invalid_color")]
+        fn set_danmaku_color(&mut self, rgb: i64) -> Result<(), CommandError>;
+        /// Send the next comments in the color `#RRGGBB` (or `RRGGBB`) names.
+        #[errors("invalid_color")]
+        fn set_danmaku_color_hex(&mut self, hex: String) -> Result<(), CommandError>;
         fn attach_subtitle(&mut self, source: MediaSource) -> Result<(), CommandError>;
 
         fn set_accent(&mut self, accent: Accent) -> Result<(), CommandError>;

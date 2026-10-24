@@ -34,7 +34,13 @@ impl ErikaEngine {
                 let _ = self.danmaku_number(key, value);
             }
         }
-        for key in ["merge", "block_top", "block_bottom", "block_scroll"] {
+        for key in [
+            "merge",
+            "block_top",
+            "block_bottom",
+            "block_scroll",
+            "random_colors",
+        ] {
             if let Some(value) = self
                 .db
                 .setting(&format!("danmaku.{key}"))

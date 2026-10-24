@@ -189,7 +189,8 @@ impl Kernel for Web {
         self.send(json!({"op":"danmakuOptions", "config":{
             "enabled":c.enabled, "supersampling":c.supersampling, "opacity":c.opacity,
             "fontSize":c.font_size, "area":c.area, "duration":c.scroll_seconds, "delay":c.delay,
-            "mergeDuplicates":c.merge, "blockTop":c.block_top, "blockBottom":c.block_bottom, "blockScroll":c.block_scroll
+            "mergeDuplicates":c.merge, "blockTop":c.block_top, "blockBottom":c.block_bottom, "blockScroll":c.block_scroll,
+            "randomColors":c.random_colors
         }}));
     }
     fn add_danmaku(&self, name: &str, contents: &str) -> Result<usize, String> {
@@ -211,8 +212,8 @@ impl Kernel for Web {
             },
         ))
     }
-    fn send_danmaku(&self, text: &str) {
-        self.send(json!({"op":"sendDanmaku", "text":text}));
+    fn send_danmaku(&self, text: &str, rgb: u32) {
+        self.send(json!({"op":"sendDanmaku", "text":text, "color":rgb}));
     }
     fn capture(&self, path: &Path, width: Option<u32>) {
         self.send(
