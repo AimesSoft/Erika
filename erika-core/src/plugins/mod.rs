@@ -89,6 +89,7 @@ pub(crate) struct Extensions {
     pub hex_input: bool,
     pub watched_button: bool,
     pub quick_select: bool,
+    pub opening: bool,
 }
 
 /// An installed plugin.
@@ -107,6 +108,8 @@ enum Done {
     Market(Vec<store::Listing>, Vec<String>),
     Installed(String, Result<Pack, String>),
     Fetched(String, u64, Result<Value, String>),
+    /// The first seconds of the video at the address, measured.
+    Opening(String, Result<Value, String>),
 }
 
 pub(crate) struct Plugins {
@@ -213,6 +216,7 @@ impl Plugins {
             all.hex_input |= extension.hex_input;
             all.watched_button |= extension.watched_button;
             all.quick_select |= extension.quick_select;
+            all.opening |= extension.opening;
         }
         all
     }
@@ -326,6 +330,12 @@ impl ErikaEngine {
                         Err(reason) => self.notify(Notice::PluginFailed { reason }),
                     }
                 }
+                Done::Opening(url, Ok(frames)) => {
+                    if self.source.as_ref().is_some_and(|source| source.url == url) {
+                        self.plugin_event("openingProfiled", json!({ "url": url, "frames": frames }));
+                    }
+                }
+                Done::Opening(url, Err(error)) => eprintln!("erika: opening of {url}: {error}"),
                 Done::Fetched(id, request, answer) => {
                     let snapshot = self.plugin_snapshot(&id);
                     if let Some(runtime) = self.plugins.runtimes.get_mut(&id) {
@@ -674,6 +684,9 @@ impl ErikaEngine {
                 self.plugins.extensions.entry(id.into()).or_default().hex_input = flag(0);
                 self.apply_extensions();
             }
+            "extendOpeningProfile" if pack.has("player.control") => {
+                self.plugins.extensions.entry(id.into()).or_default().opening = flag(0);
+            }
             "extendDownloadQuickSelect" if pack.has("library.read") => {
                 self.plugins.extensions.entry(id.into()).or_default().quick_select = flag(0);
                 self.apply_extensions();
@@ -746,6 +759,25 @@ impl ErikaEngine {
         if was_hidden != self.state.downloads_hidden && cfg!(feature = "bern-module-downloads") {
             let _ = erika::Commands::set_module(self, "downloads".into(), !self.state.downloads_hidden);
         }
+    }
+
+    /// Measure the first seconds of what opened, when a running plugin
+    /// asked to: only where liberika plays files.
+    pub(crate) fn profile_opening(&mut self) {
+        if !self.plugins.extensions().opening {
+            return;
+        }
+        let Some(url) = self.source.as_ref().map(|source| source.url.clone()) else {
+            return;
+        };
+        #[cfg(target_os = "macos")]
+        in_background(&self.plugins.inbox, move || {
+            let profile = liberika::opening::opening_profile(&url, 10.0, 4.0)
+                .map(|frames| json!(frames));
+            vec![Done::Opening(url, profile)]
+        });
+        #[cfg(not(target_os = "macos"))]
+        let _ = url;
     }
 
     /// What plays, as `videoLoaded`, `play` and `pause` describe it.

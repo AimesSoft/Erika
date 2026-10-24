@@ -87,17 +87,19 @@ var storage = {
   },
 };
 
+// NipaPlay's, with an optional value for what the user never set.
 var settings = {
-  getText: function (entry) {
+  getText: function (entry, fallback) {
     var value = __erikaPart('text')[String(entry)];
-    return value == null ? '' : String(value);
+    return value == null ? (fallback == null ? '' : String(fallback)) : String(value);
   },
   setText: function (entry, value) {
     __erikaPart('text')[String(entry)] = String(value);
     __host.call('pluginSetTextSetting', [String(entry), String(value)]);
   },
-  getSwitch: function (entry) {
-    return !!__erikaPart('switch')[String(entry)];
+  getSwitch: function (entry, fallback) {
+    var value = __erikaPart('switch')[String(entry)];
+    return value === undefined ? !!fallback : !!value;
   },
   setSwitch: function (entry, value) {
     __erikaPart('switch')[String(entry)] = !!value;
@@ -193,6 +195,14 @@ var extend = {
   downloadQuickSelect: function (enabled) {
     if (!__host.has('library.read')) return false;
     __host.call('extendDownloadQuickSelect', [enabled !== false]);
+    return true;
+  },
+  // Measure the first seconds of each video opened: an `openingProfiled`
+  // event brings { url, frames: [{ time, red, green, blue, luma, dark,
+  // white, red_share }] } where liberika plays.
+  openingProfile: function (enabled) {
+    if (!__host.has('player.control')) return false;
+    __host.call('extendOpeningProfile', [enabled !== false]);
     return true;
   },
   // A button on each episode of a show's details that marks it watched.

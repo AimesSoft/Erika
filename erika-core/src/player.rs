@@ -197,6 +197,7 @@ impl ErikaEngine {
                 }
                 self.source = Some(source.clone());
                 self.plugin_event("videoLoaded", self.plugin_media());
+                self.profile_opening();
                 self.mount_danmaku_beside(&source);
             }
             _ => {
