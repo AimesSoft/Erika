@@ -19,6 +19,7 @@ pub mod bangumi;
 pub mod custom;
 #[cfg(not(target_arch = "wasm32"))]
 mod http;
+pub mod mine;
 pub mod reviews;
 
 /// The app id the gateways know, and the secret they replace with theirs.
@@ -301,6 +302,10 @@ pub struct EpisodeInfo {
     pub episode_number: String,
     #[serde(default)]
     pub air_date: Option<String>,
+    /// When the signed-in user last watched it; dandanplay sends it only
+    /// with the account's token, and `None` means not watched.
+    #[serde(default)]
+    pub last_watched: Option<String>,
 }
 
 /// What dandanplay knows of one anime.
@@ -332,6 +337,12 @@ pub struct Details {
     pub air_day: Option<i64>,
     #[serde(default)]
     pub is_favorited: bool,
+    /// The signed-in user's own score (1 to 10, 0 for none) and how they
+    /// follow it: `favorited`, `finished` or `abandoned`.
+    #[serde(default)]
+    pub user_rating: i64,
+    #[serde(default)]
+    pub favorite_status: Option<String>,
 }
 
 #[derive(Deserialize)]

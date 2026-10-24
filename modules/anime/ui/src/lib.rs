@@ -3,7 +3,7 @@
 //! the design's desktop prototype (`design/app.html`, Apple, 1280 × 800).
 
 use bern::prelude::*;
-use erika_anime_protocol::anime::{self, BackTo, WatchStatus};
+use erika_anime_protocol::anime::{self, BackTo, Score, WatchStatus};
 use erika_protocol::erika;
 
 /// Tabs below the film of the details page.
@@ -22,6 +22,8 @@ pub struct AnimeDraft {
     #[initial(1)]
     pub episode: i64,
     pub tab: DetailTab,
+    /// The review being written, started from the one on Bangumi.
+    pub review: String,
 }
 
 /// Mounted everywhere: the clock that moves "now" along today's timeline
@@ -327,15 +329,115 @@ pub fn timeline_track(anime: anime::Client) -> impl View {
 #[component]
 pub fn details(anime: anime::Client) -> impl View {
     ui! {
-        Adaptive(id: details_layout) {
-            Layout(size: compact) {
-                phone_details(anime: anime)
+        Stack(align: top_leading) {
+            Adaptive(id: details_layout) {
+                Layout(size: compact) {
+                    phone_details(anime: anime)
+                }
+                Layout(size: expanded) {
+                    desktop_details(anime: anime)
+                }
+                Layout(size: tv) {
+                    desktop_details(anime: anime)
+                }
             }
-            Layout(size: expanded) {
-                desktop_details(anime: anime)
+            if anime.rating_open {
+                rating_dialog(anime: anime)
             }
-            Layout(size: tv) {
-                desktop_details(anime: anime)
+            if anime.review_open {
+                review_dialog(anime: anime)
+            }
+        }
+    }
+}
+
+/// The score dialog: Bangumi's ten steps with a Bangumi account, the even
+/// five without; picking one rates the show and closes it.
+#[component]
+pub fn rating_dialog(anime: anime::Client) -> impl View {
+    ui! {
+        Modal(width: 360, height: if anime.fine_scores { 390.0 } else { 270.0 }, cover: compact, appear: pop_in, disappear: fade) {
+            Column(gap: 12, padding: 24) {
+                Text(content: tr! { "zh-Hans" => "给这部作品评分", "en" => "Rate this show" }, style: title3)
+                Text(content: anime.sync_targets, style: caption, emphasis: secondary)
+                if anime.fine_scores {
+                    Picker(id: score_steps, label: tr! { "zh-Hans" => "评分", "en" => "Score" }, selected: anime.my_score, style: radio) {
+                        PickerOption(value: Score::Ten, label: tr! { "zh-Hans" => "10 分 · 超神作", "en" => "10 · All-time best" })
+                        PickerOption(value: Score::Nine, label: tr! { "zh-Hans" => "9 分 · 神作", "en" => "9 · Masterpiece" })
+                        PickerOption(value: Score::Eight, label: tr! { "zh-Hans" => "8 分 · 力荐", "en" => "8 · Great" })
+                        PickerOption(value: Score::Seven, label: tr! { "zh-Hans" => "7 分 · 推荐", "en" => "7 · Good" })
+                        PickerOption(value: Score::Six, label: tr! { "zh-Hans" => "6 分 · 还行", "en" => "6 · Fair" })
+                        PickerOption(value: Score::Five, label: tr! { "zh-Hans" => "5 分 · 不过不失", "en" => "5 · Average" })
+                        PickerOption(value: Score::Four, label: tr! { "zh-Hans" => "4 分 · 较差", "en" => "4 · Poor" })
+                        PickerOption(value: Score::Three, label: tr! { "zh-Hans" => "3 分 · 差", "en" => "3 · Bad" })
+                        PickerOption(value: Score::Two, label: tr! { "zh-Hans" => "2 分 · 很差", "en" => "2 · Very bad" })
+                        PickerOption(value: Score::One, label: tr! { "zh-Hans" => "1 分 · 不忍直视", "en" => "1 · Unwatchable" })
+                    } => anime.pick_score(anime.my_score)
+                } else {
+                    Picker(id: score_even, label: tr! { "zh-Hans" => "评分", "en" => "Score" }, selected: anime.my_score, style: radio) {
+                        PickerOption(value: Score::Ten, label: tr! { "zh-Hans" => "10 分 · 超神作", "en" => "10 · All-time best" })
+                        PickerOption(value: Score::Eight, label: tr! { "zh-Hans" => "8 分 · 力荐", "en" => "8 · Great" })
+                        PickerOption(value: Score::Six, label: tr! { "zh-Hans" => "6 分 · 还行", "en" => "6 · Fair" })
+                        PickerOption(value: Score::Four, label: tr! { "zh-Hans" => "4 分 · 较差", "en" => "4 · Poor" })
+                        PickerOption(value: Score::Two, label: tr! { "zh-Hans" => "2 分 · 很差", "en" => "2 · Very bad" })
+                    } => anime.pick_score(anime.my_score)
+                }
+                Spacer
+                Row(gap: 10, align: center) {
+                    Spacer
+                    Button(id: rating_done, label: tr! { "zh-Hans" => "完成", "en" => "Done" }, shortcut: "escape") => anime.show_rating(false)
+                }
+            }
+        }
+    }
+}
+
+/// The review dialog: the review on Bangumi, read anew as it opens, is
+/// where the writing starts; sending it saves it on Bangumi.
+#[component]
+pub fn review_dialog(anime: anime::Client, #[session] draft: AnimeDraft) -> impl View {
+    ui! {
+        Modal(width: 480, height: 320, cover: compact, appear: pop_in, disappear: fade) {
+            Column(gap: 12, padding: 24) {
+                // Start from the review there is, once it has been read.
+                Timer(interval: 0.1, enabled: !anime.review_loading && draft.review == "" && anime.review_text != "") => draft.review.set(anime.review_text)
+                Text(content: tr! { "zh-Hans" => "写评价", "en" => "Write a Review" }, style: title3)
+                Text(content: tr! { "zh-Hans" => "保存在你的 Bangumi 收藏里，最多 200 字", "en" => "Saved with your Bangumi collection, up to 200 characters" }, style: caption, emphasis: secondary)
+                if anime.review_loading {
+                    Text(content: tr! { "zh-Hans" => "正在读取你在 Bangumi 上的评价…", "en" => "Reading your review on Bangumi…" }, style: caption, emphasis: secondary)
+                } else {
+                    TextInput(id: review_field, label: tr! { "zh-Hans" => "评价", "en" => "Review" }, label_hidden: true, value: draft.review, kind: multiline, prompt: tr! { "zh-Hans" => "说说你对这部作品的看法", "en" => "What did you think of it?" })
+                }
+                if anime.review_error != "" {
+                    Text(content: anime.review_error, style: caption, lines: 3)
+                }
+                Spacer
+                Row(gap: 10, align: center) {
+                    if anime.review_text != "" {
+                        Button(id: review_remove, label: tr! { "zh-Hans" => "删除评价", "en" => "Delete Review" }, role: destructive, prominence: plain, enabled: !anime.review_saving, clears: draft.review) => anime.submit_review("")
+                    }
+                    Spacer
+                    Button(id: review_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, role: cancel, prominence: plain, shortcut: "escape", clears: draft.review) => anime.show_review(false)
+                    if anime.review_saving {
+                        Button(id: review_sending, label: tr! { "zh-Hans" => "正在提交…", "en" => "Sending…" }, prominence: prominent, enabled: false) => anime.show_review(true)
+                    } else {
+                        Button(id: review_send, label: tr! { "zh-Hans" => "提交", "en" => "Send" }, prominence: prominent, enabled: !anime.review_loading, clears: draft.review) => anime.submit_review(draft.review)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// How the marks of the open show are syncing, under its actions.
+#[component]
+pub fn sync_status(anime: anime::Client) -> impl View {
+    ui! {
+        Column(gap: 0) {
+            if anime.syncing {
+                Text(content: tr! { "zh-Hans" => "正在同步观看记录…", "en" => "Syncing your watch records…" }, style: caption, emphasis: secondary, lines: 1)
+            } else if anime.sync_note != "" {
+                Text(content: anime.sync_note, style: caption, emphasis: secondary, lines: 3)
             }
         }
     }
@@ -385,15 +487,17 @@ pub fn desktop_details(anime: anime::Client, #[session] draft: AnimeDraft) -> im
                                     MenuItem(id: want, label: tr! { "zh-Hans" => "想看", "en" => "Want to Watch" }) => anime.set_status(WatchStatus::Want)
                                     MenuItem(id: watching_now, label: tr! { "zh-Hans" => "在看", "en" => "Watching" }) => anime.set_status(WatchStatus::Watching)
                                     MenuItem(id: watched, label: tr! { "zh-Hans" => "看过", "en" => "Watched" }) => anime.set_status(WatchStatus::Watched)
+                                    MenuItem(id: dropped, label: tr! { "zh-Hans" => "抛弃", "en" => "Dropped" }) => anime.set_status(WatchStatus::Dropped)
                                 }
-                                Menu(id: rate, label: tr! { "zh-Hans" => "评分", "en" => "Rate" }, icon: "star", style: icon) {
-                                    MenuItem(id: rate_10, label: tr! { "zh-Hans" => "10 分 · 神作", "en" => "10 · Masterpiece" }) => anime.rate(10)
-                                    MenuItem(id: rate_8, label: tr! { "zh-Hans" => "8 分 · 力荐", "en" => "8 · Great" }) => anime.rate(8)
-                                    MenuItem(id: rate_6, label: tr! { "zh-Hans" => "6 分 · 还行", "en" => "6 · Fine" }) => anime.rate(6)
-                                    MenuItem(id: rate_4, label: tr! { "zh-Hans" => "4 分 · 较差", "en" => "4 · Poor" }) => anime.rate(4)
-                                    MenuItem(id: rate_2, label: tr! { "zh-Hans" => "2 分 · 不行", "en" => "2 · Bad" }) => anime.rate(2)
+                                if anime.can_rate {
+                                    Button(id: rate, label: anime.my_score, icon: "star") => anime.show_rating(true)
+                                }
+                                if anime.can_review {
+                                    Button(id: write_review, label: tr! { "zh-Hans" => "写评价", "en" => "Review" }, icon: "note.text") => anime.show_review(true)
                                 }
                             }
+                            Canvas(height: 8)
+                            sync_status(anime: anime)
                         }
                     }
                     Canvas(height: 34)
@@ -431,6 +535,7 @@ pub fn film_cell(anime: anime::Client, episode: anime::Episode) -> impl View {
     ui! {
         // `.d-ep`: 1.12 at the center, growing from 60 % of its height.
         Column(gap: 0, width: 220, scroll_scale: 1.12, scroll_origin_y: 0.6) {
+            Stack(align: top_trailing) {
             Button(id: episode_cell, label: episode.title, variant: film) {
                 if episode.pictured {
                     Stack(align: bottom_leading) {
@@ -450,6 +555,17 @@ pub fn film_cell(anime: anime::Client, episode: anime::Episode) -> impl View {
                     }
                 }
             } => anime.play_episode(episode.number)
+            // The plugin that marks single episodes turns these on.
+            if anime.episode_marking {
+                Row(gap: 0, padding: 6) {
+                    if episode.watched {
+                        IconButton(id: mark_unwatched, icon: "checkmark.circle", label: tr! { "zh-Hans" => "标记为未看", "en" => "Mark as not watched" }, prominence: prominent) => anime.mark_episode(episode.number, false)
+                    } else {
+                        IconButton(id: mark_watched, icon: "circle", label: tr! { "zh-Hans" => "标记为已看", "en" => "Mark as watched" }, prominence: prominent) => anime.mark_episode(episode.number, true)
+                    }
+                }
+            }
+            }
             // `.et` and `.es`: the title's 14 / 19 and the caption's 11.5 / 15.
             Canvas(height: 8)
             if episode.next {
@@ -457,7 +573,12 @@ pub fn film_cell(anime: anime::Client, episode: anime::Episode) -> impl View {
             } else {
                 Text(content: episode.title, style: headline, lines: 1, line_height: 19)
             }
-            Text(content: episode.note, style: caption, emphasis: secondary, line_height: 15)
+            Row(gap: 4, align: center) {
+                Text(content: episode.note, style: caption, emphasis: secondary, line_height: 15)
+                if episode.watched {
+                    Text(content: tr! { "zh-Hans" => "· 已看", "en" => "· Watched" }, style: caption, emphasis: secondary, line_height: 15)
+                }
+            }
         }
     }
 }
@@ -982,16 +1103,18 @@ pub fn phone_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
                             MenuItem(id: want, label: tr! { "zh-Hans" => "想看", "en" => "Want to Watch" }) => anime.set_status(WatchStatus::Want)
                             MenuItem(id: watching_now, label: tr! { "zh-Hans" => "在看", "en" => "Watching" }) => anime.set_status(WatchStatus::Watching)
                             MenuItem(id: watched, label: tr! { "zh-Hans" => "看过", "en" => "Watched" }) => anime.set_status(WatchStatus::Watched)
+                            MenuItem(id: dropped, label: tr! { "zh-Hans" => "抛弃", "en" => "Dropped" }) => anime.set_status(WatchStatus::Dropped)
                         }
-                        Menu(id: phone_rate, label: tr! { "zh-Hans" => "评分", "en" => "Rate" }, icon: "star", style: icon, height: 34) {
-                            MenuItem(id: rate_10, label: tr! { "zh-Hans" => "10 分 · 神作", "en" => "10 · Masterpiece" }) => anime.rate(10)
-                            MenuItem(id: rate_8, label: tr! { "zh-Hans" => "8 分 · 力荐", "en" => "8 · Great" }) => anime.rate(8)
-                            MenuItem(id: rate_6, label: tr! { "zh-Hans" => "6 分 · 还行", "en" => "6 · Fine" }) => anime.rate(6)
-                            MenuItem(id: rate_4, label: tr! { "zh-Hans" => "4 分 · 较差", "en" => "4 · Poor" }) => anime.rate(4)
-                            MenuItem(id: rate_2, label: tr! { "zh-Hans" => "2 分 · 不行", "en" => "2 · Bad" }) => anime.rate(2)
+                        if anime.can_rate {
+                            Button(id: phone_rate, label: anime.my_score, icon: "star", shape: capsule, height: 32) => anime.show_rating(true)
+                        }
+                        if anime.can_review {
+                            Button(id: phone_review, label: tr! { "zh-Hans" => "写评价", "en" => "Review" }, icon: "note.text", shape: capsule, height: 32) => anime.show_review(true)
                         }
                         Spacer
                     }
+                    Canvas(height: 6)
+                    sync_status(anime: anime)
                     Canvas(height: 14)
                     Text(content: anime.show.summary, font_size: 13, line_height: 18, emphasis: secondary, lines: 3)
                     detail_fetch_status(anime: anime)

@@ -1328,6 +1328,8 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "md-5",
+ "regex",
+ "scraper",
  "serde",
  "serde_json",
  "sha2",

@@ -2,7 +2,8 @@
 //! the engines keep what they show in their own state.
 
 use crate::{
-    Anime, Entry, Episode, EpisodeFile, FileId, Fingerprint, Recent, Seen, Shelf, Source, Watching,
+    Anime, Entry, Episode, EpisodeFile, FileId, Fingerprint, Mark, Recent, Seen, Shelf, Source,
+    Watching,
 };
 
 pub struct Db;
@@ -126,4 +127,16 @@ impl Db {
     }
 
     pub fn unlink(&self, _file: FileId) {}
+
+    pub fn mark(&self, _dandanplay_id: i64) -> Mark {
+        Mark::default()
+    }
+
+    pub fn set_mark(&self, _anime: &Anime, _mark: &Mark) {}
+
+    pub fn watched_numbers(&self, _dandanplay_id: i64) -> Vec<i64> {
+        Vec::new()
+    }
+
+    pub fn set_watched(&self, _anime: &Anime, _episode: &Episode, _watched: bool, _manual: bool) {}
 }

@@ -269,3 +269,64 @@ fn a_folder_source_keeps_what_scans_saw_and_what_the_user_decided() {
     assert!(db.sources().is_empty() && db.entries(None).is_empty());
     assert_eq!(db.file_episode(one).unwrap().1.number, 1);
 }
+
+#[test]
+fn marks_and_watched_episodes_stay_with_the_anime_with_or_without_files() {
+    let db = Db::in_memory();
+    let frieren = Anime {
+        dandanplay_id: 17675,
+        title: "葬送的芙莉莲".into(),
+        image: "https://img/f.jpg".into(),
+    };
+    assert_eq!(db.mark(17675), Mark::default());
+    db.set_mark(
+        &frieren,
+        &Mark {
+            status: Some("watching".into()),
+            rating: 8,
+        },
+    );
+    assert_eq!(db.mark(17675).rating, 8);
+    // A later sighting without a picture keeps the one there was.
+    db.set_mark(
+        &Anime {
+            image: String::new(),
+            ..frieren.clone()
+        },
+        &Mark::default(),
+    );
+    assert_eq!(db.mark(17675), Mark::default());
+    assert_eq!(db.anime(17675).unwrap().image, "https://img/f.jpg");
+
+    let episode = |number: i64| Episode {
+        dandanplay_id: 176_750_000 + number,
+        number,
+        title: String::new(),
+    };
+    // One episode has a file; the others are watched without one.
+    let file = db.opened("file:///v/2.mkv", Some(&print("2", 2))).unwrap();
+    db.link_episode(file, &frieren, &episode(2), false);
+    db.set_watched(&frieren, &episode(2), true, false);
+    db.set_watched(&frieren, &episode(5), true, true);
+    db.set_watched(
+        &frieren,
+        &Episode {
+            dandanplay_id: 0,
+            number: 7,
+            title: String::new(),
+        },
+        true,
+        false,
+    );
+    db.set_watched(&frieren, &episode(5), true, false);
+    assert_eq!(db.watched_numbers(17675), vec![2, 5, 7]);
+    assert_eq!(db.episode_files(17675).len(), 1);
+    // A file matched later to an episode watched without one joins its row.
+    let later = db.opened("file:///v/5.mkv", Some(&print("5", 5))).unwrap();
+    db.link_episode(later, &frieren, &episode(5), false);
+    assert_eq!(db.episode_files(17675).len(), 2);
+    db.set_watched(&frieren, &episode(5), false, true);
+    db.set_watched(&frieren, &episode(9), false, true);
+    assert_eq!(db.watched_numbers(17675), vec![2, 7]);
+    assert!(db.watched_numbers(1).is_empty());
+}
