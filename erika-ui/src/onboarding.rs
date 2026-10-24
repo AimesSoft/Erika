@@ -23,9 +23,9 @@ pub fn onboarding(app: erika::Client) -> impl View {
             }
         } else {
             // On the phone the flow covers the screen (`obOpen`: the whole
-            // window), its foot 72 points at the bottom.
+            // window, under the status bar), its foot 72 points at the bottom.
             Modal(width: 960, height: 600, cover: compact, appear: pop_in, disappear: fade) {
-                Stack(variant: onboarding_page) {
+                Stack(variant: onboarding_page, under_bars: true) {
                     onboarding_content(app: app)
                 }
             }

@@ -1164,7 +1164,8 @@ pub fn settings_plugins(app: erika::Client, #[session] draft: PluginsDraft) -> i
                         Text(content: tr! { "zh-Hans" => "插件来自 NipaPlay 插件市场；Erika 自己的市场上线前，先不检查这些插件要求的版本。", "en" => "Plugins come from NipaPlay's market; until Erika's own opens, their version requirements are not checked." }, style: caption, emphasis: secondary, lines: 2)
                     }
                     Spacer
-                    Button(id: refresh_plugins, label: tr! { "zh-Hans" => "刷新", "en" => "Refresh" }, icon: "arrow.triangle.2.circlepath", prominence: plain, enabled: !app.plugins_loading) => app.refresh_plugins()
+                    // The icon alone: on a phone the note beside it leaves no room for a word.
+                    IconButton(id: refresh_plugins, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "刷新", "en" => "Refresh" }, prominence: plain, enabled: !app.plugins_loading) => app.refresh_plugins()
                 } else {
                     Text(content: tr! { "zh-Hans" => "可以导入 Erika 插件文件夹（pack.json、脚本和 icon.png），或 NipaPlay 的 .js 插件。", "en" => "Import an Erika plugin folder (pack.json, its script and icon.png), or a NipaPlay .js plugin." }, style: caption, emphasis: secondary, lines: 2)
                     Spacer
