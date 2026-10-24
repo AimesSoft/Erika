@@ -162,3 +162,51 @@ fn the_real_market_installs_and_loads() {
         );
     }
 }
+
+/// Erika's own plugins install from an index of folders and load:
+/// `ERIKA_PLUGINS_REPO=…/erika_plugins cargo test -p erika-core own_plugins -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn erikas_own_plugins_install_and_load() {
+    folder();
+    let repo = std::env::var("ERIKA_PLUGINS_REPO").expect("ERIKA_PLUGINS_REPO");
+    let listings = store::read_index(&format!("{repo}/plugins.json")).unwrap();
+    assert!(listings.iter().all(|listing| matches!(listing.files, store::Files::Folder(_))));
+    let mut engine = ErikaEngine::default();
+    engine.plugins_wake();
+    engine.plugins.listings = listings.clone();
+    for listing in &listings {
+        engine.install_plugin_command(listing.pack.id.clone()).unwrap();
+    }
+    settle(&mut engine, |engine| {
+        engine.plugins.busy.is_empty()
+            && listings.iter().all(|listing| {
+                engine
+                    .plugins
+                    .find(&listing.pack.id)
+                    .is_some_and(|p| p.loaded || !p.error.is_empty())
+            })
+    });
+    for listing in &listings {
+        let plugin = engine.plugins.find(&listing.pack.id).unwrap();
+        let row = row(&engine, &listing.pack.id).unwrap();
+        println!(
+            "{} — loaded {} entries {} image {} error {:?}",
+            plugin.pack.id,
+            plugin.loaded,
+            plugin.entries.len(),
+            row.image.is_some(),
+            plugin.error
+        );
+        assert!(plugin.loaded, "{}: {}", plugin.pack.id, plugin.error);
+        assert!(row.image.is_some(), "{} shows its icon.png", plugin.pack.id);
+    }
+    let extended = engine.plugins.extensions();
+    println!("{extended:?}");
+    assert!(extended.speeds.contains(&5.0) && extended.speeds.contains(&0.25));
+    assert!(extended.hex_input && extended.watched_button && extended.quick_select && extended.opening);
+    assert_eq!(extended.colors.len(), 9);
+    assert!(engine.state.speeds.iter().any(|speed| speed.label == "5.0×"));
+    assert!(engine.state.speeds.iter().any(|speed| speed.label == "0.25×"));
+    assert!(engine.state.download_quick_select);
+}
