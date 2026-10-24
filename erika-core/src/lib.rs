@@ -438,6 +438,7 @@ impl erika::Commands for ErikaEngine {
         }
         self.db
             .set_setting(&key, Some(if value { "true" } else { "false" }));
+        self.plugin_event("settingsChanged", serde_json::json!({ "key": key, "value": value }));
         Ok(())
     }
     fn set_module(&mut self, id: String, enabled: bool) -> Result<(), CommandError> {

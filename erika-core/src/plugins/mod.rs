@@ -295,6 +295,11 @@ impl ErikaEngine {
             .filter(|id| self.plugins.enabled(id))
             .collect();
         self.refresh_market();
+        // `--load-js <file>` or `--load-js=<file>`: install and turn on a
+        // script, as NipaPlay's desktop builds do, for trying one out.
+        for script in load_js_arguments(std::env::args()) {
+            let _ = self.import_plugin_command(MediaSource::file(script));
+        }
     }
 
     fn refresh_market(&mut self) {
@@ -1228,6 +1233,22 @@ impl ErikaEngine {
     }
 }
 
+/// The scripts `--load-js` names on the command line.
+fn load_js_arguments(arguments: impl Iterator<Item = String>) -> Vec<PathBuf> {
+    let mut scripts = Vec::new();
+    let mut arguments = arguments.skip(1);
+    while let Some(argument) = arguments.next() {
+        if argument == "--load-js" {
+            if let Some(path) = arguments.next() {
+                scripts.push(PathBuf::from(path));
+            }
+        } else if let Some(path) = argument.strip_prefix("--load-js=") {
+            scripts.push(PathBuf::from(path));
+        }
+    }
+    scripts
+}
+
 /// Download the scripts a plugin requires into its folder, numbered in
 /// order: they run before it.
 fn fetch_requires(pack: &Pack) -> Result<(), String> {
@@ -1354,6 +1375,15 @@ mod engine_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn load_js_names_scripts() {
+        let arguments = ["erika", "--load-js", "/a.js", "--other", "--load-js=/b.js"].map(String::from);
+        assert_eq!(
+            load_js_arguments(arguments.into_iter()),
+            vec![PathBuf::from("/a.js"), PathBuf::from("/b.js")]
+        );
+    }
 
     #[test]
     fn saved_state_round_trips() {
