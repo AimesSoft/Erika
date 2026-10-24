@@ -19,6 +19,7 @@ pub mod bangumi;
 pub mod custom;
 #[cfg(not(target_arch = "wasm32"))]
 mod http;
+pub mod remote;
 pub mod reviews;
 
 /// The app id the gateways know, and the secret they replace with theirs.

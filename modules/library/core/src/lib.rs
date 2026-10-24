@@ -7,6 +7,7 @@
 
 mod matching;
 mod names;
+mod remote;
 mod scan;
 mod shared;
 #[cfg(test)]
@@ -33,6 +34,10 @@ const RECENT: usize = 8;
 enum Done {
     SharedMount(u64, String, String, Result<Vec<shared::Video>, String>),
     SharedRefresh(i64, String, Result<Vec<shared::Video>, String>),
+    /// A dandanplay client was read for mounting (or editing source
+    /// `editing`) under a name at an address, or for refreshing a source.
+    RemoteMount(u64, i64, String, String, Result<remote::Snapshot, String>),
+    RemoteRefresh(i64, String, Result<remote::Snapshot, String>),
     Scan(i64, Scanned),
     Match(i64, Matched),
     Details(i64, Result<Details, erika_dandanplay::Error>),
@@ -64,6 +69,10 @@ pub struct LibraryEngine {
     /// Whether the first wake, as the app starts, has come.
     started: bool,
     shared_request: u64,
+    remote_request: u64,
+    /// The file names of the videos shared devices serve, by address: their
+    /// addresses name no file.
+    names: HashMap<String, String>,
 }
 
 /// Run `work` on another thread, handing what it sends to the engine,
@@ -159,6 +168,12 @@ fn content_text(content: &SourceContent) -> &'static str {
     }
 }
 
+/// Whether a source is a device sharing its videos over the network, whose
+/// videos are streamed rather than scanned.
+fn network(kind: &str) -> bool {
+    kind == shared::KIND || kind == remote::KIND
+}
+
 /// Whether the user's own server recognizes what a source holds; dandanplay
 /// recognizes anime.
 fn by_server(content: &str) -> bool {
@@ -179,6 +194,7 @@ fn no_folder() -> LibraryFolder {
     LibraryFolder {
         source: 0,
         shared: false,
+        dandanplay: false,
         content: SourceContent::Anime,
         title: String::new(),
         location: String::new(),
@@ -279,6 +295,14 @@ impl Default for LibraryEngine {
                 shared_prompt: false,
                 shared_connecting: false,
                 shared_error: String::new(),
+                remote_prompt: false,
+                remote_connecting: false,
+                remote_error: String::new(),
+                remote_editing: 0,
+                remote_name: String::new(),
+                remote_address: String::new(),
+                remote_has_token: false,
+                remote_saved: 0,
                 show: nothing(),
                 posters: Vec::new(),
                 recent: Vec::new(),
@@ -305,6 +329,8 @@ impl Default for LibraryEngine {
             asked: HashSet::new(),
             started: false,
             shared_request: 0,
+            remote_request: 0,
+            names: HashMap::new(),
         };
         engine.load();
         engine
@@ -331,7 +357,8 @@ impl LibraryEngine {
             .iter()
             .map(|source| LibrarySourceRow {
                 id: source.id,
-                shared: source.kind == shared::KIND,
+                shared: network(&source.kind),
+                dandanplay: source.kind == remote::KIND,
                 name: source.name.clone(),
                 content: content_of(&source.content),
                 location: root_of(source).map_or_else(
@@ -347,7 +374,7 @@ impl LibraryEngine {
                         done: *done as i64,
                         total: *total as i64,
                     },
-                    None if self.missing.contains(&source.id) && source.kind == shared::KIND => {
+                    None if self.missing.contains(&source.id) && network(&source.kind) => {
                         SourceStatus::Offline
                     }
                     None if self.missing.contains(&source.id) => SourceStatus::Missing,
@@ -373,11 +400,7 @@ impl LibraryEngine {
                     .as_deref()
                     .and_then(|root| parts(root, &entry.url))
                     .unwrap_or_default();
-                let name = parts
-                    .last()
-                    .cloned()
-                    .or_else(|| bern::files::name(&entry.url))
-                    .unwrap_or_default();
+                let name = self.name_of(&entry.url, &parts);
                 let place = std::iter::once(source.name.as_str())
                     .chain(
                         parts
@@ -418,7 +441,7 @@ impl LibraryEngine {
         let Some(source) = sources.iter().find(|source| source.id == *id) else {
             return no_folder();
         };
-        if source.kind == shared::KIND {
+        if network(&source.kind) {
             return self.shared_folder(source, path, entries);
         }
         let Some(root) = root_of(source) else {
@@ -463,6 +486,7 @@ impl LibraryEngine {
         LibraryFolder {
             source: *id,
             shared: false,
+            dandanplay: false,
             content: content_of(&source.content),
             title: path.last().cloned().unwrap_or_else(|| source.name.clone()),
             location: path
@@ -489,18 +513,50 @@ impl LibraryEngine {
             .filter(|url| !present.contains(url.as_str()))
             .collect();
         for video in videos {
+            self.names.insert(video.url.clone(), video.name.clone());
             if let Some(file) = self.db.saw(
                 id,
                 &video.url,
                 video.fingerprint.size as i64,
                 0,
                 Some(&video.fingerprint),
-            ) {
-                self.db
-                    .link_episode(file, &video.anime, &video.episode, false);
+            ) && let Some((anime, episode)) = &video.matched
+            {
+                self.db.link_episode(file, anime, episode, false);
             }
         }
         self.db.forget(id, &gone);
+    }
+
+    /// A dandanplay client's library, read: its videos, and the thumbnails
+    /// of its shows as the posters of those dandanplay cannot be asked
+    /// about, as NipaPlay shows them.
+    fn import_remote(&mut self, id: i64, snapshot: &remote::Snapshot) {
+        self.import_shared(id, &snapshot.videos);
+        for (anime, thumbnail) in &snapshot.thumbnails {
+            if let Some(known) = self.db.anime(*anime).filter(|known| {
+                !reachable(known.dandanplay_id)
+                    && (known.image.is_empty()
+                        || (erika_dandanplay::remote::is_thumbnail(&known.image)
+                            && known.image != *thumbnail))
+            }) {
+                self.db.remember_anime(&Anime {
+                    image: thumbnail.clone(),
+                    ..known
+                });
+            }
+        }
+    }
+
+    /// The name of the video at `url`: the last of `parts` leading to it
+    /// in its folder, the name its shared device gave, or its address's.
+    fn name_of(&self, url: &str, parts: &[String]) -> String {
+        parts
+            .last()
+            .cloned()
+            .or_else(|| self.names.get(url).cloned())
+            .or_else(|| bern::files::name(url))
+            .unwrap_or_default()
     }
 
     fn shared_folder(&self, source: &Source, path: &[String], entries: &[Entry]) -> LibraryFolder {
@@ -508,6 +564,15 @@ impl LibraryEngine {
         let mut files = Vec::new();
         for entry in entries.iter().filter(|entry| entry.source == source.id) {
             let Some((anime, episode)) = &entry.matched else {
+                // A dandanplay client's videos it did not match wait beside
+                // its shows, to be matched here.
+                if path.is_empty() && source.kind == remote::KIND {
+                    files.push(file_row(
+                        entry,
+                        &self.name_of(&entry.url, &[]),
+                        String::new(),
+                    ));
+                }
                 continue;
             };
             if path.is_empty() {
@@ -528,6 +593,7 @@ impl LibraryEngine {
         LibraryFolder {
             source: source.id,
             shared: true,
+            dandanplay: source.kind == remote::KIND,
             content: SourceContent::Anime,
             title: path.last().cloned().unwrap_or_else(|| source.name.clone()),
             location: source.location.clone(),
@@ -550,6 +616,23 @@ impl LibraryEngine {
     /// Scan source `id`, unless it is being scanned.
     fn start_scan(&mut self, id: i64) {
         if self.busy.contains_key(&id) {
+            return;
+        }
+        if let Some(source) = self
+            .db
+            .sources()
+            .into_iter()
+            .find(|source| source.id == id && source.kind == remote::KIND)
+        {
+            let token = self
+                .db
+                .setting(&remote::token_setting(id))
+                .unwrap_or_default();
+            self.busy.insert(id, Busy::Scanning { done: 0, total: 0 });
+            in_background(&self.inbox, move |send| {
+                let result = remote::fetch(&source.location, &token);
+                send(Done::RemoteRefresh(id, source.location, result))
+            });
             return;
         }
         if let Some(source) = self
@@ -624,12 +707,7 @@ impl LibraryEngine {
             .seen(id)
             .into_iter()
             .filter(|seen| !seen.matched && !seen.decided)
-            .filter_map(|seen| {
-                Some((
-                    bern::files::name(&seen.url).unwrap_or_default(),
-                    seen.fingerprint?,
-                ))
-            })
+            .filter_map(|seen| Some((self.name_of(&seen.url, &[]), seen.fingerprint?)))
             .collect();
         let can_ask = if custom {
             erika_dandanplay::custom::server().is_some()
@@ -698,7 +776,10 @@ impl LibraryEngine {
     fn ask_posters(&mut self, shelf: &[erika_store::Shelf]) {
         for id in shelf
             .iter()
-            .filter(|shelf| shelf.anime.image.is_empty())
+            .filter(|shelf| {
+                shelf.anime.image.is_empty()
+                    || erika_dandanplay::remote::is_thumbnail(&shelf.anime.image)
+            })
             .map(|shelf| shelf.anime.dandanplay_id)
             .collect::<Vec<_>>()
         {
@@ -712,11 +793,10 @@ impl LibraryEngine {
         if let Some(session) = self.session.as_mut() {
             session.details(asked, details);
         }
-        if let Some(known) = self
-            .db
-            .anime(details.anime_id)
-            .filter(|known| known.image.is_empty() && !details.image_url.is_empty())
-        {
+        if let Some(known) = self.db.anime(details.anime_id).filter(|known| {
+            (known.image.is_empty() || erika_dandanplay::remote::is_thumbnail(&known.image))
+                && !details.image_url.is_empty()
+        }) {
             self.db.remember_anime(&Anime {
                 image: details.image_url.clone(),
                 ..known
@@ -774,6 +854,67 @@ impl LibraryEngine {
                             self.missing.remove(&id);
                             changed = true;
                             self.finish(id);
+                        }
+                        Err(_) => {
+                            self.missing.insert(id);
+                            self.announce.remove(&id);
+                        }
+                    }
+                }
+                Done::RemoteMount(request, editing, name, address, result) => {
+                    if request != self.remote_request || !self.state.remote_prompt {
+                        continue;
+                    }
+                    self.state.remote_connecting = false;
+                    let snapshot = match result {
+                        Ok(snapshot) => snapshot,
+                        Err(error) => {
+                            self.state.remote_error = error;
+                            continue;
+                        }
+                    };
+                    let id = if editing > 0 {
+                        if !self.db.sources().iter().any(|source| source.id == editing) {
+                            self.state.remote_error = "这个来源已经被移除了".into();
+                            continue;
+                        }
+                        self.db.set_source(editing, &name, &address);
+                        Some(editing)
+                    } else {
+                        self.db.add_source(remote::KIND, &name, &address, "anime")
+                    };
+                    let Some(id) = id else {
+                        self.state.remote_error = "无法保存弹弹play共享媒体来源，请重试".into();
+                        continue;
+                    };
+                    self.db.set_setting(
+                        &remote::token_setting(id),
+                        Some(snapshot.token.as_str()).filter(|token| !token.is_empty()),
+                    );
+                    self.import_remote(id, &snapshot);
+                    self.missing.remove(&id);
+                    self.state.remote_prompt = false;
+                    self.state.remote_error.clear();
+                    self.state.remote_editing = 0;
+                    self.state.remote_saved += 1;
+                    self.announce.insert(id);
+                    self.start_matching(id);
+                    changed = true;
+                }
+                Done::RemoteRefresh(id, address, result) => {
+                    // A removed source's ID may have been reused by a different source.
+                    if !self.db.sources().iter().any(|source| {
+                        source.id == id && source.kind == remote::KIND && source.location == address
+                    }) {
+                        continue;
+                    }
+                    self.busy.remove(&id);
+                    match result {
+                        Ok(snapshot) => {
+                            self.import_remote(id, &snapshot);
+                            self.missing.remove(&id);
+                            changed = true;
+                            self.start_matching(id);
                         }
                         Err(_) => {
                             self.missing.insert(id);
@@ -882,11 +1023,7 @@ impl LibraryEngine {
         let parts = root_of(&source)
             .and_then(|root| parts(&root, &entry.url))
             .unwrap_or_default();
-        let name = parts
-            .last()
-            .cloned()
-            .or_else(|| bern::files::name(&entry.url))
-            .unwrap_or_default();
+        let name = self.name_of(&entry.url, &parts);
         let place = std::iter::once(source.name.clone())
             .chain(parts.iter().cloned())
             .collect::<Vec<_>>()
@@ -1195,6 +1332,102 @@ impl library::Commands for LibraryEngine {
         Ok(())
     }
 
+    fn open_remote_mount(&mut self) -> Result<(), CommandError> {
+        self.remote_request += 1;
+        self.state.remote_prompt = true;
+        self.state.remote_connecting = false;
+        self.state.remote_error.clear();
+        self.state.remote_editing = 0;
+        self.state.remote_name.clear();
+        self.state.remote_address.clear();
+        self.state.remote_has_token = false;
+        Ok(())
+    }
+
+    fn edit_remote(&mut self, source: i64) -> Result<(), CommandError> {
+        let known = self
+            .db
+            .sources()
+            .into_iter()
+            .find(|known| known.id == source && known.kind == remote::KIND)
+            .ok_or_else(unknown_source)?;
+        self.remote_request += 1;
+        self.state.remote_prompt = true;
+        self.state.remote_connecting = false;
+        self.state.remote_error.clear();
+        self.state.remote_editing = source;
+        self.state.remote_name = known.name;
+        self.state.remote_address = known.location;
+        self.state.remote_has_token = self.db.setting(&remote::token_setting(source)).is_some();
+        Ok(())
+    }
+
+    fn cancel_remote_mount(&mut self) -> Result<(), CommandError> {
+        self.remote_request += 1;
+        self.state.remote_prompt = false;
+        self.state.remote_connecting = false;
+        self.state.remote_error.clear();
+        self.state.remote_editing = 0;
+        Ok(())
+    }
+
+    fn mount_remote(
+        &mut self,
+        name: String,
+        address: String,
+        token: String,
+    ) -> Result<(), CommandError> {
+        if self.state.remote_connecting {
+            return Ok(());
+        }
+        self.state.remote_prompt = true;
+        self.state.remote_error.clear();
+        let editing = self.state.remote_editing;
+        let known = self
+            .db
+            .sources()
+            .into_iter()
+            .find(|known| editing > 0 && known.id == editing);
+        let address = match (address.trim(), &known) {
+            ("", Some(known)) => known.location.clone(),
+            (address, _) => match erika_dandanplay::remote::address(address) {
+                Ok(address) => address,
+                Err(error) => {
+                    self.state.remote_error = error;
+                    return Ok(());
+                }
+            },
+        };
+        if editing > 0
+            && self.db.sources().iter().any(|other| {
+                other.id != editing && other.kind == remote::KIND && other.location == address
+            })
+        {
+            self.state.remote_error = "这个地址已经挂载过了".into();
+            return Ok(());
+        }
+        let name = match (name.trim(), &known) {
+            ("", Some(known)) => known.name.clone(),
+            ("", None) => address.clone(),
+            (name, _) => name.to_owned(),
+        };
+        let token = match token.trim() {
+            "" if editing > 0 => self
+                .db
+                .setting(&remote::token_setting(editing))
+                .unwrap_or_default(),
+            token => token.to_owned(),
+        };
+        self.remote_request += 1;
+        let request = self.remote_request;
+        self.state.remote_connecting = true;
+        in_background(&self.inbox, move |send| {
+            let result = remote::fetch(&address, &token);
+            send(Done::RemoteMount(request, editing, name, address, result));
+        });
+        Ok(())
+    }
+
     fn set_content(&mut self, source: i64, content: SourceContent) -> Result<(), CommandError> {
         let known = self
             .db
@@ -1230,6 +1463,7 @@ impl library::Commands for LibraryEngine {
             .find(|known| known.id == source)
             .ok_or_else(unknown_source)?;
         self.db.remove_source(source);
+        self.db.set_setting(&remote::token_setting(source), None);
         self.busy.remove(&source);
         self.missing.remove(&source);
         self.notify(LibraryNotice::Removed { name: known.name });

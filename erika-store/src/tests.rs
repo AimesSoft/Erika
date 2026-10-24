@@ -269,3 +269,28 @@ fn a_folder_source_keeps_what_scans_saw_and_what_the_user_decided() {
     assert!(db.sources().is_empty() && db.entries(None).is_empty());
     assert_eq!(db.file_episode(one).unwrap().1.number, 1);
 }
+
+#[test]
+fn a_stream_a_source_holds_is_its_file_when_played() {
+    let db = Db::in_memory();
+    let source = db
+        .add_source("dandanplay", "书房", "http://192.168.1.2", "anime")
+        .unwrap();
+    let url = "http://192.168.1.2/api/v1/stream/id/c004e475";
+    let file = db
+        .saw(source, url, 100, 0, Some(&print("0377", 100)))
+        .unwrap();
+    // A stream cannot be read for its fingerprint; its address says which
+    // file it is, so its progress and episode follow it.
+    assert_eq!(db.opened(url, None), Some(file));
+    assert_eq!(
+        db.opened("http://192.168.1.2/api/v1/stream/id/other", None),
+        None
+    );
+    db.set_source(source, "客厅", "http://192.168.1.3");
+    let renamed = db.sources().into_iter().find(|s| s.id == source).unwrap();
+    assert_eq!(
+        (renamed.name.as_str(), renamed.location.as_str()),
+        ("客厅", "http://192.168.1.3")
+    );
+}

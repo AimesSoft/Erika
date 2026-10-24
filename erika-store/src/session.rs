@@ -90,6 +90,8 @@ impl Db {
 
     pub fn set_source_content(&self, _id: i64, _content: &str) {}
 
+    pub fn set_source(&self, _id: i64, _name: &str, _location: &str) {}
+
     pub fn fingerprint_of(&self, _file: FileId) -> Option<Fingerprint> {
         None
     }

@@ -109,6 +109,8 @@ pub mod library {
     pub struct LibrarySourceRow {
         pub id: i64,
         pub shared: bool,
+        /// A dandanplay PC client's remote access, which is shared too.
+        pub dandanplay: bool,
         #[content]
         pub name: String,
         pub content: SourceContent,
@@ -179,6 +181,7 @@ pub mod library {
     pub struct LibraryFolder {
         pub source: i64,
         pub shared: bool,
+        pub dandanplay: bool,
         pub content: SourceContent,
         #[content]
         pub title: String,
@@ -344,6 +347,21 @@ pub mod library {
         pub shared_connecting: bool,
         #[content]
         pub shared_error: String,
+        /// Mounting a dandanplay PC client's remote access, or editing the
+        /// source `remote_editing` (0 while adding one): its name, address
+        /// and whether it keeps an API key, which empty fields keep.
+        pub remote_prompt: bool,
+        pub remote_connecting: bool,
+        #[content]
+        pub remote_error: String,
+        pub remote_editing: i64,
+        #[content]
+        pub remote_name: String,
+        #[content]
+        pub remote_address: String,
+        pub remote_has_token: bool,
+        /// Counts the connections saved, which clears the fields typed.
+        pub remote_saved: i64,
         pub posters: Vec<LibraryPoster>,
         /// The shows added last, newest first, for the home page, which
         /// shows them only when there are some.
@@ -395,6 +413,18 @@ pub mod library {
         fn open_shared_mount(&mut self) -> Result<(), CommandError>;
         fn cancel_shared_mount(&mut self) -> Result<(), CommandError>;
         fn mount_shared(&mut self, name: String, address: String) -> Result<(), CommandError>;
+        /// Mount a dandanplay PC client's remote access, or change the one
+        /// being edited; empty fields keep what it has.
+        fn open_remote_mount(&mut self) -> Result<(), CommandError>;
+        #[errors("unknown_source")]
+        fn edit_remote(&mut self, source: i64) -> Result<(), CommandError>;
+        fn cancel_remote_mount(&mut self) -> Result<(), CommandError>;
+        fn mount_remote(
+            &mut self,
+            name: String,
+            address: String,
+            token: String,
+        ) -> Result<(), CommandError>;
         /// Say what a source holds; its videos not matched are matched
         /// again where that content is recognized.
         #[errors("unknown_source")]

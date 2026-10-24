@@ -180,11 +180,25 @@ impl Db {
     }
 
     /// Note that the video at `url` was opened directly, and which file it
-    /// is when its fingerprint is known. Returns that file.
+    /// is when its fingerprint is known, or when a source holds it there (a
+    /// stream a shared device serves cannot be read for its fingerprint).
+    /// Returns that file.
     pub fn opened(&self, url: &str, fingerprint: Option<&Fingerprint>) -> Option<FileId> {
         logged(
             (|| {
-                let file = fingerprint.map(|fingerprint| self.file(fingerprint)).transpose()?;
+                let file = match fingerprint {
+                    Some(fingerprint) => Some(self.file(fingerprint)?),
+                    None => self
+                        .conn
+                        .query_row(
+                            "SELECT file_id FROM address
+                             WHERE path = ?1 AND source_id != ?2 AND file_id IS NOT NULL
+                             ORDER BY seen_at DESC LIMIT 1",
+                            params![url, OPENED],
+                            |row| row.get(0),
+                        )
+                        .optional()?,
+                };
                 self.conn.execute(
                     "INSERT INTO address (source_id, path, file_id, size, seen_at) VALUES (?1, ?2, ?3, ?4, ?5)
                      ON CONFLICT (source_id, path) DO UPDATE SET
@@ -571,6 +585,17 @@ impl Db {
             })(),
             "add a source",
         )
+    }
+
+    /// Source `id` is called `name` and is at `location` from now on.
+    pub fn set_source(&self, id: i64, name: &str, location: &str) {
+        logged(
+            self.conn.execute(
+                "UPDATE source SET name = ?2, location = ?3 WHERE id = ?1 AND id != ?4",
+                params![id, name, location, OPENED],
+            ),
+            "change a source",
+        );
     }
 
     /// Source `id` holds `content` from now on.

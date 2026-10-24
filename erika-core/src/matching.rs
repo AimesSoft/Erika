@@ -342,18 +342,32 @@ impl ErikaEngine {
             self.prepare_queue(&source);
         }
         self.episode_playing = Some(episode.dandanplay_id);
+        // A video a dandanplay PC client streams has the danmaku that
+        // client fetches, which need no account here.
+        let remote = self
+            .source
+            .as_ref()
+            .map(|source| source.url.clone())
+            .filter(|url| erika_dandanplay::remote::comment_url(url).is_some())
+            .filter(|_| episode.dandanplay_id > 0 && erika_dandanplay::token().is_none());
         if !self.state.features.danmaku
-            || (episode.dandanplay_id > 0 && erika_dandanplay::token().is_none())
+            || (episode.dandanplay_id > 0
+                && erika_dandanplay::token().is_none()
+                && remote.is_none())
         {
             return;
         }
         let id = episode.dandanplay_id;
         let revision = self.match_revision;
         in_background(&self.found, move || {
+            let result = match remote {
+                Some(stream) => erika_dandanplay::remote::comments(&stream),
+                None => erika_dandanplay::comments(id).map_err(|e| e.message),
+            };
             vec![Found::Comments {
                 revision,
                 episode: id,
-                result: erika_dandanplay::comments(id).map_err(|e| e.message),
+                result,
             }]
         });
     }

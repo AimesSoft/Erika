@@ -6,11 +6,13 @@ use url::Url;
 
 pub const KIND: &str = "nipaplay";
 
+/// A video a shared device serves: where it streams from, its file name,
+/// which file it is and, when the device matched it, the episode.
 pub struct Video {
     pub url: String,
+    pub name: String,
     pub fingerprint: Fingerprint,
-    pub anime: Anime,
-    pub episode: Episode,
+    pub matched: Option<(Anime, Episode)>,
 }
 
 fn local(host: &str) -> bool {
@@ -152,17 +154,23 @@ fn parse_videos(base: &str, summary: &Value, payload: &Value) -> Result<Vec<Vide
             };
         videos.push(Video {
             url,
-            fingerprint,
-            anime: anime.clone(),
-            episode: Episode {
-                dandanplay_id: episode_id,
-                number: number(&episode["episodeNumber"])
-                    .or_else(|| crate::names::episode_number(text(episode, "title")))
-                    .or_else(|| crate::names::episode_number(text(episode, "fileName")))
-                    .unwrap_or(index as i64 + 1)
-                    .max(1),
-                title: text(episode, "title").to_owned(),
+            name: match text(episode, "fileName") {
+                "" => text(episode, "title").to_owned(),
+                name => name.to_owned(),
             },
+            fingerprint,
+            matched: Some((
+                anime.clone(),
+                Episode {
+                    dandanplay_id: episode_id,
+                    number: number(&episode["episodeNumber"])
+                        .or_else(|| crate::names::episode_number(text(episode, "title")))
+                        .or_else(|| crate::names::episode_number(text(episode, "fileName")))
+                        .unwrap_or(index as i64 + 1)
+                        .max(1),
+                    title: text(episode, "title").to_owned(),
+                },
+            )),
         });
     }
     Ok(videos)
@@ -321,10 +329,12 @@ mod tests {
             video.url,
             "https://media.example.com/nipa/api/media/local/share/episodes/abc/stream"
         );
-        assert_eq!(video.episode.dandanplay_id, 795321);
-        assert_eq!(video.episode.number, 2); // The opaque episode ID is not its number.
+        let (anime, episode) = video.matched.as_ref().unwrap();
+        assert_eq!(episode.dandanplay_id, 795321);
+        assert_eq!(episode.number, 2); // The opaque episode ID is not its number.
         assert_eq!(video.fingerprint.md5, "0123456789abcdef0123456789abcdef");
-        assert_eq!(video.anime.title, "测试番剧");
+        assert_eq!(anime.title, "测试番剧");
+        assert_eq!(video.name, "show - 02.mkv");
         assert!(parse_videos("http://localhost:1180", &summary(), &json!({})).is_err());
     }
 
