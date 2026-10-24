@@ -576,6 +576,8 @@ pub struct ErikaDraft {
     /// The phone's settings, pushed over the home page.
     #[initial(PhoneSettings::Closed)]
     pub phone_settings: PhoneSettings,
+    /// The sections pushed over the phone's settings list.
+    pub settings_path: Vec<PhoneSettings>,
 }
 
 /// The application's player: liberika plays files and links in it, and

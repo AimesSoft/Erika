@@ -440,8 +440,7 @@ pub fn tv_settings(
 #[component]
 pub fn settings_account(app: erika::Client, settings_window: bool, #[session] draft: SettingsDraft) -> impl View {
     ui! {
-        Form(variant: settings_form, appear: settings_page_in) {
-            Slot(id: form_header)
+        Form(title: tr! { "zh-Hans" => "账号", "en" => "Account" }, variant: settings_form, appear: settings_page_in) {
             Section(title: tr! { "zh-Hans" => "弹弹play 账号", "en" => "dandanplay account" }) {
                 account_profile(app: app, bangumi: false, settings_window: settings_window, signed_in: app.account_status.signed_in, name: app.account_status.name, user: app.account_status.user, picture: app.account_status.avatar, busy: app.account_status.busy, message: app.account_status.error)
             }
@@ -455,8 +454,7 @@ pub fn settings_account(app: erika::Client, settings_window: bool, #[session] dr
 #[component]
 pub fn settings_general(app: erika::Client) -> impl View {
     ui! {
-        Form(variant: settings_form, appear: settings_page_in) {
-            Slot(id: form_header)
+        Form(title: tr! { "zh-Hans" => "通用", "en" => "General" }, variant: settings_form, appear: settings_page_in) {
             Section(title: tr! { "zh-Hans" => "启动", "en" => "Startup" }) {
                 Picker(id: startup, label: tr! { "zh-Hans" => "启动时打开", "en" => "Open at startup" }, selected: app.preferences.startup, style: menu) => app.set_startup(app.preferences.startup)
                 Picker(id: playback_end, label: tr! { "zh-Hans" => "播放结束后", "en" => "When playback ends" }, selected: app.preferences.playback_end, style: menu) => app.set_playback_end(app.preferences.playback_end)
@@ -470,8 +468,7 @@ pub fn settings_general(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_appearance(app: erika::Client) -> impl View {
     ui! {
-        Form(variant: settings_form, appear: settings_page_in) {
-            Slot(id: form_header)
+        Form(title: tr! { "zh-Hans" => "外观", "en" => "Appearance" }, variant: settings_form, appear: settings_page_in) {
             Section(title: tr! { "zh-Hans" => "主题色", "en" => "Accent color" }) {
                 Row(gap: 12, align: center) {
                     Column(gap: 1) {
@@ -552,8 +549,7 @@ pub fn settings_appearance(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_player(app: erika::Client) -> impl View {
     ui! {
-        Form(variant: settings_form, appear: settings_page_in) {
-            Slot(id: form_header)
+        Form(title: tr! { "zh-Hans" => "播放", "en" => "Playback" }, variant: settings_form, appear: settings_page_in) {
             Section(title: tr! { "zh-Hans" => "播放", "en" => "Playback" }) {
                 Picker(id: speed, label: tr! { "zh-Hans" => "默认倍速", "en" => "Default speed" }, selected: app.preferences.speed, style: menu) => app.set_speed(app.preferences.speed)
                 Switch(id: skip_segments, label: tr! { "zh-Hans" => "片头／片尾跳过提示", "en" => "Opening / ending skip hint" }, checked: app.player.skip_intro, style: switch) => app.set_skip_intro(app.player.skip_intro)
@@ -570,8 +566,7 @@ pub fn settings_player(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> impl View {
     ui! {
-        Form(variant: settings_form, appear: settings_page_in) {
-            Slot(id: form_header)
+        Form(title: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, variant: settings_form, appear: settings_page_in) {
             Section(title: tr! { "zh-Hans" => "显示", "en" => "Display" }) {
                 Switch(id: show_danmaku, label: tr! { "zh-Hans" => "显示弹幕", "en" => "Show danmaku" }, checked: app.preferences.show_danmaku, style: switch) => app.set_preference("show_danmaku", app.preferences.show_danmaku)
                 Column(gap: 4) {
@@ -618,8 +613,7 @@ pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> 
 #[component]
 pub fn settings_library(app: erika::Client) -> impl View {
     ui! {
-        Form(variant: settings_form, appear: settings_page_in) {
-            Slot(id: form_header)
+        Form(title: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, variant: settings_form, appear: settings_page_in) {
             Section {
                 Switch(id: sync_storage, label: tr! { "zh-Hans" => "同步与存储", "en" => "Sync and storage" }, checked: app.preferences.sync_storage, style: switch) => app.set_preference("sync_storage", app.preferences.sync_storage)
             }
@@ -632,8 +626,7 @@ pub fn settings_library(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_anime(anime: anime::Client) -> impl View {
     ui! {
-        Form(variant: settings_form, appear: settings_page_in) {
-            Slot(id: form_header)
+        Form(title: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, variant: settings_form, appear: settings_page_in) {
             Section {
                 if anime.can_choose_season_source {
                     Picker(id: season_source, label: tr! { "zh-Hans" => "新番数据源", "en" => "New Shows source" }, selected: anime.season_source, style: menu) => anime.set_season_source(anime.season_source)
@@ -659,7 +652,6 @@ pub fn settings_anime(anime: anime::Client) -> impl View {
 pub fn settings_module_placeholder(app: erika::Client) -> impl View {
     ui! {
         Form(variant: settings_form, appear: settings_page_in) {
-            Slot(id: form_header)
             Section {
                 Row(gap: 12, align: center) {
                     Column(gap: 1) {
@@ -682,8 +674,7 @@ pub fn settings_module_placeholder(app: erika::Client) -> impl View {
 pub fn settings_optional(app: erika::Client) -> impl View {
     ui! {
         Row(gap: 0, align: top) {
-            Form(variant: settings_form, appear: settings_page_in) {
-                Slot(id: form_header)
+            Form(title: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, variant: settings_form, appear: settings_page_in) {
                 if window.compact {
                     Section(style: plain) {
                         Column(gap: 0) {
@@ -919,8 +910,7 @@ pub fn settings_preview(app: erika::Client, width: f64) -> impl View {
 #[component]
 pub fn settings_keys(app: erika::Client) -> impl View {
     ui! {
-        Form(variant: settings_form, appear: settings_page_in) {
-            Slot(id: form_header)
+        Form(title: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, variant: settings_form, appear: settings_page_in) {
             Section(title: tr! { "zh-Hans" => "播放", "en" => "Playback" }) {
                 Row(gap: 8, align: center) {
                     Text(content: tr! { "zh-Hans" => "播放 / 暂停", "en" => "Play / Pause" }, style: body)
@@ -1085,8 +1075,7 @@ pub fn settings_keys(app: erika::Client) -> impl View {
 #[component]
 pub fn settings_about(app: erika::Client) -> impl View {
     ui! {
-        Form(variant: settings_form, appear: settings_page_in) {
-            Slot(id: form_header)
+        Form(title: tr! { "zh-Hans" => "关于", "en" => "About" }, variant: settings_form, appear: settings_page_in) {
             Section {
                 Column(gap: 6, padding_y: 12, align: center) {
                     Row {

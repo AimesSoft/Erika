@@ -36,8 +36,7 @@ pub fn sync_clock(sync: sync::Client) -> impl View {
 #[component]
 pub fn sync_settings(sync: sync::Client, #[session] draft: SyncDraft) -> impl View {
     ui! {
-        Form(variant: settings_form, appear: settings_page_in) {
-            Slot(id: form_header)
+        Form(title: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, variant: settings_form, appear: settings_page_in) {
             Section(title: tr! { "zh-Hans" => "状态", "en" => "Status" }) {
                 Row(gap: 12, align: center) {
                     Column(gap: 1) {

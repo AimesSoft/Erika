@@ -5,7 +5,7 @@
 //! full-window player when opened; what played last lists under it.
 use crate::phone::{
     PhoneSettings, phone_mini_player, phone_mini_player_props, phone_settings,
-    phone_settings_props, phone_settings_section, phone_settings_section_props,
+    phone_settings_props,
 };
 use crate::{AppWindows, ErikaDraft};
 use bern::prelude::*;
@@ -238,10 +238,8 @@ pub fn phone_pure(
         Stack(variant: phone_page, align: bottom) {
             if draft.phone_settings == PhoneSettings::Closed {
                 phone_pure_page(app: app)
-            } else if draft.phone_settings == PhoneSettings::List {
-                phone_settings(app: app)
             } else {
-                phone_settings_section(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+                phone_settings(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
             }
             // `.x-pmini` with no tab bar: 12 from the sides, 24 above the
             // screen's bottom edge, on the system's glass.

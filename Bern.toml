@@ -147,6 +147,5 @@ path = "modules/downloads"
 page_header = ["phone_header"]
 # Shared settings action inside each phone page's header control group.
 phone_header_settings = ["phone_settings_button"]
-# The phone's way back and title over a settings section.
-form_header = ["phone_form_header"]
+# The title over the plugins page on the phone, which has no form to title.
 scroll_header = ["phone_scroll_header"]
