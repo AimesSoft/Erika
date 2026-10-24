@@ -331,7 +331,11 @@ pub fn player_phone_scene(
                 Positioned(x: 682, y: 135, width: 162, height: 32, appear: controls_in, disappear: controls_out) {
                     Row(gap: 0, align: center) {
                         Spacer
-                        Picker(id: rate_phone, label: tr! { "zh-Hans" => "倍速", "en" => "Speed" }, selected: app.preferences.speed, label_hidden: true, style: menu, shape: capsule, height: 32) => app.set_speed(app.preferences.speed)
+                        // The rates come from the engine: the preference's six and
+                        // those a plugin adds.
+                        PopoverButton(panel_appearance: surface, id: rate_phone, icon: "speedometer", label: tr! { "zh-Hans" => "播放速度", "en" => "Playback speed" }, presented: draft.rate_open) {
+                            player_speed_menu(app: app)
+                        }
                         Spacer
                     }
                 }
