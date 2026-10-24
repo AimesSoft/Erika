@@ -274,27 +274,36 @@ pub mod erika {
         pub page: SettingsPage,
         pub item: SettingItem,
     }
-    /// What a plugin declares it may do.
+    /// What a plugin declares it may do, by NipaPlay's permission names,
+    /// with the network Erika's plugins may use.
     #[value]
     pub enum PluginPermission {
+        #[label(tr! { "zh-Hans" => "链接解析", "en" => "Link resolution" })]
+        UrlResolve,
+        #[label(tr! { "zh-Hans" => "播放器控制", "en" => "Player control" })]
+        PlayerControl,
+        #[label(tr! { "zh-Hans" => "弹幕修改", "en" => "Modify danmaku" })]
+        ModifyDanmaku,
+        #[label(tr! { "zh-Hans" => "弹幕渲染层", "en" => "Danmaku renderer" })]
+        DanmakuRenderer,
+        #[label(tr! { "zh-Hans" => "外部脚本", "en" => "External scripts" })]
+        ExternalScript,
+        #[label(tr! { "zh-Hans" => "媒体库读取", "en" => "Read library" })]
+        LibraryRead,
+        #[label(tr! { "zh-Hans" => "媒体库写入", "en" => "Modify library" })]
+        LibraryWrite,
+        #[label(tr! { "zh-Hans" => "弹窗显示", "en" => "Dialogs" })]
+        Dialog,
+        #[label(tr! { "zh-Hans" => "设置读取", "en" => "Read settings" })]
+        SettingsRead,
+        #[label(tr! { "zh-Hans" => "设置修改", "en" => "Modify settings" })]
+        SettingsModify,
+        #[label(tr! { "zh-Hans" => "数据存储", "en" => "Storage" })]
+        Storage,
+        #[label(tr! { "zh-Hans" => "系统覆盖", "en" => "System override" })]
+        SystemOverride,
         #[label(tr! { "zh-Hans" => "网络", "en" => "Network" })]
         Network,
-        #[label(tr! { "zh-Hans" => "修改弹幕", "en" => "Modify danmaku" })]
-        ModifyDanmaku,
-        #[label(tr! { "zh-Hans" => "需要弹幕模块", "en" => "Needs danmaku" })]
-        NeedsDanmaku,
-        #[label(tr! { "zh-Hans" => "着色器", "en" => "Shaders" })]
-        Shaders,
-        #[label(tr! { "zh-Hans" => "媒体导出", "en" => "Media export" })]
-        MediaExport,
-        #[label(tr! { "zh-Hans" => "写入文件", "en" => "Write files" })]
-        WriteFiles,
-        #[label(tr! { "zh-Hans" => "启动程序", "en" => "Launch programs" })]
-        LaunchPrograms,
-        #[label(tr! { "zh-Hans" => "外观", "en" => "Appearance" })]
-        Appearance,
-        #[label(tr! { "zh-Hans" => "WebView 叠加", "en" => "WebView overlay" })]
-        WebViewOverlay,
     }
     #[value]
     pub struct PluginTag {
@@ -302,7 +311,34 @@ pub mod erika {
         pub permission: PluginPermission,
     }
 
-    /// A plugin as its market lists it, in the words of its author.
+    /// The symbol a plugin without its own `icon.png` shows, by the name
+    /// its `iconId` gives.
+    #[value]
+    pub enum PluginIcon {
+        Puzzle,
+        EyeSlash,
+        Filter,
+        Shield,
+        Tv,
+        Scissors,
+        External,
+        Music,
+        Palette,
+        Bubble,
+        Speed,
+        Link,
+        Download,
+        Check,
+        Sparkles,
+        Folder,
+        Film,
+        Star,
+        Gear,
+        Sliders,
+        Back,
+    }
+
+    /// A plugin of the market or one installed, in the words of its author.
     #[value]
     pub struct Plugin {
         pub id: String,
@@ -312,10 +348,69 @@ pub mod erika {
         pub author: String,
         #[content]
         pub description: String,
+        #[content]
+        pub version: String,
         /// The permissions it declares.
         pub tags: Vec<PluginTag>,
         pub category: PluginCategory,
+        pub icon: PluginIcon,
+        /// Its `icon.png`, 256 × 256, when it has one.
+        pub image: Option<MediaSource>,
         pub installed: bool,
+        pub enabled: bool,
+        /// Running: its script loaded without an error.
+        pub loaded: bool,
+        /// The market has a newer version.
+        pub update: bool,
+        /// Being downloaded.
+        pub busy: bool,
+        /// What it needs that Erika cannot give; empty when everything
+        /// works.
+        #[content]
+        pub unsupported: String,
+        #[content]
+        pub error: String,
+        pub has_settings: bool,
+        /// A NipaPlay plugin, whose version requirement Erika ignores.
+        pub nipaplay: bool,
+    }
+
+    #[value]
+    pub enum PluginEntryKind {
+        Action,
+        Switch,
+        Text,
+    }
+
+    /// One item of a plugin's settings, from its `pluginUIEntries`.
+    #[value]
+    pub struct PluginEntry {
+        pub id: String,
+        #[content]
+        pub title: String,
+        #[content]
+        pub description: String,
+        pub kind: PluginEntryKind,
+        pub on: bool,
+        #[content]
+        pub text: String,
+        #[content]
+        pub hint: String,
+    }
+
+    /// The settings of the plugin open, and what it said last.
+    #[value]
+    pub struct PluginPanel {
+        pub open: bool,
+        pub id: String,
+        #[content]
+        pub name: String,
+        pub entries: Vec<PluginEntry>,
+        pub has_message: bool,
+        #[content]
+        pub message_title: String,
+        #[content]
+        pub message: String,
     }
 
     #[value]
@@ -432,15 +527,23 @@ pub mod erika {
             first: FeatureModule,
             second: FeatureModule,
         },
-        #[label(tr! { "zh-Hans" => "已添加 {name}", "en" => "Added {name}" })]
+        #[label(tr! { "zh-Hans" => "已安装 {name}", "en" => "Installed {name}" })]
         PluginAdded {
             #[content]
             name: String,
         },
-        #[label(tr! { "zh-Hans" => "{name} · 插件设置", "en" => "{name} · Plugin settings" })]
-        PluginSettings {
+        #[label(tr! { "zh-Hans" => "无法安装插件：{reason}", "en" => "Couldn't install the plugin: {reason}" })]
+        PluginFailed {
+            #[content]
+            reason: String,
+        },
+        /// What a plugin shows with `ui.showSnackBar`.
+        #[label(tr! { "zh-Hans" => "{name}：{message}", "en" => "{name}: {message}" })]
+        PluginSays {
             #[content]
             name: String,
+            #[content]
+            message: String,
         },
         #[label(tr! { "zh-Hans" => "已添加字幕：{file}", "en" => "Subtitles added: {file}" })]
         SubtitleChosen {
@@ -658,6 +761,17 @@ pub mod erika {
         pub plugin_category: PluginCategory,
         pub plugin_tab: PluginTab,
         pub installed_count: i64,
+        /// The market is being read, and why reading it failed.
+        pub plugins_loading: bool,
+        #[content]
+        pub plugins_error: String,
+        pub plugin_panel: PluginPanel,
+        /// A plugin turned the downloader on where Erika hides it.
+        pub downloader_unlocked: bool,
+        /// The downloader is hidden here (iOS) and no plugin turned it on.
+        pub downloads_hidden: bool,
+        /// Enabled plugins wait for the system's JavaScript host to start.
+        pub plugins_starting: bool,
         pub accent: Accent,
         pub appearance: Appearance,
         /// The version the app is, as Bern.toml names it.
@@ -796,7 +910,28 @@ pub mod erika {
         fn apply_preset(&mut self, preset: FeaturePreset) -> Result<(), CommandError>;
         fn set_plugin_category(&mut self, category: PluginCategory) -> Result<(), CommandError>;
         fn set_plugin_tab(&mut self, tab: PluginTab) -> Result<(), CommandError>;
-        fn use_plugin(&mut self, id: String) -> Result<(), CommandError>;
+        /// Download and install a plugin of the market, or its update.
+        #[errors("unknown_plugin")]
+        fn install_plugin(&mut self, id: String) -> Result<(), CommandError>;
+        /// Install the plugin folder or NipaPlay `.js` file the user picked.
+        fn import_plugin(&mut self, source: MediaSource) -> Result<(), CommandError>;
+        #[errors("unknown_plugin")]
+        fn uninstall_plugin(&mut self, id: String) -> Result<(), CommandError>;
+        #[errors("unknown_plugin")]
+        fn set_plugin_enabled(&mut self, id: String, enabled: bool) -> Result<(), CommandError>;
+        /// Read the market again.
+        fn refresh_plugins(&mut self) -> Result<(), CommandError>;
+        /// Open the settings of an installed plugin.
+        #[errors("unknown_plugin")]
+        fn open_plugin(&mut self, id: String) -> Result<(), CommandError>;
+        fn close_plugin(&mut self) -> Result<(), CommandError>;
+        /// Press a button of the open plugin's settings.
+        fn plugin_action(&mut self, entry: String) -> Result<(), CommandError>;
+        fn set_plugin_switch(&mut self, entry: String, value: bool) -> Result<(), CommandError>;
+        fn set_plugin_text(&mut self, entry: String, value: String) -> Result<(), CommandError>;
+        fn dismiss_plugin_message(&mut self) -> Result<(), CommandError>;
+        /// Start the plugins that wait; the interface's clock calls it.
+        fn plugins_tick(&mut self) -> Result<(), CommandError>;
         fn show_notice(&mut self, notice: Notice) -> Result<(), CommandError>;
         /// Play a file the user opened, picked or dropped.
         fn open_file(&mut self, source: MediaSource) -> Result<(), CommandError>;

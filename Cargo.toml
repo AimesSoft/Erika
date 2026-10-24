@@ -16,3 +16,5 @@ erika-torrent = { path = "erika-torrent" }
 # Remote builds use the pinned source revision; .cargo/config.toml can patch
 # this to a local checkout. See docs/dependencies.md.
 liberika = { package = "erika", git = "https://github.com/AimesSoft/liberika", rev = "27bab58d9816a3b9dda67d22dcb16507d46835b0" }
+# The playback half of the plugin interface, without native libraries.
+liberika-plugin = { package = "erika_plugin", git = "https://github.com/AimesSoft/liberika", rev = "27bab58d9816a3b9dda67d22dcb16507d46835b0" }

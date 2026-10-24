@@ -8,7 +8,7 @@ publish = false
 
 [features]
 default = ["bern-module-account", "bern-module-danmaku", "bern-module-enhance", "bern-module-library", "bern-module-anime", "bern-module-sync", "bern-module-sources", "bern-module-remote", "bern-module-downloads"]
-bern-module-account = ["erika-protocol/bern-module-account", "dep:ureq", "dep:scraper", "dep:regex"]
+bern-module-account = ["erika-protocol/bern-module-account", "dep:scraper", "dep:regex"]
 bern-module-danmaku = ["erika-protocol/bern-module-danmaku"]
 bern-module-enhance = ["erika-protocol/bern-module-enhance"]
 bern-module-library = ["erika-protocol/bern-module-library", "dep:erika-library-protocol"]
@@ -24,6 +24,7 @@ bern.workspace = true
 erika-protocol.workspace = true
 erika-store.workspace = true
 erika-dandanplay.workspace = true
+liberika-plugin.workspace = true
 erika-downloads-protocol = { path = "../modules/downloads/protocol", optional = true }
 erika-anime-protocol = { path = "../modules/anime/protocol", optional = true }
 erika-library-protocol = { path = "../modules/library/protocol", optional = true }
@@ -35,6 +36,10 @@ crossbeam-channel = "0.5"
 png = "0.17"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ureq = { version = "3", features = ["cookies", "json"], optional = true }
+ureq = { version = "3", features = ["cookies", "json"] }
 scraper = { version = "0.24", default-features = false, optional = true }
 regex = { version = "1", optional = true }
+
+# Plugins run in Boa where the tests have no system JavaScript host.
+[dev-dependencies]
+bern-script = { git = "https://github.com/AimesSoft/Bern", rev = "55d977685e01db8945fd64d994f83bb021a3db5b", features = ["boa"] }

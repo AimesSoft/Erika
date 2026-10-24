@@ -5,8 +5,11 @@
 [patch."https://github.com/AimesSoft/liberika"]
 erika = { path = "../liberika/crates/erika" }
 erika_ffmpeg_sys = { path = "../liberika/crates/erika_ffmpeg_sys" }
+erika_plugin = { path = "../liberika/crates/erika_plugin" }
 
-# Only `bern` is patched: `bern build` sees Cargo take it from this checkout
-# and has the generated hosts take every other Bern crate from there too.
+# `bern build` sees Cargo take `bern` from this checkout and has the
+# generated hosts take every other Bern crate from there too.
 [patch."https://github.com/AimesSoft/Bern"]
 bern = { path = "../Bern/crates/bern" }
+# The tests run plugins in this checkout's Boa.
+bern-script = { path = "../Bern/crates/bern-script" }

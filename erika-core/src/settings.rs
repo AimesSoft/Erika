@@ -23,6 +23,19 @@ pub const ALL_MODULES: &[&str] = &[
     "downloads",
 ];
 
+/// Whether a plugin turned the downloader on where Erika hides it.
+static DOWNLOADER_UNLOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// iOS hides the downloader, as NipaPlay does there, until a plugin with
+/// `system.override` turns it on (`system.setDownloaderEnabled`).
+pub(crate) fn downloader_hidden() -> bool {
+    cfg!(target_os = "ios") && !DOWNLOADER_UNLOCKED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) fn set_downloader_unlocked(unlocked: bool) {
+    DOWNLOADER_UNLOCKED.store(unlocked, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The Anime preset includes only modules present in this build.
 pub const ANIME_MODULES: &[&str] = &[
     #[cfg(feature = "bern-module-account")]
@@ -98,6 +111,7 @@ pub fn feature_selection(enabled: &[String]) -> FeatureSelection {
         sources: cfg!(feature = "bern-module-sources") && enabled.iter().any(|id| id == "sources"),
         remote: cfg!(feature = "bern-module-remote") && enabled.iter().any(|id| id == "remote"),
         downloads: cfg!(feature = "bern-module-downloads")
+            && !downloader_hidden()
             && enabled.iter().any(|id| id == "downloads"),
     }
 }
@@ -106,6 +120,9 @@ pub fn feature_selection(enabled: &[String]) -> FeatureSelection {
 /// module also supplies library details, even when New Shows is off.
 pub(crate) fn runtime_modules(selected: &[String]) -> Vec<String> {
     let mut enabled = selected.to_vec();
+    if downloader_hidden() {
+        enabled.retain(|id| id != "downloads");
+    }
     if cfg!(feature = "bern-module-anime")
         && selected.iter().any(|id| id == "library")
         && !enabled.iter().any(|id| id == "anime")
@@ -199,122 +216,10 @@ impl ErikaEngine {
         self.apply_danmaku();
     }
 }
-fn plugin_tags(permissions: &[PluginPermission]) -> Vec<PluginTag> {
-    permissions
-        .iter()
-        .map(|permission| PluginTag {
-            id: format!("{permission:?}"),
-            permission: permission.clone(),
-        })
-        .collect()
-}
-
-pub fn sample_plugins() -> Vec<Plugin> {
-    vec![
-        Plugin {
-            id: "spoiler".into(),
-            name: "防剧透".into(),
-            author: "Erika 官方".into(),
-            description: "用你配置的 AI 接口识别并遮挡剧透弹幕".into(),
-            tags: plugin_tags(&[
-                PluginPermission::Network,
-                PluginPermission::ModifyDanmaku,
-                PluginPermission::NeedsDanmaku,
-            ]),
-            category: PluginCategory::Danmaku,
-            installed: false,
-        },
-        Plugin {
-            id: "regex".into(),
-            name: "正则弹幕过滤".into(),
-            author: "Erika 官方".into(),
-            description: "用正则表达式屏蔽弹幕".into(),
-            tags: plugin_tags(&[PluginPermission::ModifyDanmaku]),
-            category: PluginCategory::Danmaku,
-            installed: true,
-        },
-        Plugin {
-            id: "words".into(),
-            name: "敏感词屏蔽".into(),
-            author: "Erika 官方".into(),
-            description: "内置中文敏感词词库，一键屏蔽".into(),
-            tags: plugin_tags(&[PluginPermission::ModifyDanmaku]),
-            category: PluginCategory::Danmaku,
-            installed: true,
-        },
-        Plugin {
-            id: "crt".into(),
-            name: "复古 CRT".into(),
-            author: "社区 · shaderlab".into(),
-            description: "扫描线与荧光屏质感的着色器".into(),
-            tags: plugin_tags(&[PluginPermission::Shaders]),
-            category: PluginCategory::Picture,
-            installed: false,
-        },
-        Plugin {
-            id: "clip".into(),
-            name: "片段导出".into(),
-            author: "Erika 官方".into(),
-            description: "把精彩片段导出为 GIF 或 MP4".into(),
-            tags: plugin_tags(&[PluginPermission::MediaExport, PluginPermission::WriteFiles]),
-            category: PluginCategory::Tools,
-            installed: false,
-        },
-        Plugin {
-            id: "ext".into(),
-            name: "外部播放器".into(),
-            author: "社区 · ext-player".into(),
-            description: "用 mpv、PotPlayer 或 IINA 打开当前视频".into(),
-            tags: plugin_tags(&[PluginPermission::LaunchPrograms]),
-            category: PluginCategory::Tools,
-            installed: false,
-        },
-        Plugin {
-            id: "sfx".into(),
-            name: "界面音效包".into(),
-            author: "Erika 官方".into(),
-            description: "给按钮和转场配上轻快的音效".into(),
-            tags: plugin_tags(&[]),
-            category: PluginCategory::Appearance,
-            installed: true,
-        },
-        Plugin {
-            id: "theme".into(),
-            name: "主题与壁纸".into(),
-            author: "社区 · mochi".into(),
-            description: "自定义背景图与配色方案".into(),
-            tags: plugin_tags(&[PluginPermission::Appearance]),
-            category: PluginCategory::Appearance,
-            installed: false,
-        },
-        Plugin {
-            id: "titan".into(),
-            name: "Titan 弹幕".into(),
-            author: "社区 · titan".into(),
-            description: "用 WebView 渲染的高级弹幕特效".into(),
-            tags: plugin_tags(&[PluginPermission::WebViewOverlay]),
-            category: PluginCategory::Danmaku,
-            installed: false,
-        },
-    ]
-}
 impl ErikaEngine {
     pub(crate) fn notify(&mut self, notice: Notice) {
         self.state.notice = Some(notice);
         self.state.notice_revision += 1;
-    }
-    pub(crate) fn filter_plugins(&mut self) {
-        self.state.installed_count = self.all_plugins.iter().filter(|p| p.installed).count() as i64;
-        self.state.plugins = self
-            .all_plugins
-            .iter()
-            .filter(|p| {
-                (self.state.plugin_category == PluginCategory::All
-                    || p.category == self.state.plugin_category)
-                    && (self.state.plugin_tab == PluginTab::Market || p.installed)
-            })
-            .cloned()
-            .collect();
     }
 }
 impl erika::Queries for ErikaEngine {
@@ -433,21 +338,5 @@ mod tests {
         assert!(selected.iter().any(|id| id == "sync"));
         change_feature(&mut selected, "library", false);
         assert!(!selected.iter().any(|id| id == "sync"));
-    }
-
-    #[test]
-    fn installing_a_preview_plugin_updates_filters_without_duplicate_counts() {
-        let mut engine = ErikaEngine::default();
-        engine.set_plugin_tab(PluginTab::Installed).unwrap();
-        assert_eq!(engine.state.plugins.len(), 3);
-        engine.use_plugin("spoiler".into()).unwrap();
-        assert_eq!(engine.state.installed_count, 4);
-        assert_eq!(engine.state.plugins.len(), 4);
-        engine.use_plugin("spoiler".into()).unwrap();
-        assert_eq!(engine.state.installed_count, 4);
-        engine.set_plugin_category(PluginCategory::Tools).unwrap();
-        assert!(engine.state.plugins.is_empty());
-        engine.set_plugin_tab(PluginTab::Market).unwrap();
-        assert_eq!(engine.state.plugins.len(), 2);
     }
 }

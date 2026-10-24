@@ -795,7 +795,7 @@ pub fn settings_optional(app: erika::Client) -> impl View {
                         Switch(id: feature_remote, label: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, checked: app.features.remote, style: switch, label_hidden: true) => app.set_module("remote", app.features.remote)
                     }
                     }
-                    if build.modules.downloads {
+                    if build.modules.downloads && !app.downloads_hidden {
                     Row(gap: 12, align: center) {
                         Stack(width: 28, height: 28) {
                             Canvas {
@@ -981,9 +981,22 @@ pub fn settings_about(app: erika::Client) -> impl View {
         }
     }
 }
+/// What the plugin page holds while the user picks a plugin to import or
+/// edits a text setting.
+#[bern::session]
+pub struct PluginsDraft {
+    pub folder: MediaSource,
+    pub script: MediaSource,
+    /// The text entry being edited, and what is typed.
+    pub editing: String,
+    pub text: String,
+}
+
 #[component]
-pub fn settings_plugins(app: erika::Client) -> impl View {
+pub fn settings_plugins(app: erika::Client, #[session] draft: PluginsDraft) -> impl View {
     ui! {
+        Stack(align: top) {
+        Timer(interval: 1, enabled: app.plugins_starting) => app.plugins_tick()
         ScrollView(appear: settings_page_in) {
         Column(gap: 0) {
         Slot(id: scroll_header)
@@ -1011,75 +1024,223 @@ pub fn settings_plugins(app: erika::Client) -> impl View {
                 Spacer
                 Picker(id: plugin_category, label: tr! { "zh-Hans" => "分类", "en" => "Category" }, selected: app.plugin_category, style: chips, label_hidden: true) => app.set_plugin_category(app.plugin_category)
             }
+            Canvas(height: 12)
+            Row(gap: 10, align: center) {
+                if app.plugin_tab == PluginTab::Market {
+                    if app.plugins_loading {
+                        Text(content: tr! { "zh-Hans" => "正在读取插件市场…", "en" => "Reading the market…" }, style: caption, emphasis: secondary)
+                    } else if "" != app.plugins_error {
+                        Text(content: tr! { "zh-Hans" => "插件市场读取失败：{error}", "en" => "The market could not be read: {error}"; error: app.plugins_error }, style: caption, emphasis: secondary, lines: 2)
+                    } else {
+                        Text(content: tr! { "zh-Hans" => "插件来自 NipaPlay 插件市场；Erika 自己的市场上线前，先不检查这些插件要求的版本。", "en" => "Plugins come from NipaPlay's market; until Erika's own opens, their version requirements are not checked." }, style: caption, emphasis: secondary, lines: 2)
+                    }
+                    Spacer
+                    Button(id: refresh_plugins, label: tr! { "zh-Hans" => "刷新", "en" => "Refresh" }, icon: "arrow.triangle.2.circlepath", prominence: plain, enabled: !app.plugins_loading) => app.refresh_plugins()
+                } else {
+                    Text(content: tr! { "zh-Hans" => "可以导入 Erika 插件文件夹（pack.json、脚本和 icon.png），或 NipaPlay 的 .js 插件。", "en" => "Import an Erika plugin folder (pack.json, its script and icon.png), or a NipaPlay .js plugin." }, style: caption, emphasis: secondary, lines: 2)
+                    Spacer
+                    Button(id: import_plugin_folder, label: tr! { "zh-Hans" => "导入文件夹", "en" => "Import Folder" }, icon: "folder", prominence: plain, pick: draft.folder, files: "folder") => app.import_plugin(draft.folder)
+                    Button(id: import_plugin_script, label: tr! { "zh-Hans" => "导入 .js", "en" => "Import .js" }, icon: "plus", prominence: plain, pick: draft.script, files: ".js") => app.import_plugin(draft.script)
+                }
+            }
             Canvas(height: 14)
+            if app.plugin_tab == PluginTab::Installed && app.installed_count == 0 {
+                Text(content: tr! { "zh-Hans" => "还没有安装插件。去「市场」里挑一个，或者导入一个。", "en" => "No plugins yet. Pick one in the market, or import one." }, emphasis: secondary)
+            }
             Grid(min_width: 300, gap: 12) {
                 ForEach(items: app.plugins, key: id) |plugin| {
-                    Stack(variant: settings_card) {
-                        Canvas {
-                            Shape(kind: rounded, corner: 16, stroke: control.border, stroke_width: 0.5)
+                    plugin_card(app: app, plugin: plugin)
+                }
+            }
+        }
+        }
+        }
+        if app.plugin_panel.has_message {
+            plugin_message(app: app)
+        } else if app.plugin_panel.open {
+            plugin_settings(app: app)
+        }
+        }
+    }
+}
+
+/// One plugin of the market or installed: its icon, name, author and
+/// version, what it does, the permissions it declares, and what can be done
+/// with it.
+#[component]
+pub fn plugin_card(app: erika::Client, plugin: Plugin) -> impl View {
+    ui! {
+        Stack(variant: settings_card) {
+            Canvas {
+                Shape(kind: rounded, corner: 16, stroke: control.border, stroke_width: 0.5)
+            }
+            Column(gap: 8, padding: 16, appear: page_in) {
+                Row(gap: 12) {
+                    plugin_icon(plugin: plugin)
+                    Column(gap: 3) {
+                        Text(content: plugin.name, style: headline, lines: 1)
+                        Text(content: tr! { "zh-Hans" => "{author} · {version}", "en" => "{author} · {version}"; author: plugin.author, version: plugin.version }, style: caption, emphasis: secondary, lines: 1)
+                    }
+                    Spacer
+                    if plugin.busy {
+                        Text(content: tr! { "zh-Hans" => "安装中…", "en" => "Installing…" }, style: caption, emphasis: secondary)
+                    } else if plugin.installed {
+                        if plugin.update {
+                            Button(id: update_plugin, label: tr! { "zh-Hans" => "更新", "en" => "Update" }, prominence: prominent) => app.install_plugin(plugin.id)
                         }
-                        Column(gap: 8, padding: 16, appear: page_in) {
-                            Row(gap: 12) {
-                                Stack(width: 42, height: 42) {
-                                    Canvas {
-                                        Shape(kind: rounded, corner: 11, fill: fill.strong)
-                                    }
-                                    if plugin.id == "spoiler" {
-                                        Label(title: plugin.name, icon: "eye.slash", style: title3, display: icon)
-                                    }
-                                    if plugin.id == "regex" {
-                                        Label(title: plugin.name, icon: "line.3.horizontal.decrease", style: title3, display: icon)
-                                    }
-                                    if plugin.id == "words" {
-                                        Label(title: plugin.name, icon: "shield", style: title3, display: icon)
-                                    }
-                                    if plugin.id == "crt" {
-                                        Label(title: plugin.name, icon: "tv", style: title3, display: icon)
-                                    }
-                                    if plugin.id == "clip" {
-                                        Label(title: plugin.name, icon: "scissors", style: title3, display: icon)
-                                    }
-                                    if plugin.id == "ext" {
-                                        Label(title: plugin.name, icon: "arrow.up.right.square", style: title3, display: icon)
-                                    }
-                                    if plugin.id == "sfx" {
-                                        Label(title: plugin.name, icon: "music.note", style: title3, display: icon)
-                                    }
-                                    if plugin.id == "theme" {
-                                        Label(title: plugin.name, icon: "paintpalette", style: title3, display: icon)
-                                    }
-                                    if plugin.id == "titan" {
-                                        Label(title: plugin.name, icon: "text.bubble", style: title3, display: icon)
-                                    }
-                                }
-                                Column(gap: 3) {
-                                    Text(content: plugin.name, style: headline)
-                                    Text(content: plugin.author, style: caption, emphasis: secondary)
-                                }
-                                Spacer
-                                if plugin.installed {
-                                    Button(id: open_plugin, label: tr! { "zh-Hans" => "打开", "en" => "Open" }) => app.use_plugin(plugin.id)
-                                }
-                                else {
-                                    Button(id: get_plugin, label: tr! { "zh-Hans" => "获取", "en" => "Get" }, prominence: prominent) => app.use_plugin(plugin.id)
-                                }
+                        Switch(id: plugin_enabled, label: tr! { "zh-Hans" => "启用 {name}", "en" => "Enable {name}"; name: plugin.name }, label_hidden: true, checked: plugin.enabled, style: switch) => app.set_plugin_enabled(plugin.id, plugin.enabled)
+                    } else if "" != plugin.unsupported {
+                        Text(content: tr! { "zh-Hans" => "不支持", "en" => "Unsupported" }, style: caption, emphasis: secondary)
+                    } else {
+                        Button(id: get_plugin, label: tr! { "zh-Hans" => "获取", "en" => "Get" }, prominence: prominent) => app.install_plugin(plugin.id)
+                    }
+                }
+                Text(content: plugin.description, emphasis: secondary, lines: 4)
+                if "" != plugin.unsupported {
+                    Text(content: tr! { "zh-Hans" => "Erika 暂不支持：{what}", "en" => "Erika does not support: {what}"; what: plugin.unsupported }, style: caption, emphasis: secondary, lines: 2)
+                }
+                if "" != plugin.error {
+                    Text(content: tr! { "zh-Hans" => "没有载入：{error}", "en" => "Not loaded: {error}"; error: plugin.error }, style: caption, emphasis: secondary, lines: 3)
+                }
+                Flow(gap: 6) {
+                    ForEach(items: plugin.tags, key: id) |tag| {
+                        Stack(variant: settings_tag) {
+                            Row(padding_x: 8, padding_y: 2) {
+                                Text(content: tag.permission, style: caption, emphasis: secondary)
                             }
-                            Text(content: plugin.description, emphasis: secondary)
-                            Row(gap: 6) {
-                                ForEach(items: plugin.tags, key: id) |tag| {
-                                    Stack(variant: settings_tag) {
-                                        Row(padding_x: 8, padding_y: 2) {
-                                            Text(content: tag.permission, style: caption, emphasis: secondary)
+                        }
+                    }
+                }
+                if plugin.installed {
+                    Row(gap: 8, align: center) {
+                        if plugin.has_settings && plugin.enabled {
+                            Button(id: plugin_settings, label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, icon: "gearshape", prominence: plain) => app.open_plugin(plugin.id)
+                        }
+                        Spacer
+                        Button(id: uninstall_plugin, label: tr! { "zh-Hans" => "卸载", "en" => "Uninstall" }, role: destructive, prominence: plain) => app.uninstall_plugin(plugin.id)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The plugin's `icon.png`, or the symbol its `iconId` names on a grey tile,
+/// as the list icons of the design (10.9).
+#[component]
+pub fn plugin_icon(plugin: Plugin) -> impl View {
+    ui! {
+        Stack(width: 42, height: 42) {
+            if let Some(image) = plugin.image {
+                Image(source: image, width: 42, height: 42, fit: cover, corner: 11, label: plugin.name)
+            } else {
+                Canvas {
+                    Shape(kind: rounded, corner: 11, fill: fill.strong)
+                }
+                match plugin.icon {
+                    PluginIcon::Puzzle => { Label(title: plugin.name, icon: "puzzlepiece.extension", style: title3, display: icon) }
+                    PluginIcon::EyeSlash => { Label(title: plugin.name, icon: "eye.slash", style: title3, display: icon) }
+                    PluginIcon::Filter => { Label(title: plugin.name, icon: "line.3.horizontal.decrease", style: title3, display: icon) }
+                    PluginIcon::Shield => { Label(title: plugin.name, icon: "shield", style: title3, display: icon) }
+                    PluginIcon::Tv => { Label(title: plugin.name, icon: "tv", style: title3, display: icon) }
+                    PluginIcon::Scissors => { Label(title: plugin.name, icon: "scissors", style: title3, display: icon) }
+                    PluginIcon::External => { Label(title: plugin.name, icon: "arrow.up.right.square", style: title3, display: icon) }
+                    PluginIcon::Music => { Label(title: plugin.name, icon: "music.note", style: title3, display: icon) }
+                    PluginIcon::Palette => { Label(title: plugin.name, icon: "paintpalette", style: title3, display: icon) }
+                    PluginIcon::Bubble => { Label(title: plugin.name, icon: "text.bubble", style: title3, display: icon) }
+                    PluginIcon::Speed => { Label(title: plugin.name, icon: "speedometer", style: title3, display: icon) }
+                    PluginIcon::Link => { Label(title: plugin.name, icon: "link", style: title3, display: icon) }
+                    PluginIcon::Download => { Label(title: plugin.name, icon: "arrow.down.circle", style: title3, display: icon) }
+                    PluginIcon::Check => { Label(title: plugin.name, icon: "checkmark", style: title3, display: icon) }
+                    PluginIcon::Sparkles => { Label(title: plugin.name, icon: "sparkles", style: title3, display: icon) }
+                    PluginIcon::Folder => { Label(title: plugin.name, icon: "folder", style: title3, display: icon) }
+                    PluginIcon::Film => { Label(title: plugin.name, icon: "film", style: title3, display: icon) }
+                    PluginIcon::Star => { Label(title: plugin.name, icon: "star", style: title3, display: icon) }
+                    PluginIcon::Gear => { Label(title: plugin.name, icon: "gearshape", style: title3, display: icon) }
+                    PluginIcon::Sliders => { Label(title: plugin.name, icon: "slider.horizontal.3", style: title3, display: icon) }
+                    PluginIcon::Back => { Label(title: plugin.name, icon: "gobackward.10", style: title3, display: icon) }
+                }
+            }
+        }
+    }
+}
+
+/// The open plugin's settings, from its `pluginUIEntries`: switches, text
+/// it keeps, and buttons whose answers it shows.
+#[component]
+pub fn plugin_settings(app: erika::Client, #[session] draft: PluginsDraft) -> impl View {
+    ui! {
+        Modal(width: 460, height: 460, cover: compact, appear: pop_in, disappear: fade) {
+            Column(gap: 12, padding: 20) {
+                Text(content: tr! { "zh-Hans" => "{name} · 插件设置", "en" => "{name} · Plugin Settings"; name: app.plugin_panel.name }, style: title3, lines: 1)
+                ScrollView {
+                    Column(gap: 14) {
+                        ForEach(items: app.plugin_panel.entries, key: id) |entry| {
+                            Column(gap: 4) {
+                                match entry.kind {
+                                    PluginEntryKind::Switch => {
+                                        Row(gap: 12, align: center) {
+                                            Text(content: entry.title, style: body)
+                                            Spacer
+                                            Switch(id: plugin_entry_switch, label: entry.title, label_hidden: true, checked: entry.on, style: switch) => app.set_plugin_switch(entry.id, entry.on)
                                         }
                                     }
+                                    PluginEntryKind::Text => {
+                                        Row(gap: 12, align: center) {
+                                            Text(content: entry.title, style: body)
+                                            Spacer
+                                            if draft.editing != entry.id {
+                                                Button(id: plugin_entry_edit, label: tr! { "zh-Hans" => "修改", "en" => "Edit" }, prominence: plain) => draft.editing.set(entry.id)
+                                            }
+                                        }
+                                        if draft.editing == entry.id {
+                                            TextInput(id: plugin_entry_text, label: entry.title, label_hidden: true, value: draft.text, prompt: entry.hint, submit: clear) => app.set_plugin_text(entry.id, draft.text)
+                                            if "" != entry.text {
+                                                Text(content: tr! { "zh-Hans" => "现在是：{text}", "en" => "Now: {text}"; text: entry.text }, style: caption, emphasis: secondary, lines: 2)
+                                            }
+                                        } else if "" != entry.text {
+                                            Text(content: entry.text, style: caption, emphasis: secondary, lines: 2)
+                                        }
+                                    }
+                                    PluginEntryKind::Action => {
+                                        Row(gap: 12, align: center) {
+                                            Text(content: entry.title, style: body)
+                                            Spacer
+                                            Button(id: plugin_entry_action, label: tr! { "zh-Hans" => "运行", "en" => "Run" }) => app.plugin_action(entry.id)
+                                        }
+                                    }
+                                }
+                                if "" != entry.description {
+                                    Text(content: entry.description, style: caption, emphasis: secondary, lines: 3)
                                 }
                             }
                         }
                     }
                 }
+                Row(gap: 10, align: center) {
+                    Spacer
+                    Button(id: plugin_settings_done, label: tr! { "zh-Hans" => "完成", "en" => "Done" }, prominence: prominent, shortcut: "escape") => app.close_plugin()
+                }
             }
         }
-        }
+    }
+}
+
+/// What a plugin answered or showed with `ui.showDialog`.
+#[component]
+pub fn plugin_message(app: erika::Client) -> impl View {
+    ui! {
+        Modal(width: 460, height: 360, cover: compact, appear: pop_in, disappear: fade) {
+            Column(gap: 12, padding: 20) {
+                Text(content: app.plugin_panel.message_title, style: title3, lines: 2)
+                ScrollView {
+                    Text(content: app.plugin_panel.message, lines: 0)
+                }
+                Row(gap: 10, align: center) {
+                    Spacer
+                    Button(id: plugin_message_close, label: tr! { "zh-Hans" => "好", "en" => "OK" }, prominence: prominent, shortcut: "return") => app.dismiss_plugin_message()
+                }
+            }
         }
     }
 }

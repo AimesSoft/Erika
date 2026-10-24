@@ -176,6 +176,7 @@ impl ErikaEngine {
                     self.seek_wanted = Some((start, 0));
                 }
                 self.source = Some(source.clone());
+                self.plugin_event("videoLoaded", self.plugin_media());
                 self.mount_danmaku_beside(&source);
             }
             _ => {
@@ -256,8 +257,11 @@ impl ErikaEngine {
         self.source = None;
     }
 
-    /// The playback rate the speed preference asks for.
-    fn rate(&self) -> f64 {
+    /// The playback rate: a plugin's, or the speed preference's.
+    pub(crate) fn rate(&self) -> f64 {
+        if let Some(rate) = self.rate_override {
+            return rate;
+        }
         match self.state.preferences.speed {
             PlaybackSpeed::Half => 0.5,
             PlaybackSpeed::Slow => 0.75,
@@ -275,6 +279,13 @@ impl ErikaEngine {
         } else {
             Enhancement::Off
         }
+    }
+
+    /// Play at `rate` in place of the speed preference, or at its own
+    /// again.
+    pub(crate) fn set_rate_override(&mut self, rate: Option<f64>) {
+        self.rate_override = rate.map(|rate| rate.clamp(0.0625, 16.0));
+        self.apply_speed();
     }
 
     pub(super) fn apply_speed(&mut self) {
@@ -306,6 +317,7 @@ impl ErikaEngine {
             }
             self.seek_wanted = Some((seconds, 0));
             self.state.elapsed = seconds;
+            self.plugin_event("seek", serde_json::json!({ "time": seconds, "duration": duration }));
             self.state.progress = if duration > 0.0 {
                 seconds / duration
             } else {
@@ -324,6 +336,7 @@ impl ErikaEngine {
             self.update_position(0.0);
         }
         self.state.paused = !self.state.paused;
+        self.plugin_event(if self.state.paused { "pause" } else { "play" }, self.plugin_media());
         if self.state.video
             && let Some(kernel) = self.kernel()
         {

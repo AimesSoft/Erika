@@ -17,6 +17,7 @@ pub fn initial() -> Onboarding {
         modules: settings::ALL_MODULES
             .iter()
             .copied()
+            .filter(|id| *id != "downloads" || !settings::downloader_hidden())
             .map(|id| OnboardingModule {
                 id: id.into(),
                 module: settings::feature_module(id),

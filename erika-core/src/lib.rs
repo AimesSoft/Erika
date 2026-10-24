@@ -16,6 +16,7 @@ mod history;
 mod kernel;
 mod links;
 mod matching;
+mod plugins;
 mod playback_preferences;
 mod player;
 mod queue;
@@ -38,7 +39,9 @@ const STILL: &str = "design/assets/still1.jpg";
 pub struct ErikaEngine {
     pub(crate) state: State,
     feedback_remaining: f64,
-    pub(crate) all_plugins: Vec<Plugin>,
+    pub(crate) plugins: plugins::Plugins,
+    /// A rate a plugin set, in place of the speed preference's.
+    pub(crate) rate_override: Option<f64>,
     pub(crate) saved_modules: Option<Vec<String>>,
     /// Runtime target while a feature change starts/stops its modules.
     pub(crate) pending_modules: Option<Vec<String>>,
@@ -185,7 +188,8 @@ impl Default for ErikaEngine {
             still_wanted: None,
             stills: 0,
             first_still_at: 0.0,
-            all_plugins: settings::sample_plugins(),
+            plugins: plugins::Plugins::default(),
+            rate_override: None,
             state: State {
                 onboarding: onboarding::initial(),
                 preferences: settings::default_preferences(),
@@ -200,10 +204,16 @@ impl Default for ErikaEngine {
                 preset: OnboardingPreset::All,
                 notice: None,
                 notice_revision: 0,
-                plugins: settings::sample_plugins(),
+                plugins: Vec::new(),
                 plugin_category: PluginCategory::All,
                 plugin_tab: PluginTab::Market,
-                installed_count: 3,
+                installed_count: 0,
+                plugins_loading: false,
+                plugins_error: String::new(),
+                plugin_panel: plugins::closed_panel(),
+                downloader_unlocked: false,
+                downloads_hidden: settings::downloader_hidden(),
+                plugins_starting: false,
 
                 accent: Accent::Crimson,
                 appearance: Appearance::System,
@@ -382,6 +392,7 @@ impl erika::Commands for ErikaEngine {
         self.db
             .set_setting("playback.speed", Some(&format!("{value:?}")));
         self.state.preferences.speed = value;
+        self.rate_override = None;
         self.apply_speed();
         Ok(())
     }
@@ -458,29 +469,49 @@ impl erika::Commands for ErikaEngine {
     }
     fn set_plugin_category(&mut self, category: PluginCategory) -> Result<(), CommandError> {
         self.state.plugin_category = category;
-        self.filter_plugins();
+        self.show_plugins();
         Ok(())
     }
     fn set_plugin_tab(&mut self, tab: PluginTab) -> Result<(), CommandError> {
         self.state.plugin_tab = tab;
-        self.filter_plugins();
+        self.show_plugins();
         Ok(())
     }
-    fn use_plugin(&mut self, id: String) -> Result<(), CommandError> {
-        let plugin = self
-            .all_plugins
-            .iter_mut()
-            .find(|p| p.id == id)
-            .ok_or_else(|| CommandError::new("unknown_plugin", "unknown plugin"))?;
-        let installed = plugin.installed;
-        let name = plugin.name.clone();
-        plugin.installed = true;
-        self.filter_plugins();
-        self.notify(if installed {
-            Notice::PluginSettings { name }
-        } else {
-            Notice::PluginAdded { name }
-        });
+    fn install_plugin(&mut self, id: String) -> Result<(), CommandError> {
+        self.install_plugin_command(id)
+    }
+    fn import_plugin(&mut self, source: MediaSource) -> Result<(), CommandError> {
+        self.import_plugin_command(source)
+    }
+    fn uninstall_plugin(&mut self, id: String) -> Result<(), CommandError> {
+        self.uninstall_plugin_command(id)
+    }
+    fn set_plugin_enabled(&mut self, id: String, enabled: bool) -> Result<(), CommandError> {
+        self.set_plugin_enabled_command(id, enabled)
+    }
+    fn refresh_plugins(&mut self) -> Result<(), CommandError> {
+        self.refresh_plugins_command()
+    }
+    fn open_plugin(&mut self, id: String) -> Result<(), CommandError> {
+        self.open_plugin_command(id)
+    }
+    fn close_plugin(&mut self) -> Result<(), CommandError> {
+        self.close_plugin_command()
+    }
+    fn plugin_action(&mut self, entry: String) -> Result<(), CommandError> {
+        self.plugin_action_command(entry)
+    }
+    fn set_plugin_switch(&mut self, entry: String, value: bool) -> Result<(), CommandError> {
+        self.set_plugin_switch_command(entry, value)
+    }
+    fn set_plugin_text(&mut self, entry: String, value: String) -> Result<(), CommandError> {
+        self.set_plugin_text_command(entry, value)
+    }
+    fn dismiss_plugin_message(&mut self) -> Result<(), CommandError> {
+        self.dismiss_plugin_message_command()
+    }
+    fn plugins_tick(&mut self) -> Result<(), CommandError> {
+        self.plugins_wake();
         Ok(())
     }
     fn show_notice(&mut self, notice: Notice) -> Result<(), CommandError> {
@@ -1026,6 +1057,7 @@ impl erika::Engine for ErikaEngine {
     /// account's token is renewed when it is old.
     fn wake(&mut self) {
         self.take_kernel_results();
+        self.plugins_wake();
         #[cfg(feature = "bern-module-account")]
         {
             self.take_account_results();
