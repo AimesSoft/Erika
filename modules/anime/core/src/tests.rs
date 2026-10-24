@@ -371,3 +371,26 @@ fn a_review_needs_bangumi_and_fits_its_limit() {
     engine.show_review(false).unwrap();
     assert!(!engine.state.review_open);
 }
+
+#[test]
+fn marks_written_by_another_engine_show_after_history_changed() {
+    let mut engine = AnimeEngine::default();
+    engine.details.insert(17675, details(17675, 12));
+    engine.open(17675).unwrap();
+    assert_eq!(engine.state.show.status, WatchStatus::Unmarked);
+    let frieren = Anime {
+        dandanplay_id: 17675,
+        title: "葬送的芙莉莲".into(),
+        image: String::new(),
+    };
+    engine.db.set_mark(
+        &frieren,
+        &erika_store::Mark {
+            status: Some("watched".into()),
+            rating: 7,
+        },
+    );
+    engine.history_changed().unwrap();
+    assert_eq!(engine.state.show.status, WatchStatus::Watched);
+    assert_eq!(engine.state.my_score, Score::Seven);
+}

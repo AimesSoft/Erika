@@ -813,6 +813,12 @@ impl anime::Commands for AnimeEngine {
     }
 
     fn history_changed(&mut self) -> Result<(), CommandError> {
+        // What is kept of the shows is read again: another engine (the
+        // account sync) may have written it. The browser keeps it nowhere
+        // else.
+        if !cfg!(target_arch = "wasm32") {
+            self.kept.clear();
+        }
         self.watching = self.db.watching(WATCHING);
         self.show_watching();
         self.show_opened();

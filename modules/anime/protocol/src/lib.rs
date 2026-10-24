@@ -487,7 +487,8 @@ pub mod anime {
         fn refresh_details(&mut self) -> Result<(), CommandError>;
         fn refresh_comments(&mut self) -> Result<(), CommandError>;
 
-        /// The shell played or matched a video: what is being watched may
+        /// The shell played or matched a video, or the account sync wrote
+        /// marks: what is being watched, and what is kept of the shows, may
         /// have changed.
         fn history_changed(&mut self) -> Result<(), CommandError>;
 
