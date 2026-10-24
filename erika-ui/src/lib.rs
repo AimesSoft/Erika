@@ -33,6 +33,7 @@ use onboarding::{onboarding, onboarding_props};
 mod feature_preview;
 mod settings;
 use settings::{settings, settings_props};
+mod plugin_info;
 mod pure;
 use pure::{PureDraft, pure_window, pure_window_props};
 mod tv;
@@ -86,6 +87,8 @@ style! {
         caption: font(size: 11.5, tv: 13.5, weight: medium),
         caption2: font(size: 12.5, tv: 14, weight: semibold),
         subheadline: font(size: 8.5, weight: semibold),
+        // A plugin page's code, a little smaller than the words around it.
+        code: font(size: 12, tv: 15, weight: regular),
     }
 
     Stack.player_black { background: color(light: "#000000", dark: "#000000"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
@@ -143,6 +146,10 @@ style! {
     Stack.settings_hud { background: color(light: "#18181B", dark: "#18181B"), corner: 17 }
     Stack.settings_wordmark { foreground: color(light: "#213A6B", dark: "#FFFFFF") }
     Stack.settings_tag { background: fill.subtle, corner: 999 }
+    // A plugin page's quotes and code, on a tint of their own.
+    Stack.document_block { background: fill.subtle, corner: 10 }
+    // The parts of a plugin's card that open its page.
+    Button.plugin_card_area { hover: none, pressed: opacity(0.6, press) }
     Stack.settings_banner { background: color(light: "#232A52", dark: "#232A52"), corner: large }
     pattern { academy: check(gap(22), band(color(light: "#000000", dark: "#000000"), 34, 0.3), gap(6), band(accent, 3, 0.92), gap(6), band(color(light: "#000000", dark: "#000000"), 34, 0.3), gap(15), band(color(light: "#FFFFFF", dark: "#FFFFFF"), 1.5, 0.5), gap(16.5), twill: true) }
     Button.theme_swatch { hover: scale(1.08, snappy), pressed: scale(0.94, press) }

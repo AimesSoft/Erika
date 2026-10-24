@@ -9,6 +9,7 @@ use crate::feature_preview::{
     feature_preview_hud, feature_preview_hud_props, feature_preview_window,
     feature_preview_window_props,
 };
+use crate::plugin_info::{plugin_actions, plugin_actions_props, plugin_info, plugin_info_props};
 use bern::prelude::*;
 #[cfg(feature = "bern-module-anime")]
 use erika_anime_protocol::anime;
@@ -1258,13 +1259,18 @@ pub fn settings_plugins(app: erika::Client, #[session] draft: PluginsDraft) -> i
             if app.plugin_tab == PluginTab::Installed && app.installed_count == 0 {
                 Text(content: tr! { "zh-Hans" => "还没有安装插件。去「市场」里挑一个，或者导入一个。", "en" => "No plugins yet. Pick one in the market, or import one." }, emphasis: secondary)
             }
-            Grid(min_width: 300, gap: 12) {
+            // Cards as tall as what they say, each in the column it fits
+            // under first.
+            Grid(min_width: 300, gap: 12, masonry: true) {
                 ForEach(items: app.plugins, key: id) |plugin| {
                     plugin_card(app: app, plugin: plugin)
                 }
             }
         }
         }
+        }
+        if app.plugin_info.open {
+            plugin_info(app: app)
         }
         if app.plugin_panel.has_message {
             plugin_message(app: app)
@@ -1277,7 +1283,7 @@ pub fn settings_plugins(app: erika::Client, #[session] draft: PluginsDraft) -> i
 
 /// One plugin of the market or installed: its icon, name, author and
 /// version, what it does, the permissions it declares, and what can be done
-/// with it.
+/// with it. What it says opens its page.
 #[component]
 pub fn plugin_card(app: erika::Client, plugin: Plugin) -> impl View {
     ui! {
@@ -1287,41 +1293,38 @@ pub fn plugin_card(app: erika::Client, plugin: Plugin) -> impl View {
             }
             Column(gap: 8, padding: 16, appear: page_in) {
                 Row(gap: 12) {
-                    plugin_icon(plugin: plugin)
-                    Column(gap: 3) {
-                        Text(content: plugin.name, style: headline, lines: 1)
-                        Text(content: tr! { "zh-Hans" => "{author} · {version}", "en" => "{author} · {version}"; author: plugin.author, version: plugin.version }, style: caption, emphasis: secondary, lines: 1)
-                    }
-                    Spacer
-                    if plugin.busy {
-                        Text(content: tr! { "zh-Hans" => "安装中…", "en" => "Installing…" }, style: caption, emphasis: secondary)
-                    } else if plugin.installed {
-                        if plugin.update {
-                            Button(id: update_plugin, label: tr! { "zh-Hans" => "更新", "en" => "Update" }, prominence: prominent) => app.install_plugin(plugin.id)
+                    Button(id: plugin_card_head, label: plugin.name, variant: plugin_card_area) {
+                        Row(gap: 12, align: center) {
+                            plugin_icon(plugin: plugin)
+                            Column(gap: 3) {
+                                Text(content: plugin.name, style: headline, lines: 1)
+                                Text(content: tr! { "zh-Hans" => "{author} · {version}", "en" => "{author} · {version}"; author: plugin.author, version: plugin.version }, style: caption, emphasis: secondary, lines: 1)
+                            }
                         }
-                        Switch(id: plugin_enabled, label: tr! { "zh-Hans" => "启用 {name}", "en" => "Enable {name}"; name: plugin.name }, label_hidden: true, checked: plugin.enabled, style: switch) => app.set_plugin_enabled(plugin.id, plugin.enabled)
-                    } else if "" != plugin.unsupported {
-                        Text(content: tr! { "zh-Hans" => "不支持", "en" => "Unsupported" }, style: caption, emphasis: secondary)
-                    } else {
-                        Button(id: get_plugin, label: tr! { "zh-Hans" => "获取", "en" => "Get" }, prominence: prominent) => app.install_plugin(plugin.id)
-                    }
+                    } => app.open_plugin_info(plugin.id)
+                    Spacer
+                    plugin_actions(app: app, plugin: plugin)
                 }
-                Text(content: plugin.description, emphasis: secondary, lines: 4)
-                if "" != plugin.unsupported {
-                    Text(content: tr! { "zh-Hans" => "Erika 暂不支持：{what}", "en" => "Erika does not support: {what}"; what: plugin.unsupported }, style: caption, emphasis: secondary, lines: 2)
-                }
-                if "" != plugin.error {
-                    Text(content: tr! { "zh-Hans" => "没有载入：{error}", "en" => "Not loaded: {error}"; error: plugin.error }, style: caption, emphasis: secondary, lines: 3)
-                }
-                Flow(gap: 6) {
-                    ForEach(items: plugin.tags, key: id) |tag| {
-                        Stack(variant: settings_tag) {
-                            Row(padding_x: 8, padding_y: 2) {
-                                Text(content: tag.permission, style: caption, emphasis: secondary)
+                Button(id: plugin_card_body, label: plugin.name, variant: plugin_card_area) {
+                    Column(gap: 8) {
+                        Text(content: plugin.description, emphasis: secondary, lines: 4)
+                        if "" != plugin.unsupported {
+                            Text(content: tr! { "zh-Hans" => "Erika 暂不支持：{what}", "en" => "Erika does not support: {what}"; what: plugin.unsupported }, style: caption, emphasis: secondary, lines: 2)
+                        }
+                        if "" != plugin.error {
+                            Text(content: tr! { "zh-Hans" => "没有载入：{error}", "en" => "Not loaded: {error}"; error: plugin.error }, style: caption, emphasis: secondary, lines: 3)
+                        }
+                        Flow(gap: 6) {
+                            ForEach(items: plugin.tags, key: id) |tag| {
+                                Stack(variant: settings_tag) {
+                                    Row(padding_x: 8, padding_y: 2) {
+                                        Text(content: tag.permission, style: caption, emphasis: secondary)
+                                    }
+                                }
                             }
                         }
                     }
-                }
+                } => app.open_plugin_info(plugin.id)
                 if plugin.installed {
                     Row(gap: 8, align: center) {
                         if plugin.has_settings && plugin.enabled {

@@ -223,6 +223,13 @@ fn local_listings() -> Vec<Listing> {
 }
 
 /// One file of a package, whole.
+pub fn package_file(package: &[u8], name: &str) -> Result<Vec<u8>, String> {
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(package)).map_err(|_| "这不是 Erika 插件包".to_string())?;
+    read_entry(&mut archive, name)
+}
+
+/// One file of an opened package, whole.
 fn read_entry<R: std::io::Read + std::io::Seek>(
     archive: &mut zip::ZipArchive<R>,
     name: &str,
@@ -247,7 +254,8 @@ pub fn install(listing: &Listing) -> Result<Pack, String> {
     match &listing.files {
         Files::Script(address) => {
             let script = get(address)?;
-            install_script(&listing.pack, &script)
+            let readme = get(&beside(address, "README.md")).ok();
+            install_script(&listing.pack, &script, readme.as_deref())
         }
         Files::Local(package) => unpack(package),
         Files::Folder(address) => {
@@ -260,17 +268,19 @@ pub fn install(listing: &Listing) -> Result<Pack, String> {
                 Some(image) => Some(get(&format!("{address}/{image}"))?),
                 None => None,
             };
-            place(&pack, &script, image.as_deref())
+            let readme = get(&format!("{address}/README.md")).ok();
+            place(&pack, &script, image.as_deref(), readme.as_deref())
         }
     }
 }
 
 /// Install a NipaPlay script under the declaration it was listed with,
-/// which its own `pluginManifest` replaces when it loads.
-pub fn install_script(pack: &Pack, script: &[u8]) -> Result<Pack, String> {
+/// which its own `pluginManifest` replaces when it loads, with the README
+/// beside it.
+pub fn install_script(pack: &Pack, script: &[u8], readme: Option<&[u8]>) -> Result<Pack, String> {
     let mut pack = pack.clone();
     pack.main = "main.js".into();
-    place(&pack, script, None)
+    place(&pack, script, None, readme)
 }
 
 /// Install a plugin the user picked: a folder with `pack.json`, or a
@@ -287,7 +297,8 @@ pub fn import_folder(path: &Path) -> Result<Pack, String> {
         Some(image) => Some(std::fs::read(path.join(image)).map_err(|_| format!("文件夹里没有 {image}"))?),
         None => None,
     };
-    place(&pack, &script, image.as_deref())
+    let readme = std::fs::read(path.join("README.md")).ok();
+    place(&pack, &script, image.as_deref(), readme.as_deref())
 }
 
 /// Install a package the user picked.
@@ -344,7 +355,7 @@ fn unpack_into(root: &Path, package: &[u8]) -> Result<Pack, String> {
 }
 
 /// Write the plugin's files into its folder, replacing what was there.
-fn place(pack: &Pack, script: &[u8], image: Option<&[u8]>) -> Result<Pack, String> {
+fn place(pack: &Pack, script: &[u8], image: Option<&[u8]>, readme: Option<&[u8]>) -> Result<Pack, String> {
     let root = folder().ok_or("没有可以安装插件的地方")?;
     let staging = root.join(format!(".{}.new", pack.id));
     let _ = std::fs::remove_dir_all(&staging);
@@ -355,6 +366,9 @@ fn place(pack: &Pack, script: &[u8], image: Option<&[u8]>) -> Result<Pack, Strin
     write(&pack.main, script)?;
     if let (Some(name), Some(bytes)) = (&pack.image, image) {
         write(name, bytes)?;
+    }
+    if let Some(bytes) = readme {
+        write("README.md", bytes)?;
     }
     write(
         "pack.json",

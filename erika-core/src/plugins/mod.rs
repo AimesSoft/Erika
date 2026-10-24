@@ -13,9 +13,9 @@ mod hooks;
 mod links;
 mod pack;
 mod runtime;
-mod store;
+pub(crate) mod store;
 
-use crate::{ErikaEngine, in_background};
+use crate::{ErikaEngine, in_background, markdown};
 use bern::CommandError;
 use bern::media::MediaSource;
 use erika_protocol::erika::{self, *};
@@ -114,6 +114,8 @@ enum Done {
     Opening(String, Result<Value, String>),
     /// A request of a link's resolution answered.
     Resolved(u64, Result<Value, String>),
+    /// A plugin's `README.md`, with where it was read from.
+    Readme(String, Result<(String, String), String>),
 }
 
 pub(crate) struct Plugins {
@@ -243,6 +245,51 @@ impl Plugins {
 }
 
 /// The settings sheet with no plugin open.
+/// No plugin's page open.
+pub(crate) fn closed_info() -> PluginInfo {
+    PluginInfo {
+        open: false,
+        plugin: None,
+        loading: false,
+        error: String::new(),
+        blocks: Vec::new(),
+    }
+}
+
+/// Where a plugin's `README.md` is: in its folder once installed, else
+/// beside what the market lists, or in the package this build carries.
+enum Readme {
+    File(PathBuf),
+    Address(String),
+    Package(&'static [u8]),
+}
+
+impl Readme {
+    fn of(installed: Option<&Installed>, listing: Option<&store::Listing>) -> Option<Readme> {
+        if let Some(path) = installed.map(|plugin| plugin.dir.join("README.md")).filter(|path| path.is_file()) {
+            return Some(Readme::File(path));
+        }
+        Some(match &listing?.files {
+            store::Files::Local(package) => Readme::Package(package),
+            store::Files::Folder(address) => Readme::Address(format!("{address}/README.md")),
+            store::Files::Script(address) => Readme::Address(store::beside(address, "README.md")),
+        })
+    }
+
+    /// Its text, and the address its relative links resolve beside.
+    fn read(self) -> Result<(String, String), String> {
+        let (bytes, base) = match self {
+            Readme::File(path) => {
+                let base = MediaSource::file(path.clone()).url;
+                (std::fs::read(&path).map_err(|error| error.to_string())?, base)
+            }
+            Readme::Address(address) => (store::get(&address)?, address),
+            Readme::Package(package) => (store::package_file(package, "README.md")?, String::new()),
+        };
+        Ok((String::from_utf8_lossy(&bytes).into_owned(), base))
+    }
+}
+
 pub(crate) fn closed_panel() -> PluginPanel {
     PluginPanel {
         open: false,
@@ -359,6 +406,7 @@ impl ErikaEngine {
                 #[cfg(target_os = "macos")]
                 Done::Opening(url, Err(error)) => eprintln!("erika: opening of {url}: {error}"),
                 Done::Resolved(tag, answer) => self.resolver_fetched(tag, answer),
+                Done::Readme(id, readme) => self.readme_read(&id, readme),
                 Done::Fetched(id, request, answer) => {
                     let snapshot = self.plugin_snapshot(&id);
                     if let Some(runtime) = self.plugins.runtimes.get_mut(&id) {
@@ -1019,6 +1067,12 @@ impl ErikaEngine {
             }
         }
         self.state.installed_count = self.plugins.installed.len() as i64;
+        // The page open shows the plugin as it is now: installed, turned on.
+        if let Some(open) = &self.state.plugin_info.plugin
+            && let Some(now) = all.iter().find(|plugin| plugin.id == open.id)
+        {
+            self.state.plugin_info.plugin = Some(now.clone());
+        }
         self.state.plugins = all
             .into_iter()
             .filter(|plugin| {
@@ -1210,6 +1264,49 @@ impl ErikaEngine {
         Ok(())
     }
 
+    pub(crate) fn open_plugin_info_command(&mut self, id: String) -> Result<(), CommandError> {
+        let host = self.state.version.clone();
+        let installed = self.plugins.find(&id);
+        let listing = self.plugins.listings.iter().find(|listing| listing.pack.id == id);
+        let pack = installed
+            .map(|plugin| &plugin.pack)
+            .or(listing.map(|listing| &listing.pack))
+            .ok_or_else(|| CommandError::new("unknown_plugin", format!("没有插件 {id}")))?;
+        let plugin = self.plugin_row(pack, installed, listing, &host);
+        let readme = Readme::of(installed, listing);
+        self.state.plugin_info = PluginInfo {
+            open: true,
+            loading: readme.is_some(),
+            error: String::new(),
+            blocks: if readme.is_some() { Vec::new() } else { markdown::paragraph(&plugin.description) },
+            plugin: Some(plugin),
+        };
+        if let Some(readme) = readme {
+            in_background(&self.plugins.inbox, move || vec![Done::Readme(id, readme.read())]);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn close_plugin_info_command(&mut self) -> Result<(), CommandError> {
+        self.state.plugin_info = closed_info();
+        Ok(())
+    }
+
+    /// Show the README that came, on the page still open for it; without
+    /// one, what the market says of the plugin.
+    fn readme_read(&mut self, id: &str, readme: Result<(String, String), String>) {
+        let info = &mut self.state.plugin_info;
+        let Some(plugin) = info.plugin.as_ref().filter(|plugin| info.open && plugin.id == id) else {
+            return;
+        };
+        let blocks = match readme {
+            Ok((text, base)) => markdown::blocks(&text, &base),
+            Err(_) => Vec::new(),
+        };
+        info.blocks = if blocks.is_empty() { markdown::paragraph(&plugin.description) } else { blocks };
+        info.loading = false;
+    }
+
     pub(crate) fn uninstall_plugin_command(&mut self, id: String) -> Result<(), CommandError> {
         if self.plugins.find(&id).is_none() {
             return Err(CommandError::new("unknown_plugin", format!("没有安装插件 {id}")));
@@ -1357,7 +1454,8 @@ fn import_script(path: &std::path::Path) -> Result<Pack, String> {
     let script = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let manifest = manifest_of(&script)?;
     let pack = Pack::from_manifest(&manifest)?;
-    store::install_script(&pack, script.as_bytes())
+    let readme = std::fs::read(path.with_file_name("README.md")).ok();
+    store::install_script(&pack, script.as_bytes(), readme.as_deref())
 }
 
 /// The `pluginManifest` a script declares, read in a context of its own.

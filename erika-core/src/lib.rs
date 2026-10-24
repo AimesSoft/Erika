@@ -16,6 +16,7 @@ mod history;
 mod kernel;
 mod keys;
 mod links;
+mod markdown;
 mod matching;
 mod plugins;
 mod playback_preferences;
@@ -214,6 +215,7 @@ impl Default for ErikaEngine {
                 plugins_loading: false,
                 plugins_error: String::new(),
                 plugin_panel: plugins::closed_panel(),
+                plugin_info: plugins::closed_info(),
                 downloader_unlocked: false,
                 downloads_hidden: settings::downloader_hidden(),
                 plugins_starting: false,
@@ -518,6 +520,12 @@ impl erika::Commands for ErikaEngine {
     }
     fn close_plugin(&mut self) -> Result<(), CommandError> {
         self.close_plugin_command()
+    }
+    fn open_plugin_info(&mut self, id: String) -> Result<(), CommandError> {
+        self.open_plugin_info_command(id)
+    }
+    fn close_plugin_info(&mut self) -> Result<(), CommandError> {
+        self.close_plugin_info_command()
     }
     fn plugin_action(&mut self, entry: String) -> Result<(), CommandError> {
         self.plugin_action_command(entry)

@@ -416,6 +416,57 @@ pub mod erika {
         Text,
     }
 
+    /// What a block of a Markdown document is.
+    #[value]
+    pub enum DocKind {
+        /// `#`
+        Title,
+        /// `##`
+        Heading,
+        /// `###` and smaller.
+        Subheading,
+        Paragraph,
+        /// An item of a list: `marker` is its bullet or number.
+        Item,
+        Quote,
+        Code,
+        Rule,
+        /// `image` is the picture.
+        Image,
+        /// A row of a two-column table: `text` names what `detail` says.
+        Term,
+    }
+
+    /// One block of a Markdown document, its words in inline Markdown
+    /// (emphasis, code and links), as `Text(markdown: true)` shows them.
+    #[value]
+    pub struct DocBlock {
+        pub id: i64,
+        pub kind: DocKind,
+        #[content]
+        pub text: String,
+        #[content]
+        pub detail: String,
+        #[content]
+        pub marker: String,
+        /// How deep a list item stands, 0 for the outermost.
+        pub depth: i64,
+        pub image: Option<MediaSource>,
+    }
+
+    /// A plugin's page: what the market or the plugin tells of it, and its
+    /// `README.md`.
+    #[value]
+    pub struct PluginInfo {
+        pub open: bool,
+        pub plugin: Option<Plugin>,
+        /// The README is being read.
+        pub loading: bool,
+        #[content]
+        pub error: String,
+        pub blocks: Vec<DocBlock>,
+    }
+
     /// One item of a plugin's settings, from its `pluginUIEntries`.
     #[value]
     pub struct PluginEntry {
@@ -894,6 +945,7 @@ pub mod erika {
         #[content]
         pub plugins_error: String,
         pub plugin_panel: PluginPanel,
+        pub plugin_info: PluginInfo,
         /// A plugin turned the downloader on where Erika hides it.
         pub downloader_unlocked: bool,
         /// The downloader is hidden here (iOS) and no plugin turned it on.
@@ -1076,6 +1128,10 @@ pub mod erika {
         #[errors("unknown_plugin")]
         fn open_plugin(&mut self, id: String) -> Result<(), CommandError>;
         fn close_plugin(&mut self) -> Result<(), CommandError>;
+        /// Open a plugin's page, with its `README.md`.
+        #[errors("unknown_plugin")]
+        fn open_plugin_info(&mut self, id: String) -> Result<(), CommandError>;
+        fn close_plugin_info(&mut self) -> Result<(), CommandError>;
         /// Press a button of the open plugin's settings.
         fn plugin_action(&mut self, entry: String) -> Result<(), CommandError>;
         fn set_plugin_switch(&mut self, entry: String, value: bool) -> Result<(), CommandError>;
