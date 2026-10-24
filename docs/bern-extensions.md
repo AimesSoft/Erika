@@ -77,6 +77,9 @@
 | 68 | 系统钥匙串 | 弹弹play 的登录令牌不能写进应用的文件 | 已完成（2026-10-21）：`bern::secrets::read / write / delete`，macOS 与 iOS 用钥匙串，Windows 用凭据管理器，Linux 用 Secret Service（构建需要 dbus）。macOS 上实测写入、读取、删除；Windows 通过类型检查；Linux、tvOS、Android、浏览器未实现 |
 | 69 | 现在与本地时区 | 新番日历与今日时间轴要知道今天是哪天、现在几点、播出时刻在本地是几点 | 已完成（2026-10-21）：`bern::date::now()` 给出 UTC 秒数和本地时区偏移，原生取系统时钟与时区，浏览器取页面的 `Date.now()` 与时区偏移。浏览器版实测日期正确 |
 | 70 | 模块读本地文件路径 | 媒体库扫描文件夹要把选到的 `file:` 地址换成路径、把找到的视频路径换回地址 | 已完成（2026-10-21）：`bern` 重新导出 `bern_command::files`（`file_path`、`name`），配合已有的 `MediaSource::file`。扫描在 macOS 上实测 |
+| 71 | 跟随状态的快捷键 | 「设置 › 快捷键」改了键，界面里的按钮、页面快捷键与菜单都跟着变 | 已完成（2026-10-24）：`shortcut:` 与 `Shortcut(key:)` 可绑定文本（`app.keys.play_pause`），六个目标运行时读取；引擎用 `bern::shortcut::parse_shortcut` 规范化、`same_keys` 判断冲突。macOS 实测改键后旧键失效、新键生效，菜单显示的按键同步；其他目标只经过生成器测试 |
+| 72 | 按下组合键来改键 | 「设置 › 快捷键」每行右侧的按钮：点一下再按新的组合键，Esc 取消、⌫ 清除 | 已完成（2026-10-24）：`ShortcutInput(current:) => app.set_shortcut(…, current)`，六个目标生成；macOS 实测点按钮后录下 ⌥P、⌃⌘F，菜单同步；iOS 等待硬件键盘，电视只显示 |
+| 73 | macOS 菜单栏 | 文件菜单里的打开文件／文件夹／链接，「播放」菜单（播放暂停、快退快进、上下集、倍速子菜单、截图），显示菜单里的全屏与弹幕，应用菜单里的设置 | 已完成（2026-10-24）：`WindowSet` 里的 `MenuBar`、`CommandMenu`（`role` 并入系统菜单、嵌套为子菜单）、`CommandItem`（动作、快捷键、`enabled`、`checked`、`pick`），草稿属于主窗口；只有 macOS 显示，其他目标不适用；`window.menu_bar` 让「菜单栏」那组快捷键只在 Mac 上出现。macOS 实测菜单出现、点菜单项与 `ui.activate` 执行命令、勾选与启用随状态更新、同键不重复触发、输入框里不被无修饰键的菜单项抢字 |
 
 ## 图标菜单尺寸（2026-10-14）
 

@@ -23,7 +23,7 @@ use erika_anime_protocol::anime::{self, BackTo};
 use erika_anime_ui::{details, details_props};
 #[cfg(feature = "bern-module-downloads")]
 use erika_downloads_protocol::downloads;
-use erika_protocol::erika;
+use erika_protocol::erika::{self, PlaybackSpeed};
 #[cfg(feature = "bern-module-account")]
 mod account;
 #[cfg(feature = "bern-module-account")]
@@ -34,7 +34,7 @@ mod feature_preview;
 mod settings;
 use settings::{settings, settings_props};
 mod pure;
-use pure::{pure_window, pure_window_props};
+use pure::{PureDraft, pure_window, pure_window_props};
 mod tv;
 use tv::{tv_shell, tv_shell_props};
 
@@ -577,6 +577,10 @@ pub struct Players {
     pub video: Player,
 }
 
+/// The windows, and the menus of the Mac's menu bar: opening files,
+/// folders and links, playback, the view and the settings, each with the
+/// shortcut 「设置 › 快捷键」 gives it. The files and folders chosen in the
+/// menus are the main window's drafts.
 #[component]
 pub fn app(
     app: erika::Client,
@@ -584,6 +588,8 @@ pub fn app(
     #[cfg(feature = "bern-module-downloads")] download_module: downloads::Client,
     windows: AppWindows,
     players: Players,
+    #[session] draft: ErikaDraft,
+    #[session] pure: PureDraft,
 ) -> impl View {
     ui! {
         WindowSet(handle: AppWindows, primary: main, accent: app.accent, appearance: app.appearance) {
@@ -592,6 +598,41 @@ pub fn app(
             }
             Window(id: settings, title: tr! { "zh-Hans" => "设置", "en" => "Settings" }, width: 1000, height: 660, min_width: 1000, min_height: 660, chrome: standard) {
                 settings(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
+            }
+            MenuBar {
+                CommandMenu(role: app) {
+                    CommandItem(id: menu_settings, label: tr! { "zh-Hans" => "设置…", "en" => "Settings…" }, shortcut: app.keys.settings) => windows.settings.open()
+                }
+                CommandMenu(role: file) {
+                    CommandItem(id: menu_open_file, label: tr! { "zh-Hans" => "打开文件…", "en" => "Open File…" }, shortcut: app.keys.open_file, pick: draft.file, files: "video") => app.open_file(draft.file)
+                    CommandItem(id: menu_open_folder, label: tr! { "zh-Hans" => "打开文件夹…", "en" => "Open Folder…" }, shortcut: app.keys.open_folder, pick: pure.folder, files: "folder") => app.open_folder(pure.folder)
+                    CommandItem(id: menu_open_link, label: tr! { "zh-Hans" => "打开链接…", "en" => "Open Link…" }, shortcut: app.keys.open_link) => app.show_link_prompt(true)
+                }
+                CommandMenu(label: tr! { "zh-Hans" => "播放", "en" => "Playback" }) {
+                    CommandItem(id: menu_play_pause, label: tr! { "zh-Hans" => "播放 / 暂停", "en" => "Play / Pause" }, shortcut: app.keys.play_pause, enabled: app.playing) => app.toggle_pause()
+                    CommandItem(id: menu_seek_back, label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 Seconds" }, shortcut: app.keys.seek_back, enabled: app.playing) => app.skip(-10.0)
+                    CommandItem(id: menu_seek_forward, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 Seconds" }, shortcut: app.keys.seek_forward, enabled: app.playing) => app.skip(10.0)
+                    Divider
+                    CommandItem(id: menu_previous, label: tr! { "zh-Hans" => "上一集", "en" => "Previous Episode" }, shortcut: app.keys.previous_episode, enabled: app.playing && app.player.has_previous) => app.change_episode(-1)
+                    CommandItem(id: menu_next, label: tr! { "zh-Hans" => "下一集", "en" => "Next Episode" }, shortcut: app.keys.next_episode, enabled: app.playing && app.player.has_next) => app.change_episode(1)
+                    Divider
+                    CommandMenu(label: tr! { "zh-Hans" => "倍速", "en" => "Speed" }) {
+                        CommandItem(id: menu_speed_half, label: tr! { "zh-Hans" => "0.5×", "en" => "0.5×" }, checked: app.preferences.speed == PlaybackSpeed::Half) => app.set_speed(PlaybackSpeed::Half)
+                        CommandItem(id: menu_speed_slow, label: tr! { "zh-Hans" => "0.75×", "en" => "0.75×" }, checked: app.preferences.speed == PlaybackSpeed::Slow) => app.set_speed(PlaybackSpeed::Slow)
+                        CommandItem(id: menu_speed_normal, label: tr! { "zh-Hans" => "1.0×", "en" => "1.0×" }, checked: app.preferences.speed == PlaybackSpeed::Normal) => app.set_speed(PlaybackSpeed::Normal)
+                        CommandItem(id: menu_speed_fast, label: tr! { "zh-Hans" => "1.25×", "en" => "1.25×" }, checked: app.preferences.speed == PlaybackSpeed::Fast) => app.set_speed(PlaybackSpeed::Fast)
+                        CommandItem(id: menu_speed_faster, label: tr! { "zh-Hans" => "1.5×", "en" => "1.5×" }, checked: app.preferences.speed == PlaybackSpeed::Faster) => app.set_speed(PlaybackSpeed::Faster)
+                        CommandItem(id: menu_speed_double, label: tr! { "zh-Hans" => "2.0×", "en" => "2.0×" }, checked: app.preferences.speed == PlaybackSpeed::Double) => app.set_speed(PlaybackSpeed::Double)
+                    }
+                    Divider
+                    CommandItem(id: menu_screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, shortcut: app.keys.screenshot, enabled: app.playing) => app.screenshot()
+                }
+                CommandMenu(role: view) {
+                    CommandItem(id: menu_fullscreen, label: tr! { "zh-Hans" => "全屏播放", "en" => "Full Screen Playback" }, shortcut: app.keys.fullscreen) => windows.main.toggle_fullscreen()
+                    if build.modules.danmaku {
+                        CommandItem(id: menu_danmaku, label: tr! { "zh-Hans" => "显示弹幕", "en" => "Show Danmaku" }, shortcut: app.keys.toggle_danmaku, checked: app.preferences.show_danmaku, enabled: app.features.danmaku) => app.set_preference("show_danmaku", !app.preferences.show_danmaku)
+                    }
+                }
             }
         }
     }
@@ -694,7 +735,7 @@ pub fn main_shell(
                             }
                             }
                             Spacer
-                            IconButton(id: settings, icon: "gearshape", label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, prominence: plain, shortcut: "cmd+,") => windows.settings.open()
+                            IconButton(id: settings, icon: "gearshape", label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, prominence: plain, shortcut: app.keys.settings) => windows.settings.open()
                         }
                     }
                 }
@@ -703,16 +744,16 @@ pub fn main_shell(
                         // Keep the destination inside the native button so
                         // its toolbar capsule measures and pads the whole label.
                         if build.modules.anime && anime.opened > 0 && (anime.back == BackTo::Search || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back == BackTo::Home) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library)) {
-                            Button(id: back, icon: "chevron.left", label: anime.back, shortcut: "escape") => anime.close()
+                            Button(id: back, icon: "chevron.left", label: anime.back, shortcut: app.keys.back) => anime.close()
                         }
                         Spacer
-                        Search(id: search, value: draft.query, style: palette, width: 640, height: 480, panel_prompt: tr! { "zh-Hans" => "搜索番剧、剧集、设置和操作", "en" => "Search shows, episodes, settings and actions" }, prompt: tr! { "zh-Hans" => "搜索番剧、文件、设置", "en" => "Search shows, files and settings" }, shortcut: "cmd+k") {
+                        Search(id: search, value: draft.query, style: palette, width: 640, height: 480, panel_prompt: tr! { "zh-Hans" => "搜索番剧、剧集、设置和操作", "en" => "Search shows, episodes, settings and actions" }, prompt: tr! { "zh-Hans" => "搜索番剧、文件、设置", "en" => "Search shows, files and settings" }, shortcut: app.keys.search) {
                             search_results(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
                         }
-                        Button(id: open_file, label: tr! { "zh-Hans" => "打开", "en" => "Open" }, icon: "plus", pick: draft.file, files: "video", shortcut: "cmd+o") => app.open_file(draft.file)
+                        Button(id: open_file, label: tr! { "zh-Hans" => "打开", "en" => "Open" }, icon: "plus", pick: draft.file, files: "video", shortcut: app.keys.open_file) => app.open_file(draft.file)
                     }
                     if build.modules.anime && anime.opened > 0 && (anime.back == BackTo::Search || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library)) {
-                        details(#[cfg(feature = "bern-module-anime")] anime: anime)
+                        details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
                     } else {
                         PageContent(slot: main, selected: draft.page)
                     }

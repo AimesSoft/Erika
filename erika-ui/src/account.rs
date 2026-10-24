@@ -83,7 +83,7 @@ pub fn account_login(
                 }
                 Row(gap: 12, align: center) {
                     Spacer
-                    Button(id: account_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, role: cancel, prominence: plain, clears: draft.password, shortcut: "escape") => app.cancel_account_login()
+                    Button(id: account_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, role: cancel, prominence: plain, clears: draft.password, shortcut: app.keys.back) => app.cancel_account_login()
                     Button(id: account_sign_in, label: tr! { "zh-Hans" => "登录", "en" => "Sign In" }, prominence: prominent, enabled: !busy) => app.submit_account_login(bangumi, draft.user, draft.password, draft.captcha)
                 }
             }

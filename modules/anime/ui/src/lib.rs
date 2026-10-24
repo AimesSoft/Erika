@@ -43,7 +43,7 @@ pub fn anime_clock(anime: anime::Client) -> impl View {
 pub fn home_page(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
         if anime.opened > 0 && !anime.opened_from_schedule && anime.back == BackTo::Home {
-            details(anime: anime)
+            details(app: app, anime: anime)
         } else {
             home(app: app, anime: anime)
         }
@@ -327,7 +327,7 @@ pub fn timeline_track(anime: anime::Client) -> impl View {
 /// The details of the opened show: a wash of the poster's color behind
 /// the head, the poster, its facts and actions, then the film of episodes.
 #[component]
-pub fn details(anime: anime::Client) -> impl View {
+pub fn details(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
         Stack(align: top_leading) {
             Adaptive(id: details_layout) {
@@ -342,10 +342,10 @@ pub fn details(anime: anime::Client) -> impl View {
                 }
             }
             if anime.rating_open {
-                rating_dialog(anime: anime)
+                rating_dialog(app: app, anime: anime)
             }
             if anime.review_open {
-                review_dialog(anime: anime)
+                review_dialog(app: app, anime: anime)
             }
         }
     }
@@ -354,7 +354,7 @@ pub fn details(anime: anime::Client) -> impl View {
 /// The score dialog: Bangumi's ten steps with a Bangumi account, the even
 /// five without; picking one rates the show and closes it.
 #[component]
-pub fn rating_dialog(anime: anime::Client) -> impl View {
+pub fn rating_dialog(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
         Modal(width: 360, height: if anime.fine_scores { 390.0 } else { 270.0 }, cover: compact, appear: pop_in, disappear: fade) {
             Column(gap: 12, padding: 24) {
@@ -385,7 +385,7 @@ pub fn rating_dialog(anime: anime::Client) -> impl View {
                 Spacer
                 Row(gap: 10, align: center) {
                     Spacer
-                    Button(id: rating_done, label: tr! { "zh-Hans" => "完成", "en" => "Done" }, shortcut: "escape") => anime.show_rating(false)
+                    Button(id: rating_done, label: tr! { "zh-Hans" => "完成", "en" => "Done" }, shortcut: app.keys.back) => anime.show_rating(false)
                 }
             }
         }
@@ -395,7 +395,7 @@ pub fn rating_dialog(anime: anime::Client) -> impl View {
 /// The review dialog: the review on Bangumi, read anew as it opens, is
 /// where the writing starts; sending it saves it on Bangumi.
 #[component]
-pub fn review_dialog(anime: anime::Client, #[session] draft: AnimeDraft) -> impl View {
+pub fn review_dialog(app: erika::Client, anime: anime::Client, #[session] draft: AnimeDraft) -> impl View {
     ui! {
         Modal(width: 480, height: 320, cover: compact, appear: pop_in, disappear: fade) {
             Column(gap: 12, padding: 24) {
@@ -417,7 +417,7 @@ pub fn review_dialog(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
                         Button(id: review_remove, label: tr! { "zh-Hans" => "删除评价", "en" => "Delete Review" }, role: destructive, prominence: plain, enabled: !anime.review_saving, clears: draft.review) => anime.submit_review("")
                     }
                     Spacer
-                    Button(id: review_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, role: cancel, prominence: plain, shortcut: "escape", clears: draft.review) => anime.show_review(false)
+                    Button(id: review_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, role: cancel, prominence: plain, shortcut: app.keys.back, clears: draft.review) => anime.show_review(false)
                     if anime.review_saving {
                         Button(id: review_sending, label: tr! { "zh-Hans" => "正在提交…", "en" => "Sending…" }, prominence: prominent, enabled: false) => anime.show_review(true)
                     } else {
@@ -603,7 +603,7 @@ pub fn tag_chip(#[content] name: String) -> impl View {
 pub fn new_page(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
         if anime.opened > 0 && anime.opened_from_schedule {
-            details(anime: anime)
+            details(app: app, anime: anime)
         } else if window.compact || window.medium {
             ScrollView(appear: page_in) {
                 calendar_page(app: app, anime: anime)

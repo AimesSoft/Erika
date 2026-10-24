@@ -180,16 +180,16 @@ pub fn player_tv_scene(
                         Stack(width: 1280, height: 720) {}
                     } => app.toggle_pause()
                 }
-                Shortcut(key: "left") => app.skip(-10.0)
-                Shortcut(key: "right") => app.skip(10.0)
+                Shortcut(key: app.keys.seek_back) => app.skip(-10.0)
+                Shortcut(key: app.keys.seek_forward) => app.skip(10.0)
             }
-            Shortcut(key: "space") => app.toggle_pause()
+            Shortcut(key: app.keys.play_pause) => app.toggle_pause()
             if app.player.panel {
-                Shortcut(key: "escape") => app.player_panel(false)
+                Shortcut(key: app.keys.back) => app.player_panel(false)
             } else if !(build.modules.anime && app.features.anime) && !(build.modules.library && app.features.library) && !(build.modules.downloads && app.features.downloads) {
-                Shortcut(key: "escape") => app.return_to_frame()
+                Shortcut(key: app.keys.back) => app.return_to_frame()
             } else {
-                Shortcut(key: "escape") => app.minimize()
+                Shortcut(key: app.keys.back) => app.minimize()
             }
             if app.player.skip_kind != SkipKind::None {
                 Positioned(x: 1004, y: 490, width: 220, height: 44) {
@@ -487,21 +487,21 @@ pub fn player_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl Vie
     ui! {
         Row(gap: 12, height: 64, align: center) {
             if draft.tracks_open {
-                Shortcut(key: "escape") => draft.tracks_open.set(false)
+                Shortcut(key: app.keys.back) => draft.tracks_open.set(false)
             } else if draft.rate_open {
-                Shortcut(key: "escape") => draft.rate_open.set(false)
+                Shortcut(key: app.keys.back) => draft.rate_open.set(false)
             } else if draft.danmaku_open {
-                Shortcut(key: "escape") => draft.danmaku_open.set(false)
+                Shortcut(key: app.keys.back) => draft.danmaku_open.set(false)
             } else if draft.composer_open {
-                Shortcut(key: "escape") => draft.composer_open.set(false)
+                Shortcut(key: app.keys.back) => draft.composer_open.set(false)
             } else if draft.volume_open {
-                Shortcut(key: "escape") => draft.volume_open.set(false)
+                Shortcut(key: app.keys.back) => draft.volume_open.set(false)
             } else if app.player.panel {
-                Shortcut(key: "escape") => app.player_panel(false)
+                Shortcut(key: app.keys.back) => app.player_panel(false)
             } else if !(build.modules.anime && app.features.anime) && !(build.modules.library && app.features.library) && !(build.modules.downloads && app.features.downloads) {
-                Shortcut(key: "escape") => app.return_to_frame()
+                Shortcut(key: app.keys.back) => app.return_to_frame()
             } else {
-                Shortcut(key: "escape") => app.minimize()
+                Shortcut(key: app.keys.back) => app.minimize()
             }
             ControlGroup(height: 40) {
                 // With no sidebar to shrink into, the picture goes back into
@@ -537,7 +537,7 @@ pub fn player_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl Vie
                 PopoverButton(panel_appearance: surface, id: settings, icon: "slider.horizontal.3", label: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }, open: app.player.panel) {
                     player_panel(app: app)
                 } => app.player_panel(app.player.panel)
-                IconButton(id: screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera", shortcut: "cmd+s") => app.screenshot()
+                IconButton(id: screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera", shortcut: app.keys.screenshot) => app.screenshot()
             }
         }
     }
@@ -589,13 +589,13 @@ pub fn player_controls(
         Row(gap: 18, align: center, height: 64) {
             Row(gap: 10, align: center, height: 64) {
                 IconButton(id: previous, variant: transport, icon: "backward.end.fill", label: tr! { "zh-Hans" => "上一集", "en" => "Previous episode" }, height: 44, prominence: plain, enabled: app.player.has_previous) => app.change_episode(-1)
-                IconButton(id: rewind, icon: "gobackward.10", variant: transport, label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 seconds" }, height: 44, prominence: plain, shortcut: "left") => app.skip(-10.0)
+                IconButton(id: rewind, icon: "gobackward.10", variant: transport, label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 seconds" }, height: 44, prominence: plain, shortcut: app.keys.seek_back) => app.skip(-10.0)
                 if app.paused {
-                    IconButton(id: play, icon: "play.fill", label: tr! { "zh-Hans" => "播放", "en" => "Play" }, variant: player_primary, height: 64, prominence: plain, shortcut: "space") => app.toggle_pause()
+                    IconButton(id: play, icon: "play.fill", label: tr! { "zh-Hans" => "播放", "en" => "Play" }, variant: player_primary, height: 64, prominence: plain, shortcut: app.keys.play_pause) => app.toggle_pause()
                 } else {
-                    IconButton(id: pause, icon: "pause.fill", label: tr! { "zh-Hans" => "暂停", "en" => "Pause" }, variant: player_primary, height: 64, prominence: plain, shortcut: "space") => app.toggle_pause()
+                    IconButton(id: pause, icon: "pause.fill", label: tr! { "zh-Hans" => "暂停", "en" => "Pause" }, variant: player_primary, height: 64, prominence: plain, shortcut: app.keys.play_pause) => app.toggle_pause()
                 }
-                IconButton(id: forward, icon: "goforward.10", variant: transport, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }, height: 44, prominence: plain, shortcut: "right") => app.skip(10.0)
+                IconButton(id: forward, icon: "goforward.10", variant: transport, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }, height: 44, prominence: plain, shortcut: app.keys.seek_forward) => app.skip(10.0)
                 IconButton(id: next, variant: transport, icon: "forward.end.fill", label: tr! { "zh-Hans" => "下一集", "en" => "Next episode" }, height: 44, prominence: plain, enabled: app.player.has_next) => app.change_episode(1)
             }
             if (build.modules.danmaku && app.features.danmaku) {
@@ -607,7 +607,7 @@ pub fn player_controls(
                         player_danmaku_composer(app: app)
                     }
                 }
-                Shortcut(key: "d") => app.set_preference("show_danmaku", !app.preferences.show_danmaku)
+                Shortcut(key: app.keys.toggle_danmaku) => app.set_preference("show_danmaku", !app.preferences.show_danmaku)
             }
             Spacer
             ControlGroup(height: 40) {
@@ -621,9 +621,9 @@ pub fn player_controls(
                     }
                 }
                 if window.fullscreen {
-                    IconButton(id: exit_fullscreen, icon: "arrow.down.right.and.arrow.up.left", label: tr! { "zh-Hans" => "退出全屏", "en" => "Exit full screen" }, shortcut: "f") => windows.main.toggle_fullscreen()
+                    IconButton(id: exit_fullscreen, icon: "arrow.down.right.and.arrow.up.left", label: tr! { "zh-Hans" => "退出全屏", "en" => "Exit full screen" }, shortcut: app.keys.fullscreen) => windows.main.toggle_fullscreen()
                 } else {
-                    IconButton(id: fullscreen, icon: "viewfinder", label: tr! { "zh-Hans" => "全屏", "en" => "Full screen" }, shortcut: "f") => windows.main.toggle_fullscreen()
+                    IconButton(id: fullscreen, icon: "viewfinder", label: tr! { "zh-Hans" => "全屏", "en" => "Full screen" }, shortcut: app.keys.fullscreen) => windows.main.toggle_fullscreen()
                 }
             }
         }

@@ -64,7 +64,7 @@ pub fn tv_shell(
             // The remote's Back closes a show's details, as the design's
             // way back does (菜单 → 播放器 → 弹窗 → 详情 → 首页).
             if build.modules.anime && anime.opened > 0 && !app.playing {
-                Shortcut(key: "escape") => anime.close()
+                Shortcut(key: app.keys.back) => anime.close()
             }
             // 「打开链接」 in the television's scene.
             if app.link_prompt {
@@ -104,12 +104,12 @@ pub fn tv_scene(
                     Positioned(x: 0, y: 80, width: 1280, height: 640) {
                         if page == MainPage::Search {
                             if build.modules.anime && anime.opened > 0 && anime.back == BackTo::Search {
-                                details(#[cfg(feature = "bern-module-anime")] anime: anime)
+                                details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
                             } else {
                                 tv_search(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
                             }
                         } else if build.modules.library && build.modules.anime && page == MainPage::Library && anime.opened > 0 && anime.back == BackTo::Library {
-                            details(#[cfg(feature = "bern-module-anime")] anime: anime)
+                            details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
                         } else {
                             PageContent(slot: main, selected: draft.page)
                         }

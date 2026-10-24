@@ -120,7 +120,7 @@ pub fn phone_tab_content(
     ui! {
         Stack(variant: phone_page, align: top_leading) {
             if build.modules.anime && anime.opened > 0 && ((build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library) || (draft.page == MainPage::Search && anime.back == BackTo::Search)) {
-                details(#[cfg(feature = "bern-module-anime")] anime: anime)
+                details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
             } else if draft.page == MainPage::Search {
                 phone_search(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
             } else {

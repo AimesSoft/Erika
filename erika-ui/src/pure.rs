@@ -36,7 +36,7 @@ pub fn pure_window(app: erika::Client, windows: AppWindows) -> impl View {
             // `renderTb` with no pages: the settings alone (`.c-ib`).
             Toolbar {
                 Spacer
-                IconButton(id: pure_settings, icon: "gearshape", label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, shortcut: "cmd+,") => windows.settings.open()
+                IconButton(id: pure_settings, icon: "gearshape", label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, shortcut: app.keys.settings) => windows.settings.open()
             }
             ScaleBox(width: 1280, height: 800) {
                 Stack(width: 1280, height: 800, align: top_leading) {
@@ -91,7 +91,7 @@ pub fn pure_frame(app: erika::Client, #[session] draft: PureDraft) -> impl View 
                     Text(content: tr! { "zh-Hans" => "支持文件、文件夹、链接和字幕文件，也可以按 {key}", "en" => "Files, folders, links and subtitle files work, or press {key}"; key: app.open_key }, style: body, emphasis: secondary, line_height: 18)
                     Canvas(height: 26)
                     Row(gap: 10, align: center) {
-                        Button(id: pure_open_file, label: tr! { "zh-Hans" => "打开文件", "en" => "Open File" }, icon: "folder", shape: capsule, height: 42, prominence: prominent, variant: primary, pick: draft.file, files: "video", shortcut: "cmd+o") => app.open_file(draft.file)
+                        Button(id: pure_open_file, label: tr! { "zh-Hans" => "打开文件", "en" => "Open File" }, icon: "folder", shape: capsule, height: 42, prominence: prominent, variant: primary, pick: draft.file, files: "video", shortcut: app.keys.open_file) => app.open_file(draft.file)
                         Button(id: pure_open_folder, label: tr! { "zh-Hans" => "打开文件夹", "en" => "Open Folder" }, shape: capsule, height: 32, pick: draft.folder, files: "folder") => app.open_folder(draft.folder)
                         Button(id: pure_open_link, label: tr! { "zh-Hans" => "打开链接…", "en" => "Open Link…" }, shape: capsule, height: 32) => app.show_link_prompt(true)
                     }
@@ -138,7 +138,7 @@ pub fn pure_recents(app: erika::Client) -> impl View {
             // `.i-key`: the button with its key (`kbd`) after the words,
             // once something played.
             if app.has_recents {
-            Button(id: continue_last, label: tr! { "zh-Hans" => "继续上次", "en" => "Continue" }, shape: capsule, height: 32, shortcut: "space", appear: recent_in, appear_delay: 0.16) {
+            Button(id: continue_last, label: tr! { "zh-Hans" => "继续上次", "en" => "Continue" }, shape: capsule, height: 32, shortcut: app.keys.play_pause, appear: recent_in, appear_delay: 0.16) {
                 Row(gap: 6, align: center) {
                     Label(title: tr! { "zh-Hans" => "继续上次", "en" => "Continue" }, icon: "play.fill", display: icon, font_size: 11)
                     // In the platform's button font, as its other buttons
@@ -182,7 +182,7 @@ pub fn link_resolving(app: erika::Client) -> impl View {
                     }
                     Row(gap: 10, align: center) {
                         Spacer
-                        Button(id: link_choice_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, shortcut: "escape") => app.cancel_link()
+                        Button(id: link_choice_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, shortcut: app.keys.back) => app.cancel_link()
                     }
                 }
             }
@@ -192,7 +192,7 @@ pub fn link_resolving(app: erika::Client) -> impl View {
                     Text(content: tr! { "zh-Hans" => "正在解析链接…", "en" => "Resolving the link…" }, style: title3)
                     Row(gap: 10, align: center) {
                         Spacer
-                        Button(id: link_resolving_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, shortcut: "escape") => app.cancel_link()
+                        Button(id: link_resolving_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, shortcut: app.keys.back) => app.cancel_link()
                     }
                 }
             }
@@ -216,8 +216,8 @@ pub fn pure_link(app: erika::Client, #[session] draft: PureDraft) -> impl View {
                 Spacer
                 Row(gap: 10, align: center) {
                     Spacer
-                    Button(id: pure_link_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, shortcut: "escape") => app.show_link_prompt(false)
-                    Button(id: pure_link_open, label: tr! { "zh-Hans" => "打开", "en" => "Open" }, prominence: prominent, shortcut: "return") => app.open_link(draft.link)
+                    Button(id: pure_link_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, shortcut: app.keys.back) => app.show_link_prompt(false)
+                    Button(id: pure_link_open, label: tr! { "zh-Hans" => "打开", "en" => "Open" }, prominence: prominent, shortcut: app.keys.confirm) => app.open_link(draft.link)
                 }
             }
         }

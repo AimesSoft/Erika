@@ -590,6 +590,14 @@ pub mod erika {
             #[content]
             file: String,
         },
+        #[label(tr! { "zh-Hans" => "{keys} 已用于「{action}」，没有更改", "en" => "{keys} already does “{action}”; nothing changed" })]
+        ShortcutTaken {
+            #[content]
+            keys: String,
+            action: KeyAction,
+        },
+        #[label(tr! { "zh-Hans" => "快捷键已全部恢复默认", "en" => "Every shortcut is back to its default" })]
+        ShortcutsReset,
     }
 
     /// The line under the title of what plays.
@@ -797,6 +805,69 @@ pub mod erika {
         pub danmaku_hex_input: bool,
     }
 
+    /// An action with a keyboard shortcut, as 「设置 › 快捷键」 lists it.
+    /// The last four are the menu bar's own, which only the Mac shows.
+    #[value]
+    pub enum KeyAction {
+        #[label(tr! { "zh-Hans" => "播放 / 暂停", "en" => "Play / Pause" })]
+        PlayPause,
+        #[label(tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 Seconds" })]
+        SeekBack,
+        #[label(tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 Seconds" })]
+        SeekForward,
+        #[label(tr! { "zh-Hans" => "全屏", "en" => "Full Screen" })]
+        Fullscreen,
+        #[label(tr! { "zh-Hans" => "开关弹幕", "en" => "Show or Hide Danmaku" })]
+        ToggleDanmaku,
+        #[label(tr! { "zh-Hans" => "截图", "en" => "Screenshot" })]
+        Screenshot,
+        #[label(tr! { "zh-Hans" => "返回 / 关闭", "en" => "Back / Close" })]
+        Back,
+        #[label(tr! { "zh-Hans" => "确认", "en" => "Confirm" })]
+        Confirm,
+        #[label(tr! { "zh-Hans" => "打开文件", "en" => "Open File" })]
+        OpenFile,
+        #[label(tr! { "zh-Hans" => "搜索", "en" => "Search" })]
+        Search,
+        #[label(tr! { "zh-Hans" => "设置", "en" => "Settings" })]
+        Settings,
+        #[label(tr! { "zh-Hans" => "缩小海报", "en" => "Smaller Posters" })]
+        SmallerPosters,
+        #[label(tr! { "zh-Hans" => "放大海报", "en" => "Larger Posters" })]
+        LargerPosters,
+        #[label(tr! { "zh-Hans" => "打开文件夹", "en" => "Open Folder" })]
+        OpenFolder,
+        #[label(tr! { "zh-Hans" => "打开链接", "en" => "Open Link" })]
+        OpenLink,
+        #[label(tr! { "zh-Hans" => "上一集", "en" => "Previous Episode" })]
+        PreviousEpisode,
+        #[label(tr! { "zh-Hans" => "下一集", "en" => "Next Episode" })]
+        NextEpisode,
+    }
+
+    /// Every action's keyboard shortcut, as Bern writes shortcuts
+    /// (`cmd+o`, `space`); empty for none.
+    #[value]
+    pub struct KeyBindings {
+        pub play_pause: String,
+        pub seek_back: String,
+        pub seek_forward: String,
+        pub fullscreen: String,
+        pub toggle_danmaku: String,
+        pub screenshot: String,
+        pub back: String,
+        pub confirm: String,
+        pub open_file: String,
+        pub search: String,
+        pub settings: String,
+        pub smaller_posters: String,
+        pub larger_posters: String,
+        pub open_folder: String,
+        pub open_link: String,
+        pub previous_episode: String,
+        pub next_episode: String,
+    }
+
     #[state]
     pub struct State {
         pub onboarding: Onboarding,
@@ -875,8 +946,9 @@ pub mod erika {
         /// last was not one it can play.
         pub link_prompt: bool,
         pub link_invalid: bool,
-        /// The key that opens a file, as this computer writes it: ⌘O on a
-        /// Mac, Ctrl+O elsewhere.
+        /// The keys that open a file, as this computer writes them: ⌘O on
+        /// a Mac and Ctrl+O elsewhere by default, or those the user chose
+        /// in 「设置 › 快捷键」.
         #[content]
         pub open_key: String,
         /// The account at the foot of the sidebar: its name, or 「本地用户」
@@ -888,6 +960,11 @@ pub mod erika {
         pub user_avatar: Option<MediaSource>,
         pub account_status: Account,
         pub bangumi: BangumiAccount,
+        /// Every action's keyboard shortcut, and the one it has by
+        /// default; whether any is not its default.
+        pub keys: KeyBindings,
+        pub default_keys: KeyBindings,
+        pub keys_changed: bool,
     }
 
     #[value]
@@ -1193,6 +1270,17 @@ pub mod erika {
         /// Open an http(s) address in the system's browser.
         #[errors("invalid_url", "platform_unavailable")]
         fn open_url(&mut self, url: String) -> Result<(), CommandError>;
+
+        /// Give `action` the shortcut `keys`, as Bern writes them
+        /// (`cmd+o`, `space`); empty for none. Keys another action has stay
+        /// that action's: a notice names it.
+        #[errors("invalid_shortcut")]
+        fn set_shortcut(&mut self, action: KeyAction, keys: String) -> Result<(), CommandError>;
+        /// Give `action` its default shortcut again, unless another action
+        /// has those keys now.
+        fn reset_shortcut(&mut self, action: KeyAction) -> Result<(), CommandError>;
+        /// Every shortcut as it is by default.
+        fn reset_shortcuts(&mut self) -> Result<(), CommandError>;
     }
     #[value]
     pub struct SearchActions {
