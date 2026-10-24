@@ -50,6 +50,10 @@ style! {
     Sidebar { background: color(light: "#FAFAFA", dark: "#171717") }
     #[target(macos, ios, tvos)]
     Detail { background: color(light: "#F2F2F2", dark: "#1E1E1E") }
+    // A page a navigation stack pushes over the detail: the stack draws its
+    // own background behind its pages otherwise. A television keeps its own.
+    #[target(macos, ios, windows, linux, android, browser)]
+    Stack.detail_page { background: color(light: "#F2F2F2", dark: "#1E1E1E") }
     #[target(browser, windows, linux, android)]
     Stack.app_window { background: color(light: "#F2F2F2", dark: "#1E1E1E") }
 

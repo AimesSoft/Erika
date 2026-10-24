@@ -1,6 +1,7 @@
-//! Interface of the sync module: 「设置 › 账号同步」, which the application
-//! places in its settings (`settings_sync`), and the clock of the
-//! automatic sync, mounted in the background of the main window.
+//! Interface of the sync module: the parts of 「设置 › 账号同步」, which the
+//! application places in its settings — the state at the top of the page
+//! (`settings_sync_status`) and the pages it lists after it — and the clock
+//! of the automatic sync, mounted in the background of the main window.
 
 use bern::prelude::*;
 use erika_sync_protocol::sync;
@@ -30,35 +31,41 @@ pub fn sync_clock(sync: sync::Client) -> impl View {
     }
 }
 
-/// The page: the passphrase accounts are sealed with, the WebDAV folder,
-/// and the file to export or import. A native grouped form, as every
-/// settings page.
+/// The page's state: what the last sync did, or what runs. It heads
+/// 「设置 › 账号同步」, above the pages the application lists after it.
 #[component]
-pub fn sync_settings(sync: sync::Client, #[session] draft: SyncDraft) -> impl View {
+pub fn account_sync_status(sync: sync::Client) -> impl View {
     ui! {
-        Form(title: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, variant: settings_form, appear: settings_page_in) {
-            Section(title: tr! { "zh-Hans" => "状态", "en" => "Status" }) {
-                Row(gap: 12, align: center) {
-                    Column(gap: 1) {
-                        if sync.busy {
-                            Text(content: sync.phase, style: body)
-                        } else {
-                            Text(content: sync.result, style: body, lines: 3)
-                        }
-                        if "" != sync.last_sync {
-                            Text(content: tr! { "zh-Hans" => "上次同步：{time}", "en" => "Last synced: {time}"; time: sync.last_sync }, style: caption, emphasis: secondary)
-                        }
-                    }
-                    Spacer
+        Section(title: tr! { "zh-Hans" => "状态", "en" => "Status" }) {
+            Row(gap: 12, align: center) {
+                Column(gap: 1) {
                     if sync.busy {
-                        Progress(label: tr! { "zh-Hans" => "进行中", "en" => "Working" })
+                        Text(content: sync.phase, style: body)
+                    } else {
+                        Text(content: sync.result, style: body, lines: 3)
+                    }
+                    if "" != sync.last_sync {
+                        Text(content: tr! { "zh-Hans" => "上次同步：{time}", "en" => "Last synced: {time}"; time: sync.last_sync }, style: caption, emphasis: secondary)
                     }
                 }
-                ForEach(items: sync.notes, key: id) |note| {
-                    Text(content: note.warning, style: caption, emphasis: secondary, lines: 3)
+                Spacer
+                if sync.busy {
+                    Progress(label: tr! { "zh-Hans" => "进行中", "en" => "Working" })
                 }
             }
-            Section(title: tr! { "zh-Hans" => "同步口令", "en" => "Sync passphrase" }, footer: tr! { "zh-Hans" => "弹弹play 令牌、Bangumi 登录和 WebDAV 密码用这个口令加密后才写进同步文件与云端，换设备后输入同一个口令，账号就能直接使用。口令只存在本机的系统钥匙串里；忘了口令只会丢掉账号，其他数据不受影响。", "en" => "Your dandanplay token, Bangumi session and WebDAV password are encrypted with this passphrase before they go into a sync file or the cloud. Enter the same passphrase on a new device and your accounts work at once. It stays in this device's keychain; forgetting it loses only the accounts." }) {
+            ForEach(items: sync.notes, key: id) |note| {
+                Text(content: note.warning, style: caption, emphasis: secondary, lines: 3)
+            }
+        }
+    }
+}
+
+/// 「账号同步 › 同步口令」: the passphrase accounts are sealed with.
+#[component]
+pub fn account_sync_passphrase(sync: sync::Client, #[session] draft: SyncDraft) -> impl View {
+    ui! {
+        Form(title: tr! { "zh-Hans" => "同步口令", "en" => "Sync Passphrase" }, variant: settings_form, appear: settings_page_in) {
+            Section(footer: tr! { "zh-Hans" => "弹弹play 令牌、Bangumi 登录和 WebDAV 密码用这个口令加密后才写进同步文件与云端，换设备后输入同一个口令，账号就能直接使用。口令只存在本机的系统钥匙串里；忘了口令只会丢掉账号，其他数据不受影响。", "en" => "Your dandanplay token, Bangumi session and WebDAV password are encrypted with this passphrase before they go into a sync file or the cloud. Enter the same passphrase on a new device and your accounts work at once. It stays in this device's keychain; forgetting it loses only the accounts." }) {
                 Row(gap: 12, align: center) {
                     Text(content: tr! { "zh-Hans" => "同步口令", "en" => "Passphrase" }, style: body)
                     Spacer
@@ -77,8 +84,17 @@ pub fn sync_settings(sync: sync::Client, #[session] draft: SyncDraft) -> impl Vi
                     Button(id: sync_save_passphrase, label: tr! { "zh-Hans" => "保存口令", "en" => "Save Passphrase" }, prominence: prominent, enabled: !sync.busy, clears: draft.passphrase) => sync.set_passphrase(draft.passphrase)
                 }
             }
+        }
+    }
+}
+
+/// 「账号同步 › WebDAV 同步」: the folder the devices sync through.
+#[component]
+pub fn account_sync_webdav(sync: sync::Client, #[session] draft: SyncDraft) -> impl View {
+    ui! {
+        Form(title: tr! { "zh-Hans" => "WebDAV 同步", "en" => "WebDAV Sync" }, variant: settings_form, appear: settings_page_in) {
             if sync.webdav_available {
-                Section(title: tr! { "zh-Hans" => "WebDAV 同步", "en" => "WebDAV sync" }, footer: tr! { "zh-Hans" => "与 NipaPlay 的增量同步一样：云端保存一份快照和各设备的补丁，每台设备只上传自己的改动，两边都改过的记录以较新的为准。本机的文件夹来源、文件路径与下载位置不会上传。", "en" => "Like NipaPlay's incremental sync: the cloud keeps a snapshot and each device's patches; every device uploads only its own changes, and where two changed one record the newer wins. Local folders, file paths and download locations stay on this device." }) {
+                Section(footer: tr! { "zh-Hans" => "与 NipaPlay 的增量同步一样：云端保存一份快照和各设备的补丁，每台设备只上传自己的改动，两边都改过的记录以较新的为准。本机的文件夹来源、文件路径与下载位置不会上传。", "en" => "Like NipaPlay's incremental sync: the cloud keeps a snapshot and each device's patches; every device uploads only its own changes, and where two changed one record the newer wins. Local folders, file paths and download locations stay on this device." }) {
                     if sync.configured && !sync.editing {
                         Row(gap: 12, align: center) {
                             Column(gap: 1) {
@@ -115,10 +131,23 @@ pub fn sync_settings(sync: sync::Client, #[session] draft: SyncDraft) -> impl Vi
                         }
                     }
                 }
+            } else {
+                Section {
+                    Text(content: tr! { "zh-Hans" => "网页版用不了 WebDAV 同步", "en" => "WebDAV sync is not available on the web" }, emphasis: secondary)
+                }
             }
+        }
+    }
+}
+
+/// 「账号同步 › 备份文件」: everything in one file, out and in again.
+#[component]
+pub fn account_sync_backup(sync: sync::Client, #[session] draft: SyncDraft) -> impl View {
+    ui! {
+        Form(title: tr! { "zh-Hans" => "备份文件", "en" => "Backup File" }, variant: settings_form, appear: settings_page_in) {
             // A television has no files to pick.
             if !window.tv {
-                Section(title: tr! { "zh-Hans" => "备份文件", "en" => "Backup file" }, footer: tr! { "zh-Hans" => "单个 .erika 文件，装着全部设置、媒体库来源、观看记录与进度、文件与剧集的对应、番剧状态与评分、扩展数据，设置了同步口令时还有加密的账号。海报、截图等缓存不在其中，可以重新获取。导入只补上本机没有或较旧的记录，不会删除本机数据。", "en" => "One .erika file with every setting, the library's sources, what you watched and where it stopped, files matched to episodes, show status and ratings, and extension data — plus your accounts, encrypted, when a sync passphrase is set. Caches such as posters and screenshots stay out; they can be fetched again. Importing adds what this device lacks or has older, and deletes nothing." }) {
+                Section(footer: tr! { "zh-Hans" => "单个 .erika 文件，装着全部设置、媒体库来源、观看记录与进度、文件与剧集的对应、番剧状态与评分、扩展数据，设置了同步口令时还有加密的账号。海报、截图等缓存不在其中，可以重新获取。导入只补上本机没有或较旧的记录，不会删除本机数据。", "en" => "One .erika file with every setting, the library's sources, what you watched and where it stopped, files matched to episodes, show status and ratings, and extension data — plus your accounts, encrypted, when a sync passphrase is set. Caches such as posters and screenshots stay out; they can be fetched again. Importing adds what this device lacks or has older, and deletes nothing." }) {
                     Row(gap: 12, align: center) {
                         Column(gap: 1) {
                             Text(content: tr! { "zh-Hans" => "导出", "en" => "Export" }, style: body)
@@ -137,7 +166,16 @@ pub fn sync_settings(sync: sync::Client, #[session] draft: SyncDraft) -> impl Vi
                     }
                 }
             }
-            Section(title: tr! { "zh-Hans" => "同步的内容", "en" => "What is synced" }) {
+        }
+    }
+}
+
+/// 「账号同步 › 同步的内容」: how much of each kind a sync carries.
+#[component]
+pub fn account_sync_contents(sync: sync::Client) -> impl View {
+    ui! {
+        Form(title: tr! { "zh-Hans" => "同步的内容", "en" => "What Is Synced" }, variant: settings_form, appear: settings_page_in) {
+            Section {
                 ForEach(items: sync.parts, key: id) |part| {
                     Row(gap: 12, align: center) {
                         Text(content: part.kind, style: body)

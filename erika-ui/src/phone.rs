@@ -38,6 +38,14 @@ pub enum PhoneSettings {
     Anime,
     #[label(tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" })]
     Sync,
+    #[label(tr! { "zh-Hans" => "同步口令", "en" => "Sync Passphrase" })]
+    SyncPassphrase,
+    #[label(tr! { "zh-Hans" => "WebDAV 同步", "en" => "WebDAV Sync" })]
+    SyncWebdav,
+    #[label(tr! { "zh-Hans" => "备份文件", "en" => "Backup File" })]
+    SyncBackup,
+    #[label(tr! { "zh-Hans" => "同步的内容", "en" => "What Is Synced" })]
+    SyncContents,
     #[label(tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" })]
     Sources,
     #[label(tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" })]
@@ -541,7 +549,29 @@ pub fn phone_settings(
             }
             Destination |section| {
                 Stack(variant: phone_page, align: top_leading) {
-                    phone_settings_section(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, section: section)
+                    // 「账号同步」 lists its pages here, where the stack can
+                    // push them.
+                    if section == PhoneSettings::Sync {
+                        Form(title: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, variant: settings_form, appear: settings_page_in) {
+                            Slot(id: settings_sync_status)
+                            Section {
+                                NavLink(id: sync_passphrase_page, route: PhoneSettings::SyncPassphrase) {
+                                    Text(content: tr! { "zh-Hans" => "同步口令", "en" => "Sync Passphrase" }, font_size: 17, line_height: 22)
+                                }
+                                NavLink(id: sync_webdav_page, route: PhoneSettings::SyncWebdav) {
+                                    Text(content: tr! { "zh-Hans" => "WebDAV 同步", "en" => "WebDAV Sync" }, font_size: 17, line_height: 22)
+                                }
+                                NavLink(id: sync_backup_page, route: PhoneSettings::SyncBackup) {
+                                    Text(content: tr! { "zh-Hans" => "备份文件", "en" => "Backup File" }, font_size: 17, line_height: 22)
+                                }
+                                NavLink(id: sync_contents_page, route: PhoneSettings::SyncContents) {
+                                    Text(content: tr! { "zh-Hans" => "同步的内容", "en" => "What Is Synced" }, font_size: 17, line_height: 22)
+                                }
+                            }
+                        }
+                    } else {
+                        phone_settings_section(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, section: section)
+                    }
                 }
             }
         }
@@ -575,7 +605,13 @@ pub fn phone_settings_section(
             #[cfg(feature = "bern-module-anime")]
             PhoneSettings::Anime => { settings_anime(anime: anime) }
             #[cfg(feature = "bern-module-sync")]
-            PhoneSettings::Sync => { Slot(id: settings_sync) }
+            PhoneSettings::SyncPassphrase => { Slot(id: settings_sync_passphrase) }
+            #[cfg(feature = "bern-module-sync")]
+            PhoneSettings::SyncWebdav => { Slot(id: settings_sync_webdav) }
+            #[cfg(feature = "bern-module-sync")]
+            PhoneSettings::SyncBackup => { Slot(id: settings_sync_backup) }
+            #[cfg(feature = "bern-module-sync")]
+            PhoneSettings::SyncContents => { Slot(id: settings_sync_contents) }
             #[cfg(feature = "bern-module-sources")]
             PhoneSettings::Sources => { settings_module_placeholder(app: app) }
             #[cfg(feature = "bern-module-remote")]

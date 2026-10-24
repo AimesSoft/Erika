@@ -18,6 +18,21 @@ pub struct SettingsDraft {
     pub page: SettingsPage,
     pub query: String,
     pub danmaku_file: MediaSource,
+    /// The pages pushed over 「账号同步」.
+    pub sync_path: Vec<SyncPage>,
+}
+
+/// The pages 「账号同步」 opens; the sync module draws each.
+#[bern::value]
+pub enum SyncPage {
+    #[label(tr! { "zh-Hans" => "同步口令", "en" => "Sync Passphrase" })]
+    Passphrase,
+    #[label(tr! { "zh-Hans" => "WebDAV 同步", "en" => "WebDAV Sync" })]
+    Webdav,
+    #[label(tr! { "zh-Hans" => "备份文件", "en" => "Backup File" })]
+    Backup,
+    #[label(tr! { "zh-Hans" => "同步的内容", "en" => "What Is Synced" })]
+    Contents,
 }
 #[component]
 pub fn settings(
@@ -103,6 +118,49 @@ pub fn settings(
     }
 }
 
+/// 「账号同步」: the sync's state, and the pages it opens, pushed over it.
+#[cfg(feature = "bern-module-sync")]
+#[component]
+pub fn settings_sync(#[session] draft: SettingsDraft) -> impl View {
+    ui! {
+        Navigation(path: draft.sync_path) {
+            // Each page stands on the detail's color, as the first does.
+            Stack(variant: detail_page, align: top_leading) {
+                Form(title: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, variant: settings_form, appear: settings_page_in) {
+                    Slot(id: settings_sync_status)
+                    Section {
+                        NavLink(id: sync_passphrase_page, route: SyncPage::Passphrase) {
+                            Text(content: tr! { "zh-Hans" => "同步口令", "en" => "Sync Passphrase" }, style: body)
+                        }
+                        NavLink(id: sync_webdav_page, route: SyncPage::Webdav) {
+                            Text(content: tr! { "zh-Hans" => "WebDAV 同步", "en" => "WebDAV Sync" }, style: body)
+                        }
+                        // A television has no files to pick.
+                        if !window.tv {
+                            NavLink(id: sync_backup_page, route: SyncPage::Backup) {
+                                Text(content: tr! { "zh-Hans" => "备份文件", "en" => "Backup File" }, style: body)
+                            }
+                        }
+                        NavLink(id: sync_contents_page, route: SyncPage::Contents) {
+                            Text(content: tr! { "zh-Hans" => "同步的内容", "en" => "What Is Synced" }, style: body)
+                        }
+                    }
+                }
+            }
+            Destination |page| {
+                Stack(variant: detail_page, align: top_leading) {
+                    match page {
+                        SyncPage::Passphrase => { Slot(id: settings_sync_passphrase) }
+                        SyncPage::Webdav => { Slot(id: settings_sync_webdav) }
+                        SyncPage::Backup => { Slot(id: settings_sync_backup) }
+                        SyncPage::Contents => { Slot(id: settings_sync_contents) }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The page the settings show.
 #[component]
 pub fn settings_page(
@@ -130,7 +188,7 @@ pub fn settings_page(
                 #[cfg(feature = "bern-module-anime")]
                 SettingsPage::Anime => { settings_anime(anime: anime) }
                 #[cfg(feature = "bern-module-sync")]
-                SettingsPage::Sync => { Slot(id: settings_sync) }
+                SettingsPage::Sync => { settings_sync() }
                 #[cfg(feature = "bern-module-sources")]
                 SettingsPage::Sources => { settings_module_placeholder(app: app) }
                 #[cfg(feature = "bern-module-remote")]

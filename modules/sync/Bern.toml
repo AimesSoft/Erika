@@ -29,7 +29,12 @@ supported = ["zh-Hans", "en"]
 default = "zh-Hans"
 
 [contributes]
-# 「设置 › 账号同步」, in the settings of every window size.
-settings_sync = ["sync_settings"]
+# 「设置 › 账号同步」, in the settings of every window size: its state at
+# the top, and the pages the application lists after it.
+settings_sync_status = ["account_sync_status"]
+settings_sync_passphrase = ["account_sync_passphrase"]
+settings_sync_webdav = ["account_sync_webdav"]
+settings_sync_backup = ["account_sync_backup"]
+settings_sync_contents = ["account_sync_contents"]
 # The automatic sync's clock and what a sync says when it is done.
 background = ["sync_clock"]

@@ -4,7 +4,7 @@
 | --- | --- | --- |
 | `protocol/` | 模块的契约：状态、命令、`restored` 事件 | `bern` |
 | `core/` | 引擎：同步文件格式、口令加密、合并、WebDAV、导入导出 | 本协议、`erika-store` |
-| `ui/` | 「设置 › 账号同步」页面（放进外壳的 `settings_sync` 插槽）与自动同步的时钟（`background` 插槽） | 本协议 |
+| `ui/` | 「设置 › 账号同步」的状态（`settings_sync_status` 插槽）与它的四个子页面：同步口令、WebDAV 同步、备份文件、同步的内容（`settings_sync_passphrase`、`settings_sync_webdav`、`settings_sync_backup`、`settings_sync_contents` 插槽）与自动同步的时钟（`background` 插槽） | 本协议 |
 
 - 单独测试引擎：`cargo test -p erika-sync-core`。
 - 参考 NipaPlay 的增量同步（`rust/src/api/incremental_sync.rs`、`lib/services/incremental_sync_*.dart`、`auto_sync_service.dart`、`full_backup_service.dart`）。
