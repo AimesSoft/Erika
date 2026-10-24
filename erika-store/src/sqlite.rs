@@ -7,6 +7,8 @@ use crate::{
 use rusqlite::{Connection, OptionalExtension, Result, TransactionBehavior, params};
 use std::path::Path;
 
+mod portable;
+
 /// The source of the videos the user opens one by one; every other source
 /// is a folder or a server the user adds.
 const OPENED: i64 = 1;
@@ -98,6 +100,21 @@ const MIGRATIONS: &[&str] = &[
     // 2: what a source holds, which says where its videos are recognized:
     // `anime` by dandanplay, `series` and `movie` by the user's own server.
     "ALTER TABLE source ADD COLUMN content TEXT NOT NULL DEFAULT 'anime';",
+    // 3: what the user thinks of an anime, and the data of extensions
+    // (plugins), any JSON by an id; the account sync carries both.
+    "
+    CREATE TABLE IF NOT EXISTS anime_mark (
+        dandanplay_id INTEGER PRIMARY KEY,
+        status TEXT,
+        rating REAL NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS extension (
+        id TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+    ) STRICT;
+    ",
 ];
 
 /// One connection to the app's database.

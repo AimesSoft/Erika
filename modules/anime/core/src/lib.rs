@@ -8,6 +8,7 @@
 mod catalog;
 mod clock;
 mod detail_posters;
+mod marks;
 mod posters;
 mod reviews;
 mod schedule;
@@ -138,6 +139,7 @@ impl Default for AnimeEngine {
                 comments_error: String::new(),
             },
         };
+        (engine.statuses, engine.ratings) = marks::load(&engine.db);
         engine.show_season();
         engine.show_watching();
         engine
@@ -551,6 +553,8 @@ impl anime::Commands for AnimeEngine {
     fn set_status(&mut self, status: WatchStatus) -> Result<(), CommandError> {
         self.statuses.insert(self.state.show.id, status.clone());
         self.state.show.status = status;
+        let id = self.state.show.id;
+        marks::save(&self.db, id, self.statuses.get(&id), self.ratings.get(&id).copied());
         Ok(())
     }
 
@@ -558,6 +562,8 @@ impl anime::Commands for AnimeEngine {
         let score = score.clamp(1, 10) as f64;
         self.ratings.insert(self.state.show.id, score);
         self.state.show.rating = score;
+        let id = self.state.show.id;
+        marks::save(&self.db, id, self.statuses.get(&id), self.ratings.get(&id).copied());
         Ok(())
     }
 
@@ -643,6 +649,7 @@ impl anime::Commands for AnimeEngine {
     }
 
     fn history_changed(&mut self) -> Result<(), CommandError> {
+        (self.statuses, self.ratings) = marks::load(&self.db);
         self.watching = self.db.watching(WATCHING);
         self.show_watching();
         self.show_opened();

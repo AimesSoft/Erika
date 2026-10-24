@@ -19,6 +19,8 @@ mod playback_preferences;
 mod player;
 mod queue;
 mod search;
+#[cfg(feature = "bern-module-sync")]
+mod sync_restore;
 
 use bern::CommandError;
 use bern::media::MediaSource;
@@ -733,6 +735,19 @@ impl erika::Commands for ErikaEngine {
     fn library_files_changed(&mut self) -> Result<(), CommandError> {
         #[cfg(feature = "bern-module-anime")]
         erika_anime_protocol::anime::calls::history_changed();
+        Ok(())
+    }
+
+    #[cfg(feature = "bern-module-sync")]
+    fn sync_restored(
+        &mut self,
+        settings: bool,
+        accounts: bool,
+        library: bool,
+        history: bool,
+        sources: Vec<i64>,
+    ) -> Result<(), CommandError> {
+        self.take_synced(settings, accounts, library, history, sources);
         Ok(())
     }
 

@@ -869,6 +869,20 @@ pub mod erika {
         #[on(library::files_changed)]
         fn library_files_changed(&mut self) -> Result<(), CommandError>;
 
+        /// The account sync wrote data from another device or a file:
+        /// settings, accounts, the library and what was watched are read
+        /// anew, and the `sources` new here are scanned.
+        #[cfg(feature = "bern-module-sync")]
+        #[on(sync::restored)]
+        fn sync_restored(
+            &mut self,
+            settings: bool,
+            accounts: bool,
+            library: bool,
+            history: bool,
+            sources: Vec<i64>,
+        ) -> Result<(), CommandError>;
+
         /// Shrink the player into the mini player and keep playing.
         fn minimize(&mut self) -> Result<(), CommandError>;
 
