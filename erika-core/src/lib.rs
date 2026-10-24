@@ -273,7 +273,7 @@ impl Default for ErikaEngine {
             engine.db.setting("danmaku_supersampling").as_deref() != Some("false");
         if let Some(enabled) = &engine.saved_modules {
             engine.state.features = settings::feature_selection(enabled);
-            engine.state.module_count = enabled.len() as i64;
+            engine.state.module_count = settings::module_count(enabled);
             engine.state.preset = settings::preset_of(enabled);
         }
         engine.show_speeds();

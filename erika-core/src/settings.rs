@@ -63,10 +63,20 @@ pub fn feature_module(id: &str) -> FeatureModule {
     }
 }
 
+/// Whether the module `id` is offered here: the downloader is kept in the
+/// saved choices where it is hidden, for when a plugin turns it on.
+fn shown(id: &&str) -> bool {
+    *id != "downloads" || !downloader_hidden()
+}
+
+/// How many of the enabled modules are offered here.
+pub fn module_count(enabled: &[String]) -> i64 {
+    enabled.iter().map(String::as_str).filter(shown).count() as i64
+}
+
 /// The preset the enabled modules are exactly, or `Custom`.
 pub fn preset_of(enabled: &[String]) -> OnboardingPreset {
     // Where the downloader is hidden, every module offered is all of them.
-    let shown = |id: &&str| *id != "downloads" || !downloader_hidden();
     let enabled: Vec<&str> = enabled.iter().map(String::as_str).filter(shown).collect();
     if enabled.is_empty() {
         OnboardingPreset::Pure
@@ -211,7 +221,7 @@ impl ErikaEngine {
         if account_was_enabled != self.state.features.account {
             self.set_account_enabled(self.state.features.account);
         }
-        self.state.module_count = selected.len() as i64;
+        self.state.module_count = module_count(selected);
         self.state.preset = preset_of(selected);
         self.apply_enhancement();
         self.apply_danmaku();

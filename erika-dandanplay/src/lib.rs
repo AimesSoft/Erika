@@ -10,9 +10,12 @@
 //! The calls block; engines make them on their own threads and take the
 //! results in when they are woken (`bern::wake`).
 
+#[cfg(not(target_arch = "wasm32"))]
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Digest;
+#[cfg(not(target_arch = "wasm32"))]
+use sha2::Sha256;
 use std::sync::RwLock;
 
 pub mod bangumi;
@@ -26,9 +29,11 @@ pub mod reviews;
 /// The app id the gateways know, and the secret they replace with theirs.
 const APP_ID: &str = "nipaplayv1";
 const APP_SECRET: &str = "server-managed";
+#[cfg(not(target_arch = "wasm32"))]
 const USER_AGENT: &str = "NipaPlay/1.0";
 
 /// The gateways, in the order tried.
+#[cfg(not(target_arch = "wasm32"))]
 const GATEWAYS: &[&str] = &[
     "https://nipaplay.aimes-soft.com/dandanplay",
     "http://43.142.85.190/dandanplay",
@@ -80,6 +85,7 @@ pub fn token() -> Option<String> {
 
 /// `X-Signature`: the SHA-256 of the app id, the time, the path and the
 /// secret, in base64.
+#[cfg(not(target_arch = "wasm32"))]
 fn signature(timestamp: i64, path: &str) -> String {
     let digest = Sha256::digest(format!("{APP_ID}{timestamp}{path}{APP_SECRET}"));
     base64::engine::general_purpose::STANDARD.encode(digest)

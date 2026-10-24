@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 /// The application player Erika plays in: `Players::video` of the
 /// interface, the name every entry addresses it by.
+#[cfg(target_os = "macos")]
 pub const PLAYER: &str = "video";
 
 /// What the engine asks of the kernel. Calls return at once; the kernel
@@ -166,6 +167,7 @@ pub fn set_link_headers(url: &str, headers: Vec<(String, String)>) {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub fn link_headers(url: &str) -> Vec<(String, String)> {
     LINK_HEADERS
         .lock()

@@ -8,6 +8,7 @@
 use crate::{Error, Result};
 use std::sync::RwLock;
 
+#[cfg(not(target_arch = "wasm32"))]
 const SITE: &str = "https://bgm.tv";
 
 /// The session's cookies, as the account settings saved them.
@@ -52,6 +53,7 @@ impl Interest {
         self as i64
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn from_id(id: i64) -> Option<Self> {
         [
             Self::Wish,
@@ -65,6 +67,7 @@ impl Interest {
     }
 
     /// The id the collect box gives the radio button of each type.
+    #[cfg(not(target_arch = "wasm32"))]
     fn from_key(key: &str) -> Option<Self> {
         match key {
             "wish" => Some(Self::Wish),
@@ -101,6 +104,7 @@ pub struct Collection {
     form_hash: String,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn expired() -> Error {
     Error {
         message: "Bangumi 登录已过期，请重新登录".into(),
