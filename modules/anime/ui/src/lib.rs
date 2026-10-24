@@ -207,9 +207,9 @@ pub fn timeline(app: erika::Client, anime: anime::Client) -> impl View {
             }
             Canvas(height: 12)
             if anime.has_airing {
-                // A track longer than the page scrolls; it opens halfway,
-                // where the evening's shows usually are.
-                ScrollView(axis: horizontal, indicators: hidden, open_at: 0.5) {
+                // A track longer than the page scrolls; it opens with "now"
+                // in the middle, or as near it as the track reaches.
+                ScrollView(axis: horizontal, indicators: hidden, open_center: anime.now_at) {
                     Column(gap: 0, width: if window.large { anime.track_wide } else { anime.track_width }) {
                         timeline_track(anime: anime)
                     }
@@ -813,12 +813,12 @@ pub fn phone_home(app: erika::Client, anime: anime::Client) -> impl View {
                     }
                     Canvas(height: 12)
                 }
-                // The timeline, at least the design's 900 points, opens
-                // halfway, where the evening's shows usually are.
+                // The timeline, at least the design's 900 points, opens with
+                // "now" in the middle, or as near it as the track reaches.
                 if anime.has_airing {
                 Row(gap: 0, align: top) {
                     Canvas(width: 16)
-                    ScrollView(axis: horizontal, indicators: hidden, open_at: 0.5) {
+                    ScrollView(axis: horizontal, indicators: hidden, open_center: anime.now_at) {
                         Row(gap: 0) {
                             Column(gap: 0, width: anime.track_width) {
                                 timeline_track(anime: anime)
