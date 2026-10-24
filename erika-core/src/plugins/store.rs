@@ -84,10 +84,11 @@ pub fn get(_address: &str) -> Result<Vec<u8>, String> {
 /// The address `relative` names beside `base`, the index or folder it is
 /// listed in.
 pub fn beside(base: &str, relative: &str) -> String {
-    if relative.contains("://") || relative.starts_with('/') {
+    if relative.contains("://") || relative.starts_with('/') || Path::new(relative).is_absolute() {
         return relative.to_string();
     }
-    let folder = base.rsplit_once('/').map_or("", |(folder, _)| folder);
+    // A local index on Windows has its folder written with backslashes.
+    let folder = base.rfind(['/', '\\']).map_or("", |at| &base[..at]);
     format!("{folder}/{}", relative.trim_start_matches("./"))
 }
 
@@ -301,6 +302,10 @@ mod tests {
             "https://host/repo/plugins/a/a.js"
         );
         assert_eq!(beside("/local/plugins.json", "./b"), "/local/b");
+        assert_eq!(
+            beside(r"C:\Users\me\erika_plugins\plugins.json", "plugins/a"),
+            r"C:\Users\me\erika_plugins/plugins/a"
+        );
     }
 
     #[test]
