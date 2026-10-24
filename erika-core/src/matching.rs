@@ -68,10 +68,13 @@ mod tests {
                 episode_number: "2".into(),
                 episode_title: "第二集".into(),
                 air_date: None,
+                last_watched: None,
             }],
             is_on_air: false,
             air_day: None,
             is_favorited: false,
+            user_rating: 0,
+            favorite_status: None,
         }
     }
 

@@ -10,6 +10,7 @@ use erika_anime_protocol::anime::{
 };
 use erika_dandanplay::{Details, Found, Intro};
 use erika_store::EpisodeFile;
+use std::collections::BTreeSet;
 
 /// How far into an episode it counts as watched.
 const WATCHED: f64 = 0.9;
@@ -39,6 +40,15 @@ fn watched(files: &[EpisodeFile]) -> i64 {
         .iter()
         .filter(|file| progress(file) >= WATCHED)
         .count() as i64
+}
+
+/// The numbers of the episodes the user played to the end.
+pub(crate) fn played(files: &[EpisodeFile]) -> BTreeSet<i64> {
+    files
+        .iter()
+        .filter(|file| progress(file) >= WATCHED)
+        .map(|file| file.episode.number)
+        .collect()
 }
 
 fn show(id: i64, title: &str, image: &str, today: CalendarDate) -> Show {
@@ -158,20 +168,31 @@ pub fn watching(watching: &erika_store::Watching) -> Watching {
 }
 
 /// The number dandanplay writes for an episode, or its place in the list.
-fn number(text: &str, index: usize) -> i64 {
+pub(crate) fn number(text: &str, index: usize) -> i64 {
     text.trim().parse().unwrap_or(index as i64 + 1)
 }
 
+/// The episodes of the details by number, with their ids.
+pub(crate) fn numbered(details: &Details) -> Vec<(i64, i64)> {
+    details
+        .episodes
+        .iter()
+        .enumerate()
+        .map(|(index, episode)| (number(&episode.episode_number, index), episode.episode_id))
+        .collect()
+}
+
 /// The film of the details page, and the episode to watch next: the one
-/// after the last the user watched to the end.
-pub fn film(details: Option<&Details>, show: &Show, files: &[EpisodeFile]) -> (Vec<Episode>, i64) {
+/// after the last the user watched, to the end here or as `marked`
+/// (here or on an account).
+pub fn film(
+    details: Option<&Details>,
+    show: &Show,
+    files: &[EpisodeFile],
+    marked: &BTreeSet<i64>,
+) -> (Vec<Episode>, i64) {
     let numbers: Vec<(i64, i64)> = match details {
-        Some(details) => details
-            .episodes
-            .iter()
-            .enumerate()
-            .map(|(index, episode)| (number(&episode.episode_number, index), episode.episode_id))
-            .collect(),
+        Some(details) => numbered(details),
         // Until the details come, the episodes the user has files of.
         None => files
             .iter()
@@ -189,9 +210,13 @@ pub fn film(details: Option<&Details>, show: &Show, files: &[EpisodeFile]) -> (V
             }
         })
     };
+    let watched = |number: i64, id: i64| {
+        marked.contains(&number)
+            || file_of(number, id).is_some_and(|file| progress(file) >= WATCHED)
+    };
     let last_watched = numbers
         .iter()
-        .filter(|(number, id)| file_of(*number, *id).is_some_and(|file| progress(file) >= WATCHED))
+        .filter(|(number, id)| watched(*number, *id))
         .map(|(number, _)| *number)
         .max()
         .unwrap_or(0);
@@ -214,8 +239,12 @@ pub fn film(details: Option<&Details>, show: &Show, files: &[EpisodeFile]) -> (V
         .take(FILM)
         .map(|&(number, id)| {
             let file = file_of(number, id);
-            let progress = file.map_or(0.0, progress);
-            let watched = progress >= WATCHED;
+            let watched = watched(number, id);
+            let progress = if watched {
+                1.0
+            } else {
+                file.map_or(0.0, progress)
+            };
             let current = number == next && !watched;
             Episode {
                 number,
@@ -224,8 +253,12 @@ pub fn film(details: Option<&Details>, show: &Show, files: &[EpisodeFile]) -> (V
                     (true, _) => EpisodeTitle::Continue { number },
                     _ => EpisodeTitle::Plain { number },
                 },
+                // A watched one says what it is beside 「· 已看」.
                 note: match file {
-                    _ if watched => EpisodeNote::Watched,
+                    Some(file) if watched && file.duration > 0.0 => EpisodeNote::Length {
+                        minutes: (file.duration / 60.0).round() as i64,
+                    },
+                    Some(_) if watched => EpisodeNote::File,
                     Some(file) if progress > 0.0 => EpisodeNote::Left {
                         minutes: ((file.duration - file.position).max(0.0) / 60.0).ceil() as i64,
                     },

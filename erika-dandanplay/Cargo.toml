@@ -16,4 +16,7 @@ url = "2"
 
 # The browser would need its own fetch; there the service is not reached yet.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ureq = { version = "3", features = ["json"] }
+ureq = { version = "3", features = ["cookies", "json"] }
+# The Bangumi website's own pages, read with the user's session.
+scraper = { version = "0.24", default-features = false }
+regex = "1"

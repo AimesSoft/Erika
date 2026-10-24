@@ -2,6 +2,8 @@
 use crate::{Details, EpisodeInfo, Error, Found, Intro, Result, Tag};
 use serde_json::Value;
 
+pub mod site;
+
 // Separate from positive dandanplay IDs and negative custom-server IDs, and
 // exactly representable by JavaScript. Never send these IDs to dandanplay.
 const ID_BASE: i64 = 1_000_000_000_000;
@@ -237,6 +239,7 @@ fn parse_episode(row: &Value) -> Option<EpisodeInfo> {
         episode_title: title(row),
         episode_number: (number as i64).to_string(),
         air_date: date(text(row, "airdate")),
+        last_watched: None,
     })
 }
 
@@ -279,11 +282,14 @@ fn parse_details(subject: i64, body: &Value) -> Result<Details> {
                 } else {
                     None
                 },
+                last_watched: None,
             })
             .collect(),
         is_on_air: false,
         air_day: None,
         is_favorited: false,
+        user_rating: 0,
+        favorite_status: None,
     })
 }
 

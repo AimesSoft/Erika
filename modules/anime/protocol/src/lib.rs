@@ -14,7 +14,9 @@ pub mod anime {
         pub name: String,
     }
 
-    /// Where the user is with a show.
+    /// Where the user is with a show. Kept here and, with an account, on
+    /// dandanplay and Bangumi; where they differ, the one further along
+    /// wins: watched, then watching, then want to watch, then dropped.
     #[value]
     pub enum WatchStatus {
         #[label(tr! { "zh-Hans" => "想看", "en" => "Want to watch" })]
@@ -23,6 +25,53 @@ pub mod anime {
         Watching,
         #[label(tr! { "zh-Hans" => "看过", "en" => "Watched" })]
         Watched,
+        #[label(tr! { "zh-Hans" => "抛弃", "en" => "Dropped" })]
+        Dropped,
+        /// Nothing marked anywhere yet.
+        #[label(tr! { "zh-Hans" => "未标记", "en" => "Not marked" })]
+        Unmarked,
+    }
+
+    /// The user's own score of a show, as Bangumi names the ten steps
+    /// (and NipaPlay after it). Without a Bangumi account only the even
+    /// ones are offered.
+    #[value]
+    pub enum Score {
+        #[label(tr! { "zh-Hans" => "评分", "en" => "Rate" })]
+        Unrated,
+        #[label(tr! { "zh-Hans" => "1 分 · 不忍直视", "en" => "1 · Unwatchable" })]
+        One,
+        #[label(tr! { "zh-Hans" => "2 分 · 很差", "en" => "2 · Very bad" })]
+        Two,
+        #[label(tr! { "zh-Hans" => "3 分 · 差", "en" => "3 · Bad" })]
+        Three,
+        #[label(tr! { "zh-Hans" => "4 分 · 较差", "en" => "4 · Poor" })]
+        Four,
+        #[label(tr! { "zh-Hans" => "5 分 · 不过不失", "en" => "5 · Average" })]
+        Five,
+        #[label(tr! { "zh-Hans" => "6 分 · 还行", "en" => "6 · Fair" })]
+        Six,
+        #[label(tr! { "zh-Hans" => "7 分 · 推荐", "en" => "7 · Good" })]
+        Seven,
+        #[label(tr! { "zh-Hans" => "8 分 · 力荐", "en" => "8 · Great" })]
+        Eight,
+        #[label(tr! { "zh-Hans" => "9 分 · 神作", "en" => "9 · Masterpiece" })]
+        Nine,
+        #[label(tr! { "zh-Hans" => "10 分 · 超神作", "en" => "10 · All-time best" })]
+        Ten,
+    }
+
+    /// Where what the user marks on the details goes besides this device.
+    #[value]
+    pub enum SyncTargets {
+        #[label(tr! { "zh-Hans" => "只保存在本机", "en" => "Kept on this device" })]
+        Local,
+        #[label(tr! { "zh-Hans" => "同步到弹弹play", "en" => "Synced to dandanplay" })]
+        Dandanplay,
+        #[label(tr! { "zh-Hans" => "同步到 Bangumi", "en" => "Synced to Bangumi" })]
+        Bangumi,
+        #[label(tr! { "zh-Hans" => "同步到弹弹play 和 Bangumi", "en" => "Synced to dandanplay and Bangumi" })]
+        Both,
     }
 
     /// One show.
@@ -145,8 +194,6 @@ pub mod anime {
     /// What the film says under an episode.
     #[value]
     pub enum EpisodeNote {
-        #[label(tr! { "zh-Hans" => "已看", "en" => "Watched" })]
-        Watched,
         #[label(tr! { "zh-Hans" => "剩 {minutes} 分钟", "en" => "{minutes} min left" })]
         Left { minutes: i64 },
         #[label(tr! { "zh-Hans" => "{minutes} 分钟", "en" => "{minutes} min" })]
@@ -157,6 +204,9 @@ pub mod anime {
         /// The user has no file of it yet.
         #[label(tr! { "zh-Hans" => "没有文件", "en" => "No file" })]
         Missing,
+        /// The user has a file of it, of a length not known, and watched it.
+        #[label(tr! { "zh-Hans" => "本地文件", "en" => "Local file" })]
+        File,
     }
 
     /// One episode on the film of the details page.
@@ -173,6 +223,9 @@ pub mod anime {
         /// language.
         #[content]
         pub numeral: String,
+        /// Watched: played to the end here, or marked watched here, on
+        /// dandanplay or on Bangumi. The film writes 「· 已看」 after the
+        /// note.
         pub watched: bool,
         /// Whether it is the one to watch next, and how far it has played.
         pub next: bool,
@@ -290,6 +343,35 @@ pub mod anime {
         pub comments_source: String,
         #[content]
         pub comments_error: String,
+        /// The user's own score of the open show; whether there is an
+        /// account to send it to, and Bangumi's, which takes all ten
+        /// steps and the review.
+        pub my_score: Score,
+        pub can_rate: bool,
+        pub fine_scores: bool,
+        pub can_review: bool,
+        pub sync_targets: SyncTargets,
+        /// Whether the open show's marks are being synced, and what the
+        /// last sync left to say: a status kept because an account had
+        /// one further along, or what failed.
+        pub syncing: bool,
+        #[content]
+        pub sync_note: String,
+        /// The dialogs of the score and of the review.
+        pub rating_open: bool,
+        pub review_open: bool,
+        pub review_loading: bool,
+        pub review_saving: bool,
+        /// The review the editor starts from: the one on Bangumi, or what
+        /// the user last sent.
+        #[content]
+        pub review_text: String,
+        #[content]
+        pub review_error: String,
+        /// Whether each episode of the film has its own button to mark it
+        /// watched or not. Off until a plugin turns it on through
+        /// `set_episode_marking`.
+        pub episode_marking: bool,
     }
 
     #[value]
@@ -359,11 +441,40 @@ pub mod anime {
         #[errors("unknown_episode")]
         fn play_episode(&mut self, number: i64) -> Result<(), CommandError>;
 
-        /// Mark where the user is with the open show.
+        /// Mark where the user is with the open show. With an account it
+        /// is synced, never over a status further along there.
         fn set_status(&mut self, status: WatchStatus) -> Result<(), CommandError>;
 
-        /// Rate the open show from 1 to 10.
+        /// Rate the open show from 1 to 10, here and on the accounts.
         fn rate(&mut self, score: i64) -> Result<(), CommandError>;
+
+        /// Rate the open show with a step of the score dialog, and close
+        /// it.
+        fn pick_score(&mut self, score: Score) -> Result<(), CommandError>;
+
+        /// Show or hide the score dialog.
+        fn show_rating(&mut self, open: bool) -> Result<(), CommandError>;
+
+        /// Show the review dialog, reading the review on Bangumi first,
+        /// or hide it.
+        fn show_review(&mut self, open: bool) -> Result<(), CommandError>;
+
+        /// Send `text` as the user's review of the open show to Bangumi;
+        /// empty takes the review away.
+        #[errors("bangumi_required")]
+        fn submit_review(&mut self, text: String) -> Result<(), CommandError>;
+
+        /// Mark episode `number` of the open show watched or not, here and
+        /// on the accounts. dandanplay cannot take a watched mark back.
+        #[errors("unknown_episode")]
+        fn mark_episode(&mut self, number: i64, watched: bool) -> Result<(), CommandError>;
+
+        /// Turn the film's per-episode mark buttons on or off; the plugin
+        /// that offers them turns them on.
+        fn set_episode_marking(&mut self, enabled: bool) -> Result<(), CommandError>;
+
+        /// Sync the open show's marks with the accounts now.
+        fn sync_marks(&mut self) -> Result<(), CommandError>;
 
         /// Update dandanplay availability and refresh the preferred catalogue.
         /// Public data remains visible when either account signs out.
@@ -376,7 +487,8 @@ pub mod anime {
         fn refresh_details(&mut self) -> Result<(), CommandError>;
         fn refresh_comments(&mut self) -> Result<(), CommandError>;
 
-        /// The shell played or matched a video: what is being watched may
+        /// The shell played or matched a video, or the account sync wrote
+        /// marks: what is being watched, and what is kept of the shows, may
         /// have changed.
         fn history_changed(&mut self) -> Result<(), CommandError>;
 

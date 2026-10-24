@@ -108,7 +108,11 @@ fn what_was_played_and_matched_is_on_the_stage_and_the_film() {
     let third = &engine.state.episodes[2];
     assert!(third.next && !third.watched);
     assert_eq!(third.note, anime::EpisodeNote::Left { minutes: 14 });
-    assert_eq!(engine.state.episodes[0].note, anime::EpisodeNote::Watched);
+    assert_eq!(
+        engine.state.episodes[0].note,
+        anime::EpisodeNote::Length { minutes: 24 }
+    );
+    assert!(engine.state.episodes[0].watched);
     assert_eq!(engine.state.episodes[5].note, anime::EpisodeNote::Missing);
     // The same verified show can receive Bangumi episode IDs without losing
     // the files and progress that were linked using dandanplay IDs.
@@ -260,4 +264,133 @@ fn the_clock_moves_now_along_once_the_minute_turns() {
     engine.minute -= 1;
     engine.tick().unwrap();
     assert!((0..86_400).contains(&engine.state.now));
+}
+
+#[test]
+fn episodes_and_the_status_marked_here_show_and_never_go_back() {
+    let mut engine = AnimeEngine::default();
+    engine.details.insert(17675, details(17675, 12));
+    engine.open(17675).unwrap();
+    assert_eq!(engine.state.show.status, WatchStatus::Unmarked);
+    assert_eq!(engine.state.sync_targets, SyncTargets::Local);
+    assert!(!engine.state.can_rate && !engine.state.can_review);
+    // The film's buttons wait for the plugin that offers them.
+    assert!(!engine.state.episode_marking);
+    engine.set_episode_marking(true).unwrap();
+    assert!(engine.state.episode_marking);
+    engine.mark_episode(1, true).unwrap();
+    engine.mark_episode(2, true).unwrap();
+    let first = &engine.state.episodes[0];
+    assert!(first.watched && first.progress == 1.0);
+    assert_eq!(first.note, anime::EpisodeNote::Missing);
+    assert_eq!(engine.state.show.watched, 2);
+    assert_eq!(engine.state.next, NextAction::Continue { episode: 3 });
+    assert_eq!(engine.state.show.status, WatchStatus::Watching);
+    // Wanting to watch a show being watched keeps it watching, and says so.
+    engine.set_status(WatchStatus::Want).unwrap();
+    assert_eq!(engine.state.show.status, WatchStatus::Watching);
+    assert!(engine.state.sync_note.contains("「在看」"));
+    engine.set_status(WatchStatus::Watched).unwrap();
+    assert_eq!(engine.state.show.status, WatchStatus::Watched);
+    assert_eq!(engine.db.mark(17675).status.as_deref(), Some("watched"));
+    // Taking a mark back is the user's to do.
+    engine.mark_episode(2, false).unwrap();
+    assert!(!engine.state.episodes[1].watched);
+    assert_eq!(engine.db.watched_numbers(17675), vec![1]);
+    assert_eq!(
+        engine.mark_episode(99, true).unwrap_err().code,
+        "unknown_episode"
+    );
+    engine.rate(8).unwrap();
+    assert_eq!(engine.state.my_score, Score::Eight);
+    engine.show_rating(true).unwrap();
+    engine.pick_score(Score::Ten).unwrap();
+    assert_eq!(engine.state.my_score, Score::Ten);
+    assert!(!engine.state.rating_open);
+    assert_eq!(engine.db.mark(17675).rating, 10);
+}
+
+#[test]
+fn what_a_sync_brings_back_is_kept_and_shown() {
+    let mut engine = AnimeEngine::default();
+    engine.details.insert(17675, details(17675, 12));
+    engine.open(17675).unwrap();
+    engine.take_synced(sync::Synced {
+        id: 17675,
+        level: Some(Level::Watched),
+        watched: [1, 2, 3].into(),
+        rating: Some(9),
+        review: Some("很好看".into()),
+        reviewed: None,
+        notes: vec!["Bangumi：暂时连不上 Bangumi".into()],
+    });
+    assert_eq!(engine.state.show.status, WatchStatus::Watched);
+    assert_eq!(engine.state.show.watched, 3);
+    assert!(
+        engine.state.episodes[..3]
+            .iter()
+            .all(|episode| episode.watched)
+    );
+    assert!(!engine.state.episodes[3].watched);
+    assert_eq!(engine.state.my_score, Score::Nine);
+    assert_eq!(engine.state.review_text, "很好看");
+    assert_eq!(engine.state.sync_note, "Bangumi：暂时连不上 Bangumi");
+    assert_eq!(engine.db.watched_numbers(17675), vec![1, 2, 3]);
+    // A sync of another show changes nothing on the open one.
+    engine.take_synced(sync::Synced {
+        id: 1,
+        level: Some(Level::Dropped),
+        ..Default::default()
+    });
+    assert_eq!(engine.state.show.status, WatchStatus::Watched);
+    assert_eq!(engine.db.mark(1).status.as_deref(), Some("dropped"));
+}
+
+#[test]
+fn a_review_needs_bangumi_and_fits_its_limit() {
+    let mut engine = AnimeEngine::default();
+    engine.details.insert(17675, details(17675, 12));
+    engine.open(17675).unwrap();
+    assert_eq!(
+        engine.submit_review("好看".into()).unwrap_err().code,
+        "bangumi_required"
+    );
+    engine.show_review(true).unwrap();
+    assert!(engine.state.review_open && !engine.state.review_loading);
+    assert!(!engine.state.review_error.is_empty());
+    // Signed in, but this show has no Bangumi subject to write to.
+    engine.accounts.bangumi = true;
+    engine.submit_review("长".repeat(201)).unwrap();
+    assert!(engine.state.review_error.contains("201"));
+    assert!(!engine.state.review_saving);
+    engine.submit_review(" 好看 ".into()).unwrap();
+    assert!(!engine.state.review_saving);
+    assert!(engine.state.review_open);
+    assert_eq!(engine.state.review_text, "好看");
+    assert!(!engine.state.review_error.is_empty());
+    engine.show_review(false).unwrap();
+    assert!(!engine.state.review_open);
+}
+
+#[test]
+fn marks_written_by_another_engine_show_after_history_changed() {
+    let mut engine = AnimeEngine::default();
+    engine.details.insert(17675, details(17675, 12));
+    engine.open(17675).unwrap();
+    assert_eq!(engine.state.show.status, WatchStatus::Unmarked);
+    let frieren = Anime {
+        dandanplay_id: 17675,
+        title: "葬送的芙莉莲".into(),
+        image: String::new(),
+    };
+    engine.db.set_mark(
+        &frieren,
+        &erika_store::Mark {
+            status: Some("watched".into()),
+            rating: 7,
+        },
+    );
+    engine.history_changed().unwrap();
+    assert_eq!(engine.state.show.status, WatchStatus::Watched);
+    assert_eq!(engine.state.my_score, Score::Seven);
 }

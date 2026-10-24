@@ -1,8 +1,8 @@
 //! The database on devices with files.
 
 use crate::{
-    Anime, Entry, Episode, EpisodeFile, FileId, Fingerprint, Recent, Seen, Shelf, Source, Watching,
-    now,
+    Anime, Entry, Episode, EpisodeFile, FileId, Fingerprint, Mark, Recent, Seen, Shelf, Source,
+    Watching, now,
 };
 use rusqlite::{Connection, OptionalExtension, Result, TransactionBehavior, params};
 use std::path::Path;
@@ -102,12 +102,14 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE source ADD COLUMN content TEXT NOT NULL DEFAULT 'anime';",
 ];
 
-/// The tables the account sync reads and writes, made where missing
-/// rather than as a numbered step, so that changes adding steps of their
-/// own land in any order. `anime_mark` is the anime module's (the same
-/// statement as where it keeps its marks); `extension` keeps the data of
-/// extensions such as plugins, any JSON by an id.
-const SYNC_TABLES: &str = "
+/// Tables added beside the numbered steps rather than as one: each is
+/// created where it is missing, so changes that add steps of their own
+/// cannot have one skipped by landing in another order. `extension` keeps
+/// the data of extensions such as plugins, any JSON by an id, which the
+/// account sync carries.
+const BESIDE: &str = "
+    -- Where the user is with an anime (the anime module's word for it)
+    -- and the score they gave it, 1 to 10 or 0.
     CREATE TABLE IF NOT EXISTS anime_mark (
         anime_id INTEGER PRIMARY KEY REFERENCES anime (id) ON DELETE CASCADE,
         status TEXT,
@@ -168,7 +170,7 @@ impl Db {
         conn.pragma_update(None, "foreign_keys", true)?;
         let mut db = Db { conn };
         db.migrate()?;
-        db.conn.execute_batch(SYNC_TABLES)?;
+        db.conn.execute_batch(BESIDE)?;
         Ok(db)
     }
 
@@ -849,5 +851,136 @@ impl Db {
             "read an anime",
         )
         .flatten()
+    }
+
+    /// What the user marked anime `dandanplay_id` as, and its score.
+    pub fn mark(&self, dandanplay_id: i64) -> Mark {
+        logged(
+            self.conn
+                .query_row(
+                    "SELECT m.status, m.rating FROM anime_mark m JOIN anime a ON a.id = m.anime_id
+                     WHERE a.dandanplay_id = ?1",
+                    [dandanplay_id],
+                    |row| {
+                        Ok(Mark {
+                            status: row.get(0)?,
+                            rating: row.get(1)?,
+                        })
+                    },
+                )
+                .optional(),
+            "read an anime's mark",
+        )
+        .flatten()
+        .unwrap_or_default()
+    }
+
+    /// Keep `mark` as what the user marked `anime` as.
+    pub fn set_mark(&self, anime: &Anime, mark: &Mark) {
+        logged(
+            (|| {
+                self.keep_anime(anime)?;
+                self.conn.execute(
+                    "INSERT INTO anime_mark (anime_id, status, rating, updated_at)
+                     VALUES ((SELECT id FROM anime WHERE dandanplay_id = ?1), ?2, ?3, ?4)
+                     ON CONFLICT (anime_id) DO UPDATE SET
+                         status = excluded.status,
+                         rating = excluded.rating,
+                         updated_at = excluded.updated_at",
+                    params![anime.dandanplay_id, mark.status, mark.rating, now()],
+                )
+            })(),
+            "save an anime's mark",
+        );
+    }
+
+    /// The numbers of the episodes of anime `dandanplay_id` marked watched.
+    pub fn watched_numbers(&self, dandanplay_id: i64) -> Vec<i64> {
+        logged(
+            (|| {
+                let mut statement = self.conn.prepare(
+                    "SELECT DISTINCT e.number FROM watched w
+                     JOIN episode e ON e.id = w.episode_id
+                     JOIN anime a ON a.id = e.anime_id
+                     WHERE a.dandanplay_id = ?1 AND e.number IS NOT NULL
+                     ORDER BY e.number",
+                )?;
+                let rows = statement.query_map([dandanplay_id], |row| row.get(0))?;
+                rows.collect()
+            })(),
+            "read the watched episodes",
+        )
+        .unwrap_or_default()
+    }
+
+    /// Mark `episode` of `anime` watched, or not; `manual` when the user
+    /// marked it. An episode without a file gets a row of its own, by its
+    /// number, and by its id when it has one.
+    pub fn set_watched(&self, anime: &Anime, episode: &Episode, watched: bool, manual: bool) {
+        logged(
+            self.mark_watched(anime, episode, watched, manual),
+            "mark an episode watched",
+        );
+    }
+
+    fn mark_watched(
+        &self,
+        anime: &Anime,
+        episode: &Episode,
+        watched: bool,
+        manual: bool,
+    ) -> Result<()> {
+        self.keep_anime(anime)?;
+        let anime_row: i64 = self.conn.query_row(
+            "SELECT id FROM anime WHERE dandanplay_id = ?1",
+            [anime.dandanplay_id],
+            |row| row.get(0),
+        )?;
+        if !watched {
+            self.conn.execute(
+                "DELETE FROM watched WHERE episode_id IN
+                     (SELECT id FROM episode WHERE anime_id = ?1 AND number = ?2)",
+                params![anime_row, episode.number],
+            )?;
+            return Ok(());
+        }
+        let id = (episode.dandanplay_id != 0).then_some(episode.dandanplay_id);
+        let find = |conn: &Connection| {
+            conn.query_row(
+                "SELECT id FROM episode
+                 WHERE (anime_id = ?1 AND number = ?2) OR (?3 IS NOT NULL AND dandanplay_id = ?3)
+                 ORDER BY dandanplay_id IS NULL, id LIMIT 1",
+                params![anime_row, episode.number, id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+        };
+        let row = match find(&self.conn)? {
+            Some(row) => row,
+            None => {
+                self.conn.execute(
+                    "INSERT INTO episode (anime_id, number, dandanplay_id, title) VALUES (?1, ?2, ?3, ?4)",
+                    params![anime_row, episode.number, id, episode.title],
+                )?;
+                self.conn.last_insert_rowid()
+            }
+        };
+        self.conn.execute(
+            "INSERT INTO watched (episode_id, at, manual) VALUES (?1, ?2, ?3)
+             ON CONFLICT (episode_id) DO UPDATE SET manual = max(manual, excluded.manual)",
+            params![row, now(), manual],
+        )?;
+        Ok(())
+    }
+
+    /// The anime's row, its picture kept when `anime` has none.
+    fn keep_anime(&self, anime: &Anime) -> Result<usize> {
+        self.conn.execute(
+            "INSERT INTO anime (dandanplay_id, title, image, updated_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (dandanplay_id) DO UPDATE SET
+                 title = CASE WHEN excluded.title = '' THEN title ELSE excluded.title END,
+                 image = CASE WHEN excluded.image = '' THEN image ELSE excluded.image END",
+            params![anime.dandanplay_id, anime.title, anime.image, now()],
+        )
     }
 }

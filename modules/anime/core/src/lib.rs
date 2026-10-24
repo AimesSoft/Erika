@@ -8,23 +8,27 @@
 mod catalog;
 mod clock;
 mod detail_posters;
+mod marks;
 mod posters;
 mod reviews;
 mod schedule;
 mod season;
 mod shows;
+mod sync;
 mod timeline;
 
 use bern::CommandError;
 use bern::media::MediaSource;
 use clock::Clock;
 use erika_anime_protocol::anime::{
-    self, BackTo, NextAction, SeasonSource, Show, State, WatchStatus,
+    self, BackTo, NextAction, Score, SeasonSource, Show, State, SyncTargets, WatchStatus,
 };
 use erika_dandanplay::{Details, Intro};
+use marks::Level;
 use schedule::Schedule;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use sync::Intent;
 
 /// The most shows the stage and the rows beside it hold.
 const WATCHING: usize = 5;
@@ -43,6 +47,9 @@ enum Done {
     Reviews(reviews::Finished),
     Poster(String),
     DetailPoster(detail_posters::Key),
+    Synced(sync::Synced),
+    /// The review on Bangumi, read as its dialog opened.
+    Review(i64, Result<String, String>),
 }
 
 pub struct AnimeEngine {
@@ -57,10 +64,11 @@ pub struct AnimeEngine {
     schedule: Schedule,
     details: HashMap<i64, Details>,
     watching: Vec<erika_store::Watching>,
-    /// What the user chose for a show here: where they are with it, and
-    /// its score.
-    statuses: HashMap<i64, WatchStatus>,
-    ratings: HashMap<i64, f64>,
+    /// What is kept here of the shows seen: where the user is with each,
+    /// its score and the episodes marked watched; and the syncs of them
+    /// with the accounts.
+    kept: HashMap<i64, sync::Kept>,
+    syncs: sync::Syncs,
     inbox: Arc<Mutex<Vec<Done>>>,
     /// Whether the first wake, as the app starts, has come.
     started: bool,
@@ -91,8 +99,8 @@ impl Default for AnimeEngine {
             watching: db.watching(WATCHING),
             db,
             details: HashMap::new(),
-            statuses: HashMap::new(),
-            ratings: HashMap::new(),
+            kept: HashMap::new(),
+            syncs: sync::Syncs::default(),
             inbox: Arc::default(),
             started: false,
             minute: 0,
@@ -136,6 +144,20 @@ impl Default for AnimeEngine {
                 has_comments: false,
                 comments_source: String::new(),
                 comments_error: String::new(),
+                my_score: Score::Unrated,
+                can_rate: accounts.signed_in(),
+                fine_scores: accounts.bangumi,
+                can_review: false,
+                sync_targets: SyncTargets::Local,
+                syncing: false,
+                sync_note: String::new(),
+                rating_open: false,
+                review_open: false,
+                review_loading: false,
+                review_saving: false,
+                review_text: String::new(),
+                review_error: String::new(),
+                episode_marking: false,
             },
         };
         engine.show_season();
@@ -307,11 +329,7 @@ impl AnimeEngine {
         } else {
             return Err(CommandError::new("unknown_show", format!("no show {id}")));
         };
-        Ok(Show {
-            status: self.statuses.get(&id).cloned().unwrap_or(show.status),
-            rating: self.ratings.get(&id).copied().unwrap_or(show.rating),
-            ..show
-        })
+        Ok(show)
     }
 
     /// Fill the open show with what is known of it now.
@@ -329,7 +347,26 @@ impl AnimeEngine {
             show.poster = poster;
         }
         let files = self.db.episode_files(id);
-        let (episodes, next) = shows::film(self.details.get(&id), &show, &files);
+        // What is watched and where the user is with it, as this device and
+        // the accounts' last sync have it.
+        let watched = self.watched_here(id);
+        show.status = Level::status(self.level_of(id, &watched));
+        let numbers: Vec<i64> = match self.details.get(&id) {
+            Some(details) => shows::numbered(details)
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect(),
+            None => files.iter().map(|file| file.episode.number).collect(),
+        };
+        show.watched = numbers.iter().filter(|n| watched.contains(n)).count() as i64;
+        let kept = self.kept(id);
+        self.state.my_score = marks::score(kept.mark.rating);
+        self.state.can_rate = self.accounts.signed_in();
+        self.state.fine_scores = self.accounts.bangumi;
+        self.state.can_review = self.accounts.bangumi && self.subject(id).is_some();
+        self.state.sync_targets = self.targets(id);
+        self.state.syncing = self.syncs.busy(id);
+        let (episodes, next) = shows::film(self.details.get(&id), &show, &files, &kept.watched);
         self.state.next_episode = next;
         self.state.next = if show.watched == 0 {
             NextAction::Start
@@ -338,6 +375,15 @@ impl AnimeEngine {
         };
         self.state.episodes = episodes;
         self.state.show = show;
+    }
+
+    /// An account signed in or out: what the details offer changes, and
+    /// what was kept while it was out goes to it now.
+    fn accounts_changed(&mut self, signed_in: bool) {
+        if signed_in {
+            self.sync_all_again();
+        }
+        self.show_opened();
     }
 
     fn take_done(&mut self) {
@@ -393,6 +439,7 @@ impl AnimeEngine {
                         self.state.details_error.clear();
                         self.show_opened();
                         self.load_detail_poster();
+                        self.sync_opened();
                     }
                 }
                 Done::Details(_, id, Err(error)) => {
@@ -409,6 +456,16 @@ impl AnimeEngine {
                     self.show_season();
                     self.show_opened();
                     self.show_watching();
+                }
+                Done::Synced(synced) => self.take_synced(synced),
+                Done::Review(id, result) => {
+                    if self.state.opened == id && self.state.review_open {
+                        self.state.review_loading = false;
+                        match result {
+                            Ok(text) => self.state.review_text = text,
+                            Err(error) => self.state.review_error = error,
+                        }
+                    }
                 }
                 Done::DetailPoster(key) => {
                     self.detail_posters.finished(&key);
@@ -467,6 +524,12 @@ impl anime::Commands for AnimeEngine {
         self.state.back = BackTo::Home;
         self.state.opened = id;
         self.state.episodes = Vec::new();
+        self.state.sync_note.clear();
+        self.state.rating_open = false;
+        self.state.review_open = false;
+        self.state.review_text.clear();
+        self.state.review_error.clear();
+        self.syncs.opened = 0;
         if !self.details.contains_key(&id)
             && let Some(details) = reviews::cached_details(id)
         {
@@ -477,6 +540,7 @@ impl anime::Commands for AnimeEngine {
         self.load_detail_poster();
         self.refresh_opened();
         self.load_reviews();
+        self.sync_opened();
         Ok(())
     }
 
@@ -506,6 +570,8 @@ impl anime::Commands for AnimeEngine {
 
     fn close(&mut self) -> Result<(), CommandError> {
         self.state.opened = 0;
+        self.state.rating_open = false;
+        self.state.review_open = false;
         self.reviews.cancel();
         Ok(())
     }
@@ -549,15 +615,117 @@ impl anime::Commands for AnimeEngine {
     }
 
     fn set_status(&mut self, status: WatchStatus) -> Result<(), CommandError> {
-        self.statuses.insert(self.state.show.id, status.clone());
-        self.state.show.status = status;
+        if let Some(level) = Level::of_status(&status) {
+            self.sync(self.state.opened, vec![Intent::Status(level)], true);
+        }
         Ok(())
     }
 
     fn rate(&mut self, score: i64) -> Result<(), CommandError> {
-        let score = score.clamp(1, 10) as f64;
-        self.ratings.insert(self.state.show.id, score);
-        self.state.show.rating = score;
+        self.sync(
+            self.state.opened,
+            vec![Intent::Rate(score.clamp(1, 10))],
+            true,
+        );
+        Ok(())
+    }
+
+    fn pick_score(&mut self, score: Score) -> Result<(), CommandError> {
+        let points = marks::points(&score);
+        if points > 0 {
+            self.rate(points)?;
+        }
+        self.state.rating_open = false;
+        Ok(())
+    }
+
+    fn show_rating(&mut self, open: bool) -> Result<(), CommandError> {
+        self.state.rating_open = open && self.state.opened != 0;
+        Ok(())
+    }
+
+    fn show_review(&mut self, open: bool) -> Result<(), CommandError> {
+        let id = self.state.opened;
+        self.state.review_error.clear();
+        self.state.review_open = open && id != 0;
+        if !self.state.review_open {
+            return Ok(());
+        }
+        match self.subject(id).filter(|_| self.accounts.bangumi) {
+            Some(subject) => {
+                self.state.review_loading = true;
+                in_background(&self.inbox, move || {
+                    let result = erika_dandanplay::bangumi::site::collection(subject)
+                        .map(|collection| collection.comment)
+                        .map_err(|error| error.message);
+                    Some(Done::Review(id, result))
+                });
+            }
+            None => {
+                self.state.review_loading = false;
+                self.state.review_error =
+                    "要先登录 Bangumi，而且这部作品要有对应的 Bangumi 条目".into();
+            }
+        }
+        Ok(())
+    }
+
+    fn submit_review(&mut self, text: String) -> Result<(), CommandError> {
+        if !self.accounts.bangumi {
+            return Err(CommandError::new(
+                "bangumi_required",
+                "请先登录 Bangumi 账号",
+            ));
+        }
+        let text = text.trim().to_string();
+        self.state.review_text = text.clone();
+        let length = text.chars().count();
+        if length > sync::REVIEW_LIMIT {
+            self.state.review_error = format!(
+                "Bangumi 的评价最多 {} 字，现在是 {length} 字",
+                sync::REVIEW_LIMIT
+            );
+            return Ok(());
+        }
+        self.state.review_error.clear();
+        self.state.review_saving = true;
+        self.sync(self.state.opened, vec![Intent::Review(text)], true);
+        Ok(())
+    }
+
+    fn mark_episode(&mut self, number: i64, watched: bool) -> Result<(), CommandError> {
+        let id = self.state.opened;
+        let known = self.numbered(id).iter().any(|(n, _)| *n == number)
+            || self
+                .state
+                .episodes
+                .iter()
+                .any(|episode| episode.number == number);
+        if id == 0 || !known {
+            return Err(CommandError::new(
+                "unknown_episode",
+                format!("no episode {number}"),
+            ));
+        }
+        if !watched && shows::played(&self.db.episode_files(id)).contains(&number) {
+            // Played to the end here: it stays watched, here and there.
+            self.state.sync_note = format!("第 {number} 话在本机已播放到结尾，仍算看过");
+            return Ok(());
+        }
+        self.sync(id, vec![Intent::Mark { number, watched }], true);
+        Ok(())
+    }
+
+    /// For the plugin system: a plugin that offers marking single episodes
+    /// on the film turns their buttons on here, and off when it is turned
+    /// off. The buttons call `mark_episode`.
+    fn set_episode_marking(&mut self, enabled: bool) -> Result<(), CommandError> {
+        self.state.episode_marking = enabled;
+        Ok(())
+    }
+
+    fn sync_marks(&mut self) -> Result<(), CommandError> {
+        self.sync(self.state.opened, Vec::new(), true);
         Ok(())
     }
 
@@ -599,6 +767,7 @@ impl anime::Commands for AnimeEngine {
         self.state.signed_in = self.accounts.signed_in();
         self.refresh();
         self.load_reviews();
+        self.accounts_changed(signed_in);
         Ok(())
     }
 
@@ -607,6 +776,7 @@ impl anime::Commands for AnimeEngine {
         self.state.signed_in = self.accounts.signed_in();
         self.refresh();
         self.load_reviews();
+        self.accounts_changed(signed_in);
         Ok(())
     }
 
@@ -643,9 +813,16 @@ impl anime::Commands for AnimeEngine {
     }
 
     fn history_changed(&mut self) -> Result<(), CommandError> {
+        // What is kept of the shows is read again: another engine (the
+        // account sync) may have written it. The browser keeps it nowhere
+        // else.
+        if !cfg!(target_arch = "wasm32") {
+            self.kept.clear();
+        }
         self.watching = self.db.watching(WATCHING);
         self.show_watching();
         self.show_opened();
+        self.sync_played();
         Ok(())
     }
 
@@ -669,6 +846,7 @@ impl anime::Engine for AnimeEngine {
         if !self.started {
             self.started = true;
             self.refresh();
+            self.sync_played();
         }
     }
 }

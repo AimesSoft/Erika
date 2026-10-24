@@ -87,6 +87,14 @@ pub struct Anime {
     pub image: String,
 }
 
+/// What the user marked an anime as, in the anime module's words, and the
+/// score they gave it, 1 to 10 or 0.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Mark {
+    pub status: Option<String>,
+    pub rating: i64,
+}
+
 /// An episode, by its dandanplay id, and its number within its anime.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Episode {
