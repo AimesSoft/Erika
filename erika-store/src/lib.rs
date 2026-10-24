@@ -27,6 +27,8 @@ mod session;
 #[cfg(target_arch = "wasm32")]
 pub use session::Db;
 
+pub mod portable;
+
 /// A file's identity: the MD5 of its first 16 MiB, in hex, and its size in
 /// bytes. dandanplay matches a video by these two.
 #[derive(Clone, Debug, PartialEq, Eq)]

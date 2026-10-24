@@ -598,7 +598,7 @@ pub fn phone_settings_section(
             #[cfg(feature = "bern-module-anime")]
             PhoneSettings::Anime => { settings_anime(anime: anime) }
             #[cfg(feature = "bern-module-sync")]
-            PhoneSettings::Sync => { settings_module_placeholder(app: app) }
+            PhoneSettings::Sync => { Slot(id: settings_sync) }
             #[cfg(feature = "bern-module-sources")]
             PhoneSettings::Sources => { settings_module_placeholder(app: app) }
             #[cfg(feature = "bern-module-remote")]

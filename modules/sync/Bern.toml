@@ -28,4 +28,8 @@ sources = "ui/src"
 supported = ["zh-Hans", "en"]
 default = "zh-Hans"
 
-
+[contributes]
+# 「设置 › 账号同步」, in the settings of every window size.
+settings_sync = ["sync_settings"]
+# The automatic sync's clock and what a sync says when it is done.
+background = ["sync_clock"]

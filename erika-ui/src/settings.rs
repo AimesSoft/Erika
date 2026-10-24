@@ -126,7 +126,7 @@ pub fn settings_page(
                 #[cfg(feature = "bern-module-anime")]
                 SettingsPage::Anime => { settings_anime(anime: anime) }
                 #[cfg(feature = "bern-module-sync")]
-                SettingsPage::Sync => { settings_module_placeholder(app: app) }
+                SettingsPage::Sync => { Slot(id: settings_sync) }
                 #[cfg(feature = "bern-module-sources")]
                 SettingsPage::Sources => { settings_module_placeholder(app: app) }
                 #[cfg(feature = "bern-module-remote")]

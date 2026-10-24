@@ -1,11 +1,97 @@
-# The sync module
+# 账号同步模块（sync）
 
-| Directory | What it holds | Depends on |
+| 目录 | 内容 | 依赖 |
 | --- | --- | --- |
-| `protocol/` | The module's contract: its state, commands, queries and events | `bern` and the protocols of the modules in `depends` |
-| `core/` | The engine: plain Rust, no windows | this protocol and the protocols of the modules in `depends` |
-| `ui/` | Components the application places in its slots and page slots | this protocol |
+| `protocol/` | 模块的契约：状态、命令、`restored` 事件 | `bern` |
+| `core/` | 引擎：同步文件格式、口令加密、合并、WebDAV、导入导出 | 本协议、`erika-store` |
+| `ui/` | 「设置 › 账号同步」页面（放进外壳的 `settings_sync` 插槽）与自动同步的时钟（`background` 插槽） | 本协议 |
 
-- Test the engine on its own: `cargo test -p erika-sync-core`.
-- Reach another module only through what it declares: `other::calls::…` to run its commands, `other::current_state()` to read its state, `#[on(other::event)]` to answer its events. List it in `depends` in `Bern.toml`.
-- Emit this module's events with `sync::emit::…`.
+- 单独测试引擎：`cargo test -p erika-sync-core`。
+- 参考 NipaPlay 的增量同步（`rust/src/api/incremental_sync.rs`、`lib/services/incremental_sync_*.dart`、`auto_sync_service.dart`、`full_backup_service.dart`）。
+
+## 做什么
+
+- **导出 / 导入单个文件**：`erika-backup-年月日-时分秒.erika`，一个文件装下用户在 Erika 里的全部数据（可重新获取的缓存除外），换设备导入后直接可用，账号也一样。
+- **WebDAV 同步**：和 NipaPlay 一样，云端目录里放一份快照与各设备的补丁；每台设备只上传自己的改动，三方合并（上次同步的基准、云端、本机），满 64 个补丁压成新快照，保留两代快照。
+- **同步口令**：账号的令牌与会话、WebDAV 密码用口令派生的密钥加密后才写进文件或云端。
+
+## 文件格式（版本 1）
+
+所有文件（导出文件、云端的 manifest / 快照 / 补丁、本机的同步基准）用同一种容器：
+
+```text
+偏移   长度  内容
+0      8     魔数 89 45 52 4B 0D 0A 1A 0A（"\x89ERK\r\n\x1a\n"，能看出被当文本传坏）
+8      2     格式版本，小端（当前 1）
+10     1     种类：1 导出，2 快照，3 补丁，4 manifest，5 本机基准
+11     1     标志：位 0 = 正文经 deflate 压缩（正文超过 512 字节且压缩后更小时）
+12     4     正文存放长度，小端
+16     n     正文
+16+n   32    前面所有字节的 SHA-256
+```
+
+正文是一串段：`标签(1 字节) + 长度(LEB128) + 内容`。读的时候跳过不认识的标签，所以以后加段、加字段都不用升版本；只有旧版本会读错时才升版本，旧版读到更高版本会提示先更新 Erika。
+
+| 标签 | 段 | 内容 |
+| --- | --- | --- |
+| 1 | head | 一个映射：创建时间、设备 id、应用版本；云端对象还有仓库 id、快照版本、补丁 id |
+| 2 | key | 口令密钥参数：`kdf = pbkdf2-sha256`、轮数、盐、校验值 |
+| 3 | state | 分类 → 键 → 值 |
+| 4 | ops | 补丁的改动：分类、键、设为某值或删除 |
+| 5 | index | manifest 的快照与补丁索引 |
+
+值是自描述的二进制编码（`core/src/value.rs`），首字节为标签：0 空、1/2 假/真、3 整数（zigzag LEB128）、4 浮点（8 字节小端）、5 文本（长度 + UTF-8）、6 字节串、7 列表、8 映射（键按序）、9 加密的秘密。任何 JSON 都能放进去。
+
+## 带哪些数据
+
+| 分类 | 键 | 内容 | WebDAV 同步时 |
+| --- | --- | --- | --- |
+| `settings` | 设置名 | SQLite `setting` 表里的全部设置（播放、弹幕、新番数据源、下载开关……），以后新加的设置自动带上 | 不带下载位置（本机路径） |
+| `store` | `welcome-v1` | 引导里选的可选功能、主题色、明暗 | 带 |
+| `sources` | 种类 + 位置 | 媒体库来源（名字、位置、内容类型、添加时间） | 只带 NipaPlay 共享媒体等网络来源，不带本机文件夹 |
+| `anime` / `episodes` | 弹弹play id | 番剧与剧集资料（标题、海报地址、集数、Bangumi id），供文件对应用 | 带 |
+| `links` | 文件指纹 `md5:大小` | 文件是哪一集、谁定的（自动 / 手动 / 不是剧集） | 带 |
+| `progress` | 文件指纹 | 播放进度、时长、弹幕偏移、时间 | 带 |
+| `watched` | 剧集 id，没有 id 的用 `番剧 id#集数` | 标记看过 | 带 |
+| `recents` | 地址 | 最近播放（标题、进度、对应文件） | 只带 http(s) 地址 |
+| `marks` | 番剧 id | 番剧状态与评分（`anime_mark` 表，由新番模块写入；本分支只同步它的行） | 带 |
+| `accounts` | `dandanplay`、`bangumi` | 弹弹play 令牌与用户名，Bangumi 会话 Cookie 与用户信息；秘密部分加密 | 有口令且口令一致时带 |
+| `extensions` | 扩展 id | 任意 JSON（插件启用状态与插件设置） | 带 |
+| `sync` | `webdav` | WebDAV 地址、用户名、目录、自动同步设置，密码加密 | 不带（只在导出文件里） |
+
+不带的数据与原因：
+
+- **缓存**：海报、截图、剧照、弹幕与新番列表等缓存（`bern::storage::cache_dir`），能重新获取。最近播放的截图路径也不带。
+- **扫描结果**（`address` 表）：本机的文件位置，导入后重新扫描就有；导入新增的来源会自动开始扫描。
+- **设备 id**（`device.id`）：识别服务器用它区分设备，每台设备各自一个。
+- **下载任务**：种子任务与已下载的文件在本机磁盘上，换设备没有意义；下载相关的开关仍随设置带走。
+- **同步口令本身**：只存在本机系统钥匙串，换设备需要再输入。
+
+合并规则（`core/src/merge.rs`，照 NipaPlay）：两边改了不同的键都保留；两边改了同一个键时，带 `at` 时间的记录（进度、最近播放、看过、番剧状态）取较新的，其他取正在同步的这台设备的改动，之后所有设备都采用它。导入文件只补上本机没有或较旧的记录，不删除本机数据。
+
+## 安全取舍
+
+- 密钥：PBKDF2-HMAC-SHA256，20 万轮，16 字节随机盐，派生 64 字节（AES-256 与 HMAC-SHA256 各一半）。盐和一个校验值放在文件（或云端 manifest）里，口令错了能直接认出来而不是读出乱码。
+- 秘密：SIV 方式的确定性加密——标签 = HMAC-SHA256(用途 ‖ 明文) 取 16 字节，同时作为 AES-256-CTR 的计数器起点。同一个令牌加密结果相同，同步时不会把没变的账号当成改动反复上传；代价是看得出两份密文是否相同，不泄露内容。用途（如 `dandanplay-token`）参与认证，密文不能挪到别的字段。
+- 用的都是 RustCrypto 现成的原语（`aes`、`hmac`、`sha2`），组合方式写在 `core/src/seal.rs`。
+- 没设口令时，导出与同步都不带账号，其他数据照常；口令不一致时账号不同步、也不会用另一个口令的密钥覆盖云端的账号。
+- 设置、观看记录等其余数据不加密：文件本身要像对待备份一样保管；WebDAV 走 HTTPS 时传输是加密的。
+- 口令存在系统钥匙串（`bern::secrets`）里，自动同步不需要每次输入。tvOS 与网页版没有钥匙串，那里设不了口令。
+
+## 扩展分区（给插件系统用）
+
+插件或任何模块把自己的数据存成一份 JSON：
+
+```rust
+// 写：任意 JSON 文本，按稳定的 id 存进 SQLite 的 extension 表。
+db.set_extension("plugins", Some(&serde_json::to_string(&value)?));
+// 读：
+let value: Option<String> = db.extension("plugins");
+// 删：
+db.set_extension("plugins", None);
+```
+
+- `db` 是各引擎自己开的 `erika_store::Db`（`Db::open()`）。存进去的内容自动进入导出文件与 WebDAV 同步的 `extensions` 分类，不需要另外登记。
+- 建议一个功能一个 id（如 `plugins` 存启用列表、`plugin.<插件 id>` 存各插件的设置），这样两台设备分别改了不同插件时都能保留。
+- 导入或同步改了这些数据后，同步模块发出 `sync::restored` 事件；外壳的 `sync_restored` 命令（`erika-core/src/sync_restore.rs`）在那里重新读设置与账号。插件系统需要即时生效时，在那里加一行重新读 `db.extension(...)`；不加也能在下次启动时生效。
+- 新的设置请继续存在 `setting` 表（`db.set_setting`），会自动同步；存进 `bern::storage::Store` 的值要在 `core/src/local.rs` 的 `STORE_KEYS` 里登记才会被带上。

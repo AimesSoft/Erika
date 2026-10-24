@@ -7,6 +7,8 @@ use crate::{
 use rusqlite::{Connection, OptionalExtension, Result, TransactionBehavior, params};
 use std::path::Path;
 
+mod portable;
+
 /// The source of the videos the user opens one by one; every other source
 /// is a folder or a server the user adds.
 const OPENED: i64 = 1;
@@ -100,6 +102,25 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE source ADD COLUMN content TEXT NOT NULL DEFAULT 'anime';",
 ];
 
+/// The tables the account sync reads and writes, made where missing
+/// rather than as a numbered step, so that changes adding steps of their
+/// own land in any order. `anime_mark` is the anime module's (the same
+/// statement as where it keeps its marks); `extension` keeps the data of
+/// extensions such as plugins, any JSON by an id.
+const SYNC_TABLES: &str = "
+    CREATE TABLE IF NOT EXISTS anime_mark (
+        anime_id INTEGER PRIMARY KEY REFERENCES anime (id) ON DELETE CASCADE,
+        status TEXT,
+        rating INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS extension (
+        id TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+    ) STRICT;
+";
+
 /// One connection to the app's database.
 pub struct Db {
     conn: Connection,
@@ -147,6 +168,7 @@ impl Db {
         conn.pragma_update(None, "foreign_keys", true)?;
         let mut db = Db { conn };
         db.migrate()?;
+        db.conn.execute_batch(SYNC_TABLES)?;
         Ok(db)
     }
 
