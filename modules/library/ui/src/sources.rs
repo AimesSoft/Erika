@@ -148,19 +148,24 @@ pub fn library_source_list(library: library::Client, #[session] draft: LibraryDr
 #[component]
 pub fn library_shared_mount(app: erika::Client, library: library::Client, #[session] draft: LibraryDraft) -> impl View {
     ui! {
-        Modal(width: 440, height: 360, cover: compact, appear: pop_in, disappear: fade) {
+        // A card, also on a phone: the fields scroll above the buttons
+        // where the card is too short for them.
+        Modal(width: 440, height: 360, appear: pop_in, disappear: fade) {
             Column(gap: 16, padding: 24) {
-                Text(content: tr! { "zh-Hans" => "挂载 NipaPlay共享媒体", "en" => "Mount NipaPlay shared media" }, style: title3)
-                Text(content: tr! { "zh-Hans" => "连接已开启远程访问的 NipaPlay 设备。", "en" => "Connect to a NipaPlay device with remote access enabled." }, emphasis: secondary, lines: 2)
-                TextInput(id: shared_name, label: tr! { "zh-Hans" => "备注名称（可选）", "en" => "Name (optional)" }, value: draft.shared_name, prompt: tr! { "zh-Hans" => "例如：家里的电脑", "en" => "e.g. Home computer" })
-                TextInput(id: shared_address, label: tr! { "zh-Hans" => "访问地址", "en" => "Address" }, value: draft.shared_address, prompt: tr! { "zh-Hans" => "192.168.1.100:1180", "en" => "192.168.1.100:1180" })
-                Text(content: tr! { "zh-Hans" => "局域网地址默认使用端口 1180，也可填写完整 HTTP(S) 地址。", "en" => "Local addresses use port 1180 by default. A full HTTP(S) address also works." }, style: caption, emphasis: secondary, lines: 2)
-                if library.shared_connecting {
-                    Text(content: tr! { "zh-Hans" => "正在连接并读取共享媒体…", "en" => "Connecting and loading shared media…" }, style: caption, emphasis: secondary)
-                } else if library.shared_error != "" {
-                    Text(content: library.shared_error, style: caption, lines: 3)
+                ScrollView {
+                    Column(gap: 16) {
+                        Text(content: tr! { "zh-Hans" => "挂载 NipaPlay共享媒体", "en" => "Mount NipaPlay shared media" }, style: title3)
+                        Text(content: tr! { "zh-Hans" => "连接已开启远程访问的 NipaPlay 设备。", "en" => "Connect to a NipaPlay device with remote access enabled." }, emphasis: secondary, lines: 2)
+                        TextInput(id: shared_name, label: tr! { "zh-Hans" => "备注名称（可选）", "en" => "Name (optional)" }, value: draft.shared_name, prompt: tr! { "zh-Hans" => "例如：家里的电脑", "en" => "e.g. Home computer" })
+                        TextInput(id: shared_address, label: tr! { "zh-Hans" => "访问地址", "en" => "Address" }, value: draft.shared_address, prompt: tr! { "zh-Hans" => "192.168.1.100:1180", "en" => "192.168.1.100:1180" })
+                        Text(content: tr! { "zh-Hans" => "局域网地址默认使用端口 1180，也可填写完整 HTTP(S) 地址。", "en" => "Local addresses use port 1180 by default. A full HTTP(S) address also works." }, style: caption, emphasis: secondary, lines: 2)
+                        if library.shared_connecting {
+                            Text(content: tr! { "zh-Hans" => "正在连接并读取共享媒体…", "en" => "Connecting and loading shared media…" }, style: caption, emphasis: secondary)
+                        } else if library.shared_error != "" {
+                            Text(content: library.shared_error, style: caption, lines: 3)
+                        }
+                    }
                 }
-                Spacer
                 Row(gap: 12, align: center) {
                     Spacer
                     Button(id: shared_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, role: cancel, shortcut: app.keys.back, prominence: plain) => library.cancel_shared_mount()
@@ -177,32 +182,37 @@ pub fn library_shared_mount(app: erika::Client, library: library::Client, #[sess
 #[component]
 pub fn library_remote_mount(app: erika::Client, library: library::Client, #[session] draft: LibraryDraft) -> impl View {
     ui! {
-        Modal(width: 460, height: 400, cover: compact, appear: pop_in, disappear: fade) {
+        // A card, also on a phone: the fields scroll above the buttons
+        // where the card is too short for them.
+        Modal(width: 460, height: 400, appear: pop_in, disappear: fade) {
             Column(gap: 14, padding: 24) {
-                if library.remote_editing > 0 {
-                    Text(content: tr! { "zh-Hans" => "编辑弹弹play共享媒体", "en" => "Edit dandanplay shared media" }, style: title3)
-                    Text(content: tr! { "zh-Hans" => "只改要改的项，留空的保持不变。", "en" => "Change only what you need; empty fields stay as they are." }, emphasis: secondary, lines: 2)
-                    TextInput(id: remote_name_edit, label: tr! { "zh-Hans" => "备注名称", "en" => "Name" }, value: draft.remote_edit_name, prompt: library.remote_name, clear_key: library.remote_saved)
-                    TextInput(id: remote_address_edit, label: tr! { "zh-Hans" => "访问地址", "en" => "Address" }, value: draft.remote_edit_address, prompt: library.remote_address, clear_key: library.remote_saved)
-                    if library.remote_has_token {
-                        TextInput(id: remote_token_edit, label: tr! { "zh-Hans" => "API 密钥", "en" => "API key" }, value: draft.remote_edit_token, kind: secure, prompt: tr! { "zh-Hans" => "已保存，留空不变", "en" => "Saved; leave empty to keep it" }, clear_key: library.remote_saved)
-                    } else {
-                        TextInput(id: remote_token_new, label: tr! { "zh-Hans" => "API 密钥（可选）", "en" => "API key (optional)" }, value: draft.remote_edit_token, kind: secure, prompt: tr! { "zh-Hans" => "可留空，按需填写", "en" => "Optional" }, clear_key: library.remote_saved)
+                ScrollView {
+                    Column(gap: 14) {
+                        if library.remote_editing > 0 {
+                            Text(content: tr! { "zh-Hans" => "编辑弹弹play共享媒体", "en" => "Edit dandanplay shared media" }, style: title3)
+                            Text(content: tr! { "zh-Hans" => "只改要改的项，留空的保持不变。", "en" => "Change only what you need; empty fields stay as they are." }, emphasis: secondary, lines: 2)
+                            TextInput(id: remote_name_edit, label: tr! { "zh-Hans" => "备注名称", "en" => "Name" }, value: draft.remote_edit_name, prompt: library.remote_name, clear_key: library.remote_saved)
+                            TextInput(id: remote_address_edit, label: tr! { "zh-Hans" => "访问地址", "en" => "Address" }, value: draft.remote_edit_address, prompt: library.remote_address, clear_key: library.remote_saved)
+                            if library.remote_has_token {
+                                TextInput(id: remote_token_edit, label: tr! { "zh-Hans" => "API 密钥", "en" => "API key" }, value: draft.remote_edit_token, kind: secure, prompt: tr! { "zh-Hans" => "已保存，留空不变", "en" => "Saved; leave empty to keep it" }, clear_key: library.remote_saved)
+                            } else {
+                                TextInput(id: remote_token_new, label: tr! { "zh-Hans" => "API 密钥（可选）", "en" => "API key (optional)" }, value: draft.remote_edit_token, kind: secure, prompt: tr! { "zh-Hans" => "可留空，按需填写", "en" => "Optional" }, clear_key: library.remote_saved)
+                            }
+                        } else {
+                            Text(content: tr! { "zh-Hans" => "挂载弹弹play共享媒体", "en" => "Mount dandanplay shared media" }, style: title3)
+                            Text(content: tr! { "zh-Hans" => "连接已开启「远程访问」的弹弹play 桌面端，它媒体库里的番剧会汇总到「番剧」里，可以直接播放。", "en" => "Connect to the dandanplay desktop app with remote access on. Its shows join Shows and play from here." }, emphasis: secondary, lines: 3)
+                            TextInput(id: remote_name, label: tr! { "zh-Hans" => "备注名称（可选）", "en" => "Name (optional)" }, value: draft.remote_name, prompt: tr! { "zh-Hans" => "例如：书房的电脑", "en" => "e.g. Study computer" }, clear_key: library.remote_saved)
+                            TextInput(id: remote_address, label: tr! { "zh-Hans" => "访问地址", "en" => "Address" }, value: draft.remote_address, prompt: tr! { "zh-Hans" => "例如：http://192.168.1.2:23333", "en" => "e.g. http://192.168.1.2:23333" }, clear_key: library.remote_saved)
+                            TextInput(id: remote_token, label: tr! { "zh-Hans" => "API 密钥（可选）", "en" => "API key (optional)" }, value: draft.remote_token, kind: secure, prompt: tr! { "zh-Hans" => "可留空，按需填写", "en" => "Optional" }, clear_key: library.remote_saved)
+                        }
+                        Text(content: tr! { "zh-Hans" => "地址和端口在弹弹play 桌面端的「远程访问」设置里；开启了 API 密钥验证时，填写那里设置的密钥。", "en" => "Find the address and port under Remote access in the dandanplay desktop app. If it asks for an API key, enter the key set there." }, style: caption, emphasis: secondary, lines: 3)
+                        if library.remote_connecting {
+                            Text(content: tr! { "zh-Hans" => "正在连接并读取弹弹play媒体库…", "en" => "Connecting and loading the dandanplay library…" }, style: caption, emphasis: secondary)
+                        } else if library.remote_error != "" {
+                            Text(content: library.remote_error, style: caption, lines: 3)
+                        }
                     }
-                } else {
-                    Text(content: tr! { "zh-Hans" => "挂载弹弹play共享媒体", "en" => "Mount dandanplay shared media" }, style: title3)
-                    Text(content: tr! { "zh-Hans" => "连接已开启「远程访问」的弹弹play 桌面端，它媒体库里的番剧会汇总到「番剧」里，可以直接播放。", "en" => "Connect to the dandanplay desktop app with remote access on. Its shows join Shows and play from here." }, emphasis: secondary, lines: 3)
-                    TextInput(id: remote_name, label: tr! { "zh-Hans" => "备注名称（可选）", "en" => "Name (optional)" }, value: draft.remote_name, prompt: tr! { "zh-Hans" => "例如：书房的电脑", "en" => "e.g. Study computer" }, clear_key: library.remote_saved)
-                    TextInput(id: remote_address, label: tr! { "zh-Hans" => "访问地址", "en" => "Address" }, value: draft.remote_address, prompt: tr! { "zh-Hans" => "例如：http://192.168.1.2:23333", "en" => "e.g. http://192.168.1.2:23333" }, clear_key: library.remote_saved)
-                    TextInput(id: remote_token, label: tr! { "zh-Hans" => "API 密钥（可选）", "en" => "API key (optional)" }, value: draft.remote_token, kind: secure, prompt: tr! { "zh-Hans" => "可留空，按需填写", "en" => "Optional" }, clear_key: library.remote_saved)
                 }
-                Text(content: tr! { "zh-Hans" => "地址和端口在弹弹play 桌面端的「远程访问」设置里；开启了 API 密钥验证时，填写那里设置的密钥。", "en" => "Find the address and port under Remote access in the dandanplay desktop app. If it asks for an API key, enter the key set there." }, style: caption, emphasis: secondary, lines: 3)
-                if library.remote_connecting {
-                    Text(content: tr! { "zh-Hans" => "正在连接并读取弹弹play媒体库…", "en" => "Connecting and loading the dandanplay library…" }, style: caption, emphasis: secondary)
-                } else if library.remote_error != "" {
-                    Text(content: library.remote_error, style: caption, lines: 3)
-                }
-                Spacer
                 Row(gap: 12, align: center) {
                     Spacer
                     // The key is hidden as it is typed: it does not wait,
