@@ -418,6 +418,14 @@ style! {
         settle: jelly,
     }
 
+    // The account's picture in place of the phone header's settings gear.
+    Button.phone_avatar {
+        corner: 15,
+        hover: none,
+        pressed: scale(0.92, press),
+        settle: jelly,
+    }
+
     Stack.phone_thumb {
         corner: 12,
     }

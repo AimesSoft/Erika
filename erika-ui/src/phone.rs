@@ -131,10 +131,18 @@ pub fn phone_tab_content(
 }
 
 /// The same trailing action is contributed to module-owned headers too.
+/// Signed in with a picture, the button is the account's picture; it opens
+/// the settings either way.
 #[component]
-pub fn phone_settings_button(#[session] draft: ErikaDraft) -> impl View {
+pub fn phone_settings_button(app: erika::Client, #[session] draft: ErikaDraft) -> impl View {
     ui! {
-        IconButton(id: phone_settings, icon: "gearshape", label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, prominence: plain) => draft.phone_settings.set(PhoneSettings::List)
+        if let Some(picture) = app.user_avatar {
+            Button(id: phone_settings_avatar, label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, variant: phone_avatar) {
+                Image(source: picture, width: 30, height: 30, corner: 15, fit: cover, label: app.user_name)
+            } => draft.phone_settings.set(PhoneSettings::List)
+        } else {
+            IconButton(id: phone_settings, icon: "gearshape", label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, prominence: plain) => draft.phone_settings.set(PhoneSettings::List)
+        }
     }
 }
 
@@ -223,7 +231,7 @@ pub fn phone_header(
                 IconButton(id: phone_back, icon: "chevron.left", font_size: 18, height: 44, label: anime.back) => anime.close()
                 Spacer
                 ControlGroup(label: tr! { "zh-Hans" => "页面操作", "en" => "Page actions" }, height: 44) {
-                    phone_settings_button()
+                    phone_settings_button(app: app)
                 }
             }
         } else if !build.modules.library || draft.page != MainPage::Library {
@@ -256,7 +264,7 @@ pub fn phone_header(
                     if build.modules.anime && draft.page == MainPage::Home {
                         IconButton(id: phone_open, icon: "plus", label: tr! { "zh-Hans" => "打开文件", "en" => "Open File" }, prominence: plain, pick: draft.file, files: "video") => app.open_file(draft.file)
                     }
-                    phone_settings_button()
+                    phone_settings_button(app: app)
                 }
             }
             // The season under the title (`.x-mut`, 13 / 18), 4 points up
