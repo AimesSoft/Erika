@@ -118,7 +118,7 @@ pub fn search_commands(
                 }
                 // A television has no files to open.
                 if actions.open_file && !window.tv {
-                    SearchItem(id: open_file, label: tr! { "zh-Hans" => "打开文件…", "en" => "Open File…" }, icon: "folder", hint: tr! { "zh-Hans" => "⌘O", "en" => "⌘O" }, pick: draft.file, files: "video") => app.open_file(draft.file)
+                    SearchItem(id: open_file, label: tr! { "zh-Hans" => "打开文件…", "en" => "Open File…" }, icon: "folder", hint: app.open_key, pick: draft.file, files: "video") => app.open_file(draft.file)
                 }
                 if build.modules.anime && actions.schedule {
                     SearchItem(id: schedule, label: tr! { "zh-Hans" => "新番表", "en" => "Airing Schedule" }, icon: "calendar") => draft.page.set(MainPage::New)

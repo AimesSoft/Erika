@@ -24,7 +24,7 @@ pub fn library_sources_page(app: erika::Client, library: library::Client) -> imp
                 }
             }
             if library.shared_prompt {
-                library_shared_mount(library: library)
+                library_shared_mount(app: app, library: library)
             }
         }
     }
@@ -139,7 +139,7 @@ pub fn library_source_list(library: library::Client, #[session] draft: LibraryDr
 
 /// The same connection fields as NipaPlay's shared-host dialog.
 #[component]
-pub fn library_shared_mount(library: library::Client, #[session] draft: LibraryDraft) -> impl View {
+pub fn library_shared_mount(app: erika::Client, library: library::Client, #[session] draft: LibraryDraft) -> impl View {
     ui! {
         Modal(width: 440, height: 360, cover: compact, appear: pop_in, disappear: fade) {
             Column(gap: 16, padding: 24) {
@@ -156,7 +156,7 @@ pub fn library_shared_mount(library: library::Client, #[session] draft: LibraryD
                 Spacer
                 Row(gap: 12, align: center) {
                     Spacer
-                    Button(id: shared_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, role: cancel, shortcut: "escape", prominence: plain) => library.cancel_shared_mount()
+                    Button(id: shared_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, role: cancel, shortcut: app.keys.back, prominence: plain) => library.cancel_shared_mount()
                     Button(id: shared_mount, label: tr! { "zh-Hans" => "挂载", "en" => "Mount" }, prominence: prominent, enabled: !library.shared_connecting) => library.mount_shared(draft.shared_name, draft.shared_address)
                 }
             }

@@ -34,7 +34,7 @@ pub fn settings(
         Stack(variant: app_window, align: bottom, reduce_motion: app.preferences.reduce_motion) {
             SplitView {
                 Sidebar(id: settings_sections, width: 220, selection: draft.page) {
-                    Search(id: settings_search, value: draft.query, prompt: tr! { "zh-Hans" => "搜索设置", "en" => "Search settings" }, shortcut: "cmd+k") {
+                    Search(id: settings_search, value: draft.query, prompt: tr! { "zh-Hans" => "搜索设置", "en" => "Search settings" }, shortcut: app.keys.search) {
                         Query(id: settings_results, query: app.find_settings(draft.query), empty: tr! { "zh-Hans" => "没有匹配的设置", "en" => "No matching settings" }) |results| {
                             ForEach(items: results, key: id) |result| {
                                 Button(id: settings_result, label: result.item, variant: row, clears: draft.query) {
@@ -898,50 +898,171 @@ pub fn settings_preview(app: erika::Client, width: f64) -> impl View {
         }
     }
 }
+/// 「设置 › 快捷键」: every shortcut, which a press of its button and then
+/// of the new keys changes. Keys another action has are refused with a
+/// notice; a changed shortcut offers its default back. The menu bar's own
+/// actions show only where the menu bar does.
 #[component]
 pub fn settings_keys(app: erika::Client) -> impl View {
     ui! {
         Form(variant: settings_form, appear: settings_page_in) {
             Slot(id: form_header)
             Section(title: tr! { "zh-Hans" => "播放", "en" => "Playback" }) {
-                Row(gap: 12, align: center) {
-                    Text(content: tr! { "zh-Hans" => "播放 / 暂停", "en" => "Play / pause" }, style: body)
+                Row(gap: 8, align: center) {
+                    Text(content: tr! { "zh-Hans" => "播放 / 暂停", "en" => "Play / Pause" }, style: body)
                     Spacer
-                    Text(content: tr! { "zh-Hans" => "空格", "en" => "Space" }, style: body, emphasis: secondary)
-                }
-                Row(gap: 12, align: center) {
-                    Text(content: tr! { "zh-Hans" => "快退 / 快进 5 秒", "en" => "Seek backward / forward 5 seconds" }, style: body)
-                    Spacer
-                    Text(content: tr! { "zh-Hans" => "← / →", "en" => "← / →" }, style: body, emphasis: secondary)
-                }
-                if (build.modules.danmaku && app.features.danmaku) {
-                    Row(gap: 12, align: center) {
-                        Text(content: tr! { "zh-Hans" => "开关弹幕", "en" => "Toggle danmaku" }, style: body)
-                        Spacer
-                        Text(content: tr! { "zh-Hans" => "D", "en" => "D" }, style: body, emphasis: secondary)
+                    if app.keys.play_pause != app.default_keys.play_pause {
+                        IconButton(id: key_play_pause_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::PlayPause)
                     }
+                    ShortcutInput(id: key_play_pause, label: tr! { "zh-Hans" => "播放 / 暂停", "en" => "Play / Pause" }, label_hidden: true, current: app.keys.play_pause) => app.set_shortcut(KeyAction::PlayPause, app.keys.play_pause)
                 }
-                Row(gap: 12, align: center) {
+                Row(gap: 8, align: center) {
+                    Text(content: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 seconds" }, style: body)
+                    Spacer
+                    if app.keys.seek_back != app.default_keys.seek_back {
+                        IconButton(id: key_seek_back_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::SeekBack)
+                    }
+                    ShortcutInput(id: key_seek_back, label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 seconds" }, label_hidden: true, current: app.keys.seek_back) => app.set_shortcut(KeyAction::SeekBack, app.keys.seek_back)
+                }
+                Row(gap: 8, align: center) {
+                    Text(content: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }, style: body)
+                    Spacer
+                    if app.keys.seek_forward != app.default_keys.seek_forward {
+                        IconButton(id: key_seek_forward_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::SeekForward)
+                    }
+                    ShortcutInput(id: key_seek_forward, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }, label_hidden: true, current: app.keys.seek_forward) => app.set_shortcut(KeyAction::SeekForward, app.keys.seek_forward)
+                }
+                Row(gap: 8, align: center) {
                     Text(content: tr! { "zh-Hans" => "全屏", "en" => "Full screen" }, style: body)
                     Spacer
-                    Text(content: tr! { "zh-Hans" => "F", "en" => "F" }, style: body, emphasis: secondary)
+                    if app.keys.fullscreen != app.default_keys.fullscreen {
+                        IconButton(id: key_fullscreen_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::Fullscreen)
+                    }
+                    ShortcutInput(id: key_fullscreen, label: tr! { "zh-Hans" => "全屏", "en" => "Full screen" }, label_hidden: true, current: app.keys.fullscreen) => app.set_shortcut(KeyAction::Fullscreen, app.keys.fullscreen)
+                }
+                if build.modules.danmaku && app.features.danmaku {
+                    Row(gap: 8, align: center) {
+                        Text(content: tr! { "zh-Hans" => "开关弹幕", "en" => "Show or hide danmaku" }, style: body)
+                        Spacer
+                        if app.keys.toggle_danmaku != app.default_keys.toggle_danmaku {
+                            IconButton(id: key_toggle_danmaku_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::ToggleDanmaku)
+                        }
+                        ShortcutInput(id: key_toggle_danmaku, label: tr! { "zh-Hans" => "开关弹幕", "en" => "Show or hide danmaku" }, label_hidden: true, current: app.keys.toggle_danmaku) => app.set_shortcut(KeyAction::ToggleDanmaku, app.keys.toggle_danmaku)
+                    }
+                }
+                Row(gap: 8, align: center) {
+                    Text(content: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, style: body)
+                    Spacer
+                    if app.keys.screenshot != app.default_keys.screenshot {
+                        IconButton(id: key_screenshot_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::Screenshot)
+                    }
+                    ShortcutInput(id: key_screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, label_hidden: true, current: app.keys.screenshot) => app.set_shortcut(KeyAction::Screenshot, app.keys.screenshot)
                 }
             }
-            Section(title: tr! { "zh-Hans" => "全局", "en" => "Global" }) {
-                Row(gap: 12, align: center) {
+            Section(title: tr! { "zh-Hans" => "通用", "en" => "General" }) {
+                Row(gap: 8, align: center) {
                     Text(content: tr! { "zh-Hans" => "打开文件", "en" => "Open file" }, style: body)
                     Spacer
-                    Text(content: tr! { "zh-Hans" => "⌘O", "en" => "⌘O" }, style: body, emphasis: secondary)
+                    if app.keys.open_file != app.default_keys.open_file {
+                        IconButton(id: key_open_file_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::OpenFile)
+                    }
+                    ShortcutInput(id: key_open_file, label: tr! { "zh-Hans" => "打开文件", "en" => "Open file" }, label_hidden: true, current: app.keys.open_file) => app.set_shortcut(KeyAction::OpenFile, app.keys.open_file)
                 }
-                Row(gap: 12, align: center) {
+                Row(gap: 8, align: center) {
                     Text(content: tr! { "zh-Hans" => "搜索", "en" => "Search" }, style: body)
                     Spacer
-                    Text(content: tr! { "zh-Hans" => "⌘K", "en" => "⌘K" }, style: body, emphasis: secondary)
+                    if app.keys.search != app.default_keys.search {
+                        IconButton(id: key_search_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::Search)
+                    }
+                    ShortcutInput(id: key_search, label: tr! { "zh-Hans" => "搜索", "en" => "Search" }, label_hidden: true, current: app.keys.search) => app.set_shortcut(KeyAction::Search, app.keys.search)
                 }
-                Row(gap: 12, align: center) {
+                Row(gap: 8, align: center) {
                     Text(content: tr! { "zh-Hans" => "设置", "en" => "Settings" }, style: body)
                     Spacer
-                    Text(content: tr! { "zh-Hans" => "⌘,", "en" => "⌘," }, style: body, emphasis: secondary)
+                    if app.keys.settings != app.default_keys.settings {
+                        IconButton(id: key_settings_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::Settings)
+                    }
+                    ShortcutInput(id: key_settings, label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, label_hidden: true, current: app.keys.settings) => app.set_shortcut(KeyAction::Settings, app.keys.settings)
+                }
+                Row(gap: 8, align: center) {
+                    Text(content: tr! { "zh-Hans" => "返回 / 关闭", "en" => "Back / close" }, style: body)
+                    Spacer
+                    if app.keys.back != app.default_keys.back {
+                        IconButton(id: key_back_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::Back)
+                    }
+                    ShortcutInput(id: key_back, label: tr! { "zh-Hans" => "返回 / 关闭", "en" => "Back / close" }, label_hidden: true, current: app.keys.back) => app.set_shortcut(KeyAction::Back, app.keys.back)
+                }
+                Row(gap: 8, align: center) {
+                    Text(content: tr! { "zh-Hans" => "确认", "en" => "Confirm" }, style: body)
+                    Spacer
+                    if app.keys.confirm != app.default_keys.confirm {
+                        IconButton(id: key_confirm_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::Confirm)
+                    }
+                    ShortcutInput(id: key_confirm, label: tr! { "zh-Hans" => "确认", "en" => "Confirm" }, label_hidden: true, current: app.keys.confirm) => app.set_shortcut(KeyAction::Confirm, app.keys.confirm)
+                }
+            }
+            if build.modules.library && app.features.library {
+                Section(title: tr! { "zh-Hans" => "媒体库", "en" => "Library" }) {
+                    Row(gap: 8, align: center) {
+                        Text(content: tr! { "zh-Hans" => "缩小海报", "en" => "Smaller posters" }, style: body)
+                        Spacer
+                        if app.keys.smaller_posters != app.default_keys.smaller_posters {
+                            IconButton(id: key_smaller_posters_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::SmallerPosters)
+                        }
+                        ShortcutInput(id: key_smaller_posters, label: tr! { "zh-Hans" => "缩小海报", "en" => "Smaller posters" }, label_hidden: true, current: app.keys.smaller_posters) => app.set_shortcut(KeyAction::SmallerPosters, app.keys.smaller_posters)
+                    }
+                    Row(gap: 8, align: center) {
+                        Text(content: tr! { "zh-Hans" => "放大海报", "en" => "Larger posters" }, style: body)
+                        Spacer
+                        if app.keys.larger_posters != app.default_keys.larger_posters {
+                            IconButton(id: key_larger_posters_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::LargerPosters)
+                        }
+                        ShortcutInput(id: key_larger_posters, label: tr! { "zh-Hans" => "放大海报", "en" => "Larger posters" }, label_hidden: true, current: app.keys.larger_posters) => app.set_shortcut(KeyAction::LargerPosters, app.keys.larger_posters)
+                    }
+                }
+            }
+            // Only the menu bar has these, and only the Mac shows it.
+            if window.menu_bar {
+                Section(title: tr! { "zh-Hans" => "菜单栏", "en" => "Menu Bar" }, footer: tr! { "zh-Hans" => "这些操作只在菜单栏中，没有界面上的按钮。", "en" => "These are in the menu bar only, with no button in the window." }) {
+                    Row(gap: 8, align: center) {
+                        Text(content: tr! { "zh-Hans" => "打开文件夹", "en" => "Open folder" }, style: body)
+                        Spacer
+                        if app.keys.open_folder != app.default_keys.open_folder {
+                            IconButton(id: key_open_folder_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::OpenFolder)
+                        }
+                        ShortcutInput(id: key_open_folder, label: tr! { "zh-Hans" => "打开文件夹", "en" => "Open folder" }, label_hidden: true, current: app.keys.open_folder) => app.set_shortcut(KeyAction::OpenFolder, app.keys.open_folder)
+                    }
+                    Row(gap: 8, align: center) {
+                        Text(content: tr! { "zh-Hans" => "打开链接", "en" => "Open link" }, style: body)
+                        Spacer
+                        if app.keys.open_link != app.default_keys.open_link {
+                            IconButton(id: key_open_link_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::OpenLink)
+                        }
+                        ShortcutInput(id: key_open_link, label: tr! { "zh-Hans" => "打开链接", "en" => "Open link" }, label_hidden: true, current: app.keys.open_link) => app.set_shortcut(KeyAction::OpenLink, app.keys.open_link)
+                    }
+                    Row(gap: 8, align: center) {
+                        Text(content: tr! { "zh-Hans" => "上一集", "en" => "Previous episode" }, style: body)
+                        Spacer
+                        if app.keys.previous_episode != app.default_keys.previous_episode {
+                            IconButton(id: key_previous_episode_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::PreviousEpisode)
+                        }
+                        ShortcutInput(id: key_previous_episode, label: tr! { "zh-Hans" => "上一集", "en" => "Previous episode" }, label_hidden: true, current: app.keys.previous_episode) => app.set_shortcut(KeyAction::PreviousEpisode, app.keys.previous_episode)
+                    }
+                    Row(gap: 8, align: center) {
+                        Text(content: tr! { "zh-Hans" => "下一集", "en" => "Next episode" }, style: body)
+                        Spacer
+                        if app.keys.next_episode != app.default_keys.next_episode {
+                            IconButton(id: key_next_episode_default, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "恢复默认", "en" => "Restore default" }, prominence: plain) => app.reset_shortcut(KeyAction::NextEpisode)
+                        }
+                        ShortcutInput(id: key_next_episode, label: tr! { "zh-Hans" => "下一集", "en" => "Next episode" }, label_hidden: true, current: app.keys.next_episode) => app.set_shortcut(KeyAction::NextEpisode, app.keys.next_episode)
+                    }
+                }
+            }
+            Section {
+                Row(gap: 12, align: center) {
+                    Text(content: tr! { "zh-Hans" => "点按快捷键，再按下新的组合键；Esc 取消，⌫ 清除。已被其他操作使用的组合不会生效。", "en" => "Click a shortcut, then press the new keys; Esc cancels and ⌫ clears it. Keys another action uses are not taken." }, style: caption, emphasis: secondary)
+                    Spacer
+                    Button(id: keys_defaults, label: tr! { "zh-Hans" => "全部恢复默认", "en" => "Restore All Defaults" }, enabled: app.keys_changed) => app.reset_shortcuts()
                 }
             }
         }

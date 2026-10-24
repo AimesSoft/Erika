@@ -64,7 +64,7 @@ pub fn tv_shell(
             // The remote's Back closes a show's details, as the design's
             // way back does (菜单 → 播放器 → 弹窗 → 详情 → 首页).
             if build.modules.anime && anime.opened > 0 && !app.playing {
-                Shortcut(key: "escape") => anime.close()
+                Shortcut(key: app.keys.back) => anime.close()
             }
             // 「打开链接」 in the television's scene.
             if app.link_prompt {

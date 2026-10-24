@@ -14,6 +14,7 @@ mod chapters;
 mod danmaku;
 mod history;
 mod kernel;
+mod keys;
 mod matching;
 mod playback_preferences;
 mod player;
@@ -234,10 +235,14 @@ impl Default for ErikaEngine {
                 user_avatar: None,
                 account_status: Account::default(),
                 bangumi: BangumiAccount::default(),
+                keys: keys::defaults(),
+                default_keys: keys::defaults(),
+                keys_changed: false,
             },
         };
         engine.restore_welcome_preferences();
         engine.restore_playback_preferences();
+        engine.restore_shortcuts();
         engine.state.player.subtitle_supersampling =
             engine.db.setting("subtitle_supersampling").as_deref() != Some("false");
         engine.state.player.skip_intro =
@@ -1012,6 +1017,19 @@ impl erika::Commands for ErikaEngine {
     fn set_appearance(&mut self, appearance: Appearance) -> Result<(), CommandError> {
         self.state.appearance = appearance;
         self.save_welcome_preferences()?;
+        Ok(())
+    }
+
+    fn set_shortcut(&mut self, action: KeyAction, keys: String) -> Result<(), CommandError> {
+        self.change_shortcut(action, keys)
+    }
+
+    fn reset_shortcut(&mut self, action: KeyAction) -> Result<(), CommandError> {
+        self.reset_shortcut_of(action)
+    }
+
+    fn reset_shortcuts(&mut self) -> Result<(), CommandError> {
+        self.reset_all_shortcuts();
         Ok(())
     }
 }
