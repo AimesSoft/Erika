@@ -143,10 +143,6 @@ impl Runtime {
         self.eval("__erikaReply(null, null);".into(), Purpose::Settle);
     }
 
-    pub fn idle(&self) -> bool {
-        self.running.is_empty()
-    }
-
     /// The evaluations that finished, in the order they were made; the
     /// others wake the engine when they do.
     pub fn finished(&mut self, waker: &Waker) -> Vec<(Purpose, Result<Value, String>)> {

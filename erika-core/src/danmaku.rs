@@ -257,7 +257,7 @@ impl ErikaEngine {
         if kernel.mount_danmaku_file(&source.url, &file) {
             return;
         }
-        match read_text(source).and_then(|contents| kernel.add_danmaku(&file, &contents)) {
+        match read_text(source).and_then(|contents| self.load_danmaku(&kernel, &file, &contents)) {
             Ok(count) => {
                 self.add_danmaku_source(file.clone(), count);
                 self.notify(Notice::DanmakuMounted {
@@ -279,7 +279,7 @@ impl ErikaEngine {
                 continue;
             };
             let file = self.source_name(&source);
-            if let Ok(count) = kernel.add_danmaku(&file, &contents) {
+            if let Ok(count) = self.load_danmaku(&kernel, &file, &contents) {
                 self.add_danmaku_source(file, count);
             }
         }

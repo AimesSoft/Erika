@@ -27,7 +27,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// What the plugins keep between runs, in `plugins/state.json`.
+/// What the plugins keep between runs: which are on, their settings and
+/// storage, and whether one unlocked the downloader.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct Saved {
     pub enabled: Vec<String>,
@@ -59,27 +60,26 @@ impl Saved {
         }
     }
 
-    fn path() -> Option<PathBuf> {
-        store::folder().map(|folder| folder.join("state.json"))
-    }
-
-    fn load() -> Saved {
-        Saved::path()
-            .and_then(|path| std::fs::read(path).ok())
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .map(|value| Saved::from_value(&value))
+    /// What was kept: in the database, which the account sync carries, or
+    /// in the plugins folder where an earlier Erika kept it.
+    fn load(db: &erika_store::Db) -> Saved {
+        db.extension(EXTENSION)
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .or_else(|| {
+                let path = store::folder()?.join("state.json");
+                serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+            })
+            .map(|value: Value| Saved::from_value(&value))
             .unwrap_or_default()
     }
 
-    fn save(&self) {
-        if let Some(path) = Saved::path() {
-            if let Some(folder) = path.parent() {
-                let _ = std::fs::create_dir_all(folder);
-            }
-            let _ = std::fs::write(path, self.to_value().to_string());
-        }
+    fn save(&self, db: &erika_store::Db) {
+        db.set_extension(EXTENSION, Some(&self.to_value().to_string()));
     }
 }
+
+/// The plugins' part of the database's extensions.
+const EXTENSION: &str = "plugins";
 
 /// What a running plugin added to Erika's controls (`extend`).
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -141,6 +141,14 @@ pub(crate) struct Plugins {
     suggesting: u64,
     /// The link a plugin is resolving.
     resolution: Option<links::Resolution>,
+    /// The comments of what plays, by track, and the track passing along
+    /// the plugins.
+    tracks: BTreeMap<String, hooks::Track>,
+    last_track: String,
+    chain: Option<hooks::Chain>,
+    waiting_tracks: Vec<String>,
+    /// Whether the anime module shows the episodes' mark buttons.
+    watched_button: bool,
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     processes: HashMap<String, std::process::Child>,
 }
@@ -165,6 +173,11 @@ impl Default for Plugins {
             next_tag: 1,
             suggesting: 0,
             resolution: None,
+            tracks: BTreeMap::new(),
+            last_track: String::new(),
+            chain: None,
+            waiting_tracks: Vec::new(),
+            watched_button: false,
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             processes: HashMap::new(),
         }
@@ -226,12 +239,6 @@ impl Plugins {
         }
         all
     }
-
-    /// The section account sync keeps of the plugins: which are on, their
-    /// settings and storage.
-    pub(crate) fn sync_section(&self) -> Value {
-        self.saved.to_value()
-    }
 }
 
 /// The settings sheet with no plugin open.
@@ -272,7 +279,7 @@ impl ErikaEngine {
     /// Read what is installed and start the enabled ones; read the market.
     fn start_plugins(&mut self) {
         self.plugins.started = true;
-        self.plugins.saved = Saved::load();
+        self.plugins.saved = Saved::load(&self.db);
         if self.plugins.saved.downloader {
             self.unlock_downloader(true);
         }
@@ -522,13 +529,20 @@ impl ErikaEngine {
                 return;
             }
         };
+        let mut words_changed = false;
         if let Some(plugin) = self.plugins.find_mut(id) {
             if let Some(entries) = reply.get("entries").and_then(Value::as_array) {
                 plugin.entries = entries.clone();
             }
-            if let Some(words) = strings(reply.get("blockWords")) {
+            if let Some(words) = strings(reply.get("blockWords"))
+                && words != plugin.block_words
+            {
                 plugin.block_words = words;
+                words_changed = purpose != Purpose::Load;
             }
+        }
+        if words_changed {
+            self.reload_plugin_danmaku();
         }
         let error = reply.get("error").and_then(Value::as_str).map(String::from);
         if purpose == Purpose::Load {
@@ -546,6 +560,9 @@ impl ErikaEngine {
                     if let Some(plugin) = self.plugins.find_mut(id) {
                         plugin.loaded = true;
                         plugin.error.clear();
+                    }
+                    if !self.plugins.tracks.is_empty() {
+                        self.rerun_plugin_danmaku();
                     }
                 }
             }
@@ -603,7 +620,7 @@ impl ErikaEngine {
         };
         if let Some(call) = Call::parse(name, args) {
             if pack.has(call.permission()) {
-                self.apply_playback_call(call);
+                self.apply_playback_call(id, call);
             }
             return;
         }
@@ -624,31 +641,31 @@ impl ErikaEngine {
             "uiShowDialog" if pack.has("ui.dialog") => self.show_plugin_message(text(0), text(1)),
             "storageSet" if pack.has("storage") => {
                 saved.storage.entry(id.into()).or_default().insert(text(0), text(1));
-                saved.save();
+                saved.save(&self.db);
             }
             "storageRemove" if pack.has("storage") => {
                 saved.storage.entry(id.into()).or_default().remove(&text(0));
-                saved.save();
+                saved.save(&self.db);
             }
             "storageClear" if pack.has("storage") => {
                 saved.storage.remove(id);
-                saved.save();
+                saved.save(&self.db);
             }
             "pluginSetTextSetting" => {
                 saved.text.entry(id.into()).or_default().insert(text(0), text(1));
-                saved.save();
+                saved.save(&self.db);
                 self.show_plugins();
             }
             "pluginSetSwitchSetting" => {
                 saved.switches.entry(id.into()).or_default().insert(text(0), flag(1));
-                saved.save();
+                saved.save(&self.db);
                 self.show_plugins();
             }
             "devLog" => eprintln!("erika: plugin {id}: {}", text(0)),
             "devLogError" => eprintln!("erika: plugin {id}: error: {}", text(0)),
             "systemSetDownloaderEnabled" if pack.has("system.override") => {
                 saved.downloader = flag(0);
-                saved.save();
+                saved.save(&self.db);
                 self.unlock_downloader(flag(0));
             }
             "processStart" if pack.has("system.override") => self.start_process(id, args),
@@ -714,7 +731,7 @@ impl ErikaEngine {
         }
     }
 
-    fn apply_playback_call(&mut self, call: Call) {
+    fn apply_playback_call(&mut self, id: &str, call: Call) {
         match call {
             Call::Play if self.state.paused => {
                 let _ = erika::Commands::toggle_pause(self);
@@ -751,7 +768,7 @@ impl ErikaEngine {
                     self.reload_plugin_danmaku();
                 }
             }
-            Call::ReplaceDanmaku(comments) => self.replace_plugin_danmaku(comments),
+            Call::ReplaceDanmaku(comments) => self.replace_plugin_danmaku(id, comments),
             _ => {}
         }
     }
@@ -761,6 +778,34 @@ impl ErikaEngine {
         self.show_speeds();
         self.state.download_quick_select = self.plugins.extensions().quick_select;
         self.plugin_controls_changed();
+    }
+
+    /// The account sync brought what was kept of the plugins from another
+    /// device: those turned on there run here, from the market when they
+    /// are not installed yet.
+    pub(crate) fn plugins_restored(&mut self) {
+        if !self.plugins.started {
+            return;
+        }
+        let saved = Saved::load(&self.db);
+        if saved == self.plugins.saved {
+            return;
+        }
+        let ids: Vec<String> = self.plugins.runtimes.keys().cloned().collect();
+        for id in ids {
+            self.stop_runtime(&id);
+        }
+        self.plugins.saved = saved;
+        self.unlock_downloader(self.plugins.saved.downloader);
+        for id in self.plugins.saved.enabled.clone() {
+            if self.plugins.find(&id).is_some() {
+                self.start_runtime(&id);
+            } else if self.plugins.listings.iter().any(|listing| listing.pack.id == id) {
+                let _ = self.install_plugin_command(id);
+            }
+        }
+        self.rerun_plugin_danmaku();
+        self.show_plugins();
     }
 
     /// Show the downloader where Erika hides it, or hide it again: the
@@ -915,7 +960,7 @@ impl ErikaEngine {
         // A new plugin is turned on; an update keeps the switch it had.
         if !was_enabled && !self.plugins.saved.enabled.contains(&id) {
             self.plugins.saved.enabled.push(id.clone());
-            self.plugins.saved.save();
+            self.plugins.saved.save(&self.db);
         }
         if self.plugins.enabled(&id) {
             self.start_runtime(&id);
@@ -1135,11 +1180,11 @@ impl ErikaEngine {
         saved.text.remove(&id);
         saved.switches.remove(&id);
         saved.storage.remove(&id);
-        saved.save();
+        saved.save(&self.db);
         if self.plugins.open.as_deref() == Some(id.as_str()) {
             self.plugins.open = None;
         }
-        self.reload_plugin_danmaku();
+        self.rerun_plugin_danmaku();
         self.show_plugins();
         Ok(())
     }
@@ -1164,8 +1209,8 @@ impl ErikaEngine {
                 self.unlock_downloader(false);
             }
         }
-        self.plugins.saved.save();
-        self.reload_plugin_danmaku();
+        self.plugins.saved.save(&self.db);
+        self.rerun_plugin_danmaku();
         self.show_plugins();
         Ok(())
     }
@@ -1207,7 +1252,7 @@ impl ErikaEngine {
             .entry(id.clone())
             .or_default()
             .insert(entry.clone(), value);
-        self.plugins.saved.save();
+        self.plugins.saved.save(&self.db);
         // NipaPlay calls the action for a switch, and reads the lists anew.
         self.invoke_action(&id, &entry);
         self.show_plugins();
@@ -1222,7 +1267,7 @@ impl ErikaEngine {
             .entry(id)
             .or_default()
             .insert(entry, value);
-        self.plugins.saved.save();
+        self.plugins.saved.save(&self.db);
         self.show_plugins();
         Ok(())
     }

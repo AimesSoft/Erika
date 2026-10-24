@@ -1,7 +1,7 @@
 //! A NipaPlay plugin, run in Boa through the engine as the app runs it.
 
 use super::*;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 const ECHO: &str = r#"
@@ -262,4 +262,99 @@ fn a_plugin_resolves_a_link_in_rounds() {
     settle(&mut engine, |engine| !engine.state.link_resolving);
     assert_eq!(engine.state.title, "clip");
     engine.uninstall_plugin_command("test.resolver".into()).unwrap();
+}
+
+/// A kernel that keeps the comments it is given, by track.
+#[derive(Default)]
+struct Shown(Mutex<BTreeMap<String, Vec<String>>>);
+
+impl crate::kernel::Kernel for Shown {
+    fn ready(&self) -> bool {
+        true
+    }
+    fn open(&self, _url: &str, _start: f64) {}
+    fn play(&self) {}
+    fn pause(&self) {}
+    fn seek(&self, _seconds: f64) {}
+    fn set_volume(&self, _volume: f64) {}
+    fn set_rate(&self, _rate: f64) {}
+    fn select_audio(&self, _id: i64) {}
+    fn select_subtitle(&self, _id: Option<i64>) {}
+    fn add_subtitle(&self, _url: &str) {}
+    fn set_subtitle_scale(&self, _scale: f64) {}
+    fn set_subtitle_supersampling(&self, _enabled: bool) {}
+    fn set_enhancement(&self, _enhancement: Enhancement) {}
+    fn set_danmaku(&self, _config: &crate::kernel::DanmakuConfig) {}
+    fn add_danmaku(&self, name: &str, contents: &str) -> Result<usize, String> {
+        let comments: Value = serde_json::from_str(contents).map_err(|e| e.to_string())?;
+        let texts: Vec<String> = comments
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["content"].as_str().unwrap().to_string())
+            .collect();
+        let count = texts.len();
+        self.0.lock().unwrap().insert(name.to_string(), texts);
+        Ok(count)
+    }
+    fn send_danmaku(&self, _text: &str, _rgb: u32) {}
+    fn capture(&self, _path: &std::path::Path, _width: Option<u32>) {}
+    fn close(&self) {}
+    fn playback(&self) -> crate::kernel::Playback {
+        Default::default()
+    }
+}
+
+const TRIM: &str = r#"
+const pluginManifest = {
+  id: 'test.trim', name: '去掉哈哈', version: '1.0.0', minHostVersion: '1.0.0',
+  permissions: ['danmaku.modify'], priority: 10,
+};
+function pluginOnEvent(event) {
+  if (event.name !== 'danmakuLoaded') return;
+  var kept = event.data.danmaku.filter(function (c) { return c.content !== '哈哈哈'; });
+  danmaku.replace({ count: kept.length, comments: kept });
+}
+"#;
+
+const HIDE: &str = r#"
+const pluginManifest = {
+  id: 'test.hide', name: '屏蔽剧透', version: '1.0.0', minHostVersion: '1.0.0',
+  permissions: ['danmaku.modify'], priority: 20,
+};
+var pluginBlockWords = ['剧透'];
+"#;
+
+#[test]
+fn comments_pass_along_the_plugins_and_their_block_lists() {
+    let folder = folder();
+    for (name, script) in [("trim.js", TRIM), ("hide.js", HIDE)] {
+        std::fs::write(folder.join(name), script).unwrap();
+    }
+    let mut engine = ErikaEngine::default();
+    let shown = Arc::new(Shown::default());
+    engine.kernel = Some(shown.clone());
+    engine.state.video = true;
+    engine.plugins_wake();
+    engine.import_plugin_command(MediaSource::file(folder.join("trim.js"))).unwrap();
+    engine.import_plugin_command(MediaSource::file(folder.join("hide.js"))).unwrap();
+    settle(&mut engine, |engine| {
+        ["test.trim", "test.hide"]
+            .iter()
+            .all(|id| row(engine, id).is_some_and(|p| p.loaded))
+    });
+
+    let kernel: Arc<dyn crate::kernel::Kernel> = shown.clone();
+    let contents = r#"[{"time":1,"content":"好看"},{"time":2,"content":"哈哈哈"},{"time":3,"content":"前方剧透"}]"#;
+    // The block list hides at once; the plugin's turn follows.
+    assert_eq!(engine.load_danmaku(&kernel, "弹弹play", contents).unwrap(), 2);
+    settle(&mut engine, |_| shown.0.lock().unwrap()["弹弹play"] == ["好看"]);
+
+    // Turned off, what it took out comes back.
+    engine.set_plugin_enabled_command("test.trim".into(), false).unwrap();
+    assert_eq!(shown.0.lock().unwrap()["弹弹play"], ["好看", "哈哈哈"]);
+    for id in ["test.trim", "test.hide"] {
+        engine.uninstall_plugin_command(id.into()).unwrap();
+    }
+    assert_eq!(shown.0.lock().unwrap()["弹弹play"].len(), 3);
 }

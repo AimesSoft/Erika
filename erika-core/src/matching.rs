@@ -435,7 +435,7 @@ impl ErikaEngine {
                     match result {
                         Ok((json, count)) => {
                             if let Some(kernel) = self.kernel().filter(|_| self.state.video) {
-                                if kernel.add_danmaku("弹弹play", &json).is_ok() {
+                                if self.load_danmaku(&kernel, "弹弹play", &json).is_ok() {
                                     self.online_danmaku_count = count;
                                     self.add_danmaku_source("弹弹play".into(), count);
                                 }

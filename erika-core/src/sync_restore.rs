@@ -34,6 +34,7 @@ impl ErikaEngine {
                 self.db.setting("danmaku_supersampling").as_deref() != Some("false");
             self.apply_enhancement();
             self.apply_danmaku();
+            self.plugins_restored();
         }
         #[cfg(feature = "bern-module-account")]
         if accounts && self.state.features.account {
