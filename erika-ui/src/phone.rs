@@ -608,16 +608,14 @@ pub fn phone_settings_hit(result: SettingResult) -> impl View {
     }
 }
 
-/// The account's picture at 60 points, as the system's settings show theirs.
+/// The account's picture at 60 points, as the system's settings show theirs;
+/// the white outline of the app's logo on a dark grey disc until the
+/// account has a picture of its own.
 #[component]
 pub fn phone_account_picture(app: erika::Client) -> impl View {
     ui! {
-        Stack(variant: avatar, width: 60, height: 60) {
-            Canvas(width: 60, height: 60, label: tr! { "zh-Hans" => "头像", "en" => "Avatar" }) {
-                Shape(kind: ellipse, fill: fill.strong)
-                Shape(kind: ellipse, x: 21.1, y: 15.1, width: 17.8, height: 17.8, fill: text.secondary, opacity: 0.5)
-                Shape(kind: ellipse, x: -6, y: 32.4, width: 72, height: 55.2, fill: text.secondary, opacity: 0.5)
-            }
+        Stack(variant: avatar_blank, width: 60, height: 60, align: center) {
+            Svg(source: "design/brand/erika-icon-export/svg/erika-mono-white.svg", width: 46, height: 46, label: tr! { "zh-Hans" => "头像", "en" => "Avatar" })
             if let Some(picture) = app.user_avatar {
                 Image(source: picture, width: 60, height: 60, corner: 30, fit: cover, label: app.user_name)
             }

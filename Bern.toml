@@ -49,7 +49,7 @@ expanded_below = 1440
 # The primary logo and monochrome brand mark, plus the still of the downloads'
 # sample media.
 [resources]
-paths = ["design/assets/icon.png", "erika-ui/assets/erika-wordmark.png", "design/brand/erika-icon-export/logo/erika-logo-icon-512.png", "design/brand/erika-icon-animated.svg", "design/brand/erika-icon-export/logo/erika-logo-icon.svg", "design/brand/erika-icon-export/png/mono-black/erika-mono-black-128.png", "design/assets/still1.jpg"]
+paths = ["design/assets/icon.png", "erika-ui/assets/erika-wordmark.png", "design/brand/erika-icon-export/logo/erika-logo-icon-512.png", "design/brand/erika-icon-animated.svg", "design/brand/erika-icon-export/logo/erika-logo-icon.svg", "design/brand/erika-icon-export/png/mono-black/erika-mono-black-128.png", "design/brand/erika-icon-export/svg/erika-mono-white.svg", "design/assets/still1.jpg"]
 
 # `channels = ["ipc"]` lets the generated command line and MCP server drive
 # the running app. Remove it to ship an app that listens to nothing.

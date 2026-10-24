@@ -433,6 +433,8 @@ style! {
     Stack.tag_pill { background: fill.subtle, corner: 999 }
     // An account's picture is round: the disc cuts the shoulders.
     Stack.avatar { corner: 999 }
+    // No picture yet: the app's logo in white on a dark grey disc.
+    Stack.avatar_blank { background: color(light: "#3A3A3C", dark: "#48484A"), corner: 999 }
 
     // The phone's way back (`.x-pback`): the accent, as iOS's.
     Stack.phone_back { foreground: accent }
@@ -823,19 +825,13 @@ pub fn main_shell(
     }
 }
 
-/// The account's picture; a person on a grey disc until the account has
-/// one of its own (`.x-av`): the head 40 % down, the shoulders an ellipse
-/// centred on the bottom edge, both in the tertiary label color (`--on3`),
-/// and the disc cuts the shoulders.
+/// The account's picture; the white outline of the app's logo on a dark
+/// grey disc until the account has one of its own.
 #[component]
 pub fn avatar(app: erika::Client) -> impl View {
     ui! {
-        Stack(variant: avatar, width: 30, height: 30) {
-            Canvas(width: 30, height: 30, label: tr! { "zh-Hans" => "头像", "en" => "Avatar" }) {
-                Shape(kind: ellipse, fill: fill.strong)
-                Shape(kind: ellipse, x: 10.55, y: 7.55, width: 8.9, height: 8.9, fill: text.placeholder)
-                Shape(kind: ellipse, x: -3, y: 16.2, width: 36, height: 27.6, fill: text.placeholder)
-            }
+        Stack(variant: avatar_blank, width: 30, height: 30, align: center) {
+            Svg(source: "design/brand/erika-icon-export/svg/erika-mono-white.svg", width: 23, height: 23, label: tr! { "zh-Hans" => "头像", "en" => "Avatar" })
             if let Some(picture) = app.user_avatar {
                 Image(source: picture, width: 30, height: 30, corner: 15, fit: cover, label: app.user_name)
             }
