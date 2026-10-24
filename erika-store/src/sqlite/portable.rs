@@ -320,36 +320,71 @@ impl Db {
 
     pub fn portable_watched(&self) -> Vec<Watched> {
         self.rows(
-            "SELECT e.dandanplay_id, w.at, w.manual FROM watched w JOIN episode e ON e.id = w.episode_id
-             WHERE e.dandanplay_id IS NOT NULL",
+            "SELECT e.dandanplay_id, a.dandanplay_id, e.number, w.at, w.manual
+             FROM watched w JOIN episode e ON e.id = w.episode_id JOIN anime a ON a.id = e.anime_id
+             WHERE a.dandanplay_id IS NOT NULL AND (e.dandanplay_id IS NOT NULL OR e.number IS NOT NULL)",
             "read the watched episodes",
             |row| {
                 Ok(Watched {
                     episode: row.get(0)?,
-                    at: row.get(1)?,
-                    manual: row.get::<_, i64>(2)? != 0,
+                    anime: row.get(1)?,
+                    number: row.get(2)?,
+                    at: row.get(3)?,
+                    manual: row.get::<_, i64>(4)? != 0,
                 })
             },
         )
     }
 
+    /// The episode `watched` names, made by its number when it has no id
+    /// here yet; its anime must be known.
+    fn episode_of(&self, watched: &Watched) -> Result<Option<i64>> {
+        let found = self
+            .conn
+            .query_row(
+                "SELECT e.id FROM episode e JOIN anime a ON a.id = e.anime_id
+                 WHERE (?1 IS NOT NULL AND e.dandanplay_id = ?1)
+                    OR (?1 IS NULL AND a.dandanplay_id = ?2 AND e.number = ?3)
+                 ORDER BY e.dandanplay_id IS NULL, e.id LIMIT 1",
+                params![watched.episode, watched.anime, watched.number],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if found.is_some() {
+            return Ok(found);
+        }
+        let added = self.conn.execute(
+            "INSERT INTO episode (anime_id, number, dandanplay_id, title)
+             SELECT id, ?2, ?3, '' FROM anime WHERE dandanplay_id = ?1",
+            params![watched.anime, watched.number, watched.episode],
+        )?;
+        Ok((added > 0).then(|| self.conn.last_insert_rowid()))
+    }
+
     pub fn put_watched(&self, watched: &Watched) {
         logged(
-            self.conn.execute(
-                "INSERT INTO watched (episode_id, at, manual)
-                 SELECT id, ?2, ?3 FROM episode WHERE dandanplay_id = ?1
-                 ON CONFLICT (episode_id) DO UPDATE SET at = excluded.at, manual = excluded.manual",
-                params![watched.episode, watched.at, i64::from(watched.manual)],
-            ),
+            (|| {
+                let Some(episode) = self.episode_of(watched)? else {
+                    return Ok(0);
+                };
+                self.conn.execute(
+                    "INSERT INTO watched (episode_id, at, manual) VALUES (?1, ?2, ?3)
+                     ON CONFLICT (episode_id) DO UPDATE SET at = excluded.at, manual = excluded.manual",
+                    params![episode, watched.at, i64::from(watched.manual)],
+                )
+            })(),
             "mark a synced episode watched",
         );
     }
 
-    pub fn remove_watched(&self, episode: i64) {
+    pub fn remove_watched(&self, watched: &Watched) {
         logged(
             self.conn.execute(
-                "DELETE FROM watched WHERE episode_id = (SELECT id FROM episode WHERE dandanplay_id = ?1)",
-                [episode],
+                "DELETE FROM watched WHERE episode_id IN (
+                     SELECT e.id FROM episode e JOIN anime a ON a.id = e.anime_id
+                     WHERE (?1 IS NOT NULL AND e.dandanplay_id = ?1)
+                        OR (?1 IS NULL AND a.dandanplay_id = ?2 AND e.number = ?3))",
+                params![watched.episode, watched.anime, watched.number],
             ),
             "unmark a synced episode",
         );
@@ -423,10 +458,12 @@ impl Db {
         );
     }
 
-    /// What the user thinks of each anime.
+    /// What the user marked each anime as, and its score.
     pub fn anime_marks(&self) -> Vec<Mark> {
         self.rows(
-            "SELECT dandanplay_id, status, rating, updated_at FROM anime_mark",
+            "SELECT a.dandanplay_id, m.status, m.rating, m.updated_at
+             FROM anime_mark m JOIN anime a ON a.id = m.anime_id
+             WHERE a.dandanplay_id IS NOT NULL",
             "read the anime marks",
             |row| {
                 Ok(Mark {
@@ -439,25 +476,29 @@ impl Db {
         )
     }
 
+    /// Keep `mark` for its anime, which must be known.
     pub fn set_anime_mark(&self, mark: &Mark) {
         logged(
             self.conn.execute(
-                "INSERT INTO anime_mark (dandanplay_id, status, rating, updated_at) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT (dandanplay_id) DO UPDATE SET
+                "INSERT INTO anime_mark (anime_id, status, rating, updated_at)
+                 SELECT id, ?2, ?3, ?4 FROM anime WHERE dandanplay_id = ?1
+                 ON CONFLICT (anime_id) DO UPDATE SET
                      status = excluded.status,
                      rating = excluded.rating,
                      updated_at = excluded.updated_at",
                 params![mark.anime, mark.status, mark.rating, mark.at],
             ),
-            "mark an anime",
+            "mark a synced anime",
         );
     }
 
     pub fn remove_anime_mark(&self, anime: i64) {
         logged(
-            self.conn
-                .execute("DELETE FROM anime_mark WHERE dandanplay_id = ?1", [anime]),
-            "unmark an anime",
+            self.conn.execute(
+                "DELETE FROM anime_mark WHERE anime_id = (SELECT id FROM anime WHERE dandanplay_id = ?1)",
+                [anime],
+            ),
+            "unmark a synced anime",
         );
     }
 

@@ -4,7 +4,7 @@ use crate::local::{MemoryVault, Vault};
 use crate::repository::{Local, MemoryTransport, Sync, Transport};
 use crate::seal::SealKey;
 use erika_store::Fingerprint;
-use erika_store::portable::{FileKey, Mark};
+use erika_store::portable::{FileKey, Mark, Watched};
 use std::collections::BTreeMap;
 
 /// Few rounds: tests need the shape of the key, not its slowness.
@@ -571,10 +571,20 @@ fn fill(db: &Db, store: &Store, vault: &dyn Vault) {
     db.remember("https://example.com/kyoto.mp4", "kyoto", None, 30.0, 300.0);
     db.set_anime_mark(&Mark {
         anime: 17675,
-        status: Some("Watching".into()),
-        rating: 9.0,
+        status: Some("watching".into()),
+        rating: 9,
         at: 50,
     });
+    // One watched episode with its id, one only by its number.
+    for (episode, number) in [(Some(176750004), 4), (None, 5)] {
+        db.put_watched(&Watched {
+            episode,
+            anime: 17675,
+            number: Some(number),
+            at: 60,
+            manual: true,
+        });
+    }
     db.set_extension(
         "plugins",
         Some(r#"{"enabled":["regex"],"regex":{"rules":["^前方高能$"]}}"#),
@@ -665,6 +675,13 @@ fn an_export_brings_everything_to_a_clean_device() {
     // Its picture was this device's cache.
     assert!(recents.iter().all(|recent| recent.still.is_none()));
     assert_eq!(new_db.anime_marks(), old_db.anime_marks());
+    assert_eq!(new_db.anime_marks()[0].status.as_deref(), Some("watching"));
+    let watched = |db: &Db| {
+        let mut keys: Vec<String> = db.portable_watched().iter().map(Watched::key).collect();
+        keys.sort();
+        keys
+    };
+    assert_eq!(watched(&new_db), ["17675#5", "176750004"]);
     let plugins: serde_json::Value =
         serde_json::from_str(&new_db.extension("plugins").unwrap()).unwrap();
     assert_eq!(plugins["regex"]["rules"][0], "^前方高能$");

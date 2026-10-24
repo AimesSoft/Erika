@@ -166,7 +166,7 @@ impl Db {
         Vec::new()
     }
     pub fn put_watched(&self, _watched: &portable::Watched) {}
-    pub fn remove_watched(&self, _episode: i64) {}
+    pub fn remove_watched(&self, _watched: &portable::Watched) {}
     pub fn portable_recents(&self) -> Vec<portable::Recent> {
         Vec::new()
     }

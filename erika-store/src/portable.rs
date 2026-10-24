@@ -88,13 +88,26 @@ pub struct Progress {
     pub at: i64,
 }
 
-/// An episode marked watched.
+/// An episode marked watched: by its dandanplay id, or by its number in
+/// its anime when it has none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Watched {
-    /// Its dandanplay id.
-    pub episode: i64,
+    pub episode: Option<i64>,
+    /// Its anime's dandanplay id.
+    pub anime: i64,
+    pub number: Option<i64>,
     pub at: i64,
     pub manual: bool,
+}
+
+impl Watched {
+    /// The same episode on any device: its id, or `anime#number`.
+    pub fn key(&self) -> String {
+        match (self.episode, self.number) {
+            (Some(id), _) => id.to_string(),
+            (None, number) => format!("{}#{}", self.anime, number.unwrap_or(0)),
+        }
+    }
 }
 
 /// A video opened directly, among the recent ones.
@@ -109,14 +122,15 @@ pub struct Recent {
     pub file: Option<FileKey>,
 }
 
-/// What the user thinks of an anime: watching it or not, and a score.
+/// What the user marked an anime as, in the anime module's words, and the
+/// score they gave it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mark {
     /// Its dandanplay id.
     pub anime: i64,
-    /// `Want`, `Watching` or `Watched`; `None` when only rated.
+    /// `None` when only rated.
     pub status: Option<String>,
     /// 1 to 10, or 0 when not rated.
-    pub rating: f64,
+    pub rating: i64,
     pub at: i64,
 }

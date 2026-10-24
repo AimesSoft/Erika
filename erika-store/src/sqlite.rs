@@ -100,13 +100,18 @@ const MIGRATIONS: &[&str] = &[
     // 2: what a source holds, which says where its videos are recognized:
     // `anime` by dandanplay, `series` and `movie` by the user's own server.
     "ALTER TABLE source ADD COLUMN content TEXT NOT NULL DEFAULT 'anime';",
-    // 3: what the user thinks of an anime, and the data of extensions
-    // (plugins), any JSON by an id; the account sync carries both.
-    "
+];
+
+/// The tables the account sync reads and writes, made where missing
+/// rather than as a numbered step, so that changes adding steps of their
+/// own land in any order. `anime_mark` is the anime module's (the same
+/// statement as where it keeps its marks); `extension` keeps the data of
+/// extensions such as plugins, any JSON by an id.
+const SYNC_TABLES: &str = "
     CREATE TABLE IF NOT EXISTS anime_mark (
-        dandanplay_id INTEGER PRIMARY KEY,
+        anime_id INTEGER PRIMARY KEY REFERENCES anime (id) ON DELETE CASCADE,
         status TEXT,
-        rating REAL NOT NULL DEFAULT 0,
+        rating INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL
     ) STRICT;
     CREATE TABLE IF NOT EXISTS extension (
@@ -114,8 +119,7 @@ const MIGRATIONS: &[&str] = &[
         value TEXT NOT NULL,
         updated_at INTEGER NOT NULL
     ) STRICT;
-    ",
-];
+";
 
 /// One connection to the app's database.
 pub struct Db {
@@ -164,6 +168,7 @@ impl Db {
         conn.pragma_update(None, "foreign_keys", true)?;
         let mut db = Db { conn };
         db.migrate()?;
+        db.conn.execute_batch(SYNC_TABLES)?;
         Ok(db)
     }
 

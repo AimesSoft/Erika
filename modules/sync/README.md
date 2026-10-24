@@ -52,9 +52,9 @@
 | `anime` / `episodes` | 弹弹play id | 番剧与剧集资料（标题、海报地址、集数、Bangumi id），供文件对应用 | 带 |
 | `links` | 文件指纹 `md5:大小` | 文件是哪一集、谁定的（自动 / 手动 / 不是剧集） | 带 |
 | `progress` | 文件指纹 | 播放进度、时长、弹幕偏移、时间 | 带 |
-| `watched` | 剧集 id | 标记看过 | 带 |
+| `watched` | 剧集 id，没有 id 的用 `番剧 id#集数` | 标记看过 | 带 |
 | `recents` | 地址 | 最近播放（标题、进度、对应文件） | 只带 http(s) 地址 |
-| `marks` | 番剧 id | 番剧状态（想看 / 在看 / 看过）与评分 | 带 |
+| `marks` | 番剧 id | 番剧状态与评分（`anime_mark` 表，由新番模块写入；本分支只同步它的行） | 带 |
 | `accounts` | `dandanplay`、`bangumi` | 弹弹play 令牌与用户名，Bangumi 会话 Cookie 与用户信息；秘密部分加密 | 有口令且口令一致时带 |
 | `extensions` | 扩展 id | 任意 JSON（插件启用状态与插件设置） | 带 |
 | `sync` | `webdav` | WebDAV 地址、用户名、目录、自动同步设置，密码加密 | 不带（只在导出文件里） |
@@ -83,7 +83,7 @@
 插件或任何模块把自己的数据存成一份 JSON：
 
 ```rust
-// 写：任意 JSON 文本，按稳定的 id 存进 SQLite 的 extension 表（迁移 3）。
+// 写：任意 JSON 文本，按稳定的 id 存进 SQLite 的 extension 表。
 db.set_extension("plugins", Some(&serde_json::to_string(&value)?));
 // 读：
 let value: Option<String> = db.extension("plugins");

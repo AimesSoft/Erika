@@ -294,8 +294,10 @@ impl<'a> Device<'a> {
         for watched in self.db.portable_watched() {
             put(
                 WATCHED,
-                watched.episode.to_string(),
+                watched.key(),
                 Value::map([
+                    ("anime", Value::Int(watched.anime)),
+                    ("number", some_int(watched.number)),
                     ("at", Value::Int(watched.at)),
                     ("manual", Value::Bool(watched.manual)),
                 ]),
@@ -323,7 +325,7 @@ impl<'a> Device<'a> {
                 mark.anime.to_string(),
                 Value::map([
                     ("status", some_text(mark.status.as_deref())),
-                    ("rating", Value::Float(mark.rating)),
+                    ("rating", Value::Int(mark.rating)),
                     ("at", Value::Int(mark.at)),
                 ]),
             );
@@ -516,18 +518,30 @@ impl<'a> Device<'a> {
                 }
             }
             WATCHED => {
-                let Ok(episode) = op.key.parse() else { return };
+                // `id`, or `anime#number` for an episode without an id.
+                let (episode, anime, number) = match op.key.split_once('#') {
+                    Some((anime, number)) => (None, anime.parse().ok(), number.parse().ok()),
+                    None => (op.key.parse().ok(), None, None),
+                };
+                if episode.is_none() && anime.is_none() {
+                    return;
+                }
                 applied.history = true;
+                let watched = Watched {
+                    episode,
+                    anime: anime
+                        .or_else(|| value.and_then(|value| value.int_of("anime")))
+                        .unwrap_or(0),
+                    number: number.or_else(|| value.and_then(|value| opt_int(value, "number"))),
+                    at: value.and_then(|value| value.int_of("at")).unwrap_or(0),
+                    manual: value
+                        .and_then(|value| value.get("manual"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                };
                 match value {
-                    Some(value) => self.db.put_watched(&Watched {
-                        episode,
-                        at: value.int_of("at").unwrap_or(0),
-                        manual: value
-                            .get("manual")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
-                    }),
-                    None => self.db.remove_watched(episode),
+                    Some(_) => self.db.put_watched(&watched),
+                    None => self.db.remove_watched(&watched),
                 }
             }
             RECENTS => {
@@ -551,7 +565,7 @@ impl<'a> Device<'a> {
                     Some(value) => self.db.set_anime_mark(&Mark {
                         anime,
                         status: opt_text(value, "status"),
-                        rating: value.float_of("rating"),
+                        rating: value.int_of("rating").unwrap_or(0),
                         at: value.int_of("at").unwrap_or(0),
                     }),
                     None => self.db.remove_anime_mark(anime),
