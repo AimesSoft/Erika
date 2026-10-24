@@ -782,7 +782,7 @@ fn export_names_and_times_read_as_dates() {
         unix: 1_792_800_000 + 3_723,
         offset: 8 * 3600,
     });
-    assert_eq!(name, "erika-backup-20261024-090203.erika");
+    assert_eq!(name, "erika-backup-20261024-090203.ebp");
 }
 
 #[test]

@@ -1243,12 +1243,12 @@ pub fn settings_plugins(app: erika::Client, #[session] draft: PluginsDraft) -> i
                 } else {
                     // The buttons under the note, which a phone has no room beside.
                     Column(gap: 8) {
-                        Text(content: tr! { "zh-Hans" => "可以导入 Erika 插件文件夹（pack.json、脚本和 icon.png），或 NipaPlay 的 .js 插件。", "en" => "Import an Erika plugin folder (pack.json, its script and icon.png), or a NipaPlay .js plugin." }, style: caption, emphasis: secondary, lines: 2)
+                        Text(content: tr! { "zh-Hans" => "可以导入 Erika 插件包（.epk）、插件文件夹，或 NipaPlay 的 .js 插件。", "en" => "Import an Erika plugin package (.epk), a plugin folder, or a NipaPlay .js plugin." }, style: caption, emphasis: secondary, lines: 2)
                         // A television has no files to pick from.
                         if !window.tv {
                             Row(gap: 10, align: center) {
+                                Button(id: import_plugin_script, label: tr! { "zh-Hans" => "导入文件", "en" => "Import File" }, icon: "plus", prominence: plain, pick: draft.script, files: ".epk .js") => app.import_plugin(draft.script)
                                 Button(id: import_plugin_folder, label: tr! { "zh-Hans" => "导入文件夹", "en" => "Import Folder" }, icon: "folder", prominence: plain, pick: draft.folder, files: "folder") => app.import_plugin(draft.folder)
-                                Button(id: import_plugin_script, label: tr! { "zh-Hans" => "导入 .js", "en" => "Import .js" }, icon: "plus", prominence: plain, pick: draft.script, files: ".js") => app.import_plugin(draft.script)
                             }
                         }
                     }

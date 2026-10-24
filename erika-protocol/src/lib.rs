@@ -1064,7 +1064,7 @@ pub mod erika {
         /// Download and install a plugin of the market, or its update.
         #[errors("unknown_plugin")]
         fn install_plugin(&mut self, id: String) -> Result<(), CommandError>;
-        /// Install the plugin folder or NipaPlay `.js` file the user picked.
+        /// Install the plugin package (`.epk`), plugin folder or NipaPlay `.js` file the user picked.
         fn import_plugin(&mut self, source: MediaSource) -> Result<(), CommandError>;
         #[errors("unknown_plugin")]
         fn uninstall_plugin(&mut self, id: String) -> Result<(), CommandError>;

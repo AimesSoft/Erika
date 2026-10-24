@@ -28,8 +28,8 @@ use std::collections::BTreeMap;
 
 pub const MAGIC: [u8; 8] = *b"\x89ERK\r\n\x1a\n";
 pub const VERSION: u16 = 1;
-/// What an export is called on disk.
-pub const EXTENSION: &str = "erika";
+/// What an export is called on disk: an Erika backup.
+pub const EXTENSION: &str = "ebp";
 
 /// Everything the sync carries: category, then key, then value.
 pub type State = BTreeMap<String, BTreeMap<String, Value>>;

@@ -1186,13 +1186,18 @@ impl ErikaEngine {
 
     pub(crate) fn import_plugin_command(&mut self, source: MediaSource) -> Result<(), CommandError> {
         let path = bern::files::file_path(&source.url)
-            .ok_or_else(|| CommandError::new("invalid_plugin", "请选择本地的插件文件夹或 .js 文件"))?;
+            .ok_or_else(|| CommandError::new("invalid_plugin", "请选择本地的插件包、插件文件夹或 .js 文件"))?;
         let id = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         self.plugins.busy.push(id.clone());
         let inbox = Arc::clone(&self.plugins.inbox);
         in_background(&inbox, move || {
+            let package = path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case(store::PACKAGE_EXTENSION));
             let result = if path.is_dir() {
                 store::import_folder(&path)
+            } else if package {
+                store::import_package(&path)
             } else {
                 import_script(&path)
             }

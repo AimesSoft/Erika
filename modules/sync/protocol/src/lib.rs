@@ -186,9 +186,9 @@ pub mod sync {
         fn set_interval(&mut self, interval: SyncInterval) -> Result<(), CommandError>;
         /// Set the passphrase accounts are sealed with; empty forgets it.
         fn set_passphrase(&mut self, passphrase: String) -> Result<(), CommandError>;
-        /// Write everything into one `.erika` file in `folder`.
+        /// Write everything into one `.ebp` file in `folder`.
         fn export_to(&mut self, folder: MediaSource) -> Result<(), CommandError>;
-        /// Take in an exported `.erika` file.
+        /// Take in an exported `.ebp` file.
         fn import_from(&mut self, file: MediaSource) -> Result<(), CommandError>;
         /// Count what an export would hold.
         fn refresh_parts(&mut self) -> Result<(), CommandError>;

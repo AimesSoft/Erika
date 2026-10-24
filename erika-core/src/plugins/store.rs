@@ -1,7 +1,12 @@
 //! The market: the plugins its indexes list, and fetching one into the
 //! plugins folder. NipaPlay's market lists single scripts; Erika's lists
 //! folders of `pack.json`, the script and `icon.png`. Until Erika's market
-//! is published its index answers nothing, and only NipaPlay's shows.
+//! is published its index answers nothing, and only NipaPlay's shows; a
+//! debug build lists the local `erika_plugins` folder's plugins first
+//! (`build.rs`).
+//!
+//! A plugin handed around on its own is a package, `.epk`: a zip archive of
+//! its folder, `pack.json` at its root. Installed, it is that folder again.
 
 use super::pack::Pack;
 use serde_json::Value;
@@ -18,6 +23,17 @@ pub const ERIKA_INDEX: &str =
 pub const INDEX_VARIABLE: &str = "ERIKA_PLUGIN_INDEX";
 /// A folder to install plugins in, in place of the application's own.
 pub const FOLDER_VARIABLE: &str = "ERIKA_PLUGIN_DIR";
+/// The extension of a plugin package.
+pub const PACKAGE_EXTENSION: &str = "epk";
+/// The most a package may hold unpacked, against archives that inflate
+/// without end.
+const PACKAGE_LIMIT: u64 = 32 << 20;
+
+mod local {
+    // The packages of the local `erika_plugins` folder, by id; none in a
+    // release build.
+    include!(concat!(env!("OUT_DIR"), "/local_plugins.rs"));
+}
 
 /// A plugin a market lists.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +50,8 @@ pub enum Files {
     Script(String),
     /// An Erika folder: its address, holding `pack.json`.
     Folder(String),
+    /// A package of the local `erika_plugins` folder this build carries.
+    Local(&'static [u8]),
 }
 
 /// The indexes to read.
@@ -166,7 +184,7 @@ pub fn read_index(address: &str) -> Result<Vec<Listing>, String> {
 /// and why the indexes that failed did. Erika's market is not published
 /// yet: its failure is not reported.
 pub fn read_all() -> (Vec<Listing>, Vec<String>) {
-    let mut listings: Vec<Listing> = Vec::new();
+    let mut listings: Vec<Listing> = local_listings();
     let mut errors = Vec::new();
     for index in indexes() {
         match read_index(&index) {
@@ -184,6 +202,38 @@ pub fn read_all() -> (Vec<Listing>, Vec<String>) {
     (listings, errors)
 }
 
+/// The plugins of the local `erika_plugins` folder this build carries, each
+/// with its icon written out where the market can show it.
+fn local_listings() -> Vec<Listing> {
+    local::LOCAL_PLUGINS
+        .iter()
+        .filter_map(|(id, package)| {
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(*package)).ok()?;
+            let declared: Value = serde_json::from_slice(&read_entry(&mut archive, "pack.json").ok()?).ok()?;
+            let pack = Pack::from_pack(&declared).ok()?;
+            let image = pack.image.as_ref().and_then(|name| {
+                let path = folder()?.join(".icons").join(format!("{id}.png"));
+                std::fs::create_dir_all(path.parent()?).ok()?;
+                std::fs::write(&path, read_entry(&mut archive, name).ok()?).ok()?;
+                Some(bern::prelude::MediaSource::file(path).url)
+            });
+            Some(Listing { pack, files: Files::Local(package), image })
+        })
+        .collect()
+}
+
+/// One file of a package, whole.
+fn read_entry<R: std::io::Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    name: &str,
+) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let file = archive.by_name(name).map_err(|_| format!("插件包里没有 {name}"))?;
+    let mut bytes = Vec::new();
+    file.take(PACKAGE_LIMIT).read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+    Ok(bytes)
+}
+
 /// Where plugins are installed, each in a folder named by its id.
 pub fn folder() -> Option<PathBuf> {
     if let Some(folder) = std::env::var_os(FOLDER_VARIABLE) {
@@ -199,6 +249,7 @@ pub fn install(listing: &Listing) -> Result<Pack, String> {
             let script = get(address)?;
             install_script(&listing.pack, &script)
         }
+        Files::Local(package) => unpack(package),
         Files::Folder(address) => {
             let pack_json = get(&format!("{address}/pack.json"))?;
             let declared: Value = serde_json::from_slice(&pack_json)
@@ -237,6 +288,59 @@ pub fn import_folder(path: &Path) -> Result<Pack, String> {
         None => None,
     };
     place(&pack, &script, image.as_deref())
+}
+
+/// Install a package the user picked.
+pub fn import_package(path: &Path) -> Result<Pack, String> {
+    unpack(&std::fs::read(path).map_err(|error| format!("{}：{error}", path.display()))?)
+}
+
+/// Unpack a package into its plugin's folder, replacing what was there:
+/// every file it holds, under the id its `pack.json` declares, once its
+/// script is there and no name leads out of the folder.
+pub fn unpack(package: &[u8]) -> Result<Pack, String> {
+    unpack_into(&folder().ok_or("没有可以安装插件的地方")?, package)
+}
+
+fn unpack_into(root: &Path, package: &[u8]) -> Result<Pack, String> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(package))
+        .map_err(|_| "这不是 Erika 插件包".to_string())?;
+    let declared: Value = serde_json::from_slice(&read_entry(&mut archive, "pack.json")?)
+        .map_err(|error| format!("pack.json：{error}"))?;
+    let pack = Pack::from_pack(&declared)?;
+    if archive.index_for_name(&pack.main).is_none() {
+        return Err(format!("插件包里没有 {}", pack.main));
+    }
+    let staging = root.join(format!(".{}.new", pack.id));
+    let _ = std::fs::remove_dir_all(&staging);
+    let mut total = 0u64;
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).map_err(|error| error.to_string())?;
+        let Some(name) = file.enclosed_name() else {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(format!("插件包里的 {} 不在插件的文件夹里", file.name()));
+        };
+        let target = staging.join(name);
+        if file.is_dir() {
+            std::fs::create_dir_all(&target).map_err(|error| error.to_string())?;
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        let mut out = std::fs::File::create(&target).map_err(|error| error.to_string())?;
+        // What is written counts, whatever the archive says a file holds.
+        total += std::io::copy(&mut std::io::Read::take(&mut file, PACKAGE_LIMIT - total + 1), &mut out)
+            .map_err(|error| error.to_string())?;
+        if total > PACKAGE_LIMIT {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err("插件包太大".into());
+        }
+    }
+    let target = root.join(&pack.id);
+    let _ = std::fs::remove_dir_all(&target);
+    std::fs::rename(&staging, &target).map_err(|error| error.to_string())?;
+    Ok(pack)
 }
 
 /// Write the plugin's files into its folder, replacing what was there.
@@ -306,6 +410,55 @@ mod tests {
             beside(r"C:\Users\me\erika_plugins\plugins.json", "plugins/a"),
             r"C:\Users\me\erika_plugins/plugins/a"
         );
+    }
+
+    /// A package of `files`, by name and text.
+    fn package(files: &[(&str, &str)]) -> Vec<u8> {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, text) in files {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(text.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    const PACK: &str = r#"{"id": "test.pack", "name": "测试", "version": "1.0.0", "category": "tools", "main": "main.js"}"#;
+
+    #[test]
+    fn packages_unpack_into_the_plugins_folder() {
+        let root = std::env::temp_dir().join(format!("erika-unpack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let pack = unpack_into(
+            &root,
+            &package(&[("pack.json", PACK), ("main.js", "1;"), ("lib/util.js", "2;")]),
+        )
+        .unwrap();
+        assert_eq!(pack.id, "test.pack");
+        assert_eq!(std::fs::read_to_string(root.join("test.pack/main.js")).unwrap(), "1;");
+        assert_eq!(std::fs::read_to_string(root.join("test.pack/lib/util.js")).unwrap(), "2;");
+        // Installed again, it replaces what was there.
+        unpack_into(&root, &package(&[("pack.json", PACK), ("main.js", "3;")])).unwrap();
+        assert!(!root.join("test.pack/lib").exists());
+        // A name that leads out of the folder, and a package without its
+        // script, install nothing.
+        let outside = package(&[("pack.json", PACK), ("main.js", "1;"), ("../escape.js", "x")]);
+        assert!(unpack_into(&root, &outside).is_err());
+        assert!(!root.join("escape.js").exists());
+        assert!(unpack_into(&root, &package(&[("pack.json", PACK)])).is_err());
+        assert!(unpack_into(&root, b"not a zip").is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_debug_build_lists_the_local_plugins() {
+        // Each package the build carries declares the id it is listed by.
+        for (id, package) in local::LOCAL_PLUGINS {
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(*package)).unwrap();
+            let declared: Value = serde_json::from_slice(&read_entry(&mut archive, "pack.json").unwrap()).unwrap();
+            assert_eq!(Pack::from_pack(&declared).unwrap().id, *id);
+        }
     }
 
     #[test]

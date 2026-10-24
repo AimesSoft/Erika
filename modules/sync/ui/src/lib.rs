@@ -147,11 +147,11 @@ pub fn account_sync_backup(sync: sync::Client, #[session] draft: SyncDraft) -> i
         Form(title: tr! { "zh-Hans" => "备份文件", "en" => "Backup File" }, variant: settings_form, appear: settings_page_in) {
             // A television has no files to pick.
             if !window.tv {
-                Section(footer: tr! { "zh-Hans" => "单个 .erika 文件，装着全部设置、媒体库来源、观看记录与进度、文件与剧集的对应、番剧状态与评分、扩展数据，设置了同步口令时还有加密的账号。海报、截图等缓存不在其中，可以重新获取。导入只补上本机没有或较旧的记录，不会删除本机数据。", "en" => "One .erika file with every setting, the library's sources, what you watched and where it stopped, files matched to episodes, show status and ratings, and extension data — plus your accounts, encrypted, when a sync passphrase is set. Caches such as posters and screenshots stay out; they can be fetched again. Importing adds what this device lacks or has older, and deletes nothing." }) {
+                Section(footer: tr! { "zh-Hans" => "单个 .ebp 文件，装着全部设置、媒体库来源、观看记录与进度、文件与剧集的对应、番剧状态与评分、扩展数据，设置了同步口令时还有加密的账号。海报、截图等缓存不在其中，可以重新获取。导入只补上本机没有或较旧的记录，不会删除本机数据。", "en" => "One .ebp file with every setting, the library's sources, what you watched and where it stopped, files matched to episodes, show status and ratings, and extension data — plus your accounts, encrypted, when a sync passphrase is set. Caches such as posters and screenshots stay out; they can be fetched again. Importing adds what this device lacks or has older, and deletes nothing." }) {
                     Row(gap: 12, align: center) {
                         Column(gap: 1) {
                             Text(content: tr! { "zh-Hans" => "导出", "en" => "Export" }, style: body)
-                            Text(content: tr! { "zh-Hans" => "选一个文件夹，写入 erika-backup-日期-时间.erika", "en" => "Choose a folder for erika-backup-date-time.erika" }, style: caption, emphasis: secondary)
+                            Text(content: tr! { "zh-Hans" => "选一个文件夹，写入 erika-backup-日期-时间.ebp", "en" => "Choose a folder for erika-backup-date-time.ebp" }, style: caption, emphasis: secondary)
                         }
                         Spacer
                         Button(id: sync_export, label: tr! { "zh-Hans" => "导出到…", "en" => "Export to…" }, enabled: !sync.busy, pick: draft.export_folder, files: "folder") => sync.export_to(draft.export_folder)
@@ -162,7 +162,8 @@ pub fn account_sync_backup(sync: sync::Client, #[session] draft: SyncDraft) -> i
                             Text(content: tr! { "zh-Hans" => "换了设备？先填同步口令，再导入", "en" => "New device? Enter the sync passphrase first, then import" }, style: caption, emphasis: secondary)
                         }
                         Spacer
-                        Button(id: sync_import, label: tr! { "zh-Hans" => "导入文件…", "en" => "Import File…" }, enabled: !sync.busy, pick: draft.import_file, files: ".erika") => sync.import_from(draft.import_file)
+                        // `.erika` is what backups were called before.
+                        Button(id: sync_import, label: tr! { "zh-Hans" => "导入文件…", "en" => "Import File…" }, enabled: !sync.busy, pick: draft.import_file, files: ".ebp .erika") => sync.import_from(draft.import_file)
                     }
                 }
             }
