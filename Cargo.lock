@@ -1332,6 +1332,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "ureq",
+ "url",
 ]
 
 [[package]]

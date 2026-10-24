@@ -37,6 +37,14 @@ pub struct LibraryDraft {
     pub folder: MediaSource,
     pub shared_name: String,
     pub shared_address: String,
+    /// What is typed to connect to a dandanplay PC client's remote access.
+    pub remote_name: String,
+    pub remote_address: String,
+    pub remote_token: String,
+    /// What is typed to change one; empty fields keep what it has.
+    pub remote_edit_name: String,
+    pub remote_edit_address: String,
+    pub remote_edit_token: String,
     /// What is typed while matching: a video's episode, the episode to
     /// start from by order, the episode the lowest number goes to, and the
     /// anime searched for.

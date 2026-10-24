@@ -130,10 +130,19 @@ impl ErikaEngine {
             self.db.save_progress(file, position, duration);
         }
         let still = self.still_path.as_ref().and_then(|path| path.to_str());
-        // Listed by the file's own name, as when it was first opened.
-        let name = source
-            .file_name()
-            .unwrap_or_else(|| self.state.title.clone());
+        // Listed by the file's own name, as when it was first opened; a
+        // dandanplay client's stream, whose address names no file, by its
+        // episode.
+        let name = match &self.state.subtitle {
+            PlayingNote::Episode { episode }
+                if erika_dandanplay::remote::comment_url(&source.url).is_some() =>
+            {
+                format!("{} 第 {episode} 话", self.state.title)
+            }
+            _ => source
+                .file_name()
+                .unwrap_or_else(|| self.state.title.clone()),
+        };
         self.db.remember(
             &source.url,
             &name,
