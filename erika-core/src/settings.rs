@@ -65,14 +65,15 @@ pub fn feature_module(id: &str) -> FeatureModule {
 
 /// The preset the enabled modules are exactly, or `Custom`.
 pub fn preset_of(enabled: &[String]) -> OnboardingPreset {
+    // Where the downloader is hidden, every module offered is all of them.
+    let shown = |id: &&str| *id != "downloads" || !downloader_hidden();
+    let enabled: Vec<&str> = enabled.iter().map(String::as_str).filter(shown).collect();
     if enabled.is_empty() {
         OnboardingPreset::Pure
-    } else if enabled.len() == ALL_MODULES.len() {
+    } else if enabled.len() == ALL_MODULES.iter().copied().filter(shown).count() {
         OnboardingPreset::All
     } else if enabled.len() == ANIME_MODULES.len()
-        && ANIME_MODULES
-            .iter()
-            .all(|id| enabled.iter().any(|m| m == id))
+        && ANIME_MODULES.iter().all(|id| enabled.contains(id))
     {
         OnboardingPreset::Anime
     } else {
