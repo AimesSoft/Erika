@@ -17,11 +17,14 @@ impl ErikaEngine {
         value: Option<Value>,
         error: Option<String>,
     ) {
-        if let Some(error) = error {
+        if let Some(error) = &error
+            && !matches!(purpose, Purpose::Resolve(_))
+        {
             eprintln!("erika: plugin {id}: {error}");
         }
         match purpose {
             Purpose::Suggest(tag) if tag == self.plugins.suggesting => self.take_suggestions(value),
+            Purpose::Resolve(tag) => self.resolver_answered(id, tag, value, error),
             _ => {}
         }
     }

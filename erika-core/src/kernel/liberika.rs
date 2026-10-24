@@ -829,7 +829,11 @@ impl Worker {
                 session.own_track = None;
                 session.presenter.clear_danmaku();
                 session.rendered_at_open = session.presenter.stats().rendered_video_frames;
-                if let Err(error) = session.presenter.open(MediaRequest::new(url.clone())) {
+                let media = MediaRequest {
+                    http_headers: super::link_headers(&url),
+                    ..MediaRequest::new(url.clone())
+                };
+                if let Err(error) = session.presenter.open(media) {
                     session.error = Some(error.to_string());
                     return Err(CommandError::new("load_failed", error.to_string()));
                 }

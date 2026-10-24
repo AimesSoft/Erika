@@ -10,6 +10,7 @@
 //! playback half of the interface, `player` and `danmaku`, is liberika's.
 
 mod hooks;
+mod links;
 mod pack;
 mod runtime;
 mod store;
@@ -110,6 +111,8 @@ enum Done {
     Fetched(String, u64, Result<Value, String>),
     /// The first seconds of the video at the address, measured.
     Opening(String, Result<Value, String>),
+    /// A request of a link's resolution answered.
+    Resolved(u64, Result<Value, String>),
 }
 
 pub(crate) struct Plugins {
@@ -136,6 +139,8 @@ pub(crate) struct Plugins {
     next_tag: u64,
     /// The download whose folders the plugins are asked for.
     suggesting: u64,
+    /// The link a plugin is resolving.
+    resolution: Option<links::Resolution>,
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     processes: HashMap<String, std::process::Child>,
 }
@@ -159,6 +164,7 @@ impl Default for Plugins {
             extensions: HashMap::new(),
             next_tag: 1,
             suggesting: 0,
+            resolution: None,
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             processes: HashMap::new(),
         }
@@ -336,6 +342,7 @@ impl ErikaEngine {
                     }
                 }
                 Done::Opening(url, Err(error)) => eprintln!("erika: opening of {url}: {error}"),
+                Done::Resolved(tag, answer) => self.resolver_fetched(tag, answer),
                 Done::Fetched(id, request, answer) => {
                     let snapshot = self.plugin_snapshot(&id);
                     if let Some(runtime) = self.plugins.runtimes.get_mut(&id) {
@@ -500,10 +507,12 @@ impl ErikaEngine {
         let reply = match result {
             Ok(reply) => reply,
             Err(error) => {
-                if purpose == Purpose::Load {
-                    self.plugin_failed(id, error);
-                } else {
-                    eprintln!("erika: plugin {id}: {error}");
+                match purpose {
+                    Purpose::Load => self.plugin_failed(id, error),
+                    Purpose::Resolve(_) | Purpose::Suggest(_) | Purpose::Danmaku(_) => {
+                        self.plugin_hook_answered(id, purpose, None, Some(error))
+                    }
+                    _ => eprintln!("erika: plugin {id}: {error}"),
                 }
                 return;
             }

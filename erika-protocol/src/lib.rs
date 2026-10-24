@@ -130,6 +130,16 @@ pub mod erika {
         pub selected: bool,
     }
 
+    /// One of what a link's page offers, such as the episodes of a video,
+    /// for the user to pick.
+    #[value]
+    pub struct LinkChoice {
+        pub id: String,
+        #[content]
+        pub title: String,
+        pub preferred: bool,
+    }
+
     /// A folder a plugin suggests downloading into.
     #[value]
     pub struct FolderSuggestion {
@@ -792,6 +802,13 @@ pub mod erika {
         pub downloads_hidden: bool,
         /// Enabled plugins wait for the system's JavaScript host to start.
         pub plugins_starting: bool,
+        /// A plugin resolving a link asks which of its items to play.
+        pub link_choosing: bool,
+        #[content]
+        pub link_choice_title: String,
+        pub link_choices: Vec<LinkChoice>,
+        /// A plugin is resolving the link given.
+        pub link_resolving: bool,
         /// The rates the speed menu offers.
         pub speeds: Vec<SpeedOption>,
         /// A plugin shows quick select where downloads are added, with the
@@ -974,6 +991,11 @@ pub mod erika {
 
         /// Play an http(s) or magnet link; any other keeps asking.
         fn open_link(&mut self, link: String) -> Result<(), CommandError>;
+
+        /// Play the item of a resolved link the user picked.
+        fn choose_link(&mut self, id: String) -> Result<(), CommandError>;
+        /// Stop resolving a link.
+        fn cancel_link(&mut self) -> Result<(), CommandError>;
 
         /// Play one of the recent videos again, from where it stopped.
         #[errors("no_such_recent")]

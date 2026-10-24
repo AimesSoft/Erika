@@ -214,6 +214,10 @@ impl Default for ErikaEngine {
                 downloader_unlocked: false,
                 downloads_hidden: settings::downloader_hidden(),
                 plugins_starting: false,
+                link_choosing: false,
+                link_choice_title: String::new(),
+                link_choices: Vec::new(),
+                link_resolving: false,
                 speeds: Vec::new(),
                 download_quick_select: false,
                 download_suggestions: Vec::new(),
@@ -627,10 +631,21 @@ impl erika::Commands for ErikaEngine {
             .unwrap_or_else(|| link.to_string());
         self.state.link_prompt = false;
         self.state.link_invalid = false;
-        self.start(title, PlayingNote::Link, no_picture(), 0.0);
-        let source = MediaSource::new(link);
-        self.prepare_queue(&source);
-        self.load(Some(source), 0.0);
+        // A plugin that resolves links may take it first.
+        if web && self.resolve_link(link, &title) {
+            return Ok(());
+        }
+        self.play_link(link, title);
+        Ok(())
+    }
+
+    fn choose_link(&mut self, id: String) -> Result<(), CommandError> {
+        self.link_chosen(id);
+        Ok(())
+    }
+
+    fn cancel_link(&mut self) -> Result<(), CommandError> {
+        self.cancel_resolution();
         Ok(())
     }
 
@@ -1063,6 +1078,16 @@ impl erika::Commands for ErikaEngine {
     }
     fn open_url(&mut self, url: String) -> Result<(), CommandError> {
         links::open(&url)
+    }
+}
+
+impl ErikaEngine {
+    /// Play the web address `link` under `title`.
+    pub(crate) fn play_link(&mut self, link: &str, title: String) {
+        self.start(title, PlayingNote::Link, no_picture(), 0.0);
+        let source = MediaSource::new(link);
+        self.prepare_queue(&source);
+        self.load(Some(source), 0.0);
     }
 }
 

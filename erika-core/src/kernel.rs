@@ -147,6 +147,32 @@ pub struct Chapter {
 
 /// Start the platform's kernel and make it Bern's media kernel, so the
 /// frontend's video views draw through it. `None` where there is none.
+/// HTTP headers a link plugin asked to fetch an address with, by address:
+/// the kernel opens the address with them.
+static LINK_HEADERS: std::sync::Mutex<Vec<(String, Vec<(String, String)>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+pub fn set_link_headers(url: &str, headers: Vec<(String, String)>) {
+    let mut all = LINK_HEADERS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    all.retain(|(known, _)| known != url);
+    if !headers.is_empty() {
+        all.push((url.to_string(), headers));
+        // A few links' worth, the latest kept.
+        let excess = all.len().saturating_sub(16);
+        all.drain(..excess);
+    }
+}
+
+pub fn link_headers(url: &str) -> Vec<(String, String)> {
+    LINK_HEADERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .find(|(known, _)| known == url)
+        .map(|(_, headers)| headers.clone())
+        .unwrap_or_default()
+}
+
 pub fn start() -> Option<Arc<dyn Kernel>> {
     #[cfg(not(target_arch = "wasm32"))]
     if bern::resources::Resources::host().is_served() {

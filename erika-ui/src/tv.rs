@@ -6,7 +6,7 @@
 //! corner (`.x-mini`), and the remote's Back closes a show's details. The
 //! remote moves the focus; the system draws it. The scene fills the whole
 //! screen: the design's 64-point margins are the overscan's safe area.
-use crate::pure::{pure_link, pure_link_props};
+use crate::pure::{link_resolving, link_resolving_props, pure_link, pure_link_props};
 use crate::search::{search_results, search_results_props};
 use crate::{AppWindows, ErikaDraft, MainPage, avatar, avatar_props};
 use bern::prelude::*;
@@ -71,6 +71,12 @@ pub fn tv_shell(
                 Stack(under_bars: true) {
                     ScaleBox(width: 1280, height: 720) {
                         pure_link(app: app)
+                    }
+                }
+            } else if app.link_resolving {
+                Stack(under_bars: true) {
+                    ScaleBox(width: 1280, height: 720) {
+                        link_resolving(app: app)
                     }
                 }
             }

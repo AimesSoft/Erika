@@ -51,6 +51,8 @@ pub fn pure_window(app: erika::Client, windows: AppWindows) -> impl View {
             }
             if app.link_prompt {
                 pure_link(app: app)
+            } else if app.link_resolving {
+                link_resolving(app: app)
             }
         }
     }
@@ -154,6 +156,50 @@ pub fn pure_recents(app: erika::Client) -> impl View {
     }
 }
 
+/// A plugin resolving a link: the items it offers to play, or that it is
+/// still working on the link.
+#[component]
+pub fn link_resolving(app: erika::Client) -> impl View {
+    ui! {
+        if app.link_choosing {
+            Modal(width: 440, height: 440, cover: compact, appear: pop_in, disappear: fade) {
+                Column(gap: 12, padding: 20) {
+                    if "" != app.link_choice_title {
+                        Text(content: app.link_choice_title, style: title3, lines: 2)
+                    } else {
+                        Text(content: tr! { "zh-Hans" => "选择要播放的内容", "en" => "Choose What to Play" }, style: title3)
+                    }
+                    ScrollView {
+                        Column(gap: 4) {
+                            ForEach(items: app.link_choices, key: id) |choice| {
+                                if choice.preferred {
+                                    Button(id: link_choice_preferred, label: choice.title, prominence: prominent) => app.choose_link(choice.id)
+                                } else {
+                                    Button(id: link_choice, label: choice.title, prominence: plain) => app.choose_link(choice.id)
+                                }
+                            }
+                        }
+                    }
+                    Row(gap: 10, align: center) {
+                        Spacer
+                        Button(id: link_choice_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, shortcut: "escape") => app.cancel_link()
+                    }
+                }
+            }
+        } else {
+            Modal(width: 360, height: 136, cover: compact, appear: pop_in, disappear: fade) {
+                Column(gap: 12, padding: 20) {
+                    Text(content: tr! { "zh-Hans" => "正在解析链接…", "en" => "Resolving the link…" }, style: title3)
+                    Row(gap: 10, align: center) {
+                        Spacer
+                        Button(id: link_resolving_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, shortcut: "escape") => app.cancel_link()
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// 「打开链接…」: a link to play, an http(s) or magnet address.
 #[component]
 pub fn pure_link(app: erika::Client, #[session] draft: PureDraft) -> impl View {
@@ -211,6 +257,8 @@ pub fn phone_pure(
             }
             if app.link_prompt {
                 pure_link(app: app)
+            } else if app.link_resolving {
+                link_resolving(app: app)
             }
         }
     }

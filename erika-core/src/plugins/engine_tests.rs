@@ -210,3 +210,56 @@ fn erikas_own_plugins_install_and_load() {
     assert!(engine.state.speeds.iter().any(|speed| speed.label == "0.25×"));
     assert!(engine.state.download_quick_select);
 }
+
+const RESOLVER: &str = r#"
+const pluginManifest = {
+  id: 'test.resolver', name: '解析', version: '1.0.0', minHostVersion: '1.0.0',
+  permissions: ['url.resolve'],
+};
+function pluginResolveUrl(input) {
+  if (!input.state) {
+    if (input.url.indexOf('https://example.com/watch/') !== 0) return null;
+    return {
+      type: 'select', title: '选集',
+      items: [{ id: 'a', title: '第一集' }, { id: 'b', title: '第二集' }],
+      preferredId: 'b', state: { step: 'picked' },
+    };
+  }
+  return {
+    type: 'play', url: 'https://cdn.example.com/' + input.selectedId + '.mp4',
+    title: input.selectedId === 'a' ? '第一集' : '第二集',
+    headers: { Referer: 'https://example.com/', Host: 'evil' },
+  };
+}
+"#;
+
+#[test]
+fn a_plugin_resolves_a_link_in_rounds() {
+    let folder = folder();
+    let script = folder.join("resolver.js");
+    std::fs::write(&script, RESOLVER).unwrap();
+    let mut engine = ErikaEngine::default();
+    engine.plugins_wake();
+    engine.import_plugin_command(MediaSource::file(&script)).unwrap();
+    settle(&mut engine, |engine| row(engine, "test.resolver").is_some_and(|p| p.loaded));
+
+    erika::Commands::open_link(&mut engine, "https://example.com/watch/1".into()).unwrap();
+    settle(&mut engine, |engine| engine.state.link_choosing);
+    assert_eq!(engine.state.link_choice_title, "选集");
+    assert_eq!(engine.state.link_choices.len(), 2);
+    assert!(engine.state.link_choices[1].preferred);
+
+    engine.link_chosen("a".into());
+    settle(&mut engine, |engine| !engine.state.link_resolving);
+    assert_eq!(engine.state.title, "第一集");
+    assert_eq!(
+        crate::kernel::link_headers("https://cdn.example.com/a.mp4"),
+        vec![("Referer".to_string(), "https://example.com/".to_string())]
+    );
+
+    // Not its link: it plays as it is.
+    erika::Commands::open_link(&mut engine, "https://other.example/v/clip.mp4".into()).unwrap();
+    settle(&mut engine, |engine| !engine.state.link_resolving);
+    assert_eq!(engine.state.title, "clip");
+    engine.uninstall_plugin_command("test.resolver".into()).unwrap();
+}
