@@ -55,6 +55,7 @@ mod tests {
 
     fn details() -> erika_dandanplay::Details {
         erika_dandanplay::Details {
+            bangumi_url: String::new(),
             anime_id: 42,
             anime_title: "匹配测试".into(),
             image_url: String::new(),

@@ -1,0 +1,33 @@
+{
+  "log": { "loglevel": "warning", "access": "none" },
+  "inbounds": [{
+    "listen": "127.0.0.1",
+    "port": 18083,
+    "protocol": "http",
+    "settings": {}
+  }],
+  "outbounds": [{
+    "protocol": "vless",
+    "settings": {
+      "vnext": [{
+        "address": "<NODE_HOST>",
+        "port": 443,
+        "users": [{
+          "id": "<NODE_UUID>",
+          "encryption": "none",
+          "flow": "xtls-rprx-vision"
+        }]
+      }]
+    },
+    "streamSettings": {
+      "network": "tcp",
+      "security": "tls",
+      "tlsSettings": {
+        "serverName": "<NODE_SNI>",
+        "fingerprint": "chrome",
+        "alpn": ["http/1.1"],
+        "allowInsecure": false
+      }
+    }
+  }]
+}

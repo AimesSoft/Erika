@@ -1,11 +1,15 @@
-//! Engine of the anime module. The season's anime come from dandanplay,
-//! with the airing times of bangumi-data; the details of a show from
-//! dandanplay too; what is being watched from the app's database, where the
+//! Engine of the anime module. The season and details come from the available
+//! dandanplay or Bangumi catalogue, with airing times from bangumi-data;
+//! what is being watched comes from the app's database, where the
 //! shell links the videos it plays to their episodes. Requests run on other
 //! threads and come back through `wake`; what was fetched last is kept in
 //! the cache folder, so the pages show it at once on the next start.
 
+mod catalog;
 mod clock;
+mod detail_posters;
+mod posters;
+mod reviews;
 mod schedule;
 mod season;
 mod shows;
@@ -14,7 +18,9 @@ mod timeline;
 use bern::CommandError;
 use bern::media::MediaSource;
 use clock::Clock;
-use erika_anime_protocol::anime::{self, BackTo, NextAction, Show, State, WatchStatus};
+use erika_anime_protocol::anime::{
+    self, BackTo, NextAction, SeasonSource, Show, State, WatchStatus,
+};
 use erika_dandanplay::{Details, Intro};
 use schedule::Schedule;
 use std::collections::HashMap;
@@ -22,18 +28,30 @@ use std::sync::{Arc, Mutex};
 
 /// The most shows the stage and the rows beside it hold.
 const WATCHING: usize = 5;
-/// The season's list as dandanplay gave it last, in the cache folder.
-const SEASON_CACHE: &str = "dandanplay-season.json";
+fn season_cache(source: &SeasonSource) -> &'static str {
+    match source {
+        SeasonSource::Dandanplay => "dandanplay-season.json",
+        SeasonSource::Bangumi => "bangumi-season.json",
+    }
+}
 
 /// What the requests came back with.
 enum Done {
-    Season(Result<Vec<Intro>, erika_dandanplay::Error>),
+    Season(u64, Result<Vec<Intro>, erika_dandanplay::Error>),
     Schedule(i64, Vec<schedule::Slot>),
-    Details(i64, Result<Details, erika_dandanplay::Error>),
+    Details(u64, i64, Result<Details, erika_dandanplay::Error>),
+    Reviews(reviews::Finished),
+    Poster(String),
+    DetailPoster(detail_posters::Key),
 }
 
 pub struct AnimeEngine {
     state: State,
+    accounts: catalog::Accounts,
+    preferred_season_source: SeasonSource,
+    links: catalog::Links,
+    generation: u64,
+    search_results: Arc<Mutex<HashMap<i64, erika_dandanplay::Found>>>,
     db: erika_store::Db,
     season: Vec<Intro>,
     schedule: Schedule,
@@ -46,18 +64,29 @@ pub struct AnimeEngine {
     inbox: Arc<Mutex<Vec<Done>>>,
     /// Whether the first wake, as the app starts, has come.
     started: bool,
+    /// The minute, since 1970, the timeline was laid out at.
+    minute: i64,
+    reviews: reviews::Runtime,
+    posters: posters::Downloads,
+    detail_posters: detail_posters::Downloads,
 }
 
 impl Default for AnimeEngine {
     fn default() -> Self {
-        let signed_in = erika_dandanplay::token().is_some();
+        let accounts = catalog::Accounts {
+            dandanplay: erika_dandanplay::token().is_some(),
+            bangumi: erika_dandanplay::reviews::bangumi_signed_in(),
+        };
         let db = erika_store::Db::open();
+        let preferred_season_source = catalog::saved_season_source(&db);
+        let season_source = accounts.season_source(&preferred_season_source);
         let mut engine = Self {
-            season: if signed_in {
-                cached_season()
-            } else {
-                Vec::new()
-            },
+            accounts,
+            preferred_season_source,
+            links: catalog::Links::cached(),
+            generation: 0,
+            search_results: Arc::default(),
+            season: cached_season(&season_source),
             schedule: Schedule::cached().unwrap_or_default(),
             watching: db.watching(WATCHING),
             db,
@@ -66,8 +95,14 @@ impl Default for AnimeEngine {
             ratings: HashMap::new(),
             inbox: Arc::default(),
             started: false,
+            minute: 0,
+            reviews: reviews::Runtime::default(),
+            posters: posters::Downloads::default(),
+            detail_posters: detail_posters::Downloads::default(),
             state: State {
-                signed_in,
+                signed_in: accounts.signed_in(),
+                season_source,
+                can_choose_season_source: accounts.can_choose(),
                 loading: false,
                 error: String::new(),
                 season_label: String::new(),
@@ -89,10 +124,18 @@ impl Default for AnimeEngine {
                 opened_from_schedule: false,
                 opened: 0,
                 show: shows::untitled(),
+                details_loading: false,
+                details_failed: false,
+                details_error: String::new(),
                 episodes: Vec::new(),
                 next_episode: 1,
                 next: NextAction::Start,
                 back: BackTo::Home,
+                comments: Vec::new(),
+                comments_loading: false,
+                has_comments: false,
+                comments_source: String::new(),
+                comments_error: String::new(),
             },
         };
         engine.show_season();
@@ -101,16 +144,17 @@ impl Default for AnimeEngine {
     }
 }
 
-fn cached_season() -> Vec<Intro> {
+fn cached_season(source: &SeasonSource) -> Vec<Intro> {
     bern::storage::cache_dir()
-        .and_then(|dir| std::fs::read(dir.join(SEASON_CACHE)).ok())
+        .and_then(|dir| std::fs::read(dir.join(season_cache(source))).ok())
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
 }
 
-fn keep_season(season: &[Intro]) {
+fn keep_season(source: &SeasonSource, season: &[Intro]) {
     if let (Some(dir), Ok(bytes)) = (bern::storage::cache_dir(), serde_json::to_vec(season)) {
-        let _ = std::fs::write(dir.join(SEASON_CACHE), bytes);
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join(season_cache(source)), bytes);
     }
 }
 
@@ -144,7 +188,9 @@ fn in_background(
 impl AnimeEngine {
     /// The week and today's timeline, as of now.
     fn show_season(&mut self) {
-        let season = season::build(&self.season, &self.schedule, &Clock::now());
+        let clock = Clock::now();
+        self.minute = clock.unix.div_euclid(60);
+        let season = season::build(&self.season, &self.schedule, &clock);
         let state = &mut self.state;
         state.today = season.today;
         state.season_label = season.label;
@@ -169,15 +215,35 @@ impl AnimeEngine {
         self.state.also = rows.collect();
     }
 
-    /// Ask dandanplay for the season's list, and bangumi-data for the
+    /// Ask the available catalogue for the season's list, and bangumi-data for the
     /// times when what is kept of them is old.
     fn refresh(&mut self) {
-        if !self.state.signed_in {
-            return;
+        self.generation += 1;
+        let generation = self.generation;
+        let accounts = self.accounts;
+        let source = accounts.season_source(&self.preferred_season_source);
+        self.state.can_choose_season_source = accounts.can_choose();
+        if self.state.season_source != source {
+            let cached = cached_season(&source);
+            // An account disappearing must not blank the existing calendar
+            // while public data refreshes. An explicit choice clears it below.
+            if !cached.is_empty() {
+                self.season = cached;
+            }
+            self.state.season_source = source.clone();
+            self.show_season();
         }
+        let links = self.links.clone();
+        self.load_posters();
         self.state.loading = true;
         self.state.error.clear();
-        in_background(&self.inbox, || Some(Done::Season(erika_dandanplay::shin())));
+        in_background(&self.inbox, move || {
+            Some(Done::Season(
+                generation,
+                catalog::season(accounts, &source, &links),
+            ))
+        });
+        self.refresh_opened();
         if erika_store::now() - self.schedule.fetched > schedule::STALE_AFTER {
             #[cfg(not(target_arch = "wasm32"))]
             in_background(&self.inbox, || {
@@ -191,6 +257,28 @@ impl AnimeEngine {
                 }
             });
         }
+    }
+
+    fn refresh_opened(&mut self) {
+        self.state.details_loading = false;
+        self.state.details_failed = false;
+        self.state.details_error.clear();
+        let id = self.state.opened;
+        if id == 0 || (id < 0 && self.details.contains_key(&id)) {
+            return;
+        }
+        let generation = self.generation;
+        self.state.details_loading = true;
+        let accounts = self.accounts;
+        let links = self.links.clone();
+        let hint = self.details.get(&id).cloned();
+        in_background(&self.inbox, move || {
+            Some(Done::Details(
+                generation,
+                id,
+                catalog::details(accounts, &links, id, hint.as_ref()),
+            ))
+        });
     }
 
     /// The show `id` as far as it is known: its details, the season's list,
@@ -209,6 +297,13 @@ impl AnimeEngine {
             shows::from_watching(watching, self.state.today)
         } else if let Some(anime) = self.db.anime(id) {
             shows::from_anime(&anime, self.state.today)
+        } else if let Some(found) = self
+            .search_results
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&id)
+        {
+            shows::from_found(found, self.state.today)
         } else {
             return Err(CommandError::new("unknown_show", format!("no show {id}")));
         };
@@ -225,9 +320,14 @@ impl AnimeEngine {
         if id == 0 {
             return;
         }
-        let Ok(show) = self.find(id) else {
+        let Ok(mut show) = self.find(id) else {
             return;
         };
+        if let Some(details) = self.details.get(&id)
+            && let Some(poster) = detail_posters::cached(details)
+        {
+            show.poster = poster;
+        }
         let files = self.db.episode_files(id);
         let (episodes, next) = shows::film(self.details.get(&id), &show, &files);
         self.state.next_episode = next;
@@ -249,7 +349,12 @@ impl AnimeEngine {
         );
         for done in done {
             match done {
-                Done::Season(Ok(season)) => {
+                Done::Season(generation, _) | Done::Details(generation, _, _)
+                    if generation != self.generation =>
+                {
+                    continue;
+                }
+                Done::Season(_, Ok(season)) => {
                     self.state.loading = false;
                     for intro in &season {
                         self.db.remember_anime(&erika_store::Anime {
@@ -258,11 +363,12 @@ impl AnimeEngine {
                             image: intro.image_url.clone(),
                         });
                     }
-                    keep_season(&season);
+                    keep_season(&self.state.season_source, &season);
                     self.season = season;
+                    self.load_posters();
                     self.show_season();
                 }
-                Done::Season(Err(error)) => {
+                Done::Season(_, Err(error)) => {
                     self.state.loading = false;
                     self.state.error = error.message;
                 }
@@ -271,19 +377,48 @@ impl AnimeEngine {
                     self.schedule = Schedule::new(fetched, slots);
                     self.show_season();
                 }
-                Done::Details(id, Ok(details)) => {
+                Done::Details(_, id, Ok(details)) => {
+                    self.links.remember(&details);
+                    reviews::keep_details(&details);
                     self.db.remember_anime(&erika_store::Anime {
                         dandanplay_id: id,
                         title: details.anime_title.clone(),
                         image: details.image_url.clone(),
                     });
                     self.details.insert(id, details);
+                    self.load_posters();
                     if self.state.opened == id {
+                        self.state.details_loading = false;
+                        self.state.details_failed = false;
+                        self.state.details_error.clear();
                         self.show_opened();
+                        self.load_detail_poster();
                     }
                 }
-                Done::Details(id, Err(error)) => {
+                Done::Details(_, id, Err(error)) => {
                     eprintln!("erika: details of {id}: {}", error.message);
+                    if self.state.opened == id {
+                        self.state.details_loading = false;
+                        self.state.details_failed = true;
+                        self.state.details_error = error.message;
+                    }
+                }
+                Done::Reviews(result) => self.take_reviews(result),
+                Done::Poster(url) => {
+                    self.posters.finished(&url, &self.inbox);
+                    self.show_season();
+                    self.show_opened();
+                    self.show_watching();
+                }
+                Done::DetailPoster(key) => {
+                    self.detail_posters.finished(&key);
+                    if self
+                        .details
+                        .get(&self.state.opened)
+                        .is_some_and(|d| detail_posters::Downloads::matches(&key, d))
+                    {
+                        self.show_opened();
+                    }
                 }
             }
         }
@@ -293,6 +428,23 @@ impl AnimeEngine {
         self.watching
             .iter()
             .find(|watching| watching.anime.dandanplay_id == id)
+    }
+
+    fn load_posters(&mut self) {
+        self.posters.add(
+            self.details
+                .values()
+                .map(|d| d.image_url.clone())
+                .chain(self.season.iter().map(|i| i.image_url.clone()))
+                .chain(self.watching.iter().map(|w| w.anime.image.clone())),
+            &self.inbox,
+        );
+    }
+
+    fn load_detail_poster(&mut self) {
+        if let Some(details) = self.details.get(&self.state.opened) {
+            self.detail_posters.request(details, &self.inbox);
+        }
     }
 
     /// Ask the shell to play what is being watched of show `id`.
@@ -315,12 +467,16 @@ impl anime::Commands for AnimeEngine {
         self.state.back = BackTo::Home;
         self.state.opened = id;
         self.state.episodes = Vec::new();
-        self.show_opened();
-        if !self.details.contains_key(&id) && self.state.signed_in {
-            in_background(&self.inbox, move || {
-                Some(Done::Details(id, erika_dandanplay::details(id)))
-            });
+        if !self.details.contains_key(&id)
+            && let Some(details) = reviews::cached_details(id)
+        {
+            self.details.insert(id, details);
         }
+        self.show_opened();
+        self.load_posters();
+        self.load_detail_poster();
+        self.refresh_opened();
+        self.load_reviews();
         Ok(())
     }
 
@@ -350,6 +506,7 @@ impl anime::Commands for AnimeEngine {
 
     fn close(&mut self) -> Result<(), CommandError> {
         self.state.opened = 0;
+        self.reviews.cancel();
         Ok(())
     }
 
@@ -438,16 +595,49 @@ impl anime::Commands for AnimeEngine {
     }
 
     fn account_changed(&mut self, signed_in: bool) -> Result<(), CommandError> {
-        self.state.signed_in = signed_in;
-        if signed_in {
-            self.refresh();
-        } else {
-            self.season.clear();
-            self.details.clear();
-            self.state.error.clear();
-            self.state.loading = false;
-            keep_season(&[]);
+        self.accounts.dandanplay = signed_in;
+        self.state.signed_in = self.accounts.signed_in();
+        self.refresh();
+        self.load_reviews();
+        Ok(())
+    }
+
+    fn bangumi_account_changed(&mut self, signed_in: bool) -> Result<(), CommandError> {
+        self.accounts.bangumi = signed_in;
+        self.state.signed_in = self.accounts.signed_in();
+        self.refresh();
+        self.load_reviews();
+        Ok(())
+    }
+
+    fn set_season_source(&mut self, source: SeasonSource) -> Result<(), CommandError> {
+        if !self.accounts.can_choose() {
+            return Err(CommandError::new(
+                "accounts_required",
+                "请先登录弹弹play和 Bangumi 账号",
+            ));
+        }
+        if self.preferred_season_source != source {
+            catalog::save_season_source(&self.db, &source);
+            self.season = cached_season(&source);
+            self.state.season_source = source.clone();
             self.show_season();
+            self.preferred_season_source = source;
+            self.refresh();
+        }
+        Ok(())
+    }
+
+    fn refresh_comments(&mut self) -> Result<(), CommandError> {
+        if !self.state.comments_loading {
+            self.load_reviews();
+        }
+        Ok(())
+    }
+
+    fn refresh_details(&mut self) -> Result<(), CommandError> {
+        if !self.state.details_loading {
+            self.refresh_opened();
         }
         Ok(())
     }
@@ -456,6 +646,14 @@ impl anime::Commands for AnimeEngine {
         self.watching = self.db.watching(WATCHING);
         self.show_watching();
         self.show_opened();
+        Ok(())
+    }
+
+    /// Lay the timeline out anew once the minute has turned.
+    fn tick(&mut self) -> Result<(), CommandError> {
+        if Clock::now().unix.div_euclid(60) != self.minute {
+            self.show_season();
+        }
         Ok(())
     }
 }
@@ -476,8 +674,8 @@ impl anime::Engine for AnimeEngine {
 }
 
 impl anime::Queries for AnimeEngine {
-    /// Shows by name: dandanplay's search while signed in, the season's
-    /// list otherwise; and, among them, what can be continued.
+    /// Search the available catalogue, falling back to the cached season;
+    /// among those results, include what can be continued.
     fn search(&self, text: String, answer: bern::prelude::Answer<anime::SearchResults>) {
         let text = text.trim().to_string();
         let today = self.state.today;
@@ -495,21 +693,35 @@ impl anime::Queries for AnimeEngine {
             .take(6)
             .map(|intro| shows::from_intro(intro, today))
             .collect();
-        if text.is_empty() || !self.state.signed_in {
+        if text.is_empty() {
             answer.ok(shows::results(local, &watching));
             return;
         }
         let cancelled = answer.cancellation();
+        let accounts = self.accounts;
+        let links = self.links.clone();
+        let results = Arc::clone(&self.search_results);
         let run = move || {
             if cancelled.is_cancelled() {
                 return;
             }
-            let shows = match erika_dandanplay::search(&text) {
-                Ok(found) => found
-                    .iter()
-                    .take(6)
-                    .map(|found| shows::from_found(found, today))
-                    .collect(),
+            let shows = match catalog::search(accounts, &links, &text) {
+                Ok(found) => {
+                    if cancelled.is_cancelled() {
+                        return;
+                    }
+                    let mut results = results.lock().unwrap_or_else(|p| p.into_inner());
+                    results.clear();
+                    found
+                        .into_iter()
+                        .take(6)
+                        .map(|found| {
+                            let show = shows::from_found(&found, today);
+                            results.insert(found.anime_id, found);
+                            show
+                        })
+                        .collect()
+                }
                 Err(_) => local,
             };
             answer.ok(shows::results(shows, &watching));

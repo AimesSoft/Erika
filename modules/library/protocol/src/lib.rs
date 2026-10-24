@@ -100,12 +100,15 @@ pub mod library {
         Matching { done: i64, total: i64 },
         #[label(tr! { "zh-Hans" => "找不到这个文件夹", "en" => "Folder not found" })]
         Missing,
+        #[label(tr! { "zh-Hans" => "共享设备离线", "en" => "Shared device offline" })]
+        Offline,
     }
 
     /// A source in the list of sources.
     #[value]
     pub struct LibrarySourceRow {
         pub id: i64,
+        pub shared: bool,
         #[content]
         pub name: String,
         pub content: SourceContent,
@@ -142,6 +145,7 @@ pub mod library {
     pub struct LibraryFile {
         /// Which address it is, for the commands.
         pub key: i64,
+        pub show: i64,
         #[content]
         pub name: String,
         pub note: FileNote,
@@ -174,6 +178,7 @@ pub mod library {
     #[value]
     pub struct LibraryFolder {
         pub source: i64,
+        pub shared: bool,
         pub content: SourceContent,
         #[content]
         pub title: String,
@@ -335,6 +340,10 @@ pub mod library {
 
     #[state]
     pub struct State {
+        pub shared_prompt: bool,
+        pub shared_connecting: bool,
+        #[content]
+        pub shared_error: String,
         pub posters: Vec<LibraryPoster>,
         /// The shows added last, newest first, for the home page, which
         /// shows them only when there are some.
@@ -383,6 +392,9 @@ pub mod library {
             folder: MediaSource,
             content: SourceContent,
         ) -> Result<(), CommandError>;
+        fn open_shared_mount(&mut self) -> Result<(), CommandError>;
+        fn cancel_shared_mount(&mut self) -> Result<(), CommandError>;
+        fn mount_shared(&mut self, name: String, address: String) -> Result<(), CommandError>;
         /// Say what a source holds; its videos not matched are matched
         /// again where that content is recognized.
         #[errors("unknown_source")]

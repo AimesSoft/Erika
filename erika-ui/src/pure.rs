@@ -9,6 +9,8 @@ use crate::phone::{
 };
 use crate::{AppWindows, ErikaDraft};
 use bern::prelude::*;
+#[cfg(feature = "bern-module-anime")]
+use erika_anime_protocol::anime;
 use erika_protocol::erika;
 
 #[bern::session]
@@ -181,7 +183,11 @@ pub fn pure_link(app: erika::Client, #[session] draft: PureDraft) -> impl View {
 /// column of ways to open and the recent videos in a grouped list. What
 /// plays stays in a mini player 24 points above the bottom.
 #[component]
-pub fn phone_pure(app: erika::Client, #[session] draft: ErikaDraft) -> impl View {
+pub fn phone_pure(
+    app: erika::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
+    #[session] draft: ErikaDraft,
+) -> impl View {
     ui! {
         Stack(variant: phone_page, align: bottom) {
             if draft.phone_settings == PhoneSettings::Closed {
@@ -189,7 +195,7 @@ pub fn phone_pure(app: erika::Client, #[session] draft: ErikaDraft) -> impl View
             } else if draft.phone_settings == PhoneSettings::List {
                 phone_settings(app: app)
             } else {
-                phone_settings_section(app: app)
+                phone_settings_section(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
             }
             // `.x-pmini` with no tab bar: 12 from the sides, 24 above the
             // screen's bottom edge, on the system's glass.
@@ -223,10 +229,11 @@ pub fn phone_pure_page(
             Section(style: plain) {
                 Column(gap: 0) {
                     Canvas(height: 7)
-                    // Apple's size for buttons in the bar: 44-point circles.
                     Row(gap: 0, height: 48, align: center) {
                         Spacer
-                        IconButton(id: phone_pure_settings, icon: "gearshape", font_size: 18, height: 44, label: tr! { "zh-Hans" => "设置", "en" => "Settings" }) => draft.phone_settings.set(PhoneSettings::List)
+                        ControlGroup(label: tr! { "zh-Hans" => "页面操作", "en" => "Page actions" }, height: 44) {
+                            Slot(id: phone_header_settings)
+                        }
                     }
                     Canvas(height: 70)
                     Drop(id: phone_pure_drop, label: tr! { "zh-Hans" => "打开一个视频", "en" => "Open a video" }, value: pure.file, files: "video", over: pure.over) {

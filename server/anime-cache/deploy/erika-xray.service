@@ -1,0 +1,18 @@
+[Unit]
+Description=Erika image cache local Xray proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=xray-cache
+Group=xray-cache
+ExecStart=/opt/erika/xray/xray run -config /etc/erika-xray/config.json
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

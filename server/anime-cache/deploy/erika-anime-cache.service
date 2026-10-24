@@ -1,0 +1,21 @@
+[Unit]
+Description=Erika public anime daily cache
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=nipaplay-api
+Group=nipaplay-api
+EnvironmentFile=/etc/nipaplay-dandanplay-gateway.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /opt/erika/anime-cache/cache.py
+Restart=always
+RestartSec=5
+StateDirectory=erika-anime-cache
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

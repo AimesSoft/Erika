@@ -7,6 +7,8 @@ mod settings;
 
 #[cfg(feature = "bern-module-account")]
 mod account;
+#[cfg(feature = "bern-module-account")]
+mod bangumi;
 
 mod chapters;
 mod danmaku;
@@ -37,6 +39,8 @@ pub struct ErikaEngine {
     feedback_remaining: f64,
     pub(crate) all_plugins: Vec<Plugin>,
     pub(crate) saved_modules: Option<Vec<String>>,
+    /// Runtime target while a feature change starts/stops its modules.
+    pub(crate) pending_modules: Option<Vec<String>>,
     pub(crate) onboarding_completed: bool,
     /// liberika, where it runs, and the media it plays.
     kernel: Option<Arc<dyn Kernel>>,
@@ -65,6 +69,8 @@ pub struct ErikaEngine {
     /// What signing in and renewing came back with on other threads.
     #[cfg(feature = "bern-module-account")]
     account_inbox: account::Inbox,
+    #[cfg(feature = "bern-module-account")]
+    bangumi: bangumi::Runtime,
     /// What matching the video playing came back with, and the dandanplay
     /// episode it was matched to.
     found: Arc<std::sync::Mutex<Vec<matching::Found>>>,
@@ -130,6 +136,8 @@ impl Default for ErikaEngine {
             run,
             #[cfg(feature = "bern-module-account")]
             account_inbox: Arc::default(),
+            #[cfg(feature = "bern-module-account")]
+            bangumi: bangumi::Runtime::default(),
             found: Arc::default(),
             episode_playing: None,
             match_revision: 0,
@@ -142,6 +150,7 @@ impl Default for ErikaEngine {
             online_danmaku_count: 0,
             feedback_remaining: 0.0,
             saved_modules: None,
+            pending_modules: None,
             onboarding_completed: false,
             kernel: if cfg!(test) { None } else { kernel::start() },
             source: None,
@@ -198,7 +207,10 @@ impl Default for ErikaEngine {
                 }
                 .into(),
                 user_name: "本地用户".into(),
+                user_account: ProfileAccount::Local,
+                user_avatar: None,
                 account_status: Account::default(),
+                bangumi: BangumiAccount::default(),
             },
         };
         engine.restore_welcome_preferences();
@@ -217,6 +229,7 @@ impl Default for ErikaEngine {
         #[cfg(feature = "bern-module-account")]
         if engine.state.features.account {
             engine.restore_account();
+            engine.restore_bangumi();
         }
         engine
     }
@@ -382,30 +395,22 @@ impl erika::Commands for ErikaEngine {
         if !settings::ALL_MODULES.contains(&id.as_str()) {
             return Err(CommandError::new("unknown_module", "unknown module"));
         }
-        let f = &self.state.features;
-        let mut affected = Vec::new();
-        match (id.as_str(), enabled) {
-            ("library", false) => {
-                if f.sources {
-                    affected.push(FeatureModule::Sources);
-                }
-                if f.remote {
-                    affected.push(FeatureModule::Remote);
-                }
-            }
-            ("account" | "anime", false) if f.sync => affected.push(FeatureModule::Sync),
-            ("sync", true) => {
-                if !f.account {
-                    affected.push(FeatureModule::Account);
-                }
-                if !f.anime {
-                    affected.push(FeatureModule::Anime);
-                }
-            }
-            ("sources" | "remote", true) if !f.library => affected.push(FeatureModule::Library),
-            _ => {}
-        }
-        let mut affected = affected.into_iter();
+        let previous = self.saved_modules.clone().unwrap_or_else(|| {
+            settings::ALL_MODULES
+                .iter()
+                .map(|id| (*id).into())
+                .collect()
+        });
+        let mut selected = previous.clone();
+        settings::change_feature(&mut selected, &id, enabled);
+        let mut affected = settings::ALL_MODULES
+            .iter()
+            .filter(|other| **other != id)
+            .filter(|other| {
+                previous.iter().any(|old| old == *other)
+                    != selected.iter().any(|new| new == *other)
+            })
+            .map(|id| settings::feature_module(id));
         match (enabled, affected.next(), affected.next()) {
             (_, None, _) => {}
             (true, Some(module), None) => self.notify(Notice::AlsoOn { module }),
@@ -415,8 +420,7 @@ impl erika::Commands for ErikaEngine {
                 self.notify(Notice::AlsoOffBoth { first, second })
             }
         }
-        bern::modules::set_enabled(&id, enabled);
-        Ok(())
+        self.apply_feature_selection(selected)
     }
     fn apply_preset(&mut self, preset: FeaturePreset) -> Result<(), CommandError> {
         self.state.feature_preview_revision += 1;
@@ -425,19 +429,7 @@ impl erika::Commands for ErikaEngine {
             FeaturePreset::Anime => settings::ANIME_MODULES,
             FeaturePreset::All => settings::ALL_MODULES,
         };
-        // Stop dependents first; enable prerequisites first. Composite still
-        // owns the dependency rules and publishes the resulting module state.
-        for id in settings::ALL_MODULES.iter().rev() {
-            if !wanted.contains(id) {
-                bern::modules::set_enabled(id, false);
-            }
-        }
-        for id in settings::ALL_MODULES {
-            if wanted.contains(&id) {
-                bern::modules::set_enabled(id, true);
-            }
-        }
-        Ok(())
+        self.apply_feature_selection(wanted.iter().map(|id| (*id).into()).collect())
     }
     fn set_plugin_category(&mut self, category: PluginCategory) -> Result<(), CommandError> {
         self.state.plugin_category = category;
@@ -934,6 +926,80 @@ impl erika::Commands for ErikaEngine {
         Ok(())
     }
 
+    #[cfg(feature = "bern-module-account")]
+    fn open_account_login(&mut self, settings_window: bool) -> Result<(), CommandError> {
+        self.require_account()?;
+        self.open_account_prompt(settings_window);
+        Ok(())
+    }
+    #[cfg(feature = "bern-module-account")]
+    fn close_account_login(&mut self) -> Result<(), CommandError> {
+        self.require_account()?;
+        self.close_account_prompt();
+        Ok(())
+    }
+
+    #[cfg(feature = "bern-module-account")]
+    fn cancel_account_login(&mut self) -> Result<(), CommandError> {
+        self.require_account()?;
+        self.close_account_prompt();
+        self.close_bangumi();
+        Ok(())
+    }
+    #[cfg(feature = "bern-module-account")]
+    fn submit_account_login(&mut self, bangumi: bool, user: String, password: String, captcha: String) -> Result<(), CommandError> {
+        self.require_account()?;
+        if bangumi && self.state.bangumi.prompt {
+            self.submit_bangumi(user, password, captcha);
+        } else if !bangumi && self.state.account_status.prompt {
+            self.sign_in_started(user, password);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "bern-module-account")]
+    fn open_bangumi_login(&mut self, settings_window: bool) -> Result<(), CommandError> {
+        self.require_account()?;
+        self.close_account_prompt();
+        self.open_bangumi(settings_window);
+        Ok(())
+    }
+    #[cfg(feature = "bern-module-account")]
+    fn refresh_bangumi_captcha(&mut self) -> Result<(), CommandError> {
+        self.require_account()?;
+        self.prepare_bangumi();
+        Ok(())
+    }
+    #[cfg(feature = "bern-module-account")]
+    fn close_bangumi_login(&mut self) -> Result<(), CommandError> {
+        self.require_account()?;
+        self.close_bangumi();
+        Ok(())
+    }
+    #[cfg(feature = "bern-module-account")]
+    fn bangumi_sign_in(&mut self, email: String, password: String, captcha: String) -> Result<(), CommandError> {
+        self.require_account()?;
+        self.submit_bangumi(email, password, captcha);
+        Ok(())
+    }
+    #[cfg(feature = "bern-module-account")]
+    fn bangumi_sign_out(&mut self) -> Result<(), CommandError> {
+        self.require_account()?;
+        self.forget_bangumi()
+    }
+    #[cfg(feature = "bern-module-account")]
+    fn check_bangumi_session(&mut self) -> Result<(), CommandError> {
+        self.require_account()?;
+        self.check_bangumi();
+        Ok(())
+    }
+    #[cfg(feature = "bern-module-account")]
+    fn dismiss_bangumi_expired(&mut self) -> Result<(), CommandError> {
+        self.require_account()?;
+        self.state.bangumi.expired = false;
+        Ok(())
+    }
+
     fn set_appearance(&mut self, appearance: Appearance) -> Result<(), CommandError> {
         self.state.appearance = appearance;
         self.save_welcome_preferences()?;
@@ -947,33 +1013,34 @@ impl erika::Engine for ErikaEngine {
     fn wake(&mut self) {
         self.take_kernel_results();
         #[cfg(feature = "bern-module-account")]
-        self.take_account_results();
+        {
+            self.take_account_results();
+            self.take_bangumi_results();
+            self.check_bangumi();
+        }
         self.take_found();
         #[cfg(feature = "bern-module-account")]
         self.renew_when_old();
     }
 
     fn initial_modules(&self) -> Option<Vec<String>> {
-        self.saved_modules.clone()
+        self.saved_modules.as_deref().map(settings::runtime_modules)
     }
     fn modules_changed(&mut self, enabled: &[String]) {
-        self.saved_modules = Some(enabled.to_vec());
+        if let Some(wanted) = &self.pending_modules {
+            if wanted.len() == enabled.len() && wanted.iter().all(|id| enabled.contains(id)) {
+                self.pending_modules = None;
+            }
+            // Runtime anime can be on solely for library details; callbacks
+            // must not turn the user's New Shows switch back on.
+            return;
+        }
+        self.publish_feature_selection(enabled);
         if let Err(error) = self.save_welcome_preferences() {
             self.notify(Notice::SaveFailed {
                 reason: error.message,
             });
         }
-        #[cfg(feature = "bern-module-account")]
-        let account_was_enabled = self.state.features.account;
-        self.state.features = settings::feature_selection(enabled);
-        #[cfg(feature = "bern-module-account")]
-        if account_was_enabled != self.state.features.account {
-            self.set_account_enabled(self.state.features.account);
-        }
-        self.state.module_count = enabled.len() as i64;
-        self.state.preset = settings::preset_of(enabled);
-        self.apply_enhancement();
-        self.apply_danmaku();
     }
 
     fn state(&self) -> &State {

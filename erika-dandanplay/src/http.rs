@@ -39,8 +39,16 @@ pub(crate) fn send(
         let index = (first + step) % GATEWAYS.len();
         let url = format!("{}{path}{query}", GATEWAYS[index]);
         match attempt(&agent, method, &url, path, body.as_ref(), token) {
-            Ok(Some(text)) => {
+            Ok(Some(mut text)) => {
                 PREFERRED.store(index, Ordering::Relaxed);
+                if path.starts_with("/public/") {
+                    // Resolve server-owned poster paths against the gateway that answered.
+                    let origin = GATEWAYS[index].trim_end_matches("/dandanplay");
+                    text = text.replace(
+                        "\"/dandanplay/public/images/",
+                        &format!("\"{origin}/dandanplay/public/images/"),
+                    );
+                }
                 return Ok(text);
             }
             // The gateway itself failed: try the next.
@@ -118,6 +126,7 @@ fn attempt(
                 .unwrap_or_else(|| "登录已失效，请重新登录弹弹play".into()),
             sign_in: true,
         })),
+        404 if path.starts_with("/public/") => Ok(None),
         500..=599 => Ok(None),
         _ => Err(Failure::Answer(Error::new(
             message

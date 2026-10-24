@@ -8,6 +8,7 @@
 mod matching;
 mod names;
 mod scan;
+mod shared;
 #[cfg(test)]
 mod tests;
 
@@ -30,6 +31,8 @@ const RECENT: usize = 8;
 
 /// What work on other threads came back with.
 enum Done {
+    SharedMount(u64, String, String, Result<Vec<shared::Video>, String>),
+    SharedRefresh(i64, String, Result<Vec<shared::Video>, String>),
     Scan(i64, Scanned),
     Match(i64, Matched),
     Details(i64, Result<Details, erika_dandanplay::Error>),
@@ -60,6 +63,7 @@ pub struct LibraryEngine {
     asked: HashSet<i64>,
     /// Whether the first wake, as the app starts, has come.
     started: bool,
+    shared_request: u64,
 }
 
 /// Run `work` on another thread, handing what it sends to the engine,
@@ -174,6 +178,7 @@ fn reachable(id: i64) -> bool {
 fn no_folder() -> LibraryFolder {
     LibraryFolder {
         source: 0,
+        shared: false,
         content: SourceContent::Anime,
         title: String::new(),
         location: String::new(),
@@ -254,6 +259,10 @@ fn note(entry: &Entry) -> FileNote {
 fn file_row(entry: &Entry, name: &str, place: String) -> LibraryFile {
     LibraryFile {
         key: entry.key,
+        show: entry
+            .matched
+            .as_ref()
+            .map_or(0, |(anime, _)| anime.dandanplay_id),
         name: name.to_string(),
         note: note(entry),
         matched: entry.matched.is_some(),
@@ -267,6 +276,9 @@ impl Default for LibraryEngine {
         let mut engine = Self {
             db: erika_store::Db::open(),
             state: State {
+                shared_prompt: false,
+                shared_connecting: false,
+                shared_error: String::new(),
                 show: nothing(),
                 posters: Vec::new(),
                 recent: Vec::new(),
@@ -292,6 +304,7 @@ impl Default for LibraryEngine {
             details: HashMap::new(),
             asked: HashSet::new(),
             started: false,
+            shared_request: 0,
         };
         engine.load();
         engine
@@ -318,6 +331,7 @@ impl LibraryEngine {
             .iter()
             .map(|source| LibrarySourceRow {
                 id: source.id,
+                shared: source.kind == shared::KIND,
                 name: source.name.clone(),
                 content: content_of(&source.content),
                 location: root_of(source).map_or_else(
@@ -333,6 +347,9 @@ impl LibraryEngine {
                         done: *done as i64,
                         total: *total as i64,
                     },
+                    None if self.missing.contains(&source.id) && source.kind == shared::KIND => {
+                        SourceStatus::Offline
+                    }
                     None if self.missing.contains(&source.id) => SourceStatus::Missing,
                     None => SourceStatus::Ready {
                         files: source.files,
@@ -401,6 +418,9 @@ impl LibraryEngine {
         let Some(source) = sources.iter().find(|source| source.id == *id) else {
             return no_folder();
         };
+        if source.kind == shared::KIND {
+            return self.shared_folder(source, path, entries);
+        }
         let Some(root) = root_of(source) else {
             return no_folder();
         };
@@ -442,6 +462,7 @@ impl LibraryEngine {
         let missing = self.missing.contains(id);
         LibraryFolder {
             source: *id,
+            shared: false,
             content: content_of(&source.content),
             title: path.last().cloned().unwrap_or_else(|| source.name.clone()),
             location: path
@@ -458,9 +479,90 @@ impl LibraryEngine {
         }
     }
 
+    fn import_shared(&mut self, id: i64, videos: &[shared::Video]) {
+        let present: HashSet<&str> = videos.iter().map(|video| video.url.as_str()).collect();
+        let gone: Vec<String> = self
+            .db
+            .seen(id)
+            .into_iter()
+            .map(|seen| seen.url)
+            .filter(|url| !present.contains(url.as_str()))
+            .collect();
+        for video in videos {
+            if let Some(file) = self.db.saw(
+                id,
+                &video.url,
+                video.fingerprint.size as i64,
+                0,
+                Some(&video.fingerprint),
+            ) {
+                self.db
+                    .link_episode(file, &video.anime, &video.episode, false);
+            }
+        }
+        self.db.forget(id, &gone);
+    }
+
+    fn shared_folder(&self, source: &Source, path: &[String], entries: &[Entry]) -> LibraryFolder {
+        let mut dirs: BTreeMap<String, i64> = BTreeMap::new();
+        let mut files = Vec::new();
+        for entry in entries.iter().filter(|entry| entry.source == source.id) {
+            let Some((anime, episode)) = &entry.matched else {
+                continue;
+            };
+            if path.is_empty() {
+                *dirs.entry(anime.title.clone()).or_default() += 1;
+            } else if path[0] == anime.title {
+                files.push(file_row(entry, &episode.title, String::new()));
+            }
+        }
+        files.sort_by(|a, b| natural(&a.name, &b.name));
+        let mut crumbs = vec![LibraryCrumb {
+            depth: 0,
+            name: source.name.clone(),
+        }];
+        crumbs.extend(path.iter().enumerate().map(|(index, name)| LibraryCrumb {
+            depth: index as i64 + 1,
+            name: name.clone(),
+        }));
+        LibraryFolder {
+            source: source.id,
+            shared: true,
+            content: SourceContent::Anime,
+            title: path.last().cloned().unwrap_or_else(|| source.name.clone()),
+            location: source.location.clone(),
+            crumbs,
+            empty: dirs.is_empty() && files.is_empty(),
+            dirs: dirs
+                .into_iter()
+                .map(|(name, files)| LibraryDir {
+                    name,
+                    files,
+                    unmatched: 0,
+                })
+                .collect(),
+            files,
+            can_batch: false,
+            missing: self.missing.contains(&source.id),
+        }
+    }
+
     /// Scan source `id`, unless it is being scanned.
     fn start_scan(&mut self, id: i64) {
         if self.busy.contains_key(&id) {
+            return;
+        }
+        if let Some(source) = self
+            .db
+            .sources()
+            .into_iter()
+            .find(|source| source.id == id && source.kind == shared::KIND)
+        {
+            self.busy.insert(id, Busy::Scanning { done: 0, total: 0 });
+            in_background(&self.inbox, move |send| {
+                let result = shared::fetch(&source.location);
+                send(Done::SharedRefresh(id, source.location, result))
+            });
             return;
         }
         if cfg!(target_arch = "wasm32") {
@@ -500,6 +602,14 @@ impl LibraryEngine {
     /// Ask dandanplay about the videos of source `id` not matched yet and
     /// not unlinked by the user, when an account is signed in.
     fn start_matching(&mut self, id: i64) {
+        if self
+            .db
+            .sources()
+            .iter()
+            .any(|source| source.id == id && source.kind == shared::KIND)
+        {
+            return;
+        }
         if self.busy.contains_key(&id) {
             return;
         }
@@ -628,6 +738,49 @@ impl LibraryEngine {
         let mut changed = false;
         for done in done {
             match done {
+                Done::SharedMount(request, name, address, result) => {
+                    if request != self.shared_request || !self.state.shared_prompt {
+                        continue;
+                    }
+                    self.state.shared_connecting = false;
+                    match result {
+                        Ok(videos) => {
+                            if let Some(id) =
+                                self.db.add_source(shared::KIND, &name, &address, "anime")
+                            {
+                                self.import_shared(id, &videos);
+                                self.missing.remove(&id);
+                                self.state.shared_prompt = false;
+                                self.state.shared_error.clear();
+                                changed = true;
+                            } else {
+                                self.state.shared_error = "无法保存共享媒体来源，请重试".into();
+                            }
+                        }
+                        Err(error) => self.state.shared_error = error,
+                    }
+                }
+                Done::SharedRefresh(id, address, result) => {
+                    // A removed source's ID may have been reused by a different source.
+                    if !self.db.sources().iter().any(|source| {
+                        source.id == id && source.kind == shared::KIND && source.location == address
+                    }) {
+                        continue;
+                    }
+                    self.busy.remove(&id);
+                    match result {
+                        Ok(videos) => {
+                            self.import_shared(id, &videos);
+                            self.missing.remove(&id);
+                            changed = true;
+                            self.finish(id);
+                        }
+                        Err(_) => {
+                            self.missing.insert(id);
+                            self.announce.remove(&id);
+                        }
+                    }
+                }
                 Done::Scan(id, Scanned::Walked { urls }) => {
                     let present: HashSet<String> = urls.into_iter().collect();
                     let gone: Vec<String> = self
@@ -995,6 +1148,50 @@ impl library::Commands for LibraryEngine {
             self.start_scan(id);
         }
         self.load();
+        Ok(())
+    }
+
+    fn open_shared_mount(&mut self) -> Result<(), CommandError> {
+        self.shared_request += 1;
+        self.state.shared_prompt = true;
+        self.state.shared_connecting = false;
+        self.state.shared_error.clear();
+        Ok(())
+    }
+
+    fn cancel_shared_mount(&mut self) -> Result<(), CommandError> {
+        self.shared_request += 1;
+        self.state.shared_prompt = false;
+        self.state.shared_connecting = false;
+        self.state.shared_error.clear();
+        Ok(())
+    }
+
+    fn mount_shared(&mut self, name: String, address: String) -> Result<(), CommandError> {
+        if self.state.shared_connecting {
+            return Ok(());
+        }
+        self.state.shared_prompt = true;
+        self.state.shared_error.clear();
+        let address = match shared::address(&address) {
+            Ok(address) => address,
+            Err(error) => {
+                self.state.shared_error = error;
+                return Ok(());
+            }
+        };
+        let name = if name.trim().is_empty() {
+            address.clone()
+        } else {
+            name.trim().to_owned()
+        };
+        self.shared_request += 1;
+        let request = self.shared_request;
+        self.state.shared_connecting = true;
+        in_background(&self.inbox, move |send| {
+            let result = shared::fetch(&address);
+            send(Done::SharedMount(request, name, address, result));
+        });
         Ok(())
     }
 

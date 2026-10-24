@@ -47,10 +47,17 @@ pub fn downloads_page(downloads: downloads::Client) -> impl View {
                 }
                 Layout(size: compact) {
                     Column(gap: 12) {
-                        Row(gap: 12, align: center) {
+                        Row(gap: 12, height: 48, align: center) {
                             Text(content: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, style: large_title)
                             Spacer
-                            if downloads.available {
+                            if window.compact {
+                                ControlGroup(label: tr! { "zh-Hans" => "下载操作", "en" => "Download actions" }, height: 44) {
+                                    if downloads.available {
+                                        IconButton(id: add_phone, label: tr! { "zh-Hans" => "添加任务", "en" => "Add task" }, icon: "plus", prominence: plain) => downloads.open_add()
+                                    }
+                                    Slot(id: phone_header_settings)
+                                }
+                            } else if downloads.available {
                                 IconButton(id: add_small, label: tr! { "zh-Hans" => "添加任务", "en" => "Add task" }, icon: "plus", prominence: plain) => downloads.open_add()
                             }
                         }

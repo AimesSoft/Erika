@@ -16,10 +16,11 @@ bern-module-anime = ["erika-protocol/bern-module-anime", "dep:erika-anime-protoc
 bern-module-sync = ["erika-protocol/bern-module-sync"]
 bern-module-sources = ["erika-protocol/bern-module-sources"]
 bern-module-remote = ["erika-protocol/bern-module-remote"]
-bern-module-downloads = ["erika-protocol/bern-module-downloads"]
+bern-module-downloads = ["erika-protocol/bern-module-downloads", "dep:erika-downloads-protocol"]
 
 [dependencies]
 bern.workspace = true
 erika-protocol.workspace = true
 erika-anime-protocol = { path = "../modules/anime/protocol", optional = true }
 erika-anime-ui = { path = "../modules/anime/ui", optional = true }
+erika-downloads-protocol = { path = "../modules/downloads/protocol", optional = true }

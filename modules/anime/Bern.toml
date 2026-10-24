@@ -41,3 +41,6 @@ id = "new"
 label = { "zh-Hans" = "新番", "en" = "New Shows" }
 icon = "calendar"
 component = "new_page"
+
+[contributes]
+background = ["anime_clock"]

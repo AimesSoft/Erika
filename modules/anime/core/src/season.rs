@@ -7,7 +7,6 @@ use crate::clock::{Clock, date_of, days_of};
 use crate::schedule::Schedule;
 use crate::timeline::{self, Timeline};
 use bern::date::CalendarDate;
-use bern::media::MediaSource;
 use erika_anime_protocol::anime::{Broadcast, BroadcastDay};
 use erika_dandanplay::Intro;
 
@@ -78,7 +77,7 @@ pub fn build(intros: &[Intro], schedule: &Schedule, clock: &Clock) -> Season {
     let broadcast = |intro: &Intro, hour: Option<f64>, episode: i64, offset: i64| Broadcast {
         id: intro.anime_id,
         title: intro.anime_title.clone(),
-        poster: MediaSource::new(intro.image_url.clone()),
+        poster: crate::posters::source(&intro.image_url),
         time: hour.map_or(0, seconds),
         timed: hour.is_some(),
         episode,

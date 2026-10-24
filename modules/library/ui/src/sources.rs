@@ -10,16 +10,21 @@ use erika_protocol::erika;
 #[component]
 pub fn library_sources_page(app: erika::Client, library: library::Client) -> impl View {
     ui! {
-        ScrollView(appear: page_in) {
-            Column(gap: 0, padding_x: if window.compact { 16.0 } else if window.tv { 56.0 } else if window.medium { 24.0 } else { 32.0 }, padding_y: 6) {
-                if library.matching.open {
-                    library_match(app: app, library: library)
-                } else if library.browsing {
-                    library_folder(library: library)
-                } else {
-                    library_source_list(library: library)
+        Stack {
+            ScrollView(appear: page_in) {
+                Column(gap: 0, padding_x: if window.compact { 16.0 } else if window.tv { 56.0 } else if window.medium { 24.0 } else { 32.0 }, padding_y: 6) {
+                    if library.matching.open {
+                        library_match(app: app, library: library)
+                    } else if library.browsing {
+                        library_folder(library: library)
+                    } else {
+                        library_source_list(library: library)
+                    }
+                    Canvas(height: 48)
                 }
-                Canvas(height: 48)
+            }
+            if library.shared_prompt {
+                library_shared_mount(library: library)
             }
         }
     }
@@ -46,10 +51,12 @@ pub fn library_source_list(library: library::Client, #[session] draft: LibraryDr
                 Row(gap: 8, height: 48, align: center) {
                     Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
                     Spacer
-                    Menu(id: add_folder_phone, label: tr! { "zh-Hans" => "添加文件夹", "en" => "Add folder" }, icon: "plus", style: icon) {
-                        MenuItem(id: add_anime_phone, label: tr! { "zh-Hans" => "番剧文件夹…", "en" => "Anime folder…" }, pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Anime)
-                        MenuItem(id: add_series_phone, label: tr! { "zh-Hans" => "电视剧文件夹…", "en" => "TV series folder…" }, pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Series)
-                        MenuItem(id: add_movie_phone, label: tr! { "zh-Hans" => "电影文件夹…", "en" => "Movies folder…" }, pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Movie)
+                    ControlGroup(label: tr! { "zh-Hans" => "媒体库操作", "en" => "Library actions" }, height: 44) {
+                        Menu(id: mount_phone, label: tr! { "zh-Hans" => "挂载", "en" => "Mount" }, icon: "plus") {
+                            MenuItem(id: mount_local_phone, label: tr! { "zh-Hans" => "本地文件夹", "en" => "Local folder" }, icon: "folder", pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Anime)
+                            MenuItem(id: mount_shared_phone, label: tr! { "zh-Hans" => "NipaPlay共享媒体", "en" => "NipaPlay shared media" }, icon: "server.rack") => library.open_shared_mount()
+                        }
+                        Slot(id: phone_header_settings)
                     }
                 }
                 Canvas(height: 2)
@@ -65,10 +72,9 @@ pub fn library_source_list(library: library::Client, #[session] draft: LibraryDr
                     // A television picks no files; its sources come from the
                     // other devices' library.
                     if !window.tv {
-                        Menu(id: add_folder, label: tr! { "zh-Hans" => "添加文件夹", "en" => "Add folder" }, icon: "plus", shape: capsule, height: 32) {
-                            MenuItem(id: add_anime, label: tr! { "zh-Hans" => "番剧文件夹…", "en" => "Anime folder…" }, pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Anime)
-                            MenuItem(id: add_series, label: tr! { "zh-Hans" => "电视剧文件夹…", "en" => "TV series folder…" }, pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Series)
-                            MenuItem(id: add_movie, label: tr! { "zh-Hans" => "电影文件夹…", "en" => "Movies folder…" }, pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Movie)
+                        Menu(id: mount, label: tr! { "zh-Hans" => "挂载", "en" => "Mount" }, icon: "plus", shape: capsule, height: 32) {
+                            MenuItem(id: mount_local, label: tr! { "zh-Hans" => "本地文件夹", "en" => "Local folder" }, icon: "folder", pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Anime)
+                            MenuItem(id: mount_shared, label: tr! { "zh-Hans" => "NipaPlay共享媒体", "en" => "NipaPlay shared media" }, icon: "server.rack") => library.open_shared_mount()
                         }
                     }
                 }
@@ -81,11 +87,19 @@ pub fn library_source_list(library: library::Client, #[session] draft: LibraryDr
                             Button(id: open_source, label: row.name, variant: row) {
                                 Row(gap: 12, align: center) {
                                     Stack(variant: setting_icon, width: 30, height: 30, align: center) {
-                                        Label(title: row.name, icon: "folder", display: icon, style: body)
+                                        if row.shared {
+                                            Label(title: row.name, icon: "server.rack", display: icon, style: body)
+                                        } else {
+                                            Label(title: row.name, icon: "folder", display: icon, style: body)
+                                        }
                                     }
                                     Column(gap: 2) {
                                         Text(content: row.name, style: headline, lines: 1)
-                                        Text(content: tr! { "zh-Hans" => "{content} · {at}", "en" => "{content} · {at}"; content: row.content, at: row.location }, style: caption, emphasis: secondary, lines: 1)
+                                        if row.shared {
+                                            Text(content: tr! { "zh-Hans" => "NipaPlay共享媒体 · {at}", "en" => "NipaPlay shared media · {at}"; at: row.location }, style: caption, emphasis: secondary, lines: 1)
+                                        } else {
+                                            Text(content: tr! { "zh-Hans" => "{content} · {at}", "en" => "{content} · {at}"; content: row.content, at: row.location }, style: caption, emphasis: secondary, lines: 1)
+                                        }
                                     }
                                     Spacer
                                     Text(content: row.status, style: caption, emphasis: secondary, lines: 1)
@@ -98,7 +112,7 @@ pub fn library_source_list(library: library::Client, #[session] draft: LibraryDr
             } else {
                 Column(gap: 4, padding_y: 8) {
                     Text(content: tr! { "zh-Hans" => "还没有来源。", "en" => "No sources yet." }, style: title3)
-                    Text(content: tr! { "zh-Hans" => "添加放视频的文件夹，Erika 会扫描里面的视频，弹弹play 认出的番列在「番剧」里；以后有新文件，重新扫描只读变了的。", "en" => "Add a folder of videos: Erika scans it, and the shows dandanplay recognizes appear under Shows. Later scans only read what changed." }, emphasis: secondary, lines: 3)
+                    Text(content: tr! { "zh-Hans" => "通过「挂载」添加本地文件夹或 NipaPlay共享媒体，视频会汇总到「番剧」里。", "en" => "Mount a local folder or NipaPlay shared media to add its videos to Shows." }, emphasis: secondary, lines: 3)
                 }
             }
             if library.has_sources {
@@ -118,6 +132,33 @@ pub fn library_source_list(library: library::Client, #[session] draft: LibraryDr
                 }
                 Canvas(height: 14)
                 Text(content: tr! { "zh-Hans" => "同一个文件在几个来源里都有，只算一份。番剧墙不分来源，要只看某个来源，在「番剧」里筛选。", "en" => "A file in several sources counts once. The wall shows every source; filter it under Shows to see one." }, style: caption, emphasis: secondary, lines: 3)
+            }
+        }
+    }
+}
+
+/// The same connection fields as NipaPlay's shared-host dialog.
+#[component]
+pub fn library_shared_mount(library: library::Client, #[session] draft: LibraryDraft) -> impl View {
+    ui! {
+        Modal(width: 440, height: 360, cover: compact, appear: pop_in, disappear: fade) {
+            Column(gap: 16, padding: 24) {
+                Text(content: tr! { "zh-Hans" => "挂载 NipaPlay共享媒体", "en" => "Mount NipaPlay shared media" }, style: title3)
+                Text(content: tr! { "zh-Hans" => "连接已开启远程访问的 NipaPlay 设备。", "en" => "Connect to a NipaPlay device with remote access enabled." }, emphasis: secondary, lines: 2)
+                TextInput(id: shared_name, label: tr! { "zh-Hans" => "备注名称（可选）", "en" => "Name (optional)" }, value: draft.shared_name, prompt: tr! { "zh-Hans" => "例如：家里的电脑", "en" => "e.g. Home computer" })
+                TextInput(id: shared_address, label: tr! { "zh-Hans" => "访问地址", "en" => "Address" }, value: draft.shared_address, prompt: tr! { "zh-Hans" => "192.168.1.100:1180", "en" => "192.168.1.100:1180" })
+                Text(content: tr! { "zh-Hans" => "局域网地址默认使用端口 1180，也可填写完整 HTTP(S) 地址。", "en" => "Local addresses use port 1180 by default. A full HTTP(S) address also works." }, style: caption, emphasis: secondary, lines: 2)
+                if library.shared_connecting {
+                    Text(content: tr! { "zh-Hans" => "正在连接并读取共享媒体…", "en" => "Connecting and loading shared media…" }, style: caption, emphasis: secondary)
+                } else if library.shared_error != "" {
+                    Text(content: library.shared_error, style: caption, lines: 3)
+                }
+                Spacer
+                Row(gap: 12, align: center) {
+                    Spacer
+                    Button(id: shared_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, role: cancel, shortcut: "escape", prominence: plain) => library.cancel_shared_mount()
+                    Button(id: shared_mount, label: tr! { "zh-Hans" => "挂载", "en" => "Mount" }, prominence: prominent, enabled: !library.shared_connecting) => library.mount_shared(draft.shared_name, draft.shared_address)
+                }
             }
         }
     }
@@ -144,7 +185,11 @@ pub fn library_file_row(
                 }
             }
             Spacer
-            if file.matched {
+            if library.folder.shared {
+                if file.show > 0 {
+                    Button(id: shared_show, label: tr! { "zh-Hans" => "查看剧集", "en" => "View episodes" }, shape: capsule, height: 28) => library.open(file.show)
+                }
+            } else if file.matched {
                 Menu(id: file_more, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon) {
                     MenuItem(id: rematch, label: tr! { "zh-Hans" => "重新匹配…", "en" => "Match again…" }, icon: "link") => library.assign(file.key)
                     MenuItem(id: unlink_file, label: tr! { "zh-Hans" => "解除匹配", "en" => "Unlink" }, icon: "xmark") => library.unlink(file.key)
@@ -174,14 +219,13 @@ pub fn library_folder(library: library::Client) -> impl View {
                 if library.folder.can_batch && !window.compact {
                     Button(id: batch_match, label: tr! { "zh-Hans" => "批量匹配", "en" => "Match all" }, icon: "link", shape: capsule, height: if window.tv { 46 } else { 32 }) => library.match_folder()
                 }
-                Menu(id: folder_more, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon) {
-                    MenuItem(id: rescan, label: tr! { "zh-Hans" => "重新扫描", "en" => "Scan again" }, icon: "arrow.triangle.2.circlepath") => library.rescan(library.folder.source)
-                    Divider
-                    MenuItem(id: as_anime, label: tr! { "zh-Hans" => "改为番剧", "en" => "Holds anime" }) => library.set_content(library.folder.source, SourceContent::Anime)
-                    MenuItem(id: as_series, label: tr! { "zh-Hans" => "改为电视剧", "en" => "Holds TV series" }) => library.set_content(library.folder.source, SourceContent::Series)
-                    MenuItem(id: as_movie, label: tr! { "zh-Hans" => "改为电影", "en" => "Holds movies" }) => library.set_content(library.folder.source, SourceContent::Movie)
-                    Divider
-                    MenuItem(id: remove_source, label: tr! { "zh-Hans" => "移除这个来源", "en" => "Remove this source" }, icon: "trash") => library.remove_source(library.folder.source)
+                if window.compact {
+                    ControlGroup(label: tr! { "zh-Hans" => "媒体库操作", "en" => "Library actions" }, height: 44) {
+                        library_folder_menu(library: library)
+                        Slot(id: phone_header_settings)
+                    }
+                } else {
+                    library_folder_menu(library: library)
                 }
             }
             // `.m-crumb`s: 来源 › the source › the folders.
@@ -204,7 +248,11 @@ pub fn library_folder(library: library::Client) -> impl View {
                 Canvas(height: 14)
             }
             if library.folder.missing {
-                Text(content: tr! { "zh-Hans" => "找不到这个文件夹：它被移动了，或者所在的磁盘没有接上。接上以后在「更多」里重新扫描。", "en" => "This folder can't be found: it moved, or its disk isn't connected. Connect it and scan again from More." }, emphasis: secondary, lines: 3)
+                if library.folder.shared {
+                    Text(content: tr! { "zh-Hans" => "暂时连不上共享设备。请确认设备已开启远程访问，然后在「更多」里刷新。", "en" => "The shared device is unavailable. Enable remote access on that device, then refresh from More." }, emphasis: secondary, lines: 3)
+                } else {
+                    Text(content: tr! { "zh-Hans" => "找不到这个文件夹：它被移动了，或者所在的磁盘没有接上。接上以后在「更多」里重新扫描。", "en" => "This folder can't be found: it moved, or its disk isn't connected. Connect it and scan again from More." }, emphasis: secondary, lines: 3)
+                }
             } else if library.folder.empty {
                 Text(content: tr! { "zh-Hans" => "这里没有视频。", "en" => "No videos here." }, emphasis: secondary)
             } else {
@@ -239,6 +287,30 @@ pub fn library_folder(library: library::Client) -> impl View {
     }
 }
 
+/// Source actions, shared by the desktop menu and phone control group.
+#[component]
+pub fn library_folder_menu(library: library::Client) -> impl View {
+    ui! {
+        if library.folder.shared {
+            Menu(id: shared_more, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon) {
+                MenuItem(id: refresh_shared, label: tr! { "zh-Hans" => "刷新共享媒体", "en" => "Refresh shared media" }, icon: "arrow.triangle.2.circlepath") => library.rescan(library.folder.source)
+                Divider
+                MenuItem(id: remove_shared, label: tr! { "zh-Hans" => "移除这个来源", "en" => "Remove this source" }, icon: "trash") => library.remove_source(library.folder.source)
+            }
+        } else {
+            Menu(id: folder_more, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon) {
+                MenuItem(id: rescan, label: tr! { "zh-Hans" => "重新扫描", "en" => "Scan again" }, icon: "arrow.triangle.2.circlepath") => library.rescan(library.folder.source)
+                Divider
+                MenuItem(id: as_anime, label: tr! { "zh-Hans" => "改为番剧", "en" => "Holds anime" }) => library.set_content(library.folder.source, SourceContent::Anime)
+                MenuItem(id: as_series, label: tr! { "zh-Hans" => "改为电视剧", "en" => "Holds TV series" }) => library.set_content(library.folder.source, SourceContent::Series)
+                MenuItem(id: as_movie, label: tr! { "zh-Hans" => "改为电影", "en" => "Holds movies" }) => library.set_content(library.folder.source, SourceContent::Movie)
+                Divider
+                MenuItem(id: remove_source, label: tr! { "zh-Hans" => "移除这个来源", "en" => "Remove this source" }, icon: "trash") => library.remove_source(library.folder.source)
+            }
+        }
+    }
+}
+
 /// Matching (`matchHTML`): the anime and how the videos go to its
 /// episodes, the videos with the episode each goes to, and confirming.
 #[component]
@@ -258,6 +330,11 @@ pub fn library_match(
                     Text(content: tr! { "zh-Hans" => "批量匹配", "en" => "Match all" }, style: large_title)
                 }
                 Spacer
+                if window.compact {
+                    ControlGroup(label: tr! { "zh-Hans" => "媒体库操作", "en" => "Library actions" }, height: 44) {
+                        Slot(id: phone_header_settings)
+                    }
+                }
             }
             if library.matching.single {
                 Text(content: library.matching.place, style: caption, emphasis: secondary, lines: 2)

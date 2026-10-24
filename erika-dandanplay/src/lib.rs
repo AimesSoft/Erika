@@ -15,9 +15,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::RwLock;
 
+pub mod bangumi;
 pub mod custom;
 #[cfg(not(target_arch = "wasm32"))]
 mod http;
+pub mod reviews;
 
 /// The app id the gateways know, and the secret they replace with theirs.
 const APP_ID: &str = "nipaplayv1";
@@ -218,6 +220,8 @@ pub struct Intro {
     pub anime_title: String,
     #[serde(default)]
     pub image_url: String,
+    #[serde(default, deserialize_with = "text_or_null")]
+    pub summary: String,
     /// The day it airs: 0 is Sunday, 1 to 6 Monday to Saturday.
     #[serde(default)]
     pub air_day: Option<i64>,
@@ -244,13 +248,29 @@ struct ShinReply {
 
 /// The anime of this season, adult ones left out.
 pub fn shin() -> Result<Vec<Intro>> {
-    let token = token().ok_or_else(Error::sign_in)?;
+    shin_from(false).or_else(|_| shin_from(true))
+}
+
+/// One source only, so the anime catalogue can try Bangumi before the cache.
+pub fn shin_from(public: bool) -> Result<Vec<Intro>> {
+    let token = token();
+    if !public && token.is_none() {
+        return Err(Error::sign_in());
+    }
     let reply: ShinReply = request(
         "GET",
-        "/api/v2/bangumi/shin",
-        "?filterAdultContent=true",
+        if !public {
+            "/api/v2/bangumi/shin"
+        } else {
+            "/public/season"
+        },
+        if !public {
+            "?filterAdultContent=true"
+        } else {
+            ""
+        },
         None,
-        Some(&token),
+        if public { None } else { token.as_deref() },
     )?;
     if reply.success {
         Ok(reply.bangumi_list)
@@ -263,14 +283,14 @@ pub fn shin() -> Result<Vec<Intro>> {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Tag {
     #[serde(default)]
     pub name: String,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct EpisodeInfo {
     pub episode_id: i64,
@@ -284,7 +304,7 @@ pub struct EpisodeInfo {
 }
 
 /// What dandanplay knows of one anime.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Details {
     pub anime_id: i64,
@@ -294,6 +314,9 @@ pub struct Details {
     pub image_url: String,
     #[serde(default, deserialize_with = "text_or_null")]
     pub summary: String,
+    /// The actual Bangumi subject link. `bangumiId` is dandanplay's own ID.
+    #[serde(default, deserialize_with = "text_or_null")]
+    pub bangumi_url: String,
     #[serde(default)]
     pub rating: f64,
     #[serde(default)]
@@ -328,13 +351,26 @@ pub fn details(anime_id: i64) -> Result<Details> {
     if custom::is_ours(anime_id) {
         return custom::details(anime_id);
     }
-    let token = token().ok_or_else(Error::sign_in)?;
+    details_from(anime_id, false).or_else(|_| details_from(anime_id, true))
+}
+
+/// Fetch authenticated details or the public snapshot, without crossing sources.
+pub fn details_from(anime_id: i64, public: bool) -> Result<Details> {
+    let token = token();
+    if !public && token.is_none() {
+        return Err(Error::sign_in());
+    }
+    let path = if !public {
+        format!("/api/v2/bangumi/{anime_id}")
+    } else {
+        format!("/public/details/{anime_id}")
+    };
     let reply: DetailsReply = request(
         "GET",
-        &format!("/api/v2/bangumi/{anime_id}"),
+        &path,
         "",
         None,
-        Some(&token),
+        if public { None } else { token.as_deref() },
     )?;
     match reply.bangumi {
         Some(details) if reply.success => Ok(details),
@@ -687,10 +723,9 @@ mod tests {
     }
 
     #[test]
-    fn without_a_token_the_service_asks_to_sign_in() {
+    fn private_actions_still_require_a_token() {
         set_token(None);
-        assert!(shin().unwrap_err().sign_in);
-        assert!(details(1).unwrap_err().sign_in);
+        assert!(comments(1).unwrap_err().sign_in);
         assert_eq!(login("", "x").unwrap_err().message, "请填写用户名和密码");
     }
 }

@@ -45,7 +45,7 @@ pub mod erika {
         Danmaku,
         #[label(tr! { "zh-Hans" => "媒体库", "en" => "Library" })]
         Library,
-        #[label(tr! { "zh-Hans" => "追番", "en" => "Anime" })]
+        #[label(tr! { "zh-Hans" => "新番", "en" => "New Shows" })]
         Anime,
         #[label(tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" })]
         Sync,
@@ -183,6 +183,7 @@ pub mod erika {
         pub danmaku: bool,
         pub enhance: bool,
         pub library: bool,
+        /// The New Shows feature; runtime `modules.anime` also serves library details.
         pub anime: bool,
         pub sync: bool,
         pub sources: bool,
@@ -238,6 +239,8 @@ pub mod erika {
         MountDanmaku,
         #[label(tr! { "zh-Hans" => "同步与存储", "en" => "Sync and Storage" })]
         SyncStorage,
+        #[label(tr! { "zh-Hans" => "新番数据源", "en" => "New Shows Source" })]
+        SeasonSource,
         #[label(tr! { "zh-Hans" => "可选功能预设", "en" => "Optional Feature Presets" })]
         Presets,
         #[label(tr! { "zh-Hans" => "启用账号", "en" => "Enable Account" })]
@@ -248,7 +251,7 @@ pub mod erika {
         EnableEnhance,
         #[label(tr! { "zh-Hans" => "启用媒体库", "en" => "Enable Library" })]
         EnableLibrary,
-        #[label(tr! { "zh-Hans" => "启用追番", "en" => "Enable Anime" })]
+        #[label(tr! { "zh-Hans" => "启用新番", "en" => "Enable New Shows" })]
         EnableAnime,
         #[label(tr! { "zh-Hans" => "启用账号同步", "en" => "Enable Account Sync" })]
         EnableSync,
@@ -343,7 +346,7 @@ pub mod erika {
         Enhance,
         #[label(tr! { "zh-Hans" => "媒体库", "en" => "Library" })]
         Library,
-        #[label(tr! { "zh-Hans" => "追番", "en" => "Anime" })]
+        #[label(tr! { "zh-Hans" => "新番", "en" => "New Shows" })]
         Anime,
         #[label(tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" })]
         Sync,
@@ -716,7 +719,21 @@ pub mod erika {
         /// until one is signed in.
         #[content]
         pub user_name: String,
+        /// The signed-in provider selected for the outer account identity.
+        pub user_account: ProfileAccount,
+        pub user_avatar: Option<MediaSource>,
         pub account_status: Account,
+        pub bangumi: BangumiAccount,
+    }
+
+    #[value]
+    pub enum ProfileAccount {
+        #[label(tr! { "zh-Hans" => "未登录", "en" => "Not signed in" })]
+        Local,
+        #[label(tr! { "zh-Hans" => "弹弹play 已登录", "en" => "Signed in to dandanplay" })]
+        Dandanplay,
+        #[label(tr! { "zh-Hans" => "Bangumi 已登录", "en" => "Signed in to Bangumi" })]
+        Bangumi,
     }
 
     /// The dandanplay account, which the season's anime, the details of a
@@ -724,11 +741,15 @@ pub mod erika {
     #[value]
     pub struct Account {
         pub signed_in: bool,
+        pub prompt: bool,
+        pub settings_window: bool,
         /// The name others see, and the one signed in with.
         #[content]
         pub name: String,
         #[content]
         pub user: String,
+        /// The QQ avatar when signed in with a numeric QQ email address.
+        pub avatar: Option<MediaSource>,
         /// Signing in is under way.
         pub busy: bool,
         /// Why signing in failed last; empty when it did not.
@@ -740,6 +761,28 @@ pub mod erika {
         pub has_server: bool,
         #[content]
         pub server: String,
+    }
+
+    /// Website session. Passwords and cookies never enter observable state.
+    #[value]
+    pub struct BangumiAccount {
+        pub signed_in: bool,
+        #[content]
+        pub name: String,
+        /// Stable website ID, used internally to associate the session.
+        #[content]
+        pub user: String,
+        /// The email used to sign in, shown in the shared account profile.
+        #[content]
+        pub email: String,
+        pub avatar: Option<MediaSource>,
+        pub busy: bool,
+        #[content]
+        pub error: String,
+        pub prompt: bool,
+        pub settings_window: bool,
+        pub expired: bool,
+        pub captcha: Option<MediaSource>,
     }
 
     #[commands]
@@ -900,6 +943,31 @@ pub mod erika {
         fn sign_in(&mut self, user: String, password: String) -> Result<(), CommandError>;
         #[cfg(feature = "bern-module-account")]
         fn sign_out(&mut self) -> Result<(), CommandError>;
+        #[cfg(feature = "bern-module-account")]
+        fn open_account_login(&mut self, settings_window: bool) -> Result<(), CommandError>;
+        #[cfg(feature = "bern-module-account")]
+        fn close_account_login(&mut self) -> Result<(), CommandError>;
+        #[cfg(feature = "bern-module-account")]
+        fn cancel_account_login(&mut self) -> Result<(), CommandError>;
+        #[cfg(feature = "bern-module-account")]
+        fn submit_account_login(&mut self, bangumi: bool, user: String, password: String, captcha: String) -> Result<(), CommandError>;
+
+
+        #[cfg(feature = "bern-module-account")]
+        fn open_bangumi_login(&mut self, settings_window: bool) -> Result<(), CommandError>;
+        #[cfg(feature = "bern-module-account")]
+        fn refresh_bangumi_captcha(&mut self) -> Result<(), CommandError>;
+        #[cfg(feature = "bern-module-account")]
+        fn close_bangumi_login(&mut self) -> Result<(), CommandError>;
+        #[cfg(feature = "bern-module-account")]
+        fn bangumi_sign_in(&mut self, email: String, password: String, captcha: String) -> Result<(), CommandError>;
+        #[cfg(feature = "bern-module-account")]
+        fn bangumi_sign_out(&mut self) -> Result<(), CommandError>;
+        #[cfg(feature = "bern-module-account")]
+        fn check_bangumi_session(&mut self) -> Result<(), CommandError>;
+        #[cfg(feature = "bern-module-account")]
+        fn dismiss_bangumi_expired(&mut self) -> Result<(), CommandError>;
+
         /// Recognize TV series and movies with the server at `address`
         /// (`https://host/…/<token>`), kept in the system's credential store.
         #[cfg(feature = "bern-module-account")]
@@ -938,12 +1006,33 @@ impl Default for erika::Account {
     fn default() -> Self {
         Self {
             signed_in: false,
+            prompt: false,
+            settings_window: false,
             name: String::new(),
             user: String::new(),
+            avatar: None,
             busy: false,
             error: String::new(),
             has_server: false,
             server: String::new(),
+        }
+    }
+}
+
+impl Default for erika::BangumiAccount {
+    fn default() -> Self {
+        Self {
+            signed_in: false,
+            name: String::new(),
+            user: String::new(),
+            email: String::new(),
+            avatar: None,
+            busy: false,
+            error: String::new(),
+            prompt: false,
+            settings_window: false,
+            expired: false,
+            captcha: None,
         }
     }
 }

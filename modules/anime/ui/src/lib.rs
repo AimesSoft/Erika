@@ -13,10 +13,6 @@ pub enum DetailTab {
     About,
     #[label(tr! { "zh-Hans" => "评论", "en" => "Comments" })]
     Comments,
-    #[label(tr! { "zh-Hans" => "制作", "en" => "Staff" })]
-    Staff,
-    #[label(tr! { "zh-Hans" => "文件", "en" => "Files" })]
-    Files,
 }
 
 /// Drafts of the anime module's pages.
@@ -26,6 +22,17 @@ pub struct AnimeDraft {
     #[initial(1)]
     pub episode: i64,
     pub tab: DetailTab,
+}
+
+/// Mounted everywhere: the clock that moves "now" along today's timeline
+/// and turns the schedule over to the next broadcast day.
+#[component]
+pub fn anime_clock(anime: anime::Client) -> impl View {
+    ui! {
+        Stack {
+            Timer(interval: 10) => anime.tick()
+        }
+    }
 }
 
 /// The home page: the stage and today's timeline, or the details of the
@@ -131,8 +138,6 @@ pub fn stage(anime: anime::Client) -> impl View {
                 Canvas(height: 16)
                 Button(id: resume, label: tr! { "zh-Hans" => "继续播放", "en" => "Continue" }, icon: "play.fill", prominence: prominent, variant: primary) => anime.resume(anime.stage.id)
                 Canvas(height: 24)
-                Text(content: tr! { "zh-Hans" => "也在看 · 点一下换上舞台", "en" => "Also watching · click one to put it on the stage" }, style: caption, emphasis: secondary)
-                Canvas(height: 10)
                 Column(gap: 4) {
                     ForEach(items: anime.also, key: id) |watching| {
                         Stack(align: leading) {
@@ -223,16 +228,7 @@ pub fn timeline(app: erika::Client, anime: anime::Client) -> impl View {
 pub fn season_note(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
         Column(gap: 4, padding_y: 10) {
-            if !anime.signed_in {
-                if build.modules.account && app.features.account {
-                    Text(content: tr! { "zh-Hans" => "登录弹弹play 账号后，这里会排出今天更新的番。", "en" => "Sign in to dandanplay to see what airs today." }, emphasis: secondary)
-                    Text(content: tr! { "zh-Hans" => "在 设置 › 账号 里登录", "en" => "Sign in under Settings › Account" }, style: caption, emphasis: tertiary)
-                } else if build.modules.account {
-                    Text(content: tr! { "zh-Hans" => "在 设置 › 可选功能 中开启账号，登录后即可查看新番。", "en" => "Enable Account under Settings › Optional Features, then sign in to see new shows." }, emphasis: secondary, lines: 2)
-                } else {
-                    Text(content: tr! { "zh-Hans" => "暂无新番数据。", "en" => "No season data available." }, emphasis: secondary)
-                }
-            } else if anime.loading {
+            if anime.loading {
                 Text(content: tr! { "zh-Hans" => "正在载入这一季的新番…", "en" => "Loading this season's shows…" }, emphasis: secondary)
             } else {
                 Text(content: tr! { "zh-Hans" => "今天没有知道播出时刻的番；新番表按星期列着这一季的全部。", "en" => "Nothing airs today at a known time; the schedule lists the whole season by day." }, emphasis: secondary)
@@ -370,7 +366,7 @@ pub fn desktop_details(anime: anime::Client, #[session] draft: AnimeDraft) -> im
                                 if anime.show.rating > 0.0 {
                                     Text(content: tr! { "zh-Hans" => "★ {rating}", "en" => "★ {rating}"; rating: anime.show.rating }, style: callout)
                                 }
-                                Text(content: tr! { "zh-Hans" => "弹弹play", "en" => "dandanplay" }, emphasis: secondary)
+                                Text(content: tr! { "zh-Hans" => "综合评分", "en" => "Rating" }, emphasis: secondary)
                                 Row(gap: 6) {
                                     ForEach(items: anime.show.tags, key: name) |tag| {
                                         tag_chip(name: tag.name)
@@ -380,6 +376,7 @@ pub fn desktop_details(anime: anime::Client, #[session] draft: AnimeDraft) -> im
                             Canvas(height: 14)
                             Column(width: 600, appear: fade) {
                                 Text(content: anime.show.summary, emphasis: secondary, lines: 3)
+                                detail_fetch_status(anime: anime)
                             }
                             Canvas(height: 20)
                             Row(gap: 10, align: center, appear: fade) {
@@ -419,11 +416,7 @@ pub fn desktop_details(anime: anime::Client, #[session] draft: AnimeDraft) -> im
                         }
                     }
                     Canvas(height: 18)
-                    Text(content: tr! { "zh-Hans" => "简介", "en" => "About" }, style: title3)
-                    Canvas(height: 10)
-                    Column(width: 640) {
-                        Text(content: anime.show.summary, emphasis: secondary)
-                    }
+                    detail_information(anime: anime)
                     Canvas(height: 32)
                 }
             }
@@ -524,7 +517,7 @@ pub fn calendar_page(app: erika::Client, anime: anime::Client) -> impl View {
                     }
                     Canvas(height: 18)
                 }
-                if !anime.signed_in || anime.loading {
+                if anime.loading {
                     season_note(app: app, anime: anime)
                     Canvas(height: 12)
                 }
@@ -556,22 +549,16 @@ pub fn calendar_page(app: erika::Client, anime: anime::Client) -> impl View {
                                         Column(gap: 0, align: center) {
                                             calendar_header_collapsed(day: day)
                                             Canvas(height: 19)
-                                            Column(gap: 10, width: 86, align: center) {
-                                                ForEach(items: day.preview, key: id) |show| {
-                                                    Column(gap: 4, align: center) {
-                                                        Image(source: show.poster, width: 52, height: 78, fit: cover, corner: poster)
-                                                        Row(gap: 0, height: 15) {
-                                                            if show.timed {
-                                                                Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: caption, emphasis: secondary, lines: 1)
-                                                            }
+                                            PreviewList(items: day.shows, key: id, item_height: 97, gap: 10, more_height: 22) |show| {
+                                                Column(gap: 4, align: center) {
+                                                    Image(source: show.poster, width: 52, height: 78, fit: cover, corner: poster)
+                                                    Row(gap: 0, height: 15) {
+                                                        if show.timed {
+                                                            Text(content: tr! { "zh-Hans" => "{time, duration, hh:mm}", "en" => "{time, duration, hh:mm}"; time: show.time }, style: caption, emphasis: secondary, lines: 1)
                                                         }
                                                     }
                                                 }
-                                                if day.remaining > 0 {
-                                                    calendar_more(count: day.remaining)
-                                                }
                                             }
-                                            Spacer
                                         }
                                     } => anime.select_day(day.id)
                                 }
@@ -978,7 +965,7 @@ pub fn phone_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
                                 if anime.show.rating > 0.0 {
                                     Text(content: tr! { "zh-Hans" => "★ {rating}", "en" => "★ {rating}"; rating: anime.show.rating }, style: headline, font_size: 16)
                                 }
-                                Text(content: tr! { "zh-Hans" => "弹弹play", "en" => "dandanplay" }, font_size: 13, emphasis: secondary)
+                                Text(content: tr! { "zh-Hans" => "综合评分", "en" => "Rating" }, font_size: 13, emphasis: secondary)
                                 Row(gap: 6) {
                                     ForEach(items: anime.show.tags, key: name) |tag| {
                                         tag_chip(name: tag.name)
@@ -1007,6 +994,7 @@ pub fn phone_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
                     }
                     Canvas(height: 14)
                     Text(content: anime.show.summary, font_size: 13, line_height: 18, emphasis: secondary, lines: 3)
+                    detail_fetch_status(anime: anime)
                     Canvas(height: 34)
                     Row(gap: 10, align: baseline) {
                         Text(content: tr! { "zh-Hans" => "剧集", "en" => "Episodes" }, style: title3)
@@ -1025,12 +1013,82 @@ pub fn phone_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
                 }
                 Column(gap: 0, padding_x: 16) {
                     Canvas(height: 18)
-                    Text(content: tr! { "zh-Hans" => "简介", "en" => "About" }, style: title3, font_size: 17)
-                    Canvas(height: 8)
-                    Text(content: anime.show.summary, font_size: 13, line_height: 18, emphasis: secondary)
+                    detail_information(anime: anime)
                     Canvas(height: 32)
                 }
             }
+            }
+        }
+    }
+}
+
+/// Shared by the phone, desktop and television details page.
+#[component]
+pub fn detail_information(anime: anime::Client, #[session] draft: AnimeDraft) -> impl View {
+    ui! {
+        Column(gap: 16) {
+            Row(gap: 10, align: center) {
+                Row(width: if window.tv { 220 } else { 160 }) {
+                    Picker(id: information_tab, label: tr! { "zh-Hans" => "简介与评论", "en" => "About and comments" }, value: draft.tab, style: segmented, label_hidden: true)
+                }
+                Spacer
+                if draft.tab == DetailTab::Comments {
+                    Button(id: refresh_reviews, label: tr! { "zh-Hans" => "刷新", "en" => "Refresh" }, enabled: !anime.comments_loading, prominence: plain) => anime.refresh_comments()
+                }
+            }
+            if draft.tab == DetailTab::About {
+                if window.compact {
+                    Text(content: anime.show.summary, font_size: 13, line_height: 18, emphasis: secondary)
+                } else {
+                    Column(width: 640) {
+                        Text(content: anime.show.summary, emphasis: secondary)
+                    }
+                }
+            } else {
+                review_section(anime: anime)
+            }
+        }
+    }
+}
+
+#[component]
+pub fn detail_fetch_status(anime: anime::Client) -> impl View {
+    ui! {
+        Column(gap: 8) {
+            if anime.details_loading {
+                Text(content: tr! { "zh-Hans" => "正在加载详情…", "en" => "Loading details…" }, style: caption, emphasis: secondary)
+            } else if anime.details_failed {
+                Text(content: anime.details_error, style: caption, emphasis: secondary)
+                Button(id: retry_details, label: tr! { "zh-Hans" => "重试", "en" => "Retry" }, icon: "arrow.clockwise") => anime.refresh_details()
+            }
+        }
+    }
+}
+
+#[component]
+pub fn review_section(anime: anime::Client) -> impl View {
+    ui! {
+        Column(gap: 14) {
+            if anime.comments_loading {
+                Text(content: tr! { "zh-Hans" => "正在更新评论…", "en" => "Updating comments…" }, style: caption, emphasis: secondary)
+            } else if !anime.has_comments {
+                Text(content: tr! { "zh-Hans" => "暂无评论", "en" => "No comments yet" }, emphasis: secondary)
+            }
+            Text(content: anime.comments_error, style: caption, emphasis: secondary)
+            ForEach(items: anime.comments, key: id) |comment| {
+                Column(gap: 8) {
+                    Row(gap: 10, align: center) {
+                        Image(source: comment.avatar, width: 32, height: 32, fit: cover, corner: poster, label: comment.author)
+                        Text(content: comment.author, style: headline, lines: 1)
+                        Spacer
+                        if comment.rating > 0 {
+                            Text(content: tr! { "zh-Hans" => "★ {rating}", "en" => "★ {rating}"; rating: comment.rating }, style: caption)
+                        }
+                        Text(content: comment.updated, style: caption, emphasis: secondary)
+                    }
+                    Text(content: comment.text, emphasis: secondary)
+                    Divider
+                }
             }
         }
     }

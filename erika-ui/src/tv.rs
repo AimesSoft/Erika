@@ -131,7 +131,7 @@ pub fn tv_actions(app: erika::Client, windows: AppWindows) -> impl View {
         Row(gap: 10, align: center) {
             if build.modules.account && app.features.account {
                 Stack(width: 40, height: 40, align: center) {
-                    avatar()
+                    avatar(app: app)
                 }
             }
             IconButton(id: tv_open, icon: "folder", label: tr! { "zh-Hans" => "打开", "en" => "Open" }, height: 46) => app.show_link_prompt(true)

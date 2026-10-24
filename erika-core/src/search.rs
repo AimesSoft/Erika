@@ -53,20 +53,6 @@ pub(crate) fn settings(text: &str, features: &FeatureSelection) -> Vec<SettingRe
             true,
         ),
         (
-            I::AutoUpdates,
-            P::General,
-            "自动检查更新 automatically check for updates",
-            "版本 自动升级 auto update",
-            true,
-        ),
-        (
-            I::UpdateChannel,
-            P::General,
-            "更新通道 update channel",
-            "稳定 预览 stable preview",
-            true,
-        ),
-        (
             I::Accent,
             P::Appearance,
             "主题色 accent color",
@@ -113,13 +99,6 @@ pub(crate) fn settings(text: &str, features: &FeatureSelection) -> Vec<SettingRe
             P::Player,
             "自动连播下一集 automatically play next episode",
             "autoplay",
-            true,
-        ),
-        (
-            I::FrameCorners,
-            P::Player,
-            "画框圆角 frame corners",
-            "圆角 rounded",
             true,
         ),
         (
@@ -177,6 +156,13 @@ pub(crate) fn settings(text: &str, features: &FeatureSelection) -> Vec<SettingRe
             "同步与存储 sync and storage",
             "",
             features.library,
+        ),
+        (
+            I::SeasonSource,
+            P::Library,
+            "新番数据源 new shows source",
+            "弹弹play bangumi bgm dandanplay 切换 来源",
+            features.library && cfg!(feature = "bern-module-anime"),
         ),
         (
             I::SyncStorage,
@@ -258,7 +244,7 @@ pub(crate) fn settings(text: &str, features: &FeatureSelection) -> Vec<SettingRe
         (
             I::EnableAnime,
             P::Optional,
-            "启用追番 enable anime",
+            "启用新番 enable new shows anime",
             "模块",
             cfg!(feature = "bern-module-anime"),
         ),
@@ -333,7 +319,7 @@ pub(crate) fn settings(text: &str, features: &FeatureSelection) -> Vec<SettingRe
                 P::Player => "播放 playback player",
                 P::Danmaku => "弹幕 danmaku",
                 P::Library => "媒体库 library",
-                P::Anime => "追番 anime",
+                P::Anime => "新番 new shows anime",
                 P::Sync => "账号同步 account sync",
                 P::Sources => "网络媒体源 network sources",
                 P::Remote => "局域网与远程 lan remote",

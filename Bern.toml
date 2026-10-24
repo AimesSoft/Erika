@@ -145,6 +145,8 @@ path = "modules/downloads"
 # The phone's header row, at the top of each page's scroll, so that it
 # scrolls away with the page as in the design.
 page_header = ["phone_header"]
+# Shared settings action inside each phone page's header control group.
+phone_header_settings = ["phone_settings_button"]
 # The phone's way back and title over a settings section.
 form_header = ["phone_form_header"]
 scroll_header = ["phone_scroll_header"]

@@ -16,7 +16,7 @@ pub fn search_results(
 ) -> impl View {
     ui! {
         Query(id: commands, query: app.search_actions(draft.query)) |actions| {
-            if (build.modules.anime && app.features.anime) {
+            if (build.modules.anime && app.modules.anime) {
               Query(id: shows, query: anime.search(draft.query)) |found| {
                 Column(gap: 0) {
                     if found.has_shows {

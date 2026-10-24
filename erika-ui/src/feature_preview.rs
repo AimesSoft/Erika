@@ -139,7 +139,7 @@ pub fn feature_preview_hud(features: FeatureSelection) -> impl View {
                 if (build.modules.enhance && features.enhance) {
                     Label(title: tr! { "zh-Hans" => "", "en" => "" }, icon: "sparkles", style: caption, appear: feature_preview_item_in, disappear: fade)
                 }
-                Label(title: tr! { "zh-Hans" => "", "en" => "" }, icon: "captions.bubble", style: caption)
+                Label(title: tr! { "zh-Hans" => "", "en" => "" }, icon: "text.rectangle", style: caption)
                 Label(title: tr! { "zh-Hans" => "", "en" => "" }, icon: "arrow.up.left.and.arrow.down.right", style: caption)
             }
         }

@@ -1,8 +1,8 @@
 //! The phone's shell, measured from the prototype at 390 × 844
 //! (design/next-screens.js `renderPhone`, next.css `.x-pnav`): a tab for
 //! every page with search last, and above each page its header row, the
-//! large title with "open" and the account on the home page, or the way
-//! back while a show's details are open.
+//! large title with grouped actions and settings, or the way back while
+//! a show's details are open.
 use crate::pure::{phone_pure, phone_pure_props};
 use crate::search::{search_results, search_results_props};
 use crate::settings::*;
@@ -15,7 +15,7 @@ use erika_anime_ui::{details, details_props};
 use erika_protocol::erika::{self, SettingsPage};
 
 /// Where the phone's settings stand (`phStack`): closed, their list, or
-/// one of their sections, pushed over the home page.
+/// one of their sections, pushed over the current tab.
 #[bern::value]
 pub enum PhoneSettings {
     #[label(tr! { "zh-Hans" => "关闭", "en" => "Closed" })]
@@ -34,7 +34,7 @@ pub enum PhoneSettings {
     Danmaku,
     #[label(tr! { "zh-Hans" => "媒体库", "en" => "Library" })]
     Library,
-    #[label(tr! { "zh-Hans" => "追番", "en" => "Anime" })]
+    #[label(tr! { "zh-Hans" => "新番", "en" => "New Shows" })]
     Anime,
     #[label(tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" })]
     Sync,
@@ -64,55 +64,41 @@ pub fn phone_shell(
     #[session] draft: ErikaDraft,
 ) -> impl View {
     ui! {
+        // Settings replace the whole tab shell, so the hidden pages cannot
+        // be switched underneath them. Closing restores the selected tab.
+        if draft.phone_settings != PhoneSettings::Closed {
+            Stack(variant: phone_page, align: top_leading) {
+                if draft.phone_settings == PhoneSettings::List {
+                    phone_settings(app: app)
+                } else {
+                    phone_settings_section(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+                }
+            }
         // Pure playback (design 10.2): no pages, so no tab bar.
-        if !(build.modules.anime && app.features.anime) && !(build.modules.library && app.features.library) && !(build.modules.downloads && app.features.downloads) {
-            phone_pure(app: app)
+        } else if !(build.modules.anime && app.features.anime) && !(build.modules.library && app.features.library) && !(build.modules.downloads && app.features.downloads) {
+            phone_pure(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
         } else {
         Tabs(id: tabs, selection: draft.page) {
             if (build.modules.anime && app.features.anime) {
                 Tab(value: MainPage::Home, label: tr! { "zh-Hans" => "首页", "en" => "Home" }, icon: "house") {
-                    Stack(variant: phone_page, align: top_leading) {
-                        if draft.phone_settings == PhoneSettings::Closed {
-                            PageContent(slot: main, selected: draft.page)
-                        } else if draft.phone_settings == PhoneSettings::List {
-                            phone_settings(app: app)
-                        } else {
-                            phone_settings_section(app: app)
-                        }
-                    }
+                    phone_tab_content(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
                 }
                 Tab(value: MainPage::New, label: tr! { "zh-Hans" => "新番", "en" => "New" }, icon: "calendar") {
-                    Stack(variant: phone_page, align: top_leading) {
-                        PageContent(slot: main, selected: draft.page)
-                    }
+                    phone_tab_content(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
                 }
             }
             if (build.modules.library && app.features.library) {
                 Tab(value: MainPage::Library, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "film.stack") {
-                    Stack(variant: phone_page, align: top_leading) {
-                        if build.modules.anime && anime.opened > 0 && anime.back == BackTo::Library {
-                            details(#[cfg(feature = "bern-module-anime")] anime: anime)
-                        } else {
-                            PageContent(slot: main, selected: draft.page)
-                        }
-                    }
+                    phone_tab_content(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
                 }
             }
             if (build.modules.downloads && app.features.downloads) {
                 Tab(value: MainPage::Downloads, label: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, icon: "arrow.down.circle") {
-                    Stack(variant: phone_page, align: top_leading) {
-                        PageContent(slot: main, selected: draft.page)
-                    }
+                    phone_tab_content(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
                 }
             }
             Tab(value: MainPage::Search, label: tr! { "zh-Hans" => "搜索", "en" => "Search" }, icon: "magnifyingglass") {
-                Stack(variant: phone_page, align: top_leading) {
-                    if build.modules.anime && anime.opened > 0 && anime.back == BackTo::Search {
-                        details(#[cfg(feature = "bern-module-anime")] anime: anime)
-                    } else {
-                        phone_search(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
-                    }
-                }
+                phone_tab_content(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
             }
             // `.x-pmini`: what plays, above the tab bar on every page.
             TabAccessory(shown: app.playing && !app.expanded) {
@@ -120,6 +106,35 @@ pub fn phone_shell(
             }
         }
         }
+    }
+}
+
+/// The selected tab's page or details. Settings are owned by the shell.
+#[component]
+pub fn phone_tab_content(
+    app: erika::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
+    windows: AppWindows,
+    #[session] draft: ErikaDraft,
+) -> impl View {
+    ui! {
+        Stack(variant: phone_page, align: top_leading) {
+            if build.modules.anime && anime.opened > 0 && ((build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library) || (draft.page == MainPage::Search && anime.back == BackTo::Search)) {
+                details(#[cfg(feature = "bern-module-anime")] anime: anime)
+            } else if draft.page == MainPage::Search {
+                phone_search(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
+            } else {
+                PageContent(slot: main, selected: draft.page)
+            }
+        }
+    }
+}
+
+/// The same trailing action is contributed to module-owned headers too.
+#[component]
+pub fn phone_settings_button(#[session] draft: ErikaDraft) -> impl View {
+    ui! {
+        IconButton(id: phone_settings, icon: "gearshape", label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, prominence: plain) => draft.phone_settings.set(PhoneSettings::List)
     }
 }
 
@@ -189,8 +204,8 @@ pub fn phone_search(
 
 /// `.x-pnav`: 48 points tall, 16 from the edges, its top 54 points down,
 /// as the prototype's status bar is tall; the iPhone's safe area is 47.
-/// The title is the large title (30 / 36, bold); the buttons are 34
-/// points round, 10 apart.
+/// The title is the large title (30 / 36, bold); trailing actions share
+/// the library's 44-point control group, with settings last.
 #[component]
 pub fn phone_header(
     app: erika::Client,
@@ -207,6 +222,9 @@ pub fn phone_header(
             Row(gap: 0, padding_x: 16, height: 48, align: center) {
                 IconButton(id: phone_back, icon: "chevron.left", font_size: 18, height: 44, label: anime.back) => anime.close()
                 Spacer
+                ControlGroup(label: tr! { "zh-Hans" => "页面操作", "en" => "Page actions" }, height: 44) {
+                    phone_settings_button()
+                }
             }
         } else if !build.modules.library || draft.page != MainPage::Library {
         // The library draws its own header row, with its buttons.
@@ -234,16 +252,11 @@ pub fn phone_header(
                     _ => {}
                 }
                 Spacer
-                if build.modules.anime && draft.page == MainPage::Home {
-                    // Apple's size for buttons in the bar: 44-point circles.
-                    IconButton(id: phone_open, icon: "plus", font_size: 18, height: 44, label: tr! { "zh-Hans" => "打开文件", "en" => "Open File" }, pick: draft.file, files: "video") => app.open_file(draft.file)
-                    if build.modules.account && app.features.account {
-                        Button(id: phone_account, label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, variant: phone_avatar) {
-                            phone_avatar()
-                        } => draft.phone_settings.set(PhoneSettings::List)
-                    } else {
-                        IconButton(id: phone_settings, icon: "gearshape", font_size: 18, height: 44, label: tr! { "zh-Hans" => "设置", "en" => "Settings" }) => draft.phone_settings.set(PhoneSettings::List)
+                ControlGroup(label: tr! { "zh-Hans" => "页面操作", "en" => "Page actions" }, height: 44) {
+                    if build.modules.anime && draft.page == MainPage::Home {
+                        IconButton(id: phone_open, icon: "plus", label: tr! { "zh-Hans" => "打开文件", "en" => "Open File" }, prominence: plain, pick: draft.file, files: "video") => app.open_file(draft.file)
                     }
+                    phone_settings_button()
                 }
             }
             // The season under the title (`.x-mut`, 13 / 18), 4 points up
@@ -254,20 +267,6 @@ pub fn phone_header(
                 }
             }
         }
-        }
-    }
-}
-
-/// `.x-av` at the bar's 44 points: on the neutral fill, a head at 40 %
-/// of the height and the shoulders, an ellipse centred on the bottom edge,
-/// which the button's round corner cuts.
-#[component]
-pub fn phone_avatar() -> impl View {
-    ui! {
-        Canvas(width: 44, height: 44, label: tr! { "zh-Hans" => "头像", "en" => "Avatar" }) {
-            Shape(kind: ellipse, fill: fill.strong)
-            Shape(kind: ellipse, x: 15.48, y: 11.08, width: 13.04, height: 13.04, fill: text.secondary, opacity: 0.5)
-            Shape(kind: ellipse, x: -4.4, y: 23.76, width: 52.8, height: 40.48, fill: text.secondary, opacity: 0.5)
         }
     }
 }
@@ -316,14 +315,10 @@ pub fn phone_settings(
             Section(padding_x: 14, padding_y: 6) {
                 Button(id: settings_account, label: tr! { "zh-Hans" => "账号", "en" => "Account" }) {
                     Row(gap: 12, align: center) {
-                        phone_account_picture()
+                        phone_account_picture(app: app)
                         Column(gap: 1) {
                             Text(content: app.user_name, font_size: 13, line_height: 18, lines: 1)
-                            if app.account_status.signed_in {
-                                Text(content: tr! { "zh-Hans" => "弹弹play 已登录", "en" => "Signed in to dandanplay" }, style: caption, emphasis: secondary, line_height: 15)
-                            } else {
-                                Text(content: tr! { "zh-Hans" => "登录弹弹play 账号", "en" => "Sign in to dandanplay" }, style: caption, emphasis: secondary, line_height: 15)
-                            }
+                            Text(content: app.user_account, style: caption, emphasis: secondary, line_height: 15)
                         }
                         Spacer
                         Text(content: tr! { "zh-Hans" => "›", "en" => "›" }, font_size: 13, emphasis: secondary)
@@ -387,12 +382,12 @@ pub fn phone_settings(
                     } => draft.phone_settings.set(PhoneSettings::Library)
                 }
                 if (build.modules.anime && app.features.anime) {
-                    Button(id: settings_anime, label: tr! { "zh-Hans" => "追番", "en" => "Anime" }) {
+                    Button(id: settings_anime, label: tr! { "zh-Hans" => "新番", "en" => "New Shows" }) {
                         Row(gap: 12, align: center) {
                             Stack(variant: setting_icon, width: 28, height: 28, align: center) {
-                                Label(title: tr! { "zh-Hans" => "追番", "en" => "Anime" }, icon: "calendar", display: icon, font_size: 15)
+                                Label(title: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, icon: "calendar", display: icon, font_size: 15)
                             }
-                            Text(content: tr! { "zh-Hans" => "追番", "en" => "Anime" }, font_size: 13, line_height: 18)
+                            Text(content: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, font_size: 13, line_height: 18)
                             Spacer
                             Text(content: tr! { "zh-Hans" => "›", "en" => "›" }, font_size: 13, emphasis: secondary)
                         }
@@ -579,12 +574,16 @@ pub fn phone_settings_result(
 /// One section of the phone's settings, pushed over their list: the
 /// desktop's form of it, which holds the way back and its title at its top.
 #[component]
-pub fn phone_settings_section(app: erika::Client, #[session] draft: ErikaDraft) -> impl View {
+pub fn phone_settings_section(
+    app: erika::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
+    #[session] draft: ErikaDraft,
+) -> impl View {
     ui! {
         match draft.phone_settings {
             PhoneSettings::Account => {
                 if build.modules.account && app.features.account {
-                    settings_account(app: app)
+                    settings_account(app: app, settings_window: false)
                 } else {
                     settings_general(app: app)
                 }
@@ -595,7 +594,7 @@ pub fn phone_settings_section(app: erika::Client, #[session] draft: ErikaDraft) 
             #[cfg(feature = "bern-module-danmaku")]
             PhoneSettings::Danmaku => { settings_danmaku(app: app) }
             #[cfg(feature = "bern-module-library")]
-            PhoneSettings::Library => { settings_module_placeholder(app: app) }
+            PhoneSettings::Library => { settings_library(app: app, #[cfg(feature = "bern-module-anime")] anime: anime) }
             #[cfg(feature = "bern-module-anime")]
             PhoneSettings::Anime => { settings_module_placeholder(app: app) }
             #[cfg(feature = "bern-module-sync")]
@@ -665,13 +664,16 @@ pub fn phone_section_title(app: erika::Client, #[session] draft: ErikaDraft) -> 
 
 /// `.ph-acct .x-av`: the account's picture at 40 points.
 #[component]
-pub fn phone_account_picture() -> impl View {
+pub fn phone_account_picture(app: erika::Client) -> impl View {
     ui! {
         Stack(variant: avatar, width: 40, height: 40) {
             Canvas(width: 40, height: 40, label: tr! { "zh-Hans" => "头像", "en" => "Avatar" }) {
                 Shape(kind: ellipse, fill: fill.strong)
                 Shape(kind: ellipse, x: 14.07, y: 10.07, width: 11.86, height: 11.86, fill: text.secondary, opacity: 0.5)
                 Shape(kind: ellipse, x: -4, y: 21.6, width: 48, height: 36.8, fill: text.secondary, opacity: 0.5)
+            }
+            if let Some(picture) = app.user_avatar {
+                Image(source: picture, width: 40, height: 40, corner: 20, fit: cover, label: app.user_name)
             }
         }
     }

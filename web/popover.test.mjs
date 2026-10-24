@@ -28,9 +28,24 @@ const commands = Object.fromEntries([...generated.matchAll(/^  (\w+): \(ctx[^\n]
 const browser = await (browserType === 'webkit' ? webkit : chromium).launch({headless:true,
   ...(browserType === 'chromium' ? {channel:'chrome',args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']} : {})});
 const page = await browser.newPage({viewport:{width:1280,height:800},hasTouch:true});
+page.setDefaultTimeout(15000);
 const errors = [], report = {mode:remote?'ui':'app',browser:browser.version(),checks:[]};
 page.on('pageerror', e => errors.push(String(e)));
 const command = (name, args = []) => page.evaluate(([name,args]) => command(name,args),[name,args]);
+const assertPictureUndimmed = async (name, expectActive = true) => {
+  const frames = await page.getByRole('button',{name:'播放或暂停画面',exact:true}).evaluate(async picture => {
+    const frames = [];
+    for (let i=0;i<4;i++) {
+      const style = getComputedStyle(picture);
+      frames.push({active:picture.matches(':active'), filter:style.filter, opacity:style.opacity});
+      await new Promise(requestAnimationFrame);
+    }
+    return frames;
+  });
+  if (expectActive) assert.ok(frames.some(frame=>frame.active), 'held outside press reaches the picture active state');
+  assert.ok(frames.every(frame=>frame.filter==='none' && frame.opacity==='1'),
+    `dismissing ${name} must not dim the picture: ${JSON.stringify(frames)}`);
+};
 try {
   if (firstFrameOnly) await page.addInitScript(() => {
     // Native toggle is a deferred task and can arrive after a paint. Stretch
@@ -129,6 +144,75 @@ try {
       }
     }
   } else {
+  assert.equal(await page.getByRole('button',{name:'更多',exact:true}).count(),0);
+  const screenshot = page.getByRole('button',{name:'截图',exact:true});
+  assert.equal(await screenshot.getAttribute('popovertarget'),null);
+  if (browserType === 'chromium') {
+    const download = page.waitForEvent('download');
+    await screenshot.click();
+    const capture = await download;
+    await capture.saveAs(`${out}/screenshot-button.png`);
+    assert.equal(await capture.failure(),null);
+    report.checks.push('screenshot button downloads the current picture directly');
+  }
+  // Use the actual Fullscreen API. Each cycle checks both popup bindings
+  // (session volume and engine settings), including playback after idle.
+  for (const playing of [false, true]) {
+    await page.getByRole('button',{name:'全屏',exact:true}).click();
+    await page.waitForFunction(() => !!document.fullscreenElement);
+    const viewport = playing ? {width:1920,height:1080} : {width:1280,height:800};
+    await page.setViewportSize(viewport);
+    if (playing) {
+      const wakeTrigger = page.getByRole('button',{name:'音量',exact:true});
+      await wakeTrigger.hover();
+      const wake = await wakeTrigger.boundingBox();
+      await command('seek', [['f64',0.1]]);
+      await command('toggle_pause');
+      await page.getByRole('button',{name:'暂停',exact:true}).waitFor();
+      await page.mouse.move(viewport.width/2,viewport.height/2);
+      await page.waitForTimeout(1200);
+      await page.mouse.move(wake.x+wake.width/2,wake.y+wake.height/2);
+      // The wake event initially hits the picture while controls are hidden.
+      // After their entrance, a stationary pointer over the button must keep
+      // it available beyond the picture's one-second auto-hide timeout.
+      await page.waitForTimeout(1500);
+      assert.equal(await wakeTrigger.isVisible(),true, 'controls stay awake under a stationary mouse');
+    }
+    for (const name of ['音量','播放设置']) {
+      const trigger = page.getByRole('button',{name,exact:true});
+      await trigger.click();
+      const panel = page.getByRole('dialog',{name,exact:true});
+      await panel.waitFor({state:'visible',timeout:5000});
+      await page.waitForTimeout(700);
+      assert.equal(await panel.evaluate(panel => {
+        const r = panel.getBoundingClientRect();
+        return !!document.fullscreenElement?.contains(panel)
+          && r.left >= 0 && r.top >= 0 && r.right <= innerWidth+1 && r.bottom <= innerHeight+1
+          && panel.contains(document.elementFromPoint(r.left+20,r.top+20));
+      }),true, `${name}: fullscreen popup is visible and receives pointer input`);
+      if (name === '播放设置') await panel.getByRole('radio',{name:'音频',exact:true}).click();
+      await panel.getByRole('slider',{name:'音量',exact:true}).press('ArrowLeft');
+      await page.screenshot({path:`${out}/fullscreen-${playing?'playing':'paused'}-${name}.png`});
+      await page.mouse.move(viewport.width/2,viewport.height/2);
+      await page.mouse.down();
+      try {
+        await assertPictureUndimmed(`${name} (fullscreen)`);
+      } finally {
+        await page.mouse.up();
+      }
+      await panel.waitFor({state:'hidden'});
+      await page.waitForFunction(() => pendingPanelCommands === 0);
+      assert.equal(await page.evaluate(() => !!document.fullscreenElement),true);
+    }
+    if (playing) {
+      await command('toggle_pause');
+      await page.getByRole('button',{name:'播放',exact:true}).waitFor();
+    }
+    await page.getByRole('button',{name:'退出全屏',exact:true}).click();
+    await page.waitForFunction(() => !document.fullscreenElement);
+    await page.setViewportSize({width:1280,height:800});
+    report.checks.push(`fullscreen ${playing?'playing after idle':'paused'}: volume/settings open, accept input, close and exit fullscreen`);
+  }
   // Clicking a different popup trigger should switch in one press.
   const volume = page.getByRole('button',{name:'音量',exact:true});
   await volume.click();
@@ -179,7 +263,17 @@ try {
           await page.waitForTimeout(350);
           await page.screenshot({path:`${out}/${viewport.width}-${i}-open.png`});
         }
-        await page.mouse.click(300,200);
+        // Dismissing a popup consumes the press, but the browser still sets
+        // :active on the picture underneath. Its pressed:none style must
+        // suppress the default content-button brightness effect throughout
+        // that press, including before the controlled binding acknowledges it.
+        await page.mouse.move(300,200);
+        await page.mouse.down();
+        try {
+          await assertPictureUndimmed(name);
+        } finally {
+          await page.mouse.up();
+        }
         await panel.waitFor({state:'hidden',timeout:5000});
         await page.waitForTimeout(350);
         assert.equal(await page.locator('[popover]:popover-open').count(),0, 'dismissed popup must stay closed');
@@ -188,7 +282,27 @@ try {
         await page.getByRole('button',{name:'播放',exact:true}).waitFor();
         if (i===0) await page.screenshot({path:`${out}/${viewport.width}-${name}-closed.png`});
       }
-      report.checks.push(`${viewport.width}: ${name} open, internal controls, dismiss, no duplicate content`);
+      if (browserType === 'chromium') {
+        // Hold a real touch too: touch has no mouse hover state to mask a
+        // missing pressed:none override, and dismissal consumes its events.
+        await trigger.tap();
+        const panel = page.getByRole('dialog',{name,exact:true});
+        await panel.waitFor();
+        const touch = await page.context().newCDPSession(page);
+        try {
+          await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:300,y:200}]});
+          // Some engines suppress touch :active after preventDefault. The
+          // visual result must still stay unchanged whether it applies or not.
+          await assertPictureUndimmed(`${name} (touch)`, false);
+        } finally {
+          await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+          await touch.detach();
+        }
+        await panel.waitFor({state:'hidden'});
+        await page.getByRole('button',{name:'播放',exact:true}).waitFor();
+        await page.waitForFunction(() => pendingPanelCommands === 0);
+      }
+      report.checks.push(`${viewport.width}: ${name} open, internal controls, dismiss without dimming, no duplicate content`);
     }
     const settings = page.getByRole('button',{name:'播放设置',exact:true});
     await command('toggle_pause');

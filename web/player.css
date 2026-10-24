@@ -1,7 +1,36 @@
 /* Erika's controls over video. These are stable Bern control IDs, shared
- * by desktop and compact layouts. Popover/menu contents keep their own
- * opaque surfaces and standard controls; no filter wraps a popup ancestor. */
+ * by desktop and compact layouts. Blur belongs to each popup surface;
+ * no filter wraps a popup ancestor or changes its contents' opacity. */
 @media (forced-colors: none) {
+  /* Native popovers inherit the player's dark appearance even when the
+   * surrounding app is light. Elsewhere these surfaces follow their host.
+   * Keep a solid fallback for browsers without backdrop filtering. */
+  .bern-popover-panel,
+  .bern-menu[popover] {
+    background: light-dark(#f2f2f2, #242424);
+    border: 1px solid light-dark(rgb(0 0 0 / 0.12), rgb(255 255 255 / 0.16));
+    box-shadow: 0 12px 32px rgb(0 0 0 / 0.28),
+      inset 0 1px 0 light-dark(rgb(255 255 255 / 0.7), rgb(255 255 255 / 0.08));
+  }
+
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .bern-popover-panel,
+    .bern-menu[popover] {
+      background: light-dark(rgb(242 242 242 / 0.78), rgb(28 28 28 / 0.76));
+      -webkit-backdrop-filter: blur(24px) saturate(115%);
+      backdrop-filter: blur(24px) saturate(115%);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .bern-popover-panel,
+    .bern-menu[popover] {
+      background: light-dark(#f2f2f2, #242424);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+
   button:is(
     [data-bern-target^="player_top."],
     [data-bern-target^="player_phone_top."],

@@ -45,7 +45,7 @@ fn show(id: i64, title: &str, image: &str, today: CalendarDate) -> Show {
     Show {
         id,
         title: title.into(),
-        poster: MediaSource::new(image),
+        poster: crate::posters::source(image),
         episodes: 0,
         watched: 0,
         rating: 0.0,
@@ -77,6 +77,7 @@ pub fn nothing_watched() -> Watching {
 pub fn from_intro(intro: &Intro, today: CalendarDate) -> Show {
     Show {
         rating: intro.rating,
+        summary: intro.summary.clone(),
         ..show(intro.anime_id, &intro.anime_title, &intro.image_url, today)
     }
 }
@@ -84,6 +85,7 @@ pub fn from_intro(intro: &Intro, today: CalendarDate) -> Show {
 pub fn from_found(found: &Found, today: CalendarDate) -> Show {
     Show {
         rating: found.rating,
+        summary: found.summary.clone(),
         episodes: found.episode_count,
         movie: is_movie(&found.type_description),
         ..show(found.anime_id, &found.anime_title, &found.image_url, today)
@@ -114,7 +116,7 @@ pub fn from_details(details: &Details, files: &[EpisodeFile]) -> Show {
     Show {
         id: details.anime_id,
         title: details.anime_title.clone(),
-        poster: MediaSource::new(details.image_url.clone()),
+        poster: crate::posters::source(&details.image_url),
         episodes,
         watched,
         rating: details.rating,
@@ -140,7 +142,7 @@ pub fn watching(watching: &erika_store::Watching) -> Watching {
         .as_deref()
         .filter(|still| std::path::Path::new(still).exists())
         .map(MediaSource::file)
-        .unwrap_or_else(|| MediaSource::new(watching.anime.image.clone()));
+        .unwrap_or_else(|| crate::posters::source(&watching.anime.image));
     Watching {
         id: watching.anime.dandanplay_id,
         title: watching.anime.title.clone(),
@@ -176,10 +178,20 @@ pub fn film(details: Option<&Details>, show: &Show, files: &[EpisodeFile]) -> (V
             .map(|file| (file.episode.number, file.episode.dandanplay_id))
             .collect(),
     };
-    let file_of = |id: i64| files.iter().find(|file| file.episode.dandanplay_id == id);
+    let file_of = |number: i64, id: i64| {
+        files.iter().find(|file| {
+            if id == 0 || erika_dandanplay::bangumi::subject_id(id).is_some() {
+                // A verified subject mapping keeps local episode progress when
+                // details came from Bangumi instead of dandanplay.
+                file.episode.number == number
+            } else {
+                file.episode.dandanplay_id == id
+            }
+        })
+    };
     let last_watched = numbers
         .iter()
-        .filter(|(_, id)| file_of(*id).is_some_and(|file| progress(file) >= WATCHED))
+        .filter(|(number, id)| file_of(*number, *id).is_some_and(|file| progress(file) >= WATCHED))
         .map(|(number, _)| *number)
         .max()
         .unwrap_or(0);
@@ -201,7 +213,7 @@ pub fn film(details: Option<&Details>, show: &Show, files: &[EpisodeFile]) -> (V
         .skip(start)
         .take(FILM)
         .map(|&(number, id)| {
-            let file = file_of(id);
+            let file = file_of(number, id);
             let progress = file.map_or(0.0, progress);
             let watched = progress >= WATCHED;
             let current = number == next && !watched;

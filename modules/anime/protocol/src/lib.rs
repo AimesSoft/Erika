@@ -125,7 +125,7 @@ pub mod anime {
         pub tomorrow: bool,
         pub day_after: bool,
         pub shows: Vec<Broadcast>,
-        /// The four non-overlapping covers shown in a collapsed column.
+        /// Up to four covers shown in the compact calendar's horizontal header.
         pub preview: Vec<Broadcast>,
         pub remaining: i64,
     }
@@ -223,12 +223,23 @@ pub mod anime {
         fn search(&self, text: String, answer: Answer<SearchResults>);
     }
 
+    /// Preferred catalogue for the New Shows calendar when both accounts exist.
+    #[value]
+    pub enum SeasonSource {
+        #[label(tr! { "zh-Hans" => "弹弹play", "en" => "dandanplay" })]
+        Dandanplay,
+        #[label(tr! { "zh-Hans" => "Bangumi", "en" => "Bangumi" })]
+        Bangumi,
+    }
+
     #[state]
     pub struct State {
-        /// Whether a dandanplay account is signed in, which the season's
-        /// list and the details need; whether they are loading, and why
-        /// they failed last (empty when they did not).
+        /// Whether either catalogue account is signed in. Public browsing
+        /// remains available without an account.
         pub signed_in: bool,
+        /// Effective first choice; a single signed-in account takes precedence.
+        pub season_source: SeasonSource,
+        pub can_choose_season_source: bool,
         pub loading: bool,
         #[content]
         pub error: String,
@@ -263,11 +274,35 @@ pub mod anime {
         /// The show whose details are open; `opened` is 0 when none is.
         pub opened: i64,
         pub show: Show,
+        pub details_loading: bool,
+        pub details_failed: bool,
+        #[content]
+        pub details_error: String,
         pub episodes: Vec<Episode>,
         /// The episode the main button plays, and what the button says.
         pub next_episode: i64,
         pub next: NextAction,
         pub back: BackTo,
+        pub comments: Vec<Review>,
+        pub comments_loading: bool,
+        pub has_comments: bool,
+        #[content]
+        pub comments_source: String,
+        #[content]
+        pub comments_error: String,
+    }
+
+    #[value]
+    pub struct Review {
+        pub id: String,
+        #[content]
+        pub author: String,
+        pub avatar: MediaSource,
+        #[content]
+        pub text: String,
+        pub rating: i64,
+        #[content]
+        pub updated: String,
     }
 
     #[events]
@@ -330,12 +365,23 @@ pub mod anime {
         /// Rate the open show from 1 to 10.
         fn rate(&mut self, score: i64) -> Result<(), CommandError>;
 
-        /// The shell signed a dandanplay account in or out: load what the
-        /// account lets the module show, or forget it.
+        /// Update dandanplay availability and refresh the preferred catalogue.
+        /// Public data remains visible when either account signs out.
         fn account_changed(&mut self, signed_in: bool) -> Result<(), CommandError>;
+
+        fn bangumi_account_changed(&mut self, signed_in: bool) -> Result<(), CommandError>;
+        /// Save the New Shows preference and refresh it immediately.
+        #[errors("accounts_required")]
+        fn set_season_source(&mut self, source: SeasonSource) -> Result<(), CommandError>;
+        fn refresh_details(&mut self) -> Result<(), CommandError>;
+        fn refresh_comments(&mut self) -> Result<(), CommandError>;
 
         /// The shell played or matched a video: what is being watched may
         /// have changed.
         fn history_changed(&mut self) -> Result<(), CommandError>;
+
+        /// Move "now" along today's timeline, and on to the next broadcast
+        /// day when it comes; the module's clock calls it.
+        fn tick(&mut self) -> Result<(), CommandError>;
     }
 }

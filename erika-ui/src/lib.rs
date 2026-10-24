@@ -21,7 +21,13 @@ use bern::prelude::*;
 use erika_anime_protocol::anime::{self, BackTo};
 #[cfg(feature = "bern-module-anime")]
 use erika_anime_ui::{details, details_props};
+#[cfg(feature = "bern-module-downloads")]
+use erika_downloads_protocol::downloads;
 use erika_protocol::erika;
+#[cfg(feature = "bern-module-account")]
+mod account;
+#[cfg(feature = "bern-module-account")]
+use account::{account_dialogs, account_dialogs_props};
 mod onboarding;
 use onboarding::{onboarding, onboarding_props};
 mod feature_preview;
@@ -35,9 +41,9 @@ use tv::{tv_shell, tv_shell_props};
 style! {
     // NipaPlay's page backgrounds, shared by both appearances and every layout.
     Stack.app_background { background: color(light: "#F2F2F2", dark: "#1E1E1E") }
-    // macOS keeps the system popover's Liquid Glass surface.
+    // macOS keeps Liquid Glass; the browser extension supplies frosted glass.
     PopoverButton { foreground: text.primary }
-    #[target(ios, tvos, browser, windows, linux, android)]
+    #[target(ios, tvos, windows, linux, android)]
     PopoverButton { background: color(light: "#F2F2F2", dark: "#1E1E1E") }
     // Native split columns own their backgrounds, preserving toolbar layout.
     #[target(macos, ios, tvos)]
@@ -117,9 +123,6 @@ style! {
     #[target(macos, ios, tvos, browser)]
     IconButton.player_primary { shadow: shadow(3, y: 1, opacity: 0.9) }
     IconButton.transport { font_size: 16, foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), padding: 6, pressed: scale(0.94, press), disabled: foreground(color(light: "#FFFFFF", dark: "#FFFFFF")) }
-    Row.enhancement_box { width: 112 }
-    #[target(browser)]
-    Row.enhancement_box { width: fit }
     Stack.onboarding_art { background: color(light: "#232A52", dark: "#232A52") }
     // Cards and groups take the system's neutral fill (P2); only the
     // picture, the player and the brand art keep their own colors.
@@ -401,15 +404,6 @@ style! {
     // The phone's way back (`.x-pback`): the accent, as iOS's.
     Stack.phone_back { foreground: accent }
 
-    // The phone's header row (`.x-av`): the account, a round button of the
-    // bar's 44 points.
-    Button.phone_avatar {
-        corner: 22,
-        hover: none,
-        pressed: scale(0.92, press),
-        settle: jelly,
-    }
-
     // The phone's cards (`.ph-cards`): the thumbnail clips its progress to
     // its 12-point corners.
     // The phone's main action (`.c-btn.p.L`), across the width.
@@ -587,16 +581,17 @@ pub struct Players {
 pub fn app(
     app: erika::Client,
     #[cfg(feature = "bern-module-anime")] anime: anime::Client,
+    #[cfg(feature = "bern-module-downloads")] download_module: downloads::Client,
     windows: AppWindows,
     players: Players,
 ) -> impl View {
     ui! {
         WindowSet(handle: AppWindows, primary: main, accent: app.accent, appearance: app.appearance) {
             Window(id: main, title: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, initial: open, width: 1280, height: 800, min_width: 720, min_height: 480, chrome: unified, idle_after: 3, idle_enabled: app.playing && app.expanded && !app.paused && !app.player.panel, immersive: app.playing && app.expanded, landscape: app.playing && app.expanded) {
-                main_window(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, players: players)
+                main_window(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, #[cfg(feature = "bern-module-downloads")] download_module: download_module, windows: windows, players: players)
             }
             Window(id: settings, title: tr! { "zh-Hans" => "设置", "en" => "Settings" }, width: 1000, height: 660, min_width: 1000, min_height: 660, chrome: standard) {
-                settings(app: app, windows: windows)
+                settings(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
             }
         }
     }
@@ -607,6 +602,7 @@ pub fn app(
 pub fn main_window(
     app: erika::Client,
     #[cfg(feature = "bern-module-anime")] anime: anime::Client,
+    #[cfg(feature = "bern-module-downloads")] download_module: downloads::Client,
     windows: AppWindows,
     players: Players,
     #[session] draft: ErikaDraft,
@@ -614,16 +610,22 @@ pub fn main_window(
     ui! {
         Stack(variant: app_window, reduce_motion: app.preferences.reduce_motion) {
             Timer(interval: 0.25, enabled: app.playing) => app.player_tick()
+            if build.modules.account && app.features.account {
+                Timer(interval: 60, enabled: app.bangumi.signed_in) => app.check_bangumi_session()
+            }
             Slot(id: background)
             if app.onboarding.visible {
                 Stack(enabled: false) {
-                    main_shell(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, players: players)
+                    main_shell(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, #[cfg(feature = "bern-module-downloads")] download_module: download_module, windows: windows, players: players)
                 }
                 onboarding(app: app)
             } else {
                 Stack(hero: onboarding_window) {
-                    main_shell(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, players: players)
+                    main_shell(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, #[cfg(feature = "bern-module-downloads")] download_module: download_module, windows: windows, players: players)
                 }
+            }
+            if build.modules.account && app.features.account {
+                account_dialogs(app: app, settings_window: false)
             }
         }
     }
@@ -633,6 +635,7 @@ pub fn main_window(
 pub fn main_shell(
     app: erika::Client,
     #[cfg(feature = "bern-module-anime")] anime: anime::Client,
+    #[cfg(feature = "bern-module-downloads")] download_module: downloads::Client,
     windows: AppWindows,
     players: Players,
     #[session] draft: ErikaDraft,
@@ -668,21 +671,26 @@ pub fn main_shell(
                             Text(content: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, style: headline)
                         }
                     }
-                    Pages(slot: main)
+                    if build.modules.anime && app.features.anime {
+                        SidebarItem(value: MainPage::Home, label: tr! { "zh-Hans" => "首页", "en" => "Home" }, icon: "house")
+                        SidebarItem(value: MainPage::New, label: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, icon: "calendar")
+                    }
+                    if build.modules.library && app.features.library {
+                        SidebarItem(value: MainPage::Library, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "film.stack")
+                    }
+                    if build.modules.downloads && app.features.downloads {
+                        SidebarItem(value: MainPage::Downloads, label: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, icon: "arrow.down.circle", badge: download_module.active_count)
+                    }
                     SidebarFooter {
                         if app.playing && !app.expanded {
                             mini_player(app: app, players: players)
                         }
                         Row(gap: 10, align: center) {
                             if build.modules.account && app.features.account {
-                            avatar()
+                            avatar(app: app)
                             Column(gap: 1) {
                                 Text(content: app.user_name, style: headline, lines: 1)
-                                if app.account_status.signed_in {
-                                    Text(content: tr! { "zh-Hans" => "弹弹play 已登录", "en" => "Signed in to dandanplay" }, style: caption, emphasis: secondary)
-                                } else {
-                                    Text(content: tr! { "zh-Hans" => "未登录", "en" => "Not signed in" }, style: caption, emphasis: secondary)
-                                }
+                                Text(content: app.user_account, style: caption, emphasis: secondary)
                             }
                             }
                             Spacer
@@ -736,13 +744,16 @@ pub fn main_shell(
 /// centred on the bottom edge, both in the tertiary label color (`--on3`),
 /// and the disc cuts the shoulders.
 #[component]
-pub fn avatar() -> impl View {
+pub fn avatar(app: erika::Client) -> impl View {
     ui! {
         Stack(variant: avatar, width: 30, height: 30) {
             Canvas(width: 30, height: 30, label: tr! { "zh-Hans" => "头像", "en" => "Avatar" }) {
                 Shape(kind: ellipse, fill: fill.strong)
                 Shape(kind: ellipse, x: 10.55, y: 7.55, width: 8.9, height: 8.9, fill: text.placeholder)
                 Shape(kind: ellipse, x: -3, y: 16.2, width: 36, height: 27.6, fill: text.placeholder)
+            }
+            if let Some(picture) = app.user_avatar {
+                Image(source: picture, width: 30, height: 30, corner: 15, fit: cover, label: app.user_name)
             }
         }
     }

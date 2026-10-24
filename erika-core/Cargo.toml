@@ -8,7 +8,7 @@ publish = false
 
 [features]
 default = ["bern-module-account", "bern-module-danmaku", "bern-module-enhance", "bern-module-library", "bern-module-anime", "bern-module-sync", "bern-module-sources", "bern-module-remote", "bern-module-downloads"]
-bern-module-account = ["erika-protocol/bern-module-account"]
+bern-module-account = ["erika-protocol/bern-module-account", "dep:ureq", "dep:scraper", "dep:regex"]
 bern-module-danmaku = ["erika-protocol/bern-module-danmaku"]
 bern-module-enhance = ["erika-protocol/bern-module-enhance"]
 bern-module-library = ["erika-protocol/bern-module-library", "dep:erika-library-protocol"]
@@ -33,3 +33,8 @@ erika-library-protocol = { path = "../modules/library/protocol", optional = true
 liberika.workspace = true
 crossbeam-channel = "0.5"
 png = "0.17"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { version = "3", features = ["cookies", "json"], optional = true }
+scraper = { version = "0.24", default-features = false, optional = true }
+regex = { version = "1", optional = true }

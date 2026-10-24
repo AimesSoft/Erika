@@ -12,9 +12,9 @@ pub struct PlayerDraft {
     pub volume_open: bool,
     pub tracks_open: bool,
     pub rate_open: bool,
+    pub enhancement_open: bool,
     pub danmaku_open: bool,
     pub composer_open: bool,
-    pub episodes_open: bool,
     /// The television's danmaku field, in place of the seek bar.
     pub saying: bool,
     pub subtitle_file: MediaSource,
@@ -36,16 +36,16 @@ pub fn player(
             if window.tv {
                 Stack(under_bars: true) {
                     ScaleBox(width: 1280, height: 720) {
-                        player_tv_scene(app: app, players: players, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.episodes_open || draft.saying)
+                        player_tv_scene(app: app, players: players, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.saying)
                     }
                 }
             } else if window.short {
                 ScaleBox(width: 844, height: 390) {
-                    player_phone_scene(app: app, players: players, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.volume_open || draft.episodes_open || draft.tracks_open || draft.rate_open || draft.danmaku_open || draft.composer_open)
+                    player_phone_scene(app: app, players: players, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.danmaku_open || draft.composer_open)
                 }
             } else {
                 ScaleBox(width: 1280, height: 800) {
-                    player_scene(app: app, players: players, windows: windows, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.volume_open || draft.episodes_open || draft.tracks_open || draft.rate_open || draft.danmaku_open || draft.composer_open)
+                    player_scene(app: app, players: players, windows: windows, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
                 }
             }
             if let Some(notice) = app.notice {
@@ -194,10 +194,10 @@ pub fn player_tv_scene(
 
 /// The television's bar (`.ff-tv .p-top`, 52 tall, 56 in): the title with
 /// its episode, then danmaku matching, picture in picture, the settings
-/// and more; no volume or full screen, which the remote and the television
+/// and screenshot; no volume or full screen, which the remote and the television
 /// have.
 #[component]
-pub fn player_tv_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
+pub fn player_tv_top(app: erika::Client) -> impl View {
     ui! {
         Row(gap: 12, height: 52, align: center) {
             Stack(variant: player_overlay) {
@@ -214,18 +214,7 @@ pub fn player_tv_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl 
                 PopoverButton(panel_appearance: surface, id: settings_tv, icon: "slider.horizontal.3", label: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }, open: app.player.panel) {
                     player_panel(app: app)
                 } => app.player_panel(app.player.panel)
-                Menu(id: more_tv, hide_disabled: true, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon) {
-                    MenuItem(id: screenshot_tv, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera") => app.screenshot()
-                    MenuItem(id: skip_segment_tv, label: tr! { "zh-Hans" => "跳过片头／片尾", "en" => "Skip opening / ending" }, enabled: app.player.skip_kind != SkipKind::None) => app.skip_segment()
-                    MenuItem(id: chapters_tv, label: tr! { "zh-Hans" => "章节…", "en" => "Chapters…" }, enabled: app.player.has_chapters) => app.player_tab(PlayerTab::Playback)
-                    MenuItem(id: episodes_tv, label: tr! { "zh-Hans" => "选集…", "en" => "Episodes…" }, enabled: app.player.episodes) => draft.episodes_open.set(true)
-                    MenuItem(id: info_tv, label: tr! { "zh-Hans" => "播放信息", "en" => "Playback information" }) => app.player_tab(PlayerTab::Playback)
-                }
-            }
-            if draft.episodes_open {
-                PopoverButton(panel_appearance: surface, id: episode_list_tv, label: tr! { "zh-Hans" => "选集", "en" => "Episodes" }, presented: draft.episodes_open) {
-                    player_episodes(app: app)
-                }
+                IconButton(id: screenshot_tv, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera") => app.screenshot()
             }
         }
     }
@@ -412,7 +401,7 @@ pub fn player_phone_scene(
 /// circle, the title with its episode, and its actions on one glass
 /// capsule, Apple's 44 points tall.
 #[component]
-pub fn player_phone_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
+pub fn player_phone_top(app: erika::Client) -> impl View {
     ui! {
         Row(gap: 10, padding_x: 8, height: 48, align: center) {
             IconButton(id: back_phone, icon: "chevron.left", font_size: 18, height: 44, label: tr! { "zh-Hans" => "返回", "en" => "Back" }) => app.minimize()
@@ -430,12 +419,7 @@ pub fn player_phone_top(app: erika::Client, #[session] draft: PlayerDraft) -> im
                 PopoverButton(panel_appearance: surface, id: settings_phone, icon: "slider.horizontal.3", label: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }, open: app.player.panel) {
                     player_panel(app: app)
                 } => app.player_panel(app.player.panel)
-                Menu(id: more_phone, hide_disabled: true, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon) {
-                    MenuItem(id: skip_segment_phone, label: tr! { "zh-Hans" => "跳过片头／片尾", "en" => "Skip opening / ending" }, enabled: app.player.skip_kind != SkipKind::None) => app.skip_segment()
-                    MenuItem(id: chapters_phone, label: tr! { "zh-Hans" => "章节…", "en" => "Chapters…" }, enabled: app.player.has_chapters) => app.player_tab(PlayerTab::Playback)
-                    MenuItem(id: episodes_phone, label: tr! { "zh-Hans" => "选集…", "en" => "Episodes…" }, enabled: app.player.episodes) => draft.episodes_open.set(true)
-                    MenuItem(id: info_phone, label: tr! { "zh-Hans" => "播放信息", "en" => "Playback information" }) => app.player_tab(PlayerTab::Playback)
-                }
+                IconButton(id: screenshot_phone, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera") => app.screenshot()
             }
         }
     }
@@ -538,19 +522,7 @@ pub fn player_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl Vie
                 PopoverButton(panel_appearance: surface, id: settings, icon: "slider.horizontal.3", label: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }, open: app.player.panel) {
                     player_panel(app: app)
                 } => app.player_panel(app.player.panel)
-                Menu(id: more, hide_disabled: true, label: tr! { "zh-Hans" => "更多", "en" => "More" }, icon: "ellipsis", style: icon) {
-                    MenuItem(id: screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera", shortcut: "cmd+s") => app.screenshot()
-                    MenuItem(id: skip_segment, label: tr! { "zh-Hans" => "跳过片头／片尾", "en" => "Skip opening / ending" }, enabled: app.player.skip_kind != SkipKind::None) => app.skip_segment()
-                    MenuItem(id: chapters, label: tr! { "zh-Hans" => "章节…", "en" => "Chapters…" }, enabled: app.player.has_chapters) => app.player_tab(PlayerTab::Playback)
-                    MenuItem(id: episodes, label: tr! { "zh-Hans" => "选集…", "en" => "Episodes…" }, enabled: app.player.episodes) => draft.episodes_open.set(true)
-                    MenuItem(id: info, label: tr! { "zh-Hans" => "播放信息", "en" => "Playback information" }) => app.player_tab(PlayerTab::Playback)
-                    MenuItem(id: manual_match, label: tr! { "zh-Hans" => "手动匹配弹幕…", "en" => "Match danmaku…" }, enabled: build.modules.danmaku && app.features.danmaku) => app.show_matching(true)
-                }
-            }
-            if draft.episodes_open {
-                PopoverButton(panel_appearance: surface, id: episode_list, label: tr! { "zh-Hans" => "选集", "en" => "Episodes" }, presented: draft.episodes_open) {
-                    player_episodes(app: app)
-                }
+                IconButton(id: screenshot, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera", shortcut: "cmd+s") => app.screenshot()
             }
         }
     }
@@ -636,22 +608,64 @@ pub fn player_controls(
                 Shortcut(key: "d") => app.set_preference("show_danmaku", !app.preferences.show_danmaku)
             }
             Spacer
-            Row(gap: 10, align: center) {
-                if (build.modules.enhance && app.features.enhance) {
-                    Row(variant: enhancement_box) { Picker(id: enhancement, label: tr! { "zh-Hans" => "画质增强", "en" => "Enhancement" }, selected: app.player.enhancement, label_hidden: true, style: menu, shape: capsule, height: 40) => app.set_enhancement(app.player.enhancement) }
+            ControlGroup(height: 40) {
+                player_subtitle_menu(app: app)
+                PopoverButton(panel_appearance: surface, id: rate, icon: "speedometer", label: tr! { "zh-Hans" => "播放速度", "en" => "Playback speed" }, presented: draft.rate_open) {
+                    player_speed_menu(app: app)
                 }
-                ControlGroup(height: 40) {
-                    player_subtitle_menu(app: app)
-                    PopoverButton(panel_appearance: surface, id: rate, icon: "speedometer", label: tr! { "zh-Hans" => "播放速度", "en" => "Playback speed" }, presented: draft.rate_open) {
-                        player_speed_menu(app: app)
+                if (build.modules.enhance && app.features.enhance) {
+                    PopoverButton(panel_appearance: surface, id: enhancement, icon: "sparkles", label: tr! { "zh-Hans" => "画质增强", "en" => "Enhancement" }, presented: draft.enhancement_open) {
+                        player_enhancement_menu(app: app)
                     }
-                    if window.fullscreen {
-                        IconButton(id: exit_fullscreen, icon: "arrow.down.right.and.arrow.up.left", label: tr! { "zh-Hans" => "退出全屏", "en" => "Exit full screen" }, shortcut: "f") => windows.main.toggle_fullscreen()
-                    } else {
-                        IconButton(id: fullscreen, icon: "viewfinder", label: tr! { "zh-Hans" => "全屏", "en" => "Full screen" }, shortcut: "f") => windows.main.toggle_fullscreen()
-                    }
+                }
+                if window.fullscreen {
+                    IconButton(id: exit_fullscreen, icon: "arrow.down.right.and.arrow.up.left", label: tr! { "zh-Hans" => "退出全屏", "en" => "Exit full screen" }, shortcut: "f") => windows.main.toggle_fullscreen()
+                } else {
+                    IconButton(id: fullscreen, icon: "viewfinder", label: tr! { "zh-Hans" => "全屏", "en" => "Full screen" }, shortcut: "f") => windows.main.toggle_fullscreen()
                 }
             }
+        }
+    }
+}
+
+#[component]
+pub fn player_enhancement_menu(app: erika::Client) -> impl View {
+    ui! {
+        Column(gap: 4, width: 248, padding: 8) {
+            Text(content: tr! { "zh-Hans" => "画质增强", "en" => "Enhancement" }, style: title3)
+            Canvas(height: 8)
+            Button(id: enhancement_off, label: tr! { "zh-Hans" => "关闭", "en" => "Off" }, variant: player_picture) {
+                Row(height: 36, padding_x: 4) {
+                    Text(content: tr! { "zh-Hans" => "关闭", "en" => "Off" }) Spacer
+                    if app.player.enhancement == Enhancement::Off {
+                        Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
+                    }
+                }
+            } => app.set_enhancement(Enhancement::Off)
+            Button(id: enhancement_artcnn, label: tr! { "zh-Hans" => "ArtCNN 2×", "en" => "ArtCNN 2×" }, variant: player_picture) {
+                Row(height: 36, padding_x: 4) {
+                    Text(content: tr! { "zh-Hans" => "ArtCNN 2×", "en" => "ArtCNN 2×" }) Spacer
+                    if app.player.enhancement == Enhancement::ArtCnn {
+                        Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
+                    }
+                }
+            } => app.set_enhancement(Enhancement::ArtCnn)
+            Button(id: enhancement_quality, label: tr! { "zh-Hans" => "ArtCNN 2× 高质量", "en" => "ArtCNN 2× high quality" }, variant: player_picture) {
+                Row(height: 36, padding_x: 4) {
+                    Text(content: tr! { "zh-Hans" => "ArtCNN 2× 高质量", "en" => "ArtCNN 2× high quality" }) Spacer
+                    if app.player.enhancement == Enhancement::ArtCnnQuality {
+                        Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
+                    }
+                }
+            } => app.set_enhancement(Enhancement::ArtCnnQuality)
+            Button(id: enhancement_denoise, label: tr! { "zh-Hans" => "ArtCNN 2× 降噪", "en" => "ArtCNN 2× denoise" }, variant: player_picture) {
+                Row(height: 36, padding_x: 4) {
+                    Text(content: tr! { "zh-Hans" => "ArtCNN 2× 降噪", "en" => "ArtCNN 2× denoise" }) Spacer
+                    if app.player.enhancement == Enhancement::ArtCnnDenoise {
+                        Stack(variant: player_accent) { Label(title: tr! { "zh-Hans" => "已选", "en" => "Selected" }, icon: "checkmark", display: icon) }
+                    }
+                }
+            } => app.set_enhancement(Enhancement::ArtCnnDenoise)
         }
     }
 }
@@ -891,6 +905,10 @@ pub fn player_panel(app: erika::Client, #[session] draft: PlayerDraft) -> impl V
                                 }
                             } }
                         PlayerTab::Playback => { Column(gap: 0, appear: settings_page_in) {
+                                if app.player.episodes {
+                                    player_episodes(app: app)
+                                    Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
+                                }
                                 Row(height: 34, padding_x: 4) { Stack(variant: player_secondary) { Text(content: tr! { "zh-Hans" => "播放", "en" => "Playback" }, style: caption) } Spacer }
                                 if app.player.has_chapters {
                                     ForEach(items: app.player.chapters, key: id) |chapter| {
@@ -943,7 +961,7 @@ pub fn player_episodes(app: erika::Client) -> impl View {
 #[component]
 pub fn player_subtitle_menu(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
     ui! {
-        PopoverButton(panel_appearance: surface, id: subtitles, label: tr! { "zh-Hans" => "字幕与音轨", "en" => "Subtitles and audio tracks" }, icon: "captions.bubble", presented: draft.tracks_open) {
+        PopoverButton(panel_appearance: surface, id: subtitles, label: tr! { "zh-Hans" => "字幕与音轨", "en" => "Subtitles and audio tracks" }, icon: "text.rectangle", presented: draft.tracks_open) {
             Column(gap: 12, width: 320, padding: 8) {
                 Text(content: tr! { "zh-Hans" => "字幕与音轨", "en" => "Subtitles and audio tracks" }, style: title3)
                 Stack(height: 320) {
@@ -989,14 +1007,14 @@ pub fn player_subtitle_menu(app: erika::Client, #[session] draft: PlayerDraft) -
 pub fn player_tv_subtitle_menu(app: erika::Client) -> impl View {
     ui! {
         if app.player.subtitle_track >= 0 {
-            Menu(id: subtitles_tv, label: app.player.subtitle_name, icon: "captions.bubble", shape: capsule, height: 46) {
+            Menu(id: subtitles_tv, label: app.player.subtitle_name, icon: "text.rectangle", shape: capsule, height: 46) {
                 MenuItem(id: subtitle_tracks_tv, label: tr! { "zh-Hans" => "字幕轨道…", "en" => "Subtitle tracks…" }) => app.player_tab(PlayerTab::Subtitles)
                 MenuItem(id: no_subtitle_tv, label: tr! { "zh-Hans" => "关闭字幕", "en" => "Subtitles off" }) => app.select_subtitle_track(-1)
                 Divider
                 MenuItem(id: audio_tracks_tv, label: tr! { "zh-Hans" => "音轨…", "en" => "Audio tracks…" }) => app.player_tab(PlayerTab::Audio)
             }
         } else {
-            Menu(id: subtitles_off_tv, label: tr! { "zh-Hans" => "关闭", "en" => "Off" }, icon: "captions.bubble", shape: capsule, height: 46) {
+            Menu(id: subtitles_off_tv, label: tr! { "zh-Hans" => "关闭", "en" => "Off" }, icon: "text.rectangle", shape: capsule, height: 46) {
                 MenuItem(id: subtitle_tracks_off_tv, label: tr! { "zh-Hans" => "字幕轨道…", "en" => "Subtitle tracks…" }) => app.player_tab(PlayerTab::Subtitles)
                 Divider
                 MenuItem(id: audio_tracks_off_tv, label: tr! { "zh-Hans" => "音轨…", "en" => "Audio tracks…" }) => app.player_tab(PlayerTab::Audio)

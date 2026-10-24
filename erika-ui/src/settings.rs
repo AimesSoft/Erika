@@ -1,34 +1,37 @@
 //! Settings from design/next-screens.js and next.css (Apple desktop).
 //! A native grouped form on every page (design 10.9: "苹果是分组列表"),
 //! a 220-point sidebar, and the title bar named after the page. All
-//! preference changes go through the shell protocol.
+//! preference changes go through the owning engine's protocol.
 use crate::AppWindows;
+#[cfg(feature = "bern-module-account")]
+use crate::account::{account_dialogs, account_dialogs_props, account_profile, account_profile_props};
 use crate::feature_preview::{
     feature_preview_hud, feature_preview_hud_props, feature_preview_window,
     feature_preview_window_props,
 };
 use bern::prelude::*;
+#[cfg(feature = "bern-module-anime")]
+use erika_anime_protocol::anime;
 use erika_protocol::erika::{self, *};
 #[bern::session]
 pub struct SettingsDraft {
     pub page: SettingsPage,
     pub query: String,
     pub danmaku_file: MediaSource,
-    /// What the account form holds until it signs in.
-    pub account_user: String,
-    pub account_password: String,
     /// The recognition server's address being typed.
     pub match_server: String,
 }
 #[component]
 pub fn settings(
     app: erika::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
     windows: AppWindows,
     #[session] draft: SettingsDraft,
 ) -> impl View {
     ui! {
+        Stack {
         if window.tv {
-            tv_settings(app: app, windows: windows)
+            tv_settings(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
         } else {
         Stack(variant: app_window, align: bottom, reduce_motion: app.preferences.reduce_motion) {
             SplitView {
@@ -58,7 +61,7 @@ pub fn settings(
                         SidebarItem(value: SettingsPage::Library, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "film.stack")
                     }
                     if (build.modules.anime && app.features.anime) {
-                        SidebarItem(value: SettingsPage::Anime, label: tr! { "zh-Hans" => "追番", "en" => "Anime" }, icon: "calendar")
+                        SidebarItem(value: SettingsPage::Anime, label: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, icon: "calendar")
                     }
                     if (build.modules.sync && app.features.sync) {
                         SidebarItem(value: SettingsPage::Sync, label: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, icon: "arrow.triangle.2.circlepath")
@@ -83,7 +86,7 @@ pub fn settings(
                     }
                 }
                 Detail {
-                    settings_page(app: app)
+                    settings_page(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
                 }
             }
             if let Some(notice) = app.notice {
@@ -91,18 +94,26 @@ pub fn settings(
             }
         }
         }
+        if build.modules.account && app.features.account {
+            account_dialogs(app: app, settings_window: true)
+        }
+        }
     }
 }
 
 /// The page the settings show.
 #[component]
-pub fn settings_page(app: erika::Client, #[session] draft: SettingsDraft) -> impl View {
+pub fn settings_page(
+    app: erika::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
+    #[session] draft: SettingsDraft,
+) -> impl View {
     ui! {
         Column(gap: 0) {
             match draft.page {
                 SettingsPage::Account => {
                     if build.modules.account && app.features.account {
-                        settings_account(app: app)
+                        settings_account(app: app, settings_window: true)
                     } else {
                         settings_general(app: app)
                     }
@@ -113,7 +124,7 @@ pub fn settings_page(app: erika::Client, #[session] draft: SettingsDraft) -> imp
                 #[cfg(feature = "bern-module-danmaku")]
                 SettingsPage::Danmaku => { settings_danmaku(app: app) }
                 #[cfg(feature = "bern-module-library")]
-                SettingsPage::Library => { settings_module_placeholder(app: app) }
+                SettingsPage::Library => { settings_library(app: app, #[cfg(feature = "bern-module-anime")] anime: anime) }
                 #[cfg(feature = "bern-module-anime")]
                 SettingsPage::Anime => { settings_module_placeholder(app: app) }
                 #[cfg(feature = "bern-module-sync")]
@@ -146,6 +157,7 @@ pub fn settings_page(app: erika::Client, #[session] draft: SettingsDraft) -> imp
 #[component]
 pub fn tv_settings(
     app: erika::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
     windows: AppWindows,
     #[session] draft: SettingsDraft,
 ) -> impl View {
@@ -247,7 +259,7 @@ pub fn tv_settings(
                                         } => draft.page.set(SettingsPage::Library)
                                     }
                                     if (build.modules.anime && app.features.anime) {
-                                        Button(id: tv_settings_anime, label: tr! { "zh-Hans" => "追番", "en" => "Anime" }, variant: settings_tv_nav) {
+                                        Button(id: tv_settings_anime, label: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, variant: settings_tv_nav) {
                                             Stack(width: 280, height: 46, align: leading) {
                                                 if draft.page == SettingsPage::Anime {
                                                     Canvas {
@@ -255,7 +267,7 @@ pub fn tv_settings(
                                                     }
                                                 }
                                                 Row(gap: 0, padding_x: 16) {
-                                                    Text(content: tr! { "zh-Hans" => "追番", "en" => "Anime" }, lines: 1)
+                                                    Text(content: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, lines: 1)
                                                     Spacer
                                                 }
                                             }
@@ -411,7 +423,7 @@ pub fn tv_settings(
                         IconButton(id: tv_settings_close, icon: "xmark", label: tr! { "zh-Hans" => "关闭", "en" => "Close" }, height: 46) => windows.settings.close()
                     }
                     Positioned(x: 322, y: 56, width: 944, height: 664) {
-                        settings_page(app: app)
+                        settings_page(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
                     }
                     if let Some(notice) = app.notice {
                         Positioned(x: 322, y: 600, width: 944, height: 80) {
@@ -424,47 +436,19 @@ pub fn tv_settings(
     }
 }
 
-/// 「账号」: the dandanplay account, which the season's anime, the details
-/// of a show and matching danmaku need. Signed out, the form asks for the
-/// name and the password; signed in, it shows the account.
+/// 「账号」: both providers use the same profile and open the shared login
+/// dialog. Only their data and authentication commands differ.
 #[cfg(feature = "bern-module-account")]
 #[component]
-pub fn settings_account(app: erika::Client, #[session] draft: SettingsDraft) -> impl View {
+pub fn settings_account(app: erika::Client, settings_window: bool, #[session] draft: SettingsDraft) -> impl View {
     ui! {
         Form(variant: settings_form, appear: settings_page_in) {
             Slot(id: form_header)
-            if app.account_status.signed_in {
-                Section(title: tr! { "zh-Hans" => "弹弹play 账号", "en" => "dandanplay account" }) {
-                    Row(gap: 12, align: center) {
-                        Label(title: tr! { "zh-Hans" => "账号", "en" => "Account" }, icon: "person.crop.circle", display: icon, font_size: 28)
-                        Column(gap: 1) {
-                            Text(content: app.account_status.name, style: body, lines: 1)
-                            Text(content: app.account_status.user, style: caption, emphasis: secondary)
-                        }
-                        Spacer
-                        Button(id: sign_out, label: tr! { "zh-Hans" => "退出登录", "en" => "Sign Out" }) => app.sign_out()
-                    }
-                }
-                Section {
-                    Text(content: tr! { "zh-Hans" => "新番、番剧详情和弹幕匹配经 NipaPlay 的网关连到弹弹play。", "en" => "The season's anime, show details and danmaku matching reach dandanplay through NipaPlay's gateways." }, style: caption, emphasis: secondary, lines: 2)
-                }
-            } else {
-                Section(title: tr! { "zh-Hans" => "弹弹play 账号", "en" => "dandanplay account" }) {
-                    TextInput(id: account_user, label: tr! { "zh-Hans" => "用户名", "en" => "User name" }, value: draft.account_user, prompt: tr! { "zh-Hans" => "用户名或邮箱", "en" => "User name or email" })
-                    TextInput(id: account_password, label: tr! { "zh-Hans" => "密码", "en" => "Password" }, value: draft.account_password, kind: secure, prompt: tr! { "zh-Hans" => "密码", "en" => "Password" }) => app.sign_in(draft.account_user, draft.account_password)
-                    Row(gap: 12, align: center) {
-                        if app.account_status.busy {
-                            Text(content: tr! { "zh-Hans" => "正在登录…", "en" => "Signing in…" }, style: caption, emphasis: secondary)
-                        } else {
-                            Text(content: app.account_status.error, style: caption, emphasis: secondary, lines: 2)
-                        }
-                        Spacer
-                        Button(id: sign_in, label: tr! { "zh-Hans" => "登录", "en" => "Sign In" }, prominence: prominent, clears: draft.account_password) => app.sign_in(draft.account_user, draft.account_password)
-                    }
-                }
-                Section {
-                    Text(content: tr! { "zh-Hans" => "登录后才能看新番和番剧详情，也才能给视频匹配弹幕。还没有账号的话，可以在弹弹play 官网注册。", "en" => "Sign in to see the season's anime and show details, and to match danmaku to your videos. No account yet? Sign up on the dandanplay website." }, style: caption, emphasis: secondary, lines: 3)
-                }
+            Section(title: tr! { "zh-Hans" => "弹弹play 账号", "en" => "dandanplay account" }) {
+                account_profile(app: app, bangumi: false, settings_window: settings_window, signed_in: app.account_status.signed_in, name: app.account_status.name, user: app.account_status.user, picture: app.account_status.avatar, busy: app.account_status.busy, message: app.account_status.error)
+            }
+            Section(title: tr! { "zh-Hans" => "Bangumi 账号", "en" => "Bangumi account" }) {
+                account_profile(app: app, bangumi: true, settings_window: settings_window, signed_in: app.bangumi.signed_in, name: app.bangumi.name, user: app.bangumi.email, picture: app.bangumi.avatar, busy: app.bangumi.busy, message: app.bangumi.error)
             }
             Section(title: tr! { "zh-Hans" => "电视剧与电影", "en" => "TV series and movies" }) {
                 if app.account_status.has_server {
@@ -502,10 +486,6 @@ pub fn settings_general(app: erika::Client) -> impl View {
             }
             Section(title: tr! { "zh-Hans" => "语言", "en" => "Language" }) {
                 Picker(id: language, label: tr! { "zh-Hans" => "界面语言", "en" => "Interface language" }, selected: app.preferences.language, style: menu) => app.set_language(app.preferences.language)
-            }
-            Section(title: tr! { "zh-Hans" => "更新", "en" => "Updates" }) {
-                Switch(id: auto_updates, label: tr! { "zh-Hans" => "自动检查更新", "en" => "Automatically check for updates" }, checked: app.preferences.auto_updates, style: switch) => app.set_preference("auto_updates", app.preferences.auto_updates)
-                Picker(id: update_channel, label: tr! { "zh-Hans" => "更新通道", "en" => "Update channel" }, selected: app.preferences.update_channel, style: menu) => app.set_update_channel(app.preferences.update_channel)
             }
         }
     }
@@ -600,20 +580,11 @@ pub fn settings_player(app: erika::Client) -> impl View {
             Section(title: tr! { "zh-Hans" => "播放", "en" => "Playback" }) {
                 Picker(id: speed, label: tr! { "zh-Hans" => "默认倍速", "en" => "Default speed" }, selected: app.preferences.speed, style: menu) => app.set_speed(app.preferences.speed)
                 Switch(id: skip_segments, label: tr! { "zh-Hans" => "片头／片尾跳过提示", "en" => "Opening / ending skip hint" }, checked: app.player.skip_intro, style: switch) => app.set_skip_intro(app.player.skip_intro)
-                Text(content: tr! { "zh-Hans" => "在视频标记的片头或片尾区间内显示跳过按钮。", "en" => "Show a skip button inside the video's marked opening or ending." }, style: caption, emphasis: secondary)
                 Switch(id: remember_position, label: tr! { "zh-Hans" => "记住播放位置", "en" => "Remember playback position" }, checked: app.preferences.remember_position, style: switch) => app.set_preference("remember_position", app.preferences.remember_position)
                 Switch(id: autoplay, label: tr! { "zh-Hans" => "自动连播下一集", "en" => "Automatically play next episode" }, checked: app.preferences.autoplay, style: switch) => app.set_preference("autoplay", app.preferences.autoplay)
             }
-            Section(title: tr! { "zh-Hans" => "画框", "en" => "Frame" }) {
-                Row(gap: 12, align: center) {
-                    Text(content: tr! { "zh-Hans" => "画框圆角", "en" => "Frame corners" }, style: body)
-                    Spacer
-                    Text(content: tr! { "zh-Hans" => "跟随系统", "en" => "System" }, style: body, emphasis: secondary)
-                }
-            }
             Section(title: tr! { "zh-Hans" => "解码", "en" => "Decoding" }) {
                 Switch(id: hardware_decode, label: tr! { "zh-Hans" => "硬件解码", "en" => "Hardware decoding" }, checked: app.preferences.hardware_decode, style: switch) => app.set_preference("hardware_decode", app.preferences.hardware_decode)
-                Text(content: tr! { "zh-Hans" => "下次打开视频时生效。", "en" => "Applies when the next video opens." }, style: caption)
             }
         }
     }
@@ -659,6 +630,40 @@ pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> 
         }
     }
 }
+#[component]
+pub fn settings_library(
+    app: erika::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
+) -> impl View {
+    ui! {
+        Form(variant: settings_form, appear: settings_page_in) {
+            Slot(id: form_header)
+            if build.modules.anime {
+                Section(title: tr! { "zh-Hans" => "新番", "en" => "New Shows" }) {
+                    if anime.can_choose_season_source {
+                        Picker(id: season_source, label: tr! { "zh-Hans" => "新番数据源", "en" => "New Shows source" }, selected: anime.season_source, style: menu) => anime.set_season_source(anime.season_source)
+                        Text(content: tr! { "zh-Hans" => "切换后立即刷新新番，并记住你的选择。所选来源不可用时会自动回退。", "en" => "Refreshes New Shows immediately and remembers your choice. Falls back automatically if the selected source is unavailable." }, style: caption, emphasis: secondary)
+                    } else {
+                        Row(gap: 12, align: center) {
+                            Text(content: tr! { "zh-Hans" => "新番数据源", "en" => "New Shows source" })
+                            Spacer
+                            if anime.signed_in {
+                                Text(content: anime.season_source, emphasis: secondary)
+                            } else {
+                                Text(content: tr! { "zh-Hans" => "公共数据", "en" => "Public catalogue" }, emphasis: secondary)
+                            }
+                        }
+                        Text(content: tr! { "zh-Hans" => "同时登录弹弹play和 Bangumi 后可切换；只登录一个账号时自动使用该账号的数据源。", "en" => "Sign in to both dandanplay and Bangumi to choose. With one account, its source is used automatically." }, style: caption, emphasis: secondary)
+                    }
+                }
+            }
+            Section {
+                Switch(id: sync_storage, label: tr! { "zh-Hans" => "同步与存储", "en" => "Sync and storage" }, checked: app.preferences.sync_storage, style: switch) => app.set_preference("sync_storage", app.preferences.sync_storage)
+            }
+        }
+    }
+}
+
 #[component]
 pub fn settings_module_placeholder(app: erika::Client) -> impl View {
     ui! {
@@ -747,14 +752,14 @@ pub fn settings_optional(app: erika::Client) -> impl View {
                             Canvas {
                                 Shape(kind: rounded, corner: 7, fill: fill.strong)
                             }
-                            Label(title: tr! { "zh-Hans" => "追番", "en" => "Anime" }, icon: "calendar", style: body, display: icon)
+                            Label(title: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, icon: "calendar", style: body, display: icon)
                         }
                         Column(gap: 1) {
-                            Text(content: tr! { "zh-Hans" => "追番", "en" => "Anime" }, style: body)
-                            Text(content: tr! { "zh-Hans" => "首页推荐、新番表、番剧详情", "en" => "Home, airing calendar and show details" }, style: caption, emphasis: secondary)
+                            Text(content: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, style: body)
+                            Text(content: tr! { "zh-Hans" => "首页推荐、新番表", "en" => "Home and airing calendar" }, style: caption, emphasis: secondary)
                         }
                         Spacer
-                        Switch(id: feature_anime, label: tr! { "zh-Hans" => "追番", "en" => "Anime" }, checked: app.features.anime, style: switch, label_hidden: true) => app.set_module("anime", app.features.anime)
+                        Switch(id: feature_anime, label: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, checked: app.features.anime, style: switch, label_hidden: true) => app.set_module("anime", app.features.anime)
                     }
                     }
                     if build.modules.sync {
@@ -767,7 +772,7 @@ pub fn settings_optional(app: erika::Client) -> impl View {
                         }
                         Column(gap: 1) {
                             Text(content: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, style: body)
-                            Text(content: tr! { "zh-Hans" => "弹弹play / Bangumi 同步 · 需要账号和追番", "en" => "Dandanplay / Bangumi · requires Account and Anime" }, style: caption, emphasis: secondary)
+                            Text(content: tr! { "zh-Hans" => "弹弹play / Bangumi 同步 · 需要账号及媒体库或新番", "en" => "Dandanplay / Bangumi · requires Account and Library or New Shows" }, style: caption, emphasis: secondary)
                         }
                         Spacer
                         Switch(id: feature_sync, label: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, checked: app.features.sync, style: switch, label_hidden: true) => app.set_module("sync", app.features.sync)

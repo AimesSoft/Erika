@@ -207,7 +207,7 @@ pub fn onboarding_card(app: erika::Client, preset: OnboardingPreset) -> impl Vie
                     if preset == OnboardingPreset::Pure {
                         Text(content: tr! { "zh-Hans" => "和 VLC 一样，打开就能播，没有多余的东西。", "en" => "Open and play, just like VLC. Nothing extra." }, style: caption, emphasis: secondary, lines: 3)
                     } else if preset == OnboardingPreset::Anime {
-                        Text(content: tr! { "zh-Hans" => "账号、弹幕、媒体库和追番。推荐大多数人选这个。", "en" => "Account, danmaku, library and anime. A good choice for most people." }, style: caption, emphasis: secondary, lines: 3)
+                        Text(content: tr! { "zh-Hans" => "账号、弹幕、媒体库和新番。推荐大多数人选这个。", "en" => "Account, danmaku, library and new shows. A good choice for most people." }, style: caption, emphasis: secondary, lines: 3)
                     } else if preset == OnboardingPreset::All {
                         Text(content: tr! { "zh-Hans" => "全部功能，和现在的 NipaPlay 一样。", "en" => "Every feature, just like NipaPlay today." }, style: caption, emphasis: secondary, lines: 3)
                     } else {
@@ -282,10 +282,10 @@ pub fn onboarding_swatch(app: erika::Client, accent: Accent) -> impl View {
 #[component]
 pub fn onboarding_swatch_content(app: erika::Client, accent: Accent) -> impl View {
     ui! {
-        // `.o-sws button`: a 44-point disc, its name 6 under; the chosen
-        // one's ring 2 points out and 2 wide, outside its room.
-        Column(gap: 6, width: 44, align: center) {
-            Stack(width: 44, height: 44) {
+        // Reserve room for the selection ring inside the button's bounds
+        // so platforms that clip button content keep the full circle.
+        Column(gap: 6, width: 52, align: center) {
+            Stack(width: 52, height: 52) {
                 if app.accent == accent {
                     Canvas(width: 52, height: 52) { Shape(kind: ellipse, x: 1, y: 1, width: 50, height: 50, stroke: text.primary, stroke_width: 2) }
                 }

@@ -56,21 +56,19 @@ impl ErikaEngine {
         let draft = &mut self.state.onboarding;
         let module = draft
             .modules
-            .iter_mut()
+            .iter()
             .find(|m| m.id == id)
             .ok_or_else(|| CommandError::new("unknown_module", "unknown module"))?;
-        module.enabled = !module.enabled;
-        let enabled = module.enabled;
-        for other in &mut draft.modules {
-            match (id, enabled, other.id.as_str()) {
-                ("sources" | "remote", true, "library") | ("sync", true, "anime" | "account") => {
-                    other.enabled = true
-                }
-                ("library", false, "sources" | "remote") | ("anime" | "account", false, "sync") => {
-                    other.enabled = false
-                }
-                _ => {}
-            }
+        let enabled = !module.enabled;
+        let mut selected = draft
+            .modules
+            .iter()
+            .filter(|m| m.enabled)
+            .map(|m| m.id.clone())
+            .collect();
+        settings::change_feature(&mut selected, id, enabled);
+        for module in &mut draft.modules {
+            module.enabled = selected.contains(&module.id);
         }
         refresh(draft);
         Ok(())
@@ -92,20 +90,7 @@ impl ErikaEngine {
             .map(|m| m.id.clone())
             .collect();
         self.write_welcome_preferences(&enabled)?;
-        for module in self
-            .state
-            .onboarding
-            .modules
-            .iter()
-            .rev()
-            .filter(|m| !m.enabled)
-        {
-            bern::modules::set_enabled(&module.id, false);
-        }
-        for module in self.state.onboarding.modules.iter().filter(|m| m.enabled) {
-            bern::modules::set_enabled(&module.id, true);
-        }
-        self.saved_modules = Some(enabled);
+        self.apply_feature_selection(enabled)?;
         self.onboarding_completed = true;
         self.state.onboarding.visible = false;
         Ok(())
@@ -146,6 +131,20 @@ mod tests {
         assert!(!e.state.onboarding.visible);
     }
     #[test]
+    fn library_only_onboarding_starts_details_without_selecting_new_shows() {
+        use erika::Engine;
+        let mut engine = ErikaEngine::default();
+        engine.onboarding_skip().unwrap();
+        engine.onboarding_toggle("library".into()).unwrap();
+        assert!(!engine.state.onboarding.features.anime);
+        engine.onboarding_next().unwrap();
+        let runtime = engine.initial_modules().unwrap();
+        assert!(runtime.iter().any(|id| id == "anime"));
+        engine.modules_changed(&runtime);
+        assert!(engine.state.features.library);
+        assert!(!engine.state.features.anime);
+    }
+    #[test]
     fn back_keeps_the_draft_and_custom_keeps_current_selection() {
         let mut e = ErikaEngine::default();
         e.onboarding_next().unwrap();
@@ -182,7 +181,7 @@ impl ErikaEngine {
         }
         self.write_welcome_preferences(self.saved_modules.as_deref().unwrap_or(&[]))
     }
-    fn write_welcome_preferences(&self, enabled: &[String]) -> Result<(), CommandError> {
+    pub(crate) fn write_welcome_preferences(&self, enabled: &[String]) -> Result<(), CommandError> {
         let text = welcome_preferences_text(enabled, &self.state.accent, &self.state.appearance);
         bern::storage::Store::host().write("welcome-v1", text.as_bytes())
     }
@@ -247,6 +246,21 @@ fn welcome_preferences_text(
 #[cfg(test)]
 mod persistence_tests {
     use super::*;
+
+    #[test]
+    fn saved_library_only_choices_restore_details_without_enabling_new_shows() {
+        for version in ["erika-welcome-1", "erika-welcome-2"] {
+            let saved =
+                parse_welcome_preferences(&format!("{version}\nlibrary\nCrimson\nSystem\n"))
+                    .unwrap();
+            let runtime = settings::runtime_modules(&saved.modules);
+            assert!(runtime.iter().any(|id| id == "anime"));
+            assert!(!settings::feature_selection(&saved.modules).anime);
+            let text = welcome_preferences_text(&saved.modules, &saved.accent, &saved.appearance);
+            let restored = parse_welcome_preferences(&text).unwrap();
+            assert_eq!(restored.modules, saved.modules);
+        }
+    }
 
     #[test]
     fn old_pure_mode_has_no_account_and_old_nonpure_retains_it() {

@@ -35,6 +35,8 @@ pub struct LibraryDraft {
     pub position: i64,
     /// The folder picked to add.
     pub folder: MediaSource,
+    pub shared_name: String,
+    pub shared_address: String,
     /// What is typed while matching: a video's episode, the episode to
     /// start from by order, the episode the lowest number goes to, and the
     /// anime searched for.
@@ -191,6 +193,7 @@ pub fn library_phone(
                         Spacer
                         ControlGroup(label: tr! { "zh-Hans" => "媒体库操作", "en" => "Library actions" }, height: 44) {
                             library_sort_round()
+                            Slot(id: phone_header_settings)
                         }
                     }
                     Canvas(height: 2)
@@ -527,7 +530,15 @@ pub fn library_preview(library: library::Client) -> impl View {
     ui! {
         ScrollView {
             Column(gap: 24, padding: 32) {
-                Button(id: back, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "chevron.left", prominence: plain) => library.close()
+                Row(align: center) {
+                    Button(id: back, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "chevron.left", prominence: plain) => library.close()
+                    Spacer
+                    if window.compact {
+                        ControlGroup(label: tr! { "zh-Hans" => "媒体库操作", "en" => "Library actions" }, height: 44) {
+                            Slot(id: phone_header_settings)
+                        }
+                    }
+                }
                 Row(gap: 36, align: top) {
                     Image(source: library.show.poster, width: 220, height: 330, fit: cover, corner: poster, label: library.show.title)
                     Column(gap: 14) {
