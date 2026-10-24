@@ -43,7 +43,7 @@ design/                界面设计文档与原型
 在 Erika 根目录执行：
 
 ```sh
-cargo build --manifest-path ../Bern/Cargo.toml -p bern-cli
+(cd ../Bern && cargo build -p bern-cli)
 ../Bern/target/debug/bern build --target web_ui --release
 target/bern/web_ui/bin/erika-host --port 4174
 ```
@@ -63,7 +63,7 @@ WebUI 的本地视频使用 liberika 浏览器播放扩展：文件留在选取�
 使用包含本次 Web 后端扩展的相邻 Bern 仓库。在 Erika 根目录执行：
 
 ```sh
-cargo build --manifest-path ../Bern/Cargo.toml -p bern-cli
+(cd ../Bern && cargo build -p bern-cli)
 ../Bern/target/debug/bern run --target web_app --port 4173
 ```
 

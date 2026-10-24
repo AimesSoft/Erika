@@ -1059,7 +1059,7 @@ pub fn detail_fetch_status(anime: anime::Client) -> impl View {
                 Text(content: tr! { "zh-Hans" => "正在加载详情…", "en" => "Loading details…" }, style: caption, emphasis: secondary)
             } else if anime.details_failed {
                 Text(content: anime.details_error, style: caption, emphasis: secondary)
-                Button(id: retry_details, label: tr! { "zh-Hans" => "重试", "en" => "Retry" }, icon: "arrow.clockwise") => anime.refresh_details()
+                Button(id: retry_details, label: tr! { "zh-Hans" => "重试", "en" => "Retry" }, icon: "arrow.triangle.2.circlepath") => anime.refresh_details()
             }
         }
     }

@@ -22,7 +22,7 @@ mkdir -p .cargo
 cp .cargo/config.local.example.toml .cargo/config.toml
 ```
 
-此后直接运行普通 `cargo` 或 `bern` 命令。Cargo 自动读取 `.cargo/config.toml` 中的 `[patch]`：liberika、FFmpeg Rust 绑定和 Bern 改用相邻工作目录，修改后无需推送就能联调。路径相对于 Erika 根目录；源码放在其他位置时修改这个文件即可。
+此后直接运行普通 `cargo` 或 `bern` 命令。Cargo 自动读取 `.cargo/config.toml` 中的 `[patch]`：liberika、FFmpeg Rust 绑定和 Bern 改用相邻工作目录，修改后无需推送就能联调。Bern 只需替换 `bern` 一个 crate：`bern` 命令看到 Cargo 实际用的是本地检出，生成的宿主也从这个检出取其余 Bern crate（需要相邻检出里的 `bern` 命令）。路径相对于 Erika 根目录；源码放在其他位置时修改这个文件即可。
 
 `.cargo/config.toml` 已被 Git 忽略，只在本机生效。GitHub 构建不复制它，自动使用 `Cargo.toml` 的 Git 版本。不要把本地路径写回公共清单。
 

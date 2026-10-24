@@ -3,7 +3,7 @@
 使用相邻 Bern 仓库的新 CLI：
 
 ```sh
-cargo build --manifest-path ../Bern/Cargo.toml -p bern-cli
+(cd ../Bern && cargo build -p bern-cli)
 ../Bern/target/debug/bern build --target android --exclude-module downloads
 ```
 
