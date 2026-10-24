@@ -270,11 +270,18 @@ pub(crate) fn settings(text: &str, features: &FeatureSelection) -> Vec<SettingRe
             cfg!(feature = "bern-module-downloads"),
         ),
         (
+            I::EnablePlugins,
+            P::Optional,
+            "启用插件 enable plugins",
+            "扩展 extensions",
+            true,
+        ),
+        (
             I::Plugins,
             P::Plugins,
             "插件市场与已安装插件 plugin marketplace installed plugins",
             "分类 扩展 extensions",
-            true,
+            features.plugins,
         ),
         (
             I::Keys,

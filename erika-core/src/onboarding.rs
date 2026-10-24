@@ -197,7 +197,7 @@ struct WelcomePreferences {
 fn parse_welcome_preferences(text: &str) -> Option<WelcomePreferences> {
     let mut lines = text.lines();
     let version = lines.next()?;
-    if version != "erika-welcome-1" && version != "erika-welcome-2" {
+    if !["erika-welcome-1", "erika-welcome-2", "erika-welcome-3"].contains(&version) {
         return None;
     }
     let saved = lines.next()?;
@@ -214,6 +214,10 @@ fn parse_welcome_preferences(text: &str) -> Option<WelcomePreferences> {
         && !modules.iter().any(|id| id == "account")
     {
         modules.insert(0, "account".into());
+    }
+    // Plugins became a choice in v3; before, they always ran.
+    if version != "erika-welcome-3" {
+        modules.push("plugins".into());
     }
     let accent = match lines.next() {
         Some("Ultramarine") => Accent::Ultramarine,
@@ -239,7 +243,7 @@ fn welcome_preferences_text(
     appearance: &Appearance,
 ) -> String {
     format!(
-        "erika-welcome-2\n{}\n{accent:?}\n{appearance:?}\n",
+        "erika-welcome-3\n{}\n{accent:?}\n{appearance:?}\n",
         modules.join(",")
     )
 }
@@ -265,7 +269,10 @@ mod persistence_tests {
 
     #[test]
     fn old_pure_mode_has_no_account_and_old_nonpure_retains_it() {
+        // Plugins always ran before they became a choice: they still do.
         let pure = parse_welcome_preferences("erika-welcome-1\n\nCrimson\nSystem\n").unwrap();
+        assert_eq!(pure.modules, ["plugins"]);
+        let pure = parse_welcome_preferences("erika-welcome-3\n\nCrimson\nSystem\n").unwrap();
         assert!(pure.modules.is_empty());
         let old = parse_welcome_preferences(
             "erika-welcome-1\ndan m aku,danmaku,library,anime\nNeon\nDark\n",

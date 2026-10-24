@@ -78,8 +78,12 @@ pub fn settings(
                     }
                     Section(title: tr! { "zh-Hans" => "扩展", "en" => "Extensions" }) {
                         SidebarItem(value: SettingsPage::Optional, label: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, icon: "square.grid.2x2")
-                        SidebarItem(value: SettingsPage::Plugins, label: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, icon: "puzzlepiece.extension")
-                        SidebarItem(value: SettingsPage::Keys, label: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, icon: "keyboard")
+                        if app.features.plugins {
+                            SidebarItem(value: SettingsPage::Plugins, label: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, icon: "puzzlepiece.extension")
+                        }
+                        if window.keyboard {
+                            SidebarItem(value: SettingsPage::Keys, label: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, icon: "keyboard")
+                        }
                         SidebarItem(value: SettingsPage::About, label: tr! { "zh-Hans" => "关于", "en" => "About" }, icon: "info.circle")
                     }
                 }
@@ -363,19 +367,21 @@ pub fn tv_settings(
                                             }
                                         }
                                     } => draft.page.set(SettingsPage::Optional)
-                                    Button(id: tv_settings_plugins, label: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, variant: settings_tv_nav) {
-                                        Stack(width: 280, height: 46, align: leading) {
-                                            if draft.page == SettingsPage::Plugins {
-                                                Canvas {
-                                                    Shape(kind: capsule, fill: fill.strong)
+                                    if app.features.plugins {
+                                        Button(id: tv_settings_plugins, label: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, variant: settings_tv_nav) {
+                                            Stack(width: 280, height: 46, align: leading) {
+                                                if draft.page == SettingsPage::Plugins {
+                                                    Canvas {
+                                                        Shape(kind: capsule, fill: fill.strong)
+                                                    }
+                                                }
+                                                Row(gap: 0, padding_x: 16) {
+                                                    Text(content: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, lines: 1)
+                                                    Spacer
                                                 }
                                             }
-                                            Row(gap: 0, padding_x: 16) {
-                                                Text(content: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, lines: 1)
-                                                Spacer
-                                            }
-                                        }
-                                    } => draft.page.set(SettingsPage::Plugins)
+                                        } => draft.page.set(SettingsPage::Plugins)
+                                    }
                                     Button(id: tv_settings_keys, label: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, variant: settings_tv_nav) {
                                         Stack(width: 280, height: 46, align: leading) {
                                             if draft.page == SettingsPage::Keys {
@@ -809,6 +815,22 @@ pub fn settings_optional(app: erika::Client) -> impl View {
                         Spacer
                         Switch(id: feature_downloads, label: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, checked: app.features.downloads, style: switch, label_hidden: true) => app.set_module("downloads", app.features.downloads)
                     }
+                    }
+                }
+                Section(title: tr! { "zh-Hans" => "扩展", "en" => "Extensions" }) {
+                    Row(gap: 12, align: center) {
+                        Stack(width: 28, height: 28) {
+                            Canvas {
+                                Shape(kind: rounded, corner: 7, fill: fill.strong)
+                            }
+                            Label(title: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, icon: "puzzlepiece.extension", style: body, display: icon)
+                        }
+                        Column(gap: 1) {
+                            Text(content: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, style: body)
+                            Text(content: tr! { "zh-Hans" => "插件市场与已安装的插件", "en" => "Plugin marketplace and installed plugins" }, style: caption, emphasis: secondary)
+                        }
+                        Spacer
+                        Switch(id: feature_plugins, label: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, checked: app.features.plugins, style: switch, label_hidden: true) => app.set_module("plugins", app.features.plugins)
                     }
                 }
             }

@@ -281,7 +281,8 @@ impl ErikaEngine {
     fn start_plugins(&mut self) {
         self.plugins.started = true;
         self.plugins.saved = Saved::load(&self.db);
-        if self.plugins.saved.downloader {
+        let running = self.state.features.plugins;
+        if running && self.plugins.saved.downloader {
             self.unlock_downloader(true);
         }
         self.plugins.installed = store::installed()
@@ -300,7 +301,7 @@ impl ErikaEngine {
             .installed
             .iter()
             .map(|plugin| plugin.pack.id.clone())
-            .filter(|id| self.plugins.enabled(id))
+            .filter(|id| running && self.plugins.enabled(id))
             .collect();
         self.refresh_market();
         // `--load-js <file>` or `--load-js=<file>`: install and turn on a
@@ -794,6 +795,11 @@ impl ErikaEngine {
         if saved == self.plugins.saved {
             return;
         }
+        // With plugins turned off, what came is kept for when they run.
+        if !self.state.features.plugins {
+            self.plugins.saved = saved;
+            return;
+        }
         let ids: Vec<String> = self.plugins.runtimes.keys().cloned().collect();
         for id in ids {
             self.stop_runtime(&id);
@@ -805,6 +811,34 @@ impl ErikaEngine {
                 self.start_runtime(&id);
             } else if self.plugins.listings.iter().any(|listing| listing.pack.id == id) {
                 let _ = self.install_plugin_command(id);
+            }
+        }
+        self.rerun_plugin_danmaku();
+        self.show_plugins();
+    }
+
+    /// Plugins turned on or off among the optional features: off stops every
+    /// plugin and takes back what they changed, keeping what is installed
+    /// and which are turned on; on starts those again.
+    pub(crate) fn set_plugins_running(&mut self, running: bool) {
+        if !self.plugins.started {
+            return;
+        }
+        if running {
+            if self.plugins.saved.downloader {
+                self.unlock_downloader(true);
+            }
+            for id in self.plugins.saved.enabled.clone() {
+                self.start_runtime(&id);
+            }
+        } else {
+            let ids: Vec<String> = self.plugins.runtimes.keys().cloned().collect();
+            for id in ids {
+                self.stop_runtime(&id);
+            }
+            self.plugins.waiting.clear();
+            if self.plugins.saved.downloader {
+                self.unlock_downloader(false);
             }
         }
         self.rerun_plugin_danmaku();

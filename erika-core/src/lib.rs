@@ -1166,7 +1166,12 @@ impl erika::Engine for ErikaEngine {
             // must not turn the user's New Shows switch back on.
             return;
         }
-        self.publish_feature_selection(enabled);
+        // The modules say nothing of the plugins, which Erika runs itself.
+        let mut enabled = enabled.to_vec();
+        if self.state.features.plugins {
+            enabled.push("plugins".into());
+        }
+        self.publish_feature_selection(&enabled);
         if let Err(error) = self.save_welcome_preferences() {
             self.notify(Notice::SaveFailed {
                 reason: error.message,

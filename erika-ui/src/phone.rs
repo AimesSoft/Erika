@@ -424,20 +424,26 @@ pub fn phone_settings(
                                 Text(content: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, font_size: 17, line_height: 22)
                             }
                         }
-                        NavLink(id: settings_plugins, route: PhoneSettings::Plugins) {
-                            Row(gap: 14, align: center) {
-                                Stack(variant: settings_plugins, width: 30, height: 30, align: center) {
-                                    Label(title: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, icon: "puzzlepiece.extension", display: icon, font_size: 20)
+                        if app.features.plugins {
+                            NavLink(id: settings_plugins, route: PhoneSettings::Plugins) {
+                                Row(gap: 14, align: center) {
+                                    Stack(variant: settings_plugins, width: 30, height: 30, align: center) {
+                                        Label(title: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, icon: "puzzlepiece.extension", display: icon, font_size: 20)
+                                    }
+                                    Text(content: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, font_size: 17, line_height: 22)
                                 }
-                                Text(content: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, font_size: 17, line_height: 22)
                             }
                         }
-                        NavLink(id: settings_keys, route: PhoneSettings::Keys) {
-                            Row(gap: 14, align: center) {
-                                Stack(variant: settings_keys, width: 30, height: 30, align: center) {
-                                    Label(title: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, icon: "keyboard", display: icon, font_size: 20)
+                        // Shortcuts are for a keyboard: without one the phone does not
+                        // offer them.
+                        if window.keyboard {
+                            NavLink(id: settings_keys, route: PhoneSettings::Keys) {
+                                Row(gap: 14, align: center) {
+                                    Stack(variant: settings_keys, width: 30, height: 30, align: center) {
+                                        Label(title: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, icon: "keyboard", display: icon, font_size: 20)
+                                    }
+                                    Text(content: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, font_size: 17, line_height: 22)
                                 }
-                                Text(content: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, font_size: 17, line_height: 22)
                             }
                         }
                         NavLink(id: settings_about, route: PhoneSettings::About) {
@@ -513,10 +519,14 @@ pub fn phone_settings(
                                         NavLink(id: result_optional, route: PhoneSettings::Optional) { phone_settings_hit(result: result) }
                                     }
                                     SettingsPage::Plugins => {
-                                        NavLink(id: result_plugins, route: PhoneSettings::Plugins) { phone_settings_hit(result: result) }
+                                        if app.features.plugins {
+                                            NavLink(id: result_plugins, route: PhoneSettings::Plugins) { phone_settings_hit(result: result) }
+                                        }
                                     }
                                     SettingsPage::Keys => {
-                                        NavLink(id: result_keys, route: PhoneSettings::Keys) { phone_settings_hit(result: result) }
+                                        if window.keyboard {
+                                            NavLink(id: result_keys, route: PhoneSettings::Keys) { phone_settings_hit(result: result) }
+                                        }
                                     }
                                     SettingsPage::About => {
                                         NavLink(id: result_about, route: PhoneSettings::About) { phone_settings_hit(result: result) }

@@ -21,6 +21,8 @@ pub const ALL_MODULES: &[&str] = &[
     "remote",
     #[cfg(feature = "bern-module-downloads")]
     "downloads",
+    // Not a module: Erika runs the plugins itself.
+    "plugins",
 ];
 
 /// Whether a plugin turned the downloader on where Erika hides it.
@@ -59,6 +61,7 @@ pub fn feature_module(id: &str) -> FeatureModule {
         "sync" => FeatureModule::Sync,
         "sources" => FeatureModule::Sources,
         "remote" => FeatureModule::Remote,
+        "plugins" => FeatureModule::Plugins,
         _ => FeatureModule::Downloads,
     }
 }
@@ -124,6 +127,7 @@ pub fn feature_selection(enabled: &[String]) -> FeatureSelection {
         downloads: cfg!(feature = "bern-module-downloads")
             && !downloader_hidden()
             && enabled.iter().any(|id| id == "downloads"),
+        plugins: enabled.iter().any(|id| id == "plugins"),
     }
 }
 
@@ -131,6 +135,8 @@ pub fn feature_selection(enabled: &[String]) -> FeatureSelection {
 /// module also supplies library details, even when New Shows is off.
 pub(crate) fn runtime_modules(selected: &[String]) -> Vec<String> {
     let mut enabled = selected.to_vec();
+    // Erika runs the plugins; no module stands for them.
+    enabled.retain(|id| id != "plugins");
     if downloader_hidden() {
         enabled.retain(|id| id != "downloads");
     }
@@ -216,7 +222,11 @@ impl ErikaEngine {
         self.saved_modules = Some(selected.to_vec());
         #[cfg(feature = "bern-module-account")]
         let account_was_enabled = self.state.features.account;
+        let plugins_were_running = self.state.features.plugins;
         self.state.features = feature_selection(selected);
+        if plugins_were_running != self.state.features.plugins {
+            self.set_plugins_running(self.state.features.plugins);
+        }
         #[cfg(feature = "bern-module-account")]
         if account_was_enabled != self.state.features.account {
             self.set_account_enabled(self.state.features.account);
@@ -252,9 +262,33 @@ mod tests {
     use super::*;
     use erika::{Commands, Engine};
 
+    /// An engine with plugins turned off: the modules' callbacks then
+    /// decide the whole choice.
+    fn without_plugins() -> ErikaEngine {
+        let mut engine = ErikaEngine::default();
+        engine.set_module("plugins".into(), false).unwrap();
+        engine
+    }
+
+    #[test]
+    fn plugins_are_a_choice_no_module_reports() {
+        let mut engine = ErikaEngine::default();
+        engine.set_module("plugins".into(), true).unwrap();
+        assert!(engine.state.features.plugins);
+        // Erika runs them: no module starts for them, and the modules'
+        // callbacks keep the choice.
+        assert!(!engine.initial_modules().unwrap().iter().any(|id| id == "plugins"));
+        engine.modules_changed(&[]);
+        assert!(engine.state.features.plugins);
+        assert_eq!(engine.state.preset, OnboardingPreset::Custom);
+        engine.set_module("plugins".into(), false).unwrap();
+        assert!(!engine.state.features.plugins);
+        assert_eq!(engine.state.preset, OnboardingPreset::Pure);
+    }
+
     #[test]
     fn module_callbacks_keep_the_preview_in_sync() {
-        let mut engine = ErikaEngine::default();
+        let mut engine = without_plugins();
         engine.modules_changed(&[]);
         assert_eq!(engine.state.module_count, 0);
         assert_eq!(engine.state.preset, OnboardingPreset::Pure);
@@ -280,7 +314,7 @@ mod tests {
     fn new_shows_and_library_keep_details_until_both_are_off() {
         for library in [false, true] {
             for new_shows in [false, true] {
-                let mut engine = ErikaEngine::default();
+                let mut engine = without_plugins();
                 engine.modules_changed(&[]);
                 engine.set_module("library".into(), library).unwrap();
                 if engine.pending_modules.is_some() {
@@ -326,7 +360,7 @@ mod tests {
 
     #[test]
     fn intermediate_runtime_callbacks_do_not_overwrite_feature_choices() {
-        let mut engine = ErikaEngine::default();
+        let mut engine = without_plugins();
         engine.modules_changed(&[]);
         engine.set_module("library".into(), true).unwrap();
         engine.modules_changed(&["anime".into()]);

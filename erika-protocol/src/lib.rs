@@ -219,6 +219,8 @@ pub mod erika {
         pub sources: bool,
         pub remote: bool,
         pub downloads: bool,
+        /// Plugins run; they are Erika's own, not a module.
+        pub plugins: bool,
     }
     /// The individual setting shown in search, localized by the interface.
     #[value]
@@ -289,6 +291,8 @@ pub mod erika {
         EnableRemote,
         #[label(tr! { "zh-Hans" => "启用下载", "en" => "Enable Downloads" })]
         EnableDownloads,
+        #[label(tr! { "zh-Hans" => "启用插件", "en" => "Enable Plugins" })]
+        EnablePlugins,
         #[label(tr! { "zh-Hans" => "插件市场与已安装插件", "en" => "Plugin Marketplace and Installed Plugins" })]
         Plugins,
         #[label(tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" })]
@@ -475,6 +479,8 @@ pub mod erika {
         Remote,
         #[label(tr! { "zh-Hans" => "下载", "en" => "Downloads" })]
         Downloads,
+        #[label(tr! { "zh-Hans" => "插件", "en" => "Plugins" })]
+        Plugins,
     }
     #[value]
     pub struct OnboardingModule {
