@@ -395,6 +395,39 @@ style! {
     // The symbol of a settings row (`.c-li .lic`): 28 points on the neutral
     // fill, 7-point corners.
     Stack.setting_icon { background: fill.strong, corner: 7 }
+    // The phone's settings list, as the system's own: on iOS each
+    // section's icon is white on a tile of the system color it is given;
+    // elsewhere the icon stands bare, as Android's settings show theirs.
+    #[target(ios)]
+    Stack.settings_general { background: color(light: "#8E8E93", dark: "#8E8E93"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
+    #[target(ios)]
+    Stack.settings_appearance { background: color(light: "#32ADE6", dark: "#64D2FF"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
+    #[target(ios)]
+    Stack.settings_player { background: color(light: "#FF3B30", dark: "#FF453A"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
+    #[target(ios)]
+    Stack.settings_danmaku { background: color(light: "#34C759", dark: "#30D158"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
+    #[target(ios)]
+    Stack.settings_library { background: color(light: "#FF9500", dark: "#FF9F0A"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
+    #[target(ios)]
+    Stack.settings_anime { background: color(light: "#FF2D55", dark: "#FF375F"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
+    #[target(ios)]
+    Stack.settings_sync { background: color(light: "#00C7BE", dark: "#63E6E2"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
+    #[target(ios)]
+    Stack.settings_sources { background: color(light: "#5856D6", dark: "#5E5CE6"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
+    #[target(ios)]
+    Stack.settings_remote { background: color(light: "#007AFF", dark: "#0A84FF"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
+    #[target(ios)]
+    Stack.settings_downloads { background: color(light: "#30B0C7", dark: "#40C8E0"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
+    #[target(ios)]
+    Stack.settings_enhance { background: color(light: "#AF52DE", dark: "#BF5AF2"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
+    #[target(ios)]
+    Stack.settings_optional { background: color(light: "#FFCC00", dark: "#FFD60A"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
+    #[target(ios)]
+    Stack.settings_plugins { background: color(light: "#34C759", dark: "#30D158"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
+    #[target(ios)]
+    Stack.settings_keys { background: color(light: "#8E8E93", dark: "#8E8E93"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
+    #[target(ios)]
+    Stack.settings_about { background: color(light: "#007AFF", dark: "#0A84FF"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), corner: 7 }
 
     // A show's tags (`.d-tags span`): pills on the neutral fill.
     Stack.tag_pill { background: fill.subtle, corner: 999 }
