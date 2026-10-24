@@ -152,6 +152,19 @@ cargo run --manifest-path "$ERIKA_LIBERIKA_ROOT/Cargo.toml" -p xtask -- \
 - Misaka 要能认出没见过的剧，得开「后备匹配」「后备搜索」（`matchFallbackEnabled`、`searchFallbackEnabled`），还得装弹幕源：新版 Misaka 的弹幕源（bilibili、iqiyi 等 `.so`）不在镜像里，要从资源仓库 `l429609201/Misaka-Scraper-Resources` 下载。服务器在国内，连不上 github.com 与 raw.githubusercontent.com，所以资源仓库设成 jsDelivr 镜像 `https://cdn.jsdelivr.net/gh/l429609201/Misaka-Scraper-Resources@main`，并打开弹幕源自动更新（每 30 分钟查一次，按清单里的 SHA-256 校验）。`api.themoviedb.org` 也连不上，TMDB 地址改成能连上的 `https://api.tmdb.org`。
 - 现在只有 80 端口、没有域名，请求以明文走 HTTP；有域名后应加 HTTPS，并把 `BUILT_IN` 改成 HTTPS 地址。
 
+## 插件（2026-10-24）
+
+「设置 › 插件」接的是真的插件市场：NipaPlay 的插件仓库（`AimesSoft/Nipaplay-plugins` 的 `plugins.json`），以及将来的 Erika 插件仓库（本地在 `../erika_plugins`，发布后地址是 `AimesSoft/erika_plugins`）。NipaPlay 的插件照装照用，暂时丢弃它们的 `minHostVersion`（那是 NipaPlay 的版本号）。
+
+- **格式**：Erika 的插件是一个文件夹：`pack.json`（名字、简介、权限、分类、图标）、脚本和 256 × 256 的 `icon.png`；没有图标时用 `iconId` 指定系统图标。分类只有弹幕、画面、工具、外观四种。声明也可以照 NipaPlay 写在脚本的 `pluginManifest` 里，`pack.json` 优先。格式与接口的完整说明在 `erika_plugins/README.md`。
+- **运行**：`erika-core/src/plugins/`。每个开着的插件一个 `bern::script` 上下文：有 WebView 的平台用系统的 JavaScript 引擎，tvOS 用 Boa。脚本不能同步调用引擎，所以引擎每次调用前把它能读的东西（播放状态、设置、存储、媒体库）作为快照放进去，调用后取回它排队的调用（`host.js`）；`net.fetch` 之类以后才有结果的，答复时再调用一次，并把 Promise 后续排的调用读回来。
+- **liberika 的部分**：`player` 与 `danmaku` 两个对象、调用的解析、弹幕格式、屏蔽词和相似度查重在 liberika 的 `erika_plugin` crate 里（不依赖原生库，各平台都能用），`erika::plugin` 再加上与弹幕时间轴的互转；开头几秒的画面测量在 `erika::opening`。别的播放器用 liberika 也能跑这些插件。
+- **接口**：NipaPlay 的全部 JS 接口（事件、生命周期、`player`、`danmaku`、`ui`、`storage`、`settings`、`dev`、`system`、`process`、链接解析 `pluginResolveUrl`、外部脚本、`--load-js`），加上 Erika 的 `net.fetch`、`library`、`extend`（倍速、发送颜色、十六进制输入、已看按钮、下载快速选择、开头测量）。没有移植的：`danmaku.renderer`（WebView 弹幕渲染层，Erika 的控件是系统原生的，放不进 WebView）、逐条的 `danmakuShow` 事件（弹幕由 liberika 自己画）、`appResumed` / `appPaused`（Bern 还没有前后台事件）、定时器。
+- **弹幕**：载入的弹幕先按屏蔽词过滤后马上显示，再按优先级交给声明了 `danmaku.modify` 的插件，每个拿到前一个的结果、可以 `danmaku.replace`，最后替换这条轨道；屏蔽词随时可以变（防剧透插件在 AI 回答后才给出），变了就重新过滤，不重跑插件。
+- **iOS 的下载器**：iOS 上隐藏下载模块，直到声明 `system.override` 的插件（如 NipaPlay 市场的「下载器解锁」）调用 `system.setDownloaderEnabled(true)`。
+- **账号同步**：哪些插件开着、插件设置与存储存在数据库的扩展分区 `plugins`，随账号同步走；换到新设备时，那边开着而本机没装的插件从市场自动装上。插件文件本身不进同步文件。
+- **试本地的市场**：`ERIKA_PLUGIN_INDEX=…/erika_plugins/plugins.json`（多个用 `;` 隔开，`-` 表示不读市场），`ERIKA_PLUGIN_DIR` 改插件安装的目录。
+
 ## 模块与设计稿的对照
 
 设计稿第 04 章的 8 个可选模块，各是一个 Bern 模块，`optional = true`，可以在运行时开关；没开的模块不进导航、菜单和设置（P5），对应 Bern 模块关闭时它的贡献不存在。
