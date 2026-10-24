@@ -149,7 +149,9 @@ impl ErikaEngine {
         name: &str,
         contents: &str,
     ) -> Result<usize, String> {
-        let Some(comments) = comments_of(contents) else {
+        // What reads as no comments goes to the kernel as it is, which
+        // knows more ways to read a file.
+        let Some(comments) = comments_of(contents).filter(|comments| !comments.is_empty()) else {
             return kernel.add_danmaku(name, contents);
         };
         self.plugins.tracks.insert(
