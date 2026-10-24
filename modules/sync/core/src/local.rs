@@ -93,10 +93,34 @@ pub fn portable(category: &str, key: &str, value: &Value) -> bool {
     match category {
         SETTINGS => !matches!(key, "downloads.places" | "downloads.place"),
         SOURCES => value.get("kind").and_then(Value::as_str) != Some("folder"),
-        RECENTS => key.starts_with("http://") || key.starts_with("https://"),
+        RECENTS => web_address(key),
         SYNC => false,
         _ => true,
     }
+}
+
+/// Whether `url` is a web address another device reaches too: not a
+/// file, and not this device's own server, such as a download streamed
+/// while it downloads.
+fn web_address(url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = match host.strip_prefix('[') {
+        Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
+        None => host.split(':').next().unwrap_or_default(),
+    };
+    !(host.eq_ignore_ascii_case("localhost")
+        || host.starts_with("127.")
+        || host == "::1"
+        || host == "0.0.0.0")
 }
 
 /// Where secrets are kept: the system's credential store, or memory in

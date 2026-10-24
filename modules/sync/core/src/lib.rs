@@ -26,7 +26,9 @@ use erika_sync_protocol::sync::{
 };
 use format::{Document, Kind};
 use local::{Applied, Device, Scope, SystemVault, Vault};
-use repository::{Base, Keys, Outcome};
+#[cfg(not(target_arch = "wasm32"))]
+use repository::Base;
+use repository::{Keys, Outcome};
 use std::sync::{Arc, Mutex};
 use value::Value;
 
@@ -250,13 +252,16 @@ fn in_background(inbox: &Arc<Mutex<Vec<Done>>>, work: impl FnOnce() -> Done + Se
 }
 
 /// The WebDAV folder, as the settings keep it.
+/// The browser has no WebDAV; it keeps the settings all the same.
 #[derive(Clone)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 struct Place {
     url: String,
     user: String,
     path: String,
 }
 
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 impl Place {
     fn name(&self) -> String {
         format!("{}|{}|{}", self.url, self.user, self.path)

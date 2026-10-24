@@ -569,6 +569,13 @@ fn fill(db: &Db, store: &Store, vault: &dyn Vault) {
         1440.0,
     );
     db.remember("https://example.com/kyoto.mp4", "kyoto", None, 30.0, 300.0);
+    db.remember(
+        "http://127.0.0.1:49268/torrent/2/stream/8/a.webm",
+        "streaming",
+        None,
+        3.0,
+        0.0,
+    );
     db.set_anime_mark(&Mark {
         anime: 17675,
         status: Some("watching".into()),
@@ -670,8 +677,8 @@ fn an_export_brings_everything_to_a_clean_device() {
     let (anime, episode) = new_db.file_episode(file).unwrap();
     assert_eq!((anime.title.as_str(), episode.number), ("葬送的芙莉莲", 4));
     let recents = new_db.recents(5);
-    assert_eq!(recents.len(), 2);
-    assert_eq!(recents[0].title, "kyoto");
+    assert_eq!(recents.len(), 3);
+    assert_eq!(recents[1].title, "kyoto");
     // Its picture was this device's cache.
     assert!(recents.iter().all(|recent| recent.still.is_none()));
     assert_eq!(new_db.anime_marks(), old_db.anime_marks());
@@ -749,10 +756,9 @@ fn a_repository_leaves_this_devices_folders_and_files_out() {
     fill(&db, &store, &vault);
     let state = Device::new(&db, &store, &vault, Scope::Repository).collect(None);
     assert_eq!(state[local::SOURCES].len(), 1);
-    assert!(
-        state[local::RECENTS]
-            .keys()
-            .all(|url| url.starts_with("https://"))
+    assert_eq!(
+        state[local::RECENTS].keys().collect::<Vec<_>>(),
+        ["https://example.com/kyoto.mp4"]
     );
     assert!(!state[local::SETTINGS].contains_key("downloads.place"));
     assert!(!state.contains_key(local::SYNC));
