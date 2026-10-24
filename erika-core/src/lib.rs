@@ -114,13 +114,36 @@ pub(crate) fn in_background<T: Send + 'static>(
     }
 }
 
+/// This device's id with the recognition server, which keeps its
+/// confirmations apart from other devices': made once, then kept.
+fn device_id(db: &erika_store::Db) -> String {
+    const DEVICE: &str = "device.id";
+    if let Some(id) = db.setting(DEVICE).filter(|id| !id.is_empty()) {
+        return id;
+    }
+    use std::hash::{BuildHasher, Hasher};
+    let id: String = (0..2)
+        .map(|_| {
+            let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+            hasher.write_i64(erika_store::now());
+            format!("{:016x}", hasher.finish())
+        })
+        .collect();
+    db.set_setting(DEVICE, Some(&id));
+    id
+}
+
 impl Default for ErikaEngine {
     fn default() -> Self {
         let db = erika_store::Db::open();
         let recents = history::recents(&db);
         // Saved module choices are restored before touching credentials.
         erika_dandanplay::set_token(None);
-        erika_dandanplay::custom::set_server(None);
+        // The recognition server is built in; the engine's tests ask none.
+        erika_dandanplay::custom::set_device(&device_id(&db));
+        erika_dandanplay::custom::set_server(
+            (!cfg!(test)).then(|| erika_dandanplay::custom::BUILT_IN.to_string()),
+        );
         // The browser has no process id.
         let process = if cfg!(target_arch = "wasm32") {
             0
@@ -902,20 +925,6 @@ impl erika::Commands for ErikaEngine {
     fn sign_in(&mut self, user: String, password: String) -> Result<(), CommandError> {
         self.require_account()?;
         self.sign_in_started(user, password);
-        Ok(())
-    }
-
-    #[cfg(feature = "bern-module-account")]
-    fn set_match_server(&mut self, address: String) -> Result<(), CommandError> {
-        self.require_account()?;
-        self.set_match_server_now(address);
-        Ok(())
-    }
-
-    #[cfg(feature = "bern-module-account")]
-    fn clear_match_server(&mut self) -> Result<(), CommandError> {
-        self.require_account()?;
-        self.clear_match_server_now();
         Ok(())
     }
 

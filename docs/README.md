@@ -133,6 +133,25 @@ cargo run --manifest-path "$ERIKA_LIBERIKA_ROOT/Cargo.toml" -p xtask -- \
 - **下载**：移植 NipaPlay 的下载器（`rust/src/api/torrent.rs`，librqbit 8.1.1），代码在 `erika-torrent/`：每个进程一个 librqbit 会话，任务存进数据文件夹的 `torrents/`，下次启动接着下（fast resume）；磁力链接从网络上读出种子、.torrent 文件直接读，先列出文件、大小和建议的文件夹名再添加；暂停、继续、移除（保留文件）、删除任务和文件（先确认）；没下完的视频经 127.0.0.1 上的小 HTTP 服务器按字节范围边下边播，下完的按本地文件播放，所以能认出剧集、带弹幕。下载模块（`modules/downloads/`）用页面的时钟每秒读一次进度；默认存到「下载/Erika」（没有下载文件夹的手机上存进数据文件夹），可以改，用过的文件夹在「快速选择」里；默认每个任务一个文件夹。下载完成时提示，并（默认开启）发 `downloads::finished` 事件，外壳把下载到的文件夹交给媒体库当来源扫描。浏览器和电视上没有下载器，页面会说明，不显示添加；电视的构建不带 librqbit。NipaPlay 下载页的搜索、排序、网格视图和「打开文件夹」没有搬：设计稿的下载页是分「进行中 / 已完成」的行，Bern 也还没有在访达里显示文件的能力。
 - 仍是示例的：插件市场；状态与评分只在本次运行内有效。
 
+## 电视剧与电影：内置的识别服务器（2026-10-24）
+
+弹弹play 只认番剧。电视剧和电影由 Erika 自己服务器上的两样东西认，地址内置在 Erika 里，用户什么都不用填：[Misaka 弹幕服务](https://github.com/l429609201/misaka_danmu_server)（兼容弹弹play 接口，按文件名匹配，接 TMDB、豆瓣等资料，从各视频网站取弹幕）和它前面的指纹网关（`erika-gateway/`，Rust）。两者都不用文件指纹，指纹由网关补上：
+
+- 网关讲弹弹play 的接口，路径是 `/{钥匙}/api/v2/…`。`match` 先查指纹表（前 16 MiB 的 MD5 加大小 → Misaka 的作品与集），查到就直接回答，查不到再交给 Misaka；新增 `match/confirm` 记下确认的匹配、`match/forget` 忘掉解除的匹配；其余请求原样转给 Misaka。Misaka 重新导入、编号变了时，按片名和集数找回原来那一集。
+- 两把钥匙：服务器主人的令牌（`ERIKA_GATEWAY_TOKEN`，确认的结果所有设备都信，解除时连别人的确认一起清掉，不限流），和内置在 Erika 里的公开钥匙（`ERIKA_GATEWAY_PUBLIC_KEY`，写在 `erika-dandanplay/src/custom.rs` 的 `BUILT_IN`）。公开钥匙下，每台设备凭 `X-Erika-Device`（Erika 第一次启动时随机生成，存在设置 `device.id`）各投各的票：自己确认过的文件回答自己的选择，没确认过的回答主人的选择，没有就回答多数设备的选择；解除只撤回自己那一票。每台设备每分钟 120 次请求（`ERIKA_GATEWAY_PER_MINUTE`），同一来源地址合计十台设备的量，挡住自己换设备号刷请求的。换钥匙会让旧版 Erika 连不上（它们会提示更新）。
+- Misaka 的几处脾气，网关替客户端抹平：它自己的作品编号要写成 `bangumi/A<编号>`（纯数字会被当成 bgm.tv 的编号），网关转发时补上 `A`；后备匹配与后备搜索给的作品编号是临时的（900000 起，过一阵就指向别的剧），集编号却是长久的（`25` + 作品 6 位 + 来源 2 位 + 集数 4 位），所以匹配与详情的回答一律换成从集编号算出的长久作品编号，详情标题去掉「（来源：…）」，确认时也按集编号记；长久编号的详情只列已经取过弹幕的集，网关记下经手过的每部剧的详情（`show` 表），把见过的集补回去；第一次取某集弹幕时 Misaka 等视频网站 30 秒就先回空、在后台继续取，网关见到等了 20 秒以上的空回答会每 4 秒再问一次，最多 4 次。Erika 的两个手动匹配（媒体库与播放器）按请求时的编号认领详情，再改用详情里的长久编号。
+- Erika 这边：来源分「番剧 / 电视剧 / 电影」，番剧照旧走弹弹play，电视剧和电影走识别服务器（`erika-dandanplay/src/custom.rs`）；它的编号在 Erika 的数据库里存成负数，`details` 与 `comments` 遇到负数就去识别服务器取，所以详情页和弹幕不用改。媒体库与播放器里的手动匹配、解除匹配都会告诉网关。设置里没有识别服务器的入口；早先手填版存在钥匙串里的地址（`match-server`）启动时会删掉。引擎自己的测试不连服务器。
+- 下载器顺带修了：librqbit 默认把 DHT 状态（含端口）存在所有程序共用的文件里，NipaPlay 开着时 Erika 的下载起不来；现在 DHT 状态放在 Erika 自己的会话文件夹里。
+
+部署在 `43.142.85.190`（与 NipaPlay 的国内备用网关同一台，1 GB 内存）：
+
+- Misaka 用 Docker 跑，只监听 `127.0.0.1:7768`，内存上限 400 MB；数据库是同机的 PostgreSQL 容器（`127.0.0.1:5432`，上限 160 MB）。Misaka 的代码只支持 MySQL 与 PostgreSQL（模板里写的 SQLite 不能用）。
+- 网关是 systemd 服务 `erika-gateway`（用户 `erika`，`127.0.0.1:7769`，上限 64 MB，数据在 `/var/lib/erika-gateway/`，配置在 `/etc/erika-gateway.env`）。用 `cargo zigbuild -p erika-gateway --release --target x86_64-unknown-linux-musl` 交叉编译成静态程序再传上去。
+- nginx 的 `nipaplay.conf` 只加了一条 `location ^~ /erika/`，不记访问日志（令牌在路径里）；其余规则没动。
+- 服务器上的 `/opt/erika/`：`secrets.env`（数据库密码、Misaka 初始管理员密码、网关令牌，只有 root 能读）、`set-misaka-token`（写入在 Misaka 里建的 API 令牌并重启网关）、`erika-address`（打印主人用的地址）、`misaka-admin`（打印 Misaka 管理员账号）。
+- Misaka 要能认出没见过的剧，得开「后备匹配」「后备搜索」（`matchFallbackEnabled`、`searchFallbackEnabled`），还得装弹幕源：新版 Misaka 的弹幕源（bilibili、iqiyi 等 `.so`）不在镜像里，要从资源仓库 `l429609201/Misaka-Scraper-Resources` 下载。服务器在国内，连不上 github.com 与 raw.githubusercontent.com，所以资源仓库设成 jsDelivr 镜像 `https://cdn.jsdelivr.net/gh/l429609201/Misaka-Scraper-Resources@main`，并打开弹幕源自动更新（每 30 分钟查一次，按清单里的 SHA-256 校验）。`api.themoviedb.org` 也连不上，TMDB 地址改成能连上的 `https://api.tmdb.org`。
+- 现在只有 80 端口、没有域名，请求以明文走 HTTP；有域名后应加 HTTPS，并把 `BUILT_IN` 改成 HTTPS 地址。
+
 ## 模块与设计稿的对照
 
 设计稿第 04 章的 8 个可选模块，各是一个 Bern 模块，`optional = true`，可以在运行时开关；没开的模块不进导航、菜单和设置（P5），对应 Bern 模块关闭时它的贡献不存在。

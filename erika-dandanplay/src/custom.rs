@@ -1,8 +1,9 @@
-//! A dandanplay-style server of the user's own: the Erika gateway before a
+//! The recognition server built into Erika: the Erika gateway before a
 //! danmaku server such as Misaka, for TV series and movies, matching by
-//! name and by the fingerprints the user confirmed. Its address holds its
-//! token, `https://host/erika/<token>`; requests go to `<address>/api/v2/…`
-//! with no signature.
+//! name and by the fingerprints users confirmed. Its address holds a key,
+//! `http://host/erika/<key>`; requests go to `<address>/api/v2/…` with no
+//! signature, and carry the device's id, which the gateway keeps each
+//! device's confirmations under and holds to a request rate by.
 //!
 //! Its ids live beside dandanplay's in Erika's database as negative
 //! numbers: everything here hands them out negated and takes them back the
@@ -15,7 +16,12 @@ use crate::{
 };
 use std::sync::RwLock;
 
+/// The server every copy of Erika asks, under the public key the gateway
+/// lets any device in with.
+pub const BUILT_IN: &str = "http://43.142.85.190/erika/9005d209603c17568b60b622";
+
 static SERVER: RwLock<Option<String>> = RwLock::new(None);
+static DEVICE: RwLock<String> = RwLock::new(String::new());
 
 /// Use the server at `address`, or none.
 pub fn set_server(address: Option<String>) {
@@ -24,6 +30,13 @@ pub fn set_server(address: Option<String>) {
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = address
         .map(|address| address.trim().trim_end_matches('/').to_string())
         .filter(|address| !address.is_empty());
+}
+
+/// Ask the server as the device `id` (letters, digits, `-` and `_`).
+pub fn set_device(id: &str) {
+    *DEVICE
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = id.to_string();
 }
 
 /// The server's address, when there is one.
@@ -45,22 +58,37 @@ fn request<T: serde::de::DeserializeOwned>(
     query: &str,
     body: Option<serde_json::Value>,
 ) -> Result<T> {
-    let address = server().ok_or_else(|| Error::new("还没有设置电视剧和电影的识别服务器"))?;
+    let address = server().ok_or_else(|| Error::new("电视剧和电影的识别服务器没有开"))?;
     #[cfg(not(target_arch = "wasm32"))]
     {
         let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            // The danmaku server searches the video sites for what it has
+            // not seen, which takes it half a minute and more.
+            .timeout_global(Some(std::time::Duration::from_secs(90)))
             .http_status_as_error(false)
             .build()
             .into();
         let url = format!("{address}/api/v2{path}{query}");
+        let device = DEVICE
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         let answer = match (method, body) {
             ("POST", Some(body)) => agent
                 .post(&url)
                 .header("User-Agent", "Erika")
+                .header("X-Erika-Device", &device)
                 .send_json(body),
-            ("POST", None) => agent.post(&url).header("User-Agent", "Erika").send_empty(),
-            _ => agent.get(&url).header("User-Agent", "Erika").call(),
+            ("POST", None) => agent
+                .post(&url)
+                .header("User-Agent", "Erika")
+                .header("X-Erika-Device", &device)
+                .send_empty(),
+            _ => agent
+                .get(&url)
+                .header("User-Agent", "Erika")
+                .header("X-Erika-Device", &device)
+                .call(),
         };
         let mut answer =
             answer.map_err(|error| Error::new(format!("连不上识别服务器：{error}")))?;
@@ -70,7 +98,10 @@ fn request<T: serde::de::DeserializeOwned>(
             .read_to_string()
             .map_err(|error| Error::new(format!("识别服务器的回答读不完：{error}")))?;
         if status == 401 {
-            return Err(Error::new("识别服务器不认这个地址里的令牌"));
+            return Err(Error::new("识别服务器不认这个版本的密钥，请更新 Erika"));
+        }
+        if status == 429 {
+            return Err(Error::new("识别服务器这会儿太忙，稍后再试"));
         }
         if status >= 400 {
             return Err(Error::new(format!("识别服务器回答了 {status}")));

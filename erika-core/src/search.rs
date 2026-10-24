@@ -25,13 +25,6 @@ pub(crate) fn settings(text: &str, features: &FeatureSelection) -> Vec<SettingRe
             features.account,
         ),
         (
-            I::MatchServer,
-            P::Account,
-            "识别服务器地址 recognition server address",
-            "电视剧 电影 匹配 misaka match server",
-            features.account,
-        ),
-        (
             I::Startup,
             P::General,
             "启动时打开 open at startup",
@@ -456,10 +449,6 @@ mod tests {
             settings("账号", &features)
                 .iter()
                 .any(|x| x.item == SettingItem::Account)
-        );
-        assert_eq!(
-            settings("识别服务器", &features)[0].item,
-            SettingItem::MatchServer
         );
     }
     #[test]

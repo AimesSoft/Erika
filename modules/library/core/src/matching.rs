@@ -256,15 +256,16 @@ impl Session {
         }
     }
 
-    /// The anime's episodes came.
-    pub fn details(&mut self, details: &Details) {
-        let Some(chosen) = self
-            .chosen
-            .as_mut()
-            .filter(|chosen| chosen.anime.dandanplay_id == details.anime_id)
-        else {
+    /// The episodes of the anime asked about as `asked` came. A service
+    /// may name what a search found by a passing id and its details by the
+    /// show's lasting one, which the choice keeps.
+    pub fn details(&mut self, asked: i64, details: &Details) {
+        let Some(chosen) = self.chosen.as_mut().filter(|chosen| {
+            chosen.anime.dandanplay_id == asked || chosen.anime.dandanplay_id == details.anime_id
+        }) else {
             return;
         };
+        chosen.anime.dandanplay_id = details.anime_id;
         if chosen.anime.image.is_empty() {
             chosen.anime.image = details.image_url.clone();
         }

@@ -284,6 +284,29 @@ fn a_folder_of_tv_series_waits_for_the_users_server() {
     engine.wake();
     assert!(engine.session.as_ref().unwrap().custom);
     assert!(engine.state.matching.search_failed, "no server to search");
+    // The server names what its search found by a passing id and gives
+    // the details under the show's lasting one, which the match keeps.
+    engine.session.as_mut().unwrap().choose(
+        Anime {
+            dandanplay_id: -900_001,
+            title: "行尸走肉 （来源：tencent）".into(),
+            image: String::new(),
+        },
+        2,
+    );
+    let details: erika_dandanplay::Details = serde_json::from_value(serde_json::json!({
+        "animeId": -137,
+        "animeTitle": "行尸走肉",
+        "episodes": [
+            { "episodeId": -25_000_137_010_001i64, "episodeTitle": "第1集", "episodeNumber": "1" },
+            { "episodeId": -25_000_137_010_002i64, "episodeTitle": "第2集", "episodeNumber": "2" }
+        ]
+    }))
+    .unwrap();
+    engine.took_details(-900_001, &details);
+    let chosen = engine.session.as_ref().unwrap().chosen.as_ref().unwrap();
+    assert_eq!(chosen.anime.dandanplay_id, -137);
+    assert_eq!(chosen.episodes.as_ref().map(|episodes| episodes.len()), Some(2));
 }
 
 #[test]

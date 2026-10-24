@@ -7,10 +7,10 @@
 use super::*;
 use std::sync::Mutex;
 
-/// The secret holding the account's token, and the one holding the
-/// address of the user's own server, whose path holds its token.
+/// The secret holding the account's token, and the one that held the
+/// recognition server's address before it was built in.
 const TOKEN: &str = "dandanplay-token";
-const SERVER: &str = "match-server";
+const OLD_SERVER: &str = "match-server";
 /// The settings holding its names and when the token was last renewed.
 const USER: &str = "dandanplay.user";
 const NAME: &str = "dandanplay.name";
@@ -86,7 +86,6 @@ mod tests {
         engine.state.account_status.signed_in = true;
         engine.state.account_status.busy = true;
         engine.state.account_status.name = "Saved Name".into();
-        engine.state.account_status.has_server = true;
         engine.state.features.account = true;
 
         engine.modules_changed(&[]);
@@ -94,7 +93,6 @@ mod tests {
         assert!(!engine.state.features.account);
         assert!(!engine.state.account_status.signed_in);
         assert!(!engine.state.account_status.busy);
-        assert!(!engine.state.account_status.has_server);
         assert_eq!(engine.db.setting(USER).as_deref(), Some("saved-user"));
         assert_eq!(engine.db.setting(NAME).as_deref(), Some("Saved Name"));
         assert_eq!(
@@ -105,17 +103,6 @@ mod tests {
             "feature_disabled"
         );
         assert_eq!(engine.sign_out().unwrap_err().code, "feature_disabled");
-        assert_eq!(
-            engine
-                .set_match_server("https://example.com".into())
-                .unwrap_err()
-                .code,
-            "feature_disabled"
-        );
-        assert_eq!(
-            engine.clear_match_server().unwrap_err().code,
-            "feature_disabled"
-        );
     }
 
     #[test]
@@ -178,11 +165,11 @@ pub(super) fn restore(db: &erika_store::Db) -> (Account, Option<String>) {
         .ok()
         .flatten()
         .filter(|token| !token.is_empty());
-    let server = bern::secrets::read(SERVER)
-        .ok()
-        .flatten()
-        .filter(|address| !address.is_empty());
-    erika_dandanplay::custom::set_server(server.clone());
+    if bern::secrets::read(OLD_SERVER).ok().flatten().is_some()
+        && let Err(error) = bern::secrets::delete(OLD_SERVER)
+    {
+        eprintln!("erika: forget the old recognition server: {}", error.message);
+    }
     if token.is_some() && db.setting(NAME) == db.setting(USER) {
         db.set_setting(RENEWED, None);
     }
@@ -202,17 +189,8 @@ pub(super) fn restore(db: &erika_store::Db) -> (Account, Option<String>) {
         user,
         busy: false,
         error: String::new(),
-        has_server: server.is_some(),
-        server: server.as_deref().map(site).unwrap_or_default(),
     };
     (account, token)
-}
-
-/// The scheme and host of a server's address: its path holds its token,
-/// which the settings do not show.
-fn site(address: &str) -> String {
-    let (scheme, rest) = address.split_once("://").unwrap_or(("https", address));
-    format!("{scheme}://{}", rest.split('/').next().unwrap_or(rest))
 }
 
 /// One selection for every outer account entry. A signed-in account with
@@ -281,7 +259,6 @@ impl ErikaEngine {
         } else {
             self.suspend_bangumi();
             erika_dandanplay::set_token(None);
-            erika_dandanplay::custom::set_server(None);
             self.state.account_status = Account::default();
         }
         self.refresh_account_profile();
@@ -289,7 +266,7 @@ impl ErikaEngine {
         erika_anime_protocol::anime::calls::account_changed(self.state.account_status.signed_in);
         #[cfg(feature = "bern-module-library")]
         erika_library_protocol::library::calls::account_changed(
-            self.state.account_status.signed_in || self.state.account_status.has_server,
+            self.state.account_status.signed_in || erika_dandanplay::custom::server().is_some(),
         );
     }
 
@@ -413,34 +390,6 @@ impl ErikaEngine {
             }
         }
         self.refresh_account_profile();
-    }
-
-    pub(super) fn set_match_server_now(&mut self, address: String) {
-        let address = address.trim().trim_end_matches('/').to_string();
-        if !(address.starts_with("http://") || address.starts_with("https://")) {
-            self.notify(Notice::MatchServerInvalid);
-            return;
-        }
-        if let Err(error) = bern::secrets::write(SERVER, &address) {
-            eprintln!("erika: keep the recognition server: {}", error.message);
-        }
-        erika_dandanplay::custom::set_server(Some(address.clone()));
-        self.state.account_status.has_server = true;
-        self.state.account_status.server = site(&address);
-        self.notify(Notice::MatchServerSet);
-        // The library matches what it could not without one.
-        #[cfg(feature = "bern-module-library")]
-        erika_library_protocol::library::calls::account_changed(true);
-    }
-
-    pub(super) fn clear_match_server_now(&mut self) {
-        if let Err(error) = bern::secrets::delete(SERVER) {
-            eprintln!("erika: forget the recognition server: {}", error.message);
-        }
-        erika_dandanplay::custom::set_server(None);
-        self.state.account_status.has_server = false;
-        self.state.account_status.server.clear();
-        self.notify(Notice::MatchServerCleared);
     }
 
     /// Renew the token once it is three weeks old.

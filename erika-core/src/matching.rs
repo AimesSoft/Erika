@@ -462,7 +462,7 @@ impl ErikaEngine {
                     }
                     self.state.matching.loading = false;
                     match result {
-                        Ok(details) => self.show_match_details(details),
+                        Ok(details) => self.show_match_details(id, details),
                         Err(error) => self.state.matching.error = error,
                     }
                 }
@@ -564,7 +564,7 @@ impl ErikaEngine {
         self.state.matching.episodes.clear();
         self.match_details = None;
         if let Some(details) = self.match_previews.get(&id).cloned() {
-            self.show_match_details(details);
+            self.show_match_details(id, details);
         } else {
             in_background(&self.found, move || {
                 vec![Found::Details {
@@ -596,7 +596,9 @@ impl ErikaEngine {
         }
     }
 
-    fn show_match_details(&mut self, details: erika_dandanplay::Details) {
+    /// The details of the show asked about as `asked`; a service may give
+    /// them under the show's lasting id.
+    fn show_match_details(&mut self, asked: i64, details: erika_dandanplay::Details) {
         self.state.matching.loading = false;
         if let Some(show) = self.state.matching.selected.as_mut() {
             enrich_show(show, &details);
@@ -606,7 +608,7 @@ impl ErikaEngine {
             .matching
             .shows
             .iter_mut()
-            .find(|s| s.id == details.anime_id)
+            .find(|s| s.id == asked)
         {
             enrich_show(show, &details);
         }
@@ -621,8 +623,7 @@ impl ErikaEngine {
         if details.episodes.is_empty() {
             self.state.matching.error = "这个作品没有可匹配的集数".into();
         }
-        self.match_previews
-            .insert(details.anime_id, details.clone());
+        self.match_previews.insert(asked, details.clone());
         self.match_details = Some(details);
     }
 
@@ -650,6 +651,31 @@ impl ErikaEngine {
         self.match_revision += 1;
         if let Some(file) = self.file {
             self.db.link_episode(file, &anime, &episode, true);
+            // The recognition server knows the file by its fingerprint next
+            // time, on every device.
+            if erika_dandanplay::custom::is_ours(anime.dandanplay_id)
+                && let Some(print) = self.db.fingerprint_of(file)
+            {
+                let name = self.source.as_ref().and_then(MediaSource::file_name).unwrap_or_default();
+                let (anime, episode) = (anime.clone(), episode.clone());
+                in_background(&self.found, move || {
+                    let done = erika_dandanplay::custom::confirm(&erika_dandanplay::custom::Confirmed {
+                        file_name: &name,
+                        md5: &print.md5,
+                        size: print.size,
+                        anime_id: anime.dandanplay_id,
+                        episode_id: episode.dandanplay_id,
+                        number: episode.number,
+                        anime_title: &anime.title,
+                        episode_title: &episode.title,
+                        image: &anime.image,
+                    });
+                    if let Err(error) = done {
+                        eprintln!("erika: confirm {name} on the server: {}", error.message);
+                    }
+                    Vec::new()
+                });
+            }
         }
         self.show_episode(&anime, &episode);
         self.state.matching.open = false;

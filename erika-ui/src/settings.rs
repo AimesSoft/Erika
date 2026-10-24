@@ -18,8 +18,6 @@ pub struct SettingsDraft {
     pub page: SettingsPage,
     pub query: String,
     pub danmaku_file: MediaSource,
-    /// The recognition server's address being typed.
-    pub match_server: String,
 }
 #[component]
 pub fn settings(
@@ -449,27 +447,6 @@ pub fn settings_account(app: erika::Client, settings_window: bool, #[session] dr
             }
             Section(title: tr! { "zh-Hans" => "Bangumi 账号", "en" => "Bangumi account" }) {
                 account_profile(app: app, bangumi: true, settings_window: settings_window, signed_in: app.bangumi.signed_in, name: app.bangumi.name, user: app.bangumi.email, picture: app.bangumi.avatar, busy: app.bangumi.busy, message: app.bangumi.error)
-            }
-            Section(title: tr! { "zh-Hans" => "电视剧与电影", "en" => "TV series and movies" }) {
-                if app.account_status.has_server {
-                    Row(gap: 12, align: center) {
-                        Column(gap: 1) {
-                            Text(content: tr! { "zh-Hans" => "识别服务器", "en" => "Recognition server" }, style: body)
-                            Text(content: app.account_status.server, style: caption, emphasis: secondary, lines: 1)
-                        }
-                        Spacer
-                        Button(id: clear_match_server, label: tr! { "zh-Hans" => "移除", "en" => "Remove" }) => app.clear_match_server()
-                    }
-                } else {
-                    TextInput(id: match_server, label: tr! { "zh-Hans" => "识别服务器地址", "en" => "Recognition server address" }, value: draft.match_server, prompt: tr! { "zh-Hans" => "https://服务器/erika/令牌", "en" => "https://server/erika/token" }) => app.set_match_server(draft.match_server)
-                    Row(gap: 12, align: center) {
-                        Spacer
-                        Button(id: save_match_server, label: tr! { "zh-Hans" => "保存", "en" => "Save" }, prominence: prominent, clears: draft.match_server) => app.set_match_server(draft.match_server)
-                    }
-                }
-            }
-            Section {
-                Text(content: tr! { "zh-Hans" => "电视剧和电影文件夹由你自己的识别服务器认：它在 Misaka 弹幕服务前面，按文件指纹记住你确认过的每个文件。地址里带着令牌，存在系统钥匙串里。", "en" => "TV series and movie folders are recognized by your own server, before a Misaka danmaku server, which remembers every file you confirm by its fingerprint. Its address holds a token and stays in the system keychain." }, style: caption, emphasis: secondary, lines: 3)
             }
         }
     }

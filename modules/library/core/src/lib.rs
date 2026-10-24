@@ -682,7 +682,7 @@ impl LibraryEngine {
     /// Ask dandanplay about anime `id`, once a run.
     fn ask_details(&mut self, id: i64) {
         if let Some(details) = self.details.get(&id).cloned() {
-            self.took_details(&details);
+            self.took_details(id, &details);
             return;
         }
         if !self.asked.insert(id) || !reachable(id) {
@@ -708,9 +708,9 @@ impl LibraryEngine {
         }
     }
 
-    fn took_details(&mut self, details: &Details) {
+    fn took_details(&mut self, asked: i64, details: &Details) {
         if let Some(session) = self.session.as_mut() {
-            session.details(details);
+            session.details(asked, details);
         }
         if let Some(known) = self
             .db
@@ -840,7 +840,7 @@ impl LibraryEngine {
                 }
                 Done::Details(id, Ok(details)) => {
                     self.details.insert(id, details.clone());
-                    self.took_details(&details);
+                    self.took_details(id, &details);
                     changed = true;
                 }
                 Done::Details(id, Err(error)) => {

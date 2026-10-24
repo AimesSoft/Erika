@@ -195,8 +195,6 @@ pub mod erika {
     pub enum SettingItem {
         #[label(tr! { "zh-Hans" => "弹弹play 账号登录", "en" => "Dandanplay Account" })]
         Account,
-        #[label(tr! { "zh-Hans" => "识别服务器地址", "en" => "Recognition Server Address" })]
-        MatchServer,
         #[label(tr! { "zh-Hans" => "启动时打开", "en" => "Open at Startup" })]
         Startup,
         #[label(tr! { "zh-Hans" => "播放结束后", "en" => "When Playback Ends" })]
@@ -399,12 +397,6 @@ pub mod erika {
         },
         #[label(tr! { "zh-Hans" => "已退出弹弹play账号", "en" => "Signed out of dandanplay" })]
         SignedOut,
-        #[label(tr! { "zh-Hans" => "已设置识别服务器，开始识别电视剧和电影", "en" => "Recognition server set; recognizing TV series and movies" })]
-        MatchServerSet,
-        #[label(tr! { "zh-Hans" => "已移除识别服务器", "en" => "Recognition server removed" })]
-        MatchServerCleared,
-        #[label(tr! { "zh-Hans" => "识别服务器的地址要以 http:// 或 https:// 开头", "en" => "The server's address starts with http:// or https://" })]
-        MatchServerInvalid,
         #[label(tr! { "zh-Hans" => "这一集还没有本地文件，打开它的视频后就能从这里播放", "en" => "No file of this episode yet; open its video once and it plays from here" })]
         NoEpisodeFile,
         #[label(tr! { "zh-Hans" => "弹弹play 认出了：{title}", "en" => "dandanplay recognized it: {title}" })]
@@ -755,12 +747,6 @@ pub mod erika {
         /// Why signing in failed last; empty when it did not.
         #[content]
         pub error: String,
-        /// The user's own server recognizing TV series and movies (the
-        /// gateway before Misaka): whether one is set, and its site, the
-        /// token in its address left out.
-        pub has_server: bool,
-        #[content]
-        pub server: String,
     }
 
     /// Website session. Passwords and cookies never enter observable state.
@@ -968,13 +954,6 @@ pub mod erika {
         #[cfg(feature = "bern-module-account")]
         fn dismiss_bangumi_expired(&mut self) -> Result<(), CommandError>;
 
-        /// Recognize TV series and movies with the server at `address`
-        /// (`https://host/…/<token>`), kept in the system's credential store.
-        #[cfg(feature = "bern-module-account")]
-        fn set_match_server(&mut self, address: String) -> Result<(), CommandError>;
-        #[cfg(feature = "bern-module-account")]
-        fn clear_match_server(&mut self) -> Result<(), CommandError>;
-
         fn set_appearance(&mut self, appearance: Appearance) -> Result<(), CommandError>;
     }
     #[value]
@@ -1013,8 +992,6 @@ impl Default for erika::Account {
             avatar: None,
             busy: false,
             error: String::new(),
-            has_server: false,
-            server: String::new(),
         }
     }
 }
