@@ -105,11 +105,10 @@ pub fn downloads_page(downloads: downloads::Client) -> impl View {
                 }
             }
             if downloads.deleting != 0 {
-                Modal(width: 440, height: 200, cover: compact, appear: pop_in, disappear: fade) {
+                Modal(width: 440, appear: pop_in, disappear: fade) {
                     Column(gap: 12, padding: 24) {
                         Text(content: tr! { "zh-Hans" => "删除任务和文件？", "en" => "Delete the download and its files?" }, style: title3)
                         Text(content: tr! { "zh-Hans" => "将从列表移除“{title}”，并删除已下载文件。此操作不可撤销。", "en" => "“{title}” leaves the list and its downloaded files are deleted. This can't be undone."; title: downloads.deleting_title }, emphasis: secondary, lines: 3)
-                        Spacer
                         Row(gap: 10, align: center) {
                             Spacer
                             Button(id: cancel_delete, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, shape: capsule, height: 32) => downloads.cancel_delete()
@@ -249,7 +248,7 @@ pub fn download_actions(downloads: downloads::Client, task: downloads::DownloadT
 #[component]
 pub fn download_add(app: erika::Client, downloads: downloads::Client, #[session] draft: DownloadsDraft) -> impl View {
     ui! {
-        Modal(width: 600, height: 600, cover: compact, appear: pop_in, disappear: fade) {
+        Modal(width: 600, appear: pop_in, disappear: fade) {
             ScrollView {
                 Column(gap: 12, padding: 24) {
                     Row(gap: 8, align: center) {

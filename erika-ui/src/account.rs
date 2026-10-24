@@ -18,11 +18,10 @@ pub fn account_dialogs(app: erika::Client, settings_window: bool, #[session] dra
         } else if app.features.account && app.account_status.prompt && app.account_status.settings_window == settings_window {
             account_login(app: app, bangumi: false, busy: app.account_status.busy, message: app.account_status.error)
         } else if app.features.account && app.bangumi.expired && !settings_window && !app.onboarding.visible {
-            Modal(width: 420, height: 220, appear: pop_in, disappear: fade) {
+            Modal(width: 420, appear: pop_in, disappear: fade) {
                 Column(gap: 16, padding: 24) {
                     Text(content: tr! { "zh-Hans" => "Bangumi 需要重新登录", "en" => "Sign in to Bangumi again" }, style: title3)
                     Text(content: tr! { "zh-Hans" => "登录状态已失效，请重新填写密码和验证码。", "en" => "Your session has expired. Enter your password and a new verification code to sign in again." }, lines: 3)
-                    Spacer
                     Row(gap: 12, align: center) {
                         Spacer
                         Button(id: bangumi_later, label: tr! { "zh-Hans" => "稍后", "en" => "Later" }) => app.dismiss_bangumi_expired()
@@ -43,7 +42,7 @@ pub fn account_login(
     #[session] draft: AccountLoginDraft,
 ) -> impl View {
     ui! {
-        Modal(width: 400, height: if window.compact { if bangumi { if busy || "" != message { 488.0 } else { 440.0 } } else { if busy || "" != message { 348.0 } else { 300.0 } } } else { if bangumi { if busy || "" != message { 372.0 } else { 324.0 } } else { if busy || "" != message { 252.0 } else { 204.0 } } }, appear: pop_in, disappear: fade) {
+        Modal(width: 400, appear: pop_in, disappear: fade) {
             Column(gap: 16, padding: 24) {
                 if bangumi {
                     Text(content: tr! { "zh-Hans" => "登录 Bangumi", "en" => "Sign in to Bangumi" }, style: title3)

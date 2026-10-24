@@ -148,9 +148,9 @@ pub fn library_source_list(library: library::Client, #[session] draft: LibraryDr
 #[component]
 pub fn library_shared_mount(app: erika::Client, library: library::Client, #[session] draft: LibraryDraft) -> impl View {
     ui! {
-        // A card, also on a phone: the fields scroll above the buttons
-        // where the card is too short for them.
-        Modal(width: 440, height: 360, appear: pop_in, disappear: fade) {
+        // A card as tall as its fields, also on a phone: they scroll above
+        // the buttons where the window is too short for them.
+        Modal(width: 440, appear: pop_in, disappear: fade) {
             Column(gap: 16, padding: 24) {
                 ScrollView {
                     Column(gap: 16) {
@@ -182,9 +182,9 @@ pub fn library_shared_mount(app: erika::Client, library: library::Client, #[sess
 #[component]
 pub fn library_remote_mount(app: erika::Client, library: library::Client, #[session] draft: LibraryDraft) -> impl View {
     ui! {
-        // A card, also on a phone: the fields scroll above the buttons
-        // where the card is too short for them.
-        Modal(width: 460, height: 400, appear: pop_in, disappear: fade) {
+        // A card as tall as its fields, also on a phone: they scroll above
+        // the buttons where the window is too short for them.
+        Modal(width: 460, appear: pop_in, disappear: fade) {
             Column(gap: 14, padding: 24) {
                 ScrollView {
                     Column(gap: 14) {

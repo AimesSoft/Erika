@@ -162,7 +162,7 @@ pub fn pure_recents(app: erika::Client) -> impl View {
 pub fn link_resolving(app: erika::Client) -> impl View {
     ui! {
         if app.link_choosing {
-            Modal(width: 440, height: 440, cover: compact, appear: pop_in, disappear: fade) {
+            Modal(width: 440, appear: pop_in, disappear: fade) {
                 Column(gap: 12, padding: 20) {
                     if "" != app.link_choice_title {
                         Text(content: app.link_choice_title, style: title3, lines: 2)
@@ -187,7 +187,7 @@ pub fn link_resolving(app: erika::Client) -> impl View {
                 }
             }
         } else {
-            Modal(width: 360, height: 136, cover: compact, appear: pop_in, disappear: fade) {
+            Modal(width: 360, appear: pop_in, disappear: fade) {
                 Column(gap: 12, padding: 20) {
                     Text(content: tr! { "zh-Hans" => "正在解析链接…", "en" => "Resolving the link…" }, style: title3)
                     Row(gap: 10, align: center) {
@@ -204,7 +204,7 @@ pub fn link_resolving(app: erika::Client) -> impl View {
 #[component]
 pub fn pure_link(app: erika::Client, #[session] draft: PureDraft) -> impl View {
     ui! {
-        Modal(width: 420, height: 176, cover: compact, appear: pop_in, disappear: fade) {
+        Modal(width: 420, appear: pop_in, disappear: fade) {
             Column(gap: 12, padding: 20) {
                 Text(content: tr! { "zh-Hans" => "打开链接", "en" => "Open Link" }, style: title3)
                 TextInput(id: pure_link_field, label: tr! { "zh-Hans" => "链接", "en" => "Link" }, label_hidden: true, value: draft.link, prompt: tr! { "zh-Hans" => "http(s):// 或 magnet: 链接", "en" => "An http(s):// or magnet: link" }) => app.open_link(draft.link)
@@ -213,7 +213,6 @@ pub fn pure_link(app: erika::Client, #[session] draft: PureDraft) -> impl View {
                         Text(content: tr! { "zh-Hans" => "链接要以 http://、https:// 或 magnet: 开头", "en" => "A link starts with http://, https:// or magnet:" }, style: caption, lines: 2)
                     }
                 }
-                Spacer
                 Row(gap: 10, align: center) {
                     Spacer
                     Button(id: pure_link_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, shortcut: app.keys.back) => app.show_link_prompt(false)

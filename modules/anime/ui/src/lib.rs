@@ -356,7 +356,7 @@ pub fn details(app: erika::Client, anime: anime::Client) -> impl View {
 #[component]
 pub fn rating_dialog(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
-        Modal(width: 360, height: if anime.fine_scores { 390.0 } else { 270.0 }, cover: compact, appear: pop_in, disappear: fade) {
+        Modal(width: 360, appear: pop_in, disappear: fade) {
             Column(gap: 12, padding: 24) {
                 Text(content: tr! { "zh-Hans" => "给这部作品评分", "en" => "Rate this show" }, style: title3)
                 Text(content: anime.sync_targets, style: caption, emphasis: secondary)
@@ -382,7 +382,6 @@ pub fn rating_dialog(app: erika::Client, anime: anime::Client) -> impl View {
                         PickerOption(value: Score::Two, label: tr! { "zh-Hans" => "2 分 · 很差", "en" => "2 · Very bad" })
                     } => anime.pick_score(anime.my_score)
                 }
-                Spacer
                 Row(gap: 10, align: center) {
                     Spacer
                     Button(id: rating_done, label: tr! { "zh-Hans" => "完成", "en" => "Done" }, shortcut: app.keys.back) => anime.show_rating(false)
@@ -397,7 +396,7 @@ pub fn rating_dialog(app: erika::Client, anime: anime::Client) -> impl View {
 #[component]
 pub fn review_dialog(app: erika::Client, anime: anime::Client, #[session] draft: AnimeDraft) -> impl View {
     ui! {
-        Modal(width: 480, height: 320, cover: compact, appear: pop_in, disappear: fade) {
+        Modal(width: 480, appear: pop_in, disappear: fade) {
             Column(gap: 12, padding: 24) {
                 // Start from the review there is, once it has been read.
                 Timer(interval: 0.1, enabled: !anime.review_loading && draft.review == "" && anime.review_text != "") => draft.review.set(anime.review_text)
@@ -411,7 +410,6 @@ pub fn review_dialog(app: erika::Client, anime: anime::Client, #[session] draft:
                 if anime.review_error != "" {
                     Text(content: anime.review_error, style: caption, lines: 3)
                 }
-                Spacer
                 Row(gap: 10, align: center) {
                     if anime.review_text != "" {
                         Button(id: review_remove, label: tr! { "zh-Hans" => "删除评价", "en" => "Delete Review" }, role: destructive, prominence: plain, enabled: !anime.review_saving, clears: draft.review) => anime.submit_review("")

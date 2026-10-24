@@ -1381,7 +1381,7 @@ pub fn plugin_icon(plugin: Plugin) -> impl View {
 #[component]
 pub fn plugin_settings(app: erika::Client, #[session] draft: PluginsDraft) -> impl View {
     ui! {
-        Modal(width: 460, height: 460, cover: compact, appear: pop_in, disappear: fade) {
+        Modal(width: 460, appear: pop_in, disappear: fade) {
             Column(gap: 12, padding: 20) {
                 Text(content: tr! { "zh-Hans" => "{name} · 插件设置", "en" => "{name} · Plugin Settings"; name: app.plugin_panel.name }, style: title3, lines: 1)
                 ScrollView {
@@ -1441,7 +1441,7 @@ pub fn plugin_settings(app: erika::Client, #[session] draft: PluginsDraft) -> im
 #[component]
 pub fn plugin_message(app: erika::Client) -> impl View {
     ui! {
-        Modal(width: 460, height: 360, cover: compact, appear: pop_in, disappear: fade) {
+        Modal(width: 460, appear: pop_in, disappear: fade) {
             Column(gap: 12, padding: 20) {
                 Text(content: app.plugin_panel.message_title, style: title3, lines: 2)
                 ScrollView {
