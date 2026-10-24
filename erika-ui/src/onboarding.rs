@@ -23,9 +23,10 @@ pub fn onboarding(app: erika::Client) -> impl View {
             }
         } else {
             // On the phone the flow covers the screen (`obOpen`: the whole
-            // window, under the status bar), its foot 72 points at the bottom.
+            // window), its foot 72 points at the bottom. It keeps clear of the
+            // status bar and the Dynamic Island, which would cut the hero.
             Modal(width: 960, height: 600, cover: compact, appear: pop_in, disappear: fade) {
-                Stack(variant: onboarding_page, under_bars: true) {
+                Stack(variant: onboarding_page) {
                     onboarding_content(app: app)
                 }
             }
