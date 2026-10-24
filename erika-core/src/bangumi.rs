@@ -94,9 +94,9 @@ impl ErikaEngine {
                 }
             },
             Ok(None) => self.state.bangumi.expired = self.db.setting(USER).is_some(),
-            Err(_) => {
-                self.state.bangumi.error = "暂时无法读取保存的 Bangumi 登录信息，请稍后重试".into()
-            }
+            // An unreadable store leaves the account signed out, without a
+            // word: signing in again saves it anew.
+            Err(_) => {}
         }
         self.notify_bangumi_account();
     }

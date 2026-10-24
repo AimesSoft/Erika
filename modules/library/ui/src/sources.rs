@@ -55,7 +55,7 @@ pub fn library_source_list(library: library::Client, #[session] draft: LibraryDr
                     Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
                     Spacer
                     ControlGroup(label: tr! { "zh-Hans" => "媒体库操作", "en" => "Library actions" }, height: 44) {
-                        Menu(id: mount_phone, label: tr! { "zh-Hans" => "挂载", "en" => "Mount" }, icon: "plus") {
+                        Menu(id: mount_phone, label: tr! { "zh-Hans" => "挂载", "en" => "Mount" }, icon: "plus", style: icon) {
                             MenuItem(id: mount_local_phone, label: tr! { "zh-Hans" => "本地文件夹", "en" => "Local folder" }, icon: "folder", pick: draft.folder, files: "folder") => library.add_folder(draft.folder, SourceContent::Anime)
                             MenuItem(id: mount_shared_phone, label: tr! { "zh-Hans" => "NipaPlay共享媒体", "en" => "NipaPlay shared media" }, icon: "server.rack") => library.open_shared_mount()
                             MenuItem(id: mount_remote_phone, label: tr! { "zh-Hans" => "弹弹play共享媒体", "en" => "dandanplay shared media" }, icon: "server.rack") => library.open_remote_mount()
