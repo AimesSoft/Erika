@@ -263,12 +263,8 @@ pub mod erika {
         Plugins,
         #[label(tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" })]
         Keys,
-        #[label(tr! { "zh-Hans" => "检查版本更新", "en" => "Check for Updates" })]
-        CheckUpdates,
-        #[label(tr! { "zh-Hans" => "开源许可", "en" => "Open Source Licenses" })]
-        Licenses,
-        #[label(tr! { "zh-Hans" => "致谢", "en" => "Credits" })]
-        Credits,
+        #[label(tr! { "zh-Hans" => "开源地址", "en" => "Source Code" })]
+        SourceCode,
     }
 
     /// A concrete setting and the section containing it.
@@ -422,12 +418,6 @@ pub mod erika {
         },
         #[label(tr! { "zh-Hans" => "先打开一个视频，再挂载弹幕", "en" => "Open a video before mounting danmaku" })]
         DanmakuNeedsVideo,
-        #[label(tr! { "zh-Hans" => "当前为界面预览版本", "en" => "This is a preview version" })]
-        PreviewVersion,
-        #[label(tr! { "zh-Hans" => "Erika · Rust / Bern / SwiftUI", "en" => "Erika · Rust / Bern / SwiftUI" })]
-        Licenses,
-        #[label(tr! { "zh-Hans" => "感谢所有开源贡献者与社区支持者", "en" => "Thanks to every open-source contributor and supporter" })]
-        Credits,
         #[label(tr! { "zh-Hans" => "已同时开启：{module}", "en" => "Also turned on: {module}" })]
         AlsoOn { module: FeatureModule },
         #[label(tr! { "zh-Hans" => "已同时开启：{first}、{second}", "en" => "Also turned on: {first} and {second}" })]
@@ -670,6 +660,9 @@ pub mod erika {
         pub installed_count: i64,
         pub accent: Accent,
         pub appearance: Appearance,
+        /// The version the app is, as Bern.toml names it.
+        #[content]
+        pub version: String,
         /// Whether something is playing. The player layer or the mini
         /// player shows it.
         pub player: PlayerState,
@@ -955,6 +948,10 @@ pub mod erika {
         fn dismiss_bangumi_expired(&mut self) -> Result<(), CommandError>;
 
         fn set_appearance(&mut self, appearance: Appearance) -> Result<(), CommandError>;
+
+        /// Open an http(s) address in the system's browser.
+        #[errors("invalid_url", "platform_unavailable")]
+        fn open_url(&mut self, url: String) -> Result<(), CommandError>;
     }
     #[value]
     pub struct SearchActions {

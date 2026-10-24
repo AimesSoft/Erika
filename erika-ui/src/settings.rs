@@ -122,9 +122,9 @@ pub fn settings_page(
                 #[cfg(feature = "bern-module-danmaku")]
                 SettingsPage::Danmaku => { settings_danmaku(app: app) }
                 #[cfg(feature = "bern-module-library")]
-                SettingsPage::Library => { settings_library(app: app, #[cfg(feature = "bern-module-anime")] anime: anime) }
+                SettingsPage::Library => { settings_library(app: app) }
                 #[cfg(feature = "bern-module-anime")]
-                SettingsPage::Anime => { settings_module_placeholder(app: app) }
+                SettingsPage::Anime => { settings_anime(anime: anime) }
                 #[cfg(feature = "bern-module-sync")]
                 SettingsPage::Sync => { settings_module_placeholder(app: app) }
                 #[cfg(feature = "bern-module-sources")]
@@ -608,34 +608,40 @@ pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> 
     }
 }
 #[component]
-pub fn settings_library(
-    app: erika::Client,
-    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
-) -> impl View {
+pub fn settings_library(app: erika::Client) -> impl View {
     ui! {
         Form(variant: settings_form, appear: settings_page_in) {
             Slot(id: form_header)
-            if build.modules.anime {
-                Section(title: tr! { "zh-Hans" => "新番", "en" => "New Shows" }) {
-                    if anime.can_choose_season_source {
-                        Picker(id: season_source, label: tr! { "zh-Hans" => "新番数据源", "en" => "New Shows source" }, selected: anime.season_source, style: menu) => anime.set_season_source(anime.season_source)
-                        Text(content: tr! { "zh-Hans" => "切换后立即刷新新番，并记住你的选择。所选来源不可用时会自动回退。", "en" => "Refreshes New Shows immediately and remembers your choice. Falls back automatically if the selected source is unavailable." }, style: caption, emphasis: secondary)
-                    } else {
-                        Row(gap: 12, align: center) {
-                            Text(content: tr! { "zh-Hans" => "新番数据源", "en" => "New Shows source" })
-                            Spacer
-                            if anime.signed_in {
-                                Text(content: anime.season_source, emphasis: secondary)
-                            } else {
-                                Text(content: tr! { "zh-Hans" => "公共数据", "en" => "Public catalogue" }, emphasis: secondary)
-                            }
-                        }
-                        Text(content: tr! { "zh-Hans" => "同时登录弹弹play和 Bangumi 后可切换；只登录一个账号时自动使用该账号的数据源。", "en" => "Sign in to both dandanplay and Bangumi to choose. With one account, its source is used automatically." }, style: caption, emphasis: secondary)
-                    }
-                }
-            }
             Section {
                 Switch(id: sync_storage, label: tr! { "zh-Hans" => "同步与存储", "en" => "Sync and storage" }, checked: app.preferences.sync_storage, style: switch) => app.set_preference("sync_storage", app.preferences.sync_storage)
+            }
+        }
+    }
+}
+
+/// New Shows: where the season's list comes from.
+#[cfg(feature = "bern-module-anime")]
+#[component]
+pub fn settings_anime(anime: anime::Client) -> impl View {
+    ui! {
+        Form(variant: settings_form, appear: settings_page_in) {
+            Slot(id: form_header)
+            Section {
+                if anime.can_choose_season_source {
+                    Picker(id: season_source, label: tr! { "zh-Hans" => "新番数据源", "en" => "New Shows source" }, selected: anime.season_source, style: menu) => anime.set_season_source(anime.season_source)
+                    Text(content: tr! { "zh-Hans" => "切换后立即刷新新番，并记住你的选择。所选来源不可用时会自动回退。", "en" => "Refreshes New Shows immediately and remembers your choice. Falls back automatically if the selected source is unavailable." }, style: caption, emphasis: secondary)
+                } else {
+                    Row(gap: 12, align: center) {
+                        Text(content: tr! { "zh-Hans" => "新番数据源", "en" => "New Shows source" })
+                        Spacer
+                        if anime.signed_in {
+                            Text(content: anime.season_source, emphasis: secondary)
+                        } else {
+                            Text(content: tr! { "zh-Hans" => "公共数据", "en" => "Public catalogue" }, emphasis: secondary)
+                        }
+                    }
+                    Text(content: tr! { "zh-Hans" => "同时登录弹弹play和 Bangumi 后可切换；只登录一个账号时自动使用该账号的数据源。", "en" => "Sign in to both dandanplay and Bangumi to choose. With one account, its source is used automatically." }, style: caption, emphasis: secondary)
+                }
             }
         }
     }
@@ -962,24 +968,14 @@ pub fn settings_about(app: erika::Client) -> impl View {
                     Stack(variant: settings_wordmark) {
                         Image(source: "erika-ui/assets/erika-wordmark.png", height: 72, rendering: template, label: tr! { "zh-Hans" => "ERIKA エリカ", "en" => "ERIKA エリカ" })
                     }
-                    Text(content: tr! { "zh-Hans" => "Erika 0.1 · 界面预览", "en" => "Erika 0.1 · Interface preview" }, emphasis: secondary)
+                    Text(content: tr! { "zh-Hans" => "Erika {version}", "en" => "Erika {version}"; version: app.version }, emphasis: secondary)
                 }
             }
             Section {
                 Row(gap: 12, align: center) {
-                    Text(content: tr! { "zh-Hans" => "检查更新", "en" => "Check for updates" }, style: body)
+                    Text(content: tr! { "zh-Hans" => "开源地址", "en" => "Source code" }, style: body)
                     Spacer
-                    Button(id: check_updates, label: tr! { "zh-Hans" => "检查", "en" => "Check" }) => app.show_notice(Notice::PreviewVersion)
-                }
-                Row(gap: 12, align: center) {
-                    Text(content: tr! { "zh-Hans" => "开源许可", "en" => "Open-source licenses" }, style: body)
-                    Spacer
-                    Button(id: licenses, label: tr! { "zh-Hans" => "›", "en" => "›" }, prominence: plain) => app.show_notice(Notice::Licenses)
-                }
-                Row(gap: 12, align: center) {
-                    Text(content: tr! { "zh-Hans" => "致谢", "en" => "Acknowledgements" }, style: body)
-                    Spacer
-                    Button(id: credits, label: tr! { "zh-Hans" => "›", "en" => "›" }, prominence: plain) => app.show_notice(Notice::Credits)
+                    Button(id: source_code, label: tr! { "zh-Hans" => "GitHub ›", "en" => "GitHub ›" }, prominence: plain) => app.open_url("https://github.com/AimesSoft/liberika")
                 }
             }
         }

@@ -14,6 +14,7 @@ mod chapters;
 mod danmaku;
 mod history;
 mod kernel;
+mod links;
 mod matching;
 mod playback_preferences;
 mod player;
@@ -206,6 +207,7 @@ impl Default for ErikaEngine {
 
                 accent: Accent::Crimson,
                 appearance: Appearance::System,
+                version: env!("CARGO_PKG_VERSION").into(),
                 player: player::initial(),
                 matching: matching::initial(),
                 danmaku_settings: danmaku::initial(),
@@ -1013,6 +1015,9 @@ impl erika::Commands for ErikaEngine {
         self.state.appearance = appearance;
         self.save_welcome_preferences()?;
         Ok(())
+    }
+    fn open_url(&mut self, url: String) -> Result<(), CommandError> {
+        links::open(&url)
     }
 }
 

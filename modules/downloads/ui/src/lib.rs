@@ -101,7 +101,6 @@ pub fn downloads_page(downloads: downloads::Client) -> impl View {
                         Spacer
                         Switch(id: to_library, label: tr! { "zh-Hans" => "下载完成后加入媒体库", "en" => "Add finished downloads to the library" }, label_hidden: true, style: switch, checked: downloads.to_library) => downloads.set_to_library(downloads.to_library)
                     }
-                    Text(content: tr! { "zh-Hans" => "行的底色就是进度。下载完成后，下载到的文件夹会作为来源加入媒体库并扫描，认出的番出现在「番剧」里。", "en" => "Each row's background shows its progress. When a download finishes, its folder joins the library as a source and is scanned." }, style: caption, font_size: 11.5, emphasis: secondary, lines: 3)
                 }
             }
             if downloads.deleting != 0 {

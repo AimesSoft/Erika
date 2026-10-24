@@ -152,10 +152,10 @@ pub(crate) fn settings(text: &str, features: &FeatureSelection) -> Vec<SettingRe
         ),
         (
             I::SeasonSource,
-            P::Library,
+            P::Anime,
             "新番数据源 new shows source",
             "弹弹play bangumi bgm dandanplay 切换 来源",
-            features.library && cfg!(feature = "bern-module-anime"),
+            features.anime && cfg!(feature = "bern-module-anime"),
         ),
         (
             I::SyncStorage,
@@ -284,20 +284,12 @@ pub(crate) fn settings(text: &str, features: &FeatureSelection) -> Vec<SettingRe
             true,
         ),
         (
-            I::CheckUpdates,
+            I::SourceCode,
             P::About,
-            "检查版本更新 check for updates",
-            "版本 version",
+            "开源地址 source code",
+            "github 仓库 repository 开源 版本 version",
             true,
         ),
-        (
-            I::Licenses,
-            P::About,
-            "开源许可 open source licenses",
-            "许可协议 license",
-            true,
-        ),
-        (I::Credits, P::About, "致谢 credits", "鸣谢 thanks", true),
     ];
     let mut results: Vec<_> = entries
         .into_iter()

@@ -594,9 +594,9 @@ pub fn phone_settings_section(
             #[cfg(feature = "bern-module-danmaku")]
             PhoneSettings::Danmaku => { settings_danmaku(app: app) }
             #[cfg(feature = "bern-module-library")]
-            PhoneSettings::Library => { settings_library(app: app, #[cfg(feature = "bern-module-anime")] anime: anime) }
+            PhoneSettings::Library => { settings_library(app: app) }
             #[cfg(feature = "bern-module-anime")]
-            PhoneSettings::Anime => { settings_module_placeholder(app: app) }
+            PhoneSettings::Anime => { settings_anime(anime: anime) }
             #[cfg(feature = "bern-module-sync")]
             PhoneSettings::Sync => { settings_module_placeholder(app: app) }
             #[cfg(feature = "bern-module-sources")]
