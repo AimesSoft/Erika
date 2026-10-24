@@ -307,12 +307,15 @@ pub fn player_phone_scene(
             if shown {
                 // The left rail: danmaku, then the previous episode and back 10.
                 Positioned(x: 0, y: 148, width: 162, height: 34, appear: controls_in, disappear: controls_out) {
-                    Row(gap: 0, align: center) {
+                    Row(gap: 6, align: center) {
                         Spacer
                         if (build.modules.danmaku && app.features.danmaku) {
                             SplitButton(id: danmaku_phone, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, more_label: tr! { "zh-Hans" => "弹幕参数", "en" => "Danmaku options" }, icon: "text.bubble", checked: app.preferences.show_danmaku, shape: capsule, height: 34) {
                                 player_danmaku_quick(app: app)
                             } => app.set_preference("show_danmaku", app.preferences.show_danmaku)
+                            PopoverButton(panel_appearance: surface, id: compose_danmaku_phone, label: tr! { "zh-Hans" => "发弹幕", "en" => "Send danmaku" }, icon: "paperplane", presented: draft.composer_open) {
+                                player_danmaku_composer(app: app)
+                            }
                         }
                         Spacer
                     }
@@ -601,21 +604,7 @@ pub fn player_controls(
                         player_danmaku_quick(app: app)
                     }
                     PopoverButton(panel_appearance: surface, id: compose_danmaku, label: tr! { "zh-Hans" => "发弹幕", "en" => "Send danmaku" }, icon: "paperplane", presented: draft.composer_open) {
-                        Column(gap: 14, width: 320, padding: 10) {
-                            Text(content: tr! { "zh-Hans" => "发弹幕", "en" => "Send danmaku" }, style: title3)
-                            FocusRegion {
-                                Column(gap: 12) {
-                                    Stack(enabled: !app.player.sending_danmaku) {
-                                        TextInput(id: danmaku_text, label: tr! { "zh-Hans" => "弹幕内容", "en" => "Danmaku message" }, label_hidden: true, prompt: tr! { "zh-Hans" => "发个友善的弹幕…", "en" => "Say something kind…" }, value: draft.text, clear_key: app.player.danmaku_sent_revision) => app.send_danmaku(draft.text)
-                                    }
-                                    player_danmaku_colors(app: app)
-                                    Row {
-                                        Spacer
-                                        Button(id: send, icon: "paperplane", label: tr! { "zh-Hans" => "发送", "en" => "Send" }, shape: capsule, height: 32, prominence: prominent, enabled: !app.player.sending_danmaku) => app.send_danmaku(draft.text)
-                                    }
-                                }
-                            }
-                        }
+                        player_danmaku_composer(app: app)
                     }
                 }
                 Shortcut(key: "d") => app.set_preference("show_danmaku", !app.preferences.show_danmaku)
@@ -679,6 +668,29 @@ pub fn player_enhancement_menu(app: erika::Client) -> impl View {
                     }
                 }
             } => app.set_enhancement(Enhancement::ArtCnnDenoise)
+        }
+    }
+}
+
+/// Sending a comment: the text, its color, and the button. The desktop's
+/// danmaku controls and the phone's left rail open it.
+#[component]
+pub fn player_danmaku_composer(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
+    ui! {
+        Column(gap: 14, width: 320, padding: 10) {
+            Text(content: tr! { "zh-Hans" => "发弹幕", "en" => "Send danmaku" }, style: title3)
+            FocusRegion {
+                Column(gap: 12) {
+                    Stack(enabled: !app.player.sending_danmaku) {
+                        TextInput(id: danmaku_text, label: tr! { "zh-Hans" => "弹幕内容", "en" => "Danmaku message" }, label_hidden: true, prompt: tr! { "zh-Hans" => "发个友善的弹幕…", "en" => "Say something kind…" }, value: draft.text, clear_key: app.player.danmaku_sent_revision) => app.send_danmaku(draft.text)
+                    }
+                    player_danmaku_colors(app: app)
+                    Row {
+                        Spacer
+                        Button(id: send, icon: "paperplane", label: tr! { "zh-Hans" => "发送", "en" => "Send" }, shape: capsule, height: 32, prominence: prominent, enabled: !app.player.sending_danmaku) => app.send_danmaku(draft.text)
+                    }
+                }
+            }
         }
     }
 }
