@@ -86,7 +86,7 @@ enum Setting {
     Capture(PathBuf, Option<u32>),
     Danmaku(DanmakuConfig),
     AddDanmaku(String, DanmakuTimeline),
-    SendDanmaku(String),
+    SendDanmaku(String, u32),
 }
 
 impl Liberika {
@@ -251,8 +251,8 @@ impl Kernel for Liberika {
         Ok(count)
     }
 
-    fn send_danmaku(&self, text: &str) {
-        self.send(Message::Set(Setting::SendDanmaku(text.into())));
+    fn send_danmaku(&self, text: &str, rgb: u32) {
+        self.send(Message::Set(Setting::SendDanmaku(text.into(), rgb)));
     }
 
     fn capture(&self, path: &Path, width: Option<u32>) {
@@ -363,6 +363,7 @@ fn danmaku_layout(config: &DanmakuConfig) -> DanmakuLayoutConfig {
         block_top: config.block_top,
         block_bottom: config.block_bottom,
         block_scroll: config.block_scroll,
+        random_colors: config.random_colors,
         ..DanmakuLayoutConfig::default()
     }
 }
@@ -549,10 +550,10 @@ impl Session {
         }
     }
 
-    /// Show `text` as the user's comment now: a moment ahead of the
-    /// picture, before the danmaku delay moves it, on a track of the
-    /// user's own comments.
-    fn send_danmaku(&mut self, text: String, delay: f64) {
+    /// Show `text` as the user's comment now, in `rgb`: a moment ahead of
+    /// the picture, before the danmaku delay moves it, on a track of the
+    /// user's own comments, which liberika frames.
+    fn send_danmaku(&mut self, text: String, rgb: u32, delay: f64) {
         let at = self.presenter.media_time().as_secs_f64() + 0.2 - delay;
         self.own_danmaku.push(DanmakuItem {
             id: self.own_danmaku.len() as u64 + 1,
@@ -560,7 +561,7 @@ impl Session {
             text,
             mode: DanmakuMode::Scroll,
             font_size: 25.0,
-            color: DanmakuColor::WHITE,
+            color: DanmakuColor::rgb_u8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8),
             opacity: 1.0,
             is_self: true,
         });
@@ -952,7 +953,7 @@ impl Worker {
             | Setting::AddSubtitle(_)
             | Setting::Capture(..)
             | Setting::AddDanmaku(..)
-            | Setting::SendDanmaku(_) => {}
+            | Setting::SendDanmaku(..) => {}
         }
         let delay = self
             .settings
@@ -1043,8 +1044,8 @@ impl Worker {
                     .add_danmaku_track(timeline, name, source, 0);
                 Ok(())
             }
-            Setting::SendDanmaku(text) => {
-                session.send_danmaku(text, delay);
+            Setting::SendDanmaku(text, rgb) => {
+                session.send_danmaku(text, rgb, delay);
                 Ok(())
             }
         };

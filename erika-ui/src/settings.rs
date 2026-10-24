@@ -589,6 +589,14 @@ pub fn settings_danmaku(app: erika::Client, #[session] draft: SettingsDraft) -> 
                     Slider(id: font_size, label: tr! { "zh-Hans" => "字号", "en" => "Font size" }, label_hidden: true, current: app.danmaku_settings.font_size, continuous: true, min: 0, max: 1) => app.set_danmaku_number("font_size", app.danmaku_settings.font_size)
                 }
                 Picker(id: area, label: tr! { "zh-Hans" => "显示区域", "en" => "Display area" }, selected: app.preferences.danmaku_area, style: segmented) => app.set_danmaku_area(app.preferences.danmaku_area)
+                Row(gap: 12, align: center) {
+                    Column(gap: 1) {
+                        Text(content: tr! { "zh-Hans" => "随机染色", "en" => "Random colors" }, style: body)
+                        Text(content: tr! { "zh-Hans" => "忽略弹幕原始颜色，按发送弹幕预设色随机分配", "en" => "Ignore each comment's own color and give it one of the sending palette's" }, style: caption, emphasis: secondary)
+                    }
+                    Spacer
+                    Switch(id: random_colors, label: tr! { "zh-Hans" => "随机染色", "en" => "Random colors" }, label_hidden: true, checked: app.danmaku_settings.random_colors, style: switch) => app.set_danmaku_switch("random_colors", app.danmaku_settings.random_colors)
+                }
             }
             Section(title: tr! { "zh-Hans" => "来源", "en" => "Sources" }) {
                 Switch(id: auto_match, label: tr! { "zh-Hans" => "弹弹play 自动匹配", "en" => "Automatically match with Dandanplay" }, checked: app.preferences.auto_match, style: switch) => app.set_preference("auto_match", app.preferences.auto_match)

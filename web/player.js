@@ -225,7 +225,7 @@ export class BrowserPlayer {
         } catch (error) {
           if (epoch === this.epoch) this.results.push({ name: message.name, error: String(error) });
         }
-      } else if (op === 'sendDanmaku') await p.sendDanmaku(message.text);
+      } else if (op === 'sendDanmaku') await p.sendDanmaku(message.text, message.color);
       else if (op === 'capture') {
         const blob = await p.capture(message.width);
         if (epoch !== this.epoch) return;

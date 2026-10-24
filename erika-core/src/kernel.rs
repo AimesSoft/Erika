@@ -58,8 +58,9 @@ pub trait Kernel: Send + Sync {
     /// Show the comments of a Bilibili xml or Dandanplay json file over
     /// what plays, as one more track; answers how many it holds.
     fn add_danmaku(&self, name: &str, contents: &str) -> Result<usize, String>;
-    /// Show `text` now as the user's own comment.
-    fn send_danmaku(&self, text: &str);
+    /// Show `text` now as the user's own comment, in `rgb` (`0xRRGGBB`),
+    /// framed as theirs.
+    fn send_danmaku(&self, text: &str, rgb: u32);
     /// Browser file I/O completes asynchronously on the player worker.
     fn mount_danmaku_file(&self, _url: &str, _name: &str) -> bool {
         false
@@ -129,6 +130,8 @@ pub struct DanmakuConfig {
     pub block_top: bool,
     pub block_bottom: bool,
     pub block_scroll: bool,
+    /// Stable colors from liberika's palette in place of the comments' own.
+    pub random_colors: bool,
 }
 
 /// A track of the media, named as the file names it.

@@ -489,8 +489,9 @@ pub fn comments(episode_id: i64) -> Result<(String, usize)> {
     Ok(kernel_comments(reply.comments))
 }
 
-/// Post exactly one comment; only the server's success is an acknowledgement.
-pub fn send_comment(episode: i64, time: f64, comment: &str) -> Result<()> {
+/// Post exactly one comment, scrolling, in `color` (`0xRRGGBB`); only the
+/// server's success is an acknowledgement.
+pub fn send_comment(episode: i64, time: f64, comment: &str, color: u32) -> Result<()> {
     if episode <= 0 {
         return Err(Error::new("此弹幕来源暂不支持发送，请匹配弹弹play集数"));
     }
@@ -499,8 +500,7 @@ pub fn send_comment(episode: i64, time: f64, comment: &str) -> Result<()> {
         return Err(Error::new("弹幕内容或时间无效"));
     }
     let token = token().ok_or_else(Error::sign_in)?;
-    let body =
-        serde_json::json!({ "time": time, "mode": 1, "color": 16777215, "comment": comment });
+    let body = comment_body(time, comment, color);
     let reply: serde_json::Value = request(
         "POST",
         &format!("/api/v2/comment/{episode}"),
@@ -518,6 +518,12 @@ pub fn send_comment(episode: i64, time: f64, comment: &str) -> Result<()> {
                 .unwrap_or("弹幕发送失败"),
         ))
     }
+}
+
+/// What dandanplay's `POST /api/v2/comment/{episode}` takes: the color as
+/// a decimal RGB number.
+fn comment_body(time: f64, comment: &str, color: u32) -> serde_json::Value {
+    serde_json::json!({ "time": time, "mode": 1, "color": color & 0xFF_FFFF, "comment": comment })
 }
 
 fn kernel_comments(comments: Vec<Comment>) -> (String, usize) {
@@ -670,6 +676,15 @@ mod tests {
         assert_eq!(reply.animes[0].episode_count, 12);
         assert!(reply.animes[1].summary.is_empty());
         assert!(reply.animes[1].image_url.is_empty());
+    }
+
+    #[test]
+    fn a_sent_comment_carries_its_color_as_decimal_rgb() {
+        assert_eq!(
+            comment_body(12.5, "前方高能", 0xFE0502),
+            serde_json::json!({ "time": 12.5, "mode": 1, "color": 16647426, "comment": "前方高能" })
+        );
+        assert_eq!(comment_body(0.0, "白", 0xFF_FFFF_FF)["color"], 16777215);
     }
 
     #[test]

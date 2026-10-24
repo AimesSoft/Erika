@@ -255,6 +255,8 @@ pub(super) enum Found {
     Sent {
         revision: u64,
         text: String,
+        /// The color it was sent in, `0xRRGGBB`.
+        color: i64,
         result: Result<(), String>,
     },
     Matched {
@@ -492,13 +494,14 @@ impl ErikaEngine {
                 Found::Sent {
                     revision,
                     text,
+                    color,
                     result,
                 } => {
                     self.state.player.sending_danmaku = false;
                     match result {
                         Ok(()) => {
                             if self.state.playing && revision == self.match_revision {
-                                self.send_own_danmaku(&text);
+                                self.send_own_danmaku(&text, color);
                             }
                             if self.state.player.danmaku_text == text {
                                 self.state.player.danmaku_text.clear();
@@ -714,12 +717,14 @@ impl ErikaEngine {
         self.state.player.sending_danmaku = true;
         let revision = self.match_revision;
         let time = self.state.elapsed;
+        let color = self.state.player.danmaku_color;
         in_background(&self.found, move || {
-            let result =
-                erika_dandanplay::send_comment(episode, time, &text).map_err(|e| e.message);
+            let result = erika_dandanplay::send_comment(episode, time, &text, color as u32)
+                .map_err(|e| e.message);
             vec![Found::Sent {
                 revision,
                 text,
+                color,
                 result,
             }]
         });
