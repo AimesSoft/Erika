@@ -39,6 +39,12 @@ cargo run --manifest-path "$ERIKA_LIBERIKA_ROOT/Cargo.toml" -p xtask -- \
 cargo check --workspace
 ```
 
+Windows 在 “x64 Native Tools Command Prompt”（或先运行 Visual Studio 的 `vcvars64.bat`）里构建，另需 Git for Windows 或 MSYS2（`sh` 与 `make`，MSYS2 不在 `C:\msys64` 时设 `MSYS2_ROOT`）、NASM、Python 3、LLVM（`bindgen` 用的 `libclang`）和 Visual Studio 的 CMake 组件。Bern 的 Windows 应用静态链接 C 运行库，原生库也要静态链接（`--crt static`）：
+
+```bat
+cargo run --manifest-path ..\liberika\Cargo.toml -p xtask -- deps build --all --profile lgpl --target x86_64-pc-windows-msvc --crt static
+```
+
 其他目标的原生依赖准备见 [liberika 构建说明](https://github.com/AimesSoft/liberika/blob/feat/bern-web-playback-20261023/docs/building.md)。
 
 Web 构建、测试素材生成和静态站点测试也通过 Cargo 定位 liberika。只有显式设置 `LIBERIKA_DIR` 时才使用指定目录；不再默认依赖 `../liberika`。

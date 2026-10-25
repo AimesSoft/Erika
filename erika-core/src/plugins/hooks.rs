@@ -30,12 +30,12 @@ pub(crate) struct Chain {
 /// The comments of `contents` as plugins see them: liberika reads any
 /// danmaku file where it is linked, JSON is read elsewhere.
 fn comments_of(contents: &str) -> Option<Vec<Comment>> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         let timeline = liberika::danmaku::DanmakuTimeline::parse_auto(contents).ok()?;
         Some(liberika::plugin::comments(&timeline))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let value: Value = serde_json::from_str(contents).ok()?;
         let list = match &value {

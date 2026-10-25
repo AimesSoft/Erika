@@ -116,7 +116,7 @@ enum Done {
     Installed(String, Result<Pack, String>),
     Fetched(String, u64, Result<Value, String>),
     /// The first seconds of the video at the address, measured.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     Opening(String, Result<Value, String>),
     /// A request of a link's resolution answered.
     Resolved(u64, Result<Value, String>),
@@ -403,13 +403,13 @@ impl ErikaEngine {
                         Err(reason) => self.notify(Notice::PluginFailed { reason }),
                     }
                 }
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
                 Done::Opening(url, Ok(frames)) => {
                     if self.source.as_ref().is_some_and(|source| source.url == url) {
                         self.plugin_event("openingProfiled", json!({ "url": url, "frames": frames }));
                     }
                 }
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
                 Done::Opening(url, Err(error)) => eprintln!("erika: opening of {url}: {error}"),
                 Done::Resolved(tag, answer) => self.resolver_fetched(tag, answer),
                 Done::Readme(id, readme) => self.readme_read(&id, readme),
@@ -926,13 +926,13 @@ impl ErikaEngine {
         let Some(url) = self.source.as_ref().map(|source| source.url.clone()) else {
             return;
         };
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         in_background(&self.plugins.inbox, move || {
             let profile = liberika::opening::opening_profile(&url, seconds, 4.0)
                 .map(|frames| json!(frames));
             vec![Done::Opening(url, profile)]
         });
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let _ = (url, seconds);
     }
 

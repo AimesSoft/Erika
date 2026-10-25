@@ -1,9 +1,10 @@
 //! liberika as Bern's media kernel. A thread of its own owns one
 //! `PresenterRuntime` per player: it performs the hub's requests and the
-//! engine's own settings, draws into the Metal layer of the video view
-//! that shows the player on each of that view's display frames, keeps the
-//! audio going while no view shows it, and reports what it sees to the hub
-//! and to the engine.
+//! engine's own settings, draws into the surface of the video view that
+//! shows the player (its Metal layer on macOS; on Windows a swap chain for
+//! composition, which it gives the view's SwapChainPanel) on each of that
+//! view's display frames, keeps the audio going while no view shows it,
+//! and reports what it sees to the hub and to the engine.
 
 use super::{Chapter, DanmakuConfig, Kernel, Operation, OperationResult, PLAYER, Playback, Track};
 use bern::media::kernel::{
@@ -13,6 +14,8 @@ use bern::media::kernel::{
 };
 use bern::{CommandError, Value};
 use erika_protocol::erika::Enhancement;
+#[cfg(target_os = "macos")]
+use liberika::MetalSurfaceHandle;
 use liberika::danmaku::{
     DanmakuColor, DanmakuItem, DanmakuLayoutConfig, DanmakuMode, DanmakuTimeline,
     DanmakuTrackSource,
@@ -20,9 +23,10 @@ use liberika::danmaku::{
 use liberika::presenter::{PresenterConfig, PresenterRuntime};
 use liberika::renderer::pipeline::LumaUpscalerMode;
 use liberika::{
-    MediaRequest, MetalSurfaceHandle, PlatformSurface, PlayerEvent, PlayerState, TrackInfo,
-    TrackKind, TrackSelection,
+    MediaRequest, PlatformSurface, PlayerEvent, PlayerState, TrackInfo, TrackKind, TrackSelection,
 };
+#[cfg(target_os = "windows")]
+use liberika::{SurfaceOutputCapabilities, WgpuSurfaceHandle, WgpuSurfaceKind};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -289,7 +293,11 @@ impl MediaKernel for Liberika {
     }
 
     fn surfaces(&self) -> Vec<SurfaceKind> {
-        vec![SurfaceKind::MetalLayer]
+        #[cfg(target_os = "macos")]
+        let kind = SurfaceKind::MetalLayer;
+        #[cfg(target_os = "windows")]
+        let kind = SurfaceKind::SwapChainPanel;
+        vec![kind]
     }
 
     fn attached(&self, hub: Arc<dyn KernelHub>) {
@@ -389,6 +397,9 @@ struct Session {
     chapters: Vec<Chapter>,
     /// The view the presenter draws into.
     view: Option<String>,
+    /// The swap chain the view's panel was given last.
+    #[cfg(target_os = "windows")]
+    chain: usize,
     volume: f64,
     muted: bool,
     buffering: bool,
@@ -410,6 +421,9 @@ struct Session {
 impl Session {
     fn new(hardware_decode: bool) -> Result<Self, CommandError> {
         let mut config = PresenterConfig::default();
+        // This thread draws, not the interface's: it can wait out the GPU
+        // work of a hardware decoder's seek preroll before a frame changes.
+        config.renderer.compositor_handoff_timeout = Duration::from_secs(2);
         if !hardware_decode {
             config.player.playback.video_decode =
                 liberika::playback::VideoDecodePreference::Software;
@@ -426,6 +440,8 @@ impl Session {
             source: None,
             chapters: Vec::new(),
             view: None,
+            #[cfg(target_os = "windows")]
+            chain: 0,
             volume: 1.0,
             muted: false,
             buffering: false,
@@ -638,14 +654,98 @@ fn failed(error: impl std::fmt::Display) -> CommandError {
     CommandError::new("media_error", error.to_string())
 }
 
-fn platform_surface(surface: &VideoSurface) -> PlatformSurface {
-    let SurfaceHandle::MetalLayer(layer) = surface.handle;
-    PlatformSurface::Metal(MetalSurfaceHandle::new(
-        layer,
-        surface.size.width,
-        surface.size.height,
-        surface.size.scale,
-    ))
+fn platform_surface(surface: &VideoSurface) -> Result<PlatformSurface, CommandError> {
+    let size = surface.size;
+    match surface.handle {
+        #[cfg(target_os = "macos")]
+        SurfaceHandle::MetalLayer(layer) => Ok(PlatformSurface::Metal(MetalSurfaceHandle::new(
+            layer,
+            size.width,
+            size.height,
+            size.scale,
+        ))),
+        // Direct3D 11 draws into a swap chain of its own, which `present`
+        // gives the panel.
+        #[cfg(target_os = "windows")]
+        SurfaceHandle::SwapChainPanel(_) => Ok(PlatformSurface::Wgpu(
+            WgpuSurfaceHandle::new(
+                WgpuSurfaceKind::WindowsHwnd,
+                0,
+                0,
+                size.width,
+                size.height,
+                size.scale,
+            )
+            .with_output_capabilities(SurfaceOutputCapabilities {
+                direct_composition: true,
+                ..SurfaceOutputCapabilities::default()
+            }),
+        )),
+        other => Err(CommandError::new(
+            "unsupported_surface",
+            format!("liberika cannot draw into {:?}", other.kind()),
+        )),
+    }
+}
+
+/// Give the panel of `session`'s view the swap chain liberika draws into,
+/// when it made a new one.
+#[cfg(target_os = "windows")]
+fn present(session: &mut Session, views: &[View]) {
+    let chain = session
+        .presenter
+        .composition_swapchain_ptr()
+        .map_or(0, |chain| chain as usize);
+    if chain == session.chain {
+        return;
+    }
+    let Some(view) = session
+        .view
+        .as_deref()
+        .and_then(|token| views.iter().find(|view| view.token == token))
+    else {
+        return;
+    };
+    // SAFETY: the view keeps its panel alive until `detach_surface`
+    // returns, which waits for this thread.
+    let result = unsafe { set_swap_chain(view.surface.handle, chain) };
+    if result >= 0 {
+        session.chain = chain;
+    } else {
+        eprintln!("liberika: the panel does not take the swap chain: {result:#x}");
+    }
+}
+
+/// Take the swap chain back from the panel of `session`'s view, which
+/// stays but no longer shows the player.
+#[cfg(target_os = "windows")]
+fn withdraw(session: &mut Session, views: &[View]) {
+    if std::mem::take(&mut session.chain) == 0 {
+        return;
+    }
+    if let Some(view) = session
+        .view
+        .as_deref()
+        .and_then(|token| views.iter().find(|view| view.token == token))
+    {
+        // SAFETY: as in `present`.
+        unsafe { set_swap_chain(view.surface.handle, 0) };
+    }
+}
+
+/// `ISwapChainPanelNative::SetSwapChain`, the method after `IUnknown`'s.
+#[cfg(target_os = "windows")]
+unsafe fn set_swap_chain(handle: SurfaceHandle, chain: usize) -> i32 {
+    type SetSwapChain =
+        unsafe extern "system" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> i32;
+    let SurfaceHandle::SwapChainPanel(panel) = handle else {
+        return 0;
+    };
+    let panel = panel as *mut std::ffi::c_void;
+    unsafe {
+        let methods = *(panel as *const *const SetSwapChain);
+        (*methods.add(3))(panel, chain as *mut std::ffi::c_void)
+    }
 }
 
 struct Worker {
@@ -742,6 +842,10 @@ impl Worker {
                 {
                     let _ = session.presenter.detach_surface();
                     session.view = None;
+                    #[cfg(target_os = "windows")]
+                    {
+                        session.chain = 0;
+                    }
                     // An earlier view of the player shows it again.
                     let _ = self.show(&player);
                 }
@@ -751,6 +855,8 @@ impl Worker {
             Message::Set(setting) => self.set(setting),
             Message::Close => {
                 if let Some(mut session) = self.players.remove(PLAYER) {
+                    #[cfg(target_os = "windows")]
+                    withdraw(&mut session, &self.views);
                     let _ = session.presenter.close();
                     if let Some(hub) = self.hub() {
                         hub.observe(PLAYER, session.version, Observation::idle());
@@ -787,14 +893,18 @@ impl Worker {
             return Ok(());
         }
         if session.view.is_some() {
+            #[cfg(target_os = "windows")]
+            withdraw(session, &self.views);
             let _ = session.presenter.detach_surface();
         }
         session.view = None;
         session
             .presenter
-            .attach_surface(platform_surface(&view.surface))
+            .attach_surface(platform_surface(&view.surface)?)
             .map_err(failed)?;
         session.view = Some(view.token.clone());
+        #[cfg(target_os = "windows")]
+        present(session, &self.views);
         Ok(())
     }
 
@@ -1097,6 +1207,8 @@ impl Worker {
             if let Err(error) = session.presenter.render_tick_at(timing.target, at) {
                 eprintln!("liberika: frame failed: {error}");
             }
+            #[cfg(target_os = "windows")]
+            present(session, &self.views);
         }
         self.report(false);
     }

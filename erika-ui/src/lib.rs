@@ -42,9 +42,11 @@ use tv::{tv_shell, tv_shell_props};
 style! {
     // NipaPlay's page backgrounds, shared by both appearances and every layout.
     Stack.app_background { background: color(light: "#F2F2F2", dark: "#1E1E1E") }
-    // macOS keeps Liquid Glass; the browser extension supplies frosted glass.
+    // macOS keeps Liquid Glass and Windows its acrylic, both in the
+    // appearance of where they open (dark over the picture); the browser
+    // extension supplies frosted glass.
     PopoverButton { foreground: text.primary }
-    #[target(ios, tvos, windows, linux, android)]
+    #[target(ios, tvos, linux, android)]
     PopoverButton { background: color(light: "#F2F2F2", dark: "#1E1E1E") }
     // Native split columns own their backgrounds, preserving toolbar layout.
     #[target(macos, ios, tvos)]
@@ -94,11 +96,24 @@ style! {
     Stack.player_black { background: color(light: "#000000", dark: "#000000"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
     // Shadow bare content and seek bars; native glass controls keep their own
     // system appearance. Opaque, bright tones stay readable over the picture.
-    #[target(macos, ios, tvos, browser)]
+    #[target(macos, ios, tvos, browser, windows)]
     Stack.player_overlay { shadow: shadow(3, y: 1, opacity: 0.9) }
+    // Windows' control groups and bare buttons have no surface of their
+    // own: what they show casts the same shadow over the picture.
+    #[target(windows)]
+    Stack.player_buttons { shadow: shadow(3, y: 1, opacity: 0.9) }
+    // The player's control groups side by side: apart where each is a
+    // capsule of its own, as close as the buttons in one where they are
+    // bare glyphs (Windows).
+    Row.player_groups { gap: 12 }
+    #[target(windows)]
+    Row.player_groups { gap: 2 }
     Stack.player_text { foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
     Stack.player_accent { foreground: accent }
     Stack.player_secondary { foreground: color(light: "#E6E6EB", dark: "#E6E6EB") }
+    // Secondary text in a bubble (the playback settings), which follows the
+    // bubble's appearance rather than lying on the picture.
+    Stack.panel_secondary { foreground: text.secondary }
     Stack.matching_detail { background: fill.subtle, foreground: text.primary, corner: 14 }
     Stack.matching_poster { background: fill.strong, foreground: text.secondary, corner: 8 }
     Button.matching_card {
@@ -113,11 +128,11 @@ style! {
     // All four bare transport glyphs stay opaque white, including disabled
     // episode navigation; enabled still controls whether an action can run.
     IconButton.player_plain { foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), padding: 6, pressed: scale(0.94, press), disabled: foreground(color(light: "#FFFFFF", dark: "#FFFFFF")) }
-    #[target(macos, ios, tvos, browser)]
+    #[target(macos, ios, tvos, browser, windows)]
     Button.player_plain { shadow: shadow(3, y: 1, opacity: 0.9) }
-    #[target(macos, ios, tvos, browser)]
+    #[target(macos, ios, tvos, browser, windows)]
     IconButton.player_plain { shadow: shadow(3, y: 1, opacity: 0.9) }
-    #[target(macos, ios, tvos, browser)]
+    #[target(macos, ios, tvos, browser, windows)]
     IconButton.transport { shadow: shadow(3, y: 1, opacity: 0.9) }
     Stack.player_gold { foreground: color(light: "#FFD24A", dark: "#FFD24A") }
     Stack.player_cyan { foreground: color(light: "#8EE3FF", dark: "#8EE3FF") }
@@ -127,7 +142,7 @@ style! {
     // the remote's focus without showing it.
     Button.remote_surface { hover: none, pressed: none, focus: none }
     IconButton.player_primary { font_size: 38, foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), padding: 6, hover: scale(1.08, snappy), pressed: scale(0.90, press), settle: jelly }
-    #[target(macos, ios, tvos, browser)]
+    #[target(macos, ios, tvos, browser, windows)]
     IconButton.player_primary { shadow: shadow(3, y: 1, opacity: 0.9) }
     IconButton.transport { font_size: 16, foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), padding: 6, pressed: scale(0.94, press), disabled: foreground(color(light: "#FFFFFF", dark: "#FFFFFF")) }
     Stack.onboarding_art { background: color(light: "#232A52", dark: "#232A52") }
