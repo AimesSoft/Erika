@@ -386,7 +386,9 @@ pub mod library {
 
     #[events]
     pub trait Events {
-        fn open_show(&self, id: i64);
+        /// A poster was opened: from the home page's 「最近添加」 when
+        /// `home`, from the library page otherwise.
+        fn open_show(&self, id: i64, home: bool);
         /// Videos were matched, unlinked or removed: what the user has of
         /// each anime changed.
         fn files_changed(&self);
@@ -396,6 +398,10 @@ pub mod library {
     pub trait Commands {
         #[errors("unknown_show")]
         fn open(&mut self, id: i64) -> Result<(), CommandError>;
+        /// Open a poster of the home page's 「最近添加」: its details show
+        /// over the home page and go back to it.
+        #[errors("unknown_show")]
+        fn open_recent(&mut self, id: i64) -> Result<(), CommandError>;
         fn close(&mut self) -> Result<(), CommandError>;
         /// The shell played or matched a video: the shows the user has
         /// files of may have changed.

@@ -38,16 +38,21 @@ pub fn player(
             if window.tv {
                 Stack(under_bars: true) {
                     ScaleBox(width: 1280, height: 720) {
-                        player_tv_scene(app: app, players: players, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.saying)
+                        player_tv_scene(app: app, players: players, shown: !window.idle || app.matching.open || app.player.panel || draft.saying)
                     }
                 }
             } else if window.short {
                 ScaleBox(width: 844, height: 390) {
-                    player_phone_scene(app: app, players: players, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.danmaku_open || draft.composer_open)
+                    player_phone_scene(app: app, players: players, shown: !window.idle || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.danmaku_open || draft.composer_open)
                 }
             } else {
-                ScaleBox(width: 1280, height: 800) {
-                    player_scene(app: app, players: players, windows: windows, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
+                // Under the title bar from the start: the window hides its
+                // bars only once a frame that flew in has landed
+                // (`arriving`), and the picture must not move then.
+                Stack(under_bars: true, variant: player_black) {
+                    ScaleBox(width: 1280, height: 800) {
+                        player_scene(app: app, players: players, windows: windows, shown: !window.idle || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
+                    }
                 }
             }
             if let Some(notice) = app.notice {
@@ -81,7 +86,7 @@ pub fn player_scene(
                         // Give liberika the whole window: it fits the video and
                         // subtitles inside it, while danmaku can cross the bars.
                         if app.video {
-                            Video(id: video, player: players.video, label: app.title, controls: none, sizing: fill, fit: contain, corner: 0)
+                            Video(id: video, player: players.video, label: app.title, controls: none, sizing: fill, fit: contain, corner: 0, appear: video_in, appear_delay: 0.4)
                         }
                         ScaleBox(width: 1280, height: 720) {
                             player_overlays(app: app)
@@ -125,7 +130,7 @@ pub fn player_tv_scene(
                 Stack {
                     Image(source: app.still, width: 1280, height: 720, corner: 0, fit: cover, label: app.title, hero: frame, hero_key: app.title, animate: hero)
                     if app.video {
-                        Video(id: video_tv, player: players.video, label: app.title, controls: none, sizing: fill, fit: contain, corner: 0)
+                        Video(id: video_tv, player: players.video, label: app.title, controls: none, sizing: fill, fit: contain, corner: 0, appear: video_in, appear_delay: 0.4)
                     }
                     ScaleBox(width: 1280, height: 720) {
                         player_overlays(app: app)
@@ -290,7 +295,7 @@ pub fn player_phone_scene(
                         // The surface includes both side bars; only the video
                         // content is aspect-fit, not the danmaku canvas.
                         if app.video {
-                            Video(id: video_phone, player: players.video, label: app.title, controls: none, sizing: fill, fit: contain, corner: 0)
+                            Video(id: video_phone, player: players.video, label: app.title, controls: none, sizing: fill, fit: contain, corner: 0, appear: video_in, appear_delay: 0.4)
                         }
                         ScaleBox(width: 693, height: 390) {
                             player_phone_overlays(app: app)

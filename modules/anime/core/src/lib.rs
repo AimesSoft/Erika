@@ -504,8 +504,9 @@ impl AnimeEngine {
         }
     }
 
-    /// Ask the shell to play what is being watched of show `id`.
-    fn play_watching(&self, watching: &erika_store::Watching) {
+    /// Ask the shell to play what is being watched of show `id`, from the
+    /// home page's stage when `from_stage`.
+    fn play_watching(&self, watching: &erika_store::Watching, from_stage: bool) {
         let row = shows::watching(watching);
         anime::emit::play(
             row.title,
@@ -513,6 +514,7 @@ impl AnimeEngine {
             row.still,
             row.progress,
             MediaSource::new(watching.url.clone()),
+            from_stage,
         );
     }
 }
@@ -585,7 +587,7 @@ impl anime::Commands for AnimeEngine {
     fn continue_from_search(&mut self, id: i64) -> Result<(), CommandError> {
         match self.watching_of(id).cloned() {
             Some(watching) => {
-                self.play_watching(&watching);
+                self.play_watching(&watching, false);
                 Ok(())
             }
             None => self.open_from_search(id),
@@ -610,7 +612,7 @@ impl anime::Commands for AnimeEngine {
         let watching = self.watching_of(id).cloned().ok_or_else(|| {
             CommandError::new("unknown_show", format!("show {id} is not being watched"))
         })?;
-        self.play_watching(&watching);
+        self.play_watching(&watching, true);
         Ok(())
     }
 
@@ -736,11 +738,14 @@ impl anime::Commands for AnimeEngine {
             .iter()
             .find(|episode| episode.number == number)
             .ok_or_else(|| CommandError::new("unknown_episode", format!("no episode {number}")))?;
-        let file = self
-            .db
-            .episode_files(self.state.show.id)
+        // The file the film shows for this episode.
+        let id = self
+            .numbered(self.state.show.id)
             .into_iter()
-            .find(|file| file.episode.number == number);
+            .find(|(n, _)| *n == number)
+            .map_or(0, |(_, id)| id);
+        let files = self.db.episode_files(self.state.show.id);
+        let file = shows::file_of(&files, number, id).cloned();
         let (source, progress) = match file {
             Some(file) => (
                 MediaSource::new(file.url),
@@ -758,6 +763,7 @@ impl anime::Commands for AnimeEngine {
             episode.still.clone(),
             progress,
             source,
+            false,
         );
         Ok(())
     }

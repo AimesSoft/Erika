@@ -29,6 +29,8 @@ pub fn initial() -> PlayerState {
         has_previous: false,
         has_next: false,
         panel: false,
+        flies_in: false,
+        arriving: false,
         tab: PlayerTab::Danmaku,
         episode: 1,
         episodes: false,
@@ -682,6 +684,7 @@ mod tests {
             still(),
             0.35,
             MediaSource::new("file:///Videos/frieren-04.mkv"),
+            false,
         )
         .unwrap();
         e
@@ -1632,6 +1635,7 @@ mod tests {
             still(),
             0.35,
             MediaSource::new(""),
+            false,
         )
         .unwrap();
         assert!(!e.state.playing);
@@ -1642,6 +1646,7 @@ mod tests {
             still(),
             0.35,
             MediaSource::new("file:///Videos/frieren-04.mkv"),
+            false,
         )
         .unwrap();
         assert!(e.state.video);

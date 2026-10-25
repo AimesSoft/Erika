@@ -347,6 +347,12 @@ impl ErikaEngine {
             PlayingNote::Episode { episode } => Some(episode),
             _ => None,
         });
+        // The player comes in at once unless the caller says the frame
+        // flies in; an open player keeps how it came, not to come in again.
+        if !(self.state.playing && self.state.expanded) {
+            self.state.player.flies_in = false;
+            self.state.player.arriving = false;
+        }
         self.state.playing = true;
         self.state.expanded = true;
         self.state.paused = false;
@@ -740,6 +746,7 @@ impl erika::Commands for ErikaEngine {
         still: MediaSource,
         progress: f64,
         source: MediaSource,
+        from_stage: bool,
     ) -> Result<(), CommandError> {
         if source.url.is_empty() {
             self.notify(Notice::NoEpisodeFile);
@@ -747,12 +754,17 @@ impl erika::Commands for ErikaEngine {
         }
         let (file, fingerprint) = self.identify(&source);
         let (start, saved) = self.saved_position(file);
+        let entering = !(self.state.playing && self.state.expanded);
         self.start(
             title,
             PlayingNote::Episode { episode },
             still,
             if file.is_some() { saved } else { progress },
         );
+        if entering {
+            self.state.player.flies_in = from_stage;
+            self.state.player.arriving = from_stage;
+        }
         self.file = file;
         self.prepare_queue(&source);
         self.load(Some(source.clone()), start);
@@ -806,9 +818,13 @@ impl erika::Commands for ErikaEngine {
     }
 
     #[cfg(feature = "bern-module-library")]
-    fn open_library_show(&mut self, id: i64) -> Result<(), CommandError> {
+    fn open_library_show(&mut self, id: i64, home: bool) -> Result<(), CommandError> {
         #[cfg(feature = "bern-module-anime")]
-        erika_anime_protocol::anime::calls::open_from_library(id);
+        if home {
+            erika_anime_protocol::anime::calls::open(id);
+        } else {
+            erika_anime_protocol::anime::calls::open_from_library(id);
+        }
         Ok(())
     }
 
@@ -837,12 +853,23 @@ impl erika::Commands for ErikaEngine {
         self.capture_still();
         self.state.expanded = false;
         self.state.player.panel = false;
+        self.state.player.arriving = false;
         Ok(())
     }
 
     fn expand(&mut self) -> Result<(), CommandError> {
         self.require_playing()?;
+        // The mini player's picture flies into the frame.
+        if !self.state.expanded {
+            self.state.player.flies_in = true;
+            self.state.player.arriving = true;
+        }
         self.state.expanded = true;
+        Ok(())
+    }
+
+    fn arrive(&mut self) -> Result<(), CommandError> {
+        self.state.player.arriving = false;
         Ok(())
     }
 
@@ -853,6 +880,7 @@ impl erika::Commands for ErikaEngine {
         }
         self.state.playing = false;
         self.state.expanded = false;
+        self.state.player.arriving = false;
         self.unload();
         Ok(())
     }
@@ -1219,15 +1247,35 @@ mod tests {
                 still(),
                 0.35,
                 MediaSource::new("file:///Videos/frieren-04.mkv"),
+                false,
             )
             .unwrap();
         assert!(engine.state.playing && engine.state.expanded);
+        assert!(!engine.state.player.flies_in);
         assert_eq!(engine.state.elapsed.floor(), 8.0 * 60.0 + 29.0);
         assert_eq!(engine.state.subtitle, PlayingNote::Episode { episode: 4 });
         engine.minimize().unwrap();
         assert!(engine.state.playing && !engine.state.expanded);
+        // The mini player's picture flies back into the frame, and the
+        // player keeps coming in that way while it is open.
         engine.expand().unwrap();
-        assert!(engine.state.expanded);
+        assert!(engine.state.expanded && engine.state.player.flies_in);
+        // The page keeps its bars and the mini player its place until the
+        // frame has landed.
+        assert!(engine.state.player.arriving);
+        engine.arrive().unwrap();
+        assert!(!engine.state.player.arriving);
+        engine
+            .play(
+                "葬送的芙莉莲".into(),
+                5,
+                still(),
+                0.0,
+                MediaSource::new("file:///Videos/frieren-05.mkv"),
+                false,
+            )
+            .unwrap();
+        assert!(engine.state.player.flies_in);
         engine.close_player().unwrap();
         assert!(!engine.state.playing);
     }

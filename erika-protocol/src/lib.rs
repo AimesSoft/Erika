@@ -827,6 +827,13 @@ pub mod erika {
         pub has_previous: bool,
         pub has_next: bool,
         pub panel: bool,
+        /// The frame flew in from the mini player or the home page's
+        /// stage: the player comes in once the picture has landed. Kept
+        /// while the player stays open.
+        pub flies_in: bool,
+        /// While the frame flies in, the page under it keeps the window's
+        /// bars and the mini player's place, so it does not move.
+        pub arriving: bool,
         pub tab: PlayerTab,
         pub episode: i64,
         pub episodes: bool,
@@ -1181,7 +1188,9 @@ pub mod erika {
         /// recent ones.
         fn return_to_frame(&mut self) -> Result<(), CommandError>;
 
-        /// Play what a module asks for, such as the next episode.
+        /// Play what a module asks for, such as the next episode;
+        /// `from_stage` when the home page's stage asked, whose picture
+        /// flies into the frame.
         #[cfg_attr(feature = "bern-module-anime", on(anime::play))]
         fn play(
             &mut self,
@@ -1190,6 +1199,7 @@ pub mod erika {
             still: MediaSource,
             progress: f64,
             source: MediaSource,
+            from_stage: bool,
         ) -> Result<(), CommandError>;
 
         /// Play a download: its file once done, a stream of it while it
@@ -1214,10 +1224,11 @@ pub mod erika {
         #[on(downloads::finished)]
         fn download_finished(&mut self, folder: MediaSource) -> Result<(), CommandError>;
 
-        /// Open a library poster using the optional anime details page.
+        /// Open a library poster using the optional anime details page,
+        /// over the home page when it was opened there.
         #[cfg(feature = "bern-module-library")]
         #[on(library::open_show)]
-        fn open_library_show(&mut self, id: i64) -> Result<(), CommandError>;
+        fn open_library_show(&mut self, id: i64, home: bool) -> Result<(), CommandError>;
 
         /// The library matched or removed videos: the anime pages show the
         /// files anew.
@@ -1244,6 +1255,10 @@ pub mod erika {
 
         /// Grow the mini player back into the player.
         fn expand(&mut self) -> Result<(), CommandError>;
+
+        /// The frame that flew in has landed under the player: the window
+        /// takes on playback's bars and the mini player leaves.
+        fn arrive(&mut self) -> Result<(), CommandError>;
 
         /// Stop playing.
         fn close_player(&mut self) -> Result<(), CommandError>;

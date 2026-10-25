@@ -182,6 +182,21 @@ pub(crate) fn numbered(details: &Details) -> Vec<(i64, i64)> {
         .collect()
 }
 
+/// The file of the episode numbered `number` with dandanplay id `id` (0
+/// when unknown): found by its id, since dandanplay may number a later
+/// season on from the first (29, 30, …) while its ids count from 1.
+pub(crate) fn file_of(files: &[EpisodeFile], number: i64, id: i64) -> Option<&EpisodeFile> {
+    files.iter().find(|file| {
+        if id == 0 || erika_dandanplay::bangumi::subject_id(id).is_some() {
+            // A verified subject mapping keeps local episode progress when
+            // details came from Bangumi instead of dandanplay.
+            file.episode.number == number
+        } else {
+            file.episode.dandanplay_id == id
+        }
+    })
+}
+
 /// The film of the details page, and the episode to watch next: the one
 /// after the last the user watched, to the end here or as `marked`
 /// (here or on an account).
@@ -199,17 +214,7 @@ pub fn film(
             .map(|file| (file.episode.number, file.episode.dandanplay_id))
             .collect(),
     };
-    let file_of = |number: i64, id: i64| {
-        files.iter().find(|file| {
-            if id == 0 || erika_dandanplay::bangumi::subject_id(id).is_some() {
-                // A verified subject mapping keeps local episode progress when
-                // details came from Bangumi instead of dandanplay.
-                file.episode.number == number
-            } else {
-                file.episode.dandanplay_id == id
-            }
-        })
-    };
+    let file_of = |number: i64, id: i64| file_of(files, number, id);
     let watched = |number: i64, id: i64| {
         marked.contains(&number)
             || file_of(number, id).is_some_and(|file| progress(file) >= WATCHED)

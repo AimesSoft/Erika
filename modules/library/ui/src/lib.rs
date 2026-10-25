@@ -515,7 +515,7 @@ pub fn library_card(
                         }
                     }
                 }
-            } => library.open(poster.id)
+            } => library.open_recent(poster.id)
             Canvas(height: 8)
             Text(content: poster.title, style: headline, lines: 2, line_height: 19)
             if status {

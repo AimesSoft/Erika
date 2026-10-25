@@ -268,6 +268,12 @@ style! {
         controls_out: slide(bottom, 8, snappy),
         top_bar_in: slide(top, 8, bouncy),
         top_bar_out: slide(top, 8, snappy),
+        // What liberika plays cannot fly with the frame (`.x-player .cv`):
+        // the still grows into place over the dark ground, then the video
+        // fades in over it (`video_in` with `appear_delay: 0.4`).
+        video_in: fade(snappy),
+        // The player around a frame that flew in (`flies_in`).
+        player_in: fade(snappy),
         // Pure playback (`renderIdle`): the empty frame grows from 0.96 on a
         // jelly spring; the recent videos rise 10 points one after another.
         pure_frame_in: pop(from: 0.96, jelly),
@@ -651,7 +657,7 @@ pub fn app(
 ) -> impl View {
     ui! {
         WindowSet(handle: AppWindows, primary: main, accent: app.accent, appearance: app.appearance, icon: app.app_icon) {
-            Window(id: main, title: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, initial: open, width: 1280, height: 800, min_width: 720, min_height: 480, chrome: unified, idle_after: 3, idle_enabled: app.playing && app.expanded && !app.paused && !app.player.panel, immersive: app.playing && app.expanded, landscape: app.playing && app.expanded) {
+            Window(id: main, title: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, initial: open, width: 1280, height: 800, min_width: 720, min_height: 480, chrome: unified, idle_after: 3, idle_enabled: app.playing && app.expanded && !app.player.panel, immersive: app.playing && app.expanded && !app.player.arriving, landscape: app.playing && app.expanded) {
                 main_window(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, #[cfg(feature = "bern-module-downloads")] download_module: download_module, windows: windows, players: players)
             }
             Window(id: settings, title: tr! { "zh-Hans" => "设置", "en" => "Settings" }, width: 1000, height: 660, min_width: 1000, min_height: 660, chrome: standard) {
@@ -709,6 +715,8 @@ pub fn main_window(
     ui! {
         Stack(variant: app_window, reduce_motion: app.preferences.reduce_motion) {
             Timer(interval: 0.25, enabled: app.playing) => app.player_tick()
+            // The frame that flew in has landed by now, under the player.
+            Timer(interval: 0.6, enabled: app.player.arriving) => app.arrive()
             if build.modules.account && app.features.account {
                 Timer(interval: 60, enabled: app.bangumi.signed_in) => app.check_bangumi_session()
             }
@@ -781,7 +789,9 @@ pub fn main_shell(
                         SidebarItem(value: MainPage::Downloads, label: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, icon: "arrow.down.circle", badge: download_module.active_count)
                     }
                     SidebarFooter {
-                        if app.playing && !app.expanded {
+                        // The mini player keeps its place while its picture
+                        // flies into the frame, so the sidebar does not move.
+                        if app.playing && (!app.expanded || app.player.arriving) {
                             mini_player(app: app, players: players)
                         }
                         Row(gap: 10, align: center) {
@@ -830,6 +840,13 @@ pub fn main_shell(
                     Stack(appear: fade, disappear: fade) {
                         player(app: app, players: players, windows: windows)
                     }
+                } else if app.player.flies_in {
+                    // The picture flies from the mini player or the stage
+                    // over the page it leaves; the player comes in around
+                    // it as it lands.
+                    Stack(appear: player_in, appear_delay: 0.3) {
+                        player(app: app, players: players, windows: windows)
+                    }
                 } else {
                     player(app: app, players: players, windows: windows)
                 }
@@ -863,9 +880,9 @@ pub fn mini_player(app: erika::Client, players: Players) -> impl View {
                     Image(source: app.still, width: 208, height: 117, corner: card, fit: cover, label: app.title, hero: frame, hero_key: app.title)
                     // What liberika plays shows here while the frame is
                     // shrunk.
-                    if app.video {
+                    if app.video && !app.expanded {
                         Stack(width: 208, height: 117) {
-                            Video(id: mini_video, player: players.video, label: app.title, controls: none, corner: card)
+                            Video(id: mini_video, player: players.video, label: app.title, controls: none, corner: card, appear: video_in, appear_delay: 0.4)
                         }
                     }
                     Rail {

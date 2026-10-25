@@ -1223,8 +1223,9 @@ fn typed(text: &str) -> Option<i64> {
     text.trim().parse().ok().filter(|number| *number > 0)
 }
 
-impl library::Commands for LibraryEngine {
-    fn open(&mut self, id: i64) -> Result<(), CommandError> {
+impl LibraryEngine {
+    /// Open poster `id`, from the home page when `home`.
+    fn open_poster(&mut self, id: i64, home: bool) -> Result<(), CommandError> {
         let show = self
             .state
             .posters
@@ -1234,8 +1235,18 @@ impl library::Commands for LibraryEngine {
             .ok_or_else(|| CommandError::new("unknown_show", "unknown library show"))?;
         self.state.show = show;
         self.state.opened = id;
-        library::emit::open_show(id);
+        library::emit::open_show(id, home);
         Ok(())
+    }
+}
+
+impl library::Commands for LibraryEngine {
+    fn open(&mut self, id: i64) -> Result<(), CommandError> {
+        self.open_poster(id, false)
+    }
+
+    fn open_recent(&mut self, id: i64) -> Result<(), CommandError> {
+        self.open_poster(id, true)
     }
 
     fn close(&mut self) -> Result<(), CommandError> {

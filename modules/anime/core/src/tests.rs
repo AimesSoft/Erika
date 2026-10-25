@@ -394,3 +394,52 @@ fn marks_written_by_another_engine_show_after_history_changed() {
     assert_eq!(engine.state.show.status, WatchStatus::Watched);
     assert_eq!(engine.state.my_score, Score::Seven);
 }
+
+#[test]
+fn a_later_season_numbered_on_plays_the_files_its_film_shows() {
+    // dandanplay numbers the second season on from the first (29, 30, …);
+    // its episode ids, and the numbers of the files matched to them, count
+    // from 1.
+    let mut engine = AnimeEngine::default();
+    let frieren = Anime {
+        dandanplay_id: 18886,
+        title: "葬送的芙莉莲 第二季".into(),
+        image: String::new(),
+    };
+    let url = "file:///v/s2-01.mkv";
+    let file = engine
+        .db
+        .opened(
+            url,
+            Some(&Fingerprint {
+                md5: "s2".into(),
+                size: 1,
+            }),
+        )
+        .unwrap();
+    engine.db.link_episode(
+        file,
+        &frieren,
+        &Episode {
+            dandanplay_id: 188_860_001,
+            number: 1,
+            title: String::new(),
+        },
+        false,
+    );
+    let mut later = details(18886, 4);
+    for (index, episode) in later.episodes.iter_mut().enumerate() {
+        episode.episode_number = (29 + index).to_string();
+    }
+    engine.details.insert(18886, later);
+    engine.open(18886).unwrap();
+    assert_eq!(engine.state.episodes[0].number, 29);
+    assert_eq!(engine.state.episodes[0].note, anime::EpisodeNote::Unwatched);
+    let id = engine.numbered(18886)[0].1;
+    let files = engine.db.episode_files(18886);
+    assert_eq!(
+        shows::file_of(&files, 29, id).map(|file| file.url.as_str()),
+        Some(url)
+    );
+    engine.play_episode(29).unwrap();
+}

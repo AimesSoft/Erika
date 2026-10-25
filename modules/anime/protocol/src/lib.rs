@@ -391,7 +391,8 @@ pub mod anime {
     pub trait Events {
         /// The user asked to play episode `episode` of a show, from the
         /// file at `source` (empty when the user has none of it); the
-        /// shell's player answers.
+        /// shell's player answers. `from_stage`: asked on the home page's
+        /// stage, whose picture flies into the player's frame.
         fn play(
             &self,
             title: String,
@@ -399,6 +400,7 @@ pub mod anime {
             still: MediaSource,
             progress: f64,
             source: MediaSource,
+            from_stage: bool,
         );
     }
 
