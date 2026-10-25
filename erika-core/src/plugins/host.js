@@ -197,12 +197,12 @@ var extend = {
     __host.call('extendDownloadQuickSelect', [enabled !== false]);
     return true;
   },
-  // Measure the first seconds of each video opened: an `openingProfiled`
-  // event brings { url, frames: [{ time, red, green, blue, luma, dark,
-  // white, red_share }] } where liberika plays.
-  openingProfile: function (enabled) {
+  // Measure the first `seconds` (10 unless given, at most 60) of each video
+  // opened: an `openingProfiled` event brings { url, frames: [{ time, red,
+  // green, blue, luma, dark, white, red_share }] } where liberika plays.
+  openingProfile: function (enabled, seconds) {
     if (!__host.has('player.control')) return false;
-    __host.call('extendOpeningProfile', [enabled !== false]);
+    __host.call('extendOpeningProfile', [enabled !== false, Number(seconds) || 10]);
     return true;
   },
   // A button on each episode of a show's details that marks it watched.

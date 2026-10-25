@@ -204,7 +204,9 @@ fn erikas_own_plugins_install_and_load() {
     let extended = engine.plugins.extensions();
     println!("{extended:?}");
     assert!(extended.speeds.contains(&5.0) && extended.speeds.contains(&0.25));
-    assert!(extended.hex_input && extended.watched_button && extended.quick_select && extended.opening);
+    assert!(extended.hex_input && extended.watched_button && extended.quick_select);
+    // The automatic offset looks past Netflix's ident and the black after it.
+    assert_eq!(extended.opening, 30.0);
     assert_eq!(extended.colors.len(), 9);
     assert!(engine.state.speeds.iter().any(|speed| speed.label == "5.0×"));
     assert!(engine.state.speeds.iter().any(|speed| speed.label == "0.25×"));

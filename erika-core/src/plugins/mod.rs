@@ -81,6 +81,10 @@ impl Saved {
 /// The plugins' part of the database's extensions.
 const EXTENSION: &str = "plugins";
 
+/// How much of a video's opening `extend.openingProfile` measures when the
+/// plugin does not say.
+const OPENING_SECONDS: f64 = 10.0;
+
 /// What a running plugin added to Erika's controls (`extend`).
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct Extensions {
@@ -90,7 +94,9 @@ pub(crate) struct Extensions {
     pub hex_input: bool,
     pub watched_button: bool,
     pub quick_select: bool,
-    pub opening: bool,
+    /// How many seconds of each video's opening to measure, 0 when no
+    /// plugin asked.
+    pub opening: f64,
 }
 
 /// An installed plugin.
@@ -238,7 +244,7 @@ impl Plugins {
             all.hex_input |= extension.hex_input;
             all.watched_button |= extension.watched_button;
             all.quick_select |= extension.quick_select;
-            all.opening |= extension.opening;
+            all.opening = all.opening.max(extension.opening);
         }
         all
     }
@@ -768,7 +774,12 @@ impl ErikaEngine {
                 self.apply_extensions();
             }
             "extendOpeningProfile" if pack.has("player.control") => {
-                self.plugins.extensions.entry(id.into()).or_default().opening = flag(0);
+                let seconds = args.get(1).and_then(Value::as_f64).unwrap_or(OPENING_SECONDS);
+                self.plugins.extensions.entry(id.into()).or_default().opening = if flag(0) {
+                    seconds.clamp(1.0, 60.0)
+                } else {
+                    0.0
+                };
             }
             "extendDownloadQuickSelect" if pack.has("library.read") => {
                 self.plugins.extensions.entry(id.into()).or_default().quick_select = flag(0);
@@ -908,7 +919,8 @@ impl ErikaEngine {
     /// Measure the first seconds of what opened, when a running plugin
     /// asked to: only where liberika plays files.
     pub(crate) fn profile_opening(&mut self) {
-        if !self.plugins.extensions().opening {
+        let seconds = self.plugins.extensions().opening;
+        if seconds <= 0.0 {
             return;
         }
         let Some(url) = self.source.as_ref().map(|source| source.url.clone()) else {
@@ -916,12 +928,12 @@ impl ErikaEngine {
         };
         #[cfg(target_os = "macos")]
         in_background(&self.plugins.inbox, move || {
-            let profile = liberika::opening::opening_profile(&url, 10.0, 4.0)
+            let profile = liberika::opening::opening_profile(&url, seconds, 4.0)
                 .map(|frames| json!(frames));
             vec![Done::Opening(url, profile)]
         });
         #[cfg(not(target_os = "macos"))]
-        let _ = url;
+        let _ = (url, seconds);
     }
 
     /// What plays, as `videoLoaded`, `play` and `pause` describe it.
