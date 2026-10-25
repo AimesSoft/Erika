@@ -534,6 +534,20 @@ pub fn settings_general(app: erika::Client) -> impl View {
 pub fn settings_appearance(app: erika::Client) -> impl View {
     ui! {
         Form(title: tr! { "zh-Hans" => "外观", "en" => "Appearance" }, variant: settings_form, appear: settings_page_in) {
+            appearance_accent(app: app)
+            appearance_mode(app: app)
+            // The television's icon cannot change.
+            if !window.tv {
+                app_icon_choices(app: app)
+            }
+        }
+    }
+}
+
+/// 「主题色」 of Appearance, on the desktop's page and the phone's.
+#[component]
+pub fn appearance_accent(app: erika::Client) -> impl View {
+    ui! {
             Section(title: tr! { "zh-Hans" => "主题色", "en" => "Accent color" }) {
                 Row(gap: 12, align: center) {
                     Column(gap: 1) {
@@ -597,6 +611,13 @@ pub fn settings_appearance(app: erika::Client) -> impl View {
                     }
                 }
             }
+    }
+}
+
+/// 「明暗」 and reduced motion of Appearance.
+#[component]
+pub fn appearance_mode(app: erika::Client) -> impl View {
+    ui! {
             Section(title: tr! { "zh-Hans" => "外观", "en" => "Appearance" }) {
                 Picker(id: appearance, label: tr! { "zh-Hans" => "明暗", "en" => "Appearance" }, selected: app.appearance, style: segmented) => app.set_appearance(app.appearance)
                 Row(gap: 12, align: center) {
@@ -608,7 +629,67 @@ pub fn settings_appearance(app: erika::Client) -> impl View {
                     Switch(id: reduce_motion, label: tr! { "zh-Hans" => "减少动态效果", "en" => "Reduce motion" }, checked: app.preferences.reduce_motion, style: switch, label_hidden: true) => app.set_preference("reduce_motion", app.preferences.reduce_motion)
                 }
             }
+    }
+}
+
+/// 「应用图标」 in the desktop's Appearance: the icons the system can show,
+/// as GitHub lists its own. The phone's Appearance pushes them as a page.
+#[component]
+pub fn app_icon_choices(app: erika::Client) -> impl View {
+    ui! {
+        Section(title: tr! { "zh-Hans" => "应用图标", "en" => "App Icon" }) {
+            app_icon_default(app: app)
+            app_icon_skin(app: app)
         }
+    }
+}
+
+/// The phone's 「应用图标」 page, pushed from Appearance; the page's title
+/// names the list.
+#[component]
+pub fn settings_app_icon(app: erika::Client) -> impl View {
+    ui! {
+        Form(title: tr! { "zh-Hans" => "应用图标", "en" => "App Icon" }, variant: settings_form, appear: settings_page_in) {
+            Section {
+                app_icon_default(app: app)
+                app_icon_skin(app: app)
+            }
+        }
+    }
+}
+
+/// One icon of the list: the picture on its plate, its name, a check by
+/// the one shown.
+#[component]
+pub fn app_icon_default(app: erika::Client) -> impl View {
+    ui! {
+        Button(id: app_icon_default, label: tr! { "zh-Hans" => "默认", "en" => "Default" }, variant: row) {
+            Row(gap: if window.compact { 14.0 } else { 12.0 }, align: center) {
+                Image(source: "design/brand/erika-icon-export/png/app-thumb/erika-app-thumb-256.png", width: if window.compact { 56.0 } else { 40.0 }, height: if window.compact { 56.0 } else { 40.0 }, label: tr! { "zh-Hans" => "默认图标", "en" => "Default icon" })
+                Text(content: tr! { "zh-Hans" => "默认", "en" => "Default" }, style: body)
+                Spacer
+                if app.app_icon == AppIcon::Default {
+                    Stack(variant: app_icon_check) { Label(title: tr! { "zh-Hans" => "正在使用", "en" => "In use" }, icon: "checkmark", display: icon, font_size: 19) }
+                }
+            }
+        }
+        => app.set_app_icon(AppIcon::Default)
+    }
+}
+#[component]
+pub fn app_icon_skin(app: erika::Client) -> impl View {
+    ui! {
+        Button(id: app_icon_skin, label: tr! { "zh-Hans" => "肤色", "en" => "Skin" }, variant: row) {
+            Row(gap: if window.compact { 14.0 } else { 12.0 }, align: center) {
+                Image(source: "design/brand/erika-icon-export/skin/png/app-thumb/erika-app-thumb-256.png", width: if window.compact { 56.0 } else { 40.0 }, height: if window.compact { 56.0 } else { 40.0 }, label: tr! { "zh-Hans" => "肤色图标", "en" => "Skin icon" })
+                Text(content: tr! { "zh-Hans" => "肤色", "en" => "Skin" }, style: body)
+                Spacer
+                if app.app_icon == AppIcon::Skin {
+                    Stack(variant: app_icon_check) { Label(title: tr! { "zh-Hans" => "正在使用", "en" => "In use" }, icon: "checkmark", display: icon, font_size: 19) }
+                }
+            }
+        }
+        => app.set_app_icon(AppIcon::Skin)
     }
 }
 #[component]

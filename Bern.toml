@@ -11,17 +11,32 @@ name = { "zh-Hans" = "Erika", "en" = "Erika" }
 # publisher = "Your Name"
 
 # The application icon of the design (design/brand/erika-icon.html), each
-# platform in its own form as `build.py` exports it; the round icon for
-# anything else.
+# platform in its own form as `build.py` exports it: the main logo on a
+# white plate (black in dark mode) where the system gives icons a shape,
+# the main logo itself for anything else. macOS and iOS take the Icon
+# Composer document: Liquid Glass from 26 on, flat images drawn from it
+# before.
 [app.icon]
-default = "design/brand/erika-icon-export/png/circle/erika-circle-1024.png"
-macos = "design/brand/erika-icon-export/macos/Erika.icns"
-ios = "design/brand/erika-icon-export/ios/AppIcon.appiconset"
+default = "design/brand/erika-icon-export/logo/erika-logo-icon-1024.png"
+macos = "design/brand/erika-icon-export/apple/Erika.icon"
+ios = "design/brand/erika-icon-export/apple/Erika.icon"
 tvos = "design/brand/erika-icon-export/tvos/Erika.brandassets"
 windows = "design/brand/erika-icon-export/windows/erika.ico"
 linux = "design/brand/erika-icon-export/linux/hicolor"
 android = "design/brand/erika-icon-export/android/res"
 browser = "design/brand/erika-icon-export/web"
+
+# 「肤色」, the icon Settings > Appearance > App Icon switches to
+# (`AppIcon::Skin`): the same logo with a skin-toned face. The television
+# keeps the primary icon.
+[app.alternate_icons.skin]
+default = "design/brand/erika-icon-export/skin/logo/erika-logo-icon-1024.png"
+macos = "design/brand/erika-icon-export/skin/apple/Erika.icon"
+ios = "design/brand/erika-icon-export/skin/apple/Erika.icon"
+windows = "design/brand/erika-icon-export/skin/windows/erika.ico"
+linux = "design/brand/erika-icon-export/skin/linux/hicolor"
+android = "design/brand/erika-icon-export/skin/android/res"
+browser = "design/brand/erika-icon-export/skin/web"
 
 [languages]
 supported = ["zh-Hans", "en"]
@@ -49,7 +64,7 @@ expanded_below = 1440
 # The primary logo and monochrome brand mark, plus the still of the downloads'
 # sample media.
 [resources]
-paths = ["design/assets/icon.png", "erika-ui/assets/erika-wordmark.png", "design/brand/erika-icon-export/logo/erika-logo-icon-512.png", "design/brand/erika-icon-animated.svg", "design/brand/erika-icon-export/logo/erika-logo-icon.svg", "design/brand/erika-icon-export/png/mono-black/erika-mono-black-128.png", "design/brand/erika-icon-export/svg/erika-mono-white.svg", "design/assets/still1.jpg"]
+paths = ["design/assets/icon.png", "erika-ui/assets/erika-wordmark.png", "design/brand/erika-icon-export/logo/erika-logo-icon-512.png", "design/brand/erika-icon-animated.svg", "design/brand/erika-icon-export/logo/erika-logo-icon.svg", "design/brand/erika-icon-export/png/mono-black/erika-mono-black-128.png", "design/brand/erika-icon-export/svg/erika-mono-white.svg", "design/assets/still1.jpg", "design/brand/erika-icon-export/png/app-thumb/erika-app-thumb-256.png", "design/brand/erika-icon-export/skin/png/app-thumb/erika-app-thumb-256.png"]
 
 # `channels = ["ipc"]` lets the generated command line and MCP server drive
 # the running app. Remove it to ship an app that listens to nothing.

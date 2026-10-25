@@ -449,6 +449,8 @@ style! {
 
     // The phone's way back (`.x-pback`): the accent, as iOS's.
     Stack.phone_back { foreground: accent }
+    // The check by the app icon in use (`.x-icon-on`).
+    Stack.app_icon_check { foreground: accent }
 
     // The phone's cards (`.ph-cards`): the thumbnail clips its progress to
     // its 12-point corners.
@@ -648,7 +650,7 @@ pub fn app(
     #[session] pure: PureDraft,
 ) -> impl View {
     ui! {
-        WindowSet(handle: AppWindows, primary: main, accent: app.accent, appearance: app.appearance) {
+        WindowSet(handle: AppWindows, primary: main, accent: app.accent, appearance: app.appearance, icon: app.app_icon) {
             Window(id: main, title: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, initial: open, width: 1280, height: 800, min_width: 720, min_height: 480, chrome: unified, idle_after: 3, idle_enabled: app.playing && app.expanded && !app.paused && !app.player.panel, immersive: app.playing && app.expanded, landscape: app.playing && app.expanded) {
                 main_window(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, #[cfg(feature = "bern-module-downloads")] download_module: download_module, windows: windows, players: players)
             }

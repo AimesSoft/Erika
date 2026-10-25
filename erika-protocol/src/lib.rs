@@ -31,6 +31,16 @@ pub mod erika {
         Dark,
     }
 
+    /// The icon the system shows for the app, chosen in Appearance:
+    /// `Default` is `[app.icon]`, `Skin` is `[app.alternate_icons.skin]`.
+    #[value]
+    pub enum AppIcon {
+        #[label(tr! { "zh-Hans" => "默认", "en" => "Default" })]
+        Default,
+        #[label(tr! { "zh-Hans" => "肤色", "en" => "Skin" })]
+        Skin,
+    }
+
     #[value]
     pub enum SettingsPage {
         #[label(tr! { "zh-Hans" => "通用", "en" => "General" })]
@@ -968,6 +978,7 @@ pub mod erika {
         pub has_download_suggestions: bool,
         pub accent: Accent,
         pub appearance: Appearance,
+        pub app_icon: AppIcon,
         /// The version the app is, as Bern.toml names it.
         #[content]
         pub version: String,
@@ -1328,6 +1339,7 @@ pub mod erika {
         fn dismiss_bangumi_expired(&mut self) -> Result<(), CommandError>;
 
         fn set_appearance(&mut self, appearance: Appearance) -> Result<(), CommandError>;
+        fn set_app_icon(&mut self, icon: AppIcon) -> Result<(), CommandError>;
 
         /// Open an http(s) address in the system's browser.
         #[errors("invalid_url", "platform_unavailable")]

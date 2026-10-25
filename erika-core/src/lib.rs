@@ -230,6 +230,7 @@ impl Default for ErikaEngine {
 
                 accent: Accent::Crimson,
                 appearance: Appearance::System,
+                app_icon: AppIcon::Default,
                 version: env!("CARGO_PKG_VERSION").into(),
                 player: player::initial(),
                 matching: matching::initial(),
@@ -267,6 +268,10 @@ impl Default for ErikaEngine {
         engine.restore_welcome_preferences();
         engine.restore_playback_preferences();
         engine.restore_shortcuts();
+        engine.state.app_icon = match engine.db.setting("appearance.icon").as_deref() {
+            Some("Skin") => AppIcon::Skin,
+            _ => AppIcon::Default,
+        };
         engine.state.player.subtitle_supersampling =
             engine.db.setting("subtitle_supersampling").as_deref() != Some("false");
         engine.state.player.skip_intro =
@@ -1115,6 +1120,12 @@ impl erika::Commands for ErikaEngine {
     fn set_appearance(&mut self, appearance: Appearance) -> Result<(), CommandError> {
         self.state.appearance = appearance;
         self.save_welcome_preferences()?;
+        Ok(())
+    }
+    fn set_app_icon(&mut self, icon: AppIcon) -> Result<(), CommandError> {
+        self.db
+            .set_setting("appearance.icon", Some(&format!("{icon:?}")));
+        self.state.app_icon = icon;
         Ok(())
     }
     fn open_url(&mut self, url: String) -> Result<(), CommandError> {

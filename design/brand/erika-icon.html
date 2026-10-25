@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Erika 图标</title>
-<meta name="description" content="Erika 软件图标定稿：蓝发齐刘海的猫耳女孩，和 Bern 的图标是一对。主 logo、各平台版本、单色版和文件；页尾保留第一版草稿。">
+<meta name="description" content="Erika 图标定稿：蓝发齐刘海的猫耳女孩，和 Bern 的图标是一对。主 logo、白底的软件图标、苹果 26 液态玻璃、单色版和文件；页尾保留上一版满版图标和第一版草稿。">
 <link rel="icon" href="../assets/icon.png">
 <link rel="stylesheet" href="../doc.css">
 <style>
@@ -107,7 +107,38 @@
   .fx-anim object { display: block; width: min(300px, 70%); aspect-ratio: 1; height: auto; }
   .fx-replay { margin-top: 14px; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font: inherit; font-size: 14px; font-weight: 600; color: var(--text); cursor: pointer; }
   .fx-steps { margin: 14px 0 0; padding-left: 20px; color: var(--text-2); font-size: 14px; line-height: 1.8; }
-  @media (max-width: 760px) { .fx-hero, .fx-mono, .fx-anim { grid-template-columns: 1fr; } }
+
+  /* 试验：logo 放进白底、黑底 */
+  .pl-cmp { display: grid; gap: 16px; }
+  .pl-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 30px 18px 20px; border-radius: 24px; background: #D9DEE6; }
+  .pl-row.dkbg { background: #23262E; }
+  .pl-row figure { margin: 0; text-align: center; font-size: 12px; font-weight: 600; color: #4a4f5a; }
+  .pl-row.dkbg figure { color: #9a9ea8; }
+  .pl-row .pl-ic { display: grid; place-items: center; width: min(260px, 100%); aspect-ratio: 1; margin: 0 auto 6px; }
+  .pl-row .pl-ic img { display: block; width: 80.5%; height: auto; border-radius: 22.37%; }   /* 和 macOS 底板（824/1024）一样大 */
+  .pl-row .pl-ic img.m { width: 100%; border-radius: 0; }
+  .pl-row .pl-ic img.lg { border-radius: 0; }
+  .pl-row.c4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  @media (max-width: 760px) { .pl-row.c4 { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 14px; } }
+  .pl-sizes { display: grid; grid-template-columns: auto repeat(4, auto); justify-content: start; align-items: end; gap: 14px 26px; margin-top: 16px; padding: 22px 26px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); font-size: 12px; color: var(--text-3); }
+  .pl-sizes img { display: block; height: auto; }
+  .pl-sizes .k { align-self: center; font-weight: 600; }
+  .pl-phones { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 16px; }
+  .pl-phones .ek-phone { width: 300px; }
+  .pl-phones .app img { display: block; width: 54px; height: 54px; margin: 0 auto 6px; border-radius: 22.37%; }
+
+  /* 试验：液态玻璃 */
+  .gl-set { padding: 22px 20px 18px; border-radius: 22px; background: var(--surface); border: 1px solid var(--line); margin-top: 16px; }
+  .gl-modes { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px 12px; }
+  .gl-modes figure { margin: 0; text-align: center; font-size: 12px; color: var(--text-3); }
+  .gl-modes img { display: block; width: 100%; height: auto; margin: 0 auto 6px; border-radius: 22.37%; }
+  .gl-hero { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .gl-hero .st { border-radius: 24px; display: grid; place-items: center; padding: 44px 24px 20px; background: linear-gradient(160deg, #CBD5E6, #E9D9E3); }
+  .gl-hero .st.dkbg { background: linear-gradient(160deg, #1B2233, #2B1E2C); }
+  .gl-hero img { width: min(240px, 70%); height: auto; }
+  .gl-hero .lb { font-size: 12px; font-weight: 600; color: #4a4f5a; margin-top: 16px; }
+  .gl-hero .st.dkbg .lb { color: #9a9ea8; }
+  @media (max-width: 760px) { .fx-hero, .fx-mono, .fx-anim, .gl-hero { grid-template-columns: 1fr; } .gl-modes { grid-template-columns: repeat(3, minmax(0, 1fr)); } .gl-set { padding: 18px 14px 14px; } .pl-row { padding: 22px 8px 14px; } .pl-sizes { gap: 12px 16px; padding: 18px 16px; } .pl-phones .ek-phone { width: 100%; max-width: 320px; } }
   @media (max-width: 900px) { .ek-ctx { grid-template-columns: 1fr; } .ek-phone { max-width: 320px; } }
   @media (max-width: 760px) {
     main.brand { padding: 28px 16px 100px; }
@@ -126,7 +157,7 @@
 <main class="brand">
   <div class="eyebrow"><span class="sailor"></span><b>品牌</b> Erika 图标 · 定稿</div>
   <h2>Erika 图标</h2>
-  <p class="lead2">蓝发齐刘海的猫耳女孩。蓝色的圆是头发，深色剪影是脸，同时也是一只猫：两只猫耳之间那道平直的边就是齐刘海。右耳歪戴一顶缎带粉的小帽（颜色取自原作绘梨花头饰的缎带），帽下垂着两根发带，米黄的竖发绳和品红的蝴蝶结圈。开发框架 Bern 的图标是黑猫和蓝发女孩，Erika 是 Bernkastel 的棋子，所以两个图标是一对。作者亲自设计，在<a href="icon-studio.html">图标工坊</a>里完成。</p>
+  <p class="lead2">蓝发齐刘海的猫耳女孩。蓝色的圆是头发，深色剪影是脸，同时也是一只猫：两只猫耳之间那道平直的边就是齐刘海。右耳歪戴一顶缎带粉的小帽（颜色取自原作绘梨花头饰的缎带），帽下垂着两根发带，米黄的竖发绳和品红的蝴蝶结圈。开发框架 Bern 的图标是黑猫和蓝发女孩，Erika 是 Bernkastel 的棋子，所以两个图标是一对。作者亲自设计，在<a href="icon-studio.html">图标工坊</a>里完成。软件图标就是这个 logo 放在纯白底上，深色外观是纯黑底。</p>
   <div class="ek-chips">
     <span><i style="background:#3E5BD8"></i>头发 #3E5BD8</span>
     <span><i style="background:#222B4F"></i>脸 · 猫 #222B4F</span>
@@ -135,6 +166,29 @@
     <span><i style="background:#D340AD"></i>蝴蝶结圈 #D340AD</span>
     <span><i style="background:#F3E1A9"></i>竖发绳 #F3E1A9</span>
   </div>
+
+  <h3 id="skin">备用图标：肤色</h3>
+  <p>在 设置 › 外观 › 应用图标 里可以换成这一款：形状和主图标完全一样，脸换成浅肤色 #FDE8DC，眼睛和嘴换成原来脸的深蓝 #222B4F。各平台的文件和主图标一样排在 <code>erika-icon-export/skin/</code> 下，由同一个导出脚本生成。</p>
+  <div class="pl-cmp">
+    <div class="pl-row c4">
+      <figure><span class="pl-ic"><img class="m" src="erika-icon-export/skin/macos/erika-macos.svg" alt=""></span>macOS</figure>
+      <figure><span class="pl-ic"><img src="erika-icon-export/skin/ios/AppIcon.appiconset/AppIcon.png" alt=""></span>iOS</figure>
+      <figure><span class="pl-ic"><img src="erika-icon-export/skin/preview/glass-Default.png" alt=""></span>液态玻璃</figure>
+      <figure><span class="pl-ic"><img class="lg" src="erika-icon-export/skin/logo/erika-logo-icon.svg" alt=""></span>Windows · Linux</figure>
+    </div>
+    <div class="pl-row c4 dkbg">
+      <figure><span class="pl-ic"><img class="m" src="erika-icon-export/skin/macos/erika-macos.svg" alt=""></span>macOS</figure>
+      <figure><span class="pl-ic"><img src="erika-icon-export/skin/ios/AppIcon.appiconset/AppIcon-dark.png" alt=""></span>iOS · 深色</figure>
+      <figure><span class="pl-ic"><img src="erika-icon-export/skin/preview/glass-Dark.png" alt=""></span>液态玻璃 · 深色</figure>
+      <figure><span class="pl-ic"><img class="lg" src="erika-icon-export/skin/logo/erika-logo-icon.svg" alt=""></span>Windows · Linux</figure>
+    </div>
+  </div>
+  <ul class="fx-steps">
+    <li>手机：设置 › 外观 里有「应用图标」一行，点进去是照 GitHub 做的列表，选中的一项打勾。电脑：外观页最下面直接列出两项。电视的图标不能换，不显示这一项。</li>
+    <li>iOS：换成系统的备用图标，系统会弹窗确认，主屏幕跟着换。安卓：离开 Erika 以后启动器入口才换成这一款（立刻换会把正在用的 App 关掉），启动器要过一会儿才刷新；手机开着「主题图标」时两款的单色层一样，看不出区别。</li>
+    <li>macOS：App 运行时程序坞里的图标换成这一款；关掉以后访达和程序坞仍显示主图标，因为永久改要改动已签名的应用包。Windows：窗口的标题栏、任务栏按钮和 Alt+Tab 换成这一款，exe 和快捷方式不变。Linux：窗口图标换成这一款，GNOME 在 Wayland 下的程序坞不跟着变。</li>
+    <li>液态玻璃里每组都不透明：半透明会让深蓝眼睛在肤色上冲成灰蓝；深色外观里脸层指定了自己的颜色，否则系统会把浅肤色提亮成白色。</li>
+  </ul>
 
   <h3>主 logo</h3>
   <p>对外展示用：README、官网、关于页、欢迎页。圆形，帽子不裁切、完整地伸出圆外，背景透明。</p>
@@ -173,22 +227,58 @@
   </ol>
   <p class="small muted">文件：<code>brand/erika-icon-animated.svg</code>（同 <code>erika-icon-export/logo/erika-logo-icon-animated.svg</code>），由导出脚本生成。双击的小动作靠 SVG 里的一小段脚本，要用 <code>&lt;object&gt;</code> 嵌入或直接打开才有；放进 <code>&lt;img&gt;</code>（比如 README）时只播出场动画。App 里用原生控件实现时照这三个动作做。</p>
 
-  <h3>各平台</h3>
-  <p>应用图标由各系统按自己的形状裁切，帽子伸出圆外的那一角会被切掉。安卓主题图标和 iOS 着色图标用单色层，系统按壁纸重新上色。</p>
-  <div class="fx-plat">
+  <h3 id="app">软件图标</h3>
+  <p>软件图标就是主 logo，原样缩小放进纯白底，深色外观换成纯黑底。头发的圆占底板宽度的 76%，圆心居中，帽子完整留在底板里。Windows、Linux 和网页标签页没有系统规定的形状，直接用透明背景的主 logo。</p>
+  <div class="pl-cmp">
+    <div class="pl-row">
+      <figure><span class="pl-ic"><img class="m" src="erika-icon-export/macos/erika-macos.svg" alt=""></span>macOS</figure>
+      <figure><span class="pl-ic"><img src="erika-icon-export/ios/AppIcon.appiconset/AppIcon.png" alt=""></span>iOS</figure>
+      <figure><span class="pl-ic"><img class="lg" src="erika-icon-export/logo/erika-logo-icon.svg" alt=""></span>Windows · Linux</figure>
+    </div>
+    <div class="pl-row dkbg">
+      <figure><span class="pl-ic"><img class="m" src="erika-icon-export/macos/erika-macos.svg" alt=""></span>macOS</figure>
+      <figure><span class="pl-ic"><img src="erika-icon-export/ios/AppIcon.appiconset/AppIcon-dark.png" alt=""></span>iOS · 深色</figure>
+      <figure><span class="pl-ic"><img class="lg" src="erika-icon-export/logo/erika-logo-icon.svg" alt=""></span>Windows · Linux</figure>
+    </div>
+  </div>
+  <div class="pl-sizes">
+    <span></span><span>128</span><span>64</span><span>32</span><span>16</span>
+    <span class="k">macOS</span><img src="erika-icon-export/macos/erika-macos.svg" width="128" alt=""><img src="erika-icon-export/macos/erika-macos.svg" width="64" alt=""><img src="erika-icon-export/macos/erika-macos.svg" width="32" alt=""><img src="erika-icon-export/macos/erika-macos.svg" width="16" alt="">
+    <span class="k">Windows · Linux</span><img src="erika-icon-export/logo/erika-logo-icon.svg" width="128" alt=""><img src="erika-icon-export/logo/erika-logo-icon.svg" width="64" alt=""><img src="erika-icon-export/logo/erika-logo-icon.svg" width="32" alt=""><img src="erika-icon-export/logo/erika-logo-icon.svg" width="16" alt="">
+  </div>
+  <div class="pl-phones">
+    <div class="ek-phone" id="plPhoneLt"></div>
+    <div class="ek-phone dkbg" id="plPhoneDk"></div>
+  </div>
+  <div class="fx-plat" style="margin-top:16px">
     <figure><img src="erika-icon-export/macos/erika-macos-1024.png" alt="">macOS</figure>
     <figure><img class="r" src="erika-icon-export/ios/AppIcon.appiconset/AppIcon.png" alt="">iOS</figure>
-    <figure><img src="erika-icon-export/png/circle/erika-circle-512.png" alt="">Windows · Linux</figure>
+    <figure><img class="r" src="erika-icon-export/ios/AppIcon.appiconset/AppIcon-dark.png" alt="">iOS 深色</figure>
+    <figure><img class="r" src="erika-icon-export/ios/AppIcon.appiconset/AppIcon-tinted.png" alt="">iOS 着色</figure>
+    <figure><img src="erika-icon-export/logo/erika-logo-icon-512.png" alt="">Windows · Linux</figure>
     <figure><img src="erika-icon-export/preview/android-circle.png" alt="">安卓 · 圆形</figure>
     <figure><img src="erika-icon-export/preview/android-squircle.png" alt="">安卓 · 圆角方</figure>
     <figure><img src="erika-icon-export/preview/android-teardrop.png" alt="">安卓 · 水滴</figure>
     <figure><img src="erika-icon-export/preview/android-themed-light.png" alt="">安卓主题图标 · 浅色</figure>
     <figure><img src="erika-icon-export/preview/android-themed-dark.png" alt="">安卓主题图标 · 深色</figure>
-    <figure><img class="r" src="erika-icon-export/ios/AppIcon.appiconset/AppIcon-tinted.png" alt="">iOS 着色</figure>
   </div>
+  <ul class="fx-steps">
+    <li>安卓和鸿蒙的同一张前景要套各种遮罩，帽子在 76% 时会碰到圆形遮罩的边，所以缩到 70%。</li>
+    <li>iOS 着色图标和安卓主题图标用单色版，保留圆的轮廓环，系统按壁纸重新上色。</li>
+    <li>logo 只占底板的 76%，小尺寸比满版小一圈：macOS 的 16 只剩一个带眼睛的圆点。</li>
+  </ul>
+
+  <h3 id="glass">液态玻璃（苹果 26）</h3>
+  <p>苹果 26 起的图标用 Icon Composer 的 <code>.icon</code> 文档。层级和平面 logo 反过来：脸是一个完整的深色正圆垫在最下面，头发是正圆挖掉猫脸后剩下的蓝色，盖在脸上，玻璃的边落在刘海和两侧的发际线上。从前到后四组：帽子和发带（帽子盖住发带的上端）、五官、头发、脸，每组是一块玻璃，边缘有高光，组与组之间有投影；除五官外都不透明，脸才保持深蓝，不被白底冲淡。底色是纯白，深色外观指定纯黑，清透和着色由系统生成。下面是 Xcode 自带的渲染器（<code>ictool</code>，设计代际 26）出的图。</p>
+  <div class="gl-hero">
+    <div class="st"><img src="erika-icon-export/preview/glass-Default.png" alt="液态玻璃 · 默认"><span class="lb">默认</span></div>
+    <div class="st dkbg"><img src="erika-icon-export/preview/glass-Dark.png" alt="液态玻璃 · 深色"><span class="lb">深色</span></div>
+  </div>
+  <div class="gl-set"><div class="gl-modes" id="glModes"></div></div>
+  <p class="small muted">文件：<code>erika-icon-export/apple/Erika.icon</code>，可以直接放进 Xcode 工程，也能用 Icon Composer 打开微调。Bern 目前还不读 <code>.icon</code>，Bern 构建的 macOS、iOS 仍用 <code>.icns</code> 和 <code>AppIcon.appiconset</code>。</p>
 
   <h3>单色</h3>
-  <p>没有背景，纯黑或纯白。头发只留圆的轮廓环，帽子四周留一道缝，和圆环、耳朵分开；眼睛、嘴和竖发绳挖空，被帽子和蝴蝶结圈盖住的地方保持实心。用于水印、系统托盘和单色印刷。安卓主题图标和 iOS 着色图标由系统按自己的形状裁切，那里的单色层不画圆环。</p>
+  <p>没有背景，纯黑或纯白。头发只留圆的轮廓环，帽子四周留一道缝，和圆环、耳朵分开；眼睛、嘴和竖发绳挖空，被帽子和蝴蝶结圈盖住的地方保持实心。用于水印、系统托盘和单色印刷，也是 iOS 着色图标和安卓主题图标的单色层。</p>
   <div class="fx-mono">
     <div class="t" style="background:#FFFFFF"><span class="lb">纯黑</span><img src="erika-icon-export/svg/erika-mono-black.svg" alt="纯黑单色图标"></div>
     <div class="t dkbg"><span class="lb">纯白</span><img src="erika-icon-export/svg/erika-mono-white.svg" alt="纯白单色图标"></div>
@@ -196,7 +286,17 @@
   </div>
 
   <h3>文件</h3>
-  <p class="small muted">全部由 <code>brand/erika-icon-export/build.py</code> 从图标工坊的两个快照生成，目录说明在 <code>brand/erika-icon-export/README.md</code>。主 logo：<code>brand/erika-icon.svg</code>（同 <code>erika-icon-export/logo/</code>）；macOS <code>macos/Erika.icns</code>；Windows <code>windows/erika.ico</code>；iOS <code>ios/AppIcon.appiconset</code>；安卓 <code>android/res/</code>；鸿蒙 <code>harmonyos/</code>；Linux <code>linux/hicolor/</code>；网页 <code>web/</code>；单色 <code>svg/erika-mono-*.svg</code>。设计改了以后，在工坊里重新保存快照，再运行一次 <code>build.py</code>。</p>
+  <p class="small muted">全部由 <code>brand/erika-icon-export/build.py</code> 从图标工坊的快照「绘梨花·多边形帽（你的版本）」生成，目录说明在 <code>brand/erika-icon-export/README.md</code>。主 logo：<code>brand/erika-icon.svg</code>（同 <code>erika-icon-export/logo/</code>）；macOS <code>macos/Erika.icns</code>；苹果 26 液态玻璃 <code>apple/Erika.icon</code>；iOS <code>ios/AppIcon.appiconset</code>（浅色、深色、着色）；Windows <code>windows/erika.ico</code>；Linux <code>linux/hicolor/</code>；安卓 <code>android/res/</code>；鸿蒙 <code>harmonyos/</code>；Apple TV <code>tvos/</code>；网页 <code>web/</code>；单色 <code>svg/erika-mono-*.svg</code>。设计改了以后，在工坊里重新保存快照，再运行一次 <code>build.py</code>。</p>
+
+  <div class="eyebrow" style="margin-top:88px"><span class="sailor"></span><b>历史</b> 上一版软件图标 · 已替换</div>
+  <h2>上一版：满版图标</h2>
+  <p>2026-10-25 之前的软件图标：头发的蓝铺满整个底板，脸往下延伸出画布，帽子在右上角被底板切掉一块。苹果 26 的深色外观里，蓝发被系统压成近黑。</p>
+  <div class="fx-plat">
+    <figure><img src="erika-icon-history/满版-macos.png" alt="">macOS</figure>
+    <figure><img class="r" src="erika-icon-history/满版-ios.png" alt="">iOS</figure>
+    <figure><img src="erika-icon-history/满版-液态玻璃.png" alt="">液态玻璃</figure>
+    <figure><img src="erika-icon-history/满版-液态玻璃-深色.png" alt="">液态玻璃 · 深色</figure>
+  </div>
 
   <div class="eyebrow" style="margin-top:88px"><span class="sailor"></span><b>历史</b> 第一版草稿 · 未采用</div>
   <h2>早期草稿：第一版</h2>
@@ -258,6 +358,16 @@
       story: '四个直角框住播放三角：审视画面，也呼应界面里的「画框」设计。',
       risk: '像相机或截图工具，侦探感最弱。' },
   ];
+  // 软件图标放在手机主屏上：浅色壁纸用白底，深色壁纸用黑底，其余是占位
+  const ph = n => Array.from({ length: n }, () => '<div class="app"><div class="ph"></div>&nbsp;</div>').join('');
+  const app = src => `<div class="app"><img src="erika-icon-export/ios/AppIcon.appiconset/${src}" alt="">Erika</div>`;
+  $('#plPhoneLt').innerHTML = ph(5) + app('AppIcon.png') + ph(10);
+  $('#plPhoneDk').innerHTML = ph(5) + app('AppIcon-dark.png') + ph(10);
+
+  // 液态玻璃的六种外观
+  const MODES = [['Default', '默认'], ['Dark', '深色'], ['ClearLight', '清透 · 浅'], ['ClearDark', '清透 · 深'], ['TintedLight', '着色 · 浅'], ['TintedDark', '着色 · 深']];
+  $('#glModes').innerHTML = MODES.map(([k, n]) => `<figure><img src="erika-icon-export/preview/glass-${k}.png" alt="">${n}</figure>`).join('');
+
   let SRC = {}, uid = 0;
   const ic = (id, cls = '', style = '') => `<span class="ic ${cls}" data-ic="${id}"${style ? ` style="${style}"` : ''}></span>`;
 

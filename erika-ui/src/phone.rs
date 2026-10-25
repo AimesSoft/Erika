@@ -28,6 +28,8 @@ pub enum PhoneSettings {
     General,
     #[label(tr! { "zh-Hans" => "外观", "en" => "Appearance" })]
     Appearance,
+    #[label(tr! { "zh-Hans" => "应用图标", "en" => "App Icon" })]
+    AppIcon,
     #[label(tr! { "zh-Hans" => "播放", "en" => "Playback" })]
     Player,
     #[label(tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" })]
@@ -569,6 +571,17 @@ pub fn phone_settings(
                                 }
                             }
                         }
+                    } else if section == PhoneSettings::Appearance {
+                        // Appearance pushes 「应用图标」, as GitHub does.
+                        Form(title: tr! { "zh-Hans" => "外观", "en" => "Appearance" }, variant: settings_form, appear: settings_page_in) {
+                            appearance_accent(app: app)
+                            appearance_mode(app: app)
+                            Section {
+                                NavLink(id: app_icon_page, route: PhoneSettings::AppIcon) {
+                                    Text(content: tr! { "zh-Hans" => "应用图标", "en" => "App Icon" }, font_size: 17, line_height: 22)
+                                }
+                            }
+                        }
                     } else {
                         phone_settings_section(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, section: section)
                     }
@@ -597,6 +610,7 @@ pub fn phone_settings_section(
             }
             PhoneSettings::General => { settings_general(app: app) }
             PhoneSettings::Appearance => { settings_appearance(app: app) }
+            PhoneSettings::AppIcon => { settings_app_icon(app: app) }
             PhoneSettings::Player => { settings_player(app: app) }
             #[cfg(feature = "bern-module-danmaku")]
             PhoneSettings::Danmaku => { settings_danmaku(app: app) }
