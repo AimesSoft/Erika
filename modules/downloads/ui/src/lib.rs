@@ -305,7 +305,7 @@ pub fn download_add(app: erika::Client, downloads: downloads::Client, #[session]
                     // of the library's shows the torrent's name matches.
                     if app.download_quick_select && (downloads.adding.has_places || app.has_download_suggestions) {
                         Text(content: tr! { "zh-Hans" => "快速选择", "en" => "Quick select" }, style: caption, emphasis: secondary)
-                        ScrollView(axis: horizontal, indicators: hidden) {
+                        ScrollView(axis: horizontal, indicators: mouse) {
                             Row(gap: 8, align: center) {
                                 ForEach(items: app.download_suggestions, key: id) |suggestion| {
                                     Button(id: suggested_place, label: suggestion.title, icon: "film", shape: chip, height: 28, variant: library_chip) => downloads.choose_place(suggestion.folder)

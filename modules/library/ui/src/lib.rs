@@ -212,7 +212,7 @@ pub fn library_phone(
                     }
                     Canvas(height: 12)
                     // `.l-chips` on the phone stay one line.
-                    ScrollView(axis: horizontal, indicators: hidden) {
+                    ScrollView(axis: horizontal, indicators: mouse) {
                         Row(gap: 8, align: center) {
                             ForEach(items: listing.filters, key: id) |chip| {
                                 library_filter(value: chip.value, count: chip.count)
@@ -452,7 +452,7 @@ pub fn library_recent(library: library::Client) -> impl View {
                 }
                 Row(gap: 0, align: top) {
                     Canvas(width: 16)
-                    ScrollView(axis: horizontal, indicators: hidden) {
+                    ScrollView(axis: horizontal, indicators: mouse) {
                         Row(gap: 0, align: top) {
                             Row(gap: 12, align: top) {
                                 ForEach(items: library.recent, key: id) |poster| {
@@ -475,7 +475,7 @@ pub fn library_recent(library: library::Client) -> impl View {
                     Button(id: recent_all_desktop, label: tr! { "zh-Hans" => "全部 ›", "en" => "All ›" }, prominence: plain) => pages.library.show()
                 }
                 Canvas(height: 12)
-                ScrollView(axis: horizontal, indicators: hidden) {
+                ScrollView(axis: horizontal, indicators: mouse) {
                     Row(gap: 18, align: top, padding_y: 2) {
                         ForEach(items: library.recent, key: id) |poster| {
                             Column(gap: 0, width: 124) {

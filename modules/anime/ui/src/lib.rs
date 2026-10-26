@@ -211,7 +211,7 @@ pub fn timeline(app: erika::Client, anime: anime::Client) -> impl View {
             if anime.has_airing {
                 // A track longer than the page scrolls; it opens with "now"
                 // in the middle, or as near it as the track reaches.
-                ScrollView(axis: horizontal, indicators: hidden, open_center: anime.now_at) {
+                ScrollView(axis: horizontal, indicators: mouse, open_center: anime.now_at) {
                     Column(gap: 0, width: if window.large { anime.track_wide } else { anime.track_width }) {
                         timeline_track(anime: anime)
                     }
@@ -508,9 +508,9 @@ pub fn desktop_details(anime: anime::Client, #[session] draft: AnimeDraft) -> im
                     }
                     Canvas(height: 6)
                     // The film pages with the arrows above it, as the design's
-                    // does; it shows no scroll bar. `.d-track`: 22 points above
-                    // and below the cells.
-                    ScrollView(axis: horizontal, snap: center, position: draft.episode, indicators: hidden) {
+                    // does; only a mouse, which cannot drag it, gets a scroll
+                    // bar. `.d-track`: 22 points above and below the cells.
+                    ScrollView(axis: horizontal, snap: center, position: draft.episode, indicators: mouse) {
                         Row(gap: 30, padding_x: 32, padding_y: 22) {
                             ForEach(items: anime.episodes, key: number) |episode| {
                                 film_cell(anime: anime, episode: episode)
@@ -909,7 +909,7 @@ pub fn phone_home(app: erika::Client, anime: anime::Client) -> impl View {
                 // running under the right one.
                 Row(gap: 0, align: top) {
                     Canvas(width: 16)
-                    ScrollView(axis: horizontal, indicators: hidden) {
+                    ScrollView(axis: horizontal, indicators: mouse) {
                         Row(gap: 0, align: top) {
                             Row(gap: 12, align: top) {
                                 ForEach(items: anime.also, key: id) |watching| {
@@ -937,7 +937,7 @@ pub fn phone_home(app: erika::Client, anime: anime::Client) -> impl View {
                 if anime.has_airing {
                 Row(gap: 0, align: top) {
                     Canvas(width: 16)
-                    ScrollView(axis: horizontal, indicators: hidden, open_center: anime.now_at) {
+                    ScrollView(axis: horizontal, indicators: mouse, open_center: anime.now_at) {
                         Row(gap: 0) {
                             Column(gap: 0, width: anime.track_width) {
                                 timeline_track(anime: anime)
@@ -1124,8 +1124,9 @@ pub fn phone_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
                     }
                     Canvas(height: 6)
                 }
-                // `.d-strip`: 21.5 points above and below the cells.
-                ScrollView(axis: horizontal, snap: center, position: draft.episode, indicators: hidden) {
+                // `.d-strip`: 21.5 points above and below the cells; a
+                // scroll bar only for a mouse.
+                ScrollView(axis: horizontal, snap: center, position: draft.episode, indicators: mouse) {
                     Row(gap: 30, padding_x: 16, padding_y: 21.5) {
                         ForEach(items: anime.episodes, key: number) |episode| {
                             film_cell(anime: anime, episode: episode)

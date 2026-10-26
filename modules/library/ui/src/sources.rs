@@ -297,7 +297,7 @@ pub fn library_folder(library: library::Client) -> impl View {
                 }
             }
             // `.m-crumb`s: 来源 › the source › the folders.
-            ScrollView(axis: horizontal, indicators: hidden) {
+            ScrollView(axis: horizontal, indicators: mouse) {
                 Row(gap: 4, align: center) {
                     Button(id: crumb_sources, label: tr! { "zh-Hans" => "来源", "en" => "Sources" }, prominence: plain, variant: more_link) => library.close_source()
                     ForEach(items: library.folder.crumbs, key: depth) |crumb| {
