@@ -8,13 +8,13 @@ edition = "2024"
 rust-version = "1.99"
 
 [workspace.dependencies]
-bern = { git = "https://github.com/AimesSoft/Bern", rev = "ef355368eb8131d782a3803b2218748839849d2b" }
+bern = { git = "https://github.com/AimesSoft/Bern", rev = "05d32d394232e4a94b7ed568bbdabe4d80f4745f" }
 erika-protocol = { path = "erika-protocol", default-features = false }
 erika-store = { path = "erika-store" }
 erika-dandanplay = { path = "erika-dandanplay" }
 erika-torrent = { path = "erika-torrent" }
 # Remote builds use the pinned source revision; .cargo/config.toml can patch
 # this to a local checkout. See docs/dependencies.md.
-liberika = { package = "erika", git = "https://github.com/AimesSoft/liberika", rev = "81395e6055ee3e374ceecb1682936fefea0851c6" }
+liberika = { package = "erika", git = "https://github.com/AimesSoft/liberika", rev = "cc297a7e15602ba0a185ed37879cd0ee5ed0601e" }
 # The playback half of the plugin interface, without native libraries.
-liberika-plugin = { package = "erika_plugin", git = "https://github.com/AimesSoft/liberika", rev = "81395e6055ee3e374ceecb1682936fefea0851c6" }
+liberika-plugin = { package = "erika_plugin", git = "https://github.com/AimesSoft/liberika", rev = "cc297a7e15602ba0a185ed37879cd0ee5ed0601e" }

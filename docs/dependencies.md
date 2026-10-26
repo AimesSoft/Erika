@@ -2,7 +2,7 @@
 
 仓库内 `Cargo.toml` 的 Bern 和 liberika 使用 Git 依赖，并固定到提交。GitHub 或另一台电脑检出 Erika 后，Cargo 会下载同一份源码，无需本机的绝对路径。
 
-liberika 当前固定到 [PR #168](https://github.com/AimesSoft/liberika/pull/168) 的提交 `27bab58d9816a3b9dda67d22dcb16507d46835b0`，因为播放器需要这批新增 API。这个提交已推送到公开仓库，不依赖 PR 是否合并。后续升级时更新 `rev` 和 `Cargo.lock`。
+liberika 当前固定到 `main` 的提交 `cc297a7c`（字幕只画在画面以内），Bern 固定到 `master` 的最新提交；两者都已推送到公开仓库。后续升级时更新 `rev` 和 `Cargo.lock`。
 
 ## 本地使用相邻源码
 
