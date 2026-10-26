@@ -108,7 +108,7 @@ cargo run --manifest-path "$ERIKA_LIBERIKA_ROOT/Cargo.toml" -p xtask -- \
 
 之后照常 `bern build --target macos`。Bern 会把 liberika 需要的系统框架（Metal、VideoToolbox、CoreAudio 等）交给 swiftc 链接。
 
-目前只有 macOS 接了 liberika：iOS、tvOS 的视图已由 Bern 生成，需要先为模拟器编译 liberika 的依赖再实测；Windows、Linux、Android 等 Bern 给出 D3D、Wayland/X11、Android 的表面后接入；Web 上 liberika 没有播放后端。没接的平台仍按剧照模拟播放。没接的平台没有字幕和弹幕。
+目前 macOS、Windows（2026-10-25）和 Linux（2026-10-27）接了 liberika。Linux 上 GTK 的视频视图给 liberika 一个帧接收器：liberika 按画框的像素离屏渲染，把画面交回视图合成；在 Steam Deck 上实测。iOS、tvOS 的视图已由 Bern 生成，需要先为模拟器编译 liberika 的依赖再实测；Android 等 Bern 给出 Android 的表面后接入；Web 上 liberika 没有播放后端。没接的平台仍按剧照模拟播放。没接的平台没有字幕和弹幕。
 
 ## 存储与弹弹play（2026-10-21）
 

@@ -1,8 +1,8 @@
-//! The playback kernel: liberika on macOS and Windows, and its
+//! The playback kernel: liberika on macOS, Windows and Linux, and its
 //! WebCodecs/Canvas adapter in browsers. Other targets and tests keep the
 //! simulated preview clock.
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 mod liberika;
 
 mod web;
@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 /// The application player Erika plays in: `Players::video` of the
 /// interface, the name every entry addresses it by.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
 pub const PLAYER: &str = "video";
 
 /// What the engine asks of the kernel. Calls return at once; the kernel
@@ -168,7 +168,7 @@ pub fn set_link_headers(url: &str, headers: Vec<(String, String)>) {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos")), test))]
 pub fn link_headers(url: &str) -> Vec<(String, String)> {
     LINK_HEADERS
         .lock()
@@ -184,7 +184,7 @@ pub fn start() -> Option<Arc<dyn Kernel>> {
     if bern::resources::Resources::host().is_served() {
         return Some(web::Web::install());
     }
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
     {
         Some(liberika::Liberika::install())
     }
@@ -192,7 +192,7 @@ pub fn start() -> Option<Arc<dyn Kernel>> {
     {
         Some(web::Web::install())
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos")), target_arch = "wasm32")))]
     {
         None
     }

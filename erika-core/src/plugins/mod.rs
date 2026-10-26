@@ -116,7 +116,7 @@ enum Done {
     Installed(String, Result<Pack, String>),
     Fetched(String, u64, Result<Value, String>),
     /// The first seconds of the video at the address, measured.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
     Opening(String, Result<Value, String>),
     /// A request of a link's resolution answered.
     Resolved(u64, Result<Value, String>),
@@ -403,13 +403,13 @@ impl ErikaEngine {
                         Err(reason) => self.notify(Notice::PluginFailed { reason }),
                     }
                 }
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                #[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
                 Done::Opening(url, Ok(frames)) => {
                     if self.source.as_ref().is_some_and(|source| source.url == url) {
                         self.plugin_event("openingProfiled", json!({ "url": url, "frames": frames }));
                     }
                 }
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                #[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
                 Done::Opening(url, Err(error)) => eprintln!("erika: opening of {url}: {error}"),
                 Done::Resolved(tag, answer) => self.resolver_fetched(tag, answer),
                 Done::Readme(id, readme) => self.readme_read(&id, readme),
@@ -926,13 +926,13 @@ impl ErikaEngine {
         let Some(url) = self.source.as_ref().map(|source| source.url.clone()) else {
             return;
         };
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
         in_background(&self.plugins.inbox, move || {
             let profile = liberika::opening::opening_profile(&url, seconds, 4.0)
                 .map(|frames| json!(frames));
             vec![Done::Opening(url, profile)]
         });
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos")))))]
         let _ = (url, seconds);
     }
 

@@ -2,9 +2,10 @@
 //! `PresenterRuntime` per player: it performs the hub's requests and the
 //! engine's own settings, draws into the surface of the video view that
 //! shows the player (its Metal layer on macOS; on Windows a swap chain for
-//! composition, which it gives the view's SwapChainPanel) on each of that
-//! view's display frames, keeps the audio going while no view shows it,
-//! and reports what it sees to the hub and to the engine.
+//! composition, which it gives the view's SwapChainPanel; on Linux pictures
+//! of the view's size, which it hands the view's frame sink) on each of
+//! that view's display frames, keeps the audio going while no view shows
+//! it, and reports what it sees to the hub and to the engine.
 
 use super::{Chapter, DanmakuConfig, Kernel, Operation, OperationResult, PLAYER, Playback, Track};
 use bern::media::kernel::{
@@ -12,6 +13,8 @@ use bern::media::kernel::{
     MediaCommand, MediaExecutor, MediaKernel, Observation, Phase, SurfaceHandle, SurfaceKind,
     SurfaceSize, VideoSurface,
 };
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+use bern::media::kernel::{FrameSink, VideoFrame};
 use bern::{CommandError, Value};
 use erika_protocol::erika::Enhancement;
 #[cfg(target_os = "macos")]
@@ -22,6 +25,8 @@ use liberika::danmaku::{
 };
 use liberika::presenter::{PresenterConfig, PresenterRuntime};
 use liberika::renderer::pipeline::LumaUpscalerMode;
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+use liberika::{FlutterTextureHandle, FlutterTextureKind};
 use liberika::{
     MediaRequest, PlatformSurface, PlayerEvent, PlayerState, TrackInfo, TrackKind, TrackSelection,
 };
@@ -38,6 +43,12 @@ use std::time::{Duration, Instant};
 const REPORT_EVERY: Duration = Duration::from_millis(100);
 /// How often a player no view shows pumps its audio.
 const AUDIO_EVERY: Duration = Duration::from_millis(10);
+/// Display frames after which a paused player whose picture stopped
+/// changing renders no more until something changes: a frame sink's every
+/// picture is read back from the GPU. Two seconds at 60 Hz, which covers a
+/// hardware decoder's preroll after a seek.
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+const SETTLED_AFTER: u32 = 120;
 
 type Hub = Arc<Mutex<Option<Arc<dyn KernelHub>>>>;
 
@@ -297,6 +308,8 @@ impl MediaKernel for Liberika {
         let kind = SurfaceKind::MetalLayer;
         #[cfg(target_os = "windows")]
         let kind = SurfaceKind::SwapChainPanel;
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        let kind = SurfaceKind::FrameSink;
         vec![kind]
     }
 
@@ -400,6 +413,15 @@ struct Session {
     /// The swap chain the view's panel was given last.
     #[cfg(target_os = "windows")]
     chain: usize,
+    /// Where the view takes the pictures liberika renders for it.
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    sink: Option<Arc<dyn FrameSink>>,
+    /// Video frames decoded when the presenter rendered last, and the
+    /// display frames since a new one or a message.
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    decoded: u64,
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+    unchanged: u32,
     volume: f64,
     muted: bool,
     buffering: bool,
@@ -442,6 +464,12 @@ impl Session {
             view: None,
             #[cfg(target_os = "windows")]
             chain: 0,
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            sink: None,
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            decoded: 0,
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            unchanged: 0,
             volume: 1.0,
             muted: false,
             buffering: false,
@@ -681,6 +709,18 @@ fn platform_surface(surface: &VideoSurface) -> Result<PlatformSurface, CommandEr
                 ..SurfaceOutputCapabilities::default()
             }),
         )),
+        // liberika renders pictures of the view's size, which `deliver`
+        // hands the view.
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        SurfaceHandle::FrameSink(_) => {
+            Ok(PlatformSurface::FlutterTexture(FlutterTextureHandle::new(
+                FlutterTextureKind::LinuxTextureRegistrar,
+                0,
+                size.width,
+                size.height,
+                size.scale,
+            )))
+        }
         other => Err(CommandError::new(
             "unsupported_surface",
             format!("liberika cannot draw into {:?}", other.kind()),
@@ -730,6 +770,22 @@ fn withdraw(session: &mut Session, views: &[View]) {
     {
         // SAFETY: as in `present`.
         unsafe { set_swap_chain(view.surface.handle, 0) };
+    }
+}
+
+/// Hand the view of `session` the picture liberika rendered for it, if it
+/// rendered one this frame.
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+fn deliver(session: &mut Session) {
+    let Some(picture) = session.presenter.take_flutter_frame() else {
+        return;
+    };
+    if let Some(sink) = &session.sink {
+        sink.present(VideoFrame {
+            width: picture.width,
+            height: picture.height,
+            pixels: picture.rgba,
+        });
     }
 }
 
@@ -787,6 +843,13 @@ impl Worker {
     }
 
     fn handle(&mut self, message: Message) {
+        // Any message may change a picture.
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        if !matches!(message, Message::Frame) {
+            for session in self.players.values_mut() {
+                session.unchanged = 0;
+            }
+        }
         match message {
             Message::Request(request) => {
                 let result = self.perform(&request);
@@ -846,6 +909,10 @@ impl Worker {
                     {
                         session.chain = 0;
                     }
+                    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+                    {
+                        session.sink = None;
+                    }
                     // An earlier view of the player shows it again.
                     let _ = self.show(&player);
                 }
@@ -898,11 +965,19 @@ impl Worker {
             let _ = session.presenter.detach_surface();
         }
         session.view = None;
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        {
+            session.sink = None;
+        }
         session
             .presenter
             .attach_surface(platform_surface(&view.surface)?)
             .map_err(failed)?;
         session.view = Some(view.token.clone());
+        #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+        {
+            session.sink = bern_kernel::frame_sink(view.surface.handle);
+        }
         #[cfg(target_os = "windows")]
         present(session, &self.views);
         Ok(())
@@ -1204,11 +1279,28 @@ impl Worker {
                     .checked_sub(Duration::from_secs_f64(-delay))
                     .unwrap_or(fired)
             };
-            if let Err(error) = session.presenter.render_tick_at(timing.target, at) {
-                eprintln!("liberika: frame failed: {error}");
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            if !session.presenter.is_playing() && session.unchanged >= SETTLED_AFTER {
+                continue;
+            }
+            match session.presenter.render_tick_at(timing.target, at) {
+                #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+                Ok(stats) => {
+                    if stats.decoded_video_frames == session.decoded {
+                        session.unchanged = session.unchanged.saturating_add(1);
+                    } else {
+                        session.decoded = stats.decoded_video_frames;
+                        session.unchanged = 0;
+                    }
+                }
+                #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
+                Ok(_) => {}
+                Err(error) => eprintln!("liberika: frame failed: {error}"),
             }
             #[cfg(target_os = "windows")]
             present(session, &self.views);
+            #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
+            deliver(session);
         }
         self.report(false);
     }

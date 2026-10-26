@@ -45,6 +45,8 @@ Windows 在 “x64 Native Tools Command Prompt”（或先运行 Visual Studio �
 cargo run --manifest-path ..\liberika\Cargo.toml -p xtask -- deps build --all --profile lgpl --target x86_64-pc-windows-msvc --crt static
 ```
 
+Linux 用发行版的 FFmpeg（8.x 或更新，`pkg-config` 要能找到 `libav*` 的开发文件；Arch 已是 9.x，同样可用）、PulseAudio（PipeWire 桌面装 `pipewire-pulse`）、Vulkan 头文件与 X11 / Wayland 的开发文件；libass 用 liberika 的脚本打补丁后编成静态库，在 liberika 的源码目录里运行 `bash scripts/build_linux_libass.sh`。liberika 的 Linux 渲染器要用它仓库里的 `third_party/wgpu-hal`：本地配置的 `[patch.crates-io]` 指向相邻检出里的这一份，`erika-core` 把 `wgpu-hal` 锁在同一个版本，否则 Cargo 会选 crates.io 上更新的发布版而不用补丁。远程构建 Linux 版暂时还缺这个补丁：Bern 生成的宿主是单独的 Cargo 工作区，不沿用 Erika 清单里的 `[patch]`。
+
 其他目标的原生依赖准备见 [liberika 构建说明](https://github.com/AimesSoft/liberika/blob/feat/bern-web-playback-20261023/docs/building.md)。
 
 Web 构建、测试素材生成和静态站点测试也通过 Cargo 定位 liberika。只有显式设置 `LIBERIKA_DIR` 时才使用指定目录；不再默认依赖 `../liberika`。
