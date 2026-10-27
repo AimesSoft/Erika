@@ -96,11 +96,11 @@ style! {
     Stack.player_black { background: color(light: "#000000", dark: "#000000"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
     // Shadow bare content and seek bars; native glass controls keep their own
     // system appearance. Opaque, bright tones stay readable over the picture.
-    #[target(macos, ios, tvos, browser, windows)]
+    #[target(macos, ios, tvos, browser, windows, linux)]
     Stack.player_overlay { shadow: shadow(3, y: 1, opacity: 0.9) }
-    // Windows' control groups and bare buttons have no surface of their
-    // own: what they show casts the same shadow over the picture.
-    #[target(windows)]
+    // Control groups without glass (Windows' bare glyphs, Linux's faint
+    // capsule): what they show casts the same shadow over the picture.
+    #[target(windows, linux)]
     Stack.player_buttons { shadow: shadow(3, y: 1, opacity: 0.9) }
     // The player's control groups side by side: apart where each is a
     // capsule of its own, as close as the buttons in one where they are
@@ -128,11 +128,11 @@ style! {
     // All four bare transport glyphs stay opaque white, including disabled
     // episode navigation; enabled still controls whether an action can run.
     IconButton.player_plain { foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), padding: 6, pressed: scale(0.94, press), disabled: foreground(color(light: "#FFFFFF", dark: "#FFFFFF")) }
-    #[target(macos, ios, tvos, browser, windows)]
+    #[target(macos, ios, tvos, browser, windows, linux)]
     Button.player_plain { shadow: shadow(3, y: 1, opacity: 0.9) }
-    #[target(macos, ios, tvos, browser, windows)]
+    #[target(macos, ios, tvos, browser, windows, linux)]
     IconButton.player_plain { shadow: shadow(3, y: 1, opacity: 0.9) }
-    #[target(macos, ios, tvos, browser, windows)]
+    #[target(macos, ios, tvos, browser, windows, linux)]
     IconButton.transport { shadow: shadow(3, y: 1, opacity: 0.9) }
     Stack.player_gold { foreground: color(light: "#FFD24A", dark: "#FFD24A") }
     Stack.player_cyan { foreground: color(light: "#8EE3FF", dark: "#8EE3FF") }
@@ -142,7 +142,7 @@ style! {
     // the remote's focus without showing it.
     Button.remote_surface { hover: none, pressed: none, focus: none }
     IconButton.player_primary { font_size: 38, foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), padding: 6, hover: scale(1.08, snappy), pressed: scale(0.90, press), settle: jelly }
-    #[target(macos, ios, tvos, browser, windows)]
+    #[target(macos, ios, tvos, browser, windows, linux)]
     IconButton.player_primary { shadow: shadow(3, y: 1, opacity: 0.9) }
     IconButton.transport { font_size: 16, foreground: color(light: "#FFFFFF", dark: "#FFFFFF"), padding: 6, pressed: scale(0.94, press), disabled: foreground(color(light: "#FFFFFF", dark: "#FFFFFF")) }
     Stack.onboarding_art { background: color(light: "#232A52", dark: "#232A52") }
