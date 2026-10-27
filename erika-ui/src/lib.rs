@@ -810,14 +810,22 @@ pub fn main_shell(
                             mini_player(app: app, players: players)
                         }
                         Row(gap: 10, align: center) {
+                            // The account opens the accounts, to choose
+                            // which one to sign in to.
                             if build.modules.account && app.features.account {
-                            avatar(app: app)
-                            Column(gap: 1) {
-                                Text(content: app.user_name, style: headline, lines: 1)
-                                Text(content: app.user_account, style: caption, emphasis: secondary)
+                                Button(id: accounts, label: tr! { "zh-Hans" => "账号", "en" => "Accounts" }, variant: row, width: fill) {
+                                    Row(gap: 10, align: center) {
+                                        avatar(app: app)
+                                        Column(gap: 1) {
+                                            Text(content: app.user_name, style: headline, lines: 1)
+                                            Text(content: app.user_account, style: caption, emphasis: secondary)
+                                        }
+                                        Spacer
+                                    }
+                                } => app.show_account_picker(true)
+                            } else {
+                                Spacer
                             }
-                            }
-                            Spacer
                             IconButton(id: settings, icon: "gearshape", label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, prominence: plain, shortcut: app.keys.settings) => windows.settings.open()
                         }
                     }

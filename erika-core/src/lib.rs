@@ -260,6 +260,7 @@ impl Default for ErikaEngine {
                 user_avatar: None,
                 account_status: Account::default(),
                 bangumi: BangumiAccount::default(),
+                account_picker: false,
                 keys: keys::defaults(),
                 default_keys: keys::defaults(),
                 keys_changed: false,
@@ -1072,8 +1073,16 @@ impl erika::Commands for ErikaEngine {
     }
 
     #[cfg(feature = "bern-module-account")]
+    fn show_account_picker(&mut self, open: bool) -> Result<(), CommandError> {
+        self.require_account()?;
+        self.state.account_picker = open;
+        Ok(())
+    }
+
+    #[cfg(feature = "bern-module-account")]
     fn open_account_login(&mut self, settings_window: bool) -> Result<(), CommandError> {
         self.require_account()?;
+        self.state.account_picker = false;
         self.open_account_prompt(settings_window);
         Ok(())
     }
@@ -1105,6 +1114,7 @@ impl erika::Commands for ErikaEngine {
     #[cfg(feature = "bern-module-account")]
     fn open_bangumi_login(&mut self, settings_window: bool) -> Result<(), CommandError> {
         self.require_account()?;
+        self.state.account_picker = false;
         self.close_account_prompt();
         self.open_bangumi(settings_window);
         Ok(())

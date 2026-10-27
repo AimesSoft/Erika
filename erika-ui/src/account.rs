@@ -17,6 +17,21 @@ pub fn account_dialogs(app: erika::Client, settings_window: bool, #[session] dra
             account_login(app: app, bangumi: true, busy: app.bangumi.busy, message: app.bangumi.error)
         } else if app.features.account && app.account_status.prompt && app.account_status.settings_window == settings_window {
             account_login(app: app, bangumi: false, busy: app.account_status.busy, message: app.account_status.error)
+        } else if app.features.account && app.account_picker && !settings_window {
+            // The foot of the sidebar's accounts: each signs in or out as
+            // in the settings, and signing in opens its own dialog.
+            Modal(width: 400, appear: pop_in, disappear: fade) {
+                Column(gap: 16, padding: 24) {
+                    Text(content: tr! { "zh-Hans" => "账号", "en" => "Accounts" }, style: title3)
+                    account_profile(app: app, bangumi: false, settings_window: false, named: true, signed_in: app.account_status.signed_in, name: app.account_status.name, user: app.account_status.user, picture: app.account_status.avatar, busy: app.account_status.busy, message: app.account_status.error)
+                    Divider
+                    account_profile(app: app, bangumi: true, settings_window: false, named: true, signed_in: app.bangumi.signed_in, name: app.bangumi.name, user: app.bangumi.email, picture: app.bangumi.avatar, busy: app.bangumi.busy, message: app.bangumi.error)
+                    Row(gap: 12, align: center) {
+                        Spacer
+                        Button(id: account_picker_done, label: tr! { "zh-Hans" => "完成", "en" => "Done" }, role: cancel, shortcut: app.keys.back) => app.show_account_picker(false)
+                    }
+                }
+            }
         } else if app.features.account && app.bangumi.expired && !settings_window && !app.onboarding.visible {
             Modal(width: 420, appear: pop_in, disappear: fade) {
                 Column(gap: 16, padding: 24) {
@@ -91,11 +106,14 @@ pub fn account_login(
 }
 
 /// Both providers use the same signed-in and signed-out account layout.
+/// Where no section title names the service (`named`), the line under a
+/// signed-in name does.
 #[component]
 pub fn account_profile(
     app: erika::Client,
     bangumi: bool,
     settings_window: bool,
+    named: bool,
     signed_in: bool,
     #[content] name: String,
     #[content] user: String,
@@ -120,7 +138,13 @@ pub fn account_profile(
                     Column(gap: 4) {
                         if signed_in {
                             Text(content: name, style: headline, lines: 1)
-                            Text(content: user, style: caption, emphasis: secondary, lines: 1)
+                            if named && bangumi {
+                                Text(content: tr! { "zh-Hans" => "Bangumi · {user}", "en" => "Bangumi · {user}"; user: user }, style: caption, emphasis: secondary, lines: 1)
+                            } else if named {
+                                Text(content: tr! { "zh-Hans" => "弹弹play · {user}", "en" => "dandanplay · {user}"; user: user }, style: caption, emphasis: secondary, lines: 1)
+                            } else {
+                                Text(content: user, style: caption, emphasis: secondary, lines: 1)
+                            }
                         } else {
                             if bangumi {
                                 Text(content: tr! { "zh-Hans" => "Bangumi", "en" => "Bangumi" }, style: headline, lines: 1)

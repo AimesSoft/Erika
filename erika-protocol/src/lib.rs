@@ -1036,6 +1036,9 @@ pub mod erika {
         pub user_avatar: Option<MediaSource>,
         pub account_status: Account,
         pub bangumi: BangumiAccount,
+        /// Whether the accounts open from the foot of the sidebar, to
+        /// choose which one to sign in to.
+        pub account_picker: bool,
         /// Every action's keyboard shortcut, and the one it has by
         /// default; whether any is not its default.
         pub keys: KeyBindings,
@@ -1328,6 +1331,10 @@ pub mod erika {
         fn sign_in(&mut self, user: String, password: String) -> Result<(), CommandError>;
         #[cfg(feature = "bern-module-account")]
         fn sign_out(&mut self) -> Result<(), CommandError>;
+        /// Opens or closes the accounts at the foot of the sidebar; signing
+        /// in to one of them closes them.
+        #[cfg(feature = "bern-module-account")]
+        fn show_account_picker(&mut self, open: bool) -> Result<(), CommandError>;
         #[cfg(feature = "bern-module-account")]
         fn open_account_login(&mut self, settings_window: bool) -> Result<(), CommandError>;
         #[cfg(feature = "bern-module-account")]

@@ -507,10 +507,10 @@ pub fn settings_account(app: erika::Client, settings_window: bool, #[session] dr
     ui! {
         Form(title: tr! { "zh-Hans" => "账号", "en" => "Account" }, variant: settings_form, appear: settings_page_in) {
             Section(title: tr! { "zh-Hans" => "弹弹play 账号", "en" => "dandanplay account" }) {
-                account_profile(app: app, bangumi: false, settings_window: settings_window, signed_in: app.account_status.signed_in, name: app.account_status.name, user: app.account_status.user, picture: app.account_status.avatar, busy: app.account_status.busy, message: app.account_status.error)
+                account_profile(app: app, bangumi: false, settings_window: settings_window, named: false, signed_in: app.account_status.signed_in, name: app.account_status.name, user: app.account_status.user, picture: app.account_status.avatar, busy: app.account_status.busy, message: app.account_status.error)
             }
             Section(title: tr! { "zh-Hans" => "Bangumi 账号", "en" => "Bangumi account" }) {
-                account_profile(app: app, bangumi: true, settings_window: settings_window, signed_in: app.bangumi.signed_in, name: app.bangumi.name, user: app.bangumi.email, picture: app.bangumi.avatar, busy: app.bangumi.busy, message: app.bangumi.error)
+                account_profile(app: app, bangumi: true, settings_window: settings_window, named: false, signed_in: app.bangumi.signed_in, name: app.bangumi.name, user: app.bangumi.email, picture: app.bangumi.avatar, busy: app.bangumi.busy, message: app.bangumi.error)
             }
         }
     }
