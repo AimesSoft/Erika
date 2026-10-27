@@ -783,8 +783,8 @@ pub fn main_shell(
             } else {
             SplitView {
                 Sidebar(id: pages, selection: draft.page) {
-                    // The logo and name; Windows shows both in the title bar
-                    // instead.
+                    // The logo and name; Windows and Linux show them in the
+                    // title bar instead.
                     SidebarHeader(role: title) {
                         // Match the navigation icon centers and title column.
                         Row(variant: brand, align: center) {
