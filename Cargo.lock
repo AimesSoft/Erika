@@ -381,7 +381,7 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 [[package]]
 name = "bern"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=6cc3aff6df09e6ae309dde9bb37122d3b2377229#6cc3aff6df09e6ae309dde9bb37122d3b2377229"
+source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
 dependencies = [
  "bern-command",
  "bern-macros",
@@ -395,7 +395,7 @@ dependencies = [
 [[package]]
 name = "bern-command"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=6cc3aff6df09e6ae309dde9bb37122d3b2377229#6cc3aff6df09e6ae309dde9bb37122d3b2377229"
+source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
 dependencies = [
  "bern-protocol",
  "keyring",
@@ -405,7 +405,7 @@ dependencies = [
 [[package]]
 name = "bern-ir"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=6cc3aff6df09e6ae309dde9bb37122d3b2377229#6cc3aff6df09e6ae309dde9bb37122d3b2377229"
+source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
 dependencies = [
  "bern-protocol",
  "serde",
@@ -415,7 +415,7 @@ dependencies = [
 [[package]]
 name = "bern-macros"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=6cc3aff6df09e6ae309dde9bb37122d3b2377229#6cc3aff6df09e6ae309dde9bb37122d3b2377229"
+source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
 dependencies = [
  "bern-ir",
  "bern-protocol",
@@ -429,7 +429,7 @@ dependencies = [
 [[package]]
 name = "bern-media"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=6cc3aff6df09e6ae309dde9bb37122d3b2377229#6cc3aff6df09e6ae309dde9bb37122d3b2377229"
+source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
 dependencies = [
  "bern-protocol",
 ]
@@ -437,7 +437,7 @@ dependencies = [
 [[package]]
 name = "bern-protocol"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=6cc3aff6df09e6ae309dde9bb37122d3b2377229#6cc3aff6df09e6ae309dde9bb37122d3b2377229"
+source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
 dependencies = [
  "serde",
  "serde_json",
@@ -446,7 +446,7 @@ dependencies = [
 [[package]]
 name = "bern-runtime"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=6cc3aff6df09e6ae309dde9bb37122d3b2377229#6cc3aff6df09e6ae309dde9bb37122d3b2377229"
+source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
 dependencies = [
  "bern-protocol",
 ]
@@ -454,7 +454,7 @@ dependencies = [
 [[package]]
 name = "bern-script"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=6cc3aff6df09e6ae309dde9bb37122d3b2377229#6cc3aff6df09e6ae309dde9bb37122d3b2377229"
+source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
 dependencies = [
  "boa_engine",
  "serde",
@@ -464,7 +464,7 @@ dependencies = [
 [[package]]
 name = "bern-syntax"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=6cc3aff6df09e6ae309dde9bb37122d3b2377229#6cc3aff6df09e6ae309dde9bb37122d3b2377229"
+source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
 dependencies = [
  "bern-media",
  "bern-protocol",
