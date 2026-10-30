@@ -261,6 +261,8 @@ impl Default for ErikaEngine {
                 account_status: Account::default(),
                 bangumi: BangumiAccount::default(),
                 account_picker: false,
+                about_dialog: false,
+                help_dialog: false,
                 keys: keys::defaults(),
                 default_keys: keys::defaults(),
                 keys_changed: false,
@@ -615,6 +617,24 @@ impl erika::Commands for ErikaEngine {
     fn show_link_prompt(&mut self, visible: bool) -> Result<(), CommandError> {
         self.state.link_prompt = visible;
         self.state.link_invalid = false;
+        Ok(())
+    }
+
+    fn show_about(&mut self, open: bool) -> Result<(), CommandError> {
+        self.state.about_dialog = open;
+        if open {
+            self.state.help_dialog = false;
+            self.state.account_picker = false;
+        }
+        Ok(())
+    }
+
+    fn show_help(&mut self, open: bool) -> Result<(), CommandError> {
+        self.state.help_dialog = open;
+        if open {
+            self.state.about_dialog = false;
+            self.state.account_picker = false;
+        }
         Ok(())
     }
 

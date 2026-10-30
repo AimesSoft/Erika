@@ -115,6 +115,11 @@ pub fn settings(
         if build.modules.account && app.features.account {
             account_dialogs(app: app, settings_window: true)
         }
+        // 「关于 Erika」 and 「Erika 帮助」 open over the main window, which
+        // comes forward when they open from in front of the settings.
+        if app.about_dialog || app.help_dialog {
+            Watch(value: app.about_dialog) => windows.main.open()
+        }
         }
     }
 }

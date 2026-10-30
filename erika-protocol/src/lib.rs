@@ -1039,6 +1039,10 @@ pub mod erika {
         /// Whether the accounts open from the foot of the sidebar, to
         /// choose which one to sign in to.
         pub account_picker: bool,
+        /// Whether 「关于 Erika」 and 「Erika 帮助」 are open over the main
+        /// window, as the Mac's menu bar opens them.
+        pub about_dialog: bool,
+        pub help_dialog: bool,
         /// Every action's keyboard shortcut, and the one it has by
         /// default; whether any is not its default.
         pub keys: KeyBindings,
@@ -1169,6 +1173,12 @@ pub mod erika {
 
         /// Ask for a link to play, or stop asking.
         fn show_link_prompt(&mut self, visible: bool) -> Result<(), CommandError>;
+
+        /// Open or close 「关于 Erika」, the page 「设置 › 关于」 shows, and
+        /// 「Erika 帮助」, what the features switched on do; either closes
+        /// the other and the accounts.
+        fn show_about(&mut self, open: bool) -> Result<(), CommandError>;
+        fn show_help(&mut self, open: bool) -> Result<(), CommandError>;
 
         /// Play an http(s) or magnet link; any other keeps asking.
         fn open_link(&mut self, link: String) -> Result<(), CommandError>;

@@ -31,6 +31,8 @@ use account::{account_dialogs, account_dialogs_props};
 mod onboarding;
 use onboarding::{onboarding, onboarding_props};
 mod feature_preview;
+mod help;
+use help::{info_dialogs, info_dialogs_props};
 mod settings;
 use settings::{settings, settings_props};
 mod plugin_info;
@@ -658,8 +660,9 @@ pub struct Players {
 
 /// The windows, and the menus of the Mac's menu bar: opening files,
 /// folders and links, playback, the view and the settings, each with the
-/// shortcut 「设置 › 快捷键」 gives it. The files and folders chosen in the
-/// menus are the main window's drafts.
+/// shortcut 「设置 › 快捷键」 gives it, and the about and the help, which
+/// open over the main window. The files and folders chosen in the menus
+/// are the main window's drafts.
 #[component]
 pub fn app(
     app: erika::Client,
@@ -679,6 +682,9 @@ pub fn app(
                 settings(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
             }
             MenuBar {
+                CommandMenu(role: about) {
+                    CommandItem(id: menu_about, label: tr! { "zh-Hans" => "关于 Erika", "en" => "About Erika" }) => app.show_about(true)
+                }
                 CommandMenu(role: app) {
                     CommandItem(id: menu_settings, label: tr! { "zh-Hans" => "设置…", "en" => "Settings…" }, shortcut: app.keys.settings) => windows.settings.open()
                 }
@@ -711,6 +717,9 @@ pub fn app(
                     if build.modules.danmaku {
                         CommandItem(id: menu_danmaku, label: tr! { "zh-Hans" => "显示弹幕", "en" => "Show Danmaku" }, shortcut: app.keys.toggle_danmaku, checked: app.preferences.show_danmaku, enabled: app.features.danmaku) => app.set_preference("show_danmaku", !app.preferences.show_danmaku)
                     }
+                }
+                CommandMenu(role: help) {
+                    CommandItem(id: menu_help, label: tr! { "zh-Hans" => "Erika 帮助", "en" => "Erika Help" }, shortcut: "cmd+?") => app.show_help(true)
                 }
             }
         }
@@ -749,6 +758,7 @@ pub fn main_window(
             if build.modules.account && app.features.account {
                 account_dialogs(app: app, settings_window: false)
             }
+            info_dialogs(app: app)
         }
     }
 }
