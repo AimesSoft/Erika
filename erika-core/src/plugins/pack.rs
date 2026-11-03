@@ -229,6 +229,7 @@ pub fn permission(id: &str) -> Option<PluginPermission> {
         "storage" => PluginPermission::Storage,
         "system.override" => PluginPermission::SystemOverride,
         "network" => PluginPermission::Network,
+        "player.overlay" => PluginPermission::PlayerOverlay,
         _ => return None,
     })
 }

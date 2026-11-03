@@ -11,6 +11,7 @@
 
 mod hooks;
 mod links;
+mod overlays;
 mod pack;
 mod runtime;
 pub(crate) mod store;
@@ -97,6 +98,10 @@ pub(crate) struct Extensions {
     /// How many seconds of each video's opening to measure, 0 when no
     /// plugin asked.
     pub opening: f64,
+    /// The progress line along the bottom of the picture, and its color.
+    pub strip: Option<PluginColor>,
+    /// The danmaku density chart along the bottom, and its color.
+    pub density: Option<PluginColor>,
 }
 
 /// An installed plugin.
@@ -245,6 +250,8 @@ impl Plugins {
             all.watched_button |= extension.watched_button;
             all.quick_select |= extension.quick_select;
             all.opening = all.opening.max(extension.opening);
+            all.strip = all.strip.or(extension.strip.clone());
+            all.density = all.density.or(extension.density.clone());
         }
         all
     }
@@ -482,6 +489,7 @@ impl ErikaEngine {
             plugin.block_words.clear();
         }
         self.plugins.waiting.retain(|waiting| waiting != id);
+        self.show_plugin_menu();
     }
 
     fn plugin_failed(&mut self, id: &str, error: String) {
@@ -588,9 +596,13 @@ impl ErikaEngine {
             }
         };
         let mut words_changed = false;
+        let mut entries_changed = false;
         if let Some(plugin) = self.plugins.find_mut(id) {
-            if let Some(entries) = reply.get("entries").and_then(Value::as_array) {
+            if let Some(entries) = reply.get("entries").and_then(Value::as_array)
+                && *entries != plugin.entries
+            {
                 plugin.entries = entries.clone();
+                entries_changed = true;
             }
             if let Some(words) = strings(reply.get("blockWords"))
                 && words != plugin.block_words
@@ -619,6 +631,7 @@ impl ErikaEngine {
                         plugin.loaded = true;
                         plugin.error.clear();
                     }
+                    entries_changed = true;
                     if !self.plugins.tracks.is_empty() {
                         self.rerun_plugin_danmaku();
                     }
@@ -626,6 +639,9 @@ impl ErikaEngine {
             }
         } else if let Some(error) = &error {
             eprintln!("erika: plugin {id}: {error}");
+        }
+        if entries_changed {
+            self.show_plugin_menu();
         }
         if let Purpose::Action(_) = purpose
             && error.is_none()
@@ -789,6 +805,16 @@ impl ErikaEngine {
                 self.plugins.extensions.entry(id.into()).or_default().watched_button = flag(0);
                 self.apply_extensions();
             }
+            "extendProgressStrip" if pack.has("player.overlay") => {
+                self.plugins.extensions.entry(id.into()).or_default().strip =
+                    overlays::shown_in(args.first());
+                self.apply_extensions();
+            }
+            "extendDanmakuDensity" if pack.has("player.overlay") => {
+                self.plugins.extensions.entry(id.into()).or_default().density =
+                    overlays::shown_in(args.first());
+                self.apply_extensions();
+            }
             "__later" => self.plugin_later(id, args),
             _ => {}
         }
@@ -841,6 +867,7 @@ impl ErikaEngine {
         self.show_speeds();
         self.state.download_quick_select = self.plugins.extensions().quick_select;
         self.plugin_controls_changed();
+        self.show_plugin_overlays();
     }
 
     /// The account sync brought what was kept of the plugins from another
@@ -1145,7 +1172,9 @@ impl ErikaEngine {
             busy: self.plugins.busy.contains(&pack.id),
             unsupported: unsupported.join("；"),
             error: installed.map(|plugin| plugin.error.clone()).unwrap_or_default(),
-            has_settings: installed.is_some_and(|plugin| !plugin.entries.is_empty()),
+            // What goes in the danmaku menu is not on the plugin's page.
+            has_settings: installed
+                .is_some_and(|plugin| plugin.entries.iter().any(|entry| !overlays::in_menu(entry))),
             nipaplay: pack.nipaplay,
         }
     }
@@ -1168,10 +1197,11 @@ impl ErikaEngine {
         let entries = plugin
             .entries
             .iter()
+            .filter(|entry| !overlays::in_menu(entry))
             .filter_map(|entry| {
                 let entry_id = text_of(entry, "id");
                 let title = text_of(entry, "title");
-                if entry_id.is_empty() || title.is_empty() {
+                if entry_id.is_empty() || title.is_empty() || entry.get("colorSetting").is_some() {
                     return None;
                 }
                 let (kind, on, text, hint) = if let Some(enabled) = entry.get("enabled") {
@@ -1223,6 +1253,10 @@ impl ErikaEngine {
                 Purpose::Action(entry.to_string()),
             );
         }
+        // Polled once now, the evaluation wakes the engine when it finishes;
+        // a command alone wakes nothing, and the answer would wait for
+        // whatever woke the engine next.
+        self.plugins_wake();
     }
 
     // ---- Commands ----

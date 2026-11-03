@@ -211,6 +211,21 @@ var extend = {
     __host.call('extendWatchedButton', [enabled !== false]);
     return true;
   },
+  // A thin line along the bottom of the picture as long as the part played,
+  // in a theme color ('accent', 'red', 'orange' or 'green'); null
+  // or false takes it away.
+  progressStrip: function (color) {
+    if (!__host.has('player.overlay')) return false;
+    __host.call('extendProgressStrip', [color === undefined ? 'accent' : color]);
+    return true;
+  },
+  // The danmaku density chart along the bottom of the picture: how many
+  // comments each stretch of the video holds, in a theme color as above.
+  danmakuDensity: function (color) {
+    if (!__host.has('player.overlay')) return false;
+    __host.call('extendDanmakuDensity', [color === undefined ? 'accent' : color]);
+    return true;
+  },
 };
 
 function __erikaDrain() {

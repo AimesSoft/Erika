@@ -348,6 +348,10 @@ pub mod erika {
         SystemOverride,
         #[label(tr! { "zh-Hans" => "网络", "en" => "Network" })]
         Network,
+        /// Erika's own: a drawing over the picture, such as a progress
+        /// line along its bottom.
+        #[label(tr! { "zh-Hans" => "播放画面叠加", "en" => "Player overlay" })]
+        PlayerOverlay,
     }
     #[value]
     pub struct PluginTag {
@@ -424,6 +428,37 @@ pub mod erika {
         Action,
         Switch,
         Text,
+        /// One of the theme's colors, as `PluginColor` names them.
+        Color,
+    }
+
+    /// A color a plugin draws in: one of the theme's, so it holds in light
+    /// and dark appearance alike.
+    #[value]
+    pub enum PluginColor {
+        #[label(tr! { "zh-Hans" => "强调色", "en" => "Accent" })]
+        Accent,
+        #[label(tr! { "zh-Hans" => "红", "en" => "Red" })]
+        Red,
+        #[label(tr! { "zh-Hans" => "橙", "en" => "Orange" })]
+        Orange,
+        #[label(tr! { "zh-Hans" => "绿", "en" => "Green" })]
+        Green,
+    }
+
+    /// A setting a running plugin puts in the danmaku menu: its
+    /// `pluginUIEntries` item with `placement: 'danmakuMenu'`.
+    #[value]
+    pub struct PluginMenuRow {
+        /// `plugin/id`: what tells the rows apart.
+        pub key: String,
+        pub plugin: String,
+        pub id: String,
+        #[content]
+        pub title: String,
+        pub kind: PluginEntryKind,
+        pub on: bool,
+        pub color: PluginColor,
     }
 
     /// What a block of a Markdown document is.
@@ -877,6 +912,20 @@ pub mod erika {
         pub danmaku_color: i64,
         /// A plugin turned on the composer's hexadecimal color field.
         pub danmaku_hex_input: bool,
+        /// The settings plugins put in the danmaku menu.
+        pub plugin_menu: Vec<PluginMenuRow>,
+        /// A line along the bottom of the picture as long as the part
+        /// played, while a plugin shows it: steps of 1 up to the
+        /// position and 0 after it, drawn as an area. Empty when none does.
+        pub progress_strip: Vec<f64>,
+        pub progress_strip_shown: bool,
+        pub progress_strip_color: PluginColor,
+        /// How many comments each stretch of the video holds, smoothed, while
+        /// a plugin shows it along the bottom. Empty when none does, or the
+        /// video has no comments.
+        pub danmaku_density: Vec<f64>,
+        pub danmaku_density_shown: bool,
+        pub danmaku_density_color: PluginColor,
     }
 
     /// An action with a keyboard shortcut, as 「设置 › 快捷键」 lists it.
@@ -1161,6 +1210,10 @@ pub mod erika {
         fn plugin_action(&mut self, entry: String) -> Result<(), CommandError>;
         fn set_plugin_switch(&mut self, entry: String, value: bool) -> Result<(), CommandError>;
         fn set_plugin_text(&mut self, entry: String, value: String) -> Result<(), CommandError>;
+        /// Turn a plugin's switch in the danmaku menu on or off.
+        fn set_plugin_menu_switch(&mut self, plugin: String, entry: String, value: bool) -> Result<(), CommandError>;
+        /// Choose the color of a plugin's color setting in the danmaku menu.
+        fn set_plugin_menu_color(&mut self, plugin: String, entry: String, color: PluginColor) -> Result<(), CommandError>;
         fn dismiss_plugin_message(&mut self) -> Result<(), CommandError>;
         /// Start the plugins that wait; the interface's clock calls it.
         fn plugins_tick(&mut self) -> Result<(), CommandError>;

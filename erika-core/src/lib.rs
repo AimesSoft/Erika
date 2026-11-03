@@ -550,6 +550,12 @@ impl erika::Commands for ErikaEngine {
     fn set_plugin_text(&mut self, entry: String, value: String) -> Result<(), CommandError> {
         self.set_plugin_text_command(entry, value)
     }
+    fn set_plugin_menu_switch(&mut self, plugin: String, entry: String, value: bool) -> Result<(), CommandError> {
+        self.set_plugin_menu_switch_command(plugin, entry, value)
+    }
+    fn set_plugin_menu_color(&mut self, plugin: String, entry: String, color: PluginColor) -> Result<(), CommandError> {
+        self.set_plugin_menu_color_command(plugin, entry, color)
+    }
     fn dismiss_plugin_message(&mut self) -> Result<(), CommandError> {
         self.dismiss_plugin_message_command()
     }

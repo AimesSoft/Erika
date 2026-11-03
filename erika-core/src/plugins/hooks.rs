@@ -62,6 +62,19 @@ fn show_track(kernel: &Arc<dyn Kernel>, plugins: &Plugins, name: &str) -> Result
     kernel.add_danmaku(name, &liberika_plugin::comments_json(&shown).to_string())
 }
 
+/// When each comment shown plays, across the tracks: what the plugins
+/// left, without what the block lists hide.
+pub(super) fn shown_times(plugins: &Plugins) -> Vec<f64> {
+    let list = BlockList::new(plugins.block_words());
+    plugins
+        .tracks
+        .values()
+        .flat_map(|track| &track.processed)
+        .filter(|comment| !list.blocks(&comment.content))
+        .map(|comment| comment.time)
+        .collect()
+}
+
 impl ErikaEngine {
     /// A hook's evaluation answered with `value`.
     pub(super) fn plugin_hook_answered(
@@ -137,6 +150,7 @@ impl ErikaEngine {
         self.plugins.tracks.clear();
         self.plugins.chain = None;
         self.plugins.waiting_tracks.clear();
+        self.refresh_danmaku_density();
     }
 
     /// Show `contents`, a danmaku file or the JSON liberika reads, as the
@@ -163,6 +177,7 @@ impl ErikaEngine {
         );
         self.plugins.last_track = name.to_string();
         let count = show_track(kernel, &self.plugins, name)?;
+        self.refresh_danmaku_density();
         self.plugins.waiting_tracks.retain(|waiting| waiting != name);
         self.plugins.waiting_tracks.push(name.to_string());
         self.next_chain();
@@ -249,6 +264,7 @@ impl ErikaEngine {
         {
             self.add_danmaku_source(name.to_string(), count);
         }
+        self.refresh_danmaku_density();
     }
 
     /// Show the comments loaded again, hiding what the block lists name now.

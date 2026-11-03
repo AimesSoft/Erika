@@ -360,3 +360,75 @@ fn comments_pass_along_the_plugins_and_their_block_lists() {
     }
     assert_eq!(shown.0.lock().unwrap()["弹弹play"].len(), 3);
 }
+
+const OVERLAY: &str = r#"
+const pluginManifest = {
+  id: 'test.overlay', name: '画面叠加', version: '1.0.0', minHostVersion: '1.0.0',
+  permissions: ['player.overlay'],
+};
+var pluginUIEntries = [
+  { id: 'show', title: '显示', enabled: true, placement: 'danmakuMenu' },
+  { id: 'color', title: '颜色', colorSetting: { default: 'red' }, placement: 'danmakuMenu' },
+  { id: 'about', title: '关于' },
+];
+function apply() {
+  var color = settings.getSwitch('show', true) ? settings.getText('color', 'red') : null;
+  extend.progressStrip(color);
+  extend.danmakuDensity(color);
+}
+function pluginOnInitialize() { apply(); }
+function pluginHandleUIAction(id) { apply(); return null; }
+"#;
+
+#[test]
+fn a_plugin_puts_its_settings_in_the_danmaku_menu_and_draws_on_the_picture() {
+    let folder = folder();
+    std::fs::write(folder.join("overlay.js"), OVERLAY).unwrap();
+    let mut engine = ErikaEngine::default();
+    let shown = Arc::new(Shown::default());
+    engine.kernel = Some(shown.clone());
+    engine.state.video = true;
+    engine.state.duration = 10.0;
+    engine.state.progress = 0.5;
+    engine.plugins_wake();
+    engine.import_plugin_command(MediaSource::file(folder.join("overlay.js"))).unwrap();
+    settle(&mut engine, |engine| !engine.state.player.progress_strip.is_empty());
+
+    // Its two settings are in the danmaku menu, the third on its page.
+    let menu = &engine.state.player.plugin_menu;
+    assert_eq!(menu.len(), 2);
+    assert_eq!((menu[0].kind.clone(), menu[0].on), (PluginEntryKind::Switch, true));
+    assert_eq!((menu[1].kind.clone(), menu[1].color.clone()), (PluginEntryKind::Color, PluginColor::Red));
+    assert!(row(&engine, "test.overlay").unwrap().has_settings);
+    assert_eq!(engine.state.player.progress_strip_color, PluginColor::Red);
+    assert_eq!(engine.state.player.progress_strip[200], 1.0);
+    assert_eq!(engine.state.player.progress_strip[201], 0.0);
+
+    // The comments shown make the density chart.
+    let kernel: Arc<dyn crate::kernel::Kernel> = shown.clone();
+    let contents = r#"[{"time":1.5,"content":"好看"},{"time":1.6,"content":"好看"},{"time":8.5,"content":"再见"}]"#;
+    engine.load_danmaku(&kernel, "弹弹play", contents).unwrap();
+    assert_eq!(engine.state.player.danmaku_density.len(), 10);
+    assert_eq!(engine.state.player.danmaku_density[1], 1.0);
+
+    // The menu's choices reach the plugin, which draws accordingly.
+    engine
+        .set_plugin_menu_color_command("test.overlay".into(), "color".into(), PluginColor::Green)
+        .unwrap();
+    settle(&mut engine, |engine| engine.state.player.danmaku_density_color == PluginColor::Green);
+    assert_eq!(engine.state.player.plugin_menu[1].color, PluginColor::Green);
+    engine
+        .set_plugin_menu_switch_command("test.overlay".into(), "show".into(), false)
+        .unwrap();
+    settle(&mut engine, |engine| engine.state.player.progress_strip.is_empty());
+    assert!(engine.state.player.danmaku_density.is_empty());
+    assert!(!engine.state.player.plugin_menu[0].on);
+    assert!(
+        engine
+            .set_plugin_menu_switch_command("test.overlay".into(), "about".into(), true)
+            .is_err()
+    );
+
+    engine.uninstall_plugin_command("test.overlay".into()).unwrap();
+    assert!(engine.state.player.plugin_menu.is_empty());
+}

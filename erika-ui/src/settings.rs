@@ -1509,6 +1509,8 @@ pub fn plugin_settings(app: erika::Client, #[session] draft: PluginsDraft) -> im
                                             Button(id: plugin_entry_action, label: tr! { "zh-Hans" => "运行", "en" => "Run" }) => app.plugin_action(entry.id)
                                         }
                                     }
+                                    // Colors are only in the danmaku menu.
+                                    PluginEntryKind::Color => {}
                                 }
                                 if "" != entry.description {
                                     Text(content: entry.description, style: caption, emphasis: secondary, lines: 3)

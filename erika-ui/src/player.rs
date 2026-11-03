@@ -91,6 +91,16 @@ pub fn player_scene(
                         ScaleBox(width: 1280, height: 720) {
                             player_overlays(app: app)
                         }
+                        // What plugins draw along the bottom edge.
+                        if app.video {
+                            ScaleBox(width: 1280, height: 800) {
+                                Stack(width: 1280, height: 800, align: top_leading) {
+                                    Positioned(x: 0, y: 778, width: 1280, height: 22, bleed: true) {
+                                        player_plugin_overlays(app: app)
+                                    }
+                                }
+                            }
+                        }
                     }
                 } => app.toggle_pause()
             }
@@ -134,6 +144,16 @@ pub fn player_tv_scene(
                     }
                     ScaleBox(width: 1280, height: 720) {
                         player_overlays(app: app)
+                    }
+                    // What plugins draw along the bottom edge.
+                    if app.video {
+                        ScaleBox(width: 1280, height: 720) {
+                            Stack(width: 1280, height: 720, align: top_leading) {
+                                Positioned(x: 0, y: 698, width: 1280, height: 22, bleed: true) {
+                                    player_plugin_overlays(app: app)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -299,6 +319,16 @@ pub fn player_phone_scene(
                         }
                         ScaleBox(width: 693, height: 390) {
                             player_phone_overlays(app: app)
+                        }
+                        // What plugins draw along the bottom edge.
+                        if app.video {
+                            ScaleBox(width: 844, height: 390) {
+                                Stack(width: 844, height: 390, align: top_leading) {
+                                    Positioned(x: 0, y: 368, width: 844, height: 22, bleed: true) {
+                                        player_plugin_overlays(app: app)
+                                    }
+                                }
+                            }
                         }
                     }
                 } => app.toggle_pause()
@@ -776,7 +806,73 @@ pub fn player_danmaku_quick(app: erika::Client) -> impl View {
                     Button(id: danmaku_later, label: tr! { "zh-Hans" => "延后 5 秒", "en" => "5 s later" }, shape: capsule, height: 30) => app.shift_danmaku_offset(5.0)
                 }
             }
+            // What plugins put here: a switch, or a choice of color.
+            ForEach(items: app.player.plugin_menu, key: key) |row| {
+                if row.kind == PluginEntryKind::Color {
+                    Column(gap: 6) {
+                        Text(content: row.title)
+                        Picker(id: plugin_menu_color, label: row.title, label_hidden: true, selected: row.color, style: segmented) => app.set_plugin_menu_color(row.plugin, row.id, row.color)
+                    }
+                } else {
+                    Switch(id: plugin_menu_switch, label: row.title, checked: row.on) => app.set_plugin_menu_switch(row.plugin, row.id, row.on)
+                }
+            }
             Button(id: more, label: tr! { "zh-Hans" => "更多弹幕设置…", "en" => "More danmaku settings…" }, prominence: plain) => app.player_tab(PlayerTab::Danmaku)
+        }
+    }
+}
+
+/// What plugins draw along the bottom of the picture: the danmaku density
+/// chart, with the line of the part played over it (NipaPlay's 弹幕密度曲线
+/// and 底部进度条). Each takes the theme color its plugin chose.
+#[component]
+pub fn player_plugin_overlays(app: erika::Client) -> impl View {
+    ui! {
+        Stack(align: bottom) {
+            if app.player.danmaku_density_shown {
+                match app.player.danmaku_density_color {
+                    PluginColor::Accent => {
+                        Canvas(height: 20, label: tr! { "zh-Hans" => "弹幕密度", "en" => "Danmaku density" }) {
+                            Series(values: app.player.danmaku_density, kind: area, fill: accent, opacity: 0.35)
+                            Series(values: app.player.danmaku_density, kind: line, stroke: accent, stroke_width: 1.5, opacity: 0.9)
+                        }
+                    }
+                    PluginColor::Red => {
+                        Canvas(height: 20, label: tr! { "zh-Hans" => "弹幕密度", "en" => "Danmaku density" }) {
+                            Series(values: app.player.danmaku_density, kind: area, fill: status.error, opacity: 0.35)
+                            Series(values: app.player.danmaku_density, kind: line, stroke: status.error, stroke_width: 1.5, opacity: 0.9)
+                        }
+                    }
+                    PluginColor::Orange => {
+                        Canvas(height: 20, label: tr! { "zh-Hans" => "弹幕密度", "en" => "Danmaku density" }) {
+                            Series(values: app.player.danmaku_density, kind: area, fill: status.warning, opacity: 0.35)
+                            Series(values: app.player.danmaku_density, kind: line, stroke: status.warning, stroke_width: 1.5, opacity: 0.9)
+                        }
+                    }
+                    PluginColor::Green => {
+                        Canvas(height: 20, label: tr! { "zh-Hans" => "弹幕密度", "en" => "Danmaku density" }) {
+                            Series(values: app.player.danmaku_density, kind: area, fill: status.success, opacity: 0.35)
+                            Series(values: app.player.danmaku_density, kind: line, stroke: status.success, stroke_width: 1.5, opacity: 0.9)
+                        }
+                    }
+                }
+            }
+            if app.player.progress_strip_shown {
+                match app.player.progress_strip_color {
+                    PluginColor::Accent => {
+                        Canvas(height: 2, label: tr! { "zh-Hans" => "播放进度", "en" => "Playback position" }) { Series(values: app.player.progress_strip, kind: area, max: 1, fill: accent) }
+                    }
+                    PluginColor::Red => {
+                        Canvas(height: 2, label: tr! { "zh-Hans" => "播放进度", "en" => "Playback position" }) { Series(values: app.player.progress_strip, kind: area, max: 1, fill: status.error) }
+                    }
+                    PluginColor::Orange => {
+                        Canvas(height: 2, label: tr! { "zh-Hans" => "播放进度", "en" => "Playback position" }) { Series(values: app.player.progress_strip, kind: area, max: 1, fill: status.warning) }
+                    }
+                    PluginColor::Green => {
+                        Canvas(height: 2, label: tr! { "zh-Hans" => "播放进度", "en" => "Playback position" }) { Series(values: app.player.progress_strip, kind: area, max: 1, fill: status.success) }
+                    }
+                }
+            }
         }
     }
 }

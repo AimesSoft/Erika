@@ -59,6 +59,13 @@ pub fn initial() -> PlayerState {
         danmaku_colors: danmaku::send_colors(&[]),
         danmaku_color: 0xFFFFFF,
         danmaku_hex_input: false,
+        plugin_menu: Vec::new(),
+        progress_strip: Vec::new(),
+        progress_strip_shown: false,
+        progress_strip_color: PluginColor::Accent,
+        danmaku_density: Vec::new(),
+        danmaku_density_shown: false,
+        danmaku_density_color: PluginColor::Accent,
     };
     simulate_tracks(&mut player);
     player
@@ -282,6 +289,8 @@ impl ErikaEngine {
         }
         self.state.video = false;
         self.source = None;
+        self.refresh_progress_strip();
+        self.refresh_danmaku_density();
     }
 
     /// The playback rate: a plugin's, or the speed preference's.
@@ -518,6 +527,7 @@ impl ErikaEngine {
             self.still_wanted = None;
         }
         let duration = playback.duration.unwrap_or(0.0).max(0.0);
+        let duration_changed = self.state.duration != duration;
         self.state.duration = duration;
         self.refresh_chapters(&playback.chapters);
         let mut position = playback.position.max(0.0);
@@ -561,6 +571,10 @@ impl ErikaEngine {
         player.video_info = playback.video;
         name_tracks(player);
         self.update_chapter_position();
+        self.refresh_progress_strip();
+        if duration_changed {
+            self.refresh_danmaku_density();
+        }
         if playback.ended && self.seek_wanted.is_none() {
             self.advance_at_end();
         }
