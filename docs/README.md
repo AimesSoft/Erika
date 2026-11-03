@@ -2,7 +2,7 @@
 
 界面设计见 [design/index.html](../design/index.html)，交互原型见 [design/app.html](../design/app.html)。这里记录用 Bern 实现时的技术决定。
 
-依赖获取及本地源码联调见 [Cargo 依赖与本地联调](dependencies.md)：远程构建使用固定 Git 提交，本机通过忽略入库的 `.cargo/config.toml` 使用本地 Bern/liberika。
+依赖获取及本地源码联调见 [Cargo 依赖与本地联调](dependencies.md)：远程构建使用固定 Git 提交，本机通过忽略入库的 `.cargo/config.toml` 使用本地 Bern/liberika。下文的 `bern` 是用 Cargo 安装的 Bern 构建工具，与 Erika 依赖的 Bern 同一提交，安装方法见[构建工具](dependencies.md#构建工具-bern)。
 
 ## 已定的决定
 
@@ -43,14 +43,13 @@ design/                界面设计文档与原型
 在 Erika 根目录执行：
 
 ```sh
-(cd ../Bern && cargo build -p bern-cli)
-../Bern/target/debug/bern build --target web_ui --release
+bern build --target web_ui --release
 target/bern/web_ui/bin/erika-host --port 4174
 ```
 
 打开宿主打印的完整 `open http://127.0.0.1:4174/#token=…` 地址。`erika-host` 同时提供网页和 `/bern` WebSocket 通道；业务引擎在这个原生进程内运行。页面中的 WASM 只包含界面会话与协议客户端。保持宿主运行，Ctrl-C 停止服务。
 
-产物位于 `target/bern/web_ui/`，其中 `bin/` 包含宿主、CLI 和 MCP 程序。也可用 `../Bern/target/debug/bern run --target web_ui --release` 构建并自动选择端口。固定端口由 `erika-host --port` 指定。
+产物位于 `target/bern/web_ui/`，其中 `bin/` 包含宿主、CLI 和 MCP 程序。也可用 `bern run --target web_ui --release` 构建并自动选择端口。固定端口由 `erika-host --port` 指定。
 
 WebUI 的本地视频使用 liberika 浏览器播放扩展：文件留在选取它的网页中解码，原生 Erika 引擎通过同一条 WebSocket 下发播放命令并接收进度、轨道和操作结果。打开文件、暂停、跳转、字幕、弹幕与截图沿用现有播放器；截图下载到浏览器。文件名先登记给引擎，多页面按文件归属执行播放。重新打开网页后需重新选择本地文件。构建需要与 `web_app` 相同的 liberika Web 工具链，详见 [浏览器播放](web-playback.md#webui-本地播放)。
 
@@ -60,11 +59,10 @@ WebUI 的本地视频使用 liberika 浏览器播放扩展：文件留在选取�
 
 [纯 Web 播放与部署](web-playback.md) 包含 `web_app` 的播放适配、发布包和独立验证步骤。
 
-使用包含本次 Web 后端扩展的相邻 Bern 仓库。在 Erika 根目录执行：
+在 Erika 根目录执行：
 
 ```sh
-(cd ../Bern && cargo build -p bern-cli)
-../Bern/target/debug/bern run --target web_app --port 4173
+bern run --target web_app --port 4173
 ```
 
 访问 `http://127.0.0.1:4173/`，Ctrl-C 停止开发服务器。首次构建需要 liberika 的 Web 工具链（Emscripten、wasm-bindgen 等，见 [浏览器播放](web-playback.md)）及 Rust 的 `wasm32-unknown-unknown` 目标：
@@ -76,7 +74,7 @@ rustup target add wasm32-unknown-unknown
 只构建静态文件：
 
 ```sh
-../Bern/target/debug/bern build --target web_app --release
+bern build --target web_app --release
 ```
 
 产物位于 `target/bern/web_app/`；通过 HTTP(S) 提供其中的 HTML、JavaScript、CSS、WASM、`resources/` 和 `extension/`，不要直接双击 HTML。Rust 引擎在浏览器的 WASM 内运行，不需要原生 Erika 进程，也不连接 macOS 的 CLI/IPC 会话。

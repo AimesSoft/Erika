@@ -4,6 +4,16 @@
 
 liberika 当前固定到 `main` 的提交 `cc297a7c`（字幕只画在画面以内），Bern 固定到 `master` 的最新提交；两者都已推送到公开仓库。后续升级时更新 `rev` 和 `Cargo.lock`。
 
+## 构建工具 bern
+
+`bern` 命令用 Cargo 安装，与 `Cargo.toml` 里的 Bern 同一提交：命令带着生成各平台工程的模板，与应用依赖的 Bern 一致才能构建。
+
+```sh
+cargo install --locked --git https://github.com/AimesSoft/Bern --rev 3085076275be0e56314d7c24c483c05090494772 bern-cli
+```
+
+升级 Bern 时，`Cargo.toml` 的 `rev` 与这条命令里的一起换，再装一次。之后在 Erika 根目录运行 `bern run`、`bern build --target <目标>`、`bern package --target <目标>`；`bern doctor` 列出本机构建各目标还缺什么。Bern 发布到 crates.io 后改为依赖发布版，`bern` 也从发布版安装。
+
 ## 本地使用相邻源码
 
 目录排列如下：
@@ -22,7 +32,7 @@ mkdir -p .cargo
 cp .cargo/config.local.example.toml .cargo/config.toml
 ```
 
-此后直接运行普通 `cargo` 或 `bern` 命令。Cargo 自动读取 `.cargo/config.toml` 中的 `[patch]`：liberika、FFmpeg Rust 绑定和 Bern 改用相邻工作目录，修改后无需推送就能联调。Bern 只需替换 `bern` 一个 crate：`bern` 命令看到 Cargo 实际用的是本地检出，生成的宿主也从这个检出取其余 Bern crate（需要相邻检出里的 `bern` 命令）。路径相对于 Erika 根目录；源码放在其他位置时修改这个文件即可。
+此后直接运行普通 `cargo` 或 `bern` 命令。Cargo 自动读取 `.cargo/config.toml` 中的 `[patch]`：liberika、FFmpeg Rust 绑定和 Bern 改用相邻工作目录，修改后无需推送就能联调。Bern 只需替换 `bern` 一个 crate：`bern` 命令看到 Cargo 实际用的是本地检出，生成的宿主也从这个检出取其余 Bern crate。这时的 `bern` 也要来自这个检出（在 Bern 目录里 `cargo install --path crates/bern-cli`，或直接运行它 `target/debug/` 下的 `bern`），模板才与本地改动一致。路径相对于 Erika 根目录；源码放在其他位置时修改这个文件即可。
 
 `.cargo/config.toml` 已被 Git 忽略，只在本机生效。GitHub 构建不复制它，自动使用 `Cargo.toml` 的 Git 版本。不要把本地路径写回公共清单。
 

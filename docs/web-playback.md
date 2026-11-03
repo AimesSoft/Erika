@@ -22,7 +22,7 @@
 原生 `kernel/web/remote.rs` 通过现有认证 WebSocket 收发带序号的播放指令与状态。重连时保留已确认的指令序号、去重操作结果；换片丢弃旧状态；多个页面打开同一界面时，本地文件仍由选择它的页面播放。关闭该页面后需重新选择文件。字幕和弹幕读取、截图下载也由浏览器执行。
 
 ```sh
-../Bern/target/debug/bern build --target web_ui --release
+bern build --target web_ui --release
 target/bern/web_ui/bin/erika-host --port 4174
 # 把宿主打印的完整 open 地址（含 token）传给测试
 ERIKA_WEBUI_URL='http://127.0.0.1:4174/#token=...' \
@@ -35,13 +35,11 @@ PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node web/webui.test.mjs
 
 ## 构建和启动
 
-相邻目录需要当前版本的 `Bern`、`liberika`。先按 liberika 的 `docs/web.zh.md` 安装 Emscripten、wasm-bindgen 和其他构建依赖；Rust 需要 `wasm32-unknown-unknown`。
+需要用 Cargo 装好的 `bern`（见[构建工具](dependencies.md#构建工具-bern)）。先按 liberika 的 `docs/web.zh.md` 安装 Emscripten、wasm-bindgen 和其他构建依赖；Rust 需要 `wasm32-unknown-unknown`。
 
 ```sh
-# Bern 的浏览器扩展能力变动后先重编 CLI
-(cd ../Bern && cargo build -p bern-cli)
-../Bern/target/debug/bern build --target web_app --release
-../Bern/target/debug/bern run --target web_app --release --port 18766
+bern build --target web_app --release
+bern run --target web_app --release --port 18766
 ```
 
 `Bern.toml` 的 `web_extension` 调用 `web/build.py`，自动构建 liberika，并把 JS、两个 WASM、Worker 和许可证放到 `target/bern/web_app/extension/`。回退字体只在 Rust WASM 内嵌一次，libass 使用同一份字体数据；构建时会清理旧版独立的 `subfont.ttf`，不再额外下载字体。不需要手工修改生成目录。liberika 源码位置由 Cargo 解析（Git 依赖或本地 patch），也可通过 `LIBERIKA_DIR` 显式指定。仅在 Web C 依赖已经编译且没有变动时，可设置 `LIBERIKA_SKIP_NATIVE=1` 加快迭代；Rust、C 桥接及 JS 仍会更新。
@@ -70,7 +68,7 @@ MCP 程序是 `target/bern/web_app/bin/erika-mcp`（stdio），工具名沿用�
 ## 纯静态发布
 
 ```sh
-../Bern/target/debug/bern package --target web_app
+bern package --target web_app
 ```
 
 macOS 的发布包为 `target/bern/dist/erika-0.1.0-web.zip`，解压得到 `erika/`。

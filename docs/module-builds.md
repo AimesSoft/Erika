@@ -1,10 +1,9 @@
 # 按模块编译 Erika
 
-使用相邻 Bern 仓库的新 CLI：
+用 Cargo 装好的 `bern`（见[构建工具](dependencies.md#构建工具-bern)）：
 
 ```sh
-(cd ../Bern && cargo build -p bern-cli)
-../Bern/target/debug/bern build --target android --exclude-module downloads
+bern build --target android --exclude-module downloads
 ```
 
 `run`、`check`、`package`、`ir` 同样接受 `--exclude-module`。多个 ID 可用逗号分隔或重复传参。不传则编译全部模块。
@@ -13,16 +12,16 @@
 
 ```sh
 # 移除追番及依赖追番的同步。
-../Bern/target/debug/bern build --target tvos --exclude-module anime,sync
+bern build --target tvos --exclude-module anime,sync
 
 # 移除媒体库及依赖媒体库的网络媒体源、远程访问。
-../Bern/target/debug/bern build --target tvos --exclude-module library,sources,remote
+bern build --target tvos --exclude-module library,sources,remote
 
 # 移除账号及依赖账号的同步。
-../Bern/target/debug/bern build --target tvos --exclude-module account,sync
+bern build --target tvos --exclude-module account,sync
 
 # 仅保留外壳与基础播放。
-../Bern/target/debug/bern build --target tvos --exclude-module account,danmaku,enhance,anime,library,sync,sources,remote,downloads
+bern build --target tvos --exclude-module account,danmaku,enhance,anime,library,sync,sources,remote,downloads
 ```
 
 保留模块仍依赖排除项时会报错，不会自动扩大排除范围。
