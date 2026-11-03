@@ -1,18 +1,18 @@
 # Cargo 依赖与本地联调
 
-仓库内 `Cargo.toml` 的 Bern 和 liberika 使用 Git 依赖，并固定到提交。GitHub 或另一台电脑检出 Erika 后，Cargo 会下载同一份源码，无需本机的绝对路径。
+仓库内 `Cargo.toml` 的 Bern 用 crates.io 上的发布版，固定到 `=0.1.0`；liberika 用 Git 依赖，固定到提交。GitHub 或另一台电脑检出 Erika 后，Cargo 会下载同一份源码，无需本机的绝对路径。
 
-liberika 当前固定到 `main` 的提交 `cc297a7c`（字幕只画在画面以内），Bern 固定到 `master` 的最新提交；两者都已推送到公开仓库。后续升级时更新 `rev` 和 `Cargo.lock`。
+liberika 当前固定到 `main` 的提交 `cc297a7c`（字幕只画在画面以内）。后续升级时更新版本或 `rev`，以及 `Cargo.lock`。
 
 ## 构建工具 bern
 
-`bern` 命令用 Cargo 安装，与 `Cargo.toml` 里的 Bern 同一提交：命令带着生成各平台工程的模板，与应用依赖的 Bern 一致才能构建。
+`bern` 命令与 `Cargo.toml` 里的 Bern 同一版本：命令带着生成各平台工程的模板，与应用依赖的 Bern 一致才能构建。
 
 ```sh
-cargo install --locked --git https://github.com/AimesSoft/Bern --rev 3085076275be0e56314d7c24c483c05090494772 bern-cli
+cargo binstall bern-cli@0.1.0
 ```
 
-升级 Bern 时，`Cargo.toml` 的 `rev` 与这条命令里的一起换，再装一次。之后在 Erika 根目录运行 `bern run`、`bern build --target <目标>`、`bern package --target <目标>`；`bern doctor` 列出本机构建各目标还缺什么。Bern 发布到 crates.io 后改为依赖发布版，`bern` 也从发布版安装。
+[cargo-binstall](https://github.com/cargo-bins/cargo-binstall) 从 Bern 的 Release 下载编译好的 `bern`；也可以用 `cargo install --locked bern-cli@0.1.0` 自己编译。升级 Bern 时，根目录 `Cargo.toml` 的 `bern` 与 `erika-core/Cargo.toml` 的 `bern-script` 两处版本与这条命令里的一起换，再装一次。之后在 Erika 根目录运行 `bern run`、`bern build --target <目标>`、`bern package --target <目标>`；`bern doctor` 列出本机构建各目标还缺什么。
 
 ## 本地使用相邻源码
 

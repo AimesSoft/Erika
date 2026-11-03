@@ -153,6 +153,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-executor"
+version = "1.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f426a31126c735126297bc5ea7a521263c9faff4f63ca415267ee625651c4f37"
+dependencies = [
+ "async-task",
+ "concurrent-queue",
+ "fastrand",
+ "futures-lite",
+ "pin-project-lite",
+ "slab",
+]
+
+[[package]]
 name = "async-io"
 version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -381,7 +395,8 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 [[package]]
 name = "bern"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67efd1f11f5a83bc480788a2e90957fb5cc5f4d15b3fadf1ab8e9a50b3b949b4"
 dependencies = [
  "bern-command",
  "bern-macros",
@@ -395,17 +410,30 @@ dependencies = [
 [[package]]
 name = "bern-command"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95166f5d444f2ed1eb280bc03d8339e78f5e16009e08fe240fa60e583cf6bb67"
 dependencies = [
  "bern-protocol",
+ "block2",
+ "dispatch2",
  "keyring",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-avf-audio",
+ "objc2-core-foundation",
+ "objc2-foundation",
+ "objc2-media-player",
  "security-framework",
+ "windows",
+ "windows-numerics",
+ "zbus 5.19.0",
 ]
 
 [[package]]
 name = "bern-ir"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cbc585c474639e18a35c47dfd04780749695a86fbd6b6b465ae4ce10a53d4f4b"
 dependencies = [
  "bern-protocol",
  "serde",
@@ -415,7 +443,8 @@ dependencies = [
 [[package]]
 name = "bern-macros"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0a56700807d761b9014f04031f0d910628fa54cf2ed1b0ca4aa3ace505d5e9a"
 dependencies = [
  "bern-ir",
  "bern-protocol",
@@ -429,7 +458,8 @@ dependencies = [
 [[package]]
 name = "bern-media"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2996cc4ec6d28e9aafc7f90fb02c21dc18aea6e33f1ac695fc909c420c19b2a3"
 dependencies = [
  "bern-protocol",
 ]
@@ -437,7 +467,8 @@ dependencies = [
 [[package]]
 name = "bern-protocol"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebd4672961c724f0f2a2c57128847e9fffcdeca95be712702c8c5df2646a3e57"
 dependencies = [
  "serde",
  "serde_json",
@@ -446,7 +477,8 @@ dependencies = [
 [[package]]
 name = "bern-runtime"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce8aaf9b00923f30f0d5fcc4847cb7843cdc4e32dee3ab24ee097bcc6542d6d2"
 dependencies = [
  "bern-protocol",
 ]
@@ -454,7 +486,8 @@ dependencies = [
 [[package]]
 name = "bern-script"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85323690def683911e3e51d530582972853a334a6f37598850df19c8ba75f8a7"
 dependencies = [
  "boa_engine",
  "serde",
@@ -464,7 +497,8 @@ dependencies = [
 [[package]]
 name = "bern-syntax"
 version = "0.1.0"
-source = "git+https://github.com/AimesSoft/Bern?rev=3085076275be0e56314d7c24c483c05090494772#3085076275be0e56314d7c24c483c05090494772"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea2be448e64eb62ffa9f4cc6f627f00047e2677551b07daee9e4b6cb5a4bb17c"
 dependencies = [
  "bern-media",
  "bern-protocol",
@@ -1337,6 +1371,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.13.2",
+ "block2",
+ "libc",
  "objc2",
 ]
 
@@ -3628,6 +3664,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-app-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-foundation",
+]
+
+[[package]]
 name = "objc2-audio-toolbox"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3639,6 +3687,17 @@ dependencies = [
  "objc2-core-audio",
  "objc2-core-audio-types",
  "objc2-core-foundation",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-avf-audio"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2",
  "objc2-foundation",
 ]
 
@@ -3736,6 +3795,20 @@ dependencies = [
  "bitflags 2.13.2",
  "objc2",
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-media-player"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85f2a98483f6e76313cb85a5a185eaa3cda86a177b13a8852d56cbd0085bf635"
+dependencies = [
+ "bitflags 2.13.2",
+ "block2",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-foundation",
 ]
 
 [[package]]
@@ -4714,7 +4787,7 @@ dependencies = [
  "rand 0.8.8",
  "serde",
  "sha2",
- "zbus",
+ "zbus 4.4.0",
 ]
 
 [[package]]
@@ -5185,7 +5258,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -5686,6 +5759,7 @@ checksum = "7cc1186384beb7dd8eedea376413fd654937285ea6c9cfbb928dc3043ea4b606"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 
@@ -6447,9 +6521,44 @@ dependencies = [
  "uds_windows",
  "windows-sys 0.52.0",
  "xdg-home",
- "zbus_macros",
- "zbus_names",
- "zvariant",
+ "zbus_macros 4.4.0",
+ "zbus_names 3.0.0",
+ "zvariant 4.2.0",
+]
+
+[[package]]
+name = "zbus"
+version = "5.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5db4be7c075cb421e4b7ee645541604239bd243ba7c357511f4ff3a74b555907"
+dependencies = [
+ "async-broadcast",
+ "async-executor",
+ "async-io",
+ "async-lock",
+ "async-process",
+ "async-recursion",
+ "async-task",
+ "async-trait",
+ "blocking",
+ "enumflags2",
+ "event-listener",
+ "futures-core",
+ "futures-lite",
+ "hex",
+ "libc",
+ "ordered-stream",
+ "rustix",
+ "serde",
+ "serde_repr",
+ "tracing",
+ "uds_windows",
+ "uuid",
+ "windows-sys 0.61.2",
+ "winnow 1.0.4",
+ "zbus_macros 5.19.0",
+ "zbus_names 4.3.5",
+ "zvariant 5.15.1",
 ]
 
 [[package]]
@@ -6462,7 +6571,22 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
- "zvariant_utils",
+ "zvariant_utils 2.1.0",
+]
+
+[[package]]
+name = "zbus_macros"
+version = "5.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2990635d09ade6df1868f72f8cac69a876a90981e8bd3c40b1be413f8dc88f40"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+ "zbus_names 4.3.5",
+ "zvariant 5.15.1",
+ "zvariant_utils 4.2.0",
 ]
 
 [[package]]
@@ -6473,7 +6597,27 @@ checksum = "4b9b1fef7d021261cc16cba64c351d291b715febe0fa10dc3a443ac5a5022e6c"
 dependencies = [
  "serde",
  "static_assertions",
- "zvariant",
+ "zvariant 4.2.0",
+]
+
+[[package]]
+name = "zbus_names"
+version = "4.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "812a12be4ead7a59e18ea8f047d08add0066b73bc62fc1467066a2472ae088dd"
+dependencies = [
+ "serde",
+ "winnow 1.0.4",
+ "zvariant 5.15.1",
+]
+
+[[package]]
+name = "zcheapstr"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "939f186d9ecebe044315a5cb6d6f78568bbc21152adc954d5a0c2f58bdbc9920"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -6634,7 +6778,22 @@ dependencies = [
  "enumflags2",
  "serde",
  "static_assertions",
- "zvariant_derive",
+ "zvariant_derive 4.2.0",
+]
+
+[[package]]
+name = "zvariant"
+version = "5.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80bf6d6cd6a4b601acb64cfb8284cdc643fcfa75ef26ae3c46ec8aa4e8a1fbb7"
+dependencies = [
+ "endi",
+ "enumflags2",
+ "serde",
+ "winnow 1.0.4",
+ "zcheapstr",
+ "zvariant_derive 5.15.1",
+ "zvariant_utils 4.2.0",
 ]
 
 [[package]]
@@ -6647,7 +6806,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
- "zvariant_utils",
+ "zvariant_utils 2.1.0",
+]
+
+[[package]]
+name = "zvariant_derive"
+version = "5.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef2672456ba1cb54b5eaec136e63135b3c7495fb938e53b28a62e633496d486d"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+ "zvariant_utils 4.2.0",
 ]
 
 [[package]]
@@ -6659,4 +6831,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "zvariant_utils"
+version = "4.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bad0294361a320b694a328460dc73add56c306150f5cb6bfafc44446120008a3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde",
+ "syn 3.0.9",
+ "winnow 1.0.4",
 ]

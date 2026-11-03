@@ -8,7 +8,8 @@ edition = "2024"
 rust-version = "1.99"
 
 [workspace.dependencies]
-bern = { git = "https://github.com/AimesSoft/Bern", rev = "3085076275be0e56314d7c24c483c05090494772" }
+# Bern from crates.io, at the version of the build tool (docs/dependencies.md).
+bern = "=0.1.0"
 erika-protocol = { path = "erika-protocol", default-features = false }
 erika-store = { path = "erika-store" }
 erika-dandanplay = { path = "erika-dandanplay" }
