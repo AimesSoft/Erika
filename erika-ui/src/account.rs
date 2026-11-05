@@ -10,6 +10,7 @@ pub struct AccountLoginDraft {
     pub captcha: String,
 }
 
+#[cfg(feature = "bern-module-account")]
 #[component]
 pub fn account_dialogs(app: erika::Client, settings_window: bool, #[session] draft: AccountLoginDraft) -> impl View {
     ui! {
@@ -48,6 +49,7 @@ pub fn account_dialogs(app: erika::Client, settings_window: bool, #[session] dra
     }
 }
 
+#[cfg(feature = "bern-module-account")]
 #[component]
 pub fn account_login(
     app: erika::Client,
@@ -108,6 +110,7 @@ pub fn account_login(
 /// Both providers use the same signed-in and signed-out account layout.
 /// Where no section title names the service (`named`), the line under a
 /// signed-in name does.
+#[cfg(feature = "bern-module-account")]
 #[component]
 pub fn account_profile(
     app: erika::Client,

@@ -2,7 +2,7 @@
 
 界面设计见 [design/index.html](../design/index.html)，交互原型见 [design/app.html](../design/app.html)。这里记录用 Bern 实现时的技术决定。
 
-依赖获取及本地源码联调见 [Cargo 依赖与本地联调](dependencies.md)：远程构建使用 crates.io 上的 Bern 与固定 Git 提交的 liberika，本机通过忽略入库的 `.cargo/config.toml` 使用本地 Bern/liberika。下文的 `bern` 是用 Cargo 安装的 Bern 构建工具，与 Erika 依赖的 Bern 同一提交，安装方法见[构建工具](dependencies.md#构建工具-bern)。
+依赖获取及本地源码联调见 [Cargo 依赖与本地联调](dependencies.md)：远程构建使用 crates.io 上的 Bern 与固定 Git 提交的 liberika，本机通过忽略入库的 `.cargo/config.toml` 使用本地 Bern/liberika。下文的 `bern` 是用 Cargo 安装的 Bern 构建工具，与 Erika 依赖的 Bern 同一版本，安装方法见[构建工具](dependencies.md#构建工具-bern)。
 
 ## 已定的决定
 

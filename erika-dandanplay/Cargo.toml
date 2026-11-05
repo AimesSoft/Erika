@@ -3,6 +3,7 @@ name = "erika-dandanplay"
 description = "Erika: the dandanplay service, through NipaPlay's gateways"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish = false
 

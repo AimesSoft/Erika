@@ -3,6 +3,7 @@ name = "erika-store"
 description = "Erika: what the app keeps on the device, in one SQLite database"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish = false
 

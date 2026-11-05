@@ -3,6 +3,7 @@ name = "erika-core"
 description = "Erika: the engine"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish = false
 
@@ -60,4 +61,4 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Plugins run in Boa where the tests have no system JavaScript host.
 [dev-dependencies]
-bern-script = { version = "=0.1.0", features = ["boa"] }
+bern-script = { version = "=0.1.7", features = ["boa"] }

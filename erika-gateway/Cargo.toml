@@ -3,6 +3,7 @@ name = "erika-gateway"
 description = "Erika: a dandanplay-style gateway before a danmaku server such as Misaka, knowing files by their fingerprints"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 publish = false
 

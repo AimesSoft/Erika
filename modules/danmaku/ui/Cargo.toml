@@ -3,6 +3,7 @@ name = "erika-danmaku-ui"
 description = "The danmaku module: its interface"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]

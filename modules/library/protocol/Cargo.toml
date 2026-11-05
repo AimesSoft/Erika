@@ -3,6 +3,7 @@ name = "erika-library-protocol"
 description = "The library module: its state and commands"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]

@@ -3,6 +3,7 @@ name = "erika-sources-core"
 description = "The sources module: its engine"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]

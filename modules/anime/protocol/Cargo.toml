@@ -3,6 +3,7 @@ name = "erika-anime-protocol"
 description = "The anime module: its state and commands"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]
