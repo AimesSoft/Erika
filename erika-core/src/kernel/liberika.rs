@@ -32,6 +32,8 @@ use liberika::{
 };
 #[cfg(target_os = "windows")]
 use liberika::{SurfaceOutputCapabilities, WgpuSurfaceHandle, WgpuSurfaceKind};
+#[cfg(target_os = "android")]
+use liberika::{WgpuSurfaceHandle, WgpuSurfaceKind};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -107,6 +109,14 @@ enum Setting {
 impl Liberika {
     /// Start the kernel's thread and install the kernel in Bern.
     pub fn install() -> Arc<dyn Kernel> {
+        // FFmpeg's MediaCodec decoder attaches its threads through the VM.
+        #[cfg(target_os = "android")]
+        // SAFETY: the runtime gives the live VM of this process.
+        if let Err(error) = unsafe {
+            liberika::ffmpeg::register_android_java_vm(ndk_context::android_context().vm())
+        } {
+            eprintln!("Software decoding only: {error}");
+        }
         let (sender, receiver) = channel();
         let hub: Hub = Arc::default();
         let playback = Arc::new(Mutex::new(Playback::default()));
@@ -310,6 +320,8 @@ impl MediaKernel for Liberika {
         let kind = SurfaceKind::SwapChainPanel;
         #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
         let kind = SurfaceKind::FrameSink;
+        #[cfg(target_os = "android")]
+        let kind = SurfaceKind::NativeWindow;
         vec![kind]
     }
 
@@ -688,6 +700,15 @@ fn platform_surface(surface: &VideoSurface) -> Result<PlatformSurface, CommandEr
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         SurfaceHandle::MetalLayer(layer) => Ok(PlatformSurface::Metal(MetalSurfaceHandle::new(
             layer,
+            size.width,
+            size.height,
+            size.scale,
+        ))),
+        #[cfg(target_os = "android")]
+        SurfaceHandle::NativeWindow(window) => Ok(PlatformSurface::Wgpu(WgpuSurfaceHandle::new(
+            WgpuSurfaceKind::AndroidNativeWindow,
+            window,
+            0,
             size.width,
             size.height,
             size.scale,

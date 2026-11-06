@@ -14,7 +14,7 @@ fn kernel_cfg() {
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     let plays = match os.as_str() {
-        "macos" | "ios" | "tvos" | "windows" => true,
+        "macos" | "ios" | "tvos" | "windows" | "android" => true,
         "linux" => env != "ohos",
         _ => false,
     };

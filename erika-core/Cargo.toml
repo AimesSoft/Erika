@@ -35,7 +35,7 @@ erika-anime-protocol = { path = "../modules/anime/protocol", optional = true }
 erika-library-protocol = { path = "../modules/library/protocol", optional = true }
 
 # liberika plays where Bern hosts it as the media kernel.
-[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "windows", target_os = "android", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
 liberika.workspace = true
 crossbeam-channel = "0.5"
 png = "0.17"
@@ -47,6 +47,13 @@ png = "0.17"
 [target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]
 liberika = { workspace = true, features = ["wgpu"] }
 wgpu-hal = "=29.0.3"
+
+# Android draws with wgpu too, into the view's native window, and FFmpeg's
+# MediaCodec decoder needs the Java VM.
+[target.'cfg(target_os = "android")'.dependencies]
+liberika = { workspace = true, features = ["wgpu"] }
+wgpu-hal = "=29.0.3"
+ndk-context = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { version = "3", features = ["cookies", "json"] }

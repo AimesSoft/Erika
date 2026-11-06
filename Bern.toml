@@ -118,6 +118,8 @@ channels = ["ipc"]
 web_ui = "web_ui"
 # One APK for each, in a release.
 abis = ["arm64-v8a", "armeabi-v7a", "x86_64"]
+# Streams, remote access and its discovery; liberika's C++ needs the runtime.
+android = { network = true, multicast = true, cxx_runtime = true }
 
 [targets.web_app]
 javascript = true
