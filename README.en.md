@@ -250,7 +250,7 @@ The web comes in two forms: `web_app` compiles the engine into the page and depl
 Install [Rust](https://rustup.rs/) first. `rust-toolchain.toml` pins Rust 1.99.0, and the first Cargo run selects it. Then install Bern's build tool, `bern`, at the version of the Bern Erika uses:
 
 ```sh
-cargo install --locked --git https://github.com/AimesSoft/Bern --rev @@BERN_REV@@ bern-cli
+cargo install --locked --git https://github.com/AimesSoft/Bern --rev 06d2cb9dc8f740e5a09cc1f69e08d4d43881da16 bern-cli
 ```
 
 Get Erika, then prepare liberika's native dependencies (FFmpeg, dav1d, libass and others, built statically, once):

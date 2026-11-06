@@ -9,8 +9,9 @@ rust-version = "1.99"
 license = "MIT"
 
 [workspace.dependencies]
-# Bern from crates.io, at the version of the build tool (docs/dependencies.md).
-bern = "=0.1.8"
+# Bern at a pinned commit of master, with what the next release will carry, at
+# the revision of the build tool (docs/dependencies.md).
+bern = { git = "https://github.com/AimesSoft/Bern", rev = "06d2cb9dc8f740e5a09cc1f69e08d4d43881da16" }
 erika-protocol = { path = "erika-protocol", default-features = false }
 erika-store = { path = "erika-store" }
 erika-dandanplay = { path = "erika-dandanplay" }
