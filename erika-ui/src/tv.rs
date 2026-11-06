@@ -41,20 +41,20 @@ pub fn tv_shell(
                             tv_scene(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, page: MainPage::Search)
                         }
                         if (build.modules.anime && app.features.anime) {
-                            Tab(value: MainPage::Home, label: tr! { "zh-Hans" => "首页", "en" => "Home" }) {
+                            Tab(value: MainPage::Home, label: tr! { "zh-Hans" => "首页", "en" => "Home" }, icon: "house") {
                                 tv_scene(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, page: MainPage::Home)
                             }
-                            Tab(value: MainPage::New, label: tr! { "zh-Hans" => "新番", "en" => "New" }) {
+                            Tab(value: MainPage::New, label: tr! { "zh-Hans" => "新番", "en" => "New" }, icon: "calendar") {
                                 tv_scene(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, page: MainPage::New)
                             }
                         }
                         if (build.modules.library && app.features.library) {
-                            Tab(value: MainPage::Library, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }) {
+                            Tab(value: MainPage::Library, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "film.stack") {
                                 tv_scene(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, page: MainPage::Library)
                             }
                         }
                         if (build.modules.downloads && app.features.downloads) {
-                            Tab(value: MainPage::Downloads, label: tr! { "zh-Hans" => "下载", "en" => "Downloads" }) {
+                            Tab(value: MainPage::Downloads, label: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, icon: "arrow.down.circle") {
                                 tv_scene(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, page: MainPage::Downloads)
                             }
                         }

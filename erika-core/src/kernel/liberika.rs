@@ -54,6 +54,64 @@ const SETTLED_AFTER: u32 = 120;
 
 type Hub = Arc<Mutex<Option<Arc<dyn KernelHub>>>>;
 
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+unsafe extern "C" {
+    fn objc_retain(object: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn objc_release(object: *mut std::ffi::c_void);
+}
+
+#[cfg(target_os = "android")]
+#[link(name = "android")]
+unsafe extern "C" {
+    fn ANativeWindow_acquire(window: *mut std::ffi::c_void);
+    fn ANativeWindow_release(window: *mut std::ffi::c_void);
+}
+
+/// A reference to a view's native surface, for as long as the thread of the
+/// presenters may reach it. That thread can be busy opening a stream past the
+/// time a view waits for it to let go, and the view's own surface is gone by
+/// the time it gets there.
+struct Held(usize);
+
+// SAFETY: both kinds of surface are reference counted across threads.
+unsafe impl Send for Held {}
+
+impl Held {
+    fn of(surface: &VideoSurface) -> Option<Held> {
+        match surface.handle {
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+            SurfaceHandle::MetalLayer(layer) => {
+                // SAFETY: the view keeps the layer alive during this call.
+                unsafe { objc_retain(layer as *mut _) };
+                Some(Held(layer as usize))
+            }
+            #[cfg(target_os = "android")]
+            SurfaceHandle::NativeWindow(window) => {
+                // SAFETY: the view keeps the window alive during this call.
+                unsafe { ANativeWindow_acquire(window as *mut _) };
+                Some(Held(window as usize))
+            }
+            #[allow(unreachable_patterns)]
+            _ => None,
+        }
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        // SAFETY: `of` took this reference.
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        unsafe {
+            objc_release(self.0 as *mut _)
+        };
+        // SAFETY: `of` took this reference.
+        #[cfg(target_os = "android")]
+        unsafe {
+            ANativeWindow_release(self.0 as *mut _)
+        };
+    }
+}
+
 pub struct Liberika {
     sender: Sender<Message>,
     hub: Hub,
@@ -75,6 +133,7 @@ enum Message {
         view: String,
         player: String,
         surface: VideoSurface,
+        held: Option<Held>,
     },
     Resize {
         view: String,
@@ -338,6 +397,7 @@ impl MediaKernel for Liberika {
         self.send(Message::Attach {
             view: view.into(),
             player: player.into(),
+            held: Held::of(&surface),
             surface,
         });
     }
@@ -409,6 +469,7 @@ struct View {
     token: String,
     player: String,
     surface: VideoSurface,
+    _held: Option<Held>,
 }
 
 struct Session {
@@ -886,12 +947,14 @@ impl Worker {
                 view,
                 player,
                 surface,
+                held,
             } => {
                 self.views.retain(|existing| existing.token != view);
                 self.views.push(View {
                     token: view,
                     player: player.clone(),
                     surface,
+                    _held: held,
                 });
                 if let Err(error) = self.show(&player) {
                     eprintln!("liberika: cannot show `{player}`: {}", error.message);
@@ -915,13 +978,15 @@ impl Worker {
                 }
             }
             Message::Detach { view, done } => {
-                let player = self
+                // Kept to the end of this arm: its surface outlives the
+                // presenter's use of it.
+                let removed = self
                     .views
                     .iter()
                     .position(|existing| existing.token == view)
-                    .map(|index| self.views.remove(index).player);
-                if let Some(player) = player
-                    && let Some(session) = self.players.get_mut(&player)
+                    .map(|index| self.views.remove(index));
+                if let Some(removed) = &removed
+                    && let Some(session) = self.players.get_mut(&removed.player)
                     && session.view.as_deref() == Some(&view)
                 {
                     let _ = session.presenter.detach_surface();
@@ -935,7 +1000,7 @@ impl Worker {
                         session.sink = None;
                     }
                     // An earlier view of the player shows it again.
-                    let _ = self.show(&player);
+                    let _ = self.show(&removed.player);
                 }
                 let _ = done.send(());
             }
