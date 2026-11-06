@@ -218,7 +218,18 @@ jobs:
             echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME"
             echo "ANDROID_API_LEVEL=26"
           } >> "$GITHUB_ENV"
-          sysroot="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          # The NDK's C++ headers need a libclang as new as the NDK's own compiler.
+          prebuilt="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          libclang=$(find "$prebuilt" -maxdepth 2 -name 'libclang.so*' | head -n 1)
+          if [ -n "$libclang" ]; then
+            echo "LIBCLANG_PATH=$(dirname "$libclang")" >> "$GITHUB_ENV"
+            echo "CLANG_PATH=$prebuilt/bin/clang" >> "$GITHUB_ENV"
+          else
+            sudo apt-get install -y clang-20 libclang-20-dev
+            echo "LIBCLANG_PATH=/usr/lib/llvm-20/lib" >> "$GITHUB_ENV"
+            echo "CLANG_PATH=/usr/lib/llvm-20/bin/clang" >> "$GITHUB_ENV"
+          fi
+          sysroot="$prebuilt/sysroot"
           echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--target=aarch64-linux-android26 --sysroot=$sysroot" >> "$GITHUB_ENV"
           echo "BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi=--target=armv7a-linux-androideabi26 --sysroot=$sysroot" >> "$GITHUB_ENV"
           echo "BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android=--target=x86_64-linux-android26 --sysroot=$sysroot" >> "$GITHUB_ENV"
