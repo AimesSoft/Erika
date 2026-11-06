@@ -7,7 +7,7 @@ import sys
 
 system, headless = sys.argv[1], sys.argv[2] == "true"
 dist = pathlib.Path("target/bern/dist")
-version = re.search(r'^version = "(.+)"', pathlib.Path("Bern.toml").read_text(), re.M).group(1)
+version = re.search(r'^version = "(.+)"', pathlib.Path("Bern.toml").read_text(encoding="utf-8"), re.M).group(1)
 arches = {
     "arm64-v8a": "arm64", "armeabi-v7a": "armv7", "aarch64": "arm64", "arm64": "arm64",
     "x86_64": "x64", "x86-64": "x64", "amd64": "x64", "x64": "x64", "armv7": "armv7",
