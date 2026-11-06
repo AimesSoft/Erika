@@ -139,9 +139,29 @@ Embedded tracks and external files both work. libass draws ASS with the fonts at
 | Account sync `sync` | One `.ebp` backup file takes all your data along; three-way merge sync over WebDAV; tokens and passwords encrypted with a sync passphrase |
 | Downloads `downloads` | BitTorrent: magnet links and `.torrent` files, pause, resume, play while downloading |
 | Network sources `sources` | Entry in place, no real function yet |
-| LAN and remote `remote` | Entry in place, no real function yet |
+| LAN and remote `remote` | Turned on, this device becomes a remote access host; see "Remote access" below |
 
 Modules depend on each other: account sync needs the account, and network sources and LAN and remote need the library. Erika follows those dependencies when you switch a module, and a build that leaves out a module something else still needs stops with an error.
+
+### Remote access
+
+Turn on the switch under Settings › LAN and Remote and this device serves on port 1180:
+
+- **Browsers**: open an address the settings list and you get Erika's WebUI. The page and the window share one engine, one library and one set of settings; a video started in the page is decoded and played by the browser, so the other device installs nothing.
+- **NipaPlay**: fully compatible with NipaPlay's remote access. NipaPlay finds this device on the network, browses its library, streams video and subtitles by range and writes progress back.
+- **Remote control**: other devices can control playback here. The first time is confirmed on this device, and "Trust This Device" stops the question.
+
+The service has no password: the address alone opens it. It is off by default, and meant for networks you trust.
+
+### Headless
+
+Each desktop system has a `headless` package: no window, only `erika-host`, `erika`, `erika-mcp` and the WebUI, for a NAS or a server. Open it in a browser after it starts, or drive it with the command line and MCP.
+
+```sh
+bin/erika-host --port 4174
+```
+
+It turns remote access on by itself; devices on the network open `http://<this machine>:1180/`.
 
 ### Plugins
 
@@ -198,7 +218,18 @@ bern build --target macos --release \
 
 ## Download
 
-There is no release yet. For now, build from source.
+Releases are on the [Releases](https://github.com/AimesSoft/Erika/releases) page, named `Erika-<version>-<system>-<architecture>[-headless]`.
+
+| System | Architecture | Package |
+| --- | --- | --- |
+| macOS | `x64`, `arm64` | `.dmg`; headless `-headless.zip` |
+| Windows | `x64`, `arm64` | `-setup.exe`, `.zip`; headless `-headless.zip` |
+| Linux | `x64`, `arm64` | `.deb`, `.tar.gz`; headless `-headless.tar.gz` |
+| Android (phones, tablets, TV) | `arm64`, `armv7`, `x64` | `.apk` |
+| iOS, iPadOS | `arm64` | `.ipa`, iOS 16 and later |
+| Apple TV | `arm64` | `.ipa` |
+
+The macOS, iOS, Apple TV and Windows packages have no developer signature: sign an `.ipa` with your own Apple ID through AltStore, Sideloadly or the like. The Linux build uses the system's FFmpeg 8, so it needs Ubuntu 26.04 or a distribution as recent.
 
 ## Platforms
 
@@ -208,8 +239,9 @@ There is no release yet. For now, build from source.
 | Windows | WinUI 3 | Direct3D 11 | ✅ liberika |
 | Linux | GTK 4 | wgpu | ✅ liberika |
 | Web | DOM + WebAssembly | WebCodecs + WebGL2 | ✅ liberika's browser backend |
-| iOS, Apple TV | SwiftUI | — | 🚧 Interface done, kernel not connected yet |
-| Android | Jetpack Compose | — | 🚧 Interface done, kernel not connected yet |
+| iOS, iPadOS | SwiftUI | Metal | ✅ liberika |
+| Apple TV | SwiftUI | Metal | ✅ liberika |
+| Android, Android TV | Jetpack Compose | Vulkan (wgpu) | ✅ liberika |
 
 The web comes in two forms: `web_app` compiles the engine into the page and deploys as static files; the page of `web_ui` connects to a native `erika-host`.
 
@@ -218,10 +250,8 @@ The web comes in two forms: `web_app` compiles the engine into the page and depl
 Install [Rust](https://rustup.rs/) first. `rust-toolchain.toml` pins Rust 1.99.0, and the first Cargo run selects it. Then install Bern's build tool, `bern`, at the version of the Bern Erika uses:
 
 ```sh
-cargo binstall bern-cli@0.1.7
+cargo install --locked --git https://github.com/AimesSoft/Bern --rev @@BERN_REV@@ bern-cli
 ```
-
-[cargo-binstall](https://github.com/cargo-bins/cargo-binstall) downloads a compiled `bern`; `cargo install --locked bern-cli@0.1.7` compiles it instead.
 
 Get Erika, then prepare liberika's native dependencies (FFmpeg, dav1d, libass and others, built statically, once):
 
@@ -242,13 +272,15 @@ Then run it:
 bern run
 ```
 
+The native dependencies of phones and televisions build for their own targets; the commands are in the [release workflow](.github/workflows/release.yml).
+
 `bern run` builds and opens the version for this computer. `bern build --target <target> --release` builds one target, `bern package --target <target>` makes an installer, and `bern doctor` lists what this computer still needs for each target.
 
 | Target | Platform |
 | --- | --- |
 | `macos` | macOS |
 | `windows` | Windows |
-| `linux` | Linux. Needs liberika's `wgpu-hal` patch, so for now it builds only from a sibling checkout; see [the dependency notes](docs/dependencies.md#本地使用相邻源码) |
+| `linux` | Linux. Needs liberika's `wgpu-hal` patch, in `.cargo/config.toml`; see [the dependency notes](docs/dependencies.md#本地使用相邻源码) |
 | `web_app`, `web_ui` | Browsers. Also needs Emscripten; see [browser playback](docs/web-playback.md) |
 | `ios`, `tvos` | Simulators |
 | `android` | Android phones |
@@ -259,12 +291,12 @@ To change Bern or liberika at the same time, put them beside Erika and copy `.ca
 
 Erika is in development, at version 0.1.0.
 
-- **Played video on**: a Mac, a Windows PC, a Steam Deck (SteamOS, Wayland) and Chrome.
-- **Interface only**: every screen was checked on the iPhone and Apple TV simulators and an Android phone, but playback there is simulated, with a still for the picture and no subtitles or danmaku.
-- **Still placeholders**: network sources, LAN and remote.
+- **Played video on**: a Mac, a Windows PC, a Steam Deck (SteamOS, Wayland), Chrome, the iPhone, iPad, iPhone Duo and Apple TV simulators, and Android phone, tablet and Android TV emulators.
+- **Not on real devices yet**: iOS, Apple TV and Android have played with the real kernel in simulators only.
+- **Still placeholders**: network sources.
 - **Recognition server**: TV shows and films are recognised by the server built into Erika. It has no domain yet, so its requests travel as plain HTTP.
 
-The current Bern 0.1.7 has been built and run on macOS only; what is said of the other platforms comes from earlier Bern versions.
+Remote access follows NipaPlay's source and was checked route by route with a simulated client; it has not been tried against the NipaPlay app itself.
 
 ## Repository
 

@@ -139,9 +139,29 @@ mpv 把内核 libmpv 和播放器放在一起，用 C 写成，很多播放器�
 | 账号同步 `sync` | 一个 `.ebp` 备份文件带走全部数据；WebDAV 三方合并同步；令牌和密码用同步口令加密 |
 | 下载 `downloads` | BT 下载：磁力链接和 `.torrent`，暂停、续传、边下边播 |
 | 网络媒体源 `sources` | 入口已留好，还没有实际功能 |
-| 局域网与远程 `remote` | 入口已留好，还没有实际功能 |
+| 局域网与远程 `remote` | 打开后这台设备就是一台远程访问主机，见下面的「远程访问」 |
 
 模块之间有依赖：账号同步需要账号，网络媒体源与局域网和远程需要媒体库。开关时 Erika 会按依赖处理；构建时排除了还被依赖的模块，会直接报错。
+
+### 远程访问
+
+打开「设置 › 局域网与远程」里的开关，这台设备就在端口 1180 上服务：
+
+- **浏览器**：直接打开设置里列出的地址，就是 Erika 的 WebUI。页面和窗口共用同一个引擎，看同一份媒体库和设置；在页面里开始的视频由浏览器解码播放，别的设备不用安装任何东西。
+- **NipaPlay**：和 NipaPlay 的远程访问完全兼容。NipaPlay 能在局域网里发现这台设备，看它的媒体库、按范围串流视频和字幕，写回播放进度。
+- **遥控**：其他设备可以控制这里的播放，第一次要在这台设备上确认，勾选「信任此设备」后不再询问。
+
+这个服务不要密码，地址就能打开，所以默认关闭，只在信任的网络里打开。
+
+### 无头版
+
+每种电脑系统都有一个 `headless` 包：没有窗口，只有 `erika-host`、`erika`、`erika-mcp` 和 WebUI，适合放在 NAS 或服务器上。运行后用浏览器打开，或者用命令行和 MCP 操作。
+
+```sh
+bin/erika-host --port 4174
+```
+
+它默认打开远程访问，局域网里的设备访问 `http://<这台机器>:1180/` 即可。
 
 ### 插件
 
@@ -198,7 +218,18 @@ bern build --target macos --release \
 
 ## 下载
 
-还没有发布版本，现在请从源码构建。
+发布后在 [Releases](https://github.com/AimesSoft/Erika/releases) 下载，文件名是 `Erika-版本-系统-架构[-headless]`。
+
+| 系统 | 架构 | 包 |
+| --- | --- | --- |
+| macOS | `x64`、`arm64` | `.dmg`；无头版 `-headless.zip` |
+| Windows | `x64`、`arm64` | `-setup.exe`、`.zip`；无头版 `-headless.zip` |
+| Linux | `x64`、`arm64` | `.deb`、`.tar.gz`；无头版 `-headless.tar.gz` |
+| Android（手机、平板、电视） | `arm64`、`armv7`、`x64` | `.apk` |
+| iOS、iPadOS | `arm64` | `.ipa`，iOS 16 起 |
+| Apple TV | `arm64` | `.ipa` |
+
+macOS、iOS、Apple TV 和 Windows 的包没有开发者签名：`.ipa` 要用 AltStore、Sideloadly 等工具以自己的 Apple ID 签名安装。Linux 版使用系统的 FFmpeg 8，需要 Ubuntu 26.04 或同样新的发行版。
 
 ## 平台
 
@@ -208,8 +239,9 @@ bern build --target macos --release \
 | Windows | WinUI 3 | Direct3D 11 | ✅ liberika |
 | Linux | GTK 4 | wgpu | ✅ liberika |
 | Web | DOM + WebAssembly | WebCodecs + WebGL2 | ✅ liberika 的浏览器后端 |
-| iOS、Apple TV | SwiftUI | — | 🚧 界面完成，内核还没接入 |
-| Android | Jetpack Compose | — | 🚧 界面完成，内核还没接入 |
+| iOS、iPadOS | SwiftUI | Metal | ✅ liberika |
+| Apple TV | SwiftUI | Metal | ✅ liberika |
+| Android、Android TV | Jetpack Compose | Vulkan（wgpu） | ✅ liberika |
 
 Web 有两种形态：`web_app` 把引擎也编译进页面，纯静态部署；`web_ui` 的页面连接一个原生的 `erika-host`。
 
@@ -218,10 +250,8 @@ Web 有两种形态：`web_app` 把引擎也编译进页面，纯静态部署；
 先装好 [Rust](https://rustup.rs/)，`rust-toolchain.toml` 固定了 Rust 1.99.0，第一次运行 Cargo 时会自动选择。然后装上 Bern 的构建工具 `bern`，版本和 Erika 用的 Bern 一致：
 
 ```sh
-cargo binstall bern-cli@0.1.7
+cargo install --locked --git https://github.com/AimesSoft/Bern --rev @@BERN_REV@@ bern-cli
 ```
-
-[cargo-binstall](https://github.com/cargo-bins/cargo-binstall) 会下载编译好的 `bern`；也可以用 `cargo install --locked bern-cli@0.1.7` 自己编译。
 
 取得 Erika，再准备 liberika 的原生依赖（FFmpeg、dav1d、libass 等，静态编译，一次即可）：
 
@@ -242,13 +272,15 @@ cargo run --manifest-path "$ERIKA_LIBERIKA_ROOT/Cargo.toml" -p xtask -- \
 bern run
 ```
 
+手机和电视的原生依赖按它们的目标编译，具体命令见 [发版工作流](.github/workflows/release.yml)。
+
 `bern run` 构建并打开这台电脑上的版本。`bern build --target <平台> --release` 构建某个平台，`bern package --target <平台>` 生成安装包，`bern doctor` 列出这台电脑构建各平台还缺什么。
 
 | 目标 | 平台 |
 | --- | --- |
 | `macos` | macOS |
 | `windows` | Windows |
-| `linux` | Linux。需要 liberika 的 `wgpu-hal` 补丁，暂时只能用相邻检出构建，见[依赖说明](docs/dependencies.md#本地使用相邻源码) |
+| `linux` | Linux。需要 liberika 的 `wgpu-hal` 补丁，写进 `.cargo/config.toml`，见[依赖说明](docs/dependencies.md#本地使用相邻源码) |
 | `web_app`、`web_ui` | 浏览器。另需 Emscripten，见[浏览器播放](docs/web-playback.md) |
 | `ios`、`tvos` | 模拟器 |
 | `android` | Android 手机 |
@@ -259,12 +291,12 @@ bern run
 
 Erika 还在开发中，版本号是 0.1.0。
 
-- **实际播放过**：macOS 实机、Windows 实机、Steam Deck（SteamOS，Wayland）、Chrome。
-- **只看过界面**：iPhone、Apple TV 模拟器和 Android 手机上的页面都逐屏看过，但播放是模拟的，用剧照代替画面，没有字幕和弹幕。
-- **还是示例或占位**：网络媒体源、局域网与远程。
+- **实际播放过**：macOS 实机、Windows 实机、Steam Deck（SteamOS，Wayland）、Chrome，iPhone、iPad、iPhone Duo 与 Apple TV 模拟器，Android 手机、平板与 Android TV 模拟器。
+- **还没上真机**：iOS、Apple TV 与 Android 目前只在模拟器上用真实内核播放过。
+- **还是示例或占位**：网络媒体源。
 - **识别服务器**：电视剧和电影由 Erika 内置的识别服务器认，它现在没有域名，请求走明文 HTTP。
 
-当前依赖的 Bern 0.1.7 只在 macOS 上构建和运行过，其他平台的结论来自更早的 Bern 版本。
+远程访问的接口按 NipaPlay 的源码实现，用模拟客户端逐条验证过，还没有和 NipaPlay 应用本身对接测试。
 
 ## 仓库结构
 

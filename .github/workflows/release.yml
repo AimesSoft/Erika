@@ -18,7 +18,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  BERN_VERSION: 0.1.7
+  BERN_REV: @@BERN_REV@@
 
 jobs:
   # The browser half of playback, the same for every WebUI.
@@ -72,9 +72,9 @@ jobs:
           - { name: Linux arm64, os: ubuntu-24.04-arm, container: "ubuntu:26.04", target: linux, system: linux, arch: arm64, native: aarch64-unknown-linux-gnu }
           - { name: Linux x64 headless, os: ubuntu-24.04, container: "ubuntu:26.04", target: web_ui, system: linux, arch: x64, native: x86_64-unknown-linux-gnu, headless: true }
           - { name: Linux arm64 headless, os: ubuntu-24.04-arm, container: "ubuntu:26.04", target: web_ui, system: linux, arch: arm64, native: aarch64-unknown-linux-gnu, headless: true }
-          - { name: Android, os: ubuntu-24.04, target: android, system: android, arch: arm64 }
-          - { name: iOS, os: macos-26, target: ios, system: ios, arch: arm64 }
-          - { name: Apple TV, os: macos-26, target: tvos, system: tvos, arch: arm64 }
+          - { name: Android, os: ubuntu-24.04, target: android, system: android, arch: arm64, native: aarch64-linux-android armv7-linux-androideabi x86_64-linux-android }
+          - { name: iOS, os: macos-26, target: ios, system: ios, arch: arm64, native: aarch64-apple-ios aarch64-apple-ios-sim }
+          - { name: Apple TV, os: macos-26, target: tvos, system: tvos, arch: arm64, native: aarch64-apple-tvos aarch64-apple-tvos-sim }
     steps:
       # Linux builds in Ubuntu 26.04, the first with the FFmpeg 8 liberika needs.
       - name: Linux libraries
@@ -170,35 +170,28 @@ jobs:
         if: matrix.native
         uses: actions/cache@v4
         with:
-          path: ${{ steps.liberika.outputs.root }}/third_party/dist/${{ matrix.native }}
-          key: native-v1-${{ matrix.native }}-${{ steps.liberika.outputs.rev }}-${{ matrix.container }}
+          path: ${{ steps.liberika.outputs.root }}/third_party/dist
+          key: native-v2-${{ matrix.system }}-${{ matrix.arch }}-${{ matrix.native }}-${{ steps.liberika.outputs.rev }}-${{ matrix.container }}
 
-      - name: Native dependencies
-        if: matrix.native
-        shell: bash
-        run: bash .github/scripts/native-deps.sh ${{ matrix.native }}
-
-      - name: Browser playback
-        if: matrix.headless
-        uses: actions/download-artifact@v4
-        with:
-          name: web-extension
-          path: ${{ runner.temp }}/extension
-
-      - name: Browser playback, built
-        if: matrix.headless
-        shell: bash
-        run: |
-          rustup target add wasm32-unknown-unknown
-          echo "ERIKA_WEB_EXTENSION=$RUNNER_TEMP/extension" >> "$GITHUB_ENV"
-
-      - name: iOS targets
+      # Bindgen reads the system headers of what it builds for.
+      - name: iOS
         if: matrix.target == 'ios'
-        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+        run: |
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+          device="$(xcrun --sdk iphoneos --show-sdk-path)"
+          simulator="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_ios=--target=arm64-apple-ios16.0 -isysroot $device" >> "$GITHUB_ENV"
+          echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_ios_sim=--target=arm64-apple-ios16.0-simulator -isysroot $simulator" >> "$GITHUB_ENV"
+          echo "REAL_CARGO=$(command -v cargo)" >> "$GITHUB_ENV"
 
-      - name: Apple TV targets
+      - name: Apple TV
         if: matrix.target == 'tvos'
-        run: rustup target add aarch64-apple-tvos aarch64-apple-tvos-sim
+        run: |
+          rustup target add aarch64-apple-tvos aarch64-apple-tvos-sim
+          device="$(xcrun --sdk appletvos --show-sdk-path)"
+          simulator="$(xcrun --sdk appletvsimulator --show-sdk-path)"
+          echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_tvos=--target=arm64-apple-tvos17.0 -isysroot $device" >> "$GITHUB_ENV"
+          echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_tvos_sim=--target=arm64-apple-tvos17.0-simulator -isysroot $simulator" >> "$GITHUB_ENV"
 
       - name: Java
         if: matrix.target == 'android'
@@ -217,10 +210,45 @@ jobs:
         if: matrix.target == 'android'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config
+          sudo apt-get install -y build-essential cmake libclang-dev libdbus-1-dev meson nasm ninja-build pkg-config python3-venv
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-37.0" > /dev/null
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
           rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+          {
+            echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME"
+            echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME"
+            echo "ANDROID_API_LEVEL=26"
+          } >> "$GITHUB_ENV"
+          sysroot="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--target=aarch64-linux-android26 --sysroot=$sysroot" >> "$GITHUB_ENV"
+          echo "BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi=--target=armv7a-linux-androideabi26 --sysroot=$sysroot" >> "$GITHUB_ENV"
+          echo "BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android=--target=x86_64-linux-android26 --sysroot=$sysroot" >> "$GITHUB_ENV"
+
+      - name: Native dependencies
+        if: matrix.native
+        shell: bash
+        run: bash .github/scripts/native-deps.sh ${{ matrix.native }}
+
+      # The Windows app links the C runtime statically, and so does the
+      # headless host, against the same native libraries.
+      - name: Windows host
+        if: runner.os == 'Windows' && matrix.headless
+        shell: bash
+        run: |
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-C target-feature=+crt-static" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_RUSTFLAGS=-C target-feature=+crt-static" >> "$GITHUB_ENV"
+
+      # Every package carries the WebUI; the browser's part is built once.
+      - name: Browser playback
+        uses: actions/download-artifact@v4
+        with:
+          name: web-extension
+          path: ${{ runner.temp }}/extension
+
+      - name: Browser playback, built
+        shell: bash
+        run: |
+          rustup target add wasm32-unknown-unknown
+          echo "ERIKA_WEB_EXTENSION=$RUNNER_TEMP/extension" >> "$GITHUB_ENV"
 
       # Without the secret the APK is signed with a debug key, which cannot
       # update an installed release.
@@ -235,22 +263,20 @@ jobs:
             echo "BERN_ANDROID_KEY_ALIAS=erika" >> "$GITHUB_ENV"
           fi
 
-      # The build tool of the Bern Erika depends on. Only the build for this
-      # runner's own Rust: an Intel bern under Rosetta takes the Mac for an
-      # Intel one and builds for it.
-      - uses: cargo-bins/cargo-binstall@v1.26.0
+      # The build tool of the Bern Erika depends on.
       - name: Bern
         shell: bash
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          cargo binstall --no-confirm --targets "$(rustc -vV | sed -n 's/^host: //p')" "bern-cli@$BERN_VERSION"
+        run: cargo install --locked --git https://github.com/AimesSoft/Bern --rev "$BERN_REV" bern-cli
 
       - name: Package
         if: runner.os != 'Windows'
         env:
           BERN_ANDROID_KEYSTORE_PASSWORD: ${{ matrix.target == 'android' && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
-        run: bern package --target ${{ matrix.target }}
+        run: |
+          if [ "${{ matrix.target }}" = ios ]; then
+            PATH="$PWD/.github/scripts:$PATH"
+          fi
+          bern package --target ${{ matrix.target }}
 
       # From cmd, so the build fetches the Windows App SDK with Windows' own
       # tar: Git's, first on the bash path, reads "D:" as a host name. The

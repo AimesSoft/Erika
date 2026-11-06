@@ -106,7 +106,7 @@ cargo run --manifest-path "$ERIKA_LIBERIKA_ROOT/Cargo.toml" -p xtask -- \
 
 之后照常 `bern build --target macos`。Bern 会把 liberika 需要的系统框架（Metal、VideoToolbox、CoreAudio 等）交给 swiftc 链接。
 
-目前 macOS、Windows（2026-10-25）和 Linux（2026-10-27）接了 liberika。Linux 上 GTK 的视频视图给 liberika 一个帧接收器：liberika 按画框的像素离屏渲染，把画面交回视图合成；在 Steam Deck 上实测。iOS、tvOS 的视图已由 Bern 生成，需要先为模拟器编译 liberika 的依赖再实测；Android 等 Bern 给出 Android 的表面后接入；Web 上 liberika 没有播放后端。没接的平台仍按剧照模拟播放。没接的平台没有字幕和弹幕。
+目前 macOS、Windows（2026-10-25）、Linux（2026-10-27）、iOS、Apple TV 与 Android（2026-11-06）都接了 liberika，`erika-core/build.rs` 的 `liberika_kernel` 决定哪些目标接。Android 由 Bern 给 `ANativeWindow`，liberika 经 wgpu 用 Vulkan 渲染，MediaCodec 解码。下面是此前的记录。目前 macOS、Windows（2026-10-25）和 Linux（2026-10-27）接了 liberika。Linux 上 GTK 的视频视图给 liberika 一个帧接收器：liberika 按画框的像素离屏渲染，把画面交回视图合成；在 Steam Deck 上实测。iOS、tvOS 的视图已由 Bern 生成，需要先为模拟器编译 liberika 的依赖再实测；Android 等 Bern 给出 Android 的表面后接入；Web 上 liberika 没有播放后端。没接的平台仍按剧照模拟播放。没接的平台没有字幕和弹幕。
 
 ## 存储与弹弹play（2026-10-21）
 
@@ -162,6 +162,16 @@ cargo run --manifest-path "$ERIKA_LIBERIKA_ROOT/Cargo.toml" -p xtask -- \
 - **iOS 的下载器**：iOS 上隐藏下载模块，直到声明 `system.override` 的插件（如 NipaPlay 市场的「下载器解锁」）调用 `system.setDownloaderEnabled(true)`。
 - **账号同步**：哪些插件开着、插件设置与存储存在数据库的扩展分区 `plugins`，随账号同步走；换到新设备时，那边开着而本机没装的插件从市场自动装上。插件文件本身不进同步文件。
 - **试本地的市场**：`ERIKA_PLUGIN_INDEX=…/erika_plugins/plugins.json`（多个用 `;` 隔开，`-` 表示不读市场），`ERIKA_PLUGIN_DIR` 改插件安装的目录。
+
+## 远程访问（2026-11-06）
+
+`modules/remote` 让这台设备成为 NipaPlay 能连上的远程访问主机，同时是 Erika 的 WebUI 服务器，两者同在一个端口（默认 1180）。原生构建由 Bern 的 `web_ui` 把页面带进应用，引擎用 `bern::web_ui` 开关；无头包（`web_ui` 目标的 `erika-host`）默认打开。
+
+- **接口**：`modules/remote/core/src/share.rs` 按 NipaPlay 的 `web_server_service`、`local_media_share_*` 实现 `/api/info`、`/api/media/local/share/*`、`/api/media/local/manage/*`（文件夹、浏览、串流、字幕、扫描状态）、`/api/history`、`/api/image_proxy` 与 `/api/remote/control/*`。字段名、整数类型、`streamPath` 的形状和 `shareId`（路径的 sha1）都照 NipaPlay，客户端靠这些派生地址；`animeId`、`episodeId` 是弹弹play 的编号，所以识别服务器的负数编号不进共享。`app` 字段必须是字面量 `NipaPlay`。没有实现只给 NipaPlay 自己的 Flutter 网页用的接口（弹幕代理、账号、搜索、`web_proxy`），Erika 用自己的 WebUI。
+- **发现**：`discovery.rs` 在 UDP 32123 上回答 `nipaplay_discover`。同机开着 NipaPlay 时端口被占，只能手动输入地址。
+- **遥控**：HTTP 线程经 `Host` 运行 `remote.authorize` 与 `erika.remote_control`；第一次由 `remote_prompt` 弹窗问用户，信任的设备存在设置 `remote.trusted`。
+- **播放**：`kernel/router.rs` 按命令入口分：页面发起的视频（`Entry::Web`）由那个页面解码，其余由 liberika 播放。引擎只有一份播放状态，所以窗口和页面看到的是同一个播放，也能互相控制。页面播放本机文件时走 `/api/media/local/manage/stream`，放行范围是媒体库的文件夹和播放过的视频。
+- **安全**：和 NipaPlay 一样没有密码，所以默认关闭。没有照抄 NipaPlay 的三处：`/manage/folders` 不返回密码、没有开放的 `web_proxy`、`bytes=-N` 按标准取末尾。
 
 ## 模块与设计稿的对照
 

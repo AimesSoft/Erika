@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# liberika finds its native libraries for iOS by one name, for devices and the
+# simulator alike, and `bern package` builds both: name the one each build needs.
+previous=
+for argument in "$@"; do
+  if [ "$previous" = --target ]; then
+    case "$argument" in
+      aarch64-apple-ios | aarch64-apple-ios-sim) export ERIKA_NATIVE_TARGET="$argument" ;;
+    esac
+  fi
+  previous="$argument"
+done
+exec "$REAL_CARGO" "$@"
