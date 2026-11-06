@@ -12,7 +12,7 @@ def liberika_root():
     else:
         project = Path(__file__).resolve().parents[1]
         metadata = json.loads(subprocess.check_output(
-            ['cargo', 'metadata', '--format-version', '1'], cwd=project, text=True,
+            ['cargo', 'metadata', '--format-version', '1'], cwd=project, encoding='utf-8',
         ))
         packages = [p for p in metadata['packages'] if p['name'] == 'erika']
         if len(packages) != 1:
