@@ -8,9 +8,11 @@ erika_ffmpeg_sys = { path = "../liberika/crates/erika_ffmpeg_sys" }
 erika_plugin = { path = "../liberika/crates/erika_plugin" }
 
 [patch.crates-io]
-# liberika's Linux renderer needs the wgpu-hal it keeps in-tree (its own
-# workspace patches crates.io the same way).
+# liberika's wgpu renderer (Linux and Android) needs the wgpu-hal it keeps
+# in-tree (its own workspace patches crates.io the same way).
 wgpu-hal = { path = "../liberika/third_party/wgpu-hal" }
+
+[patch."https://github.com/AimesSoft/Bern"]
 # `bern build` sees Cargo take `bern` from this checkout and has the
 # generated hosts take every other Bern crate from there too.
 bern = { path = "../Bern/crates/bern" }

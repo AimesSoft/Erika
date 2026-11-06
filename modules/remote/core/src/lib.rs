@@ -81,11 +81,14 @@ impl Drop for RemoteEngine {
 
 fn device_from(value: &Value) -> Device {
     let text = |name: &str| value[name].as_str().unwrap_or_default().to_string();
+    let address = text("address");
+    let name = text("name");
     Device {
         key: text("key"),
-        name: text("name"),
+        // A client need not say what it is called.
+        name: if name.is_empty() { address.clone() } else { name },
         platform: text("platform"),
-        address: text("address"),
+        address,
     }
 }
 
