@@ -26,6 +26,9 @@ jobs:
     name: Browser playback
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      # liberika's checkout has no toolchain file of its own.
+      RUSTUP_TOOLCHAIN: "1.99.0"
     steps:
       - uses: actions/checkout@v4
       - name: Rust
