@@ -80,6 +80,8 @@ channels = ["ipc"]
 javascript = true
 platform = "ios"
 channels = ["ipc"]
+# One package for iOS 16 and iOS 17 and later.
+frontends = ["swiftui", "swiftui-16"]
 
 # Apple TV, built for the simulator; `bern run --target tvos` starts it in
 # the Apple TV simulator that is running. The television's layouts are
@@ -108,6 +110,8 @@ channels = ["ipc"]
 javascript = true
 platform = "android"
 channels = ["ipc"]
+# One APK for each, in a release.
+abis = ["arm64-v8a", "armeabi-v7a", "x86_64"]
 
 [targets.web_app]
 javascript = true

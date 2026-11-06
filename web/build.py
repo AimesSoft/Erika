@@ -8,8 +8,14 @@ import sys
 from dependencies import liberika_root
 
 HERE = Path(__file__).resolve().parent
-LIBERIKA = liberika_root()
 out = Path(sys.argv[1]).resolve()
+# Already built, on another machine: the extension is the same on every target.
+built = os.environ.get('ERIKA_WEB_EXTENSION')
+if built:
+    shutil.copytree(built, out, dirs_exist_ok=True)
+    print(f'Erika browser playback: {out}', flush=True)
+    sys.exit(0)
+LIBERIKA = liberika_root()
 # The native dependency build is incremental too; always run it so a source or
 # toolchain update cannot silently package an old WASM module.
 args = ['cargo', 'run', '-p', 'xtask', '--', 'web', 'build']
