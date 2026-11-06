@@ -226,7 +226,7 @@ cargo binstall bern-cli@0.1.7
 Get Erika, then prepare liberika's native dependencies (FFmpeg, dav1d, libass and others, built statically, once):
 
 ```sh
-git clone https://github.com/MCDFsteve/Erika.git
+git clone https://github.com/AimesSoft/Erika.git
 cd Erika
 
 ERIKA_LIBERIKA_ROOT="$(python3 web/dependencies.py)"

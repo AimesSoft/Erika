@@ -18,7 +18,7 @@ pub fn subject_id(id: i64) -> Option<i64> {
 
 pub fn user_agent() -> String {
     format!(
-        "MCDFsteve/Erika/{} ({}) (https://github.com/MCDFsteve/Erika)",
+        "AimesSoft/Erika/{} ({}) (https://github.com/AimesSoft/Erika)",
         env!("CARGO_PKG_VERSION"),
         std::env::consts::OS
     )

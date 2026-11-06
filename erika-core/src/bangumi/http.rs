@@ -56,7 +56,7 @@ fn agent() -> ureq::Agent {
         // Follow GET redirects ourselves; never replay a password to a redirect.
         .max_redirects(0)
         .user_agent(format!(
-            "MCDFsteve/Erika/{} ({}) (https://github.com/MCDFsteve/Erika)",
+            "AimesSoft/Erika/{} ({}) (https://github.com/AimesSoft/Erika)",
             env!("CARGO_PKG_VERSION"),
             std::env::consts::OS
         ))

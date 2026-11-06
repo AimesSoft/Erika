@@ -226,7 +226,7 @@ cargo binstall bern-cli@0.1.7
 取得 Erika，再准备 liberika 的原生依赖（FFmpeg、dav1d、libass 等，静态编译，一次即可）：
 
 ```sh
-git clone https://github.com/MCDFsteve/Erika.git
+git clone https://github.com/AimesSoft/Erika.git
 cd Erika
 
 ERIKA_LIBERIKA_ROOT="$(python3 web/dependencies.py)"
