@@ -17,7 +17,7 @@ use bern::media::kernel::{
 use bern::media::kernel::{FrameSink, VideoFrame};
 use bern::{CommandError, Value};
 use erika_protocol::erika::Enhancement;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
 use liberika::MetalSurfaceHandle;
 use liberika::danmaku::{
     DanmakuColor, DanmakuItem, DanmakuLayoutConfig, DanmakuMode, DanmakuTimeline,
@@ -304,7 +304,7 @@ impl MediaKernel for Liberika {
     }
 
     fn surfaces(&self) -> Vec<SurfaceKind> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         let kind = SurfaceKind::MetalLayer;
         #[cfg(target_os = "windows")]
         let kind = SurfaceKind::SwapChainPanel;
@@ -685,7 +685,7 @@ fn failed(error: impl std::fmt::Display) -> CommandError {
 fn platform_surface(surface: &VideoSurface) -> Result<PlatformSurface, CommandError> {
     let size = surface.size;
     match surface.handle {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         SurfaceHandle::MetalLayer(layer) => Ok(PlatformSurface::Metal(MetalSurfaceHandle::new(
             layer,
             size.width,

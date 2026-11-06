@@ -22,6 +22,8 @@ mod plugins;
 mod playback_preferences;
 mod player;
 mod queue;
+#[cfg(feature = "bern-module-remote")]
+mod remote_control;
 mod search;
 #[cfg(feature = "bern-module-sync")]
 mod sync_restore;
@@ -923,6 +925,10 @@ impl erika::Commands for ErikaEngine {
     fn player_tick(&mut self) -> Result<(), CommandError> {
         self.tick_player();
         Ok(())
+    }
+    #[cfg(feature = "bern-module-remote")]
+    fn remote_control(&mut self, action: String, args: String) -> Result<String, CommandError> {
+        Ok(self.remote_control_request(&action, &args))
     }
     fn seek(&mut self, progress: f64) -> Result<(), CommandError> {
         self.require_playing()?;

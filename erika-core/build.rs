@@ -8,7 +8,23 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+/// Whether liberika plays on the target, which `liberika_kernel` tells the code.
+fn kernel_cfg() {
+    println!("cargo:rustc-check-cfg=cfg(liberika_kernel)");
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let plays = match os.as_str() {
+        "macos" | "ios" | "tvos" | "windows" => true,
+        "linux" => env != "ohos",
+        _ => false,
+    };
+    if plays {
+        println!("cargo:rustc-cfg=liberika_kernel");
+    }
+}
+
 fn main() {
+    kernel_cfg();
     println!("cargo:rerun-if-env-changed=ERIKA_LOCAL_PLUGINS");
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let mut list = String::from("&[\n");

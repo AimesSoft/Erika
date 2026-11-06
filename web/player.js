@@ -77,7 +77,7 @@ export class BrowserPlayer {
     this.report();
     return this.task(async () => {
       const p = await this.ensure();
-      const info = await p.open(this.files.get(url) ?? url, { hardwareDecode: this.hardware });
+      const info = await p.open(this.files.get(url) ?? served(url), { hardwareDecode: this.hardware });
       if (epoch !== this.epoch) return;
       this.info = info;
       this.subtitleSelected = info.subtitleTrack;
@@ -260,4 +260,11 @@ export class BrowserPlayer {
     this.clearStill();
     this.video.remove();
   }
+}
+
+/** A file of the device the engine runs on, by remote access on the port that
+ * served this page; other addresses as they are. */
+function served(url) {
+  if (!url.startsWith('file://')) return url;
+  return new URL(`/api/media/local/manage/stream?path=${url.slice('file://'.length)}`, location.href).href;
 }

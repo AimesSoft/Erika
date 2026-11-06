@@ -10,7 +10,7 @@ license = "MIT"
 
 [workspace.dependencies]
 # Bern from crates.io, at the version of the build tool (docs/dependencies.md).
-bern = "=0.1.7"
+bern = "=0.1.8"
 erika-protocol = { path = "erika-protocol", default-features = false }
 erika-store = { path = "erika-store" }
 erika-dandanplay = { path = "erika-dandanplay" }

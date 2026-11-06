@@ -244,6 +244,23 @@ impl Db {
         .flatten()
     }
 
+    /// Which file the video at `url` is, wherever it was seen.
+    pub fn address_file(&self, url: &str) -> Option<FileId> {
+        logged(
+            self.conn
+                .query_row(
+                    "SELECT file_id FROM address
+                     WHERE path = ?1 AND file_id IS NOT NULL
+                     ORDER BY seen_at DESC LIMIT 1",
+                    [url],
+                    |row| row.get(0),
+                )
+                .optional(),
+            "find an address's file",
+        )
+        .flatten()
+    }
+
     /// Where file `file` stopped and how long it is, in seconds.
     pub fn progress(&self, file: FileId) -> Option<(f64, f64)> {
         logged(

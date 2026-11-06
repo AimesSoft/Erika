@@ -1,9 +1,12 @@
-//! The playback kernel: liberika on macOS, Windows and Linux, and its
-//! WebCodecs/Canvas adapter in browsers. Other targets and tests keep the
-//! simulated preview clock.
+//! The playback kernel: liberika where `liberika_kernel` is set (`build.rs`),
+//! and its WebCodecs/Canvas adapter in browsers. Other targets and tests keep
+//! the simulated preview clock.
 
-#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
+#[cfg(liberika_kernel)]
 mod liberika;
+
+#[cfg(liberika_kernel)]
+mod router;
 
 mod web;
 
@@ -13,7 +16,7 @@ use std::sync::Arc;
 
 /// The application player Erika plays in: `Players::video` of the
 /// interface, the name every entry addresses it by.
-#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
+#[cfg(liberika_kernel)]
 pub const PLAYER: &str = "video";
 
 /// What the engine asks of the kernel. Calls return at once; the kernel
@@ -168,7 +171,7 @@ pub fn set_link_headers(url: &str, headers: Vec<(String, String)>) {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos")), test))]
+#[cfg(any(liberika_kernel, test))]
 pub fn link_headers(url: &str) -> Vec<(String, String)> {
     LINK_HEADERS
         .lock()
@@ -184,15 +187,19 @@ pub fn start() -> Option<Arc<dyn Kernel>> {
     if bern::resources::Resources::host().is_served() {
         return Some(web::Web::install());
     }
-    #[cfg(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos"))))]
+    #[cfg(liberika_kernel)]
     {
-        Some(liberika::Liberika::install())
+        let native = liberika::Liberika::install();
+        if bern::web_ui::page().is_some() {
+            return Some(router::Router::install(native, web::Web::install()));
+        }
+        Some(native)
     }
     #[cfg(target_arch = "wasm32")]
     {
         Some(web::Web::install())
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows", all(target_os = "linux", not(target_env = "ohos")), target_arch = "wasm32")))]
+    #[cfg(not(any(liberika_kernel, target_arch = "wasm32")))]
     {
         None
     }

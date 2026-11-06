@@ -73,6 +73,7 @@ paths = ["design/assets/icon.png", "erika-ui/assets/erika-wordmark.png", "design
 javascript = true
 platform = "macos"
 channels = ["ipc"]
+web_ui = "web_ui"
 
 # iOS, built for the simulator; `bern run --target ios` starts it in the
 # simulator that is running.
@@ -80,6 +81,7 @@ channels = ["ipc"]
 javascript = true
 platform = "ios"
 channels = ["ipc"]
+web_ui = "web_ui"
 # One package for iOS 16 and iOS 17 and later.
 frontends = ["swiftui", "swiftui-16"]
 
@@ -90,11 +92,13 @@ frontends = ["swiftui", "swiftui-16"]
 javascript = true
 platform = "tvos"
 channels = ["ipc"]
+web_ui = "web_ui"
 
 [targets.windows]
 javascript = true
 platform = "windows"
 channels = ["ipc"]
+web_ui = "web_ui"
 # WinUI 3 where Windows has a Windows App Runtime 2, the system XAML
 # elsewhere. Name one front end to build only that one.
 # frontends = ["winui3", "xaml-islands"]
@@ -103,6 +107,7 @@ channels = ["ipc"]
 javascript = true
 platform = "linux"
 channels = ["ipc"]
+web_ui = "web_ui"
 
 # Android phones; `bern run --target android` installs the app on the
 # connected device and starts it.
@@ -110,6 +115,7 @@ channels = ["ipc"]
 javascript = true
 platform = "android"
 channels = ["ipc"]
+web_ui = "web_ui"
 # One APK for each, in a release.
 abis = ["arm64-v8a", "armeabi-v7a", "x86_64"]
 

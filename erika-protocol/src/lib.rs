@@ -1332,6 +1332,9 @@ pub mod erika {
         /// Pause, or play on.
         fn toggle_pause(&mut self) -> Result<(), CommandError>;
         fn player_tick(&mut self) -> Result<(), CommandError>;
+        /// A request of remote access: `state` or `command`, in JSON.
+        #[cfg(feature = "bern-module-remote")]
+        fn remote_control(&mut self, action: String, args: String) -> Result<String, CommandError>;
         fn seek(&mut self, progress: f64) -> Result<(), CommandError>;
         fn skip(&mut self, seconds: f64) -> Result<(), CommandError>;
         #[errors("no_such_chapter")]

@@ -198,7 +198,7 @@ pub fn settings_page(
                 #[cfg(feature = "bern-module-sources")]
                 SettingsPage::Sources => { settings_module_placeholder(app: app) }
                 #[cfg(feature = "bern-module-remote")]
-                SettingsPage::Remote => { settings_module_placeholder(app: app) }
+                SettingsPage::Remote => { Slot(id: settings_remote) }
                 #[cfg(feature = "bern-module-downloads")]
                 SettingsPage::Downloads => { settings_module_placeholder(app: app) }
                 #[cfg(feature = "bern-module-enhance")]

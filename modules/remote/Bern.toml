@@ -28,4 +28,8 @@ sources = "ui/src"
 supported = ["zh-Hans", "en"]
 default = "zh-Hans"
 
-
+[contributes]
+# 「设置 › 局域网与远程」, in the settings of every window size.
+settings_remote = ["remote_settings"]
+# A device asking to control playback, wherever the app is.
+background = ["remote_prompt"]

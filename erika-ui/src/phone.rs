@@ -629,7 +629,7 @@ pub fn phone_settings_section(
             #[cfg(feature = "bern-module-sources")]
             PhoneSettings::Sources => { settings_module_placeholder(app: app) }
             #[cfg(feature = "bern-module-remote")]
-            PhoneSettings::Remote => { settings_module_placeholder(app: app) }
+            PhoneSettings::Remote => { Slot(id: settings_remote) }
             #[cfg(feature = "bern-module-downloads")]
             PhoneSettings::Downloads => { settings_module_placeholder(app: app) }
             #[cfg(feature = "bern-module-enhance")]
