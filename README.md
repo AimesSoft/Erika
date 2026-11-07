@@ -155,13 +155,32 @@ mpv 把内核 libmpv 和播放器放在一起，用 C 写成，很多播放器�
 
 ### 无头版
 
-每种电脑系统都有一个 `headless` 包：没有窗口，只有 `erika-host`、`erika`、`erika-mcp` 和 WebUI，适合放在 NAS 或服务器上。运行后用浏览器打开，或者用命令行和 MCP 操作。
+每种电脑系统都有一个 `headless` 包，没有窗口，适合放在 NAS 或服务器上。平时在浏览器里用 WebUI 操作，界面和桌面版一样；命令行 `erika` 和 MCP 服务器 `erika-mcp` 给脚本和 AI 用，三者连的是同一个引擎。
 
-```sh
-bin/erika-host --port 4174
+解压后运行 `bin/erika-host`（Windows 是 `bin\erika-host.exe`），它在前台运行，启动后打印两行：
+
+```text
+engine 76b71933e38e00
+open http://127.0.0.1:4179/#token=dd825a72…
 ```
 
-它默认打开远程访问，局域网里的设备访问 `http://<这台机器>:1180/` 即可。
+- **这台机器上**：打开 `open` 后面的地址。它只监听本机，地址里的 token 就是口令。端口每次随机，用 `--port 4179` 可以固定。
+- **局域网里的其他设备**：打开 `http://<这台机器的地址>:1180/`。无头版第一次启动时就打开远程访问，这个服务不要密码，只放在信任的网络里。
+
+浏览器的文件夹选择器读不到服务器的磁盘，媒体库用命令行添加，`--engine` 填启动时打印的那个编号：
+
+```sh
+bin/erika --engine 76b71933e38e00 library add-folder --folder '{"url":"file:///srv/anime/"}' --content Anime
+```
+
+`--content` 可以是 `Anime`、`Series` 或 `Movie`。远程访问的开关和端口在 WebUI 的「设置 › 局域网与远程」，也可以用命令行改：
+
+```sh
+bin/erika --engine 76b71933e38e00 remote set-port --port 8080
+bin/erika --engine 76b71933e38e00 remote set-enabled --enabled false
+```
+
+设置和媒体库保存在系统的应用数据目录，重启后还在。要长期运行，交给 systemd、launchd 这类服务管理器。macOS 的包没有签名，从浏览器下载后先运行 `xattr -dr com.apple.quarantine <解压出的文件夹>`。
 
 ### 插件
 
@@ -250,7 +269,7 @@ Web 有两种形态：`web_app` 把引擎也编译进页面，纯静态部署；
 先装好 [Rust](https://rustup.rs/)，`rust-toolchain.toml` 固定了 Rust 1.99.0，第一次运行 Cargo 时会自动选择。然后装上 Bern 的构建工具 `bern`，版本和 Erika 用的 Bern 一致：
 
 ```sh
-cargo install --locked --git https://github.com/AimesSoft/Bern --rev a86bbb85bd525d6c9b0c011ef1571caae4273490 bern-cli
+cargo install --locked --git https://github.com/AimesSoft/Bern --rev ccfe43fb53595252e34ed9e10e0ce95beaab1339 bern-cli
 ```
 
 取得 Erika，再准备 liberika 的原生依赖（FFmpeg、dav1d、libass 等，静态编译，一次即可）：

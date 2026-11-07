@@ -1,15 +1,15 @@
 # Cargo 依赖与本地联调
 
-仓库内 `Cargo.toml` 的 Bern 固定到 `master` 的提交 `a86bbb8`（WebUI 随应用、Android 媒体内核，下一个发布版才有）；liberika 用 Git 依赖，固定到提交。GitHub 或另一台电脑检出 Erika 后，Cargo 会下载同一份源码，无需本机的绝对路径。
+仓库内 `Cargo.toml` 的 Bern 固定到 `master` 的提交 `ccfe43f`（WebUI 随应用、Android 媒体内核，下一个发布版才有）；liberika 用 Git 依赖，固定到提交。GitHub 或另一台电脑检出 Erika 后，Cargo 会下载同一份源码，无需本机的绝对路径。
 
-liberika 当前固定到 `main` 的提交 `cc297a7c`（字幕只画在画面以内）。后续升级时更新版本或 `rev`，以及 `Cargo.lock`。
+liberika 当前固定到 `v0.3.6` 的提交 `e38a511`（弹幕彩色表情、系统字体优先，WebUI 用宿主的回退字体）。后续升级时更新版本或 `rev`，以及 `Cargo.lock`。
 
 ## 构建工具 bern
 
 `bern` 命令与 `Cargo.toml` 里的 Bern 同一版本：命令带着生成各平台工程的模板，与应用依赖的 Bern 一致才能构建。
 
 ```sh
-cargo install --locked --git https://github.com/AimesSoft/Bern --rev a86bbb85bd525d6c9b0c011ef1571caae4273490 bern-cli
+cargo install --locked --git https://github.com/AimesSoft/Bern --rev ccfe43fb53595252e34ed9e10e0ce95beaab1339 bern-cli
 ```
 
 升级 Bern 时，根目录 `Cargo.toml` 的 `bern`、`erika-core/Cargo.toml` 的 `bern-script`、`.github/workflows/release.yml` 的 `BERN_REV` 与这条命令一起换，再装一次。之后在 Erika 根目录运行 `bern run`、`bern build --target <目标>`、`bern package --target <目标>`；`bern doctor` 列出本机构建各目标还缺什么。

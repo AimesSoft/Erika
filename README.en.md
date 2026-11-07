@@ -155,13 +155,32 @@ The service has no password: the address alone opens it. It is off by default, a
 
 ### Headless
 
-Each desktop system has a `headless` package: no window, only `erika-host`, `erika`, `erika-mcp` and the WebUI, for a NAS or a server. Open it in a browser after it starts, or drive it with the command line and MCP.
+Each desktop system has a `headless` package with no window, for a NAS or a server. You use it through the WebUI in a browser, the same interface as the desktop app; the `erika` command line and the `erika-mcp` server are for scripts and AI, and all three reach the same engine.
 
-```sh
-bin/erika-host --port 4174
+Unpack it and run `bin/erika-host` (`bin\erika-host.exe` on Windows). It runs in the foreground and prints two lines when it starts:
+
+```text
+engine 76b71933e38e00
+open http://127.0.0.1:4179/#token=dd825a72…
 ```
 
-It turns remote access on by itself; devices on the network open `http://<this machine>:1180/`.
+- **On this machine**: open the address after `open`. It listens to this machine only, and the token in it is the password. The port is random each time; `--port 4179` fixes it.
+- **From other devices on the network**: open `http://<this machine's address>:1180/`. The headless package turns remote access on at its first start. This service has no password, so keep it on a network you trust.
+
+The browser's folder picker can't reach the server's disks, so add media folders from the command line, with the number printed after `engine`:
+
+```sh
+bin/erika --engine 76b71933e38e00 library add-folder --folder '{"url":"file:///srv/anime/"}' --content Anime
+```
+
+`--content` is `Anime`, `Series` or `Movie`. Remote access and its port are under Settings › LAN and Remote in the WebUI, or change them from the command line:
+
+```sh
+bin/erika --engine 76b71933e38e00 remote set-port --port 8080
+bin/erika --engine 76b71933e38e00 remote set-enabled --enabled false
+```
+
+Settings and the library are kept in the system's application data folder and survive a restart. To keep it running, hand it to a service manager such as systemd or launchd. The macOS package isn't signed: after downloading it in a browser, run `xattr -dr com.apple.quarantine <the unpacked folder>` first.
 
 ### Plugins
 
@@ -250,7 +269,7 @@ The web comes in two forms: `web_app` compiles the engine into the page and depl
 Install [Rust](https://rustup.rs/) first. `rust-toolchain.toml` pins Rust 1.99.0, and the first Cargo run selects it. Then install Bern's build tool, `bern`, at the version of the Bern Erika uses:
 
 ```sh
-cargo install --locked --git https://github.com/AimesSoft/Bern --rev a86bbb85bd525d6c9b0c011ef1571caae4273490 bern-cli
+cargo install --locked --git https://github.com/AimesSoft/Bern --rev ccfe43fb53595252e34ed9e10e0ce95beaab1339 bern-cli
 ```
 
 Get Erika, then prepare liberika's native dependencies (FFmpeg, dav1d, libass and others, built statically, once):

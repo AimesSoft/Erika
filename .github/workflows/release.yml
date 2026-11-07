@@ -18,7 +18,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  BERN_REV: a86bbb85bd525d6c9b0c011ef1571caae4273490
+  BERN_REV: ccfe43fb53595252e34ed9e10e0ce95beaab1339
 
 jobs:
   # The browser half of playback, the same for every WebUI.
@@ -41,9 +41,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y meson ninja-build nasm pkg-config python3-venv
-          cargo install wasm-bindgen-cli --version 0.2.126 --locked
+          cargo install wasm-bindgen-cli --version 0.2.130 --locked
       - name: Build
-        run: python3 web/build.py "$RUNNER_TEMP/extension"
+        # The WebUI's part: without the font, which the page takes from the
+        # device that serves it.
+        run: python3 web/build.py --host-font "$RUNNER_TEMP/extension"
       - uses: actions/upload-artifact@v4
         with:
           name: web-extension
@@ -259,7 +261,7 @@ jobs:
         shell: bash
         run: |
           rustup target add wasm32-unknown-unknown
-          echo "ERIKA_WEB_EXTENSION=$RUNNER_TEMP/extension" >> "$GITHUB_ENV"
+          echo "ERIKA_WEB_UI_EXTENSION=$RUNNER_TEMP/extension" >> "$GITHUB_ENV"
 
       # Without the secret the APK is signed with a debug key, which cannot
       # update an installed release.
