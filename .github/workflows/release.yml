@@ -10,7 +10,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-    branches: [release-ci]
   workflow_dispatch:
 
 permissions:
