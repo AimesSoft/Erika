@@ -92,7 +92,13 @@ impl Transport {
         self.clients
             .retain(|_, seen| seen.elapsed() < Duration::from_secs(60));
         self.clients.insert(client.into(), Instant::now());
-        if self.owner.is_none() {
+        // A page that reloads comes back as a new client.
+        let owner_left = self.owner.as_ref().is_none_or(|owner| {
+            self.clients
+                .get(owner)
+                .is_none_or(|seen| seen.elapsed() > Duration::from_secs(10))
+        });
+        if owner_left {
             self.owner = Some(client.into());
         }
         if self.owner.as_deref() != Some(client) {

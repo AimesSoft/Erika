@@ -394,8 +394,8 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bern"
-version = "0.1.8"
-source = "git+https://github.com/AimesSoft/Bern?rev=06d2cb9dc8f740e5a09cc1f69e08d4d43881da16#06d2cb9dc8f740e5a09cc1f69e08d4d43881da16"
+version = "0.1.9"
+source = "git+https://github.com/AimesSoft/Bern?rev=a86bbb85bd525d6c9b0c011ef1571caae4273490#a86bbb85bd525d6c9b0c011ef1571caae4273490"
 dependencies = [
  "bern-command",
  "bern-macros",
@@ -408,8 +408,8 @@ dependencies = [
 
 [[package]]
 name = "bern-command"
-version = "0.1.8"
-source = "git+https://github.com/AimesSoft/Bern?rev=06d2cb9dc8f740e5a09cc1f69e08d4d43881da16#06d2cb9dc8f740e5a09cc1f69e08d4d43881da16"
+version = "0.1.9"
+source = "git+https://github.com/AimesSoft/Bern?rev=a86bbb85bd525d6c9b0c011ef1571caae4273490#a86bbb85bd525d6c9b0c011ef1571caae4273490"
 dependencies = [
  "bern-protocol",
  "block2",
@@ -429,8 +429,8 @@ dependencies = [
 
 [[package]]
 name = "bern-ir"
-version = "0.1.8"
-source = "git+https://github.com/AimesSoft/Bern?rev=06d2cb9dc8f740e5a09cc1f69e08d4d43881da16#06d2cb9dc8f740e5a09cc1f69e08d4d43881da16"
+version = "0.1.9"
+source = "git+https://github.com/AimesSoft/Bern?rev=a86bbb85bd525d6c9b0c011ef1571caae4273490#a86bbb85bd525d6c9b0c011ef1571caae4273490"
 dependencies = [
  "bern-protocol",
  "serde",
@@ -439,8 +439,8 @@ dependencies = [
 
 [[package]]
 name = "bern-macros"
-version = "0.1.8"
-source = "git+https://github.com/AimesSoft/Bern?rev=06d2cb9dc8f740e5a09cc1f69e08d4d43881da16#06d2cb9dc8f740e5a09cc1f69e08d4d43881da16"
+version = "0.1.9"
+source = "git+https://github.com/AimesSoft/Bern?rev=a86bbb85bd525d6c9b0c011ef1571caae4273490#a86bbb85bd525d6c9b0c011ef1571caae4273490"
 dependencies = [
  "bern-ir",
  "bern-protocol",
@@ -453,16 +453,16 @@ dependencies = [
 
 [[package]]
 name = "bern-media"
-version = "0.1.8"
-source = "git+https://github.com/AimesSoft/Bern?rev=06d2cb9dc8f740e5a09cc1f69e08d4d43881da16#06d2cb9dc8f740e5a09cc1f69e08d4d43881da16"
+version = "0.1.9"
+source = "git+https://github.com/AimesSoft/Bern?rev=a86bbb85bd525d6c9b0c011ef1571caae4273490#a86bbb85bd525d6c9b0c011ef1571caae4273490"
 dependencies = [
  "bern-protocol",
 ]
 
 [[package]]
 name = "bern-protocol"
-version = "0.1.8"
-source = "git+https://github.com/AimesSoft/Bern?rev=06d2cb9dc8f740e5a09cc1f69e08d4d43881da16#06d2cb9dc8f740e5a09cc1f69e08d4d43881da16"
+version = "0.1.9"
+source = "git+https://github.com/AimesSoft/Bern?rev=a86bbb85bd525d6c9b0c011ef1571caae4273490#a86bbb85bd525d6c9b0c011ef1571caae4273490"
 dependencies = [
  "serde",
  "serde_json",
@@ -470,16 +470,16 @@ dependencies = [
 
 [[package]]
 name = "bern-runtime"
-version = "0.1.8"
-source = "git+https://github.com/AimesSoft/Bern?rev=06d2cb9dc8f740e5a09cc1f69e08d4d43881da16#06d2cb9dc8f740e5a09cc1f69e08d4d43881da16"
+version = "0.1.9"
+source = "git+https://github.com/AimesSoft/Bern?rev=a86bbb85bd525d6c9b0c011ef1571caae4273490#a86bbb85bd525d6c9b0c011ef1571caae4273490"
 dependencies = [
  "bern-protocol",
 ]
 
 [[package]]
 name = "bern-script"
-version = "0.1.8"
-source = "git+https://github.com/AimesSoft/Bern?rev=06d2cb9dc8f740e5a09cc1f69e08d4d43881da16#06d2cb9dc8f740e5a09cc1f69e08d4d43881da16"
+version = "0.1.9"
+source = "git+https://github.com/AimesSoft/Bern?rev=a86bbb85bd525d6c9b0c011ef1571caae4273490#a86bbb85bd525d6c9b0c011ef1571caae4273490"
 dependencies = [
  "boa_engine",
  "serde",
@@ -488,8 +488,8 @@ dependencies = [
 
 [[package]]
 name = "bern-syntax"
-version = "0.1.8"
-source = "git+https://github.com/AimesSoft/Bern?rev=06d2cb9dc8f740e5a09cc1f69e08d4d43881da16#06d2cb9dc8f740e5a09cc1f69e08d4d43881da16"
+version = "0.1.9"
+source = "git+https://github.com/AimesSoft/Bern?rev=a86bbb85bd525d6c9b0c011ef1571caae4273490#a86bbb85bd525d6c9b0c011ef1571caae4273490"
 dependencies = [
  "bern-media",
  "bern-protocol",
@@ -6072,6 +6072,8 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "29.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31f8e1a9e7a8512f276f7c62e018c7fa8d60954303fed2e5750114332049193f"
 dependencies = [
  "android_system_properties",
  "arrayvec",

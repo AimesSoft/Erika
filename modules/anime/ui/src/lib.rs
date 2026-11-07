@@ -42,7 +42,8 @@ pub fn anime_clock(anime: anime::Client) -> impl View {
 #[component]
 pub fn home_page(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
-        if anime.opened > 0 && !anime.opened_from_schedule && anime.back == BackTo::Home {
+        // A foldable open flat shows the details in its right half.
+        if anime.opened > 0 && !anime.opened_from_schedule && anime.back == BackTo::Home && !window.unfolded {
             details(app: app, anime: anime)
         } else {
             home(app: app, anime: anime)
@@ -53,18 +54,13 @@ pub fn home_page(app: erika::Client, anime: anime::Client) -> impl View {
 #[component]
 pub fn home(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
-        Adaptive(id: home_layout) {
-            Layout(size: compact) {
-                phone_home(app: app, anime: anime)
-            }
-            Layout(size: expanded) {
-                desktop_home(app: app, anime: anime)
-            }
-            // The television shows the desktop's stage, larger (design
-            // 6.2 `TV`).
-            Layout(size: tv) {
-                desktop_home(app: app, anime: anime)
-            }
+        // By the window, as the shell chooses: beside a sidebar the page is
+        // the desktop's however little room the sidebar leaves it. The
+        // television shows the desktop's stage, larger (design 6.2 `TV`).
+        if window.compact {
+            phone_home(app: app, anime: anime)
+        } else {
+            desktop_home(app: app, anime: anime)
         }
     }
 }
@@ -74,7 +70,7 @@ pub fn desktop_home(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
         ScrollView(appear: page_in) {
             // A television's page keeps the overscan's 56 points (`.x-page`).
-            Column(gap: 0, padding_x: if window.tv { 56 } else { 32 }, padding_y: 6) {
+            Column(gap: 0, padding_x: if window.tv { 56 } else if window.medium { 24 } else { 32 }, padding_y: 6) {
                 Row(gap: 14, align: baseline) {
                     Text(content: tr! { "zh-Hans" => "首页", "en" => "Home" }, style: large_title)
                     Text(content: tr! { "zh-Hans" => "{today, date, EEE · M 月 d 日}", "en" => "{today, date, EEE · MMM d}"; today: anime.today }, emphasis: secondary)
@@ -98,9 +94,42 @@ pub fn desktop_home(app: erika::Client, anime: anime::Client) -> impl View {
 #[component]
 pub fn stage(anime: anime::Client) -> impl View {
     ui! {
-        // A television's stage is 560 × 315 with 36 points beside it
-        // (`.h-stage`, `.h-frame` on the television).
-        Row(gap: if window.tv { 36 } else { 28 }, align: top) {
+        // A tablet held upright has no room beside the frame.
+        if window.medium {
+            Column(gap: 16) {
+                phone_stage(anime: anime)
+                stage_side(anime: anime)
+            }
+        } else {
+            // A television's stage is 560 × 315 with 36 points beside it
+            // (`.h-stage`, `.h-frame` on the television).
+            Row(gap: if window.tv { 36 } else { 28 }, align: top) {
+                stage_frame(anime: anime)
+                stage_side(anime: anime)
+            }
+        }
+    }
+}
+
+/// The frame of what was watched last, with its way to go on: what a
+/// foldable's right half shows while nothing is open there.
+#[component]
+pub fn stage_column(anime: anime::Client) -> impl View {
+    ui! {
+        ScrollView(appear: page_in) {
+            Column(gap: 16, padding_x: 16, padding_y: 16) {
+                if anime.has_stage {
+                    phone_stage(anime: anime)
+                    stage_side(anime: anime)
+                }
+            }
+        }
+    }
+}
+
+#[component]
+pub fn stage_frame(anime: anime::Client) -> impl View {
+    ui! {
             Button(id: stage, label: anime.stage.title, variant: stage) {
                 Stack(align: center) {
                     Stack(align: bottom_leading) {
@@ -125,6 +154,12 @@ pub fn stage(anime: anime::Client) -> impl View {
                     }
                 }
             } => anime.resume(anime.stage.id)
+    }
+}
+
+#[component]
+pub fn stage_side(anime: anime::Client) -> impl View {
+    ui! {
             // The prototype's `528px 1fr`: this column takes the rest, so the
             // page never asks for more room than the window leaves it.
             Column(gap: 0) {
@@ -189,7 +224,6 @@ pub fn stage(anime: anime::Client) -> impl View {
                     }
                 }
             }
-        }
     }
 }
 
@@ -446,7 +480,7 @@ pub fn desktop_details(anime: anime::Client, #[session] draft: AnimeDraft) -> im
     ui! {
         ScrollView(appear: page_in) {
             Stack(align: top_leading) {
-                Canvas(height: 440, appear: fade) {
+                Canvas(height: 440, bleed: true, appear: fade) {
                     Shape(kind: rect, fill_from: anime.show.poster, fade: down, opacity: 0.34)
                 }
                 Column(gap: 0, padding_x: if window.tv { 56 } else { 32 }, padding_y: 12) {
@@ -467,16 +501,36 @@ pub fn desktop_details(anime: anime::Client, #[session] draft: AnimeDraft) -> im
                                     Text(content: tr! { "zh-Hans" => "★ {rating}", "en" => "★ {rating}"; rating: anime.show.rating }, style: callout)
                                 }
                                 Text(content: tr! { "zh-Hans" => "综合评分", "en" => "Rating" }, emphasis: secondary)
-                                Row(gap: 6) {
-                                    ForEach(items: anime.show.tags, key: name) |tag| {
-                                        tag_chip(name: tag.name)
+                                if !window.medium {
+                                    Row(gap: 6) {
+                                        ForEach(items: anime.show.tags, key: name) |tag| {
+                                            tag_chip(name: tag.name)
+                                        }
                                     }
                                 }
                             }
-                            Canvas(height: 14)
-                            Column(width: 600, appear: fade) {
-                                Text(content: anime.show.summary, emphasis: secondary, lines: 3)
-                                detail_fetch_status(anime: anime)
+                            // Upright on a tablet the tags and the summary
+                            // have only what the poster leaves them.
+                            if window.medium {
+                                Canvas(height: 10)
+                                ScrollView(axis: horizontal, indicators: mouse) {
+                                    Row(gap: 6) {
+                                        ForEach(items: anime.show.tags, key: name) |tag| {
+                                            tag_chip(name: tag.name)
+                                        }
+                                    }
+                                }
+                                Canvas(height: 12)
+                                Column(appear: fade) {
+                                    Text(content: anime.show.summary, emphasis: secondary, lines: 3)
+                                    detail_fetch_status(anime: anime)
+                                }
+                            } else {
+                                Canvas(height: 14)
+                                Column(width: 600, appear: fade) {
+                                    Text(content: anime.show.summary, emphasis: secondary, lines: 3)
+                                    detail_fetch_status(anime: anime)
+                                }
                             }
                             Canvas(height: 20)
                             Row(gap: 10, align: center, appear: fade) {
@@ -600,7 +654,7 @@ pub fn tag_chip(#[content] name: String) -> impl View {
 #[component]
 pub fn new_page(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
-        if anime.opened > 0 && anime.opened_from_schedule {
+        if anime.opened > 0 && anime.opened_from_schedule && !window.unfolded {
             details(app: app, anime: anime)
         } else if window.compact || window.medium {
             ScrollView(appear: page_in) {
@@ -960,11 +1014,12 @@ pub fn phone_home(app: erika::Client, anime: anime::Client) -> impl View {
 }
 
 /// The details' wash of the poster's color (`.d-wash`, 440 points from
-/// under the status bar), behind the header row and the head.
+/// under the status bar), behind the header row and the head. It reaches
+/// the screen's side past the safe area, as the page's own color does.
 #[component]
 pub fn details_wash(anime: anime::Client) -> impl View {
     ui! {
-        Canvas(height: 435, appear: fade) {
+        Canvas(height: 435, bleed: true, appear: fade) {
             Shape(kind: rect, fill_from: anime.show.poster, fade: down, opacity: 0.34)
         }
     }
@@ -1064,7 +1119,17 @@ pub fn phone_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
             Stack(align: top_leading) {
             details_wash(anime: anime)
             Column(gap: 0) {
-                Slot(id: page_header)
+                // Beside the page that opened them the details close by
+                // themselves; the rest of the header stays on that page.
+                if window.unfolded {
+                    Canvas(height: 7)
+                    Row(gap: 0, padding_x: 16, height: 48, align: center) {
+                        IconButton(id: fold_back, icon: "chevron.left", font_size: 18, height: 44, label: anime.back) => anime.close()
+                        Spacer
+                    }
+                } else if window.compact {
+                    Slot(id: page_header)
+                }
                 Column(gap: 0, padding_x: 16) {
                     Canvas(height: 8)
                     Row(gap: 16, align: top) {
@@ -1085,6 +1150,9 @@ pub fn phone_details(anime: anime::Client, #[session] draft: AnimeDraft) -> impl
                                     Text(content: tr! { "zh-Hans" => "★ {rating}", "en" => "★ {rating}"; rating: anime.show.rating }, style: headline, font_size: 16)
                                 }
                                 Text(content: tr! { "zh-Hans" => "综合评分", "en" => "Rating" }, font_size: 13, emphasis: secondary)
+                            }
+                            Canvas(height: 8)
+                            ScrollView(axis: horizontal, indicators: mouse) {
                                 Row(gap: 6) {
                                     ForEach(items: anime.show.tags, key: name) |tag| {
                                         tag_chip(name: tag.name)
@@ -1161,6 +1229,8 @@ pub fn detail_information(anime: anime::Client, #[session] draft: AnimeDraft) ->
             if draft.tab == DetailTab::About {
                 if window.compact {
                     Text(content: anime.show.summary, font_size: 13, line_height: 18, emphasis: secondary)
+                } else if window.medium {
+                    Text(content: anime.show.summary, emphasis: secondary)
                 } else {
                     Column(width: 640) {
                         Text(content: anime.show.summary, emphasis: secondary)

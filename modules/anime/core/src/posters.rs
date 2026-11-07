@@ -1,5 +1,5 @@
-//! Keep public server posters locally before handing them to native renderers.
-//! The existing mainland gateway uses HTTP, which Apple image loaders reject.
+//! Keep public server posters locally: they never change, so a file shows them
+//! at once and without the network.
 use super::{Done, MediaSource, in_background};
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;

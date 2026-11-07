@@ -250,7 +250,7 @@ Web 有两种形态：`web_app` 把引擎也编译进页面，纯静态部署；
 先装好 [Rust](https://rustup.rs/)，`rust-toolchain.toml` 固定了 Rust 1.99.0，第一次运行 Cargo 时会自动选择。然后装上 Bern 的构建工具 `bern`，版本和 Erika 用的 Bern 一致：
 
 ```sh
-cargo install --locked --git https://github.com/AimesSoft/Bern --rev 06d2cb9dc8f740e5a09cc1f69e08d4d43881da16 bern-cli
+cargo install --locked --git https://github.com/AimesSoft/Bern --rev a86bbb85bd525d6c9b0c011ef1571caae4273490 bern-cli
 ```
 
 取得 Erika，再准备 liberika 的原生依赖（FFmpeg、dav1d、libass 等，静态编译，一次即可）：

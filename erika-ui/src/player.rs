@@ -32,18 +32,23 @@ pub fn player(
 ) -> impl View {
     ui! {
         Stack(appearance: dark, variant: player_black) {
-            // A phone on its side plays in the design's 844 × 390 scene, the
-            // controls in the two rails beside the picture (`RAILS`).
-            // The television's controls run across the screen.
+            // Every device has the desktop's layout at its own size: the title
+            // and its actions along the top, a long seek bar, and the controls
+            // along the bottom from both corners, so nothing has to be learned
+            // twice.
             if window.tv {
                 Stack(under_bars: true) {
                     ScaleBox(width: 1280, height: 720) {
-                        player_tv_scene(app: app, players: players, shown: !window.idle || app.matching.open || app.player.panel || draft.saying)
+                        player_tv_scene(app: app, players: players, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.saying)
                     }
                 }
-            } else if window.short {
-                ScaleBox(width: 844, height: 390) {
-                    player_phone_scene(app: app, players: players, shown: !window.idle || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.danmaku_open || draft.composer_open)
+            } else if window.tabletop {
+                player_tabletop(app: app, players: players, windows: windows)
+            } else if window.short || window.compact || window.medium {
+                Stack(under_bars: true, variant: player_black) {
+                    ScaleBox(width: 844, height: 390) {
+                        player_scene(app: app, players: players, windows: windows, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
+                    }
                 }
             } else {
                 // Under the title bar from the start: the window hides its
@@ -51,7 +56,7 @@ pub fn player(
                 // (`arriving`), and the picture must not move then.
                 Stack(under_bars: true, variant: player_black) {
                     ScaleBox(width: 1280, height: 800) {
-                        player_scene(app: app, players: players, windows: windows, shown: !window.idle || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
+                        player_scene(app: app, players: players, windows: windows, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
                     }
                 }
             }
@@ -71,11 +76,11 @@ pub fn player_scene(
     #[session] draft: PlayerDraft,
 ) -> impl View {
     ui! {
-        Stack(variant: player_black, width: 1280, height: 800, align: top_leading) {
+        Stack(variant: player_black, width: if window.short || window.compact || window.medium { 844 } else { 1280 }, height: if window.short || window.compact || window.medium { 390 } else { 800 }, align: top_leading) {
             // The video keeps its full-window, aspect-fit geometry while
             // controls and settings appear above it. Bleed reaches the window
             // edges even when its aspect ratio differs from the design scene.
-            Positioned(x: 0, y: 0, width: 1280, height: 800, bleed: true) {
+            Positioned(x: 0, y: 0, width: if window.short || window.compact || window.medium { 844 } else { 1280 }, height: if window.short || window.compact || window.medium { 390 } else { 800 }, bleed: true) {
                 // The controls hide a second after a mouse comes to rest on
                 // the picture, and stay while it is anywhere else.
                 Button(id: picture, label: tr! { "zh-Hans" => "播放或暂停画面", "en" => "Play or pause picture" }, variant: player_picture, idle_area: 1) {
@@ -105,19 +110,48 @@ pub fn player_scene(
                 } => app.toggle_pause()
             }
             if shown {
-                Positioned(x: 35, y: 22, width: 1210, height: 64, appear: top_bar_in, disappear: top_bar_out) {
+                Positioned(x: if window.short || window.compact || window.medium { 12 } else { 35 }, y: if window.short || window.compact || window.medium { 6 } else { 22 }, width: if window.short || window.compact || window.medium { 820 } else { 1210 }, height: 64, appear: top_bar_in, disappear: top_bar_out) {
                     player_top(app: app)
                 }
-                Positioned(x: 103, y: 668.125, width: 1074, height: 60, animate: hero, appear: controls_in, disappear: controls_out) {
-                    player_timeline(app: app)
+                Positioned(x: if window.short || window.compact || window.medium { 80 } else { 103 }, y: if window.short || window.compact || window.medium { 258.125 } else { 668.125 }, width: if window.short || window.compact || window.medium { 684 } else { 1074 }, height: 60, animate: hero, appear: controls_in, disappear: controls_out) {
+                    player_timeline(app: app, width: if window.short || window.compact || window.medium { 684.0 } else { 1074.0 }, end: if window.short || window.compact || window.medium { 698.0 } else { 1088.0 })
                 }
-                Positioned(x: 35, y: 726, width: 1210, height: 64, animate: hero, appear: controls_in, disappear: controls_out) {
+                Positioned(x: if window.short || window.compact || window.medium { 12 } else { 35 }, y: if window.short || window.compact || window.medium { 316 } else { 726 }, width: if window.short || window.compact || window.medium { 820 } else { 1210 }, height: 64, animate: hero, appear: controls_in, disappear: controls_out) {
                     player_controls(app: app, windows: windows)
                 }
             }
             if app.player.skip_kind != SkipKind::None {
-                Positioned(x: 957, y: 608, width: 220, height: 40) {
+                Positioned(x: if window.short || window.compact || window.medium { 521 } else { 957 }, y: if window.short || window.compact || window.medium { 198 } else { 608 }, width: 220, height: 40) {
                     player_skip_button(app: app)
+                }
+            }
+        }
+    }
+}
+
+/// A foldable resting half open (design 3.1, `tent`): the picture fills the
+/// top half, out of reach, and the desktop's rows the bottom half, so the
+/// picture never steps back.
+#[component]
+pub fn player_tabletop(app: erika::Client, players: Players, windows: AppWindows) -> impl View {
+    ui! {
+        Column(gap: 0) {
+            Stack(variant: player_black) {
+                if app.video {
+                    Video(id: video_tabletop, player: players.video, label: app.title, controls: none, sizing: fill, fit: contain, corner: 0)
+                }
+            }
+            ScaleBox(width: 720, height: 300) {
+                Stack(width: 720, height: 300, align: top_leading) {
+                    Positioned(x: 12, y: 6, width: 696, height: 64) {
+                        player_top(app: app)
+                    }
+                    Positioned(x: 80, y: 128, width: 560, height: 60) {
+                        player_timeline(app: app, width: 560.0, end: 574.0)
+                    }
+                    Positioned(x: 12, y: 196, width: 696, height: 64) {
+                        player_controls(app: app, windows: windows)
+                    }
                 }
             }
         }
@@ -158,10 +192,28 @@ pub fn player_tv_scene(
                 }
             }
             if shown {
-                Positioned(x: 56, y: 0, width: 1168, height: 52, appear: top_bar_in, disappear: top_bar_out) {
+                // The controls stay readable over a bright picture: black, the
+                // text of the light appearance, as a television's canvas has
+                // no color of its own.
+                Positioned(x: 0, y: 0, width: 1280, height: 160) {
+                    Stack(appearance: light) {
+                        Canvas(height: 160) {
+                            Shape(kind: rect, corner: 0, fill: text.primary, fade: down, opacity: 0.6)
+                        }
+                    }
+                }
+                // Inside what a television's edge may cut off.
+                Positioned(x: 56, y: 40, width: 1168, height: 52, appear: top_bar_in, disappear: top_bar_out) {
                     player_tv_top(app: app)
                 }
-                Positioned(x: 200, y: 551, width: 880, height: 44, animate: hero, appear: controls_in, disappear: controls_out) {
+                Positioned(x: 0, y: 500, width: 1280, height: 220) {
+                    Stack(appearance: light) {
+                        Canvas(height: 220) {
+                            Shape(kind: rect, corner: 0, fill: text.primary, fade: up, opacity: 0.75)
+                        }
+                    }
+                }
+                Positioned(x: 64, y: 560, width: 1152, height: 44, animate: hero, appear: controls_in, disappear: controls_out) {
                     Stack {
                         if draft.saying {
                             // 「发弹幕」: the field in the seek bar's place; the
@@ -259,257 +311,44 @@ pub fn player_tv_top(app: erika::Client) -> impl View {
 #[component]
 pub fn player_tv_controls(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
     ui! {
-        Stack {
-            Row(gap: 8, align: center, height: 56) {
+        Row(gap: 14, align: center, height: 56) {
+            if app.player.episodes {
+                IconButton(id: previous_tv, icon: "backward.end.fill", height: 46, label: tr! { "zh-Hans" => "上一集", "en" => "Previous episode" }, enabled: app.player.has_previous) => app.change_episode(-1)
+            }
+            IconButton(id: rewind_tv, icon: "gobackward.10", font_size: 20, height: 46, label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 seconds" }) => app.skip(-10.0)
+            if app.paused {
+                IconButton(id: play_tv, icon: "play.fill", font_size: 24, height: 56, prominence: prominent, default_focus: true, label: tr! { "zh-Hans" => "播放", "en" => "Play" }) => app.toggle_pause()
+            } else {
+                IconButton(id: pause_tv, icon: "pause.fill", font_size: 24, height: 56, prominence: prominent, default_focus: true, label: tr! { "zh-Hans" => "暂停", "en" => "Pause" }) => app.toggle_pause()
+            }
+            IconButton(id: forward_tv, icon: "goforward.10", font_size: 20, height: 46, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }) => app.skip(10.0)
+            if app.player.episodes {
+                IconButton(id: next_tv, icon: "forward.end.fill", height: 46, label: tr! { "zh-Hans" => "下一集", "en" => "Next episode" }, enabled: app.player.has_next) => app.change_episode(1)
+            }
+            if (build.modules.danmaku && app.features.danmaku) {
+                SplitButton(id: danmaku_tv, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, more_label: tr! { "zh-Hans" => "弹幕参数", "en" => "Danmaku options" }, icon: "text.bubble", checked: app.preferences.show_danmaku, shape: capsule, height: 46) {
+                    player_danmaku_quick(app: app)
+                } => app.set_preference("show_danmaku", app.preferences.show_danmaku)
                 if (build.modules.danmaku && app.features.danmaku) {
-                    SplitButton(id: danmaku_tv, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, more_label: tr! { "zh-Hans" => "弹幕参数", "en" => "Danmaku options" }, icon: "text.bubble", checked: app.preferences.show_danmaku, shape: capsule, height: 46) {
-                        player_danmaku_quick(app: app)
-                    } => app.set_preference("show_danmaku", app.preferences.show_danmaku)
-                    if (build.modules.danmaku && app.features.danmaku) {
-                        Button(id: say_tv, label: tr! { "zh-Hans" => "发弹幕", "en" => "Send Danmaku" }, icon: "paperplane", shape: capsule, height: 46) => draft.saying.set(true)
-                    }
-                }
-                Spacer
-                player_tv_subtitle_menu(app: app)
-                Picker(id: rate_tv, label: tr! { "zh-Hans" => "倍速", "en" => "Speed" }, selected: app.preferences.speed, label_hidden: true, style: menu, shape: capsule, height: 46) => app.set_speed(app.preferences.speed)
-                if (build.modules.enhance && app.features.enhance) {
-                    Picker(id: enhancement_tv, label: tr! { "zh-Hans" => "画质增强", "en" => "Enhancement" }, selected: app.player.enhancement, label_hidden: true, style: menu, shape: capsule, height: 46) => app.set_enhancement(app.player.enhancement)
-                }
-            }
-            Row(gap: 14, align: center, height: 56) {
-                if app.player.episodes {
-                    IconButton(id: previous_tv, icon: "backward.end.fill", height: 46, label: tr! { "zh-Hans" => "上一集", "en" => "Previous episode" }, enabled: app.player.has_previous) => app.change_episode(-1)
-                }
-                IconButton(id: rewind_tv, icon: "gobackward.10", font_size: 20, height: 46, label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 seconds" }) => app.skip(-10.0)
-                if app.paused {
-                    IconButton(id: play_tv, icon: "play.fill", font_size: 24, height: 56, prominence: prominent, default_focus: true, label: tr! { "zh-Hans" => "播放", "en" => "Play" }) => app.toggle_pause()
-                } else {
-                    IconButton(id: pause_tv, icon: "pause.fill", font_size: 24, height: 56, prominence: prominent, default_focus: true, label: tr! { "zh-Hans" => "暂停", "en" => "Pause" }) => app.toggle_pause()
-                }
-                IconButton(id: forward_tv, icon: "goforward.10", font_size: 20, height: 46, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }) => app.skip(10.0)
-                if app.player.episodes {
-                    IconButton(id: next_tv, icon: "forward.end.fill", height: 46, label: tr! { "zh-Hans" => "下一集", "en" => "Next episode" }, enabled: app.player.has_next) => app.change_episode(1)
-                }
-            }
-        }
-    }
-}
-
-/// The phone's landscape player: the rails, top bar and seek bar overlay
-/// the full-window picture. Opening settings does not resize the video.
-#[component]
-pub fn player_phone_scene(
-    app: erika::Client,
-    players: Players,
-    shown: bool,
-    #[session] draft: PlayerDraft,
-) -> impl View {
-    ui! {
-        Stack(variant: player_black, width: 844, height: 390, align: top_leading) {
-            Positioned(x: 0, y: 0, width: 844, height: 390, bleed: true) {
-                Button(id: picture_phone, label: tr! { "zh-Hans" => "播放或暂停画面", "en" => "Play or pause picture" }, variant: player_picture, idle_area: 1) {
-                    Stack {
-                        ScaleBox(width: 693, height: 390) {
-                            Image(source: app.still, width: 693, height: 390, corner: 0, fit: cover, label: app.title, hero: frame, hero_key: app.title, animate: hero)
-                        }
-                        // The surface includes both side bars; only the video
-                        // content is aspect-fit, not the danmaku canvas.
-                        if app.video {
-                            Video(id: video_phone, player: players.video, label: app.title, controls: none, sizing: fill, fit: contain, corner: 0, appear: video_in, appear_delay: 0.4)
-                        }
-                        ScaleBox(width: 693, height: 390) {
-                            player_phone_overlays(app: app)
-                        }
-                        // What plugins draw along the bottom edge.
-                        if app.video {
-                            ScaleBox(width: 844, height: 390) {
-                                Stack(width: 844, height: 390, align: top_leading) {
-                                    Positioned(x: 0, y: 368, width: 844, height: 22, bleed: true) {
-                                        player_plugin_overlays(app: app)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } => app.toggle_pause()
-            }
-            if shown {
-                // `.ph .p-top`: 8 points before the way back, 12 after the last action.
-                Positioned(x: 0, y: 0, width: 840, height: 48, appear: top_bar_in, disappear: top_bar_out) {
-                    player_phone_top(app: app)
-                }
-            }
-            if shown {
-                // The left rail: danmaku, then the previous episode and back 10.
-                Positioned(x: 0, y: 148, width: 162, height: 34, appear: controls_in, disappear: controls_out) {
-                    Row(gap: 6, align: center) {
-                        Spacer
-                        if (build.modules.danmaku && app.features.danmaku) {
-                            SplitButton(id: danmaku_phone, label: tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" }, more_label: tr! { "zh-Hans" => "弹幕参数", "en" => "Danmaku options" }, icon: "text.bubble", checked: app.preferences.show_danmaku, shape: capsule, height: 34) {
-                                player_danmaku_quick(app: app)
-                            } => app.set_preference("show_danmaku", app.preferences.show_danmaku)
-                            Stack(variant: player_buttons) {
-                                PopoverButton(panel_appearance: surface, id: compose_danmaku_phone, label: tr! { "zh-Hans" => "发弹幕", "en" => "Send danmaku" }, icon: "paperplane", presented: draft.composer_open) {
-                                    player_danmaku_composer(app: app)
-                                }
-                            }
-                        }
-                        Spacer
-                    }
-                }
-                Positioned(x: 0, y: 194, width: 162, height: 46, appear: controls_in, disappear: controls_out) {
-                    Row(gap: 8, align: center) {
-                        Spacer
-                        if app.player.episodes {
-                            Stack(variant: player_buttons) { IconButton(id: previous_phone, icon: "backward.end.fill", font_size: 11, height: 46, label: tr! { "zh-Hans" => "上一集", "en" => "Previous episode" }, enabled: app.player.has_previous) => app.change_episode(-1) }
-                        }
-                        Stack(variant: player_buttons) { IconButton(id: rewind_phone, icon: "gobackward.10", font_size: 12.5, height: 46, label: tr! { "zh-Hans" => "快退 10 秒", "en" => "Back 10 seconds" }) => app.skip(-10.0) }
-                        Spacer
-                    }
-                }
-                // The right rail: subtitles, speed, the 60-point play button,
-                // then forward 10 and the next episode.
-                Positioned(x: 682, y: 91, width: 162, height: 32, appear: controls_in, disappear: controls_out) {
-                    Row(gap: 0, align: center) {
-                        Spacer
-                        Stack(variant: player_buttons) { ControlGroup(height: 32) { player_subtitle_menu(app: app) } }
-                        Spacer
-                    }
-                }
-                Positioned(x: 682, y: 135, width: 162, height: 32, appear: controls_in, disappear: controls_out) {
-                    Row(gap: 0, align: center) {
-                        Spacer
-                        // The rates come from the engine: the preference's six and
-                        // those a plugin adds.
-                        Stack(variant: player_buttons) {
-                            PopoverButton(panel_appearance: surface, id: rate_phone, icon: "speedometer", label: tr! { "zh-Hans" => "播放速度", "en" => "Playback speed" }, presented: draft.rate_open) {
-                                player_speed_menu(app: app)
-                            }
-                        }
-                        Spacer
-                    }
-                }
-                Positioned(x: 682, y: 179, width: 162, height: 60, appear: controls_in, disappear: controls_out) {
-                    Row(gap: 0, align: center) {
-                        Spacer
-                        if app.paused {
-                            IconButton(id: play_phone, icon: "play.fill", font_size: 17, height: 60, prominence: prominent, label: tr! { "zh-Hans" => "播放", "en" => "Play" }) => app.toggle_pause()
-                        } else {
-                            IconButton(id: pause_phone, icon: "pause.fill", font_size: 17, height: 60, prominence: prominent, label: tr! { "zh-Hans" => "暂停", "en" => "Pause" }) => app.toggle_pause()
-                        }
-                        Spacer
-                    }
-                }
-                Positioned(x: 682, y: 251, width: 162, height: 46, appear: controls_in, disappear: controls_out) {
-                    Row(gap: 8, align: center) {
-                        Spacer
-                        Stack(variant: player_buttons) { IconButton(id: forward_phone, icon: "goforward.10", font_size: 12.5, height: 46, label: tr! { "zh-Hans" => "快进 10 秒", "en" => "Forward 10 seconds" }) => app.skip(10.0) }
-                        if app.player.episodes {
-                            Stack(variant: player_buttons) { IconButton(id: next_phone, icon: "forward.end.fill", font_size: 11, height: 46, label: tr! { "zh-Hans" => "下一集", "en" => "Next episode" }, enabled: app.player.has_next) => app.change_episode(1) }
-                        }
-                        Spacer
-                    }
-                }
-            }
-            if shown {
-                // `.p-seek`, 3 under the picture: the time, the seek bar 54
-                // in from both ends, the length.
-                Positioned(x: 162.5, y: 357.1, width: 35.5, height: 16, animate: hero, appear: controls_in, disappear: controls_out) {
-                    Stack(variant: player_overlay) {
-                        Stack(variant: player_text) { Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.elapsed }, style: caption2, font_size: 12) }
-                    }
-                }
-                Positioned(x: 216.5, y: 351.1, width: 411, height: 28, animate: hero, appear: controls_in, disappear: controls_out) {
-                    Stack(variant: player_overlay) {
-                        Slider(id: position_phone, appearance: dark, tint: text.primary, label: tr! { "zh-Hans" => "播放进度", "en" => "Playback position" }, label_hidden: true, current: app.progress, min: 0, max: 1) => app.seek(app.progress)
-                    }
-                }
-                if app.player.has_chapters && app.duration > 0.0 {
-                    Positioned(x: 216.5, y: 363.6, width: 411, height: 3, animate: hero, appear: controls_in, disappear: controls_out) {
-                        Stack(variant: player_overlay) {
-                            Rail {
-                                ForEach(items: app.player.chapters, key: id) |chapter| {
-                                    Canvas(at: chapter.at, width: 3, height: 3) { Shape(kind: ellipse, fill: text.primary) }
-                                }
-                            }
-                        }
-                    }
-                }
-                Positioned(x: 646, y: 357.1, width: 35.5, height: 16, animate: hero, appear: controls_in, disappear: controls_out) {
-                    Stack(variant: player_overlay) {
-                        Stack(variant: player_secondary) { Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.duration }, style: caption2, font_size: 12) }
-                    }
-                }
-            }
-            // `.ph .p-sheet`: the settings beside the picture.
-            if app.player.skip_kind != SkipKind::None {
-                Positioned(x: 488, y: 290, width: 180, height: 36) {
-                    player_skip_button(app: app)
-                }
-            }
-        }
-    }
-}
-
-/// The phone player's bar (`.p-top`, 48 points): the way back on a glass
-/// circle, the title with its episode, and its actions on one glass
-/// capsule, Apple's 44 points tall.
-#[component]
-pub fn player_phone_top(app: erika::Client) -> impl View {
-    ui! {
-        Row(gap: 10, padding_x: 8, height: 48, align: center) {
-            Stack(variant: player_buttons) { IconButton(id: back_phone, icon: "chevron.left", font_size: 18, height: 44, label: tr! { "zh-Hans" => "返回", "en" => "Back" }) => app.minimize() }
-            Stack(variant: player_overlay) {
-                Row(gap: 8, align: baseline) {
-                    Stack(variant: player_text) { Text(content: app.title, style: title3, lines: 1) }
-                    Stack(variant: player_secondary) { Text(content: app.subtitle, style: caption, lines: 1) }
+                    Button(id: say_tv, label: tr! { "zh-Hans" => "发弹幕", "en" => "Send Danmaku" }, icon: "paperplane", shape: capsule, height: 46) => draft.saying.set(true)
                 }
             }
             Spacer
-            Stack(variant: player_buttons) {
-                ControlGroup(label: tr! { "zh-Hans" => "播放选项", "en" => "Playback options" }, height: 44) {
-                    if (build.modules.danmaku && app.features.danmaku) {
-                        PopoverButton(panel_appearance: surface, id: match_danmaku_phone, icon: "link", label: tr! { "zh-Hans" => "弹幕匹配", "en" => "Match danmaku" }, open: app.matching.open) { player_matching(app: app) } => app.show_matching(app.matching.open)
-                    }
-                    PopoverButton(panel_appearance: surface, id: settings_phone, icon: "slider.horizontal.3", label: tr! { "zh-Hans" => "播放设置", "en" => "Playback settings" }, open: app.player.panel) {
-                        player_panel(app: app)
-                    } => app.player_panel(app.player.panel)
-                    IconButton(id: screenshot_phone, label: tr! { "zh-Hans" => "截图", "en" => "Screenshot" }, icon: "camera") => app.screenshot()
-                }
+            player_tv_subtitle_menu(app: app)
+            Picker(id: rate_tv, label: tr! { "zh-Hans" => "倍速", "en" => "Speed" }, selected: app.preferences.speed, label_hidden: true, style: menu, shape: capsule, height: 46) => app.set_speed(app.preferences.speed)
+            if (build.modules.enhance && app.features.enhance) {
+                Picker(id: enhancement_tv, label: tr! { "zh-Hans" => "画质增强", "en" => "Enhancement" }, selected: app.player.enhancement, label_hidden: true, style: menu, shape: capsule, height: 46) => app.set_enhancement(app.player.enhancement)
             }
         }
     }
 }
 
-/// What shows over the picture: the play or pause it was given. Subtitles
-/// and danmaku are in the picture, drawn by liberika.
 #[component]
 pub fn player_overlays(app: erika::Client) -> impl View {
     ui! {
         Stack(width: 1280, height: 720, align: top_leading) {
             if app.player.feedback {
                 Positioned(x: 596, y: 316, width: 88, height: 88, appear: player_feedback_in, disappear: fade) {
-                    Stack(variant: player_overlay) {
-                        if app.paused {
-                            Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "暂停", "en" => "Pause" }, icon: "pause.fill", display: icon, font_size: 44) }
-                        } else {
-                            Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "播放", "en" => "Play" }, icon: "play.fill", display: icon, font_size: 44) }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// The phone's overlay (`.ph .cv`), laid out on the 693 × 390 picture and
-/// scaled with it.
-#[component]
-pub fn player_phone_overlays(app: erika::Client) -> impl View {
-    ui! {
-        Stack(width: 693, height: 390, align: top_leading) {
-            if app.player.feedback {
-                Positioned(x: 302.5, y: 151, width: 88, height: 88, appear: player_feedback_in, disappear: fade) {
                     Stack(variant: player_overlay) {
                         if app.paused {
                             Stack(variant: player_text) { Label(title: tr! { "zh-Hans" => "暂停", "en" => "Pause" }, icon: "pause.fill", display: icon, font_size: 44) }
@@ -593,21 +432,21 @@ pub fn player_top(app: erika::Client, #[session] draft: PlayerDraft) -> impl Vie
 }
 
 #[component]
-pub fn player_timeline(app: erika::Client) -> impl View {
+pub fn player_timeline(app: erika::Client, width: f64, end: f64) -> impl View {
     ui! {
         Stack(variant: player_overlay, align: top_leading) {
-            Positioned(x: 0, y: 0, width: 1074, height: 44) {
+            Positioned(x: 0, y: 0, width: width, height: 44) {
                 Slider(id: position, appearance: dark, tint: text.primary, label: tr! { "zh-Hans" => "播放进度", "en" => "Playback position" }, label_hidden: true, current: app.progress, min: 0, max: 1) => app.seek(app.progress)
             }
             if app.player.has_chapters && app.duration > 0.0 {
-                Positioned(x: 0, y: 20, width: 1074, height: 4) {
+                Positioned(x: 0, y: 20, width: width, height: 4) {
                     Rail {
                         ForEach(items: app.player.chapters, key: id) |chapter| {
                             Canvas(at: chapter.at, width: 2, height: 4) { Shape(kind: rect, fill: text.primary) }
                         }
                     }
                 }
-                Positioned(x: 0, y: 40, width: 1074, height: 24) {
+                Positioned(x: 0, y: 40, width: width, height: 24) {
                     Rail(anchor: start) {
                         ForEach(items: app.player.chapters, key: id) |chapter| {
                             if chapter.label_width >= 24.0 {
@@ -622,7 +461,7 @@ pub fn player_timeline(app: erika::Client) -> impl View {
                 }
             }
             Positioned(x: -68, y: 14, width: 54, height: 16) { Row { Spacer Stack(variant: player_text) { Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.elapsed }, style: caption2) } } }
-            Positioned(x: 1088, y: 14, width: 54, height: 16) { Stack(variant: player_secondary) { Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.duration }, style: caption2) } }
+            Positioned(x: end, y: 14, width: 54, height: 16) { Stack(variant: player_secondary) { Text(content: tr! { "zh-Hans" => "{time, duration, mm:ss}", "en" => "{time, duration, mm:ss}"; time: app.duration }, style: caption2) } }
         }
     }
 }
@@ -672,10 +511,12 @@ pub fn player_controls(
                             player_enhancement_menu(app: app)
                         }
                     }
+                    if !window.short {
                     if window.fullscreen {
                         IconButton(id: exit_fullscreen, icon: "arrow.down.right.and.arrow.up.left", label: tr! { "zh-Hans" => "退出全屏", "en" => "Exit full screen" }, shortcut: app.keys.fullscreen) => windows.main.toggle_fullscreen()
                     } else {
                         IconButton(id: fullscreen, icon: "viewfinder", label: tr! { "zh-Hans" => "全屏", "en" => "Full screen" }, shortcut: app.keys.fullscreen) => windows.main.toggle_fullscreen()
+                    }
                     }
                 }
             }
@@ -952,7 +793,7 @@ pub fn player_panel(app: erika::Client, #[session] draft: PlayerDraft) -> impl V
                 }
             }
             Canvas(height: 4)
-            Stack(height: if window.short { 180 } else if app.player.tab == PlayerTab::Picture { 82 } else if app.player.tab == PlayerTab::Playback { 256 } else { 360 }) {
+            Stack(height: if window.short || window.compact || window.medium { 180 } else if app.player.tab == PlayerTab::Picture { 82 } else if app.player.tab == PlayerTab::Playback { 256 } else { 360 }) {
                 ScrollView {
                     match app.player.tab {
                         PlayerTab::Danmaku => { Column(gap: 0, appear: settings_page_in) {
@@ -1224,7 +1065,7 @@ pub fn matching_show_summary(show: MatchingShow, detailed: bool) -> impl View {
 #[component]
 pub fn player_matching(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
     ui! {
-        Column(gap: 14, width: if window.short { 340 } else { 420 }, padding: 8) {
+        Column(gap: 14, width: if window.short || window.compact || window.medium { 340 } else { 420 }, padding: 8) {
             Text(content: tr! { "zh-Hans" => "匹配弹幕", "en" => "Match danmaku" }, style: title3)
             Row(gap: 10) {
                 TextInput(id: match_query, label: tr! { "zh-Hans" => "作品名称", "en" => "Show title" }, label_hidden: true, prompt: tr! { "zh-Hans" => "输入作品名称", "en" => "Search by title" }, value: draft.match_query) => app.search_matching(draft.match_query)
@@ -1236,7 +1077,7 @@ pub fn player_matching(app: erika::Client, #[session] draft: PlayerDraft) -> imp
                     Button(id: match_back, label: tr! { "zh-Hans" => "返回搜索结果", "en" => "Back to results" }, icon: "chevron.left", shape: capsule, height: 30) => app.back_to_match_results()
                     Spacer
                 }
-                Stack(height: if window.short { 200 } else { 350 }) {
+                Stack(height: if window.short || window.compact || window.medium { 200 } else { 350 }) {
                     ScrollView {
                         Column(gap: 12) {
                             Stack(variant: matching_detail) { Column(padding: 12) { matching_show_summary(show: show, detailed: true) } }
@@ -1256,7 +1097,7 @@ pub fn player_matching(app: erika::Client, #[session] draft: PlayerDraft) -> imp
                 }
             } else {
                 Text(content: tr! { "zh-Hans" => "选择作品，再选择当前播放的集数", "en" => "Choose a show, then the episode you are watching" }, style: caption, emphasis: secondary)
-                Stack(height: if window.short { 200 } else { 350 }) {
+                Stack(height: if window.short || window.compact || window.medium { 200 } else { 350 }) {
                     ScrollView {
                         Column(gap: 10) {
                             if app.matching.loading { Progress(label: tr! { "zh-Hans" => "正在搜索…", "en" => "Searching…" }) }

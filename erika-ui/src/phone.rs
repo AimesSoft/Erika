@@ -6,7 +6,7 @@
 use crate::pure::{phone_pure, phone_pure_props};
 use crate::search::{search_results, search_results_props};
 use crate::settings::*;
-use crate::{AppWindows, ErikaDraft, MainPage};
+use crate::{AppWindows, ErikaDraft, MainPage, fold_side, fold_side_props};
 use bern::prelude::*;
 #[cfg(feature = "bern-module-anime")]
 use erika_anime_protocol::anime::{self, BackTo};
@@ -77,8 +77,17 @@ pub fn phone_shell(
         // Settings replace the whole tab shell, so the hidden pages cannot
         // be switched underneath them. Closing restores the selected tab.
         if draft.phone_settings != PhoneSettings::Closed {
-            Stack(variant: phone_page, align: top_leading) {
-                phone_settings(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+            if window.unfolded {
+                Row(gap: 0, align: top) {
+                    Stack(variant: phone_page, width: window.fold, align: top_leading) {
+                        phone_settings(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+                    }
+                    fold_side(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+                }
+            } else {
+                Stack(variant: phone_page, align: top_leading) {
+                    phone_settings(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+                }
             }
         // Pure playback (design 10.2): no pages, so no tab bar.
         } else if !(build.modules.anime && app.features.anime) && !(build.modules.library && app.features.library) && !(build.modules.downloads && app.features.downloads) {
@@ -115,9 +124,33 @@ pub fn phone_shell(
     }
 }
 
-/// The selected tab's page or details. Settings are owned by the shell.
+/// A tab: on a foldable open flat (design 3.1), the page on the left and
+/// what it opened on the right, the fold between the two. The columns are
+/// inside the tab so the tab bar spans the window, and the system stands it
+/// in the column under the status bar.
 #[component]
 pub fn phone_tab_content(
+    app: erika::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
+    windows: AppWindows,
+) -> impl View {
+    ui! {
+        if window.unfolded {
+            Row(gap: 0, align: top) {
+                Stack(width: window.fold) {
+                    phone_tab_page(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
+                }
+                fold_side(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+            }
+        } else {
+            phone_tab_page(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
+        }
+    }
+}
+
+/// The selected tab's page or details. Settings are owned by the shell.
+#[component]
+pub fn phone_tab_page(
     app: erika::Client,
     #[cfg(feature = "bern-module-anime")] anime: anime::Client,
     windows: AppWindows,
@@ -125,7 +158,7 @@ pub fn phone_tab_content(
 ) -> impl View {
     ui! {
         Stack(variant: phone_page, align: top_leading) {
-            if build.modules.anime && anime.opened > 0 && ((build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library) || (draft.page == MainPage::Search && anime.back == BackTo::Search)) {
+            if build.modules.anime && anime.opened > 0 && !window.unfolded && ((build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library) || (draft.page == MainPage::Search && anime.back == BackTo::Search)) {
                 details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
             } else if draft.page == MainPage::Search {
                 phone_search(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
@@ -229,7 +262,7 @@ pub fn phone_header(
     ui! {
         Column(gap: 0) {
         Canvas(height: 7)
-        if build.modules.anime && anime.opened > 0 && ((draft.page == MainPage::Home && !anime.opened_from_schedule) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library) || (draft.page == MainPage::Search && anime.back == BackTo::Search)) {
+        if build.modules.anime && anime.opened > 0 && !window.unfolded && ((draft.page == MainPage::Home && !anime.opened_from_schedule) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library) || (draft.page == MainPage::Search && anime.back == BackTo::Search)) {
             // The way back as iOS 26's own apps have it: the chevron on a
             // 44-point Liquid Glass circle, 16 from the edge, its label the
             // page it returns to.

@@ -20,7 +20,7 @@ use bern::prelude::*;
 #[cfg(feature = "bern-module-anime")]
 use erika_anime_protocol::anime::{self, BackTo};
 #[cfg(feature = "bern-module-anime")]
-use erika_anime_ui::{details, details_props};
+use erika_anime_ui::{details, details_props, stage_column, stage_column_props};
 #[cfg(feature = "bern-module-downloads")]
 use erika_downloads_protocol::downloads;
 use erika_protocol::erika::{self, PlaybackSpeed};
@@ -775,6 +775,11 @@ pub fn main_shell(
     ui! {
         Stack {
             Stack(enabled: !app.playing || !app.expanded) {
+            // A foldable open flat (design 3.1): the phone's tabs, whatever
+            // the window's width, with two columns in each.
+            if window.unfolded {
+                phone_shell(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
+            } else {
             Adaptive(id: shell) {
             // A phone (design 3.1): the pages are tabs, search the last.
             Layout(size: compact) {
@@ -796,11 +801,16 @@ pub fn main_shell(
                     // The logo and name; Windows and Linux show them in the
                     // title bar instead.
                     SidebarHeader(role: title) {
+                        // Material's rail has 「打开」 at its top (design 6.2).
+                        if window.rail {
+                            IconButton(id: open_rail, label: tr! { "zh-Hans" => "打开", "en" => "Open" }, icon: "plus", font_size: 22, height: 56, prominence: prominent, pick: draft.file, files: "video") => app.open_file(draft.file)
+                        } else {
                         // Match the navigation icon centers and title column.
                         Row(variant: brand, align: center) {
                             // `.x-brand img`: the logo in its own colors.
                             Image(source: "design/assets/icon.png", width: 22, height: 22, label: tr! { "zh-Hans" => "Erika", "en" => "Erika" })
                             Text(content: tr! { "zh-Hans" => "Erika", "en" => "Erika" }, style: headline)
+                        }
                         }
                     }
                     if build.modules.anime && app.features.anime {
@@ -819,6 +829,16 @@ pub fn main_shell(
                         if app.playing && (!app.expanded || app.player.arriving) {
                             mini_player(app: app, players: players)
                         }
+                        if window.rail {
+                            Column(gap: 10, align: center) {
+                                if build.modules.account && app.features.account {
+                                    Button(id: accounts_rail, label: tr! { "zh-Hans" => "账号", "en" => "Accounts" }, variant: row) {
+                                        avatar(app: app)
+                                    } => app.show_account_picker(true)
+                                }
+                                IconButton(id: settings_rail, icon: "gearshape", label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, prominence: plain) => windows.settings.open()
+                            }
+                        } else {
                         Row(gap: 10, align: center) {
                             // The account opens the accounts, to choose
                             // which one to sign in to.
@@ -838,6 +858,7 @@ pub fn main_shell(
                             }
                             IconButton(id: settings, icon: "gearshape", label: tr! { "zh-Hans" => "设置", "en" => "Settings" }, prominence: plain, shortcut: app.keys.settings) => windows.settings.open()
                         }
+                        }
                     }
                 }
                 Detail(titled: false) {
@@ -851,7 +872,9 @@ pub fn main_shell(
                         Search(id: search, value: draft.query, style: palette, width: 640, height: 480, panel_prompt: tr! { "zh-Hans" => "搜索番剧、剧集、设置和操作", "en" => "Search shows, episodes, settings and actions" }, prompt: tr! { "zh-Hans" => "搜索番剧、文件、设置", "en" => "Search shows, files and settings" }, shortcut: app.keys.search) {
                             search_results(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
                         }
-                        Button(id: open_file, label: tr! { "zh-Hans" => "打开", "en" => "Open" }, icon: "plus", pick: draft.file, files: "video", shortcut: app.keys.open_file) => app.open_file(draft.file)
+                        if !window.rail {
+                            Button(id: open_file, label: tr! { "zh-Hans" => "打开", "en" => "Open" }, icon: "plus", pick: draft.file, files: "video", shortcut: app.keys.open_file) => app.open_file(draft.file)
+                        }
                     }
                     if build.modules.anime && anime.opened > 0 && (anime.back == BackTo::Search || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library)) {
                         details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
@@ -859,6 +882,7 @@ pub fn main_shell(
                         PageContent(slot: main, selected: draft.page)
                     }
                 }
+            }
             }
             }
             }
@@ -897,6 +921,24 @@ pub fn avatar(app: erika::Client) -> impl View {
             Svg(source: "design/brand/erika-icon-export/svg/erika-mono-white.svg", width: 23, height: 23, label: tr! { "zh-Hans" => "头像", "en" => "Avatar" })
             if let Some(picture) = app.user_avatar {
                 Image(source: picture, width: 30, height: 30, corner: 15, fit: cover, label: app.user_name)
+            }
+        }
+    }
+}
+
+/// A foldable's right half (design 3.1): what the left half opened, and until
+/// then the frame of what was watched last.
+#[component]
+pub fn fold_side(
+    app: erika::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
+) -> impl View {
+    ui! {
+        Stack(variant: phone_page, align: top_leading) {
+            if build.modules.anime && anime.opened > 0 {
+                details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+            } else if build.modules.anime {
+                stage_column(anime: anime)
             }
         }
     }

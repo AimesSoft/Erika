@@ -9,6 +9,9 @@ version = "0.1.0"
 name = { "zh-Hans" = "Erika", "en" = "Erika" }
 # Shown by installers and package managers.
 # publisher = "Your Name"
+# The recognition gateway's posters and the thumbnails of a remote client on
+# the local network come over plain http.
+cleartext_http = true
 
 # The application icon of the design (design/brand/erika-icon.html), each
 # platform in its own form as `build.py` exports it: the main logo on a
