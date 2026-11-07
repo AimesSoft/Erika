@@ -182,6 +182,24 @@ pub fn link_headers(url: &str) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// The font file a page of this device's WebUI draws missing text with: a
+/// browser cannot read the fonts of the device that serves it. It is the font
+/// liberika carries, so the page needs none of its own.
+pub fn page_font() -> Option<PathBuf> {
+    #[cfg(liberika_kernel)]
+    {
+        let font = ::liberika::font::embedded_fallback_font()?;
+        let path = bern::storage::cache_dir()?.join("page-font.ttf");
+        let current = std::fs::metadata(&path).is_ok_and(|file| file.len() == font.len() as u64);
+        if !current {
+            std::fs::write(&path, font).ok()?;
+        }
+        Some(path)
+    }
+    #[cfg(not(liberika_kernel))]
+    None
+}
+
 pub fn start() -> Option<Arc<dyn Kernel>> {
     #[cfg(not(target_arch = "wasm32"))]
     if bern::resources::Resources::host().is_served() {

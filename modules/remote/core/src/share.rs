@@ -464,6 +464,7 @@ impl Share {
             }
             ("GET", ["api", "history"]) => self.plain_history(),
             ("GET" | "HEAD", ["api", "image_proxy"]) => image_proxy(request),
+            ("GET" | "HEAD", ["api", "erika", "fallback-font"]) => fallback_font(host),
             (_, ["api", "remote", "control", route]) => self.control(request, host, route),
             _ => text(404, "Route not found"),
         }
@@ -478,6 +479,30 @@ impl Routes for Share {
         let mut response = self.api(request, host);
         cors(request, &mut response);
         Some(response)
+    }
+}
+
+/// The font this device carries, for its WebUI page to draw missing text with.
+fn fallback_font(host: &Host) -> Response {
+    let font = control_call(host, "fallback_font", &Value::Null).ok();
+    let path = font.as_ref().and_then(|font| font["path"].as_str());
+    let Some(path) = path.map(PathBuf::from) else {
+        return text(404, "No font");
+    };
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return text(404, "No font");
+    };
+    Response {
+        status: 200,
+        headers: vec![
+            ("Content-Type".into(), "application/octet-stream".into()),
+            ("Cache-Control".into(), "public, max-age=86400".into()),
+        ],
+        body: Body::File {
+            path,
+            offset: 0,
+            length: metadata.len(),
+        },
     }
 }
 

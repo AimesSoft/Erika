@@ -1,10 +1,20 @@
 import { Player, AudioSession } from './liberika/index.js';
+import { hostFont } from './font.js';
 
 const nameTrack = (track) => ({ id: track.id, name: [track.name || track.language, track.codec?.toUpperCase()].filter(Boolean).join(' · ') || `Track ${track.id}` });
 const MAX_TEXT = 64 * 1024 * 1024;
 
 /** One persistent surface per Bern player. View/menu changes move this same
  * canvas, so they neither restart playback nor discard the text atlases. */
+/** A page of the native host has no font of its own: it draws missing text
+ * with the host's, read once. Without one, subtitles keep only their own fonts. */
+let hostFontRead;
+const pageFont = () => hostFontRead ??= fetch('/api/erika/fallback-font')
+  .then(async response => response.ok
+    ? { data: await response.arrayBuffer(), index: 0 }
+    : undefined)
+  .catch(() => undefined);
+
 export class BrowserPlayer {
   constructor(id, report, files, audioSession) {
     this.audioSession = audioSession;
@@ -50,7 +60,8 @@ export class BrowserPlayer {
   async ensure() {
     if (this.instance) return this.instance;
     if (this.audioSession?.context.state === 'closed') this.audioSession = new AudioSession();
-    const p = await Player.create({ canvas: this.canvas, volume: this.muted ? 0 : this.volume, audioSession: this.audioSession });
+    const fallbackFont = hostFont ? await pageFont() : undefined;
+    const p = await Player.create({ canvas: this.canvas, fallbackFont, volume: this.muted ? 0 : this.volume, audioSession: this.audioSession });
     this.instance = p;
     for (const event of ['play', 'pause', 'stats']) p.addEventListener(event, () => this.report());
     p.addEventListener('timeupdate', () => {

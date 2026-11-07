@@ -132,11 +132,11 @@ channels = ["ipc"]
 ui = "web"
 platform = "browser"
 web_mode = "app"
-web_extension = { path = "web", build = ["python3", "build.py"] }
+web_extension = { path = "web", build = ["python3", "build.py", "--host-font"] }
 
 # WebUI: the browser connects to a separate native Erika engine host.
 [targets.web_ui]
-web_extension = { path = "web", build = ["python3", "build.py"] }
+web_extension = { path = "web", build = ["python3", "build.py", "--host-font"] }
 ui = "web"
 platform = "browser"
 web_mode = "ui"

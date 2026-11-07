@@ -166,11 +166,13 @@ impl ErikaEngine {
         }
     }
 
-    /// One request of the remote module: `state` or `command`, with its
-    /// arguments as JSON; the answer is JSON too.
+    /// One request of the remote module: `state`, `command` or
+    /// `fallback_font`, with its arguments as JSON; the answer is JSON too.
     pub(crate) fn remote_control_request(&mut self, action: &str, args: &str) -> String {
         let args: Value = serde_json::from_str(args).unwrap_or(Value::Null);
-        let answer = if action == "command" {
+        let answer = if action == "fallback_font" {
+            kernel::page_font().map_or(Value::Null, |path| json!({ "path": path }))
+        } else if action == "command" {
             let result = self.control_command(
                 args["command"].as_str().unwrap_or_default(),
                 &args["args"],
