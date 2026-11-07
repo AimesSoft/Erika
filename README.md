@@ -237,7 +237,7 @@ bern build --target macos --release \
 
 ## 下载
 
-发布后在 [Releases](https://github.com/AimesSoft/Erika/releases) 下载，文件名是 `Erika-版本-系统-架构[-headless]`。
+在 [Releases](https://github.com/AimesSoft/Erika/releases) 下载，文件名是 `Erika-版本-系统-架构[-headless]`。
 
 | 系统 | 架构 | 包 |
 | --- | --- | --- |

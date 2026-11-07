@@ -1,5 +1,6 @@
-# Builds every package. A tag like v0.1.0 publishes them as a GitHub release;
-# running the workflow by hand only keeps them as artifacts of the run.
+# Builds every package. A tag like v0.1.0 publishes them as a GitHub release
+# whose notes are .github/release-notes/v0.1.0.md; running the workflow by hand
+# only keeps them as artifacts of the run.
 #
 # Package names: Erika-<version>-<system>-<architecture>[-headless].<extension>.
 # A headless package has no window: it is the engine host, the command line, the
@@ -30,6 +31,15 @@ jobs:
       RUSTUP_TOOLCHAIN: "1.99.0"
     steps:
       - uses: actions/checkout@v4
+      # Checked first, so a tag without notes stops before the long builds.
+      - name: Release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          notes=".github/release-notes/$GITHUB_REF_NAME.md"
+          if [ ! -s "$notes" ]; then
+            echo "::error::Write $notes before tagging $GITHUB_REF_NAME"
+            exit 1
+          fi
       - name: Rust
         run: rustup target add wasm32-unknown-unknown
       - uses: mymindstorm/setup-emsdk@v14
@@ -343,4 +353,5 @@ jobs:
           (cd dist && sha256sum * > SHA256SUMS.txt)
           gh release create "$GITHUB_REF_NAME" dist/* \
             --title "Erika ${GITHUB_REF_NAME#v}" \
+            --notes-file ".github/release-notes/$GITHUB_REF_NAME.md" \
             --generate-notes
