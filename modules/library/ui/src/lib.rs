@@ -164,16 +164,10 @@ pub fn library_wall(
 ) -> impl View {
     ui! {
         if window.tv {
-            ScrollView(position: draft.position, arrival: nudge) {
-                library_grid(app: app, library: library, listing: listing, size: draft.tv_poster_size, gap: 20.0, titles: true)
-                Canvas(height: 48)
-            }
+            library_grid(app: app, library: library, listing: listing, size: draft.tv_poster_size, gap: 20.0, titles: true)
         } else {
             Pinch(id: zoom_wall, label: tr! { "zh-Hans" => "缩放海报墙", "en" => "Zoom poster wall" }, value: draft.poster_size, min: 84, max: 200) {
-                ScrollView(position: draft.position, arrival: nudge) {
-                    library_grid(app: app, library: library, listing: listing, size: draft.poster_size, gap: if draft.poster_size < 110.0 { 10.0 } else { 20.0 }, titles: draft.poster_size >= 110.0)
-                    Canvas(height: 48)
-                }
+                library_grid(app: app, library: library, listing: listing, size: draft.poster_size, gap: if draft.poster_size < 110.0 { 10.0 } else { 20.0 }, titles: draft.poster_size >= 110.0)
             }
         }
     }
@@ -193,46 +187,54 @@ pub fn library_phone(
 ) -> impl View {
     ui! {
         Pinch(id: zoom_wall_phone, label: tr! { "zh-Hans" => "缩放海报墙", "en" => "Zoom poster wall" }, value: draft.phone_poster_size, min: 64, max: 150) {
-            ScrollView(position: draft.position, arrival: nudge, appear: page_in) {
-                Column(gap: 0, padding_x: 16) {
-                    Canvas(height: 7)
-                    Row(gap: 8, height: 48, align: center) {
-                        Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
-                        Spacer
-                        ControlGroup(label: tr! { "zh-Hans" => "媒体库操作", "en" => "Library actions" }, height: 44) {
-                            library_sort_round()
-                            Slot(id: phone_header_settings)
-                        }
-                    }
-                    Canvas(height: 2)
-                    Row(gap: 10, align: center) {
-                        library_tabs()
-                        Spacer
-                        library_zoom(app: app)
-                    }
-                    Canvas(height: 12)
-                    // `.l-chips` on the phone stay one line.
-                    ScrollView(axis: horizontal, indicators: mouse) {
-                        Row(gap: 8, align: center) {
-                            ForEach(items: listing.filters, key: id) |chip| {
-                                library_filter(value: chip.value, count: chip.count)
-                            }
-                            library_source_chips(library: library)
-                        }
-                    }
-                    Canvas(height: 18)
-                    // `libLayout` on the phone: 10 between posters below 110
-                    // points, else 12; the titles while posters are 96 wide.
-                    library_grid(app: app, library: library, listing: listing, size: draft.phone_poster_size, gap: if draft.phone_poster_size < 110.0 { 10.0 } else { 12.0 }, titles: draft.phone_poster_size >= 88.0)
-                    Canvas(height: 48)
+            library_grid(app: app, library: library, listing: listing, size: draft.phone_poster_size, gap: if draft.phone_poster_size < 110.0 { 10.0 } else { 12.0 }, titles: draft.phone_poster_size >= 88.0)
+        }
+    }
+}
+
+/// The phone's heading stays in the poster scroll view.
+#[component]
+pub fn library_phone_header(
+    app: erika::Client,
+    library: library::Client,
+    listing: library::LibraryListing,
+) -> impl View {
+    ui! {
+        Column(gap: 0) {
+            Canvas(height: 7)
+            Row(gap: 8, height: 48, align: center) {
+                Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: large_title)
+                Spacer
+                ControlGroup(label: tr! { "zh-Hans" => "媒体库操作", "en" => "Library actions" }, height: 44) {
+                    library_sort_round()
+                    Slot(id: phone_header_settings)
                 }
             }
+            Canvas(height: 2)
+            Row(gap: 10, align: center) {
+                library_tabs()
+                Spacer
+                library_zoom(app: app)
+            }
+            Canvas(height: 12)
+            // `.l-chips` on the phone stay one line.
+            ScrollView(axis: horizontal, indicators: mouse) {
+                Row(gap: 8, align: center) {
+                    ForEach(items: listing.filters, key: id) |chip| {
+                        library_filter(value: chip.value, count: chip.count)
+                    }
+                    library_source_chips(library: library)
+                }
+            }
+            Canvas(height: 18)
         }
     }
 }
 
 /// The wall and the letters beside it (`.l-wrap`, 28 points for the
-/// letters, 22 on the phone).
+/// letters, 22 on the phone). Only the posters scroll; the index is a
+/// sibling of that viewport. Keep the keyed ForEach in the same component
+/// as its position-bound ScrollView so native targets register its items.
 #[component]
 pub fn library_grid(
     app: erika::Client,
@@ -244,36 +246,51 @@ pub fn library_grid(
     #[session] draft: LibraryDraft,
 ) -> impl View {
     ui! {
-        if listing.empty {
-            Column(gap: 4, padding_y: 24) {
-                Text(content: tr! { "zh-Hans" => "这里还没有番。", "en" => "No shows here yet." }, style: title3)
-                Text(content: tr! { "zh-Hans" => "在「来源」里添加放视频的文件夹，或者直接打开视频，识别出的番剧会列在这里。", "en" => "Add folders of videos under Sources, or open videos; recognized shows are listed here." }, emphasis: secondary, lines: 3)
-                if build.modules.account && app.features.account {
-                    Text(content: tr! { "zh-Hans" => "在线识别需要先在 设置 › 账号 里登录。", "en" => "Sign in under Settings › Account to recognize shows online." }, style: caption, emphasis: secondary, lines: 2)
-                } else if build.modules.account {
-                    Text(content: tr! { "zh-Hans" => "在线识别可在 设置 › 可选功能 中开启账号后使用。", "en" => "Enable Account under Settings › Optional Features to recognize shows online." }, style: caption, emphasis: secondary, lines: 2)
-                }
-            }
-        } else {
-        Row(gap: if window.compact { 2.0 } else { 8.0 }, align: top) {
-            // `libLayout`: every row is 2 : 3 posters and 54 points for
-            // the titles, whatever the titles take.
-            Grid(min_width: size, gap: gap, row_gap: if titles { 16.0 } else { gap }, cell_ratio: 0.6666666667, cell_extra: if titles { 54.0 } else { 0.0 }, stagger: 0.016, animate: smooth) {
-                ForEach(items: listing.posters, key: id, reflow: smooth) |poster| {
-                    library_poster(library: library, poster: poster, show_details: titles)
-                }
-            }
-            // A television's letters are 26 points wide (`.l-idx span`).
-            Column(gap: 1, width: if window.tv { 26 } else { 20 }) {
-                ForEach(items: listing.letters, key: letter) |letter| {
-                    Button(id: index, label: letter.letter, enabled: letter.target > 0, variant: library_index) {
-                        Column(gap: 0, width: if window.tv { 26 } else { 20 }, height: 18, align: center) {
-                            Text(content: letter.letter, style: caption2, font_size: 10.5, emphasis: secondary)
+        Row(gap: if window.compact { 2.0 } else { 8.0 }, align: top, padding_x: if window.compact { 16.0 } else { 0.0 }) {
+            ScrollView(position: draft.position, arrival: nudge, appear: page_in) {
+                Column(gap: 0) {
+                    if window.compact {
+                        library_phone_header(app: app, library: library, listing: listing)
+                    }
+                    if listing.empty {
+                        Column(gap: 4, padding_y: 24) {
+                            Text(content: tr! { "zh-Hans" => "这里还没有番。", "en" => "No shows here yet." }, style: title3)
+                            Text(content: tr! { "zh-Hans" => "在「来源」里添加放视频的文件夹，或者直接打开视频，识别出的番剧会列在这里。", "en" => "Add folders of videos under Sources, or open videos; recognized shows are listed here." }, emphasis: secondary, lines: 3)
+                            if build.modules.account && app.features.account {
+                                Text(content: tr! { "zh-Hans" => "在线识别需要先在 设置 › 账号 里登录。", "en" => "Sign in under Settings › Account to recognize shows online." }, style: caption, emphasis: secondary, lines: 2)
+                            } else if build.modules.account {
+                                Text(content: tr! { "zh-Hans" => "在线识别可在 设置 › 可选功能 中开启账号后使用。", "en" => "Enable Account under Settings › Optional Features to recognize shows online." }, style: caption, emphasis: secondary, lines: 2)
+                            }
                         }
-                    } => draft.position.set(letter.target)
+                    } else {
+                        // `libLayout`: every row is 2 : 3 posters and 54 points for
+                        // the titles, whatever the titles take.
+                        Grid(min_width: size, gap: gap, row_gap: if titles { 16.0 } else { gap }, cell_ratio: 0.6666666667, cell_extra: if titles { 54.0 } else { 0.0 }, stagger: 0.016, animate: smooth) {
+                            ForEach(items: listing.posters, key: id, reflow: smooth) |poster| {
+                                library_poster(library: library, poster: poster, show_details: titles)
+                            }
+                        }
+                    }
+                    Canvas(height: 48)
                 }
             }
-        }
+            if !listing.empty {
+                // A separate viewport keeps all letters reachable in short
+                // windows without putting them in the poster scroll area.
+                Column(width: if window.tv { 26 } else { 20 }) {
+                    ScrollView(indicators: hidden) {
+                        Column(gap: 1) {
+                            ForEach(items: listing.letters, key: letter) |letter| {
+                                Button(id: index, label: letter.letter, enabled: letter.target > 0, variant: library_index) {
+                                    Column(gap: 0, width: if window.tv { 26 } else { 20 }, height: 18, align: center) {
+                                        Text(content: letter.letter, style: caption2, font_size: 10.5, emphasis: secondary)
+                                    }
+                                } => draft.position.set(letter.target)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
