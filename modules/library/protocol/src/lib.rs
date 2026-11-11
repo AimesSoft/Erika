@@ -4,7 +4,7 @@
 //! matched, and matches videos to episodes, one at a time or a folder at a
 //! time, as design/next-screens.js lays it out.
 
-#[bern::protocol(namespace = "library", version = 2)]
+#[bern::protocol(namespace = "library", version = 5)]
 pub mod library {
     use bern::prelude::*;
 
@@ -32,7 +32,8 @@ pub mod library {
 
     #[value]
     pub struct LibraryPoster {
-        pub id: i64,
+        /// Canonical UUID; never an encoded service ID.
+        pub id: String,
         #[content]
         pub title: String,
         pub poster: MediaSource,
@@ -51,8 +52,8 @@ pub mod library {
     pub struct LibraryLetter {
         #[content]
         pub letter: String,
-        /// The first visible show with this initial, or zero if absent.
-        pub target: i64,
+        /// The first visible show's UUID, or empty if absent.
+        pub target: String,
     }
 
     #[value]
@@ -77,8 +78,7 @@ pub mod library {
         pub source_name: String,
     }
 
-    /// What a source holds, which says where its videos are recognized:
-    /// anime by dandanplay, TV series and movies by the user's own server.
+    /// A search hint, not a choice of identity or danmaku provider.
     #[value]
     pub enum SourceContent {
         #[label(tr! { "zh-Hans" => "番剧", "en" => "Anime" })]
@@ -124,6 +124,11 @@ pub mod library {
     /// What a video in a source is.
     #[value]
     pub enum FileNote {
+        #[label(tr! { "zh-Hans" => "{title}", "en" => "{title}" })]
+        Content {
+            #[content]
+            title: String,
+        },
         #[label(tr! { "zh-Hans" => "{anime} · 第 {episode} 话", "en" => "{anime} · Episode {episode}" })]
         Matched {
             #[content]
@@ -147,7 +152,7 @@ pub mod library {
     pub struct LibraryFile {
         /// Which address it is, for the commands.
         pub key: i64,
-        pub show: i64,
+        pub show: String,
         #[content]
         pub name: String,
         pub note: FileNote,
@@ -201,23 +206,19 @@ pub mod library {
     /// What a video being matched says under its name.
     #[value]
     pub enum MatchNote {
-        #[label(tr! { "zh-Hans" => "现在：{anime} · 第 {episode} 话", "en" => "Now: {anime} · Episode {episode}" })]
+        #[label(tr! { "zh-Hans" => "现在：{title}", "en" => "Now: {title}" })]
         Now {
             #[content]
-            anime: String,
-            episode: i64,
+            title: String,
+        },
+        #[label(tr! { "zh-Hans" => "{reason}", "en" => "{reason}" })]
+        Invalid {
+            #[content]
+            reason: String,
         },
         #[label(tr! { "zh-Hans" => "现在：没认出", "en" => "Now: not recognized" })]
         Unmatched,
-        #[label(tr! { "zh-Hans" => "文件名里没有集数，填一个", "en" => "No episode number in the name; enter one" })]
-        NoNumber,
-        #[label(tr! { "zh-Hans" => "超出了，《{anime}》共 {total} 话", "en" => "Too high: {anime} has {total} episodes" })]
-        Beyond {
-            #[content]
-            anime: String,
-            total: i64,
-        },
-        #[label(tr! { "zh-Hans" => "和上面那个文件是同一话，算两个版本", "en" => "Same episode as a file above: two versions" })]
+        #[label(tr! { "zh-Hans" => "与其他文件覆盖了相同分集", "en" => "Overlaps episodes covered by another file" })]
         Twin,
         #[label(tr! { "zh-Hans" => "读不了这个文件，没法匹配", "en" => "This file can't be read, so it can't be matched" })]
         Unreadable,
@@ -231,8 +232,12 @@ pub mod library {
         pub name: String,
         /// Whether it is matched or skipped.
         pub on: bool,
-        /// The episode it goes to; 0 while it has none.
-        pub number: i64,
+        /// An episode number, list or range; empty for movies or unassigned rows.
+        #[content]
+        pub assignment: String,
+        /// Actual destination, including S00; movies have no synthetic number.
+        #[content]
+        pub destination: String,
         /// Whether its number is being typed.
         pub editing: bool,
         pub note: MatchNote,
@@ -240,14 +245,22 @@ pub mod library {
         pub odd: bool,
     }
 
-    /// An anime to match videos to, as dandanplay's search finds it.
+    /// A TMDB result. TV and movie IDs never share a namespace.
     #[value]
-    pub struct MatchAnime {
-        pub id: i64,
+    pub struct MatchWork {
+        pub id: String,
         #[content]
         pub title: String,
-        pub episodes: i64,
+        #[content]
+        pub detail: String,
         pub chosen: bool,
+    }
+
+    #[value]
+    pub struct MatchSeason {
+        pub id: String,
+        #[content]
+        pub title: String,
     }
 
     /// Matching videos to episodes: one video (re-matching it) or a
@@ -263,11 +276,15 @@ pub mod library {
         /// count.
         #[content]
         pub place: String,
-        pub anime: i64,
+        pub work: String,
         #[content]
-        pub anime_title: String,
-        /// The anime's episodes; 0 while unknown.
-        pub episodes: i64,
+        pub title: String,
+        pub movie: bool,
+        pub seasons: Vec<MatchSeason>,
+        pub season: String,
+        pub loading: bool,
+        #[content]
+        pub error: String,
         pub by_order: bool,
         pub start: i64,
         /// The lowest episode number in the names, 0 when they have none,
@@ -287,7 +304,7 @@ pub mod library {
         /// matched now, which can be undone.
         pub ready: bool,
         pub linked: bool,
-        pub results: Vec<MatchAnime>,
+        pub results: Vec<MatchWork>,
         pub searching: bool,
         pub search_failed: bool,
     }
@@ -295,19 +312,16 @@ pub mod library {
     /// What the library says once something is done.
     #[value]
     pub enum LibraryNotice {
-        #[label(tr! { "zh-Hans" => "已匹配到《{anime}》第 {episode} 话", "en" => "Matched to {anime} episode {episode}" })]
-        MatchedOne {
+        #[label(tr! { "zh-Hans" => "{reason}", "en" => "{reason}" })]
+        Failed {
             #[content]
-            anime: String,
-            episode: i64,
+            reason: String,
         },
-        #[label(tr! { "zh-Hans" => "已把 {count} 个文件匹配到《{anime}》第 {first}–{last} 话", "en" => "Matched {count} files to {anime} episodes {first}–{last}" })]
-        MatchedMany {
+        #[label(tr! { "zh-Hans" => "已把 {count} 个文件匹配到《{title}》", "en" => "Matched {count} files to {title}" })]
+        Matched {
             count: i64,
             #[content]
-            anime: String,
-            first: i64,
-            last: i64,
+            title: String,
         },
         #[label(tr! { "zh-Hans" => "已解除匹配，文件回到「没认出的文件」", "en" => "Unlinked; the file is back among those not recognized" })]
         Unlinked,
@@ -320,10 +334,6 @@ pub mod library {
             files: i64,
             unmatched: i64,
         },
-        #[label(tr! { "zh-Hans" => "登录弹弹play 后才能自动认出番剧", "en" => "Sign in to dandanplay to recognize shows" })]
-        SignInToMatch,
-        #[label(tr! { "zh-Hans" => "电视剧和电影要先在 设置 › 账号 里设置识别服务器", "en" => "Set a recognition server under Settings › Account for TV series and movies" })]
-        NoServer,
         #[label(tr! { "zh-Hans" => "{name} 改为{content}，重新识别没认出的文件", "en" => "{name} now holds {content}; recognizing its files again" })]
         Retyped {
             #[content]
@@ -339,6 +349,113 @@ pub mod library {
             #[content]
             name: String,
         },
+    }
+
+    /// Typed public catalogue API; numbers never encode another provider.
+    #[value]
+    pub enum CatalogKind { Tv, Movie, Season, Episode, Subject, Item }
+    #[value]
+    pub enum CatalogProvider { Tmdb, Dandanplay, Bangumi, Misaka, Jellyfin }
+    #[value]
+    pub enum CatalogRelation { Exact, PartOf, Contains, Related }
+    #[value]
+    pub enum CatalogDecision { Auto, Manual, Blocked }
+    #[value]
+    pub struct CatalogReference {
+        pub provider: CatalogProvider,
+        pub scope: String,
+        pub kind: CatalogKind,
+        pub id: String,
+    }
+    #[value]
+    pub struct CatalogNode {
+        pub id: String,
+        pub kind: CatalogKind,
+        pub root: String,
+        pub parent: Option<String>,
+        pub season_number: Option<i64>,
+        pub episode_number: Option<i64>,
+        pub reference: CatalogReference,
+        #[content]
+        pub title: String,
+        #[content]
+        pub overview: String,
+        pub date: String,
+        pub revision: i64,
+    }
+    #[value]
+    pub struct CatalogItem {
+        pub media: String,
+        pub start_seconds: Option<f64>,
+        pub end_seconds: Option<f64>,
+    }
+    #[value]
+    pub struct CatalogBinding {
+        pub file: i64,
+        pub revision: i64,
+        pub decision: CatalogDecision,
+        pub items: Vec<CatalogItem>,
+        pub evidence: String,
+    }
+    #[value]
+    pub struct CatalogDanmaku {
+        pub file: i64,
+        pub revision: i64,
+        pub reference: CatalogReference,
+        pub media: Option<String>,
+        pub manual: bool,
+        pub fingerprint_verified: bool,
+        pub shift_seconds: f64,
+        pub user_shift_seconds: f64,
+    }
+    #[value]
+    pub struct CatalogMapping {
+        pub media: String,
+        pub reference: CatalogReference,
+        pub relation: CatalogRelation,
+        pub coverage: Vec<String>,
+        pub evidence: String,
+        pub confirmed: bool,
+        pub manual: bool,
+        pub revision: i64,
+    }
+    #[value]
+    pub struct CatalogInspection {
+        pub file: i64,
+        pub revision: i64,
+        pub danmaku_revision: i64,
+        pub binding: Option<CatalogBinding>,
+        pub danmaku: Option<CatalogDanmaku>,
+        pub nodes: Vec<CatalogNode>,
+        pub mappings: Vec<CatalogMapping>,
+    }
+    #[value]
+    pub struct CatalogSearch {
+        pub nodes: Vec<CatalogNode>,
+        pub page: i64,
+        pub total_pages: i64,
+    }
+    #[value]
+    pub struct CatalogReceipt {
+        pub request: String,
+        pub change: String,
+        pub preview: bool,
+        pub bindings: Vec<CatalogBinding>,
+        pub danmaku: Vec<CatalogDanmaku>,
+        pub mappings: Vec<CatalogMapping>,
+    }
+    #[value]
+    pub struct CatalogJob {
+        pub id: String,
+        pub file: Option<i64>,
+        pub input_revision: i64,
+        pub state: String,
+        pub phase: String,
+        pub error: String,
+        pub next_attempt: i64,
+        pub nodes: Vec<CatalogNode>,
+        pub items: Vec<CatalogItem>,
+        pub reason: String,
     }
 
     #[state]
@@ -367,7 +484,7 @@ pub mod library {
         /// shows them only when there are some.
         pub recent: Vec<LibraryPoster>,
         pub has_recent: bool,
-        pub opened: i64,
+        pub opened: String,
         pub show: LibraryPoster,
         /// The folders the library scans, and whether there are any, or
         /// several (the wall can then show one of them).
@@ -382,13 +499,16 @@ pub mod library {
         pub matching: Matching,
         pub notice: Option<LibraryNotice>,
         pub notice_revision: i64,
+        pub catalog_result: Option<CatalogReceipt>,
     }
 
     #[events]
     pub trait Events {
         /// A poster was opened: from the home page's 「最近添加」 when
         /// `home`, from the library page otherwise.
-        fn open_show(&self, id: i64, home: bool);
+        fn open_show(&self, id: String, home: bool);
+        /// Play a readable source entry even before it has a canonical binding.
+        fn play_source(&self, source: MediaSource, title: String);
         /// Videos were matched, unlinked or removed: what the user has of
         /// each anime changed.
         fn files_changed(&self);
@@ -396,12 +516,24 @@ pub mod library {
 
     #[commands]
     pub trait Commands {
+        /// Read verified TMDB metadata before binding; `request` is a fresh UUID.
+        fn catalog_fetch(&mut self, request: String, reference: CatalogReference, season: Option<i64>) -> Result<(), CommandError>;
+        /// Resolve one stored file using the normal dandanplay → filename chain.
+        fn catalog_resolve(&mut self, request: String, file: i64, revision: i64, dry_run: bool) -> Result<(), CommandError>;
+        /// Whole-batch preview and commit use identical validation and CAS rules.
+        fn catalog_bind(&mut self, request: String, bindings: Vec<CatalogBinding>, preview: bool) -> Result<(), CommandError>;
+        fn catalog_unbind(&mut self, request: String, file: i64, revision: i64, preview: bool) -> Result<(), CommandError>;
+        fn catalog_bind_danmaku(&mut self, request: String, bindings: Vec<CatalogDanmaku>, preview: bool) -> Result<(), CommandError>;
+        fn catalog_map_provider(&mut self, request: String, mappings: Vec<CatalogMapping>, preview: bool) -> Result<(), CommandError>;
+        /// Remove the manual/blocked decision without changing the danmaku choice.
+        fn catalog_allow_auto(&mut self, file: i64, revision: i64) -> Result<(), CommandError>;
+        fn catalog_undo(&mut self, change: String) -> Result<(), CommandError>;
         #[errors("unknown_show")]
-        fn open(&mut self, id: i64) -> Result<(), CommandError>;
+        fn open(&mut self, id: String) -> Result<(), CommandError>;
         /// Open a poster of the home page's 「最近添加」: its details show
         /// over the home page and go back to it.
         #[errors("unknown_show")]
-        fn open_recent(&mut self, id: i64) -> Result<(), CommandError>;
+        fn open_recent(&mut self, id: String) -> Result<(), CommandError>;
         fn close(&mut self) -> Result<(), CommandError>;
         /// The shell played or matched a video: the shows the user has
         /// files of may have changed.
@@ -449,6 +581,9 @@ pub mod library {
         fn go_to(&mut self, depth: i64) -> Result<(), CommandError>;
         fn close_source(&mut self) -> Result<(), CommandError>;
 
+        /// Play the current address of a readable file, without requiring a match.
+        #[errors("unknown_file")]
+        fn play_file(&mut self, key: i64) -> Result<(), CommandError>;
         /// Match one video by hand, or match it anew.
         #[errors("unknown_file")]
         fn assign(&mut self, key: i64) -> Result<(), CommandError>;
@@ -458,7 +593,8 @@ pub mod library {
         /// Match the videos of the folder being browsed.
         fn match_folder(&mut self) -> Result<(), CommandError>;
         fn match_search(&mut self, text: String) -> Result<(), CommandError>;
-        fn match_anime(&mut self, id: i64) -> Result<(), CommandError>;
+        fn match_work(&mut self, id: String) -> Result<(), CommandError>;
+        fn match_season(&mut self, id: String) -> Result<(), CommandError>;
         fn match_by_order(&mut self, by_order: bool) -> Result<(), CommandError>;
         fn match_start(&mut self, text: String) -> Result<(), CommandError>;
         fn match_align(&mut self, text: String) -> Result<(), CommandError>;
@@ -473,6 +609,12 @@ pub mod library {
 
     #[queries]
     pub trait Queries {
+        fn catalog_inspect(&self, file: i64, answer: Answer<CatalogInspection>);
+        fn catalog_media(&self, id: String, answer: Answer<CatalogNode>);
+        fn catalog_children(&self, id: String, answer: Answer<Vec<CatalogNode>>);
+        fn catalog_search(&self, kind: CatalogKind, text: String, year: Option<i64>, page: i64, answer: Answer<CatalogSearch>);
+        fn catalog_job(&self, id: String, answer: Answer<CatalogJob>);
+        fn catalog_receipt(&self, request: String, answer: Answer<CatalogReceipt>);
         /// The wall: the shows of source `source`, or of all when it is 0.
         #[reads(posters)]
         fn browse(

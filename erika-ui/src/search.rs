@@ -1,17 +1,21 @@
 //! Desktop search palette, measured from design/next-screens.js and next.css.
 #[cfg(feature = "bern-module-anime")]
 use crate::MainPage;
+use crate::phone::PhoneSettings;
 use crate::{AppWindows, ErikaDraft};
 use bern::prelude::*;
 #[cfg(feature = "bern-module-anime")]
 use erika_anime_protocol::anime;
 use erika_protocol::erika::{self, Appearance};
 
+/// What the search finds; `phone`: the phone's search, whose settings open
+/// in the phone's own pages.
 #[component]
 pub fn search_results(
     app: erika::Client,
     #[cfg(feature = "bern-module-anime")] anime: anime::Client,
     windows: AppWindows,
+    phone: bool,
     #[session] draft: ErikaDraft,
 ) -> impl View {
     ui! {
@@ -47,10 +51,10 @@ pub fn search_results(
                             Canvas(height: 6)
                         }
                         ForEach(items: found.continuing, key: id) |episode| {
-                            SearchItem(id: continue_show, label: episode.title, icon: "play", detail: tr! { "zh-Hans" => "第 {episode} 话", "en" => "Episode {episode}"; episode: episode.episode }, hint: tr! { "zh-Hans" => "↵", "en" => "↵" }) => anime.continue_from_search(episode.id)
+                            SearchItem(id: continue_show, label: episode.title, icon: "play", detail: episode.chapter, hint: tr! { "zh-Hans" => "↵", "en" => "↵" }) => anime.continue_from_search(episode.id)
                         }
                     }
-                    search_commands(app: app, windows: windows, actions: actions)
+                    search_commands(app: app, windows: windows, actions: actions, phone: phone)
                     if !found.has_shows && actions.empty {
                         Row(padding: 30, align: center) {
                             Spacer
@@ -62,7 +66,7 @@ pub fn search_results(
               }
             } else {
                 Column(gap: 0) {
-                    search_commands(app: app, windows: windows, actions: actions)
+                    search_commands(app: app, windows: windows, actions: actions, phone: phone)
                     if actions.empty {
                         Row(padding: 30, align: center) {
                             Spacer
@@ -81,6 +85,7 @@ pub fn search_commands(
     app: erika::Client,
     windows: AppWindows,
     actions: erika::SearchActions,
+    phone: bool,
     #[session] draft: ErikaDraft,
 ) -> impl View {
     ui! {
@@ -91,23 +96,48 @@ pub fn search_commands(
                     Text(content: tr! { "zh-Hans" => "设置", "en" => "Settings" }, style: caption, emphasis: secondary, line_height: 15)
                     Canvas(height: 6)
                 }
-                if actions.theme {
-                    SearchItem(id: theme, label: tr! { "zh-Hans" => "主题色", "en" => "Accent Color" }, icon: "paintpalette", detail: tr! { "zh-Hans" => "设置 › 外观", "en" => "Settings › Appearance" }) => windows.settings.open()
-                }
-                if actions.danmaku {
-                    SearchItem(id: danmaku, label: tr! { "zh-Hans" => "弹幕不透明度", "en" => "Danmaku Opacity" }, icon: "text.bubble", detail: tr! { "zh-Hans" => "设置 › 弹幕", "en" => "Settings › Danmaku" }) => windows.settings.open()
-                }
-                if actions.skip_intro {
-                    SearchItem(id: skip_intro, label: tr! { "zh-Hans" => "片头／片尾跳过提示", "en" => "Opening / Ending Skip Hint" }, icon: "play", detail: tr! { "zh-Hans" => "设置 › 播放", "en" => "Settings › Playback" }) => windows.settings.open()
-                }
-                if actions.optional {
-                    SearchItem(id: optional, label: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, icon: "square.grid.2x2", detail: tr! { "zh-Hans" => "设置", "en" => "Settings" }) => windows.settings.open()
-                }
-                if actions.plugins {
-                    SearchItem(id: plugins, label: tr! { "zh-Hans" => "插件市场", "en" => "Plugin Marketplace" }, icon: "puzzlepiece.extension", detail: tr! { "zh-Hans" => "设置 › 插件", "en" => "Settings › Plugins" }) => windows.settings.open()
-                }
-                if actions.keys {
-                    SearchItem(id: keys, label: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, icon: "keyboard", detail: tr! { "zh-Hans" => "设置", "en" => "Settings" }) => windows.settings.open()
+                // The phone opens a setting in its own pages, at the section
+                // it is in, and its way out returns to the search; the
+                // settings window is the desktop's.
+                if phone {
+                    if actions.theme {
+                        SearchItem(id: theme_phone, label: tr! { "zh-Hans" => "主题色", "en" => "Accent Color" }, icon: "paintpalette", detail: tr! { "zh-Hans" => "设置 › 外观", "en" => "Settings › Appearance" }) => draft.phone_settings.set(PhoneSettings::Appearance)
+                    }
+                    if actions.danmaku {
+                        SearchItem(id: danmaku_phone, label: tr! { "zh-Hans" => "弹幕不透明度", "en" => "Danmaku Opacity" }, icon: "text.bubble", detail: tr! { "zh-Hans" => "设置 › 弹幕", "en" => "Settings › Danmaku" }) => draft.phone_settings.set(PhoneSettings::Danmaku)
+                    }
+                    if actions.skip_intro {
+                        SearchItem(id: skip_intro_phone, label: tr! { "zh-Hans" => "片头／片尾跳过提示", "en" => "Opening / Ending Skip Hint" }, icon: "play", detail: tr! { "zh-Hans" => "设置 › 播放", "en" => "Settings › Playback" }) => draft.phone_settings.set(PhoneSettings::Player)
+                    }
+                    if actions.optional {
+                        SearchItem(id: optional_phone, label: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, icon: "square.grid.2x2", detail: tr! { "zh-Hans" => "设置", "en" => "Settings" }) => draft.phone_settings.set(PhoneSettings::Optional)
+                    }
+                    if actions.plugins {
+                        SearchItem(id: plugins_phone, label: tr! { "zh-Hans" => "插件市场", "en" => "Plugin Marketplace" }, icon: "puzzlepiece.extension", detail: tr! { "zh-Hans" => "设置 › 插件", "en" => "Settings › Plugins" }) => draft.phone_settings.set(PhoneSettings::Plugins)
+                    }
+                    // As the list, the phone offers shortcuts only with a keyboard.
+                    if actions.keys && window.keyboard {
+                        SearchItem(id: keys_phone, label: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, icon: "keyboard", detail: tr! { "zh-Hans" => "设置", "en" => "Settings" }) => draft.phone_settings.set(PhoneSettings::Keys)
+                    }
+                } else {
+                    if actions.theme {
+                        SearchItem(id: theme, label: tr! { "zh-Hans" => "主题色", "en" => "Accent Color" }, icon: "paintpalette", detail: tr! { "zh-Hans" => "设置 › 外观", "en" => "Settings › Appearance" }) => windows.settings.open()
+                    }
+                    if actions.danmaku {
+                        SearchItem(id: danmaku, label: tr! { "zh-Hans" => "弹幕不透明度", "en" => "Danmaku Opacity" }, icon: "text.bubble", detail: tr! { "zh-Hans" => "设置 › 弹幕", "en" => "Settings › Danmaku" }) => windows.settings.open()
+                    }
+                    if actions.skip_intro {
+                        SearchItem(id: skip_intro, label: tr! { "zh-Hans" => "片头／片尾跳过提示", "en" => "Opening / Ending Skip Hint" }, icon: "play", detail: tr! { "zh-Hans" => "设置 › 播放", "en" => "Settings › Playback" }) => windows.settings.open()
+                    }
+                    if actions.optional {
+                        SearchItem(id: optional, label: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, icon: "square.grid.2x2", detail: tr! { "zh-Hans" => "设置", "en" => "Settings" }) => windows.settings.open()
+                    }
+                    if actions.plugins {
+                        SearchItem(id: plugins, label: tr! { "zh-Hans" => "插件市场", "en" => "Plugin Marketplace" }, icon: "puzzlepiece.extension", detail: tr! { "zh-Hans" => "设置 › 插件", "en" => "Settings › Plugins" }) => windows.settings.open()
+                    }
+                    if actions.keys {
+                        SearchItem(id: keys, label: tr! { "zh-Hans" => "快捷键", "en" => "Keyboard Shortcuts" }, icon: "keyboard", detail: tr! { "zh-Hans" => "设置", "en" => "Settings" }) => windows.settings.open()
+                    }
                 }
             }
             if actions.has_operations {

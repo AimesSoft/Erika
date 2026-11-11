@@ -82,6 +82,11 @@ impl ErikaEngine {
         &self,
         source: &MediaSource,
     ) -> (Option<FileId>, Option<erika_store::Fingerprint>) {
+        if erika_store::plugin_sources::is_address(&source.url) {
+            return self.db.plugin_source_item(&source.url).ok().flatten()
+                .map(|entry| (Some(entry.file), entry.item.fingerprint))
+                .unwrap_or((None, None));
+        }
         #[cfg(target_arch = "wasm32")]
         let fingerprint = None; // Session storage has no fingerprint lookup; avoid reading 16 MiB on the UI thread.
         #[cfg(not(target_arch = "wasm32"))]
@@ -119,9 +124,11 @@ impl ErikaEngine {
     /// Keep where the video playing is: its file's progress, and its place
     /// at the top of the recent videos. Simulated media is not kept.
     pub(super) fn save_history(&mut self) {
-        let Some(source) = self.source.clone() else {
-            return;
-        };
+        // An accepted open request can still fail or be cancelled before loading.
+        // Keep the previous record until this transport has reported real playback.
+        if self.source.is_none() || !self.playback_observed { return; }
+        let Some(source) = self.current_source().cloned() else { return; };
+        self.save_played();
         let (position, duration) = (self.state.elapsed, self.state.duration);
         if let Some(file) = self.file
             && duration > 0.0
@@ -139,6 +146,10 @@ impl ErikaEngine {
             {
                 format!("{} 第 {episode} 话", self.state.title)
             }
+            // Remote endpoint selectors are not filenames. Keep the title
+            // supplied by the library or resolved canonical metadata.
+            _ if erika_dandanplay::remote::comment_url(&source.url).is_some() => self.state.title.clone(),
+            _ if erika_store::plugin_sources::is_address(&source.url) => self.source_name(&source),
             _ => source
                 .file_name()
                 .unwrap_or_else(|| self.state.title.clone()),

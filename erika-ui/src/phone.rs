@@ -158,7 +158,7 @@ pub fn phone_tab_page(
 ) -> impl View {
     ui! {
         Stack(variant: phone_page, align: top_leading) {
-            if build.modules.anime && anime.opened > 0 && !window.unfolded && ((build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library) || (draft.page == MainPage::Search && anime.back == BackTo::Search)) {
+            if build.modules.anime && anime.opened != "" && !window.unfolded && ((build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library) || (draft.page == MainPage::Search && anime.back == BackTo::Search)) {
                 details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
             } else if draft.page == MainPage::Search {
                 phone_search(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
@@ -239,7 +239,7 @@ pub fn phone_search(
                 Search(id: phone_search, value: draft.query, prompt: tr! { "zh-Hans" => "番剧、剧集、设置", "en" => "Shows, episodes, settings" }, height: 34, font_size: 13.5) {
                     Column(gap: 0) {
                         Canvas(height: 8)
-                        search_results(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
+                        search_results(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, phone: true)
                     }
                 }
                 Canvas(height: 24)
@@ -262,7 +262,7 @@ pub fn phone_header(
     ui! {
         Column(gap: 0) {
         Canvas(height: 7)
-        if build.modules.anime && anime.opened > 0 && !window.unfolded && ((draft.page == MainPage::Home && !anime.opened_from_schedule) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library) || (draft.page == MainPage::Search && anime.back == BackTo::Search)) {
+        if build.modules.anime && anime.opened != "" && !window.unfolded && ((draft.page == MainPage::Home && !anime.opened_from_schedule) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library) || (draft.page == MainPage::Search && anime.back == BackTo::Search)) {
             // The way back as iOS 26's own apps have it: the chevron on a
             // 44-point Liquid Glass circle, 16 from the edge, its label the
             // page it returns to.
@@ -321,7 +321,8 @@ pub fn phone_header(
 /// The phone's settings (`phHTML('settings')`): the account and the
 /// sections in a navigation stack, each section pushed over the list; the
 /// way out and the search in the platform's bars, the search at the bottom
-/// of the screen on iOS 26.
+/// of the screen on iOS 26. Opened at a section, from a setting the app's
+/// search found, that section stands first and the way out returns there.
 #[component]
 pub fn phone_settings(
     app: erika::Client,
@@ -330,7 +331,24 @@ pub fn phone_settings(
     #[session] settings: SettingsDraft,
 ) -> impl View {
     ui! {
-        Navigation(path: draft.settings_path) {
+        Navigation(id: settings_stack, path: draft.settings_path, reset: draft.phone_settings) {
+            if draft.phone_settings == PhoneSettings::Appearance {
+                Stack(variant: phone_page, align: top_leading) {
+                    Form(title: tr! { "zh-Hans" => "外观", "en" => "Appearance" }, variant: settings_form, appear: settings_page_in) {
+                        appearance_accent(app: app)
+                        appearance_mode(app: app)
+                        Section {
+                            NavLink(id: app_icon_first, route: PhoneSettings::AppIcon) {
+                                Text(content: tr! { "zh-Hans" => "应用图标", "en" => "App Icon" }, font_size: 17, line_height: 22)
+                            }
+                        }
+                    }
+                }
+            } else if draft.phone_settings != PhoneSettings::List {
+                Stack(variant: phone_page, align: top_leading) {
+                    phone_settings_section(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, section: draft.phone_settings)
+                }
+            } else {
             // Each page stands on the phone's page: the navigation stack
             // would show its own white behind the rows.
             Stack(variant: phone_page, align: top_leading) {
@@ -499,6 +517,7 @@ pub fn phone_settings(
                         }
                     }
                 }
+            }
             }
             // The way out of the settings and the search, in the platform's
             // bars: iOS 26 puts the search at the bottom of the screen.

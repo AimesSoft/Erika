@@ -49,6 +49,12 @@ pub struct RemoteEngine {
 
 impl Default for RemoteEngine {
     fn default() -> Self {
+        Self::with_db(Db::open())
+    }
+}
+
+impl RemoteEngine {
+    fn with_db(db: Db) -> Self {
         Self {
             state: State {
                 available: false,
@@ -62,7 +68,7 @@ impl Default for RemoteEngine {
                 trusted: Vec::new(),
                 has_trusted: false,
             },
-            db: Db::open(),
+            db,
             started: false,
             #[cfg(not(target_arch = "wasm32"))]
             discovery: None,
@@ -308,10 +314,7 @@ mod tests {
     use remote::Commands;
 
     fn engine() -> RemoteEngine {
-        RemoteEngine {
-            db: Db::in_memory(),
-            ..RemoteEngine::default()
-        }
+        RemoteEngine::with_db(Db::in_memory())
     }
 
     fn client(key: &str) -> String {

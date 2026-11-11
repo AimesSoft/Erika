@@ -18,6 +18,42 @@ pub struct Router {
     browser: AtomicBool,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::player::tests::FakeKernel;
+
+    #[test]
+    fn captured_entry_routes_headers_to_the_selected_backend() {
+        let native = Arc::new(FakeKernel::default());
+        let web = Arc::new(FakeKernel::default());
+        let router = Router::install(native.clone(), web.clone());
+        let url = "https://example.invalid/movie";
+        router
+            .prepare_source_from(url, Some(bern::Entry::Web))
+            .unwrap();
+        router
+            .open_with_headers(url, 30., vec![("X-Test".into(), "web".into())])
+            .unwrap();
+        assert!(native.opens.lock().unwrap().is_empty());
+        assert_eq!(
+            web.opens.lock().unwrap()[0].2,
+            [("X-Test".into(), "web".into())]
+        );
+        router
+            .prepare_source_from(url, Some(bern::Entry::Ui))
+            .unwrap();
+        router
+            .open_with_headers(url, 40., vec![("X-Test".into(), "native".into())])
+            .unwrap();
+        assert_eq!(
+            native.opens.lock().unwrap()[0].2,
+            [("X-Test".into(), "native".into())]
+        );
+        assert_eq!(web.opens.lock().unwrap().len(), 1);
+    }
+}
+
 fn from_page() -> bool {
     bern::current_entry() == Some(bern::Entry::Web)
 }
@@ -45,11 +81,16 @@ impl Kernel for Router {
         from_page() || self.browser.load(Ordering::Relaxed)
     }
     fn file_name(&self, url: &str) -> Option<String> {
-        self.web.file_name(url).or_else(|| self.native.file_name(url))
+        self.web
+            .file_name(url)
+            .or_else(|| self.native.file_name(url))
     }
     /// A new source: where it plays is decided here.
     fn prepare_source(&self, url: &str) -> Result<(), String> {
-        let browser = from_page();
+        self.prepare_source_from(url, bern::current_entry())
+    }
+    fn prepare_source_from(&self, url: &str, entry: Option<bern::Entry>) -> Result<(), String> {
+        let browser = entry == Some(bern::Entry::Web);
         if browser != self.browser.swap(browser, Ordering::Relaxed) {
             // What played on the other side stops.
             let other = if browser { &self.native } else { &self.web };
@@ -69,6 +110,14 @@ impl Kernel for Router {
     }
     fn open(&self, url: &str, start: f64) {
         self.active().open(url, start);
+    }
+    fn open_with_headers(
+        &self,
+        url: &str,
+        start: f64,
+        headers: Vec<(String, String)>,
+    ) -> Result<(), String> {
+        self.active().open_with_headers(url, start, headers)
     }
     fn play(&self) {
         self.active().play();

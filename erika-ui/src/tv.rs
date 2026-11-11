@@ -63,7 +63,7 @@ pub fn tv_shell(
             }
             // The remote's Back closes a show's details, as the design's
             // way back does (菜单 → 播放器 → 弹窗 → 详情 → 首页).
-            if build.modules.anime && anime.opened > 0 && !app.playing {
+            if build.modules.anime && anime.opened != "" && !app.playing {
                 Shortcut(key: app.keys.back) => anime.close()
             }
             // 「打开链接」 in the television's scene.
@@ -103,12 +103,12 @@ pub fn tv_scene(
                 Stack(width: 1280, height: 720, align: top_leading) {
                     Positioned(x: 0, y: 80, width: 1280, height: 640) {
                         if page == MainPage::Search {
-                            if build.modules.anime && anime.opened > 0 && anime.back == BackTo::Search {
+                            if build.modules.anime && anime.opened != "" && anime.back == BackTo::Search {
                                 details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
                             } else {
                                 tv_search(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
                             }
-                        } else if build.modules.library && build.modules.anime && page == MainPage::Library && anime.opened > 0 && anime.back == BackTo::Library {
+                        } else if build.modules.library && build.modules.anime && page == MainPage::Library && anime.opened != "" && anime.back == BackTo::Library {
                             details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
                         } else {
                             PageContent(slot: main, selected: draft.page)
@@ -173,7 +173,7 @@ pub fn tv_search(
                         Search(id: tv_search, value: draft.query, prompt: tr! { "zh-Hans" => "番剧、剧集、设置", "en" => "Shows, episodes, settings" }, height: 52, font_size: 18, suggest: true) {
                             Column(gap: 0) {
                                 Canvas(height: 6)
-                                search_results(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
+                                search_results(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, phone: false)
                             }
                         }
                     }

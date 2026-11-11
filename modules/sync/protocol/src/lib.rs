@@ -70,9 +70,9 @@ pub mod sync {
     /// What a sync left out and why, said under the result.
     #[value]
     pub enum SyncWarning {
-        #[label(tr! { "zh-Hans" => "未设置同步口令：账号没有一起同步", "en" => "No sync passphrase: accounts were left out" })]
+        #[label(tr! { "zh-Hans" => "未设置同步口令：已跳过账号、密钥及其他私密数据", "en" => "No sync passphrase: accounts, credentials and other private data were skipped" })]
         NoPassphrase,
-        #[label(tr! { "zh-Hans" => "同步口令与加密账号时用的不一致：账号没有同步", "en" => "The sync passphrase differs from the one the accounts were sealed with: accounts were left out" })]
+        #[label(tr! { "zh-Hans" => "同步口令不一致：账号、密钥及其他私密数据保持本机内容", "en" => "Sync passphrase mismatch: local accounts, credentials and other private data were kept" })]
         WrongPassphrase,
         #[label(tr! { "zh-Hans" => "下载位置、新番数据源等模块设置在重启 Erika 后生效", "en" => "Module settings such as the download folder and the New Shows source take effect after restarting Erika" })]
         Restart,
@@ -184,7 +184,7 @@ pub mod sync {
         fn sync_now(&mut self) -> Result<(), CommandError>;
         fn set_auto(&mut self, on: bool) -> Result<(), CommandError>;
         fn set_interval(&mut self, interval: SyncInterval) -> Result<(), CommandError>;
-        /// Set the passphrase accounts are sealed with; empty forgets it.
+        /// Set the passphrase private records are sealed with; empty forgets it.
         fn set_passphrase(&mut self, passphrase: String) -> Result<(), CommandError>;
         /// Write everything into one `.ebp` file in `folder`.
         fn export_to(&mut self, folder: MediaSource) -> Result<(), CommandError>;

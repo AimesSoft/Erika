@@ -79,7 +79,7 @@ impl ErikaEngine {
             Ok(Some(cookies)) => match http::Session::restore(&cookies) {
                 Ok(session) => {
                     // The anime module syncs the collection with the same session.
-                    erika_dandanplay::bangumi::site::set_session(Some(cookies.clone()));
+                    erika_dandanplay::bangumi::site::set_account(&self.db.setting(USER).unwrap_or_default(),Some(cookies.clone()));
                     self.bangumi.session = Some(session);
                     self.state.bangumi.signed_in = true;
                     self.state.bangumi.name =
@@ -199,7 +199,7 @@ impl ErikaEngine {
     fn keep_bangumi(&mut self, session: &http::Session, user: http::User) {
         let was_signed_in = self.state.bangumi.signed_in;
         let saved = session.save().and_then(|cookies| {
-            erika_dandanplay::bangumi::site::set_session(Some(cookies.clone()));
+            erika_dandanplay::bangumi::site::set_account(&user.id,Some(cookies.clone()));
             bern::secrets::write(SECRET, &cookies)
                 .map_err(|_| "已登录，但无法安全保存登录信息；关闭应用后需要重新登录".to_string())
         });

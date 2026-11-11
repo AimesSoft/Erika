@@ -69,9 +69,10 @@ pub trait Transport {
 pub trait Local {
     /// What this device has for the repository, its secrets sealed with
     /// `key` (left out without one).
-    fn collect(&mut self, key: Option<&SealKey>) -> State;
-    /// Take in changes that came from other devices.
-    fn apply(&mut self, ops: &[Op], key: Option<&SealKey>);
+    fn collect(&mut self, key: Option<&SealKey>) -> Result<State, SyncError>;
+    /// Take in changes that came from other devices. Failure stops the sync
+    /// before publishing a patch or advancing its agreed base.
+    fn apply(&mut self, ops: &[Op], key: Option<&SealKey>) -> Result<(), SyncError>;
 }
 
 /// The keys of the passphrase, drawn once per salt: drawing one is slow
@@ -229,6 +230,9 @@ pub struct Base {
     pub snapshot: i64,
     pub snapshot_sha256: Vec<u8>,
     pub applied: BTreeSet<String>,
+    /// The cached remote state also holds sealed categories we could not read.
+    /// Those are not a three-way agreement about this device's credentials.
+    pub sealed_available: bool,
     pub state: State,
 }
 
@@ -238,6 +242,7 @@ impl Base {
             .with_head("place", Value::text(&self.place))
             .with_head("repository", Value::text(&self.repository))
             .with_head("snapshot", Value::Int(self.snapshot))
+            .with_head("sealed-available", Value::Bool(self.sealed_available))
             .with_head("sha256", Value::Bytes(self.snapshot_sha256.clone()));
         document.index = Some(Value::map([(
             "applied",
@@ -269,6 +274,7 @@ impl Base {
                 .and_then(Value::as_bytes)?
                 .to_vec(),
             applied,
+            sealed_available: document.head.get("sealed-available")?.as_bool()?,
             state: document.state?,
         })
     }
@@ -361,13 +367,19 @@ impl Sync<'_> {
         let key_added = manifest.key.is_none() && key.is_some();
         let mut categories = self.categories.clone();
         if key.is_none() {
-            categories.remove(crate::local::ACCOUNTS);
+            for category in crate::local::SEALED_CATEGORIES {
+                categories.remove(*category);
+            }
         }
 
+        let base = base.filter(|base| base.place == self.place && base.repository == manifest.repository);
+        // Compaction changes the remote representation, not our common ancestor.
+        // Keep it for the three-way merge so an undo cannot be resurrected merely
+        // because another device compacted the repository.
+        let previously_locked = base.as_ref().is_some_and(|base| !base.sealed_available);
+        let previous_agreement = base.as_ref().map(|base| base.state.clone());
         let base = base.filter(|base| {
-            base.place == self.place
-                && base.repository == manifest.repository
-                && base.snapshot == manifest.snapshot
+            base.snapshot == manifest.snapshot
                 && base.snapshot_sha256 == manifest.snapshot_sha256
         });
         let (mut remote, mut applied, agreed) = match base {
@@ -390,7 +402,7 @@ impl Sync<'_> {
                 (
                     snapshot.state.unwrap_or_default(),
                     manifest.snapshot_patches.clone(),
-                    None,
+                    previous_agreement,
                 )
             }
         };
@@ -418,14 +430,25 @@ impl Sync<'_> {
             outcome.downloaded += 1;
         }
 
-        let local = merge::select(&self.local.collect(key.as_ref()), &categories);
+        let local = merge::select(&self.local.collect(key.as_ref())?, &categories);
         let theirs = merge::select(&remote, &categories);
-        let merged_selected = match &agreed {
-            Some(agreed) => {
-                merge::merge_three(&merge::select(agreed, &categories), &theirs, &local)
+        let agreed = agreed.as_ref().map(|state| merge::select(state, &categories));
+        let mut merged_selected = crate::catalog::merge(agreed.as_ref(), &theirs, &local)?;
+        if previously_locked && key.is_some() {
+            // A locked device cached the ciphertext, but never applied it. On
+            // unlock, its missing private rows are not deletions relative to
+            // that cache. Only those categories need a first-time merge.
+            let sealed: BTreeSet<String> = crate::local::SEALED_CATEGORIES.iter()
+                .filter(|category| categories.contains(**category))
+                .map(|category| category.to_string()).collect();
+            let first = merge::merge_first(&merge::select(&theirs, &sealed), &merge::select(&local, &sealed));
+            for category in sealed {
+                match first.get(&category) {
+                    Some(entries) => { merged_selected.insert(category, entries.clone()); }
+                    None => { merged_selected.remove(&category); }
+                }
             }
-            None => merge::merge_first(&theirs, &local),
-        };
+        }
         let mut merged = remote.clone();
         for category in &categories {
             match merged_selected.get(category) {
@@ -440,7 +463,7 @@ impl Sync<'_> {
 
         let for_local = merge::diff(&local, &merged_selected);
         if !for_local.is_empty() {
-            self.local.apply(&for_local, key.as_ref());
+            self.local.apply(&for_local, key.as_ref())?;
         }
         outcome.restored = for_local.len();
 
@@ -525,6 +548,7 @@ impl Sync<'_> {
                 snapshot: manifest.snapshot,
                 snapshot_sha256: manifest.snapshot_sha256,
                 applied,
+                sealed_available: key.is_some(),
                 state: merged,
             },
         ))
@@ -535,9 +559,11 @@ impl Sync<'_> {
         let key = self.keys.create();
         let mut categories = self.categories.clone();
         if key.is_none() {
-            categories.remove(crate::local::ACCOUNTS);
+            for category in crate::local::SEALED_CATEGORIES {
+                categories.remove(*category);
+            }
         }
-        let state = merge::select(&self.local.collect(key.as_ref()), &categories);
+        let state = merge::select(&self.local.collect(key.as_ref())?, &categories);
         let repository = crate::random_hex(10);
         let snapshot_file = snapshot_name(1);
         let mut snapshot = Document::new(Kind::Snapshot)
@@ -573,6 +599,7 @@ impl Sync<'_> {
                 snapshot: 1,
                 snapshot_sha256: manifest.snapshot_sha256,
                 applied: BTreeSet::new(),
+                sealed_available: key.is_some(),
                 state,
             },
         ))

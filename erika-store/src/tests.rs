@@ -28,7 +28,7 @@ fn one_file_in_two_places_shares_its_progress() {
     assert_eq!(db.progress(here), Some((612.5, 1440.0)));
     assert_eq!(db.progress(partial), None);
     // Opening a known address again without its fingerprint keeps its file.
-    assert_eq!(db.opened("file:///a/ep1.mkv", None), None);
+    assert_eq!(db.opened("file:///a/ep1.mkv", None), Some(here));
     assert_eq!(
         db.opened("file:///a/ep1.mkv", Some(&print("3f2a", 100))),
         Some(here)
@@ -89,7 +89,7 @@ fn settings_and_anime_are_kept_and_replaced() {
 }
 
 #[test]
-fn a_database_file_is_migrated_once_and_shared_by_connections() {
+fn a_database_file_is_initialized_once_and_shared_by_connections() {
     let dir = std::env::temp_dir().join(format!("erika-store-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("erika.db");
@@ -238,15 +238,11 @@ fn a_folder_source_keeps_what_scans_saw_and_what_the_user_decided() {
         title: String::new(),
     };
     assert!(db.link_files(&frieren, &[(one, episode(1)), (two, episode(2))]));
-    assert_eq!(db.sources()[0].unmatched, 1);
+    // Provider records are kept without deciding a TMDB binding.
+    assert_eq!(db.sources()[0].unmatched, 3);
     let entries = db.entries(Some(folder));
     assert_eq!(entries.len(), 3);
-    assert!(
-        entries
-            .iter()
-            .filter(|entry| entry.matched.is_some())
-            .all(|entry| entry.manual)
-    );
+    assert!(entries.iter().all(|entry| !entry.manual));
     db.unlink(two);
     // Automatic matching leaves both the matched and the unlinked file alone.
     db.link_episode(one, &frieren, &episode(7), false);
@@ -255,8 +251,7 @@ fn a_folder_source_keeps_what_scans_saw_and_what_the_user_decided() {
     assert_eq!(db.file_episode(two), None);
     let seen = db.seen(folder);
     let of = |url: &str| seen.iter().find(|seen| seen.url == url).unwrap().clone();
-    assert!(of("file:///anime/a/01.mkv").matched && of("file:///anime/a/01.mkv").decided);
-    assert!(!of("file:///anime/a/02.mkv").matched && of("file:///anime/a/02.mkv").decided);
+    assert!(seen.iter().all(|row| !row.matched && !row.decided));
     assert_eq!(of("file:///anime/broken.mkv").fingerprint, None);
     assert_eq!(db.shelf(Some(folder)).len(), 1);
     assert!(db.shelf(Some(folder + 1)).is_empty());

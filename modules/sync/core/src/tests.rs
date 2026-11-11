@@ -108,8 +108,11 @@ fn a_document_reads_back_and_damage_is_caught() {
         Err(format::FormatError::NotErika)
     );
     let mut newer = bytes.clone();
-    newer[8] = 2;
-    assert_eq!(format::read(&newer), Err(format::FormatError::Newer(2)));
+    newer[8] = 3;
+    assert_eq!(format::read(&newer), Err(format::FormatError::Newer(3)));
+    let mut older = bytes.clone();
+    older[8] = 1;
+    assert_eq!(format::read(&older), Err(format::FormatError::Incompatible(1)));
 }
 
 #[test]
@@ -249,7 +252,7 @@ struct Memory {
 }
 
 impl Local for Memory {
-    fn collect(&mut self, key: Option<&SealKey>) -> State {
+    fn collect(&mut self, key: Option<&SealKey>) -> Result<State, repository::SyncError> {
         let mut state = self.state.clone();
         if let (Some(key), Some(accounts)) = (key, state.get_mut(local::ACCOUNTS)) {
             for value in accounts.values_mut() {
@@ -260,9 +263,9 @@ impl Local for Memory {
         } else {
             state.remove(local::ACCOUNTS);
         }
-        state
+        Ok(state)
     }
-    fn apply(&mut self, ops: &[Op], key: Option<&SealKey>) {
+    fn apply(&mut self, ops: &[Op], key: Option<&SealKey>) -> Result<(), repository::SyncError> {
         let opened = ops.iter().map(|op| Op {
             value: match &op.value {
                 Some(Value::Sealed(bytes)) => key
@@ -275,6 +278,7 @@ impl Local for Memory {
         let opened: Vec<Op> = opened.collect();
         self.applied.extend(opened.iter().cloned());
         merge::apply(&mut self.state, opened);
+        Ok(())
     }
 }
 
@@ -619,7 +623,7 @@ fn an_export_brings_everything_to_a_clean_device() {
         &old_vault,
         &mut keys(Some("passphrase")),
         "mac-id",
-    );
+    ).unwrap();
     assert!(!bytes.windows(9).any(|w| w == b"token-123"));
 
     let (new_store, new_dir) = store("new");
@@ -719,7 +723,7 @@ fn an_export_without_the_passphrase_brings_all_but_the_accounts() {
         &old_vault,
         &mut keys(Some("passphrase")),
         "mac-id",
-    );
+    ).unwrap();
     for passphrase in [None, Some("another one")] {
         let (new_store, new_dir) = store("locked-new");
         let new_db = Db::in_memory();
@@ -741,7 +745,7 @@ fn an_export_without_the_passphrase_brings_all_but_the_accounts() {
         let _ = std::fs::remove_dir_all(new_dir);
     }
     // Without a passphrase on the exporting device no secret is written.
-    let plain = export(&old_db, &old_store, &old_vault, &mut keys(None), "mac-id");
+    let plain = export(&old_db, &old_store, &old_vault, &mut keys(None), "mac-id").unwrap();
     let document = format::read(&plain).unwrap();
     assert!(document.key.is_none());
     assert!(!document.state.unwrap().contains_key(local::ACCOUNTS));
@@ -754,7 +758,7 @@ fn a_repository_leaves_this_devices_folders_and_files_out() {
     let db = Db::in_memory();
     let vault = MemoryVault::default();
     fill(&db, &store, &vault);
-    let state = Device::new(&db, &store, &vault, Scope::Repository).collect(None);
+    let state = Device::new(&db, &store, &vault, Scope::Repository).collect(None).unwrap();
     assert_eq!(state[local::SOURCES].len(), 1);
     assert_eq!(
         state[local::RECENTS].keys().collect::<Vec<_>>(),

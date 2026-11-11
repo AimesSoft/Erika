@@ -5,7 +5,7 @@
 //! video not matched yet is. The work runs on other threads and hands what
 //! it finds to the engine, which alone writes the database.
 
-use erika_store::{Anime, Episode, Fingerprint};
+use erika_store::Fingerprint;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -16,7 +16,7 @@ const VIDEO: &[&str] = &[
     "rm", "mpg", "mpeg", "3gp", "ogv", "vob",
 ];
 /// How many videos are read or asked about at once.
-const AT_ONCE: usize = 4;
+pub(super) const AT_ONCE: usize = 4;
 
 /// A video the walk found.
 #[derive(Clone, Debug, PartialEq)]
@@ -29,7 +29,9 @@ pub struct Found {
 
 /// What the scan of a source comes back with, in order.
 pub enum Scanned {
-    /// The videos the folder holds now; the others it held are gone.
+    /// Renew the source's scan lease while walking large directories.
+    Heartbeat,
+    /// The complete directory inventory. Pruning waits for Finished.
     Walked { urls: Vec<String> },
     /// How far reading the changed videos is.
     Progress { done: usize, total: usize },
@@ -42,17 +44,21 @@ pub enum Scanned {
     Finished { failed: bool },
 }
 
-/// What asking dandanplay comes back with, in order.
+/// One durable job; revisions are captured before either network service runs.
+#[derive(Clone, Debug)]
+pub struct Video {
+    pub job: String,
+    pub danmaku_revision: u64,
+    pub name: String,
+    pub directory: String,
+    pub fingerprint: Fingerprint,
+}
+
 pub enum Matched {
-    Progress {
-        done: usize,
-        total: usize,
-    },
-    /// The file with `fingerprint` is `episode` of `anime`.
-    Episode {
-        fingerprint: Fingerprint,
-        anime: Anime,
-        episode: Episode,
+    Resolved {
+        job: String,
+        danmaku_revision: u64,
+        report: erika_catalog::resolve::FileResolution,
     },
     Finished,
 }
@@ -66,32 +72,33 @@ fn is_video(path: &Path) -> bool {
 
 /// The videos under `root`, by path. Links are not followed; hidden
 /// folders and files (macOS's `._` copies among them) are skipped.
+#[cfg(test)]
 pub fn walk(root: &Path) -> std::io::Result<Vec<Found>> {
+    walk_with_heartbeat(root, &|| {})
+}
+
+fn walk_with_heartbeat(root: &Path, heartbeat: &dyn Fn()) -> std::io::Result<Vec<Found>> {
     let mut found = Vec::new();
     let mut folders = vec![root.to_path_buf()];
-    let mut first = true;
+    let mut last_heartbeat = std::time::Instant::now();
     while let Some(folder) = folders.pop() {
-        let entries = match std::fs::read_dir(&folder) {
-            Ok(entries) => entries,
-            // The folder itself must be readable; a folder inside it may not be.
-            Err(error) if first => return Err(error),
-            Err(_) => continue,
-        };
-        first = false;
-        for entry in entries.flatten() {
+        let entries = std::fs::read_dir(&folder)?;
+        for entry in entries {
+            // A partial directory listing is NOT proof that old files vanished.
+            let entry = entry?;
+            if last_heartbeat.elapsed() >= std::time::Duration::from_secs(10) {
+                heartbeat();
+                last_heartbeat = std::time::Instant::now();
+            }
             let path = entry.path();
             if entry.file_name().to_string_lossy().starts_with('.') {
                 continue;
             }
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
+            let kind = entry.file_type()?;
             if kind.is_dir() {
                 folders.push(path);
             } else if kind.is_file() && is_video(&path) {
-                let Ok(metadata) = entry.metadata() else {
-                    continue;
-                };
+                let metadata = entry.metadata()?;
                 let modified = metadata
                     .modified()
                     .ok()
@@ -142,7 +149,7 @@ pub struct Known {
 
 /// Scan the folder at `root`, which held `known` at the last scan.
 pub fn scan(root: &Path, known: &HashMap<String, Known>, send: &(dyn Fn(Scanned) + Sync)) {
-    let found = match walk(root) {
+    let found = match walk_with_heartbeat(root, &|| send(Scanned::Heartbeat)) {
         Ok(found) => found,
         Err(error) => {
             eprintln!("erika: scan {}: {error}", root.display());
@@ -177,49 +184,28 @@ pub fn scan(root: &Path, known: &HashMap<String, Known>, send: &(dyn Fn(Scanned)
     send(Scanned::Finished { failed: false });
 }
 
-/// Ask which episode each of `videos` (a name and a
-/// fingerprint) is: dandanplay for anime, the user's own server for TV
-/// series and movies (`custom`).
+/// The same dandanplay → filename/TMDB pipeline used by direct playback.
+/// The engine dispatches at most AT_ONCE claimed jobs in each batch.
 pub fn match_videos(
-    videos: Vec<(String, Fingerprint)>,
-    custom: bool,
+    videos: Vec<Video>,
+    client: &erika_catalog::Client,
+    kind: Option<erika_catalog::Kind>,
     send: &(dyn Fn(Matched) + Sync),
 ) {
-    let total = videos.len();
-    let done = Mutex::new(0usize);
-    send(Matched::Progress { done: 0, total });
-    at_once(videos, |(name, fingerprint)| {
-        let asked = if custom {
-            erika_dandanplay::custom::match_video(&name, &fingerprint.md5, fingerprint.size)
-        } else {
-            erika_dandanplay::match_video(&name, &fingerprint.md5, fingerprint.size)
-        };
-        let found = match asked {
-            Ok(found) => found,
-            Err(error) => {
-                eprintln!("erika: match {name}: {}", error.message);
-                None
-            }
-        };
-        if let Some(found) = found {
-            let number = found.number();
-            send(Matched::Episode {
-                fingerprint,
-                anime: Anime {
-                    dandanplay_id: found.anime_id,
-                    title: found.anime_title,
-                    image: found.image_url,
-                },
-                episode: Episode {
-                    dandanplay_id: found.episode_id,
-                    number,
-                    title: found.episode_title,
-                },
-            });
-        }
-        let mut done = done.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        *done += 1;
-        send(Matched::Progress { done: *done, total });
+    at_once(videos, |video| {
+        let report = futures_lite::future::block_on(erika_dandanplay::catalog::resolve_file(
+            client,
+            &video.name,
+            &video.directory,
+            Some((&video.fingerprint.md5, video.fingerprint.size)),
+            kind,
+            None,
+        ));
+        send(Matched::Resolved {
+            job: video.job,
+            danmaku_revision: video.danmaku_revision,
+            report,
+        });
     });
     send(Matched::Finished);
 }

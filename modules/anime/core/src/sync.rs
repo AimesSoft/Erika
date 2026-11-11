@@ -1,768 +1,720 @@
-//! Syncing a show's marks with the accounts signed in. On a thread of its
-//! own, a sync reads what dandanplay and Bangumi have, brings it together
-//! with what is kept here by the rules of [`marks`](crate::marks), sends
-//! each account what it lacks, and comes back with what to keep and show.
-//! What the user does on the details (a status, a score, an episode, a
-//! review) is kept here at once and rides along with the next sync.
+//! Account operations use canonical media and explicit, versioned mappings.
+//! Read and write are separate phases: the engine revalidates the captured
+//! identity, account and local intent between them. Remote replies never replace
+//! a newer local choice. Episode delivery lives in the durable watch outbox.
+mod network;
+mod subject;
+#[cfg(test)]
+mod tests;
+mod watch;
 
-use crate::catalog::Accounts;
-use crate::marks::{self, Film, Level, Side};
-use crate::{AnimeEngine, Done, in_background, shows};
-use erika_anime_protocol::anime::SyncTargets;
-use erika_dandanplay::bangumi::site::{self, Interest};
-use erika_dandanplay::mine;
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use crate::{AnimeEngine, Done, content, marks::Level};
+use bern::CommandError;
+use erika_anime_protocol::anime::{Score, SyncTargets};
+use erika_catalog::{Kind, MediaId, Provider, ProviderLink, Relation};
+use erika_dandanplay::{auth::Session, bangumi::site};
+use erika_store::{
+    Db,
+    account_sync::{AccountClaim, Delivery, SubjectSync},
+    catalog::{MarkEdit, MediaMark, WatchSync},
+};
+use std::collections::{HashMap, HashSet, VecDeque};
 
-/// Bangumi takes this many characters of a review.
 pub(crate) const REVIEW_LIMIT: usize = 200;
-
-/// Something the user did, to send with the next sync of the show.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Intent {
+    Read,
+    ReadReview,
     Status(Level),
     Rate(i64),
-    Mark { number: i64, watched: bool },
     Review(String),
+    Watch(WatchSync),
+    Subject(SubjectSync),
 }
-
-/// What a sync of one show needs, taken on the engine's thread.
-#[derive(Clone, Debug)]
-pub(crate) struct Job {
-    pub id: i64,
-    pub accounts: Accounts,
-    /// The Bangumi subject, when a verified link names it.
-    pub subject: Option<i64>,
-    /// The status kept here, and the episodes watched here: marked, or
-    /// played to the end.
-    pub local: Side,
-    /// The episodes as the details known here list them, by number and
-    /// id, and whether the show still airs.
-    pub episodes: Vec<(i64, i64)>,
-    pub on_air: bool,
-    pub intents: Vec<Intent>,
+impl Intent {
+    fn field(&self) -> u8 {
+        match self {
+            Self::Read => 0,
+            Self::ReadReview => 1,
+            Self::Status(_) => 2,
+            Self::Rate(_) => 3,
+            Self::Review(_) => 4,
+            Self::Watch(_) => 5,
+            Self::Subject(_) => 6,
+        }
+    }
+    fn writes(&self) -> bool {
+        !matches!(self, Self::Read | Self::ReadReview)
+    }
+    fn delivery(&self) -> Option<Delivery> {
+        match self {
+            Self::Watch(task) => Some(Delivery::Watch(task.clone())),
+            Self::Subject(task) => Some(Delivery::Subject(task.clone())),
+            _ => None,
+        }
+    }
+    fn only_bangumi(&self) -> bool {
+        matches!(self, Self::Rate(_) | Self::Review(_) | Self::ReadReview)
+    }
 }
-
-/// What a sync came back with.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct Synced {
-    pub id: i64,
-    pub level: Option<Level>,
-    pub watched: BTreeSet<i64>,
-    /// The user's score where it is known: as given now, or as the
-    /// accounts have it.
-    pub rating: Option<i64>,
-    /// The review on Bangumi, when it was read.
-    pub review: Option<String>,
-    /// How sending a review went, when one was sent.
-    pub reviewed: Option<Result<(), String>>,
-    pub notes: Vec<String>,
+#[derive(Clone)]
+struct Job {
+    id: u64,
+    media: MediaId,
+    session: Session,
+    subject: ProviderLink,
+    intent: Intent,
+    view: u64,
+    review: u64,
+    claim: Option<AccountClaim>,
+    mark: Option<MediaMark>,
+    /// Exact episode links and local revisions at the start of this read.
+    episodes: Vec<(ProviderLink, Option<erika_catalog::Watched>)>,
 }
-
 impl Job {
-    /// Whether an account could take part: dandanplay knows only its own
-    /// ids, Bangumi only shows linked to a subject.
-    pub fn reaches(&self) -> bool {
-        self.dandanplay() || self.bangumi()
-    }
-
-    fn dandanplay(&self) -> bool {
-        self.accounts.dandanplay
-            && self.id > 0
-            && erika_dandanplay::bangumi::subject_id(self.id).is_none()
-    }
-
-    fn bangumi(&self) -> bool {
-        self.accounts.bangumi && self.subject.is_some()
+    fn key(&self) -> (MediaId, Provider, u8) {
+        (
+            self.media.clone(),
+            self.subject.reference.provider,
+            self.intent.field(),
+        )
     }
 }
-
-/// The number dandanplay writes for an episode, when it is a plain one.
-fn number(text: &str) -> Option<i64> {
-    text.trim().parse().ok().filter(|number| *number > 0)
+#[derive(Clone, Debug)]
+enum Remote {
+    Dandanplay(erika_dandanplay::catalog::Details),
+    Bangumi(site::Collection),
 }
-
-fn ids_of(map: &[(i64, i64)], numbers: &[i64]) -> Vec<i64> {
-    numbers
-        .iter()
-        .filter_map(|number| map.iter().find(|(n, _)| n == number).map(|(_, id)| *id))
-        .collect()
-}
-
-/// Why the status chosen gave way to `level`, further along: where that
-/// one was kept.
-fn kept(level: Level, chosen: Level, dandanplay: Option<&Side>, bangumi: Option<&Side>) -> String {
-    let place = if bangumi.is_some_and(|side| side.level == Some(level)) {
-        "Bangumi 上"
-    } else if dandanplay.is_some_and(|side| side.level == Some(level)) {
-        "弹弹play 上"
-    } else {
-        return format!(
-            "已有看过的剧集，状态保留为「{}」，没有改成「{}」",
-            level.word(),
-            chosen.word()
-        );
-    };
-    format!(
-        "{place}已是「{}」，按优先级保留，没有改成「{}」",
-        level.word(),
-        chosen.word()
-    )
-}
-
-/// Run one sync. The network calls block; this runs on its own thread.
-pub(crate) fn run(job: Job) -> Synced {
-    let mut notes = Vec::new();
-    let mut local = job.local.clone();
-    let mut chosen = None;
-    let mut rate = None;
-    let mut review = None;
-    let mut unmarked = Vec::new();
-    for intent in &job.intents {
-        match intent {
-            Intent::Status(level) => {
-                local.level = Some(*level);
-                chosen = Some(*level);
+impl Remote {
+    fn level(&self) -> Option<Level> {
+        match self {
+            Self::Bangumi(c) => c.interest.map(Level::of_interest),
+            Self::Dandanplay(d) => match d.favorite_status.as_deref() {
+                Some("finished") => Some(Level::Watched),
+                Some("abandoned") => Some(Level::Dropped),
+                Some("favorited") => Some(Level::Want),
+                _ => None,
+            },
+        }
+    }
+    fn rating(&self) -> i64 {
+        match self {
+            Self::Bangumi(c) => c.rating,
+            _ => 0,
+        }
+    }
+    fn watched(&self, target: &erika_catalog::ProviderRef) -> Option<bool> {
+        match (self, target.provider, target.kind) {
+            (Self::Bangumi(c), Provider::Bangumi, Kind::Subject) => {
+                Some(c.interest == Some(site::Interest::Collect))
             }
-            Intent::Rate(points) => rate = Some((*points).clamp(1, 10)),
-            Intent::Mark { number, watched } => {
-                if *watched {
-                    local.watched.insert(*number);
-                    unmarked.retain(|n| n != number);
-                } else {
-                    local.watched.remove(number);
-                    unmarked.push(*number);
+            (Self::Bangumi(c), Provider::Bangumi, Kind::Episode) => {
+                let mut matches = c.episodes.iter().filter(|e| e.id.to_string() == target.id);
+                let value = matches.next()?.watched;
+                matches.next().is_none().then_some(value)
+            }
+            (Self::Dandanplay(d), Provider::Dandanplay, Kind::Episode) => {
+                let mut matches = d
+                    .episodes
+                    .iter()
+                    .filter(|e| e.episode_id.to_string() == target.id);
+                let value = matches
+                    .next()?
+                    .last_watched
+                    .as_ref()
+                    .is_some_and(|s| !s.trim().is_empty());
+                matches.next().is_none().then_some(value)
+            }
+            _ => None,
+        }
+    }
+    fn satisfies(&self, intent: &Intent) -> bool {
+        match intent {
+            Intent::Read | Intent::ReadReview => true,
+            Intent::Status(level) => match self {
+                Self::Bangumi(c) => c.interest == Some(level.interest()),
+                Self::Dandanplay(d) => {
+                    d.favorite_status.as_deref() == Some(network::follow(*level))
+                }
+            },
+            Intent::Rate(points) => matches!(self, Self::Bangumi(c) if c.rating == *points),
+            Intent::Review(text) => {
+                matches!(self, Self::Bangumi(c) if c.comment.trim() == text.trim())
+            }
+            Intent::Watch(w) => self.watched(&w.target) == Some(w.watched),
+            Intent::Subject(task) => {
+                let mark = &task.mark;
+                let status = mark.status.as_deref().and_then(Level::parse);
+                match self {
+                    Self::Bangumi(c) => {
+                        status.is_none_or(|s| c.interest == Some(s.interest()))
+                            && mark.rating.is_none_or(|n| c.rating == n)
+                            && mark
+                                .review
+                                .as_ref()
+                                .is_none_or(|s| c.comment.trim() == s.trim())
+                    }
+                    Self::Dandanplay(d) => status
+                        .is_some_and(|s| d.favorite_status.as_deref() == Some(network::follow(s))),
                 }
             }
-            Intent::Review(text) => review = Some(text.clone()),
         }
-    }
-    // A score or a review puts the show on the accounts' lists: as wanted,
-    // unless it is further along somewhere.
-    if (rate.is_some() || review.is_some()) && local.level.is_none() {
-        local.level = Some(Level::Want);
-    }
-
-    let dandanplay = if job.dandanplay() {
-        match mine::mine(job.id) {
-            Ok((details, mine)) => Some((details, mine)),
-            Err(error) => {
-                notes.push(format!("弹弹play：{}", error.message));
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let dandanplay_map: Vec<(i64, i64)> = dandanplay
-        .as_ref()
-        .map(|(details, _)| {
-            details
-                .episodes
-                .iter()
-                .filter_map(|episode| Some((number(&episode.episode_number)?, episode.episode_id)))
-                .collect()
-        })
-        .unwrap_or_default();
-    let dandanplay_side = dandanplay.as_ref().map(|(_, mine)| Side {
-        level: mine.follow.map(Level::of_follow),
-        watched: dandanplay_map
-            .iter()
-            .filter(|(_, id)| mine.watched.contains(id))
-            .map(|(number, _)| *number)
-            .collect(),
-    });
-
-    let subject = job.subject.filter(|_| job.bangumi());
-    let bangumi = subject.and_then(|subject| match site::collection(subject) {
-        Ok(collection) => Some(collection),
-        Err(error) => {
-            notes.push(format!("Bangumi：{}", error.message));
-            None
-        }
-    });
-    let bangumi_map: Vec<(i64, i64)> = bangumi
-        .as_ref()
-        .map(|collection| {
-            collection
-                .episodes
-                .iter()
-                .map(|episode| (episode.number, episode.id))
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut bangumi_side = bangumi.as_ref().map(|collection| Side {
-        level: collection.interest.map(Level::of_interest),
-        watched: collection
-            .episodes
-            .iter()
-            .filter(|episode| episode.watched)
-            .map(|episode| episode.number)
-            .collect(),
-    });
-    // Taking a mark back is the user's own doing: Bangumi takes it back
-    // too, unless dandanplay, which cannot, still has it watched.
-    let mut taken_back = Vec::new();
-    if let Some(side) = bangumi_side.as_mut() {
-        for number in &unmarked {
-            let stays = dandanplay_side
-                .as_ref()
-                .is_some_and(|side| side.watched.contains(number));
-            if !stays && side.watched.remove(number) {
-                taken_back.push(*number);
-            }
-        }
-    }
-
-    let film = Film {
-        numbers: if !dandanplay_map.is_empty() {
-            dandanplay_map.iter().map(|(number, _)| *number).collect()
-        } else {
-            job.episodes.iter().map(|(number, _)| *number).collect()
-        },
-        on_air: dandanplay
-            .as_ref()
-            .map_or(job.on_air, |(details, _)| details.is_on_air),
-    };
-    let plan = marks::plan(
-        &local,
-        dandanplay_side.as_ref(),
-        bangumi_side.as_ref(),
-        &film,
-    );
-
-    if let Some((_, mine)) = &dandanplay {
-        let ids = ids_of(&dandanplay_map, &plan.dandanplay.watched);
-        if !ids.is_empty() {
-            eprintln!(
-                "erika: sync {}: dandanplay watched {:?}",
-                job.id, plan.dandanplay.watched
-            );
-            if let Err(error) = mine::watched(&ids) {
-                notes.push(format!("弹弹play：{}", error.message));
-            }
-        }
-        let follow = plan.dandanplay.level.map(Level::follow);
-        let points = rate.unwrap_or(0);
-        if follow.is_some() || points > 0 {
-            eprintln!(
-                "erika: sync {}: dandanplay follow {follow:?} rating {points}",
-                job.id
-            );
-            if let Err(error) = mine::follow(job.id, follow, points) {
-                notes.push(format!("弹弹play：{}", error.message));
-            }
-        }
-        for number in &unmarked {
-            if let Some(&(_, id)) = dandanplay_map.iter().find(|(n, _)| n == number)
-                && mine.watched.contains(&id)
-            {
-                notes.push(format!(
-                    "弹弹play 不能取消已看，第 {number} 话在那里仍是看过"
-                ));
-            }
-        }
-    }
-
-    let mut reviewed = None;
-    if let (Some(subject), Some(collection)) = (subject, &bangumi) {
-        // Episodes first: marking them may collect the show as watching,
-        // which the collection saved after sets right.
-        let ids = ids_of(&bangumi_map, &plan.bangumi.watched);
-        if !ids.is_empty() {
-            eprintln!(
-                "erika: sync {}: bangumi {subject} watched {:?}",
-                job.id, plan.bangumi.watched
-            );
-            if let Err(error) = site::mark(subject, collection, &ids, true) {
-                notes.push(format!("Bangumi：{}", error.message));
-            }
-        }
-        let ids = ids_of(&bangumi_map, &taken_back);
-        if !ids.is_empty() {
-            eprintln!(
-                "erika: sync {}: bangumi {subject} not watched {taken_back:?}",
-                job.id
-            );
-            if let Err(error) = site::mark(subject, collection, &ids, false) {
-                notes.push(format!("Bangumi：{}", error.message));
-            }
-        }
-        let marked_watched = !plan.bangumi.watched.is_empty() && collection.interest.is_none();
-        if plan.bangumi.level.is_some() || rate.is_some() || review.is_some() || marked_watched {
-            let mut saved = collection.clone();
-            saved.interest = plan
-                .bangumi
-                .level
-                .map(Level::interest)
-                .or(saved.interest)
-                .or(plan.level.map(Level::interest))
-                .or(Some(Interest::Wish));
-            if let Some(points) = rate {
-                saved.rating = points;
-            }
-            if let Some(text) = &review {
-                saved.comment = text.clone();
-            }
-            eprintln!(
-                "erika: sync {}: bangumi {subject} collection {:?} rating {} review {}",
-                job.id,
-                saved.interest,
-                saved.rating,
-                if review.is_some() { "changed" } else { "kept" }
-            );
-            let result = site::save(subject, &saved).map_err(|error| error.message);
-            if let Err(error) = &result {
-                notes.push(format!("Bangumi：{error}"));
-            }
-            if review.is_some() {
-                reviewed = Some(result);
-            }
-        }
-    }
-    if review.is_some() && reviewed.is_none() {
-        reviewed = Some(Err(notes
-            .iter()
-            .find(|note| note.starts_with("Bangumi"))
-            .cloned()
-            .unwrap_or_else(|| "这部作品没有对应的 Bangumi 条目".into())));
-    }
-
-    if let (Some(chosen), Some(level)) = (chosen, plan.level)
-        && level > chosen
-    {
-        notes.insert(
-            0,
-            kept(
-                level,
-                chosen,
-                dandanplay_side.as_ref(),
-                bangumi_side.as_ref(),
-            ),
-        );
-    }
-    for note in &notes {
-        eprintln!("erika: sync {}: {note}", job.id);
-    }
-    Synced {
-        id: job.id,
-        level: plan.level,
-        watched: plan.watched,
-        rating: rate
-            .or(bangumi.as_ref().map(|c| c.rating).filter(|r| *r > 0))
-            .or(dandanplay
-                .as_ref()
-                .map(|(_, m)| m.rating)
-                .filter(|r| *r > 0)),
-        review: review.or(bangumi.map(|collection| collection.comment)),
-        reviewed,
-        notes,
     }
 }
-
-/// What is kept here of a show: its mark, and the episodes marked watched.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Kept {
-    pub mark: erika_store::Mark,
-    pub watched: BTreeSet<i64>,
+pub(crate) struct Synced {
+    id: u64,
+    written: bool,
+    result: Result<Remote, String>,
 }
-
-impl Kept {
-    pub fn level(&self) -> Option<Level> {
-        self.mark.status.as_deref().and_then(Level::parse)
-    }
+struct Observation {
+    job: Job,
+    remote: Remote,
 }
-
-/// The syncs waiting and the one under way: one at a time, so that a
-/// start with several shows to sync does not flood the accounts.
 #[derive(Default)]
 pub(crate) struct Syncs {
-    running: Option<i64>,
-    waiting: VecDeque<i64>,
-    intents: HashMap<i64, Vec<Intent>>,
-    /// The episodes played to the end, by show, as last synced.
-    played: HashMap<i64, BTreeSet<i64>>,
-    /// The show synced as it opened, so that its details coming do not
-    /// sync it again.
-    pub opened: i64,
+    running: Option<Job>,
+    waiting: VecDeque<Job>,
+    next: u64,
+    versions: HashMap<(MediaId, Provider, u8), u64>,
+    observed: HashMap<(MediaId, Provider), Observation>,
+    pub opened: Option<MediaId>,
+    view: u64,
+    review: u64,
+    watch_attempted: HashSet<(String, u64)>,
+    subject_attempted: HashSet<(String, u64)>,
+    watch_timer: bool,
+    #[cfg(test)]
+    sessions: [Option<Session>; 2],
+    #[cfg(test)]
+    dispatched: Vec<(Job, Option<Remote>)>,
+}
+impl Syncs {
+    pub fn change_view(&mut self, state: &mut erika_anime_protocol::anime::State) {
+        state.view_generation = MediaId::new().0;
+        self.view += 1;
+        self.review += 1;
+        self.opened = None;
+    }
+    pub fn change_review(&mut self) {
+        self.review += 1;
+    }
+    pub fn busy(&self, media: &MediaId) -> bool {
+        self.running.as_ref().is_some_and(|j| &j.media == media)
+            || self.waiting.iter().any(|j| &j.media == media)
+    }
 }
 
-impl Syncs {
-    pub fn busy(&self, id: i64) -> bool {
-        self.running == Some(id) || self.waiting.contains(&id)
+/// A season never silently falls back to the series' account subject. A series
+/// subject may cover several seasons, which is not permission to rate one of them.
+pub(super) fn subject(
+    db: &Db,
+    media: &MediaId,
+    provider: Provider,
+) -> Result<Option<ProviderLink>, String> {
+    let links = db.catalog_links(media).map_err(|e| e.message)?;
+    let candidates: Vec<_> = links
+        .into_iter()
+        .filter(|l| {
+            l.confirmed
+                && l.relation == Relation::Exact
+                && l.reference.provider == provider
+                && l.reference.kind == Kind::Subject
+                && l.reference.scope.is_empty()
+        })
+        .collect();
+    if candidates.len() > 1 {
+        return Err("关联了多个账户条目，请先确认对应关系".into());
     }
+    let link = candidates.into_iter().next();
+    if link.as_ref().is_some_and(|l| !link_current(db, l)) {
+        return Err("账号条目对应多个媒体，请先确认对应关系".into());
+    }
+    Ok(link)
+}
+fn link_current(db: &Db, link: &ProviderLink) -> bool {
+    db.catalog_links(&link.media).is_ok_and(|links| {
+        let candidates: Vec<_> = links
+            .iter()
+            .filter(|l| {
+                l.confirmed
+                    && l.relation == Relation::Exact
+                    && l.reference.provider == link.reference.provider
+                    && l.reference.kind == link.reference.kind
+                    && l.reference.scope == link.reference.scope
+            })
+            .collect();
+        candidates.as_slice() == [link]
+    }) && db
+        .catalog_by_ref(&link.reference)
+        .is_ok_and(|nodes| nodes.len() == 1 && nodes[0].id == link.media)
 }
 
 impl AnimeEngine {
-    /// What is kept here of show `id`.
-    pub(crate) fn kept(&mut self, id: i64) -> Kept {
-        let db = &self.db;
-        self.kept
-            .entry(id)
-            .or_insert_with(|| Kept {
-                mark: db.mark(id),
-                watched: db.watched_numbers(id).into_iter().collect(),
-            })
-            .clone()
+    pub(super) fn account_media(&self) -> Result<MediaId, CommandError> {
+        let id = if self.state.selected_season.is_empty() {
+            &self.state.opened
+        } else {
+            &self.state.selected_season
+        };
+        let id =
+            MediaId::parse(id).map_err(|_| CommandError::new("unknown_show", "请先打开作品"))?;
+        self.db
+            .catalog_node(&id)
+            .map_err(content::command)?
+            .map(|n| n.id)
+            .ok_or_else(|| CommandError::new("unknown_show", "作品已不存在"))
     }
-
-    /// The episodes of show `id` played to the end here.
-    fn played(&self, id: i64) -> BTreeSet<i64> {
-        shows::played(&self.db.episode_files(id))
-    }
-
-    /// The episodes of show `id` watched as far as this device knows.
-    pub(crate) fn watched_here(&mut self, id: i64) -> BTreeSet<i64> {
-        let mut watched = self.kept(id).watched;
-        watched.extend(self.played(id));
-        watched
-    }
-
-    /// The episodes of show `id` by number and id, from its details.
-    pub(crate) fn numbered(&self, id: i64) -> Vec<(i64, i64)> {
-        self.details
-            .get(&id)
-            .map(shows::numbered)
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn film_of(&self, id: i64) -> Film {
-        Film {
-            numbers: self
-                .numbered(id)
-                .into_iter()
-                .map(|(number, _)| number)
-                .collect(),
-            on_air: self.details.get(&id).is_some_and(|d| d.is_on_air),
+    fn account_session(&self, provider: Provider) -> Option<Session> {
+        let index = match provider {
+            Provider::Dandanplay if self.accounts.dandanplay => 0,
+            Provider::Bangumi if self.accounts.bangumi => 1,
+            _ => return None,
+        };
+        #[cfg(test)]
+        {
+            self.syncs.sessions[index]
+                .clone()
+                .filter(Session::is_current)
+        }
+        #[cfg(not(test))]
+        {
+            if index == 0 {
+                erika_dandanplay::account_session()
+            } else {
+                site::account_session()
+            }
         }
     }
-
-    /// The status shown for show `id`: the one kept here, or the one its
-    /// episodes say, whichever is further along.
-    pub(crate) fn level_of(&mut self, id: i64, watched: &BTreeSet<i64>) -> Option<Level> {
-        let film = self.film_of(id);
-        self.kept(id).level().max(marks::implied(watched, &film))
-    }
-
-    /// The Bangumi subject of show `id`, when a verified link names it.
-    pub(crate) fn subject(&self, id: i64) -> Option<i64> {
-        erika_dandanplay::bangumi::subject_id(id)
-            .or_else(|| {
-                self.details
-                    .get(&id)
-                    .and_then(|d| erika_dandanplay::reviews::subject_id(&d.bangumi_url))
-            })
-            .or_else(|| self.links.subject(id))
-    }
-
-    fn job(&mut self, id: i64, intents: Vec<Intent>) -> Job {
-        Job {
-            id,
-            accounts: self.accounts,
-            subject: self.subject(id),
-            local: Side {
-                level: self.kept(id).level(),
-                watched: self.watched_here(id),
-            },
-            episodes: self.numbered(id),
-            on_air: self.details.get(&id).is_some_and(|d| d.is_on_air),
-            intents,
+    fn subject_targets(
+        &self,
+        media: &MediaId,
+        intent: &Intent,
+    ) -> Result<Vec<(Session, ProviderLink)>, String> {
+        let mut targets = Vec::new();
+        for provider in [Provider::Bangumi, Provider::Dandanplay] {
+            if intent.only_bangumi() && provider != Provider::Bangumi {
+                continue;
+            }
+            if let Some(session) = self.account_session(provider)
+                && let Some(link) = subject(&self.db, media, provider)?
+            {
+                targets.push((session, link));
+            }
         }
+        Ok(targets)
     }
-
-    /// Where the marks of show `id` go besides this device.
-    pub(crate) fn targets(&self, id: i64) -> SyncTargets {
-        let reach = self.job_reach(id);
-        match reach {
+    pub(crate) fn targets(&self, media: &MediaId) -> SyncTargets {
+        let targets = self
+            .subject_targets(media, &Intent::Read)
+            .unwrap_or_default();
+        let has = |p| targets.iter().any(|(_, l)| l.reference.provider == p);
+        match (has(Provider::Dandanplay), has(Provider::Bangumi)) {
             (true, true) => SyncTargets::Both,
             (true, false) => SyncTargets::Dandanplay,
             (false, true) => SyncTargets::Bangumi,
-            (false, false) => SyncTargets::Local,
+            _ => SyncTargets::Local,
         }
     }
-
-    fn job_reach(&self, id: i64) -> (bool, bool) {
-        let job = Job {
-            id,
-            accounts: self.accounts,
-            subject: self.subject(id),
-            local: Side::default(),
-            episodes: Vec::new(),
-            on_air: false,
-            intents: Vec::new(),
+    /// Keep explicit local choices immediately. A remote response only updates
+    /// an account observation, never this row (including same-second changes).
+    pub(crate) fn sync_intent(&mut self, intent: Intent) -> Result<(), CommandError> {
+        let media = self.account_media()?;
+        if matches!(intent, Intent::ReadReview) {
+            let local = self
+                .db
+                .catalog_marks(&media)
+                .map_err(content::command)?
+                .into_iter()
+                .find(|m| m.reference.is_none());
+            if let Some(text) = local.and_then(|m| m.review) {
+                self.state.review_text = text;
+                self.state.review_loading = false;
+                return Ok(());
+            }
+        }
+        let targets = self
+            .subject_targets(&media, &intent)
+            .map_err(|e| CommandError::new("mapping_required", e))?;
+        if intent.only_bangumi() && targets.is_empty() {
+            return Err(CommandError::new(
+                "bangumi_required",
+                "请先登录 Bangumi 并确认此作品或季的对应条目",
+            ));
+        }
+        let edit = match &intent {
+            Intent::Status(level) => Some(MarkEdit::Status(level.key().into())),
+            Intent::Rate(points) => Some(MarkEdit::Rating(*points)),
+            Intent::Review(text) => Some(MarkEdit::Review(text.clone())),
+            _ => None,
         };
-        (job.dandanplay(), job.bangumi())
-    }
-
-    fn anime_of(&self, id: i64) -> erika_store::Anime {
-        if let Some(details) = self.details.get(&id) {
-            return erika_store::Anime {
-                dandanplay_id: id,
-                title: details.anime_title.clone(),
-                image: details.image_url.clone(),
-            };
-        }
-        self.db.anime(id).unwrap_or_else(|| erika_store::Anime {
-            dandanplay_id: id,
-            title: self.find(id).map(|show| show.title).unwrap_or_default(),
-            image: self
-                .season
-                .iter()
-                .find(|intro| intro.anime_id == id)
-                .map(|intro| intro.image_url.clone())
-                .unwrap_or_default(),
-        })
-    }
-
-    fn episode_of(&self, id: i64, number: i64) -> erika_store::Episode {
-        let episode = self.details.get(&id).and_then(|details| {
-            details
-                .episodes
-                .iter()
-                .enumerate()
-                .find(|(index, episode)| shows::number(&episode.episode_number, *index) == number)
-                .map(|(_, episode)| episode)
-        });
-        erika_store::Episode {
-            dandanplay_id: episode.map_or(0, |episode| episode.episode_id),
-            number,
-            title: episode.map(|e| e.episode_title.clone()).unwrap_or_default(),
-        }
-    }
-
-    fn keep_mark(&mut self, id: i64, mark: erika_store::Mark) {
-        if self.kept(id).mark != mark {
-            self.db.set_mark(&self.anime_of(id), &mark);
-            self.kept.entry(id).or_default().mark = mark;
-        }
-    }
-
-    fn keep_watched(&mut self, id: i64, number: i64, watched: bool, manual: bool) {
-        let kept = self.kept(id);
-        if kept.watched.contains(&number) == watched && !manual {
-            return;
-        }
-        self.db.set_watched(
-            &self.anime_of(id),
-            &self.episode_of(id, number),
-            watched,
-            manual,
-        );
-        let kept = self.kept.entry(id).or_default();
-        if watched {
-            kept.watched.insert(number);
+        self.state.sync_note.clear();
+        if let Some(edit) = edit {
+            let mark = self
+                .db
+                .catalog_edit_mark(&media, &edit)
+                .map_err(content::command)?;
+            // Queue the entire latest local choice, not a stale per-engine row.
+            // A later field edit then includes every earlier local field.
+            for (session, link) in targets {
+                self.db
+                    .catalog_subject_enqueue(session.account(), &mark, &link)
+                    .map_err(content::command)?;
+            }
+            self.queue_subjects();
         } else {
-            kept.watched.remove(&number);
-        }
-    }
-
-    /// Keep what the user did at once, and sync it with the accounts.
-    /// `first` puts the show before the others waiting.
-    pub(crate) fn sync(&mut self, id: i64, intents: Vec<Intent>, first: bool) {
-        if id == 0 {
-            return;
-        }
-        for intent in &intents {
-            match intent {
-                Intent::Status(level) => {
-                    let mark = erika_store::Mark {
-                        status: Some(level.key().into()),
-                        ..self.kept(id).mark
-                    };
-                    self.keep_mark(id, mark);
-                }
-                Intent::Rate(points) => {
-                    let mark = erika_store::Mark {
-                        rating: *points,
-                        ..self.kept(id).mark
-                    };
-                    self.keep_mark(id, mark);
-                }
-                Intent::Mark { number, watched } => self.keep_watched(id, *number, *watched, true),
-                Intent::Review(_) => {}
+            for (session, link) in targets {
+                self.queue_account(media.clone(), session, link, intent.clone());
             }
         }
-        self.syncs.intents.entry(id).or_default().extend(intents);
-        if self.syncs.running != Some(id) {
-            self.syncs.waiting.retain(|waiting| *waiting != id);
-            if first {
-                self.syncs.waiting.push_front(id);
-            } else {
-                self.syncs.waiting.push_back(id);
-            }
-        }
-        self.pump();
-        if self.state.opened == id {
-            self.show_opened();
-        }
-    }
-
-    /// Start the next sync waiting, unless one is under way. A show no
-    /// account can take is brought together here at once.
-    fn pump(&mut self) {
-        while self.syncs.running.is_none()
-            && let Some(id) = self.syncs.waiting.pop_front()
-        {
-            let intents = self.syncs.intents.remove(&id).unwrap_or_default();
-            let job = self.job(id, intents);
-            if job.reaches() {
-                self.syncs.running = Some(id);
-                in_background(&self.inbox, move || Some(Done::Synced(run(job))));
-            } else {
-                let synced = run(job);
-                self.keep_synced(synced);
-            }
-        }
-        self.state.syncing = self.syncs.busy(self.state.opened);
-    }
-
-    /// A sync came back: keep and show what it came to, and start the next.
-    pub(crate) fn take_synced(&mut self, synced: Synced) {
-        if self.syncs.running == Some(synced.id) {
-            self.syncs.running = None;
-        }
-        self.keep_synced(synced);
-        self.pump();
-    }
-
-    fn keep_synced(&mut self, synced: Synced) {
-        let id = synced.id;
-        let kept = self.kept(id);
-        let mark = erika_store::Mark {
-            status: synced.level.map(|level| level.key().to_string()),
-            rating: synced.rating.unwrap_or(kept.mark.rating),
-        };
-        self.keep_mark(id, mark);
-        for number in synced
-            .watched
-            .difference(&kept.watched)
-            .copied()
-            .collect::<Vec<_>>()
-        {
-            self.keep_watched(id, number, true, false);
-        }
-        self.syncs.played.insert(id, self.played(id));
-        if self.state.opened != id {
-            return;
-        }
-        self.state.sync_note = synced.notes.join("；");
-        if let Some(review) = synced.review
-            && !self.state.review_saving
-        {
-            self.state.review_text = review;
-        }
-        if let Some(reviewed) = synced.reviewed {
-            self.state.review_saving = false;
-            match reviewed {
-                Ok(()) => {
-                    self.state.review_open = false;
-                    self.state.review_error.clear();
-                }
-                Err(error) => self.state.review_error = error,
-            }
-        }
+        self.pump_accounts();
         self.show_opened();
+        Ok(())
     }
-
-    /// Sync the shows being watched whose episodes played to the end
-    /// changed since they were last synced, as the app starts and after
-    /// each video.
-    pub(crate) fn sync_played(&mut self) {
-        for watching in self.watching.clone() {
-            let id = watching.anime.dandanplay_id;
-            let played = self.played(id);
-            if played.is_empty() || self.syncs.played.get(&id) == Some(&played) {
+    fn queue_account(
+        &mut self,
+        media: MediaId,
+        session: Session,
+        subject: ProviderLink,
+        intent: Intent,
+    ) {
+        self.syncs.next += 1;
+        let episodes = if matches!(intent, Intent::Read) {
+            self.exact_episode_links(&media, subject.reference.provider)
+        } else {
+            Vec::new()
+        };
+        let mark = match self.db.catalog_marks(&media) {
+            Ok(marks) => marks.into_iter().find(|m| m.reference.is_none()),
+            Err(error) => {
+                self.state.sync_note = error.message;
+                return;
+            }
+        };
+        let job = Job {
+            id: self.syncs.next,
+            media,
+            session,
+            subject,
+            intent,
+            view: self.syncs.view,
+            review: self.syncs.review,
+            claim: None,
+            mark,
+            episodes,
+        };
+        if job.intent.delivery().is_none() {
+            self.syncs.versions.insert(job.key(), job.id);
+            self.syncs.waiting.retain(|j| j.key() != job.key());
+        }
+        self.syncs.waiting.push_back(job);
+    }
+    fn account_job_current(&self, job: &Job) -> bool {
+        job.session.is_current()
+            && self
+                .account_session(job.subject.reference.provider)
+                .is_some_and(|s| s.account() == job.session.account())
+            && (job.intent.delivery().is_some_and(|t| t.recovering())
+                || link_current(&self.db, &job.subject))
+            && match &job.intent {
+                Intent::Status(level) => self.db.catalog_marks(&job.media).is_ok_and(|marks| {
+                    marks
+                        .iter()
+                        .any(|m| m.reference.is_none() && m.status.as_deref() == Some(level.key()))
+                }),
+                Intent::Rate(points) => self.db.catalog_marks(&job.media).is_ok_and(|marks| {
+                    marks
+                        .iter()
+                        .any(|m| m.reference.is_none() && m.rating == Some(*points))
+                }),
+                _ => true,
+            }
+            && (job.intent.delivery().is_some()
+                || self.syncs.versions.get(&job.key()) == Some(&job.id))
+    }
+    fn job_visible(&self, job: &Job) -> bool {
+        job.view == self.syncs.view && self.account_media().is_ok_and(|id| id == job.media)
+    }
+    fn dispatch_account(&mut self, job: Job, remote: Option<Remote>) {
+        self.syncs.running = Some(job.clone());
+        #[cfg(test)]
+        self.syncs.dispatched.push((job, remote));
+        #[cfg(not(test))]
+        {
+            let deliver = crate::receiver(&self.inbox);
+            erika_catalog::client::spawn(async move {
+                let written = remote.is_some();
+                let result = match remote {
+                    Some(remote) => network::write(&job, remote).await,
+                    None => network::read(&job).await,
+                };
+                deliver(Done::Synced(Synced {
+                    id: job.id,
+                    written,
+                    result,
+                }));
+            });
+        }
+    }
+    fn pump_accounts(&mut self) {
+        while self.syncs.running.is_none()
+            && let Some(mut job) = self.syncs.waiting.pop_front()
+        {
+            if !self.account_job_current(&job) {
+                self.cancel_account_job(&job);
                 continue;
             }
-            self.syncs.played.insert(id, played);
-            self.sync(id, Vec::new(), false);
+            if let Some(task) = job.intent.delivery() {
+                match self
+                    .db
+                    .catalog_account_claim(job.session.account(), &job.subject, &task)
+                {
+                    Ok(claim) => job.claim = Some(claim),
+                    Err(error) => {
+                        if error.code != "busy" {
+                            self.account_error(&job, error.message);
+                        }
+                        self.arm_watch_retry();
+                        continue;
+                    }
+                }
+            }
+            self.dispatch_account(job, None);
+        }
+        self.state.syncing = self.account_media().is_ok_and(|id| self.syncs.busy(&id));
+    }
+    pub(crate) fn take_synced(&mut self, reply: Synced) {
+        let Some(job) = self
+            .syncs
+            .running
+            .as_ref()
+            .filter(|j| j.id == reply.id)
+            .cloned()
+        else {
+            return;
+        };
+        self.syncs.running = None;
+        if let Some(claim) = &job.claim
+            && !self.db.catalog_account_holds(claim).unwrap_or(false)
+        {
+            self.arm_watch_retry();
+            self.pump_accounts();
+            return;
+        }
+        let current = self.account_job_current(&job);
+        if matches!(job.intent, Intent::Subject(_)) {
+            self.take_subject(job, reply, current);
+            self.pump_accounts();
+            return;
+        }
+        if matches!(job.intent, Intent::Watch(_)) {
+            let claim = job.claim.clone();
+            self.take_watch(job, reply, current);
+            // take_watch retains the claim only when it dispatches the write.
+            if self.syncs.running.is_none()
+                && let Some(claim) = claim
+            {
+                let uncertain = self
+                    .db
+                    .catalog_watch_queue(&claim.account)
+                    .map_or(true, |tasks| {
+                        tasks.iter().any(|t| {
+                            t.operation == claim.operation
+                                && matches!(t.state.as_str(), "sending" | "unknown")
+                        })
+                    });
+                let _ = self.db.catalog_account_release(&claim, uncertain);
+            }
+            self.pump_accounts();
+            return;
+        }
+        if !current {
+            self.cancel_account_job(&job);
+            self.pump_accounts();
+            return;
+        }
+        match reply.result {
+            Ok(remote)
+                if !reply.written && job.intent.writes() && !remote.satisfies(&job.intent) =>
+            {
+                self.dispatch_account(job, Some(remote));
+            }
+            result => {
+                match result {
+                    Ok(remote) => {
+                        if matches!(job.intent, Intent::Read) {
+                            self.import_account_watches(&job, &remote);
+                        }
+                        if self.job_visible(&job) {
+                            if job.review == self.syncs.review && self.state.review_open {
+                                match &job.intent {
+                                    Intent::ReadReview => {
+                                        match self.db.catalog_marks(&job.media) {
+                                            Ok(marks) => {
+                                                let local = marks
+                                                    .into_iter()
+                                                    .find(|m| m.reference.is_none());
+                                                if let Some(text) =
+                                                    local.as_ref().and_then(|m| m.review.as_ref())
+                                                {
+                                                    self.state.review_text = text.clone();
+                                                } else if local == job.mark
+                                                    && let Remote::Bangumi(c) = &remote
+                                                {
+                                                    self.state.review_text = c.comment.clone();
+                                                }
+                                            }
+                                            Err(error) => self.account_error(&job, error.message),
+                                        }
+                                        self.state.review_loading = false;
+                                    }
+                                    Intent::Review(_) => {
+                                        self.state.review_saving = false;
+                                        self.state.review_open = false;
+                                        self.state.review_error.clear();
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        self.syncs.observed.insert(
+                            (job.media.clone(), job.subject.reference.provider),
+                            Observation { job, remote },
+                        );
+                    }
+                    Err(error) => self.account_error(&job, error),
+                }
+                self.show_opened();
+                self.show_watching();
+                self.pump_accounts();
+            }
         }
     }
-
-    /// An account signed in: what was kept while it was out goes to it.
-    pub(crate) fn sync_all_again(&mut self) {
-        self.syncs.played.clear();
-        self.syncs.opened = 0;
-        self.sync_opened();
-        self.sync_played();
+    fn account_error(&mut self, job: &Job, error: String) {
+        if !self.job_visible(job) {
+            return;
+        }
+        self.state.sync_note = error.clone();
+        if job.review == self.syncs.review
+            && (matches!(job.intent, Intent::Review(_) | Intent::ReadReview)
+                || matches!(&job.intent, Intent::Subject(t) if t.mark.review.is_some() && self.state.review_saving))
+        {
+            self.state.review_loading = false;
+            self.state.review_saving = false;
+            self.state.review_error = error;
+        }
     }
-
-    /// Sync the open show as it opens, once its episodes are known.
+    fn cancel_account_job(&mut self, job: &Job) {
+        if job.intent.delivery().is_none() && self.syncs.versions.get(&job.key()) != Some(&job.id) {
+            return;
+        }
+        self.account_error(job, "账号、关联或本地操作已改变；旧请求没有继续发送".into());
+    }
+    pub(crate) fn show_account_marks(&mut self) {
+        let Ok(media) = self.account_media() else {
+            return;
+        };
+        let local = self
+            .db
+            .catalog_marks(&media)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|m| m.reference.is_none());
+        let remote = [Provider::Bangumi, Provider::Dandanplay]
+            .into_iter()
+            .filter_map(|p| {
+                self.syncs
+                    .observed
+                    .get(&(media.clone(), p))
+                    .filter(|o| self.account_job_current(&o.job))
+                    .map(|o| &o.remote)
+            })
+            .collect::<Vec<_>>();
+        let status = local
+            .as_ref()
+            .and_then(|m| m.status.as_deref())
+            .and_then(Level::parse)
+            .or_else(|| remote.iter().find_map(|r| r.level()));
+        let rating = local
+            .as_ref()
+            .and_then(|m| m.rating)
+            .or_else(|| remote.iter().map(|r| r.rating()).find(|n| *n > 0));
+        self.state.show.status = status
+            .map(|level| Level::status(Some(level)))
+            .unwrap_or_else(|| {
+                let seen = self.state.episodes.iter().filter(|e| e.watched).count();
+                Level::status(if seen == 0 {
+                    None
+                } else if seen == self.state.episodes.len() {
+                    Some(Level::Watched)
+                } else {
+                    Some(Level::Watching)
+                })
+            });
+        self.state.show.rating = crate::reviews::cached_rating(&self.db, &media);
+        self.state.my_score = rating.map_or(Score::Unrated, crate::marks::score);
+        self.state.sync_targets = self.targets(&media);
+        self.state.syncing = self.syncs.busy(&media);
+        self.state.can_rate = self
+            .subject_targets(&media, &Intent::Rate(1))
+            .is_ok_and(|t| !t.is_empty());
+        self.state.can_review = self.state.can_rate;
+        self.state.fine_scores = true;
+    }
+    pub(crate) fn sync_stored_marks(&mut self, only: Option<&MediaId>) {
+        let marks = match self.db.catalog_local_marks() {
+            Ok(marks) => marks,
+            Err(error) => {
+                self.state.sync_note = error.message;
+                return;
+            }
+        };
+        for mark in marks
+            .into_iter()
+            .filter(|m| only.is_none_or(|id| id == &m.media))
+        {
+            match self.subject_targets(&mark.media, &Intent::Read) {
+                Ok(targets) => {
+                    for (session, link) in targets {
+                        if link.reference.provider == Provider::Dandanplay && mark.status.is_none()
+                        {
+                            continue;
+                        }
+                        if let Err(error) =
+                            self.db
+                                .catalog_subject_enqueue(session.account(), &mark, &link)
+                        {
+                            self.state.sync_note = error.message;
+                        }
+                    }
+                }
+                Err(error) => self.state.sync_note = error,
+            }
+        }
+        self.queue_subjects();
+        self.pump_accounts();
+    }
     pub(crate) fn sync_opened(&mut self) {
-        let id = self.state.opened;
-        if id != 0 && self.syncs.opened != id && self.details.contains_key(&id) {
-            self.syncs.opened = id;
-            self.sync(id, Vec::new(), true);
+        let Ok(media) = self.account_media() else {
+            return;
+        };
+        if self.syncs.opened.as_ref() != Some(&media) {
+            self.syncs.opened = Some(media);
+            if let Err(error) = self.sync_intent(Intent::Read) {
+                self.state.sync_note = error.message;
+            }
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn job(accounts: Accounts, id: i64, subject: Option<i64>) -> Job {
-        Job {
-            id,
-            accounts,
-            subject,
-            local: Side::default(),
-            episodes: (1..=12).map(|n| (n, id * 10_000 + n)).collect(),
-            on_air: false,
-            intents: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn only_accounts_that_know_the_show_take_part() {
-        let both = Accounts {
-            dandanplay: true,
-            bangumi: true,
-        };
-        assert!(job(both, 17675, Some(393010)).reaches());
-        assert!(job(both, 17675, None).reaches());
-        let bangumi_only = erika_dandanplay::bangumi::local_id(393010).unwrap();
-        let only = Accounts {
-            dandanplay: true,
-            bangumi: false,
-        };
-        assert!(!job(only, bangumi_only, Some(393010)).reaches());
-        assert!(!job(only, -5, None).reaches());
-        assert!(!job(Accounts::default(), 17675, Some(393010)).reaches());
-    }
-
-    #[test]
-    fn without_a_reachable_account_intents_stay_here() {
-        let mut job = job(Accounts::default(), -5, None);
-        job.local.watched.insert(2);
-        job.intents = vec![
-            Intent::Status(Level::Want),
-            Intent::Mark {
-                number: 1,
-                watched: true,
-            },
-            Intent::Mark {
-                number: 2,
-                watched: false,
-            },
-        ];
-        let synced = run(job);
-        assert_eq!(synced.watched, [1].into());
-        assert_eq!(synced.level, Some(Level::Watching));
-        assert_eq!(
-            synced.notes[0],
-            "已有看过的剧集，状态保留为「在看」，没有改成「想看」"
-        );
-        assert_eq!(synced.reviewed, None);
-    }
-
-    #[test]
-    fn a_review_without_bangumi_reports_why() {
-        let mut job = job(Accounts::default(), 17675, None);
-        job.intents = vec![Intent::Review("好看".into()), Intent::Rate(8)];
-        let synced = run(job);
-        assert!(synced.reviewed.unwrap().is_err());
-        assert_eq!(synced.rating, Some(8));
-        assert_eq!(synced.level, Some(Level::Want));
-        assert_eq!(synced.review.as_deref(), Some("好看"));
+    pub(crate) fn sync_all_again(&mut self) {
+        self.syncs.change_view(&mut self.state);
+        self.syncs.observed.clear();
+        self.state.review_loading = false;
+        self.state.review_saving = false;
+        self.state.review_open = false;
+        self.state.review_text.clear();
+        self.syncs.watch_attempted.clear();
+        self.syncs.subject_attempted.clear();
+        self.sync_opened();
+        self.sync_stored_marks(None);
+        self.sync_played();
     }
 }

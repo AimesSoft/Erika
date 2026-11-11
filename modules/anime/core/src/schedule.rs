@@ -1,8 +1,7 @@
 //! When the season's anime air, from bangumi-data (github.com/bangumi-data),
 //! which dandanplay's list lacks: each anime's first broadcast and how often
 //! it repeats, under its names. Only the shows on air around now are kept,
-//! in a small file in the cache folder, fetched again when it is three days
-//! old.
+//! in a small database cache, fetched again when it is three days old.
 //!
 //! dandanplay's list names no Bangumi subject (its `bangumiId` is its own
 //! id), so an anime is found by name: the same name, or the same name once
@@ -14,12 +13,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 
 /// Where bangumi-data is published, in the order tried.
-#[cfg(not(target_arch = "wasm32"))]
 const SOURCES: &[&str] = &[
     "https://cdn.jsdelivr.net/npm/bangumi-data@0.3/dist/data.json",
     "https://unpkg.com/bangumi-data@0.3/dist/data.json",
 ];
-const CACHE: &str = "bangumi-schedule.json";
+const CACHE: &str = "anime.broadcast_schedule.v1";
 /// How old the kept schedule gets before it is fetched again, in seconds.
 pub const STALE_AFTER: i64 = 3 * 86_400;
 
@@ -104,10 +102,9 @@ impl Schedule {
         })
     }
 
-    /// The schedule kept in the cache folder.
-    pub fn cached() -> Option<Schedule> {
-        let path = bern::storage::cache_dir()?.join(CACHE);
-        let kept: Kept = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    /// The same current-format cache on native and browser stores.
+    pub fn cached(db: &erika_store::Db) -> Option<Schedule> {
+        let kept: Kept = serde_json::from_str(&db.setting(CACHE)?).ok()?;
         Some(Schedule::new(kept.fetched, kept.slots))
     }
 }
@@ -261,22 +258,18 @@ struct Kept {
 }
 
 /// Keep `slots`, fetched at `fetched`, for the next start.
-pub fn keep(fetched: i64, slots: &[Slot]) {
-    let Some(dir) = bern::storage::cache_dir() else {
-        return;
-    };
+pub fn keep(db: &erika_store::Db, fetched: i64, slots: &[Slot]) {
     let kept = Kept {
         fetched,
         slots: slots.to_vec(),
     };
-    if let Ok(bytes) = serde_json::to_vec(&kept) {
-        let _ = std::fs::write(dir.join(CACHE), bytes);
+    if let Ok(text) = serde_json::to_string(&kept) {
+        db.set_setting(CACHE, Some(&text));
     }
 }
 
 #[derive(Deserialize)]
 struct Data {
-    #[serde(default)]
     items: Vec<Item>,
 }
 
@@ -298,11 +291,11 @@ struct Item {
 /// The slots of the shows in bangumi-data's `json` that air around `now`:
 /// begun within the last year or the next two months and not ended over a
 /// month ago, broadcast every day or week.
-pub fn parse(json: &str, now: i64) -> Vec<Slot> {
-    let Ok(data) = serde_json::from_str::<Data>(json) else {
-        return Vec::new();
-    };
-    data.items
+pub fn parse(json: &str, now: i64) -> Result<Vec<Slot>, String> {
+    let data =
+        serde_json::from_str::<Data>(json).map_err(|_| "播出时刻数据格式不正确".to_owned())?;
+    Ok(data
+        .items
         .into_iter()
         .filter_map(|mut item| {
             let (first, period) = broadcast(item.broadcast.as_deref()?)?;
@@ -319,7 +312,7 @@ pub fn parse(json: &str, now: i64) -> Vec<Slot> {
                 period,
             })
         })
-        .collect()
+        .collect())
 }
 
 /// The first broadcast and the period of an ISO 8601 repeating interval
@@ -334,26 +327,33 @@ fn broadcast(text: &str) -> Option<(i64, i64)> {
     Some((parse_utc(start)?, days * 86_400))
 }
 
-/// Download bangumi-data from the first source that answers.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn fetch() -> Result<String, String> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(60)))
-        .build()
-        .into();
-    let mut last = String::from("no source");
-    for url in SOURCES {
-        match agent.get(*url).call() {
-            Ok(mut response) => match response
-                .body_mut()
-                .with_config()
-                .limit(64 << 20)
-                .read_to_string()
-            {
-                Ok(text) => return Ok(text),
-                Err(error) => last = error.to_string(),
-            },
-            Err(error) => last = error.to_string(),
+/// Download and validate bangumi-data from the first available source.
+pub async fn fetch(now: i64) -> Result<Vec<Slot>, String> {
+    fetch_from(SOURCES, now).await
+}
+
+async fn fetch_from(sources: &[&str], now: i64) -> Result<Vec<Slot>, String> {
+    let mut last = "暂时取不到播出时刻".to_owned();
+    for url in sources {
+        let response = erika_catalog::http::get(
+            url,
+            &[("Accept", "application/json")],
+            std::time::Duration::from_secs(60),
+            64 << 20,
+            true,
+        )
+        .await;
+        let result = match response {
+            Ok(response) if response.status == 200 => response
+                .text()
+                .map_err(|error| error.message)
+                .and_then(|text| parse(&text, now)),
+            Ok(response) => Err(format!("播出时刻请求失败（{}）", response.status)),
+            Err(error) => Err(error.message),
+        };
+        match result {
+            Ok(slots) => return Ok(slots),
+            Err(error) => last = error,
         }
     }
     Err(last)
@@ -372,7 +372,7 @@ mod tests {
     #[test]
     fn shows_on_air_are_found_by_name() {
         let now = parse_utc("2026-10-21T00:00:00Z").unwrap();
-        let slots = parse(DATA, now);
+        let slots = parse(DATA, now).unwrap();
         assert_eq!(slots.len(), 1);
         let schedule = Schedule::new(now, slots);
         assert_eq!(
@@ -466,7 +466,7 @@ mod real_data {
         let path = std::env::var("BANGUMI_DATA").expect("BANGUMI_DATA");
         let json = std::fs::read_to_string(path).unwrap();
         let now = crate::clock::parse_utc("2026-10-21T12:00:00Z").unwrap();
-        let slots = super::parse(&json, now);
+        let slots = super::parse(&json, now).unwrap();
         println!("{} slots on air", slots.len());
         assert!(slots.len() > 50);
     }

@@ -1,10 +1,10 @@
-//! Erika's sync file, version 1: one binary file for an export, and the
+//! Erika's sync file, version 2: one binary file for an export, and the
 //! same container for each object of a WebDAV repository.
 //!
 //! ```text
 //! offset  size  what
 //! 0       8     magic 89 45 52 4B 0D 0A 1A 0A  ("\x89ERK\r\n\x1a\n")
-//! 8       2     format version, little endian (1)
+//! 8       2     format version, little endian (2)
 //! 10      1     kind: 1 export, 2 snapshot, 3 patch, 4 manifest, 5 base
 //! 11      1     flags: bit 0, the body is deflated
 //! 12      4     body length as stored, little endian
@@ -16,10 +16,9 @@
 //! its bytes: 1 head (a map: when, which device, which app, the
 //! repository and snapshot), 2 key (how the passphrase's key is drawn),
 //! 3 state (categories of keyed values), 4 operations (a patch's changes),
-//! 5 index (a manifest's snapshot and patches). A reader skips sections it
-//! does not know, so later versions add sections and fields without
-//! raising the version; the version rises only when version 1 readers
-//! would read a file wrongly.
+//! 5 index (a manifest's snapshot and patches). Unknown optional sections can
+//! be skipped within this format. Only the current version is accepted: there
+//! is no conversion of older backups or repositories.
 
 use crate::seal::KeyParams;
 use crate::value::{Malformed, Reader, Value, put_bytes, put_text, put_value, put_varint};
@@ -27,7 +26,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 pub const MAGIC: [u8; 8] = *b"\x89ERK\r\n\x1a\n";
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 /// What an export is called on disk: an Erika backup.
 pub const EXTENSION: &str = "ebp";
 
@@ -116,6 +115,8 @@ pub enum FormatError {
     NotErika,
     /// Written by a later Erika, in a version this one cannot read.
     Newer(u16),
+    /// Older schemas are not imported or upgraded.
+    Incompatible(u16),
     /// Cut short or changed after it was written.
     Damaged(&'static str),
 }
@@ -127,6 +128,7 @@ impl std::fmt::Display for FormatError {
             FormatError::Newer(version) => {
                 write!(f, "文件来自更新版本的 Erika（格式 {version}），请先更新")
             }
+            FormatError::Incompatible(version) => write!(f, "备份或同步库格式不兼容（格式 {version}），此开发版不提供旧数据迁移"),
             FormatError::Damaged(what) => write!(f, "文件已损坏：{what}"),
         }
     }
@@ -309,8 +311,8 @@ pub fn read(bytes: &[u8]) -> Result<Document, FormatError> {
     if version > VERSION {
         return Err(FormatError::Newer(version));
     }
-    if version == 0 {
-        return Err(FormatError::Damaged("no version"));
+    if version < VERSION {
+        return Err(FormatError::Incompatible(version));
     }
     let kind = Kind::of(bytes[10]).ok_or(FormatError::Damaged("unknown kind"))?;
     let flags = bytes[11];

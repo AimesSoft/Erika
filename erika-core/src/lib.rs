@@ -18,6 +18,8 @@ mod keys;
 mod links;
 mod markdown;
 mod matching;
+mod catalog_matching;
+mod catalog_playback;
 mod plugins;
 mod playback_preferences;
 mod player;
@@ -55,6 +57,10 @@ pub struct ErikaEngine {
     /// liberika, where it runs, and the media it plays.
     kernel: Option<Arc<dyn Kernel>>,
     source: Option<MediaSource>,
+    /// The current transport has reported a loaded playback, not just accepted an open request.
+    playback_observed: bool,
+    /// Stable catalogue/history identity; transport credentials stay in `source`.
+    logical_source: Option<MediaSource>,
     /// A pause or a seek the user asked for, with the ticks it has waited
     /// for the kernel to show it.
     pause_wanted: Option<(bool, u8)>,
@@ -85,9 +91,15 @@ pub struct ErikaEngine {
     /// episode it was matched to.
     found: Arc<std::sync::Mutex<Vec<matching::Found>>>,
     episode_playing: Option<i64>,
+    media_playing: Option<erika_catalog::MediaId>,
+    catalog_playback: catalog_playback::Current,
+    danmaku_binding: Option<erika_catalog::DanmakuBinding>,
+    danmaku_generation: u64,
+    metadata: erika_catalog::Client,
     match_revision: u64,
     search_revision: u64,
     danmaku_sources: std::collections::BTreeMap<String, usize>,
+    catalog_picker: catalog_matching::Picker,
     match_details: Option<erika_dandanplay::Details>,
     match_previews: std::collections::BTreeMap<i64, erika_dandanplay::Details>,
     match_preview_queue: std::collections::VecDeque<i64>,
@@ -173,9 +185,15 @@ impl Default for ErikaEngine {
             bangumi: bangumi::Runtime::default(),
             found: Arc::default(),
             episode_playing: None,
+            media_playing: None,
+            catalog_playback: Default::default(),
+            danmaku_binding: None,
+            danmaku_generation: 0,
+            metadata: erika_catalog::Client::built_in("zh-CN").expect("built-in metadata endpoint"),
             match_revision: 0,
             search_revision: 0,
             danmaku_sources: Default::default(),
+            catalog_picker: Default::default(),
             match_details: None,
             match_previews: Default::default(),
             match_preview_queue: Default::default(),
@@ -187,6 +205,8 @@ impl Default for ErikaEngine {
             onboarding_completed: false,
             kernel: if cfg!(test) { None } else { kernel::start() },
             source: None,
+            playback_observed: false,
+            logical_source: None,
             pause_wanted: None,
             seek_wanted: None,
             timeline: chapters::Timeline::default(),
@@ -330,13 +350,19 @@ impl ErikaEngine {
         if self.state.playing {
             self.save_history();
         }
+        self.cancel_resolution();
+        self.logical_source = None;
         self.file = None;
         self.still_path = None;
         self.saved_at = 0.0;
         self.episode_playing = None;
+        self.media_playing = None;
+        self.catalog_playback = Default::default();
+        self.reset_file_danmaku();
         self.match_revision += 1;
         self.search_revision += 1;
         self.danmaku_sources.clear();
+        self.catalog_picker = Default::default();
         self.match_details = None;
         self.match_previews.clear();
         self.match_preview_queue.clear();
@@ -576,14 +602,13 @@ impl erika::Commands for ErikaEngine {
     }
 
     fn open_file(&mut self, source: MediaSource) -> Result<(), CommandError> {
-        let title = self.source_name(&source);
-        let (file, fingerprint) = self.identify(&source);
-        let (start, progress) = self.saved_position(file);
-        self.start(title, PlayingNote::LocalFile, no_picture(), progress);
-        self.file = file;
-        self.prepare_queue(&source);
-        self.load(Some(source.clone()), start);
-        self.recognize(&source, fingerprint);
+        self.open_file_from(source, bern::current_entry());
+        Ok(())
+    }
+
+    #[cfg(feature = "bern-module-library")]
+    fn open_library_file(&mut self, source: MediaSource, title: String) -> Result<(), CommandError> {
+        self.open_file_named(source, Some(title), bern::current_entry());
         Ok(())
     }
 
@@ -731,7 +756,7 @@ impl erika::Commands for ErikaEngine {
         };
         self.start(
             without_extension(&recent.name),
-            PlayingNote::LocalFile,
+            recent.source.as_ref().map(player::source_note).unwrap_or(PlayingNote::LocalFile),
             recent.still,
             progress,
         );
@@ -765,6 +790,40 @@ impl erika::Commands for ErikaEngine {
         self.state.paused = false;
         self.state.player.panel = false;
         self.unload();
+        Ok(())
+    }
+
+    fn play_media(&mut self, media: String, source: MediaSource, position: f64, from_stage: bool) -> Result<(), CommandError> {
+        if !position.is_finite() || position<0. {
+            return Err(CommandError::new("invalid_time","播放位置不正确"));
+        }
+        let (file,fingerprint)=self.identify(&source);
+        let file=file.ok_or_else(||CommandError::new("unknown_file","没有这条媒体文件"))?;
+        let binding=self.db.catalog_binding(file).map_err(|e|CommandError::new(e.code,e.message))?
+            .ok_or_else(||CommandError::new("stale_binding","文件的作品关联已更改"))?;
+        let mut start=position;
+        if !media.is_empty() {
+            let id=erika_catalog::MediaId::parse(&media).map_err(|e|CommandError::new("invalid_media",e.message))?;
+            let node=self.db.catalog_node(&id).map_err(|e|CommandError::new(e.code,e.message))?
+                .ok_or_else(||CommandError::new("unknown_media","没有这条影片或分集"))?;
+            let item=binding.items.iter().find(|i|i.media==node.id)
+                .filter(|_|binding.has_item_positions())
+                .ok_or_else(||CommandError::new("stale_binding","文件的分集关联已更改"))?;
+            let begin=item.start_seconds.unwrap_or(0.);
+            if start<begin || binding.item_end(item).is_some_and(|end|start>=end) {start=begin;}
+        } else if binding.items.is_empty() {
+            return Err(CommandError::new("stale_binding","文件的作品关联已更改"));
+        }
+        let entering=!(self.state.playing && self.state.expanded);
+        self.start(self.source_name(&source),player::source_note(&source),no_picture(),0.);
+        if entering {self.state.player.flies_in=from_stage;self.state.player.arriving=from_stage;}
+        self.file=Some(file);
+        self.state.elapsed=start;
+        self.prepare_queue(&source);
+        // The caller selected a canonical chapter. Saved progress must never
+        // replace its absolute timestamp (including when duration is unknown).
+        self.load(Some(source.clone()),start);
+        self.recognize(&source,fingerprint);
         Ok(())
     }
 
@@ -847,7 +906,7 @@ impl erika::Commands for ErikaEngine {
     }
 
     #[cfg(feature = "bern-module-library")]
-    fn open_library_show(&mut self, id: i64, home: bool) -> Result<(), CommandError> {
+    fn open_library_show(&mut self, id: String, home: bool) -> Result<(), CommandError> {
         #[cfg(feature = "bern-module-anime")]
         if home {
             erika_anime_protocol::anime::calls::open(id);
@@ -1010,6 +1069,9 @@ impl erika::Commands for ErikaEngine {
     fn set_player_number(&mut self, key: String, value: f64) -> Result<(), CommandError> {
         self.player_number(&key, value)
     }
+    fn preview_player_volume(&mut self, value: f64) -> Result<(), CommandError> {
+        self.preview_volume(value)
+    }
     fn set_skip_intro(&mut self, value: bool) -> Result<(), CommandError> {
         self.state.player.skip_intro = value;
         self.db
@@ -1023,25 +1085,44 @@ impl erika::Commands for ErikaEngine {
     }
     fn show_matching(&mut self, open: bool) -> Result<(), CommandError> {
         self.require_playing()?;
+        if open { self.capture_match_revisions()?; }
         self.state.matching.open = open;
         Ok(())
+    }
+    fn set_matching_target(&mut self, target: MatchingTarget) -> Result<(), CommandError> {
+        self.require_playing()?;
+        self.reset_match_picker(target);
+        self.capture_match_revisions()
     }
     fn search_matching(&mut self, query: String) -> Result<(), CommandError> {
         self.search_match(query)
     }
-    fn choose_match_show(&mut self, id: i64) -> Result<(), CommandError> {
+    fn choose_match_show(&mut self, id: String) -> Result<(), CommandError> {
         self.choose_show(id)
     }
+    fn choose_match_season(&mut self, id: String) -> Result<(), CommandError> {
+        self.choose_catalog_season(id)
+    }
     fn back_to_match_results(&mut self) -> Result<(), CommandError> {
+        self.search_revision += 1;
+        self.match_previews_active = 0;
+        self.match_preview_queue.clear();
         self.state.matching.selected = None;
         self.state.matching.episodes.clear();
+        self.state.matching.seasons.clear();
+        self.state.matching.season.clear();
         self.state.matching.error.clear();
         self.state.matching.loading = false;
+        self.catalog_picker.work = None;
+        self.catalog_picker.season = None;
         self.match_details = None;
         Ok(())
     }
-    fn confirm_match_episode(&mut self, id: i64) -> Result<(), CommandError> {
+    fn confirm_match_episode(&mut self, id: String) -> Result<(), CommandError> {
         self.confirm_episode(id)
+    }
+    fn block_media_match(&mut self) -> Result<(), CommandError> {
+        self.block_catalog_match()
     }
     fn send_danmaku(&mut self, text: String) -> Result<(), CommandError> {
         self.require_playing()?;
@@ -1219,10 +1300,14 @@ impl erika::Commands for ErikaEngine {
 impl ErikaEngine {
     /// Play the web address `link` under `title`.
     pub(crate) fn play_link(&mut self, link: &str, title: String) {
+        self.play_link_from(link, title, Vec::new(), bern::current_entry());
+    }
+
+    pub(crate) fn play_link_from(&mut self, link: &str, title: String, headers: Vec<(String, String)>, entry: Option<bern::Entry>) {
         self.start(title, PlayingNote::Link, no_picture(), 0.0);
         let source = MediaSource::new(link);
         self.prepare_queue(&source);
-        self.load(Some(source), 0.0);
+        self.load_transport(Some(source), 0.0, headers, entry);
     }
 }
 
@@ -1238,6 +1323,7 @@ impl erika::Engine for ErikaEngine {
             self.take_bangumi_results();
             self.check_bangumi();
         }
+        self.refresh_playing_catalog();
         self.take_found();
         #[cfg(feature = "bern-module-account")]
         self.renew_when_old();

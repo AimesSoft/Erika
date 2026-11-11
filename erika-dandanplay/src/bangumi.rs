@@ -80,7 +80,12 @@ fn request(path: &str, body: Option<Value>) -> Result<Value> {
             None => agent.get(&url).header("Accept", "application/json").call(),
         };
         let text = response
-            .and_then(|mut r| r.body_mut().read_to_string())
+            .and_then(|mut r| {
+                r.body_mut()
+                    .with_config()
+                    .limit(8 * 1024 * 1024)
+                    .read_to_string()
+            })
             .map_err(|_| Error::new("暂时连不上 Bangumi"))?;
         serde_json::from_str(&text).map_err(|_| Error::new("Bangumi 数据格式不正确"))
     }
@@ -125,8 +130,32 @@ fn anime_id(value: &Value) -> Option<i64> {
     local_id(value["id"].as_i64()?)
 }
 
-pub fn season() -> Result<Vec<Intro>> {
-    parse_calendar(&request("/calendar", None)?)
+async fn read(path: &str) -> Result<Value> {
+    let response = erika_catalog::http::get(
+        &format!("https://api.bgm.tv{path}"),
+        &[
+            ("Accept", "application/json"),
+            ("User-Agent", &user_agent()),
+        ],
+        std::time::Duration::from_secs(10),
+        8 * 1024 * 1024,
+        false,
+    )
+    .await
+    .map_err(|_| Error::new("暂时连不上 Bangumi"))?;
+    if !(200..300).contains(&response.status) {
+        return Err(Error::new(format!(
+            "Bangumi 请求失败（{}）",
+            response.status
+        )));
+    }
+    response
+        .json()
+        .map_err(|_| Error::new("Bangumi 数据格式不正确"))
+}
+
+pub async fn season() -> Result<Vec<Intro>> {
+    parse_calendar(&read("/calendar").await?)
 }
 
 fn parse_calendar(body: &Value) -> Result<Vec<Intro>> {
@@ -196,6 +225,45 @@ fn parse_search(body: &Value) -> Result<Vec<Found>> {
             })
         })
         .collect())
+}
+
+/// Public identity evidence only. Images and descriptions shown by the app
+/// come from TMDB; this endpoint does not use the website login cookie.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Subject {
+    pub id: i64,
+    pub titles: Vec<String>,
+    pub date: String,
+    pub rating: f64,
+}
+
+pub async fn subject(subject: i64) -> Result<Subject> {
+    if local_id(subject).is_none() {
+        return Err(Error::new("无效的 Bangumi 条目"));
+    }
+    let body = read(&format!("/v0/subjects/{subject}")).await?;
+    parse_subject(subject, &body)
+}
+
+fn parse_subject(subject: i64, body: &Value) -> Result<Subject> {
+    if anime_id(body).and_then(subject_id) != Some(subject) {
+        return Err(Error::new("未找到对应的 Bangumi 动画条目"));
+    }
+    let mut titles = Vec::new();
+    for name in [text(body, "name_cn"), text(body, "name")] {
+        if !name.is_empty() && !titles.iter().any(|value| value == name) {
+            titles.push(name.to_owned());
+        }
+    }
+    Ok(Subject {
+        id: subject,
+        titles,
+        date: text(body, "date").into(),
+        rating: body["rating"]["score"]
+            .as_f64()
+            .filter(|n| (0.0..=10.0).contains(n))
+            .unwrap_or_default(),
+    })
 }
 
 pub fn details(subject: i64) -> Result<Details> {
@@ -297,6 +365,25 @@ fn parse_details(subject: i64, body: &Value) -> Result<Details> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn public_subject_evidence_validates_identity_without_fabricating_episode_ids() {
+        let body = json!({"id":42,"type":2,"name":"Original","name_cn":"中文", "date":"2024-02-29","rating":{"score":8.3}});
+        let subject = parse_subject(42, &body).unwrap();
+        assert_eq!(subject.titles, ["中文", "Original"]);
+        assert_eq!(subject.date, "2024-02-29");
+        assert_eq!(subject.rating, 8.3);
+        assert!(parse_subject(43, &body).is_err());
+        assert!(parse_subject(42, &json!({"id":42,"type":1})).is_err());
+        assert!(parse_subject(42, &json!({"id":42,"type":2,"nsfw":true})).is_err());
+        let subject = parse_subject(
+            42,
+            &json!({"id":42,"type":2,"name":"Same","name_cn":"Same"}),
+        )
+        .unwrap();
+        assert_eq!(subject.titles, ["Same"]);
+        assert!(subject.date.is_empty());
+    }
 
     #[test]
     fn ids_do_not_overlap_other_providers_or_lose_web_precision() {

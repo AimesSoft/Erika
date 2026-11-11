@@ -149,15 +149,57 @@ var net = {
     }
     var id = __erika.next++;
     return new Promise(function (resolve, reject) {
-      __erika.waiting[id] = { resolve: resolve, reject: reject };
+      __erika.waiting[id] = { resolve: resolve, reject: reject, kind: 'network' };
       __host.call('netFetch', [id, String(url), options || {}]);
     });
   },
 };
 
-// Erika's own: the shows of the library (`library.read`), and marking an
-// episode watched (`library.write`).
+function __erikaCatalogueValue(response) {
+  if (!response || !response.ok) {
+    var info = response && response.error || { code: 'invalid', message: '媒体库没有返回结果' };
+    var error = new Error(info.message);
+    error.code = info.code;
+    throw error;
+  }
+  return response.value;
+}
+function __erikaLibraryRequest(permission, method, input) {
+  if (!__host.has(permission)) {
+    var error = new Error('插件没有声明 ' + permission + ' 权限');
+    error.code = 'permission_denied';
+    return Promise.reject(error);
+  }
+  var id = __erika.next++;
+  return new Promise(function (resolve, reject) {
+    __erika.waiting[id] = { resolve: resolve, reject: reject, kind: 'library' };
+    __host.call('libraryRequest', [id, method, input]);
+  });
+}
+
+// V2 operations resolve only after the host validates and completes the request.
+// The two numeric v1 methods below keep their DDP namespace.
 var library = {
+  apiVersion: 2,
+  capabilities: ['media.read', 'media.context', 'media.watched', 'catalogue.apply', 'catalogue.undo', 'sources.import', 'sources.pages', 'sources.status'],
+  registerSource: function (descriptor) { return __erikaLibraryRequest('library.sources', 'registerSource', descriptor); },
+  beginScan: function (sourceId) { return __erikaLibraryRequest('library.sources', 'beginScan', {source: sourceId}); },
+  upsertItems: function (scanId, items, page) { return __erikaLibraryRequest('library.sources', 'upsertItems', {scan: scanId, items: items, page: page}); },
+  finishScan: function (scanId, result) { return __erikaLibraryRequest('library.sources', 'finishScan', {scan: scanId, complete: result.complete, pages: result.pages}); },
+  getSourceItems: function (sourceId, options) { options = options || {}; return __erikaLibraryRequest('library.sources', 'getSourceItems', {source: sourceId, cursor: options.cursor, limit: options.limit}); },
+  getSourceItem: function (reference) { return __erikaLibraryRequest('library.sources', 'getSourceItem', reference); },
+  getSourceStatus: function (reference) { return __erikaLibraryRequest('library.sources', 'getSourceStatus', reference); },
+  getMediaContext: function () {
+    if (!__host.has('library.read')) return null;
+    return __erikaCatalogueValue(__erika.snapshot['library.mediaContext']);
+  },
+  getMedia: function (query) { return __erikaLibraryRequest('library.read', 'getMedia', query); },
+  getFiles: function (mediaId) { return __erikaLibraryRequest('library.read', 'getFiles', mediaId); },
+  getChildren: function (mediaId) { return __erikaLibraryRequest('library.read', 'getChildren', mediaId); },
+  getWatched: function (mediaId) { return __erikaLibraryRequest('library.read', 'getWatched', mediaId); },
+  setWatched: function (decision) { return __erikaLibraryRequest('library.write', 'setWatched', decision); },
+  apply: function (edit) { return __erikaLibraryRequest('library.write', 'apply', edit); },
+  undo: function (change) { return __erikaLibraryRequest('library.write', 'undo', change); },
   getShows: function () {
     if (!__host.has('library.read')) return [];
     return __erika.snapshot.library || [];
@@ -260,7 +302,9 @@ function __erikaMessage(error) {
 function __erikaRun(tag, body) {
   try {
     var value = body();
+    var pending = false;
     if (value && typeof value.then === 'function') {
+      pending = true;
       value.then(
         function (result) {
           __host.call('__later', [tag, result === undefined ? null : result, null]);
@@ -271,7 +315,9 @@ function __erikaRun(tag, body) {
       );
       value = null;
     }
-    return __erikaReply(value, null);
+    var reply = __erikaReply(value, null);
+    reply.pending = pending;
+    return reply;
   } catch (error) {
     return __erikaReply(null, __erikaMessage(error));
   }
@@ -295,6 +341,9 @@ function __erikaSettle(id, response, error, snapshot) {
   if (waiting) {
     if (error != null) {
       waiting.reject(new Error(error));
+    } else if (waiting.kind === 'library') {
+      try { waiting.resolve(__erikaCatalogueValue(response)); }
+      catch (failure) { waiting.reject(failure); }
     } else {
       response.json = function () {
         return JSON.parse(response.body);

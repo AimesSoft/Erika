@@ -6,7 +6,7 @@ use crate::Fingerprint;
 
 /// Which file a record is about on any device: its fingerprint, or the id
 /// a media server gave it.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub enum FileKey {
     Hash { md5: String, size: u64 },
     Item(String),
@@ -38,6 +38,14 @@ impl FileKey {
             size: size.parse().ok()?,
         })
     }
+}
+
+/// Device-local settings reserved for the remote library's credentials.
+/// Sync must carry these by stable source identity, never by this row id.
+pub const DANDANPLAY_SOURCE_SETTINGS: &str = "library.dandanplay.";
+
+pub fn dandanplay_token_setting(source: i64) -> String {
+    format!("{DANDANPLAY_SOURCE_SETTINGS}{source}.token")
 }
 
 /// A place the library scans.

@@ -2,7 +2,9 @@
 
 界面设计见 [design/index.html](../design/index.html)，交互原型见 [design/app.html](../design/app.html)。这里记录用 Bern 实现时的技术决定。
 
-依赖获取及本地源码联调见 [Cargo 依赖与本地联调](dependencies.md)：远程构建使用 crates.io 上的 Bern 与固定 Git 提交的 liberika，本机通过忽略入库的 `.cargo/config.toml` 使用本地 Bern/liberika。下文的 `bern` 是用 Cargo 安装的 Bern 构建工具，与 Erika 依赖的 Bern 同一版本，安装方法见[构建工具](dependencies.md#构建工具-bern)。
+依赖获取及本地源码联调见 [Cargo 依赖与本地联调](dependencies.md)：远程构建使用固定 Git 提交的 Bern 与 liberika，本机通过忽略入库的 `.cargo/config.toml` 使用本地 Bern/liberika。下文的 `bern` 是用 Cargo 安装的 Bern 构建工具，与 Erika 依赖的 Bern 同一版本，安装方法见[构建工具](dependencies.md#构建工具-bern)。
+
+实施中：[TMDB 主媒体库：设计与实现方案](tmdb-library-design.md)（2026-11-09）——包含季集/电影身份、弹幕解耦、当前格式初始化与同步，以及 Jellyfin 插件宿主契约。只初始化当前格式，不提供旧库迁移；完整五端验收尚未完成。
 
 ## 已定的决定
 
@@ -116,7 +118,7 @@ cargo run --manifest-path "$ERIKA_LIBERIKA_ROOT/Cargo.toml" -p xtask -- \
 - **进度跟文件，看过跟剧集**：观看进度存在文件上，换个地方打开同一个视频会接着播；「最近播放」记地址和截图，截图在缓存文件夹的 `stills/`。
 - **缓存放文件**：新番列表（`dandanplay-season.json`）和 bangumi-data 的播出时刻（`bangumi-schedule.json`）在缓存文件夹，下次启动立刻显示，再到后台刷新。
 - **令牌进钥匙串**：弹弹play 的令牌存在系统凭据库（`bern::secrets`），数据库里只有用户名和昵称；三周后自动续期（`GET /api/v2/login/renew`，POST 会被回 405）。昵称取登录与续期回答里和令牌并列的 `screenName`；还以登录名为昵称的账号启动时续期一次，顺带取回昵称。
-- 外壳与每个模块各开一个连接，迁移按版本号只跑一次。浏览器没有数据库文件，只保留当次会话。
+- 外壳与每个模块各开一个连接。2026-11-09 起，空数据库一次性初始化当前格式；非当前格式明确拒绝，不执行迁移、不修改原文件。浏览器没有数据库文件，只保留当次会话。
 
 弹弹play 的代码从 NipaPlay 移植（`erika-dandanplay/`）：请求经 NipaPlay 的网关（香港 `nipaplay.aimes-soft.com` 优先，失败时用国内备用），签名与登录哈希与 NipaPlay 相同，网关替换 AppSecret；除登录外都要带令牌。
 

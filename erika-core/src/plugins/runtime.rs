@@ -6,10 +6,11 @@
 use super::pack::Pack;
 use bern::script::{Context, Evaluation, Value};
 use serde_json::json;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context as TaskContext, Poll, Wake, Waker};
 
 const HOST: &str = include_str!("host.js");
@@ -52,7 +53,10 @@ pub fn engine_waker() -> Waker {
 }
 
 pub struct Runtime {
+    pub(super) instance: u64,
+    pub(super) fetches: HashMap<u64, super::http::Pending>,
     context: Context,
+    wake: Waker,
     running: VecDeque<(Evaluation, Purpose)>,
 }
 
@@ -71,7 +75,10 @@ impl Runtime {
             "version": pack.version,
             "permissions": pack.permissions,
         });
-        let mut source = format!("var __erikaConfig = {config};\n{HOST}\n{}\n", liberika_plugin::PRELUDE);
+        let mut source = format!(
+            "var __erikaConfig = {config};\n{HOST}\n{}\n",
+            liberika_plugin::PRELUDE
+        );
         for required in requires {
             source.push_str(required);
             source.push_str("\n;\n");
@@ -95,8 +102,12 @@ impl Runtime {
              };\n",
         );
         source.push_str(&format!("__erikaLoad({snapshot});\n"));
+        static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(1);
         let mut runtime = Runtime {
+            instance: NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed),
+            fetches: HashMap::new(),
             context,
+            wake: engine_waker(),
             running: VecDeque::new(),
         };
         runtime.eval(source, Purpose::Load);
@@ -106,6 +117,10 @@ impl Runtime {
     fn eval(&mut self, source: String, purpose: Purpose) {
         let evaluation = self.context.eval(source);
         self.running.push_back((evaluation, purpose));
+        // A catalogue reply can enqueue this after finished() has polled the
+        // previous batch. Schedule its first poll so completion can register a
+        // waker; otherwise nested awaits wait for an unrelated user action.
+        self.wake.wake_by_ref();
     }
 
     /// Call the plugin's handler `name` (see `__erikaPlugin`) with `arg`.
@@ -160,5 +175,93 @@ impl Runtime {
             }
         }
         done
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    struct QueueWake(mpsc::Sender<()>);
+    impl Wake for QueueWake {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            let _ = self.0.send(());
+        }
+    }
+
+    #[test]
+    fn nested_catalogue_awaits_finish_from_wakes_without_timer_ticks() {
+        let pack = Pack::from_pack(&json!({
+            "id":"test.wake", "name":"wake", "version":"1", "category":"tools",
+            "permissions":["library.read"]
+        }))
+        .unwrap();
+        let mut runtime = Runtime::start(
+            &pack,
+            r#"
+            async function pluginHandleUIAction() {
+                const media = await library.getMedia({id:'fixture'});
+                const children = await library.getChildren(media[0].id);
+                const watched = await library.getWatched(children[0].id);
+                return watched.watched ? 'done' : 'wrong';
+            }
+        "#,
+            &[],
+            &json!({}),
+        )
+        .unwrap();
+        let (tx, rx) = mpsc::channel();
+        let wake = Waker::from(Arc::new(QueueWake(tx)));
+        runtime.wake = wake.clone();
+        runtime.invoke(
+            "handleAction",
+            None,
+            &json!({}),
+            7,
+            Purpose::Action("test".into()),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut methods = Vec::new();
+        loop {
+            rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("new evaluations and completions must wake the owner");
+            for (_, result) in runtime.finished(&wake) {
+                let reply = result.unwrap();
+                assert!(reply["error"].is_null(), "{reply}");
+                for call in reply["calls"].as_array().unwrap() {
+                    let args = call[1].as_array().unwrap();
+                    match call[0].as_str().unwrap() {
+                        "libraryRequest" => {
+                            let method = args[1].as_str().unwrap();
+                            methods.push(method.to_owned());
+                            let answer = match method {
+                                "getMedia" => json!([{"id":"parent"}]),
+                                "getChildren" => json!([{"id":"child"}]),
+                                "getWatched" => json!({"watched":true}),
+                                _ => panic!("unexpected method {method}"),
+                            };
+                            runtime.settle(
+                                args[0].as_u64().unwrap(),
+                                Ok(json!({"ok":true,"value":answer})),
+                                &json!({}),
+                            );
+                        }
+                        "__later" => {
+                            assert_eq!(args[0], 7);
+                            assert_eq!(args[1], "done");
+                            assert!(args[2].is_null());
+                            assert_eq!(methods, ["getMedia", "getChildren", "getWatched"]);
+                            return;
+                        }
+                        other => panic!("unexpected call {other}"),
+                    }
+                }
+            }
+        }
     }
 }

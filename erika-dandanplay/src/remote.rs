@@ -180,6 +180,28 @@ pub fn stream_url(base: &str, item: &Item, token: &str) -> Option<String> {
     }
 }
 
+/// Resolve a credential-free stream address under this exact configured
+/// origin and proxy path. Never attach a saved key to arbitrary URLs, queries,
+/// redirects supplied by a caller, or another source's endpoint.
+pub fn authorized_stream(base: &str, stream: &str, token: &str) -> Option<String> {
+    let base = address(base).ok()?;
+    let mut url = Url::parse(stream).ok()?;
+    if url.as_str() != stream || url.query().is_some() || url.fragment().is_some() {
+        return None;
+    }
+    let prefix = format!("{base}/api/v1/stream/");
+    let selector = stream.strip_prefix(&prefix)?;
+    match selector.strip_prefix("id/") {
+        Some(id) if !id.is_empty() && !id.contains('/') => {}
+        None if selector.len() == 32 && selector.bytes().all(|b| b.is_ascii_hexdigit()) => {}
+        _ => return None,
+    }
+    if !token.is_empty() {
+        url.query_pairs_mut().append_pair("token", token);
+    }
+    Some(url.into())
+}
+
 /// The thumbnail the client took of `item`, a JPEG.
 pub fn image_url(base: &str, item: &Item, token: &str) -> Option<String> {
     if !item.id.is_empty() {
@@ -586,6 +608,30 @@ mod tests {
         assert!(!is_thumbnail("https://img.dandanplay.net/anime/14198.jpg"));
         assert!(comment_url("https://example.com/video.mp4").is_none());
         assert!(stream_url(base, &Item::default(), "").is_none());
+    }
+
+    #[test]
+    fn saved_keys_only_authorize_the_configured_stream_endpoint() {
+        let base = "https://media.example.invalid/proxy";
+        let logical = stream_url(base, &Item { id: "video-1".into(), ..Default::default() }, "").unwrap();
+        assert_eq!(authorized_stream(base, &logical, "new key").unwrap(), format!("{logical}?token=new+key"));
+        for foreign in [
+            "https://media.example.invalid/api/v1/stream/id/video-1",
+            "https://media.example.invalid/proxy/api/v1/stream/id/video-1?redirect=https://other.invalid",
+            "https://media.example.invalid/proxy/api/v1/stream/id/video-1#fragment",
+            "https://media.example.invalid/proxy/api/v1/stream/id/",
+            "https://media.example.invalid/proxy/api/v1/stream/id/../admin",
+            "https://media.example.invalid/proxy/api/v1/stream/id/%2e%2e/admin",
+            "https://media.example.invalid/proxy/api/v1/stream/id/video-1/extra",
+            "https://media.example.invalid/proxy/api/v1/image/id/video-1",
+            "https://other.invalid/proxy/api/v1/stream/id/video-1",
+            "https://media.example.invalid@other.invalid/proxy/api/v1/stream/id/video-1",
+            "http://media.example.invalid/proxy/api/v1/stream/id/video-1",
+        ] {
+            assert!(authorized_stream(base, foreign, "secret").is_none(), "{foreign}");
+        }
+        let hash = stream_url(base, &Item { hash: "a".repeat(32), ..Default::default() }, "").unwrap();
+        assert_eq!(authorized_stream(base, &hash, ""), Some(hash));
     }
 
     #[test]

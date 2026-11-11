@@ -7,6 +7,12 @@ use erika_protocol::erika::{self, *};
 
 #[bern::session]
 pub struct PlayerDraft {
+    pub touch_hidden: bool,
+    pub brightness: f64,
+    pub brightness_available: bool,
+    pub brightness_active: bool,
+    pub gesture_volume: f64,
+    pub volume_active: bool,
     pub match_query: String,
     pub text: String,
     pub volume_open: bool,
@@ -47,7 +53,7 @@ pub fn player(
             } else if window.short || window.compact || window.medium {
                 Stack(under_bars: true, variant: player_black) {
                     ScaleBox(width: 844, height: 390) {
-                        player_scene(app: app, players: players, windows: windows, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
+                        player_scene(app: app, players: players, windows: windows, shown: (if window.touch { !draft.touch_hidden } else { !window.idle || app.paused }) || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
                     }
                 }
             } else {
@@ -56,7 +62,7 @@ pub fn player(
                 // (`arriving`), and the picture must not move then.
                 Stack(under_bars: true, variant: player_black) {
                     ScaleBox(width: 1280, height: 800) {
-                        player_scene(app: app, players: players, windows: windows, shown: !window.idle || app.paused || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
+                        player_scene(app: app, players: players, windows: windows, shown: (if window.touch { !draft.touch_hidden } else { !window.idle || app.paused }) || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open)
                     }
                 }
             }
@@ -83,7 +89,40 @@ pub fn player_scene(
             Positioned(x: 0, y: 0, width: if window.short || window.compact || window.medium { 844 } else { 1280 }, height: if window.short || window.compact || window.medium { 390 } else { 800 }, bleed: true) {
                 // The controls hide a second after a mouse comes to rest on
                 // the picture, and stay while it is anywhere else.
-                Button(id: picture, label: tr! { "zh-Hans" => "播放或暂停画面", "en" => "Play or pause picture" }, variant: player_picture, idle_area: 1) {
+                if window.touch {
+                    Stack {
+                        player_picture_content(app: app, players: players)
+                        player_touch_gestures(app: app, half_width: if window.short || window.compact || window.medium { 422.0 } else { 640.0 }, hud_x: if window.short || window.compact || window.medium { 322.0 } else { 540.0 }, height: if window.short || window.compact || window.medium { 390.0 } else { 800.0 })
+                    }
+                } else {
+                    Button(id: picture, label: tr! { "zh-Hans" => "播放或暂停画面", "en" => "Play or pause picture" }, variant: player_picture, idle_area: 1) {
+                        player_picture_content(app: app, players: players)
+                    } => app.toggle_pause()
+                }
+            }
+            if shown {
+                Positioned(x: if window.short || window.compact || window.medium { 12 } else { 35 }, y: if window.short || window.compact || window.medium { 6 } else { 22 }, width: if window.short || window.compact || window.medium { 820 } else { 1210 }, height: 64, appear: top_bar_in, disappear: top_bar_out) {
+                    player_top(app: app)
+                }
+                Positioned(x: if window.short || window.compact || window.medium { 80 } else { 103 }, y: if window.short || window.compact || window.medium { 258.125 } else { 668.125 }, width: if window.short || window.compact || window.medium { 684 } else { 1074 }, height: 60, animate: hero, appear: controls_in, disappear: controls_out) {
+                    player_timeline(app: app, width: if window.short || window.compact || window.medium { 684.0 } else { 1074.0 }, end: if window.short || window.compact || window.medium { 698.0 } else { 1088.0 })
+                }
+                Positioned(x: if window.short || window.compact || window.medium { 12 } else { 35 }, y: if window.short || window.compact || window.medium { 316 } else { 726 }, width: if window.short || window.compact || window.medium { 820 } else { 1210 }, height: 64, animate: hero, appear: controls_in, disappear: controls_out) {
+                    player_controls(app: app, windows: windows)
+                }
+            }
+            if app.player.skip_kind != SkipKind::None {
+                Positioned(x: if window.short || window.compact || window.medium { 521 } else { 957 }, y: if window.short || window.compact || window.medium { 198 } else { 608 }, width: 220, height: 40) {
+                    player_skip_button(app: app)
+                }
+            }
+        }
+    }
+}
+
+#[component]
+pub fn player_picture_content(app: erika::Client, players: Players) -> impl View {
+    ui! {
                     Stack {
                         ScaleBox(width: 1280, height: 720) {
                             Image(source: app.still, width: 1280, height: 720, corner: 0, fit: cover, label: app.title, hero: frame, hero_key: app.title, animate: hero)
@@ -107,24 +146,62 @@ pub fn player_scene(
                             }
                         }
                     }
-                } => app.toggle_pause()
+    }
+}
+
+#[component]
+pub fn player_touch_gestures(app: erika::Client, half_width: f64, hud_x: f64, height: f64, #[session] draft: PlayerDraft) -> impl View {
+    ui! {
+        Stack(align: top_leading) {
+            ScreenBrightness(value: draft.brightness, available: draft.brightness_available)
+            if !draft.volume_active {
+                Watch(value: app.player.volume) => draft.gesture_volume.set(app.player.volume)
             }
-            if shown {
-                Positioned(x: if window.short || window.compact || window.medium { 12 } else { 35 }, y: if window.short || window.compact || window.medium { 6 } else { 22 }, width: if window.short || window.compact || window.medium { 820 } else { 1210 }, height: 64, appear: top_bar_in, disappear: top_bar_out) {
-                    player_top(app: app)
-                }
-                Positioned(x: if window.short || window.compact || window.medium { 80 } else { 103 }, y: if window.short || window.compact || window.medium { 258.125 } else { 668.125 }, width: if window.short || window.compact || window.medium { 684 } else { 1074 }, height: 60, animate: hero, appear: controls_in, disappear: controls_out) {
-                    player_timeline(app: app, width: if window.short || window.compact || window.medium { 684.0 } else { 1074.0 }, end: if window.short || window.compact || window.medium { 698.0 } else { 1088.0 })
-                }
-                Positioned(x: if window.short || window.compact || window.medium { 12 } else { 35 }, y: if window.short || window.compact || window.medium { 316 } else { 726 }, width: if window.short || window.compact || window.medium { 820 } else { 1210 }, height: 64, animate: hero, appear: controls_in, disappear: controls_out) {
-                    player_controls(app: app, windows: windows)
+            Positioned(x: 0, y: 0, width: half_width, height: height, bleed: true) {
+                if draft.brightness_available {
+                    Swipe(id: brightness_swipe, label: tr! { "zh-Hans" => "亮度", "en" => "Brightness" }, value: draft.brightness, min: 0, max: 1, distance: 300, continuous: true, active: draft.brightness_active) {
+                        player_touch_tap(app: app, width: half_width, height: height, right: false)
+                    }
+                } else {
+                    player_touch_tap(app: app, width: half_width, height: height, right: false)
                 }
             }
-            if app.player.skip_kind != SkipKind::None {
-                Positioned(x: if window.short || window.compact || window.medium { 521 } else { 957 }, y: if window.short || window.compact || window.medium { 198 } else { 608 }, width: 220, height: 40) {
-                    player_skip_button(app: app)
+            Positioned(x: half_width, y: 0, width: half_width, height: height, bleed: true) {
+                Swipe(id: volume_swipe, label: tr! { "zh-Hans" => "音量", "en" => "Volume" }, value: draft.gesture_volume, min: 0, max: 1, distance: 300, continuous: true, active: draft.volume_active) {
+                    player_touch_tap(app: app, width: half_width, height: height, right: true)
+                    OnCommit => app.set_player_number("volume", draft.gesture_volume)
+                } => app.preview_player_volume(draft.gesture_volume)
+            }
+            if draft.brightness_active || draft.volume_active {
+                Positioned(x: hud_x, y: 76, width: 200, height: 44) {
+                    Row(gap: 12, align: center) {
+                        if draft.brightness_active {
+                            Label(title: tr! { "zh-Hans" => "亮度", "en" => "Brightness" }, icon: "sun.max.fill", display: icon)
+                            Progress(label: tr! { "zh-Hans" => "亮度", "en" => "Brightness" }, value: draft.brightness, total: 1)
+                        } else {
+                            Label(title: tr! { "zh-Hans" => "音量", "en" => "Volume" }, icon: "speaker.wave.2", display: icon)
+                            Progress(label: tr! { "zh-Hans" => "音量", "en" => "Volume" }, value: draft.gesture_volume, total: 1)
+                        }
+                    }
                 }
             }
+        }
+    }
+}
+
+#[component]
+pub fn player_touch_tap(app: erika::Client, width: f64, height: f64, right: bool, #[session] draft: PlayerDraft) -> impl View {
+    ui! {
+        if right {
+            Button(id: right_touch_picture, label: tr! { "zh-Hans" => "显示或隐藏播放控制", "en" => "Show or hide playback controls" }, variant: player_picture) {
+                Canvas(width: width, height: height)
+                DoubleTap => app.toggle_pause()
+            } => draft.touch_hidden.set(!draft.touch_hidden)
+        } else {
+            Button(id: left_touch_picture, label: tr! { "zh-Hans" => "显示或隐藏播放控制", "en" => "Show or hide playback controls" }, variant: player_picture) {
+                Canvas(width: width, height: height)
+                DoubleTap => app.toggle_pause()
+            } => draft.touch_hidden.set(!draft.touch_hidden)
         }
     }
 }
@@ -133,24 +210,31 @@ pub fn player_scene(
 /// top half, out of reach, and the desktop's rows the bottom half, so the
 /// picture never steps back.
 #[component]
-pub fn player_tabletop(app: erika::Client, players: Players, windows: AppWindows) -> impl View {
+pub fn player_tabletop(app: erika::Client, players: Players, windows: AppWindows, #[session] draft: PlayerDraft) -> impl View {
     ui! {
         Column(gap: 0) {
             Stack(variant: player_black) {
                 if app.video {
                     Video(id: video_tabletop, player: players.video, label: app.title, controls: none, sizing: fill, fit: contain, corner: 0)
                 }
+                if window.touch {
+                    ScaleBox(width: 720, height: 405) {
+                        player_touch_gestures(app: app, half_width: 360.0, hud_x: 260.0, height: 405.0)
+                    }
+                }
             }
             ScaleBox(width: 720, height: 300) {
                 Stack(width: 720, height: 300, align: top_leading) {
-                    Positioned(x: 12, y: 6, width: 696, height: 64) {
-                        player_top(app: app)
-                    }
-                    Positioned(x: 80, y: 128, width: 560, height: 60) {
-                        player_timeline(app: app, width: 560.0, end: 574.0)
-                    }
-                    Positioned(x: 12, y: 196, width: 696, height: 64) {
-                        player_controls(app: app, windows: windows)
+                    if !window.touch || !draft.touch_hidden || app.matching.open || app.player.panel || draft.volume_open || draft.tracks_open || draft.rate_open || draft.enhancement_open || draft.danmaku_open || draft.composer_open {
+                        Positioned(x: 12, y: 6, width: 696, height: 64) {
+                            player_top(app: app)
+                        }
+                        Positioned(x: 80, y: 128, width: 560, height: 60) {
+                            player_timeline(app: app, width: 560.0, end: 574.0)
+                        }
+                        Positioned(x: 12, y: 196, width: 696, height: 64) {
+                            player_controls(app: app, windows: windows)
+                        }
                     }
                 }
             }
@@ -1066,7 +1150,8 @@ pub fn matching_show_summary(show: MatchingShow, detailed: bool) -> impl View {
 pub fn player_matching(app: erika::Client, #[session] draft: PlayerDraft) -> impl View {
     ui! {
         Column(gap: 14, width: if window.short || window.compact || window.medium { 340 } else { 420 }, padding: 8) {
-            Text(content: tr! { "zh-Hans" => "匹配弹幕", "en" => "Match danmaku" }, style: title3)
+            Text(content: tr! { "zh-Hans" => "绑定", "en" => "Binding" }, style: title3)
+            Picker(id: match_target, label: tr! { "zh-Hans" => "绑定对象", "en" => "Binding target" }, label_hidden: true, selected: app.matching.target, style: segmented) => app.set_matching_target(app.matching.target)
             Row(gap: 10) {
                 TextInput(id: match_query, label: tr! { "zh-Hans" => "作品名称", "en" => "Show title" }, label_hidden: true, prompt: tr! { "zh-Hans" => "输入作品名称", "en" => "Search by title" }, value: draft.match_query) => app.search_matching(draft.match_query)
                 Button(id: search, label: tr! { "zh-Hans" => "搜索", "en" => "Search" }, shape: capsule, height: 32, prominence: prominent) => app.search_matching(draft.match_query)
@@ -1081,7 +1166,15 @@ pub fn player_matching(app: erika::Client, #[session] draft: PlayerDraft) -> imp
                     ScrollView {
                         Column(gap: 12) {
                             Stack(variant: matching_detail) { Column(padding: 12) { matching_show_summary(show: show, detailed: true) } }
-                            Text(content: tr! { "zh-Hans" => "选择集数以匹配弹幕", "en" => "Choose an episode to match danmaku" }, style: caption, emphasis: secondary)
+                            ForEach(items: app.matching.seasons, key: id) |season| {
+                                Button(id: match_season, label: season.name, width: fill, shape: capsule, height: 34) {
+                                    Row(gap: 8) {
+                                        Text(content: season.name)
+                                        Spacer
+                                        if app.matching.season == season.id { Label(title: tr! { "zh-Hans" => "已选择", "en" => "Selected" }, icon: "checkmark", display: icon) }
+                                    }
+                                } => app.choose_match_season(season.id)
+                            }
                             if app.matching.loading { Progress(label: tr! { "zh-Hans" => "正在加载集数…", "en" => "Loading episodes…" }) }
                             ForEach(items: app.matching.episodes, key: id) |episode| {
                                 Button(id: match_episode, label: episode.name, width: fill, variant: matching_card, enabled: !app.matching.loading) {
@@ -1096,7 +1189,9 @@ pub fn player_matching(app: erika::Client, #[session] draft: PlayerDraft) -> imp
                     }
                 }
             } else {
-                Text(content: tr! { "zh-Hans" => "选择作品，再选择当前播放的集数", "en" => "Choose a show, then the episode you are watching" }, style: caption, emphasis: secondary)
+                if app.matching.target == MatchingTarget::Content {
+                    Button(id: match_none, label: tr! { "zh-Hans" => "不绑定媒体", "en" => "Leave media unbound" }, shape: capsule, height: 30) => app.block_media_match()
+                }
                 Stack(height: if window.short || window.compact || window.medium { 200 } else { 350 }) {
                     ScrollView {
                         Column(gap: 10) {

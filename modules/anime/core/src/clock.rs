@@ -77,6 +77,31 @@ pub fn date_of(days: i64) -> CalendarDate {
     CalendarDate::new(year, month, day)
 }
 
+/// Validate the date part before using it as identity evidence or displaying it.
+pub fn parse_date(text: &str) -> Option<CalendarDate> {
+    let text = text.trim().get(..10)?;
+    let mut parts = text.split('-');
+    let (year, month, day) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some()
+        || year.len() != 4
+        || month.len() != 2
+        || day.len() != 2
+        || ![year, month, day]
+            .iter()
+            .all(|s| s.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return None;
+    }
+    let date = CalendarDate::new(year.parse().ok()?, month.parse().ok()?, day.parse().ok()?);
+    if !(1..=9999).contains(&date.year)
+        || !(1..=12).contains(&date.month)
+        || !(1..=31).contains(&date.day)
+    {
+        return None;
+    }
+    (date_of(days_of(date)) == date).then_some(date)
+}
+
 /// Seconds since 1970 of an ISO 8601 UTC time such as
 /// `2023-09-29T14:00:00.000Z`, or of a date alone.
 pub fn parse_utc(text: &str) -> Option<i64> {

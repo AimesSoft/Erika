@@ -22,7 +22,7 @@ const RENEW_AFTER: i64 = 21 * 24 * 3600;
 pub(super) enum Done {
     SignedIn(erika_dandanplay::Account),
     Failed(String),
-    Renewed(erika_dandanplay::Renewed),
+    Renewed(String, erika_dandanplay::Renewed),
 }
 
 #[cfg(test)]
@@ -244,7 +244,7 @@ impl ErikaEngine {
 
     pub(super) fn restore_account(&mut self) {
         let (account, token) = restore(&self.db);
-        erika_dandanplay::set_token(token);
+        erika_dandanplay::set_account(&account.user, token);
         self.state.account_status = account;
         self.refresh_account_profile();
     }
@@ -347,7 +347,7 @@ impl ErikaEngine {
                     self.db.set_setting(NAME, Some(&account.screen_name));
                     self.db
                         .set_setting(RENEWED, Some(&erika_store::now().to_string()));
-                    erika_dandanplay::set_token(Some(account.token));
+                    erika_dandanplay::set_account(&account.user_name, Some(account.token));
                     self.state.account_status = Account {
                         signed_in: true,
                         prompt: false,
@@ -370,14 +370,14 @@ impl ErikaEngine {
                     self.state.account_status.busy = false;
                     self.state.account_status.error = message;
                 }
-                Done::Renewed(renewed) => {
-                    if !self.state.account_status.signed_in {
+                Done::Renewed(previous, renewed) => {
+                    if !self.state.account_status.signed_in || erika_dandanplay::token().as_deref() != Some(previous.as_str()) {
                         continue;
                     }
                     if bern::secrets::write(TOKEN, &renewed.token).is_ok() {
                         self.db
                             .set_setting(RENEWED, Some(&erika_store::now().to_string()));
-                        erika_dandanplay::set_token(Some(renewed.token));
+                        erika_dandanplay::set_account(&self.state.account_status.user, Some(renewed.token));
                     }
                     if let Some(name) = renewed
                         .screen_name
@@ -413,7 +413,7 @@ impl ErikaEngine {
             .set_setting(RENEWED, Some(&erika_store::now().to_string()));
         in_background(&self.account_inbox, move || {
             match erika_dandanplay::renew(&token) {
-                Ok(renewed) => vec![Done::Renewed(renewed)],
+                Ok(renewed) => vec![Done::Renewed(token, renewed)],
                 // An old token goes on working until dandanplay refuses it.
                 Err(error) => {
                     eprintln!("erika: renew the dandanplay token: {}", error.message);

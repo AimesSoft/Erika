@@ -5,6 +5,8 @@
 //! time or a folder at a time. Scanning and asking dandanplay run on other
 //! threads; the engine alone writes the database.
 
+mod catalog_api;
+mod catalog_view;
 mod matching;
 mod names;
 mod remote;
@@ -14,13 +16,12 @@ mod shared;
 mod tests;
 
 use bern::{CommandError, media::MediaSource, query::Answer};
-use erika_dandanplay::{Details, Found};
 use erika_library_protocol::library::{
     self, FileNote, LibraryCrumb, LibraryDir, LibraryFile, LibraryFilter, LibraryFilterChip,
     LibraryFolder, LibraryLetter, LibraryListing, LibraryNotice, LibraryPoster, LibrarySort,
     LibrarySourceRow, SourceContent, SourceStatus, State,
 };
-use erika_store::{Anime, Entry, Source};
+use erika_store::{Entry, Source};
 use matching::{Session, Video};
 use scan::{Matched, Scanned};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -38,10 +39,28 @@ enum Done {
     /// `editing`) under a name at an address, or for refreshing a source.
     RemoteMount(u64, i64, String, String, Result<remote::Snapshot, String>),
     RemoteRefresh(i64, String, Result<remote::Snapshot, String>),
-    Scan(i64, Scanned),
-    Match(i64, Matched),
-    Details(i64, Result<Details, erika_dandanplay::Error>),
-    Search(u64, Result<Vec<Found>, erika_dandanplay::Error>),
+    #[cfg(not(target_arch = "wasm32"))]
+    Scan(i64, ScanTicket, Scanned),
+    #[cfg(not(target_arch = "wasm32"))]
+    Match(i64, String, Matched),
+    Picker(matching::Reply),
+    Catalog(catalog_api::Reply),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScanTicket {
+    owner: String,
+    generation: i64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct MatchingRun {
+    id: String,
+    videos: std::collections::VecDeque<scan::Video>,
+    kind: Option<erika_catalog::Kind>,
+    done: usize,
+    total: usize,
 }
 
 /// What a source is busy with, and how far it is.
@@ -56,6 +75,11 @@ pub struct LibraryEngine {
     db: erika_store::Db,
     inbox: Arc<Mutex<Vec<Done>>>,
     busy: HashMap<i64, Busy>,
+    #[cfg(not(target_arch = "wasm32"))]
+    scans: HashMap<i64, ScanTicket>,
+    #[cfg(not(target_arch = "wasm32"))]
+    match_runs: HashMap<i64, MatchingRun>,
+    metadata: erika_catalog::Client,
     /// Sources whose folder could not be read at the last scan.
     missing: HashSet<i64>,
     /// Sources whose scan the user started, which say when it is done.
@@ -63,15 +87,13 @@ pub struct LibraryEngine {
     /// The folder being browsed: its source and the names leading to it.
     at: Option<(i64, Vec<String>)>,
     session: Option<Session>,
-    /// The details dandanplay gave this run, and the anime asked about.
-    details: HashMap<i64, Details>,
-    asked: HashSet<i64>,
     /// Whether the first wake, as the app starts, has come.
     started: bool,
     shared_request: u64,
     remote_request: u64,
     /// The file names of the videos shared devices serve, by address: their
     /// addresses name no file.
+    contents: HashMap<i64, catalog_view::Content>,
     names: HashMap<String, String>,
 }
 
@@ -120,25 +142,11 @@ fn initial(title: &str) -> String {
         .unwrap_or_else(|| "#".into())
 }
 
-fn poster(shelf: &erika_store::Shelf) -> LibraryPoster {
-    let (episodes, watched) = (shelf.episodes.max(1), shelf.watched);
-    LibraryPoster {
-        id: shelf.anime.dandanplay_id,
-        title: shelf.anime.title.clone(),
-        poster: MediaSource::new(shelf.anime.image.clone()),
-        initial: initial(&shelf.anime.title),
-        episodes,
-        watched,
-        rating: 0.0,
-        progress: watched as f64 / episodes as f64,
-        watching: watched > 0 && watched < episodes,
-        movie: false,
-    }
-}
+use catalog_view::poster;
 
 fn nothing() -> LibraryPoster {
     LibraryPoster {
-        id: 0,
+        id: String::new(),
         title: String::new(),
         poster: MediaSource::new(""),
         initial: String::new(),
@@ -172,22 +180,6 @@ fn content_text(content: &SourceContent) -> &'static str {
 /// videos are streamed rather than scanned.
 fn network(kind: &str) -> bool {
     kind == shared::KIND || kind == remote::KIND
-}
-
-/// Whether the user's own server recognizes what a source holds; dandanplay
-/// recognizes anime.
-fn by_server(content: &str) -> bool {
-    content != "anime"
-}
-
-/// Whether the service that knows `id` can be asked: the user's server for
-/// its (negative) ids, dandanplay with an account for the rest.
-fn reachable(id: i64) -> bool {
-    if erika_dandanplay::custom::is_ours(id) {
-        erika_dandanplay::custom::server().is_some()
-    } else {
-        erika_dandanplay::token().is_some()
-    }
 }
 
 fn no_folder() -> LibraryFolder {
@@ -257,36 +249,6 @@ fn natural(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
-fn note(entry: &Entry) -> FileNote {
-    match (&entry.matched, entry.file) {
-        (Some((anime, episode)), _) if entry.manual => FileNote::Manual {
-            anime: anime.title.clone(),
-            episode: episode.number,
-        },
-        (Some((anime, episode)), _) => FileNote::Matched {
-            anime: anime.title.clone(),
-            episode: episode.number,
-        },
-        (None, None) => FileNote::Unreadable,
-        (None, Some(_)) => FileNote::Unmatched,
-    }
-}
-
-fn file_row(entry: &Entry, name: &str, place: String) -> LibraryFile {
-    LibraryFile {
-        key: entry.key,
-        show: entry
-            .matched
-            .as_ref()
-            .map_or(0, |(anime, _)| anime.dandanplay_id),
-        name: name.to_string(),
-        note: note(entry),
-        matched: entry.matched.is_some(),
-        readable: entry.file.is_some(),
-        place,
-    }
-}
-
 impl Default for LibraryEngine {
     fn default() -> Self {
         let mut engine = Self {
@@ -307,7 +269,7 @@ impl Default for LibraryEngine {
                 posters: Vec::new(),
                 recent: Vec::new(),
                 has_recent: false,
-                opened: 0,
+                opened: String::new(),
                 sources: Vec::new(),
                 has_sources: false,
                 several_sources: false,
@@ -318,18 +280,23 @@ impl Default for LibraryEngine {
                 matching: matching::closed(),
                 notice: None,
                 notice_revision: 0,
+                catalog_result: None,
             },
             inbox: Arc::default(),
             busy: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            scans: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            match_runs: HashMap::new(),
+            metadata: erika_catalog::Client::built_in("zh-CN").expect("built-in metadata endpoint"),
             missing: HashSet::new(),
             announce: HashSet::new(),
             at: None,
             session: None,
-            details: HashMap::new(),
-            asked: HashSet::new(),
             started: false,
             shared_request: 0,
             remote_request: 0,
+            contents: HashMap::new(),
             names: HashMap::new(),
         };
         engine.load();
@@ -345,11 +312,28 @@ impl LibraryEngine {
 
     /// Everything as the database has it now.
     fn load(&mut self) {
-        let shelf = self.db.shelf(None);
-        self.state.posters = shelf.iter().map(poster).collect();
+        let entries = self.db.entries(None);
+        let shelf = match self.db.catalog_shelf(None).and_then(|shelf| {
+            self.load_contents(&entries)?;
+            Ok(shelf)
+        }) {
+            Ok(shelf) => shelf,
+            Err(error) => {
+                self.notify(LibraryNotice::Failed {
+                    reason: error.message,
+                });
+                return;
+            }
+        };
+        let images = self.db.catalog_images();
+        self.state.posters = shelf.iter().map(|s| poster(s, &images)).collect();
         let mut added = shelf.clone();
         added.sort_by(|a, b| b.added.cmp(&a.added));
-        self.state.recent = added.iter().take(RECENT).map(poster).collect();
+        self.state.recent = added
+            .iter()
+            .take(RECENT)
+            .map(|s| poster(s, &images))
+            .collect();
         self.state.has_recent = !self.state.recent.is_empty();
 
         let sources = self.db.sources();
@@ -388,13 +372,12 @@ impl LibraryEngine {
         self.state.has_sources = !sources.is_empty();
         self.state.several_sources = sources.len() > 1;
 
-        let entries = self.db.entries(None);
         let mut unmatched: Vec<LibraryFile> = Vec::new();
         for source in &sources {
             let root = root_of(source);
             for entry in entries
                 .iter()
-                .filter(|entry| entry.source == source.id && entry.matched.is_none())
+                .filter(|entry| entry.source == source.id && self.content(entry).is_none())
             {
                 let parts = root
                     .as_deref()
@@ -410,7 +393,7 @@ impl LibraryEngine {
                     )
                     .collect::<Vec<_>>()
                     .join(" › ");
-                unmatched.push(file_row(entry, &name, place));
+                unmatched.push(self.file_row(entry, &name, place));
             }
         }
         self.state.unmatched_count = unmatched.len() as i64;
@@ -429,7 +412,6 @@ impl LibraryEngine {
             .session
             .as_ref()
             .map_or_else(matching::closed, Session::view);
-        self.ask_posters(&shelf);
     }
 
     /// The folder being browsed: the folders in it with how many videos
@@ -457,11 +439,11 @@ impl LibraryEngine {
                 continue;
             }
             if parts.len() == path.len() + 1 {
-                files.push(file_row(entry, &parts[path.len()], String::new()));
+                files.push(self.file_row(entry, &parts[path.len()], String::new()));
             } else {
                 let counts = dirs.entry(parts[path.len()].clone()).or_default();
                 counts.0 += 1;
-                counts.1 += entry.matched.is_none() as i64;
+                counts.1 += self.content(entry).is_none() as i64;
             }
         }
         files.sort_by(|a, b| natural(&a.name, &b.name));
@@ -528,24 +510,9 @@ impl LibraryEngine {
         self.db.forget(id, &gone);
     }
 
-    /// A dandanplay client's library, read: its videos, and the thumbnails
-    /// of its shows as the posters of those dandanplay cannot be asked
-    /// about, as NipaPlay shows them.
+    /// Import file and provider identities; artwork is resolved from TMDB.
     fn import_remote(&mut self, id: i64, snapshot: &remote::Snapshot) {
         self.import_shared(id, &snapshot.videos);
-        for (anime, thumbnail) in &snapshot.thumbnails {
-            if let Some(known) = self.db.anime(*anime).filter(|known| {
-                !reachable(known.dandanplay_id)
-                    && (known.image.is_empty()
-                        || (erika_dandanplay::remote::is_thumbnail(&known.image)
-                            && known.image != *thumbnail))
-            }) {
-                self.db.remember_anime(&Anime {
-                    image: thumbnail.clone(),
-                    ..known
-                });
-            }
-        }
     }
 
     /// The name of the video at `url`: the last of `parts` leading to it
@@ -563,22 +530,16 @@ impl LibraryEngine {
         let mut dirs: BTreeMap<String, i64> = BTreeMap::new();
         let mut files = Vec::new();
         for entry in entries.iter().filter(|entry| entry.source == source.id) {
-            let Some((anime, episode)) = &entry.matched else {
-                // A dandanplay client's videos it did not match wait beside
-                // its shows, to be matched here.
-                if path.is_empty() && source.kind == remote::KIND {
-                    files.push(file_row(
-                        entry,
-                        &self.name_of(&entry.url, &[]),
-                        String::new(),
-                    ));
+            let Some(content) = self.content(entry) else {
+                if path.is_empty() {
+                    files.push(self.file_row(entry, &self.name_of(&entry.url, &[]), String::new()));
                 }
                 continue;
             };
             if path.is_empty() {
-                *dirs.entry(anime.title.clone()).or_default() += 1;
-            } else if path[0] == anime.title {
-                files.push(file_row(entry, &episode.title, String::new()));
+                *dirs.entry(content.root.title.clone()).or_default() += 1;
+            } else if path[0] == content.root.title {
+                files.push(self.file_row(entry, &self.name_of(&entry.url, &[]), String::new()));
             }
         }
         files.sort_by(|a, b| natural(&a.name, &b.name));
@@ -594,7 +555,7 @@ impl LibraryEngine {
             source: source.id,
             shared: true,
             dandanplay: source.kind == remote::KIND,
-            content: SourceContent::Anime,
+            content: content_of(&source.content),
             title: path.last().cloned().unwrap_or_else(|| source.name.clone()),
             location: source.location.clone(),
             crumbs,
@@ -652,6 +613,12 @@ impl LibraryEngine {
             self.notify(LibraryNotice::CannotScan);
             return;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.start_local_scan(id);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_local_scan(&mut self, id: i64) {
         let Some(root) = self
             .db
             .sources()
@@ -661,6 +628,17 @@ impl LibraryEngine {
         else {
             return;
         };
+        let owner = erika_catalog::MediaId::new().0;
+        let generation = match self.db.catalog_scan_begin(id, &owner, erika_store::now()) {
+            Ok(generation) => generation,
+            Err(error) => {
+                eprintln!("erika: cannot claim source scan: {error}");
+                self.announce.remove(&id);
+                return;
+            }
+        };
+        let ticket = ScanTicket { owner, generation };
+        self.scans.insert(id, ticket.clone());
         let known: HashMap<String, scan::Known> = self
             .db
             .seen(id)
@@ -678,55 +656,233 @@ impl LibraryEngine {
             .collect();
         self.busy.insert(id, Busy::Scanning { done: 0, total: 0 });
         in_background(&self.inbox, move |send| {
-            scan::scan(&root, &known, &|done| send(Done::Scan(id, done)))
+            scan::scan(&root, &known, &|done| {
+                send(Done::Scan(id, ticket.clone(), done))
+            })
         });
     }
 
-    /// Ask dandanplay about the videos of source `id` not matched yet and
-    /// not unlinked by the user, when an account is signed in.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn took_scan(&mut self, id: i64, ticket: &ScanTicket, event: Scanned) -> bool {
+        if self.scans.get(&id) != Some(ticket) {
+            return false;
+        }
+        let at = erika_store::now();
+        let mut changed = false;
+        let result: erika_store::catalog::Result<()> = (|| {
+            match event {
+                Scanned::Walked { urls } => {
+                    for paths in urls.chunks(10000) {
+                        self.db.catalog_scan_saw(
+                            id,
+                            &ticket.owner,
+                            ticket.generation,
+                            paths,
+                            at,
+                        )?;
+                    }
+                }
+                Scanned::Heartbeat | Scanned::Progress { .. } => {
+                    self.db
+                        .catalog_scan_saw(id, &ticket.owner, ticket.generation, &[], at)?;
+                    if let Scanned::Progress { done, total } = event {
+                        self.busy.insert(id, Busy::Scanning { done, total });
+                    }
+                }
+                Scanned::Read { found, fingerprint } => {
+                    self.db.catalog_scan_read(
+                        id,
+                        &ticket.owner,
+                        ticket.generation,
+                        &found.url,
+                        found.size,
+                        found.modified,
+                        fingerprint.as_ref(),
+                        at,
+                    )?;
+                    changed = true;
+                }
+                Scanned::Finished { failed } => {
+                    changed |= self.db.catalog_scan_finish(
+                        id,
+                        &ticket.owner,
+                        ticket.generation,
+                        !failed,
+                        at,
+                    )? > 0;
+                    self.scans.remove(&id);
+                    self.busy.remove(&id);
+                    if failed {
+                        self.missing.insert(id);
+                        if self.announce.remove(&id) {
+                            self.notify(LibraryNotice::FolderUnreadable);
+                        }
+                    } else {
+                        self.missing.remove(&id);
+                        self.start_matching(id);
+                    }
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            eprintln!("erika: source scan result rejected: {error}");
+            self.scans.remove(&id);
+            self.busy.remove(&id);
+            self.missing.insert(id);
+            if self.announce.remove(&id) {
+                self.notify(LibraryNotice::FolderUnreadable);
+            }
+        }
+        changed
+    }
+
+    /// Anonymous filename/TMDB resolution remains available without an account.
     fn start_matching(&mut self, id: i64) {
-        if self
-            .db
-            .sources()
-            .iter()
-            .any(|source| source.id == id && source.kind == shared::KIND)
-        {
-            return;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(error) = self.prepare_matching(id) {
+            eprintln!("erika: cannot prepare recognition: {error}");
+            self.announce.remove(&id);
         }
+        #[cfg(target_arch = "wasm32")]
+        self.finish(id);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn prepare_matching(&mut self, id: i64) -> erika_store::catalog::Result<()> {
         if self.busy.contains_key(&id) {
-            return;
+            return Ok(());
         }
-        let custom = self
-            .db
-            .sources()
-            .iter()
-            .find(|source| source.id == id)
-            .is_some_and(|source| by_server(&source.content));
-        let videos: Vec<(String, erika_store::Fingerprint)> = self
+        let Some(source) = self.db.sources().into_iter().find(|s| s.id == id) else {
+            return Ok(());
+        };
+        if source.kind == shared::KIND {
+            return Ok(());
+        }
+        let kind = match source.content.as_str() {
+            "movie" => Some(erika_catalog::Kind::Movie),
+            "series" => Some(erika_catalog::Kind::Tv),
+            _ => None,
+        };
+        let mut videos = std::collections::VecDeque::new();
+        let mut files = HashSet::new();
+        for seen in self
             .db
             .seen(id)
             .into_iter()
-            .filter(|seen| !seen.matched && !seen.decided)
-            .filter_map(|seen| Some((self.name_of(&seen.url, &[]), seen.fingerprint?)))
-            .collect();
-        let can_ask = if custom {
-            erika_dandanplay::custom::server().is_some()
-        } else {
-            erika_dandanplay::token().is_some()
+            .filter(|s| !s.matched && !s.decided)
+        {
+            let Some(fingerprint) = seen.fingerprint else {
+                continue;
+            };
+            let Some(file) = self.db.file_id(&fingerprint) else {
+                continue;
+            };
+            if !files.insert(file) {
+                continue;
+            }
+            let revision = self.db.catalog_revision(file)?;
+            let previous = self.db.catalog_file_job(file, erika_store::now())?;
+            if previous.as_ref().is_some_and(|job| {
+                job.input_revision == revision
+                    && (matches!(job.state.as_str(), "running" | "pending" | "failed")
+                        || (job.state == "retry" && job.next_attempt > erika_store::now()))
+            }) {
+                continue;
+            }
+            let name = self.name_of(&seen.url, &[]);
+            let directory = bern::files::file_path(&seen.url)
+                .and_then(|p| p.parent().map(|p| p.to_string_lossy().into_owned()))
+                .unwrap_or_default();
+            let job = match previous.filter(|j| j.state == "queued" && j.input_revision == revision)
+            {
+                Some(job) => job,
+                None => {
+                    let job = erika_store::catalog::CatalogJob {
+                        id: erika_catalog::MediaId::new().0,
+                        file: Some(file),
+                        input_revision: revision,
+                        phase: "recognition".into(),
+                        state: "queued".into(),
+                        payload: serde_json::json!({"name":name,"directory":directory,"kind":kind})
+                            .to_string(),
+                        error: String::new(),
+                        next_attempt: 0,
+                    };
+                    self.db.catalog_job_enqueue(&job)?;
+                    job
+                }
+            };
+            videos.push_back(scan::Video {
+                job: job.id,
+                danmaku_revision: self.db.catalog_danmaku_revision(file)?,
+                name,
+                directory,
+                fingerprint,
+            });
+        }
+        if videos.is_empty() {
+            self.finish(id);
+            return Ok(());
+        }
+        self.match_runs.insert(
+            id,
+            MatchingRun {
+                id: erika_catalog::MediaId::new().0,
+                total: videos.len(),
+                videos,
+                kind,
+                done: 0,
+            },
+        );
+        self.next_matching_batch(id);
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn next_matching_batch(&mut self, id: i64) {
+        let Some(run) = self.match_runs.get_mut(&id) else {
+            return;
         };
-        if videos.is_empty() || !can_ask {
+        let mut batch = Vec::new();
+        while batch.len() < scan::AT_ONCE {
+            let Some(video) = run.videos.pop_front() else {
+                break;
+            };
+            match self.db.catalog_job_transition(
+                &video.job,
+                "queued",
+                "running",
+                "recognition",
+                "",
+                0,
+            ) {
+                Ok(job) if job.state == "running" => batch.push(video),
+                Ok(_) => run.done += 1,
+                Err(error) => {
+                    eprintln!("erika: recognition claim skipped: {error}");
+                    run.done += 1;
+                }
+            }
+        }
+        if batch.is_empty() {
+            self.match_runs.remove(&id);
+            self.busy.remove(&id);
             self.finish(id);
             return;
         }
         self.busy.insert(
             id,
             Busy::Matching {
-                done: 0,
-                total: videos.len(),
+                done: run.done,
+                total: run.total,
             },
         );
+        let (generation, kind, client) = (run.id.clone(), run.kind, self.metadata.clone());
         in_background(&self.inbox, move |send| {
-            scan::match_videos(videos, custom, &|done| send(Done::Match(id, done)))
+            scan::match_videos(batch, &client, kind, &|event| {
+                send(Done::Match(id, generation.clone(), event))
+            });
         });
     }
 
@@ -738,70 +894,11 @@ impl LibraryEngine {
         let Some(source) = self.db.sources().into_iter().find(|source| source.id == id) else {
             return;
         };
-        if source.unmatched > 0
-            && by_server(&source.content)
-            && erika_dandanplay::custom::server().is_none()
-        {
-            self.notify(LibraryNotice::NoServer);
-        } else if source.unmatched > 0
-            && !by_server(&source.content)
-            && erika_dandanplay::token().is_none()
-        {
-            self.notify(LibraryNotice::SignInToMatch);
-        } else {
-            self.notify(LibraryNotice::Scanned {
-                name: source.name,
-                files: source.files,
-                unmatched: source.unmatched,
-            });
-        }
-    }
-
-    /// Ask dandanplay about anime `id`, once a run.
-    fn ask_details(&mut self, id: i64) {
-        if let Some(details) = self.details.get(&id).cloned() {
-            self.took_details(id, &details);
-            return;
-        }
-        if !self.asked.insert(id) || !reachable(id) {
-            return;
-        }
-        in_background(&self.inbox, move |send| {
-            send(Done::Details(id, erika_dandanplay::details(id)))
+        self.notify(LibraryNotice::Scanned {
+            name: source.name,
+            files: source.files,
+            unmatched: source.unmatched,
         });
-    }
-
-    /// Posters for the shows on the wall that have none: dandanplay's
-    /// matching names an anime but gives no picture of it.
-    fn ask_posters(&mut self, shelf: &[erika_store::Shelf]) {
-        for id in shelf
-            .iter()
-            .filter(|shelf| {
-                shelf.anime.image.is_empty()
-                    || erika_dandanplay::remote::is_thumbnail(&shelf.anime.image)
-            })
-            .map(|shelf| shelf.anime.dandanplay_id)
-            .collect::<Vec<_>>()
-        {
-            if !self.details.contains_key(&id) {
-                self.ask_details(id);
-            }
-        }
-    }
-
-    fn took_details(&mut self, asked: i64, details: &Details) {
-        if let Some(session) = self.session.as_mut() {
-            session.details(asked, details);
-        }
-        if let Some(known) = self.db.anime(details.anime_id).filter(|known| {
-            (known.image.is_empty() || erika_dandanplay::remote::is_thumbnail(&known.image))
-                && !details.image_url.is_empty()
-        }) {
-            self.db.remember_anime(&Anime {
-                image: details.image_url.clone(),
-                ..known
-            });
-        }
     }
 
     /// Take in what the other threads came back with.
@@ -922,82 +1019,50 @@ impl LibraryEngine {
                         }
                     }
                 }
-                Done::Scan(id, Scanned::Walked { urls }) => {
-                    let present: HashSet<String> = urls.into_iter().collect();
-                    let gone: Vec<String> = self
-                        .db
-                        .seen(id)
-                        .into_iter()
-                        .map(|seen| seen.url)
-                        .filter(|url| !present.contains(url))
-                        .collect();
-                    changed |= !gone.is_empty();
-                    self.db.forget(id, &gone);
-                    self.missing.remove(&id);
+                #[cfg(not(target_arch = "wasm32"))]
+                Done::Scan(id, ticket, event) => {
+                    changed |= self.took_scan(id, &ticket, event);
                 }
-                Done::Scan(id, Scanned::Progress { done, total }) => {
-                    self.busy.insert(id, Busy::Scanning { done, total });
-                }
-                Done::Scan(id, Scanned::Read { found, fingerprint }) => {
-                    self.db.saw(
-                        id,
-                        &found.url,
-                        found.size,
-                        found.modified,
-                        fingerprint.as_ref(),
-                    );
-                    changed = true;
-                }
-                Done::Scan(id, Scanned::Finished { failed }) => {
-                    self.busy.remove(&id);
-                    if failed {
-                        self.missing.insert(id);
-                        if self.announce.remove(&id) {
-                            self.notify(LibraryNotice::FolderUnreadable);
-                        }
-                    } else {
-                        self.start_matching(id);
-                    }
-                }
-                Done::Match(id, Matched::Progress { done, total }) => {
-                    self.busy.insert(id, Busy::Matching { done, total });
-                }
-                Done::Match(
-                    _,
-                    Matched::Episode {
-                        fingerprint,
-                        anime,
-                        episode,
-                    },
-                ) => {
-                    if let Some(file) = self.db.file_id(&fingerprint) {
-                        self.db.link_episode(file, &anime, &episode, false);
-                        changed = true;
-                    }
-                }
-                Done::Match(id, Matched::Finished) => {
-                    self.busy.remove(&id);
-                    self.finish(id);
-                }
-                Done::Details(id, Ok(details)) => {
-                    self.details.insert(id, details.clone());
-                    self.took_details(id, &details);
-                    changed = true;
-                }
-                Done::Details(id, Err(error)) => {
-                    eprintln!("erika: details of {id}: {}", error.message)
-                }
-                Done::Search(search, result) => {
-                    if let Some(session) = self
-                        .session
-                        .as_mut()
-                        .filter(|session| session.search == search)
+                #[cfg(not(target_arch = "wasm32"))]
+                Done::Match(id, generation, event) => {
+                    if !self
+                        .match_runs
+                        .get(&id)
+                        .is_some_and(|run| run.id == generation)
                     {
-                        session.searching = false;
-                        session.search_failed = result.is_err();
-                        session.results = result.unwrap_or_default().into_iter().take(8).collect();
+                        continue;
+                    }
+                    match event {
+                        Matched::Resolved {
+                            job,
+                            danmaku_revision,
+                            report,
+                        } => {
+                            match self
+                                .db
+                                .catalog_finish_resolution(&job, danmaku_revision, &report)
+                            {
+                                Ok(_) => changed = true,
+                                Err(error) => {
+                                    eprintln!("erika: recognition result rejected: {error}")
+                                }
+                            }
+                            if let Some(run) = self.match_runs.get_mut(&id) {
+                                run.done += 1;
+                                self.busy.insert(
+                                    id,
+                                    Busy::Matching {
+                                        done: run.done,
+                                        total: run.total,
+                                    },
+                                );
+                            }
+                        }
+                        Matched::Finished => self.next_matching_batch(id),
                     }
                 }
+                Done::Picker(reply) => self.take_picker(reply),
+                Done::Catalog(reply) => { changed |= self.take_api(reply); }
             }
         }
         self.load();
@@ -1006,76 +1071,81 @@ impl LibraryEngine {
         }
     }
 
-    /// The video with address `key` as the matching page takes it, where it
-    /// is, and whether its source is recognized by the user's own server.
-    fn video_of(&self, key: i64) -> Option<(Video, String, bool)> {
-        let entry = self
-            .db
-            .entries(None)
-            .into_iter()
-            .find(|entry| entry.key == key)?;
+    /// Capture both the address identity and the binding revision before any
+    /// network work. A subsequent scan or another editor invalidates the batch.
+    fn video_of(&self, key: i64) -> Option<(Video, String)> {
+        let entry = self.db.entries(None).into_iter().find(|e| e.key == key)?;
         let source = self
             .db
             .sources()
             .into_iter()
-            .find(|source| source.id == entry.source)?;
-        let custom = by_server(&source.content);
+            .find(|s| s.id == entry.source)?;
         let parts = root_of(&source)
-            .and_then(|root| parts(&root, &entry.url))
+            .and_then(|r| parts(&r, &entry.url))
             .unwrap_or_default();
         let name = self.name_of(&entry.url, &parts);
         let place = std::iter::once(source.name.clone())
             .chain(parts.iter().cloned())
             .collect::<Vec<_>>()
             .join(" › ");
+        let directory = parts
+            .get(parts.len().wrapping_sub(2))
+            .map(String::as_str)
+            .unwrap_or("");
+        let mut hints = erika_catalog::names::with_directory(&name, directory);
+        let (previous, revision) = match entry.file {
+            Some(f) => {
+                let revision = self.db.catalog_revision(f).ok()?;
+                let previous = self.db.catalog_binding(f).ok()?;
+                if previous.as_ref().is_some_and(|b| b.revision != revision) {
+                    return None;
+                }
+                (previous, revision)
+            }
+            None => (None, 0),
+        };
+        // A reliable existing canonical binding is a better preview than a name.
+        if let Some(content) = self.content(&entry) {
+            if content
+                .items
+                .iter()
+                .all(|n| n.kind == erika_catalog::Kind::Episode)
+                && content
+                    .items
+                    .iter()
+                    .all(|n| n.parent == content.items[0].parent)
+            {
+                hints.season = content.items[0].season_number;
+                hints.episodes = content
+                    .items
+                    .iter()
+                    .filter_map(|n| n.episode_number)
+                    .collect();
+            }
+        }
+        let current = match self.file_row(&entry, &name, String::new()).note {
+            FileNote::Content { title } => title,
+            _ => String::new(),
+        };
+        let address = entry.file.map(|file| erika_store::catalog::AddressCheck {
+            key,
+            source: entry.source,
+            url: entry.url.clone(),
+            file,
+        });
         Some((
             Video {
                 key,
                 name,
                 file: entry.file,
-                now: entry
-                    .matched
-                    .map(|(anime, episode)| (anime, episode.number)),
+                address,
+                revision,
+                hints,
+                previous,
+                current,
             },
             place,
-            custom,
         ))
-    }
-
-    /// Open matching: the episodes of its anime are asked for, or, when it
-    /// has none yet, dandanplay is searched by `words`.
-    fn begin(&mut self, session: Session, words: String) {
-        let chosen = session
-            .chosen
-            .as_ref()
-            .map(|chosen| chosen.anime.dandanplay_id);
-        self.session = Some(session);
-        match chosen {
-            Some(id) => self.ask_details(id),
-            None => self.search(words),
-        }
-    }
-
-    fn search(&mut self, text: String) {
-        let text = text.trim().to_string();
-        let Some(session) = self.session.as_mut() else {
-            return;
-        };
-        if text.is_empty() {
-            return;
-        }
-        session.search += 1;
-        session.searching = true;
-        session.search_failed = false;
-        let (search, custom) = (session.search, session.custom);
-        in_background(&self.inbox, move |send| {
-            let found = if custom {
-                erika_dandanplay::custom::search(&text)
-            } else {
-                erika_dandanplay::search(&text)
-            };
-            send(Done::Search(search, found))
-        });
     }
 
     fn with_session(&mut self, change: impl FnOnce(&mut Session)) {
@@ -1085,67 +1155,21 @@ impl LibraryEngine {
         self.load();
     }
 
-    /// Tell the user's server which episodes these files are, so their
-    /// fingerprints are enough next time, anywhere.
-    fn confirm_on_server(
+    fn listing(
         &self,
-        anime: &Anime,
-        links: &[(erika_store::FileId, erika_store::Episode)],
-    ) {
-        let names: HashMap<erika_store::FileId, String> = self
-            .session
-            .iter()
-            .flat_map(|session| session.videos.iter())
-            .filter_map(|video| Some((video.file?, video.name.clone())))
-            .collect();
-        let confirmed: Vec<(String, erika_store::Fingerprint, erika_store::Episode)> = links
-            .iter()
-            .filter_map(|(file, episode)| {
-                Some((
-                    names.get(file).cloned().unwrap_or_default(),
-                    self.db.fingerprint_of(*file)?,
-                    episode.clone(),
-                ))
-            })
-            .collect();
-        let anime = anime.clone();
-        in_background(&self.inbox, move |_| {
-            for (name, print, episode) in confirmed {
-                let done =
-                    erika_dandanplay::custom::confirm(&erika_dandanplay::custom::Confirmed {
-                        file_name: &name,
-                        md5: &print.md5,
-                        size: print.size,
-                        anime_id: anime.dandanplay_id,
-                        episode_id: episode.dandanplay_id,
-                        number: episode.number,
-                        anime_title: &anime.title,
-                        episode_title: &episode.title,
-                        image: &anime.image,
-                    });
-                if let Err(error) = done {
-                    eprintln!("erika: confirm {name} on the server: {}", error.message);
-                }
-            }
-        });
-    }
-
-    /// Tell the user's server to forget what file `file` was.
-    fn forget_on_server(&self, file: erika_store::FileId) {
-        if let Some(print) = self.db.fingerprint_of(file) {
-            in_background(&self.inbox, move |_| {
-                if let Err(error) = erika_dandanplay::custom::forget(&print.md5, print.size) {
-                    eprintln!("erika: forget a file on the server: {}", error.message);
-                }
-            });
-        }
-    }
-
-    fn listing(&self, source: i64, filter: LibraryFilter, sort: LibrarySort) -> LibraryListing {
+        source: i64,
+        filter: LibraryFilter,
+        sort: LibrarySort,
+    ) -> erika_store::catalog::Result<LibraryListing> {
+        let images = self.db.catalog_images();
         let mut posters: Vec<LibraryPoster> = if source == 0 {
             self.state.posters.clone()
         } else {
-            self.db.shelf(Some(source)).iter().map(poster).collect()
+            self.db
+                .catalog_shelf(Some(source))?
+                .iter()
+                .map(|s| poster(s, &images))
+                .collect()
         };
         let total = posters.len() as i64;
         let watching = posters.iter().filter(|p| p.watching).count() as i64;
@@ -1173,7 +1197,8 @@ impl LibraryEngine {
                 let target = posters
                     .iter()
                     .find(|p| p.initial == letter)
-                    .map_or(0, |p| p.id);
+                    .map(|p| p.id.clone())
+                    .unwrap_or_default();
                 LibraryLetter { letter, target }
             })
             .collect();
@@ -1190,7 +1215,7 @@ impl LibraryEngine {
             count,
         })
         .collect();
-        LibraryListing {
+        Ok(LibraryListing {
             filters,
             empty: posters.is_empty(),
             posters,
@@ -1206,7 +1231,7 @@ impl LibraryEngine {
                 .find(|row| row.id == source)
                 .map(|row| row.name.clone())
                 .unwrap_or_default(),
-        }
+        })
     }
 }
 
@@ -1218,14 +1243,17 @@ fn unknown_file() -> CommandError {
     CommandError::new("unknown_file", "unknown library file")
 }
 
-/// A number the user typed, when it is one above zero.
+/// A real TMDB episode may be numbered zero. Bound numeric input before arithmetic.
 fn typed(text: &str) -> Option<i64> {
-    text.trim().parse().ok().filter(|number| *number > 0)
+    text.trim()
+        .parse()
+        .ok()
+        .filter(|number| (0..=u32::MAX as i64).contains(number))
 }
 
 impl LibraryEngine {
     /// Open poster `id`, from the home page when `home`.
-    fn open_poster(&mut self, id: i64, home: bool) -> Result<(), CommandError> {
+    fn open_poster(&mut self, id: String, home: bool) -> Result<(), CommandError> {
         let show = self
             .state
             .posters
@@ -1234,23 +1262,57 @@ impl LibraryEngine {
             .cloned()
             .ok_or_else(|| CommandError::new("unknown_show", "unknown library show"))?;
         self.state.show = show;
-        self.state.opened = id;
+        self.state.opened = id.clone();
         library::emit::open_show(id, home);
         Ok(())
     }
 }
 
 impl library::Commands for LibraryEngine {
-    fn open(&mut self, id: i64) -> Result<(), CommandError> {
+    fn catalog_fetch(&mut self, request: String, reference: library::CatalogReference, season: Option<i64>) -> Result<(), CommandError> {
+        self.api_fetch(request, reference, season)
+    }
+    fn catalog_resolve(&mut self, request: String, file: i64, revision: i64, dry_run: bool) -> Result<(), CommandError> {
+        self.api_resolve(request, file, revision, dry_run)
+    }
+    fn catalog_bind(&mut self, request: String, bindings: Vec<library::CatalogBinding>, preview: bool) -> Result<(), CommandError> {
+        let batch = erika_store::catalog::CatalogBatch { bindings: catalog_api::input_bindings(bindings)?, ..Default::default() };
+        self.api_apply(request, batch, preview)
+    }
+    fn catalog_unbind(&mut self, request: String, file: i64, revision: i64, preview: bool) -> Result<(), CommandError> {
+        self.catalog_bind(request, vec![library::CatalogBinding { file, revision, decision: library::CatalogDecision::Blocked, items: vec![], evidence: "explicit unbind".into() }], preview)
+    }
+    fn catalog_bind_danmaku(&mut self, request: String, bindings: Vec<library::CatalogDanmaku>, preview: bool) -> Result<(), CommandError> {
+        let batch = erika_store::catalog::CatalogBatch { danmaku: catalog_api::input_danmaku(bindings)?, ..Default::default() };
+        self.api_apply(request, batch, preview)
+    }
+    fn catalog_map_provider(&mut self, request: String, mappings: Vec<library::CatalogMapping>, preview: bool) -> Result<(), CommandError> {
+        let batch = erika_store::catalog::CatalogBatch { links: catalog_api::input_mappings(mappings)?, ..Default::default() };
+        self.api_apply(request, batch, preview)
+    }
+    fn catalog_allow_auto(&mut self, file: i64, revision: i64) -> Result<(), CommandError> {
+        let revision = u64::try_from(revision).map_err(|_| CommandError::new("invalid", "版本不能为负数"))?;
+        self.db.catalog_allow_auto(file, revision).map_err(catalog_api::store_error)?;
+        self.load();
+        library::emit::files_changed();
+        Ok(())
+    }
+    fn catalog_undo(&mut self, change: String) -> Result<(), CommandError> {
+        self.db.catalog_undo(&change).map_err(catalog_api::store_error)?;
+        self.load();
+        library::emit::files_changed();
+        Ok(())
+    }
+    fn open(&mut self, id: String) -> Result<(), CommandError> {
         self.open_poster(id, false)
     }
 
-    fn open_recent(&mut self, id: i64) -> Result<(), CommandError> {
+    fn open_recent(&mut self, id: String) -> Result<(), CommandError> {
         self.open_poster(id, true)
     }
 
     fn close(&mut self) -> Result<(), CommandError> {
-        self.state.opened = 0;
+        self.state.opened.clear();
         Ok(())
     }
 
@@ -1264,7 +1326,6 @@ impl library::Commands for LibraryEngine {
             for source in self.db.sources() {
                 self.start_matching(source.id);
             }
-            self.asked.clear();
         }
         self.load();
         Ok(())
@@ -1474,6 +1535,11 @@ impl library::Commands for LibraryEngine {
             .find(|known| known.id == source)
             .ok_or_else(unknown_source)?;
         self.db.remove_source(source);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.scans.remove(&source);
+            self.match_runs.remove(&source);
+        }
         self.db.set_setting(&remote::token_setting(source), None);
         self.busy.remove(&source);
         self.missing.remove(&source);
@@ -1526,26 +1592,34 @@ impl library::Commands for LibraryEngine {
         Ok(())
     }
 
+    fn play_file(&mut self, key: i64) -> Result<(), CommandError> {
+        // Re-read the address rather than trusting an earlier visible row.
+        // Neither a provider episode nor a canonical binding is required.
+        let entry = self.db.entries(None).into_iter()
+            .find(|entry| entry.key == key && entry.file.is_some())
+            .ok_or_else(unknown_file)?;
+        let source = self.db.sources().into_iter().find(|source| source.id == entry.source)
+            .ok_or_else(unknown_file)?;
+        let parts = root_of(&source).and_then(|root| parts(&root, &entry.url)).unwrap_or_default();
+        let title = self.name_of(&entry.url, &parts);
+        library::emit::play_source(MediaSource::new(entry.url), title);
+        Ok(())
+    }
+
     fn assign(&mut self, key: i64) -> Result<(), CommandError> {
-        let (video, place, custom) = self.video_of(key).ok_or_else(unknown_file)?;
+        let (video, place) = self.video_of(key).ok_or_else(unknown_file)?;
         let words = names::search_words(&video.name);
-        let mut session = Session::one(video, place);
-        session.custom = custom;
+        let session = Session::one(video, place);
         self.begin(session, words);
         self.load();
         Ok(())
     }
 
     fn unlink(&mut self, key: i64) -> Result<(), CommandError> {
-        let (video, _, custom) = self.video_of(key).ok_or_else(unknown_file)?;
-        if let Some(file) = video.file {
-            if custom {
-                self.forget_on_server(file);
-            }
-            self.db.unlink(file);
-            self.notify(LibraryNotice::Unlinked);
-            library::emit::files_changed();
-        }
+        let (video, _) = self.video_of(key).ok_or_else(unknown_file)?;
+        self.block_content(&video)?;
+        self.notify(LibraryNotice::Unlinked);
+        library::emit::files_changed();
         self.load();
         Ok(())
     }
@@ -1558,10 +1632,9 @@ impl library::Commands for LibraryEngine {
             .iter()
             .map(|file| file.key)
             .collect();
-        let found: Vec<(Video, String, bool)> =
+        let found: Vec<(Video, String)> =
             keys.iter().filter_map(|key| self.video_of(*key)).collect();
-        let custom = found.iter().any(|(_, _, custom)| *custom);
-        let videos: Vec<Video> = found.into_iter().map(|(video, _, _)| video).collect();
+        let videos: Vec<Video> = found.into_iter().map(|(video, _)| video).collect();
         if videos.is_empty() {
             return Ok(());
         }
@@ -1574,8 +1647,7 @@ impl library::Commands for LibraryEngine {
             .collect::<Vec<_>>()
             .join(" › ");
         let words = names::search_words(&self.state.folder.title);
-        let mut session = Session::folder(videos, place);
-        session.custom = custom;
+        let session = Session::folder(videos, place);
         self.begin(session, words);
         self.load();
         Ok(())
@@ -1587,23 +1659,14 @@ impl library::Commands for LibraryEngine {
         Ok(())
     }
 
-    fn match_anime(&mut self, id: i64) -> Result<(), CommandError> {
-        let Some(found) = self.session.as_ref().and_then(|session| {
-            session
-                .results
-                .iter()
-                .find(|found| found.anime_id == id)
-                .cloned()
-        }) else {
-            return Ok(());
-        };
-        let anime = Anime {
-            dandanplay_id: found.anime_id,
-            title: found.anime_title,
-            image: found.image_url,
-        };
-        self.with_session(|session| session.choose(anime, found.episode_count));
-        self.ask_details(id);
+    fn match_work(&mut self, id: String) -> Result<(), CommandError> {
+        self.choose_work(id)?;
+        self.load();
+        Ok(())
+    }
+
+    fn match_season(&mut self, id: String) -> Result<(), CommandError> {
+        self.choose_season(id)?;
         self.load();
         Ok(())
     }
@@ -1639,7 +1702,7 @@ impl library::Commands for LibraryEngine {
     }
 
     fn match_number(&mut self, key: i64, text: String) -> Result<(), CommandError> {
-        self.with_session(|session| session.type_number(key, typed(&text)));
+        self.with_session(|session| session.type_number(key, text));
         Ok(())
     }
 
@@ -1654,60 +1717,19 @@ impl library::Commands for LibraryEngine {
     }
 
     fn match_confirm(&mut self) -> Result<(), CommandError> {
-        let Some((anime, links)) = self.session.as_ref().and_then(Session::links) else {
-            return Ok(());
-        };
-        let anime = Anime {
-            image: self
-                .db
-                .anime(anime.dandanplay_id)
-                .map(|known| known.image)
-                .filter(|image| !image.is_empty())
-                .unwrap_or(anime.image.clone()),
-            ..anime
-        };
-        if self.db.link_files(&anime, &links) {
-            if self.session.as_ref().is_some_and(|session| session.custom) {
-                self.confirm_on_server(&anime, &links);
-            }
-            let numbers: Vec<i64> = links.iter().map(|(_, episode)| episode.number).collect();
-            let (first, last) = (
-                numbers.iter().min().copied().unwrap_or(0),
-                numbers.iter().max().copied().unwrap_or(0),
-            );
-            self.notify(if links.len() == 1 {
-                LibraryNotice::MatchedOne {
-                    anime: anime.title.clone(),
-                    episode: first,
-                }
-            } else {
-                LibraryNotice::MatchedMany {
-                    count: links.len() as i64,
-                    anime: anime.title.clone(),
-                    first,
-                    last,
-                }
-            });
-            self.session = None;
-            library::emit::files_changed();
-        } else {
-            self.notify(LibraryNotice::MatchFailed);
-        }
+        self.confirm_content()?;
         self.load();
         Ok(())
     }
 
     fn match_unlink(&mut self) -> Result<(), CommandError> {
-        let file = self
+        if let Some(video) = self
             .session
             .as_ref()
-            .filter(|session| session.single)
-            .and_then(|session| session.videos[0].file);
-        if let Some(file) = file {
-            if self.session.as_ref().is_some_and(|session| session.custom) {
-                self.forget_on_server(file);
-            }
-            self.db.unlink(file);
+            .filter(|s| s.single)
+            .and_then(|s| s.videos.first())
+        {
+            self.block_content(video)?;
             self.notify(LibraryNotice::Unlinked);
             self.session = None;
             library::emit::files_changed();
@@ -1724,6 +1746,12 @@ impl library::Commands for LibraryEngine {
 }
 
 impl library::Queries for LibraryEngine {
+    fn catalog_inspect(&self, file: i64, answer: Answer<library::CatalogInspection>) { answer.send(self.api_inspect(file)); }
+    fn catalog_media(&self, id: String, answer: Answer<library::CatalogNode>) { answer.send(self.api_media(&id)); }
+    fn catalog_children(&self, id: String, answer: Answer<Vec<library::CatalogNode>>) { answer.send(self.api_children(&id)); }
+    fn catalog_search(&self, kind: library::CatalogKind, text: String, year: Option<i64>, page: i64, answer: Answer<library::CatalogSearch>) { self.api_search(kind, text, year, page, answer); }
+    fn catalog_job(&self, id: String, answer: Answer<library::CatalogJob>) { answer.send(self.api_job(&id)); }
+    fn catalog_receipt(&self, request: String, answer: Answer<library::CatalogReceipt>) { answer.send(self.api_receipt(&request)); }
     fn browse(
         &self,
         source: i64,
@@ -1731,7 +1759,10 @@ impl library::Queries for LibraryEngine {
         sort: LibrarySort,
         answer: Answer<LibraryListing>,
     ) {
-        answer.ok(self.listing(source, filter, sort));
+        answer.send(
+            self.listing(source, filter, sort)
+                .map_err(|e| CommandError::new(e.code, e.message)),
+        );
     }
 }
 

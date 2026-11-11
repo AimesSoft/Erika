@@ -29,11 +29,10 @@ pub(crate) fn send(
     let agent = agent();
     let first = PREFERRED.load(Ordering::Relaxed) % GATEWAYS.len();
     let mut last = Error::new("连不上弹弹play");
-    // Posting a comment is not idempotent. A timeout may already have posted it.
-    let attempts = if method == "POST" && path.starts_with("/api/v2/comment/") {
-        1
-    } else {
+    let attempts = if crate::may_retry(method, path) {
         GATEWAYS.len()
+    } else {
+        1
     };
     for step in 0..attempts {
         let index = (first + step) % GATEWAYS.len();
@@ -116,6 +115,8 @@ fn attempt(
         .map(str::to_string);
     let text = response
         .body_mut()
+        .with_config()
+        .limit(8 * 1024 * 1024)
         .read_to_string()
         .map_err(|error| Failure::Network(error.to_string()))?;
     match status {

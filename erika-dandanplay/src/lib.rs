@@ -16,14 +16,15 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 #[cfg(not(target_arch = "wasm32"))]
 use sha2::Sha256;
-use std::sync::RwLock;
+pub mod auth;
 
 pub mod bangumi;
+pub mod catalog;
 pub mod custom;
 #[cfg(not(target_arch = "wasm32"))]
 mod http;
-pub mod remote;
 pub mod mine;
+pub mod remote;
 pub mod reviews;
 
 /// The app id the gateways know, and the secret they replace with theirs.
@@ -65,22 +66,26 @@ impl Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// The signed-in account's token, shared by the engines of the app.
-static TOKEN: RwLock<Option<String>> = RwLock::new(None);
+/// Account identity and credentials change atomically.
+static TOKEN: auth::Registry = auth::Registry::new();
 
-/// Use `token` for the requests from now on, or none after signing out.
+/// Compatibility readers may have a token without a verified account name.
+/// Such credentials cannot authorize the catalogue's account write queue.
 pub fn set_token(token: Option<String>) {
-    *TOKEN
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = token;
+    TOKEN.set(None, token);
 }
-
-/// The token in use, if an account is signed in.
+pub fn set_account(user: &str, token: Option<String>) {
+    let user = user.trim();
+    TOKEN.set(
+        (!user.is_empty()).then(|| format!("dandanplay:{user}")),
+        token,
+    );
+}
+pub fn account_session() -> Option<auth::Session> {
+    TOKEN.capture()
+}
 pub fn token() -> Option<String> {
-    TOKEN
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
+    TOKEN.secret()
 }
 
 /// `X-Signature`: the SHA-256 of the app id, the time, the path and the
@@ -620,6 +625,11 @@ fn encode(text: &str) -> String {
             _ => format!("%{byte:02X}"),
         })
         .collect()
+}
+
+/// A lost write reply is not permission to replay it against another gateway.
+fn may_retry(method: &str, path: &str) -> bool {
+    matches!(method, "GET" | "HEAD") || (method == "POST" && path == "/api/v2/match")
 }
 
 /// One request to the first gateway that answers, as JSON.

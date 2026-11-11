@@ -1,4 +1,6 @@
-//! Read-only Bangumi-only browse/search/detail check, isolated from real accounts.
+//! Read-only catalogue browsing with a process-local Bangumi preference.
+//! Public scheduling still uses the built-in source; details/search use TMDB.
+//! No real account is loaded or written.
 //! cargo run -p erika-anime-core --example single_account_smoke
 use bern::{CallContext, Entry, Host, Invocation, Value};
 use erika_anime_core::AnimeEngine;
@@ -42,11 +44,11 @@ fn main() {
         .week
         .iter()
         .flat_map(|day| &day.shows)
-        .find(|show| erika_dandanplay::bangumi::subject_id(show.id) == Some(393010))
-        .or_else(|| engine.state().week.iter().flat_map(|day| &day.shows).next())
+        .find(|show| !show.id.is_empty())
         .unwrap();
-    let id = show.id;
-    assert!(erika_dandanplay::bangumi::subject_id(id).is_some());
+    // Schedule keys may still identify an unresolved public source. Pass the
+    // opaque key through; never decode it as an account provider's integer ID.
+    let id = show.id.clone();
     engine.open_scheduled(id).unwrap();
     wait(&mut engine, |state| !state.details_loading);
     assert!(
@@ -57,7 +59,7 @@ fn main() {
     assert!(!engine.state().show.summary.is_empty());
     assert!(!engine.state().episodes.is_empty());
     println!(
-        "Bangumi only: {count} scheduled shows; detail has a summary, poster and {} episodes",
+        "Catalogue with Bangumi preference: {count} scheduled shows; detail has a summary, poster and {} episodes",
         engine.state().episodes.len()
     );
     assert!(!engine.state().show.poster.url.is_empty());
@@ -81,20 +83,20 @@ fn main() {
         found
             .shows
             .iter()
-            .all(|show| erika_dandanplay::bangumi::subject_id(show.id).is_some())
+            .all(|show| erika_catalog::MediaId::parse(&show.id).is_ok())
     );
-    let id = found.shows[0].id;
+    let id = found.shows[0].id.clone();
     host.dispatch_blocking(
         Invocation {
             command: host.resolve("anime.open_from_search").unwrap(),
-            params: vec![Value::Int(id)],
+            params: vec![Value::Text(id)],
         },
         context(),
     )
     .result
     .unwrap();
     println!(
-        "Bangumi only: {} search results; the first opens directly",
+        "Catalogue with Bangumi preference: {} search results; the first opens directly",
         found.shows.len()
     );
 }

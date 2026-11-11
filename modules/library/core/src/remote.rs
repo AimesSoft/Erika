@@ -11,15 +11,16 @@ pub const KIND: &str = "dandanplay";
 
 /// The setting that keeps the API key of source `id`.
 pub fn token_setting(id: i64) -> String {
-    format!("library.dandanplay.{id}.token")
+    erika_store::portable::dandanplay_token_setting(id)
 }
 
-/// The videos of `items`, streamed from the client at `base`.
-pub fn videos(base: &str, token: &str, items: &[Item]) -> Vec<Video> {
+/// Stable, credential-free catalogue addresses. Playback adds the current
+/// source key only after leaving the catalogue/history boundary.
+pub fn videos(base: &str, items: &[Item]) -> Vec<Video> {
     items
         .iter()
         .filter_map(|item| {
-            let url = remote::stream_url(base, item, token)?;
+            let url = remote::stream_url(base, item, "")?;
             let fingerprint = if item.has_hash() && item.size > 0 {
                 Fingerprint {
                     md5: item.hash.to_ascii_lowercase(),
@@ -42,8 +43,7 @@ pub fn videos(base: &str, token: &str, items: &[Item]) -> Vec<Video> {
                     Anime {
                         dandanplay_id: item.anime_id,
                         title,
-                        // The client keeps no poster; the library asks
-                        // dandanplay for one.
+                        // Artwork is resolved by the TMDB catalogue.
                         image: String::new(),
                     },
                     Episode {
@@ -71,23 +71,10 @@ pub fn videos(base: &str, token: &str, items: &[Item]) -> Vec<Video> {
         .collect()
 }
 
-/// The thumbnails of the shows in `items`, by anime: the poster of a show
-/// dandanplay cannot be asked about, as NipaPlay falls back to it.
-pub fn thumbnails(base: &str, token: &str, items: &[Item]) -> Vec<(i64, String)> {
-    let mut seen = std::collections::HashSet::new();
-    items
-        .iter()
-        .filter(|item| item.anime_id > 0 && item.episode_id > 0)
-        .filter(|item| seen.insert(item.anime_id))
-        .filter_map(|item| Some((item.anime_id, remote::image_url(base, item, token)?)))
-        .collect()
-}
-
-/// Everything a refresh of the client at `base` brings: its videos, and the
-/// thumbnails of its shows.
+/// A remote directory and its separately stored credential. Artwork belongs
+/// to the canonical TMDB catalogue, not authenticated client thumbnails.
 pub struct Snapshot {
     pub videos: Vec<Video>,
-    pub thumbnails: Vec<(i64, String)>,
     /// The key to keep: none when the client does not ask for one.
     pub token: String,
 }
@@ -96,8 +83,7 @@ pub struct Snapshot {
 pub fn fetch(base: &str, token: &str) -> Result<Snapshot, String> {
     let (token, items) = remote::connect(base, token)?;
     Ok(Snapshot {
-        videos: videos(base, &token, &items),
-        thumbnails: thumbnails(base, &token, &items),
+        videos: videos(base, &items),
         token,
     })
 }
@@ -105,7 +91,7 @@ pub fn fetch(base: &str, token: &str) -> Result<Snapshot, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Done, LibraryEngine};
+    use crate::Done;
     use erika_library_protocol::library::{Commands, SourceStatus};
 
     /// `/api/v1/library` recorded from a client with three videos: two
@@ -132,7 +118,7 @@ mod tests {
 
     #[test]
     fn matched_videos_keep_the_clients_episode_and_fingerprint() {
-        let videos = videos("http://192.168.1.2", "key", &items());
+        let videos = videos("http://192.168.1.2", &items());
         assert_eq!(videos.len(), 3);
         let (anime, episode) = videos[0].matched.as_ref().unwrap();
         assert_eq!(anime.dandanplay_id, 14198);
@@ -150,16 +136,10 @@ mod tests {
         );
         assert_eq!(
             videos[0].url,
-            "http://192.168.1.2/api/v1/stream/id/c004e475-d9bb-41e1-976b-7fce00997f3a?token=key"
+            "http://192.168.1.2/api/v1/stream/id/c004e475-d9bb-41e1-976b-7fce00997f3a"
         );
         assert_eq!(videos[0].name, "[Zombieland Saga][03][BIG5][1080P].mp4");
         assert!(videos[2].matched.is_none());
-        let thumbnails = thumbnails("http://192.168.1.2", "", &items());
-        assert_eq!(thumbnails.len(), 1);
-        assert_eq!(
-            thumbnails[0].1,
-            "http://192.168.1.2/api/v1/image/id/c004e475-d9bb-41e1-976b-7fce00997f3a"
-        );
     }
 
     /// A dandanplay client on this machine, answering `responses` in order:
@@ -225,7 +205,7 @@ mod tests {
             ("/api/v1/welcome", 200, WELCOME_KEY),
             ("/api/v1/library", 200, LIBRARY),
         ]);
-        let mut engine = LibraryEngine::default();
+        let (_metadata, mut engine) = crate::tests::engine();
         engine.open_remote_mount().unwrap();
         // The client asks for a key and none is given.
         engine
@@ -246,6 +226,8 @@ mod tests {
             .unwrap();
         assert!(engine.state.remote_connecting);
         engine.take_done();
+        // The anonymous matching batch posts its completion on the next wake.
+        engine.take_done();
         let requests = thread.join().unwrap();
         assert!(
             requests[4]
@@ -259,45 +241,68 @@ mod tests {
         assert_eq!(row.name, "书房的电脑");
         assert_eq!(row.location, base);
         assert_eq!(row.status, SourceStatus::Ready { files: 3 });
-        assert_eq!(row.unmatched, 1);
+        assert_eq!(row.unmatched, 3);
         let source = row.id;
         assert_eq!(
             engine.db.setting(&token_setting(source)).as_deref(),
             Some("secret")
         );
-        // The client's matches are on the wall, its thumbnail the poster
-        // while dandanplay cannot be asked.
-        assert_eq!(engine.state.posters.len(), 1);
-        assert_eq!(engine.state.posters[0].id, 14198);
-        assert_eq!(engine.state.posters[0].episodes, 2);
-        assert!(
-            engine.state.posters[0]
-                .poster
-                .url
-                .contains("/api/v1/image/id/")
-        );
+        // Provider metadata alone does not manufacture a TMDB identity.
+        assert!(engine.state.posters.is_empty());
         let files = engine.db.episode_files(14198);
         assert_eq!(files.len(), 2);
-        assert!(files[0].url.ends_with("?token=secret"));
+        assert!(!files[0].url.contains('?'));
+        assert!(engine.db.anime(14198).unwrap().image.is_empty());
         // The video not matched is listed by its file name.
-        assert_eq!(engine.state.unmatched[0].name, "unknown [01].mkv");
+        assert!(engine.state.unmatched.iter().any(|f| f.name == "unknown [01].mkv"));
         assert_eq!(engine.state.unmatched[0].place, "书房的电脑");
-        // The source opens as shows, and the video not matched beside them.
+        // Until TMDB resolves them, every file remains readable at the source root.
         engine.open_source(source).unwrap();
         assert!(engine.state.folder.dandanplay);
-        assert_eq!(engine.state.folder.dirs[0].name, "佐贺偶像是传奇");
-        assert_eq!(engine.state.folder.files[0].name, "unknown [01].mkv");
-        assert!(engine.state.folder.files[0].readable);
-        engine.open_dir("佐贺偶像是传奇".into()).unwrap();
-        assert_eq!(engine.state.folder.files.len(), 2);
-        assert_eq!(engine.state.folder.files[0].name, "第3话 DEAD OR LIVE SAGA");
-        assert_eq!(engine.state.folder.files[0].show, 14198);
+        assert!(engine.state.folder.dirs.is_empty());
+        assert_eq!(engine.state.folder.files.len(), 3);
+        assert_eq!(engine.state.unmatched_count, 3);
+        let entries = engine.db.entries(Some(source));
+        for file in &engine.state.folder.files {
+            assert!(file.readable && !file.matched && file.show.is_empty());
+            let address = entries.iter().find(|entry| entry.key == file.key).unwrap();
+            assert!(address.url.starts_with(&format!("{base}/api/v1/stream/id/")));
+            assert!(!address.url.contains('?'));
+        }
+        assert!(engine.state.folder.files.iter().any(|f| f.name == "unknown [01].mkv"));
+        assert!(engine.state.folder.files.iter().any(|f| f.name == "[Zombieland Saga][03][BIG5][1080P].mp4"));
 
         // Removing it forgets its key.
         engine.remove_source(source).unwrap();
         assert!(engine.state.sources.is_empty());
         assert!(engine.db.setting(&token_setting(source)).is_none());
         assert!(engine.db.episode_files(14198).is_empty());
+    }
+
+    #[test]
+    fn source_files_play_before_matching_and_removed_rows_cannot_play() {
+        let (_metadata, mut engine) = crate::tests::engine();
+        let source = engine.db.add_source("dandanplay", "电影目录", "https://source.example.invalid", "movie").unwrap();
+        engine.import_remote(source, &Snapshot {
+            videos: videos("https://source.example.invalid", &items()), token: String::new(),
+        });
+        engine.load();
+        engine.open_source(source).unwrap();
+        assert_eq!(engine.state.folder.content, erika_library_protocol::library::SourceContent::Movie);
+        let entries = engine.db.entries(Some(source));
+        for entry in &entries {
+            let file = entry.file.unwrap();
+            assert!(engine.db.catalog_binding(file).unwrap().is_none());
+            engine.play_file(entry.key).unwrap();
+            assert!(engine.db.catalog_binding(file).unwrap().is_none());
+        }
+        assert!(engine.play_file(i64::MAX).is_err());
+        let unreadable = "https://source.example.invalid/unreadable.mp4";
+        engine.db.saw(source, unreadable, 0, 0, None);
+        let key = engine.db.entries(Some(source)).into_iter().find(|entry| entry.url == unreadable).unwrap().key;
+        assert!(engine.play_file(key).is_err());
+        engine.remove_source(source).unwrap();
+        for entry in entries { assert!(engine.play_file(entry.key).is_err()); }
     }
 
     #[test]
@@ -308,7 +313,7 @@ mod tests {
             ("/api/v1/welcome", 200, WELCOME_OPEN),
             ("/api/v1/library", 200, LIBRARY),
         ]);
-        let mut engine = LibraryEngine::default();
+        let (_metadata, mut engine) = crate::tests::engine();
         engine.open_remote_mount().unwrap();
         // A key the client does not ask for is not kept.
         engine

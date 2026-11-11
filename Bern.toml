@@ -5,7 +5,7 @@
 id = "erika"
 # Change this to a reverse-DNS name you own before you ship.
 bundle_id = "com.aimessoft.erika"
-version = "0.1.0"
+version = "0.1.1"
 name = { "zh-Hans" = "Erika", "en" = "Erika" }
 # Shown by installers and package managers.
 # publisher = "Your Name"

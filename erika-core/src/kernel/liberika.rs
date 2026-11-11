@@ -28,7 +28,8 @@ use liberika::renderer::pipeline::LumaUpscalerMode;
 #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 use liberika::{FlutterTextureHandle, FlutterTextureKind};
 use liberika::{
-    MediaRequest, PlatformSurface, PlayerEvent, PlayerState, TrackInfo, TrackKind, TrackSelection,
+    MediaRequest, PlatformSurface, PlayerError, PlayerEvent, PlayerState, TrackInfo, TrackKind,
+    TrackSelection,
 };
 #[cfg(target_os = "windows")]
 use liberika::{SurfaceOutputCapabilities, WgpuSurfaceHandle, WgpuSurfaceKind};
@@ -118,8 +119,19 @@ pub struct Liberika {
     playback: Arc<Mutex<Playback>>,
     results: Arc<Mutex<Vec<OperationResult>>>,
     frames: Arc<Frames>,
+    /// Single-use private open packets, addressed by random handles in the hub.
+    opens: Mutex<HashMap<String, Opening>>,
 }
 
+#[cfg(test)]
+#[path = "liberika_tests.rs"]
+mod tests;
+
+struct Opening {
+    url: String,
+    start: f64,
+    headers: Vec<(String, String)>,
+}
 /// The latest display frame of each view, and whether the worker was told.
 #[derive(Default)]
 struct Frames {
@@ -128,7 +140,7 @@ struct Frames {
 }
 
 enum Message {
-    Request(ExecRequest),
+    Request(ExecRequest, Option<Opening>),
     Attach {
         view: String,
         player: String,
@@ -150,7 +162,6 @@ enum Message {
 }
 
 enum Setting {
-    StartAt(f64),
     Rate(f64),
     HardwareDecode(bool),
     AudioTrack(i64),
@@ -211,6 +222,7 @@ impl Liberika {
             playback,
             frames,
             results,
+            opens: Mutex::default(),
         });
         bern_kernel::install(kernel.clone());
         kernel
@@ -231,12 +243,7 @@ impl Liberika {
             params,
             Box::new(move |result| {
                 if let Err(error) = result {
-                    eprintln!(
-                        "liberika: {} failed: {} {}",
-                        command.id(),
-                        error.code,
-                        error.message
-                    );
+                    eprintln!("liberika: {} failed: {}", command.id(), error.code);
                 }
             }),
         );
@@ -253,14 +260,46 @@ impl Kernel for Liberika {
     }
 
     fn open(&self, url: &str, start: f64) {
-        // The previous media is gone from what the engine reads at once.
+        let _ = self.open_with_headers(url, start, Vec::new());
+    }
+
+    fn open_with_headers(
+        &self,
+        url: &str,
+        start: f64,
+        headers: Vec<(String, String)>,
+    ) -> Result<(), String> {
+        let Some(hub) = self.hub.lock().expect("hub lock").clone() else {
+            return Err("播放内核尚未就绪".into());
+        };
         *self.playback.lock().expect("playback lock") = Playback::default();
-        self.send(Message::Set(Setting::StartAt(start)));
-        self.dispatch(
-            MediaCommand::Open,
-            vec![player(), Value::Record(vec![Value::Text(url.into())])],
+        let handle = format!("erika-playback://{}", erika_catalog::MediaId::new().0);
+        self.opens.lock().expect("opens lock").insert(
+            handle.clone(),
+            Opening {
+                url: url.into(),
+                start,
+                headers,
+            },
         );
+        // Hub dispatch calls execute synchronously. Only that invocation can
+        // consume this random handle; the worker receives the packet by value.
+        hub.dispatch(
+            MediaCommand::Open,
+            vec![player(), Value::Record(vec![Value::Text(handle.clone())])],
+            Box::new(|_| {}),
+        );
+        if self
+            .opens
+            .lock()
+            .expect("opens lock")
+            .remove(&handle)
+            .is_some()
+        {
+            return Err("播放请求未被内核接收".into());
+        }
         self.dispatch(MediaCommand::Play, vec![player()]);
+        Ok(())
     }
 
     fn play(&self) {
@@ -357,8 +396,30 @@ impl Kernel for Liberika {
 }
 
 impl MediaExecutor for Liberika {
-    fn execute(&self, request: ExecRequest) {
-        self.send(Message::Request(request));
+    fn execute(&self, mut request: ExecRequest) {
+        let opening = if let ExecOp::Load { url } = &mut request.op {
+            let opening = if request.player == PLAYER {
+                self.opens.lock().expect("opens lock").remove(url)
+            } else {
+                None
+            };
+            if let Some(opening) = &opening {
+                *url = opening.url.clone();
+            } else if url.starts_with("erika-playback:") {
+                let hub = self.hub.lock().expect("hub lock").clone();
+                if let Some(hub) = hub {
+                    hub.complete(
+                        request.request,
+                        Err(CommandError::new("expired_open", "播放请求已失效")),
+                    );
+                }
+                return;
+            }
+            opening
+        } else {
+            None
+        };
+        self.send(Message::Request(request, opening));
     }
 }
 
@@ -434,7 +495,6 @@ impl MediaKernel for Liberika {
 /// Erika's own settings of its player, kept for each media it opens.
 #[derive(Default)]
 struct Settings {
-    start_at: f64,
     rate: Option<f64>,
     hardware_decode: Option<bool>,
     subtitle_scale: Option<f64>,
@@ -524,7 +584,7 @@ impl Session {
                 liberika::playback::VideoDecodePreference::Software;
         }
         let presenter = PresenterRuntime::new(config)
-            .map_err(|error| CommandError::new("kernel_failed", error.to_string()))?;
+            .map_err(|error| CommandError::new("kernel_failed", error_message(&error)))?;
         let events = presenter.player().subscribe();
         Ok(Self {
             presenter,
@@ -574,7 +634,7 @@ impl Session {
                 PlayerEvent::TracksChanged(tracks) => self.tracks = tracks,
                 PlayerEvent::TrackSelectionChanged(selection) => self.selection = selection,
                 PlayerEvent::BufferingChanged(buffering) => self.buffering = buffering,
-                PlayerEvent::Error(error) => self.error = Some(error.to_string()),
+                PlayerEvent::Error(error) => self.error = Some(error_message(&error).into()),
                 _ => {}
             }
         }
@@ -710,7 +770,7 @@ impl Session {
         let rgba = self
             .presenter
             .capture_frame_rgba(width, height)
-            .map_err(|error| error.to_string())?
+            .map_err(|error| error_message(&error).to_owned())?
             .ok_or("no picture yet")?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
@@ -751,8 +811,23 @@ fn track_name(track: &TrackInfo, index: usize) -> String {
     }
 }
 
-fn failed(error: impl std::fmt::Display) -> CommandError {
-    CommandError::new("media_error", error.to_string())
+/// The kernel's free-form diagnostics can contain private stream URLs, headers
+/// or server responses. Project only the typed category across the adapter
+/// boundary, for synchronous replies, async events and logs alike. An exhaustive
+/// match makes a new kernel error kind require an explicit disclosure decision.
+fn error_message(error: &PlayerError) -> &'static str {
+    match error {
+        PlayerError::Closed => "播放内核已关闭",
+        PlayerError::InvalidStateTransition { .. } => "当前播放状态不允许此操作",
+        PlayerError::Renderer(_) => "画面渲染失败",
+        PlayerError::RendererBackpressure(_) => "画面输出暂时繁忙",
+        PlayerError::Source(_) => "无法读取媒体来源",
+        PlayerError::Playback(_) => "媒体播放失败",
+    }
+}
+
+fn failed(error: PlayerError) -> CommandError {
+    CommandError::new("media_error", error_message(&error))
 }
 
 fn platform_surface(surface: &VideoSurface) -> Result<PlatformSurface, CommandError> {
@@ -933,10 +1008,10 @@ impl Worker {
             }
         }
         match message {
-            Message::Request(request) => {
-                let result = self.perform(&request);
+            Message::Request(request, opening) => {
+                let result = self.perform(&request, opening);
                 if let Err(error) = &result {
-                    eprintln!("liberika: {:?} failed: {}", request.op, error.message);
+                    eprintln!("liberika: request failed: {}", error.code);
                 }
                 if let Some(hub) = self.hub() {
                     hub.complete(request.request, result);
@@ -1069,10 +1144,14 @@ impl Worker {
         Ok(())
     }
 
-    fn perform(&mut self, request: &ExecRequest) -> Result<(), CommandError> {
+    fn perform(
+        &mut self,
+        request: &ExecRequest,
+        opening: Option<Opening>,
+    ) -> Result<(), CommandError> {
         match &request.op {
             ExecOp::Load { url } => {
-                let start = std::mem::take(&mut self.settings.start_at);
+                let (start, headers) = opening.map(|o| (o.start, o.headers)).unwrap_or_default();
                 let hardware = self.settings.hardware_decode.unwrap_or(true);
                 if self
                     .players
@@ -1102,12 +1181,13 @@ impl Worker {
                 session.presenter.clear_danmaku();
                 session.rendered_at_open = session.presenter.stats().rendered_video_frames;
                 let media = MediaRequest {
-                    http_headers: super::link_headers(&url),
+                    http_headers: headers,
                     ..MediaRequest::new(url.clone())
                 };
                 if let Err(error) = session.presenter.open(media) {
-                    session.error = Some(error.to_string());
-                    return Err(CommandError::new("load_failed", error.to_string()));
+                    let message = error_message(&error);
+                    session.error = Some(message.into());
+                    return Err(CommandError::new("load_failed", message));
                 }
                 session.loaded = true;
                 session.tracks = session.presenter.tracks();
@@ -1214,7 +1294,6 @@ impl Worker {
     fn set(&mut self, setting: Setting) {
         let visual_setting = matches!(&setting, Setting::Danmaku(_));
         match setting {
-            Setting::StartAt(seconds) => self.settings.start_at = seconds.max(0.0),
             Setting::Rate(rate) => self.settings.rate = Some(rate),
             Setting::HardwareDecode(enabled) => self.settings.hardware_decode = Some(enabled),
             Setting::SubtitleScale(scale) => self.settings.subtitle_scale = Some(scale),
@@ -1255,7 +1334,7 @@ impl Worker {
             return;
         };
         let result = match setting {
-            Setting::StartAt(_) | Setting::HardwareDecode(_) => Ok(()),
+            Setting::HardwareDecode(_) => Ok(()),
             Setting::Rate(rate) => session.presenter.set_playback_rate(rate),
             Setting::SubtitleScale(scale) => {
                 session.presenter.set_subtitle_scale(scale);
@@ -1276,7 +1355,7 @@ impl Worker {
                     .presenter
                     .add_external_subtitle(url.clone())
                     .and_then(|track| session.presenter.select_subtitle_track(Some(track.id)))
-                    .map_err(|e| e.to_string());
+                    .map_err(|error| error_message(&error).to_owned());
                 self.results.lock().unwrap().push(OperationResult {
                     source: session.source.clone(),
                     operation: Operation::Subtitle(url),
@@ -1328,7 +1407,7 @@ impl Worker {
             self.results.lock().unwrap().push(OperationResult {
                 source: session.source.clone(),
                 operation: Operation::Setting,
-                result: Err(error.to_string()),
+                result: Err(error_message(&error).into()),
             });
         }
         // Visual settings do not change the player's tracks or observation.
@@ -1381,7 +1460,7 @@ impl Worker {
                 }
                 #[cfg(not(all(target_os = "linux", not(target_env = "ohos"))))]
                 Ok(_) => {}
-                Err(error) => eprintln!("liberika: frame failed: {error}"),
+                Err(error) => eprintln!("liberika: frame failed: {}", error_message(&error)),
             }
             #[cfg(target_os = "windows")]
             present(session, &self.views);

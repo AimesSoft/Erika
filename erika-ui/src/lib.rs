@@ -44,11 +44,11 @@ use tv::{tv_shell, tv_shell_props};
 style! {
     // NipaPlay's page backgrounds, shared by both appearances and every layout.
     Stack.app_background { background: color(light: "#F2F2F2", dark: "#1E1E1E") }
-    // macOS keeps Liquid Glass and Windows its acrylic, both in the
-    // appearance of where they open (dark over the picture); the browser
+    // Apple platforms keep their system presentation material and Windows
+    // its acrylic, in the appearance of where they open. The browser
     // extension supplies frosted glass.
     PopoverButton { foreground: text.primary }
-    #[target(ios, tvos, linux, android)]
+    #[target(linux, android)]
     PopoverButton { background: color(light: "#F2F2F2", dark: "#1E1E1E") }
     // Native split columns own their backgrounds, preserving toolbar layout.
     #[target(macos, ios, tvos)]
@@ -795,6 +795,11 @@ pub fn main_shell(
             // sidebar; the window is the empty frame.
             if !(build.modules.anime && app.features.anime) && !(build.modules.library && app.features.library) && !(build.modules.downloads && app.features.downloads) {
                 pure_window(app: app, windows: windows)
+            } else if build.modules.anime && anime.opened != "" && (anime.back == BackTo::Search || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back == BackTo::Home) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library)) {
+                Stack(variant: detail_page, align: top_leading) {
+                    desktop_toolbar(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
+                    details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+                }
             } else {
             SplitView {
                 Sidebar(id: pages, selection: draft.page) {
@@ -862,25 +867,8 @@ pub fn main_shell(
                     }
                 }
                 Detail(titled: false) {
-                    Toolbar {
-                        // Keep the destination inside the native button so
-                        // its toolbar capsule measures and pads the whole label.
-                        if build.modules.anime && anime.opened > 0 && (anime.back == BackTo::Search || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back == BackTo::Home) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library)) {
-                            Button(id: back, icon: "chevron.left", label: anime.back, shortcut: app.keys.back) => anime.close()
-                        }
-                        Spacer
-                        Search(id: search, value: draft.query, style: palette, width: 640, height: 480, panel_prompt: tr! { "zh-Hans" => "搜索番剧、剧集、设置和操作", "en" => "Search shows, episodes, settings and actions" }, prompt: tr! { "zh-Hans" => "搜索番剧、文件、设置", "en" => "Search shows, files and settings" }, shortcut: app.keys.search) {
-                            search_results(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
-                        }
-                        if !window.rail {
-                            Button(id: open_file, label: tr! { "zh-Hans" => "打开", "en" => "Open" }, icon: "plus", pick: draft.file, files: "video", shortcut: app.keys.open_file) => app.open_file(draft.file)
-                        }
-                    }
-                    if build.modules.anime && anime.opened > 0 && (anime.back == BackTo::Search || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library)) {
-                        details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
-                    } else {
-                        PageContent(slot: main, selected: draft.page)
-                    }
+                    desktop_toolbar(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
+                    PageContent(slot: main, selected: draft.page)
                 }
             }
             }
@@ -912,6 +900,30 @@ pub fn main_shell(
     }
 }
 
+/// Desktop actions stay available both beside the sidebar and above full-window details.
+#[component]
+pub fn desktop_toolbar(
+    app: erika::Client,
+    #[cfg(feature = "bern-module-anime")] anime: anime::Client,
+    windows: AppWindows,
+    #[session] draft: ErikaDraft,
+) -> impl View {
+    ui! {
+        Toolbar {
+            if build.modules.anime && anime.opened != "" && (anime.back == BackTo::Search || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back == BackTo::Home) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library)) {
+                Button(id: back, icon: "chevron.left", label: anime.back, shortcut: app.keys.back) => anime.close()
+            }
+            Spacer
+            Search(id: search, value: draft.query, style: palette, width: 640, height: 480, panel_prompt: tr! { "zh-Hans" => "搜索番剧、剧集、设置和操作", "en" => "Search shows, episodes, settings and actions" }, prompt: tr! { "zh-Hans" => "搜索番剧、文件、设置", "en" => "Search shows, files and settings" }, shortcut: app.keys.search) {
+                search_results(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, phone: false)
+            }
+            if !window.rail {
+                Button(id: open_file, label: tr! { "zh-Hans" => "打开", "en" => "Open" }, icon: "plus", pick: draft.file, files: "video", shortcut: app.keys.open_file) => app.open_file(draft.file)
+            }
+        }
+    }
+}
+
 /// The account's picture; the white outline of the app's logo on a dark
 /// grey disc until the account has one of its own.
 #[component]
@@ -935,7 +947,7 @@ pub fn fold_side(
 ) -> impl View {
     ui! {
         Stack(variant: phone_page, align: top_leading) {
-            if build.modules.anime && anime.opened > 0 {
+            if build.modules.anime && anime.opened != "" {
                 details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
             } else if build.modules.anime {
                 stage_column(anime: anime)

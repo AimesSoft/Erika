@@ -9,6 +9,10 @@
 //!   `http://127.0.0.1:7768/api/v1/<its token>` (required);
 //! - `ERIKA_GATEWAY_LISTEN`: where to listen, `127.0.0.1:7769` by default;
 //! - `ERIKA_GATEWAY_DB`: the database file, `erika-gateway.db` by default.
+//! - `TMDB_API_READ_TOKEN` or `TMDB_API_KEY`: server-only TMDB credential;
+//! - `TMDB_API_BASE_URL`: HTTPS v3 root (defaults to TMDB's official root).
+//! Metadata is advertised as unavailable until configured, not as an empty
+//! catalogue. Existing calendar/danmaku routes continue independently.
 
 use erika_gateway::{Gateway, app, store::Store};
 use std::sync::Arc;
@@ -38,6 +42,15 @@ async fn main() {
         store.count()
     );
     let mut gateway = Gateway::new(token, upstream, store);
+    gateway.metadata = erika_gateway::metadata::Metadata::new(
+        &std::env::var("TMDB_API_BASE_URL").unwrap_or_else(|_| "https://api.themoviedb.org/3/".into()),
+        std::env::var("TMDB_API_READ_TOKEN").ok(),
+        std::env::var("TMDB_API_KEY").ok(),
+    ).unwrap_or_else(|error| {
+        eprintln!("erika-gateway: metadata configuration: {error}");
+        std::process::exit(2);
+    });
+    eprintln!("erika-gateway: TMDB catalogue {}", if gateway.metadata.configured() { "enabled" } else { "not configured" });
     gateway.public_key = std::env::var("ERIKA_GATEWAY_PUBLIC_KEY").ok().filter(|key| !key.trim().is_empty());
     if let Some(per_minute) = std::env::var("ERIKA_GATEWAY_PER_MINUTE").ok().and_then(|value| value.parse().ok()) {
         gateway.per_minute = per_minute;

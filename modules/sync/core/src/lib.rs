@@ -8,6 +8,7 @@
 //! stable id, carried in the `extensions` category, and read back with
 //! `Db::extension(id)` after the `restored` event.
 
+mod catalog;
 pub mod format;
 pub mod local;
 pub mod merge;
@@ -123,16 +124,16 @@ fn shown_time(unix: i64, offset: i64) -> String {
 
 /// Everything this device keeps, as one export file. With a passphrase
 /// the accounts come too, sealed with its key under a new salt.
-pub fn export(db: &Db, store: &Store, vault: &dyn Vault, keys: &mut Keys, device: &str) -> Vec<u8> {
+pub fn export(db: &Db, store: &Store, vault: &dyn Vault, keys: &mut Keys, device: &str) -> Result<Vec<u8>, String> {
     let key = keys.create();
-    let state = Device::new(db, store, vault, Scope::Export).collect(key.as_ref());
+    let state = Device::new(db, store, vault, Scope::Export).collect(key.as_ref()).map_err(|e| e.message)?;
     let mut document = Document::new(Kind::Export)
         .with_head("created", Value::Int(erika_store::now()))
         .with_head("device", Value::text(device))
         .with_head("app", Value::text(app_name()));
     document.key = key.map(|key| key.params().clone());
     document.state = Some(state);
-    format::write(&document)
+    Ok(format::write(&document))
 }
 
 /// What importing a file did.
@@ -167,23 +168,25 @@ pub fn import(
             if key.is_none() {
                 imported.no_passphrase = keys.passphrase.is_none();
                 imported.wrong_passphrase = keys.passphrase.is_some();
-                incoming.remove(local::ACCOUNTS);
+                for category in local::SEALED_CATEGORIES {
+                    incoming.remove(*category);
+                }
             }
             key
         }
         None => None,
     };
     let mut device = Device::new(db, store, vault, Scope::Export);
-    let mine = device.collect(key.as_ref());
-    let merged = merge::merge_first(&incoming, &mine);
+    let mine = device.collect(key.as_ref()).map_err(|e| e.message)?;
+    let merged = catalog::merge(None, &incoming, &mine).map_err(|e| e.message)?;
     let ops = merge::diff(&mine, &merged);
-    device.apply(&ops, key.as_ref());
+    device.apply(&ops, key.as_ref()).map_err(|e| e.message)?;
     imported.applied = device.applied;
     Ok(imported)
 }
 
 /// How many records of each kind `state` holds.
-fn parts(state: &format::State, accounts: i64) -> Vec<SyncPart> {
+fn parts(state: &format::State, accounts: i64, extensions: i64) -> Vec<SyncPart> {
     let count = |category: &str| {
         state
             .get(category)
@@ -196,16 +199,13 @@ fn parts(state: &format::State, accounts: i64) -> Vec<SyncPart> {
         ),
         (SyncKind::Accounts, accounts),
         (SyncKind::Sources, count(local::SOURCES)),
-        (SyncKind::Links, count(local::LINKS)),
+        (SyncKind::Links, count(catalog::BINDINGS) + count(catalog::DANMAKU) + count(catalog::LINKS)),
         (SyncKind::Progress, count(local::PROGRESS)),
         (SyncKind::Recents, count(local::RECENTS)),
-        (SyncKind::Watched, count(local::WATCHED)),
-        (
-            SyncKind::Anime,
-            count(local::ANIME) + count(local::EPISODES),
-        ),
-        (SyncKind::Marks, count(local::MARKS)),
-        (SyncKind::Extensions, count(local::EXTENSIONS)),
+        (SyncKind::Watched, count(catalog::WATCHED)),
+        (SyncKind::Anime, count(catalog::NODES)),
+        (SyncKind::Marks, count(catalog::MARKS)),
+        (SyncKind::Extensions, extensions),
     ]
     .into_iter()
     .enumerate()
@@ -223,7 +223,7 @@ enum Done {
     Tested(Result<(), String>),
     Exported(Result<String, String>),
     Imported(Result<Imported, String>),
-    Parts(Vec<SyncPart>),
+    Parts(Result<Vec<SyncPart>, String>),
     /// The passphrase was saved, or could not be.
     Passphrase(Result<bool, String>),
 }
@@ -488,7 +488,10 @@ impl SyncEngine {
                 .iter()
                 .filter(|key| db.setting(key).is_some_and(|user| !user.is_empty()))
                 .count() as i64;
-            Done::Parts(parts(&state, accounts))
+            // Count records without serializing their private payloads or
+            // asking the credential store just to paint this overview.
+            let extensions = db.extensions().len() as i64;
+            Done::Parts(state.map(|state| parts(&state, accounts, extensions)).map_err(|e| e.message))
         });
     }
 
@@ -501,12 +504,16 @@ impl SyncEngine {
         if applied.sync {
             self.load_settings();
         }
+        let mut sources = applied.new_sources.clone();
+        sources.extend_from_slice(&applied.rescan_sources);
+        sources.sort_unstable();
+        sources.dedup();
         sync::emit::restored(
-            applied.settings,
+            applied.settings || applied.extensions,
             applied.accounts,
             applied.library || applied.marks,
             applied.history,
-            applied.new_sources.clone(),
+            sources,
         );
         // The shell, the library and the anime pages read theirs anew;
         // other modules read their settings as they start.
@@ -592,7 +599,10 @@ impl SyncEngine {
                 Done::Imported(Err(detail)) => {
                     self.finish(SyncResult::Failed { detail }, Vec::new())
                 }
-                Done::Parts(parts) => self.state.parts = parts,
+                Done::Parts(Ok(parts)) => self.state.parts = parts,
+                Done::Parts(Err(detail)) => {
+                    self.state.result = SyncResult::Failed { detail };
+                }
                 Done::Passphrase(result) => {
                     self.state.busy = false;
                     self.state.phase = SyncPhase::Idle;
@@ -749,9 +759,9 @@ impl sync::Commands for SyncEngine {
             );
             let path = folder.join(export_name(bern::date::now()));
             Done::Exported(
-                std::fs::write(&path, bytes)
+                bytes.and_then(|bytes| std::fs::write(&path, bytes)
                     .map(|()| path.display().to_string())
-                    .map_err(|error| format!("无法写入 {}：{error}", path.display())),
+                    .map_err(|error| format!("无法写入 {}：{error}", path.display()))),
             )
         });
         Ok(())

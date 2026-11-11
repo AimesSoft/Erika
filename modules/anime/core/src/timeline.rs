@@ -63,7 +63,7 @@ pub fn lay_out(shows: &[(f64, &Broadcast)], now_hour: f64) -> Timeline {
     let mut groups: Vec<(f64, AiringGroup)> = Vec::new();
     for (hour, show) in shows {
         let airing = Airing {
-            id: show.id,
+            id: show.id.clone(),
             title: show.title.clone(),
             poster: show.poster.clone(),
             aired: show.aired,
@@ -202,7 +202,7 @@ mod tests {
         (
             hour,
             Broadcast {
-                id,
+                id: crate::metadata::source_key(id),
                 title: format!("{id}"),
                 poster: MediaSource::new(""),
                 time,

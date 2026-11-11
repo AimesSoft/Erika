@@ -20,6 +20,33 @@ pub struct Season {
     pub later: i64,
 }
 
+impl Season {
+    /// Rebuild every derived count and position after identity projection.
+    pub fn relayout(&mut self) {
+        for day in &mut self.week {
+            let mut seen = std::collections::HashSet::new();
+            day.shows.retain(|row| seen.insert(row.id.clone()));
+            day.count = day.shows.len() as i64;
+            day.preview = day.shows.iter().take(4).cloned().collect();
+            day.remaining = day.shows.len().saturating_sub(4) as i64;
+        }
+        let hour = |seconds: i64| {
+            let hour = seconds as f64 / 3600.;
+            if hour < 5. { hour + 24. } else { hour }
+        };
+        let today = self.week.iter().find(|day| day.today);
+        let shows = today
+            .into_iter()
+            .flat_map(|day| &day.shows)
+            .filter(|row| row.timed)
+            .map(|row| (hour(row.time), row))
+            .collect::<Vec<_>>();
+        self.aired = shows.iter().filter(|(_, row)| row.aired).count() as i64;
+        self.later = shows.len() as i64 - self.aired;
+        self.timeline = timeline::lay_out(&shows, hour(self.now));
+    }
+}
+
 /// Where an anime falls in the week: its weekday (0 Monday to 6 Sunday),
 /// and, when its slot is known, its hour in the broadcast day, the day of
 /// its first broadcast and the days between broadcasts.
@@ -75,9 +102,9 @@ pub fn build(intros: &[Intro], schedule: &Schedule, clock: &Clock) -> Season {
         )
         .collect();
     let broadcast = |intro: &Intro, hour: Option<f64>, episode: i64, offset: i64| Broadcast {
-        id: intro.anime_id,
+        id: super::metadata::source_key(intro.anime_id),
         title: intro.anime_title.clone(),
-        poster: crate::posters::source(&intro.image_url),
+        poster: bern::media::MediaSource::new(""),
         time: hour.map_or(0, seconds),
         timed: hour.is_some(),
         episode,
@@ -135,28 +162,17 @@ pub fn build(intros: &[Intro], schedule: &Schedule, clock: &Clock) -> Season {
             }
         })
         .collect();
-    // Today's timed shows, in the broadcast day's hours.
-    let today_hours: Vec<(f64, &Broadcast)> = week[0]
-        .shows
-        .iter()
-        .filter(|show| show.timed)
-        .map(|show| {
-            let hour = show.time as f64 / 3600.0;
-            (if hour < 5.0 { hour + 24.0 } else { hour }, show)
-        })
-        .collect();
-    let aired = today_hours.iter().filter(|(_, show)| show.aired).count() as i64;
-    let later = today_hours.len() as i64 - aired;
-    let timeline = timeline::lay_out(&today_hours, now_hour);
-    Season {
+    let mut season = Season {
         today,
         label: label(today),
         now: clock.seconds(),
-        later,
-        aired,
-        timeline,
+        later: 0,
+        aired: 0,
+        timeline: timeline::lay_out(&[], now_hour),
         week,
-    }
+    };
+    season.relayout();
+    season
 }
 
 #[cfg(test)]
@@ -171,6 +187,84 @@ mod tests {
             "airDay": air_day, "rating": rating,
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn projected_identity_rebuilds_counts_previews_and_the_after_midnight_timeline() {
+        let clock = Clock {
+            unix: parse_utc("2026-10-21T16:30:00Z").unwrap(),
+            offset: 8 * 3600,
+        };
+        let schedule = Schedule::new(
+            0,
+            vec![
+                Slot {
+                    titles: vec!["早".into()],
+                    first: parse_utc("2026-10-21T14:00:00Z").unwrap(),
+                    period: 7 * 86_400,
+                },
+                Slot {
+                    titles: vec!["晚".into()],
+                    first: parse_utc("2026-10-21T17:30:00Z").unwrap(),
+                    period: 7 * 86_400,
+                },
+            ],
+        );
+        let mut season = build(
+            &[
+                intro(1, "早", Some(3), 0.),
+                intro(2, "晚", Some(4), 0.),
+                intro(3, "三", Some(3), 0.),
+                intro(4, "四", Some(3), 0.),
+                intro(5, "五", Some(3), 0.),
+            ],
+            &schedule,
+            &clock,
+        );
+        let original = season.week[0].shows[0].clone();
+        season.week[0].shows.insert(2, original.clone());
+        season.week[0].shows.push(original);
+        season.relayout();
+        let today = &season.week[0];
+        assert_eq!(today.count, 5);
+        assert_eq!(today.preview.len(), 4);
+        assert_eq!(today.remaining, 1);
+        assert_eq!(
+            today.preview.iter().map(|s| &s.id).collect::<Vec<_>>(),
+            today
+                .shows
+                .iter()
+                .take(4)
+                .map(|s| &s.id)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!((season.aired, season.later), (1, 1));
+        assert_eq!(season.timeline.groups.len(), 2);
+        assert_eq!(
+            season
+                .timeline
+                .groups
+                .iter()
+                .map(|g| g.shows.len())
+                .sum::<usize>(),
+            2
+        );
+        assert_eq!(season.timeline.groups[0].shows[0].id, today.shows[0].id);
+        assert!(season.timeline.groups[0].at < season.timeline.now_at);
+        assert!(season.timeline.now_at < season.timeline.groups[1].at);
+        season.week[0].shows.clear();
+        season.relayout();
+        assert_eq!(
+            (
+                season.week[0].count,
+                season.week[0].remaining,
+                season.aired,
+                season.later
+            ),
+            (0, 0, 0, 0)
+        );
+        assert!(season.week[0].preview.is_empty());
+        assert!(season.timeline.groups.is_empty());
     }
 
     #[test]

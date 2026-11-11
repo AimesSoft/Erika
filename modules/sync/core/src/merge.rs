@@ -59,7 +59,12 @@ fn at(value: Option<&Value>) -> Option<i64> {
 
 /// Whether the local side of a key both sides changed wins: the later of
 /// two records that say when; otherwise `local_wins`.
-fn local_wins(local: Option<&Value>, remote: Option<&Value>, local_wins: bool) -> bool {
+fn local_wins(category: &str, local: Option<&Value>, remote: Option<&Value>, local_wins: bool) -> bool {
+    if crate::catalog::CATEGORIES.contains(&category) {
+        let ours = local.is_some_and(crate::catalog::is_manual);
+        let theirs = remote.is_some_and(crate::catalog::is_manual);
+        if ours != theirs { return ours; }
+    }
     match (at(local), at(remote)) {
         (Some(local), Some(remote)) if local != remote => local > remote,
         // A record removed on one side and changed on the other stays.
@@ -81,7 +86,7 @@ pub fn merge_first(remote: &State, local: &State) -> State {
                 None => {
                     target.insert(key.clone(), value.clone());
                 }
-                Some(theirs) if theirs != value && local_wins(Some(value), Some(theirs), false) => {
+                Some(theirs) if theirs != value && local_wins(category, Some(value), Some(theirs), false) => {
                     target.insert(key.clone(), value.clone());
                 }
                 Some(_) => {}
@@ -107,7 +112,7 @@ pub fn merge_three(base: &State, remote: &State, local: &State) -> State {
             let theirs = remote
                 .get(&op.category)
                 .and_then(|entries| entries.get(&op.key));
-            local_wins(op.value.as_ref(), theirs, true)
+            local_wins(&op.category, op.value.as_ref(), theirs, true)
         })
         .collect();
     let mut merged = remote.clone();

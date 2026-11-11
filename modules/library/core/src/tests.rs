@@ -1,11 +1,99 @@
 use super::*;
 use erika_library_protocol::library::{Commands, Engine, MatchNote, SourceContent};
-use erika_store::{Episode, Fingerprint};
+use erika_store::Fingerprint;
+
+pub(super) struct MetadataFixture {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+impl Drop for MetadataFixture {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let result = thread.join();
+            if !std::thread::panicking() {
+                result.unwrap();
+            }
+        }
+    }
+}
+pub(super) fn engine() -> (MetadataFixture, LibraryEngine) {
+    engine_with_metadata(|_| {
+        (
+            200,
+            serde_json::json!({"page":1,"total_pages":1,"results":[]}),
+        )
+    })
+}
+
+pub(super) fn engine_with_metadata(
+    respond: impl Fn(&str) -> (u16, serde_json::Value) + Send + 'static,
+) -> (MetadataFixture, LibraryEngine) {
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let requests = Arc::new(AtomicUsize::new(0));
+    let (done, count) = (stop.clone(), requests.clone());
+    let thread = std::thread::spawn(move || {
+        while !done.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                        .unwrap();
+                    let mut bytes = Vec::new();
+                    let mut chunk = [0; 4096];
+                    while !bytes.ends_with(b"\r\n\r\n") && bytes.len() < 16384 {
+                        let size = stream.read(&mut chunk).unwrap_or(0);
+                        if size == 0 {
+                            break;
+                        }
+                        bytes.extend_from_slice(&chunk[..size]);
+                    }
+                    if bytes.is_empty() {
+                        continue;
+                    }
+                    let request = String::from_utf8_lossy(&bytes);
+                    let lower = request.to_ascii_lowercase();
+                    assert!(!lower.contains("authorization:") && !lower.contains("cookie:"));
+                    assert!(request.starts_with("GET "));
+                    let path = request.split_whitespace().nth(1).unwrap();
+                    count.fetch_add(1, Ordering::SeqCst);
+                    let (status, data) = respond(path);
+                    let body = serde_json::json!({"schema_version":1,"data":data}).to_string();
+                    write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                Err(error) => panic!("fixture accept: {error}"),
+            }
+        }
+    });
+    let mut engine = LibraryEngine::default();
+    engine.metadata =
+        erika_catalog::Client::new(&format!("http://{address}/metadata/v1/"), "zh-CN").unwrap();
+    (
+        MetadataFixture {
+            stop,
+            requests,
+            thread: Some(thread),
+        },
+        engine,
+    )
+}
 
 #[test]
 fn the_wall_holds_the_shows_with_files_filed_under_their_initials() {
     let mut engine = LibraryEngine::default();
-    let empty = engine.listing(0, LibraryFilter::All, LibrarySort::Recent);
+    let empty = engine
+        .listing(0, LibraryFilter::All, LibrarySort::Recent)
+        .unwrap();
     assert!(empty.empty && empty.total == 0);
     for (id, title, number, position) in [
         (1, "葬送的芙莉莲", 1, 1440.0),
@@ -23,25 +111,35 @@ fn the_wall_holds_the_shows_with_files_filed_under_their_initials() {
                 }),
             )
             .unwrap();
-        let anime = Anime {
-            dandanplay_id: id,
-            title: title.into(),
-            image: format!("https://img/{id}.jpg"),
-        };
-        engine.db.link_episode(
-            file,
-            &anime,
-            &Episode {
-                dandanplay_id: id * 10_000 + number,
-                number,
-                title: String::new(),
-            },
-            false,
-        );
+        use erika_catalog::*;
+        use serde_json::json;
+        let work=tmdb::parse_work(Kind::Tv,id as u64,&json!({"id":id,"name":title,"seasons":[{"id":id*100,"season_number":1,"name":"Season 1"}]})).unwrap();
+        let season=tmdb::parse_season(&work,1,&json!({"id":id*100,"season_number":1,"name":"Season 1","episodes":[{"id":id*10000+number,"season_number":1,"episode_number":number,"name":"Episode"}]})).unwrap();
+        let item=&season.episodes[0];
+        engine.db.catalog_apply(&[work.node,season.node,item.clone()],&[],&[FileBinding {
+            file, decision:Decision::Auto,revision:0,evidence:"fixture".into(),
+            items:vec![BindingItem {media:item.id.clone(),start_seconds:None,end_seconds:None}],
+        }],&[]).unwrap();
         engine.db.save_progress(file, position, 1440.0);
+        if position >= 1440.0 {
+            let mut measured = erika_catalog::playback::Intervals::default();
+            measured.add(0., 1440.).unwrap();
+            engine
+                .db
+                .catalog_record_playback(
+                    file,
+                    engine.db.catalog_revision(file).unwrap(),
+                    &measured,
+                    1440.,
+                    true,
+                )
+                .unwrap();
+        }
     }
     engine.history_changed().unwrap();
-    let named = engine.listing(0, LibraryFilter::All, LibrarySort::Name);
+    let named = engine
+        .listing(0, LibraryFilter::All, LibrarySort::Name)
+        .unwrap();
     assert_eq!(
         named
             .posters
@@ -58,17 +156,26 @@ fn the_wall_holds_the_shows_with_files_filed_under_their_initials() {
             .find(|l| l.letter == "Z")
             .unwrap()
             .target,
-        1
+        erika_catalog::MediaId::for_ref(&erika_catalog::ProviderRef::tmdb(erika_catalog::Kind::Tv, 1).unwrap()).0
     );
     // Videos opened one by one belong to no folder.
     assert!(
         engine
             .listing(5, LibraryFilter::All, LibrarySort::Name)
+            .unwrap()
             .empty
     );
-    engine.open(1).unwrap();
+    engine
+        .open(erika_catalog::MediaId::for_ref(&erika_catalog::ProviderRef::tmdb(erika_catalog::Kind::Tv, 1).unwrap()).0)
+        .unwrap();
     assert_eq!(engine.state.show.title, "葬送的芙莉莲");
-    assert_eq!(engine.open(3).unwrap_err().code, "unknown_show");
+    assert_eq!(
+        engine
+            .open(erika_catalog::MediaId::new().0)
+            .unwrap_err()
+            .code,
+        "unknown_show"
+    );
 }
 
 /// A folder of videos on disk, removed when dropped.
@@ -106,7 +213,7 @@ fn a_folder_is_scanned_browsed_and_matched_by_hand() {
         "未整理/第五话 修正版.mkv",
         "notes.txt",
     ]);
-    let mut engine = LibraryEngine::default();
+    let (metadata, mut engine) = engine();
     engine
         .add_folder(MediaSource::file(&folder.0), SourceContent::Anime)
         .unwrap();
@@ -114,8 +221,16 @@ fn a_folder_is_scanned_browsed_and_matched_by_hand() {
     let source = engine.state.sources[0].clone();
     assert_eq!(source.status, SourceStatus::Ready { files: 4 });
     assert_eq!(source.unmatched, 4);
-    // Without an account nothing is recognized, and the library says why.
-    assert_eq!(engine.state.notice, Some(LibraryNotice::SignInToMatch));
+    // No account is needed for the anonymous metadata fallback.
+    assert!(metadata.requests.load(std::sync::atomic::Ordering::SeqCst) > 0);
+    assert_eq!(
+        engine.state.notice,
+        Some(LibraryNotice::Scanned {
+            name: source.name.clone(),
+            files: 4,
+            unmatched: 4,
+        })
+    );
     assert_eq!(engine.state.unmatched_count, 4);
     assert_eq!(
         engine
@@ -148,17 +263,8 @@ fn a_folder_is_scanned_browsed_and_matched_by_hand() {
     // A folder at once: by the numbers in the names, OVA skipped; the
     // names go on from season one, so they are aligned to episode 1.
     engine.match_folder().unwrap();
-    {
-        let session = engine.session.as_mut().unwrap();
-        session.choose(
-            Anime {
-                dandanplay_id: 18_000,
-                title: "地狱乐 第二季".into(),
-                image: String::new(),
-            },
-            12,
-        );
-    }
+    matching::tests::choose(&mut engine, 2);
+    engine.match_align("1".into()).unwrap();
     engine.load();
     let matching = &engine.state.matching;
     assert!(matching.open && !matching.single && !matching.by_order);
@@ -175,7 +281,7 @@ fn a_folder_is_scanned_browsed_and_matched_by_hand() {
         matching
             .rows
             .iter()
-            .map(|row| row.number)
+            .map(|row| row.assignment.parse::<i64>().unwrap_or(0))
             .collect::<Vec<_>>(),
         [1, 2, 0]
     );
@@ -188,22 +294,18 @@ fn a_folder_is_scanned_browsed_and_matched_by_hand() {
     engine.match_confirm().unwrap();
     assert_eq!(
         engine.state.notice,
-        Some(LibraryNotice::MatchedMany {
+        Some(LibraryNotice::Matched {
             count: 2,
-            anime: "地狱乐 第二季".into(),
-            first: 1,
-            last: 2
+            title: "地狱乐".into(),
         })
     );
     assert!(!engine.state.matching.open);
     assert_eq!(engine.state.unmatched_count, 2);
-    let wall = engine.listing(source.id, LibraryFilter::All, LibrarySort::Name);
+    let wall = engine
+        .listing(source.id, LibraryFilter::All, LibrarySort::Name)
+        .unwrap();
     assert_eq!((wall.posters.len(), wall.posters[0].episodes), (1, 2));
-    assert!(engine.state.folder.files.iter().any(|file| file.note
-        == FileNote::Manual {
-            anime: "地狱乐 第二季".into(),
-            episode: 1
-        }));
+    assert!(engine.state.folder.files.iter().any(|file| file.matched && matches!(&file.note, FileNote::Content { title } if title.starts_with("地狱乐 · S02E"))));
 
     // One video: unlinked, it goes back among those not matched, and a
     // rescan leaves it so.
@@ -237,7 +339,7 @@ fn a_folder_is_scanned_browsed_and_matched_by_hand() {
         .rows
         .iter()
         .filter(|row| row.on)
-        .map(|row| row.number)
+        .map(|row| row.assignment.parse::<i64>().unwrap_or(0))
         .collect();
     assert_eq!(numbers, (5..5 + numbers.len() as i64).collect::<Vec<_>>());
     engine.match_cancel().unwrap();
@@ -249,12 +351,12 @@ fn a_folder_is_scanned_browsed_and_matched_by_hand() {
 }
 
 #[test]
-fn a_folder_of_tv_series_waits_for_the_users_server() {
+fn a_folder_of_tv_series_uses_the_anonymous_metadata_service() {
     let folder = Folder::new(&[
         "行尸走肉/The.Walking.Dead.S01E01.mkv",
         "行尸走肉/The.Walking.Dead.S01E02.mkv",
     ]);
-    let mut engine = LibraryEngine::default();
+    let (metadata, mut engine) = engine();
     engine
         .add_folder(MediaSource::file(&folder.0), SourceContent::Series)
         .unwrap();
@@ -262,9 +364,15 @@ fn a_folder_of_tv_series_waits_for_the_users_server() {
     let source = engine.state.sources[0].clone();
     assert_eq!(source.content, SourceContent::Series);
     assert_eq!(source.status, SourceStatus::Ready { files: 2 });
-    // Without a server of the user's own, nothing is recognized, and the
-    // library says where to set one.
-    assert_eq!(engine.state.notice, Some(LibraryNotice::NoServer));
+    assert!(metadata.requests.load(std::sync::atomic::Ordering::SeqCst) > 0);
+    assert_eq!(
+        engine.state.notice,
+        Some(LibraryNotice::Scanned {
+            name: source.name.clone(),
+            files: 2,
+            unmatched: 2,
+        })
+    );
     engine.set_content(source.id, SourceContent::Anime).unwrap();
     assert_eq!(engine.state.sources[0].content, SourceContent::Anime);
     assert_eq!(
@@ -274,39 +382,110 @@ fn a_folder_of_tv_series_waits_for_the_users_server() {
             content: SourceContent::Anime
         })
     );
-    // Matching by hand searches the server the source's content asks for.
+    // Manual content matching is anonymous TMDB for every source kind too.
     engine
         .set_content(source.id, SourceContent::Series)
         .unwrap();
     engine.open_source(source.id).unwrap();
     engine.open_dir("行尸走肉".into()).unwrap();
+    let before = metadata.requests.load(std::sync::atomic::Ordering::SeqCst);
     engine.match_folder().unwrap();
     engine.wake();
-    assert!(engine.session.as_ref().unwrap().custom);
-    assert!(engine.state.matching.search_failed, "no server to search");
-    // The server names what its search found by a passing id and gives
-    // the details under the show's lasting one, which the match keeps.
-    engine.session.as_mut().unwrap().choose(
-        Anime {
-            dandanplay_id: -900_001,
-            title: "行尸走肉 （来源：tencent）".into(),
-            image: String::new(),
-        },
-        2,
+    assert!(metadata.requests.load(std::sync::atomic::Ordering::SeqCst) >= before + 2);
+    assert!(engine.session.as_ref().unwrap().results.is_empty());
+    assert!(!engine.state.matching.ready);
+    assert!(!engine.state.matching.error.contains("登录"));
+}
+
+#[test]
+fn tmdb_movies_and_specials_are_visible_without_provider_episode_pointers() {
+    use erika_catalog::*;
+    use serde_json::json;
+    let mut engine = LibraryEngine::default();
+    let source = engine
+        .db
+        .add_source("folder", "Videos", "file:///videos", "anime")
+        .unwrap();
+    let film = tmdb::parse_work(
+        Kind::Movie,
+        1,
+        &json!({"id":1,"title":"电影","poster_path":"/movie.jpg"}),
+    )
+    .unwrap()
+    .node;
+    let tv=tmdb::parse_work(Kind::Tv,1,&json!({"id":1,"name":"剧集","poster_path":"/tv.jpg","seasons":[{"id":2,"season_number":0,"name":"Specials"}]})).unwrap();
+    let season=tmdb::parse_season(&tv,0,&json!({"id":2,"season_number":0,"name":"Specials","episodes":[{"id":3,"season_number":0,"episode_number":1,"name":"特典"}]})).unwrap();
+    let mut nodes = vec![film.clone(), tv.node.clone(), season.node];
+    nodes.extend(season.episodes.clone());
+    engine.db.catalog_save_nodes(&nodes).unwrap();
+    for (name, node) in [("movie", &film), ("special", &season.episodes[0])] {
+        let f = engine
+            .db
+            .saw(
+                source,
+                &format!("file:///videos/{name}.mkv"),
+                100,
+                1,
+                Some(&Fingerprint {
+                    md5: name.into(),
+                    size: 100,
+                }),
+            )
+            .unwrap();
+        engine
+            .db
+            .catalog_apply(
+                &[],
+                &[],
+                &[FileBinding {
+                    file: f,
+                    decision: Decision::Auto,
+                    revision: 0,
+                    evidence: "fixture".into(),
+                    items: vec![BindingItem {
+                        media: node.id.clone(),
+                        start_seconds: None,
+                        end_seconds: None,
+                    }],
+                }],
+                &[],
+            )
+            .unwrap();
+        assert!(engine.db.file_episode(f).is_none());
+    }
+    engine.load();
+    engine.open_source(source).unwrap();
+    assert_eq!(engine.state.posters.len(), 2);
+    assert_eq!(engine.state.unmatched_count, 0);
+    assert!(
+        engine
+            .state
+            .folder
+            .files
+            .iter()
+            .all(|f| f.matched && !f.show.is_empty())
     );
-    let details: erika_dandanplay::Details = serde_json::from_value(serde_json::json!({
-        "animeId": -137,
-        "animeTitle": "行尸走肉",
-        "episodes": [
-            { "episodeId": -25_000_137_010_001i64, "episodeTitle": "第1集", "episodeNumber": "1" },
-            { "episodeId": -25_000_137_010_002i64, "episodeTitle": "第2集", "episodeNumber": "2" }
-        ]
-    }))
-    .unwrap();
-    engine.took_details(-900_001, &details);
-    let chosen = engine.session.as_ref().unwrap().chosen.as_ref().unwrap();
-    assert_eq!(chosen.anime.dandanplay_id, -137);
-    assert_eq!(chosen.episodes.as_ref().map(|episodes| episodes.len()), Some(2));
+    assert!(
+        engine
+            .state
+            .folder
+            .files
+            .iter()
+            .any(|f| matches!(&f.note,FileNote::Content {title} if title.contains("S00E01")))
+    );
+    let wall = engine
+        .listing(source, LibraryFilter::All, LibrarySort::Name)
+        .unwrap();
+    let film_poster = wall.posters.iter().find(|p| p.id == film.id.0).unwrap();
+    assert!(film_poster.movie);
+    assert_eq!(
+        film_poster.poster.url,
+        "https://image.tmdb.org/t/p/original/movie.jpg"
+    );
+    engine.open(film.id.0.clone()).unwrap();
+    assert_eq!(engine.state.opened, film.id.0);
+    engine.close().unwrap();
+    assert!(engine.state.opened.is_empty());
 }
 
 #[test]

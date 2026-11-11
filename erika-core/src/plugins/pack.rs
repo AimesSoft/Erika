@@ -223,6 +223,7 @@ pub fn permission(id: &str) -> Option<PluginPermission> {
         "script.external" => PluginPermission::ExternalScript,
         "library.read" => PluginPermission::LibraryRead,
         "library.write" => PluginPermission::LibraryWrite,
+        "library.sources" => PluginPermission::LibrarySources,
         "ui.dialog" => PluginPermission::Dialog,
         "settings.read" => PluginPermission::SettingsRead,
         "settings.modify" => PluginPermission::SettingsModify,

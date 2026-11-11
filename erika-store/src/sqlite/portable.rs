@@ -5,6 +5,8 @@ use crate::now;
 use crate::portable::{Anime, Episode, FileKey, Link, Mark, Progress, Recent, Source, Watched};
 use rusqlite::{OptionalExtension, Result, Row, params};
 
+pub(super) mod write;
+
 fn file_key(md5: Option<String>, size: Option<i64>, item: Option<String>) -> Option<FileKey> {
     match (md5, size, item) {
         (Some(md5), Some(size), _) => Some(FileKey::Hash {
@@ -33,15 +35,16 @@ impl Db {
         .unwrap_or_default()
     }
 
-    /// Run `work` in one transaction, so a sync's changes land together
-    /// and fast.
-    pub fn transaction<T>(&self, work: impl FnOnce() -> T) -> T {
-        let begun = logged(self.conn.execute_batch("BEGIN"), "begin a transaction").is_some();
-        let result = work();
-        if begun {
-            logged(self.conn.execute_batch("COMMIT"), "commit a transaction");
-        }
-        result
+    /// Commit the database portion of a restore only when every operation succeeds.
+    /// Callers must defer external side effects until this returns successfully.
+    pub fn transaction<T>(
+        &self,
+        work: impl FnOnce(&Self) -> crate::catalog::Result<T>,
+    ) -> crate::catalog::Result<T> {
+        let tx = write::Write::begin(&self.conn)?;
+        let result = work(self)?;
+        tx.commit()?;
+        Ok(result)
     }
 
     /// Every small value the app keeps.
@@ -93,32 +96,30 @@ impl Db {
 
     /// Add `source`, or bring the one at its place up to date. Returns its
     /// id, and whether it is new.
-    pub fn put_source(&self, source: &Source) -> Option<(i64, bool)> {
-        logged(
-            (|| {
-                let known: Option<i64> = self
-                    .conn
-                    .query_row(
-                        "SELECT id FROM source WHERE kind = ?1 AND location = ?2 AND id != ?3",
-                        params![source.kind, source.location, OPENED],
-                        |row| row.get(0),
-                    )
-                    .optional()?;
-                if let Some(id) = known {
-                    self.conn.execute(
-                        "UPDATE source SET name = ?2, content = ?3 WHERE id = ?1",
-                        params![id, source.name, source.content],
-                    )?;
-                    return Ok((id, false));
-                }
-                self.conn.execute(
-                    "INSERT INTO source (kind, name, location, added_at, content) VALUES (?1, ?2, ?3, ?4, ?5)",
+    pub fn put_source(&self, source: &Source) -> crate::catalog::Result<(i64, bool)> {
+        let descriptor = crate::plugin_sources::Descriptor::from_source(source)?;
+        let tx = write::Write::begin(&self.conn)?;
+        let result = if let Some((owner, descriptor)) = descriptor {
+            super::plugin_sources::register(&tx, &owner, &descriptor, source.added)?
+        } else {
+            let known: Option<i64> = tx.query_row(
+                "SELECT id FROM source WHERE kind=?1 AND location=?2 AND id!=?3",
+                params![source.kind, source.location, OPENED], |row| row.get(0),
+            ).optional()?;
+            if let Some(id) = known {
+                tx.execute("UPDATE source SET name=?2,content=?3 WHERE id=?1",
+                    params![id, source.name, source.content])?;
+                (id, false)
+            } else {
+                tx.execute(
+                    "INSERT INTO source(kind,name,location,added_at,content) VALUES(?1,?2,?3,?4,?5)",
                     params![source.kind, source.name, source.location, source.added, source.content],
                 )?;
-                Ok((self.conn.last_insert_rowid(), true))
-            })(),
-            "add a synced source",
-        )
+                (tx.last_insert_rowid(), true)
+            }
+        };
+        tx.commit()?;
+        Ok(result)
     }
 
     /// Forget the source of `kind` at `location`.
@@ -219,7 +220,10 @@ impl Db {
         self.rows(
             "SELECT f.md5, f.size, f.server_item, e.dandanplay_id, f.matched_by
              FROM file f LEFT JOIN episode e ON e.id = f.episode_id
-             WHERE f.matched_by IS NOT NULL OR f.episode_id IS NOT NULL",
+             WHERE (f.matched_by IS NOT NULL OR f.episode_id IS NOT NULL)
+               AND NOT EXISTS (
+                   SELECT 1 FROM file_binding b WHERE b.file_id=f.id
+               )",
             "read what files are",
             |row| {
                 Ok(key_of(row, 0)?.map(|file| Link {
@@ -235,31 +239,26 @@ impl Db {
     }
 
     pub fn put_link(&self, link: &Link) {
-        logged(
-            (|| {
-                let file = self.file_of(&link.file)?;
-                self.conn.execute(
-                    "UPDATE file SET episode_id = (SELECT id FROM episode WHERE dandanplay_id = ?2), matched_by = ?3
-                     WHERE id = ?1",
-                    params![file, link.episode, link.matched_by],
-                )
-            })(),
-            "link a synced file",
-        );
+        logged((|| {
+            let file = self.file_of(&link.file)?;
+            self.conn.execute(
+                "UPDATE file SET episode_id=(SELECT id FROM episode WHERE dandanplay_id=?2), matched_by=?3
+                 WHERE id=?1 AND (matched_by IS NULL OR matched_by='auto')
+                 AND NOT EXISTS (SELECT 1 FROM file_binding WHERE file_id=?1)
+                 AND (?2 IS NULL OR EXISTS (SELECT 1 FROM episode WHERE dandanplay_id=?2))",
+                params![file, link.episode, link.matched_by],
+            )
+        })(), "link a synced provider episode");
     }
 
-    /// The file `key` is no longer known to be an episode.
     pub fn remove_link(&self, key: &FileKey) {
-        logged(
-            (|| {
-                let file = self.file_of(key)?;
-                self.conn.execute(
-                    "UPDATE file SET episode_id = NULL, matched_by = NULL WHERE id = ?1",
-                    [file],
-                )
-            })(),
-            "unlink a synced file",
-        );
+        logged((|| {
+            let file = self.file_of(key)?;
+            self.conn.execute(
+                "UPDATE file SET episode_id=NULL, matched_by=NULL WHERE id=?1
+                 AND (matched_by IS NULL OR matched_by='auto')
+                 AND NOT EXISTS (SELECT 1 FROM file_binding WHERE file_id=?1)", [file])
+        })(), "unlink a synced provider episode");
     }
 
     pub fn portable_progress(&self) -> Vec<Progress> {

@@ -142,16 +142,33 @@ impl Links {
     }
 }
 
-pub(super) fn season(
+async fn fetch_async<T, F: std::future::Future<Output = Result<T>>>(
+    sources: Vec<Source>,
+    mut request: impl FnMut(Source) -> F,
+) -> Result<T> {
+    let mut last = api::Error {
+        message: "暂时无法获取番剧数据".into(),
+        sign_in: false,
+    };
+    for source in sources {
+        match request(source).await {
+            Ok(value) => return Ok(value),
+            Err(error) => last = error,
+        }
+    }
+    Err(last)
+}
+
+pub(super) async fn season(
     accounts: Accounts,
     preferred: &SeasonSource,
     links: &Links,
 ) -> Result<Vec<Intro>> {
-    fetch_from(accounts.season_sources(preferred), |source| {
+    fetch_async(accounts.season_sources(preferred), |source| async move {
         let rows = match source {
-            Source::Dandanplay => api::shin_from(false),
-            Source::Bangumi => bangumi::season(),
-            Source::Public => api::shin_from(true),
+            Source::Dandanplay => api::catalog::season(false).await,
+            Source::Bangumi => bangumi::season().await,
+            Source::Public => api::catalog::season(true).await,
         }?;
         if rows.is_empty() {
             return Err(api::Error {
@@ -167,6 +184,7 @@ pub(super) fn season(
             })
             .collect())
     })
+    .await
 }
 
 pub(super) fn search(accounts: Accounts, links: &Links, text: &str) -> Result<Vec<Found>> {
@@ -247,17 +265,23 @@ mod tests {
             both.sources()
         );
         let mut attempted = Vec::new();
-        let result = fetch_from(both.season_sources(&SeasonSource::Bangumi), |source| {
-            attempted.push(source);
-            if source == Source::Dandanplay {
-                Ok(42)
-            } else {
-                Err(api::Error {
-                    message: "offline".into(),
-                    sign_in: false,
-                })
-            }
-        });
+        let result = futures_lite::future::block_on(fetch_async(
+            both.season_sources(&SeasonSource::Bangumi),
+            |source| {
+                attempted.push(source);
+                async move {
+                    futures_lite::future::yield_now().await;
+                    if source == Source::Dandanplay {
+                        Ok(42)
+                    } else {
+                        Err(api::Error {
+                            message: "offline".into(),
+                            sign_in: false,
+                        })
+                    }
+                }
+            },
+        ));
         assert_eq!(result, Ok(42));
         assert_eq!(attempted, vec![Source::Bangumi, Source::Dandanplay]);
         for preferred in [SeasonSource::Bangumi, SeasonSource::Dandanplay] {

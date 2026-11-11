@@ -251,8 +251,11 @@ pub fn library_file_row(
                 }
             }
             Spacer
+            if file.readable {
+                Button(id: play_file, label: tr! { "zh-Hans" => "播放", "en" => "Play" }, icon: "play.fill", shape: capsule, height: if window.tv { 40 } else { 28 }) => library.play_file(file.key)
+            }
             if library.folder.shared {
-                if file.show > 0 {
+                if file.show != "" {
                     Button(id: shared_show, label: tr! { "zh-Hans" => "查看剧集", "en" => "View episodes" }, shape: capsule, height: 28) => library.open(file.show)
                 } else if library.folder.dandanplay && file.readable {
                     Button(id: remote_assign, label: tr! { "zh-Hans" => "指定剧集", "en" => "Choose episode" }, shape: capsule, height: if window.tv { 40 } else { 28 }) => library.assign(file.key)
@@ -386,108 +389,92 @@ pub fn library_folder_menu(library: library::Client) -> impl View {
     }
 }
 
-/// Matching (`matchHTML`): the anime and how the videos go to its
-/// episodes, the videos with the episode each goes to, and confirming.
+/// Content matching uses the same TMDB work/season identities on every device.
 #[component]
-pub fn library_match(
-    app: erika::Client,
-    library: library::Client,
-    #[session] draft: LibraryDraft,
-) -> impl View {
+pub fn library_match(app: erika::Client, library: library::Client, #[session] draft: LibraryDraft) -> impl View {
     ui! {
-        Column(gap: 0) {
-            Canvas(height: if window.compact { 7.0 } else { 0.0 })
-            Row(gap: 10, align: center, height: if window.compact { 48.0 } else { 44.0 }) {
+        Column(gap: 14) {
+            Row(gap: 10, align: center) {
                 IconButton(id: match_back, icon: "chevron.left", label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }) => library.match_cancel()
-                if library.matching.single {
-                    Text(content: tr! { "zh-Hans" => "重新匹配", "en" => "Match again" }, style: large_title)
-                } else {
-                    Text(content: tr! { "zh-Hans" => "批量匹配", "en" => "Match all" }, style: large_title)
-                }
+                Text(content: tr! { "zh-Hans" => "匹配媒体", "en" => "Match media" }, style: large_title)
                 Spacer
                 if window.compact {
-                    ControlGroup(label: tr! { "zh-Hans" => "媒体库操作", "en" => "Library actions" }, height: 44) {
-                        Slot(id: phone_header_settings)
-                    }
+                    ControlGroup(label: tr! { "zh-Hans" => "媒体库操作", "en" => "Library actions" }, height: 44) { Slot(id: phone_header_settings) }
                 }
             }
-            if library.matching.single {
-                Text(content: library.matching.place, style: caption, emphasis: secondary, lines: 2)
-            } else {
-                Text(content: tr! { "zh-Hans" => "{place} · {count} 个文件", "en" => "{place} · {count} files"; place: library.matching.place, count: library.matching.all_count }, style: caption, emphasis: secondary, lines: 2)
-            }
-            Canvas(height: 18)
-            // `.m-ctl`: the anime, then the episode or how the videos go.
-            Row(gap: 18, align: center) {
-                Row(gap: 8, align: center) {
-                    Text(content: tr! { "zh-Hans" => "番剧", "en" => "Show" }, emphasis: secondary)
-                    if library.matching.anime > 0 {
-                        PopoverButton(id: match_anime_chosen, label: library.matching.anime_title, presented: draft.anime_open) {
-                            library_match_search(app: app, library: library)
-                        }
-                    } else {
-                        PopoverButton(id: match_anime_search, label: tr! { "zh-Hans" => "搜索番剧", "en" => "Search shows" }, presented: draft.anime_open) {
-                            library_match_search(app: app, library: library)
-                        }
-                    }
-                }
-                if library.matching.single {
-                    ForEach(items: library.matching.rows, key: key) |row| {
-                        Row(gap: 6, align: center) {
-                            Text(content: tr! { "zh-Hans" => "集数 第", "en" => "Episode" }, emphasis: secondary)
-                            Row(width: 72) {
-                                TextInput(id: single_number, label: tr! { "zh-Hans" => "集数", "en" => "Episode" }, label_hidden: true, value: draft.number, prompt: tr! { "zh-Hans" => "{number}", "en" => "{number}"; number: row.number }, submit: clear) => library.match_number(row.key, draft.number)
-                            }
-                            Text(content: tr! { "zh-Hans" => "话", "en" => "" }, emphasis: secondary)
-                        }
+            Text(content: library.matching.place, style: caption, emphasis: secondary, lines: 2)
+            Row(gap: 8, align: center) {
+                Text(content: tr! { "zh-Hans" => "作品", "en" => "Title" }, emphasis: secondary)
+                if library.matching.work != "" {
+                    PopoverButton(id: match_work_chosen, label: library.matching.title, presented: draft.anime_open) {
+                        library_match_search(app: app, library: library)
                     }
                 } else {
-                    Row(gap: 6, align: center) {
-                        Text(content: tr! { "zh-Hans" => "配法", "en" => "By" }, emphasis: secondary)
-                        if library.matching.by_order {
-                            Button(id: by_number, label: tr! { "zh-Hans" => "按文件名里的集数", "en" => "Numbers in names" }, shape: chip, height: 30, variant: library_chip) => library.match_by_order(false)
-                            Button(id: by_order_on, label: tr! { "zh-Hans" => "按顺序", "en" => "Order" }, icon: "checkmark", prominence: prominent, shape: chip, height: 30, variant: library_chip) => library.match_by_order(true)
-                        } else {
-                            Button(id: by_number_on, label: tr! { "zh-Hans" => "按文件名里的集数", "en" => "Numbers in names" }, icon: "checkmark", prominence: prominent, shape: chip, height: 30, variant: library_chip) => library.match_by_order(false)
-                            Button(id: by_order, label: tr! { "zh-Hans" => "按顺序", "en" => "Order" }, shape: chip, height: 30, variant: library_chip) => library.match_by_order(true)
+                    PopoverButton(id: match_work_search, label: tr! { "zh-Hans" => "搜索作品", "en" => "Search titles" }, presented: draft.anime_open) {
+                        library_match_search(app: app, library: library)
+                    }
+                }
+                Spacer
+            }
+            if !library.matching.movie {
+                ScrollView(axis: horizontal) {
+                    Row(gap: 8) {
+                        ForEach(items: library.matching.seasons, key: id) |season| {
+                            if library.matching.season == season.id {
+                                Button(id: match_season_chosen, label: season.title, prominence: prominent, shape: chip) => library.match_season(season.id)
+                            } else {
+                                Button(id: match_season, label: season.title, shape: chip) => library.match_season(season.id)
+                            }
+                        }
+                    }
+                }
+                if !library.matching.single {
+                    ScrollView(axis: horizontal) {
+                        Row(gap: 8, align: center) {
+                            if library.matching.by_order {
+                                Button(id: by_number, label: tr! { "zh-Hans" => "文件名集数", "en" => "Filename numbers" }, shape: chip) => library.match_by_order(false)
+                                Button(id: by_order_on, label: tr! { "zh-Hans" => "按顺序", "en" => "In order" }, icon: "checkmark", prominence: prominent, shape: chip) => library.match_by_order(true)
+                            } else {
+                                Button(id: by_number_on, label: tr! { "zh-Hans" => "文件名集数", "en" => "Filename numbers" }, icon: "checkmark", prominence: prominent, shape: chip) => library.match_by_order(false)
+                                Button(id: by_order, label: tr! { "zh-Hans" => "按顺序", "en" => "In order" }, shape: chip) => library.match_by_order(true)
+                            }
+                        }
+                    }
+                    if library.matching.by_order {
+                        Row(gap: 8, align: center) {
+                            Text(content: tr! { "zh-Hans" => "起始集数", "en" => "First episode" }, emphasis: secondary)
+                            Row(width: 80) {
+                                TextInput(id: match_start, label: tr! { "zh-Hans" => "起始集数", "en" => "First episode" }, label_hidden: true, value: draft.start, prompt: tr! { "zh-Hans" => "{start}", "en" => "{start}"; start: library.matching.start }, submit: clear) => library.match_start(draft.start)
+                            }
+                        }
+                    } else if library.matching.lowest > 0 {
+                        Row(gap: 8, align: center) {
+                            Text(content: tr! { "zh-Hans" => "文件名 {lowest} 对齐至", "en" => "Map filename {lowest} to"; lowest: library.matching.lowest }, emphasis: secondary)
+                            Row(width: 80) {
+                                TextInput(id: match_align, label: tr! { "zh-Hans" => "对齐集数", "en" => "Aligned episode" }, label_hidden: true, value: draft.align, prompt: tr! { "zh-Hans" => "{number}", "en" => "{number}"; number: library.matching.align_to }, submit: clear) => library.match_align(draft.align)
+                            }
                         }
                     }
                 }
             }
+            if library.matching.loading {
+                Text(content: tr! { "zh-Hans" => "正在载入资料…", "en" => "Loading details…" }, style: caption, emphasis: secondary)
+            }
+            if library.matching.error != "" {
+                Text(content: library.matching.error, style: caption, lines: 4)
+            }
             if !library.matching.single {
-                Canvas(height: 12)
-                if library.matching.by_order {
-                    Row(gap: 6, align: center) {
-                        Text(content: tr! { "zh-Hans" => "从第", "en" => "From episode" }, emphasis: secondary)
-                        Row(width: 72) {
-                            TextInput(id: match_start, label: tr! { "zh-Hans" => "从第几话开始", "en" => "First episode" }, label_hidden: true, value: draft.start, prompt: tr! { "zh-Hans" => "{start}", "en" => "{start}"; start: library.matching.start }, submit: clear) => library.match_start(draft.start)
-                        }
-                        Text(content: tr! { "zh-Hans" => "话开始", "en" => "on" }, emphasis: secondary)
-                    }
-                } else if library.matching.lowest > 0 {
-                    Row(gap: 6, align: center) {
-                        Text(content: tr! { "zh-Hans" => "对齐：文件名里的 {lowest} 是第", "en" => "Align: {lowest} in the names is episode"; lowest: library.matching.lowest }, emphasis: secondary)
-                        Row(width: 72) {
-                            TextInput(id: match_align, label: tr! { "zh-Hans" => "对齐到第几话", "en" => "Align to episode" }, label_hidden: true, value: draft.align, prompt: tr! { "zh-Hans" => "{episode}", "en" => "{episode}"; episode: library.matching.align_to }, submit: clear) => library.match_align(draft.align)
-                        }
-                        Text(content: tr! { "zh-Hans" => "话", "en" => "" }, emphasis: secondary)
-                    }
-                }
-                Canvas(height: 14)
-                // `.m-chips`: all or the ones worth a look, and the tally.
                 Row(gap: 8, align: center) {
                     if library.matching.odd_only {
-                        Button(id: match_all, label: tr! { "zh-Hans" => "全部 {count}", "en" => "All {count}"; count: library.matching.all_count }, shape: chip, height: 30, variant: library_chip) => library.match_odd(false)
-                        Button(id: match_odd_on, label: tr! { "zh-Hans" => "要看一下 {count}", "en" => "Worth a look {count}"; count: library.matching.odd_count }, icon: "checkmark", prominence: prominent, shape: chip, height: 30, variant: library_chip) => library.match_odd(true)
+                        Button(id: match_all, label: tr! { "zh-Hans" => "全部 {count}", "en" => "All {count}"; count: library.matching.all_count }, shape: chip) => library.match_odd(false)
+                        Button(id: match_odd_on, label: tr! { "zh-Hans" => "需检查 {count}", "en" => "Review {count}"; count: library.matching.odd_count }, prominence: prominent, shape: chip) => library.match_odd(true)
                     } else {
-                        Button(id: match_all_on, label: tr! { "zh-Hans" => "全部 {count}", "en" => "All {count}"; count: library.matching.all_count }, icon: "checkmark", prominence: prominent, shape: chip, height: 30, variant: library_chip) => library.match_odd(false)
-                        Button(id: match_odd, label: tr! { "zh-Hans" => "要看一下 {count}", "en" => "Worth a look {count}"; count: library.matching.odd_count }, shape: chip, height: 30, variant: library_chip) => library.match_odd(true)
+                        Button(id: match_all_on, label: tr! { "zh-Hans" => "全部 {count}", "en" => "All {count}"; count: library.matching.all_count }, prominence: prominent, shape: chip) => library.match_odd(false)
+                        Button(id: match_odd, label: tr! { "zh-Hans" => "需检查 {count}", "en" => "Review {count}"; count: library.matching.odd_count }, shape: chip) => library.match_odd(true)
                     }
-                    Text(content: tr! { "zh-Hans" => "{on} 个会匹配 · {skipped} 个跳过 · {bad} 个要先处理", "en" => "{on} to match · {skipped} skipped · {bad} to fix"; on: library.matching.on_count, skipped: library.matching.skipped_count, bad: library.matching.bad_count }, style: caption, emphasis: secondary, lines: 1)
                     Spacer
                 }
             }
-            Canvas(height: 14)
             Stack(variant: row_group) {
                 Column(gap: 0, padding: 4) {
                     ForEach(items: library.matching.shown, key: key) |row| {
@@ -495,112 +482,76 @@ pub fn library_match(
                     }
                 }
             }
-            Canvas(height: 12)
-            if library.matching.single {
-                Text(content: tr! { "zh-Hans" => "弹幕跟着换成新那一集的；观看进度和弹幕偏移记在文件上，原样留着。这个文件在别的来源里的副本也一起改。", "en" => "Danmaku follow the new episode; progress and the danmaku offset stay with the file. Copies in other sources change too." }, style: caption, emphasis: secondary, lines: 3)
-            } else if library.matching.by_order {
-                Text(content: tr! { "zh-Hans" => "按文件名排好顺序，从起始那一话开始依次往后配。个别不对的点集数直接改，左边的勾可以跳过一个文件。确定后一次写入，出错就全部不改。", "en" => "In the order of their names, from the first episode on. Click an episode to change it, or the tick to skip a file. Everything is saved at once, or nothing." }, style: caption, emphasis: secondary, lines: 3)
-            } else {
-                Text(content: tr! { "zh-Hans" => "每个文件按文件名里的集数配到那一话；第二季接着第一季编号时改「对齐」。同一话的几个文件算几个版本。个别不对的点集数直接改，左边的勾可以跳过一个文件。这些文件在别的来源里的副本也一起改，确定后一次写入，出错就全部不改。", "en" => "Each file goes to the episode its name gives; when a second season goes on from the first, change Align. Files of one episode are its versions. Click an episode to change it, or the tick to skip a file. Copies in other sources change too; everything is saved at once, or nothing." }, style: caption, emphasis: secondary, lines: 4)
-            }
-            Canvas(height: 16)
+            Text(content: tr! { "zh-Hans" => "同一文件在所有来源中的内容关联都会更新；弹幕关联不变。", "en" => "Content links change in every source containing the same file; danmaku links stay unchanged." }, style: caption, emphasis: secondary, lines: 3)
             Row(gap: 10, align: center) {
-                if library.matching.single {
-                    Button(id: match_confirm_one, label: tr! { "zh-Hans" => "确定", "en" => "Done" }, shape: capsule, height: 32, prominence: prominent, enabled: library.matching.ready) => library.match_confirm()
-                } else {
-                    Button(id: match_confirm_many, label: tr! { "zh-Hans" => "匹配 {count} 个文件", "en" => "Match {count} files"; count: library.matching.on_count }, shape: capsule, height: 32, prominence: prominent, enabled: library.matching.ready) => library.match_confirm()
-                }
+                Button(id: match_confirm, label: tr! { "zh-Hans" => "保存匹配", "en" => "Save matches" }, shape: capsule, prominence: prominent, enabled: library.matching.ready) => library.match_confirm()
                 if library.matching.linked {
-                    Button(id: match_unlink, label: tr! { "zh-Hans" => "解除匹配", "en" => "Unlink" }, shape: capsule, height: 32) => library.match_unlink()
+                    Button(id: match_unlink, label: tr! { "zh-Hans" => "解除匹配", "en" => "Unlink" }, shape: capsule) => library.match_unlink()
                 }
-                Button(id: match_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, shape: capsule, height: 32) => library.match_cancel()
+                Button(id: match_cancel, label: tr! { "zh-Hans" => "取消", "en" => "Cancel" }, shape: capsule) => library.match_cancel()
                 Spacer
             }
         }
     }
 }
 
-/// The anime to match to, searched for on dandanplay (`manime`).
 #[component]
-pub fn library_match_search(
-    app: erika::Client,
-    library: library::Client,
-    #[session] draft: LibraryDraft,
-) -> impl View {
+pub fn library_match_search(app: erika::Client, library: library::Client, #[session] draft: LibraryDraft) -> impl View {
     ui! {
-        Column(gap: 8, width: 340, padding: 8) {
-            TextInput(id: match_search, label: tr! { "zh-Hans" => "搜索番剧", "en" => "Search shows" }, label_hidden: true, value: draft.search, prompt: tr! { "zh-Hans" => "搜索弹弹play 的番剧，回车搜索", "en" => "Search dandanplay, then press Return" }) => library.match_search(draft.search)
+        Column(gap: 8, width: 300, padding: 8) {
+            TextInput(id: match_search, label: tr! { "zh-Hans" => "搜索作品", "en" => "Search titles" }, label_hidden: true, value: draft.search, prompt: tr! { "zh-Hans" => "作品名称", "en" => "Title" }) => library.match_search(draft.search)
             if library.matching.searching {
                 Text(content: tr! { "zh-Hans" => "正在搜索…", "en" => "Searching…" }, style: caption, emphasis: secondary)
             } else if library.matching.search_failed {
-                if build.modules.account && app.features.account {
-                    Text(content: tr! { "zh-Hans" => "搜索不了：先在 设置 › 账号 里登录弹弹play。", "en" => "Can't search: sign in to dandanplay under Settings › Account." }, style: caption, emphasis: secondary, lines: 2)
-                } else if build.modules.account {
-                    Text(content: tr! { "zh-Hans" => "请先在 设置 › 可选功能 中开启账号并登录。", "en" => "Enable Account under Settings › Optional Features, then sign in." }, style: caption, emphasis: secondary, lines: 2)
-                } else {
-                    Text(content: tr! { "zh-Hans" => "此版本不支持在线搜索番剧。", "en" => "Online show search is unavailable in this build." }, style: caption, emphasis: secondary, lines: 2)
-                }
+                Text(content: library.matching.error, style: caption, lines: 3)
             }
             Column(gap: 0) {
-                ForEach(items: library.matching.results, key: id) |anime| {
-                    Button(id: match_result, label: anime.title, variant: row) {
+                ForEach(items: library.matching.results, key: id) |work| {
+                    Button(id: match_result, label: work.title, variant: row) {
                         Row(gap: 8, align: center) {
-                            if anime.chosen {
+                            if work.chosen {
                                 Label(title: tr! { "zh-Hans" => "已选", "en" => "Chosen" }, icon: "checkmark", display: icon, style: caption)
-                            } else {
-                                Canvas(width: 12, height: 12)
                             }
-                            Text(content: anime.title, lines: 1)
+                            Column(gap: 2) {
+                                Text(content: work.title, lines: 2)
+                                Text(content: work.detail, style: caption, emphasis: secondary)
+                            }
                             Spacer
-                            if anime.episodes > 0 {
-                                Text(content: tr! { "zh-Hans" => "{count} 话", "en" => "{count} eps"; count: anime.episodes }, style: caption, emphasis: secondary)
-                            }
                         }
-                    } => library.match_anime(anime.id)
+                    } => library.match_work(work.id)
                 }
             }
         }
     }
 }
 
-/// A video being matched: matched or skipped, its name and what to know
-/// of it, and the episode it goes to, typed over in place.
 #[component]
-pub fn library_match_row(
-    library: library::Client,
-    row: library::MatchRow,
-    single: bool,
-    #[session] draft: LibraryDraft,
-) -> impl View {
+pub fn library_match_row(library: library::Client, row: library::MatchRow, single: bool, #[session] draft: LibraryDraft) -> impl View {
     ui! {
         Row(gap: 12, align: center, padding: 6) {
             if single {
-                Stack(width: 30, height: 30, align: center) {
-                    Label(title: row.name, icon: "film", display: icon, style: body)
-                }
+                Label(title: row.name, icon: "film", display: icon, style: body)
             } else if row.on {
                 IconButton(id: skip_row, icon: "checkmark", label: tr! { "zh-Hans" => "跳过这个文件", "en" => "Skip this file" }) => library.match_toggle(row.key)
             } else {
                 IconButton(id: take_row, icon: "circle", label: tr! { "zh-Hans" => "匹配这个文件", "en" => "Match this file" }) => library.match_toggle(row.key)
             }
-            Column(gap: 2) {
+            Column(gap: 4) {
                 Text(content: row.name, lines: 1)
-                Text(content: row.note, style: caption, emphasis: secondary, lines: 1)
-            }
-            Spacer
-            if !single {
+                Text(content: row.note, style: caption, emphasis: secondary, lines: 2)
                 if !row.on {
                     Text(content: tr! { "zh-Hans" => "跳过", "en" => "Skipped" }, style: caption, emphasis: tertiary)
+                } else if library.matching.movie {
+                    Text(content: row.destination, style: caption, lines: 2)
                 } else if row.editing {
-                    Row(width: 96) {
-                        TextInput(id: row_number, label: tr! { "zh-Hans" => "集数", "en" => "Episode" }, label_hidden: true, value: draft.number, prompt: tr! { "zh-Hans" => "第 {number} 话", "en" => "Episode {number}"; number: row.number }, submit: clear) => library.match_number(row.key, draft.number)
-                    }
-                } else if row.number > 0 {
-                    Button(id: edit_row, label: tr! { "zh-Hans" => "→ 第 {number} 话", "en" => "→ Episode {number}"; number: row.number }, prominence: plain) => library.match_edit(row.key)
+                    TextInput(id: row_number, label: tr! { "zh-Hans" => "集数", "en" => "Episodes" }, value: draft.number, prompt: tr! { "zh-Hans" => "{number}；如 1、1-3 或 1,3", "en" => "{number}; e.g. 1, 1-3 or 1,3"; number: row.assignment }, submit: clear) => library.match_number(row.key, draft.number)
+                } else if row.destination != "" {
+                    Button(id: edit_row, label: row.destination, prominence: plain) => library.match_edit(row.key)
                 } else {
-                    Button(id: fill_row, label: tr! { "zh-Hans" => "→ 填集数", "en" => "→ Enter episode" }, prominence: plain) => library.match_edit(row.key)
+                    Button(id: fill_row, label: tr! { "zh-Hans" => "指定集数", "en" => "Set episodes" }, prominence: plain) => library.match_edit(row.key)
                 }
             }
+            Spacer
         }
     }
 }

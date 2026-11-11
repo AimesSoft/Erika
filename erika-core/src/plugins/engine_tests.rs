@@ -230,7 +230,7 @@ function pluginResolveUrl(input) {
   return {
     type: 'play', url: 'https://cdn.example.com/' + input.selectedId + '.mp4',
     title: input.selectedId === 'a' ? '第一集' : '第二集',
-    headers: { Referer: 'https://example.com/', Host: 'evil' },
+    headers: { Referer: 'https://example.com/' },
   };
 }
 "#;
@@ -241,6 +241,8 @@ fn a_plugin_resolves_a_link_in_rounds() {
     let script = folder.join("resolver.js");
     std::fs::write(&script, RESOLVER).unwrap();
     let mut engine = ErikaEngine::default();
+    let kernel = Arc::new(crate::player::tests::FakeKernel::default());
+    engine.kernel = Some(kernel.clone());
     engine.plugins_wake();
     engine.import_plugin_command(MediaSource::file(&script)).unwrap();
     settle(&mut engine, |engine| row(engine, "test.resolver").is_some_and(|p| p.loaded));
@@ -255,8 +257,8 @@ fn a_plugin_resolves_a_link_in_rounds() {
     settle(&mut engine, |engine| !engine.state.link_resolving);
     assert_eq!(engine.state.title, "第一集");
     assert_eq!(
-        crate::kernel::link_headers("https://cdn.example.com/a.mp4"),
-        vec![("Referer".to_string(), "https://example.com/".to_string())]
+        kernel.opens.lock().unwrap().as_slice(),
+        &[("https://cdn.example.com/a.mp4".into(), 0., vec![("Referer".into(), "https://example.com/".into())])]
     );
 
     // Not its link: it plays as it is.

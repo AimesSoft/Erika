@@ -31,14 +31,22 @@ pub const RECENTS: &str = "recents";
 pub const MARKS: &str = "marks";
 pub const ACCOUNTS: &str = "accounts";
 pub const EXTENSIONS: &str = "extensions";
-/// The WebDAV sync's own settings: in exports only.
+/// Credentials keyed by the source's kind and location, not its local row id.
+pub const SOURCE_SECRETS: &str = "source_secrets";
+/// Opaque extension JSON may hold arbitrary credentials. It is sealed as a
+/// whole rather than guessing which property names are passwords.
+pub const SEALED_CATEGORIES: &[&str] = &[ACCOUNTS, SOURCE_SECRETS, EXTENSIONS, SYNC];
+/// The WebDAV destination and credential, sealed together: in exports only.
 pub const SYNC: &str = "sync";
+const WEBDAV_CONFIGURATION: &str = "sync-webdav-configuration";
 
 /// Every category, in the order changes are taken in: what others refer
 /// to first.
 pub const CATEGORIES: &[&str] = &[
-    SETTINGS, STORE, SOURCES, ANIME, EPISODES, LINKS, PROGRESS, WATCHED, RECENTS, MARKS, ACCOUNTS,
+    SETTINGS, STORE, SOURCES, SOURCE_SECRETS, ANIME, EPISODES, LINKS, PROGRESS, WATCHED, RECENTS, MARKS, ACCOUNTS,
     EXTENSIONS, SYNC,
+    crate::catalog::NODES, crate::catalog::LINKS, crate::catalog::BINDINGS,
+    crate::catalog::DANMAKU, crate::catalog::WATCHED, crate::catalog::MARKS,
 ];
 
 /// The values the app keeps in its store rather than its database.
@@ -76,6 +84,10 @@ fn own_setting(key: &str) -> bool {
         && !key.starts_with("dandanplay.")
         && !key.starts_with("bangumi.")
         && !key.starts_with("sync.")
+        && !key.starts_with(erika_store::portable::DANDANPLAY_SOURCE_SETTINGS)
+        && !key.starts_with("anime.tmdb.")
+        && !key.starts_with("anime.calendar.")
+        && !key.starts_with("anime.broadcast_schedule.")
 }
 
 /// What a sync carries.
@@ -91,9 +103,9 @@ pub enum Scope {
 /// Whether an entry means the same on another device.
 pub fn portable(category: &str, key: &str, value: &Value) -> bool {
     match category {
-        SETTINGS => !matches!(key, "downloads.places" | "downloads.place"),
+        SETTINGS => own_setting(key) && !matches!(key, "downloads.places" | "downloads.place"),
         SOURCES => value.get("kind").and_then(Value::as_str) != Some("folder"),
-        RECENTS => web_address(key),
+        RECENTS => web_address(key) || erika_store::plugin_sources::is_address(key),
         SYNC => false,
         _ => true,
     }
@@ -194,6 +206,8 @@ pub struct Applied {
     pub sync: bool,
     /// Sources added, to scan.
     pub new_sources: Vec<i64>,
+    /// Existing sources whose credentials changed and whose directory must reload.
+    pub rescan_sources: Vec<i64>,
     /// Secrets that could not be opened: another passphrase sealed them.
     pub locked: usize,
     pub changes: usize,
@@ -206,6 +220,7 @@ pub struct Device<'a> {
     pub vault: &'a dyn Vault,
     pub scope: Scope,
     pub applied: Applied,
+    collected_catalog: std::cell::RefCell<Option<erika_store::catalog::CatalogSnapshot>>,
 }
 
 fn some_int(value: Option<i64>) -> Value {
@@ -232,13 +247,16 @@ impl<'a> Device<'a> {
             vault,
             scope,
             applied: Applied::default(),
+            collected_catalog: std::cell::RefCell::new(None),
         }
     }
 
-    /// Everything this device has, its secrets sealed with `key`; without
-    /// a key the accounts stay out.
-    pub fn collect(&self, key: Option<&SealKey>) -> State {
-        let mut state = State::new();
+    /// Everything this device has, its private records sealed with `key`;
+    /// without a key those records stay out.
+    pub fn collect(&self, key: Option<&SealKey>) -> Result<State, crate::repository::SyncError> {
+        let snapshot = self.db.catalog_export().map_err(|e| crate::repository::SyncError::new(e.message))?;
+        let mut state = crate::catalog::records(&snapshot)?;
+        self.collected_catalog.replace(Some(snapshot));
         let mut put = |category: &str, key: String, value: Value| {
             if self.scope == Scope::Export || portable(category, &key, &value) {
                 state
@@ -354,13 +372,26 @@ impl<'a> Device<'a> {
                 ]),
             );
         }
-        for (id, json) in self.db.extensions() {
-            match serde_json::from_str::<serde_json::Value>(&json) {
-                Ok(json) => put(EXTENSIONS, id, Value::from_json(&json)),
-                Err(error) => eprintln!("erika-sync: extension {id} is not JSON: {error}"),
-            }
-        }
         if let Some(key) = key {
+            for source in self.db.sources().into_iter().filter(|s| s.kind == "dandanplay") {
+                let setting = erika_store::portable::dandanplay_token_setting(source.id);
+                if let Some(token) = self.db.setting(&setting).filter(|v| !v.is_empty()) {
+                    let id = format!("{}\n{}", source.kind, source.location);
+                    put(SOURCE_SECRETS, id.clone(), Value::map([(
+                        "token", Value::Sealed(key.seal(&format!("source-token\n{id}"), token.as_bytes())),
+                    )]));
+                }
+            }
+            for (id, json) in self.db.extensions() {
+                // Canonical serialization makes an unchanged extension compare
+                // equal after import, irrespective of its original whitespace.
+                let json: serde_json::Value = serde_json::from_str(&json)
+                    .map_err(|_| crate::repository::SyncError::new("扩展数据不是有效 JSON，无法备份"))?;
+                let json = json.to_string();
+                put(EXTENSIONS, id.clone(), Value::map([(
+                    "data", Value::Sealed(key.seal(&format!("extension\n{id}"), json.as_bytes())),
+                )]));
+            }
             if let Some(token) = self.vault.read(DANDANPLAY_TOKEN) {
                 let mut account = self.fields(&DANDANPLAY_SETTINGS);
                 account.insert(
@@ -377,22 +408,18 @@ impl<'a> Device<'a> {
                 );
                 put(ACCOUNTS, "bangumi".into(), Value::Map(account));
             }
-        }
-        if self
-            .db
-            .setting("sync.webdav.url")
-            .is_some_and(|url| !url.is_empty())
-        {
-            let mut webdav = self.fields(&WEBDAV_SETTINGS);
-            if let (Some(key), Some(password)) = (key, self.vault.read(WEBDAV_PASSWORD)) {
-                webdav.insert(
-                    "password".into(),
-                    Value::Sealed(key.seal(WEBDAV_PASSWORD, password.as_bytes())),
-                );
+            if self.scope == Scope::Export && self.db.setting("sync.webdav.url").is_some_and(|url| !url.is_empty()) {
+                // Bind the complete destination to its password. An omitted
+                // password must never reuse the receiving device's credential.
+                let mut webdav = self.fields(&WEBDAV_SETTINGS);
+                webdav.insert("password".into(), Value::text(self.vault.read(WEBDAV_PASSWORD).unwrap_or_default()));
+                let json = Value::Map(webdav).to_json().to_string();
+                put(SYNC, "webdav".into(), Value::map([(
+                    "data", Value::Sealed(key.seal(WEBDAV_CONFIGURATION, json.as_bytes())),
+                )]));
             }
-            put(SYNC, "webdav".into(), Value::Map(webdav));
         }
-        state
+        Ok(state)
     }
 
     /// Settings `fields` names, by their names in a record.
@@ -432,24 +459,70 @@ impl<'a> Device<'a> {
         text
     }
 
-    /// Take in `ops`, secrets opened with `key`.
-    pub fn apply(&mut self, ops: &[Op], key: Option<&SealKey>) {
-        let mut ops: Vec<&Op> = ops.iter().collect();
-        ops.sort_by_key(|op| {
-            CATEGORIES
-                .iter()
-                .position(|category| *category == op.category)
-                .unwrap_or(CATEGORIES.len())
+    /// Take in database records atomically, then apply store/vault side effects.
+    pub fn apply(&mut self, ops: &[Op], key: Option<&SealKey>) -> Result<(), crate::repository::SyncError> {
+        let media_count = ops.iter().filter(|op| crate::catalog::CATEGORIES.contains(&op.category.as_str())).count();
+        let expected = if media_count > 0 {
+            Some(self.collected_catalog.take().ok_or_else(|| crate::repository::SyncError::new("请先读取本地媒体库再同步"))?)
+        } else {
+            None
+        };
+        let mut ordered: Vec<&Op> = ops.iter().filter(|op| !crate::catalog::CATEGORIES.contains(&op.category.as_str())).collect();
+        ordered.sort_by_key(|op| {
+            CATEGORIES.iter().position(|category| *category == op.category).unwrap_or(CATEGORIES.len())
         });
-        let db = self.db;
-        db.transaction(|| {
-            for op in ops {
-                self.apply_one(op, key);
+        let external = |op: &&Op| matches!(op.category.as_str(), STORE | ACCOUNTS | SYNC);
+        let applied = self.db.transaction(|db| {
+            // Browser storage supplies a private draft; never capture self.db for writes.
+            let mut staged = Device::new(db, self.store, self.vault, self.scope);
+            staged.applied = self.applied.clone();
+            if let Some(expected) = expected.as_ref() {
+                crate::catalog::apply(db, expected, ops)
+                    .map_err(|e| erika_store::catalog::Error::invalid(&e.message))?;
+                staged.applied.library = true;
+                staged.applied.history = true;
+                staged.applied.marks = true;
+                staged.applied.changes += media_count;
             }
-        });
+            for op in ordered.iter().filter(|op| !external(op)) {
+                staged.apply_one(op, key)
+                    .map_err(|e| erika_store::catalog::Error::invalid(&e.message))?;
+            }
+            Ok(staged.applied)
+        }).map_err(|e| crate::repository::SyncError::new(e.message))?;
+        self.applied = applied;
+        for op in ordered.into_iter().filter(external) {
+            self.apply_one(op, key)?;
+        }
+        Ok(())
     }
 
-    fn apply_one(&mut self, op: &Op, key: Option<&SealKey>) {
+    fn apply_one(&mut self, op: &Op, key: Option<&SealKey>) -> Result<(), crate::repository::SyncError> {
+        // Apply the same boundary on input, including deletions: a remote record
+        // must not replace this device's identity, account fields or caches via
+        // the unsealed, generic settings category.
+        if op.category == SETTINGS && (!own_setting(&op.key)
+            || (self.scope == Scope::Repository
+                && !portable(SETTINGS, &op.key, op.value.as_ref().unwrap_or(&Value::Null))))
+        {
+            return Ok(());
+        }
+        if SEALED_CATEGORIES.contains(&op.category.as_str()) && key.is_none() {
+            // Without a verified key, absence means unavailable, not a request
+            // to clear a credential or replace a local plugin configuration.
+            self.applied.locked += usize::from(op.value.is_some());
+            return Ok(());
+        }
+        if op.category == SOURCE_SECRETS || op.category == EXTENSIONS {
+            return self.apply_private_record(op, key);
+        }
+        if op.category == SYNC {
+            return if self.scope == Scope::Export && op.key == "webdav" {
+                self.apply_webdav(op.value.as_ref(), key)
+            } else {
+                Ok(())
+            };
+        }
         let value = op.value.as_ref();
         let applied = &mut self.applied;
         applied.changes += 1;
@@ -471,18 +544,31 @@ impl<'a> Device<'a> {
                 applied.library = true;
                 match value {
                     Some(value) => {
-                        if let Some((id, true)) = self.db.put_source(&Source {
+                        let source = Source {
                             kind: value.str_of("kind"),
                             name: value.str_of("name"),
                             location: value.str_of("location"),
                             content: value.str_of("content"),
                             added: value.int_of("added").unwrap_or_else(erika_store::now),
-                        }) {
+                        };
+                        if op.key != format!("{}\n{}", source.kind, source.location) {
+                            return Err(crate::repository::SyncError::new("来源键与身份不一致"));
+                        }
+                        let (id, new) = self.db.put_source(&source)
+                            .map_err(|e| crate::repository::SyncError::new(e.message))?;
+                        if new {
                             applied.new_sources.push(id);
                         }
                     }
                     None => {
                         if let Some((kind, location)) = op.key.split_once('\n') {
+                            if kind == "dandanplay" {
+                                if let Some(source) = self.db.sources().into_iter()
+                                    .find(|s| s.kind == kind && s.location == location)
+                                {
+                                    self.db.set_setting(&erika_store::portable::dandanplay_token_setting(source.id), None);
+                                }
+                            }
                             self.db.remove_source_at(kind, location);
                         }
                     }
@@ -513,7 +599,7 @@ impl<'a> Device<'a> {
             }
             LINKS => {
                 let Some(file) = FileKey::parse(&op.key) else {
-                    return;
+                    return Ok(());
                 };
                 applied.library = true;
                 match value {
@@ -527,7 +613,7 @@ impl<'a> Device<'a> {
             }
             PROGRESS => {
                 let Some(file) = FileKey::parse(&op.key) else {
-                    return;
+                    return Ok(());
                 };
                 applied.history = true;
                 match value {
@@ -548,7 +634,7 @@ impl<'a> Device<'a> {
                     None => (op.key.parse().ok(), None, None),
                 };
                 if episode.is_none() && anime.is_none() {
-                    return;
+                    return Ok(());
                 }
                 applied.history = true;
                 let watched = Watched {
@@ -583,7 +669,7 @@ impl<'a> Device<'a> {
                 }
             }
             MARKS => {
-                let Ok(anime) = op.key.parse() else { return };
+                let Ok(anime) = op.key.parse() else { return Ok(()) };
                 applied.marks = true;
                 match value {
                     Some(value) => self.db.set_anime_mark(&Mark {
@@ -595,23 +681,83 @@ impl<'a> Device<'a> {
                     None => self.db.remove_anime_mark(anime),
                 }
             }
-            EXTENSIONS => {
-                applied.extensions = true;
-                let json = value.map(|value| value.to_json().to_string());
-                self.db.set_extension(&op.key, json.as_deref());
-            }
             ACCOUNTS => self.apply_account(&op.key, value, key),
-            SYNC if op.key == "webdav" => {
-                let Some(value) = value else { return };
-                self.applied.sync = true;
-                self.put_fields(value, &WEBDAV_SETTINGS);
-                if let Some(password) = self.open(key, value, "password", WEBDAV_PASSWORD) {
-                    self.vault.write(WEBDAV_PASSWORD, &password);
-                }
-            }
             // A category of a later version.
             _ => applied.changes -= 1,
         }
+        Ok(())
+    }
+
+    fn apply_webdav(&mut self, value: Option<&Value>, key: Option<&SealKey>) -> Result<(), crate::repository::SyncError> {
+        let Some(value) = value else { return Ok(()) };
+        if !matches!(value.get("data"), Some(Value::Sealed(_))) {
+            return Err(crate::repository::SyncError::new("WebDAV 配置必须经过同步口令加密"));
+        }
+        let text = self.open(key, value, "data", WEBDAV_CONFIGURATION)
+            .ok_or_else(|| crate::repository::SyncError::new("无法解密 WebDAV 配置，已保留本机配置"))?;
+        let fields: BTreeMap<String, String> = serde_json::from_str(&text)
+            .map_err(|_| crate::repository::SyncError::new("加密的 WebDAV 配置格式不正确"))?;
+        if !fields.get("url").is_some_and(|url| !url.is_empty()) {
+            return Err(crate::repository::SyncError::new("加密的 WebDAV 配置缺少地址"));
+        }
+        let password = fields.get("password")
+            .ok_or_else(|| crate::repository::SyncError::new("加密的 WebDAV 配置缺少凭据"))?;
+        // Even an empty password replaces the previous one. Do not publish a
+        // new endpoint until the vault accepts its matching credential.
+        if !self.vault.write(WEBDAV_PASSWORD, password) {
+            return Err(crate::repository::SyncError::new("无法保存 WebDAV 密码，已保留本机配置"));
+        }
+        self.put_fields(&Value::Map(fields.into_iter().map(|(key, text)| (key, Value::text(text))).collect()), &WEBDAV_SETTINGS);
+        self.applied.sync = true;
+        self.applied.changes += 1;
+        Ok(())
+    }
+
+    fn apply_private_record(&mut self, op: &Op, key: Option<&SealKey>) -> Result<(), crate::repository::SyncError> {
+        let source = op.category == SOURCE_SECRETS;
+        let field = if source { "token" } else { "data" };
+        let purpose = format!("{}\n{}", if source { "source-token" } else { "extension" }, op.key);
+        let text = match op.value.as_ref() {
+            Some(value) => {
+                if !matches!(value.get(field), Some(Value::Sealed(_))) {
+                    return Err(crate::repository::SyncError::new("私密数据必须经过同步口令加密"));
+                }
+                let text = self.open(key, value, field, &purpose)
+                    .ok_or_else(|| crate::repository::SyncError::new("无法解密私密数据，已保留本机记录"))?;
+                Some(text)
+            }
+            None => None,
+        };
+        if source {
+            let Some(("dandanplay", location)) = op.key.split_once('\n') else {
+                return Err(crate::repository::SyncError::new("来源凭据身份不正确"));
+            };
+            let target = self.db.sources().into_iter()
+                .find(|s| s.kind == "dandanplay" && s.location == location);
+            match target {
+                Some(target) => {
+                    let setting = erika_store::portable::dandanplay_token_setting(target.id);
+                    if self.db.setting(&setting) != text {
+                        self.db.set_setting(&setting, text.as_deref());
+                        if !self.applied.rescan_sources.contains(&target.id) {
+                            self.applied.rescan_sources.push(target.id);
+                        }
+                    }
+                }
+                None if text.is_none() => return Ok(()), // The source was deleted first.
+                None => return Err(crate::repository::SyncError::new("来源凭据缺少对应来源")),
+            }
+            self.applied.library = true;
+        } else {
+            let json = text.map(|text| serde_json::from_str::<serde_json::Value>(&text)
+                .map(|value| value.to_string())
+                .map_err(|_| crate::repository::SyncError::new("加密的扩展数据不是有效 JSON")))
+                .transpose()?;
+            self.db.set_extension(&op.key, json.as_deref());
+            self.applied.extensions = true;
+        }
+        self.applied.changes += 1;
+        Ok(())
     }
 
     fn apply_account(&mut self, account: &str, value: Option<&Value>, key: Option<&SealKey>) {
@@ -642,13 +788,18 @@ impl<'a> Device<'a> {
 }
 
 impl crate::repository::Local for Device<'_> {
-    fn collect(&mut self, key: Option<&SealKey>) -> State {
+    fn collect(&mut self, key: Option<&SealKey>) -> Result<State, crate::repository::SyncError> {
         Device::collect(self, key)
     }
-    fn apply(&mut self, ops: &[Op], key: Option<&SealKey>) {
+    fn apply(&mut self, ops: &[Op], key: Option<&SealKey>) -> Result<(), crate::repository::SyncError> {
         Device::apply(self, ops, key)
     }
 }
+
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+mod credentials_tests;
 
 /// How many entries each category of `state` holds.
 pub fn counts(state: &State) -> BTreeMap<String, usize> {

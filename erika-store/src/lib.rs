@@ -22,16 +22,35 @@ mod sqlite;
 #[cfg(not(target_arch = "wasm32"))]
 pub use sqlite::Db;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(test, allow(dead_code))]
 mod session;
 #[cfg(target_arch = "wasm32")]
 pub use session::Db;
 
 pub mod portable;
+pub mod catalog;
+pub mod account_sync;
+pub mod catalog_context;
+pub mod plugin_sources;
+#[cfg(test)]
+mod plugin_sources_contract;
+pub mod catalog_images;
+mod catalog_identity;
+mod catalog_resolution;
+mod catalog_requests;
+mod catalog_snapshot;
+mod catalog_mark;
+mod catalog_watch;
+#[cfg(test)]
+mod catalog_mark_contract;
+#[cfg(test)]
+mod account_sync_contract;
 
 /// A file's identity: the MD5 of its first 16 MiB, in hex, and its size in
 /// bytes. dandanplay matches a video by these two.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Fingerprint {
     pub md5: String,
     pub size: u64,
@@ -183,5 +202,17 @@ pub fn now() -> i64 {
     bern::date::now().unix
 }
 
+#[cfg(test)]
+mod catalog_context_contract;
+#[cfg(test)]
+mod catalog_contract;
+#[cfg(test)]
+mod catalog_request_contract;
+#[cfg(test)]
+mod catalog_sync_contract;
+#[cfg(test)]
+mod settings_contract;
+#[cfg(test)]
+mod catalog_linked_watch_contract;
 #[cfg(test)]
 mod tests;

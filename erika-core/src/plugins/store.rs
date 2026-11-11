@@ -12,6 +12,49 @@ use super::pack::Pack;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
+mod download;
+
+#[derive(Clone, Copy)]
+pub(super) enum Resource {
+    Index,
+    Pack,
+    Script,
+    Readme,
+    Image,
+}
+
+impl Resource {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn label(self) -> &'static str {
+        match self {
+            Self::Index => "插件索引",
+            Self::Pack => "插件声明",
+            Self::Script => "插件脚本",
+            Self::Readme => "插件说明",
+            Self::Image => "插件图片",
+        }
+    }
+}
+
+fn resource(address: &str, kind: Resource) -> Result<Vec<u8>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    { download::read(address, kind) }
+    #[cfg(target_arch = "wasm32")]
+    { let _ = kind; get(address) }
+}
+
+pub(super) fn readme(address: &str) -> Result<Vec<u8>, String> {
+    resource(address, Resource::Readme)
+}
+
+pub(super) fn cached_image(address: &str) -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    { download::cached_image(address) }
+    #[cfg(target_arch = "wasm32")]
+    { let _ = address; None }
+}
+
 /// NipaPlay's market.
 pub const NIPAPLAY_INDEX: &str =
     "https://raw.githubusercontent.com/AimesSoft/Nipaplay-plugins/refs/heads/main/plugins.json";
@@ -133,7 +176,7 @@ pub fn declared_permissions(script: &str) -> Vec<String> {
 
 /// The plugins one index lists.
 pub fn read_index(address: &str) -> Result<Vec<Listing>, String> {
-    let bytes = get(address)?;
+    let bytes = resource(address, Resource::Index)?;
     let index: Value =
         serde_json::from_slice(&bytes).map_err(|error| format!("{address}：{error}"))?;
     let entries = index
@@ -148,7 +191,7 @@ pub fn read_index(address: &str) -> Result<Vec<Listing>, String> {
                 continue;
             };
             let script = beside(address, file);
-            if let Ok(text) = get(&script).map(|bytes| String::from_utf8_lossy(&bytes).into_owned()) {
+            if let Ok(text) = resource(&script, Resource::Script).map(|bytes| String::from_utf8_lossy(&bytes).into_owned()) {
                 pack = Pack::from_manifest(&serde_json::json!({
                     "id": pack.id, "name": pack.name, "version": pack.version,
                     "description": pack.description, "author": pack.author,
@@ -169,7 +212,10 @@ pub fn read_index(address: &str) -> Result<Vec<Listing>, String> {
             let image = pack
                 .image
                 .as_ref()
-                .map(|image| format!("{folder}/{image}"));
+                .map(|image| {
+                    let address = format!("{folder}/{image}");
+                    cached_image(&address).unwrap_or(address)
+                });
             listings.push(Listing {
                 pack,
                 files: Files::Folder(folder),
@@ -253,22 +299,22 @@ pub fn folder() -> Option<PathBuf> {
 pub fn install(listing: &Listing) -> Result<Pack, String> {
     match &listing.files {
         Files::Script(address) => {
-            let script = get(address)?;
-            let readme = get(&beside(address, "README.md")).ok();
+            let script = resource(address, Resource::Script)?;
+            let readme = readme(&beside(address, "README.md")).ok();
             install_script(&listing.pack, &script, readme.as_deref())
         }
         Files::Local(package) => unpack(package),
         Files::Folder(address) => {
-            let pack_json = get(&format!("{address}/pack.json"))?;
+            let pack_json = resource(&format!("{address}/pack.json"), Resource::Pack)?;
             let declared: Value = serde_json::from_slice(&pack_json)
                 .map_err(|error| format!("pack.json：{error}"))?;
             let pack = Pack::from_pack(&declared)?;
-            let script = get(&format!("{address}/{}", pack.main))?;
+            let script = resource(&format!("{address}/{}", pack.main), Resource::Script)?;
             let image = match &pack.image {
-                Some(image) => Some(get(&format!("{address}/{image}"))?),
+                Some(image) => Some(resource(&format!("{address}/{image}"), Resource::Image)?),
                 None => None,
             };
-            let readme = get(&format!("{address}/README.md")).ok();
+            let readme = readme(&format!("{address}/README.md")).ok();
             place(&pack, &script, image.as_deref(), readme.as_deref())
         }
     }

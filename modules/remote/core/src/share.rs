@@ -1042,7 +1042,7 @@ mod tests {
     #[test]
     fn moments_read_as_clients_parse_them() {
         assert_eq!(iso(0), "1970-01-01T00:00:00.000Z");
-        assert_eq!(iso(1_793_886_665), "2026-11-05T15:51:05.000Z");
+        assert_eq!(iso(1_793_886_665), "2026-11-05T13:51:05.000Z");
     }
 
     #[test]

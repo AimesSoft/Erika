@@ -1,19 +1,23 @@
 [workspace]
 resolver = "3"
-members = ["erika-protocol", "erika-core", "erika-ui", "erika-store", "erika-dandanplay", "erika-torrent", "erika-gateway", "modules/account/protocol", "modules/account/core", "modules/danmaku/protocol", "modules/danmaku/core", "modules/danmaku/ui", "modules/enhance/protocol", "modules/enhance/core", "modules/enhance/ui", "modules/library/protocol", "modules/library/core", "modules/library/ui", "modules/anime/protocol", "modules/anime/core", "modules/anime/ui", "modules/sync/protocol", "modules/sync/core", "modules/sync/ui", "modules/sources/protocol", "modules/sources/core", "modules/sources/ui", "modules/remote/protocol", "modules/remote/core", "modules/remote/ui", "modules/downloads/protocol", "modules/downloads/core", "modules/downloads/ui"]
+members = ["erika-protocol", "erika-core", "erika-ui", "erika-store", "erika-catalog", "erika-dandanplay", "erika-torrent", "erika-gateway", "modules/account/protocol", "modules/account/core", "modules/danmaku/protocol", "modules/danmaku/core", "modules/danmaku/ui", "modules/enhance/protocol", "modules/enhance/core", "modules/enhance/ui", "modules/library/protocol", "modules/library/core", "modules/library/ui", "modules/anime/protocol", "modules/anime/core", "modules/anime/ui", "modules/sync/protocol", "modules/sync/core", "modules/sync/ui", "modules/sources/protocol", "modules/sources/core", "modules/sources/ui", "modules/remote/protocol", "modules/remote/core", "modules/remote/ui", "modules/downloads/protocol", "modules/downloads/core", "modules/downloads/ui"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT"
 
 [workspace.dependencies]
-# Bern at a pinned commit of master, with what the next release will carry, at
-# the revision of the build tool (docs/dependencies.md).
-bern = { git = "https://github.com/AimesSoft/Bern", rev = "ccfe43fb53595252e34ed9e10e0ce95beaab1339" }
+# All native HTTP callers inherit Windows Internet Settings as well as proxy
+# environment variables. Keep this here so independently built modules do too.
+ureq = { version = "3", features = ["win-system-proxy"] }
+# Bern 0.1.15, at the same immutable revision as the build tool
+# (docs/dependencies.md).
+bern = { git = "https://github.com/AimesSoft/Bern", rev = "47820993b1f519b5e4e754a1597867da39c2ee54" }
 erika-protocol = { path = "erika-protocol", default-features = false }
 erika-store = { path = "erika-store" }
+erika-catalog = { path = "erika-catalog" }
 erika-dandanplay = { path = "erika-dandanplay" }
 erika-torrent = { path = "erika-torrent" }
 # Remote builds use the pinned source revision; .cargo/config.toml can patch

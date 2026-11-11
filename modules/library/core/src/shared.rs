@@ -85,6 +85,15 @@ fn media_url(base: &str, path: &str) -> Option<String> {
     matches!(url.scheme(), "http" | "https").then(|| url.to_string())
 }
 
+/// Whether `url` is on the same scheme, host and port as the share at
+/// `base`.
+fn same_origin(base: &str, url: &str) -> bool {
+    match (Url::parse(base), Url::parse(url)) {
+        (Ok(base), Ok(url)) => base.origin() == url.origin(),
+        _ => false,
+    }
+}
+
 fn parse_videos(base: &str, summary: &Value, payload: &Value) -> Result<Vec<Video>, String> {
     let id = number(&summary["animeId"])
         .filter(|id| *id > 0)
@@ -123,20 +132,28 @@ fn parse_videos(base: &str, summary: &Value, payload: &Value) -> Result<Vec<Vide
         let Some(episode_id) = number(&episode["episodeId"]).filter(|id| *id > 0) else {
             continue;
         };
-        let stream = match text(episode, "streamPath") {
-            "" => text(episode, "originalFilePath"),
-            stream => stream,
+        let stream = text(episode, "streamPath");
+        let url = if stream.is_empty() {
+            // A file-system path is not a relative stream route. Only an
+            // absolute HTTP URL can stand in for a missing streamPath.
+            let Ok(original) = Url::parse(text(episode, "originalFilePath")) else {
+                continue;
+            };
+            if !matches!(original.scheme(), "http" | "https") {
+                continue;
+            }
+            original.to_string()
+        } else {
+            let Some(url) = media_url(base, stream) else {
+                continue;
+            };
+            url
         };
-        // Local paths and provider-specific URLs are not playable HTTP streams.
-        if text(episode, "streamPath").is_empty()
-            && !stream.starts_with("http://")
-            && !stream.starts_with("https://")
-        {
+        // Import only streams served by this device, not historical links
+        // to files on a different device, regardless of which field holds it.
+        if !same_origin(base, &url) {
             continue;
         }
-        let Some(url) = media_url(base, stream) else {
-            continue;
-        };
         let size = number(&episode["fileSize"]).unwrap_or(0).max(0) as u64;
         let hash = text(episode, "videoHash");
         let fingerprint =
@@ -246,7 +263,11 @@ mod tests {
              "videoHash": "0123456789ABCDEF0123456789ABCDEF", "fileExists": true,
              "streamPath": "/api/media/local/share/episodes/abc/stream"},
             {"episodeId": 795322, "title": "第03话", "fileExists": false, "streamPath": "/gone"},
-            {"episodeId": 795323, "title": "第04话", "originalFilePath": "emby://server/item"}
+            {"episodeId": 795323, "title": "第04话", "originalFilePath": "emby://server/item"},
+            {"episodeId": 795324, "title": "第05话", "streamPath": null,
+             "originalFilePath": "http://192.168.31.65:8080/api/media/local/share/episodes/def/stream"},
+            {"episodeId": 795325, "title": "第06话", "fileName": "show - 06.mkv",
+             "originalFilePath": "https://media.example.com/nipa/api/media/local/share/episodes/ghi/stream"}
         ]}})
     }
 
@@ -323,7 +344,13 @@ mod tests {
     #[test]
     fn shared_payload_preserves_hashes_ids_streams_and_episode_numbers() {
         let videos = parse_videos("https://media.example.com/nipa", &summary(), &detail()).unwrap();
-        assert_eq!(videos.len(), 1);
+        // Another device's file the share once played is not the share's;
+        // one at the share's own address is.
+        assert_eq!(videos.len(), 2);
+        assert_eq!(
+            videos[1].url,
+            "https://media.example.com/nipa/api/media/local/share/episodes/ghi/stream"
+        );
         let video = &videos[0];
         assert_eq!(
             video.url,
@@ -336,6 +363,49 @@ mod tests {
         assert_eq!(anime.title, "测试番剧");
         assert_eq!(video.name, "show - 02.mkv");
         assert!(parse_videos("http://localhost:1180", &summary(), &json!({})).is_err());
+    }
+
+    #[test]
+    fn shared_payload_rejects_local_paths_and_foreign_stream_origins() {
+        let base = "https://media.example.com/nipa";
+        for path in [
+            "/home/user/show.mkv",
+            r"C:\Videos\show.mkv",
+            r"\\server\videos\show.mkv",
+            "show.mkv",
+            "file:///home/user/show.mkv",
+            "https://other.example.com/stream",
+            "http://media.example.com/stream",
+            "https://media.example.com:8443/stream",
+        ] {
+            let payload = json!({"episodes": [{"episodeId": 1, "originalFilePath": path}]});
+            assert!(
+                parse_videos(base, &summary(), &payload).unwrap().is_empty(),
+                "{path}"
+            );
+        }
+        for path in [
+            "https://other.example.com/stream",
+            "http://media.example.com/stream",
+            "https://media.example.com:8443/stream",
+        ] {
+            let payload = json!({"episodes": [{"episodeId": 1, "streamPath": path}]});
+            assert!(
+                parse_videos(base, &summary(), &payload).unwrap().is_empty(),
+                "{path}"
+            );
+        }
+        let payload = json!({"episodes": [{
+            "episodeId": 1,
+            "streamPath": "/api/media/local/share/episodes/local/stream",
+            "originalFilePath": r"C:\Videos\show.mkv"
+        }]});
+        let videos = parse_videos(base, &summary(), &payload).unwrap();
+        assert_eq!(videos.len(), 1);
+        assert_eq!(
+            videos[0].url,
+            format!("{base}/api/media/local/share/episodes/local/stream")
+        );
     }
 
     #[test]
@@ -369,16 +439,46 @@ mod tests {
             engine.state.sources[0].status,
             SourceStatus::Ready { files: 1 }
         );
-        assert_eq!(engine.state.posters[0].id, 42);
+        assert!(engine.state.posters.is_empty());
         assert_eq!(
             engine.db.episode_files(42)[0].url,
             format!("{base}/api/media/local/share/episodes/abc/stream")
         );
         engine.open_source(source).unwrap();
-        assert_eq!(engine.state.folder.dirs[0].name, "测试番剧");
-        engine.open_dir("测试番剧".into()).unwrap();
-        assert_eq!(engine.state.folder.files[0].show, 42);
+        assert!(engine.state.folder.dirs.is_empty());
+        assert_eq!(engine.state.folder.files.len(), 1);
+        let file = &engine.state.folder.files[0];
+        assert!(file.readable && !file.matched && file.show.is_empty());
+        assert_eq!(file.name, "show - 02.mkv");
+        let entries = engine.db.entries(Some(source));
+        let address = entries.iter().find(|entry| entry.key == file.key).unwrap();
+        assert_eq!(address.url, format!("{base}/api/media/local/share/episodes/abc/stream"));
+        assert_eq!(engine.state.sources[0].unmatched, 1);
+        assert_eq!(engine.state.unmatched_count, 1);
         assert!(!engine.state.folder.can_batch);
+
+        // A refresh also removes foreign URLs imported by older clients.
+        let mut previous = parse_videos(&base, &summary(), &detail()).unwrap();
+        previous.push(Video {
+            url: "http://192.168.31.65:8080/old-stream".into(),
+            name: "old.mkv".into(),
+            fingerprint: Fingerprint {
+                md5: "nipaplay:old-stream".into(),
+                size: 0,
+            },
+            matched: previous[0].matched.clone(),
+        });
+        engine.import_shared(source, &previous);
+        assert_eq!(engine.db.seen(source).len(), 2);
+        engine.inbox.lock().unwrap().push(Done::SharedRefresh(
+            source,
+            base.clone(),
+            Ok(parse_videos(&base, &summary(), &detail()).unwrap()),
+        ));
+        engine.take_done();
+        let refreshed = engine.db.seen(source);
+        assert_eq!(refreshed.len(), 1);
+        assert_eq!(refreshed[0].url, previous[0].url);
 
         engine.inbox.lock().unwrap().push(Done::SharedRefresh(
             source,

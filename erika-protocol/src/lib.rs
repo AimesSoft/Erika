@@ -336,6 +336,8 @@ pub mod erika {
         LibraryRead,
         #[label(tr! { "zh-Hans" => "媒体库写入", "en" => "Modify library" })]
         LibraryWrite,
+        #[label(tr! { "zh-Hans" => "导入媒体来源", "en" => "Import media sources" })]
+        LibrarySources,
         #[label(tr! { "zh-Hans" => "弹窗显示", "en" => "Dialogs" })]
         Dialog,
         #[label(tr! { "zh-Hans" => "设置读取", "en" => "Read settings" })]
@@ -707,6 +709,12 @@ pub mod erika {
     pub enum PlayingNote {
         #[label(tr! { "zh-Hans" => "第 {episode} 集", "en" => "Episode {episode}" })]
         Episode { episode: i64 },
+        #[label(tr! { "zh-Hans" => "第 {season} 季 · 第 {episode} 集", "en" => "Season {season} · Episode {episode}" })]
+        SeasonEpisode { season: i64, episode: i64 },
+        #[label(tr! { "zh-Hans" => "电影", "en" => "Movie" })]
+        Movie,
+        #[label(tr! { "zh-Hans" => "{label}", "en" => "{label}" })]
+        Media { #[content] label: String },
         #[label(tr! { "zh-Hans" => "本地文件", "en" => "Local file" })]
         LocalFile,
         #[label(tr! { "zh-Hans" => "已下载 · 本地文件", "en" => "Downloaded · Local file" })]
@@ -825,10 +833,27 @@ pub mod erika {
         pub kind: SkipKind,
     }
 
-    /// A matching search result with enough context to identify the right show.
+    #[value]
+    pub enum MatchingTarget {
+        #[label(tr! { "zh-Hans" => "媒体", "en" => "Media" })]
+        Content,
+        #[label(tr! { "zh-Hans" => "弹幕", "en" => "Danmaku" })]
+        Danmaku,
+    }
+
+    #[value]
+    pub struct MatchingItem {
+        #[content]
+        pub id: String,
+        #[content]
+        pub name: String,
+    }
+
+    /// IDs retain their provider and type; they are never arithmetic aliases.
     #[value]
     pub struct MatchingShow {
-        pub id: i64,
+        #[content]
+        pub id: String,
         #[content]
         pub name: String,
         pub poster: MediaSource,
@@ -843,12 +868,16 @@ pub mod erika {
     #[value]
     pub struct PlayerMatching {
         pub open: bool,
+        pub target: MatchingTarget,
         pub loading: bool,
         #[content]
         pub error: String,
         pub selected: Option<MatchingShow>,
         pub shows: Vec<MatchingShow>,
-        pub episodes: Vec<MediaTrack>,
+        pub seasons: Vec<MatchingItem>,
+        #[content]
+        pub season: String,
+        pub episodes: Vec<MatchingItem>,
     }
 
     #[value]
@@ -1254,6 +1283,10 @@ pub mod erika {
         /// recent ones.
         fn return_to_frame(&mut self) -> Result<(), CommandError>;
 
+        /// Canonical media or file-only resume at an absolute file timestamp.
+        #[cfg_attr(feature = "bern-module-anime", on(anime::play_media))]
+        fn play_media(&mut self, media: String, source: MediaSource, position: f64, from_stage: bool) -> Result<(), CommandError>;
+
         /// Play what a module asks for, such as the next episode;
         /// `from_stage` when the home page's stage asked, whose picture
         /// flies into the frame.
@@ -1290,11 +1323,17 @@ pub mod erika {
         #[on(downloads::finished)]
         fn download_finished(&mut self, folder: MediaSource) -> Result<(), CommandError>;
 
+        /// Play the current address selected in a library source, matched or not.
+        #[cfg(feature = "bern-module-library")]
+        #[on(library::play_source)]
+        fn open_library_file(&mut self, source: MediaSource, title: String) -> Result<(), CommandError>;
+
         /// Open a library poster using the optional anime details page,
         /// over the home page when it was opened there.
         #[cfg(feature = "bern-module-library")]
         #[on(library::open_show)]
-        fn open_library_show(&mut self, id: i64, home: bool) -> Result<(), CommandError>;
+        fn open_library_show(&mut self, id: String, home: bool) -> Result<(), CommandError>;
+
 
         /// The library matched or removed videos: the anime pages show the
         /// files anew.
@@ -1353,15 +1392,20 @@ pub mod erika {
         fn set_enhancement(&mut self, value: Enhancement) -> Result<(), CommandError>;
         fn set_subtitle_supersampling(&mut self, enabled: bool) -> Result<(), CommandError>;
         fn set_player_number(&mut self, key: String, value: f64) -> Result<(), CommandError>;
+        /// Preview volume without writing a preference for every gesture frame.
+        fn preview_player_volume(&mut self, value: f64) -> Result<(), CommandError>;
         fn set_skip_intro(&mut self, value: bool) -> Result<(), CommandError>;
         /// Save the picture on screen, with its subtitles, at the video's
         /// size in Pictures › Erika.
         fn screenshot(&mut self) -> Result<(), CommandError>;
         fn show_matching(&mut self, open: bool) -> Result<(), CommandError>;
         fn search_matching(&mut self, query: String) -> Result<(), CommandError>;
-        fn choose_match_show(&mut self, id: i64) -> Result<(), CommandError>;
+        fn set_matching_target(&mut self, target: MatchingTarget) -> Result<(), CommandError>;
+        fn choose_match_show(&mut self, id: String) -> Result<(), CommandError>;
+        fn choose_match_season(&mut self, id: String) -> Result<(), CommandError>;
         fn back_to_match_results(&mut self) -> Result<(), CommandError>;
-        fn confirm_match_episode(&mut self, id: i64) -> Result<(), CommandError>;
+        fn confirm_match_episode(&mut self, id: String) -> Result<(), CommandError>;
+        fn block_media_match(&mut self) -> Result<(), CommandError>;
         fn send_danmaku(&mut self, text: String) -> Result<(), CommandError>;
         /// Set a danmaku slider: `opacity`, `font_size`, `speed` (0 to 1)
         /// or `delay` (seconds).

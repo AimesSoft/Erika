@@ -8,120 +8,33 @@ use rusqlite::{Connection, OptionalExtension, Result, TransactionBehavior, param
 use std::path::Path;
 
 mod portable;
+mod catalog;
+mod catalog_jobs;
+mod account_sync;
+mod schema;
+mod catalog_portable;
+mod catalog_resolution;
+mod catalog_playback;
+mod catalog_selection;
+mod plugin_sources;
+#[cfg(test)]
+mod settings_tests;
 
 /// The source of the videos the user opens one by one; every other source
 /// is a folder or a server the user adds.
 const OPENED: i64 = 1;
 
-/// The schema, one step per version; a database at version `n` has run the
-/// first `n` steps.
-const MIGRATIONS: &[&str] = &[
-    // 1: sources, addresses, files and episodes; progress, watched, recents.
-    "
-    CREATE TABLE source (
-        id INTEGER PRIMARY KEY,
-        kind TEXT NOT NULL,
-        name TEXT NOT NULL,
-        location TEXT NOT NULL,
-        added_at INTEGER NOT NULL
-    ) STRICT;
-    INSERT INTO source (id, kind, name, location, added_at) VALUES (1, 'opened', '', '', 0);
+const SCHEMA_VERSION: i64 = 1;
+const APPLICATION_ID: i64 = 0x4552494b;
+const SCHEMA: &str = include_str!("sqlite/schema.sql");
 
-    CREATE TABLE anime (
-        id INTEGER PRIMARY KEY,
-        dandanplay_id INTEGER UNIQUE,
-        bangumi_id INTEGER UNIQUE,
-        title TEXT NOT NULL,
-        image TEXT NOT NULL DEFAULT '',
-        updated_at INTEGER NOT NULL DEFAULT 0
-    ) STRICT;
-
-    CREATE TABLE episode (
-        id INTEGER PRIMARY KEY,
-        anime_id INTEGER NOT NULL REFERENCES anime (id) ON DELETE CASCADE,
-        number INTEGER,
-        dandanplay_id INTEGER UNIQUE,
-        bangumi_id INTEGER UNIQUE,
-        title TEXT NOT NULL DEFAULT ''
-    ) STRICT;
-
-    CREATE TABLE file (
-        id INTEGER PRIMARY KEY,
-        md5 TEXT,
-        size INTEGER,
-        server_item TEXT UNIQUE,
-        episode_id INTEGER REFERENCES episode (id) ON DELETE SET NULL,
-        matched_by TEXT,
-        UNIQUE (md5, size)
-    ) STRICT;
-
-    CREATE TABLE address (
-        source_id INTEGER NOT NULL REFERENCES source (id) ON DELETE CASCADE,
-        path TEXT NOT NULL,
-        file_id INTEGER REFERENCES file (id) ON DELETE SET NULL,
-        size INTEGER,
-        modified INTEGER,
-        seen_at INTEGER NOT NULL,
-        PRIMARY KEY (source_id, path)
-    ) STRICT;
-
-    CREATE TABLE progress (
-        file_id INTEGER PRIMARY KEY REFERENCES file (id) ON DELETE CASCADE,
-        position REAL NOT NULL,
-        duration REAL NOT NULL,
-        danmaku_offset REAL NOT NULL DEFAULT 0,
-        updated_at INTEGER NOT NULL
-    ) STRICT;
-
-    CREATE TABLE watched (
-        episode_id INTEGER PRIMARY KEY REFERENCES episode (id) ON DELETE CASCADE,
-        at INTEGER NOT NULL,
-        manual INTEGER NOT NULL
-    ) STRICT;
-
-    CREATE TABLE recent (
-        source_id INTEGER NOT NULL,
-        path TEXT NOT NULL,
-        title TEXT NOT NULL,
-        still TEXT,
-        position REAL NOT NULL,
-        duration REAL NOT NULL,
-        played_at INTEGER NOT NULL,
-        PRIMARY KEY (source_id, path),
-        FOREIGN KEY (source_id, path) REFERENCES address (source_id, path) ON DELETE CASCADE
-    ) STRICT;
-    CREATE INDEX recent_by_time ON recent (played_at DESC);
-
-    CREATE TABLE setting (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-    ) STRICT;
-    ",
-    // 2: what a source holds, which says where its videos are recognized:
-    // `anime` by dandanplay, `series` and `movie` by the user's own server.
-    "ALTER TABLE source ADD COLUMN content TEXT NOT NULL DEFAULT 'anime';",
-];
-
-/// Tables added beside the numbered steps rather than as one: each is
-/// created where it is missing, so changes that add steps of their own
-/// cannot have one skipped by landing in another order. `extension` keeps
-/// the data of extensions such as plugins, any JSON by an id, which the
-/// account sync carries.
-const BESIDE: &str = "
-    -- Where the user is with an anime (the anime module's word for it)
-    -- and the score they gave it, 1 to 10 or 0.
-    CREATE TABLE IF NOT EXISTS anime_mark (
-        anime_id INTEGER PRIMARY KEY REFERENCES anime (id) ON DELETE CASCADE,
-        status TEXT,
-        rating INTEGER NOT NULL DEFAULT 0,
-        updated_at INTEGER NOT NULL
-    ) STRICT;
-    CREATE TABLE IF NOT EXISTS extension (
-        id TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-    ) STRICT;
-";
+fn sql_error(error: impl std::error::Error + Send + Sync + 'static) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(error))
+}
+fn invalid_schema() -> rusqlite::Error {
+    sql_error(std::io::Error::new(std::io::ErrorKind::InvalidData,
+        "数据库格式不匹配；此开发版不提供旧数据迁移，原文件未修改"))
+}
 
 /// One connection to the app's database.
 pub struct Db {
@@ -137,24 +50,24 @@ fn logged<T>(result: Result<T>, what: &str) -> Option<T> {
 }
 
 impl Db {
-    /// The database in the app's data folder, or one in memory where the
-    /// app has none (tests) or it cannot be opened.
+    /// Open the durable database without replacing an unreadable file.
     pub fn open() -> Db {
+        Self::try_open().unwrap_or_else(|error| panic!("媒体库未能打开，原数据未清空：{error}"))
+    }
+
+    pub fn try_open() -> Result<Db> {
         match bern::storage::data_dir() {
-            Some(dir) => {
-                let path = dir.join("erika.db");
-                logged(Self::at(&path), &format!("open {}", path.display()))
-                    .unwrap_or_else(Self::in_memory)
-            }
-            None => Self::in_memory(),
+            Some(dir) => Self::at(&dir.join("erika.db")),
+            None => Connection::open_in_memory().and_then(Self::ready),
         }
     }
 
-    /// The database at `path`, created and brought up to date.
+    /// The database at `path`, created with the current schema when empty.
     pub fn at(path: &Path) -> Result<Db> {
         let conn = Connection::open(path)?;
         // Other engines of the app hold connections to the same file.
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        Self::check_schema(&conn)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         Self::ready(conn)
     }
@@ -169,25 +82,29 @@ impl Db {
     fn ready(conn: Connection) -> Result<Db> {
         conn.pragma_update(None, "foreign_keys", true)?;
         let mut db = Db { conn };
-        db.migrate()?;
-        db.conn.execute_batch(BESIDE)?;
+        db.initialize()?;
         Ok(db)
     }
 
-    /// Run the schema steps this database has not run, in one transaction,
-    /// so engines opening it together run each step once.
-    fn migrate(&mut self) -> Result<()> {
-        let transaction = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let version: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        for step in MIGRATIONS.iter().skip(version as usize) {
-            transaction.execute_batch(step)?;
+    fn check_schema(conn: &Connection) -> Result<bool> {
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let app: i64 = conn.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+        let structure = schema::structure(conn)?;
+        if structure.is_empty() && version == 0 && app == 0 { return Ok(false); }
+        if version == SCHEMA_VERSION && app == APPLICATION_ID && schema::matches(&structure)? {
+            return Ok(true);
         }
-        if (version as usize) < MIGRATIONS.len() {
-            transaction.pragma_update(None, "user_version", MIGRATIONS.len() as i64)?;
+        Err(invalid_schema())
+    }
+
+    fn initialize(&mut self) -> Result<()> {
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !Self::check_schema(&tx)? {
+            schema::create(&tx)?;
+            tx.pragma_update(None, "application_id", APPLICATION_ID)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
-        transaction.commit()
+        tx.commit()
     }
 
     /// The file with `fingerprint`, added when new.
@@ -216,9 +133,9 @@ impl Db {
                         .conn
                         .query_row(
                             "SELECT file_id FROM address
-                             WHERE path = ?1 AND source_id != ?2 AND file_id IS NOT NULL
+                             WHERE path = ?1 AND file_id IS NOT NULL
                              ORDER BY seen_at DESC LIMIT 1",
-                            params![url, OPENED],
+                            [url],
                             |row| row.get(0),
                         )
                         .optional()?,
@@ -376,6 +293,38 @@ impl Db {
         .flatten()
     }
 
+    /// Read a setting without treating a storage failure as a missing value.
+    pub fn try_setting(&self, key: &str) -> crate::catalog::Result<Option<String>> {
+        Ok(self.conn.query_row(
+            "SELECT value FROM setting WHERE key = ?1", [key], |row| row.get(0),
+        ).optional()?)
+    }
+
+    /// Atomically read, transform and replace one setting across connections.
+    /// The callback returns the new value and its result; errors leave it intact.
+    /// It runs under the write transaction and must not re-enter this database.
+    pub fn update_setting<T>(
+        &self,
+        key: &str,
+        update: impl FnOnce(Option<&str>) -> crate::catalog::Result<(Option<String>, T)>,
+    ) -> crate::catalog::Result<T> {
+        let tx = catalog::transaction(&self.conn)?;
+        let old: Option<String> = tx.query_row(
+            "SELECT value FROM setting WHERE key = ?1", [key], |row| row.get(0),
+        ).optional()?;
+        let (value, result) = update(old.as_deref())?;
+        match value {
+            Some(value) => tx.execute(
+                "INSERT INTO setting (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )?,
+            None => tx.execute("DELETE FROM setting WHERE key = ?1", [key])?,
+        };
+        tx.commit()?;
+        Ok(result)
+    }
+
     /// Keep `value` as `key`, or forget `key` when `value` is `None`.
     pub fn set_setting(&self, key: &str, value: Option<&str>) {
         let result = match value {
@@ -410,12 +359,19 @@ impl Db {
     /// Automatic matching leaves a file the user matched or unlinked alone.
     pub fn link_episode(&self, file: FileId, anime: &Anime, episode: &Episode, manual: bool) {
         logged(
-            self.link(file, anime, episode, manual),
+            (|| {
+                let tx = catalog::transaction(&self.conn).map_err(sql_error)?;
+                self.link(file, anime, episode, manual)?;
+                tx.commit()
+            })(),
             "link a file to its episode",
         );
     }
 
     fn link(&self, file: FileId, anime: &Anime, episode: &Episode, manual: bool) -> Result<usize> {
+        if self.catalog_binding(file).map_err(sql_error)?.is_some() {
+            return Ok(0);
+        }
         self.conn.execute(
             "INSERT INTO anime (dandanplay_id, title, image, updated_at) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT (dandanplay_id) DO UPDATE SET
@@ -438,7 +394,7 @@ impl Db {
                 episode.title
             ],
         )?;
-        self.conn.execute(
+        let changed = self.conn.execute(
             "UPDATE file SET
                  episode_id = (SELECT id FROM episode WHERE dandanplay_id = ?2),
                  matched_by = ?3
@@ -448,7 +404,8 @@ impl Db {
                 episode.dandanplay_id,
                 if manual { "manual" } else { "auto" }
             ],
-        )
+        )?;
+        Ok(changed)
     }
 
     /// Which episode of which anime file `file` is, once it was matched.
@@ -688,7 +645,7 @@ impl Db {
             (|| {
                 let mut statement = self.conn.prepare(
                     "SELECT s.id, s.kind, s.name, s.location, s.content, count(ad.path),
-                            count(CASE WHEN ad.path IS NOT NULL AND f.episode_id IS NULL THEN 1 END)
+                            count(CASE WHEN ad.path IS NOT NULL AND NOT EXISTS(SELECT 1 FROM file_binding_item bi WHERE bi.file_id=f.id) THEN 1 END)
                      FROM source s
                      LEFT JOIN address ad ON ad.source_id = s.id
                      LEFT JOIN file f ON f.id = ad.file_id
@@ -720,8 +677,10 @@ impl Db {
             (|| {
                 let mut statement = self.conn.prepare(
                     "SELECT ad.path, coalesce(ad.size, -1), coalesce(ad.modified, -1), f.md5, f.size,
-                            f.episode_id IS NOT NULL, coalesce(f.matched_by IN ('manual', 'none'), 0)
+                            EXISTS(SELECT 1 FROM file_binding_item bi WHERE bi.file_id=f.id),
+                            coalesce(b.decision IN ('manual','blocked'),0)
                      FROM address ad LEFT JOIN file f ON f.id = ad.file_id
+                     LEFT JOIN file_binding b ON b.file_id=f.id
                      WHERE ad.source_id = ?1",
                 )?;
                 let rows = statement.query_map([source], |row| {
@@ -797,9 +756,10 @@ impl Db {
             (|| {
                 let mut statement = self.conn.prepare(
                     "SELECT ad.rowid, ad.source_id, ad.path, ad.file_id, a.dandanplay_id, a.title, a.image,
-                            e.dandanplay_id, e.number, e.title, coalesce(f.matched_by = 'manual', 0)
+                            e.dandanplay_id, e.number, e.title, coalesce(b.decision IN ('manual','blocked'), 0)
                      FROM address ad
                      LEFT JOIN file f ON f.id = ad.file_id
+                     LEFT JOIN file_binding b ON b.file_id=f.id
                      LEFT JOIN episode e ON e.id = f.episode_id
                      LEFT JOIN anime a ON a.id = e.anime_id
                      WHERE ad.source_id != ?1 AND (?2 IS NULL OR ad.source_id = ?2)
@@ -828,7 +788,7 @@ impl Db {
     pub fn link_files(&self, anime: &Anime, links: &[(FileId, Episode)]) -> bool {
         logged(
             (|| {
-                let transaction = self.conn.unchecked_transaction()?;
+                let transaction = catalog::transaction(&self.conn).map_err(sql_error)?;
                 for (file, episode) in links {
                     self.link(*file, anime, episode, true)?;
                 }
@@ -842,10 +802,11 @@ impl Db {
     /// The user says file `file` is no episode they know; scans leave it so.
     pub fn unlink(&self, file: FileId) {
         logged(
-            self.conn.execute(
-                "UPDATE file SET episode_id = NULL, matched_by = 'none' WHERE id = ?1",
-                [file],
-            ),
+            (|| {
+                let tx = catalog::transaction(&self.conn).map_err(sql_error)?;
+                tx.execute("UPDATE file SET episode_id=NULL,matched_by='none' WHERE id=?1", [file])?;
+                tx.commit()
+            })(),
             "unlink a file",
         );
     }

@@ -7,7 +7,11 @@ use std::path::Path;
 pub(super) struct Entry {
     pub source: MediaSource,
     pub title: String,
-    pub episode: Option<i64>,
+    pub note: PlayingNote,
+    pub label: String,
+    pub media: Option<erika_catalog::MediaId>,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
 }
 
 fn video(path: &Path) -> bool {
@@ -68,30 +72,123 @@ pub(super) fn folder(path: &Path) -> Result<Vec<Entry>, CommandError> {
                 .to_string_lossy()
                 .into_owned(),
             source: MediaSource::file(p),
-            episode: None,
+            note: PlayingNote::LocalFile,
+            label: String::new(),
+            media: None,
+            start: None,
+            end: None,
         })
         .collect())
 }
 
 impl ErikaEngine {
+    fn catalog_queue(&self) -> erika_store::catalog::Result<Vec<Entry>> {
+        let Some(file) = self.file else {
+            return Ok(Vec::new());
+        };
+        let Some(binding) = self.db.catalog_binding(file)? else {
+            return Ok(Vec::new());
+        };
+        let Some(item) = binding.items.first() else {
+            return Ok(Vec::new());
+        };
+        let Some(node) = self.db.catalog_node(&item.media)? else {
+            return Ok(Vec::new());
+        };
+        let Some(root) = self.db.catalog_node(&node.root)? else {
+            return Ok(Vec::new());
+        };
+        let mut files = self.db.catalog_files(&root.id)?;
+        // A queue plays each content item once. Keep the version already playing
+        // when a work has several encodes; the library still exposes all versions.
+        files.sort_by_key(|f| f.file != file);
+        let mut seen_media = std::collections::HashSet::new();
+        let mut seen_files = std::collections::HashSet::new();
+        let mut entries = Vec::new();
+        for candidate in files {
+            if bern::files::file_path(&candidate.url).is_some_and(|p| !p.is_file()) {
+                continue;
+            }
+            let Some(node) = self.db.catalog_node(&candidate.media)? else {
+                continue;
+            };
+            let Some(binding) = self.db.catalog_binding(candidate.file)? else {
+                continue;
+            };
+            let Some(item) = binding.items.iter().find(|i| i.media == node.id) else {
+                continue;
+            };
+            // A partially timed combined release is also indivisible. Reserve
+            // all its content IDs together so alternate encodes cannot repeat
+            // an episode already contained in this queue entry.
+            let combined = !binding.has_item_positions();
+            if combined {
+                if !seen_files.insert(candidate.file)
+                    || binding.items.iter().any(|i| seen_media.contains(&i.media))
+                {
+                    continue;
+                }
+                seen_media.extend(binding.items.iter().map(|i| i.media.clone()));
+            } else if !seen_media.insert(node.id.clone()) {
+                continue;
+            }
+            let (note, label) = match (node.kind, node.season_number, node.episode_number) {
+                (erika_catalog::Kind::Episode, Some(season), Some(episode)) => (
+                    PlayingNote::SeasonEpisode {
+                        season: season.into(),
+                        episode: episode.into(),
+                    },
+                    format!("S{season:02}E{episode:02} · {}", node.title),
+                ),
+                (erika_catalog::Kind::Movie, _, _) => (PlayingNote::Movie, node.title.clone()),
+                _ => (
+                    PlayingNote::Media {
+                        label: node.title.clone(),
+                    },
+                    node.title.clone(),
+                ),
+            };
+            let source = MediaSource::new(candidate.url);
+            let combined_label = self.source_name(&source);
+            let entry = Entry {
+                label: if combined {
+                    combined_label.clone()
+                } else {
+                    label
+                },
+                title: root.title.clone(),
+                source,
+                note: if combined {
+                    PlayingNote::Media {
+                        label: combined_label,
+                    }
+                } else {
+                    note
+                },
+                media: (!combined).then_some(node.id),
+                start: (!combined).then_some(item.start_seconds).flatten(),
+                end: (!combined).then(|| binding.item_end(item)).flatten(),
+            };
+            entries.push((
+                (node.season_number, node.episode_number, candidate.file),
+                entry,
+            ));
+        }
+        entries.sort_by_key(|(order, _)| *order);
+        Ok(entries.into_iter().map(|(_, entry)| entry).collect())
+    }
+
     pub(super) fn prepare_queue(&mut self, source: &MediaSource) {
-        self.queue = self
-            .file
-            .and_then(|f| self.db.file_episode(f))
-            .map(|(anime, _)| {
-                self.db
-                    .episode_files(anime.dandanplay_id)
-                    .into_iter()
-                    .filter(|f| bern::files::file_path(&f.url).is_none_or(|p| p.is_file()))
-                    .map(|f| Entry {
-                        source: MediaSource::new(f.url),
-                        title: anime.title.clone(),
-                        episode: Some(f.episode.number),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        if self.queue.len() < 2 {
+        self.queue = match self.catalog_queue() {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.notify(Notice::OperationFailed {
+                    reason: error.message,
+                });
+                Vec::new()
+            }
+        };
+        if self.queue.is_empty() {
             self.queue = bern::files::file_path(&source.url)
                 .and_then(|p| p.parent().map(Path::to_path_buf))
                 .and_then(|p| folder(&p).ok())
@@ -101,7 +198,11 @@ impl ErikaEngine {
             self.queue = vec![Entry {
                 source: source.clone(),
                 title: self.state.title.clone(),
-                episode: None,
+                note: player::source_note(source),
+                label: String::new(),
+                media: None,
+                start: None,
+                end: None,
             }];
         }
         self.publish_queue(source);
@@ -111,7 +212,26 @@ impl ErikaEngine {
         let index = self
             .queue
             .iter()
-            .position(|e| e.source.url == source.url)
+            .position(|e| {
+                e.source.url == source.url
+                    && e.media
+                        .as_ref()
+                        .is_none_or(|id| self.media_playing.as_ref() == Some(id))
+            })
+            .or_else(|| {
+                // A gap between known chapters has no current media ID, but
+                // must not jump the list back to the file's first chapter.
+                self.queue
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| {
+                        e.source.url == source.url
+                            && e.start.is_some_and(|start| start <= self.state.elapsed)
+                    })
+                    .max_by(|(_, a), (_, b)| a.start.unwrap().total_cmp(&b.start.unwrap()))
+                    .map(|(i, _)| i)
+            })
+            .or_else(|| self.queue.iter().position(|e| e.source.url == source.url))
             .unwrap_or(0);
         let player = &mut self.state.player;
         player.queue_index = index as i64 + 1;
@@ -124,10 +244,11 @@ impl ErikaEngine {
             .enumerate()
             .map(|(i, entry)| MediaTrack {
                 id: i as i64 + 1,
-                name: entry
-                    .episode
-                    .map(|ep| format!("第 {ep} 集"))
-                    .unwrap_or_else(|| entry.title.clone()),
+                name: if entry.label.is_empty() {
+                    entry.title.clone()
+                } else {
+                    entry.label.clone()
+                },
             })
             .collect();
     }
@@ -147,12 +268,18 @@ impl ErikaEngine {
         } else {
             (0.0, 0.0)
         };
-        let note = entry
-            .episode
-            .map(|episode| PlayingNote::Episode { episode })
-            .unwrap_or(PlayingNote::LocalFile);
-        self.start(entry.title, note, no_picture(), progress);
+        let start = if let Some(begin) = entry.start {
+            if start >= begin && entry.end.is_none_or(|end| start < end) {
+                start
+            } else {
+                begin
+            }
+        } else {
+            start
+        };
+        self.start(entry.title, entry.note, no_picture(), progress);
         self.file = file;
+        self.media_playing = entry.media;
         self.publish_queue(&entry.source);
         self.load(Some(entry.source.clone()), start);
         self.recognize(&entry.source, fingerprint);
@@ -160,11 +287,23 @@ impl ErikaEngine {
     }
 
     pub(super) fn advance_at_end(&mut self) {
-        if self.state.player.has_next
-            && self.state.preferences.autoplay
-            && self.state.preferences.playback_end == PlaybackEnd::Next
-        {
-            if let Err(error) = self.play_queue(self.state.player.queue_index + 1, false) {
+        // EOF consumes the entire physical file, including every chapter. Do
+        // not reopen a later queue item that points back into that same file.
+        let next = self
+            .queue
+            .iter()
+            .enumerate()
+            .skip(self.state.player.queue_index.max(0) as usize)
+            .find(|(_, entry)| {
+                self.current_source()
+                    .is_none_or(|s| s.url != entry.source.url)
+            })
+            .map(|(index, _)| index as i64 + 1);
+        if let Some(next) = next.filter(|_| {
+            self.state.preferences.autoplay
+                && self.state.preferences.playback_end == PlaybackEnd::Next
+        }) {
+            if let Err(error) = self.play_queue(next, false) {
                 self.state.paused = true;
                 self.notify(Notice::OperationFailed {
                     reason: error.message,

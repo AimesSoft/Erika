@@ -32,6 +32,10 @@ pub trait Kernel: Send + Sync {
     fn prepare_source(&self, _url: &str) -> Result<(), String> {
         Ok(())
     }
+    /// Preserve the initiating entry across asynchronous URL resolution.
+    fn prepare_source_from(&self, url: &str, _entry: Option<bern::Entry>) -> Result<(), String> {
+        self.prepare_source(url)
+    }
     fn browser_file(&self, _client: &str, _url: &str, _name: &str) -> Result<(), String> {
         Err("This engine does not host browser playback".into())
     }
@@ -43,6 +47,20 @@ pub trait Kernel: Send + Sync {
     /// Load `url` (a `file:` or `http(s):` address), seek to `start`
     /// seconds once it is open, and play.
     fn open(&self, url: &str, start: f64);
+    /// Per-open private headers, never a process-global URL cache. Backends must
+    /// reject unsupported authenticated requests rather than silently omit them.
+    fn open_with_headers(
+        &self,
+        url: &str,
+        start: f64,
+        headers: Vec<(String, String)>,
+    ) -> Result<(), String> {
+        if !headers.is_empty() {
+            return Err("此播放内核不支持自定义请求头，请使用签名播放地址".into());
+        }
+        self.open(url, start);
+        Ok(())
+    }
     fn play(&self);
     fn pause(&self);
     fn seek(&self, seconds: f64);
@@ -151,35 +169,6 @@ pub struct Chapter {
     pub title: String,
     pub start: f64,
     pub end: Option<f64>,
-}
-
-/// Start the platform's kernel and make it Bern's media kernel, so the
-/// frontend's video views draw through it. `None` where there is none.
-/// HTTP headers a link plugin asked to fetch an address with, by address:
-/// the kernel opens the address with them.
-static LINK_HEADERS: std::sync::Mutex<Vec<(String, Vec<(String, String)>)>> =
-    std::sync::Mutex::new(Vec::new());
-
-pub fn set_link_headers(url: &str, headers: Vec<(String, String)>) {
-    let mut all = LINK_HEADERS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    all.retain(|(known, _)| known != url);
-    if !headers.is_empty() {
-        all.push((url.to_string(), headers));
-        // A few links' worth, the latest kept.
-        let excess = all.len().saturating_sub(16);
-        all.drain(..excess);
-    }
-}
-
-#[cfg(any(liberika_kernel, test))]
-pub fn link_headers(url: &str) -> Vec<(String, String)> {
-    LINK_HEADERS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .iter()
-        .find(|(known, _)| known == url)
-        .map(|(_, headers)| headers.clone())
-        .unwrap_or_default()
 }
 
 /// The font file a page of this device's WebUI draws missing text with: a

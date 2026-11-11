@@ -1,6 +1,6 @@
 # Cargo 依赖与本地联调
 
-仓库内 `Cargo.toml` 的 Bern 固定到 `master` 的提交 `ccfe43f`（WebUI 随应用、Android 媒体内核，下一个发布版才有）；liberika 用 Git 依赖，固定到提交。GitHub 或另一台电脑检出 Erika 后，Cargo 会下载同一份源码，无需本机的绝对路径。
+仓库内 `Cargo.toml` 的 Bern 固定到 `v0.1.15` 的提交 `4782099`（原生触摸交互、页面工具栏与动态列表停靠）；liberika 用 Git 依赖，固定到提交。GitHub 或另一台电脑检出 Erika 后，Cargo 会下载同一份源码，无需本机的绝对路径。
 
 liberika 当前固定到 `v0.3.6` 的提交 `e38a511`（弹幕彩色表情、系统字体优先，WebUI 用宿主的回退字体）。后续升级时更新版本或 `rev`，以及 `Cargo.lock`。
 
@@ -9,7 +9,7 @@ liberika 当前固定到 `v0.3.6` 的提交 `e38a511`（弹幕彩色表情、系
 `bern` 命令与 `Cargo.toml` 里的 Bern 同一版本：命令带着生成各平台工程的模板，与应用依赖的 Bern 一致才能构建。
 
 ```sh
-cargo install --locked --git https://github.com/AimesSoft/Bern --rev ccfe43fb53595252e34ed9e10e0ce95beaab1339 bern-cli
+cargo install --locked --git https://github.com/AimesSoft/Bern --rev 47820993b1f519b5e4e754a1597867da39c2ee54 bern-cli
 ```
 
 升级 Bern 时，根目录 `Cargo.toml` 的 `bern`、`erika-core/Cargo.toml` 的 `bern-script`、`.github/workflows/release.yml` 的 `BERN_REV` 与这条命令一起换，再装一次。之后在 Erika 根目录运行 `bern run`、`bern build --target <目标>`、`bern package --target <目标>`；`bern doctor` 列出本机构建各目标还缺什么。
@@ -55,7 +55,7 @@ Windows 在 “x64 Native Tools Command Prompt”（或先运行 Visual Studio �
 cargo run --manifest-path ..\liberika\Cargo.toml -p xtask -- deps build --all --profile lgpl --target x86_64-pc-windows-msvc --crt static
 ```
 
-Linux 用发行版的 FFmpeg（8.x 或更新，`pkg-config` 要能找到 `libav*` 的开发文件；Arch 已是 9.x，同样可用）、PulseAudio（PipeWire 桌面装 `pipewire-pulse`）、Vulkan 头文件与 X11 / Wayland 的开发文件；libass 用 liberika 的脚本打补丁后编成静态库，在 liberika 的源码目录里运行 `bash scripts/build_linux_libass.sh`。liberika 的 Linux 渲染器要用它仓库里的 `third_party/wgpu-hal`：本地配置的 `[patch.crates-io]` 指向相邻检出里的这一份，`erika-core` 把 `wgpu-hal` 锁在同一个版本，否则 Cargo 会选 crates.io 上更新的发布版而不用补丁。远程构建 Linux 版暂时还缺这个补丁：Bern 生成的宿主是单独的 Cargo 工作区，不沿用 Erika 清单里的 `[patch]`。
+Linux 用发行版的 FFmpeg（8.x 或更新，`pkg-config` 要能找到 `libav*` 的开发文件；Arch 已是 9.x，同样可用）、PulseAudio（PipeWire 桌面装 `pipewire-pulse`）、Vulkan 头文件与 X11 / Wayland 的开发文件；libass 用 liberika 的脚本打补丁后编成静态库，在 liberika 的源码目录里运行 `bash scripts/build_linux_libass.sh`。liberika 的 Linux 渲染器要用它仓库里的 `third_party/wgpu-hal`：本地配置的 `[patch.crates-io]` 指向相邻检出里的这一份，`erika-core` 把 `wgpu-hal` 锁在同一个版本，否则 Cargo 会选 crates.io 上更新的发布版而不用补丁。Bern 生成的宿主是单独的 Cargo 工作区，不沿用 Erika 清单里的 `[patch]`；发行脚本 `.github/scripts/native-deps.sh` 将补丁写入根 `.cargo/config.toml`，让生成宿主同样读取它。
 
 其他目标的原生依赖准备见 [liberika 构建说明](https://github.com/AimesSoft/liberika/blob/feat/bern-web-playback-20261023/docs/building.md)。
 

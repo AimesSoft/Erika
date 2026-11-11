@@ -16,6 +16,7 @@
 //! rate, so the danmaku server and the machine are not overrun. The danmaku
 //! server's own token stays here, in the server's address.
 
+pub mod metadata;
 pub mod store;
 #[cfg(test)]
 mod tests;
@@ -40,6 +41,8 @@ const GAVE_UP_AFTER: Duration = Duration::from_secs(20);
 const WINDOW: Duration = Duration::from_secs(60);
 
 pub struct Gateway {
+    /// Independent public catalogue: never gated on a dandanplay account.
+    pub metadata: metadata::Metadata,
     /// The owner's token, and the public key built into Erika (none: only
     /// the owner gets in).
     pub token: String,
@@ -60,6 +63,7 @@ pub struct Gateway {
 impl Gateway {
     pub fn new(token: String, upstream: String, store: Store) -> Gateway {
         Gateway {
+            metadata: metadata::Metadata::default(),
             token,
             upstream: upstream.trim_end_matches('/').to_string(),
             store,
@@ -608,5 +612,6 @@ pub fn app(gateway: Arc<Gateway>) -> Router {
         .route("/{token}/api/v2/match/confirm", post(confirm))
         .route("/{token}/api/v2/match/forget", post(forget))
         .route("/{token}/api/v2/{*rest}", any(pass))
-        .with_state(gateway)
+        .with_state(gateway.clone())
+        .merge(gateway.metadata.clone().router())
 }

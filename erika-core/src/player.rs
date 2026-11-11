@@ -81,6 +81,15 @@ fn simulate_tracks(player: &mut PlayerState) {
     name_tracks(player);
 }
 
+fn clear_tracks(player: &mut PlayerState) {
+    player.subtitle_tracks.clear();
+    player.audio_tracks.clear();
+    player.subtitle_track = -1;
+    player.audio_track = -1;
+    player.video_info.clear();
+    name_tracks(player);
+}
+
 /// The selected tracks' names.
 fn name_tracks(player: &mut PlayerState) {
     let name = |tracks: &[MediaTrack], id: i64| {
@@ -112,6 +121,18 @@ fn playable(url: &str, browser: bool) -> bool {
         || (browser && url.starts_with("blob:"))
 }
 
+/// Describe the logical address, never a resolver's private transport URL.
+pub(super) fn source_note(source: &MediaSource) -> PlayingNote {
+    if bern::files::file_path(&source.url).is_some()
+        || source.url.starts_with("blob:")
+        || source.url.starts_with("content:")
+    {
+        PlayingNote::LocalFile
+    } else {
+        PlayingNote::Link
+    }
+}
+
 /// The kernel's subtitle scale for the size slider: 1 at its middle.
 fn subtitle_scale(size: f64) -> f64 {
     0.5 + size.clamp(0.0, 1.0)
@@ -138,7 +159,36 @@ pub(crate) fn speed_label(rate: f64) -> String {
 }
 
 impl ErikaEngine {
+    pub(crate) fn open_file_from(&mut self, source: MediaSource, entry: Option<bern::Entry>) {
+        self.open_file_named(source, None, entry);
+    }
+
+    pub(crate) fn open_file_named(&mut self, source: MediaSource, title: Option<String>, entry: Option<bern::Entry>) {
+        let title = title.filter(|title| !title.trim().is_empty()).unwrap_or_else(|| self.source_name(&source));
+        let (file, fingerprint) = self.identify(&source);
+        let (start, progress) = self.saved_position(file);
+        self.start(title, source_note(&source), no_picture(), progress);
+        self.file = file;
+        self.prepare_queue(&source);
+        self.load_from(Some(source.clone()), start, entry);
+        self.recognize(&source, fingerprint);
+    }
+
+    /// Catalogue consumers must never observe a plugin's short-lived stream URL.
+    pub(crate) fn current_source(&self) -> Option<&MediaSource> {
+        self.logical_source.as_ref().or(self.source.as_ref())
+    }
+
     pub(super) fn source_name(&self, source: &MediaSource) -> String {
+        if erika_store::plugin_sources::is_address(&source.url) {
+            return self
+                .db
+                .plugin_source_item(&source.url)
+                .ok()
+                .flatten()
+                .map(|entry| entry.item.title)
+                .unwrap_or_else(|| "来源影片".into());
+        }
         self.kernel
             .as_ref()
             .and_then(|k| k.file_name(&source.url))
@@ -154,6 +204,7 @@ impl ErikaEngine {
         self.state.player.subtitle_file.clear();
         self.state.player.danmaku_source.clear();
         self.state.player.danmaku_count = 0;
+        self.state.player.sending_danmaku = false;
         self.feedback_remaining = 0.0;
     }
 
@@ -165,6 +216,65 @@ impl ErikaEngine {
     /// Play `source` with the kernel from `start` seconds when the kernel
     /// runs and reads it; otherwise the player simulates over the still.
     pub(super) fn load(&mut self, source: Option<MediaSource>, start: f64) {
+        self.load_from(source, start, bern::current_entry());
+    }
+
+    pub(crate) fn load_from(
+        &mut self,
+        source: Option<MediaSource>,
+        start: f64,
+        entry: Option<bern::Entry>,
+    ) {
+        if let Some(source) = source
+            .as_ref()
+            .filter(|s| erika_store::plugin_sources::is_address(&s.url))
+        {
+            // Every entry point comes here, including recent/queue/canonical play.
+            // Stop the old transport while the owner obtains a fresh URL.
+            self.unload();
+            self.logical_source = Some(source.clone());
+            self.state.paused = true;
+            self.state.elapsed = if start.is_finite() { start.max(0.) } else { 0. };
+            self.state.duration = 0.;
+            self.state.progress = 0.;
+            clear_tracks(&mut self.state.player);
+            self.resolve_source(source, self.state.elapsed, entry);
+            return;
+        }
+        if let Some((logical, transport)) = source.as_ref().and_then(|source| {
+            self.remote_transport(source).map(|transport| (source.clone(), transport))
+        }) {
+            self.unload();
+            self.logical_source = Some(logical);
+            self.load_transport(Some(transport), start, Vec::new(), entry);
+            return;
+        }
+        self.logical_source = None;
+        self.load_transport(source, start, Vec::new(), entry);
+    }
+
+    /// Resolve a mounted PC library with its current, device-local credential.
+    /// A token-free HTTP identity also resumes after import and before a rescan.
+    pub(crate) fn remote_transport(&self, source: &MediaSource) -> Option<MediaSource> {
+        self.db.sources().into_iter()
+            .filter(|source| source.kind == "dandanplay")
+            .find_map(|known| {
+                let setting = erika_store::portable::dandanplay_token_setting(known.id);
+                erika_dandanplay::remote::authorized_stream(
+                    &known.location, &source.url, &self.db.setting(&setting).unwrap_or_default(),
+                ).map(MediaSource::new)
+            })
+    }
+
+    pub(crate) fn load_transport(
+        &mut self,
+        source: Option<MediaSource>,
+        start: f64,
+        headers: Vec<(String, String)>,
+        entry: Option<bern::Entry>,
+    ) {
+        self.playback_observed = false;
+        self.interrupt_played();
         self.clear_chapters();
         self.pause_wanted = None;
         self.seek_wanted = None;
@@ -172,8 +282,8 @@ impl ErikaEngine {
         let kernel = self.kernel();
         match (kernel, source) {
             (Some(kernel), Some(source)) if playable(&source.url, kernel.is_browser()) => {
-                if let Err(reason) = kernel.prepare_source(&source.url) {
-                    self.unload();
+                if let Err(reason) = kernel.prepare_source_from(&source.url, entry) {
+                    self.stop_transport();
                     self.state.paused = true;
                     self.notify(Notice::OperationFailed { reason });
                     return;
@@ -188,20 +298,20 @@ impl ErikaEngine {
                 self.state.progress = 0.0;
                 self.state.elapsed = start;
                 self.state.duration = 0.0;
-                let player = &mut self.state.player;
-                player.subtitle_tracks.clear();
-                player.audio_tracks.clear();
-                player.subtitle_track = -1;
-                player.audio_track = -1;
-                player.video_info.clear();
-                name_tracks(player);
+                clear_tracks(&mut self.state.player);
                 kernel.set_hardware_decode(self.state.preferences.hardware_decode);
                 kernel.set_rate(self.rate());
                 kernel.set_subtitle_scale(subtitle_scale(self.state.player.subtitle_size));
                 kernel.set_subtitle_supersampling(self.state.player.subtitle_supersampling);
                 kernel.set_enhancement(self.enhancement());
                 kernel.set_danmaku(&self.danmaku_config());
-                kernel.open(&source.url, start);
+                if let Err(reason) = kernel.open_with_headers(&source.url, start, headers) {
+                    self.stop_transport();
+                    self.state.paused = true;
+                    self.notify(Notice::OperationFailed { reason });
+                    return;
+                }
+                self.state.paused = false;
                 // The hub sets the volume of the player that has the media.
                 kernel.set_volume(self.state.player.volume);
                 if self.seek_wanted.is_none() && start > 0.0 {
@@ -209,9 +319,22 @@ impl ErikaEngine {
                 }
                 self.source = Some(source.clone());
                 self.plugins_new_video();
+                if let Some(episode) = self.episode_playing {
+                    // Metadata may have arrived before an asynchronous source
+                    // opened. Fetch only now, when its track can be mounted.
+                    self.fetch_online_danmaku(episode);
+                }
                 self.plugin_event("videoLoaded", self.plugin_media());
                 self.profile_opening();
                 self.mount_danmaku_beside(&source);
+            }
+            _ if self.logical_source.is_some() => {
+                // A real source cannot fall back to the sample playback clock.
+                self.state.video = false;
+                self.state.paused = true;
+                self.notify(Notice::OperationFailed {
+                    reason: "播放内核尚未就绪".into(),
+                });
             }
             _ => {
                 self.unload();
@@ -281,6 +404,14 @@ impl ErikaEngine {
 
     /// The kernel lets go of what it played.
     pub(super) fn unload(&mut self) {
+        self.cancel_resolution();
+        self.logical_source = None;
+        self.stop_transport();
+    }
+
+    fn stop_transport(&mut self) {
+        self.playback_observed = false;
+        self.interrupt_played();
         self.clear_chapters();
         if self.state.video
             && let Some(kernel) = &self.kernel
@@ -335,10 +466,21 @@ impl ErikaEngine {
     /// Play at `rate`: a preset is the speed preference, kept; another rate
     /// a plugin offers plays until the preference changes.
     pub(crate) fn play_at(&mut self, rate: f64) -> Result<(), CommandError> {
-        if !self.state.speeds.iter().any(|option| (option.rate - rate).abs() < 1e-6) {
-            return Err(CommandError::new("invalid_rate", format!("{rate}× is not offered")));
+        if !self
+            .state
+            .speeds
+            .iter()
+            .any(|option| (option.rate - rate).abs() < 1e-6)
+        {
+            return Err(CommandError::new(
+                "invalid_rate",
+                format!("{rate}× is not offered"),
+            ));
         }
-        match PRESET_RATES.iter().find(|(_, preset)| (preset - rate).abs() < 1e-6) {
+        match PRESET_RATES
+            .iter()
+            .find(|(_, preset)| (preset - rate).abs() < 1e-6)
+        {
             Some((speed, _)) => erika::Commands::set_speed(self, speed.clone()),
             None => {
                 self.set_rate_override(Some(rate));
@@ -372,6 +514,10 @@ impl ErikaEngine {
     }
 
     pub(super) fn update_position(&mut self, seconds: f64) {
+        if self.logical_source.is_some() && !self.state.video {
+            return;
+        }
+        self.interrupt_played();
         if self.state.video {
             let duration = self.state.duration;
             let seconds = if duration > 0.0 {
@@ -384,13 +530,17 @@ impl ErikaEngine {
             }
             self.seek_wanted = Some((seconds, 0));
             self.state.elapsed = seconds;
-            self.plugin_event("seek", serde_json::json!({ "time": seconds, "duration": duration }));
+            self.plugin_event(
+                "seek",
+                serde_json::json!({ "time": seconds, "duration": duration }),
+            );
             self.state.progress = if duration > 0.0 {
                 seconds / duration
             } else {
                 0.0
             };
             self.update_chapter_position();
+            self.refresh_playing_catalog();
             return;
         }
         self.state.progress = seconds.clamp(0.0, LENGTH) / LENGTH;
@@ -399,11 +549,17 @@ impl ErikaEngine {
 
     /// Pause, or play on: from the start once it ended.
     pub(super) fn toggle(&mut self) {
+        if self.logical_source.is_some() && !self.state.video {
+            return;
+        }
         if self.state.progress >= 1.0 {
             self.update_position(0.0);
         }
         self.state.paused = !self.state.paused;
-        self.plugin_event(if self.state.paused { "pause" } else { "play" }, self.plugin_media());
+        self.plugin_event(
+            if self.state.paused { "pause" } else { "play" },
+            self.plugin_media(),
+        );
         if self.state.video
             && let Some(kernel) = self.kernel()
         {
@@ -460,6 +616,7 @@ impl ErikaEngine {
             return;
         }
         self.feedback_remaining = (self.feedback_remaining - 0.25).max(0.0);
+        self.refresh_playing_catalog();
         self.state.player.feedback = self.feedback_remaining > 0.0;
         if self.state.video {
             if let Some(kernel) = self.kernel() {
@@ -484,7 +641,7 @@ impl ErikaEngine {
             self.save_history_now_and_then();
             return;
         }
-        if self.state.paused {
+        if self.state.paused || self.logical_source.is_some() {
             return;
         }
         self.update_position(self.state.progress * LENGTH + 0.25 * self.rate());
@@ -497,11 +654,16 @@ impl ErikaEngine {
     /// for holds for a few ticks until the kernel shows it. When the media
     /// fails, the frame's video says why.
     fn follow(&mut self, playback: Playback) {
+        self.follow_at(playback, web_time::Instant::now());
+    }
+
+    fn follow_at(&mut self, playback: Playback, at: web_time::Instant) {
         if playback.source.as_deref().is_some_and(|source| {
             self.source.as_ref().map(|current| current.url.as_str()) != Some(source)
         }) {
             return;
         }
+        self.observe_played(&playback, self.seek_wanted.is_some(), at);
         if playback.error.is_some() {
             self.state.paused = true;
             return;
@@ -509,6 +671,7 @@ impl ErikaEngine {
         if !playback.loaded {
             return;
         }
+        self.playback_observed = true;
         // A picture of the media, past its fade-in, stands for it from now
         // on.
         if playback.picture
@@ -575,7 +738,9 @@ impl ErikaEngine {
         if duration_changed {
             self.refresh_danmaku_density();
         }
+        self.project_playing_content(false);
         if playback.ended && self.seek_wanted.is_none() {
+            self.save_played();
             self.advance_at_end();
         }
     }
@@ -646,6 +811,20 @@ impl ErikaEngine {
         self.play_queue(episode, true)
     }
 
+    pub(super) fn preview_volume(&mut self, value: f64) -> Result<(), CommandError> {
+        if !value.is_finite() {
+            return Err(CommandError::new("invalid_value", "value must be finite"));
+        }
+        self.state.player.volume = value.clamp(0.0, 1.0);
+        self.state.player.volume_percent = (self.state.player.volume * 100.0).round() as i64;
+        if self.state.video
+            && let Some(kernel) = self.kernel()
+        {
+            kernel.set_volume(self.state.player.volume);
+        }
+        Ok(())
+    }
+
     pub(super) fn player_number(&mut self, key: &str, value: f64) -> Result<(), CommandError> {
         if !value.is_finite() {
             return Err(CommandError::new("invalid_value", "value must be finite"));
@@ -653,12 +832,7 @@ impl ErikaEngine {
         let kernel = self.kernel().filter(|_| self.state.video);
         match key {
             "volume" => {
-                self.state.player.volume = value.clamp(0.0, 1.0);
-                self.state.player.volume_percent =
-                    (self.state.player.volume * 100.0).round() as i64;
-                if let Some(kernel) = kernel {
-                    kernel.set_volume(self.state.player.volume);
-                }
+                self.preview_volume(value)?;
             }
             "subtitle_size" => {
                 self.state.player.subtitle_size = value.clamp(0.0, 1.0);
@@ -684,11 +858,29 @@ impl ErikaEngine {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::kernel::Kernel;
     use erika::Commands;
     use std::sync::Mutex;
+
+    #[test]
+    fn source_notes_classify_logical_addresses() {
+        for url in [
+            "file:///Videos/movie.mkv",
+            "blob:https://example.invalid/local-video",
+            "content://media/external/video/71",
+        ] {
+            assert_eq!(source_note(&MediaSource::new(url)), PlayingNote::LocalFile);
+        }
+        for url in [
+            "https://example.invalid/movie.mkv",
+            "http://example.invalid/movie.mp4",
+            "erika-source://2/opaque-item",
+        ] {
+            assert_eq!(source_note(&MediaSource::new(url)), PlayingNote::Link);
+        }
+    }
 
     fn playing() -> ErikaEngine {
         let mut e = ErikaEngine::default();
@@ -773,9 +965,11 @@ mod tests {
 
     /// Records what the engine asks and answers with `playback`.
     #[derive(Default)]
-    struct FakeKernel {
+    pub(crate) struct FakeKernel {
         calls: Mutex<Vec<String>>,
-        playback: Mutex<Playback>,
+        pub(crate) playback: Mutex<Playback>,
+        pub(crate) opens: Mutex<Vec<(String, f64, Vec<(String, String)>)>>,
+        pub(crate) entries: Mutex<Vec<Option<bern::Entry>>>,
         results: Mutex<Vec<crate::kernel::OperationResult>>,
     }
 
@@ -791,6 +985,27 @@ mod tests {
     impl Kernel for FakeKernel {
         fn ready(&self) -> bool {
             true
+        }
+        fn prepare_source_from(
+            &self,
+            _url: &str,
+            entry: Option<bern::Entry>,
+        ) -> Result<(), String> {
+            self.entries.lock().unwrap().push(entry);
+            Ok(())
+        }
+        fn open_with_headers(
+            &self,
+            url: &str,
+            start: f64,
+            headers: Vec<(String, String)>,
+        ) -> Result<(), String> {
+            self.opens
+                .lock()
+                .unwrap()
+                .push((url.into(), start, headers));
+            self.open(url, start);
+            Ok(())
         }
         fn open(&self, url: &str, start: f64) {
             self.call(format!("open {url} {start}"))
@@ -865,6 +1080,61 @@ mod tests {
         let mut engine = ErikaEngine::default();
         engine.kernel = Some(kernel.clone());
         (engine, kernel)
+    }
+
+    #[test]
+    fn mounted_remote_playback_keeps_keys_out_of_history_and_resolves_again_on_resume() {
+        let (mut e, kernel) = with_kernel();
+        e.state.preferences.auto_match = false;
+        e.state.features.danmaku = false;
+        let base = "https://media.example.invalid/proxy";
+        let logical = format!("{base}/api/v1/stream/id/video-1");
+        let source = e.db.add_source("dandanplay", "客厅", base, "movie").unwrap();
+        let setting = erika_store::portable::dandanplay_token_setting(source);
+        e.db.set_setting(&setting, Some("fake-key-one"));
+        let file = e.db.saw(source, &logical, 100, 0, Some(&erika_store::Fingerprint {
+            md5: "f".repeat(32), size: 100,
+        })).unwrap();
+        e.open_file_named(MediaSource::new(&logical), Some("来源文件名.mp4".into()), None);
+        assert_eq!(e.state.title, "来源文件名.mp4");
+        assert_eq!(e.file, Some(file));
+        assert_eq!(e.current_source().unwrap().url, logical);
+        assert_eq!(kernel.opens.lock().unwrap()[0].0, format!("{logical}?token=fake-key-one"));
+        assert!(!e.plugin_media().to_string().contains("fake-key"));
+        *kernel.playback.lock().unwrap() = Playback {
+            source: e.source.as_ref().map(|s| s.url.clone()),
+            loaded: true, playing: true, position: 25., duration: Some(100.), ..Default::default()
+        };
+        e.player_tick().unwrap();
+        e.return_to_frame().unwrap();
+        assert_eq!(e.db.recents(10)[0].url, logical);
+        assert_eq!(e.db.progress(file), Some((25., 100.)));
+        assert!(!format!("{:?}", e.state.recents).contains("fake-key"));
+        assert!(e.db.entries(None).iter().all(|a| !a.url.contains("token=")));
+
+        e.db.set_setting(&setting, Some("fake-key-two"));
+        e.continue_last().unwrap();
+        assert_eq!(kernel.opens.lock().unwrap().last().unwrap().0, format!("{logical}?token=fake-key-two"));
+        assert_eq!(e.state.elapsed, 25.);
+        assert_eq!(e.state.title, "来源文件名");
+        assert_eq!(e.file, Some(file));
+        assert!(e.queue.iter().all(|item| !item.source.url.contains("token=")));
+        e.db.remove_source(source);
+        assert!(e.remote_transport(&MediaSource::new(&logical)).is_none());
+    }
+
+    #[test]
+    fn mounted_remote_without_a_kernel_does_not_simulate_playback() {
+        let mut e = ErikaEngine::default();
+        e.state.preferences.auto_match = false;
+        let base = "https://media.example.invalid";
+        e.db.add_source("dandanplay", "客厅", base, "movie").unwrap();
+        e.open_file(MediaSource::new(format!("{base}/api/v1/stream/id/video"))).unwrap();
+        assert!(!e.state.video);
+        assert!(e.state.paused);
+        e.player_tick().unwrap();
+        assert_eq!(e.state.elapsed, 0.);
+        assert!(e.db.recents(10).is_empty());
     }
 
     #[test]
@@ -1050,6 +1320,7 @@ mod tests {
                 .iter()
                 .any(|call| call.starts_with("open ") && call.ends_with(" 600"))
         );
+        e.player_tick().unwrap();
         e.return_to_frame().unwrap();
         assert_eq!(e.state.recents[0].name, "two.mkv");
         // A copy of a file is the same file: it picks up there too.
@@ -1058,6 +1329,7 @@ mod tests {
         e.open_file(MediaSource::file(dir.join("copy.mkv")))
             .unwrap();
         assert_eq!(e.state.elapsed, 600.0);
+        e.player_tick().unwrap();
         e.close_player().unwrap();
         assert_eq!(
             e.play_recent("gone.mkv".into()).unwrap_err().code,
@@ -1121,6 +1393,23 @@ mod tests {
                 reason: "disk full".into()
             })
         );
+    }
+
+    #[test]
+    fn gesture_volume_previews_without_persisting_until_committed() {
+        let (mut e, _) = with_kernel();
+        e.set_player_number("volume".into(), 0.4).unwrap();
+        for value in [0.5, 0.7, 1.5] {
+            e.preview_player_volume(value).unwrap();
+            assert_eq!(e.db.setting("player.volume").as_deref(), Some("0.4"));
+        }
+        assert_eq!(e.state.player.volume, 1.0);
+        assert_eq!(e.state.player.volume_percent, 100);
+        assert!(e.preview_player_volume(f64::NAN).is_err());
+        assert!(e.preview_player_volume(f64::INFINITY).is_err());
+        assert_eq!(e.state.player.volume, 1.0);
+        e.set_player_number("volume".into(), 0.7).unwrap();
+        assert_eq!(e.db.setting("player.volume").as_deref(), Some("0.7"));
     }
 
     #[test]
@@ -1498,6 +1787,362 @@ mod tests {
         assert_eq!(kernel.calls(), ["send 前方高能 ffff00"]);
     }
 
+    fn combined_media(
+        e: &mut ErikaEngine,
+    ) -> (
+        i64,
+        erika_catalog::FileBinding,
+        Vec<erika_catalog::MediaNode>,
+    ) {
+        use erika_catalog::*;
+        use serde_json::json;
+        e.state.preferences.auto_match = false;
+        e.state.features.danmaku = false;
+        let file =
+            e.db.opened(
+                "https://example.invalid/combined.mkv",
+                Some(&erika_store::Fingerprint {
+                    md5: "d".repeat(32),
+                    size: 1234,
+                }),
+            )
+            .unwrap();
+        let work = tmdb::parse_work(Kind::Tv, 80, &json!({"id":80,"name":"合辑测试","seasons":[{"id":81,"season_number":0,"name":"特别篇"}]})).unwrap();
+        let season = tmdb::parse_season(
+            &work,
+            0,
+            &json!({"id":81,"season_number":0,"name":"特别篇","episodes":[
+            {"id":82,"season_number":0,"episode_number":1,"name":"上篇"},
+            {"id":83,"season_number":0,"episode_number":2,"name":"下篇"},
+            {"id":84,"season_number":0,"episode_number":3,"name":"续篇"}]}),
+        )
+        .unwrap();
+        let mut nodes = vec![work.node, season.node];
+        nodes.extend(season.episodes.clone());
+        let binding = FileBinding {
+            file,
+            decision: Decision::Manual,
+            evidence: "test".into(),
+            revision: 0,
+            items: season.episodes[..2]
+                .iter()
+                .enumerate()
+                .map(|(i, n)| BindingItem {
+                    media: n.id.clone(),
+                    start_seconds: Some(i as f64 * 60.),
+                    end_seconds: Some((i + 1) as f64 * 60.),
+                })
+                .collect(),
+        };
+        (file, binding, nodes)
+    }
+
+    #[test]
+    fn actual_playback_marks_chapters_without_enabling_file_resume() {
+        use std::time::Duration;
+        let (mut e, _) = with_kernel();
+        let (file, binding, nodes) = combined_media(&mut e);
+        e.db.catalog_apply(&nodes, &[], &[binding.clone()], &[])
+            .unwrap();
+        e.state.preferences.remember_position = false;
+        e.open_file(MediaSource::new("https://example.invalid/combined.mkv"))
+            .unwrap();
+        let at = web_time::Instant::now();
+        for second in 0..=60 {
+            e.follow_at(
+                Playback {
+                    loaded: true,
+                    playing: true,
+                    position: second as f64,
+                    duration: Some(120.),
+                    ..Default::default()
+                },
+                at + Duration::from_secs(second),
+            );
+        }
+        e.save_history();
+        assert!(
+            e.db.catalog_watched(&binding.items[0].media)
+                .unwrap()
+                .unwrap()
+                .watched
+        );
+        assert!(
+            e.db.catalog_watched(&binding.items[1].media)
+                .unwrap()
+                .is_none()
+        );
+        assert!(e.db.progress(file).is_none());
+        e.update_position(119.);
+        e.follow_at(
+            Playback {
+                loaded: true,
+                playing: true,
+                position: 119.,
+                duration: Some(120.),
+                ..Default::default()
+            },
+            at + Duration::from_secs(61),
+        );
+        e.follow_at(
+            Playback {
+                loaded: true,
+                ended: true,
+                position: 120.,
+                duration: Some(120.),
+                ..Default::default()
+            },
+            at + Duration::from_secs(62),
+        );
+        assert!(
+            e.db.catalog_watched(&binding.items[1].media)
+                .unwrap()
+                .is_none()
+        );
+        assert!(e.db.progress(file).is_none());
+    }
+
+    #[test]
+    fn untimed_collection_is_marked_at_real_eof_not_an_optimistic_seek() {
+        use std::time::Duration;
+        let (mut e, _) = with_kernel();
+        let (_, mut binding, nodes) = combined_media(&mut e);
+        for i in &mut binding.items {
+            i.start_seconds = None;
+            i.end_seconds = None;
+        }
+        e.db.catalog_apply(&nodes, &[], &[binding.clone()], &[])
+            .unwrap();
+        e.open_file(MediaSource::new("https://example.invalid/combined.mkv"))
+            .unwrap();
+        let at = web_time::Instant::now();
+        for second in 0..=119 {
+            e.follow_at(
+                Playback {
+                    loaded: true,
+                    playing: true,
+                    position: second as f64,
+                    duration: Some(120.),
+                    ..Default::default()
+                },
+                at + Duration::from_secs(second),
+            );
+        }
+        e.follow_at(
+            Playback {
+                loaded: true,
+                playing: true,
+                position: 119.96,
+                duration: Some(120.),
+                ..Default::default()
+            },
+            at + Duration::from_secs(120),
+        );
+        e.save_history();
+        assert!(
+            binding
+                .items
+                .iter()
+                .all(|i| e.db.catalog_watched(&i.media).unwrap().is_none())
+        );
+        e.follow_at(
+            Playback {
+                loaded: true,
+                ended: true,
+                position: 119.96,
+                duration: Some(120.),
+                ..Default::default()
+            },
+            at + Duration::from_millis(120250),
+        );
+        assert!(
+            binding
+                .items
+                .iter()
+                .all(|i| e.db.catalog_watched(&i.media).unwrap().unwrap().watched)
+        );
+    }
+
+    #[test]
+    fn combined_playback_tracks_chapters_seeks_eof_and_external_undo() {
+        let (mut e, kernel) = with_kernel();
+        let (_, binding, nodes) = combined_media(&mut e);
+        let change =
+            e.db.catalog_apply(&nodes, &[], &[binding.clone()], &[])
+                .unwrap();
+        e.open_file(MediaSource::new("https://example.invalid/combined.mkv"))
+            .unwrap();
+        assert_eq!(
+            e.state.subtitle,
+            PlayingNote::SeasonEpisode {
+                season: 0,
+                episode: 1
+            }
+        );
+        assert_eq!(e.state.player.queue_index, 1);
+        *kernel.playback.lock().unwrap() = Playback {
+            source: Some("https://example.invalid/combined.mkv".into()),
+            loaded: true,
+            playing: true,
+            position: 75.,
+            duration: Some(120.),
+            ..Default::default()
+        };
+        e.player_tick().unwrap();
+        assert_eq!(
+            e.state.subtitle,
+            PlayingNote::SeasonEpisode {
+                season: 0,
+                episode: 2
+            }
+        );
+        assert_eq!(e.media_playing, Some(binding.items[1].media.clone()));
+        assert_eq!(e.state.player.queue_index, 2);
+        e.skip(-60.).unwrap();
+        assert_eq!(e.state.player.queue_index, 1);
+        assert_eq!(e.media_playing, Some(binding.items[0].media.clone()));
+        e.seek_wanted = None;
+        kernel.calls();
+        kernel.playback.lock().unwrap().ended = true;
+        e.player_tick().unwrap();
+        assert_eq!(e.state.player.queue_index, 2);
+        assert!(e.state.paused);
+        assert!(!kernel.calls().iter().any(|c| c.starts_with("open ")));
+        e.db.catalog_undo(&change.id).unwrap();
+        e.player_tick().unwrap();
+        assert!(e.media_playing.is_none());
+        assert_eq!(e.state.title, "combined.mkv");
+        assert_eq!(e.state.subtitle, PlayingNote::Link);
+        assert_eq!(e.queue.len(), 1);
+    }
+
+    #[test]
+    fn partial_chapters_make_one_queue_item_without_a_guessed_episode() {
+        let (mut e, _) = with_kernel();
+        let (_, mut binding, nodes) = combined_media(&mut e);
+        binding.items[1].start_seconds = None;
+        e.db.catalog_apply(&nodes, &[], &[binding], &[]).unwrap();
+        e.open_file(MediaSource::new("https://example.invalid/combined.mkv"))
+            .unwrap();
+        assert!(e.media_playing.is_none());
+        assert_eq!(e.state.player.episode, 0);
+        assert_eq!(e.queue.len(), 1);
+        assert!(e.queue[0].start.is_none());
+        assert!(e.queue[0].media.is_none());
+        assert_eq!(e.state.title, "合辑测试");
+    }
+
+    #[test]
+    fn catalog_edits_from_another_engine_refresh_without_reopening_the_file() {
+        let (mut e, kernel) = with_kernel();
+        let (_, binding, nodes) = combined_media(&mut e);
+        e.open_file(MediaSource::new("https://example.invalid/combined.mkv"))
+            .unwrap();
+        kernel.calls();
+        let change = e.db.catalog_apply(&nodes, &[], &[binding], &[]).unwrap();
+        e.player_tick().unwrap();
+        assert_eq!(e.state.title, "合辑测试");
+        assert!(e.media_playing.is_some());
+        e.db.catalog_undo(&change.id).unwrap();
+        e.player_tick().unwrap();
+        assert_eq!(e.state.title, "combined.mkv");
+        assert!(e.media_playing.is_none());
+        assert!(!kernel.calls().iter().any(|c| c.starts_with("open ")));
+    }
+
+    #[test]
+    fn metadata_refresh_updates_the_player_without_rebinding_or_reopening() {
+        let (mut e, kernel) = with_kernel();
+        let (file, binding, mut nodes) = combined_media(&mut e);
+        e.db.catalog_apply(&nodes, &[], &[binding], &[]).unwrap();
+        e.open_file(MediaSource::new("https://example.invalid/combined.mkv"))
+            .unwrap();
+        kernel.calls();
+        let revision = e.db.catalog_revision(file).unwrap();
+        nodes[0].title = "更新后的片名".into();
+        e.db.catalog_save_nodes(&nodes[..1]).unwrap();
+        e.player_tick().unwrap();
+        assert_eq!(e.state.title, "更新后的片名");
+        assert_eq!(e.db.catalog_revision(file).unwrap(), revision);
+        assert!(!kernel.calls().iter().any(|c| c.starts_with("open ")));
+    }
+
+    #[test]
+    fn canonical_play_uses_requested_seconds_not_saved_progress_or_ratio() {
+        let (mut e, kernel) = with_kernel();
+        let (file, binding, nodes) = combined_media(&mut e);
+        e.db.catalog_apply(&nodes, &[], &[binding.clone()], &[])
+            .unwrap();
+        e.db.save_progress(file, 15., 0.);
+        let source = MediaSource::new("https://example.invalid/combined.mkv");
+        e.play_media(binding.items[1].media.0.clone(), source.clone(), 75., false)
+            .unwrap();
+        assert_eq!(e.state.elapsed, 75.);
+        assert_eq!(e.media_playing, Some(binding.items[1].media.clone()));
+        assert!(
+            kernel
+                .calls()
+                .iter()
+                .any(|c| c == "open https://example.invalid/combined.mkv 75")
+        );
+        // An out-of-range resume is clamped to this chapter, not chapter one.
+        e.play_media(binding.items[1].media.0.clone(), source.clone(), 15., false)
+            .unwrap();
+        assert_eq!(e.state.elapsed, 60.);
+        assert!(
+            kernel
+                .calls()
+                .iter()
+                .any(|c| c == "open https://example.invalid/combined.mkv 60")
+        );
+        for position in [f64::NAN, f64::INFINITY, -1.] {
+            assert_eq!(
+                e.play_media(
+                    binding.items[1].media.0.clone(),
+                    source.clone(),
+                    position,
+                    false
+                )
+                .unwrap_err()
+                .code,
+                "invalid_time"
+            );
+        }
+        assert!(kernel.calls().is_empty());
+    }
+
+    #[test]
+    fn canonical_play_rejects_stale_items_and_resumes_unpositioned_collections_as_files() {
+        let (mut e, kernel) = with_kernel();
+        let (_, mut binding, nodes) = combined_media(&mut e);
+        binding.items[1].start_seconds = None;
+        let change =
+            e.db.catalog_apply(&nodes, &[], &[binding.clone()], &[])
+                .unwrap();
+        let source = MediaSource::new("https://example.invalid/combined.mkv");
+        assert_eq!(
+            e.play_media(binding.items[1].media.0.clone(), source.clone(), 80., false)
+                .unwrap_err()
+                .code,
+            "stale_binding"
+        );
+        assert!(kernel.calls().is_empty());
+        e.play_media(String::new(), source.clone(), 80., true)
+            .unwrap();
+        assert_eq!(e.state.elapsed, 80.);
+        assert!(e.media_playing.is_none());
+        assert_eq!(e.queue.len(), 1);
+        kernel.calls();
+        e.db.catalog_undo(&change.id).unwrap();
+        assert_eq!(
+            e.play_media(String::new(), source, 80., false)
+                .unwrap_err()
+                .code,
+            "stale_binding"
+        );
+        assert!(kernel.calls().is_empty());
+    }
+
     #[test]
     fn real_queue_switches_sources_and_end_obeys_autoplay() {
         let (mut e, kernel) = with_kernel();
@@ -1568,6 +2213,7 @@ mod tests {
         assert_eq!(e.state.player.danmaku_text, "草稿");
         e.found.lock().unwrap().push(Found::Sent {
             revision,
+            request_generation: e.danmaku_generation,
             text: "草稿".into(),
             color: 0xFFFFFF,
             result: Err("离线".into()),
@@ -1580,23 +2226,94 @@ mod tests {
         kernel.calls();
         e.found.lock().unwrap().push(Found::Sent {
             revision,
+            request_generation: e.danmaku_generation,
             text: "草稿".into(),
             color: 0xFFFFFF,
             result: Ok(()),
         });
         e.take_found();
         assert!(kernel.calls().is_empty());
-        assert!(e.state.player.danmaku_text.is_empty());
-        assert_eq!(e.state.player.danmaku_sent_revision, 1);
+        assert_eq!(e.state.player.danmaku_text, "草稿");
+        assert_eq!(e.state.player.danmaku_sent_revision, 0);
         e.state.player.danmaku_text = "当前弹幕".into();
         e.found.lock().unwrap().push(Found::Sent {
             revision: e.match_revision,
+            request_generation: e.danmaku_generation,
             text: "当前弹幕".into(),
             color: 0xFE0502,
             result: Ok(()),
         });
         e.take_found();
         assert_eq!(kernel.calls(), ["send 当前弹幕 fe0502"]);
+    }
+
+    #[test]
+    fn changing_danmaku_invalidates_late_replies_even_without_a_fetch() {
+        use crate::matching::Found;
+        use erika_catalog::*;
+        let (mut e, kernel) = with_kernel();
+        let (file, _, _) = combined_media(&mut e);
+        e.open_file(MediaSource::new("https://example.invalid/combined.mkv"))
+            .unwrap();
+        let mut dm = DanmakuBinding {
+            file,
+            reference: ProviderRef {
+                provider: Provider::Dandanplay,
+                scope: String::new(),
+                kind: Kind::Episode,
+                id: "10001".into(),
+            },
+            media: None,
+            manual: true,
+            fingerprint_verified: false,
+            shift_seconds: 0.,
+            user_shift_seconds: 0.,
+            revision: 0,
+        };
+        dm = e.db.catalog_set_danmaku(&dm).unwrap();
+        e.show_catalog(file).unwrap();
+        let generation = e.danmaku_generation;
+        // An offset edit keeps in-flight comments and the send acknowledgement valid.
+        dm.user_shift_seconds = 5.;
+        dm = e.db.catalog_set_danmaku(&dm).unwrap();
+        e.show_catalog(file).unwrap();
+        assert_eq!(e.danmaku_generation, generation);
+        e.state.player.sending_danmaku = true;
+        dm.reference.id = "10002".into();
+        let change = e.db.catalog_apply(&[], &[], &[], &[dm]).unwrap();
+        e.show_catalog(file).unwrap();
+        assert!(e.danmaku_generation > generation);
+        assert!(!e.state.player.sending_danmaku);
+        assert_eq!(e.episode_playing, Some(10002));
+        e.state.player.sending_danmaku = true;
+        e.state.player.danmaku_text = "新轨道草稿".into();
+        kernel.calls();
+        e.found.lock().unwrap().extend([
+            Found::Sent {
+                revision: e.match_revision,
+                request_generation: generation,
+                text: "新轨道草稿".into(),
+                color: 0xFFFFFF,
+                result: Ok(()),
+            },
+            Found::Comments {
+                revision: e.match_revision,
+                request_generation: generation,
+                episode: 10001,
+                result: Ok(("120".into(), 120)),
+            },
+        ]);
+        e.take_found();
+        assert!(kernel.calls().is_empty());
+        assert!(e.state.player.sending_danmaku);
+        assert_eq!(e.state.player.danmaku_text, "新轨道草稿");
+        assert_eq!(e.state.player.danmaku_sent_revision, 0);
+        // Undo is another identity transition, not a resurrection of old callbacks.
+        let before_undo = e.danmaku_generation;
+        e.db.catalog_undo(&change.id).unwrap();
+        e.show_catalog(file).unwrap();
+        assert!(e.danmaku_generation > before_undo);
+        assert_eq!(e.episode_playing, Some(10001));
     }
 
     #[test]
@@ -1623,6 +2340,69 @@ mod tests {
         assert_eq!(e.state.danmaku_settings.opacity_percent, 61);
         assert!(e.state.danmaku_settings.block_top);
         assert_eq!(e.state.preferences.speed, PlaybackSpeed::Faster);
+    }
+
+    #[test]
+    fn failed_or_pending_opens_preserve_existing_history() {
+        for identified in [false, true] {
+            for failed in [false, true] {
+                let (mut e, kernel) = with_kernel();
+                e.state.preferences.auto_match = false;
+                let url = "https://example.invalid/resume.mp4";
+                let file = identified.then(|| {
+                    let file = e.db.opened(url, Some(&erika_store::Fingerprint {
+                        md5: "a".repeat(32), size: 100,
+                    })).unwrap();
+                    e.db.save_progress(file, 12., 30.);
+                    file
+                });
+                e.db.remember(url, "resume.mp4", None, 12., 30.);
+                e.show_recents();
+                e.continue_last().unwrap();
+                *kernel.playback.lock().unwrap() = Playback {
+                    source: Some(url.into()),
+                    error: failed.then(|| "unauthorized".into()),
+                    ..Default::default()
+                };
+                e.player_tick().unwrap();
+                e.close_player().unwrap();
+                let recent = &e.db.recents(10)[0];
+                assert_eq!((recent.position, recent.duration), (12., 30.));
+                assert_eq!(recent.title, "resume.mp4");
+                if let Some(file) = file {
+                    assert_eq!(e.db.progress(file), Some((12., 30.)));
+                }
+                e.continue_last().unwrap();
+                assert_eq!(e.state.elapsed, 12.);
+            }
+        }
+    }
+
+    #[test]
+    fn only_observed_playback_enters_history_even_without_a_duration() {
+        let (mut e, kernel) = with_kernel();
+        e.state.preferences.auto_match = false;
+        let first = "https://example.invalid/first.mp4";
+        e.open_file(MediaSource::new(first)).unwrap();
+        e.close_player().unwrap();
+        assert!(e.db.recents(10).is_empty());
+        e.open_file(MediaSource::new(first)).unwrap();
+        *kernel.playback.lock().unwrap() = Playback {
+            source: Some(first.into()), loaded: true, playing: true, position: 8.,
+            ..Default::default()
+        };
+        e.player_tick().unwrap();
+        // A later transport failure keeps the last observed position.
+        kernel.playback.lock().unwrap().error = Some("disconnected".into());
+        e.player_tick().unwrap();
+        e.close_player().unwrap();
+        assert_eq!(e.db.recents(10)[0].position, 8.);
+        let second = "https://example.invalid/second.mp4";
+        e.open_file(MediaSource::new(second)).unwrap();
+        e.player_tick().unwrap(); // A stale report from the first source is ignored.
+        e.close_player().unwrap();
+        assert_eq!(e.db.recents(10).len(), 1);
+        assert_eq!(e.db.recents(10)[0].url, first);
     }
 
     #[test]

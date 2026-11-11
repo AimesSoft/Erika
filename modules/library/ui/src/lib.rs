@@ -32,7 +32,7 @@ pub struct LibraryDraft {
     /// (`libLayout` on the television).
     #[initial(154.48)]
     pub tv_poster_size: f64,
-    pub position: i64,
+    pub position: String,
     /// The folder picked to add.
     pub folder: MediaSource,
     pub shared_name: String,
@@ -62,7 +62,7 @@ pub fn library_page(
     #[session] draft: LibraryDraft,
 ) -> impl View {
     ui! {
-        if (!build.modules.anime || !app.modules.anime) && library.opened > 0 {
+        if (!build.modules.anime || !app.modules.anime) && library.opened != "" {
             library_preview(library: library)
         } else {
             if draft.tab == LibraryTab::Sources {
@@ -253,14 +253,9 @@ pub fn library_grid(
                         library_phone_header(app: app, library: library, listing: listing)
                     }
                     if listing.empty {
-                        Column(gap: 4, padding_y: 24) {
-                            Text(content: tr! { "zh-Hans" => "这里还没有番。", "en" => "No shows here yet." }, style: title3)
-                            Text(content: tr! { "zh-Hans" => "在「来源」里添加放视频的文件夹，或者直接打开视频，识别出的番剧会列在这里。", "en" => "Add folders of videos under Sources, or open videos; recognized shows are listed here." }, emphasis: secondary, lines: 3)
-                            if build.modules.account && app.features.account {
-                                Text(content: tr! { "zh-Hans" => "在线识别需要先在 设置 › 账号 里登录。", "en" => "Sign in under Settings › Account to recognize shows online." }, style: caption, emphasis: secondary, lines: 2)
-                            } else if build.modules.account {
-                                Text(content: tr! { "zh-Hans" => "在线识别可在 设置 › 可选功能 中开启账号后使用。", "en" => "Enable Account under Settings › Optional Features to recognize shows online." }, style: caption, emphasis: secondary, lines: 2)
-                            }
+                        Column(gap: 12, padding_y: 24) {
+                            Text(content: tr! { "zh-Hans" => "还没有媒体", "en" => "No media yet" }, style: title3)
+                            Button(id: add_source_empty, label: tr! { "zh-Hans" => "添加来源", "en" => "Add source" }, icon: "folder") => draft.tab.set(LibraryTab::Sources)
                         }
                     } else {
                         // `libLayout`: every row is 2 : 3 posters and 54 points for
@@ -281,7 +276,7 @@ pub fn library_grid(
                     ScrollView(indicators: hidden) {
                         Column(gap: 1) {
                             ForEach(items: listing.letters, key: letter) |letter| {
-                                Button(id: index, label: letter.letter, enabled: letter.target > 0, variant: library_index) {
+                                Button(id: index, label: letter.letter, enabled: letter.target != "", variant: library_index) {
                                     Column(gap: 0, width: if window.tv { 26 } else { 20 }, height: 18, align: center) {
                                         Text(content: letter.letter, style: caption2, font_size: 10.5, emphasis: secondary)
                                     }

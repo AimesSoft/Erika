@@ -9,11 +9,17 @@
 //! read, and afterwards takes the calls it queued (`host.js`). The
 //! playback half of the interface, `player` and `danmaku`, is liberika's.
 
+mod catalog;
+mod deadline;
+mod http;
 mod hooks;
 mod links;
 mod overlays;
 mod pack;
 mod runtime;
+mod sources;
+#[cfg(feature = "bern-module-anime")]
+mod watched;
 pub(crate) mod store;
 
 use crate::{ErikaEngine, in_background, markdown};
@@ -119,14 +125,34 @@ struct Installed {
 enum Done {
     Market(Vec<store::Listing>, Vec<String>),
     Installed(String, Result<Pack, String>),
-    Fetched(String, u64, Result<Value, String>),
+    Fetched(String, u64, u64, Result<Value, String>),
+    ResolveTimeout(u64),
     /// The first seconds of the video at the address, measured.
     #[cfg(liberika_kernel)]
-    Opening(String, Result<Value, String>),
+    Opening(u64, Result<Value, String>),
     /// A request of a link's resolution answered.
     Resolved(u64, Result<Value, String>),
-    /// A plugin's `README.md`, with where it was read from.
-    Readme(String, Result<(String, String), String>),
+    SourceMetadata(sources::metadata::Work, erika_catalog::resolve::FileResolution),
+    #[cfg(feature = "bern-module-anime")]
+    EpisodeWatched(u64, erika_dandanplay::Result<erika_dandanplay::catalog::Details>),
+    /// A plugin's parsed README, with public market pictures localized.
+    Readme(String, Result<Vec<DocBlock>, String>),
+}
+
+/// Capture the engine wake target before starting async work. A discarded engine
+/// must not be retained by a socket or a timer.
+fn completion<T: Send + 'static>(
+    inbox: &Arc<Mutex<Vec<Done>>>,
+    wrap: impl FnOnce(T) -> Done + Send + 'static,
+) -> impl FnOnce(T) + Send + 'static {
+    let inbox = Arc::downgrade(inbox);
+    let wake = bern::wake::waker();
+    move |answer| {
+        if let Some(inbox) = inbox.upgrade() {
+            inbox.lock().unwrap_or_else(|p| p.into_inner()).push(wrap(answer));
+            if let Some(wake) = wake { wake.wake(); }
+        }
+    }
 }
 
 pub(crate) struct Plugins {
@@ -155,6 +181,9 @@ pub(crate) struct Plugins {
     suggesting: u64,
     /// The link a plugin is resolving.
     resolution: Option<links::Resolution>,
+    source_metadata: sources::metadata::Queue,
+    #[cfg(feature = "bern-module-anime")]
+    watches: watched::Pending,
     /// The comments of what plays, by track, and the track passing along
     /// the plugins.
     tracks: BTreeMap<String, hooks::Track>,
@@ -187,6 +216,9 @@ impl Default for Plugins {
             next_tag: 1,
             suggesting: 0,
             resolution: None,
+            source_metadata: sources::metadata::Queue::default(),
+            #[cfg(feature = "bern-module-anime")]
+            watches: watched::Pending::default(),
             tracks: BTreeMap::new(),
             last_track: String::new(),
             chain: None,
@@ -296,10 +328,51 @@ impl Readme {
                 let base = MediaSource::file(path.clone()).url;
                 (std::fs::read(&path).map_err(|error| error.to_string())?, base)
             }
-            Readme::Address(address) => (store::get(&address)?, address),
+            Readme::Address(address) => (store::readme(&address)?, address),
             Readme::Package(package) => (store::package_file(package, "README.md")?, String::new()),
         };
         Ok((String::from_utf8_lossy(&bytes).into_owned(), base))
+    }
+
+    /// Parse and download on the existing worker, not the engine/UI thread.
+    fn blocks(self) -> Result<Vec<DocBlock>, String> {
+        let (text, base) = self.read()?;
+        let mut blocks = markdown::blocks(&text, &base);
+        cache_readme_images(&mut blocks, store::cached_image);
+        Ok(blocks)
+    }
+}
+
+fn cache_readme_images(
+    blocks: &mut [DocBlock],
+    mut cache: impl FnMut(&str) -> Option<String>,
+) {
+    for block in blocks {
+        if let Some(image) = &mut block.image {
+            if let Some(local) = cache(&image.url) {
+                *image = MediaSource::new(local);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod market_readme_tests {
+    use super::*;
+
+    #[test]
+    fn readme_pictures_are_cached_after_resolving_the_original_base() {
+        let base = "https://raw.githubusercontent.com/AimesSoft/erika_plugins/main/tools/README.md";
+        let mut blocks = markdown::blocks("# Tools\n\n![icon](icon.png)\n\n![other](https://example.com/a.png)", base);
+        let original = "https://raw.githubusercontent.com/AimesSoft/erika_plugins/main/tools/icon.png";
+        let mut seen = Vec::new();
+        cache_readme_images(&mut blocks, |url| {
+            seen.push(url.to_string());
+            (url == original).then(|| "file:///cache/icon.png".to_string())
+        });
+        assert!(seen.iter().any(|url| url == original));
+        let images: Vec<_> = blocks.iter().filter_map(|block| block.image.as_ref().map(|image| image.url.as_str())).collect();
+        assert_eq!(images, vec!["file:///cache/icon.png", "https://example.com/a.png"]);
     }
 }
 
@@ -389,6 +462,7 @@ impl ErikaEngine {
         if !self.plugins.started {
             self.start_plugins();
         }
+        self.check_resolution();
         let done: Vec<Done> = std::mem::take(
             &mut *self
                 .plugins
@@ -411,20 +485,26 @@ impl ErikaEngine {
                     }
                 }
                 #[cfg(liberika_kernel)]
-                Done::Opening(url, Ok(frames)) => {
-                    if self.source.as_ref().is_some_and(|source| source.url == url) {
+                Done::Opening(revision, Ok(frames)) => {
+                    if self.state.video && self.match_revision == revision {
+                        let url = self.current_source().map(|source| source.url.clone());
                         self.plugin_event("openingProfiled", json!({ "url": url, "frames": frames }));
                     }
                 }
                 #[cfg(liberika_kernel)]
-                Done::Opening(url, Err(error)) => eprintln!("erika: opening of {url}: {error}"),
+                Done::Opening(_, Err(_)) => eprintln!("erika: opening profile unavailable"),
                 Done::Resolved(tag, answer) => self.resolver_fetched(tag, answer),
-                Done::Readme(id, readme) => self.readme_read(&id, readme),
-                Done::Fetched(id, request, answer) => {
-                    let snapshot = self.plugin_snapshot(&id);
-                    if let Some(runtime) = self.plugins.runtimes.get_mut(&id) {
-                        runtime.settle(request, answer, &snapshot);
+                Done::ResolveTimeout(tag) => {
+                    if self.plugins.resolution.as_ref().is_some_and(|r| r.tag == tag) {
+                        self.check_resolution();
                     }
+                }
+                Done::SourceMetadata(work, report) => self.source_metadata_finished(work, report),
+                #[cfg(feature = "bern-module-anime")]
+                Done::EpisodeWatched(tag, result) => self.plugin_watch_finished(tag, result),
+                Done::Readme(id, readme) => self.readme_read(&id, readme),
+                Done::Fetched(id, instance, request, answer) => {
+                    self.plugin_fetched(&id, instance, request, answer);
                 }
             }
         }
@@ -433,6 +513,7 @@ impl ErikaEngine {
             self.start_runtime(&id);
         }
         self.poll_plugins();
+        self.drive_source_metadata();
         self.show_plugins();
     }
 
@@ -475,6 +556,10 @@ impl ErikaEngine {
     }
 
     fn stop_runtime(&mut self, id: &str) {
+        #[cfg(feature = "bern-module-anime")]
+        self.plugins.watches.stop(id);
+        self.stop_source_metadata(id);
+        self.resolver_stopped(id);
         if let Some(mut runtime) = self.plugins.runtimes.remove(id) {
             // The context goes with it: `pluginOnDestroy` runs if it is quick.
             runtime.invoke("onDestroy", None, &Value::Null, 0, Purpose::Event);
@@ -532,6 +617,10 @@ impl ErikaEngine {
         snapshot.insert("process.running".into(), json!(self.process_running(id)));
         if pack.is_some_and(|pack| pack.has("library.read")) {
             snapshot.insert("library".into(), self.library_for_plugins());
+            snapshot.insert("library.mediaContext".into(), match self.plugin_media_context() {
+                Ok(context) => json!({"ok":true,"value":context}),
+                Err(error) => json!({"ok":false,"error":{"code":error.code,"message":error.message}}),
+            });
         }
         Value::Object(snapshot)
     }
@@ -544,8 +633,11 @@ impl ErikaEngine {
     /// The library's shows for `library.getShows()`: their ids, titles and
     /// the folders their files are in.
     fn library_for_plugins(&self) -> Value {
-        let mut shows: BTreeMap<i64, (String, std::collections::BTreeSet<String>)> = BTreeMap::new();
+        let mut shows = self.canonical_shows_for_plugins().unwrap_or_default();
         for entry in self.db.entries(None) {
+            if entry.file.is_some_and(|file| self.db.catalog_binding(file).is_ok_and(|b| b.is_some())) {
+                continue;
+            }
             let Some((anime, _)) = entry.matched else {
                 continue;
             };
@@ -632,13 +724,18 @@ impl ErikaEngine {
                         plugin.error.clear();
                     }
                     entries_changed = true;
+                    self.resume_source_metadata(id);
                     if !self.plugins.tracks.is_empty() {
                         self.rerun_plugin_danmaku();
                     }
                 }
             }
         } else if let Some(error) = &error {
-            eprintln!("erika: plugin {id}: {error}");
+            if matches!(purpose, Purpose::Resolve(_)) {
+                eprintln!("erika: plugin {id}: URL resolution failed");
+            } else {
+                eprintln!("erika: plugin {id}: {error}");
+            }
         }
         if entries_changed {
             self.show_plugin_menu();
@@ -660,7 +757,9 @@ impl ErikaEngine {
             let args = call.get(1).and_then(Value::as_array).cloned().unwrap_or_default();
             self.apply_plugin_call(id, name, &args);
         }
-        if matches!(purpose, Purpose::Danmaku(_) | Purpose::Resolve(_) | Purpose::Suggest(_)) {
+        if matches!(purpose, Purpose::Danmaku(_) | Purpose::Resolve(_) | Purpose::Suggest(_))
+            && reply.get("pending").and_then(Value::as_bool) != Some(true)
+        {
             self.plugin_hook_answered(id, purpose, reply.get("value").cloned(), error);
         }
     }
@@ -689,6 +788,10 @@ impl ErikaEngine {
 
     /// Apply a call `id` queued, if it declared the permission for it.
     fn apply_plugin_call(&mut self, id: &str, name: &str, args: &[Value]) {
+        if name == "libraryRequest" {
+            self.plugin_catalogue_request(id, args);
+            return;
+        }
         let Some(pack) = self.plugins.find(id).map(|plugin| plugin.pack.clone()) else {
             return;
         };
@@ -745,12 +848,15 @@ impl ErikaEngine {
             "processStart" if pack.has("system.override") => self.start_process(id, args),
             "processStop" if pack.has("system.override") => self.stop_process(id),
             "netFetch" if pack.has("network") => self.plugin_fetch(id, args),
+            #[cfg(feature = "bern-module-anime")]
             "librarySetEpisodeWatched" if pack.has("library.write") => {
-                self.plugin_mark_watched(
-                    args.first().and_then(Value::as_i64).unwrap_or(0),
-                    args.get(1).and_then(Value::as_i64).unwrap_or(0),
-                    flag(2),
-                );
+                if let (Some(anime), Some(episode)) = (
+                    args.first().and_then(Value::as_i64), args.get(1).and_then(Value::as_i64),
+                ) {
+                    self.plugin_mark_watched(id, anime, episode, flag(2));
+                } else {
+                    self.notify(Notice::OperationFailed { reason: "弹弹play作品或集号不正确".into() });
+                }
             }
             "extendSpeeds" if pack.has("player.control") => {
                 let speeds = args
@@ -954,10 +1060,12 @@ impl ErikaEngine {
             return;
         };
         #[cfg(liberika_kernel)]
+        let revision = self.match_revision;
+        #[cfg(liberika_kernel)]
         in_background(&self.plugins.inbox, move || {
             let profile = liberika::opening::opening_profile(&url, seconds, 4.0)
                 .map(|frames| json!(frames));
-            vec![Done::Opening(url, profile)]
+            vec![Done::Opening(revision, profile)]
         });
         #[cfg(not(liberika_kernel))]
         let _ = (url, seconds);
@@ -967,7 +1075,7 @@ impl ErikaEngine {
     pub(crate) fn plugin_media(&self) -> Value {
         json!({
             "title": self.state.title,
-            "url": self.source.as_ref().map(|source| source.url.clone()),
+            "url": self.current_source().map(|source| source.url.clone()),
             "duration": self.state.duration,
             "position": self.state.elapsed,
         })
@@ -975,10 +1083,16 @@ impl ErikaEngine {
 
     /// Send what happened to every running plugin: `pluginOnEvent`.
     pub(crate) fn plugin_event(&mut self, name: &str, data: Value) {
-        let event = json!({ "name": name, "data": data });
         let ids: Vec<String> = self.plugins.runtimes.keys().cloned().collect();
         for id in ids {
             let snapshot = self.plugin_snapshot(&id);
+            // Reuse the permission-filtered snapshot: the event and getMediaContext
+            // must not observe different catalogue commits or leak it without read access.
+            let mut data = data.clone();
+            if matches!(name, "videoLoaded" | "play" | "pause" | "seek" | "mediaChanged") {
+                catalog::attach_context(&mut data, &snapshot);
+            }
+            let event = json!({ "name": name, "data": data });
             if let Some(runtime) = self.plugins.runtimes.get_mut(&id) {
                 runtime.invoke("onEvent", Some(&event), &snapshot, 0, Purpose::Event);
             }
@@ -987,15 +1101,35 @@ impl ErikaEngine {
 
     /// The plugins asked for something that answers later, by `net.fetch`.
     fn plugin_fetch(&mut self, id: &str, args: &[Value]) {
-        let Some(request) = args.first().and_then(Value::as_u64) else {
+        let Some(request) = args.first().and_then(Value::as_u64) else { return; };
+        let Some(runtime) = self.plugins.runtimes.get(id) else { return; };
+        if runtime.fetches.contains_key(&request) { return; }
+        let instance = runtime.instance;
+        if runtime.fetches.len() >= 16 {
+            let snapshot = self.plugin_snapshot(id);
+            self.plugins.runtimes.get_mut(id).unwrap().settle(
+                request, Err("插件同时请求过多".into()), &snapshot,
+            );
             return;
-        };
-        let url = args.get(1).and_then(Value::as_str).unwrap_or_default().to_string();
-        let options = args.get(2).cloned().unwrap_or(Value::Null);
-        let id = id.to_string();
-        in_background(&self.plugins.inbox, move || {
-            vec![Done::Fetched(id, request, fetch(&url, &options))]
-        });
+        }
+        let url = args.get(1).and_then(Value::as_str).unwrap_or_default();
+        let options = args.get(2).unwrap_or(&Value::Null);
+        let owner = id.to_string();
+        let pending = http::start(http::Request::fetch(url, options),
+            completion(&self.plugins.inbox, move |answer| Done::Fetched(owner, instance, request, answer)));
+        self.plugins.runtimes.get_mut(id).unwrap().fetches.insert(request, pending);
+    }
+
+    fn plugin_fetched(&mut self, id: &str, instance: u64, request: u64, answer: Result<Value, String>) {
+        let allowed = self.state.features.plugins && self.plugins.enabled(id)
+            && self.plugins.find(id).is_some_and(|p| p.pack.has("network"));
+        let Some(runtime) = self.plugins.runtimes.get_mut(id).filter(|r| r.instance == instance)
+            else { return; };
+        if runtime.fetches.remove(&request).is_none() { return; }
+        // A load handler may await net.fetch before `loaded` becomes true.
+        let answer = if allowed { answer } else { Err("插件网络权限已撤销".into()) };
+        let snapshot = self.plugin_snapshot(id);
+        self.plugins.runtimes.get_mut(id).unwrap().settle(request, answer, &snapshot);
     }
 
     /// A handler's promise settled: an action's text, or a hook's result.
@@ -1328,7 +1462,7 @@ impl ErikaEngine {
             plugin: Some(plugin),
         };
         if let Some(readme) = readme {
-            in_background(&self.plugins.inbox, move || vec![Done::Readme(id, readme.read())]);
+            in_background(&self.plugins.inbox, move || vec![Done::Readme(id, readme.blocks())]);
         }
         Ok(())
     }
@@ -1340,13 +1474,13 @@ impl ErikaEngine {
 
     /// Show the README that came, on the page still open for it; without
     /// one, what the market says of the plugin.
-    fn readme_read(&mut self, id: &str, readme: Result<(String, String), String>) {
+    fn readme_read(&mut self, id: &str, readme: Result<Vec<DocBlock>, String>) {
         let info = &mut self.state.plugin_info;
         let Some(plugin) = info.plugin.as_ref().filter(|plugin| info.open && plugin.id == id) else {
             return;
         };
         let blocks = match readme {
-            Ok((text, base)) => markdown::blocks(&text, &base),
+            Ok(blocks) => blocks,
             Err(_) => Vec::new(),
         };
         info.blocks = if blocks.is_empty() { markdown::paragraph(&plugin.description) } else { blocks };
@@ -1539,65 +1673,6 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
         }
         std::thread::park_timeout(std::time::Duration::from_millis(100));
     }
-}
-
-/// `net.fetch(url, { method, headers, body })`: the answer as
-/// `{ status, ok, headers, body }`.
-#[cfg(not(target_arch = "wasm32"))]
-fn fetch(url: &str, options: &Value) -> Result<Value, String> {
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return Err(format!("不是网址：{url}"));
-    }
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(60)))
-        .http_status_as_error(false)
-        .build()
-        .into();
-    let method = options
-        .get("method")
-        .and_then(Value::as_str)
-        .unwrap_or("GET")
-        .to_ascii_uppercase();
-    let body = match options.get("body") {
-        Some(Value::String(text)) => Some(text.clone()),
-        Some(Value::Null) | None => None,
-        Some(other) => Some(other.to_string()),
-    };
-    let mut request = ureq::http::Request::builder().method(method.as_str()).uri(url);
-    if let Some(headers) = options.get("headers").and_then(Value::as_object) {
-        for (key, value) in headers {
-            if let Some(value) = value.as_str() {
-                request = request.header(key.as_str(), value);
-            }
-        }
-    }
-    let request = request
-        .body(body.unwrap_or_default())
-        .map_err(|error| error.to_string())?;
-    let mut response = agent.run(request).map_err(|error| error.to_string())?;
-    let status = response.status().as_u16();
-    let headers: Map<String, Value> = response
-        .headers()
-        .iter()
-        .filter_map(|(key, value)| Some((key.as_str().to_ascii_lowercase(), json!(value.to_str().ok()?))))
-        .collect();
-    let body = response
-        .body_mut()
-        .with_config()
-        .limit(16 << 20)
-        .read_to_string()
-        .map_err(|error| error.to_string())?;
-    Ok(json!({
-        "status": status,
-        "ok": (200..300).contains(&status),
-        "headers": headers,
-        "body": body,
-    }))
-}
-
-#[cfg(target_arch = "wasm32")]
-fn fetch(_url: &str, _options: &Value) -> Result<Value, String> {
-    Err("网页版的插件暂时不能联网".into())
 }
 
 #[cfg(test)]

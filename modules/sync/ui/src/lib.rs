@@ -60,12 +60,12 @@ pub fn account_sync_status(sync: sync::Client) -> impl View {
     }
 }
 
-/// 「账号同步 › 同步口令」: the passphrase accounts are sealed with.
+/// 「账号同步 › 同步口令」: the passphrase private records are sealed with.
 #[component]
 pub fn account_sync_passphrase(sync: sync::Client, #[session] draft: SyncDraft) -> impl View {
     ui! {
         Form(title: tr! { "zh-Hans" => "同步口令", "en" => "Sync Passphrase" }, variant: settings_form, appear: settings_page_in) {
-            Section(footer: tr! { "zh-Hans" => "弹弹play 令牌、Bangumi 登录和 WebDAV 密码用这个口令加密后才写进同步文件与云端，换设备后输入同一个口令，账号就能直接使用。口令只存在本机的系统钥匙串里；忘了口令只会丢掉账号，其他数据不受影响。", "en" => "Your dandanplay token, Bangumi session and WebDAV password are encrypted with this passphrase before they go into a sync file or the cloud. Enter the same passphrase on a new device and your accounts work at once. It stays in this device's keychain; forgetting it loses only the accounts." }) {
+            Section(footer: tr! { "zh-Hans" => "同步口令保护账号、来源密钥、WebDAV 配置和扩展数据。换设备需使用同一口令；没有口令时跳过这些数据，保留本机内容。", "en" => "The sync passphrase protects accounts, source credentials, WebDAV configuration and extension data. Use the same passphrase on another device. Without it, these records are skipped and local data is kept." }) {
                 Row(gap: 12, align: center) {
                     Text(content: tr! { "zh-Hans" => "同步口令", "en" => "Passphrase" }, style: body)
                     Spacer
@@ -147,7 +147,7 @@ pub fn account_sync_backup(sync: sync::Client, #[session] draft: SyncDraft) -> i
         Form(title: tr! { "zh-Hans" => "备份文件", "en" => "Backup File" }, variant: settings_form, appear: settings_page_in) {
             // A television has no files to pick.
             if !window.tv {
-                Section(footer: tr! { "zh-Hans" => "单个 .ebp 文件，装着全部设置、媒体库来源、观看记录与进度、文件与剧集的对应、番剧状态与评分、扩展数据，设置了同步口令时还有加密的账号。海报、截图等缓存不在其中，可以重新获取。导入只补上本机没有或较旧的记录，不会删除本机数据。", "en" => "One .ebp file with every setting, the library's sources, what you watched and where it stopped, files matched to episodes, show status and ratings, and extension data — plus your accounts, encrypted, when a sync passphrase is set. Caches such as posters and screenshots stay out; they can be fetched again. Importing adds what this device lacks or has older, and deletes nothing." }) {
+                Section(footer: tr! { "zh-Hans" => ".ebp 保存设置、来源、媒体关联、收藏、已看状态和播放进度；账号、来源密钥、WebDAV 配置和扩展数据需要同步口令。缓存不备份。导入不会删除本机记录。", "en" => "An .ebp file holds settings, sources, media links, collections, watched states and playback progress. Accounts, source credentials, WebDAV configuration and extension data require a sync passphrase. Caches are excluded. Importing does not delete local records." }) {
                     Row(gap: 12, align: center) {
                         Column(gap: 1) {
                             Text(content: tr! { "zh-Hans" => "导出", "en" => "Export" }, style: body)
@@ -162,8 +162,7 @@ pub fn account_sync_backup(sync: sync::Client, #[session] draft: SyncDraft) -> i
                             Text(content: tr! { "zh-Hans" => "换了设备？先填同步口令，再导入", "en" => "New device? Enter the sync passphrase first, then import" }, style: caption, emphasis: secondary)
                         }
                         Spacer
-                        // `.erika` is what backups were called before.
-                        Button(id: sync_import, label: tr! { "zh-Hans" => "导入文件…", "en" => "Import File…" }, enabled: !sync.busy, pick: draft.import_file, files: ".ebp .erika") => sync.import_from(draft.import_file)
+                        Button(id: sync_import, label: tr! { "zh-Hans" => "导入文件…", "en" => "Import File…" }, enabled: !sync.busy, pick: draft.import_file, files: ".ebp") => sync.import_from(draft.import_file)
                     }
                 }
             }

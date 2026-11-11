@@ -6,13 +6,26 @@
 //! is.
 
 use super::runtime::Purpose;
-use super::{Done, text_of};
-use crate::{ErikaEngine, in_background};
+use super::{Done, completion, deadline::Deadline, http, text_of};
+use crate::ErikaEngine;
+use bern::media::MediaSource;
 use erika_protocol::erika::{self, LinkChoice, Notice};
+use erika_store::plugin_sources::StoredItem;
 use serde_json::{Map, Value, json};
+use std::time::Duration;
+use web_time::Instant;
+
+#[derive(Clone)]
+struct SourceIntent {
+    entry: StoredItem,
+    file_revision: u64,
+    playback_revision: u64,
+    start: f64,
+}
 
 /// The most rounds one link takes.
 const ROUNDS: u32 = 16;
+const ROUND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) struct Resolution {
     url: String,
@@ -21,14 +34,150 @@ pub(crate) struct Resolution {
     /// The plugins still to ask, in their order, and the one asked.
     left: Vec<String>,
     plugin: String,
+    instance: u64,
     state: Value,
     round: u32,
-    tag: u64,
+    pub(super) tag: u64,
+    expires: Option<Instant>,
+    deadline: Option<Deadline>,
+    request: Option<http::Pending>,
     /// The plugin took the link: an error is the link's.
     taken: bool,
+    source: Option<SourceIntent>,
+    entry: Option<bern::Entry>,
 }
 
 impl ErikaEngine {
+    pub(crate) fn resolve_source(
+        &mut self,
+        source: &MediaSource,
+        start: f64,
+        entry: Option<bern::Entry>,
+    ) {
+        let prepared = (|| -> erika_store::catalog::Result<_> {
+            let entry = self
+                .db
+                .plugin_source_item(&source.url)?
+                .ok_or_else(|| erika_store::catalog::Error::conflict("来源条目已移除"))?;
+            if !self.source_resolver_allowed(&entry.owner) {
+                return Err(erika_store::catalog::Error::conflict(
+                    "请启用此来源的插件及播放解析权限",
+                ));
+            }
+            let file_revision = self.db.catalog_revision(entry.file)?;
+            Ok(SourceIntent {
+                entry,
+                file_revision,
+                playback_revision: self.match_revision,
+                start,
+            })
+        })();
+        let intent = match prepared {
+            Ok(intent) => intent,
+            Err(error) => {
+                self.resolution_failed(error.message);
+                return;
+            }
+        };
+        self.cancel_resolution();
+        self.file = Some(intent.entry.file);
+        self.plugins.resolution = Some(Resolution {
+            url: source.url.clone(),
+            title: intent.entry.item.title.clone(),
+            left: Vec::new(),
+            plugin: intent.entry.owner.clone(),
+            instance: self.plugins.runtimes[&intent.entry.owner].instance,
+            state: Value::Null,
+            round: 0,
+            expires: None,
+            deadline: None,
+            request: None,
+            tag: 0,
+            taken: true,
+            source: Some(intent),
+            entry,
+        });
+        self.state.link_resolving = true;
+        self.ask_resolver(self.round_input(Value::Null));
+    }
+
+    fn source_resolver_allowed(&self, owner: &str) -> bool {
+        self.state.features.plugins
+            && self.plugins.enabled(owner)
+            && self.plugins.runtimes.contains_key(owner)
+            && self.plugins.find(owner).is_some_and(|p| {
+                p.loaded && p.pack.has("library.sources") && p.pack.has("url.resolve")
+            })
+    }
+
+    fn resolution_current(&self) -> bool {
+        self.plugins.resolution.as_ref().is_some_and(|r| {
+            if self
+                .plugins
+                .runtimes
+                .get(&r.plugin)
+                .is_none_or(|runtime| runtime.instance != r.instance)
+            {
+                return false;
+            }
+            if let Some(source) = &r.source {
+                self.source_resolver_allowed(&r.plugin)
+                    && self.state.playing
+                    && self.match_revision == source.playback_revision
+                    && self.file == Some(source.entry.file)
+                    && self
+                        .logical_source
+                        .as_ref()
+                        .is_some_and(|s| s.url == source.entry.url)
+                    && self.db.catalog_revision(source.entry.file).ok()
+                        == Some(source.file_revision)
+                    && self
+                        .db
+                        .plugin_source_item(&source.entry.url)
+                        .ok()
+                        .flatten()
+                        .as_ref()
+                        == Some(&source.entry)
+            } else {
+                self.state.features.plugins
+                    && self.plugins.enabled(&r.plugin)
+                    && self.plugins.runtimes.contains_key(&r.plugin)
+                    && self
+                        .plugins
+                        .find(&r.plugin)
+                        .is_some_and(|p| p.loaded && p.pack.has("url.resolve"))
+            }
+        })
+    }
+
+    /// Validate even without a reply: permission edits and expired promises
+    /// cannot leave the player indefinitely displaying a resolving state.
+    pub(super) fn check_resolution(&mut self) -> bool {
+        let Some(resolution) = self.plugins.resolution.as_ref() else {
+            return false;
+        };
+        if resolution.expires.is_some_and(|at| Instant::now() >= at) {
+            self.resolution_failed("链接解析超时".into());
+            return false;
+        }
+        if !self.resolution_current() {
+            self.resolution_failed("来源或播放请求已改变，请重新打开".into());
+            return false;
+        }
+        true
+    }
+
+    pub(super) fn resolver_stopped(&mut self, owner: &str) {
+        if self
+            .plugins
+            .resolution
+            .as_ref()
+            .is_some_and(|r| r.plugin == owner)
+        {
+            self.resolution_failed("来源插件已停止".into());
+        }
+    }
+
     /// Offer `url` to the running plugins that resolve links; whether one
     /// may take it. `title` is what it plays as otherwise.
     pub(crate) fn resolve_link(&mut self, url: &str, title: &str) -> bool {
@@ -43,24 +192,34 @@ impl ErikaEngine {
         if left.is_empty() {
             return false;
         }
+        self.cancel_resolution();
         let plugin = left.remove(0);
         self.plugins.next_tag += 1;
         self.plugins.resolution = Some(Resolution {
             url: url.to_string(),
             title: title.to_string(),
             left,
+            instance: self.plugins.runtimes[&plugin].instance,
             plugin,
             state: Value::Null,
             round: 0,
+            expires: None,
+            deadline: None,
+            request: None,
             tag: self.plugins.next_tag,
             taken: false,
+            source: None,
+            entry: bern::current_entry(),
         });
         self.state.link_resolving = true;
         self.ask_resolver(json!({ "url": url }));
         true
     }
 
-    fn ask_resolver(&mut self, input: Value) {
+    fn ask_resolver(&mut self, mut input: Value) {
+        if !self.check_resolution() {
+            return;
+        }
         let Some(resolution) = &mut self.plugins.resolution else {
             return;
         };
@@ -69,10 +228,24 @@ impl ErikaEngine {
             self.resolution_failed("解析步骤太多".into());
             return;
         }
+        self.plugins.later.remove(&resolution.tag);
+        self.plugins.next_tag += 1;
+        resolution.tag = self.plugins.next_tag;
         let (id, tag) = (resolution.plugin.clone(), resolution.tag);
+        resolution.expires = Some(Instant::now() + ROUND_TIMEOUT);
+        let expire = completion(&self.plugins.inbox, move |()| Done::ResolveTimeout(tag));
+        resolution.deadline = Some(Deadline::after(ROUND_TIMEOUT, move || expire(())));
+        resolution.request = None;
         let snapshot = self.plugin_snapshot(&id);
-        self.plugins
-            .invoke(&id, "resolveUrl", Some(&input), &snapshot, tag, Purpose::Resolve(tag));
+        super::catalog::attach_context(&mut input, &snapshot);
+        self.plugins.invoke(
+            &id,
+            "resolveUrl",
+            Some(&input),
+            &snapshot,
+            tag,
+            Purpose::Resolve(tag),
+        );
     }
 
     /// What the input of the next round carries besides the link.
@@ -83,6 +256,13 @@ impl ErikaEngine {
         let mut input = Map::new();
         input.insert("url".into(), json!(resolution.url));
         input.insert("state".into(), resolution.state.clone());
+        if let Some(source) = &resolution.source {
+            input.insert("sourceItem".into(), json!(source.entry));
+            input.insert(
+                "playbackHandle".into(),
+                json!(source.entry.item.playback_handle),
+            );
+        }
         if let Value::Object(extra) = extra {
             input.extend(extra);
         }
@@ -97,14 +277,29 @@ impl ErikaEngine {
         value: Option<Value>,
         error: Option<String>,
     ) {
-        let Some(resolution) = &mut self.plugins.resolution else {
-            return;
-        };
-        if resolution.tag != tag || resolution.plugin != id {
+        if self
+            .plugins
+            .resolution
+            .as_ref()
+            .is_none_or(|r| r.tag != tag || r.plugin != id)
+        {
             return;
         }
+        if !self.check_resolution() {
+            return;
+        }
+        let resolution = self
+            .plugins
+            .resolution
+            .as_mut()
+            .expect("checked resolution");
         if let Some(error) = error {
-            self.resolution_failed(error);
+            let reason = if resolution.source.is_some() {
+                "来源插件解析失败".into()
+            } else {
+                error
+            };
+            self.resolution_failed(reason);
             return;
         }
         let value = value.unwrap_or(Value::Null);
@@ -112,11 +307,20 @@ impl ErikaEngine {
         if kind.is_none() && value.is_null() && !resolution.taken {
             // Not this plugin's link: the next one's, or the link itself.
             if resolution.left.is_empty() {
-                let (url, title) = (resolution.url.clone(), resolution.title.clone());
+                let (url, title, entry) = (
+                    resolution.url.clone(),
+                    resolution.title.clone(),
+                    resolution.entry,
+                );
                 self.end_resolution();
-                self.play_link(&url, title);
+                self.play_link_from(&url, title, Vec::new(), entry);
             } else {
                 resolution.plugin = resolution.left.remove(0);
+                resolution.instance = self
+                    .plugins
+                    .runtimes
+                    .get(&resolution.plugin)
+                    .map_or(0, |r| r.instance);
                 resolution.round = 0;
                 let url = resolution.url.clone();
                 self.ask_resolver(json!({ "url": url }));
@@ -133,9 +337,12 @@ impl ErikaEngine {
                 let address = text_of(&request, "url");
                 let headers = request.get("headers").cloned().unwrap_or(Value::Null);
                 let tag = resolution.tag;
-                in_background(&self.plugins.inbox, move || {
-                    vec![Done::Resolved(tag, get(&address, &headers))]
-                });
+                resolution.request = Some(http::start(
+                    http::Request::resolver(&address, &headers),
+                    completion(&self.plugins.inbox, move |answer| {
+                        Done::Resolved(tag, answer)
+                    }),
+                ));
             }
             Some("select") => {
                 let items: Vec<LinkChoice> = value
@@ -163,6 +370,10 @@ impl ErikaEngine {
                         self.ask_resolver(input);
                     }
                     _ => {
+                        // A person choosing a version is not a stalled plugin.
+                        resolution.deadline = None;
+                        resolution.expires = None;
+                        resolution.request = None;
                         self.state.link_choice_title = text_of(&value, "title");
                         self.state.link_choices = items;
                         self.state.link_choosing = true;
@@ -170,14 +381,29 @@ impl ErikaEngine {
                 }
             }
             Some("play") => self.play_resolved(&value),
-            Some("error") => self.resolution_failed(text_of(&value, "message")),
+            Some("error") => {
+                let reason = if resolution.source.is_some() {
+                    "来源插件解析失败".into()
+                } else {
+                    text_of(&value, "message")
+                };
+                self.resolution_failed(reason);
+            }
             _ => self.resolution_failed("插件的回答看不懂".into()),
         }
     }
 
     /// A request a round asked for answered.
     pub(super) fn resolver_fetched(&mut self, tag: u64, answer: Result<Value, String>) {
-        if self.plugins.resolution.as_ref().is_none_or(|r| r.tag != tag) {
+        if self
+            .plugins
+            .resolution
+            .as_ref()
+            .is_none_or(|r| r.tag != tag)
+        {
+            return;
+        }
+        if !self.check_resolution() {
             return;
         }
         match answer {
@@ -185,13 +411,28 @@ impl ErikaEngine {
                 let input = self.round_input(json!({ "response": response }));
                 self.ask_resolver(input);
             }
-            Err(error) => self.resolution_failed(error),
+            Err(error) => {
+                let reason = if self
+                    .plugins
+                    .resolution
+                    .as_ref()
+                    .is_some_and(|r| r.source.is_some())
+                {
+                    "来源请求失败".into()
+                } else {
+                    error
+                };
+                self.resolution_failed(reason);
+            }
         }
     }
 
     /// The user picked an item to play.
     pub(crate) fn link_chosen(&mut self, id: String) {
-        if self.plugins.resolution.is_none() || !self.state.link_choosing {
+        if self.plugins.resolution.is_none()
+            || !self.state.link_choosing
+            || !self.state.link_choices.iter().any(|choice| choice.id == id)
+        {
             return;
         }
         self.state.link_choosing = false;
@@ -204,7 +445,17 @@ impl ErikaEngine {
     }
 
     fn end_resolution(&mut self) {
-        self.plugins.resolution = None;
+        if self
+            .plugins
+            .resolution
+            .as_ref()
+            .is_some_and(|r| r.source.is_some())
+        {
+            self.state.paused = true;
+        }
+        if let Some(resolution) = self.plugins.resolution.take() {
+            self.plugins.later.remove(&resolution.tag);
+        }
         self.state.link_resolving = false;
         self.state.link_choosing = false;
         self.state.link_choices.clear();
@@ -220,32 +471,75 @@ impl ErikaEngine {
         self.notify(Notice::OperationFailed { reason });
     }
 
-    /// `{ type: 'play', url, title, searchTitle, headers }`.
+    fn play_source_reference(&mut self, value: &Value) {
+        let result = (|| -> erika_store::catalog::Result<_> {
+            let reference = serde_json::from_value(value.clone())?;
+            let r = self.plugins.resolution.as_ref().expect("active resolver");
+            if r.source.is_some() || !self.source_resolver_allowed(&r.plugin) {
+                return Err(erika_store::catalog::Error::invalid(
+                    "来源播放不能再次转交来源",
+                ));
+            }
+            self.db
+                .plugin_source_version(&r.plugin, &reference)?
+                .ok_or_else(|| erika_store::catalog::Error::conflict("来源条目不存在"))
+        })();
+        match result {
+            Ok(item) => {
+                let entry = self.plugins.resolution.as_ref().and_then(|r| r.entry);
+                self.end_resolution();
+                self.open_file_from(MediaSource::new(item.url), entry);
+            }
+            Err(error) => self.resolution_failed(error.message),
+        }
+    }
+
+    /// `{ type: 'play', url, title, searchTitle, headers, expiresAt }`.
     fn play_resolved(&mut self, value: &Value) {
+        if let Some(reference) = value.get("sourceItem") {
+            self.play_source_reference(reference);
+            return;
+        }
         let media = text_of(value, "url");
-        if !(media.starts_with("https://") || media.starts_with("http://")) {
+        if !valid_media_url(&media) {
             self.resolution_failed("插件给的不是网址".into());
             return;
         }
-        let headers: Vec<(String, String)> = value
-            .get("headers")
-            .and_then(Value::as_object)
-            .map(|headers| {
-                headers
-                    .iter()
-                    .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_string())))
-                    .filter(|(key, value)| allowed_header(key, value))
-                    .collect()
-            })
-            .unwrap_or_default();
+        if value
+            .get("expiresAt")
+            .is_some_and(|expiry| expiry.as_i64().is_none_or(|at| at <= erika_store::now()))
+        {
+            self.resolution_failed("播放地址已过期或有效期格式不正确".into());
+            return;
+        }
+        let headers = match playback_headers(value.get("headers")) {
+            Ok(headers) => headers,
+            Err(reason) => {
+                self.resolution_failed(reason);
+                return;
+            }
+        };
+        let entry = self.plugins.resolution.as_ref().and_then(|r| r.entry);
+        if let Some(source) = self
+            .plugins
+            .resolution
+            .as_ref()
+            .and_then(|r| r.source.clone())
+        {
+            self.end_resolution();
+            // Do not call play_link/start: the file, chapter and resume seconds
+            // were already selected against this immutable source snapshot.
+            self.load_transport(Some(MediaSource::new(media)), source.start, headers, entry);
+            self.refresh_playing_catalog();
+            return;
+        }
         let title = Some(text_of(value, "title"))
             .filter(|title| !title.trim().is_empty())
             .or_else(|| self.plugins.resolution.as_ref().map(|r| r.title.clone()))
             .unwrap_or_else(|| media.clone());
         let search = text_of(value, "searchTitle");
         self.end_resolution();
-        crate::kernel::set_link_headers(&media, headers);
-        self.play_link(&media, title);
+        self.play_link_from(&media, title, headers, entry);
         if !search.trim().is_empty() {
             let _ = erika::Commands::show_matching(self, true);
             let _ = erika::Commands::search_matching(self, search);
@@ -253,10 +547,50 @@ impl ErikaEngine {
     }
 }
 
+pub(super) fn valid_media_url(value: &str) -> bool {
+    value.len() <= 16 * 1024
+        && !value.chars().any(char::is_control)
+        && url::Url::parse(value).is_ok_and(|url| {
+            matches!(url.scheme(), "http" | "https")
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.fragment().is_none()
+        })
+}
+
+pub(super) fn playback_headers(value: Option<&Value>) -> Result<Vec<(String, String)>, String> {
+    let Some(value) = value.filter(|v| !v.is_null()) else {
+        return Ok(Vec::new());
+    };
+    let invalid = || "播放请求头格式不正确".to_string();
+    let object = value
+        .as_object()
+        .filter(|o| o.len() <= 64)
+        .ok_or_else(invalid)?;
+    if value.to_string().len() > 64 * 1024 {
+        return Err(invalid());
+    }
+    object
+        .iter()
+        .map(|(k, v)| {
+            let v = v
+                .as_str()
+                .filter(|v| allowed_header(k, v))
+                .ok_or_else(invalid)?;
+            Ok((k.clone(), v.into()))
+        })
+        .collect()
+}
+
 /// Headers a plugin may set: no line breaks, nothing that frames the
 /// request itself.
 fn allowed_header(key: &str, value: &str) -> bool {
-    let key = key.trim().to_ascii_lowercase();
+    let valid_key = !key.is_empty()
+        && key
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&c));
+    let key = key.to_ascii_lowercase();
     let framing = [
         "host",
         "content-length",
@@ -268,74 +602,11 @@ fn allowed_header(key: &str, value: &str) -> bool {
         "keep-alive",
         "proxy-connection",
     ];
-    !key.is_empty()
+    valid_key
         && !framing.contains(&key.as_str())
-        && !key.contains(['\r', '\n', ':'])
-        && !value.contains(['\r', '\n'])
-}
-
-/// A round's GET: its status, lower-case headers and body. Redirects are
-/// not followed: the plugin reads `location` and decides.
-#[cfg(not(target_arch = "wasm32"))]
-fn get(url: &str, headers: &Value) -> Result<Value, String> {
-    let web = url.starts_with("https://") || url.starts_with("http://");
-    let credentials = url
-        .split("://")
-        .nth(1)
-        .and_then(|rest| rest.split(['/', '?', '#']).next())
-        .is_some_and(|authority| authority.contains('@'));
-    if !web || credentials {
-        return Err(format!("插件要请求的地址不能用：{url}"));
-    }
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(20)))
-        .http_status_as_error(false)
-        .max_redirects(0)
-        .build()
-        .into();
-    let mut request = ureq::http::Request::builder().method("GET").uri(url);
-    if let Some(headers) = headers.as_object() {
-        for (key, value) in headers {
-            if let Some(value) = value.as_str()
-                && allowed_header(key, value)
-            {
-                request = request.header(key.as_str(), value);
-            }
-        }
-    }
-    let request = request.body(()).map_err(|error| error.to_string())?;
-    let mut response = agent.run(request).map_err(|error| error.to_string())?;
-    let status = response.status().as_u16();
-    let headers: Map<String, Value> = response
-        .headers()
-        .iter()
-        .filter_map(|(key, value)| Some((key.as_str().to_ascii_lowercase(), json!(value.to_str().ok()?))))
-        .collect();
-    let body = response
-        .body_mut()
-        .with_config()
-        .limit(4 << 20)
-        .read_to_vec()
-        .map_err(|error| error.to_string())?;
-    Ok(json!({
-        "url": url,
-        "status": status,
-        "headers": headers,
-        "body": String::from_utf8_lossy(&body),
-    }))
-}
-
-#[cfg(target_arch = "wasm32")]
-fn get(_url: &str, _headers: &Value) -> Result<Value, String> {
-    Err("网页版的插件暂时不能联网".into())
+        && !value.chars().any(|c| c.is_control() && c != '\t')
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn plugins_set_only_safe_headers() {
-        assert!(super::allowed_header("Referer", "https://www.bilibili.com/"));
-        assert!(!super::allowed_header("Host", "example.com"));
-        assert!(!super::allowed_header("X-A", "a\r\nX-B: b"));
-    }
-}
+#[path = "links_tests.rs"]
+mod tests;

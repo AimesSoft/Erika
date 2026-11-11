@@ -5,32 +5,31 @@
 //! posted with the page's form hash. The session goes to bgm.tv only,
 //! never to the public API.
 
+use crate::auth;
 use crate::{Error, Result};
-use std::sync::RwLock;
 
 #[cfg(not(target_arch = "wasm32"))]
 const SITE: &str = "https://bgm.tv";
 
-/// The session's cookies, as the account settings saved them.
-static SESSION: RwLock<Option<String>> = RwLock::new(None);
-
-/// Use the session saved as `cookies` from now on, or none after signing
-/// out or expiring.
+static SESSION: auth::Registry = auth::Registry::new();
 pub fn set_session(cookies: Option<String>) {
-    *SESSION
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = cookies;
+    SESSION.set(None, cookies);
 }
-
-fn session() -> Option<String> {
-    SESSION
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
+pub fn set_account(user: &str, cookies: Option<String>) {
+    let user = user.trim();
+    SESSION.set(
+        user.parse::<u64>()
+            .ok()
+            .filter(|id| *id > 0)
+            .map(|id| format!("bangumi:{id}")),
+        cookies,
+    );
 }
-
+pub fn account_session() -> Option<auth::Session> {
+    SESSION.capture()
+}
 pub fn signed_in() -> bool {
-    session().is_some()
+    SESSION.secret().is_some()
 }
 
 /// A collection type of the website, by the number its form posts.
@@ -80,8 +79,8 @@ impl Interest {
     }
 }
 
-/// A main episode on the subject's grid, by its id on the website and its
-/// number, and whether the user marked it watched.
+/// An episode on the subject's grid, including specials. `number` is display
+/// data only; canonical mappings always name the website's actual `id`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Episode {
     pub id: i64,
@@ -102,6 +101,8 @@ pub struct Collection {
     pub episodes: Vec<Episode>,
     /// The `gh` the website's forms carry.
     form_hash: String,
+    account: String,
+    subject: i64,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -124,7 +125,7 @@ mod page {
 
     /// The account the page was made for: `None` for a guest, which an
     /// expired session is.
-    fn account(page: &str) -> Option<Option<String>> {
+    pub(super) fn account(page: &str) -> Option<Option<String>> {
         let uid = Regex::new(r"\bCHOBITS_UID\s*=\s*(\d+)\s*[,;]").unwrap();
         let id = uid.captures(page)?[1].to_string();
         Some((id != "0").then_some(id))
@@ -181,11 +182,13 @@ mod page {
             private: checked(form, "privacy").is_some(),
             episodes: Vec::new(),
             form_hash: String::new(),
+            account: String::new(),
+            subject: 0,
         })
     }
 
-    /// The main episodes of the grid: those before its first heading
-    /// other than 「本篇」 (`SP` and the like).
+    /// All grid entries, including specials. The website's episode ID is the
+    /// identity; the displayed number is never used for account matching.
     pub(super) fn episodes(page: &str) -> Vec<Episode> {
         let document = Html::parse_document(page);
         let Some(grid) = document.select(&selector("ul.prg_list")).next() else {
@@ -198,10 +201,7 @@ mod page {
                 .value()
                 .has_class("subtitle", scraper::CaseSensitivity::CaseSensitive)
             {
-                if item.text().collect::<String>().trim() == "本篇" {
-                    continue;
-                }
-                break;
+                continue;
             }
             let Some(link) = item.select(&selector("a[id^=prg_]")).next() else {
                 continue;
@@ -215,10 +215,10 @@ mod page {
             let number = digits
                 .find(&text)
                 .and_then(|number| number.as_str().parse().ok());
-            if let (Some(id), Some(number)) = (id, number) {
+            if let Some(id) = id.filter(|id| *id > 0) {
                 episodes.push(Episode {
                     id,
-                    number,
+                    number: number.unwrap_or(0),
                     watched: link
                         .value()
                         .has_class("epBtnWatched", scraper::CaseSensitivity::CaseSensitive),
@@ -252,11 +252,7 @@ mod http {
     use super::*;
     use std::time::Duration;
 
-    pub(super) fn agent() -> Result<ureq::Agent> {
-        let cookies = session().ok_or_else(|| Error {
-            message: "请先登录 Bangumi 账号".into(),
-            sign_in: true,
-        })?;
+    pub(super) fn agent(cookies: &str) -> Result<ureq::Agent> {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(20)))
             .http_status_as_error(false)
@@ -341,32 +337,79 @@ mod http {
     }
 }
 
+fn current() -> Result<auth::Session> {
+    account_session().ok_or_else(|| Error {
+        message: "请先登录 Bangumi 账号".into(),
+        sign_in: true,
+    })
+}
+pub fn collection(subject: i64) -> Result<Collection> {
+    collection_with(&current()?, subject)
+}
+pub fn save(subject: i64, collection: &Collection) -> Result<()> {
+    save_with(&current()?, subject, collection)
+}
+pub fn mark(subject: i64, collection: &Collection, ids: &[i64], watched: bool) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    mark_with(&current()?, subject, collection, ids, watched)
+}
+
 /// The user's collection of `subject`, with its episode grid.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn collection(subject: i64) -> Result<Collection> {
+pub fn collection_with(session: &auth::Session, subject: i64) -> Result<Collection> {
     if subject <= 0 {
         return Err(Error::new("无效的 Bangumi 条目"));
     }
-    let agent = http::agent()?;
+    session.check()?;
+    let agent = http::agent(&session.secret)?;
     let page = http::get(&agent, &format!("/subject/{subject}"))?;
-    if page::collect_box(&page).is_some() {
-        return page::parse(&page, None);
+    session.check()?;
+    if page::account(&page).flatten().as_deref() != session.account().strip_prefix("bangumi:") {
+        return Err(expired());
     }
-    let update = http::get(&agent, &format!("/update/{subject}")).ok();
-    page::parse(&page, update.as_deref())
+    let mut collection = if page::collect_box(&page).is_some() {
+        page::parse(&page, None)?
+    } else {
+        let update = http::get(&agent, &format!("/update/{subject}")).ok();
+        page::parse(&page, update.as_deref())?
+    };
+    session.check()?;
+    collection.account = session.account().into();
+    collection.subject = subject;
+    Ok(collection)
+}
+
+fn validate_collection(
+    session: &auth::Session,
+    subject: i64,
+    collection: &Collection,
+) -> Result<()> {
+    session.check()?;
+    if collection.account != session.account()
+        || subject <= 0
+        || collection.subject != subject
+        || collection.form_hash.is_empty()
+    {
+        return Err(Error::new("Bangumi 收藏的账号或条目已改变，请重新读取"));
+    }
+    Ok(())
 }
 
 /// Save `collection` as the collection of `subject`: its type, score,
 /// comment, tags and privacy all at once, as the collect box posts them.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn save(subject: i64, collection: &Collection) -> Result<()> {
+pub fn save_with(session: &auth::Session, subject: i64, collection: &Collection) -> Result<()> {
+    validate_collection(session, subject, collection)?;
     let interest = collection
         .interest
         .ok_or_else(|| Error::new("要先选择收藏类型"))?;
     if collection.form_hash.is_empty() {
         return Err(Error::new("读不到 Bangumi 表单校验码"));
     }
-    let agent = http::agent()?;
+    session.check()?;
+    let agent = http::agent(&session.secret)?;
     let interest = interest.id().to_string();
     let rating = collection.rating.clamp(0, 10).to_string();
     http::post(
@@ -391,11 +434,25 @@ pub fn save(subject: i64, collection: &Collection) -> Result<()> {
 /// Mark the episodes `ids` of a collection watched, or take the marks
 /// back, as the grid's 「看过」 and 「撤销」 do.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn mark(subject: i64, collection: &Collection, ids: &[i64], watched: bool) -> Result<()> {
+pub fn mark_with(
+    session: &auth::Session,
+    subject: i64,
+    collection: &Collection,
+    ids: &[i64],
+    watched: bool,
+) -> Result<()> {
     let Some(&first) = ids.first() else {
         return Ok(());
     };
-    let agent = http::agent()?;
+    validate_collection(session, subject, collection)?;
+    if ids
+        .iter()
+        .any(|id| *id <= 0 || !collection.episodes.iter().any(|e| e.id == *id))
+    {
+        return Err(Error::new("指定的 Bangumi 分集不属于这部作品"));
+    }
+    session.check()?;
+    let agent = http::agent(&session.secret)?;
     let referer = format!("{SITE}/subject/{subject}");
     let hash = &collection.form_hash;
     if watched {
@@ -409,6 +466,7 @@ pub fn mark(subject: i64, collection: &Collection, ids: &[i64], watched: bool) -
         );
     }
     for id in ids {
+        session.check()?;
         http::post(
             &agent,
             &format!("{SITE}/subject/ep/{id}/status/remove?gh={hash}&ajax=1"),
@@ -420,17 +478,23 @@ pub fn mark(subject: i64, collection: &Collection, ids: &[i64], watched: bool) -
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn collection(_subject: i64) -> Result<Collection> {
+pub fn collection_with(_session: &auth::Session, _subject: i64) -> Result<Collection> {
     Err(Error::new("网页版暂时连不上 Bangumi"))
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn save(_subject: i64, _collection: &Collection) -> Result<()> {
+pub fn save_with(_session: &auth::Session, _subject: i64, _collection: &Collection) -> Result<()> {
     Err(Error::new("网页版暂时连不上 Bangumi"))
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn mark(_subject: i64, _collection: &Collection, _ids: &[i64], _watched: bool) -> Result<()> {
+pub fn mark_with(
+    _session: &auth::Session,
+    _subject: i64,
+    _collection: &Collection,
+    _ids: &[i64],
+    _watched: bool,
+) -> Result<()> {
     Err(Error::new("网页版暂时连不上 Bangumi"))
 }
 
@@ -490,6 +554,11 @@ mod tests {
                     number: 3,
                     watched: true
                 },
+                Episode {
+                    id: 1099,
+                    number: 1,
+                    watched: true
+                },
             ]
         );
     }
@@ -522,7 +591,7 @@ mod tests {
         assert!(page::collect_box(&page).is_none());
         let collection = page::parse(&page, Some(&update)).unwrap();
         assert_eq!(collection.interest, Some(Interest::Do));
-        assert_eq!(collection.episodes.len(), 3);
+        assert_eq!(collection.episodes.len(), 4);
     }
 
     #[test]

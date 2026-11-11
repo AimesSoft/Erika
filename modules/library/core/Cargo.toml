@@ -11,10 +11,12 @@ bern.workspace = true
 erika-library-protocol = { path = "../protocol" }
 erika-store.workspace = true
 erika-dandanplay.workspace = true
+erika-catalog.workspace = true
+futures-lite = "2"
 pinyin = "0.11"
 serde_json = "1"
 base64 = "0.22"
 url = "2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ureq = { version = "3", features = ["json"] }
+ureq = { workspace = true, features = ["json"] }

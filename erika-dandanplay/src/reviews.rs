@@ -97,11 +97,15 @@ pub fn subject_id(url: &str) -> Option<i64> {
     (id > 0).then_some(id)
 }
 
-pub fn bangumi(subject: i64) -> Result<Vec<Review>> {
+pub async fn bangumi(subject: i64) -> Result<Vec<Review>> {
+    if crate::bangumi::local_id(subject).is_none() {
+        return Err(Error::new("无效的 Bangumi 条目"));
+    }
     #[cfg(not(target_arch = "wasm32"))]
-    {
+    let body = {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(4)))
+            .max_redirects(0)
             .build()
             .into();
         let text = agent
@@ -111,17 +115,24 @@ pub fn bangumi(subject: i64) -> Result<Vec<Review>> {
             .header("User-Agent", &crate::bangumi::user_agent())
             .header("Accept", "application/json")
             .call()
-            .and_then(|mut r| r.body_mut().read_to_string())
+            .and_then(|mut r| {
+                r.body_mut()
+                    .with_config()
+                    .limit(8 * 1024 * 1024)
+                    .read_to_string()
+            })
             .map_err(|_| Error::new("暂时连不上 Bangumi"))?;
-        let body: Value =
-            serde_json::from_str(&text).map_err(|_| Error::new("Bangumi评论格式不正确"))?;
-        parse_bangumi(&body)
-    }
+        serde_json::from_str(&text).map_err(|_| Error::new("Bangumi评论格式不正确"))?
+    };
+    // next.bgm.tv does not allow cross-origin browser requests. The fixed public
+    // gateway forwards no website cookie, account token or caller-chosen URL.
     #[cfg(target_arch = "wasm32")]
-    {
-        let _ = subject;
-        Err(Error::new("网页版暂时连不上 Bangumi"))
-    }
+    let body = erika_catalog::client::Client::built_in("")
+        .map_err(|error| Error::new(error.message))?
+        .get(&format!("bangumi/subjects/{subject}/comments"), &[])
+        .await
+        .map_err(|error| Error::new(error.message))?;
+    parse_bangumi(&body)
 }
 
 pub fn parse_bangumi(body: &Value) -> Result<Vec<Review>> {

@@ -137,9 +137,69 @@ impl ErikaEngine {
         }
     }
 
+    /// Recognition's timing correction and the user's adjustment stay distinct.
+    /// Loading a file must not overwrite the user's default for unbound tracks.
+    pub(super) fn set_file_danmaku(&mut self, binding: erika_catalog::DanmakuBinding) -> bool {
+        let changed = self.danmaku_binding.as_ref().is_none_or(|previous| {
+            previous.file != binding.file || previous.reference != binding.reference
+        });
+        if changed {
+            // Invalidate replies even when the new track cannot be fetched yet.
+            // Offset/revision edits alone do not replace the track or its requests.
+            self.danmaku_generation += 1;
+            self.state.player.sending_danmaku = false;
+        }
+        self.state.danmaku_settings.delay = binding.shift_seconds + binding.user_shift_seconds;
+        self.danmaku_binding = Some(binding);
+        update_readouts(&mut self.state.danmaku_settings);
+        self.apply_danmaku();
+        changed
+    }
+
+    pub(super) fn reset_file_danmaku(&mut self) {
+        if self.danmaku_binding.take().is_some() {
+            self.danmaku_generation += 1;
+            self.state.player.sending_danmaku = false;
+        }
+        self.episode_playing = None;
+        self.state.danmaku_settings.delay = self
+            .db
+            .setting("danmaku.delay")
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|n| n.is_finite())
+            .unwrap_or(0.0)
+            .clamp(-OFFSET_LIMIT, OFFSET_LIMIT);
+        update_readouts(&mut self.state.danmaku_settings);
+    }
+
+    /// Translate the video clock back to the source's clock; never fabricate
+    /// time zero when the video has not reached this comment track yet.
+    pub(super) fn online_danmaku_time(&self) -> Result<f64, CommandError> {
+        let time = self.state.elapsed - self.state.danmaku_settings.delay;
+        if !time.is_finite() || time < 0.0 {
+            return Err(CommandError::new(
+                "invalid_comment_time",
+                "视频尚未到达这条弹幕轨道的起点",
+            ));
+        }
+        Ok(time)
+    }
+
     pub(super) fn danmaku_number(&mut self, key: &str, value: f64) -> Result<(), CommandError> {
         if !value.is_finite() {
             return Err(CommandError::new("invalid_value", "value must be finite"));
+        }
+        if key == "delay" {
+            if let Some(mut binding) = self.danmaku_binding.clone() {
+                binding.user_shift_seconds =
+                    (value - binding.shift_seconds).clamp(-OFFSET_LIMIT, OFFSET_LIMIT);
+                let saved = self
+                    .db
+                    .catalog_set_danmaku(&binding)
+                    .map_err(|e| CommandError::new(e.code, e.message))?;
+                self.set_file_danmaku(saved);
+                return Ok(());
+            }
         }
         let settings = &mut self.state.danmaku_settings;
         match key {

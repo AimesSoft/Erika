@@ -323,14 +323,4 @@ impl ErikaEngine {
         }
     }
 
-    /// `library.setEpisodeWatched`: the open show's episode, here and on the
-    /// accounts.
-    pub(super) fn plugin_mark_watched(&mut self, anime: i64, episode: i64, watched: bool) {
-        #[cfg(feature = "bern-module-anime")]
-        if erika_anime_protocol::anime::current_state().is_some_and(|state| state.opened == anime) {
-            erika_anime_protocol::anime::calls::mark_episode(episode, watched);
-        }
-        #[cfg(not(feature = "bern-module-anime"))]
-        let _ = (anime, episode, watched);
-    }
 }
