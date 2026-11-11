@@ -43,8 +43,10 @@ pub fn anime_clock(anime: anime::Client) -> impl View {
 #[component]
 pub fn home_page(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
-        // A foldable open flat shows the details in its right half.
-        if anime.opened != "" && !anime.opened_from_schedule && anime.back == BackTo::Home && !window.unfolded {
+        // A foldable open flat shows the details in its right half; a
+        // window with a sidebar covers it with them, leaving this page as it
+        // is underneath.
+        if anime.opened != "" && !anime.opened_from_schedule && anime.back == BackTo::Home && !window.unfolded && (window.compact || window.tv) {
             details(app: app, anime: anime)
         } else {
             home(app: app, anime: anime)
@@ -673,7 +675,7 @@ pub fn tag_chip(#[content] name: String) -> impl View {
 #[component]
 pub fn new_page(app: erika::Client, anime: anime::Client) -> impl View {
     ui! {
-        if anime.opened != "" && anime.opened_from_schedule && !window.unfolded {
+        if anime.opened != "" && anime.opened_from_schedule && !window.unfolded && (window.compact || window.tv) {
             details(app: app, anime: anime)
         } else if window.compact || window.medium {
             ScrollView(appear: page_in) {

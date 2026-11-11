@@ -795,12 +795,13 @@ pub fn main_shell(
             // sidebar; the window is the empty frame.
             if !(build.modules.anime && app.features.anime) && !(build.modules.library && app.features.library) && !(build.modules.downloads && app.features.downloads) {
                 pure_window(app: app, windows: windows)
-            } else if build.modules.anime && anime.opened != "" && (anime.back == BackTo::Search || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back == BackTo::Home) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library)) {
-                Stack(variant: detail_page, align: top_leading) {
-                    desktop_toolbar(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
-                    details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
-                }
             } else {
+            // A show's details cover the whole window, sidebar included, as
+            // a page of their own. What they cover stays mounted, so closing
+            // them returns to the same page, selection and scroll position;
+            // until then it takes no clicks, focus or accessibility.
+            Stack {
+            Stack(enabled: !(build.modules.anime && anime.opened != "" && (anime.back == BackTo::Search || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back == BackTo::Home) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library)))) {
             SplitView {
                 Sidebar(id: pages, selection: draft.page) {
                     // The logo and name; Windows and Linux show them in the
@@ -867,9 +868,21 @@ pub fn main_shell(
                     }
                 }
                 Detail(titled: false) {
-                    desktop_toolbar(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
+                    // The window has one toolbar: the covering page's while
+                    // it is open.
+                    if !(build.modules.anime && anime.opened != "" && (anime.back == BackTo::Search || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back == BackTo::Home) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library))) {
+                        desktop_toolbar(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
+                    }
                     PageContent(slot: main, selected: draft.page)
                 }
+            }
+            }
+            if build.modules.anime && anime.opened != "" && (anime.back == BackTo::Search || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back == BackTo::Home) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library)) {
+                Stack(variant: detail_page, align: top_leading) {
+                    desktop_toolbar(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
+                    details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+                }
+            }
             }
             }
             }
