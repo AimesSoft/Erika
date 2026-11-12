@@ -383,7 +383,7 @@ function pluginHandleUIAction(id) { apply(); return null; }
 "#;
 
 #[test]
-fn a_plugin_puts_its_settings_in_the_danmaku_menu_and_draws_on_the_picture() {
+fn a_plugin_puts_its_settings_in_playback_settings_and_draws_on_the_picture() {
     let folder = folder();
     std::fs::write(folder.join("overlay.js"), OVERLAY).unwrap();
     let mut engine = ErikaEngine::default();
@@ -396,7 +396,7 @@ fn a_plugin_puts_its_settings_in_the_danmaku_menu_and_draws_on_the_picture() {
     engine.import_plugin_command(MediaSource::file(folder.join("overlay.js"))).unwrap();
     settle(&mut engine, |engine| !engine.state.player.progress_strip.is_empty());
 
-    // Its two settings are in the danmaku menu, the third on its page.
+    // Its legacy placement routes two settings to playback settings; the third stays on its page.
     let menu = &engine.state.player.plugin_menu;
     assert_eq!(menu.len(), 2);
     assert_eq!((menu[0].kind.clone(), menu[0].on), (PluginEntryKind::Switch, true));
@@ -433,4 +433,66 @@ fn a_plugin_puts_its_settings_in_the_danmaku_menu_and_draws_on_the_picture() {
 
     engine.uninstall_plugin_command("test.overlay".into()).unwrap();
     assert!(engine.state.player.plugin_menu.is_empty());
+    assert!(!engine.state.player.plugin_menu_shown);
+}
+
+#[test]
+fn separate_overlay_plugins_keep_their_progress_density_and_settings() {
+    let folder = folder();
+    for (id, extend, color, placement) in [
+        ("test.strip", "progressStrip", "green", "playerMenu"),
+        ("test.density", "danmakuDensity", "red", "danmakuMenu"),
+    ] {
+        let script = format!(r#"
+const pluginManifest = {{
+  id: '{id}', name: '{id}', version: '1.0.0', minHostVersion: '1.0.0',
+  permissions: ['player.overlay'],
+}};
+var pluginUIEntries = [
+  {{ id: 'show', title: '显示', enabled: true, placement: '{placement}' }},
+];
+function apply() {{ extend.{extend}(settings.getSwitch('show', true) ? '{color}' : null); }}
+function pluginOnInitialize() {{ apply(); }}
+function pluginHandleUIAction(id) {{ apply(); return null; }}
+"#);
+        std::fs::write(folder.join(format!("{id}.js")), script).unwrap();
+    }
+    let mut engine = ErikaEngine::default();
+    let shown = Arc::new(Shown::default());
+    engine.kernel = Some(shown.clone());
+    engine.state.video = true;
+    engine.state.duration = 10.0;
+    engine.state.progress = 0.5;
+    engine.plugins_wake();
+    for id in ["test.strip", "test.density"] {
+        engine.import_plugin_command(MediaSource::file(folder.join(format!("{id}.js")))).unwrap();
+    }
+    settle(&mut engine, |engine| engine.state.player.plugin_menu.len() == 2
+        && engine.plugins.extensions().density == Some(PluginColor::Red)
+        && engine.state.player.progress_strip_color == PluginColor::Green);
+    let kernel: Arc<dyn crate::kernel::Kernel> = shown;
+    engine.load_danmaku(&kernel, "本地", r#"[{"time":1.5,"content":"好看"}]"#).unwrap();
+    assert!(engine.state.player.progress_strip_shown);
+    assert!(engine.state.player.danmaku_density_shown);
+    assert_eq!(engine.state.player.progress_strip, super::overlays::strip(0.5));
+    assert_eq!(engine.state.player.plugin_menu[0].id, "show");
+    assert_eq!(engine.state.player.plugin_menu[1].id, "show");
+    assert_ne!(engine.state.player.plugin_menu[0].key, engine.state.player.plugin_menu[1].key);
+    assert!(engine.state.player.plugin_menu_shown);
+
+    engine.set_plugin_menu_switch_command("test.density".into(), "show".into(), false).unwrap();
+    settle(&mut engine, |engine| !engine.state.player.danmaku_density_shown);
+    assert!(engine.state.player.progress_strip_shown);
+    engine.state.progress = 0.75;
+    engine.refresh_progress_strip();
+    assert_eq!(engine.state.player.progress_strip, super::overlays::strip(0.75));
+
+    engine.set_plugin_menu_switch_command("test.density".into(), "show".into(), true).unwrap();
+    settle(&mut engine, |engine| engine.state.player.danmaku_density_shown);
+    engine.set_plugin_menu_switch_command("test.strip".into(), "show".into(), false).unwrap();
+    settle(&mut engine, |engine| !engine.state.player.progress_strip_shown);
+    assert!(engine.state.player.danmaku_density_shown);
+    engine.uninstall_plugin_command("test.strip".into()).unwrap();
+    assert_eq!(engine.state.player.plugin_menu.len(), 1);
+    assert!(engine.state.player.danmaku_density_shown);
 }

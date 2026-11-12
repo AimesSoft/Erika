@@ -14,7 +14,7 @@ license = "MIT"
 ureq = { version = "3", features = ["win-system-proxy"] }
 # Bern 0.1.15, at the same immutable revision as the build tool
 # (docs/dependencies.md).
-bern = { git = "https://github.com/AimesSoft/Bern", rev = "8a51852d07b7b005144732b5fbde6c76bc1370aa" }
+bern = { git = "https://github.com/AimesSoft/Bern", rev = "a49ab0d7bd0d28feb68564709db1401f7e64674f" }
 erika-protocol = { path = "erika-protocol", default-features = false }
 erika-store = { path = "erika-store" }
 erika-catalog = { path = "erika-catalog" }

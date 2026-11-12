@@ -448,8 +448,9 @@ pub mod erika {
         Green,
     }
 
-    /// A setting a running plugin puts in the danmaku menu: its
-    /// `pluginUIEntries` item with `placement: 'danmakuMenu'`.
+    /// A setting a running plugin puts in playback settings: its
+    /// `pluginUIEntries` item with `placement: 'playerMenu'` (or the legacy
+    /// `danmakuMenu` spelling).
     #[value]
     pub struct PluginMenuRow {
         /// `plugin/id`: what tells the rows apart.
@@ -941,8 +942,9 @@ pub mod erika {
         pub danmaku_color: i64,
         /// A plugin turned on the composer's hexadecimal color field.
         pub danmaku_hex_input: bool,
-        /// The settings plugins put in the danmaku menu.
+        /// The settings plugins put in the playback settings panel.
         pub plugin_menu: Vec<PluginMenuRow>,
+        pub plugin_menu_shown: bool,
         /// A line along the bottom of the picture as long as the part
         /// played, while a plugin shows it: steps of 1 up to the
         /// position and 0 after it, drawn as an area. Empty when none does.

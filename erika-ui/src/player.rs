@@ -731,7 +731,17 @@ pub fn player_danmaku_quick(app: erika::Client) -> impl View {
                     Button(id: danmaku_later, label: tr! { "zh-Hans" => "延后 5 秒", "en" => "5 s later" }, shape: capsule, height: 30) => app.shift_danmaku_offset(5.0)
                 }
             }
-            // What plugins put here: a switch, or a choice of color.
+            Button(id: more, label: tr! { "zh-Hans" => "更多弹幕设置…", "en" => "More danmaku settings…" }, prominence: plain) => app.player_tab(PlayerTab::Danmaku)
+        }
+    }
+}
+
+/// Settings registered by plugins belong to playback settings, not the
+/// compact danmaku quick controls.
+#[component]
+pub fn player_plugin_settings(app: erika::Client) -> impl View {
+    ui! {
+        Column(gap: 14, padding_x: 4, padding_y: 8) {
             ForEach(items: app.player.plugin_menu, key: key) |row| {
                 if row.kind == PluginEntryKind::Color {
                     Column(gap: 6) {
@@ -742,18 +752,21 @@ pub fn player_danmaku_quick(app: erika::Client) -> impl View {
                     Switch(id: plugin_menu_switch, label: row.title, checked: row.on) => app.set_plugin_menu_switch(row.plugin, row.id, row.on)
                 }
             }
-            Button(id: more, label: tr! { "zh-Hans" => "更多弹幕设置…", "en" => "More danmaku settings…" }, prominence: plain) => app.player_tab(PlayerTab::Danmaku)
         }
     }
 }
 
 /// What plugins draw along the bottom of the picture: the danmaku density
-/// chart, with the line of the part played over it (NipaPlay's 弹幕密度曲线
-/// and 底部进度条). Each takes the theme color its plugin chose.
+/// chart above a separate progress line. Each keeps its own height and
+/// theme color, whether the other plugin is on or off.
 #[component]
 pub fn player_plugin_overlays(app: erika::Client) -> impl View {
     ui! {
-        Stack(align: bottom) {
+        // These are adjacent drawing bands, not overlapping layers. The
+        // spacer also anchors them to the physical bottom when bleed adds
+        // letterbox room beyond the design scene.
+        Column(gap: 0) {
+            Spacer
             if app.player.danmaku_density_shown {
                 match app.player.danmaku_density_color {
                     PluginColor::Accent => {
@@ -998,6 +1011,11 @@ pub fn player_panel(app: erika::Client, #[session] draft: PlayerDraft) -> impl V
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
                                 Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "自动连播下一集", "en" => "Play next automatically" }) Spacer Switch(id: autoplay, label: tr! { "zh-Hans" => "自动连播下一集", "en" => "Play next automatically" }, label_hidden: true, style: switch, checked: app.preferences.autoplay) => app.set_preference("autoplay", app.preferences.autoplay) }
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
+                                if app.player.plugin_menu_shown {
+                                    Row(height: 34, padding_x: 4) { Stack(variant: panel_secondary) { Text(content: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, style: caption) } Spacer }
+                                    player_plugin_settings(app: app)
+                                    Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }
+                                }
                                 Row(height: 34, padding_x: 4) { Stack(variant: panel_secondary) { Text(content: tr! { "zh-Hans" => "信息", "en" => "Information" }, style: caption) } Spacer }
                                 Row(gap: 12, height: 46, padding_x: 4, align: center) { Text(content: tr! { "zh-Hans" => "播放内核", "en" => "Playback engine" }) Spacer Stack(variant: panel_secondary) { Text(content: tr! { "zh-Hans" => "liberika", "en" => "liberika" }, style: body) } }
                                 Canvas(height: 0.5) { Shape(kind: rect, fill: control.border, opacity: 0.55) }

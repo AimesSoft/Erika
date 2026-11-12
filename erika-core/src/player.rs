@@ -60,6 +60,7 @@ pub fn initial() -> PlayerState {
         danmaku_color: 0xFFFFFF,
         danmaku_hex_input: false,
         plugin_menu: Vec::new(),
+        plugin_menu_shown: false,
         progress_strip: Vec::new(),
         progress_strip_shown: false,
         progress_strip_color: PluginColor::Accent,

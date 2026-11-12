@@ -1,5 +1,5 @@
-//! What plugins add to the player: the settings they put in the danmaku
-//! menu, and the drawings along the bottom of the picture that
+//! What plugins add to the player: entries in playback settings and
+//! drawings along the bottom of the picture that
 //! `extend.progressStrip` and `extend.danmakuDensity` turn on, ported from
 //! NipaPlay's 底部进度条 and 弹幕密度曲线.
 
@@ -9,8 +9,10 @@ use bern::CommandError;
 use erika_protocol::erika::{PluginColor, PluginEntryKind, PluginMenuRow};
 use serde_json::Value;
 
-/// Where a `pluginUIEntries` item goes in the danmaku menu.
-const DANMAKU_MENU: &str = "danmakuMenu";
+/// The current placement and its legacy spelling. Both go to playback
+/// settings; installed plugins do not have to be repackaged.
+const PLAYER_MENU: &str = "playerMenu";
+const LEGACY_DANMAKU_MENU: &str = "danmakuMenu";
 
 /// How finely the progress line moves: the share played, in steps.
 const STRIP_STEPS: usize = 400;
@@ -20,9 +22,12 @@ const STRIP_STEPS: usize = 400;
 const DENSITY_SEGMENTS: usize = 150;
 const DENSITY_SECONDS: f64 = 1.0;
 
-/// Whether a `pluginUIEntries` item goes in the danmaku menu.
+/// Whether a `pluginUIEntries` item goes in playback settings.
 pub(super) fn in_menu(entry: &Value) -> bool {
-    text_of(entry, "placement") == DANMAKU_MENU
+    matches!(
+        text_of(entry, "placement").as_str(),
+        PLAYER_MENU | LEGACY_DANMAKU_MENU
+    )
 }
 
 /// The theme color a plugin names: `accent`, `red`, `orange` or `green`.
@@ -106,7 +111,7 @@ pub(crate) fn strip(progress: f64) -> Vec<f64> {
 }
 
 impl ErikaEngine {
-    /// The settings the running plugins put in the danmaku menu, as they
+    /// The settings the running plugins put in playback settings, as they
     /// are now.
     pub(super) fn show_plugin_menu(&mut self) {
         let mut rows = Vec::new();
@@ -163,6 +168,7 @@ impl ErikaEngine {
                 rows.push(row);
             }
         }
+        self.state.player.plugin_menu_shown = !rows.is_empty();
         if self.state.player.plugin_menu != rows {
             self.state.player.plugin_menu = rows;
         }
@@ -295,6 +301,14 @@ mod tests {
         assert_eq!(half.len(), STRIP_STEPS + 1);
         assert_eq!(half[STRIP_STEPS / 2], 1.0);
         assert_eq!(half[STRIP_STEPS / 2 + 1], 0.0);
+    }
+
+    #[test]
+    fn current_and_legacy_placements_share_playback_settings() {
+        for placement in ["playerMenu", "danmakuMenu"] {
+            assert!(in_menu(&serde_json::json!({ "placement": placement })));
+        }
+        assert!(!in_menu(&serde_json::json!({ "id": "about" })));
     }
 
     #[test]
