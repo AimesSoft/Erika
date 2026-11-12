@@ -3,7 +3,7 @@ resolver = "3"
 members = ["erika-protocol", "erika-core", "erika-ui", "erika-store", "erika-catalog", "erika-dandanplay", "erika-torrent", "erika-gateway", "modules/account/protocol", "modules/account/core", "modules/danmaku/protocol", "modules/danmaku/core", "modules/danmaku/ui", "modules/enhance/protocol", "modules/enhance/core", "modules/enhance/ui", "modules/library/protocol", "modules/library/core", "modules/library/ui", "modules/anime/protocol", "modules/anime/core", "modules/anime/ui", "modules/sync/protocol", "modules/sync/core", "modules/sync/ui", "modules/sources/protocol", "modules/sources/core", "modules/sources/ui", "modules/remote/protocol", "modules/remote/core", "modules/remote/ui", "modules/downloads/protocol", "modules/downloads/core", "modules/downloads/ui"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT"

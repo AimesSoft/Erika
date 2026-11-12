@@ -1548,7 +1548,7 @@ dependencies = [
 
 [[package]]
 name = "erika-account-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-account-protocol",
@@ -1556,14 +1556,14 @@ dependencies = [
 
 [[package]]
 name = "erika-account-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
 ]
 
 [[package]]
 name = "erika-anime-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-anime-protocol",
@@ -1581,14 +1581,14 @@ dependencies = [
 
 [[package]]
 name = "erika-anime-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
 ]
 
 [[package]]
 name = "erika-anime-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-anime-protocol",
@@ -1597,7 +1597,7 @@ dependencies = [
 
 [[package]]
 name = "erika-catalog"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "futures-lite",
  "gloo-net",
@@ -1616,7 +1616,7 @@ dependencies = [
 
 [[package]]
 name = "erika-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "bern-script",
@@ -1657,7 +1657,7 @@ dependencies = [
 
 [[package]]
 name = "erika-dandanplay"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
  "erika-catalog",
@@ -1676,7 +1676,7 @@ dependencies = [
 
 [[package]]
 name = "erika-danmaku-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-danmaku-protocol",
@@ -1684,14 +1684,14 @@ dependencies = [
 
 [[package]]
 name = "erika-danmaku-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
 ]
 
 [[package]]
 name = "erika-danmaku-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-danmaku-protocol",
@@ -1699,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "erika-downloads-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-downloads-protocol",
@@ -1709,14 +1709,14 @@ dependencies = [
 
 [[package]]
 name = "erika-downloads-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
 ]
 
 [[package]]
 name = "erika-downloads-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-downloads-protocol",
@@ -1725,7 +1725,7 @@ dependencies = [
 
 [[package]]
 name = "erika-enhance-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-enhance-protocol",
@@ -1733,14 +1733,14 @@ dependencies = [
 
 [[package]]
 name = "erika-enhance-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
 ]
 
 [[package]]
 name = "erika-enhance-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-enhance-protocol",
@@ -1748,7 +1748,7 @@ dependencies = [
 
 [[package]]
 name = "erika-gateway"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axum",
  "erika-dandanplay",
@@ -1762,7 +1762,7 @@ dependencies = [
 
 [[package]]
 name = "erika-library-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
  "bern",
@@ -1779,14 +1779,14 @@ dependencies = [
 
 [[package]]
 name = "erika-library-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
 ]
 
 [[package]]
 name = "erika-library-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-library-protocol",
@@ -1795,14 +1795,14 @@ dependencies = [
 
 [[package]]
 name = "erika-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
 ]
 
 [[package]]
 name = "erika-remote-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
  "bern",
@@ -1816,14 +1816,14 @@ dependencies = [
 
 [[package]]
 name = "erika-remote-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
 ]
 
 [[package]]
 name = "erika-remote-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-remote-protocol",
@@ -1831,7 +1831,7 @@ dependencies = [
 
 [[package]]
 name = "erika-sources-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-sources-protocol",
@@ -1839,14 +1839,14 @@ dependencies = [
 
 [[package]]
 name = "erika-sources-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
 ]
 
 [[package]]
 name = "erika-sources-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-sources-protocol",
@@ -1854,7 +1854,7 @@ dependencies = [
 
 [[package]]
 name = "erika-store"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-catalog",
@@ -1866,7 +1866,7 @@ dependencies = [
 
 [[package]]
 name = "erika-sync-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -1884,14 +1884,14 @@ dependencies = [
 
 [[package]]
 name = "erika-sync-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
 ]
 
 [[package]]
 name = "erika-sync-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-sync-protocol",
@@ -1899,7 +1899,7 @@ dependencies = [
 
 [[package]]
 name = "erika-torrent"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aws-lc-rs",
  "librqbit",
@@ -1909,7 +1909,7 @@ dependencies = [
 
 [[package]]
 name = "erika-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bern",
  "erika-anime-protocol",
