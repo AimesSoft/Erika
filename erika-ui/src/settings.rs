@@ -5,10 +5,6 @@
 use crate::AppWindows;
 #[cfg(feature = "bern-module-account")]
 use crate::account::{account_dialogs, account_dialogs_props, account_profile, account_profile_props};
-use crate::feature_preview::{
-    feature_preview_hud, feature_preview_hud_props, feature_preview_window,
-    feature_preview_window_props,
-};
 use crate::plugin_info::{plugin_actions, plugin_actions_props, plugin_info, plugin_info_props};
 use bern::prelude::*;
 #[cfg(feature = "bern-module-anime")]
@@ -818,181 +814,145 @@ pub fn settings_module_placeholder(app: erika::Client) -> impl View {
     }
 }
 /// Each module's symbol sits on a neutral grey tile: the design keeps the
-/// accent off list icons (10.9). The desktop shows the preview and the
-/// presets beside the switches; the phone over them (`phHTML('settings')`),
-/// 18 under the title, without the note that points to the right.
+/// accent off list icons (10.9).
 #[component]
 pub fn settings_optional(app: erika::Client) -> impl View {
     ui! {
-        Row(gap: 0, align: top) {
-            Form(title: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, variant: settings_form, appear: settings_page_in) {
-                if window.compact {
-                    Section(style: plain) {
-                        Column(gap: 0) {
-                            Canvas(height: 8)
-                            settings_preview(app: app, width: 358.0)
-                            // `.o-pv` 6 above `.o-presets`.
-                            Canvas(height: 6)
-                            settings_presets(app: app)
+        Form(title: tr! { "zh-Hans" => "可选功能", "en" => "Optional Features" }, variant: settings_form, appear: settings_page_in) {
+            Section(title: tr! { "zh-Hans" => "观看", "en" => "Watching" }, footer: tr! { "zh-Hans" => "关掉的功能不显示，也不占资源。", "en" => "Disabled features disappear and use no resources." }) {
+                if build.modules.danmaku { settings_danmaku_module(app: app) }
+                if build.modules.enhance { settings_enhance_module(app: app) }
+            }
+            Section(title: tr! { "zh-Hans" => "内容", "en" => "Content" }) {
+                if build.modules.account {
+                Row(gap: 12, align: center) {
+                    Stack(width: 28, height: 28) {
+                        Canvas {
+                            Shape(kind: rounded, corner: 7, fill: fill.strong)
                         }
+                        Label(title: tr! { "zh-Hans" => "账号", "en" => "Account" }, icon: "person.crop.circle", style: body, display: icon)
                     }
-                    Section(title: tr! { "zh-Hans" => "观看", "en" => "Watching" }) {
-                        if build.modules.danmaku { settings_danmaku_module(app: app) }
-                        if build.modules.enhance { settings_enhance_module(app: app) }
+                    Column(gap: 1) {
+                        Text(content: tr! { "zh-Hans" => "账号", "en" => "Account" }, style: body)
+                        Text(content: tr! { "zh-Hans" => "弹弹play 登录与识别服务器", "en" => "Dandanplay sign-in and recognition server" }, style: caption, emphasis: secondary)
                     }
-                } else {
-                    Section(title: tr! { "zh-Hans" => "观看", "en" => "Watching" }, footer: tr! { "zh-Hans" => "决定 Erika 要做多少事。关掉的功能不显示，也不占资源。右边的小窗口会跟着变。", "en" => "Choose what Erika does. Disabled features disappear and use no resources. The preview updates as you go." }) {
-                        if build.modules.danmaku { settings_danmaku_module(app: app) }
-                        if build.modules.enhance { settings_enhance_module(app: app) }
-                    }
+                    Spacer
+                    Switch(id: feature_account, label: tr! { "zh-Hans" => "账号", "en" => "Account" }, checked: app.features.account, style: switch, label_hidden: true) => app.set_module("account", app.features.account)
                 }
-                Section(title: tr! { "zh-Hans" => "内容", "en" => "Content" }) {
-                    if build.modules.account {
-                    Row(gap: 12, align: center) {
-                        Stack(width: 28, height: 28) {
-                            Canvas {
-                                Shape(kind: rounded, corner: 7, fill: fill.strong)
-                            }
-                            Label(title: tr! { "zh-Hans" => "账号", "en" => "Account" }, icon: "person.crop.circle", style: body, display: icon)
-                        }
-                        Column(gap: 1) {
-                            Text(content: tr! { "zh-Hans" => "账号", "en" => "Account" }, style: body)
-                            Text(content: tr! { "zh-Hans" => "弹弹play 登录与识别服务器", "en" => "Dandanplay sign-in and recognition server" }, style: caption, emphasis: secondary)
-                        }
-                        Spacer
-                        Switch(id: feature_account, label: tr! { "zh-Hans" => "账号", "en" => "Account" }, checked: app.features.account, style: switch, label_hidden: true) => app.set_module("account", app.features.account)
-                    }
-                    }
-                    if build.modules.library {
-                    Row(gap: 12, align: center) {
-                        Stack(width: 28, height: 28) {
-                            Canvas {
-                                Shape(kind: rounded, corner: 7, fill: fill.strong)
-                            }
-                            Label(title: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "film.stack", style: body, display: icon)
-                        }
-                        Column(gap: 1) {
-                            Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: body)
-                            Text(content: tr! { "zh-Hans" => "扫描文件夹，识别番剧与封面", "en" => "Scan folders, recognize shows and posters" }, style: caption, emphasis: secondary)
-                        }
-                        Spacer
-                        Switch(id: feature_library, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, checked: app.features.library, style: switch, label_hidden: true) => app.set_module("library", app.features.library)
-                    }
-                    }
-                    if build.modules.anime {
-                    Row(gap: 12, align: center) {
-                        Stack(width: 28, height: 28) {
-                            Canvas {
-                                Shape(kind: rounded, corner: 7, fill: fill.strong)
-                            }
-                            Label(title: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, icon: "calendar", style: body, display: icon)
-                        }
-                        Column(gap: 1) {
-                            Text(content: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, style: body)
-                            Text(content: tr! { "zh-Hans" => "首页推荐、新番表", "en" => "Home and airing calendar" }, style: caption, emphasis: secondary)
-                        }
-                        Spacer
-                        Switch(id: feature_anime, label: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, checked: app.features.anime, style: switch, label_hidden: true) => app.set_module("anime", app.features.anime)
-                    }
-                    }
-                    if build.modules.sync {
-                    Row(gap: 12, align: center) {
-                        Stack(width: 28, height: 28) {
-                            Canvas {
-                                Shape(kind: rounded, corner: 7, fill: fill.strong)
-                            }
-                            Label(title: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, icon: "arrow.triangle.2.circlepath", style: body, display: icon)
-                        }
-                        Column(gap: 1) {
-                            Text(content: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, style: body)
-                            Text(content: tr! { "zh-Hans" => "弹弹play / Bangumi 同步 · 需要账号及媒体库或新番", "en" => "Dandanplay / Bangumi · requires Account and Library or New Shows" }, style: caption, emphasis: secondary)
-                        }
-                        Spacer
-                        Switch(id: feature_sync, label: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, checked: app.features.sync, style: switch, label_hidden: true) => app.set_module("sync", app.features.sync)
-                    }
-                    }
                 }
-                Section(title: tr! { "zh-Hans" => "连接", "en" => "Connections" }) {
-                    if build.modules.sources {
-                    Row(gap: 12, align: center) {
-                        Stack(width: 28, height: 28) {
-                            Canvas {
-                                Shape(kind: rounded, corner: 7, fill: fill.strong)
-                            }
-                            Label(title: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, icon: "server.rack", style: body, display: icon)
+                if build.modules.library {
+                Row(gap: 12, align: center) {
+                    Stack(width: 28, height: 28) {
+                        Canvas {
+                            Shape(kind: rounded, corner: 7, fill: fill.strong)
                         }
-                        Column(gap: 1) {
-                            Text(content: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, style: body)
-                            Text(content: tr! { "zh-Hans" => "Jellyfin、Emby、WebDAV、SMB · 需要媒体库", "en" => "Jellyfin, Emby, WebDAV, SMB · requires Library" }, style: caption, emphasis: secondary)
-                        }
-                        Spacer
-                        Switch(id: feature_sources, label: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, checked: app.features.sources, style: switch, label_hidden: true) => app.set_module("sources", app.features.sources)
+                        Label(title: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, icon: "film.stack", style: body, display: icon)
                     }
+                    Column(gap: 1) {
+                        Text(content: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, style: body)
+                        Text(content: tr! { "zh-Hans" => "扫描文件夹，识别番剧与封面", "en" => "Scan folders, recognize shows and posters" }, style: caption, emphasis: secondary)
                     }
-                    if build.modules.remote {
-                    Row(gap: 12, align: center) {
-                        Stack(width: 28, height: 28) {
-                            Canvas {
-                                Shape(kind: rounded, corner: 7, fill: fill.strong)
-                            }
-                            Label(title: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, icon: "wifi", style: body, display: icon)
-                        }
-                        Column(gap: 1) {
-                            Text(content: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, style: body)
-                            Text(content: tr! { "zh-Hans" => "局域网共享、远程访问 · 需要媒体库", "en" => "Sharing and remote access · requires Library" }, style: caption, emphasis: secondary)
-                        }
-                        Spacer
-                        Switch(id: feature_remote, label: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, checked: app.features.remote, style: switch, label_hidden: true) => app.set_module("remote", app.features.remote)
-                    }
-                    }
-                    if build.modules.downloads && !app.downloads_hidden {
-                    Row(gap: 12, align: center) {
-                        Stack(width: 28, height: 28) {
-                            Canvas {
-                                Shape(kind: rounded, corner: 7, fill: fill.strong)
-                            }
-                            Label(title: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, icon: "arrow.down.circle", style: body, display: icon)
-                        }
-                        Column(gap: 1) {
-                            Text(content: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, style: body)
-                            Text(content: tr! { "zh-Hans" => "种子与磁力链接", "en" => "Torrents and magnet links" }, style: caption, emphasis: secondary)
-                        }
-                        Spacer
-                        Switch(id: feature_downloads, label: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, checked: app.features.downloads, style: switch, label_hidden: true) => app.set_module("downloads", app.features.downloads)
-                    }
-                    }
+                    Spacer
+                    Switch(id: feature_library, label: tr! { "zh-Hans" => "媒体库", "en" => "Library" }, checked: app.features.library, style: switch, label_hidden: true) => app.set_module("library", app.features.library)
                 }
-                Section(title: tr! { "zh-Hans" => "扩展", "en" => "Extensions" }) {
-                    Row(gap: 12, align: center) {
-                        Stack(width: 28, height: 28) {
-                            Canvas {
-                                Shape(kind: rounded, corner: 7, fill: fill.strong)
-                            }
-                            Label(title: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, icon: "puzzlepiece.extension", style: body, display: icon)
+                }
+                if build.modules.anime {
+                Row(gap: 12, align: center) {
+                    Stack(width: 28, height: 28) {
+                        Canvas {
+                            Shape(kind: rounded, corner: 7, fill: fill.strong)
                         }
-                        Column(gap: 1) {
-                            Text(content: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, style: body)
-                            Text(content: tr! { "zh-Hans" => "插件市场与已安装的插件", "en" => "Plugin marketplace and installed plugins" }, style: caption, emphasis: secondary)
-                        }
-                        Spacer
-                        Switch(id: feature_plugins, label: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, checked: app.features.plugins, style: switch, label_hidden: true) => app.set_module("plugins", app.features.plugins)
+                        Label(title: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, icon: "calendar", style: body, display: icon)
                     }
+                    Column(gap: 1) {
+                        Text(content: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, style: body)
+                        Text(content: tr! { "zh-Hans" => "首页推荐、新番表", "en" => "Home and airing calendar" }, style: caption, emphasis: secondary)
+                    }
+                    Spacer
+                    Switch(id: feature_anime, label: tr! { "zh-Hans" => "新番", "en" => "New Shows" }, checked: app.features.anime, style: switch, label_hidden: true) => app.set_module("anime", app.features.anime)
+                }
+                }
+                if build.modules.sync {
+                Row(gap: 12, align: center) {
+                    Stack(width: 28, height: 28) {
+                        Canvas {
+                            Shape(kind: rounded, corner: 7, fill: fill.strong)
+                        }
+                        Label(title: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, icon: "arrow.triangle.2.circlepath", style: body, display: icon)
+                    }
+                    Column(gap: 1) {
+                        Text(content: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, style: body)
+                        Text(content: tr! { "zh-Hans" => "弹弹play / Bangumi 同步 · 需要账号及媒体库或新番", "en" => "Dandanplay / Bangumi · requires Account and Library or New Shows" }, style: caption, emphasis: secondary)
+                    }
+                    Spacer
+                    Switch(id: feature_sync, label: tr! { "zh-Hans" => "账号同步", "en" => "Account Sync" }, checked: app.features.sync, style: switch, label_hidden: true) => app.set_module("sync", app.features.sync)
+                }
                 }
             }
-            // A scroll view of its own, so the title bar's scroll edge spans
-            // this column as it does the form beside it.
-            if !window.compact {
-                ScrollView(appear: settings_page_in) {
-                    Row(gap: 0, align: top) {
-                    Column(gap: 0, width: 300, padding_y: 20) {
-                        Text(content: tr! { "zh-Hans" => "预览", "en" => "Preview" }, style: caption2, emphasis: secondary)
-                        Canvas(height: 8)
-                        settings_preview(app: app, width: 300.0)
-                        Canvas(height: 10)
-                        settings_presets(app: app)
+            Section(title: tr! { "zh-Hans" => "连接", "en" => "Connections" }) {
+                if build.modules.sources {
+                Row(gap: 12, align: center) {
+                    Stack(width: 28, height: 28) {
+                        Canvas {
+                            Shape(kind: rounded, corner: 7, fill: fill.strong)
+                        }
+                        Label(title: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, icon: "server.rack", style: body, display: icon)
                     }
-                    Canvas(width: 20)
+                    Column(gap: 1) {
+                        Text(content: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, style: body)
+                        Text(content: tr! { "zh-Hans" => "Jellyfin、Emby、WebDAV、SMB · 需要媒体库", "en" => "Jellyfin, Emby, WebDAV, SMB · requires Library" }, style: caption, emphasis: secondary)
                     }
+                    Spacer
+                    Switch(id: feature_sources, label: tr! { "zh-Hans" => "网络媒体源", "en" => "Network Sources" }, checked: app.features.sources, style: switch, label_hidden: true) => app.set_module("sources", app.features.sources)
+                }
+                }
+                if build.modules.remote {
+                Row(gap: 12, align: center) {
+                    Stack(width: 28, height: 28) {
+                        Canvas {
+                            Shape(kind: rounded, corner: 7, fill: fill.strong)
+                        }
+                        Label(title: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, icon: "wifi", style: body, display: icon)
+                    }
+                    Column(gap: 1) {
+                        Text(content: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, style: body)
+                        Text(content: tr! { "zh-Hans" => "局域网共享、远程访问 · 需要媒体库", "en" => "Sharing and remote access · requires Library" }, style: caption, emphasis: secondary)
+                    }
+                    Spacer
+                    Switch(id: feature_remote, label: tr! { "zh-Hans" => "局域网与远程", "en" => "LAN and Remote" }, checked: app.features.remote, style: switch, label_hidden: true) => app.set_module("remote", app.features.remote)
+                }
+                }
+                if build.modules.downloads && !app.downloads_hidden {
+                Row(gap: 12, align: center) {
+                    Stack(width: 28, height: 28) {
+                        Canvas {
+                            Shape(kind: rounded, corner: 7, fill: fill.strong)
+                        }
+                        Label(title: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, icon: "arrow.down.circle", style: body, display: icon)
+                    }
+                    Column(gap: 1) {
+                        Text(content: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, style: body)
+                        Text(content: tr! { "zh-Hans" => "种子与磁力链接", "en" => "Torrents and magnet links" }, style: caption, emphasis: secondary)
+                    }
+                    Spacer
+                    Switch(id: feature_downloads, label: tr! { "zh-Hans" => "下载", "en" => "Downloads" }, checked: app.features.downloads, style: switch, label_hidden: true) => app.set_module("downloads", app.features.downloads)
+                }
+                }
+            }
+            Section(title: tr! { "zh-Hans" => "扩展", "en" => "Extensions" }) {
+                Row(gap: 12, align: center) {
+                    Stack(width: 28, height: 28) {
+                        Canvas {
+                            Shape(kind: rounded, corner: 7, fill: fill.strong)
+                        }
+                        Label(title: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, icon: "puzzlepiece.extension", style: body, display: icon)
+                    }
+                    Column(gap: 1) {
+                        Text(content: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, style: body)
+                        Text(content: tr! { "zh-Hans" => "插件市场与已安装的插件", "en" => "Plugin marketplace and installed plugins" }, style: caption, emphasis: secondary)
+                    }
+                    Spacer
+                    Switch(id: feature_plugins, label: tr! { "zh-Hans" => "插件", "en" => "Plugins" }, checked: app.features.plugins, style: switch, label_hidden: true) => app.set_module("plugins", app.features.plugins)
                 }
             }
         }
@@ -1037,36 +997,6 @@ pub fn settings_enhance_module(app: erika::Client) -> impl View {
             }
             Spacer
             Switch(id: feature_enhance, label: tr! { "zh-Hans" => "画质增强", "en" => "Upscaling" }, checked: app.features.enhance, style: switch, label_hidden: true) => app.set_module("enhance", app.features.enhance)
-        }
-    }
-}
-/// `.o-presets`: the three presets, 6 apart.
-#[component]
-pub fn settings_presets(app: erika::Client) -> impl View {
-    ui! {
-        Row(gap: 6) {
-            Button(id: preset_pure, label: tr! { "zh-Hans" => "纯粹播放", "en" => "Pure playback" }) => app.apply_preset(FeaturePreset::Pure)
-            Button(id: preset_anime, label: tr! { "zh-Hans" => "看番", "en" => "Anime" }) => app.apply_preset(FeaturePreset::Anime)
-            Button(id: preset_all, label: tr! { "zh-Hans" => "全都要", "en" => "Everything" }) => app.apply_preset(FeaturePreset::All)
-        }
-    }
-}
-/// `.o-pv`: the window, 10 above its playback bar, and 14 under that how
-/// many modules are on (`.o-sum`, 13 / 18), naming the preset they are
-/// exactly.
-#[component]
-pub fn settings_preview(app: erika::Client, width: f64) -> impl View {
-    ui! {
-        Column(gap: 0, width: width) {
-            feature_preview_window(features: app.features, revision: app.feature_preview_revision, width: width)
-            Canvas(height: 10)
-            feature_preview_hud(features: app.features)
-            Canvas(height: 14)
-            if app.preset == OnboardingPreset::Custom {
-                Text(content: tr! { "zh-Hans" => "已开启 {count} 个模块", "en" => "{count, plural, one {# module} other {# modules}} on"; count: app.module_count }, font_size: 13, line_height: 18, emphasis: secondary, lines: 2)
-            } else {
-                Text(content: tr! { "zh-Hans" => "已开启 {count} 个模块 · 正好是「{preset}」", "en" => "{count, plural, one {# module} other {# modules}} on · just like “{preset}”"; count: app.module_count, preset: app.preset }, font_size: 13, line_height: 18, emphasis: secondary, lines: 2)
-            }
         }
     }
 }
@@ -1282,19 +1212,18 @@ pub fn settings_plugins(app: erika::Client, #[session] draft: PluginsDraft) -> i
     ui! {
         Stack(align: top) {
         Timer(interval: 1, enabled: app.plugins_starting) => app.plugins_tick()
-        ScrollView(appear: settings_page_in) {
-        Column(gap: 0) {
+        Column(gap: 0, appear: settings_page_in) {
         Slot(id: scroll_header)
         // The phone's page keeps 16 from its sides (`phHTML`), as the
         // market's tool strip needs to fit the prototype's chips per line.
-        Column(gap: 0, padding_x: if window.compact { 16.0 } else { 28.0 }, padding_y: 22) {
-            Stack(variant: settings_banner, height: 128, align: leading, appearance: dark) {
+        Column(gap: 0, padding_x: if window.compact { 16.0 } else { 28.0 }) {
+            Canvas(height: if window.compact { 14.0 } else { 22.0 })
+            Stack(variant: settings_banner, height: 100, align: leading, appearance: dark) {
                 Canvas {
                     Pattern(name: academy)
                 }
-                Column(gap: 6, padding_x: 26) {
+                Row(padding_x: 26) {
                     Text(content: tr! { "zh-Hans" => "插件市场", "en" => "Plugin Market" }, style: title2)
-                    Text(content: tr! { "zh-Hans" => "小功能按需安装。插件用脚本编写，只能使用它声明过的权限。", "en" => "Install small extras as needed. Plugins can only use their declared permissions." }, style: body)
                 }
             }
             Canvas(height: 18)
@@ -1308,51 +1237,47 @@ pub fn settings_plugins(app: erika::Client, #[session] draft: PluginsDraft) -> i
                 } => app.set_plugin_tab(app.plugin_tab)
                 Spacer
                 Picker(id: plugin_category, label: tr! { "zh-Hans" => "分类", "en" => "Category" }, selected: app.plugin_category, style: chips, label_hidden: true) => app.set_plugin_category(app.plugin_category)
-            }
-            Canvas(height: 12)
-            Row(gap: 10, align: center) {
                 if app.plugin_tab == PluginTab::Market {
-                    // The note takes the room the button leaves: Compose
-                    // measures a row's items in order, and a long note
-                    // would take it all.
-                    Row(gap: 0, align: center) {
-                        if app.plugins_loading {
-                            Text(content: tr! { "zh-Hans" => "正在读取插件市场…", "en" => "Reading the market…" }, style: caption, emphasis: secondary)
-                        } else if "" != app.plugins_error {
-                            Text(content: tr! { "zh-Hans" => "插件市场读取失败：{error}", "en" => "The market could not be read: {error}"; error: app.plugins_error }, style: caption, emphasis: secondary, lines: 2)
-                        } else {
-                            Text(content: tr! { "zh-Hans" => "插件来自 NipaPlay 插件市场；Erika 自己的市场上线前，先不检查这些插件要求的版本。", "en" => "Plugins come from NipaPlay's market; until Erika's own opens, their version requirements are not checked." }, style: caption, emphasis: secondary, lines: 2)
-                        }
-                        Spacer
-                    }
-                    // The icon alone: on a phone the note beside it leaves no room for a word.
                     IconButton(id: refresh_plugins, icon: "arrow.triangle.2.circlepath", label: tr! { "zh-Hans" => "刷新", "en" => "Refresh" }, prominence: plain, enabled: !app.plugins_loading) => app.refresh_plugins()
-                } else {
-                    // The buttons under the note, which a phone has no room beside.
-                    Column(gap: 8) {
-                        Text(content: tr! { "zh-Hans" => "可以导入 Erika 插件包（.epk）、插件文件夹，或 NipaPlay 的 .js 插件。", "en" => "Import an Erika plugin package (.epk), a plugin folder, or a NipaPlay .js plugin." }, style: caption, emphasis: secondary, lines: 2)
-                        // A television has no files to pick from.
-                        if !window.tv {
-                            Row(gap: 10, align: center) {
-                                Button(id: import_plugin_script, label: tr! { "zh-Hans" => "导入文件", "en" => "Import File" }, icon: "plus", prominence: plain, pick: draft.script, files: ".epk .js") => app.import_plugin(draft.script)
-                                Button(id: import_plugin_folder, label: tr! { "zh-Hans" => "导入文件夹", "en" => "Import Folder" }, icon: "folder", prominence: plain, pick: draft.folder, files: "folder") => app.import_plugin(draft.folder)
-                            }
+                }
+            }
+            if app.plugin_tab == PluginTab::Market {
+                if app.plugins_loading {
+                    Canvas(height: 10)
+                    Text(content: tr! { "zh-Hans" => "正在读取插件市场…", "en" => "Reading the market…" }, style: caption, emphasis: secondary)
+                } else if "" != app.plugins_error {
+                    Canvas(height: 10)
+                    Text(content: tr! { "zh-Hans" => "插件市场读取失败：{error}", "en" => "The market could not be read: {error}"; error: app.plugins_error }, style: caption, emphasis: secondary, lines: 2)
+                }
+            } else {
+                Canvas(height: 12)
+                Column(gap: 8) {
+                    Text(content: tr! { "zh-Hans" => "可以导入 Erika 插件包（.epk）、插件文件夹，或 NipaPlay 的 .js 插件。", "en" => "Import an Erika plugin package (.epk), a plugin folder, or a NipaPlay .js plugin." }, style: caption, emphasis: secondary, lines: 2)
+                    // A television has no files to pick from.
+                    if !window.tv {
+                        Row(gap: 10, align: center) {
+                            Button(id: import_plugin_script, label: tr! { "zh-Hans" => "导入文件", "en" => "Import File" }, icon: "plus", prominence: plain, pick: draft.script, files: ".epk .js") => app.import_plugin(draft.script)
+                            Button(id: import_plugin_folder, label: tr! { "zh-Hans" => "导入文件夹", "en" => "Import Folder" }, icon: "folder", prominence: plain, pick: draft.folder, files: "folder") => app.import_plugin(draft.folder)
                         }
                     }
                 }
             }
             Canvas(height: 14)
-            if app.plugin_tab == PluginTab::Installed && app.installed_count == 0 {
-                Text(content: tr! { "zh-Hans" => "还没有安装插件。去「市场」里挑一个，或者导入一个。", "en" => "No plugins yet. Pick one in the market, or import one." }, emphasis: secondary)
-            }
-            // Cards as tall as what they say, each in the column it fits
-            // under first.
-            Grid(min_width: 300, gap: 12, masonry: true) {
-                ForEach(items: app.plugins, key: id) |plugin| {
-                    plugin_card(app: app, plugin: plugin)
-                }
-            }
         }
+        ScrollView {
+            Column(gap: 0, padding_x: if window.compact { 16.0 } else { 28.0 }) {
+                if app.plugin_tab == PluginTab::Installed && app.installed_count == 0 {
+                    Text(content: tr! { "zh-Hans" => "还没有安装插件。去「市场」里挑一个，或者导入一个。", "en" => "No plugins yet. Pick one in the market, or import one." }, emphasis: secondary)
+                }
+                // Cards as tall as what they say, each in the column it fits
+                // under first.
+                Grid(min_width: 300, gap: 12, masonry: true) {
+                    ForEach(items: app.plugins, key: id) |plugin| {
+                        plugin_card(app: app, plugin: plugin)
+                    }
+                }
+                Canvas(height: 22)
+            }
         }
         }
         if app.plugin_info.open {
