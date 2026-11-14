@@ -394,8 +394,8 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bern"
-version = "0.1.15"
-source = "git+https://github.com/AimesSoft/Bern?rev=a49ab0d7bd0d28feb68564709db1401f7e64674f#a49ab0d7bd0d28feb68564709db1401f7e64674f"
+version = "0.1.17"
+source = "git+https://github.com/AimesSoft/Bern?rev=bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb#bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb"
 dependencies = [
  "bern-command",
  "bern-macros",
@@ -408,8 +408,8 @@ dependencies = [
 
 [[package]]
 name = "bern-command"
-version = "0.1.15"
-source = "git+https://github.com/AimesSoft/Bern?rev=a49ab0d7bd0d28feb68564709db1401f7e64674f#a49ab0d7bd0d28feb68564709db1401f7e64674f"
+version = "0.1.17"
+source = "git+https://github.com/AimesSoft/Bern?rev=bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb#bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb"
 dependencies = [
  "bern-protocol",
  "block2",
@@ -430,8 +430,8 @@ dependencies = [
 
 [[package]]
 name = "bern-ir"
-version = "0.1.15"
-source = "git+https://github.com/AimesSoft/Bern?rev=a49ab0d7bd0d28feb68564709db1401f7e64674f#a49ab0d7bd0d28feb68564709db1401f7e64674f"
+version = "0.1.17"
+source = "git+https://github.com/AimesSoft/Bern?rev=bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb#bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb"
 dependencies = [
  "bern-protocol",
  "serde",
@@ -440,8 +440,8 @@ dependencies = [
 
 [[package]]
 name = "bern-macros"
-version = "0.1.15"
-source = "git+https://github.com/AimesSoft/Bern?rev=a49ab0d7bd0d28feb68564709db1401f7e64674f#a49ab0d7bd0d28feb68564709db1401f7e64674f"
+version = "0.1.17"
+source = "git+https://github.com/AimesSoft/Bern?rev=bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb#bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb"
 dependencies = [
  "bern-ir",
  "bern-protocol",
@@ -454,16 +454,16 @@ dependencies = [
 
 [[package]]
 name = "bern-media"
-version = "0.1.15"
-source = "git+https://github.com/AimesSoft/Bern?rev=a49ab0d7bd0d28feb68564709db1401f7e64674f#a49ab0d7bd0d28feb68564709db1401f7e64674f"
+version = "0.1.17"
+source = "git+https://github.com/AimesSoft/Bern?rev=bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb#bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb"
 dependencies = [
  "bern-protocol",
 ]
 
 [[package]]
 name = "bern-protocol"
-version = "0.1.15"
-source = "git+https://github.com/AimesSoft/Bern?rev=a49ab0d7bd0d28feb68564709db1401f7e64674f#a49ab0d7bd0d28feb68564709db1401f7e64674f"
+version = "0.1.17"
+source = "git+https://github.com/AimesSoft/Bern?rev=bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb#bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb"
 dependencies = [
  "serde",
  "serde_json",
@@ -471,26 +471,27 @@ dependencies = [
 
 [[package]]
 name = "bern-runtime"
-version = "0.1.15"
-source = "git+https://github.com/AimesSoft/Bern?rev=a49ab0d7bd0d28feb68564709db1401f7e64674f#a49ab0d7bd0d28feb68564709db1401f7e64674f"
+version = "0.1.17"
+source = "git+https://github.com/AimesSoft/Bern?rev=bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb#bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb"
 dependencies = [
  "bern-protocol",
 ]
 
 [[package]]
 name = "bern-script"
-version = "0.1.15"
-source = "git+https://github.com/AimesSoft/Bern?rev=a49ab0d7bd0d28feb68564709db1401f7e64674f#a49ab0d7bd0d28feb68564709db1401f7e64674f"
+version = "0.1.17"
+source = "git+https://github.com/AimesSoft/Bern?rev=bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb#bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb"
 dependencies = [
  "boa_engine",
+ "boa_gc",
  "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "bern-syntax"
-version = "0.1.15"
-source = "git+https://github.com/AimesSoft/Bern?rev=a49ab0d7bd0d28feb68564709db1401f7e64674f#a49ab0d7bd0d28feb68564709db1401f7e64674f"
+version = "0.1.17"
+source = "git+https://github.com/AimesSoft/Bern?rev=bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb#bbf71ea02ed1ac9de2b876dcec9af10681c3c0eb"
 dependencies = [
  "bern-media",
  "bern-protocol",
@@ -5390,7 +5391,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.6",
  "windows-sys 0.61.2",

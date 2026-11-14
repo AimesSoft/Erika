@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="-16 -16 1056 1056" width="1024" height="1024" role="img" aria-label="Erika"><title>Erika</title><!--
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-16 -16 1056 1056" width="1024" height="1024" data-bern-ready="2.3s" data-bern-dblclick="random(do-wink: 1.5s, do-pet: 2.6s, do-smug: 2.8s)" role="img" aria-label="Erika"><title>Erika</title><!--
   Erika 图标 · 出场动画（纯 CSS，放进 <img> 和 GitHub README 都会播放；系统开了「减少动态效果」就直接显示）：
     0.00s 头发的圆弹出来（果冻回弹）
     0.30s 猫脸从底下蹦上来，落地压扁再弹回
