@@ -67,6 +67,57 @@ pub struct MediaShelf {
     pub added: i64,
     pub seen: i64,
 }
+
+pub(crate) fn fold_season_shelf(
+    raw: Vec<(MediaNode, Option<MediaNode>, MediaId, bool, i64)>,
+) -> Vec<MediaShelf> {
+    use std::collections::BTreeMap;
+    let mut first_regular: BTreeMap<MediaId, MediaNode> = BTreeMap::new();
+    for (root, parent, _, _, _) in &raw {
+        if let Some(season) = parent
+            && season.season_number.is_some_and(|n| n >= 1)
+        {
+            first_regular
+                .entry(root.id.clone())
+                .and_modify(|cur| {
+                    if season.season_number < cur.season_number {
+                        *cur = season.clone();
+                    }
+                })
+                .or_insert_with(|| season.clone());
+        }
+    }
+    let mut groups: BTreeMap<MediaId, (MediaNode, BTreeMap<MediaId, bool>, i64, i64)> =
+        BTreeMap::new();
+    for (root, parent, item_id, watched, seen) in raw {
+        let entry = match parent {
+            Some(season) if season.season_number.is_some_and(|n| n >= 1) => season,
+            Some(_) => first_regular
+                .get(&root.id)
+                .cloned()
+                .unwrap_or_else(|| root.clone()),
+            None => root,
+        };
+        let group = groups
+            .entry(entry.id.clone())
+            .or_insert((entry, BTreeMap::new(), seen, seen));
+        *group.1.entry(item_id).or_default() |= watched;
+        group.2 = group.2.min(seen);
+        group.3 = group.3.max(seen);
+    }
+    let mut rows: Vec<_> = groups
+        .into_values()
+        .map(|(node, items, added, seen)| MediaShelf {
+            node,
+            episodes: items.len() as i64,
+            watched: items.values().filter(|v| **v).count() as i64,
+            added,
+            seen,
+        })
+        .collect();
+    rows.sort_by(|a, b| b.seen.cmp(&a.seen).then_with(|| a.node.id.cmp(&b.node.id)));
+    rows
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MediaWatching {
     pub work: MediaNode,

@@ -353,13 +353,35 @@ pub mod library {
 
     /// Typed public catalogue API; numbers never encode another provider.
     #[value]
-    pub enum CatalogKind { Tv, Movie, Season, Episode, Subject, Item }
+    pub enum CatalogKind {
+        Tv,
+        Movie,
+        Season,
+        Episode,
+        Subject,
+        Item,
+    }
     #[value]
-    pub enum CatalogProvider { Tmdb, Dandanplay, Bangumi, Misaka, Jellyfin }
+    pub enum CatalogProvider {
+        Tmdb,
+        Dandanplay,
+        Bangumi,
+        Misaka,
+        Jellyfin,
+    }
     #[value]
-    pub enum CatalogRelation { Exact, PartOf, Contains, Related }
+    pub enum CatalogRelation {
+        Exact,
+        PartOf,
+        Contains,
+        Related,
+    }
     #[value]
-    pub enum CatalogDecision { Auto, Manual, Blocked }
+    pub enum CatalogDecision {
+        Auto,
+        Manual,
+        Blocked,
+    }
     #[value]
     pub struct CatalogReference {
         pub provider: CatalogProvider,
@@ -517,14 +539,46 @@ pub mod library {
     #[commands]
     pub trait Commands {
         /// Read verified TMDB metadata before binding; `request` is a fresh UUID.
-        fn catalog_fetch(&mut self, request: String, reference: CatalogReference, season: Option<i64>) -> Result<(), CommandError>;
+        fn catalog_fetch(
+            &mut self,
+            request: String,
+            reference: CatalogReference,
+            season: Option<i64>,
+        ) -> Result<(), CommandError>;
         /// Resolve one stored file using the normal dandanplay → filename chain.
-        fn catalog_resolve(&mut self, request: String, file: i64, revision: i64, dry_run: bool) -> Result<(), CommandError>;
+        fn catalog_resolve(
+            &mut self,
+            request: String,
+            file: i64,
+            revision: i64,
+            dry_run: bool,
+        ) -> Result<(), CommandError>;
         /// Whole-batch preview and commit use identical validation and CAS rules.
-        fn catalog_bind(&mut self, request: String, bindings: Vec<CatalogBinding>, preview: bool) -> Result<(), CommandError>;
-        fn catalog_unbind(&mut self, request: String, file: i64, revision: i64, preview: bool) -> Result<(), CommandError>;
-        fn catalog_bind_danmaku(&mut self, request: String, bindings: Vec<CatalogDanmaku>, preview: bool) -> Result<(), CommandError>;
-        fn catalog_map_provider(&mut self, request: String, mappings: Vec<CatalogMapping>, preview: bool) -> Result<(), CommandError>;
+        fn catalog_bind(
+            &mut self,
+            request: String,
+            bindings: Vec<CatalogBinding>,
+            preview: bool,
+        ) -> Result<(), CommandError>;
+        fn catalog_unbind(
+            &mut self,
+            request: String,
+            file: i64,
+            revision: i64,
+            preview: bool,
+        ) -> Result<(), CommandError>;
+        fn catalog_bind_danmaku(
+            &mut self,
+            request: String,
+            bindings: Vec<CatalogDanmaku>,
+            preview: bool,
+        ) -> Result<(), CommandError>;
+        fn catalog_map_provider(
+            &mut self,
+            request: String,
+            mappings: Vec<CatalogMapping>,
+            preview: bool,
+        ) -> Result<(), CommandError>;
         /// Remove the manual/blocked decision without changing the danmaku choice.
         fn catalog_allow_auto(&mut self, file: i64, revision: i64) -> Result<(), CommandError>;
         fn catalog_undo(&mut self, change: String) -> Result<(), CommandError>;
@@ -612,7 +666,14 @@ pub mod library {
         fn catalog_inspect(&self, file: i64, answer: Answer<CatalogInspection>);
         fn catalog_media(&self, id: String, answer: Answer<CatalogNode>);
         fn catalog_children(&self, id: String, answer: Answer<Vec<CatalogNode>>);
-        fn catalog_search(&self, kind: CatalogKind, text: String, year: Option<i64>, page: i64, answer: Answer<CatalogSearch>);
+        fn catalog_search(
+            &self,
+            kind: CatalogKind,
+            text: String,
+            year: Option<i64>,
+            page: i64,
+            answer: Answer<CatalogSearch>,
+        );
         fn catalog_job(&self, id: String, answer: Answer<CatalogJob>);
         fn catalog_receipt(&self, request: String, answer: Answer<CatalogReceipt>);
         /// The wall: the shows of source `source`, or of all when it is 0.

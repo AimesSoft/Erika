@@ -11,8 +11,8 @@ use std::{
 };
 
 mod catalog;
-mod portable_rows;
 mod plugin_sources;
+mod portable_rows;
 
 #[derive(Clone)]
 pub struct Db {
@@ -50,22 +50,56 @@ struct State {
     plugin_sources: BTreeMap<i64, plugin_sources::Directory>,
 }
 impl State {
-    fn link_provider_episode(&mut self, file: FileId, anime: &Anime, episode: &Episode, manual: bool) -> crate::catalog::Result<()> {
-        if !self.files.contains_key(&file) { return Err(crate::catalog::Error::invalid("文件不存在")); }
-        if self.catalog.bindings.contains_key(&file) { return Ok(()); }
+    fn link_provider_episode(
+        &mut self,
+        file: FileId,
+        anime: &Anime,
+        episode: &Episode,
+        manual: bool,
+    ) -> crate::catalog::Result<()> {
+        if !self.files.contains_key(&file) {
+            return Err(crate::catalog::Error::invalid("文件不存在"));
+        }
+        if self.catalog.bindings.contains_key(&file) {
+            return Ok(());
+        }
         let old = self.anime.get(&anime.dandanplay_id);
-        self.anime.insert(anime.dandanplay_id, portable::Anime {
-            dandanplay_id: anime.dandanplay_id,
-            title: anime.title.clone(),
-            image: if anime.image.is_empty() { old.map(|a| a.image.clone()).unwrap_or_default() } else { anime.image.clone() },
-            bangumi_id: old.and_then(|a| a.bangumi_id),
-        });
-        self.episodes.insert(episode.dandanplay_id, portable::Episode {
-            dandanplay_id: episode.dandanplay_id, anime: anime.dandanplay_id,
-            number: Some(episode.number), title: episode.title.clone(), bangumi_id: None,
-        });
-        if manual || self.links.get(&file).is_none_or(|(_, kind)| kind.as_deref().is_none_or(|k| k == "auto")) {
-            self.links.insert(file, (Some(episode.dandanplay_id), Some(if manual { "manual" } else { "auto" }.into())));
+        self.anime.insert(
+            anime.dandanplay_id,
+            portable::Anime {
+                dandanplay_id: anime.dandanplay_id,
+                title: anime.title.clone(),
+                image: if anime.image.is_empty() {
+                    old.map(|a| a.image.clone()).unwrap_or_default()
+                } else {
+                    anime.image.clone()
+                },
+                bangumi_id: old.and_then(|a| a.bangumi_id),
+            },
+        );
+        self.episodes.insert(
+            episode.dandanplay_id,
+            portable::Episode {
+                dandanplay_id: episode.dandanplay_id,
+                anime: anime.dandanplay_id,
+                number: Some(episode.number),
+                title: episode.title.clone(),
+                bangumi_id: None,
+            },
+        );
+        if manual
+            || self
+                .links
+                .get(&file)
+                .is_none_or(|(_, kind)| kind.as_deref().is_none_or(|k| k == "auto"))
+        {
+            self.links.insert(
+                file,
+                (
+                    Some(episode.dandanplay_id),
+                    Some(if manual { "manual" } else { "auto" }.into()),
+                ),
+            );
         }
         Ok(())
     }
@@ -569,7 +603,9 @@ impl Db {
     }
     pub fn unlink(&self, file: FileId) {
         self.write(|s| {
-            if s.files.contains_key(&file) { s.links.insert(file, (None, Some("none".into()))); }
+            if s.files.contains_key(&file) {
+                s.links.insert(file, (None, Some("none".into())));
+            }
         });
     }
     pub fn mark(&self, id: i64) -> Mark {

@@ -128,7 +128,10 @@ impl std::fmt::Display for FormatError {
             FormatError::Newer(version) => {
                 write!(f, "文件来自更新版本的 Erika（格式 {version}），请先更新")
             }
-            FormatError::Incompatible(version) => write!(f, "备份或同步库格式不兼容（格式 {version}），此开发版不提供旧数据迁移"),
+            FormatError::Incompatible(version) => write!(
+                f,
+                "备份或同步库格式不兼容（格式 {version}），此开发版不提供旧数据迁移"
+            ),
             FormatError::Damaged(what) => write!(f, "文件已损坏：{what}"),
         }
     }

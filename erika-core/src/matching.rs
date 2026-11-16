@@ -352,7 +352,9 @@ impl ErikaEngine {
             // The opaque address is not a filename, and an upstream fingerprint
             // is not evidence that this device read the file's bytes.
             if let Err(error) = self.recognize_source_item(&source.url) {
-                self.notify(Notice::OperationFailed { reason: error.message });
+                self.notify(Notice::OperationFailed {
+                    reason: error.message,
+                });
             }
             return;
         }

@@ -39,9 +39,14 @@ impl Resource {
 
 fn resource(address: &str, kind: Resource) -> Result<Vec<u8>, String> {
     #[cfg(not(target_arch = "wasm32"))]
-    { download::read(address, kind) }
+    {
+        download::read(address, kind)
+    }
     #[cfg(target_arch = "wasm32")]
-    { let _ = kind; get(address) }
+    {
+        let _ = kind;
+        get(address)
+    }
 }
 
 pub(super) fn readme(address: &str) -> Result<Vec<u8>, String> {
@@ -50,9 +55,14 @@ pub(super) fn readme(address: &str) -> Result<Vec<u8>, String> {
 
 pub(super) fn cached_image(address: &str) -> Option<String> {
     #[cfg(not(target_arch = "wasm32"))]
-    { download::cached_image(address) }
+    {
+        download::cached_image(address)
+    }
     #[cfg(target_arch = "wasm32")]
-    { let _ = address; None }
+    {
+        let _ = address;
+        None
+    }
 }
 
 /// NipaPlay's market.
@@ -168,7 +178,10 @@ pub fn declared_permissions(script: &str) -> Vec<String> {
     }
     rest[open + 1..close]
         .split(',')
-        .map(|item| item.trim().trim_matches(|c| c == '\'' || c == '"' || c == '`'))
+        .map(|item| {
+            item.trim()
+                .trim_matches(|c| c == '\'' || c == '"' || c == '`')
+        })
         .filter(|item| !item.is_empty())
         .map(String::from)
         .collect()
@@ -191,7 +204,9 @@ pub fn read_index(address: &str) -> Result<Vec<Listing>, String> {
                 continue;
             };
             let script = beside(address, file);
-            if let Ok(text) = resource(&script, Resource::Script).map(|bytes| String::from_utf8_lossy(&bytes).into_owned()) {
+            if let Ok(text) = resource(&script, Resource::Script)
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            {
                 pack = Pack::from_manifest(&serde_json::json!({
                     "id": pack.id, "name": pack.name, "version": pack.version,
                     "description": pack.description, "author": pack.author,
@@ -209,13 +224,10 @@ pub fn read_index(address: &str) -> Result<Vec<Listing>, String> {
                 continue;
             };
             let folder = beside(address, path.trim_end_matches('/'));
-            let image = pack
-                .image
-                .as_ref()
-                .map(|image| {
-                    let address = format!("{folder}/{image}");
-                    cached_image(&address).unwrap_or(address)
-                });
+            let image = pack.image.as_ref().map(|image| {
+                let address = format!("{folder}/{image}");
+                cached_image(&address).unwrap_or(address)
+            });
             listings.push(Listing {
                 pack,
                 files: Files::Folder(folder),
@@ -236,7 +248,10 @@ pub fn read_all() -> (Vec<Listing>, Vec<String>) {
         match read_index(&index) {
             Ok(found) => {
                 for listing in found {
-                    if !listings.iter().any(|known| known.pack.id == listing.pack.id) {
+                    if !listings
+                        .iter()
+                        .any(|known| known.pack.id == listing.pack.id)
+                    {
                         listings.push(listing);
                     }
                 }
@@ -255,7 +270,8 @@ fn local_listings() -> Vec<Listing> {
         .iter()
         .filter_map(|(id, package)| {
             let mut archive = zip::ZipArchive::new(std::io::Cursor::new(*package)).ok()?;
-            let declared: Value = serde_json::from_slice(&read_entry(&mut archive, "pack.json").ok()?).ok()?;
+            let declared: Value =
+                serde_json::from_slice(&read_entry(&mut archive, "pack.json").ok()?).ok()?;
             let pack = Pack::from_pack(&declared).ok()?;
             let image = pack.image.as_ref().and_then(|name| {
                 let path = folder()?.join(".icons").join(format!("{id}.png"));
@@ -263,15 +279,19 @@ fn local_listings() -> Vec<Listing> {
                 std::fs::write(&path, read_entry(&mut archive, name).ok()?).ok()?;
                 Some(bern::prelude::MediaSource::file(path).url)
             });
-            Some(Listing { pack, files: Files::Local(package), image })
+            Some(Listing {
+                pack,
+                files: Files::Local(package),
+                image,
+            })
         })
         .collect()
 }
 
 /// One file of a package, whole.
 pub fn package_file(package: &[u8], name: &str) -> Result<Vec<u8>, String> {
-    let mut archive =
-        zip::ZipArchive::new(std::io::Cursor::new(package)).map_err(|_| "这不是 Erika 插件包".to_string())?;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(package))
+        .map_err(|_| "这不是 Erika 插件包".to_string())?;
     read_entry(&mut archive, name)
 }
 
@@ -281,9 +301,13 @@ fn read_entry<R: std::io::Read + std::io::Seek>(
     name: &str,
 ) -> Result<Vec<u8>, String> {
     use std::io::Read;
-    let file = archive.by_name(name).map_err(|_| format!("插件包里没有 {name}"))?;
+    let file = archive
+        .by_name(name)
+        .map_err(|_| format!("插件包里没有 {name}"))?;
     let mut bytes = Vec::new();
-    file.take(PACKAGE_LIMIT).read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+    file.take(PACKAGE_LIMIT)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
     Ok(bytes)
 }
 
@@ -340,7 +364,9 @@ pub fn import_folder(path: &Path) -> Result<Pack, String> {
     let script =
         std::fs::read(path.join(&pack.main)).map_err(|_| format!("文件夹里没有 {}", pack.main))?;
     let image = match &pack.image {
-        Some(image) => Some(std::fs::read(path.join(image)).map_err(|_| format!("文件夹里没有 {image}"))?),
+        Some(image) => {
+            Some(std::fs::read(path.join(image)).map_err(|_| format!("文件夹里没有 {image}"))?)
+        }
         None => None,
     };
     let readme = std::fs::read(path.join("README.md")).ok();
@@ -387,8 +413,11 @@ fn unpack_into(root: &Path, package: &[u8]) -> Result<Pack, String> {
         }
         let mut out = std::fs::File::create(&target).map_err(|error| error.to_string())?;
         // What is written counts, whatever the archive says a file holds.
-        total += std::io::copy(&mut std::io::Read::take(&mut file, PACKAGE_LIMIT - total + 1), &mut out)
-            .map_err(|error| error.to_string())?;
+        total += std::io::copy(
+            &mut std::io::Read::take(&mut file, PACKAGE_LIMIT - total + 1),
+            &mut out,
+        )
+        .map_err(|error| error.to_string())?;
         if total > PACKAGE_LIMIT {
             let _ = std::fs::remove_dir_all(&staging);
             return Err("插件包太大".into());
@@ -401,7 +430,12 @@ fn unpack_into(root: &Path, package: &[u8]) -> Result<Pack, String> {
 }
 
 /// Write the plugin's files into its folder, replacing what was there.
-fn place(pack: &Pack, script: &[u8], image: Option<&[u8]>, readme: Option<&[u8]>) -> Result<Pack, String> {
+fn place(
+    pack: &Pack,
+    script: &[u8],
+    image: Option<&[u8]>,
+    readme: Option<&[u8]>,
+) -> Result<Pack, String> {
     let root = folder().ok_or("没有可以安装插件的地方")?;
     let staging = root.join(format!(".{}.new", pack.id));
     let _ = std::fs::remove_dir_all(&staging);
@@ -418,7 +452,9 @@ fn place(pack: &Pack, script: &[u8], image: Option<&[u8]>, readme: Option<&[u8]>
     }
     write(
         "pack.json",
-        serde_json::to_string_pretty(&pack.to_value()).unwrap().as_bytes(),
+        serde_json::to_string_pretty(&pack.to_value())
+            .unwrap()
+            .as_bytes(),
     )?;
     let target = root.join(&pack.id);
     let _ = std::fs::remove_dir_all(&target);
@@ -438,7 +474,11 @@ pub fn installed() -> Vec<(Pack, PathBuf)> {
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| path.is_dir())
-        .filter(|path| !path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.')))
+        .filter(|path| {
+            !path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+        })
         .filter_map(|path| {
             let text = std::fs::read(path.join("pack.json")).ok()?;
             let pack = Pack::from_installed(&serde_json::from_slice(&text).ok()?).ok()?;
@@ -477,7 +517,8 @@ mod tests {
         use std::io::Write;
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         for (name, text) in files {
-            zip.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
             zip.write_all(text.as_bytes()).unwrap();
         }
         zip.finish().unwrap().into_inner()
@@ -492,18 +533,32 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let pack = unpack_into(
             &root,
-            &package(&[("pack.json", PACK), ("main.js", "1;"), ("lib/util.js", "2;")]),
+            &package(&[
+                ("pack.json", PACK),
+                ("main.js", "1;"),
+                ("lib/util.js", "2;"),
+            ]),
         )
         .unwrap();
         assert_eq!(pack.id, "test.pack");
-        assert_eq!(std::fs::read_to_string(root.join("test.pack/main.js")).unwrap(), "1;");
-        assert_eq!(std::fs::read_to_string(root.join("test.pack/lib/util.js")).unwrap(), "2;");
+        assert_eq!(
+            std::fs::read_to_string(root.join("test.pack/main.js")).unwrap(),
+            "1;"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("test.pack/lib/util.js")).unwrap(),
+            "2;"
+        );
         // Installed again, it replaces what was there.
         unpack_into(&root, &package(&[("pack.json", PACK), ("main.js", "3;")])).unwrap();
         assert!(!root.join("test.pack/lib").exists());
         // A name that leads out of the folder, and a package without its
         // script, install nothing.
-        let outside = package(&[("pack.json", PACK), ("main.js", "1;"), ("../escape.js", "x")]);
+        let outside = package(&[
+            ("pack.json", PACK),
+            ("main.js", "1;"),
+            ("../escape.js", "x"),
+        ]);
         assert!(unpack_into(&root, &outside).is_err());
         assert!(!root.join("escape.js").exists());
         assert!(unpack_into(&root, &package(&[("pack.json", PACK)])).is_err());
@@ -516,7 +571,8 @@ mod tests {
         // Each package the build carries declares the id it is listed by.
         for (id, package) in local::LOCAL_PLUGINS {
             let mut archive = zip::ZipArchive::new(std::io::Cursor::new(*package)).unwrap();
-            let declared: Value = serde_json::from_slice(&read_entry(&mut archive, "pack.json").unwrap()).unwrap();
+            let declared: Value =
+                serde_json::from_slice(&read_entry(&mut archive, "pack.json").unwrap()).unwrap();
             assert_eq!(Pack::from_pack(&declared).unwrap().id, *id);
         }
     }
@@ -524,7 +580,10 @@ mod tests {
     #[test]
     fn scripts_declare_their_permissions() {
         let script = "const pluginManifest = {\n  id: 'x',\n  permissions: ['danmaku.modify', \"ui.dialog\"],\n};";
-        assert_eq!(declared_permissions(script), vec!["danmaku.modify", "ui.dialog"]);
+        assert_eq!(
+            declared_permissions(script),
+            vec!["danmaku.modify", "ui.dialog"]
+        );
         assert!(declared_permissions("const a = 1;").is_empty());
     }
 }

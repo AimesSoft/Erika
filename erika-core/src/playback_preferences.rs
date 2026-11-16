@@ -11,6 +11,7 @@ impl ErikaEngine {
             "show_danmaku",
             "auto_match",
             "reduce_motion",
+            "merge_seasons",
         ] {
             if let Some(value) = self.db.setting(key).and_then(|v| v.parse().ok()) {
                 let _ = self.set_preference(key.into(), value);

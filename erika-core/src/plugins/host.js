@@ -253,6 +253,11 @@ var extend = {
     __host.call('extendWatchedButton', [enabled !== false]);
     return true;
   },
+  // Pointer-following glow on show covers and episode stills.
+  hoverGlow: function (enabled) {
+    __host.call('extendHoverGlow', [enabled !== false]);
+    return true;
+  },
   // A thin line along the bottom of the picture as long as the part played,
   // in a theme color ('accent', 'red', 'orange' or 'green'); null
   // or false takes it away.

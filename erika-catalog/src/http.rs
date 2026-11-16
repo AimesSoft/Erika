@@ -41,6 +41,14 @@ pub async fn get(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+static AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
+    ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into()
+});
+
+#[cfg(not(target_arch = "wasm32"))]
 async fn execute(
     url: &str,
     headers: &[(&str, &str)],
@@ -48,13 +56,13 @@ async fn execute(
     limit: usize,
     follow_redirects: bool,
 ) -> Result<Response> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+    let mut request = AGENT
+        .get(url)
+        .config()
         .timeout_global(Some(timeout))
         .max_redirects(if follow_redirects { 5 } else { 0 })
         .http_status_as_error(false)
-        .build()
-        .into();
-    let mut request = agent.get(url);
+        .build();
     for (key, value) in headers {
         request = request.header(*key, *value);
     }

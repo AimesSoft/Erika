@@ -613,8 +613,19 @@ mod tests {
     #[test]
     fn saved_keys_only_authorize_the_configured_stream_endpoint() {
         let base = "https://media.example.invalid/proxy";
-        let logical = stream_url(base, &Item { id: "video-1".into(), ..Default::default() }, "").unwrap();
-        assert_eq!(authorized_stream(base, &logical, "new key").unwrap(), format!("{logical}?token=new+key"));
+        let logical = stream_url(
+            base,
+            &Item {
+                id: "video-1".into(),
+                ..Default::default()
+            },
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            authorized_stream(base, &logical, "new key").unwrap(),
+            format!("{logical}?token=new+key")
+        );
         for foreign in [
             "https://media.example.invalid/api/v1/stream/id/video-1",
             "https://media.example.invalid/proxy/api/v1/stream/id/video-1?redirect=https://other.invalid",
@@ -628,9 +639,20 @@ mod tests {
             "https://media.example.invalid@other.invalid/proxy/api/v1/stream/id/video-1",
             "http://media.example.invalid/proxy/api/v1/stream/id/video-1",
         ] {
-            assert!(authorized_stream(base, foreign, "secret").is_none(), "{foreign}");
+            assert!(
+                authorized_stream(base, foreign, "secret").is_none(),
+                "{foreign}"
+            );
         }
-        let hash = stream_url(base, &Item { hash: "a".repeat(32), ..Default::default() }, "").unwrap();
+        let hash = stream_url(
+            base,
+            &Item {
+                hash: "a".repeat(32),
+                ..Default::default()
+            },
+            "",
+        )
+        .unwrap();
         assert_eq!(authorized_stream(base, &hash, ""), Some(hash));
     }
 

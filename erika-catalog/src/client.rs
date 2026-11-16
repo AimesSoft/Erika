@@ -157,20 +157,39 @@ impl Client {
         {
             return Err(Error::invalid("需要TMDB作品标识"));
         }
+        let id: u64 = reference
+            .id
+            .parse()
+            .map_err(|_| Error::invalid("作品ID不正确"))?;
+        let path = format!("tmdb/{}/{}", reference.kind.as_str(), reference.id);
         let body = self
-            .get(
-                &format!("tmdb/{}/{}", reference.kind.as_str(), reference.id),
-                &[("language", self.language.clone())],
-            )
+            .get(&path, &[("language", self.language.clone())])
             .await?;
-        tmdb::parse_work(
-            reference.kind,
-            reference
-                .id
-                .parse()
-                .map_err(|_| Error::invalid("作品ID不正确"))?,
-            &body,
-        )
+        tmdb::parse_work(reference.kind, id, &body)
+    }
+    pub async fn with_episode_groups(&self, mut work: tmdb::Work) -> tmdb::Work {
+        if work.node.kind == Kind::Tv
+            && work.split_seasons.is_empty()
+            && work
+                .seasons
+                .iter()
+                .filter(|s| s.season_number.is_some_and(|n| n > 0))
+                .count()
+                <= 1
+            && let Some(reference) = work.node.reference.as_ref()
+            && let Ok(id) = reference.id.parse::<u64>()
+            && let Ok(groups) = self.get(&format!("tmdb/tv/{id}/episode_groups"), &[]).await
+            && let Some(group_id) = tmdb::choose_seasons_group(&groups)
+            && let Ok(group_body) = self
+                .get(
+                    &format!("tmdb/tv/episode_group/{group_id}"),
+                    &[("language", self.language.clone())],
+                )
+                .await
+        {
+            let _ = work.apply_episode_group(&group_body);
+        }
+        work
     }
     pub async fn season(&self, work: &tmdb::Work, number: u32) -> Result<tmdb::Season> {
         let reference = work
@@ -180,6 +199,13 @@ impl Client {
             .ok_or_else(|| Error::invalid("作品没有TMDB身份"))?;
         if reference.kind != Kind::Tv {
             return Err(Error::invalid("电影没有季"));
+        }
+        if let Some(split) = work
+            .split_seasons
+            .iter()
+            .find(|s| s.node.season_number == Some(number))
+        {
+            return Ok(split.clone());
         }
         let body = self
             .get(
@@ -215,20 +241,82 @@ impl Client {
     pub async fn image_configuration(&self) -> Result<artwork::ImageConfiguration> {
         artwork::ImageConfiguration::parse(&self.get("tmdb/images/configuration", &[]).await?)
     }
-    pub async fn with_artwork(&self, mut work: tmdb::Work) -> tmdb::Work {
+    pub async fn season_bundle(&self) -> Result<tmdb::SeasonBundle> {
+        let body = self
+            .get("season", &[("language", self.language.clone())])
+            .await?;
+        let mut bundle: tmdb::SeasonBundle =
+            serde_json::from_value(body).map_err(|_| Error::invalid("新番缓存响应格式不正确"))?;
+        bundle.items.retain(|item| item.validate().is_ok());
+        Ok(bundle)
+    }
+    pub async fn with_artwork(&self, work: tmdb::Work) -> tmdb::Work {
+        let mut work = self.with_episode_groups(work).await;
         if let Ok(images) = self.images(&work).await {
             let preferred = artwork::languages(&self.language, &work.node.original_language);
+            let original_preferred =
+                artwork::logo_languages(&self.language, &work.node.original_language);
             work.node.artwork.refresh(artwork::Artwork {
-                poster: artwork::choose(&images, artwork::ArtworkKind::Poster, &preferred, 780),
+                poster: artwork::choose(
+                    &images,
+                    artwork::ArtworkKind::Poster,
+                    &original_preferred,
+                    780,
+                ),
                 backdrop: artwork::choose(
                     &images,
                     artwork::ArtworkKind::Backdrop,
                     &preferred,
                     1920,
                 ),
-                logo: artwork::choose(&images, artwork::ArtworkKind::Logo, &preferred, 1000),
+                logo: artwork::choose(
+                    &images,
+                    artwork::ArtworkKind::Logo,
+                    &original_preferred,
+                    640,
+                ),
                 still: None,
             });
+        }
+        let orig = work.node.original_language.trim().to_string();
+        if work.node.overview.is_empty()
+            && !orig.is_empty()
+            && let Some(reference) = work.node.reference.clone()
+            && let Ok(id) = reference.id.parse::<u64>()
+        {
+            let path = format!("tmdb/{}/{}", reference.kind.as_str(), reference.id);
+            if self.language.eq_ignore_ascii_case("zh-CN")
+                && let Ok(zh_tw) = self.get(&path, &[("language", "zh-TW".into())]).await
+                && let Ok(chinese) = tmdb::parse_work(reference.kind, id, &zh_tw)
+            {
+                if !chinese.node.overview.is_empty() {
+                    work.node.overview = chinese.node.overview;
+                }
+                for season in &mut work.seasons {
+                    if season.overview.is_empty()
+                        && let Some(found) = chinese
+                            .seasons
+                            .iter()
+                            .find(|s| s.season_number == season.season_number)
+                    {
+                        season.overview.clone_from(&found.overview);
+                    }
+                }
+            }
+            let same_language = self
+                .language
+                .split('-')
+                .next()
+                .is_some_and(|lang| lang.eq_ignore_ascii_case(&orig));
+            if work.node.overview.is_empty()
+                && !same_language
+                && orig.len() <= 16
+                && orig.bytes().all(|c| c.is_ascii_alphabetic() || c == b'-')
+                && let Ok(fallback) = self.get(&path, &[("language", orig)]).await
+                && let Ok(original) = tmdb::parse_work(reference.kind, id, &fallback)
+            {
+                work.original_overview = original.node.overview;
+            }
         }
         work
     }

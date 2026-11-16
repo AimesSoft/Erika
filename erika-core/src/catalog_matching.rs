@@ -49,7 +49,7 @@ fn card(node: &MediaNode, images: Option<&ImageConfiguration>) -> MatchingShow {
         .artwork
         .poster
         .as_ref()
-        .and_then(|asset| images?.url(asset, 780).ok())
+        .and_then(|asset| asset.url(images, 780).ok())
         .unwrap_or_default();
     MatchingShow {
         id: node.id.0.clone(),
@@ -291,8 +291,11 @@ impl ErikaEngine {
                 self.state.matching.loading = false;
                 match result {
                     Ok(work) if work.node.id.0 == id => {
-                        self.state.matching.selected =
-                            Some(card(&work.node, self.catalog_picker.images.as_ref()));
+                        let mut selected = card(&work.node, self.catalog_picker.images.as_ref());
+                        if selected.summary.is_empty() {
+                            selected.summary.clone_from(&work.original_overview);
+                        }
+                        self.state.matching.selected = Some(selected);
                         self.state.matching.seasons = work.seasons.iter().map(option).collect();
                         if work.node.kind == Kind::Movie {
                             self.state.matching.episodes = vec![option(&work.node)];

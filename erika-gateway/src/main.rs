@@ -43,19 +43,40 @@ async fn main() {
     );
     let mut gateway = Gateway::new(token, upstream, store);
     gateway.metadata = erika_gateway::metadata::Metadata::new(
-        &std::env::var("TMDB_API_BASE_URL").unwrap_or_else(|_| "https://api.themoviedb.org/3/".into()),
+        &std::env::var("TMDB_API_BASE_URL")
+            .unwrap_or_else(|_| "https://api.themoviedb.org/3/".into()),
         std::env::var("TMDB_API_READ_TOKEN").ok(),
         std::env::var("TMDB_API_KEY").ok(),
-    ).unwrap_or_else(|error| {
+    )
+    .unwrap_or_else(|error| {
         eprintln!("erika-gateway: metadata configuration: {error}");
         std::process::exit(2);
     });
-    eprintln!("erika-gateway: TMDB catalogue {}", if gateway.metadata.configured() { "enabled" } else { "not configured" });
-    gateway.public_key = std::env::var("ERIKA_GATEWAY_PUBLIC_KEY").ok().filter(|key| !key.trim().is_empty());
-    if let Some(per_minute) = std::env::var("ERIKA_GATEWAY_PER_MINUTE").ok().and_then(|value| value.parse().ok()) {
+    eprintln!(
+        "erika-gateway: TMDB catalogue {}",
+        if gateway.metadata.configured() {
+            "enabled"
+        } else {
+            "not configured"
+        }
+    );
+    gateway.public_key = std::env::var("ERIKA_GATEWAY_PUBLIC_KEY")
+        .ok()
+        .filter(|key| !key.trim().is_empty());
+    if let Some(per_minute) = std::env::var("ERIKA_GATEWAY_PER_MINUTE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+    {
         gateway.per_minute = per_minute;
     }
     let gateway = Arc::new(gateway);
+    if gateway.metadata.configured() {
+        let ddp_base = std::env::var("DANDANPLAY_PUBLIC_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1/dandanplay".into());
+        let ddp_host =
+            std::env::var("DANDANPLAY_PUBLIC_HOST").unwrap_or_else(|_| "43.142.85.190".into());
+        erika_gateway::season::spawn_warmer(gateway.clone(), ddp_base, ddp_host);
+    }
     let listener = tokio::net::TcpListener::bind(&listen)
         .await
         .unwrap_or_else(|error| {

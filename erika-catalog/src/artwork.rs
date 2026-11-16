@@ -192,8 +192,20 @@ impl ImageConfiguration {
 }
 
 pub fn languages(target: &str, original: &str) -> Vec<String> {
+    language_list([target, original, "en", "null"])
+}
+
+/// Posters and title logos prefer the work's original language (e.g. Japanese
+/// `ja`) ahead of `"zh"`, because TMDB pools Simplified and Traditional Chinese
+/// under `"zh"` where localized anime covers and logos often replace the
+/// original Japanese visual with Traditional Chinese lettering.
+pub fn logo_languages(target: &str, original: &str) -> Vec<String> {
+    language_list([original, target, "en", "null"])
+}
+
+fn language_list<const N: usize>(items: [&str; N]) -> Vec<String> {
     let mut result = Vec::new();
-    for value in [target, original, "en", "null"] {
+    for value in items {
         let value = value
             .split(['-', '_'])
             .next()
@@ -314,15 +326,27 @@ mod tests {
         let owner = ProviderRef::tmdb(Kind::Tv, 12).unwrap();
         let images = parse_images(
             &owner,
-            &json!({"id":12,"posters":[{"file_path":"/p.jpg","iso_639_1":"zh","width":500}],
+            &json!({"id":12,
+            "posters":[
+                {"file_path":"/p_zh.jpg","iso_639_1":"zh","width":800},
+                {"file_path":"/p_ja.jpg","iso_639_1":"ja","width":800}
+            ],
             "backdrops":[{"file_path":"/b.jpg","iso_639_1":null,"width":1920}],
             "logos":[{"file_path":"/l.png","iso_639_1":"ja","width":1000}]}),
         )
         .unwrap();
         let prefs = languages("zh-CN", "ja");
+        let orig_prefs = logo_languages("zh-CN", "ja");
         assert_eq!(prefs, ["zh", "ja", "en", "null"]);
+        assert_eq!(orig_prefs, ["ja", "zh", "en", "null"]);
         assert_eq!(
-            choose(&images, ArtworkKind::Logo, &prefs, 800)
+            choose(&images, ArtworkKind::Poster, &orig_prefs, 780)
+                .unwrap()
+                .file_path,
+            "/p_ja.jpg"
+        );
+        assert_eq!(
+            choose(&images, ArtworkKind::Logo, &orig_prefs, 800)
                 .unwrap()
                 .file_path,
             "/l.png"

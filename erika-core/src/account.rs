@@ -33,17 +33,91 @@ mod tests {
     #[test]
     fn outer_identity_falls_back_without_mixing_account_names_and_pictures() {
         for (dandan_signed_in, dandan_url, bangumi_signed_in, bangumi_url, expected, name, url) in [
-            (true, Some("dandan.png"), true, Some("bangumi.png"), ProfileAccount::Dandanplay, "Dandan Name", Some("dandan.png")),
-            (true, None, true, Some("bangumi.png"), ProfileAccount::Bangumi, "Bangumi Name", Some("bangumi.png")),
-            (true, Some("  "), true, Some("bangumi.png"), ProfileAccount::Bangumi, "Bangumi Name", Some("bangumi.png")),
-            (false, Some("stale.png"), true, Some("bangumi.png"), ProfileAccount::Bangumi, "Bangumi Name", Some("bangumi.png")),
-            (true, None, false, Some("stale.png"), ProfileAccount::Dandanplay, "Dandan Name", None),
-            (true, None, true, None, ProfileAccount::Dandanplay, "Dandan Name", None),
-            (false, None, true, None, ProfileAccount::Bangumi, "Bangumi Name", None),
-            (false, Some("stale.png"), false, Some("stale.png"), ProfileAccount::Local, "本地用户", None),
+            (
+                true,
+                Some("dandan.png"),
+                true,
+                Some("bangumi.png"),
+                ProfileAccount::Dandanplay,
+                "Dandan Name",
+                Some("dandan.png"),
+            ),
+            (
+                true,
+                None,
+                true,
+                Some("bangumi.png"),
+                ProfileAccount::Bangumi,
+                "Bangumi Name",
+                Some("bangumi.png"),
+            ),
+            (
+                true,
+                Some("  "),
+                true,
+                Some("bangumi.png"),
+                ProfileAccount::Bangumi,
+                "Bangumi Name",
+                Some("bangumi.png"),
+            ),
+            (
+                false,
+                Some("stale.png"),
+                true,
+                Some("bangumi.png"),
+                ProfileAccount::Bangumi,
+                "Bangumi Name",
+                Some("bangumi.png"),
+            ),
+            (
+                true,
+                None,
+                false,
+                Some("stale.png"),
+                ProfileAccount::Dandanplay,
+                "Dandan Name",
+                None,
+            ),
+            (
+                true,
+                None,
+                true,
+                None,
+                ProfileAccount::Dandanplay,
+                "Dandan Name",
+                None,
+            ),
+            (
+                false,
+                None,
+                true,
+                None,
+                ProfileAccount::Bangumi,
+                "Bangumi Name",
+                None,
+            ),
+            (
+                false,
+                Some("stale.png"),
+                false,
+                Some("stale.png"),
+                ProfileAccount::Local,
+                "本地用户",
+                None,
+            ),
         ] {
-            let dandan = Account { signed_in: dandan_signed_in, name: "Dandan Name".into(), avatar: dandan_url.map(MediaSource::new), ..Account::default() };
-            let bangumi = BangumiAccount { signed_in: bangumi_signed_in, name: "Bangumi Name".into(), avatar: bangumi_url.map(MediaSource::new), ..BangumiAccount::default() };
+            let dandan = Account {
+                signed_in: dandan_signed_in,
+                name: "Dandan Name".into(),
+                avatar: dandan_url.map(MediaSource::new),
+                ..Account::default()
+            };
+            let bangumi = BangumiAccount {
+                signed_in: bangumi_signed_in,
+                name: "Bangumi Name".into(),
+                avatar: bangumi_url.map(MediaSource::new),
+                ..BangumiAccount::default()
+            };
             let actual = profile(&dandan, &bangumi);
             assert_eq!(actual.0, name);
             assert_eq!(actual.1, expected);
@@ -168,7 +242,10 @@ pub(super) fn restore(db: &erika_store::Db) -> (Account, Option<String>) {
     if bern::secrets::read(OLD_SERVER).ok().flatten().is_some()
         && let Err(error) = bern::secrets::delete(OLD_SERVER)
     {
-        eprintln!("erika: forget the old recognition server: {}", error.message);
+        eprintln!(
+            "erika: forget the old recognition server: {}",
+            error.message
+        );
     }
     if token.is_some() && db.setting(NAME) == db.setting(USER) {
         db.set_setting(RENEWED, None);
@@ -195,10 +272,17 @@ pub(super) fn restore(db: &erika_store::Db) -> (Account, Option<String>) {
 
 /// One selection for every outer account entry. A signed-in account with
 /// a picture wins over one without; ties keep the existing dandanplay identity.
-fn profile(account: &Account, bangumi: &BangumiAccount) -> (String, ProfileAccount, Option<MediaSource>) {
-    let dandan_picture = account.avatar.as_ref()
+fn profile(
+    account: &Account,
+    bangumi: &BangumiAccount,
+) -> (String, ProfileAccount, Option<MediaSource>) {
+    let dandan_picture = account
+        .avatar
+        .as_ref()
         .filter(|picture| account.signed_in && !picture.url.trim().is_empty());
-    let bangumi_picture = bangumi.avatar.as_ref()
+    let bangumi_picture = bangumi
+        .avatar
+        .as_ref()
         .filter(|picture| bangumi.signed_in && !picture.url.trim().is_empty());
     let (name, provider, picture) = if dandan_picture.is_some() {
         (&account.name, ProfileAccount::Dandanplay, dandan_picture)
@@ -216,7 +300,8 @@ fn profile(account: &Account, bangumi: &BangumiAccount) -> (String, ProfileAccou
             ProfileAccount::Dandanplay => "弹弹play",
             ProfileAccount::Bangumi => "Bangumi",
             ProfileAccount::Local => "本地用户",
-        }.to_string()
+        }
+        .to_string()
     } else {
         name.clone()
     };
@@ -271,7 +356,9 @@ impl ErikaEngine {
     }
 
     pub(super) fn open_account_prompt(&mut self, settings_window: bool) {
-        if self.state.account_status.signed_in { return; }
+        if self.state.account_status.signed_in {
+            return;
+        }
         self.close_bangumi();
         self.state.account_status.prompt = true;
         self.state.account_status.settings_window = settings_window;
@@ -279,7 +366,9 @@ impl ErikaEngine {
     }
 
     pub(super) fn close_account_prompt(&mut self) {
-        if !self.state.account_status.prompt { return; }
+        if !self.state.account_status.prompt {
+            return;
+        }
         self.account_inbox = Arc::default();
         self.state.account_status.prompt = false;
         self.state.account_status.busy = false;
@@ -371,13 +460,18 @@ impl ErikaEngine {
                     self.state.account_status.error = message;
                 }
                 Done::Renewed(previous, renewed) => {
-                    if !self.state.account_status.signed_in || erika_dandanplay::token().as_deref() != Some(previous.as_str()) {
+                    if !self.state.account_status.signed_in
+                        || erika_dandanplay::token().as_deref() != Some(previous.as_str())
+                    {
                         continue;
                     }
                     if bern::secrets::write(TOKEN, &renewed.token).is_ok() {
                         self.db
                             .set_setting(RENEWED, Some(&erika_store::now().to_string()));
-                        erika_dandanplay::set_account(&self.state.account_status.user, Some(renewed.token));
+                        erika_dandanplay::set_account(
+                            &self.state.account_status.user,
+                            Some(renewed.token),
+                        );
                     }
                     if let Some(name) = renewed
                         .screen_name

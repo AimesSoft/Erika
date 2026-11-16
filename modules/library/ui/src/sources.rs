@@ -146,7 +146,11 @@ pub fn library_source_list(library: library::Client, #[session] draft: LibraryDr
 
 /// The same connection fields as NipaPlay's shared-host dialog.
 #[component]
-pub fn library_shared_mount(app: erika::Client, library: library::Client, #[session] draft: LibraryDraft) -> impl View {
+pub fn library_shared_mount(
+    app: erika::Client,
+    library: library::Client,
+    #[session] draft: LibraryDraft,
+) -> impl View {
     ui! {
         // A card as tall as its fields, also on a phone: they scroll above
         // the buttons where the window is too short for them.
@@ -180,7 +184,11 @@ pub fn library_shared_mount(app: erika::Client, library: library::Client, #[sess
 /// of NipaPlay's 弹弹play远程访问 dialog; editing it, empty fields keep what
 /// the source has.
 #[component]
-pub fn library_remote_mount(app: erika::Client, library: library::Client, #[session] draft: LibraryDraft) -> impl View {
+pub fn library_remote_mount(
+    app: erika::Client,
+    library: library::Client,
+    #[session] draft: LibraryDraft,
+) -> impl View {
     ui! {
         // A card as tall as its fields, also on a phone: they scroll above
         // the buttons where the window is too short for them.
@@ -391,7 +399,11 @@ pub fn library_folder_menu(library: library::Client) -> impl View {
 
 /// Content matching uses the same TMDB work/season identities on every device.
 #[component]
-pub fn library_match(app: erika::Client, library: library::Client, #[session] draft: LibraryDraft) -> impl View {
+pub fn library_match(
+    app: erika::Client,
+    library: library::Client,
+    #[session] draft: LibraryDraft,
+) -> impl View {
     ui! {
         Column(gap: 14) {
             Row(gap: 10, align: center) {
@@ -496,7 +508,11 @@ pub fn library_match(app: erika::Client, library: library::Client, #[session] dr
 }
 
 #[component]
-pub fn library_match_search(app: erika::Client, library: library::Client, #[session] draft: LibraryDraft) -> impl View {
+pub fn library_match_search(
+    app: erika::Client,
+    library: library::Client,
+    #[session] draft: LibraryDraft,
+) -> impl View {
     ui! {
         Column(gap: 8, width: 300, padding: 8) {
             TextInput(id: match_search, label: tr! { "zh-Hans" => "搜索作品", "en" => "Search titles" }, label_hidden: true, value: draft.search, prompt: tr! { "zh-Hans" => "作品名称", "en" => "Title" }) => library.match_search(draft.search)
@@ -526,7 +542,12 @@ pub fn library_match_search(app: erika::Client, library: library::Client, #[sess
 }
 
 #[component]
-pub fn library_match_row(library: library::Client, row: library::MatchRow, single: bool, #[session] draft: LibraryDraft) -> impl View {
+pub fn library_match_row(
+    library: library::Client,
+    row: library::MatchRow,
+    single: bool,
+    #[session] draft: LibraryDraft,
+) -> impl View {
     ui! {
         Row(gap: 12, align: center, padding: 6) {
             if single {

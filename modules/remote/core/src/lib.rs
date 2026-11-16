@@ -9,9 +9,9 @@ mod discovery;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod share;
 
+use bern::web_ui;
 #[cfg(not(target_arch = "wasm32"))]
 use bern::web_ui::Options;
-use bern::web_ui;
 #[cfg(not(target_arch = "wasm32"))]
 use bern::web_ui::Status;
 use bern::{CommandError, resources::Resources};
@@ -92,7 +92,11 @@ fn device_from(value: &Value) -> Device {
     Device {
         key: text("key"),
         // A client need not say what it is called.
-        name: if name.is_empty() { address.clone() } else { name },
+        name: if name.is_empty() {
+            address.clone()
+        } else {
+            name
+        },
         platform: text("platform"),
         address,
     }
@@ -271,7 +275,11 @@ impl remote::Commands for RemoteEngine {
     fn authorize(&mut self, client: String, ask: bool) -> Result<String, CommandError> {
         let device = device_from(&serde_json::from_str(&client).unwrap_or(Value::Null));
         let known = self.approved.contains(&device.key)
-            || self.state.trusted.iter().any(|other| other.key == device.key);
+            || self
+                .state
+                .trusted
+                .iter()
+                .any(|other| other.key == device.key);
         let refused = self
             .denied
             .get(&device.key)
@@ -330,7 +338,10 @@ mod tests {
         assert_eq!(engine.authorize(client("id:b"), true).unwrap(), "pending");
         assert_eq!(engine.state.asking.as_ref().unwrap().key, "id:a");
         engine.answer(true, true).unwrap();
-        assert_eq!(engine.authorize(client("id:a"), false).unwrap(), "authorized");
+        assert_eq!(
+            engine.authorize(client("id:a"), false).unwrap(),
+            "authorized"
+        );
         assert_eq!(engine.state.trusted.len(), 1);
         engine.forget_device("id:a".into()).unwrap();
         assert_eq!(engine.authorize(client("id:a"), false).unwrap(), "required");

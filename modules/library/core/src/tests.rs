@@ -115,11 +115,26 @@ fn the_wall_holds_the_shows_with_files_filed_under_their_initials() {
         use serde_json::json;
         let work=tmdb::parse_work(Kind::Tv,id as u64,&json!({"id":id,"name":title,"seasons":[{"id":id*100,"season_number":1,"name":"Season 1"}]})).unwrap();
         let season=tmdb::parse_season(&work,1,&json!({"id":id*100,"season_number":1,"name":"Season 1","episodes":[{"id":id*10000+number,"season_number":1,"episode_number":number,"name":"Episode"}]})).unwrap();
-        let item=&season.episodes[0];
-        engine.db.catalog_apply(&[work.node,season.node,item.clone()],&[],&[FileBinding {
-            file, decision:Decision::Auto,revision:0,evidence:"fixture".into(),
-            items:vec![BindingItem {media:item.id.clone(),start_seconds:None,end_seconds:None}],
-        }],&[]).unwrap();
+        let item = &season.episodes[0];
+        engine
+            .db
+            .catalog_apply(
+                &[work.node, season.node, item.clone()],
+                &[],
+                &[FileBinding {
+                    file,
+                    decision: Decision::Auto,
+                    revision: 0,
+                    evidence: "fixture".into(),
+                    items: vec![BindingItem {
+                        media: item.id.clone(),
+                        start_seconds: None,
+                        end_seconds: None,
+                    }],
+                }],
+                &[],
+            )
+            .unwrap();
         engine.db.save_progress(file, position, 1440.0);
         if position >= 1440.0 {
             let mut measured = erika_catalog::playback::Intervals::default();
@@ -156,8 +171,31 @@ fn the_wall_holds_the_shows_with_files_filed_under_their_initials() {
             .find(|l| l.letter == "Z")
             .unwrap()
             .target,
-        erika_catalog::MediaId::for_ref(&erika_catalog::ProviderRef::tmdb(erika_catalog::Kind::Tv, 1).unwrap()).0
+        erika_catalog::MediaId::for_ref(
+            &erika_catalog::ProviderRef::tmdb(erika_catalog::Kind::Season, 100).unwrap()
+        )
+        .0
     );
+    // Toggling `playback.merge_seasons` merges seasons under the work root ID.
+    engine.db.set_setting("merge_seasons", Some("true"));
+    engine.history_changed().unwrap();
+    let merged = engine
+        .listing(0, LibraryFilter::All, LibrarySort::Name)
+        .unwrap();
+    assert_eq!(
+        merged
+            .letters
+            .iter()
+            .find(|l| l.letter == "Z")
+            .unwrap()
+            .target,
+        erika_catalog::MediaId::for_ref(
+            &erika_catalog::ProviderRef::tmdb(erika_catalog::Kind::Tv, 1).unwrap()
+        )
+        .0
+    );
+    engine.db.set_setting("merge_seasons", Some("false"));
+    engine.history_changed().unwrap();
     // Videos opened one by one belong to no folder.
     assert!(
         engine
@@ -166,7 +204,12 @@ fn the_wall_holds_the_shows_with_files_filed_under_their_initials() {
             .empty
     );
     engine
-        .open(erika_catalog::MediaId::for_ref(&erika_catalog::ProviderRef::tmdb(erika_catalog::Kind::Tv, 1).unwrap()).0)
+        .open(
+            erika_catalog::MediaId::for_ref(
+                &erika_catalog::ProviderRef::tmdb(erika_catalog::Kind::Tv, 1).unwrap(),
+            )
+            .0,
+        )
         .unwrap();
     assert_eq!(engine.state.show.title, "葬送的芙莉莲");
     assert_eq!(

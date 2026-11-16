@@ -108,7 +108,14 @@ impl ErikaEngine {
         let ids: Vec<String> = self.plugins.running();
         for id in ids {
             let snapshot = self.plugin_snapshot(&id);
-            self.plugins.invoke(&id, "downloadSuggestions", Some(&torrent), &snapshot, tag, Purpose::Suggest(tag));
+            self.plugins.invoke(
+                &id,
+                "downloadSuggestions",
+                Some(&torrent),
+                &snapshot,
+                tag,
+                Purpose::Suggest(tag),
+            );
         }
     }
 
@@ -118,7 +125,11 @@ impl ErikaEngine {
             return;
         };
         for item in list {
-            let title = item.get("title").and_then(Value::as_str).unwrap_or_default().trim();
+            let title = item
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
             let Some(folder) = item.get("folder").and_then(Value::as_str) else {
                 continue;
             };
@@ -132,7 +143,9 @@ impl ErikaEngine {
                 continue;
             }
             let title = if title.is_empty() {
-                path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default()
             } else {
                 title.to_string()
             };
@@ -178,7 +191,9 @@ impl ErikaEngine {
         self.plugins.last_track = name.to_string();
         let count = show_track(kernel, &self.plugins, name)?;
         self.refresh_danmaku_density();
-        self.plugins.waiting_tracks.retain(|waiting| waiting != name);
+        self.plugins
+            .waiting_tracks
+            .retain(|waiting| waiting != name);
         self.plugins.waiting_tracks.push(name.to_string());
         self.next_chain();
         Ok(count)
@@ -230,8 +245,14 @@ impl ErikaEngine {
             "data": { "danmaku": liberika_plugin::comments_json(&chain.comments) },
         });
         let snapshot = self.plugin_snapshot(&id);
-        self.plugins
-            .invoke(&id, "onEvent", Some(&event), &snapshot, tag, Purpose::Danmaku(tag));
+        self.plugins.invoke(
+            &id,
+            "onEvent",
+            Some(&event),
+            &snapshot,
+            tag,
+            Purpose::Danmaku(tag),
+        );
     }
 
     /// The plugin whose turn it was answered: the next one's turn, or the
@@ -321,6 +342,10 @@ impl ErikaEngine {
             self.plugins.watched_button = extensions.watched_button;
             erika_anime_protocol::anime::calls::set_episode_marking(extensions.watched_button);
         }
+        #[cfg(feature = "bern-module-anime")]
+        if self.plugins.hover_glow != extensions.hover_glow {
+            self.plugins.hover_glow = extensions.hover_glow;
+            erika_anime_protocol::anime::calls::set_hover_glow(extensions.hover_glow);
+        }
     }
-
 }

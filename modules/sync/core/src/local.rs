@@ -43,10 +43,26 @@ const WEBDAV_CONFIGURATION: &str = "sync-webdav-configuration";
 /// Every category, in the order changes are taken in: what others refer
 /// to first.
 pub const CATEGORIES: &[&str] = &[
-    SETTINGS, STORE, SOURCES, SOURCE_SECRETS, ANIME, EPISODES, LINKS, PROGRESS, WATCHED, RECENTS, MARKS, ACCOUNTS,
-    EXTENSIONS, SYNC,
-    crate::catalog::NODES, crate::catalog::LINKS, crate::catalog::BINDINGS,
-    crate::catalog::DANMAKU, crate::catalog::WATCHED, crate::catalog::MARKS,
+    SETTINGS,
+    STORE,
+    SOURCES,
+    SOURCE_SECRETS,
+    ANIME,
+    EPISODES,
+    LINKS,
+    PROGRESS,
+    WATCHED,
+    RECENTS,
+    MARKS,
+    ACCOUNTS,
+    EXTENSIONS,
+    SYNC,
+    crate::catalog::NODES,
+    crate::catalog::LINKS,
+    crate::catalog::BINDINGS,
+    crate::catalog::DANMAKU,
+    crate::catalog::WATCHED,
+    crate::catalog::MARKS,
 ];
 
 /// The values the app keeps in its store rather than its database.
@@ -254,7 +270,10 @@ impl<'a> Device<'a> {
     /// Everything this device has, its private records sealed with `key`;
     /// without a key those records stay out.
     pub fn collect(&self, key: Option<&SealKey>) -> Result<State, crate::repository::SyncError> {
-        let snapshot = self.db.catalog_export().map_err(|e| crate::repository::SyncError::new(e.message))?;
+        let snapshot = self
+            .db
+            .catalog_export()
+            .map_err(|e| crate::repository::SyncError::new(e.message))?;
         let mut state = crate::catalog::records(&snapshot)?;
         self.collected_catalog.replace(Some(snapshot));
         let mut put = |category: &str, key: String, value: Value| {
@@ -373,24 +392,42 @@ impl<'a> Device<'a> {
             );
         }
         if let Some(key) = key {
-            for source in self.db.sources().into_iter().filter(|s| s.kind == "dandanplay") {
+            for source in self
+                .db
+                .sources()
+                .into_iter()
+                .filter(|s| s.kind == "dandanplay")
+            {
                 let setting = erika_store::portable::dandanplay_token_setting(source.id);
                 if let Some(token) = self.db.setting(&setting).filter(|v| !v.is_empty()) {
                     let id = format!("{}\n{}", source.kind, source.location);
-                    put(SOURCE_SECRETS, id.clone(), Value::map([(
-                        "token", Value::Sealed(key.seal(&format!("source-token\n{id}"), token.as_bytes())),
-                    )]));
+                    put(
+                        SOURCE_SECRETS,
+                        id.clone(),
+                        Value::map([(
+                            "token",
+                            Value::Sealed(
+                                key.seal(&format!("source-token\n{id}"), token.as_bytes()),
+                            ),
+                        )]),
+                    );
                 }
             }
             for (id, json) in self.db.extensions() {
                 // Canonical serialization makes an unchanged extension compare
                 // equal after import, irrespective of its original whitespace.
-                let json: serde_json::Value = serde_json::from_str(&json)
-                    .map_err(|_| crate::repository::SyncError::new("扩展数据不是有效 JSON，无法备份"))?;
+                let json: serde_json::Value = serde_json::from_str(&json).map_err(|_| {
+                    crate::repository::SyncError::new("扩展数据不是有效 JSON，无法备份")
+                })?;
                 let json = json.to_string();
-                put(EXTENSIONS, id.clone(), Value::map([(
-                    "data", Value::Sealed(key.seal(&format!("extension\n{id}"), json.as_bytes())),
-                )]));
+                put(
+                    EXTENSIONS,
+                    id.clone(),
+                    Value::map([(
+                        "data",
+                        Value::Sealed(key.seal(&format!("extension\n{id}"), json.as_bytes())),
+                    )]),
+                );
             }
             if let Some(token) = self.vault.read(DANDANPLAY_TOKEN) {
                 let mut account = self.fields(&DANDANPLAY_SETTINGS);
@@ -408,15 +445,28 @@ impl<'a> Device<'a> {
                 );
                 put(ACCOUNTS, "bangumi".into(), Value::Map(account));
             }
-            if self.scope == Scope::Export && self.db.setting("sync.webdav.url").is_some_and(|url| !url.is_empty()) {
+            if self.scope == Scope::Export
+                && self
+                    .db
+                    .setting("sync.webdav.url")
+                    .is_some_and(|url| !url.is_empty())
+            {
                 // Bind the complete destination to its password. An omitted
                 // password must never reuse the receiving device's credential.
                 let mut webdav = self.fields(&WEBDAV_SETTINGS);
-                webdav.insert("password".into(), Value::text(self.vault.read(WEBDAV_PASSWORD).unwrap_or_default()));
+                webdav.insert(
+                    "password".into(),
+                    Value::text(self.vault.read(WEBDAV_PASSWORD).unwrap_or_default()),
+                );
                 let json = Value::Map(webdav).to_json().to_string();
-                put(SYNC, "webdav".into(), Value::map([(
-                    "data", Value::Sealed(key.seal(WEBDAV_CONFIGURATION, json.as_bytes())),
-                )]));
+                put(
+                    SYNC,
+                    "webdav".into(),
+                    Value::map([(
+                        "data",
+                        Value::Sealed(key.seal(WEBDAV_CONFIGURATION, json.as_bytes())),
+                    )]),
+                );
             }
         }
         Ok(state)
@@ -460,36 +510,57 @@ impl<'a> Device<'a> {
     }
 
     /// Take in database records atomically, then apply store/vault side effects.
-    pub fn apply(&mut self, ops: &[Op], key: Option<&SealKey>) -> Result<(), crate::repository::SyncError> {
-        let media_count = ops.iter().filter(|op| crate::catalog::CATEGORIES.contains(&op.category.as_str())).count();
+    pub fn apply(
+        &mut self,
+        ops: &[Op],
+        key: Option<&SealKey>,
+    ) -> Result<(), crate::repository::SyncError> {
+        let media_count = ops
+            .iter()
+            .filter(|op| crate::catalog::CATEGORIES.contains(&op.category.as_str()))
+            .count();
         let expected = if media_count > 0 {
-            Some(self.collected_catalog.take().ok_or_else(|| crate::repository::SyncError::new("请先读取本地媒体库再同步"))?)
+            Some(
+                self.collected_catalog
+                    .take()
+                    .ok_or_else(|| crate::repository::SyncError::new("请先读取本地媒体库再同步"))?,
+            )
         } else {
             None
         };
-        let mut ordered: Vec<&Op> = ops.iter().filter(|op| !crate::catalog::CATEGORIES.contains(&op.category.as_str())).collect();
+        let mut ordered: Vec<&Op> = ops
+            .iter()
+            .filter(|op| !crate::catalog::CATEGORIES.contains(&op.category.as_str()))
+            .collect();
         ordered.sort_by_key(|op| {
-            CATEGORIES.iter().position(|category| *category == op.category).unwrap_or(CATEGORIES.len())
+            CATEGORIES
+                .iter()
+                .position(|category| *category == op.category)
+                .unwrap_or(CATEGORIES.len())
         });
         let external = |op: &&Op| matches!(op.category.as_str(), STORE | ACCOUNTS | SYNC);
-        let applied = self.db.transaction(|db| {
-            // Browser storage supplies a private draft; never capture self.db for writes.
-            let mut staged = Device::new(db, self.store, self.vault, self.scope);
-            staged.applied = self.applied.clone();
-            if let Some(expected) = expected.as_ref() {
-                crate::catalog::apply(db, expected, ops)
-                    .map_err(|e| erika_store::catalog::Error::invalid(&e.message))?;
-                staged.applied.library = true;
-                staged.applied.history = true;
-                staged.applied.marks = true;
-                staged.applied.changes += media_count;
-            }
-            for op in ordered.iter().filter(|op| !external(op)) {
-                staged.apply_one(op, key)
-                    .map_err(|e| erika_store::catalog::Error::invalid(&e.message))?;
-            }
-            Ok(staged.applied)
-        }).map_err(|e| crate::repository::SyncError::new(e.message))?;
+        let applied = self
+            .db
+            .transaction(|db| {
+                // Browser storage supplies a private draft; never capture self.db for writes.
+                let mut staged = Device::new(db, self.store, self.vault, self.scope);
+                staged.applied = self.applied.clone();
+                if let Some(expected) = expected.as_ref() {
+                    crate::catalog::apply(db, expected, ops)
+                        .map_err(|e| erika_store::catalog::Error::invalid(&e.message))?;
+                    staged.applied.library = true;
+                    staged.applied.history = true;
+                    staged.applied.marks = true;
+                    staged.applied.changes += media_count;
+                }
+                for op in ordered.iter().filter(|op| !external(op)) {
+                    staged
+                        .apply_one(op, key)
+                        .map_err(|e| erika_store::catalog::Error::invalid(&e.message))?;
+                }
+                Ok(staged.applied)
+            })
+            .map_err(|e| crate::repository::SyncError::new(e.message))?;
         self.applied = applied;
         for op in ordered.into_iter().filter(external) {
             self.apply_one(op, key)?;
@@ -497,13 +568,18 @@ impl<'a> Device<'a> {
         Ok(())
     }
 
-    fn apply_one(&mut self, op: &Op, key: Option<&SealKey>) -> Result<(), crate::repository::SyncError> {
+    fn apply_one(
+        &mut self,
+        op: &Op,
+        key: Option<&SealKey>,
+    ) -> Result<(), crate::repository::SyncError> {
         // Apply the same boundary on input, including deletions: a remote record
         // must not replace this device's identity, account fields or caches via
         // the unsealed, generic settings category.
-        if op.category == SETTINGS && (!own_setting(&op.key)
-            || (self.scope == Scope::Repository
-                && !portable(SETTINGS, &op.key, op.value.as_ref().unwrap_or(&Value::Null))))
+        if op.category == SETTINGS
+            && (!own_setting(&op.key)
+                || (self.scope == Scope::Repository
+                    && !portable(SETTINGS, &op.key, op.value.as_ref().unwrap_or(&Value::Null))))
         {
             return Ok(());
         }
@@ -554,7 +630,9 @@ impl<'a> Device<'a> {
                         if op.key != format!("{}\n{}", source.kind, source.location) {
                             return Err(crate::repository::SyncError::new("来源键与身份不一致"));
                         }
-                        let (id, new) = self.db.put_source(&source)
+                        let (id, new) = self
+                            .db
+                            .put_source(&source)
                             .map_err(|e| crate::repository::SyncError::new(e.message))?;
                         if new {
                             applied.new_sources.push(id);
@@ -563,10 +641,16 @@ impl<'a> Device<'a> {
                     None => {
                         if let Some((kind, location)) = op.key.split_once('\n') {
                             if kind == "dandanplay" {
-                                if let Some(source) = self.db.sources().into_iter()
+                                if let Some(source) = self
+                                    .db
+                                    .sources()
+                                    .into_iter()
                                     .find(|s| s.kind == kind && s.location == location)
                                 {
-                                    self.db.set_setting(&erika_store::portable::dandanplay_token_setting(source.id), None);
+                                    self.db.set_setting(
+                                        &erika_store::portable::dandanplay_token_setting(source.id),
+                                        None,
+                                    );
                                 }
                             }
                             self.db.remove_source_at(kind, location);
@@ -669,7 +753,9 @@ impl<'a> Device<'a> {
                 }
             }
             MARKS => {
-                let Ok(anime) = op.key.parse() else { return Ok(()) };
+                let Ok(anime) = op.key.parse() else {
+                    return Ok(());
+                };
                 applied.marks = true;
                 match value {
                     Some(value) => self.db.set_anime_mark(&Mark {
@@ -688,42 +774,75 @@ impl<'a> Device<'a> {
         Ok(())
     }
 
-    fn apply_webdav(&mut self, value: Option<&Value>, key: Option<&SealKey>) -> Result<(), crate::repository::SyncError> {
+    fn apply_webdav(
+        &mut self,
+        value: Option<&Value>,
+        key: Option<&SealKey>,
+    ) -> Result<(), crate::repository::SyncError> {
         let Some(value) = value else { return Ok(()) };
         if !matches!(value.get("data"), Some(Value::Sealed(_))) {
-            return Err(crate::repository::SyncError::new("WebDAV 配置必须经过同步口令加密"));
+            return Err(crate::repository::SyncError::new(
+                "WebDAV 配置必须经过同步口令加密",
+            ));
         }
-        let text = self.open(key, value, "data", WEBDAV_CONFIGURATION)
-            .ok_or_else(|| crate::repository::SyncError::new("无法解密 WebDAV 配置，已保留本机配置"))?;
+        let text = self
+            .open(key, value, "data", WEBDAV_CONFIGURATION)
+            .ok_or_else(|| {
+                crate::repository::SyncError::new("无法解密 WebDAV 配置，已保留本机配置")
+            })?;
         let fields: BTreeMap<String, String> = serde_json::from_str(&text)
             .map_err(|_| crate::repository::SyncError::new("加密的 WebDAV 配置格式不正确"))?;
         if !fields.get("url").is_some_and(|url| !url.is_empty()) {
-            return Err(crate::repository::SyncError::new("加密的 WebDAV 配置缺少地址"));
+            return Err(crate::repository::SyncError::new(
+                "加密的 WebDAV 配置缺少地址",
+            ));
         }
-        let password = fields.get("password")
+        let password = fields
+            .get("password")
             .ok_or_else(|| crate::repository::SyncError::new("加密的 WebDAV 配置缺少凭据"))?;
         // Even an empty password replaces the previous one. Do not publish a
         // new endpoint until the vault accepts its matching credential.
         if !self.vault.write(WEBDAV_PASSWORD, password) {
-            return Err(crate::repository::SyncError::new("无法保存 WebDAV 密码，已保留本机配置"));
+            return Err(crate::repository::SyncError::new(
+                "无法保存 WebDAV 密码，已保留本机配置",
+            ));
         }
-        self.put_fields(&Value::Map(fields.into_iter().map(|(key, text)| (key, Value::text(text))).collect()), &WEBDAV_SETTINGS);
+        self.put_fields(
+            &Value::Map(
+                fields
+                    .into_iter()
+                    .map(|(key, text)| (key, Value::text(text)))
+                    .collect(),
+            ),
+            &WEBDAV_SETTINGS,
+        );
         self.applied.sync = true;
         self.applied.changes += 1;
         Ok(())
     }
 
-    fn apply_private_record(&mut self, op: &Op, key: Option<&SealKey>) -> Result<(), crate::repository::SyncError> {
+    fn apply_private_record(
+        &mut self,
+        op: &Op,
+        key: Option<&SealKey>,
+    ) -> Result<(), crate::repository::SyncError> {
         let source = op.category == SOURCE_SECRETS;
         let field = if source { "token" } else { "data" };
-        let purpose = format!("{}\n{}", if source { "source-token" } else { "extension" }, op.key);
+        let purpose = format!(
+            "{}\n{}",
+            if source { "source-token" } else { "extension" },
+            op.key
+        );
         let text = match op.value.as_ref() {
             Some(value) => {
                 if !matches!(value.get(field), Some(Value::Sealed(_))) {
-                    return Err(crate::repository::SyncError::new("私密数据必须经过同步口令加密"));
+                    return Err(crate::repository::SyncError::new(
+                        "私密数据必须经过同步口令加密",
+                    ));
                 }
-                let text = self.open(key, value, field, &purpose)
-                    .ok_or_else(|| crate::repository::SyncError::new("无法解密私密数据，已保留本机记录"))?;
+                let text = self.open(key, value, field, &purpose).ok_or_else(|| {
+                    crate::repository::SyncError::new("无法解密私密数据，已保留本机记录")
+                })?;
                 Some(text)
             }
             None => None,
@@ -732,7 +851,10 @@ impl<'a> Device<'a> {
             let Some(("dandanplay", location)) = op.key.split_once('\n') else {
                 return Err(crate::repository::SyncError::new("来源凭据身份不正确"));
             };
-            let target = self.db.sources().into_iter()
+            let target = self
+                .db
+                .sources()
+                .into_iter()
                 .find(|s| s.kind == "dandanplay" && s.location == location);
             match target {
                 Some(target) => {
@@ -749,9 +871,14 @@ impl<'a> Device<'a> {
             }
             self.applied.library = true;
         } else {
-            let json = text.map(|text| serde_json::from_str::<serde_json::Value>(&text)
-                .map(|value| value.to_string())
-                .map_err(|_| crate::repository::SyncError::new("加密的扩展数据不是有效 JSON")))
+            let json = text
+                .map(|text| {
+                    serde_json::from_str::<serde_json::Value>(&text)
+                        .map(|value| value.to_string())
+                        .map_err(|_| {
+                            crate::repository::SyncError::new("加密的扩展数据不是有效 JSON")
+                        })
+                })
                 .transpose()?;
             self.db.set_extension(&op.key, json.as_deref());
             self.applied.extensions = true;
@@ -791,15 +918,19 @@ impl crate::repository::Local for Device<'_> {
     fn collect(&mut self, key: Option<&SealKey>) -> Result<State, crate::repository::SyncError> {
         Device::collect(self, key)
     }
-    fn apply(&mut self, ops: &[Op], key: Option<&SealKey>) -> Result<(), crate::repository::SyncError> {
+    fn apply(
+        &mut self,
+        ops: &[Op],
+        key: Option<&SealKey>,
+    ) -> Result<(), crate::repository::SyncError> {
         Device::apply(self, ops, key)
     }
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod credentials_tests;
+#[cfg(test)]
+mod tests;
 
 /// How many entries each category of `state` holds.
 pub fn counts(state: &State) -> BTreeMap<String, usize> {

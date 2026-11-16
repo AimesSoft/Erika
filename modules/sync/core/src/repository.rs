@@ -372,15 +372,15 @@ impl Sync<'_> {
             }
         }
 
-        let base = base.filter(|base| base.place == self.place && base.repository == manifest.repository);
+        let base =
+            base.filter(|base| base.place == self.place && base.repository == manifest.repository);
         // Compaction changes the remote representation, not our common ancestor.
         // Keep it for the three-way merge so an undo cannot be resurrected merely
         // because another device compacted the repository.
         let previously_locked = base.as_ref().is_some_and(|base| !base.sealed_available);
         let previous_agreement = base.as_ref().map(|base| base.state.clone());
         let base = base.filter(|base| {
-            base.snapshot == manifest.snapshot
-                && base.snapshot_sha256 == manifest.snapshot_sha256
+            base.snapshot == manifest.snapshot && base.snapshot_sha256 == manifest.snapshot_sha256
         });
         let (mut remote, mut applied, agreed) = match base {
             Some(base) => (base.state.clone(), base.applied, Some(base.state)),
@@ -432,20 +432,31 @@ impl Sync<'_> {
 
         let local = merge::select(&self.local.collect(key.as_ref())?, &categories);
         let theirs = merge::select(&remote, &categories);
-        let agreed = agreed.as_ref().map(|state| merge::select(state, &categories));
+        let agreed = agreed
+            .as_ref()
+            .map(|state| merge::select(state, &categories));
         let mut merged_selected = crate::catalog::merge(agreed.as_ref(), &theirs, &local)?;
         if previously_locked && key.is_some() {
             // A locked device cached the ciphertext, but never applied it. On
             // unlock, its missing private rows are not deletions relative to
             // that cache. Only those categories need a first-time merge.
-            let sealed: BTreeSet<String> = crate::local::SEALED_CATEGORIES.iter()
+            let sealed: BTreeSet<String> = crate::local::SEALED_CATEGORIES
+                .iter()
                 .filter(|category| categories.contains(**category))
-                .map(|category| category.to_string()).collect();
-            let first = merge::merge_first(&merge::select(&theirs, &sealed), &merge::select(&local, &sealed));
+                .map(|category| category.to_string())
+                .collect();
+            let first = merge::merge_first(
+                &merge::select(&theirs, &sealed),
+                &merge::select(&local, &sealed),
+            );
             for category in sealed {
                 match first.get(&category) {
-                    Some(entries) => { merged_selected.insert(category, entries.clone()); }
-                    None => { merged_selected.remove(&category); }
+                    Some(entries) => {
+                        merged_selected.insert(category, entries.clone());
+                    }
+                    None => {
+                        merged_selected.remove(&category);
+                    }
                 }
             }
         }

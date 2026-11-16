@@ -26,24 +26,37 @@ fn scan(conn: &Connection, owner: &str, id: &str) -> Result<(Scan, String)> {
 }
 /// Used by registration and current-format restore inside their write boundary.
 pub(super) fn register(
-    conn: &Connection, owner: &str, descriptor: &Descriptor, added: i64,
+    conn: &Connection,
+    owner: &str,
+    descriptor: &Descriptor,
+    added: i64,
 ) -> Result<(i64, bool)> {
     descriptor.validate(owner)?;
-    let old: Option<(i64, String)> = conn.query_row(
-        "SELECT source_id,server_id FROM plugin_source WHERE owner=?1 AND external_id=?2",
-        params![owner, descriptor.id], |r| Ok((r.get(0)?, r.get(1)?)),
-    ).optional()?;
+    let old: Option<(i64, String)> = conn
+        .query_row(
+            "SELECT source_id,server_id FROM plugin_source WHERE owner=?1 AND external_id=?2",
+            params![owner, descriptor.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
     if let Some((id, server)) = old {
         if server != descriptor.server_id {
             return Err(Error::conflict("同一来源不能更换服务器身份"));
         }
-        conn.execute("UPDATE source SET name=?2,content=?3 WHERE id=?1",
-            params![id, descriptor.name, descriptor.content])?;
+        conn.execute(
+            "UPDATE source SET name=?2,content=?3 WHERE id=?1",
+            params![id, descriptor.name, descriptor.content],
+        )?;
         return Ok((id, false));
     }
     conn.execute(
         "INSERT INTO source(kind,name,location,content,added_at) VALUES('plugin',?1,?2,?3,?4)",
-        params![descriptor.name, descriptor.location(owner), descriptor.content, added],
+        params![
+            descriptor.name,
+            descriptor.location(owner),
+            descriptor.content,
+            added
+        ],
     )?;
     let id = conn.last_insert_rowid();
     conn.execute(
@@ -61,7 +74,8 @@ impl Db {
             .map_err(Into::into)
     }
     pub fn plugin_register_source(&self, owner: &str, descriptor: &Descriptor) -> Result<i64> {
-        self.put_source(&descriptor.portable(owner)).map(|(id, _)| id)
+        self.put_source(&descriptor.portable(owner))
+            .map(|(id, _)| id)
     }
     pub fn plugin_begin_scan(&self, owner: &str, source: i64) -> Result<Scan> {
         let tx = transaction(&self.conn)?;
@@ -168,7 +182,8 @@ impl Db {
         if complete {
             let external: String = tx.query_row(
                 "SELECT external_id FROM plugin_source WHERE source_id=?1",
-                [scan.source], |r| r.get(0),
+                [scan.source],
+                |r| r.get(0),
             )?;
             let rows: Vec<(String, String)> = tx
                 .prepare(
@@ -301,7 +316,8 @@ impl Db {
         let server = owned(&tx, owner, request.source)?;
         let external: String = tx.query_row(
             "SELECT external_id FROM plugin_source WHERE source_id=?1",
-            [request.source], |r| r.get(0),
+            [request.source],
+            |r| r.get(0),
         )?;
         let url = model::address(owner, &external, &server, &slot);
         let result = if let Some(item) = self.plugin_source_item(&url)? {

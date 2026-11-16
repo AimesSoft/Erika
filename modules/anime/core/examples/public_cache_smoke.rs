@@ -47,7 +47,7 @@ fn main() {
         engine.wake();
         assert!(
             poster_started.elapsed() < Duration::from_secs(60),
-            "poster did not reach native image cache"
+            "details did not load"
         );
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -58,10 +58,29 @@ fn main() {
     );
     assert!(!engine.state().show.summary.is_empty());
     assert!(!engine.state().show.poster.url.is_empty());
-    assert!(engine.state().show.poster.open().is_ok());
+    // Posters are web addresses now; the image views load them, not open().
+    assert!(engine.state().show.poster.url.starts_with("https://"));
     wait(&mut engine, true);
+    // Pick a show with its own TMDB season when the first row is a multi-year
+    // single-season anime whose Bangumi subject covers only the latest cour.
+    if engine.state().comments.is_empty()
+        && let Some(separate) = engine
+            .state()
+            .week
+            .iter()
+            .flat_map(|day| &day.shows)
+            .find(|show| show.title.contains("侦探") || show.title.contains("面包"))
+            .map(|show| show.id.clone())
+    {
+        engine.open_scheduled(separate).unwrap();
+        while engine.state().details_loading {
+            engine.wake();
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        wait(&mut engine, true);
+    }
     println!(
-        "Guest: {count} shows, cached poster and summary, {} reviews ({})",
+        "Guest: {count} shows, poster and summary, {} reviews ({})",
         engine.state().comments.len(),
         engine.state().comments_source
     );

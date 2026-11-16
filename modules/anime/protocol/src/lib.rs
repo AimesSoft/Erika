@@ -238,6 +238,10 @@ pub mod anime {
         /// language.
         #[content]
         pub numeral: String,
+        /// Non-empty on the first episode of a season when multiple seasons
+        /// are merged into one strip (e.g. "第 2 季").
+        #[content]
+        pub season_marker: String,
         /// Watched: played to the end here, or marked watched here, on
         /// dandanplay or on Bangumi. The film writes 「· 已看」 after the
         /// note.
@@ -313,6 +317,26 @@ pub mod anime {
     }
 
     #[value]
+    pub enum EpisodeFilter {
+        #[label(tr! { "zh-Hans" => "全部", "en" => "All" })]
+        All,
+        #[label(tr! { "zh-Hans" => "有文件", "en" => "Available" })]
+        Available,
+        #[label(tr! { "zh-Hans" => "未看", "en" => "Unwatched" })]
+        Unwatched,
+        #[label(tr! { "zh-Hans" => "已看", "en" => "Watched" })]
+        Watched,
+    }
+
+    #[value]
+    pub enum EpisodeSort {
+        #[label(tr! { "zh-Hans" => "正序", "en" => "Asc" })]
+        Ascending,
+        #[label(tr! { "zh-Hans" => "倒序", "en" => "Desc" })]
+        Descending,
+    }
+
+    #[value]
     pub enum MappingProvider {
         #[label(tr! { "zh-Hans" => "Bangumi", "en" => "Bangumi" })]
         Bangumi,
@@ -356,6 +380,9 @@ pub mod anime {
         #[content]
         pub reference: String,
         pub relation: MappingRelation,
+        /// False for a candidate the calendar recorded; it shows public
+        /// reviews but writes no account until confirmed.
+        pub confirmed: bool,
     }
 
     #[state]
@@ -399,6 +426,8 @@ pub mod anime {
         pub opened_from_schedule: bool,
         /// The open work's canonical UUID, empty when closed.
         pub opened: String,
+        /// The card identity that opened this details visit, for shared-element poster flights.
+        pub hero_id: String,
         /// Opaque lifetime of this details visit; changes even when reopening the same media.
         pub view_generation: String,
         pub show: Show,
@@ -411,6 +440,16 @@ pub mod anime {
         #[content]
         pub selected_season_title: String,
         pub episodes: Vec<Episode>,
+        pub episode_list_open: bool,
+        pub episode_filter: EpisodeFilter,
+        pub episode_sort: EpisodeSort,
+        pub has_seasons: bool,
+        pub listed_episodes: Vec<Episode>,
+        pub has_listed_episodes: bool,
+        pub episode_jump_target: String,
+        pub episode_jump_seq: i64,
+        #[content]
+        pub episode_jump_error: String,
         /// Stable scroll targets within the selected season, not episode numbers.
         pub first_episode: String,
         pub last_episode: String,
@@ -440,6 +479,8 @@ pub mod anime {
         #[content]
         pub sync_note: String,
         /// The dialogs of the score and of the review.
+        pub status_open: bool,
+        pub comments_open: bool,
         pub rating_open: bool,
         pub review_open: bool,
         pub review_loading: bool,
@@ -454,6 +495,9 @@ pub mod anime {
         /// watched or not. Off until a plugin turns it on through
         /// `set_episode_marking`.
         pub episode_marking: bool,
+        /// Pointer-following glow on detail covers and episode stills, enabled
+        /// by the `erika.hover_glow` plugin rather than built in.
+        pub hover_glow: bool,
         pub can_map: bool,
         pub mapping_open: bool,
         pub mapping_targets: Vec<MappingTarget>,
@@ -540,6 +584,13 @@ pub mod anime {
         #[errors("unknown_episode")]
         fn play_episode(&mut self, id: String) -> Result<(), CommandError>;
 
+        /// Open or close the episode list sub-window on the details page.
+        fn show_episode_list(&mut self, open: bool) -> Result<(), CommandError>;
+        fn set_episode_filter(&mut self, filter: EpisodeFilter) -> Result<(), CommandError>;
+        fn set_episode_sort(&mut self, sort: EpisodeSort) -> Result<(), CommandError>;
+        fn jump_to_episode(&mut self, input: String) -> Result<(), CommandError>;
+        fn play_listed_episode(&mut self, id: String) -> Result<(), CommandError>;
+
         /// Mark where the user is with the open show. With an account it
         /// is synced, never over a status further along there.
         fn set_status(&mut self, status: WatchStatus) -> Result<(), CommandError>;
@@ -552,6 +603,8 @@ pub mod anime {
         fn pick_score(&mut self, score: Score) -> Result<(), CommandError>;
 
         /// Show or hide the score dialog.
+        fn show_status(&mut self, open: bool) -> Result<(), CommandError>;
+        fn show_comments(&mut self, open: bool) -> Result<(), CommandError>;
         fn show_rating(&mut self, open: bool) -> Result<(), CommandError>;
 
         /// Show the review dialog, reading the review on Bangumi first,
@@ -572,12 +625,23 @@ pub mod anime {
         /// that offers them turns them on.
         fn set_episode_marking(&mut self, enabled: bool) -> Result<(), CommandError>;
 
+        /// Turn pointer-following glow on detail covers and episodes on or off.
+        fn set_hover_glow(&mut self, enabled: bool) -> Result<(), CommandError>;
+
         /// Open the current work's provider-link editor; no legacy identity merge.
         fn show_mappings(&mut self, open: bool) -> Result<(), CommandError>;
         fn select_mapping_target(&mut self, id: String) -> Result<(), CommandError>;
         /// Uses the revisions captured when this target was displayed.
-        fn save_provider_mapping(&mut self, provider: MappingProvider, kind: MappingKind, relation: MappingRelation, reference: String) -> Result<(), CommandError>;
+        fn save_provider_mapping(
+            &mut self,
+            provider: MappingProvider,
+            kind: MappingKind,
+            relation: MappingRelation,
+            reference: String,
+        ) -> Result<(), CommandError>;
         fn remove_provider_mapping(&mut self, row: String) -> Result<(), CommandError>;
+        /// Confirm a recorded candidate as an exact link.
+        fn confirm_provider_mapping(&mut self, row: String) -> Result<(), CommandError>;
 
         /// Sync the open show's marks with the accounts now.
         fn sync_marks(&mut self) -> Result<(), CommandError>;

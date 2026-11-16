@@ -103,26 +103,27 @@ pub async fn bangumi(subject: i64) -> Result<Vec<Review>> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     let body = {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(4)))
-            .max_redirects(0)
-            .build()
-            .into();
-        let text = agent
-            .get(format!(
-                "https://next.bgm.tv/p1/subjects/{subject}/comments?limit=20&offset=0"
-            ))
-            .header("User-Agent", &crate::bangumi::user_agent())
-            .header("Accept", "application/json")
-            .call()
-            .and_then(|mut r| {
-                r.body_mut()
-                    .with_config()
-                    .limit(8 * 1024 * 1024)
-                    .read_to_string()
-            })
-            .map_err(|_| Error::new("暂时连不上 Bangumi"))?;
-        serde_json::from_str(&text).map_err(|_| Error::new("Bangumi评论格式不正确"))?
+        let response = erika_catalog::http::get(
+            &format!("https://next.bgm.tv/p1/subjects/{subject}/comments?limit=20&offset=0"),
+            &[
+                ("User-Agent", &crate::bangumi::user_agent()),
+                ("Accept", "application/json"),
+            ],
+            std::time::Duration::from_secs(15),
+            8 * 1024 * 1024,
+            false,
+        )
+        .await
+        .map_err(|_| Error::new("暂时连不上 Bangumi"))?;
+        if !(200..300).contains(&response.status) {
+            return Err(Error::new(format!(
+                "Bangumi 评论请求失败（{}）",
+                response.status
+            )));
+        }
+        response
+            .json()
+            .map_err(|_| Error::new("Bangumi评论格式不正确"))?
     };
     // next.bgm.tv does not allow cross-origin browser requests. The fixed public
     // gateway forwards no website cookie, account token or caller-chosen URL.

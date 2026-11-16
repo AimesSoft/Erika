@@ -90,7 +90,11 @@ impl Pack {
     }
 
     fn common(value: &Value) -> Result<Pack, String> {
-        let (id, name, version) = (text(value, "id"), text(value, "name"), text(value, "version"));
+        let (id, name, version) = (
+            text(value, "id"),
+            text(value, "name"),
+            text(value, "version"),
+        );
         if id.is_empty() || name.is_empty() || version.is_empty() {
             return Err("插件声明缺少 id、name 或 version".into());
         }
@@ -98,7 +102,9 @@ impl Pack {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
         {
-            return Err(format!("插件 id「{id}」只能有字母、数字、点、下划线和连字符"));
+            return Err(format!(
+                "插件 id「{id}」只能有字母、数字、点、下划线和连字符"
+            ));
         }
         let requires = value
             .get("requires")
@@ -169,7 +175,10 @@ impl Pack {
 
     /// The permissions Erika knows, as the market tags them.
     pub fn tags(&self) -> Vec<PluginPermission> {
-        self.permissions.iter().filter_map(|id| permission(id)).collect()
+        self.permissions
+            .iter()
+            .filter_map(|id| permission(id))
+            .collect()
     }
 
     /// What it needs that Erika cannot give, in words for the user.
@@ -335,8 +344,10 @@ mod tests {
         assert!(!pack.fits("0.1.0") && pack.fits("0.2.0") && pack.fits("1.0"));
         assert_eq!(Pack::from_installed(&pack.to_value()).unwrap(), pack);
         assert!(
-            Pack::from_pack(&json!({ "id": "a", "name": "a", "version": "1", "category": "music" }))
-                .is_err()
+            Pack::from_pack(
+                &json!({ "id": "a", "name": "a", "version": "1", "category": "music" })
+            )
+            .is_err()
         );
     }
 

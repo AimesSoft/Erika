@@ -150,7 +150,13 @@ pub fn player_picture_content(app: erika::Client, players: Players) -> impl View
 }
 
 #[component]
-pub fn player_touch_gestures(app: erika::Client, half_width: f64, hud_x: f64, height: f64, #[session] draft: PlayerDraft) -> impl View {
+pub fn player_touch_gestures(
+    app: erika::Client,
+    half_width: f64,
+    hud_x: f64,
+    height: f64,
+    #[session] draft: PlayerDraft,
+) -> impl View {
     ui! {
         Stack(align: top_leading) {
             ScreenBrightness(value: draft.brightness, available: draft.brightness_available)
@@ -190,7 +196,13 @@ pub fn player_touch_gestures(app: erika::Client, half_width: f64, hud_x: f64, he
 }
 
 #[component]
-pub fn player_touch_tap(app: erika::Client, width: f64, height: f64, right: bool, #[session] draft: PlayerDraft) -> impl View {
+pub fn player_touch_tap(
+    app: erika::Client,
+    width: f64,
+    height: f64,
+    right: bool,
+    #[session] draft: PlayerDraft,
+) -> impl View {
     ui! {
         if right {
             Button(id: right_touch_picture, label: tr! { "zh-Hans" => "显示或隐藏播放控制", "en" => "Show or hide playback controls" }, variant: player_picture) {
@@ -210,7 +222,12 @@ pub fn player_touch_tap(app: erika::Client, width: f64, height: f64, right: bool
 /// top half, out of reach, and the desktop's rows the bottom half, so the
 /// picture never steps back.
 #[component]
-pub fn player_tabletop(app: erika::Client, players: Players, windows: AppWindows, #[session] draft: PlayerDraft) -> impl View {
+pub fn player_tabletop(
+    app: erika::Client,
+    players: Players,
+    windows: AppWindows,
+    #[session] draft: PlayerDraft,
+) -> impl View {
     ui! {
         Column(gap: 0) {
             Stack(variant: player_black) {

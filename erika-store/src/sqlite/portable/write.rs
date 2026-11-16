@@ -12,7 +12,10 @@ pub(in crate::sqlite) struct Write<'a> {
 impl<'a> Write<'a> {
     pub(in crate::sqlite) fn begin(conn: &'a Connection) -> Result<Self> {
         let root = if conn.is_autocommit() {
-            Some(Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?)
+            Some(Transaction::new_unchecked(
+                conn,
+                TransactionBehavior::Immediate,
+            )?)
         } else {
             // Savepoints with the same name form a stack; RELEASE / ROLLBACK TO
             // always target the most recent one on this connection.
@@ -42,9 +45,11 @@ impl Drop for Write<'_> {
     fn drop(&mut self) {
         if self.nested {
             // No values from the imported record belong in diagnostic output.
-            if self.conn.execute_batch(
-                "ROLLBACK TO erika_portable_write; RELEASE erika_portable_write",
-            ).is_err() {
+            if self
+                .conn
+                .execute_batch("ROLLBACK TO erika_portable_write; RELEASE erika_portable_write")
+                .is_err()
+            {
                 eprintln!("erika-store: could not roll back a portable write");
             }
         }

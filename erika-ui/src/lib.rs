@@ -58,7 +58,7 @@ style! {
     // A page a navigation stack pushes over the detail: the stack draws its
     // own background behind its pages otherwise. A television keeps its own.
     #[target(macos, ios, windows, linux, android, browser)]
-    Stack.detail_page { background: color(light: "#F2F2F2", dark: "#1E1E1E") }
+    Stack.detail_page { background: color(light: "#1E1E1E", dark: "#1E1E1E"), foreground: color(light: "#FFFFFF", dark: "#FFFFFF") }
     #[target(browser, windows, linux, android)]
     Stack.app_window { background: color(light: "#F2F2F2", dark: "#1E1E1E") }
 
@@ -297,6 +297,11 @@ style! {
         recent_in: slide(edge: bottom, distance: 10, jelly),
         // A new page fades in and rises 12 points (T3).
         page_in: slide(bottom, 12, smooth),
+        // Full-window details (T1): dark wash fades smoothly in and out in
+        // lockstep with the shared-element poster flight; filmstrip rises in.
+        detail_in: fade(smooth),
+        detail_out: fade(smooth),
+        detail_film_in: slide(bottom, 16, bouncy),
         settings_page_in: slide(bottom, 8, smooth),
         drop_in: slide(top, 24, jelly),
         pop_in: pop(from: 0.4, bouncy),
@@ -465,6 +470,25 @@ style! {
 
     // A show's tags (`.d-tags span`): pills on the neutral fill.
     Stack.tag_pill { background: fill.subtle, corner: 999 }
+    // Selected season inside the detail page's Liquid Glass season switcher.
+    Stack.season_active_pill { background: fill.strong, corner: 999 }
+
+    #[target(macos, ios, tvos)]
+    Stack.detail_poster {
+        corner: poster,
+        hover: scale(1.03, snappy) + shadow(14, y: 6, opacity: 0.18),
+        settle: jelly,
+    }
+    #[target(windows, linux, android, browser)]
+    Stack.detail_poster {
+        corner: poster,
+    }
+
+    Button.watch_capsule {
+        hover: background(color(light: "#FFFFFF", dark: "#FFFFFF")) + foreground(color(light: "#141416", dark: "#141416")) + scale(1.02, snappy),
+        pressed: background(color(light: "#E5E5EA", dark: "#E5E5EA")) + foreground(color(light: "#141416", dark: "#141416")) + scale(0.97, press),
+        settle: jelly,
+    }
     // An account's picture is round: the disc cuts the shoulders.
     Stack.avatar { corner: 999 }
     // No picture yet: the app's logo in white on a dark grey disc.
@@ -503,7 +527,7 @@ style! {
 
     Button.poster {
         corner: poster,
-        hover: scale(1.03, snappy) + shadow(14, y: 6, opacity: 0.18),
+        hover: scale(1.03, snappy) + shadow(7, y: 5, opacity: 0.16),
         pressed: scale(0.97, press),
         settle: jelly,
     }
@@ -541,7 +565,16 @@ style! {
     // A cell of the film.
     Button.film {
         corner: large,
+        hover: scale(1.03, snappy) + shadow(14, y: 6, opacity: 0.18),
         pressed: scale(0.97, press),
+        settle: jelly,
+    }
+
+    Button.episode_row {
+        corner: row,
+        padding: 6,
+        hover: background(fill.subtle) + scale(1.02, snappy),
+        pressed: scale(0.98, press),
         settle: jelly,
     }
 
@@ -868,17 +901,13 @@ pub fn main_shell(
                     }
                 }
                 Detail(titled: false) {
-                    // The window has one toolbar: the covering page's while
-                    // it is open.
-                    if !(build.modules.anime && anime.opened != "" && (anime.back == BackTo::Search || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back == BackTo::Home) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library))) {
-                        desktop_toolbar(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
-                    }
+                    desktop_toolbar(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
                     PageContent(slot: main, selected: draft.page)
                 }
             }
             }
             if build.modules.anime && anime.opened != "" && (anime.back == BackTo::Search || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back == BackTo::Home) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library)) {
-                Stack(variant: detail_page, align: top_leading) {
+                Stack(variant: detail_page, appearance: dark, tint: text.primary, align: top_leading, appear: detail_in, disappear: detail_out) {
                     desktop_toolbar(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows)
                     details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
                 }
@@ -924,14 +953,14 @@ pub fn desktop_toolbar(
     ui! {
         Toolbar {
             if build.modules.anime && anime.opened != "" && (anime.back == BackTo::Search || (draft.page == MainPage::Home && !anime.opened_from_schedule && anime.back == BackTo::Home) || (draft.page == MainPage::New && anime.opened_from_schedule) || (build.modules.library && draft.page == MainPage::Library && anime.back == BackTo::Library)) {
-                Button(id: back, icon: "chevron.left", label: anime.back, shortcut: app.keys.back) => anime.close()
+                IconButton(id: back, icon: "chevron.left", label: anime.back, shortcut: app.keys.back) => anime.close()
             }
             Spacer
-            Search(id: search, value: draft.query, style: palette, width: 640, height: 480, panel_prompt: tr! { "zh-Hans" => "搜索番剧、剧集、设置和操作", "en" => "Search shows, episodes, settings and actions" }, prompt: tr! { "zh-Hans" => "搜索番剧、文件、设置", "en" => "Search shows, files and settings" }, shortcut: app.keys.search) {
+            Search(id: search, value: draft.query, style: palette, display: icon, width: 640, height: 480, panel_prompt: tr! { "zh-Hans" => "搜索番剧、剧集、设置和操作", "en" => "Search shows, episodes, settings and actions" }, prompt: tr! { "zh-Hans" => "搜索", "en" => "Search" }, shortcut: app.keys.search) {
                 search_results(app: app, #[cfg(feature = "bern-module-anime")] anime: anime, windows: windows, phone: false)
             }
             if !window.rail {
-                Button(id: open_file, label: tr! { "zh-Hans" => "打开", "en" => "Open" }, icon: "plus", pick: draft.file, files: "video", shortcut: app.keys.open_file) => app.open_file(draft.file)
+                IconButton(id: open_file, label: tr! { "zh-Hans" => "打开", "en" => "Open" }, icon: "folder", pick: draft.file, files: "video", shortcut: app.keys.open_file) => app.open_file(draft.file)
             }
         }
     }
@@ -961,7 +990,9 @@ pub fn fold_side(
     ui! {
         Stack(variant: phone_page, align: top_leading) {
             if build.modules.anime && anime.opened != "" {
-                details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+                Stack(appear: detail_in, disappear: detail_out) {
+                    details(app: app, #[cfg(feature = "bern-module-anime")] anime: anime)
+                }
             } else if build.modules.anime {
                 stage_column(anime: anime)
             }

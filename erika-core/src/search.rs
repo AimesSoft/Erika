@@ -200,13 +200,6 @@ pub(crate) fn settings(text: &str, features: &FeatureSelection) -> Vec<SettingRe
             features.enhance,
         ),
         (
-            I::Presets,
-            P::Optional,
-            "可选功能预设 optional feature presets",
-            "纯粹播放 看番 全都要 极简 pure anime everything",
-            true,
-        ),
-        (
             I::EnableAccount,
             P::Optional,
             "启用账号 enable account",

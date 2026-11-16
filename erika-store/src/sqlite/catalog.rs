@@ -3,6 +3,7 @@
 use super::Db;
 use crate::catalog::{
     BindingChange, Error, MediaFile, MediaMark, MediaShelf, MediaWatching, Result,
+    fold_season_shelf,
 };
 use erika_catalog::{
     BindingItem, DanmakuBinding, Decision, FileBinding, Kind, MediaId, MediaNode, Provider,
@@ -130,12 +131,17 @@ pub(super) fn put_node(conn: &Connection, input: &MediaNode) -> Result<MediaNode
     }
     let previous = node(conn, &value.id)?;
     if let Some(previous) = &previous {
+        let same_episode = previous.kind == Kind::Episode
+            && value.kind == Kind::Episode
+            && previous.root == value.root
+            && previous.reference == value.reference;
         if previous.kind != value.kind
-            || previous.parent != value.parent
             || previous.root != value.root
             || previous.reference != value.reference
-            || previous.season_number != value.season_number
-            || previous.episode_number != value.episode_number
+            || (!same_episode
+                && (previous.parent != value.parent
+                    || previous.season_number != value.season_number
+                    || previous.episode_number != value.episode_number))
         {
             return Err(Error::conflict("媒体身份或层级不能由资料刷新改写"));
         }
@@ -148,7 +154,7 @@ pub(super) fn put_node(conn: &Connection, input: &MediaNode) -> Result<MediaNode
     value.revision = next_revision(previous.as_ref().map_or(0, |n| n.revision))?;
     let tmdb_kind = value.reference.as_ref().map(|r| r.kind.as_str());
     let tmdb_id = value.reference.as_ref().map(|r| r.id.as_str());
-    conn.execute("INSERT INTO media_node(id,kind,parent_id,root_id,season_number,episode_number,tmdb_kind,tmdb_id,title,data,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET title=excluded.title,data=excluded.data,revision=excluded.revision", params![value.id.0,value.kind.as_str(),value.parent.as_ref().map(|p| &p.0),value.root.0,value.season_number,value.episode_number,tmdb_kind,tmdb_id,value.title,json(&value)?,sql_revision(value.revision)?])?;
+    conn.execute("INSERT INTO media_node(id,kind,parent_id,root_id,season_number,episode_number,tmdb_kind,tmdb_id,title,data,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id,season_number=excluded.season_number,episode_number=excluded.episode_number,title=excluded.title,data=excluded.data,revision=excluded.revision", params![value.id.0,value.kind.as_str(),value.parent.as_ref().map(|p| &p.0),value.root.0,value.season_number,value.episode_number,tmdb_kind,tmdb_id,value.title,json(&value)?,sql_revision(value.revision)?])?;
     for asset in [
         &value.artwork.poster,
         &value.artwork.backdrop,
@@ -526,6 +532,27 @@ impl Db {
         tx.commit()?;
         Ok(result)
     }
+    pub fn catalog_drop_auto_link(&self, media: &MediaId, reference: &ProviderRef) -> Result<()> {
+        reference.validate()?;
+        let tx = transaction(&self.conn)?;
+        let previous: Option<ProviderLink> = tx
+            .query_row(
+                "SELECT data FROM provider_link WHERE media_id=?1 AND provider=?2 AND scope=?3 AND kind=?4 AND external_id=?5",
+                params![media.0, word(&reference.provider)?, reference.scope, reference.kind.as_str(), reference.id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(decode)
+            .transpose()?;
+        if previous.is_some_and(|l| !l.confirmed && !l.manual) {
+            tx.execute(
+                "DELETE FROM provider_link WHERE media_id=?1 AND provider=?2 AND scope=?3 AND kind=?4 AND external_id=?5 AND confirmed=0",
+                params![media.0, word(&reference.provider)?, reference.scope, reference.kind.as_str(), reference.id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
     pub fn catalog_links(&self, id: &MediaId) -> Result<Vec<ProviderLink>> {
         let id = canonical(&self.conn, id)?;
         let mut stmt = self.conn.prepare("SELECT data FROM provider_link WHERE media_id=?1 ORDER BY provider,scope,kind,external_id")?;
@@ -827,6 +854,29 @@ impl Db {
             })
         })
         .collect()
+    }
+    /// Per-season shelf entries: movies stay grouped by movie node, regular TV
+    /// seasons (`season_number >= 1`) become independent entries, and `Season 0`
+    /// specials fold into the work's first bound regular season (or the work
+    /// root when only specials exist).
+    pub fn catalog_season_shelf(&self, source: Option<i64>) -> Result<Vec<MediaShelf>> {
+        let mut stmt = self.conn.prepare("SELECT root.data,parent.data,n.id,coalesce(w.watched,0),ad.seen_at FROM media_node n JOIN media_node root ON root.id=n.root_id LEFT JOIN media_node parent ON parent.id=n.parent_id JOIN file_binding_item bi ON bi.media_id=n.id JOIN address ad ON ad.file_id=bi.file_id LEFT JOIN media_watched w ON w.media_id=n.id WHERE (?1 IS NULL OR ad.source_id=?1)")?;
+        let mut raw = Vec::new();
+        for row in stmt.query_map([source], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)? != 0,
+                r.get::<_, i64>(4)?,
+            ))
+        })? {
+            let (root_json, parent_json, item_id, watched, seen) = row?;
+            let root: MediaNode = decode(root_json)?;
+            let parent: Option<MediaNode> = parent_json.map(decode).transpose()?;
+            raw.push((root, parent, MediaId(item_id), watched, seen));
+        }
+        Ok(fold_season_shelf(raw))
     }
     pub fn catalog_watching(&self, limit: usize) -> Result<Vec<MediaWatching>> {
         let mut stmt = self.conn.prepare("SELECT ad.file_id,r.path,r.still,coalesce(p.position,r.position),coalesce(p.duration,r.duration) FROM recent r JOIN address ad ON ad.source_id=r.source_id AND ad.path=r.path JOIN file_binding b ON b.file_id=ad.file_id LEFT JOIN progress p ON p.file_id=ad.file_id ORDER BY r.played_at DESC,r.path")?;

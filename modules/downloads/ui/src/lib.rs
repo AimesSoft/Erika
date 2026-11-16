@@ -246,7 +246,11 @@ pub fn download_actions(downloads: downloads::Client, task: downloads::DownloadT
 /// Adding a task (`dladd`, NipaPlay's 添加磁力链接): a magnet link or a
 /// .torrent file, read to show what it holds, and the folder it goes to.
 #[component]
-pub fn download_add(app: erika::Client, downloads: downloads::Client, #[session] draft: DownloadsDraft) -> impl View {
+pub fn download_add(
+    app: erika::Client,
+    downloads: downloads::Client,
+    #[session] draft: DownloadsDraft,
+) -> impl View {
     ui! {
         Modal(width: 600, appear: pop_in, disappear: fade) {
             ScrollView {

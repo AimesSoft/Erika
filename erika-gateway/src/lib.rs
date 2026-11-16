@@ -17,6 +17,7 @@
 //! server's own token stays here, in the server's address.
 
 pub mod metadata;
+pub mod season;
 pub mod store;
 #[cfg(test)]
 mod tests;
@@ -85,25 +86,45 @@ impl Gateway {
     /// device went over its rate.
     fn caller(&self, token: &str, headers: &HeaderMap) -> Result<Voter, Response> {
         if token == self.token {
-            return Ok(Voter { device: "owner".into(), trusted: true });
+            return Ok(Voter {
+                device: "owner".into(),
+                trusted: true,
+            });
         }
         if self.public_key.as_deref() != Some(token) {
             return Err(refused());
         }
-        let header = |name: &str| headers.get(name).and_then(|value| value.to_str().ok()).map(str::trim).filter(|value| !value.is_empty());
+        let header = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        };
         let address = format!("address:{}", header("x-real-ip").unwrap_or("unknown"));
-        let device = match header("x-erika-device").filter(|id| id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
+        let device = match header("x-erika-device").filter(|id| {
+            id.len() <= 64
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        }) {
             Some(id) => format!("device:{id}"),
             None => address.clone(),
         };
         // A device is held to its rate; its address, which a device naming
         // itself anew each time cannot leave, to ten devices' worth.
-        let mut counted = self.counted.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut counted = self
+            .counted
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if counted.len() > 10_000 {
             counted.retain(|_, (since, _)| since.elapsed() < WINDOW);
         }
         let mut over = false;
-        for (key, limit) in [(&device, self.per_minute), (&address, self.per_minute.saturating_mul(10))] {
+        for (key, limit) in [
+            (&device, self.per_minute),
+            (&address, self.per_minute.saturating_mul(10)),
+        ] {
             let (since, count) = counted.entry(key.clone()).or_insert((Instant::now(), 0));
             if since.elapsed() >= WINDOW {
                 *since = Instant::now();
@@ -118,7 +139,10 @@ impl Gateway {
         if over {
             return Err((StatusCode::TOO_MANY_REQUESTS, axum::Json(json!({ "success": false, "errorCode": 429, "errorMessage": "too many requests" }))).into_response());
         }
-        Ok(Voter { device, trusted: false })
+        Ok(Voter {
+            device,
+            trusted: false,
+        })
     }
 
     fn url(&self, rest: &str, query: Option<&str>) -> String {
@@ -138,7 +162,10 @@ impl Gateway {
     /// the server is out of reach.
     async fn fetch_details(&self, id: i64) -> Option<Value> {
         let mut answer = self.get_json(&format!("bangumi/A{id}"), None).await?;
-        if let Some(details) = answer.get_mut("bangumi").filter(|details| details.is_object()) {
+        if let Some(details) = answer
+            .get_mut("bangumi")
+            .filter(|details| details.is_object())
+        {
             settle_details(details);
         }
         Some(answer)
@@ -149,7 +176,10 @@ impl Gateway {
     /// only once it fetched their danmaku.
     async fn details(&self, id: i64) -> Option<Value> {
         let mut answer = self.fetch_details(id).await?;
-        let fresh = answer.get("bangumi").filter(|details| details.is_object()).cloned();
+        let fresh = answer
+            .get("bangumi")
+            .filter(|details| details.is_object())
+            .cloned();
         let lasting = fresh
             .as_ref()
             .and_then(|details| details.get("animeId"))
@@ -318,7 +348,12 @@ fn merge_details(mut fresh: Value, seen: &Value) -> Value {
         .cloned()
         .unwrap_or_default();
     let id = |episode: &Value| episode.get("episodeId").and_then(Value::as_i64);
-    for episode in seen.get("episodes").and_then(Value::as_array).into_iter().flatten() {
+    for episode in seen
+        .get("episodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         if !episodes.iter().any(|known| id(known) == id(episode)) {
             episodes.push(episode.clone());
         }
@@ -326,8 +361,12 @@ fn merge_details(mut fresh: Value, seen: &Value) -> Value {
     episodes.sort_by_key(|episode| id(episode).unwrap_or(i64::MAX));
     fresh["episodes"] = json!(episodes);
     for key in ["imageUrl", "summary", "type", "typeDescription"] {
-        let empty = fresh.get(key).and_then(Value::as_str).is_none_or(str::is_empty)
-            || (key.starts_with("type") && fresh.get("type").and_then(Value::as_str) == Some("other"));
+        let empty = fresh
+            .get(key)
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+            || (key.starts_with("type")
+                && fresh.get("type").and_then(Value::as_str) == Some("other"));
         if empty && let Some(value) = seen.get(key) {
             fresh[key] = value.clone();
         }
@@ -337,8 +376,17 @@ fn merge_details(mut fresh: Value, seen: &Value) -> Value {
 
 /// Misaka's answer to `match`, its shows under their lasting ids.
 fn settle_matches(answer: &mut Value) {
-    for found in answer.get_mut("matches").and_then(Value::as_array_mut).into_iter().flatten() {
-        if let Some(lasting) = found.get("episodeId").and_then(Value::as_i64).and_then(show_of) {
+    for found in answer
+        .get_mut("matches")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(lasting) = found
+            .get("episodeId")
+            .and_then(Value::as_i64)
+            .and_then(show_of)
+        {
             found["animeId"] = json!(lasting);
         }
         if let Some(title) = found.get("animeTitle").and_then(Value::as_str) {
@@ -416,7 +464,8 @@ async fn match_file(
         .await;
     match answer {
         Ok(answer) => {
-            let status = StatusCode::from_u16(answer.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let status =
+                StatusCode::from_u16(answer.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             match answer.json::<Value>().await {
                 Ok(mut answer) => {
                     settle_matches(&mut answer);

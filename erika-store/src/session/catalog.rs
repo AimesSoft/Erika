@@ -6,8 +6,8 @@ use crate::catalog::{
 use erika_catalog::*;
 use std::collections::{BTreeMap, HashSet};
 
-mod jobs;
 mod account_sync;
+mod jobs;
 mod playback;
 mod portable;
 mod requests;
@@ -104,12 +104,17 @@ impl Catalog {
             }
             let old = self.nodes.get(&n.id);
             if let Some(old) = old {
+                let same_episode = old.kind == Kind::Episode
+                    && n.kind == Kind::Episode
+                    && old.root == n.root
+                    && old.reference == n.reference;
                 if old.kind != n.kind
-                    || old.parent != n.parent
                     || old.root != n.root
                     || old.reference != n.reference
-                    || old.season_number != n.season_number
-                    || old.episode_number != n.episode_number
+                    || (!same_episode
+                        && (old.parent != n.parent
+                            || old.season_number != n.season_number
+                            || old.episode_number != n.episode_number))
                 {
                     return Err(Error::conflict("媒体身份或层级不能由资料刷新改写"));
                 }
@@ -488,6 +493,15 @@ impl Db {
         })
     }
     /// Same physical-file lookup as SQLite; source listings exclude direct opens.
+    pub fn catalog_drop_auto_link(&self, media: &MediaId, reference: &ProviderRef) -> Result<()> {
+        reference.validate()?;
+        self.edit(|s| {
+            s.catalog.links.retain(|l| {
+                !(l.media == *media && l.reference == *reference && !l.confirmed && !l.manual)
+            });
+            Ok(())
+        })
+    }
     pub fn catalog_addresses(&self, file: i64) -> Result<Vec<crate::catalog::AddressCheck>> {
         self.read(|s| {
             s.require_file(file)?;
@@ -711,6 +725,31 @@ impl Db {
                 .collect();
             rows.sort_by(|a, b| b.seen.cmp(&a.seen).then_with(|| a.node.id.cmp(&b.node.id)));
             Ok(rows)
+        })
+    }
+    pub fn catalog_season_shelf(&self, source: Option<i64>) -> Result<Vec<MediaShelf>> {
+        self.read(|s| {
+            let mut raw = Vec::new();
+            for a in &s.addresses {
+                if source.is_some_and(|id| id != a.source) {
+                    continue;
+                }
+                let Some(b) = a.file.and_then(|id| s.catalog.bindings.get(&id)) else {
+                    continue;
+                };
+                for item in &b.items {
+                    let n = s.catalog.node(&item.media)?;
+                    let root = s.catalog.node(&n.root)?;
+                    let parent = n
+                        .parent
+                        .as_ref()
+                        .map(|pid| s.catalog.node(pid).cloned())
+                        .transpose()?;
+                    let watched = s.catalog.watched.get(&n.id).is_some_and(|w| w.watched);
+                    raw.push((root.clone(), parent, n.id.clone(), watched, a.seen));
+                }
+            }
+            Ok(crate::catalog::fold_season_shelf(raw))
         })
     }
     pub fn catalog_watching(&self, limit: usize) -> Result<Vec<MediaWatching>> {

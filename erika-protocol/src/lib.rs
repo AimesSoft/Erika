@@ -210,6 +210,7 @@ pub mod erika {
         pub show_danmaku: bool,
         pub auto_match: bool,
         pub sync_storage: bool,
+        pub merge_seasons: bool,
         pub startup: StartupPage,
         pub playback_end: PlaybackEnd,
         pub language: InterfaceLanguage,
@@ -715,7 +716,10 @@ pub mod erika {
         #[label(tr! { "zh-Hans" => "电影", "en" => "Movie" })]
         Movie,
         #[label(tr! { "zh-Hans" => "{label}", "en" => "{label}" })]
-        Media { #[content] label: String },
+        Media {
+            #[content]
+            label: String,
+        },
         #[label(tr! { "zh-Hans" => "本地文件", "en" => "Local file" })]
         LocalFile,
         #[label(tr! { "zh-Hans" => "已下载 · 本地文件", "en" => "Downloaded · Local file" })]
@@ -1242,9 +1246,19 @@ pub mod erika {
         fn set_plugin_switch(&mut self, entry: String, value: bool) -> Result<(), CommandError>;
         fn set_plugin_text(&mut self, entry: String, value: String) -> Result<(), CommandError>;
         /// Turn a plugin's switch in the danmaku menu on or off.
-        fn set_plugin_menu_switch(&mut self, plugin: String, entry: String, value: bool) -> Result<(), CommandError>;
+        fn set_plugin_menu_switch(
+            &mut self,
+            plugin: String,
+            entry: String,
+            value: bool,
+        ) -> Result<(), CommandError>;
         /// Choose the color of a plugin's color setting in the danmaku menu.
-        fn set_plugin_menu_color(&mut self, plugin: String, entry: String, color: PluginColor) -> Result<(), CommandError>;
+        fn set_plugin_menu_color(
+            &mut self,
+            plugin: String,
+            entry: String,
+            color: PluginColor,
+        ) -> Result<(), CommandError>;
         fn dismiss_plugin_message(&mut self) -> Result<(), CommandError>;
         /// Start the plugins that wait; the interface's clock calls it.
         fn plugins_tick(&mut self) -> Result<(), CommandError>;
@@ -1287,7 +1301,13 @@ pub mod erika {
 
         /// Canonical media or file-only resume at an absolute file timestamp.
         #[cfg_attr(feature = "bern-module-anime", on(anime::play_media))]
-        fn play_media(&mut self, media: String, source: MediaSource, position: f64, from_stage: bool) -> Result<(), CommandError>;
+        fn play_media(
+            &mut self,
+            media: String,
+            source: MediaSource,
+            position: f64,
+            from_stage: bool,
+        ) -> Result<(), CommandError>;
 
         /// Play what a module asks for, such as the next episode;
         /// `from_stage` when the home page's stage asked, whose picture
@@ -1328,14 +1348,17 @@ pub mod erika {
         /// Play the current address selected in a library source, matched or not.
         #[cfg(feature = "bern-module-library")]
         #[on(library::play_source)]
-        fn open_library_file(&mut self, source: MediaSource, title: String) -> Result<(), CommandError>;
+        fn open_library_file(
+            &mut self,
+            source: MediaSource,
+            title: String,
+        ) -> Result<(), CommandError>;
 
         /// Open a library poster using the optional anime details page,
         /// over the home page when it was opened there.
         #[cfg(feature = "bern-module-library")]
         #[on(library::open_show)]
         fn open_library_show(&mut self, id: String, home: bool) -> Result<(), CommandError>;
-
 
         /// The library matched or removed videos: the anime pages show the
         /// files anew.
@@ -1454,8 +1477,13 @@ pub mod erika {
         #[cfg(feature = "bern-module-account")]
         fn cancel_account_login(&mut self) -> Result<(), CommandError>;
         #[cfg(feature = "bern-module-account")]
-        fn submit_account_login(&mut self, bangumi: bool, user: String, password: String, captcha: String) -> Result<(), CommandError>;
-
+        fn submit_account_login(
+            &mut self,
+            bangumi: bool,
+            user: String,
+            password: String,
+            captcha: String,
+        ) -> Result<(), CommandError>;
 
         #[cfg(feature = "bern-module-account")]
         fn open_bangumi_login(&mut self, settings_window: bool) -> Result<(), CommandError>;
@@ -1464,7 +1492,12 @@ pub mod erika {
         #[cfg(feature = "bern-module-account")]
         fn close_bangumi_login(&mut self) -> Result<(), CommandError>;
         #[cfg(feature = "bern-module-account")]
-        fn bangumi_sign_in(&mut self, email: String, password: String, captcha: String) -> Result<(), CommandError>;
+        fn bangumi_sign_in(
+            &mut self,
+            email: String,
+            password: String,
+            captcha: String,
+        ) -> Result<(), CommandError>;
         #[cfg(feature = "bern-module-account")]
         fn bangumi_sign_out(&mut self) -> Result<(), CommandError>;
         #[cfg(feature = "bern-module-account")]

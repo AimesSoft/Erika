@@ -28,10 +28,24 @@ pub fn paragraph(words: &str) -> Vec<DocBlock> {
     if words.trim().is_empty() {
         return Vec::new();
     }
-    vec![block(0, DocKind::Paragraph, escape(words), String::new(), String::new(), 0)]
+    vec![block(
+        0,
+        DocKind::Paragraph,
+        escape(words),
+        String::new(),
+        String::new(),
+        0,
+    )]
 }
 
-fn block(id: i64, kind: DocKind, text: String, detail: String, marker: String, depth: i64) -> DocBlock {
+fn block(
+    id: i64,
+    kind: DocKind,
+    text: String,
+    detail: String,
+    marker: String,
+    depth: i64,
+) -> DocBlock {
     let image = matches!(kind, DocKind::Image).then(|| MediaSource::new(text.clone()));
     DocBlock {
         id,
@@ -86,7 +100,8 @@ struct Table {
 impl Doc<'_> {
     fn push(&mut self, kind: DocKind, text: String, detail: String, marker: String, depth: i64) {
         let id = self.blocks.len() as i64;
-        self.blocks.push(block(id, kind, text, detail, marker, depth));
+        self.blocks
+            .push(block(id, kind, text, detail, marker, depth));
     }
 
     fn resolve(&self, address: &str) -> String {
@@ -124,7 +139,9 @@ impl Doc<'_> {
 
     fn write(&mut self, text: &str) {
         match &mut self.table {
-            Some(table) if !table.row.is_empty() || self.words.is_empty() => self.words.push_str(text),
+            Some(table) if !table.row.is_empty() || self.words.is_empty() => {
+                self.words.push_str(text)
+            }
             _ => self.words.push_str(text),
         }
     }
@@ -194,7 +211,13 @@ impl Doc<'_> {
             Event::End(TagEnd::Item) => self.flush(DocKind::Paragraph),
             Event::Rule => {
                 self.flush(DocKind::Paragraph);
-                self.push(DocKind::Rule, String::new(), String::new(), String::new(), 0);
+                self.push(
+                    DocKind::Rule,
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    0,
+                );
             }
             Event::Start(Tag::Table(_)) => {
                 self.flush(DocKind::Paragraph);
@@ -224,7 +247,9 @@ impl Doc<'_> {
             }
             Event::Start(Tag::Strong) | Event::End(TagEnd::Strong) => self.write("**"),
             Event::Start(Tag::Emphasis) | Event::End(TagEnd::Emphasis) => self.write("*"),
-            Event::Start(Tag::Strikethrough) | Event::End(TagEnd::Strikethrough) => self.write("~~"),
+            Event::Start(Tag::Strikethrough) | Event::End(TagEnd::Strikethrough) => {
+                self.write("~~")
+            }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 self.links.push(self.resolve(&dest_url));
                 self.write("[");
@@ -267,7 +292,11 @@ impl Doc<'_> {
                 }
             } else {
                 let joined = row.join(" · ");
-                let text = if header && !joined.is_empty() { format!("**{joined}**") } else { joined };
+                let text = if header && !joined.is_empty() {
+                    format!("**{joined}**")
+                } else {
+                    joined
+                };
                 self.push(DocKind::Paragraph, text, String::new(), String::new(), 0);
             }
         }
@@ -281,7 +310,14 @@ mod tests {
     fn kinds(blocks: &[DocBlock]) -> Vec<(DocKind, &str, &str, &str)> {
         blocks
             .iter()
-            .map(|b| (b.kind.clone(), b.text.as_str(), b.detail.as_str(), b.marker.as_str()))
+            .map(|b| {
+                (
+                    b.kind.clone(),
+                    b.text.as_str(),
+                    b.detail.as_str(),
+                    b.marker.as_str(),
+                )
+            })
             .collect()
     }
 
@@ -293,7 +329,12 @@ mod tests {
             kinds(&blocks),
             vec![
                 (DocKind::Title, "标题", "", ""),
-                (DocKind::Paragraph, "第一段，**加粗**、`代码` 和 [链接](https://x.dev)。", "", ""),
+                (
+                    DocKind::Paragraph,
+                    "第一段，**加粗**、`代码` 和 [链接](https://x.dev)。",
+                    "",
+                    ""
+                ),
                 (DocKind::Heading, "规则", "", ""),
                 (DocKind::Term, "刷屏", "重复 *字符*", ""),
                 (DocKind::Item, "一", "", "•"),

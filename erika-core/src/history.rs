@@ -83,7 +83,11 @@ impl ErikaEngine {
         source: &MediaSource,
     ) -> (Option<FileId>, Option<erika_store::Fingerprint>) {
         if erika_store::plugin_sources::is_address(&source.url) {
-            return self.db.plugin_source_item(&source.url).ok().flatten()
+            return self
+                .db
+                .plugin_source_item(&source.url)
+                .ok()
+                .flatten()
                 .map(|entry| (Some(entry.file), entry.item.fingerprint))
                 .unwrap_or((None, None));
         }
@@ -126,8 +130,12 @@ impl ErikaEngine {
     pub(super) fn save_history(&mut self) {
         // An accepted open request can still fail or be cancelled before loading.
         // Keep the previous record until this transport has reported real playback.
-        if self.source.is_none() || !self.playback_observed { return; }
-        let Some(source) = self.current_source().cloned() else { return; };
+        if self.source.is_none() || !self.playback_observed {
+            return;
+        }
+        let Some(source) = self.current_source().cloned() else {
+            return;
+        };
         self.save_played();
         let (position, duration) = (self.state.elapsed, self.state.duration);
         if let Some(file) = self.file
@@ -148,7 +156,9 @@ impl ErikaEngine {
             }
             // Remote endpoint selectors are not filenames. Keep the title
             // supplied by the library or resolved canonical metadata.
-            _ if erika_dandanplay::remote::comment_url(&source.url).is_some() => self.state.title.clone(),
+            _ if erika_dandanplay::remote::comment_url(&source.url).is_some() => {
+                self.state.title.clone()
+            }
             _ if erika_store::plugin_sources::is_address(&source.url) => self.source_name(&source),
             _ => source
                 .file_name()

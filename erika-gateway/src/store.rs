@@ -65,12 +65,21 @@ const SCHEMA: &str = "
         details TEXT NOT NULL,
         updated_at INTEGER NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS season_tmdb (
+        anime_id INTEGER NOT NULL,
+        language TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (anime_id, language)
+    ) STRICT;
     -- The first version's table, from before votes; it was never filled.
     DROP TABLE IF EXISTS binding;
 ";
 
 fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_secs() as i64)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() as i64)
 }
 
 /// One vote as read back.
@@ -89,16 +98,21 @@ impl Store {
     }
 
     pub fn in_memory() -> Store {
-        Self::ready(Connection::open_in_memory().expect("an in-memory database opens")).expect("the schema applies")
+        Self::ready(Connection::open_in_memory().expect("an in-memory database opens"))
+            .expect("the schema applies")
     }
 
     fn ready(conn: Connection) -> rusqlite::Result<Store> {
         conn.execute_batch(SCHEMA)?;
-        Ok(Store { conn: Mutex::new(conn) })
+        Ok(Store {
+            conn: Mutex::new(conn),
+        })
     }
 
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn votes(&self, md5: &str, size: i64) -> Vec<Vote> {
@@ -139,16 +153,40 @@ impl Store {
     /// devices agree on, the latest of equals.
     pub fn find(&self, md5: &str, size: i64, device: &str) -> Option<Binding> {
         let votes = self.votes(md5, size);
-        let agreeing = |episode_id: i64| votes.iter().filter(|vote| vote.binding.episode_id == episode_id).count() as i64;
+        let agreeing = |episode_id: i64| {
+            votes
+                .iter()
+                .filter(|vote| vote.binding.episode_id == episode_id)
+                .count() as i64
+        };
         if let Some(own) = votes.iter().find(|vote| vote.device == device) {
-            return Some(Binding { confirmations: agreeing(own.binding.episode_id), ..own.binding.clone() });
+            return Some(Binding {
+                confirmations: agreeing(own.binding.episode_id),
+                ..own.binding.clone()
+            });
         }
-        let best = votes.iter().max_by_key(|vote| (vote.trusted, agreeing(vote.binding.episode_id), vote.updated_at))?;
-        Some(Binding { confirmations: agreeing(best.binding.episode_id), ..best.binding.clone() })
+        let best = votes.iter().max_by_key(|vote| {
+            (
+                vote.trusted,
+                agreeing(vote.binding.episode_id),
+                vote.updated_at,
+            )
+        })?;
+        Some(Binding {
+            confirmations: agreeing(best.binding.episode_id),
+            ..best.binding.clone()
+        })
     }
 
     /// `voter` says the file is this episode.
-    pub fn confirm(&self, md5: &str, size: i64, voter: &Voter, file_name: &str, binding: &Binding) -> rusqlite::Result<()> {
+    pub fn confirm(
+        &self,
+        md5: &str,
+        size: i64,
+        voter: &Voter,
+        file_name: &str,
+        binding: &Binding,
+    ) -> rusqlite::Result<()> {
         self.conn().execute(
             "INSERT INTO vote (md5, size, device, anime_id, episode_id, anime_title, episode_title, number, kind, kind_description, image, file_name, trusted, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
@@ -180,7 +218,13 @@ impl Store {
 
     /// The server's ids for episode `old` changed: every vote for it keeps
     /// pointing at it, by the new ids.
-    pub fn rebind(&self, md5: &str, size: i64, old: i64, binding: &Binding) -> rusqlite::Result<()> {
+    pub fn rebind(
+        &self,
+        md5: &str,
+        size: i64,
+        old: i64,
+        binding: &Binding,
+    ) -> rusqlite::Result<()> {
         self.conn().execute(
             "UPDATE vote SET anime_id = ?4, episode_id = ?5, anime_title = ?6, episode_title = ?7, image = ?8
              WHERE md5 = ?1 AND size = ?2 AND episode_id = ?3",
@@ -194,9 +238,15 @@ impl Store {
     pub fn forget(&self, md5: &str, size: i64, voter: &Voter) -> rusqlite::Result<()> {
         let md5 = md5.to_ascii_lowercase();
         if voter.trusted {
-            self.conn().execute("DELETE FROM vote WHERE md5 = ?1 AND size = ?2", params![md5, size])?;
+            self.conn().execute(
+                "DELETE FROM vote WHERE md5 = ?1 AND size = ?2",
+                params![md5, size],
+            )?;
         } else {
-            self.conn().execute("DELETE FROM vote WHERE md5 = ?1 AND size = ?2 AND device = ?3", params![md5, size, voter.device])?;
+            self.conn().execute(
+                "DELETE FROM vote WHERE md5 = ?1 AND size = ?2 AND device = ?3",
+                params![md5, size, voter.device],
+            )?;
         }
         Ok(())
     }
@@ -206,12 +256,20 @@ impl Store {
     pub fn show(&self, anime_id: i64) -> Option<serde_json::Value> {
         let text: String = self
             .conn()
-            .query_row("SELECT details FROM show WHERE anime_id = ?1", params![anime_id], |row| row.get(0))
+            .query_row(
+                "SELECT details FROM show WHERE anime_id = ?1",
+                params![anime_id],
+                |row| row.get(0),
+            )
             .ok()?;
         serde_json::from_str(&text).ok()
     }
 
-    pub fn remember_show(&self, anime_id: i64, details: &serde_json::Value) -> rusqlite::Result<()> {
+    pub fn remember_show(
+        &self,
+        anime_id: i64,
+        details: &serde_json::Value,
+    ) -> rusqlite::Result<()> {
         self.conn().execute(
             "INSERT INTO show (anime_id, details, updated_at) VALUES (?1, ?2, ?3)
              ON CONFLICT (anime_id) DO UPDATE SET details = excluded.details, updated_at = excluded.updated_at",
@@ -222,6 +280,48 @@ impl Store {
 
     /// How many files have votes.
     pub fn count(&self) -> i64 {
-        self.conn().query_row("SELECT count(*) FROM (SELECT DISTINCT md5, size FROM vote)", [], |row| row.get(0)).unwrap_or(0)
+        self.conn()
+            .query_row(
+                "SELECT count(*) FROM (SELECT DISTINCT md5, size FROM vote)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+    }
+
+    pub fn season_entry(&self, anime_id: i64, language: &str, max_age_secs: i64) -> Option<String> {
+        let cutoff = now().saturating_sub(max_age_secs);
+        self.conn()
+            .query_row(
+                "SELECT payload FROM season_tmdb WHERE anime_id = ?1 AND language = ?2 AND updated_at >= ?3",
+                params![anime_id, language, cutoff],
+                |row| row.get(0),
+            )
+            .ok()
+    }
+
+    pub fn save_season_entry(&self, anime_id: i64, language: &str, payload: &str) {
+        let _ = self.conn().execute(
+            "INSERT INTO season_tmdb (anime_id, language, payload, updated_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (anime_id, language) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at",
+            params![anime_id, language, payload, now()],
+        );
+    }
+
+    pub fn season_entries(&self, ids: &[i64], language: &str) -> Vec<String> {
+        let conn = self.conn();
+        let mut stmt = match conn
+            .prepare("SELECT payload FROM season_tmdb WHERE anime_id = ?1 AND language = ?2")
+        {
+            Ok(stmt) => stmt,
+            Err(_) => return Vec::new(),
+        };
+        ids.iter()
+            .filter_map(|id| {
+                stmt.query_row(params![id, language], |row| row.get::<_, String>(0))
+                    .ok()
+            })
+            .filter(|payload| payload != "null")
+            .collect()
     }
 }

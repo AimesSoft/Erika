@@ -46,18 +46,18 @@ fn main() {
     assert!(!engine.state().signed_in);
     let media = engine.state().opened.clone();
     assert!(erika_catalog::MediaId::parse(&media).is_ok());
+    let poster = engine.state().show.poster.clone();
+    assert!(poster.url.starts_with("https://image.tmdb.org/"));
     let mut bytes = Vec::new();
-    engine
-        .state()
-        .show
-        .poster
-        .open()
+    ureq::get(&poster.url)
+        .call()
         .unwrap()
+        .into_body()
+        .into_reader()
         .read_to_end(&mut bytes)
         .unwrap();
     let image = image::load_from_memory(&bytes).unwrap();
     assert!(image.height().max(image.width()) > 400);
-    let poster = engine.state().show.poster.clone();
     engine.close().unwrap();
     engine.open(media).unwrap();
     assert_eq!(engine.state().show.poster, poster);

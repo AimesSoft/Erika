@@ -137,7 +137,7 @@ async fn read(path: &str) -> Result<Value> {
             ("Accept", "application/json"),
             ("User-Agent", &user_agent()),
         ],
-        std::time::Duration::from_secs(10),
+        std::time::Duration::from_secs(20),
         8 * 1024 * 1024,
         false,
     )
@@ -229,12 +229,16 @@ fn parse_search(body: &Value) -> Result<Vec<Found>> {
 
 /// Public identity evidence only. Images and descriptions shown by the app
 /// come from TMDB; this endpoint does not use the website login cookie.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Subject {
     pub id: i64,
+    pub name: String,
+    pub name_cn: String,
+    pub image_url: String,
     pub titles: Vec<String>,
     pub date: String,
     pub rating: f64,
+    pub summary: String,
 }
 
 pub async fn subject(subject: i64) -> Result<Subject> {
@@ -243,6 +247,181 @@ pub async fn subject(subject: i64) -> Result<Subject> {
     }
     let body = read(&format!("/v0/subjects/{subject}")).await?;
     parse_subject(subject, &body)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+static SEARCH_AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(15)))
+        .http_status_as_error(false)
+        .build()
+        .into()
+});
+
+async fn post_search(keyword: &str) -> Result<Value> {
+    let payload = serde_json::json!({
+        "keyword": keyword.trim(),
+        "sort": "match",
+        "filter": { "type": [2], "nsfw": false }
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut response = SEARCH_AGENT
+            .post("https://api.bgm.tv/v0/search/subjects?limit=10")
+            .header("Accept", "application/json")
+            .header("User-Agent", &user_agent())
+            .send_json(payload)
+            .map_err(|_| Error::new("暂时连不上 Bangumi"))?;
+        if !(200..300).contains(&response.status().as_u16()) {
+            return Err(Error::new("Bangumi 搜索失败"));
+        }
+        let text = response
+            .body_mut()
+            .with_config()
+            .limit(8 * 1024 * 1024)
+            .read_to_string()
+            .map_err(|_| Error::new("Bangumi 搜索未完成"))?;
+        serde_json::from_str(&text).map_err(|_| Error::new("Bangumi 搜索格式不正确"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let response =
+            gloo_net::http::Request::post("https://api.bgm.tv/v0/search/subjects?limit=10")
+                .header("Accept", "application/json")
+                .json(&payload)
+                .map_err(|_| Error::new("Bangumi 请求格式不正确"))?
+                .send()
+                .await
+                .map_err(|_| Error::new("暂时连不上 Bangumi"))?;
+        if !response.ok() {
+            return Err(Error::new("Bangumi 搜索失败"));
+        }
+        let text = response
+            .text()
+            .await
+            .map_err(|_| Error::new("Bangumi 搜索未完成"))?;
+        serde_json::from_str(&text).map_err(|_| Error::new("Bangumi 搜索格式不正确"))
+    }
+}
+
+fn norm(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn days_from_ymd(text: &str) -> Option<i64> {
+    let (y, m, d) = erika_catalog::resolve::parse_ymd(text)?;
+    let (y, m, d) = (i64::from(y), i64::from(m), i64::from(d));
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+/// Locate the unique Bangumi anime subject matching `titles` and premiering
+/// within 45 days of `premiere_date`. Used as a read-only fallback when no
+/// explicit Bangumi link is stored yet.
+pub async fn find_subject(
+    titles: &[String],
+    season_number: Option<u32>,
+    premiere_date: &str,
+) -> Option<Subject> {
+    let target_days = days_from_ymd(premiere_date)?;
+    let mut base_norms = Vec::new();
+    for t in titles {
+        for candidate in [
+            Some(t.as_str()),
+            erika_catalog::names::sequel_base(t)
+                .as_ref()
+                .map(|(b, _)| b.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let n = norm(candidate);
+            if !n.is_empty() && !base_norms.contains(&n) {
+                base_norms.push(n);
+            }
+        }
+    }
+    if base_norms.is_empty() {
+        return None;
+    }
+    let mut queries = Vec::new();
+    for t in titles.iter().take(2) {
+        let trimmed = t.trim();
+        if !trimmed.is_empty() {
+            if let Some(n) = season_number.filter(|n| *n > 1) {
+                let sq = format!("{trimmed} 第{n}季");
+                if !queries.contains(&sq) {
+                    queries.push(sq);
+                }
+            }
+            if !queries.iter().any(|q| q == trimmed) {
+                queries.push(trimmed.to_string());
+            }
+        }
+    }
+    let mut matched: Vec<(Subject, bool, i64)> = Vec::new();
+    for query in queries.into_iter().take(3) {
+        let Ok(body) = post_search(&query).await else {
+            continue;
+        };
+        for row in body["data"].as_array().into_iter().flatten() {
+            let Some(local) = anime_id(row) else {
+                continue;
+            };
+            let Some(id) = subject_id(local) else {
+                continue;
+            };
+            let Ok(subject) = parse_subject(id, row) else {
+                continue;
+            };
+            let Some(days) = days_from_ymd(&subject.date) else {
+                continue;
+            };
+            let diff = (days - target_days).abs();
+            if diff > 45 {
+                continue;
+            }
+            let exact_tier = subject.titles.iter().any(|st| {
+                if season_number.is_some_and(|n| n > 1) {
+                    erika_catalog::names::sequel_base(st)
+                        .is_some_and(|(b, s)| s == season_number && base_norms.contains(&norm(&b)))
+                } else {
+                    base_norms.contains(&norm(st))
+                }
+            });
+            let loose_ok = exact_tier
+                || subject.titles.iter().any(|st| {
+                    let full = norm(st);
+                    let stripped = erika_catalog::names::sequel_base(st)
+                        .map(|(b, _)| norm(&b))
+                        .unwrap_or_default();
+                    base_norms.contains(&full)
+                        || (!stripped.is_empty() && base_norms.contains(&stripped))
+                });
+            if loose_ok && !matched.iter().any(|(s, _, _)| s.id == subject.id) {
+                matched.push((subject, exact_tier, diff));
+            }
+        }
+        if matched.iter().filter(|(_, exact, _)| *exact).count() == 1 {
+            break;
+        }
+    }
+    let exact: Vec<_> = matched.iter().filter(|(_, e, _)| *e).collect();
+    if exact.len() == 1 {
+        return Some(exact[0].0.clone());
+    }
+    if matched.len() == 1 {
+        return Some(matched.remove(0).0);
+    }
+    let zero_day: Vec<_> = matched.into_iter().filter(|(_, _, d)| *d == 0).collect();
+    (zero_day.len() == 1).then(|| zero_day.into_iter().next().unwrap().0)
 }
 
 fn parse_subject(subject: i64, body: &Value) -> Result<Subject> {
@@ -257,12 +436,16 @@ fn parse_subject(subject: i64, body: &Value) -> Result<Subject> {
     }
     Ok(Subject {
         id: subject,
+        name: text(body, "name").into(),
+        name_cn: text(body, "name_cn").into(),
+        image_url: image(body),
         titles,
         date: text(body, "date").into(),
         rating: body["rating"]["score"]
             .as_f64()
             .filter(|n| (0.0..=10.0).contains(n))
             .unwrap_or_default(),
+        summary: text(body, "summary").into(),
     })
 }
 

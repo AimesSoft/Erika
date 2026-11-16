@@ -48,7 +48,9 @@ impl Share {
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Db> {
-        self.db.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.db
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn info(&self) -> Response {
@@ -196,7 +198,10 @@ impl Share {
 
     /// The file of a `shareId`, reading the library again if it is new.
     fn file(&self, id: &str) -> Option<(PathBuf, String)> {
-        let mut files = self.files.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut files = self
+            .files
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(file) = files.get(id) {
             return Some(file.clone());
         }
@@ -246,7 +251,11 @@ impl Share {
         let (old_position, old_duration) = db.progress(file).unwrap_or((0.0, 0.0));
         let (position, duration) = (position.max(old_position), duration.max(old_duration));
         db.save_progress(file, position, duration);
-        let share = if duration > 0.0 { position / duration } else { 0.0 };
+        let share = if duration > 0.0 {
+            position / duration
+        } else {
+            0.0
+        };
         json_ok(json!({
             "success": true,
             "data": {
@@ -340,9 +349,14 @@ impl Share {
                 _ => failure(403, "路径不允许访问"),
             },
             ("GET" | "HEAD", ["subtitle"]) => match path {
-                Some(path) if self.allowed(&path) => {
-                    named(request, &path, request.param("name"), SUBTITLES, false, false)
-                }
+                Some(path) if self.allowed(&path) => named(
+                    request,
+                    &path,
+                    request.param("name"),
+                    SUBTITLES,
+                    false,
+                    false,
+                ),
                 _ => failure(403, "路径不允许访问"),
             },
             _ => failure(400, "这台设备不支持此操作"),
@@ -559,7 +573,9 @@ fn client(request: &Request) -> Value {
         .or_else(|| request.peer.map(|peer| peer.to_string()))
         .or_else(|| request.header("X-Real-IP").map(str::to_string))
         .unwrap_or_else(|| "unknown".into());
-    let id = request.header("X-NipaPlay-Remote-Client-Id").unwrap_or_default();
+    let id = request
+        .header("X-NipaPlay-Remote-Client-Id")
+        .unwrap_or_default();
     let key = if id.is_empty() {
         format!("ip:{address}")
     } else {
@@ -585,7 +601,10 @@ fn cors(request: &Request, response: &mut Response) {
             "Access-Control-Allow-Headers",
             "accept,accept-encoding,authorization,content-type,dnt,origin,user-agent",
         ),
-        ("Access-Control-Allow-Methods", "DELETE,GET,OPTIONS,PATCH,POST,PUT"),
+        (
+            "Access-Control-Allow-Methods",
+            "DELETE,GET,OPTIONS,PATCH,POST,PUT",
+        ),
         ("Access-Control-Max-Age", "86400"),
     ];
     for (name, value) in headers {
@@ -759,7 +778,11 @@ pub fn iso(seconds: i64) -> String {
     let of_year = day - (365 * year + year / 4 - year / 100);
     let shifted = (5 * of_year + 2) / 153;
     let date = of_year - (153 * shifted + 2) / 5 + 1;
-    let month = if shifted < 10 { shifted + 3 } else { shifted - 9 };
+    let month = if shifted < 10 {
+        shifted + 3
+    } else {
+        shifted - 9
+    };
     let year = year + era * 400 + i64::from(month <= 2);
     format!(
         "{year:04}-{month:02}-{date:02}T{:02}:{:02}:{:02}.000Z",
@@ -772,7 +795,10 @@ pub fn iso(seconds: i64) -> String {
 fn json_response(status: u16, value: Value) -> Response {
     Response {
         status,
-        headers: vec![("Content-Type".into(), "application/json; charset=utf-8".into())],
+        headers: vec![(
+            "Content-Type".into(),
+            "application/json; charset=utf-8".into(),
+        )],
         body: Body::Bytes(value.to_string().into_bytes()),
     }
 }
@@ -830,7 +856,11 @@ fn disposition(path: &Path) -> String {
             _ => '_',
         })
         .collect();
-    let plain = if plain.is_empty() { "file".into() } else { plain };
+    let plain = if plain.is_empty() {
+        "file".into()
+    } else {
+        plain
+    };
     let encoded: String = name
         .bytes()
         .map(|byte| match byte {
@@ -886,7 +916,10 @@ fn stream(request: &Request, path: &Path) -> Response {
     }
     let (status, offset, length) = match span {
         Some((start, end)) => {
-            headers.push(("Content-Range".into(), format!("bytes {start}-{end}/{size}")));
+            headers.push((
+                "Content-Range".into(),
+                format!("bytes {start}-{end}/{size}"),
+            ));
             (206, start, end - start + 1)
         }
         None => (200, 0, size),
@@ -947,15 +980,17 @@ fn siblings(video: &Path, known: &[&str], fonts: bool) -> Vec<(String, PathBuf)>
 }
 
 fn list(video: &Path, known: &[&str], fonts: bool) -> Response {
-    let stem = video.file_stem().map(|stem| stem.to_string_lossy().to_lowercase());
+    let stem = video
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_lowercase());
     let items: Vec<Value> = siblings(video, known, fonts)
         .iter()
         .map(|(name, path)| {
             let metadata = std::fs::metadata(path).ok();
             let likely = fonts
-                || stem.as_ref().is_some_and(|stem| {
-                    file_name(path).to_lowercase().starts_with(stem.as_str())
-                });
+                || stem
+                    .as_ref()
+                    .is_some_and(|stem| file_name(path).to_lowercase().starts_with(stem.as_str()));
             json!({
                 "name": name,
                 "extension": format!(".{}", extension(path)),
@@ -1015,7 +1050,10 @@ mod tests {
         // `sha1` of the path in lowercase hex.
         assert_eq!(
             share_id(Path::new("/a.mkv")),
-            "2ed4f43e8b1c6ed1c0b0a1a1c2fb4bda3b1b7d6c".len().to_string().repeat(0)
+            "2ed4f43e8b1c6ed1c0b0a1a1c2fb4bda3b1b7d6c"
+                .len()
+                .to_string()
+                .repeat(0)
                 + &share_id(Path::new("/a.mkv"))
         );
         assert_eq!(share_id(Path::new("/a.mkv")).len(), 40);
@@ -1048,7 +1086,10 @@ mod tests {
     #[test]
     fn a_name_survives_in_the_header() {
         let header = disposition(Path::new("/v/第1话 \"a\".mkv"));
-        assert!(header.starts_with("inline; filename=\"_1_ _a_.mkv\""), "{header}");
+        assert!(
+            header.starts_with("inline; filename=\"_1_ _a_.mkv\""),
+            "{header}"
+        );
         assert!(header.contains("filename*=UTF-8''%E7%AC%AC1"), "{header}");
     }
 }
